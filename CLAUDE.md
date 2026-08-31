@@ -8,7 +8,7 @@ A comprehensive guide for AI assistants working on this repository.
 
 - **Parser**: Ruby source is parsed by **prism** (the official Ruby parser, consumed as the `ruby-prism` crate); monoruby converts prism's tree into its own AST (`monoruby/src/ast/`, `monoruby/src/parser/`). The old hand-written `ruruby-parse` crate has been removed.
 - **Platform**: x86-64 **and** aarch64. The VM-tier backend (bytecode VM, invokers, native-function wrappers) and the JIT emit machine code directly via `monoasm`, with a per-`target_arch` backend under `codegen/arch/`. Both backends lower the **full** AsmInst set to machine code; aarch64 materializes large frame/field/sp offsets through scratch registers rather than bailing, so it never declines a compile (`compile_asmir`'s `bool` return is vestigial — see `doc/arch_difference.md`). Tested on Linux/x86-64 and macOS Apple Silicon (arm64-apple-darwin).
-- **Rust channel**: Nightly (`nightly-2026-05-18`, pinned in `rust-toolchain.toml`)
+- **Rust channel**: Nightly (`nightly-2026-08-18`, pinned in `rust-toolchain.toml`)
 - **No dependency on CRuby** or any other Ruby runtime
 
 ---
@@ -93,7 +93,7 @@ monoruby/                   # Workspace root
 │   ├── method_args.md      # Method argument handling
 │   └── progress_2025-2026.md # Progress notes
 ├── Cargo.toml              # Workspace manifest
-└── rust-toolchain.toml     # Pins nightly-2026-05-18
+└── rust-toolchain.toml     # Pins nightly-2026-08-18
 ```
 
 ---

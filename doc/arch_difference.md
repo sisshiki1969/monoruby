@@ -189,7 +189,7 @@ rest.
 
 Both halves are gone. Every call/yield site on both arches now records its
 return address (`set_deopt_with_return_addr`) purely as a *key*, and BOP
-redefinition runs the arch-neutral chain-deopt walk (`Codegen::chain_deopt`),
+redefinition runs the arch-neutral chain-deopt walk (`Codegen::chain_deopt_into`),
 which converts each suspended JIT frame into an interpreter frame from the
 stack alone — no code is patched, on either arch. See `doc/chain_deopt.md`
 §10.

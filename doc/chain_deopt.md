@@ -272,14 +272,17 @@ The constraints that force this:
 
 ## 8. What is implemented (§5 steps 1–3, eager form)
 
-### 8.1 The write-back is replayed from Rust, at deopt time
+### 8.1 The write-back is replayed by a compiled per-site stub, at deopt time
 
-Step 1's runtime table exists as designed: `Codegen::chain_deopt_table` maps
-a call's return address to a `ChainReplay` (`jitgen.rs`) carrying the site's
-`WriteBack`, the frame's spill `base`, the site's `UsingFpr`, the call's
-`dst` slot, and the call-site pc. The walk clones the entry and
-`ChainReplay::replay` writes the suspended caller frame back **during the
-walk**, in Rust.
+Step 1's runtime table exists, one step further along than designed. At
+compile time each site's `ChainReplay` (`jitgen.rs` — the site's `WriteBack`,
+the frame's spill `base`, the site's `UsingFpr`, the call's `dst` slot, and
+the call-site pc) is lowered by `Codegen::gen_chain_replay_stub` into a
+**compiled conversion stub**, and `Codegen::chain_deopt_table` maps the
+call's return address straight to that stub's entry (`CodePtr -> CodePtr`).
+The walk therefore carries no per-site data and clones nothing: it calls the
+stub with three frame pointers (callee bp, caller bp, caller `Lfp`) and the
+stub writes the suspended caller frame back **during the walk**.
 
 Layout facts the replay depends on (each re-verified against the emission
 code; they are load-bearing now):
@@ -304,23 +307,25 @@ code; they are load-bearing now):
   redirected when a frame is promoted to the heap, exactly like the `r14`
   the emitted deopt write-back uses.
 
-`forward_rest` / `forward_kwrest` call `runtime::create_array` /
-`runtime::kwrest_hash` (the `correct_rest_kw` equivalent) from Rust, against
-the dynamic caller's frame reached through the saved bp — the same
-addressing the emitted `gen_forward_rest_materialize` /
-`gen_forward_kwrest_materialize` use. They run after the fpr/literal/void
-stores, so every deferred `dst` slot already holds its `nil` and the frame
-stays GC-consistent across the allocating helper calls. GC safety overall:
-slots always hold whole, valid (possibly stale) `Value`s, and the GC scans
-them as such, so the replay may allocate at any point.
+`forward_rest` / `forward_kwrest` emit calls to `runtime::create_array` /
+`runtime::correct_rest_kw` against the dynamic caller's frame reached through
+the saved bp — the same helpers and the same addressing the deopt path's
+`gen_forward_rest_materialize` / `gen_forward_kwrest_materialize` use, which
+is why the stub form needs no Rust-side equivalents of its own. They run
+after the fpr/literal/void stores, so every deferred `dst` slot already holds
+its `nil` and the frame stays GC-consistent across the allocating helper
+calls. GC safety overall: slots always hold whole, valid (possibly stale)
+`Value`s, and the GC scans them as such, so the replay may allocate at any
+point.
 
-Because the replay allocates, it must not run under the `CODEGEN` borrow:
-the walk (`Codegen::chain_deopt`) only **collects** a `Vec<ChainConversion>`
-plan; the callers (`runtime::chain_deopt`, `Codegen::check_bop_redefine`)
-apply it after the borrow is released. Write-back order within one frame is fixed (deferred
-materialization last); frames are applied in walk order, which is sound
-because the replays touch disjoint frames (rest/kwrest sources are raw
-slots, valid regardless of conversion order).
+The stub reaches nothing on `Codegen` — it reads its three frame pointers and
+writes frame slots — so the walk applies each conversion in place, under the
+`CODEGEN` borrow it already holds; there is no plan to collect and hand back
+to the callers (`runtime::chain_deopt`, `Codegen::check_bop_redefine`).
+Write-back order within one frame is fixed (deferred materialization last);
+frames are converted in walk order, which is sound because the replays touch
+disjoint frames (rest/kwrest sources are raw slots, valid regardless of
+conversion order).
 
 ### 8.2 One shared continuation stub — §3.1's raw VM entry is still wrong, the pad slot fixes it
 
@@ -342,10 +347,10 @@ with a raising consumer block, once every error exit escalated).
 
 The fix keeps §3.1's "one address serves every site" without decoding
 bytecode: **one** stub per arch (`gen_chain_cont_stub`, emitted with the VM
-handlers), plus a per-site continuation word the walk stores into the
-callee's **cont-frame pad slot** (`Cfp::set_cont_frame_data`, CFP+32 — the
-second half of the 16-byte cont frame, reserved by every caller and read by
-nothing on the normal return path). The word packs `conv(dst)` (0 = none)
+handlers), plus a per-site continuation word the site's conversion stub
+stores into the callee's **cont-frame pad slot** (CFP+32 — the second half of
+the 16-byte cont frame, reserved by every caller and read by nothing on the
+normal return path). The word packs `conv(dst)` (0 = none)
 in the high 32 bits and the byte advance to the next instruction
 (`pc.next() - pc`, per-opcode-size correct: 16 or 32) in the low 32 bits.
 
@@ -467,22 +472,22 @@ return address *is* a VM address (the stub) — which is load-bearing:
 interpreted inner frames may have updated its slots through `outer_lfp`
 since, and a second replay would clobber them with stale floats.
 
-BOP eviction goes through the same walk (`Codegen::chain_deopt`) as an
+BOP eviction goes through the same walk (`Codegen::chain_deopt_into`) as an
 escalated side exit; there is one CFP walk and one conversion mechanism.
 
 ### 8.6 Where the code is
 
 | Piece | Location |
 |---|---|
-| `ChainExitSpec` (compile-time), `ChainReplay` + the Rust replay, `ChainConversion` | `jitgen.rs` |
+| `ChainExitSpec` (compile-time), `ChainReplay`, `gen_chain_replay_stub` (the compiled per-site conversion, x86-64) | `jitgen.rs` (aarch64 form in `arch/aarch64/compile/mod.rs`) |
 | `AsmInst::ChainExit` (registration, no code emitted) | `jitgen/asmir.rs`; lowered in `jitgen/asmir/compile_shared.rs` |
 | `LInst::ChainExit` | `jitgen/lir.rs` |
 | Producers (call / specialized call / yield / specialized yield) | `AbstractState::chain_exit`, `jitgen/compile/method_call.rs` |
 | Shared continuation stub | `gen_chain_cont_stub` (`arch/x86_64/vmgen.rs`, `arch/aarch64/vmgen.rs`), address in `Codegen::chain_cont_stub` |
-| `kwrest_hash` (the `correct_rest_kw` equivalent for the replay) | `codegen/runtime.rs` |
-| Runtime table, the walk | `chain_deopt_table`, `register_chain_exit`, `chain_deopt` (`codegen.rs`) |
+| Deferred rest / kwrest materialization the replay stub calls | `runtime::create_array`, `runtime::correct_rest_kw` (`codegen/runtime.rs`) |
+| Runtime table, the walk | `chain_deopt_table` (return address -> stub entry), `register_chain_exit`, `chain_deopt_into` (`codegen.rs`) |
 | Escalation switch + runtime entry | `JitContext::escalate_side_exits` (`jitgen/context.rs`), `AsmIr::escalate_exits` (`jitgen/asmir.rs`), `runtime::chain_deopt` (`codegen/runtime.rs`) |
-| Frame writers/readers | `Cfp::set_return_addr`, `Cfp::set_cont_frame_data`, `Cfp::frame_bp` (`executor/frame.rs`) |
+| Frame readers the walk uses (the return-address and cont-frame-pad *writes* are emitted into the replay stub, so there are no Rust-side writers) | `Cfp::return_addr`, `Cfp::frame_bp`, `Cfp::lfp` (`executor/frame.rs`) |
 
 ## 9. The lazy write-back was a deviation — record of the eager conversion
 
@@ -545,7 +550,7 @@ state, unwind interaction — not evidence that lazy write-back was sound.
    `ChainReplay` carries exactly that (plus `dst` and the site pc for the
    stub's continuation word); the layout facts are restated, verified, in
    §8.1. `forward_rest` / `forward_kwrest` call `runtime::create_array` /
-   `runtime::kwrest_hash` from Rust — GC-safe because every source value is
+   `runtime::correct_rest_kw` — GC-safe because every source value is
    in a scanned frame slot.
 3. ~~Remove the per-site chain-exit handlers and the `DestLabel` table —
    `chain_deopt_table` maps `return_addr` to the replay data instead.~~

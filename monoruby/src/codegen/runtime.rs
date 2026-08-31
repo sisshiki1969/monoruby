@@ -16,12 +16,12 @@ pub const PROCDATA_FUNCID: i64 = std::mem::offset_of!(ProcData, func_id) as _;
 /// falls back to the interpreter (or starts unwinding a raise).
 ///
 /// Called from a chain-escalated side-exit handler **after** its deopt
-/// write-back, so the current frame is fully homed in the LFP. The walk
-/// itself (under the `CODEGEN` borrow) only collects the conversion plan;
-/// applying it — each suspended frame's write-back replay plus the
-/// return-address rewrite — happens after the borrow is released, because
-/// the replay allocates (boxing floats, materializing deferred rest
-/// arrays/kwrest hashes) and so can run a GC. The deopting frame's *own*
+/// write-back, so the current frame is fully homed in the LFP. Each frame is
+/// converted in place by the call site's own **compiled** conversion stub —
+/// the write-back replay (boxing floats, materializing deferred rest
+/// arrays/kwrest hashes), the return-address rewrite, and the cont-frame pad
+/// write are all emitted code, so the walk itself allocates nothing and is
+/// safe to run under the `CODEGEN` borrow. The deopting frame's *own*
 /// return-address slot is rewritten too — that is what converts its caller
 /// once the now-interpreted frame eventually returns.
 pub(super) extern "C" fn chain_deopt(vm: &mut Executor) {
@@ -31,26 +31,12 @@ pub(super) extern "C" fn chain_deopt(vm: &mut Executor) {
     CODEGEN.with(|codegen| codegen.borrow_mut().chain_deopt_into(cfp));
 }
 
-
 /// Detach a shared (copy-on-write) String receiver so the JIT's inline
 /// byte-store fast path can write its buffer in place instead of deopting
 /// (see `RStringInner::detach`). Infallible; copies with a plain malloc, so
 /// it never allocates a `Value` and never runs a GC.
 pub(crate) extern "C" fn str_detach(mut v: Value) {
     v.as_rstring_inner_mut().detach();
-}
-
-/// The `correct_rest_kw` equivalent for the chain-deopt replay
-/// (`doc/chain_deopt.md` §9.3): rebuild a deferred `**kwrest` Hash from the
-/// caller's kw slots. GC-safe because every source value sits in a scanned
-/// frame slot.
-pub(in crate::codegen) fn kwrest_hash(table: &[(IdentId, SlotId)], lfp: Lfp) -> Value {
-    let mut map = RubyMap::default();
-    for (name, slot) in table {
-        let v = lfp.register(*slot).unwrap();
-        map.insert_sym(RubySymbol::new(*name), v);
-    }
-    Value::hash(map)
 }
 
 /// Resolve the method for a call-site inline-cache miss.
@@ -103,7 +89,10 @@ pub(super) extern "C" fn find_method(
         let ic_class = recv.class_for_ic();
         if ic_class == BOOL_CLASS {
             let unified = match name {
-                Some(name) => globals.store.check_method_for_class(BOOL_CLASS, name).is_some(),
+                Some(name) => globals
+                    .store
+                    .check_method_for_class(BOOL_CLASS, name)
+                    .is_some(),
                 None => false,
             };
             if unified { BOOL_CLASS } else { recv.class() }
@@ -322,7 +311,11 @@ fn entered_by(globals: &Globals, cfp: executor::Cfp) -> Option<(bool, CallSiteId
 /// `exact` is `false` when a link could not be decoded (invoker
 /// boundary etc.), in which case `k` is a lower bound and callers
 /// should fall back to frame-independent resolution.
-fn super_run(vm: &Executor, globals: &Globals, method_fid: FuncId) -> (usize, Option<CallSiteId>, bool) {
+fn super_run(
+    vm: &Executor,
+    globals: &Globals,
+    method_fid: FuncId,
+) -> (usize, Option<CallSiteId>, bool) {
     // `super` in a block resolves against the enclosing method: locate
     // the frame executing the method body (the outermost lfp, stopping
     // at a proc-method boundary, mirroring `method_func_id`).
@@ -525,7 +518,6 @@ impl ProcData {
             func_id: Some(proc.func_id()),
         }
     }
-
 }
 
 ///
@@ -718,7 +710,11 @@ fn array_teq_impl(
 /// no `===` and no user-visible method call. `val` is always an Array here
 /// (the caller wraps the splat in an array literal); a non-Array is treated
 /// as its own truthiness for safety.
-pub(super) extern "C" fn array_any(_vm: &mut Executor, _globals: &mut Globals, val: Value) -> Value {
+pub(super) extern "C" fn array_any(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    val: Value,
+) -> Value {
     let any = if let Some(ary) = val.try_array_ty() {
         ary.iter().any(|e| e.as_bool())
     } else {
@@ -1800,7 +1796,15 @@ pub(super) extern "C" fn get_index(
         }
         _ => {}
     }
-    vm.invoke_method(globals, IdentId::_INDEX, is_func_call, base, &[index], None, None)
+    vm.invoke_method(
+        globals,
+        IdentId::_INDEX,
+        is_func_call,
+        base,
+        &[index],
+        None,
+        None,
+    )
 }
 
 pub(super) extern "C" fn set_index(

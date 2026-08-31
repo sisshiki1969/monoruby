@@ -25,7 +25,7 @@ jobs:
           # toolchain the build actually uses is the pinned one anyway —
           # rustup auto-fetches it from rust-toolchain.toml — so install
           # exactly that and nothing else.
-          toolchain: nightly-2026-05-18
+          toolchain: nightly-2026-08-18
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
 
@@ -123,7 +123,7 @@ jobs:
           # toolchain the build actually uses is the pinned one anyway —
           # rustup auto-fetches it from rust-toolchain.toml — so install
           # exactly that and nothing else.
-          toolchain: nightly-2026-05-18
+          toolchain: nightly-2026-08-18
       - uses: taiki-e/install-action@nextest
 
       - name: Clone optcarrot

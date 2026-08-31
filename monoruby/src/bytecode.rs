@@ -70,6 +70,17 @@ impl std::iter::Step for BcIndex {
             Some(BcIndex((start.0 as usize - count) as _))
         }
     }
+
+    fn forward_overflowing(start: Self, count: usize) -> (Self, bool) {
+        (start + count, false)
+    }
+
+    fn backward_overflowing(start: Self, count: usize) -> (Self, bool) {
+        match Self::backward_checked(start, count) {
+            Some(next) => (next, false),
+            None => (start, true),
+        }
+    }
 }
 
 impl BcIndex {

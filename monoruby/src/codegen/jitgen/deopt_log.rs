@@ -62,6 +62,7 @@ use super::*;
 /// The type exists in every build; only `deopt` builds emit code for it.
 ///
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub(crate) enum DeoptCause {
     /// A Ruby `Value` lives in this GP register at the branch.
     Value(GP),
@@ -117,9 +118,14 @@ mod enabled {
     ///
     #[derive(Clone, Copy)]
     pub(crate) enum DeoptExit {
-        Deopt { chain: bool },
+        Deopt {
+            chain: bool,
+        },
         Evict,
-        Recompile { reason: RecompileReason, chain: bool },
+        Recompile {
+            reason: RecompileReason,
+            chain: bool,
+        },
     }
 
     static SITES: RwLock<Vec<DeoptSite>> = RwLock::new(Vec::new());

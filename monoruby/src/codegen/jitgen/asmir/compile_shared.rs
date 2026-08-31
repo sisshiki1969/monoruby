@@ -12,8 +12,8 @@
 //! forwarded to the per-arch `compile_asmir_arch`. Coverage of the shared match
 //! grows one instruction family at a time; see `doc/arch_difference.md`.
 
-use crate::codegen::jitgen::deopt_log::{self, DeoptCause};
 use super::*;
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg};
 
 impl Codegen {
@@ -219,30 +219,40 @@ impl Codegen {
             }
             // Store to a constant, bumping the global constant version (aarch64
             // bails if any fpr is live, hence the bool result).
-            AsmInst::StoreConstant { id, using_fpr, error } => {
+            AsmInst::StoreConstant {
+                id,
+                using_fpr,
+                error,
+            } => {
                 let error = labels[error].clone();
-                self.encode_linst(LInst::StoreConstant { id, using_fpr, error })
+                self.encode_linst(LInst::StoreConstant {
+                    id,
+                    using_fpr,
+                    error,
+                })
             }
             // Variable access. gvar/cvar go via a runtime call; dynvar walks the
             // outer-LFP chain.
             AsmInst::LoadGVar { name, using_fpr } => {
                 self.encode_linst(LInst::LoadGVar { name, using_fpr })
             }
-            AsmInst::StoreGVar { name, src, using_fpr } => {
-                self.encode_linst(LInst::StoreGVar { name, src, using_fpr })
-            }
+            AsmInst::StoreGVar {
+                name,
+                src,
+                using_fpr,
+            } => self.encode_linst(LInst::StoreGVar {
+                name,
+                src,
+                using_fpr,
+            }),
             AsmInst::LoadCVar { name, using_fpr } => {
                 self.encode_linst(LInst::LoadCVar { name, using_fpr })
             }
             AsmInst::LoadDynVar { src } => self.encode_linst(LInst::LoadDynVar { src }),
-            AsmInst::StoreDynVar { dst, src } => {
-                self.encode_linst(LInst::StoreDynVar { dst, src })
-            }
+            AsmInst::StoreDynVar { dst, src } => self.encode_linst(LInst::StoreDynVar { dst, src }),
             // Runtime allocation / C-call family: each builds a heap object via a
             // runtime call.
-            AsmInst::CreateArray { src, len } => {
-                self.encode_linst(LInst::CreateArray { src, len })
-            }
+            AsmInst::CreateArray { src, len } => self.encode_linst(LInst::CreateArray { src, len }),
             AsmInst::NewArray {
                 callid,
                 inline,
@@ -252,24 +262,62 @@ impl Codegen {
                 inline,
                 using_fpr,
             }),
-            AsmInst::ArrayMinMax { args, len, min, using_fpr } => {
-                self.encode_linst(LInst::ArrayMinMax { args, len, min, using_fpr })
-            }
-            AsmInst::NewHash(args, len, using_fpr) => {
-                self.encode_linst(LInst::NewHash { args, len, using_fpr })
-            }
-            AsmInst::HashInsert { hash, args, len, using_fpr } => {
-                self.encode_linst(LInst::HashInsert { hash, args, len, using_fpr })
-            }
-            AsmInst::ArrayConcat { dst, src, using_fpr } => {
-                self.encode_linst(LInst::ArrayConcat { dst, src, using_fpr })
-            }
-            AsmInst::NewRange { start, end, exclude_end, using_fpr } => {
-                self.encode_linst(LInst::NewRange { start, end, exclude_end, using_fpr })
-            }
-            AsmInst::ConcatStr { arg, len, using_fpr } => {
-                self.encode_linst(LInst::ConcatStr { arg, len, using_fpr })
-            }
+            AsmInst::ArrayMinMax {
+                args,
+                len,
+                min,
+                using_fpr,
+            } => self.encode_linst(LInst::ArrayMinMax {
+                args,
+                len,
+                min,
+                using_fpr,
+            }),
+            AsmInst::NewHash(args, len, using_fpr) => self.encode_linst(LInst::NewHash {
+                args,
+                len,
+                using_fpr,
+            }),
+            AsmInst::HashInsert {
+                hash,
+                args,
+                len,
+                using_fpr,
+            } => self.encode_linst(LInst::HashInsert {
+                hash,
+                args,
+                len,
+                using_fpr,
+            }),
+            AsmInst::ArrayConcat {
+                dst,
+                src,
+                using_fpr,
+            } => self.encode_linst(LInst::ArrayConcat {
+                dst,
+                src,
+                using_fpr,
+            }),
+            AsmInst::NewRange {
+                start,
+                end,
+                exclude_end,
+                using_fpr,
+            } => self.encode_linst(LInst::NewRange {
+                start,
+                end,
+                exclude_end,
+                using_fpr,
+            }),
+            AsmInst::ConcatStr {
+                arg,
+                len,
+                using_fpr,
+            } => self.encode_linst(LInst::ConcatStr {
+                arg,
+                len,
+                using_fpr,
+            }),
             AsmInst::ToA { src, using_fpr } => self.encode_linst(LInst::ToA { src, using_fpr }),
             AsmInst::DeepCopyLit(v, using_fpr) => {
                 self.encode_linst(LInst::DeepCopyLit { v, using_fpr })
@@ -855,8 +903,16 @@ impl Codegen {
             }
             // `&block` forwarding: proxy the block handler, or materialize it
             // into a Proc value (aarch64 bails on a live fpr / range overflow).
-            AsmInst::BlockArgProxy { ret, outer } => self.encode_linst(LInst::BlockArgProxy { ret, outer }),
-            AsmInst::BlockArg { ret, _outer: _, using_fpr, error, call_site_bc_ptr } => {
+            AsmInst::BlockArgProxy { ret, outer } => {
+                self.encode_linst(LInst::BlockArgProxy { ret, outer })
+            }
+            AsmInst::BlockArg {
+                ret,
+                _outer: _,
+                using_fpr,
+                error,
+                call_site_bc_ptr,
+            } => {
                 let error = labels[error].clone();
                 self.encode_linst(LInst::BlockArg {
                     ret,
@@ -945,19 +1001,37 @@ impl Codegen {
             AsmInst::UndefMethod { undef, using_fpr } => {
                 self.encode_linst(LInst::UndefMethod { undef, using_fpr })
             }
-            AsmInst::AliasGvar { new, old, using_fpr } => {
-                self.encode_linst(LInst::AliasGvar { new, old, using_fpr })
-            }
+            AsmInst::AliasGvar {
+                new,
+                old,
+                using_fpr,
+            } => self.encode_linst(LInst::AliasGvar {
+                new,
+                old,
+                using_fpr,
+            }),
             // Runtime-call class-variable / method-alias ops.
             AsmInst::CheckCVar { name, using_fpr } => {
                 self.encode_linst(LInst::CheckCVar { name, using_fpr })
             }
-            AsmInst::StoreCVar { name, src, using_fpr } => {
-                self.encode_linst(LInst::StoreCVar { name, src, using_fpr })
-            }
-            AsmInst::AliasMethod { new, old, using_fpr } => {
-                self.encode_linst(LInst::AliasMethod { new, old, using_fpr })
-            }
+            AsmInst::StoreCVar {
+                name,
+                src,
+                using_fpr,
+            } => self.encode_linst(LInst::StoreCVar {
+                name,
+                src,
+                using_fpr,
+            }),
+            AsmInst::AliasMethod {
+                new,
+                old,
+                using_fpr,
+            } => self.encode_linst(LInst::AliasMethod {
+                new,
+                old,
+                using_fpr,
+            }),
             // defined? runtime-call family.
             AsmInst::DefinedYield { dst, using_fpr } => {
                 self.encode_linst(LInst::DefinedYield { dst, using_fpr })
@@ -965,64 +1039,152 @@ impl Codegen {
             AsmInst::DefinedSuper { dst, using_fpr } => {
                 self.encode_linst(LInst::DefinedSuper { dst, using_fpr })
             }
-            AsmInst::DefinedGvar { dst, name, using_fpr } => {
-                self.encode_linst(LInst::DefinedGvar { dst, name, using_fpr })
-            }
-            AsmInst::DefinedCvar { dst, name, using_fpr } => {
-                self.encode_linst(LInst::DefinedCvar { dst, name, using_fpr })
-            }
-            AsmInst::DefinedConst { dst, siteid, using_fpr } => {
-                self.encode_linst(LInst::DefinedConst { dst, siteid, using_fpr })
-            }
-            AsmInst::DefinedMethod { dst, recv, name, using_fpr } => {
-                self.encode_linst(LInst::DefinedMethod { dst, recv, name, using_fpr })
-            }
-            AsmInst::DefinedIvar { dst, name, using_fpr } => {
-                self.encode_linst(LInst::DefinedIvar { dst, name, using_fpr })
-            }
+            AsmInst::DefinedGvar {
+                dst,
+                name,
+                using_fpr,
+            } => self.encode_linst(LInst::DefinedGvar {
+                dst,
+                name,
+                using_fpr,
+            }),
+            AsmInst::DefinedCvar {
+                dst,
+                name,
+                using_fpr,
+            } => self.encode_linst(LInst::DefinedCvar {
+                dst,
+                name,
+                using_fpr,
+            }),
+            AsmInst::DefinedConst {
+                dst,
+                siteid,
+                using_fpr,
+            } => self.encode_linst(LInst::DefinedConst {
+                dst,
+                siteid,
+                using_fpr,
+            }),
+            AsmInst::DefinedMethod {
+                dst,
+                recv,
+                name,
+                using_fpr,
+            } => self.encode_linst(LInst::DefinedMethod {
+                dst,
+                recv,
+                name,
+                using_fpr,
+            }),
+            AsmInst::DefinedIvar {
+                dst,
+                name,
+                using_fpr,
+            } => self.encode_linst(LInst::DefinedIvar {
+                dst,
+                name,
+                using_fpr,
+            }),
             // Generic binary-op / Array=== runtime calls.
-            AsmInst::GenericBinOp { lhs, rhs, func, is_func_call, using_fpr } => {
-                self.encode_linst(LInst::GenericBinOp { lhs, rhs, func, is_func_call, using_fpr })
-            }
-            AsmInst::OptEqCmp { lhs, rhs, kind, func, is_func_call, using_fpr } => {
-                self.encode_linst(LInst::OptEqCmp { lhs, rhs, kind, func, is_func_call, using_fpr })
-            }
-            AsmInst::ArrayTEq { lhs, rhs, using_fpr } => {
-                self.encode_linst(LInst::ArrayTEq { lhs, rhs, using_fpr })
-            }
+            AsmInst::GenericBinOp {
+                lhs,
+                rhs,
+                func,
+                is_func_call,
+                using_fpr,
+            } => self.encode_linst(LInst::GenericBinOp {
+                lhs,
+                rhs,
+                func,
+                is_func_call,
+                using_fpr,
+            }),
+            AsmInst::OptEqCmp {
+                lhs,
+                rhs,
+                kind,
+                func,
+                is_func_call,
+                using_fpr,
+            } => self.encode_linst(LInst::OptEqCmp {
+                lhs,
+                rhs,
+                kind,
+                func,
+                is_func_call,
+                using_fpr,
+            }),
+            AsmInst::ArrayTEq {
+                lhs,
+                rhs,
+                using_fpr,
+            } => self.encode_linst(LInst::ArrayTEq {
+                lhs,
+                rhs,
+                using_fpr,
+            }),
             AsmInst::ArrayAny { reg, using_fpr } => {
                 self.encode_linst(LInst::ArrayAny { reg, using_fpr })
             }
             // Regexp interpolation / keyword-rest fixup runtime calls.
-            AsmInst::ConcatRegexp { arg, len, using_fpr } => {
-                self.encode_linst(LInst::ConcatRegexp { arg, len, using_fpr })
-            }
+            AsmInst::ConcatRegexp {
+                arg,
+                len,
+                using_fpr,
+            } => self.encode_linst(LInst::ConcatRegexp {
+                arg,
+                len,
+                using_fpr,
+            }),
             AsmInst::CheckKwRest(slot) => self.encode_linst(LInst::CheckKwRest { slot }),
             // Multiple-assignment array expansion.
-            AsmInst::ExpandArray { dst, len, rest_pos, using_fpr } => {
-                self.encode_linst(LInst::ExpandArray { dst, len, rest_pos, using_fpr })
-            }
+            AsmInst::ExpandArray {
+                dst,
+                len,
+                rest_pos,
+                using_fpr,
+            } => self.encode_linst(LInst::ExpandArray {
+                dst,
+                len,
+                rest_pos,
+                using_fpr,
+            }),
             // Float C-function calls (Math.sqrt/sin/…): save the live FP pool
             // around the call.
-            AsmInst::CFunc_F_F { f, src, dst, using_fpr } => self.encode_linst(LInst::CFunc_F_F {
+            AsmInst::CFunc_F_F {
+                f,
+                src,
+                dst,
+                using_fpr,
+            } => self.encode_linst(LInst::CFunc_F_F {
                 f,
                 src,
                 dst,
                 using_fpr,
                 base: frame.base_stack_offset,
             }),
-            AsmInst::CFunc_FF_F { f, lhs, rhs, dst, using_fpr } => {
-                self.encode_linst(LInst::CFunc_FF_F {
-                    f,
-                    lhs,
-                    rhs,
-                    dst,
-                    using_fpr,
-                    base: frame.base_stack_offset,
-                })
-            }
+            AsmInst::CFunc_FF_F {
+                f,
+                lhs,
+                rhs,
+                dst,
+                using_fpr,
+            } => self.encode_linst(LInst::CFunc_FF_F {
+                f,
+                lhs,
+                rhs,
+                dst,
+                using_fpr,
+                base: frame.base_stack_offset,
+            }),
             // Method definition (`def`). aarch64 bails on a live fpr pool reg.
-            AsmInst::MethodDef { name, func_id, using_fpr, error } => {
+            AsmInst::MethodDef {
+                name,
+                func_id,
+                using_fpr,
+                error,
+            } => {
                 let error = labels[error].clone();
                 self.encode_linst(LInst::MethodDef {
                     name,
@@ -1031,7 +1193,13 @@ impl Codegen {
                     error,
                 });
             }
-            AsmInst::SingletonMethodDef { obj, name, func_id, using_fpr, error } => {
+            AsmInst::SingletonMethodDef {
+                obj,
+                name,
+                func_id,
+                using_fpr,
+                error,
+            } => {
                 let error = labels[error].clone();
                 self.encode_linst(LInst::SingletonMethodDef {
                     obj,
@@ -1073,7 +1241,12 @@ impl Codegen {
             // the block frame and calls the funcdata indirectly; both arches
             // record the block call's return address under `evict` for the
             // following `ChainExit`.
-            AsmInst::Yield { callid, simple, error, evict } => {
+            AsmInst::Yield {
+                callid,
+                simple,
+                error,
+                evict,
+            } => {
                 let error = labels[error].clone();
                 self.encode_linst(LInst::Yield {
                     callid,
@@ -1090,9 +1263,14 @@ impl Codegen {
             AsmInst::MethodRetSpecialized { rbp_offset }
             | AsmInst::BlockBreakSpecialized { rbp_offset } => {
                 let off = rbp_offset.unwrap_concrete();
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.method_return_specialized(off);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.method_return_specialized(off);
+                    },
+                );
             }
             // Outer-scope local access at a pre-resolved frame offset.
             AsmInst::StoreOuterFprHomeF { src, home } => {
@@ -1134,15 +1312,25 @@ impl Codegen {
             }
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
                 let off = offset.unwrap_concrete();
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.load_dyn_var_specialized(off, reg);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.load_dyn_var_specialized(off, reg);
+                    },
+                );
             }
             AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
                 let off = offset.unwrap_concrete();
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.store_dyn_var_specialized(off, dst, src);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.store_dyn_var_specialized(off, dst, src);
+                    },
+                );
             }
             // Direct call into an inlined method entry; the return address is
             // recorded under `evict` so the following `ChainExit` can register
@@ -1157,10 +1345,15 @@ impl Codegen {
                 let patch_point =
                     patch_point.map(|label| frame.resolve_label(&mut self.jit, label));
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    let return_addr = cg.do_specialized_call(entry_label, patch_point);
-                    cg.set_deopt_with_return_addr(return_addr, evict);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        let return_addr = cg.do_specialized_call(entry_label, patch_point);
+                        cg.set_deopt_with_return_addr(return_addr, evict);
+                    },
+                );
             }
             // Specialized `yield`: build the block frame, then branch into the
             // inlined block entry (no patch point).
@@ -1170,21 +1363,36 @@ impl Codegen {
                 req_num,
             } => {
                 let offset = store[callee_fid].get_offset();
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.gen_yield_array_expand(callid, callee_fid, req_num, offset);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.gen_yield_array_expand(callid, callee_fid, req_num, offset);
+                    },
+                );
             }
             AsmInst::SetupYieldFrame { meta, outer } => {
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.setup_yield_frame(meta, outer);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.setup_yield_frame(meta, outer);
+                    },
+                );
             }
             AsmInst::SpecializedYield { entry, evict } => {
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    let return_addr = cg.do_specialized_call(entry_label, None);
-                    cg.set_deopt_with_return_addr(return_addr, evict);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        let return_addr = cg.do_specialized_call(entry_label, None);
+                        cg.set_deopt_with_return_addr(return_addr, evict);
+                    },
+                );
             }
             // Inlined builtin method body: lower to `LInst::Inline`, the
             // context-carrying escape hatch. Unlike every other `LInst` (which
@@ -1192,26 +1400,39 @@ impl Codegen {
             // `store`/`labels`/`base`, so it is dispatched here via
             // `encode_linst_inline` — the one LIR op whose machine-code emit
             // lives at the lowering boundary rather than in `encode_linst`.
-            AsmInst::Inline(proc) => {
-                self.encode_linst_inline(LInst::Inline(proc), store, labels, frame.base_stack_offset)
-            }
+            AsmInst::Inline(proc) => self.encode_linst_inline(
+                LInst::Inline(proc),
+                store,
+                labels,
+                frame.base_stack_offset,
+            ),
             // §20 (B): typed array integer-index read/assign (replaces the
             // `ir.inline` closures, so `AsmInst` is `Clone`). The per-arch
             // index-register setup + `array_index*` call lives in
             // `gen_array_index*`.
             AsmInst::ArrayIndex { kind } => {
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.gen_array_index(kind);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.gen_array_index(kind);
+                    },
+                );
             }
             AsmInst::ArrayIndexAssign {
                 kind,
                 using_fpr,
                 error,
             } => {
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, labels, _| {
-                    cg.gen_array_index_assign(kind, using_fpr, &labels[error]);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, labels, _| {
+                        cg.gen_array_index_assign(kind, using_fpr, &labels[error]);
+                    },
+                );
             }
             // Typed field-load (replaces the `ir.inline` escape hatch for trivial
             // field-reader inline builtins). Goal-2 proof: an inline builtin's
@@ -1243,41 +1464,62 @@ impl Codegen {
                 layout,
                 sub_dead,
             } => {
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.gen_hash_len_fixnum(dst, base, layout, sub_dead);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.gen_hash_len_fixnum(dst, base, layout, sub_dead);
+                    },
+                );
             }
             AsmInst::HashCompareByIdentity { dst, base } => {
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.gen_hash_compare_by_identity(dst, base);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.gen_hash_compare_by_identity(dst, base);
+                    },
+                );
             }
             AsmInst::HashDefault {
                 dst,
                 base,
                 want_proc,
             } => {
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.gen_hash_default(dst, base, want_proc);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.gen_hash_default(dst, base, want_proc);
+                    },
+                );
             }
             AsmInst::HashEntryAt { want_key, layout } => {
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.gen_hash_entry_at(want_key, layout);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.gen_hash_entry_at(want_key, layout);
+                    },
+                );
             }
             AsmInst::HashLiveAt { layout } => {
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.gen_hash_live_at(layout);
-                });
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.gen_hash_live_at(layout);
+                    },
+                );
             }
             // Typed bool predicates (replace `emit_kernel_nil` / `emit_object_not`).
-            AsmInst::IsNilToBool { dst, src } => {
-                self.encode_linst(LInst::IsNilToBool { dst, src })
-            }
-            AsmInst::NotToBool { dst, src } => {
-                self.encode_linst(LInst::NotToBool { dst, src })
-            }
+            AsmInst::IsNilToBool { dst, src } => self.encode_linst(LInst::IsNilToBool { dst, src }),
+            AsmInst::NotToBool { dst, src } => self.encode_linst(LInst::NotToBool { dst, src }),
             // `Math.sqrt` (replaces the `emit_math_sqrt` closure). Resolve the
             // deopt label and pass the frame base, like the guard family.
             AsmInst::MathSqrt { fsrc, fret, deopt } => {
@@ -1531,13 +1773,21 @@ impl Codegen {
             } => {
                 self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_fpr, wb);
             }
-            LInst::StoreConstant { id, using_fpr, error } => {
+            LInst::StoreConstant {
+                id,
+                using_fpr,
+                error,
+            } => {
                 self.emit_store_constant(id, using_fpr, &error);
             }
             LInst::LoadGVar { name, using_fpr } => {
                 self.emit_load_gvar(name, using_fpr);
             }
-            LInst::StoreGVar { name, src, using_fpr } => {
+            LInst::StoreGVar {
+                name,
+                src,
+                using_fpr,
+            } => {
                 self.emit_store_gvar(name, src, using_fpr);
             }
             LInst::LoadCVar { name, using_fpr } => {
@@ -1559,22 +1809,49 @@ impl Codegen {
             } => {
                 self.emit_new_array(callid, inline, using_fpr);
             }
-            LInst::ArrayMinMax { args, len, min, using_fpr } => {
+            LInst::ArrayMinMax {
+                args,
+                len,
+                min,
+                using_fpr,
+            } => {
                 self.emit_array_min_max(args, len, min, using_fpr);
             }
-            LInst::NewHash { args, len, using_fpr } => {
+            LInst::NewHash {
+                args,
+                len,
+                using_fpr,
+            } => {
                 self.emit_new_hash(args, len, using_fpr);
             }
-            LInst::HashInsert { hash, args, len, using_fpr } => {
+            LInst::HashInsert {
+                hash,
+                args,
+                len,
+                using_fpr,
+            } => {
                 self.emit_hash_insert(hash, args, len, using_fpr);
             }
-            LInst::ArrayConcat { dst, src, using_fpr } => {
+            LInst::ArrayConcat {
+                dst,
+                src,
+                using_fpr,
+            } => {
                 self.emit_array_concat(dst, src, using_fpr);
             }
-            LInst::NewRange { start, end, exclude_end, using_fpr } => {
+            LInst::NewRange {
+                start,
+                end,
+                exclude_end,
+                using_fpr,
+            } => {
                 self.emit_new_range(start, end, exclude_end, using_fpr);
             }
-            LInst::ConcatStr { arg, len, using_fpr } => {
+            LInst::ConcatStr {
+                arg,
+                len,
+                using_fpr,
+            } => {
                 self.emit_concat_str(arg, len, using_fpr);
             }
             LInst::ToA { src, using_fpr } => {
@@ -1586,16 +1863,28 @@ impl Codegen {
             LInst::UndefMethod { undef, using_fpr } => {
                 self.emit_undef_method(undef, using_fpr);
             }
-            LInst::AliasGvar { new, old, using_fpr } => {
+            LInst::AliasGvar {
+                new,
+                old,
+                using_fpr,
+            } => {
                 self.emit_alias_gvar(new, old, using_fpr);
             }
             LInst::CheckCVar { name, using_fpr } => {
                 self.emit_check_cvar(name, using_fpr);
             }
-            LInst::StoreCVar { name, src, using_fpr } => {
+            LInst::StoreCVar {
+                name,
+                src,
+                using_fpr,
+            } => {
                 self.emit_store_cvar(name, src, using_fpr);
             }
-            LInst::AliasMethod { new, old, using_fpr } => {
+            LInst::AliasMethod {
+                new,
+                old,
+                using_fpr,
+            } => {
                 self.emit_alias_method(new, old, using_fpr);
             }
             LInst::DefinedYield { dst, using_fpr } => {
@@ -1604,40 +1893,87 @@ impl Codegen {
             LInst::DefinedSuper { dst, using_fpr } => {
                 self.emit_defined_super(dst, using_fpr);
             }
-            LInst::DefinedGvar { dst, name, using_fpr } => {
+            LInst::DefinedGvar {
+                dst,
+                name,
+                using_fpr,
+            } => {
                 self.emit_defined_gvar(dst, name, using_fpr);
             }
-            LInst::DefinedCvar { dst, name, using_fpr } => {
+            LInst::DefinedCvar {
+                dst,
+                name,
+                using_fpr,
+            } => {
                 self.emit_defined_cvar(dst, name, using_fpr);
             }
-            LInst::DefinedConst { dst, siteid, using_fpr } => {
+            LInst::DefinedConst {
+                dst,
+                siteid,
+                using_fpr,
+            } => {
                 self.emit_defined_const(dst, siteid, using_fpr);
             }
-            LInst::DefinedMethod { dst, recv, name, using_fpr } => {
+            LInst::DefinedMethod {
+                dst,
+                recv,
+                name,
+                using_fpr,
+            } => {
                 self.emit_defined_method(dst, recv, name, using_fpr);
             }
-            LInst::DefinedIvar { dst, name, using_fpr } => {
+            LInst::DefinedIvar {
+                dst,
+                name,
+                using_fpr,
+            } => {
                 self.emit_defined_ivar(dst, name, using_fpr);
             }
-            LInst::GenericBinOp { lhs, rhs, func, is_func_call, using_fpr } => {
+            LInst::GenericBinOp {
+                lhs,
+                rhs,
+                func,
+                is_func_call,
+                using_fpr,
+            } => {
                 self.emit_generic_binop(lhs, rhs, func, is_func_call, using_fpr);
             }
-            LInst::OptEqCmp { lhs, rhs, kind, func, is_func_call, using_fpr } => {
+            LInst::OptEqCmp {
+                lhs,
+                rhs,
+                kind,
+                func,
+                is_func_call,
+                using_fpr,
+            } => {
                 self.emit_opt_eq_cmp(lhs, rhs, kind, func, is_func_call, using_fpr);
             }
-            LInst::ArrayTEq { lhs, rhs, using_fpr } => {
+            LInst::ArrayTEq {
+                lhs,
+                rhs,
+                using_fpr,
+            } => {
                 self.emit_array_teq(lhs, rhs, using_fpr);
             }
             LInst::ArrayAny { reg, using_fpr } => {
                 self.emit_array_any(reg, using_fpr);
             }
-            LInst::ConcatRegexp { arg, len, using_fpr } => {
+            LInst::ConcatRegexp {
+                arg,
+                len,
+                using_fpr,
+            } => {
                 self.emit_concat_regexp(arg, len, using_fpr);
             }
             LInst::CheckKwRest { slot } => {
                 self.emit_check_kw_rest(slot);
             }
-            LInst::ExpandArray { dst, len, rest_pos, using_fpr } => {
+            LInst::ExpandArray {
+                dst,
+                len,
+                rest_pos,
+                using_fpr,
+            } => {
                 self.emit_expand_array(dst, len, rest_pos, using_fpr);
             }
             LInst::Deopt { deopt } => {
@@ -1646,10 +1982,18 @@ impl Codegen {
             LInst::HandleError { error } => {
                 self.emit_handle_error(&error);
             }
-            LInst::CheckStack { write_back, error, base } => {
+            LInst::CheckStack {
+                write_back,
+                error,
+                base,
+            } => {
                 self.emit_check_stack(write_back, &error, base);
             }
-            LInst::ExecGc { write_back, error, base } => {
+            LInst::ExecGc {
+                write_back,
+                error,
+                base,
+            } => {
                 self.emit_exec_gc(write_back, &error, base);
             }
             LInst::IntegerCmp { kind, lhs, rhs } => {
@@ -1661,16 +2005,25 @@ impl Codegen {
             LInst::Ret { check_deferred } => {
                 self.emit_ret(check_deferred);
             }
-            LInst::MethodRet { pc, loop_jit_spill_bytes } => {
+            LInst::MethodRet {
+                pc,
+                loop_jit_spill_bytes,
+            } => {
                 self.emit_method_ret(pc, loop_jit_spill_bytes);
             }
-            LInst::BlockBreak { pc, loop_jit_spill_bytes } => {
+            LInst::BlockBreak {
+                pc,
+                loop_jit_spill_bytes,
+            } => {
                 self.emit_block_break(pc, loop_jit_spill_bytes);
             }
             LInst::ChainExit { evict, replay } => {
                 self.register_chain_exit(evict, replay);
             }
-            LInst::Init { info, prologue_offset } => {
+            LInst::Init {
+                info,
+                prologue_offset,
+            } => {
                 self.emit_init(info, prologue_offset);
             }
             LInst::LoopJitRspBump { offset } => {
@@ -1679,25 +2032,54 @@ impl Codegen {
             LInst::BlockArgProxy { ret, outer } => {
                 self.emit_block_arg_proxy(ret, outer);
             }
-            LInst::BlockArg { ret, using_fpr, call_site_bc_ptr, error } => {
+            LInst::BlockArg {
+                ret,
+                using_fpr,
+                call_site_bc_ptr,
+                error,
+            } => {
                 self.emit_block_arg(ret, using_fpr, call_site_bc_ptr, &error);
             }
-            LInst::MethodDef { name, func_id, using_fpr, error } => {
+            LInst::MethodDef {
+                name,
+                func_id,
+                using_fpr,
+                error,
+            } => {
                 self.emit_method_def(name, func_id, using_fpr, &error);
             }
-            LInst::SingletonMethodDef { obj, name, func_id, using_fpr, error } => {
+            LInst::SingletonMethodDef {
+                obj,
+                name,
+                func_id,
+                using_fpr,
+                error,
+            } => {
                 self.emit_singleton_method_def(obj, name, func_id, using_fpr, &error);
             }
-            LInst::Raise { loop_jit_spill_bytes } => {
+            LInst::Raise {
+                loop_jit_spill_bytes,
+            } => {
                 self.emit_raise(loop_jit_spill_bytes);
             }
-            LInst::Retry { pc, loop_jit_spill_bytes } => {
+            LInst::Retry {
+                pc,
+                loop_jit_spill_bytes,
+            } => {
                 self.emit_retry(pc, loop_jit_spill_bytes);
             }
-            LInst::Redo { pc, loop_jit_spill_bytes } => {
+            LInst::Redo {
+                pc,
+                loop_jit_spill_bytes,
+            } => {
                 self.emit_redo(pc, loop_jit_spill_bytes);
             }
-            LInst::EnsureEnd { pc, loop_jit_spill_bytes, spliced_break, spliced_ret } => {
+            LInst::EnsureEnd {
+                pc,
+                loop_jit_spill_bytes,
+                spliced_break,
+                spliced_ret,
+            } => {
                 self.emit_ensure_end(pc, loop_jit_spill_bytes, spliced_break, spliced_ret);
             }
             LInst::DeferSplicedExit { kind, pc } => {
@@ -1715,7 +2097,12 @@ impl Codegen {
             LInst::BoxOuterHomeToDynVar { disp, offset, reg } => {
                 self.emit_box_outer_home_to_dynvar(disp, offset, reg);
             }
-            LInst::Yield { callid, simple, error, evict } => {
+            LInst::Yield {
+                callid,
+                simple,
+                error,
+                evict,
+            } => {
                 self.emit_yield(callid, simple, &error, evict);
             }
             LInst::Unreachable => {
@@ -1759,14 +2146,7 @@ impl Codegen {
                 error,
             } => {
                 self.class_def(
-                    base,
-                    superclass,
-                    dst,
-                    name,
-                    func_id,
-                    is_module,
-                    using_fpr,
-                    &error,
+                    base, superclass, dst, name, func_id, is_module, using_fpr, &error,
                 );
             }
             LInst::SingletonClassDef {

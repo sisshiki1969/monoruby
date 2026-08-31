@@ -91,31 +91,18 @@ impl Cfp {
     }
 
     ///
-    /// Get base pointer address of *self*.
+    /// The machine return address this frame will `ret` to.
+    ///
+    /// Read-only: chain deopt *overwrites* this slot to redirect a suspended
+    /// JIT frame's return into the VM's shared post-call continuation stub,
+    /// but it does so from the site's compiled conversion stub, not from Rust
+    /// (`doc/chain_deopt.md` §8).
+    ///
+    /// ### safety
+    /// *self* must be a live control frame of the current thread's stack.
     ///
     pub unsafe fn return_addr(&self) -> Option<monoasm::CodePtr> {
         unsafe { *(self.as_ptr() as *const Option<monoasm::CodePtr>).add(1 + BP_CFP as usize / 8) }
-    }
-
-    ///
-    /// Overwrite the machine return address this frame will `ret` to.
-    ///
-    /// The writer half of [`Self::return_addr`], used by chain deopt
-    /// (`doc/chain_deopt.md` §5 step 3) to redirect a suspended JIT frame's
-    /// return into the VM's shared post-call continuation stub instead of its
-    /// caller's compiled body.
-    ///
-    /// ### safety
-    /// *self* must be a live control frame of the current thread's stack, and
-    /// *addr* an address that is valid to return to with this frame's
-    /// register/stack state — in practice only the chain-deopt continuation
-    /// stub, paired with a [`Self::set_cont_frame_data`] write.
-    ///
-    pub(crate) unsafe fn set_return_addr(&mut self, addr: monoasm::CodePtr) {
-        unsafe {
-            *(self.as_ptr() as *mut Option<monoasm::CodePtr>).add(1 + BP_CFP as usize / 8) =
-                Some(addr)
-        };
     }
 
     ///
@@ -129,22 +116,6 @@ impl Cfp {
     }
 
     ///
-    /// Write the cont-frame *pad* slot (CFP+32, the second half of the
-    /// 16-byte continuation frame whose first half is the pc slot read by
-    /// [`Self::caller_pc_slot`]). The pad is reserved by every caller
-    /// (`push_cont_frame` / the JIT's cont-mode `FprSave`) and read by
-    /// nothing on the normal return path; chain deopt stores the converted
-    /// call's per-site continuation word here for the shared stub to read
-    /// after this frame's `ret` (`doc/chain_deopt.md` §9.3).
-    ///
-    /// ### safety
-    /// *self* must be a live control frame of the current thread's stack.
-    ///
-    pub(crate) unsafe fn set_cont_frame_data(&mut self, data: u64) {
-        unsafe { *(self.as_ptr() as *mut u64).add(4) = data };
-    }
-
-    ///
     /// The caller's suspended *pc*, read from the cont-frame slot the
     /// caller wrote just before calling into this frame (CFP+24: the
     /// VM's `push_cont_frame` `pushq r13`, the JIT's equivalent store,
@@ -153,10 +124,16 @@ impl Cfp {
     /// frame's bytecode span before trusting it, since not every
     /// dispatch path writes it.
     ///
+    /// The other half of the 16-byte cont frame — the *pad* slot at CFP+32 —
+    /// is reserved by every caller and read by nothing on the normal return
+    /// path; chain deopt reuses it for the converted call's per-site
+    /// continuation word, written by the site's compiled conversion stub and
+    /// read by `gen_chain_cont_stub` after this frame's `ret`
+    /// (`doc/chain_deopt.md` §9.3).
+    ///
     pub(crate) fn caller_pc_slot(&self) -> u64 {
         unsafe { *(self.as_ptr() as *const u64).add(3) }
     }
-
 
     ///
     /// Get LFP.
@@ -426,18 +403,6 @@ impl Lfp {
     }
 
     ///
-    /// Create LFP from a raw pointer for callers outside this module (the
-    /// chain-deopt replay derives a suspended frame's LFP from its saved
-    /// frame pointer, `lfp == bp - RBP_LOCAL_FRAME`).
-    ///
-    /// ### safety
-    /// *ptr* must point at a valid local frame.
-    ///
-    pub(crate) unsafe fn from_ptr(ptr: *mut u8) -> Self {
-        unsafe { Self::new(ptr) }
-    }
-
-    ///
     /// Get CFP.
     ///
     /// ### safety
@@ -685,10 +650,8 @@ impl Lfp {
             // with `heap_frame`/`dummy_*` so the GC can reclaim every
             // promoted buffer through its `ObjTy::FRAME` wrapper.
             let n = len / 8;
-            let src = std::slice::from_raw_parts(
-                (self.0.as_ptr() as usize + 8 - len) as *const u64,
-                n,
-            );
+            let src =
+                std::slice::from_raw_parts((self.0.as_ptr() as usize + 8 - len) as *const u64, n);
             let mut heap_lfp = wrap_promoted_frame(src.to_vec());
             heap_lfp.meta_mut().set_on_heap();
             cfp.set_lfp(heap_lfp);
@@ -733,13 +696,13 @@ impl Lfp {
         // padding so the LFP layout stays self-consistent with the
         // header size (LFP_SELF).
         let v: Vec<u64> = vec![
-            0,                  // padding (matches the historical extra slot)
-            0,                  // padding
-            self_val.id(),      // LFP_SELF
-            0,                  // LFP_BLOCK
-            0,                  // LFP_SVAR
-            0,                  // LFP_META — set via `set_reg_num` below
-            0,                  // LFP_OUTER
+            0,             // padding (matches the historical extra slot)
+            0,             // padding
+            self_val.id(), // LFP_SELF
+            0,             // LFP_BLOCK
+            0,             // LFP_SVAR
+            0,             // LFP_META — set via `set_reg_num` below
+            0,             // LFP_OUTER
         ];
         let mut heap_lfp = wrap_promoted_frame(v);
         heap_lfp.meta_mut().set_on_heap();

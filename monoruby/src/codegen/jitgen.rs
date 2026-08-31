@@ -434,10 +434,10 @@ impl ChainExitSpec {
 ///
 /// Runtime half of a call site's chain-deopt registration: the value of
 /// `Codegen::chain_deopt_table`, keyed by the call's return address. Carries
-/// what the eager walk needs to (a) replay the suspended caller frame's
-/// write-back from Rust and (b) hand the shared VM continuation stub its
-/// per-site post-call data (`dst`, resume-pc advance) through the cont-frame
-/// pad slot.
+/// what [`Codegen::gen_chain_replay_stub`] compiles into the site's
+/// conversion stub: (a) the suspended caller frame's write-back replay and
+/// (b) the per-site post-call data (`dst`, resume-pc advance) the stub hands
+/// the shared VM continuation stub through the cont-frame pad slot.
 ///
 #[derive(Debug, Clone)]
 pub(crate) struct ChainReplay {
@@ -491,15 +491,7 @@ impl ChainReplay {
         let advance = (self.pc.next().as_ptr() as u64) - (self.pc.as_ptr() as u64);
         (dst << 32) | advance
     }
-
 }
-
-///
-/// One frame's worth of eager chain-deopt conversion, produced by the walk
-/// (`Codegen::chain_deopt`) and applied by its callers *after* the
-/// `CODEGEN` borrow is released — the replay
-/// allocates (boxing, rest-`Array`/kwrest-`Hash` materialization) and so can
-/// run a GC, which must not happen while the thread-local is held.
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -1296,8 +1288,8 @@ impl JitModule {
     /// Emit this call site's chain-deopt conversion as machine code, once,
     /// at compile time, and return its entry.
     ///
-    /// This is the compiled form of `ChainReplay::replay` + the two frame
-    /// stores that followed it: everything the conversion does is fixed when
+    /// This is the compiled form of the former Rust-side replay + the two
+    /// frame stores that followed it: everything the conversion does is fixed when
     /// the site is compiled (which slots, which spill offsets, which
     /// literals, the continuation word), so a walk that reaches this frame
     /// has nothing left to decide — it calls here.
@@ -1320,7 +1312,7 @@ impl JitModule {
         let wb = replay.write_back_all();
         let base = replay.base();
         // Floats first: each is loaded from wherever the call left it and
-        // boxed, exactly as `ChainReplay::replay` did. A pool-resident
+        // boxed, exactly as the Rust-side replay did. A pool-resident
         // `FPReg` was spilled by the call's `FprSave` into the callee's save
         // area; the rest sit in the caller's own spill slots.
         for (fpr, slots) in wb.fpr_entries() {

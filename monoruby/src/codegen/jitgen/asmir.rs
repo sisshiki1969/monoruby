@@ -1,8 +1,4 @@
 use crate::bytecodegen::BinOpK;
-// Only the x86-gated `gen_asm` driver uses these directly; the aarch64 driver
-// lives in `arch/aarch64/compile.rs` with its own imports.
-#[cfg(target_arch = "x86_64")]
-use crate::codegen::jitgen::deopt_log;
 use crate::codegen::jitgen::lir::{LInst, LSideExitKind, Lir};
 
 use super::*;
@@ -322,6 +318,7 @@ impl AsmIr {
 
     /// Number of `AsmInst`s in the stream — the frame-size estimate the
     /// aarch64 branch-relaxation decision reads (`Codegen::far_branch_mode`).
+    #[cfg(target_arch = "aarch64")]
     pub(super) fn inst_len(&self) -> usize {
         self.inst.len()
     }
@@ -974,7 +971,6 @@ impl AsmIr {
 // binary operations
 //
 impl AsmIr {
-
     /// register-form fixnum binop `dst = lhs <kind> rhs` with
     /// all three operands in physical GP registers chosen by the local
     /// allocator. The result computes in place in `lhs`; the lowering moves
@@ -1008,7 +1004,12 @@ impl AsmIr {
         lhs: GP,
         rhs: GP,
     ) {
-        self.push(AsmInst::IntegerCmpReg { kind, dst, lhs, rhs });
+        self.push(AsmInst::IntegerCmpReg {
+            kind,
+            dst,
+            lhs,
+            rhs,
+        });
     }
 
     /// Register-form fused fixnum compare + conditional branch, operands already
@@ -1100,7 +1101,13 @@ impl AsmIr {
         self.push(AsmInst::NewHash(args, len, using_fpr));
     }
 
-    pub(super) fn hash_insert(&mut self, using_fpr: UsingFpr, hash: SlotId, args: SlotId, len: usize) {
+    pub(super) fn hash_insert(
+        &mut self,
+        using_fpr: UsingFpr,
+        hash: SlotId,
+        args: SlotId,
+        len: usize,
+    ) {
         self.push(AsmInst::HashInsert {
             hash,
             args,
@@ -1346,9 +1353,9 @@ impl OuterFprHome {
     pub(crate) fn unwrap_concrete(&self) -> Option<i64> {
         match self {
             OuterFprHome::Concrete(o) => *o,
-            OuterFprHome::Hint { .. } => panic!(
-                "OuterFprHome::Hint reached code generation — resolve pass did not run"
-            ),
+            OuterFprHome::Hint { .. } => {
+                panic!("OuterFprHome::Hint reached code generation — resolve pass did not run")
+            }
         }
     }
 }
@@ -2913,8 +2920,7 @@ impl AsmInst {
             }
             // Same over-reservation as the two above: the adopted home's
             // id must size the owner's spill region.
-            Self::GuardFloatToOuterHomeF { home, .. }
-            | Self::BoxOuterHomeToDynVar { home, .. } => {
+            Self::GuardFloatToOuterHomeF { home, .. } | Self::BoxOuterHomeToDynVar { home, .. } => {
                 if let OuterFprHome::Hint { fpr, .. } = home {
                     vec![*fpr]
                 } else {

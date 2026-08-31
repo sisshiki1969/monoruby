@@ -24,7 +24,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(klass, "fork", crate::builtins::kernel::fork, 0);
     // The overridable fork primitive (Ruby 3.1+): `fork` dispatches
     // through `Process._fork` so subclasses/mocks can intercept it.
-    globals.define_builtin_module_func(klass, "_fork", process__fork, 0);
+    globals.define_builtin_module_func(klass, "_fork", process_fork, 0);
     globals.define_builtin_module_func_with(klass, "daemon", process_daemon, 0, 2, false);
     globals.define_builtin_module_func(klass, "times", times, 0);
     globals.define_builtin_module_func_with(klass, "clock_gettime", clock_gettime, 1, 2, false);
@@ -33,8 +33,24 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(klass, "last_status", last_status, 0);
     // `waitpid`/`waitpid2` are true aliases (same FuncId), so
     // `Process.method(:waitpid) == Process.method(:wait)` holds.
-    globals.define_builtin_module_funcs_with(klass, "wait", &["waitpid"], process_wait, 0, 2, false);
-    globals.define_builtin_module_funcs_with(klass, "wait2", &["waitpid2"], process_wait2, 0, 2, false);
+    globals.define_builtin_module_funcs_with(
+        klass,
+        "wait",
+        &["waitpid"],
+        process_wait,
+        0,
+        2,
+        false,
+    );
+    globals.define_builtin_module_funcs_with(
+        klass,
+        "wait2",
+        &["waitpid2"],
+        process_wait2,
+        0,
+        2,
+        false,
+    );
     globals.define_builtin_module_func(klass, "waitall", process_waitall, 0);
     globals.define_builtin_module_func_rest(klass, "kill", process_kill);
     globals.define_builtin_module_func(klass, "getrlimit", process_getrlimit, 1);
@@ -94,7 +110,11 @@ pub(super) fn init(globals: &mut Globals) {
     // PRIO_* "which" selectors. Pure libc passthroughs.
     globals.define_builtin_module_func(klass, "getpriority", process_getpriority, 2);
     globals.define_builtin_module_func(klass, "setpriority", process_setpriority, 3);
-    globals.set_constant_by_str(klass, "PRIO_PROCESS", Value::integer(libc::PRIO_PROCESS as i64));
+    globals.set_constant_by_str(
+        klass,
+        "PRIO_PROCESS",
+        Value::integer(libc::PRIO_PROCESS as i64),
+    );
     globals.set_constant_by_str(klass, "PRIO_PGRP", Value::integer(libc::PRIO_PGRP as i64));
     globals.set_constant_by_str(klass, "PRIO_USER", Value::integer(libc::PRIO_USER as i64));
     // Supplemental group access list (getgroups(2)). `maxgroups`
@@ -104,7 +124,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(klass, "maxgroups", process_maxgroups, 0);
     globals.define_builtin_module_func(klass, "maxgroups=", process_maxgroups_set, 1);
     globals.define_builtin_module_func(klass, "argv0", process_argv0, 0);
-    globals.define_builtin_module_func_with(klass, "clock_getres", process_clock_getres, 1, 2, false);
+    globals.define_builtin_module_func_with(
+        klass,
+        "clock_getres",
+        process_clock_getres,
+        1,
+        2,
+        false,
+    );
     globals.define_builtin_module_func(klass, "warmup", process_warmup, 0);
     globals.define_builtin_module_func(klass, "setproctitle", process_setproctitle, 1);
     globals.define_builtin_module_func(klass, "uid=", process_uid_set, 1);
@@ -167,8 +194,22 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(sys_mod, "getegid", process_egid, 0);
     // `Process.exit` / `Process.abort` / `Process.exec` share their
     // Kernel implementations; CRuby exposes both names.
-    globals.define_builtin_module_func_with(klass, "exit", crate::builtins::kernel::exit, 0, 1, false);
-    globals.define_builtin_module_func_with(klass, "abort", crate::builtins::kernel::abort, 0, 1, false);
+    globals.define_builtin_module_func_with(
+        klass,
+        "exit",
+        crate::builtins::kernel::exit,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_module_func_with(
+        klass,
+        "abort",
+        crate::builtins::kernel::abort,
+        0,
+        1,
+        false,
+    );
     globals.define_builtin_module_func_rest(klass, "exec", crate::builtins::kernel::exec);
     globals.define_builtin_module_func_rest(klass, "spawn", crate::builtins::kernel::spawn);
 
@@ -252,11 +293,7 @@ fn pid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) ->
 /// String — the Symbol/String form is the bare suffix of the
 /// `RLIMIT_*` name (e.g. `:CORE`, `"NOFILE"`). Map them to the
 /// corresponding libc constant.
-fn coerce_rlimit_resource(
-    val: Value,
-    vm: &mut Executor,
-    globals: &mut Globals,
-) -> Result<i64> {
+fn coerce_rlimit_resource(val: Value, vm: &mut Executor, globals: &mut Globals) -> Result<i64> {
     if let Some(sym) = val.try_symbol() {
         return rlim_resource_from_name(sym.get_name().as_str());
     }
@@ -363,7 +400,10 @@ fn process_setrlimit(
     } else {
         cur
     };
-    let rlim = libc::rlimit { rlim_cur: cur, rlim_max: max };
+    let rlim = libc::rlimit {
+        rlim_cur: cur,
+        rlim_max: max,
+    };
     let rc = unsafe { libc::setrlimit(resource as _, &rlim) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
@@ -476,72 +516,129 @@ fn euid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
 // none touches the fork / exec / scheduler machinery.
 
 #[monoruby_builtin]
-fn process_ppid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_ppid(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // SAFETY: getppid never fails.
     Ok(Value::integer(unsafe { libc::getppid() } as i64))
 }
 
 #[monoruby_builtin]
-fn process_uid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_uid(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // SAFETY: getuid never fails.
     Ok(Value::integer(unsafe { libc::getuid() } as i64))
 }
 
 #[monoruby_builtin]
-fn process_gid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_gid(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // SAFETY: getgid never fails.
     Ok(Value::integer(unsafe { libc::getgid() } as i64))
 }
 
 #[monoruby_builtin]
-fn process_egid(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_egid(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // SAFETY: getegid never fails.
     Ok(Value::integer(unsafe { libc::getegid() } as i64))
 }
 
 #[monoruby_builtin]
-fn process_getpgrp(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_getpgrp(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // SAFETY: getpgrp never fails on Linux.
     Ok(Value::integer(unsafe { libc::getpgrp() } as i64))
 }
 
 #[monoruby_builtin]
-fn process_getpgid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_getpgid(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let pid = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     // SAFETY: getpgid is a POSIX syscall; only failure mode is ESRCH.
     let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
     if pgid < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("getpgid")));
+        return Err(MonorubyErr::from_io_err(
+            &globals.store,
+            &err,
+            format!("getpgid"),
+        ));
     }
     Ok(Value::integer(pgid as i64))
 }
 
 #[monoruby_builtin]
-fn process_setpgrp(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_setpgrp(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // CRuby's `Process.setpgrp` is `setpgid(0, 0)`.
     let rc = unsafe { libc::setpgid(0, 0) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("setpgrp")));
+        return Err(MonorubyErr::from_io_err(
+            &globals.store,
+            &err,
+            format!("setpgrp"),
+        ));
     }
     Ok(Value::integer(0))
 }
 
 #[monoruby_builtin]
-fn process_setpgid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_setpgid(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let pid = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let pgid = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
     let rc = unsafe { libc::setpgid(pid as libc::pid_t, pgid as libc::pid_t) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("setpgid")));
+        return Err(MonorubyErr::from_io_err(
+            &globals.store,
+            &err,
+            format!("setpgid"),
+        ));
     }
     Ok(Value::integer(0))
 }
 
 #[monoruby_builtin]
-fn process_getsid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_getsid(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let pid = if let Some(arg) = lfp.try_arg(0) {
         arg.coerce_to_int_i64(vm, globals)?
     } else {
@@ -550,17 +647,30 @@ fn process_getsid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     let sid = unsafe { libc::getsid(pid as libc::pid_t) };
     if sid < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("getsid")));
+        return Err(MonorubyErr::from_io_err(
+            &globals.store,
+            &err,
+            format!("getsid"),
+        ));
     }
     Ok(Value::integer(sid as i64))
 }
 
 #[monoruby_builtin]
-fn process_setsid(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_setsid(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let sid = unsafe { libc::setsid() };
     if sid < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(&globals.store, &err, format!("setsid")));
+        return Err(MonorubyErr::from_io_err(
+            &globals.store,
+            &err,
+            format!("setsid"),
+        ));
     }
     Ok(Value::integer(sid as i64))
 }
@@ -592,7 +702,11 @@ fn process_getpriority(
         let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         if prio == -1 && errno != 0 {
             let err = std::io::Error::from_raw_os_error(errno);
-            return Err(MonorubyErr::from_io_err(&globals.store, &err, "getpriority".to_string()));
+            return Err(MonorubyErr::from_io_err(
+                &globals.store,
+                &err,
+                "getpriority".to_string(),
+            ));
         }
         Ok(Value::integer(prio as i64))
     }
@@ -636,7 +750,11 @@ fn process_setpriority(
     let res = unsafe { libc::setpriority(which as _, who, prio) };
     if res < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(&globals.store, &err, "setpriority".to_string()));
+        return Err(MonorubyErr::from_io_err(
+            &globals.store,
+            &err,
+            "setpriority".to_string(),
+        ));
     }
     Ok(Value::integer(0))
 }
@@ -648,19 +766,32 @@ fn process_setpriority(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/groups.html]
 #[monoruby_builtin]
-fn process_groups(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_groups(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // First call with size 0 returns the number of supplementary
     // groups; then read them into a sized buffer.
     let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
     if count < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(&globals.store, &err, "getgroups".to_string()));
+        return Err(MonorubyErr::from_io_err(
+            &globals.store,
+            &err,
+            "getgroups".to_string(),
+        ));
     }
     let mut buf: Vec<libc::gid_t> = vec![0; count as usize];
     let n = unsafe { libc::getgroups(count, buf.as_mut_ptr()) };
     if n < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(&globals.store, &err, "getgroups".to_string()));
+        return Err(MonorubyErr::from_io_err(
+            &globals.store,
+            &err,
+            "getgroups".to_string(),
+        ));
     }
     let elems: Vec<Value> = buf[..n as usize]
         .iter()
@@ -679,7 +810,12 @@ fn process_groups(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: Bytec
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/maxgroups.html]
 #[monoruby_builtin]
-fn process_maxgroups(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_maxgroups(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::integer(
         MAXGROUPS.load(std::sync::atomic::Ordering::Relaxed),
     ))
@@ -703,7 +839,9 @@ fn process_maxgroups_set(
 ) -> Result<Value> {
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if n <= 0 {
-        return Err(MonorubyErr::argumenterr(format!("maxgroups {n} should be positive")));
+        return Err(MonorubyErr::argumenterr(format!(
+            "maxgroups {n} should be positive"
+        )));
     }
     // CRuby clamps to its historical 65536 cap.
     let n = n.min(65536);
@@ -746,7 +884,11 @@ fn process_groups_set(
     let rc = unsafe { libc::setgroups(gids.len() as _, gids.as_ptr()) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "setgroups"));
+        return Err(MonorubyErr::errno_with_msg(
+            &globals.store,
+            &err,
+            "setgroups",
+        ));
     }
     Ok(arg)
 }
@@ -1022,7 +1164,12 @@ pub(crate) fn signal_name_to_number(name: &str) -> Option<i32> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/kill.html]
 #[monoruby_builtin]
-fn process_kill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_kill(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.len() < 2 {
         return Err(MonorubyErr::argumenterr(format!(
@@ -1223,7 +1370,9 @@ fn command_disposition(cmd: Value) -> Result<signal_table::SignalDisposition> {
         Some("" | "SIG_IGN" | "IGNORE") => Ok(SignalDisposition::Ignore { from_nil: false }),
         Some("SIG_DFL" | "DEFAULT") => Ok(SignalDisposition::Default),
         Some("SYSTEM_DEFAULT") => Ok(SignalDisposition::SystemDefault),
-        Some(other) => Err(MonorubyErr::argumenterr(format!("unsupported command `{other}'"))),
+        Some(other) => Err(MonorubyErr::argumenterr(format!(
+            "unsupported command `{other}'"
+        ))),
         // Not a String/Symbol command: treat as a callable handler.
         None => Ok(SignalDisposition::Handler(cmd)),
     }
@@ -1325,13 +1474,16 @@ pub(super) fn signal_trap(
     });
     if !installed {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "sigaction"));
+        return Err(MonorubyErr::errno_with_msg(
+            &globals.store,
+            &err,
+            "sigaction",
+        ));
     }
 
     let prev = globals.set_signal_disposition(signo, new_disp);
     Ok(disposition_to_value(prev))
 }
-
 
 ///
 /// ### Process.argv0
@@ -1351,7 +1503,12 @@ pub(super) fn signal_trap(
 /// Returns the child pid in the parent and 0 in the child. Overridable:
 /// `Process.fork` invokes it by name.
 #[monoruby_builtin]
-fn process__fork(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_fork(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // SAFETY: fork() in a green-thread (single OS thread) process.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -1375,7 +1532,12 @@ fn process__fork(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: Bytecod
 /// unless nochdir, and point the std streams at /dev/null unless
 /// noclose.
 #[monoruby_builtin]
-fn process_daemon(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_daemon(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // Both flags accept only true / false / nil — validated BEFORE the
     // fork, or a bad argument would daemonize (and kill) the caller.
     let bool_arg = |globals: &Globals, v: Option<Value>, name: &str| -> Result<bool> {
@@ -1426,7 +1588,12 @@ fn process_daemon(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 }
 
 #[monoruby_builtin]
-fn process_argv0(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_argv0(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(globals
         .store
         .get_ivar(lfp.self_val(), IdentId::get_id("/argv0"))
@@ -1441,7 +1608,12 @@ fn process_argv0(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 /// The behavior is implementation-defined; monoruby runs a GC cycle to
 /// approximate CRuby's "prepare for fork/checkpoint" contract.
 #[monoruby_builtin]
-fn process_warmup(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_warmup(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(true))
 }
 
@@ -1453,47 +1625,52 @@ fn process_warmup(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: Byte
 /// Reap every child (blocking) and return `[pid, status]` pairs; `[]`
 /// when there are no children. `$?` is left at the last reaped child.
 #[monoruby_builtin]
-fn process_waitall(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_waitall(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // Accumulate into a rooted Array: each [pid, status] pair must
     // survive the next iteration's Process::Status construction (Ruby
     // re-entry) — a bare Rust Vec left them invisible to the GC.
     vm.with_temp_scope(|vm| {
-    vm.temp_array_new(None);
-    let pairs_idx = vm.temp_len() - 1;
-    loop {
-        let mut status: i32 = 0;
-        // SAFETY: waitpid is a POSIX system call.
-        let ret = unsafe { libc::waitpid(-1, &mut status, 0) };
-        if ret == -1 {
-            let err = std::io::Error::last_os_error();
-            match err.raw_os_error() {
-                Some(libc::ECHILD) => break,
-                Some(libc::EINTR) => {
-                    if crate::executor::execute_gc(vm, globals).is_none() {
-                        return Err(vm.take_error());
+        vm.temp_array_new(None);
+        let pairs_idx = vm.temp_len() - 1;
+        loop {
+            let mut status: i32 = 0;
+            // SAFETY: waitpid is a POSIX system call.
+            let ret = unsafe { libc::waitpid(-1, &mut status, 0) };
+            if ret == -1 {
+                let err = std::io::Error::last_os_error();
+                match err.raw_os_error() {
+                    Some(libc::ECHILD) => break,
+                    Some(libc::EINTR) => {
+                        if crate::executor::execute_gc(vm, globals).is_none() {
+                            return Err(vm.take_error());
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                _ => {
-                    return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "waitall"));
+                    _ => {
+                        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "waitall"));
+                    }
                 }
             }
+            let status_class =
+                vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
+            let status_obj = vm.invoke_method_inner(
+                globals,
+                IdentId::NEW,
+                status_class,
+                &[Value::integer(status as i64), Value::integer(ret as i64)],
+                None,
+                None,
+            )?;
+            crate::scheduler::set_last_status(vm, status_obj);
+            let pair = Value::array_from_vec(vec![Value::integer(ret as i64), status_obj]);
+            vm.temp_at(pairs_idx).as_array().push(pair);
         }
-        let status_class =
-            vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
-        let status_obj = vm.invoke_method_inner(
-            globals,
-            IdentId::NEW,
-            status_class,
-            &[Value::integer(status as i64), Value::integer(ret as i64)],
-            None,
-            None,
-        )?;
-        crate::scheduler::set_last_status(vm, status_obj);
-        let pair = Value::array_from_vec(vec![Value::integer(ret as i64), status_obj]);
-        vm.temp_at(pairs_idx).as_array().push(pair);
-    }
-    Ok(vm.temp_at(pairs_idx))
+        Ok(vm.temp_at(pairs_idx))
     })
 }
 
@@ -1528,13 +1705,18 @@ fn process_clock_getres(
         match sym.get_name().as_str() {
             // Documented emulation clocks (resolution fixed by their
             // API); the supported set matches CRuby's clock_getres.
-            "GETTIMEOFDAY_BASED_CLOCK_REALTIME"
-            | "GETRUSAGE_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1_000,
+            "GETTIMEOFDAY_BASED_CLOCK_REALTIME" | "GETRUSAGE_BASED_CLOCK_PROCESS_CPUTIME_ID" => {
+                1_000
+            }
             "TIME_BASED_CLOCK_REALTIME" => 1_000_000_000,
             "TIMES_BASED_CLOCK_MONOTONIC" | "TIMES_BASED_CLOCK_PROCESS_CPUTIME_ID" => {
                 // times(2) ticks: 1/HZ seconds.
                 let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-                if hz > 0 { 1_000_000_000 / hz } else { 10_000_000 }
+                if hz > 0 {
+                    1_000_000_000 / hz
+                } else {
+                    10_000_000
+                }
             }
             "CLOCK_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1_000,
             other => {
@@ -1617,10 +1799,16 @@ fn set_proc_title_linux(title: &[u8]) -> std::io::Result<()> {
     let fields: Vec<&str> = after.split_whitespace().collect();
     let parse = |i: usize| -> Option<u64> { fields.get(i - 3).and_then(|s| s.parse().ok()) };
     let (Some(arg_start), Some(arg_end)) = (parse(48), parse(49)) else {
-        return Err(std::io::Error::new(std::io::ErrorKind::Other, "no arg region"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "no arg region",
+        ));
     };
     if arg_start == 0 || arg_end <= arg_start {
-        return Err(std::io::Error::new(std::io::ErrorKind::Other, "no arg region"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "no arg region",
+        ));
     }
     let len = (arg_end - arg_start) as usize;
     let n = title.len().min(len - 1);
@@ -1669,7 +1857,12 @@ fn resolve_id_arg(_vm: &mut Executor, globals: &mut Globals, v: Value, group: bo
 macro_rules! id_setter {
     ($fname:ident, $group:expr, $call:expr, $label:literal) => {
         #[monoruby_builtin]
-        fn $fname(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+        fn $fname(
+            vm: &mut Executor,
+            globals: &mut Globals,
+            lfp: Lfp,
+            _: BytecodePtr,
+        ) -> Result<Value> {
             let id = resolve_id_arg(vm, globals, lfp.arg(0), $group)?;
             // SAFETY: identity syscalls take a plain id.
             let rc = unsafe { ($call)(id) };
@@ -1684,8 +1877,18 @@ macro_rules! id_setter {
 
 // uid=/gid= change only the REAL id (setreuid(uid, -1)-style), so they
 // still work after euid was dropped; euid=/egid= change the effective id.
-id_setter!(process_uid_set, false, |u| libc::setreuid(u, u32::MAX), "setreuid");
-id_setter!(process_gid_set, true, |g| libc::setregid(g, u32::MAX), "setregid");
+id_setter!(
+    process_uid_set,
+    false,
+    |u| libc::setreuid(u, u32::MAX),
+    "setreuid"
+);
+id_setter!(
+    process_gid_set,
+    true,
+    |g| libc::setregid(g, u32::MAX),
+    "setregid"
+);
 id_setter!(process_euid_set, false, |u| libc::seteuid(u), "seteuid");
 id_setter!(process_egid_set, true, |g| libc::setegid(g), "setegid");
 
@@ -1764,26 +1967,42 @@ fn getpw_by_name(name: &str) -> Option<PwEnt> {
     let c = std::ffi::CString::new(name).ok()?;
     // SAFETY: getpwnam returns a pointer to a static passwd entry or NULL.
     let p = unsafe { libc::getpwnam(c.as_ptr()) };
-    if p.is_null() { None } else { Some(unsafe { pw_from_raw(p) }) }
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { pw_from_raw(p) })
+    }
 }
 
 fn getpw_by_uid(uid: u32) -> Option<PwEnt> {
     // SAFETY: getpwuid returns a pointer to a static passwd entry or NULL.
     let p = unsafe { libc::getpwuid(uid) };
-    if p.is_null() { None } else { Some(unsafe { pw_from_raw(p) }) }
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { pw_from_raw(p) })
+    }
 }
 
 fn getgr_by_name(name: &str) -> Option<GrEnt> {
     let c = std::ffi::CString::new(name).ok()?;
     // SAFETY: getgrnam returns a pointer to a static group entry or NULL.
     let g = unsafe { libc::getgrnam(c.as_ptr()) };
-    if g.is_null() { None } else { Some(unsafe { gr_from_raw(g) }) }
+    if g.is_null() {
+        None
+    } else {
+        Some(unsafe { gr_from_raw(g) })
+    }
 }
 
 fn getgr_by_gid(gid: u32) -> Option<GrEnt> {
     // SAFETY: getgrgid returns a pointer to a static group entry or NULL.
     let g = unsafe { libc::getgrgid(gid) };
-    if g.is_null() { None } else { Some(unsafe { gr_from_raw(g) }) }
+    if g.is_null() {
+        None
+    } else {
+        Some(unsafe { gr_from_raw(g) })
+    }
 }
 
 fn pw_to_hash(vm: &mut Executor, globals: &mut Globals, pw: PwEnt) -> Result<Value> {
@@ -1817,7 +2036,12 @@ fn gr_to_hash(vm: &mut Executor, globals: &mut Globals, gr: GrEnt) -> Result<Val
 }
 
 #[monoruby_builtin]
-fn process_getpwnam(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_getpwnam(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let name = lfp.arg(0).expect_string(globals)?;
     match getpw_by_name(&name) {
         Some(pw) => pw_to_hash(vm, globals, pw),
@@ -1826,7 +2050,12 @@ fn process_getpwnam(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
 }
 
 #[monoruby_builtin]
-fn process_getpwuid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_getpwuid(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let uid = lfp.arg(0).coerce_to_int_i64(vm, globals)? as u32;
     match getpw_by_uid(uid) {
         Some(pw) => pw_to_hash(vm, globals, pw),
@@ -1835,7 +2064,12 @@ fn process_getpwuid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
 }
 
 #[monoruby_builtin]
-fn process_getgrnam(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_getgrnam(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let name = lfp.arg(0).expect_string(globals)?;
     match getgr_by_name(&name) {
         Some(gr) => gr_to_hash(vm, globals, gr),
@@ -1844,7 +2078,12 @@ fn process_getgrnam(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
 }
 
 #[monoruby_builtin]
-fn process_getgrgid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn process_getgrgid(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let gid = lfp.arg(0).coerce_to_int_i64(vm, globals)? as u32;
     match getgr_by_gid(gid) {
         Some(gr) => gr_to_hash(vm, globals, gr),
@@ -1906,7 +2145,9 @@ mod tests {
         // spawn returns a pid; detach(pid).value yields the Process::Status.
         run_test_once("Process.detach(spawn(\"true\")).value.success?");
         run_test_once("Process.detach(spawn(\"false\")).value.exitstatus");
-        run_test_once("st = Process.detach(spawn(\"sh\", \"-c\", \"exit 3\")).value; st.exitstatus");
+        run_test_once(
+            "st = Process.detach(spawn(\"sh\", \"-c\", \"exit 3\")).value; st.exitstatus",
+        );
         // The detach waiter is a Thread whose #pid / :pid report the child.
         run_test_once(
             r#"
@@ -1945,12 +2186,18 @@ mod tests {
     fn open3_capture_via_spawn() {
         // Open3 wires :in/:out/:err pipes through spawn; capture3/capture2
         // drain them — the path bundler uses to run git for git-source gems.
-        run_test_once(r#"require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.success?]"#);
-        run_test_once(r#"require "open3"; out, err, st = Open3.capture3("sh", "-c", "echo O; echo E 1>&2; exit 2"); [out, err, st.exitstatus]"#);
+        run_test_once(
+            r#"require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.success?]"#,
+        );
+        run_test_once(
+            r#"require "open3"; out, err, st = Open3.capture3("sh", "-c", "echo O; echo E 1>&2; exit 2"); [out, err, st.exitstatus]"#,
+        );
         run_test_once(r#"require "open3"; Open3.capture2("echo", "hi").first"#);
         run_test_once(r#"require "open3"; Open3.capture3("cat", stdin_data: "piped").first"#);
         // capture2e merges stdout+stderr onto one pipe.
-        run_test_once(r#"require "open3"; oe, st = Open3.capture2e("sh", "-c", "echo a; echo b 1>&2"); [oe.split("\n").sort, st.success?]"#);
+        run_test_once(
+            r#"require "open3"; oe, st = Open3.capture2e("sh", "-c", "echo a; echo b 1>&2"); [oe.split("\n").sort, st.success?]"#,
+        );
     }
 
     #[test]
@@ -2028,7 +2275,7 @@ mod tests {
     }
 
     #[test]
-        fn signal_trap_exit_pseudo_signal() {
+    fn signal_trap_exit_pseudo_signal() {
         // EXIT is an exit hook, not a signal: trapping it succeeds, a
         // never-trapped EXIT reports nil, re-trapping reports the
         // previous handler, and "DEFAULT" unsets it.
@@ -2044,7 +2291,7 @@ mod tests {
     }
 
     #[test]
-        fn signal_trap_exit_dispositions() {
+    fn signal_trap_exit_dispositions() {
         // nil / IGNORE clear the EXIT hook like DEFAULT; a handler set
         // and left in place survives a GC (the hook is a root).
         run_test_once(
@@ -2365,9 +2612,13 @@ mod tests {
     #[test]
     fn process_rlimit() {
         // Symbol shortcut.
-        run_test_once(r#"Process.getrlimit(:NOFILE).is_a?(Array) && Process.getrlimit(:NOFILE).size == 2"#);
+        run_test_once(
+            r#"Process.getrlimit(:NOFILE).is_a?(Array) && Process.getrlimit(:NOFILE).size == 2"#,
+        );
         // String shortcut.
-        run_test_once(r#"Process.getrlimit("CORE").is_a?(Array) && Process.getrlimit("CORE").size == 2"#);
+        run_test_once(
+            r#"Process.getrlimit("CORE").is_a?(Array) && Process.getrlimit("CORE").size == 2"#,
+        );
         // Integer form via the named constant.
         run_test_once(r#"Process.getrlimit(Process::RLIMIT_STACK).is_a?(Array)"#);
         // Round-trip setrlimit (lowering the soft limit is a no-fail
@@ -2387,8 +2638,12 @@ mod tests {
     /// syscall each; tests just sanity-check the return shape.
     #[test]
     fn process_posix_identity() {
-        run_test_once(r#"[Process.ppid, Process.uid, Process.gid, Process.egid].all? { |v| v.is_a?(Integer) }"#);
-        run_test_once(r#"[Process.getpgrp, Process.getpgid(0), Process.getsid].all? { |v| v.is_a?(Integer) }"#);
+        run_test_once(
+            r#"[Process.ppid, Process.uid, Process.gid, Process.egid].all? { |v| v.is_a?(Integer) }"#,
+        );
+        run_test_once(
+            r#"[Process.getpgrp, Process.getpgid(0), Process.getsid].all? { |v| v.is_a?(Integer) }"#,
+        );
         // `Process.getpgid(0)` and `Process.getpgrp` return the same value.
         run_test_once(r#"Process.getpgid(0) == Process.getpgrp"#);
     }

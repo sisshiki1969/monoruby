@@ -53,6 +53,17 @@ impl Step for BasicBlockId {
     fn backward_checked(start: Self, count: usize) -> Option<Self> {
         Some(start - count)
     }
+
+    fn forward_overflowing(start: Self, count: usize) -> (Self, bool) {
+        (start + count, false)
+    }
+
+    fn backward_overflowing(start: Self, count: usize) -> (Self, bool) {
+        match Self::backward_checked(start, count) {
+            Some(next) => (next, false),
+            None => (start, true),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]

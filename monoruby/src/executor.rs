@@ -49,8 +49,7 @@ pub fn fill_closed_std_fds() {
                 let is_devnull = libc::fstat(fd, &mut st) == 0
                     && (st.st_mode & libc::S_IFMT) == libc::S_IFCHR
                     && st.st_rdev == libc::makedev(1, 3);
-                is_devnull
-                    && (libc::fcntl(fd, libc::F_GETFL) & libc::O_ACCMODE) == libc::O_RDWR
+                is_devnull && (libc::fcntl(fd, libc::F_GETFL) & libc::O_ACCMODE) == libc::O_RDWR
             };
             // The /dev/null device numbering above is Linux's; elsewhere
             // only genuinely closed fds are (conservatively) normalized.
@@ -161,8 +160,7 @@ const SVAR_LASTLINE: usize = 1;
 
 pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
 pub(crate) const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
-pub(crate) const EXECUTOR_DEFERRED_TOP: i64 =
-    std::mem::offset_of!(Executor, deferred_top_lfp) as _;
+pub(crate) const EXECUTOR_DEFERRED_TOP: i64 = std::mem::offset_of!(Executor, deferred_top_lfp) as _;
 pub(crate) const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
 pub(crate) const EXECUTOR_STACK_LIMIT: i64 = std::mem::offset_of!(Executor, stack_limit) as _;
 /// Scratch words a deopt trampoline fills in before branching to its
@@ -1807,16 +1805,12 @@ impl Executor {
         let (_, err) = self.deferred_unwind.pop().unwrap();
         self.sync_deferred_top();
         match err.kind() {
-            MonorubyErrKind::BlockBreak(val, _, outer) if Some(*outer) == lfp.outer() => {
-                (2, *val)
-            }
+            MonorubyErrKind::BlockBreak(val, _, outer) if Some(*outer) == lfp.outer() => (2, *val),
             // The static teardown returns from this frame's outermost
             // method frame; a deferred return targeting anything else
             // (e.g. the block was promoted to a lambda after compile)
             // must go through the generic unwind.
-            MonorubyErrKind::MethodReturn(val, target) if *target == lfp.outermost().0 => {
-                (3, *val)
-            }
+            MonorubyErrKind::MethodReturn(val, target) if *target == lfp.outermost().0 => (3, *val),
             _ => {
                 self.set_error(err);
                 (1, Value::nil())
@@ -3531,7 +3525,9 @@ impl Executor {
                 for (k, offset) in cs_kw_args.into_iter() {
                     let key = Value::symbol(k);
                     let val = lfp.register(cs_kw_pos + offset).unwrap();
-                    vm.temp_at(map_idx).as_hash().insert(key, val, vm, globals)?;
+                    vm.temp_at(map_idx)
+                        .as_hash()
+                        .insert(key, val, vm, globals)?;
                 }
                 // Merge hash splat arguments into the keyword hash. `**obj`
                 // accepts any #to_hash-convertible object (implicit
@@ -4102,7 +4098,10 @@ impl Executor {
             // The frame is per-symbol and immutable (`self` is the
             // symbol, nothing else), so it is built once and shared —
             // this resolution runs on every yield.
-            Some((globals.symbol_proc_frame(symbol), SYMBOL_TO_PROC_BODY_FUNCID))
+            Some((
+                globals.symbol_proc_frame(symbol),
+                SYMBOL_TO_PROC_BODY_FUNCID,
+            ))
         } else {
             None
         }
@@ -5037,6 +5036,20 @@ impl std::iter::Step for SlotId {
             Some(Self(start.0 - count as u16))
         } else {
             None
+        }
+    }
+
+    fn forward_overflowing(start: Self, count: usize) -> (Self, bool) {
+        match Self::forward_checked(start, count) {
+            Some(next) => (next, false),
+            None => (start, true),
+        }
+    }
+
+    fn backward_overflowing(start: Self, count: usize) -> (Self, bool) {
+        match Self::backward_checked(start, count) {
+            Some(next) => (next, false),
+            None => (start, true),
         }
     }
 }

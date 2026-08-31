@@ -1,4 +1,3 @@
-use core::f64;
 use num::ToPrimitive;
 use onigmo_regex::Captures;
 use rubymap::RubyEql;
@@ -1125,7 +1124,6 @@ impl Value {
     pub fn string_scanned(s: String) -> Self {
         RValue::new_string_scanned(s).pack()
     }
-
 
     pub fn bytes(s: Vec<u8>) -> Self {
         RValue::new_bytes(s).pack()

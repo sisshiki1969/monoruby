@@ -2041,8 +2041,9 @@ impl AbstractState {
     ///
     /// Register this call site for chain deopt (`doc/chain_deopt.md` §2/§9.3),
     /// so the walk can convert a frame suspended here into an interpreter
-    /// frame: replay its write-back from Rust and rewrite the callee's
-    /// return-address slot to the shared VM continuation stub.
+    /// frame: replay its write-back and rewrite the callee's return-address
+    /// slot to the shared VM continuation stub, both from the conversion stub
+    /// compiled for this site.
     ///
     /// Call this immediately after the site's call instruction: the write-back
     /// is read off the live state, which must still be the post-`discard(dst)`

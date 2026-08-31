@@ -65,9 +65,7 @@ mod alloc_policy {
             // ids are also skipped; that only costs frame bytes.
             (0..state.fpr_alloc.len().min(PHYS_FPR_POOL))
                 .map(FPReg)
-                .find(|&fpr| {
-                    !state.fpr_alloc.is_pinned(fpr) && state.fpr_alloc.is_vacant(fpr)
-                })
+                .find(|&fpr| !state.fpr_alloc.is_pinned(fpr) && state.fpr_alloc.is_vacant(fpr))
         }
 
         ///
@@ -443,8 +441,7 @@ impl SlotState {
 
     pub(super) fn equiv(&self, other: &Self) -> bool {
         assert_eq!(self.slots_len(), other.slots_len());
-        self.all_regs()
-            .all(|i| self.mode(i).equiv(&other.mode(i)))
+        self.all_regs().all(|i| self.mode(i).equiv(&other.mode(i)))
     }
 
     pub(in crate::codegen::jitgen) fn liveness_analysis(&mut self, liveness: &Liveness) {
@@ -1231,18 +1228,6 @@ impl SlotState {
     }
 
     ///
-    /// Drop every local's `C` claim to the `S` its slot already holds.
-    ///
-    /// Pure state: the value is in the slot either way, because
-    /// [`Self::unbox_to_S`] writes a constant out on the way into every
-    /// block-passing call whether or not the claim survives it.
-    ///
-    /// Whether any local is still claimed as a compiler-held constant.
-    pub(in crate::codegen::jitgen) fn holds_const(&self) -> bool {
-        self.locals().any(|slot| matches!(self.mode(slot), LinkMode::C(_)))
-    }
-
-    ///
     /// Surrender *slot*'s `C` claim, writing the value it stood for into
     /// the slot.
     ///
@@ -1819,7 +1804,11 @@ impl AbstractFrame {
     /// `GuardClass` with the `deopt`, which it (the caller) created *before* this
     /// runs so the deopt's write-back snapshot is the pre-guard placement.
     ///
-    pub(in crate::codegen::jitgen) fn guard_class_state(&mut self, slot: SlotId, class: ClassId) -> bool {
+    pub(in crate::codegen::jitgen) fn guard_class_state(
+        &mut self,
+        slot: SlotId,
+        class: ClassId,
+    ) -> bool {
         if self.class(slot) == Some(class) {
             return false;
         }

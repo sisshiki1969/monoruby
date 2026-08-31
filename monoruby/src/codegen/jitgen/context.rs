@@ -260,8 +260,9 @@ pub(super) struct AsmInfo {
     /// aarch64: side-exit handler `LInst`s accumulated by `gen_asm` and
     /// emitted in one outlined island — at the frame's end, or mid-stream
     /// when the hot run since the last island approaches the `TBZ`/`TBNZ`
-    /// imm14 range (see `a64_drain_side_exits`). Unused on x86-64, which
-    /// outlines its handlers to the cold page instead.
+    /// imm14 range (see `a64_drain_side_exits`). Compiled out on x86-64,
+    /// which outlines its handlers to the cold page instead.
+    #[cfg(target_arch = "aarch64")]
     pub(in crate::codegen) pending_side_exits: Vec<crate::codegen::jitgen::lir::LInst>,
     /// aarch64: code position of the last side-exit island (or the frame
     /// start), the base the hot-run length is measured from.
@@ -270,6 +271,7 @@ pub(super) struct AsmInfo {
     /// referenced since their last thunk — the only ones a thunk island has
     /// to bind (binding all of them made the island itself outgrow the
     /// `TBZ` reach on handler-heavy frames).
+    #[cfg(target_arch = "aarch64")]
     pub(in crate::codegen) touched_side_exits: std::collections::HashSet<usize>,
 }
 
@@ -294,8 +296,10 @@ impl AsmInfo {
             ivar_heap_accessed: false,
             sourcemap: vec![],
             start_codepos: 0,
+            #[cfg(target_arch = "aarch64")]
             pending_side_exits: Vec::new(),
             side_exit_watermark: 0,
+            #[cfg(target_arch = "aarch64")]
             touched_side_exits: std::collections::HashSet::default(),
         }
     }
@@ -468,7 +472,13 @@ pub(super) struct JitStackFrame {
     /// chain prefix at the return, the returning frame's own state, the
     /// returned slot, the return's basic block)`.
     ///
-    return_edges: Vec<(JitLabel, Vec<AbstractFrame>, AbstractFrame, SlotId, BasicBlockId)>,
+    return_edges: Vec<(
+        JitLabel,
+        Vec<AbstractFrame>,
+        AbstractFrame,
+        SlotId,
+        BasicBlockId,
+    )>,
     ///
     /// The frame-global ledger of persistent spill-home ids: one past the
     /// highest id ever issued as a raw-f64 *home* in this frame's file
@@ -695,8 +705,10 @@ impl JitStackFrame {
                 base_stack_offset: 0,
                 sourcemap: vec![],
                 start_codepos: 0,
+                #[cfg(target_arch = "aarch64")]
                 pending_side_exits: Vec::new(),
                 side_exit_watermark: 0,
+                #[cfg(target_arch = "aarch64")]
                 touched_side_exits: std::collections::HashSet::default(),
             },
             outer,
@@ -1521,7 +1533,6 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().generic_yield = true;
     }
 
-
     ///
     /// Stage-C loop adoption: everything an adoption decision needs to
     /// know about the loop body it just analysed — see the field docs.
@@ -1609,7 +1620,11 @@ impl<'a> JitContext<'a> {
     /// has live; the caller then binds the id on the live chain (which
     /// grows the file past it).
     ///
-    pub(super) fn alloc_spill_home_at(&mut self, pos: usize, live_len: usize) -> crate::codegen::FPReg {
+    pub(super) fn alloc_spill_home_at(
+        &mut self,
+        pos: usize,
+        live_len: usize,
+    ) -> crate::codegen::FPReg {
         let frame = &mut self.stack_frame[pos];
         let id = frame.spill_home_watermark.max(live_len);
         frame.spill_home_watermark = id + 1;
@@ -1821,10 +1836,6 @@ impl<'a> JitContext<'a> {
 
     // ===== Unboxed-locals speculation (doc/chain_deopt.md §5 steps 4–5) =====
 
-
-
-
-
     ///
     /// Whether any frame on the compile stack currently has an armed
     /// unboxed-Float speculation. Sampled when a specialized subtree is
@@ -1837,7 +1848,6 @@ impl<'a> JitContext<'a> {
             .iter()
             .any(|f| !f.speculated_floats.is_empty())
     }
-
 
     fn check_exception_handler(&self, begin: usize, end: usize) -> bool {
         self.stack_frame[begin..end].iter().any(|f| {
@@ -2262,7 +2272,11 @@ impl<'a> JitContext<'a> {
                     *offset = DynVarOffset::Concrete(resolved);
                 }
                 if let OuterFprHome::Hint {
-                    ids, extra, owner, fpr, ..
+                    ids,
+                    extra,
+                    owner,
+                    fpr,
+                    ..
                 } = home
                 {
                     debug_assert!(fpr.0 >= crate::codegen::PHYS_FPR_POOL);
@@ -2758,10 +2772,7 @@ impl<'a> JitContext<'a> {
         crate::codegen::jitgen::state::ChainSurrender { per_level }
     }
 
-    fn build_return_segments(
-        &mut self,
-        frame: &mut JitStackFrame,
-    ) -> Option<Vec<AbstractFrame>> {
+    fn build_return_segments(&mut self, frame: &mut JitStackFrame) -> Option<Vec<AbstractFrame>> {
         let edges = std::mem::take(&mut frame.return_edges);
         if edges.is_empty() {
             return None;
@@ -2879,7 +2890,6 @@ impl<'a> JitContext<'a> {
         }
     }
 
-
     ///
     /// Add new return branch with `state`.
     ///
@@ -2890,7 +2900,6 @@ impl<'a> JitContext<'a> {
             self.push_return_context(pos, ret);
         }
     }
-
 
     pub(super) fn push_ir(&mut self, bb: Option<BasicBlockId>, ir: AsmIr) {
         let frame = self.current_frame_mut();

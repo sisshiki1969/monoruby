@@ -24,8 +24,8 @@ pub(crate) mod signal_table;
 // they provide differ per arch — the types themselves stay arch-neutral.
 mod arch;
 
-use self::jitgen::asmir::AsmEvict;
 use self::jitgen::ChainReplay;
+use self::jitgen::asmir::AsmEvict;
 
 use super::*;
 use crate::bytecodegen::inst::*;
@@ -780,13 +780,9 @@ pub struct Codegen {
     /// The id is how `AsmInst::ChainExit` — pushed after the call, when the
     /// address itself is no longer at hand — names the site it belongs to.
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
-    /// `doc/chain_deopt.md` §5 step 1 / §9.3: a suspended call's return
-    /// address => the data needed to convert the suspended caller frame
-    /// eagerly (replay its write-back from Rust, hand the shared VM
-    /// continuation stub its per-site `dst`/resume data). Keyed by the
-    /// return-address slot of a suspended frame (§3.4), which is all the
-    /// walk has to go on.
-    /// Return address of a chain-eligible call -> the entry of that site's
+    /// `doc/chain_deopt.md` §5 step 1 / §9.3. Keyed by the return-address
+    /// slot of a suspended frame (§3.4), which is all the walk has to go on:
+    /// return address of a chain-eligible call -> the entry of that site's
     /// compiled conversion stub (`gen_chain_replay_stub`). The stub encodes
     /// everything the conversion does, so the walk carries no per-site data
     /// and never clones a `ChainReplay`.
@@ -1650,7 +1646,6 @@ impl Codegen {
         });
     }
 
-
     /// The basic-op version: bumped by every redefinition, baked into
     /// `AsmInst::CheckBOP` sites so they deopt only on a change made *after*
     /// they were compiled.
@@ -1687,9 +1682,8 @@ impl Codegen {
     }
 
     ///
-    /// Plan the conversion of every suspended JIT frame in *cfp*'s
-    /// control-frame chain into an interpreter frame (`doc/chain_deopt.md`
-    /// §2, eager form §9.3).
+    /// Convert every suspended JIT frame in *cfp*'s control-frame chain into
+    /// an interpreter frame (`doc/chain_deopt.md` §2, eager form §9.3).
     ///
     /// This is the **only** way an on-stack JIT frame is dropped to the
     /// interpreter, and it serves both callers: an escalated side exit
@@ -1701,18 +1695,17 @@ impl Codegen {
     /// fallback covered nothing the walk does not, and self-modifying code
     /// has left the picture entirely.
     ///
-    /// Each frame is left exactly where it is. Applying a planned
-    /// [`ChainConversion`] replays the suspended caller's write-back (boxing
-    /// its unboxed floats into its local slots) and rewrites the callee's
-    /// **return-address slot** to the shared VM post-call continuation stub,
-    /// with the site's `dst`/resume word in the cont-frame pad slot. Control
-    /// therefore never re-enters a compiled body: as the innermost frame
-    /// (and then each frame in turn) returns, the `ret` lands in the stub,
-    /// which stores the result and resumes the fetch loop. Because no machine
-    /// code is touched, a compiled body that is still valid for *future*
-    /// invocations survives. The plan is returned instead of applied because
-    /// the replay allocates and this runs under the `CODEGEN` borrow (see
-    /// `runtime::chain_deopt`).
+    /// Each frame is left exactly where it is. The conversion is performed by
+    /// the site's own **compiled** stub (`gen_chain_replay_stub`, emitted
+    /// from the site's [`ChainReplay`]): it replays the suspended caller's
+    /// write-back (boxing its unboxed floats into its local slots) and
+    /// rewrites the callee's **return-address slot** to the shared VM
+    /// post-call continuation stub, with the site's `dst`/resume word in the
+    /// cont-frame pad slot. Control therefore never re-enters a compiled
+    /// body: as the innermost frame (and then each frame in turn) returns,
+    /// the `ret` lands in the stub, which stores the result and resumes the
+    /// fetch loop. Because no machine code is touched, a compiled body that
+    /// is still valid for *future* invocations survives.
     ///
     /// Frames whose return address is in VM code or an invoker are already
     /// interpreted (or are a foreign entry) and are skipped, but the walk
@@ -1726,11 +1719,6 @@ impl Codegen {
     /// entered by something that is not a compiled call site, and it holds
     /// no cross-frame state this walk is responsible for.
     ///
-    #[must_use]
-    /// Collect the chain-deopt plan into *plan*, which the caller owns and
-    /// is expected to reuse — see [`Self::take_chain_plan`]. The plan cannot
-    /// simply be applied here: the replay half allocates and can run a GC,
-    /// so it has to run outside the `CODEGEN` borrow this method holds.
     pub(crate) fn chain_deopt_into(&mut self, mut cfp: Cfp) {
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
@@ -1762,11 +1750,7 @@ impl Codegen {
                 unsafe {
                     let f: extern "C" fn(*mut u64, *mut u64, *mut u8) =
                         std::mem::transmute(site_stub.as_ptr());
-                    f(
-                        cfp.frame_bp(),
-                        prev_cfp.frame_bp(),
-                        prev_cfp.lfp().as_ptr(),
-                    );
+                    f(cfp.frame_bp(), prev_cfp.frame_bp(), prev_cfp.lfp().as_ptr());
                 }
             }
             cfp = prev_cfp;
@@ -2059,34 +2043,112 @@ pub(crate) mod jit_stats {
         let g = |c: &AtomicUsize| c.load(Ordering::Relaxed);
         eprintln!();
         eprintln!("version / salvage stats:");
-        eprintln!("  chain conversions:                 {}", g(&CHAIN_CONVERSIONS));
-        eprintln!("    replay would be a no-op:         {}", g(&CHAIN_CONV_EMPTY));
-        eprintln!("    carries unboxed floats:          {}", g(&CHAIN_CONV_FLOAT));
-        eprintln!("    replay can allocate:             {}", g(&CHAIN_CONV_ALLOC));
+        eprintln!(
+            "  chain conversions:                 {}",
+            g(&CHAIN_CONVERSIONS)
+        );
+        eprintln!(
+            "    replay would be a no-op:         {}",
+            g(&CHAIN_CONV_EMPTY)
+        );
+        eprintln!(
+            "    carries unboxed floats:          {}",
+            g(&CHAIN_CONV_FLOAT)
+        );
+        eprintln!(
+            "    replay can allocate:             {}",
+            g(&CHAIN_CONV_ALLOC)
+        );
         eprintln!("  class_version incs:                {}", g(&CLASS_VER_INC));
         eprintln!("  const_version incs:                {}", g(&CONST_VER_INC));
-        eprintln!("  recovery attempts (class guard):   {}", g(&RECOVERY_ATTEMPT));
+        eprintln!(
+            "  recovery attempts (class guard):   {}",
+            g(&RECOVERY_ATTEMPT)
+        );
         eprintln!("    salvaged (re-resolution ok):     {}", g(&SALVAGE_OK));
-        eprintln!("  recovery attempts (loop guard):    {}", g(&RECOVERY_ATTEMPT_LOOP));
-        eprintln!("    salvaged (re-resolution ok):     {}", g(&SALVAGE_OK_LOOP));
-        eprintln!("  recovery attempts (spec guard):    {}", g(&RECOVERY_ATTEMPT_SPEC));
-        eprintln!("    salvaged (re-resolution ok):     {}", g(&SALVAGE_OK_SPEC));
-        eprintln!("    fail: resolution changed:        {}", g(&SALVAGE_FAIL_RESOLUTION_CHANGED));
-        eprintln!("    fail: no cache/entry:            {}", g(&SALVAGE_FAIL_NO_ENTRY));
-        eprintln!("  recovery attempts (const guard):   {}", g(&CONST_RECOVERY_ATTEMPT));
-        eprintln!("    salvaged:                        {}", g(&CONST_SALVAGE_OK));
-        eprintln!("    value-compared sites:            {}", g(&CONST_SALVAGE_VALUECMP));
-        eprintln!("    fail: cache stale:               {}", g(&CONST_SALVAGE_FAIL_STALE));
-        eprintln!("    fail: value changed:             {}", g(&CONST_SALVAGE_FAIL_CHANGED));
-        eprintln!("  whole recompiles  class-ver:       {}", g(&RECOMPILE_METHOD_CLASS_VER));
-        eprintln!("  whole recompiles  const-ver:       {}", g(&RECOMPILE_METHOD_CONST_VER));
-        eprintln!("  whole recompiles  other:           {}", g(&RECOMPILE_METHOD_OTHER));
-        eprintln!("  whole recompiles  skipped(noinst): {}", g(&RECOMPILE_METHOD_SKIPPED));
-        eprintln!("  loop  recompiles  class-ver:       {}", g(&RECOMPILE_LOOP_CLASS_VER));
-        eprintln!("  loop  recompiles  const-ver:       {}", g(&RECOMPILE_LOOP_CONST_VER));
-        eprintln!("  loop  recompiles  other:           {}", g(&RECOMPILE_LOOP_OTHER));
-        eprintln!("  spec  recompiles  class-ver:       {}", g(&RECOMPILE_SPEC_CLASS_VER));
-        eprintln!("  spec  recompiles  const-ver:       {}", g(&RECOMPILE_SPEC_CONST_VER));
-        eprintln!("  spec  recompiles  other:           {}", g(&RECOMPILE_SPEC_OTHER));
+        eprintln!(
+            "  recovery attempts (loop guard):    {}",
+            g(&RECOVERY_ATTEMPT_LOOP)
+        );
+        eprintln!(
+            "    salvaged (re-resolution ok):     {}",
+            g(&SALVAGE_OK_LOOP)
+        );
+        eprintln!(
+            "  recovery attempts (spec guard):    {}",
+            g(&RECOVERY_ATTEMPT_SPEC)
+        );
+        eprintln!(
+            "    salvaged (re-resolution ok):     {}",
+            g(&SALVAGE_OK_SPEC)
+        );
+        eprintln!(
+            "    fail: resolution changed:        {}",
+            g(&SALVAGE_FAIL_RESOLUTION_CHANGED)
+        );
+        eprintln!(
+            "    fail: no cache/entry:            {}",
+            g(&SALVAGE_FAIL_NO_ENTRY)
+        );
+        eprintln!(
+            "  recovery attempts (const guard):   {}",
+            g(&CONST_RECOVERY_ATTEMPT)
+        );
+        eprintln!(
+            "    salvaged:                        {}",
+            g(&CONST_SALVAGE_OK)
+        );
+        eprintln!(
+            "    value-compared sites:            {}",
+            g(&CONST_SALVAGE_VALUECMP)
+        );
+        eprintln!(
+            "    fail: cache stale:               {}",
+            g(&CONST_SALVAGE_FAIL_STALE)
+        );
+        eprintln!(
+            "    fail: value changed:             {}",
+            g(&CONST_SALVAGE_FAIL_CHANGED)
+        );
+        eprintln!(
+            "  whole recompiles  class-ver:       {}",
+            g(&RECOMPILE_METHOD_CLASS_VER)
+        );
+        eprintln!(
+            "  whole recompiles  const-ver:       {}",
+            g(&RECOMPILE_METHOD_CONST_VER)
+        );
+        eprintln!(
+            "  whole recompiles  other:           {}",
+            g(&RECOMPILE_METHOD_OTHER)
+        );
+        eprintln!(
+            "  whole recompiles  skipped(noinst): {}",
+            g(&RECOMPILE_METHOD_SKIPPED)
+        );
+        eprintln!(
+            "  loop  recompiles  class-ver:       {}",
+            g(&RECOMPILE_LOOP_CLASS_VER)
+        );
+        eprintln!(
+            "  loop  recompiles  const-ver:       {}",
+            g(&RECOMPILE_LOOP_CONST_VER)
+        );
+        eprintln!(
+            "  loop  recompiles  other:           {}",
+            g(&RECOMPILE_LOOP_OTHER)
+        );
+        eprintln!(
+            "  spec  recompiles  class-ver:       {}",
+            g(&RECOMPILE_SPEC_CLASS_VER)
+        );
+        eprintln!(
+            "  spec  recompiles  const-ver:       {}",
+            g(&RECOMPILE_SPEC_CONST_VER)
+        );
+        eprintln!(
+            "  spec  recompiles  other:           {}",
+            g(&RECOMPILE_SPEC_OTHER)
+        );
     }
 }

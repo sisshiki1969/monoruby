@@ -83,7 +83,7 @@ fn insert_method(&mut self, class_id: ClassId, name: IdentId, entry: MethodTable
 呼び出し元の `Executor::{add_method, add_method_with_original,
 alias_method_for_class}` が担う。メソッド表を書き換えた**後**・`method_added`
 フックを呼ぶ**前**に `Codegen::check_bop_redefine(cfp)` を通し、フラグが非 0 なら
-`Codegen::chain_deopt` が CFP 鎖を遡って各サスペンド中フレームを
+`Codegen::chain_deopt_into` が CFP 鎖を遡って各サスペンド中フレームを
 インタプリタフレームへ**変換**する（write-back の replay ＋ return address を
 共有 VM continuation stub に書き換え。`doc/chain_deopt.md` §10 を参照）。
 戻ってきた時点で VM に落ちる。かつてはコードそのものに `jmp deopt` を
