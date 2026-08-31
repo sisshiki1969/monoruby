@@ -1,4 +1,4 @@
-# Benchmarks
+# Benchmark
 
 monoruby is performance-focused, and performance is measured continuously
 rather than quoted from a README. This page covers the live dashboards, how to
@@ -15,8 +15,9 @@ portal](https://sisshiki1969.github.io/monoruby/):
 | --- | --- |
 | [Performance vs YJIT (x86-64)](https://sisshiki1969.github.io/monoruby/bench/) | Per-benchmark speed relative to CRuby + YJIT, plus a history chart per benchmark |
 | [Performance vs YJIT (aarch64)](https://sisshiki1969.github.io/monoruby/bench-arm64/) | The same suite on an Apple Silicon runner |
-| [ruby/spec core dashboard](https://sisshiki1969.github.io/monoruby/spec/) | Pass rates for the `core` spec group |
-| [ruby/spec library dashboard](https://sisshiki1969.github.io/monoruby/library/) | Pass rates for the `library` spec group |
+
+The portal also hosts the two ruby/spec dashboards; those are covered in
+[Compatibility](compatibility.md).
 
 Methodology, from `.github/workflows/bench.yml`:
 

@@ -5,8 +5,12 @@
 # Getting Started
 
 - [Installation and Build](installation.md)
-- [Benchmarks](benchmarks.md)
 - [Development and Build Options](development.md)
+
+# Performance and Compatibility
+
+- [Benchmark](benchmarks.md)
+- [Compatibility](compatibility.md)
 
 # Architecture
 

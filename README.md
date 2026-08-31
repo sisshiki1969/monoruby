@@ -6,7 +6,7 @@
 
 Ruby implementation with yet another JIT compiler written in Rust.
 
-- 📖 **[Documentation](https://sisshiki1969.github.io/monoruby/docs/)** — [installation and build](https://sisshiki1969.github.io/monoruby/docs/installation.html), [benchmarks](https://sisshiki1969.github.io/monoruby/docs/benchmarks.html), [development and build options](https://sisshiki1969.github.io/monoruby/docs/development.html), architecture overviews and the full design documents.
+- 📖 **[Documentation](https://sisshiki1969.github.io/monoruby/docs/)** — [installation and build](https://sisshiki1969.github.io/monoruby/docs/installation.html), [development and build options](https://sisshiki1969.github.io/monoruby/docs/development.html), [benchmark](https://sisshiki1969.github.io/monoruby/docs/benchmarks.html) and [compatibility](https://sisshiki1969.github.io/monoruby/docs/compatibility.html), architecture overviews and the full design documents.
 - 📊 **[Project portal](https://sisshiki1969.github.io/monoruby/)** — benchmark and ruby/spec dashboards, re-measured on every push to `master` that touches the interpreter.
 
 ## What's New in 2026
@@ -96,6 +96,8 @@ Conformance with Ruby has improved dramatically over the course of 2026, driven 
 Pass rates are re-measured on every interpreter change and published on the project portal: as of commit `a13bfe0` (2026-08-31) monoruby passes **97.6%** of the [core specs](https://sisshiki1969.github.io/monoruby/spec/) (22468 / 23029 examples) and **59.1%** of the [library specs](https://sisshiki1969.github.io/monoruby/library/).
 As of July 2026 it also passed 100% of the command-line specs and 99.6% of the language specs.
 Daily-updated pass statistics, compared with CRuby / TruffleRuby / JRuby, are published at [rubyspec-stats](https://sisshiki1969.github.io/rubyspec-stats/).
+
+The [Compatibility](https://sisshiki1969.github.io/monoruby/docs/compatibility.html) chapter of the documentation breaks the numbers down by category, explains how they are measured, and lists the behaviours that differ from CRuby by design.
 
 ## Prerequisites
 
