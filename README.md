@@ -6,6 +6,9 @@
 
 Ruby implementation with yet another JIT compiler written in Rust.
 
+- 📖 **[Documentation](https://sisshiki1969.github.io/monoruby/docs/)** — [installation and build](https://sisshiki1969.github.io/monoruby/docs/installation.html), [benchmarks](https://sisshiki1969.github.io/monoruby/docs/benchmarks.html), [development and build options](https://sisshiki1969.github.io/monoruby/docs/development.html), architecture overviews and the full design documents.
+- 📊 **[Project portal](https://sisshiki1969.github.io/monoruby/)** — benchmark and ruby/spec dashboards, re-measured on every push to `master` that touches the interpreter.
+
 ## What's New in 2026
 
 Monthly highlights of improvements since January 2026 (with representative PRs).
@@ -90,7 +93,8 @@ Monthly highlights of improvements since January 2026 (with representative PRs).
 ## Compatibility
 
 Conformance with Ruby has improved dramatically over the course of 2026, driven by an extensive [ruby/spec](https://github.com/ruby/spec)-based compliance effort.
-As of July 2026, monoruby passes 100% of the command-line specs, 99.6% of the language specs, and about 90% of the core-library specs.
+Pass rates are re-measured on every interpreter change and published on the project portal: as of commit `a13bfe0` (2026-08-31) monoruby passes **97.6%** of the [core specs](https://sisshiki1969.github.io/monoruby/spec/) (22468 / 23029 examples) and **59.1%** of the [library specs](https://sisshiki1969.github.io/monoruby/library/).
+As of July 2026 it also passed 100% of the command-line specs and 99.6% of the language specs.
 Daily-updated pass statistics, compared with CRuby / TruffleRuby / JRuby, are published at [rubyspec-stats](https://sisshiki1969.github.io/rubyspec-stats/).
 
 ## Prerequisites
@@ -102,15 +106,13 @@ Daily-updated pass statistics, compared with CRuby / TruffleRuby / JRuby, are pu
 
 ## How to run
 
-Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/Build-and-Install) for details. 
+See [Installation and Build](https://sisshiki1969.github.io/monoruby/docs/installation.html) for prebuilt binaries, platform notes, what the build installs, and the full command-line reference.
 
-(1) Install nightly Rust.
+(1) Install Rust.
 
-First of all, install Rust nightly.
-[Check here to install Rust](https://www.rust-lang.org/ja/tools/install)
+[Check here to install Rust](https://www.rust-lang.org/tools/install) if you have no Rust yet.
 
-_Caution!!_ **only nightly Rust works** for monoruby.
-[See here to work with nightly Rust](https://rust-lang.github.io/rustup/concepts/channels.html#working-with-nightly-rust).
+_Caution!!_ **only nightly Rust works** for monoruby. You do not have to select the channel yourself: `rust-toolchain.toml` pins the exact nightly the project is tested against, and `rustup` installs and uses it automatically the first time you run `cargo` in the checkout.
 
 (2) Clone this repository.
 
@@ -135,6 +137,14 @@ or
 
 ```sh
 > bin/irm
+```
+
+(5) or, install `monoruby` and `irm` onto your `PATH`.
+
+```sh
+> cargo install --path monoruby
+> monoruby test.rb
+> irm
 ```
 
 ## Using monoruby in GitHub Actions
@@ -177,12 +187,14 @@ Inputs and outputs:
 
 ## Benchmark
 
-Up-to-date benchmark results (yjit-bench, measured on every push to master) and a ruby/spec compliance dashboard are published on [the project portal](https://sisshiki1969.github.io/monoruby/). The numbers below are from older one-off measurements.
+Up-to-date benchmark results (yjit-bench, re-measured on every interpreter change) and the ruby/spec compliance dashboards are published on [the project portal](https://sisshiki1969.github.io/monoruby/). On the x86-64 run of commit `a13bfe0` (2026-08-31), over the 59 benchmarks that completed on both interpreters, monoruby averaged 1.28x the speed of CRuby+YJIT (geometric mean).
 
-### 1. Optcarrot banechmark
+The [Benchmarks](https://sisshiki1969.github.io/monoruby/docs/benchmarks.html) chapter of the documentation explains the measurement methodology and how to reproduce a run locally. The numbers below are older one-off measurements, kept for the record.
+
+### 1. Optcarrot benchmark
 
 Several Ruby implementations described below were measured by [optcarrot](https://github.com/mame/optcarrot) benchmark.
-Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/Optcarrot-benchmark) for details. 
+See [Benchmarks — optcarrot](https://sisshiki1969.github.io/monoruby/docs/benchmarks.html#optcarrot-april-2024) for details.
 
 #### Versions of used Rubies
 
@@ -202,7 +214,7 @@ Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/Optcarrot-benchm
 ### 2. Other benchmarks
 
 Several Ruby implementations described below were measured by [yjit-bench](https://github.com/Shopify/yjit-bench).
-Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/General-benchmarks) for details.
+See [Benchmarks — yjit-bench](https://sisshiki1969.github.io/monoruby/docs/benchmarks.html#yjit-bench-december-2024) for the raw data.
 
 #### Versions of used Rubies
 

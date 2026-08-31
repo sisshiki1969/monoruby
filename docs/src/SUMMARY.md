@@ -2,6 +2,12 @@
 
 [Introduction](introduction.md)
 
+# Getting Started
+
+- [Installation and Build](installation.md)
+- [Benchmarks](benchmarks.md)
+- [Development and Build Options](development.md)
+
 # Architecture
 
 - [Architecture Overview](architecture-overview.md)
