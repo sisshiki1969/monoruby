@@ -7,6 +7,13 @@ For a prose account of the same period rather than a list — what changed and
 why, over roughly 500 commits — see [Progress summary (April 2025 – April
 2026)](design/progress_2025-2026.md).
 
+> **Maintenance.** This page is the single source of truth. A scheduled
+> Routine appends the previous month on the 1st of each month, then runs
+> `bin/sync-changelog-readme`, which copies the two newest month sections
+> verbatim into the README between its `LATEST-MONTHS` markers. The README's
+> month text is generated — edit this page instead, and re-run the script
+> (`bin/sync-changelog-readme --check` verifies the two are in sync).
+
 ## 2026
 
 ### July 2026
