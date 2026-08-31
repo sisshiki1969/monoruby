@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>JIT Compiler - monoruby</title>
+        <title>Reading the deopt log - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-e96d0476.css">
-        <link rel="stylesheet" href="css/chrome-d279d366.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-86c241c2.js";
+            window.path_to_searchindex_js = "../searchindex-86c241c2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a8d0bf4a.js"></script>
+        <script src="../toc-a8d0bf4a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">monoruby</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
@@ -177,62 +177,118 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <p>monoruby executes bytecode in the VM until code gets hot, then compiles it to specialized machine code. This page is an overview; the detailed documents are <a href="design/jit.html"><code>doc/jit.md</code></a> (stub/bridge code), <a href="design/lir.html"><code>doc/lir.md</code></a> (the low-level IR), <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> (register allocation), and <a href="design/inline.html"><code>doc/inline.md</code></a> (inline builtins).</p>
-<h2 id="when-compilation-triggers"><a class="header" href="#when-compilation-triggers">When compilation triggers</a></h2>
-<ul>
-<li><strong>Method JIT</strong> — after ≥ 20 calls (<code>COUNT_START_COMPILE</code>; 5 in test mode)</li>
-<li><strong>Loop JIT</strong> — after ≥ 100 iterations of a loop (<code>COUNT_LOOP_START_COMPILE</code>; 15 in test mode), compiling the enclosing method from the loop entry</li>
-</ul>
-<p>Each function starts with a small <em>wrapper</em> that decrements a counter and falls through to the VM until the counter expires, then triggers compilation and patches itself.</p>
-<h2 id="ir-pipeline"><a class="header" href="#ir-pipeline">IR pipeline</a></h2>
-<pre><code>bytecode ──abstract interpretation──▶ TraceIR ──▶ AsmIR ──▶ LIR ──▶ machine code (monoasm)
-                (type feedback from inline caches)        (per-arch encoder)
+                        <h1 id="reading-the-deopt-log---features-deopt"><a class="header" href="#reading-the-deopt-log---features-deopt">Reading the deopt log (<code>--features deopt</code>)</a></h1>
+<h2 id="what-a-record-looks-like"><a class="header" href="#what-a-record-looks-like">What a record looks like</a></h2>
+<pre><code>&lt;-- deopt occurs in &lt;Array#each&gt; FuncId(2251).
+      [:00019] %1 = %1 + %2   [Integer][Integer]   exit: deopt (chained)
+      guard: monoruby/src/codegen/jitgen/asmir/compile_shared.rs:541:34
+      exit emitted by: monoruby/src/codegen/jitgen/compile/method_call.rs:973:24
+      cause: class version
 </code></pre>
-<ul>
-<li><strong>TraceIR</strong> — bytecode annotated with type information gathered from the VM tier’s inline caches.</li>
-<li><strong>AsmIR</strong> (<code>AsmInst</code>) — arch-neutral, register-allocated assembly IR produced by an abstract interpreter that tracks, per slot, whether a value lives on the stack, in a floating-point register (unboxed <code>f64</code>), both, or is a compile-time constant (<code>LinkMode</code>).</li>
-<li><strong>LIR</strong> (<code>LInst</code>) — arch-neutral machine-level ops with offsets and labels resolved; the single seam where bytes are emitted. Each architecture implements one <code>encode_linst</code> (see <a href="aarch64-backend.html">aarch64 Backend</a>).</li>
-</ul>
-<h2 id="specialization-and-inline-caches"><a class="header" href="#specialization-and-inline-caches">Specialization and inline caches</a></h2>
-<p>Compiled code is specialized <strong>per receiver class</strong>. The method entry is a chain of self-class guard stubs: each guard tests the receiver’s class and jumps to the machine code compiled for that class; a miss falls through to the next guard or to the VM. Method calls inside JIT code are resolved through inline caches and guarded by a <strong>class-version</strong> check, so redefining a method invalidates dependent code. Small hot builtins (<code>Array#[]</code>, <code>Integer</code> arithmetic, <code>Math.sqrt</code>, <code>Object#is_a?</code>, <code>Struct</code> accessors, <code>Class#new</code>, <code>Fiber.yield</code>, …) are inlined directly by generator functions that can both consult the abstract state (folding results at compile time when types are proven) and emit code; a failed inline attempt rolls back cleanly and falls back to a normal call. Monomorphic methods can additionally be <strong>specialized inline</strong> — the callee’s frame is inlined into the caller.</p>
-<h2 id="deoptimization-and-recompilation"><a class="header" href="#deoptimization-and-recompilation">Deoptimization and recompilation</a></h2>
-<p>JIT code is speculative. Guards — receiver class, class version, array type, frozen state, fixnum overflow, basic-operator (BOP) redefinition, frame capture — branch to <strong>side exits</strong> that write register-resident values back to the frame and resume in the VM at the equivalent program point. Repeated deopts trigger <strong>recompilation</strong> with the newly observed classes (e.g. polymorphic call sites, <code>method_missing</code> dispatch, newly resolved constants/ivars). Deopt logging is available with the <code>deopt</code> Cargo feature, recompile/deopt statistics with <code>profile</code>.</p>
-<h2 id="register-allocation"><a class="header" href="#register-allocation">Register allocation</a></h2>
-<ul>
-<li><strong>Floating point</strong> — virtual FP registers (<code>VirtFPReg</code>) allocated greedily over the physical pool (14 xmm registers on x86-64), with automatic <strong>spill-to-stack</strong> when the pool is exhausted; loop entries specialize float-typed slots so hot numeric loops keep values unboxed in registers.</li>
-<li><strong>General purpose</strong> — a per-basic-block local GP register allocator keeps boxed values (notably Fixnums) in a small pool of scratch registers within a block, eliding redundant fixnum guards, and flushes the pool at calls and GC safepoints (pool registers are not GC roots).</li>
-</ul>
-<p>The long-form design discussion — separating type inference from placement, the retirement of the dedicated accumulator register, and measured results — is in <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> and <a href="design/lir.html"><code>doc/lir.md</code></a>.</p>
-<h2 id="argument-forwarding-d1"><a class="header" href="#argument-forwarding-d1">Argument forwarding (D1)</a></h2>
-<p><code>def f(...)</code> forwarding is compiled as an opaque pipe: for simple callees the rest-Array / keyword-Hash allocation is elided entirely and arguments are copied (or lazily deferred) straight from the caller’s frame, with deopt-safe lazy materialization if a side exit or frame capture ever needs the real objects. See <a href="design/arg_forwarding_jit.html"><code>doc/arg_forwarding_jit.md</code></a>.</p>
-<h2 id="observing-the-jit"><a class="header" href="#observing-the-jit">Observing the JIT</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Cargo feature</th><th>Output</th></tr>
+<tr><th>field</th><th>means</th></tr>
 </thead>
 <tbody>
-<tr><td><code>dump-bc</code> / <code>emit-bc</code></td><td>bytecode</td></tr>
-<tr><td><code>dump-traceir</code></td><td>TraceIR</td></tr>
-<tr><td><code>emit-asm</code></td><td>generated assembly</td></tr>
-<tr><td><code>jit-log</code> / <code>jit-debug</code></td><td>compilation events / detailed debug</td></tr>
-<tr><td><code>deopt</code></td><td>deoptimization log</td></tr>
-<tr><td><code>profile</code></td><td>deopt &amp; recompile statistics</td></tr>
-<tr><td><code>perf</code></td><td>perf-compatible symbol maps</td></tr>
+<tr><td>first line</td><td>the frame that deoptimized</td></tr>
+<tr><td><code>[:NNNNN]</code></td><td>its bytecode index, and the TraceIR at that index</td></tr>
+<tr><td><code>exit:</code></td><td>what the handler is — <code>deopt</code>, <code>evict</code>, or <code>recompile[reason]</code>, plus <code>(chained)</code></td></tr>
+<tr><td><code>guard:</code></td><td>the lowering site of the guard that <strong>actually branched</strong></td></tr>
+<tr><td><code>exit emitted by:</code></td><td>the front-end site that decided a deopt was needed here</td></tr>
+<tr><td><code>cause:</code></td><td>the operand the guard was looking at, or a name when there is none</td></tr>
 </tbody>
 </table>
 </div>
-<p>The JIT is always built in; disable it at runtime with <code>--no-jit</code>. See <a href="https://github.com/sisshiki1969/monoruby/wiki/Build-options-for-performance-tuning">Build options for performance tuning</a> for example output.</p>
+<p><code>guard:</code> is the field to read first. It identifies the branch, not the
+handler — see below for why those differ.</p>
+<h2 id="why-it-is-built-the-way-it-is"><a class="header" href="#why-it-is-built-the-way-it-is">Why it is built the way it is</a></h2>
+<p>The cause column used to be “whatever sat in rdi when the side exit ran”.
+That was wrong in two independent ways, and the two together produced four
+consecutive misdiagnoses during the activerecord deopt investigation:</p>
+<p><strong>The value was stale.</strong> The handler read rdi <em>after</em> the deopt write-back,
+which calls into C (<code>f64_to_val</code>, <code>create_array</code>, …) and clobbers the
+register file. Most records printed <code>UNDEFINED</code> — how a zero word renders —
+so the column was noise dressed as data.</p>
+<p><strong>The guard was unidentifiable.</strong> Deopt exits are deduplicated by
+<code>(pc, write_back, chain)</code>, and a single <code>AsmDeopt</code> is handed to several
+guards even before that. Neither the handler nor the <code>AsmDeopt</code> index names
+the branch that was taken. Two guards at one pc are one handler, and the
+log could not tell them apart.</p>
+<p>So identity is recorded where the branch is. Every lowering site that asks
+for a deopt label gets a trampoline of its own:</p>
+<pre><code>site_NNN:
+    movq [rbx + EXECUTOR_DEOPT_CAUSE], &lt;cause register&gt;
+    movl [rbx + EXECUTOR_DEOPT_SITE],  &lt;site id&gt;
+    jmp  &lt;deduplicated handler&gt;
+</code></pre>
+<p>rbx is <code>&amp;mut Executor</code> for the whole body, so this costs no scratch
+register, no stack traffic, and — at a point where a guard has just done its
+compare — no flag-clobbering instruction. Recording the operand <em>before</em> the
+write-back is what makes the value trustworthy, which in turn lets the log
+call stay where it always was: after the write-back, with nothing live in
+registers.</p>
+<p>Handlers stay deduplicated. Only the trampolines multiply, at ~20 cold-page
+bytes each.</p>
+<h2 id="the-invariant"><a class="header" href="#the-invariant">The invariant</a></h2>
+<p><strong>The only way to reach a deopt handler from a JIT body is
+<code>Codegen::deopt_label</code>, and it demands a <code>DeoptCause</code>.</strong></p>
+<p><code>SideExitLabels</code> has no <code>Index&lt;AsmDeopt&gt;</code> impl, and <code>deopt_label</code> has no
+default for <code>cause</code>. A new guard that skips the question does not compile.</p>
+<p>Choosing a cause: <em>for the label this call returns, is a meaningful operand
+present on <strong>every</strong> path that jumps to it?</em> If some edge leaves the
+register undefined, the honest answer is <code>DeoptCause::Static("…")</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>variant</th><th>when</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Value(r)</code></td><td>a Ruby <code>Value</code> is in <code>r</code> on every edge</td></tr>
+<tr><td><code>ValueVsBaked(r, v)</code></td><td>…and the guard compared it against <code>v</code>, baked at compile time</td></tr>
+<tr><td><code>Raw(r)</code></td><td>non-<code>Value</code> bits (pointers, byte counts); printed as hex, never decoded</td></tr>
+<tr><td><code>Static(s)</code></td><td>no operand: global state (version word, BOP flag, counter), an unconditional deopt, or an unboxed float</td></tr>
+</tbody>
+</table>
+</div>
+<p>Floats are deliberately <code>Static</code>. An <code>FPReg</code> is virtual — resolving one
+needs the frame’s <code>base_stack_offset</code>, since a spilled float lives on the
+stack rather than in an <code>xmm</code> — and threading a frame through every guard’s
+lowering to recover an operand for two call sites is not worth it.</p>
+<h2 id="what-the-log-will-not-do"><a class="header" href="#what-the-log-will-not-do">What the log will not do</a></h2>
+<p><strong>It will not decode a word it cannot vouch for.</strong> A <code>Value</code> cause is
+checked (<code>Value::debug_check</code>) before it is decoded, and the raw bits are
+always printed alongside. The write-back between capture and log can run a
+GC, so an object reachable only from the guard’s register may be gone by
+then; such a word reads as <code>&lt;not a Value&gt;</code> rather than as a plausible lie.</p>
+<p><strong>It will not attribute a branch it did not see.</strong> A handler entered without
+a trampoline — an evict resuming through a patched return address, say —
+reports <code>guard: unknown (handler entered without a trampoline)</code>. The site id
+is taken and cleared on every read, so a later entry cannot inherit an
+earlier one’s identity.</p>
+<p><strong>It will flag its own contradictions.</strong> A <code>ValueVsBaked</code> guard that reports
+a miss on bits equal to what it compares against prints
+<code>!!! guard reported a miss on equal bits</code>. That exact contradiction — a
+guard appearing to fail against the value it was testing for — is what cost
+four hypotheses before the log could state it.</p>
+<h2 id="scope"><a class="header" href="#scope">Scope</a></h2>
+<p>Everything here is <code>cfg(feature = "deopt")</code>. Normal builds emit byte-identical
+code: <code>deopt_label</code> compiles to the bare handler label and the <code>cause</code>
+argument is discarded. <code>profile</code>-only builds keep their original call site.</p>
+<p>aarch64 is out of scope, unchanged: <code>a64_gen_deopt</code> has never called
+<code>log_deoptimize</code>, so aarch64 <code>deopt</code> builds print nothing. Adding it later is
+a contained job — x19/x20/x21 mirror rbx/r12/r13, and the trampoline becomes
+<code>str x_cause,[x19,#CAUSE]; mov w12,#id; str w12,[x19,#SITE]; b deopt</code>.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="value-representation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/chain_deopt.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="garbage-collection.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../design/polymorphic_call.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -242,11 +298,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="value-representation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/chain_deopt.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="garbage-collection.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../design/polymorphic_call.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -266,13 +322,13 @@
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-09f2665d.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-609e4cb8.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

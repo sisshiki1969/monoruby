@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7840c045.js";
+            window.path_to_searchindex_js = "searchindex-86c241c2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e1173681.js"></script>
+        <script src="toc-a8d0bf4a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,16 +179,24 @@
                     <main>
                         <h1 id="monoruby"><a class="header" href="#monoruby">monoruby</a></h1>
 <p><a href="https://github.com/sisshiki1969/monoruby">monoruby</a> is a Ruby implementation written from scratch in Rust, featuring a register-based bytecode VM and a just-in-time (JIT) compiler for x86-64 and aarch64 (Apple Silicon). It is fast — comparable to CRuby with YJIT/ZJIT on many benchmarks — and has no dependency on any other Ruby runtime.</p>
-<p>This site documents monoruby’s internals.</p>
+<p>This site is monoruby’s documentation: how to build and run it, how it performs, and how it works inside.</p>
 <ul>
+<li>The <strong>Getting Started</strong> section covers <a href="installation.html">installing and building</a> monoruby, and the <a href="development.html">build options and test workflow</a> used when developing it.</li>
+<li>The <strong>Performance and Compatibility</strong> section is where the live dashboards are explained: <a href="benchmarks.html">Benchmark</a> for speed against CRuby+YJIT, <a href="compatibility.html">Compatibility</a> for ruby/spec conformance.</li>
 <li>The <strong>Architecture</strong> section contains overview pages: start with the <a href="architecture-overview.html">Architecture Overview</a>.</li>
 <li>The <strong>Design Documents</strong> section renders the full design documents from the repository’s <a href="https://github.com/sisshiki1969/monoruby/tree/master/doc"><code>doc/</code></a> directory (some are written in Japanese, as marked).</li>
 </ul>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<pre><code class="language-sh">git clone https://github.com/sisshiki1969/monoruby.git
+cd monoruby
+cargo install --path monoruby   # nightly Rust is installed automatically by rust-toolchain.toml
+monoruby -e 'puts "hello"'
+</code></pre>
+<p>See <a href="installation.html">Installation and Build</a> for prebuilt binaries, the GitHub Action, platform notes and the full command-line reference.</p>
 <h2 id="related-resources"><a class="header" href="#related-resources">Related resources</a></h2>
 <ul>
-<li><a href="https://github.com/sisshiki1969/monoruby#readme">README</a> — features, installation, monthly changelog</li>
-<li><a href="https://github.com/sisshiki1969/monoruby/wiki/Build-and-Install">Build and Install</a> — build instructions (wiki)</li>
-<li><a href="https://sisshiki1969.github.io/monoruby/bench/">Benchmark results</a> — continuously updated yjit-bench comparison</li>
+<li><a href="https://github.com/sisshiki1969/monoruby#readme">README</a> — features and the monthly changelog</li>
+<li><a href="https://sisshiki1969.github.io/monoruby/bench/">Benchmark dashboard</a> — continuously updated yjit-bench comparison, re-run on every push to <code>master</code> that touches the interpreter</li>
 <li><a href="https://sisshiki1969.github.io/monoruby/spec/">ruby/spec dashboard</a> — spec compliance for this repository</li>
 <li><a href="https://sisshiki1969.github.io/rubyspec-stats/">rubyspec-stats</a> — daily ruby/spec pass rates across Ruby implementations</li>
 </ul>
@@ -198,7 +206,7 @@
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
 
-                            <a rel="next prefetch" href="architecture-overview.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="installation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -209,7 +217,7 @@
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
 
-                    <a rel="next prefetch" href="architecture-overview.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="installation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

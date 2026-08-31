@@ -1,0 +1,635 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Development and Build Options - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-86c241c2.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-a8d0bf4a.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="development-and-build-options"><a class="header" href="#development-and-build-options">Development and Build Options</a></h1>
+<p>This page collects the build features, environment variables and helper
+scripts used when working <em>on</em> monoruby, rather than with it. For getting a
+working binary in the first place see <a href="installation.html">Installation and
+Build</a>.</p>
+<h2 id="cargo-features"><a class="header" href="#cargo-features">Cargo features</a></h2>
+<p>Every feature is off by default. They are diagnostic or stress switches: none
+of them changes what a correct program computes, and none is needed for a
+normal build.</p>
+<p>The JIT is <strong>always</strong> compiled in regardless of features — it is disabled at
+run time with <code>--no-jit</code>. (The old <code>jit</code> / <code>jit_x86</code> build cfgs and the
+<code>no-jit</code> feature are gone; backend selection is purely by <code>target_arch</code>.)</p>
+<h3 id="dumping-the-compilation-pipeline"><a class="header" href="#dumping-the-compilation-pipeline">Dumping the compilation pipeline</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>emit-bc</code></td><td>Dump bytecode to stderr (implies <code>dump-bc</code>, <code>dump-traceir</code>)</td></tr>
+<tr><td><code>emit-asm</code></td><td>Dump generated machine code to stderr (implies <code>dump-bc</code>, <code>dump-traceir</code>, <code>jit-log</code>)</td></tr>
+<tr><td><code>emit-cfg</code></td><td>Write each JIT-compiled function’s control-flow graph to <code>.cfg/fid-&lt;id&gt;.dot</code> (implies <code>dump-bc</code>, <code>dump-traceir</code>)</td></tr>
+<tr><td><code>dump-bc</code></td><td>Enable the bytecode dumper</td></tr>
+<tr><td><code>dump-traceir</code></td><td>Enable the TraceIR dumper</td></tr>
+<tr><td><code>dump-require</code></td><td>Log <code>require</code> / <code>load</code> file resolution</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="jit-diagnostics"><a class="header" href="#jit-diagnostics">JIT diagnostics</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>jit-log</code></td><td>Log JIT compilation events</td></tr>
+<tr><td><code>jit-debug</code></td><td>Detailed JIT debug output (implies <code>dump-traceir</code>)</td></tr>
+<tr><td><code>deopt</code></td><td>Log deoptimizations (implies <code>jit-log</code>, <code>dump-bc</code>, <code>dump-traceir</code>)</td></tr>
+<tr><td><code>chain-deopt-log</code></td><td>Trace every chain-deopt escalation to stderr. Deliberately <strong>not</strong> implied by <code>deopt</code> / <code>profile</code>: it fires hundreds of thousands of times per activerecord iteration and once wrote 160 MB of stderr in five iterations</td></tr>
+<tr><td><code>profile</code></td><td>Collect deopt / recompile statistics (implies <code>dump-traceir</code> for the deopt-site table, but not the bytecode dumps)</td></tr>
+<tr><td><code>perf</code></td><td>Emit perf-compatible symbol maps so JIT frames get names</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="gc"><a class="header" href="#gc">GC</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>gc-log</code></td><td>Log GC statistics at exit</td></tr>
+<tr><td><code>gc-debug</code></td><td>GC debug assertions</td></tr>
+<tr><td><code>gc-stress</code></td><td>Start in <code>GC.stress</code> and collect at <strong>every</strong> safepoint</td></tr>
+<tr><td><code>gc-verify</code></td><td>After every minor GC, independently re-mark the whole live graph from the roots, so a missed write barrier trips an assertion. Debug-only and very slow</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="register-allocation-and-allocator-experiments"><a class="header" href="#register-allocation-and-allocator-experiments">Register allocation and allocator experiments</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>stress-spill-pool</code></td><td>Shrink <code>PHYS_FPR_POOL</code> to 2 so almost every float-resident slot becomes a spilled virtual FP register, stressing the spill paths</td></tr>
+<tr><td><code>shadow-placement</code></td><td>Record every physical FP placement in emission order, producing a per-compile fingerprint of the lowering. The gate for the abstract-interpreter / register-allocation separation</td></tr>
+<tr><td><code>phys-table</code></td><td>Move the physical FP placement <em>policy</em> out of the resolver into an explicit table-backed function. Byte-identical to the formula it replaces</td></tr>
+<tr><td><code>phys-loop-aware</code></td><td>The loop-aware FP allocation policy: keep loop-carried floats resident so a fresh value spills instead of evicting one. Non-byte-identical by design</td></tr>
+<tr><td><code>mimalloc</code></td><td>Route the global allocator’s delegation to mimalloc instead of glibc, changing exactly one variable for an A/B</td></tr>
+</tbody>
+</table>
+</div>
+<p>The last three are gated on measurement and are off until their A/B clears;
+see <a href="design/regalloc_separation.html">Separating the abstract interpreter from register
+allocation</a>.</p>
+<h2 id="worked-example-reading-the-pipeline"><a class="header" href="#worked-example-reading-the-pipeline">Worked example: reading the pipeline</a></h2>
+<p>Everyone loves Fibonacci, so all three dumps below are of the same
+<code>benchmark/app_fib.rb</code>:</p>
+<pre><code class="language-ruby">def fib n
+  if n &lt; 3
+    1
+  else
+    fib(n-1) + fib(n-2)
+  end
+end
+
+puts fib(34)
+</code></pre>
+<h3 id="bytecode---features-emit-bc"><a class="header" href="#bytecode---features-emit-bc">Bytecode (<code>--features emit-bc</code>)</a></h3>
+<pre><code class="language-sh">cargo build --release --features emit-bc
+target/release/monoruby benchmark/app_fib.rb 2&gt; fib.bytecode &gt; /dev/null
+</code></pre>
+<p>Each method and block is dumped as a register-based instruction listing,
+grouped into basic blocks (<code>BBx</code>). <code>%n</code> is a bytecode register (<code>SlotId</code>);
+<code>_%n</code> marks a result the next instruction consumes directly without the value
+ever being stored. The bracketed columns on the right are inline-cache slots,
+shown as <code>&lt;INVALID&gt;</code> here because the dump happens at compile time, before any
+cache has been filled.</p>
+<pre><code class="language-text">&lt;fib&gt; benchmark/app_fib.rb:1
+FuncId(3835) SIMPLE stack reg_num:5 owner:[] local_vars:1 temp:3
+ParamsInfo { required_num: 1, optional_num: 0, rest: None, rest_is_implicit: false, post_num: 0, args_names: [Some(n)], kw_names: [], kw_required: [], kw_rest: None, block_param: None, forwarding: false, it_param: false, forbid_keyword: false }
+[]
+  BB0
+    :00000 [02] init_method reg:4 arg:1 stack_offset:8
+    :00001 [03] %2 = 3
+    :00002 [03] _%2 = %1 &lt; %2                        [&lt;INVALID&gt;][&lt;INVALID&gt;]
+    :00003 [02] condnotbr _%2 =&gt; BB2
+  BB1
+    :00004 [03] %2 = 1
+    :00005 [02] ret %2
+  BB2
+    :00006 [03] %2 = 1
+    :00007 [03] %2 = %1 - %2                         [&lt;INVALID&gt;][&lt;INVALID&gt;]
+    :00008 [03] %2 = %0.fib(%2)                      [&lt;INVALID&gt;] -
+    :00010 [04] %3 = 2
+    :00011 [04] %3 = %1 - %3                         [&lt;INVALID&gt;][&lt;INVALID&gt;]
+    :00012 [04] %3 = %0.fib(%3)                      [&lt;INVALID&gt;] -
+    :00014 [03] %2 = %2 + %3                         [&lt;INVALID&gt;][&lt;INVALID&gt;]
+    :00015 [02] ret %2
+</code></pre>
+<p><code>%0</code> is <code>self</code>, <code>%1</code> is the parameter <code>n</code>, and <code>[nn]</code> is the source line.
+See <a href="design/method_args.html">Method argument processing</a> for what the
+<code>ParamsInfo</code> counters mean.</p>
+<h3 id="jit-compiled-machine-code---features-emit-asm"><a class="header" href="#jit-compiled-machine-code---features-emit-asm">JIT-compiled machine code (<code>--features emit-asm</code>)</a></h3>
+<pre><code class="language-sh">cargo build --release --features emit-asm
+target/release/monoruby benchmark/app_fib.rb 2&gt; fib.disas &gt; /dev/null
+</code></pre>
+<p>Each bytecode instruction is printed with the machine code it lowered to, so
+the dump reads as an annotated disassembly. The bracketed columns are now the
+<em>resolved</em> inline caches — <code>[Integer][Integer]</code> for the arithmetic, and
+<code>[#&lt;Class:main&gt;] FuncId(3835)</code> for the recursive call — because by the time
+the JIT runs, the VM has executed the method often enough to fill them. That
+is exactly the type information the compiler speculates on; see <a href="design/jit_invariants.html">Invariants
+compiled code speculates on</a>.</p>
+<pre><code class="language-text">==&gt; start whole compile: FuncId(3835) &lt;Object#fib&gt; self_class: #&lt;Class:main&gt; benchmark/app_fib.rb:1
+  &gt;&gt;&gt; [0] ISeqId(2164) &lt;Object#fib&gt; self_class:#&lt;Class:main&gt;
+      offset:Pos(251180) code: 517 bytes  data: 0 bytes
+  BB0
+    :00000 init_method reg:4 arg:1 stack_offset:8
+      000000: push   rbp
+      000001: mov    rbp,rsp
+      000004: sub    rsp,0x80
+      00000b: movabs rax,0x4
+      000015: mov    QWORD PTR [rbp-0x48],rax
+      000019: mov    QWORD PTR [rbp-0x50],rax
+      00001d: mov    QWORD PTR [rbp-0x58],rax
+      000021: cmp    DWORD PTR [rip+0x7ffc2ad4],0x0        # 0x7ffc2afc
+      000028: jne    0x3ffc60be
+    :00001 %2 = 3
+    :00002 _%2 = %1 &lt; %2                        [Integer][Integer]
+      00002e: mov    r8,QWORD PTR [rbp-0x40]
+      000032: test   r8,0x1
+      000039: je     0x3ffc60e9
+      00003f: cmp    r8,0x7
+      000043: jge    0x55
+    :00003 condnotbr _%2 =&gt; BB2
+  BB1
+    :00004 %2 = 1
+    :00005 ret %2
+      000049: movabs rax,0x3
+      000053: leave
+      000054: ret
+  BB2
+    :00006 %2 = 1
+    :00007 %2 = %1 - %2                         [Integer][Integer]
+      000055: mov    r8,QWORD PTR [rbp-0x40]
+      000059: sub    r8,0x2
+      00005d: jo     0x3ffc61ce
+    :00008 %2 = %0.fib(%2)                      [#&lt;Class:main&gt;] FuncId(3835)
+      000063: mov    eax,DWORD PTR [rip+0x7ffc2a6b]        # 0x7ffc2ad4
+      000069: cmp    eax,DWORD PTR [rip+0xffffffffffffff8d]        # 0xfffffffc
+      00006f: jne    0x3ffc61dd
+      000075: cmp    rsp,QWORD PTR [rbx+0x18]
+      000079: jle    0x3ffc6344
+
+      … call sequence and the second recursive call elided …
+
+    :00014 %2 = %2 + %3                         [Integer][Integer]
+      0001d5: mov    r9,QWORD PTR [rbp-0x48]
+      0001d9: test   r9,0x1
+      0001e0: je     0x3ffc6540
+      0001e6: test   r8,0x1
+      0001ed: je     0x3ffc6548
+      0001f3: sub    r9,0x1
+      0001f7: add    r9,r8
+      0001fa: jo     0x3ffc6550
+    :00015 ret %2
+      000200: mov    rax,r9
+      000203: leave
+      000204: ret
+  &lt;&lt;&lt;
+Object#fib #&lt;Class:main&gt; None (522 bytes, 1223 bytes) [wm0:CodePtr(139715286390055)-CodePtr(139715286390577) wm1:CodePtr(139716359894468)-CodePtr(139716359895691)] 5.462877ms
+- [ISeqId(2164)] &lt;Object#fib&gt; self_class:#&lt;Class:main&gt;
+
+</code></pre>
+<p>Things worth reading out of that listing:</p>
+<ul>
+<li><strong>The guards are the speculation.</strong> <code>test r8,0x1</code> / <code>je</code> is the Fixnum tag
+check on <code>n</code>; the <code>jo</code> after each <code>sub</code> / <code>add</code> catches overflow out of the
+63-bit Fixnum range; and <code>movl rax,[rip+global_version]</code> /
+<code>cmpl rax,[rip+cached_version]</code> / <code>jne</code> before each call is the class-version
+guard. Every one of those branch targets is a side exit.</li>
+<li><strong>Fixnums are tagged, and the constants are pre-encoded.</strong> <code>n &lt; 3</code> compiles
+to <code>cmp r8,0x7</code> because <code>3</code> as a Fixnum is <code>3 &lt;&lt; 1 | 1</code>; <code>n - 1</code> is
+<code>sub r8,0x2</code>; and the base case returns <code>movabs rax,0x3</code>, which is <code>1</code>.
+The final <code>sub r9,0x1; add r9,r8</code> strips one tag bit before adding. See
+<a href="value-representation.html">Value Representation</a>.</li>
+<li><strong>No accumulator register.</strong> Values live in whatever GP register the
+per-basic-block allocator picked (<code>r8</code> and <code>r9</code> here), with the frame at
+<code>[rbp-…]</code>. The fixed <code>r15</code> accumulator was retired in June 2026.</li>
+<li><strong><code>cmp rsp,[rbx+0x18]</code> before each call</strong> is the stack-limit check; <code>rbx</code>
+holds <code>&amp;mut Executor</code>.</li>
+</ul>
+<p>The summary line reports the code size and the two code regions the compiler
+emitted into: <code>wm0</code> is the fast path, <code>wm1</code> the out-of-line page holding the
+recompile and deopt stubs each failing guard jumps to.</p>
+<h3 id="cfg---features-emit-cfg"><a class="header" href="#cfg---features-emit-cfg">CFG (<code>--features emit-cfg</code>)</a></h3>
+<p><code>emit-cfg</code> writes one DOT file per JIT-compiled function into a <code>.cfg/</code>
+directory under the current working directory, named by <code>FuncId</code>:</p>
+<pre><code class="language-sh">cargo build --release --features emit-cfg
+target/release/monoruby benchmark/app_fib.rb &gt; /dev/null
+dot -Tsvg .cfg/fid-3835.dot -o fib-cfg.svg
+</code></pre>
+<p>Only functions that actually reach the JIT are dumped, so the set of files
+also tells you what got compiled.</p>
+<h2 id="testing"><a class="header" href="#testing">Testing</a></h2>
+<pre><code class="language-sh">cargo test              # unit + integration tests
+bin/test                # the full CI scope: tests + coverage + benchmarks + optcarrot + spec
+</code></pre>
+<p><code>bin/test</code> is what CI runs. In order it:</p>
+<ol>
+<li>Runs <code>cargo llvm-cov nextest</code> with <code>stress-spill-pool</code> (plus <code>gc-stress</code>
+only when <code>GC_STRESS=1</code> is exported).</li>
+<li>Builds a debug benchmark binary with the <strong>same</strong> feature list, so a
+<code>GC_STRESS=1</code> run stresses the benchmark / optcarrot / spec phases too.</li>
+<li>Runs the benchmark scripts and <code>diff</code>s their output against CRuby
+(<code>app_fib</code>, <code>tarai</code>, <code>so_nbody</code>, plb2 <code>nqueen</code> / <code>sudoku</code>, and
+<code>so_mandelbrot</code> both with and without the JIT).</li>
+<li>Runs optcarrot plain and with <code>--opt</code>, comparing output against CRuby.</li>
+<li>Runs a ruby/spec subset if <code>../spec</code> and <code>../mspec</code> exist.</li>
+<li>Writes an <code>lcov.info</code> coverage report.</li>
+</ol>
+<p><code>SKIP_COV=1</code> runs the whole script without llvm-cov instrumentation.</p>
+<h3 id="the-snapshot-oracle"><a class="header" href="#the-snapshot-oracle">The snapshot oracle</a></h3>
+<p>Tests compare monoruby’s output against CRuby, but they do <strong>not</strong> spawn CRuby
+per test. The single-code helpers — <code>run_test</code>, <code>run_test_once</code>, <code>run_test2</code>,
+<code>run_test_with_prelude</code> — memoize expected output in the checked-in file
+<code>monoruby/tests/ruby_oracle.tsv</code> (<code>code-hash → output</code>, key-sorted and
+flock-serialized so concurrent nextest processes cooperate). A live <code>ruby</code> is
+invoked only on a cache miss, and the fresh entry is written back — <strong>commit
+it</strong>. The batched helpers (<code>run_tests</code>, <code>run_tests2</code>, and the binop/unop
+generators built on them) always spawn a live CRuby, because their generated
+code strings churn too much to be worth snapshotting.</p>
+<p><code>MONORUBY_TEST_ORACLE</code> selects the mode:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Value</th><th>Behavior</th></tr>
+</thead>
+<tbody>
+<tr><td>unset / <code>snapshot</code></td><td>Replay stored entries; spawn and record on a miss (the default)</td></tr>
+<tr><td><code>ruby</code></td><td>Always spawn CRuby and refresh stale entries in place — use this after bumping the reference CRuby version</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-sh">rm monoruby/tests/ruby_oracle.tsv &amp;&amp; cargo test   # regenerate from scratch
+MONORUBY_TEST_ORACLE=ruby cargo test              # re-verify against a new CRuby
+</code></pre>
+<p>Tests whose expected value varies per host or OS must use <code>run_test_live</code> /
+<code>run_test_once_live</code>, which always compare against a live CRuby: anything
+touching <code>Dir.home</code> / <code>Dir.pwd</code>, absolute checkout paths, <code>~user</code> expansion
+(<code>/root</code> vs macOS <code>/var/root</code>), or <code>realpath</code> under <code>/tmp</code> (a symlink to
+<code>/private/tmp</code> on macOS). As a safety net a cached entry that disagrees with
+monoruby is re-verified against a live CRuby before failing — grep test output
+for <code>re-verifying against a live ruby</code> to find tests that should move to the
+<code>_live</code> helpers.</p>
+<p>Running the suite needs a host <code>ruby</code> matching the vendored pin (<strong>4.0.2</strong>,
+from <code>monoruby/vendor/ruby-stdlib/.ruby-version</code>). Since Ruby 3.4 <code>bigdecimal</code>
+is no longer a default gem, so install it explicitly or every
+<code>tests/bigdecimal.rs</code> test fails with <code>LoadError</code>:</p>
+<pre><code class="language-sh">gem install bigdecimal
+</code></pre>
+<h3 id="gc-stress"><a class="header" href="#gc-stress">GC stress</a></h3>
+<p><code>gc-stress</code> collects at <strong>every</strong> safepoint. It is what finds unrooted-<code>Value</code>
+bugs — a builtin that creates a <code>Value</code> and then re-enters Ruby — and it is
+opt-in precisely because it is expensive: stacked on llvm-cov it took the
+x86-64 nextest phase from ~10 minutes to ~100, and a full <code>bin/test</code> scope
+under stress is an hours-scale job.</p>
+<pre><code class="language-sh">GC_STRESS=1 bin/test    # applies to every phase, not just nextest
+</code></pre>
+<p>Nothing enables it implicitly, so the automatic CI never pays for it. Instead
+dispatch the manual <code>gc-stress</code> workflow from the Actions tab when touching
+the GC, frame layout, argument binding, or any builtin that creates a <code>Value</code>
+and re-enters Ruby. Its inputs are <code>arch</code> (<code>both</code> / <code>x86_64</code> / <code>aarch64</code>),
+<code>scope</code> (<code>nextest</code> = the unit + integration suite, minutes; <code>full</code> = the whole
+<code>bin/test</code> scope, hours), <code>test_filter</code> (a nextest <code>-E</code> expression), and
+<code>no_fail_fast</code>. It runs on <code>ubuntu-latest</code> and <strong>native</strong> arm64
+(<code>ubuntu-24.04-arm</code>), not qemu, and collects no coverage.</p>
+<p>Tests whose loop counts exist only to reach the JIT thresholds should shrink
+them under <code>cfg!(feature = "gc-stress")</code> (see <code>tests/method_call.rs</code>), or they
+blow past nextest’s per-test cap.</p>
+<h3 id="rubyspec"><a class="header" href="#rubyspec">ruby/spec</a></h3>
+<p>ruby/spec is cloned <strong>outside</strong> the monoruby repository, alongside it:</p>
+<pre><code>parent/
+├── monoruby/    # this repository
+├── spec/        # ruby/spec
+└── mspec/       # the mspec runner
+</code></pre>
+<pre><code class="language-sh">cd /path/to/parent-of-monoruby
+git clone --depth 1 https://github.com/ruby/spec.git spec
+git clone --depth 1 https://github.com/ruby/mspec.git mspec
+
+cd monoruby &amp;&amp; cargo install --path monoruby
+
+cd ../spec
+../mspec/bin/mspec run core/array -t monoruby              # one category
+../mspec/bin/mspec run core/array/flatten_spec.rb -t monoruby  # one file
+../mspec/bin/mspec run core/array -t monoruby --format dotted
+</code></pre>
+<p><code>bin/spec</code> from the monoruby checkout runs a standard set of categories in one
+go. Pass rates are published continuously on the <a href="https://sisshiki1969.github.io/monoruby/spec/">spec
+dashboard</a>; see <a href="design/ruby_spec_skip_tags.html">ruby/spec hang
+countermeasures</a> for how the suite avoids
+hangs.</p>
+<h3 id="aarch64"><a class="header" href="#aarch64">aarch64</a></h3>
+<p>On an x86-64 host the aarch64 backend is cross-compiled and run under
+qemu-user:</p>
+<pre><code class="language-sh">bin/setup-aarch64-cross   # qemu-aarch64, aarch64-linux-gnu-gcc, rust std
+bin/test-aarch64          # same scope as bin/test, for aarch64
+</code></pre>
+<p><code>bin/test-aarch64</code> takes <code>SKIP_HEAVY=1</code> (skip the benchmarks and specs that
+take over ten minutes under emulation), <code>SKIP_COV=1</code>, and <code>STRESS=1</code>. The
+<code>.cargo/config.toml</code> wiring points <code>aarch64-unknown-linux-gnu</code> at that cross
+toolchain and runner, which is why the CI job on a <em>native</em> arm64 runner
+overrides <code>CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_{LINKER,RUNNER}</code> — otherwise
+it would emulate everything.</p>
+<h2 id="measurement-and-profiling"><a class="header" href="#measurement-and-profiling">Measurement and profiling</a></h2>
+<p><code>--features profile</code> collects deopt and recompile statistics: which sites
+deoptimized, how often, and why. The reasons are the <code>RecompileReason</code>
+variants — <code>NotCached</code>, <code>MethodNotFound</code>, <code>IvarIdNotFound</code>,
+<code>ClassVersionGuardFailed</code>, <code>BecamePolymorphic</code>, <code>ConstVersionGuardFailed</code>.</p>
+<p><code>--features deopt</code> logs individual deoptimizations;
+<a href="design/deopt_log.html">Reading the deopt log</a> explains the format, including
+how the log names the guard that actually branched when exits have been
+deduplicated.</p>
+<p>For time rather than counts, see <a href="benchmarks.html#profiling">Benchmarks</a>.</p>
+<h2 id="jit-thresholds"><a class="header" href="#jit-thresholds">JIT thresholds</a></h2>
+<p>A function is compiled after <strong>20 calls</strong> (<code>COUNT_START_COMPILE</code>) and a loop
+after <strong>100 iterations</strong> (<code>COUNT_LOOP_START_COMPILE</code>). Both drop to 5 and 15
+in test builds, so tests reach compiled code without long warm-up loops.</p>
+<h2 id="vendored-and-pinned-dependencies"><a class="header" href="#vendored-and-pinned-dependencies">Vendored and pinned dependencies</a></h2>
+<p><code>hashbrown/</code> is a workspace member (a local fork). <code>smallvec</code> is also a fork
+but is consumed as a git dependency rather than in-tree.</p>
+<p>The <code>ruby-prism</code> wrapper is pinned to the <code>monoruby-vendored</code> branch of
+<a href="https://github.com/sisshiki1969/prism"><code>sisshiki1969/prism</code></a>. That fork has
+two branches:</p>
+<ul>
+<li><code>monoruby</code> — the minimal upstream-bound diff (the Rust <code>parse_with_options</code>
+API plus <code>ruby-prism-sys</code> bindgen allowlist additions). The base for any
+upstream PR to <code>ruby/prism</code>.</li>
+<li><code>monoruby-vendored</code> — <code>monoruby</code> plus one commit checking in the C sources
+the upstream <code>vendored.rs</code> build script needs, so consumers need neither
+bundler nor <code>rake cargo:build</code>.</li>
+</ul>
+<p>To bump the prism revision: push to the fork’s <code>monoruby</code> branch, run
+<code>bin/refresh-prism-vendored</code> (which rebuilds and force-pushes
+<code>monoruby-vendored</code>), then <code>cargo update -p ruby-prism</code> here.</p>
+<p><code>bin/vendor-ruby-stdlib</code> re-snapshots CRuby’s pure-Ruby stdlib and default
+gems into <code>monoruby/vendor/ruby-stdlib/</code>. It is a maintenance step, never run
+by <code>cargo build</code>.</p>
+<h2 id="continuous-integration"><a class="header" href="#continuous-integration">Continuous integration</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Workflow</th><th>Trigger</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>rust.yml</code></td><td>push / PR to <code>master</code></td><td><code>bin/test</code> on x86-64 Linux (with coverage to Codecov) and on native Apple Silicon</td></tr>
+<tr><td><code>bench.yml</code></td><td>push to <code>master</code> touching the interpreter</td><td>yjit-bench vs YJIT on x86-64 and aarch64, published to the portal</td></tr>
+<tr><td><code>spec-core.yml</code>, <code>spec-library.yml</code></td><td>push to <code>master</code> touching the interpreter, plus a weekly cron</td><td>ruby/spec pass rates, published to the portal</td></tr>
+<tr><td><code>docs.yml</code></td><td>push to <code>master</code> touching <code>doc/**</code> or <code>docs/**</code></td><td>Builds this book with mdBook and publishes it to <code>gh-pages</code> under <code>/docs/</code></td></tr>
+<tr><td><code>release-binaries.yml</code></td><td>push to <code>master</code>, release published, dispatch</td><td>Prebuilt binaries for the <code>setup-monoruby</code> action</td></tr>
+<tr><td><code>gc-stress.yml</code></td><td><strong>dispatch only</strong></td><td>The stress run described above</td></tr>
+</tbody>
+</table>
+</div>
+<p>Neither <code>rust.yml</code> job sets <code>GC_STRESS</code>, so neither pays the per-safepoint
+cost.</p>
+<h2 id="documentation"><a class="header" href="#documentation">Documentation</a></h2>
+<p>This book lives in <code>docs/</code>. <code>docs/build.sh</code> copies <code>doc/*.md</code> and the diagrams
+into <code>docs/src/design/</code> (gitignored) and runs <code>mdbook build</code>; <code>docs.yml</code>
+publishes the result. If you add a design document to <code>doc/</code>, give it a
+chapter in <code>docs/src/SUMMARY.md</code> — mdBook renders only what <code>SUMMARY.md</code>
+lists, so an unlisted document is copied and then silently dropped.</p>
+<pre><code class="language-sh">bash docs/build.sh          # output in docs/book/
+mdbook serve docs           # live preview
+</code></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="installation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="benchmarks.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="installation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="benchmarks.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-09f2665d.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

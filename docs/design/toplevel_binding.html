@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>JIT Compiler - monoruby</title>
+        <title>TOPLEVEL_BINDING and the main script - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-e96d0476.css">
-        <link rel="stylesheet" href="css/chrome-d279d366.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-86c241c2.js";
+            window.path_to_searchindex_js = "../searchindex-86c241c2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a8d0bf4a.js"></script>
+        <script src="../toc-a8d0bf4a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">monoruby</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
@@ -177,62 +177,126 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <p>monoruby executes bytecode in the VM until code gets hot, then compiles it to specialized machine code. This page is an overview; the detailed documents are <a href="design/jit.html"><code>doc/jit.md</code></a> (stub/bridge code), <a href="design/lir.html"><code>doc/lir.md</code></a> (the low-level IR), <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> (register allocation), and <a href="design/inline.html"><code>doc/inline.md</code></a> (inline builtins).</p>
-<h2 id="when-compilation-triggers"><a class="header" href="#when-compilation-triggers">When compilation triggers</a></h2>
-<ul>
-<li><strong>Method JIT</strong> — after ≥ 20 calls (<code>COUNT_START_COMPILE</code>; 5 in test mode)</li>
-<li><strong>Loop JIT</strong> — after ≥ 100 iterations of a loop (<code>COUNT_LOOP_START_COMPILE</code>; 15 in test mode), compiling the enclosing method from the loop entry</li>
-</ul>
-<p>Each function starts with a small <em>wrapper</em> that decrements a counter and falls through to the VM until the counter expires, then triggers compilation and patches itself.</p>
-<h2 id="ir-pipeline"><a class="header" href="#ir-pipeline">IR pipeline</a></h2>
-<pre><code>bytecode ──abstract interpretation──▶ TraceIR ──▶ AsmIR ──▶ LIR ──▶ machine code (monoasm)
-                (type feedback from inline caches)        (per-arch encoder)
+                        <h1 id="toplevel_binding-and-the-main-scripts-frame"><a class="header" href="#toplevel_binding-and-the-main-scripts-frame"><code>TOPLEVEL_BINDING</code> and the main script’s frame</a></h1>
+<p>Why the main script no longer runs inside <code>TOPLEVEL_BINDING</code>, what is
+built instead and when, and which reads still force the old shape.</p>
+<hr>
+<h2 id="1-the-problem-a-bindings-frame-is-a-captured-frame"><a class="header" href="#1-the-problem-a-bindings-frame-is-a-captured-frame">1. The problem: a binding’s frame is a captured frame</a></h2>
+<p><code>TOPLEVEL_BINDING</code> has to expose exactly the main script’s locals —
+live, and shared with anything the binding sets dynamically:</p>
+<pre><code class="language-ruby"># main.rb
+p TOPLEVEL_BINDING.local_variables   # =&gt; [:a]   (parse-time locals, before the assignment)
+a = 1
+p TOPLEVEL_BINDING.local_variable_get(:a)   # =&gt; 1
 </code></pre>
-<ul>
-<li><strong>TraceIR</strong> — bytecode annotated with type information gathered from the VM tier’s inline caches.</li>
-<li><strong>AsmIR</strong> (<code>AsmInst</code>) — arch-neutral, register-allocated assembly IR produced by an abstract interpreter that tracks, per slot, whether a value lives on the stack, in a floating-point register (unboxed <code>f64</code>), both, or is a compile-time constant (<code>LinkMode</code>).</li>
-<li><strong>LIR</strong> (<code>LInst</code>) — arch-neutral machine-level ops with offsets and labels resolved; the single seam where bytes are emitted. Each architecture implements one <code>encode_linst</code> (see <a href="aarch64-backend.html">aarch64 Backend</a>).</li>
-</ul>
-<h2 id="specialization-and-inline-caches"><a class="header" href="#specialization-and-inline-caches">Specialization and inline caches</a></h2>
-<p>Compiled code is specialized <strong>per receiver class</strong>. The method entry is a chain of self-class guard stubs: each guard tests the receiver’s class and jumps to the machine code compiled for that class; a miss falls through to the next guard or to the VM. Method calls inside JIT code are resolved through inline caches and guarded by a <strong>class-version</strong> check, so redefining a method invalidates dependent code. Small hot builtins (<code>Array#[]</code>, <code>Integer</code> arithmetic, <code>Math.sqrt</code>, <code>Object#is_a?</code>, <code>Struct</code> accessors, <code>Class#new</code>, <code>Fiber.yield</code>, …) are inlined directly by generator functions that can both consult the abstract state (folding results at compile time when types are proven) and emit code; a failed inline attempt rolls back cleanly and falls back to a normal call. Monomorphic methods can additionally be <strong>specialized inline</strong> — the callee’s frame is inlined into the caller.</p>
-<h2 id="deoptimization-and-recompilation"><a class="header" href="#deoptimization-and-recompilation">Deoptimization and recompilation</a></h2>
-<p>JIT code is speculative. Guards — receiver class, class version, array type, frozen state, fixnum overflow, basic-operator (BOP) redefinition, frame capture — branch to <strong>side exits</strong> that write register-resident values back to the frame and resume in the VM at the equivalent program point. Repeated deopts trigger <strong>recompilation</strong> with the newly observed classes (e.g. polymorphic call sites, <code>method_missing</code> dispatch, newly resolved constants/ivars). Deopt logging is available with the <code>deopt</code> Cargo feature, recompile/deopt statistics with <code>profile</code>.</p>
-<h2 id="register-allocation"><a class="header" href="#register-allocation">Register allocation</a></h2>
-<ul>
-<li><strong>Floating point</strong> — virtual FP registers (<code>VirtFPReg</code>) allocated greedily over the physical pool (14 xmm registers on x86-64), with automatic <strong>spill-to-stack</strong> when the pool is exhausted; loop entries specialize float-typed slots so hot numeric loops keep values unboxed in registers.</li>
-<li><strong>General purpose</strong> — a per-basic-block local GP register allocator keeps boxed values (notably Fixnums) in a small pool of scratch registers within a block, eliding redundant fixnum guards, and flushes the pool at calls and GC safepoints (pool registers are not GC roots).</li>
-</ul>
-<p>The long-form design discussion — separating type inference from placement, the retirement of the dedicated accumulator register, and measured results — is in <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> and <a href="design/lir.html"><code>doc/lir.md</code></a>.</p>
-<h2 id="argument-forwarding-d1"><a class="header" href="#argument-forwarding-d1">Argument forwarding (D1)</a></h2>
-<p><code>def f(...)</code> forwarding is compiled as an opaque pipe: for simple callees the rest-Array / keyword-Hash allocation is elided entirely and arguments are copied (or lazily deferred) straight from the caller’s frame, with deopt-safe lazy materialization if a side exit or frame capture ever needs the real objects. See <a href="design/arg_forwarding_jit.html"><code>doc/arg_forwarding_jit.md</code></a>.</p>
-<h2 id="observing-the-jit"><a class="header" href="#observing-the-jit">Observing the JIT</a></h2>
+<p>The direct way to get that is to <em>be</em> the binding’s frame: compile the
+main script as a body of the binding and run it there
+(<code>Globals::compile_main_script_binding</code>). That is what monoruby did.</p>
+<p>The cost was invisible and large. A <code>Binding</code>’s frame is heap-allocated,
+so the main script’s frame has the <code>on_heap</code> bit set in its <code>Meta</code>, and
+<code>vm_loop_start</code> — the VM’s loop-JIT trigger — begins with
+<code>branch_if_captured</code>:</p>
+<pre><code>testb [r14 - (LFP_META - META_KIND)], 0b1000_1000   ; on_heap | invalidated
+jnz   cont                                           ; …never count, never compile
+</code></pre>
+<p>A captured frame’s locals may be aliased through the heap, which the
+register-caching JIT cannot honour, so the trigger skips such frames
+entirely. For the main script that meant <strong>top-level code was never
+JIT-compiled at all</strong> — not “compiled and then deoptimized”, never
+compiled: with <code>--features jit-log</code> a top-level-loop program reports
+<code>elapsed JIT compile time: 0ns</code>, and <code>--no-jit</code> runs it at the same
+speed.</p>
+<p>Measured on x86-64 (release, best of 3), the same loop as a main script
+versus inside a <code>require</code>d file (a plain stack frame):</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Cargo feature</th><th>Output</th></tr>
+<tr><th></th><th style="text-align: right">main script</th><th style="text-align: right">via <code>require</code></th><th style="text-align: right">CRuby 4.0.2</th></tr>
 </thead>
 <tbody>
-<tr><td><code>dump-bc</code> / <code>emit-bc</code></td><td>bytecode</td></tr>
-<tr><td><code>dump-traceir</code></td><td>TraceIR</td></tr>
-<tr><td><code>emit-asm</code></td><td>generated assembly</td></tr>
-<tr><td><code>jit-log</code> / <code>jit-debug</code></td><td>compilation events / detailed debug</td></tr>
-<tr><td><code>deopt</code></td><td>deoptimization log</td></tr>
-<tr><td><code>profile</code></td><td>deopt &amp; recompile statistics</td></tr>
-<tr><td><code>perf</code></td><td>perf-compatible symbol maps</td></tr>
+<tr><td><code>benchmark/so_mandelbrot.rb</code></td><td style="text-align: right">3.41 s</td><td style="text-align: right">0.21 s</td><td style="text-align: right">1.98 s</td></tr>
+<tr><td>minimal <code>while</code> loop over floats</td><td style="text-align: right">1.35 s</td><td style="text-align: right">0.13 s</td><td style="text-align: right">0.77 s</td></tr>
 </tbody>
 </table>
 </div>
-<p>The JIT is always built in; disable it at runtime with <code>--no-jit</code>. See <a href="https://github.com/sisshiki1969/monoruby/wiki/Build-options-for-performance-tuning">Build options for performance tuning</a> for example output.</p>
+<p>Method-shaped code was never affected — only code running directly at
+the top level. (The benchmark harness measures the method-wrapped form:
+<code>benchmark/so_mandelbrot.yml</code> wraps the body in <code>def do_it</code>, which is why
+the suite never showed this.)</p>
+<h2 id="2-what-happens-now"><a class="header" href="#2-what-happens-now">2. What happens now</a></h2>
+<p><code>TOPLEVEL_BINDING</code> is registered at startup as a <strong>lazy constant</strong> —
+<code>ConstStateKind::LazyToplevelBinding</code>. The name is <em>defined</em> (it lists in
+<code>Object.constants</code>, answers <code>const_defined?</code> and <code>defined?</code>, and reports
+no autoload) but holds no <code>Binding</code> object yet.</p>
+<ul>
+<li>The main script runs as a plain toplevel body on a <strong>stack</strong> frame
+(<code>Executor::try_exec_main_script_plain</code>), so its loops reach the JIT
+like any method’s.</li>
+<li>The first <em>read</em> of the constant builds the binding
+(<code>Executor::materialize_toplevel_binding</code>), over the main script’s own
+frame — promoted to the heap exactly as <code>Kernel#binding</code> promotes a
+method’s frame. Reader and script then share one set of locals, which
+is the semantics above. Promotion mid-run is the same event a
+<code>binding</code> call inside a hot method loop causes, and is handled by the
+existing <code>invalidated</code> tombstone machinery.</li>
+<li>Reading it where no main-script frame is running — during a <code>-r</code>
+require, before the script starts — builds an empty frame on the main
+object, which is what CRuby exposes at that point too.</li>
+<li>If a read happened <em>before</em> the main script starts (a <code>-r</code> library
+that touched it), the script runs inside that already-built binding:
+the old path, unchanged, because the binding has already handed out
+the frame its locals must live in.</li>
+</ul>
+<h2 id="3-scripts-that-name-the-constant-themselves"><a class="header" href="#3-scripts-that-name-the-constant-themselves">3. Scripts that name the constant themselves</a></h2>
+<p>Two readers cannot be served by “build it over the frame that is running
+right now”:</p>
+<pre><code class="language-ruby">z = 7
+at_exit { p TOPLEVEL_BINDING.local_variable_get(:z) }   # toplevel frame is gone by then
+Thread.new { p TOPLEVEL_BINDING.local_variables }.join  # another call chain
+</code></pre>
+<p>So a main script that <em>names</em> <code>TOPLEVEL_BINDING</code> anywhere in its own
+source — a mention inside a block counts — runs inside the binding, the
+pre-existing path, and keeps the pre-existing semantics.</p>
+<p>The test is the constant sites the script’s compilation recorded
+(<code>Store::names_constant_since</code>), so it sees exactly the literal
+references the script compiled: a mention in a comment does not count, a
+reference nested in a block or a <code>def</code> does. A script that trips this
+loses top-level JIT, as before; a script that does not mention the
+constant pays nothing.</p>
+<p>Dynamic reads from <em>other</em> files (<code>Object.const_get(:TOPLEVEL_BINDING)</code>
+in a library, an <code>eval</code>) are not statically visible, and do not need to
+be: they run while the main script’s frame is live, so §2’s
+materialization serves them. The residual gap — a <em>required library</em>
+reading it from a thread or an <code>at_exit</code> handler, in a program whose own
+source never mentions the constant — yields the empty binding.</p>
+<h2 id="4-where-the-pieces-live"><a class="header" href="#4-where-the-pieces-live">4. Where the pieces live</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Piece</th><th>Location</th></tr>
+</thead>
+<tbody>
+<tr><td>Lazy constant slot</td><td><code>ConstStateKind::LazyToplevelBinding</code>, <code>globals/store/class/constants.rs</code></td></tr>
+<tr><td>Registration at startup</td><td><code>Executor::init</code>, <code>executor.rs</code></td></tr>
+<tr><td>First-read hook</td><td><code>Executor::get_constant</code>, <code>executor/constants.rs</code></td></tr>
+<tr><td>Building the binding</td><td><code>Executor::materialize_toplevel_binding</code>, <code>executor.rs</code></td></tr>
+<tr><td>Fast path + static scan</td><td><code>Executor::try_exec_main_script_plain</code>, <code>executor.rs</code></td></tr>
+<tr><td>Binding path (unchanged)</td><td><code>Globals::compile_main_script_binding</code>, <code>globals.rs</code></td></tr>
+<tr><td><code>&lt;main&gt;</code> backtrace label</td><td><code>Store::func_description_for</code>, <code>globals/store.rs</code> (keyed by the recorded main-script <code>FuncId</code>, since a plain main body is otherwise indistinguishable from a required file’s toplevel)</td></tr>
+<tr><td>Tests</td><td><code>monoruby/tests/main_script.rs</code></td></tr>
+</tbody>
+</table>
+</div>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="value-representation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/refinements.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="garbage-collection.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../design/super_resolution.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -242,11 +306,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="value-representation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/refinements.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="garbage-collection.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../design/super_resolution.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -266,13 +330,13 @@
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-09f2665d.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-609e4cb8.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

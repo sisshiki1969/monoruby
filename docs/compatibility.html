@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>JIT Compiler - monoruby</title>
+        <title>Compatibility - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -177,62 +177,127 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <p>monoruby executes bytecode in the VM until code gets hot, then compiles it to specialized machine code. This page is an overview; the detailed documents are <a href="design/jit.html"><code>doc/jit.md</code></a> (stub/bridge code), <a href="design/lir.html"><code>doc/lir.md</code></a> (the low-level IR), <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> (register allocation), and <a href="design/inline.html"><code>doc/inline.md</code></a> (inline builtins).</p>
-<h2 id="when-compilation-triggers"><a class="header" href="#when-compilation-triggers">When compilation triggers</a></h2>
-<ul>
-<li><strong>Method JIT</strong> — after ≥ 20 calls (<code>COUNT_START_COMPILE</code>; 5 in test mode)</li>
-<li><strong>Loop JIT</strong> — after ≥ 100 iterations of a loop (<code>COUNT_LOOP_START_COMPILE</code>; 15 in test mode), compiling the enclosing method from the loop entry</li>
-</ul>
-<p>Each function starts with a small <em>wrapper</em> that decrements a counter and falls through to the VM until the counter expires, then triggers compilation and patches itself.</p>
-<h2 id="ir-pipeline"><a class="header" href="#ir-pipeline">IR pipeline</a></h2>
-<pre><code>bytecode ──abstract interpretation──▶ TraceIR ──▶ AsmIR ──▶ LIR ──▶ machine code (monoasm)
-                (type feedback from inline caches)        (per-arch encoder)
-</code></pre>
-<ul>
-<li><strong>TraceIR</strong> — bytecode annotated with type information gathered from the VM tier’s inline caches.</li>
-<li><strong>AsmIR</strong> (<code>AsmInst</code>) — arch-neutral, register-allocated assembly IR produced by an abstract interpreter that tracks, per slot, whether a value lives on the stack, in a floating-point register (unboxed <code>f64</code>), both, or is a compile-time constant (<code>LinkMode</code>).</li>
-<li><strong>LIR</strong> (<code>LInst</code>) — arch-neutral machine-level ops with offsets and labels resolved; the single seam where bytes are emitted. Each architecture implements one <code>encode_linst</code> (see <a href="aarch64-backend.html">aarch64 Backend</a>).</li>
-</ul>
-<h2 id="specialization-and-inline-caches"><a class="header" href="#specialization-and-inline-caches">Specialization and inline caches</a></h2>
-<p>Compiled code is specialized <strong>per receiver class</strong>. The method entry is a chain of self-class guard stubs: each guard tests the receiver’s class and jumps to the machine code compiled for that class; a miss falls through to the next guard or to the VM. Method calls inside JIT code are resolved through inline caches and guarded by a <strong>class-version</strong> check, so redefining a method invalidates dependent code. Small hot builtins (<code>Array#[]</code>, <code>Integer</code> arithmetic, <code>Math.sqrt</code>, <code>Object#is_a?</code>, <code>Struct</code> accessors, <code>Class#new</code>, <code>Fiber.yield</code>, …) are inlined directly by generator functions that can both consult the abstract state (folding results at compile time when types are proven) and emit code; a failed inline attempt rolls back cleanly and falls back to a normal call. Monomorphic methods can additionally be <strong>specialized inline</strong> — the callee’s frame is inlined into the caller.</p>
-<h2 id="deoptimization-and-recompilation"><a class="header" href="#deoptimization-and-recompilation">Deoptimization and recompilation</a></h2>
-<p>JIT code is speculative. Guards — receiver class, class version, array type, frozen state, fixnum overflow, basic-operator (BOP) redefinition, frame capture — branch to <strong>side exits</strong> that write register-resident values back to the frame and resume in the VM at the equivalent program point. Repeated deopts trigger <strong>recompilation</strong> with the newly observed classes (e.g. polymorphic call sites, <code>method_missing</code> dispatch, newly resolved constants/ivars). Deopt logging is available with the <code>deopt</code> Cargo feature, recompile/deopt statistics with <code>profile</code>.</p>
-<h2 id="register-allocation"><a class="header" href="#register-allocation">Register allocation</a></h2>
-<ul>
-<li><strong>Floating point</strong> — virtual FP registers (<code>VirtFPReg</code>) allocated greedily over the physical pool (14 xmm registers on x86-64), with automatic <strong>spill-to-stack</strong> when the pool is exhausted; loop entries specialize float-typed slots so hot numeric loops keep values unboxed in registers.</li>
-<li><strong>General purpose</strong> — a per-basic-block local GP register allocator keeps boxed values (notably Fixnums) in a small pool of scratch registers within a block, eliding redundant fixnum guards, and flushes the pool at calls and GC safepoints (pool registers are not GC roots).</li>
-</ul>
-<p>The long-form design discussion — separating type inference from placement, the retirement of the dedicated accumulator register, and measured results — is in <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> and <a href="design/lir.html"><code>doc/lir.md</code></a>.</p>
-<h2 id="argument-forwarding-d1"><a class="header" href="#argument-forwarding-d1">Argument forwarding (D1)</a></h2>
-<p><code>def f(...)</code> forwarding is compiled as an opaque pipe: for simple callees the rest-Array / keyword-Hash allocation is elided entirely and arguments are copied (or lazily deferred) straight from the caller’s frame, with deopt-safe lazy materialization if a side exit or frame capture ever needs the real objects. See <a href="design/arg_forwarding_jit.html"><code>doc/arg_forwarding_jit.md</code></a>.</p>
-<h2 id="observing-the-jit"><a class="header" href="#observing-the-jit">Observing the JIT</a></h2>
+                        <h1 id="compatibility"><a class="header" href="#compatibility">Compatibility</a></h1>
+<p>monoruby aims at CRuby 4.0 compatibility, and measures it against
+<a href="https://github.com/ruby/spec">ruby/spec</a> — the executable specification
+suite CRuby itself is tested with. The suite is re-run on every push to
+<code>master</code> that touches the interpreter, and the results are published as live
+dashboards.</p>
+<h2 id="dashboards"><a class="header" href="#dashboards">Dashboards</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Cargo feature</th><th>Output</th></tr>
+<tr><th>Dashboard</th><th>Scope</th></tr>
 </thead>
 <tbody>
-<tr><td><code>dump-bc</code> / <code>emit-bc</code></td><td>bytecode</td></tr>
-<tr><td><code>dump-traceir</code></td><td>TraceIR</td></tr>
-<tr><td><code>emit-asm</code></td><td>generated assembly</td></tr>
-<tr><td><code>jit-log</code> / <code>jit-debug</code></td><td>compilation events / detailed debug</td></tr>
-<tr><td><code>deopt</code></td><td>deoptimization log</td></tr>
-<tr><td><code>profile</code></td><td>deopt &amp; recompile statistics</td></tr>
-<tr><td><code>perf</code></td><td>perf-compatible symbol maps</td></tr>
+<tr><td><a href="https://sisshiki1969.github.io/monoruby/spec/">ruby/spec core</a></td><td>The <code>core/</code> group — the built-in classes and modules</td></tr>
+<tr><td><a href="https://sisshiki1969.github.io/monoruby/library/">ruby/spec library</a></td><td>The <code>library/</code> group — the standard library</td></tr>
+<tr><td><a href="https://sisshiki1969.github.io/rubyspec-stats/">rubyspec-stats</a></td><td>Daily pass rates for monoruby, CRuby, TruffleRuby and JRuby side by side</td></tr>
 </tbody>
 </table>
 </div>
-<p>The JIT is always built in; disable it at runtime with <code>--no-jit</code>. See <a href="https://github.com/sisshiki1969/monoruby/wiki/Build-options-for-performance-tuning">Build options for performance tuning</a> for example output.</p>
+<p>Each dashboard carries a per-category table, a history chart, and the raw
+<code>latest.json</code> / <code>data/history.csv</code> behind it. The core dashboard also
+publishes per-branch pages for branches under active spec work.</p>
+<h2 id="where-things-stand"><a class="header" href="#where-things-stand">Where things stand</a></h2>
+<p>As of commit <code>a13bfe0</code> (2026-08-31):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Group</th><th style="text-align: right">Examples</th><th style="text-align: right">Passing</th><th style="text-align: right">Pass rate</th><th style="text-align: right">Categories at 100%</th></tr>
+</thead>
+<tbody>
+<tr><td><code>core</code></td><td style="text-align: right">23029</td><td style="text-align: right">22468</td><td style="text-align: right"><strong>97.6%</strong></td><td style="text-align: right">39 / 59</td></tr>
+<tr><td><code>library</code></td><td style="text-align: right">5330</td><td style="text-align: right">3148</td><td style="text-align: right"><strong>59.1%</strong></td><td style="text-align: right">23 / 59</td></tr>
+</tbody>
+</table>
+</div>
+<p>Additionally, as of July 2026 monoruby passed 100% of the command-line specs
+and 99.6% of the language specs.</p>
+<p>The core figure is the result of a sustained compliance push through 2026 —
+the first published measurement, on 2026-04-27, was <strong>59.5%</strong>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Date</th><th>Commit</th><th style="text-align: right">Examples</th><th style="text-align: right">Pass rate</th></tr>
+</thead>
+<tbody>
+<tr><td>2026-04-27</td><td><code>7d2dd48</code></td><td style="text-align: right">22520</td><td style="text-align: right">59.5%</td></tr>
+<tr><td>2026-08-31</td><td><code>a13bfe0</code></td><td style="text-align: right">23029</td><td style="text-align: right">97.6%</td></tr>
+</tbody>
+</table>
+</div>
+<p>The largest core categories are in good shape — <code>array</code> 100% over 2898
+examples, <code>file</code> 99.6%, <code>kernel</code> 99.5%, <code>module</code> 98.9%, <code>io</code> 96.2%, and
+<code>string</code> 95.4% over 3905. What remains is concentrated rather than spread out:
+<code>tracepoint</code> (TracePoint is deliberately not implemented — the JIT’s
+speculation assumes its absence, see <a href="design/jit_invariants.html">Invariants compiled code speculates
+on</a>), <code>objectspace</code> at 39.3%, then <code>time</code>,
+<code>marshal</code> and <code>encoding</code> in the 89–95% band.</p>
+<p>The library group is the frontier. <code>matrix</code> and <code>net-http</code> are essentially
+complete (100% and 99.5%), while the biggest gaps are <code>socket</code> (40.2% over
+1129 examples), <code>stringio</code> (67.5%), <code>net-ftp</code> (54.9%) and <code>bigdecimal</code>
+(68.6%). Libraries needing facilities monoruby does not have — <code>openssl</code>,
+<code>coverage</code>, <code>mkmf</code>, <code>irb</code> — sit at 0%.</p>
+<h2 id="how-the-numbers-are-produced"><a class="header" href="#how-the-numbers-are-produced">How the numbers are produced</a></h2>
+<p>Both dashboards come from the same workflow shape
+(<code>.github/workflows/spec-core.yml</code> and <code>spec-library.yml</code>):</p>
+<ul>
+<li>Every <code>*_spec.rb</code> under the group is run through <code>mspec</code>, category by
+category, in batches of 10 files.</li>
+<li>Each batch runs under a hard 60-second deadline with <code>timeout -k 5</code>. The
+<code>-k</code> matters: monoruby installs its own <code>SIGTERM</code> handler which is deferred
+to a VM poll point, so a process stuck in a blocking read never dies to a
+plain <code>TERM</code>.</li>
+<li>A killed batch prints no summary line, which would lose the tally for all
+ten files, so the batch is re-run one file at a time — completing files are
+counted after all, and the hanging file is pinned down and recorded in
+<code>data/timeouts.csv</code>. Both groups currently record <strong>zero</strong> timeouts.</li>
+<li><code>--excl-tag fails</code> excludes examples tagged in this repository’s
+<code>spec/tags/</code>. That list is deliberately tiny — <strong>6 examples</strong> in 4 files at
+present, covering <code>Refinement#import_methods</code> from a C extension,
+<code>$LOAD_PATH.resolve_feature_path</code> for a <code>.so</code>, the <code>/o</code> Regexp modifier,
+and three refinement-driven pattern-matching cases. The published pass rate
+is therefore very close to an unfiltered one.</li>
+</ul>
+<p>The audit that cut the skip list down from coarse file-level exclusions to
+that handful is written up in <a href="design/ruby_spec_skip_tags.html">ruby/spec hang
+countermeasures</a>. Green threads removed the
+last structural hangs: blocking IO now parks the calling thread on the
+scheduler’s fd poller instead of blocking the process, so specs like
+<code>core/io/copy_stream_spec.rb</code> and <code>core/io/select_spec.rb</code> run to completion.</p>
+<h2 id="running-the-specs-yourself"><a class="header" href="#running-the-specs-yourself">Running the specs yourself</a></h2>
+<p>ruby/spec and mspec are cloned alongside the monoruby checkout, not inside
+it. See <a href="development.html#rubyspec">Development and Build Options →
+ruby/spec</a> for the layout and the commands.</p>
+<h2 id="deliberate-differences-from-cruby"><a class="header" href="#deliberate-differences-from-cruby">Deliberate differences from CRuby</a></h2>
+<p>A few behaviours differ by design rather than by omission:</p>
+<ul>
+<li><strong>TracePoint is not implemented.</strong> Compiled code speculates on its absence.</li>
+<li><strong>Backtraces are formatted lazily.</strong> Raise, unwind and catch record what is
+needed; the backtrace string is not built until something asks for it. See
+<a href="design/exception_handling.html">Exception handling</a>.</li>
+<li><strong>The garbage collector is non-moving</strong>, single-threaded and stop-the-world
+(generational since June 2026). Compiled code relies on objects not moving.</li>
+<li><strong>Threads are M:1 green threads</strong> with time-slice preemption, not OS
+threads. See <a href="design/threads.html">Thread / Fiber / non-blocking IO /
+preemption</a>.</li>
+<li><strong>C extensions cannot be loaded.</strong> Libraries that CRuby backs with a C
+extension — <code>json</code>, <code>date</code>, <code>digest</code>, <code>stringio</code>, <code>zlib</code>, <code>openssl</code> and
+others — are either reimplemented in Rust/Ruby and shipped in the vendored
+tree, or unavailable. <a href="design/c_extention.html">C extension support</a> is a
+design study, not a shipped feature.</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="value-representation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="benchmarks.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="garbage-collection.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="architecture-overview.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -242,11 +307,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="value-representation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="benchmarks.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="garbage-collection.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="architecture-overview.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

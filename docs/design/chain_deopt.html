@@ -1,0 +1,840 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Chain deoptimization - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-86c241c2.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-a8d0bf4a.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="chain-deopt--handoff-note"><a class="header" href="#chain-deopt--handoff-note">Chain deopt — handoff note</a></h1>
+<p><strong>Kind:</strong> plan. <strong>Status:</strong> the <em>mechanism</em> (§5 steps 1–3) is implemented and
+exercised end-to-end <strong>in its eager form</strong> — the walk replays every suspended
+frame’s write-back at deopt time and points its return-address slot at one
+shared VM continuation stub (§9.3’s conversion has landed; §8 describes the
+implementation). Registration is unconditional in every build, and chain
+conversion is now the <strong>only</strong> way an on-stack JIT frame is dropped to the
+interpreter: immediate eviction — the code-patching mechanism this document
+was written against — is gone (§10). The <strong>escalation half of step 4</strong> — the
+switch that makes every interpreter-resuming side exit run the
+chain-deopt walk, plus the runtime entry it calls — is in place and <strong>on by
+default in every build</strong> (§8.5; the former <code>chain-deopt</code> validation feature
+is gone). <strong>The speculation itself (§5 steps 4–5) is implemented</strong> — see
+§11 for what shipped: qualifying block-passing specialized call sites keep
+pure-<code>F</code> (and Float-literal) locals unboxed across the call, specialized
+blocks in the subtree read/write them in the speculating frame’s FP
+save/spill area (<code>Load/StoreDynVarSpeculatedF</code>), a non-Float store
+compiles to <code>load_fpr</code>’s Float guard whose escalated deopt converts the
+chain <em>before</em> the offending store, and a compile-time-known non-Float
+store (or any capture-capable construct in the subtree) poisons the
+attempt, which recompiles unspeculated. The return-state recovery (§6) is
+not implemented. §9 stays as the record
+of why the original lazy build was wrong.</p>
+<hr>
+<h2 id="1-what-this-is-for"><a class="header" href="#1-what-this-is-for">1. What this is for</a></h2>
+<p>The optimization we want is <strong>speculative unboxed <code>Float</code> locals across a
+block call</strong>.</p>
+<p>Today a method call that passes a block demotes every local to
+<code>LinkMode::S</code> before the call:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// compile/method_call.rs
+// We must write back all local vars to the stack and set the state to
+// LinkMode::S when they are possibly accessed or captured from inner blocks.
+if callsite.block_fid.is_some() {
+    state.locals_to_S(ir);
+}
+<span class="boring">}</span></code></pre>
+<p>so a <code>Float</code> local is boxed on every block call, because the inner block
+might read or write it. The speculation is to <strong>stop demoting</strong>: keep the
+local unboxed in the frame’s FP spill area and let the (specialized,
+non-capturable) block read and write it there. If the block ever stores a
+non-<code>Float</code> into such a local the speculation is dead — the outer frame’s
+compiled code assumes an <code>f64</code> at a spill offset that no longer holds one —
+and the whole suspended chain has to fall back to the interpreter at once.</p>
+<p>The motivating shape is real and hot. <code>benchmark/app_aobench.rb</code>:</p>
+<pre><code class="language-ruby">occlusion = 0.0
+nphi.times do |j|
+  ntheta.times do |i|
+    ...
+    occlusion += 1.0     # outer Float local, mutated from two blocks deep
+  end
+end
+</code></pre>
+<p><strong>Chain deopt is the enabling mechanism, not the optimization.</strong> It also
+pays for itself a second time — see §6.</p>
+<h2 id="2-the-mechanism"><a class="header" href="#2-the-mechanism">2. The mechanism</a></h2>
+<p>On a deep deopt, leave every frame where it is and convert the whole
+suspended chain from JIT frames into interpreter frames:</p>
+<ol>
+<li>for every JIT frame on the stack, write its spilled xmm/d registers back
+into its local slots (boxing the floats);</li>
+<li>rewrite each frame’s <strong>return-address slot on the stack</strong> to the VM’s
+post-call continuation;</li>
+<li>the continuation reads the suspended pc off the stack, so that slot has
+to be right (it is — see §3.2).</li>
+</ol>
+<p>Control then never re-enters JIT code: each <code>ret</code> lands in the interpreter.</p>
+<p>This is <strong>not</strong> what <code>Codegen::immediate_eviction</code> did. That one wrote a
+<code>jmp deopt</code> into the <em>code</em> at the call’s return continuation, so control
+returned into JIT code and deopted one instruction later. Chain deopt does not
+touch code and does not return into JIT code at all — which is why it could
+replace immediate eviction outright rather than sit beside it (§10).</p>
+<h2 id="3-what-was-verified-in-the-source"><a class="header" href="#3-what-was-verified-in-the-source">3. What was verified in the source</a></h2>
+<h3 id="31-the-vm-entry-already-exists-and-is-shared"><a class="header" href="#31-the-vm-entry-already-exists-and-is-shared">3.1 The VM entry already exists and is shared</a></h3>
+<p><code>arch/x86_64/vmgen/method_call.rs:81</code>, the send opcode’s post-call sequence:</p>
+<pre><code class="language-asm">done:
+  pop_cont_frame     ; popq r13 (suspended pc); addq rsp, 8
+                     ; movzxw rdi, [r13 + RET_REG_FROM_CALLSITE]  &lt;- dst slot, from the bytecode
+                     ; addq r13, 32                               &lt;- past the 2-unit send
+  vm_handle_error
+  vm_store_rdi(rax)  ; store the return value into dst
+  fetch_and_dispatch
+</code></pre>
+<p>It is <strong>entirely stack-driven and carries no per-site state</strong>: it recovers
+the pc from the stack, re-derives the destination slot from the bytecode at
+that pc, stores <code>rax</code>, and resumes. So a <em>single</em> address serves every call
+site. Bind a label there and expose its address.</p>
+<h3 id="32-the-suspended-pc-is-already-correct--no-prerequisite-work"><a class="header" href="#32-the-suspended-pc-is-already-correct--no-prerequisite-work">3.2 The suspended pc is already correct — no prerequisite work</a></h3>
+<p><code>AsmInst::ContFramePc { call_site_pc }</code> (<code>asmir.rs:1678</code>) stores the
+call-site pc into the outgoing cont-frame slot — documented as “the slot
+<code>Kernel#caller</code> reads”. Its producers cover every JIT call/yield emitter:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th><code>compile/method_call.rs</code></th><th>emitter</th><th>path</th></tr>
+</thead>
+<tbody>
+<tr><td>822</td><td><code>compile_yield_specialized</code></td><td>specialized yield</td></tr>
+<tr><td>1419</td><td><code>send</code></td><td>ordinary call</td></tr>
+<tr><td>1484</td><td><code>send_specialized</code></td><td>specialized call</td></tr>
+<tr><td>1520</td><td><code>compile_yield</code></td><td>generic yield</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>Cfp::caller_pc_slot</code>’s “not every dispatch path writes it” caveat is about
+non-JIT paths (the invoker’s zero sentinel). Filling the pc lazily during
+the walk remains available as belt-and-braces, but is not needed to start.</p>
+<h3 id="33-the-write-back-is-heavier-than-a-memcpy"><a class="header" href="#33-the-write-back-is-heavier-than-a-memcpy">3.3 The write-back is heavier than a memcpy</a></h3>
+<p><code>WriteBack</code> (<code>jitgen.rs:175</code>) has six kinds of entry:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fpr: Vec&lt;(FPReg, Vec&lt;SlotId&gt;)&gt;,                            // float -&gt; one or more slots
+literal: Vec&lt;(Value, SlotId)&gt;,
+void: Vec&lt;SlotId&gt;,
+gp: Vec&lt;(GP, SlotId)&gt;,                                     // empty in shipping builds
+forward_rest: Vec&lt;(SlotId, SlotId, u16)&gt;,                  // D1: build the rest Array
+forward_kwrest: Vec&lt;(SlotId, Box&lt;[(IdentId, SlotId)]&gt;)&gt;,   // K1: build the kwrest Hash
+<span class="boring">}</span></code></pre>
+<p>To replay one from Rust the walker needs the <code>WriteBack</code> <strong>and the frame’s
+spill base</strong> (<code>base</code>, today only a compile-time argument to
+<code>gen_write_back_for_deopt</code>). <code>forward_rest</code> / <code>forward_kwrest</code> additionally
+need <code>create_array</code> / <code>correct_rest_kw</code> calls, so this is not a pure memory
+shuffle.</p>
+<p>Why replaying from Rust is possible at all: xmm is caller-saved, so
+<code>FprSave</code> has already spilled every live float of a <strong>suspended</strong> frame into
+that frame’s own spill area. Only the innermost frame still has live values
+in registers, and that one deopts through its compiled handler as it does
+today.</p>
+<h3 id="34-the-registration-key-already-exists"><a class="header" href="#34-the-registration-key-already-exists">3.4 The registration key already exists</a></h3>
+<p><code>return_addr_table</code> (<code>codegen.rs</code>) maps a suspended call’s return address to
+its side exit, filled by <code>set_deopt_with_return_addr</code> from all four emitters
+above. The runtime table wants the same key.</p>
+<h2 id="4-a-rejected-attempt--do-not-repeat-it"><a class="header" href="#4-a-rejected-attempt--do-not-repeat-it">4. A rejected attempt — do not repeat it</a></h2>
+<p>Rewriting the stack’s return address to point at that frame’s <strong><code>Evict</code>
+handler</strong> looks like it should work. It does not, and it fails loudly
+(<code>caller_lines_survive_specialized_frame_eviction</code>, SIGABRT inside
+<code>pmc_record_binary</code>).</p>
+<p>The instruction order at a specialized call is:</p>
+<pre><code>call callee            &lt;- the return address points here
+&lt;result-store code emitted by def_rax2acc_return&gt;
+patch_point            &lt;- where immediate_eviction wrote its jmp
+</code></pre>
+<p>and <code>compile/method_call.rs:835</code> fixed the contract:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let res = state.def_rax2acc_return(ir, dst, return_state);  // emits the result store
+state.immediate_evict(ir, evict);                            // records patch_point + write_back
+<span class="boring">}</span></code></pre>
+<p>The <code>Evict</code> write-back is captured <strong>after</strong> the result store is modelled,
+so the handler assumes that store has already run. Entering it directly by
+<code>ret</code> skips the store, the callee’s return value never reaches its slot, and
+garbage propagates.</p>
+<p><code>immediate_eviction</code> patched at <code>patch_point</code> — <em>after</em> the result store —
+precisely for this reason. Chain deopt sidesteps the whole issue by
+targeting the VM entry (§3.1), where <code>vm_store_rdi</code> does the store. (The
+argument is preserved because it is the reason the <em>stub</em>, not the frame’s
+own <code>Evict</code> handler, is the conversion target; the patching mechanism it
+describes no longer exists — §10.)</p>
+<h2 id="5-order-of-work"><a class="header" href="#5-order-of-work">5. Order of work</a></h2>
+<p>Steps 1–3 are done, essentially as written (after a detour through a lazy
+per-site-handler form — §9) — see §8.</p>
+<ol>
+<li><strong>Runtime table</strong> <code>return_addr -&gt; (WriteBack, spill base)</code>, plus the Rust
+routine that replays one against a frame’s <code>rbp</code>/<code>lfp</code>.</li>
+<li><strong>Expose the VM entry</strong>: bind a label at <code>done:</code> and publish its address.</li>
+<li><strong>The walk</strong>: <code>Cfp::set_return_addr</code> (a writer next to the existing
+<code>return_addr()</code> at <code>frame.rs:76</code>), then walk the CFP chain applying 1 and
+2. Model the loop on <code>immediate_eviction</code>, which already skips VM frames
+via <code>check_vm_address</code> and handles recursion by visiting every frame.
+(The chain walk has since <em>become</em> that loop — §10.)</li>
+<li><strong>Firing point</strong>: the <code>Float</code> guard on a block’s <code>StoreDynVar</code> into an
+outer unboxed local. Write back <em>before</em> performing the offending store,
+or the write-back overwrites it.</li>
+<li><strong>Relax <code>locals_to_S</code></strong> for qualifying block calls, and point the block’s
+<code>Load/StoreDynVar</code> at the outer frame’s spill area.</li>
+<li><strong>Recover the return-state narrowing</strong> — see §6.</li>
+</ol>
+<h2 id="6-the-second-payoff-frame_had_deopt"><a class="header" href="#6-the-second-payoff-frame_had_deopt">6. The second payoff: <code>frame_had_deopt</code></a></h2>
+<p><code>compile/method_call.rs:1243</code> currently gives up all return-type inference
+for any callee that <em>could</em> deopt:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if self.store[iseq_id].has_exception_handler() || frame_had_deopt {
+    s.taint_for_unmodeled_rescue();     // ret -&gt; ReturnValue::Value
+}
+<span class="boring">}</span></code></pre>
+<p>and propagates the fact one level out (<code>current_frame_mut().had_deopt = true</code>),
+so one deopt-able site anywhere in an inlined subtree flattens every
+enclosing return state to <code>Value</code>. This is PR #505’s fix for a real
+unsoundness: a deopted callee resumes in the interpreter and can return a
+value outside the class the abstract interpreter predicted.</p>
+<p>Chain deopt licenses removing the <code>frame_had_deopt</code> half:</p>
+<ul>
+<li>callee completes in JIT — the inference was derived from exactly those
+compiled paths, so it holds;</li>
+<li>callee deopts — the caller is converted too, its compiled code never
+resumes, and the <code>Guarded::Class(..)</code> tag is never acted on.</li>
+</ul>
+<p>Two conditions on that argument:</p>
+<ul>
+<li><strong>Every deopt below a site that consumed a narrowed return state must
+escalate to chain deopt.</strong> Blanket escalation would make today’s cheap
+per-frame deopts pay a chain walk and throw away the caller’s compiled
+execution, so gate it per site. Specialization compiles the callee body
+<em>per call site</em>, so the flag can be baked in at compile time. This is the
+quietest thing in the design to get wrong — a missed escalation shows up
+only as a wrong class tag — so it wants a mechanical guarantee (a frame
+flag every side-exit emitter in that frame consults), not review
+discipline.</li>
+<li><strong><code>has_exception_handler</code> stays.</strong> An exception raised and rescued <em>inside</em>
+the callee returns normally with no deopt at all, so chain deopt never
+fires and the happy-path-only inference is still wrong (issue #405).</li>
+</ul>
+<p>Note also that <code>taint_for_unmodeled_rescue</code> (<code>state.rs:598</code>) bundles the
+<code>ret</code> downgrade with clearing <code>invariants.side_effect_guard</code>; splitting the
+deopt reason from the rescue reason means deciding both, and the
+<code>side_effect_guard</code> half needs its own written argument.</p>
+<h2 id="7-gating-for-the-speculation-itself-5455"><a class="header" href="#7-gating-for-the-speculation-itself-5455">7. Gating for the speculation itself (§5.4–5.5)</a></h2>
+<p>Agreed scope: <strong>specialized <code>iseq_block</code> only, and only where the frame
+cannot be captured</strong> (<code>possibly_capture_without_block</code> / <code>has_block_arg</code>
+false). Generic block invocation is out of scope for now.</p>
+<p>The constraints that force this:</p>
+<ul>
+<li><strong>GC.</strong> <code>Lfp::mark</code> (<code>frame.rs:284</code>) walks <code>meta.regs()</code> and marks every
+slot as a <code>Value</code>. A raw <code>f64</code> in a local slot would be scanned as a heap
+pointer, so unboxed values must stay in the FP spill area and the block
+must be pointed <em>there</em>, not at <code>[outer_lfp - slot]</code>.</li>
+<li><strong>Escape paths.</strong> Anything that reads <code>[outer_lfp - slot]</code> expecting a
+boxed <code>Value</code> breaks the speculation: a captured <code>Proc</code> called later,
+<code>binding</code> / <code>Binding#local_variable_get</code>, generic (non-specialized) block
+invocation, <code>move_frame_to_heap</code>, backtraces — and the interpreter itself
+once <em>the block</em> deopts and the VM runs the block’s body.</li>
+</ul>
+<h2 id="8-what-is-implemented-5-steps-13-eager-form"><a class="header" href="#8-what-is-implemented-5-steps-13-eager-form">8. What is implemented (§5 steps 1–3, eager form)</a></h2>
+<h3 id="81-the-write-back-is-replayed-by-a-compiled-per-site-stub-at-deopt-time"><a class="header" href="#81-the-write-back-is-replayed-by-a-compiled-per-site-stub-at-deopt-time">8.1 The write-back is replayed by a compiled per-site stub, at deopt time</a></h3>
+<p>Step 1’s runtime table exists, one step further along than designed. At
+compile time each site’s <code>ChainReplay</code> (<code>jitgen.rs</code> — the site’s <code>WriteBack</code>,
+the frame’s spill <code>base</code>, the site’s <code>UsingFpr</code>, the call’s <code>dst</code> slot, and
+the call-site pc) is lowered by <code>Codegen::gen_chain_replay_stub</code> into a
+<strong>compiled conversion stub</strong>, and <code>Codegen::chain_deopt_table</code> maps the
+call’s return address straight to that stub’s entry (<code>CodePtr -&gt; CodePtr</code>).
+The walk therefore carries no per-site data and clones nothing: it calls the
+stub with three frame pointers (callee bp, caller bp, caller <code>Lfp</code>) and the
+stub writes the suspended caller frame back <strong>during the walk</strong>.</p>
+<p>Layout facts the replay depends on (each re-verified against the emission
+code; they are load-bearing now):</p>
+<ul>
+<li>Every frame — VM, JIT, native wrapper — establishes <code>bp == cfp + BP_CFP</code>
+in its prologue (<code>Cfp::frame_bp</code>), so <code>callee_rbp = callee_cfp + 8</code> and
+the caller’s saved bp is <code>[callee_rbp]</code>.</li>
+<li>§3.3’s premise was wrong in one detail: <code>FprSave</code> does <strong>not</strong> spill the
+pool-resident floats into the frame’s <code>base</code>-relative spill area. The
+cont-mode save (<code>fpr_save_with_cont</code> / <code>emit_fpr_save</code>) puts them in an
+<code>rsp</code>-relative area allocated at the call — one 8-byte slot per set bit of
+the site’s <code>UsingFpr</code>, in bit order, at <code>[rsp + 16 + 8i]</code> — which after
+the call/prologue sits at <strong><code>callee_rbp + 32 + 8i</code></strong> (since
+<code>callee_rbp == rsp_after_FprSave - 16</code>). The formula is byte-identical on
+aarch64 (<code>emit_fpr_save</code> mirrors the x86 shape; <code>stp x29, x30</code> is the same
+16-byte adjustment as <code>call</code> + <code>pushq rbp</code>), so one arch-neutral replay
+serves both.</li>
+<li>Spilled <code>FPReg</code>s (ids <code>&gt;= PHYS_FPR_POOL</code>) live <code>base</code>-relative in the
+caller frame: <code>[caller_rbp - (base - 24 + 8n)]</code> (<code>PhysMap::resolve</code>,
+shared by both arches).</li>
+<li>The caller’s LFP is read through <code>caller_cfp.lfp()</code> — the cfp slot is
+redirected when a frame is promoted to the heap, exactly like the <code>r14</code>
+the emitted deopt write-back uses.</li>
+</ul>
+<p><code>forward_rest</code> / <code>forward_kwrest</code> emit calls to <code>runtime::create_array</code> /
+<code>runtime::correct_rest_kw</code> against the dynamic caller’s frame reached through
+the saved bp — the same helpers and the same addressing the deopt path’s
+<code>gen_forward_rest_materialize</code> / <code>gen_forward_kwrest_materialize</code> use, which
+is why the stub form needs no Rust-side equivalents of its own. They run
+after the fpr/literal/void stores, so every deferred <code>dst</code> slot already holds
+its <code>nil</code> and the frame stays GC-consistent across the allocating helper
+calls. GC safety overall: slots always hold whole, valid (possibly stale)
+<code>Value</code>s, and the GC scans them as such, so the replay may allocate at any
+point.</p>
+<p>The stub reaches nothing on <code>Codegen</code> — it reads its three frame pointers and
+writes frame slots — so the walk applies each conversion in place, under the
+<code>CODEGEN</code> borrow it already holds; there is no plan to collect and hand back
+to the callers (<code>runtime::chain_deopt</code>, <code>Codegen::check_bop_redefine</code>).
+Write-back order within one frame is fixed (deferred materialization last);
+frames are converted in walk order, which is sound because the replays touch
+disjoint frames (rest/kwrest sources are raw slots, valid regardless of
+conversion order).</p>
+<h3 id="82-one-shared-continuation-stub--31s-raw-vm-entry-is-still-wrong-the-pad-slot-fixes-it"><a class="header" href="#82-one-shared-continuation-stub--31s-raw-vm-entry-is-still-wrong-the-pad-slot-fixes-it">8.2 One shared continuation stub — §3.1’s raw VM entry is still wrong, the pad slot fixes it</a></h3>
+<p>§3.1 proposes pointing every rewritten return-address slot at the VM’s
+shared post-call continuation, on the grounds that the sequence is entirely
+stack-driven and carries no per-site state. That is wrong for a reason §3.1
+missed: the shared continuation re-derives the destination slot and the
+resume pc from the bytecode <strong>assuming a 2-unit send instruction</strong>
+(<code>movzxw rdi, [r13 + 4]</code>; <code>addq r13, 32</code>; on error <code>entry_raise</code>’s
+<code>r13 - 16</code> lands on the send’s second unit, which the exception table still
+covers <em>for sends</em>). But operator call sites — <code>BinOp</code> / <code>Index</code> / …,
+<strong>1-unit</strong> bytecodes — dispatch through the same <code>send</code> emitter and register
+for chain deopt too. At such a site the raw VM continuation reads a garbage
+destination slot, resumes one whole instruction too far, and on a
+propagating exception looks up the exception table at the <em>following</em>
+instruction — which silently skips an <code>ensure</code> whose protected range ends at
+the operator (found by <code>Enumerator.new { |y| begin; y &lt;&lt; 1; ensure; … }</code>
+with a raising consumer block, once every error exit escalated).</p>
+<p>The fix keeps §3.1’s “one address serves every site” without decoding
+bytecode: <strong>one</strong> stub per arch (<code>gen_chain_cont_stub</code>, emitted with the VM
+handlers), plus a per-site continuation word the site’s conversion stub
+stores into the callee’s <strong>cont-frame pad slot</strong> (CFP+32 — the second half of
+the 16-byte cont frame, reserved by every caller and read by nothing on the
+normal return path). The word packs <code>conv(dst)</code> (0 = none)
+in the high 32 bits and the byte advance to the next instruction
+(<code>pc.next() - pc</code>, per-opcode-size correct: 16 or 32) in the low 32 bits.</p>
+<p>Entered by <code>ret</code> — the frame’s write-back already replayed at deopt time —
+the stub only has to:</p>
+<ol>
+<li>run the <code>pop_frame</code> the hijacked <code>ret</code> skipped (<code>rbp</code>/<code>x29</code>-derived, so
+correct whatever the callee left in the global registers): restore
+<code>Executor::cfp</code> and the LFP register;</li>
+<li>read the call-site pc from the cont frame’s pc slot (<code>ContFramePc</code> wrote
+it at every JIT site; <code>Kernel#caller</code> reads the same slot) and the
+continuation word from the pad, then drop the cont frame;</li>
+<li>on the error signal (result 0), hand the call-site pc to <code>entry_raise</code>
+under each arch’s convention (x86 <code>pc + 1</code> before the <code>-16</code>, aarch64 <code>pc</code>
+unchanged);</li>
+<li>otherwise store the result into <code>dst</code> (if any) and resume the fetch loop
+at <code>pc + advance</code>.</li>
+</ol>
+<p>The stub never allocates, so no GC concern; the dead <code>FprSave</code> area above
+the cont frame is simply left below the frame, as every side exit leaves
+it. There are no per-site handlers, no <code>SideExit::ChainExit</code>, and no
+<code>fpr_reload_cont</code> — the pool registers are dead at the stub (the replay
+consumed the save area).</p>
+<h3 id="83-how-it-is-exercised-without-a-firing-point"><a class="header" href="#83-how-it-is-exercised-without-a-firing-point">8.3 How it is exercised without a firing point</a></h3>
+<p>Steps 4–5’s speculation does not exist yet, so the <code>Float</code> guard that will
+fire the walk does not either. Two things exercise it meanwhile:</p>
+<ul>
+<li><strong>BOP eviction</strong>, in <em>every</em> build: it is now the walk’s only production
+caller, so <code>tests/redefine.rs</code> covers the mechanism unconditionally.
+<code>redefine_bop_onstack_caller</code> fails with the stale inlined <code>+</code> (8 instead
+of 999) if the suspended caller resumes its compiled body, so the test
+passing is a positive signal that the conversion happened, not just that
+nothing crashed.</li>
+<li><strong>Every side exit escalates</strong> (§8.6), unconditionally in every build
+(formerly the default-off <code>chain-deopt</code> cargo feature; promoted to the
+default after measurement — see §8.5): each deopt / recompile-deopt /
+error exit taken anywhere in the suite fires the walk from the deopting
+frame, so the deopt → replay → stub-return path — the one the speculation
+will actually take — is exercised at every deopt site the suite reaches,
+not only at BOP redefinitions.</li>
+</ul>
+<p>What this validates: the walk, the eager replay, the return-address rewrite,
+the stub’s frame/LFP restore and result/raise hand-off, across normal calls,
+generic yields, and specialized calls/yields. What it does <strong>not</strong> validate
+is the case chain deopt exists for — a frame whose local is <em>unboxed at the
+moment of conversion</em> — because without the <code>locals_to_S</code> relaxation no
+suspended frame ever holds one.</p>
+<p>The producers (<code>AbstractState::chain_exit</code>) are <strong>not</strong> gated: every call and
+yield site registers in every build, because with immediate eviction gone a
+site the table does not know is a site BOP eviction cannot convert (§10).
+The metadata cost is accepted. When step 5 lands, the per-site decision §6
+argues for rides on top of unconditional registration, not instead of it.</p>
+<h3 id="84-a-rewritten-return-address-slot-is-also-on-the-unwind-path"><a class="header" href="#84-a-rewritten-return-address-slot-is-also-on-the-unwind-path">8.4 A rewritten return-address slot is also on the unwind path</a></h3>
+<p>Worth knowing before building step 4, because it is not obvious: an
+exception does <strong>not</strong> bypass the rewritten slot. <code>entry_raise</code> with no
+in-frame handler unwinds by running the frame’s ordinary epilogue and
+<code>ret</code>ing with the error signal in <code>rax</code>/<code>x0</code> — so a propagating exception
+lands in the continuation stub too, and the stub’s error branch (§8.2)
+hands the call-site pc to <code>entry_raise</code>, which re-raises from the
+now-converted frame at the call site — running its <code>rescue</code>/<code>ensure</code> there
+or unwinding further. Non-local exits (<code>MethodReturn</code>, <code>Break</code>) take the
+same route, including <code>method_return_specialized</code>, whose <code>ret</code> lands in the
+stub via the slot belonging to the <em>outermost</em> inlined call — the one whose
+<code>dst</code> the value is destined for.</p>
+<p>This is what we want (the frame is converted before the VM inspects it for
+a <code>rescue</code>), and it means the stub must be correct for <code>rax == 0</code>, not only
+for a normal return. It is: the error branch touches neither <code>dst</code> nor the
+advance, and the frame’s write-back already ran at deopt time.</p>
+<h3 id="85-escalating-side-exits-5-step-4s-mechanism-6s-mechanical-guarantee"><a class="header" href="#85-escalating-side-exits-5-step-4s-mechanism-6s-mechanical-guarantee">8.5 Escalating side exits (§5 step 4’s mechanism, §6’s mechanical guarantee)</a></h3>
+<p>A frame compiled under the speculation must convert its suspended callers on
+<strong>every</strong> path that resumes the interpreter in-frame, not just the <code>Float</code>
+guard on the offending store: once the interpreter runs any of the frame’s
+bytecode it can reach an outer local through <code>Load/StoreDynVar</code>, a <code>binding</code>,
+or a capture, and would read the stale slot. §6 asks for a mechanical
+guarantee rather than review discipline, and this is it:</p>
+<ul>
+<li><code>JitContext::escalate_side_exits</code> is the single decision point. It is
+stamped onto each <code>AsmIr</code> at construction, and <strong>every</strong> side-exit
+constructor (<code>new_deopt</code> / <code>new_deopt_with_pc</code> / <code>deopt_from_point</code> /
+<code>new_recompile_deopt</code> / <code>new_error</code>) reads it — an emitter cannot forget
+to escalate because emitters do not choose. It returns <code>true</code>
+unconditionally: A/B measurement of blanket escalation (full suite,
+benchmark set, optcarrot) put the walk at ~160ns per escalation and
+≤1.6% wall-clock even on bedcov’s 1.8M-escalation worst case, every
+other benchmark inside noise — cheap enough that §6’s per-site gating is
+unnecessary for the escalation itself, and blanket escalation is exactly
+the invariant the speculation needs (a speculated frame’s callers
+convert on <em>every</em> interpreter resume below it, not only on the Float
+guard).</li>
+<li>An escalated <code>Deoptimize</code> / <code>RecompileDeoptimize</code> / <code>Error</code> handler calls
+<code>runtime::chain_deopt(vm)</code> <strong>after</strong> its write-back (the frame is fully
+homed) and before resuming the fetch loop / entering <code>entry_raise</code>. The
+runtime entry collects the plan under the <code>CODEGEN</code> borrow and applies it
+(replay + slot rewrite) after releasing it — the replay allocates (§8.1).
+The walk starts at the deopting frame’s own cfp, so its own
+return-address slot is rewritten too — that is what converts its caller
+when the now-interpreted frame eventually returns.</li>
+<li><code>Error</code> exits escalate because a raise can be rescued <em>in-frame</em> (an
+interpreter resume like any deopt) or unwind through the suspended callers
+— §8.4’s path, which requires the slots to have been rewritten.</li>
+<li><code>Evict</code> handlers do <strong>not</strong> escalate — and are in fact no longer entered
+at all: immediate eviction was their only entry (§10). The side-exit slot
+survives because <code>AsmEvict</code> is the id under which a call site’s return
+address is recorded for <code>chain_exit</code>.</li>
+</ul>
+<p>Every JIT call/yield site registers, so the walk converts every suspended
+JIT frame it reaches — strictly more conversion than the speculation will
+need, which is sound for the same reason BOP eviction is. A frame converted
+by an earlier walk is skipped the same way a VM frame is — its rewritten
+return address <em>is</em> a VM address (the stub) — which is load-bearing:
+interpreted inner frames may have updated its slots through <code>outer_lfp</code>
+since, and a second replay would clobber them with stale floats.</p>
+<p>BOP eviction goes through the same walk (<code>Codegen::chain_deopt_into</code>) as an
+escalated side exit; there is one CFP walk and one conversion mechanism.</p>
+<h3 id="86-where-the-code-is"><a class="header" href="#86-where-the-code-is">8.6 Where the code is</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Piece</th><th>Location</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ChainExitSpec</code> (compile-time), <code>ChainReplay</code>, <code>gen_chain_replay_stub</code> (the compiled per-site conversion, x86-64)</td><td><code>jitgen.rs</code> (aarch64 form in <code>arch/aarch64/compile/mod.rs</code>)</td></tr>
+<tr><td><code>AsmInst::ChainExit</code> (registration, no code emitted)</td><td><code>jitgen/asmir.rs</code>; lowered in <code>jitgen/asmir/compile_shared.rs</code></td></tr>
+<tr><td><code>LInst::ChainExit</code></td><td><code>jitgen/lir.rs</code></td></tr>
+<tr><td>Producers (call / specialized call / yield / specialized yield)</td><td><code>AbstractState::chain_exit</code>, <code>jitgen/compile/method_call.rs</code></td></tr>
+<tr><td>Shared continuation stub</td><td><code>gen_chain_cont_stub</code> (<code>arch/x86_64/vmgen.rs</code>, <code>arch/aarch64/vmgen.rs</code>), address in <code>Codegen::chain_cont_stub</code></td></tr>
+<tr><td>Deferred rest / kwrest materialization the replay stub calls</td><td><code>runtime::create_array</code>, <code>runtime::correct_rest_kw</code> (<code>codegen/runtime.rs</code>)</td></tr>
+<tr><td>Runtime table, the walk</td><td><code>chain_deopt_table</code> (return address -&gt; stub entry), <code>register_chain_exit</code>, <code>chain_deopt_into</code> (<code>codegen.rs</code>)</td></tr>
+<tr><td>Escalation switch + runtime entry</td><td><code>JitContext::escalate_side_exits</code> (<code>jitgen/context.rs</code>), <code>AsmIr::escalate_exits</code> (<code>jitgen/asmir.rs</code>), <code>runtime::chain_deopt</code> (<code>codegen/runtime.rs</code>)</td></tr>
+<tr><td>Frame readers the walk uses (the return-address and cont-frame-pad <em>writes</em> are emitted into the replay stub, so there are no Rust-side writers)</td><td><code>Cfp::return_addr</code>, <code>Cfp::frame_bp</code>, <code>Cfp::lfp</code> (<code>executor/frame.rs</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="9-the-lazy-write-back-was-a-deviation--record-of-the-eager-conversion"><a class="header" href="#9-the-lazy-write-back-was-a-deviation--record-of-the-eager-conversion">9. The lazy write-back was a deviation — record of the eager conversion</a></h2>
+<p><strong>Resolved.</strong> The mechanism was first built in a lazy, per-site-handler
+form; this section records what that form did, why it was unsound to build
+the speculation on, and the conversion plan — which has since landed (§8
+describes the eager implementation). §9.1–9.2 describe the <em>former</em> build.</p>
+<h3 id="91-what-the-built-mechanism-actually-did"><a class="header" href="#91-what-the-built-mechanism-actually-did">9.1 What the built mechanism actually did</a></h3>
+<p><code>Codegen::chain_deopt</code> (<code>codegen.rs</code>) rewrote each suspended frame’s
+return-address slot to that site’s chain-exit handler — <strong>and nothing
+else</strong>. The frame’s write-back runs only when control returns to it: the
+innermost frame <code>ret</code>s, lands in the handler, the handler writes that one
+frame back and tails into the VM continuation; then the next frame out, and
+so on. Only the frame that <em>raised</em> the deopt is written back eagerly (by
+its own escalated side exit, before it calls <code>runtime::chain_deopt</code>).</p>
+<p>So immediately after a deopt in <code>A → B → C</code> at <code>C</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>frame</th><th>local slots</th></tr>
+</thead>
+<tbody>
+<tr><td>C</td><td>correct (its own side exit wrote them)</td></tr>
+<tr><td>B, A</td><td><strong>stale</strong> — write-back deferred to their <code>ret</code>s</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="92-why-that-is-wrong-and-why-nothing-catches-it-today"><a class="header" href="#92-why-that-is-wrong-and-why-nothing-catches-it-today">9.2 Why that is wrong, and why nothing catches it today</a></h3>
+<p>The intended design (§2) is that the walk converts the whole chain at deopt
+time: <strong>all</strong> frames written back, return addresses pointed at the <strong>VM’s
+shared post-call continuation</strong> — control never re-enters JIT code, and no
+per-site handler exists at all. (Note the tension in the built form: a
+per-site handler is only reachable <em>because</em> the return address points at
+it rather than at the VM — the lazy write-back and the per-site handlers
+are two faces of the same deviation.)</p>
+<p>The soundness gap: once <code>C</code> is running in the interpreter, anything that
+reads an outer frame’s locals through <code>outer_lfp</code> — a block body touching
+<code>A</code>’s variables, <code>binding</code>, a backtrace with argument values — reads <code>A</code>’s
+<strong>slots</strong>, which still hold whatever was there before <code>A</code>’s floats were
+promoted to <code>LinkMode::F</code>. Today this cannot be observed solely because
+<code>locals_to_S</code> boxes every local into its slot before <em>every</em> block-passing
+call, so every frame on an <code>outer</code> chain happens to have correct slots.
+§5 step 5 removes exactly that guarantee; the lazy form breaks the moment
+it lands.</p>
+<p>The <code>chain-deopt</code> feature suite (3203/3203 green) was therefore a regression
+base for the <em>conversion machinery</em> — stack rewriting, <code>ret</code>-entry handler
+state, unwind interaction — not evidence that lazy write-back was sound.</p>
+<h3 id="93-the-conversion--landed"><a class="header" href="#93-the-conversion--landed">9.3 The conversion — landed</a></h3>
+<ol>
+<li><del>Extend the walk to replay each suspended frame’s write-back <strong>during</strong>
+<code>chain_deopt</code>, then point its return address at the shared VM entry.</del>
+Done — with §8.2’s correction: the raw VM send continuation is wrong for
+1-unit operator sites, so the rewritten slots point at one shared stub
+(<code>gen_chain_cont_stub</code>) that reads the per-site <code>dst</code>/advance word the
+walk stored in the cont-frame pad slot.</li>
+<li><del>The replay needs, per return address: the <code>WriteBack</code>, the frame’s
+spill <code>base</code>, and the site’s <code>UsingFpr</code> save-area layout.</del> Done —
+<code>ChainReplay</code> carries exactly that (plus <code>dst</code> and the site pc for the
+stub’s continuation word); the layout facts are restated, verified, in
+§8.1. <code>forward_rest</code> / <code>forward_kwrest</code> call <code>runtime::create_array</code> /
+<code>runtime::correct_rest_kw</code> — GC-safe because every source value is
+in a scanned frame slot.</li>
+<li><del>Remove the per-site chain-exit handlers and the <code>DestLabel</code> table —
+<code>chain_deopt_table</code> maps <code>return_addr</code> to the replay data instead.</del>
+Done — <code>SideExit::ChainExit</code> / <code>LSideExitKind::ChainExit</code>,
+<code>gen_chain_exit_with_label</code> / <code>a64_gen_chain_exit</code>, and
+<code>fpr_reload_cont</code> / <code>a64_fpr_reload_cont</code> are deleted; §8.4’s unwind
+path now terminates in the stub’s error branch.</li>
+<li><del>Re-run the <code>chain-deopt</code> feature suite; it must stay green through the
+conversion.</del> Done — 3203/3203 green in the eager form (and the default
+suite unchanged).</li>
+</ol>
+<p>Ordering: this preceded §5 steps 4–5, as required. The <code>locals_to_S</code>
+relaxation is now unblocked.</p>
+<h2 id="10-immediate-eviction-is-gone"><a class="header" href="#10-immediate-eviction-is-gone">10. Immediate eviction is gone</a></h2>
+<p><strong>Landed.</strong> Chain conversion is the only mechanism that drops an on-stack JIT
+frame to the interpreter.</p>
+<p>Immediate eviction existed because a basic-op redefinition inside a callee
+makes the <em>caller’s</em> already-compiled continuation stale — its inlined integer
+arithmetic and constant folds assume the builtin op — and the callee’s entry
+guards cannot protect a frame that is already suspended. With no way to
+convert a suspended frame, the only lever was the code itself: record each
+call’s return continuation as a patch point and, on redefinition, overwrite it
+with a <code>jmp</code>/<code>B</code> to that site’s <code>Evict</code> handler, so the frame deopted one
+instruction after it resumed.</p>
+<p>Chain conversion subsumes that completely — it drops the same frames to the
+interpreter, from the stack rather than from the code — with three things the
+patching form could not offer:</p>
+<ul>
+<li>a compiled body still valid for <em>future</em> invocations survives, because no
+machine code is rewritten;</li>
+<li>on aarch64 it removes a self-modifying-code path, with its
+writable/I-cache-invalidate dance around every patched word (the remaining
+SMC users are <code>patch_call_to_entry</code> and the recompilation patch points, which
+are unrelated);</li>
+<li>it is the mechanism the unboxed-locals speculation needs anyway, so there is
+one walk to reason about instead of two that must agree.</li>
+</ul>
+<p>The single precondition was that <strong>every</strong> call and yield site register a
+<code>chain_deopt_table</code> entry, since an unregistered site is one the walk leaves
+running its stale body. §8.3’s feature gate on <code>AbstractState::chain_exit</code> was
+therefore removed; every build pays the metadata.</p>
+<p>Removed with it: <code>Codegen::patch_return_to_deopt</code> (both arches),
+<code>get_deopt_with_return_addr</code> and the <code>return_addr_table</code> it read,
+<code>emit_immediate_evict</code> (both arches), and <code>AsmInst::ImmediateEvict</code> /
+<code>LInst::ImmediateEvict</code> with their dispatch arms. <code>asm_return_addr_table</code>
+stays — it is how <code>AsmInst::ChainExit</code>, pushed after the call when the return
+address is no longer at hand, names the site it belongs to. <code>AsmEvict</code> and
+<code>SideExit::Evict</code> stay for the same reason, though nothing branches to an
+<code>Evict</code> handler any more; retiring that emission is a separate cleanup.</p>
+<p><code>Codegen::evict_suspended_frames</code> and <code>Codegen::chain_deopt</code> were the same CFP
+walk once the patch fallback was gone, and are now one function
+(<code>chain_deopt</code>), used by both <code>check_bop_redefine</code> and <code>runtime::chain_deopt</code>.</p>
+<h2 id="11-the-speculation-as-shipped-5-steps-45"><a class="header" href="#11-the-speculation-as-shipped-5-steps-45">11. The speculation as shipped (§5 steps 4–5)</a></h2>
+<p><strong>Scope</strong> (§7, enforced by <code>float_speculation_qualifies</code> +
+poison hooks): a block-passing call site whose callee is a plain iseq and
+whose literal block is an iseq with no capture surface
+(<code>possibly_capture_without_block</code> / <code>has_block_arg</code> false), compiled
+outside a dispatch arm. Everything subtler is caught during the subtree
+compile by the poison hooks — a generic block-passing call, a generic
+yield, a block-handler materialization (<code>BlockArgProxy</code> / <code>BlockArg</code>), or
+a no-capture invalidation reaching the speculating frame — and flips the
+site to an unspeculated recompile.</p>
+<p><strong>Step 5 — the relaxation.</strong> At a qualifying site,
+<code>locals_to_S_keep_F</code> demotes every local <em>except</em> pure-<code>F</code> ones and
+Float literals (<code>occlusion = 0.0</code> is materialized to <code>F</code>); the kept set
+is armed on the frame (<code>begin_float_speculation</code>) for the duration of
+the specialized-subtree compile. The unboxed local’s canonical home
+during the call is memory the machinery already maintains:</p>
+<ul>
+<li>pool-resident <code>F</code> → the call’s cont-mode save slot
+(<code>[callee_rbp + 32 + 8·rank]</code>, rank = the register’s ascending-bit
+rank in the site’s <code>UsingFpr</code> — the exact layout <code>emit_fpr_save</code>
+writes and <code>ChainReplay</code> §8.1 reads);</li>
+<li>spilled <code>F</code> → its own <code>[rbp - (base - 24 + 8n)]</code> spill slot.</li>
+</ul>
+<p>A specialized block resolving <code>Load/StoreDynVar</code> against an armed outer
+frame (<code>speculated_dynvar</code>) compiles a single f64 move at
+<code>[rbp + Σ frame-sizes + disp]</code> — the same late-resolved
+<code>DynVarOffset::Hint</code> chain the boxed specialized access uses. After the
+call nothing needs fixing: <code>fpr_restore_cont</code> reloads pool registers
+from the (possibly block-updated) save slots, a spilled local reads its
+own slot, and the site’s <code>ChainReplay</code> boxes from exactly the locations
+the block writes.</p>
+<p><strong>Step 4 — the Float guard.</strong> A store’s source must <em>be</em> a Float, not
+coerce to one: a proven-Float source stores its f64 directly; a
+Float-guarded stack source goes through <code>load_fpr</code>’s guard + unbox,
+whose (escalated, §8.5) deopt converts the whole chain before the
+offending store runs — the interpreter then re-executes the store
+against the boxed frame. A statically non-Float source poisons the
+attempt instead (<code>speculated_store_src</code> returns <code>None</code>): the store
+would fail every execution, so the site recompiles unspeculated.</p>
+<p><strong>Nesting.</strong> A qualified site whose subtree compiles without a single
+capture-relevant event (<code>JitContext::capture_events</code> snapshot) keeps
+the caller’s no-capture invariant instead of running the blanket
+post-call unset — which is what lets an enclosing frame’s speculation
+survive an inner qualified block call (<code>nphi.times { ntheta.times { occlusion += … } }</code>, the motivating aobench shape, speculates through
+both levels).</p>
+<p><strong>Pinning.</strong> The kept pool floats are <code>pin_fpr</code>-ed from the demote
+point to the end of the site emission so an allocation in between
+cannot spill one out of the save slot the compiled block addresses.</p>
+<p><strong>Poisoned retry.</strong> The first (speculated) subtree compile is discarded
+wholesale on poison — its specialized bodies are emitted but never
+referenced — and the site recompiles the subtree against the
+post-<code>locals_to_S</code> state under a fresh patch point.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/bop_redefinition.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/deopt_log.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/bop_redefinition.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/deopt_log.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

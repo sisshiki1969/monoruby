@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>JIT Compiler - monoruby</title>
+        <title>Installation and Build - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -177,62 +177,213 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <p>monoruby executes bytecode in the VM until code gets hot, then compiles it to specialized machine code. This page is an overview; the detailed documents are <a href="design/jit.html"><code>doc/jit.md</code></a> (stub/bridge code), <a href="design/lir.html"><code>doc/lir.md</code></a> (the low-level IR), <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> (register allocation), and <a href="design/inline.html"><code>doc/inline.md</code></a> (inline builtins).</p>
-<h2 id="when-compilation-triggers"><a class="header" href="#when-compilation-triggers">When compilation triggers</a></h2>
-<ul>
-<li><strong>Method JIT</strong> — after ≥ 20 calls (<code>COUNT_START_COMPILE</code>; 5 in test mode)</li>
-<li><strong>Loop JIT</strong> — after ≥ 100 iterations of a loop (<code>COUNT_LOOP_START_COMPILE</code>; 15 in test mode), compiling the enclosing method from the loop entry</li>
-</ul>
-<p>Each function starts with a small <em>wrapper</em> that decrements a counter and falls through to the VM until the counter expires, then triggers compilation and patches itself.</p>
-<h2 id="ir-pipeline"><a class="header" href="#ir-pipeline">IR pipeline</a></h2>
-<pre><code>bytecode ──abstract interpretation──▶ TraceIR ──▶ AsmIR ──▶ LIR ──▶ machine code (monoasm)
-                (type feedback from inline caches)        (per-arch encoder)
-</code></pre>
-<ul>
-<li><strong>TraceIR</strong> — bytecode annotated with type information gathered from the VM tier’s inline caches.</li>
-<li><strong>AsmIR</strong> (<code>AsmInst</code>) — arch-neutral, register-allocated assembly IR produced by an abstract interpreter that tracks, per slot, whether a value lives on the stack, in a floating-point register (unboxed <code>f64</code>), both, or is a compile-time constant (<code>LinkMode</code>).</li>
-<li><strong>LIR</strong> (<code>LInst</code>) — arch-neutral machine-level ops with offsets and labels resolved; the single seam where bytes are emitted. Each architecture implements one <code>encode_linst</code> (see <a href="aarch64-backend.html">aarch64 Backend</a>).</li>
-</ul>
-<h2 id="specialization-and-inline-caches"><a class="header" href="#specialization-and-inline-caches">Specialization and inline caches</a></h2>
-<p>Compiled code is specialized <strong>per receiver class</strong>. The method entry is a chain of self-class guard stubs: each guard tests the receiver’s class and jumps to the machine code compiled for that class; a miss falls through to the next guard or to the VM. Method calls inside JIT code are resolved through inline caches and guarded by a <strong>class-version</strong> check, so redefining a method invalidates dependent code. Small hot builtins (<code>Array#[]</code>, <code>Integer</code> arithmetic, <code>Math.sqrt</code>, <code>Object#is_a?</code>, <code>Struct</code> accessors, <code>Class#new</code>, <code>Fiber.yield</code>, …) are inlined directly by generator functions that can both consult the abstract state (folding results at compile time when types are proven) and emit code; a failed inline attempt rolls back cleanly and falls back to a normal call. Monomorphic methods can additionally be <strong>specialized inline</strong> — the callee’s frame is inlined into the caller.</p>
-<h2 id="deoptimization-and-recompilation"><a class="header" href="#deoptimization-and-recompilation">Deoptimization and recompilation</a></h2>
-<p>JIT code is speculative. Guards — receiver class, class version, array type, frozen state, fixnum overflow, basic-operator (BOP) redefinition, frame capture — branch to <strong>side exits</strong> that write register-resident values back to the frame and resume in the VM at the equivalent program point. Repeated deopts trigger <strong>recompilation</strong> with the newly observed classes (e.g. polymorphic call sites, <code>method_missing</code> dispatch, newly resolved constants/ivars). Deopt logging is available with the <code>deopt</code> Cargo feature, recompile/deopt statistics with <code>profile</code>.</p>
-<h2 id="register-allocation"><a class="header" href="#register-allocation">Register allocation</a></h2>
-<ul>
-<li><strong>Floating point</strong> — virtual FP registers (<code>VirtFPReg</code>) allocated greedily over the physical pool (14 xmm registers on x86-64), with automatic <strong>spill-to-stack</strong> when the pool is exhausted; loop entries specialize float-typed slots so hot numeric loops keep values unboxed in registers.</li>
-<li><strong>General purpose</strong> — a per-basic-block local GP register allocator keeps boxed values (notably Fixnums) in a small pool of scratch registers within a block, eliding redundant fixnum guards, and flushes the pool at calls and GC safepoints (pool registers are not GC roots).</li>
-</ul>
-<p>The long-form design discussion — separating type inference from placement, the retirement of the dedicated accumulator register, and measured results — is in <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> and <a href="design/lir.html"><code>doc/lir.md</code></a>.</p>
-<h2 id="argument-forwarding-d1"><a class="header" href="#argument-forwarding-d1">Argument forwarding (D1)</a></h2>
-<p><code>def f(...)</code> forwarding is compiled as an opaque pipe: for simple callees the rest-Array / keyword-Hash allocation is elided entirely and arguments are copied (or lazily deferred) straight from the caller’s frame, with deopt-safe lazy materialization if a side exit or frame capture ever needs the real objects. See <a href="design/arg_forwarding_jit.html"><code>doc/arg_forwarding_jit.md</code></a>.</p>
-<h2 id="observing-the-jit"><a class="header" href="#observing-the-jit">Observing the JIT</a></h2>
+                        <h1 id="installation-and-build"><a class="header" href="#installation-and-build">Installation and Build</a></h1>
+<p>monoruby is a standalone Ruby implementation: it does <strong>not</strong> need CRuby or
+any other Ruby runtime to build or to run. There are two ways to get it — a
+prebuilt binary, or a build from source.</p>
+<h2 id="supported-platforms"><a class="header" href="#supported-platforms">Supported platforms</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Cargo feature</th><th>Output</th></tr>
+<tr><th>Platform</th><th>Status</th></tr>
 </thead>
 <tbody>
-<tr><td><code>dump-bc</code> / <code>emit-bc</code></td><td>bytecode</td></tr>
-<tr><td><code>dump-traceir</code></td><td>TraceIR</td></tr>
-<tr><td><code>emit-asm</code></td><td>generated assembly</td></tr>
-<tr><td><code>jit-log</code> / <code>jit-debug</code></td><td>compilation events / detailed debug</td></tr>
-<tr><td><code>deopt</code></td><td>deoptimization log</td></tr>
-<tr><td><code>profile</code></td><td>deopt &amp; recompile statistics</td></tr>
-<tr><td><code>perf</code></td><td>perf-compatible symbol maps</td></tr>
+<tr><td>x86-64 Linux</td><td>Fully supported (VM + JIT). Primary CI target.</td></tr>
+<tr><td>aarch64 macOS (Apple Silicon)</td><td>Fully supported (VM + JIT). CI runs natively on <code>macos-latest</code>.</td></tr>
+<tr><td>aarch64 Linux</td><td>Supported (VM + JIT). Exercised by the manual <code>gc-stress</code> workflow on <code>ubuntu-24.04-arm</code>.</td></tr>
 </tbody>
 </table>
 </div>
-<p>The JIT is always built in; disable it at runtime with <code>--no-jit</code>. See <a href="https://github.com/sisshiki1969/monoruby/wiki/Build-options-for-performance-tuning">Build options for performance tuning</a> for example output.</p>
+<p>Both architectures lower the complete instruction set; the JIT never declines
+a compile on either. See <a href="design/arch_difference.html">x86-64 / aarch64 JIT backend
+differences</a> for what actually differs between the
+two backends.</p>
+<h2 id="prebuilt-binaries"><a class="header" href="#prebuilt-binaries">Prebuilt binaries</a></h2>
+<p>Releases carry prebuilt tarballs, and a rolling <code>nightly</code> prerelease is
+rebuilt on every push to <code>master</code>. The easiest way to consume them is the
+<code>setup-monoruby</code> GitHub Action that this repository doubles as, modeled after
+<a href="https://github.com/ruby/setup-ruby">ruby/setup-ruby</a>. The ref after <code>@</code>
+selects the version:</p>
+<pre><code class="language-yaml">steps:
+  - uses: sisshiki1969/monoruby@master # or a release tag
+  - run: monoruby my_script.rb
+</code></pre>
+<p>The action downloads a release asset when one exists for the ref and platform
+(seconds), and otherwise builds from source once per monoruby revision ×
+runner OS/arch and caches the result with <code>actions/cache</code>. Automatic builds
+cover x86-64 Linux; Linux arm64 and macOS arm64 assets are published on demand
+by dispatching the <code>release binaries</code> workflow. See the <a href="https://github.com/sisshiki1969/monoruby#using-monoruby-in-github-actions">README’s action
+section</a>
+for the full input/output table.</p>
+<p>Each asset is a tarball containing <code>bin/monoruby</code>, <code>bin/irm</code>, and the
+<code>monoruby-home/v&lt;version&gt;/</code> runtime tree described under <a href="#what-the-build-installs">What the build
+installs</a> below. Because the binary bakes in the
+build machine’s install-root path, point <code>MONORUBY_INSTALL_ROOT</code> at wherever
+you extracted that tree.</p>
+<h2 id="building-from-source"><a class="header" href="#building-from-source">Building from source</a></h2>
+<h3 id="1-install-rust"><a class="header" href="#1-install-rust">1. Install Rust</a></h3>
+<p><strong>Only nightly Rust works.</strong> monoruby uses several nightly-only language
+features (<code>box_patterns</code>, <code>iter_next_chunk</code>, <code>step_trait</code>,
+<code>coverage_attribute</code>), so a stable toolchain fails to build.</p>
+<p>You do not have to select the channel by hand: <code>rust-toolchain.toml</code> pins the
+exact nightly the project is developed and tested against, and <code>rustup</code>
+installs and uses it automatically the first time you run <code>cargo</code> in the
+checkout.</p>
+<pre><code class="language-toml"># rust-toolchain.toml
+[toolchain]
+channel = "nightly-2026-08-18"
+</code></pre>
+<p>If you have no Rust at all yet, <a href="https://www.rust-lang.org/tools/install">install
+rustup</a> first.</p>
+<h3 id="2-clone-the-repository"><a class="header" href="#2-clone-the-repository">2. Clone the repository</a></h3>
+<pre><code class="language-sh">git clone https://github.com/sisshiki1969/monoruby.git
+cd monoruby
+</code></pre>
+<h3 id="3-platform-specific-dependencies"><a class="header" href="#3-platform-specific-dependencies">3. Platform-specific dependencies</a></h3>
+<p>On <strong>aarch64 macOS</strong> only, monoruby links the system libffi instead of the
+bundled one (the bundled <code>libffi-sys</code> fails to link <code>_ffi_prep_cif_machdep</code> on
+arm64):</p>
+<pre><code class="language-sh">brew install libffi pkg-config
+export PKG_CONFIG_PATH="$(brew --prefix libffi)/lib/pkgconfig"
+</code></pre>
+<p>Linux and x86-64 macOS need nothing extra.</p>
+<h3 id="4-build-and-run"><a class="header" href="#4-build-and-run">4. Build and run</a></h3>
+<pre><code class="language-sh">cargo build --release
+cargo run --release -- test.rb
+</code></pre>
+<p>The debug profile is built at <code>opt-level = 1</code> (set in the workspace
+<code>Cargo.toml</code>), so a debug build is usable for day-to-day work — but use
+<code>--release</code> for anything you intend to measure.</p>
+<p>A one-liner:</p>
+<pre><code class="language-sh">cargo run --release -- -e "puts 100"
+</code></pre>
+<h3 id="5-install"><a class="header" href="#5-install">5. Install</a></h3>
+<pre><code class="language-sh">cargo install --path monoruby
+</code></pre>
+<p>This puts two binaries on your <code>PATH</code>:</p>
+<pre><code class="language-sh">monoruby test.rb   # the interpreter
+irm                # the REPL
+</code></pre>
+<p>From a checkout you can launch the REPL without installing:</p>
+<pre><code class="language-sh">cargo run --bin irm
+# or
+bin/irm
+</code></pre>
+<h2 id="what-the-build-installs"><a class="header" href="#what-the-build-installs">What the build installs</a></h2>
+<p><code>monoruby/build.rs</code> runs on every <code>cargo build</code> and is <strong>host-Ruby
+independent</strong> — it does not need a <code>ruby</code> on <code>PATH</code> to produce a correct,
+reproducible build. It does two things:</p>
+<ol>
+<li>
+<p><strong>Bakes the reported Ruby version.</strong> <code>MONORUBY_RUBY_VERSION</code> is read from
+<code>monoruby/vendor/ruby-stdlib/.ruby-version</code> (currently <strong>4.0.2</strong>) and
+reported at run time as <code>RUBY_VERSION</code>. Taking it from the vendored
+snapshot rather than a host <code>ruby</code> keeps the version monoruby reports in
+step with the stdlib it actually ships.</p>
+</li>
+<li>
+<p><strong>Installs the runtime tree</strong> into a per-version root,
+<code>~/.monoruby/v&lt;version&gt;/</code> (e.g. <code>~/.monoruby/v0.3.0/</code>), whose absolute path
+is baked into the binary as <code>MONORUBY_INSTALL_ROOT</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Source</th><th>Installed as</th><th>Contents</th></tr>
+</thead>
+<tbody>
+<tr><td><code>monoruby/vendor/ruby-stdlib/</code></td><td><code>&lt;root&gt;/lib/</code></td><td>Checked-in CRuby stdlib + default-gem snapshot</td></tr>
+<tr><td><code>monoruby/builtins/</code></td><td><code>&lt;root&gt;/builtins/</code></td><td>Ruby files loaded at interpreter start (<code>startup.rb</code>, <code>enumerable.rb</code>, …)</td></tr>
+<tr><td><code>monoruby/stdlib/</code>, <code>monoruby/gem/</code></td><td><code>&lt;root&gt;/lib/</code> and <code>&lt;root&gt;/stub/</code></td><td>monoruby’s own host-independent replacements for C-extension-backed libraries</td></tr>
+</tbody>
+</table>
+</div>
+<p>The install is staged in a private directory and swapped in with an atomic
+rename, so a running monoruby never sees a half-populated tree, and the
+per-version namespacing keeps concurrent builds and multiple checkouts from
+clobbering each other.</p>
+</li>
+</ol>
+<p><code>build.rs</code> declares <code>cargo:rerun-if-changed</code> for each of those trees, so
+editing <code>builtins/</code>, <code>stdlib/</code> or <code>gem/</code> reinstalls on the next build, and
+deleting <code>~/.monoruby</code> re-triggers the whole install.</p>
+<p>Setting <code>MONORUBY_INSTALL_ROOT</code> in the <strong>runtime</strong> environment overrides the
+baked path, which is what makes a distributed binary relocatable.</p>
+<h2 id="do-i-need-a-host-ruby"><a class="header" href="#do-i-need-a-host-ruby">Do I need a host Ruby?</a></h2>
+<p><strong>To build and run monoruby: no.</strong> The stdlib is vendored and the version is
+read from the snapshot.</p>
+<p>A host <code>ruby</code> is used for exactly two optional things:</p>
+<ul>
+<li>
+<p><strong>Host-installed (non-default) gems.</strong> At startup <code>src/ruby_probe.rs</code>
+invokes a host <code>ruby</code> once — if one is present and is 4.0 or later — to
+discover <code>$LOAD_PATH</code> and <code>Gem.paths.path</code>, and caches the answer in
+<code>~/.monoruby/{library_path,gem_path}</code> so the ~50 ms spawn is paid once per
+machine. Precedence is <code>MONORUBY_GEM_PATH</code> / <code>MONORUBY_LOAD_PATH</code>, then
+<code>GEM_PATH</code>, then the cache files, then the probe. <code>MONORUBY_REPROBE=1</code>
+forces a fresh probe. With no host Ruby, those caches stay empty and the
+vendored stdlib still loads normally — you will just see this on startup:</p>
+<pre><code class="language-text">Warning: failed to read library path file: "~/.monoruby/library_path". Ruby may not be installed.
+</code></pre>
+<p>It is a warning, not an error: only host-installed gems are unavailable.</p>
+</li>
+<li>
+<p><strong>Running the test suite</strong>, which compares monoruby’s output against CRuby.
+See <a href="development.html#testing">Development and Build Options</a>.</p>
+</li>
+</ul>
+<h2 id="command-line-options"><a class="header" href="#command-line-options">Command-line options</a></h2>
+<p>monoruby accepts CRuby’s command-line switches:</p>
+<pre><code class="language-text">Usage: monoruby [switches] [--] [programfile] [arguments]
+  -0[octal]       specify record separator (\0, if no argument)
+  -a              autosplit mode with -n or -p (splits $_ into $F)
+  -i[extension]   edit ARGV files in place (make backup if extension supplied)
+  -c              check syntax only
+  -Cdirectory     cd to directory before executing your script
+  -d, --debug     set debugging flags (set $DEBUG to true)
+  -e 'command'    one line of script. Several -e's allowed. Omit [programfile]
+  -Eex[:in], --encoding=ex[:in]
+                  specify the default external and internal character encodings
+  -Fpattern       split() pattern for autosplit (-a)
+  -Idirectory     specify $LOAD_PATH directory (may be used more than once)
+  -l              enable line ending processing
+  -n              assume 'while gets(); ... end' loop around your script
+  -p              assume loop like -n but print line also like sed
+  -rlibrary       require the library before executing your script
+  -s              enable some switch parsing for switches after script name
+  -S              look for the script using PATH environment variable
+  -U              set the internal encoding to UTF-8
+  -v              print the version number, then turn on verbose mode
+  -w              turn warnings on for your script
+  -W[level=2|:category]
+                  set warning level; 0=silence, 1=medium, 2=verbose
+  -x[directory]   strip off text before #!ruby line and perhaps cd to directory
+  -h              show this message, --help for more options
+  --ast           dump the parsed ruby-prism AST and exit
+  --no-jit        disable just-in-time compilation
+  --no-gc         disable garbage collection
+  --enable=feature[,...], --disable=feature[,...]
+                  enable or disable features (gems, did_you_mean, rubyopt,
+                  frozen-string-literal, all)
+</code></pre>
+<p><code>RUBYOPT</code> is honoured for the subset of switches CRuby permits there.</p>
+<p>The three monoruby-specific switches are worth knowing:</p>
+<ul>
+<li><code>--no-jit</code> — run everything in the bytecode VM. The JIT is always compiled
+into the binary; this disables it at run time. Useful for isolating a JIT
+bug from a VM bug, and as the baseline half of a JIT A/B.</li>
+<li><code>--no-gc</code> — disable garbage collection entirely.</li>
+<li><code>--ast</code> — dump the parsed prism AST and exit.</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="value-representation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="introduction.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="garbage-collection.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="development.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -242,11 +393,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="value-representation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="introduction.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="garbage-collection.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="development.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

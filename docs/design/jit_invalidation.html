@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Inline asm functions - monoruby</title>
+        <title>Version guards, salvage and the megamorphic gate - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -177,125 +177,298 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="inline-asm-function"><a class="header" href="#inline-asm-function">Inline asm function</a></h1>
-<ul>
-<li>To avoid the overhead of method calls in performance-critical code paths, we can inline certain method calls directly into the generated machine code using inline assembly functions.</li>
-<li>This is particularly useful for small, frequently called methods where the overhead of a function call would be significant compared to the method’s execution time.</li>
-<li>In inline asm functions, we have direct access to the JIT context, allowing us to manipulate the abstract state and generate machine code as needed.</li>
-<li>We can do ‘trial inlining’ by attempting to inline a method call and reverting to the original state if inlining is not possible.</li>
-</ul>
-<h2 id="output"><a class="header" href="#output">output</a></h2>
-<ul>
-<li>accumulator(r15): result: Value</li>
-</ul>
+                        <h1 id="invalidating-compiled-code--and-repairing-it-instead"><a class="header" href="#invalidating-compiled-code--and-repairing-it-instead">Invalidating compiled code — and repairing it instead</a></h1>
+<p>Compiled code bakes in answers that Ruby is allowed to change later: which
+<code>FuncId</code> a call site dispatches to, what value a folded constant has, which
+operator is still the builtin. monoruby guards those answers with two
+global version counters, and a guard failure used to mean one thing —
+throw the body away and compile it again.</p>
+<p>That was far too blunt. The counters are <em>global</em>: any <code>def</code> anywhere moves
+the class version, any <code>X = 1</code> anywhere moves the constant version. A
+program that keeps defining things (a spec suite, a Rails boot) moved them
+constantly, so hot bodies were recompiled over and over even though
+nothing they had cached had actually changed.</p>
+<p><strong>Salvage</strong> is the answer: on a guard failure, re-validate what the body
+assumed. If every assumption still holds, stamp the current version into
+the body and keep the code. Only a genuine change recompiles. On a
+ruby/spec <code>core</code> run this turns ~107,000 recompiles into ~320.</p>
+<p>This document covers what moves the counters, how a unit records what it
+assumed, and how each guard failure is repaired. For the stub and
+class-guard-chain shapes the guards live in, see <a href="jit.html"><code>jit.md</code></a>; for
+basic-operator redefinition — the one invalidation that is <em>not</em> repaired
+this way — see <a href="bop_redefinition.html"><code>bop_redefinition.md</code></a>.</p>
+<hr>
+<h2 id="1-the-two-counters-and-what-moves-them"><a class="header" href="#1-the-two-counters-and-what-moves-them">1. The two counters, and what moves them</a></h2>
+<p>Both live in <code>Codegen</code> (<code>codegen.rs</code>) and are read by compiled code as a
+plain memory word.</p>
+<p><strong>Class version</strong> — <code>Globals::class_version_inc()</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Site</th><th>Trigger</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Store::insert_method</code> (<code>globals/store/class.rs</code>)</td><td><code>def</code>, <code>define_method</code>, <code>attr_*</code>, <code>alias_method</code></td></tr>
+<tr><td><code>Store::remove_method</code></td><td><code>remove_method</code>, <code>undef_method</code></td></tr>
+<tr><td>visibility update (same file)</td><td><code>public</code> / <code>private</code> / <code>protected</code> on an existing entry</td></tr>
+<tr><td><code>include_or_prepend_module</code> (<code>value/rvalue/module.rs</code>)</td><td><code>include</code>, <code>prepend</code></td></tr>
+<tr><td>refinement import (<code>builtins/module.rs</code>), <code>using</code> (<code>executor.rs</code>)</td><td><code>refine</code>, <code>using</code> — see <a href="refinements.html"><code>refinements.md</code></a> §6.1</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Constant version</strong> — <code>Globals::const_version_inc()</code>, and the per-name
+epochs described in §4:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Site</th><th>Trigger</th><th>Epoch bumped</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Globals::set_constant</code></td><td>any constant assignment, <em>including the first</em></td><td>that name</td></tr>
+<tr><td><code>Globals::remove_constant</code></td><td><code>remove_const</code></td><td>that name</td></tr>
+<tr><td>bare <code>const_version_inc()</code> (<code>value/rvalue/module.rs</code>)</td><td><code>include</code> / <code>prepend</code> — resolution may change without any assignment</td><td>wildcard</td></tr>
+</tbody>
+</table>
+</div>
+<p>Note the third row: an event with no single name to attribute the change
+to bumps a <em>wildcard</em> epoch, which makes every unit’s fast path (§4)
+conservative until it re-validates.</p>
+<h2 id="2-one-patchable-snapshot-word-per-compilation-unit"><a class="header" href="#2-one-patchable-snapshot-word-per-compilation-unit">2. One patchable snapshot word per compilation unit</a></h2>
+<p>A compilation unit is a root body plus every specialized callee inlined
+into it. <code>jit_compile</code> (<code>codegen/jitgen.rs</code>) creates <strong>one</strong> class-version
+word and — when the body folded at least one constant — <strong>one</strong>
+const-version word for the whole unit:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>impl&lt;'a&gt; JitContext&lt;'a&gt; {
-    fn inline_asm(
-        &amp;mut self,
-        state: &amp;mut AbstractState,
-        ir: &amp;mut AsmIr,
-        f: impl Fn(
-            &amp;mut AbstractState,
-            &amp;mut AsmIr,
-            &amp;JitContext,
-            &amp;Store,
-            CallSiteId,
-            ClassId,
-            BytecodePtr,
-        ) -&gt; bool,
-        callid: CallSiteId,
-        recv_class: ClassId,
-        pc: BytecodePtr,
-    ) -&gt; bool {
-        let state_save = state.clone();
-        let ir_save = ir.save();
-        if f(state, ir, self, &amp;self.store, callid, recv_class, pc) {
-            true
-        } else {
-            *state = state_save;
-            ir.restore(ir_save);
-            false
-        }
-    }
-}
+</span>let class_version_label = self.jit.const_i32(class_version as _);
+let const_version_label = (!const_folds.is_empty())
+    .then(|| self.jit.const_i64(const_version as _));
 <span class="boring">}</span></code></pre>
-<p>the signature of inline asm function is as follows:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>fn(
-    &amp;mut AbstractState,
-    &amp;mut AsmIr,
-    &amp;JitContext,
-    &amp;Store,
-    &amp;CallSiteInfo,
-    ClassId,
-    BytecodePtr,
-) -&gt; bool
-<span class="boring">}</span></code></pre>
-<h2 id="inline-asm-function-example"><a class="header" href="#inline-asm-function-example">inline asm function example</a></h2>
+<p>Every guard in the unit, children included, compares the global counter
+against that one word. Compilation is atomic at one version, so one word
+is enough — and one store re-validates the entire unit. <code>set_class_version</code>
+/ <code>set_const_version</code> (<code>codegen.rs</code>) are that store.</p>
+<blockquote>
+<p><strong>Both arches read the word.</strong> aarch64 used to bake the snapshot in as an
+immediate, which silently made salvage a no-op there: the word was
+patched and the guard kept comparing against the old immediate. Fixed in
+#1157; <code>a64_guard_class_version</code> now takes the unit’s label.</p>
+</blockquote>
+<p>The word is reachable afterwards through the unit’s salvage record:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Unit kind</th><th>Record</th><th>Keyed by</th></tr>
+</thead>
+<tbody>
+<tr><td>whole method</td><td><code>ISeqInfo::jit_entry</code> → <code>JitInfo</code></td><td><code>self_class</code></td></tr>
+<tr><td>loop (OSR)</td><td><code>ISeqInfo::loop_jit_info</code> → <code>LoopJitInfo</code></td><td><code>(self_class, LoopStart index)</code></td></tr>
+<tr><td>specialized child</td><td>its owner’s record, via <code>SpecializedPatchEntry::owner</code></td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="3-class-version-salvage"><a class="header" href="#3-class-version-salvage">3. Class-version salvage</a></h2>
+<p><code>JitInfo</code> / <code>LoopJitInfo</code> carry an <code>inline_cache_map: Vec&lt;InlineCacheEntry&gt;</code>
+— every method call the compiler resolved at compile time, as
+<code>(recv_class, name, refinements, func_id)</code>. <code>Store::salvage_method_unit</code> /
+<code>salvage_loop_unit</code> (<code>globals/store/class.rs</code>) re-ask each question with
+<code>check_method_for_name</code> and compare the answer:</p>
 <ul>
-<li>We must return <code>true</code> if inlining succeeded, otherwise <code>false</code>.</li>
-<li>We must take arguments directly from the caller’s stack using callsite information (<code>CallSiteId</code>).</li>
-<li>An ‘inlinable’ method call should have ‘simple’ call site, which means no keyword arguments, no splat arguments, and no block argument.</li>
-<li>use <code>AsmIr::inline()</code> to embed a machine code directly.</li>
-<li>use <code>AbstractState::def_rax2acc()</code> for moving the result (in <code>rax</code>) to the accumulator.</li>
+<li><strong>all unchanged</strong> → return the unit’s version label; the caller patches
+it and the code stands.</li>
+<li><strong>any changed</strong> → <code>None</code>; recompile.</li>
 </ul>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>fn kernel_nil(
-    state: &amp;mut AbstractState,
-    ir: &amp;mut AsmIr,
-    _: &amp;JitContext,
-    store: &amp;Store,
-    callid: CallSiteId,
-    _: ClassId,
-    _: BytecodePtr,
-) -&gt; bool {
-    let callsite = &amp;store[callid];
-    if !callsite.is_simple() {
-        return false;
-    }
-    let CallSiteInfo { recv, dst, .. } = *callsite;
-    if state.is_nil(recv) {
-        if let Some(dst) = dst {
-            state.def_C(dst, Value::bool(true));
-        }
-    } else if state.is_not_nil(recv) {
-        if let Some(dst) = dst {
-            state.def_C(dst, Value::bool(false));
-        }
-    } else {
-        state.load(ir, recv, GP::Rdi);
-        ir.inline(|r#gen, _, _| {
-            monoasm! { &amp;mut r#gen.jit,
-                movq rax, (FALSE_VALUE);
-                movq rsi, (TRUE_VALUE);
-                cmpq rdi, (NIL_VALUE);
-                cmoveqq rax, rsi;
-            }
-        });
-        state.def_rax2acc(ir, dst);
-    }
-    true
-}
-<span class="boring">}</span></code></pre>
+<p>Two details that are easy to get wrong:</p>
 <ul>
-<li>Here, we check if the call site is simple. If not, we return <code>false</code> to indicate inlining failed.</li>
-<li>We then check the abstract state of the receiver. If we can determine it’s definitely <code>nil</code> or definitely not <code>nil</code>, we set the destination accordingly.</li>
-<li>If we cannot determine the state of the receiver, we generate machine code to perform the check at runtime.</li>
-<li>Finally, we move the result from <code>rax</code> to the accumulator and return <code>true</code> to indicate successful inlining.</li>
+<li><strong>The refinement set is part of the question.</strong> Re-asking the <em>unrefined</em>
+question after a <code>using</code> moved the version would confirm an answer the
+code is no longer allowed to give (<code>refinements.md</code> §3.4).</li>
+<li><strong><code>super</code> sites need the executing frame.</strong> <code>check_method_for_name</code> takes
+<code>Option&lt;Lfp&gt;</code>; a <code>super</code> entry (<code>name: None</code>) resolves relative to the
+owning frame. A salvage triggered from an inlined child has no such
+frame, passes <code>None</code>, and conservatively fails — so a unit containing a
+cached <code>super</code> site recompiles rather than guessing.</li>
+</ul>
+<p><strong>Specialized children salvage their owner.</strong> A child’s guard reads the
+owner’s word, and the owner’s cache map covers the child’s call sites, so
+<code>salvage_specialized</code> (<code>codegen/compiler.rs</code>) validates the <em>owner</em> unit.
+<code>SpecializedPatchEntry::owner</code> is cleared to <code>None</code> when a child is
+recompiled individually: the fresh body reads its own fresh words, which
+the owner’s record no longer names, and patching the owner’s word would
+“heal” words that body never reads — deopting it on every call, forever.</p>
+<h2 id="4-const-version-salvage--two-tiers"><a class="header" href="#4-const-version-salvage--two-tiers">4. Const-version salvage — two tiers</a></h2>
+<p>A const-version guard failure says only “some constant event happened
+somewhere”. <code>ConstSalvageMap</code> (<code>globals/store/iseq.rs</code>) records what the
+unit actually folded — for each site, the <code>ConstCache</code> tuple the emitted
+code relies on and the names whose redefinition could change its
+resolution (the final name plus every path qualifier) — plus a snapshot of
+those names’ epochs at compile time.</p>
+<p><code>Store::salvage_const_unit</code> then escalates:</p>
+<ol>
+<li><strong>Per-name epochs.</strong> Every event in §1 bumps the epoch of the name it
+touched. If no folded name’s epoch moved (and the wildcard didn’t), no
+fold can have changed — patch the word, done, without a single lookup.
+This is the common case: a spec file defining unrelated constants.</li>
+<li><strong>Value re-check.</strong> For a site whose name <em>was</em> touched, compare the
+fold against that site’s VM inline cache. A cache already refreshed at
+the current version whose <code>(value, base_class, self_class)</code> equals the
+fold proves the assignment wrote the same value — patch and keep.
+A <strong>differing</strong> value recompiles.
+A <strong>stale</strong> cache (the VM has not re-run the site at this version yet)
+returns <code>ConstSalvage::Defer</code>: skip the recompile, let this invocation
+deopt so the interpreter refreshes the cache, and retry on the next
+miss. Bounded by <code>stale_defers</code> (3) so a fold whose site the deopted
+execution never reaches cannot defer forever.</li>
+</ol>
+<p>The recorded fold values are GC roots: <code>ConstSalvageMap::mark</code> is reached
+from <code>ISeqInfo::mark</code>, so a folded <code>Value</code> stays alive as long as the code
+that baked it in.</p>
+<h2 id="5-where-a-guard-miss-goes"><a class="header" href="#5-where-a-guard-miss-goes">5. Where a guard miss goes</a></h2>
+<p>All misses call into Rust <em>before</em> deciding. The entry points live in
+<code>codegen/compiler.rs</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Unit</th><th>x86-64</th><th>aarch64</th></tr>
+</thead>
+<tbody>
+<tr><td>whole method, class ver</td><td><code>jit_recompile_method_with_recovery</code> — on a successful salvage returns 1 and the stub’s <code>jnz recover</code> <strong>resumes in place</strong>, no deopt</td><td><code>jit_recompile_method</code> — salvages, then deopts once</td></tr>
+<tr><td>whole method, const ver</td><td><code>jit_recompile_method</code> → <code>salvage_method_const</code></td><td>same</td></tr>
+<tr><td>loop (OSR)</td><td><code>jit_recompile_loop</code> → <code>salvage_loop</code> (class or const)</td><td>same</td></tr>
+<tr><td>specialized</td><td><code>jit_recompile_specialized</code> → <code>salvage_specialized</code></td><td>same</td></tr>
+</tbody>
+</table>
+</div>
+<p>Except for x86’s resume-in-place path, a successful salvage still lets the
+current invocation deopt to the VM once; the healed code passes its guards
+from the next call or iteration.</p>
+<p><strong>Salvage must run outside the <code>CODEGEN</code> borrow.</strong> Validation reads
+<code>Globals::class_version()</code> / <code>const_version()</code>, which borrow the same
+thread-local <code>RefCell</code> — so the salvage attempt sits in the <code>extern "C"</code>
+entry point, before <code>CODEGEN.with(...)</code>, and the helpers in <code>Store</code> return
+the <code>DestLabel</code> for the caller to patch in its own borrow context rather
+than patching it themselves.</p>
+<p><strong>Const guards are not counter-gated.</strong> The generic recompile side exit
+(<code>SideExit::RecompileDeoptimize</code> → <code>AsmInst::RecompileDeopt</code>, gated by
+<code>COUNT_DEOPT_RECOMPILE</code>) is one-shot: once drained
+it never re-arms. That is right for an expensive recompile but wrong for a
+cheap salvage — the <em>second</em> version move after a successful salvage would
+strand the body in the interpreter for the rest of the run. So a
+const-version miss calls the salvaging entry on every failure, the same
+shape the class-version guard uses. A <em>block</em>-style root is the exception
+and keeps a plain deopt: the whole-method recompile entry rebuilds
+whatever <code>lfp.func_id()</code> names as a method, which is the wrong frame shape
+for a block body.</p>
+<h2 id="6-what-is-not-salvaged"><a class="header" href="#6-what-is-not-salvaged">6. What is not salvaged</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Reason</th><th>Behaviour</th></tr>
+</thead>
+<tbody>
+<tr><td><code>NotCached</code>, <code>MethodNotFound</code>, <code>IvarIdNotFound</code></td><td>the compiler lacked information; recompiling with a warmed VM cache is the point</td></tr>
+<tr><td><code>BecamePolymorphic</code></td><td>a monomorphic-compiled send saw a second class. Ratcheted: recompile while the PMC holds fewer than two classes, plain deopt afterwards (<code>RecvMissMode::Learn</code>)</td></tr>
+<tr><td>basic-operator redefinition</td><td>not a version guard. Bodies that inlined the operator are <em>evicted</em> (<code>ISeqInfo::evict_jit_code</code>, <code>bop_deps</code>) — see <a href="bop_redefinition.html"><code>bop_redefinition.md</code></a></td></tr>
+<tr><td>front-end bail</td><td>a <em>whole-method</em> bail marks the iseq <code>jit_invalidated</code>, and it is never compiled again; a loop bail just leaves the site interpreted</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="7-the-megamorphic-gate"><a class="header" href="#7-the-megamorphic-gate">7. The megamorphic gate</a></h2>
+<p>Salvage repairs code that is still correct. The complementary question —
+<em>should this receiver class be compiled at all?</em> — is answered by the
+class-guard chain’s <strong>miss exit</strong>, and it is worth stating because getting
+it wrong is invisible.</p>
+<p>A chain miss must leave the chain and run the call in the interpreter
+(<code>jit_class_guard_fail: jmp vm_entry</code>). The stub samples the receiver
+class only when its warm-up counter expires, so a class used for a single
+call is sampled at most once, evicted from the small profile
+(<code>profile_self_class</code>: cap 8, threshold 2), and never compiled for.</p>
+<p>When that exit label was left unbound (bound only under
+<code>#[cfg(feature = "profile")]</code>, so ordinary builds emitted a branch with a
+zeroed rel32 — a no-op), every miss fell through into the profiler
+instead, sampled the class twice back-to-back, crossed the threshold and
+compiled a specialization for <strong>every</strong> class that ever missed. ruby/spec’s
+concurrent-subclasses example compiled ~15,000 <code>Object#should</code> bodies
+(~300 MB) and timed the suite out. Fixed in #1158.</p>
+<h2 id="8-measuring"><a class="header" href="#8-measuring">8. Measuring</a></h2>
+<p>Build with <code>--features jit-log</code>; <code>jit_stats::dump()</code> prints at exit:</p>
+<pre><code>version / salvage stats:
+  class_version incs:                25022
+  recovery attempts (class guard):   ...
+    salvaged (re-resolution ok):     ...
+  recovery attempts (loop guard):    ...
+  recovery attempts (spec guard):    ...
+  recovery attempts (const guard):   15740
+    salvaged:                        10485
+    value-compared sites:            13309
+    fail: cache stale:               ...
+    fail: value changed:             0
+  whole recompiles  class-ver:       ...
+  ...
+</code></pre>
+<p>Read it as: <em>attempts</em> are guard failures that reached a salvage entry,
+<em>salvaged</em> are the ones that kept their code, and the <code>recompiles</code> block
+is what was left over. <code>fail: value changed</code> staying at 0 over a whole
+spec run is the empirical case for the whole mechanism — the constant
+events were real, but never changed a folded value.</p>
+<p>ruby/spec <code>core</code> (2,144 files / 23,034 examples), x86-64. Measured in two
+series, because the base moved in between — do not read across them:</p>
+<p><strong>Salvage, measured against the pre-#1156 base:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>before salvage</th><th>class-version salvage (#1151, #1155)</th><th>+ const-version salvage (#1157)</th></tr>
+</thead>
+<tbody>
+<tr><td>specialized recompiles (class ver)</td><td>90,593</td><td>68</td><td>149</td></tr>
+<tr><td>loop recompiles (class ver)</td><td>12,395</td><td>0</td><td>0</td></tr>
+<tr><td>whole recompiles (const ver)</td><td>4,174</td><td>4,148</td><td>155</td></tr>
+<tr><td>JIT compile time</td><td>22.4 s</td><td>15.6 s</td><td>12.8 s</td></tr>
+<tr><td>peak code emission</td><td>350.7 MB</td><td>327.7 MB</td><td>297.9 MB</td></tr>
+</tbody>
+</table>
+</div>
+<p>Version-guard-driven recompiles across the whole run: <strong>107,220 → 323</strong>.</p>
+<p><strong>The megamorphic gate (§7), measured against current master:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>before #1158</th><th>after #1158</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Object#should</code> whole compiles</td><td>14,945</td><td>30</td></tr>
+<tr><td>JIT compile time</td><td>23.1 s</td><td><strong>0.44 s</strong></td></tr>
+<tr><td>peak code emission</td><td>318.4 MB</td><td><strong>10.6 MB</strong></td></tr>
+</tbody>
+</table>
+</div>
+<p>The gate dominates everything else: it was compiling one body per receiver
+class, which is why its emission dwarfs the recompile traffic salvage
+removes.</p>
+<h2 id="9-if-you-change-this-code"><a class="header" href="#9-if-you-change-this-code">9. If you change this code</a></h2>
+<ul>
+<li>A new event that can change method resolution must bump the class
+version; one that can change constant resolution must bump the constant
+version <strong>and</strong> the right epoch (a name, or the wildcard when there is
+no single name).</li>
+<li>A new compile path must register a salvage record, or its guard
+failures will recompile forever. The whole-method and loop paths do this
+in <code>compile_patch</code> / <code>compile_partial_by_id</code>.</li>
+<li>A new question the compiler bakes in needs a new record and a new tier —
+do not extend an existing map with a differently-shaped invariant.</li>
+<li>Never bind a guard’s miss-exit label inside a <code>cfg</code> block (§7), and keep
+the snapshot side of a version compare a <em>word</em>, never an immediate (§2).</li>
 </ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../design/trace_chain_joins.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/jit_invariants.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../design/arg_forwarding_jit.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../design/bop_redefinition.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -305,11 +478,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../design/trace_chain_joins.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/jit_invariants.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../design/arg_forwarding_jit.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../design/bop_redefinition.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

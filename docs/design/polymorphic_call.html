@@ -1,0 +1,641 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Receiver-polymorphic call sites (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-86c241c2.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-a8d0bf4a.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="polymorphic-call-サイトの最適化--設計メモ"><a class="header" href="#polymorphic-call-サイトの最適化--設計メモ">Polymorphic call サイトの最適化 — 設計メモ</a></h1>
+<p><strong>Kind</strong>: plan(第一歩の <code>nil?</code> 耐性ガードは実装済み・このブランチに同梱。
+一般化はここでの設計判断待ち)</p>
+<p>このメモは、ruby-bench の binarytrees / protoboeuf-encode 調査
+(String#<code>&lt;&lt;</code> インライン化・trailing-splat fast path は #1109 で master 入り)
+の過程で見つかった <strong>レシーバ多相なコールサイトの deopt 問題</strong> について、
+実測・実装済みの第一歩・残された設計空間をまとめたものである。</p>
+<hr>
+<h2 id="1-現状のコールサイト設計とその盲点"><a class="header" href="#1-現状のコールサイト設計とその盲点">1. 現状のコールサイト設計と、その盲点</a></h2>
+<p>JIT のメソッド呼び出しは <strong>monomorphic 前提</strong> で組み立てられている:</p>
+<ol>
+<li>VM がインラインキャッシュを温める(receiver class → FuncId)。</li>
+<li>JIT はキャッシュされた 1 クラスで <strong>レシーバクラスガード</strong> を発行し、
+ガードの内側で FuncId を確定させ、インライン生成器
+(<code>inline_info.get_inline</code>)か直接呼び出しへ落とす。</li>
+<li>ガード失敗は deopt。<code>BinCmp</code> サイトのみ、ミス回数が温まると
+<code>RecompileReason::BecamePolymorphic</code> で「多相対応版」へ再コンパイル
+する経路(Part B)がある。ふつうのメソッド呼び出しにはこれが無く、
+<strong>ガード失敗は永久に毎回 deopt</strong> する。</li>
+</ol>
+<p>盲点は「nil との二相」である。Ruby の慣用句はレシーバが nil かもしれない
+場所でこそメソッドを呼ぶ:</p>
+<pre><code class="language-ruby">return 1 if left.nil?        # left は Array か nil(binarytrees の item_check)
+limit = to unless to.nil?    # to は Numeric か nil(numeric.rb の step)
+step ||= 1
+if by == nil ...             # 同型の == バリアント
+</code></pre>
+<p>このため <code>nil?</code> / <code>== nil</code> サイトは <strong>設計上 50/50 で二相</strong> になり、
+毎回 deopt が観測された。</p>
+<h2 id="2-実測2026-08x86-64-linuxrelease"><a class="header" href="#2-実測2026-08x86-64-linuxrelease">2. 実測(2026-08、x86-64 Linux、release)</a></h2>
+<ul>
+<li>
+<p>binarytrees(#1109 適用後): <code>item_check</code> の <code>left.nil?</code> サイトで
+<strong>1 実行あたり 458 万回の deopt</strong>(<code>profile</code> フィーチャで観測。
+deopt ログは <code>POLYMORPHIC [NilClass]</code>)。</p>
+</li>
+<li>
+<p>マイクロベンチ(2^16 ノードの木 ×40 周、YJIT 比):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>変種</th><th>monoruby(修正前)</th><th>修正後(§3)</th><th>CRuby+YJIT</th></tr>
+</thead>
+<tbody>
+<tr><td><code>left.nil?</code></td><td>353ms</td><td><strong>64ms</strong></td><td>87ms</td></tr>
+<tr><td><code>left</code>(truthiness)</td><td>317ms</td><td>62ms</td><td>90ms</td></tr>
+<tr><td><code>left == nil</code></td><td>885ms</td><td><strong>489ms(未対策)</strong></td><td>193ms</td></tr>
+</tbody>
+</table>
+</div>
+</li>
+<li>
+<p>ベンチ全体: binarytrees 118ms → <strong>100ms</strong>(−15%)。</p>
+</li>
+<li>
+<p><code>== nil</code> が truthiness より 2.8 倍遅いのは、<code>==</code> サイトも同じ
+nil/非 nil 二相 deopt を踏んでいるからで、<strong>未回収の最大候補</strong>。</p>
+</li>
+</ul>
+<h2 id="3-第一歩として試作した-nil-専用の-nil-耐性ガード撤去済み"><a class="header" href="#3-第一歩として試作した-nil-専用の-nil-耐性ガード撤去済み">3. 第一歩として試作した <code>nil?</code> 専用の nil 耐性ガード(撤去済み)</a></h2>
+<blockquote>
+<p><strong>注</strong>: この節の <code>GuardClassOrNil</code> 実装は一度ブランチに入れたが、
+§7 の一般機構(観測クラス集合が単一 native FuncId に収束するサイトの
+<code>GuardClassIn</code>)が <code>nil?</code> サイトも吸収するため、<strong>PR からは撤去した</strong>。
+nil? は現在、集合ガード + 組み込み呼び出しとして扱われる。ガード後に
+値比較 1 命令へ畳む特化(このメモの元の §3 形)は、生成器の
+nil 安全 flag(§5.1)とセットで将来の最適化として残る。§3.3 の
+page 耐性修正だけは、集合ガードも同じ「state 未確定 → cold ブロックに
+Float unbox」経路を踏むため<strong>残している</strong>。以下は設計記録。</p>
+</blockquote>
+<p>このブランチに含まれる(master 未マージ)。構成は 3 点:</p>
+<h3 id="31-guardclassornilasmir--lir--両アーキ-lowering"><a class="header" href="#31-guardclassornilasmir--lir--両アーキ-lowering">3.1 <code>GuardClassOrNil</code>(AsmIR / LIR / 両アーキ lowering)</a></h3>
+<p>「レシーバが nil なら通過、そうでなければ従来のクラスガード」。
+nil ケースは比較 1 回+分岐 1 回で、deopt と違い定常コストがほぼ無い。</p>
+<pre><code>cmp  recv, NIL_VALUE
+jeq  nil_ok
+&lt;従来の guard_class(recv_class), 失敗は deopt&gt;
+nil_ok:
+</code></pre>
+<h3 id="32-フロントエンドのゲートcompile_method_call"><a class="header" href="#32-フロントエンドのゲートcompile_method_call">3.2 フロントエンドのゲート(<code>compile_method_call</code>)</a></h3>
+<p>適用条件(健全性の根拠ごと):</p>
+<ul>
+<li>サイト名が <code>nil?</code>、simple、引数 0。</li>
+<li><code>recv_class != NIL_CLASS</code>(nil 単相なら従来ガードで十分)。</li>
+<li><strong><code>jit_check_call(NIL_CLASS, name)</code> の解決 FuncId が、キャッシュ
+クラスでの解決 FuncId と一致</strong>すること。これが健全性の核で、
+「nil が来ても非 nil が来ても呼ぶべきメソッドは同一」をコンパイル時に
+証明する。直前に発行済みの class version guard が再定義を無効化する。
+<code>NilClass#nil?</code> だけが再定義されていれば一致せず、自動的に従来経路へ
+戻る。第三のクラス(独自 <code>nil?</code> を持つ等)は従来どおり deopt して
+正しくディスパッチされる。</li>
+<li>ガード通過後、<strong>abstract state は refine しない</strong>(レシーバは
+「nil か recv_class」なので、クラスを確定させたら嘘になる)。
+未確定状態の <code>kernel_nil</code> 生成器は <code>recv == nil</code> の値比較
+(<code>is_nil_to_bool</code>)を出すので、これがそのまま両ケースの正解になる。</li>
+</ul>
+<h3 id="33-副作用-page-規律との衝突修正済みただし全面解消ではない"><a class="header" href="#33-副作用-page-規律との衝突修正済みただし全面解消ではない">3.3 副作用: page 規律との衝突(修正済み、ただし全面解消ではない)</a></h3>
+<p>state を refine しないことの下流コスト: <code>to.nil?</code> の後で <code>to</code> を Float
+として使うコード(numeric.rb <code>step</code>)では、Float unbox(ガード付き
+Value→f64)が <strong>cold ブロック(page 1 に out-of-line 発行される基本
+ブロック)内</strong> に現れるようになった。x86-64 バックエンドの多くの
+lowering は「hot(page 0)から呼ばれ、自分の cold スニペットを page 1 に
+置く」前提で <code>assert_eq!(0, get_page())</code> を持っており、ここで abort した
+(<code>numeric_step</code> テストで決定的に再現)。</p>
+<p>クラッシュ経路の <code>float_to_f64</code> / <code>float_val_to_f64</code> は、<code>guard_class</code> の
+fail ラッパが既にやっている二形態(<strong>page 0 なら cold スニペットを
+page 1 へ、page 1 で発行中ならその場に inline 化して飛び越す</strong>)に直して
+解消した。ただし同種の assert は <code>binary_op.rs</code> 等にも十数箇所残って
+おり、「refine しない state を広げる」設計はこの規律と面で衝突する
+(§5.4)。</p>
+<h2 id="4-なぜ-nil-に限定したか"><a class="header" href="#4-なぜ-nil-に限定したか">4. なぜ <code>nil?</code> に限定したか</a></h2>
+<p>仕組み(FuncId 一致検証 + <code>GuardClassOrNil</code>)自体は名前非依存だが、
+ガード通過後に走る <strong>インライン生成器の前提</strong> が問題になる。生成器の
+多くは「ガード済み recv_class のレシーバ」を前提に書かれている
+(例: <code>Hash#[]</code> は <code>as_hash</code> へ直行)。nil が素通りすれば即クラッシュ
+なので、無条件の一般化は生成器全数の nil 安全性監査を要求する。
+<code>kernel_nil</code> は未確定状態で値比較を出すだけなので唯一安全と言い切れた。</p>
+<h2 id="5-設計空間これから決めること"><a class="header" href="#5-設計空間これから決めること">5. 設計空間(これから決めること)</a></h2>
+<h3 id="51-nil-耐性ガードの一般化--最小コストで--nil-を回収する"><a class="header" href="#51-nil-耐性ガードの一般化--最小コストで--nil-を回収する">5.1 nil 耐性ガードの一般化 — 最小コストで <code>== nil</code> を回収する</a></h3>
+<p>適用条件を「名前 = <code>nil?</code>」から次へ広げる:</p>
+<blockquote>
+<p><code>jit_check_call(NIL_CLASS, name) == func_id</code> <strong>かつ</strong>
+(a) <code>func_id</code> にインライン生成器が無い、または
+(b) 生成器が nil 安全(<code>InlineFuncInfo</code> に flag を追加)</p>
+</blockquote>
+<p>(a) が成り立つ場合、通常呼び出しは FuncId 直接ディスパッチなので
+レシーバが nil でも健全(フレーム構築・visibility はクラス非依存)。
+候補: <code>==</code>(NilClass は独自 <code>==</code> を持つため一致しないケースが多い点に
+注意 — 要確認)、<code>is_a?</code> / <code>kind_of?</code>、<code>respond_to?</code>、<code>frozen?</code> など
+Object/Kernel から継承される述語群。<code>left == nil</code> の 885→489ms(§2)が
+最初の回収目標。</p>
+<p>コスト: 小。リスク: 生成器 flag の付け間違い。§3 の機構をそのまま使う。</p>
+<h3 id="52-polymorphic-inline-cachen-way-ディスパッチ-採用方針7-の調査記録を参照"><a class="header" href="#52-polymorphic-inline-cachen-way-ディスパッチ-採用方針7-の調査記録を参照">5.2 Polymorphic Inline Cache(N-way ディスパッチ)→ <strong>採用方針。§7 の調査記録を参照</strong></a></h3>
+<p>一般解。サイトごとに観測クラス列 (class, FuncId) を 2〜4 way まで持ち、
+線形比較チェーンで分岐、全ミスで deopt/再コンパイル。<code>BinCmp</code> の
+Part B(<code>BecamePolymorphic</code> 再コンパイル)を method call 全般へ拡張する
+形が自然で、「初回は monomorphic でコンパイル → ミスが温まったら
+polymorphic 版へ再コンパイル」という既存のポリシーに乗る。</p>
+<p><strong>方針決定(2026-08)</strong>: VM が実行時に polymorphic を検出して
+バイトコードへ書き込む既存機構(<code>opcode_sub</code>)を土台に、
+<code>CallSiteInfo</code> に 4-way 程度の PMC を蓄積し JIT コンパイル時に利用する。
+<code>nil?</code> はこの一般機構で自然に扱える(§7.2)。<code>==</code> など二項演算子命令へ
+の適用可否は §7.3 の調査結果のとおり「検出機構は既にあり有効、
+ただしキャッシュがペア形で置き場所の追加が要る」。</p>
+<p>論点(§7 の調査で一部解決):</p>
+<ul>
+<li><strong>インライン生成器との併用</strong>: way ガード通過後はレシーバクラスが
+確定するので、way ごとに生成器を適用しても ③ の unrefined-state
+問題は起きない。ただし最小実装は「全 way が同一 FuncId のときだけ
+生成器適用(<code>nil?</code> がこれ)、それ以外は way → 直接 FuncId 呼び出し」。</li>
+<li><strong>abstract state</strong>: way ごとに事後状態が異なる。合流で全 way の
+join を取る(≒ Value に落ちる)なら §5.3 の問題に帰着する。
+最小実装はチェーン全体を 1 命令として扱い、結果は Value で合流。</li>
+</ul>
+<h3 id="53-abstract-state-に-union-を持たせるか"><a class="header" href="#53-abstract-state-に-union-を持たせるか">5.3 abstract state に union を持たせるか</a></h3>
+<p>現在の <code>Guarded</code> ラティスは単一クラス(+ Fixnum/Float 系の特例)。
+<code>nil?</code> 対応で「refine しない」を選んだが、<code>recv_class ∪ NilClass</code> の
+ような 2 要素 union を表現できれば、非 nil 側の下流(<code>unless to.nil?</code>
+の then 側など)は分岐条件から <code>recv_class</code> 単相へ <strong>絞り直せる</strong>。
+truthiness 分岐(<code>if x</code> / <code>unless x.nil?</code>)で nil を落とす flow-sensitive
+な絞り込みは、§5.1/5.2 のどちらを選んでも効く直交した改善。ただし
+ラティス拡張は merge/bridge 全体に波及するので、最も工数が大きい。</p>
+<h3 id="54-page-規律の全面解消前提整備"><a class="header" href="#54-page-規律の全面解消前提整備">5.4 page 規律の全面解消(前提整備)</a></h3>
+<p>「cold ブロック内で page-1 スニペットを使う lowering が走り得る」は、
+refine しない state を広げるほど踏みやすくなる。選択肢:</p>
+<ol>
+<li>§3.3 の二形態化を、assert を持つ全 lowering(<code>binary_op.rs</code> ほか
+十数箇所)へ横展開する。機械的だが確実。</li>
+<li>LIR 化(<code>doc/lir.md</code>)の進行に合わせ、cold スニペット配置を encoder
+の責務にして assert 自体を消す。方向としては正しいが待ちが長い。</li>
+</ol>
+<p>§5.1 だけなら影響面は小さい(<code>==</code> 述語群の下流は Float unbox を含み
+にくい)が、§5.2/5.3 をやるなら 1. を先に済ませるべき。</p>
+<h3 id="55-やらないと決めたこと"><a class="header" href="#55-やらないと決めたこと">5.5 やらないと決めたこと</a></h3>
+<ul>
+<li><strong>ガード全廃(値比較のみで nil? を実装)</strong>: 「どのクラスも <code>nil?</code> を
+再定義していない」というグローバル性質が必要で、Kernel を include
+しない BasicObject 系レシーバ(<code>nil?</code> 呼び出しは NoMethodError に
+なるべき)で誤答する。クラスガードは第三クラスの安全網として残す。</li>
+</ul>
+<h2 id="6-提案する順序7-の方針決定で改訂"><a class="header" href="#6-提案する順序7-の方針決定で改訂">6. 提案する順序(§7 の方針決定で改訂)</a></h2>
+<ol>
+<li><strong>VM 駆動 4-way PMC(メソッド呼び出し)</strong> — §7.2 の実装点に沿って
+<code>CallSiteInfo</code> に PMC を蓄積し、JIT が <code>_polymorphic</code> サイトで
+ガードチェーンを発行する。<code>nil?</code> はこの一般機構に吸収され、§3 の
+<code>GuardClassOrNil</code> 特例は「全 way 同一 FuncId の縮退形」として整理
+し直す(または撤去する)。</li>
+<li><strong>§5.4-1 の page 二形態化の横展開</strong> — way 分岐後のコード配置が
+cold 側へ広がるため、PMC より先に済ませるのが安全。</li>
+<li><strong>二項演算子命令へのペア PMC 拡張</strong> — §7.3。<code>== nil</code>
+(現況 489ms vs YJIT 193ms)を計測基準にする。</li>
+</ol>
+<h2 id="7-調査記録-vm-駆動-4-way-pmc-の実装点2026-08"><a class="header" href="#7-調査記録-vm-駆動-4-way-pmc-の実装点2026-08">7. 調査記録: VM 駆動 4-way PMC の実装点(2026-08)</a></h2>
+<h3 id="71-既存の検出機構前提の確認"><a class="header" href="#71-既存の検出機構前提の確認">7.1 既存の検出機構(前提の確認)</a></h3>
+<p>VM は <strong>メソッド呼び出し・二項演算の両方で</strong> polymorphic を実行時検出
+し、バイトコードの <code>opcode_sub</code> バイトに書き込む機構を既に持つ:</p>
+<ul>
+<li><strong>メソッド呼び出し</strong>(<code>vmgen/method_call.rs</code> slow_path):
+インラインキャッシュ(バイトコード内の CACHED_CLASS / VERSION /
+FUNCID、1 エントリ)が populated かつ receiver class 不一致のとき
+<code>opcode_sub = 1</code>。直後に必ず <code>runtime::find_method(vm, globals, callid, recv)</code> が呼ばれ、(class_for_ic, FuncId) を解決してキャッシュを
+再タグ付けする。</li>
+<li><strong>二項演算</strong>(<code>vmgen.rs</code> <code>vm_save_binary_class</code>):
+バイトコード内 IC に (lhs_class, rhs_class) の 1 ペアを保存し、
+どちらかの変化を検出したら <code>opcode_sub = 1</code>。</li>
+</ul>
+<p>TraceIR はどちらも読み取り済みで、<code>BinCmp</code>/<code>BinCmpBr</code>/<code>BinOp</code> は
+<code>polymorphic</code> を <strong>消費している</strong>(単相 → ペアガード +
+recompile-on-miss(Part B)、多相 → ガードなし generic C-call +
+Eq/Ne は即値 fast path(Part C))。一方 <code>TraceIr::MethodCall</code> の
+<code>_polymorphic</code> は <strong>未使用</strong>(<code>compile.rs</code> で <code>_polymorphic: _</code>)。
+つまりメソッド呼び出し側は「検出はあるが JIT が利用していない」状態で、
+PMC 案はまさにこの穴を埋める。</p>
+<h3 id="72-メソッド呼び出し側の実装点"><a class="header" href="#72-メソッド呼び出し側の実装点">7.2 メソッド呼び出し側の実装点</a></h3>
+<ol>
+<li><strong>記録</strong>: <code>runtime::find_method</code> は <code>&amp;mut Globals</code> と <code>CallSiteId</code> を
+受けて解決結果 (cache_class, fid) を計算済みなので、ここで
+<code>CallSiteInfo</code> に固定長 4-way の <code>(ClassId, FuncId)</code> 列を追記するのが
+最小変更。既存の <code>class_for_ic</code>(Bool 統合)と <code>cacheable = false</code>
+(frame-dependent super — class タグ 0 で毎回再解決)の扱いを
+そのまま流用でき、cacheable でないサイトは PMC 対象外にマークする。
+5 クラス目が観測されたら megamorphic フラグ(PMC 打ち切り、JIT は
+ガードなし generic dispatch を選ぶ)。</li>
+<li><strong>消費</strong>: <code>compile_method_call</code> で <code>_polymorphic</code> が真なら、単一
+キャッシュではなく PMC を読み、way ごとの class 比較チェーンを発行:
+<ul>
+<li>way ガード通過後はレシーバクラスが確定するので、既存の
+monomorphic 経路(インライン生成器を含む)を way 内で再利用できる
+余地がある。ただし最小実装は「way → FuncId 直接呼び出し、結果は
+Value で合流」。</li>
+<li><strong>同一 FuncId の way は 1 経路に畳む</strong>。<code>nil?</code> は全 way が
+Kernel#nil? に解決されるため、畳んだ結果が §3 のガードレス値比較と
+一致する — nil? 特例が一般機構の縮退形になる、というのがこの案の
+利点。</li>
+<li>全 way ミス: deopt(+ 観測が増えたら再コンパイル)か、その場で
+generic dispatch へ落とすかは選択。Part B の単調再コンパイル
+不変量(多相化は一方向)に合わせるなら後者。</li>
+</ul>
+</li>
+<li><strong>無効化</strong>: PMC エントリは class version guard の傘の下にある
+(再定義で全サイト再コンパイル)ので、エントリ個別の無効化は不要。</li>
+</ol>
+<h3 id="73-二項演算子命令-ほかへの適用可否"><a class="header" href="#73-二項演算子命令-ほかへの適用可否">7.3 二項演算子命令(<code>==</code> ほか)への適用可否</a></h3>
+<p><strong>有効。ただしキャッシュの形と置き場所が method call と異なる。</strong></p>
+<ul>
+<li>検出(<code>opcode_sub</code>)は §7.1 のとおり既にあり、多相サイトは現在
+「ガードなし generic C-call」へ落ちている。<code>left == nil</code>
+(left: Array/nil 二相)の実測 489ms(YJIT 193ms)の残りコストは
+この generic C-call: Part C の即値 fast path は <strong>両オペランドが
+非 heap</strong> のときだけ効くので、Array 側の呼び出しが毎回
+<code>cmp_eq_values</code>(メソッド解決+実行)を払う。</li>
+<li>binop の IC は (lhs_class, rhs_class) <strong>ペア</strong>で、バイトコード内の
+8 バイト(2×u32)に 1 ペアしか置けない。4-way 化はバイトコード内では
+無理なので、method call と同じくサイド構造に置く。置き場所の候補:
+<ul>
+<li>binop サイトの一部は <code>IseqInfo::callsite_map</code>(bc_pos → CallSiteId)
+で <code>CallSiteInfo</code> に到達できる(polymorphic 分岐が is_func_call
+判定に既に使っている)。ペア PMC を <code>CallSiteInfo</code> に置くなら
+これに乗るが、<strong>全 binop 命令に callsite があるかは未確認</strong>
+(<code>get_callsite_id</code> は Option)。無いサイトには <code>IseqInfo</code> 側に
+bc_pos キーのテーブルを足す。</li>
+<li>記録タイミング: <code>vm_save_binary_class</code> はアセンブラ内でクラス保存
+まで。ペア追記は set_poly 分岐(既に slow path)から Rust ヘルパを
+呼ぶ形になる。generic C ヘルパ(<code>cmp_eq_values</code> 等)は pc を
+受けない規約なので、記録はヘルパ側でなく VM 命令側で行う。</li>
+</ul>
+</li>
+<li>way 特化の価値: 第一段階は「ペアガード → FuncId 直接呼び出し」で
+解決コストを消すだけでよい。第二段階として、組み込みが確定する
+ペアには特化コードの余地がある(例: (Array, NilClass) の <code>==</code> は
+Array#== が組み込みなら定数 false)。どちらが効くかは
+<code>cmp_eq_values</code> の内部コスト内訳(解決 vs 本体実行)を測ってから
+決める。</li>
+</ul>
+<h3 id="74-検証結果-callsite-記録と-poly-検出の全数確認2026-08"><a class="header" href="#74-検証結果-callsite-記録と-poly-検出の全数確認2026-08">7.4 検証結果: callsite 記録と poly 検出の全数確認(2026-08)</a></h3>
+<p><strong>callsite 記録(<code>bytecodegen/encode.rs</code>)</strong>: UnOp(121-124)/
+BinOp(160+)/ Cmp 両形(140-146, 150-156)/ Index(132)/
+StoreIndex(133)は全て <code>new_callsite</code> + <code>new_callsite_map_entry</code> で
+<code>CallSiteId</code> に到達できる。例外は <strong>RescueTEq(157)のみ</strong>(rescue 節
+マッチ専用、常にランタイムヘルパ経由で IC なし — PMC 対象外で問題ない)。
+<code>get_callsite_id</code> が <code>Option</code> なのはこの 1 命令のためで、ペア PMC を
+<code>CallSiteInfo</code> に置く設計は追加テーブルなしで成立する。</p>
+<p><strong>VM の poly 検出(x86_64 / aarch64 でミラーを確認)</strong>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>経路</th><th>保存</th><th><code>opcode_sub</code> 検出</th></tr>
+</thead>
+<tbody>
+<tr><td>binop/cmp generic(<code>vm_generic_binop</code> → <code>vm_save_binary_class</code>)</td><td>✓</td><td>✓</td></tr>
+<tr><td>binop/cmp fixnum fast path(<code>vm_save_binary_integer</code>)</td><td>上書きのみ</td><td>✗(無害 — 下記)</td></tr>
+<tr><td>unop generic(<code>vm_generic_unop</code> → <code>vm_save_lhs_class</code>)</td><td>✓</td><td><strong>✗ 欠落</strong></td></tr>
+<tr><td>unop fixnum fast path(<code>vm_lhs_integer</code>)</td><td>上書きのみ</td><td>✗</td></tr>
+<tr><td>Index / StoreIndex(<code>runtime::get_index</code>/<code>set_index</code> が ClassIdSlot へ無条件代入)</td><td>✓</td><td><strong>✗ 欠落</strong></td></tr>
+<tr><td>メソッド呼び出し slow path</td><td>✓</td><td>✓</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li>binop/cmp fast path の欠落は実質無害: fast path しか通らないサイトは
+単相で、多相サイトは必ず generic を通ってそこで検出される(最大
+1 実行遅れるだけ)。<strong>binop/cmp は現状のまま PMC の前提を満たす</strong>。</li>
+<li><strong>unop の検出欠落 → 実装済み</strong>(このブランチ): <code>vm_save_lhs_class</code> /
+<code>a64_save_lhs_class</code> に <code>vm_save_binary_class</code> と同じ
+「キャッシュ populated かつクラス変化 → <code>opcode_sub = 1</code>」を追加した
+(generic 側のみ、両アーキ)。<code>TraceIr::UnOp</code> にも <code>_polymorphic</code> を
+配線済み(JIT 消費は PMC 本実装で)。</li>
+<li><strong>Index/StoreIndex の検出欠落 → 実装済み</strong>(このブランチ): クラス
+記録をランタイムヘルパから <strong>VM 命令内の機械語へ移した</strong>。binop と
+同じ <code>[pc+8]</code>/<code>[pc+12]</code> レイアウトなので <code>vm_save_binary_class</code> /
+<code>a64_save_binary_class</code> をそのまま流用でき、検出も同時に付く。
+<code>get_index</code> / <code>set_index</code> は <code>ClassIdSlot</code> ポインタ引数(bit 0 に
+is_func_call を折り込むハック)を廃止して素の <code>is_func_call</code> を
+受ける形に単純化した。<code>TraceIr::Index</code> / <code>IndexAssign</code> にも
+<code>_polymorphic</code> を配線済み。Index は binop と違い fixnum fast path を
+持たないため、検出は全実行に効く(遅延なし)。</li>
+</ul>
+<h3 id="75-実装済み-pmc-の記録と-profile-ダンプ2026-08"><a class="header" href="#75-実装済み-pmc-の記録と-profile-ダンプ2026-08">7.5 実装済み: PMC の記録と profile ダンプ(2026-08)</a></h3>
+<p>記録側を実装した(JIT 消費は未着手)。設計:</p>
+<ul>
+<li><strong>格納</strong>: <code>CallSiteInfo::pmc: PolyCache</code>(<code>store.rs</code>)。最大
+<code>PMC_WAYS = 4</code> エントリ <code>(recv, Option&lt;arg&gt;, Option&lt;fid&gt;, count)</code> +
+megamorphic overflow カウンタ。キー形状は
+<strong>MethodCall / UnOp = レシーバのみ、BinOp / Cmp / Index /
+StoreIndex = レシーバ + 第一引数</strong>。</li>
+<li><strong>記録点(すべて slow path のみ、定常状態のコストゼロ)</strong>:
+<ul>
+<li>MethodCall: <code>runtime::find_method</code>(単一エントリキャッシュのミス時に
+呼ばれる)で <code>class_for_ic</code> と解決済み FuncId を記録。
+<code>cacheable = false</code>(frame-dependent super)は記録しない。</li>
+<li>BinOp / Cmp / Index / StoreIndex: <code>vm_save_binary_class</code> /
+<code>a64_save_binary_class</code> の「初回 population」と「poly 遷移」の 2 分岐
+から <code>runtime::pmc_record_binary(vm, globals, pc, old_lhs, old_rhs)</code>
+を呼ぶ。新クラスは直前にバイトコード IC へ書いた値を pc から読み
+戻し、<strong>置き換えられた旧ペアも引数で渡して一緒に記録する</strong>。
+fixnum fast path(<code>vm_save_binary_integer</code>)は IC に無記録で
+スタンプするため、displacement の瞬間がそのペアを PMC に残す唯一の
+機会 — IC は実行とともに変化するので、これを取り逃すと IC を
+通過したクラスが失われる。callsite は
+<code>cfp → iseq → get_pc_index → callsite_map</code> で解決
+(record 分岐のみのコスト)。
+なお「fast path のスタンプが一度も displace されずに終わった」
+サイトはその 1 クラスが PMC に載らないが、IC 自体が生きている —
+<strong>消費側は IC の現内容と PMC の和集合を観測集合として扱う</strong>こと。</li>
+<li>UnOp: 同様に <code>vm_save_lhs_class</code> / <code>a64_save_lhs_class</code> から
+<code>pmc_record_unary</code>(レシーバのみ)。</li>
+</ul>
+</li>
+<li><strong>ダンプ</strong>: <code>--features profile</code> の終了時統計(<code>Store::show_stats</code>)に
+「polymorphic method cache」節を追加。サイト数サマリ
+(recorded / polymorphic / megamorphic)と、slow-path 観測数順の
+多相サイト top 40 を <code>class(/arg)(=resolved-func) xN</code> 形式で表示。
+count は <strong>slow-path 観測数</strong>(fast path は記録しないので呼び出し
+総数ではない)。</li>
+<li>実測例(gem 起動込みの小スクリプト): 3,984 サイト記録・35 多相・
+13 megamorphic。<code>initialize</code> / <code>__builtin_allocate__</code>(overflow 196)や
+Errno 網羅の <code>is_a?</code>(overflow 130)が megamorphic として正しく
+弁別され、<code>nil?</code> は <code>Array=Kernel#nil? | NilClass=Kernel#nil? | …</code> と
+全 way 同一 FuncId が観測できる — §7.2 の「同一 FuncId way の畳み込み」
+の実データがそのまま得られる。</li>
+</ul>
+<h2 id="8-このブランチに含まれる実装"><a class="header" href="#8-このブランチに含まれる実装">8. このブランチに含まれる実装</a></h2>
+<ul>
+<li><code>x86_64: make the Float-unbox guards page-tolerant</code> — §3.3。
+集合ガード(下記)が受け手 state を未確定のまま残すために必要。</li>
+<li>VM 検出の全命令完備(unop / Index / StoreIndex)— §7.4。</li>
+<li>PMC の記録と profile ダンプ — §7.5。</li>
+<li><strong>PMC 消費 v1</strong>: 観測クラス集合が単一 <strong>native</strong> FuncId に収束する
+method call サイトへの <code>GuardClassIn</code>(集合メンバーシップガード)+
+通常呼び出し。FuncId は <code>jit_check_call</code> で再計算し PMC の保存値は
+使わない。iseq ターゲットはレシーバクラス特殊化があるため対象外
+(<code>polymorphic_call</code> テストが検出した制約)。<code>nil?</code> / <code>is_a?</code> /
+<code>frozen?</code> 型の 4-way 多相サイトが deopt ゼロ・ほぼ単相速度になる。</li>
+</ul>
+<p>検証済み: フルスイート green、<code>Weird#is_a?</code> 等の第三クラス・
+オーバーライドは CRuby と一致。</p>
+<h2 id="9-実装済み-クラス非依存-inline-生成器pmc-消費-v22026-08"><a class="header" href="#9-実装済み-クラス非依存-inline-生成器pmc-消費-v22026-08">9. 実装済み: クラス非依存 inline 生成器(PMC 消費 v2、2026-08)</a></h2>
+<p>§8 の v1 は集合ガード通過後を <strong>builtin 呼び出し</strong>に固定していた
+(inline 生成器は単一 <code>recv_class</code> 前提のため全面スキップ)。v2 は
+「生成コードがレシーバクラスに一切依存しない」生成器だけを型で選別し、
+集合ガードの背後でもインライン発火させる。</p>
+<ul>
+<li><strong>契約の型強制</strong>: <code>InlineGenClassIndependent</code>(<code>globals.rs</code>)は
+<code>InlineGen</code> から <code>ClassId</code> / <code>Option&lt;ClassId&gt;</code> 引数を<strong>持たない</strong>
+別型。クラスを参照したくても引数に無いので、契約違反はコンパイル
+エラーになる。<code>InlineFuncInfo::InlineGenClassIndependent</code> variant +
+<code>define_builtin_inline_func_class_independent</code> 登録経路を追加。</li>
+<li><strong>dispatch</strong>(<code>compile_method_call</code>): クラス非依存 variant は
+<code>same_target_set_guarded</code> でも発火。他の variant(<code>InlineGen</code>、
+Float 前提の <code>CFunc_*</code>)は従来どおり集合ガード時スキップ。</li>
+<li><strong>対象(v2 時点)</strong>: <code>Kernel#nil?</code>(値比較のみ)、
+<code>object_id</code> / <code>__id__</code>(<code>Value::id()</code> のみ)、<strong><code>frozen?</code>(新規
+インライン、両アーキ <code>emit_frozen_pred</code>)</strong>。frozen? の述語は
+<code>Value::is_frozen</code> の鏡写し: 即値→true、ヒープ Numeric
+(Bignum/Float/Complex/Rational)→true、他は header FROZEN bit
+(chilled 文字列は bit が落ちているので false)。</li>
+<li><strong>対象外のまま</strong>: <code>is_a?</code> / <code>instance_of?</code> / <code>respond_to?</code> 系は
+静的 recv_class で畳み込む設計なので <code>InlineGen</code> のまま(多相
+サイトでは builtin 呼び出し継続)。動的 ancestor チェック版を書けば
+対象化できるが別段階。</li>
+</ul>
+<p>テスト: <code>polymorphic_class_independent_inline</code>(4-way サイトでの
+nil?/frozen?/object_id、frozen? 述語の全表現アーム、warmup 後の
+<code>frozen?</code> オーバーライドの deopt)。</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/deopt_log.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/gc.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/deopt_log.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/gc.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

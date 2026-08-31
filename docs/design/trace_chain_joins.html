@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>JIT Compiler - monoruby</title>
+        <title>Trace-wide abstract state and chain joins - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-e96d0476.css">
-        <link rel="stylesheet" href="css/chrome-d279d366.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-86c241c2.js";
+            window.path_to_searchindex_js = "../searchindex-86c241c2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a8d0bf4a.js"></script>
+        <script src="../toc-a8d0bf4a.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">monoruby</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
@@ -177,62 +177,204 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <p>monoruby executes bytecode in the VM until code gets hot, then compiles it to specialized machine code. This page is an overview; the detailed documents are <a href="design/jit.html"><code>doc/jit.md</code></a> (stub/bridge code), <a href="design/lir.html"><code>doc/lir.md</code></a> (the low-level IR), <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> (register allocation), and <a href="design/inline.html"><code>doc/inline.md</code></a> (inline builtins).</p>
-<h2 id="when-compilation-triggers"><a class="header" href="#when-compilation-triggers">When compilation triggers</a></h2>
+                        <h1 id="trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack"><a class="header" href="#trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack">Trace-chain joins — one <code>AbstractState</code> for the whole specialization stack</a></h1>
+<p><strong>Kind: design record.</strong> Why the JIT’s abstract state spans every frame of
+the trace being compiled — suspended method callers included — and how the
+merge machinery (join / equiv / bridge), specialized returns, and the
+outer-frame float claims all ride that one chain. This records the design
+as landed and the alternatives that were tried and rejected on the way.</p>
+<p>The observation driving it: <em>joining the frames suspended mid-trace and
+joining the lexical outer scopes are the same operation.</em> Every mechanism
+below is an instance of letting the ordinary state machinery — clone at a
+branch, join at a merge, bridge the difference — do a job that previously
+had a bespoke side channel.</p>
+<h2 id="1-the-chain"><a class="header" href="#1-the-chain">1. The chain</a></h2>
+<p><code>AbstractState</code> holds a <code>Vec&lt;AbstractFrame&gt;</code>, 1:1 with <code>JitContext</code>’s
+specialization stack (<code>stack_frame</code>): the unit root at position 0, the
+innermost (currently compiling) frame last. This is the <em>trace</em> chain,
+not the lexical chain — a specialized method caller like <code>Integer#times</code>
+sits in it even though it is nobody’s lexical outer. Each frame carries
+<code>lexical_outer: Option&lt;usize&gt;</code> (the state-side twin of
+<code>JitStackFrame::outer</code>); dynvar addressing walks those links
+(<code>outer_level</code>), while joins, <code>equiv</code>, and bridges walk every frame of
+the chain regardless of lexical reachability.</p>
+<p>A nested specialized compile enters with the caller’s live chain
+(<code>specialized_compile</code> passes <code>state.frames_cloned()</code> to
+<code>AbstractState::with_chain</code>), so what the callee’s compile believes about
+the outer frames is exactly what this call path believed at the call —
+per branch, not a checkpoint from frame entry.</p>
+<h2 id="2-returns-are-merge-edges"><a class="header" href="#2-returns-are-merge-edges">2. Returns are merge edges</a></h2>
+<p>A plain <code>Ret</code> in a specialized callee is not a terminator; it is an entry
+edge of the caller’s continuation. Each one branches to an outline return
+segment recording the full chain at that return
+(<code>record_return_edge</code>); after the callee’s body is compiled,
+<code>build_return_segments</code> joins the edges’ chains (<code>join_no_alloc</code>) and
+emits, per edge, the bridge from that edge’s state to the join, the
+return-value load, and the actual <code>Ret</code>.</p>
+<p>The bridge is where the kept-constant discipline becomes per-path. A
+caller may keep a <code>C(v)</code> claim on one of its slots across the call (the
+slot unwritten, the constant folded into the callee); a return path on
+which the callee’s subtree gave the claim up meets <code>C ⊔ S → S</code> at the
+join, and that path’s segment emits the literal write
+(chain-addressed <code>StoreDynVarSpecialized</code>) — the <em>surrender write</em> — so
+every resuming path arrives with the slot current. A path that kept the
+claim writes nothing. Before this, keeping a constant required the claim
+to survive <em>every</em> path or be given up everywhere.</p>
+<h2 id="3-the-resume-asymmetry"><a class="header" href="#3-the-resume-asymmetry">3. The resume asymmetry</a></h2>
+<p>When <code>specialized_compile</code> returns, the caller resumes from the join of
+the return-path chains — with one deliberate asymmetry, learned by
+bisection (see §7):</p>
 <ul>
-<li><strong>Method JIT</strong> — after ≥ 20 calls (<code>COUNT_START_COMPILE</code>; 5 in test mode)</li>
-<li><strong>Loop JIT</strong> — after ≥ 100 iterations of a loop (<code>COUNT_LOOP_START_COMPILE</code>; 15 in test mode), compiling the enclosing method from the loop entry</li>
+<li><strong>Outer levels</strong> (everything below the caller) take the joined chains
+whole. Their own-timeline bookkeeping is not consumed here; each
+becomes “the resuming level” only at its own caller’s resume, where
+this same rule applies.</li>
+<li><strong>The caller level</strong> keeps the frame it parked at the call (its pc,
+liveness, hints, and invariant flags belong to its own compile
+timeline) and overlays only the slot claims the join validated
+(<code>overlay_kept_constants</code>): kept <code>C</code>s (sound because every return path
+either held the claim or emitted its surrender write), spill-homed
+<code>Sf(Float)</code> promotions the subtree made, and the monotone
+<code>subtree_float_read</code> mark bits.</li>
 </ul>
-<p>Each function starts with a small <em>wrapper</em> that decrements a counter and falls through to the VM until the counter expires, then triggers compilation and patches itself.</p>
-<h2 id="ir-pipeline"><a class="header" href="#ir-pipeline">IR pipeline</a></h2>
-<pre><code>bytecode ──abstract interpretation──▶ TraceIR ──▶ AsmIR ──▶ LIR ──▶ machine code (monoasm)
-                (type feedback from inline caches)        (per-arch encoder)
-</code></pre>
+<p>If the callee compiled <strong>no</strong> plain <code>Ret</code> (every path raises, breaks, or
+returns non-locally), the caller’s continuation is unreachable on
+compiled paths. The resume state is then rebuilt from a copy of the
+call’s own entry chain, re-widened by the callee-era delta of the
+<code>widened_outer_log</code>. Any claim that placeholder still carries is
+vacuous — no execution arrives through it — and a later merge’s claims
+are established by its <em>reachable</em> entries’ bridges.</p>
+<h2 id="4-invariants-travel-lexically-on-the-live-chain"><a class="header" href="#4-invariants-travel-lexically-on-the-live-chain">4. Invariants travel lexically on the live chain</a></h2>
+<p>The frame-chain no-capture invariant (<code>no_capture_guard</code>, licensing
+static chain addressing) is maintained on the live chain by a lexical
+walk: a call that may capture unsets it up the lexical links
+(<code>unset_lexical_no_capture_guard</code>), and the capture guard emitted after
+the call re-proves it up the same links
+(<code>set_lexical_no_capture_guard</code>) — sound because
+<code>branch_if_captured</code>‘s meta check also catches an ancestor
+<code>move_frame_to_heap</code> (a captured ancestor tombstones the frame). The
+first cut unset the invariant on <em>every</em> chain frame but re-proved only
+the innermost, which one-way-ratcheted the outer frames’ invariants
+false and silently degraded every chain-addressed load behind them back
+to the generic walk — found by instruction-count probes, +22% on the
+block-read benchmarks.</p>
+<h2 id="5-outer-float-claims-as-ordinary-state"><a class="header" href="#5-outer-float-claims-as-ordinary-state">5. Outer-float claims as ordinary state</a></h2>
+<p>The outer-frame float roadmap (write-through keeps, store-driven <code>S→Sf</code>
+promotion with spill homes, home-directed reads, home-aliased bare-<code>F</code>
+reads, and loop-entry adoption) originally kept several side channels on
+the parked frame copies. Each has since become ordinary state:</p>
 <ul>
-<li><strong>TraceIR</strong> — bytecode annotated with type information gathered from the VM tier’s inline caches.</li>
-<li><strong>AsmIR</strong> (<code>AsmInst</code>) — arch-neutral, register-allocated assembly IR produced by an abstract interpreter that tracks, per slot, whether a value lives on the stack, in a floating-point register (unboxed <code>f64</code>), both, or is a compile-time constant (<code>LinkMode</code>).</li>
-<li><strong>LIR</strong> (<code>LInst</code>) — arch-neutral machine-level ops with offsets and labels resolved; the single seam where bytes are emitted. Each architecture implements one <code>encode_linst</code> (see <a href="aarch64-backend.html">aarch64 Backend</a>).</li>
+<li><strong>Read decisions</strong> consult the live chain (<code>outer_sf_float</code>,
+<code>outer_no_capture_guard</code> on <code>AbstractState</code>).</li>
+<li><strong>Float-read marks</strong> (stage A: an inlined callee consumed an outer
+slot’s value as a raw f64) land on the owner’s frame <em>in the state</em>
+(<code>mark_outer_float_read</code>) and travel like any monotone hint — ORed
+through joins, carried by return chains, merged by the resume overlay.</li>
+<li><strong>Loop-entry adoption</strong> (stage C) reads the marks off the loop’s
+back-edge state at the merge, minus what the incoming state already
+had; the loop analysis exports only its <em>vetoes</em> (the claim barrier /
+generic-yield poison and the outer widens its walk performed). The
+adopted <code>Sf(Float)</code> binds on the live loop-entry state; its scope is
+handled by the joins themselves — a path bypassing the loop head meets
+the claim back to <code>S</code> — so no revert machinery exists.</li>
 </ul>
-<h2 id="specialization-and-inline-caches"><a class="header" href="#specialization-and-inline-caches">Specialization and inline caches</a></h2>
-<p>Compiled code is specialized <strong>per receiver class</strong>. The method entry is a chain of self-class guard stubs: each guard tests the receiver’s class and jumps to the machine code compiled for that class; a miss falls through to the next guard or to the VM. Method calls inside JIT code are resolved through inline caches and guarded by a <strong>class-version</strong> check, so redefining a method invalidates dependent code. Small hot builtins (<code>Array#[]</code>, <code>Integer</code> arithmetic, <code>Math.sqrt</code>, <code>Object#is_a?</code>, <code>Struct</code> accessors, <code>Class#new</code>, <code>Fiber.yield</code>, …) are inlined directly by generator functions that can both consult the abstract state (folding results at compile time when types are proven) and emit code; a failed inline attempt rolls back cleanly and falls back to a normal call. Monomorphic methods can additionally be <strong>specialized inline</strong> — the callee’s frame is inlined into the caller.</p>
-<h2 id="deoptimization-and-recompilation"><a class="header" href="#deoptimization-and-recompilation">Deoptimization and recompilation</a></h2>
-<p>JIT code is speculative. Guards — receiver class, class version, array type, frozen state, fixnum overflow, basic-operator (BOP) redefinition, frame capture — branch to <strong>side exits</strong> that write register-resident values back to the frame and resume in the VM at the equivalent program point. Repeated deopts trigger <strong>recompilation</strong> with the newly observed classes (e.g. polymorphic call sites, <code>method_missing</code> dispatch, newly resolved constants/ivars). Deopt logging is available with the <code>deopt</code> Cargo feature, recompile/deopt statistics with <code>profile</code>.</p>
-<h2 id="register-allocation"><a class="header" href="#register-allocation">Register allocation</a></h2>
+<h2 id="6-what-the-chain-wide-join-subsumed"><a class="header" href="#6-what-the-chain-wide-join-subsumed">6. What the chain-wide join subsumed</a></h2>
+<p><code>converge_block_entry</code> — a probe fixpoint that compiled a yielded block
+into a throwaway context to discover which outer constants it gives up,
+treating “this block may be entered again” as a back edge — was deleted
+outright. Every re-entry path is a join the chain already covers:</p>
 <ul>
-<li><strong>Floating point</strong> — virtual FP registers (<code>VirtFPReg</code>) allocated greedily over the physical pool (14 xmm registers on x86-64), with automatic <strong>spill-to-stack</strong> when the pool is exhausted; loop entries specialize float-typed slots so hot numeric loops keep values unboxed in registers.</li>
-<li><strong>General purpose</strong> — a per-basic-block local GP register allocator keeps boxed values (notably Fixnums) in a small pool of scratch registers within a block, eliding redundant fixnum guards, and flushes the pool at calls and GC safepoints (pool registers are not GC roots).</li>
+<li>a yield inside the compiling unit’s own loop demotes outer <code>C</code>s at
+that loop’s back-edge join (<code>analyse_backedge_fixpoint</code> joins every
+frame of the chain);</li>
+<li>straight-line repeated yields thread the widen through the live chain
+from one yield to the next;</li>
+<li>a re-entry through a loop <em>outside</em> the chain can only be a generic
+yield, where the caller’s <code>forget_constants</code> bet-confirmation drops
+every claim.</li>
 </ul>
-<p>The long-form design discussion — separating type inference from placement, the retirement of the dedicated accumulator register, and measured results — is in <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> and <a href="design/lir.html"><code>doc/lir.md</code></a>.</p>
-<h2 id="argument-forwarding-d1"><a class="header" href="#argument-forwarding-d1">Argument forwarding (D1)</a></h2>
-<p><code>def f(...)</code> forwarding is compiled as an opaque pipe: for simple callees the rest-Array / keyword-Hash allocation is elided entirely and arguments are copied (or lazily deferred) straight from the caller’s frame, with deopt-safe lazy materialization if a side exit or frame capture ever needs the real objects. See <a href="design/arg_forwarding_jit.html"><code>doc/arg_forwarding_jit.md</code></a>.</p>
-<h2 id="observing-the-jit"><a class="header" href="#observing-the-jit">Observing the JIT</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Cargo feature</th><th>Output</th></tr>
-</thead>
-<tbody>
-<tr><td><code>dump-bc</code> / <code>emit-bc</code></td><td>bytecode</td></tr>
-<tr><td><code>dump-traceir</code></td><td>TraceIR</td></tr>
-<tr><td><code>emit-asm</code></td><td>generated assembly</td></tr>
-<tr><td><code>jit-log</code> / <code>jit-debug</code></td><td>compilation events / detailed debug</td></tr>
-<tr><td><code>deopt</code></td><td>deoptimization log</td></tr>
-<tr><td><code>profile</code></td><td>deopt &amp; recompile statistics</td></tr>
-<tr><td><code>perf</code></td><td>perf-compatible symbol maps</td></tr>
-</tbody>
-</table>
-</div>
-<p>The JIT is always built in; disable it at runtime with <code>--no-jit</code>. See <a href="https://github.com/sisshiki1969/monoruby/wiki/Build-options-for-performance-tuning">Build options for performance tuning</a> for example output.</p>
+<p>With it went the last cross-frame <em>readers</em> of the parked copies’
+constant claims (<code>outer_const_count</code>, <code>adopt_outer_widenings</code>,
+<code>lost_constants_of</code>) — and one probe compile per specialized yield.</p>
+<h2 id="7-what-the-parked-copy-still-is"><a class="header" href="#7-what-the-parked-copy-still-is">7. What the parked copy still is</a></h2>
+<p><code>JitStackFrame.abstract_state</code> — the frame a compile parks when it
+suspends for a nested compile — is no longer a truth channel for
+cross-frame claims. Its one remaining job is <strong>the suspended frame’s own
+resume record</strong>: the caller level resumes from it (§3), and subtree
+events that must reach that record do so under strict monotone rules —
+widens (<code>widen_outer_at_pos</code>, dual-written with the live chain and
+logged) and capture unsets.</p>
+<p>The two roles that outlived the join unification were retired by the
+<strong>frame-global home ledger</strong> (<code>JitStackFrame::spill_home_watermark</code>). A
+persistent raw-f64 home id is a physical resource — a stack slot in the
+owner’s frame, baked into callee code as an address — not a per-path
+belief, so its id space cannot live in the per-path-cloned state; the
+parked copy had provided it by accident of being one-per-frame. The
+ledger is context-side (one per frame, never cloned per branch; analysis
+clones inherit the mark and their bumps die with them), promotions and
+adoptions issue <code>max(ledger, the allocating path's file length)</code> and
+bind on the live chain only, the stage-2 gate reads the live chain, and
+on resume every frame’s file is grown to its ledger mark. That growth —
+together with capping the allocator’s vacant-pick and demote-victim
+phases at the physical pool — closes a reuse hazard the parked scheme
+left open: spill-resident values are not saved across calls, and callee
+code that established a home keeps writing it at runtime, so a home id
+that went vacant must never be re-issued to a transient.</p>
+<p>Never publish a nested compile’s view of a frame <em>into</em> its parked slot:
+that replaces the state the suspended frame will resume from with a view
+taken at a different program point, in a different frame’s terms — three
+levels of nested blocks segfaulted in generated code when this was
+tried.</p>
+<h2 id="8-rejected-alternatives"><a class="header" href="#8-rejected-alternatives">8. Rejected alternatives</a></h2>
+<ul>
+<li><strong>Full-chain replacement at resume.</strong> Replacing the caller level with
+the callee’s joined view of it broke real code (<code>Integer#downto</code>
+resumed a <code>C(0)</code> where the parked frame held a runtime value;
+<code>Array#permutation</code> read <code>nil</code>). Bisection modes that kept the parked
+caller level and overlaid only validated claims passed — hence §3’s
+asymmetry. The underlying reason: <code>AbstractFrame</code>/<code>SlotState</code>
+interleave slot <em>claims</em> with own-timeline metadata (pc, liveness,
+guard hints, the FPR allocator), and only the claims are validated by
+the return join.</li>
+<li><strong>Marks inside the <code>IsUsed</code> lattice.</strong> Folding the stage-A float-read
+marks into the existing use/type lattice perturbed tuned owner
+policies (+7% on mandelbrot); the marks are a separate bitvec with a
+single consumer instead.</li>
+<li><strong>Invariants restored from the parked copy at nested entry.</strong> Worked,
+but treated the symptom of the one-way ratchet (§4); replaced by the
+lexical unset/re-prove pair, after which the restoration was removed.</li>
+<li><strong>Capture events as an adoption barrier.</strong> Not needed: the runtime
+capture guard (with its tombstone check, §4) already covers ancestor
+promotions, so stage-C adoption gates on the invariant rather than
+poisoning the whole loop.</li>
+<li><strong>Dead outer-home store elimination.</strong> A whole-tree use scan at
+resolve time (collect every home the finished compile reads — chain
+reads, the owner’s own references, exit write-backs — and elide
+<code>StoreOuterFprHomeF</code>s to homes read nowhere) was built and probed,
+and found no targets: a store to a <em>constant</em> never exists (the
+kept-<code>C</code> machinery folds the claim and surrenders per return path,
+§2), and every surviving non-constant home had migrated to a <strong>pool</strong>
+register by codegen time — the owner, once resumed as the innermost
+frame, re-places <code>Sf(spill)</code> claims into the pool at its own merges
+(<code>allow_fpr</code>), and pool-home refreshes already ride the save-set
+channel, whose shrunk-set case elides them. This held even under
+<code>stress-spill-pool</code> (67 spill promotions, zero spill stores emitted,
+across the outer-float suite). Pool-home dead-store analysis would
+need binding-sensitive (per-store, flow-sensitive) liveness — pool
+ids are reused constantly, so id-level liveness says nothing — and
+was not pursued. The machinery was reverted; this note is what it
+bought.</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="value-representation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/regalloc_separation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="garbage-collection.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../design/inline.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -242,11 +384,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="value-representation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/regalloc_separation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="garbage-collection.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../design/inline.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -266,13 +408,13 @@
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-09f2665d.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-609e4cb8.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

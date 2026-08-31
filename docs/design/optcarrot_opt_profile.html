@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Thread / Fiber state transition diagrams (Japanese) - monoruby</title>
+        <title>optcarrot --opt profile (Japanese) - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -177,199 +177,275 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="green-thread-スケジューラ-thread--fiber-の状態遷移図"><a class="header" href="#green-thread-スケジューラ-thread--fiber-の状態遷移図">Green thread スケジューラ: Thread / Fiber の状態遷移図</a></h1>
-<p><code>doc/threads.md</code> の補足。スケジューラ(<code>src/scheduler.rs</code>)が管理する
-<code>ThreadState</code>(<code>src/value/rvalue/thread.rs</code>)と、Fiber の
-<code>FiberState</code>(<code>src/executor.rs</code> の <code>fiber_state()</code>)の状態遷移をまとめる。</p>
-<h2 id="1-thread-の状態遷移"><a class="header" href="#1-thread-の状態遷移">1. Thread の状態遷移</a></h2>
-<p><code>ThreadState</code> は 6 状態:</p>
-<pre><code>Created | Runnable | Sleeping | Joining | IoWaiting | Dead
-</code></pre>
-<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="thread_state_diagram.svg" alt="Thread 状態遷移図"><span class="img-wrapper"><img src="thread_state_diagram.svg" alt="Thread 状態遷移図"></span></label></p>
-<pre><code class="language-mermaid">stateDiagram-v2
-    [*] --&gt; Created : Thread.new / start / fork&lt;br&gt;spawn() が registry と ready キューに登録
-
-    Created --&gt; Runnable : dispatch()&lt;br&gt;スタック確保 (initialize_stack) →&lt;br&gt;thread_invoker で本体起動
-    Created --&gt; Dead : 起動前に #kill / #raise が queue 済み&lt;br&gt;本体を実行せず finalize_unstarted()
-
-    Runnable --&gt; Sleeping : Kernel#sleep / Thread.stop&lt;br&gt;(sleepers へ登録、deadline は Option)
-    Runnable --&gt; Joining : Thread#join / #value&lt;br&gt;(対象の joiners へ登録、timeout は sleepers 併用)
-    Runnable --&gt; IoWaiting : fd 待ち wait_fd / wait_fds&lt;br&gt;(io_waiters へ登録、deadline は sleepers 併用)
-    Runnable --&gt; Runnable : Thread.pass / タイマ・プリエンプション&lt;br&gt;(ready 末尾へ回る)&lt;br&gt;park_permit 消費時は park が即時復帰
-    Runnable --&gt; Dead : 本体 return / 未捕捉例外 /&lt;br&gt;kill unwind 到達 → finalize()
-
-    Sleeping --&gt; Runnable : ① #wakeup / #run&lt;br&gt;② deadline 経過 (wake_due_sleepers)&lt;br&gt;③ #kill / #raise (wake_worthy な割り込み)
-    Joining --&gt; Runnable : ① join 対象の死亡 (finalize_common が joiners を起床)&lt;br&gt;② timeout 経過&lt;br&gt;③ #kill / #raise
-    IoWaiting --&gt; Runnable : ① fd ready / HUP / error (poll_io_waiters)&lt;br&gt;② deadline 経過&lt;br&gt;③ #kill / #raise
-
-    Dead --&gt; [*] : registry から prune&lt;br&gt;(ユーザ参照が残る限りオブジェクトは生存)
-</code></pre>
-<h3 id="遷移の詳細とコード対応"><a class="header" href="#遷移の詳細とコード対応">遷移の詳細とコード対応</a></h3>
+                        <h1 id="optcarrot---opt-プロファイル調査と高速化ロードマップ"><a class="header" href="#optcarrot---opt-プロファイル調査と高速化ロードマップ">optcarrot <code>--opt</code> プロファイル調査と高速化ロードマップ</a></h1>
+<p><code>bin/optcarrot --opt</code>（<code>--opt-ppu=all --opt-cpu=all</code>）を対象に、どこで時間を
+使っているかを <code>perf</code> と <code>--features profile</code> で測り、追加すべき最適化を洗い
+出した記録。調査日 2026-07-31 / 2026-08-01。調査の出発点は <code>ba8e5599</code>、
+最終的な A/B は <code>111d1895</code>（PR のマージベース）に対して取り直したもの。</p>
+<p>計測機は x86-64 / Linux。数値は <code>--frames 3000</code> を 9 回走らせた中央値
+（<code>--frames 180</code> の既定計測は分散が大きいので、定常状態の比較にはフレーム数を
+増やしたものを使う）。</p>
+<hr>
+<h2 id="1-出発点"><a class="header" href="#1-出発点">1. 出発点</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>遷移</th><th>トリガ</th><th>実装箇所 (<code>scheduler.rs</code>)</th></tr>
+<tr><th>実装</th><th style="text-align: right">fps (<code>--opt</code>, 180 frames)</th></tr>
 </thead>
 <tbody>
-<tr><td><code>[*] → Created</code></td><td><code>Thread.new</code> が <code>ThreadInner::new</code> を生成、<code>spawn()</code> が <code>threads</code> + <code>ready</code> に登録</td><td><code>spawn</code></td></tr>
-<tr><td><code>Created → Runnable</code></td><td>ready から取り出され <code>dispatch()</code> が初回起動(スタック確保 → <code>thread_invoker</code>)</td><td><code>dispatch</code> の <code>Entry::Invoke</code></td></tr>
-<tr><td><code>Created → Dead</code></td><td>起動前に <code>#kill</code> / <code>#raise</code> が pending に積まれていた場合、本体を実行せず死亡(CRuby 意味論)。raise は終了例外として記録</td><td><code>dispatch</code> の <code>Entry::Skip</code> → <code>finalize_unstarted</code></td></tr>
-<tr><td><code>Runnable → Sleeping</code></td><td><code>Kernel#sleep</code> / <code>Thread.stop</code>。deadline <code>None</code> = <code>#wakeup</code> されるまで</td><td><code>sleep</code></td></tr>
-<tr><td><code>Runnable → Joining</code></td><td><code>Thread#join</code> / <code>#value</code>。対象の <code>joiners</code> に登録。timeout 付きなら <code>sleepers</code> にも登録</td><td><code>join</code></td></tr>
-<tr><td><code>Runnable → IoWaiting</code></td><td>ブロックする IO / <code>IO.select</code>。fd ごとに <code>io_waiters</code> へ登録(1 スレッドが複数 fd を待てる)</td><td><code>wait_fd</code> / <code>wait_fds</code></td></tr>
-<tr><td><code>Runnable → Runnable</code></td><td><code>Thread.pass</code>(自発)、またはプリエンプション(<code>preempt.rs</code> のタイマが 10 ms ごとに poll フラグを立て、次のセーフポイントで <code>scheduler::pass</code> 相当)。ready 末尾へ</td><td><code>pass</code></td></tr>
-<tr><td><code>Runnable → Dead</code></td><td>本体の正常終了(<code>result</code> 記録)、未捕捉例外(<code>exception</code> 記録)、または kill unwind のスレッド root 到達(クリーンな死)</td><td><code>dispatch</code> 復帰後の <code>finalize</code></td></tr>
-<tr><td><code>Sleeping → Runnable</code></td><td><code>#wakeup</code> / <code>#run</code>(park 中でなければ <code>park_permit</code> を立てるだけで状態遷移なし)/ deadline 経過 / wake に値する割り込み</td><td><code>wakeup_inner</code> / <code>wake_due_sleepers</code> / <code>interrupt</code></td></tr>
-<tr><td><code>Joining → Runnable</code></td><td>join 対象の死亡(<code>finalize_common</code> が <code>joiners</code> を一括起床)/ timeout / 割り込み</td><td><code>finalize_common</code> / <code>wake_due_sleepers</code> / <code>interrupt</code></td></tr>
-<tr><td><code>IoWaiting → Runnable</code></td><td><code>poll(2)</code> で fd が ready(HUP / error 含む — 起床側が再試行して実 errno を得る)/ deadline / 割り込み</td><td><code>poll_io_waiters</code> / <code>wake_due_sleepers</code> / <code>interrupt</code></td></tr>
-<tr><td><code>Dead → (prune)</code></td><td><code>finalize_common</code> が state を <code>Dead</code> にし、joiners を起こし、<code>threads</code> registry から除去</td><td><code>finalize_common</code></td></tr>
+<tr><td>CRuby 4.0.1</td><td style="text-align: right">約 114</td></tr>
+<tr><td>CRuby 4.0.1 + YJIT</td><td style="text-align: right">約 153</td></tr>
+<tr><td>monoruby (<code>ba8e5599</code>)</td><td style="text-align: right">約 460〜494 (3000 frames 中央値)</td></tr>
+<tr><td>monoruby (<code>111d1895</code>)</td><td style="text-align: right">486.5 (3000 frames 中央値)</td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="注意点"><a class="header" href="#注意点">注意点</a></h3>
-<ul>
-<li><strong>「Running」という状態はない</strong>。<code>Runnable</code> は「ready キューにいる」と
-「現在実行中(<code>Scheduler::current</code>)」の両方を含む。</li>
-<li><strong>main スレッドは ready キューに入らない</strong>。main が <code>Runnable</code> に戻ることが
-<code>scheduler_loop</code> の終了条件で、ループが return して main が再開する。
-各起床パス(<code>wakeup_inner</code> / <code>wake_due_sleepers</code> / <code>poll_io_waiters</code> /
-<code>interrupt</code> / <code>finalize_common</code>)はすべて <code>Some(t) != main</code> を確認してから
-ready に push する。</li>
-<li><strong>割り込みによる起床は「配送」ではない</strong>。<code>#kill</code> / <code>#raise</code> は <code>pending</code>
-キューに積み、対象が park 中(<code>Sleeping | Joining | IoWaiting</code>)かつ
-マスクが全て <code>:never</code> でなければ <code>Runnable</code> に戻すだけ。実際の配送は
-<code>dispatch</code> の再開時(<code>Entry::ResumeInterrupt</code>: エラーをセットして 0 で
-resume → park していた <code>park_switch</code> が <code>Err</code> を返す)か、main なら
-<code>take_main_pending</code> で行われ、<code>Thread.handle_interrupt</code> のマスクに従う。</li>
-<li><strong>park_permit</strong>(図中の self-loop): <em>running</em> な対象への
-<code>Thread#__wakeup_permit</code>(Mutex / Queue / ConditionVariable が使用)は
-<code>park_permit</code> を立て、対象の次の park は状態遷移せず即時復帰する。
-プリエンプション下の lost-wakeup 窓を塞ぐ(<code>doc/threads.md</code> §5)。</li>
-<li><strong>タイムアウト付き join / IO 待ちは二重登録</strong>される(<code>joiners</code>/<code>io_waiters</code> と
-<code>sleepers</code> の両方)。どちらか一方の経路で起きたら他方のエントリは stale になり、
-<code>wake_due_sleepers</code> / <code>prune_io_waiters</code> が状態を再検査して破棄する。
-スプリアス起床は常に許容され、呼び出し元のループが条件を再検査する。</li>
-<li><strong><code>Thread.allocate</code> の shell</strong>(<code>Thread::Waiter</code> 等)は最初から <code>Dead</code> で
-生成され、スケジュールされない。</li>
-</ul>
-<h3 id="threadstatus-との対応"><a class="header" href="#threadstatus-との対応"><code>Thread#status</code> との対応</a></h3>
+<h2 id="2-時間の内訳"><a class="header" href="#2-時間の内訳">2. 時間の内訳</a></h2>
+<p><code>perf record -F 4999 -g --call-graph=fp</code> の結果を大づかみに分類すると:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th><code>ThreadState</code></th><th><code>#status</code></th><th><code>#alive?</code></th><th><code>#stop?</code></th></tr>
+<tr><th>区分</th><th style="text-align: right">割合</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Created</code> / <code>Runnable</code></td><td><code>"run"</code></td><td>true</td><td>false</td></tr>
-<tr><td><code>Sleeping</code> / <code>Joining</code> / <code>IoWaiting</code></td><td><code>"sleep"</code></td><td>true</td><td>true</td></tr>
-<tr><td><code>Dead</code>(正常終了 / kill)</td><td><code>false</code></td><td>false</td><td>true</td></tr>
-<tr><td><code>Dead</code>(例外終了)</td><td><code>nil</code></td><td>false</td><td>true</td></tr>
+<tr><td>JIT が吐いたコード本体</td><td style="text-align: right">約 40 %</td></tr>
+<tr><td><strong>JIT コードから呼び出す Rust 側 builtin / runtime</strong></td><td style="text-align: right"><strong>約 30 %</strong></td></tr>
+<tr><td>JIT コンパイル自身（<code>AbstractState::join</code> ほか）</td><td style="text-align: right">約 8 %</td></tr>
+<tr><td>GC / malloc / memmove</td><td style="text-align: right">約 2 %</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="2-fiber-の状態遷移"><a class="header" href="#2-fiber-の状態遷移">2. Fiber の状態遷移</a></h2>
-<p>Fiber の状態は専用フィールドではなく <code>Executor::rsp_save</code> から導出される
-(<code>fiber_state()</code>):</p>
-<pre><code>rsp_save == None  → Created
-rsp_save == -1    → Terminated
-それ以外          → Suspended
-</code></pre>
-<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="fiber_state_diagram.svg" alt="Fiber 状態遷移図"><span class="img-wrapper"><img src="fiber_state_diagram.svg" alt="Fiber 状態遷移図"></span></label></p>
-<pre><code class="language-mermaid">stateDiagram-v2
-    [*] --&gt; Created : Fiber.new (rsp_save = None)
-
-    Created --&gt; Suspended : #resume / Enumerator#next 等&lt;br&gt;invoke_fiber: スタック確保 → fiber_invoker で本体起動
-    Suspended --&gt; Suspended : Fiber.yield で親へ復帰 ⇄&lt;br&gt;#resume (resume_fiber) で再開
-    Suspended --&gt; Terminated : 本体 return / 例外&lt;br&gt;invoker エピローグが rsp_save = -1 を書き&lt;br&gt;parent の rsp_save へ復帰
-
-    Terminated --&gt; [*]
-
-    note right of Created
-        Terminated への #resume は
-        FiberError
-        (Enumerator 経路では StopIteration)
-    end note
-
-    note right of Suspended
-        「Running」は rsp_save では表現されない —
-        実行中の Fiber も Suspended と読める。
-        current / 祖先 (parent_fiber チェーン) への
-        #resume は double resume として FiberError
-    end note
-</code></pre>
-<h3 id="遷移の詳細とコード対応-1"><a class="header" href="#遷移の詳細とコード対応-1">遷移の詳細とコード対応</a></h3>
+<p>つまり「JIT の出すコードが遅い」のではなく、<strong>ホットループが 1 命令ごとに
+Rust の関数呼び出しへ抜けている</strong>のが最大の損失だった。individual な内訳
+（改善前）:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>遷移</th><th>トリガ</th><th>実装箇所</th></tr>
+<tr><th>シンボル</th><th style="text-align: right">自己時間</th><th>呼び出し元</th></tr>
 </thead>
 <tbody>
-<tr><td><code>[*] → Created</code></td><td><code>Fiber.new</code>(<code>FiberInner::new</code>、スタック未確保)</td><td><code>value/rvalue/fiber.rs</code></td></tr>
-<tr><td><code>Created → Suspended</code>(実行開始)</td><td>初回 <code>#resume</code> / <code>Enumerator#next</code> / Generator 起動。<code>initialize()</code> が 256 KiB スタックを確保し <code>rsp_save</code> にスタックトップを書く → <code>fiber_invoker</code></td><td><code>Fiber::invoke_fiber</code> / <code>invoke_fiber_with_self</code></td></tr>
-<tr><td><code>Suspended ⇄ Suspended</code></td><td><code>Fiber.yield</code>(<code>yield_fiber</code>: 自分の <code>rsp_save</code> に現コンテキストを保存し <code>parent_fiber</code> へ switch)と <code>#resume</code>(<code>resume_fiber</code>: 逆方向)</td><td><code>executor.rs</code> / <code>codegen/arch/*/invoker.rs</code></td></tr>
-<tr><td><code>Suspended → Terminated</code></td><td>本体の return または例外。<code>fiber_invoker</code> のエピローグが <code>rsp_save = -1</code> を書いて parent へ復帰</td><td><code>codegen/arch/*/invoker.rs</code></td></tr>
-<tr><td><code>Terminated → (エラー)</code></td><td><code>#resume</code> は <code>FiberError</code>(“attempt to resume a terminated fiber”)、Enumerator / Generator 経路は <code>StopIteration</code></td><td><code>Fiber::resume</code> / <code>enum_yield_values</code> / <code>generator_yield_values</code></td></tr>
+<tr><td><code>Array::push</code> (← <code>ary_shl</code>)</td><td style="text-align: right">10.0 %</td><td><code>@output_pixels &lt;&lt; …</code> ×8 連鎖</td></tr>
+<tr><td><code>builtins::numeric::integer::index</code></td><td style="text-align: right">3.9 %</td><td><code>data[8]</code>, <code>@_a[6]</code>（CPU のビット取り出し）</td></tr>
+<tr><td><code>builtins::array::rotate_</code></td><td style="text-align: right">3.6 %</td><td><code>@bg_pixels.rotate!(8)</code></td></tr>
+<tr><td><code>runtime::expand_array</code></td><td style="text-align: right">3.0 %</td><td>多重代入 <code>a, b = …</code></td></tr>
+<tr><td><code>Array::set_index2</code> + <code>index_assign</code></td><td style="text-align: right">4.3 %</td><td><code>@bg_pixels[@scroll_xfine, 8] = …</code></td></tr>
+<tr><td><code>Value::unpack</code></td><td style="text-align: right">2.2 %</td><td>上記 builtin の中</td></tr>
+<tr><td><code>Encoding::classify</code> (← <code>$1</code>)</td><td style="text-align: right">1.3 %</td><td><code>--opt</code> のソース書き換え（起動時）</td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="注意点-1"><a class="header" href="#注意点-1">注意点</a></h3>
-<ul>
-<li><strong>エラー遷移(状態は変わらない)</strong>:
-<ul>
-<li>実行中の Fiber 自身、または <code>parent_fiber</code> チェーン上の祖先への
-<code>#resume</code> → <code>FiberError</code>(double resume。ライブなスタックへの switch は
-SIGSEGV になるため事前検査)。</li>
-<li><code>parent_fiber == None</code> のコンテキスト(main、および<strong>スレッド root</strong>)での
-<code>Fiber.yield</code> → <code>FiberError</code>(“can’t yield from main fiber”)。</li>
-</ul>
-</li>
-<li><strong>Thread との関係</strong>: Thread は Fiber のスタック切替機構(<code>rsp_save</code> 交換)を
-土台にするが、スレッド root の <code>parent_fiber</code> は常に <code>None</code> で、切替は
-専用スタブ(<code>thread_invoker</code> / <code>switch_to_scheduler</code> / <code>scheduler_resume</code>)が
-<code>SCHED_RSP</code> 経由で行う。<code>ThreadInner::body_terminated()</code> は root Executor の
-<code>FiberState::Terminated</code>(= <code>rsp_save == -1</code>)で本体終了を検知し、これが
-Thread 側の <code>Runnable → Dead</code> 遷移(<code>finalize</code>)のトリガになる。</li>
-<li><strong>スレッド内にネストした Fiber</strong>: green thread が nested Fiber の中で park
-した場合、<code>ThreadInner::resume_exec</code> は root ではなく park した Fiber の
-Executor を指し、スケジューラはそこへ直接 resume する(<code>parent_fiber</code>
-チェーンは切替をまたいで保存される)。</li>
-</ul>
-<h2 id="3-2-つの状態機械の関係全体図"><a class="header" href="#3-2-つの状態機械の関係全体図">3. 2 つの状態機械の関係(全体図)</a></h2>
-<pre><code class="language-mermaid">flowchart TB
-    subgraph sched["スケジューラ (main コンテキストのイベントループ)"]
-        ready["ready キュー (FIFO)"]
-        sleepers["sleepers (deadline)"]
-        io["io_waiters (fd, events)"]
-    end
-
-    subgraph thread["green thread"]
-        direction TB
-        root["thread root Executor&lt;br&gt;(parent_fiber = None)"]
-        fib["nested Fiber&lt;br&gt;(parent_fiber → resumer)"]
-        root -- "#resume" --&gt; fib
-        fib -- "Fiber.yield" --&gt; root
-    end
-
-    ready -- "dispatch()&lt;br&gt;thread_invoker / scheduler_resume" --&gt; thread
-    thread -- "park (switch_to_scheduler)&lt;br&gt;resume_exec を記録" --&gt; sleepers
-    thread -- "park" --&gt; io
-    thread -- "本体終了 (rsp_save = -1)" --&gt; sched
+<h3 id="--opt-の起動コスト"><a class="header" href="#--opt-の起動コスト"><code>--opt</code> の起動コスト</a></h3>
+<p><code>--frames</code> を振って外挿すると、定常状態は約 2.2 ms/frame、<strong>固定コストが約
+1.3 s</strong>。optcarrot の <code>--opt</code> は起動時に Ruby ソースを生成・正規表現で書き換え
+るため、そのぶんが丸ごと乗る。<code>fps</code> の数値自体には影響しないが、
+<code>Encoding::classify</code> / <code>match_at</code> はここに属する。</p>
+<hr>
+<h2 id="3-実施した最適化"><a class="header" href="#3-実施した最適化">3. 実施した最適化</a></h2>
+<h3 id="31-integernth-の-jit-インライン化"><a class="header" href="#31-integernth-の-jit-インライン化">3.1 <code>Integer#[nth]</code> の JIT インライン化</a></h3>
+<p><code>data[8]</code> のようなビット取り出しが builtin 呼び出しになっていた。レシーバは
+<code>INTEGER_CLASS</code> ガード（= <code>Guarded::Fixnum</code>）で Fixnum が確定しているので、
+<code>nth</code> が定数なら 3 命令で済む。</p>
+<p>Fixnum の表現は <code>2n+1</code> なので、<code>n</code> のビット <code>nth</code> はタグ付き値のビット
+<code>nth+1</code> にある。算術右シフト <code>nth</code> でちょうどビット 1 に落ち、これは Fixnum
+タグが求める位置そのもの:</p>
+<pre><code class="language-asm">sarq rdi, (nth.min(63))   ; nth&gt;=63 は符号ビット複製で正しい答えになる
+andq rdi, 2
+orq  rdi, 1
 </code></pre>
+<p>負の <code>nth</code> は常に 0、両辺リテラルなら定数畳み込み。<code>[nth, len]</code> / Range 形式は
+従来どおり generic path。x86-64 / aarch64 双方に実装
+（<code>gen_bit_index_imm</code>）。</p>
+<p><strong>効果: 中央値 492 → 510 fps（+4 %）</strong>、<code>integer::index</code> は 3.9 % → 0.7 %、
+<code>Value::unpack</code> は 2.2 % → 0.7 % に低下。</p>
+<h3 id="32-array-の真のインライン化"><a class="header" href="#32-array-の真のインライン化">3.2 <code>Array#&lt;&lt;</code> の真のインライン化</a></h3>
+<p><code>Array#&lt;&lt;</code> は <code>define_builtin_inline_func</code> に登録されてはいたが、
+<code>emit_array_shl</code> の中身は <code>movq rax, (f); call rax;</code> ——つまり
+「generic dispatch を飛ばした直接呼び出し」でしかなく、<code>Array::push</code> 本体
+（プロローグ／エピローグ + <code>SmallVec</code> の inline/heap 判定 + 書き込みバリア）は
+毎回実行されていた。optcarrot の生成コードは</p>
+<pre><code class="language-ruby">@output_pixels &lt;&lt; @output_color[pixel0] &lt;&lt; … &lt;&lt; @output_color[pixel7]
+</code></pre>
+<p>を 1 フレームあたり 61440 回実行するため、これが単独で最大のホットスポット。</p>
+<p><code>ArrayInner</code> は <code>SmallVec&lt;[Value; 5]&gt;</code> で、レイアウトは</p>
 <ul>
-<li>スケジューラは Thread 単位でスケジュールし、Fiber の resume/yield は
-スレッド内で完結する(スケジューラは関与しない)。</li>
-<li>park はどの Fiber の中からでもよく、<code>resume_exec</code> が park した Executor を
-指すので、再開は park 地点へ直接戻る。</li>
+<li><code>capacity &gt; 5</code> ⇔ spill 済み</li>
+<li>inline のときは <code>capacity</code> フィールドが<strong>そのまま長さ</strong>、容量は 5 固定</li>
+<li>spill 済みなら <code>heap_ptr</code> / <code>heap_len</code> が別フィールド</li>
 </ul>
+<p>なので、どちらの residency でも「2 ロード + 1 ストア + 長さ加算」で追記できる。
+容量いっぱいのとき（<code>capacity</code> 回に 1 回、償却的にごく稀）だけ <code>ary_shl</code> に
+落として再確保させる。x86-64 / aarch64 双方に実装。</p>
+<p><strong>副産物として凍結チェックのバグを修正</strong>: <code>ary_shl</code> は <code>Array::push</code> を直接
+呼ぶだけで frozen を見ていなかったため、JIT 化された <code>a &lt;&lt; v</code> は凍結配列に
+書き込めてしまっていた。</p>
+<pre><code class="language-ruby">def go(a, v) = a &lt;&lt; v
+300.times { |i| go([], i) }      # JIT を温める
+go([1].freeze, 2)                # CRuby: FrozenError / 修正前 monoruby: 素通り
+</code></pre>
+<p>インライン化されたストアは <code>Array::push</code> を経由しないので、インライン生成側で
+<code>ir.guard_frozen(deopt)</code> を張り、凍結時はインタプリタへ deopt して正しく
+<code>FrozenError</code> を上げるようにした。</p>
+<p><strong>効果: 中央値 510 → 590 fps。<code>Array::push</code> / <code>ary_shl</code> はプロファイルから
+完全に消滅。</strong></p>
+<h3 id="33-arrayrotate"><a class="header" href="#33-arrayrotate">3.3 <code>Array#rotate!</code></a></h3>
+<p><code>rotate_</code> の自己時間の <strong>約 48 % が <code>i % ary_len</code> の 32bit <code>div</code></strong> だった
+（<code>@bg_pixels.rotate!(8)</code> は 16 要素配列に対する回転で、剰余は常に恒等）。
+除算は数十サイクルかかる一方、回転量が配列長未満という圧倒的多数のケースでは
+剰余は <code>|cnt|</code> そのものなので、範囲内なら除算を飛ばす <code>wrap_rotate_count</code> を
+入れた。<code>Array#rotate</code> も同じ。</p>
+<p>ついでに <code>(-i) % ary_len</code> が <code>i == i64::MIN</code> でオーバーフローする既存の穴も
+塞いだ（先に剰余を取ってから符号を反転する）。</p>
+<p>さらに JIT インライン生成を追加し、レシーバのクラスガード + <code>guard_frozen</code> の
+あと <code>ary_rotate_(ary, i64)</code> を直接呼ぶようにした（generic dispatch と
+<code>coerce_to_int_i64</code> が消える）。</p>
+<h3 id="34-expand_array多重代入"><a class="header" href="#34-expand_array多重代入">3.4 <code>expand_array</code>（多重代入）</a></h3>
+<p><code>AsmInst::ExpandArray</code> は常に <code>runtime::expand_array</code> を呼んでいた。<code>rest</code> なし
+で <code>src</code> がすでに Array、かつ要素数が足りているケース——多重代入の圧倒的多数
+——は <code>#to_ary</code> も nil 埋めも起きない単なる代入列なので、<code>len &lt;= 8</code> のときは
+<code>is_array_ty</code> チェック + 長さ確認 + 定数回のロード／ストアに展開し、外れた場合
+だけ従来の runtime 呼び出しへ落ちるようにした。</p>
+<h3 id="35-array-の-slice-形式"><a class="header" href="#35-array-の-slice-形式">3.5 <code>Array#[]=</code> の slice 形式</a></h3>
+<p><code>array_index_assign</code> のインライン生成は <code>pos_num != 2</code> を弾いており、3 引数形式
+（<code>@bg_pixels[@scroll_xfine, 8] = @bg_pattern_lut[@bg_pattern]</code>）が丸ごと
+generic dispatch に落ちていた。<code>set_index2</code> は <code>try_array_ty</code> → <code>copy_within</code>
+→ <code>resize</code> → <code>copy_from_slice</code> と一般形を通るが、エミュレータの内側ループが
+書くのは「同じ長さの並びを配列の内側で置き換える」形だけ——<strong>要素の増減も
+移動もない、ただのコピー</strong>。</p>
+<p>そこで <code>len</code> をコンパイル時リテラルから取り、残り（<code>other</code> が Array であること、
+<code>other.len() == len</code>、<code>0 &lt;= start</code> かつ <code>start + len &lt;= self.len()</code>）を実行時に
+チェックして <code>len</code> 個コピーする。外れたもの（伸縮する splice、負のインデックス、
+Array でない右辺、自己代入）はすべて <code>set_array_slice</code> に落ちて builtin と同じ
+意味論を再現する。</p>
+<blockquote>
+<p><strong>落とし穴</strong>: 最初 <code>state.is_fixnum(start)</code> でゲートしたら optcarrot では
+一度も発火しなかった。<code>@scroll_xfine</code> は ivar から読んだ値で、抽象状態は
+Fixnum と<strong>証明できていない</strong>（<code>Guarded::Value</code>）ためである。<code>load_fixnum</code> は
+どのみちガードを張るので、「Integer 以外だと<em>証明されて</em>いない限り許可」と
+いう弱い述語 <code>may_be_fixnum</code> を足してゲートし直した。これで発火するようになり、
+単独で 645 → 799 fps を稼いだ。</p>
+</blockquote>
+<h3 id="36-合計"><a class="header" href="#36-合計">3.6 合計</a></h3>
+<p>段階ごとの寄与（<code>ba8e5599</code> を基準に測ったもの）:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th style="text-align: right">fps (中央値, 3000 frames)</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ba8e5599</code></td><td style="text-align: right">460〜494（run 間で振れる）</td></tr>
+<tr><td>+ <code>Integer#[]</code> + <code>Array#&lt;&lt;</code></td><td style="text-align: right">590.4</td></tr>
+<tr><td>+ <code>rotate!</code> + <code>expand_array</code> + <code>[]=</code> slice</td><td style="text-align: right">779.0</td></tr>
+</tbody>
+</table>
+</div>
+<p>最終的な A/B は PR のマージベース <code>111d1895</code> に対して取り直した:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th style="text-align: right">fps (中央値, 3000 frames)</th></tr>
+</thead>
+<tbody>
+<tr><td><code>111d1895</code></td><td style="text-align: right">486.5</td></tr>
+<tr><td>+ 本変更</td><td style="text-align: right"><strong>775.6</strong></td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>+59.4 %</strong>。180 frames の既定計測では CRuby ≈ 135〜141 / YJIT ≈ 157〜158
+に対し <code>111d1895</code> が 498〜528、本変更で <strong>854〜900 fps</strong>。
+checksum は全 run で一致（60838）。</p>
+<p>改善後プロファイルでは JIT が吐いたコードが全体の約 70 % を占め、
+<code>Array::push</code> / <code>ary_shl</code> / <code>integer::index</code> / <code>set_index2</code> / <code>index_assign</code> /
+<code>expand_array</code> / <code>coerce_to_int_i64</code> / <code>SmallVec::resize</code> はいずれも上位から
+消えた。</p>
+<p>検証: <code>cargo test --release</code> 3073 件 pass / 0 fail、<code>--features gc-stress</code> の
+lib テスト 2253 件 pass / 0 fail。加えて各最適化について、境界・エラー・凍結・
+GC 書き込みバリアを突く Ruby スクリプトを release と gc-stress の両ビルドで
+CRuby と差分比較（<code>Array#&lt;&lt;</code> の inline/spill/成長境界/自己追記、slice 代入の
+伸縮・負インデックス・非 Array 右辺・自己代入・<code>to_ary</code> 強制、<code>rotate!</code> の
+巨大/負/<code>to_int</code> 引数、<code>expand_array</code> の 1〜9 要素・<code>*rest</code>・<code>to_ary</code>）。</p>
+<blockquote>
+<p><strong>注意</strong>: aarch64 側の実装はクロスコンパイラ (<code>gcc-aarch64-linux-gnu</code>) が
+手元になく <strong>型チェックできていない</strong>。monoasm の arm64 命令定義と既存の
+aarch64 コードに照らした目視レビューのみ。CI の macOS arm64 ジョブが初回の
+ビルド検証になる。</p>
+</blockquote>
+<hr>
+<h2 id="4-残っている改善余地"><a class="header" href="#4-残っている改善余地">4. 残っている改善余地</a></h2>
+<p>改善後プロファイル（<code>--frames 4000</code>）の、JIT コード外の上位:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>対象</th><th style="text-align: right">割合</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Array#rotate!</code> の実作業</td><td style="text-align: right">3.3 %</td><td><code>ary_rotate_</code> 1.7 + <code>ptr_rotate</code> 1.6</td></tr>
+<tr><td><code>Encoding::classify</code> + <code>match_at</code></td><td style="text-align: right">1.8 %</td><td><code>--opt</code> の起動時ソース書き換え</td></tr>
+<tr><td>JIT コンパイル自身</td><td style="text-align: right">約 2 %</td><td><code>AbstractState::join</code> 1.0 ほか</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="41-arrayrotate-の回転そのもの"><a class="header" href="#41-arrayrotate-の回転そのもの">4.1 <code>Array#rotate!</code> の回転そのもの</a></h3>
+<p>除算は消えたが、<code>core::slice::rotate::ptr_rotate</code>（三段リバース／ジャグリング
+の汎用実装）は残っている。<code>@bg_pixels</code> のような 16 要素固定の小配列なら、
+スタック上のテンポラリにコピーして戻すだけの特殊化のほうが速い。</p>
+<h3 id="42-1-取得時のコードレンジ再走査"><a class="header" href="#42-1-取得時のコードレンジ再走査">4.2 <code>$1</code> 取得時のコードレンジ再走査</a></h3>
+<p><code>get_match_nth</code> → <code>RStringInner::propagated_cr</code> → <code>Encoding::classify</code> が
+1.7 %。<code>propagated_cr</code> は親の <code>code_range()</code> が <code>Unknown</code> だと O(N) の再分類に
+落ちる。親文字列を生成した時点（リテラル、<code>String#+</code>、<code>gsub</code> の結果など）で
+コードレンジを確定させておけば、<code>$1</code> ごとの再走査がなくなる。<code>fps</code> には効かな
+いが <code>--opt</code> の 1.3 s の起動時間には効く。</p>
+<h3 id="43-jit-コンパイル時間--再コンパイル"><a class="header" href="#43-jit-コンパイル時間--再コンパイル">4.3 JIT コンパイル時間 / 再コンパイル</a></h3>
+<p><code>--features profile</code> の <code>jit recompile stats</code> で、巨大な生成メソッド
+<code>run</code> が <code>RecompileReason::NotCached</code> で <strong>CPU 側 16 回・PPU 側 6 回</strong>
+再コンパイルされている。数千の呼び出しサイトを持つメソッドでは、
+「まだ暖まっていない 1 サイト」のたびに全体を捨てて再コンパイルすることになる。</p>
+<ul>
+<li>冷たいサイトだけを遅延コンパイルする（サイド出口スタブ方式）</li>
+<li>あるいは一定数のサイトが暖まるまでコンパイルを遅らせる</li>
+</ul>
+<p>のどちらかで、起動 1.3 s と定常 2.5 % の双方が縮む見込み。</p>
+<h3 id="44-多相インラインキャッシュ-pic"><a class="header" href="#44-多相インラインキャッシュ-pic">4.4 多相インラインキャッシュ (PIC)</a></h3>
+<p><code>jit class guard failed stats</code> を見ると <code>APU::Oscillator#poke_3</code> などの
+スーパークラス共有メソッドが <code>Pulse</code> / <code>Noise</code> / <code>Triangle</code> の 3 クラスで
+呼ばれ、単相ガードのミス→ deopt になっている。JIT コード内に 2〜4 way の
+PIC を持たせれば deopt を避けられる。</p>
+<h3 id="45-ruby-メソッドのインライン展開条件の緩和"><a class="header" href="#45-ruby-メソッドのインライン展開条件の緩和">4.5 Ruby メソッドのインライン展開条件の緩和</a></h3>
+<p>現在 <code>specialized_iseq</code>（callee の iseq を呼び出し側に展開）が起動する条件は
+<code>is_simple_call</code> かつ <strong>レシーバか引数のどれかがコンパイル時即値</strong>、または
+<code>...</code> フォワーディングのとき。APU のように「レシーバは ivar から読んだ
+オブジェクトだが、インラインキャッシュ上はクラスが単相」という典型的な
+ケースは対象外になっている。</p>
+<p>「単相 かつ callee の iseq が小さい（バイトコード N 命令未満）」を追加条件に
+すれば、<code>Oscillator#active?</code> のような薄いメソッドを取り込める。機構
+（<code>JitType::Specialized</code>、<code>specialize_level</code> による深さ制限）はすでにあるので、
+ゲートの緩和とサイズヒューリスティクスの追加が主な作業になる。</p>
+<hr>
+<h2 id="5-調べ方の再現手順"><a class="header" href="#5-調べ方の再現手順">5. 調べ方の再現手順</a></h2>
+<pre><code class="language-sh"># プロファイル
+cargo build --release --features perf
+perf record -F 4999 -g --call-graph=fp -o oc.data \
+  target/release/monoruby ../optcarrot/bin/optcarrot -b --opt --frames 3000 \
+  ../optcarrot/examples/Lan_Master.nes
+perf report -i oc.data --no-children -g none --stdio   # 自己時間の一覧
+perf report -i oc.data --no-children --stdio -S &lt;symbol&gt;  # 呼び出し元
+
+# deopt / 再コンパイル / メソッドキャッシュ統計
+cargo build --release --features profile
+target/release/monoruby ../optcarrot/bin/optcarrot -b --opt --frames 500 \
+  ../optcarrot/examples/Lan_Master.nes 2&gt; prof.txt
+
+# A/B は必ずインターリーブして中央値を取る（単発は ±20 % 振れる）
+</code></pre>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../design/threads.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/ruby_spec_skip_tags.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../design/safepoint.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../design/progress_2025-2026.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -379,11 +455,11 @@ Executor を指し、スケジューラはそこへ直接 resume する(<code>pa
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../design/threads.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/ruby_spec_skip_tags.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../design/safepoint.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../design/progress_2025-2026.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

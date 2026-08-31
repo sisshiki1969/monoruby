@@ -1,0 +1,814 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Refinements and method resolution - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-86c241c2.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-a8d0bf4a.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="refinements--the-design-and-why-it-is-shaped-this-way"><a class="header" href="#refinements--the-design-and-why-it-is-shaped-this-way">Refinements — the design, and why it is shaped this way</a></h1>
+<p>monoruby implements refinements. <code>Module#refine</code>, <code>Module#using</code> and
+<code>main.using</code> are real, <code>Refinement</code> is a class with <code>#target</code> and
+<code>#import_methods</code>, and <code>Module#refinements</code> / <code>Module.used_refinements</code> /
+<code>Module.used_modules</code> report the truth. The interpreter and the JIT both
+resolve through an activated refinement.</p>
+<p>This document is the design record: §§1–5 are the problem — what
+refinements do to method resolution and where each of monoruby’s
+resolution paths would break under the naive approach — and §§6–7 are the
+implementation that avoids it. Read it together with <code>doc/cref.md</code> (the
+CREF refinements hang off) and <code>doc/jit.md</code>.</p>
+<p>The short version of the problem: refinements make the resolved method a
+function of the <strong>caller’s lexical scope</strong>, and every method-resolution
+path in monoruby — the global method cache, the VM inline cache, JIT
+compile-time resolution, and the class-version repair path — was keyed
+without it. The repair path was the dangerous one: left alone it would
+silently re-validate machine code that resolved the wrong method.</p>
+<p>The short version of the answer (§6): represent an activated set as an
+interned <code>u32</code>, treat it as a compile-time constant of each body with
+<code>class_version</code> as the invalidation channel, and gate everything on “does
+this process contain a refinement at all”. A program that never calls
+<code>refine</code> emits byte-identical machine code to the one that predates all of
+this — checked against an <code>emit-asm</code> baseline, not assumed.</p>
+<p><strong>Known gaps.</strong> One refinement cell per iseq means a <em>block</em> that runs
+<code>using</code> and executes more than once bases on the previous execution’s set
+(<code>ISeqInfo::refinements</code>, §7.2 option C). Refinements of <em>basic operations</em>
+are honoured in both tiers (§6.7); the JIT keeps its inline path in scopes
+that do not activate the refinement, while the VM’s assembly guard has no
+call site to ask about and gives it up process-wide.</p>
+<hr>
+<h2 id="1-what-refinements-change-about-lookup"><a class="header" href="#1-what-refinements-change-about-lookup">1. What refinements change about lookup</a></h2>
+<p>Without refinements, monoruby’s method resolution is a function of</p>
+<pre><code>(receiver class, method name, class version) -&gt; FuncId
+</code></pre>
+<p>and every cache in the system is keyed on exactly that. With refinements
+it becomes</p>
+<pre><code>(receiver class, method name, class version, caller's cref) -&gt; FuncId
+</code></pre>
+<p>Four properties of the cref dependency matter for the implementation.
+All four were checked against CRuby 4.0.2.</p>
+<p><strong>(a) Activation is a runtime event at a lexical position.</strong> <code>using</code> is a
+statement, not a declaration. The same source text resolves differently
+before and after it runs:</p>
+<pre><code class="language-ruby">module R
+  refine Integer do
+    def +(o) = "refined+"
+  end
+end
+
+p (1 + 1)     # =&gt; 2
+using R
+p (1 + 1)     # =&gt; "refined+"
+</code></pre>
+<p><strong>(b) The activated set is captured per method body, at definition
+time.</strong> A method defined before the <code>using</code> is not refined even when it is
+<em>called</em> afterwards:</p>
+<pre><code class="language-ruby">def unrefined = 1 + 1
+using R
+p unrefined   # =&gt; 2   (not "refined+")
+</code></pre>
+<p>So this is not a global mode that can be flipped, and it is not a property
+of the receiver either.</p>
+<p><strong>(c) Basic operations are refinable.</strong> <code>Integer#+</code> above is a monoruby
+<em>basic op</em> and a JIT inline-generator target — the two paths that never
+dispatch at all.</p>
+<p><strong>(d) The reflective entry points see refinements too.</strong> In Ruby 4.0
+<code>send</code>, <code>public_send</code>, <code>respond_to?</code>, <code>Object#method</code> and blocks / <code>eval</code>
+written in the activated scope all resolve through the refinement:</p>
+<pre><code class="language-ruby">class C
+  using R
+  def direct      = "x".foo
+  def via_send    = "x".send(:foo)
+  def via_respond = "x".respond_to?(:foo)
+  def via_method  = "x".method(:foo).call
+  def in_block    = [1].map { "x".foo }.first
+  def in_eval     = eval('"x".foo')
+end
+# =&gt; ["refined", "refined", true, "refined", "refined", "refined"]
+</code></pre>
+<p>There is no “reflection is exempt” shortcut to lean on.</p>
+<hr>
+<h2 id="2-the-prerequisite-per-scope-cref-state"><a class="header" href="#2-the-prerequisite-per-scope-cref-state">2. The prerequisite: per-scope cref state</a></h2>
+<p><code>doc/cref.md</code> covers this in full; the part that blocked refinements:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Executor
+lexical_class: Vec&lt;Vec&lt;Cref&gt;&gt;,
+<span class="boring">}</span></code></pre>
+<p>This is <strong>one VM-wide stack</strong>, whose outer level is a <code>require</code> / <code>load</code>
+boundary, not a call frame. Method calls push nothing. In CRuby the CREF
+chain is per-frame, hung off the environment pointer, and <code>using</code>
+populates the <em>current</em> frame’s chain.</p>
+<p>The consequence has already been observed. <code>Module.nesting</code> used to read
+this stack and therefore reported whatever class body happened to be on
+it — a method called from inside an unrelated class body saw that body’s
+scope. That was fixed (<code>current_class_nesting</code>) by reading the <em>static</em>
+<code>ISeqInfo::lexical_context</code> instead, because the lexical nesting of an
+iseq never changes after compilation.</p>
+<p><strong>A refinement set cannot be recovered the same way.</strong> Property (a) above
+says it is mutated at runtime; property (b) says the mutation is visible
+only to bodies compiled under that cref. A static per-iseq field cannot
+express “the set as it stood when this body was defined” unless the field
+is snapshotted per definition — which is exactly a per-frame cref by
+another name.</p>
+<p>This was the first step. It is a change to where scope state is <em>stored</em>,
+not to how lookup works — and, as §7 works out, it did not have to be a
+change to the frame layout: the cell lives on <code>ISeqInfo</code>, resolved through
+the lexical-parent chain.</p>
+<hr>
+<h2 id="3-where-each-resolution-layer-would-have-broken"><a class="header" href="#3-where-each-resolution-layer-would-have-broken">3. Where each resolution layer would have broken</a></h2>
+<h3 id="31-global-method-cache"><a class="header" href="#31-global-method-cache">3.1 Global method cache</a></h3>
+<p><code>Store::check_method_for_class_with_version</code> (<code>globals/store.rs</code>)</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let mut cache = self.method_cache.borrow_mut();
+if let Some(entry) = cache.get(class_id, name, class_version) { … }
+<span class="boring">}</span></code></pre>
+<p>Key: <code>(name, class_id)</code> + <code>class_version</code>. Every consumer in the tree goes
+through here or through <code>search_method_by_class_id</code> beneath it. Under
+refinements this key no longer identifies an answer.</p>
+<p>The per-class memoized predicates built on the same key (<code>no_to_str</code>,
+<code>neq_basic_at</code>, <code>match_method_at</code>, <code>default_copy_at</code> — all <code>Cell&lt;Option&lt;u32&gt;&gt;</code>
+stamps on <code>ClassInfo</code>) inherit the problem: a refinement of <code>#to_str</code> on a
+class whose <code>no_to_str</code> memo says “no such method” would be invisible to
+every coercion site.</p>
+<h3 id="32-vm-inline-cache"><a class="header" href="#32-vm-inline-cache">3.2 VM inline cache</a></h3>
+<p><code>vm_send</code> (<code>codegen/arch/{x86_64,aarch64}/vmgen/method_call.rs</code>) caches
+into the bytecode operand words:</p>
+<pre><code>CACHED_FUNCID  (u32)   CACHED_CLASS (ClassId)   CACHED_VERSION (u32)
+</code></pre>
+<p>and guards with two compares:</p>
+<pre><code class="language-asm">cmpl r15, [r13 + CACHED_CLASS]     ; receiver class
+jne  slow_path1
+movl rdi, [r13 + CACHED_VERSION]
+cmpl rdi, [rip + class_version]    ; global class version
+jne  slow_path2
+</code></pre>
+<p>This cache is <em>per call site</em>, so in principle it can hold a cref-dependent
+answer — a given call site has exactly one cref. The problem is
+invalidation: nothing in these two guards notices that <code>using</code> ran. Making
+<code>using</code> bump the global <code>class_version</code> works but is blunt — it invalidates
+every inline cache in the program. §6.1 argues that is the right trade
+anyway, because <code>using</code> is a load-time event, not a hot-path one.</p>
+<h3 id="33-jit-compile-time-resolution"><a class="header" href="#33-jit-compile-time-resolution">3.3 JIT compile-time resolution</a></h3>
+<p><code>JitContext::jit_check_method</code> (<code>codegen/jitgen/compile.rs</code>)</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn jit_check_method(&amp;self, class_id: ClassId, name: IdentId) -&gt; Option&lt;(FuncId, Visibility)&gt; {
+    let class_version = self.class_version();
+    let entry = self.store
+        .check_method_for_class_with_version(class_id, name, class_version)?;
+    Some((entry.func_id()?, entry.visibility()))
+}
+<span class="boring">}</span></code></pre>
+<p>The JIT resolves to a concrete <code>FuncId</code> at compile time and bakes it into
+machine code (and, on the specialized path, inlines the callee body). The
+inputs are receiver class, name and version — the compiling iseq’s cref is
+not among them and is not even reachable from <code>JitContext</code>.</p>
+<h3 id="34-class-version-repair--the-silent-wrong-answer-path"><a class="header" href="#34-class-version-repair--the-silent-wrong-answer-path">3.4 Class-version repair — the silent-wrong-answer path</a></h3>
+<p>This is the one that makes a half-measure unsafe.</p>
+<p>Every JIT compilation records what it assumed:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// JitContext, per compiled method call
+self.inline_method_cache.push((recv_class, callsite.name, func_id));
+// stored on the iseq as `inline_cache_map`
+<span class="boring">}</span></code></pre>
+<p>When the global class version moves, compiled code deopts — and
+<code>Store::update_inline_cache</code> (<code>globals/store/class.rs</code>) tries to <em>repair</em>
+rather than recompile:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>for (recv_class, name, comptime_fid) in cache_map {
+    let func_id = self.check_method_for_name(lfp, *recv_class, *name);
+    if func_id != Some(*comptime_fid) {
+        return false;              // resolution moved -&gt; recompile
+    }
+}
+// nothing moved: stamp the new version into the compiled code and keep running
+codegen.set_class_version(class_version, &amp;version_label);
+<span class="boring">}</span></code></pre>
+<p><code>check_method_for_name</code> is a cref-free lookup. If <code>using</code> only bumped the
+class version (§3.2’s blunt option), this loop would re-ask the <em>unrefined</em>
+question, get the same unrefined answer it got at compile time, conclude
+nothing moved, and re-validate machine code that must now dispatch into the
+refinement. No error, no deopt — just the wrong method, indefinitely.</p>
+<p>Any refinement implementation has to record the cref alongside each
+<code>inline_cache_map</code> entry so the repair re-asks the same question the
+compiler asked.</p>
+<h3 id="35-specialized-inlining"><a class="header" href="#35-specialized-inlining">3.5 Specialized inlining</a></h3>
+<p><code>JitType::Specialized</code> inlines a callee’s body into the caller’s frame, and
+<code>gen_machine_code</code> recurses through <code>SpecializeInfo</code> to do it for a whole
+tree of callees. A refined method body carries its <em>own</em> cref — calls
+inside it resolve under the refinement module’s scope, not the caller’s.
+Inlining across that boundary needs a per-inlined-frame cref threaded
+through <code>JitContext</code>, in the same place the specialized frame sizes and
+argument info are threaded today.</p>
+<h3 id="36-inlined-builtins-and-basic-ops"><a class="header" href="#36-inlined-builtins-and-basic-ops">3.6 Inlined builtins and basic ops</a></h3>
+<p>Two mechanisms bypass dispatch entirely:</p>
+<ul>
+<li><code>InlineTable: HashMap&lt;FuncId, InlineFuncInfo&gt;</code> — an inline generator
+emits machine code for <code>Integer#+</code>, <code>Array#[]</code>, <code>Math.sqrt</code>, … in place
+of a call.</li>
+<li>Basic ops additionally consult a single global word,
+<code>bop_redefined_flags</code>; <code>Codegen::set_bop_redefine</code> sets it to <code>!0</code> and
+calls <code>remove_vm_bop_optimization()</code> — a process-wide, one-way
+de-optimisation.</li>
+</ul>
+<p>Property (c) says <code>Integer#+</code> is refinable, so a refinement must reach both.
+Framed as an either/or — thread the cref into every <code>InlineGen</code>, or take
+the process-wide <code>set_bop_redefine</code> cliff — both options are bad. §6.7
+splits it instead: the JIT’s inline generators gate per call site on a
+<code>refined_names</code> set, and only the VM’s dispatch-table basic ops take the
+global hit.</p>
+<h3 id="37-super"><a class="header" href="#37-super">3.7 super</a></h3>
+<p><code>find_super</code> / <code>jit_check_super</code> resolve <code>super</code> by finding the <em>position</em>
+of the running body in the receiver’s ancestor chain
+(<code>body_dispatched_by</code>, occurrence counting) and continuing from the next
+one. The chain is a property of the receiver class.</p>
+<p>A refinement is, semantically, an entry that exists in the chain only
+relative to a cref, and <code>super</code> inside a refined method means “the method
+this refinement shadows”. Neither is expressible in a position-in-the-real-
+chain model; <code>super</code> from a refinement needs its own resolution rule.</p>
+<hr>
+<h2 id="4-why-the-cheap-version-would-have-been-worse-than-nothing"><a class="header" href="#4-why-the-cheap-version-would-have-been-worse-than-nothing">4. Why the cheap version would have been worse than nothing</a></h2>
+<p>A stub <code>refine</code> that creates an anonymous module, evaluates the block in
+it and returns it — no activation — was prototyped and measured. It
+unblocks 55 of the 59 <code>core/binding</code> examples (see §5) because the blocker
+there is a fixture that merely <em>calls</em> <code>refine</code> at load time.</p>
+<p>It was not kept, and the real thing was implemented instead. Without
+activation, <code>refine</code> turns every refinement-using
+program from a clear <code>NoMethodError</code> at the <code>refine</code> call into a silently
+wrong result at every refined call site. The same trade-off applies to
+<code>using</code>, which is why the existing <code>Module#using</code> is documented as
+“activates the (necessarily empty) set of refinements” — it is only honest
+because <code>refine</code> cannot produce a non-empty one.</p>
+<hr>
+<h2 id="5-what-it-is-worth-in-rubyspec"><a class="header" href="#5-what-it-is-worth-in-rubyspec">5. What it is worth, in ruby/spec</a></h2>
+<p>Measured against CRuby 4.0.2, current tree:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>category</th><th>monoruby</th><th>note</th></tr>
+</thead>
+<tbody>
+<tr><td><code>core/refinement</code></td><td>25 examples, <strong>25 errors</strong></td><td>nothing implemented</td></tr>
+<tr><td><code>core/module</code></td><td>11 F / 66 E, of which <strong>62</strong> mention refine</td><td><code>refine_spec</code>, <code>using_spec</code>, <code>module_eval</code> refinement scope, …</td></tr>
+<tr><td><code>core/main</code></td><td>3 F / 6 E, of which <strong>5</strong></td><td><code>main.using</code></td></tr>
+<tr><td><code>core/kernel</code></td><td>4 F / 11 E, of which <strong>2</strong></td><td><code>Kernel#eval</code> refinement scope</td></tr>
+<tr><td><code>language/pattern_matching</code></td><td><strong>2</strong> E</td><td><code>#deconstruct</code> via refinement</td></tr>
+<tr><td><code>core/binding</code></td><td>0 F / <strong>7</strong> E</td><td>see below</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>core/binding</code> is a special case worth separating. Its 7 errors are not 7
+failing examples — they are 7 spec <em>files</em> that fail to load, because
+<code>core/binding/fixtures/classes.rb:54</code> calls <code>refine</code>. That takes 59
+examples out of the run (monoruby executes 39 of CRuby’s 98). <strong>Exactly one
+of those 59 needs refinements to work</strong> (<code>Binding#eval reflects refinements activated in the binding scope</code>); the other 58 only need <code>refine</code> to
+exist.</p>
+<p>So the ledger is roughly:</p>
+<ul>
+<li>~96 examples need real refinements,</li>
+<li>~58 examples are collateral damage from a fixture that only needs the
+method to be defined.</li>
+</ul>
+<p>That asymmetry is the argument for eventually implementing refinements
+properly rather than stubbing them: the stub buys the 58 at the cost of
+making the 96 fail silently instead of loudly.</p>
+<hr>
+<h2 id="6-an-implementation-strategy-that-keeps-the-performance"><a class="header" href="#6-an-implementation-strategy-that-keeps-the-performance">6. An implementation strategy that keeps the performance</a></h2>
+<p>The naive framing of §3 — “every cache key has to grow a cref” — is what
+makes refinements look prohibitive. It is avoidable. The design below rests
+on one representation choice and two observations, and its acceptance
+criterion is that a program which never calls <code>refine</code> executes <em>the same
+machine code it does today</em>.</p>
+<h3 id="60-the-representation-an-interned-set-id"><a class="header" href="#60-the-representation-an-interned-set-id">6.0 The representation: an interned set id</a></h3>
+<p>Represent an activated refinement set as an interned <code>RefinementSetId(u32)</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>RefinementSetId::EMPTY == 0                  // no refinements activated
+using M   on a scope holding S   =&gt;   intern(S ∪ refinements_of(M))
+<span class="boring">}</span></code></pre>
+<p>Interning is hash-consing over a table of small sets; equal sets get equal
+ids. Real programs have a handful of distinct activations, so the table
+stays tiny.</p>
+<p>This is the move that makes everything else cheap. The cref’s refinement
+state stops being a <code>Hash[refined_class =&gt; module]</code> that has to be walked
+and starts being <strong>a <code>u32</code> that can be compared, stored in a cache entry,
+and baked into compiled code as a constant</strong>.</p>
+<h3 id="61-observation-1--a-call-sites-set-is-a-compile-time-constant"><a class="header" href="#61-observation-1--a-call-sites-set-is-a-compile-time-constant">6.1 Observation 1 — a call site’s set is a compile-time constant</a></h3>
+<p><code>using</code> is illegal in a method body (§7.1), so:</p>
+<ul>
+<li>A <strong>method body</strong> snapshots its scope’s set at <code>def</code>. Every invocation of
+that method resolves under the same id.</li>
+<li>A <strong>block</strong> reads its home scope’s live cell — but that cell changes only
+when <code>using</code> runs in that scope, and <code>using</code> is a load-time event.</li>
+</ul>
+<p>So for any iseq, the set is constant except across a <code>using</code> in its home
+scope. That is precisely the shape a JIT speculates on: <strong>treat the set id
+as a compile-time constant, and let <code>using</code> bump <code>class_version</code>.</strong></p>
+<p><code>using</code> bumping the global class version invalidates every inline cache and
+every JIT entry in the program. That sounds violent until you notice it is
+exactly what a <code>def</code> at load time already does, and <code>using</code> happens once
+per scope during startup, never in a loop.</p>
+<h3 id="62-observation-2--the-cost-should-scale-with-refined-names-not-with-using-refinements-at-all"><a class="header" href="#62-observation-2--the-cost-should-scale-with-refined-names-not-with-using-refinements-at-all">6.2 Observation 2 — the cost should scale with <em>refined names</em>, not with <em>using refinements at all</em></a></h3>
+<p>Maintain</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>refined_names: HashSet&lt;IdentId&gt;   // union of names any refinement defines
+<span class="boring">}</span></code></pre>
+<p>This is typically a handful of symbols. Then:</p>
+<ul>
+<li>the global method cache and the per-class memoized predicates
+(<code>no_to_str</code>, <code>neq_basic_at</code>, …) <strong>keep their existing key</strong>, and simply
+refuse to serve a name in <code>refined_names</code>;</li>
+<li>those names — and only those — take
+<code>search_method_with_refinements(recv_class, name, set_id)</code>.</li>
+</ul>
+<p>A program that refines <code>String#blank?</code> pays nothing on <code>Array#each</code>,
+<code>Integer#+</code>, or any of the other tens of thousands of call sites. The tax
+is proportional to how much is refined, which is the right shape and is
+what keeps a refinement-using program fast, not just a refinement-free one.</p>
+<h3 id="63-where-the-mutable-cell-lives"><a class="header" href="#63-where-the-mutable-cell-lives">6.3 Where the mutable cell lives</a></h3>
+<p>Only toplevel / class-module bodies / eval-at-toplevel own one (§7.1), and
+now it holds a <code>u32</code>. §7.2 option <strong>(B)</strong> — a side table on the <code>Executor</code>
+keyed by LEP, alongside the existing <code>deferred_unwind</code> — stays the
+recommendation: no frame-layout change, correct per execution, and
+allocated only once a refinement exists.</p>
+<p>A block finds its own set by the same outer-chain walk to the LEP that
+<code>$~</code> already does. A method finds its own on its <code>FuncInfo</code>, written by
+<code>def</code>. (<code>def</code> re-executing under a <em>different</em> set writes a different id;
+since <code>using</code> already bumped the version, that is self-correcting rather
+than stale — unlike <code>lexical_context</code>, which has no such guard.)</p>
+<h3 id="64-the-zero-cost-gate"><a class="header" href="#64-the-zero-cost-gate">6.4 The zero-cost gate</a></h3>
+<p>A process-wide flag, false until the first <code>refine</code> call:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>path</th><th>flag false</th><th>flag true</th></tr>
+</thead>
+<tbody>
+<tr><td><code>search_method</code></td><td>today’s code</td><td>+ <code>refined_names</code> check</td></tr>
+<tr><td>global method cache</td><td>today’s key</td><td>today’s key; skipped for refined names</td></tr>
+<tr><td>VM inline cache</td><td>today’s two guards</td><td>unchanged (see 6.5)</td></tr>
+<tr><td><code>jit_check_method</code></td><td>today’s lookup</td><td>takes <code>set_id</code></td></tr>
+<tr><td><code>update_inline_cache</code></td><td>today’s loop</td><td>+ id comparison (see 6.6)</td></tr>
+<tr><td>inline generators</td><td>fire as today</td><td>gated per call site (see 6.7)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The acceptance criterion is stronger than “fast”: with the flag false the
+emitted machine code must be <strong>identical</strong>, which <code>--features emit-asm</code>
+makes directly checkable against a baseline. Benchmarks (optcarrot and
+<code>benchmark/</code>) then cannot regress, by construction rather than by
+measurement.</p>
+<h3 id="65-vm-inline-cache--no-format-change"><a class="header" href="#65-vm-inline-cache--no-format-change">6.5 VM inline cache — no format change</a></h3>
+<p>The cached triple lives in the bytecode operand words
+(<code>CACHED_FUNCID</code> / <code>CACHED_CLASS</code> / <code>CACHED_VERSION</code>) and has no room for a
+fourth. It does not need one: a call site has exactly one set id, so the
+cached <code>FuncId</code> is already the right answer <em>for that site</em>. The warm path
+(<code>runtime::find_method</code>) has <code>vm</code>, hence the current frame, hence the set —
+it resolves with it and caches the result. <code>using</code>’s version bump forces a
+re-warm. Nothing in the guard sequence changes.</p>
+<h3 id="66-jit--closing-the-repair-hole-for-4-bytes"><a class="header" href="#66-jit--closing-the-repair-hole-for-4-bytes">6.6 JIT — closing the repair hole for 4 bytes</a></h3>
+<p><code>inline_cache_map</code> entries grow from</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>(ClassId, Option&lt;IdentId&gt;, FuncId)
+<span class="boring">}</span></code></pre>
+<p>to</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>(ClassId, Option&lt;IdentId&gt;, RefinementSetId, FuncId)
+<span class="boring">}</span></code></pre>
+<p>and <code>update_inline_cache</code>’s re-check calls the set-aware lookup. That is
+the whole fix for §3.4’s silent-wrong-answer path: the repair now re-asks
+the question the compiler asked. Four bytes per recorded call site, no
+runtime cost, and with the gate off every recorded id is <code>EMPTY</code> and the
+comparison is a constant-folded no-op.</p>
+<p><code>JitContext</code> gains the set id of the iseq it is compiling — read from the
+<code>FuncInfo</code> snapshot for a method, or from the live frame for a block/loop,
+both at compile time in Rust. <strong>No emitted prologue changes and no machine
+code ever loads a cref.</strong></p>
+<h3 id="67-inline-generators-and-basic-ops--split-the-two"><a class="header" href="#67-inline-generators-and-basic-ops--split-the-two">6.7 Inline generators and basic ops — split the two</a></h3>
+<p>§3.6 framed this as a choice between threading the cref into <code>InlineGen</code>
+and taking the global basic-op cliff. With <code>refined_names</code> it is neither:</p>
+<ul>
+<li><strong>Inline generators</strong> (<code>Array#[]</code>, <code>String#size</code>, …) are consulted at JIT
+compile time, where the set id is known. Gate them on
+<code>set_id == EMPTY || !refined_names.contains(name)</code>. A refinement of
+<code>Array#[]</code> costs the fast path <strong>only in scopes that activated it</strong>;
+every other scope keeps it.</li>
+<li><strong>Basic ops in the VM</strong> (<code>vm_binops</code>, the comparison dispatch entries)
+are selected by a dispatch table with no call-site context, and
+<code>remove_vm_bop_optimization</code> is a one-way process-wide switch. Refining
+one of those does take the global hit. That is acceptable because it is
+the same hit a <em>global</em> monkey patch of <code>Integer#+</code> takes today — the
+honest comparison — and because the JIT, which is where the time
+actually goes, keeps per-scope precision via the gate above.</li>
+</ul>
+<blockquote>
+<p><strong>Update.</strong> The order this called for was followed —
+<code>doc/bop_redefinition.md</code> gave basic ops <code>(op, class)</code> granularity, full
+coverage and per-iseq JIT invalidation first — and once that was in
+place, honouring a refinement of a basic operation turned out to need
+almost nothing beyond <em>marking the pair</em>. <code>insert_method</code> /
+<code>remove_method</code> ask <code>refined_class()</code> for the class the refinement
+refines and mark <code>(that class, name)</code>; both tiers then stop answering it
+without a lookup, and the dispatch they fall back to was already
+refinement-aware. <code>refine Integer { def +(o) = 42 }</code> now yields 42 in the
+VM and in JIT-compiled code.</p>
+<p>Two things that fix did <em>not</em> buy:</p>
+<ul>
+<li><strong>Per-scope precision in the JIT</strong> — since added. <code>BasicOpTable</code> keeps
+the union it always did (“this pair is no longer unconditionally
+sound”, which is what the runtime guards want) but records the reason
+alongside it, so <code>assume_basic_op</code> can ask two questions: a global
+redefinition binds everywhere and is never inlined, while a refinement
+is checked against the <em>compiling scope’s</em> set
+(<code>Store::basic_op_refined_in_scope</code>). <code>refine</code>-ing an operator no
+longer costs anything outside the scopes that <code>using</code> it — <code>fib(29)</code>
+0.034 → 0.009, back to baseline. The VM’s asm guard is a global word
+with no call-site context and stays coarse; correctness there rests on
+the dispatch it falls through to, which is refinement-aware.</li>
+<li><strong>The inline-generator half</strong>, which is still ungated.</li>
+</ul>
+<p>One boundary had to be drawn to make any of this correct — see
+<code>Executor::basic_op_refinements</code>. monoruby writes part of its core
+library in Ruby where CRuby uses C, and those frames are transparent to
+refinements so that <code>&amp;obj</code> / interpolation, which monoruby converts in
+the callee and CRuby in the caller, reach the user’s scope. An operator
+is never such a conversion: <code>Array#map</code>’s own <code>i += 1</code> is library code,
+C in CRuby and invisible to any refinement. Resolving it against the
+caller ended the loop after one iteration. So operator names stop the
+walk at the library boundary and everything else still walks out.</p>
+</blockquote>
+<h3 id="68-the-remaining-pieces"><a class="header" href="#68-the-remaining-pieces">6.8 The remaining pieces</a></h3>
+<ul>
+<li><strong><code>super</code> inside a refinement</strong> means “the method this refinement
+shadows”. Record <code>refined_class: Option&lt;ClassId&gt;</code> on the refinement
+module and special-case <code>find_super</code> when the running body belongs to
+one, instead of trying to express it as a position in the real ancestor
+chain (§3.7).</li>
+<li><strong>Reflection</strong> (<code>send</code>, <code>respond_to?</code>, <code>Object#method</code>) resolves with the
+<em>caller’s</em> set: the same <code>nearest_ruby_frame</code> walk the eval builtins now
+use, then that frame’s set id. Only reached with the gate on.</li>
+</ul>
+<h3 id="69-order-of-work--as-landed"><a class="header" href="#69-order-of-work--as-landed">6.9 Order of work — as landed</a></h3>
+<p>Each step shipped on its own, with the spec ledger and (from step 3) the
+<code>emit-asm</code> baseline checked at every one.</p>
+<ol>
+<li><code>refine</code> / <code>using</code> build and intern sets; <code>Module#refinements</code> and
+<code>used_refinements</code> stop being mocks. Lookup still ignores them, so
+nothing can regress yet.</li>
+<li><code>search_method_with_refinements</code> + <code>refined_names</code> + the gate. <code>using</code>
+bumps <code>class_version</code>. Correct end-to-end through the VM; the JIT still
+refuses to compile any iseq with a non-empty set (deopt to VM), which is
+safe because the gate keeps that path cold.</li>
+<li><code>RefinementSetId</code> into <code>JitContext</code> and <code>inline_cache_map</code>; lift the
+step-2 refusal. This is the step that must not move the emit-asm
+baseline for the gate-off case.</li>
+<li>Inline-generator gate, <code>super</code>, reflection.</li>
+</ol>
+<p>Steps 1–2 were shippable on their own: refinements worked, refinement-using
+code was slower than it needed to be, and nothing else in the system
+changed speed. Step 3 is where the §3.4 hazard is actually closed, which
+is why the JIT kept refusing until it landed — a refusal is a performance
+choice, a wrong <code>FuncId</code> is not.</p>
+<p>Over core/{refinement,module,main,binding,kernel,proc,class,basicobject}
+and language, the four steps took 137 failing examples to 30. What is left
+is §6.7’s basic ops, the per-iseq cell’s re-execution case, and one
+<code>import_methods</code> example that is not a defect (monoruby implements Zlib in
+Ruby, so importing from it legitimately succeeds).</p>
+<hr>
+<h2 id="7-does-this-change-the-method-frame-layout"><a class="header" href="#7-does-this-change-the-method-frame-layout">7. Does this change the method frame layout?</a></h2>
+<p>Not for method frames. It does need a mutable cell somewhere for the
+scopes that can run <code>using</code> — but those are a small, bounded set, and the
+JIT never has to read it from machine code.</p>
+<h3 id="71-what-each-kind-of-body-actually-needs"><a class="header" href="#71-what-each-kind-of-body-actually-needs">7.1 What each kind of body actually needs</a></h3>
+<p>The requirement is bounded by what a scope’s <em>own</em> refinement state does
+when it changes mid-execution. Two <code>using</code> calls in one scope, with a
+<code>proc</code> and a <code>def</code> interleaved between them (CRuby 4.0.2):</p>
+<pre><code class="language-ruby">module A; refine(Integer) { def tag;  "A" } end
+module B; refine(Integer) { def tag2; "B" } end
+
+p0 = proc { … }   ;   def m0 = …          # before both
+using A
+p1 = proc { … }   ;   def m1 = …          # between
+using B
+p2 = proc { … }   ;   def m2 = …          # after both
+
+# procs:   p0 -&gt; [A, B]    p1 -&gt; [A, B]    p2 -&gt; [A, B]
+# methods: m0 -&gt; [-, -]    m1 -&gt; [A, -]    m2 -&gt; [A, B]
+</code></pre>
+<p>Every proc sees the final state, <strong>including the one created before any
+<code>using</code> ran</strong>. Every method sees the state as of its own <code>def</code>, and the
+three methods in one scope carry three different sets.</p>
+<p>So the scope’s refinement set is genuinely modified at runtime; a block
+reads the scope’s live state at call time rather than snapshotting it,
+while <code>def</code> snapshots. The cell must therefore be <em>mutable, owned by the
+scope’s environment, and read through</em> — not a value copied into each
+closure. A static per-iseq field cannot express both halves.</p>
+<p>Runtime mutation of a CREF is not itself new to monoruby: bare <code>private</code> /
+<code>public</code> / <code>protected</code> already write <code>Cref::visibility</code> in place
+(<code>set_context_visibility</code>), <code>module_function</code> writes <code>Cref::module_function</code>
+(<code>set_module_function</code> / <code>clear_module_function</code>), and class bodies and
+evals push and pop entries (<code>push_class_context</code>, <code>push_eval_cref</code>). What
+refinements add is that <strong>method resolution</strong> starts depending on that
+mutable state — and that the mutation must be visible to blocks already
+created and invisible to methods already defined.</p>
+<p>But the mutable half is needed only where <code>using</code> is legal, and that is
+narrow (verified):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>position</th><th><code>using</code></th></tr>
+</thead>
+<tbody>
+<tr><td>toplevel</td><td><code>main.using</code> — ok</td></tr>
+<tr><td>class / module body, <code>Class.new { }</code></td><td><code>Module#using</code> — ok</td></tr>
+<tr><td><code>Kernel#eval</code> at toplevel</td><td>ok</td></tr>
+<tr><td><strong>method body</strong></td><td><code>RuntimeError: Module#using is not permitted in methods</code></td></tr>
+<tr><td><strong>outside toplevel via main</strong></td><td><code>RuntimeError: main.using is permitted only at toplevel</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>A method body therefore only ever needs a <strong>read-only snapshot taken at
+<code>def</code></strong> — which is precisely what <code>ISeqInfo::lexical_context</code> and
+<code>ISeqInfo::nested_definee</code> already are. Method frames need no new slot.</p>
+<p>The same applies to the JIT: it compiles method / block / loop bodies and
+resolves methods at <em>compile</em> time, in Rust, with a live frame in hand. It
+never needs to load a cref from machine code, so none of the emitted
+prologues change.</p>
+<h3 id="72-three-places-the-mutable-cell-could-live"><a class="header" href="#72-three-places-the-mutable-cell-could-live">7.2 Three places the mutable cell could live</a></h3>
+<p><strong>(A) A new <code>LFP_CREF</code> word in the local frame.</strong> The faithful option, and
+there is a template: <code>LFP_SVAR</code> was added for the structurally identical
+problem — <code>$~</code> owned by the LEP, shared with blocks through the outer
+chain, lazily allocated with <code>0</code> as the “unset” sentinel, marked in
+<code>Lfp::mark</code>. A cref slot would copy it line for line.</p>
+<p>The cost is the layout shift. Today:</p>
+<pre><code>LFP_OUTER 0   LFP_META 8   LFP_SVAR 16   LFP_BLOCK 24   LFP_SELF 32   LFP_ARG0 40
+RSP_LOCAL_FRAME = 40
+</code></pre>
+<p>Inserting a word moves <code>LFP_ARG0</code> and <code>RSP_LOCAL_FRAME</code> to 48, which
+reaches 41 <code>LFP_ARG0</code> and 149 <code>RSP_LOCAL_FRAME</code> references across 26 files
+— both architectures’ <code>vmgen/{init_method,method_call,definition}</code>, both
+JIT <code>compile/</code> trees, the invokers and native wrappers, <code>Lfp::heap_frame</code> /
+<code>move_frame_to_heap</code> / <code>frame_bytes</code>, and <code>Lfp::mark</code>. It also spends 8
+bytes on <em>every</em> frame for something only non-method frames use.</p>
+<p><strong>(B) A side table on the <code>Executor</code>, keyed by LEP.</strong> The codebase already
+keys per-frame state this way: <code>deferred_unwind: Vec&lt;(Lfp, MonorubyErr)&gt;</code>
+and <code>adapter_blocks: Vec&lt;(Value, ProcData)&gt;</code>. Resolving “my scope’s cref”
+is the same outer-chain walk to the LEP that <code>$~</code> does, followed by a
+lookup. No layout change, per-execution correct, and behind the Stage-2
+global gate a non-refining program never touches it.</p>
+<p>What it has to handle: <code>move_frame_to_heap</code> changes an <code>Lfp</code>’s identity
+(<code>deferred_unwind</code> carries the same exposure), entries must be dropped when
+the frame dies so a reused stack address cannot inherit a stale cref, and
+the stored crefs must be reachable from the GC.</p>
+<p><strong>(C) Per-iseq storage, no frame involvement at all.</strong> Put the cref next to
+<code>lexical_context</code> on <code>ISeqInfo</code>, last-execution-wins — which is already how
+<code>enter_classdef</code> stamps <code>lexical_context</code> today. <code>using</code> writes the running
+scope’s cell, blocks read their mother’s, <code>def</code> snapshots.</p>
+<p>This inherits the staleness class <code>ISeqInfo</code> already documents: one cell
+per iseq, so re-entrant execution of a scope that runs <code>using</code> (a recursive
+or concurrently-loaded <code>Class.new { using … }</code>, the same file required on
+two threads) shares it. Rare, given §7.1’s table — but silently wrong when
+it happens, which is the failure mode §4 argues against.</p>
+<h3 id="73-recommendation"><a class="header" href="#73-recommendation">7.3 Recommendation</a></h3>
+<p>(B). It leaves the frame layout alone, is correct per execution rather than
+per iseq, and costs nothing while no refinement has been activated. (A) is
+the more faithful model and is known-feasible, but it taxes every call in
+every program for a feature most never use; it is the right answer only if
+per-frame cref turns out to be wanted for other reasons too — <code>doc/cref.md</code>
+lists several places where monoruby’s single VM-wide <code>lexical_class</code> stack
+already diverges from CRuby, so that is not far-fetched.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/cref.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/toplevel_binding.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/cref.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/toplevel_binding.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

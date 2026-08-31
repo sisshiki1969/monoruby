@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>JIT Compiler - monoruby</title>
+        <title>Benchmark - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -177,62 +177,172 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <p>monoruby executes bytecode in the VM until code gets hot, then compiles it to specialized machine code. This page is an overview; the detailed documents are <a href="design/jit.html"><code>doc/jit.md</code></a> (stub/bridge code), <a href="design/lir.html"><code>doc/lir.md</code></a> (the low-level IR), <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> (register allocation), and <a href="design/inline.html"><code>doc/inline.md</code></a> (inline builtins).</p>
-<h2 id="when-compilation-triggers"><a class="header" href="#when-compilation-triggers">When compilation triggers</a></h2>
-<ul>
-<li><strong>Method JIT</strong> — after ≥ 20 calls (<code>COUNT_START_COMPILE</code>; 5 in test mode)</li>
-<li><strong>Loop JIT</strong> — after ≥ 100 iterations of a loop (<code>COUNT_LOOP_START_COMPILE</code>; 15 in test mode), compiling the enclosing method from the loop entry</li>
-</ul>
-<p>Each function starts with a small <em>wrapper</em> that decrements a counter and falls through to the VM until the counter expires, then triggers compilation and patches itself.</p>
-<h2 id="ir-pipeline"><a class="header" href="#ir-pipeline">IR pipeline</a></h2>
-<pre><code>bytecode ──abstract interpretation──▶ TraceIR ──▶ AsmIR ──▶ LIR ──▶ machine code (monoasm)
-                (type feedback from inline caches)        (per-arch encoder)
-</code></pre>
-<ul>
-<li><strong>TraceIR</strong> — bytecode annotated with type information gathered from the VM tier’s inline caches.</li>
-<li><strong>AsmIR</strong> (<code>AsmInst</code>) — arch-neutral, register-allocated assembly IR produced by an abstract interpreter that tracks, per slot, whether a value lives on the stack, in a floating-point register (unboxed <code>f64</code>), both, or is a compile-time constant (<code>LinkMode</code>).</li>
-<li><strong>LIR</strong> (<code>LInst</code>) — arch-neutral machine-level ops with offsets and labels resolved; the single seam where bytes are emitted. Each architecture implements one <code>encode_linst</code> (see <a href="aarch64-backend.html">aarch64 Backend</a>).</li>
-</ul>
-<h2 id="specialization-and-inline-caches"><a class="header" href="#specialization-and-inline-caches">Specialization and inline caches</a></h2>
-<p>Compiled code is specialized <strong>per receiver class</strong>. The method entry is a chain of self-class guard stubs: each guard tests the receiver’s class and jumps to the machine code compiled for that class; a miss falls through to the next guard or to the VM. Method calls inside JIT code are resolved through inline caches and guarded by a <strong>class-version</strong> check, so redefining a method invalidates dependent code. Small hot builtins (<code>Array#[]</code>, <code>Integer</code> arithmetic, <code>Math.sqrt</code>, <code>Object#is_a?</code>, <code>Struct</code> accessors, <code>Class#new</code>, <code>Fiber.yield</code>, …) are inlined directly by generator functions that can both consult the abstract state (folding results at compile time when types are proven) and emit code; a failed inline attempt rolls back cleanly and falls back to a normal call. Monomorphic methods can additionally be <strong>specialized inline</strong> — the callee’s frame is inlined into the caller.</p>
-<h2 id="deoptimization-and-recompilation"><a class="header" href="#deoptimization-and-recompilation">Deoptimization and recompilation</a></h2>
-<p>JIT code is speculative. Guards — receiver class, class version, array type, frozen state, fixnum overflow, basic-operator (BOP) redefinition, frame capture — branch to <strong>side exits</strong> that write register-resident values back to the frame and resume in the VM at the equivalent program point. Repeated deopts trigger <strong>recompilation</strong> with the newly observed classes (e.g. polymorphic call sites, <code>method_missing</code> dispatch, newly resolved constants/ivars). Deopt logging is available with the <code>deopt</code> Cargo feature, recompile/deopt statistics with <code>profile</code>.</p>
-<h2 id="register-allocation"><a class="header" href="#register-allocation">Register allocation</a></h2>
-<ul>
-<li><strong>Floating point</strong> — virtual FP registers (<code>VirtFPReg</code>) allocated greedily over the physical pool (14 xmm registers on x86-64), with automatic <strong>spill-to-stack</strong> when the pool is exhausted; loop entries specialize float-typed slots so hot numeric loops keep values unboxed in registers.</li>
-<li><strong>General purpose</strong> — a per-basic-block local GP register allocator keeps boxed values (notably Fixnums) in a small pool of scratch registers within a block, eliding redundant fixnum guards, and flushes the pool at calls and GC safepoints (pool registers are not GC roots).</li>
-</ul>
-<p>The long-form design discussion — separating type inference from placement, the retirement of the dedicated accumulator register, and measured results — is in <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> and <a href="design/lir.html"><code>doc/lir.md</code></a>.</p>
-<h2 id="argument-forwarding-d1"><a class="header" href="#argument-forwarding-d1">Argument forwarding (D1)</a></h2>
-<p><code>def f(...)</code> forwarding is compiled as an opaque pipe: for simple callees the rest-Array / keyword-Hash allocation is elided entirely and arguments are copied (or lazily deferred) straight from the caller’s frame, with deopt-safe lazy materialization if a side exit or frame capture ever needs the real objects. See <a href="design/arg_forwarding_jit.html"><code>doc/arg_forwarding_jit.md</code></a>.</p>
-<h2 id="observing-the-jit"><a class="header" href="#observing-the-jit">Observing the JIT</a></h2>
+                        <h1 id="benchmark"><a class="header" href="#benchmark">Benchmark</a></h1>
+<p>monoruby is performance-focused, and performance is measured continuously
+rather than quoted from a README. This page covers the live dashboards, how to
+reproduce a measurement locally, and the historical one-off comparisons that
+used to live in the project wiki.</p>
+<h2 id="live-dashboards"><a class="header" href="#live-dashboards">Live dashboards</a></h2>
+<p>Every push to <code>master</code> that touches the interpreter re-runs the benchmark
+suite and republishes the <a href="https://sisshiki1969.github.io/monoruby/">project
+portal</a>:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Cargo feature</th><th>Output</th></tr>
+<tr><th>Dashboard</th><th>What it shows</th></tr>
 </thead>
 <tbody>
-<tr><td><code>dump-bc</code> / <code>emit-bc</code></td><td>bytecode</td></tr>
-<tr><td><code>dump-traceir</code></td><td>TraceIR</td></tr>
-<tr><td><code>emit-asm</code></td><td>generated assembly</td></tr>
-<tr><td><code>jit-log</code> / <code>jit-debug</code></td><td>compilation events / detailed debug</td></tr>
-<tr><td><code>deopt</code></td><td>deoptimization log</td></tr>
-<tr><td><code>profile</code></td><td>deopt &amp; recompile statistics</td></tr>
-<tr><td><code>perf</code></td><td>perf-compatible symbol maps</td></tr>
+<tr><td><a href="https://sisshiki1969.github.io/monoruby/bench/">Performance vs YJIT (x86-64)</a></td><td>Per-benchmark speed relative to CRuby + YJIT, plus a history chart per benchmark</td></tr>
+<tr><td><a href="https://sisshiki1969.github.io/monoruby/bench-arm64/">Performance vs YJIT (aarch64)</a></td><td>The same suite on an Apple Silicon runner</td></tr>
 </tbody>
 </table>
 </div>
-<p>The JIT is always built in; disable it at runtime with <code>--no-jit</code>. See <a href="https://github.com/sisshiki1969/monoruby/wiki/Build-options-for-performance-tuning">Build options for performance tuning</a> for example output.</p>
+<p>The portal also hosts the two ruby/spec dashboards; those are covered in
+<a href="compatibility.html">Compatibility</a>.</p>
+<p>Methodology, from <code>.github/workflows/bench.yml</code>:</p>
+<ul>
+<li>The suite is <a href="https://github.com/Shopify/yjit-bench">yjit-bench</a>, run with
+<code>--rss --harness=harness-warmup</code>, monoruby against <code>ruby --yjit</code> on the same
+runner in the same job.</li>
+<li>The reference CRuby is 4.0.2 (<code>ruby/setup-ruby</code>), and monoruby is installed
+with <code>cargo install --path monoruby --locked</code>.</li>
+<li>Each benchmark gets a 400-second timeout per interpreter; a benchmark that
+times out or exits non-zero is recorded as a failure rather than silently
+dropped, and shows on the dashboard as a gap.</li>
+<li>The published <code>ratio</code> is <strong>× YJIT, higher = monoruby faster</strong>, 1× being
+parity. <code>latest.json</code> and <code>data/history.csv</code> next to each dashboard hold the
+raw numbers if you want to plot them yourself.</li>
+</ul>
+<p>As a snapshot: on the x86-64 run of commit <code>a13bfe0</code> (2026-08-31), 59 of the
+76 benchmarks produced a ratio on both interpreters; over those the geometric
+mean was <strong>1.28× YJIT</strong>, with monoruby ahead on 30 of them. The spread is
+wide in both directions — from ~16× on <code>string_malloc_pressure</code> down to ~0.3×
+on <code>send_bmethod</code> — which is the point of reading the dashboard rather than a
+single headline number.</p>
+<h2 id="reproducing-a-measurement-locally"><a class="header" href="#reproducing-a-measurement-locally">Reproducing a measurement locally</a></h2>
+<p>The helper scripts in <code>bin/</code> wrap the two harnesses the project uses. Most of
+them assume <a href="https://github.com/benchmark-driver/benchmark-driver">benchmark-driver</a>
+and <code>rbenv</code>-managed reference Rubies; adjust the version strings inside to
+match what you have installed.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Script</th><th>What it runs</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bin/bench</code></td><td>The standard set (<code>app_fib</code>, <code>so_nbody</code>, <code>so_mandelbrot</code>, <code>app_aobench</code>, plb2) via benchmark-driver, against <code>4.0.5 --yjit</code> and <code>4.0.5 --zjit</code></td></tr>
+<tr><td><code>bin/compare</code></td><td>Comparing <strong>two git refs of monoruby</strong> against each other — <code>bin/compare HEAD~1 HEAD</code> by default, over <code>app_fib</code>, <code>so_nbody</code>, <code>so_mandelbrot</code>, <code>quick_sort</code>, <code>integer</code>, <code>vm_send</code>, <code>vm_block</code>, <code>vm_yield</code></td></tr>
+<tr><td><code>bin/ruby-bench</code></td><td>The full yjit-bench suite (expects a <code>../ruby-bench</code> checkout), the same harness CI uses</td></tr>
+<tr><td><code>bin/optcarrot</code></td><td>optcarrot on ruby, <code>ruby --yjit</code> and monoruby in turn (expects <code>../optcarrot</code>)</td></tr>
+<tr><td><code>bin/opt.rb</code></td><td>optcarrot fps history over 3000 frames, the data behind the fps-history charts</td></tr>
+<tr><td><code>bin/index</code></td><td>Array / Hash element access (<code>benchmark/index.yaml</code>)</td></tr>
+<tr><td><code>bin/inline</code></td><td>Integer and Math methods, i.e. the inline-asm builtins, also run with <code>--no-jit</code> for contrast</td></tr>
+<tr><td><code>bin/ivar</code></td><td>Instance-variable get/set, generic and <code>attr_</code>-generated</td></tr>
+<tr><td><code>bin/send</code></td><td>Method dispatch, <code>Class.new</code>, Array literals and constant lookup</td></tr>
+<tr><td><code>bin/times</code></td><td><code>Integer#times</code>, JIT’ed Array / Hash work, <code>block_given?</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>bin/compare</code> is the one to reach for when you want to know whether a change
+you just made helped:</p>
+<pre><code class="language-sh">bin/compare                          # HEAD~1 vs HEAD, standard benchmarks
+bin/compare abc1234 def5678          # two specific commits
+bin/compare HEAD~5 HEAD app_fib.yml  # one benchmark
+</code></pre>
+<p>For a single script, a release build is enough:</p>
+<pre><code class="language-sh">cargo build --release
+target/release/monoruby benchmark/app_fib.rb
+</code></pre>
+<p>Benchmark scripts and their benchmark-driver YAML configs live in
+<code>benchmark/</code>. Passing <code>--no-jit</code> gives you the VM-only baseline for the same
+script, which is often more informative than an absolute number.</p>
+<h2 id="profiling"><a class="header" href="#profiling">Profiling</a></h2>
+<pre><code class="language-sh"># Flame graph via Linux perf (needs ../FlameGraph)
+bin/perf benchmark/app_fib.rb
+
+# or by hand
+cargo build --release --features perf
+perf record target/release/monoruby benchmark/app_fib.rb
+perf report
+</code></pre>
+<p>The <code>perf</code> feature makes monoruby emit perf-compatible symbol maps so
+JIT-compiled frames get names instead of raw addresses.
+<code>.cargo/config.toml</code> sets <code>-Cforce-frame-pointers=yes</code> globally, which is what
+makes the stacks walkable.</p>
+<p><code>--features profile</code> collects deopt and recompile statistics instead of a time
+profile — see <a href="development.html#measurement-and-profiling">Development and Build Options</a>.
+<a href="design/optcarrot_opt_profile.html">Where optcarrot –opt spends its time</a> is a
+worked example of both.</p>
+<h2 id="historical-measurements"><a class="header" href="#historical-measurements">Historical measurements</a></h2>
+<p>The two comparisons below are one-off measurements previously published in the
+project wiki. They are kept for the record and are <strong>not</strong> re-measured; for
+current numbers use the live dashboards above.</p>
+<h3 id="optcarrot-april-2024"><a class="header" href="#optcarrot-april-2024">optcarrot (April 2024)</a></h3>
+<p>Measured with <a href="https://github.com/mame/optcarrot">optcarrot</a>.</p>
+<p>Rubies:</p>
+<ul>
+<li>ruby 3.4.0dev (2024-04-27T08:56:20Z master 9ea77cb351) [x86_64-linux]</li>
+<li>truffleruby 24.0.1, like ruby 3.2.2, Oracle GraalVM JVM [x86_64-linux]</li>
+<li>truffleruby 24.0.1, like ruby 3.2.2, Oracle GraalVM Native [x86_64-linux]</li>
+<li>monoruby 3e348afd4141c40978342e67ad26d42dc0b8d2a7</li>
+</ul>
+<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="design/optcarrot_benchmark.png" alt="optcarrot benchmark"><span class="img-wrapper"><img src="design/optcarrot_benchmark.png" alt="optcarrot benchmark"></span></label></p>
+<p>fps history, 0–3000 frames:</p>
+<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="design/optcarrot_fps_history.png" alt="optcarrot fps history"><span class="img-wrapper"><img src="design/optcarrot_fps_history.png" alt="optcarrot fps history"></span></label></p>
+<p>With <code>--opt</code> (optcarrot’s self-rewriting optimization mode):</p>
+<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="design/optcarrot_fps_history_opt.png" alt="optcarrot fps history, –opt"><span class="img-wrapper"><img src="design/optcarrot_fps_history_opt.png" alt="optcarrot fps history, –opt"></span></label></p>
+<h3 id="yjit-bench-december-2024"><a class="header" href="#yjit-bench-december-2024">yjit-bench (December 2024)</a></h3>
+<p>Speed ratio against truffleruby; higher is better. Measured with
+<a href="https://github.com/Shopify/yjit-bench">yjit-bench</a> using
+<code>--rss --harness=harness-warmup</code>. Benchmark sources are from
+<a href="https://github.com/ruby/ruby/tree/master/benchmark">ruby/ruby’s <code>benchmark/</code></a>
+and <a href="https://github.com/attractivechaos/plb2">plb2</a>.</p>
+<p>Rubies:</p>
+<ul>
+<li>monoruby 0.3.0</li>
+<li>ruby 3.4.1 (2024-12-25 revision 48d4efcb85) +YJIT +PRISM [x86_64-linux]</li>
+<li>truffleruby 24.1.1, like ruby 3.2.4, Oracle GraalVM Native [x86_64-linux]</li>
+</ul>
+<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="design/chart.png" alt="micro benchmarks"><span class="img-wrapper"><img src="design/chart.png" alt="micro benchmarks"></span></label></p>
+<p>Raw data — execution time in milliseconds, resident set size (RSS) in MiB.
+<code>monoruby/yjit</code> and <code>monoruby/truffle</code> are time ratios; above 1 means monoruby
+is faster.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">bench</th><th style="text-align: right">monoruby (ms)</th><th style="text-align: right">RSS (MiB)</th><th style="text-align: right">yjit (ms)</th><th style="text-align: right">RSS (MiB)</th><th style="text-align: right">truffle (ms)</th><th style="text-align: right">RSS (MiB)</th><th style="text-align: right">monoruby/yjit</th><th style="text-align: right">monoruby/truffle</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left">bedcov</td><td style="text-align: right">4412.0</td><td style="text-align: right">234.3</td><td style="text-align: right">4803.9</td><td style="text-align: right">413.8</td><td style="text-align: right">1881.8</td><td style="text-align: right">1909.5</td><td style="text-align: right">0.918</td><td style="text-align: right">2.345</td></tr>
+<tr><td style="text-align: left">binarytrees</td><td style="text-align: right">175.0</td><td style="text-align: right">28.7</td><td style="text-align: right">137.0</td><td style="text-align: right">22.0</td><td style="text-align: right">31.7</td><td style="text-align: right">1126.4</td><td style="text-align: right">1.278</td><td style="text-align: right">5.525</td></tr>
+<tr><td style="text-align: left">matmul</td><td style="text-align: right">39.7</td><td style="text-align: right">35.0</td><td style="text-align: right">121.8</td><td style="text-align: right">22.8</td><td style="text-align: right">1.4</td><td style="text-align: right">803.2</td><td style="text-align: right">0.326</td><td style="text-align: right">29.059</td></tr>
+<tr><td style="text-align: left">nbody</td><td style="text-align: right">8.5</td><td style="text-align: right">27.7</td><td style="text-align: right">21.9</td><td style="text-align: right">14.0</td><td style="text-align: right">1.1</td><td style="text-align: right">690.2</td><td style="text-align: right">0.389</td><td style="text-align: right">7.473</td></tr>
+<tr><td style="text-align: left">nqueens</td><td style="text-align: right">14.7</td><td style="text-align: right">24.7</td><td style="text-align: right">31.0</td><td style="text-align: right">14.2</td><td style="text-align: right">7.2</td><td style="text-align: right">637.9</td><td style="text-align: right">0.475</td><td style="text-align: right">2.044</td></tr>
+<tr><td style="text-align: left">optcarrot</td><td style="text-align: right">520.4</td><td style="text-align: right">79.0</td><td style="text-align: right">720.9</td><td style="text-align: right">54.7</td><td style="text-align: right">432.2</td><td style="text-align: right">1506.3</td><td style="text-align: right">0.722</td><td style="text-align: right">1.204</td></tr>
+<tr><td style="text-align: left">rubykon</td><td style="text-align: right">214.9</td><td style="text-align: right">34.9</td><td style="text-align: right">348.2</td><td style="text-align: right">18.6</td><td style="text-align: right">65.2</td><td style="text-align: right">2279.9</td><td style="text-align: right">0.617</td><td style="text-align: right">3.298</td></tr>
+<tr><td style="text-align: left">so_mandelbrot</td><td style="text-align: right">39.9</td><td style="text-align: right">22.9</td><td style="text-align: right">509.5</td><td style="text-align: right">14.5</td><td style="text-align: right">26.3</td><td style="text-align: right">548.8</td><td style="text-align: right">0.078</td><td style="text-align: right">1.517</td></tr>
+<tr><td style="text-align: left">sudoku</td><td style="text-align: right">41.6</td><td style="text-align: right">23.9</td><td style="text-align: right">88.8</td><td style="text-align: right">14.9</td><td style="text-align: right">17.5</td><td style="text-align: right">1165.2</td><td style="text-align: right">0.469</td><td style="text-align: right">2.381</td></tr>
+<tr><td style="text-align: left">fib</td><td style="text-align: right">16.7</td><td style="text-align: right">23.5</td><td style="text-align: right">17.4</td><td style="text-align: right">15.0</td><td style="text-align: right">8.8</td><td style="text-align: right">483.4</td><td style="text-align: right">0.960</td><td style="text-align: right">1.895</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="machine"><a class="header" href="#machine">Machine</a></h3>
+<p>Both historical runs used the same machine:</p>
+<ul>
+<li>Architecture: x86_64</li>
+<li>CPU(s): 32 — 13th Gen Intel(R) Core(TM) i9-13900HX, 16 cores / 2 threads per core</li>
+<li>Caches (sum of all): L1d 768 KiB (16), L1i 512 KiB (16), L2 32 MiB (16), L3 36 MiB (1)</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="value-representation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="development.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="garbage-collection.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="compatibility.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -242,11 +352,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="value-representation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="development.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="garbage-collection.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="compatibility.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

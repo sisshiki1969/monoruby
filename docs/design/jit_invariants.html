@@ -1,0 +1,636 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Invariants compiled code speculates on (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-86c241c2.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-a8d0bf4a.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="jit-の不変条件--何を前提に投機し破れたらどう戻るか"><a class="header" href="#jit-の不変条件--何を前提に投機し破れたらどう戻るか">JIT の不変条件 — 何を前提に投機し、破れたらどう戻るか</a></h1>
+<p>monoruby の JIT は、コンパイル時点で<strong>まだ真である事実</strong>をコードに焼き込む。
+「この呼び出しは <code>FuncId(42)</code> へ行く」「この定数は <code>3</code> である」「この足し算は
+組み込みの <code>Integer#+</code> である」「このスロットは常に <code>Float</code> である」——
+どれも Ruby が実行中に覆せる。覆されたまま走り続ければ JIT コードは
+インタプリタとの等価性を失う。</p>
+<p>したがって投機ごとに次の 3 点が必要になる:</p>
+<ol>
+<li><strong>前提（不変条件）を明示する</strong> — 何を真だと仮定したか。</li>
+<li><strong>破れを検知する</strong> — ガード、あるいは外部イベントからの通知。</li>
+<li><strong>整合性を保って戻る</strong> — 生成コードが持っていた状態（レジスタ内の値、
+アンボックスされた float、遅延したオブジェクト確保）をすべてフレームへ
+書き戻し、正しい pc からインタプリタを再開する。実行中の<strong>呼び出し元
+フレーム</strong>も同時に救出する必要がある。</li>
+</ol>
+<p>本書は monoruby がいま持っている不変条件を一覧し、それぞれの検知と復帰を
+実装に即して記述する。個別の機構には専用ドキュメントがあるので、詳細は
+そちらへ譲る:</p>
+<ul>
+<li><a href="jit_invalidation.html"><code>jit_invalidation.md</code></a> — バージョンカウンタと salvage</li>
+<li><a href="bop_redefinition.html"><code>bop_redefinition.md</code></a> — 基本演算の再定義</li>
+<li><a href="chain_deopt.html"><code>chain_deopt.md</code></a> — 呼び出し元チェーンの一括変換</li>
+<li><a href="deopt_log.html"><code>deopt_log.md</code></a> — <code>--features deopt</code> の読み方</li>
+<li><a href="refinements.html"><code>refinements.md</code></a> — refinements とメソッド解決</li>
+<li><a href="safepoint.html"><code>safepoint.md</code></a> — GC/preempt ポーリング（同じ write-back を共有）</li>
+<li><a href="jit.html"><code>jit.md</code></a> — スタブとクラスガードチェーンの形</li>
+</ul>
+<hr>
+<h2 id="1-三つの道具"><a class="header" href="#1-三つの道具">1. 三つの道具</a></h2>
+<p>不変条件を守る手段は 3 つあり、どれを使うかは「破れがどこから来るか」で
+決まる。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>道具</th><th>いつ使うか</th><th>例</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>ガード（guard）</strong></td><td>生成コード自身が実行時に確かめられる</td><td>クラスガード、型ガード、バージョンワード比較、キャプチャガード</td></tr>
+<tr><td><strong>無効化（invalidation）</strong></td><td>外部イベントが起きた時に Rust 側からコードを差し替える／捨てる</td><td>BOP 再定義によるエビクション</td></tr>
+<tr><td><strong>投機の放棄（bail / 前提の成立）</strong></td><td>そもそも守れない、または安く成立させられる</td><td><code>eval</code> を呼ぶ callee は specialize しない／プロローグで ivar テーブルを拡張する</td></tr>
+</tbody>
+</table>
+</div>
+<p>3 つ目には二種類ある。<strong>放棄</strong>は「投機しない」であり、
+<strong>前提の成立</strong>は「ガードする代わりに、入口でその条件を真にしてしまう」
+である（§3.7 の ivar テーブル）。後者はガードより安いことが多い。</p>
+<hr>
+<h2 id="2-不変条件の一覧"><a class="header" href="#2-不変条件の一覧">2. 不変条件の一覧</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>#</th><th>不変条件</th><th>破るイベント</th><th>検知</th><th>復帰</th></tr>
+</thead>
+<tbody>
+<tr><td>I1</td><td>呼び出し先の解決（<code>(recv_class, name, refinements) → FuncId</code>）</td><td><code>def</code> / <code>define_method</code> / <code>attr_*</code> / <code>alias</code> / <code>undef</code> / 可視性変更 / <code>include</code> / <code>prepend</code> / <code>refine</code> / <code>using</code></td><td>クラスバージョンワードの比較</td><td>salvage → 成功なら継続、失敗なら再コンパイル</td></tr>
+<tr><td>I2</td><td>畳み込んだ定数の値</td><td>定数代入・<code>remove_const</code>・<code>include</code>/<code>prepend</code></td><td>定数バージョンワードの比較</td><td>2 段 salvage（名前エポック → 値比較）</td></tr>
+<tr><td>I3</td><td>基本演算が組み込みのまま</td><td><code>Integer#+</code> 等の再定義</td><td><code>CheckBOP</code>（バージョン即値比較）＋ 依存 iseq のエビクション</td><td>コード破棄 + 実行中フレームの chain 変換</td></tr>
+<tr><td>I4</td><td>レシーバ／スロットの型・クラス</td><td>別クラスの値が流れてくる、Fixnum のオーバーフロー、<code>freeze</code></td><td>クラスガード／型ガード／<code>jo</code></td><td>deopt</td></tr>
+<tr><td>I5</td><td>フレームが未キャプチャ</td><td>ブロック・<code>Proc.new</code>・<code>binding</code>・<code>eval</code> によるヒープ昇格</td><td><code>GuardCapture</code>（meta のビット検査）</td><td>deopt</td></tr>
+<tr><td>I6</td><td><code>eval</code> 族がフレームを覗かない</td><td><code>eval</code> / <code>instance_eval</code> / <code>binding</code> の呼び出し</td><td><strong>コンパイル時に拒否</strong>（<code>Effect::EVAL</code>/<code>BINDING</code>）</td><td>そもそも投機しない</td></tr>
+<tr><td>I7</td><td>TracePoint が存在しない</td><td>（未サポート）</td><td>検知機構なし</td><td>—</td></tr>
+<tr><td>I8</td><td>呼び出しが単相</td><td>2 つ目のレシーバクラスの到来</td><td>クラスガードのミス</td><td>一度だけ再コンパイル（多相形へ）／以後は素の deopt</td></tr>
+<tr><td>I9</td><td>遅延した実体（float・転送 rest/kwrest・定数）はフレームに無い</td><td>あらゆる側方退出・セーフポイント</td><td>— （破れではなく<strong>義務</strong>）</td><td>write-back で実体化してから戻る</td></tr>
+<tr><td>I10</td><td>GC がオブジェクトを動かさない</td><td>（現状の GC は非移動）</td><td>検知機構なし</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<p>I1〜I3 が「グローバルな再定義」、I4〜I5 が「そのフレーム固有の投機」、
+I6〜I7・I10 が「そもそも投機しない／前提を置いている」もの、I9 は復帰の
+<strong>手続き</strong>そのものである。</p>
+<hr>
+<h2 id="3-個別の不変条件"><a class="header" href="#3-個別の不変条件">3. 個別の不変条件</a></h2>
+<h3 id="31-i1-メソッド解決クラスバージョン"><a class="header" href="#31-i1-メソッド解決クラスバージョン">3.1 I1: メソッド解決（クラスバージョン）</a></h3>
+<p>コンパイル時に <code>(recv_class, name, refinements) → FuncId</code> を解決してコードへ
+焼き込む。この答えを変えうる全イベントが <code>Globals::class_version_inc()</code> で
+グローバルなクラスバージョンを進める（<code>def</code>、<code>define_method</code>、<code>attr_*</code>、
+<code>alias_method</code>、<code>remove_method</code>、<code>undef_method</code>、可視性変更、<code>include</code> /
+<code>prepend</code>、<code>refine</code> / <code>using</code>）。</p>
+<p><strong>検知</strong>: コンパイル単位（ルート本体 + そこへインライン展開された全
+specialize 済み callee）につき<strong>ひとつ</strong>のバージョンワードを持ち、単位内の
+全ガードがグローバルカウンタとそのワードを比較する。ワードは<strong>即値ではなく
+メモリ</strong>でなければならない（即値にすると salvage が無言で効かなくなる。
+aarch64 で実際に起きた）。</p>
+<p><strong>復帰</strong>: カウンタはグローバルなので、無関係な <code>def</code> ひとつでも動く。そこで
+ミスは即再コンパイルではなく <strong>salvage</strong>（修復）を試みる。単位は自分が
+解決したメソッドを <code>inline_cache_map</code> に記録しており、全件を現在の
+バージョンで再解決して答えが変わっていなければワードに現在値を書き込んで
+コードを生かす。ruby/spec <code>core</code> で ~107,000 回の再コンパイルが ~320 回に
+なった。詳細は <a href="jit_invalidation.html"><code>jit_invalidation.md</code></a> §1〜§3。</p>
+<p><strong>復帰の粒度</strong>: x86-64 のメソッド単位クラスガードだけは salvage 成功時に
+その場で実行を再開する（<code>jit_recompile_method_with_recovery</code> が 1 を返し、
+スタブの <code>jnz recover</code> が戻る）。それ以外は salvage が成功しても当該呼び出しは
+一度 deopt し、次回から修復済みコードが走る。</p>
+<h3 id="32-i2-定数の畳み込み定数バージョン"><a class="header" href="#32-i2-定数の畳み込み定数バージョン">3.2 I2: 定数の畳み込み（定数バージョン）</a></h3>
+<p>定数を畳み込んだ単位は、クラスバージョンとは別に定数バージョンワードを持つ。
+ミス時の salvage は 2 段:</p>
+<ol>
+<li><strong>名前エポック</strong> — 各イベントは触った名前のエポックを進める。畳み込んだ
+名前のエポックが一つも動いていなければ（ワイルドカードも動いていなければ）
+ルックアップ 0 回で確定。</li>
+<li><strong>値の再確認</strong> — 触られた名前は VM 側インラインキャッシュと突き合わせる。
+同じ値ならパッチして継続、違えば再コンパイル、キャッシュが古ければ
+<code>Defer</code>（今回は deopt させて VM にキャッシュを温めさせ、次回再試行。
+<code>stale_defers</code> = 3 回で打ち切り）。</li>
+</ol>
+<p>畳み込んだ <code>Value</code> は <code>ConstSalvageMap::mark</code> から GC ルートとして生かされる。
+詳細は <a href="jit_invalidation.html"><code>jit_invalidation.md</code></a> §4。</p>
+<h3 id="33-i3-基本演算bopの再定義"><a class="header" href="#33-i3-基本演算bopの再定義">3.3 I3: 基本演算（BOP）の再定義</a></h3>
+<p><code>1 + 2</code> を機械語の加算にインライン化してよいのは <code>Integer#+</code> が組み込みの
+ままだからである。この前提だけは<strong>バージョンガードでは修復されない</strong>。</p>
+<p><strong>検知</strong>: 二段構え。</p>
+<ul>
+<li>コンパイル時に <code>bop_deps: Vec&lt;(ClassId, IdentId)&gt;</code> を記録する
+（「この本体は <code>Integer#+</code> をガード無しでインライン化した」）。</li>
+<li>生成コードには <code>AsmInst::CheckBOP</code> を置く。比較対象は
+<strong>コンパイル時に観測した BOP バージョン</strong>であって 0 ではない。ゼロ比較に
+すると、無関係な再定義以降すべての <code>def</code> で deopt し続けてしまう。</li>
+</ul>
+<p><strong>復帰</strong>: 再定義が起きると <code>Store::evict_jit_code_for_bop(class, name)</code> が
+<code>depends_on_bop(class, name)</code> な iseq <strong>だけ</strong>のコードを捨てる
+（<code>evict_jit_code</code>）。<code>Integer#+</code> をインライン化した本体は <code>Integer#~</code> の
+再定義では無傷であり、実メソッド呼び出しとして出た演算子は I1 の
+クラスバージョンガードが既にカバーしている。</p>
+<p><strong>実行中フレームの救出</strong>: 捨てるだけでは、いまスタックで動いている JIT
+フレームが古いコードを実行し続ける。<code>Codegen::check_bop_redefine</code> が
+メソッド定義のたびに「今の定義が実際に BOP を潰したか」を確認し、潰していれば
+<code>chain_deopt_into(cfp)</code> で<strong>スタック上の全 JIT フレームをインタプリタ
+フレームへ変換</strong>する（§4.4）。BOP エビクションと側方退出のチェーン変換は
+同一の walk を通る。詳細は <a href="bop_redefinition.html"><code>bop_redefinition.md</code></a>。</p>
+<h3 id="34-i4-型クラスの投機"><a class="header" href="#34-i4-型クラスの投機">3.4 I4: 型・クラスの投機</a></h3>
+<p>インラインキャッシュから作った TraceIR は「このスロットは <code>Integer</code>」
+「このレシーバは <code>Foo</code>」という型注釈を持つ。JIT はそれを信じてアンボックス
+表現（<code>LinkMode::F</code> の生 float、タグ付き Fixnum の直接演算）や
+クラス特化コードを出し、代わりにガードを置く。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>ガード</th><th>破れ方</th><th>退出</th></tr>
+</thead>
+<tbody>
+<tr><td><code>GuardClass</code></td><td>別クラスのレシーバ</td><td>deopt（呼び出しサイトでは §3.8 の再コンパイル付き）</td></tr>
+<tr><td>float アンボックス（<code>GuardFloat</code> 系）</td><td>Float でない値</td><td>deopt</td></tr>
+<tr><td>Fixnum 演算のオーバーフロー（<code>jo</code>）</td><td>i63 を超える</td><td>deopt（インタプリタが Bignum へ昇格）</td></tr>
+<tr><td><code>GuardArrayTy</code></td><td>Array でない</td><td>deopt</td></tr>
+<tr><td><code>guard_frozen</code></td><td>凍結オブジェクトへの ivar 代入</td><td>deopt（インタプリタが <code>FrozenError</code> を上げる）</td></tr>
+<tr><td>引数形状ガード（転送の長さガード等）</td><td>個数不一致</td><td><strong>deopt ではなく</strong>汎用ランタイムへフォールバック</td></tr>
+</tbody>
+</table>
+</div>
+<p>最後の行は重要な設計上の区別である。ガードが<strong>フレームを書き始める前</strong>に
+すべて置かれていれば、ミスは deopt ではなく「同じことを汎用パスでやり直す」
+で済み、ロールバックが要らない。引数設定の高速路（<code>SetArgumentsForwarded</code>
+など）はこの形をとっている。</p>
+<p><code>unfrozen_slots</code> のような「直線コード内でだけ有効な証明」は基本ブロックの
+合流で捨てられる（合流点では両側の事実が保証されないため）。投機的事実の
+生存範囲を状態機械に持たせる、という一般則の一例。</p>
+<h3 id="35-i5-フレームのキャプチャクロージャ"><a class="header" href="#35-i5-フレームのキャプチャクロージャ">3.5 I5: フレームのキャプチャ（クロージャ）</a></h3>
+<p>JIT はローカル変数をスタックフレーム上のスロットとして rbp 相対で読み書き
+する。ところが Ruby はフレームを<strong>ヒープへ昇格</strong>させられる:
+ブロックや <code>Proc</code> が外側フレームを掴む、<code>binding</code> を取る、<code>eval</code> がフレームに
+対してコンパイルする、など。</p>
+<p><strong>機構</strong>: <code>Lfp::move_frame_to_heap</code> がフレームの内容をヒープへコピーし、
+<code>cfp.set_lfp(heap_lfp)</code> で正本を差し替え、<strong>元のスタックスロットに
+tombstone（<code>invalidated</code> ビット）を立てる</strong>。以後スタック側を読む者は
+<code>cfp.lfp()</code> 経由でヒープコピーへ転送される。外側フレームも再帰的に昇格する。</p>
+<p><strong>検知</strong>: <code>AsmInst::GuardCapture</code> が meta のビットを見て、昇格済み
+（<code>on_heap</code> / <code>invalidated</code>）なら deopt する。tombstone ビットのおかげで
+この 1 つの検査が<strong>レキシカルな祖先の昇格まで</strong>カバーするので、ガードを
+1 回通せば自フレームとその祖先すべてについて「未キャプチャ」を再証明できる
+（<code>set_lexical_no_capture_guard</code>）。</p>
+<p><strong>抽象状態側</strong>: <code>no_capture_guard</code> は各フレームの invariant として持たれ、
+ブロックリテラルを渡す呼び出しのたびに保守的に落とされ、ガード通過で
+再び立つ。落ちている間、呼び出し結果の格納は rbp 相対ではなく
+<strong>LFP（r14、呼び出し後に <code>cfp.lfp</code> から再ロード）経由</strong>になる
+（<code>def_return_store_guarded</code> / <code>def_rax2acc_capturing</code>）。昇格が起きても
+生きているフレームへ書き込むためである。</p>
+<p><strong>specialize の拒否</strong>: <code>&amp;block</code> を転送する（<code>BlockArg</code> を持つ）callee は
+インライン展開しない。specialize すると <code>pop_frame</code> が無いため、昇格後に
+r14 がヒープコピーへ更新されず、以後のローカル読みが tombstone と
+ヒープコピーに分裂する。</p>
+<h3 id="36-i6-eval-族"><a class="header" href="#36-i6-eval-族">3.6 I6: <code>eval</code> 族</a></h3>
+<p><code>eval</code> / <code>instance_eval</code> / <code>class_eval</code> / <code>module_eval</code> / <code>Binding#eval</code> は
+<code>Effect::EVAL</code>、<code>Kernel#binding</code> は <code>Effect::CAPTURE | Effect::BINDING</code> を
+持つ。<code>possibly_capture_without_block()</code> が真の callee を呼ぶサイトは
+<strong>specialize を拒否</strong>する（<code>CompileError</code> → その呼び出しは通常ディスパッチ）。
+これらはブロックを介さずに任意のフレームを覗ける＝ローカル変数の配置に
+関するあらゆる投機を無効化しうるので、ガードではなく投機の放棄で対処する。</p>
+<p>加えて eval/binding は<strong>遅延実体化の強制解決</strong>も引き起こす:
+文字列 <code>eval</code>（<code>globals.rs</code>）と <code>Kernel#binding</code>（<code>builtins/kernel.rs</code>）は
+<code>materialize_lazy_forwarding</code> を呼び、cfp チェーン上の
+lazy <code>(...)</code>-転送マーカーをすべて実 Array にしてから進む
+（<a href="arg_forwarding_jit.html"><code>arg_forwarding_jit.md</code></a> §3.6）。eval されたコードは
+生のパラメータスロットに到達できるため、マーカーを残せない。</p>
+<h3 id="37-前提を成立させる例-ivar-テーブルと-ivar-id"><a class="header" href="#37-前提を成立させる例-ivar-テーブルと-ivar-id">3.7 前提を成立させる例: ivar テーブルと ivar id</a></h3>
+<p>self のインスタンス変数は「クラスごとの <code>IvarId</code> スロット」で表される。
+JIT が <code>LoadIVarInline</code> / <code>StoreIVarHeap</code> をガード無しで出せるのは、
+<strong>その id までテーブルが確保済み</strong>だからである。</p>
+<p>これはガードで守られていない。メソッドのプロローグ（<code>AsmInst::Preparation</code>）
+が、self のクラスが持つ ivar 数からヒープテーブルの必要長を計算し、
+足りなければ <code>extend_ivar</code> で<strong>その場で拡張する</strong>。以後の本体は境界検査
+なしで書ける。frozen なクラスや inline 領域だけで済む場合は no-op。</p>
+<p>コンパイル時に ivar id が引けなかった場合（まだ一度も代入されていない）は
+<code>RecompileReason::IvarIdNotFound</code> で、VM のキャッシュが温まってからの
+再コンパイルに委ねる。</p>
+<h3 id="38-i8-単相性"><a class="header" href="#38-i8-単相性">3.8 I8: 単相性</a></h3>
+<p>単相前提でコンパイルしたサイトに 2 つ目のクラスが来ると、クラスガードが
+外れる。ここは素の deopt ではなく <code>SideExit::RecompileDeoptimize</code> で、
+ミスカウンタが尽きた時に<strong>多相形（クラス集合ガードまたは PIC）へ
+一度だけ</strong>作り直す（<code>RecompileReason::BecamePolymorphic</code>）。作り直した
+サイトにはレシーバクラスガードが無いので再発しない（単調・一回限り）。</p>
+<p>対になるのが<strong>メガモルフィックゲート</strong>: クラスガードチェーンを全部外した
+レシーバはインタプリタで実行され、スタブのウォームアップサンプラが 2 回
+観測して初めてそのクラス用のコードを作る。この脱出先ラベルが未バインドで
+分岐が no-op になっていた時、ミスしたクラス全部にコードを作ってしまい
+ruby/spec が ~15,000 本 / ~300MB を吐いてタイムアウトした
+（<a href="jit_invalidation.html"><code>jit_invalidation.md</code></a> §7）。</p>
+<h3 id="39-i7-tracepoint"><a class="header" href="#39-i7-tracepoint">3.9 I7: TracePoint</a></h3>
+<p>monoruby には行・呼び出しイベントのフックが<strong>無い</strong>。<code>Kernel#set_trace_func</code>
+は CRuby と同じ形（private instance method かつ module function）で存在
+するが、ハンドラを受け取って返すだけの no-op スタブ
+（<code>monoruby/builtins/kernel.rb</code>）であり、<code>TracePoint</code> クラスも無い。</p>
+<p>これは単なる未実装ではなく、<strong>現在の最適化が寄りかかっている前提</strong>である。
+JIT は次のように「呼び出しが起きた事実」そのものを消している:</p>
+<ul>
+<li>trivial method fold — <code>ISeqHint::ConstReturn</code> / <code>SelfReturn</code> な callee の
+呼び出しを丸ごと消す。</li>
+<li>frameless 展開 — <code>def initialize(a,b) = (@a=a; @b=b)</code> をフレームを作らずに
+呼び出し元の命令列へ展開する。</li>
+<li>specialize — callee をコンパイル単位へ取り込む（フレーム自体は作るので
+バックトレースは保たれるが、呼び出し規約は消える）。</li>
+</ul>
+<p>イベントフックが入れば、これらは <code>:call</code> / <code>:return</code> / <code>:line</code> イベントを
+落とすことになり等価性を失う。将来 TracePoint を実装する場合は、
+<strong>「フックが有効か」を新しいグローバル不変条件として立て</strong>、有効化時に
+全 JIT コードをエビクトする（I3 と同じ形）のが素直である。フックが無効な
+限りコストがゼロという点でも BOP と同型になる。</p>
+<h3 id="310-i10-gc-がオブジェクトを動かさないこと"><a class="header" href="#310-i10-gc-がオブジェクトを動かさないこと">3.10 I10: GC がオブジェクトを動かさないこと</a></h3>
+<p>JIT コードは畳み込んだ <code>Value</code>（定数、シンボル、<code>ISeqHint::ConstReturn</code> の
+戻り値）を<strong>即値としてコードに埋め込む</strong>。現在の GC は非移動
+（<a href="gc.html"><code>gc.md</code></a>：非移動・単一スレッド・stop-the-world の世代別
+mark &amp; sweep）なので、これは安全である。埋め込んだ <code>Value</code> が回収されない
+ことは、salvage レコードを GC ルートとして走査することで保証している。</p>
+<p>移動 GC（コンパクション）を導入する場合、この暗黙の前提が破れる。焼き込んだ
+ポインタの一覧を持って更新するか、間接参照に変えるか、いずれにせよ本書の
+表に新しい行が要る。</p>
+<hr>
+<h2 id="4-復帰の機構"><a class="header" href="#4-復帰の機構">4. 復帰の機構</a></h2>
+<p>破れの検知はここまでで、以降は<strong>どう戻るか</strong>である。復帰は 4 つの部品から
+なる。</p>
+<h3 id="41-側方退出side-exitの-4-形態"><a class="header" href="#41-側方退出side-exitの-4-形態">4.1 側方退出（side exit）の 4 形態</a></h3>
+<p><code>SideExit</code>（<code>jitgen/asmir.rs</code>）:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>形態</th><th>使われ方</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Deoptimize(pc, wb, chain)</code></td><td>素の deopt。インタプリタで <code>pc</code> から再開</td></tr>
+<tr><td><code>RecompileDeoptimize(pc, wb, reason, target, chain)</code></td><td>deopt に加え、カウンタが尽きたら <code>target</code> を再コンパイル（§3.8）</td></tr>
+<tr><td><code>Error(pc, wb, chain)</code></td><td>例外送出。write-back 後に <code>entry_raise</code> へ</td></tr>
+<tr><td><code>Evict(..)</code></td><td>歴史的な即時エビクション用。現在どこからも<strong>入らない</strong>が、<code>AsmEvict</code> が chain 変換のための返りアドレス登録キーなのでスロットは残る</td></tr>
+</tbody>
+</table>
+</div>
+<p>退出ハンドラはホットパスの外に置かれる（x86-64 はコールドページ page 1、
+aarch64 は本体の後ろへ島として outline する）ので、ホットパスが払うのは
+分岐命令 1 つだけである。</p>
+<h3 id="42-write-back--何を書き戻すか"><a class="header" href="#42-write-back--何を書き戻すか">4.2 write-back — 何を書き戻すか</a></h3>
+<p><code>WriteBack</code>（<code>jitgen.rs</code>）がその地点で「フレームに無い状態」を列挙する:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>フィールド</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>fpr</code></td><td>XMM/D レジスタにアンボックスで載っている float（<code>f64_to_val</code> でボックス化）</td></tr>
+<tr><td><code>literal</code></td><td>コンパイル時定数として持っていたスロット</td></tr>
+<tr><td><code>void</code></td><td>未定義スロット（<code>nil</code> で埋める）</td></tr>
+<tr><td><code>gp</code></td><td>GP プール（x86-64 の <code>r8</code>–<code>r11</code>）に載っているスロット</td></tr>
+<tr><td><code>forward_rest</code></td><td>D1: 未実体化の <code>...</code> rest Array（呼び出し元のスロット窓から <code>create_array</code>）</td></tr>
+<tr><td><code>forward_kwrest</code></td><td>K1: 未実体化の <code>**kwrest</code> Hash（<code>correct_rest_kw</code>）</td></tr>
+</tbody>
+</table>
+</div>
+<p>順序に意味がある。<code>literal</code> を先に書いてから <code>forward_rest</code> /
+<code>forward_kwrest</code> を実体化する — 後者は確保を伴う呼び出しであり、その時点で
+フレームが GC 整合でなければならないからである（未書き込みの遅延スロットは
+呼び出し元が入れた物理的な <code>nil</code> を保持している）。</p>
+<p><strong>Loop JIT の rsp</strong>: write-back は Loop JIT のスピル領域を rsp が跨いだ状態で
+<strong>先に</strong>行う。先に rsp を戻すと、ボックス化のための <code>call</code> が積む戻りアドレスが
+スピルスロットを踏み、生きた float をコードポインタで上書きする。</p>
+<h3 id="43-pc-の復元とインタプリタ再開"><a class="header" href="#43-pc-の復元とインタプリタ再開">4.3 pc の復元とインタプリタ再開</a></h3>
+<p>write-back 後、<code>r13</code>（プログラムカウンタ）に退出地点の <code>pc</code> を書き、
+VM のフェッチループ（<code>vm_fetch</code>）へ <code>jmp</code> する。フレームのレイアウトは
+VM と JIT で共通なので、フレームの作り直しは不要である。Loop JIT の場合は
+ここでスピル領域分だけ rsp を戻し、VM の <code>init_method</code> が想定する深さに
+合わせる。</p>
+<h3 id="44-chain-deopt--呼び出し元フレームの救出"><a class="header" href="#44-chain-deopt--呼び出し元フレームの救出">4.4 chain deopt — 呼び出し元フレームの救出</a></h3>
+<p>自フレームだけ戻しても足りない。呼び出し元にも JIT フレームが積まれており、
+それらもアンボックス float を抱えている。インタプリタになった内側フレームは
+<code>Load/StoreDynVar</code>・<code>binding</code>・キャプチャ経由で外側のスロットに触れるので、
+古いままでは壊れた値を読む。</p>
+<p><code>runtime::chain_deopt</code> は cfp チェーンを歩いて、各 JIT フレームについて</p>
+<ol>
+<li>スピルされたレジスタをスロットへ書き戻し（Rust 側で replay）、</li>
+<li><strong>スタック上の返りアドレススロット</strong>を VM の継続スタブへ書き換える。</li>
+</ol>
+<p>これで制御は二度と JIT コードへ戻らず、各 <code>ret</code> がインタプリタに着地する。
+コードには一切触らないので、他のフレームや他スレッドに影響しない。</p>
+<p>エスケープは<strong>個々の emitter が選ぶのではない</strong>: <code>escalate_side_exits</code> が
+<code>AsmIr</code> に一度スタンプされ、すべての側方退出コンストラクタがそれを読む。
+現在は無条件に真（実測で 1 回 ~160ns、最悪ケースでも 1.6% 以内）。
+<code>Error</code> 退出も対象である — 例外はフレーム内で <code>rescue</code> されるかもしれず、
+それは deopt と同じ「インタプリタでの再開」だからである。
+一度変換済みのフレームは（返りアドレスが既に VM のものなので）スキップされる。
+二重 replay は、その後インタプリタが更新した値を古い float で上書きしてしまう。</p>
+<p>BOP エビクション（§3.3）もこの同じ walk を通る。変換機構は 1 つだけである。</p>
+<h3 id="45-コンパイルそのものの放棄"><a class="header" href="#45-コンパイルそのものの放棄">4.5 コンパイルそのものの放棄</a></h3>
+<p>フロントエンドがコンパイルを諦めた場合（<code>CompileError</code>）:</p>
+<ul>
+<li><strong>メソッド単位</strong>の bail は iseq に <code>jit_invalidated</code> を立て、以後<strong>二度と</strong>
+コンパイルしない。</li>
+<li><strong>ループ単位</strong>の bail はその地点をインタプリタのままにするだけ。</li>
+</ul>
+<p>これは不変条件の破れではなく「投機を始めない」判断だが、同じ表に載せておく
+価値がある。<code>eval</code> を呼ぶ callee（§3.6）や <code>&amp;block</code> 転送メソッド（§3.5）が
+ここに来る。</p>
+<hr>
+<h2 id="5-実行中フレームがある場合の一般則"><a class="header" href="#5-実行中フレームがある場合の一般則">5. 実行中フレームがある場合の一般則</a></h2>
+<p>コードを捨てる・差し替える操作は、<strong>そのコードを今実行しているフレーム</strong>が
+あるかどうかで難度が変わる。monoruby の答えは一貫している:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>操作</th><th>実行中フレームへの対処</th></tr>
+</thead>
+<tbody>
+<tr><td>salvage（I1/I2）</td><td>不要。コードは生き続け、ワードを書き換えるだけ</td></tr>
+<tr><td>再コンパイル</td><td>走行中のフレームは、再コンパイルを起動したその退出でインタプリタへ戻る（write-back 済み）。エントリのパッチポイントを新本体へ向け直すので、次回の呼び出し／次回のループ入口から新本体が使われる</td></tr>
+<tr><td>BOP エビクション</td><td><strong>必要</strong>。走行中の本体は誤った演算をインライン化しているので <code>chain_deopt_into</code> で全 JIT フレームを変換する</td></tr>
+<tr><td>側方退出</td><td><strong>必要</strong>。<code>chain_deopt</code> で呼び出し元チェーンを変換する</td></tr>
+</tbody>
+</table>
+</div>
+<p>MAP_JIT ページ（Apple Silicon）へ書き込む salvage は、パッチの直前に
+ページを書き込み可へ倒す必要がある。</p>
+<hr>
+<h2 id="6-新しい投機を足すときのチェックリスト"><a class="header" href="#6-新しい投機を足すときのチェックリスト">6. 新しい投機を足すときのチェックリスト</a></h2>
+<ol>
+<li><strong>前提を一文で書けるか。</strong> 書けないなら、それはまだ設計されていない。</li>
+<li><strong>破れうるイベントを列挙したか。</strong> メソッド解決を変えうるなら
+クラスバージョンを、定数解決を変えうるなら定数バージョンと<strong>適切な
+エポック</strong>（名前、または名前が特定できないならワイルドカード）を進める。</li>
+<li><strong>検知はガードか無効化か。</strong> ガードなら「フレームを書き始める前」に
+置けるか（置けるならミスはフォールバックで済み、deopt が要らない）。</li>
+<li><strong>salvage レコードを登録したか。</strong> 登録しないとガードミスが永久に
+再コンパイルを呼ぶ。既存のマップに<strong>形の違う不変条件を相乗りさせない</strong>。</li>
+<li><strong>遅延した実体があるなら <code>WriteBack</code> に載せたか。</strong> 側方退出だけでなく
+GC セーフポイントとフレームキャプチャも、その実体を要求する。</li>
+<li><strong>バージョン比較の相手はワードか。</strong> 即値にすると salvage が無言で死ぬ。</li>
+<li><strong>ガードのミス先ラベルを <code>cfg</code> ブロックの中でバインドしていないか。</strong>
+未バインドの分岐は no-op になり、投機が全件通ってしまう。</li>
+<li><strong>両アーキで lowering したか。</strong> x86-64 と aarch64 は全 <code>AsmInst</code> を
+ロワリングする（<a href="arch_difference.html"><code>arch_difference.md</code></a>）。</li>
+</ol>
+<hr>
+<h2 id="7-観測のしかた"><a class="header" href="#7-観測のしかた">7. 観測のしかた</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>目的</th><th>方法</th></tr>
+</thead>
+<tbody>
+<tr><td>どのガードが外れたか</td><td><code>--features deopt</code> → <a href="deopt_log.html"><code>deopt_log.md</code></a>。<code>guard:</code> 欄が実際に分岐した箇所、<code>cause:</code> がその時の被検査値</td></tr>
+<tr><td>salvage と再コンパイルの収支</td><td><code>--features jit-log</code> → 終了時に <code>jit_stats::dump()</code></td></tr>
+<tr><td>deopt / 再コンパイルの統計</td><td><code>--features profile</code></td></tr>
+<tr><td>生成コードそのもの</td><td><code>--features emit-asm</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>fail: value changed</code> が spec 一周で 0 のまま、というのが salvage 機構の
+経験的な正当化になっている（定数イベントは実在したが、畳み込んだ値を
+変えたものは一つも無かった）。</p>
+<hr>
+<h2 id="8-まとめ"><a class="header" href="#8-まとめ">8. まとめ</a></h2>
+<ul>
+<li>不変条件は 3 つの道具で守る: <strong>ガード</strong>（コードが自分で確かめる）、
+<strong>無効化</strong>（外部イベントがコードを捨てる）、<strong>放棄／前提の成立</strong>
+（投機しない、または入口で条件を真にする）。</li>
+<li>グローバルなバージョンカウンタの破れは、まず<strong>修復</strong>を試みる。
+カウンタが粗い（グローバル）以上、ミス＝変更ではないからである。</li>
+<li>復帰は「write-back → pc 復元 → チェーン変換 → VM フェッチ」の 4 段で、
+どの退出形態も同じ道を通る。</li>
+<li>実行中フレームを持つ無効化（BOP、側方退出）は、<strong>コードではなくフレーム</strong>を
+書き換えることで解決する。返りアドレスの差し替えが chain deopt の核心。</li>
+<li>TracePoint の不在は暗黙の不変条件であり、実装するなら BOP と同型の
+グローバル無効化として設計するのが自然。</li>
+<li>非移動 GC も暗黙の不変条件である。</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/arch_difference.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/jit_invalidation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/arch_difference.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/jit_invalidation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>
