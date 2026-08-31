@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-86c241c2.js";
+            window.path_to_searchindex_js = "searchindex-bd8e4c6e.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a8d0bf4a.js"></script>
+        <script src="toc-ad91b9ad.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,11 +181,11 @@
 <h2 id="frame-layout"><a class="header" href="#frame-layout">Frame layout</a></h2>
 <p>Each Ruby-level call pushes three contiguous regions on the native stack (growing downward):</p>
 <ul>
-<li><strong>Continuation frame</strong> — the caller’s saved <code>lfp</code>, <code>pc</code>, return address, and <code>rbp</code>. The saved call-site pc is also what powers lazy backtraces, <code>Kernel#caller</code>, and <code>super</code> resolution.</li>
-<li><strong>Control frame (CFP)</strong> — <code>prev cfp</code> and <code>lfp</code>; the executor’s <code>cfp</code> chain links all active frames.</li>
-<li><strong>Local frame (LFP)</strong> — the Ruby-visible part: <code>outer</code> (for blocks: the enclosing frame), <code>meta</code>, <code>block</code>, <code>self</code>, then the argument/local slots <code>arg0, arg1, …</code>.</li>
+<li><strong>Continuation frame</strong> — the saved <code>rbp</code>, the return address, the caller’s suspended <code>pc</code>, and a pad word. The saved call-site pc is what powers lazy backtraces, <code>Kernel#caller</code>, and <code>super</code> resolution; the pad is unread on the normal return path and is reused by chain deopt as the converted call’s continuation word.</li>
+<li><strong>Control frame (CFP)</strong> — <code>prev cfp</code> and <code>lfp</code>; the executor’s <code>cfp</code> chain links all active frames. Every frame establishes <code>bp == cfp + 8</code> in its prologue, so the machine frame pointer is recoverable from the CFP alone.</li>
+<li><strong>Local frame (LFP)</strong> — the Ruby-visible part, addressed at negative offsets from <code>lfp</code>: <code>outer</code> (for blocks, the enclosing frame), <code>meta</code> (a packed word of <code>FuncId</code>, <code>reg_num</code>, arg mode and flags), <code>svar</code> (frame-local <code>$~</code> / <code>$_</code>, lazily allocated), <code>block</code>, <code>self</code>, then the argument/local slots <code>arg0, arg1, …</code>. <code>self</code> is register slot <code>%0</code>, so a method’s first parameter is <code>%1</code>.</li>
 </ul>
-<p>The bytecode interpreter and JIT code share a fixed register ABI on x86-64 (the aarch64 backend uses an equivalent assignment): <code>rbx</code> = <code>&amp;mut Executor</code>, <code>r12</code> = <code>&amp;mut Globals</code>, <code>r13</code> = pc, <code>r14</code> = lfp.</p>
+<p>The bytecode interpreter and JIT code share a fixed register ABI on x86-64 (the aarch64 backend uses an equivalent assignment): <code>rbx</code> = <code>&amp;mut Executor</code>, <code>r12</code> = <code>&amp;mut Globals</code>, <code>r13</code> = pc, <code>r14</code> = lfp, <code>r15</code> = accumulator. The accumulator is a VM-tier register — JIT’ed code keeps no fixed accumulator and allocates general-purpose registers per basic block instead.</p>
 <p>Frames captured by blocks, Procs, or Bindings are <strong>promoted to the heap lazily</strong> — only when the capture actually escapes — and heap frames are reclaimed by the GC once unreachable.</p>
 <h2 id="argument-processing"><a class="header" href="#argument-processing">Argument processing</a></h2>
 <p>Formal parameters occupy frame slots in a fixed order: <code>required | optional | rest | keyword | block | destructured-children</code>. At call time the <strong>caller</strong> copies positional arguments into the callee frame, expanding splats, gathering overflow into <code>rest</code>, filling missing slots with <code>nil</code>/none-markers, and checking arity. Keyword arguments are then assigned by name, with surplus keywords gathered into the keyword-rest slot; if the callee accepts no keywords at all, trailing keywords are packed into a Hash and passed as one extra positional argument. Blocks additionally auto-splat a single Array argument when they take multiple parameters. The <strong>callee prologue</strong> (<code>InitMethod</code>) then links the frame, homes arguments, nil-fills the remaining slots — and runs the safepoint poll. Destructuring and optional-parameter default initializers are compiled as ordinary bytecode at the top of the method body.</p>

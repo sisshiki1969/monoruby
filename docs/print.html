@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-86c241c2.js";
+            window.path_to_searchindex_js = "searchindex-bd8e4c6e.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a8d0bf4a.js"></script>
+        <script src="toc-ad91b9ad.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,7 +183,7 @@
 <p>This site is monoruby’s documentation: how to build and run it, how it performs, and how it works inside.</p>
 <ul>
 <li>The <strong>Getting Started</strong> section covers <a href="#installation-and-build">installing and building</a> monoruby, and the <a href="#development-and-build-options">build options and test workflow</a> used when developing it.</li>
-<li>The <strong>Performance and Compatibility</strong> section is where the live dashboards are explained: <a href="#benchmark">Benchmark</a> for speed against CRuby+YJIT, <a href="#compatibility">Compatibility</a> for ruby/spec conformance.</li>
+<li>The <strong>Performance and Compatibility</strong> section is where the live dashboards are explained: <a href="#benchmark">Benchmark</a> for speed against CRuby+YJIT, <a href="#compatibility">Compatibility</a> for ruby/spec conformance. The <a href="#changelog">Changelog</a> sits alongside them.</li>
 <li>The <strong>Architecture</strong> section contains overview pages: start with the <a href="#architecture-overview">Architecture Overview</a>.</li>
 <li>The <strong>Design Documents</strong> section renders the full design documents from the repository’s <a href="https://github.com/sisshiki1969/monoruby/tree/master/doc"><code>doc/</code></a> directory (some are written in Japanese, as marked).</li>
 </ul>
@@ -798,6 +798,20 @@ lists, so an unlisted document is copied and then silently dropped.</p>
 <pre><code class="language-sh">bash docs/build.sh          # output in docs/book/
 mdbook serve docs           # live preview
 </code></pre>
+<h3 id="the-changelog-and-the-readme"><a class="header" href="#the-changelog-and-the-readme">The changelog and the README</a></h3>
+<p><a href="#changelog"><code>docs/src/changelog.md</code></a> is the single source of truth for the
+monthly changelog. The README shows only the two newest month sections,
+copied verbatim between its <code>&lt;!-- BEGIN LATEST-MONTHS --&gt;</code> /
+<code>&lt;!-- END LATEST-MONTHS --&gt;</code> markers — that block is generated, so edit the
+changelog and regenerate rather than editing the README:</p>
+<pre><code class="language-sh">bin/sync-changelog-readme           # rewrite the README block
+bin/sync-changelog-readme --check   # exit 1 if the two have drifted
+</code></pre>
+<p>A scheduled Routine runs on the 1st of each month: it summarizes the previous
+month’s merged PRs into a new <code>### &lt;Month&gt; &lt;Year&gt;</code> section at the top of the
+changelog’s current <code>## &lt;year&gt;</code> group, runs the sync script, and pushes both
+files. Pushing <code>docs/src/changelog.md</code> also re-triggers <code>docs.yml</code>, so the
+published book picks the new month up in the same run.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="benchmark"><a class="header" href="#benchmark">Benchmark</a></h1>
 <p>monoruby is performance-focused, and performance is measured continuously
@@ -1068,6 +1082,85 @@ tree, or unavailable. <a href="#monoruby-における-ruby-c-拡張サポート�
 design study, not a shipped feature.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="changelog"><a class="header" href="#changelog">Changelog</a></h1>
+<p>Monthly highlights of monoruby’s development, with representative PRs. The
+README carries the most recent two months; this page is the full record.</p>
+<p>For a prose account of the same period rather than a list — what changed and
+why, over roughly 500 commits — see <a href="#monoruby-progress-summary-april-2025--april-2026">Progress summary (April 2025 – April
+2026)</a>.</p>
+<blockquote>
+<p><strong>Maintenance.</strong> This page is the single source of truth. A scheduled
+Routine appends the previous month on the 1st of each month, then runs
+<code>bin/sync-changelog-readme</code>, which copies the two newest month sections
+verbatim into the README between its <code>LATEST-MONTHS</code> markers. The README’s
+month text is generated — edit this page instead, and re-run the script
+(<code>bin/sync-changelog-readme --check</code> verifies the two are in sync).</p>
+</blockquote>
+<h2 id="2026"><a class="header" href="#2026">2026</a></h2>
+<h3 id="july-2026"><a class="header" href="#july-2026">July 2026</a></h3>
+<ul>
+<li>Big language-semantics compliance drive on the ruby/spec “language” group: destructuring, block-argument semantics, <code>defined?</code>, flip-flops, <code>BEGIN</code>/<code>END</code>, and predefined globals (<a href="https://github.com/sisshiki1969/monoruby/pull/804">#804</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/874">#874</a>, notably <a href="https://github.com/sisshiki1969/monoruby/pull/861">#861</a>).</li>
+<li>Implemented pattern matching (<code>case</code>/<code>in</code>, <code>=&gt;</code>) (<a href="https://github.com/sisshiki1969/monoruby/pull/883">#883</a>) and MRI’s full eigenclass tower (<a href="https://github.com/sisshiki1969/monoruby/pull/877">#877</a>).</li>
+<li>Green threads (M:1): scheduler core, real Thread / Mutex / Queue, scheduler-integrated blocking IO, and preemptive timeslice multithreading (<a href="https://github.com/sisshiki1969/monoruby/pull/941">#941</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/944">#944</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/962">#962</a>).</li>
+<li>Real TCP / UDP / UNIX-domain sockets (<a href="https://github.com/sisshiki1969/monoruby/pull/964">#964</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/981">#981</a>); <code>IO::Buffer</code> with mmap file mapping (<a href="https://github.com/sisshiki1969/monoruby/pull/927">#927</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/931">#931</a>); <code>IO.copy_stream</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/924">#924</a>).</li>
+<li>Added the <code>setup-monoruby</code> GitHub Action with prebuilt binaries (<a href="https://github.com/sisshiki1969/monoruby/pull/884">#884</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/886">#886</a>) and CRuby-compatible command-line option processing (<a href="https://github.com/sisshiki1969/monoruby/pull/891">#891</a>).</li>
+<li>Completed the Exception API: raise-time backtraces, <code>full_message</code>, NameError / NoMethodError metadata (<a href="https://github.com/sisshiki1969/monoruby/pull/893">#893</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/896">#896</a>).</li>
+<li>Brought the aarch64 JIT to optimization parity with x86-64 (<a href="https://github.com/sisshiki1969/monoruby/pull/993">#993</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/1004">#1004</a>) and shrank call frames for ~7% faster fib (<a href="https://github.com/sisshiki1969/monoruby/pull/850">#850</a>).</li>
+<li>Completed <code>Fiber</code> — transfer / raise / kill / storage and a real root fiber, making core/fiber fully green (<a href="https://github.com/sisshiki1969/monoruby/pull/1036">#1036</a>) — and refined Thread semantics: the async <code>Thread#raise</code> protocol and structured <code>Thread::Backtrace::Location</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/1026">#1026</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/1027">#1027</a>).</li>
+<li>JIT: object allocation emitted as inline machine code (free-list pop + bump) (<a href="https://github.com/sisshiki1969/monoruby/pull/1011">#1011</a>), guard-free slot dispatch for method calls on aarch64 (<a href="https://github.com/sisshiki1969/monoruby/pull/1010">#1010</a>), and trivial-method folding through <code>...</code> forwards (<a href="https://github.com/sisshiki1969/monoruby/pull/1012">#1012</a>).</li>
+<li>Encoding: streaming <code>Encoding::Converter</code> state and <code>String#encode</code> fallback / newline decorators (<a href="https://github.com/sisshiki1969/monoruby/pull/1018">#1018</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/1019">#1019</a>); Regexp gained native-encoding byte matching for non-UTF-8 subjects plus upstream Onigmo engine fixes (<a href="https://github.com/sisshiki1969/monoruby/pull/1037">#1037</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/1038">#1038</a>).</li>
+<li>CRuby-compatible <code>require</code> / <code>load</code> / <code>autoload</code> resolution rules (<a href="https://github.com/sisshiki1969/monoruby/pull/1033">#1033</a>), a Rust fnmatch engine backing <code>Dir.glob</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/1017">#1017</a>), and an mdBook documentation site published to <a href="https://sisshiki1969.github.io/monoruby/docs/">the project portal</a> (<a href="https://github.com/sisshiki1969/monoruby/pull/1008">#1008</a>).</li>
+</ul>
+<h3 id="june-2026"><a class="header" href="#june-2026">June 2026</a></h3>
+<ul>
+<li>Completed the aarch64 JIT backend: full AsmInst coverage, inline methods, loop JIT, and recompilation on Apple Silicon (<a href="https://github.com/sisshiki1969/monoruby/pull/645">#645</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/704">#704</a>).</li>
+<li>Introduced a generational GC (RGenGC-style) (<a href="https://github.com/sisshiki1969/monoruby/pull/705">#705</a>); GC now also triggers on malloc growth (<a href="https://github.com/sisshiki1969/monoruby/pull/732">#732</a>).</li>
+<li>Completed the Prism migration and removed the old hand-written parser (ruruby-parse) (<a href="https://github.com/sisshiki1969/monoruby/pull/657">#657</a>).</li>
+<li>New JIT register allocation: LIR-based lowering with a per-basic-block GP register allocator; retired the R15 accumulator (<a href="https://github.com/sisshiki1969/monoruby/pull/741">#741</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/756">#756</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/763">#763</a>).</li>
+<li>Cut allocation/dispatch overhead by 12–26% on addressable benchmarks (<a href="https://github.com/sisshiki1969/monoruby/pull/708">#708</a>); zero-copy String operations (gsub, slice, lines, scan) (<a href="https://github.com/sisshiki1969/monoruby/pull/722">#722</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/724">#724</a>).</li>
+<li>Made the build host-Ruby independent and reproducible (<a href="https://github.com/sisshiki1969/monoruby/pull/769">#769</a>).</li>
+</ul>
+<h3 id="may-2026"><a class="header" href="#may-2026">May 2026</a></h3>
+<ul>
+<li>Switched the parser to Prism, the official Ruby parser (<a href="https://github.com/sisshiki1969/monoruby/pull/412">#412</a>).</li>
+<li>Encoding subsystem overhaul: real <code>String#encode</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/443">#443</a>), <code>Encoding::Converter</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/447">#447</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/451">#451</a>), ISO-2022-JP (<a href="https://github.com/sisshiki1969/monoruby/pull/449">#449</a>), and EUC-JP / Shift_JIS-aware string operations (<a href="https://github.com/sisshiki1969/monoruby/pull/536">#536</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/545">#545</a>).</li>
+<li>Native String fast paths (<code>reverse</code>, <code>rindex</code>, case mapping, …) that beat YJIT (<a href="https://github.com/sisshiki1969/monoruby/pull/493">#493</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/497">#497</a>); dropped per-builtin <code>catch_unwind</code> for +8–10% on optcarrot (<a href="https://github.com/sisshiki1969/monoruby/pull/501">#501</a>).</li>
+<li>JIT: virtual FP registers with spill-to-stack (<a href="https://github.com/sisshiki1969/monoruby/pull/387">#387</a>), heap-constant folding and <code>Object#is_a?</code> inlining (<a href="https://github.com/sisshiki1969/monoruby/pull/504">#504</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/505">#505</a>), non-deopting polymorphic comparisons (<a href="https://github.com/sisshiki1969/monoruby/pull/519">#519</a>).</li>
+<li>Decoupled monoruby from any host Ruby installation (<a href="https://github.com/sisshiki1969/monoruby/pull/579">#579</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/595">#595</a>); completed the Marshal format tags (<a href="https://github.com/sisshiki1969/monoruby/pull/588">#588</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/603">#603</a>); real <code>File::Stat</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/607">#607</a>); frame-local <code>$~</code> / <code>$_</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/608">#608</a>).</li>
+<li>Started the aarch64 port: VM-tier backend and macOS (Apple Silicon) support (<a href="https://github.com/sisshiki1969/monoruby/pull/640">#640</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/641">#641</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/644">#644</a>).</li>
+<li>Continuous yjit-bench benchmarking against YJIT, charted on GitHub Pages (<a href="https://github.com/sisshiki1969/monoruby/pull/411">#411</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/416">#416</a>).</li>
+</ul>
+<h3 id="april-2026"><a class="header" href="#april-2026">April 2026</a></h3>
+<ul>
+<li>Reimplemented <code>Rational</code> as a first-class Rust type with literal support (<a href="https://github.com/sisshiki1969/monoruby/pull/266">#266</a>).</li>
+<li>Broad ruby/spec compliance work on Integer / Float / Array / Symbol / Class / Module (e.g. <a href="https://github.com/sisshiki1969/monoruby/pull/281">#281</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/284">#284</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/309">#309</a>), with a live spec dashboard published on GitHub Pages (<a href="https://github.com/sisshiki1969/monoruby/pull/364">#364</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/365">#365</a>).</li>
+<li>Moved shift / bitwise / <code>**</code> / <code>%</code> into the inline-function JIT pipeline with constant folding (<a href="https://github.com/sisshiki1969/monoruby/pull/307">#307</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/308">#308</a>), and added frame-free trivial-method optimization via <code>ISeqHint</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/290">#290</a>).</li>
+<li>Struct: per-instance slot storage with JIT-inlined member accessors (<a href="https://github.com/sisshiki1969/monoruby/pull/367">#367</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/369">#369</a>).</li>
+<li>String: encoding-aware data model — code ranges, <code>Encoding::CompatibilityError</code>, encoding-aware char iteration (<a href="https://github.com/sisshiki1969/monoruby/pull/382">#382</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/384">#384</a>).</li>
+<li>Reworked <code>autoload</code> as a proper state machine (<a href="https://github.com/sisshiki1969/monoruby/pull/376">#376</a>) and added lazy heap promotion for Proc / Lambda / Binding captures (<a href="https://github.com/sisshiki1969/monoruby/pull/332">#332</a>).</li>
+</ul>
+<h3 id="march-2026"><a class="header" href="#march-2026">March 2026</a></h3>
+<ul>
+<li>Implemented <code>Marshal.dump</code> / <code>Marshal.load</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/121">#121</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/125">#125</a>) and the <code>Set</code> class, a CRuby 4.0 built-in (<a href="https://github.com/sisshiki1969/monoruby/pull/130">#130</a>).</li>
+<li>Implemented the <code>retry</code> statement (<a href="https://github.com/sisshiki1969/monoruby/pull/109">#109</a>), module/class lifecycle hooks (<a href="https://github.com/sisshiki1969/monoruby/pull/127">#127</a>), anonymous block forwarding (<a href="https://github.com/sisshiki1969/monoruby/pull/128">#128</a>), and regex backreferences / special variables (<a href="https://github.com/sisshiki1969/monoruby/pull/129">#129</a>).</li>
+<li>Added <code>Kernel.#load</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/105">#105</a>), correct <code>Dir.glob</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/106">#106</a>), <code>Kernel.#format</code> / <code>sprintf</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/162">#162</a>), and a SQLite3 FFI bridge for the sqlite3 gem (<a href="https://github.com/sisshiki1969/monoruby/pull/160">#160</a>).</li>
+<li>Started a large ruby/spec compatibility push: implicit type conversions (<a href="https://github.com/sisshiki1969/monoruby/pull/225">#225</a>), frozen-object support (<a href="https://github.com/sisshiki1969/monoruby/pull/240">#240</a>), Errno exceptions (<a href="https://github.com/sisshiki1969/monoruby/pull/250">#250</a>), and many crash fixes on invalid UTF-8 input (<a href="https://github.com/sisshiki1969/monoruby/pull/209">#209</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/212">#212</a>).</li>
+<li>Fixed many issues to run optcarrot (<a href="https://github.com/sisshiki1969/monoruby/pull/115">#115</a>) and the rubyboy / lee benchmarks (<a href="https://github.com/sisshiki1969/monoruby/pull/111">#111</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/120">#120</a>).</li>
+</ul>
+<h3 id="february-2026"><a class="header" href="#february-2026">February 2026</a></h3>
+<ul>
+<li>Optimized rest / keyword-rest parameters in the JIT (<a href="https://github.com/sisshiki1969/monoruby/pull/96">#96</a>).</li>
+<li>Corrected <code>/</code> and <code>%</code> semantics for Integer and Float (<a href="https://github.com/sisshiki1969/monoruby/pull/97">#97</a>) and fixed <code>Integer#digits</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/99">#99</a>).</li>
+<li>Optimized the Range class (<a href="https://github.com/sisshiki1969/monoruby/pull/98">#98</a>) and fixed <code>Range#include?</code> for string / beginless / endless ranges (<a href="https://github.com/sisshiki1969/monoruby/pull/104">#104</a>).</li>
+<li>Introduced continuation frames (<a href="https://github.com/sisshiki1969/monoruby/pull/101">#101</a>) and reworked JIT slot write-back logic (<a href="https://github.com/sisshiki1969/monoruby/pull/102">#102</a>).</li>
+</ul>
+<h3 id="january-2026"><a class="header" href="#january-2026">January 2026</a></h3>
+<ul>
+<li>Hardened JIT frame handling so local frames are never captured by JIT-compiled code (<a href="https://github.com/sisshiki1969/monoruby/pull/93">#93</a>).</li>
+<li>Added <code>SAFETY</code> comments to <code>unsafe</code> blocks across the codebase (<a href="https://github.com/sisshiki1969/monoruby/pull/94">#94</a>).</li>
+<li>Introduced immediate operands (<code>BytecodeInst::Immediate</code>) into the bytecode (<a href="https://github.com/sisshiki1969/monoruby/pull/95">#95</a>).</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="architecture-overview"><a href="#architecture-overview" class="header">Architecture Overview</a></h1>
 <p>monoruby is a Ruby implementation written from scratch in Rust, featuring a register-based bytecode VM and a just-in-time (JIT) compiler. It has no dependency on CRuby or any other Ruby runtime. This page gives a bird’s-eye view of the system; each section links to a dedicated chapter and to the detailed design documents (rendered in the “Design Documents” section of this book, sourced from the repository’s <a href="https://github.com/sisshiki1969/monoruby/tree/master/doc"><code>doc/</code></a> directory).</p>
 <h2 id="compilation-pipeline"><a class="header" href="#compilation-pipeline">Compilation pipeline</a></h2>
@@ -1117,7 +1210,7 @@ Native machine code
 <tr><td>JIT compiler (TraceIR / AsmIR / register allocation)</td><td><a href="#jit-compiler">JIT Compiler</a></td><td><a href="#stub-code-for-jited-code-generated-by-compiler"><code>jit.md</code></a>, <a href="#unified-low-level-ir-lir"><code>lir.md</code></a>, <a href="#separating-the-abstract-interpreter-from-register-allocation"><code>regalloc_separation.md</code></a></td></tr>
 <tr><td>Garbage collection (generational mark-and-sweep)</td><td><a href="#garbage-collection">Garbage Collection</a></td><td><a href="#monoruby-の-gc--機構と実装"><code>gc.md</code></a></td></tr>
 <tr><td>Green threads and fibers</td><td><a href="#threads-and-fibers">Threads and Fibers</a></td><td><a href="#thread--fiber--non-blocking-io--プリエンプション-の実装"><code>threads.md</code></a></td></tr>
-<tr><td>Stack frames and method calls</td><td><a href="#stack-frames-and-method-calls">Stack Frames and Method Calls</a></td><td><a href="#stack-layout-for-the-bytecode-interpreter-jit-ed-code"><code>stack_frame.md</code></a>, <a href="#メソッド引数の処理"><code>method_args.md</code></a></td></tr>
+<tr><td>Stack frames and method calls</td><td><a href="#stack-frames-and-method-calls">Stack Frames and Method Calls</a></td><td><a href="#stack-layout-for-the-bytecode-interpreter--jited-code"><code>stack_frame.md</code></a>, <a href="#メソッド引数の処理"><code>method_args.md</code></a></td></tr>
 <tr><td>Exception handling</td><td><a href="#exception-handling">Exception Handling</a></td><td><a href="#exception-handling-in-monoruby--mechanism-and-cruby-contrast"><code>exception_handling.md</code></a></td></tr>
 <tr><td>aarch64 (Apple Silicon) backend</td><td><a href="#aarch64-backend">aarch64 Backend</a></td><td><a href="#x86-64--aarch64-jit-backend-differences"><code>arch_difference.md</code></a></td></tr>
 </tbody>
@@ -1337,15 +1430,15 @@ Native machine code
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="stack-frames-and-method-calls"><a href="#stack-frames-and-method-calls" class="header">Stack Frames and Method Calls</a></h1>
-<p>This page describes how monoruby lays out call frames and processes method arguments. Details: <a href="#stack-layout-for-the-bytecode-interpreter-jit-ed-code"><code>doc/stack_frame.md</code></a>, <a href="#メソッド引数の処理"><code>doc/method_args.md</code></a>, <a href="#cref--class-reference--constant-reference"><code>doc/cref.md</code></a>, <a href="#super-のメソッド名解決と呼び出し元-pc-を用いた実装"><code>doc/super_resolution.md</code></a>.</p>
+<p>This page describes how monoruby lays out call frames and processes method arguments. Details: <a href="#stack-layout-for-the-bytecode-interpreter--jited-code"><code>doc/stack_frame.md</code></a>, <a href="#メソッド引数の処理"><code>doc/method_args.md</code></a>, <a href="#cref--class-reference--constant-reference"><code>doc/cref.md</code></a>, <a href="#super-のメソッド名解決と呼び出し元-pc-を用いた実装"><code>doc/super_resolution.md</code></a>.</p>
 <h2 id="frame-layout"><a class="header" href="#frame-layout">Frame layout</a></h2>
 <p>Each Ruby-level call pushes three contiguous regions on the native stack (growing downward):</p>
 <ul>
-<li><strong>Continuation frame</strong> — the caller’s saved <code>lfp</code>, <code>pc</code>, return address, and <code>rbp</code>. The saved call-site pc is also what powers lazy backtraces, <code>Kernel#caller</code>, and <code>super</code> resolution.</li>
-<li><strong>Control frame (CFP)</strong> — <code>prev cfp</code> and <code>lfp</code>; the executor’s <code>cfp</code> chain links all active frames.</li>
-<li><strong>Local frame (LFP)</strong> — the Ruby-visible part: <code>outer</code> (for blocks: the enclosing frame), <code>meta</code>, <code>block</code>, <code>self</code>, then the argument/local slots <code>arg0, arg1, …</code>.</li>
+<li><strong>Continuation frame</strong> — the saved <code>rbp</code>, the return address, the caller’s suspended <code>pc</code>, and a pad word. The saved call-site pc is what powers lazy backtraces, <code>Kernel#caller</code>, and <code>super</code> resolution; the pad is unread on the normal return path and is reused by chain deopt as the converted call’s continuation word.</li>
+<li><strong>Control frame (CFP)</strong> — <code>prev cfp</code> and <code>lfp</code>; the executor’s <code>cfp</code> chain links all active frames. Every frame establishes <code>bp == cfp + 8</code> in its prologue, so the machine frame pointer is recoverable from the CFP alone.</li>
+<li><strong>Local frame (LFP)</strong> — the Ruby-visible part, addressed at negative offsets from <code>lfp</code>: <code>outer</code> (for blocks, the enclosing frame), <code>meta</code> (a packed word of <code>FuncId</code>, <code>reg_num</code>, arg mode and flags), <code>svar</code> (frame-local <code>$~</code> / <code>$_</code>, lazily allocated), <code>block</code>, <code>self</code>, then the argument/local slots <code>arg0, arg1, …</code>. <code>self</code> is register slot <code>%0</code>, so a method’s first parameter is <code>%1</code>.</li>
 </ul>
-<p>The bytecode interpreter and JIT code share a fixed register ABI on x86-64 (the aarch64 backend uses an equivalent assignment): <code>rbx</code> = <code>&amp;mut Executor</code>, <code>r12</code> = <code>&amp;mut Globals</code>, <code>r13</code> = pc, <code>r14</code> = lfp.</p>
+<p>The bytecode interpreter and JIT code share a fixed register ABI on x86-64 (the aarch64 backend uses an equivalent assignment): <code>rbx</code> = <code>&amp;mut Executor</code>, <code>r12</code> = <code>&amp;mut Globals</code>, <code>r13</code> = pc, <code>r14</code> = lfp, <code>r15</code> = accumulator. The accumulator is a VM-tier register — JIT’ed code keeps no fixed accumulator and allocates general-purpose registers per basic block instead.</p>
 <p>Frames captured by blocks, Procs, or Bindings are <strong>promoted to the heap lazily</strong> — only when the capture actually escapes — and heap frames are reclaimed by the GC once unreachable.</p>
 <h2 id="argument-processing"><a class="header" href="#argument-processing">Argument processing</a></h2>
 <p>Formal parameters occupy frame slots in a fixed order: <code>required | optional | rest | keyword | block | destructured-children</code>. At call time the <strong>caller</strong> copies positional arguments into the callee frame, expanding splats, gathering overflow into <code>rest</code>, filling missing slots with <code>nil</code>/none-markers, and checking arity. Keyword arguments are then assigned by name, with surplus keywords gathered into the keyword-rest slot; if the callee accepts no keywords at all, trailing keywords are packed into a Hash and passed as one extra positional argument. Blocks additionally auto-splat a single Array argument when they take multiple parameters. The <strong>callee prologue</strong> (<code>InitMethod</code>) then links the frame, homes arguments, nil-fills the remaining slots — and runs the safepoint poll. Destructuring and optional-parameter default initializers are compiled as ordinary bytecode at the top of the method body.</p>
@@ -1356,7 +1449,7 @@ Native machine code
 <p>CRuby frames carry a callable-method-entry that tells <code>super</code> both the method name to search and where in the ancestor chain to continue. monoruby frames carry only a <code>FuncId</code>, so <code>super</code> <strong>reconstructs</strong> that information from the caller pc saved in the continuation frame: it recovers the call site’s opcode and call-site info, derives the originally-called name (correct across <code>alias</code> and multi-name <code>define_method</code>), and counts how many times the running body occurs in the ancestor chain so a method aliased into several places supers past the right occurrence. See <a href="#super-のメソッド名解決と呼び出し元-pc-を用いた実装"><code>doc/super_resolution.md</code></a>.</p>
 <h2 id="further-reading-3"><a class="header" href="#further-reading-3">Further reading</a></h2>
 <ul>
-<li><a href="#stack-layout-for-the-bytecode-interpreter-jit-ed-code"><code>doc/stack_frame.md</code></a> — exact slot offsets, pre-call vs post-prologue layouts</li>
+<li><a href="#stack-layout-for-the-bytecode-interpreter--jited-code"><code>doc/stack_frame.md</code></a> — exact slot offsets, pre-call vs post-prologue layouts</li>
 <li><a href="#メソッド引数の処理"><code>doc/method_args.md</code></a> — caller/callee argument-processing responsibilities</li>
 <li><a href="#native-builtin-function-registration"><code>doc/native_func.md</code></a> — builtin registration and argument slots</li>
 </ul>
@@ -10634,75 +10727,169 @@ caught at the Rust level below the bytecode-<code>rescue</code> path.</li>
 <p>The net effect is CRuby-equivalent observable behavior with the backtrace cost
 concentrated on exactly the exceptions that are genuinely caught and inspected.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="stack-layout-for-the-bytecode-interpreter-jit-ed-code"><a class="header" href="#stack-layout-for-the-bytecode-interpreter-jit-ed-code">Stack layout for the bytecode interpreter/ JIT-ed code</a></h1>
-<h2 id="stack-frame-structure-just-after-prologue"><a class="header" href="#stack-frame-structure-just-after-prologue">stack frame structure (just after prologue)</a></h2>
+<h1 id="stack-layout-for-the-bytecode-interpreter--jited-code"><a class="header" href="#stack-layout-for-the-bytecode-interpreter--jited-code">Stack layout for the bytecode interpreter / JIT’ed code</a></h1>
+<p>The interpreter and JIT’ed code share one frame layout: both go through the
+same <code>set_lfp</code> / <code>set_method_outer</code> / <code>set_block_outer</code> primitives in
+<code>codegen/arch/&lt;arch&gt;/jit_module.rs</code>, so a single picture covers a VM frame, a
+JIT frame and a native wrapper alike. The offsets below are the constants in
+<code>executor.rs</code>; when this document and that file disagree, the file is right.</p>
+<h2 id="slot-offsets"><a class="header" href="#slot-offsets">Slot offsets</a></h2>
+<p>Each Ruby-level call occupies three contiguous regions, stack growing down.
+<code>cfp</code> and <code>lfp</code> are two pointers into it: the control frame is addressed at
+<strong>positive</strong> offsets from <code>cfp</code>, the local frame at <strong>negative</strong> offsets from
+<code>lfp</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Slot</th><th>Address</th><th>Constant</th></tr>
+</thead>
+<tbody>
+<tr><td>pad / chain-deopt continuation word</td><td><code>cfp + 0x20</code></td><td>—</td></tr>
+<tr><td>caller pc</td><td><code>cfp + 0x18</code></td><td>—</td></tr>
+<tr><td>return address</td><td><code>cfp + 0x10</code></td><td>—</td></tr>
+<tr><td>saved <code>rbp</code></td><td><code>cfp + 0x08</code></td><td><code>BP_CFP</code> (<code>bp == cfp + BP_CFP</code>)</td></tr>
+<tr><td>prev cfp</td><td><code>cfp + 0x00</code></td><td>—</td></tr>
+<tr><td>lfp</td><td><code>cfp - 0x08</code></td><td><code>CFP_LFP</code></td></tr>
+<tr><td>outer</td><td><code>lfp - 0x00</code></td><td><code>LFP_OUTER</code> = 0</td></tr>
+<tr><td>meta</td><td><code>lfp - 0x08</code></td><td><code>LFP_META</code> = 8</td></tr>
+<tr><td>svar</td><td><code>lfp - 0x10</code></td><td><code>LFP_SVAR</code> = 16</td></tr>
+<tr><td>block</td><td><code>lfp - 0x18</code></td><td><code>LFP_BLOCK</code> = 24</td></tr>
+<tr><td>self</td><td><code>lfp - 0x20</code></td><td><code>LFP_SELF</code> = 32</td></tr>
+<tr><td>arg0</td><td><code>lfp - 0x28</code></td><td><code>LFP_ARG0</code> = 40</td></tr>
+</tbody>
+</table>
+</div>
+<p>The local frame starts at <code>cfp - 0x10</code>, one word below the <code>lfp</code> slot itself.
+From a caller’s <code>rsp</code> at the call, <code>RSP_CFP</code> (24) and <code>RSP_LOCAL_FRAME</code> (40)
+name the same two points.</p>
+<h2 id="just-after-the-prologue"><a class="header" href="#just-after-the-prologue">Just after the prologue</a></h2>
 <pre><code class="language-text">             +-------------+----------------------
-             |  prev lfp   |
+   cfp+0x20  |     pad     |
              +-------------+
-             |   prev pc   |
+   cfp+0x18  |  caller pc  |
              +-------------+  continuation frame
-             | return addr |
+   cfp+0x10  | return addr |
              +-------------+
- BP-&gt;        |  prev rbp   | &lt;- rbp
+   cfp+0x08  |  saved rbp  | &lt;- rbp
              +-------------+----------------------
-CFP-&gt;        |  prev cfp   |
+   cfp+0x00  |  prev cfp   | &lt;- cfp
              +-------------+  control frame
-             |     lfp     |
+   cfp-0x08  |     lfp     |
              +-------------+----------------------
-       -0x00 |    outer    | &lt;- r14
+       -0x00 |    outer    | &lt;- r14 (lfp)
              +-------------+
        -0x08 |    meta     |
              +-------------+
-       -0x10 |    block    |
+       -0x10 |    svar     |
+             +-------------+  local frame
+       -0x18 |    block    |
              +-------------+
-       -0x18 |    self     |  local frame
+       -0x20 |    self     |
              +-------------+
-       -0x20 |    arg0     |
+       -0x28 |    arg0     |
              +-------------+
              |      :      |
              +-------------+
              |   arg(n-1)  |
              +-------------+----------------------
-       -0xy0 |             | &lt;- rsp
+             |             | &lt;- rsp
              +-------------+
              |      :      |
 </code></pre>
-<h2 id="stack-frame-structure-just-before-call"><a class="header" href="#stack-frame-structure-just-before-call">stack frame structure (just before call)</a></h2>
-<pre><code class="language-text">             +-------------+
-       -0x00 |             | &lt;- rsp
+<h2 id="just-before-the-call"><a class="header" href="#just-before-the-call">Just before the call</a></h2>
+<p>The caller builds the callee’s frame below its own <code>rsp</code> and then <code>call</code>s;
+the two words above <code>rsp</code> are the cont-frame extension it reserved with
+<code>sub rsp, 0x10</code>, and <code>call</code> / the callee prologue push the return address and
+the saved <code>rbp</code> into the two words below it.</p>
+<pre><code class="language-text">             +-------------+----------------------
+       +0x08 |     pad     |
+             +-------------+  reserved by the caller
+       +0x00 |  caller pc  | &lt;- rsp
+             +-------------+----------------------
+       -0x08 | return addr |    pushed by `call`
              +-------------+
-       -0x08 |             |
-             +-------------+
-       -0x10 |             |
-             +-------------+-----------------
-       -0x18 |  prev cfp   |
+       -0x10 |  saved rbp  |    pushed by the callee prologue
+             +-------------+----------------------
+       -0x18 |  prev cfp   | &lt;- cfp        (RSP_CFP)
              +-------------+  control frame
        -0x20 |     lfp     |
-             +-------------+-----------------
-       -0x28 |    outer    | &lt;- r14
+             +-------------+----------------------
+       -0x28 |    outer    | &lt;- r14 (lfp)  (RSP_LOCAL_FRAME)
              +-------------+
        -0x30 |    meta     |
              +-------------+
-       -0x38 |    block    |
+       -0x38 |    svar     |
+             +-------------+  local frame
+       -0x40 |    block    |
              +-------------+
-       -0x40 |    self     |  local frame
+       -0x48 |    self     |
              +-------------+
-       -0x48 |    arg0     |
+       -0x50 |    arg0     |
              +-------------+
              |      :      |
              +-------------+
              |   arg(n-1)  |
-             +-------------+------------------
+             +-------------+----------------------
              |      :      |
 </code></pre>
-<h2 id="abi-of-interpreter-and-jit-ed-code"><a class="header" href="#abi-of-interpreter-and-jit-ed-code">ABI of interpreter and JIT-ed code</a></h2>
-<h3 id="global-registers-callee-save"><a class="header" href="#global-registers-callee-save">global registers (callee save)</a></h3>
+<h2 id="what-the-header-slots-hold"><a class="header" href="#what-the-header-slots-hold">What the header slots hold</a></h2>
 <ul>
-<li>rbx: &amp;mut Executer ([rbx] points to cfp)</li>
-<li>r12: &amp;mut Globals</li>
-<li>r13: pc (current bytecode address, dummy for JIT-ed code)</li>
-<li>r14: lfp (local frame pointer)</li>
+<li><strong>outer</strong> — the lexically enclosing frame’s lfp for a block, <code>0</code> for a
+method-introducing frame. <code>$~</code> resolution and outer-local access walk this
+chain.</li>
+<li><strong>meta</strong> — one packed 8-byte word: <code>FuncId</code> (4 bytes), <code>reg_num</code> (2), the
+argument <code>mode</code> byte, and a <code>kind</code> byte carrying on-stack/on-heap,
+simple-arity, invalidated, native, block-style and related flags.
+<code>LFP_REGNUM</code> and <code>LFP_FUNCID</code> address fields <em>inside</em> this word; they are
+not separate slots.</li>
+<li><strong>svar</strong> — frame-local special variables, the counterpart of CRuby’s
+<code>vm_svar</code>. <code>0</code> is the lazy-allocation sentinel (“nothing set in this scope
+yet”); otherwise a 2-element <code>Array</code> container <code>[$~, $_]</code>. Only a
+method-introducing frame owns one — blocks walk the outer chain to the LEP.</li>
+<li><strong>block</strong> — the block passed to this call, if any.</li>
+<li><strong>self</strong> — the receiver, and register slot <code>%0</code>. Locals follow it
+contiguously, so <code>Lfp::register_ptr</code> addresses slot <code>i</code> as
+<code>lfp - (LFP_SELF + 8 * i)</code>: <code>%0</code> is <code>self</code>, <code>%1</code> is <code>arg0</code>, and so on —
+which is why the bytecode dumps show a method’s first parameter as <code>%1</code>.</li>
 </ul>
+<h2 id="continuation-frame"><a class="header" href="#continuation-frame">Continuation frame</a></h2>
+<p>The four words above <code>cfp</code> are written by different parties:</p>
+<ul>
+<li><strong>saved rbp</strong> and <strong>return address</strong> by <code>call</code> and the callee prologue.
+Every frame — VM, JIT or native wrapper — establishes <code>bp == cfp + BP_CFP</code>
+in its prologue, so <code>Cfp::frame_bp</code> can recover the register’s value from
+the CFP alone.</li>
+<li><strong>caller pc</strong> by the caller just before dispatching (the VM’s
+<code>pushq r13</code>, the JIT’s equivalent store, or a zero sentinel from an
+invoker). Not every dispatch path writes it, so consumers must
+range-validate it against the caller frame’s bytecode span before trusting
+it. This is what powers lazy backtraces, <code>Kernel#caller</code>, and <code>super</code>
+resolution (see <a href="#super-のメソッド名解決と呼び出し元-pc-を用いた実装"><code>super_resolution.md</code></a>).</li>
+<li><strong>pad</strong> is reserved by every caller and read by nothing on the normal
+return path. Chain deopt reuses it as the converted call’s per-site
+continuation word (see <a href="#chain-deopt--handoff-note"><code>chain_deopt.md</code></a> §9.3).</li>
+</ul>
+<h2 id="abi-of-the-interpreter-and-jited-code"><a class="header" href="#abi-of-the-interpreter-and-jited-code">ABI of the interpreter and JIT’ed code</a></h2>
+<p>Global registers, callee-saved on both architectures:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Role</th><th>x86-64</th><th>aarch64</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&amp;mut Executor</code> (<code>[rbx]</code> points to cfp)</td><td><code>rbx</code></td><td><code>x19</code></td></tr>
+<tr><td><code>&amp;mut Globals</code></td><td><code>r12</code></td><td><code>x20</code></td></tr>
+<tr><td>program counter</td><td><code>r13</code></td><td><code>x21</code></td></tr>
+<tr><td>local frame pointer (lfp)</td><td><code>r14</code></td><td><code>x22</code></td></tr>
+<tr><td>accumulator</td><td><code>r15</code></td><td><code>x23</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The accumulator is a <strong>VM-tier</strong> register. JIT’ed code does not keep a fixed
+accumulator: <code>GP_ALLOC_POOL</code> is empty, and the local allocator in
+<code>jitgen/gp_alloc.rs</code> assigns general-purpose registers per basic block
+instead, so a compiled body’s values live in whatever caller-saved register
+it picked.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="メソッド引数の処理"><a class="header" href="#メソッド引数の処理">メソッド引数の処理</a></h1>
 <h2 id="pos_num"><a class="header" href="#pos_num">pos_num</a></h2>

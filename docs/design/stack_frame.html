@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-86c241c2.js";
+            window.path_to_searchindex_js = "../searchindex-bd8e4c6e.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a8d0bf4a.js"></script>
+        <script src="../toc-ad91b9ad.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,75 +177,169 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="stack-layout-for-the-bytecode-interpreter-jit-ed-code"><a class="header" href="#stack-layout-for-the-bytecode-interpreter-jit-ed-code">Stack layout for the bytecode interpreter/ JIT-ed code</a></h1>
-<h2 id="stack-frame-structure-just-after-prologue"><a class="header" href="#stack-frame-structure-just-after-prologue">stack frame structure (just after prologue)</a></h2>
+                        <h1 id="stack-layout-for-the-bytecode-interpreter--jited-code"><a class="header" href="#stack-layout-for-the-bytecode-interpreter--jited-code">Stack layout for the bytecode interpreter / JIT’ed code</a></h1>
+<p>The interpreter and JIT’ed code share one frame layout: both go through the
+same <code>set_lfp</code> / <code>set_method_outer</code> / <code>set_block_outer</code> primitives in
+<code>codegen/arch/&lt;arch&gt;/jit_module.rs</code>, so a single picture covers a VM frame, a
+JIT frame and a native wrapper alike. The offsets below are the constants in
+<code>executor.rs</code>; when this document and that file disagree, the file is right.</p>
+<h2 id="slot-offsets"><a class="header" href="#slot-offsets">Slot offsets</a></h2>
+<p>Each Ruby-level call occupies three contiguous regions, stack growing down.
+<code>cfp</code> and <code>lfp</code> are two pointers into it: the control frame is addressed at
+<strong>positive</strong> offsets from <code>cfp</code>, the local frame at <strong>negative</strong> offsets from
+<code>lfp</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Slot</th><th>Address</th><th>Constant</th></tr>
+</thead>
+<tbody>
+<tr><td>pad / chain-deopt continuation word</td><td><code>cfp + 0x20</code></td><td>—</td></tr>
+<tr><td>caller pc</td><td><code>cfp + 0x18</code></td><td>—</td></tr>
+<tr><td>return address</td><td><code>cfp + 0x10</code></td><td>—</td></tr>
+<tr><td>saved <code>rbp</code></td><td><code>cfp + 0x08</code></td><td><code>BP_CFP</code> (<code>bp == cfp + BP_CFP</code>)</td></tr>
+<tr><td>prev cfp</td><td><code>cfp + 0x00</code></td><td>—</td></tr>
+<tr><td>lfp</td><td><code>cfp - 0x08</code></td><td><code>CFP_LFP</code></td></tr>
+<tr><td>outer</td><td><code>lfp - 0x00</code></td><td><code>LFP_OUTER</code> = 0</td></tr>
+<tr><td>meta</td><td><code>lfp - 0x08</code></td><td><code>LFP_META</code> = 8</td></tr>
+<tr><td>svar</td><td><code>lfp - 0x10</code></td><td><code>LFP_SVAR</code> = 16</td></tr>
+<tr><td>block</td><td><code>lfp - 0x18</code></td><td><code>LFP_BLOCK</code> = 24</td></tr>
+<tr><td>self</td><td><code>lfp - 0x20</code></td><td><code>LFP_SELF</code> = 32</td></tr>
+<tr><td>arg0</td><td><code>lfp - 0x28</code></td><td><code>LFP_ARG0</code> = 40</td></tr>
+</tbody>
+</table>
+</div>
+<p>The local frame starts at <code>cfp - 0x10</code>, one word below the <code>lfp</code> slot itself.
+From a caller’s <code>rsp</code> at the call, <code>RSP_CFP</code> (24) and <code>RSP_LOCAL_FRAME</code> (40)
+name the same two points.</p>
+<h2 id="just-after-the-prologue"><a class="header" href="#just-after-the-prologue">Just after the prologue</a></h2>
 <pre><code class="language-text">             +-------------+----------------------
-             |  prev lfp   |
+   cfp+0x20  |     pad     |
              +-------------+
-             |   prev pc   |
+   cfp+0x18  |  caller pc  |
              +-------------+  continuation frame
-             | return addr |
+   cfp+0x10  | return addr |
              +-------------+
- BP-&gt;        |  prev rbp   | &lt;- rbp
+   cfp+0x08  |  saved rbp  | &lt;- rbp
              +-------------+----------------------
-CFP-&gt;        |  prev cfp   |
+   cfp+0x00  |  prev cfp   | &lt;- cfp
              +-------------+  control frame
-             |     lfp     |
+   cfp-0x08  |     lfp     |
              +-------------+----------------------
-       -0x00 |    outer    | &lt;- r14
+       -0x00 |    outer    | &lt;- r14 (lfp)
              +-------------+
        -0x08 |    meta     |
              +-------------+
-       -0x10 |    block    |
+       -0x10 |    svar     |
+             +-------------+  local frame
+       -0x18 |    block    |
              +-------------+
-       -0x18 |    self     |  local frame
+       -0x20 |    self     |
              +-------------+
-       -0x20 |    arg0     |
+       -0x28 |    arg0     |
              +-------------+
              |      :      |
              +-------------+
              |   arg(n-1)  |
              +-------------+----------------------
-       -0xy0 |             | &lt;- rsp
+             |             | &lt;- rsp
              +-------------+
              |      :      |
 </code></pre>
-<h2 id="stack-frame-structure-just-before-call"><a class="header" href="#stack-frame-structure-just-before-call">stack frame structure (just before call)</a></h2>
-<pre><code class="language-text">             +-------------+
-       -0x00 |             | &lt;- rsp
+<h2 id="just-before-the-call"><a class="header" href="#just-before-the-call">Just before the call</a></h2>
+<p>The caller builds the callee’s frame below its own <code>rsp</code> and then <code>call</code>s;
+the two words above <code>rsp</code> are the cont-frame extension it reserved with
+<code>sub rsp, 0x10</code>, and <code>call</code> / the callee prologue push the return address and
+the saved <code>rbp</code> into the two words below it.</p>
+<pre><code class="language-text">             +-------------+----------------------
+       +0x08 |     pad     |
+             +-------------+  reserved by the caller
+       +0x00 |  caller pc  | &lt;- rsp
+             +-------------+----------------------
+       -0x08 | return addr |    pushed by `call`
              +-------------+
-       -0x08 |             |
-             +-------------+
-       -0x10 |             |
-             +-------------+-----------------
-       -0x18 |  prev cfp   |
+       -0x10 |  saved rbp  |    pushed by the callee prologue
+             +-------------+----------------------
+       -0x18 |  prev cfp   | &lt;- cfp        (RSP_CFP)
              +-------------+  control frame
        -0x20 |     lfp     |
-             +-------------+-----------------
-       -0x28 |    outer    | &lt;- r14
+             +-------------+----------------------
+       -0x28 |    outer    | &lt;- r14 (lfp)  (RSP_LOCAL_FRAME)
              +-------------+
        -0x30 |    meta     |
              +-------------+
-       -0x38 |    block    |
+       -0x38 |    svar     |
+             +-------------+  local frame
+       -0x40 |    block    |
              +-------------+
-       -0x40 |    self     |  local frame
+       -0x48 |    self     |
              +-------------+
-       -0x48 |    arg0     |
+       -0x50 |    arg0     |
              +-------------+
              |      :      |
              +-------------+
              |   arg(n-1)  |
-             +-------------+------------------
+             +-------------+----------------------
              |      :      |
 </code></pre>
-<h2 id="abi-of-interpreter-and-jit-ed-code"><a class="header" href="#abi-of-interpreter-and-jit-ed-code">ABI of interpreter and JIT-ed code</a></h2>
-<h3 id="global-registers-callee-save"><a class="header" href="#global-registers-callee-save">global registers (callee save)</a></h3>
+<h2 id="what-the-header-slots-hold"><a class="header" href="#what-the-header-slots-hold">What the header slots hold</a></h2>
 <ul>
-<li>rbx: &amp;mut Executer ([rbx] points to cfp)</li>
-<li>r12: &amp;mut Globals</li>
-<li>r13: pc (current bytecode address, dummy for JIT-ed code)</li>
-<li>r14: lfp (local frame pointer)</li>
+<li><strong>outer</strong> — the lexically enclosing frame’s lfp for a block, <code>0</code> for a
+method-introducing frame. <code>$~</code> resolution and outer-local access walk this
+chain.</li>
+<li><strong>meta</strong> — one packed 8-byte word: <code>FuncId</code> (4 bytes), <code>reg_num</code> (2), the
+argument <code>mode</code> byte, and a <code>kind</code> byte carrying on-stack/on-heap,
+simple-arity, invalidated, native, block-style and related flags.
+<code>LFP_REGNUM</code> and <code>LFP_FUNCID</code> address fields <em>inside</em> this word; they are
+not separate slots.</li>
+<li><strong>svar</strong> — frame-local special variables, the counterpart of CRuby’s
+<code>vm_svar</code>. <code>0</code> is the lazy-allocation sentinel (“nothing set in this scope
+yet”); otherwise a 2-element <code>Array</code> container <code>[$~, $_]</code>. Only a
+method-introducing frame owns one — blocks walk the outer chain to the LEP.</li>
+<li><strong>block</strong> — the block passed to this call, if any.</li>
+<li><strong>self</strong> — the receiver, and register slot <code>%0</code>. Locals follow it
+contiguously, so <code>Lfp::register_ptr</code> addresses slot <code>i</code> as
+<code>lfp - (LFP_SELF + 8 * i)</code>: <code>%0</code> is <code>self</code>, <code>%1</code> is <code>arg0</code>, and so on —
+which is why the bytecode dumps show a method’s first parameter as <code>%1</code>.</li>
 </ul>
+<h2 id="continuation-frame"><a class="header" href="#continuation-frame">Continuation frame</a></h2>
+<p>The four words above <code>cfp</code> are written by different parties:</p>
+<ul>
+<li><strong>saved rbp</strong> and <strong>return address</strong> by <code>call</code> and the callee prologue.
+Every frame — VM, JIT or native wrapper — establishes <code>bp == cfp + BP_CFP</code>
+in its prologue, so <code>Cfp::frame_bp</code> can recover the register’s value from
+the CFP alone.</li>
+<li><strong>caller pc</strong> by the caller just before dispatching (the VM’s
+<code>pushq r13</code>, the JIT’s equivalent store, or a zero sentinel from an
+invoker). Not every dispatch path writes it, so consumers must
+range-validate it against the caller frame’s bytecode span before trusting
+it. This is what powers lazy backtraces, <code>Kernel#caller</code>, and <code>super</code>
+resolution (see <a href="super_resolution.html"><code>super_resolution.md</code></a>).</li>
+<li><strong>pad</strong> is reserved by every caller and read by nothing on the normal
+return path. Chain deopt reuses it as the converted call’s per-site
+continuation word (see <a href="chain_deopt.html"><code>chain_deopt.md</code></a> §9.3).</li>
+</ul>
+<h2 id="abi-of-the-interpreter-and-jited-code"><a class="header" href="#abi-of-the-interpreter-and-jited-code">ABI of the interpreter and JIT’ed code</a></h2>
+<p>Global registers, callee-saved on both architectures:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Role</th><th>x86-64</th><th>aarch64</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&amp;mut Executor</code> (<code>[rbx]</code> points to cfp)</td><td><code>rbx</code></td><td><code>x19</code></td></tr>
+<tr><td><code>&amp;mut Globals</code></td><td><code>r12</code></td><td><code>x20</code></td></tr>
+<tr><td>program counter</td><td><code>r13</code></td><td><code>x21</code></td></tr>
+<tr><td>local frame pointer (lfp)</td><td><code>r14</code></td><td><code>x22</code></td></tr>
+<tr><td>accumulator</td><td><code>r15</code></td><td><code>x23</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The accumulator is a <strong>VM-tier</strong> register. JIT’ed code does not keep a fixed
+accumulator: <code>GP_ALLOC_POOL</code> is empty, and the local allocator in
+<code>jitgen/gp_alloc.rs</code> assigns general-purpose registers per basic block
+instead, so a compiled body’s values live in whatever caller-saved register
+it picked.</p>
 
                     </main>
 

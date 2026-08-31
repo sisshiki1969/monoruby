@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-86c241c2.js";
+            window.path_to_searchindex_js = "searchindex-bd8e4c6e.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a8d0bf4a.js"></script>
+        <script src="toc-ad91b9ad.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -575,6 +575,20 @@ lists, so an unlisted document is copied and then silently dropped.</p>
 <pre><code class="language-sh">bash docs/build.sh          # output in docs/book/
 mdbook serve docs           # live preview
 </code></pre>
+<h3 id="the-changelog-and-the-readme"><a class="header" href="#the-changelog-and-the-readme">The changelog and the README</a></h3>
+<p><a href="changelog.html"><code>docs/src/changelog.md</code></a> is the single source of truth for the
+monthly changelog. The README shows only the two newest month sections,
+copied verbatim between its <code>&lt;!-- BEGIN LATEST-MONTHS --&gt;</code> /
+<code>&lt;!-- END LATEST-MONTHS --&gt;</code> markers — that block is generated, so edit the
+changelog and regenerate rather than editing the README:</p>
+<pre><code class="language-sh">bin/sync-changelog-readme           # rewrite the README block
+bin/sync-changelog-readme --check   # exit 1 if the two have drifted
+</code></pre>
+<p>A scheduled Routine runs on the 1st of each month: it summarizes the previous
+month’s merged PRs into a new <code>### &lt;Month&gt; &lt;Year&gt;</code> section at the top of the
+changelog’s current <code>## &lt;year&gt;</code> group, runs the sync script, and pushes both
+files. Pushing <code>docs/src/changelog.md</code> also re-triggers <code>docs.yml</code>, so the
+published book picks the new month up in the same run.</p>
 
                     </main>
 

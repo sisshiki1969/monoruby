@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>TOPLEVEL_BINDING and the main script - monoruby</title>
+        <title>Changelog - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
-        <link rel="stylesheet" href="../css/variables-8adf115d.css">
-        <link rel="stylesheet" href="../css/general-e96d0476.css">
-        <link rel="stylesheet" href="../css/chrome-d279d366.css">
-        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-bd8e4c6e.js";
+            window.path_to_searchindex_js = "searchindex-bd8e4c6e.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-ad91b9ad.js"></script>
+        <script src="toc-ad91b9ad.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">monoruby</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
@@ -177,126 +177,94 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="toplevel_binding-and-the-main-scripts-frame"><a class="header" href="#toplevel_binding-and-the-main-scripts-frame"><code>TOPLEVEL_BINDING</code> and the main script’s frame</a></h1>
-<p>Why the main script no longer runs inside <code>TOPLEVEL_BINDING</code>, what is
-built instead and when, and which reads still force the old shape.</p>
-<hr>
-<h2 id="1-the-problem-a-bindings-frame-is-a-captured-frame"><a class="header" href="#1-the-problem-a-bindings-frame-is-a-captured-frame">1. The problem: a binding’s frame is a captured frame</a></h2>
-<p><code>TOPLEVEL_BINDING</code> has to expose exactly the main script’s locals —
-live, and shared with anything the binding sets dynamically:</p>
-<pre><code class="language-ruby"># main.rb
-p TOPLEVEL_BINDING.local_variables   # =&gt; [:a]   (parse-time locals, before the assignment)
-a = 1
-p TOPLEVEL_BINDING.local_variable_get(:a)   # =&gt; 1
-</code></pre>
-<p>The direct way to get that is to <em>be</em> the binding’s frame: compile the
-main script as a body of the binding and run it there
-(<code>Globals::compile_main_script_binding</code>). That is what monoruby did.</p>
-<p>The cost was invisible and large. A <code>Binding</code>’s frame is heap-allocated,
-so the main script’s frame has the <code>on_heap</code> bit set in its <code>Meta</code>, and
-<code>vm_loop_start</code> — the VM’s loop-JIT trigger — begins with
-<code>branch_if_captured</code>:</p>
-<pre><code>testb [r14 - (LFP_META - META_KIND)], 0b1000_1000   ; on_heap | invalidated
-jnz   cont                                           ; …never count, never compile
-</code></pre>
-<p>A captured frame’s locals may be aliased through the heap, which the
-register-caching JIT cannot honour, so the trigger skips such frames
-entirely. For the main script that meant <strong>top-level code was never
-JIT-compiled at all</strong> — not “compiled and then deoptimized”, never
-compiled: with <code>--features jit-log</code> a top-level-loop program reports
-<code>elapsed JIT compile time: 0ns</code>, and <code>--no-jit</code> runs it at the same
-speed.</p>
-<p>Measured on x86-64 (release, best of 3), the same loop as a main script
-versus inside a <code>require</code>d file (a plain stack frame):</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th style="text-align: right">main script</th><th style="text-align: right">via <code>require</code></th><th style="text-align: right">CRuby 4.0.2</th></tr>
-</thead>
-<tbody>
-<tr><td><code>benchmark/so_mandelbrot.rb</code></td><td style="text-align: right">3.41 s</td><td style="text-align: right">0.21 s</td><td style="text-align: right">1.98 s</td></tr>
-<tr><td>minimal <code>while</code> loop over floats</td><td style="text-align: right">1.35 s</td><td style="text-align: right">0.13 s</td><td style="text-align: right">0.77 s</td></tr>
-</tbody>
-</table>
-</div>
-<p>Method-shaped code was never affected — only code running directly at
-the top level. (The benchmark harness measures the method-wrapped form:
-<code>benchmark/so_mandelbrot.yml</code> wraps the body in <code>def do_it</code>, which is why
-the suite never showed this.)</p>
-<h2 id="2-what-happens-now"><a class="header" href="#2-what-happens-now">2. What happens now</a></h2>
-<p><code>TOPLEVEL_BINDING</code> is registered at startup as a <strong>lazy constant</strong> —
-<code>ConstStateKind::LazyToplevelBinding</code>. The name is <em>defined</em> (it lists in
-<code>Object.constants</code>, answers <code>const_defined?</code> and <code>defined?</code>, and reports
-no autoload) but holds no <code>Binding</code> object yet.</p>
+                        <h1 id="changelog"><a class="header" href="#changelog">Changelog</a></h1>
+<p>Monthly highlights of monoruby’s development, with representative PRs. The
+README carries the most recent two months; this page is the full record.</p>
+<p>For a prose account of the same period rather than a list — what changed and
+why, over roughly 500 commits — see <a href="design/progress_2025-2026.html">Progress summary (April 2025 – April
+2026)</a>.</p>
+<blockquote>
+<p><strong>Maintenance.</strong> This page is the single source of truth. A scheduled
+Routine appends the previous month on the 1st of each month, then runs
+<code>bin/sync-changelog-readme</code>, which copies the two newest month sections
+verbatim into the README between its <code>LATEST-MONTHS</code> markers. The README’s
+month text is generated — edit this page instead, and re-run the script
+(<code>bin/sync-changelog-readme --check</code> verifies the two are in sync).</p>
+</blockquote>
+<h2 id="2026"><a class="header" href="#2026">2026</a></h2>
+<h3 id="july-2026"><a class="header" href="#july-2026">July 2026</a></h3>
 <ul>
-<li>The main script runs as a plain toplevel body on a <strong>stack</strong> frame
-(<code>Executor::try_exec_main_script_plain</code>), so its loops reach the JIT
-like any method’s.</li>
-<li>The first <em>read</em> of the constant builds the binding
-(<code>Executor::materialize_toplevel_binding</code>), over the main script’s own
-frame — promoted to the heap exactly as <code>Kernel#binding</code> promotes a
-method’s frame. Reader and script then share one set of locals, which
-is the semantics above. Promotion mid-run is the same event a
-<code>binding</code> call inside a hot method loop causes, and is handled by the
-existing <code>invalidated</code> tombstone machinery.</li>
-<li>Reading it where no main-script frame is running — during a <code>-r</code>
-require, before the script starts — builds an empty frame on the main
-object, which is what CRuby exposes at that point too.</li>
-<li>If a read happened <em>before</em> the main script starts (a <code>-r</code> library
-that touched it), the script runs inside that already-built binding:
-the old path, unchanged, because the binding has already handed out
-the frame its locals must live in.</li>
+<li>Big language-semantics compliance drive on the ruby/spec “language” group: destructuring, block-argument semantics, <code>defined?</code>, flip-flops, <code>BEGIN</code>/<code>END</code>, and predefined globals (<a href="https://github.com/sisshiki1969/monoruby/pull/804">#804</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/874">#874</a>, notably <a href="https://github.com/sisshiki1969/monoruby/pull/861">#861</a>).</li>
+<li>Implemented pattern matching (<code>case</code>/<code>in</code>, <code>=&gt;</code>) (<a href="https://github.com/sisshiki1969/monoruby/pull/883">#883</a>) and MRI’s full eigenclass tower (<a href="https://github.com/sisshiki1969/monoruby/pull/877">#877</a>).</li>
+<li>Green threads (M:1): scheduler core, real Thread / Mutex / Queue, scheduler-integrated blocking IO, and preemptive timeslice multithreading (<a href="https://github.com/sisshiki1969/monoruby/pull/941">#941</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/944">#944</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/962">#962</a>).</li>
+<li>Real TCP / UDP / UNIX-domain sockets (<a href="https://github.com/sisshiki1969/monoruby/pull/964">#964</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/981">#981</a>); <code>IO::Buffer</code> with mmap file mapping (<a href="https://github.com/sisshiki1969/monoruby/pull/927">#927</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/931">#931</a>); <code>IO.copy_stream</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/924">#924</a>).</li>
+<li>Added the <code>setup-monoruby</code> GitHub Action with prebuilt binaries (<a href="https://github.com/sisshiki1969/monoruby/pull/884">#884</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/886">#886</a>) and CRuby-compatible command-line option processing (<a href="https://github.com/sisshiki1969/monoruby/pull/891">#891</a>).</li>
+<li>Completed the Exception API: raise-time backtraces, <code>full_message</code>, NameError / NoMethodError metadata (<a href="https://github.com/sisshiki1969/monoruby/pull/893">#893</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/896">#896</a>).</li>
+<li>Brought the aarch64 JIT to optimization parity with x86-64 (<a href="https://github.com/sisshiki1969/monoruby/pull/993">#993</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/1004">#1004</a>) and shrank call frames for ~7% faster fib (<a href="https://github.com/sisshiki1969/monoruby/pull/850">#850</a>).</li>
+<li>Completed <code>Fiber</code> — transfer / raise / kill / storage and a real root fiber, making core/fiber fully green (<a href="https://github.com/sisshiki1969/monoruby/pull/1036">#1036</a>) — and refined Thread semantics: the async <code>Thread#raise</code> protocol and structured <code>Thread::Backtrace::Location</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/1026">#1026</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/1027">#1027</a>).</li>
+<li>JIT: object allocation emitted as inline machine code (free-list pop + bump) (<a href="https://github.com/sisshiki1969/monoruby/pull/1011">#1011</a>), guard-free slot dispatch for method calls on aarch64 (<a href="https://github.com/sisshiki1969/monoruby/pull/1010">#1010</a>), and trivial-method folding through <code>...</code> forwards (<a href="https://github.com/sisshiki1969/monoruby/pull/1012">#1012</a>).</li>
+<li>Encoding: streaming <code>Encoding::Converter</code> state and <code>String#encode</code> fallback / newline decorators (<a href="https://github.com/sisshiki1969/monoruby/pull/1018">#1018</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/1019">#1019</a>); Regexp gained native-encoding byte matching for non-UTF-8 subjects plus upstream Onigmo engine fixes (<a href="https://github.com/sisshiki1969/monoruby/pull/1037">#1037</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/1038">#1038</a>).</li>
+<li>CRuby-compatible <code>require</code> / <code>load</code> / <code>autoload</code> resolution rules (<a href="https://github.com/sisshiki1969/monoruby/pull/1033">#1033</a>), a Rust fnmatch engine backing <code>Dir.glob</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/1017">#1017</a>), and an mdBook documentation site published to <a href="https://sisshiki1969.github.io/monoruby/docs/">the project portal</a> (<a href="https://github.com/sisshiki1969/monoruby/pull/1008">#1008</a>).</li>
 </ul>
-<h2 id="3-scripts-that-name-the-constant-themselves"><a class="header" href="#3-scripts-that-name-the-constant-themselves">3. Scripts that name the constant themselves</a></h2>
-<p>Two readers cannot be served by “build it over the frame that is running
-right now”:</p>
-<pre><code class="language-ruby">z = 7
-at_exit { p TOPLEVEL_BINDING.local_variable_get(:z) }   # toplevel frame is gone by then
-Thread.new { p TOPLEVEL_BINDING.local_variables }.join  # another call chain
-</code></pre>
-<p>So a main script that <em>names</em> <code>TOPLEVEL_BINDING</code> anywhere in its own
-source — a mention inside a block counts — runs inside the binding, the
-pre-existing path, and keeps the pre-existing semantics.</p>
-<p>The test is the constant sites the script’s compilation recorded
-(<code>Store::names_constant_since</code>), so it sees exactly the literal
-references the script compiled: a mention in a comment does not count, a
-reference nested in a block or a <code>def</code> does. A script that trips this
-loses top-level JIT, as before; a script that does not mention the
-constant pays nothing.</p>
-<p>Dynamic reads from <em>other</em> files (<code>Object.const_get(:TOPLEVEL_BINDING)</code>
-in a library, an <code>eval</code>) are not statically visible, and do not need to
-be: they run while the main script’s frame is live, so §2’s
-materialization serves them. The residual gap — a <em>required library</em>
-reading it from a thread or an <code>at_exit</code> handler, in a program whose own
-source never mentions the constant — yields the empty binding.</p>
-<h2 id="4-where-the-pieces-live"><a class="header" href="#4-where-the-pieces-live">4. Where the pieces live</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Piece</th><th>Location</th></tr>
-</thead>
-<tbody>
-<tr><td>Lazy constant slot</td><td><code>ConstStateKind::LazyToplevelBinding</code>, <code>globals/store/class/constants.rs</code></td></tr>
-<tr><td>Registration at startup</td><td><code>Executor::init</code>, <code>executor.rs</code></td></tr>
-<tr><td>First-read hook</td><td><code>Executor::get_constant</code>, <code>executor/constants.rs</code></td></tr>
-<tr><td>Building the binding</td><td><code>Executor::materialize_toplevel_binding</code>, <code>executor.rs</code></td></tr>
-<tr><td>Fast path + static scan</td><td><code>Executor::try_exec_main_script_plain</code>, <code>executor.rs</code></td></tr>
-<tr><td>Binding path (unchanged)</td><td><code>Globals::compile_main_script_binding</code>, <code>globals.rs</code></td></tr>
-<tr><td><code>&lt;main&gt;</code> backtrace label</td><td><code>Store::func_description_for</code>, <code>globals/store.rs</code> (keyed by the recorded main-script <code>FuncId</code>, since a plain main body is otherwise indistinguishable from a required file’s toplevel)</td></tr>
-<tr><td>Tests</td><td><code>monoruby/tests/main_script.rs</code></td></tr>
-</tbody>
-</table>
-</div>
+<h3 id="june-2026"><a class="header" href="#june-2026">June 2026</a></h3>
+<ul>
+<li>Completed the aarch64 JIT backend: full AsmInst coverage, inline methods, loop JIT, and recompilation on Apple Silicon (<a href="https://github.com/sisshiki1969/monoruby/pull/645">#645</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/704">#704</a>).</li>
+<li>Introduced a generational GC (RGenGC-style) (<a href="https://github.com/sisshiki1969/monoruby/pull/705">#705</a>); GC now also triggers on malloc growth (<a href="https://github.com/sisshiki1969/monoruby/pull/732">#732</a>).</li>
+<li>Completed the Prism migration and removed the old hand-written parser (ruruby-parse) (<a href="https://github.com/sisshiki1969/monoruby/pull/657">#657</a>).</li>
+<li>New JIT register allocation: LIR-based lowering with a per-basic-block GP register allocator; retired the R15 accumulator (<a href="https://github.com/sisshiki1969/monoruby/pull/741">#741</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/756">#756</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/763">#763</a>).</li>
+<li>Cut allocation/dispatch overhead by 12–26% on addressable benchmarks (<a href="https://github.com/sisshiki1969/monoruby/pull/708">#708</a>); zero-copy String operations (gsub, slice, lines, scan) (<a href="https://github.com/sisshiki1969/monoruby/pull/722">#722</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/724">#724</a>).</li>
+<li>Made the build host-Ruby independent and reproducible (<a href="https://github.com/sisshiki1969/monoruby/pull/769">#769</a>).</li>
+</ul>
+<h3 id="may-2026"><a class="header" href="#may-2026">May 2026</a></h3>
+<ul>
+<li>Switched the parser to Prism, the official Ruby parser (<a href="https://github.com/sisshiki1969/monoruby/pull/412">#412</a>).</li>
+<li>Encoding subsystem overhaul: real <code>String#encode</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/443">#443</a>), <code>Encoding::Converter</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/447">#447</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/451">#451</a>), ISO-2022-JP (<a href="https://github.com/sisshiki1969/monoruby/pull/449">#449</a>), and EUC-JP / Shift_JIS-aware string operations (<a href="https://github.com/sisshiki1969/monoruby/pull/536">#536</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/545">#545</a>).</li>
+<li>Native String fast paths (<code>reverse</code>, <code>rindex</code>, case mapping, …) that beat YJIT (<a href="https://github.com/sisshiki1969/monoruby/pull/493">#493</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/497">#497</a>); dropped per-builtin <code>catch_unwind</code> for +8–10% on optcarrot (<a href="https://github.com/sisshiki1969/monoruby/pull/501">#501</a>).</li>
+<li>JIT: virtual FP registers with spill-to-stack (<a href="https://github.com/sisshiki1969/monoruby/pull/387">#387</a>), heap-constant folding and <code>Object#is_a?</code> inlining (<a href="https://github.com/sisshiki1969/monoruby/pull/504">#504</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/505">#505</a>), non-deopting polymorphic comparisons (<a href="https://github.com/sisshiki1969/monoruby/pull/519">#519</a>).</li>
+<li>Decoupled monoruby from any host Ruby installation (<a href="https://github.com/sisshiki1969/monoruby/pull/579">#579</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/595">#595</a>); completed the Marshal format tags (<a href="https://github.com/sisshiki1969/monoruby/pull/588">#588</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/603">#603</a>); real <code>File::Stat</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/607">#607</a>); frame-local <code>$~</code> / <code>$_</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/608">#608</a>).</li>
+<li>Started the aarch64 port: VM-tier backend and macOS (Apple Silicon) support (<a href="https://github.com/sisshiki1969/monoruby/pull/640">#640</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/641">#641</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/644">#644</a>).</li>
+<li>Continuous yjit-bench benchmarking against YJIT, charted on GitHub Pages (<a href="https://github.com/sisshiki1969/monoruby/pull/411">#411</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/416">#416</a>).</li>
+</ul>
+<h3 id="april-2026"><a class="header" href="#april-2026">April 2026</a></h3>
+<ul>
+<li>Reimplemented <code>Rational</code> as a first-class Rust type with literal support (<a href="https://github.com/sisshiki1969/monoruby/pull/266">#266</a>).</li>
+<li>Broad ruby/spec compliance work on Integer / Float / Array / Symbol / Class / Module (e.g. <a href="https://github.com/sisshiki1969/monoruby/pull/281">#281</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/284">#284</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/309">#309</a>), with a live spec dashboard published on GitHub Pages (<a href="https://github.com/sisshiki1969/monoruby/pull/364">#364</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/365">#365</a>).</li>
+<li>Moved shift / bitwise / <code>**</code> / <code>%</code> into the inline-function JIT pipeline with constant folding (<a href="https://github.com/sisshiki1969/monoruby/pull/307">#307</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/308">#308</a>), and added frame-free trivial-method optimization via <code>ISeqHint</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/290">#290</a>).</li>
+<li>Struct: per-instance slot storage with JIT-inlined member accessors (<a href="https://github.com/sisshiki1969/monoruby/pull/367">#367</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/369">#369</a>).</li>
+<li>String: encoding-aware data model — code ranges, <code>Encoding::CompatibilityError</code>, encoding-aware char iteration (<a href="https://github.com/sisshiki1969/monoruby/pull/382">#382</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/384">#384</a>).</li>
+<li>Reworked <code>autoload</code> as a proper state machine (<a href="https://github.com/sisshiki1969/monoruby/pull/376">#376</a>) and added lazy heap promotion for Proc / Lambda / Binding captures (<a href="https://github.com/sisshiki1969/monoruby/pull/332">#332</a>).</li>
+</ul>
+<h3 id="march-2026"><a class="header" href="#march-2026">March 2026</a></h3>
+<ul>
+<li>Implemented <code>Marshal.dump</code> / <code>Marshal.load</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/121">#121</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/125">#125</a>) and the <code>Set</code> class, a CRuby 4.0 built-in (<a href="https://github.com/sisshiki1969/monoruby/pull/130">#130</a>).</li>
+<li>Implemented the <code>retry</code> statement (<a href="https://github.com/sisshiki1969/monoruby/pull/109">#109</a>), module/class lifecycle hooks (<a href="https://github.com/sisshiki1969/monoruby/pull/127">#127</a>), anonymous block forwarding (<a href="https://github.com/sisshiki1969/monoruby/pull/128">#128</a>), and regex backreferences / special variables (<a href="https://github.com/sisshiki1969/monoruby/pull/129">#129</a>).</li>
+<li>Added <code>Kernel.#load</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/105">#105</a>), correct <code>Dir.glob</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/106">#106</a>), <code>Kernel.#format</code> / <code>sprintf</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/162">#162</a>), and a SQLite3 FFI bridge for the sqlite3 gem (<a href="https://github.com/sisshiki1969/monoruby/pull/160">#160</a>).</li>
+<li>Started a large ruby/spec compatibility push: implicit type conversions (<a href="https://github.com/sisshiki1969/monoruby/pull/225">#225</a>), frozen-object support (<a href="https://github.com/sisshiki1969/monoruby/pull/240">#240</a>), Errno exceptions (<a href="https://github.com/sisshiki1969/monoruby/pull/250">#250</a>), and many crash fixes on invalid UTF-8 input (<a href="https://github.com/sisshiki1969/monoruby/pull/209">#209</a>–<a href="https://github.com/sisshiki1969/monoruby/pull/212">#212</a>).</li>
+<li>Fixed many issues to run optcarrot (<a href="https://github.com/sisshiki1969/monoruby/pull/115">#115</a>) and the rubyboy / lee benchmarks (<a href="https://github.com/sisshiki1969/monoruby/pull/111">#111</a>, <a href="https://github.com/sisshiki1969/monoruby/pull/120">#120</a>).</li>
+</ul>
+<h3 id="february-2026"><a class="header" href="#february-2026">February 2026</a></h3>
+<ul>
+<li>Optimized rest / keyword-rest parameters in the JIT (<a href="https://github.com/sisshiki1969/monoruby/pull/96">#96</a>).</li>
+<li>Corrected <code>/</code> and <code>%</code> semantics for Integer and Float (<a href="https://github.com/sisshiki1969/monoruby/pull/97">#97</a>) and fixed <code>Integer#digits</code> (<a href="https://github.com/sisshiki1969/monoruby/pull/99">#99</a>).</li>
+<li>Optimized the Range class (<a href="https://github.com/sisshiki1969/monoruby/pull/98">#98</a>) and fixed <code>Range#include?</code> for string / beginless / endless ranges (<a href="https://github.com/sisshiki1969/monoruby/pull/104">#104</a>).</li>
+<li>Introduced continuation frames (<a href="https://github.com/sisshiki1969/monoruby/pull/101">#101</a>) and reworked JIT slot write-back logic (<a href="https://github.com/sisshiki1969/monoruby/pull/102">#102</a>).</li>
+</ul>
+<h3 id="january-2026"><a class="header" href="#january-2026">January 2026</a></h3>
+<ul>
+<li>Hardened JIT frame handling so local frames are never captured by JIT-compiled code (<a href="https://github.com/sisshiki1969/monoruby/pull/93">#93</a>).</li>
+<li>Added <code>SAFETY</code> comments to <code>unsafe</code> blocks across the codebase (<a href="https://github.com/sisshiki1969/monoruby/pull/94">#94</a>).</li>
+<li>Introduced immediate operands (<code>BytecodeInst::Immediate</code>) into the bytecode (<a href="https://github.com/sisshiki1969/monoruby/pull/95">#95</a>).</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../design/refinements.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="compatibility.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../design/super_resolution.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="architecture-overview.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -306,11 +274,11 @@ source never mentions the constant — yields the empty binding.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../design/refinements.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="compatibility.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../design/super_resolution.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="architecture-overview.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -330,13 +298,13 @@ source never mentions the constant — yields the empty binding.</p>
         </script>
 
 
-        <script src="../elasticlunr-ef4e11c1.min.js"></script>
-        <script src="../mark-09e88c2c.min.js"></script>
-        <script src="../searcher-09f2665d.js"></script>
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-09f2665d.js"></script>
 
-        <script src="../clipboard-1626706a.min.js"></script>
-        <script src="../highlight-abc7f01d.js"></script>
-        <script src="../book-609e4cb8.js"></script>
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 
