@@ -1,4 +1,4 @@
-timestamp,commit,benchmark,monoruby_ms,yjit_ms,ratio,monoruby_failed,yjit_failed,monoruby_reason,yjit_reason
+timestamp,commit,benchmark,monoruby_ms,yjit_ms,ratio,monoruby_failed,yjit_failed,monoruby_reason,yjit_reason,zjit_ms,zjit_failed,zjit_reason
 2026-06-13T01:40:59Z,12cd390,30k_ifelse,,162.4810,,true,false,"timeout (400s)",
 2026-06-13T01:40:59Z,12cd390,30k_methods,201.5520,102.3075,0.5076,false,false,,
 2026-06-13T01:40:59Z,12cd390,activerecord,,84.1650,,true,false,"exit 1",
@@ -28958,3 +28958,79 @@ timestamp,commit,benchmark,monoruby_ms,yjit_ms,ratio,monoruby_failed,yjit_failed
 2026-08-31T12:22:14Z,770cfe1,sudoku,55.4280,140.7550,2.5394,false,false,,
 2026-08-31T12:22:14Z,770cfe1,throw,4.5690,13.5850,2.9733,false,false,,
 2026-08-31T12:22:14Z,770cfe1,tinygql,418.6800,214.4450,0.5122,false,false,,
+2026-09-01T14:57:21Z,2d0c953,30k_ifelse,,170.6050,,true,false,"timeout (400s)",,217.6485,false,
+2026-09-01T14:57:21Z,2d0c953,30k_methods,189.2090,108.2690,0.5722,false,false,,,29.7440,false,
+2026-09-01T14:57:21Z,2d0c953,30k_variables,440.0570,,,false,true,,"timeout (400s)",5.5590,false,
+2026-09-01T14:57:21Z,2d0c953,activerecord,,73.4030,,true,false,"exit 1",,91.2370,false,
+2026-09-01T14:57:21Z,2d0c953,addressable-equality,447.6090,305.7530,0.6831,false,false,,,298.9580,false,
+2026-09-01T14:57:21Z,2d0c953,addressable-getters,97.3110,75.9860,0.7809,false,false,,,78.6320,false,
+2026-09-01T14:57:21Z,2d0c953,addressable-join,209.6185,147.4910,0.7036,false,false,,,146.3170,false,
+2026-09-01T14:57:21Z,2d0c953,addressable-merge,115.5600,67.1520,0.5811,false,false,,,64.8755,false,
+2026-09-01T14:57:21Z,2d0c953,addressable-new,49.4420,30.8140,0.6232,false,false,,,31.2375,false,
+2026-09-01T14:57:21Z,2d0c953,addressable-normalize,255.0830,173.9880,0.6821,false,false,,,165.4415,false,
+2026-09-01T14:57:21Z,2d0c953,addressable-parse,158.1640,115.2390,0.7286,false,false,,,118.0090,false,
+2026-09-01T14:57:21Z,2d0c953,addressable-setters,113.0550,61.7755,0.5464,false,false,,,59.0980,false,
+2026-09-01T14:57:21Z,2d0c953,addressable-to-s,97.1580,74.7570,0.7694,false,false,,,76.9800,false,
+2026-09-01T14:57:21Z,2d0c953,attr_accessor,6.5440,18.5240,2.8307,false,false,,,7.4420,false,
+2026-09-01T14:57:21Z,2d0c953,binarytrees,60.4960,130.7070,2.1606,false,false,,,145.4980,false,
+2026-09-01T14:57:21Z,2d0c953,blurhash,45.7835,108.8285,2.3770,false,false,,,134.7960,false,
+2026-09-01T14:57:21Z,2d0c953,cfunc_itself,1.9700,16.5485,8.4003,false,false,,,2.2660,false,
+2026-09-01T14:57:21Z,2d0c953,chunky-png,439.0420,313.4640,0.7140,false,false,,,302.8300,false,
+2026-09-01T14:57:21Z,2d0c953,erubi,244.6540,114.5720,0.4683,false,false,,,144.5360,false,
+2026-09-01T14:57:21Z,2d0c953,erubi-rails,,,,true,true,"exit 1","exit 1",,true,"exit 1"
+2026-09-01T14:57:21Z,2d0c953,etanni,412.4105,214.8190,0.5209,false,false,,,214.7030,false,
+2026-09-01T14:57:21Z,2d0c953,fannkuchredux,42.5245,375.7210,8.8354,false,false,,,477.8740,false,
+2026-09-01T14:57:21Z,2d0c953,fib,28.7020,30.0745,1.0478,false,false,,,26.0570,false,
+2026-09-01T14:57:21Z,2d0c953,fluentd,,283.8570,,true,false,"exit 1",,331.8715,false,
+2026-09-01T14:57:21Z,2d0c953,gcbench,397.8960,,,false,true,,"timeout (400s)",303.1680,false,
+2026-09-01T14:57:21Z,2d0c953,getivar,6.8520,15.5690,2.2722,false,false,,,7.1190,false,
+2026-09-01T14:57:21Z,2d0c953,getivar-module,14.3245,73.9710,5.1639,false,false,,,14.7030,false,
+2026-09-01T14:57:21Z,2d0c953,graphql,42.1870,22.3760,0.5304,false,false,,,22.4100,false,
+2026-09-01T14:57:21Z,2d0c953,graphql-native,,195.0920,,true,false,"exit 1",,177.1105,false,
+2026-09-01T14:57:21Z,2d0c953,hexapdf,,,,true,true,"exit 1","timeout (400s)",,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,keyword_args,21.4990,20.5070,0.9539,false,false,,,13.0250,false,
+2026-09-01T14:57:21Z,2d0c953,knucleotide,306.0205,40.0680,0.1309,false,false,,,,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,lee,429.0230,489.8750,1.1418,false,false,,,221.5895,false,
+2026-09-01T14:57:21Z,2d0c953,liquid-c,,37.1540,,true,false,"exit 1",,38.4720,false,
+2026-09-01T14:57:21Z,2d0c953,liquid-compile,,25.7770,,true,false,"exit 1",,28.4620,false,
+2026-09-01T14:57:21Z,2d0c953,liquid-il,,146.9955,,true,false,"no result",,159.7485,false,
+2026-09-01T14:57:21Z,2d0c953,liquid-render,,48.7415,,true,false,"exit 1",,,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,lobsters,,638.0890,,true,false,"exit 1",,,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,loops-times,153.4560,256.9490,1.6744,false,false,,,,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,mail,,69.4580,,true,false,"exit 1",,,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,matmul,62.7830,211.7300,3.3724,false,false,,,148.0960,false,
+2026-09-01T14:57:21Z,2d0c953,nbody,10.4305,36.0595,3.4571,false,false,,,33.9950,false,
+2026-09-01T14:57:21Z,2d0c953,nqueens,15.8510,55.2430,3.4851,false,false,,,31.8500,false,
+2026-09-01T14:57:21Z,2d0c953,object-new,21.5350,52.6900,2.4467,false,false,,,7.0780,false,
+2026-09-01T14:57:21Z,2d0c953,object-new-initialize,19.9940,47.5240,2.3769,false,false,,,13.6290,false,
+2026-09-01T14:57:21Z,2d0c953,object-new-no-escape,34.2725,75.5045,2.2031,false,false,,,22.5150,false,
+2026-09-01T14:57:21Z,2d0c953,optcarrot,,1194.4550,,true,false,"timeout (400s)",,911.1130,false,
+2026-09-01T14:57:21Z,2d0c953,protoboeuf,30.3780,30.3545,0.9992,false,false,,,21.0025,false,
+2026-09-01T14:57:21Z,2d0c953,protoboeuf-encode,,40.7100,,true,false,"no result",,26.1345,false,
+2026-09-01T14:57:21Z,2d0c953,psych-load,,,,true,true,"timeout (400s)","SIGKILL after timeout (400s)",,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,rack,50.3240,26.3320,0.5232,false,false,,,31.0290,false,
+2026-09-01T14:57:21Z,2d0c953,railsbench,,807.3740,,true,false,"exit 1",,,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,respond_to,4.9780,15.1655,3.0465,false,false,,,8.2355,false,
+2026-09-01T14:57:21Z,2d0c953,rubocop,,,,true,true,"exit 1","exit 1",,true,"exit 1"
+2026-09-01T14:57:21Z,2d0c953,ruby-json,,149.1250,,true,false,"exit 1",,127.7405,false,
+2026-09-01T14:57:21Z,2d0c953,ruby-lsp,,82.7200,,true,false,"exit 1",,70.8840,false,
+2026-09-01T14:57:21Z,2d0c953,ruby-xor,6.9185,21.8210,3.1540,false,false,,,15.6520,false,
+2026-09-01T14:57:21Z,2d0c953,rubyboy,,,,true,true,"no result","timeout (400s)",,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,rubykon,352.0175,372.3715,1.0578,false,false,,,310.1800,false,
+2026-09-01T14:57:21Z,2d0c953,send_bmethod,14.9610,8.7255,0.5832,false,false,,,2.2910,false,
+2026-09-01T14:57:21Z,2d0c953,send_cfunc_block,90.0210,100.3790,1.1151,false,false,,,105.2730,false,
+2026-09-01T14:57:21Z,2d0c953,send_rubyfunc_block,18.3955,20.0255,1.0886,false,false,,,8.3260,false,
+2026-09-01T14:57:21Z,2d0c953,send_rubyfunc_inline,60.2725,103.7280,1.7210,false,false,,,41.4905,false,
+2026-09-01T14:57:21Z,2d0c953,sequel,,35.8030,,true,false,"exit 1",,34.0125,false,
+2026-09-01T14:57:21Z,2d0c953,setivar,3.1605,9.0200,2.8540,false,false,,,1.3960,false,
+2026-09-01T14:57:21Z,2d0c953,setivar_object,4.2410,33.2430,7.8385,false,false,,,30.1710,false,
+2026-09-01T14:57:21Z,2d0c953,setivar_young,4.2615,33.5415,7.8708,false,false,,,32.8775,false,
+2026-09-01T14:57:21Z,2d0c953,shipit,,,,true,true,"exit 1","timeout (400s)",,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,splay,,,,true,true,"timeout (400s)","timeout (400s)",58.9015,false,
+2026-09-01T14:57:21Z,2d0c953,str_concat,18.3900,28.3285,1.5404,false,false,,,23.0290,false,
+2026-09-01T14:57:21Z,2d0c953,string_malloc_pressure,33.8350,,,false,true,,"timeout (400s)",,true,"timeout (400s)"
+2026-09-01T14:57:21Z,2d0c953,structaref,7.1655,19.9910,2.7899,false,false,,,6.8545,false,
+2026-09-01T14:57:21Z,2d0c953,structaset,5.7420,61.6605,10.7385,false,false,,,3.2015,false,
+2026-09-01T14:57:21Z,2d0c953,sudoku,56.7830,142.9680,2.5178,false,false,,,83.7790,false,
+2026-09-01T14:57:21Z,2d0c953,throw,4.6260,14.2850,3.0880,false,false,,,28.7990,false,
+2026-09-01T14:57:21Z,2d0c953,tinygql,424.7620,220.4890,0.5191,false,false,,,187.3490,false,
