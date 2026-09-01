@@ -1309,6 +1309,7 @@
 65694a727aa519d1f24a0ad7779439d7	["a", "b"]	sup = Class.new do\n          def a; "a"; end\n          def b; "b"; end\n
 658a3d798e2393a25a6923d06ab095be	[:tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok]	def tmo(klass)\n              perform = Proc.new do\n                
 659055cc978aefe6697faff4fd6e1315	[[1, 2, 3], 10, 20]	def f(*pos, a:, b:)\n          [pos, a, b]\n        end\n        \n\n       
+65b60c5b39c342afed16c0ba169c3edc	20100	def target(x) = x + 1\n        s = 0\n        i = 0\n        while i < 200
 65d10140470d60de44657d841741db77	[0, 1, 2, 3, 4]	a = []\n            p = Proc.new {|x|\n                a << x\n       
 65f089c7f8670902b073a707f21a776d	["/p", nil]	m = Module.new { autoload :X, "/p" }\n            [m.autoload?("X"),
 6622d68b20aa2154a49d5b127ef16dc7	:assigned	module MM\n          def self.const_missing(c); c; end\n        end\n     

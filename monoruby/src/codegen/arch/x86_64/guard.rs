@@ -1,11 +1,34 @@
 use super::*;
 
 impl Codegen {
-    fn check_version(&mut self, cached_version: DestLabel, fail: &DestLabel) {
+    /// Compare the global class version against this unit's snapshot.
+    ///
+    /// The snapshot side is an *inline imm32*, not the unit's snapshot
+    /// word: `movl rax, imm32` has a fixed 5-byte encoding (unlike a
+    /// `cmp m32, imm` whose imm8 short form would make the patch site
+    /// variable-length), so a successful salvage re-stamps the version
+    /// by patching the 4 bytes before the label bound here (see
+    /// `Codegen::set_class_version`). This removes the per-unit data
+    /// load — one scattered cache line per compilation unit — from
+    /// every guard on the hot path; only the shared, always-hot global
+    /// word is read. The word (`cached_version`) still exists as the
+    /// salvage records' key and for the aarch64 twin, which reads it.
+    ///
+    /// Every emitted compare registers its patch site here — this is
+    /// the single choke point, so a guard shape cannot forget to (the
+    /// #1157 failure mode: an unpatchable snapshot immediate silently
+    /// turns every salvage into a permanent per-call deopt).
+    fn check_version(&mut self, _cached_version: DestLabel, fail: &DestLabel) {
         let global_version = self.class_version_label();
+        let version = self.class_version();
+        let patch_site = self.jit.label();
         monoasm! { &mut self.jit,
-            movl rax, [rip + global_version];
-            cmpl rax, [rip + cached_version];
+            movl rax, (version);
+        }
+        self.jit.bind_label(patch_site.clone());
+        self.unit_version_patch_sites.push(patch_site);
+        monoasm! { &mut self.jit,
+            cmpl rax, [rip + global_version];
             jne  fail;
         }
     }

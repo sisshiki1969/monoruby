@@ -432,6 +432,22 @@ pub(crate) mod placement_shadow {
 pub struct JitModule {
     pub(crate) jit: JitMemory,
     class_version: DestLabel,
+    /// x86 only: the class-version-guard imm32 patch sites of the unit
+    /// currently being compiled. Each guard emits `movl rax, imm32`
+    /// (fixed 5-byte encoding) with the compile-time version baked in
+    /// and pushes a label bound right after it; a successful salvage
+    /// re-stamps every site through `version_imm_sites`. Collected by
+    /// `check_version` (the single choke point emitting the compare, so
+    /// a site cannot be forgotten) and drained per unit by
+    /// `jit_compile`.
+    pub(in crate::codegen) unit_version_patch_sites: Vec<DestLabel>,
+    /// x86 only: per-unit imm32 patch-site lists, keyed by the unit's
+    /// snapshot-word address (the `DestLabel` the salvage records
+    /// already carry). `set_class_version` patches the word *and* every
+    /// registered site, so the salvage plumbing needs no signature
+    /// changes. Units live for the process lifetime (JIT code is never
+    /// freed), so entries are never removed.
+    pub(in crate::codegen) version_imm_sites: std::collections::HashMap<u64, Vec<DestLabel>>,
     const_version: DestLabel,
     /// The safepoint poll word (see poll_flag.rs for the lane protocol).
     /// JIT data so the VM/JIT poll sites can address it rip-relative.
@@ -565,6 +581,27 @@ impl JitModule {
         // SAFETY: the label names a 4-byte word emitted by `jit_compile`,
         // just made writable by `mark_dirty`.
         unsafe { *p = version };
+        // x86: the unit's guards compare an *inline imm32* against the
+        // global version (no per-unit data load on the hot path); the
+        // word above is retained as the salvage records' key and for the
+        // aarch64 twin, which still reads it. Re-stamp every imm site of
+        // this unit. Patching is safe here: the only thread executing
+        // JIT code is this one, and it is inside the guard's cold path.
+        if let Some(sites) = self.version_imm_sites.get(&(p as u64)) {
+            for site in sites.clone() {
+                // The label is bound immediately after the fixed 5-byte
+                // `movl rax, imm32`, so the imm is the 4 bytes before it.
+                let imm = unsafe { self.jit.get_label_address(&site).as_ptr().sub(4) } as *mut u32;
+                self.jit.mark_dirty(imm as *const u8, 4);
+                // SAFETY: `check_version` bound the label right after its
+                // 5-byte `movl`; the 4 bytes before it are that mov's
+                // imm32, just made writable by `mark_dirty`. Unaligned by
+                // nature (an instruction immediate), hence
+                // `write_unaligned`; single-threaded JIT execution makes
+                // the non-atomic store unobservable mid-write.
+                unsafe { imm.write_unaligned(version) };
+            }
+        }
         self.jit.set_executable();
     }
 

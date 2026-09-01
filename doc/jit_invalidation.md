@@ -71,10 +71,28 @@ against that one word. Compilation is atomic at one version, so one word
 is enough — and one store re-validates the entire unit. `set_class_version`
 / `set_const_version` (`codegen.rs`) are that store.
 
-> **Both arches read the word.** aarch64 used to bake the snapshot in as an
-> immediate, which silently made salvage a no-op there: the word was
-> patched and the guard kept comparing against the old immediate. Fixed in
-> #1157; `a64_guard_class_version` now takes the unit's label.
+> **The snapshot's representation differs per arch.** aarch64 reads the
+> word (`a64_guard_class_version` takes the unit's label). x86-64 bakes
+> the snapshot into each guard as a **patchable imm32** — a fixed 5-byte
+> `movl rax, imm32` whose last 4 bytes salvage re-stamps — removing the
+> per-unit data load (one scattered cache line per compilation unit,
+> ~1 D1 miss per call in call-dense code) from the hot path. This is
+> safe *only* because every imm site is registered: `check_version`
+> (`arch/x86_64/guard.rs`) is the single emitter of the compare and
+> pushes its patch label into `unit_version_patch_sites`; `jit_compile`
+> files the unit's list under its snapshot-word address
+> (`version_imm_sites`), and `set_class_version` patches the word *and*
+> every registered site. The word itself is retained as the salvage
+> records' key (and as what aarch64 reads), so the record plumbing is
+> unchanged.
+>
+> The history that makes the registration invariant load-bearing:
+> aarch64 once baked the snapshot as an *unpatched* immediate, which
+> silently made salvage a no-op there — the word was patched and the
+> guard kept comparing against the old immediate (fixed in #1157). An
+> immediate is acceptable exactly when its patch site cannot be
+> forgotten; a guard shape that emits its own compare instead of going
+> through `check_version` would reintroduce the bug.
 
 The word is reachable afterwards through the unit's salvage record:
 
@@ -274,5 +292,8 @@ removes.
   in `compile_patch` / `compile_partial_by_id`.
 - A new question the compiler bakes in needs a new record and a new tier —
   do not extend an existing map with a differently-shaped invariant.
-- Never bind a guard's miss-exit label inside a `cfg` block (§7), and keep
-  the snapshot side of a version compare a *word*, never an immediate (§2).
+- Never bind a guard's miss-exit label inside a `cfg` block (§7). The
+  snapshot side of a version compare is either the unit's *word* or a
+  *registered patchable immediate* (§2) — never an unregistered
+  immediate, and never a compare emitted outside `check_version` on
+  x86-64.
