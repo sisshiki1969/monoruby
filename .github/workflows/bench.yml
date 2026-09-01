@@ -11,6 +11,7 @@ on:
       - 'rubymap/**'
       - 'Cargo.toml'
       - '.github/workflows/bench.yml'
+      - '.github/scripts/**'
       - '.github/portal/**'
       - '.github/bench-pages/**'
 
@@ -37,14 +38,42 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install system deps for yjit-bench
+      - name: Install system deps for yjit-bench and the ruby HEAD build
+        # libssl-dev/zlib1g-dev/libffi-dev are for the ruby HEAD build
+        # (rubygems needs openssl+zlib so each benchmark's
+        # `bundle install` works under the zjit ruby); autoconf drives
+        # its autogen.sh. The rest are yjit-bench gem dependencies.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libmagickwand-dev imagemagick libsqlite3-dev libpq-dev libyaml-dev
+            libmagickwand-dev imagemagick libsqlite3-dev libpq-dev libyaml-dev \
+            autoconf libssl-dev zlib1g-dev libffi-dev
 
       - name: Install monoruby (release)
         run: RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby --locked
+
+      - name: Build ruby HEAD (ZJIT)
+        # ruby/ruby master is rebuilt from scratch on every run (no cache,
+        # by design: the point is to track ZJIT's HEAD). master does
+        # occasionally fail to build — that must not cost the monoruby /
+        # YJIT numbers, so this step only drops the zjit engine on
+        # failure and the dashboard records why. The nightly Rust
+        # toolchain installed above satisfies ZJIT's rustc >= 1.85
+        # requirement; the 4.0.2 ruby installed above is BASERUBY.
+        id: zjit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/ruby/ruby.git ../ruby-head
+          echo "sha=$(git -C ../ruby-head rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          cd ../ruby-head
+          ./autogen.sh
+          ./configure --prefix="$HOME/ruby-head" \
+            --enable-zjit --disable-yjit --disable-install-doc
+          make -j"$(getconf _NPROCESSORS_ONLN)"
+          make install
+          "$HOME/ruby-head/bin/ruby" --zjit -e 'puts RUBY_DESCRIPTION'
 
       - name: Clone yjit-bench (Shopify/yjit-bench)
         run: git clone --depth 1 https://github.com/Shopify/yjit-bench.git ../ruby-bench
@@ -75,19 +104,29 @@ jobs:
           echo "## Pre-run resource snapshot"
           { echo '### df -h'; df -h; echo; echo '### free -h'; free -h; } | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Run yjit-bench (monoruby vs ruby --yjit)
+      - name: Run yjit-bench (monoruby vs ruby --yjit / --zjit)
         id: run
         working-directory: ../ruby-bench
         shell: bash
         env:
           MR_TIMEOUT: '400'
           YJ_TIMEOUT: '400'
+          ZJ_TIMEOUT: '400'
         run: |
           set +e
           set -uo pipefail
 
           OUT="$GITHUB_WORKSPACE/bench-results"
           mkdir -p "$OUT/data"
+
+          # The zjit engine rides on the HEAD build when it exists;
+          # "$@" expands to nothing (safely, even under `set -u` on old
+          # bash) when the build failed and the run proceeds two-engined.
+          if [ -x "$HOME/ruby-head/bin/ruby" ]; then
+            set -- -e "zjit::timeout --foreground -k 5 ${ZJ_TIMEOUT} $HOME/ruby-head/bin/ruby --zjit"
+          else
+            set --
+          fi
 
           ./run_benchmarks.rb \
             --no-sudo \
@@ -98,6 +137,7 @@ jobs:
             --out-name="$OUT/data/raw" \
             -e "monoruby::timeout --foreground -k 5 ${MR_TIMEOUT} $HOME/.cargo/bin/monoruby" \
             -e "yjit::timeout --foreground -k 5 ${YJ_TIMEOUT} $(command -v ruby) --yjit" \
+            "$@" \
             2>&1 | tee "$OUT/run.log"
 
           true
@@ -109,6 +149,7 @@ jobs:
             echo "short_sha=$SHORT_SHA"
             echo "mr_timeout=${MR_TIMEOUT}"
             echo "yj_timeout=${YJ_TIMEOUT}"
+            echo "zj_timeout=${ZJ_TIMEOUT}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Post-run resource snapshot
@@ -123,102 +164,24 @@ jobs:
           SHORT_SHA: ${{ steps.run.outputs.short_sha }}
           MR_TIMEOUT: ${{ steps.run.outputs.mr_timeout }}
           YJ_TIMEOUT: ${{ steps.run.outputs.yj_timeout }}
+          ZJ_TIMEOUT: ${{ steps.run.outputs.zj_timeout }}
+          RUBY_HEAD_SHA: ${{ steps.zjit.outputs.sha }}
+          ZJIT_BUILD: ${{ steps.zjit.outcome == 'success' && 'ok' || 'failed' }}
         shell: bash
         run: |
           set -euo pipefail
 
-          OUT="$GITHUB_WORKSPACE/bench-results"
-
-          ruby -rjson <<'RUBY' > "$OUT/portal.json"
-          out = ENV['GITHUB_WORKSPACE'] + '/bench-results'
-          raw = JSON.parse(File.read(out + '/data/raw.json'))
-          fails_path = out + '/data/raw.failures.json'
-          fails = File.exist?(fails_path) ? JSON.parse(File.read(fails_path)) : {}
-
-          mr_data = raw.dig('raw_data', 'monoruby') || {}
-          yj_data = raw.dig('raw_data', 'yjit') || {}
-          mr_fails = fails['monoruby'] || {}
-          yj_fails = fails['yjit']     || {}
-          mr_to = ENV.fetch('MR_TIMEOUT', '400').to_i
-          yj_to = ENV.fetch('YJ_TIMEOUT', '400').to_i
-
-          reason = ->(status, timeout_s) {
-            return nil if status.nil?
-            case status
-            when 0   then 'ok'
-            when 1   then 'exit 1'
-            when 124 then "timeout (#{timeout_s}s)"
-            when 137 then "SIGKILL after timeout (#{timeout_s}s)"
-            when 132 then 'SIGILL'
-            when 134 then 'SIGABRT'
-            when 136 then 'SIGFPE'
-            when 138 then 'SIGBUS'
-            when 139 then 'SIGSEGV'
-            when 143 then 'SIGTERM'
-            else
-              if status > 128
-                "signal #{status - 128} (exit #{status})"
-              else
-                "exit #{status}"
-              end
-            end
-          }
-
-          median = ->(arr) {
-            return nil if arr.nil? || arr.empty?
-            s = arr.sort
-            n = s.size
-            n.odd? ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2.0
-          }
-
-          all_names = (mr_data.keys + yj_data.keys + mr_fails.keys + yj_fails.keys).uniq.sort
-
-          benches = all_names.map do |name|
-            mr = mr_data[name]
-            yj = yj_data[name]
-            mr_med = mr ? median.call(mr['bench']) : nil
-            yj_med = yj ? median.call(yj['bench']) : nil
-            mr_ms = (mr_med && mr_med > 0) ? mr_med * 1000.0 : nil
-            yj_ms = (yj_med && yj_med > 0) ? yj_med * 1000.0 : nil
-            ratio = (mr_ms && yj_ms) ? yj_ms / mr_ms : nil
-            {
-              name: name,
-              monoruby_ms: mr_ms,
-              yjit_ms: yj_ms,
-              ratio: ratio,
-              monoruby_failed: mr_ms.nil?,
-              yjit_failed: yj_ms.nil?,
-              monoruby_reason: mr_ms.nil? ? (reason.call(mr_fails[name], mr_to) || 'no result') : nil,
-              yjit_reason:     yj_ms.nil? ? (reason.call(yj_fails[name], yj_to) || 'no result') : nil,
-            }
-          end
-
-          puts JSON.generate(
-            timestamp: ENV['TIMESTAMP'],
-            commit: ENV['SHORT_SHA'],
-            timeouts: { 'monoruby' => mr_to, 'yjit' => yj_to },
-            benchmarks: benches,
-          )
-          RUBY
+          ruby "$GITHUB_WORKSPACE/.github/scripts/aggregate_portal.rb" \
+            > "$GITHUB_WORKSPACE/bench-results/portal.json"
 
           {
-            echo "## Benchmark vs YJIT (yjit-bench, x86-64)"
+            echo "## Benchmark vs YJIT / ZJIT (yjit-bench, x86-64)"
             echo ""
-            echo "monoruby commit: \`$SHORT_SHA\`  (timeouts: monoruby ${MR_TIMEOUT}s, yjit ${YJ_TIMEOUT}s)"
+            echo "monoruby commit: \`$SHORT_SHA\`  zjit: ruby/ruby@\`${RUBY_HEAD_SHA:-n/a}\` (timeouts: monoruby ${MR_TIMEOUT}s, yjit ${YJ_TIMEOUT}s, zjit ${ZJ_TIMEOUT}s)"
             echo ""
-            echo "| Benchmark | monoruby (ms) | YJIT (ms) | YJIT / monoruby | monoruby reason | yjit reason |"
-            echo "| --- | ---: | ---: | ---: | --- | --- |"
-            ruby -rjson <<'RUBY'
-          data = JSON.parse(File.read(ENV['GITHUB_WORKSPACE'] + '/bench-results/portal.json'))
-          data['benchmarks'].each do |b|
-            mr = b['monoruby_failed'] ? '**ERROR**' : '%.3f' % b['monoruby_ms']
-            yj = b['yjit_failed']     ? '**ERROR**' : '%.3f' % b['yjit_ms']
-            ratio = b['ratio'] ? '%.3fx' % b['ratio'] : '-'
-            mr_r = b['monoruby_reason'] || '-'
-            yj_r = b['yjit_reason']     || '-'
-            puts "| #{b['name']} | #{mr} | #{yj} | #{ratio} | #{mr_r} | #{yj_r} |"
-          end
-          RUBY
+            echo "| Benchmark | monoruby (ms) | YJIT (ms) | ZJIT (ms) | monoruby (x YJIT) | ZJIT (x YJIT) | reasons |"
+            echo "| --- | ---: | ---: | ---: | ---: | ---: | --- |"
+            ruby "$GITHUB_WORKSPACE/.github/scripts/summary_rows.rb"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results
@@ -251,15 +214,37 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install system deps for yjit-bench (macOS)
+      - name: Install system deps for yjit-bench and the ruby HEAD build (macOS)
         run: |
-          brew install coreutils imagemagick sqlite libpq libyaml libffi pkg-config
+          brew install coreutils imagemagick sqlite libpq libyaml libffi pkg-config \
+            autoconf automake openssl@3
           # GNU coreutils provides `timeout --foreground` used by the bench wrapper.
           echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
           echo "PKG_CONFIG_PATH=$(brew --prefix libffi)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Install monoruby (release)
         run: cargo install --path monoruby --locked
+
+      - name: Build ruby HEAD (ZJIT)
+        # Mirrors the amd64 job: fresh build every run, and a failed
+        # ruby/ruby master build only drops the zjit engine. openssl@3
+        # is keg-only, so configure is pointed at it explicitly
+        # (rubygems needs it for each benchmark's `bundle install`).
+        id: zjit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/ruby/ruby.git ../ruby-head
+          echo "sha=$(git -C ../ruby-head rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          cd ../ruby-head
+          ./autogen.sh
+          ./configure --prefix="$HOME/ruby-head" \
+            --enable-zjit --disable-yjit --disable-install-doc \
+            --with-openssl-dir="$(brew --prefix openssl@3)"
+          make -j"$(getconf _NPROCESSORS_ONLN)"
+          make install
+          "$HOME/ruby-head/bin/ruby" --zjit -e 'puts RUBY_DESCRIPTION'
 
       - name: Clone yjit-bench (Shopify/yjit-bench)
         run: git clone --depth 1 https://github.com/Shopify/yjit-bench.git ../ruby-bench
@@ -285,19 +270,28 @@ jobs:
           gem install --no-document bundler
           bundle install || true
 
-      - name: Run yjit-bench (monoruby vs ruby --yjit)
+      - name: Run yjit-bench (monoruby vs ruby --yjit / --zjit)
         id: run
         working-directory: ../ruby-bench
         shell: bash
         env:
           MR_TIMEOUT: '400'
           YJ_TIMEOUT: '400'
+          ZJ_TIMEOUT: '400'
         run: |
           set +e
           set -uo pipefail
 
           OUT="$GITHUB_WORKSPACE/bench-results"
           mkdir -p "$OUT/data"
+
+          # See the amd64 job: "$@" carries the zjit engine only when the
+          # HEAD build produced a binary.
+          if [ -x "$HOME/ruby-head/bin/ruby" ]; then
+            set -- -e "zjit::timeout --foreground -k 5 ${ZJ_TIMEOUT} $HOME/ruby-head/bin/ruby --zjit"
+          else
+            set --
+          fi
 
           ./run_benchmarks.rb \
             --no-sudo \
@@ -308,6 +302,7 @@ jobs:
             --out-name="$OUT/data/raw" \
             -e "monoruby::timeout --foreground -k 5 ${MR_TIMEOUT} $HOME/.cargo/bin/monoruby" \
             -e "yjit::timeout --foreground -k 5 ${YJ_TIMEOUT} $(command -v ruby) --yjit" \
+            "$@" \
             2>&1 | tee "$OUT/run.log"
 
           true
@@ -319,6 +314,7 @@ jobs:
             echo "short_sha=$SHORT_SHA"
             echo "mr_timeout=${MR_TIMEOUT}"
             echo "yj_timeout=${YJ_TIMEOUT}"
+            echo "zj_timeout=${ZJ_TIMEOUT}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Aggregate to portal JSON
@@ -327,102 +323,24 @@ jobs:
           SHORT_SHA: ${{ steps.run.outputs.short_sha }}
           MR_TIMEOUT: ${{ steps.run.outputs.mr_timeout }}
           YJ_TIMEOUT: ${{ steps.run.outputs.yj_timeout }}
+          ZJ_TIMEOUT: ${{ steps.run.outputs.zj_timeout }}
+          RUBY_HEAD_SHA: ${{ steps.zjit.outputs.sha }}
+          ZJIT_BUILD: ${{ steps.zjit.outcome == 'success' && 'ok' || 'failed' }}
         shell: bash
         run: |
           set -euo pipefail
 
-          OUT="$GITHUB_WORKSPACE/bench-results"
-
-          ruby -rjson <<'RUBY' > "$OUT/portal.json"
-          out = ENV['GITHUB_WORKSPACE'] + '/bench-results'
-          raw = JSON.parse(File.read(out + '/data/raw.json'))
-          fails_path = out + '/data/raw.failures.json'
-          fails = File.exist?(fails_path) ? JSON.parse(File.read(fails_path)) : {}
-
-          mr_data = raw.dig('raw_data', 'monoruby') || {}
-          yj_data = raw.dig('raw_data', 'yjit') || {}
-          mr_fails = fails['monoruby'] || {}
-          yj_fails = fails['yjit']     || {}
-          mr_to = ENV.fetch('MR_TIMEOUT', '400').to_i
-          yj_to = ENV.fetch('YJ_TIMEOUT', '400').to_i
-
-          reason = ->(status, timeout_s) {
-            return nil if status.nil?
-            case status
-            when 0   then 'ok'
-            when 1   then 'exit 1'
-            when 124 then "timeout (#{timeout_s}s)"
-            when 137 then "SIGKILL after timeout (#{timeout_s}s)"
-            when 132 then 'SIGILL'
-            when 134 then 'SIGABRT'
-            when 136 then 'SIGFPE'
-            when 138 then 'SIGBUS'
-            when 139 then 'SIGSEGV'
-            when 143 then 'SIGTERM'
-            else
-              if status > 128
-                "signal #{status - 128} (exit #{status})"
-              else
-                "exit #{status}"
-              end
-            end
-          }
-
-          median = ->(arr) {
-            return nil if arr.nil? || arr.empty?
-            s = arr.sort
-            n = s.size
-            n.odd? ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2.0
-          }
-
-          all_names = (mr_data.keys + yj_data.keys + mr_fails.keys + yj_fails.keys).uniq.sort
-
-          benches = all_names.map do |name|
-            mr = mr_data[name]
-            yj = yj_data[name]
-            mr_med = mr ? median.call(mr['bench']) : nil
-            yj_med = yj ? median.call(yj['bench']) : nil
-            mr_ms = (mr_med && mr_med > 0) ? mr_med * 1000.0 : nil
-            yj_ms = (yj_med && yj_med > 0) ? yj_med * 1000.0 : nil
-            ratio = (mr_ms && yj_ms) ? yj_ms / mr_ms : nil
-            {
-              name: name,
-              monoruby_ms: mr_ms,
-              yjit_ms: yj_ms,
-              ratio: ratio,
-              monoruby_failed: mr_ms.nil?,
-              yjit_failed: yj_ms.nil?,
-              monoruby_reason: mr_ms.nil? ? (reason.call(mr_fails[name], mr_to) || 'no result') : nil,
-              yjit_reason:     yj_ms.nil? ? (reason.call(yj_fails[name], yj_to) || 'no result') : nil,
-            }
-          end
-
-          puts JSON.generate(
-            timestamp: ENV['TIMESTAMP'],
-            commit: ENV['SHORT_SHA'],
-            timeouts: { 'monoruby' => mr_to, 'yjit' => yj_to },
-            benchmarks: benches,
-          )
-          RUBY
+          ruby "$GITHUB_WORKSPACE/.github/scripts/aggregate_portal.rb" \
+            > "$GITHUB_WORKSPACE/bench-results/portal.json"
 
           {
-            echo "## Benchmark vs YJIT (yjit-bench, aarch64)"
+            echo "## Benchmark vs YJIT / ZJIT (yjit-bench, aarch64)"
             echo ""
-            echo "monoruby commit: \`$SHORT_SHA\`  (timeouts: monoruby ${MR_TIMEOUT}s, yjit ${YJ_TIMEOUT}s)"
+            echo "monoruby commit: \`$SHORT_SHA\`  zjit: ruby/ruby@\`${RUBY_HEAD_SHA:-n/a}\` (timeouts: monoruby ${MR_TIMEOUT}s, yjit ${YJ_TIMEOUT}s, zjit ${ZJ_TIMEOUT}s)"
             echo ""
-            echo "| Benchmark | monoruby (ms) | YJIT (ms) | YJIT / monoruby | monoruby reason | yjit reason |"
-            echo "| --- | ---: | ---: | ---: | --- | --- |"
-            ruby -rjson <<'RUBY'
-          data = JSON.parse(File.read(ENV['GITHUB_WORKSPACE'] + '/bench-results/portal.json'))
-          data['benchmarks'].each do |b|
-            mr = b['monoruby_failed'] ? '**ERROR**' : '%.3f' % b['monoruby_ms']
-            yj = b['yjit_failed']     ? '**ERROR**' : '%.3f' % b['yjit_ms']
-            ratio = b['ratio'] ? '%.3fx' % b['ratio'] : '-'
-            mr_r = b['monoruby_reason'] || '-'
-            yj_r = b['yjit_reason']     || '-'
-            puts "| #{b['name']} | #{mr} | #{yj} | #{ratio} | #{mr_r} | #{yj_r} |"
-          end
-          RUBY
+            echo "| Benchmark | monoruby (ms) | YJIT (ms) | ZJIT (ms) | monoruby (x YJIT) | ZJIT (x YJIT) | reasons |"
+            echo "| --- | ---: | ---: | ---: | ---: | ---: | --- |"
+            ruby "$GITHUB_WORKSPACE/.github/scripts/summary_rows.rb"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results
@@ -488,16 +406,17 @@ jobs:
             mkdir -p "$GH_PAGES_DIR/$SUBDIR/data"
 
             local CSV="$GH_PAGES_DIR/$SUBDIR/data/history.csv"
-            local HEADER="timestamp,commit,benchmark,monoruby_ms,yjit_ms,ratio,monoruby_failed,yjit_failed,monoruby_reason,yjit_reason"
+            # New columns only ever go at the END of this header:
+            # consumers parse rows positionally, and older rows keep
+            # their original (shorter) field count.
+            local HEADER="timestamp,commit,benchmark,monoruby_ms,yjit_ms,ratio,monoruby_failed,yjit_failed,monoruby_reason,yjit_reason,zjit_ms,zjit_failed,zjit_reason"
 
             if [ ! -f "$CSV" ]; then
               echo "$HEADER" > "$CSV"
             elif [ "$(head -n 1 "$CSV")" != "$HEADER" ]; then
-              # The header was only ever written when the file was created,
-              # so the live file still names its columns after the original
-              # iterations/sec schema (`monoruby_ips,yjit_ips,ratio`) even
-              # though every row since has been the 10-column ms schema.
-              # Rewrite just line 1 so the names match the data.
+              # A schema change (or the original stale monoruby_ips
+              # header) leaves line 1 out of date; rewrite just that
+              # line so the names match the current schema.
               { echo "$HEADER"; tail -n +2 "$CSV"; } > "$CSV.new"
               mv "$CSV.new" "$CSV"
               echo "history.csv: refreshed stale header for $SUBDIR"
