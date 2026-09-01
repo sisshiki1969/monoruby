@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a2062133.js";
+            window.path_to_searchindex_js = "../searchindex-749c233a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-ad91b9ad.js"></script>
@@ -803,6 +803,65 @@ refinement が置き換えたはずの算術をそのまま出してしまう。
 </div>
 <p><strong>refine しただけのコストが消えた。</strong> VM 側の asm ガードは呼び出し地点の
 文脈を持たないグローバル語なので粗いまま（正しさは dispatch が担保する）。</p>
+<h3 id="step-4--mixin-経由の再定義1214-1219-実装済み"><a class="header" href="#step-4--mixin-経由の再定義1214-1219-実装済み">Step 4 — mixin 経由の再定義（#1214, #1219）— <strong>実装済み</strong></a></h3>
+<p>Step 1 で「メソッド表を変更する全経路に検知点を置く」と決めたが、経路が
+1 本抜けていた。<strong>モジュール経由</strong>である。</p>
+<pre><code class="language-ruby">module M
+  def +(o) = super(o) * 2
+end
+class Integer
+  prepend M
+end
+</code></pre>
+<p><code>insert_method</code> が受け取る <code>class_id</code> は <code>M</code> であって <code>Integer</code> ではない。
+表が記録しているペアは <code>(Integer, "+")</code> なので <code>contains(M, "+")</code> は false、
+何も立たず両ティアがビルトインを撃ち続けた。順序を入れ替えて
+<code>prepend</code> を先にしても同じ（定義そのものが走らない）。</p>
+<p>検知点は 2 つ:</p>
+<ul>
+<li><code>insert_method</code> → <code>check_mixed_in_basic_op(module_id, name)</code> —
+モジュールに後からメソッドが入った場合</li>
+<li><code>append_features</code> / <code>prepend_features</code> → <code>check_mixin_basic_ops(module)</code> —
+すでにメソッドを持つモジュールが後から差し込まれた場合</li>
+</ul>
+<p><strong>罠 — 「モジュールがその名前を定義しているか」は問いとして間違っている。</strong>
+最初の実装はこう書いた:「<code>name</code> が BOP 名で、かつ <code>module_id</code> が基本演算
+クラス <code>C</code> の祖先にあるなら <code>(C, name)</code> を再定義済みにする」。これは
+<strong>ユーザコードの <code>include Comparable</code> ひとつでプロセス中の整数 fast path が
+全滅する</strong>。<code>Comparable</code> は <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>==</code> を定義しており、
+<code>Integer</code> はブートストラップ以来それを include している。つまり
+「祖先のモジュールがその名前を定義している」は<em>どんなプログラムでも常に真</em>
+で、一方 <code>Integer</code> 自身の <code>&lt;</code> はルックアップで勝ち続けるので<strong>実際には何も
+変わっていない</strong>。</p>
+<p>正しい問いは「<strong>そのクラスは今もビルトインに解決するか</strong>」である。
+<code>arm_basic_ops</code> が起動時に全ペアの解決先 <code>FuncId</code> をスナップショットし
+（<code>BasicOpTable::armed_funcs</code>）、mixin 検知はそれと現在の解決先を比較する。
+<code>Integer.prepend M</code>（M が <code>+</code> を持つ）なら解決先が動くので立ち、
+<code>class Foo; include Comparable; end</code> なら動かないので立たない。</p>
+<p><strong>実測（yjit-bench <code>lee</code>, x86-64）。</strong> この誤検知は 1 回の <code>include</code> で
+<code>Integer#&lt; &lt;= &gt; &gt;= == != === &lt;=&gt; !</code>、<code>Float</code>・<code>String</code>・<code>Symbol</code> の同種、
+計 27 ペアを恒久的に落とした。<code>lee</code> は <code>require "json"</code> の過程で
+<code>Comparable</code> を include するため直撃した:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th style="text-align: right">median</th></tr>
+</thead>
+<tbody>
+<tr><td>誤検知の前（<code>037a720</code>）</td><td style="text-align: right">512 ms</td></tr>
+<tr><td>誤検知の入った master（<code>21ed6aa</code>）</td><td style="text-align: right">1728 ms</td></tr>
+<tr><td>解決先比較を入れた後</td><td style="text-align: right">520 ms</td></tr>
+</tbody>
+</table>
+</div>
+<p>CI の履歴では amd64 が 478 ms → 1550 ms（YJIT 比 1.48x → 0.44x）、
+arm64 は 400 秒のタイムアウトに達した。</p>
+<p>回帰テストは <code>basic_op.rs</code> の
+<code>a_mixin_that_displaces_nothing_keeps_the_basic_ops</code> /
+<code>a_prepend_that_displaces_the_builtin_retires_its_pair</code>。前者は「何も
+落ちない」ことを、後者は「落ちるべきものは落ちる」ことを表の状態に対して
+直接主張する — 値の比較では、fast path が消えても答えは正しいままなので
+検出できない。</p>
 <h3 id="step-3-の当初計画記録として保存"><a class="header" href="#step-3-の当初計画記録として保存">Step 3 の当初計画（記録として保存）</a></h3>
 <p>Step 2 の (op, class) ビットマスクができれば、#1066 が要求する
 「refinement セットごとの BOP ビットマスク」はその自然な拡張になる。</p>
