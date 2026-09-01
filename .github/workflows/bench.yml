@@ -235,7 +235,12 @@ jobs:
 
   bench-arm64:
     runs-on: macos-latest
-    timeout-minutes: 240
+    # The three-engine pass needs ~245-260 min on this runner (the zjit
+    # pass alone is ~2.5 h on arm64): the first zjit run hit the old
+    # 240-min cap during its final engine pass, ~90% done, and published
+    # nothing. 350 leaves headroom while staying under the 360-min
+    # GitHub-hosted maximum.
+    timeout-minutes: 350
     env:
       CARGO_TERM_COLOR: always
     steps:
