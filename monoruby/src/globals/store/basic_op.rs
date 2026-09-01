@@ -156,6 +156,13 @@ pub(crate) struct BasicOpTable {
     /// `JitContext::assume_basic_op`. The VM's assembly guard has no call
     /// site to ask about and stays coarse.
     refined_set: HashSet<(ClassId, IdentId)>,
+    /// What each pair resolved to at [`Self::arm`]. The mixin checks
+    /// compare against this rather than asking whether a module merely
+    /// *defines* the name: `Comparable` defines `<` and `Integer` has
+    /// included it since bootstrap, so "the module defines it" is true
+    /// for every `include Comparable` in the program while the
+    /// resolution — `Integer`'s own `<` — never moves.
+    armed_funcs: HashMap<(ClassId, IdentId), Option<FuncId>>,
     /// Pairs replaced since the last drain, awaiting CRuby's
     /// `:performance` warning ("Redefining 'Integer#+' disables
     /// interpreter and JIT optimizations"). Marking happens deep inside
@@ -182,14 +189,35 @@ impl BasicOpTable {
             redefined_set: HashSet::default(),
             globally_redefined_set: HashSet::default(),
             refined_set: HashSet::default(),
+            armed_funcs: HashMap::default(),
             pending_warnings: Vec::new(),
         }
     }
 
     /// Start reporting. Called once, after startup.rb and the gems have
-    /// loaded and before user code runs.
-    pub(crate) fn arm(&mut self) {
+    /// loaded and before user code runs. `resolved` is what each pair
+    /// answers at that moment — the baseline the mixin checks compare
+    /// against.
+    pub(crate) fn arm(&mut self, resolved: Vec<((ClassId, IdentId), Option<FuncId>)>) {
         self.armed = true;
+        self.armed_funcs = resolved.into_iter().collect();
+    }
+
+    /// Every pair in the table, for the caller that resolves them at
+    /// [`Self::arm`] time.
+    pub(crate) fn pairs(&self) -> Vec<(ClassId, IdentId)> {
+        self.set.iter().copied().collect()
+    }
+
+    /// What `class_id#name` resolved to when the table was armed.
+    /// `None` when the pair has no snapshot at all (the table is not
+    /// armed yet), which callers treat as "assume it moved".
+    pub(crate) fn armed_func(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Option<Option<FuncId>> {
+        self.armed_funcs.get(&(class_id, name)).copied()
     }
 
     /// Whether replacing `class_id#name` invalidates a fast path.
@@ -266,6 +294,110 @@ impl BasicOpTable {
 mod tests {
     use super::*;
     use crate::tests::*;
+
+    /// Run `code` and report which pairs it left marked as redefined.
+    fn redefined_pairs_after(code: &str) -> Vec<String> {
+        let mut globals = Globals::new_test();
+        globals
+            .run(code, std::path::Path::new("."))
+            .unwrap_or_else(|err| {
+                err.show_error_message_and_all_loc(&globals.store);
+                panic!("code under test raised");
+            });
+        BASIC_OP_DEFS
+            .iter()
+            .filter(|(class_id, name)| {
+                globals
+                    .store
+                    .basic_op_redefined_for(*class_id, IdentId::get_id(name))
+            })
+            .map(|(class_id, name)| format!("{}#{}", globals.store.get_class_name(*class_id), name))
+            .collect()
+    }
+
+    /// A mixin that displaces nothing must leave the table alone.
+    ///
+    /// `Comparable` defines `<`, `<=`, `>`, `>=` and `==`, and `Integer`,
+    /// `Float` and `String` have included it since bootstrap. So "a
+    /// module in this class's ancestry defines the name" holds for
+    /// *every* `include Comparable` in any program — while `Integer`'s
+    /// own `<` goes on winning the lookup. Answering that question
+    /// rather than "does the class still resolve to the builtin?" made
+    /// one unrelated `include` — from user code or from a required
+    /// library — evict every integer fast path in the process, which
+    /// cost the `lee` benchmark a factor of three.
+    #[test]
+    fn a_mixin_that_displaces_nothing_keeps_the_basic_ops() {
+        let marked = redefined_pairs_after(
+            r##"
+            module BareMixin
+              def <(o) = :never_reached
+              def ==(o) = :never_reached
+              def +(o) = :never_reached
+            end
+            # Including a module a basic-op class already carries.
+            class UsesComparable
+              include Comparable
+              def <=>(o) = 0
+            end
+            # Including a fresh module that happens to name basic ops.
+            class UsesBareMixin
+              include BareMixin
+            end
+            # Reopening the module a basic-op class already includes —
+            # the same question one level further out. `Integer#<` still
+            # shadows `Comparable#<`.
+            module Comparable
+              def clamp_ish(a, b) = self
+            end
+            # Defining basic-op names on an ordinary class.
+            class Unrelated
+              def +(o) = :never_reached
+              def [](i) = :never_reached
+            end
+            "##,
+        );
+        assert!(
+            marked.is_empty(),
+            "these pairs were retired by mixins that displace nothing: {marked:?}"
+        );
+    }
+
+    /// The other direction, so the check above cannot be satisfied by
+    /// simply never marking anything: a prepend that *does* displace the
+    /// builtin still retires exactly its own pair.
+    #[test]
+    fn a_prepend_that_displaces_the_builtin_retires_its_pair() {
+        assert_eq!(
+            vec!["Integer#+".to_string()],
+            redefined_pairs_after(
+                r##"
+                module Shadow
+                  def +(o) = super(o) * 2
+                end
+                class Integer
+                  prepend Shadow
+                end
+                "##,
+            )
+        );
+        // ... and in the other order, with the method arriving after the
+        // module is already spliced in.
+        assert_eq!(
+            vec!["Integer#*".to_string()],
+            redefined_pairs_after(
+                r##"
+                module Late; end
+                class Integer
+                  prepend Late
+                end
+                module Late
+                  def *(o) = super(o)
+                end
+                "##,
+            )
+        );
+    }
 
     #[test]
     fn basic_op_defs_have_no_duplicates() {

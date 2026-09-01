@@ -647,6 +647,69 @@ refinement が置き換えたはずの算術をそのまま出してしまう。
 **refine しただけのコストが消えた。** VM 側の asm ガードは呼び出し地点の
 文脈を持たないグローバル語なので粗いまま（正しさは dispatch が担保する）。
 
+### Step 4 — mixin 経由の再定義（#1214, #1219）— **実装済み**
+
+Step 1 で「メソッド表を変更する全経路に検知点を置く」と決めたが、経路が
+1 本抜けていた。**モジュール経由**である。
+
+```ruby
+module M
+  def +(o) = super(o) * 2
+end
+class Integer
+  prepend M
+end
+```
+
+`insert_method` が受け取る `class_id` は `M` であって `Integer` ではない。
+表が記録しているペアは `(Integer, "+")` なので `contains(M, "+")` は false、
+何も立たず両ティアがビルトインを撃ち続けた。順序を入れ替えて
+`prepend` を先にしても同じ（定義そのものが走らない）。
+
+検知点は 2 つ:
+
+- `insert_method` → `check_mixed_in_basic_op(module_id, name)` —
+  モジュールに後からメソッドが入った場合
+- `append_features` / `prepend_features` → `check_mixin_basic_ops(module)` —
+  すでにメソッドを持つモジュールが後から差し込まれた場合
+
+**罠 — 「モジュールがその名前を定義しているか」は問いとして間違っている。**
+最初の実装はこう書いた:「`name` が BOP 名で、かつ `module_id` が基本演算
+クラス `C` の祖先にあるなら `(C, name)` を再定義済みにする」。これは
+**ユーザコードの `include Comparable` ひとつでプロセス中の整数 fast path が
+全滅する**。`Comparable` は `<` `<=` `>` `>=` `==` を定義しており、
+`Integer` はブートストラップ以来それを include している。つまり
+「祖先のモジュールがその名前を定義している」は*どんなプログラムでも常に真*
+で、一方 `Integer` 自身の `<` はルックアップで勝ち続けるので**実際には何も
+変わっていない**。
+
+正しい問いは「**そのクラスは今もビルトインに解決するか**」である。
+`arm_basic_ops` が起動時に全ペアの解決先 `FuncId` をスナップショットし
+（`BasicOpTable::armed_funcs`）、mixin 検知はそれと現在の解決先を比較する。
+`Integer.prepend M`（M が `+` を持つ）なら解決先が動くので立ち、
+`class Foo; include Comparable; end` なら動かないので立たない。
+
+**実測（yjit-bench `lee`, x86-64）。** この誤検知は 1 回の `include` で
+`Integer#< <= > >= == != === <=> !`、`Float`・`String`・`Symbol` の同種、
+計 27 ペアを恒久的に落とした。`lee` は `require "json"` の過程で
+`Comparable` を include するため直撃した:
+
+| | median |
+| --- | ---: |
+| 誤検知の前（`037a720`） | 512 ms |
+| 誤検知の入った master（`21ed6aa`） | 1728 ms |
+| 解決先比較を入れた後 | 520 ms |
+
+CI の履歴では amd64 が 478 ms → 1550 ms（YJIT 比 1.48x → 0.44x）、
+arm64 は 400 秒のタイムアウトに達した。
+
+回帰テストは `basic_op.rs` の
+`a_mixin_that_displaces_nothing_keeps_the_basic_ops` / 
+`a_prepend_that_displaces_the_builtin_retires_its_pair`。前者は「何も
+落ちない」ことを、後者は「落ちるべきものは落ちる」ことを表の状態に対して
+直接主張する — 値の比較では、fast path が消えても答えは正しいままなので
+検出できない。
+
 ### Step 3 の当初計画（記録として保存）
 
 Step 2 の (op, class) ビットマスクができれば、#1066 が要求する
