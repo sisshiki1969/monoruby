@@ -608,6 +608,11 @@ impl Codegen {
         // must be resolved before `gen_machine_code` runs (x86 reads them
         // rip-relative and doesn't care).
         self.jit.finalize();
+        // x86: collect this unit's class-version imm32 patch sites (one per
+        // emitted guard, root and inlined children alike — one compilation
+        // is atomic at one version). Cleared here so an earlier aborted
+        // compile can't leak stale labels into this unit's list.
+        self.unit_version_patch_sites.clear();
         // Stage-1 placement shadow (§24): bracket the whole ③ emission (the
         // `gen_machine_code` driver recurses into inlined callees, so one
         // begin/take pair captures the entire compilation unit's FP placement).
@@ -637,6 +642,23 @@ impl Codegen {
         // emission (e.g. the class-guard stub).
         #[cfg(target_arch = "x86_64")]
         self.jit.finalize();
+        // Stamp the unit's real class version over every guard's
+        // emission-time `VERSION_IMM_SENTINEL` (resolvable only now,
+        // after `finalize`; the code is not yet published, so nothing
+        // can execute a sentinel compare), and register the sites under
+        // the unit's snapshot-word address — `set_class_version` looks
+        // them up by the same `DestLabel` the salvage records carry, so
+        // the salvage plumbing stays word-keyed. Empty on aarch64 (its
+        // guards read the word).
+        {
+            let sites = std::mem::take(&mut self.unit_version_patch_sites);
+            if !sites.is_empty() {
+                self.stamp_version_imm_sites(&sites, class_version);
+                self.jit.set_executable();
+                let key = self.jit.get_label_address(&class_version_label).as_ptr() as u64;
+                self.version_imm_sites.insert(key, sites);
+            }
+        }
         self.unit_const_version = None;
         // Snapshot the involved names' epochs *at compile time*; a later
         // guard failure compares against these to prove the folds unchanged.
