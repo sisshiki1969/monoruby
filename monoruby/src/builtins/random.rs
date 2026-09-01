@@ -15,6 +15,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "bytes", random_bytes, 1);
     globals.define_builtin_class_func(klass, "new_seed", new_seed, 0);
     globals.define_private_builtin_func_with(klass, "initialize", random_init_m, 0, 1, false);
+    globals.define_private_builtin_func(klass, "initialize_copy", random_init_copy, 1);
     globals.define_builtin_func_with(klass, "rand", rand, 0, 1, false);
     // CRuby defines `Random::Formatter#random_number` in C (random.c) and the
     // stdlib `random/formatter` builds its helpers on it; binding it here on
@@ -30,18 +31,30 @@ pub(super) fn init(globals: &mut Globals) {
 
 // --- CRuby-compatible Mersenne-Twister helpers ---------------------------
 //
-// A per-instance `Random` stores its original seed and the number of
-// 32-bit words drawn so far in two internal ivars. Each operation
-// rebuilds the MT generator from the seed (CRuby's `init_by_array`,
-// which `rand_mt::Mt::new_with_key` implements), skips the already-drawn
-// words, performs the operation, and persists the new draw count. This
-// reproduces CRuby's exact stream without serialising MT internal state.
+// A per-instance `Random` keeps three internal ivars: its original seed
+// (`Random#seed`), the number of 32-bit words drawn so far, and the
+// generator's *live* state — the 624-word MT table plus position,
+// serialized into a binary String (`Mt::to_bytes`). Each operation
+// deserializes the state, draws, and writes the advanced state back, so
+// a draw costs O(1) regardless of how many preceded it.
+//
+// It used to persist only `(seed, count)` and rebuild the generator from
+// the seed on every call, replaying every previously drawn word — O(n)
+// per draw, quadratic over a generator's lifetime. yjit-bench `splay`
+// draws from one `Random.new(42)` forever: each iteration was slower
+// than the last (1.0 s → 1.9 s and climbing), the harness never
+// converged, and the run hit the 400 s cap. The rebuild path survives
+// as `mt_at`, the fallback for an instance whose state ivar is missing
+// (e.g. an allocated-but-uninitialized object).
 
 fn ivar_seed() -> IdentId {
     IdentId::get_id("/random_seed")
 }
 fn ivar_cnt() -> IdentId {
     IdentId::get_id("/random_cnt")
+}
+fn ivar_state() -> IdentId {
+    IdentId::get_id("/random_state")
 }
 
 fn load_state(globals: &Globals, self_: Value) -> (Value, u64) {
@@ -65,15 +78,45 @@ fn mt_at(seed: Value, cnt: u64) -> Mt {
     mt
 }
 
+/// The instance's live generator and draw count. Deserialized from the
+/// state ivar; rebuilt from `(seed, count)` only when that ivar is
+/// absent or malformed.
+fn load_mt(globals: &Globals, self_: Value) -> (Mt, u64) {
+    let (seed, cnt) = load_state(globals, self_);
+    let mt = globals
+        .store
+        .get_ivar(self_, ivar_state())
+        .and_then(|v| v.is_rstring_inner().and_then(|s| Mt::from_bytes(s.as_bytes())))
+        .unwrap_or_else(|| mt_at(seed, cnt));
+    (mt, cnt)
+}
+
+/// Persist the generator and draw count. The state String is rewritten
+/// in place when present (it is private to this instance — `dup`
+/// clones it in `initialize_copy`), else created.
+fn store_mt(globals: &mut Globals, self_: Value, mt: &Mt, cnt: u64) -> Result<()> {
+    let bytes = mt.to_bytes();
+    match globals.store.get_ivar(self_, ivar_state()) {
+        Some(mut v) if v.is_rstring_inner().is_some() => {
+            v.replace_with_inner(RStringInner::bytes(&bytes));
+        }
+        _ => {
+            globals
+                .store
+                .set_ivar(self_, ivar_state(), Value::bytes(bytes))?;
+        }
+    }
+    globals
+        .store
+        .set_ivar(self_, ivar_cnt(), Value::integer(cnt as i64))?;
+    Ok(())
+}
+
 ///
 /// A multi-draw session over one `Random` instance's generator.
 ///
-/// Because a `Random` persists only its seed and draw count, every
-/// single operation rebuilds the MT and replays it (`mt_at`). A caller
-/// that needs one draw per element — `Array#shuffle` — would make that
-/// replay quadratic, so it opens a session instead: the MT is built
-/// once, advanced across every draw, and the final word count written
-/// back by `finish`.
+/// The generator is loaded once, advanced across every draw — one per
+/// element for `Array#shuffle` — and written back by `finish`.
 ///
 pub(super) struct RandomDraw {
     receiver: Value,
@@ -83,12 +126,8 @@ pub(super) struct RandomDraw {
 
 impl RandomDraw {
     pub(super) fn new(globals: &Globals, receiver: Value) -> Self {
-        let (seed, cnt) = load_state(globals, receiver);
-        Self {
-            receiver,
-            mt: mt_at(seed, cnt),
-            cnt,
-        }
+        let (mt, cnt) = load_mt(globals, receiver);
+        Self { receiver, mt, cnt }
     }
 
     /// Uniform integer in `[0, max]` — CRuby's `rb_random_ulong_limited`
@@ -97,12 +136,9 @@ impl RandomDraw {
         ulong_limited(&mut self.mt, &mut self.cnt, max)
     }
 
-    /// Persist the advanced word count back onto the receiver.
+    /// Persist the advanced generator back onto the receiver.
     pub(super) fn finish(self, globals: &mut Globals) -> Result<()> {
-        globals
-            .store
-            .set_ivar(self.receiver, ivar_cnt(), Value::integer(self.cnt as i64))?;
-        Ok(())
+        store_mt(globals, self.receiver, &self.mt, self.cnt)
     }
 }
 
@@ -159,10 +195,41 @@ fn random_init_m(
         Some(v) => coerce_seed(vm, globals, v)?,
     };
     globals.store.set_ivar(self_, ivar_seed(), seed)?;
+    let mt = build_mt(seed);
+    // A fresh state String: never share one between instances.
+    globals
+        .store
+        .set_ivar(self_, ivar_state(), Value::bytes(mt.to_bytes()))?;
     globals
         .store
         .set_ivar(self_, ivar_cnt(), Value::integer(0))?;
     Ok(Value::nil())
+}
+
+///
+/// ### Random#initialize_copy (the #dup / #clone hook)
+///
+/// The shallow copy shares the state String with the original, and the
+/// state is advanced in place — give the copy its own so the two
+/// generators continue independently (CRuby: a dup'd Random replays the
+/// same sequence as its source from that point on).
+#[monoruby_builtin]
+fn random_init_copy(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let src = lfp.arg(0);
+    let (mt, cnt) = load_mt(globals, src);
+    globals
+        .store
+        .set_ivar(self_, ivar_state(), Value::bytes(mt.to_bytes()))?;
+    globals
+        .store
+        .set_ivar(self_, ivar_cnt(), Value::integer(cnt as i64))?;
+    Ok(self_)
 }
 
 ///
@@ -180,8 +247,7 @@ fn inst_seed(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 #[monoruby_builtin]
 fn inst_state(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::hash::{Hash, Hasher};
-    let (seed, cnt) = load_state(globals, lfp.self_val());
-    let mt = mt_at(seed, cnt);
+    let (mt, _) = load_mt(globals, lfp.self_val());
     let mut h = std::collections::hash_map::DefaultHasher::new();
     mt.hash(&mut h);
     Ok(Value::integer(h.finish() as i64))
@@ -199,10 +265,9 @@ fn inst_eq(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if self_.class() != other.class() {
         return Ok(Value::bool(false));
     }
-    let (sa, ca) = load_state(globals, self_);
-    let (sb, cb) = load_state(globals, other);
-    let eq = mt_at(sa, ca) == mt_at(sb, cb);
-    Ok(Value::bool(eq))
+    let (ma, _) = load_mt(globals, self_);
+    let (mb, _) = load_mt(globals, other);
+    Ok(Value::bool(ma == mb))
 }
 
 ///
@@ -306,13 +371,9 @@ fn random_rand(
 #[monoruby_builtin]
 fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let (seed, cnt) = load_state(globals, self_);
-    let mut mt = mt_at(seed, cnt);
-    let mut c = cnt;
+    let (mut mt, mut c) = load_mt(globals, self_);
     let result = inst_rand_op(vm, globals, &mut mt, &mut c, lfp.try_arg(0))?;
-    globals
-        .store
-        .set_ivar(self_, ivar_cnt(), Value::integer(c as i64))?;
+    store_mt(globals, self_, &mt, c)?;
     Ok(result)
 }
 
@@ -466,16 +527,13 @@ fn instance_bytes(
         return Err(MonorubyErr::argumenterr("negative string size".to_string()));
     }
     let size = size as usize;
-    let (seed, cnt) = load_state(globals, self_);
-    let mut mt = mt_at(seed, cnt);
+    let (mut mt, cnt) = load_mt(globals, self_);
     // ceil(size/4) 32-bit words are consumed (a trailing partial word
     // still draws a full u32, matching CRuby).
     let words = size.div_ceil(4) as u64;
     let mut buf = vec![0u8; size];
     mt.fill_bytes(&mut buf);
-    globals
-        .store
-        .set_ivar(self_, ivar_cnt(), Value::integer((cnt + words) as i64))?;
+    store_mt(globals, self_, &mt, cnt + words)?;
     Ok(Value::bytes(buf))
 }
 

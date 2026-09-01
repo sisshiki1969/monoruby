@@ -92,6 +92,39 @@ impl Mt {
         y
     }
 
+    /// Serialized size of a generator: 624 little-endian `u32` words
+    /// plus the `u32` position — the live state a `Random` instance keeps
+    /// in its `/random_state` ivar (`builtins/random.rs`).
+    pub(crate) const STATE_BYTES: usize = MT_N * 4 + 4;
+
+    /// The generator's full state as bytes (see `STATE_BYTES`).
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(Self::STATE_BYTES);
+        for w in &self.mt {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+        out.extend_from_slice(&(self.mti as u32).to_le_bytes());
+        out
+    }
+
+    /// Rebuild a generator from `to_bytes` output; `None` if the buffer
+    /// is not a well-formed state.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != Self::STATE_BYTES {
+            return None;
+        }
+        let mut mt = [0u32; MT_N];
+        for (i, c) in bytes[..MT_N * 4].chunks_exact(4).enumerate() {
+            mt[i] = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+        }
+        let b = &bytes[MT_N * 4..];
+        let mti = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize;
+        if mti > MT_N {
+            return None;
+        }
+        Some(Self { mt, mti })
+    }
+
     /// CRuby `rb_rand_bytes`: little-endian 32-bit chunks; a trailing
     /// partial word still consumes a full draw.
     pub(crate) fn fill_bytes(&mut self, dest: &mut [u8]) {
