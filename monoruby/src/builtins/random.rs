@@ -732,6 +732,36 @@ mod tests {
     }
 
     #[test]
+    fn random_live_state() {
+        // dup / clone get their own generator (initialize_copy): the copy
+        // continues the source's stream independently, and stays == to
+        // its source only while both have drawn the same number of words.
+        run_tests(&[
+            r#"(a=Random.new(7); a.rand; b=a.dup; [a.rand(100), b.rand(100), a == b])"#,
+            r#"(a=Random.new(7); b=a.clone; x=b.rand; [x == Random.new(7).rand, a == b, a.rand == x])"#,
+            r#"(a=Random.new(9); b=a.dup; 3.times { b.rand }; [a.rand(1000), b.rand(1000)])"#,
+            r#"(a=Random.new(5); b=a.dup; a.bytes(7); b.bytes(7); a == b)"#,
+            // Bytes and shuffle/sample draw from — and advance — the same
+            // live state as rand.
+            r#"(r=Random.new(11); [r.bytes(5).bytes, r.rand(100), (1..10).to_a.shuffle(random: r), r.rand(100)])"#,
+            r#"(r=Random.new(13); [(1..20).to_a.sample(3, random: r), r.rand])"#,
+            // The private state digest tracks the generator.
+            r#"(r=Random.new(3); s0=r.send(:state); r.rand; [s0 == r.send(:state), r.send(:state) == Random.new(3).tap { |q| q.rand }.send(:state)])"#,
+            r#"(r=Random.new(2**70); r.rand(2**40); r.rand(2**40))"#,
+        ]);
+        // An allocated-but-uninitialized instance has no state ivar: the
+        // rebuild-from-(seed, count) fallback serves it.
+        run_test(
+            r#"
+        r = Random.allocate
+        a = r.rand
+        b = r.rand(10)
+        [a.is_a?(Float) && a >= 0.0 && a < 1.0, b.is_a?(Integer) && b >= 0 && b < 10, r.seed.is_a?(Integer)]
+        "#,
+        );
+    }
+
+    #[test]
     fn random_cruby_parity() {
         // Bit-identical to CRuby (run_tests compares against `ruby`):
         // seed accessor, deterministic stream, bytes, ranges, ==, eql,
