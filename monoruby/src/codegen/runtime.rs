@@ -816,8 +816,11 @@ fn gen_hash_inner(
 ) -> Result<crate::value::rvalue::HashmapInner> {
     // Build the HashmapInner directly (not a RubyMap first) so a small
     // literal with packed keys lands in the inline representation without
-    // ever touching the heap.
-    let mut map = crate::value::rvalue::HashmapInner::default();
+    // ever touching the heap. A literal past the inline capacity is
+    // pre-sized instead: its length is known here, and inserting through
+    // the inline→boxed growth ladder costs a representation switch plus
+    // a rehash per doubling (an 8-pair literal was ~2.4x CRuby+YJIT).
+    let mut map = crate::value::rvalue::HashmapInner::with_capacity(len);
     if len > 0 {
         let mut iter = unsafe { std::slice::from_raw_parts(src.sub(len * 2 - 1), len * 2) }
             .iter()
