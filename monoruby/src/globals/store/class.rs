@@ -2449,9 +2449,19 @@ impl Store {
     /// records names the class, not the module, so nothing marked it
     /// and both tiers kept firing the builtin.
     ///
+    /// The deciding question is not "does the module define this name?"
+    /// but "does the class still resolve it to the builtin?" — those
+    /// differ constantly. `Comparable` defines `<`, `<=`, `>`, `>=` and
+    /// `==`, and `Integer` has included it since bootstrap, so a bare
+    /// `class Foo; include Comparable; end` anywhere in the program
+    /// satisfies the ancestry test for `(Integer, :<)` while changing
+    /// nothing at all: `Integer`'s own `<` still wins the lookup.
+    /// Asking the resolution is what keeps an unrelated `include` from
+    /// evicting every integer fast path in the program.
+    ///
     /// Only a name that appears somewhere in `BASIC_OP_DEFS` gets past
-    /// the first test, so the ancestry walk runs for `+`, `<<`, `==`, …
-    /// and over the handful of classes the table pairs that name with.
+    /// the first test, so the walk runs for `+`, `<<`, `==`, … and over
+    /// the handful of classes the table pairs that name with.
     ///
     fn check_mixed_in_basic_op(&mut self, module_id: ClassId, name: IdentId) {
         if !self.basic_ops.is_basic_op_name(name) {
@@ -2460,10 +2470,37 @@ impl Store {
         for class_id in self.basic_ops.classes_for_name(name) {
             // The `class_id == module_id` case is the ordinary
             // redefinition `insert_method` already handled.
-            if class_id != module_id && self.class_in_ancestors(class_id, module_id) {
+            if class_id != module_id
+                && self.class_in_ancestors(class_id, module_id)
+                && !self.basic_op_resolves_as_armed(class_id, name)
+            {
                 self.set_bop_redefine(class_id, name);
             }
         }
+    }
+
+    ///
+    /// Whether `class_id#name` still resolves to the method the table
+    /// was armed with — the snapshot [`Store::arm_basic_ops`] takes
+    /// once the builtins have finished defining themselves.
+    ///
+    /// A pair with no snapshot is reported as changed, so an unknown
+    /// pair costs a fast path rather than correctness.
+    ///
+    fn basic_op_resolves_as_armed(&self, class_id: ClassId, name: IdentId) -> bool {
+        let Some(armed) = self.basic_ops.armed_func(class_id, name) else {
+            return false;
+        };
+        armed == self.resolve_basic_op(class_id, name)
+    }
+
+    /// What `class_id#name` resolves to right now, in the form the
+    /// snapshot records. `None` for a name no ancestor defines — a real
+    /// state for the pairs inherited from `Object` / `BasicObject`
+    /// (`Integer#!`, `NilClass#==`, …).
+    pub(super) fn resolve_basic_op(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
+        self.search_method(self[class_id].get_module(), name)
+            .and_then(|entry| entry.func_id())
     }
 
     ///

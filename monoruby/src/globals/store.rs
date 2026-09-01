@@ -445,7 +445,17 @@ impl Store {
     /// names, so arming any earlier reports the interpreter monkey-patching
     /// itself. See `basic_op::BasicOpTable`.
     pub(crate) fn arm_basic_ops(&mut self) {
-        self.basic_ops.arm();
+        // Snapshot what every pair resolves to right now. The mixin
+        // checks compare against this baseline, so that including a
+        // module a basic-op class already carries — `Comparable`, say —
+        // is recognised as changing nothing.
+        let resolved = self
+            .basic_ops
+            .pairs()
+            .into_iter()
+            .map(|(class_id, name)| ((class_id, name), self.resolve_basic_op(class_id, name)))
+            .collect();
+        self.basic_ops.arm(resolved);
     }
 
     /// Whether any basic op has been redefined. Read by the fast paths that
