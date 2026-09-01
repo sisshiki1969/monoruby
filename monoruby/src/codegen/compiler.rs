@@ -168,6 +168,7 @@ impl Codegen {
 
     #[cfg(target_arch = "x86_64")]
     pub(super) fn gen_compile_loop(&mut self, entry: &DestLabel, cont: &DestLabel) {
+        let run = self.jit.label();
         monoasm!( &mut self.jit,
         entry:
             movq rdi, r12;
@@ -177,7 +178,15 @@ impl Codegen {
             call rax;
             movq rax, [r13 - 8];
             testq rax, rax;
-            jeq cont;
+            jne run;
+            // The compile bailed (codeptr unpublished): stamp the
+            // 1-sentinel so `vm_loop_start` never fires the compiler for
+            // this loop again — without it, the counter sitting past the
+            // threshold re-ran the (aborting) compiler on every single
+            // iteration. Mirrors the aarch64 `vm_loop_start` bail path.
+            movq [r13 - 8], 1;
+            jmp cont;
+        run:
             jmp rax;
         );
     }

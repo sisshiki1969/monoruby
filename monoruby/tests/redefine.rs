@@ -790,3 +790,26 @@ fn version_guard_restamp_survives_repeated_defs() {
         "##,
     );
 }
+
+#[test]
+fn loop_with_eval_does_not_storm_the_loop_jit() {
+    // A loop body containing `eval` cannot be loop-JIT-compiled (the
+    // front-end bails). The bail must be remembered via the LoopStart
+    // 1-sentinel — without it (the x86 bug this guards), the counter
+    // sitting past the threshold re-fired the aborting compiler on
+    // every iteration: ~100k aborted compiles for a 100k-iteration
+    // loop (28.5s instead of 0.16s for this shape at 100k).
+    run_test_once(
+        r##"
+        def target(x) = x + 1
+        s = 0
+        i = 0
+        while i < 2000
+          s += target(i)
+          eval("1 + 1") if i == 0
+          i += 1
+        end
+        s
+        "##,
+    );
+}
