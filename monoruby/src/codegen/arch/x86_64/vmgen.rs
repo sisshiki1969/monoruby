@@ -921,12 +921,25 @@ impl Codegen {
         self.vm_execute_gc();
         {
             let count = self.jit.label();
+            let low = self.jit.label();
             self.jit.branch_if_captured(&cont);
+            // The codeptr slot holds 0 (not yet compiled — count toward the
+            // threshold), the 1-sentinel (a compile bailed — keep
+            // interpreting, never retry; see `gen_compile_loop`), or the
+            // compiled loop's address. Without the sentinel a bailing loop
+            // (e.g. a body containing `eval`) re-fired the compiler on
+            // every iteration once the counter crossed the threshold —
+            // ~100k aborted compiles for a 100k-iteration loop. Mirrors
+            // the aarch64 `vm_loop_start`, which has carried the sentinel
+            // all along (`clear_loop_jit_entries` already preserves it).
             monoasm! { &mut self.jit,
                 movq rax, [r13 - 8];
-                testq rax, rax;
-                jeq count;
+                cmpq rax, 1;
+                jbe  low;
                 jmp rax;
+            low:
+                jne  count;
+                jmp  cont;
             count:
                 addl [r13 - 16], 1;
                 cmpl [r13 - 16], (COUNT_LOOP_START_COMPILE);

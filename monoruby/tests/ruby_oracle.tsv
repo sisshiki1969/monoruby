@@ -1716,6 +1716,7 @@
 85e7593e9dd66c1c5a37afa22f1b7d68	"nil"	r, w = IO.pipe\n            t = Thread.new { sleep 0.2 }\n           
 85e7620ff95003251b4405ba74cbfb03	[0, 0]	path = "/tmp/mr_fsync_test.txt"\n            r = File.open(path, "w"
 85fe2b8468951fc30f0d8cabe844b706	Module	m = Module.new\n        m.class\n        
+8603e6ae1d240418c0c2c021929e70ad	2001000	def target(x) = x + 1\n        s = 0\n        i = 0\n        while i < 200
 860c557ff310749db06b9beabc01cc56	["Process::Status", 0]	IO.popen(["true"]) { |io| io.read }\n            [$?.class.to_s, $?.
 861e99795f6f1ed683e95e52e573c574	["US-ASCII"]	"abc".dup.force_encoding("US-ASCII").split("").map(&:encoding).map(&:to_s).uniq
 8634204d0d711f3c760e95c063499f29	["superclass must be an instance of Class (given an instance of Integer)", "superclass must be an instance of Class (given an instance of Integer)", "superclass must be an instance of Class (given an instance of String)", "superclass must be an instance of Class (given an instance of String)", "superclass must be an instance of Class (given an instance of Symbol)", "superclass must be an instance of Class (given an instance of Symbol)", "superclass must be an instance of Class (given an instance of Module)", "superclass must be an instance of Class (given an instance of Module)", "can't make subclass of singleton class", "can't make subclass of singleton class"]	res = []\n        [42, "s", :sym, Module.new, Object.new.singleton_class
