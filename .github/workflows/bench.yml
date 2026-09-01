@@ -52,28 +52,68 @@ jobs:
       - name: Install monoruby (release)
         run: RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby --locked
 
+      - name: Compute the daily ruby HEAD cache key
+        id: zjit-key
+        run: echo "today=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the ruby HEAD (ZJIT) build cache
+        # Full ruby/ruby builds are limited to one per day: the cache key
+        # carries the UTC date, so the first bench run of a day builds
+        # HEAD and every later run that day restores it in seconds. The
+        # prefix restore-key falls back to the newest older build, so a
+        # day whose ruby/ruby master fails to build still benchmarks
+        # zjit — on yesterday's HEAD, which the dashboard reports
+        # faithfully because the sha is read from the binary itself
+        # (see "Resolve the zjit engine"). The post-job save stores
+        # whatever prefix the run ends with under *today's* key, so a
+        # failed build is not retried until tomorrow: at most one full
+        # build per day, by construction.
+        id: zjit-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/ruby-head
+          key: ruby-head-zjit-${{ runner.os }}-${{ runner.arch }}-${{ steps.zjit-key.outputs.today }}
+          restore-keys: |
+            ruby-head-zjit-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Build ruby HEAD (ZJIT)
-        # ruby/ruby master is rebuilt from scratch on every run (no cache,
-        # by design: the point is to track ZJIT's HEAD). master does
+        # Only on the day's first run (no exact cache hit). master does
         # occasionally fail to build — that must not cost the monoruby /
         # YJIT numbers, so this step only drops the zjit engine on
-        # failure and the dashboard records why. The nightly Rust
-        # toolchain installed above satisfies ZJIT's rustc >= 1.85
+        # failure, and a restored older build survives it: the install
+        # prefix is wiped only after `make` has succeeded. The nightly
+        # Rust toolchain installed above satisfies ZJIT's rustc >= 1.85
         # requirement; the 4.0.2 ruby installed above is BASERUBY.
         id: zjit
+        if: steps.zjit-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/ruby/ruby.git ../ruby-head
-          echo "sha=$(git -C ../ruby-head rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           cd ../ruby-head
           ./autogen.sh
           ./configure --prefix="$HOME/ruby-head" \
             --enable-zjit --disable-yjit --disable-install-doc
           make -j"$(getconf _NPROCESSORS_ONLN)"
+          rm -rf "$HOME/ruby-head"
           make install
-          "$HOME/ruby-head/bin/ruby" --zjit -e 'puts RUBY_DESCRIPTION'
+
+      - name: Resolve the zjit engine
+        # The binary answers for itself whether zjit is usable and which
+        # ruby/ruby commit it was built from — the same contract whether
+        # it was built just now, restored from today's cache, or fell
+        # back to an older day's build.
+        id: zjit-resolved
+        shell: bash
+        run: |
+          ok=false; sha=""
+          if [ -x "$HOME/ruby-head/bin/ruby" ] \
+            && sha=$("$HOME/ruby-head/bin/ruby" --zjit -e 'print RUBY_REVISION[0, 7]' 2>/dev/null); then
+            ok=true
+            "$HOME/ruby-head/bin/ruby" --zjit -e 'puts RUBY_DESCRIPTION'
+          fi
+          { echo "ok=$ok"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
 
       - name: Clone yjit-bench (Shopify/yjit-bench)
         run: git clone --depth 1 https://github.com/Shopify/yjit-bench.git ../ruby-bench
@@ -112,6 +152,7 @@ jobs:
           MR_TIMEOUT: '400'
           YJ_TIMEOUT: '400'
           ZJ_TIMEOUT: '400'
+          ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
           set +e
           set -uo pipefail
@@ -119,10 +160,10 @@ jobs:
           OUT="$GITHUB_WORKSPACE/bench-results"
           mkdir -p "$OUT/data"
 
-          # The zjit engine rides on the HEAD build when it exists;
-          # "$@" expands to nothing (safely, even under `set -u` on old
-          # bash) when the build failed and the run proceeds two-engined.
-          if [ -x "$HOME/ruby-head/bin/ruby" ]; then
+          # The zjit engine rides on the resolved HEAD build; "$@"
+          # expands to nothing (safely, even under `set -u` on old bash)
+          # when no usable build exists and the run proceeds two-engined.
+          if [ "${ZJIT_OK:-false}" = "true" ]; then
             set -- -e "zjit::timeout --foreground -k 5 ${ZJ_TIMEOUT} $HOME/ruby-head/bin/ruby --zjit"
           else
             set --
@@ -165,8 +206,8 @@ jobs:
           MR_TIMEOUT: ${{ steps.run.outputs.mr_timeout }}
           YJ_TIMEOUT: ${{ steps.run.outputs.yj_timeout }}
           ZJ_TIMEOUT: ${{ steps.run.outputs.zj_timeout }}
-          RUBY_HEAD_SHA: ${{ steps.zjit.outputs.sha }}
-          ZJIT_BUILD: ${{ steps.zjit.outcome == 'success' && 'ok' || 'failed' }}
+          RUBY_HEAD_SHA: ${{ steps.zjit-resolved.outputs.sha }}
+          ZJIT_BUILD: ${{ steps.zjit-resolved.outputs.ok == 'true' && 'ok' || 'failed' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -225,26 +266,60 @@ jobs:
       - name: Install monoruby (release)
         run: cargo install --path monoruby --locked
 
+      - name: Compute the daily ruby HEAD cache key
+        id: zjit-key
+        run: echo "today=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the ruby HEAD (ZJIT) build cache
+        # Mirrors the amd64 job: at most one full ruby/ruby build per
+        # UTC day, with a fallback to the newest older build when
+        # today's master fails to build. See the amd64 job's comment
+        # for the mechanics.
+        id: zjit-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/ruby-head
+          key: ruby-head-zjit-${{ runner.os }}-${{ runner.arch }}-${{ steps.zjit-key.outputs.today }}
+          restore-keys: |
+            ruby-head-zjit-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Build ruby HEAD (ZJIT)
-        # Mirrors the amd64 job: fresh build every run, and a failed
-        # ruby/ruby master build only drops the zjit engine. openssl@3
-        # is keg-only, so configure is pointed at it explicitly
-        # (rubygems needs it for each benchmark's `bundle install`).
+        # Only on the day's first run (no exact cache hit); a failed
+        # ruby/ruby master build only drops the zjit engine, and a
+        # restored older build survives it (the prefix is wiped only
+        # after `make` has succeeded). openssl@3 is keg-only, so
+        # configure is pointed at it explicitly (rubygems needs it for
+        # each benchmark's `bundle install`).
         id: zjit
+        if: steps.zjit-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/ruby/ruby.git ../ruby-head
-          echo "sha=$(git -C ../ruby-head rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           cd ../ruby-head
           ./autogen.sh
           ./configure --prefix="$HOME/ruby-head" \
             --enable-zjit --disable-yjit --disable-install-doc \
             --with-openssl-dir="$(brew --prefix openssl@3)"
           make -j"$(getconf _NPROCESSORS_ONLN)"
+          rm -rf "$HOME/ruby-head"
           make install
-          "$HOME/ruby-head/bin/ruby" --zjit -e 'puts RUBY_DESCRIPTION'
+
+      - name: Resolve the zjit engine
+        # See the amd64 job: the binary answers for itself whether zjit
+        # is usable and which ruby/ruby commit it was built from,
+        # whichever of build / today's cache / older fallback provided it.
+        id: zjit-resolved
+        shell: bash
+        run: |
+          ok=false; sha=""
+          if [ -x "$HOME/ruby-head/bin/ruby" ] \
+            && sha=$("$HOME/ruby-head/bin/ruby" --zjit -e 'print RUBY_REVISION[0, 7]' 2>/dev/null); then
+            ok=true
+            "$HOME/ruby-head/bin/ruby" --zjit -e 'puts RUBY_DESCRIPTION'
+          fi
+          { echo "ok=$ok"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
 
       - name: Clone yjit-bench (Shopify/yjit-bench)
         run: git clone --depth 1 https://github.com/Shopify/yjit-bench.git ../ruby-bench
@@ -278,6 +353,7 @@ jobs:
           MR_TIMEOUT: '400'
           YJ_TIMEOUT: '400'
           ZJ_TIMEOUT: '400'
+          ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
           set +e
           set -uo pipefail
@@ -285,9 +361,9 @@ jobs:
           OUT="$GITHUB_WORKSPACE/bench-results"
           mkdir -p "$OUT/data"
 
-          # See the amd64 job: "$@" carries the zjit engine only when the
-          # HEAD build produced a binary.
-          if [ -x "$HOME/ruby-head/bin/ruby" ]; then
+          # See the amd64 job: "$@" carries the zjit engine only when a
+          # usable HEAD build was resolved.
+          if [ "${ZJIT_OK:-false}" = "true" ]; then
             set -- -e "zjit::timeout --foreground -k 5 ${ZJ_TIMEOUT} $HOME/ruby-head/bin/ruby --zjit"
           else
             set --
@@ -324,8 +400,8 @@ jobs:
           MR_TIMEOUT: ${{ steps.run.outputs.mr_timeout }}
           YJ_TIMEOUT: ${{ steps.run.outputs.yj_timeout }}
           ZJ_TIMEOUT: ${{ steps.run.outputs.zj_timeout }}
-          RUBY_HEAD_SHA: ${{ steps.zjit.outputs.sha }}
-          ZJIT_BUILD: ${{ steps.zjit.outcome == 'success' && 'ok' || 'failed' }}
+          RUBY_HEAD_SHA: ${{ steps.zjit-resolved.outputs.sha }}
+          ZJIT_BUILD: ${{ steps.zjit-resolved.outputs.ok == 'true' && 'ok' || 'failed' }}
         shell: bash
         run: |
           set -euo pipefail
