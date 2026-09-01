@@ -1,5 +1,6 @@
 use super::*;
 use crate::bytecodegen::CompileInfo;
+use std::collections::VecDeque;
 
 pub(crate) const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr) as _;
 pub(crate) const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
@@ -371,7 +372,12 @@ mod tests {
 
 pub(crate) struct Funcs {
     pub(in crate::globals) info: MonoVec<FuncInfo>,
-    compile_info: Vec<CompileInfo>,
+    /// FIFO of not-yet-compiled function bodies, consumed by
+    /// `bytecode_compile`. A deque, not a `Vec`: entries embed the whole AST
+    /// (hundreds of bytes each), and a 30k-`def` script queues 30k of them —
+    /// `Vec::remove(0)` per pop made loading such a file quadratic in memmove
+    /// (~6 s for a 30k-method file; `pop_front` brings it to ~250 ms).
+    compile_info: VecDeque<CompileInfo>,
 }
 
 impl std::ops::Index<FuncId> for Funcs {
@@ -393,7 +399,7 @@ impl std::default::Default for Funcs {
         info.push(FuncInfo::default());
         Self {
             info,
-            compile_info: vec![],
+            compile_info: VecDeque::new(),
         }
     }
 }
@@ -639,7 +645,7 @@ impl Funcs {
     }
 
     pub fn get_compile_info(&mut self) -> CompileInfo {
-        self.compile_info.remove(0)
+        self.compile_info.pop_front().unwrap()
     }
 
     pub(crate) fn clear_compile_info(&mut self) {
@@ -663,7 +669,7 @@ impl Funcs {
     }
 
     pub(super) fn add_compile_info(&mut self, compile_info: CompileInfo) {
-        self.compile_info.push(compile_info);
+        self.compile_info.push_back(compile_info);
     }
 
     pub(super) fn new_native_func(
