@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-749c233a.js";
+            window.path_to_searchindex_js = "../searchindex-8ce854c5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-ad91b9ad.js"></script>
@@ -249,10 +249,27 @@ against that one word. Compilation is atomic at one version, so one word
 is enough — and one store re-validates the entire unit. <code>set_class_version</code>
 / <code>set_const_version</code> (<code>codegen.rs</code>) are that store.</p>
 <blockquote>
-<p><strong>Both arches read the word.</strong> aarch64 used to bake the snapshot in as an
-immediate, which silently made salvage a no-op there: the word was
-patched and the guard kept comparing against the old immediate. Fixed in
-#1157; <code>a64_guard_class_version</code> now takes the unit’s label.</p>
+<p><strong>The snapshot’s representation differs per arch.</strong> aarch64 reads the
+word (<code>a64_guard_class_version</code> takes the unit’s label). x86-64 bakes
+the snapshot into each guard as a <strong>patchable imm32</strong> — a fixed 5-byte
+<code>movl rax, imm32</code> whose last 4 bytes salvage re-stamps — removing the
+per-unit data load (one scattered cache line per compilation unit,
+~1 D1 miss per call in call-dense code) from the hot path. This is
+safe <em>only</em> because every imm site is registered: <code>check_version</code>
+(<code>arch/x86_64/guard.rs</code>) is the single emitter of the compare and
+pushes its patch label into <code>unit_version_patch_sites</code>; <code>jit_compile</code>
+files the unit’s list under its snapshot-word address
+(<code>version_imm_sites</code>), and <code>set_class_version</code> patches the word <em>and</em>
+every registered site. The word itself is retained as the salvage
+records’ key (and as what aarch64 reads), so the record plumbing is
+unchanged.</p>
+<p>The history that makes the registration invariant load-bearing:
+aarch64 once baked the snapshot as an <em>unpatched</em> immediate, which
+silently made salvage a no-op there — the word was patched and the
+guard kept comparing against the old immediate (fixed in #1157). An
+immediate is acceptable exactly when its patch site cannot be
+forgotten; a guard shape that emits its own compare instead of going
+through <code>check_version</code> would reintroduce the bug.</p>
 </blockquote>
 <p>The word is reachable afterwards through the unit’s salvage record:</p>
 <div class="table-wrapper">
@@ -456,8 +473,11 @@ failures will recompile forever. The whole-method and loop paths do this
 in <code>compile_patch</code> / <code>compile_partial_by_id</code>.</li>
 <li>A new question the compiler bakes in needs a new record and a new tier —
 do not extend an existing map with a differently-shaped invariant.</li>
-<li>Never bind a guard’s miss-exit label inside a <code>cfg</code> block (§7), and keep
-the snapshot side of a version compare a <em>word</em>, never an immediate (§2).</li>
+<li>Never bind a guard’s miss-exit label inside a <code>cfg</code> block (§7). The
+snapshot side of a version compare is either the unit’s <em>word</em> or a
+<em>registered patchable immediate</em> (§2) — never an unregistered
+immediate, and never a compare emitted outside <code>check_version</code> on
+x86-64.</li>
 </ul>
 
                     </main>
