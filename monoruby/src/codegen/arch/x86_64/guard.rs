@@ -4,10 +4,12 @@ impl Codegen {
     /// Compare the global class version against this unit's snapshot.
     ///
     /// The snapshot side is an *inline imm32*, not the unit's snapshot
-    /// word: `movl rax, imm32` has a fixed 5-byte encoding (unlike a
-    /// `cmp m32, imm` whose imm8 short form would make the patch site
-    /// variable-length), so a successful salvage re-stamps the version
-    /// by patching the 4 bytes before the label bound here (see
+    /// word: `cmpl [rip + global], imm32`. The immediate is emitted as
+    /// the sentinel `VERSION_IMM_SENTINEL` (`0x8000_0000` — outside the
+    /// imm8 range, so monoasm is pinned to the 4-byte `81 /7 id`
+    /// encoding) and `jit_compile` overwrites every site with the
+    /// unit's real version right after `finalize`, before the code is
+    /// published; a successful salvage re-stamps them the same way (see
     /// `Codegen::set_class_version`). This removes the per-unit data
     /// load — one scattered cache line per compilation unit — from
     /// every guard on the hot path; only the shared, always-hot global
@@ -20,15 +22,13 @@ impl Codegen {
     /// turns every salvage into a permanent per-call deopt).
     fn check_version(&mut self, _cached_version: DestLabel, fail: &DestLabel) {
         let global_version = self.class_version_label();
-        let version = self.class_version();
         let patch_site = self.jit.label();
         monoasm! { &mut self.jit,
-            movl rax, (version);
+            cmpl [rip + global_version], (crate::codegen::VERSION_IMM_SENTINEL);
         }
         self.jit.bind_label(patch_site.clone());
         self.unit_version_patch_sites.push(patch_site);
         monoasm! { &mut self.jit,
-            cmpl rax, [rip + global_version];
             jne  fail;
         }
     }
@@ -45,8 +45,7 @@ impl Codegen {
     /// Check the cached class version.
     /// If different, recompile immediately, and jump to `deopt`.
     ///
-    /// ### destroy
-    /// - rax
+    /// Destroys no registers (the compare is `cmp m32, imm32`).
     ///
     pub(super) fn guard_class_version(
         &mut self,

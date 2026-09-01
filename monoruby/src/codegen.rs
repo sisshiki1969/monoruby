@@ -429,6 +429,13 @@ pub(crate) mod placement_shadow {
     }
 }
 
+/// Emission-time placeholder for a class-version guard's imm32
+/// (`check_version`): outside the imm8 range, so monoasm is pinned to
+/// the 4-byte-immediate `cmp` encoding, keeping every patch site a
+/// fixed 4 bytes. Never compared at runtime — `jit_compile` overwrites
+/// all sites with the unit's real version before the code is published.
+pub(in crate::codegen) const VERSION_IMM_SENTINEL: i32 = 0x8000_0000u32 as i32;
+
 pub struct JitModule {
     pub(crate) jit: JitMemory,
     class_version: DestLabel,
@@ -588,21 +595,34 @@ impl JitModule {
         // this unit. Patching is safe here: the only thread executing
         // JIT code is this one, and it is inside the guard's cold path.
         if let Some(sites) = self.version_imm_sites.get(&(p as u64)) {
-            for site in sites.clone() {
-                // The label is bound immediately after the fixed 5-byte
-                // `movl rax, imm32`, so the imm is the 4 bytes before it.
-                let imm = unsafe { self.jit.get_label_address(&site).as_ptr().sub(4) } as *mut u32;
-                self.jit.mark_dirty(imm as *const u8, 4);
-                // SAFETY: `check_version` bound the label right after its
-                // 5-byte `movl`; the 4 bytes before it are that mov's
-                // imm32, just made writable by `mark_dirty`. Unaligned by
-                // nature (an instruction immediate), hence
-                // `write_unaligned`; single-threaded JIT execution makes
-                // the non-atomic store unobservable mid-write.
-                unsafe { imm.write_unaligned(version) };
-            }
+            let sites = sites.clone();
+            self.stamp_version_imm_sites(&sites, version);
         }
         self.jit.set_executable();
+    }
+
+    /// Overwrite the imm32 of every registered class-version guard site
+    /// with *version*. A site label is bound immediately after its
+    /// `cmpl [rip + global], imm32`, so the imm is the 4 bytes before
+    /// it. Used by `jit_compile` for the initial stamp (replacing the
+    /// emission-time `VERSION_IMM_SENTINEL`, before the code is
+    /// published) and by `set_class_version` on a salvage re-stamp.
+    /// The caller owns the following `set_executable`.
+    pub(in crate::codegen) fn stamp_version_imm_sites(
+        &mut self,
+        sites: &[DestLabel],
+        version: u32,
+    ) {
+        for site in sites {
+            let imm = unsafe { self.jit.get_label_address(site).as_ptr().sub(4) } as *mut u32;
+            self.jit.mark_dirty(imm as *const u8, 4);
+            // SAFETY: `check_version` bound the label right after its
+            // `cmpl`'s 4-byte imm32, just made writable by `mark_dirty`.
+            // Unaligned by nature (an instruction immediate), hence
+            // `write_unaligned`; single-threaded JIT execution makes the
+            // non-atomic store unobservable mid-write.
+            unsafe { imm.write_unaligned(version) };
+        }
     }
 
     /// Patch a compilation unit's const-version snapshot word (see

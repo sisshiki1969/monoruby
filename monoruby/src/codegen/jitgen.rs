@@ -642,13 +642,19 @@ impl Codegen {
         // emission (e.g. the class-guard stub).
         #[cfg(target_arch = "x86_64")]
         self.jit.finalize();
-        // Register the unit's imm32 patch sites under its snapshot-word
-        // address — `set_class_version` looks them up by the same
-        // `DestLabel` the salvage records carry, so the salvage plumbing
-        // stays word-keyed. Empty on aarch64 (its guards read the word).
+        // Stamp the unit's real class version over every guard's
+        // emission-time `VERSION_IMM_SENTINEL` (resolvable only now,
+        // after `finalize`; the code is not yet published, so nothing
+        // can execute a sentinel compare), and register the sites under
+        // the unit's snapshot-word address — `set_class_version` looks
+        // them up by the same `DestLabel` the salvage records carry, so
+        // the salvage plumbing stays word-keyed. Empty on aarch64 (its
+        // guards read the word).
         {
             let sites = std::mem::take(&mut self.unit_version_patch_sites);
             if !sites.is_empty() {
+                self.stamp_version_imm_sites(&sites, class_version);
+                self.jit.set_executable();
                 let key = self.jit.get_label_address(&class_version_label).as_ptr() as u64;
                 self.version_imm_sites.insert(key, sites);
             }
