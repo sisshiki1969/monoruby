@@ -768,6 +768,30 @@ fn const_version_nested_block_root_heals() {
 }
 
 #[test]
+fn version_guard_restamp_survives_repeated_defs() {
+    // Every 7th iteration defines a fresh (unrelated) method, bumping the
+    // global class version while `target`'s compiled unit is hot. Each bump
+    // fails the unit's class-version guard; salvage re-validates the
+    // unchanged call sites and re-stamps the guard's version snapshot —
+    // on x86-64 by patching the imm32 baked into every guard's
+    // `movl rax, imm32` (see `check_version`). A mis-patched site would
+    // crash or wedge the method into a permanent per-call deopt.
+    run_test(
+        r##"
+        def target(x) = x + 1
+        s = 0
+        i = 0
+        while i < 200
+          s += target(i)
+          eval("def zz_#{s} = 1") if i % 7 == 0
+          i += 1
+        end
+        s
+        "##,
+    );
+}
+
+#[test]
 fn loop_with_eval_does_not_storm_the_loop_jit() {
     // A loop body containing `eval` cannot be loop-JIT-compiled (the
     // front-end bails). The bail must be remembered via the LoopStart

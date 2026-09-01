@@ -1,11 +1,34 @@
 use super::*;
 
 impl Codegen {
-    fn check_version(&mut self, cached_version: DestLabel, fail: &DestLabel) {
+    /// Compare the global class version against this unit's snapshot.
+    ///
+    /// The snapshot side is an *inline imm32*, not the unit's snapshot
+    /// word: `cmpl [rip + global], imm32`. The immediate is emitted as
+    /// the sentinel `VERSION_IMM_SENTINEL` (`0x8000_0000` — outside the
+    /// imm8 range, so monoasm is pinned to the 4-byte `81 /7 id`
+    /// encoding) and `jit_compile` overwrites every site with the
+    /// unit's real version right after `finalize`, before the code is
+    /// published; a successful salvage re-stamps them the same way (see
+    /// `Codegen::set_class_version`). This removes the per-unit data
+    /// load — one scattered cache line per compilation unit — from
+    /// every guard on the hot path; only the shared, always-hot global
+    /// word is read. The word (`cached_version`) still exists as the
+    /// salvage records' key and for the aarch64 twin, which reads it.
+    ///
+    /// Every emitted compare registers its patch site here — this is
+    /// the single choke point, so a guard shape cannot forget to (the
+    /// #1157 failure mode: an unpatchable snapshot immediate silently
+    /// turns every salvage into a permanent per-call deopt).
+    fn check_version(&mut self, _cached_version: DestLabel, fail: &DestLabel) {
         let global_version = self.class_version_label();
+        let patch_site = self.jit.label();
         monoasm! { &mut self.jit,
-            movl rax, [rip + global_version];
-            cmpl rax, [rip + cached_version];
+            cmpl [rip + global_version], (crate::codegen::VERSION_IMM_SENTINEL);
+        }
+        self.jit.bind_label(patch_site.clone());
+        self.unit_version_patch_sites.push(patch_site);
+        monoasm! { &mut self.jit,
             jne  fail;
         }
     }
@@ -22,8 +45,7 @@ impl Codegen {
     /// Check the cached class version.
     /// If different, recompile immediately, and jump to `deopt`.
     ///
-    /// ### destroy
-    /// - rax
+    /// Destroys no registers (the compare is `cmp m32, imm32`).
     ///
     pub(super) fn guard_class_version(
         &mut self,

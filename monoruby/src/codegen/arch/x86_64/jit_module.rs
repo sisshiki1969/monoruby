@@ -47,6 +47,8 @@ impl JitModule {
         let mut j = Self {
             jit,
             class_version,
+            unit_version_patch_sites: Vec::new(),
+            version_imm_sites: std::collections::HashMap::default(),
             const_version,
             poll_flag,
             entry_raise,
