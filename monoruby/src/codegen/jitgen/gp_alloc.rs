@@ -160,6 +160,22 @@ impl GpRegFile {
         self.holder.iter().all(|h| h.is_none())
     }
 
+    /// The `(reg, slot)` pairs of every resident, clean or dirty. Does not
+    /// mutate the file. Used to seed the direct-argument-store hints a call
+    /// site captures just before its flush: after the flush spills a dirty
+    /// resident, the register still holds the slot's (now home-equal) value,
+    /// so `set_arguments` can store it straight into the callee frame
+    /// instead of round-tripping through the just-written stack home (a
+    /// store-forwarding hop on the call's critical path).
+    pub(in crate::codegen::jitgen) fn residents(&self) -> Vec<(GP, SlotId)> {
+        (0..self.holder.len())
+            .filter_map(|i| match self.holder[i] {
+                Some(Holder { slot, .. }) => Some((GP_ALLOC_SET[i], slot)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The `(reg, slot)` pairs of every **dirty** resident, for inclusion in a
     /// deopt / GC write-back (the values that differ from their stack home and
     /// must be re-homed if the VM resumes). Does not mutate the file.

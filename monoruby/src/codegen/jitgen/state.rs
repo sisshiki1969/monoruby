@@ -928,6 +928,14 @@ impl AbstractFrame {
     /// call/yield-result parking (`def_rax2gp`) and concrete-literal defs
     /// (`def_lit2gp`); generic slot reads and write-backs consult the residents
     /// without flushing. A no-op when the file is empty.
+    /// Snapshot the `(reg, slot)` pairs currently in the local GP file,
+    /// for the call sites' direct-argument-store hints (captured just
+    /// before the flush inside `get_using_fpr`; after the spill the
+    /// registers still hold their slots' home-equal values). Read-only.
+    pub(in crate::codegen::jitgen) fn peek_gp_residents(&self) -> Vec<(GP, SlotId)> {
+        self.gp_regfile.residents()
+    }
+
     pub(in crate::codegen::jitgen) fn flush_gp(&mut self, ir: &mut AsmIr) {
         if self.gp_regfile.is_empty() {
             return;
