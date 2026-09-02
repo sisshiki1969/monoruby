@@ -262,6 +262,10 @@ impl IdentId {
     pub const INITIALIZE_CLONE: IdentId = id!(77);
     pub const INITIALIZE_DUP: IdentId = id!(78);
     pub const RESPOND_TO_MISSING_: IdentId = id!(79);
+    /// The hidden ivar `Integer#chr` hangs a mock encoding object on
+    /// (`/encoding_override`). `String#encoding` probes it on every call,
+    /// so it is interned up front rather than by name each time.
+    pub const _ENCODING_OVERRIDE: IdentId = id!(96);
 
     // The special global variables whose assignment `write_special_check`
     // (globals/gvar.rs) validates or coerces. Deliberately a *consecutive*
@@ -547,6 +551,7 @@ impl IdentifierTable {
         for (name, id) in IdentId::SPECIAL_GVARS {
             table.set_id(name, id);
         }
+        table.set_id("/encoding_override", IdentId::_ENCODING_OVERRIDE);
         table
     }
 

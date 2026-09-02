@@ -51,6 +51,7 @@ pub(super) fn init_encoding(globals: &mut Globals) {
             Value::string_from_str("ASCII-8BIT"),
         )
         .unwrap();
+    globals.register_encoding_object(val, Encoding::Ascii8);
     globals.set_constant(enc.id(), IdentId::ASCII_8BIT, val);
     globals.set_constant_by_str(enc.id(), "BINARY", val);
     // Add encoding constants (placeholder objects for compatibility).
@@ -180,6 +181,13 @@ pub(super) fn init_encoding(globals: &mut Globals) {
                 .store
                 .set_ivar(val, IdentId::_ENCODING, Value::string_from_str(canonical))
                 .unwrap();
+            // The object's `Encoding`, recorded once so
+            // `String#force_encoding(Encoding::X)` never re-parses the
+            // name. A name monoruby has no `Encoding` for keeps only the
+            // name path.
+            if let Ok(e) = Encoding::try_from_str(canonical) {
+                globals.register_encoding_object(val, e);
+            }
             val
         };
         globals.set_constant_by_str(enc.id(), name, val);
@@ -1687,17 +1695,24 @@ pub(super) fn str_encoding(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     // Check for overridden encoding label (set by Integer#chr for mock encodings)
-    let enc_override_id = IdentId::get_id("/encoding_override");
-    if let Some(enc_obj) = globals.store.get_ivar(self_, enc_override_id) {
+    if let Some(enc_obj) = globals.store.get_ivar(self_, IdentId::_ENCODING_OVERRIDE) {
         return Ok(enc_obj);
     }
     let enc = self_.as_rstring_inner().encoding();
+    // The `Encoding::<NAME>` object for `enc` is the same every time;
+    // resolve it through the constant table once and answer from the
+    // memo after that (a call used to intern the constant's name and
+    // walk two constant lookups).
+    if let Some(obj) = globals.cached_encoding_object(enc) {
+        return Ok(obj);
+    }
     let enc_class = vm
         .get_constant_checked(globals, OBJECT_CLASS, IdentId::ENCODING)?
         .expect_class(globals)?
         .id();
     let const_name = encoding_constant_name(enc);
     let res = vm.get_constant_checked(globals, enc_class, IdentId::get_id(const_name))?;
+    globals.cache_encoding_object(enc, res);
     Ok(res)
 }
 
@@ -1789,6 +1804,10 @@ pub(super) fn value_to_encoding(
 ) -> Result<Encoding> {
     if let Some(s) = arg0.is_str() {
         Encoding::try_from_str(s)
+    } else if let Some(enc) = globals.encoding_of_object(arg0) {
+        // An `Encoding::<NAME>` constant object: its `Encoding` was
+        // recorded at init, so no name is read or parsed.
+        Ok(enc)
     } else if arg0.class() == encoding_class(globals) {
         let s = globals.store.get_ivar(arg0, IdentId::_ENCODING).unwrap();
         Encoding::try_from_str(s.as_str())
@@ -4930,6 +4949,28 @@ mod tests {
         );
     }
     use crate::tests::*;
+
+    #[test]
+    fn encoding_object_round_trip_without_names() {
+        // `force_encoding(Encoding::X)` reads the object's recorded
+        // `Encoding` and `String#encoding` answers from a memo, so every
+        // registered constant — including the shared-object aliases and
+        // the name-only encodings — has to round-trip to the same
+        // object CRuby returns, and the name path must be untouched.
+        run_tests(&[
+            r#"s = +"abc"; [Encoding::UTF_8, Encoding::ASCII_8BIT, Encoding::BINARY, Encoding::US_ASCII, Encoding::ASCII, Encoding::CP65001, Encoding::UTF_16LE, Encoding::UTF_16BE, Encoding::UTF_32LE, Encoding::Shift_JIS, Encoding::SHIFT_JIS, Encoding::Windows_31J, Encoding::EUC_JP, Encoding::ISO_8859_1, Encoding::ISO_8859_15, Encoding::Big5, Encoding::Windows_1252, Encoding::IBM437, Encoding::CP437, Encoding::UTF_7, Encoding::ISO_2022_JP].map { |e| s.force_encoding(e); [s.encoding.name, s.encoding.equal?(e)] }"#,
+            r#"s = +"abc"; ["UTF-8", "ASCII-8BIT", "BINARY", "US-ASCII", "utf-8", "Shift_JIS", "Windows-31J", "Big5", "UTF-16LE"].map { |n| s.force_encoding(n); [s.encoding.name, s.encoding.equal?(Encoding.find(n))] }"#,
+            r#"o = Object.new; def o.to_str; "US-ASCII"; end; s = +"abc"; s.force_encoding(o); [s.encoding.name, s.encoding.equal?(Encoding::US_ASCII)]"#,
+            r#"a = "x".encoding; b = "y".encoding; c = "z".b.encoding; [a.equal?(b), a.equal?(Encoding::UTF_8), c.equal?(Encoding::BINARY), c.equal?(Encoding::ASCII_8BIT), "w".force_encoding("US-ASCII").encoding.equal?(Encoding::US_ASCII)]"#,
+            r#"s = +"\xe3\x81\x82"; r = []; [Encoding::BINARY, Encoding::UTF_8, Encoding::Shift_JIS, Encoding::UTF_8].each { |e| s.force_encoding(e); r << [s.encoding.name, s.valid_encoding?, s.length] }; r"#,
+            // `Integer#chr`'s mock-encoding override still takes
+            // precedence over the string's real encoding.
+            r#"c = 0x80.chr(Encoding::Windows_1252); [c.encoding.name, c.bytes, c.encoding.equal?(Encoding::Windows_1252)]"#,
+        ]);
+        run_test_error(r#""Ruby".force_encoding(Encoding)"#);
+        run_test_error(r#""Ruby".force_encoding(Object.new)"#);
+        run_test_error(r#""Ruby".force_encoding(nil)"#);
+    }
 
     #[test]
     fn force_encoding() {

@@ -404,7 +404,7 @@ fn chr_set_encoding_label(globals: &mut Globals, val: Value, enc_name: &str) {
             .store
             .get_constant_noautoload(class_id, IdentId::get_id(&const_name))
         {
-            let override_id = IdentId::get_id("/encoding_override");
+            let override_id = IdentId::_ENCODING_OVERRIDE;
             globals.store.set_ivar(val, override_id, enc_obj).ok();
         }
     }
