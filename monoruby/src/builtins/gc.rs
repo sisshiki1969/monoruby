@@ -488,6 +488,58 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn empty_pages_go_back_to_the_os() {
+        // Grow the heap with garbage, collect, and the pages that emptied
+        // out beyond the resident reserve are handed back: they still
+        // count as empty pages (reusable), and on Linux the memory behind
+        // them is gone at once. The residency check asks `mincore` about
+        // this thread's arena rather than reading the process RSS, which
+        // every other test thread's arena moves too.
+        let res = run_test_no_result_check(
+            r##"
+            keep = []
+            400.times { |i| keep << Array.new(2000) { |j| [i, j] } }
+            pages_peak = GC.stat(:heap_allocated_pages)
+            keep = nil
+            GC.start
+            GC.start
+            [pages_peak, GC.stat(:heap_allocated_pages), GC.stat(:heap_empty_pages)]
+            "##,
+        );
+        let v: Vec<i64> = res
+            .as_array()
+            .iter()
+            .map(|v| v.try_fixnum().unwrap())
+            .collect();
+        let (pages_peak, pages_after, empty) = (v[0], v[1], v[2]);
+        assert!(pages_peak > 100, "heap did not grow: {v:?}");
+        assert!(pages_after < pages_peak / 4, "pages stayed in service: {v:?}");
+        assert!(empty > pages_peak / 2, "salvaged pages not accounted as empty: {v:?}");
+        // The allocator is thread-local and outlives the `Globals` above,
+        // so it still holds the post-collection page lists here.
+        let (released, resident) = crate::alloc::ALLOC.with(|alloc| {
+            let alloc = alloc.borrow();
+            (
+                alloc.released_page_count() as i64,
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                alloc.resident_released_pages(),
+                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+                0,
+            )
+        });
+        assert!(
+            released > pages_peak / 2,
+            "salvaged pages not released: {v:?} released={released}"
+        );
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                resident, 0,
+                "released pages still resident: {v:?} released={released}"
+            );
+        }
+    }
+
+    #[test]
     fn gc_compact_is_a_full_gc_noop() {
         // The `GC.compact if GC.respond_to?(:compact)` guard idiom must
         // run the call, and the return keeps CRuby's shape (per-type

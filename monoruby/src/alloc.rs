@@ -485,6 +485,20 @@ const OLD_GROWTH_FACTOR: usize = 2;
 /// would only add overhead.
 const OLD_OBJECT_FLOOR: usize = 16384;
 
+/// How many salvaged (all-dead) pages stay resident for reuse before the
+/// rest are handed back to the OS: `1/FREE_PAGE_RESERVE_FRACTION` of the
+/// pages in service, and never fewer than `FREE_PAGE_RESERVE_MIN`.
+///
+/// A page that empties out used to sit on `free_pages` forever, so a
+/// workload's *peak* heap stayed resident: lee's collector needed 22
+/// pages for its live set while the arena kept ~115 touched (30 MB RSS
+/// for 5.5 MB of objects). The reserve covers the growth between two
+/// collections (the trigger budget is `1/GC_HEAP_FRACTION` of the pages
+/// in service), so a steady-state heap reuses resident pages and only a
+/// heap that shrank pays the page faults of re-touching released ones.
+const FREE_PAGE_RESERVE_FRACTION: usize = 8;
+const FREE_PAGE_RESERVE_MIN: usize = 2;
+
 /// How deep the mark phase may walk the object graph with plain
 /// recursion before it starts deferring children to the mark queue
 /// (`Allocator::scan_children`).
@@ -642,6 +656,14 @@ pub struct Allocator<T> {
     free: Option<std::ptr::NonNull<T>>,
     /// Deallocated pages.
     free_pages: VecDeque<PageRef<T>>,
+    /// Salvaged pages whose memory has been handed back to the OS
+    /// (`release_page`): still part of the arena, reused after
+    /// `free_pages` runs dry. Their contents are undefined until a
+    /// page enters service again, which re-initialises everything it
+    /// reads (`clear_old_bits`, then the bump allocator writes cells).
+    released_pages: VecDeque<PageRef<T>>,
+    /// Pages released to the OS so far (monotonic; `GC.stat`-style).
+    total_released_pages: usize,
     /// Counter of GC execution.
     total_gc_counter: usize,
     /// Counter of minor (young-generation) GC executions. Always 0 until
@@ -906,6 +928,8 @@ impl<T: GCBox> Allocator<T> {
             mark_counter: 0,
             free: None,
             free_pages: VecDeque::new(),
+            released_pages: VecDeque::new(),
+            total_released_pages: 0,
             total_gc_counter: 0,
             minor_gc_count: 0,
             major_gc_count: 0,
@@ -1104,7 +1128,42 @@ impl<T: GCBox> Allocator<T> {
     /// Pages salvaged by a previous sweep and waiting to be reused
     /// (CRuby's `heap_empty_pages`).
     pub fn empty_page_count(&self) -> usize {
-        self.free_pages.len()
+        self.free_pages.len() + self.released_pages.len()
+    }
+
+    /// Salvaged pages currently handed back to the OS (a subset of
+    /// [`empty_page_count`](Self::empty_page_count)).
+    pub fn released_page_count(&self) -> usize {
+        self.released_pages.len()
+    }
+
+    /// Pages handed back to the OS so far (monotonic).
+    pub fn total_released_pages(&self) -> usize {
+        self.total_released_pages
+    }
+
+    /// Released pages that still have memory resident behind them, per
+    /// `mincore(2)`. Linux drops an `MADV_DONTNEED` range at once, so this
+    /// is zero right after a release. Test-only: it costs a syscall per
+    /// page, and it is the process-independent way to check the release
+    /// actually happened (a whole-process RSS reading is shared with every
+    /// other test thread's arena).
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    pub(crate) fn resident_released_pages(&self) -> usize {
+        // SAFETY: `sysconf` has no preconditions.
+        let os_page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let mut vec = vec![0u8; ALLOC_SIZE / os_page];
+        self.released_pages
+            .iter()
+            .filter(|page| {
+                // SAFETY: `page` is an `ALLOC_SIZE`-sized block of the arena
+                // mapping and `vec` holds one byte per OS page of it.
+                let rc = unsafe {
+                    libc::mincore(page.as_ptr() as _, ALLOC_SIZE, vec.as_mut_ptr() as _)
+                };
+                rc == 0 && vec.iter().any(|b| b & 1 != 0)
+            })
+            .count()
     }
 
     /// Object slots the in-service pages hold in total.
@@ -1270,7 +1329,7 @@ impl<T: GCBox> Allocator<T> {
             // Allocate new page.
             self.used_in_current = 1;
             self.pages.push(self.current_page);
-            self.current_page = match self.free_pages.pop_front() {
+            self.current_page = match self.take_free_page() {
                 Some(page) => page,
                 None => {
                     self.total_allocated_pages += 1;
@@ -1894,6 +1953,36 @@ impl<T: GCBox> Allocator<T> {
                 }
             }
         }
+        self.release_excess_free_pages();
+    }
+
+    /// The salvaged pages kept resident: see [`FREE_PAGE_RESERVE_FRACTION`].
+    fn free_page_reserve(&self) -> usize {
+        (self.page_count() / FREE_PAGE_RESERVE_FRACTION).max(FREE_PAGE_RESERVE_MIN)
+    }
+
+    /// Hand every salvaged page beyond the reserve back to the OS. The
+    /// pages stay in the arena (on `released_pages`) and come back into
+    /// service after the resident ones are used up.
+    fn release_excess_free_pages(&mut self) {
+        let reserve = self.free_page_reserve();
+        while self.free_pages.len() > reserve {
+            let page = self.free_pages.pop_back().unwrap();
+            release_page(page);
+            self.released_pages.push_back(page);
+            self.total_released_pages += 1;
+        }
+    }
+
+    /// A salvaged page for reuse: a resident one first, else one that was
+    /// released to the OS (its memory is reclaimed on the way).
+    fn take_free_page(&mut self) -> Option<PageRef<T>> {
+        if let Some(page) = self.free_pages.pop_front() {
+            return Some(page);
+        }
+        let page = self.released_pages.pop_front()?;
+        reclaim_page(page);
+        Some(page)
     }
 
     ///
@@ -2107,6 +2196,50 @@ impl<T: GCBox> Allocator<T> {
             self.free_list_count, self.allocated, self.used_in_current
         );
     }*/
+}
+
+/// Hand a whole, all-dead page back to the OS while keeping its address
+/// range in the arena. Linux drops the pages outright (`MADV_DONTNEED`:
+/// RSS falls now, a later touch faults in zero pages); macOS is told they
+/// are reusable (`MADV_FREE_REUSABLE`, the form whose accounting also
+/// lowers RSS immediately). Other platforms keep the page resident. The
+/// page is a whole `ALLOC_SIZE`-aligned block, so the advice covers
+/// exactly its cells and bitmaps.
+fn release_page<T>(page: PageRef<T>) {
+    #[cfg(target_os = "linux")]
+    let advice = libc::MADV_DONTNEED;
+    #[cfg(target_os = "macos")]
+    let advice = libc::MADV_FREE_REUSABLE;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = page;
+        return;
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    // SAFETY: `page` is an `ALLOC_SIZE`-aligned, `ALLOC_SIZE`-sized block
+    // of the arena mapping that no live object references (every cell was
+    // dropped by `drop_inner_cells` and none is on the free list).
+    // Advice failing only means the memory stays resident.
+    unsafe {
+        let _ = libc::madvise(page.as_ptr() as *mut libc::c_void, ALLOC_SIZE, advice);
+    }
+}
+
+/// The counterpart of [`release_page`] when a released page re-enters
+/// service. Linux needs nothing (the first touch faults the pages back
+/// in); macOS wants `MADV_FREE_REUSE` so its accounting counts them again.
+fn reclaim_page<T>(page: PageRef<T>) {
+    #[cfg(target_os = "macos")]
+    // SAFETY: as in `release_page`; the page is about to be re-initialised.
+    unsafe {
+        let _ = libc::madvise(
+            page.as_ptr() as *mut libc::c_void,
+            ALLOC_SIZE,
+            libc::MADV_FREE_REUSE,
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = page;
 }
 
 ///
