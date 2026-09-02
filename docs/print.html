@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6529cd81.js";
+            window.path_to_searchindex_js = "searchindex-6d284e1b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-ad91b9ad.js"></script>
@@ -13030,6 +13030,15 @@ fails:IO.select returns the pipe read end in read set if the pipe write end is c
 側へ配置して mspec に読ませる。ローカル検証では symlink で同じ配線を再現する。</p>
 <pre><code class="language-sh">ln -sfn /path/to/monoruby/spec/tags /path/to/spec/tags
 </code></pre>
+<p>なお、monoruby リポジトリ側の <code>spec/default.mspec</code> は別物で、setup action
+（<code>rubyspec: "true"</code>）が rubyspec-stats のワークスペース直下 <code>spec/</code> に
+コピーする設定ファイル。<code>tags_patterns</code> は設定しない（mspec 組み込みの
+<code>spec/tags/ruby/...</code> 解決のまま）。中身は example トレースのみ: 各 example の
+description を実行直前に stderr へ出す。mspec 自身の <code>--timeout</code> は対象
+プロセス内の監視スレッドなので、メインスレッドがカーネル内（<code>waitpid</code> 等）で
+ブロックすると monoruby では発火せず、外側の <code>timeout(1)</code> に kill されて
+結果ファイルが空になる。トレースがあれば CI ログの最後の description が
+ハングした example であり、そのままタグに書ける。</p>
 <h2 id="bisect-手法ローカル"><a class="header" href="#bisect-手法ローカル">bisect 手法（ローカル）</a></h2>
 <p>CI には “Bisect monoruby core hang” ワークフローがあるが、監査全体は
 現 master バイナリ・sibling の <code>spec/</code>・<code>mspec/</code> チェックアウト・timeout が
