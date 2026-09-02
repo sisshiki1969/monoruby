@@ -139,15 +139,6 @@ impl MatchDataInner {
         self
     }
 
-    pub fn from_capture_snap(
-        captures: Captures,
-        heystack: &str,
-        resolved: Option<(Value, usize)>,
-        regex: Regexp,
-    ) -> Self {
-        Self::from_captures_snap(&captures, heystack, resolved).with_regex(regex)
-    }
-
     pub fn regexp(&self) -> Option<Regexp> {
         self.regex
     }

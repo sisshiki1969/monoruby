@@ -1411,20 +1411,13 @@ impl RegexpInner {
                 // (with the Regexp attached through the stash above), and
                 // that object *is* the result — `str.match(re).equal?($~)`
                 // holds in CRuby — so hand it back rather than building
-                // a second MatchData with a second haystack view. The
-                // fallback only covers a frame with no svar container.
-                let match_data = match vm.current_match_data() {
-                    Some(md) => md,
-                    None => {
-                        let md = MatchDataInner::from_capture_snap(
-                            captures,
-                            given,
-                            vm.resolve_haystack(given),
-                            re,
-                        );
-                        RValue::new_match_data_from_inner(md).pack()
-                    }
-                };
+                // a second MatchData with a second haystack view. A
+                // builtin always runs inside a Ruby frame, so the svar
+                // container the save went to exists.
+                let _ = captures;
+                let match_data = vm
+                    .current_match_data()
+                    .expect("`$~` was saved by captures_from_pos");
                 if let Some(bh) = block {
                     vm.invoke_block_once(globals, bh, &[match_data])
                 } else {

@@ -1216,21 +1216,11 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         // the Regexp attached through the stash above), and that object
         // *is* the result — `regexp.match(s).equal?($~)` holds in CRuby
         // — so hand it back rather than building a second MatchData
-        // with a second haystack view. The fallback only covers a
-        // frame with no svar container.
-        match vm.current_match_data() {
-            Some(md) => md,
-            None => {
-                let md = Value::new_matchdata_snap(
-                    captures,
-                    heystack,
-                    vm.resolve_haystack(heystack),
-                    regex,
-                );
-                vm.set_backref(md);
-                md
-            }
-        }
+        // with a second haystack view. A builtin always runs inside a
+        // Ruby frame, so the svar container the save went to exists.
+        let _ = captures;
+        vm.current_match_data()
+            .expect("`$~` was saved by captures_from_pos")
     } else {
         Value::nil()
     };
