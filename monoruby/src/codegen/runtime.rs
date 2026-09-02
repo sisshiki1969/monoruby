@@ -932,7 +932,7 @@ fn concatenate_string_inner(
     arg: *mut Value,
     len: usize,
 ) -> Result<Value> {
-    use crate::value::rvalue::{CodeRange, Encoding, RStringInner};
+    use crate::value::rvalue::{CodeRange, Encoding, RStringInner, StringBuf};
     // Build the result as raw bytes so invalid byte sequences in any
     // operand survive interpolation (going through a Rust `String`
     // would silently rewrite them as U+FFFD via `from_utf8_lossy`).
@@ -954,53 +954,58 @@ fn concatenate_string_inner(
     // negotiation concatenate to a well-formed whole, since the
     // non-winning encoding's bytes are 7-bit (`Encoding::compatible`
     // admits nothing else).
-    let mut bytes: Vec<u8> = Vec::new();
+    //
+    // The bytes go straight into the String's own buffer, sized up
+    // front from the operands that are already Strings (the literal
+    // fragments and most interpolated values): a short result is
+    // assembled inline and never touches the heap, a long one gets
+    // its one allocation here and is adopted as-is at the end. An
+    // Integer operand is formatted into the buffer directly — it is
+    // the most common non-String operand, and going through `to_s`
+    // meant allocating a heap String only to copy it out again.
+    let refined = vm.to_s_is_refined(globals);
+    let mut estimate = 0;
+    for i in 0..len {
+        // SAFETY: `arg` points at operand 0 of `len` operand `Value`s
+        // laid out downward.
+        let v = unsafe { *arg.sub(i) };
+        estimate += match v.is_rstring_inner() {
+            Some(s) => s.len(),
+            None => 8,
+        };
+    }
+    let mut bytes = StringBuf::with_capacity(estimate);
     let mut enc: Option<Encoding> = None;
     let mut cr = CodeRange::SevenBit; // classify("") — the fold identity
+    let mut digits = [0u8; 20];
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
+        if !refined {
+            if let Some(n) = v.try_fixnum() {
+                let piece = format_i64(&mut digits, n);
+                append_piece(
+                    globals,
+                    &mut bytes,
+                    &mut enc,
+                    &mut cr,
+                    piece,
+                    Encoding::Utf8,
+                    CodeRange::SevenBit,
+                )?;
+                continue;
+            }
+        }
         let s_val = vm.invoke_tos(globals, v)?;
         if let Some(inner) = s_val.is_rstring_inner() {
-            let piece_enc = inner.encoding();
-            enc = Some(match enc {
-                None => piece_enc,
-                Some(prev) if prev == piece_enc => prev,
-                Some(prev) => {
-                    // Replicates `RStringInner::compatible_encoding`
-                    // with the accumulated side's tracked state.
-                    let piece_cr = inner.code_range();
-                    let accum_empty = bytes.is_empty();
-                    let piece_empty = inner.is_empty();
-                    let negotiated = if accum_empty && piece_empty {
-                        Some(prev)
-                    } else if accum_empty {
-                        if prev.is_ascii_compatible() && piece_cr == CodeRange::SevenBit {
-                            Some(prev)
-                        } else {
-                            Some(piece_enc)
-                        }
-                    } else if piece_empty {
-                        Some(prev)
-                    } else {
-                        if cr == CodeRange::Unknown {
-                            cr = prev.classify(&bytes);
-                        }
-                        Encoding::compatible(prev, cr, piece_enc, piece_cr)
-                    };
-                    negotiated.ok_or_else(|| {
-                        MonorubyErr::incompatible_encoding(&globals.store, prev, piece_enc)
-                    })?
-                }
-            });
-            cr = match (cr, inner.code_range()) {
-                (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
-                (
-                    CodeRange::SevenBit | CodeRange::Valid,
-                    CodeRange::SevenBit | CodeRange::Valid,
-                ) => CodeRange::Valid,
-                _ => CodeRange::Unknown,
-            };
-            bytes.extend_from_slice(inner.as_bytes());
+            append_piece(
+                globals,
+                &mut bytes,
+                &mut enc,
+                &mut cr,
+                inner.as_bytes(),
+                inner.encoding(),
+                inner.code_range(),
+            )?;
         } else {
             // `invoke_tos` returns the user-defined `to_s` result
             // verbatim for `RV::Object` receivers, so this branch is
@@ -1022,11 +1027,84 @@ fn concatenate_string_inner(
             bytes.extend_from_slice(s.as_bytes());
         }
     }
-    Ok(Value::string_from_inner(RStringInner::from_vec_cr(
+    Ok(Value::string_from_inner(RStringInner::from_buf_cr(
         bytes,
         enc.unwrap_or(Encoding::Utf8),
         cr,
     )))
+}
+
+/// Append one interpolation operand to the growing buffer, negotiating
+/// the accumulated `(enc, cr)` with the piece's under CRuby's
+/// `compatible_encoding` rules (see `concatenate_string_inner`).
+fn append_piece(
+    globals: &Globals,
+    bytes: &mut crate::value::rvalue::StringBuf,
+    enc: &mut Option<crate::value::rvalue::Encoding>,
+    cr: &mut crate::value::rvalue::CodeRange,
+    piece: &[u8],
+    piece_enc: crate::value::rvalue::Encoding,
+    piece_cr: crate::value::rvalue::CodeRange,
+) -> Result<()> {
+    use crate::value::rvalue::{CodeRange, Encoding};
+    *enc = Some(match *enc {
+        None => piece_enc,
+        Some(prev) if prev == piece_enc => prev,
+        Some(prev) => {
+            // Replicates `RStringInner::compatible_encoding` with the
+            // accumulated side's tracked state.
+            let accum_empty = bytes.is_empty();
+            let piece_empty = piece.is_empty();
+            let negotiated = if accum_empty && piece_empty {
+                Some(prev)
+            } else if accum_empty {
+                if prev.is_ascii_compatible() && piece_cr == CodeRange::SevenBit {
+                    Some(prev)
+                } else {
+                    Some(piece_enc)
+                }
+            } else if piece_empty {
+                Some(prev)
+            } else {
+                if *cr == CodeRange::Unknown {
+                    *cr = prev.classify(bytes);
+                }
+                Encoding::compatible(prev, *cr, piece_enc, piece_cr)
+            };
+            negotiated
+                .ok_or_else(|| MonorubyErr::incompatible_encoding(&globals.store, prev, piece_enc))?
+        }
+    });
+    *cr = match (*cr, piece_cr) {
+        (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
+        (
+            CodeRange::SevenBit | CodeRange::Valid,
+            CodeRange::SevenBit | CodeRange::Valid,
+        ) => CodeRange::Valid,
+        _ => CodeRange::Unknown,
+    };
+    bytes.extend_from_slice(piece);
+    Ok(())
+}
+
+/// The decimal digits of `n` (with a leading `-` when negative) written
+/// into the tail of `buf`; the same text as `Integer#to_s`.
+fn format_i64(buf: &mut [u8; 20], n: i64) -> &[u8] {
+    let mut pos = buf.len();
+    let mut m = n.unsigned_abs();
+    loop {
+        pos -= 1;
+        buf[pos] = b'0' + (m % 10) as u8;
+        m /= 10;
+        if m == 0 {
+            break;
+        }
+    }
+    if n < 0 {
+        pos -= 1;
+        buf[pos] = b'-';
+    }
+    &buf[pos..]
 }
 
 pub(super) extern "C" fn concatenate_regexp(
@@ -2708,4 +2786,29 @@ pub extern "C" fn _check_stack(vm: &mut Executor, globals: &mut Globals) -> bool
         }
     }
     invalid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_i64;
+
+    #[test]
+    fn format_i64_matches_to_string() {
+        let mut buf = [0u8; 20];
+        for n in [
+            0,
+            1,
+            -1,
+            9,
+            10,
+            -10,
+            42,
+            -4611686018427387904,
+            4611686018427387903,
+            i64::MAX,
+            i64::MIN,
+        ] {
+            assert_eq!(format_i64(&mut buf, n), n.to_string().as_bytes(), "{n}");
+        }
+    }
 }

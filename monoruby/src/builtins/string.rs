@@ -12055,6 +12055,38 @@ mod tests {
     }
 
     #[test]
+    fn string_interpolation_formats_integers_in_place() {
+        // A Fixnum operand is written into the result buffer directly
+        // (no intermediate `to_s` String); the text must be exactly
+        // `Integer#to_s`, and the result's encoding / code range must
+        // negotiate as a 7-bit piece would.
+        run_tests(&[
+            r##"i = 0; ["#{i}", "#{-1}", "#{42}", "#{-9007199254740993}"]"##,
+            r##"a = 2**62 - 1; b = -(2**62); c = 2**62; d = -(2**62) - 1; ["#{a}", "#{b}", "#{c}", "#{d}", "#{2**80}", "#{-(2**80)}"]"##,
+            r##"s = "n#{1}#{22}#{333}"; [s, s.encoding.name, s.ascii_only?, s.valid_encoding?, s.frozen?]"##,
+            r##"s = "あ#{1}い#{-2}う"; [s, s.encoding.name, s.ascii_only?, s.valid_encoding?, s.length]"##,
+            r##"s = "v#{1.5}#{nil}#{true}#{:sym}#{2}"; [s, s.encoding.name]"##,
+            // Results longer than the inline buffer.
+            r##"s = "#{"x" * 30}#{123456789}#{"y" * 30}"; [s.bytesize, s.ascii_only?, s.valid_encoding?, s[28, 14]]"##,
+            r##"x = "\xff".b; s = "#{x}#{7}"; [s.bytes, s.encoding.name, s.ascii_only?]"##,
+            r##"e = "abc".encode("UTF-16LE"); s = "#{e}"; [s.encoding.name, s.bytesize]"##,
+        ]);
+        // A refined `Integer#to_s` still wins over the in-place path.
+        run_test(
+            r##"
+            module IntTos
+              refine Integer do
+                def to_s; "<int>"; end
+              end
+            end
+            using IntTos
+            i = 5
+            ["#{i}", "#{-1}#{i}", "#{2**70}"]
+            "##,
+        );
+    }
+
+    #[test]
     fn string_interpolation_falls_back_when_to_s_returns_non_string() {
         // Exercises `concatenate_string_inner`'s else branch:
         // `invoke_tos` returns the user-defined `to_s` result

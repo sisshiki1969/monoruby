@@ -2059,7 +2059,15 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 
     let mut visited: HashSet<u64> = HashSet::default();
     visited.insert(ary.id());
-    let mut result: Vec<u8> = Vec::new();
+    // Size the buffer from the elements that are already Strings (the
+    // common case is all of them) plus the separators, so the join
+    // allocates once instead of growing by doubling.
+    let estimate = ary
+        .iter()
+        .map(|v| v.is_rstring_inner().map_or(8, |s| s.len()))
+        .sum::<usize>()
+        + sep_bytes.len() * ary.len().saturating_sub(1);
+    let mut result: Vec<u8> = Vec::with_capacity(estimate);
     // `None` means "nothing appended yet"; the first emitted
     // fragment seeds the running encoding (CRuby's left-wins
     // rule on 7-bit content).
@@ -2075,9 +2083,11 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         &mut result,
         &mut state,
     )?;
-    let final_enc = state.map(|(e, _)| e).unwrap_or(Encoding::UsAscii);
-    // Eager-classify so the join's result has its cr cached.
-    let inner = RStringInner::from_encoding_scanned(&result, final_enc);
+    // The running state carries the result's code range (the fold in
+    // `merge_join_state`), so the buffer is adopted as-is: no copy and
+    // no re-scan of the bytes just written.
+    let (final_enc, final_cr) = state.unwrap_or((Encoding::UsAscii, CodeRange::SevenBit));
+    let inner = RStringInner::from_vec_cr(result, final_enc, final_cr);
     Ok(Value::string_from_inner(inner))
 }
 
@@ -2112,14 +2122,20 @@ fn merge_join_state(
         None => return Some((other_enc, other_cr)),
     };
     let combined_enc = Encoding::compatible(cur_enc, cur_cr, other_enc, other_cr)?;
-    // Combined code range is the "max" of the two: SevenBit
-    // (both clean) < Valid (at least one carried real characters)
-    // < Broken / Unknown.
+    // The result's code range is the fold `concatenate_string_inner`
+    // uses: two well-formed sides stay well-formed, and anything
+    // involving a broken or unclassified side is left for a later scan
+    // — a broken piece can complete an earlier broken one (`"\xE3"` +
+    // `"\x81\x82"` joins to a valid `"あ"`), so `Broken` must not be
+    // recorded as final. `Encoding::compatible` only asks whether a side
+    // is 7-bit, so the negotiation sees no difference.
     let combined_cr = match (cur_cr, other_cr) {
         (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
-        (CodeRange::Broken, _) | (_, CodeRange::Broken) => CodeRange::Broken,
-        (CodeRange::Unknown, _) | (_, CodeRange::Unknown) => CodeRange::Unknown,
-        _ => CodeRange::Valid,
+        (
+            CodeRange::SevenBit | CodeRange::Valid,
+            CodeRange::SevenBit | CodeRange::Valid,
+        ) => CodeRange::Valid,
+        _ => CodeRange::Unknown,
     };
     Some((combined_enc, combined_cr))
 }
@@ -7642,6 +7658,28 @@ mod tests {
             r#"[C.new].join("-")"#,
             r#"class C; def to_ary; [1, 2]; end; end"#,
         );
+    }
+
+    #[test]
+    fn join_result_code_range_is_trusted() {
+        // The join adopts its buffer with the code range it tracked
+        // while appending, instead of re-scanning the result, so the
+        // tracked value has to be right — in particular a broken piece
+        // completed by the next one must be re-classified, not recorded
+        // as broken.
+        run_tests(&[
+            r#"a = ["\xE3".b.force_encoding("UTF-8"), "\x81\x82".b.force_encoding("UTF-8")]; j = a.join; [j.valid_encoding?, j.ascii_only?, j == "あ", j.encoding.name]"#,
+            r#"a = ["a", "\xE3".b.force_encoding("UTF-8"), "\x81\x82".b.force_encoding("UTF-8"), "b"]; j = a.join("-"); [j.valid_encoding?, j.ascii_only?, j.bytes]"#,
+            r#"j = ["abc", "あ", "def"].join; [j.valid_encoding?, j.ascii_only?, j.encoding.name, j.length]"#,
+            r#"j = ["abc", "def"].join(", "); [j.valid_encoding?, j.ascii_only?, j.encoding.name]"#,
+            r#"j = ["abc", "\xff".b.force_encoding("UTF-8")].join; [j.valid_encoding?, j.ascii_only?]"#,
+            r#"j = ["abc", "\xff".b].join; [j.valid_encoding?, j.ascii_only?, j.encoding.name]"#,
+            // Non-String elements (the size estimate is only a guess
+            // for these) and results longer than the inline buffer.
+            r#"j = [1, :sym, nil, 2.5, "x" * 40, [3, [4]]].join("/"); [j, j.bytesize, j.valid_encoding?, j.ascii_only?]"#,
+            r#"j = (["あいう"] * 20).join("、"); [j.bytesize, j.length, j.valid_encoding?, j.ascii_only?]"#,
+            r#"j = ["x"].join("あ"); [j, j.ascii_only?, j.encoding.name]"#,
+        ]);
     }
 
     #[test]

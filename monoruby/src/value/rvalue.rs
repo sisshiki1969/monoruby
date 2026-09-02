@@ -37,8 +37,8 @@ pub use string::{
     STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, map_bytes_to_utf8,
 };
 pub(crate) use string::{
-    STRING_SHARED_TAG, check_string_not_modified, share_string_buffer, string_snapshot,
-    string_substring,
+    STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer,
+    string_snapshot, string_substring,
 };
 pub(crate) use string::{eucjp_char_width, named_byte_const_name, sjis_char_width};
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};

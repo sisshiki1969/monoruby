@@ -573,6 +573,7 @@
 2a331dfdc06006cb6c2d9fb1b276af51	[false, false, true, true, true, true]	[Kernel.private_instance_methods(false).include?(:chop),\n          
 2a3de9772e2bbde8e6d892268ebbd6b6	:m	[1, 2].each.with_object(:m) { |v, m| }
 2a5869ecfcebdbb2da9022b23ccf267d	["constant", true, [:C]]	$res = []\n        parent = Class.new do\n          def self.inherited(su
+2a5b9f708b06a2c9976d7328b5e29c89	["<int>", "<int><int>", "<int>"]	module IntTos\n              refine Integer do\n                def t
 2a5cd0c05a4c867471eb9bdcd900f0a1	[[4, 5, 6], 8]	r = []\n        calls = 0\n        10.times { |i| r << i if (calls += 1; 
 2a7ebdf4fd301bbdfa3591753316bc4d	:OVERRIDDEN	class Float; def >=(o); :OVERRIDDEN; end; end; 3.0 >= 4.0
 2a9067ffb78152f7b45306f4f629c67a	[1, 2, 3, 4, [5, 6]]	def f(x,y,a=42,b=55,*z,c,d)\n            [x,y,a,b,z]\n        end\n       
