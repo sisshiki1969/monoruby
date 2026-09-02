@@ -1,0 +1,5 @@
+critical(hangs):Process.fork returns status zero
+critical(hangs):Process.fork returns status non-zero
+critical(hangs):Process.fork returns nil for the child process
+critical(hangs):Process.fork runs a block in a child process
+critical(hangs):Process.fork marks threads from the parent as killed
