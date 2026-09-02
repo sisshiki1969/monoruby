@@ -137,15 +137,26 @@ module Psych
       i
     end
 
-    def parse_value(parent_indent)
+    # `seq_at_parent` is set by a mapping whose key carried no inline
+    # value: YAML's compact form lets the block sequence that is the
+    # value sit at the key's own indentation (`x:\n- 1\n- 2`), so a
+    # sequence entry there is the value, not the end of the node. A
+    # sequence item never passes it — a same-indent `- ` after an empty
+    # item is the next sibling.
+    def parse_value(parent_indent, seq_at_parent = false)
       skip_blanks_and_comments
       line = current_line
       return nil if line.nil?
 
       ind = indent_of(line)
-      return nil if parent_indent >= 0 && ind <= parent_indent
-
       stripped = line.strip
+      if parent_indent >= 0 && ind <= parent_indent
+        if seq_at_parent && ind == parent_indent &&
+           (stripped.start_with?("- ") || stripped == "-")
+          return parse_block_sequence(ind)
+        end
+        return nil
+      end
 
       if stripped.start_with?("- ")
         return parse_block_sequence(ind)
@@ -257,8 +268,9 @@ module Psych
 
         if rest.nil? || rest.empty? || rest.start_with?("#")
           # `key: # comment` carries no inline value; the value is on
-          # the following indented line(s).
-          value = parse_value(ind)
+          # the following indented line(s) — or a block sequence at the
+          # key's own indentation (`seq_at_parent`).
+          value = parse_value(ind, true)
         elsif rest.start_with?("*")
           alias_name = rest[1..-1].strip
           value = @anchors[alias_name]
@@ -267,7 +279,7 @@ module Psych
             val_anchor = $1
             val_rest = $2
             if val_rest.empty?
-              value = parse_value(ind)
+              value = parse_value(ind, true)
             else
               value = resolve_scalar(val_rest)
             end
@@ -341,23 +353,30 @@ module Psych
             value = resolve_scalar(rest)
           end
           @anchors[anchor] = value
-        elsif after_dash =~ /\A\s+(.*)/
-          item_text = $1
-          if block_mapping_line?("  " * (ind + 2) + item_text)
-            inner_indent = ind + 2
-            fake_line = " " * inner_indent + item_text
-            @lines[@pos] = fake_line
-            value = parse_block_mapping(inner_indent)
-          elsif item_text.start_with?("- ")
-            @pos += 1
-            inner_arr = [resolve_scalar(item_text[2..-1].strip)]
-            value = inner_arr
-          elsif item_text.start_with?("{")
+        elsif after_dash =~ /\A(\s+)(.*)/
+          item_text = $2
+          # The item's own indentation is where its text starts: past the
+          # dash and the whitespace run (`-  a: 1` puts `a` at column
+          # ind + 3). Continuation lines of a nested node align to it.
+          inner_indent = ind + 1 + $1.size
+          # Flow collections first: `- {a: 1}` contains a `: ` and would
+          # otherwise be taken for a block mapping with the key `{a`.
+          if item_text.start_with?("{")
             @pos += 1
             value = parse_flow_mapping(item_text)
           elsif item_text.start_with?("[")
             @pos += 1
             value = parse_flow_sequence(item_text)
+          elsif block_mapping_line?(" " * inner_indent + item_text)
+            fake_line = " " * inner_indent + item_text
+            @lines[@pos] = fake_line
+            value = parse_block_mapping(inner_indent)
+          elsif item_text.start_with?("- ") || item_text == "-"
+            # A nested sequence opened on the dash line (`- - a`): reparse
+            # the line as its first entry at the inner indentation.
+            fake_line = " " * inner_indent + item_text
+            @lines[@pos] = fake_line
+            value = parse_block_sequence(inner_indent)
           else
             @pos += 1
             value = resolve_scalar(item_text)
