@@ -478,6 +478,7 @@
 23eb3686dbbed3c698cd040745ddc710	["elefant", nil]	S = Struct.new(:name, :legs, keyword_init: true)\n            \n\n    
 23f3838afb92bd57e15d229dd0d1deb0	"method"	defined?(__ENCODING__.name)
 23fb14c94b631d93c9694feb48994552	[RuntimeError, true]	class BlockRaiser\n              def self.raise_in_thread(*args, &bl
+23fb7df204a374180f0628ebb762f0dd	[[:deprecated, :experimental, :performance, :strict_unused_block], false, true, false, false, true, true, nil, false, false, false, true]	res = []\n            res << Warning.categories\n            res << W
 24196e0cebd247d987469fb63b77ec33	:OVERRIDDEN	class Complex; def *(o); :OVERRIDDEN; end; end; Complex(1,2) * Complex(3,4)
 245e848f69575fb36810ea7f6796973c	TypeError	(GC.stat(7) rescue $!.class)
 246af9040a3d2f43e9ddf823ee30471c	true	(0x8000_0000_0000_0000 + 39) > (0x8000_0000_0000_0000 + 39 + 0.0)
@@ -2612,6 +2613,7 @@ c8799d1336ebc55a682946bdf05acb08	"world"	"hello world" =~ /world/\n            a
 c88b8c3752c39d8970e218b314f54141	:OVERRIDDEN	class Integer; def **(o); :OVERRIDDEN; end; end; 3 ** 4
 c88d879be35ce530404a7d7d86ef3e35	"<STDERR>"	$stderr.path
 c8bab73ede7ee43432582e134e2a3b5a	["FrozenError"]	def fapp(s)\n          s << "x"\n        end\n        r = []\n        25.ti
+c8bce95deb43e8ab5ca7f3a0947ee77a	[true, false]	require "stringio"\n            out = []\n            [true, false].e
 c8bf8011aa78146fd38ed4085528fb94	"EUC-JP"	Marshal.load(Marshal.dump("a".encode("EUC-JP"))).encoding.to_s
 c8c5061b79a576ee1e2ea779548f7e63	[[], [nil, nil, nil], [:x, :x, :x], [0, 2, 4], "negative array size", "wrong number of arguments (given 3, expected 0..2)", ["MyA", [:z, :z], false]]	class MyA < Array\n              def self.allocate; $called = true; 
 c8e2a671d745fa2d9c8ee6d19996e1d2	0	123456789123456789123456789123456789123456789[..-3]
