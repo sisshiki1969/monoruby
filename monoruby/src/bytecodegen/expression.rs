@@ -1828,6 +1828,32 @@ impl<'a> BytecodeGen<'a> {
         loc: Loc,
     ) -> Result<()> {
         self.warn_duplicated_hash_keys(&nodes, &splat);
+        if splat.is_empty()
+            && !nodes.is_empty()
+            && nodes
+                .iter()
+                .all(|(k, v)| self.is_static_hash_key(k) && self.is_static_hash_value(v))
+        {
+            // A constant literal — every key an immediate or a String
+            // (which a Hash freezes anyway) and every value immutable —
+            // is built once, here, and copied per evaluation by the
+            // `Literal` dispatch (`RValue::deep_copy` clones the table
+            // and shares the keys and values), instead of being
+            // re-inserted pair by pair each time: CRuby's `duphash`.
+            // A String value only counts under `frozen_string_literal`,
+            // where it is the same frozen object on every evaluation;
+            // otherwise each evaluation owes a fresh copy of it.
+            let enc = self.source_encoding();
+            let pairs: Vec<(Value, Value)> = nodes
+                .iter()
+                .map(|(k, v)| (self.static_hash_key(k, enc), self.static_hash_value(v, enc)))
+                .collect();
+            let template = Value::hash_from_inner(
+                crate::value::rvalue::HashmapInner::from_literal_pairs(&pairs),
+            );
+            self.emit_literal(ret, template);
+            return Ok(());
+        }
         if splat.is_empty() {
             if nodes.len() <= LITERAL_CHUNK_LEN {
                 let len = nodes.len();
@@ -1944,6 +1970,67 @@ impl<'a> BytecodeGen<'a> {
             remaining -= take;
         }
         Ok(())
+    }
+
+    /// Whether `node` is a key a constant Hash literal can hold: an
+    /// immediate (a Fixnum, a flonum, a Symbol, nil, true, false) or a
+    /// String literal. Both digest and compare without running Ruby
+    /// code, which is what lets the template be built at emission time
+    /// (`HashmapInner::from_literal_pairs`). A Bignum or a heap Float
+    /// is a heap key and takes the general path.
+    fn is_static_hash_key(&self, node: &Node) -> bool {
+        match &node.kind {
+            NodeKind::Integer(i) => Immediate::check_fixnum(*i).is_some(),
+            NodeKind::Float(f) => Immediate::flonum(*f).is_some(),
+            NodeKind::Symbol(_) | NodeKind::Nil | NodeKind::Bool(_) => true,
+            NodeKind::String(_) | NodeKind::Bytes(_) | NodeKind::EncodedString(..) => true,
+            _ => false,
+        }
+    }
+
+    /// Whether `node` is a value a constant Hash literal can share
+    /// between evaluations: any immutable literal, and a String literal
+    /// only under `frozen_string_literal` (a mutable String literal is a
+    /// fresh copy per evaluation).
+    fn is_static_hash_value(&self, node: &Node) -> bool {
+        match &node.kind {
+            NodeKind::Integer(_)
+            | NodeKind::Bignum(_)
+            | NodeKind::Float(_)
+            | NodeKind::Symbol(_)
+            | NodeKind::Nil
+            | NodeKind::Bool(_) => true,
+            NodeKind::String(_) | NodeKind::Bytes(_) | NodeKind::EncodedString(..) => {
+                self.frozen_string_literal()
+            }
+            _ => false,
+        }
+    }
+
+    /// The key `Value` of a static pair: a String key is the interned
+    /// frozen string, the same object on every evaluation (CRuby's
+    /// `fstring` for a literal key).
+    fn static_hash_key(&mut self, node: &Node, enc: crate::value::Encoding) -> Value {
+        match &node.kind {
+            NodeKind::String(s) => self.store.intern_frozen_str(s.as_bytes(), enc),
+            NodeKind::Bytes(b) => self.store.intern_frozen_str(b, enc),
+            NodeKind::EncodedString(b, name) => {
+                let enc = crate::value::Encoding::try_from_str(name)
+                    .unwrap_or(crate::value::Encoding::Utf8);
+                self.store.intern_frozen_str(b, enc)
+            }
+            _ => Value::from_const_ast(node, enc),
+        }
+    }
+
+    /// The value `Value` of a static pair (see `is_static_hash_value`).
+    fn static_hash_value(&mut self, node: &Node, enc: crate::value::Encoding) -> Value {
+        match &node.kind {
+            NodeKind::String(_) | NodeKind::Bytes(_) | NodeKind::EncodedString(..) => {
+                self.static_hash_key(node, enc)
+            }
+            _ => Value::from_const_ast(node, enc),
+        }
     }
 
     ///

@@ -354,6 +354,7 @@
 19c3117422e24db6dd0e39d531d1f3f5	[true, true, true, false, false]	class C\n            include Comparable\n            attr_accessor :x\n 
 19f37cc8342f248bcc7ea2bff3525fb8	true	def f; caller_locations(1, 1)[0].lineno.is_a?(Integer); end\n       
 1a0f14b93dbac347cd85f619ff9eb079	1	count = Module.constants.size\n            module ModConstSpec1; end
+1a37ac01757c7cd301967989601e5c9b	[{"k" => "v!"}, {"k" => "v"}, false, false, [{"k" => "v", s: "w"}, true, true, false, false, true]]	def m; {"k" => "v"}; end\n            a = m; a["k"] << "!"\n         
 1a3da0f2d5820c3da4a22ebe3d606273	[nil, 0]	h = Hash.new(99)\n            h[:a] = 1\n            r = h.except(:a)
 1a561eac221bbb35c7021303bd9f4066	["DEFAULT", true, nil, "SYSTEM_DEFAULT"]	Signal.trap("USR2", "DEFAULT")\n            h = ->{}\n            a =
 1a67742c8115d3d19f33ca885e738ec5	[4, false, :from_block, :lam, 99]	res = []\n        class Y\n          def self.define_deep(&blk)\n         
@@ -839,6 +840,7 @@
 417394f1be1fb3cb921d2758ca5edc19	nil	defined?($there_is_no_such_global_xxxxx)\n            
 419d77b6e939231fdafd53d3c6c6ea9d	[1, 2, 42, 55, []]	def f(x,y,a=42,b=55,*z)\n            [x,y,a,b,z]\n        end\n        \n\n 
 419ee2f4a5f8c62a9f32d72169a9b695	[true, 100, 91, 97, 112]	[\n              Errno::ENETDOWN.ancestors.include?(SystemCallError)
+41ddfa3d947230443c7eb469c3269928	[{a: 3, "s" => 4, 1 => 6}, 3, [:a, "s", 1]]	def d; {a: 1, "s" => 2, a: 3, "s" => 4, 1 => 5, 1 => 6}; end\n      
 4201651c81088820aab64210097ab3f7	[2, "NoMethodError"]	r = Module.new do\n              refine Array do\n                ali
 420fd4ef995831a71e5964759ba88f3b	"ああabc"	"abc".rjust(5, "あ")
 421b2694d3c8d4c86d2dafb625fb56b3	["/no/such/path", nil]	m = Module.new do\n              autoload :Foo, "/no/such/path"\n    
@@ -899,6 +901,7 @@
 457f6a743618e9a691a1720e9d5b31b0	[1575.0276087749185, 6.073454154620117]	def call_block\n          yield\n        end\n        def f(n)\n          a
 4590827ce0f8f39bce38419577946094	[[1, true], [1, true], [1, true], [1, true], [1, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true]]	def row\n          res = []\n          x = 0\n          while x < 60\n     
 459af0ef6a434f9f83be184be79da2d5	[[:mm, :whatever, [], nil], [:mm, :whatever, [1, 2], nil], [:mm, :whatever, [], :from_block], [:mm, :whatever, [3], nil], [:mm, :whatever_str, [], nil]]	class MM\n          def method_missing(name, *args, &blk) = [:mm, name, 
+45b7692889f0f92f83f9e66cf62a1155	[{1 => 2, a: 3, z: 9}, {1 => 2, a: 3}, {"a" => 1, "b" => 2, "c" => 3}, {"a" => 1, "b" => 2}, 2, 2, false, false, true]	def g; {1 => 2, :a => 3}; end\n            def h; {"a" => 1, "b" => 
 45c219e430e29dc7ecd467638b65c70b	[true, true, true]	pid = spawn("true")\n            t = Process.detach(pid)\n           
 45c9b7ea3cba52cd428385897c67b953	[true, false, false, false, true, false, true, false, true, false]	S = Struct.new(:a, :b)\n        T = Struct.new(:a, :b)\n        \n\n       
 45ca7b6809a873de22eb68bc015aef5c	["abc", "abcd"]	s = +"abc"; t = s.dup; t << "d"; [s, t]
@@ -1384,6 +1387,7 @@
 6b4af7ca5b9a5430ebaa6f57763959e3	true	(1 << 53) == (1 << 53).to_f
 6b5c527a35a6e84b5f466edc5a765e96	:OVERRIDDEN	class Integer; def -(o); :OVERRIDDEN; end; end; 3 - 4
 6b5df255bb3d61a71b92a9142b777854	[[164, 162], "EUC-JP"]	m = /./e.match("\\244\\242".dup.force_encoding(Encoding::EUC_JP))\n               [
+6b6d860f8e456a8193747381c47a8d69	[{"dyn" => 1, 1180591620717411303424 => 2, Infinity => 3, "lit" => 4}, false, false, true, 4]	k = "dyn"\n            def n(k); {k => 1, 2**70 => 2, 1e300 * 1e10 =
 6b6dfbea494d895f88178ed4fd8780ed	[[nil], [[1, 2]]]	[Enumerator.new { |y| y.yield },\n                Enumerator.new { |y| y.yield 1,
 6b7c29f7108cc984781c81784cefb56d	"aa"	eval("/a+?*/").match("aa")[0]
 6b82ebaaa0df8e456b952c1649290d36	["INT-NE", "RAW-B", false, true, true, true, true]	class Integer; def !=(o); "INT-NE"; end; end\n        class CustomEqB; d
@@ -2846,6 +2850,7 @@ da6b246283b4f211581ca1d5eb140461	"a b\\n"	IO.popen(["echo", "a b"]) { |io| io.re
 daa7019f1dfb40422c47287a212b59ec	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]	class C\n          def foo; 1; end\n        end\n        res = []\n        
 dae52af79f68fd59e79d94c60e7c3a75	"US-ASCII"	s = "abc".dup.force_encoding("ASCII-8BIT")\n              s.unpack
 dae678c7230abbc68fd9e71f3ce16a0c	8400	class Target\n          def value_plus(n) = 2 + n\n        end\n        cl
+dae90ab3ae1aa4e8058cace910bd3a82	[40, 40, -1, 0, 39, ["k0", "k1", "k2"], 780]	def big; {"k0"=>0,"k1"=>1,"k2"=>2,"k3"=>3,"k4"=>4,"k5"=>5,"k6"=>6,"
 db00180168f82ac3f47a720c4c80a330	[]	[] | []
 db1d122ccf500fce3b16c8ab7548f6cf	"ab"	$/ = "cdef"; r = "abcdef".chomp; $/ = "\\n"; r
 db1e8e1f47867fdb41ead37f6e942df5	[42, 42, 42, 42, 42, 42, 42, 42, 84, 84, 84]	class A\n              attr_accessor :w\n            end\n            
@@ -2915,6 +2920,7 @@ e04102db31563efacf03513f5ddbcdd6	{"MONORUBY_ENV_TEST_SL1" => "x", "MONORUBY_ENV_
 e0430993ff49221b4ff142a12a2d9ee6	[1, [:gt, :lt, :gt, :lt]]	class C\n              attr_reader :calls\n              def initiali
 e051ec7a15469fca9105c948f78c2f26	[[:v], 50]	$nlr_log = []\n        def nlr_mid\n          yield\n        ensure\n      
 e093793f4006c99f09965c6fde38e86b	42	class Foo\n          def initialize\n            @x = 42\n          end\n  
+e0982ecc832e3a0a37c3aabbe59b1ec2	[{"name" => 100, "version" => 2, sym: 3, 4 => 5, 1.5 => 6, nil => 7, true => 8, false => 9, new: 200}, {"name" => 1, sym: 3, 4 => 5, 1.5 => 6, nil => 7, true => 8, false => 9}, {"name" => 1, "version" => 2, sym: 3, 4 => 5, 1.5 => 6, nil => 7, true => 8, false => 9}, false, false, nil, false, 9, 8, [true, true, true, true, true, true, true, true], [String, String, Symbol, Integer, Float, NilClass, TrueClass, FalseClass], true, 39]	def f; {"name" => 1, "version" => 2, sym: 3, 4 => 5, 1.5 => 6, nil 
 e09c62f66a3c3f3ed8999368ae421637	[true, [Errno::ENOENT, "No such file or directory @ rb_check_realpath_internal - /no_such_dir_zzq/x"], Errno::ELOOP, Errno::ELOOP]	(d="/tmp/mono_rp_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/file", ""); a=(
 e0a574583b5fc83f8c4cabc65c564a05	259.5522608117453	def call_block\n          yield\n        end\n        def p1\n          k =
 e0aaed5b5073da72fc373f05fb574de1	true	S = Struct.new(:a, :b)\n            \n\n            S.new(1, 2).hash !

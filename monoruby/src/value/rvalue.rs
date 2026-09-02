@@ -1452,8 +1452,12 @@ impl RValue {
     }
 
     pub(super) fn deep_copy(&self) -> Self {
+        let mut header = self.header.newborn();
+        if unsafe { self.try_ty() } == Some(ObjTy::HASH) {
+            header.set_ty_flags(hash::sanitize_dup_flags(header.ty_flags()));
+        }
         RValue {
-            header: self.header.newborn(),
+            header,
             var_table: self.var_table.clone(),
             kind: unsafe {
                 match self.ty() {
@@ -1500,19 +1504,15 @@ impl RValue {
                             lhs.exclude_end(),
                         )
                     }
-                    /*ObjTy::HASH => {
-                        let mut map = RubyMap::default();
-                        let hash = self.as_hashmap();
-                        for (k, v) in hash.iter() {
-                            map.insert(
-                                HashKey(k.deep_copy(vm, globals)?),
-                                v.deep_copy(vm, globals)?,
-                                vm,
-                                globals,
-                            )?;
-                        }
-                        ObjKind::hash_from(map)
-                    }*/
+                    // The only Hash reaching here is the template of a
+                    // constant literal (`HashmapInner::from_literal_pairs`):
+                    // its keys are immediates or frozen Strings and its
+                    // values immutable, so the copy shares them — as
+                    // CRuby's `duphash` does — and only the table is
+                    // cloned.
+                    ObjTy::HASH => ObjKind {
+                        hash: ManuallyDrop::new(self.as_hashmap().clone_body()),
+                    },
                     ObjTy::REGEXP => {
                         let regexp = self.as_regex();
                         ObjKind::regexp(regexp.clone())

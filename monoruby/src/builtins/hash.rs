@@ -5602,6 +5602,83 @@ mod tests {
     }
 
     #[test]
+    fn constant_hash_literal_is_copied_per_evaluation() {
+        // A constant literal is built once as a template and copied on
+        // each evaluation (`HashmapInner::from_literal_pairs` +
+        // `RValue::deep_copy`): every evaluation must still yield a
+        // fresh, unfrozen, independent Hash with a nil default.
+        run_test(
+            r##"
+            def f; {"name" => 1, "version" => 2, sym: 3, 4 => 5, 1.5 => 6, nil => 7, true => 8, false => 9}; end
+            a = f
+            b = f
+            a["name"] = 100
+            a[:new] = 200
+            b.delete("version")
+            r = [a, b, f, a.equal?(b), a.frozen?, a.default, a.compare_by_identity?, a.size, f.size]
+            r << f.keys.map(&:frozen?)
+            r << f.keys.map(&:class)
+            # A String key is the same frozen object on every evaluation.
+            r << f.keys[0].equal?(f.keys[0])
+            r << (f["name"] + f[:sym] + f[4] + f[1.5] + f[nil] + f[true] + f[false])
+            r
+            "##,
+        );
+        // Inline (all-immediate, up to three pairs), boxed, and past the
+        // chunking limit.
+        run_test(
+            r##"
+            def g; {1 => 2, :a => 3}; end
+            def h; {"a" => 1, "b" => 2}; end
+            x = g; y = g; x[:z] = 9
+            p = h; q = h; p["c"] = 3
+            [x, y, p, q, g.size, h.size, g.frozen?, h.frozen?, h.keys.all?(&:frozen?)]
+            "##,
+        );
+        run_test(
+            r##"
+            def big; {"k0"=>0,"k1"=>1,"k2"=>2,"k3"=>3,"k4"=>4,"k5"=>5,"k6"=>6,"k7"=>7,"k8"=>8,"k9"=>9,"k10"=>10,"k11"=>11,"k12"=>12,"k13"=>13,"k14"=>14,"k15"=>15,"k16"=>16,"k17"=>17,"k18"=>18,"k19"=>19,"k20"=>20,"k21"=>21,"k22"=>22,"k23"=>23,"k24"=>24,"k25"=>25,"k26"=>26,"k27"=>27,"k28"=>28,"k29"=>29,"k30"=>30,"k31"=>31,"k32"=>32,"k33"=>33,"k34"=>34,"k35"=>35,"k36"=>36,"k37"=>37,"k38"=>38,"k39"=>39}; end
+            a = big; b = big; a["k0"] = -1
+            [a.size, b.size, a["k0"], b["k0"], a["k39"], big.keys.first(3), big.values.sum]
+            "##,
+        );
+        // Duplicate keys: the later pair wins, once, and String keys
+        // compare by content.
+        run_test(
+            r##"
+            def d; {a: 1, "s" => 2, a: 3, "s" => 4, 1 => 5, 1 => 6}; end
+            [d, d.size, d.keys]
+            "##,
+        );
+        // Mutable String values keep the per-evaluation copy: each call
+        // gets its own value object, and mutating one leaves the next
+        // alone. Under `frozen_string_literal` the value is one shared
+        // frozen String, as it would be anywhere else in the file.
+        run_test(
+            r##"
+            def m; {"k" => "v"}; end
+            a = m; a["k"] << "!"
+            b = m
+            r = [a, b, a["k"].equal?(b["k"]), b["k"].frozen?]
+            src = "# frozen_string_literal: true\n{'k' => 'v', s: 'w'}"
+            h1 = eval(src); h2 = eval(src)
+            r << [h1, h1["k"].frozen?, h1[:s].frozen?, h1.frozen?, h1.equal?(h2), h1["k"].equal?(h2["k"])]
+            r
+            "##,
+        );
+        // A heap key or a computed element still takes the general path
+        // and behaves the same.
+        run_test(
+            r##"
+            k = "dyn"
+            def n(k); {k => 1, 2**70 => 2, 1e300 * 1e10 => 3, "lit" => 4}; end
+            a = n(k); b = n(k)
+            [a, a.equal?(b), a.keys[0].equal?(k), a.keys[3].frozen?, a.size]
+            "##,
+        );
+    }
+
+    #[test]
     fn hash_literal_duplicated_key_warning() {
         // A hash literal that repeats a *literal* key warns "key ... is
         // duplicated and overwritten" through `$stderr` (so a redirected
