@@ -7,8 +7,9 @@
 #     - run: monoruby my_script.rb
 #
 # With the `rubyspec: 'true'` input the action also prepares a ruby/spec
-# workspace (clones spec/ruby + spec/mspec and copies this repo's spec/tags
-# into the tag locations mspec resolves), ready for
+# workspace (clones spec/ruby + spec/mspec, copies this repo's spec/tags
+# into the tag locations mspec resolves, and installs this repo's
+# spec/default.mspec, which mspec picks up by itself), ready for
 # `spec/mspec/bin/mspec ci --target monoruby spec/ruby/...`.
 #
 # Install strategy, in order:
@@ -69,9 +70,11 @@ inputs:
     description: >
       Also set up a ruby/spec workspace for running the Ruby specs against
       the installed monoruby: clone ruby/spec into spec/ruby and ruby/mspec
-      into spec/mspec (both in $GITHUB_WORKSPACE), and copy this repo's
-      spec/tags into the tag locations mspec resolves. Used by conformance
-      trackers such as rubyspec-stats; off by default.
+      into spec/mspec (both in $GITHUB_WORKSPACE), copy this repo's
+      spec/tags into the tag locations mspec resolves, and install this
+      repo's spec/default.mspec (mspec loads it automatically; it traces
+      each example to stderr so a hung run still names the culprit). Used
+      by conformance trackers such as rubyspec-stats; off by default.
     required: false
     default: "false"
 
@@ -239,15 +242,19 @@ runs:
     # this repo at the action ref), so they stay in step with the monoruby
     # version the consumer selected — no extra clone needed.
     #
-    # Tag lookup depends on whether an mspec config file is loaded. mspec
-    # searches config[:path] = ['.', 'spec'] for `default.mspec` — in this
-    # workspace layout NEITHER exists (ruby/spec's own default.mspec sits at
-    # spec/ruby/default.mspec, which is not searched), so mspec falls back to
+    # Tag lookup: mspec searches config[:path] = ['.', 'spec'] for
+    # `default.mspec`, and the only one it finds here is this repo's
+    # spec/default.mspec (ruby/spec's own sits at spec/ruby/default.mspec,
+    # which is not searched). Ours does not set :tags_patterns, so mspec keeps
     # its built-in pattern `[[%r(spec/), 'spec/tags/'], [/_spec.rb$/, '_tags.txt']]`:
     # `spec/ruby/core/file/flock_spec.rb` -> `spec/tags/ruby/core/file/flock_tags.txt`.
-    # Copy into BOTH locations so the tags keep working even if a config file
-    # ever becomes loadable and switches the mapping to ruby/spec's
-    # `[%r(core/), 'tags/core/']` style (spec/ruby/tags/...).
+    # Copy into BOTH locations so the tags keep working even if the mapping
+    # ever switches to ruby/spec's `[%r(core/), 'tags/core/']` style
+    # (spec/ruby/tags/...).
+    #
+    # spec/default.mspec itself only registers an example trace (each
+    # example's description goes to stderr as it starts); see the file for
+    # why that matters for hung runs.
     - name: Set up ruby/spec workspace
       if: inputs.rubyspec == 'true'
       shell: bash
@@ -260,3 +267,4 @@ runs:
           cp -R "$GITHUB_ACTION_PATH/spec/tags/." spec/tags/ruby/
           cp -R "$GITHUB_ACTION_PATH/spec/tags/." spec/ruby/tags/
         fi
+        cp "$GITHUB_ACTION_PATH/spec/default.mspec" spec/default.mspec
