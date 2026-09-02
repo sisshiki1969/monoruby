@@ -2800,6 +2800,7 @@ d71c934480e135d29e482184c781d14a	[true, :PRIV]	module RcvV\n              class 
 d72491ac5b346cc00a4b205572a40779	false	ENV[""]      = nil\n            ENV["a=b"]   = nil\n            ENV.k
 d73852b1cc0988b573a8ac0d26714459	true	class C\n          def initialize; @percent = 7; @start = Time.now; end\n
 d743ebb1ae4f3634827d1cf257e34b99	[4, 8, 12, 16, 20]	(1..10).filter_map { |i| i * 2 if i.even? }
+d75925b6d715ab922640059a7e8b5f45	[true, true, true]	r = Random.allocate\n        a = r.rand\n        b = r.rand(10)\n        [
 d7727c6111808f529a320fda4e7cb48b	[[195]]	m = /#{/./}/s.match("\\303\\251".dup.force_encoding(Encoding::Windows_31J))\n      
 d774e46c066fe58e1b5886fed882b4a9	5	c = Class.new { def orig; 5; end }\n            c.class_eval { alias
 d77d6e3d33b3312be174ad8da7e0e5f2	100	::E = 100\n            \n\n          Object::E\n            

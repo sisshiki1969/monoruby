@@ -92,6 +92,39 @@ impl Mt {
         y
     }
 
+    /// Serialized size of a generator: 624 little-endian `u32` words
+    /// plus the `u32` position — the live state a `Random` instance keeps
+    /// in its `/random_state` ivar (`builtins/random.rs`).
+    pub(crate) const STATE_BYTES: usize = MT_N * 4 + 4;
+
+    /// The generator's full state as bytes (see `STATE_BYTES`).
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(Self::STATE_BYTES);
+        for w in &self.mt {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+        out.extend_from_slice(&(self.mti as u32).to_le_bytes());
+        out
+    }
+
+    /// Rebuild a generator from `to_bytes` output; `None` if the buffer
+    /// is not a well-formed state.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != Self::STATE_BYTES {
+            return None;
+        }
+        let mut mt = [0u32; MT_N];
+        for (i, c) in bytes[..MT_N * 4].chunks_exact(4).enumerate() {
+            mt[i] = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+        }
+        let b = &bytes[MT_N * 4..];
+        let mti = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize;
+        if mti > MT_N {
+            return None;
+        }
+        Some(Self { mt, mti })
+    }
+
     /// CRuby `rb_rand_bytes`: little-endian 32-bit chunks; a trailing
     /// partial word still consumes a full draw.
     pub(crate) fn fill_bytes(&mut self, dest: &mut [u8]) {
@@ -330,5 +363,38 @@ impl Prng {
 
     pub(crate) fn fill_bytes(&mut self, dest: &mut [u8]) {
         self.mt.fill_bytes(dest)
+    }
+}
+
+#[cfg(test)]
+mod state_bytes_tests {
+    use super::*;
+
+    #[test]
+    fn mt_state_round_trips_through_bytes() {
+        let mut mt = Mt::new_with_key(&[42]);
+        for _ in 0..1000 {
+            mt.next_u32();
+        }
+        let bytes = mt.to_bytes();
+        assert_eq!(bytes.len(), Mt::STATE_BYTES);
+        let mut back = Mt::from_bytes(&bytes).unwrap();
+        assert!(back == mt);
+        // The restored generator continues the same stream.
+        for _ in 0..2000 {
+            assert_eq!(back.next_u32(), mt.next_u32());
+        }
+    }
+
+    #[test]
+    fn mt_from_bytes_rejects_malformed_state() {
+        assert!(Mt::from_bytes(&[]).is_none());
+        assert!(Mt::from_bytes(&vec![0u8; Mt::STATE_BYTES - 1]).is_none());
+        assert!(Mt::from_bytes(&vec![0u8; Mt::STATE_BYTES + 1]).is_none());
+        // A position past the table is rejected.
+        let mut bytes = Mt::init_genrand(1).to_bytes();
+        let n = bytes.len();
+        bytes[n - 4..].copy_from_slice(&(MT_N as u32 + 1).to_le_bytes());
+        assert!(Mt::from_bytes(&bytes).is_none());
     }
 }
