@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-8ce854c5.js";
+            window.path_to_searchindex_js = "searchindex-6529cd81.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-ad91b9ad.js"></script>
@@ -8657,7 +8657,8 @@ GC は VM セーフポイントで同期的に実行され、並行 GC やイン
 <tr><td><code>current_page</code> / <code>head_page</code> / <code>pages</code></td><td>現ページ / 最上位ページ / 割り当て済みページ一覧</td></tr>
 <tr><td><code>used_in_current</code></td><td>現ページのバンプ位置</td></tr>
 <tr><td><code>free</code> / <code>free_list_count</code></td><td>フリーリスト先頭と要素数</td></tr>
-<tr><td><code>free_pages</code></td><td>空きになって再利用待ちのページ</td></tr>
+<tr><td><code>free_pages</code></td><td>空きになって再利用待ちのページ(常駐したまま)</td></tr>
+<tr><td><code>released_pages</code> / <code>total_released_pages</code></td><td>空きページのうち OS に返したもの(<code>madvise</code>)と、その累計</td></tr>
 <tr><td><code>total_gc_counter</code> / <code>minor_gc_count</code> / <code>major_gc_count</code></td><td>GC 回数の各カウンタ</td></tr>
 <tr><td><code>minors_since_major</code></td><td>直近メジャー以降のマイナー回数(kind 判定に使用)</td></tr>
 <tr><td><code>old_count</code></td><td>old 世代オブジェクト数(昇格で +1、メジャーで 0 リセット)</td></tr>
@@ -9141,8 +9142,18 @@ res = src.flat_map { |rf, gf, bf| (0...64).map { |i| [i * rf, i * gf, i * bf] } 
 次のスイープでもう一度 free されうるため。</p>
 <h3 id="空きページの回収salvage_empty_pages-allocrs1250"><a class="header" href="#空きページの回収salvage_empty_pages-allocrs1250">空きページの回収(<code>salvage_empty_pages</code>, <code>alloc.rs:1250</code>)</a></h3>
 <p>スイープ前に、全セルが未マーク(<code>all_dead</code>)のページを <code>pages</code> から外して
-中身をドロップし <code>free_pages</code> へ戻す。以後の割り当てで再利用される(OS へは返さず、
-アリーナ予約内で回す)。</p>
+中身をドロップし <code>free_pages</code> へ戻す。以後の割り当てで再利用される。</p>
+<p><code>free_pages</code> のうち予備(稼働中ページ数の 1/8、最低 2 枚:
+<code>FREE_PAGE_RESERVE_FRACTION</code> / <code>FREE_PAGE_RESERVE_MIN</code>)を超えた分は
+<code>release_excess_free_pages</code> が OS に返す(<code>released_pages</code> へ移し、Linux は
+<code>madvise(MADV_DONTNEED)</code>、macOS は <code>MADV_FREE_REUSABLE</code>)。アドレスはアリーナ予約内に
+留まり、<code>free_pages</code> が尽きたときに <code>take_free_page</code> が(macOS では <code>MADV_FREE_REUSE</code>
+を打って)再び稼働に戻す。返したページの中身は不定だが、稼働に戻るページは
+<code>clear_old_bits</code> とバンプ割り当てが読む前にすべて書き直すので問題ない。</p>
+<p>以前は空きページを常駐させたままだったため、ワークロードのピーク時のヒープが
+そのまま RSS に残っていた(lee: 生存 22 ページに対して常駐 ~140 ページ、30 MB)。
+予備は 2 回の収集ぶんの成長(トリガー予算は稼働ページの 1/16)を賄うので、
+定常状態のヒープは常駐ページを回し、縮んだヒープだけが再タッチのページフォルトを払う。</p>
 <hr>
 <h2 id="10-ヒープに退避したフレームheap_frames"><a class="header" href="#10-ヒープに退避したフレームheap_frames">10. ヒープに退避したフレーム(<code>heap_frames</code>)</a></h2>
 <p>クロージャ等でスタックフレームがその生成メソッドより長生きする場合、フレームは
