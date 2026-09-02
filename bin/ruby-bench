@@ -1,5 +1,12 @@
 #!/bin/sh
+#
+# Run the ruby-bench suite against monoruby.
+#
+# Usage:
+#   bin/ruby-bench                 # run all benchmarks
+#   bin/ruby-bench fib             # run only benchmarks whose name matches "fib"
+#   bin/ruby-bench fib nqueens     # run several benchmarks
 
-cargo install --path monoruby
-# cd ../ruby-bench && ./run_benchmarks.rb --once -e "monoruby" -e "yjit::ruby --yjit"
-cd ../ruby-bench && ./run_benchmarks.rb --rss --harness=harness-warmup -e "monoruby" -e "yjit::ruby --yjit"
+cargo install --path monoruby || exit 1
+# cd ../ruby-bench && ./run_benchmarks.rb --once -e "monoruby" -e "yjit::ruby --yjit" "$@"
+cd ../ruby-bench && ./run_benchmarks.rb --rss --harness=harness-warmup -e "monoruby" -e "yjit::ruby --yjit" "$@"
