@@ -49,6 +49,7 @@ mod symbol;
 mod thread;
 mod time;
 mod true_class;
+mod warning;
 
 #[cfg(target_arch = "x86_64")]
 use crate::codegen::jitgen::AbstractState;
@@ -134,6 +135,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     process::init(globals);
     thread::init(globals);
     gc::init(globals);
+    warning::init(globals);
     random::init(globals);
     symbol::init(globals);
     binding::init(globals);

@@ -24,6 +24,48 @@ pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
+/// The `Warning[]` categories (CRuby's `rb_warning_category_t`).
+///
+/// Each is one bit of [`Globals::warning_categories`]. The runtime reads
+/// the bit directly (`rb_warning_category_enabled_p` does the same in
+/// CRuby — it never calls the Ruby-level `Warning.[]`), so a
+/// deprecation check on a hot path such as chilled-string mutation is a
+/// load and a mask, not a method dispatch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum WarningCategory {
+    Deprecated = 1,
+    Experimental = 2,
+    Performance = 4,
+    StrictUnusedBlock = 8,
+}
+
+impl WarningCategory {
+    /// Every category, in `Warning.categories` order.
+    pub const ALL: [WarningCategory; 4] = [
+        WarningCategory::Deprecated,
+        WarningCategory::Experimental,
+        WarningCategory::Performance,
+        WarningCategory::StrictUnusedBlock,
+    ];
+
+    /// The categories that are on at startup (CRuby: only `experimental`).
+    pub const DEFAULT: u8 = WarningCategory::Experimental as u8;
+
+    pub fn name(self) -> &'static str {
+        match self {
+            WarningCategory::Deprecated => "deprecated",
+            WarningCategory::Experimental => "experimental",
+            WarningCategory::Performance => "performance",
+            WarningCategory::StrictUnusedBlock => "strict_unused_block",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<WarningCategory> {
+        WarningCategory::ALL.into_iter().find(|c| c.name() == name)
+    }
+}
+
 /// `--backtrace-limit=N` (-1 = unlimited). Read by the uncaught-error
 /// reporter and `Exception#full_message`.
 static BACKTRACE_LIMIT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
@@ -291,6 +333,8 @@ pub struct Globals {
     pub no_jit: bool,
     /// suppress loading gem.
     pub no_gems: bool,
+    /// The `Warning[]` switches, one [`WarningCategory`] bit each.
+    warning_categories: u8,
     /// library directries.
     load_path: Value,
     /// standard PRNG
@@ -709,6 +753,7 @@ impl Globals {
             special_gvars: SpecialGvars::default(),
             no_jit,
             no_gems,
+            warning_categories: WarningCategory::DEFAULT,
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_features,
@@ -1691,6 +1736,24 @@ impl Globals {
                     .insert((func_id, class_id, *reason), 1);
             }
         };
+    }
+}
+
+// `Warning[]` categories
+impl Globals {
+    /// `Warning[category]` — CRuby's `rb_warning_category_enabled_p`.
+    #[inline]
+    pub fn warning_category_enabled(&self, category: WarningCategory) -> bool {
+        self.warning_categories & category as u8 != 0
+    }
+
+    /// `Warning[category] = flag`.
+    pub fn set_warning_category(&mut self, category: WarningCategory, flag: bool) {
+        if flag {
+            self.warning_categories |= category as u8;
+        } else {
+            self.warning_categories &= !(category as u8);
+        }
     }
 }
 
