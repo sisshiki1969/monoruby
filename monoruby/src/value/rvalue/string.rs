@@ -1371,6 +1371,14 @@ impl RStringInner {
         unsafe { &mut self.content.owned }
     }
 
+    /// The bytes, for overwriting in place at the same length (a shared
+    /// view is detached first). The cached code range is dropped, since
+    /// the caller may write anything.
+    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8] {
+        self.cr.set(CodeRange::Unknown);
+        self.owned_mut().as_mut_slice()
+    }
+
     /// Detach a shared string from its root in place — `uniquify` for
     /// callers outside this module (the JIT's inline `String#<<` calls
     /// this through `runtime::str_detach` and retries its append on the

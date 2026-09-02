@@ -241,6 +241,7 @@
 10406c07428dfa0886a1bab13dabf6f4	"comparison of String with 7 failed"	begin; "a" < 7; rescue ArgumentError => e; e.message; end
 1044a6ff811467108220b77d16c0df20	nil	GC.start
 10630cb5c02e6154a16815f1db4afaa8	[[:get, []], [2]]	class C\n                 def initialize; @log = []; end\n                 def []=
+1064214475f653609918e0669d1287fc	[0.03158614482564204, 5, 309460860262, 208, 1.0635907791763746, 4, 3, 1.6253046607137025, 1.7834227259416147, 1.9183869748893747, [126, 137, 1, 124, 6, 104], 0.8733366617238478, 5, true, 0.9193919732144173, 0.9193919732144173, true, true, true]	r = Random.new(42)\n            1300.times { r.rand }\n            a 
 10763a10e14efbbc495d2a2b48c4e475	[3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22]	class Foo\n              @@foo = 1\n              def foo\n           
 10825d3f920402467ed0762277926bd9	[1, 2]	def method_with_block\n          Fiber.new {\n            [1,2].each { |x
 10992a62d5e09476c2e0a3c43fd20025	[true, [:a, :b]]	S = Struct.new(:a, :b, keyword_init: true)\n            \n\n          
@@ -1064,6 +1065,7 @@
 506afd7190c9d45ecdef2e801c939176	:te	begin; 1.instance_eval { undef to_s }; :no; rescue TypeError; :te; end
 5078669efc5be0d889fb3ff62604139e	[5350, 1, 2]	class Ka; def v = 1; end\n            class Kb; def v = 2; end\n     
 507f32e0a72a071583d973ffea3c15c7	["Hello Dave at New York!", "Hello Gave at Hawaii!"]	Customer = Struct.new(:name, :address) do\n            def greeting\n    
+5084a8e909415b5d3fcf1ba2101d0cff		r = Random.new(42)\n            1300.times { r.rand }\n            a 
 509d9bea76f0e1d8349ff37b354accf3	2	k = Class.new { define_method(:m) { [1, 2, 3].each { |x| return x i
 50a5f1523f40c371eae52d5bdb271289	[:@b]	class Foo\n              def initialize\n                @a = 1\n     
 50dc75cab4d7c00e25ec748ffac45bee	"[C2, M, C1, M, Object, Kernel, BasicObject]"	module M\n            end\n            class C1\n            end\n     
@@ -1525,6 +1527,7 @@
 763b67d3ef3e1c8ffe7d61ecae99e06f	"/home/user/monoruby/monoruby/a.rb"	require File.expand_path("./b")\n        C::D\n        
 7679a579d835ee8b69befeae2cee0a2b	"Z"	class MyInt\n                  def to_int; 90; end\n             
 76816dc27924ee3f477d020204e7cbd2	:ok	old_stderr = $stderr\n            captured = String.new\n            
+7689440a9c2dac124b7cf3203bcc5d04	[0.03158614482564204, 5, 309460860262, 208, 1.0635907791763746, 4, 3, 1.6253046607137025, [83, 100, 142, 200, 61, 53], 0.2797035384714792, 1, true, 0.6005943333606173, 0.6005943333606173, true, true, true]	r = Random.new(42)\n            1300.times { r.rand }\n            a 
 768d732177da90b2c02a306f1f672d62	[[1, 2, nil], [true, nil], [true, nil], [42, nil], "Ary", ["Ary", 1], [[1, 2, nil]]]	class Ary;  def to_ary; [1, 2]; end; end\n        class Nily; def to_ary
 76980b7d628abc009ae2670280836614	[["ArgumentError", "only cause is given with no arguments"], ["StandardError", "hi"], ["TypeError", "exception object expected"], ["TypeError", "exception class/object expected"]]	results = []\n            # cause: only ⇒ ArgumentError "only cause 
 76a4361de08288d7f1e53eb3855bdaef	[:refused, "nil", "nil"]	require "socket"\n            # Grab a free port, close the listener
