@@ -1132,6 +1132,9 @@ impl Globals {
                 eprintln!("live objects (last gc):  {}", alloc.live_count());
                 eprintln!("free list (last gc):     {}", alloc.free_count());
                 eprintln!("active pages:            {}", alloc.pages_len());
+                eprintln!("empty pages (resident):  {}", alloc.empty_page_count() - alloc.released_page_count());
+                eprintln!("empty pages (released):  {}", alloc.released_page_count());
+                eprintln!("total released pages:    {}", alloc.total_released_pages());
             });
             alloc::malloc_stats::dump();
         }

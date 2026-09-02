@@ -66,7 +66,8 @@ thread_local! { pub static ALLOC: RefCell<Allocator<RValue>> }   // alloc.rs
 | `current_page` / `head_page` / `pages` | 現ページ / 最上位ページ / 割り当て済みページ一覧 |
 | `used_in_current` | 現ページのバンプ位置 |
 | `free` / `free_list_count` | フリーリスト先頭と要素数 |
-| `free_pages` | 空きになって再利用待ちのページ |
+| `free_pages` | 空きになって再利用待ちのページ(常駐したまま) |
+| `released_pages` / `total_released_pages` | 空きページのうち OS に返したもの(`madvise`)と、その累計 |
 | `total_gc_counter` / `minor_gc_count` / `major_gc_count` | GC 回数の各カウンタ |
 | `minors_since_major` | 直近メジャー以降のマイナー回数(kind 判定に使用) |
 | `old_count` | old 世代オブジェクト数(昇格で +1、メジャーで 0 リセット) |
@@ -600,8 +601,20 @@ res = src.flat_map { |rf, gf, bf| (0...64).map { |i| [i * rf, i * gf, i * bf] } 
 ### 空きページの回収(`salvage_empty_pages`, `alloc.rs:1250`)
 
 スイープ前に、全セルが未マーク(`all_dead`)のページを `pages` から外して
-中身をドロップし `free_pages` へ戻す。以後の割り当てで再利用される(OS へは返さず、
-アリーナ予約内で回す)。
+中身をドロップし `free_pages` へ戻す。以後の割り当てで再利用される。
+
+`free_pages` のうち予備(稼働中ページ数の 1/8、最低 2 枚:
+`FREE_PAGE_RESERVE_FRACTION` / `FREE_PAGE_RESERVE_MIN`)を超えた分は
+`release_excess_free_pages` が OS に返す(`released_pages` へ移し、Linux は
+`madvise(MADV_DONTNEED)`、macOS は `MADV_FREE_REUSABLE`)。アドレスはアリーナ予約内に
+留まり、`free_pages` が尽きたときに `take_free_page` が(macOS では `MADV_FREE_REUSE`
+を打って)再び稼働に戻す。返したページの中身は不定だが、稼働に戻るページは
+`clear_old_bits` とバンプ割り当てが読む前にすべて書き直すので問題ない。
+
+以前は空きページを常駐させたままだったため、ワークロードのピーク時のヒープが
+そのまま RSS に残っていた(lee: 生存 22 ページに対して常駐 ~140 ページ、30 MB)。
+予備は 2 回の収集ぶんの成長(トリガー予算は稼働ページの 1/16)を賄うので、
+定常状態のヒープは常駐ページを回し、縮んだヒープだけが再タッチのページフォルトを払う。
 
 ---
 
