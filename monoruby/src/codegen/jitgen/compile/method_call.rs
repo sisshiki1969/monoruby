@@ -1109,6 +1109,9 @@ impl<'a> JitContext<'a> {
         // Stack check only: the specialized block body compiles its own
         // `InitMethod` entry poll, so no call-site GC poll is needed.
         state.check_stack(ir);
+        // Pre-flush GP-pool snapshot for direct argument stores — see
+        // `send`.
+        let arg_hints = state.peek_gp_residents();
         let using_fpr = state.get_using_fpr(ir);
         // Stage 1': the resolve pass places write-through refreshes into
         // this site's save area by this record.
@@ -1119,7 +1122,7 @@ impl<'a> JitContext<'a> {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: state.pc().as_ptr() as u64,
         });
-        state.set_arguments(&self.store, ir, callid, callee_fid, false);
+        state.set_arguments(&self.store, ir, callid, callee_fid, false, &arg_hints);
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -1545,6 +1548,9 @@ impl<'a> JitContext<'a> {
             }
         }
         let evict = ir.new_evict();
+        // Pre-flush GP-pool snapshot for direct argument stores — see
+        // `send`. Captured before `get_using_fpr`'s flush.
+        let arg_hints = state.peek_gp_residents();
         // Snapshot the save set here (it is what `fpr_save_cont` below
         // will emit) and record it for the resolve pass — stage 1'.
         let using_fpr = state.get_using_fpr(ir);
@@ -1561,6 +1567,7 @@ impl<'a> JitContext<'a> {
             needs_rest_array,
             bmethod_outer,
             using_fpr,
+            &arg_hints,
         );
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
@@ -1889,6 +1896,13 @@ impl AbstractState {
         // (optcarrot `--opt` mis-emulated a few frames in on aarch64 `gp-alloc`,
         // e.g. a wrong PPU value broke the vblank-wait loop), so we always flush
         // before the call now.
+        // Snapshot the GP-pool residents *before* the flush inside
+        // `get_using_fpr`: after the spill each register still holds its
+        // slot's (now home-equal) value, so `set_arguments` can store it
+        // straight into the callee frame instead of round-tripping
+        // through the just-written stack home — a store-forwarding hop
+        // on the call's critical path (fib: the `n-1` / `n-2` argument).
+        let arg_hints = self.peek_gp_residents();
         let using_fpr = self.get_using_fpr(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
@@ -1896,7 +1910,7 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(store, ir, callid, callee_fid, false);
+        self.set_arguments(store, ir, callid, callee_fid, false, &arg_hints);
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -1952,6 +1966,9 @@ impl AbstractState {
         // can also be recorded for the resolve pass (stage 1' — the
         // recorded set must be exactly what `fpr_save_cont` emits).
         using_fpr: UsingFpr,
+        // Pre-flush GP-pool residents (captured by the caller alongside
+        // `using_fpr`) — see `send`'s direct argument stores.
+        arg_hints: &[(GP, SlotId)],
     ) {
         // D1: skip the caller-side `create_array` only when at least
         // one forwarding consume was source-routed AND no forwarding
@@ -1966,7 +1983,7 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(store, ir, callid, callee_fid, defer_rest);
+        self.set_arguments(store, ir, callid, callee_fid, defer_rest, arg_hints);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -2150,6 +2167,7 @@ impl AbstractState {
         callid: CallSiteId,
         callee_fid: FuncId,
         defer_rest: bool,
+        arg_hints: &[(GP, SlotId)],
     ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
@@ -2170,6 +2188,32 @@ impl AbstractState {
             };
             ir.reg_sub(GP::Rsp, stack_offset);
 
+            // Direct stores for required args whose slot was GP-pool
+            // resident at the pre-flush snapshot: the register still
+            // holds the slot's home-equal value, so store it straight
+            // into the callee frame, skipping the reload of the home the
+            // flush just wrote (a store-forwarding hop on the call's
+            // critical path). Emitted *first*, before anything that can
+            // issue a C call (block-arg write-back, float boxing in the
+            // generic fills), which would clobber the pool — and R11 is
+            // excluded, the `ContFramePc` scratch already emitted above.
+            // Restricted to the required positionals: the later fill
+            // kinds can interleave calls, so their hints may be stale.
+            let hinted = |slot: SlotId| {
+                arg_hints
+                    .iter()
+                    .find(|(reg, s)| *s == slot && *reg != GP::R11)
+                    .map(|(reg, _)| *reg)
+            };
+            let mut direct_filled = vec![];
+            for i in filled_req.clone() {
+                if let Some(reg) = hinted(args + i) {
+                    let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
+                    ir.reg2rsp_offset(reg, ofs);
+                    direct_filled.push(i);
+                }
+            }
+
             // write back block argument.
             if let Some(block_arg) = callsite.block_arg {
                 self.write_back_slot(ir, block_arg);
@@ -2185,6 +2229,9 @@ impl AbstractState {
 
             // fill required params.
             for i in filled_req {
+                if direct_filled.contains(&i) {
+                    continue;
+                }
                 let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                 self.fetch_for_callee(ir, args + i, ofs);
             }
