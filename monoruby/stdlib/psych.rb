@@ -94,7 +94,11 @@ module Psych
   # ------------------------------------------------------------------
   class Parser
     def initialize(yaml)
-      @lines = yaml.gsub("\r\n", "\n").split("\n")
+      # `gsub` with a String pattern goes through the regexp engine and
+      # scans the whole document; skip it when there is no CR at all
+      # (`include?` is a plain substring search).
+      yaml = yaml.gsub("\r\n", "\n") if yaml.include?("\r")
+      @lines = yaml.split("\n")
       @pos = 0
       @anchors = {}
     end
@@ -181,32 +185,31 @@ module Psych
     end
 
     def block_mapping_line?(line)
-      # Find the first non-leading-whitespace byte without allocating.
-      bytes = line.bytes
-      len = bytes.size
+      # Byte scan via `getbyte`: no per-line Integer array.
+      len = line.bytesize
       i = 0
-      while i < len && (bytes[i] == 0x20 || bytes[i] == 0x09)
+      while i < len && (line.getbyte(i) == 0x20 || line.getbyte(i) == 0x09)
         i += 1
       end
       return false if i == len
-      first = bytes[i]
+      first = line.getbyte(i)
       return false if first == 0x23 # '#'
-      return false if first == 0x2D && i + 1 < len && bytes[i + 1] == 0x20 # "- "
+      return false if first == 0x2D && i + 1 < len && line.getbyte(i + 1) == 0x20 # "- "
       # A block-mapping line is a key followed by ':' that is either
       # at end of line or followed by whitespace. Strings escape the
       # match (so we have to skip past balanced "..." or '...').
       while i < len
-        b = bytes[i]
+        b = line.getbyte(i)
         case b
         when 0x22 # '"'
           i += 1
-          while i < len && bytes[i] != 0x22
+          while i < len && line.getbyte(i) != 0x22
             i += 1
           end
           i += 1 # past closing "
         when 0x27 # "'"
           i += 1
-          while i < len && bytes[i] != 0x27
+          while i < len && line.getbyte(i) != 0x27
             i += 1
           end
           i += 1 # past closing '
@@ -218,7 +221,7 @@ module Psych
           if i + 1 == len
             return true
           end
-          nx = bytes[i + 1]
+          nx = line.getbyte(i + 1)
           return true if nx == 0x20 || nx == 0x09
           i += 1
         else
@@ -381,11 +384,29 @@ module Psych
           return [$1, $2]
         end
       end
-      if stripped =~ /\A(.*?)\s*:\s+(.*)\z/
-        return [$1, $2]
-      end
-      if stripped =~ /\A(.*?)\s*:\z/
-        return [$1, nil]
+      # The unquoted case, by byte scan — the two lazy-`.*?` regexps
+      # it replaces (`/\A(.*?)\s*:\s+(.*)\z/`, `/\A(.*?)\s*:\z/`) ran
+      # per mapping line and were the single largest cost of a load.
+      # Same matching: the first ':' followed by whitespace splits
+      # (key rstripped, value past the whitespace run); a ':' that is
+      # the last byte yields a nil value.
+      i = 0
+      len = stripped.bytesize
+      while i < len
+        if stripped.getbyte(i) == 0x3A # ':'
+          if i + 1 == len
+            return [stripped[0, i].rstrip, nil]
+          end
+          nx = stripped.getbyte(i + 1)
+          if nx == 0x20 || nx == 0x09
+            j = i + 1
+            while j < len && ((b = stripped.getbyte(j)) == 0x20 || b == 0x09)
+              j += 1
+            end
+            return [stripped[0, i].rstrip, stripped[j..-1]]
+          end
+        end
+        i += 1
       end
       [stripped, nil]
     end
