@@ -592,8 +592,14 @@ impl Executor {
         if std::env::var_os("MONORUBY_SKIP_STARTUP").is_none() {
             let path = install_root().join("builtins").join("startup.rb");
             executor.require(globals, &path, false)?;
+            // The rubygems boot: `gem_prelude.rb` registers `Gem` as an
+            // autoload of "rubygems" (and a `Kernel#gem` stub that boots
+            // it), so the vendored rubygems is read only by the first
+            // program that reaches for it — a plain script skips its
+            // ~8 MB / ~90 ms.
             if !globals.no_gems {
-                executor.load_gems(globals);
+                let path = install_root().join("builtins").join("gem_prelude.rb");
+                executor.require(globals, &path, false)?;
             }
         }
         // TOPLEVEL_BINDING: registered as a *lazy* constant — defined
@@ -658,15 +664,6 @@ impl Executor {
         // stays within the allocated stack region.
         let stack_limit = unsafe { rsp.sub(FIBER_STACK_BUDGET) };
         self.stack_limit = stack_limit as usize;
-    }
-
-    fn load_gems(&mut self, globals: &mut Globals) {
-        for gem in ["rubygems"] {
-            if let Err(err) = self.require(globals, &std::path::PathBuf::from(gem), false) {
-                err.show_error_message_and_all_loc(&globals.store);
-                panic!("error occured in loading {gem}");
-            }
-        }
     }
 
     pub fn cfp(&self) -> Cfp {
@@ -1301,22 +1298,37 @@ impl Executor {
             // `Gem.loaded_specs["gosu"].full_gem_path` then raises a
             // `NoMethodError` on `nil`. When the file we just loaded came
             // from a host gem (`/gems/`) or from a C-extension-gem stub
-            // (`~/.monoruby/stub`), ask the (already eagerly-loaded)
-            // vendored rubygems to activate the gem that provides this
-            // feature so its spec lands in `Gem.loaded_specs`, matching
-            // CRuby — keyed on the requested feature, not the resolved
-            // path, so a stub-shadowed gem still activates its host spec.
+            // (`~/.monoruby/stub`), ask the vendored rubygems to activate
+            // the gem that provides this feature so its spec lands in
+            // `Gem.loaded_specs`, matching CRuby — keyed on the requested
+            // feature, not the resolved path, so a stub-shadowed gem still
+            // activates its host spec.
             //
-            // The two gates matter for performance: the first activation
-            // forces rubygems to build its stub index over every installed
-            // gemspec (~100ms here), so we keep that cost off every
-            // program that doesn't actually reach for a host gem.
-            //  * `startup_flag` skips requires issued while startup.rb /
-            //    gem bootstrap runs — notably rubygems' own
-            //    `require "monitor"` (a default gem served from the stub
-            //    dir), which would otherwise build the index at every
-            //    boot for no benefit (default gems don't populate
-            //    `loaded_specs`).
+            // rubygems itself is booted lazily (`gem_prelude.rb` registers
+            // `Gem` as an autoload), and the two origins treat that
+            // differently:
+            //  * a host gem's file is proof the program uses host gems, so
+            //    the lookup goes through the autoload and boots rubygems
+            //    if nothing has yet;
+            //  * a stub's file is not: `json`, `set`, `monitor` and the
+            //    other default-gem stands-in are served from the same
+            //    directory, and booting rubygems (~8 MB, ~90 ms) for
+            //    `require "json"` would waste the deferral for most
+            //    programs. A stub only activates through a rubygems the
+            //    program already loaded — and not while that rubygems is
+            //    still booting: its own `require "monitor"` (a default gem
+            //    served from the stub dir) lands here after `module Gem`
+            //    has defined the constant, and activating it would build
+            //    the index at every boot for no benefit (default gems
+            //    don't populate `loaded_specs`). The `gosu` stub publishes
+            //    its own spec into `loaded_specs` regardless
+            //    (`native_shim.rb`).
+            //
+            // The remaining gates matter for performance: the first
+            // activation forces rubygems to build its stub index over every
+            // installed gemspec (~100ms here), so we keep that cost off
+            // every program that doesn't actually reach for a host gem.
+            //  * `startup_flag` skips requires issued while startup.rb runs.
             //  * the resolved-path gate skips the vendored stdlib (e.g.
             //    `require 'rbconfig'` resolves under `~/.monoruby/lib`),
             //    so a program that only touches the stdlib never pays the
@@ -1335,29 +1347,39 @@ impl Executor {
             //    not needed by the gosu/`full_gem_path` case this serves.
             // `require_relative` (`is_relative`) and absolute requires are
             // skipped too: their feature is a path, not a gem name.
-            // Best-effort — any raised error is swallowed (and cleared
-            // from `self`) so a successful require never fails over this
+            // Best-effort — any raised error (the rubygems boot included)
+            // is swallowed so a successful require never fails over this
             // bookkeeping.
             if !is_relative
                 && CODEGEN.with(|codegen| codegen.borrow().startup_flag)
                 && file_name.to_str().is_some_and(|s| !s.contains('/'))
-                && (canonicalized_path
+            {
+                let gem_id = IdentId::get_id("Gem");
+                let gem = if canonicalized_path
                     .to_str()
                     .is_some_and(|s| s.contains("/gems/"))
-                    || canonicalized_path.starts_with(install_root().join("stub")))
-                && let Some(gem) = globals
-                    .store
-                    .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Gem"))
-            {
-                let feature = Value::string_from_str(&file_name.to_string_lossy());
-                let _ = self.invoke_method_if_exists(
-                    globals,
-                    IdentId::get_id("try_activate"),
-                    gem,
-                    &[feature],
-                    None,
-                    None,
-                );
+                {
+                    self.get_constant(globals, OBJECT_CLASS, gem_id)
+                        .ok()
+                        .flatten()
+                } else if canonicalized_path.starts_with(install_root().join("stub"))
+                    && !self.is_loading_path(&install_root().join("lib").join("rubygems.rb"))
+                {
+                    globals.store.get_constant_noautoload(OBJECT_CLASS, gem_id)
+                } else {
+                    None
+                };
+                if let Some(gem) = gem {
+                    let feature = Value::string_from_str(&file_name.to_string_lossy());
+                    let _ = self.invoke_method_if_exists(
+                        globals,
+                        IdentId::get_id("try_activate"),
+                        gem,
+                        &[feature],
+                        None,
+                        None,
+                    );
+                }
             }
             Ok(true)
         }
