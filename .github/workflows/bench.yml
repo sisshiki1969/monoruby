@@ -2,6 +2,15 @@ name: bench vs YJIT
 
 on:
   workflow_dispatch:
+    inputs:
+      arch:
+        description: "Which benchmark jobs to run (darwin/arm64 only runs from here)"
+        type: choice
+        default: arm64
+        options:
+          - arm64
+          - amd64
+          - both
   push:
     branches: [master]
     paths:
@@ -20,6 +29,9 @@ permissions:
 
 jobs:
   bench-amd64:
+    # Runs on every master push; a manual dispatch includes it only when
+    # asked (arch: amd64 / both — the dispatch default is arm64-only).
+    if: ${{ github.event_name == 'push' || inputs.arch == 'amd64' || inputs.arch == 'both' }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -234,6 +246,12 @@ jobs:
           retention-days: 30
 
   bench-arm64:
+    # NEVER runs automatically: the ~4.3 h three-engine pass burns far
+    # too much of the macOS runner allowance to pay on every master
+    # push. Run it from the Actions tab (workflow_dispatch, arch: arm64
+    # — the default — or both); the publish job tolerates its absence
+    # and simply leaves the arm64 dashboard at its last snapshot.
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.arch == 'arm64' || inputs.arch == 'both') }}
     runs-on: macos-latest
     # The three-engine pass needs ~245-260 min on this runner (the zjit
     # pass alone is ~2.5 h on arm64): the first zjit run hit the old
