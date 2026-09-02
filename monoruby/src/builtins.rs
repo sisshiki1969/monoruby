@@ -50,6 +50,7 @@ mod thread;
 mod time;
 mod true_class;
 mod warning;
+mod zlib;
 
 #[cfg(target_arch = "x86_64")]
 use crate::codegen::jitgen::AbstractState;
@@ -144,6 +145,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     set::init(globals);
     json::init(globals);
     digest::init(globals);
+    zlib::init(globals);
     main_object::init(globals);
     globals.object_class().include_module(kernel).unwrap();
 }
