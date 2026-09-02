@@ -109,6 +109,16 @@ example を統計へ復帰させること。
 ln -sfn /path/to/monoruby/spec/tags /path/to/spec/tags
 ```
 
+なお、monoruby リポジトリ側の `spec/default.mspec` は別物で、setup action
+（`rubyspec: "true"`）が rubyspec-stats のワークスペース直下 `spec/` に
+コピーする設定ファイル。`tags_patterns` は設定しない（mspec 組み込みの
+`spec/tags/ruby/...` 解決のまま）。中身は example トレースのみ: 各 example の
+description を実行直前に stderr へ出す。mspec 自身の `--timeout` は対象
+プロセス内の監視スレッドなので、メインスレッドがカーネル内（`waitpid` 等）で
+ブロックすると monoruby では発火せず、外側の `timeout(1)` に kill されて
+結果ファイルが空になる。トレースがあれば CI ログの最後の description が
+ハングした example であり、そのままタグに書ける。
+
 ## bisect 手法（ローカル）
 
 CI には "Bisect monoruby core hang" ワークフローがあるが、監査全体は
