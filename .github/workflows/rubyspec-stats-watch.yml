@@ -1,0 +1,33 @@
+name: rubyspec-stats watch
+
+# Opens an issue here when a rubyspec-stats site (the fork or upstream)
+# publishes empty monoruby results -- a category that hung or crashed and
+# shows as 0% -- or when its monoruby job did not succeed at all, and closes
+# the issue again once results recover. See .github/scripts/rubyspec_stats_watch.rb.
+
+on:
+  schedule:
+    # Both rubyspec-stats CIs run daily at 07:00 UTC; the monoruby job
+    # commits its results within the hour.
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only print what would be done
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: ruby .github/scripts/rubyspec_stats_watch.rb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
