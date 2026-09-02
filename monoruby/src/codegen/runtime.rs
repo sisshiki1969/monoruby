@@ -206,10 +206,9 @@ fn warn_unused_block(vm: &mut Executor, globals: &mut Globals, callid: CallSiteI
     let verbose = globals
         .get_gvar(IdentId::get_id("$VERBOSE"))
         .is_some_and(|v| v.as_bool());
-    if !verbose && !strict_unused_block_category(vm, globals) {
+    if !verbose && !globals.warning_category_enabled(WarningCategory::StrictUnusedBlock) {
         return;
     }
-    // Re-borrow after the potential Ruby invocation above.
     let iseq = &globals.store[iseq_id];
     let defined_at = format!(
         "{}:{}",
@@ -252,22 +251,6 @@ fn warn_unused_block(vm: &mut Executor, globals: &mut Globals, callid: CallSiteI
         None,
         None,
     );
-}
-
-/// `Warning[:strict_unused_block]` — `false` when the Warning module
-/// isn't loaded yet (bootstrap) or the lookup fails.
-fn strict_unused_block_category(vm: &mut Executor, globals: &mut Globals) -> bool {
-    let Some(warning_val) = globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
-    else {
-        return false;
-    };
-    let sym = Value::symbol(IdentId::get_id("strict_unused_block"));
-    match vm.invoke_method_inner(globals, IdentId::_INDEX, warning_val, &[sym], None, None) {
-        Ok(v) => v.as_bool(),
-        Err(_) => false,
-    }
 }
 
 /// Classify the call instruction that created the frame `cfp`: read the

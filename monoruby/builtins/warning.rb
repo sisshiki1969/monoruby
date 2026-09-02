@@ -1,32 +1,8 @@
 module Warning
-  @categories = {
-    deprecated: false, experimental: true, performance: false,
-    strict_unused_block: false,
-  }
-
-  def self.categories
-    @categories.keys
-  end
-
-  def self.[](category)
-    unless category.is_a?(Symbol)
-      raise TypeError, "wrong argument type #{category.class} (expected Symbol)"
-    end
-    unless @categories.key?(category)
-      raise ArgumentError, "unknown category: #{category}"
-    end
-    @categories[category]
-  end
-
-  def self.[]=(category, value)
-    unless category.is_a?(Symbol)
-      raise TypeError, "wrong argument type #{category.class} (expected Symbol)"
-    end
-    unless @categories.key?(category)
-      raise ArgumentError, "unknown category: #{category}"
-    end
-    @categories[category] = value ? true : false
-  end
+  # `Warning.[]`, `Warning.[]=` and `Warning.categories` are builtins
+  # (src/builtins/warning.rs): the category switches live in the Rust
+  # runtime so its own gated warnings read a flag rather than calling
+  # back into Ruby.
 
   # The default `Warning.warn`. A categorised warning is suppressed when
   # its category is switched off (`Warning[:deprecated] = false`), which

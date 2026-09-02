@@ -1686,7 +1686,7 @@ pub(crate) fn emit_chilled_literal_mutation_warning(
     globals: &mut Globals,
     origin: Option<String>,
 ) -> Result<()> {
-    if !warning_deprecated_on(vm, globals)? {
+    if !globals.warning_category_enabled(WarningCategory::Deprecated) {
         return Ok(());
     }
     let msg = if debug_frozen_string_log() {
@@ -1717,28 +1717,6 @@ pub(crate) fn emit_chilled_literal_mutation_warning(
     Ok(())
 }
 
-/// `Warning[:deprecated]`, or `false` when the Warning module isn't
-/// loaded yet (bootstrap).
-fn warning_deprecated_on(vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
-    let warning_val = match globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
-    {
-        Some(v) => v,
-        None => return Ok(false),
-    };
-    let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
-    let dep = vm.invoke_method_inner(
-        globals,
-        IdentId::_INDEX,
-        warning_val,
-        &[dep_sym],
-        None,
-        None,
-    )?;
-    Ok(!(dep.is_nil() || dep == Value::bool(false)))
-}
-
 ///
 /// Emit the CRuby-compatible deprecation warning for mutating a chilled
 /// string (one returned by `Symbol#to_s`). Gated by `Warning[:deprecated]`;
@@ -1752,24 +1730,7 @@ pub(crate) fn emit_chilled_string_mutation_warning(
     globals: &mut Globals,
     self_val: Value,
 ) -> Result<()> {
-    // Check Warning[:deprecated].
-    let warning_val = match globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
-    {
-        Some(v) => v,
-        None => return Ok(()),
-    };
-    let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
-    let dep = vm.invoke_method_inner(
-        globals,
-        IdentId::_INDEX,
-        warning_val,
-        &[dep_sym],
-        None,
-        None,
-    )?;
-    if dep.is_nil() || dep == Value::bool(false) {
+    if !globals.warning_category_enabled(WarningCategory::Deprecated) {
         return Ok(());
     }
 
@@ -1863,25 +1824,7 @@ pub(crate) fn emit_deprecated_constant_warning(
     globals: &mut Globals,
     qualified_name: &str,
 ) -> Result<()> {
-    // Check Warning[:deprecated]. If the Warning module isn't loaded
-    // yet (during bootstrap) we silently skip — CRuby behaves the same.
-    let warning_val = match globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
-    {
-        Some(v) => v,
-        None => return Ok(()),
-    };
-    let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
-    let dep = vm.invoke_method_inner(
-        globals,
-        IdentId::_INDEX,
-        warning_val,
-        &[dep_sym],
-        None,
-        None,
-    )?;
-    if dep.is_nil() || dep == Value::bool(false) {
+    if !globals.warning_category_enabled(WarningCategory::Deprecated) {
         return Ok(());
     }
 
