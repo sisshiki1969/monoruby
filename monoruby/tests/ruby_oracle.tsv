@@ -1460,6 +1460,7 @@
 71330c857c9c2f5e5dac1dd122e8905a	[199, 199, 199, "h199", :sym]	class P\n          def fill(i)\n            @a0 = i; @a1 = i; @a2 = i; @a
 7147936003db8a32b07eb1bb5089096f	[[:it, :j]]	def m; [1].map { |it| j = it; local_variables.sort }; end; m
 716b4dbaef364450a9132d2ead310c72	1440.0	def occl(nphi, ntheta)\n          eps = 0.5\n          occlusion = 0.0\n  
+71717a77aafa3f3abf1f6f9130d24a5b	[true, "b", "a", "c", true, "c", "c", true, nil, nil, true, 2, "c", "c", "(?<n>c)", true, "b"]	r = []\n            m = "abc".match(/b/); r << m.equal?($~) << m[0] 
 719d10e6b19ee956599a34926b2812c4	[[0, "SystemExit"], [0, "SystemExit"], [7, "SystemExit"], [0, "msg"], [0, "SystemExit"], [1, "SystemExit"], [0, "SystemExit"], [3, "x"], [0, "y"], [2, "SystemExit"]]	[\n              [SystemExit.new.status, SystemExit.new.message],\n  
 71a91bb93ad21f17fda2dab2d2720ef2	"foo12"	class Foo\n              def foo(x, y)\n                "foo" + x.to_
 71b94208b971bf119d6f24e1a29ca23a	[1, 2, 3]	class Foo\n              def to_proc\n                Proc.new {|v| $
@@ -2886,6 +2887,7 @@ dd9fdf5bf20e5c51c71f01d1236eba44	Array	class C < Array; end\n(C[1,2] + [3]).clas
 dde678d4f6ec4280c7043b73a85391df	[140, [70, 10]]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 ddf316887c271d6578314a6be120991f	[300, 300, 599, 0, 299]	h = { 0 => 0, 1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 7, 8 => 8, 9 
 de101e25e7a853fe0c9708bc2adb754c	true	FileTest.executable?("/bin/sh")
+de246ca85dbac4cf3bf0eb1e991fd929	["example.comx", false, false, nil, "example.com", "a%20b%20c", false, "string modified", "", "y", "-a-b-", "あ_い", "UTF-8"]	r = []\n            s = +"example.com"\n            t = s.gsub(/[^a-z
 de380c92af41a21d06d2ec9ba8e97c01	[1, 2, 42]	def f\n          yield [1,2]\n        end\n        \n\n        f { |a,b,c=42
 de387ac8bf934d8f07086b9e2b4a50ed	42	$. = 42; $.
 de3f2322030d1ec856a9f41781bd41a8	[[:amount, :unit], [:amount, :unit]]	M = Data.define(:amount, :unit)\n[M.members, M.new(1, "m").members]

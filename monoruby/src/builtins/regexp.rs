@@ -1212,16 +1212,28 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     vm.set_match_regex(self_);
     let md = if let Some(captures) = regex.captures_from_pos(heystack, byte_pos, vm)? {
-        Value::new_matchdata_snap(captures, heystack, vm.resolve_haystack(heystack), regex)
+        // `captures_from_pos` has just saved this match as `$~` (with
+        // the Regexp attached through the stash above), and that object
+        // *is* the result — `regexp.match(s).equal?($~)` holds in CRuby
+        // — so hand it back rather than building a second MatchData
+        // with a second haystack view. The fallback only covers a
+        // frame with no svar container.
+        match vm.current_match_data() {
+            Some(md) => md,
+            None => {
+                let md = Value::new_matchdata_snap(
+                    captures,
+                    heystack,
+                    vm.resolve_haystack(heystack),
+                    regex,
+                );
+                vm.set_backref(md);
+                md
+            }
+        }
     } else {
         Value::nil()
     };
-    if !md.is_nil() {
-        // `$~` must be the very MatchData object this call returns
-        // (CRuby: `regexp.match(s).equal?($~)`), not the separate one
-        // `captures_from_pos` saved while matching.
-        vm.set_backref(md);
-    }
     // `Regexp#match(str) { |m| … }` block form: yield the
     // MatchData (or skip the block when there's no match) and
     // return whatever the block returned. CRuby calls the block
@@ -1533,6 +1545,54 @@ fn regexp_encoding_value(globals: &Globals, regex: &RegexpInner) -> Value {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn match_returns_the_saved_backref() {
+        // `String#match` / `Regexp#match` hand back the very MatchData
+        // they saved as `$~` (no second object), block form included.
+        run_test(
+            r##"
+            r = []
+            m = "abc".match(/b/); r << m.equal?($~) << m[0] << m.pre_match << m.post_match
+            m = /(b)(c)/.match("abc"); r << m.equal?($~) << m[2] << $2
+            m = "abc".match(/b/) { |x| x }; r << m.equal?($~)
+            m = "abc".match(/z/); r << m << $~
+            m = "xabc".match(/b/, 1); r << m.equal?($~) << m.begin(0)
+            m = /(?<n>c)/.match("abc"); r << m[:n] << $~[:n] << m.regexp.source
+            m = "abc".match("b"); r << m.equal?($~) << m[0]
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn gsub_block_without_a_match_probes_first() {
+        // With no match the block never runs, so `gsub` skips the frozen
+        // snapshot and returns a plain copy; `$~` is cleared, the copy is
+        // unfrozen and independent, and a receiver mutated inside the
+        // block on a *matching* call is still detected.
+        run_test(
+            r##"
+            r = []
+            s = +"example.com"
+            t = s.gsub(/[^a-z.]/) { |c| "%20" }
+            r << t << t.equal?(s) << t.frozen? << $~
+            t << "x"; r << s
+            u = "a b c".gsub(/ /) { |c| $~[0] == " " ? "%20" : "?" }
+            r << u << $~.nil?
+            v = +"a b"
+            begin
+              v.gsub(/ /) { |c| v << "!" ; "-" }
+              r << "no error"
+            rescue RuntimeError => e
+              r << e.message
+            end
+            r << "".gsub(/x/) { "y" } << "".gsub(//) { "y" } << "ab".gsub(//) { "-" }
+            w = "あ い".gsub(/ /) { "_" }; r << w << w.encoding.name
+            r
+            "##,
+        );
+    }
     #[test]
     fn regex() {
         run_tests(&[

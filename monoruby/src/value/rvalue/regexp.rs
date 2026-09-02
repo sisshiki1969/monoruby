@@ -1181,10 +1181,29 @@ impl RegexpInner {
         self_enc: Option<crate::value::Encoding>,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
+            // Probe the live receiver first. Until the first match no
+            // block runs, so nothing can reallocate the buffer under the
+            // view, and a miss — the common case for a normalizing
+            // `gsub(/[^allowed]/) { … }` — then costs one copy of the
+            // receiver instead of a frozen snapshot plus a splice.
+            vm.clear_capture_special_variables();
+            let first = {
+                let inner = recv.as_rstring_inner();
+                let view = inner.regex_view()?;
+                match re.captures_from_pos_no_save(&view, 0)? {
+                    // What `splice_all` with no replacements would build.
+                    None => return Ok((RStringInner::from_str(&view), false)),
+                    // Nothing matches before this position, so the real
+                    // walk over the snapshot can start here instead of
+                    // repeating the scan from the beginning.
+                    Some(cap) => cap.get(0).unwrap().start(),
+                }
+            };
             let subject = string_snapshot(recv);
             let tmp = vm.temp_len();
             vm.temp_push(subject);
-            let res = re.replace_all_block_inner(vm, globals, subject, recv, bh, self_enc);
+            let res =
+                re.replace_all_block_inner(vm, globals, subject, recv, bh, self_enc, first);
             vm.temp_clear(tmp);
             res
         })
@@ -1198,6 +1217,7 @@ impl RegexpInner {
         recv: Value,
         bh: BlockHandler,
         self_enc: Option<crate::value::Encoding>,
+        first: usize,
     ) -> Result<(RStringInner, bool)> {
         // `subject` is frozen and temp-rooted by the caller, so `given`
         // and the matched views stay valid across `invoke_block`.
@@ -1211,9 +1231,23 @@ impl RegexpInner {
         let data = vm.get_block_data(globals, bh)?;
 
         vm.clear_capture_special_variables();
-        for cap in self.captures_iter(given) {
-            let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
+        // The non-overlapping walk of `captures_iter`, started at `first`
+        // (the caller's probe found nothing before it): an empty match
+        // right where the previous match ended is skipped by one
+        // character rather than looping forever.
+        let mut pos = first;
+        let mut last_match_end: Option<usize> = None;
+        while pos <= given.len() {
+            let Some(cap) = self.captures_from_pos_no_save(given, pos)? else {
+                break;
+            };
             let m = cap.get(0).unwrap();
+            if m.start() == m.end() && last_match_end == Some(m.end()) {
+                pos += given[pos..].chars().next().map_or(1, |c| c.len_utf8());
+                continue;
+            }
+            pos = m.end();
+            last_match_end = Some(m.end());
 
             // In surrogate space the zero-copy substring view would
             // carry mapped UTF-8 bytes at mapped offsets — decode the
@@ -1373,15 +1407,24 @@ impl RegexpInner {
         match re.captures_from_pos(given, byte_pos, vm)? {
             None => Ok(Value::nil()),
             Some(captures) => {
-                // Zero-copy haystack snapshot when the caller stashed
-                // the subject Value (see `Executor::resolve_haystack`).
-                let md = MatchDataInner::from_capture_snap(
-                    captures,
-                    given,
-                    vm.resolve_haystack(given),
-                    re,
-                );
-                let match_data = RValue::new_match_data_from_inner(md).pack();
+                // `captures_from_pos` has just saved this match as `$~`
+                // (with the Regexp attached through the stash above), and
+                // that object *is* the result — `str.match(re).equal?($~)`
+                // holds in CRuby — so hand it back rather than building
+                // a second MatchData with a second haystack view. The
+                // fallback only covers a frame with no svar container.
+                let match_data = match vm.current_match_data() {
+                    Some(md) => md,
+                    None => {
+                        let md = MatchDataInner::from_capture_snap(
+                            captures,
+                            given,
+                            vm.resolve_haystack(given),
+                            re,
+                        );
+                        RValue::new_match_data_from_inner(md).pack()
+                    }
+                };
                 if let Some(bh) = block {
                     vm.invoke_block_once(globals, bh, &[match_data])
                 } else {
