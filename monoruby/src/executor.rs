@@ -3579,15 +3579,19 @@ impl Executor {
         res
     }
 
-    pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
-        // A refinement of the receiver's `to_s` has to be honoured here
-        // too — interpolating an Integer is the common case, and that
-        // takes the built-in shortcut below unless a refinement is in
-        // play (`doc/refinements.md` §1(d)).
-        let refined_to_s = globals.store.refinements().is_active()
+    /// Whether a refinement of `to_s` is in effect at the current frame.
+    /// While one is, the built-in `to_s` shortcuts for immediates and
+    /// Strings must not be taken — interpolating an Integer is the
+    /// common case, and it has to see the refined method
+    /// (`doc/refinements.md` §1(d)).
+    pub(crate) fn to_s_is_refined(&mut self, globals: &mut Globals) -> bool {
+        globals.store.refinements().is_active()
             && globals.store.refinements().is_refined_name(IdentId::TO_S)
-            && !self.current_refinements(globals).is_empty();
-        if !refined_to_s {
+            && !self.current_refinements(globals).is_empty()
+    }
+
+    pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
+        if !self.to_s_is_refined(globals) {
             match receiver.unpack() {
                 // String operands round-trip via `to_s` to themselves
                 // (or to whatever the user-overridden `to_s` returns),

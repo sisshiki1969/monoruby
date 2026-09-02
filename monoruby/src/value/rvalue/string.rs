@@ -708,6 +708,12 @@ struct SharedContent {
     root: Value,
 }
 
+/// The owned byte buffer of a String: inline up to `STRING_INLINE_CAP`
+/// bytes, spilled to the heap beyond. Builders that know their result
+/// lands in a String assemble it in one of these and hand it over with
+/// `RStringInner::from_buf_cr`, so short results never allocate.
+pub(crate) type StringBuf = SmallVec<[u8; STRING_INLINE_CAP]>;
+
 /// Byte storage of a Ruby String: either an owned buffer (the plain
 /// `SmallVec`, inline ≤ `STRING_INLINE_CAP` bytes or spilled to the
 /// heap) or a zero-copy view into a frozen root's buffer. The active
@@ -1813,9 +1819,17 @@ impl RStringInner {
 
     /// O(1): take ownership of an already-built byte buffer with a
     /// pre-computed `cr` (the caller tracked it while building — see
-    /// `concatenate_string_inner`).
+    /// `Array#join`).
     pub(crate) fn from_vec_cr(bytes: Vec<u8>, encoding: Encoding, cr: CodeRange) -> Self {
         RStringInner::from(SmallVec::from_vec(bytes), encoding, cr)
+    }
+
+    /// O(1): take ownership of a buffer that was built directly in the
+    /// string's own representation — a short result never touched the
+    /// heap, a long one is adopted without a copy (see
+    /// `concatenate_string_inner`). `cr` was tracked by the builder.
+    pub(crate) fn from_buf_cr(bytes: StringBuf, encoding: Encoding, cr: CodeRange) -> Self {
+        RStringInner::from(bytes, encoding, cr)
     }
 
     /// O(N): build a string with the given encoding and pre-classify
