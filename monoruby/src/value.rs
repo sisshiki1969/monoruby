@@ -1,5 +1,4 @@
 use num::ToPrimitive;
-use onigmo_regex::Captures;
 use rubymap::RubyEql;
 use std::{
     collections::HashSet,
@@ -1491,23 +1490,8 @@ impl Value {
         RValue::new_binding(outer_lfp, pc).pack()
     }
 
-    /// Construct a MatchData. Takes the result of
-    /// `Executor::resolve_haystack` so the haystack snapshot can be a
-    /// zero-copy shared substring of the subject String.
-    pub(crate) fn new_matchdata_snap(
-        captures: Captures,
-        heystack: &str,
-        resolved: Option<(Value, usize)>,
-        regex: Regexp,
-    ) -> Self {
-        RValue::new_match_data_from_inner(MatchDataInner::from_capture_snap(
-            captures, heystack, resolved, regex,
-        ))
-        .pack()
-    }
-
-    /// `new_matchdata_snap` for byte-oriented matches on non-UTF-8
-    /// subjects (`Regex::captures_bytes`). `heystack` is the subject
+    /// Construct a MatchData for a byte-oriented match on a non-UTF-8
+    /// subject (`Regex::captures_bytes`). `heystack` is the subject
     /// String Value whose raw bytes the capture offsets index.
     pub(crate) fn new_matchdata_bytes(
         captures: &onigmo_regex::CapturesBytes,
