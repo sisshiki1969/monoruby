@@ -592,8 +592,14 @@ impl Executor {
         if std::env::var_os("MONORUBY_SKIP_STARTUP").is_none() {
             let path = install_root().join("builtins").join("startup.rb");
             executor.require(globals, &path, false)?;
+            // The rubygems boot: `gem_prelude.rb` registers `Gem` as an
+            // autoload of "rubygems" (and a `Kernel#gem` stub that boots
+            // it), so the vendored rubygems is read only by the first
+            // program that reaches for it — a plain script skips its
+            // ~8 MB / ~90 ms.
             if !globals.no_gems {
-                executor.load_gems(globals);
+                let path = install_root().join("builtins").join("gem_prelude.rb");
+                executor.require(globals, &path, false)?;
             }
         }
         // TOPLEVEL_BINDING: registered as a *lazy* constant — defined
@@ -658,18 +664,6 @@ impl Executor {
         // stays within the allocated stack region.
         let stack_limit = unsafe { rsp.sub(FIBER_STACK_BUDGET) };
         self.stack_limit = stack_limit as usize;
-    }
-
-    /// The rubygems boot: `builtins/gem_prelude.rb` registers `Gem` as an
-    /// autoload of "rubygems" (and a `Kernel#gem` stub that boots it), so
-    /// the vendored rubygems is read only by the first program that
-    /// reaches for it — a plain script skips its ~8 MB / ~90 ms.
-    fn load_gems(&mut self, globals: &mut Globals) {
-        let path = install_root().join("builtins").join("gem_prelude.rb");
-        if let Err(err) = self.require(globals, &path, false) {
-            err.show_error_message_and_all_loc(&globals.store);
-            panic!("error occured in loading {}", path.display());
-        }
     }
 
     pub fn cfp(&self) -> Cfp {

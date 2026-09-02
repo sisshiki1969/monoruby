@@ -113,6 +113,34 @@ fn a_stub_library_does_not_boot_rubygems() {
 }
 
 #[test]
+fn a_host_gem_boots_rubygems_and_is_activated() {
+    // A file served from a host gem's directory (`/gems/`) is proof the
+    // program uses host gems: the activation hook boots rubygems through
+    // the autoload and activates the gem, so `Gem.loaded_specs` fills in
+    // as in CRuby. `rake` is a bundled gem of every Ruby, but only
+    // reachable if a host Ruby was found; let the process report that.
+    let got = run(
+        &[],
+        &format!(
+            r#"before = {RUBYGEMS_LOADED}
+               begin
+                 require "rake"
+               rescue LoadError => e
+                 print "skip: #{{e.message}}"
+                 exit 0
+               end
+               p [before, {RUBYGEMS_LOADED}, Gem.loaded_specs.key?("rake"),
+                  $LOADED_FEATURES.grep(%r{{/rake\.rb\z}}).first&.include?("/gems/")]"#
+        ),
+    );
+    if let Some(reason) = got.strip_prefix("skip: ") {
+        eprintln!("skipped: no host rake gem here ({reason})");
+        return;
+    }
+    assert_eq!(got, "[false, true, true, true]");
+}
+
+#[test]
 fn disable_gems_leaves_gem_undefined() {
     let got = run(
         &["--disable=gems"],
