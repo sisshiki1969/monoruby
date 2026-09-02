@@ -410,6 +410,54 @@ impl HashmapInner {
         }
     }
 
+    /// The template of a constant Hash literal (`{"name" => 1, sym: 2}`
+    /// with only immediate or String keys and immutable values), built
+    /// at bytecode-emission time — so without a vm. Every key's digest
+    /// and `eql?` are vm-free (`packed_digest` / `string_digest`, exactly
+    /// what `insert` uses for them), so no Ruby code can run. Later
+    /// pairs overwrite earlier ones, as `insert` does. The literal is
+    /// materialized per evaluation by `RValue::deep_copy`.
+    pub(crate) fn from_literal_pairs(pairs: &[(Value, Value)]) -> Self {
+        debug_assert!(
+            pairs
+                .iter()
+                .all(|(k, _)| k.is_packed_value() || k.is_rstring_inner().is_some())
+        );
+        if pairs.len() <= INLINE_CAP && pairs.iter().all(|(k, _)| is_inline_key(*k)) {
+            let mut h = Self::default();
+            let mut m = h.as_mut();
+            for &(k, v) in pairs {
+                if let Some(i) = m.as_ref().inline_pos_noobs(k) {
+                    // SAFETY: rep is inline; i < len.
+                    unsafe { m.body_mut().inline[i].1 = v };
+                } else {
+                    let len = m.inline_len();
+                    // SAFETY: rep is inline; the slot exists (len < CAP).
+                    unsafe { m.body_mut().inline[len] = (k, v) };
+                    m.set_rep(len as u8 + 1);
+                }
+            }
+            return h;
+        }
+        let mut map = RubyMap::with_capacity(pairs.len());
+        for &(k, v) in pairs {
+            if k.is_packed_value() {
+                let hash = packed_digest(map.hasher(), k);
+                map.insert_prehashed(hash, Some(k), v);
+            } else {
+                let s = k.as_rstring_inner();
+                let hash = string_digest(map.hasher(), s);
+                map.insert_prehashed_with(hash, Some(k), v, |ek| string_key_eq(ek, k, s));
+            }
+        }
+        Self::from_parts(
+            REP_BOXED,
+            HashBody {
+                boxed: ManuallyDrop::new(BoxedHash::new(HashContent::Map(Box::new(map)))),
+            },
+        )
+    }
+
     fn new_boxed_with_default(map: RubyMap<Value, Value>, default: Option<HashDefault>) -> Self {
         Self::from_parts(
             REP_BOXED,
