@@ -69,27 +69,12 @@ impl Mt {
 
     pub(crate) fn next_u32(&mut self) -> u32 {
         if self.mti >= MT_N {
-            let mt = &mut self.mt;
-            for kk in 0..MT_N - MT_M {
-                let y = (mt[kk] & MT_UPPER) | (mt[kk + 1] & MT_LOWER);
-                mt[kk] = mt[kk + MT_M] ^ (y >> 1) ^ if y & 1 != 0 { MT_MATRIX_A } else { 0 };
-            }
-            for kk in MT_N - MT_M..MT_N - 1 {
-                let y = (mt[kk] & MT_UPPER) | (mt[kk + 1] & MT_LOWER);
-                mt[kk] =
-                    mt[kk + MT_M - MT_N] ^ (y >> 1) ^ if y & 1 != 0 { MT_MATRIX_A } else { 0 };
-            }
-            let y = (mt[MT_N - 1] & MT_UPPER) | (mt[0] & MT_LOWER);
-            mt[MT_N - 1] = mt[MT_M - 1] ^ (y >> 1) ^ if y & 1 != 0 { MT_MATRIX_A } else { 0 };
+            refill(&mut self.mt);
             self.mti = 0;
         }
-        let mut y = self.mt[self.mti];
+        let y = self.mt[self.mti];
         self.mti += 1;
-        y ^= y >> 11;
-        y ^= (y << 7) & 0x9d2c_5680;
-        y ^= (y << 15) & 0xefc6_0000;
-        y ^= y >> 18;
-        y
+        temper(y)
     }
 
     /// Serialized size of a generator: 624 little-endian `u32` words
@@ -125,9 +110,43 @@ impl Mt {
         Some(Self { mt, mti })
     }
 
+}
+
+/// Regenerate the 624-word table (`mt19937ar` `genrand_int32`'s
+/// refill), shared by the in-memory generator and the in-place one.
+fn refill(mt: &mut [u32; MT_N]) {
+    for kk in 0..MT_N - MT_M {
+        let y = (mt[kk] & MT_UPPER) | (mt[kk + 1] & MT_LOWER);
+        mt[kk] = mt[kk + MT_M] ^ (y >> 1) ^ if y & 1 != 0 { MT_MATRIX_A } else { 0 };
+    }
+    for kk in MT_N - MT_M..MT_N - 1 {
+        let y = (mt[kk] & MT_UPPER) | (mt[kk + 1] & MT_LOWER);
+        mt[kk] = mt[kk + MT_M - MT_N] ^ (y >> 1) ^ if y & 1 != 0 { MT_MATRIX_A } else { 0 };
+    }
+    let y = (mt[MT_N - 1] & MT_UPPER) | (mt[0] & MT_LOWER);
+    mt[MT_N - 1] = mt[MT_M - 1] ^ (y >> 1) ^ if y & 1 != 0 { MT_MATRIX_A } else { 0 };
+}
+
+/// The output tempering applied to one table word.
+#[inline]
+fn temper(mut y: u32) -> u32 {
+    y ^= y >> 11;
+    y ^= (y << 7) & 0x9d2c_5680;
+    y ^= (y << 15) & 0xefc6_0000;
+    y ^= y >> 18;
+    y
+}
+
+/// A source of MT19937 words: the in-memory [`Mt`] behind the global
+/// PRNG, or [`MtInPlace`], a `Random` instance's serialized state
+/// advanced where it lives. Every draw helper below is written against
+/// this so both share one implementation of CRuby's algorithms.
+pub(crate) trait MtDraw {
+    fn next_u32(&mut self) -> u32;
+
     /// CRuby `rb_rand_bytes`: little-endian 32-bit chunks; a trailing
     /// partial word still consumes a full draw.
-    pub(crate) fn fill_bytes(&mut self, dest: &mut [u8]) {
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
         let mut chunks = dest.chunks_exact_mut(4);
         for c in &mut chunks {
             c.copy_from_slice(&self.next_u32().to_le_bytes());
@@ -137,6 +156,69 @@ impl Mt {
             let b = self.next_u32().to_le_bytes();
             rem.copy_from_slice(&b[..rem.len()]);
         }
+    }
+}
+
+impl MtDraw for Mt {
+    fn next_u32(&mut self) -> u32 {
+        Mt::next_u32(self)
+    }
+}
+
+/// A generator operating directly on its serialized state (the
+/// `Mt::to_bytes` layout) — the `/random_state` String of a `Random`
+/// instance, borrowed for the duration of one builtin call.
+///
+/// A draw touches one table word and the position, so it costs O(1)
+/// where deserializing, drawing and re-serializing the 2.5 KB state cost
+/// ~10k instructions per `Random#rand` (splay draws 12k times per
+/// iteration). Only the refill, once every 624 words, decodes the table
+/// into a stack copy and writes it back.
+pub(crate) struct MtInPlace<'a>(&'a mut [u8]);
+
+impl<'a> MtInPlace<'a> {
+    /// `None` unless `bytes` is a well-formed state.
+    pub(crate) fn new(bytes: &'a mut [u8]) -> Option<Self> {
+        if bytes.len() != Mt::STATE_BYTES {
+            return None;
+        }
+        let s = Self(bytes);
+        (s.mti() <= MT_N).then_some(s)
+    }
+
+    #[inline]
+    fn word(&self, i: usize) -> u32 {
+        u32::from_le_bytes(self.0[i * 4..i * 4 + 4].try_into().unwrap())
+    }
+
+    #[inline]
+    fn mti(&self) -> usize {
+        self.word(MT_N) as usize
+    }
+
+    #[inline]
+    fn set_mti(&mut self, mti: usize) {
+        self.0[MT_N * 4..MT_N * 4 + 4].copy_from_slice(&(mti as u32).to_le_bytes());
+    }
+}
+
+impl MtDraw for MtInPlace<'_> {
+    fn next_u32(&mut self) -> u32 {
+        let mut mti = self.mti();
+        if mti >= MT_N {
+            let mut mt = [0u32; MT_N];
+            for (w, c) in mt.iter_mut().zip(self.0[..MT_N * 4].chunks_exact(4)) {
+                *w = u32::from_le_bytes(c.try_into().unwrap());
+            }
+            refill(&mut mt);
+            for (c, w) in self.0[..MT_N * 4].chunks_exact_mut(4).zip(mt.iter()) {
+                c.copy_from_slice(&w.to_le_bytes());
+            }
+            mti = 0;
+        }
+        let y = self.word(mti);
+        self.set_mti(mti + 1);
+        temper(y)
     }
 }
 
@@ -175,11 +257,24 @@ pub(crate) fn build_mt(seed: Value) -> Mt {
 }
 
 /// CRuby `genrand_real` (53-bit, two draws).
-pub(crate) fn next_real(mt: &mut Mt, cnt: &mut u64) -> f64 {
+pub(crate) fn next_real<M: MtDraw>(mt: &mut M, cnt: &mut u64) -> f64 {
     let a = (mt.next_u32() >> 5) as f64;
     let b = (mt.next_u32() >> 6) as f64;
     *cnt += 2;
     (a * 67108864.0 + b) * (1.0 / 9007199254740992.0)
+}
+
+/// CRuby `int_pair_to_real_inclusive`: uniform Float in `[0, 1]` (both
+/// ends included), two draws — the mapping an *inclusive* float-range
+/// `rand(a..b)` uses.
+pub(crate) fn next_real_inclusive<M: MtDraw>(mt: &mut M, cnt: &mut u64) -> f64 {
+    let a = mt.next_u32() as u128;
+    let b = mt.next_u32() as u128;
+    *cnt += 2;
+    let x = (a << 32) | b;
+    let m = (1u128 << 53) | 1;
+    let r = ((x * m) >> 64) as u64;
+    (r as f64) * (1.0 / 9007199254740992.0)
 }
 
 fn make_mask(mut x: u32) -> u32 {
@@ -204,7 +299,12 @@ fn make_mask(mut x: u32) -> u32 {
 /// A retry abandons a partially written pass, but the pass that returns
 /// assigns every index, so no stale digit can survive into the result and
 /// the buffer needs no clearing in between.
-pub(crate) fn limited_rand_into(mt: &mut Mt, cnt: &mut u64, limit: &[u32], digits: &mut [u32]) {
+pub(crate) fn limited_rand_into<M: MtDraw>(
+    mt: &mut M,
+    cnt: &mut u64,
+    limit: &[u32],
+    digits: &mut [u32],
+) {
     let len = limit.len();
     debug_assert_eq!(len, digits.len());
     loop {
@@ -240,7 +340,7 @@ pub(crate) fn limited_rand_into(mt: &mut Mt, cnt: &mut u64, limit: &[u32], digit
 
 /// [`limited_rand_into`] for the variable-width (Bignum) callers, which
 /// cannot size a buffer at compile time.
-pub(crate) fn limited_rand(mt: &mut Mt, cnt: &mut u64, limit: &[u32]) -> Vec<u32> {
+pub(crate) fn limited_rand<M: MtDraw>(mt: &mut M, cnt: &mut u64, limit: &[u32]) -> Vec<u32> {
     let mut digits = vec![0u32; limit.len()];
     limited_rand_into(mt, cnt, limit, &mut digits);
     digits
@@ -249,7 +349,7 @@ pub(crate) fn limited_rand(mt: &mut Mt, cnt: &mut u64, limit: &[u32]) -> Vec<u32
 /// CRuby `rb_random_ulong_limited`: uniform integer in `[0, max]`, drawn
 /// from `mt` without allocating. This is the draw behind every
 /// `Array#shuffle` / `#sample` index.
-pub(crate) fn ulong_limited(mt: &mut Mt, cnt: &mut u64, max: u64) -> u64 {
+pub(crate) fn ulong_limited<M: MtDraw>(mt: &mut M, cnt: &mut u64, max: u64) -> u64 {
     if max == 0 {
         return 0;
     }
@@ -287,7 +387,7 @@ pub(crate) fn digits_to_value(digits: &[u32]) -> Value {
 }
 
 /// `rand(max)` for an integer `max` (> 0): uniform in `[0, max)`.
-pub(crate) fn rand_int(mt: &mut Mt, cnt: &mut u64, max: &num::BigInt) -> Value {
+pub(crate) fn rand_int<M: MtDraw>(mt: &mut M, cnt: &mut u64, max: &num::BigInt) -> Value {
     let limit = max - 1u32;
     let digits = limited_rand(mt, cnt, &to_le_digits(&limit));
     digits_to_value(&digits)
@@ -339,12 +439,8 @@ impl Prng {
     /// (both ends included), two draws — the mapping an *inclusive*
     /// float-range `rand` uses.
     pub(crate) fn next_real_inclusive(&mut self) -> f64 {
-        let a = self.mt.next_u32() as u128;
-        let b = self.mt.next_u32() as u128;
-        let x = (a << 32) | b;
-        let m = (1u128 << 53) | 1;
-        let r = ((x * m) >> 64) as u64;
-        (r as f64) * (1.0 / 9007199254740992.0)
+        let mut cnt = 0;
+        next_real_inclusive(&mut self.mt, &mut cnt)
     }
 
     /// CRuby `rb_random_ulong_limited`: uniform integer in `[0, max]`.

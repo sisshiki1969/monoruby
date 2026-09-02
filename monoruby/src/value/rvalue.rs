@@ -1481,10 +1481,11 @@ impl RValue {
                     ObjTy::IO_BUFFER => ObjKind::io_buffer(self.as_io_buffer().clone()),
                     ObjTy::ARGF => ObjKind::argf(self.as_argf().clone()),
                     ObjTy::ARRAY => {
-                        let mut v = vec![];
-                        for e in self.as_array().iter() {
-                            v.push(e.deep_copy());
-                        }
+                        // Sized up front: a literal past the inline
+                        // capacity (`[0, 1, …, 9]`) is copied on every
+                        // evaluation, and growing from empty cost three
+                        // reallocations per copy — 80% of the copy.
+                        let v: Vec<Value> = self.as_array().iter().map(|e| e.deep_copy()).collect();
                         ObjKind::array(ArrayInner::from_vec(v))
                     }
                     ObjTy::RANGE => {

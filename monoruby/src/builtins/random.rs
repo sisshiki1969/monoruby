@@ -1,5 +1,7 @@
 use super::*;
-use crate::globals::prng::{Mt, build_mt, next_real, rand_int, ulong_limited};
+use crate::globals::prng::{
+    Mt, MtDraw, MtInPlace, build_mt, next_real, next_real_inclusive, rand_int, ulong_limited,
+};
 use num::{Signed, Zero};
 
 //
@@ -110,6 +112,52 @@ fn store_mt(globals: &mut Globals, self_: Value, mt: &Mt, cnt: u64) -> Result<()
         .store
         .set_ivar(self_, ivar_cnt(), Value::integer(cnt as i64))?;
     Ok(())
+}
+
+/// Run `f` over the instance's live generator *in place* — the
+/// `/random_state` String is advanced where it lies (`MtInPlace`), so a
+/// draw costs O(1) instead of a 2.5 KB deserialize/serialize round trip.
+/// The count ivar is updated afterwards. A missing or malformed state
+/// String is materialized from `(seed, count)` first.
+///
+/// `f` must not run Ruby code: it holds a mutable borrow of the state
+/// String's buffer. Coerce arguments before calling this.
+fn with_mt_in_place<R>(
+    globals: &mut Globals,
+    self_: Value,
+    f: impl FnOnce(&mut MtInPlace<'_>, &mut u64) -> R,
+) -> Result<R> {
+    let (seed, mut cnt) = load_state(globals, self_);
+    let state_ok = globals
+        .store
+        .get_ivar(self_, ivar_state())
+        .and_then(|v| v.is_rstring_inner().map(|s| s.len() == Mt::STATE_BYTES))
+        .unwrap_or(false);
+    if !state_ok {
+        let mt = mt_at(seed, cnt);
+        globals
+            .store
+            .set_ivar(self_, ivar_state(), Value::bytes(mt.to_bytes()))?;
+    }
+    let mut state = globals.store.get_ivar(self_, ivar_state()).unwrap();
+    let res = {
+        let bytes = state.as_rstring_inner_mut().as_bytes_mut();
+        match MtInPlace::new(bytes) {
+            Some(mut mt) => f(&mut mt, &mut cnt),
+            None => {
+                // A state String of the right length but an impossible
+                // position: rebuild it and go again.
+                let fresh = mt_at(seed, cnt).to_bytes();
+                bytes.copy_from_slice(&fresh);
+                let mut mt = MtInPlace::new(bytes).expect("freshly serialized state");
+                f(&mut mt, &mut cnt)
+            }
+        }
+    };
+    globals
+        .store
+        .set_ivar(self_, ivar_cnt(), Value::integer(cnt as i64))?;
+    Ok(res)
 }
 
 ///
@@ -371,23 +419,33 @@ fn random_rand(
 #[monoruby_builtin]
 fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let (mut mt, mut c) = load_mt(globals, self_);
-    let result = inst_rand_op(vm, globals, &mut mt, &mut c, lfp.try_arg(0))?;
-    store_mt(globals, self_, &mt, c)?;
-    Ok(result)
+    // Argument coercion may run Ruby code; it happens before the
+    // generator's buffer is borrowed for the draw.
+    let req = prepare_rand(vm, globals, lfp.try_arg(0))?;
+    with_mt_in_place(globals, self_, |mt, c| draw_rand(mt, c, req))
 }
 
-/// Core `Random#rand` dispatch operating on a reconstructed MT.
-fn inst_rand_op(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    mt: &mut Mt,
-    c: &mut u64,
-    arg: Option<Value>,
-) -> Result<Value> {
+/// A `Random#rand` request with its argument fully coerced, so the draw
+/// itself runs no Ruby code.
+enum RandReq {
+    /// `rand` — a Float in `[0, 1)`.
+    Real,
+    /// `rand(int)` — an Integer in `[0, max)`.
+    Int(num::BigInt),
+    /// `rand(float)` — a Float in `[0, max)` (`0.0` means `[0, 1)`).
+    FloatMax(f64),
+    /// `rand(a..b)` over Integers: `start + [0, span)`.
+    IntRange { start: i64, span: i64 },
+    /// `rand(a..b)` with a Float end point: `s + real * (e - s)`, the
+    /// real drawn inclusively for `..` (CRuby `int_pair_to_real_inclusive`)
+    /// and half-open for `...`.
+    FloatRange { start: f64, end: f64, excl: bool },
+}
+
+fn prepare_rand(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) -> Result<RandReq> {
     let arg = match arg {
         Some(v) => v,
-        None => return Ok(Value::float(next_real(mt, c))),
+        None => return Ok(RandReq::Real),
     };
     // Range: `rand(a..b)` / `rand(a...b)`.
     if let Some(r) = arg.is_range() {
@@ -400,18 +458,21 @@ fn inst_rand_op(
         {
             let span = e - s + if excl { 0 } else { 1 };
             if span <= 0 {
-                return Ok(Value::nil());
+                // `Random#rand` rejects an empty range (`Kernel#rand`
+                // is the one that answers nil).
+                return Err(MonorubyErr::argumenterr(format!(
+                    "invalid argument - {}",
+                    arg.inspect(&globals.store)
+                )));
             }
-            let v = rand_int(mt, c, &num::BigInt::from(span));
-            return Ok(Value::integer(s + v.try_fixnum().unwrap_or(0)));
+            return Ok(RandReq::IntRange { start: s, span });
         }
         // If either end point is a Float, both are treated as Floats.
         let to_f = |v: Value| -> Option<f64> {
             v.try_float().or_else(|| v.try_fixnum().map(|i| i as f64))
         };
         if let (Some(s), Some(e)) = (to_f(start), to_f(end)) {
-            let f = next_real(mt, c);
-            return Ok(Value::float(s + f * (e - s)));
+            return Ok(RandReq::FloatRange { start: s, end: e, excl });
         }
         return Err(MonorubyErr::argumenterr("bad value for range"));
     }
@@ -421,8 +482,7 @@ fn inst_rand_op(
         if max < 0.0 {
             return Err(MonorubyErr::argumenterr(format!("invalid argument - {max}")));
         }
-        let f = next_real(mt, c);
-        return Ok(Value::float(if max == 0.0 { f } else { f * max }));
+        return Ok(RandReq::FloatMax(max));
     }
     // Integer maximum (Fixnum or Bignum), or anything #to_int-coercible.
     let max = match arg.unpack() {
@@ -442,7 +502,27 @@ fn inst_rand_op(
             "invalid argument - {big}"
         )));
     }
-    Ok(rand_int(mt, c, &big))
+    Ok(RandReq::Int(big))
+}
+
+/// The draw for a prepared request, against any generator.
+fn draw_rand<M: MtDraw>(mt: &mut M, c: &mut u64, req: RandReq) -> Value {
+    match req {
+        RandReq::Real => Value::float(next_real(mt, c)),
+        RandReq::Int(big) => rand_int(mt, c, &big),
+        RandReq::FloatMax(max) => {
+            let f = next_real(mt, c);
+            Value::float(if max == 0.0 { f } else { f * max })
+        }
+        RandReq::IntRange { start, span } => {
+            let v = rand_int(mt, c, &num::BigInt::from(span));
+            Value::integer(start + v.try_fixnum().unwrap_or(0))
+        }
+        RandReq::FloatRange { start, end, excl } => {
+            let f = if excl { next_real(mt, c) } else { next_real_inclusive(mt, c) };
+            Value::float(start + f * (end - start))
+        }
+    }
 }
 
 /// Shared implementation for `Random.rand`, `Random.random_number`,
@@ -527,13 +607,14 @@ fn instance_bytes(
         return Err(MonorubyErr::argumenterr("negative string size".to_string()));
     }
     let size = size as usize;
-    let (mut mt, cnt) = load_mt(globals, self_);
     // ceil(size/4) 32-bit words are consumed (a trailing partial word
     // still draws a full u32, matching CRuby).
     let words = size.div_ceil(4) as u64;
     let mut buf = vec![0u8; size];
-    mt.fill_bytes(&mut buf);
-    store_mt(globals, self_, &mt, cnt + words)?;
+    with_mt_in_place(globals, self_, |mt, cnt| {
+        mt.fill_bytes(&mut buf);
+        *cnt += words;
+    })?;
     Ok(Value::bytes(buf))
 }
 
@@ -729,6 +810,36 @@ mod tests {
         );
         run_test_error("Random.urandom(-1)");
         run_test_error("Random.urandom('woo')");
+    }
+
+    #[test]
+    fn random_draws_in_place_across_refills() {
+        // The state String is advanced where it lies; the table is
+        // regenerated in place every 624 words. Walk well past several
+        // refills through every draw kind, then compare the stream, the
+        // count-sensitive `==`, and a dup's independence with CRuby.
+        run_test(
+            r##"
+            r = Random.new(42)
+            1300.times { r.rand }
+            a = [r.rand, r.rand(100), r.rand(1 << 40), r.rand(2 ** 70) % 1000, r.rand(1.5), r.rand(3..9), r.rand(3...4), r.rand(1.0..2.0), r.rand(1.0...2.0), r.rand(1..2.5), r.bytes(6).bytes]
+            700.times { r.bytes(3) }
+            a << r.rand << r.rand(7)
+            d = r.dup
+            a << (d == r) << d.rand << r.rand << (d == r)
+            s = Random.new(42); 1300.times { s.rand }
+            a << (s.rand == a[0])
+            o = Object.new; def o.to_int; 10; end
+            a << r.rand(o).between?(0, 9)
+            a
+            "##,
+        );
+        run_test_error("Random.new(1).rand(-1)");
+        run_test_error("Random.new(1).rand(0)");
+        run_test_error("Random.new(1).rand(-0.5)");
+        run_test_error(r#"Random.new(1).rand("x"..."y")"#);
+        run_test_error("Random.new(1).rand(5..1)");
+        run_test_error("Random.new(1).rand(5...5)");
     }
 
     #[test]
