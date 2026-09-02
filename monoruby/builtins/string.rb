@@ -134,9 +134,19 @@ class String
     end
   end
 
-  def each_byte(&block)
-    return to_enum(:each_byte) unless block
-    bytes.each(&block)
+  # `rb_str_each_byte`: the length is re-read every iteration, so a
+  # block that shrinks the receiver stops early, as in CRuby. Written as
+  # a plain loop rather than `bytes.each(&block)` — that built a
+  # bytesize-element Array and a Proc per call, and the JIT inlines
+  # `bytesize` / `getbyte` / `yield` here, which makes this about 3x
+  # faster per byte.
+  def each_byte
+    return to_enum(:each_byte) { bytesize } unless block_given?
+    i = 0
+    while i < bytesize
+      yield getbyte(i)
+      i += 1
+    end
     self
   end
 
