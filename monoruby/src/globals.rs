@@ -335,6 +335,17 @@ pub struct Globals {
     pub no_gems: bool,
     /// The `Warning[]` switches, one [`WarningCategory`] bit each.
     warning_categories: u8,
+    /// The `Encoding` each `Encoding::<NAME>` constant object stands
+    /// for, keyed by the object. Filled by `init_encoding`; those objects
+    /// live as long as the process, so the keys never go stale. This is
+    /// what lets `String#force_encoding(Encoding::UTF_8)` skip the
+    /// object → name → parse round trip (CRuby's `rb_to_encoding` is an
+    /// index read too).
+    encoding_of_object: HashMap<u64, crate::value::rvalue::Encoding>,
+    /// The `Encoding::<NAME>` object `String#encoding` answers for each
+    /// `Encoding`, memoized on first use — the reverse of the above,
+    /// resolved through the constant table once instead of per call.
+    encoding_objects: HashMap<crate::value::rvalue::Encoding, Value>,
     /// library directries.
     load_path: Value,
     /// standard PRNG
@@ -558,6 +569,9 @@ impl alloc::GC<RValue> for Globals {
             v.mark(alloc);
         }
         self.random_seed_obj.mark(alloc);
+        for v in self.encoding_objects.values() {
+            v.mark(alloc);
+        }
         // The argv array and the bound ARGF object outlive any
         // reassignment of the `ARGV` / `ARGF` constants, so from then on
         // they are reachable only from here.
@@ -754,6 +768,8 @@ impl Globals {
             no_jit,
             no_gems,
             warning_categories: WarningCategory::DEFAULT,
+            encoding_of_object: HashMap::default(),
+            encoding_objects: HashMap::default(),
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_features,
@@ -1736,6 +1752,38 @@ impl Globals {
                     .insert((func_id, class_id, *reason), 1);
             }
         };
+    }
+}
+
+// `Encoding` objects ↔ `Encoding` values
+impl Globals {
+    /// Record that the constant object `obj` (an `Encoding::<NAME>`)
+    /// stands for `enc`. Called by `init_encoding` for objects that are
+    /// never collected.
+    pub(crate) fn register_encoding_object(
+        &mut self,
+        obj: Value,
+        enc: crate::value::rvalue::Encoding,
+    ) {
+        self.encoding_of_object.insert(obj.id(), enc);
+    }
+
+    /// The `Encoding` an `Encoding::<NAME>` constant object stands for,
+    /// without touching its name.
+    #[inline]
+    pub(crate) fn encoding_of_object(&self, obj: Value) -> Option<crate::value::rvalue::Encoding> {
+        self.encoding_of_object.get(&obj.id()).copied()
+    }
+
+    /// The memoized `Encoding::<NAME>` object for `enc`, if
+    /// `String#encoding` has resolved it before.
+    #[inline]
+    pub(crate) fn cached_encoding_object(&self, enc: crate::value::rvalue::Encoding) -> Option<Value> {
+        self.encoding_objects.get(&enc).copied()
+    }
+
+    pub(crate) fn cache_encoding_object(&mut self, enc: crate::value::rvalue::Encoding, obj: Value) {
+        self.encoding_objects.insert(enc, obj);
     }
 }
 
