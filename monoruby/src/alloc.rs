@@ -418,10 +418,21 @@ const DATA_LEN: usize = 64 * (SIZE - 1);
 const THRESHOLD: usize = 64 * (SIZE - 2);
 
 /// Floor for the allocation budget between collections: pages filling to
-/// `THRESHOLD` before the arena requests a collection (~8 pages ≈ 32K
-/// `RValue`s, matching the old `>= 8` poll band that accumulated `+1` per
-/// page). Small heaps use exactly this; see [`GC_HEAP_FRACTION`].
-const PAGES_PER_GC_TRIGGER: u32 = 8;
+/// `THRESHOLD` before the arena requests a collection (32 pages ≈ 127K
+/// `RValue`s, 8 MB of cells). Small heaps use exactly this; see
+/// [`GC_HEAP_FRACTION`].
+///
+/// Was 8 (the old `>= 8` poll band). Every minor collection re-scans the
+/// whole root set — every ISeq's literals, every class — so on a program
+/// that has loaded a Rails-sized amount of code the fixed cost per
+/// collection dwarfs the young generation it reclaims: erubi ran 7.3
+/// collections per iteration, activerecord 3.8, on a 6 MB heap. Raising
+/// the floor to 32 measured graphql -8%, activerecord -6.5%, rack -2%
+/// (yjit-bench, x86-64, single runs on a machine that drifts ±10%; erubi
+/// did not move in a 3-round rerun) for +3..10 MB RSS, still below
+/// CRuby's on the same programs
+/// (see doc/yjit_bench_slow_investigation_2026-09.md §8).
+const PAGES_PER_GC_TRIGGER: u32 = 32;
 
 /// Above `PAGES_PER_GC_TRIGGER * GC_HEAP_FRACTION` pages in service, the
 /// budget instead scales with the heap: a collection is requested once
