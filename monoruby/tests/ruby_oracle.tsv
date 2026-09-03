@@ -61,6 +61,7 @@
 03503f8bcb4632cbd04e4701371caab5	["File::Stat", 8, true]	path = "/tmp/monoruby_test_instat_#{Process.pid}_#{rand(100000)}"\n 
 035d992920dc2f7cc38dee107378052b	true	'he[[o'.gsub('[', ']'); $~.regexp == /\\[/
 0365d874d3091255ffafa6a537178e6a	nil	a=Object.new; a.instance_variable_get(:@i)
+0366a74fdcc076e9a2a06c94bbd26362	[nil, "a", ".", 2, 4, "b.", 2, "a.", "c a+b", "b.", nil, "c a+", "c a+", 8, "+", "a.b.c a", 1, 1, true, nil, false, "", 0, "", "a.b", IndexError]	require "strscan"\n        s = StringScanner.new("a.b.c a+b")\n        r 
 0379b90699980103ce98cdf1fd4b6457	[42, false, true]	class Foo\n          def !\n            42\n          end\n        end\n    
 03add114cdd6e1fb8f694172fc12ba42	[["method", "method"], [:se, :se]]	$dlog = []\n            def dse; $dlog << :se; 1; end\n            [[
 04053dc491e488a586338fcc5eed81e2	"hi"	c = Class.new\n            [1].each do |_|\n              c.class_eva
@@ -1315,6 +1316,7 @@
 63e644345315a92587e6531509cddace	true	require "json"\n            data = JSON.parse("{\\"name\\": \\"Nokogiri
 6400ae64c9910a3864a764454ee1737f	["SystemExit", true, 0]	begin\n              Process.exit(0)\n            rescue SystemExit =
 64304d338b2e1d9153798436746ba67c	[:plus, :lt, :bang, :aref, 3, true, false, 9]	class BopUser\n              def +(o); :plus; end\n              def 
+6453b5e2bc4a58561702b08638c14ead	["ab", 2, "ab", nil, "\\xFFc", "\\xFFc", 4, "c", 3, "d ef", "d", 1, "ef", "f", true, "ASCII-8BIT", "", nil, nil, "no implicit conversion of Integer into String", "no implicit conversion of Symbol into String"]	require "strscan"\n        r = []\n        b = StringScanner.new("ab\\xFFc
 646b6df81e3b78ea650391aa2912e6d4	["0.33333e1", "0.3333333333e1", "0.25e2"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
 64745fd3594011f602b1ae98a52ab4ae	["Array", true, ["prompt>"], ["prompt>"]]	require "expect"\n            res = []\n            r, w = IO.pipe\n  
 64813a4dde67dc42192c53915b8c2dc5	true	M = Data.define(:amount, :unit)\nM.new(42, "km").frozen?
@@ -1368,6 +1370,7 @@
 681fd3ccba5816796a6f87e5163660da	["US-ASCII", "US-ASCII", "US-ASCII"]	s = "abc".dup.force_encoding("US-ASCII")\n              s.rpartiti
 6867d900d8bc23f027af9e908bfd1fbc	[File, "hello"]	path = "/tmp/mono_cov_file_new_#{Process.pid}"\n            begin\n  
 688b520eaa53b818c032ed84ebb90ba3	1234	Random.srand(1234)\n        Random.srand(4567)\n        
+688bcd73f28a1d32469337711f75b5af	["日本語", 9, 9, 3, 1, "text", "e", ["t", "e", "x", "t"], 14, " ü", 17, "日本語 text ", "nïcode 123", "nïcode 123", 10, "1", "2", "3", "3", true, nil, "本", "語", 9, "日", 3, "日", 3, "本", 3, "\\xE6", 4, "\\x9C\\xAC", 24]	require "strscan"\n        s = StringScanner.new("日本語 text ünïcode 123")
 68aaf8840f49575ccb7aee97d2c25227	true	__ENCODING__.equal?(Encoding::UTF_8)
 68acd2045cc595907a8dd13ac1cc06ac	[[:a, 10], [:b, 20], [:c, 30]]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.eac
 68c63ec13376de46973a48e77ab880cf	[]	Module.nesting
@@ -1493,6 +1496,7 @@
 71d85b9646b325d57ec9e46b0c5bd105	"hello"	class Foo; def to_str; "hello"; end; end\n            String.new(Foo
 71f4d67c2c270e965eaade7505c22804	[20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 0]	def count(n)\n              i = 0\n              c = 0\n              
 7223f396f3e66e954bb3f1b4f21a88a0	[[:a, :one, [0]], [:a, :two, [0]], [:a, :real, [0]], [:b, :one, [0]], [:b, :two, [0]], [:b_real, 0], [:a, :one, [1]], [:a, :two, [1]], [:a, :real, [1]], [:b, :one, [1]], [:b, :two, [1]], [:b_real, 1]]	class A\n          def method_missing(name, *args) = [:a, name, args]\n  
+722e9d91e8bf5b57493890d13ca6bbf4	["\\xFF", 1, "ab", "ab", "\\xFEcd", "\\xFEc", 5, 4, "d", "d", "d", true, "EUC-JP", 6, 1, "abc", "b", true]	require "strscan"\n        r = []\n        b = StringScanner.new("\\xFFab\\
 7235ebfc85831c502397c3cbb35ce813	Foo	class Foo\n              def bar; end\n            end\n            \n\n
 723ea63495140106ebdfae5448e3e464	80	class C\n          def f(a, b)\n            a + b\n          end\n        e
 7252f1c8ab400b2d14e205f52ce07f84	["warned", "silent", "warned", "silent", "warned", "warned"]	require "stringio"\n        res = []\n        capture = proc do |verbose,
@@ -1705,6 +1709,7 @@
 81a4893d8dc3fd03a6cb2cc3f973f7b0	[4, 8, 111, 58, 14, 69, 120, 99, 101, 112, 116, 105, 111, 110, 8, 58, 9, 109, 101, 115, 103, 73, 34, 6, 120, 6, 58, 6, 69, 84, 58, 7, 98, 116, 48, 58, 10, 64, 105, 118, 97, 114, 105, 12]	e = Exception.new("x")\n            e.instance_variable_set(:@ivar, 
 81e0c55d71a2b7b73cce48922e4bf66e	:OVERRIDDEN	class Integer; def /(o); :OVERRIDDEN; end; end; 3 / 4
 81eacd02531187a80cb90a83f0c4824c	[[130, 160], "Shift_JIS"]	Encoding.default_internal = Encoding::Shift_JIS\n              t =
+81f86732a80e26e9376730e005f7ae2b	["日本語", 9, 9, 3, 1, "text", "e", ["t", "e", "x", "t"], 14, " ü", 17, "日本語 text ", "nïcode 123", "nïcode 123", 10, "1", "2", "3", "3", true, nil, "\\x97", 2, "本", "語", 9]	require "strscan"\n        s = StringScanner.new("日本語 text ünïcode 123")
 81fd4c71c1be9be22bcbec82f890766a	[:method_missing, :method_missing]	class CM\n              def method_missing(name, *) = [__method__, _
 8200b7ed09f157ac5e736b20f1274721	[:custom, false, true, true, false]	class Baz\n          def !\n            :custom\n          end\n        end
 823812ee0e73bed95cbd8ff75188a377	[[65], [195, 168], nil]	File.write("/tmp/mr_gc3.txt", "A" + [0xC3, 0xA8].pack("C*").force_e
@@ -2339,6 +2344,7 @@ b1e95110d8ea3a01a8392d5fcde03380	[true, "nil"]	begin\n              raise Runtim
 b1f575a8d57c1ae9a8351ad21a875204	true	[true, false].include?(GC.auto_compact)
 b1fe8d72aed6bdfd75350fcc54ac6891	10	obj = Object.new\n            pr = Proc.new { |x| x * 2 }\n          
 b20a481ce0203a766d78c51b6ec17f1a	[[[ArgumentError, "comparison of Array with Array failed"], [ArgumentError, "comparison of String with 0 failed"]], [[ArgumentError, "comparison of Array with Array failed"], [ArgumentError, "comparison of String with 0 failed"]], [[ArgumentError, "comparison of Array with Array failed"], [ArgumentError, "comparison of String with 0 failed"]], [[ArgumentError, "comparison of Array with Array failed"], [ArgumentError, "comparison of String with 0 failed"]]]	a = [[1], [2]]\n            f = ->(m) { begin; a.send(m) { |x, y| ni
+b2246dc28e027cca7c95b52e7331237d	["ab", 3, "b", "b", nil, ["ab", "a", "b"], nil, false, nil, nil, nil, nil, "1", "1", 1, "ab", "2", 1, "2", "2", 3, false, "StringScanner::Error", "2", 3, nil, nil, false]	require "strscan"\n        s = StringScanner.new("ab12")\n        r = []\n
 b22bc514c07a095c143e3f7049f6dcd2	[true, false, false]	ensured = false\n            rescued = false\n            f = Fiber.n
 b2581c86d8fd4f38392d54c50df9db10	[5, 2, "hABlo", 2, "hABzz", "not opened for writing", 2, [0, 0, 104, 105], "not opened for writing", 1, 3, "x123"]	path = "/tmp/monoruby_test_iowrite_#{Process.pid}_#{rand(100000)}"\n
 b2795cc1ad41c83216d600a75460cd44	[nil, false, 19, nil, nil, 12, 17, :again, 18]	h = {}\n        20.times { |i| h["k#{i}"] = i }\n        h.delete("k3")\n 
@@ -2962,6 +2968,7 @@ e0378a5e80a453abed2cc017dde89a8c	[[:n, :n, :n], "wrong number of arguments (give
 e04102db31563efacf03513f5ddbcdd6	{"MONORUBY_ENV_TEST_SL1" => "x", "MONORUBY_ENV_TEST_SL2" => "y"}	ENV["MONORUBY_ENV_TEST_SL1"] = "x"\n            ENV["MONORUBY_ENV_TE
 e0430993ff49221b4ff142a12a2d9ee6	[1, [:gt, :lt, :gt, :lt]]	class C\n              attr_reader :calls\n              def initiali
 e051ec7a15469fca9105c948f78c2f26	[[:v], 50]	$nlr_log = []\n        def nlr_mid\n          yield\n        ensure\n      
+e08faf6442afb4dbe110fadb78630420	["ab", 3, "b", "b", nil, ["ab", "a", "b"], nil, false, nil, nil, nil, nil, "1", "1", 1, "ab", "2", 1, "2", "2", 3, false, StringScanner::Error, "2", 3, nil, nil, false]	require "strscan"\n        s = StringScanner.new("ab12")\n        r = []\n
 e093793f4006c99f09965c6fde38e86b	42	class Foo\n          def initialize\n            @x = 42\n          end\n  
 e0982ecc832e3a0a37c3aabbe59b1ec2	[{"name" => 100, "version" => 2, sym: 3, 4 => 5, 1.5 => 6, nil => 7, true => 8, false => 9, new: 200}, {"name" => 1, sym: 3, 4 => 5, 1.5 => 6, nil => 7, true => 8, false => 9}, {"name" => 1, "version" => 2, sym: 3, 4 => 5, 1.5 => 6, nil => 7, true => 8, false => 9}, false, false, nil, false, 9, 8, [true, true, true, true, true, true, true, true], [String, String, Symbol, Integer, Float, NilClass, TrueClass, FalseClass], true, 39]	def f; {"name" => 1, "version" => 2, sym: 3, 4 => 5, 1.5 => 6, nil 
 e09c62f66a3c3f3ed8999368ae421637	[true, [Errno::ENOENT, "No such file or directory @ rb_check_realpath_internal - /no_such_dir_zzq/x"], Errno::ELOOP, Errno::ELOOP]	(d="/tmp/mono_rp_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/file", ""); a=(

@@ -152,3 +152,94 @@ fn string_match_position_boundaries() {
         "#,
     );
 }
+
+#[test]
+fn strscan_literal_string_patterns() {
+    // String patterns are literal bytes for the anchored family and a
+    // literal byte search for the `_until` family; a name lookup on a
+    // String-pattern match has no groups to find.
+    run_test_once(
+        r#"
+        require "strscan"
+        s = StringScanner.new("a.b.c a+b")
+        r = []
+        r << s.scan(".") << s.scan("a") << s.scan(".") << s.skip("b.") << s.pos
+        r << s.matched << s.matched_size << s.pre_match << s.post_match << s[0] << s[1]
+        r << s.check_until("+") << s.scan_until("+") << s.pos << s.matched << s.pre_match
+        r << s.exist?("b") << s.skip_until("b") << s.eos? << s.scan_until("zz") << s.matched?
+        s.reset
+        r << s.scan_until("") << s.pos << s.scan("") << s.check("a.b")
+        r << (begin; s.scan("a"); s["x"]; rescue IndexError => e; e.class; end)
+        r
+        "#,
+    );
+}
+
+#[test]
+fn strscan_utf8_subjects_in_place() {
+    // Non-ASCII UTF-8 subjects are matched in place at a byte position;
+    // the registers stay byte offsets, so every accessor agrees with
+    // CRuby's byte-based scanner.
+    run_test_once(
+        r#"
+        require "strscan"
+        s = StringScanner.new("日本語 text ünïcode 123")
+        r = []
+        r << s.scan(/\S+/) << s.pos << s.matched_size << s.charpos
+        r << s.skip(/\s+/) << s.scan(/(t)(e)(x)(t)?/) << s[2] << s.captures << s.pos
+        r << s.scan_until(/ü/) << s.pos << s.pre_match << s.post_match
+        r << s.check_until(/\d+/) << s.skip_until(/(\d)(\d)/) << s[1] << s[2] << s.rest
+        r << s.scan(/\d/) << s.eos? << s.getch
+        s.pos = 3
+        r << s.scan(/本/) << s.scan(/語/) << s.pos
+        s.reset
+        r << s.getch << s.pos << s.matched << s.matched_size << s.getch << s.unscan.pos
+        r << s.get_byte << s.pos << s.peek(2) << s.rest_size
+        r
+        "#,
+    );
+}
+
+#[test]
+fn strscan_register_state_across_calls() {
+    // A failed match clears the registers; getch / get_byte record the
+    // char as the whole match; unscan restores the previous position.
+    run_test_once(
+        r#"
+        require "strscan"
+        s = StringScanner.new("ab12")
+        r = []
+        r << s.scan(/(a)(b)/) << s.size << s[-1] << s[2] << s[3] << s.values_at(0, 1, 2)
+        r << s.scan(/x/) << s.matched? << s.matched << s.size << s.captures << s[0]
+        r << s.getch << s.matched << s.matched_size << s.pre_match << s.post_match << s.size
+        r << s.get_byte << s.matched << s.unscan.pos << s.matched?
+        r << (begin; s.unscan; rescue => e; e.class.to_s; end)
+        r << s.scan(/\d+/) << s.unscan.pos << s.scan(/(\d)(\d)/) << s.captures << s.eos?
+        r
+        "#,
+    );
+}
+
+#[test]
+fn strscan_fallback_subjects_and_pattern_types() {
+    // A byte-oriented subject with 8-bit content cannot be viewed in
+    // place, so Regexp patterns take the MatchData fallback (String
+    // patterns stay literal bytes); a pattern that is neither raises the
+    // conversion TypeError CRuby reports.
+    run_test_once(
+        r#"
+        require "strscan"
+        r = []
+        b = StringScanner.new("ab\xFFcd ef".b)
+        r << b.scan(/ab/) << b.pos << b.matched << b.scan(/x/) << b.check_until(/c/) << b.scan_until(/c/) << b.pos
+        r << b.matched << b.pre_match.bytesize << b.post_match << b.scan("d") << b.skip(/\s/) << b.scan(/(e)(f)/) << b[2] << b.eos?
+        r << b.string.encoding.to_s
+        s = StringScanner.new("abc")
+        s.pos = 3
+        r << s.scan("") << s.scan("a") << s.scan_until("a")
+        r << (begin; s.scan(1); rescue TypeError => e; e.message; end)
+        r << (begin; s.scan_until(:a); rescue TypeError => e; e.message; end)
+        r
+        "#,
+    );
+}
