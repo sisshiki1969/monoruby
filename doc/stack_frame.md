@@ -164,3 +164,55 @@ accumulator: `GP_ALLOC_POOL` is empty, and the local allocator in
 `jitgen/gp_alloc.rs` assigns general-purpose registers per basic block
 instead, so a compiled body's values live in whatever caller-saved register
 it picked.
+
+## Negative result: moving META / SVAR to the callee
+
+The caller writes the whole header, including the two words that depend only
+on the callee — `meta` (`store[fid].meta()`) and the `svar` zero sentinel.
+They are the same at every call site of a given method, so they look like an
+obvious thing to write once in the callee instead: 24 bytes off each of a
+program's call sites, in exchange for 17 bytes added once per method.
+
+This was implemented and measured, and it is **slower**. The x86-64 form
+was: `Codegen::init_func` writes both words at `rbp - RBP_LOCAL_FRAME` (the
+same addresses the caller reached at `rsp - RSP_LOCAL_FRAME`), and a call
+site drops them exactly when it dispatches straight to the callee's compiled
+entry — the same `get_jit_entry` lookup `AsmInst::Call` performs, resolved in
+the same lowering so the two cannot disagree. Block-style callees were
+excluded: `define_method` re-tags a block's `LFP_META` with
+`Meta::PROC_METHOD_MASK` at call time, and a body rewriting the word from its
+own compile-time copy would drop that bit.
+
+Measured against the same tree, interleaved runs (x86-64, release):
+
+| benchmark | delta |
+|---|---|
+| fib | +4% |
+| 30k_methods | −5 to −10% |
+| tarai | −5.8% |
+| bedcov | −5.5% |
+| sudoku | −3.6% |
+| qsort | −3.3% |
+| 30k_ifelse | −3% |
+| aobench | −2.5% |
+| nbody, mandelbrot, bf, 30k_variables | flat |
+
+Two reasons, and both generalise:
+
+* **The size win is much smaller than the call-site arithmetic suggests.**
+  A `movabs` for the 64-bit `Meta` is 10 of the 17 bytes added per method,
+  and these programs have nearly as many methods as call sites (30k_methods:
+  ~31k sites over 30k methods). The net was ~6% of the JIT code, not the
+  ~19% the caller-side saving alone implies. The trade only pays where call
+  sites outnumber methods by a wide margin — which is what `fib` is, and why
+  `fib` is the one benchmark that improved.
+* **Placement matters more than count.** The stores moved from the caller,
+  where they issue well ahead of the `call` and drain from the store buffer
+  while the caller finishes its own work, to the head of the callee, where
+  they are serialized behind `push rbp` / `mov rbp, rsp` / `sub rsp` and
+  compete with the entry poll's load — on a taken branch, at the exact point
+  the front end is refilling.
+
+So the header stays where it is. A future attempt at trimming the call
+sequence should target words that can be *dropped* rather than moved, or
+move work off the callee's entry rather than onto it.
