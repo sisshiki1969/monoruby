@@ -1904,6 +1904,34 @@ pub(super) extern "C" fn set_index(
             }
         };
     }
+    if base_classid == HASH_CLASS
+        && !globals
+            .store
+            .basic_op_redefined_for(HASH_CLASS, IdentId::_INDEX_ASSIGN)
+    {
+        // `Hash#[]=` without a method lookup: the same steps as the
+        // `index_assign` builtin (the fresh-String-key dup/freeze, the
+        // frozen-receiver check, the insert). This is the path every
+        // interpreted `h[k] = v` on a Hash takes, and the residual arm of
+        // the JIT's polymorphic `[]=` dispatch; going through
+        // `invoke_method` here meant a global-method-cache probe per store
+        // (10M of them in an activerecord run).
+        let key = if base.as_hash().is_compare_by_identity() {
+            index
+        } else {
+            index.frozen_hash_key()
+        };
+        let res = base
+            .as_hash_mut(&globals.store)
+            .and_then(|mut h| h.insert(key, src, vm, globals));
+        return match res {
+            Ok(()) => Some(src),
+            Err(err) => {
+                vm.set_error(err);
+                None
+            }
+        };
+    }
     vm.invoke_method(
         globals,
         IdentId::_INDEX_ASSIGN,

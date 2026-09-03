@@ -527,3 +527,44 @@ fn command_literal_frozen_argument() {
         "#,
     );
 }
+
+#[test]
+fn hash_index_assign_generic_path() {
+    // `h[k] = v` on a Hash whose class the JIT cannot pin down takes
+    // `runtime::set_index`: fresh String keys are dup'd and frozen, frozen
+    // receivers raise, compare_by_identity keeps the caller's key, and a
+    // redefined `Hash#[]=` is honoured.
+    run_test(
+        r##"
+        def st(h, k, v) = (h[k] = v)
+        k = +"key"
+        h = {}
+        st(h, k, 1); k << "!"
+        r = [h.keys, h.keys[0].frozen?, h.keys[0].equal?(k)]
+        i = {}.compare_by_identity
+        ik = +"ik"
+        st(i, ik, 2); ik << "?"
+        r << i.keys[0].equal?(ik) << i[ik]
+        a = [1, 2]
+        st(a, 0, 9)
+        r << a
+        begin
+          st({}.freeze, :a, 1)
+        rescue => e
+          r << e.class
+        end
+        r
+        "##,
+    );
+    run_test_once(
+        r##"
+        class Hash
+          def []=(k, v)
+            "redef #{k}"
+          end
+        end
+        def st(h, k, v) = (h[k] = v)
+        [st({}, :a, 1), {}.size]
+        "##,
+    );
+}
