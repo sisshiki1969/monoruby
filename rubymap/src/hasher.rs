@@ -198,8 +198,17 @@ impl Hasher for RubyHasher {
 mod tests {
     use super::*;
 
+    /// A fixed seed, so the statistical assertions below are the same
+    /// run to run. The process seed is exercised separately by
+    /// `state_is_stable_within_the_process`.
+    fn fixed() -> RubyRandomState {
+        RubyRandomState {
+            seed: 0x0123_4567_89ab_cdef,
+        }
+    }
+
     fn digest(f: impl FnOnce(&mut RubyHasher)) -> u64 {
-        let mut h = RubyRandomState::default().build_hasher();
+        let mut h = fixed().build_hasher();
         f(&mut h);
         h.finish()
     }
@@ -240,20 +249,35 @@ mod tests {
     /// One flipped bit anywhere in the input changes the digest, and
     /// changes it in the high bits too — hashbrown takes its control byte
     /// from the top 7, so a mixer that only diffuses downward would
-    /// cluster.
+    /// cluster there while looking fine overall.
+    ///
+    /// The control byte is only 7 bits wide, so two unrelated digests
+    /// share it once in 128 by chance: the bound is on the *rate*, not
+    /// on every flip. A mixer that left the high bits alone would keep
+    /// them equal for nearly every flip and blow well past it.
     #[test]
     fn one_bit_changes_the_whole_digest() {
         let base = [0x11u8; 24];
         let h0 = of(&base);
+        let mut same_control = 0;
+        let flips = base.len() * 8;
         for byte in 0..base.len() {
             for bit in 0..8 {
                 let mut probe = base;
                 probe[byte] ^= 1 << bit;
                 let h1 = of(&probe);
                 assert_ne!(h0, h1, "byte {byte} bit {bit}");
-                assert_ne!(h0 >> 57, h1 >> 57, "control bits, byte {byte} bit {bit}");
+                if h0 >> 57 == h1 >> 57 {
+                    same_control += 1;
+                }
             }
         }
+        // Chance alone gives flips/128 (1.5 of 192); 10 % is far above
+        // that and far below the ~100 % of an undiffused high half.
+        assert!(
+            same_control * 10 <= flips,
+            "control bits unchanged for {same_control} of {flips} flips"
+        );
     }
 
     /// Sequential and strided integers are the classic way a weak mixer
@@ -312,3 +336,4 @@ mod tests {
         assert_eq!(a.hash_one("key"), c.hash_one("key"));
     }
 }
+
