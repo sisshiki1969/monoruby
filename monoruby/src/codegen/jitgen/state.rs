@@ -724,8 +724,8 @@ impl AbstractFrame {
         guarded: slot::Guarded,
     ) -> GP {
         self.def_S_guarded(dst, guarded);
-        let (gp, spill) = self.gp_regfile.alloc_reg(&[]);
-        if let Some((reg, slot)) = spill {
+        let (gp, spills) = self.gp_regfile.alloc_reg(&[]);
+        for (reg, slot) in spills {
             ir.reg2stack(reg, slot);
         }
         gp

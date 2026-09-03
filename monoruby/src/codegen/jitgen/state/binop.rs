@@ -187,66 +187,51 @@ impl AbstractFrame {
         let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
         // Same slot on both sides (`x + x`): one guard proves both operands.
         let rhs_guard = rhs_guard && lhs != rhs;
-        // 1b. For `Mul`/`Div`: if `rhs` is a dirty resident, write it to its home
-        //     and mark it clean *before* the deopt snapshot. The op clobbers
-        //     `rhs_gp` before the side-exit, so the snapshot must re-home `rhs`
-        //     from its (now-current) stack home, not from the dead register — a
+        // 1b. For `Mul`/`Div`: the op clobbers `rhs_gp` before the side-exit,
+        //     so every holder of that register — `rhs` and any slot copied from
+        //     it — is written to its home if dirty and forgotten *before* the
+        //     deopt snapshot. The snapshot must re-home them from their
+        //     (now-current) stack homes, not from the dead register — a
         //     `dirty_residents()` entry would otherwise store garbage to the slot
         //     on deopt (e.g. the untagged divisor, an invalid `Value`). A fresh /
         //     constant operand is already recoverable (its home is current, or it
-        //     re-materializes from `LinkMode::C`).
-        if rhs_clobbered && let Some(reg) = self.gp_regfile.dirty_reg_of(rhs) {
-            ir.reg2stack(reg, rhs);
-            self.gp_regfile.sync(rhs);
+        //     re-materializes from `LinkMode::C`). The register still physically
+        //     holds `rhs` for the op itself.
+        if rhs_clobbered {
+            for (reg, slot) in self.gp_regfile.evict_reg(rhs_gp) {
+                ir.reg2stack(reg, slot);
+            }
         }
-        // Whether `lhs`'s snapshot recovery depends on `lhs_gp` surviving the
-        // op: a dirty resident is re-homed *from the register* by the deopt
-        // write-back, so an in-place Add/Sub (which clobbers the register
-        // before the overflow side-exit) must not be chosen for it — see
-        // `binop_dst_reg`. Captured before the snapshot.
-        let lhs_dirty = self.gp_regfile.dirty_reg_of(lhs).is_some();
-        // 2. Snapshot the deopt write-back *before* clearing: it must re-home the
+        // 2. Plan the result register and make room for it *before* the deopt
+        //    snapshot (see `plan_dst_reg`). `Add`/`Sub` compute in the dst
+        //    position, preferring `lhs_gp` itself (in place, or a binding
+        //    transfer from a clean live resident — no move), and fall back to a
+        //    distinct register when `lhs` is dirty (its register must survive
+        //    to the side exit for the deopt write-back) or shared with other
+        //    slots. `Mul`/`Div` clobber `rhs` and (Div) produce in `rax`, so
+        //    pin both operands and take a distinct register. `x + x` (both
+        //    operands in one register) uses the tagged-order doubling
+        //    sequence, which reads the shared operand before any untag — so it
+        //    may compute in place in the shared register too.
+        let double = kind == BinOpK::Add && lhs_gp == rhs_gp;
+        let extra_pinned: &[GP] = if double && !rhs_clobbered { &[] } else { &[rhs_gp] };
+        let plan = self.plan_dst_reg(ir, lhs, lhs_gp, !rhs_clobbered, extra_pinned, dst);
+        // 3. Snapshot the deopt write-back *before* clearing: it must re-home the
         //    dirty residents that are live at this op's PC — which includes a
         //    dirty operand that is itself a dead-after temporary (a prior binop
         //    result consumed here). The guards and the overflow check below all
         //    side-exit to this point, where the interpreter re-reads the operands
         //    from their stack homes, so they have to be recoverable.
         let deopt = ir.new_deopt(self);
-        // 3. `dst` is about to be redefined: drop any stale GP cache of it (done
+        // 4. `dst` is about to be redefined: drop any stale GP cache of it (done
         //    after the snapshot, so a `dst` that aliases a dirty operand is still
-        //    re-homed for the re-execution).
-        if let Some(dst) = dst {
-            self.gp_regfile.invalidate(dst);
-        }
-        // 4. Clear `next_sp`: every temporary the stack pointer has popped is now
-        //    dead. `next_sp` is the sp *after* this op, so the operands — already
-        //    read into registers in step 1 — are freed here too. This must run
-        //    after the load (which still reads them) and before the result
-        //    allocation (so the result can reuse a freed operand's register).
-        let next_sp = self.next_sp();
-        self.gp_regfile.free_above_sp(next_sp);
-        // 5. Choose the result register and run the op. `Add`/`Sub` compute in
-        //    the dst position; `binop_dst_reg` prefers `lhs_gp` itself (in
-        //    place, or a binding transfer from a clean live resident — no
-        //    move), falling back to a distinct register when `lhs` is dirty
-        //    (its register must survive to the side exit for the deopt
-        //    write-back). `Mul`/`Div` clobber `rhs` and (Div) produce in
-        //    `rax`, so pin both operands and take a distinct register.
-        //    `x + x` (both operands in one register) uses the tagged-order
-        //    doubling sequence, which reads the shared operand before any
-        //    untag — so it may compute in place in the shared register too.
-        let double = kind == BinOpK::Add && lhs_gp == rhs_gp;
-        let dst_gp = if rhs_clobbered {
-            let (gp, spill) = self.gp_regfile.alloc_reg(&[lhs_gp, rhs_gp]);
-            if let Some((reg, slot)) = spill {
-                ir.reg2stack(reg, slot);
-            }
-            gp
-        } else if double {
-            self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[])
-        } else {
-            self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[rhs_gp])
-        };
+        //    re-homed for the re-execution). Then clear `next_sp`: every
+        //    temporary the stack pointer has popped is now dead. `next_sp` is
+        //    the sp *after* this op, so the operands — already read into
+        //    registers in step 1 — are freed here too. This must run after the
+        //    load (which still reads them) and before the result allocation (so
+        //    the result can reuse a freed operand's register).
+        let dst_gp = self.take_dst_reg(ir, plan, lhs, lhs_gp, extra_pinned, dst);
         // An operand not yet proven a fixnum is only speculatively an integer,
         // so guard it; the guard then *proves* it a fixnum, so refine its
         // abstract type in place (keeping the resident) — a later integer op on
@@ -268,10 +253,6 @@ impl AbstractFrame {
         } else {
             ir.integer_binop_reg(kind, dst_gp, lhs_gp, rhs_gp, deopt);
         }
-        // The op left garbage in `rhs_gp`: forget that it cached `rhs`.
-        if rhs_clobbered {
-            self.gp_regfile.invalidate(rhs);
-        }
         if let Some(dst) = dst {
             // Define first (this clears any stale resident of `dst` via `clear`),
             // then bind the result register.
@@ -292,14 +273,11 @@ impl AbstractFrame {
         imm: i32,
     ) {
         let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
-        let lhs_dirty = self.gp_regfile.dirty_reg_of(lhs).is_some();
+        // Plan and reserve the result register before the snapshot, then
+        // snapshot, then clear — the same three steps as `binop_integer_gp`.
+        let plan = self.plan_dst_reg(ir, lhs, lhs_gp, true, &[], dst);
         let deopt = ir.new_deopt(self);
-        if let Some(dst) = dst {
-            self.gp_regfile.invalidate(dst);
-        }
-        let next_sp = self.next_sp();
-        self.gp_regfile.free_above_sp(next_sp);
-        let dst_gp = self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[]);
+        let dst_gp = self.take_dst_reg(ir, plan, lhs, lhs_gp, &[], dst);
         if lhs_guard {
             ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
             self.refine_S_fixnum(lhs);
@@ -317,45 +295,81 @@ impl AbstractFrame {
         }
     }
 
-    /// Choose the result register for an `Add`/`Sub`-family op that computes
-    /// in place in the dst position.
+    /// Plan the result register of an integer op, **before** its deopt
+    /// snapshot, and make room for it. Returns whether the op computes in
+    /// place in `lhs_gp`; otherwise a distinct register is reserved (any
+    /// eviction that requires is spilled *now*, so the snapshot taken next
+    /// lists no register the result will overwrite — see
+    /// `GpRegFile::reserve`). The decision reads the file as it will be after
+    /// the post-snapshot clearing (`invalidate(dst)`, `free_above_sp`).
     ///
-    /// * `lhs` **clean** (or already unbound — a dead-after temp freed by
-    ///   `free_above_sp`, a dst-aliasing operand dropped by `invalidate`, or
-    ///   a constant's load register): compute in place in `lhs_gp`. A live
-    ///   clean resident transfers its register to the result with no data
-    ///   move (its stack home is current, so nothing is lost); the slot
-    ///   simply drops to `S`.
-    /// * `lhs` **dirty**: the deopt write-back re-homes `lhs` *from
-    ///   `lhs_gp`*, and the op would clobber that register before the
+    /// In place (`in_place_ok` only — `Mul`/`Div` never qualify) when:
+    /// * `lhs` is **clean** (or unbound — a dead-after temp, a dst-aliasing
+    ///   operand, or a constant's load register): a live clean resident
+    ///   transfers its register to the result with no data move (its stack
+    ///   home is current, so nothing is lost); the slot simply drops to `S`.
+    ///   A **dirty** `lhs` is re-homed *from `lhs_gp`* by the deopt
+    ///   write-back, and the op would clobber that register before the
     ///   overflow side-exit — the interpreter would then re-execute the op
-    ///   with a corrupted operand. Compute in a distinct register instead
-    ///   (the lowering's `mov dst, lhs` preserves the operand register for
-    ///   the side exit).
-    fn binop_dst_reg(
+    ///   with a corrupted operand — so it gets a distinct register (the
+    ///   lowering's `mov dst, lhs` preserves the operand register).
+    /// * `lhs_gp` will hold nothing but `lhs`: a register **shared** with
+    ///   other slots (copies of `lhs` whose stores are still owed) carries
+    ///   their only copy, so it must survive.
+    /// * `lhs_gp` carries no other live operand (`x + x`: lhs and rhs share
+    ///   one register — clobbering it in place would corrupt the rhs read).
+    fn plan_dst_reg(
         &mut self,
         ir: &mut AsmIr,
         lhs: SlotId,
         lhs_gp: GP,
-        lhs_dirty: bool,
+        in_place_ok: bool,
         extra_pinned: &[GP],
+        dst: Option<SlotId>,
+    ) -> bool {
+        let next_sp = self.next_sp();
+        let in_place = in_place_ok
+            && self.gp_regfile.dirty_reg_of(lhs).is_none()
+            && !extra_pinned.contains(&lhs_gp)
+            && self.gp_regfile.will_hold_at_most(lhs_gp, lhs, next_sp, dst);
+        if !in_place {
+            let mut pinned = vec![lhs_gp];
+            pinned.extend_from_slice(extra_pinned);
+            for (reg, slot) in self.gp_regfile.reserve(&pinned, next_sp, dst) {
+                ir.reg2stack(reg, slot);
+            }
+        }
+        in_place
+    }
+
+    /// The post-snapshot half of [`Self::plan_dst_reg`]: drop the stale cache
+    /// of `dst` and the popped temporaries, then hand out the planned result
+    /// register — `lhs_gp` itself (in place), or a register `reserve` left
+    /// free, so no spill lands after the snapshot.
+    fn take_dst_reg(
+        &mut self,
+        ir: &mut AsmIr,
+        in_place: bool,
+        lhs: SlotId,
+        lhs_gp: GP,
+        extra_pinned: &[GP],
+        dst: Option<SlotId>,
     ) -> GP {
-        // Never compute in place in a register that also carries another live
-        // operand (`x + x`: lhs and rhs share one register — clobbering it
-        // in place would corrupt the rhs read).
-        if !lhs_dirty && !extra_pinned.contains(&lhs_gp) {
-            if self.gp_regfile.is_free(lhs_gp) {
-                return lhs_gp;
-            }
-            if self.gp_regfile.reg_of(lhs) == Some(lhs_gp) {
-                self.gp_regfile.invalidate(lhs);
-                return lhs_gp;
-            }
+        if let Some(dst) = dst {
+            self.gp_regfile.invalidate(dst);
+        }
+        let next_sp = self.next_sp();
+        self.gp_regfile.free_above_sp(next_sp);
+        if in_place {
+            debug_assert!(self.gp_regfile.will_hold_at_most(lhs_gp, lhs, next_sp, None));
+            self.gp_regfile.invalidate(lhs);
+            return lhs_gp;
         }
         let mut pinned = vec![lhs_gp];
         pinned.extend_from_slice(extra_pinned);
-        let (gp, spill) = self.gp_regfile.alloc_reg(&pinned);
-        if let Some((reg, slot)) = spill {
+        let (gp, spills) = self.gp_regfile.alloc_reg(&pinned);
+        debug_assert!(spills.is_empty(), "reserve() must have made room before the snapshot");
+        for (reg, slot) in spills {
             ir.reg2stack(reg, slot);
         }
         gp
@@ -383,8 +397,8 @@ impl AbstractFrame {
         // as `movabs gp, 0x3` rather than materializing it to a slot and reading
         // it back). The value is a known fixnum, so it needs no guard.
         if let Some(v) = self.fixnum_literal_value(slot) {
-            let (gp, spill) = self.gp_regfile.alloc_reg(pinned);
-            if let Some((reg, s)) = spill {
+            let (gp, spills) = self.gp_regfile.alloc_reg(pinned);
+            for (reg, s) in spills {
                 ir.reg2stack(reg, s);
             }
             ir.lit2reg(v, gp);
@@ -394,8 +408,8 @@ impl AbstractFrame {
         // Not resident and not a constant: put the value at its canonical stack
         // home (a no-op for an `S` slot; materializes a boxed float), then load it.
         self.write_back_slot(ir, slot);
-        let (gp, spill) = self.gp_regfile.alloc_reg(pinned);
-        if let Some((reg, s)) = spill {
+        let (gp, spills) = self.gp_regfile.alloc_reg(pinned);
+        for (reg, s) in spills {
             ir.reg2stack(reg, s);
         }
         ir.stack2reg(slot, gp);

@@ -1752,16 +1752,31 @@ impl SlotState {
                 self.set_Sf(dst, x, guarded);
             }
             LinkMode::S(guarded) => {
-                // A live GP resident holds `src`'s value in a register; copy it
-                // from there rather than reading a stale stack home (mirrors
-                // `load`'s resident-aware `S` arm).
-                if let Some(reg) = self.gp_regfile.reg_of(src) {
-                    ir.reg2stack(reg, dst);
-                } else {
-                    ir.stack2reg(src, GP::Rax);
-                    ir.reg2stack(GP::Rax, dst);
-                }
+                // The copy is free: `dst` joins `src`'s register as a dirty
+                // holder and no store is emitted now. The store to `dst`'s
+                // home is owed at the register's eviction or the next flush —
+                // and dropped if `dst` dies first (a `ret`, a popped
+                // temporary). A chain `v2 = v1; v3 = v2; …` thus costs nothing
+                // per link instead of a load/store pair each, with each
+                // link's load waiting on the previous link's store. When
+                // `src` is not resident it is loaded (clean) into a fresh
+                // register first, so `src` and `dst` share it from here on.
+                let reg = match self.gp_regfile.reg_of(src) {
+                    Some(reg) => reg,
+                    None => {
+                        let (reg, spills) = self.gp_regfile.alloc_reg(&[]);
+                        for (r, s) in spills {
+                            ir.reg2stack(r, s);
+                        }
+                        ir.stack2reg(src, reg);
+                        self.gp_regfile.bind(reg, src, /* dirty */ false);
+                        reg
+                    }
+                };
+                // Define first (this drops any stale resident of `dst` via
+                // `clear`), then bind the shared register.
                 self.def_S_guarded(dst, guarded);
+                self.gp_regfile.bind(reg, dst, /* dirty */ true);
             }
             LinkMode::C(v) => {
                 self.def_C(dst, v);

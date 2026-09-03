@@ -3088,3 +3088,46 @@ The type+liveness loop-entry float adoption (§16 L2-1, promoted to default-on i
 Only the build knob is gone; runtime behaviour is unchanged from the default-on
 state. The §31/§32 `layer2-float-by-type` × `stress-spill-pool` history is
 retained above as the record of the pressure bug that §39/§40 fixed.
+
+## 45. Slot copies share a GP register (many slots per register, as the fpr file)
+
+`%dst = %src` used to be a load/store pair through the stack home — and, since
+`Mov` flushed the GP file first, it also ended every run of register-resident
+integer work. On a copy-heavy body (yjit-bench `30k_variables`: 100 locals per
+method, mostly `vN = vM`) that was ~300 memory ops per call, each copy's load
+waiting on the previous copy's store (a store-forwarding chain), and 12× the
+cost of ZJIT's SSA form, where a copy is a renaming.
+
+The fpr file has always let one xmm back several slots (`vfpr: Vec<Vec<SlotId>>`,
+the `F`/`Sf` sharing `copy_slot` relies on). `GpRegFile` now has the same shape:
+`holders: Vec<Vec<Holder>>`, one holder set per allocatable register, each
+holder carrying its own dirty bit. `copy_slot`'s `S` arm binds `dst` **dirty**
+to `src`'s register (loading `src` clean into a fresh register first if it was
+not resident) and emits nothing; `Mov` no longer flushes for an `S`/`C`
+source. The store to `dst`'s home is owed at the register's eviction or the
+next flush, and is dropped if `dst` dies first (a `ret`, a popped temporary —
+`free_above_sp` retains per holder). Eviction spills every dirty holder of the
+victim (`alloc_reg` returns a `Vec` of spills; `evict_reg` is the shared
+primitive, also used where `Mul`/`Div` are about to destroy `rhs`'s register).
+
+Two rules follow from sharing:
+
+- An op may compute **in place** only in a register that will hold nothing
+  but its `lhs` (`will_hold_at_most`); a register shared with copies carries
+  their only value, so the result takes a distinct register.
+- The result register must be **reserved before the deopt snapshot**
+  (`plan_dst_reg` → `GpRegFile::reserve`, then `new_deopt`, then
+  `take_dst_reg`). The snapshot is taken before the popped operands are
+  cleared so the interpreter can re-read them from their homes; a victim
+  evicted *after* it stayed listed in it, and an overflow side exit then
+  stored the register — by now holding the result — into the victim's home.
+  Copies made this latent ordering bug reachable (plb2 `bedcov`'s
+  `splitmix32`: `z = x` kept `x` resident for the whole body, the second
+  multiply overflowed to a Bignum, and `x` came back a Float); it is fixed
+  for the copy-free case too.
+
+Result (x86-64, release): `30k_variables` 306 ms → 25 ms per iteration; the
+other benchmarks are flat. Tests: `tests/copy_propagation.rs` (in-place ops on
+a shared register, `Mul`/`Div` clobbering a shared operand, overflow and type
+deopts with copies outstanding, calls/allocations, loops, non-fixnum values,
+the `splitmix32` shape) and the `gp_alloc` unit tests.
