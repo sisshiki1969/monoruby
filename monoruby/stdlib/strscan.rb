@@ -7,14 +7,18 @@
 #
 # Like CRuby's C strscan, the scanner keeps its match registers to
 # itself: a scan stores only byte offsets (via the allocation-lean
-# `String#__strscan_match` primitive on the ASCII fast path — a plain
-# Fixnum for group-less patterns), never builds a MatchData, and leaves
-# `$~` untouched. The accessors (`matched`, `[]`, `captures`, …)
-# materialize strings lazily from the registers. Non-ASCII subjects fall
-# back to a copied rest-slice matched with `String#match`, whose
-# MatchData then backs the same accessors.
+# `String#__strscan_match` primitive, matched in place on the byte
+# suffix at the scan position; a plain Fixnum for group-less patterns),
+# never builds a MatchData, and leaves `$~` untouched. The
+# accessors (`matched`, `[]`, `captures`, …) materialize strings lazily
+# from the registers. Byte-oriented subjects with 8-bit content (whose
+# engine view is a remapped copy) fall back to a copied rest-slice
+# matched with `String#match`, whose MatchData then backs the same
+# accessors.
 
 class StringScanner
+  class Error < StandardError; end
+
   def initialize(str)
     @str = str.is_a?(String) ? str : str.to_s
     @pos = 0
@@ -121,13 +125,13 @@ class StringScanner
 
   def getch
     return nil if eos?
-    ch = @str.byteslice(@pos, 1)
+    # One character (up to 4 bytes of UTF-8), not one byte.
+    ch = @str.byteslice(@pos, 4).chr
     @prev_pos = @pos
-    @pos += 1
+    @pos += ch.bytesize
     # A successful getch records the char as the whole match (CRuby).
     _clear_match
-    @match_spans = @match_end = ch.bytesize
-    @match_begin = 0
+    @match_spans = ch.bytesize
     ch
   end
 
@@ -137,14 +141,13 @@ class StringScanner
     @prev_pos = @pos
     @pos += 1
     _clear_match
-    @match_spans = @match_end = 1
-    @match_begin = 0
+    @match_spans = 1
     byte
   end
   alias getbyte get_byte
 
   def unscan
-    raise "unscan failed: previous match record not exist" unless matched?
+    raise Error, "unscan failed: previous match record not exist" unless matched?
     @pos = @prev_pos
     _clear_match
     self
@@ -152,14 +155,16 @@ class StringScanner
 
   # --- Match data ---
   #
-  # On the register (spans) path, @match_begin/@match_end are byte
-  # offsets of the whole match relative to the scan origin (@prev_pos),
-  # and group contents are byteslices of @str. On the fallback path the
+  # On the register path @match_spans is either an Integer (the byte end
+  # of a group-less whole match that starts at the scan origin
+  # @prev_pos) or an Array of byte offset pairs relative to @prev_pos;
+  # group contents are byteslices of @str. On the fallback path the
   # stored MatchData answers instead.
 
   def matched
     if @match_spans
-      @str.byteslice(@prev_pos + @match_begin, @match_end - @match_begin)
+      b = _match_begin
+      @str.byteslice(@prev_pos + b, _match_end - b)
     elsif @match_md
       @match_md[0]
     end
@@ -171,7 +176,7 @@ class StringScanner
 
   def matched_size
     if @match_spans
-      @match_end - @match_begin
+      _match_end - _match_begin
     elsif @match_md
       @match_md[0].bytesize
     end
@@ -191,7 +196,7 @@ class StringScanner
         end
       elsif n.is_a?(String) || n.is_a?(Symbol)
         name = n.to_s
-        idx = @match_re && @match_re.named_captures[name]&.last
+        idx = Regexp === @match_re && @match_re.named_captures[name]&.last
         raise IndexError, "undefined group name reference: #{name}" unless idx
         self[idx]
       elsif n.respond_to?(:to_int)
@@ -206,7 +211,7 @@ class StringScanner
 
   def pre_match
     if @match_spans
-      @str.byteslice(0, @prev_pos + @match_begin)
+      @str.byteslice(0, @prev_pos + _match_begin)
     elsif @match_md
       @str.byteslice(0, @pos - @match_md[0].bytesize)
     end
@@ -214,7 +219,7 @@ class StringScanner
 
   def post_match
     if @match_spans
-      @str.byteslice(@prev_pos + @match_end..-1)
+      @str.byteslice(@prev_pos + _match_end..-1)
     elsif @match_md
       @str.byteslice(@pos..-1)
     end
@@ -263,14 +268,14 @@ class StringScanner
     matched.to_s
   end
 
-  # `\A`-anchored counterparts of caller patterns, built once per
-  # distinct pattern instead of on every scan. Regexp patterns are
-  # identity-keyed (a regex literal is the same object on every
-  # evaluation, so a lexer's fixed pattern set hits after the first
-  # scan); String patterns are value-keyed via their escaped form
-  # (CRuby's C strscan treats them as literal bytes). All caches are
-  # size-capped so callers that generate patterns dynamically cannot
-  # grow them without bound.
+  # `\A`-anchored counterparts of caller Regexp patterns, built once per
+  # distinct pattern instead of on every scan; identity-keyed (a regex
+  # literal is the same object on every evaluation, so a lexer's fixed
+  # pattern set hits after the first scan). String patterns never come
+  # here: the primitive treats them as literal bytes (CRuby's C strscan
+  # does too), and only the MatchData fallback needs their escaped
+  # Regexp forms. All caches are size-capped so callers that generate
+  # patterns dynamically cannot grow them without bound.
   ANCHORED_RE = {}.compare_by_identity
   ANCHORED_STR = {}
   PLAIN_STR = {}
@@ -280,7 +285,7 @@ class StringScanner
   private
 
   def _clear_match
-    @match_spans = @match_md = @match_re = @match_begin = @match_end = nil
+    @match_spans = @match_md = @match_re = nil
   end
 
   def _group_count
@@ -290,6 +295,15 @@ class StringScanner
   # Group count across both representations (for `captures`).
   def _group_total
     @match_spans ? _group_count : @match_md.size
+  end
+
+  # Whole-match byte offsets relative to @prev_pos (register path).
+  def _match_begin
+    Integer === @match_spans ? 0 : @match_spans[0]
+  end
+
+  def _match_end
+    Integer === @match_spans ? @match_spans : @match_spans[1]
   end
 
   # Both match paths hand the engine only the rest of the string, so
@@ -305,39 +319,24 @@ class StringScanner
     end
   end
 
-  # Match the anchored form of `pattern` at the scan position and store
-  # the registers. Returns the byte length of the match, or nil.
+  # Match `pattern` at the scan position and store the registers.
+  # Returns the byte length of the match, or nil.
   #
-  # ASCII-only content (an O(1) check on the cached code range; byte and
-  # char offsets coincide) matches the byte suffix in place via
-  # `__strscan_match` — a group-less hit costs no allocation at all.
-  # Everything else copies the rest and matches it, as before.
+  # `__strscan_match` matches the byte suffix in place (a group-less hit
+  # is a bare Fixnum) and answers `false` only for a subject it cannot
+  # view in place, which takes the MatchData fallback. The engine sees
+  # only the suffix, so the cached `\A(?:…)` form of a Regexp pattern
+  # anchors at the scan position; a String pattern is a literal prefix.
   def _match_len_at_pos(pattern, advance)
-    anchored = _anchored(pattern)
     @prev_pos = @pos
-    if @str.ascii_only?
-      spans = @str.__strscan_match(anchored, @pos)
-      @match_md = nil
-      unless spans
-        @match_spans = @match_re = @match_begin = @match_end = nil
-        return nil
-      end
-      @match_spans = spans
-      @match_re = anchored
-      @match_begin = 0
-      len = @match_end = (Integer === spans ? spans : spans[1])
-    else
-      rest_str = @str.byteslice(@pos..-1)
-      m = rest_str&.match(anchored)
-      @match_spans = @match_re = nil
-      @match_md = m
-      unless m
-        @match_begin = @match_end = nil
-        return nil
-      end
-      @match_begin = 0
-      len = @match_end = m[0].bytesize
-    end
+    probe = pattern.is_a?(String) ? pattern : _anchored(pattern)
+    spans = @str.__strscan_match(probe, @pos, true)
+    return _fallback_at_pos(pattern, advance) if false == spans
+    @match_md = nil
+    @match_spans = spans
+    return nil unless spans
+    @match_re = pattern
+    len = Integer === spans ? spans : spans[1]
     @pos += len if advance
     len
   end
@@ -347,41 +346,47 @@ class StringScanner
   # position (== the number of bytes an advancing variant consumes), or
   # nil.
   def _match_forward_end(pattern, advance)
+    @prev_pos = @pos
+    spans = @str.__strscan_match(pattern, @pos, false)
+    return _fallback_forward(pattern, advance) if false == spans
+    @match_md = nil
+    @match_spans = spans
+    return nil unless spans
+    @match_re = pattern
+    end_pos = Integer === spans ? spans : spans[1]
+    @pos += end_pos if advance
+    end_pos
+  end
+
+  # MatchData fallbacks for subjects the primitive cannot match in
+  # place: copy the rest and match it, so `\A` anchors at the scan
+  # position.
+  def _fallback_at_pos(pattern, advance)
+    m = _fallback_match(_anchored(pattern))
+    return nil unless m
+    len = m[0].bytesize
+    @pos += len if advance
+    len
+  end
+
+  def _fallback_forward(pattern, advance)
     if pattern.is_a?(String)
       PLAIN_STR.clear if PLAIN_STR.size > CACHE_LIMIT
       pattern = PLAIN_STR[pattern] ||= Regexp.new(Regexp.escape(pattern))
     end
-    @prev_pos = @pos
-    if @str.ascii_only?
-      spans = @str.__strscan_match(pattern, @pos)
-      @match_md = nil
-      unless spans
-        @match_spans = @match_re = @match_begin = @match_end = nil
-        return nil
-      end
-      @match_spans = spans
-      @match_re = pattern
-      if Integer === spans
-        @match_begin = 0
-        end_pos = @match_end = spans
-      else
-        @match_begin = spans[0]
-        end_pos = @match_end = spans[1]
-      end
-    else
-      rest_str = @str.byteslice(@pos..-1)
-      m = rest_str&.match(pattern)
-      @match_spans = @match_re = nil
-      @match_md = m
-      unless m
-        @match_begin = @match_end = nil
-        return nil
-      end
-      end_pos = m.end(0)
-      @match_begin = end_pos - m[0].bytesize
-      @match_end = end_pos
-    end
+    m = _fallback_match(pattern)
+    return nil unless m
+    # Char == byte offsets on this path (a byte-oriented subject views
+    # one char per byte).
+    end_pos = m.end(0)
     @pos += end_pos if advance
     end_pos
+  end
+
+  def _fallback_match(re)
+    rest_str = @str.byteslice(@pos..-1)
+    m = rest_str&.match(re)
+    @match_spans = @match_re = nil
+    @match_md = m
   end
 end

@@ -359,6 +359,10 @@ Fixnum ガードに Bignum 3.3 %、`Visitor#visit` の class-set ガード 2.4 %
 対策: `StringScanner` を Rust builtin にして、region を scanner に持たせ `onig_match`
 （アンカー付きの 1 回マッチ）を直接呼ぶ。CRuby の C 実装と同じ形。
 
+→ §8.1 で「Ruby 実装は残したまま、primitive だけを `onig_match` + region 再利用に
+する」形で検討した。2 倍速くなるが、`onigmo-regex` crate 側に region を受け取る API
+が要る。
+
 ### 5.7 例外・catch/throw（rack, activerecord）
 
 - `raise` は `MonorubyErr::new(String)` でメッセージ String を Rust ヒープに複製し、
@@ -526,6 +530,61 @@ activerecord の `respond_to?` 連打（`respond_to?(:to_ary)` などの未検�
   専用命令 + basic-op 検査に置き換えて解消。もう 1 つ、結果 temp を `push` する前に
   命令を emit すると JIT の抽象フレームがその temp を死んだスロットと見なして
   `load()` で panic する（`emit_call` は push してから emit している）。
+### 8.1 StringScanner（§5.6）の検討: Ruby 実装を残したまま primitive を差し替える
+
+graphql の lexer は 1 トークンあたり `skip` を 2〜3 回呼ぶ。`skip` 1 回の内訳を
+`perf`（`skip(/[_A-Za-z][_0-9A-Za-z]*/)` ヒットのみのループ、1 回 246 ns）で見ると:
+
+| 割合 | 何 |
+|---:|---|
+| 32 % | Onigmo 本体（`match_at` 17.6、`onig_search_gpos` 5.0、`forward_search_range` 4.5、`onig_region_clear` + memset 3.3、`mbclen` 1.9） |
+| 22 % | JIT された Ruby 側（`_match_len_at_pos` 12.8、`_anchored` 2.7、`pos=` 2.4、`skip` 1.3、呼び出し元 2.4） |
+| 20 % | Rust ヘルパ（`string_strscan_match` 6.6、`regex_view` 3.1、`captures_from_pos_no_save` 2.7、`Hash#[]`（`\A` 付き Regexp のキャッシュ引き）4.2、`Captures::get` 1.9、`coerce_to_regexp_or_string` 1.5） |
+| 9 % | malloc / free（`onig_region_new` / `onig_region_resize` / `onig_region_free`: `captures_from_pos` が呼ぶたびに region を確保・解放する） |
+
+つまり regex エンジン本体は 1/3 で、残りは「`\A(?:…)` でラップした Regexp を Hash から
+引いて `onig_search` に渡し、region を毎回 malloc する」周辺コスト。CRuby の C strscan は
+scanner が region を持ち、`onig_match`（scan 位置での 1 回マッチ）を直接呼ぶ。
+
+試したこと（2 段階）:
+
+1. **monoruby だけで閉じる変更**（このブランチ、コミット済み）: `__strscan_match` を
+   `(pattern, byte_pos, anchored)` にして、String パターンはリテラルのバイト比較
+   （prefix / 前方探索）を Rust で、Regexp は `\A(?:…)` 形を Ruby 側キャッシュから渡す。
+   非 ASCII の UTF-8 文字列もその場でマッチ（従来は rest をコピーして `String#match` に
+   落としていた）。`ascii_only?` 呼び出しと `@match_begin/@match_end` の ivar を削り、
+   MatchData fallback はバイト指向エンコーディング + 8bit 内容と EUC-JP 等だけに。
+   ついでに `getch` の多バイト文字対応と `StringScanner::Error` を追加。
+   **性能はほぼ中立**（`skip` ヒット 246 → 248 ns、graphql ±0）— Ruby 側の削減分は
+   ノイズに埋もれ、コストは Rust/Onigmo 側にあることが確認できた。
+2. **`onigmo-regex` に region 再利用 API を足す**（プロトタイプ、未マージ）:
+   `Regex::match_at_with_region(heystack, at, &mut Region)`（`onig_match`）と
+   `Regex::search_with_region`（`onig_search`）、`Region::new` を pub に。monoruby 側は
+   thread-local の `Region` を 1 つ持ち、Regexp パターンを *そのまま*（ラップせず）
+   `onig_match` で scan 位置にアンカーする。Ruby 側は `_anchored` を fallback 専用に
+   するだけ。
+
+   | マイクロ（ns/op） | 従来 | 1 | 2 | YJIT |
+   |---|---:|---:|---:|---:|
+   | `skip(/ident/)` ヒット | 246 | 248 | 126 | 158 |
+   | `skip(/ident/)` ミス | 160 | 157 | 86 | 151 |
+   | `scan(/ident/)` ヒット | 346 | 346 | 233 | 237 |
+   | `skip(/-?(…)(\.[0-9]+)?…/)` + `s[1]`（2 群） | 440 | 438 | 301 | 193 |
+   | lexer ループ（1 回、ms） | 6.2 | 6.1 | 3.5 | 2.9 |
+
+   graphql（交互 3 ラウンドの中央値）: 従来 54.8 / 54.6 / 54.6 ms → **2 で 41.8 / 41.8 / 42.7 ms
+   （−23 %）**、YJIT 31 ms。
+
+段階 2 は crate 側の変更（`sisshiki1969/onigmo-regex`）を先に取り込む必要があり、
+このセッションからは push できないので、パッチ 2 本（crate 側 `onigmo-regex-region-api.patch`
+と monoruby 側の差し替え `monoruby-strscan-followup-onig-match.patch`、どちらも段階 1 の
+上に当たる）を別途渡した。適用手順: crate に当てて push → monoruby で
+`cargo update -p onigmo-regex` → monoruby 側パッチを当てる → `cargo test --test strscan`。
+
+残る差（群あり 301 vs 193 ns）は群オフセットを Ruby の Array で返して `[]` を Ruby で
+引く分。scanner 側に region を持たせる（= Rust オブジェクト化）までやれば埋まるが、
+Ruby 実装を残す方針では次点。
+
 - 手元の CRuby は 4.0.6 で、`Float#ceil(15)` の結果が 4.0.2 と違う
   （`1.123456789.ceil(15)` → `1.123456789000001`）ため `float::tests::angle` が
   baseline でも失敗する。本変更とは無関係。

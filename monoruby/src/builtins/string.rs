@@ -74,7 +74,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "scan", scan, 1);
     globals.define_builtin_func_with(STRING_CLASS, "match", string_match, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "match?", string_match_, 1, 2, false);
-    globals.define_builtin_func(STRING_CLASS, "__strscan_match", string_strscan_match, 2);
+    globals.define_builtin_func(STRING_CLASS, "__strscan_match", string_strscan_match, 3);
     globals.define_builtin_func_with(STRING_CLASS, "index", string_index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "rindex", string_rindex, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
@@ -3446,10 +3446,10 @@ fn string_match(
 ///
 /// ### String#__strscan_match (monoruby internal)
 ///
-/// - __strscan_match(regexp, byte_pos) -> Integer | Array | nil
+/// - __strscan_match(pattern, byte_pos, anchored) -> Integer | Array | nil | false
 ///
 /// Allocation-lean scanning primitive backing the pure-Ruby
-/// `StringScanner` (`stdlib/strscan.rb`): match `regexp` against the
+/// `StringScanner` (`stdlib/strscan.rb`): match `pattern` against the
 /// byte suffix of self starting at `byte_pos` and hand back only the
 /// match registers. No MatchData is built and `$~` is NOT set — like
 /// CRuby's C strscan, which keeps its registers inside the scanner and
@@ -3457,17 +3457,25 @@ fn string_match(
 ///
 /// The engine sees only the suffix, so `\A` and `^` anchor at the scan
 /// position (CRuby strscan's default `fixed_anchor: false` semantics).
+/// A String pattern is literal bytes, as in CRuby's C strscan:
+/// `anchored` selects a prefix test versus a forward byte search. A
+/// Regexp pattern is searched as given — the Ruby side passes its
+/// `\A(?:…)`-wrapped form for the anchored scan family (see
+/// `RegexpInner::strscan_match` for the `onig_match` route this is
+/// meant to take once the regex crate exposes a reusable region).
 /// Returns
 /// - nil — no match;
 /// - an Integer — the byte end of a whole-match starting at offset 0
 ///   with no capture groups (the common lexer case — the value is a
 ///   packed Fixnum, so a hit allocates nothing);
 /// - an Array `[b0, e0, b1, e1, …]` of byte offsets relative to
-///   `byte_pos` (nil pairs for unmatched groups) otherwise.
+///   `byte_pos` (nil pairs for unmatched groups) otherwise;
+/// - false — the subject cannot be matched in place (a byte-oriented
+///   string with 8-bit content, EUC-JP / Shift_JIS text, broken UTF-8:
+///   anything whose engine view is not the byte buffer itself): the
+///   Ruby side falls back to `String#match` on a copy of the rest.
 ///
-/// Out-of-range or non-char-boundary positions return nil; the
-/// caller's `ascii_only?` gate makes every in-range byte position a
-/// boundary.
+/// Out-of-range or non-char-boundary positions return nil.
 #[monoruby_builtin]
 fn string_strscan_match(
     vm: &mut Executor,
@@ -3479,20 +3487,58 @@ fn string_strscan_match(
         pos if pos >= 0 => pos as usize,
         _ => return Ok(Value::nil()),
     };
-    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
+    let anchored = lfp.arg(2).as_bool();
+    let pattern = lfp.arg(0);
     let self_ = lfp.self_val();
     let s = self_.as_rstring_inner();
-    let given = s.regex_view()?;
+    if let Some(pat) = pattern.is_rstring_inner() {
+        // Literal bytes: a prefix test, or a forward byte search.
+        let Some(sub) = s.as_bytes().get(byte_pos..) else {
+            return Ok(Value::nil());
+        };
+        let pat = pat.as_bytes();
+        let found = if anchored {
+            sub.starts_with(pat).then_some(0)
+        } else if pat.is_empty() {
+            Some(0)
+        } else {
+            sub.windows(pat.len()).position(|w| w == pat)
+        };
+        return Ok(match found {
+            None => Value::nil(),
+            Some(0) => Value::integer(pat.len() as i64),
+            Some(b) => Value::array_from_vec(vec![
+                Value::integer(b as i64),
+                Value::integer((b + pat.len()) as i64),
+            ]),
+        });
+    }
+    let Some(re) = pattern.is_regex() else {
+        return Err(MonorubyErr::argumenterr("pattern must be a Regexp or String"));
+    };
+    // In place only when the engine view *is* the byte buffer: ASCII-only
+    // content under any encoding, or valid UTF-8. Anything else takes the
+    // Ruby-side `String#match` fallback, which knows how to view those.
+    if !(s.is_ascii_only() || (s.encoding() == Encoding::Utf8 && s.is_valid_encoding())) {
+        return Ok(Value::bool(false));
+    }
+    let given = s.check_utf8()?;
     let Some(sub) = given.get(byte_pos..) else {
         return Ok(Value::nil());
     };
+    // The engine sees only `sub`, so the caller's `\A(?:…)`-wrapped form
+    // anchors at the scan position. Onigmo's `onig_match` with a reused
+    // region (no wrapper regex, no region allocation per match) needs an
+    // `onigmo-regex` API taking a caller-owned `Region`; until the crate
+    // grows one this goes through `captures_from_pos`, which allocates
+    // its region per call.
     let Some(caps) = re.captures_from_pos_no_save(sub, 0)? else {
         return Ok(Value::nil());
     };
     if caps.len() == 1 {
         // Group-less pattern: a single Fixnum carries the whole
         // register set when the match starts at the scan position
-        // (always true for the `\A`-anchored scan family).
+        // (always true for the anchored scan family).
         let m = caps.get(0).unwrap();
         if m.start() == 0 {
             return Ok(Value::integer(m.end() as i64));
