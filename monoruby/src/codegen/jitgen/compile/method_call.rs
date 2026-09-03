@@ -852,19 +852,20 @@ impl<'a> JitContext<'a> {
                     // never one the constructor recogniser would take.
                     if let Some(leaf) = frameless::leaf_expr_body(&self.store, iseq) {
                         let callee_pos = self.store[func_id].params().total_positional_args();
-                        let arg_slots: Option<Vec<frameless::ArgSlot>> = (simple_fold
-                            && pos_num == callee_pos)
-                            .then(|| {
-                                (0..callee_pos)
-                                    .map(|i| frameless::ArgSlot::Own(args + i))
-                                    .collect()
-                            });
-                        if let Some(arg_slots) = arg_slots
-                            && self.expand_leaf_body(
+                        // Plain positional arguments in this frame's own
+                        // slots. A `...` forward leaves its positionals in
+                        // the *caller's* window instead, which only the
+                        // constructor expansion below reads; a forwarding
+                        // callee is not `simple_fold`, so it falls through
+                        // to it rather than being handled here.
+                        if simple_fold && pos_num == callee_pos {
+                            let arg_slots: Vec<SlotId> =
+                                (0..callee_pos).map(|i| args + i).collect();
+                            if self.expand_leaf_body(
                                 state, ir, recv_class, recv, dst, &leaf, &arg_slots,
-                            )
-                        {
-                            return Ok(CompileResult::Continue);
+                            ) {
+                                return Ok(CompileResult::Continue);
+                            }
                         }
                     }
                     if let Some(body) = frameless::ivar_store_body(&self.store, iseq) {
@@ -1323,7 +1324,7 @@ impl<'a> JitContext<'a> {
         recv: SlotId,
         dst: Option<SlotId>,
         body: &frameless::LeafBody,
-        arg_slots: &[frameless::ArgSlot],
+        arg_slots: &[SlotId],
     ) -> bool {
         // Every ivar below is resolved against `recv_class`, so the site
         // must have proven the receiver *is* that class. A set-guarded
@@ -1383,7 +1384,7 @@ impl<'a> JitContext<'a> {
         fn emit_value(
             ir: &mut AsmIr,
             state: &mut AbstractState,
-            arg_slots: &[frameless::ArgSlot],
+            arg_slots: &[SlotId],
             v: frameless::LeafValue,
             ivarid: Option<IvarId>,
             reg: GP,
@@ -1394,12 +1395,7 @@ impl<'a> JitContext<'a> {
                     dst: reg,
                 }),
                 frameless::LeafValue::Fixnum(val) => ir.lit2reg(val, reg),
-                frameless::LeafValue::Param(i) => match arg_slots[i as usize] {
-                    frameless::ArgSlot::Own(slot) => state.load(ir, slot, reg),
-                    frameless::ArgSlot::Caller(slot) => {
-                        ir.push(AsmInst::LoadCallerSlot { slot, dst: reg })
-                    }
-                },
+                frameless::LeafValue::Param(i) => state.load(ir, arg_slots[i as usize], reg),
             }
         }
 
@@ -3521,7 +3517,10 @@ mod tests {
     /// conditional store (a guard would have to prove something about a
     /// path that stores nothing), a body that calls, one that stores twice,
     /// one whose store is not last, a `%` (`BinOpK::Rem` has no register
-    /// form to lower to), and a body reading a second object's ivar.
+    /// form to lower to), and a body reading a second object's ivar. Then
+    /// the two declines that depend on the *receiver* rather than the body:
+    /// a class whose instances have no inline ivar slots, and an ivar with
+    /// no `IvarId` to resolve.
     #[test]
     fn frameless_leaf_bodies_decline() {
         run_test(
@@ -3542,6 +3541,27 @@ mod tests {
             100.times { d.cond(1); d.calls; d.two; d.early; d.rem(3); d.other(d) }
             res << d.cond(-1) << d.cond(3) << d.calls << d.two << d.early
             res << d.rem(4) << d.other(d) << d.n << d.m
+
+            # A receiver whose instances are not plain objects has no inline
+            # ivar slots to read at a fixed offset.
+            class S < String
+              def initialize(x); super(x); @n = 5; end
+              def inc; @n += 1; end
+            end
+            s = S.new("x")
+            100.times { s.inc }
+            res << s.inc << s
+
+            # An ivar no instance of the class was ever assigned has no
+            # `IvarId` to resolve, so the body cannot be expanded against it.
+            class U
+              def initialize; @a = 1; end
+              def unset; @never; end
+              def bump; @never2 = (@a += 1); end
+            end
+            u = U.new
+            100.times { u.unset; u.bump }
+            res << u.unset << u.bump << u.instance_variables
             res
             "#,
         );
