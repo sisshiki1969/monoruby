@@ -46,6 +46,7 @@
 029c3ebe189781d0b649df411808dfee	[[[:a, 1], 0], [[:b, 2], 1]]	r = []; ({a: 1, b: 2}).each.with_index { |v, i| r << [v, i] }; r
 02a7d510f273964ead93e757431a554c	[3, 2, 1]	base = Class.new { def foo(ary); ary << 1; end }\n            child 
 02b9efd8d2189aaacb0d22c54cae5e92	[2000, 0, 999]	a = []\n            2000.times { |i| a << [(i * 7919) % 1000] }\n    
+02bcd011adb4bb84d0653542d5cc1dbf	[33, 14, 50, -4, -4, ZeroDivisionError, "divided by 0", [[4, "'Q#div'"], [27, "'<main>'"]], [[4, "'Q#div'"], [9, "'block in Object#in_block'"]], [[4, "'Q#div'"], [14, "'Object#in_loop'"], [33, "'<main>'"]]]	BASE = __LINE__\n            class Q\n              def initialize(n)
 02c396b429bf65fdf9a120d44cc103f5	true	src = Module.new { def t1; end }\n            m = Module.new do\n    
 02c6f5d297eadcc0a5026d7c20a2e18c	["a", {b: "b"}]	T = Struct.new(:a, :b)\n            \n\n            s = T.new("a", b: 
 02cb9b2aa7a2eb9ebb2690e1cb412b25	200000	io = IO.popen("sleep 0.05; cat > /dev/null", "w")\n            t = T
@@ -804,6 +805,7 @@
 3dbebf67556767ed46ca1b15b5c6014b	0	("" <=> "".dup.force_encoding("ISO-2022-JP"))\n            
 3dde798cc9545abe28c98d1ee6dfbc9a	[:wrapped, :real, 12]	class Base; def real(x); x * 3; end; end\n            class Sub < Ba
 3dea6009f2f1cee6ca57430c6241a099	"ASCII-8BIT"	s = "abcdef".dup.force_encoding("US-ASCII")\n              arg = "
+3dedec9b4f9d9d254f018b5a0e31acb1	[33, 14, 50, -4, -4, ZeroDivisionError, "divided by 0", [[4, "'Q#div'"], [32, "'<main>'"]], [[4, "'Q#div'"], [14, "'block in Object#in_block'"]], [[4, "'Q#div'"], [19, "'Object#in_loop'"], [38, "'<main>'"]], [[10, "'Q#store_after'"], [42, "'<main>'"]], 25, 25, true]	BASE = __LINE__\n            class Q\n              def initialize(n)
 3df82d5f32bc7def3d0d985cd7071aa8	:ok	res = :ok; if false; a = [1, 2]; a[] = 9; end; res
 3dfe78bc67c9d66d2fdd2e9ab6b354e7	[1, 9, 10, 7, 107]	class A\n              def initialize(h) @a = h end\n              de
 3e1d53f944590acbe759e3fddf0d6b76	60000	S = Struct.new(:a, :b, :c)\n            \n\n            s = S.new(10, 

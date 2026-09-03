@@ -3570,30 +3570,65 @@ mod tests {
     /// A zero divisor is a guard like any other: it exits to the call
     /// instruction, and the interpreter performs the whole call — so the
     /// `ZeroDivisionError` is raised from the frame it builds, and carries
-    /// that frame's backtrace. The frame the expansion skipped has to
-    /// appear in it, which is the whole point.
+    /// that frame's backtrace.
+    ///
+    /// The deopt fabricates neither a frame nor a position: it restores the
+    /// caller at the call instruction and hands the call back, so the
+    /// frames and the lines within them are the ones the unexpanded path
+    /// produces. That is what is asserted — every frame, with its line as
+    /// an offset from a `__LINE__` marker so the comparison does not depend
+    /// on where the harness places the snippet — for a plain call, a call
+    /// inside a block, and a call under a JIT-compiled loop. `Integer#/` is
+    /// dropped because CRuby lists that builtin frame and monoruby reports
+    /// no builtin frame at all, expanded or not.
     #[test]
     fn frameless_leaf_bodies_divide() {
         run_test(
             r#"
+            BASE = __LINE__
             class Q
               def initialize(n); @n = n; end
-              def div(x); @n / x; end
+              def div(x)
+                @n / x
+              end
               def half; @n / 2; end
+              # The store is after the division, so a zero divisor must
+              # leave it undone — that is what lets the exit hand the whole
+              # call back.
+              def store_after(x); @m = @n / x; end
+              attr_reader :m
+            end
+            def in_block(q, d)
+              [d].each { |v| q.div(v) }
+            end
+            def in_loop(q, d)
+              i = 0
+              i += 1 while i < 200
+              q.div(d)
+            end
+            def trace(e)
+              e.backtrace.reject { |l| l.include?("Integer#/") }.map { |l|
+                l =~ /:(\d+):in (.+)/ ? [$1.to_i - BASE, $2] : l
+              }
             end
             q = Q.new(100)
             res = []
-            200.times { q.div(3); q.half }
+            200.times { q.div(3); q.half; in_block(q, 3); in_loop(q, 3) }
             res << q.div(3) << q.div(7) << q.half
             # floor division, not truncation
             res << Q.new(-7).div(2) << Q.new(7).div(-2)
             e = (begin; q.div(0); rescue ZeroDivisionError => x; x; end)
-            res << e.class << e.message
-            # The frame the expansion skipped must be in the backtrace.
-            # Not `backtrace.first`: CRuby also lists the `Integer#/`
-            # builtin frame above it, which monoruby does not report for any
-            # builtin, expanded or not.
-            res << e.backtrace.any? { |l| l.include?("Q#div") }
+            res << e.class << e.message << trace(e)
+            # `Array#each` is a C frame in CRuby and Ruby-level in monoruby,
+            # so the block case compares only the frames below it.
+            e = (begin; in_block(q, 0); rescue ZeroDivisionError => x; x; end)
+            res << trace(e).first(2)
+            e = (begin; in_loop(q, 0); rescue ZeroDivisionError => x; x; end)
+            res << trace(e)
+            200.times { q.store_after(4) }
+            before = q.m
+            e = (begin; q.store_after(0); rescue ZeroDivisionError => x; x; end)
+            res << trace(e) << before << q.m << (q.m == before)
             res
             "#,
         );
