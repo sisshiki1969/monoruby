@@ -144,3 +144,86 @@ fn string_key_default_and_fetch() {
         "##,
     );
 }
+
+// Small Hash literals with frozen String keys stay in the inline
+// representation (see `is_inline_key` in rvalue/hash.rs); the inline
+// scan compares String keys by byte content, so every probe shape that
+// the boxed path handles must behave identically before and after the
+// literal is promoted.
+
+#[test]
+fn inline_string_key_literal_lookup() {
+    run_test(
+        r##"
+        h = {"content-type" => "text/plain", "b" => 2}
+        k = "content" + "-type"
+        r = [h["content-type"], h[k], h[k.dup], h["zz"], h.key?("b"), h.keys.map(&:frozen?), h.size]
+        h["c"] = 3
+        r << [h["c"], h.size, h.keys]
+        h["d"] = 4
+        r << [h["d"], h["content-type"], h.size, h.keys]
+        r
+        "##,
+    );
+}
+
+#[test]
+fn inline_string_key_duplicate_and_identity() {
+    run_test(
+        r##"
+        d = {"a" => 1, "a" + "" => 2}
+        i = {"x" => 1}.compare_by_identity
+        m = +"mut"
+        mh = {}
+        mh[m] = 1
+        m << "!"
+        [d, d.size, i["x"], i[i.keys[0]], i.compare_by_identity?,
+         mh["mut"], mh["mut!"], mh.keys[0].frozen?, mh.keys[0].equal?(m)]
+        "##,
+    );
+}
+
+#[test]
+fn inline_string_key_equality_with_boxed() {
+    run_test(
+        r##"
+        big = {"a" => 1}
+        %w[b c d e].each { |x| big[x] = 1 }
+        %w[b c d e].each { |x| big.delete(x) }
+        [{"a" => 1} == {"a" => 1}, {"a" => 1}.eql?({"a" => 1}), {"a" => 1}.hash == {"a" => 1}.hash,
+         big == {"a" => 1}, {"a" => 1} == big, big.hash == {"a" => 1}.hash]
+        "##,
+    );
+}
+
+#[test]
+fn inline_string_key_encoding_and_mixed() {
+    run_test(
+        r##"
+        bin = "a".b
+        e = {"k" => 1, :k => 2, 3 => 4}
+        s = {"k" => 1}
+        r = [{"a" => 1}[bin], {bin => 1}["a"], {"あ" => 1}["あ".encode("EUC-JP")],
+             e["k"], e[:k], e[3], e.to_a, s.delete("k"), s, s.delete("k")]
+        begin
+          e.each { |kk, v| e["new"] = 1 }
+        rescue => ex
+          r << ex.class
+        end
+        r << (e.rehash == e)
+        r
+        "##,
+    );
+}
+
+#[test]
+fn inline_string_key_ignores_redefined_string_hash() {
+    // Hash keys use the built-in byte comparison even when String#hash /
+    // String#eql? are redefined.
+    run_test_once(
+        r##"
+        class String; def hash = 0; def eql?(o) = true; end
+        [{"p" => 1}["q"], {"p" => 1}.key?("q"), {"p" => 1}["p"]]
+        "##,
+    );
+}

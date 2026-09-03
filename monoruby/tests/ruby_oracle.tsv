@@ -92,12 +92,14 @@
 05e7e9aedd7fe345c9cdb9a754d718b2	["", "FILE:22: warning: Redefining 'Integer#+' disables interpreter and JIT optimizations\\n", "FILE:26: warning: Redefining 'Integer#-' disables interpreter and JIT optimizations\\n", ""]	require "stringio"\n        def capture\n          old = $stderr\n        
 05f9f4947bb616ee98f8b5b527a50fb4	[["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], true, :q, :q, :q, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]	$r = []\n        TOPC9 = :top\n        # defined?(CONST) resolves through
 0600c545eb8ea8eab3868af35cea60cf	[0, 0, 10, 0]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
+060471b8bc0825de0a94ef6e887b0609	[{"a" => 2}, 1, nil, 1, true, 1, nil, true, false]	d = {"a" => 1, "a" + "" => 2}\n        i = {"x" => 1}.compare_by_identit
 061bdd061f147a5d9f44958903cc9221	"hi\\n"	require "open3"; Open3.capture2("echo", "hi").first
 0631f6304fce006defdd49a51a8efa19	4.0	def exc(n)\n          acc = 0.0\n          begin\n            n.times do |
 0639fd7a5d2bbe9305ea95f45248e727	[[nil], [:v], [[1, 2]]]	[Enumerator.new { |y| y.yield },\n                Enumerator.new { |y| y.yield :v
 06434e99eae696dd4168e81e0a57cf74	[8.5, -1.0]	def call_block\n          yield\n        end\n        def p6(n)\n          
 0645bcf03de3613af42e57886acd5057	"ClassKwOuter::ClassKwInner"	class ClassKwOuter\n              class ClassKwInner; end\n          
 066265d0228305a399c4298d3fde2292	[[0, 1, 2, 3, 4], true, nil]	q = Queue.new\n            prod = Thread.new { 5.times { |i| q.push 
+066392710dabdf12722c1aa1a604fa66	[1, 1, nil, 1, 2, 4, [["k", 1], [:k, 2], [3, 4]], 1, {}, nil, RuntimeError, true]	bin = "a".b\n        e = {"k" => 1, :k => 2, 3 => 4}\n        s = {"k" =>
 067076632d9bbfc6687c8a1ec746a38b	[:a, :b]	c = Class.new { attr :a, :b }\n            c.instance_methods(false)
 0671dc386fe22ac136194d005bfa5d9e	[:foo]	$res = []\n            class C\n              def self.method_undefin
 0691611dde38293b7701c47f3487d59e	[10, 10, 10, 10, 10, 20, 20, 20, 20, 20]	class C\n          def foo; 10; end\n        end\n        c = C.new\n      
@@ -203,6 +205,7 @@
 0cebe4bdba51d916fafb772a61e36f04	42	x = 42\n            binding.local_variable_get(:x)\n            
 0cf52da8cfa0528dc273b8d510378aad	["not_myobj", false]	class MyObj\n          def !\n            "not_myobj"\n          end\n     
 0d15e11cd1a3b81c19b4c71f397879fd	nil	("hello" =~ /z/)
+0d5b1172c41b9ebf2f49abac0b10757d	[[Plain, false, false, false], [Always, true, true, true], [Never, false, false, false], [Some, false, true, true], [[:foo, false], [:zzz, false], [:zzz, true]]]	class Plain; end\n        class Always\n          def respond_to_missing?
 0d6a2a0f9abdc99f9a6612d7f1a2514a	false	"a\\xC3z".dup.force_encoding("UTF-8").reverse.valid_encoding?
 0d89c6fc6073b1e6bf891b9d457e2158	"'NsX::Cx.boom'"	module NsX\n          class Cx\n            def self.boom; raise "x"; end
 0da04c155a74c747b1e587c007959b4f	"ab20000c"	%Q(ab#{100*200}c#$1)
@@ -1221,6 +1224,7 @@
 5d53a8af94b50b97064e8d51ff1aee9b	["ASCII-8BIT", true, true, "UTF-8"]	t = Thread.new { "x" }\n            t.join\n            s = t.to_s\n  
 5d6c8b649c34e181f15d691733d4d981	[3, 5, 9, 4, 1, TypeError, [NotImplementedError, "Unsupported advice: :bogus"]]	(f="/tmp/mono_ss_#{Process.pid}"; File.write(f,"0123456789"); io=File.open(f); a
 5d7f92fded187ab734dbc79a4aec62ad	[[nil, NilClass, false], [7, NilClass, false], [nil, Proc, false], [nil, NilClass, true], [:d, NilClass, false]]	def probe(h)\n              [h.default, h.default_proc.class, h.comp
+5d8e2e082fd6c1f154c3281f7f0fe664	["text/plain", "text/plain", "text/plain", nil, true, [true, true], 2, [3, 3, ["content-type", "b", "c"]], [4, "text/plain", 4, ["content-type", "b", "c", "d"]]]	h = {"content-type" => "text/plain", "b" => 2}\n        k = "content" + 
 5d99f984ecc5beafe25ac272f6e841d1	[IO, "hello\\n"]	path = "/tmp/mono_cov_io_new_#{Process.pid}"\n            begin\n    
 5da42f6c8778648a29ceb2994861a7cb	[1, 3, 5, 7]	[1, 2, 3, 4, 5, 6, 7].filter { |x| x.odd? }
 5dbf9a8047fd94fd04731be638681e64	[true, Time, Time, "hello", 0, 0]	(f="/tmp/mono_cov_#{Process.pid}.txt"; File.write(f,"hello world"); io=File.open
@@ -1342,6 +1346,7 @@
 66cedbdd1ae3d91dacc69ce72dd69c63	nil	GC::Profiler.disable; GC::Profiler.raw_data
 66d3a720ccfcd8a4c65aa4a7264f96c3	nil	um = Integer.instance_method(:to_s)\n        um.source_location\n        
 66de5b13ad3146aa31137d2a2a57cbda	[1, 2, 3, 4, 9]	t = Process::Tms.new(1, 2, 3, 4)\n            u = Process::Tms.new\n 
+66de6816f85e17eef7a07c51664ed709	[true, true, true, true, true, true]	big = {"a" => 1}\n        %w[b c d e].each { |x| big[x] = 1 }\n        %w
 66ffaa1b0f890b32d4446740cc7383f4	["Struct::MStructA", 1, "two"]	Struct.new("MStructA", :a, :b)\n            \n\n            s = Struct
 670c773e2073e18117a7165d0039c444	[0.5621431308531042, 2.282033618166754]	def call_block\n          yield\n        end\n        def w4(q)\n          
 676948299cc86ad51d988c8190977471	:OVERRIDDEN	class Float; def -(o); :OVERRIDDEN; end; end; 3.0 - 4.0
@@ -2053,6 +2058,7 @@
 9eb8b6ae56715eb169a709857b6176e9	:done	END { }; :done
 9eb98c1b5f6e2d631b2b51c04acc62e5	"m::N"	m = Module.new\n            m::N = Module.new\n            m::N.name 
 9ec21f255b64bf6cee16e04bbbaa7ae3	[[:C1, :C2, :S1], [:C1, :C2]]	class S\n              S1 = 100\n            end\n            class C 
+9ed3763bcd2664e8cf0aae5654b5955d	[nil, false, 1]	class String; def hash = 0; def eql?(o) = true; end\n        [{"p" => 1}
 9ed470f69b7adeaf9e790c17d1dcce76	[150, 199, :absent]	def nlr_y3\n          yield\n        end\n        def find_it(n)\n         
 9ee5793f09dedfe9c6cd4714aaad32b5	[15150, [10, 105, 20000000000000000000000000000000000000000, 10000000000000000000000000000000000000100, 20000000000000000000000000000000000000002, 10000000000000000000000000000000000000101, 14, 107, 200000000000000000000000000000000000000000000000000000000000000000000000000000000, 100000000000000000000000000000000000000000000000000000000000000000000000000000100, 18, 109, -16, 92, -20000000000000000000000000000000000000000, -9999999999999999999999999999999999999900]]	class Integer\n          def dbl; self * 2; end\n          def add5(x); s
 9eeb8d867dcde677d9837c5ba30e2c40	[:yes, "NoMethodError", false]	module EscA\n              refine(String) { def only_here; :yes; end
