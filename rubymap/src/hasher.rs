@@ -193,3 +193,122 @@ impl Hasher for RubyHasher {
         self.add(n as u64);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn digest(f: impl FnOnce(&mut RubyHasher)) -> u64 {
+        let mut h = RubyRandomState::default().build_hasher();
+        f(&mut h);
+        h.finish()
+    }
+
+    fn of(bytes: &[u8]) -> u64 {
+        digest(|h| h.write(bytes))
+    }
+
+    /// Every length branch of `write`: empty, the 1..=3 byte-at-a-time
+    /// arm, the overlapping 4-byte and 8-byte arms, and the 16-byte loop
+    /// with each possible tail.
+    #[test]
+    fn write_covers_every_length_branch() {
+        let buf: Vec<u8> = (0u8..=63).collect();
+        let mut seen = std::collections::HashSet::new();
+        for len in 0..buf.len() {
+            // Distinct lengths of distinct content must not collide; a
+            // branch that dropped its bytes would show up here.
+            assert!(seen.insert(of(&buf[..len])), "collision at len {len}");
+        }
+    }
+
+    /// The length is mixed in, so a split write is not the same as the
+    /// concatenation — `Hash` implementations that stream several fields
+    /// depend on that.
+    #[test]
+    fn length_separates_split_writes() {
+        let concat = of(b"ab");
+        let split = digest(|h| {
+            h.write(b"a");
+            h.write(b"b");
+        });
+        assert_ne!(concat, split);
+        assert_ne!(of(b"ab"), of(b"ab\0"));
+        assert_ne!(of(b""), of(b"\0"));
+    }
+
+    /// One flipped bit anywhere in the input changes the digest, and
+    /// changes it in the high bits too — hashbrown takes its control byte
+    /// from the top 7, so a mixer that only diffuses downward would
+    /// cluster.
+    #[test]
+    fn one_bit_changes_the_whole_digest() {
+        let base = [0x11u8; 24];
+        let h0 = of(&base);
+        for byte in 0..base.len() {
+            for bit in 0..8 {
+                let mut probe = base;
+                probe[byte] ^= 1 << bit;
+                let h1 = of(&probe);
+                assert_ne!(h0, h1, "byte {byte} bit {bit}");
+                assert_ne!(h0 >> 57, h1 >> 57, "control bits, byte {byte} bit {bit}");
+            }
+        }
+    }
+
+    /// Sequential and strided integers are the classic way a weak mixer
+    /// falls over: the low bits pick the bucket, so a mixer that leaves
+    /// them alone piles every stride into one.
+    #[test]
+    fn integer_keys_spread_over_buckets() {
+        for stride in [1u64, 8, 4096, 1 << 20] {
+            let mut buckets = [0usize; 64];
+            for i in 0..4096u64 {
+                let h = digest(|h| h.write_u64(i.wrapping_mul(stride)));
+                buckets[(h % 64) as usize] += 1;
+            }
+            // 4096 keys over 64 buckets is 64 each; allow a wide margin
+            // and still catch clustering.
+            let (min, max) = (
+                *buckets.iter().min().unwrap(),
+                *buckets.iter().max().unwrap(),
+            );
+            assert!(min >= 20 && max <= 160, "stride {stride}: {min}..{max}");
+        }
+    }
+
+    /// Every `write_*` the `Hash` derive can reach, so a key type that
+    /// streams anything other than `u64` still digests.
+    #[test]
+    fn every_write_method_digests() {
+        let mut seen = std::collections::HashSet::new();
+        assert!(seen.insert(digest(|h| h.write_u8(1))));
+        assert!(seen.insert(digest(|h| h.write_u16(2))));
+        assert!(seen.insert(digest(|h| h.write_u32(3))));
+        assert!(seen.insert(digest(|h| h.write_u64(4))));
+        assert!(seen.insert(digest(|h| h.write_u128(5))));
+        assert!(seen.insert(digest(|h| h.write_usize(6))));
+        assert!(seen.insert(digest(|h| h.write_i8(-1))));
+        assert!(seen.insert(digest(|h| h.write_i16(-2))));
+        assert!(seen.insert(digest(|h| h.write_i32(-3))));
+        assert!(seen.insert(digest(|h| h.write_i64(-4))));
+        assert!(seen.insert(digest(|h| h.write_isize(-5))));
+        // The 128-bit write folds both halves in, so the high half is
+        // not dropped.
+        assert_ne!(
+            digest(|h| h.write_u128(1)),
+            digest(|h| h.write_u128(1 | (1 << 64)))
+        );
+    }
+
+    /// One seed per process: two states digest alike, and a state
+    /// survives being cloned into a map.
+    #[test]
+    fn state_is_stable_within_the_process() {
+        let a = RubyRandomState::new();
+        let b = RubyRandomState::default();
+        assert_eq!(a.hash_one(0x1234u64), b.hash_one(0x1234u64));
+        let c = a;
+        assert_eq!(a.hash_one("key"), c.hash_one("key"));
+    }
+}
