@@ -1189,6 +1189,7 @@
 5b44a248a61dc40383d51a96cc748f88	14	[2, 3, 4, 5].inject {|result, item| result + item }
 5b46729462de0ea516438e53f745a399	[4.5, 5.5, 4.75]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 5b723a2cb7483967f04b7359c4f52ccd	[11, 11, 5, 3, 8, nil, nil, nil]	class C; attr_accessor :m; end\n\n        res = []\n        o = C.new\n        o.m =
+5b746dc2feb736ef4fb8f1d37beb7a7c	[-59, 6, 7, 5, 3, "x", 9, 9, 18]	class L\n              def initialize; @n = 0; @a = 3; @s = "x"; end
 5b774769e16c7084451c9d4b9f9b0acd	[[[:missing, :later]], [:from_base]]	class Base; end\n        class Sub < Base\n          def method_missing(n
 5b79cfb335c3c10194e188b3310b2096	["RuntimeError", "msg", false]	root = Fiber.current\n            fiber = Fiber.new { root.transfer;
 5b81f105b406bdc1f8f48edc118fcd74	[{a: 1, b: 2, c: 3}]	def f(*x)\n            x\n        end\n        \n\n            f(a:1, **{b:2
@@ -1402,6 +1403,7 @@
 6b82ebaaa0df8e456b952c1649290d36	["INT-NE", "RAW-B", false, true, true, true, true]	class Integer; def !=(o); "INT-NE"; end; end\n        class CustomEqB; d
 6bab7203c03f2793f901298b3357f169	true	"abc".force_encoding("ISO-8859-5").encoding == Encoding::ISO_8859_5
 6bc256a131cd947b4c256d4afa639789	["y", Encoding::ConverterNotFoundError, Encoding::ConverterNotFoundError, [254, 255, 0, 97, 0, 10, 0, 98], "UTF-16", [[254, 255, 0, 97, 0, 10, 0, 98]], true, Encoding::ConverterNotFoundError]	(a="\\x79".dup.force_encoding(Encoding::BINARY).encode(Encoding::Emacs_Mule); b=(
+6beb6eff7e6eb2f2c46d4560e26595f7	[1, 3, 4, 106, 107, 0, 2, 1, 106, ZeroDivisionError]	class D\n              def initialize; @n = 5; @m = 5; end\n         
 6c331f471496111694ecb08afb04cab9	[1, 2, 3]	v = []\n            t = Thread.new { v << 1; sleep; v << 3 }\n       
 6c6bac9e1206b463f412a2b2d96f020e	[3, 1]	class Integer; def <=>(o) = (o.to_i - to_i); end\n[3, 1, 2].minmax
 6c8169ed67889ab883af159b5e32ee14	[[:reader_splat, 2, :struct_reader_arg, 3], 3]	class AccCov\n          attr_reader :x\n          attr_writer :y\n        
@@ -1912,6 +1914,7 @@
 93e6ef7313e6853be460ee30b0736410	[true, 5]	pid = fork { exit 5 }\n            w = Process.detach(pid)\n         
 940e03901c8843bf06aca61f6ac64658	true	pid = Process.fork { exit 0 }\n            pid.is_a?(Integer)\n      
 94317fffff39c9093268791671c631b0	[true, false, 1, -1, nil, true, false, true, false, false, true, false, false, true]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
+9441f2118acd3193fe370775231fdcac	[[101, 101, 1001], 100]	class P\n              def initialize; @n = 1; end\n              def
 9455609d2dcf2780b3bf58180504fb90	["a", nil, "b"]	ENV["MONORUBY_ENV_TEST_VA1"] = "a"\n            ENV["MONORUBY_ENV_TE
 948c8ebc5838aacb75bb4ad2c54cd528	[true, true, true]	[Process.respond_to?(:exit),\n             Process.respond_to?(:abor
 9491706684975503cce7f8dd96dffe40	:OVERRIDDEN	class NilClass; def !; :OVERRIDDEN; end; end; !(nil)
@@ -2859,6 +2862,7 @@ da20ef8164c16f9d050189c7530ccdda	13	case 4\n        when 0\n          a = 10\n  
 da337801ffb5841d6913419d4806674b	[[1, 2, 3], [1, 2, 3], 1, 3, [1, 3]]	a = [3, 1, 2]\n            [\n              a.sort { |x, y| (x <=> y)
 da4116da4a0b35a76e2faef0a98c7685	[42, 300]	$m = 0\n        def h\n          [1].each do |x|\n            begin\n      
 da424b8ae2f6063fa60766fab8bac34a	false	t = Thread.new { sleep(2**62) }\n            Thread.pass while t.sta
+da52e290ddf3ec3f474fa3a4bb76acdd	[2.5, 2.5, 3.5, TypeError, 4611686018427387904, Integer, FrozenError, 1]	class L\n              def initialize(n, a); @n = n; @a = a; end\n   
 da5e06d1fe5eed1ee4258f71a99b2332	0	a = "abc".dup.force_encoding("UTF-8")\n              b = "abc".dup
 da64841b8187b9d8951f84703a56f5e9	[true, false]	$x = []\n            path = "/tmp/monoruby_test_mkdir_#{Process.pid}
 da6b246283b4f211581ca1d5eb140461	"a b\\n"	IO.popen(["echo", "a b"]) { |io| io.read }\n            
