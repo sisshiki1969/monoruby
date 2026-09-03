@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5770cfc6.js";
+            window.path_to_searchindex_js = "../searchindex-48e55a7a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-ad91b9ad.js"></script>
@@ -340,6 +340,59 @@ accumulator: <code>GP_ALLOC_POOL</code> is empty, and the local allocator in
 <code>jitgen/gp_alloc.rs</code> assigns general-purpose registers per basic block
 instead, so a compiled body’s values live in whatever caller-saved register
 it picked.</p>
+<h2 id="negative-result-moving-meta--svar-to-the-callee"><a class="header" href="#negative-result-moving-meta--svar-to-the-callee">Negative result: moving META / SVAR to the callee</a></h2>
+<p>The caller writes the whole header, including the two words that depend only
+on the callee — <code>meta</code> (<code>store[fid].meta()</code>) and the <code>svar</code> zero sentinel.
+They are the same at every call site of a given method, so they look like an
+obvious thing to write once in the callee instead: 24 bytes off each of a
+program’s call sites, in exchange for 17 bytes added once per method.</p>
+<p>This was implemented and measured, and it is <strong>slower</strong>. The x86-64 form
+was: <code>Codegen::init_func</code> writes both words at <code>rbp - RBP_LOCAL_FRAME</code> (the
+same addresses the caller reached at <code>rsp - RSP_LOCAL_FRAME</code>), and a call
+site drops them exactly when it dispatches straight to the callee’s compiled
+entry — the same <code>get_jit_entry</code> lookup <code>AsmInst::Call</code> performs, resolved in
+the same lowering so the two cannot disagree. Block-style callees were
+excluded: <code>define_method</code> re-tags a block’s <code>LFP_META</code> with
+<code>Meta::PROC_METHOD_MASK</code> at call time, and a body rewriting the word from its
+own compile-time copy would drop that bit.</p>
+<p>Measured against the same tree, interleaved runs (x86-64, release):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>benchmark</th><th>delta</th></tr>
+</thead>
+<tbody>
+<tr><td>fib</td><td>+4%</td></tr>
+<tr><td>30k_methods</td><td>−5 to −10%</td></tr>
+<tr><td>tarai</td><td>−5.8%</td></tr>
+<tr><td>bedcov</td><td>−5.5%</td></tr>
+<tr><td>sudoku</td><td>−3.6%</td></tr>
+<tr><td>qsort</td><td>−3.3%</td></tr>
+<tr><td>30k_ifelse</td><td>−3%</td></tr>
+<tr><td>aobench</td><td>−2.5%</td></tr>
+<tr><td>nbody, mandelbrot, bf, 30k_variables</td><td>flat</td></tr>
+</tbody>
+</table>
+</div>
+<p>Two reasons, and both generalise:</p>
+<ul>
+<li><strong>The size win is much smaller than the call-site arithmetic suggests.</strong>
+A <code>movabs</code> for the 64-bit <code>Meta</code> is 10 of the 17 bytes added per method,
+and these programs have nearly as many methods as call sites (30k_methods:
+~31k sites over 30k methods). The net was ~6% of the JIT code, not the
+~19% the caller-side saving alone implies. The trade only pays where call
+sites outnumber methods by a wide margin — which is what <code>fib</code> is, and why
+<code>fib</code> is the one benchmark that improved.</li>
+<li><strong>Placement matters more than count.</strong> The stores moved from the caller,
+where they issue well ahead of the <code>call</code> and drain from the store buffer
+while the caller finishes its own work, to the head of the callee, where
+they are serialized behind <code>push rbp</code> / <code>mov rbp, rsp</code> / <code>sub rsp</code> and
+compete with the entry poll’s load — on a taken branch, at the exact point
+the front end is refilling.</li>
+</ul>
+<p>So the header stays where it is. A future attempt at trimming the call
+sequence should target words that can be <em>dropped</em> rather than moved, or
+move work off the callee’s entry rather than onto it.</p>
 
                     </main>
 
