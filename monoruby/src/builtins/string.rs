@@ -3514,7 +3514,13 @@ fn string_strscan_match(
         });
     }
     let Some(re) = pattern.is_regex() else {
-        return Err(MonorubyErr::argumenterr("pattern must be a Regexp or String"));
+        // CRuby's strscan tries `to_str` on anything else and reports it
+        // as a String conversion failure.
+        return Err(MonorubyErr::no_implicit_conversion(
+            &globals.store,
+            pattern,
+            STRING_CLASS,
+        ));
     };
     // In place only when the engine view *is* the byte buffer: ASCII-only
     // content under any encoding, or valid UTF-8. Anything else takes the

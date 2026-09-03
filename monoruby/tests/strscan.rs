@@ -219,3 +219,27 @@ fn strscan_register_state_across_calls() {
         "#,
     );
 }
+
+#[test]
+fn strscan_fallback_subjects_and_pattern_types() {
+    // A byte-oriented subject with 8-bit content cannot be viewed in
+    // place, so Regexp patterns take the MatchData fallback (String
+    // patterns stay literal bytes); a pattern that is neither raises the
+    // conversion TypeError CRuby reports.
+    run_test_once(
+        r#"
+        require "strscan"
+        r = []
+        b = StringScanner.new("ab\xFFcd ef".b)
+        r << b.scan(/ab/) << b.pos << b.matched << b.scan(/x/) << b.check_until(/c/) << b.scan_until(/c/) << b.pos
+        r << b.matched << b.pre_match.bytesize << b.post_match << b.scan("d") << b.skip(/\s/) << b.scan(/(e)(f)/) << b[2] << b.eos?
+        r << b.string.encoding.to_s
+        s = StringScanner.new("abc")
+        s.pos = 3
+        r << s.scan("") << s.scan("a") << s.scan_until("a")
+        r << (begin; s.scan(1); rescue TypeError => e; e.message; end)
+        r << (begin; s.scan_until(:a); rescue TypeError => e; e.message; end)
+        r
+        "#,
+    );
+}

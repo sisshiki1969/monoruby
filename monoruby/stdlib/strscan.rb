@@ -314,6 +314,9 @@ class StringScanner
       ANCHORED_STR.clear if ANCHORED_STR.size > CACHE_LIMIT
       ANCHORED_STR[pattern] ||= Regexp.new("\\A#{Regexp.escape(pattern)}")
     else
+      unless pattern.is_a?(Regexp)
+        raise TypeError, "no implicit conversion of #{pattern.class} into String"
+      end
       ANCHORED_RE.clear if ANCHORED_RE.size > CACHE_LIMIT
       ANCHORED_RE[pattern] ||= Regexp.new("\\A(?:#{pattern.source})", pattern.options)
     end

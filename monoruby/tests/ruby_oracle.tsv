@@ -1311,6 +1311,7 @@
 63e644345315a92587e6531509cddace	true	require "json"\n            data = JSON.parse("{\\"name\\": \\"Nokogiri
 6400ae64c9910a3864a764454ee1737f	["SystemExit", true, 0]	begin\n              Process.exit(0)\n            rescue SystemExit =
 64304d338b2e1d9153798436746ba67c	[:plus, :lt, :bang, :aref, 3, true, false, 9]	class BopUser\n              def +(o); :plus; end\n              def 
+6453b5e2bc4a58561702b08638c14ead	["ab", 2, "ab", nil, "\\xFFc", "\\xFFc", 4, "c", 3, "d ef", "d", 1, "ef", "f", true, "ASCII-8BIT", "", nil, nil, "no implicit conversion of Integer into String", "no implicit conversion of Symbol into String"]	require "strscan"\n        r = []\n        b = StringScanner.new("ab\\xFFc
 646b6df81e3b78ea650391aa2912e6d4	["0.33333e1", "0.3333333333e1", "0.25e2"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
 64745fd3594011f602b1ae98a52ab4ae	["Array", true, ["prompt>"], ["prompt>"]]	require "expect"\n            res = []\n            r, w = IO.pipe\n  
 64813a4dde67dc42192c53915b8c2dc5	true	M = Data.define(:amount, :unit)\nM.new(42, "km").frozen?
