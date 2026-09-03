@@ -99,9 +99,15 @@ def step_tail(log, category)
   block = block[(endgroup + 1)..] if endgroup
   exit_line = block.find { |l| l.start_with?('##[error]Process completed') }&.sub('##[error]', '')
   output = block.reject { |l| l.empty? || l.start_with?('##[') || l.start_with?('Warning: failed to read library path') }
+  # The first two output lines are mspec's command echo and monoruby's banner;
+  # anything after that which is not a bare `--marker` dot run is the example
+  # trace (or the specs' own output).
+  traced = output.drop(2).any? { |l| !l.match?(/\A\.+\z/) }
   last = output.last.to_s
-  last = if last.match?(/\A\.+\z/)
-           '(only a file marker: the process died while loading the next spec file, before any of its examples)'
+  last = if !traced
+           '(no example trace in this log, only file markers; count the dots to find the file)'
+         elsif last.match?(/\A\.+\z/)
+           '(only a file marker after the last example: the process died while loading the next spec file)'
          else
            last.sub(/\A\.+/, '')
          end
@@ -191,7 +197,7 @@ def check_source(repo, site)
 
         #{lines.join("\n")}
 
-        To keep the category out of the way until the cause is fixed, tag the example (`spec/tags/#{category}/<file>_tags.txt`, `critical(hangs):<description>`), see doc/ruby_spec_skip_tags.md. This issue closes itself once the next run publishes non-empty results.
+        To keep the category out of the way until the cause is fixed, tag the example (`spec/tags/#{category}/FILE_tags.txt`, `critical(hangs):DESCRIPTION`), see doc/ruby_spec_skip_tags.md. This issue closes itself once the next run publishes non-empty results.
       BODY
     }
   end
