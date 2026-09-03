@@ -2948,6 +2948,7 @@ dfa6493490a950a4a97d2766f58d2dd5	7	p = Proc.new { |x, y| x + y }\n            de
 dfb8f5dd8fef254047d34541fb3b1231	229	class C\n                def f(x,y,z,a:1000)\n                    x+y
 dfc42a777c7f83e4c7bf0de522556f8b	[ArgumentError, "boom"]	h = { "d" => 4, "b" => 2, "a" => 1, "c" => 3, "e" => 5 }\n          
 e025a42ea6959b901cc28694e25f35a9	true	Random.srand(42)\n        results = 10.times.map { Random.rand }\n       
+e0378a5e80a453abed2cc017dde89a8c	[[:n, :n, :n], "wrong number of arguments (given 1, expected 0)", "wrong number of arguments (given 0, expected 1)", [nil, nil, nil], "wrong number of arguments (given 2, expected 1)", "wrong number of arguments (given 0, expected 1+)", [42, 42, 42], [42, 42, 42], "missing keyword: :k", "wrong number of arguments (given 1, expected 0; required keyword: k)", [false, false, false], [7, 7, 7], "wrong number of arguments (given 2, expected 1)", "wrong number of arguments (given 1, expected 0)", true, false, 7]	class C\n          def none = :n\n          def one(a) = nil\n          de
 e04102db31563efacf03513f5ddbcdd6	{"MONORUBY_ENV_TEST_SL1" => "x", "MONORUBY_ENV_TEST_SL2" => "y"}	ENV["MONORUBY_ENV_TEST_SL1"] = "x"\n            ENV["MONORUBY_ENV_TE
 e0430993ff49221b4ff142a12a2d9ee6	[1, [:gt, :lt, :gt, :lt]]	class C\n              attr_reader :calls\n              def initiali
 e051ec7a15469fca9105c948f78c2f26	[[:v], 50]	$nlr_log = []\n        def nlr_mid\n          yield\n        ensure\n      

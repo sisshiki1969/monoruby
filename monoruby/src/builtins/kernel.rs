@@ -5341,14 +5341,8 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     if let Some(fid) = globals.check_method(lfp.self_val(), respond_to_missing) {
         // The default `Object#respond_to_missing?` is `false` — an ISeq
         // whose hint says it returns a constant — and so is the common
-        // user override that answers a literal. Answer the constant
-        // without a Ruby call, as the JIT's inline generator does; only
-        // a body that computes something is invoked.
-        if let Some(iseq) = globals.store[fid].is_iseq()
-            && let ISeqHint::ConstReturn(v) = globals.store[iseq].hint
-        {
-            return Ok(Value::bool(v.as_bool()));
-        }
+        // user override that answers a literal; `invoke_func` answers
+        // those from the hint without a Ruby call.
         let result = vm.invoke_func_inner(
             globals,
             fid,
@@ -7937,6 +7931,41 @@ mod tests {
           end
         end
         "#,
+        );
+    }
+
+    #[test]
+    fn invoke_const_return_arity() {
+        // `invoke_func` answers a constant-returning method without a
+        // frame, but only when the arguments would bind: wrong positional
+        // counts, unexpected keywords, and missing required keywords must
+        // still raise from the builtin call paths (send / Method#call).
+        run_test(
+            r##"
+        class C
+          def none = :n
+          def one(a) = nil
+          def opt(a, b = 1, *r) = 42
+          def kw(k:) = true
+          def optkw(k: 1) = false
+          def blk(&b) = 7
+        end
+        c = C.new
+        r = []
+        [[:none, []], [:none, [1]], [:one, []], [:one, [1]], [:one, [1, 2]],
+         [:opt, []], [:opt, [1]], [:opt, [1, 2, 3, 4]], [:kw, []], [:kw, [{k: 1}]],
+         [:optkw, []], [:blk, []]].each do |m, args|
+          r << begin
+            [c.send(m, *args), c.method(m).call(*args), c.public_send(m, *args)]
+          rescue ArgumentError => e
+            e.message
+          end
+        end
+        r << begin; c.send(:one, 1, k: 2); rescue ArgumentError => e; e.message; end
+        r << begin; c.send(:none, k: 2); rescue ArgumentError => e; e.message; end
+        r << c.send(:kw, k: 5) << c.send(:optkw, k: 5) << c.send(:blk) { 1 }
+        r
+        "##,
         );
     }
 
