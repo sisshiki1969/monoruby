@@ -5339,6 +5339,16 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // Call respond_to_missing?(name, include_all) as CRuby does.
     let respond_to_missing = IdentId::RESPOND_TO_MISSING_;
     if let Some(fid) = globals.check_method(lfp.self_val(), respond_to_missing) {
+        // The default `Object#respond_to_missing?` is `false` — an ISeq
+        // whose hint says it returns a constant — and so is the common
+        // user override that answers a literal. Answer the constant
+        // without a Ruby call, as the JIT's inline generator does; only
+        // a body that computes something is invoked.
+        if let Some(iseq) = globals.store[fid].is_iseq()
+            && let ISeqHint::ConstReturn(v) = globals.store[iseq].hint
+        {
+            return Ok(Value::bool(v.as_bool()));
+        }
         let result = vm.invoke_func_inner(
             globals,
             fid,
@@ -7889,6 +7899,41 @@ mod tests {
           private
           def hello
             "Guten Tag"
+          end
+        end
+        "#,
+        );
+    }
+
+    #[test]
+    fn respond_to_missing_const_return() {
+        // The default `Object#respond_to_missing?` and a user override that
+        // returns a literal are answered from the ISeq's constant-return hint
+        // without a Ruby call; an override that actually computes its answer
+        // is still invoked with (name, include_all).
+        run_test_with_prelude(
+            r#"
+        res = []
+        [Plain.new, Always.new, Never.new, Some.new].each do |o|
+          res << [o.class, o.respond_to?(:foo), o.respond_to?(:zzz), o.respond_to?(:zzz, true)]
+        end
+        res << Some.log.uniq.sort_by(&:to_s)
+        res
+        "#,
+            r#"
+        class Plain; end
+        class Always
+          def respond_to_missing?(n, p) = true
+        end
+        class Never
+          def respond_to_missing?(n, p) = false
+        end
+        class Some
+          @log = []
+          def self.log = @log
+          def respond_to_missing?(n, priv)
+            Some.log << [n, priv]
+            n == :zzz
           end
         end
         "#,
