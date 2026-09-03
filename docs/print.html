@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6d284e1b.js";
+            window.path_to_searchindex_js = "searchindex-5770cfc6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-ad91b9ad.js"></script>
@@ -5034,6 +5034,45 @@ longer passes it.</li>
 <p>Only the build knob is gone; runtime behaviour is unchanged from the default-on
 state. The §31/§32 <code>layer2-float-by-type</code> × <code>stress-spill-pool</code> history is
 retained above as the record of the pressure bug that §39/§40 fixed.</p>
+<h2 id="45-slot-copies-share-a-gp-register-many-slots-per-register-as-the-fpr-file"><a class="header" href="#45-slot-copies-share-a-gp-register-many-slots-per-register-as-the-fpr-file">45. Slot copies share a GP register (many slots per register, as the fpr file)</a></h2>
+<p><code>%dst = %src</code> used to be a load/store pair through the stack home — and, since
+<code>Mov</code> flushed the GP file first, it also ended every run of register-resident
+integer work. On a copy-heavy body (yjit-bench <code>30k_variables</code>: 100 locals per
+method, mostly <code>vN = vM</code>) that was ~300 memory ops per call, each copy’s load
+waiting on the previous copy’s store (a store-forwarding chain), and 12× the
+cost of ZJIT’s SSA form, where a copy is a renaming.</p>
+<p>The fpr file has always let one xmm back several slots (<code>vfpr: Vec&lt;Vec&lt;SlotId&gt;&gt;</code>,
+the <code>F</code>/<code>Sf</code> sharing <code>copy_slot</code> relies on). <code>GpRegFile</code> now has the same shape:
+<code>holders: Vec&lt;Vec&lt;Holder&gt;&gt;</code>, one holder set per allocatable register, each
+holder carrying its own dirty bit. <code>copy_slot</code>’s <code>S</code> arm binds <code>dst</code> <strong>dirty</strong>
+to <code>src</code>’s register (loading <code>src</code> clean into a fresh register first if it was
+not resident) and emits nothing; <code>Mov</code> no longer flushes for an <code>S</code>/<code>C</code>
+source. The store to <code>dst</code>’s home is owed at the register’s eviction or the
+next flush, and is dropped if <code>dst</code> dies first (a <code>ret</code>, a popped temporary —
+<code>free_above_sp</code> retains per holder). Eviction spills every dirty holder of the
+victim (<code>alloc_reg</code> returns a <code>Vec</code> of spills; <code>evict_reg</code> is the shared
+primitive, also used where <code>Mul</code>/<code>Div</code> are about to destroy <code>rhs</code>’s register).</p>
+<p>Two rules follow from sharing:</p>
+<ul>
+<li>An op may compute <strong>in place</strong> only in a register that will hold nothing
+but its <code>lhs</code> (<code>will_hold_at_most</code>); a register shared with copies carries
+their only value, so the result takes a distinct register.</li>
+<li>The result register must be <strong>reserved before the deopt snapshot</strong>
+(<code>plan_dst_reg</code> → <code>GpRegFile::reserve</code>, then <code>new_deopt</code>, then
+<code>take_dst_reg</code>). The snapshot is taken before the popped operands are
+cleared so the interpreter can re-read them from their homes; a victim
+evicted <em>after</em> it stayed listed in it, and an overflow side exit then
+stored the register — by now holding the result — into the victim’s home.
+Copies made this latent ordering bug reachable (plb2 <code>bedcov</code>’s
+<code>splitmix32</code>: <code>z = x</code> kept <code>x</code> resident for the whole body, the second
+multiply overflowed to a Bignum, and <code>x</code> came back a Float); it is fixed
+for the copy-free case too.</li>
+</ul>
+<p>Result (x86-64, release): <code>30k_variables</code> 306 ms → 25 ms per iteration; the
+other benchmarks are flat. Tests: <code>tests/copy_propagation.rs</code> (in-place ops on
+a shared register, <code>Mul</code>/<code>Div</code> clobbering a shared operand, overflow and type
+deopts with copies outstanding, calls/allocations, loops, non-fixnum values,
+the <code>splitmix32</code> shape) and the <code>gp_alloc</code> unit tests.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack"><a class="header" href="#trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack">Trace-chain joins — one <code>AbstractState</code> for the whole specialization stack</a></h1>
 <p><strong>Kind: design record.</strong> Why the JIT’s abstract state spans every frame of
