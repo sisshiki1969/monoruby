@@ -1358,29 +1358,38 @@ impl<'a> JitContext<'a> {
                 _ => Some(None),
             }
         };
-        let Some(base_ivar) = ivar_of(self, body.base) else {
-            return false;
-        };
-        let mut step_ivars = Vec::with_capacity(body.steps.len());
-        for &(_, operand) in &body.steps {
-            let Some(ivarid) = ivar_of(self, operand) else {
-                return false;
+        // Resolve every ivar name the body mentions, up front.
+        let mut ivars: Vec<Option<IvarId>> = Vec::with_capacity(body.ops.len());
+        for op in &body.ops {
+            let name = match *op {
+                frameless::LeafOp::Load(frameless::LeafValue::SelfIvar(name))
+                | frameless::LeafOp::Bin(_, frameless::LeafValue::SelfIvar(name))
+                | frameless::LeafOp::Cmp(_, frameless::LeafValue::SelfIvar(name))
+                | frameless::LeafOp::Store(name) => name,
+                _ => {
+                    ivars.push(None);
+                    continue;
+                }
             };
-            step_ivars.push(ivarid);
-        }
-        let store_ivar = match body.store {
-            Some(name) => match resolve(self, name) {
-                Some(ivarid) => Some(ivarid),
+            match resolve(self, name) {
+                Some(ivarid) => ivars.push(Some(ivarid)),
                 None => return false,
-            },
-            None => None,
-        };
+            }
+        }
 
         state.flush_gp(ir);
         // The receiver, for every inline ivar access and the frozen guard.
         state.load(ir, recv, GP::Rdi);
         let deopt = ir.new_deopt(state);
 
+        ///
+        /// Emit one operand into `reg`.
+        ///
+        /// Returns whether rdi (the receiver) may have been clobbered. Only
+        /// a parameter load can do it: the slot may hold an unboxed float,
+        /// and boxing it calls out. The ivar load and the literal write
+        /// their destination and nothing else.
+        ///
         fn emit_value(
             ir: &mut AsmIr,
             state: &mut AbstractState,
@@ -1388,43 +1397,81 @@ impl<'a> JitContext<'a> {
             v: frameless::LeafValue,
             ivarid: Option<IvarId>,
             reg: GP,
-        ) {
+        ) -> bool {
             match v {
-                frameless::LeafValue::SelfIvar(_) => ir.push(AsmInst::LoadIVarInline {
-                    ivarid: ivarid.unwrap(),
-                    dst: reg,
-                }),
-                frameless::LeafValue::Fixnum(val) => ir.lit2reg(val, reg),
-                frameless::LeafValue::Param(i) => state.load(ir, arg_slots[i as usize], reg),
+                frameless::LeafValue::SelfIvar(_) => {
+                    ir.push(AsmInst::LoadIVarInline {
+                        ivarid: ivarid.unwrap(),
+                        dst: reg,
+                    });
+                    false
+                }
+                frameless::LeafValue::Fixnum(val) => {
+                    ir.lit2reg(val, reg);
+                    false
+                }
+                frameless::LeafValue::Param(i) => {
+                    state.load(ir, arg_slots[i as usize], reg);
+                    true
+                }
             }
         }
 
-        emit_value(ir, state, arg_slots, body.base, base_ivar, GP::Rax);
-        for (i, &(kind, operand)) in body.steps.iter().enumerate() {
-            emit_value(ir, state, arg_slots, operand, step_ivars[i], GP::Rcx);
-            // Neither operand is statically typed here — the receiver's
-            // class is known but its ivars' contents are not, and a
-            // parameter is whatever the caller passed.
-            ir.push(AsmInst::GuardClass(GP::Rax, INTEGER_CLASS, deopt));
-            ir.push(AsmInst::GuardClass(GP::Rcx, INTEGER_CLASS, deopt));
-            ir.integer_binop_reg(kind, GP::Rax, GP::Rax, GP::Rcx, deopt);
-        }
-
-        if let Some(ivarid) = store_ivar {
-            // A step's result is a proven fixnum, so it needs no write
-            // barrier; a bare value (`def set(x) = @a = x`) may be a heap
-            // object and does.
-            let wb = body.steps.is_empty() && !matches!(body.base, frameless::LeafValue::Fixnum(_));
-            // Re-materialize the receiver: the arithmetic above went
-            // through rax/rcx, but a parameter load may have gone through
-            // rdi's slot machinery.
-            state.load(ir, recv, GP::Rdi);
-            ir.guard_frozen(deopt);
-            ir.push(AsmInst::StoreIVarInline {
-                src: GP::Rax,
-                ivarid,
-                wb,
-            });
+        // The accumulator lives in rax; rcx holds each op's right operand.
+        // Tracked alongside it: whether rax is known to hold an immediate,
+        // which is what decides the write barrier on a store.
+        let mut acc_immediate = false;
+        // The frozen guard is hoisted to the first store and covers every
+        // later one — nothing between them can call out and freeze the
+        // receiver.
+        let mut frozen_guarded = false;
+        // rdi still holds the receiver, so a store needs no reload.
+        let mut recv_live = true;
+        for (i, op) in body.ops.iter().enumerate() {
+            match *op {
+                frameless::LeafOp::Load(v) => {
+                    recv_live &= !emit_value(ir, state, arg_slots, v, ivars[i], GP::Rax);
+                    acc_immediate = matches!(v, frameless::LeafValue::Fixnum(_));
+                }
+                frameless::LeafOp::Bin(kind, operand) => {
+                    recv_live &= !emit_value(ir, state, arg_slots, operand, ivars[i], GP::Rcx);
+                    // Neither operand is statically typed here — the
+                    // receiver's class is known but its ivars' contents are
+                    // not, and a parameter is whatever the caller passed.
+                    ir.push(AsmInst::GuardClass(GP::Rax, INTEGER_CLASS, deopt));
+                    ir.push(AsmInst::GuardClass(GP::Rcx, INTEGER_CLASS, deopt));
+                    ir.integer_binop_reg(kind, GP::Rax, GP::Rax, GP::Rcx, deopt);
+                    acc_immediate = true;
+                }
+                frameless::LeafOp::Cmp(kind, operand) => {
+                    recv_live &= !emit_value(ir, state, arg_slots, operand, ivars[i], GP::Rcx);
+                    ir.push(AsmInst::GuardClass(GP::Rax, INTEGER_CLASS, deopt));
+                    ir.push(AsmInst::GuardClass(GP::Rcx, INTEGER_CLASS, deopt));
+                    // The comparison zeroes rax before reading its operands,
+                    // so the accumulator has to step aside first.
+                    ir.reg_move(GP::Rax, GP::Rsi);
+                    ir.integer_cmp_reg(kind, None, GP::Rsi, GP::Rcx);
+                    acc_immediate = true;
+                }
+                frameless::LeafOp::Store(_) => {
+                    if !recv_live {
+                        state.load(ir, recv, GP::Rdi);
+                        recv_live = true;
+                    }
+                    if !frozen_guarded {
+                        ir.guard_frozen(deopt);
+                        frozen_guarded = true;
+                    }
+                    ir.push(AsmInst::StoreIVarInline {
+                        src: GP::Rax,
+                        ivarid: ivars[i].unwrap(),
+                        // A guarded arithmetic result or a fixnum literal
+                        // needs no write barrier; a bare value
+                        // (`def set(x) = @a = x`) may be a heap object.
+                        wb: !acc_immediate,
+                    });
+                }
+            }
         }
         state.def_reg2acc(ir, GP::Rax, dst);
         state.unset_side_effect_guard();
@@ -3518,9 +3565,9 @@ mod tests {
     /// path that stores nothing), a body that calls, one that stores twice,
     /// one whose store is not last, a `%` (`BinOpK::Rem` has no register
     /// form to lower to), and a body reading a second object's ivar. Then
-    /// the two declines that depend on the *receiver* rather than the body:
-    /// a class whose instances have no inline ivar slots, and an ivar with
-    /// no `IvarId` to resolve.
+    /// a guard after an effect, and the two declines that depend on the
+    /// *receiver* rather than the body: a class whose instances have no
+    /// inline ivar slots, and an ivar with no `IvarId` to resolve.
     #[test]
     fn frameless_leaf_bodies_decline() {
         run_test(
@@ -3534,13 +3581,17 @@ mod tests {
               def early; @n = 1; @m + 1; end
               def rem(x); @n % x; end
               def other(o); @n + o.n; end
+              # A guard *after* an effect: `@n` is already written when the
+              # `+` overflow check could fire, so that exit could no longer
+              # hand the whole call back.
+              def late(x); @n = x; @m = x + 1; end
               attr_reader :n, :m
             end
             d = D.new
             res = []
-            100.times { d.cond(1); d.calls; d.two; d.early; d.rem(3); d.other(d) }
+            100.times { d.cond(1); d.calls; d.two; d.early; d.rem(3); d.other(d); d.late(2) }
             res << d.cond(-1) << d.cond(3) << d.calls << d.two << d.early
-            res << d.rem(4) << d.other(d) << d.n << d.m
+            res << d.rem(4) << d.other(d) << d.late(5) << d.n << d.m
 
             # A receiver whose instances are not plain objects has no inline
             # ivar slots to read at a fixed offset.
@@ -3629,6 +3680,124 @@ mod tests {
             before = q.m
             e = (begin; q.store_after(0); rescue ZeroDivisionError => x; x; end)
             res << trace(e) << before << q.m << (q.m == before)
+            res
+            "#,
+        );
+    }
+
+    /// Several effects in one body. The rule is that no *guard* may follow
+    /// an effect, not that there be only one effect, so `@n = 1; @m = 2`
+    /// expands: one hoisted frozen guard covers both stores, since nothing
+    /// between them can call out and freeze the receiver.
+    ///
+    /// Covered alongside it: the write barrier, which a guarded arithmetic
+    /// result or a fixnum literal does not need but a bare parameter does —
+    /// so a store of a heap object has to keep the receiver's card marked,
+    /// which the young-object collection at the end checks.
+    #[test]
+    fn frameless_leaf_bodies_multi_store() {
+        run_test(
+            r#"
+            class M
+              def initialize; @a = 0; @b = 0; @c = 0; end
+              def two;   @a = 1; @b = 2; end
+              def reset; @a = 0; @b = 0; @c = 0; end
+              def calc(x); @a = x * 2; @b = @a; end
+              def objs(x); @a = x; @b = x; end
+              attr_reader :a, :b, :c
+            end
+            m = M.new
+            res = []
+            300.times { m.two; m.reset; m.calc(3); m.objs("s") }
+            res << m.two << [m.a, m.b]
+            res << m.reset << [m.a, m.b, m.c]
+            res << m.calc(4) << [m.a, m.b]
+            # a heap object through the same path: the store needs the write
+            # barrier, so force a collection and read it back
+            res << m.objs([1, 2]) << [m.a, m.b]
+            GC.start
+            res << [m.a, m.b]
+            # a frozen receiver still raises, from a real frame, and with
+            # neither store performed
+            f = M.new.freeze
+            res << (begin; f.two; rescue FrozenError => e; e.class; end) << [f.a, f.b]
+            res
+            "#,
+        );
+    }
+
+    /// The expansion is all-fixnum — it guards both operands as `Integer`
+    /// and lowers to the integer register forms — so it must only be taken
+    /// where the VM has actually seen fixnums. Float-ivar bodies are the
+    /// counter-case, and they are everywhere in numeric code: expanding
+    /// `def scaled = @x * 2` on a `Float` `@x` answers correctly (the guard
+    /// exits and the interpreter performs the call) but exits on *every*
+    /// execution, which is strictly worse than the specialized call it
+    /// replaced. Measured on a tight loop, gating on the inline cache is
+    /// worth ~2x on these bodies.
+    ///
+    /// This test pins the answers; what it cannot pin is the absence of the
+    /// exit, so the shapes are listed here to keep them exercised.
+    #[test]
+    fn frameless_leaf_bodies_float_ivars() {
+        run_test(
+            r#"
+            class F
+              def initialize(x, y); @x = x; @y = y; end
+              def scaled; @x * 2; end
+              def sum;    @x + @y; end
+              def gt;     @x > 1.0; end
+              def bump;   @x += 1; end
+              attr_reader :x
+            end
+            f = F.new(1.5, 2.5)
+            res = []
+            300.times { f.scaled; f.sum; f.gt; f.bump }
+            res << f.scaled << f.sum << f.gt << f.bump << f.x
+            # the same bodies on Integer receivers still answer correctly
+            i = F.new(3, 4)
+            300.times { i.scaled; i.sum; i.gt; i.bump }
+            res << i.scaled << i.sum << i.gt << i.bump << i.x
+            # and a body the VM saw on both is polymorphic, so neither
+            # expansion is taken
+            m = [F.new(1.5, 2.5), F.new(3, 4)]
+            300.times { m.each { |o| o.sum } }
+            res << m.map { |o| o.sum }
+            res
+            "#,
+        );
+    }
+
+    /// Comparisons: the accumulator becomes a bool, so the expansion has to
+    /// step it out of rax first (the lowering zeroes rax before reading its
+    /// operands). All seven `CmpKind`s, on an ivar and on a parameter, plus
+    /// the guard firing on a non-fixnum operand.
+    #[test]
+    fn frameless_leaf_bodies_compare() {
+        run_test(
+            r#"
+            class P
+              def initialize(n); @n = n; end
+              def pos;    @n > 0; end
+              def gt(x);  @n > x; end
+              def ge(x);  @n >= x; end
+              def lt(x);  @n < x; end
+              def le(x);  @n <= x; end
+              def eq(x);  @n == x; end
+              def ne(x);  @n != x; end
+              def scaled_gt(x); @n * 2 > x; end
+            end
+            p5 = P.new(5)
+            res = []
+            300.times { p5.pos; p5.gt(1); p5.ge(5); p5.lt(9); p5.le(5); p5.eq(5); p5.ne(1); p5.scaled_gt(3) }
+            res << p5.pos << P.new(-1).pos << P.new(0).pos
+            res << p5.gt(4) << p5.gt(5) << p5.ge(5) << p5.ge(6)
+            res << p5.lt(6) << p5.lt(5) << p5.le(5) << p5.le(4)
+            res << p5.eq(5) << p5.eq(6) << p5.ne(5) << p5.ne(6)
+            res << p5.scaled_gt(9) << p5.scaled_gt(10)
+            # the guards fire: a non-fixnum ivar, and a non-fixnum argument
+            res << P.new(1.5).pos << p5.gt(4.5) << p5.eq("5")
+            res << (begin; p5.gt("x"); rescue ArgumentError, TypeError => e; e.class; end)
             res
             "#,
         );
