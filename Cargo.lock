@@ -794,7 +794,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 [[package]]
 name = "monoasm"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git?branch=aarch#12c4fe932435f738f9322461ef53a497b0280ae3"
+source = "git+https://github.com/sisshiki1969/monoasm.git?branch=claude%2Fmovups#d9f2d07f333c8f89c29881bfff1ad0961889553f"
 dependencies = [
  "chrono",
  "libc",
@@ -808,7 +808,7 @@ dependencies = [
 [[package]]
 name = "monoasm_macro"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git?branch=aarch#12c4fe932435f738f9322461ef53a497b0280ae3"
+source = "git+https://github.com/sisshiki1969/monoasm.git?branch=claude%2Fmovups#d9f2d07f333c8f89c29881bfff1ad0961889553f"
 dependencies = [
  "proc-macro2",
  "quote",

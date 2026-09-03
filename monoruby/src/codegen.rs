@@ -870,6 +870,13 @@ pub struct Codegen {
     ///   live x30 around the `bl`).
     ///
     alloc_cell: DestLabel,
+    /// A 16-byte constant holding `NIL_VALUE` twice, so a method prologue
+    /// can nil-fill its slots two at a time with `movups` (see
+    /// `Codegen::init_func`). Laid down as four `const_i32`, not two
+    /// `const_i64`: monoasm aligns every 8-byte constant to 16 bytes
+    /// individually, so a pair of them would not be contiguous.
+    #[cfg(target_arch = "x86_64")]
+    nil_pair: DestLabel,
     pub(crate) specialized_info: Vec<SpecializedPatchEntry>,
     pub(crate) specialized_base: usize,
     /// The const-version snapshot word of the unit currently being compiled:
@@ -1260,6 +1267,16 @@ impl Codegen {
         let switch_to_scheduler = jit.switch_to_scheduler();
         let scheduler_resume = jit.scheduler_resume();
 
+        #[cfg(target_arch = "x86_64")]
+        let nil_pair = {
+            let label = jit.const_align8();
+            for _ in 0..2 {
+                jit.const_i32(NIL_VALUE as i32);
+                jit.const_i32((NIL_VALUE >> 32) as i32);
+            }
+            label
+        };
+
         let mut codegen = Self {
             jit,
             class_version_addr,
@@ -1274,6 +1291,8 @@ impl Codegen {
             chain_deopt_table: HashMap::default(),
             chain_cont_stub: entry_panic.clone(),
             alloc_cell: entry_panic.clone(),
+            #[cfg(target_arch = "x86_64")]
+            nil_pair,
             specialized_info: Vec::new(),
             specialized_base: 0,
             unit_const_version: None,
