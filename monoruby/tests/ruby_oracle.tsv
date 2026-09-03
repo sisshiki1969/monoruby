@@ -277,6 +277,7 @@
 1317901b03e325cdcbdb9c43a59b5785	[[[167, 65, 166, 110], "Big5"], [167, 65, 166, 110]]	require "tmpdir"\n        path = File.join(Dir.tmpdir, "mrb_bytes_magic_
 132388d4515c19d62c2dd3396854ec0f	[21, "xyy"]	def idapp(s, n)\n          i = 0\n          while i < n\n            t = (
 13323a8d5c81e35bcd4ad9f525e2542e	[true, 2, 9, 0]	h = Signal.list\n            [h.is_a?(Hash), h["INT"], h["KILL"], h[
+136d5b53ff9c773153c7fac5ff0b733b	[200, [:sym, "s", :sym, "s"], "strx!", 8, ["ac", "ab"], 3, [false, true]]	def push(a, x) = a << x\n            a = []\n            200.times { 
 138e62ffcfc71d0338a5247a729e81fb	[true, true]	[$:.equal?($LOAD_PATH), $:.equal?($-I)]\n        
 13ad4da7c9b738e48c91a58c2101c684	[false, true, false, false, true]	r, w = IO.pipe\n            res = [$stdout.sync, $stderr.sync, $stdi
 13c09eba52c55ecec3e82b015d3b4f59	[true, true, true]	C = Class.new\n            D = Class.new(C)\n            \n[C.new.clas
@@ -503,6 +504,7 @@
 2564e3ad2fe7fb1fdc5d2fa9b88997a2	"US-ASCII"	"\\x01".unpack("h")[0].encoding.to_s
 256686756b653a14cc54ed2fe66c19a5	"hello from Foo"	class Foo\n              def hello\n                "hello from Foo"\n
 259e0bc1539e3e941c430db4dd5e906c	"/home/user/monoruby/monoruby/a.rb"	class C\n          autoload :D, File.expand_path("j")\n          autoload
+25ab3bc8851895e51c03504e71ee2483	[true, false, "a1"]	x = 1\n        s = "a#{x}".freeze\n        t = "a#{x}".freeze\n        [s.
 25bf8c5753369088e3ee3a5e22313082	["Z", "\\n"]	tr = []\n            trace_var(:$/) { |v| tr << v }\n            $/ =
 25bfb835555c41988ae49ab62e4ae633	["ok", "ok", "ok", "ok", "ok", "abcok"]	class MTosInt; def to_s; 42; end; end\n            class MTosNil; de
 25f0534564d801243342b23debebc6f2	[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19], true, [0, 1, 2, 3, 4, 5, 6], [[0, "s0"], [1, "s1"], [2, "s2"], [3, "s3"], [4, "s4"], [5, "s5"]], [0, 1, 2], FrozenError]	def app(a, v) = a << v\n        def app_blk(a, v, &b) = a.<<(v, &b)\n    
@@ -1145,6 +1147,7 @@
 573a889f327b5f24c438d7517aacf15a	nil	"hello".byteindex("ll", 3)
 573fe669ac971343defbd1cde20dc915	["MONORUBY_ENV_TEST_KEY", nil]	ENV["MONORUBY_ENV_TEST_KEY"] = "uniq_value_5678"\n            r = EN
 576157356419a5741dbdbde29df95789	true	GC.stat.values.all? { |v| v.is_a?(Integer) }
+578de94984c2ccfde4e12e4b109f9b81	[1, 0]	class Hash\n          def []=(k, v)\n            "redef #{k}"\n          e
 57bd29081de5740463b29a1c3ee0ef00	"US-ASCII"	s = "hello".dup.force_encoding("US-ASCII")\n              s[/(ll)/
 57c833a5c1b734fc7100669600389b9b	[nil, nil, nil, 2.5, 3.5, :sym]	def __f(x)\n          \n        a = x.odd? ? nil : "str"\n        b = a\n  
 57f002dbbc2a38d20a751f8e1d4218fe	[255, 15, 240, -1, 15, -16, 42, 0, 42, 42, -43, 244837815148286, 304366200, 244837510782086]	def or_a; 0xFF | 0x0F; end\n            def and_a; 0xFF & 0x0F; end\n
@@ -1204,6 +1207,7 @@
 5c54276df75bb39ec1d87961406e8d9a	"M:Base"	module M\n          def greet\n            "M:" + super\n          end\n   
 5c591e9ff73fb3eaf82f8472fbe461ed	:nme	class Float; def *(o); super(o); end; end\n                begin; 2.0 * 3; rescue
 5c78c8c1a1899c06122f988ae4e55650	true	module MNs; module Ext; end; end\n            o = Object.new\n       
+5c81b1416723d320008472f66e0573cc	[true, true, true]	def churn(n) = n.times { |i| [i, i] }\n            churn(50_000); GC
 5c9a399e6be0e655dcde007dc7ece9b8	true	r, w = IO.pipe\n            t = Thread.new { sleep 0.2 }\n           
 5c9bd2b9dbdb63097f4a4accca2a9df4	nil	def f(&p)\n            p.call\n        end\n        \n\n        f{}\n        
 5d03329e8ce3ae472df7fb2691c658f9	[3, :redefined]	a, b = 3, 9\n            r = []\n            50.times { r << [a, b].m
@@ -1324,6 +1328,7 @@
 65b60c5b39c342afed16c0ba169c3edc	20100	def target(x) = x + 1\n        s = 0\n        i = 0\n        while i < 200
 65d10140470d60de44657d841741db77	[0, 1, 2, 3, 4]	a = []\n            p = Proc.new {|x|\n                a << x\n       
 65f089c7f8670902b073a707f21a776d	["/p", nil]	m = Module.new { autoload :X, "/p" }\n            [m.autoload?("X"),
+660c0103d91b50d0c6f365cf1111c0c4	:OVERRIDDEN	class String; def freeze; :OVERRIDDEN; end; end; "a".freeze
 6622d68b20aa2154a49d5b127ef16dc7	:assigned	module MM\n          def self.const_missing(c); c; end\n        end\n     
 6640768cb0201ad9cc8cdbbc1ff67cd8	42	c = Class.new\n            c.class_exec do\n              define_meth
 664f853aae1b23342a7f3f6347677439	[nil, [:r]]	$clog = []\n            def craise; $clog << :r; raise "x"; end\n    
@@ -2251,6 +2256,7 @@ abff45e2e4ccefb2ed9daaa747abd7e9	[false, true, "ASCII-8BIT", "US-ASCII", "US-ASC
 ac05813546d64cee5c65087151515f0e	2	class C\n              class_variable_set(:@@a, 1)\n              cla
 ac1cd090922e2d287c49175ec16f5e26	[10.0, 11.0]	def call_block\n          yield\n        end\n        def q2(n)\n          
 ac297a4af1959cc67e21eec34a53aea8	"nil"	def t; end; (private).inspect
+ac2e43020ffe19b6c18c1104198f1e6e	[["key"], true, false, true, 2, [9, 2], FrozenError]	def st(h, k, v) = (h[k] = v)\n        k = +"key"\n        h = {}\n        
 ac3fd0f0d8305e489381e6ee6e5c07bd	[100, 100, 4950]	a=1\n            x=0\n            b=while a<2500 do\n            if a=
 ac462de061f87c41bfe50ec870af58fd	[false, true]	io = IO.popen("cat", "r+")\n            begin\n              io.close
 ac47b35a8659a773ec56fdd4d59752c6	"m1+m2"	m1 = Module.new do\n          def foo; "m1"; end\n        end\n        m2 
@@ -2353,6 +2359,7 @@ b48421b0d63a4f1dfbd01b42afbcbd69	[[true, "Other 2\\n", "File", true], [true, fal
 b4b8f74ab1ab36ffeaae5c220a83557e	[true, true]	m = Module.new do\n              eval <<-CODE\n                module
 b4da8c820c2dab4428659d300baa5cc4	[:foo]	$res = []\n            class C\n              def self.method_removed
 b4de022176f4c5de67942bada3f160da	[[Fold], [FoldRest], [FoldOpt], [Impure], 99, ArgumentError, ArgumentError, ArgumentError, Fold, 100]	$effects = []\n            class Fold\n              def initialize(x
+b4ebc0e6f5be99ec71ef0910baf89efa	"redefined:false"	class String\n          def freeze = "redefined:#{frozen?}"\n        end\n
 b4ebd9e4bda33219cab1ca52fb00c022	[[[1, 2, 3], [[:x, 10], [:y, 20]]]]	class C\n          def f(*args, **kw)\n            $res << [args, kw.sort
 b50aa88cac9a4ea0fd9adfd0ecc7d571	20	Random.urandom(0).size\n        Random.urandom(1).size\n        Random.ur
 b5186a1f8fc3fcc5d73748e08564545a	[1, 1]	->(a = 1, b = a) { [a, b] }.call
@@ -2399,6 +2406,7 @@ b8659d9eac8d9dda73d245a1976bcfbd	256	253.succ.succ.succ
 b8a21a20381c12eb8fd88a75578fcc20	["mm: probe [7]", "super: no superclass method 'probe'"]	res = []\n        klass = Class.new do\n          def method_missing(name
 b8a48c3aa1c3407546058fae28da4256	[false, false]	def foo; end\n            def bar; end\n            public :foo, :bar
 b8add92dc4f86330682dc9fa57fea596	"[nil, true]"	r, w = IO.pipe\n            pid = fork do\n              r.close\n    
+b8b5815c80c9b41df4ebb850776696ed	[100, 100, [49, :tagged]]	def push(a, x) = a << x\n            a = []\n            100.times { 
 b8d3738377245420bc2378da58f5f7d9	100	p = Proc.new { 100 }\n            define_method(:foo, p)\n           
 b8d68ef10028da6842a236893e45d2cb	:local_jump	begin\n              Thread.new { return }.value\n              :no_e
 b8e73ca465704ccb728ac104f9385e74	["str", 8]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
@@ -2419,6 +2427,7 @@ ba14940825be38e026fae59620419fd4	42	class A\n          private\n          def se
 ba2759338f46738112684574d1873d91	["C", true, :overridden, "BetweenBAndC", "B", nil, "BetweenBAndC"]	module B; def overridden; "B"; end; end\n            module BetweenB
 ba33ae227745c6540c696d6d1939ee32	Complex	8.0.fdiv(Complex(2, 1)).class
 ba39d4e07d48704cbbd5237bda1f2e52	3	class C\n          def f(a = ($x = 3)); self; end\n        end\n        C.
+ba3e73d62c5db2b4428bbeab1207b07f	[true, false, true]	# frozen_string_literal: true\n        a = 'abc'.freeze\n        [a.froze
 ba4b2a427a6ae2a8c8e93903224a4e27	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, true, :lexical, :lexical, :lexical, :lexical, :lexical, :lexical, :lexical, :lexical, :lexical, :lexical]	$r = []\n        # Constants stored directly in the singleton class.\n   
 ba4f1d7bb4ae928b997cbb3df7f887d9	nil	m = Module.new\n            m.name\n            
 ba4ff971390140cc452d6a37019cd25e	["hello", "hellohellohellohellohellohellohellohellohellohello"]	class Foo\n          def initialize(data)\n            @key = data\n      
@@ -2884,6 +2893,7 @@ dc3f2c1c601ee25acabb218a6cdbf2ba	"custom_argv0\\n"	r, w = IO.pipe\n            P
 dc46fc2af0d8cdf7f503978a0a044521	[{"a" => 100, "b" => 357, "c" => 300, "d" => 400}, {"a" => 100, "b" => 357, "c" => 300, "d" => 400}, {"a" => 100, "b" => 357, "c" => 300, "d" => 400}]	h1 = { "a" => 100, "b" => 200 }\n            h2 = { "b" => 246, "c" 
 dc4f9ee2cdc75359817229684847545b	[nil, nil, nil]	class C; def to_int; 3; end; end; o = C.new\nArray.new(o)
 dc8c0fed605309d0ac56a18fa4f96131	[1, -1, 2, -2]	class Foo\n              def a(x:); end\n              def b(x: 1); e
+dc8f64ca126f4f16403db76ca436887b	["hello world", "hello world!", "ABC", false]	def app(buf) = buf << 'hello '.freeze\n        def cat(buf) = buf.concat
 dca050e66a831044f8036e5e5e53de5e	[true, false]	class ModEvalBlockA; end\n            ModEvalBlockA.module_eval {\n  
 dca1fe10428b94607119699e4536affd	77	module Foo\n          def self.Bar; yield; end\n        end\n        Foo::
 dcb299cee36b3bcad2f0615af4c007af	true	File.exist?("../LICENSE-MIT")
@@ -3031,6 +3041,7 @@ e7c6302a9b297579c8e5ac35b76c1089	"1"	def foo \n          eval("a = 1", $b)\n    
 e7ca5b8d05bd3556a711daf23dfd10c6	nil	r, _w = IO.pipe\n            r.wait(IO::READABLE, 0)\n            
 e7ea0100557a89543a11511853510192	[{"alpha" => 3, "beta" => 2}, 3, 2, nil, true, false, 2]	h = {}\n        h["alpha"] = 1\n        h["beta"] = 2\n        h["alpha" +
 e832c1ba769618395a505bd13bd3d3b7	"hi"	mod = Module.new do\n          def greet; "hi"; end\n        end\n        
+e83df828ab1988d0aa930288164eeda1	[true, true, "abc", true, true]	def f = 'abc'.freeze\n        a = f; b = f\n        [a.frozen?, a.equal?(
 e841964d3dcfd7149202c80802373ee4	"Encoding::CompatibilityError"	(Regexp.new("".dup.force_encoding("US-ASCII"), Regexp::FIXEDENCODING) =~ "\\303\\2
 e845d4c714ee9e6cae44891a1b737bc6	[10, 11, 12]	class FwdD\n          attr_reader :a\n          def initialize(n)\n       
 e84e2a6f452bc8149fdee15dda638246	4	r = 0\n            20.times do\n              begin\n                r

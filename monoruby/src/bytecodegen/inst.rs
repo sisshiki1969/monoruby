@@ -54,6 +54,10 @@ pub(super) enum BytecodeInst {
     FrozenLiteral(BcReg, Value),
     /// Heap object (not frozen)
     Literal(BcReg, Value),
+    /// `"lit".freeze` (CRuby's `opt_str_freeze`): the interned frozen
+    /// literal while `String#freeze` is the builtin, otherwise a chilled
+    /// copy of the literal handed to the redefined `freeze`.
+    StringFreeze(BcReg, Value),
     Array(BcReg, Box<CallSite>),
     /// Concatenate the Array in `src` onto the Array in `dst` (used for the
     /// 2nd and later chunks of a chunked Array literal).

@@ -527,3 +527,97 @@ fn command_literal_frozen_argument() {
         "#,
     );
 }
+
+#[test]
+fn string_literal_freeze_fold() {
+    // `"lit".freeze` loads the interned frozen template (CRuby's
+    // opt_str_freeze): frozen, and the same object on every evaluation.
+    run_test(
+        r##"
+        def f = 'abc'.freeze
+        a = f; b = f
+        [a.frozen?, a.equal?(b), a, 'abc'.freeze.equal?('abc'.freeze), 'xyz'.freeze.frozen?]
+        "##,
+    );
+    // Interpolated receivers and calls with arguments/blocks are not folded.
+    run_test(
+        r##"
+        x = 1
+        s = "a#{x}".freeze
+        t = "a#{x}".freeze
+        [s.frozen?, s.equal?(t), s]
+        "##,
+    );
+    // A redefined String#freeze still runs (and sees a frozen receiver).
+    run_test_once(
+        r##"
+        class String
+          def freeze = "redefined:#{frozen?}"
+        end
+        'abc'.freeze
+        "##,
+    );
+    // The result lands in a temp that the next instruction consumes: a
+    // binop rhs, a call argument, a receiver (the JIT's abstract frame must
+    // see the temp as live).
+    run_test(
+        r##"
+        def app(buf) = buf << 'hello '.freeze
+        def cat(buf) = buf.concat('world'.freeze)
+        def plus(a) = a + '!'.freeze
+        def recv = 'abc'.freeze.upcase
+        buf = String.new
+        app(buf); cat(buf)
+        [buf, plus(buf), recv, ('x'.freeze + 'y').frozen?]
+        "##,
+    );
+    // Under the pragma the literal is already the interned object.
+    run_test(
+        r##"
+        # frozen_string_literal: true
+        a = 'abc'.freeze
+        [a.frozen?, a.equal?('abc'), a.equal?('abc'.freeze)]
+        "##,
+    );
+}
+
+#[test]
+fn hash_index_assign_generic_path() {
+    // `h[k] = v` on a Hash whose class the JIT cannot pin down takes
+    // `runtime::set_index`: fresh String keys are dup'd and frozen, frozen
+    // receivers raise, compare_by_identity keeps the caller's key, and a
+    // redefined `Hash#[]=` is honoured.
+    run_test(
+        r##"
+        def st(h, k, v) = (h[k] = v)
+        k = +"key"
+        h = {}
+        st(h, k, 1); k << "!"
+        r = [h.keys, h.keys[0].frozen?, h.keys[0].equal?(k)]
+        i = {}.compare_by_identity
+        ik = +"ik"
+        st(i, ik, 2); ik << "?"
+        r << i.keys[0].equal?(ik) << i[ik]
+        a = [1, 2]
+        st(a, 0, 9)
+        r << a
+        begin
+          st({}.freeze, :a, 1)
+        rescue => e
+          r << e.class
+        end
+        r
+        "##,
+    );
+    run_test_once(
+        r##"
+        class Hash
+          def []=(k, v)
+            "redef #{k}"
+          end
+        end
+        def st(h, k, v) = (h[k] = v)
+        [st({}, :a, 1), {}.size]
+        "##,
+    );
+}

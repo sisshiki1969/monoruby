@@ -1871,6 +1871,34 @@ pub(super) extern "C" fn get_index(
     )
 }
 
+/// `StringFreeze` (`"lit".freeze`, CRuby's `opt_str_freeze`): while
+/// `String#freeze` is the builtin the answer is `lit` itself — the interned
+/// frozen literal, no copy, no call. Once it has been redefined the literal
+/// is copied (chilled, as a plain literal evaluation would produce) and the
+/// redefined `freeze` is called on the copy, exactly as the unfolded form
+/// would have done.
+pub(super) extern "C" fn string_freeze_literal(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lit: Value,
+) -> Option<Value> {
+    if !globals
+        .store
+        .basic_op_redefined_for(STRING_CLASS, IdentId::FREEZE)
+    {
+        return Some(lit);
+    }
+    let mut copy = lit.dup();
+    copy.set_chilled_literal();
+    match vm.invoke_method_inner(globals, IdentId::FREEZE, copy, &[], None, None) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 pub(super) extern "C" fn set_index(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1898,6 +1926,34 @@ pub(super) extern "C" fn set_index(
         }
         return match base.as_array().set_index(idx, src) {
             Ok(val) => Some(val),
+            Err(err) => {
+                vm.set_error(err);
+                None
+            }
+        };
+    }
+    if base_classid == HASH_CLASS
+        && !globals
+            .store
+            .basic_op_redefined_for(HASH_CLASS, IdentId::_INDEX_ASSIGN)
+    {
+        // `Hash#[]=` without a method lookup: the same steps as the
+        // `index_assign` builtin (the fresh-String-key dup/freeze, the
+        // frozen-receiver check, the insert). This is the path every
+        // interpreted `h[k] = v` on a Hash takes, and the residual arm of
+        // the JIT's polymorphic `[]=` dispatch; going through
+        // `invoke_method` here meant a global-method-cache probe per store
+        // (10M of them in an activerecord run).
+        let key = if base.as_hash().is_compare_by_identity() {
+            index
+        } else {
+            index.frozen_hash_key()
+        };
+        let res = base
+            .as_hash_mut(&globals.store)
+            .and_then(|mut h| h.insert(key, src, vm, globals));
+        return match res {
+            Ok(()) => Some(src),
             Err(err) => {
                 vm.set_error(err);
                 None

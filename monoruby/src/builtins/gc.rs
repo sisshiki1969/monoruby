@@ -777,15 +777,20 @@ mod tests {
             // mode rather than the trigger policy.
             return;
         }
+        // The budget floor is `PAGES_PER_GC_TRIGGER` (32) pages, so the
+        // large run has to hold more than `32 * GC_HEAP_FRACTION` (512)
+        // pages — about 2M cells — before the heap-scaled budget exceeds
+        // the floor; 4M single-element Arrays (~1000 pages) put the budget
+        // at ~60 pages against the small run's 32.
         run_test_once(
             r##"
             def churn(n) = n.times { |i| [i, i] }
             churn(50_000); GC.start
-            b = GC.count; churn(400_000); small = GC.count - b
-            keep = Array.new(1_500_000) { |i| [i] }
+            b = GC.count; churn(1_200_000); small = GC.count - b
+            keep = Array.new(4_000_000) { |i| [i] }
             GC.start
-            b = GC.count; churn(400_000); large = GC.count - b
-            [small > 0, large < small, keep.size == 1_500_000]
+            b = GC.count; churn(1_200_000); large = GC.count - b
+            [small > 0, large < small, keep.size == 4_000_000]
             "##,
         );
     }
