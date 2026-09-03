@@ -1,10 +1,12 @@
-//! Frame-free expansion of the constructor idiom.
+//! Frame-free expansion of the small-body idioms.
 //!
-//! `def initialize(a, b) = (@a = a; @b = b)` is the single most common
-//! method body in object-heavy Ruby, and today it costs a full method
-//! frame to run three `mov`s. This module recognises that body and lets
-//! [`compile_method_call`](JitContext::compile_method_call) emit the
-//! stores straight into the caller, with no frame pushed at all.
+//! `def initialize(a, b) = (@a = a; @b = b)` and `def inc = @count += 1`
+//! are the most common method bodies in object-heavy Ruby, and today each
+//! costs a full method frame to run a handful of `mov`s. This module
+//! recognises them — [`ivar_store_body`] the constructor, [`leaf_expr_body`]
+//! the accessor/counter — and lets
+//! [`compile_method_call`](JitContext::compile_method_call) emit the body
+//! straight into the caller, with no frame pushed at all.
 //!
 //! # How this differs from the other two folds
 //!
@@ -20,17 +22,22 @@
 //! a frozen guard, and a deopt is fine because it rebuilds from the
 //! *caller's* frame state, which is the one that exists. What the callee
 //! must not do is *need a frame of its own*: no call or `yield` (a
-//! callee's callee walks `cfp` and would find the caller's frame), nothing
-//! that can raise or appear in a backtrace, no `binding`, no `super`, no
-//! access to an `outer` frame.
+//! callee's callee walks `cfp` and would find the caller's frame), no
+//! `binding`, no `super`, no access to an `outer` frame.
 //!
-//! Restricting the body to `StoreIvar` from a parameter slot, plus the
-//! `Ret`, buys all of that at once: every instruction is a move between
-//! things the caller already holds. The frozen guard is the one side exit,
-//! and it is hoisted ahead of the stores so the expansion is all-or-nothing
-//! (see [`ivar_store_body`] for why that matters).
+//! Raising is not on that list either, as long as the raise is reached by a
+//! *guard*. `x / 0` deopts to the call instruction in both backends, and
+//! the interpreter then performs the whole call — building the real frame
+//! and raising `ZeroDivisionError` from it, with the backtrace that frame
+//! gives it. What the guards buy is not "cannot raise" but **nothing has
+//! happened yet**: the expansion is all-or-nothing, so an exit can hand the
+//! entire call back. Both recognisers therefore hoist every guard ahead of
+//! every store — the frozen guard in [`ivar_store_body`], and in
+//! [`leaf_expr_body`] the single store is required to be the last
+//! instruction before the `Ret`.
 
 use super::*;
+use crate::bytecodegen::BinOpK;
 
 ///
 /// Where a callee parameter's value lives, as seen from the frame being
@@ -160,5 +167,192 @@ pub(super) fn ivar_store_body(store: &Store, iseq_id: ISeqId) -> Option<IvarStor
     Some(IvarStoreBody {
         stores,
         ret: ret?,
+    })
+}
+
+///
+/// One value a frame-free leaf body can reach for.
+///
+/// All three are things the *caller* already holds: an argument in one of
+/// its slots, an inline ivar of the receiver it is about to send to, or a
+/// constant. None of them needs a frame to name.
+///
+#[derive(Clone, Copy, Debug)]
+pub(super) enum LeafValue {
+    /// The callee's parameter `i` (0-based), i.e. its `SlotId(i + 1)`.
+    Param(u16),
+    /// `@name` of the receiver.
+    SelfIvar(IdentId),
+    /// A fixnum literal.
+    Fixnum(Value),
+}
+
+///
+/// A body that computes one value by folding operands into an accumulator,
+/// optionally stores it to an ivar, and returns it.
+///
+/// `@count += 1`, `@a * 2`, `@sum + x`, `@a` — the small readers, writers
+/// and counters that make up most of the leaf methods in object-heavy Ruby,
+/// and today cost a full frame each.
+///
+/// The chain is deliberately *left-linear*: every step's right operand is a
+/// leaf. That keeps the expansion to two registers, and it is the shape
+/// bytecodegen produces for these expressions anyway.
+///
+pub(super) struct LeafBody {
+    /// The value the accumulator starts at.
+    pub base: LeafValue,
+    /// Folded in left to right: `acc = acc <kind> operand`.
+    pub steps: Vec<(BinOpK, LeafValue)>,
+    /// When set, the accumulator is stored to this ivar before returning.
+    pub store: Option<IdentId>,
+}
+
+/// The longest accumulator chain that is still worth expanding. Each step
+/// is two guards plus an arithmetic instruction in the caller, repeated at
+/// every site that calls this method.
+const MAX_STEPS: usize = 3;
+
+/// What a callee slot holds, as an accumulator chain under construction.
+#[derive(Clone)]
+struct Chain {
+    base: LeafValue,
+    steps: Vec<(BinOpK, LeafValue)>,
+}
+
+impl Chain {
+    fn leaf(base: LeafValue) -> Self {
+        Self {
+            base,
+            steps: vec![],
+        }
+    }
+}
+
+///
+/// Recognise a leaf body of the [`LeafBody`] shape.
+///
+/// The frame conditions are [`ivar_store_body`]'s, and for the same
+/// reasons: no `outer`, plain positional parameters, a single basic block,
+/// and an instruction set with no call, no `yield`, nothing that raises and
+/// nothing that appears in a backtrace.
+///
+/// # Why the store must come last
+///
+/// Every guard this body needs — the operand class checks, the overflow
+/// check, the frozen check — side-exits to the *call* instruction, and the
+/// interpreter then performs the whole call itself. That is only sound
+/// while nothing has happened yet, so the one effect a body may have has to
+/// come after every exit. Requiring a single `StoreIvar` immediately before
+/// the `Ret` buys that outright; anything else is declined.
+///
+/// `Div` needs no special treatment: a zero divisor is *already* a deopt in
+/// both backends (x86-64 stamps `_divide_by_zero` and jumps to the exit,
+/// aarch64 does `cbz x(r), deopt`), so it lands on the call instruction like
+/// every other guard and the interpreter raises `ZeroDivisionError` from the
+/// real frame it then builds — backtrace and all. `Rem` is the one exclusion,
+/// and for a lowering reason rather than a semantic one: `BinOpK::Rem` is
+/// `unreachable!()` in the register form of the integer binop.
+///
+pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody> {
+    let iseq = &store[iseq_id];
+    if iseq.outer.is_some() {
+        return None;
+    }
+    let func = &store[iseq.func_id()];
+    if !func.meta().is_simple() || iseq.block_param().is_some() {
+        return None;
+    }
+    let pos_num = func.params().total_positional_args();
+    if pos_num > u16::MAX as usize {
+        return None;
+    }
+    if iseq.bb_info.len() != 1 {
+        return None;
+    }
+    let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[BasicBlockId(0)];
+
+    // Parameters arrive in `SlotId(1) ..= SlotId(pos_num)`; `SlotId(0)` is self.
+    let mut slots: HashMap<SlotId, Chain> = HashMap::default();
+    for i in 0..pos_num {
+        slots.insert(
+            SlotId::new(i as u16 + 1),
+            Chain::leaf(LeafValue::Param(i as u16)),
+        );
+    }
+
+    let mut store_to: Option<(IdentId, SlotId)> = None;
+    let mut ret: Option<SlotId> = None;
+    for idx in begin..=end {
+        // A store is the body's one effect, so nothing that can side-exit
+        // may follow it. `Ret` is all that is allowed to.
+        let after_store = store_to.is_some();
+        match TraceIr::from_pc(iseq.get_pc(idx), store) {
+            TraceIr::InitMethod(..) if !after_store => {}
+            TraceIr::FrozenLiteral(dst, v) | TraceIr::Literal(dst, v) if !after_store => {
+                v.try_fixnum()?;
+                slots.insert(dst, Chain::leaf(LeafValue::Fixnum(v)));
+            }
+            TraceIr::LoadIvar(dst, name, _) if !after_store => {
+                slots.insert(dst, Chain::leaf(LeafValue::SelfIvar(name)));
+            }
+            TraceIr::Mov(dst, src) if !after_store => {
+                let chain = slots.get(&src)?.clone();
+                slots.insert(dst, chain);
+            }
+            TraceIr::BinOp {
+                kind,
+                dst: Some(dst),
+                lhs,
+                rhs,
+                ..
+            } if !after_store => {
+                if !matches!(
+                    kind,
+                    BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div
+                ) {
+                    return None;
+                }
+                let lhs = slots.get(&lhs)?.clone();
+                let rhs = slots.get(&rhs)?;
+                // Left-linear only: a nested right operand would need a
+                // third register and a spill slot to evaluate.
+                if !rhs.steps.is_empty() {
+                    return None;
+                }
+                let operand = rhs.base;
+                if lhs.steps.len() >= MAX_STEPS {
+                    return None;
+                }
+                let mut chain = lhs;
+                chain.steps.push((kind, operand));
+                slots.insert(dst, chain);
+            }
+            TraceIr::StoreIvar(src, name, _) if !after_store => {
+                store_to = Some((name, src));
+            }
+            // A basic block ends at its terminator, so this runs last.
+            TraceIr::Ret(slot) => ret = Some(slot),
+            _ => return None,
+        }
+    }
+
+    let ret = ret?;
+    // When the body stores, it must return the very value it stored — the
+    // expansion computes the accumulator once.
+    if let Some((_, src)) = store_to
+        && src != ret
+    {
+        return None;
+    }
+    let chain = slots.remove(&ret)?;
+    // A body that only hands back a parameter is `ISeqHint`'s business.
+    if chain.steps.is_empty() && store_to.is_none() && matches!(chain.base, LeafValue::Param(_)) {
+        return None;
+    }
+    Some(LeafBody {
+        base: chain.base,
+        steps: chain.steps,
+        store: store_to.map(|(name, _)| name),
     })
 }

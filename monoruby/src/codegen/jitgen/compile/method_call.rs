@@ -845,6 +845,29 @@ impl<'a> JitContext<'a> {
                     // pushing a frame to run three `mov`s. Same gate as the
                     // folds above, because it needs the same thing they do —
                     // an argument shape that binds without `ArgumentError`.
+                    // Frame-free expansion of the leaf idiom (`@count += 1`,
+                    // `@a * 2`, `@sum + x`, `@a`): the accumulator chain runs
+                    // in the caller's registers, and every guard exits to the
+                    // call instruction. Tried first — a body it recognises is
+                    // never one the constructor recogniser would take.
+                    if let Some(leaf) = frameless::leaf_expr_body(&self.store, iseq) {
+                        let callee_pos = self.store[func_id].params().total_positional_args();
+                        // Plain positional arguments in this frame's own
+                        // slots. A `...` forward leaves its positionals in
+                        // the *caller's* window instead, which only the
+                        // constructor expansion below reads; a forwarding
+                        // callee is not `simple_fold`, so it falls through
+                        // to it rather than being handled here.
+                        if simple_fold && pos_num == callee_pos {
+                            let arg_slots: Vec<SlotId> =
+                                (0..callee_pos).map(|i| args + i).collect();
+                            if self.expand_leaf_body(
+                                state, ir, recv_class, recv, dst, &leaf, &arg_slots,
+                            ) {
+                                return Ok(CompileResult::Continue);
+                            }
+                        }
+                    }
                     if let Some(body) = frameless::ivar_store_body(&self.store, iseq) {
                         let callee_pos = self.store[func_id].params().total_positional_args();
                         // Where each callee parameter lives in *this* frame.
@@ -1272,6 +1295,142 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    ///
+    /// Emit a recognised leaf body ([`frameless::leaf_expr_body`]) as the
+    /// caller's own instructions — no frame pushed, no call made.
+    ///
+    /// Returns `false` (having emitted nothing) when the receiver class
+    /// cannot serve the body's ivars inline, in which case the caller falls
+    /// through to the ordinary call.
+    ///
+    /// # Where the guards exit to
+    ///
+    /// Every guard here — each operand's fixnum check, each arithmetic
+    /// overflow check, the frozen check before a store — side-exits to the
+    /// deopt taken at the *call* instruction, so the interpreter re-performs
+    /// the whole call and produces whatever the real body would have,
+    /// including any exception, from a real frame. That is sound only
+    /// because nothing has happened yet when a guard fires: the recogniser
+    /// admits a single `StoreIvar` and only as the last thing before the
+    /// `Ret`, so every exit precedes the one effect. A zero divisor is one
+    /// of those exits, so `x / 0` raises `ZeroDivisionError` from the frame
+    /// the interpreter builds, with the backtrace that frame gives it.
+    ///
+    fn expand_leaf_body(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        recv_class: ClassId,
+        recv: SlotId,
+        dst: Option<SlotId>,
+        body: &frameless::LeafBody,
+        arg_slots: &[SlotId],
+    ) -> bool {
+        // Every ivar below is resolved against `recv_class`, so the site
+        // must have proven the receiver *is* that class. A set-guarded
+        // dispatch arm has only proven membership in a set of classes that
+        // share this `func_id` — and two classes sharing a method need not
+        // agree on where its ivars live: a subclass that assigns one of its
+        // own first shifts every inherited slot. Reading `@n` at the
+        // parent's index would then hit whatever the subclass put there.
+        if state.class(recv) != Some(recv_class) {
+            return false;
+        }
+        // Only `RValue`s with the object layout have inline ivar slots at a
+        // fixed offset; anything else goes through the heap table, which
+        // needs `using_fpr` bookkeeping and a possible reallocation call.
+        if !self.store[recv_class].is_object_ty_instance() {
+            return false;
+        }
+        // Resolve every ivar before emitting anything, so a body that is
+        // only partly expandable emits nothing at all. A miss means the
+        // class reaching this site is not the one the body was written for
+        // (a subclass whose own initializer never ran); decline rather than
+        // recompile — the ordinary call is correct.
+        let resolve = |this: &Self, name: IdentId| -> Option<IvarId> {
+            this.store[recv_class]
+                .get_ivarid(name)
+                .filter(|ivarid| ivarid.is_inline())
+        };
+        let ivar_of = |this: &Self, v: frameless::LeafValue| -> Option<Option<IvarId>> {
+            match v {
+                frameless::LeafValue::SelfIvar(name) => resolve(this, name).map(Some),
+                _ => Some(None),
+            }
+        };
+        let Some(base_ivar) = ivar_of(self, body.base) else {
+            return false;
+        };
+        let mut step_ivars = Vec::with_capacity(body.steps.len());
+        for &(_, operand) in &body.steps {
+            let Some(ivarid) = ivar_of(self, operand) else {
+                return false;
+            };
+            step_ivars.push(ivarid);
+        }
+        let store_ivar = match body.store {
+            Some(name) => match resolve(self, name) {
+                Some(ivarid) => Some(ivarid),
+                None => return false,
+            },
+            None => None,
+        };
+
+        state.flush_gp(ir);
+        // The receiver, for every inline ivar access and the frozen guard.
+        state.load(ir, recv, GP::Rdi);
+        let deopt = ir.new_deopt(state);
+
+        fn emit_value(
+            ir: &mut AsmIr,
+            state: &mut AbstractState,
+            arg_slots: &[SlotId],
+            v: frameless::LeafValue,
+            ivarid: Option<IvarId>,
+            reg: GP,
+        ) {
+            match v {
+                frameless::LeafValue::SelfIvar(_) => ir.push(AsmInst::LoadIVarInline {
+                    ivarid: ivarid.unwrap(),
+                    dst: reg,
+                }),
+                frameless::LeafValue::Fixnum(val) => ir.lit2reg(val, reg),
+                frameless::LeafValue::Param(i) => state.load(ir, arg_slots[i as usize], reg),
+            }
+        }
+
+        emit_value(ir, state, arg_slots, body.base, base_ivar, GP::Rax);
+        for (i, &(kind, operand)) in body.steps.iter().enumerate() {
+            emit_value(ir, state, arg_slots, operand, step_ivars[i], GP::Rcx);
+            // Neither operand is statically typed here — the receiver's
+            // class is known but its ivars' contents are not, and a
+            // parameter is whatever the caller passed.
+            ir.push(AsmInst::GuardClass(GP::Rax, INTEGER_CLASS, deopt));
+            ir.push(AsmInst::GuardClass(GP::Rcx, INTEGER_CLASS, deopt));
+            ir.integer_binop_reg(kind, GP::Rax, GP::Rax, GP::Rcx, deopt);
+        }
+
+        if let Some(ivarid) = store_ivar {
+            // A step's result is a proven fixnum, so it needs no write
+            // barrier; a bare value (`def set(x) = @a = x`) may be a heap
+            // object and does.
+            let wb = body.steps.is_empty() && !matches!(body.base, frameless::LeafValue::Fixnum(_));
+            // Re-materialize the receiver: the arithmetic above went
+            // through rax/rcx, but a parameter load may have gone through
+            // rdi's slot machinery.
+            state.load(ir, recv, GP::Rdi);
+            ir.guard_frozen(deopt);
+            ir.push(AsmInst::StoreIVarInline {
+                src: GP::Rax,
+                ivarid,
+                wb,
+            });
+        }
+        state.def_reg2acc(ir, GP::Rax, dst);
+        state.unset_side_effect_guard();
+        true
+    }
+
     /// Emit a recognised constructor body ([`frameless::ivar_store_body`])
     /// as the caller's own instructions — no frame pushed, no call made.
     ///
@@ -3284,6 +3443,222 @@ mod tests {
             end
             30.times { t("hello"); t(:HUP); t(nil); t(0) }
             [t("hello"), t(:HUP), t(nil), t(0)]
+            "#,
+        );
+    }
+
+    /// Frame-free expansion of the leaf idiom
+    /// ([`frameless::leaf_expr_body`]): a counter, a reader, arithmetic on
+    /// an ivar and on a parameter, and a plain writer. Every one of these
+    /// runs in the caller with no frame, so the results have to match the
+    /// interpreter exactly — including the values the guards send back to
+    /// it.
+    #[test]
+    fn frameless_leaf_bodies() {
+        run_test(
+            r#"
+            class L
+              def initialize; @n = 0; @a = 3; @s = "x"; end
+              def inc; @n += 1; end
+              def dec; @n -= 2; end
+              def dbl; @a * 2; end
+              def add(x); @a + x; end
+              def chain(x); @a + x * 1; end
+              def get; @a; end
+              def obj; @s; end
+              def set(x); @a = x; end
+            end
+            l = L.new
+            res = []
+            60.times { l.inc }
+            60.times { l.dec }
+            res << l.inc << l.dbl << l.add(4) << l.chain(2) << l.get << l.obj
+            res << l.set(9) << l.get << l.dbl
+            res
+            "#,
+        );
+    }
+
+    /// The guards the expansion hoists must send control back to the call
+    /// instruction, where the interpreter performs the real call. Each case
+    /// below makes one of them fire after the site is hot: a non-fixnum
+    /// ivar, a non-fixnum argument, a fixnum overflow into Bignum, and a
+    /// frozen receiver (which must raise `FrozenError` from a real frame).
+    #[test]
+    fn frameless_leaf_bodies_deopt() {
+        run_test(
+            r#"
+            class L
+              def initialize(n, a); @n = n; @a = a; end
+              def inc; @n += 1; end
+              def add(x); @a + x; end
+              attr_reader :n, :a
+            end
+            res = []
+            l = L.new(0, 1)
+            100.times { l.inc; l.add(1) }
+            # the ivar stops being a fixnum
+            f = L.new(1.5, 1)
+            res << (begin; f.inc; rescue => e; e.class; end) << f.n
+            # the argument stops being a fixnum
+            res << l.add(2.5) << (begin; l.add("s"); rescue TypeError => e; e.class; end)
+            # overflow out of the fixnum range
+            b = L.new(4611686018427387903, 1)
+            res << b.inc << b.n.class
+            # a frozen receiver must raise, from a real frame
+            fr = L.new(1, 1).freeze
+            res << (begin; fr.inc; rescue FrozenError => e; e.class; end) << fr.n
+            res
+            "#,
+        );
+    }
+
+    /// Shapes the recogniser must decline, each for its own reason: a
+    /// conditional store (a guard would have to prove something about a
+    /// path that stores nothing), a body that calls, one that stores twice,
+    /// one whose store is not last, a `%` (`BinOpK::Rem` has no register
+    /// form to lower to), and a body reading a second object's ivar. Then
+    /// the two declines that depend on the *receiver* rather than the body:
+    /// a class whose instances have no inline ivar slots, and an ivar with
+    /// no `IvarId` to resolve.
+    #[test]
+    fn frameless_leaf_bodies_decline() {
+        run_test(
+            r#"
+            class D
+              def initialize; @n = 5; @m = 5; end
+              def cond(x); @n = x if x > 0; @n; end
+              def calls; helper + @n; end
+              def helper; 1; end
+              def two; @n += 1; @m += 1; end
+              def early; @n = 1; @m + 1; end
+              def rem(x); @n % x; end
+              def other(o); @n + o.n; end
+              attr_reader :n, :m
+            end
+            d = D.new
+            res = []
+            100.times { d.cond(1); d.calls; d.two; d.early; d.rem(3); d.other(d) }
+            res << d.cond(-1) << d.cond(3) << d.calls << d.two << d.early
+            res << d.rem(4) << d.other(d) << d.n << d.m
+
+            # A receiver whose instances are not plain objects has no inline
+            # ivar slots to read at a fixed offset.
+            class S < String
+              def initialize(x); super(x); @n = 5; end
+              def inc; @n += 1; end
+            end
+            s = S.new("x")
+            100.times { s.inc }
+            res << s.inc << s
+
+            # An ivar no instance of the class was ever assigned has no
+            # `IvarId` to resolve, so the body cannot be expanded against it.
+            class U
+              def initialize; @a = 1; end
+              def unset; @never; end
+              def bump; @never2 = (@a += 1); end
+            end
+            u = U.new
+            100.times { u.unset; u.bump }
+            res << u.unset << u.bump << u.instance_variables
+            res
+            "#,
+        );
+    }
+
+    /// A zero divisor is a guard like any other: it exits to the call
+    /// instruction, and the interpreter performs the whole call — so the
+    /// `ZeroDivisionError` is raised from the frame it builds, and carries
+    /// that frame's backtrace.
+    ///
+    /// The deopt fabricates neither a frame nor a position: it restores the
+    /// caller at the call instruction and hands the call back, so the
+    /// frames and the lines within them are the ones the unexpanded path
+    /// produces. That is what is asserted — every frame, with its line as
+    /// an offset from a `__LINE__` marker so the comparison does not depend
+    /// on where the harness places the snippet — for a plain call, a call
+    /// inside a block, and a call under a JIT-compiled loop. `Integer#/` is
+    /// dropped because CRuby lists that builtin frame and monoruby reports
+    /// no builtin frame at all, expanded or not.
+    #[test]
+    fn frameless_leaf_bodies_divide() {
+        run_test(
+            r#"
+            BASE = __LINE__
+            class Q
+              def initialize(n); @n = n; end
+              def div(x)
+                @n / x
+              end
+              def half; @n / 2; end
+              # The store is after the division, so a zero divisor must
+              # leave it undone — that is what lets the exit hand the whole
+              # call back.
+              def store_after(x); @m = @n / x; end
+              attr_reader :m
+            end
+            def in_block(q, d)
+              [d].each { |v| q.div(v) }
+            end
+            def in_loop(q, d)
+              i = 0
+              i += 1 while i < 200
+              q.div(d)
+            end
+            def trace(e)
+              e.backtrace.reject { |l| l.include?("Integer#/") }.map { |l|
+                l =~ /:(\d+):in (.+)/ ? [$1.to_i - BASE, $2] : l
+              }
+            end
+            q = Q.new(100)
+            res = []
+            200.times { q.div(3); q.half; in_block(q, 3); in_loop(q, 3) }
+            res << q.div(3) << q.div(7) << q.half
+            # floor division, not truncation
+            res << Q.new(-7).div(2) << Q.new(7).div(-2)
+            e = (begin; q.div(0); rescue ZeroDivisionError => x; x; end)
+            res << e.class << e.message << trace(e)
+            # `Array#each` is a C frame in CRuby and Ruby-level in monoruby,
+            # so the block case compares only the frames below it.
+            e = (begin; in_block(q, 0); rescue ZeroDivisionError => x; x; end)
+            res << trace(e).first(2)
+            e = (begin; in_loop(q, 0); rescue ZeroDivisionError => x; x; end)
+            res << trace(e)
+            200.times { q.store_after(4) }
+            before = q.m
+            e = (begin; q.store_after(0); rescue ZeroDivisionError => x; x; end)
+            res << trace(e) << before << q.m << (q.m == before)
+            res
+            "#,
+        );
+    }
+
+    /// The expansion resolves ivar names against the *receiver's* class, so
+    /// a subclass whose slot numbering diverges must still land in the
+    /// right slot — and a subclass that redefines the method must not be
+    /// expanded with the parent's body.
+    #[test]
+    fn frameless_leaf_bodies_subclass() {
+        run_test(
+            r#"
+            class P
+              def initialize; @n = 1; end
+              def inc; @n += 1; end
+              attr_reader :n
+            end
+            class Skew < P
+              def initialize; @z = 100; @n = 1; end
+              attr_reader :z
+            end
+            class Over < P
+              def inc; @n += 10; end
+            end
+            res = []
+            objs = [P.new, Skew.new, Over.new]
+            100.times { objs.each { |o| o.inc } }
+            res << objs.map { |o| o.n } << Skew.new.z
+            res
             "#,
         );
     }

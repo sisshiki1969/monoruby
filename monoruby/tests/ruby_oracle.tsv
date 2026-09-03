@@ -46,6 +46,7 @@
 029c3ebe189781d0b649df411808dfee	[[[:a, 1], 0], [[:b, 2], 1]]	r = []; ({a: 1, b: 2}).each.with_index { |v, i| r << [v, i] }; r
 02a7d510f273964ead93e757431a554c	[3, 2, 1]	base = Class.new { def foo(ary); ary << 1; end }\n            child 
 02b9efd8d2189aaacb0d22c54cae5e92	[2000, 0, 999]	a = []\n            2000.times { |i| a << [(i * 7919) % 1000] }\n    
+02bcd011adb4bb84d0653542d5cc1dbf	[33, 14, 50, -4, -4, ZeroDivisionError, "divided by 0", [[4, "'Q#div'"], [27, "'<main>'"]], [[4, "'Q#div'"], [9, "'block in Object#in_block'"]], [[4, "'Q#div'"], [14, "'Object#in_loop'"], [33, "'<main>'"]]]	BASE = __LINE__\n            class Q\n              def initialize(n)
 02c396b429bf65fdf9a120d44cc103f5	true	src = Module.new { def t1; end }\n            m = Module.new do\n    
 02c6f5d297eadcc0a5026d7c20a2e18c	["a", {b: "b"}]	T = Struct.new(:a, :b)\n            \n\n            s = T.new("a", b: 
 02cb9b2aa7a2eb9ebb2690e1cb412b25	200000	io = IO.popen("sleep 0.05; cat > /dev/null", "w")\n            t = T
@@ -339,6 +340,7 @@
 1821c10c6ad04de6330183a77e1e0216	["Binding", 41, 42, 41]	x = 41\n            b = binding\n            b2 = b.dup\n            b
 182caa69fa07777b5c852ab6d6cd523b	[:@b]	class Foo\n              def initialize\n                @a = 1\n     
 1838df795bd9fd01b3bfa47259229043	1.0	class Float; def <=>(o) = (o.to_f - to_f); end\n[3.0, 1.0, 2.0].max
+183dd8bff258c6f71986a8a730a5a952	[1, 3, 4, 106, 107, 1, 2, 1, 106]	class D\n              def initialize; @n = 5; @m = 5; end\n         
 185001d9a1904b3f91e65a1932e2bf0b	[11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11]	def g(a) = yield(a * 2)\n        def f(...) = g(...)\n        \n\n        $
 18507817da0f9cab02fe974f7701f74a	[[3.0, 2.0, 1.0], 3.0, 1.0, [3.0, 1.0], [1.7976931348623157e+308, 1.0]]	class Float; def <=>(o) = (o.to_f - to_f); end\n        [[3.0, 1.0, 2.0]
 186a15eac97b7392435d31cc9d7e59de	70	class Coercible\n              def to_proc\n                proc { |x
@@ -791,6 +793,7 @@
 3c317b41d6a90f7b882850a676d924f0	[40, 36, 39]	def __f(x)\n          \n        a = x\n        b = a\n        a += 1\n      
 3c3e9df720bcfc9e16e5388ec370e1a6	3.15	class Foo; def to_int; 2; end; end\n            3.14159.ceil(Foo.new
 3c69555cfc9c304438892b113e9bb012	[[:@@inherited, :@@own], [:@@own]]	parent = Class.new\n            parent.class_variable_set(:@@inherit
+3c6e88bd378792f73dc8dc3eec400a99	[33, 14, 50, -4, -4, ZeroDivisionError, "divided by 0", true]	class Q\n              def initialize(n); @n = n; end\n              
 3c7f081b962e4c7272b51d99d568feb4	["outer", "outer", "outer", "outer", "nil"]	def brk_while(log)\n          outer = StandardError.new "outer"\n        
 3c8c62dfbc6ab8e4b391463cee4bdbb0	[true, true]	require "io/wait"\n            [IO.instance_method(:wait_readable).i
 3c8d308b1dc06f94ef88b63745ff08be	[false, true, [:a, :b], nil]	t = Thread.new {}.join\n            t.thread_variable_set(:a, 1)\n   
@@ -807,6 +810,7 @@
 3dbebf67556767ed46ca1b15b5c6014b	0	("" <=> "".dup.force_encoding("ISO-2022-JP"))\n            
 3dde798cc9545abe28c98d1ee6dfbc9a	[:wrapped, :real, 12]	class Base; def real(x); x * 3; end; end\n            class Sub < Ba
 3dea6009f2f1cee6ca57430c6241a099	"ASCII-8BIT"	s = "abcdef".dup.force_encoding("US-ASCII")\n              arg = "
+3dedec9b4f9d9d254f018b5a0e31acb1	[33, 14, 50, -4, -4, ZeroDivisionError, "divided by 0", [[4, "'Q#div'"], [32, "'<main>'"]], [[4, "'Q#div'"], [14, "'block in Object#in_block'"]], [[4, "'Q#div'"], [19, "'Object#in_loop'"], [38, "'<main>'"]], [[10, "'Q#store_after'"], [42, "'<main>'"]], 25, 25, true]	BASE = __LINE__\n            class Q\n              def initialize(n)
 3df82d5f32bc7def3d0d985cd7071aa8	:ok	res = :ok; if false; a = [1, 2]; a[] = 9; end; res
 3dfe78bc67c9d66d2fdd2e9ab6b354e7	[1, 9, 10, 7, 107]	class A\n              def initialize(h) @a = h end\n              de
 3e1d53f944590acbe759e3fddf0d6b76	60000	S = Struct.new(:a, :b, :c)\n            \n\n            s = S.new(10, 
@@ -1195,6 +1199,7 @@
 5b44a248a61dc40383d51a96cc748f88	14	[2, 3, 4, 5].inject {|result, item| result + item }
 5b46729462de0ea516438e53f745a399	[4.5, 5.5, 4.75]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 5b723a2cb7483967f04b7359c4f52ccd	[11, 11, 5, 3, 8, nil, nil, nil]	class C; attr_accessor :m; end\n\n        res = []\n        o = C.new\n        o.m =
+5b746dc2feb736ef4fb8f1d37beb7a7c	[-59, 6, 7, 5, 3, "x", 9, 9, 18]	class L\n              def initialize; @n = 0; @a = 3; @s = "x"; end
 5b774769e16c7084451c9d4b9f9b0acd	[[[:missing, :later]], [:from_base]]	class Base; end\n        class Sub < Base\n          def method_missing(n
 5b79cfb335c3c10194e188b3310b2096	["RuntimeError", "msg", false]	root = Fiber.current\n            fiber = Fiber.new { root.transfer;
 5b81f105b406bdc1f8f48edc118fcd74	[{a: 1, b: 2, c: 3}]	def f(*x)\n            x\n        end\n        \n\n            f(a:1, **{b:2
@@ -1412,6 +1417,7 @@
 6b82ebaaa0df8e456b952c1649290d36	["INT-NE", "RAW-B", false, true, true, true, true]	class Integer; def !=(o); "INT-NE"; end; end\n        class CustomEqB; d
 6bab7203c03f2793f901298b3357f169	true	"abc".force_encoding("ISO-8859-5").encoding == Encoding::ISO_8859_5
 6bc256a131cd947b4c256d4afa639789	["y", Encoding::ConverterNotFoundError, Encoding::ConverterNotFoundError, [254, 255, 0, 97, 0, 10, 0, 98], "UTF-16", [[254, 255, 0, 97, 0, 10, 0, 98]], true, Encoding::ConverterNotFoundError]	(a="\\x79".dup.force_encoding(Encoding::BINARY).encode(Encoding::Emacs_Mule); b=(
+6beb6eff7e6eb2f2c46d4560e26595f7	[1, 3, 4, 106, 107, 0, 2, 1, 106, ZeroDivisionError]	class D\n              def initialize; @n = 5; @m = 5; end\n         
 6c331f471496111694ecb08afb04cab9	[1, 2, 3]	v = []\n            t = Thread.new { v << 1; sleep; v << 3 }\n       
 6c6bac9e1206b463f412a2b2d96f020e	[3, 1]	class Integer; def <=>(o) = (o.to_i - to_i); end\n[3, 1, 2].minmax
 6c8169ed67889ab883af159b5e32ee14	[[:reader_splat, 2, :struct_reader_arg, 3], 3]	class AccCov\n          attr_reader :x\n          attr_writer :y\n        
@@ -1570,6 +1576,7 @@
 77b00e5257cfe366d9ad6a60194785e2	[true, false, true, false]	x = 1\n            b = binding\n            [\n              b.local_v
 77be5f23f43f53c251e9965e79fe7154	true	class MyStr\n              def to_str\n                "llo"\n        
 77c54f817439de91d7af1ba0fc2f7703	2.0	[1.0, 1e100, 1.0, -1e100].sum
+77d2a482539b819352ff3c3c016f211c	[1, 3, 4, 106, 107, 1, 2, 1, 106, 106, "x", nil, 102, [:@a, :@never2]]	class D\n              def initialize; @n = 5; @m = 5; end\n         
 77d8bf3df315e6839b43925962f505ad	[5, ["\\n", "\\n", "\\n", "plain\\n"], true]	path = "/tmp/mono_cov_puts_#{Process.pid}"\n            begin\n      
 77e87f734b11d0483e6b3360a59c3d1a	["-", "+", "~", "-", "+", "~"]	class C\n          def -@\n            "-"\n          end\n            \n   
 77ef6df0c04f7f116f5f35aaaea42fca	[7, 7, true]	b = binding\n            b.local_variable_set(:foo, 7)\n            [
@@ -1622,6 +1629,7 @@
 7bf72e6eb4c2c593bd81eb7b98dcafb0	:OVERRIDDEN	class Integer; def <=>(o); :OVERRIDDEN; end; end; 1 <=> 2
 7bfe1905c8cfcd84d8d0ad738c459253	[1, 2, 3, 4, 1, 2]	def f(x,y,a:100,b:200,c:300,d:400)\n              [a,b,c,d,x,y]\n    
 7c1f60d60806a84dcf3a11a88bdef692	TypeError	("a" =~ "b" rescue $!.class)
+7c1f7443b2cfe560bb72a1a104c6e345	[33, 14, 50, -4, -4, ZeroDivisionError, "divided by 0", "'Integer#/'"]	class Q\n              def initialize(n); @n = n; end\n              
 7c28dee19aa27309293f956968134d84	"HELLOd"	s = "hello world"; s.bytesplice(0...-1, "HELLO"); s
 7c3a942bb1335abaf415dc95e59e5dfd	[0, 1, 2, 3, 4, 5, "break:5", "done: main"]	def bar(&b)\n      10.times &b\n      $i << "done: bar"\n    end\n\n    def foo(
 7c486608085102bd6bffa726334867ac	[true, true, true, "warned", [1, 2]]	res = []\n        f = -> *a { a.last }\n        res << f.ruby2_keywords.e
@@ -1922,6 +1930,7 @@
 93e6ef7313e6853be460ee30b0736410	[true, 5]	pid = fork { exit 5 }\n            w = Process.detach(pid)\n         
 940e03901c8843bf06aca61f6ac64658	true	pid = Process.fork { exit 0 }\n            pid.is_a?(Integer)\n      
 94317fffff39c9093268791671c631b0	[true, false, 1, -1, nil, true, false, true, false, false, true, false, false, true]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
+9441f2118acd3193fe370775231fdcac	[[101, 101, 1001], 100]	class P\n              def initialize; @n = 1; end\n              def
 9455609d2dcf2780b3bf58180504fb90	["a", nil, "b"]	ENV["MONORUBY_ENV_TEST_VA1"] = "a"\n            ENV["MONORUBY_ENV_TE
 948c8ebc5838aacb75bb4ad2c54cd528	[true, true, true]	[Process.respond_to?(:exit),\n             Process.respond_to?(:abor
 9491706684975503cce7f8dd96dffe40	:OVERRIDDEN	class NilClass; def !; :OVERRIDDEN; end; end; !(nil)
@@ -2874,6 +2883,7 @@ da20ef8164c16f9d050189c7530ccdda	13	case 4\n        when 0\n          a = 10\n  
 da337801ffb5841d6913419d4806674b	[[1, 2, 3], [1, 2, 3], 1, 3, [1, 3]]	a = [3, 1, 2]\n            [\n              a.sort { |x, y| (x <=> y)
 da4116da4a0b35a76e2faef0a98c7685	[42, 300]	$m = 0\n        def h\n          [1].each do |x|\n            begin\n      
 da424b8ae2f6063fa60766fab8bac34a	false	t = Thread.new { sleep(2**62) }\n            Thread.pass while t.sta
+da52e290ddf3ec3f474fa3a4bb76acdd	[2.5, 2.5, 3.5, TypeError, 4611686018427387904, Integer, FrozenError, 1]	class L\n              def initialize(n, a); @n = n; @a = a; end\n   
 da5e06d1fe5eed1ee4258f71a99b2332	0	a = "abc".dup.force_encoding("UTF-8")\n              b = "abc".dup
 da64841b8187b9d8951f84703a56f5e9	[true, false]	$x = []\n            path = "/tmp/monoruby_test_mkdir_#{Process.pid}
 da6b246283b4f211581ca1d5eb140461	"a b\\n"	IO.popen(["echo", "a b"]) { |io| io.read }\n            
