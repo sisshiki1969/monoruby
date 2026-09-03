@@ -589,14 +589,31 @@ impl RubyHash<Executor, Globals, MonorubyErr> for HashmapInner {
     }
 }
 
-/// Can `k` be stored inline? Only packed immediates: their identity *is*
+/// Can `k` be stored inline? Packed immediates: their identity *is*
 /// their content, so equality is bit comparison and the digest
-/// recomputed at probe time can never disagree with an insert-time one
-/// (heap keys — even strings — can be mutated, and a boxed map's
-/// insert-time digest going stale is exactly the behavior `Hash#rehash`
-/// exists for; that protocol stays with the boxed representation).
+/// recomputed at probe time can never disagree with an insert-time one.
+/// And *frozen* Strings: `eql?` on a String is byte equality under the
+/// same encoding rules `string_key_eq` applies to the boxed map, never a
+/// user dispatch (a redefined `String#eql?` / `#hash` is not consulted
+/// for String keys in either representation), and a frozen one cannot
+/// change under the probe. That admits the shape every Hash literal
+/// with String keys and every `h["k"] = v` store produces (the stored
+/// key is the interned literal or the `frozen_hash_key` copy), so a
+/// `{"content-type" => "text/plain"}` no longer costs a boxed map — two
+/// heap allocations — per evaluation. A mutable heap key of any other
+/// kind keeps the boxed representation: its insert-time digest going
+/// stale is exactly the behavior `Hash#rehash` exists for, and its
+/// `eql?` may be Ruby code.
 fn is_inline_key(k: Value) -> bool {
-    k.is_packed_value()
+    k.is_packed_value() || (k.is_rstring_inner().is_some() && k.is_frozen())
+}
+
+/// The inline-pair match for a String probe: identity, then byte
+/// equality against a String key — the reachable arms of `Value::eql`
+/// for a String lhs, exactly as `string_key_eq` answers for the boxed
+/// map.
+fn inline_string_key_eq(ek: Value, k: Value, s: &RStringInner) -> bool {
+    ek.id() == k.id() || ek.is_rstring_inner().is_some_and(|es| es == s)
 }
 
 /// A tag-resolved view of the content, so read paths can match on the
@@ -706,33 +723,40 @@ impl<'a> HashRef<'a> {
 
     /// Position of `k` among the inline pairs when no `#hash` dispatch
     /// can be observable: an identity-keyed hash compares ids for any
-    /// key, and in an eql?-keyed hash only a packed probe can match
-    /// (packed values are eql? iff their bits are equal — `Value::eql`'s
+    /// key; in an eql?-keyed hash a packed probe matches by id (packed
+    /// values are eql? iff their bits are equal — `Value::eql`'s
     /// immediate arm — so the id scan is exactly a map's digest-probe +
-    /// eql? for them). An eql?-keyed heap probe returns `None`; whether
-    /// its `#hash` must be observed is the caller's business.
+    /// eql? for them) and a String probe by identity or byte equality
+    /// against the String keys (`inline_string_key_eq`, the boxed map's
+    /// `string_key_eq`). Any other eql?-keyed heap probe returns `None`
+    /// — nothing else is eql? to a packed value or a String; whether its
+    /// `#hash` must be observed is the caller's business.
     fn inline_pos_noobs(&self, k: Value) -> Option<usize> {
-        if !self.is_ident_inline() && !k.is_packed_value() {
-            return None;
+        let pairs = self.inline_pairs();
+        if self.is_ident_inline() || k.is_packed_value() {
+            return pairs.iter().position(|(ek, _)| ek.id() == k.id());
         }
-        self.inline_pairs()
+        let s = k.is_rstring_inner()?;
+        pairs
             .iter()
-            .position(|(ek, _)| ek.id() == k.id())
+            .position(|(ek, _)| inline_string_key_eq(*ek, k, s))
     }
 
     /// Position of `k` among the inline pairs, observing the same
     /// `#hash` protocol a boxed-map lookup would: an eql?-keyed heap
-    /// probe is hashed exactly once (dispatching a user-defined `#hash`
-    /// and propagating its errors) even though it can never be eql? to a
-    /// packed key. Identity-keyed lookups never hash (matching the
-    /// IdentKey map, which digests ids natively).
+    /// probe other than a String is hashed exactly once (dispatching a
+    /// user-defined `#hash` and propagating its errors) even though it
+    /// can never be eql? to a packed or String key. A String probe digests
+    /// vm-free in the boxed map too (`string_digest`), so it observes
+    /// nothing here either; identity-keyed lookups never hash (matching
+    /// the IdentKey map, which digests ids natively).
     fn inline_pos(
         &self,
         k: Value,
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<Option<usize>> {
-        if self.is_ident_inline() || k.is_packed_value() {
+        if self.is_ident_inline() || k.is_packed_value() || k.is_rstring_inner().is_some() {
             Ok(self.inline_pos_noobs(k))
         } else {
             k.calculate_hash(vm, globals)?;
@@ -1281,7 +1305,8 @@ impl<'a> HashRefMut<'a> {
 
     /// Move an inline hash into its boxed form (the 4th pair, a heap
     /// key, a default, or `compare_by_identity` arrived). Re-inserting
-    /// packed keys hashes them natively — no Ruby code runs. The live
+    /// the packed and frozen-String keys hashes them natively — no Ruby
+    /// code runs. The live
     /// iteration depth (header bits) migrates into the exact counter.
     fn promote(&mut self, ident: bool, vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         debug_assert!(self.is_inline());
@@ -1343,7 +1368,7 @@ impl<'a> HashRefMut<'a> {
             } else if (ident || is_inline_key(k)) && len < INLINE_CAP {
                 // An identity-keyed inline hash accepts any key (id
                 // probing never goes stale); an eql?-keyed one only
-                // packed immediates.
+                // packed immediates and frozen Strings (`is_inline_key`).
                 // SAFETY: rep is inline; the slot exists (len < CAP).
                 unsafe { self.body_mut().inline[len] = (k, v) };
                 self.set_rep(len as u8 + 1);

@@ -468,6 +468,8 @@ FFI: `fiddle|ffi_call|sqlite|classify_argument|libffi`）。
 | 2 | 汎用 `[]=`（VM と JIT の多相残余）に Hash の直接経路 | `runtime::set_index` | — | 下表 |
 | 3 | `"lit".freeze` を専用命令 `StringFreeze`（opcode 8）に。`String#freeze` を basic-op 表に追加し、未再定義ならインターン済み frozen リテラルを返す（CRuby の `opt_str_freeze`）。JIT は bop 依存を記録して plain literal load、再定義済みなら VM ヘルパが chilled コピーを作って再定義された `freeze` を呼ぶ | bytecodegen `gen_method_call`、`runtime::string_freeze_literal`、VM 両アーキ、TraceIR/JIT | `'abc'.freeze` 67.6 → 9.8 ns（YJIT 26）、`buf << 'lit'.freeze` 73 → 15.9 ns（YJIT 21） | pragma なしのコードのみ |
 | 4 | 引数クラスだけが変わる多相二項演算サイト（`children << node`）に、受信側クラスで分岐する 2-arm dispatch（直接呼び出し + 汎用ヘルパ）。それまでは毎回 `invoke_method` → グローバルメソッドキャッシュ | `compile/binary_op.rs::binary_recv_dispatch` | `ary << x`（4 クラス）57 → 4.5 ns、`<<` のグローバルキャッシュ引き 300 万回 → 0 | 下表 |
+| 5 | `Executor::invoke_func`（builtin から Ruby メソッドを呼ぶ経路: `send`、`Method#call`、`respond_to?` → `respond_to_missing?`、`method_missing`、coerce など）で、解決したメソッドが `ConstReturn` ヒント付き ISeq（既定の `Object#respond_to_missing?` は `false`、リテラルを返すユーザ定義も同様）なら invoker に入らず定数を返す。JIT の call-site fold と wrapper の fast return と同じ条件で、位置引数の数が束縛でき、キーワードが両側にないときのみ（arity エラーは通常経路で出す）。ブロックは wrapper と同じ理由（イテレータの safepoint）で除外 | `executor.rs::invoke_func` | 多相受信側の未検出 80 → 41 ns（YJIT 84）、ユーザ定義混在 84 → 63 ns（YJIT 107） | 下表 |
+| 6 | frozen String をインライン表現（≤3 ペア）のキーとして許可。String の `eql?` はバイト比較で（再定義は両表現とも参照しない）、frozen ならプローブ中に変化しないため、boxed map と同じ `string_key_eq` の規則をインライン走査に持ち込める。リテラルのキーと `h["k"] = v` の格納キー（`frozen_hash_key`）は全部 frozen なので、String キーの小さな Hash リテラルが boxed map（RubyMap + entries Vec の 2 アロケーション + キーごとの SipHash）を作らなくなる | `rvalue/hash.rs::is_inline_key`, `inline_pos_noobs` | `{"content-type" => "text/plain"}` 134 → 57 ns（YJIT 60、Symbol キーと同じ）、`h["k"]` 50 → 23 ns、`h["k"] = v` 40 → 22 ns | 下表 |
 
 施策 1〜3 を入れた時点（v2）:
 
@@ -490,6 +492,29 @@ FFI: `fiddle|ffi_call|sqlite|classify_argument|libffi`）。
 （v2 → v3 で graphql がさらに 3 % 前後縮んだのが施策 4 の分。activerecord は
 ノイズの範囲。）フルテストは 3688 passed / 1 failed で、失敗は下記の既存の
 `Float#ceil` 差分のみ。
+
+施策 5〜6 を v3 に重ねたビルド（v4）。v3 の binary との交互 3 ラウンド:
+
+| ベンチ | v3（3 回の中央値） | v4 | 差 |
+|---|---:|---:|---:|
+| erubi | 316 / 311 / 308 ms | 303 / 317 / 305 ms | −2 %（ノイズ内） |
+| rack | 88 / 93 / 84 ms | 80 / 78 / 82 ms | −7 % |
+| graphql | 55 / 56 / 53 ms | 53 / 59 / 55 ms | ±0 |
+| activerecord | 294 / 305 / 275 ms | 247 / 244 / 238 ms | −13.5 % |
+
+rack と activerecord は §5.2 / §5.4 で挙げた String キー Hash リテラル
+（`{"content-type" => ...}`、`{"PATH_INFO" => ...}` の env 生成）と、
+activerecord の `respond_to?` 連打（`respond_to?(:to_ary)` などの未検出側）が
+そのまま効いた。erubi の String キー Hash は `@options` のように 4 ペアを超える
+ものが主で、boxed のままなので変わらない。graphql は Symbol キーが主。
+フルテストは 2397 passed / 1 failed（`float::tests::angle` のみ）。
+
+- 施策 6 の設計メモ: JIT の機械語はインラインのキーを内容で走査しない
+  （`gen_hash_entry_at` は位置指定、`Hash#[]` / `[]=` は runtime ヘルパ経由）ので、
+  変更は `hash.rs` に閉じている。インラインと boxed の `==` / `eql?` / `hash` の
+  一致、4 ペア目での昇格、`compare_by_identity` 後の同一性比較、`String#hash` /
+  `eql?` 再定義の無視などは `tests/hash_string_keys.rs` の `inline_string_key_*` で
+  CRuby と突き合わせている。
 
 - erubi は GC 回数が 1/4 になっても速くならなかった（施策 1 単体の単発計測では
   erubi −13 % に見えたが、交互 3 ラウンドでは差なし。ヒープが 6 → 8 MB になって

@@ -5339,6 +5339,10 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // Call respond_to_missing?(name, include_all) as CRuby does.
     let respond_to_missing = IdentId::RESPOND_TO_MISSING_;
     if let Some(fid) = globals.check_method(lfp.self_val(), respond_to_missing) {
+        // The default `Object#respond_to_missing?` is `false` — an ISeq
+        // whose hint says it returns a constant — and so is the common
+        // user override that answers a literal; `invoke_func` answers
+        // those from the hint without a Ruby call.
         let result = vm.invoke_func_inner(
             globals,
             fid,
@@ -7892,6 +7896,76 @@ mod tests {
           end
         end
         "#,
+        );
+    }
+
+    #[test]
+    fn respond_to_missing_const_return() {
+        // The default `Object#respond_to_missing?` and a user override that
+        // returns a literal are answered from the ISeq's constant-return hint
+        // without a Ruby call; an override that actually computes its answer
+        // is still invoked with (name, include_all).
+        run_test_with_prelude(
+            r#"
+        res = []
+        [Plain.new, Always.new, Never.new, Some.new].each do |o|
+          res << [o.class, o.respond_to?(:foo), o.respond_to?(:zzz), o.respond_to?(:zzz, true)]
+        end
+        res << Some.log.uniq.sort_by(&:to_s)
+        res
+        "#,
+            r#"
+        class Plain; end
+        class Always
+          def respond_to_missing?(n, p) = true
+        end
+        class Never
+          def respond_to_missing?(n, p) = false
+        end
+        class Some
+          @log = []
+          def self.log = @log
+          def respond_to_missing?(n, priv)
+            Some.log << [n, priv]
+            n == :zzz
+          end
+        end
+        "#,
+        );
+    }
+
+    #[test]
+    fn invoke_const_return_arity() {
+        // `invoke_func` answers a constant-returning method without a
+        // frame, but only when the arguments would bind: wrong positional
+        // counts, unexpected keywords, and missing required keywords must
+        // still raise from the builtin call paths (send / Method#call).
+        run_test(
+            r##"
+        class C
+          def none = :n
+          def one(a) = nil
+          def opt(a, b = 1, *r) = 42
+          def kw(k:) = true
+          def optkw(k: 1) = false
+          def blk(&b) = 7
+        end
+        c = C.new
+        r = []
+        [[:none, []], [:none, [1]], [:one, []], [:one, [1]], [:one, [1, 2]],
+         [:opt, []], [:opt, [1]], [:opt, [1, 2, 3, 4]], [:kw, []], [:kw, [{k: 1}]],
+         [:optkw, []], [:blk, []]].each do |m, args|
+          r << begin
+            [c.send(m, *args), c.method(m).call(*args), c.public_send(m, *args)]
+          rescue ArgumentError => e
+            e.message
+          end
+        end
+        r << begin; c.send(:one, 1, k: 2); rescue ArgumentError => e; e.message; end
+        r << begin; c.send(:none, k: 2); rescue ArgumentError => e; e.message; end
+        r << c.send(:kw, k: 5) << c.send(:optkw, k: 5) << c.send(:blk) { 1 }
+        r
+        "##,
         );
     }
 

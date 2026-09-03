@@ -4055,6 +4055,28 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Option<Value> {
+        // A method whose body is a single literal (`def respond_to_missing?
+        // (n, p) = false`, `def frozen? = true`, an empty `def m; end`)
+        // observes neither its receiver, its arguments, nor its block:
+        // answer it from the ISeq's `ConstReturn` hint without entering
+        // the invoker, exactly as the JIT folds such call sites and the
+        // wrapper fast-returns them. The invoker's only observable work
+        // for such a body is the arity check, so the shortcut applies
+        // only when the positional count binds and no keywords are in
+        // play on either side (a required keyword, or keywords passed to
+        // a method without any, must still raise through the normal
+        // path). Blocks are excluded for the reason the wrapper excludes
+        // them: iterator loops rely on the block's entry safepoint.
+        let func = &globals.store[func_id];
+        if let Some(iseq) = func.is_iseq()
+            && func.is_not_block()
+            && let ISeqHint::ConstReturn(v) = globals.store[iseq].hint
+            && kw_args.is_none()
+            && func.no_keyword()
+            && func.positional_arity_ok(args.len())
+        {
+            return Some(v.into());
+        }
         let bh = bh.map(|bh| bh.delegate());
         (globals.invokers.method)(
             self,
