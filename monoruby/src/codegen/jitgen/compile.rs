@@ -782,7 +782,13 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
             TraceIr::Mov(dst, src) => {
-                state.flush_gp(ir);
+                // GP-aware for a stack-homed or constant `src`: the copy
+                // becomes a shared GP register (see `copy_slot`), so the
+                // residents stay live across it. The fpr forms read `src`'s
+                // stack home and are not resident-aware, so they flush.
+                if !matches!(state.mode(src), LinkMode::S(_) | LinkMode::C(_)) {
+                    state.flush_gp(ir);
+                }
                 state.copy_slot(ir, src, dst);
                 // Pure copy; dst now holds src's object, so src's proof
                 // transfers to it.

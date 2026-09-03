@@ -158,6 +158,7 @@
 09c5d14600ee6e1cc49a870b8ecd0fea	["zero", "one", "two", "three-six", "three-six", "three-six", "three-six", "seven", "eight", "nine", "ten-fourteen", "ten-fourteen", "ten-fourteen", "ten-fourteen", "ten-fourteen", "fifteen", "sixteen", "seventeen", "above eighteen", "above eighteen", "zero", "one", "two", "three-six", "three-six", "three-six", "three-six", "seven", "eight", "nine", "ten-fourteen", "ten-fourteen", "ten-fourteen", "ten-fourteen", "ten-fourteen", "fifteen", "sixteen", "seventeen", "above eighteen", "above eighteen", "zero", "one", "two", "three-six", "three-six", "three-six", "three-six", "seven", "eight", "nine"]	res = []\n      50.times do |x|\n        case x % 20\n        when 0\n       
 09da60f0b8af936f2576e6fce8f5b2ce	[["one", nil, 1], "uno", [1, "uno"], [1, 1, nil, [true]], [2, 1, 2, nil], 10, [2, 10, 2]]	def drive(n)\n              r = nil\n              n.times { r = yiel
 09dbda92a05db85d6ad08cef7673aa9d	["extended:C"]	$res = []\n        module M\n          def self.extended(base)\n          
+09e1a701e3fe1cd8ef94aa693e0b655b	[1.5, 1.5, 1.5, 2.5]	def __f(x)\n          \n        a = x > 30 ? 1.5 : x\n        b = a\n      
 0a0748b8809f0e8d7f80297870a4da1e	[200000, 0, 999]	a = []\n            200000.times { |i| a << [(i * 7919) % 1000] }\n  
 0a0f30d8ebe55e1e0abe73391dfb071f	[true, true, true, true, 2]	(o=Object.new; def o.to_path; "/tmp/mono_tp_#{Process.pid}"; end; p2=Object.new;
 0a113daaabe1d4a623096c5f5d1b9ad3	"/home/user/monoruby"	File.expand_path("..")
@@ -197,6 +198,7 @@
 0c59ef50cf993e559eee5d6f90c6a39e	[1, 1, 8, [2, 3, 4], 1, 2, 4, nil, 9, 9, 8, [9, 3, 4], 0, 2, 4, nil, 9, 3, 8, [9, 3, 4], 1, 2, 4, nil, 9, 4, 8, [9, 2, 4], 2, 2, 4, nil, 9, 5, 8, [9, 2, 3], 3, 2, 4, nil, 9, 6, 8, [9, 2, 3], 4, 2, 4, nil, 9, 7, 8, [9, 2, 3], 5, 2, 4, nil, 9, 8, 8, [9, 2, 3], 6, 2, 4, nil, 9, 9, 7, [9, 2, 3], 7, 2, 4, nil, 9, 9, 7, [9, 2, 3], 8, 2, 4, nil, 9, 2, 7, [9, 2, 3], 9, 2, 4, nil, 9, 3, 7, [9, 10, 3], 10, 2, 4, nil, 9, 4, 7, [9, 10, 11], 11, 2, 4, nil, 9, 5, 7, [9, 10, 11], 12, 2, 4, nil, 9, 6, 7, [9, 10, 11], 13, 2, 4, nil, 9, 7, 7, [9, 10, 11], 14, 2, 4, nil, 9, 9, 15, [9, 10, 11], 15, 2, 4, nil, 9, 9, 15, [9, 10, 11], 16, 2, 4, nil, 9, 10, 15, [9, 10, 11], 17, 2, 4, nil, 9, 11, 15, [9, 18, 11], 18, 2, 4, nil, 9, 12, 15, [9, 18, 19], 19, 2, 4, nil, 9, 13, 15, [9, 18, 19], 20, 2, 4, nil, 9, 14, 15, [9, 18, 19], 21, 2, 4, nil, 9, 15, 15, [9, 18, 19], 22, 2, 4, nil, 9, 9, 23, [9, 18, 19], 23, 2, 4, nil, 9, 9, 23, [9, 18, 19], 24, 2, 4, nil, 9, 18, 23, [9, 18, 19], 25, 2, 4, nil, 9, 19, 23, [9, 26, 19], 26, 2, 4, nil, 9, 20, 23, [9, 26, 27], 27, 2, 4, nil, 9, 21, 23, [9, 26, 27], 28, 2, 4, nil, [9, 9, 26, 27, 28, 29, 22, 23], {a: 29, "b" => 2, 3 => 4}]	def drive\n              a = [1, 2, 3, 4, 5, 6, 7, 8]\n              
 0c73d03517bb4f3119910e3eaaaec7c7	"[]\\n"	ENV["SPAWN_T2"] = "parent"\n            r, w = IO.pipe\n            P
 0c83f321648f3f64690fb94178ec7665	"/home/user/monoruby/monoruby"	Dir.pwd
+0cace142624c1e6cb89f728eba20c289	[39, 39, 39, "zzz", [39, 39, "39"]]	def __f(x)\n          \n        a = x\n        b = a\n        s = "z" * 3\n 
 0cc1878ea30baafb813863f3ce8b91b6	[90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90]	def real(a, *r) = yield(a + r.sum)\n        def g(...) = real(...)\n     
 0cebe4bdba51d916fafb772a61e36f04	42	x = 42\n            binding.local_variable_get(:x)\n            
 0cf52da8cfa0528dc273b8d510378aad	["not_myobj", false]	class MyObj\n          def !\n            "not_myobj"\n          end\n     
@@ -781,6 +783,7 @@
 3c027e2e1ae3889315fbc61098871eaa	3	class MyNum; def to_int; 2; end; end\nn = MyNum.new\n[1,2,3,4,5].delete_at(n)
 3c08d84242fa705f6035b733b22c106c	"no-shebang\\n"	require "tmpdir"\n            Dir.mktmpdir do |d|\n              path
 3c2bfd6217c4e85fafe2bf1e3baa05d5	""	eval("/a+?*/").match("")[0]
+3c317b41d6a90f7b882850a676d924f0	[40, 36, 39]	def __f(x)\n          \n        a = x\n        b = a\n        a += 1\n      
 3c3e9df720bcfc9e16e5388ec370e1a6	3.15	class Foo; def to_int; 2; end; end\n            3.14159.ceil(Foo.new
 3c69555cfc9c304438892b113e9bb012	[[:@@inherited, :@@own], [:@@own]]	parent = Class.new\n            parent.class_variable_set(:@@inherit
 3c7f081b962e4c7272b51d99d568feb4	["outer", "outer", "outer", "outer", "nil"]	def brk_while(log)\n          outer = StandardError.new "outer"\n        
@@ -836,6 +839,7 @@
 40e716c7328738b3fe988089e88cf750	[false, "d"]	File.open("Cargo.toml") do |f|\n              f.read\n              f
 40ec27ae46c638a3a6280b2acf09bfed	["SocketError", true, 0, ["AF_INET", "127.0.0.1", "127.0.0.1"], true, "127.0.0.1"]	require "socket"\n            res = []\n            # unknown host ->
 410e76b670dd81753a10505bf18e9a4e	[true, ["String", "Comparable", "Object", "Kernel", "BasicObject"], true, false, "b", "c", "c", true, true, true, false, true, false, -1, nil, "b", "a"]	[String.include?(Comparable), String.ancestors.map(&:to_s),\n         "b
+41196e2784709a38db16b2ac20d45c21	[47, 47, 0, 47, 39]	def __f(x)\n          \n        v0 = x\n        v1 = (v0 + 8) & 4095\n     
 4127f9d58f69e19b5bcf5c3c3cefe969	[true, true, false, :fired]	Thread.handle_interrupt(StandardError => :never) do\n              c
 41308fa046142fe3ed9d2bce06bdeb37	[4, 8, 91, 7, 73, 117, 58, 13, 85, 68, 80, 114, 111, 116, 111, 50, 7, 104, 105, 6, 58, 6, 69, 84, 64, 6]	class UDProto2\n              def initialize(s); @s = s; end\n       
 41709673073e0a9bac7681363b4962df	"語本日"	"日本語".reverse
@@ -1142,6 +1146,7 @@
 573fe669ac971343defbd1cde20dc915	["MONORUBY_ENV_TEST_KEY", nil]	ENV["MONORUBY_ENV_TEST_KEY"] = "uniq_value_5678"\n            r = EN
 576157356419a5741dbdbde29df95789	true	GC.stat.values.all? { |v| v.is_a?(Integer) }
 57bd29081de5740463b29a1c3ee0ef00	"US-ASCII"	s = "hello".dup.force_encoding("US-ASCII")\n              s[/(ll)/
+57c833a5c1b734fc7100669600389b9b	[nil, nil, nil, 2.5, 3.5, :sym]	def __f(x)\n          \n        a = x.odd? ? nil : "str"\n        b = a\n  
 57f002dbbc2a38d20a751f8e1d4218fe	[255, 15, 240, -1, 15, -16, 42, 0, 42, 42, -43, 244837815148286, 304366200, 244837510782086]	def or_a; 0xFF | 0x0F; end\n            def and_a; 0xFF & 0x0F; end\n
 57f22a05e8acf18b24e3a1c7b3e4f9a8	[false, :c, false, :cf, :c]	class A; end\n            class B; end\n            class C; end\n    
 5802c597582fbeab79b6c6ee6bfe6fed	[true, false]	a = ["a","b","c"]\n        \n\n            [a.include?("b"), a.include
@@ -1356,6 +1361,7 @@
 68f4361ccb18fadb55264f42091b2bc7	42	x = 42\n            x\n        
 690f7a9479d83c4f5efc9942963213df	["bc", "bc"]	class C; def to_str; "bc"; end; end; o = C.new\n"abcabc".scan(o)
 6918db71780c28b00e597c253bde368e	"default"	GC.config[:implementation]
+69191e68bd5e02ec97d535fd37c3ff3e	652	acc = 0\n        i = 0\n        while i < 100\n          v = i\n          w
 691b2c56eea7b2b314d5eb00cd44238a	nil	def f; end; f
 693bb18ddab0f71baad7547f17a5170e	true	File.executable?("/bin/sh")
 693f5aa61446e94a059879fc0e8410e4	C	class C\n        end\n        \n\n        a = 1\n        C.class_eval do |m|
@@ -1447,6 +1453,7 @@
 704d452b80d83d3bcdabb9fc21dfd71c	["boom", 1, "KwErr", "KwErr"]	class KwErr < StandardError\n              attr_reader :extra\n      
 704e725b4b5d761ef261e9bd0491038b	0.75	Rational(3, 4).to_f
 705519c630a831804749a02887790307	[true, true, true]	module M; class N; CONST = 1; end; end\n            \n\n            [\n
+70656cec0a7d05dbe074e523b3789ac3	[4611686018427387939, 4611686018427387939, 4611686018427387939, 4611686018427387949]	def __f(x)\n          \n        a = x + 4611686018427387900\n        b = a
 7068324754662230dd6cba5af8947f71	"hel"	class Foo; def to_str; "lo"; end; end\n            "hello".chomp(Foo
 7073b2cf059ea135845fa20451762fce	[1, 2, 3]	class E\n              def initialize(a); @a = a; end\n              
 707b7fd02add3d39fff2a8fb60b17cde	["hello", "text"]	klass = Class.new do\n          def hello; "hello"; end\n          def se
@@ -1793,6 +1800,7 @@
 8a6b94b64e2a0b0af3908b52f147185f	true	class S\n        end\n        class C < S\n        end\n        S === C.new
 8a806116e8db9855524e6f7e79e47938	[nil, 2, 9999999999999999999999999999999]	[[].max, [1,2,-42].max, [-42.4242, 100, 999999999999999999999999999
 8ab7255cc645f88bcc12b9b985e76688	[[:protected_foo, :public_foo], [:protected_foo, :public_foo], [:private_foo], [:private_foo]]	class Foo\n          private;   def private_foo()   end\n          protec
+8ac618ade447bc8197083d4232e91f3a	[42, 42, 294, 23, 2]	def __f(x)\n          \n        a = x + 3\n        b = a\n        c = 7 * b
 8ac98985ac612f0703d37bf0737bc3e8	["ABいう", true]	s = "あいう"\n            s.bytesplice(0, 3, "AB".force_encoding("ASCII
 8ad0bb005e97f639e1a5c706a270ed11	[true, false, true, true, true, true]	class W\n            include Comparable\n            attr_accessor :x\n 
 8aff130d4cf4e00d7d7b4435b5691762	[true, "hi"]	require 'tmpdir'\n            path = File.join(Dir.tmpdir, "mrb_fifo
@@ -2461,6 +2469,7 @@ bd72323eccae40b197ebea1283639273	[nil, 42]	a = []\n        a << $std\n        $s
 bd7a26e1f462e26d42e9543689bc3430	3862152.611328125	def calc(n, vals)\n          a = 0.0; b = 1.0; c = 2.0; d = 3.0\n        
 bd9970837b8009b39aca5efafe329d8e	["true", "5", "", "foo"]	[true.to_s, 5.to_s, nil.to_s, :foo.to_s]
 bd9f54fa26238d51503216b560dcfe9d	"M:C"	module M\n          def foo\n            "M:" + super\n          end\n     
+bdab5d25c3b4be158f0e7bd7de9daf97	[118, 592, 4147, 74705710618821783505]	def __f(x)\n          \n        a = x * 3 + 1\n        b = a * 5 + 2\n     
 bdd4254f72e55d63b4505c0909c9bd00	[6.5, 17.0]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 bde4f5647e4c5f426e0b6b9de2ad09ab	[[], [:it], [:_1, :_2, :_3], [:it], [], [], []]	[\n              binding.implicit_parameters,\n              proc { i
 bde9a54a7762ba3fd118c904ccaac5c2	[:rescued]	def boom; raise "no"; end\n            def test; [1].map { begin; bo
@@ -2663,6 +2672,7 @@ cb4478e73aab25c758637cb13389a676	true	Process.respond_to?(:exit!)
 cb6813c622f9c03c3a741e5ea65819a7	-1	class Integer; alias __orig :-; def -(o); __orig(o); end; end; 3 - 4
 cb7c9ec2433344c197fcd2854cff3c52	"abc"	"abc".center(3)
 cb9f3248f2f6bc5c98916096bf18af2d	[false, nil, nil]	class NilClass; def to_a; $flag = true; super; end; end\n        $flag =
+cba3d63bf788ac7a61926a8c9c04217f	[80, 40]	def __f(x)\n          \n        a = x + 1\n        b = a\n        a = a + a
 cba85401e6793856ca7879fbbe19af13	0	Process.euid
 cbc5428b9ea75e034300c93910733635	[10, 20, 30]	class C\n              attr_accessor :x,:y,:z\n            end\n      
 cbe2fdfe5524a2252322956fc39595d8	{}	M = Data.define(:amount, :unit)\nM.new(1, "m").deconstruct_keys([:amount, :x, :un
@@ -2981,6 +2991,7 @@ e47239d7cd6ec89f4fe82f6a1a03800e	ArgumentError	class Integer; def <=>(o); :OVERR
 e47afc9bea872de2d1e41b256d5d2554	[true, 9, nil]	pid = fork { sleep 5 }\n            Process.kill("SIGKILL", pid)\n   
 e48337ae565a3904f3c01b8e583758d2	["C", "M2", "M1"]	module M1\n          def f\n            $res << "M1"\n          end\n      
 e4a701808e3a93ca91d9df6170eb2110	[["NestA::NestB", "NestA"], ["NestA::NestB", "NestA"], []]	module NestA\n              module NestB\n                def self.f;
+e4ae3916bef50df6a3becd07254df7c2	[3849074495, 2606176403]	def splitmix32(x)\n          x = (x + 0x9e3779b9) & 0xffffffff\n         
 e4b07dfb345d9091378925364fd0c790	[8, [1, 3, 5], 50, 3, 10]	def first_even(a); a.each { |x| break x if x % 2 == 0 }; end\n        de
 e4c3805b5eda733c2c3b305a068dc955	"Cargo.toml"	File.open("Cargo.toml") { |f| f.path }
 e4e344de107f90e3a04f591c1d83fb9a	nil	Inner = Struct.new(:b)\n        Outer = Struct.new(:a)\n        o = Outer
@@ -3157,6 +3168,7 @@ f2104384e6be9965ec5da4ad860b37f4	[1, 4, 2]	[IO::READABLE, IO::WRITABLE, IO::PRIO
 f212deed776e67ad2663d333efdef52c	true	b = binding\n            b.eval("z = 1")\n            b.local_variabl
 f216b4de4c4cc3516688e358d154cc58	[{k: 0}, 1, {a: 1, b: 0}, [:a, :b], [1, 0], false, true, {k: 1}, 1, {a: 1, b: 1}, [:a, :b], [1, 1], false, true, {k: 2}, 1, {a: 1, b: 2}, [:a, :b], [1, 2], false, true, {k: 3}, 1, {a: 1, b: 3}, [:a, :b], [1, 3], false, true, {k: 4}, 1, {a: 1, b: 4}, [:a, :b], [1, 4], false, true, {k: 5}, 1, {a: 1, b: 5}, [:a, :b], [1, 5], false, true, {k: 6}, 1, {a: 1, b: 6}, [:a, :b], [1, 6], false, true, {k: 7}, 1, {a: 1, b: 7}, [:a, :b], [1, 7], false, true, {k: 8}, 1, {a: 1, b: 8}, [:a, :b], [1, 8], false, true, {k: 9}, 1, {a: 1, b: 9}, [:a, :b], [1, 9], false, true, {k: 10}, 1, {a: 1, b: 10}, [:a, :b], [1, 10], false, true, {k: 11}, 1, {a: 1, b: 11}, [:a, :b], [1, 11], false, true, {k: 12}, 1, {a: 1, b: 12}, [:a, :b], [1, 12], false, true, {k: 13}, 1, {a: 1, b: 13}, [:a, :b], [1, 13], false, true, {k: 14}, 1, {a: 1, b: 14}, [:a, :b], [1, 14], false, true, {k: 15}, 1, {a: 1, b: 15}, [:a, :b], [1, 15], false, true, {k: 16}, 1, {a: 1, b: 16}, [:a, :b], [1, 16], false, true, {k: 17}, 1, {a: 1, b: 17}, [:a, :b], [1, 17], false, true, {k: 18}, 1, {a: 1, b: 18}, [:a, :b], [1, 18], false, true, {k: 19}, 1, {a: 1, b: 19}, [:a, :b], [1, 19], false, true]	res = []\n        20.times do |i|\n            h = {}\n            h[:k] =
 f25e578e126546527b49642021ac237a	[["US-ASCII", [65]], ["ASCII-8BIT", [65, 128]], ["ASCII-8BIT", [255]], ["UTF-8", [226, 128, 189]], ["EUC-JP", [65, 161, 161]], ["Windows-31J", [65, 177, 129, 64]], ["ASCII-8BIT", [0, 255]], ["ISO-8859-1", [65, 255]], ["UTF-16LE", 65, [65, 0]], ["UTF-16LE", 8253, [61, 32]], ["UTF-16LE", 66376, [0, 216, 72, 223]], ["UTF-16LE", "invalid codepoint 0xD800 in UTF-16LE"], ["UTF-16BE", 65, [0, 65]], ["UTF-16BE", 8253, [32, 61]], ["UTF-16BE", 66376, [216, 0, 223, 72]], ["UTF-16BE", "invalid codepoint 0xD800 in UTF-16BE"], ["UTF-32LE", 65, [65, 0, 0, 0]], ["UTF-32LE", 8253, [61, 32, 0, 0]], ["UTF-32LE", 66376, [72, 3, 1, 0]], ["UTF-32LE", "invalid codepoint 0xD800 in UTF-32LE"], ["UTF-32BE", 65, [0, 0, 0, 65]], ["UTF-32BE", 8253, [0, 0, 32, 61]], ["UTF-32BE", 66376, [0, 1, 3, 72]], ["UTF-32BE", "invalid codepoint 0xD800 in UTF-32BE"], ["RangeError", "256 out of char range"], ["RangeError", "-1 out of char range"], ["RangeError", "invalid codepoint 0x81 in EUC-JP"], ["RangeError", "invalid codepoint 0xA100 in EUC-JP"], ["RangeError", "invalid codepoint 0x80 in Windows-31J"], ["RangeError", "65536 out of char range"], ["RangeError", "16777216 out of char range"], ["RangeError", "256 out of char range"], ["RangeError", "4660 out of char range"], ["RangeError", "invalid codepoint 0xDFFF in UTF-16LE"], ["RangeError", "invalid codepoint 0x110000 in UTF-32BE"], ["RangeError", "256 out of char range"], ["RangeError", "1114112 out of char range"], ["RangeError", "bignum out of char range"]]	res = []\n        # US-ASCII: 7-bit stays, 128..255 widens to BINARY, pa
+f278d110b91e27cba6d94dd2fa48e555	[680, 19, 38, 19]	def __f(x)\n          \n        acc = 0\n        i = 0\n        while i < 2
 f27aef0e47e3354ce496c90299f462ea	[["x\\ny\\nz\\n"], ["x\\n", "y\\n", "z\\n"], ["x\\n", "y\\n", "z\\n"], "ASCII-8BIT"]	File.write("/tmp/mr_rlf4.txt", "x\\ny\\nz\\n")\n            r = []\n    
 f2899713941ee3ed54e30d3b5b785abc	[1, true]	module MSx; end\n            SX = Struct.new(:a)\n            s = SX.
 f2e470589175775eee4819e2df92057b	true	v = "MONORUBY_TEST_VAL"\n            r = ENV.send(:[]=, "MONORUBY_EN
@@ -3292,6 +3304,7 @@ fbb6a99a9e767f50065c0f1b714f7960	["RuntimeError", "boom", false]	f = Fiber.new {
 fbfbbb9d05ea7dc5ddb91d5f6aa274ad	"EUC-JP"	e = "あ".encode("EUC-JP"); "#{""}#{e}".encoding.to_s
 fc2292041cacaef7aa439e177107ed46	[42, 90, 15, "1/2", "7:8", "argerr"]	def a0; 42; end\n        def a1(x); x * 10; end\n        def a5(a, b, c, 
 fc22a4cd64bea4559dace662cad4cc26	[[1, 2]]	r = []; Enumerator.new { |y| y.yield 1, 2 }.each { |*a| r << a }; r
+fc2f16b93ce4cbb761bfc5c755d871c4	[40, 40, 41, "q"]	def __f(x)\n          \n        a = x.succ\n        b = a\n        c = b + 
 fc3371eaceedc6a0fdff24c1dffa8f49	[[], [nil, nil, nil], [:x, :x, :x], [0, 2, 4], [1, 2, 3], [4, 5], [nil, nil], [nil, nil]]	o = Object.new\n        def o.to_ary = [4, 5]\n        # to_ary returning
 fc3d5bf1ce71d212ebacaaf185815390	["RuntimeError", "parent 42", "parent 5"]	parent = Class.new { def m(a) = "parent #{a}" }\n        res = []\n      
 fc49adcb727ee87209fa4da1d578751d	["a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_"]	res = []\n        require "strscan"\n        20.times do\n            s = 

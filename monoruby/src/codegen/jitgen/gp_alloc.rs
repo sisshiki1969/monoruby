@@ -106,27 +106,30 @@ pub(in crate::codegen::jitgen) enum GpAction {
     Spill { reg: GP, slot: SlotId },
 }
 
-/// What an allocatable register currently caches.
-#[derive(Clone, Copy)]
+/// One slot an allocatable register currently caches.
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Holder {
     slot: SlotId,
-    /// the register's value differs from `slot`'s stack home (a binop result);
-    /// a clean holder (freshly loaded, unmodified) needs no spill.
+    /// the register's value differs from `slot`'s stack home (a binop result,
+    /// or a copy that has not been stored yet); a clean holder (freshly loaded,
+    /// unmodified) needs no spill.
     dirty: bool,
-    /// monotonically-increasing stamp set when the slot was bound, used to pick
-    /// the oldest resident as the eviction victim (FIFO).
-    age: u64,
 }
 
-/// The per-basic-block GP register file: which slot, if any, each allocatable
-/// register currently caches. The `vgp`-style `holder` vector mirrors the xmm
-/// `FprAllocator`.
+/// The per-basic-block GP register file: which slots each allocatable register
+/// currently caches. The `vgp`-style `holders` vector mirrors the xmm
+/// `FprAllocator`, including its many-slots-per-register shape: a register
+/// holds a *set* of slots that all carry the same value, each with its own
+/// dirty bit. That is what makes a slot copy free — `%dst = %src` adds `dst` to
+/// `src`'s register as a dirty holder and emits nothing; the store to `dst`'s
+/// home is owed only when the register is evicted or the file is flushed, and
+/// is dropped entirely if `dst` dies first (a `ret`, a popped temporary).
 ///
 /// Held in the abstract state and driven online during the basic-block walk:
 /// the GP-aware operations (integer binops, integer compares/compare-branches,
-/// call/yield-result parking, concrete-literal defs) reuse/allocate registers
-/// through it, while every other instruction flushes the live GP residents
-/// back to their stack homes up front (via `flush_gp` →
+/// call/yield-result parking, concrete-literal defs, slot copies)
+/// reuse/allocate registers through it, while every other instruction flushes
+/// the live GP residents back to their stack homes up front (via `flush_gp` →
 /// [`Self::take_dirty_spills`]).
 ///
 /// It is flushed empty at every basic-block boundary, so although it rides
@@ -134,8 +137,12 @@ struct Holder {
 /// block merge (the per-block-locality the design requires).
 #[derive(Clone)]
 pub(in crate::codegen::jitgen) struct GpRegFile {
-    /// `holder[i]` is what `GP_ALLOC_SET[i]` caches (`None` = free).
-    holder: Vec<Option<Holder>>,
+    /// `holders[i]` is the set of slots `GP_ALLOC_SET[i]` caches (empty = free).
+    holders: Vec<Vec<Holder>>,
+    /// `age[i]`: monotonically-increasing stamp set when a slot was last bound
+    /// to `GP_ALLOC_SET[i]`, used to pick the oldest register as the eviction
+    /// victim (FIFO).
+    age: Vec<u64>,
     /// FIFO clock for victim selection.
     clock: u64,
 }
@@ -149,7 +156,8 @@ impl Default for GpRegFile {
 impl GpRegFile {
     pub(in crate::codegen::jitgen) fn new() -> Self {
         Self {
-            holder: vec![None; GP_ALLOC_SET.len()],
+            holders: vec![vec![]; GP_ALLOC_SET.len()],
+            age: vec![0; GP_ALLOC_SET.len()],
             clock: 0,
         }
     }
@@ -157,7 +165,7 @@ impl GpRegFile {
     /// True when no register is occupied (the common case — flushing then is a
     /// no-op, so the hot path pays nothing).
     pub(in crate::codegen::jitgen) fn is_empty(&self) -> bool {
-        self.holder.iter().all(|h| h.is_none())
+        self.holders.iter().all(|h| h.is_empty())
     }
 
     /// The `(reg, slot)` pairs of every resident, clean or dirty. Does not
@@ -168,22 +176,23 @@ impl GpRegFile {
     /// instead of round-tripping through the just-written stack home (a
     /// store-forwarding hop on the call's critical path).
     pub(in crate::codegen::jitgen) fn residents(&self) -> Vec<(GP, SlotId)> {
-        (0..self.holder.len())
-            .filter_map(|i| match self.holder[i] {
-                Some(Holder { slot, .. }) => Some((GP_ALLOC_SET[i], slot)),
-                _ => None,
-            })
-            .collect()
+        self.pairs(|_| true)
     }
 
     /// The `(reg, slot)` pairs of every **dirty** resident, for inclusion in a
     /// deopt / GC write-back (the values that differ from their stack home and
     /// must be re-homed if the VM resumes). Does not mutate the file.
     pub(in crate::codegen::jitgen) fn dirty_residents(&self) -> Vec<(GP, SlotId)> {
-        (0..self.holder.len())
-            .filter_map(|i| match self.holder[i] {
-                Some(Holder { slot, dirty: true, .. }) => Some((GP_ALLOC_SET[i], slot)),
-                _ => None,
+        self.pairs(|h| h.dirty)
+    }
+
+    fn pairs(&self, f: impl Fn(&Holder) -> bool) -> Vec<(GP, SlotId)> {
+        (0..self.holders.len())
+            .flat_map(|i| {
+                self.holders[i]
+                    .iter()
+                    .filter(|h| f(h))
+                    .map(move |h| (GP_ALLOC_SET[i], h.slot))
             })
             .collect()
     }
@@ -193,8 +202,8 @@ impl GpRegFile {
     /// flush). Clean residents need no store and are simply dropped.
     pub(in crate::codegen::jitgen) fn take_dirty_spills(&mut self) -> Vec<(GP, SlotId)> {
         let spills = self.dirty_residents();
-        for h in self.holder.iter_mut() {
-            *h = None;
+        for h in self.holders.iter_mut() {
+            h.clear();
         }
         spills
     }
@@ -210,15 +219,28 @@ impl GpRegFile {
 
     /// True when `reg` holds no resident (free for immediate reuse).
     pub(in crate::codegen::jitgen) fn is_free(&self, reg: GP) -> bool {
-        self.holder[Self::index_of(reg)].is_none()
+        self.holders[Self::index_of(reg)].is_empty()
+    }
+
+    /// True when `slot` is the **only** slot `reg` caches. An op may compute in
+    /// place in a register only under this condition: with more holders the
+    /// register carries other slots' (not yet stored) values, and overwriting
+    /// it would corrupt them.
+    pub(in crate::codegen::jitgen) fn holds_only(&self, reg: GP, slot: SlotId) -> bool {
+        matches!(self.holders[Self::index_of(reg)].as_slice(), [h] if h.slot == slot)
+    }
+
+    fn position_of(&self, slot: SlotId) -> Option<(usize, usize)> {
+        self.holders.iter().enumerate().find_map(|(i, hs)| {
+            hs.iter()
+                .position(|h| h.slot == slot)
+                .map(|j| (i, j))
+        })
     }
 
     /// The register currently caching `slot`, if any (the reuse lookup).
     pub(in crate::codegen::jitgen) fn reg_of(&self, slot: SlotId) -> Option<GP> {
-        self.holder
-            .iter()
-            .position(|h| h.map(|h| h.slot) == Some(slot))
-            .map(|i| GP_ALLOC_SET[i])
+        self.position_of(slot).map(|(i, _)| GP_ALLOC_SET[i])
     }
 
     /// The register caching `slot` only if that cache is **dirty** (its value
@@ -226,10 +248,9 @@ impl GpRegFile {
     /// register (`Mul`/`Div` destroy `rhs`): the dirty value must be written to
     /// its home first, since the register will not survive the op.
     pub(in crate::codegen::jitgen) fn dirty_reg_of(&self, slot: SlotId) -> Option<GP> {
-        self.holder
-            .iter()
-            .position(|h| matches!(h, Some(Holder { slot: s, dirty: true, .. }) if *s == slot))
-            .map(|i| GP_ALLOC_SET[i])
+        self.position_of(slot)
+            .filter(|&(i, j)| self.holders[i][j].dirty)
+            .map(|(i, _)| GP_ALLOC_SET[i])
     }
 
     /// A free register that is not `pinned`. Pinned registers hold operands that
@@ -237,53 +258,64 @@ impl GpRegFile {
     /// operand slot, `invalidate(dst)` leaves the operand's register unbound but
     /// still in use), so they must never be handed out even when free.
     fn find_free(&self, pinned: &[GP]) -> Option<GP> {
-        (0..self.holder.len())
-            .find(|&i| self.holder[i].is_none() && !pinned.contains(&GP_ALLOC_SET[i]))
+        (0..self.holders.len())
+            .find(|&i| self.holders[i].is_empty() && !pinned.contains(&GP_ALLOC_SET[i]))
             .map(|i| GP_ALLOC_SET[i])
     }
 
     /// Online allocation primitive for the codegen driver: return a register
-    /// (a free one, else the **oldest** non-`pinned` resident) plus the spill
-    /// the caller must emit when a dirty resident was evicted. The returned
-    /// register is left **unbound** — the caller binds it after loading/computing
-    /// the value (so the binop result always lands in a register).
-    pub(in crate::codegen::jitgen) fn alloc_reg(
-        &mut self,
-        pinned: &[GP],
-    ) -> (GP, Option<(GP, SlotId)>) {
+    /// (a free one, else the **oldest** non-`pinned` resident) plus the spills
+    /// the caller must emit for the dirty holders it evicted (one store per
+    /// dirty slot the victim carried). The returned register is left
+    /// **unbound** — the caller binds it after loading/computing the value (so
+    /// the binop result always lands in a register).
+    pub(in crate::codegen::jitgen) fn alloc_reg(&mut self, pinned: &[GP]) -> (GP, Vec<(GP, SlotId)>) {
         if let Some(reg) = self.find_free(pinned) {
-            return (reg, None);
+            return (reg, vec![]);
         }
-        let victim_idx = (0..self.holder.len())
+        let victim_idx = (0..self.holders.len())
             .filter(|&i| !pinned.contains(&GP_ALLOC_SET[i]))
-            .min_by_key(|&i| self.holder[i].unwrap().age)
+            .min_by_key(|&i| self.age[i])
             .expect("more pinned registers than the allocatable set");
         let reg = GP_ALLOC_SET[victim_idx];
-        let h = self.holder[victim_idx].unwrap();
-        let spill = if h.dirty { Some((reg, h.slot)) } else { None };
-        self.holder[victim_idx] = None;
-        (reg, spill)
+        (reg, self.evict_reg(reg))
+    }
+
+    /// Forget every holder of `reg`, returning the spills owed for its dirty
+    /// ones. Used when an op is about to destroy the register's value
+    /// (`Mul`/`Div` clobber `rhs`), and by [`Self::alloc_reg`] for its victim.
+    pub(in crate::codegen::jitgen) fn evict_reg(&mut self, reg: GP) -> Vec<(GP, SlotId)> {
+        let idx = Self::index_of(reg);
+        let spills = self.holders[idx]
+            .iter()
+            .filter(|h| h.dirty)
+            .map(|h| (reg, h.slot))
+            .collect();
+        self.holders[idx].clear();
+        spills
     }
 
     /// Internal `alloc` used by the pure `allocate_run` reference: like
-    /// [`Self::alloc_reg`] but emits the spill into `out`.
+    /// [`Self::alloc_reg`] but emits the spills into `out`.
     fn alloc(&mut self, pinned: &[GP], out: &mut Vec<GpAction>) -> GP {
-        let (reg, spill) = self.alloc_reg(pinned);
-        if let Some((reg, slot)) = spill {
+        let (reg, spills) = self.alloc_reg(pinned);
+        for (reg, slot) in spills {
             out.push(GpAction::Spill { reg, slot });
         }
         reg
     }
 
-    /// Record that `reg` now caches `slot`, dropping any prior cache of `slot`.
+    /// Record that `reg` now (also) caches `slot`, dropping any prior cache of
+    /// `slot`. The register's other holders are kept: they carry the same value,
+    /// which is exactly what a slot copy relies on (`%dst = %src` binds `dst`
+    /// dirty to `src`'s register). A register handed out by [`Self::alloc_reg`]
+    /// is empty, so binding a freshly produced value never shares by accident.
     pub(in crate::codegen::jitgen) fn bind(&mut self, reg: GP, slot: SlotId, dirty: bool) {
-        for h in self.holder.iter_mut() {
-            if h.map(|h| h.slot) == Some(slot) {
-                *h = None;
-            }
-        }
+        self.invalidate(slot);
         let age = self.tick();
-        self.holder[Self::index_of(reg)] = Some(Holder { slot, dirty, age });
+        let idx = Self::index_of(reg);
+        self.holders[idx].push(Holder { slot, dirty });
+        self.age[idx] = age;
     }
 
     /// If `slot` is a GP resident, return its register and mark it **clean** —
@@ -294,25 +326,65 @@ impl GpRegFile {
     /// cached (now clean), so a following integer op still reuses it and a later
     /// flush does not re-spill it.
     pub(in crate::codegen::jitgen) fn sync(&mut self, slot: SlotId) -> Option<GP> {
-        let idx = self
-            .holder
-            .iter()
-            .position(|h| h.map(|h| h.slot) == Some(slot))?;
-        self.holder[idx].as_mut().unwrap().dirty = false;
-        Some(GP_ALLOC_SET[idx])
+        let (i, j) = self.position_of(slot)?;
+        self.holders[i][j].dirty = false;
+        Some(GP_ALLOC_SET[i])
     }
 
     /// Free every register caching a slot at or above `sp` — those temporaries
     /// are dead (popped past the stack pointer), so they are dropped without a
     /// spill, mirroring `clear_above_next_sp`.
     pub(in crate::codegen::jitgen) fn free_above_sp(&mut self, sp: SlotId) {
-        for h in self.holder.iter_mut() {
-            if let Some(held) = *h
-                && held.slot >= sp
-            {
-                *h = None;
-            }
+        for h in self.holders.iter_mut() {
+            h.retain(|held| held.slot < sp);
         }
+    }
+
+    /// Whether, once the popped temporaries (`>= sp`) and the redefined `dst`
+    /// are dropped, `reg` caches nothing but (at most) `slot` — the condition
+    /// for an op to compute in place in `reg` without corrupting another
+    /// slot's only copy. Answered *before* those drops happen, so an op can
+    /// plan its result register ahead of its deopt snapshot.
+    pub(in crate::codegen::jitgen) fn will_hold_at_most(
+        &self,
+        reg: GP,
+        slot: SlotId,
+        sp: SlotId,
+        dst: Option<SlotId>,
+    ) -> bool {
+        self.holders[Self::index_of(reg)]
+            .iter()
+            .all(|h| h.slot == slot || h.slot >= sp || Some(h.slot) == dst)
+    }
+
+    /// Make room for one register to be allocated *after* `free_above_sp(sp)`
+    /// and `invalidate(dst)` have run, doing neither yet: if some non-`pinned`
+    /// register will be free by then, nothing is owed; otherwise the oldest
+    /// non-`pinned` register is evicted now and its dirty holders' spills are
+    /// returned. An op that side-exits (a deopt) takes its write-back snapshot
+    /// before it clears the popped operands, so that the interpreter can
+    /// re-read them from their homes; a victim evicted *after* that snapshot
+    /// would still be listed in it, and the deopt would then store the
+    /// register — by then overwritten with the result — into the victim's
+    /// home. Reserving here, before the snapshot, keeps every snapshotted
+    /// register intact up to the side exit.
+    pub(in crate::codegen::jitgen) fn reserve(
+        &mut self,
+        pinned: &[GP],
+        sp: SlotId,
+        dst: Option<SlotId>,
+    ) -> Vec<(GP, SlotId)> {
+        let free_later = |hs: &Vec<Holder>| hs.iter().all(|h| h.slot >= sp || Some(h.slot) == dst);
+        if (0..self.holders.len())
+            .any(|i| !pinned.contains(&GP_ALLOC_SET[i]) && free_later(&self.holders[i]))
+        {
+            return vec![];
+        }
+        let victim_idx = (0..self.holders.len())
+            .filter(|&i| !pinned.contains(&GP_ALLOC_SET[i]))
+            .min_by_key(|&i| self.age[i])
+            .expect("more pinned registers than the allocatable set");
+        self.evict_reg(GP_ALLOC_SET[victim_idx])
     }
 }
 
@@ -367,25 +439,17 @@ fn ensure(rf: &mut GpRegFile, slot: SlotId, pinned: &[GP], out: &mut Vec<GpActio
 
 /// Flush dirty residents to their stack homes and clear the file.
 fn flush_dirty(rf: &mut GpRegFile, out: &mut Vec<GpAction>) {
-    for i in 0..rf.holder.len() {
-        if let Some(Holder { slot, dirty: true, .. }) = rf.holder[i] {
-            out.push(GpAction::Spill {
-                reg: GP_ALLOC_SET[i],
-                slot,
-            });
-        }
-        rf.holder[i] = None;
+    for (reg, slot) in rf.take_dirty_spills() {
+        out.push(GpAction::Spill { reg, slot });
     }
 }
 
 impl GpRegFile {
     /// A slot is about to be redefined: drop any stale register cache of it (the
-    /// old value is dead, so no spill).
+    /// old value is dead, so no spill). The register's other holders stay.
     pub(in crate::codegen::jitgen) fn invalidate(&mut self, slot: SlotId) {
-        for h in self.holder.iter_mut() {
-            if h.map(|h| h.slot) == Some(slot) {
-                *h = None;
-            }
+        for h in self.holders.iter_mut() {
+            h.retain(|held| held.slot != slot);
         }
     }
 }
@@ -506,6 +570,69 @@ mod tests {
                 .iter()
                 .any(|a| matches!(a, GpAction::Spill { slot, .. } if *slot == sl(s))));
         }
+    }
+
+    /// A slot copy binds the destination to the source's register as a second
+    /// (dirty) holder: both resolve to the register, only the copy owes a store,
+    /// and the register is no longer a sole-holder (no in-place compute).
+    #[test]
+    fn copy_shares_the_register() {
+        let mut rf = GpRegFile::new();
+        rf.bind(R8, sl(1), /* dirty */ false);
+        rf.bind(R8, sl(2), /* dirty */ true);
+        assert_eq!(rf.reg_of(sl(1)), Some(R8));
+        assert_eq!(rf.reg_of(sl(2)), Some(R8));
+        assert_eq!(rf.dirty_reg_of(sl(1)), None);
+        assert_eq!(rf.dirty_reg_of(sl(2)), Some(R8));
+        assert!(!rf.holds_only(R8, sl(1)));
+        assert!(!rf.holds_only(R8, sl(2)));
+        assert_eq!(rf.dirty_residents(), vec![(R8, sl(2))]);
+        // Dropping one holder leaves the other, now alone in the register.
+        rf.invalidate(sl(1));
+        assert_eq!(rf.reg_of(sl(1)), None);
+        assert!(rf.holds_only(R8, sl(2)));
+        // The flush stores the copy only.
+        assert_eq!(rf.take_dirty_spills(), vec![(R8, sl(2))]);
+        assert!(rf.is_empty());
+    }
+
+    /// Evicting a shared register owes one store per dirty holder, and a
+    /// popped temporary among the holders is dropped without one.
+    #[test]
+    fn eviction_spills_every_dirty_holder() {
+        let mut rf = GpRegFile::new();
+        rf.bind(R8, sl(1), false);
+        rf.bind(R8, sl(2), true);
+        rf.bind(R8, sl(9), true);
+        rf.bind(R9, sl(3), true);
+        rf.bind(R10, sl(4), true);
+        rf.bind(GP::R11, sl(5), true);
+        // %9 is a temporary popped by the stack pointer: no store owed.
+        rf.free_above_sp(sl(9));
+        assert_eq!(rf.reg_of(sl(9)), None);
+        // The file is full; R8 (the oldest) is the victim, spilling %2 only.
+        let (reg, spills) = rf.alloc_reg(&[]);
+        assert_eq!(reg, R8);
+        assert_eq!(spills, vec![(R8, sl(2))]);
+        assert!(rf.is_free(R8));
+        assert_eq!(rf.reg_of(sl(1)), None);
+        // `evict_reg` does the same for a register an op is about to clobber.
+        assert_eq!(rf.evict_reg(R9), vec![(R9, sl(3))]);
+        assert!(rf.is_free(R9));
+    }
+
+    /// Rebinding a slot elsewhere removes it from its old register without
+    /// disturbing the register's other holders.
+    #[test]
+    fn rebind_moves_one_holder() {
+        let mut rf = GpRegFile::new();
+        rf.bind(R8, sl(1), false);
+        rf.bind(R8, sl(2), true);
+        rf.bind(R9, sl(2), true);
+        assert_eq!(rf.reg_of(sl(2)), Some(R9));
+        assert!(rf.holds_only(R8, sl(1)));
+        assert_eq!(rf.sync(sl(2)), Some(R9));
+        assert!(rf.dirty_residents().is_empty());
     }
 
     /// `sync` makes a resident's stack home current (returns its register) and
