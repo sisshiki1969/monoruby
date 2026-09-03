@@ -498,15 +498,28 @@ const OLD_OBJECT_FLOOR: usize = 16384;
 
 /// How many salvaged (all-dead) pages stay resident for reuse before the
 /// rest are handed back to the OS: `1/FREE_PAGE_RESERVE_FRACTION` of the
-/// pages in service, and never fewer than `FREE_PAGE_RESERVE_MIN`.
+/// pages in service, never fewer than `FREE_PAGE_RESERVE_MIN`, and never
+/// less than one collection's allocation budget (`gc_trigger_pages`).
 ///
 /// A page that empties out used to sit on `free_pages` forever, so a
 /// workload's *peak* heap stayed resident: lee's collector needed 22
 /// pages for its live set while the arena kept ~115 touched (30 MB RSS
-/// for 5.5 MB of objects). The reserve covers the growth between two
-/// collections (the trigger budget is `1/GC_HEAP_FRACTION` of the pages
-/// in service), so a steady-state heap reuses resident pages and only a
-/// heap that shrank pays the page faults of re-touching released ones.
+/// for 5.5 MB of objects). The reserve has to cover the growth between
+/// two collections, otherwise the mutator re-faults the pages it just
+/// released: what it allocates between collections is exactly
+/// `gc_trigger_pages`, so that is the floor. The fraction alone was only
+/// equal to it while the budget was `1/GC_HEAP_FRACTION` of the pages in
+/// service — once `PAGES_PER_GC_TRIGGER` became the binding term (a heap
+/// whose live set is small next to its allocation rate), the reserve fell
+/// to `FREE_PAGE_RESERVE_MIN` while the budget stayed at 32 pages, and
+/// every cycle handed back ~30 pages only to fault them in again. On a
+/// 20M-`Object.new` loop that was 282K page faults and 794 ms; with the
+/// budget as the floor, 5.4K faults and 456 ms.
+///
+/// The floor is bounded by the budget, not by the peak heap, so the
+/// original problem does not come back: a program keeps at most one
+/// collection's worth of pages resident (8 MB at
+/// `PAGES_PER_GC_TRIGGER`), and only if it actually salvaged that many.
 const FREE_PAGE_RESERVE_FRACTION: usize = 8;
 const FREE_PAGE_RESERVE_MIN: usize = 2;
 
@@ -1969,7 +1982,9 @@ impl<T: GCBox> Allocator<T> {
 
     /// The salvaged pages kept resident: see [`FREE_PAGE_RESERVE_FRACTION`].
     fn free_page_reserve(&self) -> usize {
-        (self.page_count() / FREE_PAGE_RESERVE_FRACTION).max(FREE_PAGE_RESERVE_MIN)
+        (self.page_count() / FREE_PAGE_RESERVE_FRACTION)
+            .max(FREE_PAGE_RESERVE_MIN)
+            .max(self.gc_trigger_pages() as usize)
     }
 
     /// Hand every salvaged page beyond the reserve back to the OS. The
