@@ -125,7 +125,7 @@ pub const HASH_DEAD_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(Bo
 /// `IdentKey`, a transparent wrapper, so in practice the two agree and
 /// generated code need not branch on the discriminant.
 pub fn hash_entries_layout() -> Option<rubymap::EntriesLayout> {
-    type S = std::collections::hash_map::RandomState;
+    type S = rubymap::RubyRandomState;
     let by_value = rubymap::entries_layout::<Option<Value>, Value, (), (), (), S>()?;
     let by_ident = rubymap::entries_layout::<Option<IdentKey>, Value, (), (), (), S>()?;
     (by_value == by_ident).then_some(by_value)

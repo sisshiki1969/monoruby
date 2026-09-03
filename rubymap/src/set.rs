@@ -9,7 +9,7 @@ mod tests;
 pub use self::iter::{Drain, IntoIter, Iter};
 pub use self::slice::Slice;
 
-use std::collections::hash_map::RandomState;
+use crate::hasher::RubyRandomState;
 
 use crate::util::try_simplify_range;
 use alloc::boxed::Box;
@@ -71,7 +71,7 @@ type Bucket<T> = super::Bucket<T, ()>;
 /// assert!(letters.contains(&'u', &mut (), &mut ()).unwrap());
 /// assert!(!letters.contains(&'y', &mut (), &mut ()).unwrap());
 /// ```
-pub struct RubySet<T, E = (), G = (), R = (), S = RandomState> {
+pub struct RubySet<T, E = (), G = (), R = (), S = RubyRandomState> {
     pub(crate) map: RubyMap<T, (), E, G, R, S>,
 }
 
@@ -977,7 +977,7 @@ where
     }
 }
 
-impl<T, E, G, R> RubySet<T, E, G, R, RandomState>
+impl<T, E, G, R> RubySet<T, E, G, R, RubyRandomState>
 where
     T: RubyEql<E, G, R> + RubyHash<E, G, R>,
 {

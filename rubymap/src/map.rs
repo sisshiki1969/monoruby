@@ -24,7 +24,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use ruby_traits::{RubyEql, RubyHash, RubySymEql, RubySymHash};
 
-use std::collections::hash_map::RandomState;
+use crate::hasher::RubyRandomState;
 
 use self::core::IndexMapCore;
 use crate::util::{third, try_simplify_range};
@@ -73,7 +73,7 @@ use crate::{Bucket, Entries, Equivalent, GetDisjointMutError, HashValue};
 /// assert_eq!(letters[&'u'], 1);
 /// assert_eq!(letters.get(&'y', &mut (), &mut ()).unwrap(), None);
 /// ```
-pub struct RubyMap<K, V, E = (), G = (), R = (), S = RandomState> {
+pub struct RubyMap<K, V, E = (), G = (), R = (), S = RubyRandomState> {
     pub(crate) core: IndexMapCore<K, V, E, G, R>,
     hash_builder: S,
 }
@@ -1635,7 +1635,7 @@ where
     }
 }
 
-impl<K, V, E, G, R> RubyMap<K, V, E, G, R, RandomState>
+impl<K, V, E, G, R> RubyMap<K, V, E, G, R, RubyRandomState>
 where
     K: RubyHash<E, G, R> + RubyEql<E, G, R>,
 {
