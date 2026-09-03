@@ -59,10 +59,10 @@
 //! ### Alternate Hashers
 //!
 //! [`IndexMap`] and [`RubySet`] have a default hasher type
-//! [`S = RandomState`][std::collections::hash_map::RandomState],
-//! just like the standard `HashMap` and `HashSet`, which is resistant to
-//! HashDoS attacks but not the most performant. Type aliases can make it easier
-//! to use alternate hashers:
+//! [`S = RubyRandomState`][crate::RubyRandomState]: a seeded,
+//! non-cryptographic mixer rather than the standard library's SipHash-1-3
+//! (see `hasher.rs` for why, and what the seed does and does not buy).
+//! Type aliases can make it easier to use alternate hashers:
 //!
 //! ### Rust Version
 //!
@@ -98,11 +98,13 @@ use alloc::vec::{self, Vec};
 
 #[macro_use]
 mod macros;
+mod hasher;
 mod util;
 
 pub mod map;
 pub mod set;
 
+pub use crate::hasher::{RubyHasher, RubyRandomState};
 pub use crate::map::RubyMap;
 pub use crate::set::RubySet;
 pub use ruby_traits::{Equivalent, RubyEql, RubyHash, RubySymEql, RubySymHash};
