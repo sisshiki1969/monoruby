@@ -3459,11 +3459,11 @@ fn string_match(
 /// position (CRuby strscan's default `fixed_anchor: false` semantics).
 /// A String pattern is literal bytes, as in CRuby's C strscan:
 /// `anchored` selects a prefix test versus a forward byte search. A
-/// Regexp pattern is searched as given — the Ruby side passes its
-/// `\A(?:…)`-wrapped form for the anchored scan family (see
-/// `RegexpInner::strscan_match` for the `onig_match` route this is
-/// meant to take once the regex crate exposes a reusable region).
-/// Returns
+/// Regexp pattern goes to `onig_match` at the scan position when
+/// `anchored` — no `\A(?:…)` wrapper regex is ever built — and to a
+/// forward `onig_search` otherwise; the registers land in one
+/// thread-local Onigmo region reused across calls, so a group-less hit
+/// costs no allocation at all. Returns
 /// - nil — no match;
 /// - an Integer — the byte end of a whole-match starting at offset 0
 ///   with no capture groups (the common lexer case — the value is a
@@ -3483,6 +3483,10 @@ fn string_strscan_match(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    thread_local! {
+        static STRSCAN_REGION: std::cell::RefCell<onigmo_regex::Region> =
+            std::cell::RefCell::new(onigmo_regex::Region::new());
+    }
     let byte_pos = match lfp.arg(1).coerce_to_int_i64(vm, globals)? {
         pos if pos >= 0 => pos as usize,
         _ => return Ok(Value::nil()),
@@ -3532,38 +3536,35 @@ fn string_strscan_match(
     let Some(sub) = given.get(byte_pos..) else {
         return Ok(Value::nil());
     };
-    // The engine sees only `sub`, so the caller's `\A(?:…)`-wrapped form
-    // anchors at the scan position. Onigmo's `onig_match` with a reused
-    // region (no wrapper regex, no region allocation per match) needs an
-    // `onigmo-regex` API taking a caller-owned `Region`; until the crate
-    // grows one this goes through `captures_from_pos`, which allocates
-    // its region per call.
-    let Some(caps) = re.captures_from_pos_no_save(sub, 0)? else {
-        return Ok(Value::nil());
-    };
-    if caps.len() == 1 {
-        // Group-less pattern: a single Fixnum carries the whole
-        // register set when the match starts at the scan position
-        // (always true for the anchored scan family).
-        let m = caps.get(0).unwrap();
-        if m.start() == 0 {
-            return Ok(Value::integer(m.end() as i64));
+    STRSCAN_REGION.with(|region| {
+        let mut region = region.borrow_mut();
+        if !re.strscan_match(sub, anchored, &mut region)? {
+            return Ok(Value::nil());
         }
-    }
-    let mut spans = Vec::with_capacity(caps.len() * 2);
-    for m in caps.iter() {
-        match m {
-            Some(m) => {
-                spans.push(Value::integer(m.start() as i64));
-                spans.push(Value::integer(m.end() as i64));
-            }
-            None => {
-                spans.push(Value::nil());
-                spans.push(Value::nil());
+        let n = region.len();
+        if n == 1 {
+            // Group-less pattern: a single Fixnum carries the whole
+            // register set when the match starts at the scan position
+            // (always true for the anchored scan family).
+            if let Some((0, e)) = region.pos(0) {
+                return Ok(Value::integer(e as i64));
             }
         }
-    }
-    Ok(Value::array_from_vec(spans))
+        let mut spans = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            match region.pos(i) {
+                Some((b, e)) => {
+                    spans.push(Value::integer(b as i64));
+                    spans.push(Value::integer(e as i64));
+                }
+                None => {
+                    spans.push(Value::nil());
+                    spans.push(Value::nil());
+                }
+            }
+        }
+        Ok(Value::array_from_vec(spans))
+    })
 }
 
 ///
