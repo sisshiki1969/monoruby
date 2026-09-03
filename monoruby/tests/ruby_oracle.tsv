@@ -490,6 +490,7 @@
 23f3838afb92bd57e15d229dd0d1deb0	"method"	defined?(__ENCODING__.name)
 23fb14c94b631d93c9694feb48994552	[RuntimeError, true]	class BlockRaiser\n              def self.raise_in_thread(*args, &bl
 23fb7df204a374180f0628ebb762f0dd	[[:deprecated, :experimental, :performance, :strict_unused_block], false, true, false, false, true, true, nil, false, false, false, true]	res = []\n            res << Warning.categories\n            res << W
+2409ce9d3bc696017834648d7c8c2579	[2, [1, 2], 0, [0, 0, 0], 8, [8, 8], [1, 2], [[1, 2], [1, 2]], [[1, 2], [1, 2]], FrozenError, [0, 0]]	class M\n              def initialize; @a = 0; @b = 0; @c = 0; end\n 
 24196e0cebd247d987469fb63b77ec33	:OVERRIDDEN	class Complex; def *(o); :OVERRIDDEN; end; end; Complex(1,2) * Complex(3,4)
 245e848f69575fb36810ea7f6796973c	TypeError	(GC.stat(7) rescue $!.class)
 246af9040a3d2f43e9ddf823ee30471c	true	(0x8000_0000_0000_0000 + 39) > (0x8000_0000_0000_0000 + 39 + 0.0)
@@ -1528,6 +1529,7 @@
 740f2927c51791b1cce95ad716cea114	[[], [[], :blk]]	class ZpBase\n          def q(*a) = a\n          def r(*a) = [a, block_gi
 7416b95f5e87edec12c271dfa849a210	[200, [:body, :ensure_start, :ensure]]	def baz\n              $x = []\n              $x << :body\n           
 74265315f293e83823e6e37edea00c74	[true, true, true, true, true, 1.0, 42, nil, nil]	srand(42)\n            a = rand\n            srand(42)\n            [\n
+7427c64af89bec062257a676328a3d4f	[603.0, 304.0, true, 302.5, 302.5, 606, 307, true, 304, 304, [4.0, 7]]	class F\n              def initialize(x, y); @x = x; @y = y; end\n   
 742cf7259eae88dd4512794b3c9d16ad	[:i, :j]	def m; [1].each { |i| j = i * 2; return local_variables.sort }; end; m
 7441660ef7a2d951150dad613bc4907b	[:x, :x=, :y, :y=]	$added = []\n        class Module\n          alias_method :orig_method_ad
 7483001417ab19fd0c97c04334cd3e4a	[-1.0, -0.5, 0.0, 0.5, 1.0]	def test\n          res = []\n          i = 0\n          lo  = -2.0\n      
@@ -2988,6 +2990,7 @@ e1c2cb8e9e01d860acf3a63296e8f6a3	[nil, nil]	s = "\\303".dup.force_encoding(Encod
 e1d0e1049ee5298bcdc5c96d04a37dd7	[false, false, true]	res = [$DEBUG, $-d]\n        $DEBUG = true\n        res << $-d\n        $D
 e1dc59a25b246ef8aaa68515e60ea4a0	true	Process.getrlimit(Process::RLIMIT_STACK).is_a?(Array)
 e1e049bcd24042f78171ca96d4da9c05	false	class Foo\n              def bar; end\n            end\n            \n\n
+e1f68fed705933ee21e8053af4092c30	[true, false, false, true, false, true, false, true, false, true, false, true, false, false, true, true, false, true, true, false, ArgumentError]	class P\n              def initialize(n); @n = n; end\n              
 e216ce1e2b8ed4cd8ceaebfdb111d6fc	"US-ASCII"	("abc %s".dup.force_encoding("US-ASCII") % "x").encoding.to_s
 e221d27f16787b87dfe9fecfc65c5962	[600.0, 150.0]	def call_block\n          yield\n        end\n        def d2(k)\n          
 e226e478267e4a855c4aa2949e8e83a5	30	def add(x, y); x + y; end\n            m = method(:add)\n            
@@ -3208,6 +3211,7 @@ f27aef0e47e3354ce496c90299f462ea	[["x\\ny\\nz\\n"], ["x\\n", "y\\n", "z\\n"], ["
 f2899713941ee3ed54e30d3b5b785abc	[1, true]	module MSx; end\n            SX = Struct.new(:a)\n            s = SX.
 f2e470589175775eee4819e2df92057b	true	v = "MONORUBY_TEST_VAL"\n            r = ENV.send(:[]=, "MONORUBY_EN
 f2f61ae8dbed2bff4eb6e1bb603b94d5	5	(..5).max
+f30aa4d203b608f35977d0b328b100ae	[2, 3, 4, 4, 5, 1, 2, 6, 5, 6, 106, "x", nil, 102, [:@a, :@never2]]	class D\n              def initialize; @n = 5; @m = 5; end\n         
 f3176371966e0240a645893d31e35731	[1, 2]	module M\n              def a; 1; end\n              def b; 2; end\n  
 f329ce2071115a197fe643cb17ed55d7	[]	S = Struct.new(:a, :b, :c)\n            \n\n            s = S.new(1, 2
 f3438f2eabc960c10ac335f28ee99149	[7, true]	def m\n              y = 7\n              binding\n            end\n   

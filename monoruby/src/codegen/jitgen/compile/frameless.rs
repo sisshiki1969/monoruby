@@ -188,43 +188,71 @@ pub(super) enum LeafValue {
 }
 
 ///
-/// A body that computes one value by folding operands into an accumulator,
-/// optionally stores it to an ivar, and returns it.
+/// One step of a frame-free leaf body, applied in order to a single
+/// accumulator.
 ///
-/// `@count += 1`, `@a * 2`, `@sum + x`, `@a` — the small readers, writers
-/// and counters that make up most of the leaf methods in object-heavy Ruby,
-/// and today cost a full frame each.
+/// The accumulator model is what keeps the expansion to two registers and
+/// no stack slots, and it is not a restriction bytecodegen fights: these
+/// bodies are single expressions, so their bytecode already threads one
+/// value through one temporary.
 ///
-/// The chain is deliberately *left-linear*: every step's right operand is a
-/// leaf. That keeps the expansion to two registers, and it is the shape
-/// bytecodegen produces for these expressions anyway.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum LeafOp {
+    /// `acc = value`. Needs no guard — every [`LeafValue`] is something the
+    /// caller can name outright.
+    Load(LeafValue),
+    /// `acc = acc <kind> operand`, fixnum arithmetic. Guards both operands
+    /// and, for `Div`, the zero divisor.
+    Bin(BinOpK, LeafValue),
+    /// `acc = acc <kind> operand`, fixnum comparison. Guards both operands;
+    /// the accumulator becomes a bool.
+    Cmp(CmpKind, LeafValue),
+    /// `@name = acc`.
+    Store(IdentId),
+}
+
+impl LeafOp {
+    /// Whether this op can side-exit. The ordering rule is stated in terms
+    /// of these: none may follow a [`LeafOp::Store`].
+    fn guards(&self) -> bool {
+        matches!(self, LeafOp::Bin(..) | LeafOp::Cmp(..))
+    }
+}
+
+///
+/// A body that computes one value through an accumulator, storing to ivars
+/// along the way, and returns it.
+///
+/// `@count += 1`, `@a * 2`, `@sum + x`, `@a > 0`, `@a`, `@n = 1; @m = 2` —
+/// the small readers, writers, counters and predicates that make up most of
+/// the leaf methods in object-heavy Ruby, and today cost a full frame each.
 ///
 pub(super) struct LeafBody {
-    /// The value the accumulator starts at.
-    pub base: LeafValue,
-    /// Folded in left to right: `acc = acc <kind> operand`.
-    pub steps: Vec<(BinOpK, LeafValue)>,
-    /// When set, the accumulator is stored to this ivar before returning.
-    pub store: Option<IdentId>,
+    /// Applied in order; the accumulator's final value is returned.
+    pub ops: Vec<LeafOp>,
 }
 
-/// The longest accumulator chain that is still worth expanding. Each step
-/// is two guards plus an arithmetic instruction in the caller, repeated at
+/// The most ops a body may have and still be expanded. Each guarding op is
+/// two guards plus an arithmetic instruction in the caller, repeated at
 /// every site that calls this method.
-const MAX_STEPS: usize = 3;
+const MAX_OPS: usize = 8;
 
-/// What a callee slot holds, as an accumulator chain under construction.
+/// What a callee slot holds: the op sequence that computes it.
 #[derive(Clone)]
-struct Chain {
-    base: LeafValue,
-    steps: Vec<(BinOpK, LeafValue)>,
-}
+struct Chain(Vec<LeafOp>);
 
 impl Chain {
     fn leaf(base: LeafValue) -> Self {
-        Self {
-            base,
-            steps: vec![],
+        Self(vec![LeafOp::Load(base)])
+    }
+
+    /// The value this chain is, when it is a bare [`LeafValue`] — the only
+    /// form admitted as an operand, which is what keeps the accumulator
+    /// chain left-linear and the register need at two.
+    fn as_value(&self) -> Option<LeafValue> {
+        match self.0[..] {
+            [LeafOp::Load(v)] => Some(v),
+            _ => None,
         }
     }
 }
@@ -237,14 +265,21 @@ impl Chain {
 /// and an instruction set with no call, no `yield`, nothing that raises and
 /// nothing that appears in a backtrace.
 ///
-/// # Why the store must come last
+/// # Why no guard may follow a store
 ///
 /// Every guard this body needs — the operand class checks, the overflow
-/// check, the frozen check — side-exits to the *call* instruction, and the
-/// interpreter then performs the whole call itself. That is only sound
-/// while nothing has happened yet, so the one effect a body may have has to
-/// come after every exit. Requiring a single `StoreIvar` immediately before
-/// the `Ret` buys that outright; anything else is declined.
+/// check, the zero-divisor check, the frozen check — side-exits to the
+/// *call* instruction, and the interpreter then performs the whole call
+/// itself. That is only sound while **nothing has happened yet**, so the
+/// body's effects have to come after every exit.
+///
+/// That is the rule, and it is weaker than "one store, immediately before
+/// the `Ret`", which is what the first version required. A body may store
+/// as many times as it likes (`def reset = (@n = 0; @m = 0)`) as long as no
+/// guarding op follows the first store; the hoisted frozen guard covers
+/// every one of them, since nothing between them can call out and freeze
+/// the receiver. What is declined is a guard *after* an effect — that exit
+/// could no longer hand the call back, because part of it already ran.
 ///
 /// `Div` needs no special treatment: a zero divisor is *already* a deopt in
 /// both backends (x86-64 stamps `_divide_by_zero` and jumps to the exit,
@@ -281,22 +316,23 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
         );
     }
 
-    let mut store_to: Option<(IdentId, SlotId)> = None;
+    // Stores are the body's effects, so they are emitted where the body puts
+    // them rather than folded into a slot's chain. `ops` is what has been
+    // committed to the accumulator so far; a slot's chain is spliced onto it
+    // when the slot is finally used.
+    let mut ops: Vec<LeafOp> = vec![];
     let mut ret: Option<SlotId> = None;
     for idx in begin..=end {
-        // A store is the body's one effect, so nothing that can side-exit
-        // may follow it. `Ret` is all that is allowed to.
-        let after_store = store_to.is_some();
         match TraceIr::from_pc(iseq.get_pc(idx), store) {
-            TraceIr::InitMethod(..) if !after_store => {}
-            TraceIr::FrozenLiteral(dst, v) | TraceIr::Literal(dst, v) if !after_store => {
+            TraceIr::InitMethod(..) => {}
+            TraceIr::FrozenLiteral(dst, v) | TraceIr::Literal(dst, v) => {
                 v.try_fixnum()?;
                 slots.insert(dst, Chain::leaf(LeafValue::Fixnum(v)));
             }
-            TraceIr::LoadIvar(dst, name, _) if !after_store => {
+            TraceIr::LoadIvar(dst, name, _) => {
                 slots.insert(dst, Chain::leaf(LeafValue::SelfIvar(name)));
             }
-            TraceIr::Mov(dst, src) if !after_store => {
+            TraceIr::Mov(dst, src) => {
                 let chain = slots.get(&src)?.clone();
                 slots.insert(dst, chain);
             }
@@ -305,31 +341,40 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
                 dst: Some(dst),
                 lhs,
                 rhs,
-                ..
-            } if !after_store => {
+                ic,
+                polymorphic,
+            } => {
                 if !matches!(
                     kind,
                     BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div
                 ) {
                     return None;
                 }
-                let lhs = slots.get(&lhs)?.clone();
-                let rhs = slots.get(&rhs)?;
-                // Left-linear only: a nested right operand would need a
-                // third register and a spill slot to evaluate.
-                if !rhs.steps.is_empty() {
-                    return None;
-                }
-                let operand = rhs.base;
-                if lhs.steps.len() >= MAX_STEPS {
-                    return None;
-                }
-                let mut chain = lhs;
-                chain.steps.push((kind, operand));
+                saw_fixnums(ic, polymorphic)?;
+                let chain = extend(&slots, lhs, rhs, LeafOp::Bin(kind, LeafValue::Param(0)))?;
                 slots.insert(dst, chain);
             }
-            TraceIr::StoreIvar(src, name, _) if !after_store => {
-                store_to = Some((name, src));
+            TraceIr::BinCmp {
+                kind,
+                dst: Some(dst),
+                lhs,
+                rhs,
+                ic,
+                polymorphic,
+            } => {
+                saw_fixnums(ic, polymorphic)?;
+                let chain = extend(&slots, lhs, rhs, LeafOp::Cmp(kind, LeafValue::Param(0)))?;
+                slots.insert(dst, chain);
+            }
+            TraceIr::StoreIvar(src, name, _) => {
+                // The stored value's chain is committed here, so its guards
+                // land ahead of this store — and of every later one.
+                let chain = slots.get(&src)?.clone();
+                commit(&mut ops, chain)?;
+                ops.push(LeafOp::Store(name));
+                // The slot now *is* the accumulator: a later use of it (the
+                // `ret` of `@n += 1`, say) must not recompute the chain.
+                slots.insert(src, Chain(vec![]));
             }
             // A basic block ends at its terminator, so this runs last.
             TraceIr::Ret(slot) => ret = Some(slot),
@@ -337,22 +382,94 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
         }
     }
 
-    let ret = ret?;
-    // When the body stores, it must return the very value it stored — the
-    // expansion computes the accumulator once.
-    if let Some((_, src)) = store_to
-        && src != ret
+    let chain = slots.remove(&ret?)?;
+    commit(&mut ops, chain)?;
+    // A body that only hands back a parameter is `ISeqHint`'s business.
+    if let [LeafOp::Load(LeafValue::Param(_))] = ops[..] {
+        return None;
+    }
+    if ops.len() > MAX_OPS {
+        return None;
+    }
+    // The rule: nothing that can side-exit may follow an effect.
+    let first_store = ops.iter().position(|op| matches!(op, LeafOp::Store(_)));
+    if let Some(i) = first_store
+        && ops[i..].iter().any(LeafOp::guards)
     {
         return None;
     }
-    let chain = slots.remove(&ret)?;
-    // A body that only hands back a parameter is `ISeqHint`'s business.
-    if chain.steps.is_empty() && store_to.is_none() && matches!(chain.base, LeafValue::Param(_)) {
+    Some(LeafBody { ops })
+}
+
+///
+/// Require that the VM has actually seen this operation on two fixnums.
+///
+/// The expansion is *all* fixnum: it guards both operands as `Integer` and
+/// lowers to the integer register forms. Taking it at a site the VM has only
+/// ever run on Floats does not produce a wrong answer — the guard exits and
+/// the interpreter performs the call — but it replaces a working specialized
+/// call with a guaranteed deopt on every execution, which is worse than not
+/// expanding at all. Float-heavy code (`app_aobench.rb`'s vector methods) is
+/// full of exactly these small bodies, so the inline cache is the difference
+/// between a win and a regression there.
+///
+/// An empty cache means the VM never reached the instruction, which is no
+/// evidence either; a polymorphic site means it saw more than one operand
+/// class, so a fixnum-only expansion would exit on the others.
+///
+fn saw_fixnums(ic: Option<(ClassId, ClassId)>, polymorphic: bool) -> Option<()> {
+    if polymorphic {
         return None;
     }
-    Some(LeafBody {
-        base: chain.base,
-        steps: chain.steps,
-        store: store_to.map(|(name, _)| name),
-    })
+    match ic {
+        Some((INTEGER_CLASS, INTEGER_CLASS)) => Some(()),
+        _ => None,
+    }
+}
+
+///
+/// Splice `chain` onto the ops committed so far.
+///
+/// An empty chain means the slot already *is* the accumulator (it was just
+/// stored), so there is nothing to recompute. Otherwise the chain must start
+/// by loading the accumulator afresh — a chain that continued from some
+/// other slot's value would need that value still to be in the accumulator,
+/// which only the empty case guarantees.
+///
+fn commit(ops: &mut Vec<LeafOp>, chain: Chain) -> Option<()> {
+    if chain.0.is_empty() {
+        return Some(());
+    }
+    if !matches!(chain.0[0], LeafOp::Load(_)) {
+        return None;
+    }
+    ops.extend(chain.0);
+    Some(())
+}
+
+///
+/// Build the chain for `lhs <op> rhs`, where `op`'s operand field is a
+/// placeholder to be filled with `rhs`'s value.
+///
+/// The right operand must be a bare [`LeafValue`]: a nested one would need a
+/// third register and a slot to evaluate into, and bytecodegen does not
+/// produce it for these bodies anyway.
+///
+fn extend(
+    slots: &HashMap<SlotId, Chain>,
+    lhs: SlotId,
+    rhs: SlotId,
+    op: LeafOp,
+) -> Option<Chain> {
+    let operand = slots.get(&rhs)?.as_value()?;
+    let mut chain = slots.get(&lhs)?.clone();
+    if chain.0.is_empty() {
+        return None;
+    }
+    chain.0.push(match op {
+        LeafOp::Bin(kind, _) => LeafOp::Bin(kind, operand),
+        LeafOp::Cmp(kind, _) => LeafOp::Cmp(kind, operand),
+        _ => return None,
+    });
+    Some(chain)
 }
