@@ -377,7 +377,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -438,7 +438,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -794,7 +794,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 [[package]]
 name = "monoasm"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git?branch=claude%2Fmovups#d9f2d07f333c8f89c29881bfff1ad0961889553f"
+source = "git+https://github.com/sisshiki1969/monoasm.git?branch=aarch#e577fb19a52a44af23caa55e02fc8568f52b7ef5"
 dependencies = [
  "chrono",
  "libc",
@@ -808,7 +808,7 @@ dependencies = [
 [[package]]
 name = "monoasm_macro"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/monoasm.git?branch=claude%2Fmovups#d9f2d07f333c8f89c29881bfff1ad0961889553f"
+source = "git+https://github.com/sisshiki1969/monoasm.git?branch=aarch#e577fb19a52a44af23caa55e02fc8568f52b7ef5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1283,7 +1283,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1480,7 +1480,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
