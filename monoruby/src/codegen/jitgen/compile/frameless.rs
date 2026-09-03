@@ -1,10 +1,12 @@
-//! Frame-free expansion of the constructor idiom.
+//! Frame-free expansion of the small-body idioms.
 //!
-//! `def initialize(a, b) = (@a = a; @b = b)` is the single most common
-//! method body in object-heavy Ruby, and today it costs a full method
-//! frame to run three `mov`s. This module recognises that body and lets
-//! [`compile_method_call`](JitContext::compile_method_call) emit the
-//! stores straight into the caller, with no frame pushed at all.
+//! `def initialize(a, b) = (@a = a; @b = b)` and `def inc = @count += 1`
+//! are the most common method bodies in object-heavy Ruby, and today each
+//! costs a full method frame to run a handful of `mov`s. This module
+//! recognises them — [`ivar_store_body`] the constructor, [`leaf_expr_body`]
+//! the accessor/counter — and lets
+//! [`compile_method_call`](JitContext::compile_method_call) emit the body
+//! straight into the caller, with no frame pushed at all.
 //!
 //! # How this differs from the other two folds
 //!
@@ -20,15 +22,19 @@
 //! a frozen guard, and a deopt is fine because it rebuilds from the
 //! *caller's* frame state, which is the one that exists. What the callee
 //! must not do is *need a frame of its own*: no call or `yield` (a
-//! callee's callee walks `cfp` and would find the caller's frame), nothing
-//! that can raise or appear in a backtrace, no `binding`, no `super`, no
-//! access to an `outer` frame.
+//! callee's callee walks `cfp` and would find the caller's frame), no
+//! `binding`, no `super`, no access to an `outer` frame.
 //!
-//! Restricting the body to `StoreIvar` from a parameter slot, plus the
-//! `Ret`, buys all of that at once: every instruction is a move between
-//! things the caller already holds. The frozen guard is the one side exit,
-//! and it is hoisted ahead of the stores so the expansion is all-or-nothing
-//! (see [`ivar_store_body`] for why that matters).
+//! Raising is not on that list either, as long as the raise is reached by a
+//! *guard*. `x / 0` deopts to the call instruction in both backends, and
+//! the interpreter then performs the whole call — building the real frame
+//! and raising `ZeroDivisionError` from it, with the backtrace that frame
+//! gives it. What the guards buy is not "cannot raise" but **nothing has
+//! happened yet**: the expansion is all-or-nothing, so an exit can hand the
+//! entire call back. Both recognisers therefore hoist every guard ahead of
+//! every store — the frozen guard in [`ivar_store_body`], and in
+//! [`leaf_expr_body`] the single store is required to be the last
+//! instruction before the `Ret`.
 
 use super::*;
 use crate::bytecodegen::BinOpK;
@@ -240,8 +246,13 @@ impl Chain {
 /// come after every exit. Requiring a single `StoreIvar` immediately before
 /// the `Ret` buys that outright; anything else is declined.
 ///
-/// `Div` and `Rem` are excluded for the same reason in reverse: they raise
-/// `ZeroDivisionError`, which needs a frame to raise *from*.
+/// `Div` needs no special treatment: a zero divisor is *already* a deopt in
+/// both backends (x86-64 stamps `_divide_by_zero` and jumps to the exit,
+/// aarch64 does `cbz x(r), deopt`), so it lands on the call instruction like
+/// every other guard and the interpreter raises `ZeroDivisionError` from the
+/// real frame it then builds — backtrace and all. `Rem` is the one exclusion,
+/// and for a lowering reason rather than a semantic one: `BinOpK::Rem` is
+/// `unreachable!()` in the register form of the integer binop.
 ///
 pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody> {
     let iseq = &store[iseq_id];
@@ -296,7 +307,10 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
                 rhs,
                 ..
             } if !after_store => {
-                if !matches!(kind, BinOpK::Add | BinOpK::Sub | BinOpK::Mul) {
+                if !matches!(
+                    kind,
+                    BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div
+                ) {
                     return None;
                 }
                 let lhs = slots.get(&lhs)?.clone();

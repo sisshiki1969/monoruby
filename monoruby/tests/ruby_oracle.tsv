@@ -335,6 +335,7 @@
 1821c10c6ad04de6330183a77e1e0216	["Binding", 41, 42, 41]	x = 41\n            b = binding\n            b2 = b.dup\n            b
 182caa69fa07777b5c852ab6d6cd523b	[:@b]	class Foo\n              def initialize\n                @a = 1\n     
 1838df795bd9fd01b3bfa47259229043	1.0	class Float; def <=>(o) = (o.to_f - to_f); end\n[3.0, 1.0, 2.0].max
+183dd8bff258c6f71986a8a730a5a952	[1, 3, 4, 106, 107, 1, 2, 1, 106]	class D\n              def initialize; @n = 5; @m = 5; end\n         
 185001d9a1904b3f91e65a1932e2bf0b	[11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11]	def g(a) = yield(a * 2)\n        def f(...) = g(...)\n        \n\n        $
 18507817da0f9cab02fe974f7701f74a	[[3.0, 2.0, 1.0], 3.0, 1.0, [3.0, 1.0], [1.7976931348623157e+308, 1.0]]	class Float; def <=>(o) = (o.to_f - to_f); end\n        [[3.0, 1.0, 2.0]
 186a15eac97b7392435d31cc9d7e59de	70	class Coercible\n              def to_proc\n                proc { |x
@@ -786,6 +787,7 @@
 3c317b41d6a90f7b882850a676d924f0	[40, 36, 39]	def __f(x)\n          \n        a = x\n        b = a\n        a += 1\n      
 3c3e9df720bcfc9e16e5388ec370e1a6	3.15	class Foo; def to_int; 2; end; end\n            3.14159.ceil(Foo.new
 3c69555cfc9c304438892b113e9bb012	[[:@@inherited, :@@own], [:@@own]]	parent = Class.new\n            parent.class_variable_set(:@@inherit
+3c6e88bd378792f73dc8dc3eec400a99	[33, 14, 50, -4, -4, ZeroDivisionError, "divided by 0", true]	class Q\n              def initialize(n); @n = n; end\n              
 3c7f081b962e4c7272b51d99d568feb4	["outer", "outer", "outer", "outer", "nil"]	def brk_while(log)\n          outer = StandardError.new "outer"\n        
 3c8c62dfbc6ab8e4b391463cee4bdbb0	[true, true]	require "io/wait"\n            [IO.instance_method(:wait_readable).i
 3c8d308b1dc06f94ef88b63745ff08be	[false, true, [:a, :b], nil]	t = Thread.new {}.join\n            t.thread_variable_set(:a, 1)\n   
@@ -1614,6 +1616,7 @@
 7bf72e6eb4c2c593bd81eb7b98dcafb0	:OVERRIDDEN	class Integer; def <=>(o); :OVERRIDDEN; end; end; 1 <=> 2
 7bfe1905c8cfcd84d8d0ad738c459253	[1, 2, 3, 4, 1, 2]	def f(x,y,a:100,b:200,c:300,d:400)\n              [a,b,c,d,x,y]\n    
 7c1f60d60806a84dcf3a11a88bdef692	TypeError	("a" =~ "b" rescue $!.class)
+7c1f7443b2cfe560bb72a1a104c6e345	[33, 14, 50, -4, -4, ZeroDivisionError, "divided by 0", "'Integer#/'"]	class Q\n              def initialize(n); @n = n; end\n              
 7c28dee19aa27309293f956968134d84	"HELLOd"	s = "hello world"; s.bytesplice(0...-1, "HELLO"); s
 7c3a942bb1335abaf415dc95e59e5dfd	[0, 1, 2, 3, 4, 5, "break:5", "done: main"]	def bar(&b)\n      10.times &b\n      $i << "done: bar"\n    end\n\n    def foo(
 7c486608085102bd6bffa726334867ac	[true, true, true, "warned", [1, 2]]	res = []\n        f = -> *a { a.last }\n        res << f.ruby2_keywords.e

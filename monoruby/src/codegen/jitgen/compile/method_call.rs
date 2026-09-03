@@ -1311,7 +1311,9 @@ impl<'a> JitContext<'a> {
     /// including any exception, from a real frame. That is sound only
     /// because nothing has happened yet when a guard fires: the recogniser
     /// admits a single `StoreIvar` and only as the last thing before the
-    /// `Ret`, so every exit precedes the one effect.
+    /// `Ret`, so every exit precedes the one effect. A zero divisor is one
+    /// of those exits, so `x / 0` raises `ZeroDivisionError` from the frame
+    /// the interpreter builds, with the backtrace that frame gives it.
     ///
     fn expand_leaf_body(
         &mut self,
@@ -3518,9 +3520,8 @@ mod tests {
     /// Shapes the recogniser must decline, each for its own reason: a
     /// conditional store (a guard would have to prove something about a
     /// path that stores nothing), a body that calls, one that stores twice,
-    /// one whose store is not last, a division (it can raise
-    /// `ZeroDivisionError`, which needs a frame), and a body reading a
-    /// second object's ivar.
+    /// one whose store is not last, a `%` (`BinOpK::Rem` has no register
+    /// form to lower to), and a body reading a second object's ivar.
     #[test]
     fn frameless_leaf_bodies_decline() {
         run_test(
@@ -3532,16 +3533,47 @@ mod tests {
               def helper; 1; end
               def two; @n += 1; @m += 1; end
               def early; @n = 1; @m + 1; end
-              def div(x); @n / x; end
+              def rem(x); @n % x; end
               def other(o); @n + o.n; end
               attr_reader :n, :m
             end
             d = D.new
             res = []
-            100.times { d.cond(1); d.calls; d.two; d.early; d.div(1); d.other(d) }
+            100.times { d.cond(1); d.calls; d.two; d.early; d.rem(3); d.other(d) }
             res << d.cond(-1) << d.cond(3) << d.calls << d.two << d.early
-            res << d.div(2) << d.other(d) << d.n << d.m
-            res << (begin; d.div(0); rescue ZeroDivisionError => e; e.class; end)
+            res << d.rem(4) << d.other(d) << d.n << d.m
+            res
+            "#,
+        );
+    }
+
+    /// A zero divisor is a guard like any other: it exits to the call
+    /// instruction, and the interpreter performs the whole call — so the
+    /// `ZeroDivisionError` is raised from the frame it builds, and carries
+    /// that frame's backtrace. The frame the expansion skipped has to
+    /// appear in it, which is the whole point.
+    #[test]
+    fn frameless_leaf_bodies_divide() {
+        run_test(
+            r#"
+            class Q
+              def initialize(n); @n = n; end
+              def div(x); @n / x; end
+              def half; @n / 2; end
+            end
+            q = Q.new(100)
+            res = []
+            200.times { q.div(3); q.half }
+            res << q.div(3) << q.div(7) << q.half
+            # floor division, not truncation
+            res << Q.new(-7).div(2) << Q.new(7).div(-2)
+            e = (begin; q.div(0); rescue ZeroDivisionError => x; x; end)
+            res << e.class << e.message
+            # The frame the expansion skipped must be in the backtrace.
+            # Not `backtrace.first`: CRuby also lists the `Integer#/`
+            # builtin frame above it, which monoruby does not report for any
+            # builtin, expanded or not.
+            res << e.backtrace.any? { |l| l.include?("Q#div") }
             res
             "#,
         );
