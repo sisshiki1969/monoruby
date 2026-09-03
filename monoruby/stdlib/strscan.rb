@@ -268,14 +268,11 @@ class StringScanner
     matched.to_s
   end
 
-  # `\A`-anchored counterparts of caller Regexp patterns, built once per
-  # distinct pattern instead of on every scan; identity-keyed (a regex
-  # literal is the same object on every evaluation, so a lexer's fixed
-  # pattern set hits after the first scan). String patterns never come
-  # here: the primitive treats them as literal bytes (CRuby's C strscan
-  # does too), and only the MatchData fallback needs their escaped
-  # Regexp forms. All caches are size-capped so callers that generate
-  # patterns dynamically cannot grow them without bound.
+  # `\A`-anchored counterparts of caller patterns for the MatchData
+  # fallback path only (the primitive anchors natively), built once per
+  # distinct pattern; identity-keyed for Regexps, value-keyed via the
+  # escaped form for Strings. All caches are size-capped so callers that
+  # generate patterns dynamically cannot grow them without bound.
   ANCHORED_RE = {}.compare_by_identity
   ANCHORED_STR = {}
   PLAIN_STR = {}
@@ -327,13 +324,12 @@ class StringScanner
   #
   # `__strscan_match` matches the byte suffix in place (a group-less hit
   # is a bare Fixnum) and answers `false` only for a subject it cannot
-  # view in place, which takes the MatchData fallback. The engine sees
-  # only the suffix, so the cached `\A(?:…)` form of a Regexp pattern
-  # anchors at the scan position; a String pattern is a literal prefix.
+  # view in place, which takes the MatchData fallback. The primitive
+  # anchors natively at the scan position (`onig_match` on the suffix);
+  # a String pattern is a literal prefix.
   def _match_len_at_pos(pattern, advance)
     @prev_pos = @pos
-    probe = pattern.is_a?(String) ? pattern : _anchored(pattern)
-    spans = @str.__strscan_match(probe, @pos, true)
+    spans = @str.__strscan_match(pattern, @pos, true)
     return _fallback_at_pos(pattern, advance) if false == spans
     @match_md = nil
     @match_spans = spans

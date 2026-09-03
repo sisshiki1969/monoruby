@@ -557,29 +557,24 @@ scanner が region を持ち、`onig_match`（scan 位置での 1 回マッチ�
    ついでに `getch` の多バイト文字対応と `StringScanner::Error` を追加。
    **性能はほぼ中立**（`skip` ヒット 246 → 248 ns、graphql ±0）— Ruby 側の削減分は
    ノイズに埋もれ、コストは Rust/Onigmo 側にあることが確認できた。
-2. **`onigmo-regex` に region 再利用 API を足す**（プロトタイプ、未マージ）:
+2. **`onigmo-regex` に region 再利用 API を足す**（crate 側マージ済み、monoruby 側も適用）:
    `Regex::match_at_with_region(heystack, at, &mut Region)`（`onig_match`）と
    `Regex::search_with_region`（`onig_search`）、`Region::new` を pub に。monoruby 側は
    thread-local の `Region` を 1 つ持ち、Regexp パターンを *そのまま*（ラップせず）
-   `onig_match` で scan 位置にアンカーする。Ruby 側は `_anchored` を fallback 専用に
-   するだけ。
+   `onig_match` で scan 位置にアンカーする。`\A(?:…)` のラップ Regexp も、その Hash
+   キャッシュ引きも、マッチごとの region 確保・解放も消える。Ruby 側の変更は
+   `_anchored` を fallback 専用にするだけで、`StringScanner` は Ruby のまま。
 
    | マイクロ（ns/op） | 従来 | 1 | 2 | YJIT |
    |---|---:|---:|---:|---:|
-   | `skip(/ident/)` ヒット | 246 | 248 | 126 | 158 |
-   | `skip(/ident/)` ミス | 160 | 157 | 86 | 151 |
-   | `scan(/ident/)` ヒット | 346 | 346 | 233 | 237 |
-   | `skip(/-?(…)(\.[0-9]+)?…/)` + `s[1]`（2 群） | 440 | 438 | 301 | 193 |
-   | lexer ループ（1 回、ms） | 6.2 | 6.1 | 3.5 | 2.9 |
+   | `skip(/ident/)` ヒット | 246 | 234 | 127 | 158 |
+   | `skip(/ident/)` ミス | 160 | 147 | 83 | 151 |
+   | `scan(/ident/)` ヒット | 346 | 362 | 222 | 237 |
+   | `skip(/-?(…)(\.[0-9]+)?…/)` + `s[1]`（2 群） | 440 | 430 | 301 | 193 |
+   | lexer ループ（1 回、ms） | 6.2 | 5.8 | 3.7 | 2.9 |
 
-   graphql（交互 3 ラウンドの中央値）: 従来 54.8 / 54.6 / 54.6 ms → **2 で 41.8 / 41.8 / 42.7 ms
-   （−23 %）**、YJIT 31 ms。
-
-段階 2 は crate 側の変更（`sisshiki1969/onigmo-regex`）を先に取り込む必要があり、
-このセッションからは push できないので、パッチ 2 本（crate 側 `onigmo-regex-region-api.patch`
-と monoruby 側の差し替え `monoruby-strscan-followup-onig-match.patch`、どちらも段階 1 の
-上に当たる）を別途渡した。適用手順: crate に当てて push → monoruby で
-`cargo update -p onigmo-regex` → monoruby 側パッチを当てる → `cargo test --test strscan`。
+   graphql（交互 3 ラウンドの中央値）: 段階 1 まで（`479b011`）53.3 / 55.4 / 53.4 ms →
+   **段階 2 で 40.9 / 40.4 / 41.3 ms（−24 %）**、YJIT 31 ms。
 
 残る差（群あり 301 vs 193 ns）は群オフセットを Ruby の Array で返して `[]` を Ruby で
 引く分。scanner 側に region を持たせる（= Rust オブジェクト化）までやれば埋まるが、

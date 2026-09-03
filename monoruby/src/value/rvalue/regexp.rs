@@ -1440,6 +1440,27 @@ impl RegexpInner {
             .map_err(|err| MonorubyErr::regexerr(format!("Capture failed. {:?}", err)))
     }
 
+    /// `StringScanner` primitive: match `sub` (the byte suffix at the scan
+    /// position, already a valid engine view) either anchored at its start
+    /// (`onig_match`) or as a forward search (`onig_search`), recording the
+    /// registers into the caller's reusable `region`. Returns whether it
+    /// matched; the caller reads the offsets (relative to `sub`) from the
+    /// region. Never touches `$~`.
+    pub(crate) fn strscan_match(
+        &self,
+        sub: &str,
+        anchored: bool,
+        region: &mut onigmo_regex::Region,
+    ) -> Result<bool> {
+        let r = if anchored {
+            self.regex.match_at_with_region(sub.as_bytes(), 0, region)
+        } else {
+            self.regex.search_with_region(sub.as_bytes(), 0, region)
+        };
+        r.map(|r| r.is_some())
+            .map_err(|err| MonorubyErr::regexerr(format!("Capture failed. {:?}", err)))
+    }
+
     /// Like `match_one` but returns only a boolean and does NOT set `$~`.
     pub(crate) fn match_pred(
         re: &RegexpInner,
