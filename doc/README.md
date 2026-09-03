@@ -78,6 +78,7 @@ Diagrams referenced by the above: [`fiber_state_diagram.svg`](fiber_state_diagra
 |---|---|---|---|
 | [`ruby_spec_skip_tags.md`](ruby_spec_skip_tags.md) | JA | reference | How the ruby/spec suite avoids hangs, and the audit that cut a coarse file-level skip list down to the handful that genuinely cannot run. |
 | [`optcarrot_opt_profile.md`](optcarrot_opt_profile.md) | JA | design record | Where `bin/optcarrot --opt` spends its time, measured with `perf` and `--features profile`, and the optimizations that came out of it. |
+| [`yjit_bench_slow_investigation_2026-09.md`](yjit_bench_slow_investigation_2026-09.md) | JA | design record | Why activerecord / erubi / rack / graphql run at half of CRuby+YJIT: steady-state `perf` breakdowns, deopt-log and PMC statistics, microbenchmarks isolating each runtime cost (String-keyed Hash, GC roots, arg-class-keyed PMC, StringScanner, exceptions), and a ranked plan. |
 
 ## Plans and history
 
