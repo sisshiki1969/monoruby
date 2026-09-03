@@ -455,3 +455,52 @@ FFI: `fiddle|ffi_call|sqlite|classify_argument|libffi`）。
 このコンテナには `perf` が無いので `apt-get install linux-tools-generic` で入れ、カーネル版が
 違うため `/usr/lib/linux-tools/<ver>/perf` を直接叩いた（`perf_event_paranoid = 2` でも
 `-e cpu-clock` は採れる）。
+
+## 8. 実施した対策（2026-09-03、コスト順）
+
+§6 の案のうち実装コストの低いものから順に入れた。効果は同じ計測機で baseline
+（`750d04f`）と新ビルドを交互に 3 ラウンド走らせた中央値の最小値で比較
+（`MAX_TIME=30`、単発計測は ±10 % 揺れるので 1 回の差は信用しない）。
+
+| # | 施策 | 変更箇所 | マイクロベンチ | ベンチへの効果 |
+|---|---|---|---|---|
+| 1 | GC トリガーの下限を 8 → 32 ページ（≈ 13 万 RValue、8 MB） | `alloc.rs::PAGES_PER_GC_TRIGGER` | — | 下表 |
+| 2 | 汎用 `[]=`（VM と JIT の多相残余）に Hash の直接経路 | `runtime::set_index` | — | 下表 |
+| 3 | `"lit".freeze` を専用命令 `StringFreeze`（opcode 8）に。`String#freeze` を basic-op 表に追加し、未再定義ならインターン済み frozen リテラルを返す（CRuby の `opt_str_freeze`）。JIT は bop 依存を記録して plain literal load、再定義済みなら VM ヘルパが chilled コピーを作って再定義された `freeze` を呼ぶ | bytecodegen `gen_method_call`、`runtime::string_freeze_literal`、VM 両アーキ、TraceIR/JIT | `'abc'.freeze` 67.6 → 9.8 ns（YJIT 26）、`buf << 'lit'.freeze` 73 → 15.9 ns（YJIT 21） | pragma なしのコードのみ |
+| 4 | 引数クラスだけが変わる多相二項演算サイト（`children << node`）に、受信側クラスで分岐する 2-arm dispatch（直接呼び出し + 汎用ヘルパ）。それまでは毎回 `invoke_method` → グローバルメソッドキャッシュ | `compile/binary_op.rs::binary_recv_dispatch` | `ary << x`（4 クラス）57 → 4.5 ns、`<<` のグローバルキャッシュ引き 300 万回 → 0 | 下表 |
+
+施策 1〜3 を入れた時点（v2）:
+
+| ベンチ | baseline（3 回の中央値） | v2 | 差 |
+|---|---:|---:|---:|
+| erubi | 318 / 310 / 311 ms | 317 / 318 / 310 ms | ±0 % |
+| rack | 94 / 91 / 90 ms | 84 / 89 / 91 ms | −6.7 % |
+| graphql | 61 / 61 / 59 ms | 59 / 53 / 58 ms | −10 % |
+| activerecord | 329 / 341 / 340 ms | 318 / 292 / 311 ms | −11 % |
+
+施策 1〜4 を全部入れた最終ビルド（v3、コミット `265aa91`）:
+
+| ベンチ | baseline（3 回の中央値） | v3 | 差 |
+|---|---:|---:|---:|
+| erubi | 337 / 316 / 310 ms | 308 / 318 / 334 ms | ±0 % |
+| rack | 88 / 92 / 98 ms | 84 / 81 / 82 ms | −8 % |
+| graphql | 61 / 60 / 62 ms | 54 / 53 / 52 ms | −13 % |
+| activerecord | 334 / 328 / 319 ms | 309 / 301 / 293 ms | −8 % |
+
+（v2 → v3 で graphql がさらに 3 % 前後縮んだのが施策 4 の分。activerecord は
+ノイズの範囲。）フルテストは 3688 passed / 1 failed で、失敗は下記の既存の
+`Float#ceil` 差分のみ。
+
+- erubi は GC 回数が 1/4 になっても速くならなかった（施策 1 単体の単発計測では
+  erubi −13 % に見えたが、交互 3 ラウンドでは差なし。ヒープが 6 → 8 MB になって
+  キャッシュ局所性が落ちる分と相殺していると見ている）。GC のコストの本体は
+  ルート走査（§5.1）なので、次はルートの世代別化が必要。
+- 施策 3 の設計メモ: 最初は「レシーバだけを frozen リテラルにして `freeze` 呼び出し
+  は残す」形で入れたが、`String#freeze` を再定義したコードが frozen なレシーバを
+  受け取る（CRuby は chilled なコピーを渡す）ので、テストで CRuby と食い違った。
+  専用命令 + basic-op 検査に置き換えて解消。もう 1 つ、結果 temp を `push` する前に
+  命令を emit すると JIT の抽象フレームがその temp を死んだスロットと見なして
+  `load()` で panic する（`emit_call` は push してから emit している）。
+- 手元の CRuby は 4.0.6 で、`Float#ceil(15)` の結果が 4.0.2 と違う
+  （`1.123456789.ceil(15)` → `1.123456789000001`）ため `float::tests::angle` が
+  baseline でも失敗する。本変更とは無関係。
