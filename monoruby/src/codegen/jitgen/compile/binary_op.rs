@@ -545,6 +545,106 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Answer a polymorphic site whose receiver the VM only ever saw as one
+    /// (non-numeric) class with a two-arm dispatch around a direct call:
+    ///
+    /// ```text
+    ///         br_class_ne rdi, C -> slow
+    ///         <call C#op>                    (class-version guarded, no deopt)
+    ///         br merge
+    ///   slow: <generic helper>               (correct for *any* operand pair)
+    ///   merge:
+    /// ```
+    ///
+    /// The site is polymorphic in the inline cache's terms only: the pair
+    /// key changed because the *argument* did. The receiver-keyed dispatch
+    /// gives the one receiver class the call it would have had at a
+    /// monomorphic site, with the helper — not a deopt — behind it for a
+    /// receiver the VM never saw. Numeric receivers are left to the inline
+    /// arms above, which already handle their argument variance.
+    ///
+    /// Returns `false` (leaving *state* and *ir* untouched) when the site
+    /// does not qualify.
+    ///
+    #[allow(clippy::too_many_arguments)]
+    fn binary_recv_dispatch(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        binop: BinaryOp,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        rhs: SlotId,
+        case_semantics: bool,
+        bc_pos: BcIndex,
+    ) -> JitResult<bool> {
+        let Some(callid) = self.store.get_callsite_id(self.iseq_id(), bc_pos) else {
+            return Ok(false);
+        };
+        let op: IdentId = binop.into();
+        let mut recvs = self.store[callid].pmc.entries().iter().map(|e| e.recv);
+        let Some(recv_class) = recvs.next() else {
+            return Ok(false);
+        };
+        if recv_class == INTEGER_CLASS
+            || recv_class == FLOAT_CLASS
+            || !recvs.all(|c| c == recv_class)
+        {
+            return Ok(false);
+        }
+        let Some((fid, visibility)) = self.jit_check_method(recv_class, op) else {
+            return Ok(false);
+        };
+        // The ways out of `compile_method_call` that would leave the arm
+        // unfinished, hoisted (as `pic_groups` does) so the arm always lands
+        // on the merge.
+        if self.jit_visibility_blocks(callid, visibility)
+            || self.store[fid].possibly_capture_without_block()
+            || self.store[fid]
+                .is_iseq()
+                .is_some_and(|iseq| self.store[iseq].has_block_arg())
+        {
+            return Ok(false);
+        }
+        let is_func_call = self.store[callid].is_func_call();
+
+        let (entry, merge) = self.declare_merge(state, ir, &[lhs, rhs], dst);
+        let slow = self.label();
+
+        // ---- arm 1: the receiver class the VM saw, called directly.
+        let mut fast = entry.clone();
+        fast.load(ir, lhs, GP::Rdi);
+        ir.push(AsmInst::BrClassNe(GP::Rdi, recv_class, slow));
+        // Reaching the arm is the proof: `compile_method_call` sees a state
+        // that already knows the class and emits no receiver guard.
+        fast.guard_class_state(lhs, recv_class);
+        let outcome = self.with_arm(false, |this| {
+            this.compile_method_call(
+                &mut fast,
+                ir,
+                recv_class,
+                None,
+                fid,
+                visibility,
+                callid,
+                RecvMissMode::Plain,
+            )
+        })?;
+        debug_assert!(matches!(outcome, CompileResult::Continue));
+        self.end_arm(fast, ir, &merge, true);
+
+        // ---- arm 2: every other operand pair, through the generic helper.
+        ir.push(AsmInst::Label(slow));
+        let mut rest = entry.clone();
+        self.emit_generic_binary(&mut rest, ir, binop, lhs, rhs, case_semantics, is_func_call);
+        rest.def_rax2acc(ir, dst);
+        self.end_arm(rest, ir, &merge, false);
+
+        self.bind_merge(state, ir, merge);
+        Ok(true)
+    }
+
+    ///
     /// Lower a binary site: the shared skeleton behind `BinOp`, `BinCmp` and
     /// `BinCmpBr`.
     ///
@@ -682,6 +782,21 @@ impl<'a> JitContext<'a> {
 
         // ---- 5. The residual.
         if polymorphic {
+            // A site whose *argument* class varies while the receiver stays
+            // one class — `children << node` over a dozen node classes — is
+            // polymorphic only because the inline cache is keyed on the
+            // pair. Its receiver's operator has no guard-free inline arm
+            // (`Array#<<` is a builtin the bop table does not track), so it
+            // used to fall straight to the generic helper: `invoke_method`
+            // and a global-method-cache probe on every execution, twenty
+            // times a monomorphic call. Branch on the receiver into a direct
+            // call of the one method the VM saw instead, and let anything
+            // else take the helper.
+            if !matches!(mode, BinaryInlineMode::CmpBr { .. })
+                && self.binary_recv_dispatch(state, ir, binop, dst, lhs, rhs, case_semantics, bc_pos)?
+            {
+                return Ok(BinaryLowering::Emitted);
+            }
             // Any C-ABI call flushes at its `get_using_fpr` chokepoint; the
             // GP pool has to be spilled here because the helper clobbers it.
             state.flush_gp(ir);
@@ -1249,6 +1364,48 @@ mod tests {
             res = []
             600.times { |i| res << probe(vals[i % 4]) }
             [res.uniq.sort_by(&:to_s), probe(1 << 70), probe(2.5)]
+            "#,
+        );
+    }
+
+    /// A site polymorphic in the inline cache's terms only — one receiver
+    /// class, an argument that varies — takes the receiver-keyed dispatch
+    /// (`binary_recv_dispatch`): the observed class calls its method
+    /// directly, a receiver the VM never saw lands in the generic helper,
+    /// and a redefinition after warmup is caught by the class-version
+    /// guard.
+    #[test]
+    fn binop_arg_varying_site_dispatches_on_receiver() {
+        run_test(
+            r#"
+            def push(a, x) = a << x
+            a = []
+            200.times { |i| push(a, i.odd? ? "s" : :sym) }
+            s = +"str"
+            push(s, "x"); push(s, 33)
+            def plus(a, b) = a + b
+            r = []
+            100.times { |i| r << plus("a", i.odd? ? "b" : "c") }
+            def eq(a, b) = a == b
+            q = []
+            100.times { |i| q << eq([1], i.odd? ? [1] : "no") }
+            [a.size, a[0..3], s, push(1, 3), r.uniq, plus(1, 2), q.uniq]
+            "#,
+        );
+        // A redefinition is global, so this half runs once (the repeated
+        // form would see the redefined operator from its second pass on).
+        run_test_once(
+            r#"
+            def push(a, x) = a << x
+            a = []
+            100.times { |i| push(a, i.odd? ? "s" : :sym) }
+            class Array
+              alias push_orig push
+              def <<(x) = (push_orig(x, :tagged); self)
+            end
+            b = []
+            50.times { |i| push(b, i) }
+            [a.size, b.size, b.last(2)]
             "#,
         );
     }
