@@ -266,6 +266,9 @@ impl IdentId {
     /// (`/encoding_override`). `String#encoding` probes it on every call,
     /// so it is interned up front rather than by name each time.
     pub const _ENCODING_OVERRIDE: IdentId = id!(96);
+    /// `freeze`: the `StringFreeze` opcode (`"lit".freeze`) asks the
+    /// basic-op table about `String#freeze` on every interpreted execution.
+    pub const FREEZE: IdentId = id!(97);
 
     // The special global variables whose assignment `write_special_check`
     // (globals/gvar.rs) validates or coerces. Deliberately a *consecutive*
@@ -552,6 +555,7 @@ impl IdentifierTable {
             table.set_id(name, id);
         }
         table.set_id("/encoding_override", IdentId::_ENCODING_OVERRIDE);
+        table.set_id("freeze", IdentId::FREEZE);
         table
     }
 

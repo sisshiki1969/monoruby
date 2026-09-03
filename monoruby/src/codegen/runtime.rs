@@ -1871,6 +1871,34 @@ pub(super) extern "C" fn get_index(
     )
 }
 
+/// `StringFreeze` (`"lit".freeze`, CRuby's `opt_str_freeze`): while
+/// `String#freeze` is the builtin the answer is `lit` itself — the interned
+/// frozen literal, no copy, no call. Once it has been redefined the literal
+/// is copied (chilled, as a plain literal evaluation would produce) and the
+/// redefined `freeze` is called on the copy, exactly as the unfolded form
+/// would have done.
+pub(super) extern "C" fn string_freeze_literal(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lit: Value,
+) -> Option<Value> {
+    if !globals
+        .store
+        .basic_op_redefined_for(STRING_CLASS, IdentId::FREEZE)
+    {
+        return Some(lit);
+    }
+    let mut copy = lit.dup();
+    copy.set_chilled_literal();
+    match vm.invoke_method_inner(globals, IdentId::FREEZE, copy, &[], None, None) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 pub(super) extern "C" fn set_index(
     vm: &mut Executor,
     globals: &mut Globals,

@@ -998,6 +998,7 @@ pub(crate) struct VmHandlers {
     pub condnotbr: CodePtr,            // 5, 13
     pub immediate: CodePtr,            // 6
     pub literal: CodePtr,              // 7
+    pub string_freeze: CodePtr,        // 8
     pub load_const: CodePtr,           // 10
     pub store_const: CodePtr,          // 11
     pub loop_start: CodePtr,           // 14
@@ -1129,6 +1130,7 @@ impl Codegen {
         self.dispatch[5] = h.condnotbr;
         self.dispatch[6] = h.immediate;
         self.dispatch[7] = h.literal;
+        self.dispatch[8] = h.string_freeze;
         self.dispatch[10] = h.load_const;
         self.dispatch[11] = h.store_const;
         self.dispatch[12] = h.condbr;

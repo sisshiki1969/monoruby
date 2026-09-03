@@ -369,6 +369,7 @@ impl Codegen {
             condnotbr: self.vm_condnotbr(&branch),
             immediate: self.vm_immediate(),
             literal: self.vm_literal(),
+            string_freeze: self.vm_string_freeze(),
             load_const: self.vm_load_const(),
             store_const: self.vm_store_const(),
             loop_start: self.vm_loop_start(),
@@ -977,6 +978,25 @@ impl Codegen {
             movq rax, (Value::value_deep_copy);
             call rax;
         };
+        self.vm_store_r15(GP::Rax);
+        self.fetch_and_dispatch();
+        label
+    }
+
+    /// op 8 `StringFreeze`: slot[:1] <- string_freeze_literal(vm, globals,
+    /// the literal Value at [pc - 8]) -> Option (the redefined `freeze` may
+    /// raise).
+    fn vm_string_freeze(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch_r15();
+        monoasm! { &mut self.jit,
+            movq rdx, [r13 - 8];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::string_freeze_literal);
+            call rax;
+        };
+        self.vm_handle_error();
         self.vm_store_r15(GP::Rax);
         self.fetch_and_dispatch();
         label

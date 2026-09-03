@@ -80,6 +80,7 @@ impl Codegen {
         let init_method = self.a64_op_init_method();
         let immediate = self.a64_op_immediate();
         let literal = self.a64_op_literal();
+        let string_freeze = self.a64_op_string_freeze();
         let mov = self.a64_op_mov();
         let ret = self.a64_op_ret();
         let add_rr = self.a64_op_iadd(false);
@@ -220,6 +221,7 @@ impl Codegen {
             condnotbr,
             immediate,
             literal,
+            string_freeze,
             load_const,
             store_const,
             loop_start,
@@ -1620,6 +1622,23 @@ impl Codegen {
             add x(PC.0), x(PC.0), #(16);
         );
         self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 8 `StringFreeze`: slot[`[pc+4]`] <- string_freeze_literal(vm,
+    /// globals, the literal Value at `[pc+8]`) -> Option (the redefined
+    /// `freeze` may raise). x86 `vm_string_freeze`.
+    pub(in crate::codegen) fn a64_op_string_freeze(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr x2, [x(PC.0), #(8)];  // literal Value
+            mov x9, (runtime::string_freeze_literal as *const () as u64);
+            blr x9;
+        );
+        self.a64_checked_store_next(&raise);
         p
     }
 

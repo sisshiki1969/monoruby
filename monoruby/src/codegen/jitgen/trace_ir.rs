@@ -97,6 +97,9 @@ pub(crate) enum TraceIr {
 
     /// literal(%ret, value)
     FrozenLiteral(SlotId, Value),
+    /// `"lit".freeze`: the interned frozen literal while `String#freeze` is
+    /// the builtin (see `BytecodeInst::StringFreeze`).
+    StringFreeze(SlotId, Value),
     /// literal(%ret, value)
     Literal(SlotId, Value),
     Array {
@@ -390,6 +393,7 @@ impl TraceIr {
                 5 => TraceIr::CondBr(SlotId::new(op1_w), op1_l as i32, false, BrKind::BrIfNot),
                 6 => TraceIr::FrozenLiteral(SlotId::new(op1_w), Value::from_u64(op2)),
                 7 => TraceIr::Literal(SlotId::new(op1_w), Value::from_u64(op2)),
+                8 => TraceIr::StringFreeze(SlotId::new(op1_w), Value::from_u64(op2)),
                 10 | 18 => TraceIr::LoadConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
                 11 => TraceIr::StoreConst(SlotId::new(op1_w), ConstSiteId(op1_l)),
                 12..=13 => TraceIr::CondBr(
@@ -902,6 +906,9 @@ impl TraceIr {
                 )
             }
             TraceIr::FrozenLiteral(reg, val) => format!("{:?} = {}", reg, val.debug(store)),
+            TraceIr::StringFreeze(reg, val) => {
+                format!("{:?} = {}.freeze", reg, val.debug(store))
+            }
             TraceIr::Literal(reg, val) => {
                 format!("{:?} = literal[{}]", reg, val.debug(store))
             }

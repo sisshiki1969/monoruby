@@ -58,6 +58,42 @@ impl<'a> BytecodeGen<'a> {
             UseMode2::Store(dst) => (Some(dst), false),
         };
         let old_temp = self.temp;
+        // `"lit".freeze` with no arguments, in a file without the
+        // `frozen_string_literal` pragma: CRuby's `opt_str_freeze`. One
+        // `StringFreeze` yields the interned frozen literal while
+        // `String#freeze` is the builtin — no per-evaluation copy, no call,
+        // the same object every time — and otherwise hands a chilled copy of
+        // the literal to the redefined method (`runtime::string_freeze_literal`
+        // consults the basic-op table). Under the pragma the literal already
+        // is the interned object and `Object#freeze` on it is a cheap no-op
+        // call, so there is nothing to fold.
+        if !safe_nav
+            && !self.frozen_string_literal()
+            && method == IdentId::FREEZE
+            && arglist.args.is_empty()
+            && arglist.kw_args.is_empty()
+            && arglist.hash_splat.is_empty()
+            && arglist.block.is_none()
+            && !arglist.forwarding
+            && !arglist.delegate_block
+            && !arglist.splat
+            && let Some(NodeKind::String(s)) = receiver.as_ref().map(|r| &r.kind)
+        {
+            let enc = self.source_encoding();
+            let v = self.store.intern_frozen_str(s.as_bytes(), enc);
+            let r: BcReg = dst.unwrap_or_else(|| self.sp().into());
+            // Push before emitting (as `emit_call` does): the instruction's
+            // recorded stack pointer has to cover its own result slot, or the
+            // JIT's abstract frame takes the temp for dead space.
+            if push_flag {
+                self.push();
+            }
+            self.emit(BytecodeInst::StringFreeze(r, v), loc);
+            if use_mode.is_ret() {
+                self.emit_ret(None)?;
+            }
+            return Ok(());
+        }
         let recv = match receiver {
             Some(receiver) => {
                 if receiver.kind == NodeKind::SelfValue {

@@ -313,6 +313,11 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&reg);
                 Bytecode::from_with_value(enc_wl(7, op1.0, 0), val)
             }
+            BytecodeInst::StringFreeze(reg, val) => {
+                // 8
+                let op1 = self.slot_id(&reg);
+                Bytecode::from_with_value(enc_wl(8, op1.0, 0), val)
+            }
             BytecodeInst::LoadConst {
                 dst,
                 base,

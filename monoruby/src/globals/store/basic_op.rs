@@ -107,6 +107,11 @@ pub(crate) const BASIC_OP_DEFS: &[(ClassId, &str)] = &[
     (FLOAT_CLASS, "!"),
     (STRING_CLASS, "!"),
     (SYMBOL_CLASS, "!"),
+    // ---- `"lit".freeze`: the `StringFreeze` opcode (bytecodegen
+    // `gen_method_call`) answers the interned frozen literal without a
+    // call — CRuby's `opt_str_freeze` — and the JIT loads it as a plain
+    // literal (`compile.rs`, recorded as a bop dependency).
+    (STRING_CLASS, "freeze"),
     (COMPLEX_CLASS, "!"),
     (NIL_CLASS, "!"),
     (TRUE_CLASS, "!"),
@@ -460,6 +465,7 @@ mod tests {
             ("String", "==(o)", r#""a" == "b""#),
             ("String", "!=(o)", r#""a" != "b""#),
             ("String", "!", r#"!("a")"#),
+            ("String", "freeze", r#""a".freeze"#),
             ("Symbol", "==(o)", ":a == :b"),
             ("Symbol", "===(o)", ":a === :b"),
             ("Symbol", "!", "!(:a)"),

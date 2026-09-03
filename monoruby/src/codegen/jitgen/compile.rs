@@ -405,6 +405,23 @@ impl<'a> JitContext<'a> {
                 // Pure register/stack work.
                 self.restore_unfrozen(Some(dst));
             }
+            TraceIr::StringFreeze(dst, val) => {
+                if self.basic_op_assumable(STRING_CLASS, IdentId::FREEZE) {
+                    // The builtin `String#freeze`: the answer is the interned
+                    // literal itself, loaded like any frozen literal. The
+                    // recorded dependency evicts this body if `freeze` is
+                    // later redefined.
+                    self.record_bop_dep(STRING_CLASS, IdentId::FREEZE);
+                    state.def_lit2gp(ir, dst, val);
+                    self.restore_unfrozen(Some(dst));
+                } else {
+                    // Redefined: the interpreter's helper copies the literal
+                    // and calls whatever `freeze` is now. Rare enough that
+                    // an unconditional exit is the whole treatment.
+                    ir.deopt(state);
+                    return Ok(CompileResult::Cease);
+                }
+            }
             TraceIr::Literal(dst, val) => {
                 state.discard(dst);
                 let using_fpr = state.get_using_fpr(ir);
