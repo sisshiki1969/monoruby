@@ -194,13 +194,52 @@ erubi の 322 個の spec Hash は **すべて同じ 18 個のキーを同じ順
 shape に相当する仕組みを Hash に持ち込むことになるので、キーセットの同一性を
 安く判定する仕掛け（挿入順の版番号など）の設計が要る。
 
-### 4.4 ディスパッチ段数を減らす（小〜中）
+### 4.4 ディスパッチ段数を減らす（**却下**、2026-09-04）
 
 `hashindex` → `Hashmap::index` → `HashRef::get` → `IndexMapCore` の 4 段で、
-それぞれが `vm` / `globals` を引き回している。`Hashmap::index` はミス時の
-default 処理のためだけに 1 段あり、`HashRef::get` は表現の分岐をしている。
-表現の分岐を呼び出し側に持ち上げて boxed 専用の入口を用意すれば数 ns 縮む
-見込み。4.2 を先にやると自然に消える部分もある。
+それぞれが `vm` / `globals` を引き回している。18 エントリ・String キーの純
+ルックアップの `perf` セルフ時間は:
+
+| | % |
+|---|---:|
+| hashbrown `find`（probe） | 30.7 |
+| `HashRef::get` | 18.3 |
+| `RubyMap::get_prehashed_with` | 10.6 |
+| `Hashmap::index` | 10.2 |
+| `RStringInner::hash`（ダイジェスト） | 9.9 |
+| `memcmp`（キー比較） | 6.3 |
+| `hashindex` | 5.9 |
+
+一見「層が 45 %」だが、**3 つ試して 1 つも効かなかった**:
+
+1. **thin LTO**（`[profile.release] lto = "thin"`。既定は LTO 無効・
+   codegen-units=16 なので、層が CGU 境界で切れている仮説）— 効果なし。
+   むしろ誤差内でやや悪化。ビルドは 1m06s → 2m00s。
+2. **冷たいアームの outline** — `HashRef::get` を「boxed × packed/String キー」
+   だけの本体と、`#[inline(never)]` の `get_slow`（inline 表現・ident マップ・
+   eql? キーのヒープキー）に分割。`perf annotate` が示していた
+   `push rbp` + 5 本のレジスタ退避 + `sub $0xa8,%rsp`（**168 バイト**、関数の
+   自己サンプルの約 1/5）が、表現アームの合計で膨らんでいるという仮説だった。
+   **フレームは 168 バイトのまま**で、交互 6 ペアの中央値も 34.4 → 34.8 ns。
+   168 バイトはインライン化された probe 機構（`get_prehashed_with` →
+   hashbrown）の分であって、冷たいアームの分ではなかった。
+3. **`#[inline]` を 3 層に付ける**（2 でホットパスが小さくなった分、通る可能性）
+   — LLVM に**断られた**。`HashRef::get` / `Hashmap::index` / `hashindex` は
+   inline 後の profile にも独立シンボルとして残る。各関数が probe を
+   インライン化しているので、hint だけでは小さくならない。
+
+結論として、層が残るのは「表現の分岐」のせいではなく、**各層が probe 機構を
+インライン化して大きくなっている**ためで、hint や outline では崩せない。
+崩すには probe そのものを小さくするか外に出すかで、後者は呼び出しを 1 つ
+別の呼び出しに置き換えるだけになる。
+
+**残る本命は 4.2**（probe を JIT で機械語として吐く）。これは層を薄くする
+のではなく、呼び出しごと無くす。
+
+計測環境の注意: この調査を行ったコンテナはハードウェアカウンタが使えず
+（`perf stat -e instructions` が `<not supported>`）、壁時計のノイズ床が
+±15 % あった。「呼び出しオーバヘッドを削る」種類の変更は命令数で見るのが
+本来なので、数 ns の差を主張する場合は静かな機械で取り直すこと。
 
 ### 4.5 frozen String にダイジェストをキャッシュ（小）
 
