@@ -1378,17 +1378,24 @@ impl<'a> JitContext<'a> {
         // exit: the class-version guard fires, the body recompiles, and the
         // recompiled body emits the same unconditional fast path again —
         // `frameless_leaf_bodies_bop_redefine` is the regression.
-        let mut bop_deps: Vec<IdentId> = Vec::new();
+        let mut bop_deps: Vec<(ClassId, IdentId)> = Vec::new();
         for op in &body.ops {
             let name: IdentId = match *op {
                 frameless::LeafOp::Bin(kind, _) => kind.into(),
-                frameless::LeafOp::Cmp(kind, _) => kind.into(),
+                frameless::LeafOp::Cmp(kind, _, _) => kind.into(),
                 _ => continue,
             };
-            if !self.basic_op_assumable(INTEGER_CLASS, name) {
+            // The class the guards will prove, so the licence is the tight
+            // one: a `Symbol` comparison needs `Symbol#==` unredefined, not
+            // `Integer#==`.
+            let class = match *op {
+                frameless::LeafOp::Cmp(_, _, class) => class,
+                _ => INTEGER_CLASS,
+            };
+            if !self.basic_op_assumable(class, name) {
                 return false;
             }
-            bop_deps.push(name);
+            bop_deps.push((class, name));
         }
 
         // Resolve every ivar name the body mentions, up front.
@@ -1397,7 +1404,7 @@ impl<'a> JitContext<'a> {
             let name = match *op {
                 frameless::LeafOp::Load(frameless::LeafValue::SelfIvar(name))
                 | frameless::LeafOp::Bin(_, frameless::LeafValue::SelfIvar(name))
-                | frameless::LeafOp::Cmp(_, frameless::LeafValue::SelfIvar(name))
+                | frameless::LeafOp::Cmp(_, frameless::LeafValue::SelfIvar(name), _)
                 | frameless::LeafOp::Store(name) => name,
                 _ => {
                     ivars.push(None);
@@ -1476,10 +1483,15 @@ impl<'a> JitContext<'a> {
                     ir.integer_binop_reg(kind, GP::Rax, GP::Rax, GP::Rcx, deopt);
                     acc_immediate = true;
                 }
-                frameless::LeafOp::Cmp(kind, operand) => {
+                frameless::LeafOp::Cmp(kind, operand, class) => {
                     recv_live &= !emit_value(ir, state, arg_slots, operand, ivars[i], GP::Rcx);
-                    ir.push(AsmInst::GuardClass(GP::Rax, INTEGER_CLASS, deopt));
-                    ir.push(AsmInst::GuardClass(GP::Rcx, INTEGER_CLASS, deopt));
+                    // Both backends compare with a plain register compare, so
+                    // the guarded class decides what that compare *means*:
+                    // bit equality for an immediate, a signed read of the
+                    // tagged bits for a fixnum. The recogniser admits the
+                    // non-fixnum classes for equality only.
+                    ir.push(AsmInst::GuardClass(GP::Rax, class, deopt));
+                    ir.push(AsmInst::GuardClass(GP::Rcx, class, deopt));
                     // The comparison zeroes rax before reading its operands,
                     // so the accumulator has to step aside first.
                     ir.reg_move(GP::Rax, GP::Rsi);
@@ -1506,8 +1518,8 @@ impl<'a> JitContext<'a> {
                 }
             }
         }
-        for name in bop_deps {
-            self.record_bop_dep(INTEGER_CLASS, name);
+        for (class, name) in bop_deps {
+            self.record_bop_dep(class, name);
         }
         state.def_reg2acc(ir, GP::Rax, dst);
         state.unset_side_effect_guard();
@@ -4070,6 +4082,63 @@ mod tests {
               def ==(o); :redefined_eq; end
             end
             res << run(c, 500)
+            res
+            "#,
+        );
+    }
+
+    /// Equality on the immediates. Both backends compare with a plain
+    /// register compare, which for `==` / `!=` is bit equality — and bit
+    /// equality *is* equality for a `Symbol`, `nil`, `true` or `false`, not
+    /// only for a fixnum. The motivating shape is graphql's parser:
+    ///
+    /// ```ruby
+    /// def at?(expected_token_name)
+    ///   @token_name == expected_token_name
+    /// end
+    /// ```
+    ///
+    /// — 74 call sites on the hot path of every parse, which an
+    /// `Integer`-only gate turned away.
+    ///
+    /// Ordering reads the same bits as a signed number, which is only right
+    /// for a tagged fixnum (`Symbol#<` compares the names through
+    /// `Comparable`), so the non-fixnum classes are admitted for equality
+    /// alone — `sym_lt` below is the case that must still go through a real
+    /// call, and it is checked against a receiver whose answer the bit
+    /// ordering would get wrong.
+    #[test]
+    fn frameless_leaf_bodies_immediate_eq() {
+        run_test(
+            r#"
+            class P
+              def initialize(t); @t = t; end
+              def at?(x);   @t == x; end
+              def not?(x);  @t != x; end
+              def teq?(x);  @t === x; end
+              def is_nil;   @t == nil; end
+              def is_true;  @t == true; end
+              def is_false; @t == false; end
+              def sym_lt(x); @t < x; end
+            end
+            res = []
+            sym = P.new(:ident)
+            400.times { sym.at?(:ident); sym.not?(:other); sym.teq?(:ident); sym.is_nil }
+            res << sym.at?(:ident) << sym.at?(:other)
+            res << sym.not?(:other) << sym.not?(:ident)
+            res << sym.teq?(:ident) << sym.teq?(:other)
+            res << sym.is_nil << sym.is_true << sym.is_false
+            # a Symbol the bit ordering would order the other way round:
+            # :a < :b by name, but their ids run the other direction only
+            # by accident, so this pins the answer rather than the reason
+            res << P.new(:a).sym_lt(:b) << P.new(:b).sym_lt(:a)
+
+            nl = P.new(nil);   400.times { nl.is_nil };   res << nl.is_nil << nl.at?(nil)
+            tr = P.new(true);  400.times { tr.is_true };  res << tr.is_true << tr.is_false
+            fa = P.new(false); 400.times { fa.is_false }; res << fa.is_false << fa.is_true
+            # the guard fires: a receiver whose ivar is not the observed class
+            st = P.new("s"); res << st.at?("s") << st.at?(:s)
+            res << P.new(1).at?(1) << P.new(1).at?(:one)
             res
             "#,
         );

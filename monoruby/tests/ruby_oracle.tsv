@@ -1747,6 +1747,7 @@
 846556768cd567bd24d3916bd92ff7db	[false, false, true, [true, true, false], true, false, false, ["NameError", "'a' is not an implicit parameter"], ["TypeError", "1 is not a symbol nor a string"]]	def try; yield; rescue => e; [e.class.to_s, e.message]; end\n       
 846653c25256021e7ac217987b6ab247	[nil, true]	r, w = IO.pipe\n            pid = fork { r.close; Signal.trap("TERM"
 8479b8263b2031ca390cec82e34d1347	"yes-shname\\n"	env = Object.new\n            def env.to_hash = {"VIA_TO_HASH" => "y
+84b7526c4266744e31975a2bbd3771af	[true, false, true, false, true, false, false, false, false, true, false, true, true, true, false, true, false, true, false, true, false]	class P\n              def initialize(t); @t = t; end\n              
 84d91589fff917e43c1d88cde1f37516	[false, false, false, [:include, :TypeError], [:extend, :TypeError], [:r_include, :TypeError], [:r_prepend, :TypeError]]	r = Module.new { refine(String) { } }.refinements[0]\n            ou
 84f4b6da4f67b5e0629d3c8cdef84518	"A"	class A\n              def who; self.class.name; end\n            end
 85019cb4cb8a7b9dda94fc30fc53ddb9	""	class EmptyStr\n                  def to_str; ""; end\n          
