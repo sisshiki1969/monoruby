@@ -963,6 +963,31 @@ impl<'a> JitContext<'a> {
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
                 {
+                    // Stage-1 frame-merge survey: how many of the calls that
+                    // reach specialization could instead run inside this
+                    // frame? Reported so the machinery is only built if the
+                    // population is worth it.
+                    #[cfg(feature = "jit-log")]
+                    {
+                        let name = self.store.func_description(self.store[iseq].func_id());
+                        match merge::mergeable_body(&self.store, iseq) {
+                            Some(info) => eprintln!(
+                                "MERGE-SURVEY yes bb={} regs={} {}",
+                                info.bb_num, info.reg_num, name
+                            ),
+                            None => match merge::mergeable_body_calls_ok(&self.store, iseq) {
+                                Some(info) => eprintln!(
+                                    "MERGE-SURVEY calls bb={} regs={} {}",
+                                    info.bb_num, info.reg_num, name
+                                ),
+                                None => eprintln!(
+                                    "MERGE-SURVEY no {} {}",
+                                    merge::decline_reason(&self.store, iseq, true),
+                                    name
+                                ),
+                            },
+                        }
+                    }
                     return self.specialized_iseq(
                         state,
                         ir,
@@ -1352,7 +1377,7 @@ impl<'a> JitContext<'a> {
                 .get_ivarid(name)
                 .filter(|ivarid| ivarid.is_inline())
         };
-        let ivar_of = |this: &Self, v: frameless::LeafValue| -> Option<Option<IvarId>> {
+        let _ivar_of = |this: &Self, v: frameless::LeafValue| -> Option<Option<IvarId>> {
             match v {
                 frameless::LeafValue::SelfIvar(name) => resolve(this, name).map(Some),
                 _ => Some(None),

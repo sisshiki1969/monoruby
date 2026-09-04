@@ -12,6 +12,7 @@ mod dump_cfg;
 mod frameless;
 mod index;
 mod loop_analysis;
+mod merge;
 mod method_call;
 mod pic;
 mod variables;
