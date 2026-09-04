@@ -666,7 +666,7 @@ impl Globals {
         // Resolution chain (first non-empty wins):
         //   1. MONORUBY_GEM_PATH env var  — explicit override
         //   2. GEM_PATH env var           — CRuby convention, untouched
-        //   3. ~/.monoruby/gem_path file  — build.rs baked
+        //   3. ~/.monoruby/gem_path file  — cached from an earlier probe
         //   4. Runtime probe              — invoke `ruby` once, cache to file
         let monoruby_dir = dirs::home_dir().unwrap().join(".monoruby");
         let gem_path_file = monoruby_dir.join("gem_path");
@@ -681,9 +681,20 @@ impl Globals {
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
-            let from_probe = if cached.is_some() && !crate::ruby_probe::reprobe_requested() {
-                None
-            } else {
+            // Probe when there is nothing cached, when the user asks
+            // (`MONORUBY_REPROBE=1`), or when the cache predates the
+            // host's gem index — without that last check a `gem install`
+            // after the first probe stays invisible to `require` forever,
+            // since the cached `$LOAD_PATH` is the only place a
+            // non-default gem's `lib/` is listed.
+            let must_probe = match cached.as_deref() {
+                None => true,
+                Some(gem_path) => {
+                    crate::ruby_probe::reprobe_requested()
+                        || crate::ruby_probe::cache_is_stale(&library_path_file, gem_path)
+                }
+            };
+            let from_probe = if must_probe {
                 crate::ruby_probe::probe().map(|p| {
                     // Cache both files so subsequent runs skip the
                     // ~50ms `ruby` spawn. `library_path` may not have
@@ -693,6 +704,8 @@ impl Globals {
                     let _ = std::fs::write(&library_path_file, &p.library_path);
                     p.gem_path
                 })
+            } else {
+                None
             };
             if let Some(s) = from_probe.or(cached)
                 && !s.is_empty()
