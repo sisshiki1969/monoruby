@@ -17,6 +17,18 @@ impl GC<RValue> for ComplexInner {
     }
 }
 
+impl ComplexInner {
+    ///
+    /// The remember-on-promote half of `mark` above; it must cover exactly
+    /// the same two fields. A `Real` is a `Value` (`repr(transparent)`), so
+    /// a Bignum or heap Float component really is a heap reference.
+    ///
+    pub(crate) fn young_child_exists(&self, alloc: &Allocator<RValue>) -> bool {
+        let is_young = |r: Real| r.get().try_rvalue().is_some_and(|rv| !alloc.is_old(rv));
+        is_young(self.0.re) || is_young(self.0.im)
+    }
+}
+
 impl std::ops::Deref for ComplexInner {
     type Target = num::complex::Complex<Real>;
     fn deref(&self) -> &Self::Target {

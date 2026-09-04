@@ -897,12 +897,38 @@ major の回数は変わらず（4/4, 4/4, 4/4, 3/3, 6/6）、合計マーク時
 増やさない（保持する `Value` が無いので、将来の書き込み点に課す約束が無い）ので
 入れてある。
 
-**B. ストアが既にバリア済み / 構築後不変: RANGE / COMPLEX / RATIONAL**
+**B. ストアが既にバリア済み / 構築後不変: RATIONAL / RANGE / COMPLEX**（実施済み）
 
-`RangeInner::initialize` は「Write barriers are the caller's responsibility」と
-明記され、`builtins/range.rs` が実際に `write_barrier(start)` / `(end)` を呼んで
-いる。必要なのは `young_child_exists` の腕だけ。ただし数が少ない（AR で 74/minor）
-ので未実施。
+監査してみると 3 型の性質は違った:
+
+- **RATIONAL** は `{ num: BigInt, den: BigInt }` で `mark` が**空** — つまり
+  実は A（`Value` を持たない）だった。`mark_children` が
+  `self.as_rational().mark(alloc)` を呼ぶので一見マークしているように見えるが、
+  その中身が no-op。
+- **RANGE** は `start` / `end` の 2 つの `Value` を持つが、書き込みは
+  `RangeInner::initialize` の 1 か所だけで、`builtins/range.rs` が直後に
+  `write_barrier(start)` / `(end)` を呼んでいる（`initialize` の doc に
+  「Write barriers are the caller's responsibility」と明記されている）。
+- **COMPLEX** は `Real`（= `repr(transparent)` な `Value`）を 2 つ持つが、
+  **可変アクセサが存在しない** — 構築されるだけで、以後書き換わらない。
+
+よってバリアの追加は不要で、`young_child_exists` の腕（RANGE / COMPLEX は
+`mark` と同じ 2 フィールドを報告、RATIONAL は `false`）と `is_promotable` への
+追加だけ。マークされなくなる:
+
+| ベンチ | RANGE | COMPLEX |
+|---|---|---|
+| erubi | 29 → 0 | 1 → 0 |
+| activerecord | 74 → 2 | 1 → 0 |
+| rack | 37 → 0 | 1 → 0 |
+| graphql | 28 → 1 | 1 → 0 |
+
+**時間への効果は A よりさらに小さく、完全にノイズ以下**（minor マーク:
+erubi 984 → 1088 µs、AR 2281 → 2239 µs、rack 938 → 925 µs、graphql 969 → 973 µs
+と方向すら揃わない）。minor 1 回あたり 6,000〜30,000 個マークするうちの
+30〜74 個なので当然。許可リストの取りこぼしを埋めるだけの変更で、維持コストが
+ゼロ（Complex は可変アクセサ自体が無く、Range の唯一の書き込みは既にバリア済み）
+なので入れてあるが、性能施策としては数えない。
 
 **C. PROC / FRAME / BINDING / FIBER / THREAD — 本丸だが難易度が別物**
 
