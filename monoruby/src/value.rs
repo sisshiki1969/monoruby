@@ -487,7 +487,19 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
                         (ObjTy::COMPLEX, ObjTy::COMPLEX) => {
                             lhs.as_complex().eql(rhs.as_complex(), vm, globals)?
                         }
-                        (ObjTy::STRING, ObjTy::STRING) => lhs.as_rstring() == rhs.as_rstring(),
+                        // Byte equality only between two *plain* Strings.
+                        // CRuby's `rb_any_cmp` gates its String
+                        // short-circuit on `RBASIC(a)->klass == rb_cString`
+                        // for both operands; a subclass falls through to
+                        // `rb_eql` below, so a redefined `eql?` on it is
+                        // observed. (`any_hash` has no such gate, so a
+                        // subclass still hashes by content — only the
+                        // comparison moves.)
+                        (ObjTy::STRING, ObjTy::STRING)
+                            if self.class() == STRING_CLASS && other.class() == STRING_CLASS =>
+                        {
+                            lhs.as_rstring() == rhs.as_rstring()
+                        }
                         (ObjTy::ARRAY, ObjTy::ARRAY) => {
                             let lhs_ary = lhs.as_array();
                             let rhs_ary = rhs.as_array();
@@ -2834,6 +2846,26 @@ impl Value {
             }
         } else {
             None
+        }
+    }
+
+    ///
+    /// [`Self::is_rstring_inner`] restricted to a String whose class is
+    /// exactly `String` — the condition under which a Hash may compare it
+    /// by bytes instead of dispatching `eql?` (see
+    /// `rvalue::hash::plain_string`).
+    ///
+    /// One `try_rvalue` for both questions: the type tag and the class sit
+    /// in the same header word, and this is on the hash-probe path.
+    ///
+    pub(crate) fn is_plain_rstring_inner(&self) -> Option<&RStringInner> {
+        let rv = self.try_rvalue()?;
+        // SAFETY: the type check ensures this RValue contains a string.
+        unsafe {
+            match rv.ty() {
+                ObjTy::STRING if rv.class() == STRING_CLASS => Some(rv.as_rstring()),
+                _ => None,
+            }
         }
     }
 

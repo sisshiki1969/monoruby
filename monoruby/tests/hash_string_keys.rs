@@ -227,3 +227,48 @@ fn inline_string_key_ignores_redefined_string_hash() {
         "##,
     );
 }
+
+/// A String **subclass** key is compared by `eql?`, not by bytes.
+///
+/// CRuby's `rb_any_cmp` gates its String short-circuit on
+/// `RBASIC(a)->klass == rb_cString` for both operands, so a subclass falls
+/// through to `rb_eql` and a redefined `eql?` decides. Its `any_hash` has
+/// no such gate — a subclass still hashes by content — so the two keys
+/// land in the same bucket and the redefinition is what turns the lookup
+/// into a miss, rather than the bucket choice.
+///
+/// Both halves are checked here, and in both representations: `OnlyEql`
+/// misses (`eql?` said no) while `OnlyHash` and `Plain` hit (the bytes
+/// chose the bucket, and the default `eql?` agreed) — which is also why
+/// `h["q"]` finds the subclass-keyed entry in every case.
+#[test]
+fn string_subclass_key_dispatches_eql() {
+    run_test_once(
+        r##"
+        class OnlyHash < String; def hash; object_id; end; end
+        class OnlyEql  < String; def eql?(o); false; end; end
+        class Plain    < String; end
+        class Both     < String; def hash; 1; end; def eql?(o); true; end; end
+        res = []
+        [OnlyHash, OnlyEql, Plain, Both].each do |c|
+          # 1 pair exercises the inline representation, 18 the boxed map
+          [1, 18].each do |n|
+            h = {}
+            (1...n).each { |i| h["pad#{i}"] = i }
+            h[c.new("q")] = :hit
+            res << [c.to_s, n, h[c.new("q")], h["q"], h.key?(c.new("q")), h.size]
+          end
+        end
+        # the other direction: a plain String key, probed with a subclass
+        [1, 18].each do |n|
+          h = {}
+          (1...n).each { |i| h["pad#{i}"] = i }
+          h["q"] = :plain
+          res << ["stored-plain", n, h[Plain.new("q")], h[OnlyEql.new("q")]]
+        end
+        h = {"q" => 1}
+        res << ["delete", h.delete(Plain.new("q")), h.size]
+        res
+        "##,
+    );
+}
