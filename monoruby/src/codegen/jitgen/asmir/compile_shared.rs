@@ -1507,6 +1507,20 @@ impl Codegen {
                     },
                 );
             }
+            AsmInst::HashProbePacked {
+                layout,
+                hashindex,
+                digest,
+            } => {
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.gen_hash_probe_packed(layout, hashindex, digest);
+                    },
+                );
+            }
             AsmInst::HashLiveAt { layout } => {
                 self.lower_via_inline(
                     store,

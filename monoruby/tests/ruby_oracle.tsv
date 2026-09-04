@@ -133,6 +133,7 @@
 07b1d4b32547d6f6624dc2c846950ab0	[true, true]	t = Thread.new { :x }\n            t.join\n            [t.kill == t, 
 07d3d8701aafb106b630434fe110bc28	[8, 7]	inc = proc { |n| n + 1 }\n        d = Object.new\n        def d.call(n); 
 07db4a045facdc21787ed0ef44cb050c	["class or module required for rescue clause", "class or module required for rescue clause", "class or module required for rescue clause"]	res = []\n        rescuer = 42\n        3.times do\n          begin\n      
+07fc55c9c66fdcb526a444ef6361069c	[1, 5, nil, 1, :dflt, 1, "proc:q"]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 080f42d888ea5e1a7eb7a4c43d6b5064	"US-ASCII"	"Hello".encode("US-ASCII").swapcase.encoding.to_s
 080f929287fc4ac492b6fb2c6fb2aaac	[:interrupted]	def run_masked(timing, blocking = true)\n              klass = Class
 082c922854391d30efbd21f4e18518c3	true	File.writable?("/tmp")
@@ -614,6 +615,7 @@
 2c60a3b58b3cec1741ef306698cffc54	"missing: hello"	class C\n          def method_missing(name, *args)\n            "missing:
 2cbffbc78f3202b93258530c17eb3aec	[1200, "abcdefghij", true]	def app_piece2(s, piece, n)\n          i = 0\n          while i < n\n     
 2cf607598595d4b3f44991e7c7f960a0	[[:typeerr], [:typeerr], [:typeerr], [:ok]]	def t(x)\n              [x].map do |v|\n                begin\n       
+2d0977c7c034e1bbf8950d44e00c27b0	[1, 20, nil, 1, 2, nil, 1, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 2d0f94c4757acfe87ab61946bc9adbbb	3	st = Process.detach(spawn("sh", "-c", "exit 3")).value; st.exitstatus
 2d2ff1c3ff5d4218de0d6a13eec1eeb7	"a"	"a".reverse
 2d4ecfc6a346da8617ce2f74c132236e	[["1", "9", "0", nil], ["global-variable", nil], nil, nil]	res = []\n        "1234567890" =~ /(1)(2)(3)(4)(5)(6)(7)(8)(9)(0)/\n     
@@ -805,6 +807,7 @@
 3d4f40c1f15e87af5d8f2875562332f0	true	"".dup.force_encoding("UTF-16BE") == "".dup.force_encoding("UTF-8")
 3d5aaee333bdf3c4bc36ded91dcd0aaf	[1, :nme]	class TrueClass; def only_true713; 1; end; end\n        res = []\n       
 3d5adde3fb0edf69c5646dd0efeadc07	["PSubC", :dup, :clone]	class PSubC < Proc\n                 def initialize_dup(o); super; @tag = :dup; e
+3d7615175fabd68b3fa63cd412a212f0	[:n, :t, :f, 1, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 3d825ed681f4d3904854e2642bf813b4	A	class A; end\n            Class.new(A).superclass\n            
 3d87b9096253d3620333a296cee8e5f7	2.5	def call_block\n          yield\n        end\n        def p3\n          k =
 3d97f043dbc63d648bc8c08d3cd03cda	Array	class C < Array; end\n(C[1,2] | [3]).class
@@ -1225,6 +1228,7 @@
 5d03329e8ce3ae472df7fb2691c658f9	[3, :redefined]	a, b = 3, 9\n            r = []\n            50.times { r << [a, b].m
 5d04703a221875b0b4d2a0813111741a	nil	class CSrcLocMissing; end\n            CSrcLocMissing.const_source_l
 5d0c9438a810db95f43044dee3f665ba	[true, true]	class CSrcLocScopeOuter\n              class Inner\n                I
+5d133754b00e49c763d011ae4b0d6b42	[1, :seven, :str, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 12, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 5d2068c7082fde255a8c47d3b3b3e849	nil	$stdout.write("a")\n            print "b"\n            $stdout.write(
 5d33630c505ca95acb062afbe222be3f	"Float"	before = Time.now\n            (Time.now - before).class.to_s
 5d37270fae8d3495ac4405dcd8502866	["fiber called across threads", "fiber called across threads", "fiber called across threads", "fiber called across threads", :r]	res = []\n            f1 = Fiber.new { :r }\n            f2 = Fiber.n
@@ -3026,6 +3030,7 @@ e40d3f8284923f9a5d0e3cb7bf4ebd90	:OVERRIDDEN	class String; def !=(o); :OVERRIDDE
 e4389faf07c04c6c6c14f39e455deef9	"Object"	Enumerator::Yielder.superclass.to_s
 e441908e5db44ae55d2d4454aa1055a2	["hello", "HI"]	class A\n              def greet; "hello"; end\n            end\n     
 e44c1ee57a646b552c6cf61a121a4a5f	["hellohellohello", "hellohello", "hello world", true, "x", "!‽", "abcd"]	a = +"hello"\n        a.concat a, a\n        b = +"hello"\n        b.conca
+e44cf67962ec6cc352d0ab49d20f4d1f	[nil, 4, 5, 1, nil, 2, 4, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 e44fe0e6159ead6593e9820b1014b08b	[:two_ensure, :three_post, :three_ensure]	class BT\n          def one; two { yield }; end\n          def two\n      
 e45448fbfd8f7f0f3eff2312a6288466	nil	begin\n              raise "original"\n            rescue => e\n      
 e45816cf8d4aeb4f460e318b767a5882	1	(1..).min
@@ -3193,6 +3198,7 @@ f090d1117e83eac6fc71416bd205423e	[[195, 169], "Windows-31J", true]	s = "\\303\\2
 f090e128d692f747d1595559a1145a25	[499500, 4]	module Hot; end\n        class Integer\n          prepend Hot\n        end
 f098937c1782ad342405a495ac2f0063	true	class Foo\n              def bar; end\n            end\n            \n\n
 f09f3eb9548625635df9c1a64f0614c9	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
+f0c130f386e3895d3c36f721f172b025	[1, 10, 5, nil, 3, 1, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 f0c50bd8de554c94bd61a098ac6b9b78	"#<data M amount=42, unit=\\"km\\">"	M = Data.define(:amount, :unit)\nM.new(42, "km").to_s
 f0e946f362739bd5f3dcdd127d2dbfe2	[:toa, :single]	class E1 < StandardError; end\n            class Custom; def to_a; [
 f12165564d922cbb529013b962e93e50	11	b = for a in 0..300 do\n                if a == 77 then break a/7 en

@@ -58,6 +58,14 @@ pub(crate) const fn entries_offset<K, V, E, G, R>() -> usize {
     std::mem::offset_of!(IndexMapCore<K, V, E, G, R>, entries)
 }
 
+/// Byte offset of the `linear` flag inside an `IndexMapCore`, for the same
+/// consumer as [`entries_offset`]: generated code reads it to decide whether
+/// the entries may be scanned directly (no indices table) or the probe must
+/// go through the table.
+pub(crate) const fn linear_offset<K, V, E, G, R>() -> usize {
+    std::mem::offset_of!(IndexMapCore<K, V, E, G, R>, linear)
+}
+
 /// Mutable references to the parts of an `IndexMapCore`.
 ///
 /// When using `HashTable::find_entry`, that takes hold of `&mut indices`, so we have to borrow our

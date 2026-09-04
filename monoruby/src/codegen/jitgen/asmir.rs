@@ -1225,6 +1225,20 @@ impl AsmIr {
         self.inst.push(AsmInst::HashEntryAt { want_key, layout });
     }
 
+    /// See [`AsmInst::HashProbePacked`].
+    pub(crate) fn hash_probe_packed(
+        &mut self,
+        layout: rubymap::EntriesLayout,
+        hashindex: u64,
+        digest: u64,
+    ) {
+        self.inst.push(AsmInst::HashProbePacked {
+            layout,
+            hashindex,
+            digest,
+        });
+    }
+
     /// Emit `dst <- fixnum(String#bytesize)`: the fixnum-tagged byte length of
     /// the string receiver in `base`. Typed alternative to `inline`.
     pub(crate) fn string_len_fixnum(&mut self, dst: GP, base: GP) {
@@ -2071,6 +2085,32 @@ pub(super) enum AsmInst {
     /// construction, like `HashEntryAt` — no error edge, no fallback.
     HashLiveAt {
         layout: rubymap::EntriesLayout,
+    },
+    ///
+    /// `Rax <- Hash#[](Rcx)` for the hash in `Rdx`, with the probe emitted
+    /// as machine code: the boxed map's entries are scanned for the key's
+    /// digest and then its bits, and a hit reads the value straight out of
+    /// the entry. No Rust runs on a hit except the digest itself
+    /// (`digest`, a leaf). A miss answers `nil` in line when the Hash has
+    /// no default; a default value / default proc goes to `hashindex`,
+    /// which owns them — and so does a shape the probe does not handle (an
+    /// inline or identity-keyed representation, or a map past its linear
+    /// size, whose probe goes through the indices table). Total by
+    /// construction: nothing here exits, because a deopt would not
+    /// recompile and a large Symbol-keyed Hash would then exit on every
+    /// lookup.
+    ///
+    /// The key must already be class-guarded to one of the bits-hashed
+    /// immediates (`Symbol`, `nil`, `true`, `false`): a fixnum's digest
+    /// reduces through SipHash first (`Value::ruby_hash_packed`), which the
+    /// leaf would do correctly but not cheaply.
+    ///
+    HashProbePacked {
+        layout: rubymap::EntriesLayout,
+        /// `hashindex`'s address — the miss path.
+        hashindex: u64,
+        /// `packed_digest_c`'s address.
+        digest: u64,
     },
     /// `dst <- (src == nil) ? true : false` as a Ruby bool `Value` (`Object#nil?`).
     /// Typed replacement for the `emit_kernel_nil` closure. Uses `GP::Rsi` as a

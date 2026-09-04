@@ -173,7 +173,7 @@ Integer キーだけ Symbol キーより 14 ns 遅い（39.5 vs 25.7）のがそ
 構造ハッシュ用（Ruby から見える `#hash` 値）とバケッティング用を分ければ、
 Integer キーの参照が Symbol キーと同じところまで来るはず。
 
-### 4.2 probe を JIT でインライン展開する（大・最大の残り）
+### 4.2 probe を JIT でインライン展開する（大・最大の残り。**段階 1 実装済み**、2026-09-04）
 
 いまは `Hash#[]` のインライン生成が `hashindex` への直接呼び出しまでしか
 やらない（メソッドフレームは省くが、そこから先は Rust）。受信側が
@@ -183,6 +183,60 @@ Integer キーの参照が Symbol キーと同じところまで来るはず。
 残差（33.7 vs 17.5 ns）を埋める本命。`gen_hash_entry_at` が既に
 `rubymap::EntriesLayout` からエントリ配列を歩いているので、必要なレイアウト
 知識は揃っている。
+
+#### 段階分け
+
+`IndexMapCore` には 2 つの動作領域がある。**≤ 8 エントリ**（`AR_MAX`、CRuby の
+`RHASH_AR_TABLE_MAX_SIZE` と同じ）は `linear`、`indices` を作らず `entries` を
+線形走査して `entry.hash == hash` の一致だけキー比較する。それ以上は hashbrown
+の probe（上位 7 ビットで control byte を 16 個ずつ SIMD 比較 → 添字 →
+エントリ比較）。`Bucket { hash, key, value }` はハッシュ値を格納しているので、
+線形走査は「64 ビット比較 × N、当たったときだけキー比較」で済む。
+
+| 段階 | キー | 領域 | 状態 |
+|---|---|---|---|
+| 1 | packed のうちビットがそのままミキサーに入るもの（Symbol / nil / true / false） | 線形（≤ 8） | **実装済み** `AsmInst::HashProbePacked` |
+| 2 | 同上 | 索引（> 8）— hashbrown の group probe | 未 |
+| 3 | String — バイト列ダイジェスト + memcmp + `plain_string` 判定 | 両方 | 未（erubi の 18 エントリ・String キーはここ） |
+
+Integer キーは 4.1 の二重ハッシュ（SipHash を内側で 1 回回す）が解けるまで
+対象外。葉ヘルパで正しく計算はできるが、ヘルパ自体が現状のルックアップの
+大半のコストになる。
+
+#### 段階 1 の設計判断（2026-09-04）
+
+- **ダイジェストは葉ヘルパ `packed_digest_c`、probe は機械語。** fold は
+  64×64→128 の乗算だが、この JIT が使う x86-64 アセンブラ（monoasm）に
+  1 オペランド `mul` が**無い**（`div` / `idiv` はあり、`imul` は 2 オペランドの
+  下位 64 ビットのみ）。aarch64 には `umulh` がある。monoasm に足したら
+  ヘルパをその命令列に置き換えるだけで、他は変わらない。
+- **形の不一致は deopt ではなく builtin 呼び出し。** inline 表現・identity
+  マップ・索引領域はすべて `hashindex` への合流で、exit しない。最初は deopt に
+  していたが、この deopt は再コンパイルを起こさないので、大きな Symbol キー
+  Hash のサイトが**毎回 deopt**することになる（4.5 の ic ゲートで踏んだのと
+  同型）。builtin 呼び出しなら現状と同コストで退行しない。
+- **線形領域の miss は in-line で `nil`。** 走査を尽くしたら
+  `Option<Box<HashDefault>>`（null = default 値も proc も無し）を 1 ロード見て、
+  無ければ nil。builtin に落とすとダイジェストと走査をもう一度やり直すので、
+  最初の実装では miss が 16 → 30 ns に**退行**していた。
+- **`EntriesLayout` に `hash_offset` / `linear_offset` を追加**。`Bucket` は
+  niche を持つキー型で並び替わる（`Option<Value>` では value+0 / hash+8 /
+  key+16）ので、既存どおり実測で取る。
+
+#### 段階 1 の効果（6 エントリ・Symbol キー、純ルックアップ、交互 4 ラウンド）
+
+| | 従来 | 段階 1 |
+|---|---:|---:|
+| hit（先頭） | 16.3–18.1 | **6.3–9.7** |
+| hit（末尾） | 15.3–19.3 | **8.2–11.0** |
+| miss | 16.5–20.4 | **7.4–10.6** |
+| 18 エントリ Symbol（索引領域、fallback） | 18.7–26.0 | 15.5–21.2（退行なし） |
+
+hit 経路の call は `packed_digest_c` の 1 つだけになり、`hashindex` の call は
+miss 側にしか残らない（`emit-asm` で確認）。`tests/hash_probe_jit.rs` が
+hit / miss / default 値 / default proc / nil・true・false キー / tombstone /
+索引領域・inline 表現・identity マップへの委譲 / クラスガード / 線形↔索引の
+境界を跨ぐ成長 / 生きた状態の読み取りを CRuby と突き合わせる。
 
 ### 4.3 呼び出しサイトのキーセット・インラインキャッシュ（中・要検証）
 

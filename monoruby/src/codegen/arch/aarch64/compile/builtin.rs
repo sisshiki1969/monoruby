@@ -752,6 +752,102 @@ impl Codegen {
         );
     }
 
+    ///
+    /// `Hash#[]` with the probe in line — see `AsmInst::HashProbePacked`.
+    /// The x86-64 sequence, register for register: hash in x2 (Rdx), key in
+    /// x1 (Rcx), result in x0 (Rax); x1 / x2 survive the probe for the miss
+    /// path's `emit_call_2args`. x3, x4, x9–x12 are scratch.
+    ///
+    pub(crate) fn gen_hash_probe_packed(
+        &mut self,
+        layout: rubymap::EntriesLayout,
+        hashindex: u64,
+        digest: u64,
+    ) {
+        let lp = self.jit.label();
+        let next = self.jit.label();
+        let exhausted = self.jit.label();
+        let miss = self.jit.label();
+        let done = self.jit.label();
+        let ty_flags = (RVALUE_OFFSET_TY + 1) as u32;
+        let boxed_rep = HASH_REP_BOXED as u32;
+        let map_ptr = HASH_CONTENT_MAP_OFFSET as u32;
+        let default_slot = HASH_DEFAULT_OFFSET as u32;
+        let linear_off = layout.linear_offset as u32;
+        let len_off = layout.len_offset as u32;
+        let ptr_off = layout.ptr_offset as u32;
+        let bucket_size = layout.bucket_size as u64;
+        let hash_off = layout.hash_offset as u32;
+        let key_off = layout.key_offset as u32;
+        let value_off = layout.value_offset as u32;
+        monoasm_arm64!(&mut self.jit,
+            ldrb w3, [x2, #(ty_flags)];
+            mov x9, (HASH_REP_MASK as u64);
+            and x3, x3, x9;
+            cmp x3, #(boxed_rep);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &miss);
+        monoasm_arm64!(&mut self.jit,
+            ldr x4, [x2, #(map_ptr)];
+            ldrb w3, [x4, #(linear_off)];
+            cmp x3, #(0);
+        );
+        // A shape this probe does not handle is a call, not an exit — see
+        // the x86-64 twin.
+        self.jit.bcond_label(monoasm::Cond::Eq, &miss);
+        monoasm_arm64!(&mut self.jit,
+            // digest = packed_digest_c(key); keep x1 / x2 for the miss path.
+            stp x1, x2, [sp, #(-16)]!;
+            mov x0, x1;
+            mov x9, (digest);
+            str x30, [sp, #(-16)]!;
+            blr x9;
+            ldr x30, [sp], #(16);
+            ldp x1, x2, [sp], #(16);
+            mov x10, x0;                        // x10 = digest
+            ldr x4, [x2, #(map_ptr)];
+            ldr x11, [x4, #(ptr_off)];          // x11 = &entries[0]
+            ldr x9, [x4, #(len_off)];
+            mov x12, (bucket_size);
+            mul x9, x9, x12;
+            add x9, x9, x11;                    // x9 = one past the last entry
+        lp:
+            cmp x11, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Hs, &exhausted);
+        monoasm_arm64!(&mut self.jit,
+            ldr x3, [x11, #(hash_off)];
+            cmp x3, x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &next);
+        monoasm_arm64!(&mut self.jit,
+            ldr x3, [x11, #(key_off)];
+            cmp x3, x1;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &next);
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x11, #(value_off)];
+            b done;
+        next:
+            add x11, x11, x12;
+            b lp;
+        exhausted:
+            // Not present: nil in line unless a default value / proc exists
+            // (null `Option<Box<HashDefault>>` means neither) — see the
+            // x86-64 twin.
+            ldr x3, [x2, #(default_slot)];
+            cmp x3, #(0);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &miss);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, #(NIL_VALUE);
+            b done;
+        miss:
+        );
+        self.emit_call_2args(hashindex);
+        self.jit.bind_label(done);
+    }
+
     /// `Hash#__key_at` / `#__value_at`: hash in Rdx (x2), fixnum index in Rcx
     /// (x1), result Value in Rax (x0). aarch64 twin of the x86
     /// `gen_hash_entry_at`.
