@@ -1314,7 +1314,7 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn emit_literal(&mut self, dst: BcReg, v: Value) {
-        self.iseq_mut().literals.push(v);
+        self.store.push_literal(v);
         if v.class().is_always_frozen() {
             self.emit(BytecodeInst::FrozenLiteral(dst, v), Loc::default());
         } else {
@@ -1458,7 +1458,7 @@ impl<'a> BytecodeGen<'a> {
         let enc = self.source_encoding();
         let mut v = Value::string_from_source_str(s, enc);
         v.set_frozen();
-        self.iseq_mut().literals.push(v);
+        self.store.push_literal(v);
         self.emit(BytecodeInst::FrozenLiteral(dst, v), Loc::default());
     }
 

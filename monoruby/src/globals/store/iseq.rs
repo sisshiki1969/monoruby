@@ -250,10 +250,6 @@ pub struct ISeqInfo {
     ///
     pub(crate) locals: indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
     ///
-    /// literal values. (for GC)
-    ///
-    pub literals: Vec<Value>,
-    ///
     /// The number of non-temporary registers.
     ///
     pub non_temp_num: u16,
@@ -273,6 +269,13 @@ pub struct ISeqInfo {
     /// JIT code info for each class of *self*.
     ///
     pub(super) jit_entry: HashMap<ClassId, JitInfo>,
+    ///
+    /// Whether this ISeq is already on `Store::jit_iseqs` — the list the GC
+    /// walks instead of every ISeq. Set once, when the first compiled unit is
+    /// recorded; an eviction (BOP redefinition clears both maps) leaves the
+    /// entry in place, which only costs an empty visit.
+    ///
+    pub(super) on_jit_list: bool,
     /// Per-loop (OSR) compilation units, keyed by `(self_class, LoopStart
     /// index)`: the inline-cache map and shared class-version word of the
     /// last installed loop body, so a class-version guard failure can be
@@ -447,9 +450,11 @@ impl std::fmt::Debug for ISeqInfo {
 
 impl alloc::GC<RValue> for ISeqInfo {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.literals.iter().for_each(|v| v.mark(alloc));
         // The salvage records snapshot folded constant Values; they must stay
-        // alive as long as the compiled code that baked them in.
+        // alive as long as the compiled code that baked them in. Only reached
+        // for an ISeq on `Store::jit_iseqs` — an ISeq that has never been
+        // compiled holds no Value at all, and the overwhelming majority never
+        // are (23k ISeqs, 1.6k compiled units on activerecord).
         self.jit_entry
             .values()
             .for_each(|info| info.const_map.mark(alloc));
@@ -482,12 +487,12 @@ impl ISeqInfo {
             exception_map: vec![],
             args,
             locals: Default::default(),
-            literals: vec![],
             non_temp_num: 0,
             temp_num: 0,
             lexical_context: vec![],
             sourceinfo,
             jit_entry: HashMap::default(),
+            on_jit_list: false,
             loop_jit_info: HashMap::default(),
             #[cfg(target_arch = "aarch64")]
             jit_slot: HashMap::default(),

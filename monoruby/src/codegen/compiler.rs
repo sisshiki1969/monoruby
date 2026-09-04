@@ -555,6 +555,7 @@ impl Codegen {
             // Record the unit's salvage info so a later class-version guard
             // failure can re-validate and patch instead of recompiling.
             let index = globals.store[iseq_id].get_pc_index(Some(pc));
+            globals.store.note_jit_iseq(iseq_id);
             globals.store[iseq_id].set_loop_jit_info(
                 self_class,
                 index,

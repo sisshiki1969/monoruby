@@ -372,6 +372,15 @@ mod tests {
 
 pub(crate) struct Funcs {
     pub(in crate::globals) info: MonoVec<FuncInfo>,
+    ///
+    /// The `FuncKind::Proc` entries — the only `FuncInfo`s that hold a
+    /// `Value` (the `define_method` block's `Proc`, with its captured outer
+    /// frame). Every other kind marks nothing, so the GC walks this list
+    /// rather than the whole table: activerecord has 3k of these among 29k
+    /// functions. A function's kind is fixed at creation, so the list needs
+    /// no maintenance beyond the one push in `new_proc_method`.
+    ///
+    proc_fids: Vec<FuncId>,
     /// FIFO of not-yet-compiled function bodies, consumed by
     /// `bytecode_compile`. A deque, not a `Vec`: entries embed the whole AST
     /// (hundreds of bytes each), and a 30k-`def` script queues 30k of them —
@@ -399,6 +408,7 @@ impl std::default::Default for Funcs {
         info.push(FuncInfo::default());
         Self {
             info,
+            proc_fids: vec![],
             compile_info: VecDeque::new(),
         }
     }
@@ -406,7 +416,7 @@ impl std::default::Default for Funcs {
 
 impl alloc::GC<RValue> for Funcs {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        self.info.iter().for_each(|info| info.mark(alloc));
+        self.proc_fids.iter().for_each(|&fid| self[fid].mark(alloc));
     }
 }
 
@@ -665,6 +675,7 @@ impl Funcs {
             reg_num,
             is_block_style,
         ));
+        self.proc_fids.push(func_id);
         func_id
     }
 

@@ -112,12 +112,39 @@ pub struct Store {
     class_new_fid: Option<FuncId>,
     /// ISeq info.
     pub(crate) iseqs: Vec<ISeqInfo>,
+    ///
+    /// Every literal `Value` any bytecode holds, in one flat pool.
+    ///
+    /// These exist only to keep the literals alive (nothing reads them —
+    /// the bytecode carries the `Value` in its operand), and they are
+    /// immortal once bytecodegen has emitted them. Pooling them here rather
+    /// than in a `Vec` per `ISeqInfo` is what makes the GC's cost
+    /// proportional to the number of literals instead of the number of
+    /// ISeqs: activerecord has 8.7k literals spread over 23k ISeqs, so the
+    /// per-ISeq form chased 23k cold `Vec` headers per collection to reach
+    /// them.
+    ///
+    literals: Vec<Value>,
+    ///
+    /// The ISeqs that have at least one compiled unit, i.e. the only ones
+    /// whose `mark` can reach anything (a unit's `const_map` snapshots the
+    /// constants it folded). Membership is recorded by `note_jit_iseq`,
+    /// and `ISeqInfo::on_jit_list` keeps it duplicate-free.
+    ///
+    jit_iseqs: Vec<ISeqId>,
     /// class table.
     classes: ClassInfoTable,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
     constsite_info: Vec<ConstSiteInfo>,
+    ///
+    /// The const sites whose inline cache is populated — the only ones
+    /// holding a `Value`. Appended by `set_const_cache` on the `None` →
+    /// `Some` transition, which is the only way a cache appears; a cache is
+    /// never cleared, only overwritten.
+    ///
+    cached_constsites: Vec<ConstSiteId>,
     /// opt case branch info.
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
@@ -230,11 +257,9 @@ impl std::ops::Index<ConstSiteId> for Store {
     }
 }
 
-impl std::ops::IndexMut<ConstSiteId> for Store {
-    fn index_mut(&mut self, index: ConstSiteId) -> &mut ConstSiteInfo {
-        &mut self.constsite_info[index.0 as usize]
-    }
-}
+// NOTE: deliberately no `IndexMut<ConstSiteId>`. The only mutable field is
+// the inline cache, and writing it must go through `set_const_cache` so the
+// GC's `cached_constsites` index stays in step.
 
 impl std::ops::Index<CallSiteId> for Store {
     type Output = CallSiteInfo;
@@ -263,16 +288,63 @@ impl std::ops::Index<OptCaseId> for Store {
 }
 
 impl alloc::GC<RValue> for Store {
+    ///
+    /// Scan the interpreter's own tables for `Value`s.
+    ///
+    /// This is the bulk of every collection — the object graph reachable
+    /// from frames and globals is comparatively tiny — so each table is
+    /// walked through a side index of exactly the entries that can hold a
+    /// `Value`, never the table itself. On activerecord that is the
+    /// difference between visiting ~52k `FuncInfo`/`ISeqInfo`/`ConstSiteInfo`
+    /// entries and visiting the ~13k that actually carry one.
+    ///
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.functions.mark(alloc);
-        self.iseqs.iter().for_each(|info| info.mark(alloc));
-        self.constsite_info.iter().for_each(|info| info.mark(alloc));
+        self.literals.iter().for_each(|v| v.mark(alloc));
+        self.jit_iseqs
+            .iter()
+            .for_each(|&id| self[id].mark(alloc));
+        self.cached_constsites
+            .iter()
+            .for_each(|&id| self[id].mark(alloc));
         self.classes.table.iter().for_each(|info| info.mark(alloc));
         self.frozen_str_pool.values().for_each(|v| v.mark(alloc));
     }
 }
 
 impl Store {
+    ///
+    /// Root a bytecode literal. Called once per literal, from bytecodegen.
+    ///
+    pub(crate) fn push_literal(&mut self, v: Value) {
+        self.literals.push(v);
+    }
+
+    ///
+    /// Note that `iseq_id` now has a compiled unit, so the GC visits it.
+    /// Idempotent; call before installing the unit or after, either works.
+    ///
+    pub(crate) fn note_jit_iseq(&mut self, iseq_id: ISeqId) {
+        let idx: usize = iseq_id.into();
+        if !self.iseqs[idx].on_jit_list {
+            self.iseqs[idx].on_jit_list = true;
+            self.jit_iseqs.push(iseq_id);
+        }
+    }
+
+    ///
+    /// Populate a const site's inline cache, keeping the GC's side index of
+    /// cache-holding sites in step. The only way a cache is created.
+    ///
+    pub(crate) fn set_const_cache(&mut self, site_id: ConstSiteId, cache: ConstCache) {
+        let site = &mut self.constsite_info[site_id.0 as usize];
+        let first = site.cache.is_none();
+        site.cache = Some(cache);
+        if first {
+            self.cached_constsites.push(site_id);
+        }
+    }
+
     pub(super) fn new() -> Self {
         Self {
             functions: function::Funcs::default(),
@@ -282,7 +354,10 @@ impl Store {
             array_hash_fid: None,
             hash_hash_fid: None,
             iseqs: vec![],
+            literals: vec![],
+            jit_iseqs: vec![],
             constsite_info: vec![],
+            cached_constsites: vec![],
             callsite_info: vec![],
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
