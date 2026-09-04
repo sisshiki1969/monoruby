@@ -700,6 +700,17 @@ impl<'a> JitContext<'a> {
         if !self.accessor_shape_ok(callid, func_id) {
             return Ok(CompileResult::Deopt);
         }
+        // `Foo.new`: emit the whole construction here rather than call the
+        // Ruby trampoline. Needs a *proven* receiver class — behind the
+        // class-set guard the site only narrowed it to a set, and the
+        // metaclass it would read is then not this receiver's.
+        if !same_target_set_guarded
+            && self.store.class_new_fid() == Some(func_id)
+            && self.inline_class_new(state, ir, callid, recv_class)
+        {
+            state.unset_side_effect_guard();
+            return Ok(CompileResult::Continue);
+        }
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let (fid, outer_lfp) = match self.store[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
@@ -1497,6 +1508,189 @@ impl<'a> JitContext<'a> {
     /// is why the body must be straight-line (a conditional store would
     /// leave the guard proving something about a path that never stores).
     ///
+    ///
+    /// Frame-free `Foo.new`.
+    ///
+    /// `Class#new` is a Ruby trampoline (`builtins/class.rb`):
+    /// `o = __builtin_allocate__; o.__builtin_initialize__(...); o`. Both
+    /// halves already compile away *inside* that trampoline — the
+    /// allocation to an inline free-list pop (`emit_class_allocate`), the
+    /// `initialize` to nothing at all when its body is trivial
+    /// (`ISeqHint`) or to a handful of stores when it is a plain
+    /// constructor (`frameless::ivar_store_body`). What is left is the
+    /// trampoline's own frame: a class-version guard, a stack-overflow
+    /// check, ~10 stores of frame setup and a `call`/`ret`, to run code
+    /// that is a dozen instructions. This emits the same two halves as the
+    /// *caller's* instructions instead, so an argument-less construction
+    /// costs exactly the allocation.
+    ///
+    /// Declines (⇒ the ordinary specialized call) unless the whole
+    /// construction is expressible without a frame:
+    ///
+    /// * the site hands its arguments over as plain positionals — the
+    ///   trampoline's `(...)` forward is transparent only when there is
+    ///   nothing to re-shape;
+    /// * the receiver is (provably, see the identity guard) the attached
+    ///   class object, and its allocator is the stock object one, so the
+    ///   allocation is the `InlineAlloc::Object` sequence;
+    /// * `initialize` resolves to a Ruby body this compile can consume —
+    ///   trivial (folded away) or a plain ivar-store constructor
+    ///   (expanded), with an argument shape that binds without
+    ///   `ArgumentError`.
+    ///
+    /// Soundness rides on the site's class-version guard (emitted before
+    /// this point): defining `new`, `initialize`, or an `allocate` anywhere
+    /// bumps the version and this code is re-validated or discarded.
+    ///
+    fn inline_class_new(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+        recv_class: ClassId,
+    ) -> bool {
+        let callsite = &self.store[callid];
+        if callsite.block_fid.is_some()
+            || callsite.block_arg.is_some()
+            || !callsite.is_simple()
+            || callsite.kw_may_exists()
+        {
+            return false;
+        }
+        let CallSiteInfo {
+            recv,
+            dst,
+            args,
+            pos_num,
+            ..
+        } = *callsite;
+
+        // The receiver of `Class#new` is a class object, so its class is
+        // that class's singleton (metaclass); unwrap to the attached class,
+        // which is the one being instantiated.
+        let mut self_module = self.store[recv_class].get_module();
+        if let Some(origin) = self_module.is_singleton() {
+            self_module = origin.as_class();
+        }
+        let class_id = self_module.id();
+        // `Class.new` (a fresh class) and instantiating a singleton class
+        // are not this shape at all.
+        if class_id == CLASS_CLASS || self.store[class_id].get_module().is_singleton().is_some() {
+            return false;
+        }
+        // Only the stock object allocator is emitted inline: anything with
+        // its own `alloc_func` (Array, Hash, String, …) builds a payload
+        // this cannot write, and its `initialize` is native anyway. The
+        // ivar-count gate is the same pure optimization gate as in
+        // `gen_class_allocate_inline`.
+        let Some(alloc_func) = self.store[class_id].alloc_func() else {
+            return false;
+        };
+        if !std::ptr::fn_addr_eq(alloc_func, crate::default_alloc_func as AllocFunc)
+            || self.store[class_id].ivar_len() > OBJECT_INLINE_IVAR
+        {
+            return false;
+        }
+
+        // Resolve `initialize` for the allocated class. `new` reaches it
+        // through the privileged spelling, so its `private` visibility is
+        // not a gate here.
+        let init_fid = self
+            .store
+            .check_method_for_class_with_version(
+                class_id,
+                IdentId::INITIALIZE,
+                self.class_version(),
+            )
+            .and_then(|e| e.func_id());
+        let Some(init_fid) = init_fid else {
+            return false;
+        };
+        let Some(init_iseq) = self.store[init_fid].is_iseq() else {
+            return false;
+        };
+        let callee = &self.store[init_fid];
+        if !callee.no_keyword() || callee.single_arg_expand() || !callee.positional_arity_ok(pos_num)
+        {
+            return false;
+        }
+
+        // Decide the whole plan before emitting anything: the expansion is
+        // all-or-nothing, and the allocation is already emitted by the time
+        // `expand_ivar_stores` would report a miss.
+        enum InitPlan {
+            /// A trivial body: nothing to emit at all.
+            Fold,
+            /// A plain constructor, expanded into the caller.
+            Stores(frameless::IvarStoreBody),
+        }
+        let plan = match self.store[init_iseq].hint {
+            // `SelfReturn` is `def initialize = self`, which returns the
+            // new object — and `new` discards the return value either way.
+            ISeqHint::ConstReturn(_) | ISeqHint::SelfReturn => InitPlan::Fold,
+            ISeqHint::Normal => {
+                // The stores are written into the object this very
+                // instruction allocated, so its slot must exist — and must
+                // not be one of the argument slots the stores then read
+                // (the new object lands in `dst` *before* they run).
+                let Some(d) = dst else {
+                    return false;
+                };
+                if (0..pos_num).any(|i| args + i == d) {
+                    return false;
+                }
+                let Some(body) = frameless::ivar_store_body(&self.store, init_iseq) else {
+                    return false;
+                };
+                if pos_num != self.store[init_fid].params().total_positional_args()
+                    || !self.store[class_id].is_object_ty_instance()
+                    || !body.stores.iter().all(|&(name, _)| {
+                        self.store[class_id]
+                            .get_ivarid(name)
+                            .is_some_and(|id| id.is_inline())
+                    })
+                {
+                    return false;
+                }
+                InitPlan::Stores(body)
+            }
+        };
+
+        // Runtime identity guard, for the same reason `Class#allocate`
+        // needs one: the dispatch class is not injective over receivers —
+        // for `o` an instance of `Foo`, both `Foo` and `o.singleton_class`
+        // dispatch as `#<Class:Foo>`, and `o.singleton_class.new` must
+        // raise TypeError rather than allocate a `Foo`. Deopt on mismatch
+        // and let the interpreter do the raising.
+        state.load(ir, recv, GP::Rax);
+        let deopt = ir.new_deopt(state);
+        ir.guard_value_identity(self_module.as_val(), deopt);
+
+        let using_fpr = state.get_using_fpr(ir);
+        ir.fpr_save(using_fpr);
+        ir.inline(move |r#gen, _, _, _| {
+            r#gen.emit_class_allocate(
+                class_id.u32(),
+                alloc_func as *const () as u64,
+                Some(InlineAlloc::Object),
+            )
+        });
+        ir.fpr_restore(using_fpr);
+        state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
+
+        if let InitPlan::Stores(body) = plan {
+            let dst = dst.unwrap();
+            let arg_slots: Vec<frameless::ArgSlot> =
+                (0..pos_num).map(|i| frameless::ArgSlot::Own(args + i)).collect();
+            // The constructor's return value is discarded by `new`, so the
+            // expansion writes no destination — `dst` keeps the object.
+            let ok = self.expand_ivar_stores(state, ir, class_id, dst, None, &body, &arg_slots);
+            // The plan was fully resolved above, so this cannot miss.
+            debug_assert!(ok);
+        }
+        true
+    }
+
     fn expand_ivar_stores(
         &mut self,
         state: &mut AbstractState,

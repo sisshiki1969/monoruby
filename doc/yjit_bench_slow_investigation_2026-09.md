@@ -580,6 +580,78 @@ scanner が region を持ち、`onig_match`（scan 位置での 1 回マッチ�
 引く分。scanner 側に region を持たせる（= Rust オブジェクト化）までやれば埋まるが、
 Ruby 実装を残す方針では次点。
 
+### 8.2 `Foo.new`（オブジェクト生成）をフレームなしで出す
+
+`object-new` 系（yjit-bench）が monoruby の弱点として残っていたので分解した。
+`Object.new` 1 回 = **16.5 ns**（ループ 1.6 ns を含む）で、内訳は:
+
+| 内訳 | ns |
+|---|---:|
+| ループ本体 | 1.6 |
+| セル確保（free-list pop + ヘッダ/ivar 初期化） | 8.2 |
+| `Class#new` トランポリンのフレーム | 4.2 |
+| `__builtin_initialize__` → native `BasicObject#initialize` | 2.5 |
+
+確保そのものは既にアセンブリでインライン化済み（`emit_class_allocate` +
+`emit_alloc_cell`: free-list pop / bump ポインタ、`alloc_func` はスローパス専用）
+なので、残りはトランポリン 2 段ぶんのフレームだった。2 つ入れた。
+
+**(a) `BasicObject#initialize` を Ruby で定義**（`builtins/basic_object.rb`）。
+native の no-op（`bo_initialize`）は bytecodegen のヒントを持てないので、
+`Class#new` の中の `o.__builtin_initialize__(...)` は必ず本物の呼び出しになる。
+`def initialize; end` にすると `ISeqHint::ConstReturn(nil)` が付き、JIT の
+forwarded-fold（`compile_method_call` の `forwarded_fold`）が呼び出しごと消す。
+arity は 0 のままなので `Object.new(1)` は今までどおり ArgumentError。native 定義は
+ブートストラップ用に残す（basic_object.rb が読まれる前に `.new` が要る）。
+`singleton_method_added` 等の no-op フックは既にこの形になっていた。
+
+**(b) `Foo.new` を呼び出しサイトで展開**（`JitContext::inline_class_new`）。
+(a) を入れても `Class#new` 自身のフレーム（クラスバージョンガード、スタック
+オーバーフロー検査、フレーム設定 ~10 store、`call`/`ret`）は残る。`Class#new` は
+`(...)` 転送なので JIT は self_class ごとに特殊化コンパイルするが、**呼び出しは
+残る**（`SpecializedCall`）。呼び出しサイトで直接:
+
+1. 受信側が（識別ガード付きで）その クラスオブジェクトそのもの、
+2. `alloc_func` が既定の object allocator（`InlineAlloc::Object`）、
+3. `initialize` が Ruby の ISeq で、`ISeqHint` で畳めるか
+   `frameless::ivar_store_body`（`def initialize(a,b) = (@a=a; @b=b)`）で展開でき、
+   引数形が ArgumentError なしで束縛できる
+
+をすべて満たすときだけ、確保と ivar ストアを**呼び出し元の命令として**出す。
+1 つでも欠ければ従来の特殊化呼び出しに落ちる（ブロック付き、キーワード、splat、
+`super`、`define_method` の `initialize`、Array/Hash/Struct/Data など独自
+allocator のクラスは全部この「降りる」側）。健全性は既存のクラスバージョンガード
+（この時点で emit 済み）に乗っている — `new` / `initialize` / `allocate` の
+再定義はどれもバージョンを進める。
+
+`Class#new` の FuncId は `builtins/class.rb` を読んだ後にしか存在しないので、
+startup 完了時に `Store::record_class_new_fid()` で 1 回だけ記録する。
+
+結果（`Empty.new` の JIT 出力は `call alloc_cell` + 8 store のみ、フレームなし）:
+
+| マイクロ（ns/iter、ループ 1.4 を含む） | before | after |
+|---|---:|---:|
+| `Object.new` | 14.9 | 7.9 |
+| `Empty.new`（`initialize` なし） | 15.4 | 7.9 |
+| `Point.new(i, i)`（2 ivar） | 12.1 | 12.2 |
+
+yjit-bench（交互 3 ラウンドの中央値の最小値、`MAX_TIME=6`／アプリ系は 12）:
+
+| ベンチ | before | after | 差 |
+|---|---:|---:|---:|
+| object-new | 15.52 ms | 9.14 ms | **−41 %** |
+| object-new-initialize（4 ivar） | 17.13 ms | 12.33 ms | **−28 %** |
+| object-new-no-escape | 30.13 ms | 22.88 ms | **−24 %** |
+| setivar_object（対照） | 4.51 ms | 4.58 ms | ±0 |
+| erubi | 198.2 ms | 188.9 ms | −4.7 % |
+| psych-load | 1338 ms | 1309 ms | −2.2 % |
+| activerecord | 142.7 ms | 139.9 ms | −1.9 % |
+| rack | 46.3 ms | 46.5 ms | ±0 |
+| graphql | 27.8 ms | 27.9 ms | ±0（8 ラウンドで再確認） |
+
+残りは確保そのもの（`Empty.new` 7.9 − ループ 1.4 = **6.5 ns**）で、その大半は
+GC の償却分。ここから先は §5.1（GC ルートの世代別化）とアロケータの話になる。
+
 - 手元の CRuby は 4.0.6 で、`Float#ceil(15)` の結果が 4.0.2 と違う
   （`1.123456789.ceil(15)` → `1.123456789000001`）ため `float::tests::angle` が
   baseline でも失敗する。本変更とは無関係。

@@ -408,6 +408,95 @@ mod tests {
         );
     }
 
+    /// The frame-free `Foo.new` (`JitContext::inline_class_new`) emits the
+    /// allocation and the constructor as the *caller's* instructions, so
+    /// every semantic the trampoline used to carry has to survive without a
+    /// frame: strict arity, the receiver-identity guard that keeps
+    /// `o.singleton_class.new` raising, a user `initialize` that really
+    /// runs, and a re-`def` of `initialize` invalidating the compile.
+    #[test]
+    fn class_new_inline() {
+        run_test(
+            r#"
+        class Empty; end
+        class Point
+          def initialize(x, y); @x = x; @y = y; end
+          def to_a; [@x, @y]; end
+        end
+        res = []
+        res << Empty.new.class.to_s
+        res << Point.new(1, 2).to_a
+        res << Point.new(1, 2).instance_variables
+        res << (begin; Empty.new(1); rescue ArgumentError => e; e.class.to_s; end)
+        res << (begin; Point.new(1); rescue ArgumentError => e; e.class.to_s; end)
+        res << (begin; Empty.new.singleton_class.new; rescue TypeError => e; e.class.to_s; end)
+        res
+        "#,
+        );
+    }
+
+    /// A `new` / `initialize` (re)definition after the site is hot must be
+    /// picked up: both are ordinary method definitions, so the site's
+    /// class-version guard is what stands behind the specialization.
+    #[test]
+    fn class_new_inline_redefinition() {
+        run_test(
+            r#"
+        class C
+          def initialize(x); @x = x; end
+          def x; @x; end
+        end
+        res = []
+        30.times { res << C.new(1).x }
+        class C; def initialize(x); @x = x * 10; end; end
+        30.times { res << C.new(1).x }
+        class D
+          def initialize(x); @x = x; end
+        end
+        def D.new(x); :custom; end
+        30.times { res << D.new(1).to_s }
+        res.uniq
+        "#,
+        );
+    }
+
+    /// Shapes the frame-free path must decline rather than mis-compile: a
+    /// constructor with a block, with keywords, with a splat, one that
+    /// calls `super`, and a class whose allocator is not the stock object
+    /// one.
+    #[test]
+    fn class_new_inline_declines() {
+        run_test(
+            r#"
+        class Blocky
+          def initialize; @r = block_given? ? yield : :none; end
+          def r; @r; end
+        end
+        class Kw
+          def initialize(a:, b: 2); @a = a; @b = b; end
+          def to_a; [@a, @b]; end
+        end
+        class Base; def initialize(x); @x = x; end; end
+        class Derived < Base
+          def initialize(x); super(x + 1); end
+          def x; @x; end
+        end
+        class MyArray < Array; end
+        res = []
+        30.times { res << Blocky.new { :blk }.r }
+        30.times { res << Blocky.new.r }
+        30.times { res << Kw.new(a: 1).to_a }
+        30.times { res << Kw.new(**{a: 1, b: 3}).to_a }
+        30.times { |i| res << Derived.new(i).x }
+        args = [1, 2]
+        class Pair; def initialize(a, b); @a = a; @b = b; end; def to_a; [@a, @b]; end; end
+        30.times { res << Pair.new(*args).to_a }
+        30.times { res << MyArray.new(2, 0).to_a }
+        res.uniq
+        "#,
+        );
+    }
+
     #[test]
     fn test_class() {
         run_test("Time.superclass.to_s");
