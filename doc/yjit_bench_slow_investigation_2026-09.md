@@ -772,9 +772,75 @@ _ => false,   // ← CLASS / MODULE は昇格しない
 > いる。既存の失敗 2 件（`float::tests::angle`、`io::tests::file_path_survives_…`）
 > はどちらも master で同一に再現する。
 
-残りは frozen 文字列プールと、上のクラスオブジェクト本体。オブジェクト化が本当に
-必要になるのは「死んだ ISeq / 無名クラスの回収」の方で、これは性能ではなくメモリ
-リーク（`iseqs` / `functions` / `constsite_info` が append-only）の課題として別に扱う。
+→ この前提条件を §8.5 で実際に外した。外したあとダーティビットは本来の働きをする。
+
+### 8.5 CLASS / MODULE を昇格可能にする
+
+§8.4 が突き当たった `RValue::is_promotable` の除外を外す。クラスオブジェクトが
+保持する `Value` は `ModuleInner` の 3 本だけ:
+
+| フィールド | 書き込み点 | 対応 |
+|---|---|---|
+| `superclass` | `Module::include` / `Module::prepend_module` / `set_superclass`（外部 3 か所） | 3 か所すべてに write barrier |
+| `origin` | `Module::prepend_module` の 1 か所 | 同上 |
+| `singleton` | 構築時のみ（再代入なし） | 若い時点で作られるので不要 |
+| `var_table`（クラスの ivar） | `set_ivar` と JIT の ivar ストア | **既にバリア済み** |
+
+`ModuleInner::set_superclass` は private にして、バリア付きの `Module::set_superclass`
+だけを公開経路にした（`Module` の inherent メソッドが Deref より優先されるので、
+`Module` 受信側からは迂回できない）。`RValue::young_child_exists` に
+`CLASS | MODULE` の腕を足す — `mark` と**厳密に同じ 3 本**を報告する必要がある
+（remember-on-promote が漏れると、生きた参照の下でオブジェクトが解放される）。
+そのうえで `is_promotable` に `CLASS | MODULE` を追加し、`ClassInfo` の
+oldness 判定に `object` を戻した。
+
+dirty なクラスは **3〜6 %** に落ちる:
+
+| ベンチ | クラス数 | dirty |
+|---|---:|---:|
+| erubi | 1,242 | 45 (3.6 %) |
+| activerecord | 3,748 | 178 (4.7 %) |
+| rack | 1,421 | 56 (3.9 %) |
+| graphql | 1,372 | 79 (5.8 %) |
+| psych-load | 1,212 | 30 (2.5 %) |
+
+マーク時間（§8.4 の状態から）:
+
+| ベンチ | §8.4 | + 昇格可能 | 差 |
+|---|---:|---:|---:|
+| erubi | 1096 µs/gc | 937 | **−14.5 %** |
+| activerecord | 3173 µs/gc | 2332 | **−26.5 %** |
+| rack | 1218 µs/gc | 1025 | **−15.8 %** |
+| graphql | 1287 µs/gc | 1067 | **−17.1 %** |
+| psych-load | 1528 µs/gc | 1389 | **−9.1 %** |
+
+表を飛ばす分より大きいのは、クラスオブジェクトが old になったことで
+**minor GC がクラスグラフ全体（superclass 鎖・iclass・シングルトン）を辿らなく
+なった**から。§8.3〜8.5 の合計、master (`be40f5a`) からの mark 時間:
+
+| ベンチ | master | 8.3+8.4+8.5 | 差 |
+|---|---:|---:|---:|
+| erubi | 1795 µs/gc | 1028 | **−43 %** |
+| activerecord | 5413 µs/gc | 2825 | **−48 %** |
+| rack | 2185 µs/gc | 1150 | **−47 %** |
+| graphql | 2102 µs/gc | 1220 | **−42 %** |
+| psych-load | 2302 µs/gc | 1524 | **−34 %** |
+
+エンドツーエンドは 8 ラウンド交互で erubi 中央値 291 → 283 ms（−3 %）、
+activerecord 253 → 250 ms（−1 %）、graphql −3 %、rack −1.5 %、psych ±0。
+マークが実行時間の 2〜3 % しかない以上これが上限で、**本当の価値はポーズ時間**
+（activerecord の 5.4 ms → 2.8 ms）の方にある。
+
+> 検証: `gc-debug` + `gc-stress`（全セーフポイントで GC、全 minor でクリーンな
+> `ClassInfo` の不変条件を検査）で lib テスト **2,616 件**通過、表明の発火 0。
+> 通常フルスイート 3728 passed / 1 failed（既存の `angle`）。バリア漏れがあれば
+> 昇格したクラスオブジェクトの下で superclass が解放されるので、gc-stress が
+> 最も効く形の検証になっている。
+
+残りは frozen 文字列プールと、`Store` の各表の単調増加そのもの。オブジェクト化が
+本当に必要になるのは「死んだ ISeq / 無名クラスの回収」の方で、これは性能ではなく
+メモリリーク（`iseqs` / `functions` / `constsite_info` が append-only）の課題として
+別に扱う。
 
 - 手元の CRuby は 4.0.6 で、`Float#ceil(15)` の結果が 4.0.2 と違う
   （`1.123456789.ceil(15)` → `1.123456789000001`）ため `float::tests::angle` が

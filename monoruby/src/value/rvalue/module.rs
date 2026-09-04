@@ -144,6 +144,7 @@ impl Module {
     fn include(&mut self, module: Module) {
         let include_module = module.make_iclass(self.superclass());
         self.superclass = Some(include_module);
+        self.0.write_barrier(include_module.as_val());
     }
 
     ///
@@ -191,6 +192,7 @@ impl Module {
             let origin = self.make_iclass(self.superclass());
             self.superclass = Some(origin);
             self.origin = Some(origin);
+            self.0.write_barrier(origin.as_val());
         }
         self.include_or_prepend_module(module, true)
     }
@@ -228,6 +230,21 @@ impl Module {
 
     fn make_iclass(&self, superclass: Option<Module>) -> Module {
         Value::iclass(self.id(), superclass).as_class()
+    }
+
+    ///
+    /// Set this module's superclass, with the generational write barrier.
+    ///
+    /// The only way to write the field: `ModuleInner`'s own setter is
+    /// private, so a `Module` receiver cannot bypass this. Class objects are
+    /// promotable (`RValue::is_promotable`), which holds exactly as long as
+    /// every store into one is barriered.
+    ///
+    pub fn set_superclass(&mut self, super_class: Option<Module>) {
+        self.set_superclass_unbarriered(super_class);
+        if let Some(m) = super_class {
+            self.0.write_barrier(m.as_val());
+        }
     }
 }
 
@@ -267,6 +284,22 @@ impl GC<RValue> for ModuleInner {
 }
 
 impl ModuleInner {
+    ///
+    /// The remember-on-promote half of [`GC::mark`] above: whether any of
+    /// the three `Value`s a module holds is still young. It must cover
+    /// **exactly** what `mark` covers — a field marked but not reported here
+    /// would be dropped from the remembered set and then freed under a live
+    /// reference.
+    ///
+    pub(crate) fn young_child_exists(&self, alloc: &Allocator<RValue>) -> bool {
+        let is_young = |v: Value| v.try_rvalue().is_some_and(|rv| !alloc.is_old(rv));
+        self.superclass.is_some_and(|m| is_young(m.get()))
+            || self.singleton.is_some_and(is_young)
+            || self.origin.is_some_and(|m| is_young(m.get()))
+    }
+}
+
+impl ModuleInner {
     pub fn new(
         class_id: ClassId,
         superclass: Option<Module>,
@@ -290,7 +323,11 @@ impl ModuleInner {
         self.superclass
     }
 
-    pub fn set_superclass(&mut self, super_class: Option<Module>) {
+    ///
+    /// Private: every store must go through `Module::set_superclass`, which
+    /// runs the generational write barrier. See `RValue::is_promotable`.
+    ///
+    fn set_superclass_unbarriered(&mut self, super_class: Option<Module>) {
         self.superclass = super_class;
     }
 

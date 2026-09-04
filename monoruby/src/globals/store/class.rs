@@ -448,21 +448,13 @@ impl alloc::GC<RValue> for ClassInfo {
     /// write barrier.
     ///
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        // The class object is marked on every collection, and is deliberately
-        // left out of the dirty accounting: `ObjTy::CLASS` / `MODULE` are not
-        // promotable (`RValue::is_promotable` — not every Value-storing path
-        // on a class object is barriered yet), so a class object is *never*
-        // old. Counting it would leave 97-99 % of classes permanently dirty
-        // and the flag would buy nothing; excluded, 6-8 % stay dirty. The
-        // cost is one already-marked check per class, against the hash-map
-        // walks below.
-        if let Some(v) = self.object {
-            v.as_val().mark(alloc);
-        }
         if !alloc.is_full_mark() && !self.dirty.get() {
             return;
         }
         let mut all_old = true;
+        if let Some(v) = self.object {
+            mark_and_test_old(alloc, v.as_val(), &mut all_old);
+        }
         if let Some(v) = self.name_value {
             mark_and_test_old(alloc, v, &mut all_old);
         }
@@ -580,6 +572,9 @@ impl ClassInfo {
                 );
             }
         };
+        if let Some(v) = self.object {
+            check(v.as_val(), "class object");
+        }
         if let Some(v) = self.name_value {
             check(v, "name value");
         }

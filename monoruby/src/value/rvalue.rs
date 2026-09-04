@@ -1093,13 +1093,24 @@ impl alloc::GCBox for RValue {
             // Hash stores go through Hashmap::insert (the barriered wrapper)
             // in the interpreter, and Hash#[]= is not JIT-inlined (it calls
             // that builtin), so every Hash store is barriered too.
+            // A class object holds exactly three Values — superclass,
+            // singleton (the attached object) and origin (the prepend
+            // iclass) — plus its class-level ivars. `singleton` is set once
+            // at construction; the other two are written only through
+            // `Module::{include, prepend_module, set_superclass}`, which
+            // barrier, and the ivars through the same `set_ivar` path as
+            // any object. So class objects promote like the rest, which is
+            // what lets a minor GC stop re-marking every class in the
+            // program (`ClassInfo::dirty`).
             ObjTy::OBJECT
             | ObjTy::STRING
             | ObjTy::BIGNUM
             | ObjTy::FLOAT
             | ObjTy::ARRAY
             | ObjTy::STRUCT
-            | ObjTy::HASH => true,
+            | ObjTy::HASH
+            | ObjTy::CLASS
+            | ObjTy::MODULE => true,
             _ => false,
         }
     }
@@ -1155,6 +1166,9 @@ impl alloc::GCBox for RValue {
                 ObjTy::ARRAY => self.as_array().iter().any(|v| is_young(*v, alloc)),
                 ObjTy::STRUCT => self.as_struct_inner().iter().any(|v| is_young(*v, alloc)),
                 ObjTy::HASH => self.as_hashmap().young_child_exists(alloc),
+                // Mirrors `ModuleInner`'s `mark`: superclass, singleton,
+                // origin.
+                ObjTy::CLASS | ObjTy::MODULE => self.as_module().young_child_exists(alloc),
                 // Any other (currently non-promoted) kind: conservatively
                 // assume it points at young, so it is always remembered.
                 _ => true,
