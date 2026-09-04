@@ -58,6 +58,7 @@ impl Codegen {
         // of recompiling. On aarch64 dispatch goes through `jit_slot`, so the
         // `jit_entry` table exists purely as this record — a republish for the
         // same class simply replaces it.
+        globals.store.note_jit_iseq(iseq_id);
         globals.store[iseq_id].add_jit_code(
             self_class,
             jit_entry.clone(),
@@ -145,6 +146,7 @@ impl Codegen {
             let patch_point = self.jit.label();
             let guard = self.jit.label();
             self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
+            globals.store.note_jit_iseq(iseq_id);
             let old_entry = globals.store[iseq_id].add_jit_code(
                 self_class,
                 patch_point,

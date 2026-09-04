@@ -1555,8 +1555,13 @@ impl<T: GCBox> Allocator<T> {
         #[cfg(feature = "gc-verify")]
         if kind == GcKind::Minor {
             self.clear_mark();
+            // Every mark bit is gone, so this re-mark must reach everything —
+            // including the metadata entries a minor is allowed to skip
+            // (`Allocator::is_full_mark`).
+            self.major_mark = true;
             root.mark(self);
             self.drain_mark_queue();
+            self.major_mark = false;
         }
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
@@ -1773,6 +1778,19 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
+    ///
+    /// Whether the mark phase now running has to re-mark everything.
+    ///
+    /// True for a major (its `clear_mark` zeroed every mark bit) and for the
+    /// `gc-verify` re-mark, which does the same. False for a minor, whose
+    /// bits are seeded from the old generation — which is what lets
+    /// `Store::mark` skip the metadata entries it knows hold only old
+    /// values.
+    ///
+    pub(crate) fn is_full_mark(&self) -> bool {
+        self.major_mark
+    }
+
     /// Whether `ptr` belongs to the old generation (its `old_bits` is set).
     /// Used by `young_child_exists` for the remember-on-promote check.
     ///

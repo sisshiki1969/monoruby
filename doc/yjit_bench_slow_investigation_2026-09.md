@@ -652,6 +652,196 @@ yjit-bench（交互 3 ラウンドの中央値の最小値、`MAX_TIME=6`／ア�
 残りは確保そのもの（`Empty.new` 7.9 − ループ 1.4 = **6.5 ns**）で、その大半は
 GC の償却分。ここから先は §5.1（GC ルートの世代別化）とアロケータの話になる。
 
+### 8.3 GC のマークフェーズ: 「表の大きさ」ではなく「Value を持つ数」に比例させる
+
+§5.1 で GC を挙げたが、その内訳を実測していなかったので測った。GC 1 回あたりの
+マーク時間と、その中で `Store` のメタデータ表を走査している割合:
+
+| ベンチ | mark 全体 | うち Store の表の走査 | マークした Value |
+|---|---:|---:|---:|
+| erubi | 546 µs | **520 µs (95 %)** | 8.2k |
+| rack | 606 µs | ≈100 % | 8.1k |
+| psych-load | 637 µs | 503 µs (79 %) | 7.5k |
+| graphql | 684 µs | ≈100 % | 8.1k |
+| activerecord | 2201 µs | **1534 µs (70 %)** | 13.4k |
+
+**マークフェーズはほぼ全部が `Store` のメタデータ表の走査**だった。フレームや
+グローバル変数から辿る生きたオブジェクトグラフは誤差（`drain_mark_queue` が
+0.1 µs/gc）。内訳（activerecord / erubi）:
+
+| 走査対象 | エントリ数 | µs/gc (AR) | µs/gc (erubi) | 実際に Value を持つ数 |
+|---|---:|---:|---:|---|
+| `Funcs::mark` | 29,495 / 11,420 | 379 | 184 | Proc 3,057 / 2,810 |
+| `ISeqInfo.literals` | 23,247 iseq | 326 | 116 | literal 8,669 / 4,023 |
+| `ISeqInfo` の JIT `const_map` | 23,247 iseq | 328 | 69 | 1,634 / 240 unit |
+| `ClassInfo` | 4,058 / 1,281 | 336 | 76 | 定数 3,736、cvar **54** |
+| `ConstSiteInfo` + frozen pool | 16,457 + 7,129 | 158 | 76 | cache 済 4,802 / 2,252 |
+
+つまり **AR は 5.2 万エントリを舐めて 1.3 万個をマークしていた**。しかもその大半
+（リテラル、畳み込み定数、frozen 文字列）は生成後に二度と変わらない。
+
+CRuby のように `ISeqInfo` 等をオブジェクトとして wrap し、世代別マークに載せる案も
+検討したが（`ClassId` が JIT の機械語に即値で焼かれている、`Store` が至る所で
+`&mut` 借用されている、major GC はむしろ遅くなる）、**表現を変えずに「Value を
+持つエントリの逆引き」を持つだけで同じ効果の大半が取れる**ので、まずそちらを入れた:
+
+- `ISeqInfo.literals: Vec<Value>` → `Store.literals` の 1 本のプールへ。これは
+  実行には一切使われず GC ルート専用のリストだった（バイトコードのオペランドが
+  `Value` を持つ）ので、ISeq ごとに分ける理由がない。23k 個の冷えた `Vec` ヘッダを
+  追う代わりに 8.7k 要素を連続走査する。
+- `Funcs.proc_fids: Vec<FuncId>` — `Value` を持つのは `FuncKind::Proc` だけ。
+  種別は生成時に決まるので `new_proc_method` の 1 push で済む。
+- `Store.jit_iseqs: Vec<ISeqId>` — コンパイル済みユニットを持つ ISeq だけ。
+  `ISeqInfo.on_jit_list` で重複を防ぐ。BOP 再定義でユニットが落ちてもリストには
+  残るが、空振り 1 回のコストしかない。
+- `Store.cached_constsites: Vec<ConstSiteId>` — インラインキャッシュが埋まった
+  サイトだけ。`None` → `Some` の遷移は `set_const_cache` の 1 か所しかないので、
+  `IndexMut<ConstSiteId>` は削除して迂回できないようにした。
+
+いずれも表現も借用構造も JIT の即値も変えない、純粋な副次索引の追加。
+
+マーク時間（同一機・連続実行での実測）:
+
+| ベンチ | before | after | 差 |
+|---|---:|---:|---:|
+| erubi | 1765 µs/gc | 1232 | **−30 %** |
+| activerecord | 4966 µs/gc | 3296 | **−34 %** |
+| rack | 2056 µs/gc | 1362 | **−34 %** |
+| graphql | 2061 µs/gc | 1464 | **−29 %** |
+| psych-load | 2221 µs/gc | 1736 | **−22 %** |
+
+エンドツーエンド（交互 3 ラウンド、中央値の最小）: erubi −2.9 %、activerecord
+−3.6 %、graphql −3.1 %、psych-load −3.4 %、rack ±0（7 ラウンドで再確認、中央値は
+73.3 → 73.1 ms でほぼ同じ）。
+
+> 注意: この計測をした時点でマシンが §8.2 のときより明らかに遅くなっており
+> （erubi の絶対値が 189 → 288 ms）、GC の占める割合が相対的に大きい。%
+> の絶対値は §8.2 の表とは比較できない。堅いのは上の mark 時間の方。
+
+### 8.4 `ClassInfo` のダーティビット — 入れたが、ほとんど効かない（記録）
+
+§8.3 の続きで残った `ClassInfo`（4,058 個）に、「minor GC が解放し得る値を持つか」
+のダーティビットを付けた。minor はマークビットを old 世代から seed するので、
+**保持する Value がすべて old なら minor は触らなくてよい**。書き込み側
+（`set_constant` / `set_cvar` / `set_cached_name_value` / `object` 代入とクラス複製）
+が立て、マーク自身が「全部 old だった」と観測したときに下ろす。
+
+最初の版は**まったく効かなかった**。理由は `RValue::is_promotable`:
+
+```rust
+ObjTy::OBJECT | STRING | BIGNUM | FLOAT | ARRAY | STRUCT | HASH => true,
+_ => false,   // ← CLASS / MODULE は昇格しない
+```
+
+クラスオブジェクトは**決して old にならない**。`ClassInfo.object` はほぼ全クラスで
+`Some` なので、oldness 判定に入れると全部が永久に dirty になる。実測:
+
+| ベンチ | クラス数 | dirty（object を含める） | dirty（object を除外） |
+|---|---:|---:|---:|
+| erubi | 1,236 | 1,196 (97 %) | **73 (6 %)** |
+| activerecord | 3,676 | 3,635 (99 %) | **276 (8 %)** |
+| rack | 1,413 | 1,372 (97 %) | **91 (6 %)** |
+| graphql | 1,344 | 1,303 (97 %) | **84 (6 %)** |
+
+そこで `object` は毎回無条件にマークし（1 クラスあたり「もうマーク済み」判定 1 回）、
+フラグは `name_value` / `constants` / `class_variables` のハッシュマップ走査だけを
+支配するようにした。dirty は 6〜8 % に落ちる。
+
+**それでもマーク時間はほとんど変わらない**（§8.3 の側から見て）:
+
+| ベンチ | §8.3 まで | + ダーティビット | 差 |
+|---|---:|---:|---:|
+| erubi | 1203 µs/gc | 1158 | −3.7 % |
+| activerecord | 3432 µs/gc | 3391 | −1.2 % |
+| rack | 1390 µs/gc | 1330 | −4.3 % |
+| graphql | 1409 µs/gc | 1397 | −0.9 % |
+| psych-load | 1708 µs/gc | 1561 | −8.6 % |
+
+マークは実行時間の 2〜3 % なので、エンドツーエンドでは 0.2 % 未満 — 測定ノイズ以下。
+表を飛ばせても、**クラスオブジェクト本体のマーク（と、そこから辿る子）が残る**からで、
+これは `object` を無条件にマークしている以上どうにもならない。
+
+つまりこの領域の本当のボトルネックは **CLASS / MODULE が昇格しないこと**であり、
+それを直す（クラスオブジェクトへの Value ストアを全部バリアで覆う）のが前提条件。
+それが済めばクラスオブジェクトも old になり、`object` を oldness 判定に戻せて、
+ダーティビットが初めて意味を持つ。
+
+> 検証: `gc-debug` にクリーンな `ClassInfo` が young な値を持たないことの表明を入れ、
+> `gc-debug` + `gc-stress`（= 全セーフポイントで GC し、全 minor で表明を検査）で
+> lib テスト 2,236 件を通した。表明は 1 度も発火せず、書き込み点の列挙は網羅できて
+> いる。既存の失敗 2 件（`float::tests::angle`、`io::tests::file_path_survives_…`）
+> はどちらも master で同一に再現する。
+
+→ この前提条件を §8.5 で実際に外した。外したあとダーティビットは本来の働きをする。
+
+### 8.5 CLASS / MODULE を昇格可能にする
+
+§8.4 が突き当たった `RValue::is_promotable` の除外を外す。クラスオブジェクトが
+保持する `Value` は `ModuleInner` の 3 本だけ:
+
+| フィールド | 書き込み点 | 対応 |
+|---|---|---|
+| `superclass` | `Module::include` / `Module::prepend_module` / `set_superclass`（外部 3 か所） | 3 か所すべてに write barrier |
+| `origin` | `Module::prepend_module` の 1 か所 | 同上 |
+| `singleton` | 構築時のみ（再代入なし） | 若い時点で作られるので不要 |
+| `var_table`（クラスの ivar） | `set_ivar` と JIT の ivar ストア | **既にバリア済み** |
+
+`ModuleInner::set_superclass` は private にして、バリア付きの `Module::set_superclass`
+だけを公開経路にした（`Module` の inherent メソッドが Deref より優先されるので、
+`Module` 受信側からは迂回できない）。`RValue::young_child_exists` に
+`CLASS | MODULE` の腕を足す — `mark` と**厳密に同じ 3 本**を報告する必要がある
+（remember-on-promote が漏れると、生きた参照の下でオブジェクトが解放される）。
+そのうえで `is_promotable` に `CLASS | MODULE` を追加し、`ClassInfo` の
+oldness 判定に `object` を戻した。
+
+dirty なクラスは **3〜6 %** に落ちる:
+
+| ベンチ | クラス数 | dirty |
+|---|---:|---:|
+| erubi | 1,242 | 45 (3.6 %) |
+| activerecord | 3,748 | 178 (4.7 %) |
+| rack | 1,421 | 56 (3.9 %) |
+| graphql | 1,372 | 79 (5.8 %) |
+| psych-load | 1,212 | 30 (2.5 %) |
+
+マーク時間（§8.4 の状態から）:
+
+| ベンチ | §8.4 | + 昇格可能 | 差 |
+|---|---:|---:|---:|
+| erubi | 1096 µs/gc | 937 | **−14.5 %** |
+| activerecord | 3173 µs/gc | 2332 | **−26.5 %** |
+| rack | 1218 µs/gc | 1025 | **−15.8 %** |
+| graphql | 1287 µs/gc | 1067 | **−17.1 %** |
+| psych-load | 1528 µs/gc | 1389 | **−9.1 %** |
+
+表を飛ばす分より大きいのは、クラスオブジェクトが old になったことで
+**minor GC がクラスグラフ全体（superclass 鎖・iclass・シングルトン）を辿らなく
+なった**から。§8.3〜8.5 の合計、master (`be40f5a`) からの mark 時間:
+
+| ベンチ | master | 8.3+8.4+8.5 | 差 |
+|---|---:|---:|---:|
+| erubi | 1795 µs/gc | 1028 | **−43 %** |
+| activerecord | 5413 µs/gc | 2825 | **−48 %** |
+| rack | 2185 µs/gc | 1150 | **−47 %** |
+| graphql | 2102 µs/gc | 1220 | **−42 %** |
+| psych-load | 2302 µs/gc | 1524 | **−34 %** |
+
+エンドツーエンドは 8 ラウンド交互で erubi 中央値 291 → 283 ms（−3 %）、
+activerecord 253 → 250 ms（−1 %）、graphql −3 %、rack −1.5 %、psych ±0。
+マークが実行時間の 2〜3 % しかない以上これが上限で、**本当の価値はポーズ時間**
+（activerecord の 5.4 ms → 2.8 ms）の方にある。
+
+> 検証: `gc-debug` + `gc-stress`（全セーフポイントで GC、全 minor でクリーンな
+> `ClassInfo` の不変条件を検査）で lib テスト **2,616 件**通過、表明の発火 0。
+> 通常フルスイート 3728 passed / 1 failed（既存の `angle`）。バリア漏れがあれば
+> 昇格したクラスオブジェクトの下で superclass が解放されるので、gc-stress が
+> 最も効く形の検証になっている。
+
+残りは frozen 文字列プールと、`Store` の各表の単調増加そのもの。オブジェクト化が
+本当に必要になるのは「死んだ ISeq / 無名クラスの回収」の方で、これは性能ではなく
+メモリリーク（`iseqs` / `functions` / `constsite_info` が append-only）の課題として
+別に扱う。
+
 - 手元の CRuby は 4.0.6 で、`Float#ceil(15)` の結果が 4.0.2 と違う
   （`1.123456789.ceil(15)` → `1.123456789000001`）ため `float::tests::angle` が
   baseline でも失敗する。本変更とは無関係。

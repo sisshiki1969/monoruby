@@ -409,6 +409,10 @@ impl ClassInfoTable {
         // `$stderr.write` and uses the proper qualified path. We
         // intentionally do *not* re-emit here.
         let _prev = self[class_id].constants.insert(name, new_state);
+        // A freshly stored constant is a young `Value` until it has survived
+        // enough collections to be promoted; until then a minor GC must scan
+        // this class. See `ClassInfo::dirty`.
+        self[class_id].mark_dirty();
         // Auto-naming: only for *non-singleton* anonymous classes/modules.
         // CRuby never names a singleton class from constant assignment
         // (`class << o; CONST = self; end` ⇒ `o.singleton_class.name == nil`).
