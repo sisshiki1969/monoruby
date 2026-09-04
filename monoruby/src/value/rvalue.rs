@@ -1110,7 +1110,17 @@ impl alloc::GCBox for RValue {
             | ObjTy::STRUCT
             | ObjTy::HASH
             | ObjTy::CLASS
-            | ObjTy::MODULE => true,
+            | ObjTy::MODULE
+            // These three hold no `Value` at all — their payloads are a
+            // `DateTime`, an `Arc<Regex>` plus source bytes, and a
+            // `FuncId`/`ClassId`/`IdentId` triple. `mark_children` walks
+            // nothing for them (they are the only kinds besides Bignum and
+            // heap Float for which it is empty), so they satisfy even the
+            // strictest form of the rule: an ivar is the only reference
+            // they can ever gain, and that store is barriered.
+            | ObjTy::TIME
+            | ObjTy::REGEXP
+            | ObjTy::UMETHOD => true,
             _ => false,
         }
     }
@@ -1157,7 +1167,16 @@ impl alloc::GCBox for RValue {
                     .as_rstring()
                     .shared_root()
                     .is_some_and(|root| is_young(root, alloc)),
-                ObjTy::BIGNUM | ObjTy::FLOAT => false,
+                // Reference-free payloads: nothing but `var_table` (checked
+                // above) can point anywhere. Without an arm here they would
+                // fall to the conservative `_ => true` below and be
+                // remembered on every promotion — which costs more than not
+                // promoting them at all.
+                ObjTy::BIGNUM
+                | ObjTy::FLOAT
+                | ObjTy::TIME
+                | ObjTy::REGEXP
+                | ObjTy::UMETHOD => false,
                 ObjTy::OBJECT => self
                     .as_object()
                     .iter()
