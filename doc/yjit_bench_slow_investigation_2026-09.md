@@ -837,6 +837,88 @@ activerecord 253 → 250 ms（−1 %）、graphql −3 %、rack −1.5 %、psych
 > 昇格したクラスオブジェクトの下で superclass が解放されるので、gc-stress が
 > 最も効く形の検証になっている。
 
+### 8.6 minor GC が何を辿っているかの census と、残りの昇格不能型
+
+§8.5 のあと「他に何が昇格しないのか」を型別に測った。`mark_object` が実際に
+マークした数を minor GC ごとに集計する（old はシードマーク済みで早期 return する
+ので計上されない = そのまま「毎回辿り直しているもの」）。
+
+| 型 | erubi（計 6,608/minor） | activerecord（計 31,030/minor） | 昇格 |
+|---|---:|---:|---|
+| STRING | 608 | 9,699 | 可 |
+| OBJECT | 35 | 7,647 | 可 |
+| HASH | 46 | 3,906 | 可 |
+| **PROC** | **2,693 (41 %)** | **2,961 (9.5 %)** | **不可** |
+| **FRAME** | **2,692 (41 %)** | **2,880 (9.3 %)** | **不可** |
+| ARRAY | 61 | 2,016 | 可 |
+| TIME | 89 | 995 | 不可 |
+| REGEXP | 292 | 663 | 不可 |
+| RANGE / UMETHOD | 29 / 26 | 74 / 28 | 不可 |
+
+昇格しない型は 20 種（`TIME, RANGE, EXCEPTION, PROC, REGEXP, IO, METHOD, FIBER,
+ENUMERATOR, GENERATOR, COMPLEX, BINDING, UMETHOD, MATCHDATA, RATIONAL,
+ARITHMETIC_SEQUENCE, IO_BUFFER, THREAD, ARGF, FRAME`）だが、性質は 3 階層に分かれる。
+
+**A. `Value` を 1 本も持たない: TIME / REGEXP / UMETHOD**（実施済み）
+
+`mark_children` が `{}` なのは Bignum・ヒープ Float とこの 3 型だけ。中身も
+`DateTime` / `Arc<Regex>` + ソースバイト列 / `FuncId`+`ClassId`+`IdentId` で、
+`Value` を持たない。**元の厳しいルール（reference-free union kind）すら満たして
+いた**ので、許可リストへの入れ忘れ。バリアは 1 行も要らず、`is_promotable` への
+追加と `young_child_exists` の `false` を返す腕だけ（後者が無いと `_ => true` に
+落ちて昇格のたびに remembered set に入り、昇格しない場合より悪くなる）。
+
+マーク**個数**は減る:
+
+| ベンチ | before | after |
+|---|---:|---:|
+| erubi | REGEXP 291 / TIME 89 / UMETHOD 26 | 5 / 1 / 0 |
+| rack | 413 / 90 / 28 | 9 / 2 / 0 |
+| graphql | 298 / 88 / 25 | 13 / 4 / 1 |
+| activerecord | 658 / 975 / 28 | 24 / 870 / 1 |
+
+（activerecord の TIME が残るのは、本当に毎 GC 窓で ~870 個生成していて age 3 に
+届かないから。「昇格できないから残っている」のではない。）
+
+**ただし時間は 1〜2 % しか減らない**:
+
+| ベンチ | minor 1 回のマーク | マーク個数 |
+|---|---|---|
+| erubi | 1118 → 1095 µs (−2.1 %) | 6,626 → 6,176 (−6.8 %) |
+| activerecord | 2292 → 2282 µs (−0.4 %) | 30,472 → 29,946 (−1.7 %) |
+| rack | 1008 → 987 µs (−2.1 %) | 6,524 → 6,023 (−7.7 %) |
+| graphql | 1056 → 1034 µs (−2.1 %) | 7,971 → 7,561 (−5.1 %) |
+| psych-load | 1381 → 1387 µs (±0) | — |
+
+major の回数は変わらず（4/4, 4/4, 4/4, 3/3, 6/6）、合計マーク時間も誤差内。
+**個数が 7 % 減っても時間が 2 % しか減らないのは、この 3 型が葉だから** —
+`mark_children` が空なので、辿るコストはビットを立てるだけ。時間を食っているのは
+子を持つオブジェクトの traversal の方。効果は小さいが、新しい不変条件を 1 つも
+増やさない（保持する `Value` が無いので、将来の書き込み点に課す約束が無い）ので
+入れてある。
+
+**B. ストアが既にバリア済み / 構築後不変: RANGE / COMPLEX / RATIONAL**
+
+`RangeInner::initialize` は「Write barriers are the caller's responsibility」と
+明記され、`builtins/range.rs` が実際に `write_barrier(start)` / `(end)` を呼んで
+いる。必要なのは `young_child_exists` の腕だけ。ただし数が少ない（AR で 74/minor）
+ので未実施。
+
+**C. PROC / FRAME / BINDING / FIBER / THREAD — 本丸だが難易度が別物**
+
+erubi で 82 %、activerecord で 19 %。理由はコードに明記されている:
+
+> `FRAME`: *Deliberately NOT in `is_promotable`: frames are mutated without a
+> write barrier (dynvar stores), so like Proc/Binding/Fiber they stay young and
+> are re-walked on every minor GC.*
+
+CLASS は書き込み点が 4 か所だったが、フレームのスロットは**ローカル変数代入その
+もの**で書かれる — インタプリタと JIT 双方の、システム中で最もホットなパス。
+バリアを入れれば毎回のローカル代入にヘッダビット検査が乗るので、GC の削減と
+実行時コストのトレードオフになり、CLASS のような一方的な得ではない。加えて
+erubi の PROC 2,693/minor は「昇格できないから残っている」のか「本当に短命」なのか
+未切り分け（テンプレートが毎回ブロックを作っている）。着手前に寿命の実測が要る。
+
 残りは frozen 文字列プールと、`Store` の各表の単調増加そのもの。オブジェクト化が
 本当に必要になるのは「死んだ ISeq / 無名クラスの回収」の方で、これは性能ではなく
 メモリリーク（`iseqs` / `functions` / `constsite_info` が append-only）の課題として
