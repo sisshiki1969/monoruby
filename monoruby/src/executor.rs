@@ -601,6 +601,9 @@ impl Executor {
                 let path = install_root().join("builtins").join("gem_prelude.rb");
                 executor.require(globals, &path, false)?;
             }
+            // `Class#new` exists only once class.rb has run; the JIT needs
+            // its FuncId to recognise a `Foo.new` site.
+            globals.store.record_class_new_fid();
         }
         // TOPLEVEL_BINDING: registered as a *lazy* constant — defined
         // (it lists in `Object.constants` and answers `const_defined?`)

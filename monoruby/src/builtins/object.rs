@@ -11,6 +11,9 @@ use jitgen::{AbstractState, JitContext};
 pub(super) fn init(globals: &mut Globals) {
     // BasicObject methods
 
+    // Bootstrap-only default constructor (overridden by startup.rb with the
+    // Ruby `def initialize; end`, whose `ISeqHint::ConstReturn` lets the JIT
+    // fold the call away). Needed before basic_object.rb loads.
     globals.define_private_builtin_func(BASIC_OBJECT_CLASS, "initialize", bo_initialize, 0);
     globals.define_builtin_inline_func(
         BASIC_OBJECT_CLASS,
@@ -102,6 +105,8 @@ pub(super) fn init(globals: &mut Globals) {
 
 ///
 /// ### BasicObject#initialize
+///
+/// Bootstrap default; startup.rb replaces it with the Ruby no-op.
 ///
 #[monoruby_builtin]
 fn bo_initialize(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {

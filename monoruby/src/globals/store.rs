@@ -102,6 +102,14 @@ pub struct Store {
     kernel_hash_fid: Option<FuncId>,
     array_hash_fid: Option<FuncId>,
     hash_hash_fid: Option<FuncId>,
+    /// `FuncId` of the Ruby `Class#new` trampoline (`builtins/class.rb`),
+    /// recorded once the bootstrap sources have loaded. The JIT compares a
+    /// call site's resolved target against it to recognise `Foo.new` and
+    /// emit the construction frame-free — see
+    /// `JitContext::inline_class_new`. `None` when the bootstrap was
+    /// skipped (`MONORUBY_SKIP_STARTUP`), which simply disables that
+    /// specialization.
+    class_new_fid: Option<FuncId>,
     /// ISeq info.
     pub(crate) iseqs: Vec<ISeqInfo>,
     /// class table.
@@ -270,6 +278,7 @@ impl Store {
             functions: function::Funcs::default(),
             basic_ops: basic_op::BasicOpTable::new(),
             kernel_hash_fid: None,
+            class_new_fid: None,
             array_hash_fid: None,
             hash_hash_fid: None,
             iseqs: vec![],
@@ -464,6 +473,21 @@ impl Store {
     /// Record the builtin `Kernel#hash`. Called once, at bootstrap.
     pub(crate) fn set_kernel_hash_fid(&mut self, fid: FuncId) {
         self.kernel_hash_fid = Some(fid);
+    }
+
+    ///
+    /// Record the Ruby `Class#new` trampoline. Called once, right after the
+    /// bootstrap Ruby sources load (it does not exist before that).
+    ///
+    pub(crate) fn record_class_new_fid(&mut self) {
+        self.class_new_fid = self
+            .search_method_by_class_id(CLASS_CLASS, IdentId::NEW)
+            .and_then(|e| e.func_id());
+    }
+
+    /// The Ruby `Class#new` trampoline's `FuncId`, if the bootstrap ran.
+    pub(crate) fn class_new_fid(&self) -> Option<FuncId> {
+        self.class_new_fid
     }
 
     pub(crate) fn set_array_hash_fid(&mut self, fid: FuncId) {
