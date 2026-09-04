@@ -1446,6 +1446,7 @@
 6e572d93b20a8692a4e7ddd298baa9ee	true	class Foo\n              def bind; binding; end\n            end\n    
 6e7aebe2556be39faee23d7b63bd31d6	[false, false, false, false, false]	S = Struct.new(:a, :b, :c)\n            \n\n            s = S.new(1, 2
 6eadac74beac0aa21a211ec67fcdc95d	["0.514e1", "0.114e1", "0.628e1", "0.45e1", "0.7e1", "0.3e0"]	require "rubygems"\n        require "bigdecimal"\n        a = BigDecimal(
+6ebe2eb5165b0355e2d3ceeb9e154145	[[[6, true]], [[:redefined_mul, :redefined_eq]]]	class C\n              def initialize; @a = 3; @n = 1; end\n         
 6ec1acc4c17516bb23420e702e9103d2	[:done, true, 64]	def make_enum\n              Enumerator.new { |y| sleep 0.05; y << :
 6ee39a1116ff8eda1d78eddc45c1b5a3	[2020, 1, 2, 3, 32400, 32400]	t = Time.new(2020, 1, 2, 3, 4, 5, "+09:00")\n        [t.year, t.month, t
 6ee8709f21799482d6bff0182f48702d	"/\\n"	r, w = IO.pipe\n            Process.wait Process.spawn("pwd", chdir:
@@ -1746,6 +1747,7 @@
 846556768cd567bd24d3916bd92ff7db	[false, false, true, [true, true, false], true, false, false, ["NameError", "'a' is not an implicit parameter"], ["TypeError", "1 is not a symbol nor a string"]]	def try; yield; rescue => e; [e.class.to_s, e.message]; end\n       
 846653c25256021e7ac217987b6ab247	[nil, true]	r, w = IO.pipe\n            pid = fork { r.close; Signal.trap("TERM"
 8479b8263b2031ca390cec82e34d1347	"yes-shname\\n"	env = Object.new\n            def env.to_hash = {"VIA_TO_HASH" => "y
+84b7526c4266744e31975a2bbd3771af	[true, false, true, false, true, false, false, false, false, true, false, true, true, true, false, true, false, true, false, true, false]	class P\n              def initialize(t); @t = t; end\n              
 84d91589fff917e43c1d88cde1f37516	[false, false, false, [:include, :TypeError], [:extend, :TypeError], [:r_include, :TypeError], [:r_prepend, :TypeError]]	r = Module.new { refine(String) { } }.refinements[0]\n            ou
 84f4b6da4f67b5e0629d3c8cdef84518	"A"	class A\n              def who; self.class.name; end\n            end
 85019cb4cb8a7b9dda94fc30fc53ddb9	""	class EmptyStr\n                  def to_str; ""; end\n          

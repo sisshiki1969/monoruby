@@ -204,9 +204,19 @@ pub(super) enum LeafOp {
     /// `acc = acc <kind> operand`, fixnum arithmetic. Guards both operands
     /// and, for `Div`, the zero divisor.
     Bin(BinOpK, LeafValue),
-    /// `acc = acc <kind> operand`, fixnum comparison. Guards both operands;
-    /// the accumulator becomes a bool.
-    Cmp(CmpKind, LeafValue),
+    ///
+    /// `acc = acc <kind> operand`, comparison against a *tagged* value.
+    /// Guards both operands as the carried class; the accumulator becomes a
+    /// bool.
+    ///
+    /// The class is not always `Integer`. Both backends compare with a plain
+    /// register compare (`cmpq` / `cmp x, x`), which for `==` / `!=` is bit
+    /// equality — and bit equality *is* equality for every immediate:
+    /// `Symbol`, `nil`, `true`, `false` as well as fixnums. Ordering is a
+    /// fixnum-only reading of those bits, so the recogniser admits the other
+    /// classes for equality alone.
+    ///
+    Cmp(CmpKind, LeafValue, ClassId),
     /// `@name = acc`.
     Store(IdentId),
 }
@@ -362,8 +372,13 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
                 ic,
                 polymorphic,
             } => {
-                saw_fixnums(ic, polymorphic)?;
-                let chain = extend(&slots, lhs, rhs, LeafOp::Cmp(kind, LeafValue::Param(0)))?;
+                let class = cmp_operand_class(ic, polymorphic, kind)?;
+                let chain = extend(
+                    &slots,
+                    lhs,
+                    rhs,
+                    LeafOp::Cmp(kind, LeafValue::Param(0), class),
+                )?;
                 slots.insert(dst, chain);
             }
             TraceIr::StoreIvar(src, name, _) => {
@@ -418,11 +433,51 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
 /// class, so a fixnum-only expansion would exit on the others.
 ///
 fn saw_fixnums(ic: Option<(ClassId, ClassId)>, polymorphic: bool) -> Option<()> {
+    cmp_operand_class(ic, polymorphic, CmpKind::Lt).filter(|c| *c == INTEGER_CLASS)?;
+    Some(())
+}
+
+///
+/// The class both operands of a comparison were observed to have, when the
+/// expansion can decide that comparison with a register compare.
+///
+/// For `==` / `!=` / `===` the compare is bit equality, which is equality
+/// for every immediate — so `Symbol`, `nil`, `true` and `false` join
+/// `Integer` here. `graphql`'s parser is the motivating shape:
+///
+/// ```ruby
+/// def at?(expected_token_name)
+///   @token_name == expected_token_name
+/// end
+/// ```
+///
+/// — 74 call sites, on the hot path of every parse, and an `Integer`-only
+/// gate turned every one of them away.
+///
+/// Ordering reads those same bits as a signed number, which is only the
+/// right answer for a tagged fixnum (`Symbol#<` compares the *names*, via
+/// `Comparable`), so the other classes are admitted for equality alone.
+///
+fn cmp_operand_class(
+    ic: Option<(ClassId, ClassId)>,
+    polymorphic: bool,
+    kind: CmpKind,
+) -> Option<ClassId> {
+    // A polymorphic site saw more than one operand class, so a
+    // single-class guard would exit on the others.
     if polymorphic {
         return None;
     }
-    match ic {
-        Some((INTEGER_CLASS, INTEGER_CLASS)) => Some(()),
+    // An empty cache means the VM never reached the instruction, which is
+    // no evidence either way.
+    let (lhs, rhs) = ic?;
+    if lhs != rhs {
+        return None;
+    }
+    let equality = matches!(kind, CmpKind::Eq | CmpKind::Ne | CmpKind::TEq);
+    match lhs {
+        INTEGER_CLASS => Some(lhs),
+        NIL_CLASS | TRUE_CLASS | FALSE_CLASS | SYMBOL_CLASS if equality => Some(lhs),
         _ => None,
     }
 }
@@ -468,7 +523,7 @@ fn extend(
     }
     chain.0.push(match op {
         LeafOp::Bin(kind, _) => LeafOp::Bin(kind, operand),
-        LeafOp::Cmp(kind, _) => LeafOp::Cmp(kind, operand),
+        LeafOp::Cmp(kind, _, class) => LeafOp::Cmp(kind, operand, class),
         _ => return None,
     });
     Some(chain)

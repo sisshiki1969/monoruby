@@ -1369,13 +1369,42 @@ impl<'a> JitContext<'a> {
                 _ => Some(None),
             }
         };
+        // The arithmetic and the comparison below are emitted as machine
+        // instructions with no runtime check, which is only licensed while
+        // the operator is still the built-in one. Take that licence for
+        // every operator the body uses *before* emitting anything, and
+        // record the dependency after, so `set_bop_redefine` evicts this
+        // body. Without it a redefinition is not repairable by any side
+        // exit: the class-version guard fires, the body recompiles, and the
+        // recompiled body emits the same unconditional fast path again —
+        // `frameless_leaf_bodies_bop_redefine` is the regression.
+        let mut bop_deps: Vec<(ClassId, IdentId)> = Vec::new();
+        for op in &body.ops {
+            let name: IdentId = match *op {
+                frameless::LeafOp::Bin(kind, _) => kind.into(),
+                frameless::LeafOp::Cmp(kind, _, _) => kind.into(),
+                _ => continue,
+            };
+            // The class the guards will prove, so the licence is the tight
+            // one: a `Symbol` comparison needs `Symbol#==` unredefined, not
+            // `Integer#==`.
+            let class = match *op {
+                frameless::LeafOp::Cmp(_, _, class) => class,
+                _ => INTEGER_CLASS,
+            };
+            if !self.basic_op_assumable(class, name) {
+                return false;
+            }
+            bop_deps.push((class, name));
+        }
+
         // Resolve every ivar name the body mentions, up front.
         let mut ivars: Vec<Option<IvarId>> = Vec::with_capacity(body.ops.len());
         for op in &body.ops {
             let name = match *op {
                 frameless::LeafOp::Load(frameless::LeafValue::SelfIvar(name))
                 | frameless::LeafOp::Bin(_, frameless::LeafValue::SelfIvar(name))
-                | frameless::LeafOp::Cmp(_, frameless::LeafValue::SelfIvar(name))
+                | frameless::LeafOp::Cmp(_, frameless::LeafValue::SelfIvar(name), _)
                 | frameless::LeafOp::Store(name) => name,
                 _ => {
                     ivars.push(None);
@@ -1454,10 +1483,15 @@ impl<'a> JitContext<'a> {
                     ir.integer_binop_reg(kind, GP::Rax, GP::Rax, GP::Rcx, deopt);
                     acc_immediate = true;
                 }
-                frameless::LeafOp::Cmp(kind, operand) => {
+                frameless::LeafOp::Cmp(kind, operand, class) => {
                     recv_live &= !emit_value(ir, state, arg_slots, operand, ivars[i], GP::Rcx);
-                    ir.push(AsmInst::GuardClass(GP::Rax, INTEGER_CLASS, deopt));
-                    ir.push(AsmInst::GuardClass(GP::Rcx, INTEGER_CLASS, deopt));
+                    // Both backends compare with a plain register compare, so
+                    // the guarded class decides what that compare *means*:
+                    // bit equality for an immediate, a signed read of the
+                    // tagged bits for a fixnum. The recogniser admits the
+                    // non-fixnum classes for equality only.
+                    ir.push(AsmInst::GuardClass(GP::Rax, class, deopt));
+                    ir.push(AsmInst::GuardClass(GP::Rcx, class, deopt));
                     // The comparison zeroes rax before reading its operands,
                     // so the accumulator has to step aside first.
                     ir.reg_move(GP::Rax, GP::Rsi);
@@ -1483,6 +1517,9 @@ impl<'a> JitContext<'a> {
                     });
                 }
             }
+        }
+        for (class, name) in bop_deps {
+            self.record_bop_dep(class, name);
         }
         state.def_reg2acc(ir, GP::Rax, dst);
         state.unset_side_effect_guard();
@@ -3992,6 +4029,116 @@ mod tests {
             # the guards fire: a non-fixnum ivar, and a non-fixnum argument
             res << P.new(1.5).pos << p5.gt(4.5) << p5.eq("5")
             res << (begin; p5.gt("x"); rescue ArgumentError, TypeError => e; e.class; end)
+            res
+            "#,
+        );
+    }
+
+    /// The expansion emits the arithmetic and the comparison as machine
+    /// instructions with no runtime check, which Ruby licenses only while
+    /// the operator is still the built-in one. Redefining it has to take
+    /// the licence back.
+    ///
+    /// A side exit cannot do that on its own: the class-version guard every
+    /// definition bumps does fire, but the body then *recompiles* and emits
+    /// the same unconditional fast path, so the answer goes stale again on
+    /// the next entry. The observable shape is a redefinition that appears
+    /// to take and then stops: 500 calls after `Integer#*` is redefined
+    /// answered `[:redefined_mul, 6]` — the compiled body drifting back to
+    /// the machine multiply — where CRuby answers `[:redefined_mul]`.
+    ///
+    /// So the expansion takes `basic_op_assumable` before emitting and
+    /// records the dependency after, which is what makes `set_bop_redefine`
+    /// evict it.
+    #[test]
+    fn frameless_leaf_bodies_bop_redefine() {
+        run_test_once(
+            r#"
+            class C
+              def initialize; @a = 3; @n = 1; end
+              def dbl; @a * 2; end
+              def add; @a + 1; end
+              def eq;  @n == 1; end
+            end
+            # The loop keeps the caller compiled across the redefinition, so
+            # the expansion is re-entered rather than left behind at the
+            # first deopt. `<` and `+=` drive the loop, so the body uses `*`
+            # and `==`, which the redefinition below can take without
+            # breaking the loop itself.
+            def run(c, n)
+              out = []
+              i = 0
+              while i < n
+                out << [c.dbl, c.eq]
+                i += 1
+              end
+              out.uniq
+            end
+            c = C.new
+            run(c, 500)
+            res = [run(c, 50)]
+            class Integer
+              def *(o); :redefined_mul; end
+              def ==(o); :redefined_eq; end
+            end
+            res << run(c, 500)
+            res
+            "#,
+        );
+    }
+
+    /// Equality on the immediates. Both backends compare with a plain
+    /// register compare, which for `==` / `!=` is bit equality — and bit
+    /// equality *is* equality for a `Symbol`, `nil`, `true` or `false`, not
+    /// only for a fixnum. The motivating shape is graphql's parser:
+    ///
+    /// ```ruby
+    /// def at?(expected_token_name)
+    ///   @token_name == expected_token_name
+    /// end
+    /// ```
+    ///
+    /// — 74 call sites on the hot path of every parse, which an
+    /// `Integer`-only gate turned away.
+    ///
+    /// Ordering reads the same bits as a signed number, which is only right
+    /// for a tagged fixnum (`Symbol#<` compares the names through
+    /// `Comparable`), so the non-fixnum classes are admitted for equality
+    /// alone — `sym_lt` below is the case that must still go through a real
+    /// call, and it is checked against a receiver whose answer the bit
+    /// ordering would get wrong.
+    #[test]
+    fn frameless_leaf_bodies_immediate_eq() {
+        run_test(
+            r#"
+            class P
+              def initialize(t); @t = t; end
+              def at?(x);   @t == x; end
+              def not?(x);  @t != x; end
+              def teq?(x);  @t === x; end
+              def is_nil;   @t == nil; end
+              def is_true;  @t == true; end
+              def is_false; @t == false; end
+              def sym_lt(x); @t < x; end
+            end
+            res = []
+            sym = P.new(:ident)
+            400.times { sym.at?(:ident); sym.not?(:other); sym.teq?(:ident); sym.is_nil }
+            res << sym.at?(:ident) << sym.at?(:other)
+            res << sym.not?(:other) << sym.not?(:ident)
+            res << sym.teq?(:ident) << sym.teq?(:other)
+            res << sym.is_nil << sym.is_true << sym.is_false
+            # a Symbol the bit ordering would order the other way round:
+            # :a < :b by name, but their ids run the other direction only
+            # by accident, so this pins the answer rather than the reason
+            res << P.new(:a).sym_lt(:b) << P.new(:b).sym_lt(:a)
+
+            nl = P.new(nil);   400.times { nl.is_nil };   res << nl.is_nil << nl.at?(nil)
+            tr = P.new(true);  400.times { tr.is_true };  res << tr.is_true << tr.is_false
+            fa = P.new(false); 400.times { fa.is_false }; res << fa.is_false << fa.is_true
+            # the guard fires: a receiver whose ivar is not the observed class
+            st = P.new("s"); res << st.at?("s") << st.at?(:s)
+            res << P.new(1).at?(1) << P.new(1).at?(:one)
             res
             "#,
         );
