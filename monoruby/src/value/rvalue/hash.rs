@@ -180,6 +180,29 @@ fn string_digest<S: std::hash::BuildHasher>(hash_builder: &S, s: &RStringInner) 
 /// `String#eql?` it resolves to returns false for any non-String
 /// argument — a redefined `String#eql?` is no more observed here than a
 /// redefined `String#hash` is at insert time.)
+///
+/// # Plain-String keys
+///
+/// A Hash may compare a key by bytes instead of dispatching `eql?` only
+/// when it is a String **whose class is exactly `String`**.
+///
+/// CRuby draws the line in the same place, and only on the *equality*
+/// side. `rb_any_cmp`'s String short-circuit requires
+/// `RBASIC(a)->klass == rb_cString` of both operands, so a subclass falls
+/// through to `rb_eql` and a redefined `eql?` is observed; `any_hash` has
+/// no such check, so a subclass still hashes by content and lands in the
+/// bucket its bytes choose. Keeping the digest content-based and moving
+/// only the comparison reproduces both halves:
+///
+/// ```ruby
+/// class Sub < String; def eql?(o) = false; end
+/// h = {}; h[Sub.new("q")] = 1
+/// h[Sub.new("q")]   # nil — `eql?` decides, and says no
+/// h["q"]            # 1   — the bytes still chose the same bucket
+/// ```
+///
+/// The accessor that answers it is [`Value::is_plain_rstring_inner`].
+///
 fn string_key_eq(stored: &Option<Value>, k: Value, s: &RStringInner) -> bool {
     match stored {
         Some(sk) => sk.id() == k.id() || sk.is_rstring_inner().is_some_and(|si| si == s),
@@ -605,7 +628,7 @@ impl RubyHash<Executor, Globals, MonorubyErr> for HashmapInner {
 /// stale is exactly the behavior `Hash#rehash` exists for, and its
 /// `eql?` may be Ruby code.
 fn is_inline_key(k: Value) -> bool {
-    k.is_packed_value() || (k.is_rstring_inner().is_some() && k.is_frozen())
+    k.is_packed_value() || (k.is_plain_rstring_inner().is_some() && k.is_frozen())
 }
 
 /// The inline-pair match for a String probe: identity, then byte
@@ -736,7 +759,7 @@ impl<'a> HashRef<'a> {
         if self.is_ident_inline() || k.is_packed_value() {
             return pairs.iter().position(|(ek, _)| ek.id() == k.id());
         }
-        let s = k.is_rstring_inner()?;
+        let s = k.is_plain_rstring_inner()?;
         pairs
             .iter()
             .position(|(ek, _)| inline_string_key_eq(*ek, k, s))
@@ -756,8 +779,22 @@ impl<'a> HashRef<'a> {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<Option<usize>> {
-        if self.is_ident_inline() || k.is_packed_value() || k.is_rstring_inner().is_some() {
+        if self.is_ident_inline() || k.is_packed_value() || k.is_plain_rstring_inner().is_some() {
             Ok(self.inline_pos_noobs(k))
+        } else if k.is_rstring_inner().is_some() {
+            // A String *subclass* probe. It can be `eql?` to a plain
+            // String key — the bytes are what chose the bucket — but the
+            // verdict is `eql?`'s to give, so scan with the dispatching
+            // comparison rather than by bytes. (`plain_string` keeps
+            // subclasses out of `is_inline_key`, so no *stored* inline key
+            // is one; only the probe can be.)
+            let pairs = self.inline_pairs().to_vec();
+            for (i, (ek, _)) in pairs.iter().enumerate() {
+                if k.eql(ek, vm, globals)? {
+                    return Ok(Some(i));
+                }
+            }
+            Ok(None)
         } else {
             k.calculate_hash(vm, globals)?;
             Ok(None)
@@ -876,7 +913,7 @@ impl<'a> HashRef<'a> {
                 if k.is_packed_value() {
                     let hash = packed_digest(m.hasher(), k);
                     m.get_prehashed(hash, &Some(k), vm, globals)?.copied()
-                } else if let Some(s) = k.is_rstring_inner() {
+                } else if let Some(s) = k.is_plain_rstring_inner() {
                     let hash = string_digest(m.hasher(), s);
                     m.get_prehashed_with(hash, |ek| string_key_eq(ek, k, s), vm, globals)?
                         .copied()
@@ -903,7 +940,7 @@ impl<'a> HashRef<'a> {
                 if k.is_packed_value() {
                     let hash = packed_digest(m.hasher(), k);
                     Ok(m.get_prehashed(hash, &Some(k), vm, globals)?.is_some())
-                } else if let Some(s) = k.is_rstring_inner() {
+                } else if let Some(s) = k.is_plain_rstring_inner() {
                     let hash = string_digest(m.hasher(), s);
                     Ok(m
                         .get_prehashed_with(hash, |ek| string_key_eq(ek, k, s), vm, globals)?
@@ -1394,7 +1431,7 @@ impl<'a> HashRefMut<'a> {
                     // is vm-free — so the whole probe is vm-free.
                     let hash = packed_digest(m.hasher(), k);
                     m.insert_prehashed(hash, Some(k), v);
-                } else if let Some(s) = k.is_rstring_inner() {
+                } else if let Some(s) = k.is_plain_rstring_inner() {
                     // A String key's digest and `eql?` are likewise
                     // vm-free: byte content only, dispatching neither
                     // `String#hash` nor `String#eql?` — exactly what the

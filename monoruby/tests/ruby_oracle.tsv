@@ -1464,6 +1464,7 @@
 6f9a21b16eccd94c397c19f2c70977ab	[450.0, 1.5]	def call_block\n          yield\n        end\n        def c1\n          k =
 6f9e3eb9473b85b89a35086c448b5d42	true	obj = Object.new\n            begin; obj.nope_method; rescue NoMetho
 6fb70e1ac677ec5293ce90caf3afcdf5	true	Time.utc(2000,1,1,0,0,0,500000).subsec > 0
+6fbdf22dd19163ffa996600cbd775daa	[["OnlyHash", 1, :hit, :hit, true, 1], ["OnlyHash", 18, :hit, :hit, true, 18], ["OnlyEql", 1, nil, :hit, false, 1], ["OnlyEql", 18, nil, :hit, false, 18], ["Plain", 1, :hit, :hit, true, 1], ["Plain", 18, :hit, :hit, true, 18], ["Both", 1, :hit, :hit, true, 1], ["Both", 18, :hit, :hit, true, 18], ["stored-plain", 1, :plain, nil], ["stored-plain", 18, :plain, nil], ["delete", 1, 0]]	class OnlyHash < String; def hash; object_id; end; end\n        class On
 6fd7a2503b2b0d8020435a1135d8760a	["extended:Bar"]	$res = []\n        module Foo\n          def self.extended(base)\n        
 6ff6c6d86d977c8d2388dd6f11a63d5c	[4, 5, 7, 8]	r = []\n        10.times { |i| r << i if (i == 4)..(i == 5) or (i == 7).
 701afcadda9f90ae591de50be598f558	[[[false, 120], [true, 480]], false, true]	class T\n              def initialize = (@a = [1, 2.5, 3, 4.5, 1 << 

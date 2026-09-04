@@ -1363,12 +1363,6 @@ impl<'a> JitContext<'a> {
                 .get_ivarid(name)
                 .filter(|ivarid| ivarid.is_inline())
         };
-        let ivar_of = |this: &Self, v: frameless::LeafValue| -> Option<Option<IvarId>> {
-            match v {
-                frameless::LeafValue::SelfIvar(name) => resolve(this, name).map(Some),
-                _ => Some(None),
-            }
-        };
         // The arithmetic and the comparison below are emitted as machine
         // instructions with no runtime check, which is only licensed while
         // the operator is still the built-in one. Take that licence for
