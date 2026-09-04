@@ -305,6 +305,24 @@ pub struct ClassInfo {
     ///
     class_variables: Option<indexmap::IndexMap<IdentId, Value, fxhash::FxBuildHasher>>,
     ///
+    /// Whether this entry may hold a `Value` that is not yet in the old
+    /// generation, i.e. whether a *minor* GC has to scan it.
+    ///
+    /// The other metadata tables shrank their scan with a side index of the
+    /// entries that hold a `Value` at all (see `Store::mark`), but constants
+    /// and class variables mutate, so the interesting question here is not
+    /// "does it hold one" — nearly every class does — but "could a minor
+    /// collection free one". It could only if the value is young, and a
+    /// minor seeds its mark bits from the old generation, so an entry whose
+    /// values are all old survives untouched.
+    ///
+    /// Set by every write of a `Value` into this struct; cleared by the
+    /// mark itself, once it observes that every value it visited is old.
+    /// Conservative in the safe direction — a stale `true` costs a scan, and
+    /// a class is born dirty.
+    ///
+    dirty: std::cell::Cell<bool>,
+    ///
     /// instance variable table (insertion-ordered).
     ///
     /// `IdentId` is a `u32`, so the default SipHash costs more to compute
@@ -420,22 +438,63 @@ pub fn struct_members_len(store: &super::Store, class_id: ClassId) -> usize {
 }
 
 impl alloc::GC<RValue> for ClassInfo {
+    ///
+    /// Mark this class's `Value`s and re-classify it: an entry all of whose
+    /// values are already old needs no minor scan at all (see the `dirty`
+    /// field), so the mark that establishes that also records it.
+    ///
+    /// Anything reachable *through* those values is not this scan's problem
+    /// — an old object with young children is remembered by the object-level
+    /// write barrier.
+    ///
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        // The class object is marked on every collection, and is deliberately
+        // left out of the dirty accounting: `ObjTy::CLASS` / `MODULE` are not
+        // promotable (`RValue::is_promotable` — not every Value-storing path
+        // on a class object is barriered yet), so a class object is *never*
+        // old. Counting it would leave 97-99 % of classes permanently dirty
+        // and the flag would buy nothing; excluded, 6-8 % stay dirty. The
+        // cost is one already-marked check per class, against the hash-map
+        // walks below.
         if let Some(v) = self.object {
             v.as_val().mark(alloc);
         }
+        if !alloc.is_full_mark() && !self.dirty.get() {
+            return;
+        }
+        let mut all_old = true;
         if let Some(v) = self.name_value {
-            v.mark(alloc);
+            mark_and_test_old(alloc, v, &mut all_old);
         }
         self.constants.values().for_each(|state| {
             if let Some(v) = state.loaded_value() {
-                v.mark(alloc)
+                mark_and_test_old(alloc, v, &mut all_old);
             }
         });
         if let Some(cv) = &self.class_variables {
-            cv.values().for_each(|v| v.mark(alloc));
+            cv.values()
+                .for_each(|&v| mark_and_test_old(alloc, v, &mut all_old));
         }
+        self.dirty.set(!all_old);
     }
+}
+
+///
+/// Mark `v`, and clear `all_old` unless it is safe from a minor collection.
+///
+/// An immediate carries no cell, so nothing can free it — it counts as old.
+/// The generation is read before aging runs for this cycle, so a value
+/// promoted *by* this collection still reads young here and keeps its class
+/// dirty for one more cycle. Conservative in the safe direction.
+///
+fn mark_and_test_old(alloc: &mut alloc::Allocator<RValue>, v: Value, all_old: &mut bool) {
+    use alloc::GC;
+    if let Some(r) = v.try_rvalue()
+        && !alloc.is_old(r)
+    {
+        *all_old = false;
+    }
+    v.mark(alloc);
 }
 
 impl ClassInfo {
@@ -455,6 +514,7 @@ impl ClassInfo {
             constants: HashMap::default(),
             constant_locations: HashMap::default(),
             class_variables: None,
+            dirty: std::cell::Cell::new(true),
             ivar_names: indexmap::IndexMap::default(),
             instance_ty: None,
             alloc_func: None,
@@ -481,6 +541,7 @@ impl ClassInfo {
             constants: HashMap::default(),
             constant_locations: HashMap::default(),
             class_variables: None,
+            dirty: std::cell::Cell::new(true),
             ivar_names: self.ivar_names.clone(),
             instance_ty: self.instance_ty,
             alloc_func: self.alloc_func,
@@ -488,6 +549,49 @@ impl ClassInfo {
             neq_basic_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
+        }
+    }
+
+    ///
+    /// Record that a `Value` was written into this entry, so the next minor
+    /// GC scans it. Every such write must call this — see the `dirty` field.
+    ///
+    pub(super) fn mark_dirty(&self) {
+        self.dirty.set(true);
+    }
+
+    #[cfg(feature = "gc-debug")]
+    pub(super) fn is_dirty(&self) -> bool {
+        self.dirty.get()
+    }
+
+    ///
+    /// `gc-debug`: check the invariant a clean entry stands on — that a minor
+    /// collection cannot free anything it holds. `object` is exempt: it is
+    /// marked unconditionally (see `mark`).
+    ///
+    #[cfg(feature = "gc-debug")]
+    pub(super) fn assert_all_values_old(&self, alloc: &alloc::Allocator<RValue>) {
+        let check = |v: Value, what: &str| {
+            if let Some(r) = v.try_rvalue() {
+                assert!(
+                    alloc.is_old(r),
+                    "clean ClassInfo holds a young {what}: a writer is missing `mark_dirty()`"
+                );
+            }
+        };
+        if let Some(v) = self.name_value {
+            check(v, "name value");
+        }
+        for state in self.constants.values() {
+            if let Some(v) = state.loaded_value() {
+                check(v, "constant");
+            }
+        }
+        if let Some(cv) = &self.class_variables {
+            for &v in cv.values() {
+                check(v, "class variable");
+            }
         }
     }
 
@@ -668,6 +772,7 @@ impl ClassInfo {
 
     pub(crate) fn set_cached_name_value(&mut self, val: Value) {
         self.name_value = Some(val);
+        self.mark_dirty();
     }
 
     pub(crate) fn record_constant_location(&mut self, name: IdentId, file: String, line: u32) {
@@ -767,6 +872,7 @@ impl ClassInfo {
             cv.insert(name, val);
             self.class_variables = Some(cv);
         }
+        self.mark_dirty();
     }
 
     fn get_cvar(&self, name: IdentId) -> Option<Value> {
@@ -823,6 +929,7 @@ impl ClassInfoTable {
         let id = self.copy_class(original_class);
         let class_obj = Value::singleton_class_empty(id, super_class.into(), base).as_class();
         self[id].object = Some(class_obj);
+        self[id].mark_dirty();
         class_obj
     }
 
@@ -1687,6 +1794,7 @@ impl ClassInfoTable {
             None => false,
         };
         self[class_id].object = Some(class_obj.as_class());
+        self[class_id].mark_dirty();
         self[class_id].name = name.map(|id| id.to_string());
         self[class_id].name_permanent = name.is_some() && parent_permanent;
         self[class_id].parent = parent;
@@ -1840,6 +1948,7 @@ impl ClassInfoTable {
         info.constant_locations = constant_locations;
         info.class_variables = class_variables;
         info.alloc_func = alloc_func;
+        info.mark_dirty();
 
         // Duplicate the singleton class too: CRuby's Module#initialize_copy
         // clones the singleton class so `def self.foo` and `extend`-ed modules
@@ -1873,6 +1982,7 @@ impl ClassInfoTable {
         new_meta_info.constants = m_constants;
         new_meta_info.constant_locations = m_constant_locations;
         new_meta_info.class_variables = m_class_variables;
+        new_meta_info.mark_dirty();
 
         // Replicate `extend`-ed modules (iclasses hanging off the original
         // metaclass's superclass chain) on the new metaclass in the same
@@ -1934,6 +2044,7 @@ impl ClassInfoTable {
         new_info.constants = constants;
         new_info.constant_locations = constant_locations;
         new_info.class_variables = class_variables;
+        new_info.mark_dirty();
         // Replicate `extend`-ed modules (iclasses on the original
         // singleton's superclass chain) in the same order; `include_module`
         // prepends, so walk nearest-to-furthest and re-include in reverse.

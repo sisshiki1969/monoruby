@@ -307,6 +307,18 @@ impl alloc::GC<RValue> for Store {
         self.cached_constsites
             .iter()
             .for_each(|&id| self[id].mark(alloc));
+        // Constants and class variables mutate, so a side index cannot
+        // shrink this one: nearly every class holds a `Value`. `ClassInfo`
+        // instead carries a dirty flag and skips its own tables when a minor
+        // collection cannot free anything in them — see `ClassInfo::mark`.
+        #[cfg(feature = "gc-debug")]
+        if !alloc.is_full_mark() {
+            for info in self.classes.table.iter() {
+                if !info.is_dirty() {
+                    info.assert_all_values_old(alloc);
+                }
+            }
+        }
         self.classes.table.iter().for_each(|info| info.mark(alloc));
         self.frozen_str_pool.values().for_each(|v| v.mark(alloc));
     }
