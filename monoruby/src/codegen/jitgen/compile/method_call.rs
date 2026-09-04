@@ -1369,6 +1369,28 @@ impl<'a> JitContext<'a> {
                 _ => Some(None),
             }
         };
+        // The arithmetic and the comparison below are emitted as machine
+        // instructions with no runtime check, which is only licensed while
+        // the operator is still the built-in one. Take that licence for
+        // every operator the body uses *before* emitting anything, and
+        // record the dependency after, so `set_bop_redefine` evicts this
+        // body. Without it a redefinition is not repairable by any side
+        // exit: the class-version guard fires, the body recompiles, and the
+        // recompiled body emits the same unconditional fast path again —
+        // `frameless_leaf_bodies_bop_redefine` is the regression.
+        let mut bop_deps: Vec<IdentId> = Vec::new();
+        for op in &body.ops {
+            let name: IdentId = match *op {
+                frameless::LeafOp::Bin(kind, _) => kind.into(),
+                frameless::LeafOp::Cmp(kind, _) => kind.into(),
+                _ => continue,
+            };
+            if !self.basic_op_assumable(INTEGER_CLASS, name) {
+                return false;
+            }
+            bop_deps.push(name);
+        }
+
         // Resolve every ivar name the body mentions, up front.
         let mut ivars: Vec<Option<IvarId>> = Vec::with_capacity(body.ops.len());
         for op in &body.ops {
@@ -1483,6 +1505,9 @@ impl<'a> JitContext<'a> {
                     });
                 }
             }
+        }
+        for name in bop_deps {
+            self.record_bop_dep(INTEGER_CLASS, name);
         }
         state.def_reg2acc(ir, GP::Rax, dst);
         state.unset_side_effect_guard();
@@ -3992,6 +4017,59 @@ mod tests {
             # the guards fire: a non-fixnum ivar, and a non-fixnum argument
             res << P.new(1.5).pos << p5.gt(4.5) << p5.eq("5")
             res << (begin; p5.gt("x"); rescue ArgumentError, TypeError => e; e.class; end)
+            res
+            "#,
+        );
+    }
+
+    /// The expansion emits the arithmetic and the comparison as machine
+    /// instructions with no runtime check, which Ruby licenses only while
+    /// the operator is still the built-in one. Redefining it has to take
+    /// the licence back.
+    ///
+    /// A side exit cannot do that on its own: the class-version guard every
+    /// definition bumps does fire, but the body then *recompiles* and emits
+    /// the same unconditional fast path, so the answer goes stale again on
+    /// the next entry. The observable shape is a redefinition that appears
+    /// to take and then stops: 500 calls after `Integer#*` is redefined
+    /// answered `[:redefined_mul, 6]` — the compiled body drifting back to
+    /// the machine multiply — where CRuby answers `[:redefined_mul]`.
+    ///
+    /// So the expansion takes `basic_op_assumable` before emitting and
+    /// records the dependency after, which is what makes `set_bop_redefine`
+    /// evict it.
+    #[test]
+    fn frameless_leaf_bodies_bop_redefine() {
+        run_test_once(
+            r#"
+            class C
+              def initialize; @a = 3; @n = 1; end
+              def dbl; @a * 2; end
+              def add; @a + 1; end
+              def eq;  @n == 1; end
+            end
+            # The loop keeps the caller compiled across the redefinition, so
+            # the expansion is re-entered rather than left behind at the
+            # first deopt. `<` and `+=` drive the loop, so the body uses `*`
+            # and `==`, which the redefinition below can take without
+            # breaking the loop itself.
+            def run(c, n)
+              out = []
+              i = 0
+              while i < n
+                out << [c.dbl, c.eq]
+                i += 1
+              end
+              out.uniq
+            end
+            c = C.new
+            run(c, 500)
+            res = [run(c, 50)]
+            class Integer
+              def *(o); :redefined_mul; end
+              def ==(o); :redefined_eq; end
+            end
+            res << run(c, 500)
             res
             "#,
         );

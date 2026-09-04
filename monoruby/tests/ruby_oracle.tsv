@@ -1446,6 +1446,7 @@
 6e572d93b20a8692a4e7ddd298baa9ee	true	class Foo\n              def bind; binding; end\n            end\n    
 6e7aebe2556be39faee23d7b63bd31d6	[false, false, false, false, false]	S = Struct.new(:a, :b, :c)\n            \n\n            s = S.new(1, 2
 6eadac74beac0aa21a211ec67fcdc95d	["0.514e1", "0.114e1", "0.628e1", "0.45e1", "0.7e1", "0.3e0"]	require "rubygems"\n        require "bigdecimal"\n        a = BigDecimal(
+6ebe2eb5165b0355e2d3ceeb9e154145	[[[6, true]], [[:redefined_mul, :redefined_eq]]]	class C\n              def initialize; @a = 3; @n = 1; end\n         
 6ec1acc4c17516bb23420e702e9103d2	[:done, true, 64]	def make_enum\n              Enumerator.new { |y| sleep 0.05; y << :
 6ee39a1116ff8eda1d78eddc45c1b5a3	[2020, 1, 2, 3, 32400, 32400]	t = Time.new(2020, 1, 2, 3, 4, 5, "+09:00")\n        [t.year, t.month, t
 6ee8709f21799482d6bff0182f48702d	"/\\n"	r, w = IO.pipe\n            Process.wait Process.spawn("pwd", chdir:
