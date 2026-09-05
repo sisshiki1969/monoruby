@@ -157,6 +157,27 @@ fn packed_digest<S: std::hash::BuildHasher>(hash_builder: &S, k: Value) -> usize
     h.finish() as usize
 }
 
+///
+/// The bucketing digest of a packed key, for the JIT's inline probe.
+///
+/// A leaf: no vm, no allocation, nothing it can raise — so generated code
+/// calls it with the key in the first argument register and only its own
+/// caller-saved registers to protect. It is the same digest the map
+/// computed at insert time: the mixer is seeded per *process*
+/// (`RubyRandomState::new` reads one `OnceLock`), so one seed serves every
+/// map and every call site.
+///
+/// Why a call and not two multiplies in line: the fold is a 64×64→128
+/// multiply, and the x86-64 assembler this JIT emits through has no
+/// one-operand `mul`. When it does, this helper becomes the emitted
+/// sequence and nothing else changes.
+///
+pub(crate) extern "C" fn packed_digest_c(bits: u64) -> u64 {
+    let k = Value::from_u64(bits);
+    debug_assert!(k.is_packed_value());
+    packed_digest(&rubymap::RubyRandomState::new(), k) as u64
+}
+
 /// The boxed map's digest of a String key, computed without the vm: the
 /// same builder and the same digest stream as `RubyMap::hash(&Some(k))`
 /// for an `ObjTy::STRING` payload — `Value::ruby_hash`'s STRING arm

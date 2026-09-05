@@ -187,6 +187,7 @@ impl Codegen {
             | AsmInst::HashLenFixnum { .. }
             | AsmInst::HashEntryAt { .. }
             | AsmInst::HashLiveAt { .. }
+            | AsmInst::HashProbePacked { .. }
             | AsmInst::HashCompareByIdentity { .. }
             | AsmInst::HashDefault { .. }
             | AsmInst::IsNilToBool { .. }

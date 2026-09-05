@@ -727,6 +727,110 @@ impl Codegen {
         }
     }
 
+    ///
+    /// `Hash#[]` with the probe in line — see `AsmInst::HashProbePacked`.
+    ///
+    /// ### in
+    /// - rdx: the hash
+    /// - rcx: the key, a bits-hashed immediate (class-guarded by the caller)
+    ///
+    /// ### out
+    /// - rax: the value on a hit; `hashindex`'s answer on a miss
+    ///
+    /// rdx and rcx survive the probe (the miss path needs them as
+    /// `hashindex`'s arguments); everything else caller-saved is scratch.
+    /// Total: a shape the probe does not handle is answered by the builtin,
+    /// never by an exit.
+    ///
+    pub(crate) fn gen_hash_probe_packed(
+        &mut self,
+        layout: rubymap::EntriesLayout,
+        hashindex: u64,
+        digest: u64,
+    ) {
+        let lp = self.jit.label();
+        let next = self.jit.label();
+        let exhausted = self.jit.label();
+        let miss = self.jit.label();
+        let done = self.jit.label();
+        let ty_flags = RVALUE_OFFSET_TY + 1;
+        let mask = HASH_REP_MASK as u64;
+        let boxed_rep = HASH_REP_BOXED as u64;
+        let map_ptr = HASH_CONTENT_MAP_OFFSET;
+        let default_slot = HASH_DEFAULT_OFFSET;
+        let linear_off = layout.linear_offset;
+        let len_off = layout.len_offset;
+        let ptr_off = layout.ptr_offset;
+        let bucket_size = layout.bucket_size;
+        let hash_off = layout.hash_offset;
+        let key_off = layout.key_offset;
+        let value_off = layout.value_offset;
+        monoasm! { &mut self.jit,
+            // The boxed representation only: inline pairs have no digests to
+            // compare, and the identity-keyed map is keyed differently.
+            movzxb rsi, [rdx + (ty_flags)];
+            andq rsi, (mask);
+            cmpq rsi, (boxed_rep);
+            jne  miss;
+            movq rdi, [rdx + (map_ptr)];
+            // Linear regime only (no indices table): the entries are the
+            // whole probe. Past that the table decides, which is stage 2.
+            // Either way the builtin answers correctly, so a shape this
+            // probe does not handle is a *call*, not an exit: a deopt here
+            // would not recompile, and a large Symbol-keyed Hash would then
+            // exit on every lookup — strictly worse than today.
+            movzxb rsi, [rdi + (linear_off)];
+            testq rsi, rsi;
+            jz   miss;
+            // digest = packed_digest_c(key). A leaf, but a C call: rdx / rcx
+            // are caller-saved, and the miss path still needs them.
+            pushq rdx;
+            pushq rcx;
+            movq rdi, rcx;
+            movq rax, (digest);
+            call rax;
+            popq rcx;
+            popq rdx;
+            movq r8, rax;                       // r8 = digest
+            movq rdi, [rdx + (map_ptr)];
+            movq r11, [rdi + (ptr_off)];        // r11 = &entries[0]
+            movq r9, [rdi + (len_off)];
+            movq rsi, (bucket_size);
+            imul r9, rsi;
+            addq r9, r11;                       // r9 = one past the last entry
+        lp:
+            cmpq r11, r9;
+            jae  exhausted;
+            cmpq r8, [r11 + (hash_off)];
+            jne  next;
+            // `Option<Value>` in `Value`'s NonZero niche: `Some(k)` is k's own
+            // bits, and a tombstone's `None` is the zero word, which no packed
+            // key equals.
+            cmpq rcx, [r11 + (key_off)];
+            jne  next;
+            movq rax, [r11 + (value_off)];
+            jmp  done;
+        next:
+            addq r11, (bucket_size);
+            jmp  lp;
+        exhausted:
+            // Not present. Without a default that *is* the answer, and the
+            // builtin would only redo the digest and the scan to say so;
+            // `Option<Box<HashDefault>>` is null when there is neither a
+            // default value nor a default proc.
+            movq rsi, [rdx + (default_slot)];
+            testq rsi, rsi;
+            jne  miss;
+            movq rax, (NIL_VALUE);
+            jmp  done;
+        miss:
+        }
+        // A default value / default proc, or a shape this probe does not
+        // handle: the builtin.
+        self.emit_call_2args(hashindex);
+        self.jit.bind_label(done);
+    }
+
     /// `Hash#__live_at`: hash in rdx, fixnum index in rcx, Ruby bool in rax —
     /// `true` iff the position is in range and the entry is not a tombstone.
     /// Total by construction, like `__key_at`. rsi and rdi are scratch.
