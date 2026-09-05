@@ -178,6 +178,34 @@ pub(crate) extern "C" fn packed_digest_c(bits: u64) -> u64 {
     packed_digest(&rubymap::RubyRandomState::new(), k) as u64
 }
 
+///
+/// The bucketing digest of a String key, for the JIT's inline probe — the
+/// String counterpart of [`packed_digest_c`]: a leaf (no vm, no
+/// allocation, nothing it can raise) computing exactly what
+/// [`string_digest`] computes at insert time. The caller has already
+/// class-guarded the key to `String` itself (the same line
+/// [`Value::is_plain_rstring_inner`] draws), so the content is read
+/// unconditionally.
+///
+pub(crate) extern "C" fn string_digest_c(bits: u64) -> u64 {
+    let k = Value::from_u64(bits);
+    let s = k.as_rstring_inner();
+    string_digest(&rubymap::RubyRandomState::new(), s) as u64
+}
+
+///
+/// The `eql?` verdict of a stored boxed-map key against a plain String
+/// probe key, for the JIT's inline probe: [`string_key_eq`] as a leaf,
+/// answering 1 / 0. `stored` is the raw key slot of the entry — an
+/// `Option<Value>`, whose `None` is the zero word.
+///
+pub(crate) extern "C" fn string_key_eq_c(stored: u64, key: u64) -> u64 {
+    let stored = (stored != 0).then(|| Value::from_u64(stored));
+    let k = Value::from_u64(key);
+    let s = k.as_rstring_inner();
+    string_key_eq(&stored, k, s) as u64
+}
+
 /// The boxed map's digest of a String key, computed without the vm: the
 /// same builder and the same digest stream as `RubyMap::hash(&Some(k))`
 /// for an `ObjTy::STRING` payload — `Value::ruby_hash`'s STRING arm

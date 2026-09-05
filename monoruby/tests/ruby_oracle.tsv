@@ -767,6 +767,7 @@
 39e6703b6b81cc1675c7d7f7730c417f	[[1, 2, 3, nil, nil, nil, nil], 31, [3, [[:a, 31], [1, 2], [nil, 3]], 31], [4, 4, 31, nil], [nil, nil, 0], [7, 1, 1], ["gen", 1]]	def drive(n)\n              r = nil\n              n.times { r = yiel
 39eb22a6c09538f53ff55e200b562be8	59	f = ->(x){x + 42}\n            \n\n            f.call(17)\n            
 3a01dc8fffbde1143e30f29445a348d4	[42, "z", 99]	out = nil\n        50.times do\n          a = []\n          a << (class C7
+3a19a4b42a902a2326b2eab0711379ad	[1, nil, 2, 1, nil, 3, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 3a319d3cfdb21a4802f64f67da78477f	"US-ASCII"	s = "Hello".encode("US-ASCII")\n              s.swapcase!\n        
 3a3ea224e66a902c9412e5a9bc4f8e3d	[[:A, [7], {}], [:A, [1, 2], {x: 9}], [:A, [], {}], [:A, [3, 4], {}], [:t, [1, 2], {z: 3}], [:t, [], {}]]	class A\n              def m(*a, **k); [:A, a, k]; end\n            e
 3a4a3fd8d76c29f29774b570dd11adcd	[true, :ok, 42, 42, :called]	res = []\n        class DMNest\n          define_method(:dm) { def dm_nes
@@ -1068,6 +1069,7 @@
 4e78c9407fe210294bad93265e6fe237	"Class"	"mutable-str".dup.singleton_class.class.to_s
 4e8da0b5e2010b485853959988c37a10	[5.0]	class RS2\n          def initialize = (@objs = [1.5, 2.5, 3.5])\n        
 4e91589759e06abf5967280f353d07c5	[9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError"]	def g(a, b, c) = yield(a + b + c)\n        def f(...) = g(1, ...)\n      
+4e9433807c6ac2166e6457fd13ba0a0f	[nil, nil, nil, 6, 18, :back, 3000, 3000]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 4e9bfbcee73c693e57ccc4d38d0dfa34	["x", "y"]	base = "/tmp/monoruby_dir_eachchild_#{Process.pid}_#{rand(100000)}"
 4ebe3f743c44083475b01a20ac7c38bc	false	binding.local_variable_defined?(:_10)
 4edbac695b5ed45b538971de1ca0ed2c	[true, true, true, false]	f = File.open("Cargo.toml")\n            begin\n              [f.binm
@@ -1878,6 +1880,7 @@
 8dd55defdf95efbdd977e6c2174cf434	[3, false]	s = "abc"\n            s.instance_eval { alias my_len length }\n     
 8df6d4abdff110c4dbaffcd3404ca581	{amount: 42, unit: "km"}	M = Data.define(:amount, :unit)\nM[42, "km"].to_h
 8e1574a4b3216e60ac128b6d348f4518	"bar is true"	foo = false\n        bar = true\n        quu = false\n        \n        x =
+8e430b6b2eaf098fe9c551a79ce5e682	[1, 5, nil, 1, 0, 17, 9, nil, :frozen, :frozen, :frozen, 3, :d, 3, "p:x", 1, :d]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 8e4e8019a5cb826e7c04db9f7be00c08	[[10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4]]	def g(a, b, c, d) = [a, b, c, d]\n        def f(...) = g(10, ...)\n      
 8e5bf6a49a3af8219a95bf2205693b54	"from ensure"	def m\n              raise "orig"\n            rescue\n              r
 8e826807820a874b952371a0550c1442	true	m = Module.new\n            m.const_set(:X, 1)\n            m.depreca
@@ -1931,6 +1934,7 @@
 929ec88122ad3533893000031753c174	[999, 999]	def m_dyn(a, b)\n          yield\n          a + b\n        end\n        def
 92ae34eef31e84efce3356329a17c934	"US-ASCII"	"\\x01".unpack("b")[0].encoding.to_s
 92c320086797b71e965185f0332f276e	[true, "nil"]	begin\n              raise "x"\n            rescue => e\n             
+92c7fd1254ddfbf42a32cc10aff9632c	[0, 99, 50, nil, nil, nil, 51, 99, :n, :t, :f, 7, 3000, 3000]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 92c81d1822b4b41aa65c4eff4e01c590	[[100, 200, 300], [[:a, 250], [:c, 400]], [100, 200, 300], [[:a, 250], [:c, 400]]]	class S\n            def f(*x, **y)\n                $res << x\n         
 92d03f760ad8afc09f2a68a94487b012	["Fri Dec", "Fri Dec", " Dec", " Dec", " Dec", " Dec", nil, 2, [" Dec"], "Fri Dec", 7, "", " 12 1975 14:39", "IndexError", " 12", "Fri Dec ", " 1975 14:39", "12", 7, " 12", "Fri Dec ", " 1975 14:39", 10, " ", " ", " ", 1, 5, "19", "75", ["19", "75"], "1975 ", 3, 0, 3, 3, "tes", nil, ["t", "e", nil, "s"], ["tes", "s", "s", nil], 0]	require "strscan"\n        r = []\n        s = StringScanner.new("Fri Dec
 92d55f7191fed22f0d1af9face39145d	[:a, :b, :block, :x, :z]	a = 1\n        b = 2\n        def f(x, &block)\n          z = nil\n        
@@ -2500,6 +2504,7 @@ bc4a7a2f49371fc147939e3a5a54bd45	[nil, true]	r, w = IO.pipe\n            pid = f
 bc5ee3d6a54ec78cbbccd9f386e31604	[true, true, "test"]	class MyMod < Module\n              def initialize(name)\n           
 bc7468de3c49bfa7febfbc6e20e4709c	[4, 1170]	a = 0\n        for i in [0,1,2,3,4]\n            1.times do\n             
 bca890206e651d8b1e7121a1d6d0052d	[1, 2, 3, 4, [5, 6, 7]]	def f(x,y,a=42,b=55,*z)\n            [x,y,a,b,z]\n        end\n        \n\n 
+bcc6b943a1ec50a193fa5cfc44c60d80	[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 12, nil, :str, 1, :seven, :u, 1]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 bcd4d79874131b33a41f66ab63d74f9a	[["historical binary regexp match"], ["historical binary regexp match"], true, true, true]	def cap\n              saved = $stderr\n              buf = +""\n     
 bd014186227c44d7add99e1236397a73	[[[:a, 1], ["b", 2], [3, :c]], ["k99", 99], [], [["k", 1], ["k", 2]]]	def entries(h)\n              if h.respond_to?(:__key_at)\n          
 bd22533535800c77fe48058df3d9f037	"1"	def foo\n          eval("a = 1", $b)\n        end\n        \n\n        eval(

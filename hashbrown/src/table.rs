@@ -1,5 +1,6 @@
 use core::{fmt, iter::FusedIterator, marker::PhantomData};
 
+use crate::control::Group;
 use crate::raw::{
     Bucket, InsertSlot, RawDrain, RawExtractIf, RawIntoIter, RawIter, RawIterHash, RawTable,
 };
@@ -45,6 +46,25 @@ pub struct HashTable<T, E = (), G = (), R = ()> {
 }
 
 impl<T, E, G, R> HashTable<T, E, G, R> {
+    /// Byte offset, from `&HashTable`, of the control-byte pointer — for a
+    /// consumer that walks the table from generated machine code. The data
+    /// buckets sit *below* that pointer: bucket `i` is at
+    /// `ctrl - (i + 1) * size_of::<T>()`; the control bytes run upward from it
+    /// for `bucket_mask + 1 + Group::WIDTH` bytes (the trailing `WIDTH` mirror
+    /// the first ones, so a group load at any position is in bounds).
+    pub const fn ctrl_offset() -> usize {
+        core::mem::offset_of!(Self, raw) + RawTable::<T, E, G, R>::ctrl_offset()
+    }
+
+    /// Byte offset, from `&HashTable`, of `bucket_mask` (buckets − 1).
+    pub const fn bucket_mask_offset() -> usize {
+        core::mem::offset_of!(Self, raw) + RawTable::<T, E, G, R>::bucket_mask_offset()
+    }
+
+    /// The width of one control group — the probe step, and the number of
+    /// mirrored trailing control bytes.
+    pub const GROUP_WIDTH: usize = Group::WIDTH;
+
     /// Creates an empty `HashTable`.
     ///
     /// The hash table is initially created with a capacity of 0, so it will not allocate until it

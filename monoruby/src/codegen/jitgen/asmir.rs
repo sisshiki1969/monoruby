@@ -1225,17 +1225,19 @@ impl AsmIr {
         self.inst.push(AsmInst::HashEntryAt { want_key, layout });
     }
 
-    /// See [`AsmInst::HashProbePacked`].
-    pub(crate) fn hash_probe_packed(
+    /// See [`AsmInst::HashProbe`].
+    pub(crate) fn hash_probe(
         &mut self,
         layout: rubymap::EntriesLayout,
         hashindex: u64,
         digest: u64,
+        key_eq: Option<u64>,
     ) {
-        self.inst.push(AsmInst::HashProbePacked {
+        self.inst.push(AsmInst::HashProbe {
             layout,
             hashindex,
             digest,
+            key_eq,
         });
     }
 
@@ -2088,29 +2090,38 @@ pub(super) enum AsmInst {
     },
     ///
     /// `Rax <- Hash#[](Rcx)` for the hash in `Rdx`, with the probe emitted
-    /// as machine code: the boxed map's entries are scanned for the key's
-    /// digest and then its bits, and a hit reads the value straight out of
-    /// the entry. No Rust runs on a hit except the digest itself
-    /// (`digest`, a leaf). A miss answers `nil` in line when the Hash has
-    /// no default; a default value / default proc goes to `hashindex`,
-    /// which owns them — and so does a shape the probe does not handle (an
-    /// inline or identity-keyed representation, or a map past its linear
-    /// size, whose probe goes through the indices table). Total by
-    /// construction: nothing here exits, because a deopt would not
-    /// recompile and a large Symbol-keyed Hash would then exit on every
-    /// lookup.
+    /// as machine code. The boxed map is probed the way `IndexMapCore`
+    /// probes it: a map within its linear size scans the entries for the
+    /// key's digest; a larger one walks the hashbrown indices table
+    /// (control-byte groups matched a word at a time, triangular probe
+    /// sequence, an empty control byte ending the walk). A candidate whose
+    /// stored digest matches is then compared as the key kind demands, and
+    /// a hit reads the value straight out of the entry. No Rust runs on a
+    /// hit except the digest (`digest`, a leaf) and, for a String key that
+    /// is not the stored object itself, the byte comparison (`key_eq`, a
+    /// leaf). A miss answers `nil` in line when the Hash has no default; a
+    /// default value / default proc goes to `hashindex`, which owns them —
+    /// and so does a shape the probe does not handle (an inline or
+    /// identity-keyed representation). Total by construction: nothing here
+    /// exits, because a deopt would not recompile and the site would then
+    /// exit on every lookup.
     ///
-    /// The key must already be class-guarded to one of the bits-hashed
-    /// immediates (`Symbol`, `nil`, `true`, `false`): a fixnum's digest
-    /// reduces through SipHash first (`Value::ruby_hash_packed`), which the
-    /// leaf would do correctly but not cheaply.
+    /// The key must already be class-guarded to what `digest` / `key_eq`
+    /// expect: one of the bits-hashed immediates (`Symbol`, `nil`, `true`,
+    /// `false`; a fixnum's digest reduces through SipHash first) with
+    /// `key_eq: None` — the key is then compared by its bits — or `String`
+    /// itself (not a subclass, whose `eql?` is dispatched) with `key_eq`
+    /// naming the byte-equality leaf.
     ///
-    HashProbePacked {
+    HashProbe {
         layout: rubymap::EntriesLayout,
         /// `hashindex`'s address — the miss path.
         hashindex: u64,
-        /// `packed_digest_c`'s address.
+        /// The digest leaf's address: `fn(key_bits) -> digest`.
         digest: u64,
+        /// The equality leaf's address, `fn(stored_key_bits, key_bits) -> 0 | 1`,
+        /// for a key kind not decided by its bits; `None` compares bits.
+        key_eq: Option<u64>,
     },
     /// `dst <- (src == nil) ? true : false` as a Ruby bool `Value` (`Object#nil?`).
     /// Typed replacement for the `emit_kernel_nil` closure. Uses `GP::Rsi` as a
