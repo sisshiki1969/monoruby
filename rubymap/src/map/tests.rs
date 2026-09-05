@@ -299,13 +299,12 @@ fn reserve() {
         assert_eq!(map.capacity(), capacity);
         assert_eq!(map.get(&i, &mut e, &mut g).unwrap(), Some(&(i * i)));
     }
-    map.insert(capacity, std::usize::MAX, &mut e, &mut g)
-        .unwrap();
+    map.insert(capacity, usize::MAX, &mut e, &mut g).unwrap();
     assert_eq!(map.len(), capacity + 1);
     assert!(map.capacity() > capacity);
     assert_eq!(
         map.get(&capacity, &mut e, &mut g).unwrap(),
-        Some(&std::usize::MAX)
+        Some(&usize::MAX)
     );
 }
 
@@ -1619,8 +1618,14 @@ fn linear_mode_small_maps() {
     for i in 0..5 {
         map.insert(i, i, &mut e, &mut g).unwrap();
     }
-    assert_eq!(map.shift_remove_index(1, &mut e, &mut g).unwrap(), Some((1, 1)));
-    assert_eq!(map.swap_remove_index(0, &mut e, &mut g).unwrap(), Some((0, 0)));
+    assert_eq!(
+        map.shift_remove_index(1, &mut e, &mut g).unwrap(),
+        Some((1, 1))
+    );
+    assert_eq!(
+        map.swap_remove_index(0, &mut e, &mut g).unwrap(),
+        Some((0, 0))
+    );
     assert_eq!(map.shift_remove_index(99, &mut e, &mut g).unwrap(), None);
     assert_eq!(map.swap_remove_index(99, &mut e, &mut g).unwrap(), None);
     let keys: Vec<i32> = map.keys().copied().collect();
