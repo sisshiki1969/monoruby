@@ -410,13 +410,15 @@ module Psych
       # per mapping line and were the single largest cost of a load.
       # Same matching: the first ':' followed by whitespace splits
       # (key rstripped, value past the whitespace run); a ':' that is
-      # the last byte yields a nil value.
+      # the last byte yields a nil value. The indices are byte offsets,
+      # so slice with `byteslice`: `String#[]` counts characters and
+      # would cut a non-ASCII key (`日本: 1`) in the wrong place.
       i = 0
       len = stripped.bytesize
       while i < len
         if stripped.getbyte(i) == 0x3A # ':'
           if i + 1 == len
-            return [stripped[0, i].rstrip, nil]
+            return [stripped.byteslice(0, i).rstrip, nil]
           end
           nx = stripped.getbyte(i + 1)
           if nx == 0x20 || nx == 0x09
@@ -424,7 +426,7 @@ module Psych
             while j < len && ((b = stripped.getbyte(j)) == 0x20 || b == 0x09)
               j += 1
             end
-            return [stripped[0, i].rstrip, stripped[j..-1]]
+            return [stripped.byteslice(0, i).rstrip, stripped.byteslice(j, len - j)]
           end
         end
         i += 1
