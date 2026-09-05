@@ -1066,21 +1066,28 @@ fn hash_index(
     // The probe in line, when the key is one of the immediates whose digest
     // is its bits through the mixer (a fixnum's goes through SipHash first
     // — `Value::ruby_hash_packed` — and stays on the call until that is
-    // split). The key's class comes from this site's inline cache, so it is
-    // guarded; the receiver's shape is checked inside the probe, and a shape
-    // it does not handle is answered by the builtin call, not by an exit.
-    if let (Some(layout), Some(kc)) = (hash_entries_layout(), idx_class)
-        && matches!(kc, SYMBOL_CLASS | NIL_CLASS | TRUE_CLASS | FALSE_CLASS)
-    {
+    // split), or a String of class `String` itself (a subclass's `eql?` is
+    // dispatched — see `string_key_eq`). The key's class comes from this
+    // site's inline cache, so it is guarded; the receiver's shape is checked
+    // inside the probe, and a shape it does not handle is answered by the
+    // builtin call, not by an exit.
+    let probe = idx_class.and_then(|kc| match kc {
+        SYMBOL_CLASS | NIL_CLASS | TRUE_CLASS | FALSE_CLASS => {
+            Some((kc, packed_digest_c as *const () as u64, None))
+        }
+        STRING_CLASS => Some((
+            kc,
+            string_digest_c as *const () as u64,
+            Some(string_key_eq_c as *const () as u64),
+        )),
+        _ => None,
+    });
+    if let (Some(layout), Some((kc, digest, key_eq))) = (hash_entries_layout(), probe) {
         let deopt = ir.new_deopt(state);
         state.guard_class(ir, callsite.args, GP::Rcx, kc, deopt);
         let using_fpr = state.get_using_fpr(ir);
         ir.fpr_save(using_fpr);
-        ir.hash_probe_packed(
-            layout,
-            hashindex as *const () as u64,
-            packed_digest_c as *const () as u64,
-        );
+        ir.hash_probe(layout, hashindex as *const () as u64, digest, key_eq);
         ir.fpr_restore(using_fpr);
         let error = ir.new_error(state);
         ir.handle_error(error);

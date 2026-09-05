@@ -1507,17 +1507,18 @@ impl Codegen {
                     },
                 );
             }
-            AsmInst::HashProbePacked {
+            AsmInst::HashProbe {
                 layout,
                 hashindex,
                 digest,
+                key_eq,
             } => {
                 self.lower_via_inline(
                     store,
                     labels,
                     frame.base_stack_offset,
                     move |cg, _, _, _| {
-                        cg.gen_hash_probe_packed(layout, hashindex, digest);
+                        cg.gen_hash_probe(layout, hashindex, digest, key_eq);
                     },
                 );
             }

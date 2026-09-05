@@ -66,6 +66,22 @@ pub(crate) const fn linear_offset<K, V, E, G, R>() -> usize {
     std::mem::offset_of!(IndexMapCore<K, V, E, G, R>, linear)
 }
 
+/// Byte offset of the `indices` table inside an `IndexMapCore` — see
+/// [`entries_offset`]. Combined with the table's own `ctrl_offset` /
+/// `bucket_mask_offset`, this lets generated code run the indexed probe.
+pub(crate) const fn indices_offset<K, V, E, G, R>() -> usize {
+    std::mem::offset_of!(IndexMapCore<K, V, E, G, R>, indices)
+}
+
+/// The indices table's own layout, for [`crate::entries_layout`].
+pub(crate) const fn indices_ctrl_offset<E, G, R>() -> usize {
+    Indices::<E, G, R>::ctrl_offset()
+}
+pub(crate) const fn indices_mask_offset<E, G, R>() -> usize {
+    Indices::<E, G, R>::bucket_mask_offset()
+}
+pub(crate) const INDICES_GROUP_WIDTH: usize = Indices::<(), (), ()>::GROUP_WIDTH;
+
 /// Mutable references to the parts of an `IndexMapCore`.
 ///
 /// When using `HashTable::find_entry`, that takes hold of `&mut indices`, so we have to borrow our

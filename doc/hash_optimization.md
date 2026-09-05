@@ -173,7 +173,7 @@ Integer キーだけ Symbol キーより 14 ns 遅い（39.5 vs 25.7）のがそ
 構造ハッシュ用（Ruby から見える `#hash` 値）とバケッティング用を分ければ、
 Integer キーの参照が Symbol キーと同じところまで来るはず。
 
-### 4.2 probe を JIT でインライン展開する（大・最大の残り。**段階 1 実装済み**、2026-09-04）
+### 4.2 probe を JIT でインライン展開する（大・最大の残り。**段階 1〜3 実装済み**、2026-09-04/05）
 
 いまは `Hash#[]` のインライン生成が `hashindex` への直接呼び出しまでしか
 やらない（メソッドフレームは省くが、そこから先は Rust）。受信側が
@@ -195,9 +195,9 @@ Integer キーの参照が Symbol キーと同じところまで来るはず。
 
 | 段階 | キー | 領域 | 状態 |
 |---|---|---|---|
-| 1 | packed のうちビットがそのままミキサーに入るもの（Symbol / nil / true / false） | 線形（≤ 8） | **実装済み** `AsmInst::HashProbePacked` |
-| 2 | 同上 | 索引（> 8）— hashbrown の group probe | 未 |
-| 3 | String — バイト列ダイジェスト + memcmp + `plain_string` 判定 | 両方 | 未（erubi の 18 エントリ・String キーはここ） |
+| 1 | packed のうちビットがそのままミキサーに入るもの（Symbol / nil / true / false） | 線形（≤ 8） | **実装済み** `AsmInst::HashProbe`（旧 `HashProbePacked`） |
+| 2 | 同上 | 索引（> 8）— hashbrown の group probe | **実装済み**（段階 3 と同時） |
+| 3 | String — バイト列ダイジェスト + memcmp + `plain_string` 判定 | 両方 | **実装済み**（erubi の 18 エントリ・String キーはここ） |
 
 Integer キーは 4.1 の二重ハッシュ（SipHash を内側で 1 回回す）が解けるまで
 対象外。葉ヘルパで正しく計算はできるが、ヘルパ自体が現状のルックアップの
@@ -237,6 +237,72 @@ miss 側にしか残らない（`emit-asm` で確認）。`tests/hash_probe_jit.
 hit / miss / default 値 / default proc / nil・true・false キー / tombstone /
 索引領域・inline 表現・identity マップへの委譲 / クラスガード / 線形↔索引の
 境界を跨ぐ成長 / 生きた状態の読み取りを CRuby と突き合わせる。
+
+#### 段階 2・3 の設計判断（2026-09-05）
+
+- **索引領域は hashbrown の `find_inner` を SIMD 無しで写す。** monoasm には
+  SIMD が無いので、16 バイトの control group を 64 ビット語 2 つとして読み、
+  hashbrown 自身の generic backend と同じ SWAR ゼロバイト判定
+  （`(x - 0x01..) & !x & 0x80..`、x = word ^ tag×0x01..）で候補ビットを出す。
+  真の一致より後ろのバイトに偽陽性が出うるが、候補は必ずエントリの格納
+  ダイジェスト（64 ビット全部）で検証するので無害。候補の添字は control
+  バイト列の**下**にあるバケット配列（bucket i は `ctrl - 8(i+1)`）から
+  読む。2 語とも見終わってから EMPTY（`0xFF` — bit 7 と 6 が立つので
+  `w & (w << 1) & 0x80..`）の有無で打ち切り、無ければ三角数列で次の group
+  へ。**EMPTY を見た瞬間に打ち切ってはいけない**：削除で EMPTY に戻った
+  スロットより後ろに、それ以前に挿入された要素が同じ group 内に居られる
+  （hashbrown は group 内の一致を全部見てから EMPTY を判定する）。
+  `rubymap` の `raw_probe` テストがこのアルゴリズムを生の offset だけで
+  なぞり、`find_inner` と同じ答えになることを固定している。
+- **レイアウトは `offset_of!` で取る。** `EntriesLayout` に
+  `indices_ctrl_offset` / `indices_mask_offset` / `group_width` を追加。
+  hashbrown（vendored）の `RawTable` / `HashTable` に `ctrl_offset()` /
+  `bucket_mask_offset()` / `GROUP_WIDTH` を生やした。group 幅が 16 で
+  ない構成では索引領域を builtin に渡す（静的分岐）。
+- **String キーは葉ヘルパ 2 つ + 機械語 probe。** `string_digest_c`（バイト
+  列の wyhash、挿入時と同じ）と `string_key_eq_c`（`string_key_eq` そのもの
+  ：identity → STRING×STRING バイト比較）。同一オブジェクト（frozen
+  リテラル）なら eq 呼び出しを省く。**格納ダイジェストが一致したのに eq が
+  偽**なら（64 ビット衝突か tombstone か異種キー）`miss` → builtin。こうする
+  と eq 呼び出しの前後で probe のループ状態を退避する必要が無く、rdx/rcx
+  と entry ポインタだけ push すれば済む。
+- **サブクラスは class guard が弾く。** `guard_class(STRING_CLASS)` はクラス
+  一致なので、`eql?` を dispatch すべき String サブクラス（#1258）は
+  probe に入らず deopt する。
+- **identity マップは probe しない。** `HashContent` の判別子（0 = Map,
+  1 = IdentMap）を見て IdentMap なら builtin へ。段階 1 は判別子を見て
+  いなかったが、Symbol は `IdentKey` のダイジェスト（`id()`）と packed
+  ダイジェストが一致するので偶然正しかった。String は内容ダイジェスト ≠
+  identity ダイジェストで、**自分自身すら見つからず nil を返していた**
+  （`compare_by_identity` + String キーで検出、テスト追加）。
+- **キークラスが混在するサイトは段階 1 と同じ性質。** `h[k]` の k の
+  クラスは抽象状態から取り、guard の失敗は plain deopt（再コンパイル無し）。
+  同じサイトに String と Symbol が交互に来ると、後から来たクラスは毎回
+  deopt して interpreter で実行される（計測では 12 → 24 ns）。段階 1 の
+  Symbol guard も同じ。receiver 側の `BecamePolymorphic` 再コンパイルは VM
+  が立てる POLY ビットで「次は generic に」と判断できるが、引数クラスには
+  その仕組みが無く、再コンパイルしても同じ guard が出るだけなので保留。
+
+#### 段階 2・3 の効果（純ルックアップ、交互 2 ラウンド、ns）
+
+| | 段階 1 | 段階 3 | CRuby+YJIT |
+|---|---:|---:|---:|
+| String 6 エントリ hit（先頭 / 末尾） | 12.4–13.7 / 14.6–16.2 | **10.7–11.1 / 14.4–14.6** | 33.1 / 34.6 |
+| String 6 エントリ miss | 13.5–15.6 | **10.9** | 27.9 |
+| String 18 エントリ（erubi 形）hit | 14.4–17.1 | **11.7–12.3** | 26.4–40.5 |
+| String 18 エントリ miss | 12.6–17.1 | **8.1–8.3** | 18.8 |
+| String 100 エントリ hit / miss | 14.7–17.1 / 12.7–14.6 | **11.6–12.1 / 8.0–10.7** | 25.3 / 19.0 |
+| Symbol 18 / 100 / 1000 エントリ hit | 10.9–13.3 | **7.5–8.6** | 10.6 |
+| Symbol 18 / 100 / 1000 エントリ miss | 11.1–15.0 | **8.8–11.2** | 11.2 |
+
+String の hit は digest 呼び出し（wyhash）と eq 呼び出し（memcmp）が残るので
+Symbol ほどは縮まないが、miss は in-line で nil を返せるので 8 ns 台。
+yjit-bench の erubi（`benchmark_mono.rb`、warmup 10 + 30 反復、交互 2 ラウンド）
+は 215–221 ms → **192–206 ms**（−7〜−10 %）。
+`tests/hash_probe_jit.rs` に String キー（線形 / 索引 / frozen 同一 /
+default 値・proc）、索引領域の Symbol（100・3000 エントリ、削除後）、
+索引領域の tombstone、サブクラスキー、identity マップ、線形↔索引の成長、
+String → Symbol のクラス変化を追加。
 
 ### 4.3 呼び出しサイトのキーセット・インラインキャッシュ（中・要検証）
 

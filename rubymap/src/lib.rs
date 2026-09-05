@@ -256,6 +256,14 @@ pub struct EntriesLayout {
     /// holds at most `AR_MAX` entries and has no indices table, in which case
     /// the entries may be scanned directly.
     pub linear_offset: usize,
+    /// Offset from `&RubyMap` to the indices table's control-byte pointer
+    /// (valid when `linear` is zero). Bucket `i` — an index into the entries —
+    /// sits at `ctrl - (i + 1) * 8`; the control bytes run upward from `ctrl`.
+    pub indices_ctrl_offset: usize,
+    /// Offset from `&RubyMap` to the indices table's `bucket_mask`.
+    pub indices_mask_offset: usize,
+    /// The control-group width the probe steps by (16 with SSE2 / NEON).
+    pub group_width: usize,
 }
 
 ///
@@ -315,6 +323,13 @@ pub fn entries_layout<K, V, E, G, R, S>() -> Option<EntriesLayout> {
         value_offset: std::mem::offset_of!(Bucket<K, V>, value),
         hash_offset: std::mem::offset_of!(Bucket<K, V>, hash),
         linear_offset: core + crate::map::core::linear_offset::<K, V, E, G, R>(),
+        indices_ctrl_offset: core
+            + crate::map::core::indices_offset::<K, V, E, G, R>()
+            + crate::map::core::indices_ctrl_offset::<E, G, R>(),
+        indices_mask_offset: core
+            + crate::map::core::indices_offset::<K, V, E, G, R>()
+            + crate::map::core::indices_mask_offset::<E, G, R>(),
+        group_width: crate::map::core::INDICES_GROUP_WIDTH,
     })
 }
 
@@ -337,6 +352,50 @@ mod entries_layout_tests {
                 entry.add(lay.key_offset).cast::<K>().read(),
                 entry.add(lay.value_offset).cast::<V>().read(),
             )
+        }
+    }
+
+    /// Reference for the machine-code probe: `hash` is the full 64-bit
+    /// digest, `eq` decides a candidate key. Mirrors `RawTableInner::find_inner`
+    /// with the group scanned a byte at a time.
+    #[allow(unsafe_code)]
+    unsafe fn raw_probe<K: Copy, V: Copy>(
+        map: *const u8,
+        lay: &EntriesLayout,
+        hash: u64,
+        eq: impl Fn(&K) -> bool,
+    ) -> Option<V> {
+        unsafe {
+            let ctrl = map.add(lay.indices_ctrl_offset).cast::<*const u8>().read();
+            let mask = map.add(lay.indices_mask_offset).cast::<usize>().read();
+            let entries = map.add(lay.ptr_offset).cast::<*const u8>().read();
+            let tag = ((hash >> 57) & 0x7f) as u8;
+            let mut pos = (hash as usize) & mask;
+            let mut stride = 0usize;
+            loop {
+                let mut empty = false;
+                for i in 0..lay.group_width {
+                    let b = ctrl.add(pos + i).read();
+                    if b == tag {
+                        let idx = (pos + i) & mask;
+                        let ent = ctrl.cast::<usize>().sub(idx + 1).read();
+                        let e = entries.add(ent * lay.bucket_size);
+                        if e.add(lay.hash_offset).cast::<usize>().read() as u64 == hash
+                            && eq(&e.add(lay.key_offset).cast::<K>().read())
+                        {
+                            return Some(e.add(lay.value_offset).cast::<V>().read());
+                        }
+                    }
+                    if b == 0xff {
+                        empty = true;
+                    }
+                }
+                if empty {
+                    return None;
+                }
+                stride += lay.group_width;
+                pos = (pos + stride) & mask;
+            }
         }
     }
 
@@ -377,6 +436,17 @@ mod entries_layout_tests {
         }
         // 64 entries is past AR_MAX, so the map is indexed: `linear` is 0.
         assert_eq!(unsafe { p.add(lay.linear_offset).read() }, 0);
+        // The indexed probe, exactly as the JIT emits it — byte-wise over one
+        // control group at a time, empty byte ends the probe, triangular step
+        // — must find every key through the raw offsets alone.
+        for i in 0..map.len() {
+            let (k, v) = unsafe { raw_entry::<u64, u64>(p, &lay, i) };
+            let hash = map.hash(&k, &mut (), &mut ()).unwrap().0 as u64;
+            let found = unsafe { raw_probe::<u64, u64>(p, &lay, hash, |ek| *ek == k) };
+            assert_eq!(found, Some(v), "probe for entry {i}");
+        }
+        let hash = map.hash(&999u64, &mut (), &mut ()).unwrap().0 as u64;
+        assert_eq!(unsafe { raw_probe::<u64, u64>(p, &lay, hash, |ek| *ek == 999) }, None);
         let mut small: RubyMap<u64, u64> = RubyMap::new();
         small.insert(1, 2, &mut (), &mut ()).unwrap();
         let q = &small as *const _ as *const u8;
