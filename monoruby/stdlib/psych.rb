@@ -259,7 +259,9 @@ module Psych
         @pos += 1
 
         anchor = nil
-        if key =~ /\A&(\S+)\s+(.*)/
+        # Anchored keys (`&name key: v`) are rare; only run the regexp
+        # when the key actually starts with '&'.
+        if key.getbyte(0) == 0x26 && key =~ /\A&(\S+)\s+(.*)/
           anchor = $1
           key = $2
         end
