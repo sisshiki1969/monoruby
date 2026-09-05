@@ -1210,6 +1210,10 @@ impl Codegen {
     /// `Fiddle.___read` integer load: untag the pointer in rdi, deopt on NULL,
     /// load a `width`-byte value (sign/zero-extended per `signed`), tag the
     /// result as a fixnum in rax.
+    ///
+    /// A `width` of 8 cannot be tagged unconditionally — the loaded value may
+    /// need a Bignum — so the shift that tags it is a checked one and the
+    /// out-of-range values deopt to the builtin, which boxes them.
     pub(crate) fn emit_fiddle_read_int(&mut self, width: u8, signed: bool, deopt: &DestLabel) {
         monoasm! { &mut self.jit,
             sarq rdi, 1;
@@ -1223,13 +1227,23 @@ impl Codegen {
             (2, false) => monoasm! { &mut self.jit, movzxw rax, [rdi]; },
             (4, true) => monoasm! { &mut self.jit, movsxl rax, [rdi]; },
             (4, false) => monoasm! { &mut self.jit, movl rax, [rdi]; },
+            (8, _) => monoasm! { &mut self.jit, movq rax, [rdi]; },
             _ => unreachable!(),
         }
         // Tag as Fixnum: rax = (rax << 1) | 1.
-        monoasm! { &mut self.jit,
-            addq rax, rax;
-            orq rax, 1;
+        monoasm! { &mut self.jit, addq rax, rax; }
+        if width == 8 {
+            // `addq rax, rax` sets OF when bit 63 and bit 62 of the loaded
+            // value disagree, i.e. exactly when a *signed* i64 does not fit
+            // in an i63.
+            monoasm! { &mut self.jit, jo deopt; }
+            if !signed {
+                // For an unsigned u64 both of those bits must be clear, so
+                // additionally reject `bit62 == 1` (SF after the doubling).
+                monoasm! { &mut self.jit, js deopt; }
+            }
         }
+        monoasm! { &mut self.jit, orq rax, 1; }
     }
 
     /// `Fiddle.___read` f64 load: untag the pointer in rdi, deopt on NULL, load
@@ -1259,6 +1273,7 @@ impl Codegen {
             1 => monoasm! { &mut self.jit, movb [rdi], rsi; },
             2 => monoasm! { &mut self.jit, movw [rdi], rsi; },
             4 => monoasm! { &mut self.jit, movl [rdi], rsi; },
+            8 => monoasm! { &mut self.jit, movq [rdi], rsi; },
             _ => unreachable!(),
         }
     }
