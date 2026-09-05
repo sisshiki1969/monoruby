@@ -120,8 +120,8 @@ fn type_code_to_ret_ffi_type(ty: i64) -> Result<Type> {
     }
 }
 
-/// Coerce a Ruby Integer argument to the `i64` a C integer parameter is
-/// built from.
+/// Coerce a Ruby Integer argument to the `i64` a C integer parameter — or a
+/// typed `___write` — is built from.
 ///
 /// monoruby's Fixnum is an i63, so an `Integer` anywhere in
 /// `[2^62, 2^64)` — `sqlite3_bind_int64(…, 2**62)`, or any `unsigned long`
@@ -130,6 +130,9 @@ fn type_code_to_ret_ffi_type(ty: i64) -> Result<Type> {
 /// in-range values fail with "no implicit conversion of Integer into
 /// Integer". Accept both representations and let the caller's `as` cast
 /// narrow to the declared width, matching C's own conversion rules.
+///
+/// `___write` needs exactly the same latitude — `ptr.write_uint64(2**63)`
+/// stores a word the C type holds exactly — so it converts through here too.
 fn integer_arg_to_i64(globals: &Globals, val: Value) -> Result<i64> {
     match val.unpack() {
         RV::Fixnum(i) => Ok(i),
@@ -659,7 +662,7 @@ fn fiddle_read(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let ptr = lfp.arg(0).expect_integer(globals)? as usize;
+    let ptr = integer_arg_to_i64(globals, lfp.arg(0))? as usize;
     let ty = lfp.arg(1).expect_integer(globals)?;
     if ptr == 0 {
         return Err(MonorubyErr::runtimeerr("Fiddle.___read: NULL pointer"));
@@ -676,7 +679,9 @@ fn fiddle_read(
                 Value::integer(*(ptr as *const i64))
             }
             TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG => {
-                Value::integer(*(ptr as *const u64) as i64)
+                // Reinterpreting as i64 would report every address / unsigned
+                // value with bit 63 set as a negative Integer.
+                Value::integer_from_u64(*(ptr as *const u64))
             }
             TYPE_FLOAT => Value::float(*(ptr as *const f32) as f64),
             TYPE_DOUBLE => Value::float(*(ptr as *const f64)),
@@ -702,7 +707,7 @@ fn fiddle_write(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let ptr = lfp.arg(0).expect_integer(globals)? as usize;
+    let ptr = integer_arg_to_i64(globals, lfp.arg(0))? as usize;
     let ty = lfp.arg(1).expect_integer(globals)?;
     let val = lfp.arg(2);
     if ptr == 0 {
@@ -710,17 +715,17 @@ fn fiddle_write(
     }
     unsafe {
         match ty {
-            TYPE_CHAR => *(ptr as *mut i8) = val.expect_integer(globals)? as i8,
-            TYPE_UCHAR => *(ptr as *mut u8) = val.expect_integer(globals)? as u8,
-            TYPE_SHORT => *(ptr as *mut i16) = val.expect_integer(globals)? as i16,
-            TYPE_USHORT => *(ptr as *mut u16) = val.expect_integer(globals)? as u16,
-            TYPE_INT | TYPE_BOOL => *(ptr as *mut i32) = val.expect_integer(globals)? as i32,
-            TYPE_UINT => *(ptr as *mut u32) = val.expect_integer(globals)? as u32,
+            TYPE_CHAR => *(ptr as *mut i8) = integer_arg_to_i64(globals, val)? as i8,
+            TYPE_UCHAR => *(ptr as *mut u8) = integer_arg_to_i64(globals, val)? as u8,
+            TYPE_SHORT => *(ptr as *mut i16) = integer_arg_to_i64(globals, val)? as i16,
+            TYPE_USHORT => *(ptr as *mut u16) = integer_arg_to_i64(globals, val)? as u16,
+            TYPE_INT | TYPE_BOOL => *(ptr as *mut i32) = integer_arg_to_i64(globals, val)? as i32,
+            TYPE_UINT => *(ptr as *mut u32) = integer_arg_to_i64(globals, val)? as u32,
             TYPE_LONG | TYPE_LONG_LONG => {
-                *(ptr as *mut i64) = val.expect_integer(globals)?;
+                *(ptr as *mut i64) = integer_arg_to_i64(globals, val)?;
             }
             TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG => {
-                *(ptr as *mut u64) = val.expect_integer(globals)? as u64;
+                *(ptr as *mut u64) = integer_arg_to_i64(globals, val)? as u64;
             }
             TYPE_FLOAT => *(ptr as *mut f32) = val.coerce_to_f64_no_convert(globals)? as f32,
             TYPE_DOUBLE => *(ptr as *mut f64) = val.coerce_to_f64_no_convert(globals)?,
@@ -738,11 +743,18 @@ fn fiddle_write(
 // ---------------------------------------------------------------------------
 // Inline JIT specializations for ___read / ___write
 //
-// When the type code is a constant Fixnum at compile time and the requested
-// width fits in a Fixnum (i63), the JIT can emit a direct typed load/store
-// against the memory pointed to by `ptr`, skipping the type-code dispatch
-// and libffi-free Rust path. NULL pointers deopt to the interpreter so the
-// regular builtin raises the runtime error.
+// When the type code is a constant Fixnum at compile time, the JIT can emit a
+// direct typed load/store against the memory pointed to by `ptr`, skipping the
+// type-code dispatch and the libffi-free Rust path. NULL pointers deopt to the
+// interpreter so the regular builtin raises the runtime error.
+//
+// Widths up to 32 bits always fit monoruby's i63 Fixnum, so those need no
+// range check. The 64-bit types (LONG / LONG_LONG / ULONG / ULONG_LONG /
+// VOIDP) do not: a value outside `[-2^62, 2^62)` — for unsigned, anything
+// `>= 2^62` — has to become a Bignum. Rather than give up on inlining them,
+// the emitted code takes the common in-range case and deopts to the builtin
+// on the values that need boxing (which the builtin now handles: it accepts
+// and produces Bignums for these types).
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy)]
@@ -753,6 +765,8 @@ enum ReadKind {
     U16,
     I32,
     U32,
+    I64,
+    U64,
     F64,
 }
 
@@ -784,6 +798,8 @@ fn fiddle_read_inline(
         TYPE_USHORT => ReadKind::U16,
         TYPE_INT | TYPE_BOOL => ReadKind::I32,
         TYPE_UINT => ReadKind::U32,
+        TYPE_LONG | TYPE_LONG_LONG => ReadKind::I64,
+        TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG => ReadKind::U64,
         TYPE_DOUBLE => ReadKind::F64,
         _ => return false,
     };
@@ -808,6 +824,8 @@ fn fiddle_read_inline(
                 ReadKind::U16 => (2, false),
                 ReadKind::I32 => (4, true),
                 ReadKind::U32 => (4, false),
+                ReadKind::I64 => (8, true),
+                ReadKind::U64 => (8, false),
                 ReadKind::F64 => unreachable!(),
             };
             ir.inline(move |r#gen, _, labels, _| {
@@ -825,6 +843,7 @@ enum WriteKind {
     Int8,
     Int16,
     Int32,
+    Int64,
     F64,
 }
 
@@ -850,6 +869,9 @@ fn fiddle_write_inline(
         TYPE_CHAR | TYPE_UCHAR => WriteKind::Int8,
         TYPE_SHORT | TYPE_USHORT => WriteKind::Int16,
         TYPE_INT | TYPE_UINT | TYPE_BOOL => WriteKind::Int32,
+        TYPE_VOIDP | TYPE_LONG | TYPE_ULONG | TYPE_LONG_LONG | TYPE_ULONG_LONG => {
+            WriteKind::Int64
+        }
         TYPE_DOUBLE => WriteKind::F64,
         _ => return false,
     };
@@ -873,6 +895,7 @@ fn fiddle_write_inline(
                 WriteKind::Int8 => 1,
                 WriteKind::Int16 => 2,
                 WriteKind::Int32 => 4,
+                WriteKind::Int64 => 8,
                 WriteKind::F64 => unreachable!(),
             };
             ir.inline(move |r#gen, _, labels, _| {

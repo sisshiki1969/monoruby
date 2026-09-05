@@ -1659,10 +1659,10 @@ impl Codegen {
     /// `emit_fiddle_read_int`; signed byte/half loads sign-extend via lsl+asr
     /// since the macro has no `ldrsb`/`ldrsh`.
     pub(crate) fn emit_fiddle_read_int(&mut self, width: u8, signed: bool, deopt: &DestLabel) {
-        let deopt = deopt.clone();
+        let null = deopt.clone();
         monoasm_arm64!(&mut self.jit,
             asr x4, x4, #(1);     // untag ptr (Rdi == x4)
-            cbz x4, deopt;        // NULL -> deopt
+            cbz x4, null;         // NULL -> deopt
         );
         match (width, signed) {
             (1, true) => monoasm_arm64!(&mut self.jit,
@@ -1673,13 +1673,24 @@ impl Codegen {
             (2, false) => monoasm_arm64!(&mut self.jit, ldrh w0, [x4];),
             (4, true) => monoasm_arm64!(&mut self.jit, ldrsw x0, [x4];),
             (4, false) => monoasm_arm64!(&mut self.jit, ldr w0, [x4];),
+            (8, _) => monoasm_arm64!(&mut self.jit, ldr x0, [x4];),
             _ => unreachable!(),
         }
-        // Tag as Fixnum: x0 = (x0 << 1) | 1.
-        monoasm_arm64!(&mut self.jit,
-            lsl x0, x0, #(1);
-            add x0, x0, #(1);
-        );
+        // Tag as Fixnum: x0 = (x0 << 1) | 1. A 64-bit load may not fit in an
+        // i63, so double it with a flag-setting add and deopt to the builtin
+        // (which boxes it as a Bignum) when it overflows: V is set exactly
+        // when a *signed* i64 does not fit, and for an *unsigned* u64 bit 62
+        // must be clear too (N after the doubling).
+        if width == 8 {
+            monoasm_arm64!(&mut self.jit, adds x0, x0, x0;);
+            self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+            if !signed {
+                self.jit.bcond_label(monoasm::Cond::Mi, deopt);
+            }
+        } else {
+            monoasm_arm64!(&mut self.jit, lsl x0, x0, #(1););
+        }
+        monoasm_arm64!(&mut self.jit, add x0, x0, #(1););
     }
 
     /// `Fiddle.___read` f64 load: untag the pointer in Rdi (x4), deopt on NULL,
@@ -1710,6 +1721,7 @@ impl Codegen {
             1 => monoasm_arm64!(&mut self.jit, strb w3, [x4];),
             2 => monoasm_arm64!(&mut self.jit, strh w3, [x4];),
             4 => monoasm_arm64!(&mut self.jit, str w3, [x4];),
+            8 => monoasm_arm64!(&mut self.jit, str x3, [x4];),
             _ => unreachable!(),
         }
     }
