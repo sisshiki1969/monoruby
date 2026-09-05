@@ -336,56 +336,91 @@ module Psych
         stripped = line.strip
         break unless stripped.start_with?("-")
 
-        after_dash = stripped[1..-1]
+        # Classify the entry by byte scan. This replaces three regexps
+        # that ran, in order, on every sequence item:
+        #   /\A\s+\*(\S+)\s*\z/   alias item     `- *name`
+        #   /\A\s+&(\S+)\s*(.*)/  anchored item  `- &name value`
+        #   /\A(\s+)(.*)/         plain item     `- text`
+        # `stripped` has no trailing whitespace, so "rest is all
+        # non-whitespace" is what the `\S+\s*\z` of the alias form
+        # amounts to, and the whitespace run after the dash is the
+        # `$1` whose width sets the item's own indentation. As in the
+        # other byte scans of this file, whitespace is space or tab.
+        len = stripped.bytesize
+        i = 1
+        while i < len && ((b = stripped.getbyte(i)) == 0x20 || b == 0x09)
+          i += 1
+        end
 
-        if after_dash.nil? || after_dash.strip.empty?
+        if i == len
+          # `-` alone: the value is on the following line(s).
           @pos += 1
           value = parse_value(ind)
-        elsif after_dash =~ /\A\s+\*(\S+)\s*\z/
-          @pos += 1
-          alias_name = $1
-          value = @anchors[alias_name]
-        elsif after_dash =~ /\A\s+&(\S+)\s*(.*)/
-          anchor = $1
-          rest = $2.strip
-          @pos += 1
-          if rest.empty?
-            value = parse_value(ind)
-          else
-            value = resolve_scalar(rest)
-          end
-          @anchors[anchor] = value
-        elsif after_dash =~ /\A(\s+)(.*)/
-          item_text = $2
-          # The item's own indentation is where its text starts: past the
-          # dash and the whitespace run (`-  a: 1` puts `a` at column
-          # ind + 3). Continuation lines of a nested node align to it.
-          inner_indent = ind + 1 + $1.size
-          # Flow collections first: `- {a: 1}` contains a `: ` and would
-          # otherwise be taken for a block mapping with the key `{a`.
-          if item_text.start_with?("{")
-            @pos += 1
-            value = parse_flow_mapping(item_text)
-          elsif item_text.start_with?("[")
-            @pos += 1
-            value = parse_flow_sequence(item_text)
-          elsif block_mapping_line?(" " * inner_indent + item_text)
-            fake_line = " " * inner_indent + item_text
-            @lines[@pos] = fake_line
-            value = parse_block_mapping(inner_indent)
-          elsif item_text.start_with?("- ") || item_text == "-"
-            # A nested sequence opened on the dash line (`- - a`): reparse
-            # the line as its first entry at the inner indentation.
-            fake_line = " " * inner_indent + item_text
-            @lines[@pos] = fake_line
-            value = parse_block_sequence(inner_indent)
-          else
-            @pos += 1
-            value = resolve_scalar(item_text)
-          end
-        else
+        elsif i == 1
+          # `-foo`: no whitespace after the dash, not an item text.
           @pos += 1
           value = nil
+        else
+          first = stripped.getbyte(i)
+          # End of the non-whitespace run that starts at i + 1 (the
+          # alias / anchor name).
+          j = i + 1
+          if first == 0x2A || first == 0x26 # '*' or '&'
+            while j < len && ((b = stripped.getbyte(j)) != 0x20 && b != 0x09)
+              j += 1
+            end
+          end
+
+          # Scan indices are byte offsets, so slice with `byteslice`
+          # (`String#[]` counts characters, which differ past a
+          # multibyte name).
+          if first == 0x2A && j == len && j > i + 1
+            # `- *name`: the whole rest is the alias name.
+            @pos += 1
+            value = @anchors[stripped.byteslice(i + 1, len - i - 1)]
+          elsif first == 0x26 && j > i + 1
+            # `- &name [value]`
+            anchor = stripped.byteslice(i + 1, j - i - 1)
+            k = j
+            while k < len && ((b = stripped.getbyte(k)) == 0x20 || b == 0x09)
+              k += 1
+            end
+            @pos += 1
+            if k == len
+              value = parse_value(ind)
+            else
+              value = resolve_scalar(stripped.byteslice(k, len - k))
+            end
+            @anchors[anchor] = value
+          else
+            item_text = stripped.byteslice(i, len - i)
+            # The item's own indentation is where its text starts: past the
+            # dash and the whitespace run (`-  a: 1` puts `a` at column
+            # ind + 3). Continuation lines of a nested node align to it.
+            inner_indent = ind + i
+            # Flow collections first: `- {a: 1}` contains a `: ` and would
+            # otherwise be taken for a block mapping with the key `{a`.
+            if item_text.start_with?("{")
+              @pos += 1
+              value = parse_flow_mapping(item_text)
+            elsif item_text.start_with?("[")
+              @pos += 1
+              value = parse_flow_sequence(item_text)
+            elsif block_mapping_line?(" " * inner_indent + item_text)
+              fake_line = " " * inner_indent + item_text
+              @lines[@pos] = fake_line
+              value = parse_block_mapping(inner_indent)
+            elsif item_text.start_with?("- ") || item_text == "-"
+              # A nested sequence opened on the dash line (`- - a`): reparse
+              # the line as its first entry at the inner indentation.
+              fake_line = " " * inner_indent + item_text
+              @lines[@pos] = fake_line
+              value = parse_block_sequence(inner_indent)
+            else
+              @pos += 1
+              value = resolve_scalar(item_text)
+            end
+          end
         end
 
         arr << value
