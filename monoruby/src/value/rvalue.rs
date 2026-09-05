@@ -1120,7 +1120,17 @@ impl alloc::GCBox for RValue {
             // they can ever gain, and that store is barriered.
             | ObjTy::TIME
             | ObjTy::REGEXP
-            | ObjTy::UMETHOD => true,
+            | ObjTy::UMETHOD
+            // `RationalInner` is a pair of Rust `BigInt`s — its `mark` is a
+            // no-op, so it belongs with the reference-free kinds above.
+            | ObjTy::RATIONAL
+            // Range and Complex do hold `Value`s, but every store into one
+            // is accounted for: a Range is written only by
+            // `Range#initialize`, which barriers (see `builtins/range.rs`),
+            // and a Complex has no mutable accessor at all — it is built
+            // once and never written again.
+            | ObjTy::RANGE
+            | ObjTy::COMPLEX => true,
             _ => false,
         }
     }
@@ -1176,7 +1186,11 @@ impl alloc::GCBox for RValue {
                 | ObjTy::FLOAT
                 | ObjTy::TIME
                 | ObjTy::REGEXP
-                | ObjTy::UMETHOD => false,
+                | ObjTy::UMETHOD
+                | ObjTy::RATIONAL => false,
+                // Mirror each inner's `mark`.
+                ObjTy::RANGE => self.as_range().young_child_exists(alloc),
+                ObjTy::COMPLEX => self.as_complex().young_child_exists(alloc),
                 ObjTy::OBJECT => self
                     .as_object()
                     .iter()

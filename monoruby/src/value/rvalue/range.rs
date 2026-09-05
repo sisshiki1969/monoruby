@@ -20,6 +20,19 @@ impl GC<RValue> for RangeInner {
     }
 }
 
+impl RangeInner {
+    ///
+    /// The remember-on-promote half of `mark` above. It must cover exactly
+    /// what `mark` covers — a field marked but not reported here would be
+    /// dropped from the remembered set and then freed under a live
+    /// reference.
+    ///
+    pub(crate) fn young_child_exists(&self, alloc: &Allocator<RValue>) -> bool {
+        let is_young = |v: Value| v.try_rvalue().is_some_and(|rv| !alloc.is_old(rv));
+        is_young(self.start) || is_young(self.end)
+    }
+}
+
 impl RubyEql<Executor, Globals, MonorubyErr> for RangeInner {
     fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         Ok(self.start.eql(&other.start, vm, globals)?
