@@ -2946,6 +2946,11 @@ impl Value {
         unsafe { self.rvalue_mut().as_range_mut() }
     }
 
+    pub(crate) fn as_iobuffer(&self) -> IoBuffer {
+        assert_eq!(ObjTy::IO_BUFFER, self.rvalue().ty());
+        IoBuffer::new_unchecked(*self)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn as_io_inner(&self) -> &IoInner {
         assert_eq!(ObjTy::IO, self.rvalue().ty());
@@ -3017,11 +3022,16 @@ impl Value {
         unsafe { self.rvalue_mut().as_enumerator_mut() }
     }
 
-    pub fn as_io_buffer_inner(&self) -> &IoBufferInner {
+    pub fn try_iobuffer_inner(&self) -> Option<&IoBufferInner> {
+        let rv = self.try_rvalue()?;
+        (rv.ty() == ObjTy::IO_BUFFER).then(|| rv.as_io_buffer())
+    }
+
+    pub fn as_iobuffer_inner(&self) -> &IoBufferInner {
         self.rvalue().as_io_buffer()
     }
 
-    pub fn as_io_buffer_inner_mut(&mut self) -> &mut IoBufferInner {
+    pub fn as_iobuffer_inner_mut(&mut self) -> &mut IoBufferInner {
         self.rvalue_mut().as_io_buffer_mut()
     }
 

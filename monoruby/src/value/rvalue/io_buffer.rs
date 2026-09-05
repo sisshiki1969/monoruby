@@ -12,8 +12,6 @@ pub const BUF_READONLY: u32 = 128;
 /// Where an `IO::Buffer`'s bytes live.
 #[derive(Debug)]
 pub enum BufStorage {
-    /// Zero-sized or freed buffer.
-    Null,
     /// Heap allocation owned by this buffer (INTERNAL, and anonymous
     /// MAPPED allocations, which monoruby backs with the same heap
     /// memory — the MAPPED flag is presentation only until file mapping
@@ -24,20 +22,19 @@ pub enum BufStorage {
     /// directly, so freeing the source buffer does not invalidate them).
     /// Reads and writes go directly through the String's bytes, so
     /// mutations are visible to (block form) — and from — the original.
-    Str { s: Value, offset: usize },
+    Str { s: RString, offset: usize },
     /// A file-backed mmap region (`.map`). Unmapped on drop/free.
     FileMap { ptr: *mut u8, len: usize },
     /// A view into a span of another IO::Buffer (`#slice`). Access is
     /// re-resolved through the parent on every operation, so a parent
     /// resize cannot leave a dangling pointer (out-of-range access
     /// simply fails the bounds check).
-    Slice { parent: Value, offset: usize },
+    Slice { parent: IoBuffer, offset: usize },
 }
 
 impl Clone for BufStorage {
     fn clone(&self) -> Self {
         match self {
-            Self::Null => Self::Null,
             Self::Owned(v) => Self::Owned(v.clone()),
             // Cloning a mapping (object #dup) materializes a private copy —
             // sharing the region would double-munmap on drop.
@@ -67,6 +64,9 @@ impl Drop for BufStorage {
     }
 }
 
+#[monoruby_object]
+pub struct IoBuffer(Value);
+
 ///
 /// The native payload of an `IO::Buffer` (`ObjTy::IO_BUFFER`).
 ///
@@ -81,7 +81,7 @@ pub struct IoBufferInner {
 impl IoBufferInner {
     pub fn null() -> Self {
         Self {
-            storage: BufStorage::Null,
+            storage: BufStorage::Owned(Vec::new()),
             size: 0,
             flags: 0,
             locked: false,
@@ -98,11 +98,11 @@ impl IoBufferInner {
         }
     }
 
-    pub fn string_backed(s: Value, size: usize, flags: u32) -> Self {
+    pub fn string_backed(s: RString, size: usize, flags: u32) -> Self {
         Self::string_backed_at(s, 0, size, flags)
     }
 
-    pub fn string_backed_at(s: Value, offset: usize, size: usize, flags: u32) -> Self {
+    pub fn string_backed_at(s: RString, offset: usize, size: usize, flags: u32) -> Self {
         Self {
             storage: BufStorage::Str { s, offset },
             size,
@@ -120,7 +120,7 @@ impl IoBufferInner {
         }
     }
 
-    pub fn slice_of(parent: Value, offset: usize, size: usize, flags: u32) -> Self {
+    pub fn slice_of(parent: IoBuffer, offset: usize, size: usize, flags: u32) -> Self {
         Self {
             storage: BufStorage::Slice { parent, offset },
             size,
@@ -130,7 +130,10 @@ impl IoBufferInner {
     }
 
     pub fn is_null(&self) -> bool {
-        matches!(self.storage, BufStorage::Null)
+        match &self.storage {
+            BufStorage::Owned(v) => v.is_empty(),
+            _ => false,
+        }
     }
 
     pub(crate) fn mark(&self, alloc: &mut crate::alloc::Allocator<RValue>) {
@@ -144,33 +147,47 @@ impl IoBufferInner {
     /// Copy out the buffer's live byte span. Fails with the CRuby
     /// bounds message when a slice no longer fits its parent (e.g. the
     /// parent was resized smaller).
-    pub fn read_bytes(&self) -> Result<Vec<u8>> {
+    pub fn read_bytes(&self) -> Result<&[u8]> {
         match &self.storage {
-            BufStorage::Null => Ok(Vec::new()),
-            BufStorage::Owned(v) => Ok(v.clone()),
+            BufStorage::Owned(v) => Ok(v),
             BufStorage::FileMap { ptr, len } => {
                 let n = self.size.min(*len);
                 // SAFETY: ptr/len describe this buffer's live mapping.
-                Ok(unsafe { std::slice::from_raw_parts(*ptr, n) }.to_vec())
+                Ok(unsafe { std::slice::from_raw_parts(*ptr, n) })
             }
             BufStorage::Str { s, offset } => {
-                let bytes = s.as_rstring_inner().as_bytes();
+                let bytes = s.as_bytes();
                 if *offset + self.size > bytes.len() {
                     return Err(MonorubyErr::argumenterr(
                         "Specified offset+length is bigger than the buffer size!",
                     ));
                 }
-                Ok(bytes[*offset..*offset + self.size].to_vec())
+                Ok(&bytes[*offset..*offset + self.size])
             }
             BufStorage::Slice { parent, offset } => {
-                let parent_bytes = parent.as_io_buffer_inner().read_bytes()?;
+                let parent_bytes = parent.read_bytes()?;
                 if *offset + self.size > parent_bytes.len() {
                     return Err(MonorubyErr::argumenterr(
                         "Specified offset+length is bigger than the buffer size!",
                     ));
                 }
-                Ok(parent_bytes[*offset..*offset + self.size].to_vec())
+                Ok(&parent_bytes[*offset..*offset + self.size])
             }
+        }
+    }
+
+    /// Identity of the allocation this buffer's bytes live in, for
+    /// `#copy`'s alias check: two buffers can only overlap when they
+    /// resolve to the same root (the same owned Vec, mapping, or backing
+    /// String — slices resolve through their parent). A CoW'd String
+    /// shares its sibling's byte array, so views of either compare equal
+    /// until the write un-shares them, which errs on the safe side.
+    pub fn storage_root(&self) -> usize {
+        match &self.storage {
+            BufStorage::Owned(v) => v.as_ptr() as usize,
+            BufStorage::FileMap { ptr, .. } => *ptr as usize,
+            BufStorage::Str { s, .. } => s.as_bytes().as_ptr() as usize,
+            BufStorage::Slice { parent, .. } => parent.storage_root(),
         }
     }
 
@@ -180,7 +197,6 @@ impl IoBufferInner {
     /// original String; slices write through to their parent.
     pub fn write_at(&mut self, offset: usize, data: &[u8]) -> Result<()> {
         match &mut self.storage {
-            BufStorage::Null => Ok(()),
             BufStorage::Owned(v) => {
                 v[offset..offset + data.len()].copy_from_slice(data);
                 Ok(())
@@ -199,26 +215,20 @@ impl IoBufferInner {
             }
             BufStorage::Str { s, offset: base } => {
                 let base = *base;
-                let mut sv = *s;
-                let inner = sv.as_rstring_inner_mut();
-                if base + offset + data.len() > inner.len() {
+                if base + offset + data.len() > s.len() {
                     return Err(MonorubyErr::argumenterr(
                         "Specified offset+length is bigger than the buffer size!",
                     ));
                 }
                 for (i, b) in data.iter().enumerate() {
-                    inner.set_byte(base + offset + i, *b);
+                    s.set_byte(base + offset + i, *b);
                 }
                 Ok(())
             }
             BufStorage::Slice {
                 parent,
                 offset: base,
-            } => {
-                let base = *base;
-                let mut pv = *parent;
-                pv.as_io_buffer_inner_mut().write_at(base + offset, data)
-            }
+            } => parent.write_at(*base + offset, data),
         }
     }
 }
