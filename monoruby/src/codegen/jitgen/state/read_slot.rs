@@ -521,7 +521,7 @@ impl AbstractFrame {
     ) {
         for (slot, _) in &rest_kw {
             self.use_as_value(*slot);
-            self.write_back_slot(ir, *slot);
+            self.write_back(ir, *slot, Keep::All);
         }
         if rest_kw.is_empty() {
             ir.lit2reg(Value::nil(), GP::Rax);
