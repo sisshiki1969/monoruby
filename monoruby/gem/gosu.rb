@@ -450,14 +450,20 @@ module Gosu
           update
           last_tick = now
         end
-        # Gosu redraws the whole window each frame, so a frame starts from a
-        # cleared surface: whatever `draw` leaves unpainted must not show the
-        # back buffer's previous contents. The colour is set here every time
-        # because drawing (draw_rect, draw_line, ...) leaves its own behind.
-        SDL2.set_draw_color(@_sdl_renderer, 0, 0, 0, 255)
-        SDL2.render_clear(@_sdl_renderer)
-        draw
-        SDL2.render_present(@_sdl_renderer)
+        # Upstream Gosu gates clearing, drawing and presenting together on
+        # needs_redraw? (Window::tick -> Graphics::frame, which opens with
+        # glClearColor(0, 0, 0, 1) + glClear right before draw()), so a frame
+        # that is drawn always starts from a cleared surface and a frame that
+        # is skipped leaves the window exactly as it was. Without the clear,
+        # whatever `draw` does not paint shows the back buffer's previous
+        # contents instead of black. The colour is set every time because
+        # drawing (draw_rect, draw_line, ...) leaves its own behind.
+        if needs_redraw?
+          SDL2.set_draw_color(@_sdl_renderer, 0, 0, 0, 255)
+          SDL2.render_clear(@_sdl_renderer)
+          draw
+          SDL2.render_present(@_sdl_renderer)
+        end
         SDL2.delay(1)
       end
       close!
