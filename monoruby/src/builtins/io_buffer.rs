@@ -232,7 +232,7 @@ fn encode_value(
                 f.to_bits()
             }
         }
-        _ => (v.coerce_to_int_i64(vm, globals)? as u64) & mask(width),
+        _ => encode_integer(vm, globals, v, width, kind)?,
     };
     let mut out = [0u8; 8];
     if big {
@@ -241,6 +241,127 @@ fn encode_value(
         out[..width].copy_from_slice(&raw.to_le_bytes()[..width]);
     }
     Ok(out)
+}
+
+/// Convert an integer `set_value` argument the way CRuby does.
+///
+/// CRuby reads each integer type through a C conversion macro, and the
+/// range that is accepted — and the error raised outside it — is the
+/// macro's, not the type's:
+///
+/// | type            | macro       | accepts                        |
+/// |-----------------|-------------|--------------------------------|
+/// | U8 / u16 / u32  | `NUM2UINT`  | `[INT_MIN, UINT_MAX]`          |
+/// | S8 / s16 / s32  | `NUM2INT`   | `[INT_MIN, INT_MAX]`           |
+/// | u64             | `NUM2ULL`   | `[-2^63, 2^64)`                |
+/// | s64             | `NUM2LL`    | `[-2^63, 2^63)`                |
+///
+/// So a narrow type truncates a value that is wider than itself but still
+/// within `int` / `unsigned int` (`set_value(:U8, 0, 256)` writes `0`,
+/// `set_value(:U8, 0, -1)` writes `255`), while a value outside that C
+/// range raises `RangeError` even though it would truncate just as well —
+/// `set_value(:U8, 0, 2**32)` — and a 64-bit unsigned field takes the whole
+/// `[2^63, 2^64)` range that a signed conversion would refuse. Negative
+/// values wrap through the unsigned macros as they do in C.
+///
+/// Non-Integer arguments go through `to_int` first, as CRuby's macros do.
+fn encode_integer(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+    width: usize,
+    kind: ValKind,
+) -> Result<u64> {
+    let int = match v.unpack() {
+        RV::Fixnum(_) | RV::BigInt(_) => v,
+        _ => v.coerce_to_int(vm, globals)?,
+    };
+    let raw = match (width, kind) {
+        (8, ValKind::Unsigned) => num2ull(int, "unsigned long long")?,
+        (8, _) => num2ll(int, "long long")? as u64,
+        (_, ValKind::Unsigned) => {
+            let (num, negative) = num2ulong(int)?;
+            // check_uint: a negative value must not go below INT_MIN, a
+            // positive one must not exceed UINT_MAX.
+            if negative {
+                if num < i32::MIN as i64 as u64 {
+                    return Err(MonorubyErr::rangeerr(format!(
+                        "integer {} too small to convert to 'unsigned int'",
+                        num as i64
+                    )));
+                }
+            } else if num > u32::MAX as u64 {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "integer {num} too big to convert to 'unsigned int'"
+                )));
+            }
+            num
+        }
+        _ => {
+            let num = num2ll(int, "long")?;
+            // check_int
+            if num < i32::MIN as i64 {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "integer {num} too small to convert to 'int'"
+                )));
+            }
+            if num > i32::MAX as i64 {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "integer {num} too big to convert to 'int'"
+                )));
+            }
+            num as u64
+        }
+    };
+    Ok(raw & mask(width))
+}
+
+/// `rb_num2ll` / `rb_num2long`: an Integer that fits an i64, else
+/// `RangeError: bignum too big to convert into '<cname>'` (CRuby uses the
+/// same wording for both directions).
+fn num2ll(int: Value, cname: &str) -> Result<i64> {
+    match int.unpack() {
+        RV::Fixnum(i) => Ok(i),
+        RV::BigInt(b) => num::ToPrimitive::to_i64(b).ok_or_else(|| {
+            MonorubyErr::rangeerr(format!("bignum too big to convert into '{cname}'"))
+        }),
+        _ => unreachable!("encode_integer coerced to an Integer"),
+    }
+}
+
+/// `rb_num2ull` / `rb_big2ulong`: a non-negative Integer below 2^64, or a
+/// negative one no smaller than -2^63 (wrapped as C would). Beyond that
+/// CRuby distinguishes the two ends: "too big to convert into" above,
+/// "out of range of" below.
+fn num2ull(int: Value, cname: &str) -> Result<u64> {
+    match int.unpack() {
+        RV::Fixnum(i) => Ok(i as u64),
+        RV::BigInt(b) => {
+            let negative = b.sign() == num::bigint::Sign::Minus;
+            match num::ToPrimitive::to_i128(b) {
+                Some(x) if !negative && x <= u64::MAX as i128 => Ok(x as u64),
+                Some(x) if negative && x >= i64::MIN as i128 => Ok(x as i64 as u64),
+                _ if negative => Err(MonorubyErr::rangeerr(format!(
+                    "bignum out of range of {cname}"
+                ))),
+                _ => Err(MonorubyErr::rangeerr(format!(
+                    "bignum too big to convert into '{cname}'"
+                ))),
+            }
+        }
+        _ => unreachable!("encode_integer coerced to an Integer"),
+    }
+}
+
+/// `rb_num2ulong` plus the sign `check_uint` needs: the wrapped value and
+/// whether the Integer was negative.
+fn num2ulong(int: Value) -> Result<(u64, bool)> {
+    let negative = match int.unpack() {
+        RV::Fixnum(i) => i < 0,
+        RV::BigInt(b) => b.sign() == num::bigint::Sign::Minus,
+        _ => unreachable!("encode_integer coerced to an Integer"),
+    };
+    Ok((num2ull(int, "unsigned long")?, negative))
 }
 
 ///
@@ -1687,6 +1808,38 @@ mod tests {
             gr = IO::Buffer.new(4); gr.set_string("abcd"); gr.resize(8)
             r << [gr.size, gr.get_string.bytes]
             r << er.call { gr.resize("x") } << er.call { gr.resize(-1) }
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_buffer_set_value_integer_ranges() {
+        // set_value converts through CRuby's per-type C macros, whose
+        // accepted range is the macro's rather than the type's: narrow
+        // types truncate anything within int / unsigned int and raise
+        // outside it, u64 takes the whole [2^63, 2^64) range a signed
+        // conversion would refuse, and negatives wrap through the unsigned
+        // door. The Bignum boundary (2^62) is monoruby's, not CRuby's, so
+        // the probe straddles it deliberately.
+        run_test_once(
+            r##"
+            r = []
+            er = ->(&blk) { begin; blk.call; :no_raise; rescue => e; [e.class, e.message]; end }
+            b = IO::Buffer.new(8)
+            rw = ->(t, v) { [er.call { b.set_value(t, 0, v) }, b.get_value(t, 0)] }
+            wide = [2**62 - 1, 2**62, 2**62 + 1, 2**63 - 1, -(2**62), -(2**62) - 1, -(2**63),
+                    2**63, 2**64 - 1, 2**64, -(2**63) - 1]
+            %i[u64 U64 s64 S64].each { |t| wide.each { |v| r << rw.call(t, v) } }
+            narrow = [-1, 255, 256, 2**16, 2**31 - 1, 2**31, 2**32 - 1, 2**32,
+                      -(2**31), -(2**31) - 1, -(2**32), 2**62, -(2**62) - 1, 2**64, -(2**63) - 1]
+            %i[U8 S8 u16 s16 u32 s32].each { |t| narrow.each { |v| r << rw.call(t, v) } }
+            # to_int coercion lands on the same rules
+            big = Object.new; def big.to_int; 2**63 + 1; end
+            r << rw.call(:u64, big) << rw.call(:s64, big) << rw.call(:U8, big)
+            r << rw.call(:U8, 1.5) << rw.call(:s16, -1.5)
+            b.set_value(:U64, 0, 2**63 + 5)
+            r << b.values(:U64, 0) << b.values(:S64, 0)
             r
             "##,
         );
