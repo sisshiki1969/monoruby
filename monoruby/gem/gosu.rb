@@ -779,6 +779,7 @@ module Gosu
       @_renderer = nil  # the renderer the texture was created against
       @_owns_texture = true
       @_rgba_blob = nil
+      @_retro = false
 
       if source.is_a?(String)
         _load_from_path(source)
@@ -892,8 +893,55 @@ module Gosu
     def to_blob
       @_rgba_blob || ("\0".b * (@width.to_i * @height.to_i * 4))
     end
+
+    # Set by Gosu.render for a `retro: true` target; read by _ensure_texture.
+    attr_writer :_retro
     def save(_path); end
-    def insert(_img, _x, _y); self; end
+    # Overwrites part of this image with `source`, as Gosu's Image#insert
+    # does, clipping a source that hangs over an edge. The pixel blob is
+    # this image's truth and the texture is derived from it, so the texture
+    # is dropped here and rebuilt from the new pixels on the next draw.
+    def insert(source, x, y)
+      blob = @_rgba_blob
+      pixels, src_w, src_h = Image._pixels_of(source)
+      return self if blob.nil? || pixels.nil? || src_w <= 0 || src_h <= 0
+
+      x = x.to_i
+      y = y.to_i
+      dst_w = @width.to_i
+      dst_h = @height.to_i
+      # The overlapping rectangle, in source coordinates.
+      left   = x < 0 ? -x : 0
+      top    = y < 0 ? -y : 0
+      right  = [src_w, dst_w - x].min
+      bottom = [src_h, dst_h - y].min
+      return self if left >= right || top >= bottom
+
+      # Both are pixel buffers, so splice them by byte: String#[]= counts in
+      # characters, which is the wrong unit here.
+      blob = blob.force_encoding(Encoding::BINARY)
+      row_bytes = (right - left) * 4
+      (top...bottom).each do |row|
+        src_off = (row * src_w + left) * 4
+        dst_off = ((y + row) * dst_w + (x + left)) * 4
+        blob.bytesplice(dst_off, row_bytes, pixels.byteslice(src_off, row_bytes))
+      end
+      _rebuild_from_blob(blob)
+      self
+    end
+
+    # The (pixels, width, height) of an Image or of anything shaped like
+    # `Image::BlobHelper`, the two things Gosu's #insert accepts.
+    def self._pixels_of(source)
+      if source.is_a?(Image)
+        [source.to_blob.b, source.width.to_i, source.height.to_i]
+      elsif source.respond_to?(:to_blob) && source.respond_to?(:columns) &&
+            source.respond_to?(:rows)
+        [source.to_blob.to_s.b, source.columns.to_i, source.rows.to_i]
+      else
+        [nil, 0, 0]
+      end
+    end
     def subimage(_x, _y, _w, _h); Image.new; end
     def gl_tex_info; nil; end
 
@@ -961,6 +1009,18 @@ module Gosu
       @_owns_texture = true
     end
 
+    # Re-seed the surface from pixels that changed under us, releasing what
+    # the old ones own first: _init_from_blob overwrites both handles
+    # without freeing them, and #insert runs per frame.
+    def _rebuild_from_blob(blob)
+      if @_pending_surface && !@_pending_surface.null?
+        SDL2.free_surface(@_pending_surface)
+        @_pending_surface = nil
+      end
+      _destroy_texture
+      _init_from_blob(blob, @width.to_i, @height.to_i)
+    end
+
     # Reset instance state used by allocate + _init_from_blob (bypassing
     # the normal initialize path).
     def _init_blob_state
@@ -968,6 +1028,7 @@ module Gosu
       @_renderer = nil
       @_owns_texture = true
       @_rgba_blob = nil
+      @_retro = false
     end
 
     # Read an SDL_Surface's pixels into an RGBA8888 Ruby String. The
@@ -1023,6 +1084,10 @@ module Gosu
         return false
       end
       SDL2.set_texture_blend_mode(@_texture, 1)  # SDL_BLENDMODE_BLEND
+      # Gosu's `retro:` means the image is not interpolated when scaled.
+      SDL2.set_texture_scale_mode(@_texture,
+                                  @_retro ? SDL2::SCALEMODE_NEAREST
+                                          : SDL2::SCALEMODE_LINEAR)
       @_renderer = ren
       true
     end
@@ -1491,6 +1556,32 @@ module Gosu
     end
   end
 
+  # Runs the block with no outer transform: a render target has its own
+  # coordinate space, so whatever the caller was transformed by must not
+  # apply inside it. Defined out here rather than in `class << self`, where
+  # @@_mat_stack would resolve to the singleton class's own variable.
+  def self._with_identity_matrix
+    saved = @@_mat_stack
+    @@_mat_stack = [IDENTITY_MATRIX]
+    begin
+      yield if block_given?
+    ensure
+      @@_mat_stack = saved
+    end
+  end
+
+  # Reads the current render target back as an RGBA8888 blob, the form
+  # every Image keeps its pixels in.
+  def self._read_target_pixels(renderer, w, h)
+    pitch = w * 4
+    buffer = FFI::MemoryPointer.new(:uint8, pitch * h)
+    if SDL2.render_read_pixels(renderer, nil, SDL2::PIXELFORMAT_ABGR8888,
+                               buffer, pitch) != 0
+      raise RuntimeError, "SDL_RenderReadPixels failed: #{SDL2.get_error}"
+    end
+    buffer.get_bytes(0, pitch * h)
+  end
+
   class << self
     # Split an ARGB / Color into 4 bytes for SDL colour calls.
     def _split_color(color)
@@ -1649,6 +1740,58 @@ module Gosu
 
     def flush; end
     def record(_w, _h); yield if block_given?; nil; end
+
+    # Draws the block into a new Image of the given size, as Gosu's
+    # Graphics::render does: an off-screen target cleared to fully
+    # transparent (glClearColor(0, 0, 0, 0) upstream), drawn in the
+    # target's own coordinates.
+    #
+    # The pixels are read back once, so what comes out is an ordinary
+    # Image, holding a blob that #to_blob, #insert, #save and #draw all
+    # work from, rather than a live GPU target the rest of this shim would
+    # have to know about. Gosu.render builds an image; it is not a
+    # per-frame call.
+    def render(width, height, options = {})
+      w = width.to_i
+      h = height.to_i
+      raise ArgumentError, "Gosu.render needs a positive size" if w <= 0 || h <= 0
+
+      renderer = _current_window && _current_window._sdl_renderer
+      raise RuntimeError, "Gosu.render needs an open window" unless renderer
+
+      target = SDL2.create_texture(renderer, SDL2::PIXELFORMAT_ABGR8888,
+                                   SDL2::TEXTUREACCESS_TARGET, w, h)
+      if target.null?
+        raise RuntimeError, "SDL_CreateTexture failed: #{SDL2.get_error}"
+      end
+
+      blob = nil
+      begin
+        SDL2.set_texture_blend_mode(target, 1) # SDL_BLENDMODE_BLEND
+        # A null target is the window, so this restores whatever was
+        # current, nesting included.
+        previous = SDL2.get_render_target(renderer)
+        if SDL2.set_render_target(renderer, target) != 0
+          raise RuntimeError, "SDL_SetRenderTarget failed: #{SDL2.get_error}"
+        end
+        begin
+          SDL2.set_draw_color(renderer, 0, 0, 0, 0)
+          SDL2.render_clear(renderer)
+          _with_identity_matrix { yield if block_given? }
+          blob = _read_target_pixels(renderer, w, h)
+        ensure
+          SDL2.set_render_target(renderer, previous)
+        end
+      ensure
+        SDL2.destroy_texture(target)
+      end
+
+      image = Image.allocate
+      image.send(:_init_blob_state)
+      image.send(:_init_from_blob, blob, w, h)
+      image._retro = true if options.is_a?(Hash) && options[:retro]
+      image
+    end
 
     def clip_to(x, y, w, h)
       ren = (_current_window && _current_window._sdl_renderer)
