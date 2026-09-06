@@ -279,7 +279,7 @@ impl<'a> JitContext<'a> {
             // the deopt resume past the fused BinCmp into the bare
             // CondBr, which then reads a stale `%dst` — see #480.
             self.gen_bridges_for_branches(&target, entries, bbid, pc, &outer_inits);
-            self.new_backedge(target.slot_states(), bbid);
+            self.new_backedge(target.frames_cloned(), bbid);
 
             Some(target)
         } else {
@@ -308,7 +308,7 @@ impl<'a> JitContext<'a> {
         pc: BytecodePtr,
         outer_inits: &[(Vec<SpecializedId>, usize, SlotId, OuterFprHome)],
     ) {
-        let target = target.slot_states();
+        let target = target.frames_cloned();
         #[cfg(feature = "jit-debug")]
         eprintln!("  bridge to:{bbid:?} target:{target:?}");
         for BranchEntry {
