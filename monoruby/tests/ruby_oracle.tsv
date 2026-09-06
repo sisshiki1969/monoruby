@@ -522,6 +522,7 @@
 2725417552fe9cf3994cb6d9305ea32c	7	class C; def to_int; nil; end; def to_i; 7; end; end; o = C.new\nInteger(o)
 272fe9061909044beaae1c691819f22b	"/dev/null"	File.path("/dev/null")
 273609161e526f0caca0d803b1f5ac8c	3	$x = 0\n            begin\n              $x += 1\n              raise 
+273898934e7df5dea5c4e43f205ec103	[[:hit, 2], [:miss, 598]]	def probe(prev, key)\n              if prev == key\n                :
 27452ff2af75468b18d93adad2bb0edd	["nil", "nil", "nil", "nil"]	[STDOUT.external_encoding, STDERR.external_encoding,\n         STDOUT.in
 27679c36ace334b798b8ac5753b80532	42	# Test 2: include + prepend where M appears twice in the chain\n#\n# B2 includes 
 2771493de6880db912552ec36e380f75	[true, true, nil, true, true, true, true, IPSocket, TCPSocket, IO, StandardError]	require "socket"\n            sock = Socket.new(:INET, :STREAM)\n    
@@ -1826,6 +1827,7 @@
 8c70e2dbc965b5a240d04429bfa944de	["UTF-8", "UTF-8", "abc", "nil", "plain"]	path = "/tmp/monoruby_io_bom_#{Process.pid}_#{rand(100000)}"\n      
 8c83bb3ecc9ac2c1e06a16d061103347	Array	class C < Array; end\n(C[1,2,2] & [2,3]).class
 8c8d2f17496ea5fcffabf17deeb83042	["a", "b"]	base = "/tmp/monoruby_dir_eachinst_#{Process.pid}_#{rand(100000)}"\n
+8c9756554430bb7072dc29c2c12abded	[[:ge, 500], [:lt, 100]]	def probe(a, b)\n              if a < b\n                :lt\n        
 8cccb4747cfdbfa71bed00dbdaf949ab	[["RuntimeError", "TypeError"], ["RuntimeError", nil], "TypeError", ["RuntimeError", nil], "ArgumentError"]	def t; yield; rescue Exception => e; [e.class.to_s, (e.cause && e.c
 8cf4538ff9dc5775c6aa04d3c95d1924	[[:pa, 1000], [:pb, 1000], [:pc, 1000]]	class Vbase; def val = @v; end\n            class Va < Vbase; def in
 8cf61f75f99a0e9c53f3bf071168dad0	[:foo]	class P\n              def foo; end\n              def bar; end\n     
@@ -2672,6 +2674,7 @@ ca23ef27e73796162ee1e53425e88043	[2, 1]	class C\n                CONST = 1\n    
 ca52734c6644d5ea8d449f149120fcc2	[3, -1, :nme]	res = []\n            res << (1 + 2)\n            class Integer\n     
 ca6aea137215ef3580ab386ef7dcb37d	[[1, 2], [1, 2]]	def f(a,b,*)\n              [a,b]\n            end\n        \n\n        
 ca79e057f33cc52f3f630ba69bc2c841	42	x = 42\n            binding.local_variable_get("x")\n            
+ca8d43e6bd29bc3dae725a7ca1983f22	[[:hit, 22], [:miss, 338]]	def probe(prev, key)\n              if prev == key\n                :
 ca8e2478f764162473914c7004640057	[10, 20, 30, 40, 50, 60, 70, 80, 1, 2, 3, 4, 5, 6, 7, 8]	class S\n                def initialize\n                    @a = 10\n
 ca928535f52567b7ee925c29e111ffe1	89.75113055617776	def call_block\n          yield\n        end\n        def w8(s, flag)\n    
 ca9a7fe5197626d693b7a2d84780366f	[["a", "cc", "bbb", "dddd"], ["a", "bbb", "cc", "dddd"], ["a", "cc", "bbb", "dddd"], [3, 2, 1], ArgumentError, ["a", "cc", "bbb", "dddd"], [0.5, 1.5], []]	words = ["bbb", "a", "cc", "dddd"]\n        by_int = words.sort_by { |s|
@@ -2702,6 +2705,7 @@ cc8aebeeff87148f768f16c8f957f04b	[File, Errno::EEXIST, "hello\\nmore\\n", nil, "
 cca80bdce242e79abc49108091469b12	3	module MShip\n              class Widget\n                attr_reader
 ccd878c1f1810dfef13a53d1e1a05fb8	:te	begin; :sym.instance_eval { alias :foo :to_s }; :no; rescue TypeError; :te; end
 ccdd40701f9797edf931ec9bb16c3abf	[:alpha, 1.5, :beta, 2.5]	class PmF\n          def tag = :alpha\n          def rate = 1.5\n        e
+ccebcacf1f0e521c283f27ea3d09e042	[[[:hit, 1], [:miss, 299]], :hit, :miss, :hit, :hit, :miss]	def probe(prev, key)\n              if prev == key\n                :
 ccee79e211a63a6f8408eaaa13a6aee9	[{a: 1}, [1, {a: 1}], {}, "no implicit conversion of Object into Hash", "can't convert Object to Hash (Object#to_hash gives Integer)"]	def f(**o) = o\n            def g(a, **o) = [a, o]\n            m = O
 cd29ece16f52c170d36a353d72be8fb8	[1, 2, [3, 4, 5, 6, 7]]	def f(x,y,*z)\n            [x,y,z]\n        end\n        \n\n        f(1,2,3
 cd2df73dc4bb642c9c1db8166dee2691	true	t = File.birthtime("Cargo.toml") rescue :unsupported\n            t 

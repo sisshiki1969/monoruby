@@ -1697,6 +1697,24 @@ impl Codegen {
                 RecompileTarget::Whole(_) => COUNT_DEOPT_RECOMPILE,
                 RecompileTarget::Specialized(_) => COUNT_DEOPT_RECOMPILE_SPECIALIZED,
             });
+            // `BecamePolymorphic` is checked, not assumed: recompile only
+            // once the VM has actually stamped the site's POLY byte
+            // (`opcode_sub`, op1 bits 63:56 — the interpreter sets it on an
+            // operand/receiver *class* change). A miss that splits one class
+            // by representation — a BigInt failing an `Integer` guard's
+            // fixnum tag test — re-executes in the VM without moving the
+            // byte, and a recompile against an unchanged profile would
+            // reproduce the same guard: the activerecord `out_of_range?`
+            // shape recompiled 8,756 times that way. With the gate such a
+            // site just deopts plainly, byte-for-byte the pre-heal behavior.
+            if reason == RecompileReason::BecamePolymorphic {
+                let poly_byte = pc.as_ptr() as usize + 7;
+                monoasm!( &mut self.jit,
+                    movq rax, (poly_byte);
+                    cmpb [rax], 0;
+                    jeq  skip;
+                );
+            }
             monoasm!( &mut self.jit,
                 cmpl [rip + counter], 0;
                 jle  skip;

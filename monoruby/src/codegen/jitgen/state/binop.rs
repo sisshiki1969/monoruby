@@ -898,7 +898,17 @@ impl AbstractFrame {
     ///   and emits nothing.
     /// * anything else — materialize into `Rdi` and compare the class id.
     ///
-    pub(crate) fn guard_recv_class(&mut self, ir: &mut AsmIr, slot: SlotId, class: ClassId) {
+    pub(crate) fn guard_recv_class(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        class: ClassId,
+        // `Some`: a guard miss exits through a counter-gated recompile of
+        // *target* (reason `BecamePolymorphic`) instead of a plain deopt,
+        // so a site compiled before the VM saw class variance flips to the
+        // polymorphic treatment instead of side-exiting forever.
+        heal: Option<RecompileTarget>,
+    ) {
         if self.class(slot) == Some(class) {
             return;
         }
@@ -908,23 +918,33 @@ impl AbstractFrame {
         // on (a skipped guard let `BIGNUM_CONST >> 4` shift the raw heap
         // pointer). Bignum-constant sites are instead intercepted before
         // the dispatch (`compile_binary`'s fold / the generators' decline).
+        let new_deopt = |state: &Self, ir: &mut AsmIr| match heal {
+            Some(target) => {
+                ir.new_recompile_deopt(state, RecompileReason::BecamePolymorphic, target)
+            }
+            None => ir.new_deopt(state),
+        };
         match class {
             INTEGER_CLASS => {
                 let (gp, needs_guard) = self.gp_ensure(ir, slot, &[]);
                 if needs_guard {
-                    let deopt = ir.new_deopt(self);
+                    let deopt = new_deopt(self, ir);
                     ir.push(AsmInst::GuardClass(gp, INTEGER_CLASS, deopt));
                     self.refine_S_fixnum(slot);
                 }
             }
             FLOAT_CLASS => {
+                // The unboxing guard admits both float representations
+                // (flonum and heap Float), so its misses are genuine class
+                // misses — but the deopt is welded into `load_fpr`; healing
+                // it is a separate plumbing job. Left plain for now.
                 self.load_fpr(ir, slot);
             }
             _ => {
                 // Snapshot before the guard: the side exit re-reads the
                 // operands from their stack homes, so the write-back must be
                 // the pre-guard placement.
-                let deopt = ir.new_deopt(self);
+                let deopt = new_deopt(self, ir);
                 self.load(ir, slot, GP::Rdi);
                 self.guard_class(ir, slot, GP::Rdi, class, deopt);
             }
