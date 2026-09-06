@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-750e0a02.js";
+            window.path_to_searchindex_js = "../searchindex-9e1eec94.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-ad91b9ad.js"></script>
@@ -3097,6 +3097,17 @@ suite pass. The <code>*_state</code> analysis-half split of the two old function
 (<code>write_back_slot_state</code>, <code>to_S_unguarded_state</code>) is folded in as well: the
 <code>Spill</code> record is still computed by the state transition and emitted through
 <code>ir.spill</code>, so analysis mode still emits nothing.</p>
+<h2 id="49-phys-loop-aware-removed"><a class="header" href="#49-phys-loop-aware-removed">49. <code>phys-loop-aware</code> removed</a></h2>
+<p>The §42 loop-aware spill-victim policy (<code>loop_carried</code> on <code>SlotState</code>, filled
+at the loop-entry merge from the back-edge fixpoint; the phase-1 filter that
+kept a loop-carried <code>Sf</code> cache resident) is deleted along with its Cargo
+feature. It was default-off, not built by CI, and — as §42 itself records —
+inert under the shipping <code>POOL=14</code>: phase 1 runs only when no pool register is
+vacant, so the lever bit only under <code>stress-spill-pool</code> or a ≈14-live-float
+loop, and its M1 A/B (§27.3-2c) was never run. The <code>L</code>-collection timing
+finding (§42: the multi-iteration fixpoint makes the back-edge available at
+merge time) stays in the record for whoever revisits loop-aware allocation;
+the code it justified no longer earns its field in the per-path state.</p>
 
                     </main>
 

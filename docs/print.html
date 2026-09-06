@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-750e0a02.js";
+            window.path_to_searchindex_js = "searchindex-9e1eec94.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-ad91b9ad.js"></script>
@@ -468,7 +468,6 @@ run time with <code>--no-jit</code>. (The old <code>jit</code> / <code>jit_x86</
 <tr><td><code>stress-spill-pool</code></td><td>Shrink <code>PHYS_FPR_POOL</code> to 2 so almost every float-resident slot becomes a spilled virtual FP register, stressing the spill paths</td></tr>
 <tr><td><code>shadow-placement</code></td><td>Record every physical FP placement in emission order, producing a per-compile fingerprint of the lowering. The gate for the abstract-interpreter / register-allocation separation</td></tr>
 <tr><td><code>phys-table</code></td><td>Move the physical FP placement <em>policy</em> out of the resolver into an explicit table-backed function. Byte-identical to the formula it replaces</td></tr>
-<tr><td><code>phys-loop-aware</code></td><td>The loop-aware FP allocation policy: keep loop-carried floats resident so a fresh value spills instead of evicting one. Non-byte-identical by design</td></tr>
 <tr><td><code>mimalloc</code></td><td>Route the global allocator’s delegation to mimalloc instead of glibc, changing exactly one variable for an A/B</td></tr>
 </tbody>
 </table>
@@ -2061,9 +2060,10 @@ recompute it. Thread it onto the buffer.</li>
 <li><strong>9d — The arch-dependent physical-allocation pass.</strong> Walk the buffered LIR,
 assign physical GPs to <code>VReg</code>s (spilling to frame slots under pressure, exactly
 as <code>FPReg</code> does for FP), then drain → encode. This is the first point the
-output may legitimately differ from today’s bytes; like <code>phys-loop-aware</code>
-(§42), it is a perf experiment gated behind a flag + the M1 A/B bench gate, and
-the shadow digest becomes a delta meter, not an equality check.</li>
+output may legitimately differ from today’s bytes; like the (since removed)
+<code>phys-loop-aware</code> experiment (regalloc doc §42, §49), it is a perf experiment
+gated behind a flag + the M1 A/B bench gate, and the shadow digest becomes a
+delta meter, not an equality check.</li>
 </ul>
 <h3 id="9d-allocatable-gp-pool-design-decision"><a class="header" href="#9d-allocatable-gp-pool-design-decision">9d allocatable GP pool (design decision)</a></h3>
 <p>The VM’s fixed registers stay <strong>pinned</strong> (acc=R15, lfp=R14, pc=R13, globals=R12,
@@ -5195,6 +5195,17 @@ suite pass. The <code>*_state</code> analysis-half split of the two old function
 (<code>write_back_slot_state</code>, <code>to_S_unguarded_state</code>) is folded in as well: the
 <code>Spill</code> record is still computed by the state transition and emitted through
 <code>ir.spill</code>, so analysis mode still emits nothing.</p>
+<h2 id="49-phys-loop-aware-removed"><a class="header" href="#49-phys-loop-aware-removed">49. <code>phys-loop-aware</code> removed</a></h2>
+<p>The §42 loop-aware spill-victim policy (<code>loop_carried</code> on <code>SlotState</code>, filled
+at the loop-entry merge from the back-edge fixpoint; the phase-1 filter that
+kept a loop-carried <code>Sf</code> cache resident) is deleted along with its Cargo
+feature. It was default-off, not built by CI, and — as §42 itself records —
+inert under the shipping <code>POOL=14</code>: phase 1 runs only when no pool register is
+vacant, so the lever bit only under <code>stress-spill-pool</code> or a ≈14-live-float
+loop, and its M1 A/B (§27.3-2c) was never run. The <code>L</code>-collection timing
+finding (§42: the multi-iteration fixpoint makes the back-edge available at
+merge time) stays in the record for whoever revisits loop-aware allocation;
+the code it justified no longer earns its field in the per-path state.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack"><a class="header" href="#trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack">Trace-chain joins — one <code>AbstractState</code> for the whole specialization stack</a></h1>
 <p><strong>Kind: design record.</strong> Why the JIT’s abstract state spans every frame of
