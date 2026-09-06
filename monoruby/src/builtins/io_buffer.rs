@@ -164,19 +164,23 @@ fn value_type_arg(v: Value) -> Result<(usize, ValKind, bool)> {
     // get/set_value sit on every wasm-style memory access, so resolve the
     // type symbol by interned id — `IdentId::get_name` allocates a String
     // per call, and that alone showed up at several percent of a DOOM run.
-    static TABLE: std::sync::OnceLock<std::collections::HashMap<IdentId, (usize, ValKind, bool)>> =
+    // An 18-entry linear scan of u32 ids: SipHashing the IdentId for a
+    // HashMap cost ~2% of the same run.
+    static TABLE: std::sync::OnceLock<[(IdentId, (usize, ValKind, bool)); 18]> =
         std::sync::OnceLock::new();
     let table = TABLE.get_or_init(|| {
         [
-            "U8", "S8", "u16", "U16", "s16", "S16", "u32", "U32", "s32", "S32", "u64", "U64",
+            "u32", "u64", "U8", "S8", "u16", "U16", "s16", "S16", "U32", "s32", "S32", "U64",
             "s64", "S64", "f32", "F32", "f64", "F64",
         ]
-        .into_iter()
         .map(|name| (IdentId::get_id(name), parse_value_type(name).unwrap()))
-        .collect()
     });
     v.try_symbol_or_string()
-        .and_then(|id| table.get(&id).copied())
+        .and_then(|id| {
+            table
+                .iter()
+                .find_map(|(tid, spec)| (*tid == id).then_some(*spec))
+        })
         .ok_or_else(|| MonorubyErr::argumenterr("Invalid type name!"))
 }
 
