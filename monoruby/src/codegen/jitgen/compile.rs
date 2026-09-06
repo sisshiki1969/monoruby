@@ -389,7 +389,12 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
                 assert_ne!(0, self.loop_count());
                 self.dec_loop_count();
-                if self.is_loop() && self.loop_count() == 0 {
+                // The positional check backs up the counter: when an inner
+                // loop's `loop_end` sits in dead code the counter never
+                // returns to zero, but the region's own `loop_end` must
+                // still emit the exit bridge — otherwise execution falls
+                // off the end of the compiled unit into unemitted memory.
+                if self.is_loop() && (self.loop_count() == 0 || self.is_loop_region_end(bc_pos)) {
                     ir.deopt(state);
                     return Ok(CompileResult::ExitLoop);
                 }

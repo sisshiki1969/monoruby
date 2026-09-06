@@ -2548,6 +2548,25 @@ impl<'a> JitContext<'a> {
         matches!(self.jit_type(), JitType::Loop(_))
     }
 
+    /// Whether `bc_pos` sits in the basic block holding this loop
+    /// compile's terminating `loop_end` (the structural pair of
+    /// `position()`'s `loop_start`). The nesting counter alone cannot
+    /// detect the region end: an inner loop's `loop_end` swallowed by
+    /// dead code (e.g. behind an unconditional deopt on a
+    /// never-profiled path) leaves the counter high, and counting alone
+    /// would let the compile run off the end of the region without
+    /// emitting the exit bridge.
+    pub(super) fn is_loop_region_end(&self, bc_pos: BcIndex) -> bool {
+        let Some(pc) = self.position() else {
+            return false;
+        };
+        let iseq = self.iseq();
+        let start_pos = iseq.get_pc_index(Some(pc));
+        let bb_begin = iseq.bb_info.get_bb_id(start_pos);
+        let (_, bb_end) = iseq.bb_info.is_loop_begin(bb_begin).unwrap();
+        iseq.bb_info.get_bb_id(bc_pos) == bb_end
+    }
+
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
         self.current_frame().get_bb_label(bb)
     }
