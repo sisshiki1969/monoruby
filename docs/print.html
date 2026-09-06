@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d660dcfd.js";
+            window.path_to_searchindex_js = "searchindex-b1c9bd13.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-ad91b9ad.js"></script>
@@ -5123,6 +5123,45 @@ map’s per-register slot order is the binding order, and the deopt write-back
 order, so the change is semantics-preserving but not byte-identical. Left for
 its own change with its own gate.</li>
 </ul>
+<h2 id="47-the-fpr-file-is-derived-from-the-slot-modes-and-the-stale-entry-it-was-hiding"><a class="header" href="#47-the-fpr-file-is-derived-from-the-slot-modes-and-the-stale-entry-it-was-hiding">47. The fpr file is derived from the slot modes (and the stale entry it was hiding)</a></h2>
+<p><code>FprAllocator</code> kept a reverse map <code>vfpr: Vec&lt;Vec&lt;SlotId&gt;&gt;</code> — for each fpr, the
+slots bound to it — maintained by <code>fpr_add</code> / <code>fpr_remove</code> / <code>clear</code> / <code>swap</code>
+alongside every <code>F</code> / <code>Sf</code> mode transition. The map is a function of the modes,
+so it is now computed from them: <code>SlotState::fpr_slots(fpr)</code> and a one-pass
+<code>pool_occupancy()</code> (per pool register: occupied?, all-<code>Sf</code>?) serve the
+allocator’s two phases, <code>is_fpr_vacant</code>, the call-site save set and the deopt
+write-back. <code>FprAllocator</code> keeps only what is <em>not</em> derivable: the number of ids
+issued (spill ids are never re-issued once vacant — §46’s <code>pick_vacant</code> note)
+and the pin set. <code>set_F</code> / <code>set_Sf</code> / <code>clear</code> no longer touch a file, and the
+bookkeeping that the <code>alloc_fpr</code> aliasing regression lived in is gone.</p>
+<p><strong>What the reverse map was hiding.</strong> The suite caught the derivation:
+<code>outer_float_write_through</code>’s type-flip tests returned wrong values. The
+emitted code differed from master at exactly one place — the <code>each</code> call site
+in the owner loop saved <code>xmm2</code> on master and not on the branch — and the block
+compiled inside that call then read the owner’s <code>a</code> where it meant to read <code>i</code>
+(the <code>_%2 = %2 == %3 [Float][Integer]</code> deopt storm: the block’s static
+frame-chain offsets were off by the missing 16-byte save).</p>
+<p>The mechanism: <code>specialized_compile</code> freezes the caller’s FP save set <em>before</em>
+the nested compile (<code>stack_offset = using_fpr_offset().offset()</code> lays out the
+callee’s <code>extra</code> chain offsets over it), while the call emission after the
+compile took <code>get_using_fpr</code> <em>again</em>. In between, the callee’s compile can
+widen a caller slot (<code>StoreDynVar</code> through the chain → <code>widen_outer_slot</code> →
+<code>invalidate_slot</code>, which set <code>S</code> <strong>without</strong> <code>fpr_remove</code>). With the map, the
+stale entry kept <code>xmm2</code> “occupied”, so both sets agreed by accident (and the
+register was leaked for the rest of the compile). Derived from the modes, the
+second set was smaller than the first, and the callee’s offsets no longer
+matched the frame the call actually built.</p>
+<p>Fixed at the root, not by re-adding the map: the frozen set rides back on the
+compiled frame (<code>JitStackFrame::call_site_using_fpr</code>, surfaced as
+<code>SpecializedCompileResult::using_fpr</code>), and both specialized call sites emit
+<em>that</em> set — <code>get_using_fpr</code> still runs for its GP flush and alias kill, and a
+debug assertion checks the live set is a subset of the frozen one (it can only
+shrink: a suspended frame never gains a pool register). Saving a register the
+caller no longer needs is harmless; saving fewer than the callee was laid out
+over was the bug.</p>
+<p>Verified: <code>emit-asm</code> dumps of the nine benchmarks are identical to master
+(<code>app_aobench</code> included this time), the JIT lib tests and the float / block /
+loop integration tests pass, and the full <code>cargo test</code> suite passes.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack"><a class="header" href="#trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack">Trace-chain joins — one <code>AbstractState</code> for the whole specialization stack</a></h1>
 <p><strong>Kind: design record.</strong> Why the JIT’s abstract state spans every frame of
