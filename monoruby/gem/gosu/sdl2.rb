@@ -64,6 +64,9 @@ module Gosu
     EVENT_CONTROLLERDEVICEREMOVED = 0x654
     EVENT_TEXTINPUT               = 0x303
 
+    # --- SDL_WindowEvent.event kinds (EVENT_WINDOW) ---------------------
+    WINDOWEVENT_SIZE_CHANGED = 6
+
     # --- Core -----------------------------------------------------------
     attach_function :init,             :SDL_Init,             [:uint32], :int
     attach_function :init_sub_system,  :SDL_InitSubSystem,    [:uint32], :int

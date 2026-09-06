@@ -404,6 +404,17 @@ module Gosu
                   :update_interval
     attr_reader :text_input
 
+    # Window flags, as swig_patches.rb's Window#initialize packs them before
+    # handing them down: it turns Gosu 1.x's options Hash
+    # (`Window.new(w, h, fullscreen: true, resizable: true)`) and the older
+    # positional boolean alike into this bitmask.
+    FLAG_FULLSCREEN = 1
+    FLAG_RESIZABLE  = 2
+    FLAG_BORDERLESS = 4
+
+    # `fullscreen_or_flags` is that bitmask, so it has to be read bit by bit.
+    # Read as one on/off fullscreen value it makes every other flag mean
+    # fullscreen: `resizable: true` on its own arrives as 2, and 2 != 0.
     def initialize(width, height, fullscreen_or_flags = 0,
                    update_interval = 16.666666)
       @width  = width
@@ -413,9 +424,14 @@ module Gosu
       @mouse_y = 0.0
       @update_interval = update_interval
       @text_input = nil
-      @fullscreen = fullscreen_or_flags != 0
-      @resizable = false
-      @borderless = false
+      flags = case fullscreen_or_flags
+              when true then FLAG_FULLSCREEN
+              when false, nil then 0
+              else fullscreen_or_flags.to_i
+              end
+      @fullscreen = flags & FLAG_FULLSCREEN != 0
+      @resizable  = flags & FLAG_RESIZABLE  != 0
+      @borderless = flags & FLAG_BORDERLESS != 0
       @_sdl_window = nil
       @_sdl_renderer = nil
       @_closing = false
@@ -434,8 +450,20 @@ module Gosu
           update
           last_tick = now
         end
-        draw
-        SDL2.render_present(@_sdl_renderer)
+        # Upstream Gosu gates clearing, drawing and presenting together on
+        # needs_redraw? (Window::tick -> Graphics::frame, which opens with
+        # glClearColor(0, 0, 0, 1) + glClear right before draw()), so a frame
+        # that is drawn always starts from a cleared surface and a frame that
+        # is skipped leaves the window exactly as it was. Without the clear,
+        # whatever `draw` does not paint shows the back buffer's previous
+        # contents instead of black. The colour is set every time because
+        # drawing (draw_rect, draw_line, ...) leaves its own behind.
+        if needs_redraw?
+          SDL2.set_draw_color(@_sdl_renderer, 0, 0, 0, 255)
+          SDL2.render_clear(@_sdl_renderer)
+          draw
+          SDL2.render_present(@_sdl_renderer)
+        end
         SDL2.delay(1)
       end
       close!
@@ -559,6 +587,9 @@ module Gosu
     #     .y                   int32  @ 24
     #   SDL_MouseButtonEvent:
     #     .button              uint8  @ 16
+    #   SDL_WindowEvent:
+    #     .event               uint8  @ 12
+    #     .data1 / .data2      int32  @ 16 / 20
     # All other fields are ignored for now.
     def _pump_events
       while SDL2.poll_event(@_event_buf) != 0
@@ -566,6 +597,14 @@ module Gosu
         case type
         when SDL2::EVENT_QUIT
           close
+        when SDL2::EVENT_WINDOW
+          # #width / #height are what a resizable or fullscreen window lays
+          # itself out against, and SDL, not the requested size, decides what
+          # they end up being.
+          if @_event_buf.get_uint8(12) == SDL2::WINDOWEVENT_SIZE_CHANGED
+            @width  = @_event_buf.get_int32(16)
+            @height = @_event_buf.get_int32(20)
+          end
         when SDL2::EVENT_KEYDOWN
           scancode = @_event_buf.get_int32(16)
           next if @text_input && _text_input_consume_keydown(scancode)
