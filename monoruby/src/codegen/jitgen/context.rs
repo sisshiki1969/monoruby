@@ -474,7 +474,7 @@ pub(super) struct JitStackFrame {
     ///
     return_edges: Vec<(
         JitLabel,
-        Vec<AbstractFrame>,
+        Vec<FrameRef>,
         AbstractFrame,
         SlotId,
         BasicBlockId,
@@ -524,7 +524,7 @@ pub(super) struct JitStackFrame {
     /// Outer frames are carried because a block handed out of the unit can
     /// write their locals, so their modes have to be merged (and written
     /// back) at the loop head like the innermost frame's.
-    backedge_map: HashMap<BasicBlockId, Vec<SlotState>>,
+    backedge_map: HashMap<BasicBlockId, Vec<FrameRef>>,
     ///
     /// Contexts for returning from this frame.
     ///
@@ -1355,7 +1355,7 @@ impl<'a> JitContext<'a> {
             // resuming level" only at its own caller's resume, where this
             // same rule applies.
             let joined_caller = chain.last().unwrap().clone();
-            *chain.last_mut().unwrap() = innermost;
+            *chain.last_mut().unwrap() = FrameRef::new(innermost);
             state.set_frames(chain);
             state.overlay_kept_constants_innermost(joined_caller.slot_state());
         } else {
@@ -1368,7 +1368,7 @@ impl<'a> JitContext<'a> {
             // arrives here — and every later merge's claims are
             // established by its *reachable* entries' bridges.
             let mut chain = fallback_chain;
-            *chain.last_mut().unwrap() = innermost;
+            *chain.last_mut().unwrap() = FrameRef::new(innermost);
             state.set_frames(chain);
             for (pos, slot) in self.widened_outer_log[widen_mark..].to_vec() {
                 state.invalidate_at(pos, slot);
@@ -1766,13 +1766,13 @@ impl<'a> JitContext<'a> {
     /// frame) covers both. Lexical (dynvar) addressing walks the per-frame
     /// links, exactly as [`Self::outer_pos`] walks `stack_frame`.
     ///
-    pub(super) fn trace_contexts(&self) -> Vec<AbstractFrame> {
+    pub(super) fn trace_contexts(&self) -> Vec<FrameRef> {
         let end = self.stack_frame.len() - 1;
         (0..end)
             .map(|pos| {
                 let mut f = self.stack_frame[pos].abstract_state.clone().unwrap();
                 f.set_lexical_outer(self.stack_frame[pos].outer);
-                f
+                FrameRef::new(f)
             })
             .collect()
     }
@@ -2630,7 +2630,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().branch_map.remove(&bb)
     }
 
-    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<Vec<SlotState>> {
+    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<Vec<FrameRef>> {
         self.current_frame_mut().backedge_map.remove(&bb)
     }
 
@@ -2717,7 +2717,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Add new backward branch from *src_idx* to *dest* with `state`.
     ///
-    pub(super) fn new_backedge(&mut self, target: Vec<SlotState>, bb_pos: BasicBlockId) {
+    pub(super) fn new_backedge(&mut self, target: Vec<FrameRef>, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.current_frame_mut().backedge_map.insert(bb_pos, target);
@@ -2791,16 +2791,21 @@ impl<'a> JitContext<'a> {
         crate::codegen::jitgen::state::ChainSurrender { per_level }
     }
 
-    fn build_return_segments(&mut self, frame: &mut JitStackFrame) -> Option<Vec<AbstractFrame>> {
+    fn build_return_segments(&mut self, frame: &mut JitStackFrame) -> Option<Vec<FrameRef>> {
         let edges = std::mem::take(&mut frame.return_edges);
         if edges.is_empty() {
             return None;
         }
-        let mut target: Vec<AbstractFrame> = edges[0].1.clone();
+        let mut target: Vec<FrameRef> = edges[0].1.clone();
         for (_, chain, ..) in edges.iter().skip(1) {
             debug_assert_eq!(target.len(), chain.len());
             for (t, e) in target.iter_mut().zip(chain.iter()) {
-                t.join_no_alloc(e);
+                // Identity fast path: the frame no path has touched joins
+                // with itself — a pointer compare instead of a slot walk.
+                if FrameRef::ptr_eq(t, e) {
+                    continue;
+                }
+                FrameRef::make_mut(t).join_no_alloc(e);
             }
         }
         for (seg, chain, mut inner, ret_slot, bbid) in edges {

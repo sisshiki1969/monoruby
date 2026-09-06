@@ -20,7 +20,7 @@ impl<'a> JitContext<'a> {
     pub(super) fn traceir_to_asmir(
         &mut self,
         frame: JitStackFrame,
-        entry_chain: Option<Vec<AbstractFrame>>,
+        entry_chain: Option<Vec<FrameRef>>,
     ) -> JitResult<JitStackFrame> {
         self.push_frame(frame);
 

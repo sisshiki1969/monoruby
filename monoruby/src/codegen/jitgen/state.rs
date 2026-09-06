@@ -14,21 +14,33 @@ pub(in crate::codegen::jitgen) use slot::SfGuarded;
 pub(in crate::codegen::jitgen) use slot::DynVarAliasLoad;
 pub(super) use slot::{Guarded, LinkMode, SlotState};
 
+/// A frame of the abstract-state chain, shared by reference.
+///
+/// The `Rc` pointer is the frame's *identity*: a chain clone bumps
+/// refcounts instead of deep-copying `SlotState`s, a mutation goes
+/// through `Rc::make_mut` (copy-on-write — untouched sharers keep the
+/// old version), and `Rc::ptr_eq` is the O(1) same-frame check the
+/// merge machinery uses to skip frames no path has touched. In a deep
+/// specialization tower the outer frames — the *largest* ones, with the
+/// root at the far end — are exactly the ones nothing touches, so every
+/// per-slot walk over them collapses to a pointer compare.
+pub(in crate::codegen::jitgen) type FrameRef = std::rc::Rc<AbstractFrame>;
+
 #[derive(Debug, Clone)]
 pub(crate) struct AbstractState {
-    frames: Vec<AbstractFrame>,
+    frames: Vec<FrameRef>,
 }
 
 impl std::ops::Deref for AbstractState {
     type Target = AbstractFrame;
     fn deref(&self) -> &Self::Target {
-        &self.frames.last().unwrap()
+        self.frames.last().unwrap()
     }
 }
 
 impl std::ops::DerefMut for AbstractState {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.frames.last_mut().unwrap()
+        FrameRef::make_mut(self.frames.last_mut().unwrap())
     }
 }
 
@@ -41,21 +53,21 @@ impl std::ops::Index<usize> for AbstractState {
 
 impl std::ops::IndexMut<usize> for AbstractState {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.frames[index]
+        FrameRef::make_mut(&mut self.frames[index])
     }
 }
 
 impl AbstractState {
     /// Nested compile entry from the caller's live chain (B3a, gated).
-    pub(super) fn with_chain(jitctx: &JitContext, chain: Vec<AbstractFrame>) -> Self {
+    pub(super) fn with_chain(jitctx: &JitContext, chain: Vec<FrameRef>) -> Self {
         let mut frames = chain;
         let mut current = AbstractFrame::new(jitctx);
         current.set_lexical_outer(jitctx.current_frame_lexical_outer());
-        frames.push(current);
+        frames.push(FrameRef::new(current));
         AbstractState { frames }
     }
 
-    pub(super) fn frames_cloned(&self) -> Vec<AbstractFrame> {
+    pub(super) fn frames_cloned(&self) -> Vec<FrameRef> {
         self.frames.clone()
     }
 
@@ -68,7 +80,7 @@ impl AbstractState {
         let mut frames = jitctx.trace_contexts();
         let mut current = AbstractFrame::new(jitctx);
         current.set_lexical_outer(jitctx.current_frame_lexical_outer());
-        frames.push(current);
+        frames.push(FrameRef::new(current));
         AbstractState { frames }
     }
 
@@ -91,10 +103,7 @@ impl AbstractState {
     /// (the resume overlay — see `specialized_compile`).
     ///
     pub(super) fn overlay_kept_constants_innermost(&mut self, joined: &SlotState) {
-        self.frames
-            .last_mut()
-            .unwrap()
-            .overlay_kept_constants(joined);
+        FrameRef::make_mut(self.frames.last_mut().unwrap()).overlay_kept_constants(joined);
     }
 
     ///
@@ -102,7 +111,7 @@ impl AbstractState {
     /// loop-entry adoption whose owner is found by trace position.
     ///
     pub(super) fn set_outer_sf_at(&mut self, pos: usize, slot: SlotId, fpr: FPReg) {
-        let frame = &mut self.frames[pos];
+        let frame = FrameRef::make_mut(&mut self.frames[pos]);
         frame.grow_fpr_to(fpr.0 + 1);
         frame.set_Sf(slot, fpr, SfGuarded::Float);
     }
@@ -119,7 +128,10 @@ impl AbstractState {
     /// dropped at a join is never re-issued to a transient.
     ///
     pub(super) fn grow_frame_fpr_to(&mut self, pos: usize, len: usize) {
-        self.frames[pos].grow_fpr_to(len);
+        // Growing to the current length must not break sharing.
+        if self.frames[pos].fpr_len() < len {
+            FrameRef::make_mut(&mut self.frames[pos]).grow_fpr_to(len);
+        }
     }
 
     ///
@@ -130,20 +142,20 @@ impl AbstractState {
     ///
     pub(super) fn invalidate_at(&mut self, pos: usize, slot: SlotId) {
         if let Some(frame) = self.frames.get_mut(pos) {
-            frame.invalidate_slot(slot);
+            FrameRef::make_mut(frame).invalidate_slot(slot);
         }
     }
 
     pub(super) fn innermost_clone(&self) -> AbstractFrame {
-        self.frames.last().unwrap().clone()
+        (**self.frames.last().unwrap()).clone()
     }
 
-    pub(super) fn chain_prefix(&self, pos: usize) -> Vec<AbstractFrame> {
+    pub(super) fn chain_prefix(&self, pos: usize) -> Vec<FrameRef> {
         debug_assert!(pos < self.frames.len());
         self.frames[..=pos].to_vec()
     }
 
-    pub(super) fn set_frames(&mut self, frames: Vec<AbstractFrame>) {
+    pub(super) fn set_frames(&mut self, frames: Vec<FrameRef>) {
         debug_assert_eq!(frames.len(), self.frames.len());
         self.frames = frames;
     }
@@ -165,7 +177,7 @@ impl AbstractState {
             return;
         }
         if let Some(level) = self.outer_level(outer) {
-            let frame = &mut self.frames[level];
+            let frame = FrameRef::make_mut(&mut self.frames[level]);
             frame.grow_fpr_to(fpr.0 + 1);
             frame.set_Sf(slot, fpr, SfGuarded::Float);
         }
@@ -175,7 +187,7 @@ impl AbstractState {
     /// boxed slot store made the slot current, so `S` is sound).
     #[coverage(off)] // only called from the dormant drain — see `drain_kept_outer_views`
     pub(super) fn invalidate_innermost(&mut self, slot: SlotId) {
-        self.frames.last_mut().unwrap().invalidate_slot(slot);
+        FrameRef::make_mut(self.frames.last_mut().unwrap()).invalidate_slot(slot);
     }
 
     ///
@@ -186,7 +198,10 @@ impl AbstractState {
     ///
     pub(super) fn mark_outer_float_read(&mut self, outer: usize, slot: SlotId) {
         if let Some(level) = self.outer_level(outer) {
-            self.frames[level].mark_subtree_float_read(slot);
+            // A monotone hint: skip the copy-on-write when already set.
+            if !self.frames[level].subtree_float_read(slot) {
+                FrameRef::make_mut(&mut self.frames[level]).mark_subtree_float_read(slot);
+            }
         }
     }
 
@@ -195,15 +210,11 @@ impl AbstractState {
             return;
         }
         if let Some(level) = self.outer_level(outer) {
-            self.frames[level].invalidate_slot(slot);
+            FrameRef::make_mut(&mut self.frames[level]).invalidate_slot(slot);
         }
     }
 
-    /// Every frame's `SlotState`, innermost last — the loop-entry shape
-    /// each back edge is bridged to.
-    pub(super) fn slot_states(&self) -> Vec<SlotState> {
-        self.frames.iter().map(|f| f.slot_state().clone()).collect()
-    }
+
 
     ///
     /// Bridge every frame of this compilation to *target*, not just the
@@ -224,7 +235,7 @@ impl AbstractState {
     pub(super) fn gen_bridge_all(
         mut self,
         ir: &mut AsmIr,
-        target: &[SlotState],
+        target: &[FrameRef],
         pc: BytecodePtr,
         sur: &ChainSurrender,
     ) {
@@ -233,11 +244,18 @@ impl AbstractState {
         let depth = self.frames.len();
         debug_assert_eq!(depth, target.len());
         for (level, tgt) in target.iter().enumerate().rev() {
+            // Identity fast path: bridging a frame to itself moves
+            // nothing — a pointer compare instead of a slot walk over
+            // every suspended frame at every merge edge.
+            if FrameRef::ptr_eq(&self.frames[level], tgt) {
+                continue;
+            }
+            let tgt: &SlotState = tgt;
             // `level` counts from the outermost frame; `outer` is the
             // distance from the innermost, which is what the frame-chain
             // addressing takes.
             let outer = depth - 1 - level;
-            let frame = &mut self.frames[level];
+            let frame = FrameRef::make_mut(&mut self.frames[level]);
             // The target may have allocated more spill slots than us (a
             // sibling branch reached the merge with a wider spill region).
             // Grow to match so a `LinkMode::F(VirtFPReg(N))` in `tgt` with
@@ -324,7 +342,7 @@ impl AbstractState {
         for level in levels {
             let outer = depth - 1 - level;
             for i in self.frames[level].locals() {
-                match self.frames[level].unbox_to_S_at(ir, i, outer) {
+                match FrameRef::make_mut(&mut self.frames[level]).unbox_to_S_at(ir, i, outer) {
                     crate::codegen::jitgen::state::slot::OuterBarrier::Kept => {}
                     crate::codegen::jitgen::state::slot::OuterBarrier::Widened => {
                         widened.push((level, i));
@@ -366,7 +384,7 @@ impl AbstractState {
         self.frames
             .iter()
             .zip(other.frames.iter())
-            .all(|(lhs, rhs)| lhs.equiv(rhs))
+            .all(|(lhs, rhs)| FrameRef::ptr_eq(lhs, rhs) || lhs.equiv(rhs))
     }
 
     pub(super) fn unset_no_capture_guard(&mut self, jitctx: &mut JitContext) {
@@ -400,7 +418,11 @@ impl AbstractState {
     pub(super) fn set_lexical_no_capture_guard(&mut self) {
         let mut level = self.frames.len() - 1;
         loop {
-            self.frames[level].set_no_capture_guard();
+            // Monotone bit: skip the copy-on-write when already set, so a
+            // re-proof does not fork a shared frame for a no-op.
+            if !self.frames[level].no_capture_guard() {
+                FrameRef::make_mut(&mut self.frames[level]).set_no_capture_guard();
+            }
             match self.frames[level].lexical_outer() {
                 Some(o) if level >= o => level -= o,
                 _ => break,
@@ -411,7 +433,9 @@ impl AbstractState {
     pub(super) fn unset_lexical_no_capture_guard(&mut self) {
         let mut level = self.frames.len() - 1;
         loop {
-            self.frames[level].unset_no_capture_guard();
+            if self.frames[level].no_capture_guard() {
+                FrameRef::make_mut(&mut self.frames[level]).unset_no_capture_guard();
+            }
             match self.frames[level].lexical_outer() {
                 Some(o) if level >= o => level -= o,
                 _ => break,
@@ -460,7 +484,7 @@ impl AbstractState {
     pub(super) fn defer_outer_boxing_to(&mut self, outer: usize, slot: SlotId, hfpr: FPReg) {
         debug_assert!(hfpr.0 >= crate::codegen::PHYS_FPR_POOL);
         if let Some(level) = self.outer_level(outer) {
-            let frame = &mut self.frames[level];
+            let frame = FrameRef::make_mut(&mut self.frames[level]);
             match frame.mode(slot) {
                 // Already deferred to this home by an earlier store.
                 LinkMode::F(fpr) if fpr == hfpr => {}
