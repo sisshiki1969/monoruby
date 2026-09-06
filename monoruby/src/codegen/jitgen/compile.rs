@@ -760,9 +760,15 @@ impl<'a> JitContext<'a> {
                 }
                 // Not inlined: the block becomes a unit of its own, and
                 // whatever it stores it stores where we cannot see it. So
-                // hand the whole lexical chain over in its slots and keep
+                // hand the block's home chain over in its slots and keep
                 // no claim about any of it, exactly as a call that passes a
-                // block to a callee outside the unit does.
+                // block to a callee outside the unit does. When
+                // `resolve_given_block` pinned the block to an in-unit
+                // literal (`block_info.outer` frames up — a builtin-bodied
+                // block, or a dispatch arm), that home chain is in this
+                // state; otherwise the block came in through the root's own
+                // block argument, its home lies outside the unit, and no
+                // in-chain frame is reachable through it.
                 //
                 // Belt and braces with the `generic_yield` flag below: the
                 // flag settles what the *caller* may still believe when
@@ -772,7 +778,10 @@ impl<'a> JitContext<'a> {
                 // and the lexical chain stops at the enclosing method). One
                 // does not cover the other, and neither is worth resting on
                 // a per-case proof.
-                state.all_frames_unbox_to_S(self, ir);
+                let home = self.current_method_given_block().and_then(|bi| {
+                    state.innermost_level().checked_sub(bi.outer)
+                });
+                state.unbox_to_S_for_outgoing_block(self, ir, home);
                 self.set_generic_yield();
                 state.compile_yield(ir, &self.store, callid);
             }

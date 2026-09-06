@@ -216,6 +216,7 @@
 0e54a426c81dbbf91db0373ac6572904	["qy", "sx", 2]	def sapp(s, a)\n          s.<<(*a)\n        end\n        def papp(o)\n     
 0e56d42fa329cec66eaa8a31dadafef0	[true, true]	def m; proc{|x| x}; end; p = m; [p.dup.eql?(p), p.dup.hash == p.hash]
 0e58e78424730044c7b8bdc310bb26e6	["Fri Dec 12 ", "Fri Dec 12 ", "Fri", "Dec", "12", 4, ["Fri", "Dec", "12"], ["Fri Dec 12 ", "Dec"], "Fri Dec 12 ", true, 11, "", "1975 14:39", 11, 0, "Fri"]	require "strscan"\n        s = StringScanner.new("Fri Dec 12 1975 14:39"
+0e7e3c1fe18a8cbea4e15f4300b4c145	150.0	def collect(n)\n          acc = 0.0\n          sink = [3, 1, 2]\n         
 0eb451479b9e3deffa5ff499cb00893c	[:private_answer]	class P\n          def method_missing(name, *args) = :missed\n          p
 0ed19825320ad4f01be8637520de3fe5	[[0, 0, 0], [0, 1, 0], [1, 0, 0], [1, 1, 0], [2, 0, 0], [2, 1, 0]]	res = []\n        3.times do |i|\n          2.times do |j|\n            1.
 0ed9e8d09d16c423c6e622570359536f	[["MONORUBY_ENV_TEST_ASSOC", "yes"], nil]	ENV["MONORUBY_ENV_TEST_ASSOC"] = "yes"\n            r = ENV.assoc("M
@@ -2185,6 +2186,7 @@ a7e6e135e95d618e3ae7fc235b8624b8	17158183388.626425	def calc(i)\n              f
 a7ea202d40851dfadabc161faaaaffb7	true	GC.config({}) == GC.config
 a800cb1d66d4f7c50d700a30535cce0f	["UTF-16LE", [97, 0, 98, 0, 99, 0]]	File.write("/tmp/mr_rd2.txt", "abc")\n            r = []\n           
 a8018262ffba8fba491e3b1e7bcd20b9	42	module M\n              @x = 42\n              remove_instance_variab
+a81d22f2a88cfcc16513b0ca5f20189b	2970.0	def inner(k)\n          arr = [k + 2, k, k + 1]\n          arr.sort! { |a
 a86010e766462d5eea966a5e9133b6f0	[nil, true, nil, true]	a = Signal.trap(:EXIT, proc { })\n            b = Signal.trap(:EXIT,
 a87019ce1fb4a58da98eb0fcd22f397c	[1.0, "caught", 2.0, "caught", 3.0, "done"]	x = 0.0\n            $res = []\n            begin\n              x += 
 a88bdad4ba8d9e033a1c6a53c309f4ea	["42", 100]	class C\n          def [](idx)\n            idx.to_s\n          end\n      
@@ -2435,6 +2437,7 @@ ba4ff971390140cc452d6a37019cd25e	["hello", "hellohellohellohellohellohellohelloh
 ba657172c9c846fc29d3c12c19422d81	3	m = Mutex.new\n            cv = ConditionVariable.new\n            wo
 ba6f639d6a80fdb3a0102d2205ebee91	[["one x\\n", "two x\\n", "\\n", "\\n", "\\n", "three\\n", "four\\n"], ["one x\\ntwo x\\n\\n", "three\\nfour\\n"], ["one ", "x\\n", "two ", "x\\n", "\\n", "\\n", "\\n", "thre", "e\\n", "four", "\\n"], ["one ", "\\ntwo ", "\\n\\n\\n\\nthree\\nfour\\n"], "invalid limit: 0 for each_line", ["one x", "two x", "", "", "", "three", "four"], [], ["one x\\ntw", "o x\\n\\n"], 7, ["one x", "two x", ""], ["one", " x", "\\ntw", "o x", "\\n\\n\\n", "\\nth", "ree", "\\nfo", "ur\\n"], 1, :t1, :t2, [["one x\\n", 1], ["two x\\n", 2], ["\\n", 3], ["\\n", 4], ["\\n", 5], ["three\\n", 6], ["four\\n", 7]], "nil", ["one x\\n", "two x\\n", "\\n", "\\n", "\\n", "three\\n", "four\\n"], ["one x\\ntwo x", "three\\nfour\\n"], "nil", 7, 7, :notread, ""]	require "tempfile"\n            t = Tempfile.new("mrb_lines")\n      
 ba7058a9f888bace3485573d10433a9e	true	M = Data.define(:amount, :unit)\nm = M.new(42, "km"); m.with.equal?(m)
+ba70657eca5ff02438e4ed7fd9465199	4162.5	def leaf(i)\n          q = 1.25 * i\n          t = yield 3\n          q + 
 ba73e17b465fecb689735f04e9f7047e	[1, 2, "l1\\nl2\\n"]	path = "/tmp/mr_gvar_lines.txt"\n            File.write(path, "l1\\nl
 ba8132b4a761c3cc445f79982ea307f1	[:frozen, :frozen, 1]	klass = Class.new; klass.freeze\n            r1 = begin; klass.class
 ba8abe11f8c7c450d64cf7c0c8aaeef7	:finished	ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")\n             

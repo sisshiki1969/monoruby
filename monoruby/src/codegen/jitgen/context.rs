@@ -948,7 +948,7 @@ pub(crate) struct JitContext<'a> {
     ///
     /// Stage-C loop adoption: set when this context compiled anything
     /// that can rewrite an outer frame's slot *invisibly* — a call that
-    /// hands a block out of the unit (`all_frames_unbox_to_S`), a call
+    /// hands a block out of the unit (`unbox_to_S_for_outgoing_block`), a call
     /// site forwarding an explicit `&blk`, or a capture event. A loop
     /// analysed while this fires must not adopt an outer view: the
     /// compile-time widen hooks do not cover such stores, so the adopted
@@ -1514,7 +1514,7 @@ impl<'a> JitContext<'a> {
     /// believing a mode this store just invalidated.
     ///
     /// A frame's locals cross a call boundary with their `Guarded` intact
-    /// (`all_frames_unbox_to_S`), which is only sound if a callee that
+    /// (`unbox_to_S_for_outgoing_block`), which is only sound if a callee that
     /// writes one of them says so: an `S(Guarded::Float)` a callee stores
     /// a String into would otherwise still be read as a Float once the
     /// call returns.

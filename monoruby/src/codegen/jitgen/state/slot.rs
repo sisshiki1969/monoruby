@@ -2601,7 +2601,7 @@ impl AbstractFrame {
     /// give the claim up, for the reason above. Most claims go with
     /// nothing emitted; a stage-1'' deferred `F(spill home)` — whose slot
     /// is genuinely stale — reports [`OuterBarrier::BoxHome`] so the
-    /// caller ([`AbstractState::all_frames_unbox_to_S`]) can emit the
+    /// caller ([`AbstractState::unbox_to_S_for_outgoing_block`]) can emit the
     /// box-from-home surrender write through the chain.
     ///
     #[allow(non_snake_case)]
