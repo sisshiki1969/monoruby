@@ -53,7 +53,7 @@ mod alloc_policy {
         /// it to keep loop-carried values resident. Zero extra cost on the default
         /// path (it is the original Phase-0 scan).
         ///
-        fn pick_vacant(&self, state: &SlotState) -> Option<FPReg> {
+        fn pick_vacant(&self, state: &SlotState, occ: &PoolOccupancy) -> Option<FPReg> {
             // Pool registers only, per this phase's contract ("vacant
             // phys"). A vacant *spill* id must not be re-issued: it may
             // be a persistent raw-f64 home whose binding this path does
@@ -64,7 +64,7 @@ mod alloc_policy {
             // ids are also skipped; that only costs frame bytes.
             (0..state.fpr_alloc.len().min(PHYS_FPR_POOL))
                 .map(FPReg)
-                .find(|&fpr| !state.fpr_alloc.is_pinned(fpr) && state.fpr_alloc.is_vacant(fpr))
+                .find(|&fpr| !state.fpr_alloc.is_pinned(fpr) && !occ.occupied(fpr))
         }
 
         ///
@@ -95,9 +95,13 @@ mod alloc_policy {
     /// pluggable.
     ///
     pub(super) fn try_alloc_fpr_ctx(state: &mut SlotState, ctx: &AllocCtx) -> Option<FPReg> {
+        // One pass over the slots gives every per-register fact both
+        // phases need (the register file is derived from the slot modes,
+        // not tracked beside them).
+        let occ = state.pool_occupancy();
         // Phase 0: a vacant fpr chosen by the policy (default: lowest index, as
         // before — the real placement lever, doc §27).
-        if let Some(fpr) = ctx.pick_vacant(state) {
+        if let Some(fpr) = ctx.pick_vacant(state, &occ) {
             return Some(fpr);
         }
         // Phase 1: among the fprs whose linked slots are *all* `Sf` (stack already
@@ -112,7 +116,7 @@ mod alloc_policy {
         // that callee code still writes at runtime.
         let victim = (0..state.fpr_alloc.len().min(PHYS_FPR_POOL))
             .map(FPReg)
-            .filter(|&fpr| !state.fpr_alloc.is_pinned(fpr) && !state.fpr_alloc.is_vacant(fpr))
+            .filter(|&fpr| !state.fpr_alloc.is_pinned(fpr) && occ.occupied(fpr))
             .filter(|&fpr| {
                 // §27.3 Stage-2b (`phys-loop-aware`): do not demote the `Sf`
                 // cache of a loop-carried float — keep `L` resident so the
@@ -121,36 +125,25 @@ mod alloc_policy {
                 // Default path: this filter is absent (`loop_carried` empty),
                 // so victim selection is byte-identical.
                 #[cfg(feature = "phys-loop-aware")]
-                if state
-                    .fpr_alloc
-                    .slots(fpr)
-                    .iter()
-                    .any(|&s| state.loop_carried.contains(&s))
+                if occ.all_sf(fpr)
                     && state
-                        .fpr_alloc
-                        .slots(fpr)
-                        .iter()
-                        .all(|&s| matches!(state.mode(s), LinkMode::Sf(_, _)))
+                        .fpr_slots(fpr)
+                        .any(|s| state.loop_carried.contains(&s))
                 {
                     return false;
                 }
-                state
-                    .fpr_alloc
-                    .slots(fpr)
-                    .iter()
-                    .all(|&s| matches!(state.mode(s), LinkMode::Sf(_, _)))
+                occ.all_sf(fpr)
             })
             .min_by_key(|&fpr| ctx.victim_rank(fpr))?;
+        // Demoting the slots is what frees the register: the file is
+        // derived from the modes, so there is no reverse entry to clear.
         let to_demote: Vec<(SlotId, SfGuarded)> = state
-            .fpr_alloc
-            .slots(victim)
-            .iter()
-            .map(|&s| match state.mode(s) {
+            .fpr_slots(victim)
+            .map(|s| match state.mode(s) {
                 LinkMode::Sf(_, g) => (s, g),
                 _ => unreachable!(),
             })
             .collect();
-        state.fpr_alloc.clear(victim);
         for (s, g) in to_demote {
             state.set_mode(s, LinkMode::S(g.into()));
         }
@@ -171,17 +164,19 @@ mod alloc_policy {
 }
 
 ///
-/// The fpr-register allocation state (item ②, step 1): the reverse map from
-/// physical/spill FP registers to the slots bound to them, plus the pin set.
-/// `SlotState` owns one of these and drives it through its `fpr_*` methods; the
-/// allocation *policy* (`alloc_policy::try_alloc_fpr` / `alloc_fpr`) takes `&mut
-/// SlotState` because it also reads/mutates slot placements. Indices
-/// `0..PHYS_FPR_POOL` map to physical `xmm2..xmm15`; `>= PHYS_FPR_POOL` are stack
-/// spills.
+/// The fpr-register file's *bookkeeping*: how many register ids have been
+/// issued and which are pinned. Which slots occupy a register is **not**
+/// tracked here — it is derived from the slot modes
+/// ([`SlotState::fpr_slots`] / [`SlotState::pool_occupancy`]), so the file
+/// can never disagree with the placements. Indices `0..PHYS_FPR_POOL` map to
+/// physical `xmm2..xmm15`; `>= PHYS_FPR_POOL` are stack spills.
 ///
 #[derive(Clone, Default)]
 pub(super) struct FprAllocator {
-    vfpr: Vec<Vec<SlotId>>,
+    /// Ids issued so far: the pool prefix plus every spill id this file
+    /// has ever issued or been grown to. A spill id is never re-issued
+    /// once vacant (see `pick_vacant`), so this only grows.
+    len: usize,
     /// fpr registers that must not be reused by `alloc_fpr` until unpinned.
     pinned: Vec<FPReg>,
 }
@@ -189,49 +184,27 @@ pub(super) struct FprAllocator {
 impl FprAllocator {
     fn new() -> Self {
         Self {
-            vfpr: (0..PHYS_FPR_POOL).map(|_| vec![]).collect(),
+            len: PHYS_FPR_POOL,
             pinned: Vec::new(),
         }
     }
 
     fn len(&self) -> usize {
-        self.vfpr.len()
-    }
-
-    fn slots(&self, fpr: FPReg) -> &[SlotId] {
-        &self.vfpr[fpr.0 as usize]
-    }
-
-    fn is_vacant(&self, fpr: FPReg) -> bool {
-        self.vfpr[fpr.0 as usize].is_empty()
+        self.len
     }
 
     fn is_pinned(&self, fpr: FPReg) -> bool {
         self.pinned.contains(&fpr)
     }
 
-    fn add(&mut self, slot: SlotId, fpr: FPReg) {
-        self.vfpr[fpr.0 as usize].push(slot);
-    }
-
-    fn remove(&mut self, slot: SlotId, fpr: FPReg) {
-        self.vfpr[fpr.0 as usize].retain(|e| *e != slot);
-    }
-
-    fn clear(&mut self, fpr: FPReg) {
-        self.vfpr[fpr.0 as usize].clear();
-    }
-
     fn grow_to(&mut self, new_len: usize) {
-        while self.vfpr.len() < new_len {
-            self.vfpr.push(vec![]);
-        }
+        self.len = self.len.max(new_len);
     }
 
-    /// Append a fresh spill slot beyond the physical pool and return its id.
+    /// Issue a fresh spill id beyond everything issued so far.
     fn push_spill(&mut self) -> FPReg {
-        let new_id = self.vfpr.len();
-        self.vfpr.push(vec![]);
+        let new_id = self.len;
+        self.len += 1;
         FPReg(new_id)
     }
 
@@ -246,9 +219,25 @@ impl FprAllocator {
             self.pinned.swap_remove(pos);
         }
     }
+}
 
-    fn swap(&mut self, l: FPReg, r: FPReg) {
-        self.vfpr.swap(l.0 as usize, r.0 as usize);
+///
+/// Per-pool-register facts collected in one pass over the slots: whether
+/// the register holds any slot, and whether every slot it holds is an `Sf`
+/// view (the stack is canonical, so the register can be dropped for free).
+///
+struct PoolOccupancy {
+    occupied: [bool; PHYS_FPR_POOL],
+    all_sf: [bool; PHYS_FPR_POOL],
+}
+
+impl PoolOccupancy {
+    fn occupied(&self, fpr: FPReg) -> bool {
+        self.occupied[fpr.0]
+    }
+
+    fn all_sf(&self, fpr: FPReg) -> bool {
+        self.occupied[fpr.0] && self.all_sf[fpr.0]
     }
 }
 
@@ -574,8 +563,32 @@ impl SlotState {
         &mut self.slots[slot.0 as usize].used
     }
 
-    fn fpr(&self, fpr: FPReg) -> &[SlotId] {
-        self.fpr_alloc.slots(fpr)
+    /// The slots bound to *fpr* (as `F` or `Sf`), in slot order — the
+    /// register file, read off the slot modes.
+    fn fpr_slots(&self, fpr: FPReg) -> impl Iterator<Item = SlotId> + '_ {
+        self.all_regs().filter(move |&s| {
+            matches!(self.mode(s), LinkMode::F(x) | LinkMode::Sf(x, _) if x == fpr)
+        })
+    }
+
+    fn pool_occupancy(&self) -> PoolOccupancy {
+        let mut occ = PoolOccupancy {
+            occupied: [false; PHYS_FPR_POOL],
+            all_sf: [true; PHYS_FPR_POOL],
+        };
+        for s in self.all_regs() {
+            match self.mode(s) {
+                LinkMode::F(x) if x.0 < PHYS_FPR_POOL => {
+                    occ.occupied[x.0] = true;
+                    occ.all_sf[x.0] = false;
+                }
+                LinkMode::Sf(x, _) if x.0 < PHYS_FPR_POOL => {
+                    occ.occupied[x.0] = true;
+                }
+                _ => {}
+            }
+        }
+        occ
     }
 
     ///
@@ -597,14 +610,7 @@ impl SlotState {
     ///
     pub(super) fn grow_fpr_to(&mut self, new_len: usize) {
         self.fpr_alloc.grow_to(new_len);
-    }
 
-    fn fpr_add(&mut self, slot: SlotId, fpr: FPReg) {
-        self.fpr_alloc.add(slot, fpr);
-    }
-
-    fn fpr_remove(&mut self, slot: SlotId, fpr: FPReg) {
-        self.fpr_alloc.remove(slot, fpr);
     }
 
     /// Mark *fpr* off-limits for subsequent `alloc_fpr` /
@@ -654,15 +660,8 @@ impl SlotState {
         // Any transition away from the aliased-`F` binding ends the alias;
         // the consult site takes it *before* transitioning.
         self.slots[slot.0 as usize].dynvar_alias = None;
-        match self.mode(slot) {
-            LinkMode::Sf(fpr, _) | LinkMode::F(fpr) => {
-                assert!(self.fpr(fpr).contains(&slot));
-                self.fpr_remove(slot, fpr);
-            }
-            LinkMode::C(_) => {}
-            LinkMode::S(_) => {}
-            LinkMode::MaybeNone | LinkMode::None => {}
-            LinkMode::V => return,
+        if self.mode(slot) == LinkMode::V {
+            return;
         }
         self.set_mode(slot, LinkMode::V);
     }
@@ -809,7 +808,6 @@ impl SlotState {
     pub(super) fn set_F(&mut self, slot: SlotId, fpr: FPReg) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::F(fpr));
-        self.fpr_add(slot, fpr);
     }
 
     ///
@@ -819,7 +817,6 @@ impl SlotState {
     pub(super) fn set_Sf(&mut self, slot: SlotId, fpr: FPReg, guarded: SfGuarded) {
         self.clear(slot);
         self.set_mode(slot, LinkMode::Sf(fpr, guarded));
-        self.fpr_add(slot, fpr);
     }
 
     ///
@@ -1401,8 +1398,6 @@ impl SlotState {
                 // place, and the boxed value is materialized only where a
                 // path actually gives the claim up.
                 let h = self.fpr_alloc.push_spill();
-                self.fpr_remove(slot, fpr);
-                self.fpr_add(slot, h);
                 self.set_mode(slot, LinkMode::F(h));
                 ir.fpr_move(fpr, h);
             }
@@ -1688,7 +1683,7 @@ impl SlotState {
     }
 
     fn is_fpr_vacant(&self, fpr: FPReg) -> bool {
-        self.fpr(fpr).is_empty()
+        self.fpr_slots(fpr).next().is_none()
     }
 }
 
@@ -1893,9 +1888,11 @@ impl AbstractFrame {
         let mut b = UsingFpr::new();
         // Only physical pool slots need save/restore at call
         // boundaries; spill slots already live on the stack.
-        for i in 0..PHYS_FPR_POOL {
-            if !self.fpr_alloc.is_vacant(FPReg(i)) {
-                b.set(i, true);
+        for s in self.all_regs() {
+            if let LinkMode::F(x) | LinkMode::Sf(x, _) = self.mode(s)
+                && x.0 < PHYS_FPR_POOL
+            {
+                b.set(x.0, true);
             }
         }
         b
@@ -1961,7 +1958,6 @@ impl AbstractFrame {
     }
 
     fn fpr_swap(&mut self, l: FPReg, r: FPReg) {
-        self.fpr_alloc.swap(l, r);
         // A physical fpr swap (`FprSwap`) only changes *which register* holds
         // each live value; every slot keeps its own representation and
         // refinement. The two registers need not share a refinement — e.g. the
@@ -1990,20 +1986,23 @@ impl AbstractFrame {
         }
     }
 
+    /// Every register holding an `F` slot, with those slots — the raw
+    /// f64s a side exit has to box into their stack homes. Registers in
+    /// id order, slots in slot order.
     fn wb_fpr(&self, f: impl Fn(SlotId) -> bool) -> Vec<(FPReg, Vec<SlotId>)> {
-        (0..self.fpr_alloc.len())
-            .filter_map(|i| {
-                let reg = FPReg::new(i);
-                let v: Vec<_> = self
-                    .fpr_alloc
-                    .slots(reg)
-                    .iter()
-                    .filter(|s| f(**s) && matches!(self.mode(**s), LinkMode::F(_)))
-                    .cloned()
-                    .collect();
-                if v.is_empty() { None } else { Some((reg, v)) }
-            })
-            .collect()
+        let mut by_reg: Vec<(FPReg, Vec<SlotId>)> = Vec::new();
+        for s in self.all_regs() {
+            if let LinkMode::F(x) = self.mode(s)
+                && f(s)
+            {
+                match by_reg.iter_mut().find(|(r, _)| *r == x) {
+                    Some((_, v)) => v.push(s),
+                    None => by_reg.push((x, vec![s])),
+                }
+            }
+        }
+        by_reg.sort_by_key(|(r, _)| r.0);
+        by_reg
     }
 
     fn wb_literal(&self, f: impl Fn(SlotId) -> bool) -> Vec<(Value, SlotId)> {

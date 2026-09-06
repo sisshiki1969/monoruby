@@ -3183,3 +3183,48 @@ What was *not* folded, and why:
   (`wb_fpr`) emits stores in that order — a derived map would emit them in slot
   order, so the change is semantics-preserving but not byte-identical. Left for
   its own change with its own gate.
+
+## 47. The fpr file is derived from the slot modes (and the stale entry it was hiding)
+
+`FprAllocator` kept a reverse map `vfpr: Vec<Vec<SlotId>>` — for each fpr, the
+slots bound to it — maintained by `fpr_add` / `fpr_remove` / `clear` / `swap`
+alongside every `F` / `Sf` mode transition. The map is a function of the modes,
+so it is now computed from them: `SlotState::fpr_slots(fpr)` and a one-pass
+`pool_occupancy()` (per pool register: occupied?, all-`Sf`?) serve the
+allocator's two phases, `is_fpr_vacant`, the call-site save set and the deopt
+write-back. `FprAllocator` keeps only what is *not* derivable: the number of ids
+issued (spill ids are never re-issued once vacant — §46's `pick_vacant` note)
+and the pin set. `set_F` / `set_Sf` / `clear` no longer touch a file, and the
+bookkeeping that the `alloc_fpr` aliasing regression lived in is gone.
+
+**What the reverse map was hiding.** The suite caught the derivation:
+`outer_float_write_through`'s type-flip tests returned wrong values. The
+emitted code differed from master at exactly one place — the `each` call site
+in the owner loop saved `xmm2` on master and not on the branch — and the block
+compiled inside that call then read the owner's `a` where it meant to read `i`
+(the `_%2 = %2 == %3 [Float][Integer]` deopt storm: the block's static
+frame-chain offsets were off by the missing 16-byte save).
+
+The mechanism: `specialized_compile` freezes the caller's FP save set *before*
+the nested compile (`stack_offset = using_fpr_offset().offset()` lays out the
+callee's `extra` chain offsets over it), while the call emission after the
+compile took `get_using_fpr` *again*. In between, the callee's compile can
+widen a caller slot (`StoreDynVar` through the chain → `widen_outer_slot` →
+`invalidate_slot`, which set `S` **without** `fpr_remove`). With the map, the
+stale entry kept `xmm2` "occupied", so both sets agreed by accident (and the
+register was leaked for the rest of the compile). Derived from the modes, the
+second set was smaller than the first, and the callee's offsets no longer
+matched the frame the call actually built.
+
+Fixed at the root, not by re-adding the map: the frozen set rides back on the
+compiled frame (`JitStackFrame::call_site_using_fpr`, surfaced as
+`SpecializedCompileResult::using_fpr`), and both specialized call sites emit
+*that* set — `get_using_fpr` still runs for its GP flush and alias kill, and a
+debug assertion checks the live set is a subset of the frozen one (it can only
+shrink: a suspended frame never gains a pool register). Saving a register the
+caller no longer needs is harmless; saving fewer than the callee was laid out
+over was the bug.
+
+Verified: `emit-asm` dumps of the nine benchmarks are identical to master
+(`app_aobench` included this time), the JIT lib tests and the float / block /
+loop integration tests pass, and the full `cargo test` suite passes.

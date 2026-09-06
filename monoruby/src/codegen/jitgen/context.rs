@@ -580,6 +580,13 @@ pub(super) struct JitStackFrame {
     /// store it makes into an outer frame is invisible here.
     ///
     pub(super) generic_yield: bool,
+    ///
+    /// The caller's FP save set frozen when this frame's specialized
+    /// compile began (`specialized_compile`): the callee's static
+    /// frame-chain offsets are laid out over it, so the call emission
+    /// must save exactly this set. Filled by `specialized_compile`.
+    ///
+    pub(super) call_site_using_fpr: UsingFpr,
     /// D1: set when the trampoline forwarding consumer routed `g(...)`
     /// straight from the caller source (elided `f`'s rest Array).
     /// Aggregated from `AsmIr::deferred_rest()` like `had_deopt`,
@@ -730,6 +737,7 @@ impl JitStackFrame {
             specialized_id: SpecializedId(usize::MAX),
             had_deopt: false,
             generic_yield: false,
+            call_site_using_fpr: UsingFpr::default(),
             deferred_rest: false,
             needs_rest_array: false,
             speculated_floats: vec![],
@@ -767,6 +775,7 @@ impl JitStackFrame {
             specialized_id: self.specialized_id,
             had_deopt: self.had_deopt,
             generic_yield: self.generic_yield,
+            call_site_using_fpr: self.call_site_using_fpr,
             deferred_rest: self.deferred_rest,
             needs_rest_array: self.needs_rest_array,
             speculated_floats: self.speculated_floats.clone(),
@@ -1314,7 +1323,17 @@ impl<'a> JitContext<'a> {
         // Stage-B home-aliased reads: the callee can store through the
         // frame chain, so no alias survives a specialized call either.
         state.clear_dynvar_aliases();
-        let stack_offset = state.using_fpr_offset().offset();
+        // The call site's FP save set, frozen *here*: the callee's static
+        // frame-chain offsets (`extra`) are laid out over `stack_offset`,
+        // so the call emission after this compile must save exactly this
+        // set — not the set the caller's state holds *then*. The callee
+        // can widen the caller's slots while it compiles (a `StoreDynVar`
+        // through the chain drops an `Sf`/`F` view to `S`), which would
+        // shrink a freshly derived set and shift every offset the callee
+        // already baked in. It rides back to the call site on the compiled
+        // frame (`call_site_using_fpr`).
+        let using_fpr = state.using_fpr_offset();
+        let stack_offset = using_fpr.offset();
         // The live chain's invariants are maintained lexically (see
         // `unset_lexical_no_capture_guard`), so the entry chain is simply
         // this path's live frames.
@@ -1330,6 +1349,7 @@ impl<'a> JitContext<'a> {
         assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
 
         let mut frame = self.traceir_to_asmir(frame, Some(entry_chain))?;
+        frame.call_site_using_fpr = using_fpr;
 
         // Every plain `Ret` in the callee branched to a return segment;
         // build them (and the join of the return-path chains) now, while

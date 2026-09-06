@@ -1159,6 +1159,7 @@ impl<'a> JitContext<'a> {
             had_deopt: _,
             generic_yield: _,
             spec_id,
+            using_fpr: frozen_using_fpr,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -1175,7 +1176,13 @@ impl<'a> JitContext<'a> {
         // Pre-flush GP-pool snapshot for direct argument stores — see
         // `send`.
         let arg_hints = state.peek_gp_residents();
-        let using_fpr = state.get_using_fpr(ir);
+        // The save set was frozen when the callee's compile began (its
+        // frame-chain offsets are laid out over it); the live set can only
+        // have shrunk since, so saving the frozen set is sound and keeps
+        // the offsets right. `get_using_fpr` still runs for its flushes.
+        let live = state.get_using_fpr(ir);
+        let using_fpr = frozen_using_fpr;
+        debug_assert!(using_fpr.is_superset_of(&live), "{using_fpr:?} < {live:?}");
         // Stage 1': the resolve pass places write-through refreshes into
         // this site's save area by this record.
         self.record_call_site_fpr_save(spec_id, using_fpr);
@@ -1971,6 +1978,7 @@ impl<'a> JitContext<'a> {
             had_deopt,
             generic_yield,
             spec_id,
+            using_fpr: frozen_using_fpr,
         } = compiled;
         // The call site passes a block literal: if the callee heapifies
         // its *own* frame during the call (`Proc.new` / `lambda` /
@@ -2013,9 +2021,11 @@ impl<'a> JitContext<'a> {
         // Pre-flush GP-pool snapshot for direct argument stores — see
         // `send`. Captured before `get_using_fpr`'s flush.
         let arg_hints = state.peek_gp_residents();
-        // Snapshot the save set here (it is what `fpr_save_cont` below
-        // will emit) and record it for the resolve pass — stage 1'.
-        let using_fpr = state.get_using_fpr(ir);
+        // The save set was frozen when the callee's compile began — see
+        // the yield site above and `specialized_compile`.
+        let live = state.get_using_fpr(ir);
+        let using_fpr = frozen_using_fpr;
+        debug_assert!(using_fpr.is_superset_of(&live), "{using_fpr:?} < {live:?}");
         self.record_call_site_fpr_save(spec_id, using_fpr);
         state.send_specialized(
             ir,
@@ -2056,6 +2066,10 @@ pub(super) struct SpecializedCompileResult {
     /// The compiled callee instance, keying its call site's recorded FP
     /// save layout (stage 1' write-through).
     pub spec_id: context::SpecializedId,
+    /// The FP save set the call site must emit: the caller's set frozen
+    /// when the callee's compile began, over which the callee's
+    /// frame-chain offsets were laid out (`specialized_compile`).
+    pub using_fpr: UsingFpr,
     /// A `yield` in the compiled subtree was not inlined — see
     /// [`JitStackFrame::generic_yield`].
     pub generic_yield: bool,
@@ -2129,6 +2143,7 @@ impl<'a> JitContext<'a> {
         self.merge_return_context(return_context);
         // Capture before `frame.asm_info` is moved below.
         let spec_id = frame.asm_info.specialized_id;
+        let frame_using_fpr = frame.call_site_using_fpr;
         let frame_had_deopt = frame.had_deopt;
         let frame_deferred_rest = frame.deferred_rest;
         let frame_needs_rest_array = frame.needs_rest_array;
@@ -2226,6 +2241,7 @@ impl<'a> JitContext<'a> {
             had_deopt: frame_had_deopt,
             generic_yield: frame_generic_yield,
             spec_id,
+            using_fpr: frame_using_fpr,
         })
     }
 
