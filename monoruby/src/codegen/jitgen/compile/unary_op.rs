@@ -72,6 +72,15 @@ impl<'a> JitContext<'a> {
         let Some(recv_class) = state.class(src).or(ic) else {
             return Ok(CompileResult::Recompile(RecompileReason::NotCached));
         };
+        // The unary paths are not (yet) representation-aware: normalize the
+        // profile's Bignum tag back to `Integer` so a Bignum-profiled site
+        // compiles exactly as it did before the binop ICs learned to
+        // distinguish the representations.
+        let recv_class = if recv_class == BIGNUM_CLASS {
+            INTEGER_CLASS
+        } else {
+            recv_class
+        };
         if self.fire_unary_inline(state, ir, kind.into(), src, recv_class, bc_pos) {
             // ④-b: the Integer/Float inline unaries are pure arithmetic
             // (guards exit the trace) — the unfrozen-slot proofs survive.

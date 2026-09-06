@@ -228,6 +228,14 @@ impl<'a> JitContext<'a> {
         // the state already knows the class and no guard is emitted at all.
         heal: Option<RecompileTarget>,
     ) -> Option<BinaryInlineOutcome> {
+        // The Bignum tag resolves to Integer's methods, whose inline
+        // generators compute raw fixnum arithmetic — firing one behind a
+        // Bignum-profiled receiver would operate on a heap pointer. A
+        // Bignum receiver has no inline form; the caller's residual
+        // (generic helper / dispatch slow arm) is its fast path.
+        if lhs_class == BIGNUM_CLASS {
+            return None;
+        }
         let (fid, _visibility) = self.jit_check_method(lhs_class, op)?;
         let inline = self.store.inline_info.get_inline(fid)?;
         if !matches!(
@@ -349,15 +357,21 @@ impl<'a> JitContext<'a> {
             pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
         classes.into_iter().map(|(class, _)| class).find(|&class| {
-            matches!(
-                self.jit_check_method(class, op)
-                    .and_then(|(fid, _)| self.store.inline_info.get_inline(fid)),
-                Some(InlineFuncInfo::InlineGenBinary(_))
-            )
-            // Same licence the guarded direct-fire path needs: the arm runs
-            // without a class-version guard, so a redefinition has to reach
-            // it through the recorded bop dependency.
-            && self.basic_op_assumable(class, op)
+            // The Bignum tag resolves to Integer's methods and would look
+            // inlinable, but the arm guard proves the *fixnum*
+            // representation — a Bignum can never enter it. Its share is
+            // served by the residual arm (where `BrClassNe(INTEGER)`'s tag
+            // test already routes every heap Integer).
+            class != BIGNUM_CLASS
+                && matches!(
+                    self.jit_check_method(class, op)
+                        .and_then(|(fid, _)| self.store.inline_info.get_inline(fid)),
+                    Some(InlineFuncInfo::InlineGenBinary(_))
+                )
+                // Same licence the guarded direct-fire path needs: the arm
+                // runs without a class-version guard, so a redefinition has
+                // to reach it through the recorded bop dependency.
+                && self.basic_op_assumable(class, op)
         })
     }
 
@@ -599,6 +613,9 @@ impl<'a> JitContext<'a> {
         };
         if recv_class == INTEGER_CLASS
             || recv_class == FLOAT_CLASS
+            // The Bignum tag is numeric too (and `BrClassNe` cannot test a
+            // representation): its sites belong to the generic helper.
+            || recv_class == BIGNUM_CLASS
             || !recvs.all(|c| c == recv_class)
         {
             return Ok(false);
@@ -835,13 +852,17 @@ impl<'a> JitContext<'a> {
             // residual treatment above. The exit only actually recompiles
             // once the VM has stamped the site's POLY byte (see the
             // `BecamePolymorphic` gate in the side-exit lowering), so a
-            // representation-only miss — a BigInt failing the fixnum tag
-            // test, class `Integer` all the same, which never sets POLY —
-            // can never recompile-livelock (the activerecord
-            // `out_of_range?` storm shape). At a site already compiled
-            // polymorphic, reaching here means the polymorphic treatments
-            // were tried at *this* compile and declined; a recompile would
-            // reproduce this very body, so the guard deopts plainly.
+            // miss the profile cannot describe as a class change can never
+            // recompile-livelock (the activerecord `out_of_range?` storm
+            // shape). A Bignum miss *is* a class change here — the binop
+            // ICs record heap Integers under `BIGNUM_CLASS` — so a
+            // fixnum-compiled site that starts seeing Bignums heals into
+            // the dispatch, whose `Integer` arm is the fixnum tag test and
+            // whose residual arm is exactly where the Bignum share wants
+            // to run. At a site already compiled polymorphic, reaching
+            // here means the polymorphic treatments were tried at *this*
+            // compile and declined; a recompile would reproduce this very
+            // body, so the guard deopts plainly.
             let heal = (!polymorphic)
                 .then(|| self.recv_miss_recompile_target())
                 .flatten();
@@ -914,6 +935,22 @@ impl<'a> JitContext<'a> {
                 .jit_check_method(lhs_class, IdentId::from(binop))
                 .is_none()
         {
+            state.flush_gp(ir);
+            let is_func_call = self
+                .store
+                .get_callsite_id(self.iseq_id(), bc_pos)
+                .is_some_and(|c| self.store[c].is_func_call());
+            self.emit_generic_binary(state, ir, binop, lhs, rhs, case_semantics, is_func_call);
+            return Ok(BinaryLowering::Generic);
+        }
+        // A Bignum-profiled receiver has no inline form and nothing worth
+        // guarding: a direct call would need a compound representation
+        // guard, and the generic helper already dispatches a heap Integer
+        // correctly. Same treatment as the unresolvable BOOL case above —
+        // and a site that later turns fixnum flips polymorphic (the tag
+        // change stamps POLY) and takes the dispatch, whose Integer arm
+        // serves the fixnum share inline.
+        if lhs_class == BIGNUM_CLASS {
             state.flush_gp(ir);
             let is_func_call = self
                 .store
@@ -1465,13 +1502,17 @@ mod tests {
         );
     }
 
-    /// A representation-only miss must NOT heal: the guard is the fixnum tag
-    /// test, a Bignum carries `Integer` all the same, and the VM never marks
-    /// the site polymorphic — so the `BecamePolymorphic` exit's POLY-byte
-    /// gate keeps it on the plain deopt (no recompile-per-N-misses storm; the
-    /// activerecord `out_of_range?` shape). Pins the semantics either way.
+    /// A fixnum-compiled site that starts seeing Bignums: the binop ICs
+    /// record a heap Integer under the `BIGNUM_CLASS` tag, so the first
+    /// Bignum operand is a class change — it stamps the POLY byte, feeds
+    /// the PMC, and the guard's `BecamePolymorphic` exit heals the site
+    /// into the polymorphic treatment (fused: the generic residual;
+    /// value-mode: the two-arm dispatch, whose `Integer` arm is the fixnum
+    /// tag test and whose residual arm serves the Bignum share) instead of
+    /// side-exiting on every heap operand forever. Pins the semantics
+    /// through the transition.
     #[test]
-    fn mono_cmp_bigint_misses_stay_plain() {
+    fn mono_cmp_heals_on_bignum_misses() {
         run_test(
             r#"
             def probe(a, b)
@@ -1486,6 +1527,27 @@ mod tests {
             big = 1 << 62
             300.times { |n| res << probe(big + n, 100) }
             res.tally.sort_by { |k, _| k.to_s }
+            "#,
+        );
+    }
+
+    /// A site that has only ever seen Bignum receivers compiles to the
+    /// generic helper — no inline form exists for a heap Integer, and a
+    /// class guard for the representation tag would deopt on every
+    /// execution. Both the pure-Bignum and the value-mode mixed shape must
+    /// answer exactly as the interpreter.
+    #[test]
+    fn bignum_mono_cmp_takes_generic() {
+        run_test(
+            r#"
+            big = 1 << 62
+            def probe(a, b) = a < b ? 1 : 0
+            def eq(a, b) = (a == b)
+            r = 0
+            300.times { |n| r += probe(big + n, big) }
+            ok = []
+            300.times { |n| ok << eq(big + (n % 2), big) }
+            [r, ok.tally.sort_by { |k, _| k.to_s }]
             "#,
         );
     }

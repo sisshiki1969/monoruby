@@ -1705,13 +1705,16 @@ impl Codegen {
             // `BecamePolymorphic` is checked, not assumed: recompile only
             // once the VM has actually stamped the site's POLY byte
             // (`opcode_sub`, op1 bits 63:56 — the interpreter sets it on an
-            // operand/receiver *class* change). A miss that splits one class
-            // by representation — a BigInt failing an `Integer` guard's
-            // fixnum tag test — re-executes in the VM without moving the
-            // byte, and a recompile against an unchanged profile would
-            // reproduce the same guard: the activerecord `out_of_range?`
-            // shape recompiled 8,756 times that way. With the gate such a
-            // site just deopts plainly, byte-for-byte the pre-heal behavior.
+            // operand/receiver *class* change). A miss the profile cannot
+            // describe as a class change re-executes in the VM without
+            // moving the byte, and a recompile against an unchanged profile
+            // would reproduce the same guard: the activerecord
+            // `out_of_range?` shape recompiled 8,756 times that way. With
+            // the gate such a site just deopts plainly, byte-for-byte the
+            // pre-heal behavior. (Binop/cmp ICs record a heap Integer under
+            // the `BIGNUM_CLASS` tag, so a Bignum miss *is* a class change
+            // there and heals into the dispatch; the gate still protects
+            // the send-side exits, whose ICs class every Integer alike.)
             if reason == RecompileReason::BecamePolymorphic {
                 let poly_byte = pc.as_ptr() as usize + 7;
                 monoasm!( &mut self.jit,

@@ -89,6 +89,26 @@ pub const YIELDER_CLASS: ClassId = ClassId::new(60);
 /// on (for `Module.used_modules` and for `#to_s`).
 pub const REFINEMENT_CLASS: ClassId = ClassId::new(61);
 
+/// Internal "Bignum" tag — like [`BOOL_CLASS`], not a Ruby-visible class:
+/// every Integer keeps its `Integer` identity at the user level. The
+/// binop/cmp inline caches (and the PMC they feed) record a heap Integer
+/// under this tag instead of `INTEGER_CLASS`, so the profile machinery
+/// sees the two *representations* as two classes: a site that has only
+/// ever seen fixnums stays monomorphic, and the first Bignum operand is a
+/// class change — it stamps the site's POLY byte and lands in the PMC,
+/// exactly like `nil` arriving at an Integer compare. The existing
+/// polymorphic treatments then apply unchanged: the two-arm dispatch's
+/// `Integer` arm is the fixnum tag test, so the Bignum share falls to the
+/// guard-free generic arm instead of deopting forever, and the
+/// `BecamePolymorphic` heal's POLY-byte gate passes for genuinely
+/// Bignum-visited sites (it exists to block exactly the sites the old
+/// vocabulary could not describe). Method resolution for the tag
+/// delegates to `INTEGER_CLASS` (see
+/// `check_method_for_class_with_version`); the JIT never emits an inline
+/// arm or a class guard for it — a Bignum-profiled receiver takes the
+/// generic call, which is where a heap Integer wants to be anyway.
+pub const BIGNUM_CLASS: ClassId = ClassId::new(62);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ClassId(NonZeroU32);
@@ -155,6 +175,7 @@ impl std::fmt::Debug for ClassId {
             55 => write!(f, "ARITHMETIC_SEQUENCE"),
             56 => write!(f, "SIGNAL_EXCEPTION"),
             57 => write!(f, "INTERRUPT"),
+            62 => write!(f, "BIGNUM"),
             n => write!(f, "ClassId({n})"),
         }
     }
