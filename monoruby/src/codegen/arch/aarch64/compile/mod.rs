@@ -1811,12 +1811,16 @@ impl Codegen {
                     // `BecamePolymorphic` is checked, not assumed: recompile
                     // only once the VM has actually stamped the site's POLY
                     // byte (`opcode_sub`, set by the interpreter on an
-                    // operand/receiver *class* change). A representation-only
-                    // miss — a BigInt failing an `Integer` guard's fixnum tag
-                    // test — never moves the byte, so the gate keeps such a
-                    // site on the plain deopt instead of recompiling against
-                    // an unchanged profile every N misses. Mirrors the x86
-                    // gate in `side_exit_with_label`.
+                    // operand/receiver *class* change). A miss the profile
+                    // cannot describe as a class change never moves the
+                    // byte, so the gate keeps such a site on the plain deopt
+                    // instead of recompiling against an unchanged profile
+                    // every N misses. (Binop/cmp ICs record a heap Integer
+                    // under the `BIGNUM_CLASS` tag, so a Bignum miss *is* a
+                    // class change there and heals into the dispatch; the
+                    // gate still protects the send-side exits, whose ICs
+                    // class every Integer alike.) Mirrors the x86 gate in
+                    // `side_exit_with_label`.
                     if reason == RecompileReason::BecamePolymorphic {
                         let poly_byte = pc.as_ptr() as u64 + 7;
                         monoasm_arm64!(&mut self.jit,

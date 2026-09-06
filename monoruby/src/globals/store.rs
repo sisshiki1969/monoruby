@@ -1460,6 +1460,13 @@ impl Store {
         if class_id == BOOL_CLASS {
             return self.check_bool_method_with_version(name, class_version);
         }
+        // The Bignum tag is a representation, not a method namespace: every
+        // heap Integer resolves methods exactly as a fixnum does.
+        let class_id = if class_id == BIGNUM_CLASS {
+            INTEGER_CLASS
+        } else {
+            class_id
+        };
         let mut cache = self.method_cache.borrow_mut();
         if let Some(entry) = cache.get(class_id, name, class_version) {
             return entry.cloned();

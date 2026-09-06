@@ -1389,10 +1389,25 @@ impl Codegen {
         let get_class = self.get_class.clone();
         let skip = self.jit.label();
         let record = self.jit.label();
+        let keep = self.jit.label();
         monoasm_arm64!(&mut self.jit,
             ldr w10, [x(PC.0), #(8)]; // old classid1 (0 = cache empty)
+            // Stash the operand: `get_class` clobbers x2 for immediate
+            // receivers, and the representation refinement below needs its
+            // fixnum bit. x11 is in this helper's clobber set and is not
+            // read again until the poly-stamp below.
+            mov x11, x2;
             mov x0, x2;
             bl get_class;             // x0 = class(operand)
+            // Representation refinement (see `BIGNUM_CLASS`): record a heap
+            // Integer under the Bignum tag — mirrors `a64_save_binary_class`.
+            cmp w0, #(INTEGER_CLASS.u32());
+        );
+        self.jit.bcond_label(Cond::Ne, &keep);
+        monoasm_arm64!(&mut self.jit,
+            tbnz x11, #(0), keep;
+            mov x0, (BIGNUM_CLASS.u32() as u64);
+        keep:
             str w0, [x(PC.0), #(8)];  // classid1
             cbz w10, record;          // first population: record, no flag
             cmp w10, w0;
@@ -1422,6 +1437,8 @@ impl Codegen {
         let set_poly = self.jit.label();
         let skip = self.jit.label();
         let record = self.jit.label();
+        let keep_l = self.jit.label();
+        let keep_r = self.jit.label();
         monoasm_arm64!(&mut self.jit,
             // Read the previously-cached operand classes before overwriting
             // them (x10 = old classid1, x12 = old classid2; 0 = cache empty),
@@ -1431,9 +1448,29 @@ impl Codegen {
             ldr w12, [x(PC.0), #(12)];  // old classid2
             mov x0, x13;
             bl get_class;             // x0 = class(lhs)
+            // Representation refinement (see `BIGNUM_CLASS`): a heap
+            // Integer is recorded under the Bignum tag, so a
+            // fixnum-profiled site stays monomorphic and the first Bignum
+            // operand reads as a class change (POLY stamp + PMC entry)
+            // instead of vanishing into `Integer`. x13/x14 survive
+            // `get_class`, so the operand's fixnum bit is still testable.
+            cmp w0, #(INTEGER_CLASS.u32());
+        );
+        self.jit.bcond_label(Cond::Ne, &keep_l);
+        monoasm_arm64!(&mut self.jit,
+            tbnz x13, #(0), keep_l;
+            mov x0, (BIGNUM_CLASS.u32() as u64);
+        keep_l:
             str w0, [x(PC.0), #(8)];  // classid1
             mov x0, x14;
             bl get_class;             // x0 = class(rhs)
+            cmp w0, #(INTEGER_CLASS.u32());
+        );
+        self.jit.bcond_label(Cond::Ne, &keep_r);
+        monoasm_arm64!(&mut self.jit,
+            tbnz x14, #(0), keep_r;
+            mov x0, (BIGNUM_CLASS.u32() as u64);
+        keep_r:
             str w0, [x(PC.0), #(12)]; // classid2
             // Polymorphic detection (mirrors x86 `vm_save_binary_class`): once
             // the cache is populated (old classid1 != 0), if either operand's

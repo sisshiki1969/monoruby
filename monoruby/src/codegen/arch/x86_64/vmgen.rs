@@ -614,8 +614,20 @@ impl Codegen {
         let get_class = self.get_class.clone();
         let skip = self.jit.label();
         let record = self.jit.label();
+        let keep = self.jit.label();
         monoasm! { &mut self.jit,
             call  get_class;
+            // Representation refinement (see `BIGNUM_CLASS`): a heap Integer
+            // is recorded under the Bignum tag, so a fixnum-profiled site
+            // stays monomorphic and the first Bignum operand reads as a
+            // class change (POLY stamp + PMC entry) instead of vanishing
+            // into `Integer`. `get_class` preserves rdi (the operand).
+            cmpl  rax, (INTEGER_CLASS.u32());
+            jne   keep;
+            testq rdi, 0x1;
+            jne   keep;
+            movl  rax, (BIGNUM_CLASS.u32());
+        keep:
             // r8 <- cached class (0 if the inline cache is empty)
             movl  r8, [r13 - 8];
             movl  [r13 - 8], rax;
@@ -659,14 +671,33 @@ impl Codegen {
         let skip = self.jit.label();
         let set_poly = self.jit.label();
         let record = self.jit.label();
+        let keep_l = self.jit.label();
+        let keep_r = self.jit.label();
         monoasm! { &mut self.jit,
             call  get_class;
+            // Representation refinement (see `BIGNUM_CLASS`): a heap Integer
+            // is recorded under the Bignum tag, so a fixnum-profiled site
+            // stays monomorphic and the first Bignum operand reads as a
+            // class change (POLY stamp + PMC entry) instead of vanishing
+            // into `Integer`. `get_class` preserves rdi (the operand).
+            cmpl  rax, (INTEGER_CLASS.u32());
+            jne   keep_l;
+            testq rdi, 0x1;
+            jne   keep_l;
+            movl  rax, (BIGNUM_CLASS.u32());
+        keep_l:
             // r8 <- cached lhs class (0 if the inline cache is empty)
             movl  r8, [r13 - 8];
             movl  [r13 - 8], rax;
             xchgq rdi, rsi;
             //movq  rdi, rsi;
             call  get_class;
+            cmpl  rax, (INTEGER_CLASS.u32());
+            jne   keep_r;
+            testq rdi, 0x1;
+            jne   keep_r;
+            movl  rax, (BIGNUM_CLASS.u32());
+        keep_r:
             // r9 <- cached rhs class
             movl  r9, [r13 - 4];
             movl  [r13 - 4], rax;
