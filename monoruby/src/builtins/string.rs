@@ -2,12 +2,12 @@ use num::{BigInt, Zero};
 use smallvec::SmallVec;
 
 use super::*;
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 use crate::value::rvalue::{eucjp_char_width, sjis_char_width};
 #[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
 #[cfg(target_arch = "aarch64")]
 use jitgen::{AbstractState, JitContext};
-use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 //
 // String class
@@ -274,7 +274,10 @@ pub(super) fn init(globals: &mut Globals) {
 /// is binary, and bare `String.new` inherits that default because
 /// `#initialize` without a source argument leaves self untouched).
 pub(crate) extern "C" fn string_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
-    Value::string_from_inner_with_class(RStringInner::from_encoding(b"", Encoding::Ascii8), class_id)
+    Value::string_from_inner_with_class(
+        RStringInner::from_encoding(b"", Encoding::Ascii8),
+        class_id,
+    )
 }
 
 ///
@@ -380,7 +383,6 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let h = lfp.self_val().calculate_hash(vm, globals)?;
     Ok(Value::from_hash_digest(h))
 }
-
 
 /// JIT inliner for `String#==` (and its aliases `===` / `eql?`): when the
 /// rhs class is known at JIT-compile time, the reverse-dispatch question
@@ -507,7 +509,10 @@ fn string_eq_bool(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     // user-defined `==` decide. (Note: `to_str` is *not* actually
     // called.) This lets a mock that defines both `to_str` and a
     // custom `==` exercise the fallback branch.
-    if !globals.store.no_to_str(rhs.class(), Globals::class_version()) {
+    if !globals
+        .store
+        .no_to_str(rhs.class(), Globals::class_version())
+    {
         let result =
             vm.invoke_method_inner(globals, IdentId::_EQ, rhs, &[lfp.self_val()], None, None)?;
         return Ok(result.as_bool());
@@ -811,13 +816,10 @@ fn shl_inner(
             self_.extend_from_slice_checked(encoded.as_bytes())?;
         } else {
             let bytes = codepoint_bytes(enc, ch).map_err(|e| match e {
-                CodepointErr::Invalid => MonorubyErr::rangeerr(format!(
-                    "invalid codepoint 0x{ch:X} in {}",
-                    enc.name()
-                )),
-                CodepointErr::OutOfRange => {
-                    MonorubyErr::char_out_of_range(&globals.store, other_v)
+                CodepointErr::Invalid => {
+                    MonorubyErr::rangeerr(format!("invalid codepoint 0x{ch:X} in {}", enc.name()))
                 }
+                CodepointErr::OutOfRange => MonorubyErr::char_out_of_range(&globals.store, other_v),
             })?;
             self_.extend_from_slice_checked(&bytes)?;
         }
@@ -1459,8 +1461,14 @@ fn index_assign(
         // calling `to_str` on the replacement; spec exercises this with a
         // mock that should not receive `to_str` when the match fails.
         let (start, end) = locate_regex_match(vm, &re, &lfp.self_val(), arg1_opt, globals)?;
-        let subst = arg_val.coerce_to_string(vm, globals)?;
-        replace_byte_range(globals, lfp.self_val(), start, end, &subst)?;
+        let subst = replacement_string(vm, globals, arg_val)?;
+        replace_byte_range(
+            globals,
+            lfp.self_val(),
+            start,
+            end,
+            subst.as_rstring_inner(),
+        )?;
         return Ok(arg_val);
     }
 
@@ -1472,24 +1480,43 @@ fn index_assign(
             ));
         }
         let needle = arg0_val.is_str().unwrap().to_string();
-        let subst = arg_val.coerce_to_string(vm, globals)?;
+        let subst = replacement_string(vm, globals, arg_val)?;
         let self_ = lfp.self_val();
         let lhs = self_.expect_str(globals)?;
         let pos = match lhs.find(needle.as_str()) {
             Some(p) => p,
             None => return Err(MonorubyErr::indexerr("string not matched")),
         };
-        replace_byte_range(globals, lfp.self_val(), pos, pos + needle.len(), &subst)?;
+        replace_byte_range(
+            globals,
+            lfp.self_val(),
+            pos,
+            pos + needle.len(),
+            subst.as_rstring_inner(),
+        )?;
         return Ok(arg_val);
     }
 
-    let subst = arg_val.coerce_to_string(vm, globals)?;
+    let subst_val = replacement_string(vm, globals, arg_val)?;
+    let subst_inner = subst_val.as_rstring_inner();
     let self_ = lfp.self_val();
-    // Non-UTF-8 receiver: resolve the character index/range and splice
-    // bytes via the encoding-aware `get_range` (the `&str` path below
-    // would error on EUC-JP / Shift_JIS multibyte content). `subst`
-    // is ASCII or same-encoding (compat checked above).
-    if !self_.as_rstring_inner().encoding().is_utf8_compatible() {
+    // The `&str` path below rebuilds the receiver as a Rust String and
+    // splices a `&str` into it, so it can only serve a receiver and a
+    // replacement that are both really UTF-8. Anything else takes the
+    // byte route, where `get_range` walks the declared encoding and
+    // `bytesplice_with` settles the result's encoding and code range.
+    //
+    // The two sides are judged differently. The receiver keeps its
+    // encoding, and the `&str` path would rebuild it as UTF-8, so an
+    // ASCII-only EUC-JP receiver has to stay on the byte route as much as
+    // a multibyte one: its declared encoding decides. The replacement
+    // only has to survive the trip through a `&str`, which ASCII-only
+    // bytes do whatever their encoding, and which broken UTF-8 does not:
+    // encoding alone cannot say, since ASCII-8BIT is `valid_encoding?`
+    // whatever its bytes while UTF-8 may be broken.
+    let subst_is_utf8 = subst_inner.is_ascii_only()
+        || (subst_inner.encoding().is_utf8_compatible() && subst_inner.is_valid_encoding());
+    if !self_.as_rstring_inner().encoding().is_utf8_compatible() || !subst_is_utf8 {
         let inner = self_.as_rstring_inner();
         let char_len = inner.char_length();
         if let Some(idx) = arg0_val.try_fixnum().or_else(|| {
@@ -1518,7 +1545,7 @@ fn index_assign(
                 1
             };
             let r = inner.get_range(start, len);
-            replace_byte_range(globals, self_, r.start, r.end, &subst)?;
+            replace_byte_range(globals, self_, r.start, r.end, subst_inner)?;
             return Ok(arg_val);
         }
         if let Some(info) = arg0_val.is_range() {
@@ -1553,10 +1580,11 @@ fn index_assign(
                 0
             };
             let r = inner.get_range(start_char, count);
-            replace_byte_range(globals, self_, r.start, r.end, &subst)?;
+            replace_byte_range(globals, self_, r.start, r.end, subst_inner)?;
             return Ok(arg_val);
         }
     }
+    let subst = subst_inner.to_str()?;
     let mut lhs = self_.expect_string(globals)?;
     let len = lhs.chars().count();
     if let Some(arg0) = arg0_val.try_fixnum() {
@@ -1718,11 +1746,32 @@ fn replace_byte_range(
     mut self_val: Value,
     start: usize,
     end: usize,
-    subst: &str,
+    subst: &RStringInner,
 ) -> Result<()> {
-    let repl = RStringInner::from_str_scanned(subst);
     let inner = self_val.as_rstring_inner_mut();
-    inner.bytesplice_with(start, end - start, &repl, &globals.store)
+    inner.bytesplice_with(start, end - start, subst, &globals.store)
+}
+
+/// The replacement of `s[...] = val`, as a Ruby string, so that its bytes
+/// survive: a Rust `String` cannot hold a byte >= 0x80 outside UTF-8, and
+/// `coerce_to_string` renders such a byte as the four characters of the
+/// text `\xFF`, which would then be spliced in literally.
+fn replacement_string(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<Value> {
+    // `is_str` demands valid UTF-8, which is exactly what a binary
+    // replacement is not; `is_rstring_inner` accepts any Ruby string.
+    if val.is_rstring_inner().is_some() {
+        return Ok(val);
+    }
+    // Run `to_str` here rather than leaving it to `coerce_to_string`, so
+    // that a binary string handed back by it keeps its bytes too.
+    if let Some(func_id) = globals.check_method(val, IdentId::TO_STR) {
+        let converted = vm.invoke_func_inner(globals, func_id, val, &[], None, None)?;
+        if converted.is_rstring_inner().is_some() {
+            return Ok(converted);
+        }
+    }
+    // Nothing usable came back: let the usual coercion raise TypeError.
+    Ok(Value::string(val.coerce_to_string(vm, globals)?))
 }
 
 ///
@@ -2564,7 +2613,8 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             return Ok(Value::nil());
         }
         let removed = RStringInner::from_encoding(&self_.as_rstring_inner()[r.clone()], enc);
-        replace_byte_range(globals, self_, r.start, r.end, "")?;
+        let empty = RStringInner::from_str_scanned("");
+        replace_byte_range(globals, self_, r.start, r.end, &empty)?;
         return Ok(Value::string_from_inner(removed));
     }
     let lhs = self_.expect_string(globals)?;
@@ -3104,7 +3154,6 @@ fn replacement_view(
     arg.coerce_to_str(vm, globals)
 }
 
-
 /// Raise `Encoding::CompatibilityError` if `self_val` (the receiver
 /// of `gsub`/`sub`) and `replacement` (the explicit replacement
 /// String) have incompatible encodings. The block-form callers
@@ -3220,7 +3269,14 @@ fn gsub_main(
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
             Some(bh) => {
                 let self_enc = self_val.as_rstring_inner().encoding();
-                RegexpInner::replace_all_block(vm, globals, lfp.arg(0), self_val, bh, Some(self_enc))
+                RegexpInner::replace_all_block(
+                    vm,
+                    globals,
+                    lfp.arg(0),
+                    self_val,
+                    bh,
+                    Some(self_enc),
+                )
             }
         }
     }
@@ -3644,12 +3700,10 @@ fn string_index(
             None => return Ok(Value::nil()),
         };
         let needle = arg_inner.as_bytes().to_vec();
-        return Ok(
-            match substring_char_index(&given, &needle, from, false) {
-                Some(cp) => Value::integer(cp as i64),
-                None => Value::nil(),
-            },
-        );
+        return Ok(match substring_char_index(&given, &needle, from, false) {
+            Some(cp) => Value::integer(cp as i64),
+            None => Value::nil(),
+        });
     }
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
@@ -3744,10 +3798,12 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 "offset {byte_offset} does not land on character boundary"
             )));
         }
-        return Ok(match byte_search_fwd(haystack, needle.as_bytes(), byte_offset) {
-            Some(p) => Value::integer(p as i64),
-            None => Value::nil(),
-        });
+        return Ok(
+            match byte_search_fwd(haystack, needle.as_bytes(), byte_offset) {
+                Some(p) => Value::integer(p as i64),
+                None => Value::nil(),
+            },
+        );
     }
 
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
@@ -3822,10 +3878,12 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 "offset {byte_offset} does not land on character boundary"
             )));
         }
-        return Ok(match byte_search_rev(haystack, needle.as_bytes(), byte_offset) {
-            Some(p) => Value::integer(p as i64),
-            None => Value::nil(),
-        });
+        return Ok(
+            match byte_search_rev(haystack, needle.as_bytes(), byte_offset) {
+                Some(p) => Value::integer(p as i64),
+                None => Value::nil(),
+            },
+        );
     }
 
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
@@ -3878,7 +3936,6 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     })
 }
 
-
 /// Whether `pos` lands on a character boundary of `inner` in its
 /// declared encoding (broken bytes count as single characters, like
 /// CRuby's byte-position checks). `0` and `inner.len()` are always
@@ -3915,7 +3972,9 @@ fn byte_search_rev(haystack: &[u8], needle: &[u8], upto: usize) -> Option<usize>
         return Some(upto.min(haystack.len()));
     }
     let last = haystack.len().checked_sub(needle.len())?;
-    (0..=last.min(upto)).rev().find(|&i| haystack[i..].starts_with(needle))
+    (0..=last.min(upto))
+        .rev()
+        .find(|&i| haystack[i..].starts_with(needle))
 }
 
 /// Coerce a value to a `Regexp` for `byteindex`/`byterindex`. Accepts
@@ -4047,7 +4106,12 @@ fn string_rindex(
                 last_byte_pos = captures.get(0).unwrap().start();
                 if last_byte_pos == byte_pos {
                     if char_pos > max_char_pos {
-                        rindex_set_backref(vm, &re, s, last_char_pos.map(|p| char_to_byte_pos(s, p)))?;
+                        rindex_set_backref(
+                            vm,
+                            &re,
+                            s,
+                            last_char_pos.map(|p| char_to_byte_pos(s, p)),
+                        )?;
                         return Ok(match last_char_pos {
                             Some(pos) => Value::integer(pos as i64),
                             None => Value::nil(),
@@ -4078,7 +4142,6 @@ fn string_rindex(
         None => Value::nil(),
     })
 }
-
 
 /// Final `$~` fix-up for the `rindex`-style forward scans: the loop
 /// probes *past* the match it ends up returning, leaving `$~` as the
@@ -4958,12 +5021,13 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             // Same as the receiver's range above: an out-of-range left
             // boundary is a RangeError naming the range.
             let src_start_i = src_start;
-            let src_start = conv_byte_index_for_splice(src_start_i, str_byte_len).map_err(|_| {
-                MonorubyErr::rangeerr(format!(
-                    "{} out of range",
-                    lfp.arg(str_arg_idx + 1).inspect(&globals.store)
-                ))
-            })?;
+            let src_start =
+                conv_byte_index_for_splice(src_start_i, str_byte_len).map_err(|_| {
+                    MonorubyErr::rangeerr(format!(
+                        "{} out of range",
+                        lfp.arg(str_arg_idx + 1).inspect(&globals.store)
+                    ))
+                })?;
             let src_end_val = if src_end >= 0 {
                 let e = if src_range.exclude_end() {
                     src_end as usize
@@ -7899,10 +7963,9 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     } else {
         Encoding::Utf8
     };
-    Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
-        dumped.as_bytes(),
-        enc,
-    )))
+    Ok(Value::string_from_inner(
+        RStringInner::from_encoding_scanned(dumped.as_bytes(), enc),
+    ))
 }
 
 ///
@@ -9945,6 +10008,66 @@ mod tests {
     }
 
     #[test]
+    fn index_assign_binary_replacement() {
+        // A replacement holding bytes >= 0x80 has to be spliced as bytes.
+        // Routed through a Rust String it arrived as the *text* "\xFF",
+        // four characters, and was spliced in literally.
+        run_tests(&[
+            r#"s = "\x00".b * 8; s[2, 4] = [255, 128, 64, 255].pack("C*"); s.bytes"#,
+            r#"s = "\x00".b * 8; s[0] = 255.chr; s.bytes"#,
+            r#"s = "\x00".b * 8; s[1..3] = [200, 201].pack("C*"); s.bytes"#,
+            r#"s = "\x00".b * 8; s[2, 4] = [1, 2].pack("C*"); s.bytes"#,
+            // A UTF-8 receiver demotes to ASCII-8BIT, as CRuby's does.
+            r#"s = "abcdef"; s[2, 2] = [255, 128].pack("C*"); [s.bytes, s.encoding.to_s]"#,
+            r#"s = "abcdef"; s["cd"] = [255, 128].pack("C*"); s.bytes"#,
+            r#"s = "abcdef"; s[/cd/] = [255, 128].pack("C*"); s.bytes"#,
+        ]);
+    }
+
+    #[test]
+    fn index_assign_encoding_and_code_range() {
+        // The result's encoding and code range are as much part of the
+        // splice as its bytes: `valid_encoding?` and `ascii_only?` read
+        // the code range, `length` counts characters under the encoding,
+        // and the receiver's encoding has to survive a splice that does
+        // not force it to change.
+        run_tests(&[
+            r#"s = "abcdef"; s[2, 2] = [255, 128].pack("C*"); [s.encoding.to_s, s.valid_encoding?, s.ascii_only?, s.length, s.bytes]"#,
+            r#"s = "abcdef"; s[2, 2] = "AB".b; [s.encoding.to_s, s.ascii_only?, s.length, s.bytes]"#,
+            r#"s = "\x00".b * 6; s[2, 2] = "\u3042"; [s.encoding.to_s, s.valid_encoding?, s.length, s.bytes]"#,
+            r#"s = "\x00".b * 6; s[2, 2] = "xy"; [s.encoding.to_s, s.ascii_only?, s.length, s.bytes]"#,
+            r#"s = "abcdef"; s[2, 2] = "\u3042".encode("EUC-JP"); [s.encoding.to_s, s.length, s.bytes]"#,
+            r#"s = "abc".encode("EUC-JP"); s[1] = "z"; [s.encoding.to_s, s.ascii_only?, s.bytes]"#,
+            r#"s = "abc"; s[3] = [255, 128].pack("C*"); [s.encoding.to_s, s.ascii_only?, s.bytes]"#,
+            r#"s = "abcdef"; s[2, 2] = ""; [s.encoding.to_s, s.ascii_only?, s.length, s.bytes]"#,
+            r#"begin; s = "\u3042\u3044".dup; s[1] = [255].pack("C*"); rescue => e; e.class.to_s; end"#,
+        ]);
+    }
+
+    #[test]
+    fn index_assign_to_str_replacement() {
+        // The replacement is taken through `to_str`, and a binary string
+        // handed back by it keeps its bytes just as a direct one does.
+        run_tests(&[
+            r#"class RA; def to_str; [255, 128].pack("C*"); end; end; s = "\x00".b * 6; s[2, 2] = RA.new; s.bytes"#,
+            r#"class RB; def to_str; "XY"; end; end; s = "abcdef"; s[2, 2] = RB.new; [s, s.encoding.to_s]"#,
+            r#"class RC; def to_str; [255, 128].pack("C*"); end; end; s = "abcdef"; s[2, 2] = RC.new; [s.encoding.to_s, s.bytes]"#,
+            // Nothing to convert with still raises, as it did before.
+            r#"begin; s = "abcdef"; s[2, 2] = 42; rescue => e; e.class.to_s; end"#,
+        ]);
+    }
+
+    #[test]
+    fn slice_bang_on_binary_receiver() {
+        // `slice!` shares index_assign's byte-splice path.
+        run_tests(&[
+            r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1, 2); [r.bytes, r.encoding.to_s, s.bytes]"#,
+            r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1); [r.bytes, s.bytes]"#,
+            r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1..2); [r.bytes, s.bytes]"#,
+        ]);
+    }
+
+    #[test]
     fn index_assign_special_int_cases() {
         // CRuby permits `""[0] = "..."` (zero index on an empty
         // string) and `s[length] = "..."` (append at end).
@@ -10361,9 +10484,9 @@ mod tests {
             // pos clamps the maximum match-start position.
             r#""hello".rindex("l", 2)"#,
             r#""hello".rindex("l", 1)"#,
-            r#""hello".rindex("l", 100)"#, // positive clamp
+            r#""hello".rindex("l", 100)"#,    // positive clamp
             r#""hello".rindex("hello", -1)"#, // negative-but-in-range
-            r#""hello".rindex("a", -100)"#, // negative overflow → nil
+            r#""hello".rindex("a", -100)"#,   // negative overflow → nil
             r#""ababab".rindex("ab", 3)"#,
             // string_rindex_string_empty_needle
             // Empty needle returns `pos` (capped at char_len).
@@ -10896,8 +11019,8 @@ mod tests {
             r#""blablabla".byterindex(/\z/)"#,
             r#""blablabla\n".byterindex(/\Z/)"#,
             // string_byterindex_multibyte
-            r#""ありがりがとう".byterindex("が")"#, // 12
-            r#""ありがりがとう".byterindex(/が/)"#, // 12
+            r#""ありがりがとう".byterindex("が")"#,    // 12
+            r#""ありがりがとう".byterindex(/が/)"#,    // 12
             r#""ありがりがとう".byterindex("が", 9)"#, // 6
         ]);
     }
@@ -11274,7 +11397,9 @@ mod tests {
 
     #[test]
     fn string_plus_returns_string() {
-        run_test(r#"class StrPlusSub < String; end; (StrPlusSub.new("a") + "b").instance_of?(String)"#);
+        run_test(
+            r#"class StrPlusSub < String; end; (StrPlusSub.new("a") + "b").instance_of?(String)"#,
+        );
         run_test(r#"("foo" + "bar")"#);
     }
 
