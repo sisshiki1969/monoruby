@@ -1500,17 +1500,23 @@ fn index_assign(
     let subst_val = replacement_string(vm, globals, arg_val)?;
     let subst_inner = subst_val.as_rstring_inner();
     let self_ = lfp.self_val();
-    // Splice bytes when either side needs it: a non-UTF-8 receiver because
-    // the character index/range has to come from the encoding-aware
-    // `get_range` (the `&str` path below would error on EUC-JP /
-    // Shift_JIS multibyte content), and a replacement that is not valid
-    // UTF-8 because no `&str` can carry its bytes. Encoding compatibility
-    // was checked above, and `bytesplice_with` re-checks it.
-    // The replacement is judged from its bytes: `to_str` renders invalid
-    // UTF-8 as escape text rather than failing, so it never reports one.
-    if !self_.as_rstring_inner().encoding().is_utf8_compatible()
-        || std::str::from_utf8(subst_inner.as_bytes()).is_err()
-    {
+    // The `&str` path below rebuilds the receiver as a Rust String and
+    // splices a `&str` into it, so it can only serve a receiver and a
+    // replacement that are both really UTF-8. Anything else takes the
+    // byte route, where `get_range` walks the declared encoding and
+    // `bytesplice_with` settles the result's encoding and code range.
+    //
+    // The two sides are judged differently. The receiver keeps its
+    // encoding, and the `&str` path would rebuild it as UTF-8, so an
+    // ASCII-only EUC-JP receiver has to stay on the byte route as much as
+    // a multibyte one: its declared encoding decides. The replacement
+    // only has to survive the trip through a `&str`, which ASCII-only
+    // bytes do whatever their encoding, and which broken UTF-8 does not:
+    // encoding alone cannot say, since ASCII-8BIT is `valid_encoding?`
+    // whatever its bytes while UTF-8 may be broken.
+    let subst_is_utf8 = subst_inner.is_ascii_only()
+        || (subst_inner.encoding().is_utf8_compatible() && subst_inner.is_valid_encoding());
+    if !self_.as_rstring_inner().encoding().is_utf8_compatible() || !subst_is_utf8 {
         let inner = self_.as_rstring_inner();
         let char_len = inner.char_length();
         if let Some(idx) = arg0_val.try_fixnum().or_else(|| {
@@ -10006,6 +10012,26 @@ mod tests {
             r#"s = "abcdef"; s[2, 2] = [255, 128].pack("C*"); [s.bytes, s.encoding.to_s]"#,
             r#"s = "abcdef"; s["cd"] = [255, 128].pack("C*"); s.bytes"#,
             r#"s = "abcdef"; s[/cd/] = [255, 128].pack("C*"); s.bytes"#,
+        ]);
+    }
+
+    #[test]
+    fn index_assign_encoding_and_code_range() {
+        // The result's encoding and code range are as much part of the
+        // splice as its bytes: `valid_encoding?` and `ascii_only?` read
+        // the code range, `length` counts characters under the encoding,
+        // and the receiver's encoding has to survive a splice that does
+        // not force it to change.
+        run_tests(&[
+            r#"s = "abcdef"; s[2, 2] = [255, 128].pack("C*"); [s.encoding.to_s, s.valid_encoding?, s.ascii_only?, s.length, s.bytes]"#,
+            r#"s = "abcdef"; s[2, 2] = "AB".b; [s.encoding.to_s, s.ascii_only?, s.length, s.bytes]"#,
+            r#"s = "\x00".b * 6; s[2, 2] = "\u3042"; [s.encoding.to_s, s.valid_encoding?, s.length, s.bytes]"#,
+            r#"s = "\x00".b * 6; s[2, 2] = "xy"; [s.encoding.to_s, s.ascii_only?, s.length, s.bytes]"#,
+            r#"s = "abcdef"; s[2, 2] = "\u3042".encode("EUC-JP"); [s.encoding.to_s, s.length, s.bytes]"#,
+            r#"s = "abc".encode("EUC-JP"); s[1] = "z"; [s.encoding.to_s, s.ascii_only?, s.bytes]"#,
+            r#"s = "abc"; s[3] = [255, 128].pack("C*"); [s.encoding.to_s, s.ascii_only?, s.bytes]"#,
+            r#"s = "abcdef"; s[2, 2] = ""; [s.encoding.to_s, s.ascii_only?, s.length, s.bytes]"#,
+            r#"begin; s = "\u3042\u3044".dup; s[1] = [255].pack("C*"); rescue => e; e.class.to_s; end"#,
         ]);
     }
 
