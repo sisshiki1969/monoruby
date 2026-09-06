@@ -13,7 +13,7 @@ fn run_both(script: &str) {
         .args(["--disable=gems", "-e", script])
         .output()
         .unwrap();
-    let ruby = Command::new("ruby")
+    let ruby = Command::new(monoruby::tests::ruby_path())
         // Match the main harness: skip rubygems boot and ambient RUBYOPT.
         .args(["--disable=gems,rubyopt", "-e", script])
         .output()

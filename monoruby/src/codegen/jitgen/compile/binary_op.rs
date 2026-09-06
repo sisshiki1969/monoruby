@@ -222,6 +222,11 @@ impl<'a> JitContext<'a> {
         rhs_class: Option<ClassId>,
         bc_pos: BcIndex,
         mode: BinaryInlineMode,
+        // `Some`: the receiver guard exits through a counter-gated,
+        // POLY-byte-checked recompile of *target* instead of a plain deopt
+        // (see `compile_binary` step 4). `None` inside a dispatch arm, where
+        // the state already knows the class and no guard is emitted at all.
+        heal: Option<RecompileTarget>,
     ) -> Option<BinaryInlineOutcome> {
         let (fid, _visibility) = self.jit_check_method(lhs_class, op)?;
         let inline = self.store.inline_info.get_inline(fid)?;
@@ -246,7 +251,7 @@ impl<'a> JitContext<'a> {
         // that declines after the guard was emitted must leave no trace.
         let state_save = state.clone();
         let ir_save = ir.save();
-        state.guard_recv_class(ir, lhs, lhs_class);
+        state.guard_recv_class(ir, lhs, lhs_class, heal);
         let outcome = match self.store.inline_info.get_inline(fid).unwrap() {
             InlineFuncInfo::InlineGenBinary(f) => {
                 self.inline_asm_binary(state, ir, f, callid, lhs_class, rhs_class, mode)
@@ -336,32 +341,13 @@ impl<'a> JitContext<'a> {
     /// caller keeps the ordinary (guarded, deopting) path.
     ///
     fn dispatch_inline_class(&mut self, callid: CallSiteId, op: IdentId) -> Option<ClassId> {
-        let pmc = &self.store[callid].pmc;
-        // Two-arm dispatch only pays off where the site really alternates;
-        // one observed class is the monomorphic guard's case.
-        if pmc.entries().len() < 2 {
+        if !self.pmc_really_alternates(callid) {
             return None;
         }
-        let observations = pmc.observations();
+        let pmc = &self.store[callid].pmc;
         let mut classes: Vec<(ClassId, u32)> =
             pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
-        // The POLY bit only says the site was *ever* seen with a second
-        // class; it never clears. A site that is one hot class plus a
-        // handful of stragglers is monomorphic in every way that matters,
-        // and dispatching it is a pure loss — the hot class pays an extra
-        // branch on every execution and, worse, gives up its result's type
-        // at the merge, where a register-resident flag becomes a boxed
-        // stack slot. So require the runner-up to be a real share of the
-        // traffic, the same 1/8 the class-set guard demands of its members.
-        // (etanni measured ~2% slower before this test existed.)
-        if classes[1]
-            .1
-            .saturating_mul(PMC_SET_SHARE_DIVISOR)
-            < observations
-        {
-            return None;
-        }
         classes.into_iter().map(|(class, _)| class).find(|&class| {
             matches!(
                 self.jit_check_method(class, op)
@@ -373,6 +359,30 @@ impl<'a> JitContext<'a> {
             // it through the recorded bop dependency.
             && self.basic_op_assumable(class, op)
         })
+    }
+
+    ///
+    /// Does the PMC show this site's *receiver* genuinely alternating
+    /// between classes?
+    ///
+    /// The POLY bit only says the site was *ever* seen with a second
+    /// class; it never clears. A site that is one hot class plus a
+    /// handful of stragglers is monomorphic in every way that matters,
+    /// and treating it polymorphically is a pure loss — the hot class
+    /// pays an extra branch (or the generic call) on every execution. So
+    /// require the runner-up to be a real share of the traffic, the same
+    /// 1/8 the class-set guard demands of its members. (etanni measured
+    /// ~2% slower before this test existed on the two-arm dispatch.)
+    ///
+    fn pmc_really_alternates(&self, callid: CallSiteId) -> bool {
+        let pmc = &self.store[callid].pmc;
+        if pmc.entries().len() < 2 {
+            return false;
+        }
+        let observations = pmc.observations();
+        let mut counts: Vec<u32> = pmc.entries().iter().map(|e| e.count).collect();
+        counts.sort_unstable_by_key(|count| std::cmp::Reverse(*count));
+        counts[1].saturating_mul(PMC_SET_SHARE_DIVISOR) >= observations
     }
 
     ///
@@ -522,6 +532,7 @@ impl<'a> JitContext<'a> {
                 rhs_class,
                 bc_pos,
                 BinaryInlineMode::Value,
+                None,
             ),
             Some(BinaryInlineOutcome::Done)
         ) {
@@ -771,6 +782,28 @@ impl<'a> JitContext<'a> {
             }
         }
 
+        // ---- 3c. A *fused* comparison (`BinCmpBr`) at a site the VM marked
+        // polymorphic and whose receiver genuinely alternates: take the
+        // polymorphic residual (step 5) instead of the mono inline below.
+        // The two-arm dispatch (step 2) cannot serve the fused form — the
+        // arms would have to materialize the very flag the fusion exists to
+        // avoid — so these sites used to fall through to the single-class
+        // guard and side-exit on every off-class operand, forever (dewasm
+        // DOOM: thousands of `Integer == nil` exits per tick, the "~24
+        // fused side exits" note on step 2 notwithstanding). The residual
+        // is guard-free, and for `==`/`!=` it is `opt_eq_cmp`'s inline
+        // bit-equality fast path, which answers an immediate-vs-immediate
+        // compare — the `nil` operand included — without the C call. The
+        // 1/8-share gate keeps the hot-class fast path for one-hot-class
+        // sites, exactly as it does for the two-arm dispatch.
+        let fused_poly_residual = polymorphic
+            && case_semantics
+            && state.class(lhs).is_none()
+            && self
+                .store
+                .get_callsite_id(self.iseq_id(), bc_pos)
+                .is_some_and(|callid| self.pmc_really_alternates(callid));
+
         // ---- 4. One path for every operator: guard the receiver, run the
         // generator registered on `lhs_class#op`, and fall back for whatever
         // it declines. The generator picks its emission from the argument
@@ -790,33 +823,57 @@ impl<'a> JitContext<'a> {
         // return via the eviction walk's return-address patching (see
         // `emit_call`). A `def` executed *inside* JIT code is caught by the
         // `check_bop` after `MethodDef`/`SingletonMethodDef`.
-        match self.fire_binary_inline(
-            state,
-            ir,
-            binop.into(),
-            lhs,
-            rhs,
-            lhs_class,
-            rhs_class,
-            bc_pos,
-            mode,
-        ) {
-            Some(BinaryInlineOutcome::Done) => {
-                // ④-b: the Integer/Float inline lowerings are pure
-                // arithmetic — overflow promotes via a Rust helper, guards
-                // and errors exit the trace, nothing dispatches Ruby code —
-                // so the unfrozen-slot proofs survive them. Other classes'
-                // inline generators are not audited for that; drop the
-                // proofs there.
-                if (lhs_class == INTEGER_CLASS || lhs_class == FLOAT_CLASS)
-                    && (rhs_class == Some(INTEGER_CLASS) || rhs_class == Some(FLOAT_CLASS))
-                {
-                    self.restore_unfrozen(dst);
+        if !fused_poly_residual {
+            // A site still monomorphic in the VM's eyes gets the plain
+            // single-class guard — but that guard must not deopt forever
+            // once the program *does* start feeding it a second class
+            // (compile-before-variance is pure timing: the DOOM shape is a
+            // fused `prev == key` whose `prev` starts feeding `nil` only
+            // after the site compiled). Hand the guard a counter-gated
+            // recompiling exit instead: after a few misses the site
+            // recompiles and, now marked polymorphic, takes the dispatch /
+            // residual treatment above. The exit only actually recompiles
+            // once the VM has stamped the site's POLY byte (see the
+            // `BecamePolymorphic` gate in the side-exit lowering), so a
+            // representation-only miss — a BigInt failing the fixnum tag
+            // test, class `Integer` all the same, which never sets POLY —
+            // can never recompile-livelock (the activerecord
+            // `out_of_range?` storm shape). At a site already compiled
+            // polymorphic, reaching here means the polymorphic treatments
+            // were tried at *this* compile and declined; a recompile would
+            // reproduce this very body, so the guard deopts plainly.
+            let heal = (!polymorphic)
+                .then(|| self.recv_miss_recompile_target())
+                .flatten();
+            match self.fire_binary_inline(
+                state,
+                ir,
+                binop.into(),
+                lhs,
+                rhs,
+                lhs_class,
+                rhs_class,
+                bc_pos,
+                mode,
+                heal,
+            ) {
+                Some(BinaryInlineOutcome::Done) => {
+                    // ④-b: the Integer/Float inline lowerings are pure
+                    // arithmetic — overflow promotes via a Rust helper, guards
+                    // and errors exit the trace, nothing dispatches Ruby code —
+                    // so the unfrozen-slot proofs survive them. Other classes'
+                    // inline generators are not audited for that; drop the
+                    // proofs there.
+                    if (lhs_class == INTEGER_CLASS || lhs_class == FLOAT_CLASS)
+                        && (rhs_class == Some(INTEGER_CLASS) || rhs_class == Some(FLOAT_CLASS))
+                    {
+                        self.restore_unfrozen(dst);
+                    }
+                    return Ok(BinaryLowering::Emitted);
                 }
-                return Ok(BinaryLowering::Emitted);
+                Some(BinaryInlineOutcome::Folded(b)) => return Ok(BinaryLowering::Folded(b)),
+                Some(BinaryInlineOutcome::Declined) | None => {}
             }
-            Some(BinaryInlineOutcome::Folded(b)) => return Ok(BinaryLowering::Folded(b)),
-            Some(BinaryInlineOutcome::Declined) | None => {}
         }
 
         // ---- 5. The residual.
@@ -1353,6 +1410,111 @@ mod tests {
             res = []
             600.times { |n| res << probe(t, n % 5, (n + 1) % 5) }
             [res.tally.sort_by { |k, _| k.to_s }, probe(t, 4, 0), probe(t, 1, 4)]
+            "#,
+        );
+    }
+
+    /// A *fused* comparison (`if a == b`) at a genuinely alternating
+    /// nil/Integer site. The two-arm dispatch cannot serve the fused form,
+    /// so `compile_binary` step 3c routes it to the guard-free generic
+    /// residual (`opt_eq_cmp`'s bit-equality fast path) instead of the
+    /// single-class guard that used to side-exit on every nil (the dewasm
+    /// DOOM `prev == key` shape). Every operand mix must answer exactly as
+    /// the interpreter does.
+    #[test]
+    fn fused_cmp_poly_residual() {
+        run_test(
+            r#"
+            def probe(prev, key)
+              if prev == key
+                :hit
+              else
+                :miss
+              end
+            end
+            res = []
+            300.times { |n| res << probe(n % 3 == 0 ? nil : n, 7) }
+            [res.tally.sort_by { |k, _| k.to_s },
+             probe(nil, nil), probe(nil, 7), probe(7, 7), probe(7.0, 7), probe(1 << 70, 7)]
+            "#,
+        );
+    }
+
+    /// The compile-before-variance half of the same story: the site compiles
+    /// while still monomorphic (plain fused Integer compare, class guard),
+    /// and only *then* starts seeing nil. The guard's `BecamePolymorphic`
+    /// recompiling exit must flip the body to the polymorphic residual after
+    /// a few misses — and, healed or not, every answer must match the
+    /// interpreter through the transition.
+    #[test]
+    fn fused_cmp_mono_heals_to_poly() {
+        run_test(
+            r#"
+            def probe(prev, key)
+              if prev == key
+                :hit
+              else
+                :miss
+              end
+            end
+            res = []
+            300.times { |n| res << probe(n, 7) }
+            300.times { |n| res << probe(n % 3 == 0 ? nil : n, 7) }
+            res.tally.sort_by { |k, _| k.to_s }
+            "#,
+        );
+    }
+
+    /// A representation-only miss must NOT heal: the guard is the fixnum tag
+    /// test, a Bignum carries `Integer` all the same, and the VM never marks
+    /// the site polymorphic — so the `BecamePolymorphic` exit's POLY-byte
+    /// gate keeps it on the plain deopt (no recompile-per-N-misses storm; the
+    /// activerecord `out_of_range?` shape). Pins the semantics either way.
+    #[test]
+    fn mono_cmp_bigint_misses_stay_plain() {
+        run_test(
+            r#"
+            def probe(a, b)
+              if a < b
+                :lt
+              else
+                :ge
+              end
+            end
+            res = []
+            300.times { |n| res << probe(n, 100) }
+            big = 1 << 62
+            300.times { |n| res << probe(big + n, 100) }
+            res.tally.sort_by { |k, _| k.to_s }
+            "#,
+        );
+    }
+
+    /// The polymorphic residual's `==` fast path answers bit equality for
+    /// `nil` under the basic-op licence, so a `NilClass#==` redefinition must
+    /// evict it and the site must dispatch the redefined method from then on
+    /// — same contract the guard-free inline generators honor.
+    #[test]
+    fn poly_cmp_respects_nil_eq_redefinition() {
+        // `run_test_once`: the 25× rerun harness would carry the NilClass
+        // redefinition into the warmup of every later iteration. Test-mode
+        // JIT thresholds make the in-script loops warm enough on their own.
+        run_test_once(
+            r#"
+            def probe(prev, key)
+              if prev == key
+                :hit
+              else
+                :miss
+              end
+            end
+            res = []
+            300.times { |n| res << probe(n % 3 == 0 ? nil : n, 7) }
+            class NilClass
+              def ==(other) = true
+            end
+            60.times { |n| res << probe(n % 3 == 0 ? nil : n, 7) }
+            res.tally.sort_by { |k, _| k.to_s }
             "#,
         );
     }

@@ -1808,6 +1808,23 @@ impl Codegen {
                     let deopt_body = self.jit.label();
                     let error_body = self.jit.label();
                     self.jit.bind_label(entry);
+                    // `BecamePolymorphic` is checked, not assumed: recompile
+                    // only once the VM has actually stamped the site's POLY
+                    // byte (`opcode_sub`, set by the interpreter on an
+                    // operand/receiver *class* change). A representation-only
+                    // miss — a BigInt failing an `Integer` guard's fixnum tag
+                    // test — never moves the byte, so the gate keeps such a
+                    // site on the plain deopt instead of recompiling against
+                    // an unchanged profile every N misses. Mirrors the x86
+                    // gate in `side_exit_with_label`.
+                    if reason == RecompileReason::BecamePolymorphic {
+                        let poly_byte = pc.as_ptr() as u64 + 7;
+                        monoasm_arm64!(&mut self.jit,
+                            mov x9, (poly_byte);
+                            ldrb w9, [x9];
+                            cbz w9, deopt_body;
+                        );
+                    }
                     self.emit_recompile_deopt(target, &deopt_body, Some(&error_body), reason);
                     self.a64_gen_deopt(pc, &wb, deopt_body, loop_jit_spill_bytes, base, chain);
                     self.a64_gen_handle_error(pc, &wb, error_body, loop_jit_spill_bytes, base, chain);

@@ -3235,7 +3235,7 @@ fn toplevel_return_argument_warns() {
     let mut f = std::fs::File::create(&script).unwrap();
     writeln!(f, "return 10 if false\nreturn 10\nputs :unreachable").unwrap();
     drop(f);
-    for bin in ["ruby", env!("CARGO_BIN_EXE_monoruby")] {
+    for bin in [ruby_path(), env!("CARGO_BIN_EXE_monoruby")] {
         let out = std::process::Command::new(bin)
             // The script needs no gem, and both interpreters take the
             // flag — skipping the rubygems boot is most of a spawn's
