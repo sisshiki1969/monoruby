@@ -451,7 +451,11 @@ impl<'a> JitContext<'a> {
             if inlined_block {
                 state.locals_unbox_to_S_keeping_claims(ir);
             } else {
-                state.all_frames_unbox_to_S(self, ir);
+                // The literal block handed out here is homed in the
+                // current frame: it can reach that frame and its lexical
+                // ancestors, and nothing else in the chain.
+                let home = state.innermost_level();
+                state.unbox_to_S_for_outgoing_block(self, ir, Some(home));
             }
         }
 

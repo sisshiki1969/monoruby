@@ -219,7 +219,7 @@ impl AbstractState {
     /// Nothing is reported to the context here. A bridge relocates or
     /// materialises a value; it never *changes* one, so it has nothing to
     /// tell the frame that owns the slot. Only a store the compiler cannot
-    /// see behind does — `store_dynvar` and `all_frames_unbox_to_S`.
+    /// see behind does — `store_dynvar` and `unbox_to_S_for_outgoing_block`.
     ///
     pub(super) fn gen_bridge_all(
         mut self,
@@ -272,24 +272,56 @@ impl AbstractState {
     }
 
     ///
-    /// The same over *every* frame of this compilation, keeping no
-    /// constant.
+    /// The same over the frames an outgoing block can actually reach:
+    /// its home frame (chain position `home_level`) and the home's
+    /// *lexical* ancestors, keeping no constant there.
     ///
     /// What a call that hands a block to a callee outside this unit needs.
     /// The block is compiled on its own, so its stores never reach
-    /// `store_dynvar`'s hook — and it can reach not only this frame but,
-    /// through its own outer chain, every frame further out.
+    /// `store_dynvar`'s hook — but the frames those stores (and reads)
+    /// can land in are exactly the block's own outer chain, which is the
+    /// home's lexical chain, not the whole state chain. A suspended
+    /// *method* caller outside that chain keeps its views and claims —
+    /// the same reachability argument `unbox_to_S_at` already makes for
+    /// the pool-`F` binding, and the blanket walk's demotion of those
+    /// frames was pure pessimization (the same lesson
+    /// `unset_lexical_no_capture_guard` records for the invariants).
+    ///
+    /// `home_level == None` means the block's home lies outside this
+    /// unit (the root's own block argument reaching a generic `yield`):
+    /// no in-chain frame is reachable, so only the adoption barrier is
+    /// raised — mirroring what an explicit `&blk` hand-off has always
+    /// done (`compile_method_call`'s entry).
     ///
     #[allow(non_snake_case)]
-    pub(super) fn all_frames_unbox_to_S(&mut self, jitctx: &mut JitContext, ir: &mut AsmIr) {
+    pub(super) fn unbox_to_S_for_outgoing_block(
+        &mut self,
+        jitctx: &mut JitContext,
+        ir: &mut AsmIr,
+        home_level: Option<usize>,
+    ) {
         // Stage-C loop adoption: a block leaves the unit here — its
         // runtime stores bypass every compile-time widen hook, and its
         // lexical chain can reach frames this state chain does not
         // (a forwarded block's home). No outer view adopts across this.
         jitctx.set_outer_claim_barrier();
+        let Some(home_level) = home_level else {
+            return;
+        };
         let depth = self.frames.len();
+        // The home chain: `home_level` and its lexical ancestors — the
+        // same walk as `unset_lexical_no_capture_guard`.
+        let mut levels = vec![];
+        let mut level = home_level;
+        loop {
+            levels.push(level);
+            match self.frames[level].lexical_outer() {
+                Some(o) if level >= o && o > 0 => level -= o,
+                _ => break,
+            }
+        }
         let mut widened = vec![];
-        for level in (0..depth).rev() {
+        for level in levels {
             let outer = depth - 1 - level;
             for i in self.frames[level].locals() {
                 match self.frames[level].unbox_to_S_at(ir, i, outer) {
@@ -323,6 +355,11 @@ impl AbstractState {
         for (pos, slot) in widened {
             jitctx.widen_outer_at_pos(pos, slot);
         }
+    }
+
+    /// Chain position of the innermost (current) frame.
+    pub(super) fn innermost_level(&self) -> usize {
+        self.frames.len() - 1
     }
 
     pub(super) fn equiv(&self, other: &Self) -> bool {
