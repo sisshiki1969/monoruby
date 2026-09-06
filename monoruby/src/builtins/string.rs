@@ -1762,6 +1762,15 @@ fn replacement_string(vm: &mut Executor, globals: &mut Globals, val: Value) -> R
     if val.is_rstring_inner().is_some() {
         return Ok(val);
     }
+    // Run `to_str` here rather than leaving it to `coerce_to_string`, so
+    // that a binary string handed back by it keeps its bytes too.
+    if let Some(func_id) = globals.check_method(val, IdentId::TO_STR) {
+        let converted = vm.invoke_func_inner(globals, func_id, val, &[], None, None)?;
+        if converted.is_rstring_inner().is_some() {
+            return Ok(converted);
+        }
+    }
+    // Nothing usable came back: let the usual coercion raise TypeError.
     Ok(Value::string(val.coerce_to_string(vm, globals)?))
 }
 
@@ -10032,6 +10041,29 @@ mod tests {
             r#"s = "abc"; s[3] = [255, 128].pack("C*"); [s.encoding.to_s, s.ascii_only?, s.bytes]"#,
             r#"s = "abcdef"; s[2, 2] = ""; [s.encoding.to_s, s.ascii_only?, s.length, s.bytes]"#,
             r#"begin; s = "\u3042\u3044".dup; s[1] = [255].pack("C*"); rescue => e; e.class.to_s; end"#,
+        ]);
+    }
+
+    #[test]
+    fn index_assign_to_str_replacement() {
+        // The replacement is taken through `to_str`, and a binary string
+        // handed back by it keeps its bytes just as a direct one does.
+        run_tests(&[
+            r#"class RA; def to_str; [255, 128].pack("C*"); end; end; s = "\x00".b * 6; s[2, 2] = RA.new; s.bytes"#,
+            r#"class RB; def to_str; "XY"; end; end; s = "abcdef"; s[2, 2] = RB.new; [s, s.encoding.to_s]"#,
+            r#"class RC; def to_str; [255, 128].pack("C*"); end; end; s = "abcdef"; s[2, 2] = RC.new; [s.encoding.to_s, s.bytes]"#,
+            // Nothing to convert with still raises, as it did before.
+            r#"begin; s = "abcdef"; s[2, 2] = 42; rescue => e; e.class.to_s; end"#,
+        ]);
+    }
+
+    #[test]
+    fn slice_bang_on_binary_receiver() {
+        // `slice!` shares index_assign's byte-splice path.
+        run_tests(&[
+            r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1, 2); [r.bytes, r.encoding.to_s, s.bytes]"#,
+            r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1); [r.bytes, s.bytes]"#,
+            r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1..2); [r.bytes, s.bytes]"#,
         ]);
     }
 
