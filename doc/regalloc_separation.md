@@ -3131,3 +3131,55 @@ other benchmarks are flat. Tests: `tests/copy_propagation.rs` (in-place ops on
 a shared register, `Mul`/`Div` clobbering a shared operand, overflow and type
 deopts with copies outstanding, calls/allocations, loops, non-fixnum values,
 the `splitmix32` shape) and the `gp_alloc` unit tests.
+
+## 46. `place`/`ty` folded back into one `Vec<Slot>` (the scaffolding is retired)
+
+Steps 0b–0c split `SlotState.slots: Vec<LinkMode>` into `place: Vec<Placement>`
++ `ty: Vec<Guarded>` so a standalone analysis pass could consume the type
+vector alone. That pass never materialised in the shape the split assumed: the
+attempts to run allocation apart from the fixpoint (§13.8, §16.6, §26.3,
+§31.2) all lost to the greedy backedge placement, and the durable results are
+the seams that were *kept* (`decide_join`/`apply_join`, `alloc_policy`, the
+transfer records, the `keep_backedge_floats` mechanism/policy split) — none of
+which reads `place` or `ty` separately. After §44 the only consumer of the
+split was `join_ty`, called from the debug-only `verify_join_replay`; the
+`Placement` enum had no consumer at all. Meanwhile every `mode()` recomposed
+the pair through `from_parts` and every `set_mode()` decomposed it, with the
+sentinels (`None` / `MaybeNone` / `V`) needing a "no type" special case on
+both sides.
+
+So the split is undone: `LinkMode` is stored directly again, `Placement` /
+`placement()` / `from_parts()` and the round-trip test are gone, and `join_ty`
+is computed from the stored modes (sentinels read as ⊤, as the stored `ty`
+did) for the assertion that still uses it. The type-meet separability
+invariant (§12 stage 2) is unchanged — it is a property of `LinkMode::guarded`
+and `Guarded::join`, not of how the pair is stored.
+
+At the same time the per-slot vectors that had accumulated beside `place`/`ty`
+— `liveness`, `dynvar_src`, `subtree_float_read`, `dynvar_alias` — became one
+`Vec<Slot>` record, so a per-slot fact is added, cleared (`clear` / `discard`)
+and merged (`join_subtree_read_meta`) in one place; and `deferred_forward`,
+which is fixed for the compile unit, moved from the per-path `SlotState` to
+`AbstractFrame` next to `invariants`. Verified byte-identical: `emit-asm` dumps
+of `app_fib`, `so_mandelbrot`, `so_nbody`, `binarytrees`, `quick_sort`, `bf`,
+`tarai`, `loop_whileloop` are identical to master modulo the compile-time
+lines; `app_aobench` differs at one site that master itself emits differently
+from run to run (a pre-existing nondeterminism, not this change).
+
+What was *not* folded, and why:
+
+- `pending_outer_float_reads` (the stage-A report queue). The natural
+  replacement — marking the owner frame directly at the raw-f64 consumption —
+  needs the chain, and the consumption sites (`load_fpr_state` and the float
+  binop helpers) are `AbstractFrame` methods that only see their own frame. A
+  per-slot "pending" bit instead of the queue loses the report when the slot is
+  redefined in the same instruction (`a = a * 2.0` consumes `a` and then
+  discards it before the next boundary). The queue is the honest
+  representation of "events for a frame this frame cannot see".
+- `FprAllocator`'s reverse map (`vfpr`). It is derivable from the slot modes,
+  and deriving it would remove the `fpr_add` / `fpr_remove` / `swap` bookkeeping
+  and the desync class the `alloc_fpr` aliasing regression belonged to. But the
+  map's per-register slot order is the binding order, and the deopt write-back
+  (`wb_fpr`) emits stores in that order — a derived map would emit them in slot
+  order, so the change is semantics-preserving but not byte-identical. Left for
+  its own change with its own gate.

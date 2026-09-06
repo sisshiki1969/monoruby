@@ -1,5 +1,4 @@
 use super::*;
-use crate::codegen::jitgen::context::DeferredForward;
 
 ///
 /// §5 stage 3c-i — the register-allocation **policy** seam.
@@ -255,23 +254,17 @@ impl FprAllocator {
 
 #[derive(Clone, Default)]
 pub(crate) struct SlotState {
-    /// Per-slot location / representation (the `LinkMode` split into its two
-    /// halves; item ②). Paired index-for-index with `ty`.
-    place: Vec<Placement>,
-    /// Per-slot abstract type (the class lattice). The `Sf` refinement is
-    /// recovered from this via `LinkMode::from_parts`. Paired with `place`.
-    ty: Vec<Guarded>,
-    /// Liveness information.
-    liveness: Vec<IsUsed>,
-    /// fpr-register allocation state (item ②, step 1).
+    /// One record per slot: placement + type (`LinkMode`), liveness, and
+    /// the outer-float provenance hints. Every per-slot fact is added,
+    /// cleared and merged through this one record.
+    slots: Vec<Slot>,
+    /// fpr-register allocation state.
     fpr_alloc: FprAllocator,
     /// Per-basic-block local GP register file (the local GP allocator). Empty (and
     /// flushed) at every block boundary, so it never carries state across a
     /// merge despite living in the cloned `SlotState`.
     pub(in crate::codegen::jitgen) gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile,
     local_num: usize,
-    /// D1/K1 forwarding deferral (transient annotation; see the consumers).
-    deferred_forward: Option<DeferredForward>,
     /// §27.3 Stage-2a: the loop-carried float set `L` for the enclosing loop —
     /// slots that are `F`/`Sf` at the loop back-edge (so they round-trip the
     /// loop). Populated at the loop-entry merge from the fixpoint's back-edge
@@ -281,35 +274,49 @@ pub(crate) struct SlotState {
     /// loop-carried `Sf` resident; empty (no effect) on the default path.
     #[cfg_attr(not(feature = "phys-loop-aware"), allow(dead_code))]
     loop_carried: std::collections::HashSet<SlotId>,
-    /// Stage-A use propagation: per-slot provenance — the slot's current
-    /// value came from a `LoadDynVar` of the frame `outer` levels out,
-    /// slot `src`. Recorded by the `LoadDynVar` lowering, cleared on
-    /// redefinition ([`Self::discard`]); a mode transition that keeps the
-    /// value (write-back, unguarded demotion) keeps it. Consulted when the
-    /// slot is consumed as a raw f64 ([`Self::use_as_float`]), which
-    /// queues the pair on `pending_outer_float_reads`. A correctness-
-    /// neutral hint: it only feeds the loop-entry float-adoption policy.
-    dynvar_src: Vec<Option<(u16, SlotId)>>,
     /// Float-consumed dynvar reads not yet reported to the `JitContext`
     /// (the frame itself cannot reach the outer frames' parked states).
     /// Drained at the next `compile_instruction` boundary into
     /// `JitContext::mark_outer_float_read`.
     pending_outer_float_reads: Vec<(u16, SlotId)>,
+}
+
+///
+/// One slot of an abstract frame.
+///
+#[derive(Clone, Default)]
+struct Slot {
+    /// Where the live copies of the value are, and what is known about
+    /// its type.
+    mode: LinkMode,
+    /// Liveness (use / kill) information.
+    used: IsUsed,
+    /// Stage-A use propagation: provenance — the slot's current value
+    /// came from a `LoadDynVar` of the frame `outer` levels out, slot
+    /// `src`. Recorded by the `LoadDynVar` lowering, cleared on
+    /// redefinition ([`SlotState::discard`]); a mode transition that
+    /// keeps the value (write-back, unguarded demotion) keeps it.
+    /// Consulted when the slot is consumed as a raw f64
+    /// ([`SlotState::use_as_float`]), which queues the pair on
+    /// `pending_outer_float_reads`. A correctness-neutral hint: it only
+    /// feeds the loop-entry float-adoption policy.
+    dynvar_src: Option<(u16, SlotId)>,
     /// Stage-A use propagation, the owner-side landing spot: an inlined
     /// callee read this slot through the frame chain and consumed it as a
     /// raw f64. Deliberately *not* folded into `IsUsed` — the type/kill
     /// lattice drives the long-tuned owner-side float policies, and this
     /// signal feeds only the loop-entry `Sf` adoption
     /// (`Liveness::subtree_float_reads`).
-    subtree_float_read: Vec<bool>,
+    subtree_float_read: bool,
     /// Stage-B home-aliased reads: for a slot holding a bare-`F` home read
     /// of an outer float, the recipe for loading the *boxed* twin straight
     /// from the owner's slot (which still holds the value the home read
     /// took) instead of re-boxing the fpr. Valid only while nothing can
     /// have rewritten the owner's slot: killed at every store through the
     /// frame chain and at every call boundary (`clear_dynvar_aliases`),
-    /// and dropped with the binding on any mode transition ([`Self::clear`]).
-    dynvar_alias: Vec<Option<DynVarAliasLoad>>,
+    /// and dropped with the binding on any mode transition
+    /// ([`SlotState::clear`]).
+    dynvar_alias: Option<DynVarAliasLoad>,
 }
 
 ///
@@ -341,23 +348,17 @@ impl SlotState {
         let total_reg_num = cc.total_reg_num();
         let local_num = cc.local_num();
         let self_class = Guarded::from_class(cc.self_class());
-        let default_ty = match default {
-            LinkMode::None | LinkMode::MaybeNone | LinkMode::V => Guarded::Value,
-            o => o.guarded(),
+        let slot = Slot {
+            mode: default,
+            ..Slot::default()
         };
         let mut ctx = SlotState {
-            place: vec![default.placement(); total_reg_num],
-            ty: vec![default_ty; total_reg_num],
-            liveness: vec![IsUsed::default(); total_reg_num],
+            slots: vec![slot; total_reg_num],
             fpr_alloc: FprAllocator::new(),
             gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile::new(),
             local_num,
-            deferred_forward: None,
             loop_carried: std::collections::HashSet::new(),
-            dynvar_src: vec![None; total_reg_num],
             pending_outer_float_reads: vec![],
-            subtree_float_read: vec![false; total_reg_num],
-            dynvar_alias: vec![None; total_reg_num],
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -403,39 +404,30 @@ impl SlotState {
                 ctx.set_MaybeNone(kw + i);
             }
         }
-        // D1: tentatively annotate the forwarding-trampoline rest slot.
-        // The slot's `LinkMode` is left at its baseline (`S`): when the
-        // deferral activates the caller-side `set_arguments` physically
-        // stores a real `nil` there (GC-safe) and the consumer routes
-        // from the caller source; deopts rebuild the array via
-        // `forward_rest`. When it does *not* activate the caller builds
-        // the array normally and the (still-`S`) slot holds it — no
-        // spurious `C(nil)` write-back can clobber that array. The
-        // annotation only routes the consumer and adds the deopt
-        // materialization while live.
-        if let Some(df) = cc.forward_rest_deferral() {
-            ctx.deferred_forward = Some(df);
-        }
         ctx
     }
 
     pub(super) fn slots_len(&self) -> usize {
-        self.place.len()
+        self.slots.len()
     }
 
-    /// The pure type-lattice meet over the per-slot `ty` vectors — the
-    /// analysis-layer join (item ②, the reusable primitive for the standalone
-    /// analysis pass in step 2). Element-wise `Guarded::join`; placement /
-    /// sentinel reconciliation is a separate concern that the fused
-    /// `AbstractFrame::join` still owns today. For non-sentinel slots this equals
-    /// the fused join's resulting type (verified arm-by-arm; see
-    /// `doc/regalloc_separation.md`).
-    #[allow(dead_code)] // wired in by step 2 (standalone analysis pass)
+    /// The slot's abstract type as a lattice element; the sentinels
+    /// (`None` / `MaybeNone` / `V`) carry no type and read as ⊤.
+    fn ty(&self, slot: SlotId) -> Guarded {
+        match self.mode(slot) {
+            LinkMode::None | LinkMode::MaybeNone | LinkMode::V => Guarded::Value,
+            o => o.guarded(),
+        }
+    }
+
+    /// The pure type-lattice meet over the two frames' slots — element-wise
+    /// `Guarded::join`, no placement involved. For non-sentinel slots this
+    /// equals the fused `AbstractFrame::join`'s resulting type, which the
+    /// debug replay (`verify_join_replay`) asserts after every merge.
+    #[cfg(debug_assertions)]
     pub(super) fn join_ty(&self, other: &SlotState) -> Vec<Guarded> {
-        self.ty
-            .iter()
-            .zip(other.ty.iter())
-            .map(|(a, b)| a.join(b))
+        self.all_regs()
+            .map(|i| self.ty(i).join(&other.ty(i)))
             .collect()
     }
 
@@ -499,8 +491,7 @@ impl SlotState {
     }
 
     pub(in crate::codegen::jitgen) fn mode(&self, slot: SlotId) -> LinkMode {
-        let i = slot.0 as usize;
-        LinkMode::from_parts(self.place[i], self.ty[i])
+        self.slots[slot.0 as usize].mode
     }
 
     pub(in crate::codegen::jitgen) fn guarded(&self, slot: SlotId) -> Guarded {
@@ -572,40 +563,15 @@ impl SlotState {
 
 impl SlotState {
     pub(super) fn set_mode(&mut self, slot: SlotId, mode: LinkMode) {
-        let i = slot.0 as usize;
-        self.place[i] = mode.placement();
-        // Sentinels carry no type; `from_parts` ignores `ty` for them.
-        self.ty[i] = match mode {
-            LinkMode::None | LinkMode::MaybeNone | LinkMode::V => Guarded::Value,
-            o => o.guarded(),
-        };
-    }
-
-    /// D1: if `slot` is the deferred forwarding-rest slot, return its
-    /// `(src, len)` caller source range.
-    pub(in crate::codegen::jitgen) fn deferred_rest_src(
-        &self,
-        slot: SlotId,
-    ) -> Option<(SlotId, u16)> {
-        match &self.deferred_forward {
-            Some(df) if df.rest_local == slot => Some((df.src, df.len)),
-            _ => None,
-        }
-    }
-
-    /// D1/K1: the frame's deferral annotation, if any. Used by
-    /// forwarding consumers to source-route or to veto the caller-side
-    /// skip (`set_needs_rest_array`).
-    pub(in crate::codegen::jitgen) fn deferred_forward_info(&self) -> Option<&DeferredForward> {
-        self.deferred_forward.as_ref()
+        self.slots[slot.0 as usize].mode = mode;
     }
 
     pub(super) fn is_used(&self, slot: SlotId) -> &IsUsed {
-        &self.liveness[slot.0 as usize]
+        &self.slots[slot.0 as usize].used
     }
 
     pub(super) fn is_used_mut(&mut self, slot: SlotId) -> &mut IsUsed {
-        &mut self.liveness[slot.0 as usize]
+        &mut self.slots[slot.0 as usize].used
     }
 
     fn fpr(&self, fpr: FPReg) -> &[SlotId] {
@@ -687,7 +653,7 @@ impl SlotState {
         self.gp_regfile.invalidate(slot);
         // Any transition away from the aliased-`F` binding ends the alias;
         // the consult site takes it *before* transitioning.
-        self.dynvar_alias[slot.0 as usize] = None;
+        self.slots[slot.0 as usize].dynvar_alias = None;
         match self.mode(slot) {
             LinkMode::Sf(fpr, _) | LinkMode::F(fpr) => {
                 assert!(self.fpr(fpr).contains(&slot));
@@ -715,7 +681,7 @@ impl SlotState {
             self.is_used_mut(slot).kill();
             // A redefinition ends the dynvar provenance — the new value did
             // not come through the frame chain.
-            self.dynvar_src[slot.0 as usize] = None;
+            self.slots[slot.0 as usize].dynvar_src = None;
         }
     }
 
@@ -976,19 +942,6 @@ impl SlotState {
     }
 
     ///
-    /// Define *slot* as a bare `F` in a fresh fpr (stage-B home read: the
-    /// raw f64 arrives by `LoadOuterFprHomeF`; the slot's own stack home
-    /// is left stale on purpose).
-    ///
-    #[allow(non_snake_case)]
-    pub(crate) fn def_F_new(&mut self, slot: SlotId) -> FPReg {
-        let fpr = self.alloc_fpr();
-        self.discard(slot);
-        self.set_F(slot, fpr);
-        fpr
-    }
-
-    ///
     /// Link *slot* to a concrete flonum value *i*.
     ///
     #[allow(non_snake_case)]
@@ -1026,7 +979,7 @@ impl SlotState {
         // owner's slot* — queue it for the next `compile_instruction`
         // boundary, where the `JitContext` can reach the owner's parked
         // frame ([`JitContext::mark_outer_float_read`]).
-        if let Some(src) = self.dynvar_src[slot.0 as usize] {
+        if let Some(src) = self.slots[slot.0 as usize].dynvar_src {
             self.pending_outer_float_reads.push(src);
         }
         self.is_used_mut(slot).use_as_float();
@@ -1047,7 +1000,7 @@ impl SlotState {
         src: SlotId,
     ) {
         if let Ok(outer) = u16::try_from(outer) {
-            self.dynvar_src[slot.0 as usize] = Some((outer, src));
+            self.slots[slot.0 as usize].dynvar_src = Some((outer, src));
         }
     }
 
@@ -1068,16 +1021,15 @@ impl SlotState {
     /// deliberately left untouched (see the field comment).
     ///
     pub(in crate::codegen::jitgen) fn mark_subtree_float_read(&mut self, slot: SlotId) {
-        if let Some(b) = self.subtree_float_read.get_mut(slot.0 as usize) {
-            *b = true;
+        if let Some(s) = self.slots.get_mut(slot.0 as usize) {
+            s.subtree_float_read = true;
         }
     }
 
     pub(in crate::codegen::jitgen) fn subtree_float_read(&self, slot: SlotId) -> bool {
-        self.subtree_float_read
+        self.slots
             .get(slot.0 as usize)
-            .copied()
-            .unwrap_or(false)
+            .is_some_and(|s| s.subtree_float_read)
     }
 
     ///
@@ -1085,10 +1037,10 @@ impl SlotState {
     /// callee read as a raw f64.
     ///
     pub(in crate::codegen::jitgen) fn subtree_float_read_slots(&self) -> Vec<SlotId> {
-        self.subtree_float_read
+        self.slots
             .iter()
             .enumerate()
-            .filter_map(|(i, b)| b.then_some(SlotId(i as u16)))
+            .filter_map(|(i, s)| s.subtree_float_read.then_some(SlotId(i as u16)))
             .collect()
     }
 
@@ -1101,7 +1053,7 @@ impl SlotState {
         slot: SlotId,
         alias: DynVarAliasLoad,
     ) {
-        self.dynvar_alias[slot.0 as usize] = Some(alias);
+        self.slots[slot.0 as usize].dynvar_alias = Some(alias);
     }
 
     ///
@@ -1109,7 +1061,7 @@ impl SlotState {
     /// (the `F` boxed-use arm), before the `F -> Sf` transition clears it.
     ///
     pub(super) fn take_dynvar_alias(&mut self, slot: SlotId) -> Option<DynVarAliasLoad> {
-        self.dynvar_alias[slot.0 as usize].take()
+        self.slots[slot.0 as usize].dynvar_alias.take()
     }
 
     ///
@@ -1117,8 +1069,8 @@ impl SlotState {
     /// call boundary may rewrite any owner slot, so every alias dies.
     ///
     pub(in crate::codegen::jitgen) fn clear_dynvar_aliases(&mut self) {
-        for a in &mut self.dynvar_alias {
-            *a = None;
+        for s in &mut self.slots {
+            s.dynvar_alias = None;
         }
     }
 
@@ -1128,27 +1080,20 @@ impl SlotState {
     /// landed subtree-read marks from either path remain evidence.
     ///
     pub(super) fn join_subtree_read_meta(&mut self, other: &SlotState) {
-        for (l, r) in self.dynvar_src.iter_mut().zip(other.dynvar_src.iter()) {
-            if *l != *r {
-                *l = None;
+        for (l, r) in self.slots.iter_mut().zip(other.slots.iter()) {
+            if l.dynvar_src != r.dynvar_src {
+                l.dynvar_src = None;
+            }
+            l.subtree_float_read |= r.subtree_float_read;
+            // An alias is a per-path fact about the owner's slot content;
+            // it survives a merge only when both paths carry the identical
+            // claim.
+            if l.dynvar_alias != r.dynvar_alias {
+                l.dynvar_alias = None;
             }
         }
         self.pending_outer_float_reads
             .extend(other.pending_outer_float_reads.iter().copied());
-        for (l, r) in self
-            .subtree_float_read
-            .iter_mut()
-            .zip(other.subtree_float_read.iter())
-        {
-            *l |= *r;
-        }
-        // An alias is a per-path fact about the owner's slot content; it
-        // survives a merge only when both paths carry the identical claim.
-        for (l, r) in self.dynvar_alias.iter_mut().zip(other.dynvar_alias.iter()) {
-            if l.as_ref() != r.as_ref() {
-                *l = None;
-            }
-        }
     }
 
     ///
@@ -1341,12 +1286,8 @@ impl SlotState {
         // Monotone hint bits ride along: the subtree float-read marks the
         // callee landed on its copies of this frame must reach the loop
         // analyses of the resumed compile.
-        for (l, r) in self
-            .subtree_float_read
-            .iter_mut()
-            .zip(other.subtree_float_read.iter())
-        {
-            *l |= *r;
+        for (l, r) in self.slots.iter_mut().zip(other.slots.iter()) {
+            l.subtree_float_read |= r.subtree_float_read;
         }
         for slot in self.locals() {
             match (self.mode(slot), other.mode(slot)) {
@@ -1746,12 +1687,6 @@ impl SlotState {
         }
     }
 
-    /// A GP register physically holding `slot`'s value. **Always `None`**: with
-    /// GP-pool residence (`LinkMode::G`) abolished, no slot is register-resident.
-    pub(super) fn on_reg(&self, _slot: SlotId) -> Option<GP> {
-        None
-    }
-
     fn is_fpr_vacant(&self, fpr: FPReg) -> bool {
         self.fpr(fpr).is_empty()
     }
@@ -2108,37 +2043,6 @@ impl Into<Guarded> for SfGuarded {
 }
 
 ///
-/// The *location / representation* half of a [`LinkMode`], with the type/class
-/// (`Guarded`) factored out — the dual of [`LinkMode::guarded`].
-///
-/// Part of item ② (separating value placement from type analysis; see
-/// `doc/regalloc_separation.md`). It records only *where the live copies are*.
-/// The `Sf` linkage is the `FprStack` placement: per review, `Sf` is **not** a
-/// type — it is a representation chosen for "Integer def'd / Float use'd" slots
-/// by a dedicated def-use + loop analysis. Its `SfGuarded` refinement is exactly
-/// the boxed value's class, so it is recovered from the paired `Guarded` (the
-/// `SfGuarded → Guarded` map is injective: `FixnumOrFloat ↔ Value`).
-/// `LinkMode::from_parts(self.placement(), self.guarded())` reconstructs the
-/// original `LinkMode` (verified by a unit test).
-///
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::codegen::jitgen) enum Placement {
-    None,
-    MaybeNone,
-    /// void (temp slot above sp)
-    Void,
-    /// boxed `Value` in its stack home
-    Stack,
-    /// unboxed f64 in an fpr (type is implicitly `Float`)
-    Xmm(FPReg),
-    /// unboxed f64 in an fpr + a read-only boxed cache on the stack (the `Sf`
-    /// linkage); the Int/Float refinement is recovered from the paired `Guarded`
-    FprStack(FPReg),
-    /// compile-time constant (no register / stack location)
-    Const(Value),
-}
-
-///
 /// A pending stack write-back produced by a transfer/eviction primitive
 /// (item ②, step 2): the *what* of an eviction, decided by the primitive's
 /// analysis (state) half and emitted by the codegen half. This is the first
@@ -2271,11 +2175,14 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     C(Value),
 }
 
-impl LinkMode {
+impl Default for LinkMode {
+    /// A boxed `Value` of unknown class in its stack home.
     fn default() -> Self {
         LinkMode::S(Guarded::Value)
     }
+}
 
+impl LinkMode {
     fn none() -> Self {
         LinkMode::None
     }
@@ -2292,49 +2199,6 @@ impl LinkMode {
             LinkMode::C(v) => Guarded::from_concrete_value(*v),
             LinkMode::V => Guarded::Class(NIL_CLASS),
             _ => unreachable!("{:?}", self),
-        }
-    }
-
-    ///
-    /// The location/representation half of this mode (the dual of
-    /// [`Self::guarded`]). See [`Placement`].
-    ///
-    fn placement(&self) -> Placement {
-        match self {
-            LinkMode::None => Placement::None,
-            LinkMode::MaybeNone => Placement::MaybeNone,
-            LinkMode::V => Placement::Void,
-            LinkMode::S(_) => Placement::Stack,
-            LinkMode::F(x) => Placement::Xmm(*x),
-            LinkMode::Sf(x, _) => Placement::FprStack(*x),
-            LinkMode::C(v) => Placement::Const(*v),
-        }
-    }
-
-    ///
-    /// Recombine a placement with a type guard into a `LinkMode` — the inverse
-    /// of [`Self::placement`] + [`Self::guarded`]. The `guarded` types the boxed
-    /// `Stack` case and picks the `Sf` refinement for `FprStack` (the
-    /// `Guarded → SfGuarded` inverse: `Value → FixnumOrFloat`); the `Xmm` /
-    /// `Const` / sentinel placements carry their own type, so it is ignored.
-    ///
-    fn from_parts(place: Placement, guarded: Guarded) -> Self {
-        match place {
-            Placement::None => LinkMode::None,
-            Placement::MaybeNone => LinkMode::MaybeNone,
-            Placement::Void => LinkMode::V,
-            Placement::Stack => LinkMode::S(guarded),
-            Placement::Xmm(x) => LinkMode::F(x),
-            Placement::FprStack(x) => {
-                let sf = match guarded {
-                    Guarded::Float => SfGuarded::Float,
-                    Guarded::Fixnum => SfGuarded::Fixnum,
-                    Guarded::Value => SfGuarded::FixnumOrFloat,
-                    Guarded::Class(_) => unreachable!("FprStack with class guard {guarded:?}"),
-                };
-                LinkMode::Sf(x, sf)
-            }
-            Placement::Const(v) => LinkMode::C(v),
         }
     }
 
@@ -2998,35 +2862,5 @@ mod tests {
         test
         "###,
         );
-    }
-
-    /// Item ②: `LinkMode` decomposes losslessly into a `Placement` (location /
-    /// representation) and a `Guarded` (type), and recombines via `from_parts`.
-    /// The `Sf` (`FprStack`) refinement is recovered from the paired `Guarded`.
-    #[test]
-    fn linkmode_placement_roundtrip() {
-        use super::*;
-        let x = FPReg(0);
-        // Value-carrying modes: from_parts(placement(), guarded()) == self.
-        let value_modes = [
-            LinkMode::S(Guarded::Value),
-            LinkMode::S(Guarded::Fixnum),
-            LinkMode::S(Guarded::Float),
-            LinkMode::S(Guarded::Class(NIL_CLASS)),
-            LinkMode::F(x),
-            LinkMode::Sf(x, SfGuarded::Float),
-            LinkMode::Sf(x, SfGuarded::Fixnum),
-            LinkMode::Sf(x, SfGuarded::FixnumOrFloat),
-            LinkMode::C(Value::nil()),
-            LinkMode::C(Value::i32(7)),
-            LinkMode::V,
-        ];
-        for lm in value_modes {
-            assert_eq!(LinkMode::from_parts(lm.placement(), lm.guarded()), lm);
-        }
-        // None / MaybeNone carry no type; placement() round-trips with any guard.
-        for lm in [LinkMode::None, LinkMode::MaybeNone] {
-            assert_eq!(LinkMode::from_parts(lm.placement(), Guarded::Value), lm);
-        }
     }
 }
