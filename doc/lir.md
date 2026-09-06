@@ -441,9 +441,10 @@ ordered sequence the allocator can walk and the drainer can replay faithfully.
 - **9d — The arch-dependent physical-allocation pass.** Walk the buffered LIR,
   assign physical GPs to `VReg`s (spilling to frame slots under pressure, exactly
   as `FPReg` does for FP), then drain → encode. This is the first point the
-  output may legitimately differ from today's bytes; like `phys-loop-aware`
-  (§42), it is a perf experiment gated behind a flag + the M1 A/B bench gate, and
-  the shadow digest becomes a delta meter, not an equality check.
+  output may legitimately differ from today's bytes; like the (since removed)
+  `phys-loop-aware` experiment (regalloc doc §42, §49), it is a perf experiment
+  gated behind a flag + the M1 A/B bench gate, and the shadow digest becomes a
+  delta meter, not an equality check.
 
 ### 9d allocatable GP pool (design decision)
 

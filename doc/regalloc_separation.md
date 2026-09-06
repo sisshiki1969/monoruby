@@ -3259,3 +3259,16 @@ suite pass. The `*_state` analysis-half split of the two old functions
 (`write_back_slot_state`, `to_S_unguarded_state`) is folded in as well: the
 `Spill` record is still computed by the state transition and emitted through
 `ir.spill`, so analysis mode still emits nothing.
+
+## 49. `phys-loop-aware` removed
+
+The §42 loop-aware spill-victim policy (`loop_carried` on `SlotState`, filled
+at the loop-entry merge from the back-edge fixpoint; the phase-1 filter that
+kept a loop-carried `Sf` cache resident) is deleted along with its Cargo
+feature. It was default-off, not built by CI, and — as §42 itself records —
+inert under the shipping `POOL=14`: phase 1 runs only when no pool register is
+vacant, so the lever bit only under `stress-spill-pool` or a ≈14-live-float
+loop, and its M1 A/B (§27.3-2c) was never run. The `L`-collection timing
+finding (§42: the multi-iteration fixpoint makes the back-edge available at
+merge time) stays in the record for whoever revisits loop-aware allocation;
+the code it justified no longer earns its field in the per-path state.
