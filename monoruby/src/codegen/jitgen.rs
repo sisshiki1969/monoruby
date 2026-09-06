@@ -378,6 +378,11 @@ impl UsingFpr {
         let len = self.count_ones();
         (len + len % 2) * 8
     }
+
+    /// Every register in *other* is in `self`.
+    pub(crate) fn is_superset_of(&self, other: &Self) -> bool {
+        (0..PHYS_FPR_POOL).all(|i| !other.inner[i] || self.inner[i])
+    }
 }
 
 ///
