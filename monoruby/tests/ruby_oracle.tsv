@@ -542,6 +542,7 @@
 285185fceec5d66e9a0b0017921fcdb3	:ok	old_stderr = $stderr\n            captured = String.new\n            
 2856d276c472b3b28a51d514662d76c0	"Cargo.toml"	File.open("Cargo.toml") { |f| f.to_path }
 2857ee8562740e3a303e0b419aa33d73	["EUC-JP", true]	(f="/tmp/mono_tpe_#{Process.pid}"; File.write(f, ""); io=File.new(f.encode(Encod
+285956e4dfd6239b0f5020e2c849f546	[6.0, 4.0]	def f(a)\n          x = a * 2.0\n          "abc".each_char { |c| x += c.s
 286b90c6e98dbe079e4a2b613b749cdb	"nil"	Set[1, 2, 3].freeze.flatten!.inspect
 289051905abb74616bfde774be4d9349	32.5	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 2890bbfd125193c6fcb4cb125c9bd264	[999, 999]	$flag = false\n        def maybe_redefine\n          if $flag\n           
