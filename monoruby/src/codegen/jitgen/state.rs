@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen::jitgen::context::DeferredForward;
 
 mod binop;
 mod index;
@@ -534,6 +535,19 @@ pub(crate) struct AbstractFrame {
     next_sp: SlotId,
     /// assumptions
     invariants: Invariants,
+    /// D1/K1 forwarding deferral: the forwarding-trampoline rest / kwrest
+    /// slots whose materialization is deferred to the consumer. Fixed for
+    /// the compile unit (set once at frame creation), so it lives here
+    /// next to the other per-frame constants rather than in the per-path
+    /// slot state. The slots' `LinkMode`s stay at their baseline (`S`):
+    /// when the deferral activates the caller-side `set_arguments`
+    /// physically stores a real `nil` there (GC-safe) and the consumer
+    /// routes from the caller source; deopts rebuild the array via
+    /// `forward_rest`. When it does *not* activate the caller builds the
+    /// array normally and the (still-`S`) slot holds it — no spurious
+    /// `C(nil)` write-back can clobber that array. The annotation only
+    /// routes the consumer and adds the deopt materialization while live.
+    deferred_forward: Option<DeferredForward>,
     /// Chain-relative distance to this frame's *lexical* parent within
     /// the state chain (`None` for a method / the chain root) — the
     /// state-side twin of `JitStackFrame::outer`, set when the frame
@@ -615,6 +629,7 @@ impl AbstractFrame {
                     slot_state: SlotState::new_method(cc),
                     next_sp,
                     invariants: Invariants::new_entry(cc),
+                    deferred_forward: cc.forward_rest_deferral(),
                     lexical_outer: None,
                 }
             }
@@ -623,6 +638,7 @@ impl AbstractFrame {
                 slot_state: SlotState::new_loop(cc),
                 next_sp,
                 invariants: Invariants::new_loop(),
+                deferred_forward: None,
                 lexical_outer: None,
             },
             JitType::Specialized { .. } => {
@@ -632,6 +648,7 @@ impl AbstractFrame {
                     slot_state: SlotState::new_method(cc),
                     next_sp,
                     invariants: Invariants::new_specialized(cc),
+                    deferred_forward: cc.forward_rest_deferral(),
                     lexical_outer: None,
                 }
             }
@@ -648,6 +665,25 @@ impl AbstractFrame {
 
     pub(super) fn lexical_outer(&self) -> Option<usize> {
         self.lexical_outer
+    }
+
+    /// D1: if `slot` is the deferred forwarding-rest slot, return its
+    /// `(src, len)` caller source range.
+    pub(in crate::codegen::jitgen) fn deferred_rest_src(
+        &self,
+        slot: SlotId,
+    ) -> Option<(SlotId, u16)> {
+        match &self.deferred_forward {
+            Some(df) if df.rest_local == slot => Some((df.src, df.len)),
+            _ => None,
+        }
+    }
+
+    /// D1/K1: the frame's deferral annotation, if any. Used by
+    /// forwarding consumers to source-route or to veto the caller-side
+    /// skip (`set_needs_rest_array`).
+    pub(in crate::codegen::jitgen) fn deferred_forward_info(&self) -> Option<&DeferredForward> {
+        self.deferred_forward.as_ref()
     }
 
     pub(super) fn set_lexical_outer(&mut self, link: Option<usize>) {

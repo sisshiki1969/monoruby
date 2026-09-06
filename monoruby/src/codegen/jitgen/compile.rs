@@ -615,7 +615,7 @@ impl<'a> JitContext<'a> {
                             reg: src.reg,
                         });
                     if let Some(home) = self.outer_fpr_home_hint(ids, extra, src.outer, afpr) {
-                        let dfpr = state.def_F_new(dst);
+                        let dfpr = state.def_F(dst);
                         ir.push(AsmInst::LoadOuterFprHomeF { dst: dfpr, home });
                         if let Some(alias) = alias {
                             state.set_dynvar_alias(dst, alias);

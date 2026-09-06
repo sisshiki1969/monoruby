@@ -323,26 +323,6 @@ impl AbstractFrame {
         }
     }
 
-    ///
-    /// load *slot* into *opt* if not on register, and return the register.
-    ///
-    /// ### panic
-    /// - if *slot* is V or None.
-    ///
-    pub(in crate::codegen::jitgen) fn load_or_reg(
-        &mut self,
-        ir: &mut AsmIr,
-        slot: SlotId,
-        opt: GP,
-    ) -> GP {
-        if let Some(r) = self.on_reg(slot) {
-            r
-        } else {
-            self.load(ir, slot, opt);
-            opt
-        }
-    }
-
     pub(in crate::codegen::jitgen) fn load_array_ty(
         &mut self,
         ir: &mut AsmIr,

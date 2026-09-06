@@ -1307,7 +1307,8 @@ impl<'a> JitContext<'a> {
         }
         // A provably-immediate stored value needs no GC write barrier.
         let wb = !state.is_guarded_immediate(args);
-        let src = state.load_or_reg(ir, args, GP::Rax);
+        state.load(ir, args, GP::Rax);
+        let src = GP::Rax;
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
         let using_fpr = state.get_using_fpr(ir);
         if is_object_ty && ivarid.is_inline() {
@@ -1793,10 +1794,10 @@ impl<'a> JitContext<'a> {
             // keeps the barrier; an own slot elides it when the state
             // proves the value immediate.
             let (src, wb) = match src_slot {
-                frameless::ArgSlot::Own(slot) => (
-                    state.load_or_reg(ir, slot, GP::Rax),
-                    !state.is_guarded_immediate(slot),
-                ),
+                frameless::ArgSlot::Own(slot) => {
+                    state.load(ir, slot, GP::Rax);
+                    (GP::Rax, !state.is_guarded_immediate(slot))
+                }
                 frameless::ArgSlot::Caller(slot) => {
                     ir.push(AsmInst::LoadCallerSlot {
                         slot,
@@ -1892,7 +1893,8 @@ impl<'a> JitContext<'a> {
         state.load(ir, recv, GP::Rdi);
         let deopt = ir.new_deopt(state);
         ir.guard_frozen(deopt);
-        let src = state.load_or_reg(ir, args, GP::Rax);
+        state.load(ir, args, GP::Rax);
+        let src = GP::Rax;
         if inline {
             ir.push(AsmInst::StoreStructSlotInline { src, slot_index });
         } else {
