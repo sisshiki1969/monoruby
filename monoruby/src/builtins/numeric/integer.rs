@@ -1184,6 +1184,15 @@ fn integer_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
             } = *callsite;
             match rhs_class {
                 Some(INTEGER_CLASS) => {
+                    // A bignum-constant operand (`x & 0xffff_ffff_ffff_ffff`,
+                    // the dewasm mask idiom) has no fixnum lowering: the
+                    // fixnum guard would land on the constant and fail on
+                    // every execution. Decline to the direct-call residual.
+                    if state.is_bigint_literal_sign(recv).is_some()
+                        || state.is_bigint_literal_sign(args).is_some()
+                    {
+                        return BinaryInlineOutcome::Declined;
+                    }
                     state.binop_integer(ir, kind, dst, recv, args);
                     BinaryInlineOutcome::Done
                 }
@@ -1250,6 +1259,9 @@ fn integer_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                                 return BinaryInlineOutcome::Folded(AbstractFrame::fold_cmp(
                                     kind, l, r,
                                 ));
+                            }
+                            if let Some(b) = state.fold_bigint_const_cmpbr(ir, kind, recv, args) {
+                                return BinaryInlineOutcome::Folded(b);
                             }
                             state.gen_cmpbr_integer(ir, kind, recv, args, brkind, dest);
                         }

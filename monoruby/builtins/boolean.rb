@@ -100,10 +100,17 @@ end
 class FalseClass
   # core/false/inspect_spec.rb: inspect is an alias of to_s (to_s on FalseClass).
   alias inspect to_s
-  # core/false/xor_spec.rb: ^ is an alias of |. Both `|` and `^` are rooted
-  # directly on FalseClass (registered by bool_class.rs on FALSE_CLASS, not an
-  # inherited parent), so just re-point `^` at the existing `|`. For false,
-  # `false ^ x` and `false | x` are both `!!x`, so behaviour is unchanged.
-  # (`true` keeps distinct `^`/`|` on the shared Boolean, where they differ.)
-  alias ^ |
+  # core/false/xor_spec.rb: ^ and | are the same method entry on FalseClass
+  # (for false, `false ^ x` and `false | x` are both `!!x`). The alias
+  # direction matters for the JIT: bool_class.rs registers `^` with ONE
+  # FuncId on both TrueClass and FalseClass so a polymorphic-on-true/false
+  # `^` site can use the unified BOOL_CLASS inline cache — dewasm-generated
+  # wasm code leans on `(a < 0) ^ (b < 0)` sign tests, and `alias ^ |` here
+  # used to re-point false's `^` at `|`'s FuncId, breaking that unification
+  # and turning every such JIT site into a deopt/recompile storm. Re-point
+  # `|` at `^` instead: the spec's identity check still holds, `^` stays
+  # unified, and only `|` diverges (true keeps its own genuinely different
+  # `|`; a divergent bool operator now falls back to the generic dispatch
+  # in the JIT rather than deopting).
+  alias | ^
 end

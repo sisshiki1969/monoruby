@@ -227,26 +227,25 @@ impl<'a> JitContext<'a> {
     ///
     ///
     /// The recompile target a receiver-class-guard `Learn` exit uses for
-    /// this compilation unit, or `None` when no sound one exists.
+    /// this compilation unit.
     ///
-    /// A block ROOT cannot take a whole-recompile: the side exit recompiles
-    /// whatever `lfp.func_id()` names as if it were a method, which rebuilds
-    /// a block body under the wrong argument convention (see
-    /// `guard_const_version`, which learned this the hard way). Loop JITs
-    /// (position = Some) and specialized block bodies (idx route) recompile
-    /// fine.
+    /// Block ROOTs take the whole-recompile route like any other whole
+    /// unit. They used to be excluded — an early recompile path rebuilt a
+    /// block body under the method argument convention (#1127 records
+    /// `Kernel#caller_locations`' block losing its argument) — but the
+    /// compile pipeline has been iseq-driven and identical for the initial
+    /// compile and the recompile since the abstract-state unification, and
+    /// the exclusion had become the last permanent-deopt hole: a block
+    /// compiled while a receiver was still `nil` (dewasm DOOM's terminal
+    /// renderer compares `prev_row[cx] == key` — nil on the first frame,
+    /// Integer forever after) failed its class guard on every later cell
+    /// of every later frame, ~296k plain deopts per minute, with the VM
+    /// interpreting the rest of each block invocation.
     ///
     pub(super) fn recv_miss_recompile_target(&self) -> Option<RecompileTarget> {
         match self.jit_type() {
             JitType::Specialized { idx, .. } => Some(RecompileTarget::Specialized(*idx)),
-            _ => {
-                let position = self.position();
-                if position.is_none() && self.store[self.func_id()].is_block_style() {
-                    None
-                } else {
-                    Some(RecompileTarget::Whole(position))
-                }
-            }
+            _ => Some(RecompileTarget::Whole(self.position())),
         }
     }
 
@@ -471,6 +470,22 @@ impl<'a> JitContext<'a> {
         // best and — since only one of the arm's classes is `recv_class` —
         // would deopt the rest at worst.
         let mut same_target_set_guarded = self.in_set_guarded_arm();
+        // A compile-time heap-constant receiver of the right class needs no
+        // runtime guard — its class is a static fact (`M64 - x` reaching the
+        // direct-call residual: the Integer guard is a fixnum-tag test a
+        // bignum can never pass). But it gets no representation refinement
+        // either (a bignum constant is Integer without being a fixnum), so
+        // for everything downstream it must look like the set-guarded case:
+        // class known, nothing proven untagged, generators decline or
+        // handle `None`, the ordinary builtin call carries boxed Values.
+        let mut recv_const_unrefined = false;
+        if !same_target_set_guarded
+            && state.class(recv) != Some(recv_class)
+            && state.is_const_of_class(recv, recv_class)
+        {
+            same_target_set_guarded = true;
+            recv_const_unrefined = true;
+        }
         if !same_target_set_guarded && state.class(recv) != Some(recv_class) {
             if recv_miss != RecvMissMode::PartB
                 && let Some(classes) = self.pmc_same_target_classes(callid, recv_class, func_id)
@@ -566,10 +581,20 @@ impl<'a> JitContext<'a> {
                 // `object_id` keep firing there while a generator that needs
                 // the class declines to the ordinary call.
                 InlineFuncInfo::InlineGen(f) => {
-                    let proven = (!same_target_set_guarded).then_some(recv_class);
-                    if self.inline_asm(state, ir, f, callid, proven, arg_class) {
-                        state.unset_side_effect_guard();
-                        return Ok(CompileResult::Continue);
+                    // Not behind a const-receiver guard skip: the Integer
+                    // generators load the receiver raw on the strength of
+                    // the caller's guard (a set guard's INTEGER member is
+                    // the same fixnum-tag test, so `None` there is safe) —
+                    // a skipped guard for a heap constant proves no
+                    // representation, so they must not fire (`999…9[0]`
+                    // would shift the bignum's pointer bits); fall through
+                    // to the ordinary builtin call instead.
+                    if !recv_const_unrefined {
+                        let proven = (!same_target_set_guarded).then_some(recv_class);
+                        if self.inline_asm(state, ir, f, callid, proven, arg_class) {
+                            state.unset_side_effect_guard();
+                            return Ok(CompileResult::Continue);
+                        }
                     }
                 }
                 // The operator generators still take a definite receiver

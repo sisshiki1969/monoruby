@@ -402,6 +402,16 @@ impl<'a> JitContext<'a> {
             TraceIr::FrozenLiteral(dst, val) => {
                 if let Some(imm) = val.is_immediate() {
                     state.def_C(dst, imm);
+                } else if matches!(val.unpack(), RV::BigInt(_)) {
+                    // A bignum literal (`x >= 0x8000_0000_0000_0000`, the
+                    // dewasm sign-test idiom) folds as `LinkMode::C` like a
+                    // bignum from the constant cache (`load_constant`), so
+                    // the comparison/binop lowerings see its compile-time
+                    // sign instead of emitting a fixnum guard the heap
+                    // Integer fails on every execution. GC safety is the
+                    // const fold's: `wb_literal` writes the value back to
+                    // the stack slot before every safepoint.
+                    state.def_C(dst, val);
                 } else {
                     // Load the literal straight into a GP-pool register resident
                     // rather than through rax to the stack home (see `def_lit2gp`).
@@ -1325,7 +1335,8 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
         recv_miss: RecvMissMode,
     ) -> JitResult<CompileResult> {
-        if let Some((fid, visibility)) = self.jit_check_method(lhs_class, name.into()) {
+        let name = name.into();
+        if let Some((fid, visibility)) = self.jit_check_method(lhs_class, name) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, lhs);
             assert_eq!(self.store[callid].args, rhs);

@@ -1535,6 +1535,39 @@ impl SlotState {
         }
     }
 
+    /// Whether `slot` is a compile-time constant of class `class` — a
+    /// static fact that needs no runtime class guard. Matters for heap
+    /// constants (a bignum's Guarded state is deliberately `Value`, so a
+    /// class-based check would emit the fixnum-tag guard it can never
+    /// pass).
+    pub(in crate::codegen::jitgen) fn is_const_of_class(&self, slot: SlotId, class: ClassId) -> bool {
+        matches!(self.mode(slot), LinkMode::C(v) if v.class() == class)
+    }
+
+    /// A compile-time heap-`Integer` (bignum) constant slot, reduced to its
+    /// sign: `Some(true)` = above the fixnum window, `Some(false)` = below
+    /// it. Every fixnum compares the same way against such a constant, so a
+    /// fixnum-guarded operand's comparison folds to that one answer —
+    /// dewasm-generated wasm code hits this on every 64-bit op via masks
+    /// like `x <= 0xffff_ffff_ffff_ffff`. A denormalized bignum that would
+    /// fit the fixnum window is not folded (`None`).
+    pub fn is_bigint_literal_sign(&self, slot: SlotId) -> Option<bool> {
+        use num::ToPrimitive;
+        if let LinkMode::C(v) = self.mode(slot)
+            && v.is_immediate().is_none()
+            && let RV::BigInt(b) = v.unpack()
+        {
+            if let Some(i) = b.to_i64()
+                && (-(1i64 << 62)..(1i64 << 62)).contains(&i)
+            {
+                return None;
+            }
+            Some(b.sign() == num::bigint::Sign::Plus)
+        } else {
+            None
+        }
+    }
+
     /// The tagged `Value` of a fixnum compile-time-constant slot, if any — the
     /// immediate to load straight into a register (the local GP allocator), skipping
     /// the stack-home materialization and the fixnum guard.
