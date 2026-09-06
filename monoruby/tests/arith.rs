@@ -324,6 +324,81 @@ fn bench_factorialpoly() {
     );
 }
 
+/// `begin ... end while false` (and its `until true` / `while nil` twins) is a
+/// labeled block: the body runs once and `break` / `next` are forward jumps.
+/// bytecodegen emits it without loop markers, so this pins the semantics of
+/// every exit form against CRuby, deeply nested the way generated code nests it.
+#[test]
+fn test_postfix_while_literal_false() {
+    run_test(
+        r#"
+        r = []
+        begin
+          r << 1
+          break if r.size == 1
+          r << :unreachable
+        end while false
+        begin
+          r << 2
+          next if r.size == 2
+          r << :unreachable
+        end while false
+        v = begin
+          r << 3
+        end while false
+        r << v
+        u = begin
+          r << 4
+        end until true
+        r << u
+        n = 0
+        begin
+          n += 1
+          redo if n < 3
+        end while false
+        r << n
+        i = 0
+        begin
+          i += 1
+        end while nil
+        r << i
+        x = begin; 7; end while false
+        r << x
+        def m
+          begin
+            return :from_block
+          end while false
+          :after
+        end
+        r << m
+        # dewasm's lowering of a wasm `block` nest: a pending branch id in
+        # `__br` is relayed outward through each level's epilogue.
+        def nest(k)
+          __br = nil
+          out = []
+          begin
+            begin
+              begin
+                out << :a
+                if k == 1 then __br = 1; break end
+                out << :b
+                if k == 2 then __br = 3; break end
+                out << :c
+              end while false
+              if __br == 3 then __br = nil elsif __br then break end
+              out << :d
+            end while false
+            if __br == 2 then __br = nil elsif __br then break end
+            out << :e
+          end while false
+          out
+        end
+        r << nest(0) << nest(1) << nest(2)
+        r
+        "#,
+    );
+}
+
 #[test]
 fn bench_while_until_for() {
     run_tests2(&[

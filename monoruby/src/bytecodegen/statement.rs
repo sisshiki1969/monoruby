@@ -197,6 +197,30 @@ impl<'a> BytecodeGen<'a> {
         };
         self.loop_push(break_dest, next_dest, loop_start, ret);
         let loc = body.loc;
+        // `begin ... end while false` (and `... until true`) runs the body
+        // exactly once and never takes the back edge: it is a labeled block
+        // whose `break` / `next` are forward jumps, not a loop. Code
+        // generators that lower a structured `block` into Ruby (dewasm's
+        // Ruby backend does) nest it deeply, and a `LoopStart` per level
+        // would make the JIT's back-edge analysis walk each nesting level's
+        // body once per enclosing level — exponential in the depth. Emit
+        // the body with no loop markers and no condition at all.
+        let single_shot = match cond.kind {
+            NodeKind::Bool(b) => b != cond_op,
+            NodeKind::Nil => cond_op,
+            _ => false,
+        };
+        if single_shot {
+            self.apply_label(loop_start);
+            self.gen_expr(body, UseMode2::NotUse)?;
+            self.apply_label(next_dest);
+            if use_value {
+                self.push_nil();
+            }
+            self.loop_pop();
+            self.apply_label(break_dest);
+            return Ok(());
+        }
         self.apply_label(loop_start);
         self.emit(BytecodeInst::LoopStart, loc);
         self.gen_expr(body, UseMode2::NotUse)?;
