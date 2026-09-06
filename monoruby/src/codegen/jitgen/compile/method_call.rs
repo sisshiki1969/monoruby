@@ -1947,7 +1947,7 @@ impl<'a> JitContext<'a> {
         // we still know what they were.
         let held = state.held_constants();
         // The same, for the float locals whose boxed slot store the
-        // block-handing `unbox_to_S` deferred to a spill home.
+        // block-handing `write_back(Keep::Claims)` deferred to a spill home.
         let deferred_homes = state.deferred_float_homes();
         let compiled = self.compile_specialized_func(
             state,
@@ -1994,7 +1994,7 @@ impl<'a> JitContext<'a> {
             // the block would be compiled into this unit — see
             // `compile_method_call`. Confirm the bet now that the callee's
             // body is compiled, and give the claims up unless it holds. The
-            // values are in their slots either way (`unbox_to_S` wrote them
+            // values are in their slots either way (the write-back wrote them
             // on the way in), so this costs no code.
             //
             // Two ways it fails. A `yield` that was not inlined runs the
@@ -2694,7 +2694,7 @@ impl AbstractState {
 
             // write back block argument.
             if let Some(block_arg) = callsite.block_arg {
-                self.write_back_slot(ir, block_arg);
+                self.write_back(ir, block_arg, Keep::All);
             }
 
             // fill self.

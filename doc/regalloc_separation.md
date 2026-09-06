@@ -3228,3 +3228,34 @@ over was the bug.
 Verified: `emit-asm` dumps of the nine benchmarks are identical to master
 (`app_aobench` included this time), the JIT lib tests and the float / block /
 loop integration tests pass, and the full `cargo test` suite passes.
+
+## 48. One `write_back(slot, Keep)` for the four write-back policies
+
+`SlotState` had four ways to put a slot's value into its frame slot, each a
+function with its own prose: `write_back_slot` (keep everything), `unbox_to_S`
+with `keep_claims == false` (drop views and claims, keep the type) and `== true`
+(the specialized-call demotion: keep claims, move a pool `F` to a spill home),
+`to_S_unguarded` (forget everything), plus `give_up_const` as the `C` arm of the
+second. Their differences — what each mode becomes, what is written, what is
+forgotten — were spread over four bodies and their comments, and the
+GP-resident re-homing preamble was copied into three of them.
+
+They are now one function, `write_back(ir, slot, Keep)`, whose match is the
+mode × policy table (reproduced in its doc comment), and one enum:
+
+| `Keep`    | was                          | meaning                                                   |
+|-----------|------------------------------|-----------------------------------------------------------|
+| `All`     | `write_back_slot`            | the slot gets the value; every view and claim stays       |
+| `Type`    | `unbox_to_S(_, false)`, `give_up_const` | views and claims go, the type stays (a block leaves the unit) |
+| `Nothing` | `to_S_unguarded`             | everything goes: `S(Value)`                               |
+| `Claims`  | `unbox_to_S(_, true)`        | claims and views stay; a pool `F` moves to a spill home   |
+
+Arm for arm the transitions and emissions are the ones the four functions
+performed (the GP-resident flush under every policy, the resident drop only
+under `All`, `clear` where the old bodies cleared), so the change is
+byte-identical: `emit-asm` dumps of the nine benchmarks match master, the JIT
+lib tests, the float / block / loop integration tests and the full `cargo test`
+suite pass. The `*_state` analysis-half split of the two old functions
+(`write_back_slot_state`, `to_S_unguarded_state`) is folded in as well: the
+`Spill` record is still computed by the state transition and emitted through
+`ir.spill`, so analysis mode still emits nothing.

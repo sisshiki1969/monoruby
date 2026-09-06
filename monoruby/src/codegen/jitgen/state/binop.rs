@@ -407,7 +407,7 @@ impl AbstractFrame {
         }
         // Not resident and not a constant: put the value at its canonical stack
         // home (a no-op for an `S` slot; materializes a boxed float), then load it.
-        self.write_back_slot(ir, slot);
+        self.write_back(ir, slot, Keep::All);
         let (gp, spills) = self.gp_regfile.alloc_reg(pinned);
         for (reg, s) in spills {
             ir.reg2stack(reg, s);

@@ -336,11 +336,11 @@ impl<'a> JitContext<'a> {
         // `SlotState::get_using_fpr`), so an arm that reaches it (directly, via the
         // cached `send`, or inside its `ir.<helper>` / `jit_*` builder) before any
         // clobber needs no head flush. Every slot *read* goes through the
-        // GP-resident-aware `load` / `write_back_slot` / `to_S_unguarded` /
-        // `copy_slot`, each of which re-homes a live resident rather than reading a
-        // stale stack home, so leaving a resident live into such an arm is safe.
-        // (That resident-awareness was missing from `write_back_slot` /
-        // `to_S_unguarded` / `copy_slot` and showed up as `string_scrub_block_form`
+        // GP-resident-aware `load` / `write_back` / `copy_slot`, each of which
+        // re-homes a live resident rather than reading a stale stack home, so
+        // leaving a resident live into such an arm is safe. (That
+        // resident-awareness was missing from the write-backs and `copy_slot`
+        // and showed up as `string_scrub_block_form`
         // / `hash_*` JIT miscompiles until fixed.) A head flush is also a no-op when
         // the register file is empty.
         //
@@ -816,7 +816,7 @@ impl<'a> JitContext<'a> {
             TraceIr::ToA { dst, src } => {
                 state.flush_gp(ir);
                 let error = ir.new_error(state);
-                state.write_back_slot(ir, src);
+                state.write_back(ir, src, Keep::All);
                 ir.to_a(state, src);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
@@ -964,7 +964,7 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::DefinedYield { dst, using_fpr });
             }
             TraceIr::DefinedConst { dst, siteid } => {
-                state.to_S_unguarded(ir, dst);
+                state.write_back(ir, dst, Keep::Nothing);
                 let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedConst {
                     dst,
@@ -974,7 +974,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::DefinedMethod { dst, recv, name } => {
                 state.write_back_slots(ir, &[recv]);
-                state.to_S_unguarded(ir, dst);
+                state.write_back(ir, dst, Keep::Nothing);
                 let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedMethod {
                     dst,
@@ -998,7 +998,7 @@ impl<'a> JitContext<'a> {
                 });
             }
             TraceIr::DefinedIvar { dst, name } => {
-                state.to_S_unguarded(ir, dst);
+                state.write_back(ir, dst, Keep::Nothing);
                 let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedIvar {
                     dst,

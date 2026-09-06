@@ -13,7 +13,7 @@ pub(super) use liveness::Liveness;
 pub(super) use read_slot::DeoptPoint;
 pub(in crate::codegen::jitgen) use slot::SfGuarded;
 pub(in crate::codegen::jitgen) use slot::DynVarAliasLoad;
-pub(super) use slot::{Guarded, LinkMode, SlotState};
+pub(super) use slot::{Guarded, Keep, LinkMode, SlotState};
 
 /// A frame of the abstract-state chain, shared by reference.
 ///
@@ -286,7 +286,7 @@ impl AbstractState {
     #[allow(non_snake_case)]
     pub(super) fn locals_unbox_to_S_keeping_claims(&mut self, ir: &mut AsmIr) {
         for i in self.locals() {
-            self.unbox_to_S(ir, i, true);
+            self.write_back(ir, i, Keep::Claims);
         }
     }
 
@@ -1012,7 +1012,7 @@ impl AbstractFrame {
 impl AbstractFrame {
     /// Write back the given slots according to their current state.
     pub(crate) fn write_back_slots(&mut self, ir: &mut AsmIr, slot: &[SlotId]) {
-        slot.iter().for_each(|r| self.write_back_slot(ir, *r));
+        slot.iter().for_each(|r| self.write_back(ir, *r, Keep::All));
     }
 
     /// Flush the per-block local GP register file (the local GP allocator): spill every
@@ -1047,12 +1047,12 @@ impl AbstractFrame {
     ///
     pub(super) fn write_back_range(&mut self, ir: &mut AsmIr, args: SlotId, len: u16) {
         for reg in args.0..args.0 + len {
-            self.write_back_slot(ir, SlotId::new(reg))
+            self.write_back(ir, SlotId::new(reg), Keep::All)
         }
     }
 
     pub(crate) fn write_back_recv_and_callargs(&mut self, ir: &mut AsmIr, callsite: &CallSiteInfo) {
-        self.write_back_slot(ir, callsite.recv);
+        self.write_back(ir, callsite.recv, Keep::All);
         self.write_back_args(ir, callsite);
     }
 
@@ -1067,14 +1067,14 @@ impl AbstractFrame {
         self.write_back_range(ir, *args, *pos_num as u16);
         self.write_back_range(ir, *kw_pos, callsite.kw_len() as u16);
         if let Some(block_arg) = block_arg {
-            self.write_back_slot(ir, *block_arg);
+            self.write_back(ir, *block_arg, Keep::All);
         }
     }
 
     #[allow(non_snake_case)]
     pub(super) fn locals_to_S(&mut self, ir: &mut AsmIr) {
         for i in self.locals() {
-            self.to_S_unguarded(ir, i);
+            self.write_back(ir, i, Keep::Nothing);
         }
     }
 
