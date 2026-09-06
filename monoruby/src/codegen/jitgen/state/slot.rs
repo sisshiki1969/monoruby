@@ -2774,6 +2774,28 @@ mod tests {
         ));
     }
 
+    /// A local still held only in an fpr (`F`) when a block is handed to a
+    /// callee outside the unit (`String#each_char` is a Rust builtin, so
+    /// the block is not specialized) is boxed into its slot first — the
+    /// `F` arm of `unbox_to_S` without `keep_claims`: the block reads and
+    /// writes `x` through the frame, so the register copy alone would be
+    /// stale on both sides.
+    #[test]
+    fn test_unboxed_local_homed_before_an_outgoing_block() {
+        run_test(
+            r###"
+        def f(a)
+          x = a * 2.0
+          "abc".each_char { |c| x += c.size }
+          y = x * 0.5
+          loop { y += 1.0; break }
+          [x, y]
+        end
+        f(1.5)
+        "###,
+        );
+    }
+
     /// §15.5: a loop-carried float enters a loop JIT from the VM as a boxed
     /// `S(Value)`, but the back-edge fixpoint proves it is a `Float`. The
     /// loop-entry specialization re-adopts `F` (the `S -> F` bridge unboxes the
