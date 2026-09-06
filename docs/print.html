@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9e1eec94.js";
+            window.path_to_searchindex_js = "searchindex-06f90937.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-ad91b9ad.js"></script>
@@ -5206,6 +5206,36 @@ loop, and its M1 A/B (§27.3-2c) was never run. The <code>L</code>-collection ti
 finding (§42: the multi-iteration fixpoint makes the back-edge available at
 merge time) stays in the record for whoever revisits loop-aware allocation;
 the code it justified no longer earns its field in the per-path state.</p>
+<h2 id="50-pending_outer_float_reads-removed-the-mark-lands-at-the-consumption"><a class="header" href="#50-pending_outer_float_reads-removed-the-mark-lands-at-the-consumption">50. <code>pending_outer_float_reads</code> removed: the mark lands at the consumption</a></h2>
+<p>§46 kept the stage-A report queue on the grounds that the raw-f64
+consumption sites (<code>load_fpr_state</code> and the float binop helpers) were
+<code>AbstractFrame</code> methods that only see their own frame, so the owner frame of a
+dynvar-loaded value could not be marked there and the pair had to wait for the
+next <code>compile_instruction</code> boundary, where the <code>JitContext</code> holds the chain.</p>
+<p>The cheaper move is to put those consumption sites on the chain. <code>binop.rs</code>’s
+single <code>impl AbstractFrame</code> block is now <code>impl AbstractState</code>, and <code>load_fpr</code> /
+<code>load_fpr_state</code> moved with it; every field and frame-level method they use
+still resolves through <code>AbstractState</code>’s <code>Deref</code>/<code>DerefMut</code> to the innermost
+frame, so the bodies are unchanged. <code>AbstractState::use_as_float</code> then does
+what the drain did — look up the slot’s <code>dynvar_src</code>, resolve <code>outer</code> against
+the chain, <code>mark_outer_float_read</code> — right at the consumption, and the frame
+keeps only the liveness half (<code>use_as_float_liveness</code>). The queue, its drain,
+its join concatenation and <code>take_pending_outer_float_reads</code> are gone, and
+<code>SlotState</code> is down to <code>slots</code>, <code>fpr_alloc</code>, <code>gp_regfile</code>, <code>local_num</code>.</p>
+<p>Why the timing change is safe: <code>outer</code> is resolved against the chain as it
+stands at the consumption, which is the chain the <code>LoadDynVar</code> recorded the
+provenance under (a nested compile pushes and pops its frames inside the same
+instruction, and a <code>LoadDynVar</code>’s consumer is a later instruction of the same
+frame). The mark is a monotone hint whose readers run at merges and
+boundaries, after the instruction that would have drained it, so seeing it one
+instruction earlier changes nothing they compute; and a read consumed by an
+instruction that ends a block is no longer parked on a queue that a merge
+concatenates — the owner frame simply carries the bit into the join, which
+ORs it exactly as the concatenated queue’s drain would have.</p>
+<p>Verified byte-identical: <code>emit-asm</code> dumps of eight benchmarks match master;
+<code>app_aobench</code> differs only at the site master itself emits differently from run
+to run (§46). The JIT lib tests, the float / block / loop integration tests and
+the full <code>cargo test</code> suite pass.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack"><a class="header" href="#trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack">Trace-chain joins — one <code>AbstractState</code> for the whole specialization stack</a></h1>
 <p><strong>Kind: design record.</strong> Why the JIT’s abstract state spans every frame of
