@@ -1298,7 +1298,7 @@ impl Codegen {
             tbz x14, #(0), generic;
         );
         self.a64_bop_guard(bop, &generic);
-        self.a64_save_binary_integer();
+        self.a64_save_binary_integer(&generic);
         monoasm_arm64!(&mut self.jit,
             cmp x13, x14;
         );
@@ -1516,14 +1516,42 @@ impl Codegen {
     /// `Integer`/`Integer` into the BinOp inline cache (`[PC+8]` classid1,
     /// `[PC+12]` classid2) so the JIT can type integer arithmetic/compare
     /// sites. Without this the cache stays empty (`<INVALID>`) and the JIT
-    /// deopts every integer binop. Mirrors x86 `vm_save_binary_integer`.
-    /// Clobbers X10; leaves the NZCV flags untouched (mov-immediate + stores).
-    pub(in crate::codegen) fn a64_save_binary_integer(&mut self) {
+    /// deopts every integer binop.
+    ///
+    /// Not an unconditional store: displacing a cached non-Integer pair is a
+    /// class change the profile must not lose (the old silent overwrite kept
+    /// `NilClass`-mono-compiled sites deopting forever while never reading
+    /// as polymorphic, and their PMC never learned the site takes Integer
+    /// receivers at all) — so that one execution is routed through *generic*
+    /// instead, whose class saver stamps POLY, records both pairs in the
+    /// PMC, and computes the same result the fast path would have. This
+    /// preserves the invariant the compile-time gates rest on: a POLY
+    /// site's PMC always holds every observed class. Steady state is two
+    /// compares and no stores. Mirrors x86 `vm_save_binary_integer`.
+    /// Clobbers X10 and the NZCV flags (both call sites set their own flags
+    /// afterwards).
+    pub(in crate::codegen) fn a64_save_binary_integer(&mut self, generic: &DestLabel) {
         let int_class: u32 = INTEGER_CLASS.into();
+        let stamp = self.jit.label();
+        let done = self.jit.label();
         monoasm_arm64!(&mut self.jit,
+            ldr w10, [x(PC.0), #(8)];   // cached classid1 (0 = empty)
+            cbz w10, stamp;             // first population: record, no flag
+            cmp w10, #(int_class);
+        );
+        self.jit.bcond_label(Cond::Ne, generic);
+        monoasm_arm64!(&mut self.jit,
+            ldr w10, [x(PC.0), #(12)];  // cached classid2
+            cmp w10, #(int_class);
+        );
+        self.jit.bcond_label(Cond::Ne, generic);
+        monoasm_arm64!(&mut self.jit,
+            b done;                     // steady state: already Integer/Integer
+            stamp:
             mov x10, (int_class);
             str w10, [x(PC.0), #(8)];   // classid1
             str w10, [x(PC.0), #(12)];  // classid2
+            done:
         );
     }
 
@@ -1585,7 +1613,7 @@ impl Codegen {
             tbz x14, #(0), generic;
         );
         self.a64_bop_guard(bop, &generic);
-        self.a64_save_binary_integer();
+        self.a64_save_binary_integer(&generic);
         if is_sub {
             monoasm_arm64!(&mut self.jit,
                 subs x9, x13, x14;

@@ -25,7 +25,7 @@ macro_rules! vm_cmp_opt {
               self.vm_get_slot_value(GP::Rsi);
               self.guard_rdi_rsi_fixnum(&generic);
               self.vm_bop_guard(VmBop::$bop, &generic);
-              self.vm_save_binary_integer();
+              self.vm_save_binary_integer(&generic);
 
               self.[<icmp_ $op>]();
               self.vm_store_r15(GP::Rax);
@@ -56,7 +56,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi);
         self.vm_get_slot_value(GP::Rsi);
-        self.vm_save_binary_integer();
+        self.vm_save_binary_integer(&generic);
         self.vm_generic_binop(&generic, cmp_teq_rescue_values as _);
         self.fetch_and_dispatch();
         label
@@ -73,7 +73,7 @@ impl Codegen {
         self.vm_get_slot_value(GP::Rsi);
         self.guard_rdi_rsi_fixnum(&generic);
         self.vm_bop_guard(VmBop::TEq, &generic);
-        self.vm_save_binary_integer();
+        self.vm_save_binary_integer(&generic);
 
         self.icmp_eq();
         self.vm_store_r15(GP::Rax);
@@ -753,11 +753,37 @@ impl Codegen {
         };
     }
 
-    fn vm_save_binary_integer(&mut self) {
+    /// Fixnum-fast-path IC stamp. Not an unconditional store: a cached
+    /// non-Integer pair being displaced by a fixnum/fixnum execution is a
+    /// class change the profile must not lose — the old silent overwrite is
+    /// how a site mono-compiled for a `NilClass` operand (dewasm DOOM's
+    /// first-frame `@prev` fill) kept failing its guard 296k times while
+    /// never reading as polymorphic: every deopt re-executed right here,
+    /// which re-stamped `Integer`/`Integer` without touching POLY, so the
+    /// `BecamePolymorphic` heal's gate never opened and the PMC never
+    /// learned the site takes Integer receivers at all. On displacement,
+    /// route this one execution through *generic* — the slow path stamps
+    /// POLY, records both pairs in the PMC (displaced pair included), and
+    /// computes the same result the fast path would have — preserving the
+    /// invariant the compile-time gates rest on: a POLY site's PMC always
+    /// holds every observed class. Steady state is two compares and no
+    /// stores. Clobbers only the flags.
+    fn vm_save_binary_integer(&mut self, generic: &DestLabel) {
         let int_class: u32 = INTEGER_CLASS.into();
+        let stamp = self.jit.label();
+        let done = self.jit.label();
         monoasm! { &mut self.jit,
+            cmpl  [r13 - 8], 0;
+            jeq   stamp;           // first population: record without the flag
+            cmpl  [r13 - 8], (int_class);
+            jne   generic;         // displacing a non-Integer pair: full save
+            cmpl  [r13 - 4], (int_class);
+            jne   generic;
+            jmp   done;            // steady state: already Integer/Integer
+        stamp:
             movl  [r13 - 8], (int_class);
             movl  [r13 - 4], (int_class);
+        done:
         };
     }
 
@@ -1533,7 +1559,7 @@ impl Codegen {
         self.guard_rdi_rsi_fixnum(&generic);
         self.vm_bop_guard(bop, &generic);
         self.jit.bind_label(common.clone());
-        self.vm_save_binary_integer();
+        self.vm_save_binary_integer(&generic);
         opt_func(self, generic.clone());
         self.vm_store_r15(GP::Rax);
         self.jit.bind_label(exit.clone());

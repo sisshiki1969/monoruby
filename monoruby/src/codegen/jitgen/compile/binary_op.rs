@@ -348,8 +348,23 @@ impl<'a> JitContext<'a> {
     /// `None` when no observed class can carry the arm, in which case the
     /// caller keeps the ordinary (guarded, deopting) path.
     ///
-    fn dispatch_inline_class(&mut self, callid: CallSiteId, op: IdentId) -> Option<ClassId> {
-        if !self.pmc_really_alternates(callid) {
+    /// *nil_arm_eligible*: the caller will give a nil share its own raw-bit
+    /// arm. That changes the economics of the share gate: a nil runner-up
+    /// below 1/8 still deopts on every appearance under the monomorphic
+    /// guard (dewasm DOOM's `_f262` paid 16k exits at a ~1/20 nil share),
+    /// while the nil arm costs the hot class one untaken compare — so a
+    /// site with any observed nil dispatches regardless of the runner-up's
+    /// share. Non-nil stragglers keep the 1/8 rule: their arm is the
+    /// generic *call*, which really does want a fair share of the traffic.
+    fn dispatch_inline_class(
+        &mut self,
+        callid: CallSiteId,
+        op: IdentId,
+        nil_arm_eligible: bool,
+    ) -> Option<ClassId> {
+        if !self.pmc_really_alternates(callid)
+            && !(nil_arm_eligible && self.store[callid].pmc.entries().len() >= 2)
+        {
             return None;
         }
         let pmc = &self.store[callid].pmc;
@@ -388,6 +403,15 @@ impl<'a> JitContext<'a> {
     /// 1/8 the class-set guard demands of its members. (etanni measured
     /// ~2% slower before this test existed on the two-arm dispatch.)
     ///
+    /// Did the VM ever observe *class* as this site's receiver?
+    fn pmc_recv_contains(&self, callid: CallSiteId, class: ClassId) -> bool {
+        self.store[callid]
+            .pmc
+            .entries()
+            .iter()
+            .any(|e| e.recv == class)
+    }
+
     fn pmc_really_alternates(&self, callid: CallSiteId) -> bool {
         let pmc = &self.store[callid].pmc;
         if pmc.entries().len() < 2 {
@@ -487,7 +511,12 @@ impl<'a> JitContext<'a> {
             return Ok(false);
         };
         let op: IdentId = binop.into();
-        let Some(inline_class) = self.dispatch_inline_class(callid, op) else {
+        // See the `nil_arm` comment below; computed up front because it also
+        // loosens the dispatch gate (`dispatch_inline_class`).
+        let nil_arm_eligible = matches!(binop, BinaryOp::Cmp(CmpKind::Eq | CmpKind::TEq))
+            && self.pmc_recv_contains(callid, NIL_CLASS)
+            && self.basic_op_assumable(NIL_CLASS, op);
+        let Some(inline_class) = self.dispatch_inline_class(callid, op, nil_arm_eligible) else {
             return Ok(false);
         };
         // The dispatch guards the *receiver*. An arithmetic arm still guards
@@ -527,10 +556,23 @@ impl<'a> JitContext<'a> {
         let (entry, merge) = self.declare_merge(state, ir, &[lhs, rhs], dst);
         let slow = self.label();
 
+        // A `nil` receiver needs no method call at all for `==` / `===`:
+        // `NilClass#==` is identity, and nil's encoding is unique, so the
+        // answer is one raw bit-compare of the *argument* against
+        // `NIL_VALUE`. Give it its own arm (behind the hot class's) instead
+        // of sending the nil share through the generic helper — the
+        // rubykon/DOOM alternating shapes spend half their traffic there.
+        // Licence: the arm bakes in the builtin, so it is gated on and
+        // recorded against the (NIL_CLASS, op) basic-op pair — `!=` has no
+        // such pair and is excluded by the gate itself.
+        let nil_arm = nil_arm_eligible && inline_class != NIL_CLASS;
+        let nil_chk = self.label();
+        let arm1_miss = if nil_arm { nil_chk.clone() } else { slow.clone() };
+
         // ---- arm 1: the class that can be compared inline.
         let mut fast = entry.clone();
         fast.load(ir, lhs, GP::Rdi);
-        ir.push(AsmInst::BrClassNe(GP::Rdi, inline_class, slow));
+        ir.push(AsmInst::BrClassNe(GP::Rdi, inline_class, arm1_miss));
         // Reaching the arm *is* the proof, so `fire_binary_inline`'s own
         // receiver guard sees a state that already knows the class and emits
         // nothing.
@@ -558,7 +600,31 @@ impl<'a> JitContext<'a> {
         }
         self.end_arm(fast, ir, &merge, true);
 
-        // ---- arm 2: every other operand pair, through the generic helper.
+        // ---- nil arm: `nil == x` ⇔ `x` is nil, decided by the raw bits.
+        if nil_arm {
+            ir.push(AsmInst::Label(nil_chk));
+            // Rdi still holds the receiver: the only way here is arm 1's
+            // class branch, which sits after the load.
+            let mut narm = entry.clone();
+            ir.push(AsmInst::BrClassNe(GP::Rdi, NIL_CLASS, slow));
+            narm.load(ir, rhs, GP::Rsi);
+            // `IntegerCmpImm` is a raw `cmp` + flag-to-bool; `NIL_VALUE` is
+            // not a tagged fixnum, but for `Eq` bit-equality is exactly the
+            // question (no other value shares nil's encoding). `===` on nil
+            // is the same identity test.
+            ir.push(AsmInst::IntegerCmpImm {
+                kind: CmpKind::Eq,
+                dst: None,
+                lhs: GP::Rsi,
+                imm: crate::value::NIL_VALUE as i32,
+            });
+            narm.def_rax2acc(ir, dst);
+            self.end_arm(narm, ir, &merge, true);
+            self.record_bop_dep(NIL_CLASS, op);
+        }
+
+        // ---- residual arm: every other operand pair, through the generic
+        // helper.
         ir.push(AsmInst::Label(slow));
         let mut rest = entry.clone();
         self.emit_generic_binary(&mut rest, ir, binop, lhs, rhs, case_semantics, is_func_call);
@@ -800,26 +866,114 @@ impl<'a> JitContext<'a> {
         }
 
         // ---- 3c. A *fused* comparison (`BinCmpBr`) at a site the VM marked
-        // polymorphic and whose receiver genuinely alternates: take the
-        // polymorphic residual (step 5) instead of the mono inline below.
-        // The two-arm dispatch (step 2) cannot serve the fused form — the
-        // arms would have to materialize the very flag the fusion exists to
+        // polymorphic and whose receiver genuinely alternates. The two-arm
+        // *value* dispatch (step 2) cannot serve the fused form — its arms
+        // would have to materialize the very flag the fusion exists to
         // avoid — so these sites used to fall through to the single-class
         // guard and side-exit on every off-class operand, forever (dewasm
         // DOOM: thousands of `Integer == nil` exits per tick, the "~24
-        // fused side exits" note on step 2 notwithstanding). The residual
-        // is guard-free, and for `==`/`!=` it is `opt_eq_cmp`'s inline
-        // bit-equality fast path, which answers an immediate-vs-immediate
-        // compare — the `nil` operand included — without the C call. The
-        // 1/8-share gate keeps the hot-class fast path for one-hot-class
-        // sites, exactly as it does for the two-arm dispatch.
-        let fused_poly_residual = polymorphic
-            && case_semantics
-            && state.class(lhs).is_none()
-            && self
-                .store
-                .get_callsite_id(self.iseq_id(), bc_pos)
-                .is_some_and(|callid| self.pmc_really_alternates(callid));
+        // fused side exits" note on step 2 notwithstanding). The 1/8-share
+        // gate keeps the hot-class fast path for one-hot-class sites,
+        // exactly as it does for the value dispatch.
+        let fused_poly_callid = (polymorphic && case_semantics && state.class(lhs).is_none())
+            .then(|| self.store.get_callsite_id(self.iseq_id(), bc_pos))
+            .flatten();
+
+        // The nil/Integer alternation gets real arms, not the C helper: the
+        // arms of a *fused* dispatch need no value merge, because each one
+        // branches for itself — the nil arm is one raw compare of the
+        // argument against `NIL_VALUE` fused straight into the branch, and
+        // the Integer arm is the ordinary fused inline (whose receiver
+        // guard now only ever sees the leftover classes). Both arms jump to
+        // the same branch label with every slot at home (`declare_merge`
+        // flushed the operands, the inline's own flush covers its spills),
+        // so the caller's single side-branch bookkeeping — registered
+        // against the conservative merge state — covers them both.
+        // Licence as everywhere: the nil arm bakes in `NilClass#==`/`===`,
+        // so it is gated on and recorded against the basic-op pair.
+        if let Some(callid) = fused_poly_callid
+            && let BinaryInlineMode::CmpBr { brkind, dest } = mode
+            && matches!(binop, BinaryOp::Cmp(CmpKind::Eq | CmpKind::TEq))
+            && self.pmc_recv_contains(callid, NIL_CLASS)
+            && self.pmc_recv_contains(callid, INTEGER_CLASS)
+            // The peel has no generic arm: a receiver outside {nil,
+            // Integer} lands on the Integer arm's guard, a plain deopt. So
+            // it only serves sites whose whole observed profile is the
+            // nil/Integer pair — anything richer keeps the guard-free
+            // residual routing below. No share gate: the nil arm costs the
+            // hot class one untaken compare, while an under-1/8 nil share
+            // still deopts on every appearance under a monomorphic guard.
+            && self.store[callid]
+                .pmc
+                .entries()
+                .iter()
+                .all(|e| e.recv == NIL_CLASS || e.recv == INTEGER_CLASS)
+            && self.basic_op_assumable(NIL_CLASS, binop.into())
+        {
+            let state_save = state.clone();
+            let ir_save = ir.save();
+            let (entry, merge) = self.declare_merge(state, ir, &[lhs, rhs], None);
+            let not_nil = self.label();
+
+            // nil arm: `nil == x` ⇔ `x` is nil — raw bit compare, fused.
+            let mut narm = entry.clone();
+            narm.load(ir, lhs, GP::Rdi);
+            ir.push(AsmInst::BrClassNe(GP::Rdi, NIL_CLASS, not_nil));
+            narm.load(ir, rhs, GP::Rsi);
+            // Raw `cmp` + fused branch; `NIL_VALUE` is not a tagged fixnum,
+            // but for `Eq` bit-equality is exactly the question (no other
+            // value shares nil's encoding; `===` on nil is the same test).
+            ir.push(AsmInst::IntegerCmpBrImm {
+                kind: CmpKind::Eq,
+                brkind,
+                branch_dest: dest,
+                lhs: GP::Rsi,
+                imm: crate::value::NIL_VALUE as i32,
+            });
+            self.end_arm(narm, ir, &merge, true);
+
+            // Integer arm: the fused inline the mono path would have
+            // emitted, now behind the nil peel — its fixnum guard still
+            // deopts for a class the site never showed (the profile-subset
+            // gate above keeps this to genuinely unobserved classes).
+            ir.push(AsmInst::Label(not_nil));
+            let mut iarm = entry.clone();
+            match self.fire_binary_inline(
+                &mut iarm,
+                ir,
+                binop.into(),
+                lhs,
+                rhs,
+                INTEGER_CLASS,
+                rhs_class,
+                bc_pos,
+                mode,
+                None,
+            ) {
+                Some(BinaryInlineOutcome::Done) => {
+                    self.record_bop_dep(NIL_CLASS, binop.into());
+                    self.end_arm(iarm, ir, &merge, false);
+                    self.bind_merge(state, ir, merge);
+                    return Ok(BinaryLowering::Emitted);
+                }
+                // The generator declined (or, impossibly for an unknown
+                // receiver, folded): back the peel out and take the
+                // residual routing below.
+                _ => {
+                    ir.restore(ir_save);
+                    *state = state_save;
+                }
+            }
+        }
+
+        // Residual routing for the remaining fused polymorphic shapes: the
+        // generic helper, which for `==`/`!=` is `opt_eq_cmp`'s inline
+        // bit-equality fast path — guard-free either way. Unlike the peel
+        // (whose nil arm costs the hot class one compare, so any observed
+        // nil justifies it), sending *everything* to the helper taxes the
+        // hot class on each execution, so the 1/8-share gate stands here.
+        let fused_poly_residual =
+            fused_poly_callid.is_some_and(|callid| self.pmc_really_alternates(callid));
 
         // ---- 4. One path for every operator: guard the receiver, run the
         // generator registered on `lhs_class#op`, and fall back for whatever
@@ -1527,6 +1681,55 @@ mod tests {
             big = 1 << 62
             300.times { |n| res << probe(big + n, 100) }
             res.tally.sort_by { |k, _| k.to_s }
+            "#,
+        );
+    }
+
+    /// The fused nil-peel: an alternating nil/Integer receiver at a fused
+    /// compare gets a raw-bit nil arm plus the ordinary fused Integer
+    /// inline, under both branch polarities (`if` and `unless`), with the
+    /// nil == nil, `===`, and Float-argument corners pinned against the
+    /// interpreter.
+    #[test]
+    fn fused_nil_peel_operand_matrix() {
+        run_test(
+            r#"
+            def hit(prev, key)
+              if prev == key then :hit else :miss end
+            end
+            def inv(prev, key)
+              unless prev == key then :ne else :eq end
+            end
+            def teq(prev, key)
+              if prev === key then :hit else :miss end
+            end
+            res = []
+            300.times do |n|
+              v = n % 3 == 0 ? nil : n
+              res << hit(v, 7) << inv(v, 7) << teq(v, 7)
+            end
+            [res.tally.sort_by { |k, _| k.to_s },
+             hit(nil, nil), inv(nil, nil), teq(nil, nil),
+             hit(nil, 7.0), hit(7, 7.0), hit(1 << 70, 7)]
+            "#,
+        );
+    }
+
+    /// The value-mode nil arm: the two-arm dispatch grows a raw-bit nil arm
+    /// when the PMC shows a nil share, so `res = (a == b)` at an
+    /// alternating site answers nil receivers without the generic helper.
+    /// Semantics pinned across the operand mixes.
+    #[test]
+    fn value_cmp_nil_arm_operand_matrix() {
+        run_test(
+            r#"
+            def probe(a, b) = (a == b)
+            res = []
+            300.times do |n|
+              v = n % 3 == 0 ? nil : n
+              res << probe(v, 7) << probe(v, nil)
+            end
+            [res.tally.sort_by { |k, _| k.to_s }, probe(nil, nil), probe(7, 7.0)]
             "#,
         );
     }

@@ -2709,6 +2709,7 @@ ccd878c1f1810dfef13a53d1e1a05fb8	:te	begin; :sym.instance_eval { alias :foo :to_
 ccdd40701f9797edf931ec9bb16c3abf	[:alpha, 1.5, :beta, 2.5]	class PmF\n          def tag = :alpha\n          def rate = 1.5\n        e
 ccebcacf1f0e521c283f27ea3d09e042	[[[:hit, 1], [:miss, 299]], :hit, :miss, :hit, :hit, :miss]	def probe(prev, key)\n              if prev == key\n                :
 ccee79e211a63a6f8408eaaa13a6aee9	[{a: 1}, [1, {a: 1}], {}, "no implicit conversion of Object into Hash", "can't convert Object to Hash (Object#to_hash gives Integer)"]	def f(**o) = o\n            def g(a, **o) = [a, o]\n            m = O
+cd2701bc81848b76a6ea4326a7d33198	[[[:eq, 1], [:hit, 2], [:miss, 598], [:ne, 299]], :hit, :eq, :hit, :miss, :hit, :miss]	def hit(prev, key)\n              if prev == key then :hit else :mis
 cd29ece16f52c170d36a353d72be8fb8	[1, 2, [3, 4, 5, 6, 7]]	def f(x,y,*z)\n            [x,y,z]\n        end\n        \n\n        f(1,2,3
 cd2df73dc4bb642c9c1db8166dee2691	true	t = File.birthtime("Cargo.toml") rescue :unsupported\n            t 
 cd4f0795009d40364b489188418b4b29	42	$a = 42\n            alias $b $a\n            $b\n            
@@ -3222,6 +3223,7 @@ f4cc159c69dc86f34d5c5c1a1739908b	nil	$!\n
 f4dbd65859826724c9fb5648c3f84c3a	[:re]	def m\n              re = /(?<matched>foo)/\n              re =~ "foo
 f4e35e264294b3bd8913c077f24dea7a	[{"a" => 10, "b" => 20}, {1 => :a, 2 => :b}, {}]	h = { a: 1, b: 2 }\n            [h.to_h { |k, v| [k.to_s, v * 10] },
 f4ef37c05309c4811b6d78d2a1b7c9ce	[true, true]	S = Struct.new(:a, :b)\n            \n\n            a = S.new(1, "x")\n
+f4f168f8c67128f9b1bc02c608e68a9c	[[[false, 499], [true, 101]], true, true]	def probe(a, b) = (a == b)\n            res = []\n            300.tim
 f4f318253ef6eda2bd57d54a445dae64	[1, 2, [3, 4], 5, [6], 7, 8, [9, 10]]	f = ->((a, b, *c, d), (*e, f, g), (*h)) { [a, b, c, d, e, f, g, h] }\n  
 f54339b0ac95ca56fd90790bbbaab021	[[1], [2], :missing, [:hi], :gone]	class R; def v = 1; end\n        first = [R.new].map(&:v)\n        class 
 f54dcd2ea5a345f130209fcaaafe0294	"US-ASCII"	"abc".encode("US-ASCII").center(5).encoding.to_s
