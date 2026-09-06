@@ -697,6 +697,7 @@
 350fc45901c7ff4041bdf8a1abf3a79c	["via_send", "BSend", "BSend", [], [:a], 1]	class BSend\n              def direct; binding; end\n              de
 351c5e2d7c1113c1b45bd6b66e8aa52a	[2.0, 3.0, -3.0, -2.0, 0.0, 2.0, 0.5]	def fa; 17 % 5.0; end\n            def fb; -17 % 5.0; end\n          
 3535eecf4c57db26badbf664b0539819	["DEFAULT", true, "IGNORE"]	Signal.trap("USR2", "DEFAULT")\n            a = Signal.trap("USR2") 
+354035ac9f6036c3a6b9b24e07a634bf	ArgumentError	(begin; Dir.home("no_such_user_zzq"); rescue => e; e.class; end)
 355f64ccc41342dde6bb12c04da77410	true	[Process.getpgrp, Process.getpgid(0), Process.getsid].all? { |v| v.is_a?(Integer
 3565c58dca7325f9f598f2c1ae3626b3	true	GC.config.is_a?(Hash)
 356bbf9786b1d2f6d8025e7e3cda3118	[4, [0, 104, 0, 105], [104, 233], "Encoding::UndefinedConversionError"]	path = "/tmp/monoruby_test_iowt_#{Process.pid}_#{rand(100000)}"\n   
@@ -1678,6 +1679,7 @@
 81521b66a2141f9037bbfa1330b6895b	"abcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"	"abcdefghij" * 5
 815fb5dfd31836a4be23fedfa5db3a46	"ok"	r, w = IO.pipe\n            t = Thread.new { r.read(2) }\n           
 81674508001763ecbda6a61bcd269308	[1, :assigned]	module M1; end\n        x = 0\n        (x += 1; M1)::C ||= :assigned\n    
+817da22aee03e98f9c09abf7ff088595	[ArgumentError, "user no_such_user_zzq doesn't exist"]	(begin; File.expand_path("~no_such_user_zzq"); rescue => e; [e.class, e.message]
 8193766d4ea2f53b2e9b0d421c63493f	["no keywords accepted", :ok, :ok, :ok, "no keywords accepted", 3, "no keywords accepted", :mok, "no keywords accepted", "no keywords accepted", :mok]	def rescue_msg\n              yield; :no_error\n            rescue Ar
 819786c3c521ff97cda2204ae5eaf866	[true]	def check(o); o.is_a?(Integer); end\n            r = []\n            
 81a4893d8dc3fd03a6cb2cc3f973f7b0	[4, 8, 111, 58, 14, 69, 120, 99, 101, 112, 116, 105, 111, 110, 8, 58, 9, 109, 101, 115, 103, 73, 34, 6, 120, 6, 58, 6, 69, 84, 58, 7, 98, 116, 48, 58, 10, 64, 105, 118, 97, 114, 105, 12]	e = Exception.new("x")\n            e.instance_variable_set(:@ivar, 

@@ -1037,8 +1037,43 @@ impl Globals {
     }
 
     pub fn new_test() -> Self {
+        Self::pin_test_nss_to_files();
         Globals::new(1, false, true)
     }
+
+    /// On glibc hosts, pin the test process's passwd/group NSS lookups
+    /// to the `files` service. The differential tests probe nonexistent
+    /// users and groups (`Etc.getpwnam` errors, `~no_such_user`
+    /// expansion, `Process.groups=` by unknown name), and any NSS
+    /// service listed after `files` turns each such miss into that
+    /// service's timeout — WSL2's nss-systemd waits out systemd's
+    /// 45-second varlink timeout per miss, which alone put five tests
+    /// at 90-136 s. Existing entries resolve from `files` identically;
+    /// only the miss path changes, only inside this process (the
+    /// host's nsswitch.conf is untouched), and only for test Globals.
+    /// Must run before the process's first passwd/group lookup — glibc
+    /// parses nsswitch.conf once per database on first use.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn pin_test_nss_to_files() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            unsafe extern "C" {
+                fn __nss_configure_lookup(
+                    dbname: *const std::ffi::c_char,
+                    string: *const std::ffi::c_char,
+                ) -> std::ffi::c_int;
+            }
+            // SAFETY: both arguments are valid NUL-terminated C strings;
+            // the glibc extension only records the override.
+            unsafe {
+                __nss_configure_lookup(c"passwd".as_ptr(), c"files".as_ptr());
+                __nss_configure_lookup(c"group".as_ptr(), c"files".as_ptr());
+            }
+        });
+    }
+
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    fn pin_test_nss_to_files() {}
 
     pub fn locals_len(&self, func_id: FuncId) -> usize {
         match self.store[func_id].kind {
