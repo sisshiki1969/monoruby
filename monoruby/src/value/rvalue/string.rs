@@ -55,6 +55,12 @@ pub(crate) fn sjis_char_width(b: &[u8]) -> Option<usize> {
 #[monoruby_object]
 pub struct RString(Value);
 
+impl RString {
+    pub fn bytes(v: Vec<u8>) -> Self {
+        Self(Value::bytes(v))
+    }
+}
+
 /// Iterator yielding one character's worth of bytes per call,
 /// honouring the declared encoding. For UTF-8, walks valid UTF-8
 /// scalars; broken byte sequences advance one byte at a time so the
@@ -220,8 +226,7 @@ pub enum Encoding {
 /// Canonical names for [`Encoding::Other`] variants (stateful /
 /// dummy byte encodings monoruby has no native codec for). The
 /// index is the `Encoding::Other` payload.
-pub(crate) const OTHER_ENC_NAMES: &[&str] =
-    &["UTF-7", "CP50220", "CP50221", "UTF-16", "UTF-32"];
+pub(crate) const OTHER_ENC_NAMES: &[&str] = &["UTF-7", "CP50220", "CP50221", "UTF-16", "UTF-32"];
 
 /// `(display name, `Encoding::<CONST>` suffix)` for
 /// [`Encoding::NamedByte`] variants — ASCII-compatible byte
@@ -570,33 +575,33 @@ impl Encoding {
             "TIS_620" | "TIS620" => Ok(Encoding::NamedByte(named_byte_index("TIS_620").unwrap())),
             "KOI8_R" => Ok(Encoding::NamedByte(named_byte_index("KOI8_R").unwrap())),
             "KOI8_U" => Ok(Encoding::NamedByte(named_byte_index("KOI8_U").unwrap())),
-            "WINDOWS_1250" | "CP1250" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1250").unwrap()))
-            }
-            "WINDOWS_1251" | "CP1251" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1251").unwrap()))
-            }
-            "WINDOWS_1252" | "CP1252" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1252").unwrap()))
-            }
-            "WINDOWS_1253" | "CP1253" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1253").unwrap()))
-            }
-            "WINDOWS_1254" | "CP1254" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1254").unwrap()))
-            }
-            "WINDOWS_1255" | "CP1255" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1255").unwrap()))
-            }
-            "WINDOWS_1256" | "CP1256" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1256").unwrap()))
-            }
-            "WINDOWS_1257" | "CP1257" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1257").unwrap()))
-            }
-            "WINDOWS_1258" | "CP1258" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1258").unwrap()))
-            }
+            "WINDOWS_1250" | "CP1250" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1250").unwrap(),
+            )),
+            "WINDOWS_1251" | "CP1251" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1251").unwrap(),
+            )),
+            "WINDOWS_1252" | "CP1252" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1252").unwrap(),
+            )),
+            "WINDOWS_1253" | "CP1253" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1253").unwrap(),
+            )),
+            "WINDOWS_1254" | "CP1254" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1254").unwrap(),
+            )),
+            "WINDOWS_1255" | "CP1255" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1255").unwrap(),
+            )),
+            "WINDOWS_1256" | "CP1256" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1256").unwrap(),
+            )),
+            "WINDOWS_1257" | "CP1257" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1257").unwrap(),
+            )),
+            "WINDOWS_1258" | "CP1258" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1258").unwrap(),
+            )),
             "IBM437" | "CP437" => Ok(Encoding::NamedByte(named_byte_index("IBM437").unwrap())),
             "IBM737" | "CP737" => Ok(Encoding::NamedByte(named_byte_index("IBM737").unwrap())),
             "IBM775" | "CP775" => Ok(Encoding::NamedByte(named_byte_index("IBM775").unwrap())),
@@ -618,8 +623,8 @@ impl Encoding {
             // Byte encodings we still fold onto ASCII-8BIT without
             // name preservation (Mac* — kept as the prior behaviour to
             // avoid ASCII-compat edge cases).
-            "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN"
-            | "MACROMANIA" | "MACTHAI" | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
+            "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN" | "MACROMANIA" | "MACTHAI"
+            | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
 
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unknown encoding name - {s}"
@@ -1463,7 +1468,11 @@ impl RStringInner {
             // from_utf8 -- a SevenBit string can answer in O(1).
             Encoding::Utf8 => match self.code_range() {
                 CodeRange::SevenBit => self.len(),
-                CodeRange::Valid => self.as_bytes().iter().filter(|&&b| (b & 0xC0) != 0x80).count(),
+                CodeRange::Valid => self
+                    .as_bytes()
+                    .iter()
+                    .filter(|&&b| (b & 0xC0) != 0x80)
+                    .count(),
                 CodeRange::Broken => self.iter_char_bytes().count(),
                 // code_range() always populates `cr` to a concrete
                 // variant before returning; Unknown is unreachable.
@@ -2724,8 +2733,14 @@ mod encoding_tests {
         // Bare `UTF-16` / `UTF-32` are CRuby's BOM-based *dummy*
         // encodings — distinct ASCII-incompatible `Other` variants,
         // not the real LE codecs.
-        assert_eq!(Encoding::try_from_str("UTF-16").unwrap(), Encoding::Other(3));
-        assert_eq!(Encoding::try_from_str("UTF-32").unwrap(), Encoding::Other(4));
+        assert_eq!(
+            Encoding::try_from_str("UTF-16").unwrap(),
+            Encoding::Other(3)
+        );
+        assert_eq!(
+            Encoding::try_from_str("UTF-32").unwrap(),
+            Encoding::Other(4)
+        );
         // Japanese.
         assert_eq!(Encoding::try_from_str("EUC-JP").unwrap(), Encoding::EucJp);
         assert_eq!(
@@ -3501,7 +3516,10 @@ mod shared_string_tests {
     /// SmallVec rather than trusting the (non-repr(C)) SmallVec layout.
     #[test]
     fn shared_overlay_matches_spilled_smallvec_layout() {
-        assert_eq!(std::mem::offset_of!(SharedContent, tag), smallvec::OFFSET_CAPA);
+        assert_eq!(
+            std::mem::offset_of!(SharedContent, tag),
+            smallvec::OFFSET_CAPA
+        );
         assert_eq!(
             std::mem::offset_of!(SharedContent, ptr),
             smallvec::OFFSET_HEAP_PTR
@@ -3518,7 +3536,11 @@ mod shared_string_tests {
         // A spilled owned buffer read through the `shared` overlay must
         // expose its heap ptr / len on the same offsets.
         let bytes: Vec<u8> = (0..100u8).collect();
-        let inner = RStringInner::from(SmallVec::from_slice(&bytes), Encoding::Ascii8, CodeRange::Valid);
+        let inner = RStringInner::from(
+            SmallVec::from_slice(&bytes),
+            Encoding::Ascii8,
+            CodeRange::Valid,
+        );
         assert!(inner.owned_spilled());
         let (ptr, len) = unsafe { (inner.content.shared.ptr, inner.content.shared.len) };
         assert_eq!(ptr, inner.as_ptr());
@@ -3542,7 +3564,10 @@ mod shared_string_tests {
         let root = child.as_rstring_inner().shared_root().unwrap();
         assert_eq!(parent.as_rstring_inner().shared_root(), Some(root));
         assert!(root.is_frozen());
-        assert_eq!(child.as_rstring_inner().as_bytes(), &src.as_bytes()[50..200]);
+        assert_eq!(
+            child.as_rstring_inner().as_bytes(),
+            &src.as_bytes()[50..200]
+        );
         assert_eq!(parent.as_rstring_inner().as_bytes(), src.as_bytes());
         // Both views alias the root's buffer (no copy happened).
         assert_eq!(

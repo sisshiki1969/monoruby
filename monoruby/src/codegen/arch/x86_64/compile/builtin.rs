@@ -728,11 +728,12 @@ impl Codegen {
     }
 
     ///
-    /// `Hash#[]` with the probe in line — see `AsmInst::HashProbePacked`.
+    /// `Hash#[]` with the probe in line — see `AsmInst::HashProbe`.
     ///
     /// ### in
     /// - rdx: the hash
-    /// - rcx: the key, a bits-hashed immediate (class-guarded by the caller)
+    /// - rcx: the key (class-guarded by the caller to what `digest` /
+    ///   `key_eq` expect)
     ///
     /// ### out
     /// - rax: the value on a hit; `hashindex`'s answer on a miss
@@ -742,14 +743,31 @@ impl Codegen {
     /// Total: a shape the probe does not handle is answered by the builtin,
     /// never by an exit.
     ///
-    pub(crate) fn gen_hash_probe_packed(
+    /// ### The indexed regime
+    ///
+    /// Past the linear size the map is probed through its hashbrown
+    /// indices table, mirroring `RawTableInner::find_inner` without SIMD:
+    /// a 16-byte control group is two 64-bit words, each matched against
+    /// the digest's 7-bit tag by the SWAR zero-byte test hashbrown's own
+    /// generic backend uses (`(x - 0x01..) & !x & 0x80..`; false positives
+    /// are possible past a true match and are harmless — every candidate is
+    /// verified by its full stored digest). Candidates are read from the
+    /// bucket array below the control bytes (bucket `i` at `ctrl - 8(i+1)`)
+    /// as indices into the entries. After both words, an EMPTY control byte
+    /// (`0xFF`: bits 7 and 6 set, so `w & (w << 1) & 0x80..`) anywhere in
+    /// the group ends the walk; otherwise the triangular sequence steps on.
+    ///
+    pub(crate) fn gen_hash_probe(
         &mut self,
         layout: rubymap::EntriesLayout,
         hashindex: u64,
         digest: u64,
+        key_eq: Option<u64>,
     ) {
         let lp = self.jit.label();
         let next = self.jit.label();
+        let indexed = self.jit.label();
+        let group = self.jit.label();
         let exhausted = self.jit.label();
         let miss = self.jit.label();
         let done = self.jit.label();
@@ -763,27 +781,23 @@ impl Codegen {
         let ptr_off = layout.ptr_offset;
         let bucket_size = layout.bucket_size;
         let hash_off = layout.hash_offset;
-        let key_off = layout.key_offset;
-        let value_off = layout.value_offset;
+        let ctrl_off = layout.indices_ctrl_offset;
+        let mask_off = layout.indices_mask_offset;
+        let content = HASH_CONTENT_OFFSET;
         monoasm! { &mut self.jit,
-            // The boxed representation only: inline pairs have no digests to
-            // compare, and the identity-keyed map is keyed differently.
+            // The boxed, value-keyed representation only: inline pairs have
+            // no digests to compare, and the identity-keyed map digests the
+            // key's identity, not its content (a String key's digest would
+            // not even find its own object).
             movzxb rsi, [rdx + (ty_flags)];
             andq rsi, (mask);
             cmpq rsi, (boxed_rep);
             jne  miss;
-            movq rdi, [rdx + (map_ptr)];
-            // Linear regime only (no indices table): the entries are the
-            // whole probe. Past that the table decides, which is stage 2.
-            // Either way the builtin answers correctly, so a shape this
-            // probe does not handle is a *call*, not an exit: a deopt here
-            // would not recompile, and a large Symbol-keyed Hash would then
-            // exit on every lookup — strictly worse than today.
-            movzxb rsi, [rdi + (linear_off)];
+            movq rsi, [rdx + (content)];        // 0 = Map, 1 = IdentMap
             testq rsi, rsi;
-            jz   miss;
-            // digest = packed_digest_c(key). A leaf, but a C call: rdx / rcx
-            // are caller-saved, and the miss path still needs them.
+            jne  miss;
+            // digest = digest(key). A leaf, but a C call: rdx / rcx are
+            // caller-saved, and the miss path still needs them.
             pushq rdx;
             pushq rcx;
             movq rdi, rcx;
@@ -793,6 +807,11 @@ impl Codegen {
             popq rdx;
             movq r8, rax;                       // r8 = digest
             movq rdi, [rdx + (map_ptr)];
+            movzxb rsi, [rdi + (linear_off)];
+            testq rsi, rsi;
+            jz   indexed;
+            // Linear regime (no indices table): the entries are the whole
+            // probe.
             movq r11, [rdi + (ptr_off)];        // r11 = &entries[0]
             movq r9, [rdi + (len_off)];
             movq rsi, (bucket_size);
@@ -803,19 +822,64 @@ impl Codegen {
             jae  exhausted;
             cmpq r8, [r11 + (hash_off)];
             jne  next;
-            // `Option<Value>` in `Value`'s NonZero niche: `Some(k)` is k's own
-            // bits, and a tombstone's `None` is the zero word, which no packed
-            // key equals.
-            cmpq rcx, [r11 + (key_off)];
-            jne  next;
-            movq rax, [r11 + (value_off)];
-            jmp  done;
+        }
+        // entry in r11; rsi / rdi / r10 are free here.
+        self.gen_hash_probe_key_check(&layout, key_eq, 11, 10, &next, &miss, &done);
+        monoasm! { &mut self.jit,
         next:
             addq r11, (bucket_size);
             jmp  lp;
+        indexed:
+        }
+        if layout.group_width == 16 {
+            let lo = 0x0101_0101_0101_0101u64;
+            let hi = 0x8080_8080_8080_8080u64;
+            monoasm! { &mut self.jit,
+                movq rsi, r8;
+                andq rsi, [rdi + (mask_off)];   // rsi = pos = h1 & bucket_mask
+                xorq rdi, rdi;                  // rdi = stride
+            group:
+            }
+            // The two words of the group at pos; rsi walks pos, pos + 8.
+            for word in 0..2 {
+                if word == 1 {
+                    monoasm! { &mut self.jit, addq rsi, 8; }
+                }
+                self.gen_hash_probe_word(&layout, key_eq, lo, hi, &miss, &done);
+            }
+            monoasm! { &mut self.jit,
+                // Back to pos. An EMPTY byte in the group ends the walk.
+                subq rsi, 8;
+                movq r9, [rdx + (map_ptr)];
+                movq r9, [r9 + (ctrl_off)];
+                movq rax, [r9 + rsi];
+                movq r10, rax;
+                shlq r10, 1;
+                andq rax, r10;
+                movq r11, [r9 + rsi + 8];
+                movq r10, r11;
+                shlq r10, 1;
+                andq r11, r10;
+                orq  rax, r11;
+                movq r10, (hi);
+                testq rax, r10;
+                jne  exhausted;
+                // pos = (pos + stride) & bucket_mask, stride += 16.
+                addq rdi, 16;
+                addq rsi, rdi;
+                movq r11, [rdx + (map_ptr)];
+                andq rsi, [r11 + (mask_off)];
+                jmp  group;
+            }
+        } else {
+            // A control group this emitter does not know how to scan: the
+            // builtin walks the table.
+            monoasm! { &mut self.jit, jmp miss; }
+        }
+        monoasm! { &mut self.jit,
         exhausted:
             // Not present. Without a default that *is* the answer, and the
-            // builtin would only redo the digest and the scan to say so;
+            // builtin would only redo the digest and the probe to say so;
             // `Option<Box<HashDefault>>` is null when there is neither a
             // default value nor a default proc.
             movq rsi, [rdx + (default_slot)];
@@ -829,6 +893,137 @@ impl Codegen {
         // handle: the builtin.
         self.emit_call_2args(hashindex);
         self.jit.bind_label(done);
+    }
+
+    /// One control word of the indexed probe (`gen_hash_probe`): rsi is
+    /// the word's position in the control bytes, r8 the digest; rax / r9 /
+    /// r10 / r11 are scratch. Every tag match is looked up through the
+    /// bucket array and verified against the entry's stored digest, then
+    /// its key. Falls through when the word is done.
+    fn gen_hash_probe_word(
+        &mut self,
+        layout: &rubymap::EntriesLayout,
+        key_eq: Option<u64>,
+        lo: u64,
+        hi: u64,
+        miss: &DestLabel,
+        done: &DestLabel,
+    ) {
+        let cand = self.jit.label();
+        let cand_next = self.jit.label();
+        let word_done = self.jit.label();
+        let map_ptr = HASH_CONTENT_MAP_OFFSET;
+        let ptr_off = layout.ptr_offset;
+        let bucket_size = layout.bucket_size;
+        let hash_off = layout.hash_offset;
+        let ctrl_off = layout.indices_ctrl_offset;
+        let mask_off = layout.indices_mask_offset;
+        monoasm! { &mut self.jit,
+            movq r9, [rdx + (map_ptr)];
+            movq r9, [r9 + (ctrl_off)];
+            movq rax, [r9 + rsi];               // the control word
+            movq r9, r8;
+            shrq r9, 57;                        // the digest's 7-bit tag
+            movq r10, (lo);
+            imul r9, r10;                       // ... in every byte
+            xorq rax, r9;                       // x: a zero byte per match
+            movq r9, rax;
+            notq r9;
+            subq rax, r10;
+            andq rax, r9;
+            movq r10, (hi);
+            andq rax, r10;                      // rax = match mask (bit 7 of each byte)
+            movq r9, rsi;                       // r9 = position of the byte at bit 0
+        cand:
+            testq rax, rax;
+            jz   word_done;
+            testq rax, (0x80);
+            jz   cand_next;
+            // Candidate: bucket (r9 & mask) holds an index into the entries.
+            movq r10, [rdx + (map_ptr)];
+            movq r11, r9;
+            andq r11, [r10 + (mask_off)];
+            notq r11;                           // -(index + 1)
+            movq r10, [r10 + (ctrl_off)];
+            movq r10, [r10 + r11 * 8];          // the entry's index
+            movq r11, (bucket_size);
+            imul r10, r11;
+            movq r11, [rdx + (map_ptr)];
+            addq r10, [r11 + (ptr_off)];        // r10 = the entry
+            cmpq r8, [r10 + (hash_off)];
+            jne  cand_next;
+        }
+        // entry in r10; r11 is free (rax / r9 are the loop state).
+        self.gen_hash_probe_key_check(layout, key_eq, 10, 11, &cand_next, miss, done);
+        monoasm! { &mut self.jit,
+        cand_next:
+            shrq rax, 8;
+            addq r9, 1;
+            jmp  cand;
+        word_done:
+        }
+    }
+
+    /// The key comparison of `gen_hash_probe` for the entry in `R(entry)`
+    /// whose stored digest matched: a hit loads the value into rax and jumps
+    /// to `done`; a stored key that is not this key continues at `next`.
+    /// With `key_eq`, identity decides first, then the leaf; a leaf verdict
+    /// of "not equal" against a full-digest match is (short of a 64-bit
+    /// collision) a tombstone or a foreign key, and goes to `miss` — the
+    /// builtin answers, and nothing of the probe's state need survive the
+    /// call. `R(tmp)` is scratch.
+    fn gen_hash_probe_key_check(
+        &mut self,
+        layout: &rubymap::EntriesLayout,
+        key_eq: Option<u64>,
+        entry: u64,
+        tmp: u64,
+        next: &DestLabel,
+        miss: &DestLabel,
+        done: &DestLabel,
+    ) {
+        let key_off = layout.key_offset;
+        let value_off = layout.value_offset;
+        match key_eq {
+            None => {
+                monoasm! { &mut self.jit,
+                    // `Option<Value>` in `Value`'s NonZero niche: `Some(k)` is
+                    // k's own bits, and a tombstone's `None` is the zero word,
+                    // which no packed key equals.
+                    cmpq rcx, [R(entry) + (key_off)];
+                    jne  next;
+                    movq rax, [R(entry) + (value_off)];
+                    jmp  done;
+                }
+            }
+            Some(key_eq) => {
+                let hit = self.jit.label();
+                monoasm! { &mut self.jit,
+                    movq R(tmp), [R(entry) + (key_off)];
+                    testq R(tmp), R(tmp);           // a tombstone
+                    jz   next;
+                    cmpq R(tmp), rcx;               // the stored object itself
+                    jeq  hit;
+                    pushq rdx;
+                    pushq rcx;
+                    pushq R(entry);
+                    subq rsp, 8;                    // keep the call 16-aligned
+                    movq rdi, R(tmp);
+                    movq rsi, rcx;
+                    movq rax, (key_eq);
+                    call rax;
+                    addq rsp, 8;
+                    popq R(entry);
+                    popq rcx;
+                    popq rdx;
+                    testq rax, rax;
+                    jz   miss;
+                hit:
+                    movq rax, [R(entry) + (value_off)];
+                    jmp  done;
+                }
+            }
+        }
     }
 
     /// `Hash#__live_at`: hash in rdx, fixnum index in rcx, Ruby bool in rax —

@@ -1161,6 +1161,19 @@ impl<T, E, G, R> RawTable<T, E, G, R> {
 
     /// Returns the number of buckets in the table.
     #[inline]
+    /// Byte offset of the control-byte pointer inside a `RawTable`, for a
+    /// consumer that reads the table from generated machine code (the
+    /// monoruby JIT's inline `Hash#[]` probe). Probed with `offset_of!` rather
+    /// than assumed from field order.
+    pub const fn ctrl_offset() -> usize {
+        core::mem::offset_of!(Self, table) + core::mem::offset_of!(RawTableInner, ctrl)
+    }
+
+    /// Byte offset of `bucket_mask` inside a `RawTable` — see [`Self::ctrl_offset`].
+    pub const fn bucket_mask_offset() -> usize {
+        core::mem::offset_of!(Self, table) + core::mem::offset_of!(RawTableInner, bucket_mask)
+    }
+
     pub fn buckets(&self) -> usize {
         self.table.bucket_mask + 1
     }

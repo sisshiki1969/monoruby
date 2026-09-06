@@ -165,8 +165,18 @@ mod tests {
             r#"require "zlib"; [Zlib.crc32("あ"), Zlib.adler32("あ"), Zlib.crc32("abc", Zlib.crc32("IDAT"))]"#,
             r#"require "zlib"; o = Object.new; def o.to_str; "abc"; end; [Zlib.crc32(o), Zlib.adler32(o)]"#,
             r#"require "zlib"; s = ("x" * 7000) + (0..255).map(&:chr).join; [Zlib.crc32(s), Zlib.adler32(s), Zlib.crc32(s, Zlib.crc32(s))]"#,
-            r#"require "zlib"; a = "abc" * 10; b = "defg" * 500; [Zlib.crc32_combine(Zlib.crc32(a), Zlib.crc32(b), b.bytesize) == Zlib.crc32(a + b), Zlib.adler32_combine(Zlib.adler32(a), Zlib.adler32(b), b.bytesize) == Zlib.adler32(a + b), Zlib.crc32_combine(7, 9, 0), Zlib.adler32_combine(7, 9, 0)]"#,
+            // `crc32_combine(_, crc2, 0)` only with `crc2 == 0`: zlib < 1.2.12
+            // short-circuits a zero `len2` to `crc1` where 1.2.12+ still XORs
+            // `crc2` in, so any other seed pair depends on the host's zlib.
+            r#"require "zlib"; a = "abc" * 10; b = "defg" * 500; [Zlib.crc32_combine(Zlib.crc32(a), Zlib.crc32(b), b.bytesize) == Zlib.crc32(a + b), Zlib.adler32_combine(Zlib.adler32(a), Zlib.adler32(b), b.bytesize) == Zlib.adler32(a + b), Zlib.crc32_combine(7, 0, 0), Zlib.adler32_combine(7, 9, 0)]"#,
         ]);
+        // The stub follows zlib 1.2.12+ (`crc1 ^ crc2` even for a zero
+        // `len2`); pin that without consulting the host's CRuby, whose
+        // linked zlib may be older and answer `crc1`.
+        assert_eq!(
+            run_test_no_result_check(r#"require "zlib"; Zlib.crc32_combine(7, 9, 0)"#),
+            Value::integer(14)
+        );
         run_test_error(r#"require "zlib"; Zlib.crc32("abc", "1")"#);
         run_test_error(r#"require "zlib"; Zlib.crc32(123)"#);
         run_test_error(r#"require "zlib"; Zlib.adler32(:abc)"#);

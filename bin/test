@@ -87,6 +87,14 @@ phase() {
   printf '[phase %s] %s\n' "$(date -u +%H:%M:%S)" "$1"
 }
 
+# Host gems the suite needs: `bigdecimal` for tests/bigdecimal.rs (not a
+# default gem since Ruby 3.4), `erubi` for bin/ruby-bench-diff. rbenv keeps
+# gems per ruby version, so switching versions silently drops them — install
+# whatever is missing (idempotent; touches the network only on a miss).
+for g in bigdecimal erubi; do
+  gem list -i "^$g\$" > /dev/null || gem install "$g" --no-document
+done
+
 phase "nextest (unit + integration tests)"
 cov_clean
 cov_nextest "${NEXTEST_FEATURES[@]}"

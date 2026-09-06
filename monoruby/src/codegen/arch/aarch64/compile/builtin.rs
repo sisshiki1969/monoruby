@@ -753,19 +753,26 @@ impl Codegen {
     }
 
     ///
-    /// `Hash#[]` with the probe in line — see `AsmInst::HashProbePacked`.
-    /// The x86-64 sequence, register for register: hash in x2 (Rdx), key in
+    /// `Hash#[]` with the probe in line — see `AsmInst::HashProbe`. The
+    /// x86-64 sequence, register for register: hash in x2 (Rdx), key in
     /// x1 (Rcx), result in x0 (Rax); x1 / x2 survive the probe for the miss
-    /// path's `emit_call_2args`. x3, x4, x9–x12 are scratch.
+    /// path's `emit_call_2args`. x10 holds the digest; x0, x3, x4, x9,
+    /// x11, x12 are scratch. The indexed regime is the same SWAR group walk
+    /// as the x86-64 emitter (see its doc): the control group is two
+    /// 64-bit words, each matched byte-wise against the digest's tag by the
+    /// zero-byte test, an EMPTY byte after both words ends the walk.
     ///
-    pub(crate) fn gen_hash_probe_packed(
+    pub(crate) fn gen_hash_probe(
         &mut self,
         layout: rubymap::EntriesLayout,
         hashindex: u64,
         digest: u64,
+        key_eq: Option<u64>,
     ) {
         let lp = self.jit.label();
         let next = self.jit.label();
+        let indexed = self.jit.label();
+        let group = self.jit.label();
         let exhausted = self.jit.label();
         let miss = self.jit.label();
         let done = self.jit.label();
@@ -778,25 +785,24 @@ impl Codegen {
         let ptr_off = layout.ptr_offset as u32;
         let bucket_size = layout.bucket_size as u64;
         let hash_off = layout.hash_offset as u32;
-        let key_off = layout.key_offset as u32;
-        let value_off = layout.value_offset as u32;
+        let ctrl_off = layout.indices_ctrl_offset as u32;
+        let mask_off = layout.indices_mask_offset as u32;
+        let content = HASH_CONTENT_OFFSET as u32;
         monoasm_arm64!(&mut self.jit,
             ldrb w3, [x2, #(ty_flags)];
             mov x9, (HASH_REP_MASK as u64);
             and x3, x3, x9;
             cmp x3, #(boxed_rep);
         );
+        // The boxed, value-keyed representation only; a shape this probe
+        // does not handle is a call, not an exit — see the x86-64 twin.
         self.jit.bcond_label(monoasm::Cond::Ne, &miss);
         monoasm_arm64!(&mut self.jit,
-            ldr x4, [x2, #(map_ptr)];
-            ldrb w3, [x4, #(linear_off)];
-            cmp x3, #(0);
+            ldr x3, [x2, #(content)];           // 0 = Map, 1 = IdentMap
         );
-        // A shape this probe does not handle is a call, not an exit — see
-        // the x86-64 twin.
-        self.jit.bcond_label(monoasm::Cond::Eq, &miss);
+        self.jit.cbnz_label(monoasm::GReg(3), &miss);
         monoasm_arm64!(&mut self.jit,
-            // digest = packed_digest_c(key); keep x1 / x2 for the miss path.
+            // digest = digest(key); keep x1 / x2 for the miss path.
             stp x1, x2, [sp, #(-16)]!;
             mov x0, x1;
             mov x9, (digest);
@@ -806,31 +812,82 @@ impl Codegen {
             ldp x1, x2, [sp], #(16);
             mov x10, x0;                        // x10 = digest
             ldr x4, [x2, #(map_ptr)];
-            ldr x11, [x4, #(ptr_off)];          // x11 = &entries[0]
+            ldrb w3, [x4, #(linear_off)];
+        );
+        self.jit.cbz_label(monoasm::GReg(3), &indexed);
+        monoasm_arm64!(&mut self.jit,
+            // Linear regime (no indices table): the entries are the whole
+            // probe.
+            ldr x12, [x4, #(ptr_off)];          // x12 = &entries[0]
             ldr x9, [x4, #(len_off)];
-            mov x12, (bucket_size);
-            mul x9, x9, x12;
-            add x9, x9, x11;                    // x9 = one past the last entry
+            mov x11, (bucket_size);
+            mul x9, x9, x11;
+            add x9, x9, x12;                    // x9 = one past the last entry
         lp:
-            cmp x11, x9;
+            cmp x12, x9;
         );
         self.jit.bcond_label(monoasm::Cond::Hs, &exhausted);
         monoasm_arm64!(&mut self.jit,
-            ldr x3, [x11, #(hash_off)];
+            ldr x3, [x12, #(hash_off)];
             cmp x3, x10;
         );
         self.jit.bcond_label(monoasm::Cond::Ne, &next);
+        // entry in x12; x3 / x4 / x11 are free here.
+        self.gen_hash_probe_key_check(&layout, key_eq, 12, 3, &next, &miss, &done);
         monoasm_arm64!(&mut self.jit,
-            ldr x3, [x11, #(key_off)];
-            cmp x3, x1;
-        );
-        self.jit.bcond_label(monoasm::Cond::Ne, &next);
-        monoasm_arm64!(&mut self.jit,
-            ldr x0, [x11, #(value_off)];
-            b done;
         next:
-            add x11, x11, x12;
+            add x12, x12, x11;
             b lp;
+        indexed:
+        );
+        if layout.group_width == 16 {
+            let lo = 0x0101_0101_0101_0101u64;
+            let hi = 0x8080_8080_8080_8080u64;
+            monoasm_arm64!(&mut self.jit,
+                ldr x3, [x4, #(mask_off)];
+                and x3, x10, x3;                // x3 = pos = h1 & bucket_mask
+                mov x4, #(0);                   // x4 = stride
+            group:
+            );
+            // The two words of the group at pos; x3 walks pos, pos + 8.
+            for word in 0..2 {
+                if word == 1 {
+                    monoasm_arm64!(&mut self.jit, add x3, x3, #(8););
+                }
+                self.gen_hash_probe_word(&layout, key_eq, lo, hi, &miss, &done);
+            }
+            monoasm_arm64!(&mut self.jit,
+                // Back to pos. An EMPTY byte in the group ends the walk.
+                sub x3, x3, #(8);
+                ldr x9, [x2, #(map_ptr)];
+                ldr x9, [x9, #(ctrl_off)];
+                ldr x0, [x9, x3];
+                lsl x11, x0, #(1);
+                and x0, x0, x11;
+                add x11, x3, #(8);
+                ldr x12, [x9, x11];
+                lsl x11, x12, #(1);
+                and x12, x12, x11;
+                orr x0, x0, x12;
+                mov x11, (hi);
+                tst x0, x11;
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &exhausted);
+            monoasm_arm64!(&mut self.jit,
+                // pos = (pos + stride) & bucket_mask, stride += 16.
+                add x4, x4, #(16);
+                add x3, x3, x4;
+                ldr x11, [x2, #(map_ptr)];
+                ldr x11, [x11, #(mask_off)];
+                and x3, x3, x11;
+                b group;
+            );
+        } else {
+            // A control group this emitter does not know how to scan: the
+            // builtin walks the table.
+            self.jit.b_label(&miss);
+        }
+        monoasm_arm64!(&mut self.jit,
         exhausted:
             // Not present: nil in line unless a default value / proc exists
             // (null `Option<Box<HashDefault>>` means neither) — see the
@@ -846,6 +903,135 @@ impl Codegen {
         );
         self.emit_call_2args(hashindex);
         self.jit.bind_label(done);
+    }
+
+    /// One control word of the indexed probe (`gen_hash_probe`): x3 is the
+    /// word's position in the control bytes, x10 the digest; x0 / x9 / x11
+    /// / x12 are scratch. The x86-64 `gen_hash_probe_word`, register for
+    /// register (rax→x0, r9→x9, r10→x11, r11→x12).
+    fn gen_hash_probe_word(
+        &mut self,
+        layout: &rubymap::EntriesLayout,
+        key_eq: Option<u64>,
+        lo: u64,
+        hi: u64,
+        miss: &DestLabel,
+        done: &DestLabel,
+    ) {
+        let cand = self.jit.label();
+        let cand_next = self.jit.label();
+        let word_done = self.jit.label();
+        let map_ptr = HASH_CONTENT_MAP_OFFSET as u32;
+        let ptr_off = layout.ptr_offset as u32;
+        let bucket_size = layout.bucket_size as u64;
+        let hash_off = layout.hash_offset as u32;
+        let ctrl_off = layout.indices_ctrl_offset as u32;
+        let mask_off = layout.indices_mask_offset as u32;
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x2, #(map_ptr)];
+            ldr x9, [x9, #(ctrl_off)];
+            ldr x0, [x9, x3];                   // the control word
+            lsr x9, x10, #(57);                 // the digest's 7-bit tag
+            mov x11, (lo);
+            mul x9, x9, x11;                    // ... in every byte
+            eor x0, x0, x9;                     // x: a zero byte per match
+            mvn x9, x0;
+            sub x0, x0, x11;
+            and x0, x0, x9;
+            mov x11, (hi);
+            and x0, x0, x11;                    // x0 = match mask (bit 7 of each byte)
+            mov x9, x3;                         // x9 = position of the byte at bit 0
+        cand:
+        );
+        self.jit.cbz_label(monoasm::GReg(0), &word_done);
+        self.jit.tbz_label(monoasm::GReg(0), 7, &cand_next);
+        monoasm_arm64!(&mut self.jit,
+            // Candidate: bucket (x9 & mask) holds an index into the entries.
+            ldr x11, [x2, #(map_ptr)];
+            ldr x12, [x11, #(mask_off)];
+            and x12, x9, x12;
+            mvn x12, x12;                       // -(index + 1)
+            ldr x11, [x11, #(ctrl_off)];
+            ldr x11, [x11, x12, lsl #(3)];      // the entry's index
+            mov x12, (bucket_size);
+            mul x11, x11, x12;
+            ldr x12, [x2, #(map_ptr)];
+            ldr x12, [x12, #(ptr_off)];
+            add x11, x11, x12;                  // x11 = the entry
+            ldr x12, [x11, #(hash_off)];
+            cmp x12, x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &cand_next);
+        // entry in x11; x12 is free (x0 / x9 are the loop state).
+        self.gen_hash_probe_key_check(layout, key_eq, 11, 12, &cand_next, miss, done);
+        monoasm_arm64!(&mut self.jit,
+        cand_next:
+            lsr x0, x0, #(8);
+            add x9, x9, #(1);
+            b cand;
+        word_done:
+        );
+    }
+
+    /// The key comparison of `gen_hash_probe` for the entry in `x(entry)`
+    /// whose stored digest matched — the x86-64 `gen_hash_probe_key_check`:
+    /// a hit loads the value into x0 and jumps to `done`; a stored key that
+    /// is not this key continues at `next`; a `key_eq` verdict of "not
+    /// equal" goes to `miss`. `x(tmp)` is scratch.
+    fn gen_hash_probe_key_check(
+        &mut self,
+        layout: &rubymap::EntriesLayout,
+        key_eq: Option<u64>,
+        entry: u32,
+        tmp: u32,
+        next: &DestLabel,
+        miss: &DestLabel,
+        done: &DestLabel,
+    ) {
+        let key_off = layout.key_offset as u32;
+        let value_off = layout.value_offset as u32;
+        match key_eq {
+            None => {
+                monoasm_arm64!(&mut self.jit,
+                    // `Option<Value>` in `Value`'s NonZero niche: `Some(k)` is
+                    // k's own bits, and a tombstone's `None` is the zero word,
+                    // which no packed key equals.
+                    ldr x(tmp), [x(entry), #(key_off)];
+                    cmp x(tmp), x1;
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, next);
+                monoasm_arm64!(&mut self.jit,
+                    ldr x0, [x(entry), #(value_off)];
+                );
+                self.jit.b_label(done);
+            }
+            Some(key_eq) => {
+                let hit = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    ldr x(tmp), [x(entry), #(key_off)];
+                );
+                self.jit.cbz_label(monoasm::GReg(tmp), next); // a tombstone
+                monoasm_arm64!(&mut self.jit,
+                    cmp x(tmp), x1;                 // the stored object itself
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &hit);
+                monoasm_arm64!(&mut self.jit,
+                    stp x1, x2, [sp, #(-16)]!;
+                    stp x(entry), x30, [sp, #(-16)]!;
+                    mov x0, x(tmp);                 // (x1 = key already)
+                    mov x9, (key_eq);
+                    blr x9;
+                    ldp x(entry), x30, [sp], #(16);
+                    ldp x1, x2, [sp], #(16);
+                );
+                self.jit.cbz_label(monoasm::GReg(0), miss);
+                monoasm_arm64!(&mut self.jit,
+                hit:
+                    ldr x0, [x(entry), #(value_off)];
+                );
+                self.jit.b_label(done);
+            }
+        }
     }
 
     /// `Hash#__key_at` / `#__value_at`: hash in Rdx (x2), fixnum index in Rcx
