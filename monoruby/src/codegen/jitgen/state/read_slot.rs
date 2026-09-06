@@ -405,6 +405,52 @@ impl AbstractFrame {
     /// - rdi, rax
     ///
     ///
+    ///
+    /// Capture the deopt **program point** at the current placement state (item
+    /// ②, step 2 — deopt program-point-ification, doc §9): the bytecode `pc`
+    /// plus the write-back snapshot `get_write_back()` — *which* values are
+    /// unboxed/in-acc and must be restored to the stack if a guard fails. This is
+    /// pure analysis state; the codegen half turns it into an `AsmDeopt`
+    /// side-exit via [`AsmIr::deopt_from_point`]. Mirrors `AsmIr::new_deopt`'s
+    /// snapshot, minus the `side_exit` push.
+    ///
+    pub(in crate::codegen::jitgen) fn deopt_point(&self) -> DeoptPoint {
+        DeoptPoint::new(self.pc(), self.get_write_back())
+    }
+
+    #[allow(non_snake_case)]
+    fn load_fpr_from_C_state(&mut self, slot: SlotId, v: Value) -> (FPReg, FprLoad) {
+        // `LinkMode::C` may hold any Value; fpr loads only ever come from
+        // numeric literals (fixnum / float / heap Float), so anything else
+        // is a bug at the call site.
+        match v.unpack() {
+            RV::Float(f) => {
+                // -> F
+                let x = self.set_new_F(slot);
+                (x, FprLoad::FromF64(f, x))
+            }
+            RV::Fixnum(i) => {
+                // -> Sf
+                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                (x, FprLoad::FromFixnum(i, x))
+            }
+            _ => {
+                unreachable!("load_fpr_from_C() {:?}", v);
+            }
+        }
+    }
+}
+
+impl AbstractState {
+    ///
+    /// load *slot* as f64 into an fpr register. On the chain rather than
+    /// the frame: consuming a value as a raw f64 is float-use evidence
+    /// about the slot it was loaded from, which for a dynvar-loaded value
+    /// is an *outer* frame's slot ([`Self::use_as_float`]).
+    ///
+    /// ### destroy
+    /// - rdi, rax
+    ///
     pub(crate) fn load_fpr(&mut self, ir: &mut AsmIr, slot: SlotId) -> FPReg {
         // The deopt point is recorded *before* the state transition, so its
         // write-back snapshot (`get_write_back`) is the pre-load placement — see
@@ -417,18 +463,19 @@ impl AbstractFrame {
         x
     }
 
-
     ///
-    /// Capture the deopt **program point** at the current placement state (item
-    /// ②, step 2 — deopt program-point-ification, doc §9): the bytecode `pc`
-    /// plus the write-back snapshot `get_write_back()` — *which* values are
-    /// unboxed/in-acc and must be restored to the stack if a guard fails. This is
-    /// pure analysis state; the codegen half turns it into an `AsmDeopt`
-    /// side-exit via [`AsmIr::deopt_from_point`]. Mirrors `AsmIr::new_deopt`'s
-    /// snapshot, minus the `side_exit` push.
+    /// Stage-A use propagation: a raw-f64 consumption of *slot*. Besides
+    /// the frame's own liveness, a value that arrived through `LoadDynVar`
+    /// is float-use evidence *about the owner's slot*, so the mark lands
+    /// on the owner frame on this chain right away (`outer` is resolved
+    /// against the chain as it stands at the consumption, which is the
+    /// chain the read was recorded under).
     ///
-    pub(in crate::codegen::jitgen) fn deopt_point(&self) -> DeoptPoint {
-        DeoptPoint::new(self.pc(), self.get_write_back())
+    pub(super) fn use_as_float(&mut self, slot: SlotId) {
+        if let Some((outer, src)) = self.dynvar_src(slot) {
+            self.mark_outer_float_read(outer as usize, src);
+        }
+        self.use_as_float_liveness(slot);
     }
 
     ///
@@ -455,27 +502,6 @@ impl AbstractFrame {
         }
     }
 
-    #[allow(non_snake_case)]
-    fn load_fpr_from_C_state(&mut self, slot: SlotId, v: Value) -> (FPReg, FprLoad) {
-        // `LinkMode::C` may hold any Value; fpr loads only ever come from
-        // numeric literals (fixnum / float / heap Float), so anything else
-        // is a bug at the call site.
-        match v.unpack() {
-            RV::Float(f) => {
-                // -> F
-                let x = self.set_new_F(slot);
-                (x, FprLoad::FromF64(f, x))
-            }
-            RV::Fixnum(i) => {
-                // -> Sf
-                let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
-                (x, FprLoad::FromFixnum(i, x))
-            }
-            _ => {
-                unreachable!("load_fpr_from_C() {:?}", v);
-            }
-        }
-    }
 }
 
 impl AbstractFrame {

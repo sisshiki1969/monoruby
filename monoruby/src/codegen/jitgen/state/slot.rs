@@ -238,11 +238,6 @@ pub(crate) struct SlotState {
     /// merge despite living in the cloned `SlotState`.
     pub(in crate::codegen::jitgen) gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile,
     local_num: usize,
-    /// Float-consumed dynvar reads not yet reported to the `JitContext`
-    /// (the frame itself cannot reach the outer frames' parked states).
-    /// Drained at the next `compile_instruction` boundary into
-    /// `JitContext::mark_outer_float_read`.
-    pending_outer_float_reads: Vec<(u16, SlotId)>,
 }
 
 ///
@@ -261,9 +256,9 @@ struct Slot {
     /// redefinition ([`SlotState::discard`]); a mode transition that
     /// keeps the value (write-back, unguarded demotion) keeps it.
     /// Consulted when the slot is consumed as a raw f64
-    /// ([`SlotState::use_as_float`]), which queues the pair on
-    /// `pending_outer_float_reads`. A correctness-neutral hint: it only
-    /// feeds the loop-entry float-adoption policy.
+    /// ([`AbstractState::use_as_float`]), which marks the owner frame's
+    /// slot on the chain. A correctness-neutral hint: it only feeds the
+    /// loop-entry float-adoption policy.
     dynvar_src: Option<(u16, SlotId)>,
     /// Stage-A use propagation, the owner-side landing spot: an inlined
     /// callee read this slot through the frame chain and consumed it as a
@@ -321,7 +316,6 @@ impl SlotState {
             fpr_alloc: FprAllocator::new(),
             gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile::new(),
             local_num,
-            pending_outer_float_reads: vec![],
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -934,17 +928,18 @@ impl SlotState {
 
     // APIs for 'use'
 
-    /// used as f64 with no conversion
-    pub(super) fn use_as_float(&mut self, slot: SlotId) {
-        // Stage-A use propagation: a raw-f64 consumption of a value that
-        // arrived through `LoadDynVar` is float-use evidence *about the
-        // owner's slot* — queue it for the next `compile_instruction`
-        // boundary, where the `JitContext` can reach the owner's parked
-        // frame ([`JitContext::mark_outer_float_read`]).
-        if let Some(src) = self.slots[slot.0 as usize].dynvar_src {
-            self.pending_outer_float_reads.push(src);
-        }
+    /// Liveness: used as f64 with no conversion. The chain-level
+    /// [`AbstractState::use_as_float`] is the entry point — it also lands
+    /// the stage-A float-read mark on the owner frame of a dynvar-loaded
+    /// value, which this frame cannot reach on its own.
+    pub(super) fn use_as_float_liveness(&mut self, slot: SlotId) {
         self.is_used_mut(slot).use_as_float();
+    }
+
+    /// Stage-A use propagation: where *slot*'s value came from, if it was
+    /// loaded through the frame chain (`outer` levels out, slot `src`).
+    pub(super) fn dynvar_src(&self, slot: SlotId) -> Option<(u16, SlotId)> {
+        self.slots[slot.0 as usize].dynvar_src
     }
 
     pub(super) fn use_as_value(&mut self, slot: SlotId) {
@@ -964,16 +959,6 @@ impl SlotState {
         if let Ok(outer) = u16::try_from(outer) {
             self.slots[slot.0 as usize].dynvar_src = Some((outer, src));
         }
-    }
-
-    ///
-    /// Stage-A use propagation: hand over the float-consumed dynvar reads
-    /// queued since the last drain.
-    ///
-    pub(in crate::codegen::jitgen) fn take_pending_outer_float_reads(
-        &mut self,
-    ) -> Vec<(u16, SlotId)> {
-        std::mem::take(&mut self.pending_outer_float_reads)
     }
 
     ///
@@ -1038,8 +1023,8 @@ impl SlotState {
 
     ///
     /// Stage-A use propagation: merge the hint fields at a path join —
-    /// provenance is kept only where both paths agree, pending reports and
-    /// landed subtree-read marks from either path remain evidence.
+    /// provenance is kept only where both paths agree, landed subtree-read
+    /// marks from either path remain evidence.
     ///
     pub(super) fn join_subtree_read_meta(&mut self, other: &SlotState) {
         for (l, r) in self.slots.iter_mut().zip(other.slots.iter()) {
@@ -1054,8 +1039,6 @@ impl SlotState {
                 l.dynvar_alias = None;
             }
         }
-        self.pending_outer_float_reads
-            .extend(other.pending_outer_float_reads.iter().copied());
     }
 
     ///
