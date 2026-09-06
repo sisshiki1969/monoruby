@@ -2,7 +2,7 @@ use super::*;
 use crate::ast::CmpKind;
 use crate::bytecodegen::BinOpK;
 use jitgen::trace_ir::{FBinOpInfo, FOpClass};
-use jitgen::{AbstractFrame, AbstractState, BinaryInlineMode, BinaryInlineOutcome, JitContext};
+use jitgen::{AbstractState, BinaryInlineMode, BinaryInlineOutcome, JitContext};
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
 use crate::codegen::jitgen::deopt_log::DeoptCause;
@@ -1256,7 +1256,7 @@ fn integer_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                     match float_info {
                         None => {
                             if let Some((l, r)) = state.check_concrete_i64(recv, args) {
-                                return BinaryInlineOutcome::Folded(AbstractFrame::fold_cmp(
+                                return BinaryInlineOutcome::Folded(AbstractState::fold_cmp(
                                     kind, l, r,
                                 ));
                             }
@@ -1267,7 +1267,7 @@ fn integer_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                         }
                         Some(info) => {
                             if let Some((l, r)) = state.check_binary_C_f64(recv, args) {
-                                return BinaryInlineOutcome::Folded(AbstractFrame::fold_cmp(
+                                return BinaryInlineOutcome::Folded(AbstractState::fold_cmp(
                                     kind, l, r,
                                 ));
                             }

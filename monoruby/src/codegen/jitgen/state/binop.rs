@@ -43,7 +43,7 @@ where
     }
 }
 
-impl AbstractFrame {
+impl AbstractState {
     fn fold_constant_cmp<T>(&mut self, kind: CmpKind, lhs: T, rhs: T, dst: Option<SlotId>)
     where
         T: PartialEq + PartialOrd,

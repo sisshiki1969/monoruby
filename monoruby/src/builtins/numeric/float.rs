@@ -4,10 +4,8 @@ use super::*;
 use crate::ast::CmpKind;
 use crate::bytecodegen::{BinOpK, UnOpK};
 use crate::executor::Visibility;
-#[cfg(target_arch = "aarch64")]
-use jitgen::AbstractState;
 use jitgen::trace_ir::{FBinOpInfo, FOpClass};
-use jitgen::{AbstractFrame, BinaryInlineMode, BinaryInlineOutcome, JitContext};
+use jitgen::{AbstractState, BinaryInlineMode, BinaryInlineOutcome, JitContext};
 use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 //
@@ -214,7 +212,7 @@ fn float_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                 }
                 BinaryInlineMode::CmpBr { brkind, dest } => {
                     if let Some((l, r)) = state.check_binary_C_f64(recv, args) {
-                        return BinaryInlineOutcome::Folded(AbstractFrame::fold_cmp(kind, l, r));
+                        return BinaryInlineOutcome::Folded(AbstractState::fold_cmp(kind, l, r));
                     }
                     state.gen_cmpbr_float(ir, info, kind, brkind, dest);
                     BinaryInlineOutcome::Done

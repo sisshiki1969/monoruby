@@ -3272,3 +3272,38 @@ loop, and its M1 A/B (§27.3-2c) was never run. The `L`-collection timing
 finding (§42: the multi-iteration fixpoint makes the back-edge available at
 merge time) stays in the record for whoever revisits loop-aware allocation;
 the code it justified no longer earns its field in the per-path state.
+
+## 50. `pending_outer_float_reads` removed: the mark lands at the consumption
+
+§46 kept the stage-A report queue on the grounds that the raw-f64
+consumption sites (`load_fpr_state` and the float binop helpers) were
+`AbstractFrame` methods that only see their own frame, so the owner frame of a
+dynvar-loaded value could not be marked there and the pair had to wait for the
+next `compile_instruction` boundary, where the `JitContext` holds the chain.
+
+The cheaper move is to put those consumption sites on the chain. `binop.rs`'s
+single `impl AbstractFrame` block is now `impl AbstractState`, and `load_fpr` /
+`load_fpr_state` moved with it; every field and frame-level method they use
+still resolves through `AbstractState`'s `Deref`/`DerefMut` to the innermost
+frame, so the bodies are unchanged. `AbstractState::use_as_float` then does
+what the drain did — look up the slot's `dynvar_src`, resolve `outer` against
+the chain, `mark_outer_float_read` — right at the consumption, and the frame
+keeps only the liveness half (`use_as_float_liveness`). The queue, its drain,
+its join concatenation and `take_pending_outer_float_reads` are gone, and
+`SlotState` is down to `slots`, `fpr_alloc`, `gp_regfile`, `local_num`.
+
+Why the timing change is safe: `outer` is resolved against the chain as it
+stands at the consumption, which is the chain the `LoadDynVar` recorded the
+provenance under (a nested compile pushes and pops its frames inside the same
+instruction, and a `LoadDynVar`'s consumer is a later instruction of the same
+frame). The mark is a monotone hint whose readers run at merges and
+boundaries, after the instruction that would have drained it, so seeing it one
+instruction earlier changes nothing they compute; and a read consumed by an
+instruction that ends a block is no longer parked on a queue that a merge
+concatenates — the owner frame simply carries the bit into the join, which
+ORs it exactly as the concatenated queue's drain would have.
+
+Verified byte-identical: `emit-asm` dumps of eight benchmarks match master;
+`app_aobench` differs only at the site master itself emits differently from run
+to run (§46). The JIT lib tests, the float / block / loop integration tests and
+the full `cargo test` suite pass.
