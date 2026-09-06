@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-48e55a7a.js";
+            window.path_to_searchindex_js = "searchindex-d660dcfd.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-ad91b9ad.js"></script>
@@ -5073,6 +5073,56 @@ other benchmarks are flat. Tests: <code>tests/copy_propagation.rs</code> (in-pla
 a shared register, <code>Mul</code>/<code>Div</code> clobbering a shared operand, overflow and type
 deopts with copies outstanding, calls/allocations, loops, non-fixnum values,
 the <code>splitmix32</code> shape) and the <code>gp_alloc</code> unit tests.</p>
+<h2 id="46-placety-folded-back-into-one-vecslot-the-scaffolding-is-retired"><a class="header" href="#46-placety-folded-back-into-one-vecslot-the-scaffolding-is-retired">46. <code>place</code>/<code>ty</code> folded back into one <code>Vec&lt;Slot&gt;</code> (the scaffolding is retired)</a></h2>
+<p>Steps 0b–0c split <code>SlotState.slots: Vec&lt;LinkMode&gt;</code> into <code>place: Vec&lt;Placement&gt;</code></p>
+<ul>
+<li><code>ty: Vec&lt;Guarded&gt;</code> so a standalone analysis pass could consume the type
+vector alone. That pass never materialised in the shape the split assumed: the
+attempts to run allocation apart from the fixpoint (§13.8, §16.6, §26.3,
+§31.2) all lost to the greedy backedge placement, and the durable results are
+the seams that were <em>kept</em> (<code>decide_join</code>/<code>apply_join</code>, <code>alloc_policy</code>, the
+transfer records, the <code>keep_backedge_floats</code> mechanism/policy split) — none of
+which reads <code>place</code> or <code>ty</code> separately. After §44 the only consumer of the
+split was <code>join_ty</code>, called from the debug-only <code>verify_join_replay</code>; the
+<code>Placement</code> enum had no consumer at all. Meanwhile every <code>mode()</code> recomposed
+the pair through <code>from_parts</code> and every <code>set_mode()</code> decomposed it, with the
+sentinels (<code>None</code> / <code>MaybeNone</code> / <code>V</code>) needing a “no type” special case on
+both sides.</li>
+</ul>
+<p>So the split is undone: <code>LinkMode</code> is stored directly again, <code>Placement</code> /
+<code>placement()</code> / <code>from_parts()</code> and the round-trip test are gone, and <code>join_ty</code>
+is computed from the stored modes (sentinels read as ⊤, as the stored <code>ty</code>
+did) for the assertion that still uses it. The type-meet separability
+invariant (§12 stage 2) is unchanged — it is a property of <code>LinkMode::guarded</code>
+and <code>Guarded::join</code>, not of how the pair is stored.</p>
+<p>At the same time the per-slot vectors that had accumulated beside <code>place</code>/<code>ty</code>
+— <code>liveness</code>, <code>dynvar_src</code>, <code>subtree_float_read</code>, <code>dynvar_alias</code> — became one
+<code>Vec&lt;Slot&gt;</code> record, so a per-slot fact is added, cleared (<code>clear</code> / <code>discard</code>)
+and merged (<code>join_subtree_read_meta</code>) in one place; and <code>deferred_forward</code>,
+which is fixed for the compile unit, moved from the per-path <code>SlotState</code> to
+<code>AbstractFrame</code> next to <code>invariants</code>. Verified byte-identical: <code>emit-asm</code> dumps
+of <code>app_fib</code>, <code>so_mandelbrot</code>, <code>so_nbody</code>, <code>binarytrees</code>, <code>quick_sort</code>, <code>bf</code>,
+<code>tarai</code>, <code>loop_whileloop</code> are identical to master modulo the compile-time
+lines; <code>app_aobench</code> differs at one site that master itself emits differently
+from run to run (a pre-existing nondeterminism, not this change).</p>
+<p>What was <em>not</em> folded, and why:</p>
+<ul>
+<li><code>pending_outer_float_reads</code> (the stage-A report queue). The natural
+replacement — marking the owner frame directly at the raw-f64 consumption —
+needs the chain, and the consumption sites (<code>load_fpr_state</code> and the float
+binop helpers) are <code>AbstractFrame</code> methods that only see their own frame. A
+per-slot “pending” bit instead of the queue loses the report when the slot is
+redefined in the same instruction (<code>a = a * 2.0</code> consumes <code>a</code> and then
+discards it before the next boundary). The queue is the honest
+representation of “events for a frame this frame cannot see”.</li>
+<li><code>FprAllocator</code>’s reverse map (<code>vfpr</code>). It is derivable from the slot modes,
+and deriving it would remove the <code>fpr_add</code> / <code>fpr_remove</code> / <code>swap</code> bookkeeping
+and the desync class the <code>alloc_fpr</code> aliasing regression belonged to. But the
+map’s per-register slot order is the binding order, and the deopt write-back
+(<code>wb_fpr</code>) emits stores in that order — a derived map would emit them in slot
+order, so the change is semantics-preserving but not byte-identical. Left for
+its own change with its own gate.</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack"><a class="header" href="#trace-chain-joins--one-abstractstate-for-the-whole-specialization-stack">Trace-chain joins — one <code>AbstractState</code> for the whole specialization stack</a></h1>
 <p><strong>Kind: design record.</strong> Why the JIT’s abstract state spans every frame of
