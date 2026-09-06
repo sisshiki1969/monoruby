@@ -1645,3 +1645,117 @@ fn linear_mode_sym_maps() {
     assert_eq!(map.len(), 9);
     assert_eq!(map.insert_sym(Symbol(8), 88), Some(8)); // indexed replace
 }
+
+/// The Ruby key contract: `eql` may only decide between keys whose full
+/// hashes are identical. The indexed probe matches 7 bits of the hash
+/// (hashbrown's control byte) before running `eq`, so an over-broad
+/// `eql` — Ruby's `def eql?(o) = true` — used to match a colliding
+/// *different-hash* entry (monoruby's `string_subclass_key_dispatches_eql`
+/// failed on ~1/70 hash seeds, returning a stranger's value). Pin it with
+/// an identity hasher so the collisions are constructed, not lucky: the
+/// three keys below share the bucket (low bits) and the control byte (top
+/// 7 bits) and differ only in between.
+#[derive(Debug, Clone, Copy)]
+struct Collider(u64);
+
+impl RubyEql<E, G, ()> for Collider {
+    fn eql(&self, _: &Self, _: &mut E, _: &mut G) -> Result<bool, ()> {
+        Ok(true) // deliberately over-broad
+    }
+}
+
+impl RubyHash<E, G, ()> for Collider {
+    fn ruby_hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+        _: &mut E,
+        _: &mut G,
+    ) -> Result<(), ()> {
+        state.write_u64(self.0);
+        Ok(())
+    }
+}
+
+/// A hasher that answers exactly the last `u64` written, so a test can
+/// choose final hash values outright.
+#[derive(Default)]
+struct IdentityHasher(u64);
+
+impl std::hash::Hasher for IdentityHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        let mut b = [0u8; 8];
+        let n = bytes.len().min(8);
+        b[..n].copy_from_slice(&bytes[..n]);
+        self.0 = u64::from_le_bytes(b);
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.0 = v;
+    }
+}
+
+#[derive(Clone, Default)]
+struct IdentityState;
+
+impl std::hash::BuildHasher for IdentityState {
+    type Hasher = IdentityHasher;
+    fn build_hasher(&self) -> IdentityHasher {
+        IdentityHasher::default()
+    }
+}
+
+#[test]
+fn eql_consulted_only_on_full_hash_match() {
+    let mut e = E;
+    let mut g = G;
+    let mut map: RubyMap<Collider, i32, E, G, (), IdentityState> =
+        RubyMap::with_hasher(IdentityState);
+    // Fill past AR_MAX so the map leaves linear mode (whose probe already
+    // compared stored hashes) and the indexed path is the one under test.
+    for i in 0..9u64 {
+        map.insert(Collider((i + 1) << 32), i as i32, &mut e, &mut g)
+            .unwrap();
+    }
+    assert_eq!(map.len(), 9);
+    // Same bucket and same control byte as `1 << 32`-family? No — pick two
+    // fresh keys that collide with *each other*: identical low bits and top
+    // 7 bits, different middle.
+    map.insert(Collider(0x0000_0100_0000_0001), 100, &mut e, &mut g)
+        .unwrap();
+    // Insert, not replace: differing full hash keeps them distinct even
+    // though `eql` says true.
+    map.insert(Collider(0x0000_0200_0000_0001), 200, &mut e, &mut g)
+        .unwrap();
+    assert_eq!(map.len(), 11);
+    // Lookups answer their own entry, never a control-byte twin's.
+    assert_eq!(
+        map.get(&Collider(0x0000_0100_0000_0001), &mut e, &mut g)
+            .unwrap(),
+        Some(&100)
+    );
+    assert_eq!(
+        map.get(&Collider(0x0000_0200_0000_0001), &mut e, &mut g)
+            .unwrap(),
+        Some(&200)
+    );
+    // A third colliding hash the map never saw misses outright.
+    assert_eq!(
+        map.get(&Collider(0x0000_0300_0000_0001), &mut e, &mut g)
+            .unwrap(),
+        None
+    );
+    // Removal is hash-exact too.
+    assert_eq!(
+        map.shift_remove(&Collider(0x0000_0300_0000_0001), &mut e, &mut g)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        map.shift_remove(&Collider(0x0000_0100_0000_0001), &mut e, &mut g)
+            .unwrap(),
+        Some(100)
+    );
+    assert_eq!(map.len(), 10);
+}
