@@ -134,6 +134,11 @@ fn io_console_without_a_tty() {
         res << (begin; w.cursor = 1; rescue TypeError => e; e.message; end)
         res << (begin; r.raw(intr: 1) {}; rescue ArgumentError => e; e.message; end)
         res << (begin; r.raw(foo: 1) {}; rescue ArgumentError => e; e.message; end)
+        null = File.open("/dev/null", "r+")
+        res << (begin; null.winsize; rescue SystemCallError => e; e.message; end)
+        res << (begin; null.raw!; rescue SystemCallError => e; e.message; end)
+        res << (begin; null.raw {}; rescue SystemCallError => e; e.message; end)
+        null.close
         c = IO.console
         res << (c.nil? || (c.is_a?(File) && c.sync && c.path == "/dev/tty" && c.equal?(IO.console)))
         res << IO.console(:close) << IO.console(:nil?).inspect.size
@@ -216,6 +221,9 @@ fn io_console_modes_on_a_pty() {
         cm2.echo = true
         res << (f.console_mode = cm2).equal?(cm2) << f.echo?
         res << (begin; f.console_mode = 1; rescue TypeError => e; e.message; end)
+        r, w = IO.pipe
+        res << (begin; r.console_mode = cm; rescue SystemCallError => e; e.class; end)
+        r.close; w.close
         res << (begin; f.raw {{ raise "boom" }}; rescue RuntimeError => e; e.message; end) << f.echo?
         f.cooked!
         f.close
@@ -253,6 +261,14 @@ fn io_console_winsize_on_a_pty() {
         "##,
         path = pty.path,
     ));
+}
+
+/// The termios blob is opaque to Ruby, but the primitives still refuse a
+/// String of the wrong length rather than reading past it.
+#[test]
+fn io_console_rejects_a_malformed_termios_blob() {
+    run_test_error(r#"require "io/console"; IO.__termios_echo?("x")"#);
+    run_test_error(r#"require "io/console"; IO.__termios_raw("", nil, nil, false)"#);
 }
 
 /// Reads fed by the fake terminal: getch, raw getc, getpass and the
