@@ -1009,9 +1009,25 @@ impl<'a> JitContext<'a> {
         }
     }
 
-    pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
+    ///
+    /// The throwaway context for one analysis walk over the loop headed at
+    /// *loop_start* (whose `LoopStart` is at *pc*). The walk merges every
+    /// inner loop head with the back edge recorded for it by the previous
+    /// walks, so those entries come along; the walked loop's own entry
+    /// does not — its recorded back edge is joined into the walk's entry
+    /// state by `analyse_loop`, and its liveness belongs to the real merge.
+    ///
+    pub(super) fn loop_analysis(&self, pc: BytecodePtr, loop_start: BasicBlockId) -> Self {
         let mut ctx = self.analysis_clone();
-        ctx.stack_frame.last_mut().unwrap().jit_type = JitType::Loop(pc);
+        let frame = ctx.stack_frame.last_mut().unwrap();
+        frame.jit_type = JitType::Loop(pc);
+        frame.loop_info = self
+            .current_frame()
+            .loop_info
+            .iter()
+            .filter(|(head, _)| **head != loop_start)
+            .map(|(head, info)| (*head, info.clone()))
+            .collect();
         ctx
     }
 

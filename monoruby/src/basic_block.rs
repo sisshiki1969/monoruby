@@ -11,7 +11,7 @@ use std::iter::Step;
 use crate::bytecode::BcIndex;
 use crate::bytecodegen::inst::BytecodeIr;
 
-#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
 pub(crate) struct BasicBlockId(pub usize);
 
 impl std::fmt::Debug for BasicBlockId {
@@ -200,6 +200,26 @@ impl BasicBlockInfo {
             .iter()
             .find(|(begin, _)| *begin == bb_id)
             .cloned()
+    }
+
+    ///
+    /// Every loop whose blocks lie within `start..=end` — the loop
+    /// headed at `start` itself first, then the loops nested inside it in
+    /// order of their heads.
+    ///
+    pub(crate) fn loops_within(
+        &self,
+        start: BasicBlockId,
+        end: BasicBlockId,
+    ) -> Vec<(BasicBlockId, BasicBlockId)> {
+        let mut loops: Vec<_> = self
+            .loops
+            .iter()
+            .filter(|(begin, last)| start <= *begin && *last <= end)
+            .cloned()
+            .collect();
+        loops.sort_by_key(|(begin, _)| *begin);
+        loops
     }
 }
 
