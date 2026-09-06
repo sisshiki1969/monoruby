@@ -813,9 +813,16 @@ impl MonorubyErr {
         val: Value,
         target_class: ClassId,
     ) -> MonorubyErr {
+        // CRuby (rb_builtin_class_name) names the literal, not the
+        // class, for nil / true / false.
+        let name = match val.unpack() {
+            RV::Nil => "nil".to_string(),
+            RV::Bool(b) => b.to_string(),
+            _ => val.get_real_class_name(store),
+        };
         MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into {}",
-            val.get_real_class_name(store),
+            name,
             store.get_class_name(target_class)
         ))
     }

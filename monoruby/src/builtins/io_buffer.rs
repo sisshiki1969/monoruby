@@ -200,6 +200,111 @@ fn mask(width: usize) -> u64 {
     }
 }
 
+/// Coerce an integer argument for `set_value` the way CRuby's per-type
+/// converters do (io_buffer.c): widths below 8 go through
+/// `NUM2UINT`/`NUM2INT` and then truncate, the 64-bit types through
+/// `NUM2ULL`/`NUM2LL` — so `:u64` accepts the whole `[-2^63, 2^64)`
+/// window (negative values wrap), and each type raises CRuby's own
+/// RangeError message beyond its window. Returns the value's low bits,
+/// already masked to `width`.
+fn coerce_int_for_type(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+    width: usize,
+    kind: ValKind,
+) -> Result<u64> {
+    use num::ToPrimitive;
+    // Reduce to an i128 (every representable argument fits; a bignum
+    // outside i128 is beyond every window below, and the messages there
+    // don't depend on how far out it is, so i128::MAX stands in).
+    let i: i128 = match v.unpack() {
+        RV::Fixnum(i) => i as i128,
+        RV::BigInt(b) => b.to_i128().unwrap_or(i128::MAX),
+        RV::Float(f) => {
+            // C double→integer conversion window of the underlying
+            // converter; a float inside it truncates and then takes the
+            // integer checks below.
+            let (lo, hi, what) = match (width, kind) {
+                (8, ValKind::Unsigned) => (-(2f64.powi(63)), 2f64.powi(64), "unsigned long long"),
+                (8, _) => (-(2f64.powi(63)), 2f64.powi(63), "long long"),
+                (_, ValKind::Unsigned) => (-(2f64.powi(63)), 2f64.powi(64), "integer"),
+                _ => (-(2f64.powi(63)), 2f64.powi(63), "integer"),
+            };
+            if f.is_nan() || f < lo || f >= hi {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "float {} out of range of {what}",
+                    crate::executor::format::float_g_image(f)
+                )));
+            }
+            f.trunc() as i128
+        }
+        _ => match v.coerce_to_int(vm, globals)?.unpack() {
+            RV::Fixnum(i) => i as i128,
+            RV::BigInt(b) => b.to_i128().unwrap_or(i128::MAX),
+            _ => unreachable!(),
+        },
+    };
+    match (width, kind) {
+        (8, ValKind::Unsigned) => {
+            // NUM2ULL: [-2^63, 2^64), negative wraps two's-complement.
+            if (-(1i128 << 63)..(1i128 << 64)).contains(&i) {
+                Ok(i as u64)
+            } else if i < 0 && i > -(1i128 << 64) {
+                Err(MonorubyErr::rangeerr(
+                    "bignum out of range of unsigned long long",
+                ))
+            } else {
+                Err(MonorubyErr::rangeerr(
+                    "bignum too big to convert into 'unsigned long long'",
+                ))
+            }
+        }
+        (8, _) => {
+            // NUM2LL: strict i64.
+            if let Ok(i) = i64::try_from(i) {
+                Ok(i as u64)
+            } else {
+                Err(MonorubyErr::rangeerr(
+                    "bignum too big to convert into 'long long'",
+                ))
+            }
+        }
+        (_, ValKind::Unsigned) => {
+            // NUM2UINT: the combined int/uint window wraps, anything
+            // else that still fits the ulong converter reports the
+            // value, and only a true ulong overflow blames the bignum.
+            if (-(1i128 << 31)..(1i128 << 32)).contains(&i) {
+                Ok((i as u64) & mask(width))
+            } else if (-(1i128 << 63)..(1i128 << 64)).contains(&i) {
+                let side = if i > 0 { "big" } else { "small" };
+                Err(MonorubyErr::rangeerr(format!(
+                    "integer {i} too {side} to convert to 'unsigned int'"
+                )))
+            } else if i < 0 && i > -(1i128 << 64) {
+                Err(MonorubyErr::rangeerr("bignum out of range of unsigned long"))
+            } else {
+                Err(MonorubyErr::rangeerr(
+                    "bignum too big to convert into 'unsigned long'",
+                ))
+            }
+        }
+        _ => {
+            // NUM2INT: strict i32 window before truncating to width.
+            if (-(1i128 << 31)..(1i128 << 31)).contains(&i) {
+                Ok((i as u64) & mask(width))
+            } else if i64::try_from(i).is_ok() {
+                let side = if i > 0 { "big" } else { "small" };
+                Err(MonorubyErr::rangeerr(format!(
+                    "integer {i} too {side} to convert to 'int'"
+                )))
+            } else {
+                Err(MonorubyErr::rangeerr("bignum too big to convert into 'long'"))
+            }
+        }
+    }
+}
+
 fn encode_value(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -213,7 +318,9 @@ fn encode_value(
             let f = if let Some(f) = v.try_float() {
                 f
             } else if matches!(v.unpack(), RV::Fixnum(_) | RV::BigInt(_)) {
-                v.coerce_to_int_i64(vm, globals)? as f64
+                // Integer#to_f semantics — a bignum beyond i64 still
+                // converts (losing precision), it does not raise.
+                v.coerce_to_f64(vm, globals)?
             } else {
                 // CRuby's rb_to_float message, with the lowercased
                 // class word ("string", "nil", ...).
@@ -232,7 +339,7 @@ fn encode_value(
                 f.to_bits()
             }
         }
-        _ => (v.coerce_to_int_i64(vm, globals)? as u64) & mask(width),
+        _ => coerce_int_for_type(vm, globals, v, width, kind)?,
     };
     let mut out = [0u8; 8];
     if big {
@@ -1687,6 +1794,52 @@ mod tests {
             gr = IO::Buffer.new(4); gr.set_string("abcd"); gr.resize(8)
             r << [gr.size, gr.get_string.bytes]
             r << er.call { gr.resize("x") } << er.call { gr.resize(-1) }
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_buffer_set_value_integer_ranges() {
+        // CRuby coerces each value type with its own converter
+        // (io_buffer.c: NUM2UINT/NUM2INT below 8 bytes, NUM2ULL/NUM2LL
+        // for the 64-bit types), so `:u64` takes the whole
+        // [-2^63, 2^64) window — wasm runtimes (dewasm) store negative
+        // i64s through it as masked bignums — narrow types wrap inside
+        // the C int window and raise CRuby's exact messages outside it,
+        // and floats truncate with their own range check.
+        run_test_once(
+            r##"
+            r = []
+            er = ->(&blk) { begin; blk.call; :no_raise; rescue => e; [e.class, e.message]; end }
+            b = IO::Buffer.new(8)
+            wr = ->(t, v) { er.call { b.set_value(t, 0, v); b.get_value(t, 0) } }
+            # u64/U64: NUM2ULL window, negative wraps
+            r << wr.(:u64, 2**64 - 1) << wr.(:u64, -1) << wr.(:u64, 2**63) << wr.(:U64, 2**64 - 1)
+            r << wr.(:u64, -2**63) << wr.(:u64, 2**64) << wr.(:u64, -2**63 - 1) << wr.(:u64, -2**64)
+            r << wr.(:u64, 2**200) << wr.(:u64, -(2**200))
+            # s64: strict i64
+            r << wr.(:s64, -2**63) << wr.(:s64, 2**63) << wr.(:s64, -2**63 - 1)
+            # u32/u16/U8: int/uint window wraps, then the ulong messages
+            r << wr.(:u32, -1) << wr.(:u32, -2**31) << wr.(:u32, -2**31 - 1) << wr.(:u32, 2**32)
+            r << wr.(:u32, 2**63) << wr.(:u32, 2**64 - 1) << wr.(:u32, 2**64)
+            r << wr.(:u32, -2**63) << wr.(:u32, -2**63 - 1) << wr.(:u32, -2**64)
+            r << wr.(:U8, 256) << wr.(:U8, -1) << wr.(:U8, 2**40) << wr.(:u16, 70000)
+            # s32/s16/S8: strict i32 window, truncate to width
+            r << wr.(:s32, 2**31) << wr.(:s32, -2**31 - 1) << wr.(:s32, 2**64)
+            r << wr.(:s16, 40000) << wr.(:S8, -2**31 - 1)
+            # floats truncate inside the converter's window
+            r << wr.(:u64, 2.5) << wr.(:u64, -1.5) << wr.(:u64, 1.8e19) << wr.(:u64, -1e18)
+            r << wr.(:u64, 1e20) << wr.(:u64, -1e19) << wr.(:u64, Float::NAN) << wr.(:u64, Float::INFINITY)
+            r << wr.(:s64, 1e19) << wr.(:s64, -1e19)
+            r << wr.(:s32, 1e10) << wr.(:s32, -1e10) << wr.(:s32, 1e30) << wr.(:s32, Float::NAN)
+            r << wr.(:u32, -1e9) << wr.(:u32, 1e30) << wr.(:u32, 2.5)
+            # to_int is honored, nil names the literal in the TypeError
+            r << wr.(:s16, Object.new.tap { |o| def o.to_int = 300 })
+            r << wr.(:u64, Object.new.tap { |o| def o.to_int = 2**64 - 1 })
+            r << wr.(:u64, nil) << wr.(:u64, "x")
+            # integers beyond i64 still convert for the float types
+            r << wr.(:f64, 2**64) << wr.(:f32, 2**200)
             r
             "##,
         );
