@@ -117,23 +117,7 @@ mod alloc_policy {
         let victim = (0..state.fpr_alloc.len().min(PHYS_FPR_POOL))
             .map(FPReg)
             .filter(|&fpr| !state.fpr_alloc.is_pinned(fpr) && occ.occupied(fpr))
-            .filter(|&fpr| {
-                // §27.3 Stage-2b (`phys-loop-aware`): do not demote the `Sf`
-                // cache of a loop-carried float — keep `L` resident so the
-                // body re-reads it from `xmm` instead of decoding it each
-                // iteration; the fresh value goes to a phase-2 spill instead.
-                // Default path: this filter is absent (`loop_carried` empty),
-                // so victim selection is byte-identical.
-                #[cfg(feature = "phys-loop-aware")]
-                if occ.all_sf(fpr)
-                    && state
-                        .fpr_slots(fpr)
-                        .any(|s| state.loop_carried.contains(&s))
-                {
-                    return false;
-                }
-                occ.all_sf(fpr)
-            })
+            .filter(|&fpr| occ.all_sf(fpr))
             .min_by_key(|&fpr| ctx.victim_rank(fpr))?;
         // Demoting the slots is what frees the register: the file is
         // derived from the modes, so there is no reverse entry to clear.
@@ -254,15 +238,6 @@ pub(crate) struct SlotState {
     /// merge despite living in the cloned `SlotState`.
     pub(in crate::codegen::jitgen) gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile,
     local_num: usize,
-    /// §27.3 Stage-2a: the loop-carried float set `L` for the enclosing loop —
-    /// slots that are `F`/`Sf` at the loop back-edge (so they round-trip the
-    /// loop). Populated at the loop-entry merge from the fixpoint's back-edge
-    /// (which is why §29's forward-allocation attempt found it empty), and
-    /// propagated through clones / `&mut self` joins. A correctness-neutral
-    /// *hint*: read only by the `phys-loop-aware` allocation policy to keep
-    /// loop-carried `Sf` resident; empty (no effect) on the default path.
-    #[cfg_attr(not(feature = "phys-loop-aware"), allow(dead_code))]
-    loop_carried: std::collections::HashSet<SlotId>,
     /// Float-consumed dynvar reads not yet reported to the `JitContext`
     /// (the frame itself cannot reach the outer frames' parked states).
     /// Drained at the next `compile_instruction` boundary into
@@ -346,7 +321,6 @@ impl SlotState {
             fpr_alloc: FprAllocator::new(),
             gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile::new(),
             local_num,
-            loop_carried: std::collections::HashSet::new(),
             pending_outer_float_reads: vec![],
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
@@ -519,15 +493,6 @@ impl SlotState {
     /// of the analysis-pass placement (`mode == F`). See doc §16.
     pub(in crate::codegen::jitgen) fn is_float_typed(&self, slot: SlotId) -> bool {
         matches!(self.guarded(slot), Guarded::Float)
-    }
-
-    /// §27.3 Stage-2a: record the loop-carried float set for this loop body.
-    #[cfg_attr(not(feature = "phys-loop-aware"), allow(dead_code))]
-    pub(in crate::codegen::jitgen) fn set_loop_carried(
-        &mut self,
-        set: std::collections::HashSet<SlotId>,
-    ) {
-        self.loop_carried = set;
     }
 
     pub(in crate::codegen::jitgen) fn class(&self, slot: SlotId) -> Option<ClassId> {

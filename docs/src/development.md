@@ -53,7 +53,6 @@ run time with `--no-jit`. (The old `jit` / `jit_x86` build cfgs and the
 | `stress-spill-pool` | Shrink `PHYS_FPR_POOL` to 2 so almost every float-resident slot becomes a spilled virtual FP register, stressing the spill paths |
 | `shadow-placement` | Record every physical FP placement in emission order, producing a per-compile fingerprint of the lowering. The gate for the abstract-interpreter / register-allocation separation |
 | `phys-table` | Move the physical FP placement *policy* out of the resolver into an explicit table-backed function. Byte-identical to the formula it replaces |
-| `phys-loop-aware` | The loop-aware FP allocation policy: keep loop-carried floats resident so a fresh value spills instead of evicting one. Non-byte-identical by design |
 | `mimalloc` | Route the global allocator's delegation to mimalloc instead of glibc, changing exactly one variable for an A/B |
 
 The last three are gated on measurement and are off until their A/B clears;
