@@ -1513,10 +1513,14 @@ fn index_assign(
     // only has to survive the trip through a `&str`, which ASCII-only
     // bytes do whatever their encoding, and which broken UTF-8 does not:
     // encoding alone cannot say, since ASCII-8BIT is `valid_encoding?`
-    // whatever its bytes while UTF-8 may be broken.
+    // whatever its bytes while UTF-8 may be broken. A UTF-8 receiver
+    // holding broken bytes is no more rebuildable as a Rust String than a
+    // EUC-JP one, so its code range is asked as well.
+    let recv_inner = self_.as_rstring_inner();
+    let recv_is_utf8 = recv_inner.encoding().is_utf8_compatible() && recv_inner.is_valid_encoding();
     let subst_is_utf8 = subst_inner.is_ascii_only()
         || (subst_inner.encoding().is_utf8_compatible() && subst_inner.is_valid_encoding());
-    if !self_.as_rstring_inner().encoding().is_utf8_compatible() || !subst_is_utf8 {
+    if !recv_is_utf8 || !subst_is_utf8 {
         let inner = self_.as_rstring_inner();
         let char_len = inner.char_length();
         if let Some(idx) = arg0_val.try_fixnum().or_else(|| {
@@ -10064,6 +10068,27 @@ mod tests {
             r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1, 2); [r.bytes, r.encoding.to_s, s.bytes]"#,
             r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1); [r.bytes, s.bytes]"#,
             r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1..2); [r.bytes, s.bytes]"#,
+        ]);
+    }
+
+    #[test]
+    fn splice_keeps_a_broken_encoding() {
+        // A splice that leaves the string invalid keeps the encoding
+        // `compatible_encoding` negotiated: CRuby reports
+        // `valid_encoding?` false rather than re-tagging it ASCII-8BIT,
+        // which would also claim the result valid.
+        run_tests(&[
+            r#"s = [255, 97, 98].pack("C*").force_encoding("UTF-8"); s.bytesplice(1, 1, "z"); [s.encoding.to_s, s.valid_encoding?, s.bytes]"#,
+            r#"s = [255, 97, 98].pack("C*").force_encoding("UTF-8"); s.bytesplice(1, 1, ""); [s.encoding.to_s, s.valid_encoding?, s.bytes]"#,
+            // The same receiver through `[]=`, which splices the same way.
+            r#"s = [255, 97, 98].pack("C*").force_encoding("UTF-8"); s[1] = "z"; [s.encoding.to_s, s.valid_encoding?, s.bytes]"#,
+            // Negotiation still decides the encoding where it applies.
+            r#"s = "abcdef".b; s.bytesplice(2, 2, "\u3042"); [s.encoding.to_s, s.valid_encoding?, s.bytes]"#,
+            r#"s = "abcdef".dup; s.bytesplice(2, 2, [255, 128].pack("C*")); [s.encoding.to_s, s.bytes]"#,
+            // And an incompatible pair still raises rather than demoting.
+            r#"begin; s = [255, 97, 98].pack("C*").force_encoding("UTF-8"); s.bytesplice(1, 1, [255, 128].pack("C*")); rescue => e; e.class.to_s; end"#,
+            // `bytesplice` keeps rejecting a non-boundary offset.
+            r#"begin; s = "\u3042\u3044".dup; s.bytesplice(1, 1, "z"); rescue => e; e.class.to_s; end"#,
         ]);
     }
 
