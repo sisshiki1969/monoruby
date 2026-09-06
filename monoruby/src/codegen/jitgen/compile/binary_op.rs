@@ -732,6 +732,45 @@ impl<'a> JitContext<'a> {
             )));
         };
 
+        // ---- 3b. A comparison with exactly one bignum-constant operand
+        // folds to its sign-decided answer here, BEFORE the inline
+        // dispatch: the receiver guard the dispatch would emit is a
+        // fixnum-representation test, which a bignum constant receiver
+        // (`M64 >= x`) can never pass, so the fold has to intercept — the
+        // constant side needs no runtime check at all, only the variable
+        // side keeps its fixnum guard. Same discipline as
+        // `fire_binary_inline`: the answer bakes in the builtin
+        // comparison, so it is gated on bop assumability and records the
+        // dependency.
+        if let BinaryOp::Cmp(kind) = binop
+            && lhs_class == INTEGER_CLASS
+            && !polymorphic
+        {
+            let rhs_big = state.is_bigint_literal_sign(rhs).is_some();
+            let lhs_big = state.is_bigint_literal_sign(lhs).is_some();
+            // Exactly one constant side, and the variable side profiled
+            // Integer (that's where the fold's fixnum guard lands).
+            if rhs_big != lhs_big
+                && (rhs_big || rhs_class == Some(INTEGER_CLASS))
+                && self.basic_op_assumable(INTEGER_CLASS, binop.into())
+            {
+                match mode {
+                    BinaryInlineMode::Value => {
+                        if state.fold_bigint_const_cmp(ir, kind, dst, lhs, rhs) {
+                            self.record_bop_dep(INTEGER_CLASS, binop.into());
+                            return Ok(BinaryLowering::Emitted);
+                        }
+                    }
+                    BinaryInlineMode::CmpBr { .. } => {
+                        if let Some(b) = state.fold_bigint_const_cmpbr(ir, kind, lhs, rhs) {
+                            self.record_bop_dep(INTEGER_CLASS, binop.into());
+                            return Ok(BinaryLowering::Folded(b));
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- 4. One path for every operator: guard the receiver, run the
         // generator registered on `lhs_class#op`, and fall back for whatever
         // it declines. The generator picks its emission from the argument
@@ -799,6 +838,25 @@ impl<'a> JitContext<'a> {
             }
             // Any C-ABI call flushes at its `get_using_fpr` chokepoint; the
             // GP pool has to be spilled here because the helper clobbers it.
+            state.flush_gp(ir);
+            let is_func_call = self
+                .store
+                .get_callsite_id(self.iseq_id(), bc_pos)
+                .is_some_and(|c| self.store[c].is_func_call());
+            self.emit_generic_binary(state, ir, binop, lhs, rhs, case_semantics, is_func_call);
+            return Ok(BinaryLowering::Generic);
+        }
+        // A BOOL_CLASS receiver whose operator has no unified resolution
+        // (TrueClass and FalseClass diverge on it — `|` after boolean.rb's
+        // alias, or a user redefinition on one class) has nothing to guard:
+        // the profile tags every boolean BOOL_CLASS, so a recompile re-asks
+        // the same unanswerable question and the site deopts forever.
+        // Dispatch through the generic helper instead.
+        if lhs_class == BOOL_CLASS
+            && self
+                .jit_check_method(lhs_class, IdentId::from(binop))
+                .is_none()
+        {
             state.flush_gp(ir);
             let is_func_call = self
                 .store

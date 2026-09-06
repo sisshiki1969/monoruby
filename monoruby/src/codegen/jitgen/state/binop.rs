@@ -491,7 +491,91 @@ impl AbstractFrame {
             self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };
+        // One operand a bignum constant (`x <= 0xffff_ffff_ffff_ffff`, the
+        // dewasm mask idiom): guard the other operand fixnum and the result
+        // is decided by the constant's sign alone. Without this the fixnum
+        // guard lands on the constant itself and fails on every execution.
+        if self.fold_bigint_const_cmp(ir, kind, dst, lhs, rhs) {
+            return;
+        }
         self.gen_cmp_integer_gp(ir, kind, dst, lhs, rhs);
+    }
+
+    /// The (variable side, folded answer) of a comparison with a bignum
+    /// constant on the other side: `fixnum <op> B` orders by B's sign
+    /// alone (equality never holds), flipped when B is the lhs. `None`
+    /// when neither side is a bignum constant.
+    fn bigint_cmp_fold_plan(&self, kind: CmpKind, lhs: SlotId, rhs: SlotId) -> Option<(SlotId, bool)> {
+        let (var, const_above, const_on_lhs) = if let Some(pos) = self.is_bigint_literal_sign(rhs) {
+            (lhs, pos, false)
+        } else if let Some(pos) = self.is_bigint_literal_sign(lhs) {
+            (rhs, pos, true)
+        } else {
+            return None;
+        };
+        let var_is_less = const_above != const_on_lhs;
+        let b = match kind {
+            CmpKind::Lt | CmpKind::Le => var_is_less,
+            CmpKind::Gt | CmpKind::Ge => !var_is_less,
+            CmpKind::Eq | CmpKind::TEq => false,
+            CmpKind::Ne => true,
+        };
+        Some((var, b))
+    }
+
+    /// The fixnum guard a bignum-constant fold's answer depends on: a
+    /// bignum in the variable operand must still deopt. Skipped when the
+    /// slot is already fixnum-proven or itself a fixnum constant.
+    fn guard_fixnum_for_fold(&mut self, ir: &mut AsmIr, var: SlotId) {
+        if self.is_fixnum_literal(var).is_none() {
+            let (var_gp, var_guard) = self.gp_ensure(ir, var, &[]);
+            if var_guard {
+                let deopt = ir.new_deopt(self);
+                ir.push(AsmInst::GuardClass(var_gp, INTEGER_CLASS, deopt));
+                self.refine_S_fixnum(var);
+            }
+        }
+    }
+
+    /// The `gen_cmp_integer` bignum-constant fold: when one operand is a
+    /// compile-time bignum constant, emit only the fixnum guard for the
+    /// other operand and link `dst` to the constant boolean answer.
+    /// Returns false (emitting nothing) when neither side qualifies.
+    pub(crate) fn fold_bigint_const_cmp(
+        &mut self,
+        ir: &mut AsmIr,
+        kind: CmpKind,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        rhs: SlotId,
+    ) -> bool {
+        let Some((var, b)) = self.bigint_cmp_fold_plan(kind, lhs, rhs) else {
+            return false;
+        };
+        self.guard_fixnum_for_fold(ir, var);
+        if let Some(dst) = dst {
+            self.gp_regfile.invalidate(dst);
+        }
+        let next_sp = self.next_sp();
+        self.gp_regfile.free_above_sp(next_sp);
+        self.def_C(dst, Value::bool(b));
+        true
+    }
+
+    /// The fused compare-and-branch form of the bignum-constant fold
+    /// (`x >= 0x8000_0000_0000_0000 ? … : …`, the dewasm sign-test
+    /// idiom): emit only the fixnum guard and hand the static answer to
+    /// the caller, which resolves the branch like a constant `CondBr`.
+    pub(crate) fn fold_bigint_const_cmpbr(
+        &mut self,
+        ir: &mut AsmIr,
+        kind: CmpKind,
+        lhs: SlotId,
+        rhs: SlotId,
+    ) -> Option<bool> {
+        let (var, b) = self.bigint_cmp_fold_plan(kind, lhs, rhs)?;
+        self.guard_fixnum_for_fold(ir, var);
+        Some(b)
     }
 
     /// the register-allocated fixnum comparison. Operands are
@@ -818,6 +902,12 @@ impl AbstractFrame {
         if self.class(slot) == Some(class) {
             return;
         }
+        // NOTE: a compile-time heap constant of the right class (a bignum
+        // receiver, say) must NOT skip this guard: for INTEGER it doubles
+        // as the fixnum-representation proof the inline generators build
+        // on (a skipped guard let `BIGNUM_CONST >> 4` shift the raw heap
+        // pointer). Bignum-constant sites are instead intercepted before
+        // the dispatch (`compile_binary`'s fold / the generators' decline).
         match class {
             INTEGER_CLASS => {
                 let (gp, needs_guard) = self.gp_ensure(ir, slot, &[]);

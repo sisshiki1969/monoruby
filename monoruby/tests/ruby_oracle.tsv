@@ -271,6 +271,7 @@
 12ac69d0e3d7829ff39cbbddc61b3277	["elefant", 4]	S = Struct.new(:name, :legs, keyword_init: true)\n            \n\n    
 12b1a598797e50c460f3d7646ca37481	[:y]	class B\n              def x; end\n            end\n            class 
 12cd2297f4d6ac25a476739a253c9292	["RUBZ", "RUBZ", 7, 8, false, true, 7]	class C\n              def succ(s); s.succ; end\n              def po
+12dced64afc93b420fbe2976ff18cf1d	[1, 0, 1, 1, 0, 62499999999999999999999999999999, 1999999999999999999999999999999998, 1000000000000000000000000000000000, 5]	B = 999999999999999999999999999999999\n        def t = [B[0], B[47], B[4
 12f9391c89c11935d8348e594acea735	[[10, 2, 3]]	class C\n          def f(a, b, c)\n            $res << [a, b, c]\n        
 130d9d1858257d1d752139ea21b67095	3240	def outer(n) = ->{ ->{ n } }\n            (1..80).map { |i| outer(i)
 131328b07507899394604b346dd7ea4c	{"A" => 65, "B" => 66}	hash = { "a" => 97, "b" => 98 }\n        hash.to_h {|key, value| [key.up
@@ -1144,6 +1145,7 @@
 573a889f327b5f24c438d7517aacf15a	nil	"hello".byteindex("ll", 3)
 573fe669ac971343defbd1cde20dc915	["MONORUBY_ENV_TEST_KEY", nil]	ENV["MONORUBY_ENV_TEST_KEY"] = "uniq_value_5678"\n            r = EN
 576157356419a5741dbdbde29df95789	true	GC.stat.values.all? { |v| v.is_a?(Integer) }
+577054b1d14b6315e02a2fd981488055	[false, true, false, true, true, false, true, false, false, true]	def g(a, b) = (a < 0) ^ (b < 0)\n        r = []\n        60.times { |i| r
 578de94984c2ccfde4e12e4b109f9b81	[1, 0]	class Hash\n          def []=(k, v)\n            "redef #{k}"\n          e
 57bd29081de5740463b29a1c3ee0ef00	"US-ASCII"	s = "hello".dup.force_encoding("US-ASCII")\n              s[/(ll)/
 57c833a5c1b734fc7100669600389b9b	[nil, nil, nil, 2.5, 3.5, :sym]	def __f(x)\n          \n        a = x.odd? ? nil : "str"\n        b = a\n  
@@ -1275,6 +1277,7 @@
 61999c6ea193c221146e7ca8536ca661	[1, 0, 7, 8, false, true, false, "File", true, true, "A", "B"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
 61c0d3358404d8b3ec51225d2fe11ce4	ArgumentError	class Integer; def <=>(o); :OVERRIDDEN; end; end\n            begin\n
 61d6a9b0085afd6c0cbfefe4fc3fe618	[true, true, true, Hash]	klass = Class.new(Hash)\n            [\n              klass[].instanc
+61fd9e5f4b3828247ba8a86b2a04db06	[[true, true, false, false, false, true, false, false, true, true, false, true, false, true, false, false], [false, false, true, true, false, true, true, true, false, false, false, true, false, true, false, false], [true, true, false, false, false, true, false, false, true, true, false, true, true, false, false, true], [true, true, false, false, false, true, false, false, true, true, false, true, false, true, false, false], [true, true, false, false, false, true, false, false, true, true, false, true, false, true, false, false], [true, true, false, false, false, true, false, false, true, true, false, true, false, true, false, false]]	BIGP = 0xffff_ffff_ffff_ffff\n        BIGN = -(2**63)\n        def t(x)\n 
 61fdd1242a66df09095c5df145f21012	12	def m(n); eval("BEGIN {return n*3}"); end; m(4)
 6201f6ca2228419027d2e3763e300a6c	:OVERRIDDEN	class Float; def !=(o); :OVERRIDDEN; end; end; 3.0 != 4.0
 62299cb34bf9144c91ccc814afcbeb05	"ab"	$/ = "c"; r = "abc".chomp; $/ = "\\n"; r
@@ -1478,6 +1481,7 @@
 71b94208b971bf119d6f24e1a29ca23a	[1, 2, 3]	class Foo\n              def to_proc\n                Proc.new {|v| $
 71c24f8639e7747006e674bc0fbf4547	256	def f(x)\n          x * 2\n        end\n        def g(x)\n          x + 2\n 
 71d85b9646b325d57ec9e46b0c5bd105	"hello"	class Foo; def to_str; "hello"; end; end\n            String.new(Foo
+71e5d3e78e179f2f4f8f383bbcd87148	[[29, 18446744073709551645, 18446744073709551586, 18446744073709551644, 18446744073709551586, -267477789068788498432, 1152921504606846975, 9223372036854775837], [0, 18446744073709551616, 36893488147419103231, 36893488147419103231, -1, -170141183460469231731687303715884105728, 1152921504606846975, 27670116110564327424], [9223372036854775808, -9223372036854775808, -9223372036854775809, 9223372036854775807, 27670116110564327423, 85070591730234615865843651857942052864, 1152921504606846975, 0]]	BIGP = 0xffff_ffff_ffff_ffff\n        BIGN = -(2**63)\n        def t(x)\n 
 71f4d67c2c270e965eaade7505c22804	[20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 0]	def count(n)\n              i = 0\n              c = 0\n              
 7223f396f3e66e954bb3f1b4f21a88a0	[[:a, :one, [0]], [:a, :two, [0]], [:a, :real, [0]], [:b, :one, [0]], [:b, :two, [0]], [:b_real, 0], [:a, :one, [1]], [:a, :two, [1]], [:a, :real, [1]], [:b, :one, [1]], [:b, :two, [1]], [:b_real, 1]]	class A\n          def method_missing(name, *args) = [:a, name, args]\n  
 7235ebfc85831c502397c3cbb35ce813	Foo	class Foo\n              def bar; end\n            end\n            \n\n
@@ -1583,6 +1587,7 @@
 79df004215796258833bafeb383ba684	5	def f; return 5; end; f()
 79f4d501500e80397f0486c89f664adf	[[-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0], [-7, 7, -8, -1.5, 1.5], [3, -3, 2, 0.25, -0.25], [4611686018427387904, -4611686018427387904, 4611686018427387903, -0.0, 0.0]]	def u(a, b)\n              [-a, +a, ~a, -b, +b]\n            end\n    
 79f521b7a2931ecaf21b4ae269dca011	"AB"	[65, 66].pack("C # first byte\\nC")
+79f83cffe41fecbab6352c9428ed0aa5	[false, false, true, false, true, true, true, false, false, false, true, false]	def h(a, b) = (a < 0) | (b < 0)\n        def k(a, b) = (a < 0) & (b < 0)
 7a214163208727ff855a9c86b078e3e2	[:foo, :bar]	$res = []\n            class C\n              def self.method_added(n
 7a22fbab65c686870df2b5b99250f03d	["bc", "Windows-31J"]	m = /b./s.match("abc".dup.force_encoding(Encoding::Windows_31J))\n               
 7a4714b990c4d0b20606ba3b944a11b0	[Module, 42]	$res = []\n        m = Module.new do |mod|\n          $res << mod.class\n 
@@ -1805,6 +1810,7 @@
 8b1c707195f0233d91b133db6b2549a0	3	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.len
 8b55158395e31dd88ba473b1a6f3e551	true	GC.auto_compact = true; GC.auto_compact
 8b98d44ec4272b482412f750678a9964	1	obj = Object.new\n            def obj.infinite?; -1; end\n           
+8bb7ba05994d18d3475fe6de3651363c	[196, -1, -9223372036854775808, 9223372036854775807, 5, 18446744073709551615, 18446744073709551615, 0, 0]	def s64(x) = x >= 0x8000_0000_0000_0000 ? x - 0x1_0000_0000_0000_0000 :
 8bc4cf0cc800784b3cf613c74c5a0702	[[:init, :body], true, :uninitialized, "must be called with a block", :already, true, 2, 1]	r = []\n            arr = []\n            sub = Class.new(Thread) do\n
 8bc5ef741a233aec240c5b062658f9b1	[4, 2, 4, 2, []]	splat = BasicObject.new\n        def splat.to_a; [2, 3, 4]; end\n        
 8bc9d3da4bf1a6f87b5745a463b34756	0	base = "/tmp/monoruby_dir_openblk_#{Process.pid}_#{rand(100000)}"\n 
@@ -2485,6 +2491,7 @@ be1808a6727b8d3bac7af6a899237547	1	class C; define_method(:m) { |a,| a }; end\n 
 be32db402f76154708fa32e248c791d9	[[:a, :c, nil, true, false], [1, 3, 4, 5, 6, nil], [:int, :float], [:x, :dflt], [:hit, "miss2"], [:one, nil, :int], [30, 110, [1, 2, 3]], [30, nil, 5], [:nan, nil]]	r = []\n            h = { 1 => :a, 5 => :b, 9 => :c }\n            r 
 be4f9b746714ae0e4ffd2af6d6fbee22	[0, 1, 2, 3, 4, 5, 6, 7, 8]	def f(*x)\n          x\n        end\n        \n\n        f(0,1,2,3,4,5,6,7,8
 be742cca1782a87afe5f5416052525fb	["CHUNKED BODY", "chunked body"]	require "socket"\n            s = TCPServer.new("127.0.0.1", 0)\n    
+be788727e64dc4ef73b6181bdb6cd3e8	8200	class R\n          def initialize(n)\n            @n = n\n            @pre
 be89db2e4e8d046b8a6387300e1417a7	[["Other 1\\n", true], [false, "Line 1\\n"], "Other 1\\n", true, true, "Errno::ENOENT", true, true, ["original data", "new data"]]	require 'fcntl'\n            base = "/tmp/monoruby_test_reopenp_#{Pr
 be99d9b9ef932ccac7c6d76c7e115282	[3, 9, 9, 1]	a, b = 3, 9\n            x = [b, a]\n            r = nil\n            
 bea8826dff62c61422cfd5dbadf7f523	[ArgumentError, "invalid byte sequence in UTF-8"]	x = [150].pack("C").force_encoding("utf-8");\n               (/(.).(.)/.match("ab
@@ -2731,6 +2738,7 @@ cffe2bea88b632377cf81196a0f5adbc	:OVERRIDDEN	class Integer; def %(o); :OVERRIDDE
 d005def98ec838cc7d6f37a7bdf0aaa0	[1, 2, 42, 12]	def f(x,y,z=42,w=12)\n            [x,y,z,w]\n        end\n        \n\n      
 d00a59254916621fa57745491676e04c	[true, false]	m = Module.new\n            m.freeze\n            ok = false\n        
 d01f7af924363a6dde43e88de3de59d1	nil	"hello".byteindex("x")
+d02239e9ea6a9ec41f97d63367a30a78	52230	class Loc\n          attr_reader :a, :b\n          def initialize(a, b) =
 d03f3da52be16a5382075d9aea65e40c	[0, true]	class Symbol; def ==(o) = true; end\n        [[:a, :b].index(:z), [:a, :
 d044b1d1eedcdda6f15b67ec84350344	4	"hello".byteindex("o")
 d05976bbfb14033f00937939ab90a32c	36000000	class Lib; def twice(n); n + n; end; end\n        $lib = Lib.new\n       
@@ -3112,6 +3120,7 @@ ed9d8e2f202ed982f57795adbdcbe43f	3	File.write("/tmp/foo", "woo")
 ed9eb5bf08edb4fb19ef55071777ac61	["a", "b"]	def foo(&block)\n        ["a","b"].each { |e| block.call(e) }\n\t    end\n    
 eda7a759e9b973f854bd82f3e9fc91f6	"nil"	begin; raise "a"; rescue; end\n            begin; raise "b"; rescue 
 edb5dbcaeaf97748d60848f2d876bf85	87520950	a = 0\n        for x in 0..20\n          for y in 0..20\n            for z
+edb915162043d994549434f1c1361e14	[true, :redefined]	M = 0xffff_ffff_ffff_ffff\n        def t(x) = x <= M\n        r = []\n    
 edd7521592e8b800133323de5557ca5d	[[1, 0], [2, 1]]	r = []; [1, 2].each.with_index { |v, i| r << [v, i] }; r
 edfa5f14dfb3ce9aa5f33fbf8b2f4c1f	[3, 3]	class C\n              def each_twice(n); r = []; 2.times { r << (yi
 ee0ddcc65de084a835c47f1e8ef4b537	true	Process.clock_gettime(Process::CLOCK_REALTIME, nil).is_a?(Float)
