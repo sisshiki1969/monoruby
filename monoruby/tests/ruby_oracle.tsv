@@ -2970,6 +2970,7 @@ e154b3c6984d91ffa32cd89a1908494b	false	File.directory?("monoruby")
 e167a456c7b69a77638b0dd3c251ab26	true	"abc".casecmp?("ABC")
 e19e475a8598d24cded21068c47654dd	"abc"	"abc".rjust(3)
 e1b505f2197e0465fd5bc85b29e4ab80	[604, -1, -2, 1, -2]	n = 1; x = [-1, -2]; a = [*x, n + 0, n + 1, n + 2, n + 3, n + 4, n + 5, n + 6, n
+e1ba7519a727204602c379e31e7f6a90	[nil, false, nil, nil, false, nil, 18, nil, 18, 9, 17]	class Sticky < String\n          def hash; 1; end\n          def eql?(o);
 e1c2cb8e9e01d860acf3a63296e8f6a3	[nil, nil]	s = "\\303".dup.force_encoding(Encoding::Windows_31J)\n               [/z/s.match(
 e1d0e1049ee5298bcdc5c96d04a37dd7	[false, false, true]	res = [$DEBUG, $-d]\n        $DEBUG = true\n        res << $-d\n        $D
 e1dc59a25b246ef8aaa68515e60ea4a0	true	Process.getrlimit(Process::RLIMIT_STACK).is_a?(Array)
