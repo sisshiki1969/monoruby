@@ -1801,10 +1801,16 @@ impl Codegen {
     /// value is in Rdx (x2); narrower-than-64-bit types deopt outside
     /// CRuby's `NUM2UINT` / `NUM2INT` window. Returns `offset + width`
     /// tagged in x0.
-    pub(crate) fn emit_io_buffer_write_int(&mut self, width: u8, signed: bool, deopt: &DestLabel) {
+    pub(crate) fn emit_io_buffer_write_int(
+        &mut self,
+        width: u8,
+        signed: bool,
+        check_range: bool,
+        deopt: &DestLabel,
+    ) {
         self.emit_io_buffer_addr(width, true, deopt);
         monoasm_arm64!(&mut self.jit, asr x2, x2, #(1););
-        if width < 8 {
+        if width < 8 && check_range {
             let limit: u64 = if signed { 1 << 32 } else { (1 << 32) + (1 << 31) };
             monoasm_arm64!(&mut self.jit,
                 mov x9, (1u64 << 31);

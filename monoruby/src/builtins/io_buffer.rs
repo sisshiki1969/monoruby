@@ -500,6 +500,25 @@ fn get_value_inline(
     true
 }
 
+///
+/// Whether `slot` holds a compile-time constant that already satisfies the
+/// `NUM2UINT` / `NUM2INT` window `emit_io_buffer_write_int` tests for a
+/// narrower-than-64-bit store.
+///
+/// A constant outside the window answers `false`, so the check stays and the
+/// deopt hands the store to the builtin, which raises exactly as CRuby does.
+/// The window itself is the emitter's: `[-2^31, 2^32)` unsigned,
+/// `[-2^31, 2^31)` signed, read off the untagged value.
+///
+fn constant_fits_write_window(state: &AbstractState, slot: SlotId, signed: bool) -> bool {
+    let Some(v) = state.is_fixnum_literal(slot) else {
+        return false;
+    };
+    let v = v.get();
+    let hi = if signed { 1i64 << 31 } else { 1i64 << 32 };
+    (-(1i64 << 31)..hi).contains(&v)
+}
+
 fn set_value_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -536,12 +555,16 @@ fn set_value_inline(
             });
         }
         _ => {
+            let signed = kind == ValKind::Signed;
+            // Read the value's link mode *before* `load_fixnum` materializes
+            // it: a constant it can see settles the store's range window here
+            // rather than in five instructions per store.
+            let check_range = !constant_fits_write_window(state, val_slot, signed);
             state.load_fixnum(ir, val_slot, GP::Rdx);
             let deopt = ir.new_deopt(state);
-            let signed = kind == ValKind::Signed;
             ir.inline(move |r#gen, _, labels, _| {
                 let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
-                r#gen.emit_io_buffer_write_int(width, signed, &d);
+                r#gen.emit_io_buffer_write_int(width, signed, check_range, &d);
             });
         }
     }
@@ -2005,6 +2028,64 @@ mod tests {
             r << er.call { gr.resize("x") } << er.call { gr.resize(-1) }
             r
             "##,
+        );
+    }
+
+    #[test]
+    fn io_buffer_set_value_constant_range() {
+        // The inlined narrow store tests CRuby's `NUM2UINT` / `NUM2INT`
+        // window at run time, which a value the compiler can see settles
+        // statically instead. Both halves of that have to hold: a constant
+        // inside the window stores the same byte the checked path would,
+        // and one outside keeps the check, so the deopt still hands the
+        // store to the builtin and CRuby's own `RangeError` comes out.
+        //
+        // Both the type symbol and the value must be literal at the call
+        // site for the store to inline at all, so each case needs its own
+        // method rather than a lambda over a table.
+        run_test(
+            r#"
+            b = IO::Buffer.new(64)
+            def w_u8(b, n)  = (i=0; while i<n; b.set_value(:U8,  0, 200);         i+=1; end)
+            def w_s8(b, n)  = (i=0; while i<n; b.set_value(:S8,  0, -100);        i+=1; end)
+            def w_u16(b, n) = (i=0; while i<n; b.set_value(:u16, 2, 60000);       i+=1; end)
+            def w_s16(b, n) = (i=0; while i<n; b.set_value(:s16, 4, -30000);      i+=1; end)
+            def w_u32(b, n) = (i=0; while i<n; b.set_value(:u32, 8, 4000000000);  i+=1; end)
+            def w_s32(b, n) = (i=0; while i<n; b.set_value(:s32, 12, -2000000000); i+=1; end)
+            def w_u64(b, n) = (i=0; while i<n; b.set_value(:u64, 16, 12345);      i+=1; end)
+            # The window's own edges, which must stay inside it.
+            def w_lo(b, n)  = (i=0; while i<n; b.set_value(:u32, 24, -2147483648); i+=1; end)
+            def w_hi(b, n)  = (i=0; while i<n; b.set_value(:u32, 28, 4294967295);  i+=1; end)
+            def w_slo(b, n) = (i=0; while i<n; b.set_value(:s32, 32, -2147483648); i+=1; end)
+            # Outside it: the check stays, and the builtin raises.
+            def w_over(b, n)    = (i=0; while i<n; b.set_value(:u32, 36, 4294967296);  i+=1; end)
+            def w_under(b, n)   = (i=0; while i<n; b.set_value(:u32, 40, -2147483649); i+=1; end)
+            def w_s32over(b, n) = (i=0; while i<n; b.set_value(:s32, 44, 2147483648);  i+=1; end)
+            def w_u8over(b, n)  = (i=0; while i<n; b.set_value(:U8,  48, 4294967296);  i+=1; end)
+
+            r = []
+            [[:w_u8, :U8, 0], [:w_s8, :S8, 0], [:w_u16, :u16, 2], [:w_s16, :s16, 4],
+             [:w_u32, :u32, 8], [:w_s32, :s32, 12], [:w_u64, :u64, 16],
+             [:w_lo, :u32, 24], [:w_hi, :u32, 28], [:w_slo, :s32, 32]].each do |m, t, off|
+              send(m, b, 400)
+              r << [m, b.get_value(t, off)]
+            end
+            [:w_over, :w_under, :w_s32over, :w_u8over].each do |m|
+              r << [m, (begin; send(m, b, 400); :no_raise; rescue => e; [e.class, e.message]; end)]
+            end
+            # The wrapper shape a wasm backend emits: a literal argument makes
+            # the wrapper specializable, so the mask folds and the store's
+            # value is a compile-time constant one frame further in.
+            class Mem
+              def initialize(b) = @b = b
+              def iwsb(a, v) = @b.set_value(:U8, a, v & 0xff)
+              def iws(a, v)  = @b.set_value(:u32, a, v & 0xffffffff)
+            end
+            def drive(m, n) = (i=0; while i<n; m.iwsb(52, 300); m.iws(56, -1); i+=1; end)
+            drive(Mem.new(b), 500)
+            r << [:wrapped, b.get_value(:U8, 52), b.get_value(:u32, 56)]
+            r
+            "#,
         );
     }
 

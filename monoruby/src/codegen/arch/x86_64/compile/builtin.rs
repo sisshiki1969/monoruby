@@ -1554,10 +1554,22 @@ impl Codegen {
     /// window (`[-2^31, 2^32)` / `[-2^31, 2^31)`) and deopt outside it, where
     /// the builtin raises; the low `width` bytes are stored. Returns
     /// `offset + width` as a fixnum in rax, as the builtin does.
-    pub(crate) fn emit_io_buffer_write_int(&mut self, width: u8, signed: bool, deopt: &DestLabel) {
+    ///
+    /// `check_range` is what the caller could not settle at compile time. A
+    /// value it can see (a literal, or a slot the JIT folded to one) decides
+    /// the window itself, so the five instructions below are emitted only for
+    /// a value the code has to inspect at run time. Width 8 has no window and
+    /// ignores it.
+    pub(crate) fn emit_io_buffer_write_int(
+        &mut self,
+        width: u8,
+        signed: bool,
+        check_range: bool,
+        deopt: &DestLabel,
+    ) {
         self.emit_io_buffer_addr(width, true, deopt);
         monoasm! { &mut self.jit, sarq rdx, 1; }
-        if width < 8 {
+        if width < 8 && check_range {
             // rdi / rsi are free once the address is formed; r8-r11 are
             // not (they are the GP allocation set and may hold live values).
             let limit: i64 = if signed { 1 << 32 } else { (1 << 32) + (1 << 31) };
