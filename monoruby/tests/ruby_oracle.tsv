@@ -1521,6 +1521,7 @@
 7427c64af89bec062257a676328a3d4f	[603.0, 304.0, true, 302.5, 302.5, 606, 307, true, 304, 304, [4.0, 7]]	class F\n              def initialize(x, y); @x = x; @y = y; end\n   
 742cf7259eae88dd4512794b3c9d16ad	[:i, :j]	def m; [1].each { |i| j = i * 2; return local_variables.sort }; end; m
 7441660ef7a2d951150dad613bc4907b	[:x, :x=, :y, :y=]	$added = []\n        class Module\n          alias_method :orig_method_ad
+74659f3c30edb7085fa7ff3fdb1203d2	[[:w_u8, 200], [:w_s8, -100], [:w_u16, 60000], [:w_s16, -30000], [:w_u32, 4000000000], [:w_s32, -2000000000], [:w_u64, 12345], [:w_lo, 2147483648], [:w_hi, 4294967295], [:w_slo, -2147483648], [:w_over, [RangeError, "integer 4294967296 too big to convert to 'unsigned int'"]], [:w_under, [RangeError, "integer -2147483649 too small to convert to 'unsigned int'"]], [:w_s32over, [RangeError, "integer 2147483648 too big to convert to 'int'"]], [:w_u8over, [RangeError, "integer 4294967296 too big to convert to 'unsigned int'"]], [:wrapped, 44, 4294967295]]	b = IO::Buffer.new(64)\n            def w_u8(b, n)  = (i=0; while i<
 7483001417ab19fd0c97c04334cd3e4a	[-1.0, -0.5, 0.0, 0.5, 1.0]	def test\n          res = []\n          i = 0\n          lo  = -2.0\n      
 7487c3bf6df41321ad221f8888a96604	:OVERRIDDEN	class Integer; def ~; :OVERRIDDEN; end; end; ~(3)
 748e241d7044c339274b01953e5a3301	[[:a, :a=, :b, :b=, :c, :c=], [:d=, :e=], [:f, :g]]	class C\n              def self.method_added(name)\n                G
