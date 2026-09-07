@@ -399,6 +399,62 @@ fn test_postfix_while_literal_false() {
     );
 }
 
+/// A ten-deep `while true` nest. The back-edge fixpoint analysis walks the
+/// whole nest per outer iteration; before it stopped recursing into each
+/// inner head's own fixpoint the innermost body was walked ~3^10 times and
+/// this did not finish in any reasonable time.
+#[test]
+fn test_deep_loop_nest_compiles() {
+    run_test(
+        r#"
+        n = 0
+        acc = 1
+        while true
+          n += 1
+          while true
+            n += 1
+            while true
+              n += 1
+              while true
+                n += 1
+                while true
+                  n += 1
+                  while true
+                    n += 1
+                    while true
+                      n += 1
+                      while true
+                        n += 1
+                        while true
+                          n += 1
+                          while true
+                            n += 1
+                            acc = acc * 3 + n & 0xffff
+                            break if n % 11 == 0
+                          end
+                          break if n % 10 == 0
+                        end
+                        break if n % 9 == 0
+                      end
+                      break if n % 8 == 0
+                    end
+                    break if n % 7 == 0
+                  end
+                  break if n % 6 == 0
+                end
+                break if n % 5 == 0
+              end
+              break if n % 4 == 0
+            end
+            break if n % 3 == 0
+          end
+          break if n % 2 == 0
+        end
+        [n, acc]
+        "#,
+    );
+}
+
 #[test]
 fn bench_while_until_for() {
     run_tests2(&[

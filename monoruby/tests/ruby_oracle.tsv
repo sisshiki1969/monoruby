@@ -163,6 +163,7 @@
 09e1a701e3fe1cd8ef94aa693e0b655b	[1.5, 1.5, 1.5, 2.5]	def __f(x)\n          \n        a = x > 30 ? 1.5 : x\n        b = a\n      
 0a0748b8809f0e8d7f80297870a4da1e	[200000, 0, 999]	a = []\n            200000.times { |i| a << [(i * 7919) % 1000] }\n  
 0a0f30d8ebe55e1e0abe73391dfb071f	[true, true, true, true, 2]	(o=Object.new; def o.to_path; "/tmp/mono_tp_#{Process.pid}"; end; p2=Object.new;
+0a5b4d0ac946d24249dbf3aa75d75a4f	[27720, 62874]	n = 0\n        acc = 1\n        while true\n          n += 1\n          whi
 0a8fcb3472ef6869da4abdbb99763b0d	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
 0aa2fa3cce375400b399c989bb80cc19	[1, 0, 0, 2, 1, 1, 3, 2, 2, 5, 3, 3, 8, 4, 4, 13, 5, 5, 21, 6, 6, 34, 7, 7, 55, 8, 8, 89, 9, 9, 144, 10, 10, 233, 11, 11, 377, 12, 12, 610, 13, 13, 987, 14, 14, 1597, 15, 15]	e = Enumerator.new do |y|\n            a = b = 1\n            loop do\n   
 0abce90d3ad088b0bf89b96ec125cc4a	[5.25, 0.75, 4.5]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
