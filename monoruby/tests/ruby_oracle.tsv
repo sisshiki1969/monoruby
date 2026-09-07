@@ -411,6 +411,7 @@
 1d061f190c766b447c0ce49d2254a833	"miss"	if /(?<w>foo)/ =~ "nope" then "hit" else "miss" end
 1d3b62c9ac33620fface000347a8abc0	"missing keywords: :x, :y"	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:,
 1d68e692e3b7f47da7c6ea7772f726dc	[:raised, :wait_readable, :raised, :wait_readable, "hi", "hi", ["yo", "Addrinfo"]]	require "socket"\n            res = []\n            a, b = UNIXSocket
+1d7e301a02dad991c924273414bc4664	[10, 115, 10, true, 1000, 1000, 102.5, 33, 14, 14]	module M\n              N = 7\n            end\n            class C\n  
 1db5d35ff78d7fa83b8c03967ca12192	true	def foo; end\n            public :foo\n            private :foo\n     
 1dbac381063982c828c61a6698e1e664	[42, 42, 42]	$a = 1\n            alias $b $a\n            alias $c $b\n            
 1dc4e6b9d13cbb4bda8ad0cf13be134b	[2, "hi"]	(f="/tmp/mono_oa_#{Process.pid}"; n=IO.write(f, "hi", open_args: ["w", nil, {enc
@@ -2774,6 +2775,7 @@ d192f501e35fa1bc0e0242a09104fe74	[["warning: non-nil '$/' is deprecated", "warni
 d19be72e25b9de2024bf0d36a3f8d563	{"a" => 1, "b" => [2, 3]}	require "json"\n            JSON.parse("  {  \\"a\\" : 1 ,  \\"b\\" :  [
 d1a295f75a785d2141f8551da1a6f041	Array	class C < Array; end\nC[1,2,3].map { |x| x }.class
 d1a2f6b3b40a551652027bc197b91882	[:deferred]	def run_masked(timing, blocking = true)\n              klass = Class
+d1b6c360f244221f8cbf36738a39be5a	[10, 25, 40.0, 5]	class C\n              K = 10\n              def initialize; @n = 100
 d1b8a6b7678b598205d8118224d254db	"99"	class HasToI; def to_i; 99; end; end\n            sprintf("%d", HasT
 d1fb6e221ee581e85d0263cbc4321970	[false, false, false]	[$VERBOSE, $-v, $-w]
 d22622fcd363dab097a0d4aa0bfe2e93	30	def f(a:, b:)\n          a + b\n        end\n        \n\n        f(a: 10, b:
