@@ -92,19 +92,31 @@ pub fn reprobe_requested() -> bool {
 /// every install/uninstall. A root without one (never used by rubygems,
 /// or gone with its Ruby) simply doesn't vote — which keeps a
 /// host-Ruby-less machine from re-probing on every start.
+///
+/// Separately, when *every* cached root has vanished, the Ruby
+/// installation the cache was probed from is gone entirely (e.g. an
+/// rbenv version upgrade deleted the old tree). The cached `$LOAD_PATH`
+/// then points only at dead directories, and — since the new Ruby's gem
+/// roots are not in the cache — no `gem install` there can ever move a
+/// `specifications/` mtime we compare against, so the mtime rule alone
+/// would keep serving the dead cache forever. Treat that as stale: a
+/// fresh probe against the current Ruby rewrites the cache, and on a
+/// host that lost its Ruby altogether the retried probe fails in a few
+/// milliseconds without touching the cache.
 pub fn cache_is_stale(library_path_file: &Path, gem_path: &str) -> bool {
     let Ok(cached_at) = std::fs::metadata(library_path_file).and_then(|m| m.modified()) else {
         // No readable cache file: only a probe can populate it.
         return true;
     };
-    gem_path
-        .split(':')
-        .filter(|root| !root.is_empty())
-        .any(|root| {
-            std::fs::metadata(Path::new(root).join("specifications"))
-                .and_then(|m| m.modified())
-                .is_ok_and(|installed_at| installed_at > cached_at)
-        })
+    let roots: Vec<&str> = gem_path.split(':').filter(|root| !root.is_empty()).collect();
+    if !roots.is_empty() && roots.iter().all(|root| !Path::new(root).exists()) {
+        return true;
+    }
+    roots.iter().any(|root| {
+        std::fs::metadata(Path::new(root).join("specifications"))
+            .and_then(|m| m.modified())
+            .is_ok_and(|installed_at| installed_at > cached_at)
+    })
 }
 
 /// Probe result: `(library_path, gem_path)`.
@@ -232,14 +244,31 @@ mod tests {
     #[test]
     fn roots_without_a_specification_dir_do_not_vote() {
         // A root rubygems never wrote to, and one that vanished with its
-        // Ruby: neither may force a probe, or a host with no usable ruby
-        // would re-spawn the (failing) probe on every single start.
+        // Ruby: as long as at least one cached root still exists, neither
+        // may force a probe, or a host whose ruby never installs a gem
+        // would re-spawn the probe on every single start.
         let tmp = tempfile::tempdir().unwrap();
         let bare = gem_root(tmp.path(), "bare", false);
         let gone = tmp.path().join("gone");
         let cache = cache_file(tmp.path(), hour_ago());
         let gem_path = format!("{}:{}", bare.display(), gone.display());
         assert!(!cache_is_stale(&cache, &gem_path));
+    }
+
+    #[test]
+    fn all_roots_vanished_is_stale() {
+        // Every cached root gone means the probed Ruby installation was
+        // removed wholesale (e.g. an rbenv upgrade deleted the old
+        // version tree): the cached $LOAD_PATH is dead and the mtime rule
+        // can never fire again, so only a fresh probe can repair it.
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = cache_file(tmp.path(), hour_hence());
+        let gem_path = format!(
+            "{}:{}",
+            tmp.path().join("gone-a").display(),
+            tmp.path().join("gone-b").display()
+        );
+        assert!(cache_is_stale(&cache, &gem_path));
     }
 
     #[test]
