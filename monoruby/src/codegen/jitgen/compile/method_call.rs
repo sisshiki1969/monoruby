@@ -1448,6 +1448,34 @@ impl<'a> JitContext<'a> {
             }
         }
 
+        // The constants the body folded. Their values were baked in against
+        // the *callee's* inline caches, which are only right at the version
+        // they were resolved at: the body cannot redefine a constant (it
+        // contains no call), but anything else in the program can, between
+        // this compilation and a later execution of the code emitted here.
+        // So the expansion carries the same guard and salvage record a
+        // `LoadConst` in this frame would (`load_constant`) — one guard per
+        // trace covers them all — and declines a site whose cache has moved
+        // on, since the ordinary call is correct.
+        let mut const_folds: Vec<ConstFoldSite> = Vec::with_capacity(body.consts.len());
+        for &id in &body.consts {
+            let site = &self.store[id];
+            let Some(cache) = site.cache.clone() else {
+                return false;
+            };
+            if cache.version as u64 != self.const_version() {
+                return false;
+            }
+            let mut names = site.prefix.clone();
+            names.push(site.name);
+            const_folds.push(ConstFoldSite { id, cache, names });
+        }
+        // Emitted before anything else, so a miss still hands the whole call
+        // back — the all-or-nothing property every other guard here keeps.
+        if let Some(version) = const_folds.first().map(|site| site.cache.version) {
+            self.guard_const_version(state, ir, version);
+        }
+
         state.flush_gp(ir);
         // The receiver, for every inline ivar access and the frozen guard.
         state.load(ir, recv, GP::Rdi);
@@ -1552,6 +1580,7 @@ impl<'a> JitContext<'a> {
         for (class, name) in bop_deps {
             self.record_bop_dep(class, name);
         }
+        self.const_fold_cache.extend(const_folds);
         state.def_reg2acc(ir, GP::Rax, dst);
         state.unset_side_effect_guard();
         true
@@ -4123,6 +4152,97 @@ mod tests {
               def ==(o); :redefined_eq; end
             end
             res << run(c, 500)
+            res
+            "#,
+        );
+    }
+
+    /// A constant operand. `def size = @size / PAGE_SIZE` is the shape that
+    /// motivates it: without the constant the recogniser turned away every
+    /// leaf body that names one, which is most of the ones worth expanding.
+    ///
+    /// The value is the callee's inline cache, so it is folded into the
+    /// caller exactly as a `LoadConst` in the caller's own frame would be —
+    /// same fixnum-only test, same version guard, same salvage record.
+    #[test]
+    fn frameless_leaf_bodies_const() {
+        run_test(
+            r#"
+            module M
+              N = 7
+            end
+            class C
+              K = 10
+              S = "abc"
+              F = 2.5
+              def initialize; @n = 100; end
+              def div_k; @n / K; end
+              def sum(x); @n + K + x; end
+              def just_k; K; end
+              def gt_k; @n > K; end
+              def store_k; @m = @n * K; end
+              # Declined, each for its own reason: a non-fixnum constant
+              # cannot be baked into the caller (no GC root, and the
+              # arithmetic is fixnum-only), and a constant reached through a
+              # runtime base needs a guard on the callee's own slot.
+              def flt; @n + F; end
+              def str_size; @n / S.size; end
+              def based(m); @n / m::N; end
+              # A prefix qualifier is not a runtime base: it resolves at
+              # compile time and its names go into the salvage record, so
+              # this one is folded like any other.
+              def prefixed; @n / M::N; end
+              attr_reader :m
+            end
+            c = C.new
+            300.times { c.div_k; c.sum(1); c.just_k; c.gt_k; c.store_k;
+                        c.flt; c.str_size; c.based(M); c.prefixed }
+            [c.div_k, c.sum(5), c.just_k, c.gt_k, c.store_k, c.m,
+             c.flt, c.str_size, c.based(M), c.prefixed]
+            "#,
+        );
+    }
+
+    /// The folded value is only right at the const version it was resolved
+    /// at. The body cannot redefine a constant itself — it contains no call
+    /// — but anything else in the program can, between the caller's
+    /// compilation and a later execution of it, and the caller then holds a
+    /// stale immediate in its instruction stream. So the expansion emits
+    /// the same `GuardConstVersion` a `LoadConst` in the caller's frame
+    /// would, and records the fold for salvage.
+    ///
+    /// `loop_div` is compiled on its first call, with `K` folded in as 10;
+    /// every later call must see the current `K`. Dropping the guard makes
+    /// the second and third rows below keep answering 10.
+    #[test]
+    fn frameless_leaf_bodies_const_redefine() {
+        run_test_once(
+            r#"
+            class C
+              K = 10
+              def initialize; @n = 100; end
+              def div_k; @n / K; end
+            end
+            def loop_div(c, n)
+              r = 0
+              i = 0
+              while i < n
+                r = c.div_k
+                i += 1
+              end
+              r
+            end
+            c = C.new
+            res = [loop_div(c, 500)]
+            C.send(:remove_const, :K); C.const_set(:K, 4)
+            res << loop_div(c, 500)
+            # A constant that stops being a fixnum has to leave the fold
+            # behind entirely, not just re-fold: the recompiled body
+            # declines and the ordinary call runs.
+            C.send(:remove_const, :K); C.const_set(:K, 2.5)
+            res << loop_div(c, 500)
+            C.send(:remove_const, :K); C.const_set(:K, 20)
+            res << loop_div(c, 500)
             res
             "#,
         );
