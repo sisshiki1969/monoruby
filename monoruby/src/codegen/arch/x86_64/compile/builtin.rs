@@ -1487,6 +1487,115 @@ impl Codegen {
         }
     }
 
+    /// The address of an inlined `IO::Buffer#get_value` / `#set_value`
+    /// access: the receiver in rdi, the tagged offset in rsi. Leaves
+    /// `&bytes[offset]` in rax and `offset + width` (untagged) in rcx; deopts
+    /// to the builtin when the buffer has no stable data pointer (a String
+    /// view, a slice, a null buffer; for a write, a read-only buffer too),
+    /// when the offset is negative or not a fixnum-untaggable value, or when
+    /// the access runs past the end. Clobbers rdi, rsi.
+    fn emit_io_buffer_addr(&mut self, width: u8, write: bool, deopt: &DestLabel) {
+        let ptr_off = if write {
+            crate::rvalue::IOBUF_OFFSET_FAST_WPTR
+        } else {
+            crate::rvalue::IOBUF_OFFSET_FAST_PTR
+        };
+        monoasm! { &mut self.jit,
+            movq rdi, [rdi + (RVALUE_OFFSET_KIND)];
+            movq rax, [rdi + (ptr_off)];
+            testq rax, rax;
+            jz deopt;
+            sarq rsi, 1;
+            js deopt;
+            lea rcx, [rsi + (width as i32)];
+            cmpq rcx, [rdi + (crate::rvalue::IOBUF_OFFSET_FAST_LEN)];
+            ja deopt;
+            addq rax, rsi;
+        }
+    }
+
+    /// Inlined `IO::Buffer#get_value` for a little-endian integer type:
+    /// receiver in rdi, tagged offset in rsi; the value, tagged as a fixnum,
+    /// in rax. A 64-bit value that needs a Bignum deopts to the builtin
+    /// (the same checked doubling as `emit_fiddle_read_int`).
+    pub(crate) fn emit_io_buffer_read_int(&mut self, width: u8, signed: bool, deopt: &DestLabel) {
+        self.emit_io_buffer_addr(width, false, deopt);
+        match (width, signed) {
+            (1, true) => monoasm! { &mut self.jit, movsxb rax, [rax]; },
+            (1, false) => monoasm! { &mut self.jit, movzxb rax, [rax]; },
+            (2, true) => monoasm! { &mut self.jit, movsxw rax, [rax]; },
+            (2, false) => monoasm! { &mut self.jit, movzxw rax, [rax]; },
+            (4, true) => monoasm! { &mut self.jit, movsxl rax, [rax]; },
+            (4, false) => monoasm! { &mut self.jit, movl rax, [rax]; },
+            (8, _) => monoasm! { &mut self.jit, movq rax, [rax]; },
+            _ => unreachable!(),
+        }
+        monoasm! { &mut self.jit, addq rax, rax; }
+        if width == 8 {
+            monoasm! { &mut self.jit, jo deopt; }
+            if !signed {
+                monoasm! { &mut self.jit, js deopt; }
+            }
+        }
+        monoasm! { &mut self.jit, orq rax, 1; }
+    }
+
+    /// Inlined `IO::Buffer#get_value(:f64, offset)`: the double lands in
+    /// `fret`.
+    pub(crate) fn emit_io_buffer_read_f64(&mut self, fret: FPReg, deopt: &DestLabel, base: usize) {
+        self.emit_io_buffer_addr(8, false, deopt);
+        monoasm! { &mut self.jit, movq xmm0, [rax]; }
+        self.store_fpr_into_xmm(fret, base);
+    }
+
+    /// Inlined `IO::Buffer#set_value` for a little-endian integer type:
+    /// receiver in rdi, tagged offset in rsi, tagged fixnum value in rdx.
+    /// Types narrower than 64 bits take CRuby's `NUM2UINT` / `NUM2INT`
+    /// window (`[-2^31, 2^32)` / `[-2^31, 2^31)`) and deopt outside it, where
+    /// the builtin raises; the low `width` bytes are stored. Returns
+    /// `offset + width` as a fixnum in rax, as the builtin does.
+    pub(crate) fn emit_io_buffer_write_int(&mut self, width: u8, signed: bool, deopt: &DestLabel) {
+        self.emit_io_buffer_addr(width, true, deopt);
+        monoasm! { &mut self.jit, sarq rdx, 1; }
+        if width < 8 {
+            // rdi / rsi are free once the address is formed; r8-r11 are
+            // not (they are the GP allocation set and may hold live values).
+            let limit: i64 = if signed { 1 << 32 } else { (1 << 32) + (1 << 31) };
+            monoasm! { &mut self.jit,
+                movq rdi, (1i64 << 31);
+                addq rdi, rdx;
+                movq rsi, (limit);
+                cmpq rdi, rsi;
+                jae deopt;
+            }
+        }
+        match width {
+            1 => monoasm! { &mut self.jit, movb [rax], rdx; },
+            2 => monoasm! { &mut self.jit, movw [rax], rdx; },
+            4 => monoasm! { &mut self.jit, movl [rax], rdx; },
+            8 => monoasm! { &mut self.jit, movq [rax], rdx; },
+            _ => unreachable!(),
+        }
+        monoasm! { &mut self.jit,
+            movq rax, rcx;
+            addq rax, rax;
+            orq rax, 1;
+        }
+    }
+
+    /// Inlined `IO::Buffer#set_value(:f64, offset, value)`: the double in
+    /// `xsrc` is stored; returns `offset + 8` as a fixnum in rax.
+    pub(crate) fn emit_io_buffer_write_f64(&mut self, xsrc: FPReg, deopt: &DestLabel, base: usize) {
+        self.load_fpr_into_xmm0(xsrc, base);
+        self.emit_io_buffer_addr(8, true, deopt);
+        monoasm! { &mut self.jit,
+            movq [rax], xmm0;
+            movq rax, rcx;
+            addq rax, rax;
+            orq rax, 1;
+        }
+    }
+
     /// `Integer#%` by a positive power of two: `lhs & mask` on the tagged
     /// fixnum in rdi.
     pub(crate) fn emit_int_rem_pow2_mask(&mut self, mask: i64) {

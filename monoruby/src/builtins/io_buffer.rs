@@ -1,8 +1,10 @@
 use super::*;
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 use crate::value::rvalue::{
     BUF_EXTERNAL, BUF_INTERNAL, BUF_LOCKED, BUF_MAPPED, BUF_PRIVATE, BUF_READONLY, BUF_SHARED,
     BufStorage, IoBufferInner,
 };
+use jitgen::{AbstractState, JitContext};
 
 //
 // IO::Buffer — a fixed-size byte buffer (CRuby 3.1+, io_buffer.c).
@@ -118,8 +120,20 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_BUFFER_CLASS, "or!", bit_or_inplace, 1);
     globals.define_builtin_func(IO_BUFFER_CLASS, "xor!", bit_xor_inplace, 1);
     globals.define_builtin_func(IO_BUFFER_CLASS, "not!", bit_not_inplace, 0);
-    globals.define_builtin_func(IO_BUFFER_CLASS, "get_value", get_value, 2);
-    globals.define_builtin_func(IO_BUFFER_CLASS, "set_value", set_value, 3);
+    globals.define_builtin_inline_func(
+        IO_BUFFER_CLASS,
+        "get_value",
+        get_value,
+        inline_gen2!(get_value_inline),
+        2,
+    );
+    globals.define_builtin_inline_func(
+        IO_BUFFER_CLASS,
+        "set_value",
+        set_value,
+        inline_gen2!(set_value_inline),
+        3,
+    );
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "each", each, 1, 3, false);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "values", values, 1, 3, false);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "each_byte", each_byte, 0, 2, false);
@@ -128,7 +142,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// A get/set_value type symbol: byte width, kind, endianness.
 /// Lowercase multi-byte names are little-endian, uppercase big-endian
 /// (`:U8`/`:S8` have no endianness).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ValKind {
     Unsigned,
     Signed,
@@ -407,6 +421,132 @@ fn set_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     buf.write_at(offset, &encoded[..width])?;
     // CRuby returns the offset just past the written value.
     Ok(Value::integer((offset + width) as i64))
+}
+
+// ---------------------------------------------------------------------------
+// Inline JIT specializations for get_value / set_value
+//
+// wasm-derived code (dewasm's Ruby backend) performs every linear-memory
+// access through `@buffer.get_value(:u32, addr)` / `set_value`, thousands
+// of call sites per program, so the builtin round trip — frame setup, the
+// type-symbol lookup, the strict offset conversion, the decode — was half
+// of a DOOM tick. With the type a symbol literal, the access compiles to a
+// bounds check and one typed load/store against the buffer's cached data
+// pointer (`IoBufferInner`'s fast view). Little-endian integer types and
+// `:f64` are inlined; the big-endian and `:f32` forms, and every buffer
+// without a stable data pointer, take the builtin. The 64-bit integer
+// types deopt to the builtin for values that need a Bignum, and the
+// narrower `set_value` types for values outside CRuby's conversion
+// window, so the builtin still raises the exact error.
+// ---------------------------------------------------------------------------
+
+/// The (width, kind) of a `get_value` / `set_value` type-symbol literal in
+/// `slot` that the JIT inlines, or `None` for anything the builtin keeps.
+fn inline_value_type(state: &AbstractState, slot: SlotId) -> Option<(u8, ValKind)> {
+    let id = state.is_symbol_literal(slot)?;
+    let (width, kind, big) = parse_value_type(&id.get_name())?;
+    if big || (kind == ValKind::Float && width != 8) {
+        return None;
+    }
+    Some((width as u8, kind))
+}
+
+fn get_value_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: Option<ClassId>,
+    _: Option<ClassId>,
+) -> bool {
+    if recv_class != Some(IO_BUFFER_CLASS) {
+        return false;
+    }
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 2 {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    let Some(dst) = dst else {
+        return false;
+    };
+    let Some((width, kind)) = inline_value_type(state, args) else {
+        return false;
+    };
+
+    state.load(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args + 1usize, GP::Rsi);
+    let deopt = ir.new_deopt(state);
+    match kind {
+        ValKind::Float => {
+            let fret = state.def_F(dst);
+            ir.inline(move |r#gen, _, labels, base| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_read_f64(fret, &d, base);
+            });
+        }
+        _ => {
+            let signed = kind == ValKind::Signed;
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_read_int(width, signed, &d);
+            });
+            state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+        }
+    }
+    true
+}
+
+fn set_value_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: Option<ClassId>,
+    _: Option<ClassId>,
+) -> bool {
+    if recv_class != Some(IO_BUFFER_CLASS) {
+        return false;
+    }
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 3 {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    let Some((width, kind)) = inline_value_type(state, args) else {
+        return false;
+    };
+
+    let val_slot = args + 2usize;
+    state.load(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args + 1usize, GP::Rsi);
+    match kind {
+        ValKind::Float => {
+            let xsrc = state.load_fpr(ir, val_slot);
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels, base| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_write_f64(xsrc, &d, base);
+            });
+        }
+        _ => {
+            state.load_fixnum(ir, val_slot, GP::Rdx);
+            let deopt = ir.new_deopt(state);
+            let signed = kind == ValKind::Signed;
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_write_int(width, signed, &d);
+            });
+        }
+    }
+    state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
 }
 
 /// Iterate `(absolute_offset, decoded_value)` pairs of `type` starting at
@@ -1115,7 +1255,9 @@ fn transfer(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let inner = std::mem::replace(self_.as_iobuffer_inner_mut(), IoBufferInner::null());
     // The nulled original keeps its flag bits (CRuby: "+0 NULL INTERNAL");
     // #free, by contrast, clears them.
-    self_.as_iobuffer_inner_mut().flags = inner.flags;
+    let nulled = self_.as_iobuffer_inner_mut();
+    nulled.flags = inner.flags;
+    nulled.refresh_fast();
     Ok(Value::new_io_buffer(inner))
 }
 
@@ -1612,6 +1754,57 @@ fn bit_not_inplace(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// The JIT-inlined `get_value` / `set_value` (little-endian integer
+    /// types and `:f64` with a literal type symbol): every type, the
+    /// 64-bit values that need a Bignum, the narrow-type conversion windows,
+    /// bounds and negative offsets, non-fixnum arguments, read-only /
+    /// String-backed / sliced / duplicated / resized / freed / transferred
+    /// buffers — all of which leave the inlined path for the builtin.
+    #[test]
+    fn io_buffer_get_set_value_jit() {
+        run_test(
+            r##"
+            b = IO::Buffer.new(64)
+            r = nil
+            40.times do |i|
+              b.set_value(:U8, 0, i); b.set_value(:S8, 1, -i); b.set_value(:u16, 2, i * 300); b.set_value(:s16, 4, -i * 300)
+              b.set_value(:u32, 8, i * 70000); b.set_value(:s32, 12, -i * 70000)
+              b.set_value(:u64, 16, i * 3000000000); b.set_value(:s64, 24, -i * 3000000000)
+              b.set_value(:f64, 32, i * 0.5); b.set_value(:f64, 40, i)
+              r = [b.get_value(:U8, 0), b.get_value(:S8, 1), b.get_value(:u16, 2), b.get_value(:s16, 4),
+                   b.get_value(:u32, 8), b.get_value(:s32, 12), b.get_value(:u64, 16), b.get_value(:s64, 24),
+                   b.get_value(:f64, 32), b.get_value(:f64, 40), b.set_value(:U8, 63, 1), b.get_value(:U32, 8), b.get_value(:f32, 32)]
+            end
+            er = ->(&blk) { begin; blk.call; rescue => e; [e.class, e.message]; end }
+            res = []
+            20.times do
+              b.set_value(:u64, 40, 2**63 + 5); res << b.get_value(:u64, 40) << b.get_value(:s64, 40)
+              b.set_value(:s64, 48, -2**62 - 1); res << b.get_value(:s64, 48) << b.get_value(:u64, 48)
+              b.set_value(:u64, 56, 2**62); res << b.get_value(:u64, 56) << b.get_value(:s64, 56)
+              res << er.call { b.set_value(:u32, 8, 2**32) } << er.call { b.set_value(:s16, 4, 2**31) } << er.call { b.set_value(:U8, 0, -2**31 - 1) }
+              res << er.call { b.set_value(:s32, 12, -2**31 - 1) } << b.set_value(:s32, 12, -2**31) << b.get_value(:s32, 12)
+              res << b.set_value(:U8, 0, -1) << b.get_value(:U8, 0) << b.set_value(:u32, 8, -1) << b.get_value(:u32, 8) << b.get_value(:s32, 8)
+              res << er.call { b.get_value(:u32, 62) } << er.call { b.get_value(:u32, -1) } << er.call { b.set_value(:u32, 61, 1) } << er.call { b.get_value(:U8, 64) } << b.get_value(:U8, 63)
+              res << b.set_value(:f64, 32, 3) << b.get_value(:f64, 32)
+              res << er.call { b.set_value(:u32, 8, "x") } << er.call { b.get_value(:u32, 1.5) } << er.call { b.set_value(:u32, nil, 1) }
+              ro = IO::Buffer.for("abcdefgh"); res << ro.get_value(:u32, 0) << er.call { ro.set_value(:u32, 0, 1) }
+              IO::Buffer.for(+"abcdefgh") { |w| w.set_value(:U8, 0, 65); res << w.get_value(:U8, 0) }
+              sl = b.slice(8, 8); res << sl.get_value(:u32, 0); sl.set_value(:u32, 4, 77); res << b.get_value(:u32, 12)
+              d = b.dup; d.set_value(:u32, 8, 99); res << [d.get_value(:u32, 8), b.get_value(:u32, 8)]
+            end
+            b2 = IO::Buffer.new(16)
+            20.times { |i| b2.set_value(:u32, 0, i); b2.resize(32) if i == 5; res << b2.get_value(:u32, 0) << (i >= 5 ? b2.set_value(:U8, 31, i) : nil) }
+            b2.free
+            res << er.call { b2.get_value(:u32, 0) }
+            b3 = IO::Buffer.new(8)
+            t = b3.transfer
+            20.times { |i| t.set_value(:u32, 0, i); res << t.get_value(:u32, 0) << er.call { b3.get_value(:u32, 0) } }
+            [r, res]
+
+            "##,
+        );
+    }
 
     #[test]
     fn io_buffer_map_and_bitwise() {

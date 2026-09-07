@@ -70,32 +70,79 @@ pub struct IoBuffer(Value);
 ///
 /// The native payload of an `IO::Buffer` (`ObjTy::IO_BUFFER`).
 ///
-#[derive(Debug, Clone)]
+/// The three leading fields are the JIT's view of the bytes, read by the
+/// inlined `get_value` / `set_value` (`IOBUF_OFFSET_*`): the data pointer
+/// and length of a buffer whose storage has a stable address (owned heap
+/// memory, a file mapping), and the same pointer again unless the buffer
+/// is read-only. Null for every other storage (a Ruby String's bytes can
+/// move; a slice resolves through its parent) — the inlined access deopts
+/// to the builtin on a null. Every constructor derives them from the
+/// storage and flags (`refresh_fast`); the builtins never mutate a
+/// storage in place, they replace the whole payload.
+///
+#[derive(Debug)]
+#[repr(C)]
 pub struct IoBufferInner {
+    fast_ptr: *mut u8,
+    fast_len: usize,
+    fast_wptr: *mut u8,
     pub storage: BufStorage,
     pub size: usize,
     pub flags: u32,
     pub locked: bool,
 }
 
+/// Offsets of the JIT-read fields (see [`IoBufferInner`]).
+pub const IOBUF_OFFSET_FAST_PTR: usize = std::mem::offset_of!(IoBufferInner, fast_ptr);
+pub const IOBUF_OFFSET_FAST_LEN: usize = std::mem::offset_of!(IoBufferInner, fast_len);
+pub const IOBUF_OFFSET_FAST_WPTR: usize = std::mem::offset_of!(IoBufferInner, fast_wptr);
+
+impl Clone for IoBufferInner {
+    fn clone(&self) -> Self {
+        // The cloned storage lives at a new address: derive the fast view
+        // from it rather than copying the source's pointers.
+        Self::new(self.storage.clone(), self.size, self.flags, self.locked)
+    }
+}
+
 impl IoBufferInner {
+    fn new(storage: BufStorage, size: usize, flags: u32, locked: bool) -> Self {
+        let mut inner = Self {
+            fast_ptr: std::ptr::null_mut(),
+            fast_len: 0,
+            fast_wptr: std::ptr::null_mut(),
+            storage,
+            size,
+            flags,
+            locked,
+        };
+        inner.refresh_fast();
+        inner
+    }
+
+    /// Re-derive the JIT's fast view from the storage and flags.
+    pub fn refresh_fast(&mut self) {
+        let ptr = match &mut self.storage {
+            BufStorage::Owned(v) if !v.is_empty() => v.as_mut_ptr(),
+            BufStorage::FileMap { ptr, len } if self.size <= *len => *ptr,
+            _ => std::ptr::null_mut(),
+        };
+        self.fast_ptr = ptr;
+        self.fast_len = if ptr.is_null() { 0 } else { self.size };
+        self.fast_wptr = if self.flags & BUF_READONLY != 0 {
+            std::ptr::null_mut()
+        } else {
+            ptr
+        };
+    }
+
     pub fn null() -> Self {
-        Self {
-            storage: BufStorage::Owned(Vec::new()),
-            size: 0,
-            flags: 0,
-            locked: false,
-        }
+        Self::new(BufStorage::Owned(Vec::new()), 0, 0, false)
     }
 
     pub fn owned(bytes: Vec<u8>, flags: u32) -> Self {
         let size = bytes.len();
-        Self {
-            storage: BufStorage::Owned(bytes),
-            size,
-            flags,
-            locked: false,
-        }
+        Self::new(BufStorage::Owned(bytes), size, flags, false)
     }
 
     pub fn string_backed(s: RString, size: usize, flags: u32) -> Self {
@@ -103,30 +150,15 @@ impl IoBufferInner {
     }
 
     pub fn string_backed_at(s: RString, offset: usize, size: usize, flags: u32) -> Self {
-        Self {
-            storage: BufStorage::Str { s, offset },
-            size,
-            flags,
-            locked: false,
-        }
+        Self::new(BufStorage::Str { s, offset }, size, flags, false)
     }
 
     pub fn file_map(ptr: *mut u8, len: usize, flags: u32) -> Self {
-        Self {
-            storage: BufStorage::FileMap { ptr, len },
-            size: len,
-            flags,
-            locked: false,
-        }
+        Self::new(BufStorage::FileMap { ptr, len }, len, flags, false)
     }
 
     pub fn slice_of(parent: IoBuffer, offset: usize, size: usize, flags: u32) -> Self {
-        Self {
-            storage: BufStorage::Slice { parent, offset },
-            size,
-            flags,
-            locked: false,
-        }
+        Self::new(BufStorage::Slice { parent, offset }, size, flags, false)
     }
 
     pub fn is_null(&self) -> bool {
