@@ -1455,24 +1455,18 @@ impl<'a> JitContext<'a> {
         // this compilation and a later execution of the code emitted here.
         // So the expansion carries the same guard and salvage record a
         // `LoadConst` in this frame would (`load_constant`) — one guard per
-        // trace covers them all — and declines a site whose cache has moved
-        // on, since the ordinary call is correct.
-        let mut const_folds: Vec<ConstFoldSite> = Vec::with_capacity(body.consts.len());
-        for &id in &body.consts {
-            let site = &self.store[id];
-            let Some(cache) = site.cache.clone() else {
-                return false;
-            };
-            if cache.version as u64 != self.const_version() {
-                return false;
-            }
-            let mut names = site.prefix.clone();
-            names.push(site.name);
-            const_folds.push(ConstFoldSite { id, cache, names });
+        // trace covers them all — and declines a fold resolved at another
+        // version, since the ordinary call is correct.
+        if body
+            .consts
+            .iter()
+            .any(|site| site.cache.version as u64 != self.const_version())
+        {
+            return false;
         }
         // Emitted before anything else, so a miss still hands the whole call
         // back — the all-or-nothing property every other guard here keeps.
-        if let Some(version) = const_folds.first().map(|site| site.cache.version) {
+        if let Some(version) = body.consts.first().map(|site| site.cache.version) {
             self.guard_const_version(state, ir, version);
         }
 
@@ -1580,7 +1574,7 @@ impl<'a> JitContext<'a> {
         for (class, name) in bop_deps {
             self.record_bop_dep(class, name);
         }
-        self.const_fold_cache.extend(const_folds);
+        self.const_fold_cache.extend(body.consts.iter().cloned());
         state.def_reg2acc(ir, GP::Rax, dst);
         state.unset_side_effect_guard();
         true

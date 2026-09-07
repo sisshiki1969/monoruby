@@ -241,17 +241,18 @@ pub(super) struct LeafBody {
     /// Applied in order; the accumulator's final value is returned.
     pub ops: Vec<LeafOp>,
     ///
-    /// The constant sites whose cached values are baked into `ops`.
+    /// The salvage records for the constants baked into `ops`, built here
+    /// from the caches the fold actually read.
     ///
     /// A fold is only the right value at the const version it was resolved
     /// at. The body cannot redefine a constant itself (it contains no
     /// call), but anything else in the program can, between the caller's
-    /// compilation and a later execution of it. The call site therefore
-    /// re-validates these against its own compile-time version and takes
-    /// the same guard and salvage record a `LoadConst` in its own frame
-    /// would; see [`JitContext::expand_leaf_body`].
+    /// compilation and a later execution of it. The call site checks these
+    /// versions against its own and takes the same guard and salvage record
+    /// a `LoadConst` in its own frame would; see
+    /// [`JitContext::expand_leaf_body`].
     ///
-    pub consts: Vec<ConstSiteId>,
+    pub consts: Vec<ConstFoldSite>,
 }
 
 /// The most ops a body may have and still be expanded. Each guarding op is
@@ -343,7 +344,7 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
     // committed to the accumulator so far; a slot's chain is spliced onto it
     // when the slot is finally used.
     let mut ops: Vec<LeafOp> = vec![];
-    let mut consts: Vec<ConstSiteId> = vec![];
+    let mut consts: Vec<ConstFoldSite> = vec![];
     let mut ret: Option<SlotId> = None;
     for idx in begin..=end {
         match TraceIr::from_pc(iseq.get_pc(idx), store) {
@@ -370,7 +371,17 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
                 {
                     return None;
                 }
-                consts.push(id);
+                // The salvage record is built from this cache, so the call
+                // site never has to re-read the site: the value it guards is
+                // the value the fold used.
+                let site = &store[id];
+                let mut names = site.prefix.clone();
+                names.push(site.name);
+                consts.push(ConstFoldSite {
+                    id,
+                    cache: cache.clone(),
+                    names,
+                });
                 slots.insert(dst, Chain::leaf(LeafValue::Fixnum(cache.value)));
             }
             TraceIr::LoadIvar(dst, name, _) => {
