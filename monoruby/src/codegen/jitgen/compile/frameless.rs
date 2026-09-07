@@ -183,7 +183,7 @@ pub(super) enum LeafValue {
     Param(u16),
     /// `@name` of the receiver.
     SelfIvar(IdentId),
-    /// A fixnum literal.
+    /// A fixnum literal, or a constant whose cached value is one.
     Fixnum(Value),
 }
 
@@ -240,6 +240,19 @@ impl LeafOp {
 pub(super) struct LeafBody {
     /// Applied in order; the accumulator's final value is returned.
     pub ops: Vec<LeafOp>,
+    ///
+    /// The salvage records for the constants baked into `ops`, built here
+    /// from the caches the fold actually read.
+    ///
+    /// A fold is only the right value at the const version it was resolved
+    /// at. The body cannot redefine a constant itself (it contains no
+    /// call), but anything else in the program can, between the caller's
+    /// compilation and a later execution of it. The call site checks these
+    /// versions against its own and takes the same guard and salvage record
+    /// a `LoadConst` in its own frame would; see
+    /// [`JitContext::expand_leaf_body`].
+    ///
+    pub consts: Vec<ConstFoldSite>,
 }
 
 /// The most ops a body may have and still be expanded. Each guarding op is
@@ -331,6 +344,7 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
     // committed to the accumulator so far; a slot's chain is spliced onto it
     // when the slot is finally used.
     let mut ops: Vec<LeafOp> = vec![];
+    let mut consts: Vec<ConstFoldSite> = vec![];
     let mut ret: Option<SlotId> = None;
     for idx in begin..=end {
         match TraceIr::from_pc(iseq.get_pc(idx), store) {
@@ -338,6 +352,37 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
             TraceIr::FrozenLiteral(dst, v) | TraceIr::Literal(dst, v) => {
                 v.try_fixnum()?;
                 slots.insert(dst, Chain::leaf(LeafValue::Fixnum(v)));
+            }
+            TraceIr::LoadConst(dst, id) => {
+                let cache = store[id].cache.as_ref()?;
+                // Only an immediate may be baked into the caller's code:
+                // the expansion records no GC root for the operand, and a
+                // fixnum is the only thing the arithmetic below accepts
+                // anyway. Same test the literal arm applies.
+                cache.value.try_fixnum()?;
+                // `Foo::BAR` needs a guard on the base slot, and a
+                // singleton-cref resolution one on the frame's `self`:
+                // both are guards on the *callee's* frame, which is the
+                // thing this expansion removes. Decline rather than
+                // approximate them.
+                if store[id].base.is_some()
+                    || cache.self_class.is_some()
+                    || iseq.in_singleton_lexical
+                {
+                    return None;
+                }
+                // The salvage record is built from this cache, so the call
+                // site never has to re-read the site: the value it guards is
+                // the value the fold used.
+                let site = &store[id];
+                let mut names = site.prefix.clone();
+                names.push(site.name);
+                consts.push(ConstFoldSite {
+                    id,
+                    cache: cache.clone(),
+                    names,
+                });
+                slots.insert(dst, Chain::leaf(LeafValue::Fixnum(cache.value)));
             }
             TraceIr::LoadIvar(dst, name, _) => {
                 slots.insert(dst, Chain::leaf(LeafValue::SelfIvar(name)));
@@ -413,7 +458,7 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
     {
         return None;
     }
-    Some(LeafBody { ops })
+    Some(LeafBody { ops, consts })
 }
 
 ///

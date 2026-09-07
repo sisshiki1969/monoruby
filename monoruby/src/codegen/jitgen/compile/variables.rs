@@ -159,7 +159,12 @@ impl<'a> JitContext<'a> {
     /// assigning constants: at worst 10 deopts and one recompile per version
     /// move, instead of one deopt per call for the rest of the run.
     ///
-    fn guard_const_version(&self, state: &mut AbstractState, ir: &mut AsmIr, version: usize) {
+    pub(super) fn guard_const_version(
+        &self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        version: usize,
+    ) {
         if state.const_version_guard() {
             return;
         }
