@@ -18,6 +18,10 @@
 require "fiddle"
 
 module FFI
+  # ::IO::Buffer in a global variable, for allocation on hot paths that
+  # run with many receiver classes (FFI::Struct.new) — see the comment
+  # there for why those paths must not load a constant.
+  $__ffi_gc_buffer = ::IO::Buffer
   # VERSION is set by the ffi gem's lib/ffi/version.rb
 
   # `Fiddle.___prepare` flags (kept in sync with src/builtins/fiddle.rs).
@@ -578,8 +582,25 @@ module FFI
                    1
                  end
       total = elem_size * count
-      addr = Fiddle.___malloc(total, true)
-      raise NoMemoryError, "FFI::MemoryPointer malloc(#{total}) failed" if addr == 0
+      if total > 0
+        # GC-owned backing store rather than a raw ___malloc: the real ffi
+        # gem's MemoryPointer is autoreleased by the GC, and callers (every
+        # FFI::Struct.new, for one) rely on that and never call #free.
+        # monoruby runs finalizers only at exit, so raw malloc here would
+        # leak one allocation per struct; an IO::Buffer's bytes are freed
+        # when the buffer is swept, count as allocation pressure toward
+        # the GC trigger, and have a stable address (`__address`) for the
+        # lifetime of the buffer.
+        # Via the $__ffi_gc_buffer global — see FFI::Struct.new for why a
+        # method shared by several receiver classes (FFI::Buffer
+        # subclasses this) must not load a constant on its hot path.
+        @_backing = $__ffi_gc_buffer.new(total)
+        addr = @_backing.__address || 0
+        raise NoMemoryError, "FFI::MemoryPointer malloc(#{total}) failed" if addr == 0
+      else
+        @_backing = nil
+        addr = 0
+      end
       super(addr)
       @size = total
       @total = total
@@ -600,11 +621,14 @@ module FFI
     end
 
     def free
-      Fiddle.___free(@address) if @address != 0
+      if @_backing
+        @_backing.free
+        @_backing = nil
+      end
       @address = 0
     end
 
-    def autorelease=(flag); end  # manual for now
+    def autorelease=(flag); end  # GC-owned either way, so the flag is moot
 
     def inspect
       "#<#{self.class} address=0x#{@address.to_s(16)} size=#{@size}>"
@@ -986,9 +1010,10 @@ module FFI
   class Struct < AbstractMemory
     # Writers used by `Struct.new` and `Struct#read_field` to populate a
     # fresh allocate'd instance in pieces. AbstractMemory already exposes
-    # `address` / `size` readers.
+    # `address` / `size` readers. `_backing` keeps the IO::Buffer that owns
+    # an owned struct's memory alive (and lets #free release it early).
     attr_writer :address, :size
-    attr_accessor :owned
+    attr_accessor :owned, :_backing
 
     class << self
       attr_reader :layout
@@ -1041,9 +1066,24 @@ module FFI
       def new(*args)
         obj = allocate
         if args.empty?
-          # allocate fresh memory
-          addr = Fiddle.___malloc(size, true)
+          # Fresh backing memory. GC-owned (IO::Buffer) rather than a raw
+          # ___malloc: struct instances are created freely (a rect per
+          # draw call, say) and almost never explicitly freed — the real
+          # ffi gem lets the GC reclaim them, and monoruby runs finalizers
+          # only at exit, so raw malloc here leaked one block per struct.
+          #
+          # The buffer class is read from a global variable, not a
+          # constant: this method runs with every struct subclass as
+          # `self`, and monoruby's JIT keys a method's inline caches —
+          # constant loads included — on the receiver class, so two
+          # struct classes alternating through a constant load here would
+          # recompile this method on every call (burning time and
+          # accreting JIT code for as long as the program draws). A
+          # global-variable read has no such cache to miss.
+          backing = $__ffi_gc_buffer.new(size)
+          addr = backing.__address || 0
           raise NoMemoryError, "FFI::Struct malloc(#{size}) failed" if addr == 0
+          obj._backing = backing
           obj.address = addr
           obj.size    = size
           obj.owned   = true
@@ -1091,7 +1131,10 @@ module FFI
 
     def free
       if @owned && @address != 0
-        Fiddle.___free(@address)
+        if @_backing
+          @_backing.free
+          @_backing = nil
+        end
         @address = 0
       end
     end
