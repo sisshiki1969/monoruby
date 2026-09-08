@@ -3114,6 +3114,97 @@ fn require_sub_block_or_replacement(lfp: &Lfp, _name: &str) -> Result<()> {
     Ok(())
 }
 
+/// The one ASCII byte a `count` / `delete` / `squeeze` character-set
+/// argument list denotes, when it is a single String of exactly one
+/// 7-bit byte (any such byte is literal in `tr` syntax: `^`, `-` and
+/// `\\` only carry meaning inside longer specs) and the receiver is
+/// ASCII-only or valid UTF-8 — where an ASCII byte never occurs inside
+/// a multibyte character, so a byte scan is exact. `None` sends every
+/// other shape through `Charset::parse`.
+fn single_ascii_byte_set(args: Array, recv: &RStringInner) -> Option<u8> {
+    if args.len() != 1 {
+        return None;
+    }
+    let set = args[0].is_rstring_inner()?;
+    let bytes = set.as_bytes();
+    if bytes.len() != 1 || !bytes[0].is_ascii() {
+        return None;
+    }
+    if recv.is_ascii_only() || (recv.encoding().is_utf8_compatible() && recv.is_valid_encoding()) {
+        Some(bytes[0])
+    } else {
+        None
+    }
+}
+
+/// `sub` / `gsub` with a String pattern and a String replacement that
+/// holds no backslash: `memmem` over the receiver's bytes and a splice,
+/// instead of compiling the escaped pattern into a Regexp and running
+/// onigmo (`RegexpInner::with_coerced_regexp`). `$~` is set from the
+/// (last) match span, or cleared on a miss, as the regex path does;
+/// `$~.regexp` (the escaped pattern, which `gsub` attached eagerly) is
+/// built only when asked for (`MatchDataInner::regexp`).
+///
+/// Both strings must be ASCII-only or valid UTF-8: a valid UTF-8
+/// needle can only match at a character boundary of a valid UTF-8
+/// haystack (a lead byte never equals a continuation byte), so no
+/// boundary check is needed. Everything else — a backslash in the
+/// replacement (`\0`, `\&`, `` \` ``, `\'` expand), an empty
+/// pattern, a byte-oriented encoding, a non-String replacement —
+/// returns `None` and takes the regex path.
+fn string_pattern_replace(
+    vm: &mut Executor,
+    self_val: Value,
+    pattern: Value,
+    replacement: Value,
+    all: bool,
+) -> Option<(RStringInner, bool)> {
+    fn plain(s: &RStringInner) -> bool {
+        s.is_ascii_only() || (s.encoding().is_utf8_compatible() && s.is_valid_encoding())
+    }
+    let recv = self_val.is_rstring_inner()?;
+    let pat = pattern.is_rstring_inner()?;
+    let rep = replacement.is_rstring_inner()?;
+    if !plain(&recv) || !plain(&pat) || !plain(&rep) {
+        return None;
+    }
+    let needle = pat.as_bytes();
+    let rep_bytes = rep.as_bytes();
+    if needle.is_empty() || memchr::memchr(b'\\', rep_bytes).is_some() {
+        return None;
+    }
+    let hay = recv.as_bytes();
+    let enc = recv.encoding();
+    let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(hay.len());
+    let mut last = 0usize;
+    let mut last_hit = None;
+    if all {
+        for hit in memchr::memmem::find_iter(hay, needle) {
+            out.extend_from_slice(&hay[last..hit]);
+            out.extend_from_slice(rep_bytes);
+            last = hit + needle.len();
+            last_hit = Some(hit);
+        }
+    } else if let Some(hit) = memchr::memmem::find(hay, needle) {
+        out.extend_from_slice(&hay[..hit]);
+        out.extend_from_slice(rep_bytes);
+        last = hit + needle.len();
+        last_hit = Some(hit);
+    }
+    out.extend_from_slice(&hay[last..]);
+    let res = RStringInner::from_encoding_scanned(&out, enc);
+    match last_hit {
+        Some(hit) => {
+            vm.save_capture_span(self_val, hit, hit + needle.len(), pattern);
+            Some((res, true))
+        }
+        None => {
+            vm.clear_capture_special_variables();
+            Some((res, false))
+        }
+    }
+}
+
 fn sub_main(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -3133,6 +3224,9 @@ fn sub_main(
             RegexpInner::replace_one_hash(vm, globals, lfp.arg(0), &given, arg1, mapped_enc)
         } else {
             check_replacement_encoding_compat(globals, self_val, arg1)?;
+            if let Some(res) = string_pattern_replace(vm, self_val, lfp.arg(0), arg1, false) {
+                return Ok(res);
+            }
             let replace = replacement_view(vm, globals, arg1, mapped_enc.is_some())?;
             // Borrow after the coercion above (a user `to_str` could
             // mutate the receiver); the replacement loop runs no Ruby,
@@ -3326,6 +3420,9 @@ fn gsub_main(
             RegexpInner::replace_all_hash(vm, globals, lfp.arg(0), self_val, arg1)
         } else {
             check_replacement_encoding_compat(globals, self_val, arg1)?;
+            if let Some(res) = string_pattern_replace(vm, self_val, lfp.arg(0), arg1, true) {
+                return Ok(res);
+            }
             let replace = replacement_view(vm, globals, arg1, mapped_enc.is_some())?;
             // Borrow after `coerce_to_str` (its `to_str` could mutate
             // the receiver); the string-replacement loop runs no Ruby,
@@ -3833,9 +3930,13 @@ fn string_index(
         // Never enters the regex engine, so `$~` is untouched (CRuby
         // only sets the backref for Regexp patterns — issue #721) and
         // broken-UTF-8 receivers work (CRuby allows them here).
-        let from = match given.conv_char_index(char_pos) {
-            Some(p) => p,
-            None => return Ok(Value::nil()),
+        let from = if char_pos == 0 {
+            0
+        } else {
+            match given.conv_char_index(char_pos) {
+                Some(p) => p,
+                None => return Ok(Value::nil()),
+            }
         };
         let needle = arg_inner.as_bytes().to_vec();
         return Ok(match substring_char_index(&given, &needle, from, false) {
@@ -4331,14 +4432,8 @@ fn substring_char_index(
     rev: bool,
 ) -> Option<usize> {
     let bytes = inner.as_bytes();
-    let mut bounds: Vec<usize> = Vec::new();
-    let mut off = 0usize;
-    for ch in inner.iter_char_bytes() {
-        bounds.push(off);
-        off += ch.len();
-    }
-    let char_len = bounds.len();
     if needle.is_empty() {
+        let char_len = inner.char_length();
         return if rev {
             Some(anchor.min(char_len))
         } else if anchor <= char_len {
@@ -4347,14 +4442,118 @@ fn substring_char_index(
             None
         };
     }
-    let hit = |cp: usize| {
-        let bp = bounds[cp];
-        bytes[bp..].starts_with(needle)
-    };
+    // The search itself is `memmem` over the raw bytes; character
+    // boundaries only enter twice — turning the anchor into a byte
+    // offset, and the hit back into a character index. On an ASCII-only
+    // receiver both are the identity, so this is one `find` / `rfind`.
+    // (Tabulating every boundary of the receiver into a `Vec` and
+    // probing each with `starts_with`, as this used to, was an O(n)
+    // allocation and comparison on every call — 12x slower than CRuby
+    // on a 200-byte receiver.)
+    if inner.is_ascii_only() {
+        return if rev {
+            // A match may start at `anchor` at the latest.
+            let end = anchor.saturating_add(needle.len()).min(bytes.len());
+            memchr::memmem::rfind(&bytes[..end], needle)
+        } else {
+            memchr::memmem::find(bytes.get(anchor..)?, needle).map(|p| p + anchor)
+        };
+    }
     if rev {
-        (0..char_len.min(anchor + 1)).rev().find(|&cp| hit(cp))
-    } else {
-        (anchor..char_len).find(|&cp| hit(cp))
+        return substring_char_index_rev_multibyte(inner, needle, anchor);
+    }
+    if inner.encoding().is_utf8_compatible() && inner.is_valid_encoding() {
+        // Valid UTF-8: a character starts at every non-continuation
+        // byte, so the anchor and the hit convert by counting those —
+        // a branch-free scan the compiler vectorizes — and a hit on a
+        // continuation byte (only possible for a needle that is not
+        // itself valid UTF-8) is skipped.
+        let is_lead = |b: &u8| (*b & 0xC0) != 0x80;
+        let mut off = 0usize;
+        if anchor > 0 {
+            let mut seen = 0usize;
+            loop {
+                if off >= bytes.len() {
+                    return None;
+                }
+                if is_lead(&bytes[off]) {
+                    if seen == anchor {
+                        break;
+                    }
+                    seen += 1;
+                }
+                off += 1;
+            }
+        }
+        let finder = memchr::memmem::Finder::new(needle);
+        let mut search_from = off;
+        loop {
+            let hit = search_from + finder.find(&bytes[search_from..])?;
+            if is_lead(&bytes[hit]) {
+                return Some(bytes[..hit].iter().filter(|b| is_lead(b)).count());
+            }
+            search_from = hit + 1;
+        }
+    }
+    // Other multibyte encodings (`iter_char_bytes` knows their
+    // boundaries): walk the boundaries lazily, only as far as each hit.
+    // A hit that lands inside a character is not a match; resume one
+    // byte later.
+    let mut chars = inner.iter_char_bytes();
+    let mut cp = 0usize;
+    let mut off = 0usize;
+    while cp < anchor {
+        let ch = chars.next()?;
+        off += ch.len();
+        cp += 1;
+    }
+    let finder = memchr::memmem::Finder::new(needle);
+    let mut search_from = off;
+    loop {
+        let hit = search_from + finder.find(&bytes[search_from..])?;
+        while off < hit {
+            let ch = chars.next()?;
+            off += ch.len();
+            cp += 1;
+        }
+        if off == hit {
+            return Some(cp);
+        }
+        search_from = hit + 1;
+    }
+}
+
+/// `substring_char_index` with `rev` on a multibyte receiver: the
+/// rightmost boundary-aligned hit starting at character `anchor` or
+/// earlier. Boundaries are tabulated only up to the anchor, and each
+/// `rfind` candidate is checked against them by binary search.
+fn substring_char_index_rev_multibyte(
+    inner: &RStringInner,
+    needle: &[u8],
+    anchor: usize,
+) -> Option<usize> {
+    let bytes = inner.as_bytes();
+    let mut bounds: Vec<usize> = Vec::new();
+    let mut off = 0usize;
+    for ch in inner.iter_char_bytes() {
+        if bounds.len() > anchor {
+            break;
+        }
+        bounds.push(off);
+        off += ch.len();
+    }
+    let mut end = match bounds.get(anchor) {
+        Some(&b) => b.saturating_add(needle.len()).min(bytes.len()),
+        None => bytes.len(),
+    };
+    loop {
+        let hit = memchr::memmem::rfind(&bytes[..end], needle)?;
+        if let Ok(cp) = bounds.binary_search(&hit) {
+            return Some(cp);
+        }
+        // Not a boundary (so `hit >= 1`: byte 0 always is one): the next
+        // candidate must start before `hit`.
+        end = hit + needle.len() - 1;
     }
 }
 
@@ -6810,6 +7009,18 @@ fn delete_compute(
             "wrong number of arguments (given 0, expected 1+)",
         ));
     }
+    let inner = self_val.as_rstring_inner();
+    if let Some(b) = single_ascii_byte_set(args, &inner) {
+        let bytes = inner.as_bytes();
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
+        let mut last = 0;
+        for p in memchr::memchr_iter(b, bytes) {
+            out.extend_from_slice(&bytes[last..p]);
+            last = p + 1;
+        }
+        out.extend_from_slice(&bytes[last..]);
+        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+    }
     let strs: Vec<String> = args
         .iter()
         .map(|arg| tr_set_view(vm, globals, *arg))
@@ -6818,7 +7029,6 @@ fn delete_compute(
         .iter()
         .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
-    let inner = self_val.as_rstring_inner();
 
     // Non-UTF-8 receiver: delete by character via the encoding-aware
     // iterator (multibyte chars are kept unless the set is negated).
@@ -7441,6 +7651,12 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             "wrong number of arguments (given 0, expected 1+)",
         ));
     }
+    let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
+    if let Some(b) = single_ascii_byte_set(args, inner) {
+        let n = memchr::memchr_iter(b, inner.as_bytes()).count();
+        return Ok(Value::integer(n as i64));
+    }
     let strs: Vec<String> = args
         .iter()
         .map(|arg| tr_set_view(vm, globals, *arg))
@@ -7449,8 +7665,6 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         .iter()
         .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
-    let self_ = lfp.self_val();
-    let inner = self_.as_rstring_inner();
 
     // Non-UTF-8 receiver: walk the encoding-aware char iterator.
     if let Some(sets) = nonutf8_ascii_charsets(globals, &inner, args)? {
@@ -7532,6 +7746,24 @@ fn squeeze_compute(
     rest_arg: Value,
 ) -> Result<RStringInner> {
     let args = rest_arg.as_array();
+    let inner = self_val.as_rstring_inner();
+    if let Some(b) = single_ascii_byte_set(args, &inner) {
+        let bytes = inner.as_bytes();
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
+        let mut prev_hit = false;
+        for &c in bytes {
+            if c == b {
+                if prev_hit {
+                    continue;
+                }
+                prev_hit = true;
+            } else {
+                prev_hit = false;
+            }
+            out.push(c);
+        }
+        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+    }
     let strs: Vec<String> = args
         .iter()
         .map(|a| tr_set_view(vm, globals, *a))
@@ -7541,7 +7773,6 @@ fn squeeze_compute(
         .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
     let squeeze_all = sets.is_empty();
-    let inner = self_val.as_rstring_inner();
 
     // Non-UTF-8 receiver: collapse runs of identical *characters*
     // via the encoding-aware iterator.

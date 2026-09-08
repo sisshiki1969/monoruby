@@ -80,6 +80,7 @@ Diagrams referenced by the above: [`fiber_state_diagram.svg`](fiber_state_diagra
 | [`optcarrot_opt_profile.md`](optcarrot_opt_profile.md) | JA | design record | Where `bin/optcarrot --opt` spends its time, measured with `perf` and `--features profile`, and the optimizations that came out of it. |
 | [`hash_optimization.md`](hash_optimization.md) | JA | design record | What one `Hash#[]` actually costs: the three representations (inline / boxed / identity-keyed), the vm-free prehashed probe, the optimizations landed so far with their measurements, and a ranked list of what is left. |
 | [`yjit_bench_slow_investigation_2026-09.md`](yjit_bench_slow_investigation_2026-09.md) | JA | design record | Why activerecord / erubi / rack / graphql run at half of CRuby+YJIT: steady-state `perf` breakdowns, deopt-log and PMC statistics, microbenchmarks isolating each runtime cost (String-keyed Hash, GC roots, arg-class-keyed PMC, StringScanner, exceptions), and a ranked plan. |
+| [`ruby_bench_low_cost_ideas_2026-09.md`](ruby_bench_low_cost_ideas_2026-09.md) | JA | design record | The follow-up: the whole ruby-bench picture against CRuby 4.0.2+YJIT at `702e362`, why the remaining losses cluster (code footprint on `30k_*`, GC frequency on `splay`, per-call fixed cost), a 150-item micro-op sweep that surfaces monoruby-specific slow paths (non-frozen String hash-literal keys, `String#index`/`#sub`/`#count` with String patterns, `instance_variable_get`, `format`), and the ideas ranked by implementation cost. |
 
 ## Plans and history
 

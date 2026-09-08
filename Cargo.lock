@@ -837,6 +837,7 @@ dependencies = [
  "libc",
  "libffi",
  "md-5",
+ "memchr",
  "mimalloc",
  "monoasm",
  "monoasm_macro",
