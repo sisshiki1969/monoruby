@@ -3131,3 +3131,179 @@ other benchmarks are flat. Tests: `tests/copy_propagation.rs` (in-place ops on
 a shared register, `Mul`/`Div` clobbering a shared operand, overflow and type
 deopts with copies outstanding, calls/allocations, loops, non-fixnum values,
 the `splitmix32` shape) and the `gp_alloc` unit tests.
+
+## 46. `place`/`ty` folded back into one `Vec<Slot>` (the scaffolding is retired)
+
+Steps 0b–0c split `SlotState.slots: Vec<LinkMode>` into `place: Vec<Placement>`
++ `ty: Vec<Guarded>` so a standalone analysis pass could consume the type
+vector alone. That pass never materialised in the shape the split assumed: the
+attempts to run allocation apart from the fixpoint (§13.8, §16.6, §26.3,
+§31.2) all lost to the greedy backedge placement, and the durable results are
+the seams that were *kept* (`decide_join`/`apply_join`, `alloc_policy`, the
+transfer records, the `keep_backedge_floats` mechanism/policy split) — none of
+which reads `place` or `ty` separately. After §44 the only consumer of the
+split was `join_ty`, called from the debug-only `verify_join_replay`; the
+`Placement` enum had no consumer at all. Meanwhile every `mode()` recomposed
+the pair through `from_parts` and every `set_mode()` decomposed it, with the
+sentinels (`None` / `MaybeNone` / `V`) needing a "no type" special case on
+both sides.
+
+So the split is undone: `LinkMode` is stored directly again, `Placement` /
+`placement()` / `from_parts()` and the round-trip test are gone, and `join_ty`
+is computed from the stored modes (sentinels read as ⊤, as the stored `ty`
+did) for the assertion that still uses it. The type-meet separability
+invariant (§12 stage 2) is unchanged — it is a property of `LinkMode::guarded`
+and `Guarded::join`, not of how the pair is stored.
+
+At the same time the per-slot vectors that had accumulated beside `place`/`ty`
+— `liveness`, `dynvar_src`, `subtree_float_read`, `dynvar_alias` — became one
+`Vec<Slot>` record, so a per-slot fact is added, cleared (`clear` / `discard`)
+and merged (`join_subtree_read_meta`) in one place; and `deferred_forward`,
+which is fixed for the compile unit, moved from the per-path `SlotState` to
+`AbstractFrame` next to `invariants`. Verified byte-identical: `emit-asm` dumps
+of `app_fib`, `so_mandelbrot`, `so_nbody`, `binarytrees`, `quick_sort`, `bf`,
+`tarai`, `loop_whileloop` are identical to master modulo the compile-time
+lines; `app_aobench` differs at one site that master itself emits differently
+from run to run (a pre-existing nondeterminism, not this change).
+
+What was *not* folded, and why:
+
+- `pending_outer_float_reads` (the stage-A report queue). The natural
+  replacement — marking the owner frame directly at the raw-f64 consumption —
+  needs the chain, and the consumption sites (`load_fpr_state` and the float
+  binop helpers) are `AbstractFrame` methods that only see their own frame. A
+  per-slot "pending" bit instead of the queue loses the report when the slot is
+  redefined in the same instruction (`a = a * 2.0` consumes `a` and then
+  discards it before the next boundary). The queue is the honest
+  representation of "events for a frame this frame cannot see".
+- `FprAllocator`'s reverse map (`vfpr`). It is derivable from the slot modes,
+  and deriving it would remove the `fpr_add` / `fpr_remove` / `swap` bookkeeping
+  and the desync class the `alloc_fpr` aliasing regression belonged to. But the
+  map's per-register slot order is the binding order, and the deopt write-back
+  (`wb_fpr`) emits stores in that order — a derived map would emit them in slot
+  order, so the change is semantics-preserving but not byte-identical. Left for
+  its own change with its own gate.
+
+## 47. The fpr file is derived from the slot modes (and the stale entry it was hiding)
+
+`FprAllocator` kept a reverse map `vfpr: Vec<Vec<SlotId>>` — for each fpr, the
+slots bound to it — maintained by `fpr_add` / `fpr_remove` / `clear` / `swap`
+alongside every `F` / `Sf` mode transition. The map is a function of the modes,
+so it is now computed from them: `SlotState::fpr_slots(fpr)` and a one-pass
+`pool_occupancy()` (per pool register: occupied?, all-`Sf`?) serve the
+allocator's two phases, `is_fpr_vacant`, the call-site save set and the deopt
+write-back. `FprAllocator` keeps only what is *not* derivable: the number of ids
+issued (spill ids are never re-issued once vacant — §46's `pick_vacant` note)
+and the pin set. `set_F` / `set_Sf` / `clear` no longer touch a file, and the
+bookkeeping that the `alloc_fpr` aliasing regression lived in is gone.
+
+**What the reverse map was hiding.** The suite caught the derivation:
+`outer_float_write_through`'s type-flip tests returned wrong values. The
+emitted code differed from master at exactly one place — the `each` call site
+in the owner loop saved `xmm2` on master and not on the branch — and the block
+compiled inside that call then read the owner's `a` where it meant to read `i`
+(the `_%2 = %2 == %3 [Float][Integer]` deopt storm: the block's static
+frame-chain offsets were off by the missing 16-byte save).
+
+The mechanism: `specialized_compile` freezes the caller's FP save set *before*
+the nested compile (`stack_offset = using_fpr_offset().offset()` lays out the
+callee's `extra` chain offsets over it), while the call emission after the
+compile took `get_using_fpr` *again*. In between, the callee's compile can
+widen a caller slot (`StoreDynVar` through the chain → `widen_outer_slot` →
+`invalidate_slot`, which set `S` **without** `fpr_remove`). With the map, the
+stale entry kept `xmm2` "occupied", so both sets agreed by accident (and the
+register was leaked for the rest of the compile). Derived from the modes, the
+second set was smaller than the first, and the callee's offsets no longer
+matched the frame the call actually built.
+
+Fixed at the root, not by re-adding the map: the frozen set rides back on the
+compiled frame (`JitStackFrame::call_site_using_fpr`, surfaced as
+`SpecializedCompileResult::using_fpr`), and both specialized call sites emit
+*that* set — `get_using_fpr` still runs for its GP flush and alias kill, and a
+debug assertion checks the live set is a subset of the frozen one (it can only
+shrink: a suspended frame never gains a pool register). Saving a register the
+caller no longer needs is harmless; saving fewer than the callee was laid out
+over was the bug.
+
+Verified: `emit-asm` dumps of the nine benchmarks are identical to master
+(`app_aobench` included this time), the JIT lib tests and the float / block /
+loop integration tests pass, and the full `cargo test` suite passes.
+
+## 48. One `write_back(slot, Keep)` for the four write-back policies
+
+`SlotState` had four ways to put a slot's value into its frame slot, each a
+function with its own prose: `write_back_slot` (keep everything), `unbox_to_S`
+with `keep_claims == false` (drop views and claims, keep the type) and `== true`
+(the specialized-call demotion: keep claims, move a pool `F` to a spill home),
+`to_S_unguarded` (forget everything), plus `give_up_const` as the `C` arm of the
+second. Their differences — what each mode becomes, what is written, what is
+forgotten — were spread over four bodies and their comments, and the
+GP-resident re-homing preamble was copied into three of them.
+
+They are now one function, `write_back(ir, slot, Keep)`, whose match is the
+mode × policy table (reproduced in its doc comment), and one enum:
+
+| `Keep`    | was                          | meaning                                                   |
+|-----------|------------------------------|-----------------------------------------------------------|
+| `All`     | `write_back_slot`            | the slot gets the value; every view and claim stays       |
+| `Type`    | `unbox_to_S(_, false)`, `give_up_const` | views and claims go, the type stays (a block leaves the unit) |
+| `Nothing` | `to_S_unguarded`             | everything goes: `S(Value)`                               |
+| `Claims`  | `unbox_to_S(_, true)`        | claims and views stay; a pool `F` moves to a spill home   |
+
+Arm for arm the transitions and emissions are the ones the four functions
+performed (the GP-resident flush under every policy, the resident drop only
+under `All`, `clear` where the old bodies cleared), so the change is
+byte-identical: `emit-asm` dumps of the nine benchmarks match master, the JIT
+lib tests, the float / block / loop integration tests and the full `cargo test`
+suite pass. The `*_state` analysis-half split of the two old functions
+(`write_back_slot_state`, `to_S_unguarded_state`) is folded in as well: the
+`Spill` record is still computed by the state transition and emitted through
+`ir.spill`, so analysis mode still emits nothing.
+
+## 49. `phys-loop-aware` removed
+
+The §42 loop-aware spill-victim policy (`loop_carried` on `SlotState`, filled
+at the loop-entry merge from the back-edge fixpoint; the phase-1 filter that
+kept a loop-carried `Sf` cache resident) is deleted along with its Cargo
+feature. It was default-off, not built by CI, and — as §42 itself records —
+inert under the shipping `POOL=14`: phase 1 runs only when no pool register is
+vacant, so the lever bit only under `stress-spill-pool` or a ≈14-live-float
+loop, and its M1 A/B (§27.3-2c) was never run. The `L`-collection timing
+finding (§42: the multi-iteration fixpoint makes the back-edge available at
+merge time) stays in the record for whoever revisits loop-aware allocation;
+the code it justified no longer earns its field in the per-path state.
+
+## 50. `pending_outer_float_reads` removed: the mark lands at the consumption
+
+§46 kept the stage-A report queue on the grounds that the raw-f64
+consumption sites (`load_fpr_state` and the float binop helpers) were
+`AbstractFrame` methods that only see their own frame, so the owner frame of a
+dynvar-loaded value could not be marked there and the pair had to wait for the
+next `compile_instruction` boundary, where the `JitContext` holds the chain.
+
+The cheaper move is to put those consumption sites on the chain. `binop.rs`'s
+single `impl AbstractFrame` block is now `impl AbstractState`, and `load_fpr` /
+`load_fpr_state` moved with it; every field and frame-level method they use
+still resolves through `AbstractState`'s `Deref`/`DerefMut` to the innermost
+frame, so the bodies are unchanged. `AbstractState::use_as_float` then does
+what the drain did — look up the slot's `dynvar_src`, resolve `outer` against
+the chain, `mark_outer_float_read` — right at the consumption, and the frame
+keeps only the liveness half (`use_as_float_liveness`). The queue, its drain,
+its join concatenation and `take_pending_outer_float_reads` are gone, and
+`SlotState` is down to `slots`, `fpr_alloc`, `gp_regfile`, `local_num`.
+
+Why the timing change is safe: `outer` is resolved against the chain as it
+stands at the consumption, which is the chain the `LoadDynVar` recorded the
+provenance under (a nested compile pushes and pops its frames inside the same
+instruction, and a `LoadDynVar`'s consumer is a later instruction of the same
+frame). The mark is a monotone hint whose readers run at merges and
+boundaries, after the instruction that would have drained it, so seeing it one
+instruction earlier changes nothing they compute; and a read consumed by an
+instruction that ends a block is no longer parked on a queue that a merge
+concatenates — the owner frame simply carries the bit into the join, which
+ORs it exactly as the concatenated queue's drain would have.
+
+Verified byte-identical: `emit-asm` dumps of eight benchmarks match master;
+`app_aobench` differs only at the site master itself emits differently from run
+to run (§46). The JIT lib tests, the float / block / loop integration tests and
+the full `cargo test` suite pass.

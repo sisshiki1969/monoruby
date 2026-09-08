@@ -1,8 +1,10 @@
 use super::*;
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 use crate::value::rvalue::{
     BUF_EXTERNAL, BUF_INTERNAL, BUF_LOCKED, BUF_MAPPED, BUF_PRIVATE, BUF_READONLY, BUF_SHARED,
     BufStorage, IoBufferInner,
 };
+use jitgen::{AbstractState, JitContext};
 
 //
 // IO::Buffer — a fixed-size byte buffer (CRuby 3.1+, io_buffer.c).
@@ -118,8 +120,20 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_BUFFER_CLASS, "or!", bit_or_inplace, 1);
     globals.define_builtin_func(IO_BUFFER_CLASS, "xor!", bit_xor_inplace, 1);
     globals.define_builtin_func(IO_BUFFER_CLASS, "not!", bit_not_inplace, 0);
-    globals.define_builtin_func(IO_BUFFER_CLASS, "get_value", get_value, 2);
-    globals.define_builtin_func(IO_BUFFER_CLASS, "set_value", set_value, 3);
+    globals.define_builtin_inline_func(
+        IO_BUFFER_CLASS,
+        "get_value",
+        get_value,
+        inline_gen2!(get_value_inline),
+        2,
+    );
+    globals.define_builtin_inline_func(
+        IO_BUFFER_CLASS,
+        "set_value",
+        set_value,
+        inline_gen2!(set_value_inline),
+        3,
+    );
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "each", each, 1, 3, false);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "values", values, 1, 3, false);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "each_byte", each_byte, 0, 2, false);
@@ -128,7 +142,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// A get/set_value type symbol: byte width, kind, endianness.
 /// Lowercase multi-byte names are little-endian, uppercase big-endian
 /// (`:U8`/`:S8` have no endianness).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ValKind {
     Unsigned,
     Signed,
@@ -161,11 +175,27 @@ fn parse_value_type(name: &str) -> Option<(usize, ValKind, bool)> {
 }
 
 fn value_type_arg(v: Value) -> Result<(usize, ValKind, bool)> {
-    let name = match v.try_symbol_or_string() {
-        Some(id) => id.get_name(),
-        None => return Err(MonorubyErr::argumenterr("Invalid type name!")),
-    };
-    parse_value_type(&name).ok_or_else(|| MonorubyErr::argumenterr("Invalid type name!"))
+    // get/set_value sit on every wasm-style memory access, so resolve the
+    // type symbol by interned id — `IdentId::get_name` allocates a String
+    // per call, and that alone showed up at several percent of a DOOM run.
+    // An 18-entry linear scan of u32 ids: SipHashing the IdentId for a
+    // HashMap cost ~2% of the same run.
+    static TABLE: std::sync::OnceLock<[(IdentId, (usize, ValKind, bool)); 18]> =
+        std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        [
+            "u32", "u64", "U8", "S8", "u16", "U16", "s16", "S16", "U32", "s32", "S32", "U64",
+            "s64", "S64", "f32", "F32", "f64", "F64",
+        ]
+        .map(|name| (IdentId::get_id(name), parse_value_type(name).unwrap()))
+    });
+    v.try_symbol_or_string()
+        .and_then(|id| {
+            table
+                .iter()
+                .find_map(|(tid, spec)| (*tid == id).then_some(*spec))
+        })
+        .ok_or_else(|| MonorubyErr::argumenterr("Invalid type name!"))
 }
 
 fn decode_value(bytes: &[u8], kind: ValKind, big: bool) -> Value {
@@ -200,6 +230,111 @@ fn mask(width: usize) -> u64 {
     }
 }
 
+/// Coerce an integer argument for `set_value` the way CRuby's per-type
+/// converters do (io_buffer.c): widths below 8 go through
+/// `NUM2UINT`/`NUM2INT` and then truncate, the 64-bit types through
+/// `NUM2ULL`/`NUM2LL` — so `:u64` accepts the whole `[-2^63, 2^64)`
+/// window (negative values wrap), and each type raises CRuby's own
+/// RangeError message beyond its window. Returns the value's low bits,
+/// already masked to `width`.
+fn coerce_int_for_type(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+    width: usize,
+    kind: ValKind,
+) -> Result<u64> {
+    use num::ToPrimitive;
+    // Reduce to an i128 (every representable argument fits; a bignum
+    // outside i128 is beyond every window below, and the messages there
+    // don't depend on how far out it is, so i128::MAX stands in).
+    let i: i128 = match v.unpack() {
+        RV::Fixnum(i) => i as i128,
+        RV::BigInt(b) => b.to_i128().unwrap_or(i128::MAX),
+        RV::Float(f) => {
+            // C double→integer conversion window of the underlying
+            // converter; a float inside it truncates and then takes the
+            // integer checks below.
+            let (lo, hi, what) = match (width, kind) {
+                (8, ValKind::Unsigned) => (-(2f64.powi(63)), 2f64.powi(64), "unsigned long long"),
+                (8, _) => (-(2f64.powi(63)), 2f64.powi(63), "long long"),
+                (_, ValKind::Unsigned) => (-(2f64.powi(63)), 2f64.powi(64), "integer"),
+                _ => (-(2f64.powi(63)), 2f64.powi(63), "integer"),
+            };
+            if f.is_nan() || f < lo || f >= hi {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "float {} out of range of {what}",
+                    crate::executor::format::float_g_image(f)
+                )));
+            }
+            f.trunc() as i128
+        }
+        _ => match v.coerce_to_int(vm, globals)?.unpack() {
+            RV::Fixnum(i) => i as i128,
+            RV::BigInt(b) => b.to_i128().unwrap_or(i128::MAX),
+            _ => unreachable!(),
+        },
+    };
+    match (width, kind) {
+        (8, ValKind::Unsigned) => {
+            // NUM2ULL: [-2^63, 2^64), negative wraps two's-complement.
+            if (-(1i128 << 63)..(1i128 << 64)).contains(&i) {
+                Ok(i as u64)
+            } else if i < 0 && i > -(1i128 << 64) {
+                Err(MonorubyErr::rangeerr(
+                    "bignum out of range of unsigned long long",
+                ))
+            } else {
+                Err(MonorubyErr::rangeerr(
+                    "bignum too big to convert into 'unsigned long long'",
+                ))
+            }
+        }
+        (8, _) => {
+            // NUM2LL: strict i64.
+            if let Ok(i) = i64::try_from(i) {
+                Ok(i as u64)
+            } else {
+                Err(MonorubyErr::rangeerr(
+                    "bignum too big to convert into 'long long'",
+                ))
+            }
+        }
+        (_, ValKind::Unsigned) => {
+            // NUM2UINT: the combined int/uint window wraps, anything
+            // else that still fits the ulong converter reports the
+            // value, and only a true ulong overflow blames the bignum.
+            if (-(1i128 << 31)..(1i128 << 32)).contains(&i) {
+                Ok((i as u64) & mask(width))
+            } else if (-(1i128 << 63)..(1i128 << 64)).contains(&i) {
+                let side = if i > 0 { "big" } else { "small" };
+                Err(MonorubyErr::rangeerr(format!(
+                    "integer {i} too {side} to convert to 'unsigned int'"
+                )))
+            } else if i < 0 && i > -(1i128 << 64) {
+                Err(MonorubyErr::rangeerr("bignum out of range of unsigned long"))
+            } else {
+                Err(MonorubyErr::rangeerr(
+                    "bignum too big to convert into 'unsigned long'",
+                ))
+            }
+        }
+        _ => {
+            // NUM2INT: strict i32 window before truncating to width.
+            if (-(1i128 << 31)..(1i128 << 31)).contains(&i) {
+                Ok((i as u64) & mask(width))
+            } else if i64::try_from(i).is_ok() {
+                let side = if i > 0 { "big" } else { "small" };
+                Err(MonorubyErr::rangeerr(format!(
+                    "integer {i} too {side} to convert to 'int'"
+                )))
+            } else {
+                Err(MonorubyErr::rangeerr("bignum too big to convert into 'long'"))
+            }
+        }
+    }
+}
+
 fn encode_value(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -213,7 +348,9 @@ fn encode_value(
             let f = if let Some(f) = v.try_float() {
                 f
             } else if matches!(v.unpack(), RV::Fixnum(_) | RV::BigInt(_)) {
-                v.coerce_to_int_i64(vm, globals)? as f64
+                // Integer#to_f semantics — a bignum beyond i64 still
+                // converts (losing precision), it does not raise.
+                v.coerce_to_f64(vm, globals)?
             } else {
                 // CRuby's rb_to_float message, with the lowercased
                 // class word ("string", "nil", ...).
@@ -232,7 +369,7 @@ fn encode_value(
                 f.to_bits()
             }
         }
-        _ => encode_integer(vm, globals, v, width, kind)?,
+        _ => coerce_int_for_type(vm, globals, v, width, kind)?,
     };
     let mut out = [0u8; 8];
     if big {
@@ -241,127 +378,6 @@ fn encode_value(
         out[..width].copy_from_slice(&raw.to_le_bytes()[..width]);
     }
     Ok(out)
-}
-
-/// Convert an integer `set_value` argument the way CRuby does.
-///
-/// CRuby reads each integer type through a C conversion macro, and the
-/// range that is accepted — and the error raised outside it — is the
-/// macro's, not the type's:
-///
-/// | type            | macro       | accepts                        |
-/// |-----------------|-------------|--------------------------------|
-/// | U8 / u16 / u32  | `NUM2UINT`  | `[INT_MIN, UINT_MAX]`          |
-/// | S8 / s16 / s32  | `NUM2INT`   | `[INT_MIN, INT_MAX]`           |
-/// | u64             | `NUM2ULL`   | `[-2^63, 2^64)`                |
-/// | s64             | `NUM2LL`    | `[-2^63, 2^63)`                |
-///
-/// So a narrow type truncates a value that is wider than itself but still
-/// within `int` / `unsigned int` (`set_value(:U8, 0, 256)` writes `0`,
-/// `set_value(:U8, 0, -1)` writes `255`), while a value outside that C
-/// range raises `RangeError` even though it would truncate just as well —
-/// `set_value(:U8, 0, 2**32)` — and a 64-bit unsigned field takes the whole
-/// `[2^63, 2^64)` range that a signed conversion would refuse. Negative
-/// values wrap through the unsigned macros as they do in C.
-///
-/// Non-Integer arguments go through `to_int` first, as CRuby's macros do.
-fn encode_integer(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    v: Value,
-    width: usize,
-    kind: ValKind,
-) -> Result<u64> {
-    let int = match v.unpack() {
-        RV::Fixnum(_) | RV::BigInt(_) => v,
-        _ => v.coerce_to_int(vm, globals)?,
-    };
-    let raw = match (width, kind) {
-        (8, ValKind::Unsigned) => num2ull(int, "unsigned long long")?,
-        (8, _) => num2ll(int, "long long")? as u64,
-        (_, ValKind::Unsigned) => {
-            let (num, negative) = num2ulong(int)?;
-            // check_uint: a negative value must not go below INT_MIN, a
-            // positive one must not exceed UINT_MAX.
-            if negative {
-                if num < i32::MIN as i64 as u64 {
-                    return Err(MonorubyErr::rangeerr(format!(
-                        "integer {} too small to convert to 'unsigned int'",
-                        num as i64
-                    )));
-                }
-            } else if num > u32::MAX as u64 {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "integer {num} too big to convert to 'unsigned int'"
-                )));
-            }
-            num
-        }
-        _ => {
-            let num = num2ll(int, "long")?;
-            // check_int
-            if num < i32::MIN as i64 {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "integer {num} too small to convert to 'int'"
-                )));
-            }
-            if num > i32::MAX as i64 {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "integer {num} too big to convert to 'int'"
-                )));
-            }
-            num as u64
-        }
-    };
-    Ok(raw & mask(width))
-}
-
-/// `rb_num2ll` / `rb_num2long`: an Integer that fits an i64, else
-/// `RangeError: bignum too big to convert into '<cname>'` (CRuby uses the
-/// same wording for both directions).
-fn num2ll(int: Value, cname: &str) -> Result<i64> {
-    match int.unpack() {
-        RV::Fixnum(i) => Ok(i),
-        RV::BigInt(b) => num::ToPrimitive::to_i64(b).ok_or_else(|| {
-            MonorubyErr::rangeerr(format!("bignum too big to convert into '{cname}'"))
-        }),
-        _ => unreachable!("encode_integer coerced to an Integer"),
-    }
-}
-
-/// `rb_num2ull` / `rb_big2ulong`: a non-negative Integer below 2^64, or a
-/// negative one no smaller than -2^63 (wrapped as C would). Beyond that
-/// CRuby distinguishes the two ends: "too big to convert into" above,
-/// "out of range of" below.
-fn num2ull(int: Value, cname: &str) -> Result<u64> {
-    match int.unpack() {
-        RV::Fixnum(i) => Ok(i as u64),
-        RV::BigInt(b) => {
-            let negative = b.sign() == num::bigint::Sign::Minus;
-            match num::ToPrimitive::to_i128(b) {
-                Some(x) if !negative && x <= u64::MAX as i128 => Ok(x as u64),
-                Some(x) if negative && x >= i64::MIN as i128 => Ok(x as i64 as u64),
-                _ if negative => Err(MonorubyErr::rangeerr(format!(
-                    "bignum out of range of {cname}"
-                ))),
-                _ => Err(MonorubyErr::rangeerr(format!(
-                    "bignum too big to convert into '{cname}'"
-                ))),
-            }
-        }
-        _ => unreachable!("encode_integer coerced to an Integer"),
-    }
-}
-
-/// `rb_num2ulong` plus the sign `check_uint` needs: the wrapped value and
-/// whether the Integer was negative.
-fn num2ulong(int: Value) -> Result<(u64, bool)> {
-    let negative = match int.unpack() {
-        RV::Fixnum(i) => i < 0,
-        RV::BigInt(b) => b.sign() == num::bigint::Sign::Minus,
-        _ => unreachable!("encode_integer coerced to an Integer"),
-    };
-    Ok((num2ull(int, "unsigned long")?, negative))
 }
 
 ///
@@ -405,6 +421,155 @@ fn set_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     buf.write_at(offset, &encoded[..width])?;
     // CRuby returns the offset just past the written value.
     Ok(Value::integer((offset + width) as i64))
+}
+
+// ---------------------------------------------------------------------------
+// Inline JIT specializations for get_value / set_value
+//
+// wasm-derived code (dewasm's Ruby backend) performs every linear-memory
+// access through `@buffer.get_value(:u32, addr)` / `set_value`, thousands
+// of call sites per program, so the builtin round trip — frame setup, the
+// type-symbol lookup, the strict offset conversion, the decode — was half
+// of a DOOM tick. With the type a symbol literal, the access compiles to a
+// bounds check and one typed load/store against the buffer's cached data
+// pointer (`IoBufferInner`'s fast view). Little-endian integer types and
+// `:f64` are inlined; the big-endian and `:f32` forms, and every buffer
+// without a stable data pointer, take the builtin. The 64-bit integer
+// types deopt to the builtin for values that need a Bignum, and the
+// narrower `set_value` types for values outside CRuby's conversion
+// window, so the builtin still raises the exact error.
+// ---------------------------------------------------------------------------
+
+/// The (width, kind) of a `get_value` / `set_value` type-symbol literal in
+/// `slot` that the JIT inlines, or `None` for anything the builtin keeps.
+fn inline_value_type(state: &AbstractState, slot: SlotId) -> Option<(u8, ValKind)> {
+    let id = state.is_symbol_literal(slot)?;
+    let (width, kind, big) = parse_value_type(&id.get_name())?;
+    if big || (kind == ValKind::Float && width != 8) {
+        return None;
+    }
+    Some((width as u8, kind))
+}
+
+fn get_value_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: Option<ClassId>,
+    _: Option<ClassId>,
+) -> bool {
+    if recv_class != Some(IO_BUFFER_CLASS) {
+        return false;
+    }
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 2 {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    let Some(dst) = dst else {
+        return false;
+    };
+    let Some((width, kind)) = inline_value_type(state, args) else {
+        return false;
+    };
+
+    state.load(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args + 1usize, GP::Rsi);
+    let deopt = ir.new_deopt(state);
+    match kind {
+        ValKind::Float => {
+            let fret = state.def_F(dst);
+            ir.inline(move |r#gen, _, labels, base| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_read_f64(fret, &d, base);
+            });
+        }
+        _ => {
+            let signed = kind == ValKind::Signed;
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_read_int(width, signed, &d);
+            });
+            state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+        }
+    }
+    true
+}
+
+///
+/// Whether `slot` holds a compile-time constant that already satisfies the
+/// `NUM2UINT` / `NUM2INT` window `emit_io_buffer_write_int` tests for a
+/// narrower-than-64-bit store.
+///
+/// A constant outside the window answers `false`, so the check stays and the
+/// deopt hands the store to the builtin, which raises exactly as CRuby does.
+/// The window itself is the emitter's: `[-2^31, 2^32)` unsigned,
+/// `[-2^31, 2^31)` signed, read off the untagged value.
+///
+fn constant_fits_write_window(state: &AbstractState, slot: SlotId, signed: bool) -> bool {
+    let Some(v) = state.is_fixnum_literal(slot) else {
+        return false;
+    };
+    let v = v.get();
+    let hi = if signed { 1i64 << 31 } else { 1i64 << 32 };
+    (-(1i64 << 31)..hi).contains(&v)
+}
+
+fn set_value_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: Option<ClassId>,
+    _: Option<ClassId>,
+) -> bool {
+    if recv_class != Some(IO_BUFFER_CLASS) {
+        return false;
+    }
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 3 {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    let Some((width, kind)) = inline_value_type(state, args) else {
+        return false;
+    };
+
+    let val_slot = args + 2usize;
+    state.load(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args + 1usize, GP::Rsi);
+    match kind {
+        ValKind::Float => {
+            let xsrc = state.load_fpr(ir, val_slot);
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels, base| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_write_f64(xsrc, &d, base);
+            });
+        }
+        _ => {
+            let signed = kind == ValKind::Signed;
+            // Read the value's link mode *before* `load_fixnum` materializes
+            // it: a constant it can see settles the store's range window here
+            // rather than in five instructions per store.
+            let check_range = !constant_fits_write_window(state, val_slot, signed);
+            state.load_fixnum(ir, val_slot, GP::Rdx);
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_write_int(width, signed, check_range, &d);
+            });
+        }
+    }
+    state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
 }
 
 /// Iterate `(absolute_offset, decoded_value)` pairs of `type` starting at
@@ -1113,7 +1278,9 @@ fn transfer(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let inner = std::mem::replace(self_.as_iobuffer_inner_mut(), IoBufferInner::null());
     // The nulled original keeps its flag bits (CRuby: "+0 NULL INTERNAL");
     // #free, by contrast, clears them.
-    self_.as_iobuffer_inner_mut().flags = inner.flags;
+    let nulled = self_.as_iobuffer_inner_mut();
+    nulled.flags = inner.flags;
+    nulled.refresh_fast();
     Ok(Value::new_io_buffer(inner))
 }
 
@@ -1611,6 +1778,57 @@ fn bit_not_inplace(
 mod tests {
     use crate::tests::*;
 
+    /// The JIT-inlined `get_value` / `set_value` (little-endian integer
+    /// types and `:f64` with a literal type symbol): every type, the
+    /// 64-bit values that need a Bignum, the narrow-type conversion windows,
+    /// bounds and negative offsets, non-fixnum arguments, read-only /
+    /// String-backed / sliced / duplicated / resized / freed / transferred
+    /// buffers — all of which leave the inlined path for the builtin.
+    #[test]
+    fn io_buffer_get_set_value_jit() {
+        run_test(
+            r##"
+            b = IO::Buffer.new(64)
+            r = nil
+            40.times do |i|
+              b.set_value(:U8, 0, i); b.set_value(:S8, 1, -i); b.set_value(:u16, 2, i * 300); b.set_value(:s16, 4, -i * 300)
+              b.set_value(:u32, 8, i * 70000); b.set_value(:s32, 12, -i * 70000)
+              b.set_value(:u64, 16, i * 3000000000); b.set_value(:s64, 24, -i * 3000000000)
+              b.set_value(:f64, 32, i * 0.5); b.set_value(:f64, 40, i)
+              r = [b.get_value(:U8, 0), b.get_value(:S8, 1), b.get_value(:u16, 2), b.get_value(:s16, 4),
+                   b.get_value(:u32, 8), b.get_value(:s32, 12), b.get_value(:u64, 16), b.get_value(:s64, 24),
+                   b.get_value(:f64, 32), b.get_value(:f64, 40), b.set_value(:U8, 63, 1), b.get_value(:U32, 8), b.get_value(:f32, 32)]
+            end
+            er = ->(&blk) { begin; blk.call; rescue => e; [e.class, e.message]; end }
+            res = []
+            20.times do
+              b.set_value(:u64, 40, 2**63 + 5); res << b.get_value(:u64, 40) << b.get_value(:s64, 40)
+              b.set_value(:s64, 48, -2**62 - 1); res << b.get_value(:s64, 48) << b.get_value(:u64, 48)
+              b.set_value(:u64, 56, 2**62); res << b.get_value(:u64, 56) << b.get_value(:s64, 56)
+              res << er.call { b.set_value(:u32, 8, 2**32) } << er.call { b.set_value(:s16, 4, 2**31) } << er.call { b.set_value(:U8, 0, -2**31 - 1) }
+              res << er.call { b.set_value(:s32, 12, -2**31 - 1) } << b.set_value(:s32, 12, -2**31) << b.get_value(:s32, 12)
+              res << b.set_value(:U8, 0, -1) << b.get_value(:U8, 0) << b.set_value(:u32, 8, -1) << b.get_value(:u32, 8) << b.get_value(:s32, 8)
+              res << er.call { b.get_value(:u32, 62) } << er.call { b.get_value(:u32, -1) } << er.call { b.set_value(:u32, 61, 1) } << er.call { b.get_value(:U8, 64) } << b.get_value(:U8, 63)
+              res << b.set_value(:f64, 32, 3) << b.get_value(:f64, 32)
+              res << er.call { b.set_value(:u32, 8, "x") } << er.call { b.get_value(:u32, 1.5) } << er.call { b.set_value(:u32, nil, 1) }
+              ro = IO::Buffer.for("abcdefgh"); res << ro.get_value(:u32, 0) << er.call { ro.set_value(:u32, 0, 1) }
+              IO::Buffer.for(+"abcdefgh") { |w| w.set_value(:U8, 0, 65); res << w.get_value(:U8, 0) }
+              sl = b.slice(8, 8); res << sl.get_value(:u32, 0); sl.set_value(:u32, 4, 77); res << b.get_value(:u32, 12)
+              d = b.dup; d.set_value(:u32, 8, 99); res << [d.get_value(:u32, 8), b.get_value(:u32, 8)]
+            end
+            b2 = IO::Buffer.new(16)
+            20.times { |i| b2.set_value(:u32, 0, i); b2.resize(32) if i == 5; res << b2.get_value(:u32, 0) << (i >= 5 ? b2.set_value(:U8, 31, i) : nil) }
+            b2.free
+            res << er.call { b2.get_value(:u32, 0) }
+            b3 = IO::Buffer.new(8)
+            t = b3.transfer
+            20.times { |i| t.set_value(:u32, 0, i); res << t.get_value(:u32, 0) << er.call { b3.get_value(:u32, 0) } }
+            [r, res]
+
+            "##,
+        );
+    }
+
     #[test]
     fn io_buffer_map_and_bitwise() {
         // .map: mmap-backed buffers (FILE flag word, write-through to the
@@ -1814,32 +2032,104 @@ mod tests {
     }
 
     #[test]
+    fn io_buffer_set_value_constant_range() {
+        // The inlined narrow store tests CRuby's `NUM2UINT` / `NUM2INT`
+        // window at run time, which a value the compiler can see settles
+        // statically instead. Both halves of that have to hold: a constant
+        // inside the window stores the same byte the checked path would,
+        // and one outside keeps the check, so the deopt still hands the
+        // store to the builtin and CRuby's own `RangeError` comes out.
+        //
+        // Both the type symbol and the value must be literal at the call
+        // site for the store to inline at all, so each case needs its own
+        // method rather than a lambda over a table.
+        run_test(
+            r#"
+            b = IO::Buffer.new(64)
+            def w_u8(b, n)  = (i=0; while i<n; b.set_value(:U8,  0, 200);         i+=1; end)
+            def w_s8(b, n)  = (i=0; while i<n; b.set_value(:S8,  0, -100);        i+=1; end)
+            def w_u16(b, n) = (i=0; while i<n; b.set_value(:u16, 2, 60000);       i+=1; end)
+            def w_s16(b, n) = (i=0; while i<n; b.set_value(:s16, 4, -30000);      i+=1; end)
+            def w_u32(b, n) = (i=0; while i<n; b.set_value(:u32, 8, 4000000000);  i+=1; end)
+            def w_s32(b, n) = (i=0; while i<n; b.set_value(:s32, 12, -2000000000); i+=1; end)
+            def w_u64(b, n) = (i=0; while i<n; b.set_value(:u64, 16, 12345);      i+=1; end)
+            # The window's own edges, which must stay inside it.
+            def w_lo(b, n)  = (i=0; while i<n; b.set_value(:u32, 24, -2147483648); i+=1; end)
+            def w_hi(b, n)  = (i=0; while i<n; b.set_value(:u32, 28, 4294967295);  i+=1; end)
+            def w_slo(b, n) = (i=0; while i<n; b.set_value(:s32, 32, -2147483648); i+=1; end)
+            # Outside it: the check stays, and the builtin raises.
+            def w_over(b, n)    = (i=0; while i<n; b.set_value(:u32, 36, 4294967296);  i+=1; end)
+            def w_under(b, n)   = (i=0; while i<n; b.set_value(:u32, 40, -2147483649); i+=1; end)
+            def w_s32over(b, n) = (i=0; while i<n; b.set_value(:s32, 44, 2147483648);  i+=1; end)
+            def w_u8over(b, n)  = (i=0; while i<n; b.set_value(:U8,  48, 4294967296);  i+=1; end)
+
+            r = []
+            [[:w_u8, :U8, 0], [:w_s8, :S8, 0], [:w_u16, :u16, 2], [:w_s16, :s16, 4],
+             [:w_u32, :u32, 8], [:w_s32, :s32, 12], [:w_u64, :u64, 16],
+             [:w_lo, :u32, 24], [:w_hi, :u32, 28], [:w_slo, :s32, 32]].each do |m, t, off|
+              send(m, b, 400)
+              r << [m, b.get_value(t, off)]
+            end
+            [:w_over, :w_under, :w_s32over, :w_u8over].each do |m|
+              r << [m, (begin; send(m, b, 400); :no_raise; rescue => e; [e.class, e.message]; end)]
+            end
+            # The wrapper shape a wasm backend emits: a literal argument makes
+            # the wrapper specializable, so the mask folds and the store's
+            # value is a compile-time constant one frame further in.
+            class Mem
+              def initialize(b) = @b = b
+              def iwsb(a, v) = @b.set_value(:U8, a, v & 0xff)
+              def iws(a, v)  = @b.set_value(:u32, a, v & 0xffffffff)
+            end
+            def drive(m, n) = (i=0; while i<n; m.iwsb(52, 300); m.iws(56, -1); i+=1; end)
+            drive(Mem.new(b), 500)
+            r << [:wrapped, b.get_value(:U8, 52), b.get_value(:u32, 56)]
+            r
+            "#,
+        );
+    }
+
+    #[test]
     fn io_buffer_set_value_integer_ranges() {
-        // set_value converts through CRuby's per-type C macros, whose
-        // accepted range is the macro's rather than the type's: narrow
-        // types truncate anything within int / unsigned int and raise
-        // outside it, u64 takes the whole [2^63, 2^64) range a signed
-        // conversion would refuse, and negatives wrap through the unsigned
-        // door. The Bignum boundary (2^62) is monoruby's, not CRuby's, so
-        // the probe straddles it deliberately.
+        // CRuby coerces each value type with its own converter
+        // (io_buffer.c: NUM2UINT/NUM2INT below 8 bytes, NUM2ULL/NUM2LL
+        // for the 64-bit types), so `:u64` takes the whole
+        // [-2^63, 2^64) window — wasm runtimes (dewasm) store negative
+        // i64s through it as masked bignums — narrow types wrap inside
+        // the C int window and raise CRuby's exact messages outside it,
+        // and floats truncate with their own range check.
         run_test_once(
             r##"
             r = []
             er = ->(&blk) { begin; blk.call; :no_raise; rescue => e; [e.class, e.message]; end }
             b = IO::Buffer.new(8)
-            rw = ->(t, v) { [er.call { b.set_value(t, 0, v) }, b.get_value(t, 0)] }
-            wide = [2**62 - 1, 2**62, 2**62 + 1, 2**63 - 1, -(2**62), -(2**62) - 1, -(2**63),
-                    2**63, 2**64 - 1, 2**64, -(2**63) - 1]
-            %i[u64 U64 s64 S64].each { |t| wide.each { |v| r << rw.call(t, v) } }
-            narrow = [-1, 255, 256, 2**16, 2**31 - 1, 2**31, 2**32 - 1, 2**32,
-                      -(2**31), -(2**31) - 1, -(2**32), 2**62, -(2**62) - 1, 2**64, -(2**63) - 1]
-            %i[U8 S8 u16 s16 u32 s32].each { |t| narrow.each { |v| r << rw.call(t, v) } }
-            # to_int coercion lands on the same rules
-            big = Object.new; def big.to_int; 2**63 + 1; end
-            r << rw.call(:u64, big) << rw.call(:s64, big) << rw.call(:U8, big)
-            r << rw.call(:U8, 1.5) << rw.call(:s16, -1.5)
-            b.set_value(:U64, 0, 2**63 + 5)
-            r << b.values(:U64, 0) << b.values(:S64, 0)
+            wr = ->(t, v) { er.call { b.set_value(t, 0, v); b.get_value(t, 0) } }
+            # u64/U64: NUM2ULL window, negative wraps
+            r << wr.(:u64, 2**64 - 1) << wr.(:u64, -1) << wr.(:u64, 2**63) << wr.(:U64, 2**64 - 1)
+            r << wr.(:u64, -2**63) << wr.(:u64, 2**64) << wr.(:u64, -2**63 - 1) << wr.(:u64, -2**64)
+            r << wr.(:u64, 2**200) << wr.(:u64, -(2**200))
+            # s64: strict i64
+            r << wr.(:s64, -2**63) << wr.(:s64, 2**63) << wr.(:s64, -2**63 - 1)
+            # u32/u16/U8: int/uint window wraps, then the ulong messages
+            r << wr.(:u32, -1) << wr.(:u32, -2**31) << wr.(:u32, -2**31 - 1) << wr.(:u32, 2**32)
+            r << wr.(:u32, 2**63) << wr.(:u32, 2**64 - 1) << wr.(:u32, 2**64)
+            r << wr.(:u32, -2**63) << wr.(:u32, -2**63 - 1) << wr.(:u32, -2**64)
+            r << wr.(:U8, 256) << wr.(:U8, -1) << wr.(:U8, 2**40) << wr.(:u16, 70000)
+            # s32/s16/S8: strict i32 window, truncate to width
+            r << wr.(:s32, 2**31) << wr.(:s32, -2**31 - 1) << wr.(:s32, 2**64)
+            r << wr.(:s16, 40000) << wr.(:S8, -2**31 - 1)
+            # floats truncate inside the converter's window
+            r << wr.(:u64, 2.5) << wr.(:u64, -1.5) << wr.(:u64, 1.8e19) << wr.(:u64, -1e18)
+            r << wr.(:u64, 1e20) << wr.(:u64, -1e19) << wr.(:u64, Float::NAN) << wr.(:u64, Float::INFINITY)
+            r << wr.(:s64, 1e19) << wr.(:s64, -1e19)
+            r << wr.(:s32, 1e10) << wr.(:s32, -1e10) << wr.(:s32, 1e30) << wr.(:s32, Float::NAN)
+            r << wr.(:u32, -1e9) << wr.(:u32, 1e30) << wr.(:u32, 2.5)
+            # to_int is honored, nil names the literal in the TypeError
+            r << wr.(:s16, Object.new.tap { |o| def o.to_int = 300 })
+            r << wr.(:u64, Object.new.tap { |o| def o.to_int = 2**64 - 1 })
+            r << wr.(:u64, nil) << wr.(:u64, "x")
+            # integers beyond i64 still convert for the float types
+            r << wr.(:f64, 2**64) << wr.(:f32, 2**200)
             r
             "##,
         );

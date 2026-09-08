@@ -238,21 +238,6 @@ impl<'a> JitContext<'a> {
                         target.keep_backedge_floats(adopt, adopt_sf, adopt_deferred, promotable);
                     }
                 }
-                // §27.3 Stage-2a: record the loop-carried float set `L` (slots
-                // `F`/`Sf` at the back-edge) on the loop-entry state, so the
-                // `phys-loop-aware` policy can keep them resident in the body.
-                // Available here only because the fixpoint already computed the
-                // back-edge — the timing §29's forward attempt lacked. It
-                // propagates into the body via clones / `&mut self` joins, and
-                // is an inert hint on the default path.
-                #[cfg(feature = "phys-loop-aware")]
-                if let Some(be) = &backedge_for_floats {
-                    let lc: std::collections::HashSet<SlotId> = be
-                        .all_regs()
-                        .filter(|&i| matches!(be.mode(i), LinkMode::F(_) | LinkMode::Sf(_, _)))
-                        .collect();
-                    target.set_loop_carried(lc);
-                }
             }
             #[cfg(feature = "jit-debug")]
             eprintln!("  target:  {:?}\n", target.slot_state());
@@ -279,7 +264,7 @@ impl<'a> JitContext<'a> {
             // the deopt resume past the fused BinCmp into the bare
             // CondBr, which then reads a stale `%dst` — see #480.
             self.gen_bridges_for_branches(&target, entries, bbid, pc, &outer_inits);
-            self.new_backedge(target.slot_states(), bbid);
+            self.new_backedge(target.frames_cloned(), bbid);
 
             Some(target)
         } else {
@@ -308,7 +293,7 @@ impl<'a> JitContext<'a> {
         pc: BytecodePtr,
         outer_inits: &[(Vec<SpecializedId>, usize, SlotId, OuterFprHome)],
     ) {
-        let target = target.slot_states();
+        let target = target.frames_cloned();
         #[cfg(feature = "jit-debug")]
         eprintln!("  bridge to:{bbid:?} target:{target:?}");
         for BranchEntry {

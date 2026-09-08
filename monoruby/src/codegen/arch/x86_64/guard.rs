@@ -228,14 +228,26 @@ impl Codegen {
             movq [rsp], rax;
         );
         self.save_registers();
+        // The guard jumps here straight out of the body, so the stack
+        // parity is whatever the unit happened to run at — a Loop-JIT
+        // frame with an odd spill-slot count sits 8 bytes off the parity a
+        // method frame has, and a fixed `subq` would call the recorder
+        // misaligned there (Rust code then faults on the first `movdqa`
+        // spill — seen as a SIGSEGV inside a `HashMap::insert`). Align
+        // explicitly instead of assuming, exactly as a signal handler
+        // must: stash rsp below the red-zone hop, round down to 16, and
+        // restore from the stash.
         monoasm!( &mut self.jit,
             movq rdx, rdi;      // the value that failed the guard
             movq rdi, rbx;      // &mut Executor
             movq rsi, r12;      // &mut Globals
+            movq rax, rsp;
+            subq rsp, 4112;
+            andq rsp, (-16);
+            movq [rsp], rax;
             movq rax, (guard_fail);
-            subq rsp, 4088;
             call rax;
-            addq rsp, 4088;
+            movq rsp, [rsp];
         );
         self.restore_registers();
         monoasm!( &mut self.jit,

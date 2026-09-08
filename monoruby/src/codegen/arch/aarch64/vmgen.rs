@@ -1298,7 +1298,7 @@ impl Codegen {
             tbz x14, #(0), generic;
         );
         self.a64_bop_guard(bop, &generic);
-        self.a64_save_binary_integer();
+        self.a64_save_binary_integer(&generic);
         monoasm_arm64!(&mut self.jit,
             cmp x13, x14;
         );
@@ -1389,10 +1389,25 @@ impl Codegen {
         let get_class = self.get_class.clone();
         let skip = self.jit.label();
         let record = self.jit.label();
+        let keep = self.jit.label();
         monoasm_arm64!(&mut self.jit,
             ldr w10, [x(PC.0), #(8)]; // old classid1 (0 = cache empty)
+            // Stash the operand: `get_class` clobbers x2 for immediate
+            // receivers, and the representation refinement below needs its
+            // fixnum bit. x11 is in this helper's clobber set and is not
+            // read again until the poly-stamp below.
+            mov x11, x2;
             mov x0, x2;
             bl get_class;             // x0 = class(operand)
+            // Representation refinement (see `BIGNUM_CLASS`): record a heap
+            // Integer under the Bignum tag — mirrors `a64_save_binary_class`.
+            cmp w0, #(INTEGER_CLASS.u32());
+        );
+        self.jit.bcond_label(Cond::Ne, &keep);
+        monoasm_arm64!(&mut self.jit,
+            tbnz x11, #(0), keep;
+            mov x0, (BIGNUM_CLASS.u32() as u64);
+        keep:
             str w0, [x(PC.0), #(8)];  // classid1
             cbz w10, record;          // first population: record, no flag
             cmp w10, w0;
@@ -1422,6 +1437,8 @@ impl Codegen {
         let set_poly = self.jit.label();
         let skip = self.jit.label();
         let record = self.jit.label();
+        let keep_l = self.jit.label();
+        let keep_r = self.jit.label();
         monoasm_arm64!(&mut self.jit,
             // Read the previously-cached operand classes before overwriting
             // them (x10 = old classid1, x12 = old classid2; 0 = cache empty),
@@ -1431,9 +1448,29 @@ impl Codegen {
             ldr w12, [x(PC.0), #(12)];  // old classid2
             mov x0, x13;
             bl get_class;             // x0 = class(lhs)
+            // Representation refinement (see `BIGNUM_CLASS`): a heap
+            // Integer is recorded under the Bignum tag, so a
+            // fixnum-profiled site stays monomorphic and the first Bignum
+            // operand reads as a class change (POLY stamp + PMC entry)
+            // instead of vanishing into `Integer`. x13/x14 survive
+            // `get_class`, so the operand's fixnum bit is still testable.
+            cmp w0, #(INTEGER_CLASS.u32());
+        );
+        self.jit.bcond_label(Cond::Ne, &keep_l);
+        monoasm_arm64!(&mut self.jit,
+            tbnz x13, #(0), keep_l;
+            mov x0, (BIGNUM_CLASS.u32() as u64);
+        keep_l:
             str w0, [x(PC.0), #(8)];  // classid1
             mov x0, x14;
             bl get_class;             // x0 = class(rhs)
+            cmp w0, #(INTEGER_CLASS.u32());
+        );
+        self.jit.bcond_label(Cond::Ne, &keep_r);
+        monoasm_arm64!(&mut self.jit,
+            tbnz x14, #(0), keep_r;
+            mov x0, (BIGNUM_CLASS.u32() as u64);
+        keep_r:
             str w0, [x(PC.0), #(12)]; // classid2
             // Polymorphic detection (mirrors x86 `vm_save_binary_class`): once
             // the cache is populated (old classid1 != 0), if either operand's
@@ -1479,14 +1516,42 @@ impl Codegen {
     /// `Integer`/`Integer` into the BinOp inline cache (`[PC+8]` classid1,
     /// `[PC+12]` classid2) so the JIT can type integer arithmetic/compare
     /// sites. Without this the cache stays empty (`<INVALID>`) and the JIT
-    /// deopts every integer binop. Mirrors x86 `vm_save_binary_integer`.
-    /// Clobbers X10; leaves the NZCV flags untouched (mov-immediate + stores).
-    pub(in crate::codegen) fn a64_save_binary_integer(&mut self) {
+    /// deopts every integer binop.
+    ///
+    /// Not an unconditional store: displacing a cached non-Integer pair is a
+    /// class change the profile must not lose (the old silent overwrite kept
+    /// `NilClass`-mono-compiled sites deopting forever while never reading
+    /// as polymorphic, and their PMC never learned the site takes Integer
+    /// receivers at all) — so that one execution is routed through *generic*
+    /// instead, whose class saver stamps POLY, records both pairs in the
+    /// PMC, and computes the same result the fast path would have. This
+    /// preserves the invariant the compile-time gates rest on: a POLY
+    /// site's PMC always holds every observed class. Steady state is two
+    /// compares and no stores. Mirrors x86 `vm_save_binary_integer`.
+    /// Clobbers X10 and the NZCV flags (both call sites set their own flags
+    /// afterwards).
+    pub(in crate::codegen) fn a64_save_binary_integer(&mut self, generic: &DestLabel) {
         let int_class: u32 = INTEGER_CLASS.into();
+        let stamp = self.jit.label();
+        let done = self.jit.label();
         monoasm_arm64!(&mut self.jit,
+            ldr w10, [x(PC.0), #(8)];   // cached classid1 (0 = empty)
+            cbz w10, stamp;             // first population: record, no flag
+            cmp w10, #(int_class);
+        );
+        self.jit.bcond_label(Cond::Ne, generic);
+        monoasm_arm64!(&mut self.jit,
+            ldr w10, [x(PC.0), #(12)];  // cached classid2
+            cmp w10, #(int_class);
+        );
+        self.jit.bcond_label(Cond::Ne, generic);
+        monoasm_arm64!(&mut self.jit,
+            b done;                     // steady state: already Integer/Integer
+            stamp:
             mov x10, (int_class);
             str w10, [x(PC.0), #(8)];   // classid1
             str w10, [x(PC.0), #(12)];  // classid2
+            done:
         );
     }
 
@@ -1548,7 +1613,7 @@ impl Codegen {
             tbz x14, #(0), generic;
         );
         self.a64_bop_guard(bop, &generic);
-        self.a64_save_binary_integer();
+        self.a64_save_binary_integer(&generic);
         if is_sub {
             monoasm_arm64!(&mut self.jit,
                 subs x9, x13, x14;

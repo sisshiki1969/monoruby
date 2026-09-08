@@ -272,3 +272,41 @@ fn string_subclass_key_dispatches_eql() {
         "##,
     );
 }
+
+/// Ruby key identity is hash equality AND `eql?`, in that order — `eql?`
+/// may only decide between keys whose hashes already match. A subclass
+/// with an over-broad `eql?` (always true) and its own `#hash` must not
+/// match a plain-String entry in either representation: the boxed map's
+/// indexed probe used to consult `eql?` on a mere control-byte (7-bit)
+/// hash collision, matching a stranger's entry on ~1/70 hash seeds
+/// (`string_subclass_key_dispatches_eql`'s flake), and the inline scan
+/// consulted `eql?` without hashing at all, matching deterministically.
+#[test]
+fn eql_needs_a_full_hash_match_first() {
+    run_test_once(
+        r##"
+        class Sticky < String
+          def hash; 1; end
+          def eql?(o); true; end
+        end
+        res = []
+        # Inline representation (single pair, then a few).
+        h1 = { "pad1" => 1 }
+        res << h1[Sticky.new("q")] << h1.key?(Sticky.new("q"))
+        h3 = { "pad1" => 1, "pad2" => 2, "pad3" => 3 }
+        res << h3[Sticky.new("q")]
+        # Boxed representation.
+        hb = {}
+        (1...18).each { |i| hb["pad#{i}"] = i }
+        res << hb[Sticky.new("q")] << hb.key?(Sticky.new("q"))
+        # The subclass still finds itself: same #hash, eql? true.
+        hb[Sticky.new("s")] = :self
+        res << hb[Sticky.new("t")] << hb.size
+        # And deleting through the over-broad eql? only takes the
+        # hash-matching entry with it.
+        res << hb.delete(Sticky.new("u")) << hb.size
+        res << hb.delete("pad9") << hb.size
+        res
+        "##,
+    );
+}

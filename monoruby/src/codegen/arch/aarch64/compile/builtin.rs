@@ -1726,6 +1726,125 @@ impl Codegen {
         }
     }
 
+    /// The address of an inlined `IO::Buffer#get_value` / `#set_value`
+    /// access — aarch64 twin of x86 `emit_io_buffer_addr`: receiver in Rdi
+    /// (x4), tagged offset in Rsi (x3). Leaves `&bytes[offset]` in Rax (x0)
+    /// and `offset + width` (untagged) in Rcx (x1); deopts when the buffer
+    /// has no stable data pointer (for a write, also when read-only), when
+    /// the offset is negative, or when the access runs past the end.
+    fn emit_io_buffer_addr(&mut self, width: u8, write: bool, deopt: &DestLabel) {
+        let ptr_off = if write {
+            crate::rvalue::IOBUF_OFFSET_FAST_WPTR
+        } else {
+            crate::rvalue::IOBUF_OFFSET_FAST_PTR
+        };
+        let len_off = crate::rvalue::IOBUF_OFFSET_FAST_LEN;
+        let d = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            ldr x4, [x4, #(RVALUE_OFFSET_KIND)];   // Box<IoBufferInner>
+            ldr x0, [x4, #(ptr_off)];              // fast data pointer
+            cbz x0, d;                              // none -> deopt
+            asr x3, x3, #(1);                       // untag offset
+            cmp x3, #(0);
+        );
+        self.jit.bcond_label(monoasm::Cond::Mi, deopt); // negative -> deopt
+        monoasm_arm64!(&mut self.jit,
+            add x1, x3, #(width as u32);
+            ldr x9, [x4, #(len_off)];
+            cmp x1, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Hi, deopt); // offset + width > len
+        monoasm_arm64!(&mut self.jit, add x0, x0, x3;);
+    }
+
+    /// Inlined `IO::Buffer#get_value` for a little-endian integer type —
+    /// aarch64 twin of x86 `emit_io_buffer_read_int`. Loads through the
+    /// address from `emit_io_buffer_addr` and tags the value as a fixnum in
+    /// x0; a 64-bit value that needs a Bignum deopts (as in
+    /// `emit_fiddle_read_int`).
+    pub(crate) fn emit_io_buffer_read_int(&mut self, width: u8, signed: bool, deopt: &DestLabel) {
+        self.emit_io_buffer_addr(width, false, deopt);
+        match (width, signed) {
+            (1, true) => monoasm_arm64!(&mut self.jit,
+                ldrb w0, [x0]; lsl x0, x0, #(56); asr x0, x0, #(56);),
+            (1, false) => monoasm_arm64!(&mut self.jit, ldrb w0, [x0];),
+            (2, true) => monoasm_arm64!(&mut self.jit,
+                ldrh w0, [x0]; lsl x0, x0, #(48); asr x0, x0, #(48);),
+            (2, false) => monoasm_arm64!(&mut self.jit, ldrh w0, [x0];),
+            (4, true) => monoasm_arm64!(&mut self.jit, ldrsw x0, [x0];),
+            (4, false) => monoasm_arm64!(&mut self.jit, ldr w0, [x0];),
+            (8, _) => monoasm_arm64!(&mut self.jit, ldr x0, [x0];),
+            _ => unreachable!(),
+        }
+        if width == 8 {
+            monoasm_arm64!(&mut self.jit, adds x0, x0, x0;);
+            self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+            if !signed {
+                self.jit.bcond_label(monoasm::Cond::Mi, deopt);
+            }
+        } else {
+            monoasm_arm64!(&mut self.jit, lsl x0, x0, #(1););
+        }
+        monoasm_arm64!(&mut self.jit, add x0, x0, #(1););
+    }
+
+    /// Inlined `IO::Buffer#get_value(:f64, offset)` — aarch64 twin of x86
+    /// `emit_io_buffer_read_f64`.
+    pub(crate) fn emit_io_buffer_read_f64(&mut self, fret: FPReg, deopt: &DestLabel, base: usize) {
+        self.emit_io_buffer_addr(8, false, deopt);
+        monoasm_arm64!(&mut self.jit, ldr d0, [x0];);
+        self.a64_d0_into_fpr(fret, base);
+    }
+
+    /// Inlined `IO::Buffer#set_value` for a little-endian integer type —
+    /// aarch64 twin of x86 `emit_io_buffer_write_int`: the tagged fixnum
+    /// value is in Rdx (x2); narrower-than-64-bit types deopt outside
+    /// CRuby's `NUM2UINT` / `NUM2INT` window. Returns `offset + width`
+    /// tagged in x0.
+    pub(crate) fn emit_io_buffer_write_int(
+        &mut self,
+        width: u8,
+        signed: bool,
+        check_range: bool,
+        deopt: &DestLabel,
+    ) {
+        self.emit_io_buffer_addr(width, true, deopt);
+        monoasm_arm64!(&mut self.jit, asr x2, x2, #(1););
+        if width < 8 && check_range {
+            let limit: u64 = if signed { 1 << 32 } else { (1 << 32) + (1 << 31) };
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (1u64 << 31);
+                add x9, x9, x2;
+                mov x10, (limit);
+                cmp x9, x10;
+            );
+            self.jit.bcond_label(monoasm::Cond::Hs, deopt);
+        }
+        match width {
+            1 => monoasm_arm64!(&mut self.jit, strb w2, [x0];),
+            2 => monoasm_arm64!(&mut self.jit, strh w2, [x0];),
+            4 => monoasm_arm64!(&mut self.jit, str w2, [x0];),
+            8 => monoasm_arm64!(&mut self.jit, str x2, [x0];),
+            _ => unreachable!(),
+        }
+        monoasm_arm64!(&mut self.jit,
+            add x0, x1, x1;
+            add x0, x0, #(1);
+        );
+    }
+
+    /// Inlined `IO::Buffer#set_value(:f64, offset, value)` — aarch64 twin
+    /// of x86 `emit_io_buffer_write_f64`.
+    pub(crate) fn emit_io_buffer_write_f64(&mut self, xsrc: FPReg, deopt: &DestLabel, base: usize) {
+        self.a64_fpr_into_d0(xsrc, base);
+        self.emit_io_buffer_addr(8, true, deopt);
+        monoasm_arm64!(&mut self.jit,
+            str d0, [x0];
+            add x0, x1, x1;
+            add x0, x0, #(1);
+        );
+    }
+
     /// `Fiddle.___write` f64 store: load the source double into d0, save the
     /// tagged pointer in Rax (x0), untag the pointer in Rdi (x4), deopt on NULL,
     /// store the double. aarch64 twin of x86 `emit_fiddle_write_f64`.

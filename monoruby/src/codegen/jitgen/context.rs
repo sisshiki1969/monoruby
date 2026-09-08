@@ -474,7 +474,7 @@ pub(super) struct JitStackFrame {
     ///
     return_edges: Vec<(
         JitLabel,
-        Vec<AbstractFrame>,
+        Vec<FrameRef>,
         AbstractFrame,
         SlotId,
         BasicBlockId,
@@ -524,7 +524,7 @@ pub(super) struct JitStackFrame {
     /// Outer frames are carried because a block handed out of the unit can
     /// write their locals, so their modes have to be merged (and written
     /// back) at the loop head like the innermost frame's.
-    backedge_map: HashMap<BasicBlockId, Vec<SlotState>>,
+    backedge_map: HashMap<BasicBlockId, Vec<FrameRef>>,
     ///
     /// Contexts for returning from this frame.
     ///
@@ -580,6 +580,13 @@ pub(super) struct JitStackFrame {
     /// store it makes into an outer frame is invisible here.
     ///
     pub(super) generic_yield: bool,
+    ///
+    /// The caller's FP save set frozen when this frame's specialized
+    /// compile began (`specialized_compile`): the callee's static
+    /// frame-chain offsets are laid out over it, so the call emission
+    /// must save exactly this set. Filled by `specialized_compile`.
+    ///
+    pub(super) call_site_using_fpr: UsingFpr,
     /// D1: set when the trampoline forwarding consumer routed `g(...)`
     /// straight from the caller source (elided `f`'s rest Array).
     /// Aggregated from `AsmIr::deferred_rest()` like `had_deopt`,
@@ -730,6 +737,7 @@ impl JitStackFrame {
             specialized_id: SpecializedId(usize::MAX),
             had_deopt: false,
             generic_yield: false,
+            call_site_using_fpr: UsingFpr::default(),
             deferred_rest: false,
             needs_rest_array: false,
             speculated_floats: vec![],
@@ -767,6 +775,7 @@ impl JitStackFrame {
             specialized_id: self.specialized_id,
             had_deopt: self.had_deopt,
             generic_yield: self.generic_yield,
+            call_site_using_fpr: self.call_site_using_fpr,
             deferred_rest: self.deferred_rest,
             needs_rest_array: self.needs_rest_array,
             speculated_floats: self.speculated_floats.clone(),
@@ -948,7 +957,7 @@ pub(crate) struct JitContext<'a> {
     ///
     /// Stage-C loop adoption: set when this context compiled anything
     /// that can rewrite an outer frame's slot *invisibly* — a call that
-    /// hands a block out of the unit (`all_frames_unbox_to_S`), a call
+    /// hands a block out of the unit (`unbox_to_S_for_outgoing_block`), a call
     /// site forwarding an explicit `&blk`, or a capture event. A loop
     /// analysed while this fires must not adopt an outer view: the
     /// compile-time widen hooks do not cover such stores, so the adopted
@@ -1000,9 +1009,25 @@ impl<'a> JitContext<'a> {
         }
     }
 
-    pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
+    ///
+    /// The throwaway context for one analysis walk over the loop headed at
+    /// *loop_start* (whose `LoopStart` is at *pc*). The walk merges every
+    /// inner loop head with the back edge recorded for it by the previous
+    /// walks, so those entries come along; the walked loop's own entry
+    /// does not — its recorded back edge is joined into the walk's entry
+    /// state by `analyse_loop`, and its liveness belongs to the real merge.
+    ///
+    pub(super) fn loop_analysis(&self, pc: BytecodePtr, loop_start: BasicBlockId) -> Self {
         let mut ctx = self.analysis_clone();
-        ctx.stack_frame.last_mut().unwrap().jit_type = JitType::Loop(pc);
+        let frame = ctx.stack_frame.last_mut().unwrap();
+        frame.jit_type = JitType::Loop(pc);
+        frame.loop_info = self
+            .current_frame()
+            .loop_info
+            .iter()
+            .filter(|(head, _)| **head != loop_start)
+            .map(|(head, info)| (*head, info.clone()))
+            .collect();
         ctx
     }
 
@@ -1314,7 +1339,17 @@ impl<'a> JitContext<'a> {
         // Stage-B home-aliased reads: the callee can store through the
         // frame chain, so no alias survives a specialized call either.
         state.clear_dynvar_aliases();
-        let stack_offset = state.using_fpr_offset().offset();
+        // The call site's FP save set, frozen *here*: the callee's static
+        // frame-chain offsets (`extra`) are laid out over `stack_offset`,
+        // so the call emission after this compile must save exactly this
+        // set — not the set the caller's state holds *then*. The callee
+        // can widen the caller's slots while it compiles (a `StoreDynVar`
+        // through the chain drops an `Sf`/`F` view to `S`), which would
+        // shrink a freshly derived set and shift every offset the callee
+        // already baked in. It rides back to the call site on the compiled
+        // frame (`call_site_using_fpr`).
+        let using_fpr = state.using_fpr_offset();
+        let stack_offset = using_fpr.offset();
         // The live chain's invariants are maintained lexically (see
         // `unset_lexical_no_capture_guard`), so the entry chain is simply
         // this path's live frames.
@@ -1330,6 +1365,7 @@ impl<'a> JitContext<'a> {
         assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
 
         let mut frame = self.traceir_to_asmir(frame, Some(entry_chain))?;
+        frame.call_site_using_fpr = using_fpr;
 
         // Every plain `Ret` in the callee branched to a return segment;
         // build them (and the join of the return-path chains) now, while
@@ -1355,7 +1391,7 @@ impl<'a> JitContext<'a> {
             // resuming level" only at its own caller's resume, where this
             // same rule applies.
             let joined_caller = chain.last().unwrap().clone();
-            *chain.last_mut().unwrap() = innermost;
+            *chain.last_mut().unwrap() = FrameRef::new(innermost);
             state.set_frames(chain);
             state.overlay_kept_constants_innermost(joined_caller.slot_state());
         } else {
@@ -1368,7 +1404,7 @@ impl<'a> JitContext<'a> {
             // arrives here — and every later merge's claims are
             // established by its *reachable* entries' bridges.
             let mut chain = fallback_chain;
-            *chain.last_mut().unwrap() = innermost;
+            *chain.last_mut().unwrap() = FrameRef::new(innermost);
             state.set_frames(chain);
             for (pos, slot) in self.widened_outer_log[widen_mark..].to_vec() {
                 state.invalidate_at(pos, slot);
@@ -1514,7 +1550,7 @@ impl<'a> JitContext<'a> {
     /// believing a mode this store just invalidated.
     ///
     /// A frame's locals cross a call boundary with their `Guarded` intact
-    /// (`all_frames_unbox_to_S`), which is only sound if a callee that
+    /// (`unbox_to_S_for_outgoing_block`), which is only sound if a callee that
     /// writes one of them says so: an `S(Guarded::Float)` a callee stores
     /// a String into would otherwise still be read as a Float once the
     /// call returns.
@@ -1766,13 +1802,13 @@ impl<'a> JitContext<'a> {
     /// frame) covers both. Lexical (dynvar) addressing walks the per-frame
     /// links, exactly as [`Self::outer_pos`] walks `stack_frame`.
     ///
-    pub(super) fn trace_contexts(&self) -> Vec<AbstractFrame> {
+    pub(super) fn trace_contexts(&self) -> Vec<FrameRef> {
         let end = self.stack_frame.len() - 1;
         (0..end)
             .map(|pos| {
                 let mut f = self.stack_frame[pos].abstract_state.clone().unwrap();
                 f.set_lexical_outer(self.stack_frame[pos].outer);
-                f
+                FrameRef::new(f)
             })
             .collect()
     }
@@ -2548,6 +2584,25 @@ impl<'a> JitContext<'a> {
         matches!(self.jit_type(), JitType::Loop(_))
     }
 
+    /// Whether `bc_pos` sits in the basic block holding this loop
+    /// compile's terminating `loop_end` (the structural pair of
+    /// `position()`'s `loop_start`). The nesting counter alone cannot
+    /// detect the region end: an inner loop's `loop_end` swallowed by
+    /// dead code (e.g. behind an unconditional deopt on a
+    /// never-profiled path) leaves the counter high, and counting alone
+    /// would let the compile run off the end of the region without
+    /// emitting the exit bridge.
+    pub(super) fn is_loop_region_end(&self, bc_pos: BcIndex) -> bool {
+        let Some(pc) = self.position() else {
+            return false;
+        };
+        let iseq = self.iseq();
+        let start_pos = iseq.get_pc_index(Some(pc));
+        let bb_begin = iseq.bb_info.get_bb_id(start_pos);
+        let (_, bb_end) = iseq.bb_info.is_loop_begin(bb_begin).unwrap();
+        iseq.bb_info.get_bb_id(bc_pos) == bb_end
+    }
+
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
         self.current_frame().get_bb_label(bb)
     }
@@ -2611,7 +2666,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().branch_map.remove(&bb)
     }
 
-    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<Vec<SlotState>> {
+    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<Vec<FrameRef>> {
         self.current_frame_mut().backedge_map.remove(&bb)
     }
 
@@ -2698,7 +2753,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Add new backward branch from *src_idx* to *dest* with `state`.
     ///
-    pub(super) fn new_backedge(&mut self, target: Vec<SlotState>, bb_pos: BasicBlockId) {
+    pub(super) fn new_backedge(&mut self, target: Vec<FrameRef>, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.current_frame_mut().backedge_map.insert(bb_pos, target);
@@ -2772,16 +2827,21 @@ impl<'a> JitContext<'a> {
         crate::codegen::jitgen::state::ChainSurrender { per_level }
     }
 
-    fn build_return_segments(&mut self, frame: &mut JitStackFrame) -> Option<Vec<AbstractFrame>> {
+    fn build_return_segments(&mut self, frame: &mut JitStackFrame) -> Option<Vec<FrameRef>> {
         let edges = std::mem::take(&mut frame.return_edges);
         if edges.is_empty() {
             return None;
         }
-        let mut target: Vec<AbstractFrame> = edges[0].1.clone();
+        let mut target: Vec<FrameRef> = edges[0].1.clone();
         for (_, chain, ..) in edges.iter().skip(1) {
             debug_assert_eq!(target.len(), chain.len());
             for (t, e) in target.iter_mut().zip(chain.iter()) {
-                t.join_no_alloc(e);
+                // Identity fast path: the frame no path has touched joins
+                // with itself — a pointer compare instead of a slot walk.
+                if FrameRef::ptr_eq(t, e) {
+                    continue;
+                }
+                FrameRef::make_mut(t).join_no_alloc(e);
             }
         }
         for (seg, chain, mut inner, ret_slot, bbid) in edges {

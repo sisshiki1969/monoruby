@@ -2,7 +2,7 @@ use super::*;
 use crate::ast::CmpKind;
 use crate::bytecodegen::BinOpK;
 use jitgen::trace_ir::{FBinOpInfo, FOpClass};
-use jitgen::{AbstractFrame, AbstractState, BinaryInlineMode, BinaryInlineOutcome, JitContext};
+use jitgen::{AbstractState, BinaryInlineMode, BinaryInlineOutcome, JitContext};
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
 use crate::codegen::jitgen::deopt_log::DeoptCause;
@@ -1184,6 +1184,15 @@ fn integer_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
             } = *callsite;
             match rhs_class {
                 Some(INTEGER_CLASS) => {
+                    // A bignum-constant operand (`x & 0xffff_ffff_ffff_ffff`,
+                    // the dewasm mask idiom) has no fixnum lowering: the
+                    // fixnum guard would land on the constant and fail on
+                    // every execution. Decline to the direct-call residual.
+                    if state.is_bigint_literal_sign(recv).is_some()
+                        || state.is_bigint_literal_sign(args).is_some()
+                    {
+                        return BinaryInlineOutcome::Declined;
+                    }
                     state.binop_integer(ir, kind, dst, recv, args);
                     BinaryInlineOutcome::Done
                 }
@@ -1247,15 +1256,18 @@ fn integer_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                     match float_info {
                         None => {
                             if let Some((l, r)) = state.check_concrete_i64(recv, args) {
-                                return BinaryInlineOutcome::Folded(AbstractFrame::fold_cmp(
+                                return BinaryInlineOutcome::Folded(AbstractState::fold_cmp(
                                     kind, l, r,
                                 ));
+                            }
+                            if let Some(b) = state.fold_bigint_const_cmpbr(ir, kind, recv, args) {
+                                return BinaryInlineOutcome::Folded(b);
                             }
                             state.gen_cmpbr_integer(ir, kind, recv, args, brkind, dest);
                         }
                         Some(info) => {
                             if let Some((l, r)) = state.check_binary_C_f64(recv, args) {
-                                return BinaryInlineOutcome::Folded(AbstractFrame::fold_cmp(
+                                return BinaryInlineOutcome::Folded(AbstractState::fold_cmp(
                                     kind, l, r,
                                 ));
                             }

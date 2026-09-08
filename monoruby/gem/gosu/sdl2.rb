@@ -64,6 +64,9 @@ module Gosu
     EVENT_CONTROLLERDEVICEREMOVED = 0x654
     EVENT_TEXTINPUT               = 0x303
 
+    # --- SDL_WindowEvent.event kinds (EVENT_WINDOW) ---------------------
+    WINDOWEVENT_SIZE_CHANGED = 6
+
     # --- Core -----------------------------------------------------------
     attach_function :init,             :SDL_Init,             [:uint32], :int
     attach_function :init_sub_system,  :SDL_InitSubSystem,    [:uint32], :int
@@ -119,6 +122,12 @@ module Gosu
     # SDL_PIXELFORMAT_ABGR8888: four bytes in memory order R, G, B, A.
     # This matches Gosu's to_blob / from_blob convention.
     PIXELFORMAT_ABGR8888 = 0x16762004
+
+    # SDL_TextureAccess / SDL_ScaleMode, for render-to-texture targets and
+    # for Gosu's `retro:` (nearest-neighbour) scaling.
+    TEXTUREACCESS_TARGET = 2
+    SCALEMODE_NEAREST    = 0
+    SCALEMODE_LINEAR     = 1
     attach_function :destroy_texture,         :SDL_DestroyTexture,
       [:pointer], :void
     attach_function :query_texture,           :SDL_QueryTexture,
@@ -129,6 +138,17 @@ module Gosu
       [:pointer, :uint8], :int
     attach_function :set_texture_blend_mode,  :SDL_SetTextureBlendMode,
       [:pointer, :int], :int
+    attach_function :create_texture,          :SDL_CreateTexture,
+      [:pointer, :uint32, :int, :int, :int], :pointer
+    attach_function :set_texture_scale_mode,  :SDL_SetTextureScaleMode,
+      [:pointer, :int], :int
+    # Render-to-texture. A null target restores the window as the target.
+    attach_function :set_render_target,       :SDL_SetRenderTarget,
+      [:pointer, :pointer], :int
+    attach_function :get_render_target,       :SDL_GetRenderTarget,
+      [:pointer], :pointer
+    attach_function :render_read_pixels,      :SDL_RenderReadPixels,
+      [:pointer, :pointer, :uint32, :pointer, :int], :int
     attach_function :render_copy,             :SDL_RenderCopy,
       [:pointer, :pointer, :pointer, :pointer], :int
     attach_function :render_copy_ex,          :SDL_RenderCopyEx,

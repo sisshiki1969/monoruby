@@ -324,6 +324,137 @@ fn bench_factorialpoly() {
     );
 }
 
+/// `begin ... end while false` (and its `until true` / `while nil` twins) is a
+/// labeled block: the body runs once and `break` / `next` are forward jumps.
+/// bytecodegen emits it without loop markers, so this pins the semantics of
+/// every exit form against CRuby, deeply nested the way generated code nests it.
+#[test]
+fn test_postfix_while_literal_false() {
+    run_test(
+        r#"
+        r = []
+        begin
+          r << 1
+          break if r.size == 1
+          r << :unreachable
+        end while false
+        begin
+          r << 2
+          next if r.size == 2
+          r << :unreachable
+        end while false
+        v = begin
+          r << 3
+        end while false
+        r << v
+        u = begin
+          r << 4
+        end until true
+        r << u
+        n = 0
+        begin
+          n += 1
+          redo if n < 3
+        end while false
+        r << n
+        i = 0
+        begin
+          i += 1
+        end while nil
+        r << i
+        x = begin; 7; end while false
+        r << x
+        def m
+          begin
+            return :from_block
+          end while false
+          :after
+        end
+        r << m
+        # dewasm's lowering of a wasm `block` nest: a pending branch id in
+        # `__br` is relayed outward through each level's epilogue.
+        def nest(k)
+          __br = nil
+          out = []
+          begin
+            begin
+              begin
+                out << :a
+                if k == 1 then __br = 1; break end
+                out << :b
+                if k == 2 then __br = 3; break end
+                out << :c
+              end while false
+              if __br == 3 then __br = nil elsif __br then break end
+              out << :d
+            end while false
+            if __br == 2 then __br = nil elsif __br then break end
+            out << :e
+          end while false
+          out
+        end
+        r << nest(0) << nest(1) << nest(2)
+        r
+        "#,
+    );
+}
+
+/// A ten-deep `while true` nest. The back-edge fixpoint analysis walks the
+/// whole nest per outer iteration; before it stopped recursing into each
+/// inner head's own fixpoint the innermost body was walked ~3^10 times and
+/// this did not finish in any reasonable time.
+#[test]
+fn test_deep_loop_nest_compiles() {
+    run_test(
+        r#"
+        n = 0
+        acc = 1
+        while true
+          n += 1
+          while true
+            n += 1
+            while true
+              n += 1
+              while true
+                n += 1
+                while true
+                  n += 1
+                  while true
+                    n += 1
+                    while true
+                      n += 1
+                      while true
+                        n += 1
+                        while true
+                          n += 1
+                          while true
+                            n += 1
+                            acc = acc * 3 + n & 0xffff
+                            break if n % 11 == 0
+                          end
+                          break if n % 10 == 0
+                        end
+                        break if n % 9 == 0
+                      end
+                      break if n % 8 == 0
+                    end
+                    break if n % 7 == 0
+                  end
+                  break if n % 6 == 0
+                end
+                break if n % 5 == 0
+              end
+              break if n % 4 == 0
+            end
+            break if n % 3 == 0
+          end
+          break if n % 2 == 0
+        end
+        [n, acc]
+        "#,
+    );
+}
+
 #[test]
 fn bench_while_until_for() {
     run_tests2(&[

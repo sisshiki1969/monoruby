@@ -831,22 +831,29 @@ impl<'a> HashRef<'a> {
     ) -> Result<Option<usize>> {
         if self.is_ident_inline() || k.is_packed_value() || k.is_plain_rstring_inner().is_some() {
             Ok(self.inline_pos_noobs(k))
-        } else if k.is_rstring_inner().is_some() {
-            // A String *subclass* probe. It can be `eql?` to a plain
-            // String key — the bytes are what chose the bucket — but the
-            // verdict is `eql?`'s to give, so scan with the dispatching
-            // comparison rather than by bytes. (`plain_string` keeps
-            // subclasses out of `is_inline_key`, so no *stored* inline key
-            // is one; only the probe can be.)
+        } else {
+            // A heap probe that needs dispatch — a String subclass, or any
+            // other object. Ruby key identity is hash equality AND `eql?`,
+            // in that order: hash the probe once (dispatching a
+            // user-defined `#hash`, exactly as the boxed map would) and
+            // consult `eql?` only against a key with the same digest. A
+            // subclass that redefines `#hash` therefore misses a plain
+            // String key even when its `eql?` says true, as CRuby answers.
+            // (The converse — an object whose `#hash` deliberately returns
+            // a builtin key's hash value, which CRuby then matches — stays
+            // a miss here: builtin keys digest their content directly
+            // rather than through the Ruby-visible `#hash` integer, so the
+            // two domains never meet. Pre-existing, and shared with the
+            // boxed map.) Stored inline keys are packed values or plain
+            // frozen Strings (`is_inline_key`), so their digests compute
+            // without dispatching any Ruby code.
+            let probe_hash = k.calculate_hash(vm, globals)?;
             let pairs = self.inline_pairs().to_vec();
             for (i, (ek, _)) in pairs.iter().enumerate() {
-                if k.eql(ek, vm, globals)? {
+                if ek.calculate_hash(vm, globals)? == probe_hash && k.eql(ek, vm, globals)? {
                     return Ok(Some(i));
                 }
             }
-            Ok(None)
-        } else {
-            k.calculate_hash(vm, globals)?;
             Ok(None)
         }
     }

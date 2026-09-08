@@ -23,6 +23,7 @@ mod gc;
 mod hash;
 mod io;
 mod io_buffer;
+mod io_console;
 mod json;
 pub(crate) mod kernel;
 mod main_object;
@@ -125,6 +126,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     time::init(globals);
     io::init(globals);
     io_buffer::init(globals);
+    io_console::init(globals);
     struct_class::init(globals);
     data_class::init(globals);
     file::init(globals);

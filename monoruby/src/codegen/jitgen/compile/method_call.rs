@@ -227,26 +227,25 @@ impl<'a> JitContext<'a> {
     ///
     ///
     /// The recompile target a receiver-class-guard `Learn` exit uses for
-    /// this compilation unit, or `None` when no sound one exists.
+    /// this compilation unit.
     ///
-    /// A block ROOT cannot take a whole-recompile: the side exit recompiles
-    /// whatever `lfp.func_id()` names as if it were a method, which rebuilds
-    /// a block body under the wrong argument convention (see
-    /// `guard_const_version`, which learned this the hard way). Loop JITs
-    /// (position = Some) and specialized block bodies (idx route) recompile
-    /// fine.
+    /// Block ROOTs take the whole-recompile route like any other whole
+    /// unit. They used to be excluded — an early recompile path rebuilt a
+    /// block body under the method argument convention (#1127 records
+    /// `Kernel#caller_locations`' block losing its argument) — but the
+    /// compile pipeline has been iseq-driven and identical for the initial
+    /// compile and the recompile since the abstract-state unification, and
+    /// the exclusion had become the last permanent-deopt hole: a block
+    /// compiled while a receiver was still `nil` (dewasm DOOM's terminal
+    /// renderer compares `prev_row[cx] == key` — nil on the first frame,
+    /// Integer forever after) failed its class guard on every later cell
+    /// of every later frame, ~296k plain deopts per minute, with the VM
+    /// interpreting the rest of each block invocation.
     ///
     pub(super) fn recv_miss_recompile_target(&self) -> Option<RecompileTarget> {
         match self.jit_type() {
             JitType::Specialized { idx, .. } => Some(RecompileTarget::Specialized(*idx)),
-            _ => {
-                let position = self.position();
-                if position.is_none() && self.store[self.func_id()].is_block_style() {
-                    None
-                } else {
-                    Some(RecompileTarget::Whole(position))
-                }
-            }
+            _ => Some(RecompileTarget::Whole(self.position())),
         }
     }
 
@@ -452,7 +451,11 @@ impl<'a> JitContext<'a> {
             if inlined_block {
                 state.locals_unbox_to_S_keeping_claims(ir);
             } else {
-                state.all_frames_unbox_to_S(self, ir);
+                // The literal block handed out here is homed in the
+                // current frame: it can reach that frame and its lexical
+                // ancestors, and nothing else in the chain.
+                let home = state.innermost_level();
+                state.unbox_to_S_for_outgoing_block(self, ir, Some(home));
             }
         }
 
@@ -471,6 +474,22 @@ impl<'a> JitContext<'a> {
         // best and — since only one of the arm's classes is `recv_class` —
         // would deopt the rest at worst.
         let mut same_target_set_guarded = self.in_set_guarded_arm();
+        // A compile-time heap-constant receiver of the right class needs no
+        // runtime guard — its class is a static fact (`M64 - x` reaching the
+        // direct-call residual: the Integer guard is a fixnum-tag test a
+        // bignum can never pass). But it gets no representation refinement
+        // either (a bignum constant is Integer without being a fixnum), so
+        // for everything downstream it must look like the set-guarded case:
+        // class known, nothing proven untagged, generators decline or
+        // handle `None`, the ordinary builtin call carries boxed Values.
+        let mut recv_const_unrefined = false;
+        if !same_target_set_guarded
+            && state.class(recv) != Some(recv_class)
+            && state.is_const_of_class(recv, recv_class)
+        {
+            same_target_set_guarded = true;
+            recv_const_unrefined = true;
+        }
         if !same_target_set_guarded && state.class(recv) != Some(recv_class) {
             if recv_miss != RecvMissMode::PartB
                 && let Some(classes) = self.pmc_same_target_classes(callid, recv_class, func_id)
@@ -566,10 +585,20 @@ impl<'a> JitContext<'a> {
                 // `object_id` keep firing there while a generator that needs
                 // the class declines to the ordinary call.
                 InlineFuncInfo::InlineGen(f) => {
-                    let proven = (!same_target_set_guarded).then_some(recv_class);
-                    if self.inline_asm(state, ir, f, callid, proven, arg_class) {
-                        state.unset_side_effect_guard();
-                        return Ok(CompileResult::Continue);
+                    // Not behind a const-receiver guard skip: the Integer
+                    // generators load the receiver raw on the strength of
+                    // the caller's guard (a set guard's INTEGER member is
+                    // the same fixnum-tag test, so `None` there is safe) —
+                    // a skipped guard for a heap constant proves no
+                    // representation, so they must not fire (`999…9[0]`
+                    // would shift the bignum's pointer bits); fall through
+                    // to the ordinary builtin call instead.
+                    if !recv_const_unrefined {
+                        let proven = (!same_target_set_guarded).then_some(recv_class);
+                        if self.inline_asm(state, ir, f, callid, proven, arg_class) {
+                            state.unset_side_effect_guard();
+                            return Ok(CompileResult::Continue);
+                        }
                     }
                 }
                 // The operator generators still take a definite receiver
@@ -1130,6 +1159,7 @@ impl<'a> JitContext<'a> {
             had_deopt: _,
             generic_yield: _,
             spec_id,
+            using_fpr: frozen_using_fpr,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -1146,7 +1176,13 @@ impl<'a> JitContext<'a> {
         // Pre-flush GP-pool snapshot for direct argument stores — see
         // `send`.
         let arg_hints = state.peek_gp_residents();
-        let using_fpr = state.get_using_fpr(ir);
+        // The save set was frozen when the callee's compile began (its
+        // frame-chain offsets are laid out over it); the live set can only
+        // have shrunk since, so saving the frozen set is sound and keeps
+        // the offsets right. `get_using_fpr` still runs for its flushes.
+        let live = state.get_using_fpr(ir);
+        let using_fpr = frozen_using_fpr;
+        debug_assert!(using_fpr.is_superset_of(&live), "{using_fpr:?} < {live:?}");
         // Stage 1': the resolve pass places write-through refreshes into
         // this site's save area by this record.
         self.record_call_site_fpr_save(spec_id, using_fpr);
@@ -1278,7 +1314,8 @@ impl<'a> JitContext<'a> {
         }
         // A provably-immediate stored value needs no GC write barrier.
         let wb = !state.is_guarded_immediate(args);
-        let src = state.load_or_reg(ir, args, GP::Rax);
+        state.load(ir, args, GP::Rax);
+        let src = GP::Rax;
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
         let using_fpr = state.get_using_fpr(ir);
         if is_object_ty && ivarid.is_inline() {
@@ -1411,6 +1448,28 @@ impl<'a> JitContext<'a> {
             }
         }
 
+        // The constants the body folded. Their values were baked in against
+        // the *callee's* inline caches, which are only right at the version
+        // they were resolved at: the body cannot redefine a constant (it
+        // contains no call), but anything else in the program can, between
+        // this compilation and a later execution of the code emitted here.
+        // So the expansion carries the same guard and salvage record a
+        // `LoadConst` in this frame would (`load_constant`) — one guard per
+        // trace covers them all — and declines a fold resolved at another
+        // version, since the ordinary call is correct.
+        if body
+            .consts
+            .iter()
+            .any(|site| site.cache.version as u64 != self.const_version())
+        {
+            return false;
+        }
+        // Emitted before anything else, so a miss still hands the whole call
+        // back — the all-or-nothing property every other guard here keeps.
+        if let Some(version) = body.consts.first().map(|site| site.cache.version) {
+            self.guard_const_version(state, ir, version);
+        }
+
         state.flush_gp(ir);
         // The receiver, for every inline ivar access and the frozen guard.
         state.load(ir, recv, GP::Rdi);
@@ -1515,6 +1574,7 @@ impl<'a> JitContext<'a> {
         for (class, name) in bop_deps {
             self.record_bop_dep(class, name);
         }
+        self.const_fold_cache.extend(body.consts.iter().cloned());
         state.def_reg2acc(ir, GP::Rax, dst);
         state.unset_side_effect_guard();
         true
@@ -1764,10 +1824,10 @@ impl<'a> JitContext<'a> {
             // keeps the barrier; an own slot elides it when the state
             // proves the value immediate.
             let (src, wb) = match src_slot {
-                frameless::ArgSlot::Own(slot) => (
-                    state.load_or_reg(ir, slot, GP::Rax),
-                    !state.is_guarded_immediate(slot),
-                ),
+                frameless::ArgSlot::Own(slot) => {
+                    state.load(ir, slot, GP::Rax);
+                    (GP::Rax, !state.is_guarded_immediate(slot))
+                }
                 frameless::ArgSlot::Caller(slot) => {
                     ir.push(AsmInst::LoadCallerSlot {
                         slot,
@@ -1863,7 +1923,8 @@ impl<'a> JitContext<'a> {
         state.load(ir, recv, GP::Rdi);
         let deopt = ir.new_deopt(state);
         ir.guard_frozen(deopt);
-        let src = state.load_or_reg(ir, args, GP::Rax);
+        state.load(ir, args, GP::Rax);
+        let src = GP::Rax;
         if inline {
             ir.push(AsmInst::StoreStructSlotInline { src, slot_index });
         } else {
@@ -1909,7 +1970,7 @@ impl<'a> JitContext<'a> {
         // we still know what they were.
         let held = state.held_constants();
         // The same, for the float locals whose boxed slot store the
-        // block-handing `unbox_to_S` deferred to a spill home.
+        // block-handing `write_back(Keep::Claims)` deferred to a spill home.
         let deferred_homes = state.deferred_float_homes();
         let compiled = self.compile_specialized_func(
             state,
@@ -1940,6 +2001,7 @@ impl<'a> JitContext<'a> {
             had_deopt,
             generic_yield,
             spec_id,
+            using_fpr: frozen_using_fpr,
         } = compiled;
         // The call site passes a block literal: if the callee heapifies
         // its *own* frame during the call (`Proc.new` / `lambda` /
@@ -1955,7 +2017,7 @@ impl<'a> JitContext<'a> {
             // the block would be compiled into this unit — see
             // `compile_method_call`. Confirm the bet now that the callee's
             // body is compiled, and give the claims up unless it holds. The
-            // values are in their slots either way (`unbox_to_S` wrote them
+            // values are in their slots either way (the write-back wrote them
             // on the way in), so this costs no code.
             //
             // Two ways it fails. A `yield` that was not inlined runs the
@@ -1982,9 +2044,11 @@ impl<'a> JitContext<'a> {
         // Pre-flush GP-pool snapshot for direct argument stores — see
         // `send`. Captured before `get_using_fpr`'s flush.
         let arg_hints = state.peek_gp_residents();
-        // Snapshot the save set here (it is what `fpr_save_cont` below
-        // will emit) and record it for the resolve pass — stage 1'.
-        let using_fpr = state.get_using_fpr(ir);
+        // The save set was frozen when the callee's compile began — see
+        // the yield site above and `specialized_compile`.
+        let live = state.get_using_fpr(ir);
+        let using_fpr = frozen_using_fpr;
+        debug_assert!(using_fpr.is_superset_of(&live), "{using_fpr:?} < {live:?}");
         self.record_call_site_fpr_save(spec_id, using_fpr);
         state.send_specialized(
             ir,
@@ -2025,6 +2089,10 @@ pub(super) struct SpecializedCompileResult {
     /// The compiled callee instance, keying its call site's recorded FP
     /// save layout (stage 1' write-through).
     pub spec_id: context::SpecializedId,
+    /// The FP save set the call site must emit: the caller's set frozen
+    /// when the callee's compile began, over which the callee's
+    /// frame-chain offsets were laid out (`specialized_compile`).
+    pub using_fpr: UsingFpr,
     /// A `yield` in the compiled subtree was not inlined — see
     /// [`JitStackFrame::generic_yield`].
     pub generic_yield: bool,
@@ -2098,6 +2166,7 @@ impl<'a> JitContext<'a> {
         self.merge_return_context(return_context);
         // Capture before `frame.asm_info` is moved below.
         let spec_id = frame.asm_info.specialized_id;
+        let frame_using_fpr = frame.call_site_using_fpr;
         let frame_had_deopt = frame.had_deopt;
         let frame_deferred_rest = frame.deferred_rest;
         let frame_needs_rest_array = frame.needs_rest_array;
@@ -2195,6 +2264,7 @@ impl<'a> JitContext<'a> {
             had_deopt: frame_had_deopt,
             generic_yield: frame_generic_yield,
             spec_id,
+            using_fpr: frame_using_fpr,
         })
     }
 
@@ -2647,7 +2717,7 @@ impl AbstractState {
 
             // write back block argument.
             if let Some(block_arg) = callsite.block_arg {
-                self.write_back_slot(ir, block_arg);
+                self.write_back(ir, block_arg, Keep::All);
             }
 
             // fill self.
@@ -4076,6 +4146,97 @@ mod tests {
               def ==(o); :redefined_eq; end
             end
             res << run(c, 500)
+            res
+            "#,
+        );
+    }
+
+    /// A constant operand. `def size = @size / PAGE_SIZE` is the shape that
+    /// motivates it: without the constant the recogniser turned away every
+    /// leaf body that names one, which is most of the ones worth expanding.
+    ///
+    /// The value is the callee's inline cache, so it is folded into the
+    /// caller exactly as a `LoadConst` in the caller's own frame would be —
+    /// same fixnum-only test, same version guard, same salvage record.
+    #[test]
+    fn frameless_leaf_bodies_const() {
+        run_test(
+            r#"
+            module M
+              N = 7
+            end
+            class C
+              K = 10
+              S = "abc"
+              F = 2.5
+              def initialize; @n = 100; end
+              def div_k; @n / K; end
+              def sum(x); @n + K + x; end
+              def just_k; K; end
+              def gt_k; @n > K; end
+              def store_k; @m = @n * K; end
+              # Declined, each for its own reason: a non-fixnum constant
+              # cannot be baked into the caller (no GC root, and the
+              # arithmetic is fixnum-only), and a constant reached through a
+              # runtime base needs a guard on the callee's own slot.
+              def flt; @n + F; end
+              def str_size; @n / S.size; end
+              def based(m); @n / m::N; end
+              # A prefix qualifier is not a runtime base: it resolves at
+              # compile time and its names go into the salvage record, so
+              # this one is folded like any other.
+              def prefixed; @n / M::N; end
+              attr_reader :m
+            end
+            c = C.new
+            300.times { c.div_k; c.sum(1); c.just_k; c.gt_k; c.store_k;
+                        c.flt; c.str_size; c.based(M); c.prefixed }
+            [c.div_k, c.sum(5), c.just_k, c.gt_k, c.store_k, c.m,
+             c.flt, c.str_size, c.based(M), c.prefixed]
+            "#,
+        );
+    }
+
+    /// The folded value is only right at the const version it was resolved
+    /// at. The body cannot redefine a constant itself — it contains no call
+    /// — but anything else in the program can, between the caller's
+    /// compilation and a later execution of it, and the caller then holds a
+    /// stale immediate in its instruction stream. So the expansion emits
+    /// the same `GuardConstVersion` a `LoadConst` in the caller's frame
+    /// would, and records the fold for salvage.
+    ///
+    /// `loop_div` is compiled on its first call, with `K` folded in as 10;
+    /// every later call must see the current `K`. Dropping the guard makes
+    /// the second and third rows below keep answering 10.
+    #[test]
+    fn frameless_leaf_bodies_const_redefine() {
+        run_test_once(
+            r#"
+            class C
+              K = 10
+              def initialize; @n = 100; end
+              def div_k; @n / K; end
+            end
+            def loop_div(c, n)
+              r = 0
+              i = 0
+              while i < n
+                r = c.div_k
+                i += 1
+              end
+              r
+            end
+            c = C.new
+            res = [loop_div(c, 500)]
+            C.send(:remove_const, :K); C.const_set(:K, 4)
+            res << loop_div(c, 500)
+            # A constant that stops being a fixnum has to leave the fold
+            # behind entirely, not just re-fold: the recompiled body
+            # declines and the ordinary call runs.
+            C.send(:remove_const, :K); C.const_set(:K, 2.5)
+            res << loop_div(c, 500)
+            C.send(:remove_const, :K); C.const_set(:K, 20)
+            res << loop_div(c, 500)
             res
             "#,
         );

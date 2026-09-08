@@ -2385,9 +2385,9 @@ impl RStringInner {
     /// the post-mutation classification: when both sides are
     /// SevenBit/Valid and the splice falls on UTF-8 character
     /// boundaries we set the result cr in O(1) without re-walking
-    /// the whole buffer. Broken results on UTF-8-compatible
-    /// encodings demote to ASCII-8BIT, matching CRuby and
-    /// `bytesplice`.
+    /// the whole buffer. A broken result keeps the encoding
+    /// `compatible_encoding` negotiated, as CRuby's does, and is simply
+    /// classified Broken.
     pub fn bytesplice_with(
         &mut self,
         start: usize,
@@ -2437,16 +2437,12 @@ impl RStringInner {
         // Slow path: re-classify the whole buffer. Caching the
         // result keeps a chain of in-place splices O(N) rather than
         // O(N²).
-        let cr = self.ty.classify(self.as_bytes());
-        if matches!(cr, CodeRange::Broken) && self.ty.is_utf8_compatible() {
-            // CRuby downgrades to ASCII-8BIT when UTF-8-tagged
-            // content becomes invalid; under that tag every byte is
-            // valid.
-            self.ty = Encoding::Ascii8;
-            self.cr.set(CodeRange::Valid);
-        } else {
-            self.cr.set(cr);
-        }
+        // The encoding is whatever `compatible_encoding` negotiated, and a
+        // broken result does not change it: CRuby leaves the string under
+        // its own tag and lets `valid_encoding?` report false. Splicing
+        // ASCII into an already-broken UTF-8 string keeps it UTF-8 there,
+        // where re-tagging it ASCII-8BIT would also claim it valid.
+        self.cr.set(self.ty.classify(self.as_bytes()));
         Ok(())
     }
 
@@ -3490,18 +3486,22 @@ mod encoding_tests {
     }
 
     #[test]
-    fn bytesplice_with_breaks_utf8_boundary_demotes_to_ascii8() {
+    fn bytesplice_with_breaks_utf8_boundary_stays_utf8() {
         // Splicing into the middle of a multi-byte UTF-8 character
-        // produces broken bytes; under Utf8 tagging CRuby (and our
-        // implementation) demotes to ASCII-8BIT.
+        // produces broken bytes. The string keeps its UTF-8 tag and is
+        // classified Broken: re-tagging it ASCII-8BIT would also declare
+        // it valid, and CRuby reports `valid_encoding?` false instead.
+        // `String#bytesplice` itself never gets here, rejecting a
+        // non-boundary offset with IndexError as CRuby does; this is the
+        // helper that `index_assign` also splices through.
         let globals = Globals::new_test();
         let mut s = RStringInner::from_str_scanned("あ"); // 3 bytes
         let repl = RStringInner::from_str_scanned("X");
 
         // Replace byte 1 (middle of "あ") — boundary check fails.
         s.bytesplice_with(1, 0, &repl, &globals.store).unwrap();
-        assert_eq!(s.encoding(), Encoding::Ascii8);
-        assert_eq!(s.cr.get(), CodeRange::Valid);
+        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.cr.get(), CodeRange::Broken);
     }
 }
 

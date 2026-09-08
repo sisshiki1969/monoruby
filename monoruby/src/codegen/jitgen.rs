@@ -16,12 +16,12 @@ use crate::{
 pub(crate) use crate::basic_block::{BasicBlockId, BasicBlockInfoEntry};
 pub(crate) use self::context::JitContext;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
-use state::{DeoptPoint, LinkMode, ReturnState};
+use state::{DeoptPoint, FrameRef, Keep, LinkMode, ReturnState};
 
 use super::*;
 use asmir::*;
 use context::{JitArgumentInfo, JitType};
-use state::{Liveness, SlotState};
+use state::Liveness;
 use trace_ir::*;
 
 pub mod asmir;
@@ -377,6 +377,11 @@ impl UsingFpr {
     fn offset(&self) -> usize {
         let len = self.count_ones();
         (len + len % 2) * 8
+    }
+
+    /// Every register in *other* is in `self`.
+    pub(crate) fn is_superset_of(&self, other: &Self) -> bool {
+        (0..PHYS_FPR_POOL).all(|i| !other.inner[i] || self.inner[i])
     }
 }
 
@@ -1697,6 +1702,27 @@ impl Codegen {
                 RecompileTarget::Whole(_) => COUNT_DEOPT_RECOMPILE,
                 RecompileTarget::Specialized(_) => COUNT_DEOPT_RECOMPILE_SPECIALIZED,
             });
+            // `BecamePolymorphic` is checked, not assumed: recompile only
+            // once the VM has actually stamped the site's POLY byte
+            // (`opcode_sub`, op1 bits 63:56 — the interpreter sets it on an
+            // operand/receiver *class* change). A miss the profile cannot
+            // describe as a class change re-executes in the VM without
+            // moving the byte, and a recompile against an unchanged profile
+            // would reproduce the same guard: the activerecord
+            // `out_of_range?` shape recompiled 8,756 times that way. With
+            // the gate such a site just deopts plainly, byte-for-byte the
+            // pre-heal behavior. (Binop/cmp ICs record a heap Integer under
+            // the `BIGNUM_CLASS` tag, so a Bignum miss *is* a class change
+            // there and heals into the dispatch; the gate still protects
+            // the send-side exits, whose ICs class every Integer alike.)
+            if reason == RecompileReason::BecamePolymorphic {
+                let poly_byte = pc.as_ptr() as usize + 7;
+                monoasm!( &mut self.jit,
+                    movq rax, (poly_byte);
+                    cmpb [rax], 0;
+                    jeq  skip;
+                );
+            }
             monoasm!( &mut self.jit,
                 cmpl [rip + counter], 0;
                 jle  skip;
