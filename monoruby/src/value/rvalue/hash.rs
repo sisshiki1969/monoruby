@@ -25,7 +25,8 @@ use std::ptr::NonNull;
 // | 3    | ruby2_keywords flag                                  |
 // | 4-5  | inline iteration depth (saturating; boxed hashes     |
 // |      | count in `BoxedHash::iter_lev` instead)              |
-// | 6-7  | reserved (zero)                                      |
+// | 6    | inline hash is `compare_by_identity` (`IDENT_BIT`)   |
+// | 7    | reserved (zero)                                      |
 //
 // A zeroed byte — the `Header::new` default — is a valid empty inline
 // hash, and dup/clone (`Header::newborn`) preserve the byte, so the
