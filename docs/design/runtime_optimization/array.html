@@ -1,0 +1,669 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Array - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../../searchindex-a0bcb149.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-8a4c8fb9.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="array-の実装と最適化"><a class="header" href="#array-の実装と最適化">Array の実装と最適化</a></h1>
+<p>Array は Ruby プログラムの「ただの並び」であると同時に、<code>each</code> / <code>map</code> /
+<code>[]</code> / <code>&lt;&lt;</code> が最内ループに現れる型でもある。optcarrot では <code>Array#&lt;&lt;</code> と
+<code>Array#[]=</code> のスライス形が最上位のホットスポットだった
+（<a href="../optcarrot_opt_profile.html"><code>../optcarrot_opt_profile.md</code></a> §3）。</p>
+<p>この文書は、Array がメモリ上でどう置かれ、VM と JIT が <code>[]</code> / <code>[]=</code> / <code>&lt;&lt;</code> /
+リテラル生成 / 多重代入をどう処理し、どの組み込みメソッドが Ruby で書かれて
+いてそれがなぜかをまとめ、最後に CRuby との実装差異を並べる。共通の前提
+（RValue の 64 バイト、write barrier、インライン生成器の仕組み）は
+<a href="README.html">README.md</a> にある。</p>
+<hr>
+<h2 id="1-表現"><a class="header" href="#1-表現">1. 表現</a></h2>
+<h3 id="11-セルの中身"><a class="header" href="#11-セルの中身">1.1 セルの中身</a></h3>
+<p><code>RValue</code> は 64 バイトの <code>#[repr(C)]</code> で、8 バイトのヘッダ、8 バイトの
+<code>var_table</code>（あふれた ivar）、48 バイトのペイロード共用体 <code>ObjKind</code> から
+なる（<code>rvalue.rs</code>）。Array のペイロードは</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub const ARRAY_INLINE_CAPA: usize = 5;
+#[repr(transparent)]
+pub struct ArrayInner(SmallVec&lt;[Value; ARRAY_INLINE_CAPA]&gt;);
+<span class="boring">}</span></code></pre>
+<p>で、<strong>5 要素までは 48 バイトの中に直接置かれ、それを超えるとヒープに
+あふれる</strong>（<code>value/rvalue/array.rs</code>）。<code>smallvec</code> は fork
+（<code>sisshiki1969/rust-smallvec</code>、<code>const_generics</code> 有効）で、fork している理由は
+JIT / VM のアセンブリがペイロードを直接アドレッシングできるように
+<code>OFFSET_CAPA</code> / <code>OFFSET_INLINE</code> / <code>OFFSET_HEAP_PTR</code> / <code>OFFSET_HEAP_LEN</code> を
+公開するためである。<code>rvalue.rs</code> はこれを <code>RVALUE_OFFSET_ARY_CAPA</code> などとして
+セル先頭からのオフセットに焼き直す。</p>
+<p><strong>すべての高速経路の前提になる規約</strong>: inline のあいだは <code>capacity</code> が
+<strong>長さを兼ねる</strong>。<code>capacity &gt; 5</code> ならヒープ変種が生きていて、そのときは
+<code>capacity</code> が確保サイズ、実際の長さはポインタの隣にある。したがって
+<code>cmpq capa, 5</code> の 1 命令で「inline かヒープか」と「inline なら長さは capa」
+の両方が決まる。Struct（<code>StructInner</code>）は同じレイアウトを共有していて、
+スロットアクセスに同じ定数を使う。</p>
+<h3 id="12-フラグ"><a class="header" href="#12-フラグ">1.2 フラグ</a></h3>
+<p>frozen はヘッダ <code>flag</code> のビット 1（<code>0b10</code>）。ビット 0 が live、ビット 2 が
+chilled（String 専用）、ビット 3 / 4 / 6 が世代別 GC の OLD / WB_UNPROTECTED /
+WB_ARMED、ビット 8..15 が GC の年齢。Array は Hash と違って型別メタデータ
+バイト <code>ty_flags</code> を使わない。</p>
+<p><code>NEWBORN_FLAG_MASK</code> は JIT と共有していて、リテラル複製の機械語がテンプレート
+のヘッダ語をこのマスクで落とすので、<code>dup</code> / <code>clone</code> / リテラル評価はすべて
+若く・バリア未装填の状態で始まる。</p>
+<h3 id="13-gc-との関係"><a class="header" href="#13-gc-との関係">1.3 GC との関係</a></h3>
+<ul>
+<li>mark は要素を順に mark するだけ（<code>rvalue.rs</code> の <code>ObjTy::ARRAY</code> アーム）。</li>
+<li><strong>Array は OLD 世代へ昇格できる</strong>（<code>is_promotable</code>）。条件は「要素の
+格納が全部バリアされていること」で、インタプリタ側は <code>Array</code> ラッパ、
+JIT 側は <code>array_index_assign</code> と emit されたバリアがそれを保証する。</li>
+<li>ラッパ <code>Array</code>（<code>#[monoruby_object(write_barrier)]</code>）の固有メソッドは
+<code>Deref</code> 先の <code>ArrayInner</code> の同名メソッドを<strong>隠す</strong>ので、<code>ary.push(v)</code> /
+<code>set_index</code> / <code>insert</code> / <code>fill</code> / <code>resize</code> / <code>extend</code> / <code>replace</code> /
+<code>set_index2</code> は必ず <code>write_barrier</code> / <code>write_barrier_bulk</code> を通る。削除系
+（<code>pop</code> / <code>remove</code> / <code>truncate</code> / <code>clear</code> / <code>drain</code>）にバリアは要らない。</li>
+<li><code>as_array_mut(&amp;Store)</code> は frozen 検査を<strong>取得時に 1 回だけ</strong>行い、返った
+ラッパの mutator は再検査しない。</li>
+</ul>
+<p>詳細は <a href="../gc.html"><code>../gc.md</code></a>。</p>
+<hr>
+<h2 id="2-vm-の経路"><a class="header" href="#2-vm-の経路">2. VM の経路</a></h2>
+<h3 id="21-バイトコード"><a class="header" href="#21-バイトコード">2.1 バイトコード</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Array(dst, callsite)</code></td><td>リテラル生成。splat 位置は call site が持つ</td></tr>
+<tr><td><code>ArrayConcat { dst, src }</code></td><td>長いリテラルの分割結合</td></tr>
+<tr><td><code>ExpandArray(src, dst, len, rest_pos)</code></td><td>多重代入・ブロック引数の分解</td></tr>
+<tr><td><code>ArrayTEq</code> / <code>ArrayAny</code></td><td><code>when *ary</code>（<code>===</code> あり / 真偽のみ）</td></tr>
+<tr><td><code>Index</code> / <code>IndexAssign</code></td><td>単一・非 splat の添字</td></tr>
+<tr><td><code>Literal</code> / <code>FrozenLiteral</code></td><td>定数リテラル（Array は常に <code>Literal</code>、§3.6）</td></tr>
+</tbody>
+</table>
+</div>
+<p>リテラルは <code>LITERAL_CHUNK_LEN</code> まで 1 命令、それより長ければ<strong>有界の
+チャンク</strong>に分けて <code>ArrayConcat</code> で繋ぐ（<code>bytecodegen/expression.rs::gen_array</code>）。
+一時レジスタの数がリテラル長に比例せず、<code>ret</code> が作りかけの配列を持たない。
+定数リテラルは <code>Value::from_const_ast</code> でテンプレートを 1 個作り
+<code>emit_literal</code> に渡すが、<code>FrozenLiteral</code> になるのは <code>is_always_frozen</code> な
+クラスだけなので Array は <code>Literal</code>、つまり<strong>評価ごとに deep copy</strong>（Ruby の
+意味論どおり新しい可変オブジェクト）になる。</p>
+<p>実行時の <code>Array</code> は <code>runtime::gen_array</code>: splat が無ければスタックスロットの
+範囲を <code>Value::array_from_iter</code> で一気に取り込む。</p>
+<h3 id="22---"><a class="header" href="#22---">2.2 <code>[]</code> / <code>[]=</code></a></h3>
+<p>VM スタブ <code>vm_index</code> / <code>vm_index_assign</code> は二項演算と同じ簿記をしてから
+<code>runtime::get_index</code> / <code>set_index</code> を呼ぶ:</p>
+<ol>
+<li><code>(base_class, idx_class)</code> をサイトのインラインキャッシュに記録し、多相
+ビットを立てる（<code>vm_save_binary_class</code>）。</li>
+<li><code>is_func_call = (base slot == 0)</code>、すなわちレシーバ無しの <code>self[i]</code> を
+区別する。CRuby と同じく <strong>private な <code>#[]</code> に届く</strong>ようにするため。</li>
+</ol>
+<p><code>runtime::get_index</code> はまず <code>basic_op_redefined_for(base_class, :[])</code> を見る。
+ディスパッチテーブル型の演算子と違ってこのヘルパ自体が実装なので、
+<code>_no_opt</code> 版と差し替えるのではなくフラグを直接読む。再定義されていれば
+<code>invoke_method</code>。<code>ARRAY_CLASS</code> アームは、Fixnum でも Range でもない添字が
+<code>Enumerator::ArithmeticSequence</code> なら <code>aseq.[](self)</code> に委ね（スライスの
+規則は AS 側にある）、それ以外は <code>to_int</code> して <code>ArrayInner::get_elem1</code>。
+続いて <code>HASH_CLASS</code> / <code>METHOD_CLASS</code> のアームがあり、他は dispatch。</p>
+<p>このヘルパの <code>is_func_call</code> が VM のフラグ語ではなく <code>bool</code> なのは、型を
+<code>BinaryOpFn</code> に揃えて JIT が多相サイトの残余アームとして再利用できるように
+するためである（§3.2）。</p>
+<p><code>runtime::set_index</code> は <code>Array</code> + Fixnum 添字 + <code>[]=</code> 未再定義なら明示的な
+frozen 検査（<code>FrozenError</code>）の後 <code>Array::set_index</code> を呼び、メソッド探索を
+しない。<code>Hash#[]=</code> の並行アームは #1245 で追加された
+（<a href="hash.html">hash.md</a> §2）。</p>
+<h3 id="23-添字計算"><a class="header" href="#23-添字計算">2.3 添字計算</a></h3>
+<p><code>value/rvalue/array.rs</code>:</p>
+<ul>
+<li><code>get_array_index(i64) -&gt; Option&lt;usize&gt;</code>: 負なら折り返し、それでも負なら
+<code>None</code>。</li>
+<li><code>get_elem1</code>: Range 添字（beginless / endless / exclusive、負の折り返し、
+<code>len == start → []</code> と <code>len &lt; start → nil</code> の区別）とスカラ。<strong>Range 形は
+常に新しい配列を確保する</strong>（共有しない、§6）。</li>
+<li><code>get_elem2</code>: <code>ary[start, len]</code> 形。</li>
+<li><code>set_index</code>: 末尾より先の正の添字は nil で埋めて伸ばす、範囲外の負は
+<code>IndexError</code>。</li>
+<li><code>set_index2</code>: スライス代入の splice。自己代入は先にスナップショットを取り
+（<code>is_self</code>）、伸縮方向に応じて <code>copy_within</code>。</li>
+</ul>
+<h3 id="24-expandarray-と-casewhen"><a class="header" href="#24-expandarray-と-casewhen">2.4 <code>ExpandArray</code> と <code>case/when</code></a></h3>
+<p><code>runtime::expand_array</code> はユーザーが上書きした <code>respond_to?</code> を尊重してから
+<code>#to_ary</code> を探し（CRuby 準拠）、素の <code>BasicObject</code> はスカラのままにし、
+エラーは <code>None</code> で返す。<code>array_teq</code> は splat 配列を <code>===</code> で回し、rescue 版は
+「class or module required for rescue clause」を出す。<code>array_any</code> は CRuby の
+<code>checkmatch(VM_CHECKMATCH_TYPE_WHEN | ARRAY)</code> と同じく<strong>真偽だけ</strong>で、<code>===</code> も
+ユーザーから見える呼び出しも無い。</p>
+<hr>
+<h2 id="3-jit-の経路"><a class="header" href="#3-jit-の経路">3. JIT の経路</a></h2>
+<h3 id="31-登録されているインライン生成器"><a class="header" href="#31-登録されているインライン生成器">3.1 登録されているインライン生成器</a></h3>
+<p><code>builtins/array.rs::init</code> で <code>inline_gen2!</code>（中身は <code>Box::new</code>）により登録:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>メソッド</th><th>生成器</th><th>出るもの</th></tr>
+</thead>
+<tbody>
+<tr><td><code>size</code> / <code>length</code></td><td><code>array_size</code></td><td>型付き LIR <code>ArrayLenFixnum</code>（アーキ固有クロージャ無し）</td></tr>
+<tr><td><code>clone</code> / <code>dup</code></td><td><code>array_clone</code> / <code>array_dup_inline</code></td><td><code>array_clone_extern</code> / <code>array_dup_extern</code> への直接 call</td></tr>
+<tr><td><code>&lt;&lt;</code></td><td><code>array_shl</code></td><td><code>guard_frozen</code> + <code>emit_array_shl</code></td></tr>
+<tr><td><code>[]</code> / <code>slice</code></td><td><code>array_index</code></td><td><code>AsmInst::ArrayIndex</code></td></tr>
+<tr><td><code>[]=</code></td><td><code>array_index_assign</code> / <code>array_slice_assign</code></td><td><code>AsmInst::ArrayIndexAssign</code> / <code>emit_array_slice_assign</code></td></tr>
+<tr><td><code>rotate!</code></td><td><code>array_rotate_</code></td><td><code>guard_frozen</code> + <code>ary_rotate_</code> への call</td></tr>
+</tbody>
+</table>
+</div>
+<p>生成器は <code>compile_method_call</code> から、class-version ガードとレシーバクラス
+ガードを<strong>出した後に</strong>呼ばれる。<code>proven: Option&lt;ClassId&gt;</code>（クラス集合ガードや
+dispatch アームの陰では <code>None</code>）と <code>arg_class</code> を受け取り、<code>false</code> を返せば
+状態と IR が巻き戻される（trial inlining、<a href="../inline.html"><code>../inline.md</code></a>）。</p>
+<h3 id="32----のコンパイル経路"><a class="header" href="#32----のコンパイル経路">3.2 <code>[]</code> / <code>[]=</code> のコンパイル経路</a></h3>
+<p><code>codegen/jitgen/compile/index.rs</code>。<code>index()</code> は次の順で決める:</p>
+<ol>
+<li>多相サイトでレシーバクラスが抽象状態に無い → <code>index_dispatch</code>。</li>
+<li>レシーバクラスが証明できない → <code>Recompile(NotCached)</code>。</li>
+<li><code>fire_index_inline</code> — 前置きを省いたインライン。</li>
+<li>それ以外は通常の <code>call_binary_method</code>。</li>
+</ol>
+<p><strong><code>fire_index_inline</code></strong> は数値演算の直接発火と違って<strong>レシーバクラスガードを
+残す</strong>。理由は添字の生成器が自分でレシーバを守るとは限らないからで、
+<code>array_index</code> の <code>load_array_ty</code> は<strong>オブジェクト型</strong>（<code>ObjTy::ARRAY</code>）を
+証明するだけなので、独自の <code>#[]</code> を持つ <code>Array</code> サブクラスがすり抜ける。
+省くのは <strong>class-version ガード</strong>と <code>compile_method_call</code> の残りの前置きで、
+再定義は記録した BOP 依存で捕まえる（§3.7）。メソッドが無い・生成器が
+無い・<code>basic_op_assumable</code> でない・可視性で弾かれる・ブロック無しで
+キャプチャしうる・ブロックが渡される、のどれかなら断る。ガードと生成器は
+巻き戻し可能な 1 単位として出る。</p>
+<p><strong><code>index_dispatch</code></strong> は多相サイトへの 2 腕の答え:</p>
+<pre><code>br_class_ne rdi, C -&gt; slow
+&lt;C#[] をインライン&gt;          ; BOP 依存を記録、class-version ガード無し
+br merge
+slow: &lt;runtime::get_index&gt;   ; どんなレシーバでも正しい。BOP の許可も自分で再確認
+merge:
+</code></pre>
+<p>要点は <strong>deopt という第 3 の選択肢が無い</strong>こと。optcarrot の
+<code>@fetch[addr][addr]</code> は Array と Method を交互に取り、ホットループ最大の
+deopt 源だった。<code>index_inline_class</code> はインラインキャッシュが持つクラス
+ではなく「観測されたうち生成器を持つ最頻クラス」を選ぶ — キャッシュには
+たまたま <code>Method</code> が入っていて、それをインライン化すると RAM 読みの全部が
+C 呼び出しに残ってしまうからである。両腕とも <code>dst</code> に素の <code>Value</code> を残す
+ので join 機構は要らない。<code>index_assign</code> に dispatch 腕は無い。</p>
+<h3 id="33----の機械語x86-64"><a class="header" href="#33----の機械語x86-64">3.3 <code>[]</code> / <code>[]=</code> の機械語（x86-64）</a></h3>
+<p><code>codegen/arch/x86_64/compile/index.rs</code>。</p>
+<ul>
+<li><strong><code>array_index</code></strong>（非負添字の読み）: <code>movq rax,[rdi+ARY_CAPA]; cmpq rax,5; jgt heap</code>。inline 腕は <code>capa</code>（= 長さ）と添字を比べ、<code>jle out_range</code> の後
+<code>movq rax,[rdi + rsi*8 + INLINE]</code>。heap 腕は <code>HEAP_LEN</code> で境界検査してから
+<code>HEAP_PTR</code> 経由。<code>out_range</code> は <strong><code>NIL_VALUE</code> を返す</strong>（範囲外の <code>[]</code> は
+Ruby でも nil なので deopt しない）。cold ブロックはページ 1 に置く。</li>
+<li><strong><code>array_index_assign</code></strong>: 同じ常駐分岐だが、write barrier は <code>rdi</code> を
+ヒープバッファに付け替える<strong>前</strong>に出す。範囲外の添字はインラインで
+raise せず <code>generic</code> → <code>set_array_integer_index</code>（正なら伸長、負すぎれば
+<code>IndexError</code>）へ落ち、エラーは <code>handle_error</code> に戻る。</li>
+<li><strong><code>gen_array_index</code> / <code>gen_array_index_assign</code></strong>（<code>ArrayIndexKind</code> の駆動）:
+<code>U16</code> なら添字は <code>movl</code> の即値。<code>Fixnum</code> なら <code>sarq rsi,1</code> で untag し
+<code>js negative</code>。negative 腕（ページ 1）は <code>get_array_length</code> を呼んで
+<code>addq rsi,rax; jns checked</code> — <strong>一度折り返して検査済み経路に再入する</strong>。
+まだ負なら generic / out_range。</li>
+<li><strong><code>get_array_length</code></strong> は分岐無し: <code>cmpq rax,5; cmovgtq rax,[rdi+HEAP_LEN]</code>。</li>
+</ul>
+<p>抽象状態側（<code>jitgen/state/index.rs</code>）: 添字がコンパイル時の <code>u16</code> リテラル
+なら <code>ArrayIndexKind::U16</code>、そうでなければ <code>load_fixnum</code>（Fixnum ガードを
+出す）して <code>Fixnum</code>。<code>load_array_ty</code> は抽象状態がまだ配列型を証明していない
+ときだけ <code>GuardArrayTy</code> を出す（<code>ClassInfo::is_array_ty_instance</code> なので
+サブクラスも通る — これが §3.2 でクラスガードを残す理由）。</p>
+<p>aarch64 は <code>cmov</code> を <code>csel</code> で置き換えた同型で、cold ブロックは同じページに
+インライン配置する（<code>b</code> / <code>b.cond</code> が monoasm の第 2 ページに届かないため）。
+<code>a[-100000]</code> / <code>a[100000]</code> / 添字 100000 への <code>[]=</code> 伸長 / <code>a[-3]=</code> のエラーは
+同ファイルのテストが固定している。</p>
+<h3 id="34-"><a class="header" href="#34-">3.4 <code>&lt;&lt;</code></a></h3>
+<p><code>array_shl</code> は <code>guard_frozen</code> を明示的に出す。<code>emit_array_shl</code> のインライン
+格納は <code>Array::push</code> を迂回し、<code>push</code> 自体は frozen を見ないので、frozen な
+レシーバは JIT を抜けてインタプリタに <code>FrozenError</code> を出させる必要がある —
+これはインライン化と同時に直した実バグである
+（<a href="../optcarrot_opt_profile.html"><code>../optcarrot_opt_profile.md</code></a> §3.2）。</p>
+<p><code>emit_array_shl</code>（<code>x86_64/compile/builtin.rs</code>）: <code>capa &lt;= 5</code> ⇔ 未あふれ
+なので、どちらの常駐でも「2 ロード + 1 ストア」の高速経路になる。
+<code>cmpq rax, 5</code> が<strong>inline バッファ満杯の判定のフラグも同時に立てている</strong>ので
+<code>jeq grow</code> はただで付く。満杯のとき — <code>capacity</code> 回に 1 回、償却 — だけ
+<code>ary_shl</code> を呼んで再確保させる（そこでバリアも走る）。最後に
+<code>emit_write_barrier_rdi(Rsi)</code> と <code>rax = rdi</code>（<code>&lt;&lt;</code> は self を返す）。</p>
+<h3 id="35-rotate--スライス代入--size--clone--dup"><a class="header" href="#35-rotate--スライス代入--size--clone--dup">3.5 <code>rotate!</code> / スライス代入 / <code>size</code> / <code>clone</code> / <code>dup</code></a></h3>
+<ul>
+<li><strong><code>rotate!</code></strong>: <code>pos_num &lt;= 1</code>、引数があるときは <code>arg_class == INTEGER_CLASS</code>
+のときだけ。<code>guard_frozen</code> → 回転数を untag → <code>ary_rotate_</code>。</li>
+<li><strong><code>ary[start, len] = other</code></strong>（<code>array_slice_assign</code>）: 動機は optcarrot の
+<code>@bg_pixels[@scroll_xfine, 8] = ...</code> で、支配的な形は「配列の内側の
+run を同じ長さの run で置き換える」、つまりサイズが変わらない素のコピー。
+ゲートは <code>may_be_fixnum(start)</code>（意図的に弱い — <code>ary[ivar, 8]</code> の start は
+抽象状態が絞っていない ivar から来るので、<code>load_fixnum</code> のガードに任せる。
+Float / Range と<strong>証明された</strong>スロットだけ断る）と、<code>len</code> が
+<code>0..=MAX_INLINE_SLICE</code>（8）の<strong>コンパイル時 Fixnum リテラル</strong>であること
+（コピーの展開回数になる）。<code>emit_array_slice_assign</code> は start の untag →
+<code>js slow</code>、自己代入（<code>cmpq rdi, rdx</code>）→ slow、<code>rdx</code> がちょうど <code>len</code>
+要素の Array で、レシーバの run がその内側に収まるときだけ <code>len</code> 個の
+<code>mov</code> 対を展開し、<code>emit_write_barrier_bulk_rdi</code>、<code>rax = rdx</code>。それ以外は
+<code>set_array_slice</code> が builtin と同じ規則（添字正規化、<code>#to_ary</code>）で処理。</li>
+<li><strong><code>size</code> / <code>length</code></strong>: <code>ir.array_len_fixnum(Rax, Rdi)</code> の純 LIR。x86 は
+<code>cmov</code> + <code>salq/orq</code>、aarch64 は <code>csel</code>（<a href="../lir.html"><code>../lir.md</code></a> の
+「container length」族）。</li>
+<li><strong><code>clone</code> / <code>dup</code></strong>: 証明済みレシーバのときだけ、<code>fpr_save</code> + 直接 call。
+<code>clone</code> は frozen を伝播し、<code>dup</code> は本来のクラスに付け替える意味論を保つ。</li>
+</ul>
+<h3 id="36-リテラルと生成"><a class="header" href="#36-リテラルと生成">3.6 リテラルと生成</a></h3>
+<ul>
+<li><strong>リテラル確保のインライン化</strong>（<code>TraceIr::Array</code>）: splat 無しで長さが
+<code>ARRAY_INLINE_CAPA</code> 以下（<code>[]</code> を含む）なら GC free list からセルを直接
+取る（<code>new_array_inline</code> → <code>emit_alloc_cell</code>）。ヘッダは
+<code>class&lt;&lt;32 | ObjTy::ARRAY&lt;&lt;16 | 1</code> の即値、<code>var_table = 0</code>、<code>ARY_CAPA = len</code>、
+続けて <code>len</code> 個のスロット→フィールド移送。free list が空／ページ境界なら
+<code>runtime::gen_array</code> に落ちる。</li>
+<li><strong>リテラル複製のインライン化</strong>（<code>DeepCopyLit</code>）: テンプレートが ivar
+無し・<code>len &lt;= 5</code>・<strong>全要素が immediate</strong> なら
+<code>RValue::inline_copyable_array</code>。immediate の deep copy は恒等なので語
+コピーで済み、要素は GC ポインタでなくテンプレートも不変なので機械語に
+焼き込める。<code>emit_deep_copy_lit</code> は <code>CellHeader::NewbornOf(template)</code> で
+ヘッダを <code>NEWBORN_FLAG_MASK</code> で落として写す（<code>Header::newborn</code> と同じ
+マスクなので乖離しない）。それ以外は <code>value_deep_copy</code> 呼び出し。</li>
+<li><strong><code>[a, b].min</code> / <code>.max</code> の融合</strong>（CRuby の <code>opt_newarray_send</code>）:
+<code>try_fuse_array_minmax</code>。消費する呼び出しが同一基本ブロックの<strong>直後の
+命令</strong>で、レシーバがそのリテラルで、リテラルが<strong>一時スロット</strong>に落ち
+（ローカルは再読される）、splat / 引数 / ブロック無し、<code>Array#min</code> /
+<code>#max</code> が builtin に解決する（<code>FuncKind::Builtin { abs_address }</code> を
+<code>builtins::array::min/max</code> と比較）ときだけ。class-version ガードの後
+<code>ir.array_min_max</code> を出し、call 命令を <code>fused_skip</code> で飛ばす。実行時の
+<code>opt_array_minmax</code> は要素を<strong>スタックスロット上で</strong>比較し、Array を
+作らない。同点は先の要素、比較不能は raise、と builtin と同じ。</li>
+<li><strong><code>ExpandArray</code> の高速経路</strong>: <code>src</code> が既に <code>len</code> 要素以上の Array なら
+<code>len</code> 回の移送で済ませる（<code>respond_to?</code> / <code>#to_ary</code> の dispatch 無し、
+nil 埋め無し、raise 無し）。<code>rest_pos</code> あり・<code>len == 0</code>・
+<code>len &gt; MAX_INLINE_EXPAND</code>（8）は断る。成功時 <code>rax = 1</code>
+（<code>expand_array</code> は null 返しでエラーを伝えるため）。呼び出し元が続けて
+出す実行時呼び出しがそのまま遅い経路になる。</li>
+</ul>
+<h3 id="37-bop基本演算の再定義"><a class="header" href="#37-bop基本演算の再定義">3.7 BOP（基本演算）の再定義</a></h3>
+<p><code>globals/store/basic_op.rs</code> の Array エントリは 3 つだけ:
+<code>(ARRAY_CLASS, "[]")</code>, <code>(HASH_CLASS, "[]")</code>, <code>(ARRAY_CLASS, "[]=")</code>。
+<code>runtime::get_index</code> / <code>set_index</code> は素の Rust ヘルパなので、差し替えられる
+のではなく <code>BasicOpTable::redefined</code> を直接見る。</p>
+<p><strong><code>Array#size</code> / <code>#length</code> は BOP ではない</strong>（CRuby には <code>BOP_SIZE</code> /
+<code>BOP_LENGTH</code> がある）。そのインライン生成器は <code>compile_method_call</code> から
+発火し、そこで既に class-version ガードが出ているので再定義はそちらで
+捕まる。JIT 側の許可は <code>basic_op_assumable</code>（追跡対象の組・グローバルに
+未再定義・コンパイル中スコープで refine されていない）で、<code>record_bop_dep</code>
+が <code>(class, op)</code> を記録し、<code>set_bop_redefine</code> がそれを読んで依存本体だけを
+evict する。<strong>直接発火経路には class-version ガードが無く、健全性は記録した
+依存だけに拠る</strong>。<code>Hash#[]=</code> が意図的に表に無いのはこのためで、通常の
+class-version ガード付き経路に残す（<code>index_hash_assign_redefinition</code> テスト）。
+効果は <a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a>（<code>Array#[]</code> 再定義
+時 0.30 → 0.030 → 0.009 s）。</p>
+<h3 id="38-arraynew-と-classnew"><a class="header" href="#38-arraynew-と-classnew">3.8 <code>Array.new</code> と <code>Class#new</code></a></h3>
+<p><code>Array.new</code> は native では定義されていない。Ruby の <code>Class#new</code> トランポリン
+（<code>o = __builtin_allocate__; o.__builtin_initialize__(...)</code>）を継いで、Ruby
+で書かれた <code>Array#initialize</code>（<code>builtins/array.rb</code>、位置引数 0〜2、rest /
+キーワード無し）にインライン経路で届く。以前の <code>__send__</code> による override は
+rest + kwrest 登録だったため JIT の転送高速経路を全部外し、汎用の引数再解析
+と rest Array の即時実体化を毎回払っていた（約 8 倍遅い）。さらに public な
+<code>allocate</code> を dispatch していたのでユーザーの上書きを尊重してしまい、CRuby の
+<code>Array.new</code> とは違っていた。</p>
+<p><code>Array#initialize</code> の重い脚は native の <code>__init_fill</code> / <code>__init_from</code> /
+<code>__size_to_int</code>。<code>#to_ary</code> の探索は引数が Integer でないときに限る（CRuby の
+<code>!FIXNUM_P</code>）。ブロック形は要素を逐次 push して <code>break</code> 時の部分内容を
+CRuby と一致させ、<code>yield</code> はユーザーの <code>Array.new { }</code> サイトのリテラル
+ブロックに対して特殊化される（<code>resolve_given_block</code> が <code>Class#new</code> の転送
+連鎖を辿る）。</p>
+<p>アロケータは <code>array_alloc_func</code> で <code>default_alloc_func</code> ではないため、
+<code>emit_class_allocate</code> の <code>InlineAlloc::Object</code> 列にはならず、<code>array_alloc_func</code>
+への直接 call になる。クラス記録により後続の <code>__builtin_initialize__</code> は
+単相になる。</p>
+<p>rest 引数 <code>Array</code> の遅延実体化（D1）は
+<a href="../arg_forwarding_jit.html"><code>../arg_forwarding_jit.md</code></a> §3.4 にある。
+<code>WriteBack::forward_rest</code> が <code>(dst, src, len)</code> を持ち、deopt 時に
+<code>runtime::create_array</code> で作る。リテラルの write back が <code>forward_rest</code> より
+先なのは、実体化が確保を伴い、その時点でフレームが GC 整合でなければならない
+からである（<a href="../jit_invariants.html"><code>../jit_invariants.md</code></a>）。</p>
+<hr>
+<h2 id="4-ruby-で書かれているメソッド"><a class="header" href="#4-ruby-で書かれているメソッド">4. Ruby で書かれているメソッド</a></h2>
+<p><code>builtins/array.rb</code> に <code>initialize</code> / <code>each</code> / <code>reverse_each</code> /
+<code>each_with_index</code> / <code>each_index</code> / <code>map</code> / <code>map!</code> / <code>bsearch</code> /
+<code>bsearch_index</code> / <code>dig</code> / <code>tally</code> / <code>filter_map</code> / <code>cycle</code> / <code>combination</code> /
+<code>permutation</code> / <code>repeated_*</code> / <code>at</code> / <code>to_ary</code> / <code>deconstruct</code> / <code>drop_while</code> /
+<code>fetch_values</code> / <code>rindex</code> / <code>assoc</code> / <code>rassoc</code> / <code>values_at</code> / <code>__zip_pull</code> が
+ある。</p>
+<p>理由はファイル自身が書いている: ホットな <code>Array.new</code> サイトが JIT の
+特殊化された引数束縛を得られ、ブロック形では要素ごとの <code>yield</code> がインライン
+展開される（native 版は要素ごとに native→Ruby のブロック呼び出しを払って
+いた）。<code>each</code> / <code>map</code> の Rust 版は <code>builtins/array.rs</code> に残っているが<strong>登録が
+コメントアウト</strong>されていて、<code>while i &lt; self.size</code> を <code>Array#size</code> / <code>Array#[]</code>
+のインラインで回す Ruby 版が勝つ。</p>
+<p>逆に <strong><code>Array#sum</code> は意図的に Ruby で開き直さない</strong>（Rust の Fixnum 高速
+経路を迂回してしまうため）。<code>sample</code> / <code>shuffle</code> / <code>shuffle!</code> は <code>random:</code>
+の解決と <code>RAND_UPTO</code> を共有するため Rust のまま。</p>
+<p>このトレードオフは <a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a> に記録
+されている: <code>Integer#&lt;</code> を再定義すると monoruby では <code>Array#map</code>（の
+<code>while i &lt; size</code>）が壊れるが、C 実装の CRuby は影響を受けない。
+<code>Array#size</code> を再定義すると <code>Kernel#p</code> の内部が <code>ArgumentError</code> になるのも
+同種で、BOP フックの欠落ではなく「組み込みが Ruby で書かれていることの露出」
+である。</p>
+<hr>
+<h2 id="5-個別メソッドの注記"><a class="header" href="#5-個別メソッドの注記">5. 個別メソッドの注記</a></h2>
+<ul>
+<li><strong><code>Array#sum</code></strong>: ブロック無し・整数の初期値・全要素 Fixnum なら
+<code>checked_add</code> の高速経路（約 30 倍）、外れたら元の <code>sum</code> で汎用ループへ。
+Float が続くあいだは <strong>Kahan–Neumaier 補償加算</strong>（CRuby と同じ精度）。
+補償項は全 Float 経路を抜けるときと最後に畳み、非有限になったら更新
+しない（<code>Inf - Inf</code> の偽 NaN を避ける）。配列はイテレータではなく毎回
+添字で読み直すので、ブロックがレシーバを伸ばしても CRuby と同じく耐える。</li>
+<li><strong><code>sort</code> / <code>sort!</code> / <code>min</code> / <code>max</code> / <code>minmax</code></strong>（<code>executor/op/sort.rs</code>）:
+20 要素以下は挿入ソート（マージバッファ無し）。マージ中のバッファは
+一方の run の<strong>唯一の参照</strong>を持ち、比較子は任意の Ruby を走らせるので、
+Rust の <code>Vec&lt;Value&gt;</code> では GC に見えない — 実際にあったバグで、呼び出し側
+は nil 埋めの <code>Array</code> を temp スタックに置いてバッファにする。全 Fixnum /
+全 String / 全（非 NaN）Float のスライスは <code>homogeneous_ord</code> で
+<strong>Rust の中だけで</strong>ソートし、クラスごとに別の <code>sort_unstable_by*</code> を呼ぶ
+（キー抽出が単相化して inline される）。Ruby の sort は安定でないので
+unstable で良い。許可は <code>BASIC_OP_DEFS</code> + <code>cmp_redefined</code>。<code>cmpint</code> は
+<code>rb_cmpint</code> に従い、Bignum は符号を直接読み、非 Integer は <code>&lt;=&gt; 0</code> でなく
+<code>&gt; 0</code> と <code>&lt; 0</code> を尋ねる。<code>min(n)</code> / <code>max(n)</code> は部分選択ではなく rooted な
+コピーの 1 回ソートを使う。</li>
+<li><strong><code>hash</code> / <code>eql?</code></strong>: 外側再帰は <code>exec_recursive_outer_unregistered</code> で
+畳み、循環構造はすべて同じ番兵にハッシュする（<code>rec.hash == [{x: rec}].hash</code>
+が <code>eql?</code> と整合する）。<code>Store::has_builtin_container_hash</code> が「この
+Array / Hash はまだ builtin の <code>:hash</code> に解決するか」を class version で
+キャッシュしていて、真なら <code>Value::ruby_hash</code> が構造ダイジェストを
+<strong>native で</strong>計算する。singleton / mock / monkey-patch があれば dispatch。</li>
+<li><strong><code>include?</code> / <code>index</code> / <code>count</code> / <code>delete</code></strong>（<code>EqSearch</code>、<code>executor/op.rs</code>）:
+needle を 1 回準備してから走査する。Integer / Symbol / nil / true / false
+の needle なら同クラスでビットが違う要素は <code>==</code> 無しで不一致、String は
+内容で決まる。<code>basic_op_redefined_for(class, :==)</code> でゲート。dispatch に
+達する要素には <code>(ClassId, class_version)</code> キーの<strong>単相キャッシュ</strong>
+<code>cached_eq</code> があり、独自 <code>==</code> を持たないクラスは <code>Identity</code> アームで
+呼び出し自体を省く。以前は<strong>引数</strong>に <code>==</code> を尋ねて hoist していて、
+レシーバが違うバグだった。</li>
+<li><strong><code>-</code> / <code>&amp;</code> / <code>intersection</code> / <code>uniq</code></strong>: <code>RubySet</code> を作る。<code>insert</code> が
+Ruby を走らせうるので、格納ポインタを temp スタックで root する。</li>
+<li><strong><code>flatten</code></strong>: object id の <code>seen</code> で循環検出。要素の変換探索
+<code>try_convert_to_array</code> は <code>rb_check_funcall</code> の 4 段（ユーザーの
+<code>respond_to?</code> → <code>to_ary</code> → <code>respond_to_missing?</code> → <code>method_missing</code>）を
+ruby/spec どおりに踏む。</li>
+<li><strong><code>flat_map</code></strong>: 蓄積先は Rust の <code>Vec</code> ではなく <strong>rooted な Ruby Array</strong>
+（<code>vm.temp_array_*</code>）。<code>invoke_block</code> はすべて safepoint だからで、
+gc-stress の optcarrot が落ちた事例が <a href="../gc.html"><code>../gc.md</code></a> にある。</li>
+<li><strong><code>pack</code></strong>: <code>string/pack.rs</code> の CRuby <code>pack.c</code> 忠実移植で、実行時の
+高速経路は特に無い。</li>
+<li><strong><code>shuffle</code> / <code>sample</code></strong>: CRuby の <code>RAND_UPTO</code>（<code>rb_random_ulong_limited</code>）
+をそのまま使うので、<code>srand(n)</code> 後の列が<strong>1 回の draw 単位で CRuby と
+一致</strong>する。</li>
+</ul>
+<hr>
+<h2 id="6-cruby-との実装差異"><a class="header" href="#6-cruby-との実装差異">6. CRuby との実装差異</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>項目</th><th>CRuby</th><th>monoruby</th></tr>
+</thead>
+<tbody>
+<tr><td>埋め込み／共有</td><td><code>RARRAY_EMBED</code>（埋め込み）と <code>ary_make_shared</code> による共有配列 + copy-on-write の 2 段</td><td><strong>共有配列は無い</strong>。<code>SmallVec&lt;[Value; 5]&gt;</code> の 1 機構: 5 要素まで 48 バイトのペイロードに直置き、超えたらヒープ。<code>get_elem1</code> / <code>get_elem2</code> の Range 形は毎回新しい配列を確保する。String には隠れ frozen root による共有部分文字列があるので（<a href="string.html">string.md</a>）、Array に無いのは意図的な選択</td></tr>
+<tr><td>基本演算の追跡</td><td><code>BOP_SIZE</code> / <code>BOP_LENGTH</code> / <code>BOP_AREF</code> / <code>BOP_ASET</code> …</td><td><code>Array#[]</code> / <code>Array#[]=</code> / <code>Hash#[]</code> のみ。<code>size</code> は class-version ガードで守る。<code>Hash#[]=</code> は意図的に外す</td></tr>
+<tr><td>組み込みの実装言語</td><td>C（<code>Integer#&lt;</code> を再定義しても <code>Array#map</code> は無傷）</td><td><code>each</code> / <code>map</code> / <code>initialize</code> などが Ruby。<code>Integer#&lt;</code> や <code>Array#size</code> の再定義が組み込みの内部に及ぶ（意図したトレードオフ、§4）</td></tr>
+<tr><td><code>Array.new</code> と <code>allocate</code></td><td>ユーザー定義の <code>self.allocate</code> を迂回</td><td>同じ。private な <code>__builtin_allocate__</code> 経由で実現</td></tr>
+<tr><td>範囲外の <code>[]</code></td><td>nil</td><td>JIT コード内で nil（deopt 無し）。負添字も生成コードで折り返す。範囲外の<strong>書き込み</strong>は必ず高速経路を抜ける（伸長・<code>IndexError</code> のため）</td></tr>
+<tr><td><code>ArithmeticSequence</code> 添字</td><td><code>rb_ary_aref1</code> 内で処理</td><td><code>aseq.[](self)</code> に委譲（3 箇所とも）。特異クラス付きの AS（<code>Range#%</code> 由来）も <code>ObjTy</code> で判定するので届く</td></tr>
+<tr><td><code>[]=</code> の Range 開始</td><td>折り返しても負なら <code>RangeError</code></td><td>同じ。素の負 Integer 添字は <code>IndexError</code></td></tr>
+<tr><td><code>Array#&lt;=&gt;</code></td><td>最初に <code>0</code> でなかった要素比較の結果をそのまま返す</td><td>同じ（nil / ±1 / String もそのまま）</td></tr>
+<tr><td>リテラル</td><td><code>duparray</code> / <code>newarray</code>、<code>opt_newarray_send</code></td><td><code>Literal</code>（テンプレート deep copy）。要素が全部 immediate で 5 以下なら複製を機械語に焼く。<code>[a,b].min/max</code> 融合あり</td></tr>
+<tr><td><code>Array.new</code> の <code>#to_ary</code> 探索</td><td><code>!FIXNUM_P</code> で判定。Bignum は探索する</td><td>Integer クラスが 1 つなので Bignum も探索を飛ばし、<code>__init_fill</code> のサイズ検査が CRuby の <code>NUM2LONG</code> + 「array size too big」の順で拒む。<code>MAX_ARRAY_SIZE = 1 &lt;&lt; 30</code></td></tr>
+<tr><td><code>zip</code> の引き出し</td><td><code>take_items</code>（<code>each</code> + <code>break</code>）</td><td>同じ。<code>Enumerator#next</code> の fiber は使わないので、引数の <code>each</code> からの <code>StopIteration</code> は呼び出し元に届く</td></tr>
+<tr><td>要素格納のバリア</td><td><code>RARRAY_ASET</code> が <code>RB_OBJ_WRITE</code></td><td><code>Array</code> ラッパが <code>ArrayInner</code> の mutator を隠して全経路をバリア。JIT は <code>emit_write_barrier_rdi</code> / <code>_bulk</code></td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="7-テストと関連文書"><a class="header" href="#7-テストと関連文書">7. テストと関連文書</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>場所</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>codegen/arch/x86_64/compile/index.rs</code> のテスト</td><td>添字境界（±100000、伸長、<code>a[-3]=</code> のエラー）</td></tr>
+<tr><td><code>codegen/jitgen/compile/index.rs</code> のテスト</td><td><code>index_redefinition_evicts</code> / <code>index_polymorphic_array_and_method</code> / <code>index_array_subclass_override</code> / <code>index_private_receiver</code> / <code>index_hash_assign_redefinition</code></td></tr>
+<tr><td><code>builtins/array.rs</code> の <code>array_literal_minmax_fusion</code></td><td><code>[a, b].min</code> 融合</td></tr>
+<tr><td><a href="../optcarrot_opt_profile.html"><code>../optcarrot_opt_profile.md</code></a></td><td><code>&lt;&lt;</code> / <code>rotate!</code> / <code>expand_array</code> / スライス代入の計測と経緯</td></tr>
+<tr><td><a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a></td><td>BOP の差分掃討（48 ケース）、Ruby 実装組み込みの露出</td></tr>
+<tr><td><a href="../lir.html"><code>../lir.md</code></a></td><td><code>GuardArrayTy</code> / <code>GuardFrozen</code> / <code>ArrayLenFixnum</code> の LIR</td></tr>
+<tr><td><a href="../arg_forwarding_jit.html"><code>../arg_forwarding_jit.md</code></a></td><td>rest Array の遅延実体化（D1）</td></tr>
+<tr><td><a href="../gc.html"><code>../gc.md</code></a></td><td>バリア、temp スタックの root、<code>flat_map</code> の事例</td></tr>
+<tr><td><a href="../progress_2025-2026.html"><code>../progress_2025-2026.md</code></a></td><td><code>Array#[]</code> / <code>#[]=</code> のインライン化（#269）などの変更履歴</td></tr>
+</tbody>
+</table>
+</div>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../design/runtime_optimization/index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../design/runtime_optimization/hash.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../design/runtime_optimization/index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../design/runtime_optimization/hash.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-09f2665d.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

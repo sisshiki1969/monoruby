@@ -1,0 +1,705 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>String - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../../searchindex-a0bcb149.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-8a4c8fb9.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="string-の実装と最適化"><a class="header" href="#string-の実装と最適化">String の実装と最適化</a></h1>
+<p>String はテンプレートエンジンとパーサの最内ループに出てくる型で、erubi の
+バッファ <code>&lt;&lt;</code>、Hash の String キー、<code>"lit".freeze</code> がそれぞれ計測で
+ボトルネックになった
+（<a href="../yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a>
+§5.2、§5.6）。</p>
+<p>この文書は、String のセル内レイアウト、部分文字列の共有と copy-on-write、
+エンコーディングと code range のキャッシュ、リテラルの扱い、VM と JIT の
+高速経路をまとめ、最後に CRuby との実装差異を並べる。共通の前提は
+<a href="README.html">README.md</a>、Hash の String キーについては <a href="hash.html">hash.md</a> を参照。</p>
+<hr>
+<h2 id="1-表現"><a class="header" href="#1-表現">1. 表現</a></h2>
+<h3 id="11-セルと-32-バイトの-inline-閾値"><a class="header" href="#11-セルと-32-バイトの-inline-閾値">1.1 セルと 32 バイトの inline 閾値</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[repr(C)]
+pub struct RStringInner {
+    content: StringContent,   // 先頭固定: JIT が直接アドレッシングする
+    ty: Encoding,             // repr(u8)
+    cr: Cell&lt;CodeRange&gt;,      // repr(u8)、遅延で埋まる
+}
+<span class="boring">}</span></code></pre>
+<p>バッファは fork した <code>SmallVec&lt;[u8; 32]&gt;</code>（<code>STRING_INLINE_CAP = 32</code>、
+<code>lib.rs</code>）で、Array と同じく <code>OFFSET_CAPA</code> / <code>OFFSET_INLINE</code> /
+<code>OFFSET_HEAP_PTR</code> / <code>OFFSET_HEAP_LEN</code> を JIT に公開するために fork している。
+<strong>32 バイトまでは 64 バイトの RValue セルの中</strong>（malloc 無し）、超えると
+ヒープにあふれる。inline のあいだは <code>capa</code> スロットが長さを兼ね、あふれると
+<code>capa</code> は容量で長さはポインタの隣に置かれる。JIT の全 emitter は
+<code>cmp capa, STRING_INLINE_CAP</code> でこの二重の意味を分岐する。<code>Encoding</code> が
+<code>u8</code> ペイロードに収まるサイズに抑えられているのは RValue を 64 バイトに
+保つためである。</p>
+<h3 id="12-共有文字列と-copy-on-write"><a class="header" href="#12-共有文字列と-copy-on-write">1.2 共有文字列と copy-on-write</a></h3>
+<p>CRuby の <code>STR_SHARED</code> に相当する仕組みがあり、<strong>あふれた SmallVec の
+フィールドに重ねる</strong>形で置かれている:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>offset</th><th>SmallVec（あふれ時）</th><th><code>SharedContent</code></th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td>capacity</td><td><code>tag</code>（= <code>STRING_SHARED_TAG</code> = <code>isize::MAX</code>）</td></tr>
+<tr><td>8</td><td>heap ptr</td><td><code>ptr</code>（root のバッファ内を指す）</td></tr>
+<tr><td>16</td><td>heap len</td><td><code>len</code></td></tr>
+<tr><td>24</td><td>（inline の残り）</td><td><code>root: Value</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>タグが <code>usize::MAX</code> でなく <code>isize::MAX</code> なのは、JIT のインライン <code>bytesize</code> /
+<code>getbyte</code> が <code>capa &gt; INLINE_CAP</code> を<strong>符号付き</strong>で比較するため（<code>cmovgt</code> /
+<code>csel gt</code>）で、正の値にしておけば共有文字列が自動的にヒープ経路に乗る。
+その帰結として <strong>読み取り専用のインライン命令は共有検査を一切必要としない</strong>。
+検査が要るのは書き込み側だけである。</p>
+<ul>
+<li><code>union StringContent { owned, shared }</code> の判別は先頭の <code>usize</code> を読むだけ。</li>
+<li><code>Clone</code>: <strong>sharer の複製は O(1)</strong>（4 語のコピーで同じ root のもう 1 つの
+sharer）。所有バッファの複製はバイトコピー。</li>
+<li><code>owned_mut()</code> が<strong>唯一の変更の入口</strong>で、書き込みはまず <code>uniquify()</code>
+（見ているバイト列を新しい所有バッファに写す）を通る。これが CoW の
+「write」側。JIT 向けには同じものが <code>detach()</code> / <code>runtime::str_detach</code> と
+して出ている。</li>
+<li><code>string_substring(parent, start, end)</code> が共有するのは <strong><code>len &gt; 32</code> かつ
+親が既に共有かヒープあふれのとき</strong>だけ。inline に収まる複製は最大 32
+バイトで、root の確保 + GC エッジより安い。</li>
+<li><code>ensure_shared_root(parent)</code> の 3 ケース: (1) 親が既に sharer → その root
+を返す（<strong>root の連鎖は決して作らない</strong>）、(2) 親が frozen → 親自身が
+root（chilled は該当しない）、(3) 可変でヒープあふれ → バッファを
+<code>mem::take</code> して<strong>隠れた frozen root String</strong> を新設し、親を最初の sharer に
+する。確保をまたぐ瞬間だけ親は空文字列として妥当な状態にあり、
+<code>parent.write_barrier(root)</code> が String が持ちうる唯一の外向き参照を記録する。</li>
+<li><code>string_snapshot(receiver)</code>: 正規表現系メソッドが使う frozen で安定な
+スナップショット。ブロックがレシーバを書き換えても match のビューは
+有効なまま。frozen ならそれ自身、共有／あふれなら frozen root（レシーバが
+窓なら frozen なサブビュー）、短い inline なら frozen な複製。</li>
+<li><code>check_string_not_modified</code>（CRuby の <code>str_mod_check</code>）は<strong>バイト長だけ</strong>
+で判定する。monoruby は同じ長さの in-place 編集でも CoW detach で再確保
+するので、ポインタ比較だと過剰に発火する。</li>
+</ul>
+<p>共有ビューを作る側: <code>String#[]</code> / <code>slice</code> / <code>chomp</code> / <code>strip</code> 系 / <code>scan</code> /
+<code>byteslice</code> / <code>lines</code> / <code>each_line</code>、<code>MatchData#[]</code> / <code>pre_match</code> /
+<code>post_match</code> / <code>$~</code> の haystack、<code>Regexp</code> 側の各種（<a href="regexp.html">regexp.md</a>）。</p>
+<p>GC: sharer は root を mark し（<code>rvalue.rs</code> の STRING アーム）、
+<code>young_child_exists</code> は「若い root を持つ sharer」を報告する — 報告しないと
+minor GC が root を足元から解放する。String は OLD へ昇格可能。</p>
+<p><code>shared_string_tests</code>（<code>string.rs</code>）が overlay のオフセットを <code>smallvec::OFFSET_*</code>
+と突き合わせ、短いスライスが所有のままであること、sharer のサブ文字列が
+同じ root を使うこと、frozen 親が自分自身を root にすること、sharer の
+clone が安価で独立していることを固定する。</p>
+<h3 id="13-順序等価ハッシュc-連携"><a class="header" href="#13-順序等価ハッシュc-連携">1.3 順序・等価・ハッシュ・C 連携</a></h3>
+<ul>
+<li><code>PartialEq</code> は <code>as_bytes()</code> の比較（memcmp）。<code>Hash</code> はバイト内容のハッシュで、
+<strong>String にダイジェストはキャッシュされない</strong>（§7）。</li>
+<li><code>Ord</code> は手書きの prefix 比較で、ループ内の長さ差分岐を避ける。</li>
+<li><code>nul_terminated_buf_ptr</code>: CoW を先に detach し（C 側が書くかもしれない）、
+必要なら <code>reserve(1)</code> して<strong>予備容量に</strong> NUL を書く。<code>as_bytes</code> / <code>len</code> /
+<code>hash</code> / 等価は変わらない。Fiddle / FFI ブリッジが使う。</li>
+<li>容量成長は SmallVec の倍々で、CRuby の <code>rb_str_capa</code> のような調整は無い。
+事前サイズ指定は <code>concatenate_string_inner</code>（§4.2）と
+<code>with_encoding_capacity</code> の 2 箇所。</li>
+</ul>
+<hr>
+<h2 id="2-エンコーディングと-code-range"><a class="header" href="#2-エンコーディングと-code-range">2. エンコーディングと code range</a></h2>
+<ul>
+<li><code>CodeRange { Unknown=0, SevenBit=1, Valid=2, Broken=3 }</code> は <code>repr(u8)</code> で
+判別値を固定している（JIT が直接書く）。</li>
+<li><code>Encoding</code> は <code>repr(u8)</code>: <code>Ascii8(0), Utf8(1), UsAscii(2), Utf16Le(3), Utf16Be(4), Utf32Le(5), Utf32Be(6), Iso8859(u8), EucJp, Sjis(u8), Iso2022Jp, Other(u8), NamedByte(u8)</code>。先頭 7 つはペイロード無しで、
+JIT の <code>&lt;&lt;</code> 高速経路の <code>&lt;= 6</code> 判定はこれに対応する。<code>Other</code> は UTF-7 /
+CP50220/1 / BOM 付き UTF-16/32（ASCII 非互換、コーデック無し、名前だけ
+保持）、<code>NamedByte</code> は Big5 / GBK / GB18030 / EUC-KR / Windows-125x /
+IBM* / KOI8 / TIS-620 / Emacs-Mule など約 38 の ASCII 互換コードページで、
+格納と反復は ASCII-8BIT として振る舞う。</li>
+<li><code>cr</code> は<strong>遅延</strong>: <code>code_range()</code> が最初の問い合わせで分類して <code>Cell</code> に
+入れ、<code>set_encoding</code> が無効化する。<code>Encoding::classify</code> は空なら SevenBit、
+ASCII 互換で全バイト &lt; 0x80 なら SevenBit（短絡）、あとはエンコーディング
+ごと（UTF-8 は <code>str::from_utf8</code>、UTF-16/32 はバイト数の偶奇、EUC-JP / SJIS
+は <code>*_char_width</code>、ISO-2022-JP は <code>encoding_rs</code>）。</li>
+<li>コンストラクタは「走査する／しない」の対で用意されている:
+<code>from_str</code> / <code>from_str_scanned</code>、<code>from_string</code> / <code>_scanned</code>、
+<code>from_encoding</code> / <code>_scanned</code>、<code>from_vec_scanned</code>（UTF-8 か binary かを同じ
+一巡で自動判定）、<code>from_ascii_bytes</code>（呼び出し側が SevenBit を保証）、
+<code>from_vec_cr</code> / <code>from_buf_cr</code>（<code>StringBuf</code> に直接組んだバッファをそのまま
+採用）、<code>with_encoding_capacity</code>（SevenBit で開始）。方針は「長生きする
+テンプレートは先に走査（複製が <code>cr</code> をただで継ぐ）、使い捨ては後回し」。</li>
+<li><strong>追記時の O(1) 畳み込み</strong>（<code>extend</code>）が最大の性能修正である。素朴に <code>cr</code>
+を Unknown に戻すと、10 万回の <code>s &lt;&lt; "abcde"</code> ループが <strong>CRuby 5.6 ms に
+対して約 5.7 s</strong>（O(N²)）になった。<code>(SevenBit, SevenBit) → SevenBit</code>、
+<code>({SevenBit, Valid}, {SevenBit, Valid}) → Valid</code>、それ以外 Unknown、の
+畳み込みで O(N) に戻る。<code>extend_from_slice_checked</code> /
+<code>extend_from_slice_merge_cr</code>（<code>pack</code> の <code>buffer:</code>）も同じで、
+<code>extend_from_slice_no_validate</code>（<code>append_as_bytes</code>）は意図的に畳まない。</li>
+<li>部分文字列への伝播 <code>propagated_cr</code>: SevenBit は無条件、Valid は
+単バイト系なら無条件、UTF-8 は両端が文字境界のとき、UTF-16/32 は 2/4
+バイト整合のとき。UsAscii / EucJp / Sjis / Iso2022Jp と Broken / Unknown の
+親は Unknown に落とす。</li>
+<li><code>set_byte</code> は ASCII バイトを置くときだけ SevenBit キャッシュを保つ
+（JIT の <code>setbyte</code> が同じ規則を再現する）。</li>
+<li><code>char_length</code> はバイト指向のエンコーディングと、SevenBit がキャッシュ
+された UTF-8 / EUC-JP / SJIS で O(1)。UTF-8 の Valid は非継続バイトを数え、
+Broken は <code>iter_char_bytes</code> を歩く。</li>
+<li><code>regex_view</code> / <code>from_mapped_utf8</code> / <code>needs_byte_mapping</code>: UTF-8 専用の
+<code>regex</code> クレートをバイト指向エンコーディングにかけるための
+バイト ↔ <code>U+00XX</code> 代理写像（<a href="regexp.html">regexp.md</a>）。</li>
+<li><code>compatible_encoding</code> / <code>Encoding::compatible</code> は <code>rb_enc_compatible</code> の
+移植で、キャッシュ済みの <code>cr</code> を消費して再走査しない。</li>
+</ul>
+<p><a href="../encoding_char_iteration_design.html"><code>../encoding_char_iteration_design.md</code></a>
+はエンコーディングごとの文字境界層の提案（<em>proposed</em>）で、§2 に現状の
+<code>RStringInner</code> の穴（EUC-JP / SJIS のバイト単位反復、非 UTF-8 の <code>to_str</code>
+退避）の監査がある。ただしその文書は <code>content: Vec&lt;u8&gt;</code> 時代の記述で、
+SmallVec / 共有 union への改修より前のものである。</p>
+<hr>
+<h2 id="3-リテラル"><a class="header" href="#3-リテラル">3. リテラル</a></h2>
+<h3 id="31-fstring-プール"><a class="header" href="#31-fstring-プール">3.1 fstring プール</a></h3>
+<p><code>Store::frozen_str_pool: HashMap&lt;(Vec&lt;u8&gt;, Encoding), Value&gt;</code> は <code>(bytes, encoding)</code> をキーにしたプログラム全体のプールで（<code>require</code> をまたいで
+生き、<code>Store::mark</code> で GC root）、<code>Store::intern_frozen_str</code> が
+<code>Value::string_from_source_bytes</code>（<code>cr</code> 走査済み）+ <code>set_frozen()</code> で作って
+記憶する。目的は CRuby と同じく pragma 下で <code>"abc".equal?("abc")</code> を true に
+すること。</p>
+<h3 id="32--frozen_string_literal-true"><a class="header" href="#32--frozen_string_literal-true">3.2 <code># frozen_string_literal: true</code></a></h3>
+<p><code>emit_string</code> / <code>emit_bytes</code> は pragma 下で <code>emit_frozen_interned</code> →
+<code>BytecodeInst::FrozenLiteral</code>（<strong>そのままロード、複製しない</strong>）。pragma が
+無ければテンプレート値 + <code>BytecodeInst::Literal</code> で、評価ごとに <code>deep_copy</code>。
+<code>emit_literal</code> は <code>is_always_frozen</code> なクラスのリテラルも <code>FrozenLiteral</code> に
+回す。<code>source_encoding()</code> は <code># encoding:</code> マジックコメントを解決し既定は
+UTF-8。</p>
+<h3 id="33-chilled-リテラルcruby-34-の移行経路"><a class="header" href="#33-chilled-リテラルcruby-34-の移行経路">3.3 chilled リテラル（CRuby 3.4 の移行経路）</a></h3>
+<p>pragma の無いファイルのテンプレートは chilled と印を付ける
+（<code>chill_literal_template</code>）。ただし monoruby 自身の <code>install_root()</code> 配下の
+ランタイム Ruby は除く（<code>Warning[:deprecated]</code> がインタプリタ内部を指さない
+ように）。フラグは <code>CHILLED_LITERAL_BIT = 0b1000_0000</code>（意図的に下位バイトの
+中 — 以前は GC 年齢フィールドと衝突していた、issue #975）。<code>Symbol#to_s</code> も
+chilled な String を返す。<code>--debug-frozen-string-literal</code> はリテラルの出自を
+<code>record_string_origin</code> / <code>string_origin</code> で記録し、エラー表示が参照する。</p>
+<h3 id="34-非-frozen-リテラルの評価-テンプレート--o1-cow-複製"><a class="header" href="#34-非-frozen-リテラルの評価-テンプレート--o1-cow-複製">3.4 非 frozen リテラルの評価: テンプレート + O(1) CoW 複製</a></h3>
+<p><code>Value::value_deep_copy</code> は最初に <code>share_string_buffer(&amp;mut val)</code> を呼ぶ。
+<strong>テンプレート自身が（1 回だけ）隠れ frozen root の sharer に変わり</strong>、以後
+の評価ごとの <code>deep_copy</code> は O(len) のバイトコピーではなく O(1) のビュー複製
+になり、キャッシュ済みの <code>cr</code> も継ぐ。ERB / heredoc サイズのテンプレートが
+動機。chilled（デバッグ時は出自も）は各複製に伝播する。</p>
+<p>VM の <code>vm_literal</code> は <code>Value::value_deep_copy</code> への call。JIT の
+<code>TraceIr::Literal</code> → <code>DeepCopyLit</code> → <code>emit_deep_copy_lit</code> で完全にインライン
+確保されるのは <strong>Array リテラルだけ</strong>で、String は <code>deepcopy_literal</code> の
+call になる。<code>FrozenLiteral</code> は純粋なレジスタロード。</p>
+<h3 id="35-litfreeze-の畳み込みcruby-の-opt_str_freeze"><a class="header" href="#35-litfreeze-の畳み込みcruby-の-opt_str_freeze">3.5 <code>"lit".freeze</code> の畳み込み（CRuby の <code>opt_str_freeze</code>）</a></h3>
+<p><code>bytecodegen/method_call.rs</code> が、safe-nav でなく・<strong>pragma 下でなく</strong>
+（pragma 下ではリテラルが既にインターン済みオブジェクトで <code>Object#freeze</code> は
+安い no-op）・メソッドが <code>freeze</code>・引数無し・レシーバが <code>NodeKind::String</code>
+のときだけ <code>BytecodeInst::StringFreeze(reg, interned)</code> を出す。実行時の
+<code>string_freeze_literal</code> は <code>String#freeze</code> が未再定義ならインターン済み
+リテラルをそのまま返し（複製も呼び出しも無し）、再定義されていれば
+<code>dup</code> + <code>set_chilled_literal</code> + 再定義された <code>freeze</code> を dispatch する。
+BOP 表に <code>(STRING_CLASS, "freeze")</code> があり、JIT は <code>basic_op_assumable</code> の
+もとで BOP 依存を記録して定数ロードにし、再定義は本体を evict、コンパイル時
+に再定義済みなら無条件 deopt。</p>
+<p>計測: <code>'abc'.freeze</code> <strong>67.6 → 9.8 ns</strong>（YJIT 26）、<code>buf &lt;&lt; 'lit'.freeze</code>
+<strong>73 → 15.9 ns</strong>（YJIT 21）。</p>
+<p><strong><code>-"lit"</code>（<code>opt_str_uminus</code>）の畳み込みは無い。</strong> <code>String#-@</code> は Ruby で
+<code>frozen? ? self : dup.freeze</code> と定義されていて（<code>builtins/string.rb</code>）、
+CRuby の <code>rb_fstring</code> のような<strong>重複排除テーブルは無い</strong>。<code>String#+@</code> は
+chilled フラグに Ruby レベルの述語が無いため Rust のまま。</p>
+<hr>
+<h2 id="4-vm-の経路"><a class="header" href="#4-vm-の経路">4. VM の経路</a></h2>
+<h3 id="41---"><a class="header" href="#41---">4.1 <code>+</code> / <code>&lt;&lt;</code></a></h3>
+<ul>
+<li><code>+</code>（<code>add</code>）はサブクラスのレシーバでも<strong>素の String</strong> を返す（<code>dup</code> せず
+新規に組む）。<code>#to_str</code> が Ruby に再入するので引数を先に変換する。</li>
+<li><code>&lt;&lt;</code>（<code>shl</code> / <code>shl_inner</code>）は <code>s &lt;&lt; s</code> のエイリアスを inner のスナップ
+ショットで処理し（sharer なら O(1)）、Integer をコードポイントとして
+受ける CRuby の <code>rb_str_concat</code> の ASCII 特例（US-ASCII は高位バイトで
+ASCII-8BIT に自動拡張）、<code>codepoint_bytes</code> によるエンコーディングごとの
+符号化（<code>rb_enc_codelen</code> / <code>rb_enc_mbcput</code> 相当、<code>Invalid</code> と <code>OutOfRange</code> で
+onigmo の 2 つのメッセージを再現）、<code>#to_str</code> 変換中のレシーバの
+<code>vm.temp_push</code> による root を行う。<code>extern "C" fn string_shl</code> が JIT の
+呼ぶフレームレスの入口。</li>
+</ul>
+<h3 id="42-補間--concatstr"><a class="header" href="#42-補間--concatstr">4.2 補間 — <code>ConcatStr</code></a></h3>
+<p>バイトコード側（<code>bytecodegen/expression.rs</code>）: 補間がリテラル断片で
+始まらないときは空の <code>seed</code> リテラルを押し、実行時の結合が常にソース
+エンコーディングから交渉するようにする（pragma 下でも結果が新規の可変
+String になる）。<strong>リテラル断片はインターン済み frozen テンプレートとして
+出す</strong>（評価ごとの deep copy ではない）。CRuby も dstr の断片を frozen で
+埋め込んでおり、テンプレートのキャッシュ済み <code>cr</code> が結合の逐次交渉に
+流れ込むので、大きな断片の分類は一生に 1 回で済む。</p>
+<p>実行時（<code>runtime::concatenate_string_inner</code>）の設計:</p>
+<ul>
+<li>一貫して生バイト（Rust の <code>String</code> を経由すると不正列が U+FFFD に書き
+換わる）。</li>
+<li>エンコーディングは最初の String オペランドから seed し、以降は
+<code>Encoding::compatible</code> で交渉。</li>
+<li><strong>エンコーディングと <code>cr</code> を逐次で追跡する。</strong> 以前は交渉のたびに
+成長中のバッファを一時 String で包んでオペランドごとにコピーしていて
+O(N·total) だったのが O(total) になった。</li>
+<li>結果は String オペランドから事前サイズを決めた <code>StringBuf</code> に<strong>直接</strong>
+組む。短い結果はヒープに触れず、長い結果は確保 1 回で、
+<code>RStringInner::from_buf_cr</code> がそのまま採用する。</li>
+<li><strong>Fixnum オペランドはバッファに直接整形する</strong>（<code>format_i64</code> +
+<code>append_piece</code>）。<code>to_s</code> でヒープ String を作らない。<code>vm.to_s_is_refined</code>
+で refinement が勝つようゲート。</li>
+<li>ユーザーの <code>to_s</code> が非 String を返せば <code>#&lt;Class:0xADDR&gt;</code> に落とす。</li>
+</ul>
+<p>JIT の <code>TraceIr::ConcatStr</code> → <code>AsmInst::ConcatStr</code> → <code>LInst::ConcatStr</code> →
+<code>emit_concat_str</code> は同じヘルパへの call。</p>
+<h3 id="43---eql------hash"><a class="header" href="#43---eql------hash">4.3 <code>==</code> / <code>eql?</code> / <code>!=</code> / <code>&lt;=&gt;</code> / <code>hash</code></a></h3>
+<ul>
+<li><code>==</code>（<code>===</code> / <code>eql?</code> は同じ builtin と同じインライン生成器）:
+<code>string_eq_bool</code> はバイト比較<strong>に加えて</strong>エンコーディング互換検査を行う
+（CRuby 準拠: 交渉できないエンコーディングの同一バイト列は不一致）。右辺
+が String でなく <code>to_str</code> に<strong>応答する</strong>なら（<code>store.no_to_str</code> で判定、
+<code>to_str</code> 自体は呼ばない）<code>rhs == self</code> を dispatch する。</li>
+<li><code>!=</code> は基本演算（<code>define_basic_op</code>）で、CRuby に <code>String#!=</code> は無いので
+上記の逆 dispatch を含む厳密な否定になっている（右辺が <code>to_str</code> と独自
+<code>==</code> の両方を持つ場合に素のバイト比較だと乖離する）。</li>
+<li><code>&lt;=&gt;</code> はバイト比較に<strong>エンコーディング序数のタイブレーク</strong>（CRuby の
+<code>rb_enc_index</code> 順）。非 ASCII 内容でだけ効く。</li>
+<li><code>hash</code> は <code>Value::calculate_hash</code> → プロセスごとの <code>RandomState</code> で
+seed した SipHash（<code>HASH_STATE</code>、CVE-2011-4815 対策）を <code>from_hash_digest</code>
+で Fixnum 範囲に畳む。<strong>String ごとのハッシュキャッシュは無い</strong>。</li>
+</ul>
+<h3 id="44-to_symその他"><a class="header" href="#44-to_symその他">4.4 <code>[]</code>、<code>to_sym</code>、<code>%</code>、その他</a></h3>
+<ul>
+<li><code>String#[]</code> の Fixnum / Range 形は<strong>コピー無しの共有部分文字列</strong>。Range は
+<code>rb_range_beg_len</code> の順（負の正規化 → <code>exclude_end</code> の畳み込み）で、
+以前 <code>"abc"[0...0]</code> が折り返していたバグの記録がある。ASCII のみの
+レシーバは SevenBit キャッシュで <code>char_length</code> が O(1)。</li>
+<li><code>to_sym</code> / <code>intern</code> は CRuby のシンボルエンコーディング正規化を実装する:
+ASCII 互換エンコーディングの ASCII のみ内容は US-ASCII に畳む
+（<code>"a".force_encoding("KOI8-R").to_sym == :a</code>）、US-ASCII / UTF-8 名は
+文字列で、他は <code>(bytes, encoding)</code> でインターン。<code>IdentifierTable</code>
+（<code>id_table.rs</code>）は UTF-8 名の <code>rev_table</code>、バイナリ名の
+<code>rev_table_bytes</code>、前方の <code>table: Vec&lt;IdentName&gt;</code>、バイトインターンした
+シンボルの出自エンコーディングを持つ <code>enc_map</code> からなり、
+<code>LazyLock&lt;RwLock&lt;_&gt;&gt;</code> のグローバル。<code>IdentId::compare</code> は id の一致で
+read lock を取る前に短絡する。</li>
+<li><code>%</code>（<code>rem</code>）は Hash 1 個なら名前参照の源として <code>format_by_args</code> へ
+（<code>%{name}</code> と <code>%&lt;name&gt;spec</code> の両方）、Array は splat、それ以外は
+<code>to_ary</code> を試してから包む。<code>Kernel#format</code> と共有。JIT 特殊化は無い。</li>
+<li><code>*</code> は overflow ガード後 <code>RStringInner::repeat</code> で、<code>cr</code> を再走査せず
+解析的に保つ。</li>
+<li><code>split</code> は <code>$~</code> の haystack を設定してコピー無しのスナップショットを使い、
+非 UTF-8 で空セパレータなら <code>iter_char_bytes</code> の経路。</li>
+<li><code>lines</code> / <code>each_line</code> は<strong>ブロックが走る前に</strong>全行を実体化する
+（<code>build_lines</code>）ので、ブロックがレシーバを変えても全ビューが同じ
+frozen root を指す。</li>
+<li><code>scan</code> / <code>gsub</code> / <code>sub</code> は先に <code>string_snapshot</code> を取り、各 match 結果は
+スナップショットの共有ビュー、<code>$~</code> も同じバッファを共有する。</li>
+<li><code>Array#pack</code> の <code>buffer:</code> は <code>extend_from_slice_merge_cr</code>、<code>Array#join</code> は
+<code>from_vec_cr</code> を使う。</li>
+<li><code>string_alloc_func</code> は空の <strong>ASCII-8BIT</strong> 文字列を作り、<code>String.new</code> は
+汎用の <code>Class#new</code> を通るのでサブクラスの <code>initialize</code> 上書きが効く。</li>
+</ul>
+<hr>
+<h2 id="5-jit-の経路"><a class="header" href="#5-jit-の経路">5. JIT の経路</a></h2>
+<h3 id="51-登録されているインライン生成器"><a class="header" href="#51-登録されているインライン生成器">5.1 登録されているインライン生成器</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>メソッド</th><th>生成器</th><th>出るもの</th></tr>
+</thead>
+<tbody>
+<tr><td><code>==</code> / <code>===</code> / <code>eql?</code></td><td><code>string_eq_gen</code></td><td>無し — 定数畳み込み</td></tr>
+<tr><td><code>!=</code>（基本演算）</td><td><code>string_ne_gen</code></td><td>無し — 定数畳み込み</td></tr>
+<tr><td><code>&lt;&lt;</code></td><td><code>string_shl_gen</code></td><td><code>emit_string_shl</code></td></tr>
+<tr><td><code>bytesize</code></td><td><code>string_bytesize</code></td><td>純 LIR <code>StringLenFixnum</code></td></tr>
+<tr><td><code>getbyte</code></td><td><code>string_getbyte</code></td><td><code>emit_string_getbyte</code></td></tr>
+<tr><td><code>setbyte</code></td><td><code>string_setbyte</code></td><td><code>emit_string_setbyte</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>これ以外の String メソッドはインライン化されていない。特に <code>length</code> /
+<code>empty?</code> / <code>==</code> のバイト比較 emitter は無く、<code>String#length</code> と
+<code>String#empty?</code> は普通の builtin である。</p>
+<h3 id="52----コンパイル時の定数畳み込み"><a class="header" href="#52----コンパイル時の定数畳み込み">5.2 <code>==</code> / <code>!=</code>: コンパイル時の定数畳み込み</a></h3>
+<p>右辺のクラスがコンパイル時に分かっていて、それが <code>String</code> でも <code>to_str</code> を
+持つクラスでもなければ（<code>store.no_to_str(rhs_class, class_version)</code>）、比較
+全体をコンパイル時定数の <code>false</code> / <code>true</code> に畳む — 至る所にある <code>str == nil</code>
+がこれ。クラスは二項演算のインラインキャッシュ由来の推測なので
+<code>guard_class</code> を出し、後からの（再）定義はインライン dispatch が既に出して
+いる class-version ガードが捕まえる。結果は <code>state.def_C</code> で登録するので、
+値としての利用は抽象状態から読み、分岐での利用は静的に解決される（素の
+<code>CondBr</code> は真偽で、融合した <code>BinCmpBr</code> は <code>binary_cmp_br</code> で）。<code>no_to_str</code>
+はクラス × class_version でメモ化され、JIT コンパイル中に global method
+cache の <code>RefCell</code> が借用中でも呼べるよう、キャッシュしない祖先走査で
+解決する。</p>
+<h3 id="53-bytesize-型付き-lir-マクロ命令"><a class="header" href="#53-bytesize-型付き-lir-マクロ命令">5.3 <code>bytesize</code>: 型付き LIR マクロ命令</a></h3>
+<pre><code>movq d, [b + RVALUE_OFFSET_ARY_CAPA]
+cmpq d, STRING_INLINE_CAP
+cmovgtq d, [b + RVALUE_OFFSET_HEAP_LEN]
+salq d,1 ; orq d,1
+</code></pre>
+<p>共有文字列の <code>capa</code> は <code>isize::MAX</code> と読めるのでヒープ長のロードに回り、
+それは <code>SharedContent::len</code> である — 「共有タグは正でなければならない」
+要件の出所。aarch64 は <code>csel gt</code>。</p>
+<h3 id="54-getbyte--setbyte"><a class="header" href="#54-getbyte--setbyte">5.4 <code>getbyte</code> / <code>setbyte</code></a></h3>
+<p><code>emit_string_getbyte</code>: 添字の untag、<code>cmp capa, 32</code> + <code>cmovgt</code> の対で
+<code>(len, ptr)</code> の inline / heap 選択、<code>cmovs</code> で負添字の補正、符号無し境界
+検査（まだ負の添字も同時に捕まえる）、<code>movzxb</code> + Fixnum タグ。<strong>範囲外は
+インラインで nil</strong> を返すので <code>while b = s.getbyte(i)</code> の終端で deopt しない。
+共有検査は overlay により不要。</p>
+<p><code>emit_string_setbyte</code>: frozen（<code>0b010</code>）／chilled（<code>0b100</code>）のレシーバと
+範囲外添字で deopt。<strong>共有レシーバは deopt せず detach して再試行する。</strong>
+<code>s = lit.dup; s.setbyte(..)</code> では共有ミスが慢性化し（dup した文字列ごとに
+1 回）、side-exit のエスカレーションが無条件になった今、deopt のたびに
+呼び出し元の連鎖全体を歩いて変換してしまう（ruby-xor の退行）。out-of-line
+経路は <code>runtime::str_detach</code>（素の malloc + memcpy、Value 確保無し、GC 無し）
+を呼んで <code>reload</code> に戻る。<strong>cr キャッシュはインラインで整合を保つ</strong>:
+SevenBit + バイト &lt; 0x80 は SevenBit のまま、それ以外は <code>STRING_CR_OFFSET</code> に
+<code>Unknown</code> を書く（<code>RStringInner::set_byte</code> と同じ規則）。</p>
+<h3 id="55---最大のもの"><a class="header" href="#55---最大のもの">5.5 <code>&lt;&lt;</code> — 最大のもの</a></h3>
+<p><code>string_shl_gen</code> は証明済みのレシーバクラスを要求し、引数クラスから
+<code>StringShlHint</code>（<code>Integer → Fixnum</code>、<code>String → Str</code>、それ以外 <code>Both</code>）を
+導いて使わない経路を出さない。レシーバクラスの制限は要らない（String
+サブクラスも同じ builtin に解決する）。<code>emit_string_shl</code> の doc コメントが
+正式な説明で、要点は:</p>
+<p><strong>Fixnum バイト経路</strong>: 引数が Fixnum、レシーバが frozen / chilled でない、
+バイトが 0..=255、エンコーディングタグが <code>STRING_TY_MAX_INLINE_SHL</code>
+（= <code>UsAscii</code> = 2）以下 — Ascii8 / UTF-8 / US-ASCII では 7 ビットの
+コードポイントがそのままバイトで、UTF-16/32 は 2/4 バイト、US-ASCII より
+先は高速経路で組めない多バイト列がある — 高位バイトはさらに Ascii8
+（タグ 0）に絞る。共有レシーバは fallback（この経路は detach しない）。
+inline / heap の格納と容量検査（満杯は fallback — 成長で deopt しては
+<strong>いけない</strong>）。cr の畳み込み: ASCII バイトはキャッシュを保ち、高位バイトは
+Unknown を書く。</p>
+<p><strong>String 引数経路</strong>: 引数が <code>ObjTy::STRING</code> のヒープオブジェクト、レシーバが
+frozen / chilled でない。タグが等しいときは両方<strong>ペイロード無し</strong>
+（<code>&lt;= 6</code>）、<strong>不一致</strong>のときは両方 ASCII 互換（<code>&lt;= 2</code>）で断片が SevenBit
+キャッシュ済み、レシーバが SevenBit か Valid のキャッシュ済み — これは
+<code>Encoding.compatible?</code> がレシーバのエンコーディングに解決するケース
+（コメントは「erubi のバッファの形」と呼ぶ）。断片の <code>cr</code> が単に未キャッシュ
+なら fallback するが、ヘルパが分類してキャッシュするので、同じ断片は
+<strong>2 回目の追記から</strong>インラインになる。<strong>共有レシーバは out-of-line の
+<code>str_detach</code> + 再試行</strong>で fallback ではない（「共有は <code>dup</code> ごとの出来事で、
+高速経路を永久に離れる理由ではない」）。<strong>引数</strong>は共有でも overlay 経由で
+正しく読める。両側の inline / heap 選択、容量検査、バイトコピーループ
+（<code>s &lt;&lt; s</code> は重ならない: 元 <code>[0,len)</code>、先 <code>[len,2len)</code>）、生きているスロット
+（inline なら <code>capa</code>、あふれなら <code>heap_len</code>）への長さ書き戻し。
+<strong>cr の畳み込みはレジスタ内で</strong> <code>RStringInner::extend</code> と同じ: <code>sub 1</code> で
+SevenBit→0、Valid→1、Unknown はラップ、Broken→2 とし、<code>ja</code> 1 つで「整形
+でない」を捕まえ、2 つの <code>or</code> で SevenBit か Valid を決める。</p>
+<p>fallback は生成コードの中で <code>string_shl(vm, globals, recv, arg)</code> を
+<strong>deopt 無しで</strong>末尾呼び出しし、builtin の完全な意味論を運ぶ。</p>
+<p>レイアウト定数 <code>STRING_CR_OFFSET</code> / <code>STRING_TY_OFFSET</code> /
+<code>STRING_TY_MAX_INLINE_SHL</code> / <code>Encoding::tag()</code> は
+<code>inline_shl_encoding_tags_are_pinned</code> テストが固定する。振る舞いは
+<code>tests/string_bytes.rs</code> が全ケースでバイト列・エンコーディング・<strong>キャッシュ
+された code range</strong>（<code>valid_encoding?</code> / <code>ascii_only?</code> 越しに観測）を CRuby
+オラクルと突き合わせる。トップレベルの main スクリプトは JIT されないので、
+各ホットな追記ループは 20 回の呼び出し閾値を越える <code>def</code> の中に置く必要が
+ある、とファイル先頭が注意している。</p>
+<h3 id="56-hash-の-string-キー"><a class="header" href="#56-hash-の-string-キー">5.6 Hash の String キー</a></h3>
+<p><code>Hash#[]</code> のインライン probe は、キークラスが <code>String</code> ちょうどなら
+<code>string_digest_c</code>（バイト列の wyhash、挿入時と同じ）と <code>string_key_eq_c</code>
+（同一性 → STRING×STRING バイト比較）を葉ヘルパにして機械語で探索する。
+再定義された <code>String#hash</code> はバケッティングに一切使われない。frozen String は
+inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも <code>h["k"] = v</code> の
+格納キー（<code>Value::frozen_hash_key</code> が複製して freeze）も frozen なので
+<code>{"content-type" =&gt; "text/plain"}</code> は boxed map を作らない（134 → 57 ns）。
+詳細は <a href="hash.html">hash.md</a> §1.1、§1.3、§4.2。</p>
+<hr>
+<h2 id="6-ruby-で書かれているメソッド"><a class="header" href="#6-ruby-で書かれているメソッド">6. Ruby で書かれているメソッド</a></h2>
+<p><code>builtins/string.rb</code>:</p>
+<ul>
+<li><code>include Comparable</code> は <code>between?</code> / <code>clamp</code> を得るため<strong>だけ</strong>。順序演算子
+は native のままで、クラス自身のメソッドがモジュールより勝つので
+<code>&lt;</code> / <code>&lt;=</code> / <code>&gt;</code> / <code>&gt;=</code> は遅い <code>&lt;=&gt;</code> 経由に落ちない。</li>
+<li><code>to_s</code> / <code>to_str</code>、<code>insert</code>、<code>prepend</code>、<code>chop</code> / <code>chop!</code>、<code>delete_suffix</code> /
+<code>!</code>、<code>partition</code> / <code>rpartition</code>、<code>codepoints</code> / <code>each_codepoint</code>、<code>clear</code>
+（<code>bytesplice</code> 経由）、<code>upto</code>。</li>
+<li><code>concat</code> / <code>append</code> は <code>rb_str_concat_multi</code> の実装で、引数が 2 つ以上なら
+先にバッファに集めてからつなぐので、レシーバをエイリアスする引数は
+入口の値で寄与する（<code>str.concat str, str</code> は 4 倍でなく 3 倍）。</li>
+<li><code>each_byte</code> は<strong>明示的に性能上の選択</strong>で、<code>bytes.each(&amp;block)</code> でなく素の
+<code>while</code> ループ。前者は bytesize 個の Array と Proc を呼び出しごとに作って
+いた。ここでは JIT が <code>bytesize</code> / <code>getbyte</code> / <code>yield</code> をインライン化し、
+「バイトあたり約 3 倍速い」。</li>
+<li><code>upto</code> は CRuby の 2 つの特例（全桁数字の端点は整数として、1 文字 ASCII の
+端点はバイトで反復）を再現する。</li>
+<li><code>-@</code> / <code>dedup</code> は <code>frozen? ? self : dup.freeze</code>。<strong>重複排除テーブル無し</strong>。
+<code>+@</code> は chilled に Ruby レベルの述語が無いため Rust に残っている。</li>
+</ul>
+<hr>
+<h2 id="7-cruby-との実装差異"><a class="header" href="#7-cruby-との実装差異">7. CRuby との実装差異</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>項目</th><th>CRuby</th><th>monoruby</th></tr>
+</thead>
+<tbody>
+<tr><td>埋め込み文字列</td><td><code>RSTRING_EMBED</code>、64 ビットで約 24 バイト</td><td><strong>32 バイト</strong>。fork した <code>SmallVec&lt;[u8; 32]&gt;</code> が 64 バイトの RValue セル内</td></tr>
+<tr><td>共有文字列</td><td><code>STR_SHARED</code> + RString の <code>shared</code> フィールド</td><td>あふれた SmallVec のフィールドに重ねた <code>SharedContent</code>、<code>capacity == isize::MAX</code> でタグ。<strong>読み取り専用の JIT 命令が共有検査を要らないよう</strong>に設計</td></tr>
+<tr><td>共有の方針</td><td>積極的（<code>rb_str_new_shared</code>、<code>RSTRING_EMBED_LEN_MAX</code> 超の <code>rb_str_substr</code>）</td><td><code>len &gt; 32</code> <strong>かつ</strong>親が既に共有かヒープあふれのときだけ</td></tr>
+<tr><td>root</td><td>共有の親自身が共有でありうる（連鎖、<code>rb_str_shared_root</code> で解決）</td><td>隠れた <strong>frozen</strong> root。sharer は連鎖しない。frozen な親は自分自身が root</td></tr>
+<tr><td>CoW</td><td><code>rb_str_modify</code> → <code>str_make_independent</code></td><td><code>owned_mut()</code> / <code>uniquify()</code> の単一入口</td></tr>
+<tr><td><code>rb_fstring</code> の重複排除</td><td>pragma のリテラル<strong>と</strong>実行時の <code>-"str"</code> / <code>String#-@</code> / Hash キーに適用</td><td>コンパイル時のリテラルプール <code>Store::frozen_str_pool</code>（<code>(bytes, encoding)</code> キー）<strong>のみ</strong>。<code>String#-@</code> は素の <code>dup.freeze</code>（<strong>実行時の重複排除無し</strong>）。Hash の String キーは格納ごとに <code>dup</code> + <code>freeze</code> でインターンしない</td></tr>
+<tr><td>chilled リテラル</td><td>CRuby 3.4 の <code>STR_CHILLED</code></td><td>ヘッダフラグのビット 7 <code>CHILLED_LITERAL_BIT</code>、<code>Symbol#to_s</code> 用の別の <code>is_chilled</code> ビット、<code>--debug-frozen-string-literal</code> の出自テーブル</td></tr>
+<tr><td>coderange</td><td><code>ENC_CODERANGE_*</code> を RBasic のフラグにキャッシュ</td><td>JIT 既知オフセットの <code>Cell&lt;CodeRange&gt;</code>（<code>repr(u8)</code>）。<strong>遅延</strong>計算で、追記・部分文字列・repeat では再計算でなく O(1) で畳む</td></tr>
+<tr><td><code>String#hash</code></td><td>seeded SipHash。fstring 側でキャッシュ</td><td>seeded SipHash（<code>DefaultHasher</code> + プロセスごとの <code>RandomState</code>）。<strong>String ごとのキャッシュ無し</strong>（<a href="../yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a> §5.2 が未解決コストとして挙げる）</td></tr>
+<tr><td>Hash キーのバケッティング</td><td><code>any_hash</code> はサブクラスでも内容をハッシュ、<code>rb_any_cmp</code> は <code>String</code> ちょうどのときだけバイト比較</td><td>同じ分割: <code>string_digest</code> は無条件に内容、<code>string_key_eq</code> / <code>is_plain_rstring_inner</code> がバイト比較をクラス一致でゲート</td></tr>
+<tr><td><code>opt_str_freeze</code></td><td>あり</td><td>あり — <code>StringFreeze</code> 命令（§3.5）</td></tr>
+<tr><td><code>opt_str_uminus</code></td><td>あり</td><td><strong>無し</strong></td></tr>
+<tr><td>エンコーディング</td><td>約 100 種の本物のコーデック</td><td>native コーデックは <strong>UTF-8, US-ASCII, ASCII-8BIT, UTF-16LE/BE, UTF-32LE/BE, ISO-8859-1..16, EUC-JP, Shift_JIS / CP932 / Windows-31J, ISO-2022-JP（<code>encoding_rs</code>）</strong>。他は名前だけ保持（<code>Other</code> = ASCII 非互換のダミー、<code>NamedByte</code> = 約 38 の ASCII 互換コードページで、格納と文字反復は ASCII-8BIT として振る舞い <code>#name</code> / <code>#inspect</code> / ASCII 互換性だけが違う）</td></tr>
+<tr><td>EUC-JP / Shift_JIS の文字反復</td><td>完全な <code>mbclen</code></td><td><code>classify</code> と <code>char_length</code> は native に復号するが、<code>CharByteIter</code> は<strong>バイト単位</strong>で進む。<a href="../encoding_char_iteration_design.html"><code>../encoding_char_iteration_design.md</code></a> が埋めようとしている穴</td></tr>
+<tr><td>非 UTF-8 上の正規表現</td><td>onigmo の多エンコーディング</td><td>バイト → <code>U+00XX</code> 代理写像で UTF-8 専用の <code>regex</code> クレートに掛ける（<code>regex_view</code> / <code>from_mapped_utf8</code>）。EUC-JP / SJIS はバイト単位の近似</td></tr>
+<tr><td>宣言エンコーディング下の不正バイト</td><td>許容、coderange BROKEN</td><td>同じ（<code>content</code> は不透明なバイトバッファ、<code>ty</code> は情報のみ）</td></tr>
+<tr><td><code>str_mod_check</code></td><td>ポインタ + 長さ</td><td>長さのみ（同じ長さの in-place 編集でも再確保するため）</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="8-テストと関連文書"><a class="header" href="#8-テストと関連文書">8. テストと関連文書</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>場所</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>tests/string_bytes.rs</code></td><td><code>&lt;&lt;</code> / <code>setbyte</code> のバイト・エンコーディング・code range を CRuby と突き合わせ</td></tr>
+<tr><td><code>tests/hash_string_keys.rs</code></td><td>String キーの Hash 経路</td></tr>
+<tr><td><code>tests/literal.rs</code></td><td>リテラルの評価</td></tr>
+<tr><td><code>string.rs</code> の <code>shared_string_tests</code> / <code>inline_shl_encoding_tags_are_pinned</code></td><td>overlay のレイアウト、CoW の分離、タグの固定</td></tr>
+<tr><td><a href="hash.html">hash.md</a></td><td>String キーの probe、<code>frozen_hash_key</code></td></tr>
+<tr><td><a href="../inline.html"><code>../inline.md</code></a></td><td>インライン生成器の契約（trial inlining、<code>is_simple()</code>）</td></tr>
+<tr><td><a href="../lir.html"><code>../lir.md</code></a></td><td><code>StringLenFixnum</code> の LIR</td></tr>
+<tr><td><a href="../gc.html"><code>../gc.md</code></a></td><td>共有 root の write barrier、<code>young_child_exists</code></td></tr>
+<tr><td><a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a></td><td><code>(STRING_CLASS, "freeze")</code> / <code>"!="</code> の BOP</td></tr>
+<tr><td><a href="../chain_deopt.html"><code>../chain_deopt.md</code></a> / <a href="../deopt_log.html"><code>../deopt_log.md</code></a></td><td><code>setbyte</code> / <code>&lt;&lt;</code> が deopt でなく detach + 再試行を選ぶ背景</td></tr>
+<tr><td><a href="../c_extention.html"><code>../c_extention.md</code></a></td><td><code>nul_terminated_buf_ptr</code> と FFI</td></tr>
+</tbody>
+</table>
+</div>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../design/runtime_optimization/hash.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../design/runtime_optimization/regexp.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../design/runtime_optimization/hash.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../design/runtime_optimization/regexp.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-09f2665d.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

@@ -1,0 +1,655 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Regexp - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../../searchindex-a0bcb149.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-8a4c8fb9.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="regexp-の実装と最適化"><a class="header" href="#regexp-の実装と最適化">Regexp の実装と最適化</a></h1>
+<p>Regexp は graphql の実行時間の 3 分の 1 を占め（<code>perf</code> で 33.9 %）、
+StringScanner を介して activerecord / rack のパーサ群にも効いてくる
+（<a href="../yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a>
+§5.6、§8.1）。</p>
+<p>この文書は、正規表現エンジンとコンパイル済みパターンのキャッシュ、<code>$~</code> と
+<code>MatchData</code> の置き方、正規表現を使う <code>String</code> メソッドがどこで高速経路を
+取り、どこで取らないかをまとめ、最後に CRuby との実装差異を並べる。
+String 側の表現（共有部分文字列、code range、<code>regex_view</code>）は
+<a href="string.html">string.md</a> が前提になる。共通の前提は <a href="README.html">README.md</a>。</p>
+<hr>
+<h2 id="1-エンジンとコンパイル済みパターン"><a class="header" href="#1-エンジンとコンパイル済みパターン">1. エンジンとコンパイル済みパターン</a></h2>
+<h3 id="11-onigmo-regex-クレート"><a class="header" href="#11-onigmo-regex-クレート">1.1 <code>onigmo-regex</code> クレート</a></h3>
+<p>エンジンは CRuby と同じ Onigmo で、<code>onigmo-regex</code> クレート（git 依存）が
+束ねている。<code>Regex</code> は生の <code>re_pattern_buffer</code> ポインタ、コンパイル時の
+パターンバイト列、オプション語、<code>OnigmoEncoding</code>、コンパイル時の診断
+<code>Vec&lt;String&gt;</code> を持ち、<code>unsafe impl Send + Sync</code> なので、プロセス全体で 1 つの
+<code>Arc&lt;Regex&gt;</code> をグリーンスレッド間で共有できる。</p>
+<p>構築は <code>Regex::new_bytes_with_encoding</code> の 1 本に集約され、<code>onig_new</code> を
+<code>OnigSyntaxRuby</code> で呼び、Onigmo の <code>onig_syntax_warn</code> 出力をフックで拾って
+<code>warnings</code> に溜める。</p>
+<p>照合の入口は 3 つ:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>入口</th><th>Onigmo</th><th>Region</th></tr>
+</thead>
+<tbody>
+<tr><td><code>captures_from_pos</code></td><td><code>onig_search</code></td><td><strong>呼び出しごとに新規確保</strong>（<code>onig_region_new</code> / <code>free</code> が 1 回ずつ）</td></tr>
+<tr><td><code>match_at_with_region</code></td><td><code>onig_match</code>（アンカー、前方探索無し）</td><td>呼び出し側が持つ再利用 <code>Region</code></td></tr>
+<tr><td><code>search_with_region</code></td><td><code>onig_search</code></td><td>同上</td></tr>
+</tbody>
+</table>
+</div>
+<p>後ろ 2 つは StringScanner のために追加された（§3.6）。<code>Captures</code> は
+<code>Region</code> と haystack への <code>&amp;str</code> を持ち、グループ参照はレジスタ配列を直接
+読むのでグループごとの確保は無い。</p>
+<h3 id="12-regexpinner"><a class="header" href="#12-regexpinner">1.2 <code>RegexpInner</code></a></h3>
+<pre><code>regex: Arc&lt;Regex&gt;            // 共有されるコンパイル済みパターン
+source: Arc&lt;[u8]&gt;            // CRuby から見える #source の生バイト列（\u{} 展開前）
+encoding: OnigmoEncoding     // エンジンが実際に使うエンコーディング（UTF8 / ASCII のみ）
+declared_encoding: Encoding  // Regexp#encoding
+fixed_encoding: bool         // Regexp#fixed_encoding?
+initialized: bool            // Regexp.allocate の placeholder だけ false
+</code></pre>
+<p>重いフィールドは両方 <code>Arc</code> なので <code>clone</code> は参照カウント 2 回。<code>PartialEq</code> は
+<code>Arc::ptr_eq</code> で短絡する。<strong><code>Value</code> を 1 つも持たない</strong>ことが <code>ObjTy::REGEXP</code>
+を GC で昇格可能にしている（§2.6）。</p>
+<h3 id="13-プロセス全体の正規表現キャッシュ-regex_cache"><a class="header" href="#13-プロセス全体の正規表現キャッシュ-regex_cache">1.3 プロセス全体の正規表現キャッシュ <code>REGEX_CACHE</code></a></h3>
+<p><code>static REGEX_CACHE: LazyLock&lt;RwLock&lt;HashMap&lt;(String, u32, OnigmoEncoding), Arc&lt;Regex&gt;&gt;&gt;&gt;</code>。キーは <strong><code>\u{}</code> 展開後のエンジン向けパターン文字列、Onigmo
+だけのオプションビット、エンジンエンコーディング</strong>。Ruby だけのビット
+（<code>NOENCODING</code> / <code>FIXEDENCODING</code> / <code>KCODE_*</code>）はキーを作る前に落とすので
+<code>/x/</code> と <code>/x/n</code> はコンパイル済み <code>Regex</code> を共有する
+（<code>ruby_only_option_bits_dont_split_cache</code> テスト）。</p>
+<p>探索は <code>RegexpInner::with_option_kcode_source</code> の 1 本に集まっていて、
+インタプリタのあらゆる構築経路（<code>with_option</code> / <code>with_option_and_encoding</code> /
+<code>with_option_kcode</code> / <code>from_escaped</code>）がここを通る。ヒットなら <code>Arc</code> を
+複製して<strong>コンパイル警告を再キューする</strong>（CRuby は同じパターンを
+コンパイルするたびに警告し直す）。ミスならコンパイルして挿入し、Onigmo の
+エラーを CRuby の <code>"&lt;msg&gt;: /&lt;source&gt;/"</code> に整形する。</p>
+<p>コストの注記: 探索は常に<strong>書き込みロック</strong>を取り、ヒットでもキーの
+<code>String</code> を確保する（<code>reg_str.clone()</code>）。マップは<strong>決して evict されない</strong>
+ので、<code>Regexp.new</code> で無限に異なるソースを作るプログラムは際限なく育つ。</p>
+<h3 id="14-第-2-のキャッシュnative-エンコーディング"><a class="header" href="#14-第-2-のキャッシュnative-エンコーディング">1.4 第 2 のキャッシュ（native エンコーディング）</a></h3>
+<p><code>RegexpInner::native_regex</code> は <code>NATIVE_CACHE</code>（生ソースバイト列 + オプション</p>
+<ul>
+<li>コーデックがキー）を持ち、被照合文字列が EUC-JP / Windows-31J / ISO-8859-* /
+KOI8 / Windows-125x のとき、そのコーデックでパターンを再コンパイルする。
+こちらは <code>read()</code> の高速経路が先にある。コーデック対応表 <code>onigmo_encoding_for</code>
+は多バイトの <code>NamedByte</code> コーデック（Big5 / GB18030 / EUC-KR）を意図的に
+外している — monoruby の文字イテレータが Onigmo の境界と食い違うため。
+これが CRuby の <code>rb_reg_prepare_re</code> のエンコーディング別再コンパイル
+キャッシュに相当する（§5）。</li>
+</ul>
+<h3 id="15-onigmo-に渡す前のソース前処理"><a class="header" href="#15-onigmo-に渡す前のソース前処理">1.5 Onigmo に渡す前のソース前処理</a></h3>
+<ul>
+<li><code>pre_validate_regex</code>: Onigmo が黙って受けてしまう入力に CRuby の文言で
+<code>RegexpError</code> を出す（末尾の <code>\</code>、桁ゼロの <code>\x</code>、閉じていない <code>\p{</code>）。</li>
+<li><code>expand_unicode_braces</code>: Onigmo の <code>\u</code> は 4 桁ちょうどしか受けないので
+<code>\u{XXXX}</code> / <code>\u{XX YY}</code> を <code>\uHHHH</code>（BMP）か生 UTF-8（補助面）に書き換え、
+<code>\uXYZ</code> 形のエラーは CRuby の文言で出す。<code>\u</code> を含まなければ即座に抜ける。</li>
+<li><code>resolve_declared_encoding</code> 系: CRuby のエンコーディング解決の梯子
+（n → u/e/s → FIXEDENCODING → 非 ASCII 内容 → US-ASCII 非固定）。</li>
+</ul>
+<h3 id="16-executor-無しでのコンパイル時警告"><a class="header" href="#16-executor-無しでのコンパイル時警告">1.6 <code>Executor</code> 無しでのコンパイル時警告</a></h3>
+<p>bytecodegen はリテラルを <code>Executor</code> の届かないところでコンパイルするので、
+<code>thread_local! PENDING_REGEXP_WARNINGS</code> に溜めて <code>queue_regexp_warnings</code> /
+<code>drain_pending_warnings</code> で受け渡す。<code>Executor::flush_compile_warnings</code> が
+<code>Regexp.new</code> / <code>Regexp#initialize</code> / <code>eval</code> / <code>Binding</code> / スクリプトコンパイル
+後に流す。</p>
+<h3 id="17-regexpnew--escape--union--その他"><a class="header" href="#17-regexpnew--escape--union--その他">1.7 <code>Regexp.new</code> / <code>.escape</code> / <code>.union</code> / その他</a></h3>
+<ul>
+<li><code>regexp_new</code>: レシーバが <code>REGEXP_CLASS</code> ちょうどなら直接構築（allocate +
+initialize の往復無し）。サブクラスは allocate してから <code>#initialize</code> を
+dispatch し、インスタンスを <code>vm.temp_push</code> で root する。</li>
+<li><code>Regexp.allocate</code> は空パターンをコンパイルし（必ずキャッシュヒット）、
+<code>initialized = false</code> を立てる。<code>#match</code> / <code>#=~</code> / <code>#options</code> は
+<code>TypeError</code>、<code>#==</code> / <code>#hash</code> は動く。</li>
+<li><code>Regexp.escape</code> / <code>.quote</code> はバイト単位の一巡 <code>escape_bytes</code>
+（<code>rb_reg_quote</code> 相当、<code>Vec::with_capacity(len)</code>）。「壊れた」文字列も
+raise せずバイト単位でエスケープする。</li>
+<li><code>Regexp.union</code>: 空 → <code>/(?!)/</code>、<code>Regexp</code> 1 個 → <strong>再コンパイル無しで
+そのまま返す</strong>、<code>to_regexp</code> に応える 1 個 → その regexp。それ以外は
+<code>parts.join("|")</code> して 1 回コンパイル（キャッシュが効きうる）。
+エンコーディング合成の状態機械 <code>UnionEnc</code> / <code>ArgEnc</code> がある。</li>
+<li><code>Regexp.linear_time?</code> は <code>\1..\9</code> / <code>\k</code> / <code>\g</code> の純粋な構文走査。
+<code>Regexp.timeout</code> / <code>timeout=</code> はスレッドローカルに<strong>保存されるだけで
+強制されない</strong>（ReDoS の中断は無い）。</li>
+</ul>
+<h3 id="18-bytecodegen-でのリテラル"><a class="header" href="#18-bytecodegen-でのリテラル">1.8 bytecodegen でのリテラル</a></h3>
+<ul>
+<li>パーサ（<code>prism_backend.rs</code>）は <code>NodeKind::RegExp(parts, flags, is_const)</code> を
+作る。フラグ抽出 <code>regex_flags_from_closing</code> は <code>i m x n u e s</code> だけを残し、
+<strong><code>o</code> を落とす</strong>（§5）。</li>
+<li><strong>非補間リテラル</strong>（<code>is_const</code>）: <code>const_regexp</code> が bytecode 生成時に
+<strong>1 回だけ</strong>コンパイルし、結果の <code>Value</code> を frozen にして <code>emit_literal</code> に
+渡す。<code>REGEXP_CLASS.is_always_frozen()</code> が真なので命令は
+<strong><code>FrozenLiteral</code></strong>（<code>Literal</code> ではない）: VM は共有オブジェクトを
+複製無しでロードし、JIT の <code>TraceIr::FrozenLiteral</code> は <code>def_lit2gp</code> で
+GP レジスタへの即値ロードになる。<strong><code>/re/</code> を回すループは 1 反復あたり
+確保ゼロ・エンジン仕事ゼロ</strong>で、同じサイトの <code>/re/.equal?(/re/)</code> が成り
+立つ。リテラルのコンパイルエラーはロード時の<strong>構文エラー</strong>になる。</li>
+<li><strong>補間リテラル</strong>: <code>gen_regexp</code> が <code>ConcatRegexp</code> 命令を出し、オプション語
+は <code>(?imx)</code> のソース接頭辞ではなく先頭の Fixnum オペランドで渡す
+（<code>(?n)</code> は Onigmo のグループオプションとして無効、かつ <code>Regexp#source</code> に
+フラグが見えてはいけない）。実行時の <code>runtime::concatenate_regexp</code> は
+まず通常の <code>"#{}"</code> 結合（<code>concatenate_string_inner</code>、<a href="string.html">string.md</a>
+§4.2）で補間 <strong>String</strong> を組み、そのバイト列と lossy な UTF-8 ビューを
+<code>with_option_kcode_source</code> に渡す。つまり<strong>補間 regexp は評価のたびに
+組み直されるが、補間結果が同じなら Onigmo のコンパイルは <code>REGEX_CACHE</code> が
+省く</strong>。VM / JIT の lowering は素の実行時呼び出し。</li>
+<li>条件式の裸のリテラル（<code>if /pat/</code>）はパーサが <code>regex =~ $_</code> に脱糖する。
+<code>/(?&lt;name&gt;…)/ =~ str</code> の名前付きキャプチャのローカル束縛は、パーサが
+<code>Regexp.last_match(:name)</code> の代入列に書き換える。</li>
+</ul>
+<hr>
+<h2 id="2--と-matchdata"><a class="header" href="#2--と-matchdata">2. <code>$~</code> と <code>MatchData</code></a></h2>
+<h3 id="21-lfp_svar-コンテナ"><a class="header" href="#21-lfp_svar-コンテナ">2.1 <code>LFP_SVAR</code> コンテナ</a></h3>
+<p>フレームスロット <code>LFP_SVAR</code>（= 16）の <code>0</code> は「未確保」の番兵で、非ゼロなら
+<strong>2 要素の <code>Array</code> <code>[$~, $_]</code></strong>（<code>SVAR_BACKREF = 0</code> / <code>SVAR_LASTLINE = 1</code>）。
+所有するのはメソッドを導入するフレームだけで、ブロックと <strong>lambda</strong> は
+<code>outer</code> を辿って LEP に至り、<code>def</code> / クラス本体 / トップレベル /
+<code>define_method</code> 本体で止まる（<code>Lfp::mfp</code>、
+<a href="../stack_frame.html"><code>../stack_frame.md</code></a>）。</p>
+<p>native な builtin フレームは svar スコープを作らない。<code>Executor::current_mfp</code>
+は<strong>動的な</strong> CFP 連鎖を <code>is_native()</code> と <code>is_svar_transparent()</code> のフレーム
+越しに歩く。<code>is_svar_transparent</code> は monoruby 自身の <code>builtins/*.rb</code> から
+コンパイルされた全 iseq に立つので、<code>"wawa".to_enum(:scan, /./).map { $&amp; }</code>
+は monoruby の <code>Enumerable#map</code> が Ruby フレームでも <code>scan</code> の match を見る。</p>
+<p><strong>遅延確保</strong>: <code>svar_container_of</code> はスロットがゼロなら <code>None</code> を返し、
+<code>svar_container_of_create</code> だけが <code>Value::array2(nil, nil)</code> を確保する。
+<code>clear_capture_special_variables</code> は nil を格納するためだけにコンテナを
+作ったりしない。すべてのフレーム設定コード（VM / JIT / invoker、両アーキ）
+がゼロの番兵を書く。</p>
+<p>GC: <code>Lfp::mark_contents</code> は非ゼロのときだけ mark。<code>c.as_array()[SVAR_BACKREF] = val</code> の格納は <code>Array</code> の <code>DerefMut</code> が <code>write_barrier_bulk()</code> を走らせる
+のでバリア済み。</p>
+<p>実行コンテキストごとの上書き <code>root_lep</code> / <code>root_svar</code>: スレッド／ファイバー
+本体は spawner の LEP を持つブロックなので、そこを通して解決すると <code>$~</code> が
+双方向に漏れる。CRuby の <code>ec-&gt;root_lep</code> を鏡写しにしていて、
+<code>FiberInner::svar_isolated</code> で opt-out できる（Enumerator の内部は意図的に
+<strong>共有</strong>のまま）。</p>
+<h3 id="22-フックされたグローバル"><a class="header" href="#22-フックされたグローバル">2.2 フックされたグローバル</a></h3>
+<p><code>$~</code>（get / set、nil か MatchData のみ）、<code>$&amp;</code>、<code>$'</code>、<code>$`</code>、<code>$+</code>、
+<code>$1..$N</code>（<code>IdentId</code> から桁を読む）、<code>$_</code> は全部、格納された 1 つの
+<code>MatchData</code> から<strong>導出する読み手</strong>で、別の格納は無い。<code>$~</code> が設定される
+までは <code>None</code>（<code>defined?</code> が nil）を返し、<code>$~</code> 自身は常に <code>Some</code>。
+<code>stdlib/stringio.rb</code> が <code>rb_lastline_set</code> を真似るための
+<code>__set_lastline_in_caller</code> もある。</p>
+<h3 id="23-matchdatainner--rvalue-のセルに収める"><a class="header" href="#23-matchdatainner--rvalue-のセルに収める">2.3 <code>MatchDataInner</code> — RValue のセルに収める</a></h3>
+<pre><code>regex:    Option&lt;Regexp&gt;        // 8
+heystack: Value                 // 8   (String のスナップショット)
+matches:  SmallVec&lt;[Span; 2]&gt;   // 24
+                                 = 40 ≤ RValue の 48 バイト
+</code></pre>
+<p><code>Span = (u32, u32)</code> で <code>NO_MATCH = (u32::MAX, u32::MAX)</code> が不参加グループ。
+<code>usize</code> 対の半分の幅で、inline 容量 2 は「全体一致のみ」と「キャプチャ 1 つ」
+を位置の確保無しで賄う。被照合文字列は 4 GiB 未満に制限（構築時に assert）。</p>
+<p><strong>コピー無しの haystack スナップショット</strong>: <code>MatchDataInner::snapshot</code> は
+照合側が被照合 <code>Value</code> を知っていれば、それの<strong>共有 copy-on-write 部分文字列</strong>
+（<code>string_substring</code>）として保持し、知らなければ所有コピーにする。
+<code>from_captures_snap</code> が <code>$~</code> のホットな構築子で、<code>Captures::iter</code> から
+中間の位置 <code>Vec</code> 無しで span を組む。アクセサ <code>at_value</code> / <code>pre_match_value</code> /
+<code>post_match_value</code> / <code>captures_values</code> も CoW 部分文字列を返し、
+<code>string_value</code> は<strong>毎回同じ</strong> frozen スナップショットを返す
+（<code>md.string.equal?(md.string)</code>）。<code>at</code> は <code>&amp;[u8]</code> を返す — <code>/n</code> のバイト
+クラス一致で文字境界のスライスをすると <code>extern "C"</code> 境界で abort するため。</p>
+<h3 id="24-一時の-stash-と保存経路"><a class="header" href="#24-一時の-stash-と保存経路">2.4 一時の stash と保存経路</a></h3>
+<ul>
+<li><code>sp_match_regex</code>: 進行中の <code>Regexp</code>。次の <code>save_capture_special_variables</code>
+が名前付きキャプチャ用に付ける。消費されたら消える。</li>
+<li><code>sp_match_haystack</code>: 被照合 String の <code>Value</code>。<code>resolve_haystack</code> は照合側
+の <code>&amp;str</code> が本当にそのバッファを借りているかを<strong>ポインタの包含</strong>で
+検証し、<code>(subject, byte offset)</code> を返す。古い stash は単に <code>None</code> に
+解決してコピーに落ちるだけで、誤帰属はしない。</li>
+<li>両方とも <code>Executor::mark</code> の GC root（<code>MatchData</code> 確保が GC を起こす）。</li>
+<li><code>save_capture_special_variables</code> / <code>_bytes</code> が <code>MatchData</code> を組み、regexp を
+付け、<code>SVAR_BACKREF</code> に格納する。呼び出し側は <code>String#match</code> / <code>=~</code> /
+<code>[]</code> 系 / <code>split</code> / <code>sub</code> / <code>gsub</code> / <code>scan</code>、<code>Regexp#=~</code> / <code>===</code> / <code>match</code>。</li>
+</ul>
+<h3 id="25-matchdata-を確保しない場合"><a class="header" href="#25-matchdata-を確保しない場合">2.5 <code>MatchData</code> を<strong>確保しない</strong>場合</a></h3>
+<ul>
+<li><code>RegexpInner::match_pred</code>: 真偽だけの照合で、<strong><code>$~</code> に触れず <code>MatchData</code>
+も作らない</strong>。<code>Regexp#match?</code>、<code>String#match?</code>、<code>Array#grep</code> /
+<code>Enumerable#grep</code>（grep は <code>$~</code> を乱してはいけない、CRuby 準拠）。</li>
+<li><code>captures_from_pos_no_save</code>: 特殊変数の副作用無しの生の照合。<code>gsub</code> +
+ブロックの先行探索と <code>replace_all_block_inner</code> の走査。</li>
+<li><code>strscan_match</code>: <code>onig_match</code> / <code>onig_search</code> を再利用 region に、<code>$~</code>
+無し（§3.6）。</li>
+<li><code>String#match</code> / <code>Regexp#match</code> は<strong>保存したばかりの <code>$~</code> を返り値として
+再利用</strong>し、別の haystack ビュー上に 2 個目の <code>MatchData</code> を作らない
+（<code>match_one</code> / <code>rmatch</code>）。<code>str.match(re).equal?($~)</code> が CRuby と同じく
+成り立つ。</li>
+</ul>
+<p><strong>避けられていないもの</strong>: <code>str =~ /x/</code>（どちらのレシーバ順でも）は必ず
+確保する。<code>Regexp#=~</code> → <code>find_one</code> → <code>captures</code> → <code>captures_from_pos</code> →
+無条件の <code>save_capture_special_variables</code>。bytecodegen にも JIT にも
+<strong><code>$~</code> の死活解析は無い</strong>ので、JIT されたループ内の <code>if str =~ /x/</code> は
+1 反復あたり <code>MatchData</code> 1 個（+ <code>onig_region_new</code> / <code>free</code> 1 回）を確保する。
+<code>Regexp#===</code>（<code>teq</code>）も <code>find_one</code> を通るので <code>case s when /x/</code> はテストごと
+に <code>MatchData</code> を確保する — CRuby も同じだが、CRuby は busy でない
+<code>MatchData</code> オブジェクトを再利用する（§5）。</p>
+<h3 id="26-gc-での昇格"><a class="header" href="#26-gc-での昇格">2.6 GC での昇格</a></h3>
+<p><code>RValue::is_promotable</code> で <code>ObjTy::REGEXP</code> は <code>TIME</code> / <code>UMETHOD</code> とともに
+昇格可能（「この 3 つは <code>Value</code> を一切持たない」）。remember-on-promote
+（<code>young_child_exists</code>）からも参照無しの腕で除外される。効果は
+<a href="../yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a>
+§8.6（minor GC ごとの REGEXP の mark が erubi で 291 → 5）。
+<code>ObjTy::MATCHDATA</code> は昇格<strong>しない</strong>（regexp と haystack の <code>Value</code> を持ち、
+<code>_ =&gt; false</code> の腕に落ちる）。</p>
+<hr>
+<h2 id="3-vm--jit-の経路と正規表現を使う-string-メソッド"><a class="header" href="#3-vm--jit-の経路と正規表現を使う-string-メソッド">3. VM / JIT の経路と正規表現を使う String メソッド</a></h2>
+<h3 id="30-無いもの"><a class="header" href="#30-無いもの">3.0 無いもの</a></h3>
+<ul>
+<li><strong><code>Regexp</code> にも正規表現駆動の <code>String</code> メソッドにも、インライン生成器・JIT
+intrinsic・LIR ノードは 1 つも無い。</strong> <code>builtins/regexp.rs</code> に <code>add_inline</code> /
+<code>inline_gen2!</code> は無く、<code>codegen/</code> にある regexp 形の機械語は
+<code>ConcatRegexp</code> の実行時呼び出しだけである。</li>
+<li><code>Regexp#===</code> は基本演算表に<strong>無い</strong>（<code>===</code> は Integer / Float / Symbol /
+nil / true / false だけ）。<code>case/when</code> に regexp が来ると <code>Cmp(TEq)</code> →
+<code>cmp_teq_case_values</code> → <code>cmp_teq_values_impl</code> に Regexp の腕が無く、汎用の
+<code>invoke_method(_TEQ)</code> でフルの dispatch になる。<code>OptCase</code>（ジャンプ表）は
+小さな Integer の <code>when</code> が 8 個以上のときだけで、regexp には効かない。</li>
+</ul>
+<h3 id="31-regex_view-の継ぎ目"><a class="header" href="#31-regex_view-の継ぎ目">3.1 <code>regex_view</code> の継ぎ目</a></h3>
+<p><code>RStringInner::regex_view</code> はエンジン向けに UTF-8 として妥当な <code>Cow&lt;str&gt;</code> を
+返す: UTF-8 / US-ASCII / ASCII のみの内容なら <code>check_utf8</code> 経由の<strong>借用</strong>
+ビュー、8 ビット内容を持つバイト指向エンコーディングなら各バイト <code>b</code> を
+<code>U+00bb</code> にした<strong>所有の代理像</strong>（元の 1 バイト ↔ ビューの 1 文字）。述語
+<code>needs_byte_mapping</code> は<strong>宣言された</strong>エンコーディングで決め、バイト列が
+たまたま UTF-8 として妥当かどうかは見ない。逆写像は <code>from_mapped_utf8</code>。
+全 <code>String</code> 正規表現メソッドが <code>mapped</code> フラグを持ち回って結果を戻す。
+<code>check_utf8</code> はキャッシュ済み <code>CodeRange</code> が <code>SevenBit</code> か <code>Utf8 + Valid</code>
+なら O(n) の再検証を飛ばす。</p>
+<h3 id="32-coderange--o1-の分類キャッシュ"><a class="header" href="#32-coderange--o1-の分類キャッシュ">3.2 <code>CodeRange</code> — O(1) の分類キャッシュ</a></h3>
+<p><a href="string.html">string.md</a> §2 の <code>cr</code> が regexp 経路を安くしている当のもの:
+<code>is_ascii_only()</code> が「文字添字 == バイト添字」の全ショートカットをゲートし、
+<code>char_length()</code> は SevenBit で O(1)、<code>Regexp#match</code> は
+<code>code_range() != SevenBit</code> で native コーデック経路が要るかを決め、
+<code>String#match</code> / <code>#match?</code> は ASCII のみのレシーバで <code>chars().count()</code> を
+飛ばす。</p>
+<h3 id="33-バイト--文字オフセット変換"><a class="header" href="#33-バイト--文字オフセット変換">3.3 バイト ↔ 文字オフセット変換</a></h3>
+<p><strong>文字添字 → バイト添字のキャッシュは無い。</strong> 変換は毎回線形走査
+（<code>byte_to_char_index</code> は <code>char_indices().enumerate()</code>、<code>char_to_byte_pos</code> は
+<code>char_indices().nth(cp)</code>、<code>Regexp#match</code> の native 経路は
+<code>iter_char_bytes().take(cp).map(len).sum()</code>）。ASCII のみのショートカットが
+緩和のすべてで、背景と計画は
+<a href="../encoding_char_iteration_design.html"><code>../encoding_char_iteration_design.md</code></a>
+（<code>CharByteIter</code>、「Onigmo coupling」の制限、多エンコーディングの Onigmo
+走査は別件という注記）。</p>
+<h3 id="34-部分文字列の共有と一巡の-splice"><a class="header" href="#34-部分文字列の共有と一巡の-splice">3.4 部分文字列の共有と一巡の splice</a></h3>
+<ul>
+<li><code>string_substring</code>: <code>len &gt; 32</code> で親がヒープ／共有ならコピー無しの CoW
+共有ビュー。全キャプチャ / pre / post 文字列と <code>scan</code> の結果に使う。</li>
+<li><code>string_snapshot</code>: ユーザーコードが生きたレシーバを書き換えても
+<code>invoke_block</code> をまたいで <code>&amp;str</code> を借りられる <strong>frozen</strong> スナップショット。
+<code>scan</code>、<code>gsub</code> + ブロック、<code>gsub</code> + Hash。</li>
+<li><code>check_string_not_modified</code>: CRuby の <code>str_mod_check</code>（長さ基準、
+<code>RuntimeError: string modified</code>）。</li>
+<li><code>RStringInner::splice_all</code>: <code>gsub</code> / <code>scan</code> の全置換を<strong>前方一巡</strong>で適用し、
+N 回の末尾シフト <code>bytesplice_with</code> の <code>O(haystack · matches)</code> を
+<code>O(haystack + Σ replacements)</code> にする（回帰テスト
+<code>gsub_many_matches_linear</code>）。</li>
+<li><code>bytesplice_with</code>: 単一一致の <code>sub</code> 用。両側が SevenBit / Valid で splice
+端点が UTF-8 境界なら変更後の code range 分類を O(1) に短縮。</li>
+</ul>
+<h3 id="35-メソッドごとの注記"><a class="header" href="#35-メソッドごとの注記">3.5 メソッドごとの注記</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>メソッド</th><th>最適化の要点</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Regexp#=~</code></td><td>nil 引数は <code>$~</code> を消して nil（エンジン呼び出し無し）。1 回の <code>from_utf8</code> 検証後 <code>from_utf8_unchecked</code> でバイト列を借り、CoW スナップショットのために被照合を stash。<strong>バイト</strong>オフセットを返す</td></tr>
+<tr><td><code>Regexp#===</code></td><td>nil / Regexp / 非文字列様の引数は照合せず false。Symbol → String、他は <code>to_str</code></td></tr>
+<tr><td><code>Regexp#match?</code></td><td><code>match_pred</code>。<code>MatchData</code> 無し、<code>$~</code> 無し、<code>sp_match_regex</code> 無し</td></tr>
+<tr><td><code>Regexp#match</code></td><td>まずエンコーディング検証。非 SevenBit でコーデックのある被照合は <strong>native コーデックのバイト経路</strong>（<code>.</code> が宣言エンコーディングに従う）、それ以外は借用 UTF-8 経路で、保存したばかりの <code>$~</code> を返す</td></tr>
+<tr><td><code>String#=~</code></td><td>Regexp 右辺が高速経路で<strong>文字</strong>添字を返す。String 右辺は <code>TypeError</code>、他は <code>to_str</code> の前に <code>rhs =~ self</code> を逆 dispatch</td></tr>
+<tr><td><code>String#match</code></td><td>両引数を借用の前に変換（ユーザーの <code>to_str</code> がレシーバを変えうる）。文字 → バイト位置は ASCII のみで O(1)、末尾超えは CRuby どおり clamp</td></tr>
+<tr><td><code>String#match?</code></td><td><code>match_pred</code>。範囲外の位置は clamp せず拒否</td></tr>
+<tr><td><code>String#[]</code> / <code>slice</code>（Regexp）</td><td>名前付きは <code>get_group_members</code> でグループ番号を解決し、最右の参加グループ。<code>$~</code> を設定</td></tr>
+<tr><td><code>String#index</code></td><td><strong>String の needle はエンジンに入らない</strong> — バイト／文字境界の部分文字列探索で <code>$~</code> を触らず（issue #721）、壊れた UTF-8 も許容。Regexp 経路はミス時に <code>$~</code> を消し、末尾のゼロ幅一致を専用に扱う</td></tr>
+<tr><td><code>String#rindex</code></td><td>前方走査ループ。最終的な <code>$~</code> は返す位置での追加 1 プローブで再確立</td></tr>
+<tr><td><code>String#sub</code> / <code>sub!</code></td><td>Hash / 置換 String / ブロックの 3 腕が <code>with_coerced_regexp</code>（Regexp・String（エスケープ）・<code>to_str</code>）に集まる。結果は <code>apply_template_encoding</code> で再タグ</td></tr>
+<tr><td><code>String#gsub</code> / <code>gsub!</code></td><td>ブロック形は <code>replace_all_block</code> が <strong>frozen スナップショットを取る前に生きたレシーバで最初の一致を先行探索</strong>する: 「一致無し」の一般的なケースがスナップショット + splice でなくコピー 1 回で済み、本走査は 0 でなく最初の一致位置から始まる（<code>gsub_block_without_a_match_probes_first</code> テスト）。ブロック結果のエンコーディング互換は文字列化前に検査</td></tr>
+<tr><td><code>String#scan</code></td><td>先に frozen スナップショット。yield する各断片は CoW <code>string_substring</code>。CRuby のゼロ幅一致を落とさないよう <code>captures_iter</code> でなく手動走査。ループ後 <code>$~</code> を<strong>最後の</strong>一致に戻す（終端の不一致で消えるため）</td></tr>
+<tr><td><code>String#split</code></td><td>区切り <code>SepKind::{Awk, Chars, Str, Re}</code>: <strong>空ソースの Regexp は文字分割、単一スペースのソースはリテラル文字列分割に降格し、どちらもエンジンに入らない</strong>。非 UTF-8 + 空区切りの専用文字経路、<code>limit == 1</code> の短絡、CRuby の <code>split_string</code> を写した空フィールドの遅延カウンタ</td></tr>
+<tr><td><code>String#start_with?</code></td><td>Regexp はエンジン（<code>m.start() == 0</code> でアンカー）。<strong>String は生の <code>starts_with</code> バイト検査</strong> + <code>enc_char_boundary</code> で、エンジンも確保も無し</td></tr>
+<tr><td><code>String#end_with?</code></td><td>Regexp は <code>TypeError</code>（CRuby どおり）。String は <code>ends_with</code> + 境界検査</td></tr>
+<tr><td><code>String#include?</code></td><td>2 つの <code>regex_view</code> に <code>str::contains</code></td></tr>
+<tr><td><code>String#tr</code> / <code>tr_s</code> / <code>delete</code> / <code>count</code> / <code>squeeze</code></td><td>3 段: (1) ASCII のみのレシーバ <strong>かつ</strong> ASCII のみの指定なら <code>[u64; 2]</code> の 128 ビットマップ（削除／否定）か平坦な <code>[u8; 128]</code> 変換表で全部バイト単位、(2) 非 ASCII レシーバに ASCII 指定は <code>tr_translate_bytes</code>、(3) 汎用の <code>chars()</code> 走査。<code>Charset</code> は <code>ascii_bitmap: [u64; 2]</code> + <code>non_ascii: BTreeSet&lt;char&gt;</code> + <code>negated</code> で、<code>contains_ascii_byte</code> はシフト / AND / XOR 各 1 回</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="36-stringscanner--唯一の手調整されたエンジン経路"><a class="header" href="#36-stringscanner--唯一の手調整されたエンジン経路">3.6 StringScanner — 唯一の手調整されたエンジン経路</a></h3>
+<p>Ruby 側は <code>stdlib/strscan.rb</code>。<code>_anchored</code> が <code>\A(?:…)</code> で包んだ regexp を
+作るのは<strong>fallback 経路だけ</strong>で、サイズ上限 512 の 3 つの Hash
+（<code>ANCHORED_RE</code>（identity キー）/ <code>ANCHORED_STR</code> / <code>PLAIN_STR</code>）にキャッシュ
+する。</p>
+<p>Rust 側の <code>String#__strscan_match</code>:</p>
+<ul>
+<li><code>thread_local! STRSCAN_REGION: RefCell&lt;onigmo_regex::Region&gt;</code> — <strong>スレッド
+全体で 1 つの再利用 region</strong> なので、グループ無しのヒットは確保ゼロ。</li>
+<li>String パターンはリテラルバイト列: アンカー時 <code>starts_with</code>、それ以外は
+<code>windows().position()</code> — Onigmo に入らない。</li>
+<li>Regexp パターンはエンジンビューがバッファそのもの（<code>is_ascii_only() || (Utf8 &amp;&amp; valid)</code>）のときだけバイトバッファ上で<strong>その場</strong>照合し、それ以外は
+<code>false</code> を返して Ruby 側がコピーに対する <code>String#match</code> に落ちる。</li>
+<li>アンカーは suffix に対する <code>onig_match</code>（<code>strscan_match</code>）で、高速経路では
+<strong><code>\A(?:…)</code> の包み regexp を決して作らない</strong>。</li>
+<li>返り値は確保を意識している: 走査位置から始まるグループ無しの全体一致は
+素の Fixnum、それ以外は平坦な <code>[b0, e0, b1, e1, …]</code> Array。</li>
+<li><code>$~</code> は触らない（CRuby の C 実装 strscan もレジスタを自分で持つ）。</li>
+</ul>
+<p>計測と経緯は
+<a href="../yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a>
+§5.6、§8.1。</p>
+<hr>
+<h2 id="4-エンジンとエンコーディングの相互作用"><a class="header" href="#4-エンジンとエンコーディングの相互作用">4. エンジンとエンコーディングの相互作用</a></h2>
+<ul>
+<li>主経路でエンジンに渡るのは <strong>UTF-8 か ASCII だけ</strong>。より豊かな宣言
+エンコーディングは <code>declared_encoding</code> に残り、<code>#encoding</code> /
+<code>#fixed_encoding?</code> / <code>Regexp.union</code> の互換判定に使われ、走査自体は
+UTF-8 / 代理ビュー上で走る。</li>
+<li>例外は非 SevenBit でコーデックのある被照合に対する <code>Regexp#match</code>:
+<code>onigmo_encoding_for</code> → <code>native_regex</code>（<code>NATIVE_CACHE</code>）→
+<code>captures_bytes_from_pos</code> → <code>MatchDataInner::from_captures_bytes</code>。Onigmo が
+多エンコーディング照合をするのはここだけ。</li>
+<li>互換ゲートは CRuby の <code>rb_reg_prepare_enc</code> を写す: <code>check_match_encoding</code>
+の 3 規則、<code>regexp_encoding_mismatch</code>、<code>check_subject_match_encoding</code>、
+<code>warn_binary_regexp_match</code>（「historical binary regexp match /…/n
+against X string」）、<code>Regexp#match</code> の <code>ArgumentError: invalid byte sequence</code>、String 側の <code>check_pattern_encoding_compat</code> 等。</li>
+<li>代理写像は多バイトのバイト指向エンコーディングに対する CRuby のエンコー
+ディング別文字走査の<strong>バイト単位の近似</strong>である。</li>
+<li>結果のエンコーディング: <code>apply_template_encoding</code> が <code>sub</code> / <code>gsub</code> の出力を
+レシーバのエンコーディングに再タグし（置換機構は既定で UTF-8 を組む）、
+<code>Regexp#source</code> は <code>fixed_encoding?</code> に従い、補間 regexp は修飾子で固定
+されない限り補間内容から取る。</li>
+</ul>
+<hr>
+<h2 id="5-cruby-との実装差異"><a class="header" href="#5-cruby-との実装差異">5. CRuby との実装差異</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>項目</th><th>CRuby</th><th>monoruby</th></tr>
+</thead>
+<tbody>
+<tr><td><strong><code>/o</code>（once）</strong></td><td>補間リテラルを 1 回だけコンパイルして再利用</td><td><code>o</code> を<strong>パーサが落とす</strong>ので <code>/#{x}/o</code> は評価ごとに組み直す。<code>REGEX_CACHE</code> のヒットで再構築はハッシュ探索で済むが、<code>Regexp</code> オブジェクトの同一性は違う。ruby/spec の regexp 関連で唯一の失敗タグ（<code>spec/tags/language/regexp/modifiers_tags.txt</code> の “supports /o (once)”）</td></tr>
+<tr><td>非補間リテラル</td><td>1 回コンパイル、frozen、共有</td><td>同じだがさらに早く、<em>bytecodegen</em> 時にコンパイルして <code>FrozenLiteral</code> で出す。コンパイルエラーは実行時 <code>RegexpError</code> でなく<strong>ロード時の構文エラー</strong></td></tr>
+<tr><td>エンコーディング別の再コンパイル</td><td><code>rb_reg_prepare_re</code> が regexp オブジェクト上にキャッシュ</td><td><strong>プロセス全体</strong>の 2 つのキャッシュ（<code>REGEX_CACHE</code> / <code>NATIVE_CACHE</code>）、どちらも <code>RwLock&lt;HashMap&gt;</code> で<strong>上限無し</strong>。<code>Arc&lt;Regex&gt;</code> でスレッド間共有</td></tr>
+<tr><td>エンジンが見るエンコーディング</td><td>被照合の実エンコーディングで Onigmo が動く</td><td>既定で UTF-8 / ASCII。<code>Regexp#match</code> + 非 SevenBit + 対応コーデックだけ native 経路。多バイト <code>NamedByte</code>（Big5 / GB18030 / EUC-KR/TW）は意図的に除外。他はバイト ↔ <code>U+00XX</code> の代理空間</td></tr>
+<tr><td><code>$~</code> の格納</td><td>MFP の <code>vm_svar</code></td><td>同じ設計を意図的に写す: LEP の <code>LFP_SVAR</code>、遅延確保の <code>[$~, $_]</code>、ブロック / lambda が <code>outer</code> を辿る。追加で <code>is_svar_transparent</code>（monoruby の Ruby 実装コアメソッド用。CRuby はそれらを C で書くので相当物が無い）</td></tr>
+<tr><td><code>Regexp#match?</code> の <code>MatchData</code> 回避</td><td>あり（<code>rb_reg_match_p</code>）</td><td>あり（<code>match_pred</code>）。CRuby より広く <code>Array#grep</code> / <code>Enumerable#grep</code> も使う</td></tr>
+<tr><td><code>MatchData</code> オブジェクトの再利用</td><td><code>rb_reg_search0</code> が backref スロットの busy でない <code>MatchData</code> を再利用</td><td><strong>常に新規確保</strong>。40 バイトのペイロード、<code>SmallVec&lt;[Span; 2]&gt;</code> の inline 容量、コピー無しの CoW haystack スナップショットで緩和</td></tr>
+<tr><td><code>onig_region</code> の再利用</td><td>照合ごとに再利用</td><td><code>captures_from_pos</code> は照合ごとに <code>OnigRegion</code> を確保・解放。再利用は StringScanner のプリミティブ（スレッドローカル <code>Region</code>）<strong>のみ</strong>（<code>onig_region_clear</code> + memset で約 3.3 %）</td></tr>
+<tr><td>リテラル接頭辞の最適探索 / <code>ONIG_OPTION_FIND_NOT_EMPTY</code></td><td>使う</td><td>使わない。代わりに <code>scan</code> / <code>replace_repeat</code> / <code>replace_all_block_inner</code> / <code>scan_block_loop</code> で<strong>手動走査</strong>（クレートの <code>captures_iter</code> は CRuby が yield するはずのゼロ幅一致を落とすため）</td></tr>
+<tr><td><code>Regexp.timeout</code></td><td>強制（ReDoS 中断）</td><td>スレッドローカルに保存して読み返すだけで<strong>強制しない</strong></td></tr>
+<tr><td><code>Regexp#==</code> / <code>#hash</code></td><td><code>hash</code> はエンコーディングフラグを無視、<code>==</code> は無視しない</td><td>同じ非対称を写す: <code>==</code> は <code>REGEXP_EQ_OPTION_MASK</code>（m / i / x）+ <code>declared_encoding</code>、<code>hash</code> はソース + マスクのみ</td></tr>
+<tr><td>エラーメッセージ</td><td>Onigmo の文言 + <code>: /&lt;source&gt;/</code></td><td><code>pre_validate_regex</code> / <code>expand_unicode_braces</code> / キャッシュミスのエラー腕が CRuby の文言を手で再現</td></tr>
+<tr><td><code>String#index</code>（String needle）</td><td><code>$~</code> を設定しない</td><td>同じ（issue #721）。さらにエンジンにも入らない</td></tr>
+<tr><td><code>\k&lt;name&gt;</code> の重複名</td><td>最後に参加したグループ</td><td>同じ（<code>get_group_members</code> 上で実装）</td></tr>
+<tr><td><code>Regexp#initialize</code></td><td>private、再初期化は raise</td><td>private で常に raise: frozen リテラルは <code>FrozenError</code>、それ以外は <code>TypeError: already initialized regexp</code>。埋めるのは <code>allocate</code> の placeholder 経路だけ</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="6-現在の限界"><a class="header" href="#6-現在の限界">6. 現在の限界</a></h2>
+<ol>
+<li><code>REGEX_CACHE</code> と <code>NATIVE_CACHE</code> は上限が無く evict されない。<code>REGEX_CACHE</code>
+は構築のたびに<strong>書き込み</strong>ロックを取りキー <code>String</code> を確保する。</li>
+<li><code>captures_from_pos</code> は照合ごとに <code>OnigRegion</code> を確保・解放する。再利用は
+StringScanner だけ。</li>
+<li><code>$~</code> の死活解析が無いので <code>str =~ /x/</code> と <code>case … when /x/</code> は結果を
+使わなくても評価ごとに <code>MatchData</code> を確保する。</li>
+<li><code>Regexp.timeout</code> は不活性。</li>
+<li><code>Regexp#multiline?</code> は未実装（<a href="../plan-activerecord.html"><code>../plan-activerecord.md</code></a>）。</li>
+<li>非 UTF-8 レシーバに対する Regexp 付き <code>String#slice!</code>、同一エンコーディング
+の多バイト <code>tr</code> / <code>count</code> 集合は追記予定として <code>string.rs</code> に記録がある。</li>
+</ol>
+<hr>
+<h2 id="7-テストと関連文書"><a class="header" href="#7-テストと関連文書">7. テストと関連文書</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>場所</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>value/rvalue/regexp.rs</code> の <code>regex_cache_tests</code></td><td>キャッシュの契約（Ruby だけのビットがキャッシュを分割しない、等）</td></tr>
+<tr><td><code>builtins/regexp.rs</code> のテスト</td><td><code>regexp_match_pred_does_not_set_special_vars</code>、<code>gsub_block_without_a_match_probes_first</code>、<code>regexp_hash_ignores_encoding</code>、<code>initialize</code> の raise</td></tr>
+<tr><td><code>builtins/string.rs</code> の <code>gsub_many_matches_linear</code></td><td><code>splice_all</code> の線形性</td></tr>
+<tr><td><code>builtins/fiber.rs</code> / <code>builtins/thread.rs</code> の svar テスト</td><td><code>root_svar</code> の分離</td></tr>
+<tr><td><a href="../stack_frame.html"><code>../stack_frame.md</code></a></td><td><code>LFP_SVAR</code> スロットと LEP の所有規則</td></tr>
+<tr><td><a href="../gc.html"><code>../gc.md</code></a></td><td><code>sp_match_regex</code> / <code>sp_match_haystack</code> の root</td></tr>
+<tr><td><a href="../encoding_char_iteration_design.html"><code>../encoding_char_iteration_design.md</code></a></td><td>バイト ↔ 文字オフセット、<code>CharByteIter</code></td></tr>
+<tr><td><a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a></td><td><code>Regexp#===</code> が表に無い理由の背景</td></tr>
+<tr><td><a href="../lir.html"><code>../lir.md</code></a> / <a href="../arch_difference.html"><code>../arch_difference.md</code></a></td><td><code>ConcatRegexp</code> マクロ命令</td></tr>
+<tr><td><a href="../threads.html"><code>../threads.md</code></a> / <a href="../refinements.html"><code>../refinements.md</code></a></td><td>実行コンテキストごとの <code>$~</code> / <code>$_</code>、LEP 走査の再利用</td></tr>
+</tbody>
+</table>
+</div>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../design/runtime_optimization/string.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../design/encoding_char_iteration_design.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../design/runtime_optimization/string.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../design/encoding_char_iteration_design.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-09f2665d.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

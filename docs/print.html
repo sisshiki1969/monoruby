@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-06f90937.js";
+            window.path_to_searchindex_js = "searchindex-a0bcb149.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-ad91b9ad.js"></script>
+        <script src="toc-8a4c8fb9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -12628,6 +12628,1940 @@ invoker 境界が挟まると <code>exact=false</code> となり旧ヒューリ�
 (<code>AsmInst::ContFramePc</code>)</li>
 <li>#890 — 本書の super 解決機構</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="ランタイム最適化--目次と共通の前提"><a class="header" href="#ランタイム最適化--目次と共通の前提">ランタイム最適化 — 目次と共通の前提</a></h1>
+<p><code>runtime_optimization/</code> は、Ruby のコアクラスが monoruby の中でどう表現され、
+VM と JIT がその上のホットな操作をどう安くしているかを、クラスごとに 1 文書
+ずつまとめたものである。各文書は末尾に <strong>CRuby との実装差異</strong>の表を持つ。
+すべて日本語。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>文書</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="#array-の実装と最適化">array.md</a></td><td><code>SmallVec&lt;[Value; 5]&gt;</code> の inline / ヒープ、<code>[]</code> / <code>[]=</code> / <code>&lt;&lt;</code> / リテラル / 多重代入の VM・JIT 経路、Ruby で書かれた <code>each</code> / <code>map</code> / <code>initialize</code>、<code>sum</code> / <code>sort</code> / <code>hash</code> の注記。共有配列を持たない理由</td></tr>
+<tr><td><a href="#hash-の実装と最適化">hash.md</a></td><td>inline（≤ 3 ペア）/ boxed 線形 / boxed 索引の 3 表現、vm 不要の prehashed probe、機械語の probe（Symbol / String キー）、2 つのハッシュ関数、Ruby で書かれた走査とそのプリミティブ、計測と残課題。<code>ar_table</code> / <code>st_table</code> との対比</td></tr>
+<tr><td><a href="#string-の実装と最適化">string.md</a></td><td><code>SmallVec&lt;[u8; 32]&gt;</code> と共有部分文字列（隠れ frozen root、copy-on-write）、エンコーディングと code range の O(1) 畳み込み、frozen リテラルと <code>"lit".freeze</code>、補間、<code>&lt;&lt;</code> / <code>getbyte</code> / <code>setbyte</code> / <code>==</code> の JIT、Hash の String キー</td></tr>
+<tr><td><a href="#regexp-の実装と最適化">regexp.md</a></td><td>Onigmo とプロセス全体のパターンキャッシュ、<code>FrozenLiteral</code> としてのリテラル、<code>LFP_SVAR</code> の <code>$~</code> と 40 バイトの <code>MatchData</code>、<code>MatchData</code> を作らない経路、正規表現を使う <code>String</code> メソッドの高速経路、StringScanner</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="共通の前提"><a class="header" href="#共通の前提">共通の前提</a></h2>
+<p>以下は 4 文書が暗黙に使う事実で、それぞれの出典を示す。</p>
+<h3 id="rvalue-は-64-バイト"><a class="header" href="#rvalue-は-64-バイト">RValue は 64 バイト</a></h3>
+<p>ヒープオブジェクトはすべて <code>RValue</code>（<code>value/rvalue.rs</code>）で、8 バイトの
+ヘッダ（live / frozen / chilled / GC の OLD・WB_UNPROTECTED・WB_ARMED /
+年齢、型タグ <code>ObjTy</code>、型別メタデータバイト <code>ty_flags</code>、クラス）、8 バイトの
+<code>var_table</code>（あふれた ivar）、<strong>48 バイトのペイロード共用体</strong> <code>ObjKind</code>
+からなる。Array / String / Hash はこの 48 バイトに「小さいものは直置き、
+大きければヒープ」の 2 段を入れていて、閾値はそれぞれ 5 要素 / 32 バイト /
+3 ペアである。値の表現（Fixnum / Flonum / 即値 / ヒープポインタ）は
+<code>CLAUDE.md</code> の「Value Representation」を参照。</p>
+<h3 id="fork-した-smallvec"><a class="header" href="#fork-した-smallvec">fork した <code>smallvec</code></a></h3>
+<p>Array と String のバッファは <code>sisshiki1969/rust-smallvec</code>（<code>const_generics</code>）
+で、fork している理由は <code>OFFSET_CAPA</code> / <code>OFFSET_INLINE</code> / <code>OFFSET_HEAP_PTR</code> /
+<code>OFFSET_HEAP_LEN</code> を公開して JIT / VM がペイロードを直接アドレッシング
+できるようにするためである。規約は「inline のあいだは <code>capacity</code> が長さを
+兼ね、<code>capacity &gt; inline 容量</code> ならヒープ変種」で、機械語の高速経路はすべて
+<code>cmp capa, N</code> の 1 命令でこれを分岐する。</p>
+<h3 id="世代別-gc-と-write-barrier"><a class="header" href="#世代別-gc-と-write-barrier">世代別 GC と write barrier</a></h3>
+<p>GC は非移動・stop-the-world・世代別（<a href="#monoruby-の-gc--機構と実装"><code>../gc.md</code></a>）。子への参照を
+持つオブジェクトが OLD へ昇格できるのは、その参照の格納がすべて
+write barrier を通る場合だけである。Array / Hash は mutator を barrier 付きの
+ラッパで隠し、String は隠れ root への 1 本の参照だけを barrier し、Regexp は
+<code>Value</code> を持たないので無条件に昇格できる。JIT がインラインで格納するときは
+<code>emit_write_barrier_rdi</code> / <code>_bulk</code> を自分で出す。</p>
+<h3 id="インライン生成器と-bop"><a class="header" href="#インライン生成器と-bop">インライン生成器と BOP</a></h3>
+<p>JIT は組み込みメソッドの呼び出しを、<code>InlineTable::add_inline</code> に
+<code>inline_gen2!</code> で登録された生成器（抽象状態と AsmIR を受け取り、機械語を出す
+か <code>false</code> で辞退する）で置き換える。生成器は class-version ガードと
+レシーバクラスガードの後で呼ばれ、辞退すれば状態と IR が巻き戻される
+（trial inlining、<a href="#inline-asm-function"><code>../inline.md</code></a>）。</p>
+<p><code>Array#[]</code> / <code>Array#[]=</code> / <code>Hash#[]</code> / <code>String#freeze</code> / <code>String#!=</code> など
+**基本演算（BOP）**として表（<code>globals/store/basic_op.rs</code>）に載っている組は、
+class-version ガード無しの直接発火経路を取れ、再定義は記録した依存
+（<code>record_bop_dep</code>）で該当本体だけを evict する
+（<a href="#基本演算の再定義bop-redefinition"><code>../bop_redefinition.md</code></a>）。表に無いメソッドは
+通常の class-version ガード付き経路に残る。</p>
+<h3 id="deopt-とcall-で逃がす"><a class="header" href="#deopt-とcall-で逃がす">deopt と「call で逃がす」</a></h3>
+<p>型ガードの失敗はインタプリタへの side exit（deopt）になるが、deopt が
+再コンパイルを起こさない場面で毎回 deopt するサイトは慢性的に遅くなる
+（<a href="#chain-deopt--handoff-note"><code>../chain_deopt.md</code></a>、<a href="#reading-the-deopt-log---features-deopt"><code>../deopt_log.md</code></a>）。
+そのため各文書に出てくる高速経路は、形が合わないケースを <strong>deopt でなく
+builtin への call</strong> で逃がす設計を繰り返し選んでいる: Hash の probe が
+inline / identity / 索引の表現を <code>hashindex</code> に渡す、<code>Array#[]</code> の多相
+サイトが 2 腕の dispatch を出す、<code>String#&lt;&lt;</code> が fallback を末尾呼び出しする、
+<code>String#setbyte</code> が共有レシーバを detach して再試行する、など。</p>
+<h3 id="ruby-で書かれた組み込み"><a class="header" href="#ruby-で書かれた組み込み">Ruby で書かれた組み込み</a></h3>
+<p><code>builtins/*.rb</code> の <code>Array#each</code> / <code>Hash#each</code> / <code>Array#initialize</code> などが
+Ruby なのは、JIT がインライン展開するのが <code>FuncKind::ISeq</code> の呼び出し先だけ
+だからで、ホットなサイトではメソッド本体とブロックが <code>yield</code> の位置に展開
+される。代償として、CRuby の C 実装なら無傷な <code>Integer#&lt;</code> や <code>Array#size</code> の
+再定義が組み込みの内部に及ぶ（意図したトレードオフ、
+<a href="#基本演算の再定義bop-redefinition"><code>../bop_redefinition.md</code></a>）。</p>
+<h3 id="計測の規律"><a class="header" href="#計測の規律">計測の規律</a></h3>
+<p>各文書の数値は、同じ計測機で<strong>交互ラウンドの中央値の最小値</strong>を取り、
+マイクロベンチは「同じループから対象操作だけ抜いたもの」を baseline として
+差し引いている。monoruby と CRuby ではループ自体のコストが 10 倍近く違う
+ので、生の時間を並べても比較にならない。手順は <a href="#hash-の実装と最適化">hash.md</a> §8。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="array-の実装と最適化"><a class="header" href="#array-の実装と最適化">Array の実装と最適化</a></h1>
+<p>Array は Ruby プログラムの「ただの並び」であると同時に、<code>each</code> / <code>map</code> /
+<code>[]</code> / <code>&lt;&lt;</code> が最内ループに現れる型でもある。optcarrot では <code>Array#&lt;&lt;</code> と
+<code>Array#[]=</code> のスライス形が最上位のホットスポットだった
+（<a href="#optcarrot---opt-プロファイル調査と高速化ロードマップ"><code>../optcarrot_opt_profile.md</code></a> §3）。</p>
+<p>この文書は、Array がメモリ上でどう置かれ、VM と JIT が <code>[]</code> / <code>[]=</code> / <code>&lt;&lt;</code> /
+リテラル生成 / 多重代入をどう処理し、どの組み込みメソッドが Ruby で書かれて
+いてそれがなぜかをまとめ、最後に CRuby との実装差異を並べる。共通の前提
+（RValue の 64 バイト、write barrier、インライン生成器の仕組み）は
+<a href="design/runtime_optimization/README.html">README.md</a> にある。</p>
+<hr>
+<h2 id="1-表現"><a class="header" href="#1-表現">1. 表現</a></h2>
+<h3 id="11-セルの中身"><a class="header" href="#11-セルの中身">1.1 セルの中身</a></h3>
+<p><code>RValue</code> は 64 バイトの <code>#[repr(C)]</code> で、8 バイトのヘッダ、8 バイトの
+<code>var_table</code>（あふれた ivar）、48 バイトのペイロード共用体 <code>ObjKind</code> から
+なる（<code>rvalue.rs</code>）。Array のペイロードは</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub const ARRAY_INLINE_CAPA: usize = 5;
+#[repr(transparent)]
+pub struct ArrayInner(SmallVec&lt;[Value; ARRAY_INLINE_CAPA]&gt;);
+<span class="boring">}</span></code></pre>
+<p>で、<strong>5 要素までは 48 バイトの中に直接置かれ、それを超えるとヒープに
+あふれる</strong>（<code>value/rvalue/array.rs</code>）。<code>smallvec</code> は fork
+（<code>sisshiki1969/rust-smallvec</code>、<code>const_generics</code> 有効）で、fork している理由は
+JIT / VM のアセンブリがペイロードを直接アドレッシングできるように
+<code>OFFSET_CAPA</code> / <code>OFFSET_INLINE</code> / <code>OFFSET_HEAP_PTR</code> / <code>OFFSET_HEAP_LEN</code> を
+公開するためである。<code>rvalue.rs</code> はこれを <code>RVALUE_OFFSET_ARY_CAPA</code> などとして
+セル先頭からのオフセットに焼き直す。</p>
+<p><strong>すべての高速経路の前提になる規約</strong>: inline のあいだは <code>capacity</code> が
+<strong>長さを兼ねる</strong>。<code>capacity &gt; 5</code> ならヒープ変種が生きていて、そのときは
+<code>capacity</code> が確保サイズ、実際の長さはポインタの隣にある。したがって
+<code>cmpq capa, 5</code> の 1 命令で「inline かヒープか」と「inline なら長さは capa」
+の両方が決まる。Struct（<code>StructInner</code>）は同じレイアウトを共有していて、
+スロットアクセスに同じ定数を使う。</p>
+<h3 id="12-フラグ"><a class="header" href="#12-フラグ">1.2 フラグ</a></h3>
+<p>frozen はヘッダ <code>flag</code> のビット 1（<code>0b10</code>）。ビット 0 が live、ビット 2 が
+chilled（String 専用）、ビット 3 / 4 / 6 が世代別 GC の OLD / WB_UNPROTECTED /
+WB_ARMED、ビット 8..15 が GC の年齢。Array は Hash と違って型別メタデータ
+バイト <code>ty_flags</code> を使わない。</p>
+<p><code>NEWBORN_FLAG_MASK</code> は JIT と共有していて、リテラル複製の機械語がテンプレート
+のヘッダ語をこのマスクで落とすので、<code>dup</code> / <code>clone</code> / リテラル評価はすべて
+若く・バリア未装填の状態で始まる。</p>
+<h3 id="13-gc-との関係"><a class="header" href="#13-gc-との関係">1.3 GC との関係</a></h3>
+<ul>
+<li>mark は要素を順に mark するだけ（<code>rvalue.rs</code> の <code>ObjTy::ARRAY</code> アーム）。</li>
+<li><strong>Array は OLD 世代へ昇格できる</strong>（<code>is_promotable</code>）。条件は「要素の
+格納が全部バリアされていること」で、インタプリタ側は <code>Array</code> ラッパ、
+JIT 側は <code>array_index_assign</code> と emit されたバリアがそれを保証する。</li>
+<li>ラッパ <code>Array</code>（<code>#[monoruby_object(write_barrier)]</code>）の固有メソッドは
+<code>Deref</code> 先の <code>ArrayInner</code> の同名メソッドを<strong>隠す</strong>ので、<code>ary.push(v)</code> /
+<code>set_index</code> / <code>insert</code> / <code>fill</code> / <code>resize</code> / <code>extend</code> / <code>replace</code> /
+<code>set_index2</code> は必ず <code>write_barrier</code> / <code>write_barrier_bulk</code> を通る。削除系
+（<code>pop</code> / <code>remove</code> / <code>truncate</code> / <code>clear</code> / <code>drain</code>）にバリアは要らない。</li>
+<li><code>as_array_mut(&amp;Store)</code> は frozen 検査を<strong>取得時に 1 回だけ</strong>行い、返った
+ラッパの mutator は再検査しない。</li>
+</ul>
+<p>詳細は <a href="#monoruby-の-gc--機構と実装"><code>../gc.md</code></a>。</p>
+<hr>
+<h2 id="2-vm-の経路"><a class="header" href="#2-vm-の経路">2. VM の経路</a></h2>
+<h3 id="21-バイトコード"><a class="header" href="#21-バイトコード">2.1 バイトコード</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Array(dst, callsite)</code></td><td>リテラル生成。splat 位置は call site が持つ</td></tr>
+<tr><td><code>ArrayConcat { dst, src }</code></td><td>長いリテラルの分割結合</td></tr>
+<tr><td><code>ExpandArray(src, dst, len, rest_pos)</code></td><td>多重代入・ブロック引数の分解</td></tr>
+<tr><td><code>ArrayTEq</code> / <code>ArrayAny</code></td><td><code>when *ary</code>（<code>===</code> あり / 真偽のみ）</td></tr>
+<tr><td><code>Index</code> / <code>IndexAssign</code></td><td>単一・非 splat の添字</td></tr>
+<tr><td><code>Literal</code> / <code>FrozenLiteral</code></td><td>定数リテラル（Array は常に <code>Literal</code>、§3.6）</td></tr>
+</tbody>
+</table>
+</div>
+<p>リテラルは <code>LITERAL_CHUNK_LEN</code> まで 1 命令、それより長ければ<strong>有界の
+チャンク</strong>に分けて <code>ArrayConcat</code> で繋ぐ（<code>bytecodegen/expression.rs::gen_array</code>）。
+一時レジスタの数がリテラル長に比例せず、<code>ret</code> が作りかけの配列を持たない。
+定数リテラルは <code>Value::from_const_ast</code> でテンプレートを 1 個作り
+<code>emit_literal</code> に渡すが、<code>FrozenLiteral</code> になるのは <code>is_always_frozen</code> な
+クラスだけなので Array は <code>Literal</code>、つまり<strong>評価ごとに deep copy</strong>（Ruby の
+意味論どおり新しい可変オブジェクト）になる。</p>
+<p>実行時の <code>Array</code> は <code>runtime::gen_array</code>: splat が無ければスタックスロットの
+範囲を <code>Value::array_from_iter</code> で一気に取り込む。</p>
+<h3 id="22---"><a class="header" href="#22---">2.2 <code>[]</code> / <code>[]=</code></a></h3>
+<p>VM スタブ <code>vm_index</code> / <code>vm_index_assign</code> は二項演算と同じ簿記をしてから
+<code>runtime::get_index</code> / <code>set_index</code> を呼ぶ:</p>
+<ol>
+<li><code>(base_class, idx_class)</code> をサイトのインラインキャッシュに記録し、多相
+ビットを立てる（<code>vm_save_binary_class</code>）。</li>
+<li><code>is_func_call = (base slot == 0)</code>、すなわちレシーバ無しの <code>self[i]</code> を
+区別する。CRuby と同じく <strong>private な <code>#[]</code> に届く</strong>ようにするため。</li>
+</ol>
+<p><code>runtime::get_index</code> はまず <code>basic_op_redefined_for(base_class, :[])</code> を見る。
+ディスパッチテーブル型の演算子と違ってこのヘルパ自体が実装なので、
+<code>_no_opt</code> 版と差し替えるのではなくフラグを直接読む。再定義されていれば
+<code>invoke_method</code>。<code>ARRAY_CLASS</code> アームは、Fixnum でも Range でもない添字が
+<code>Enumerator::ArithmeticSequence</code> なら <code>aseq.[](self)</code> に委ね（スライスの
+規則は AS 側にある）、それ以外は <code>to_int</code> して <code>ArrayInner::get_elem1</code>。
+続いて <code>HASH_CLASS</code> / <code>METHOD_CLASS</code> のアームがあり、他は dispatch。</p>
+<p>このヘルパの <code>is_func_call</code> が VM のフラグ語ではなく <code>bool</code> なのは、型を
+<code>BinaryOpFn</code> に揃えて JIT が多相サイトの残余アームとして再利用できるように
+するためである（§3.2）。</p>
+<p><code>runtime::set_index</code> は <code>Array</code> + Fixnum 添字 + <code>[]=</code> 未再定義なら明示的な
+frozen 検査（<code>FrozenError</code>）の後 <code>Array::set_index</code> を呼び、メソッド探索を
+しない。<code>Hash#[]=</code> の並行アームは #1245 で追加された
+（<a href="#hash-の実装と最適化">hash.md</a> §2）。</p>
+<h3 id="23-添字計算"><a class="header" href="#23-添字計算">2.3 添字計算</a></h3>
+<p><code>value/rvalue/array.rs</code>:</p>
+<ul>
+<li><code>get_array_index(i64) -&gt; Option&lt;usize&gt;</code>: 負なら折り返し、それでも負なら
+<code>None</code>。</li>
+<li><code>get_elem1</code>: Range 添字（beginless / endless / exclusive、負の折り返し、
+<code>len == start → []</code> と <code>len &lt; start → nil</code> の区別）とスカラ。<strong>Range 形は
+常に新しい配列を確保する</strong>（共有しない、§6）。</li>
+<li><code>get_elem2</code>: <code>ary[start, len]</code> 形。</li>
+<li><code>set_index</code>: 末尾より先の正の添字は nil で埋めて伸ばす、範囲外の負は
+<code>IndexError</code>。</li>
+<li><code>set_index2</code>: スライス代入の splice。自己代入は先にスナップショットを取り
+（<code>is_self</code>）、伸縮方向に応じて <code>copy_within</code>。</li>
+</ul>
+<h3 id="24-expandarray-と-casewhen"><a class="header" href="#24-expandarray-と-casewhen">2.4 <code>ExpandArray</code> と <code>case/when</code></a></h3>
+<p><code>runtime::expand_array</code> はユーザーが上書きした <code>respond_to?</code> を尊重してから
+<code>#to_ary</code> を探し（CRuby 準拠）、素の <code>BasicObject</code> はスカラのままにし、
+エラーは <code>None</code> で返す。<code>array_teq</code> は splat 配列を <code>===</code> で回し、rescue 版は
+「class or module required for rescue clause」を出す。<code>array_any</code> は CRuby の
+<code>checkmatch(VM_CHECKMATCH_TYPE_WHEN | ARRAY)</code> と同じく<strong>真偽だけ</strong>で、<code>===</code> も
+ユーザーから見える呼び出しも無い。</p>
+<hr>
+<h2 id="3-jit-の経路"><a class="header" href="#3-jit-の経路">3. JIT の経路</a></h2>
+<h3 id="31-登録されているインライン生成器"><a class="header" href="#31-登録されているインライン生成器">3.1 登録されているインライン生成器</a></h3>
+<p><code>builtins/array.rs::init</code> で <code>inline_gen2!</code>（中身は <code>Box::new</code>）により登録:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>メソッド</th><th>生成器</th><th>出るもの</th></tr>
+</thead>
+<tbody>
+<tr><td><code>size</code> / <code>length</code></td><td><code>array_size</code></td><td>型付き LIR <code>ArrayLenFixnum</code>（アーキ固有クロージャ無し）</td></tr>
+<tr><td><code>clone</code> / <code>dup</code></td><td><code>array_clone</code> / <code>array_dup_inline</code></td><td><code>array_clone_extern</code> / <code>array_dup_extern</code> への直接 call</td></tr>
+<tr><td><code>&lt;&lt;</code></td><td><code>array_shl</code></td><td><code>guard_frozen</code> + <code>emit_array_shl</code></td></tr>
+<tr><td><code>[]</code> / <code>slice</code></td><td><code>array_index</code></td><td><code>AsmInst::ArrayIndex</code></td></tr>
+<tr><td><code>[]=</code></td><td><code>array_index_assign</code> / <code>array_slice_assign</code></td><td><code>AsmInst::ArrayIndexAssign</code> / <code>emit_array_slice_assign</code></td></tr>
+<tr><td><code>rotate!</code></td><td><code>array_rotate_</code></td><td><code>guard_frozen</code> + <code>ary_rotate_</code> への call</td></tr>
+</tbody>
+</table>
+</div>
+<p>生成器は <code>compile_method_call</code> から、class-version ガードとレシーバクラス
+ガードを<strong>出した後に</strong>呼ばれる。<code>proven: Option&lt;ClassId&gt;</code>（クラス集合ガードや
+dispatch アームの陰では <code>None</code>）と <code>arg_class</code> を受け取り、<code>false</code> を返せば
+状態と IR が巻き戻される（trial inlining、<a href="#inline-asm-function"><code>../inline.md</code></a>）。</p>
+<h3 id="32----のコンパイル経路"><a class="header" href="#32----のコンパイル経路">3.2 <code>[]</code> / <code>[]=</code> のコンパイル経路</a></h3>
+<p><code>codegen/jitgen/compile/index.rs</code>。<code>index()</code> は次の順で決める:</p>
+<ol>
+<li>多相サイトでレシーバクラスが抽象状態に無い → <code>index_dispatch</code>。</li>
+<li>レシーバクラスが証明できない → <code>Recompile(NotCached)</code>。</li>
+<li><code>fire_index_inline</code> — 前置きを省いたインライン。</li>
+<li>それ以外は通常の <code>call_binary_method</code>。</li>
+</ol>
+<p><strong><code>fire_index_inline</code></strong> は数値演算の直接発火と違って<strong>レシーバクラスガードを
+残す</strong>。理由は添字の生成器が自分でレシーバを守るとは限らないからで、
+<code>array_index</code> の <code>load_array_ty</code> は<strong>オブジェクト型</strong>（<code>ObjTy::ARRAY</code>）を
+証明するだけなので、独自の <code>#[]</code> を持つ <code>Array</code> サブクラスがすり抜ける。
+省くのは <strong>class-version ガード</strong>と <code>compile_method_call</code> の残りの前置きで、
+再定義は記録した BOP 依存で捕まえる（§3.7）。メソッドが無い・生成器が
+無い・<code>basic_op_assumable</code> でない・可視性で弾かれる・ブロック無しで
+キャプチャしうる・ブロックが渡される、のどれかなら断る。ガードと生成器は
+巻き戻し可能な 1 単位として出る。</p>
+<p><strong><code>index_dispatch</code></strong> は多相サイトへの 2 腕の答え:</p>
+<pre><code>br_class_ne rdi, C -&gt; slow
+&lt;C#[] をインライン&gt;          ; BOP 依存を記録、class-version ガード無し
+br merge
+slow: &lt;runtime::get_index&gt;   ; どんなレシーバでも正しい。BOP の許可も自分で再確認
+merge:
+</code></pre>
+<p>要点は <strong>deopt という第 3 の選択肢が無い</strong>こと。optcarrot の
+<code>@fetch[addr][addr]</code> は Array と Method を交互に取り、ホットループ最大の
+deopt 源だった。<code>index_inline_class</code> はインラインキャッシュが持つクラス
+ではなく「観測されたうち生成器を持つ最頻クラス」を選ぶ — キャッシュには
+たまたま <code>Method</code> が入っていて、それをインライン化すると RAM 読みの全部が
+C 呼び出しに残ってしまうからである。両腕とも <code>dst</code> に素の <code>Value</code> を残す
+ので join 機構は要らない。<code>index_assign</code> に dispatch 腕は無い。</p>
+<h3 id="33----の機械語x86-64"><a class="header" href="#33----の機械語x86-64">3.3 <code>[]</code> / <code>[]=</code> の機械語（x86-64）</a></h3>
+<p><code>codegen/arch/x86_64/compile/index.rs</code>。</p>
+<ul>
+<li><strong><code>array_index</code></strong>（非負添字の読み）: <code>movq rax,[rdi+ARY_CAPA]; cmpq rax,5; jgt heap</code>。inline 腕は <code>capa</code>（= 長さ）と添字を比べ、<code>jle out_range</code> の後
+<code>movq rax,[rdi + rsi*8 + INLINE]</code>。heap 腕は <code>HEAP_LEN</code> で境界検査してから
+<code>HEAP_PTR</code> 経由。<code>out_range</code> は <strong><code>NIL_VALUE</code> を返す</strong>（範囲外の <code>[]</code> は
+Ruby でも nil なので deopt しない）。cold ブロックはページ 1 に置く。</li>
+<li><strong><code>array_index_assign</code></strong>: 同じ常駐分岐だが、write barrier は <code>rdi</code> を
+ヒープバッファに付け替える<strong>前</strong>に出す。範囲外の添字はインラインで
+raise せず <code>generic</code> → <code>set_array_integer_index</code>（正なら伸長、負すぎれば
+<code>IndexError</code>）へ落ち、エラーは <code>handle_error</code> に戻る。</li>
+<li><strong><code>gen_array_index</code> / <code>gen_array_index_assign</code></strong>（<code>ArrayIndexKind</code> の駆動）:
+<code>U16</code> なら添字は <code>movl</code> の即値。<code>Fixnum</code> なら <code>sarq rsi,1</code> で untag し
+<code>js negative</code>。negative 腕（ページ 1）は <code>get_array_length</code> を呼んで
+<code>addq rsi,rax; jns checked</code> — <strong>一度折り返して検査済み経路に再入する</strong>。
+まだ負なら generic / out_range。</li>
+<li><strong><code>get_array_length</code></strong> は分岐無し: <code>cmpq rax,5; cmovgtq rax,[rdi+HEAP_LEN]</code>。</li>
+</ul>
+<p>抽象状態側（<code>jitgen/state/index.rs</code>）: 添字がコンパイル時の <code>u16</code> リテラル
+なら <code>ArrayIndexKind::U16</code>、そうでなければ <code>load_fixnum</code>（Fixnum ガードを
+出す）して <code>Fixnum</code>。<code>load_array_ty</code> は抽象状態がまだ配列型を証明していない
+ときだけ <code>GuardArrayTy</code> を出す（<code>ClassInfo::is_array_ty_instance</code> なので
+サブクラスも通る — これが §3.2 でクラスガードを残す理由）。</p>
+<p>aarch64 は <code>cmov</code> を <code>csel</code> で置き換えた同型で、cold ブロックは同じページに
+インライン配置する（<code>b</code> / <code>b.cond</code> が monoasm の第 2 ページに届かないため）。
+<code>a[-100000]</code> / <code>a[100000]</code> / 添字 100000 への <code>[]=</code> 伸長 / <code>a[-3]=</code> のエラーは
+同ファイルのテストが固定している。</p>
+<h3 id="34-"><a class="header" href="#34-">3.4 <code>&lt;&lt;</code></a></h3>
+<p><code>array_shl</code> は <code>guard_frozen</code> を明示的に出す。<code>emit_array_shl</code> のインライン
+格納は <code>Array::push</code> を迂回し、<code>push</code> 自体は frozen を見ないので、frozen な
+レシーバは JIT を抜けてインタプリタに <code>FrozenError</code> を出させる必要がある —
+これはインライン化と同時に直した実バグである
+（<a href="#optcarrot---opt-プロファイル調査と高速化ロードマップ"><code>../optcarrot_opt_profile.md</code></a> §3.2）。</p>
+<p><code>emit_array_shl</code>（<code>x86_64/compile/builtin.rs</code>）: <code>capa &lt;= 5</code> ⇔ 未あふれ
+なので、どちらの常駐でも「2 ロード + 1 ストア」の高速経路になる。
+<code>cmpq rax, 5</code> が<strong>inline バッファ満杯の判定のフラグも同時に立てている</strong>ので
+<code>jeq grow</code> はただで付く。満杯のとき — <code>capacity</code> 回に 1 回、償却 — だけ
+<code>ary_shl</code> を呼んで再確保させる（そこでバリアも走る）。最後に
+<code>emit_write_barrier_rdi(Rsi)</code> と <code>rax = rdi</code>（<code>&lt;&lt;</code> は self を返す）。</p>
+<h3 id="35-rotate--スライス代入--size--clone--dup"><a class="header" href="#35-rotate--スライス代入--size--clone--dup">3.5 <code>rotate!</code> / スライス代入 / <code>size</code> / <code>clone</code> / <code>dup</code></a></h3>
+<ul>
+<li><strong><code>rotate!</code></strong>: <code>pos_num &lt;= 1</code>、引数があるときは <code>arg_class == INTEGER_CLASS</code>
+のときだけ。<code>guard_frozen</code> → 回転数を untag → <code>ary_rotate_</code>。</li>
+<li><strong><code>ary[start, len] = other</code></strong>（<code>array_slice_assign</code>）: 動機は optcarrot の
+<code>@bg_pixels[@scroll_xfine, 8] = ...</code> で、支配的な形は「配列の内側の
+run を同じ長さの run で置き換える」、つまりサイズが変わらない素のコピー。
+ゲートは <code>may_be_fixnum(start)</code>（意図的に弱い — <code>ary[ivar, 8]</code> の start は
+抽象状態が絞っていない ivar から来るので、<code>load_fixnum</code> のガードに任せる。
+Float / Range と<strong>証明された</strong>スロットだけ断る）と、<code>len</code> が
+<code>0..=MAX_INLINE_SLICE</code>（8）の<strong>コンパイル時 Fixnum リテラル</strong>であること
+（コピーの展開回数になる）。<code>emit_array_slice_assign</code> は start の untag →
+<code>js slow</code>、自己代入（<code>cmpq rdi, rdx</code>）→ slow、<code>rdx</code> がちょうど <code>len</code>
+要素の Array で、レシーバの run がその内側に収まるときだけ <code>len</code> 個の
+<code>mov</code> 対を展開し、<code>emit_write_barrier_bulk_rdi</code>、<code>rax = rdx</code>。それ以外は
+<code>set_array_slice</code> が builtin と同じ規則（添字正規化、<code>#to_ary</code>）で処理。</li>
+<li><strong><code>size</code> / <code>length</code></strong>: <code>ir.array_len_fixnum(Rax, Rdi)</code> の純 LIR。x86 は
+<code>cmov</code> + <code>salq/orq</code>、aarch64 は <code>csel</code>（<a href="#unified-low-level-ir-lir"><code>../lir.md</code></a> の
+「container length」族）。</li>
+<li><strong><code>clone</code> / <code>dup</code></strong>: 証明済みレシーバのときだけ、<code>fpr_save</code> + 直接 call。
+<code>clone</code> は frozen を伝播し、<code>dup</code> は本来のクラスに付け替える意味論を保つ。</li>
+</ul>
+<h3 id="36-リテラルと生成"><a class="header" href="#36-リテラルと生成">3.6 リテラルと生成</a></h3>
+<ul>
+<li><strong>リテラル確保のインライン化</strong>（<code>TraceIr::Array</code>）: splat 無しで長さが
+<code>ARRAY_INLINE_CAPA</code> 以下（<code>[]</code> を含む）なら GC free list からセルを直接
+取る（<code>new_array_inline</code> → <code>emit_alloc_cell</code>）。ヘッダは
+<code>class&lt;&lt;32 | ObjTy::ARRAY&lt;&lt;16 | 1</code> の即値、<code>var_table = 0</code>、<code>ARY_CAPA = len</code>、
+続けて <code>len</code> 個のスロット→フィールド移送。free list が空／ページ境界なら
+<code>runtime::gen_array</code> に落ちる。</li>
+<li><strong>リテラル複製のインライン化</strong>（<code>DeepCopyLit</code>）: テンプレートが ivar
+無し・<code>len &lt;= 5</code>・<strong>全要素が immediate</strong> なら
+<code>RValue::inline_copyable_array</code>。immediate の deep copy は恒等なので語
+コピーで済み、要素は GC ポインタでなくテンプレートも不変なので機械語に
+焼き込める。<code>emit_deep_copy_lit</code> は <code>CellHeader::NewbornOf(template)</code> で
+ヘッダを <code>NEWBORN_FLAG_MASK</code> で落として写す（<code>Header::newborn</code> と同じ
+マスクなので乖離しない）。それ以外は <code>value_deep_copy</code> 呼び出し。</li>
+<li><strong><code>[a, b].min</code> / <code>.max</code> の融合</strong>（CRuby の <code>opt_newarray_send</code>）:
+<code>try_fuse_array_minmax</code>。消費する呼び出しが同一基本ブロックの<strong>直後の
+命令</strong>で、レシーバがそのリテラルで、リテラルが<strong>一時スロット</strong>に落ち
+（ローカルは再読される）、splat / 引数 / ブロック無し、<code>Array#min</code> /
+<code>#max</code> が builtin に解決する（<code>FuncKind::Builtin { abs_address }</code> を
+<code>builtins::array::min/max</code> と比較）ときだけ。class-version ガードの後
+<code>ir.array_min_max</code> を出し、call 命令を <code>fused_skip</code> で飛ばす。実行時の
+<code>opt_array_minmax</code> は要素を<strong>スタックスロット上で</strong>比較し、Array を
+作らない。同点は先の要素、比較不能は raise、と builtin と同じ。</li>
+<li><strong><code>ExpandArray</code> の高速経路</strong>: <code>src</code> が既に <code>len</code> 要素以上の Array なら
+<code>len</code> 回の移送で済ませる（<code>respond_to?</code> / <code>#to_ary</code> の dispatch 無し、
+nil 埋め無し、raise 無し）。<code>rest_pos</code> あり・<code>len == 0</code>・
+<code>len &gt; MAX_INLINE_EXPAND</code>（8）は断る。成功時 <code>rax = 1</code>
+（<code>expand_array</code> は null 返しでエラーを伝えるため）。呼び出し元が続けて
+出す実行時呼び出しがそのまま遅い経路になる。</li>
+</ul>
+<h3 id="37-bop基本演算の再定義"><a class="header" href="#37-bop基本演算の再定義">3.7 BOP（基本演算）の再定義</a></h3>
+<p><code>globals/store/basic_op.rs</code> の Array エントリは 3 つだけ:
+<code>(ARRAY_CLASS, "[]")</code>, <code>(HASH_CLASS, "[]")</code>, <code>(ARRAY_CLASS, "[]=")</code>。
+<code>runtime::get_index</code> / <code>set_index</code> は素の Rust ヘルパなので、差し替えられる
+のではなく <code>BasicOpTable::redefined</code> を直接見る。</p>
+<p><strong><code>Array#size</code> / <code>#length</code> は BOP ではない</strong>（CRuby には <code>BOP_SIZE</code> /
+<code>BOP_LENGTH</code> がある）。そのインライン生成器は <code>compile_method_call</code> から
+発火し、そこで既に class-version ガードが出ているので再定義はそちらで
+捕まる。JIT 側の許可は <code>basic_op_assumable</code>（追跡対象の組・グローバルに
+未再定義・コンパイル中スコープで refine されていない）で、<code>record_bop_dep</code>
+が <code>(class, op)</code> を記録し、<code>set_bop_redefine</code> がそれを読んで依存本体だけを
+evict する。<strong>直接発火経路には class-version ガードが無く、健全性は記録した
+依存だけに拠る</strong>。<code>Hash#[]=</code> が意図的に表に無いのはこのためで、通常の
+class-version ガード付き経路に残す（<code>index_hash_assign_redefinition</code> テスト）。
+効果は <a href="#基本演算の再定義bop-redefinition"><code>../bop_redefinition.md</code></a>（<code>Array#[]</code> 再定義
+時 0.30 → 0.030 → 0.009 s）。</p>
+<h3 id="38-arraynew-と-classnew"><a class="header" href="#38-arraynew-と-classnew">3.8 <code>Array.new</code> と <code>Class#new</code></a></h3>
+<p><code>Array.new</code> は native では定義されていない。Ruby の <code>Class#new</code> トランポリン
+（<code>o = __builtin_allocate__; o.__builtin_initialize__(...)</code>）を継いで、Ruby
+で書かれた <code>Array#initialize</code>（<code>builtins/array.rb</code>、位置引数 0〜2、rest /
+キーワード無し）にインライン経路で届く。以前の <code>__send__</code> による override は
+rest + kwrest 登録だったため JIT の転送高速経路を全部外し、汎用の引数再解析
+と rest Array の即時実体化を毎回払っていた（約 8 倍遅い）。さらに public な
+<code>allocate</code> を dispatch していたのでユーザーの上書きを尊重してしまい、CRuby の
+<code>Array.new</code> とは違っていた。</p>
+<p><code>Array#initialize</code> の重い脚は native の <code>__init_fill</code> / <code>__init_from</code> /
+<code>__size_to_int</code>。<code>#to_ary</code> の探索は引数が Integer でないときに限る（CRuby の
+<code>!FIXNUM_P</code>）。ブロック形は要素を逐次 push して <code>break</code> 時の部分内容を
+CRuby と一致させ、<code>yield</code> はユーザーの <code>Array.new { }</code> サイトのリテラル
+ブロックに対して特殊化される（<code>resolve_given_block</code> が <code>Class#new</code> の転送
+連鎖を辿る）。</p>
+<p>アロケータは <code>array_alloc_func</code> で <code>default_alloc_func</code> ではないため、
+<code>emit_class_allocate</code> の <code>InlineAlloc::Object</code> 列にはならず、<code>array_alloc_func</code>
+への直接 call になる。クラス記録により後続の <code>__builtin_initialize__</code> は
+単相になる。</p>
+<p>rest 引数 <code>Array</code> の遅延実体化（D1）は
+<a href="#argument-forwarding-def-fa--g-end-の最適化"><code>../arg_forwarding_jit.md</code></a> §3.4 にある。
+<code>WriteBack::forward_rest</code> が <code>(dst, src, len)</code> を持ち、deopt 時に
+<code>runtime::create_array</code> で作る。リテラルの write back が <code>forward_rest</code> より
+先なのは、実体化が確保を伴い、その時点でフレームが GC 整合でなければならない
+からである（<a href="#jit-の不変条件--何を前提に投機し破れたらどう戻るか"><code>../jit_invariants.md</code></a>）。</p>
+<hr>
+<h2 id="4-ruby-で書かれているメソッド"><a class="header" href="#4-ruby-で書かれているメソッド">4. Ruby で書かれているメソッド</a></h2>
+<p><code>builtins/array.rb</code> に <code>initialize</code> / <code>each</code> / <code>reverse_each</code> /
+<code>each_with_index</code> / <code>each_index</code> / <code>map</code> / <code>map!</code> / <code>bsearch</code> /
+<code>bsearch_index</code> / <code>dig</code> / <code>tally</code> / <code>filter_map</code> / <code>cycle</code> / <code>combination</code> /
+<code>permutation</code> / <code>repeated_*</code> / <code>at</code> / <code>to_ary</code> / <code>deconstruct</code> / <code>drop_while</code> /
+<code>fetch_values</code> / <code>rindex</code> / <code>assoc</code> / <code>rassoc</code> / <code>values_at</code> / <code>__zip_pull</code> が
+ある。</p>
+<p>理由はファイル自身が書いている: ホットな <code>Array.new</code> サイトが JIT の
+特殊化された引数束縛を得られ、ブロック形では要素ごとの <code>yield</code> がインライン
+展開される（native 版は要素ごとに native→Ruby のブロック呼び出しを払って
+いた）。<code>each</code> / <code>map</code> の Rust 版は <code>builtins/array.rs</code> に残っているが<strong>登録が
+コメントアウト</strong>されていて、<code>while i &lt; self.size</code> を <code>Array#size</code> / <code>Array#[]</code>
+のインラインで回す Ruby 版が勝つ。</p>
+<p>逆に <strong><code>Array#sum</code> は意図的に Ruby で開き直さない</strong>（Rust の Fixnum 高速
+経路を迂回してしまうため）。<code>sample</code> / <code>shuffle</code> / <code>shuffle!</code> は <code>random:</code>
+の解決と <code>RAND_UPTO</code> を共有するため Rust のまま。</p>
+<p>このトレードオフは <a href="#基本演算の再定義bop-redefinition"><code>../bop_redefinition.md</code></a> に記録
+されている: <code>Integer#&lt;</code> を再定義すると monoruby では <code>Array#map</code>（の
+<code>while i &lt; size</code>）が壊れるが、C 実装の CRuby は影響を受けない。
+<code>Array#size</code> を再定義すると <code>Kernel#p</code> の内部が <code>ArgumentError</code> になるのも
+同種で、BOP フックの欠落ではなく「組み込みが Ruby で書かれていることの露出」
+である。</p>
+<hr>
+<h2 id="5-個別メソッドの注記"><a class="header" href="#5-個別メソッドの注記">5. 個別メソッドの注記</a></h2>
+<ul>
+<li><strong><code>Array#sum</code></strong>: ブロック無し・整数の初期値・全要素 Fixnum なら
+<code>checked_add</code> の高速経路（約 30 倍）、外れたら元の <code>sum</code> で汎用ループへ。
+Float が続くあいだは <strong>Kahan–Neumaier 補償加算</strong>（CRuby と同じ精度）。
+補償項は全 Float 経路を抜けるときと最後に畳み、非有限になったら更新
+しない（<code>Inf - Inf</code> の偽 NaN を避ける）。配列はイテレータではなく毎回
+添字で読み直すので、ブロックがレシーバを伸ばしても CRuby と同じく耐える。</li>
+<li><strong><code>sort</code> / <code>sort!</code> / <code>min</code> / <code>max</code> / <code>minmax</code></strong>（<code>executor/op/sort.rs</code>）:
+20 要素以下は挿入ソート（マージバッファ無し）。マージ中のバッファは
+一方の run の<strong>唯一の参照</strong>を持ち、比較子は任意の Ruby を走らせるので、
+Rust の <code>Vec&lt;Value&gt;</code> では GC に見えない — 実際にあったバグで、呼び出し側
+は nil 埋めの <code>Array</code> を temp スタックに置いてバッファにする。全 Fixnum /
+全 String / 全（非 NaN）Float のスライスは <code>homogeneous_ord</code> で
+<strong>Rust の中だけで</strong>ソートし、クラスごとに別の <code>sort_unstable_by*</code> を呼ぶ
+（キー抽出が単相化して inline される）。Ruby の sort は安定でないので
+unstable で良い。許可は <code>BASIC_OP_DEFS</code> + <code>cmp_redefined</code>。<code>cmpint</code> は
+<code>rb_cmpint</code> に従い、Bignum は符号を直接読み、非 Integer は <code>&lt;=&gt; 0</code> でなく
+<code>&gt; 0</code> と <code>&lt; 0</code> を尋ねる。<code>min(n)</code> / <code>max(n)</code> は部分選択ではなく rooted な
+コピーの 1 回ソートを使う。</li>
+<li><strong><code>hash</code> / <code>eql?</code></strong>: 外側再帰は <code>exec_recursive_outer_unregistered</code> で
+畳み、循環構造はすべて同じ番兵にハッシュする（<code>rec.hash == [{x: rec}].hash</code>
+が <code>eql?</code> と整合する）。<code>Store::has_builtin_container_hash</code> が「この
+Array / Hash はまだ builtin の <code>:hash</code> に解決するか」を class version で
+キャッシュしていて、真なら <code>Value::ruby_hash</code> が構造ダイジェストを
+<strong>native で</strong>計算する。singleton / mock / monkey-patch があれば dispatch。</li>
+<li><strong><code>include?</code> / <code>index</code> / <code>count</code> / <code>delete</code></strong>（<code>EqSearch</code>、<code>executor/op.rs</code>）:
+needle を 1 回準備してから走査する。Integer / Symbol / nil / true / false
+の needle なら同クラスでビットが違う要素は <code>==</code> 無しで不一致、String は
+内容で決まる。<code>basic_op_redefined_for(class, :==)</code> でゲート。dispatch に
+達する要素には <code>(ClassId, class_version)</code> キーの<strong>単相キャッシュ</strong>
+<code>cached_eq</code> があり、独自 <code>==</code> を持たないクラスは <code>Identity</code> アームで
+呼び出し自体を省く。以前は<strong>引数</strong>に <code>==</code> を尋ねて hoist していて、
+レシーバが違うバグだった。</li>
+<li><strong><code>-</code> / <code>&amp;</code> / <code>intersection</code> / <code>uniq</code></strong>: <code>RubySet</code> を作る。<code>insert</code> が
+Ruby を走らせうるので、格納ポインタを temp スタックで root する。</li>
+<li><strong><code>flatten</code></strong>: object id の <code>seen</code> で循環検出。要素の変換探索
+<code>try_convert_to_array</code> は <code>rb_check_funcall</code> の 4 段（ユーザーの
+<code>respond_to?</code> → <code>to_ary</code> → <code>respond_to_missing?</code> → <code>method_missing</code>）を
+ruby/spec どおりに踏む。</li>
+<li><strong><code>flat_map</code></strong>: 蓄積先は Rust の <code>Vec</code> ではなく <strong>rooted な Ruby Array</strong>
+（<code>vm.temp_array_*</code>）。<code>invoke_block</code> はすべて safepoint だからで、
+gc-stress の optcarrot が落ちた事例が <a href="#monoruby-の-gc--機構と実装"><code>../gc.md</code></a> にある。</li>
+<li><strong><code>pack</code></strong>: <code>string/pack.rs</code> の CRuby <code>pack.c</code> 忠実移植で、実行時の
+高速経路は特に無い。</li>
+<li><strong><code>shuffle</code> / <code>sample</code></strong>: CRuby の <code>RAND_UPTO</code>（<code>rb_random_ulong_limited</code>）
+をそのまま使うので、<code>srand(n)</code> 後の列が<strong>1 回の draw 単位で CRuby と
+一致</strong>する。</li>
+</ul>
+<hr>
+<h2 id="6-cruby-との実装差異"><a class="header" href="#6-cruby-との実装差異">6. CRuby との実装差異</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>項目</th><th>CRuby</th><th>monoruby</th></tr>
+</thead>
+<tbody>
+<tr><td>埋め込み／共有</td><td><code>RARRAY_EMBED</code>（埋め込み）と <code>ary_make_shared</code> による共有配列 + copy-on-write の 2 段</td><td><strong>共有配列は無い</strong>。<code>SmallVec&lt;[Value; 5]&gt;</code> の 1 機構: 5 要素まで 48 バイトのペイロードに直置き、超えたらヒープ。<code>get_elem1</code> / <code>get_elem2</code> の Range 形は毎回新しい配列を確保する。String には隠れ frozen root による共有部分文字列があるので（<a href="#string-の実装と最適化">string.md</a>）、Array に無いのは意図的な選択</td></tr>
+<tr><td>基本演算の追跡</td><td><code>BOP_SIZE</code> / <code>BOP_LENGTH</code> / <code>BOP_AREF</code> / <code>BOP_ASET</code> …</td><td><code>Array#[]</code> / <code>Array#[]=</code> / <code>Hash#[]</code> のみ。<code>size</code> は class-version ガードで守る。<code>Hash#[]=</code> は意図的に外す</td></tr>
+<tr><td>組み込みの実装言語</td><td>C（<code>Integer#&lt;</code> を再定義しても <code>Array#map</code> は無傷）</td><td><code>each</code> / <code>map</code> / <code>initialize</code> などが Ruby。<code>Integer#&lt;</code> や <code>Array#size</code> の再定義が組み込みの内部に及ぶ（意図したトレードオフ、§4）</td></tr>
+<tr><td><code>Array.new</code> と <code>allocate</code></td><td>ユーザー定義の <code>self.allocate</code> を迂回</td><td>同じ。private な <code>__builtin_allocate__</code> 経由で実現</td></tr>
+<tr><td>範囲外の <code>[]</code></td><td>nil</td><td>JIT コード内で nil（deopt 無し）。負添字も生成コードで折り返す。範囲外の<strong>書き込み</strong>は必ず高速経路を抜ける（伸長・<code>IndexError</code> のため）</td></tr>
+<tr><td><code>ArithmeticSequence</code> 添字</td><td><code>rb_ary_aref1</code> 内で処理</td><td><code>aseq.[](self)</code> に委譲（3 箇所とも）。特異クラス付きの AS（<code>Range#%</code> 由来）も <code>ObjTy</code> で判定するので届く</td></tr>
+<tr><td><code>[]=</code> の Range 開始</td><td>折り返しても負なら <code>RangeError</code></td><td>同じ。素の負 Integer 添字は <code>IndexError</code></td></tr>
+<tr><td><code>Array#&lt;=&gt;</code></td><td>最初に <code>0</code> でなかった要素比較の結果をそのまま返す</td><td>同じ（nil / ±1 / String もそのまま）</td></tr>
+<tr><td>リテラル</td><td><code>duparray</code> / <code>newarray</code>、<code>opt_newarray_send</code></td><td><code>Literal</code>（テンプレート deep copy）。要素が全部 immediate で 5 以下なら複製を機械語に焼く。<code>[a,b].min/max</code> 融合あり</td></tr>
+<tr><td><code>Array.new</code> の <code>#to_ary</code> 探索</td><td><code>!FIXNUM_P</code> で判定。Bignum は探索する</td><td>Integer クラスが 1 つなので Bignum も探索を飛ばし、<code>__init_fill</code> のサイズ検査が CRuby の <code>NUM2LONG</code> + 「array size too big」の順で拒む。<code>MAX_ARRAY_SIZE = 1 &lt;&lt; 30</code></td></tr>
+<tr><td><code>zip</code> の引き出し</td><td><code>take_items</code>（<code>each</code> + <code>break</code>）</td><td>同じ。<code>Enumerator#next</code> の fiber は使わないので、引数の <code>each</code> からの <code>StopIteration</code> は呼び出し元に届く</td></tr>
+<tr><td>要素格納のバリア</td><td><code>RARRAY_ASET</code> が <code>RB_OBJ_WRITE</code></td><td><code>Array</code> ラッパが <code>ArrayInner</code> の mutator を隠して全経路をバリア。JIT は <code>emit_write_barrier_rdi</code> / <code>_bulk</code></td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="7-テストと関連文書"><a class="header" href="#7-テストと関連文書">7. テストと関連文書</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>場所</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>codegen/arch/x86_64/compile/index.rs</code> のテスト</td><td>添字境界（±100000、伸長、<code>a[-3]=</code> のエラー）</td></tr>
+<tr><td><code>codegen/jitgen/compile/index.rs</code> のテスト</td><td><code>index_redefinition_evicts</code> / <code>index_polymorphic_array_and_method</code> / <code>index_array_subclass_override</code> / <code>index_private_receiver</code> / <code>index_hash_assign_redefinition</code></td></tr>
+<tr><td><code>builtins/array.rs</code> の <code>array_literal_minmax_fusion</code></td><td><code>[a, b].min</code> 融合</td></tr>
+<tr><td><a href="#optcarrot---opt-プロファイル調査と高速化ロードマップ"><code>../optcarrot_opt_profile.md</code></a></td><td><code>&lt;&lt;</code> / <code>rotate!</code> / <code>expand_array</code> / スライス代入の計測と経緯</td></tr>
+<tr><td><a href="#基本演算の再定義bop-redefinition"><code>../bop_redefinition.md</code></a></td><td>BOP の差分掃討（48 ケース）、Ruby 実装組み込みの露出</td></tr>
+<tr><td><a href="#unified-low-level-ir-lir"><code>../lir.md</code></a></td><td><code>GuardArrayTy</code> / <code>GuardFrozen</code> / <code>ArrayLenFixnum</code> の LIR</td></tr>
+<tr><td><a href="#argument-forwarding-def-fa--g-end-の最適化"><code>../arg_forwarding_jit.md</code></a></td><td>rest Array の遅延実体化（D1）</td></tr>
+<tr><td><a href="#monoruby-の-gc--機構と実装"><code>../gc.md</code></a></td><td>バリア、temp スタックの root、<code>flat_map</code> の事例</td></tr>
+<tr><td><a href="#monoruby-progress-summary-april-2025--april-2026"><code>../progress_2025-2026.md</code></a></td><td><code>Array#[]</code> / <code>#[]=</code> のインライン化（#269）などの変更履歴</td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="hash-の実装と最適化"><a class="header" href="#hash-の実装と最適化">Hash の実装と最適化</a></h1>
+<p>Ruby プログラムは Hash を「オブジェクトのフィールド袋」として使うので、
+<code>[]</code> / <code>[]=</code> / <code>key?</code> / <code>fetch</code> はアプリケーションのもっとも内側のループに
+現れる。yjit-bench の erubi では実行時間の 29 %、rack で 18 %、
+activerecord で 13 % が Hash 参照だった
+（<a href="design/yjit_bench_slow_investigation_2026-09.html"><code>yjit_bench_slow_investigation_2026-09.md</code></a> §5.2）。</p>
+<p>この文書は、現在の Hash がどういう表現とどういう探索経路を持っているかを
+まとめ、そこに入れた最適化を計測とともに記録し、残っているコストと次の
+候補を優先順位付きで並べる。個々の API の意味論ではなく「1 回の参照に何が
+起きるか」に焦点を当てる。CRuby の <code>ar_table</code> / <code>st_table</code> と実装が
+どう違うかは §6 にまとめた。</p>
+<p><code>runtime_optimization/</code> の他の章（<a href="#array-の実装と最適化">Array</a> / <a href="#string-の実装と最適化">String</a> /
+<a href="#regexp-の実装と最適化">Regexp</a>）と共通の前提は <a href="design/runtime_optimization/README.html">README.md</a> にある。</p>
+<hr>
+<h2 id="1-3-つの表現"><a class="header" href="#1-3-つの表現">1. 3 つの表現</a></h2>
+<p>Hash の表現は <code>RValue</code> ヘッダの型別メタデータバイト（<code>Metadata::ty_flags</code>）に
+入っている。48 バイトのペイロードを表現の判別に使わないので、小さい Hash は
+ペイロード全部をデータに使える。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>ビット</th><th>意味</th></tr>
+</thead>
+<tbody>
+<tr><td>0-2</td><td>表現: 0..=3 = その数のペアを inline 保持、7 = boxed</td></tr>
+<tr><td>3</td><td><code>ruby2_keywords</code> フラグ</td></tr>
+<tr><td>4-5</td><td>inline hash の反復深度（飽和カウンタ。boxed は <code>BoxedHash::iter_lev</code>）</td></tr>
+<tr><td>6</td><td>inline hash が <code>compare_by_identity</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>ゼロバイト（<code>Header::new</code> の既定値）がそのまま空の inline hash として妥当で、
+<code>dup</code> / <code>clone</code>（<code>Header::newborn</code>）はこのバイトを保存するので、表現はヘッダと
+一緒に移動する（<code>sanitize_dup_flags</code> が表現と identity ビットだけを残し、
+<code>ruby2_keywords</code> と反復深度は落とす）。</p>
+<p>表現は「3 つ」と言っているが、identity 比較の有無を掛けると形は 4 つある:
+inline（<code>eql?</code> 比較）、inline + <code>IDENT_BIT</code>、boxed の <code>HashContent::Map</code>、
+boxed の <code>HashContent::IdentMap</code>。boxed 側は <code>Box&lt;RubyMap&lt;Option&lt;Value&gt;, Value&gt;&gt;</code>
+と <code>Box&lt;RubyMap&lt;Option&lt;IdentKey&gt;, Value&gt;&gt;</code> という<strong>別の型のマップ</strong>で、
+<code>#[repr(C, usize)]</code> の判別子がオフセット 0 にあるので機械語からも見分けられる。</p>
+<h3 id="11-inline-表現-3-ペア"><a class="header" href="#11-inline-表現-3-ペア">1.1 inline 表現（≤ 3 ペア）</a></h3>
+<p><code>HashBody::inline</code> に <code>(key, value)</code> を 3 組、セルの中に直接持つ。<strong>ヒープ確保
+ゼロ</strong>、探索は 3 要素の線形走査。<code>is_inline_key</code>（<code>rvalue/hash.rs</code>）が許すキーは:</p>
+<ul>
+<li><strong>packed immediate</strong>（Fixnum / Symbol / nil / true / false / flonum）—
+同一性がそのまま内容なので、比較はビット比較で足り、プローブ時に再計算した
+ダイジェストが挿入時のものと食い違うことがない。</li>
+<li><strong>frozen String</strong> — String の <code>eql?</code> はエンコーディング規則込みのバイト比較で
+（再定義された <code>String#eql?</code> / <code>#hash</code> はどちらの表現でも参照しない）、frozen
+なら探索中に内容が変わらない。</li>
+</ul>
+<p>リテラルのキーも <code>h["k"] = v</code> の格納キー（<code>Value::frozen_hash_key</code> が
+コピーして freeze する）も frozen なので、<strong>String キーの小さな Hash リテラルは
+boxed map を作らない</strong>。</p>
+<p><code>compare_by_identity</code> な inline hash は id 走査だけなので、任意のキー（可変な
+ヒープオブジェクトを含む）を保持できる（<code>IDENT_BIT</code>）。</p>
+<p>4 ペア目、inline に置けないヒープキー、デフォルト値／デフォルト proc の設定、
+反復中の <code>delete</code> / <code>shift</code>（tombstone を置く場所が inline には無い）のいずれかが
+来ると <code>promote</code> が boxed へ移す。移送は native の再挿入で Ruby コードは
+走らず、inline の反復深度ビットは <code>iter_lev</code> に引き継がれる。逆方向は
+<code>clear</code> だけで、デフォルトが無ければ boxed の格納を手放して inline に戻る
+（identity ビットは保つ）。</p>
+<h3 id="12-boxed-表現"><a class="header" href="#12-boxed-表現">1.2 boxed 表現</a></h3>
+<p><code>BoxedHash</code> は <code>Box&lt;RubyMap&lt;Option&lt;Value&gt;, Value&gt;&gt;</code>（<code>compare_by_identity</code> なら
+<code>Option&lt;IdentKey&gt;</code> キーの別インスタンス）とデフォルト値／デフォルト proc、
+反復深度、tombstone 数を持つ。</p>
+<p><code>rubymap</code> は順序保持マップ（hashbrown のインデックステーブル + エントリ Vec）
+で、Ruby の挿入順序保持セマンティクスをそのまま表現する。反復中の <code>delete</code> は
+エントリを <strong>tombstone</strong>（キーを <code>None</code>）にして位置を保ち、<code>Option&lt;Value&gt;</code> の
+niche によりキーワードがゼロなら死んだエントリ、という判定が機械語からも
+できる。反復が終わった後の最初の変更操作が <code>compact_if_dirty</code> で詰める。</p>
+<h3 id="13-探索経路"><a class="header" href="#13-探索経路">1.3 探索経路</a></h3>
+<pre><code>JIT: Hash#[]  ──inline gen (hash_index)──►  hashindex(vm, globals, recv, key)
+                                                  │
+VM:  Hash#[]  ──builtin index───────────────────►  Hashmap::index
+                                                  │  （ミス時のみ default / default_proc）
+                                                  ▼
+                                             HashRef::get
+                                        ┌─────────┴─────────┐
+                                    inline 走査        boxed プローブ
+                                                  ┌────────┴────────┐
+                                          packed_digest      string_digest
+                                          （vm 不要）        + string_key_eq（vm 不要）
+                                                  └────────┬────────┘
+                                                  IndexMapCore::get_index_of_prehashed*
+</code></pre>
+<p>要点は <strong>prehashed probe</strong>: packed キーと String キーは Ruby コードを一切
+起動せずにダイジェストと <code>eql?</code> を決められるので、<code>vm</code> / <code>globals</code> を触らない
+専用経路を通る。汎用経路（<code>RubyMap::hash</code>）とバケットが一致することは
+<code>packed_digest</code> / <code>string_digest</code> のドキュメントコメントが不変条件として
+書いている。</p>
+<h3 id="14-機械語が直接歩く部分"><a class="header" href="#14-機械語が直接歩く部分">1.4 機械語が直接歩く部分</a></h3>
+<p><code>Hash#size</code> / <code>#__key_at</code> / <code>#__value_at</code> / <code>#__entry_count</code> / <code>#__live_at</code> /
+<code>#__get_or_key</code> / <code>#default</code> / <code>#default=</code> / <code>#compare_by_identity?</code> は JIT が
+表現を直接歩く機械語として出る。焼き込むオフセットは手計算せず
+<code>HASH_INLINE_PAIRS_OFFSET</code> などのレイアウト定数（<code>offset_of!</code> 由来）と
+<code>rubymap::EntriesLayout</code> のプローブから取る。<code>Bucket&lt;K, V&gt;</code> は <code>repr(Rust)</code> で
+キー型の niche によってフィールドが並び替わる（<code>Option&lt;Value&gt;</code> では
+value+0 / hash+8 / key+16）ため、<code>entries_layout()</code> は本物の <code>Vec</code> を作って
+実測し、<code>rubymap</code> 側の <code>raw_probe</code> / <code>layout_matches_the_safe_api</code> テストが
+その値で歩いた結果が安全な API と一致することを固定している。</p>
+<p>3 ペア以下の Hash リテラルは、<strong>キーが全部 packed immediate で互いに異なる</strong>
+場合に限り JIT がセルを bump 確保してヘッダとペアを直接書き込む
+（<code>new_hash_inline</code> → <code>emit_alloc_cell</code>）。frozen String キーは inline 表現には
+置けるが、この bump 確保の対象ではなく、<code>gen_hash</code> の実行時呼び出しを経て
+inline 表現に落ち着く。</p>
+<p><code>Hash#each</code> / <code>each_key</code> / <code>each_value</code> はこれらのプリミティブの上に Ruby で
+書かれている（<code>builtins/hash.rb</code>）ので、ホットな呼び出しサイトではメソッドと
+ブロックの両方がインライン展開される（§1.6）。</p>
+<h3 id="15-2-つのハッシュ関数"><a class="header" href="#15-2-つのハッシュ関数">1.5 2 つのハッシュ関数</a></h3>
+<p>Hash には<strong>用途の違う 2 つのハッシュ関数</strong>が共存していて、これが §4.1 の前提に
+なる。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>用途</th><th>実装</th><th>場所</th></tr>
+</thead>
+<tbody>
+<tr><td>バケッティング（マップ内部のダイジェスト）</td><td>seeded な wyhash 系 multiply-fold（<code>RubyHasher</code>、施策 5）</td><td><code>rubymap/src/hasher.rs</code></td></tr>
+<tr><td>Ruby から見える <code>Object#hash</code> の<strong>値</strong></td><td>std の <code>RandomState</code> = SipHash-1-3（<code>HASH_STATE</code>、<code>seeded_hasher()</code>）</td><td><code>value.rs</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>RubyHasher</code> は長さを最初に混ぜ、16 バイト単位のループの後に重なりを許した
+4 / 8 バイトの末尾読みをして最後にもう 1 回 fold する。シードはプロセスで 1 回
+<code>RandomState</code> から引く（<code>OnceLock&lt;u64&gt;</code>）ので、全マップと全 JIT 呼び出しサイトが
+同じシードを共有する。ハッシュ品質は <code>hasher.rs</code> のテストが固定している:
+長さごとの分離、1 ビットの変化が<strong>上位 7 ビット</strong>（hashbrown の control byte）
+まで拡散すること、等間隔の整数キーが散ること。</p>
+<p>Ruby 側の <code>#hash</code> は <code>Value::ruby_hash</code> / <code>ruby_hash_packed</code> が作る。nil /
+true / false / Symbol はビットそのもの、String は <code>RStringInner::hash</code>（生
+バイト列、エンコーディング非依存、再定義された <code>String#hash</code> は見ない）、
+Array / Hash は組み込みの <code>hash</code> が再定義されていない限り native の構造
+ハッシュ、それ以外は <code>#hash</code> を dispatch して <code>#to_int</code> で整数化する。
+<strong>Fixnum / Float だけは内側で SipHash を丸ごと 1 回回して</strong> <code>Integer#hash</code> /
+<code>Float#hash</code> の値を作り、その結果をマップ側のハッシャに流す。これは
+<code>Array#hash</code> が要素を混ぜるときに Ruby レベルの <code>#hash</code> と一致させるためで、
+バケッティングには要らない二重ハッシュである（§4.1）。</p>
+<p>異なるプロセスで <code>#hash</code> が変わること（CVE-2011-4815 対策）は
+<code>tests/hash_seed.rs</code> が本物のバイナリを 2 回起動して確認している。</p>
+<h3 id="16-ruby-で書かれた走査とそのためのプリミティブ"><a class="header" href="#16-ruby-で書かれた走査とそのためのプリミティブ">1.6 Ruby で書かれた走査と、そのためのプリミティブ</a></h3>
+<p><code>builtins/hash.rb</code> に <code>each</code> 系が Ruby で書かれている理由は、JIT が
+インライン展開するのが <code>FuncKind::ISeq</code> の呼び出し先だけだからである。
+Rust の builtin が要素ごとにブロックを起動すると 1 要素ごとにフルの
+ブロック呼び出しを払うが、Ruby の <code>each</code> なら <code>h.each { .. }</code> のホットな
+サイトでメソッド本体とブロックの両方が <code>yield</code> の位置に展開される。
+ブロック引数を <code>&amp;block</code> で受けると <code>BlockArg</code> バイトコードになって
+メソッド全体が特殊化不能になり、フレームもヒープに移る
+（<code>Iseq::has_block_arg</code>）ので、必ず <code>yield</code> で書く。</p>
+<p>そのために Rust 側が出しているプリミティブ（大半に機械語インライナがある）:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>プリミティブ</th><th>役割</th></tr>
+</thead>
+<tbody>
+<tr><td><code>__entry_count</code></td><td>エントリ配列の生の長さ（tombstone 込み）</td></tr>
+<tr><td><code>__live_at(i)</code></td><td>位置 i が生きているか</td></tr>
+<tr><td><code>__key_at(i)</code> / <code>__value_at(i)</code></td><td>O(1) の位置参照。範囲外・tombstone は nil（エラー経路が無いので <code>while</code> ループに境界機構が要らない）</td></tr>
+<tr><td><code>__set_value_at(i, v)</code></td><td>位置指定の値上書き。ダイジェストもプローブも走らない</td></tr>
+<tr><td><code>__iter_begin</code> / <code>__iter_end(g)</code></td><td>反復参照の取得・返却（inline の深度は飽和するので戻り値を必ず返す）</td></tr>
+<tr><td><code>__dup_table</code></td><td>エントリと identity モードだけを複製。デフォルトは持たず、常に素の <code>Hash</code>（CRuby の <code>hash_dup_with_compare_by_id</code>）</td></tr>
+<tr><td><code>__new_hash_with_capacity(n)</code></td><td>容量指定の空 Hash</td></tr>
+<tr><td><code>__get_or_key(k)</code></td><td><code>key?(k) ? self[k] : k</code> を 1 プローブで（CRuby の <code>rb_hash_lookup2(map, k, k)</code>）。デフォルトは見ない</td></tr>
+<tr><td><code>__pairs</code></td><td><code>[[k, v], ...]</code> のスナップショット</td></tr>
+<tr><td><code>__block_splits_pair?</code></td><td>呼び出し元ブロックの形（`</td></tr>
+</tbody>
+</table>
+</div>
+<p>この上に乗っている走査の要点:</p>
+<ul>
+<li><code>each</code> / <code>each_pair</code> / <code>each_key</code> / <code>each_value</code> は
+<code>guard = __iter_begin; ... while i &lt; __entry_count ... if __live_at(i) ... ensure __iter_end(guard)</code> の形。</li>
+<li><code>transform_values</code> は <code>__dup_table</code> + <code>__set_value_at</code> で、<strong>キーは変わらない
+ので一度も再ハッシュもプローブもしない</strong>。切り離したコピーを歩くので
+ガードも不要で、全位置が生きている。<code>transform_values!</code> は同じ位置上書きを
+<code>self</code> に対してガード付きで行う。</li>
+<li><code>transform_keys</code> はブロック無し <code>transform_keys(map)</code> にペアごとのブロック
+判定が乗らないよう 3 本のループに分け、<code>__get_or_key</code> を使う。</li>
+<li><code>to_h</code> にブロックが付いたときは <code>each</code> を経由せず位置を直接歩き、
+<code>[k, v]</code> 配列を作らない。結果は <code>__new_hash_with_capacity</code> で事前確保。</li>
+<li><code>map</code> / <code>collect</code> は <code>method(:each).owner == ::Hash</code> を確認したうえで
+<code>__block_splits_pair?</code> をループの外で 1 回だけ判定する（<code>|*vs|</code> の rest
+引数は specialized-yield の対象外になるため）。</li>
+<li><code>dig</code> を Rust に移した実験は計測で退行したので Ruby に戻してある
+（<code>hash.rb</code> のコメントに記録）。</li>
+</ul>
+<hr>
+<h2 id="2-入れた最適化"><a class="header" href="#2-入れた最適化">2. 入れた最適化</a></h2>
+<p>効果は同じ計測機で交互ラウンドの中央値の最小値で比較している（単発は ±10 %
+揺れる）。「純ルックアップ」は同じループからルックアップだけ抜いた時間を
+差し引いた値。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>#</th><th>施策</th><th>変更箇所</th><th>効果</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>≤3 ペアの packed キー Hash を inline 表現に（ヒープ確保ゼロ、JIT がセルを直接書く）</td><td><code>rvalue/hash.rs</code>、JIT の literal 経路</td><td>Symbol キーリテラル生成が boxed の 1/2 以下</td></tr>
+<tr><td>2</td><td>定数 Hash リテラルをテンプレート化し、評価ごとに複製（#1232）</td><td><code>bytecodegen/expression.rs::from_literal_pairs</code></td><td>評価ごとの挿入ループが消える</td></tr>
+<tr><td>3</td><td>汎用 <code>[]=</code>（VM と JIT の多相残余）に Hash の直接経路（#1245）</td><td><code>codegen/runtime.rs::set_index</code></td><td>rack −8 %、graphql −13 %、activerecord −8 %（他の 3 施策込み）</td></tr>
+<tr><td>4</td><td>frozen String キーを inline 表現に許可（#1246）</td><td><code>rvalue/hash.rs::is_inline_key</code></td><td><code>{"content-type" =&gt; "text/plain"}</code> 生成 134 → 57 ns（YJIT 60）、<code>h["k"]</code> 50 → 23 ns、<code>h["k"] = v</code> 40 → 22 ns。rack −7 %、activerecord −13.5 %</td></tr>
+<tr><td>5</td><td>バケット用ハッシュを SipHash-1-3 から seeded ミキサーへ（本ブランチ）</td><td><code>rubymap/src/hasher.rs</code></td><td>下表。erubi −12.4 %、graphql −4.1 %</td></tr>
+</tbody>
+</table>
+</div>
+<p>施策 5 の背景: <code>RubyMap</code> は std の <code>RandomState</code>（SipHash-1-3）を既定の
+ハッシャに継いでいて、<code>perf</code> で見るとルックアップ 1 回の <strong>1/3</strong> がそこだった
+（String キーで <code>string_digest</code> 18.7 % + <code>SipHasher13::write</code> 13.9 %、Symbol キーで
+<code>packed_digest</code> 24.6 % + 11.7 %）。CRuby の <code>st_hash</code> は seeded な非暗号ミキサー
+なので、同じトレードを取った。プロセス単位の乱数シード（<code>RandomState</code> から
+1 度引くので新規依存なし）+ wyhash 系の multiply-fold。シードを秘匿することが
+hash-flooding を抑える根拠で、混ぜ方自体は乗算 2 回。Ruby から見える
+<code>Object#hash</code> は従来どおり <code>HASH_STATE</code> 側なので変わらない。</p>
+<h3 id="純ルックアップのコスト1-回ns18-エントリの-hash"><a class="header" href="#純ルックアップのコスト1-回ns18-エントリの-hash">純ルックアップのコスト（1 回、ns。18 エントリの Hash）</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>キー</th><th style="text-align: right">施策 4 まで</th><th style="text-align: right">施策 5 後</th><th style="text-align: right">CRuby 4.0.6 + YJIT</th></tr>
+</thead>
+<tbody>
+<tr><td>String 4 バイト</td><td style="text-align: right">42.8</td><td style="text-align: right"><strong>33.7</strong></td><td style="text-align: right">17.5</td></tr>
+<tr><td>String 19 バイト</td><td style="text-align: right">49.1</td><td style="text-align: right"><strong>37.7</strong></td><td style="text-align: right">18.5</td></tr>
+<tr><td>String ミス</td><td style="text-align: right">42.0</td><td style="text-align: right"><strong>30.7</strong></td><td style="text-align: right">16.7</td></tr>
+<tr><td>Symbol</td><td style="text-align: right">39.0</td><td style="text-align: right"><strong>25.7</strong></td><td style="text-align: right">16.1</td></tr>
+<tr><td>Integer</td><td style="text-align: right">52.1</td><td style="text-align: right"><strong>39.5</strong></td><td style="text-align: right">16.4</td></tr>
+</tbody>
+</table>
+</div>
+<p>ハッシュ品質のサニティチェック: 20 万エントリで 4096 刻みの整数キー（弱い
+ミキサーが破綻する典型ケース）は 94.2 → 88.8 ns と悪化しない。</p>
+<hr>
+<h2 id="3-残っているコスト"><a class="header" href="#3-残っているコスト">3. 残っているコスト</a></h2>
+<p>施策 5 後の <code>h["name"]</code> / <code>h[:name]</code> ループの <code>perf</code> セルフ時間:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th style="text-align: right">String キー</th><th style="text-align: right">Symbol キー</th></tr>
+</thead>
+<tbody>
+<tr><td>IndexMap / hashbrown の probe</td><td style="text-align: right">31.6 %</td><td style="text-align: right">32.6 %</td></tr>
+<tr><td><code>HashRef::get</code>（2 インスタンス化の合計）</td><td style="text-align: right">25.0 %</td><td style="text-align: right">19.7 %</td></tr>
+<tr><td><code>Hashmap::index</code></td><td style="text-align: right">10.4 %</td><td style="text-align: right">13.6 %</td></tr>
+<tr><td>ダイジェスト（<code>RubyHasher</code>）</td><td style="text-align: right">7.8 %</td><td style="text-align: right">8.9 %</td></tr>
+<tr><td><code>hashindex</code> builtin</td><td style="text-align: right">7.2 %</td><td style="text-align: right">6.3 %</td></tr>
+<tr><td><code>memcmp</code>（キー比較）</td><td style="text-align: right">7.7 %</td><td style="text-align: right">—</td></tr>
+</tbody>
+</table>
+</div>
+<p>ハッシュは 33 % → 8 % まで落ち、いまの支配項は <strong>probe と 4 段のディスパッチ</strong>
+（<code>hashindex</code> → <code>Hashmap::index</code> → <code>HashRef::get</code> → <code>IndexMapCore</code>）である。</p>
+<hr>
+<h2 id="4-今後のアイデア効果の見込み順"><a class="header" href="#4-今後のアイデア効果の見込み順">4. 今後のアイデア（効果の見込み順）</a></h2>
+<h3 id="41-integer--float-キーの二重ハッシュを外す小確度高"><a class="header" href="#41-integer--float-キーの二重ハッシュを外す小確度高">4.1 Integer / Float キーの二重ハッシュを外す（小・確度高）</a></h3>
+<p><code>Value::ruby_hash_packed</code> の Fixnum / Float アームは、<code>Integer#hash</code> /
+<code>Float#hash</code> が返す<strong>値</strong>を作るために内側で <code>seeded_hasher()</code>（std の
+<code>DefaultHasher</code> = SipHash）を丸ごと 1 回回し、その結果を外側のマップハッシャに
+流している。これは <code>Array#hash</code> / <code>Hash#hash</code> が要素を混ぜるときに Ruby レベルの
+<code>#hash</code> 結果と一致させるための要請で、<strong>バケッティングには要らない</strong>。上表で
+Integer キーだけ Symbol キーより 14 ns 遅い（39.5 vs 25.7）のがそのコスト。</p>
+<p>構造ハッシュ用（Ruby から見える <code>#hash</code> 値）とバケッティング用を分ければ、
+Integer キーの参照が Symbol キーと同じところまで来るはず。</p>
+<h3 id="42-probe-を-jit-でインライン展開する大最大の残り段階-13-実装済み2026-09-0405"><a class="header" href="#42-probe-を-jit-でインライン展開する大最大の残り段階-13-実装済み2026-09-0405">4.2 probe を JIT でインライン展開する（大・最大の残り。<strong>段階 1〜3 実装済み</strong>、2026-09-04/05）</a></h3>
+<p>いまは <code>Hash#[]</code> のインライン生成が <code>hashindex</code> への直接呼び出しまでしか
+やらない（メソッドフレームは省くが、そこから先は Rust）。受信側が
+<code>Hash</code> ちょうどで boxed 表現だと分かっている呼び出しサイトなら、
+ダイジェスト → インデックステーブル引き → エントリ比較を機械語で出せる。
+上の内訳の probe 32 % + ディスパッチ 42 % のかなりの部分が対象で、YJIT との
+残差（33.7 vs 17.5 ns）を埋める本命。<code>gen_hash_entry_at</code> が既に
+<code>rubymap::EntriesLayout</code> からエントリ配列を歩いているので、必要なレイアウト
+知識は揃っている。</p>
+<h4 id="段階分け"><a class="header" href="#段階分け">段階分け</a></h4>
+<p><code>IndexMapCore</code> には 2 つの動作領域がある。<strong>≤ 8 エントリ</strong>（<code>AR_MAX</code>、CRuby の
+<code>RHASH_AR_TABLE_MAX_SIZE</code> と同じ）は <code>linear</code>、<code>indices</code> を作らず <code>entries</code> を
+線形走査して <code>entry.hash == hash</code> の一致だけキー比較する。それ以上は hashbrown
+の probe（上位 7 ビットで control byte を 16 個ずつ SIMD 比較 → 添字 →
+エントリ比較）。<code>Bucket { hash, key, value }</code> はハッシュ値を格納しているので、
+線形走査は「64 ビット比較 × N、当たったときだけキー比較」で済む。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>段階</th><th>キー</th><th>領域</th><th>状態</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>packed のうちビットがそのままミキサーに入るもの（Symbol / nil / true / false）</td><td>線形（≤ 8）</td><td><strong>実装済み</strong> <code>AsmInst::HashProbe</code>（旧 <code>HashProbePacked</code>）</td></tr>
+<tr><td>2</td><td>同上</td><td>索引（&gt; 8）— hashbrown の group probe</td><td><strong>実装済み</strong>（段階 3 と同時）</td></tr>
+<tr><td>3</td><td>String — バイト列ダイジェスト + memcmp + <code>plain_string</code> 判定</td><td>両方</td><td><strong>実装済み</strong>（erubi の 18 エントリ・String キーはここ）</td></tr>
+</tbody>
+</table>
+</div>
+<p>Integer キーは 4.1 の二重ハッシュ（SipHash を内側で 1 回回す）が解けるまで
+対象外。葉ヘルパで正しく計算はできるが、ヘルパ自体が現状のルックアップの
+大半のコストになる。</p>
+<h4 id="段階-1-の設計判断2026-09-04"><a class="header" href="#段階-1-の設計判断2026-09-04">段階 1 の設計判断（2026-09-04）</a></h4>
+<ul>
+<li><strong>ダイジェストは葉ヘルパ <code>packed_digest_c</code>、probe は機械語。</strong> fold は
+64×64→128 の乗算だが、この JIT が使う x86-64 アセンブラ（monoasm）に
+1 オペランド <code>mul</code> が<strong>無い</strong>（<code>div</code> / <code>idiv</code> はあり、<code>imul</code> は 2 オペランドの
+下位 64 ビットのみ）。aarch64 には <code>umulh</code> がある。monoasm に足したら
+ヘルパをその命令列に置き換えるだけで、他は変わらない。</li>
+<li><strong>形の不一致は deopt ではなく builtin 呼び出し。</strong> inline 表現・identity
+マップ・索引領域はすべて <code>hashindex</code> への合流で、exit しない。最初は deopt に
+していたが、この deopt は再コンパイルを起こさないので、大きな Symbol キー
+Hash のサイトが<strong>毎回 deopt</strong>することになる（4.5 の ic ゲートで踏んだのと
+同型）。builtin 呼び出しなら現状と同コストで退行しない。</li>
+<li><strong>線形領域の miss は in-line で <code>nil</code>。</strong> 走査を尽くしたら
+<code>Option&lt;Box&lt;HashDefault&gt;&gt;</code>（null = default 値も proc も無し）を 1 ロード見て、
+無ければ nil。builtin に落とすとダイジェストと走査をもう一度やり直すので、
+最初の実装では miss が 16 → 30 ns に<strong>退行</strong>していた。</li>
+<li><strong><code>EntriesLayout</code> に <code>hash_offset</code> / <code>linear_offset</code> を追加</strong>。<code>Bucket</code> は
+niche を持つキー型で並び替わる（<code>Option&lt;Value&gt;</code> では value+0 / hash+8 /
+key+16）ので、既存どおり実測で取る。</li>
+</ul>
+<h4 id="段階-1-の効果6-エントリsymbol-キー純ルックアップ交互-4-ラウンド"><a class="header" href="#段階-1-の効果6-エントリsymbol-キー純ルックアップ交互-4-ラウンド">段階 1 の効果（6 エントリ・Symbol キー、純ルックアップ、交互 4 ラウンド）</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th style="text-align: right">従来</th><th style="text-align: right">段階 1</th></tr>
+</thead>
+<tbody>
+<tr><td>hit（先頭）</td><td style="text-align: right">16.3–18.1</td><td style="text-align: right"><strong>6.3–9.7</strong></td></tr>
+<tr><td>hit（末尾）</td><td style="text-align: right">15.3–19.3</td><td style="text-align: right"><strong>8.2–11.0</strong></td></tr>
+<tr><td>miss</td><td style="text-align: right">16.5–20.4</td><td style="text-align: right"><strong>7.4–10.6</strong></td></tr>
+<tr><td>18 エントリ Symbol（索引領域、fallback）</td><td style="text-align: right">18.7–26.0</td><td style="text-align: right">15.5–21.2（退行なし）</td></tr>
+</tbody>
+</table>
+</div>
+<p>hit 経路の call は <code>packed_digest_c</code> の 1 つだけになり、<code>hashindex</code> の call は
+miss 側にしか残らない（<code>emit-asm</code> で確認）。<code>tests/hash_probe_jit.rs</code> が
+hit / miss / default 値 / default proc / nil・true・false キー / tombstone /
+索引領域・inline 表現・identity マップへの委譲 / クラスガード / 線形↔索引の
+境界を跨ぐ成長 / 生きた状態の読み取りを CRuby と突き合わせる。</p>
+<h4 id="段階-23-の設計判断2026-09-05"><a class="header" href="#段階-23-の設計判断2026-09-05">段階 2・3 の設計判断（2026-09-05）</a></h4>
+<ul>
+<li><strong>索引領域は hashbrown の <code>find_inner</code> を SIMD 無しで写す。</strong> monoasm には
+SIMD が無いので、16 バイトの control group を 64 ビット語 2 つとして読み、
+hashbrown 自身の generic backend と同じ SWAR ゼロバイト判定
+（<code>(x - 0x01..) &amp; !x &amp; 0x80..</code>、x = word ^ tag×0x01..）で候補ビットを出す。
+真の一致より後ろのバイトに偽陽性が出うるが、候補は必ずエントリの格納
+ダイジェスト（64 ビット全部）で検証するので無害。候補の添字は control
+バイト列の<strong>下</strong>にあるバケット配列（bucket i は <code>ctrl - 8(i+1)</code>）から
+読む。2 語とも見終わってから EMPTY（<code>0xFF</code> — bit 7 と 6 が立つので
+<code>w &amp; (w &lt;&lt; 1) &amp; 0x80..</code>）の有無で打ち切り、無ければ三角数列で次の group
+へ。<strong>EMPTY を見た瞬間に打ち切ってはいけない</strong>：削除で EMPTY に戻った
+スロットより後ろに、それ以前に挿入された要素が同じ group 内に居られる
+（hashbrown は group 内の一致を全部見てから EMPTY を判定する）。
+<code>rubymap</code> の <code>raw_probe</code> テストがこのアルゴリズムを生の offset だけで
+なぞり、<code>find_inner</code> と同じ答えになることを固定している。</li>
+<li><strong>レイアウトは <code>offset_of!</code> で取る。</strong> <code>EntriesLayout</code> に
+<code>indices_ctrl_offset</code> / <code>indices_mask_offset</code> / <code>group_width</code> を追加。
+hashbrown（vendored）の <code>RawTable</code> / <code>HashTable</code> に <code>ctrl_offset()</code> /
+<code>bucket_mask_offset()</code> / <code>GROUP_WIDTH</code> を生やした。group 幅が 16 で
+ない構成では索引領域を builtin に渡す（静的分岐）。</li>
+<li><strong>String キーは葉ヘルパ 2 つ + 機械語 probe。</strong> <code>string_digest_c</code>（バイト
+列の wyhash、挿入時と同じ）と <code>string_key_eq_c</code>（<code>string_key_eq</code> そのもの
+：identity → STRING×STRING バイト比較）。同一オブジェクト（frozen
+リテラル）なら eq 呼び出しを省く。<strong>格納ダイジェストが一致したのに eq が
+偽</strong>なら（64 ビット衝突か tombstone か異種キー）<code>miss</code> → builtin。こうする
+と eq 呼び出しの前後で probe のループ状態を退避する必要が無く、rdx/rcx
+と entry ポインタだけ push すれば済む。</li>
+<li><strong>サブクラスは class guard が弾く。</strong> <code>guard_class(STRING_CLASS)</code> はクラス
+一致なので、<code>eql?</code> を dispatch すべき String サブクラス（#1258）は
+probe に入らず deopt する。</li>
+<li><strong>identity マップは probe しない。</strong> <code>HashContent</code> の判別子（0 = Map,
+1 = IdentMap）を見て IdentMap なら builtin へ。段階 1 は判別子を見て
+いなかったが、Symbol は <code>IdentKey</code> のダイジェスト（<code>id()</code>）と packed
+ダイジェストが一致するので偶然正しかった。String は内容ダイジェスト ≠
+identity ダイジェストで、<strong>自分自身すら見つからず nil を返していた</strong>
+（<code>compare_by_identity</code> + String キーで検出、テスト追加）。</li>
+<li><strong>キークラスが混在するサイトは段階 1 と同じ性質。</strong> <code>h[k]</code> の k の
+クラスは抽象状態から取り、guard の失敗は plain deopt（再コンパイル無し）。
+同じサイトに String と Symbol が交互に来ると、後から来たクラスは毎回
+deopt して interpreter で実行される（計測では 12 → 24 ns）。段階 1 の
+Symbol guard も同じ。receiver 側の <code>BecamePolymorphic</code> 再コンパイルは VM
+が立てる POLY ビットで「次は generic に」と判断できるが、引数クラスには
+その仕組みが無く、再コンパイルしても同じ guard が出るだけなので保留。</li>
+</ul>
+<h4 id="補足-どこから発火しいつ機械語を諦めるか"><a class="header" href="#補足-どこから発火しいつ機械語を諦めるか">補足: どこから発火し、いつ機械語を諦めるか</a></h4>
+<ul>
+<li><code>Hash#[]</code> のインライン生成 <code>hash_index</code> は <code>fire_index_inline</code> から呼ばれ、
+受信側クラスが<strong>ちょうど <code>Hash</code></strong> のときだけ probe を出す。理由は builtin
+の <code>Hash#[]</code> がミス時に <code>default</code> <strong>メソッド</strong>を dispatch する（サブクラスや
+特異メソッドで上書きできる）のに対し、<code>hashindex</code> は格納されたデフォルトを
+直接読むからで、サブクラスは通常の class-version ガード付き呼び出しに残す。
+<code>Hash#[]</code> は <code>BASIC_OP_DEFS</code> に入っているので class-version ガードは省き、
+<code>record_bop_dep</code> で再定義を捕まえる。<code>Hash#[]=</code> は意図的に BOP に<strong>入って
+いない</strong>ので、<code>hash_index_assign</code> は通常経路のまま（<code>index_hash_assign_redefinition</code>
+テストが固定）。</li>
+<li>受信側クラスを抽象状態が確定できない多相サイトでは <code>index_dispatch</code> が
+<strong>2 腕のディスパッチ</strong>を出す: <code>BrClassNe</code> で Hash なら probe、そうでなければ
+<code>runtime::get_index</code>。外れたクラスは deopt ではなく C 呼び出しになる。</li>
+<li>キーのクラスはサイトのインラインキャッシュ／抽象状態から取り、
+Symbol / nil / true / false は <code>packed_digest_c</code>、String は <code>string_digest_c</code>
+<ul>
+<li><code>string_key_eq_c</code>、それ以外（Integer を含む）は probe を出さず
+<code>hashindex</code> の直接呼び出しに落ちる。</li>
+</ul>
+</li>
+<li><code>hash_entries_layout()</code> が <code>None</code>（2 つのマップ型でレイアウトが一致しない
+構成）か、hashbrown の group 幅が 16 でない構成では、索引領域は静的に
+<code>miss</code> へ飛ばす。いずれも性能上の後退で、正しさには関わらない。</li>
+</ul>
+<h4 id="段階-23-の効果純ルックアップ交互-2-ラウンドns"><a class="header" href="#段階-23-の効果純ルックアップ交互-2-ラウンドns">段階 2・3 の効果（純ルックアップ、交互 2 ラウンド、ns）</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th style="text-align: right">段階 1</th><th style="text-align: right">段階 3</th><th style="text-align: right">CRuby+YJIT</th></tr>
+</thead>
+<tbody>
+<tr><td>String 6 エントリ hit（先頭 / 末尾）</td><td style="text-align: right">12.4–13.7 / 14.6–16.2</td><td style="text-align: right"><strong>10.7–11.1 / 14.4–14.6</strong></td><td style="text-align: right">33.1 / 34.6</td></tr>
+<tr><td>String 6 エントリ miss</td><td style="text-align: right">13.5–15.6</td><td style="text-align: right"><strong>10.9</strong></td><td style="text-align: right">27.9</td></tr>
+<tr><td>String 18 エントリ（erubi 形）hit</td><td style="text-align: right">14.4–17.1</td><td style="text-align: right"><strong>11.7–12.3</strong></td><td style="text-align: right">26.4–40.5</td></tr>
+<tr><td>String 18 エントリ miss</td><td style="text-align: right">12.6–17.1</td><td style="text-align: right"><strong>8.1–8.3</strong></td><td style="text-align: right">18.8</td></tr>
+<tr><td>String 100 エントリ hit / miss</td><td style="text-align: right">14.7–17.1 / 12.7–14.6</td><td style="text-align: right"><strong>11.6–12.1 / 8.0–10.7</strong></td><td style="text-align: right">25.3 / 19.0</td></tr>
+<tr><td>Symbol 18 / 100 / 1000 エントリ hit</td><td style="text-align: right">10.9–13.3</td><td style="text-align: right"><strong>7.5–8.6</strong></td><td style="text-align: right">10.6</td></tr>
+<tr><td>Symbol 18 / 100 / 1000 エントリ miss</td><td style="text-align: right">11.1–15.0</td><td style="text-align: right"><strong>8.8–11.2</strong></td><td style="text-align: right">11.2</td></tr>
+</tbody>
+</table>
+</div>
+<p>String の hit は digest 呼び出し（wyhash）と eq 呼び出し（memcmp）が残るので
+Symbol ほどは縮まないが、miss は in-line で nil を返せるので 8 ns 台。
+yjit-bench の erubi（<code>benchmark_mono.rb</code>、warmup 10 + 30 反復、交互 2 ラウンド）
+は 215–221 ms → <strong>192–206 ms</strong>（−7〜−10 %）。
+<code>tests/hash_probe_jit.rs</code> に String キー（線形 / 索引 / frozen 同一 /
+default 値・proc）、索引領域の Symbol（100・3000 エントリ、削除後）、
+索引領域の tombstone、サブクラスキー、identity マップ、線形↔索引の成長、
+String → Symbol のクラス変化を追加。</p>
+<h3 id="43-呼び出しサイトのキーセットインラインキャッシュ中要検証"><a class="header" href="#43-呼び出しサイトのキーセットインラインキャッシュ中要検証">4.3 呼び出しサイトのキーセット・インラインキャッシュ（中・要検証）</a></h3>
+<p>erubi の 322 個の spec Hash は <strong>すべて同じ 18 個のキーを同じ順序で持つ</strong>
+（同じ JSON 形状から作られる）。<code>spec["name"]</code> のような「リテラルキー ×
+同形状の Hash」という組み合わせは、テンプレートエンジンや JSON 処理では
+支配的なパターンである。呼び出しサイトに「このキーセットならインデックスは
+これ」を憶えさせられれば、probe そのものを飛ばせる。CRuby のオブジェクト
+shape に相当する仕組みを Hash に持ち込むことになるので、キーセットの同一性を
+安く判定する仕掛け（挿入順の版番号など）の設計が要る。</p>
+<h3 id="44-ディスパッチ段数を減らす小中"><a class="header" href="#44-ディスパッチ段数を減らす小中">4.4 ディスパッチ段数を減らす（小〜中）</a></h3>
+<p><code>hashindex</code> → <code>Hashmap::index</code> → <code>HashRef::get</code> → <code>IndexMapCore</code> の 4 段で、
+それぞれが <code>vm</code> / <code>globals</code> を引き回している。<code>Hashmap::index</code> はミス時の
+default 処理のためだけに 1 段あり、<code>HashRef::get</code> は表現の分岐をしている。
+表現の分岐を呼び出し側に持ち上げて boxed 専用の入口を用意すれば数 ns 縮む
+見込み。4.2 を先にやると自然に消える部分もある。</p>
+<h3 id="45-frozen-string-にダイジェストをキャッシュ小"><a class="header" href="#45-frozen-string-にダイジェストをキャッシュ小">4.5 frozen String にダイジェストをキャッシュ（小）</a></h3>
+<p>施策 5 の前は有力だったが、ハッシュが 8 % まで落ちた今は上積みが小さい。
+長いキー（パスや URL）を多用するコードでは効くので、<code>RStringInner</code> に
+4 バイトの空きができたときの候補として残す。frozen なら無効化が不要という
+性質は変わらない。</p>
+<h3 id="46-inline-表現の拡張要検討"><a class="header" href="#46-inline-表現の拡張要検討">4.6 inline 表現の拡張（要検討）</a></h3>
+<p>48 バイトのペイロードにペア 3 組でちょうど埋まっている。4 組以上にするには
+<code>RValue</code> を大きくするかキー・値を別配列にするかで、どちらも Hash 以外の
+すべてのオブジェクトに影響する。erubi の Hash は 18 ペアなので、この方向で
+救えるワークロードは限られる。</p>
+<h3 id="47-rvalue-の中身のアロケータ別件だが-hash-に効く"><a class="header" href="#47-rvalue-の中身のアロケータ別件だが-hash-に効く">4.7 RValue の中身のアロケータ（別件だが Hash に効く）</a></h3>
+<p>boxed Hash の実体（インデックステーブルとエントリ Vec）は glibc malloc
+経由で、activerecord では malloc/free 系だけで 15 % を占める。<code>mimalloc</code>
+フィーチャの既定化 A/B は Hash に限らない話だが、Hash の生成・成長が多い
+ワークロードにはここが効く。</p>
+<hr>
+<h2 id="5---eql--hash-の意味論"><a class="header" href="#5---eql--hash-の意味論">5. <code>==</code> / <code>eql?</code> / <code>hash</code> の意味論</a></h2>
+<ul>
+<li><code>Hash#==</code> / <code>#eql?</code> はまず同一性で短絡する（<code>h = {x: Float::NAN}; h == h</code> が
+true になる）。空でない Hash 同士では identity モードが違えば偽。再帰構造は
+<code>exec_recursive_paired</code> で扱う。</li>
+<li><code>Hash#hash</code> はペアごとに <code>kpart ^ vpart</code> を作って順序非依存に足し合わせ、
+サイズを混ぜてから <code>from_hash_digest</code> で Fixnum 範囲に畳む。キーと値の
+<code>#hash</code> は本物の dispatch で、<code>rb_exec_recursive_outer</code> 相当の再帰保護が付く。</li>
+<li>内部の <code>HashRef::eql</code>（Hash 自身がキーになったときのキー比較）は別物で、
+モードが違えば偽を返す。</li>
+<li><code>Hash#rehash</code> は Ruby で <code>to_a; clear; 再挿入</code> と書かれていて、C レベルの
+テーブル再構築ではない。</li>
+</ul>
+<hr>
+<h2 id="6-cruby-との実装差異-1"><a class="header" href="#6-cruby-との実装差異-1">6. CRuby との実装差異</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>項目</th><th>CRuby</th><th>monoruby</th></tr>
+</thead>
+<tbody>
+<tr><td>表現の段階</td><td><code>ar_table</code>（≤ 8、線形、ハッシュ値格納）→ <code>st_table</code></td><td><strong>≤ 3 ペアは RValue のペイロードに直置き（ヒープ確保ゼロ）</strong> → boxed の線形領域（≤ 8、<code>AR_MAX</code>、CRuby と同じ閾値）→ hashbrown の索引領域。線形→索引はエントリ <code>Vec</code> を共有したまま index table を作るだけで、<code>ar</code>→<code>st</code> のような作り直しは無い</td></tr>
+<tr><td>挿入順序</td><td><code>st_table</code> のエントリ配列</td><td><code>rubymap</code>（IndexMap 系）: エントリ <code>Vec</code> + 位置の index table。観測される順序は同じ</td></tr>
+<tr><td>反復中の変更</td><td>追加は例外、<code>delete</code> は許可（<code>RHASH_ITER_LEV</code>）</td><td>同じ規則（既存キーの更新は許可）。機構は tombstone + <code>dead</code> カウンタ + <code>compact_if_dirty</code>。inline hash は tombstone を置く前に boxed へ昇格する。深度は inline が 2 ビット飽和、boxed が <code>Cell&lt;u32&gt;</code></td></tr>
+<tr><td>走査の実装</td><td><code>rb_hash_foreach</code>（C のコールバックループ）</td><td><code>each</code> は Ruby の位置ループ（§1.6）。JIT がブロックごと展開するため</td></tr>
+<tr><td>String キーの複製</td><td><code>rb_hash_key_str</code> が fstring テーブルに<strong>インターン</strong>（Hash 間で共有）</td><td><code>Value::frozen_hash_key</code> がバイト列から新しい frozen コピーを毎回作る。<strong>重複排除テーブルは無い</strong>。特異メソッドは引き継がない</td></tr>
+<tr><td>String キーの比較・ハッシュ</td><td>内容のみ、<code>String#hash</code> は dispatch しない。クラスが <code>String</code> ちょうどのときだけバイト比較で短絡（<code>rb_any_cmp</code> / <code>any_hash</code>）</td><td>同じ規則（<code>Value::eql</code>、<code>string_key_eq</code>）。ただしバイト比較は <code>RStringInner::eq</code> で<strong>エンコーディングを見ない</strong>。CRuby の <code>rb_str_hash</code> は非 ASCII 文字列でエンコーディング index を混ぜる</td></tr>
+<tr><td><code>compare_by_identity</code></td><td><code>st_table</code> の型を <code>identhash</code> に切り替えて再ハッシュ</td><td>inline は <code>IDENT_BIT</code> を立てるだけ（packed キーは <code>eql?</code> と同一性が一致するので inline のまま）。boxed は<strong>別型</strong>の <code>RubyMap&lt;Option&lt;IdentKey&gt;, Value&gt;</code> に作り直す。空マップ限定で双方向に切り替える <code>set_compare_by_identity_empty</code> があり、<code>Hash#replace</code> / <code>Set</code> が使う</td></tr>
+<tr><td>デフォルト値／proc</td><td><code>ifnone</code> スロット</td><td><code>Option&lt;Box&lt;HashDefault&gt;&gt;</code>。null なら「どちらも無し」を 1 ロードで判定でき、JIT のミス経路が in-line で nil を返せる。デフォルトを持つと boxed 強制（<code>Hash.new(7)</code> は確保する）。<code>clear</code> はデフォルトを保つ（CRuby と同じ）</td></tr>
+<tr><td>ミス時の <code>default</code></td><td><code>rb_funcall(id_default)</code></td><td>builtin の <code>Hash#[]</code> は同じく dispatch。<code>hashindex</code> / <code>runtime::get_index</code> は格納値を直接読むので、対象を <code>Hash</code> ちょうどに限定</td></tr>
+<tr><td>Ruby から見える <code>#hash</code></td><td><code>rb_hash_start</code> 系（SipHash-1-3、seeded）</td><td><code>HASH_STATE</code>（std <code>RandomState</code> = SipHash-1-3、seeded）。バケッティングは別の seeded ミキサー（§1.5）</td></tr>
+<tr><td>String ハッシュのキャッシュ</td><td>無し</td><td>無し（§4.5 に候補として残す）</td></tr>
+<tr><td>GC</td><td><code>rb_gc_mark</code></td><td><code>HashRef::mark</code> がデフォルトと生きたエントリを mark。<code>young_child_exists</code> が世代別の remember 判定、mutator と JIT の <code>emit_hash_default_assign</code> が write barrier を出す（<a href="#monoruby-の-gc--機構と実装"><code>../gc.md</code></a>）</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="7-テストと計測の所在"><a class="header" href="#7-テストと計測の所在">7. テストと計測の所在</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>場所</th><th>何を固定しているか</th></tr>
+</thead>
+<tbody>
+<tr><td><code>monoruby/tests/hash_probe_jit.rs</code></td><td>機械語 probe: hit / miss / default 値 / default proc / nil・true・false キー / tombstone / 索引・inline・identity への委譲（<strong>call であって exit ではない</strong>）/ クラスガード / 線形↔索引の成長 / String キー（線形・索引・frozen 同一）/ サブクラスキー / String → Symbol のクラス変化</td></tr>
+<tr><td><code>monoruby/tests/hash_string_keys.rs</code></td><td>boxed と inline の String キー経路: 往復、混在、サブクラス、エンコーディング（バイト比較）、tombstone、<code>compare_by_identity</code>、<code>string_subclass_key_dispatches_eql</code></td></tr>
+<tr><td><code>monoruby/tests/hash_compare_by_identity.rs</code></td><td>identity hash は String キーを複製しない、通常 hash は複製して freeze する</td></tr>
+<tr><td><code>monoruby/tests/hash_seed.rs</code></td><td><code>#hash</code> がプロセス間で変わり、プロセス内で安定</td></tr>
+<tr><td><code>rubymap/src/lib.rs</code>（<code>raw_probe</code>, <code>layout_matches_the_safe_api</code>, <code>niche_carrying_keys_reorder_the_bucket</code>）</td><td>JIT が使う生オフセットでの探索が <code>find_inner</code> と同じ答えになること</td></tr>
+<tr><td><code>rubymap/src/hasher.rs</code> のテスト</td><td>ミキサーの品質（長さ分離、上位 7 ビットへの拡散、等間隔キー）</td></tr>
+<tr><td><code>builtins/hash.rs</code> の <code>jit_layout_matches_entry_at*</code></td><td>monoruby 側のレイアウト定数が <code>entry_at</code> と一致</td></tr>
+<tr><td><code>benchmark/jit_hash.yaml</code></td><td>1000 エントリ Hash の反復・変換ベンチ</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="8-計測手順再現用"><a class="header" href="#8-計測手順再現用">8. 計測手順（再現用）</a></h2>
+<pre><code class="language-sh"># ビルド
+cargo build --release
+cargo build --release --features perf --target-dir target-perf   # perf 用シンボル
+
+# 純ルックアップのマイクロ（baseline を引く）
+target/release/monoruby bench_hash.rb
+
+# 内訳
+perf record -F 999 -e cpu-clock -g --call-graph=fp -o h.data -- \
+  target-perf/release/monoruby h_str.rb
+perf report -i h.data --stdio --no-children --sort symbol -g none
+
+# ベンチ（交互ラウンド。単発は信用しない）
+cd ../yjit-bench &amp;&amp; export LANG=C.UTF-8
+MAX_TIME=25 RESULT_JSON_PATH=out.json \
+  /path/to/monoruby -Iharness-warmup benchmarks/erubi/benchmark.rb
+</code></pre>
+<p>マイクロは必ず「同じループからルックアップを抜いたもの」を baseline として
+測り、その差を見る。monoruby と CRuby ではループ自体のコストが 10 倍違う
+（2.5 ns 対 23 ns）ので、生の時間を並べると比較にならない。</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="string-の実装と最適化"><a class="header" href="#string-の実装と最適化">String の実装と最適化</a></h1>
+<p>String はテンプレートエンジンとパーサの最内ループに出てくる型で、erubi の
+バッファ <code>&lt;&lt;</code>、Hash の String キー、<code>"lit".freeze</code> がそれぞれ計測で
+ボトルネックになった
+（<a href="design/yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a>
+§5.2、§5.6）。</p>
+<p>この文書は、String のセル内レイアウト、部分文字列の共有と copy-on-write、
+エンコーディングと code range のキャッシュ、リテラルの扱い、VM と JIT の
+高速経路をまとめ、最後に CRuby との実装差異を並べる。共通の前提は
+<a href="design/runtime_optimization/README.html">README.md</a>、Hash の String キーについては <a href="#hash-の実装と最適化">hash.md</a> を参照。</p>
+<hr>
+<h2 id="1-表現-1"><a class="header" href="#1-表現-1">1. 表現</a></h2>
+<h3 id="11-セルと-32-バイトの-inline-閾値"><a class="header" href="#11-セルと-32-バイトの-inline-閾値">1.1 セルと 32 バイトの inline 閾値</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[repr(C)]
+pub struct RStringInner {
+    content: StringContent,   // 先頭固定: JIT が直接アドレッシングする
+    ty: Encoding,             // repr(u8)
+    cr: Cell&lt;CodeRange&gt;,      // repr(u8)、遅延で埋まる
+}
+<span class="boring">}</span></code></pre>
+<p>バッファは fork した <code>SmallVec&lt;[u8; 32]&gt;</code>（<code>STRING_INLINE_CAP = 32</code>、
+<code>lib.rs</code>）で、Array と同じく <code>OFFSET_CAPA</code> / <code>OFFSET_INLINE</code> /
+<code>OFFSET_HEAP_PTR</code> / <code>OFFSET_HEAP_LEN</code> を JIT に公開するために fork している。
+<strong>32 バイトまでは 64 バイトの RValue セルの中</strong>（malloc 無し）、超えると
+ヒープにあふれる。inline のあいだは <code>capa</code> スロットが長さを兼ね、あふれると
+<code>capa</code> は容量で長さはポインタの隣に置かれる。JIT の全 emitter は
+<code>cmp capa, STRING_INLINE_CAP</code> でこの二重の意味を分岐する。<code>Encoding</code> が
+<code>u8</code> ペイロードに収まるサイズに抑えられているのは RValue を 64 バイトに
+保つためである。</p>
+<h3 id="12-共有文字列と-copy-on-write"><a class="header" href="#12-共有文字列と-copy-on-write">1.2 共有文字列と copy-on-write</a></h3>
+<p>CRuby の <code>STR_SHARED</code> に相当する仕組みがあり、<strong>あふれた SmallVec の
+フィールドに重ねる</strong>形で置かれている:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>offset</th><th>SmallVec（あふれ時）</th><th><code>SharedContent</code></th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td>capacity</td><td><code>tag</code>（= <code>STRING_SHARED_TAG</code> = <code>isize::MAX</code>）</td></tr>
+<tr><td>8</td><td>heap ptr</td><td><code>ptr</code>（root のバッファ内を指す）</td></tr>
+<tr><td>16</td><td>heap len</td><td><code>len</code></td></tr>
+<tr><td>24</td><td>（inline の残り）</td><td><code>root: Value</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>タグが <code>usize::MAX</code> でなく <code>isize::MAX</code> なのは、JIT のインライン <code>bytesize</code> /
+<code>getbyte</code> が <code>capa &gt; INLINE_CAP</code> を<strong>符号付き</strong>で比較するため（<code>cmovgt</code> /
+<code>csel gt</code>）で、正の値にしておけば共有文字列が自動的にヒープ経路に乗る。
+その帰結として <strong>読み取り専用のインライン命令は共有検査を一切必要としない</strong>。
+検査が要るのは書き込み側だけである。</p>
+<ul>
+<li><code>union StringContent { owned, shared }</code> の判別は先頭の <code>usize</code> を読むだけ。</li>
+<li><code>Clone</code>: <strong>sharer の複製は O(1)</strong>（4 語のコピーで同じ root のもう 1 つの
+sharer）。所有バッファの複製はバイトコピー。</li>
+<li><code>owned_mut()</code> が<strong>唯一の変更の入口</strong>で、書き込みはまず <code>uniquify()</code>
+（見ているバイト列を新しい所有バッファに写す）を通る。これが CoW の
+「write」側。JIT 向けには同じものが <code>detach()</code> / <code>runtime::str_detach</code> と
+して出ている。</li>
+<li><code>string_substring(parent, start, end)</code> が共有するのは <strong><code>len &gt; 32</code> かつ
+親が既に共有かヒープあふれのとき</strong>だけ。inline に収まる複製は最大 32
+バイトで、root の確保 + GC エッジより安い。</li>
+<li><code>ensure_shared_root(parent)</code> の 3 ケース: (1) 親が既に sharer → その root
+を返す（<strong>root の連鎖は決して作らない</strong>）、(2) 親が frozen → 親自身が
+root（chilled は該当しない）、(3) 可変でヒープあふれ → バッファを
+<code>mem::take</code> して<strong>隠れた frozen root String</strong> を新設し、親を最初の sharer に
+する。確保をまたぐ瞬間だけ親は空文字列として妥当な状態にあり、
+<code>parent.write_barrier(root)</code> が String が持ちうる唯一の外向き参照を記録する。</li>
+<li><code>string_snapshot(receiver)</code>: 正規表現系メソッドが使う frozen で安定な
+スナップショット。ブロックがレシーバを書き換えても match のビューは
+有効なまま。frozen ならそれ自身、共有／あふれなら frozen root（レシーバが
+窓なら frozen なサブビュー）、短い inline なら frozen な複製。</li>
+<li><code>check_string_not_modified</code>（CRuby の <code>str_mod_check</code>）は<strong>バイト長だけ</strong>
+で判定する。monoruby は同じ長さの in-place 編集でも CoW detach で再確保
+するので、ポインタ比較だと過剰に発火する。</li>
+</ul>
+<p>共有ビューを作る側: <code>String#[]</code> / <code>slice</code> / <code>chomp</code> / <code>strip</code> 系 / <code>scan</code> /
+<code>byteslice</code> / <code>lines</code> / <code>each_line</code>、<code>MatchData#[]</code> / <code>pre_match</code> /
+<code>post_match</code> / <code>$~</code> の haystack、<code>Regexp</code> 側の各種（<a href="#regexp-の実装と最適化">regexp.md</a>）。</p>
+<p>GC: sharer は root を mark し（<code>rvalue.rs</code> の STRING アーム）、
+<code>young_child_exists</code> は「若い root を持つ sharer」を報告する — 報告しないと
+minor GC が root を足元から解放する。String は OLD へ昇格可能。</p>
+<p><code>shared_string_tests</code>（<code>string.rs</code>）が overlay のオフセットを <code>smallvec::OFFSET_*</code>
+と突き合わせ、短いスライスが所有のままであること、sharer のサブ文字列が
+同じ root を使うこと、frozen 親が自分自身を root にすること、sharer の
+clone が安価で独立していることを固定する。</p>
+<h3 id="13-順序等価ハッシュc-連携"><a class="header" href="#13-順序等価ハッシュc-連携">1.3 順序・等価・ハッシュ・C 連携</a></h3>
+<ul>
+<li><code>PartialEq</code> は <code>as_bytes()</code> の比較（memcmp）。<code>Hash</code> はバイト内容のハッシュで、
+<strong>String にダイジェストはキャッシュされない</strong>（§7）。</li>
+<li><code>Ord</code> は手書きの prefix 比較で、ループ内の長さ差分岐を避ける。</li>
+<li><code>nul_terminated_buf_ptr</code>: CoW を先に detach し（C 側が書くかもしれない）、
+必要なら <code>reserve(1)</code> して<strong>予備容量に</strong> NUL を書く。<code>as_bytes</code> / <code>len</code> /
+<code>hash</code> / 等価は変わらない。Fiddle / FFI ブリッジが使う。</li>
+<li>容量成長は SmallVec の倍々で、CRuby の <code>rb_str_capa</code> のような調整は無い。
+事前サイズ指定は <code>concatenate_string_inner</code>（§4.2）と
+<code>with_encoding_capacity</code> の 2 箇所。</li>
+</ul>
+<hr>
+<h2 id="2-エンコーディングと-code-range"><a class="header" href="#2-エンコーディングと-code-range">2. エンコーディングと code range</a></h2>
+<ul>
+<li><code>CodeRange { Unknown=0, SevenBit=1, Valid=2, Broken=3 }</code> は <code>repr(u8)</code> で
+判別値を固定している（JIT が直接書く）。</li>
+<li><code>Encoding</code> は <code>repr(u8)</code>: <code>Ascii8(0), Utf8(1), UsAscii(2), Utf16Le(3), Utf16Be(4), Utf32Le(5), Utf32Be(6), Iso8859(u8), EucJp, Sjis(u8), Iso2022Jp, Other(u8), NamedByte(u8)</code>。先頭 7 つはペイロード無しで、
+JIT の <code>&lt;&lt;</code> 高速経路の <code>&lt;= 6</code> 判定はこれに対応する。<code>Other</code> は UTF-7 /
+CP50220/1 / BOM 付き UTF-16/32（ASCII 非互換、コーデック無し、名前だけ
+保持）、<code>NamedByte</code> は Big5 / GBK / GB18030 / EUC-KR / Windows-125x /
+IBM* / KOI8 / TIS-620 / Emacs-Mule など約 38 の ASCII 互換コードページで、
+格納と反復は ASCII-8BIT として振る舞う。</li>
+<li><code>cr</code> は<strong>遅延</strong>: <code>code_range()</code> が最初の問い合わせで分類して <code>Cell</code> に
+入れ、<code>set_encoding</code> が無効化する。<code>Encoding::classify</code> は空なら SevenBit、
+ASCII 互換で全バイト &lt; 0x80 なら SevenBit（短絡）、あとはエンコーディング
+ごと（UTF-8 は <code>str::from_utf8</code>、UTF-16/32 はバイト数の偶奇、EUC-JP / SJIS
+は <code>*_char_width</code>、ISO-2022-JP は <code>encoding_rs</code>）。</li>
+<li>コンストラクタは「走査する／しない」の対で用意されている:
+<code>from_str</code> / <code>from_str_scanned</code>、<code>from_string</code> / <code>_scanned</code>、
+<code>from_encoding</code> / <code>_scanned</code>、<code>from_vec_scanned</code>（UTF-8 か binary かを同じ
+一巡で自動判定）、<code>from_ascii_bytes</code>（呼び出し側が SevenBit を保証）、
+<code>from_vec_cr</code> / <code>from_buf_cr</code>（<code>StringBuf</code> に直接組んだバッファをそのまま
+採用）、<code>with_encoding_capacity</code>（SevenBit で開始）。方針は「長生きする
+テンプレートは先に走査（複製が <code>cr</code> をただで継ぐ）、使い捨ては後回し」。</li>
+<li><strong>追記時の O(1) 畳み込み</strong>（<code>extend</code>）が最大の性能修正である。素朴に <code>cr</code>
+を Unknown に戻すと、10 万回の <code>s &lt;&lt; "abcde"</code> ループが <strong>CRuby 5.6 ms に
+対して約 5.7 s</strong>（O(N²)）になった。<code>(SevenBit, SevenBit) → SevenBit</code>、
+<code>({SevenBit, Valid}, {SevenBit, Valid}) → Valid</code>、それ以外 Unknown、の
+畳み込みで O(N) に戻る。<code>extend_from_slice_checked</code> /
+<code>extend_from_slice_merge_cr</code>（<code>pack</code> の <code>buffer:</code>）も同じで、
+<code>extend_from_slice_no_validate</code>（<code>append_as_bytes</code>）は意図的に畳まない。</li>
+<li>部分文字列への伝播 <code>propagated_cr</code>: SevenBit は無条件、Valid は
+単バイト系なら無条件、UTF-8 は両端が文字境界のとき、UTF-16/32 は 2/4
+バイト整合のとき。UsAscii / EucJp / Sjis / Iso2022Jp と Broken / Unknown の
+親は Unknown に落とす。</li>
+<li><code>set_byte</code> は ASCII バイトを置くときだけ SevenBit キャッシュを保つ
+（JIT の <code>setbyte</code> が同じ規則を再現する）。</li>
+<li><code>char_length</code> はバイト指向のエンコーディングと、SevenBit がキャッシュ
+された UTF-8 / EUC-JP / SJIS で O(1)。UTF-8 の Valid は非継続バイトを数え、
+Broken は <code>iter_char_bytes</code> を歩く。</li>
+<li><code>regex_view</code> / <code>from_mapped_utf8</code> / <code>needs_byte_mapping</code>: UTF-8 専用の
+<code>regex</code> クレートをバイト指向エンコーディングにかけるための
+バイト ↔ <code>U+00XX</code> 代理写像（<a href="#regexp-の実装と最適化">regexp.md</a>）。</li>
+<li><code>compatible_encoding</code> / <code>Encoding::compatible</code> は <code>rb_enc_compatible</code> の
+移植で、キャッシュ済みの <code>cr</code> を消費して再走査しない。</li>
+</ul>
+<p><a href="#design-per-encoding-character-iteration-layer"><code>../encoding_char_iteration_design.md</code></a>
+はエンコーディングごとの文字境界層の提案（<em>proposed</em>）で、§2 に現状の
+<code>RStringInner</code> の穴（EUC-JP / SJIS のバイト単位反復、非 UTF-8 の <code>to_str</code>
+退避）の監査がある。ただしその文書は <code>content: Vec&lt;u8&gt;</code> 時代の記述で、
+SmallVec / 共有 union への改修より前のものである。</p>
+<hr>
+<h2 id="3-リテラル"><a class="header" href="#3-リテラル">3. リテラル</a></h2>
+<h3 id="31-fstring-プール"><a class="header" href="#31-fstring-プール">3.1 fstring プール</a></h3>
+<p><code>Store::frozen_str_pool: HashMap&lt;(Vec&lt;u8&gt;, Encoding), Value&gt;</code> は <code>(bytes, encoding)</code> をキーにしたプログラム全体のプールで（<code>require</code> をまたいで
+生き、<code>Store::mark</code> で GC root）、<code>Store::intern_frozen_str</code> が
+<code>Value::string_from_source_bytes</code>（<code>cr</code> 走査済み）+ <code>set_frozen()</code> で作って
+記憶する。目的は CRuby と同じく pragma 下で <code>"abc".equal?("abc")</code> を true に
+すること。</p>
+<h3 id="32--frozen_string_literal-true"><a class="header" href="#32--frozen_string_literal-true">3.2 <code># frozen_string_literal: true</code></a></h3>
+<p><code>emit_string</code> / <code>emit_bytes</code> は pragma 下で <code>emit_frozen_interned</code> →
+<code>BytecodeInst::FrozenLiteral</code>（<strong>そのままロード、複製しない</strong>）。pragma が
+無ければテンプレート値 + <code>BytecodeInst::Literal</code> で、評価ごとに <code>deep_copy</code>。
+<code>emit_literal</code> は <code>is_always_frozen</code> なクラスのリテラルも <code>FrozenLiteral</code> に
+回す。<code>source_encoding()</code> は <code># encoding:</code> マジックコメントを解決し既定は
+UTF-8。</p>
+<h3 id="33-chilled-リテラルcruby-34-の移行経路"><a class="header" href="#33-chilled-リテラルcruby-34-の移行経路">3.3 chilled リテラル（CRuby 3.4 の移行経路）</a></h3>
+<p>pragma の無いファイルのテンプレートは chilled と印を付ける
+（<code>chill_literal_template</code>）。ただし monoruby 自身の <code>install_root()</code> 配下の
+ランタイム Ruby は除く（<code>Warning[:deprecated]</code> がインタプリタ内部を指さない
+ように）。フラグは <code>CHILLED_LITERAL_BIT = 0b1000_0000</code>（意図的に下位バイトの
+中 — 以前は GC 年齢フィールドと衝突していた、issue #975）。<code>Symbol#to_s</code> も
+chilled な String を返す。<code>--debug-frozen-string-literal</code> はリテラルの出自を
+<code>record_string_origin</code> / <code>string_origin</code> で記録し、エラー表示が参照する。</p>
+<h3 id="34-非-frozen-リテラルの評価-テンプレート--o1-cow-複製"><a class="header" href="#34-非-frozen-リテラルの評価-テンプレート--o1-cow-複製">3.4 非 frozen リテラルの評価: テンプレート + O(1) CoW 複製</a></h3>
+<p><code>Value::value_deep_copy</code> は最初に <code>share_string_buffer(&amp;mut val)</code> を呼ぶ。
+<strong>テンプレート自身が（1 回だけ）隠れ frozen root の sharer に変わり</strong>、以後
+の評価ごとの <code>deep_copy</code> は O(len) のバイトコピーではなく O(1) のビュー複製
+になり、キャッシュ済みの <code>cr</code> も継ぐ。ERB / heredoc サイズのテンプレートが
+動機。chilled（デバッグ時は出自も）は各複製に伝播する。</p>
+<p>VM の <code>vm_literal</code> は <code>Value::value_deep_copy</code> への call。JIT の
+<code>TraceIr::Literal</code> → <code>DeepCopyLit</code> → <code>emit_deep_copy_lit</code> で完全にインライン
+確保されるのは <strong>Array リテラルだけ</strong>で、String は <code>deepcopy_literal</code> の
+call になる。<code>FrozenLiteral</code> は純粋なレジスタロード。</p>
+<h3 id="35-litfreeze-の畳み込みcruby-の-opt_str_freeze"><a class="header" href="#35-litfreeze-の畳み込みcruby-の-opt_str_freeze">3.5 <code>"lit".freeze</code> の畳み込み（CRuby の <code>opt_str_freeze</code>）</a></h3>
+<p><code>bytecodegen/method_call.rs</code> が、safe-nav でなく・<strong>pragma 下でなく</strong>
+（pragma 下ではリテラルが既にインターン済みオブジェクトで <code>Object#freeze</code> は
+安い no-op）・メソッドが <code>freeze</code>・引数無し・レシーバが <code>NodeKind::String</code>
+のときだけ <code>BytecodeInst::StringFreeze(reg, interned)</code> を出す。実行時の
+<code>string_freeze_literal</code> は <code>String#freeze</code> が未再定義ならインターン済み
+リテラルをそのまま返し（複製も呼び出しも無し）、再定義されていれば
+<code>dup</code> + <code>set_chilled_literal</code> + 再定義された <code>freeze</code> を dispatch する。
+BOP 表に <code>(STRING_CLASS, "freeze")</code> があり、JIT は <code>basic_op_assumable</code> の
+もとで BOP 依存を記録して定数ロードにし、再定義は本体を evict、コンパイル時
+に再定義済みなら無条件 deopt。</p>
+<p>計測: <code>'abc'.freeze</code> <strong>67.6 → 9.8 ns</strong>（YJIT 26）、<code>buf &lt;&lt; 'lit'.freeze</code>
+<strong>73 → 15.9 ns</strong>（YJIT 21）。</p>
+<p><strong><code>-"lit"</code>（<code>opt_str_uminus</code>）の畳み込みは無い。</strong> <code>String#-@</code> は Ruby で
+<code>frozen? ? self : dup.freeze</code> と定義されていて（<code>builtins/string.rb</code>）、
+CRuby の <code>rb_fstring</code> のような<strong>重複排除テーブルは無い</strong>。<code>String#+@</code> は
+chilled フラグに Ruby レベルの述語が無いため Rust のまま。</p>
+<hr>
+<h2 id="4-vm-の経路"><a class="header" href="#4-vm-の経路">4. VM の経路</a></h2>
+<h3 id="41---"><a class="header" href="#41---">4.1 <code>+</code> / <code>&lt;&lt;</code></a></h3>
+<ul>
+<li><code>+</code>（<code>add</code>）はサブクラスのレシーバでも<strong>素の String</strong> を返す（<code>dup</code> せず
+新規に組む）。<code>#to_str</code> が Ruby に再入するので引数を先に変換する。</li>
+<li><code>&lt;&lt;</code>（<code>shl</code> / <code>shl_inner</code>）は <code>s &lt;&lt; s</code> のエイリアスを inner のスナップ
+ショットで処理し（sharer なら O(1)）、Integer をコードポイントとして
+受ける CRuby の <code>rb_str_concat</code> の ASCII 特例（US-ASCII は高位バイトで
+ASCII-8BIT に自動拡張）、<code>codepoint_bytes</code> によるエンコーディングごとの
+符号化（<code>rb_enc_codelen</code> / <code>rb_enc_mbcput</code> 相当、<code>Invalid</code> と <code>OutOfRange</code> で
+onigmo の 2 つのメッセージを再現）、<code>#to_str</code> 変換中のレシーバの
+<code>vm.temp_push</code> による root を行う。<code>extern "C" fn string_shl</code> が JIT の
+呼ぶフレームレスの入口。</li>
+</ul>
+<h3 id="42-補間--concatstr"><a class="header" href="#42-補間--concatstr">4.2 補間 — <code>ConcatStr</code></a></h3>
+<p>バイトコード側（<code>bytecodegen/expression.rs</code>）: 補間がリテラル断片で
+始まらないときは空の <code>seed</code> リテラルを押し、実行時の結合が常にソース
+エンコーディングから交渉するようにする（pragma 下でも結果が新規の可変
+String になる）。<strong>リテラル断片はインターン済み frozen テンプレートとして
+出す</strong>（評価ごとの deep copy ではない）。CRuby も dstr の断片を frozen で
+埋め込んでおり、テンプレートのキャッシュ済み <code>cr</code> が結合の逐次交渉に
+流れ込むので、大きな断片の分類は一生に 1 回で済む。</p>
+<p>実行時（<code>runtime::concatenate_string_inner</code>）の設計:</p>
+<ul>
+<li>一貫して生バイト（Rust の <code>String</code> を経由すると不正列が U+FFFD に書き
+換わる）。</li>
+<li>エンコーディングは最初の String オペランドから seed し、以降は
+<code>Encoding::compatible</code> で交渉。</li>
+<li><strong>エンコーディングと <code>cr</code> を逐次で追跡する。</strong> 以前は交渉のたびに
+成長中のバッファを一時 String で包んでオペランドごとにコピーしていて
+O(N·total) だったのが O(total) になった。</li>
+<li>結果は String オペランドから事前サイズを決めた <code>StringBuf</code> に<strong>直接</strong>
+組む。短い結果はヒープに触れず、長い結果は確保 1 回で、
+<code>RStringInner::from_buf_cr</code> がそのまま採用する。</li>
+<li><strong>Fixnum オペランドはバッファに直接整形する</strong>（<code>format_i64</code> +
+<code>append_piece</code>）。<code>to_s</code> でヒープ String を作らない。<code>vm.to_s_is_refined</code>
+で refinement が勝つようゲート。</li>
+<li>ユーザーの <code>to_s</code> が非 String を返せば <code>#&lt;Class:0xADDR&gt;</code> に落とす。</li>
+</ul>
+<p>JIT の <code>TraceIr::ConcatStr</code> → <code>AsmInst::ConcatStr</code> → <code>LInst::ConcatStr</code> →
+<code>emit_concat_str</code> は同じヘルパへの call。</p>
+<h3 id="43---eql------hash"><a class="header" href="#43---eql------hash">4.3 <code>==</code> / <code>eql?</code> / <code>!=</code> / <code>&lt;=&gt;</code> / <code>hash</code></a></h3>
+<ul>
+<li><code>==</code>（<code>===</code> / <code>eql?</code> は同じ builtin と同じインライン生成器）:
+<code>string_eq_bool</code> はバイト比較<strong>に加えて</strong>エンコーディング互換検査を行う
+（CRuby 準拠: 交渉できないエンコーディングの同一バイト列は不一致）。右辺
+が String でなく <code>to_str</code> に<strong>応答する</strong>なら（<code>store.no_to_str</code> で判定、
+<code>to_str</code> 自体は呼ばない）<code>rhs == self</code> を dispatch する。</li>
+<li><code>!=</code> は基本演算（<code>define_basic_op</code>）で、CRuby に <code>String#!=</code> は無いので
+上記の逆 dispatch を含む厳密な否定になっている（右辺が <code>to_str</code> と独自
+<code>==</code> の両方を持つ場合に素のバイト比較だと乖離する）。</li>
+<li><code>&lt;=&gt;</code> はバイト比較に<strong>エンコーディング序数のタイブレーク</strong>（CRuby の
+<code>rb_enc_index</code> 順）。非 ASCII 内容でだけ効く。</li>
+<li><code>hash</code> は <code>Value::calculate_hash</code> → プロセスごとの <code>RandomState</code> で
+seed した SipHash（<code>HASH_STATE</code>、CVE-2011-4815 対策）を <code>from_hash_digest</code>
+で Fixnum 範囲に畳む。<strong>String ごとのハッシュキャッシュは無い</strong>。</li>
+</ul>
+<h3 id="44-to_symその他"><a class="header" href="#44-to_symその他">4.4 <code>[]</code>、<code>to_sym</code>、<code>%</code>、その他</a></h3>
+<ul>
+<li><code>String#[]</code> の Fixnum / Range 形は<strong>コピー無しの共有部分文字列</strong>。Range は
+<code>rb_range_beg_len</code> の順（負の正規化 → <code>exclude_end</code> の畳み込み）で、
+以前 <code>"abc"[0...0]</code> が折り返していたバグの記録がある。ASCII のみの
+レシーバは SevenBit キャッシュで <code>char_length</code> が O(1)。</li>
+<li><code>to_sym</code> / <code>intern</code> は CRuby のシンボルエンコーディング正規化を実装する:
+ASCII 互換エンコーディングの ASCII のみ内容は US-ASCII に畳む
+（<code>"a".force_encoding("KOI8-R").to_sym == :a</code>）、US-ASCII / UTF-8 名は
+文字列で、他は <code>(bytes, encoding)</code> でインターン。<code>IdentifierTable</code>
+（<code>id_table.rs</code>）は UTF-8 名の <code>rev_table</code>、バイナリ名の
+<code>rev_table_bytes</code>、前方の <code>table: Vec&lt;IdentName&gt;</code>、バイトインターンした
+シンボルの出自エンコーディングを持つ <code>enc_map</code> からなり、
+<code>LazyLock&lt;RwLock&lt;_&gt;&gt;</code> のグローバル。<code>IdentId::compare</code> は id の一致で
+read lock を取る前に短絡する。</li>
+<li><code>%</code>（<code>rem</code>）は Hash 1 個なら名前参照の源として <code>format_by_args</code> へ
+（<code>%{name}</code> と <code>%&lt;name&gt;spec</code> の両方）、Array は splat、それ以外は
+<code>to_ary</code> を試してから包む。<code>Kernel#format</code> と共有。JIT 特殊化は無い。</li>
+<li><code>*</code> は overflow ガード後 <code>RStringInner::repeat</code> で、<code>cr</code> を再走査せず
+解析的に保つ。</li>
+<li><code>split</code> は <code>$~</code> の haystack を設定してコピー無しのスナップショットを使い、
+非 UTF-8 で空セパレータなら <code>iter_char_bytes</code> の経路。</li>
+<li><code>lines</code> / <code>each_line</code> は<strong>ブロックが走る前に</strong>全行を実体化する
+（<code>build_lines</code>）ので、ブロックがレシーバを変えても全ビューが同じ
+frozen root を指す。</li>
+<li><code>scan</code> / <code>gsub</code> / <code>sub</code> は先に <code>string_snapshot</code> を取り、各 match 結果は
+スナップショットの共有ビュー、<code>$~</code> も同じバッファを共有する。</li>
+<li><code>Array#pack</code> の <code>buffer:</code> は <code>extend_from_slice_merge_cr</code>、<code>Array#join</code> は
+<code>from_vec_cr</code> を使う。</li>
+<li><code>string_alloc_func</code> は空の <strong>ASCII-8BIT</strong> 文字列を作り、<code>String.new</code> は
+汎用の <code>Class#new</code> を通るのでサブクラスの <code>initialize</code> 上書きが効く。</li>
+</ul>
+<hr>
+<h2 id="5-jit-の経路"><a class="header" href="#5-jit-の経路">5. JIT の経路</a></h2>
+<h3 id="51-登録されているインライン生成器"><a class="header" href="#51-登録されているインライン生成器">5.1 登録されているインライン生成器</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>メソッド</th><th>生成器</th><th>出るもの</th></tr>
+</thead>
+<tbody>
+<tr><td><code>==</code> / <code>===</code> / <code>eql?</code></td><td><code>string_eq_gen</code></td><td>無し — 定数畳み込み</td></tr>
+<tr><td><code>!=</code>（基本演算）</td><td><code>string_ne_gen</code></td><td>無し — 定数畳み込み</td></tr>
+<tr><td><code>&lt;&lt;</code></td><td><code>string_shl_gen</code></td><td><code>emit_string_shl</code></td></tr>
+<tr><td><code>bytesize</code></td><td><code>string_bytesize</code></td><td>純 LIR <code>StringLenFixnum</code></td></tr>
+<tr><td><code>getbyte</code></td><td><code>string_getbyte</code></td><td><code>emit_string_getbyte</code></td></tr>
+<tr><td><code>setbyte</code></td><td><code>string_setbyte</code></td><td><code>emit_string_setbyte</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>これ以外の String メソッドはインライン化されていない。特に <code>length</code> /
+<code>empty?</code> / <code>==</code> のバイト比較 emitter は無く、<code>String#length</code> と
+<code>String#empty?</code> は普通の builtin である。</p>
+<h3 id="52----コンパイル時の定数畳み込み"><a class="header" href="#52----コンパイル時の定数畳み込み">5.2 <code>==</code> / <code>!=</code>: コンパイル時の定数畳み込み</a></h3>
+<p>右辺のクラスがコンパイル時に分かっていて、それが <code>String</code> でも <code>to_str</code> を
+持つクラスでもなければ（<code>store.no_to_str(rhs_class, class_version)</code>）、比較
+全体をコンパイル時定数の <code>false</code> / <code>true</code> に畳む — 至る所にある <code>str == nil</code>
+がこれ。クラスは二項演算のインラインキャッシュ由来の推測なので
+<code>guard_class</code> を出し、後からの（再）定義はインライン dispatch が既に出して
+いる class-version ガードが捕まえる。結果は <code>state.def_C</code> で登録するので、
+値としての利用は抽象状態から読み、分岐での利用は静的に解決される（素の
+<code>CondBr</code> は真偽で、融合した <code>BinCmpBr</code> は <code>binary_cmp_br</code> で）。<code>no_to_str</code>
+はクラス × class_version でメモ化され、JIT コンパイル中に global method
+cache の <code>RefCell</code> が借用中でも呼べるよう、キャッシュしない祖先走査で
+解決する。</p>
+<h3 id="53-bytesize-型付き-lir-マクロ命令"><a class="header" href="#53-bytesize-型付き-lir-マクロ命令">5.3 <code>bytesize</code>: 型付き LIR マクロ命令</a></h3>
+<pre><code>movq d, [b + RVALUE_OFFSET_ARY_CAPA]
+cmpq d, STRING_INLINE_CAP
+cmovgtq d, [b + RVALUE_OFFSET_HEAP_LEN]
+salq d,1 ; orq d,1
+</code></pre>
+<p>共有文字列の <code>capa</code> は <code>isize::MAX</code> と読めるのでヒープ長のロードに回り、
+それは <code>SharedContent::len</code> である — 「共有タグは正でなければならない」
+要件の出所。aarch64 は <code>csel gt</code>。</p>
+<h3 id="54-getbyte--setbyte"><a class="header" href="#54-getbyte--setbyte">5.4 <code>getbyte</code> / <code>setbyte</code></a></h3>
+<p><code>emit_string_getbyte</code>: 添字の untag、<code>cmp capa, 32</code> + <code>cmovgt</code> の対で
+<code>(len, ptr)</code> の inline / heap 選択、<code>cmovs</code> で負添字の補正、符号無し境界
+検査（まだ負の添字も同時に捕まえる）、<code>movzxb</code> + Fixnum タグ。<strong>範囲外は
+インラインで nil</strong> を返すので <code>while b = s.getbyte(i)</code> の終端で deopt しない。
+共有検査は overlay により不要。</p>
+<p><code>emit_string_setbyte</code>: frozen（<code>0b010</code>）／chilled（<code>0b100</code>）のレシーバと
+範囲外添字で deopt。<strong>共有レシーバは deopt せず detach して再試行する。</strong>
+<code>s = lit.dup; s.setbyte(..)</code> では共有ミスが慢性化し（dup した文字列ごとに
+1 回）、side-exit のエスカレーションが無条件になった今、deopt のたびに
+呼び出し元の連鎖全体を歩いて変換してしまう（ruby-xor の退行）。out-of-line
+経路は <code>runtime::str_detach</code>（素の malloc + memcpy、Value 確保無し、GC 無し）
+を呼んで <code>reload</code> に戻る。<strong>cr キャッシュはインラインで整合を保つ</strong>:
+SevenBit + バイト &lt; 0x80 は SevenBit のまま、それ以外は <code>STRING_CR_OFFSET</code> に
+<code>Unknown</code> を書く（<code>RStringInner::set_byte</code> と同じ規則）。</p>
+<h3 id="55---最大のもの"><a class="header" href="#55---最大のもの">5.5 <code>&lt;&lt;</code> — 最大のもの</a></h3>
+<p><code>string_shl_gen</code> は証明済みのレシーバクラスを要求し、引数クラスから
+<code>StringShlHint</code>（<code>Integer → Fixnum</code>、<code>String → Str</code>、それ以外 <code>Both</code>）を
+導いて使わない経路を出さない。レシーバクラスの制限は要らない（String
+サブクラスも同じ builtin に解決する）。<code>emit_string_shl</code> の doc コメントが
+正式な説明で、要点は:</p>
+<p><strong>Fixnum バイト経路</strong>: 引数が Fixnum、レシーバが frozen / chilled でない、
+バイトが 0..=255、エンコーディングタグが <code>STRING_TY_MAX_INLINE_SHL</code>
+（= <code>UsAscii</code> = 2）以下 — Ascii8 / UTF-8 / US-ASCII では 7 ビットの
+コードポイントがそのままバイトで、UTF-16/32 は 2/4 バイト、US-ASCII より
+先は高速経路で組めない多バイト列がある — 高位バイトはさらに Ascii8
+（タグ 0）に絞る。共有レシーバは fallback（この経路は detach しない）。
+inline / heap の格納と容量検査（満杯は fallback — 成長で deopt しては
+<strong>いけない</strong>）。cr の畳み込み: ASCII バイトはキャッシュを保ち、高位バイトは
+Unknown を書く。</p>
+<p><strong>String 引数経路</strong>: 引数が <code>ObjTy::STRING</code> のヒープオブジェクト、レシーバが
+frozen / chilled でない。タグが等しいときは両方<strong>ペイロード無し</strong>
+（<code>&lt;= 6</code>）、<strong>不一致</strong>のときは両方 ASCII 互換（<code>&lt;= 2</code>）で断片が SevenBit
+キャッシュ済み、レシーバが SevenBit か Valid のキャッシュ済み — これは
+<code>Encoding.compatible?</code> がレシーバのエンコーディングに解決するケース
+（コメントは「erubi のバッファの形」と呼ぶ）。断片の <code>cr</code> が単に未キャッシュ
+なら fallback するが、ヘルパが分類してキャッシュするので、同じ断片は
+<strong>2 回目の追記から</strong>インラインになる。<strong>共有レシーバは out-of-line の
+<code>str_detach</code> + 再試行</strong>で fallback ではない（「共有は <code>dup</code> ごとの出来事で、
+高速経路を永久に離れる理由ではない」）。<strong>引数</strong>は共有でも overlay 経由で
+正しく読める。両側の inline / heap 選択、容量検査、バイトコピーループ
+（<code>s &lt;&lt; s</code> は重ならない: 元 <code>[0,len)</code>、先 <code>[len,2len)</code>）、生きているスロット
+（inline なら <code>capa</code>、あふれなら <code>heap_len</code>）への長さ書き戻し。
+<strong>cr の畳み込みはレジスタ内で</strong> <code>RStringInner::extend</code> と同じ: <code>sub 1</code> で
+SevenBit→0、Valid→1、Unknown はラップ、Broken→2 とし、<code>ja</code> 1 つで「整形
+でない」を捕まえ、2 つの <code>or</code> で SevenBit か Valid を決める。</p>
+<p>fallback は生成コードの中で <code>string_shl(vm, globals, recv, arg)</code> を
+<strong>deopt 無しで</strong>末尾呼び出しし、builtin の完全な意味論を運ぶ。</p>
+<p>レイアウト定数 <code>STRING_CR_OFFSET</code> / <code>STRING_TY_OFFSET</code> /
+<code>STRING_TY_MAX_INLINE_SHL</code> / <code>Encoding::tag()</code> は
+<code>inline_shl_encoding_tags_are_pinned</code> テストが固定する。振る舞いは
+<code>tests/string_bytes.rs</code> が全ケースでバイト列・エンコーディング・<strong>キャッシュ
+された code range</strong>（<code>valid_encoding?</code> / <code>ascii_only?</code> 越しに観測）を CRuby
+オラクルと突き合わせる。トップレベルの main スクリプトは JIT されないので、
+各ホットな追記ループは 20 回の呼び出し閾値を越える <code>def</code> の中に置く必要が
+ある、とファイル先頭が注意している。</p>
+<h3 id="56-hash-の-string-キー"><a class="header" href="#56-hash-の-string-キー">5.6 Hash の String キー</a></h3>
+<p><code>Hash#[]</code> のインライン probe は、キークラスが <code>String</code> ちょうどなら
+<code>string_digest_c</code>（バイト列の wyhash、挿入時と同じ）と <code>string_key_eq_c</code>
+（同一性 → STRING×STRING バイト比較）を葉ヘルパにして機械語で探索する。
+再定義された <code>String#hash</code> はバケッティングに一切使われない。frozen String は
+inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも <code>h["k"] = v</code> の
+格納キー（<code>Value::frozen_hash_key</code> が複製して freeze）も frozen なので
+<code>{"content-type" =&gt; "text/plain"}</code> は boxed map を作らない（134 → 57 ns）。
+詳細は <a href="#hash-の実装と最適化">hash.md</a> §1.1、§1.3、§4.2。</p>
+<hr>
+<h2 id="6-ruby-で書かれているメソッド"><a class="header" href="#6-ruby-で書かれているメソッド">6. Ruby で書かれているメソッド</a></h2>
+<p><code>builtins/string.rb</code>:</p>
+<ul>
+<li><code>include Comparable</code> は <code>between?</code> / <code>clamp</code> を得るため<strong>だけ</strong>。順序演算子
+は native のままで、クラス自身のメソッドがモジュールより勝つので
+<code>&lt;</code> / <code>&lt;=</code> / <code>&gt;</code> / <code>&gt;=</code> は遅い <code>&lt;=&gt;</code> 経由に落ちない。</li>
+<li><code>to_s</code> / <code>to_str</code>、<code>insert</code>、<code>prepend</code>、<code>chop</code> / <code>chop!</code>、<code>delete_suffix</code> /
+<code>!</code>、<code>partition</code> / <code>rpartition</code>、<code>codepoints</code> / <code>each_codepoint</code>、<code>clear</code>
+（<code>bytesplice</code> 経由）、<code>upto</code>。</li>
+<li><code>concat</code> / <code>append</code> は <code>rb_str_concat_multi</code> の実装で、引数が 2 つ以上なら
+先にバッファに集めてからつなぐので、レシーバをエイリアスする引数は
+入口の値で寄与する（<code>str.concat str, str</code> は 4 倍でなく 3 倍）。</li>
+<li><code>each_byte</code> は<strong>明示的に性能上の選択</strong>で、<code>bytes.each(&amp;block)</code> でなく素の
+<code>while</code> ループ。前者は bytesize 個の Array と Proc を呼び出しごとに作って
+いた。ここでは JIT が <code>bytesize</code> / <code>getbyte</code> / <code>yield</code> をインライン化し、
+「バイトあたり約 3 倍速い」。</li>
+<li><code>upto</code> は CRuby の 2 つの特例（全桁数字の端点は整数として、1 文字 ASCII の
+端点はバイトで反復）を再現する。</li>
+<li><code>-@</code> / <code>dedup</code> は <code>frozen? ? self : dup.freeze</code>。<strong>重複排除テーブル無し</strong>。
+<code>+@</code> は chilled に Ruby レベルの述語が無いため Rust に残っている。</li>
+</ul>
+<hr>
+<h2 id="7-cruby-との実装差異"><a class="header" href="#7-cruby-との実装差異">7. CRuby との実装差異</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>項目</th><th>CRuby</th><th>monoruby</th></tr>
+</thead>
+<tbody>
+<tr><td>埋め込み文字列</td><td><code>RSTRING_EMBED</code>、64 ビットで約 24 バイト</td><td><strong>32 バイト</strong>。fork した <code>SmallVec&lt;[u8; 32]&gt;</code> が 64 バイトの RValue セル内</td></tr>
+<tr><td>共有文字列</td><td><code>STR_SHARED</code> + RString の <code>shared</code> フィールド</td><td>あふれた SmallVec のフィールドに重ねた <code>SharedContent</code>、<code>capacity == isize::MAX</code> でタグ。<strong>読み取り専用の JIT 命令が共有検査を要らないよう</strong>に設計</td></tr>
+<tr><td>共有の方針</td><td>積極的（<code>rb_str_new_shared</code>、<code>RSTRING_EMBED_LEN_MAX</code> 超の <code>rb_str_substr</code>）</td><td><code>len &gt; 32</code> <strong>かつ</strong>親が既に共有かヒープあふれのときだけ</td></tr>
+<tr><td>root</td><td>共有の親自身が共有でありうる（連鎖、<code>rb_str_shared_root</code> で解決）</td><td>隠れた <strong>frozen</strong> root。sharer は連鎖しない。frozen な親は自分自身が root</td></tr>
+<tr><td>CoW</td><td><code>rb_str_modify</code> → <code>str_make_independent</code></td><td><code>owned_mut()</code> / <code>uniquify()</code> の単一入口</td></tr>
+<tr><td><code>rb_fstring</code> の重複排除</td><td>pragma のリテラル<strong>と</strong>実行時の <code>-"str"</code> / <code>String#-@</code> / Hash キーに適用</td><td>コンパイル時のリテラルプール <code>Store::frozen_str_pool</code>（<code>(bytes, encoding)</code> キー）<strong>のみ</strong>。<code>String#-@</code> は素の <code>dup.freeze</code>（<strong>実行時の重複排除無し</strong>）。Hash の String キーは格納ごとに <code>dup</code> + <code>freeze</code> でインターンしない</td></tr>
+<tr><td>chilled リテラル</td><td>CRuby 3.4 の <code>STR_CHILLED</code></td><td>ヘッダフラグのビット 7 <code>CHILLED_LITERAL_BIT</code>、<code>Symbol#to_s</code> 用の別の <code>is_chilled</code> ビット、<code>--debug-frozen-string-literal</code> の出自テーブル</td></tr>
+<tr><td>coderange</td><td><code>ENC_CODERANGE_*</code> を RBasic のフラグにキャッシュ</td><td>JIT 既知オフセットの <code>Cell&lt;CodeRange&gt;</code>（<code>repr(u8)</code>）。<strong>遅延</strong>計算で、追記・部分文字列・repeat では再計算でなく O(1) で畳む</td></tr>
+<tr><td><code>String#hash</code></td><td>seeded SipHash。fstring 側でキャッシュ</td><td>seeded SipHash（<code>DefaultHasher</code> + プロセスごとの <code>RandomState</code>）。<strong>String ごとのキャッシュ無し</strong>（<a href="design/yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a> §5.2 が未解決コストとして挙げる）</td></tr>
+<tr><td>Hash キーのバケッティング</td><td><code>any_hash</code> はサブクラスでも内容をハッシュ、<code>rb_any_cmp</code> は <code>String</code> ちょうどのときだけバイト比較</td><td>同じ分割: <code>string_digest</code> は無条件に内容、<code>string_key_eq</code> / <code>is_plain_rstring_inner</code> がバイト比較をクラス一致でゲート</td></tr>
+<tr><td><code>opt_str_freeze</code></td><td>あり</td><td>あり — <code>StringFreeze</code> 命令（§3.5）</td></tr>
+<tr><td><code>opt_str_uminus</code></td><td>あり</td><td><strong>無し</strong></td></tr>
+<tr><td>エンコーディング</td><td>約 100 種の本物のコーデック</td><td>native コーデックは <strong>UTF-8, US-ASCII, ASCII-8BIT, UTF-16LE/BE, UTF-32LE/BE, ISO-8859-1..16, EUC-JP, Shift_JIS / CP932 / Windows-31J, ISO-2022-JP（<code>encoding_rs</code>）</strong>。他は名前だけ保持（<code>Other</code> = ASCII 非互換のダミー、<code>NamedByte</code> = 約 38 の ASCII 互換コードページで、格納と文字反復は ASCII-8BIT として振る舞い <code>#name</code> / <code>#inspect</code> / ASCII 互換性だけが違う）</td></tr>
+<tr><td>EUC-JP / Shift_JIS の文字反復</td><td>完全な <code>mbclen</code></td><td><code>classify</code> と <code>char_length</code> は native に復号するが、<code>CharByteIter</code> は<strong>バイト単位</strong>で進む。<a href="#design-per-encoding-character-iteration-layer"><code>../encoding_char_iteration_design.md</code></a> が埋めようとしている穴</td></tr>
+<tr><td>非 UTF-8 上の正規表現</td><td>onigmo の多エンコーディング</td><td>バイト → <code>U+00XX</code> 代理写像で UTF-8 専用の <code>regex</code> クレートに掛ける（<code>regex_view</code> / <code>from_mapped_utf8</code>）。EUC-JP / SJIS はバイト単位の近似</td></tr>
+<tr><td>宣言エンコーディング下の不正バイト</td><td>許容、coderange BROKEN</td><td>同じ（<code>content</code> は不透明なバイトバッファ、<code>ty</code> は情報のみ）</td></tr>
+<tr><td><code>str_mod_check</code></td><td>ポインタ + 長さ</td><td>長さのみ（同じ長さの in-place 編集でも再確保するため）</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="8-テストと関連文書"><a class="header" href="#8-テストと関連文書">8. テストと関連文書</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>場所</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>tests/string_bytes.rs</code></td><td><code>&lt;&lt;</code> / <code>setbyte</code> のバイト・エンコーディング・code range を CRuby と突き合わせ</td></tr>
+<tr><td><code>tests/hash_string_keys.rs</code></td><td>String キーの Hash 経路</td></tr>
+<tr><td><code>tests/literal.rs</code></td><td>リテラルの評価</td></tr>
+<tr><td><code>string.rs</code> の <code>shared_string_tests</code> / <code>inline_shl_encoding_tags_are_pinned</code></td><td>overlay のレイアウト、CoW の分離、タグの固定</td></tr>
+<tr><td><a href="#hash-の実装と最適化">hash.md</a></td><td>String キーの probe、<code>frozen_hash_key</code></td></tr>
+<tr><td><a href="#inline-asm-function"><code>../inline.md</code></a></td><td>インライン生成器の契約（trial inlining、<code>is_simple()</code>）</td></tr>
+<tr><td><a href="#unified-low-level-ir-lir"><code>../lir.md</code></a></td><td><code>StringLenFixnum</code> の LIR</td></tr>
+<tr><td><a href="#monoruby-の-gc--機構と実装"><code>../gc.md</code></a></td><td>共有 root の write barrier、<code>young_child_exists</code></td></tr>
+<tr><td><a href="#基本演算の再定義bop-redefinition"><code>../bop_redefinition.md</code></a></td><td><code>(STRING_CLASS, "freeze")</code> / <code>"!="</code> の BOP</td></tr>
+<tr><td><a href="#chain-deopt--handoff-note"><code>../chain_deopt.md</code></a> / <a href="#reading-the-deopt-log---features-deopt"><code>../deopt_log.md</code></a></td><td><code>setbyte</code> / <code>&lt;&lt;</code> が deopt でなく detach + 再試行を選ぶ背景</td></tr>
+<tr><td><a href="#monoruby-における-ruby-c-拡張サポートの設計検討"><code>../c_extention.md</code></a></td><td><code>nul_terminated_buf_ptr</code> と FFI</td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="regexp-の実装と最適化"><a class="header" href="#regexp-の実装と最適化">Regexp の実装と最適化</a></h1>
+<p>Regexp は graphql の実行時間の 3 分の 1 を占め（<code>perf</code> で 33.9 %）、
+StringScanner を介して activerecord / rack のパーサ群にも効いてくる
+（<a href="design/yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a>
+§5.6、§8.1）。</p>
+<p>この文書は、正規表現エンジンとコンパイル済みパターンのキャッシュ、<code>$~</code> と
+<code>MatchData</code> の置き方、正規表現を使う <code>String</code> メソッドがどこで高速経路を
+取り、どこで取らないかをまとめ、最後に CRuby との実装差異を並べる。
+String 側の表現（共有部分文字列、code range、<code>regex_view</code>）は
+<a href="#string-の実装と最適化">string.md</a> が前提になる。共通の前提は <a href="design/runtime_optimization/README.html">README.md</a>。</p>
+<hr>
+<h2 id="1-エンジンとコンパイル済みパターン"><a class="header" href="#1-エンジンとコンパイル済みパターン">1. エンジンとコンパイル済みパターン</a></h2>
+<h3 id="11-onigmo-regex-クレート"><a class="header" href="#11-onigmo-regex-クレート">1.1 <code>onigmo-regex</code> クレート</a></h3>
+<p>エンジンは CRuby と同じ Onigmo で、<code>onigmo-regex</code> クレート（git 依存）が
+束ねている。<code>Regex</code> は生の <code>re_pattern_buffer</code> ポインタ、コンパイル時の
+パターンバイト列、オプション語、<code>OnigmoEncoding</code>、コンパイル時の診断
+<code>Vec&lt;String&gt;</code> を持ち、<code>unsafe impl Send + Sync</code> なので、プロセス全体で 1 つの
+<code>Arc&lt;Regex&gt;</code> をグリーンスレッド間で共有できる。</p>
+<p>構築は <code>Regex::new_bytes_with_encoding</code> の 1 本に集約され、<code>onig_new</code> を
+<code>OnigSyntaxRuby</code> で呼び、Onigmo の <code>onig_syntax_warn</code> 出力をフックで拾って
+<code>warnings</code> に溜める。</p>
+<p>照合の入口は 3 つ:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>入口</th><th>Onigmo</th><th>Region</th></tr>
+</thead>
+<tbody>
+<tr><td><code>captures_from_pos</code></td><td><code>onig_search</code></td><td><strong>呼び出しごとに新規確保</strong>（<code>onig_region_new</code> / <code>free</code> が 1 回ずつ）</td></tr>
+<tr><td><code>match_at_with_region</code></td><td><code>onig_match</code>（アンカー、前方探索無し）</td><td>呼び出し側が持つ再利用 <code>Region</code></td></tr>
+<tr><td><code>search_with_region</code></td><td><code>onig_search</code></td><td>同上</td></tr>
+</tbody>
+</table>
+</div>
+<p>後ろ 2 つは StringScanner のために追加された（§3.6）。<code>Captures</code> は
+<code>Region</code> と haystack への <code>&amp;str</code> を持ち、グループ参照はレジスタ配列を直接
+読むのでグループごとの確保は無い。</p>
+<h3 id="12-regexpinner"><a class="header" href="#12-regexpinner">1.2 <code>RegexpInner</code></a></h3>
+<pre><code>regex: Arc&lt;Regex&gt;            // 共有されるコンパイル済みパターン
+source: Arc&lt;[u8]&gt;            // CRuby から見える #source の生バイト列（\u{} 展開前）
+encoding: OnigmoEncoding     // エンジンが実際に使うエンコーディング（UTF8 / ASCII のみ）
+declared_encoding: Encoding  // Regexp#encoding
+fixed_encoding: bool         // Regexp#fixed_encoding?
+initialized: bool            // Regexp.allocate の placeholder だけ false
+</code></pre>
+<p>重いフィールドは両方 <code>Arc</code> なので <code>clone</code> は参照カウント 2 回。<code>PartialEq</code> は
+<code>Arc::ptr_eq</code> で短絡する。<strong><code>Value</code> を 1 つも持たない</strong>ことが <code>ObjTy::REGEXP</code>
+を GC で昇格可能にしている（§2.6）。</p>
+<h3 id="13-プロセス全体の正規表現キャッシュ-regex_cache"><a class="header" href="#13-プロセス全体の正規表現キャッシュ-regex_cache">1.3 プロセス全体の正規表現キャッシュ <code>REGEX_CACHE</code></a></h3>
+<p><code>static REGEX_CACHE: LazyLock&lt;RwLock&lt;HashMap&lt;(String, u32, OnigmoEncoding), Arc&lt;Regex&gt;&gt;&gt;&gt;</code>。キーは <strong><code>\u{}</code> 展開後のエンジン向けパターン文字列、Onigmo
+だけのオプションビット、エンジンエンコーディング</strong>。Ruby だけのビット
+（<code>NOENCODING</code> / <code>FIXEDENCODING</code> / <code>KCODE_*</code>）はキーを作る前に落とすので
+<code>/x/</code> と <code>/x/n</code> はコンパイル済み <code>Regex</code> を共有する
+（<code>ruby_only_option_bits_dont_split_cache</code> テスト）。</p>
+<p>探索は <code>RegexpInner::with_option_kcode_source</code> の 1 本に集まっていて、
+インタプリタのあらゆる構築経路（<code>with_option</code> / <code>with_option_and_encoding</code> /
+<code>with_option_kcode</code> / <code>from_escaped</code>）がここを通る。ヒットなら <code>Arc</code> を
+複製して<strong>コンパイル警告を再キューする</strong>（CRuby は同じパターンを
+コンパイルするたびに警告し直す）。ミスならコンパイルして挿入し、Onigmo の
+エラーを CRuby の <code>"&lt;msg&gt;: /&lt;source&gt;/"</code> に整形する。</p>
+<p>コストの注記: 探索は常に<strong>書き込みロック</strong>を取り、ヒットでもキーの
+<code>String</code> を確保する（<code>reg_str.clone()</code>）。マップは<strong>決して evict されない</strong>
+ので、<code>Regexp.new</code> で無限に異なるソースを作るプログラムは際限なく育つ。</p>
+<h3 id="14-第-2-のキャッシュnative-エンコーディング"><a class="header" href="#14-第-2-のキャッシュnative-エンコーディング">1.4 第 2 のキャッシュ（native エンコーディング）</a></h3>
+<p><code>RegexpInner::native_regex</code> は <code>NATIVE_CACHE</code>（生ソースバイト列 + オプション</p>
+<ul>
+<li>コーデックがキー）を持ち、被照合文字列が EUC-JP / Windows-31J / ISO-8859-* /
+KOI8 / Windows-125x のとき、そのコーデックでパターンを再コンパイルする。
+こちらは <code>read()</code> の高速経路が先にある。コーデック対応表 <code>onigmo_encoding_for</code>
+は多バイトの <code>NamedByte</code> コーデック（Big5 / GB18030 / EUC-KR）を意図的に
+外している — monoruby の文字イテレータが Onigmo の境界と食い違うため。
+これが CRuby の <code>rb_reg_prepare_re</code> のエンコーディング別再コンパイル
+キャッシュに相当する（§5）。</li>
+</ul>
+<h3 id="15-onigmo-に渡す前のソース前処理"><a class="header" href="#15-onigmo-に渡す前のソース前処理">1.5 Onigmo に渡す前のソース前処理</a></h3>
+<ul>
+<li><code>pre_validate_regex</code>: Onigmo が黙って受けてしまう入力に CRuby の文言で
+<code>RegexpError</code> を出す（末尾の <code>\</code>、桁ゼロの <code>\x</code>、閉じていない <code>\p{</code>）。</li>
+<li><code>expand_unicode_braces</code>: Onigmo の <code>\u</code> は 4 桁ちょうどしか受けないので
+<code>\u{XXXX}</code> / <code>\u{XX YY}</code> を <code>\uHHHH</code>（BMP）か生 UTF-8（補助面）に書き換え、
+<code>\uXYZ</code> 形のエラーは CRuby の文言で出す。<code>\u</code> を含まなければ即座に抜ける。</li>
+<li><code>resolve_declared_encoding</code> 系: CRuby のエンコーディング解決の梯子
+（n → u/e/s → FIXEDENCODING → 非 ASCII 内容 → US-ASCII 非固定）。</li>
+</ul>
+<h3 id="16-executor-無しでのコンパイル時警告"><a class="header" href="#16-executor-無しでのコンパイル時警告">1.6 <code>Executor</code> 無しでのコンパイル時警告</a></h3>
+<p>bytecodegen はリテラルを <code>Executor</code> の届かないところでコンパイルするので、
+<code>thread_local! PENDING_REGEXP_WARNINGS</code> に溜めて <code>queue_regexp_warnings</code> /
+<code>drain_pending_warnings</code> で受け渡す。<code>Executor::flush_compile_warnings</code> が
+<code>Regexp.new</code> / <code>Regexp#initialize</code> / <code>eval</code> / <code>Binding</code> / スクリプトコンパイル
+後に流す。</p>
+<h3 id="17-regexpnew--escape--union--その他"><a class="header" href="#17-regexpnew--escape--union--その他">1.7 <code>Regexp.new</code> / <code>.escape</code> / <code>.union</code> / その他</a></h3>
+<ul>
+<li><code>regexp_new</code>: レシーバが <code>REGEXP_CLASS</code> ちょうどなら直接構築（allocate +
+initialize の往復無し）。サブクラスは allocate してから <code>#initialize</code> を
+dispatch し、インスタンスを <code>vm.temp_push</code> で root する。</li>
+<li><code>Regexp.allocate</code> は空パターンをコンパイルし（必ずキャッシュヒット）、
+<code>initialized = false</code> を立てる。<code>#match</code> / <code>#=~</code> / <code>#options</code> は
+<code>TypeError</code>、<code>#==</code> / <code>#hash</code> は動く。</li>
+<li><code>Regexp.escape</code> / <code>.quote</code> はバイト単位の一巡 <code>escape_bytes</code>
+（<code>rb_reg_quote</code> 相当、<code>Vec::with_capacity(len)</code>）。「壊れた」文字列も
+raise せずバイト単位でエスケープする。</li>
+<li><code>Regexp.union</code>: 空 → <code>/(?!)/</code>、<code>Regexp</code> 1 個 → <strong>再コンパイル無しで
+そのまま返す</strong>、<code>to_regexp</code> に応える 1 個 → その regexp。それ以外は
+<code>parts.join("|")</code> して 1 回コンパイル（キャッシュが効きうる）。
+エンコーディング合成の状態機械 <code>UnionEnc</code> / <code>ArgEnc</code> がある。</li>
+<li><code>Regexp.linear_time?</code> は <code>\1..\9</code> / <code>\k</code> / <code>\g</code> の純粋な構文走査。
+<code>Regexp.timeout</code> / <code>timeout=</code> はスレッドローカルに<strong>保存されるだけで
+強制されない</strong>（ReDoS の中断は無い）。</li>
+</ul>
+<h3 id="18-bytecodegen-でのリテラル"><a class="header" href="#18-bytecodegen-でのリテラル">1.8 bytecodegen でのリテラル</a></h3>
+<ul>
+<li>パーサ（<code>prism_backend.rs</code>）は <code>NodeKind::RegExp(parts, flags, is_const)</code> を
+作る。フラグ抽出 <code>regex_flags_from_closing</code> は <code>i m x n u e s</code> だけを残し、
+<strong><code>o</code> を落とす</strong>（§5）。</li>
+<li><strong>非補間リテラル</strong>（<code>is_const</code>）: <code>const_regexp</code> が bytecode 生成時に
+<strong>1 回だけ</strong>コンパイルし、結果の <code>Value</code> を frozen にして <code>emit_literal</code> に
+渡す。<code>REGEXP_CLASS.is_always_frozen()</code> が真なので命令は
+<strong><code>FrozenLiteral</code></strong>（<code>Literal</code> ではない）: VM は共有オブジェクトを
+複製無しでロードし、JIT の <code>TraceIr::FrozenLiteral</code> は <code>def_lit2gp</code> で
+GP レジスタへの即値ロードになる。<strong><code>/re/</code> を回すループは 1 反復あたり
+確保ゼロ・エンジン仕事ゼロ</strong>で、同じサイトの <code>/re/.equal?(/re/)</code> が成り
+立つ。リテラルのコンパイルエラーはロード時の<strong>構文エラー</strong>になる。</li>
+<li><strong>補間リテラル</strong>: <code>gen_regexp</code> が <code>ConcatRegexp</code> 命令を出し、オプション語
+は <code>(?imx)</code> のソース接頭辞ではなく先頭の Fixnum オペランドで渡す
+（<code>(?n)</code> は Onigmo のグループオプションとして無効、かつ <code>Regexp#source</code> に
+フラグが見えてはいけない）。実行時の <code>runtime::concatenate_regexp</code> は
+まず通常の <code>"#{}"</code> 結合（<code>concatenate_string_inner</code>、<a href="#string-の実装と最適化">string.md</a>
+§4.2）で補間 <strong>String</strong> を組み、そのバイト列と lossy な UTF-8 ビューを
+<code>with_option_kcode_source</code> に渡す。つまり<strong>補間 regexp は評価のたびに
+組み直されるが、補間結果が同じなら Onigmo のコンパイルは <code>REGEX_CACHE</code> が
+省く</strong>。VM / JIT の lowering は素の実行時呼び出し。</li>
+<li>条件式の裸のリテラル（<code>if /pat/</code>）はパーサが <code>regex =~ $_</code> に脱糖する。
+<code>/(?&lt;name&gt;…)/ =~ str</code> の名前付きキャプチャのローカル束縛は、パーサが
+<code>Regexp.last_match(:name)</code> の代入列に書き換える。</li>
+</ul>
+<hr>
+<h2 id="2--と-matchdata"><a class="header" href="#2--と-matchdata">2. <code>$~</code> と <code>MatchData</code></a></h2>
+<h3 id="21-lfp_svar-コンテナ"><a class="header" href="#21-lfp_svar-コンテナ">2.1 <code>LFP_SVAR</code> コンテナ</a></h3>
+<p>フレームスロット <code>LFP_SVAR</code>（= 16）の <code>0</code> は「未確保」の番兵で、非ゼロなら
+<strong>2 要素の <code>Array</code> <code>[$~, $_]</code></strong>（<code>SVAR_BACKREF = 0</code> / <code>SVAR_LASTLINE = 1</code>）。
+所有するのはメソッドを導入するフレームだけで、ブロックと <strong>lambda</strong> は
+<code>outer</code> を辿って LEP に至り、<code>def</code> / クラス本体 / トップレベル /
+<code>define_method</code> 本体で止まる（<code>Lfp::mfp</code>、
+<a href="#stack-layout-for-the-bytecode-interpreter--jited-code"><code>../stack_frame.md</code></a>）。</p>
+<p>native な builtin フレームは svar スコープを作らない。<code>Executor::current_mfp</code>
+は<strong>動的な</strong> CFP 連鎖を <code>is_native()</code> と <code>is_svar_transparent()</code> のフレーム
+越しに歩く。<code>is_svar_transparent</code> は monoruby 自身の <code>builtins/*.rb</code> から
+コンパイルされた全 iseq に立つので、<code>"wawa".to_enum(:scan, /./).map { $&amp; }</code>
+は monoruby の <code>Enumerable#map</code> が Ruby フレームでも <code>scan</code> の match を見る。</p>
+<p><strong>遅延確保</strong>: <code>svar_container_of</code> はスロットがゼロなら <code>None</code> を返し、
+<code>svar_container_of_create</code> だけが <code>Value::array2(nil, nil)</code> を確保する。
+<code>clear_capture_special_variables</code> は nil を格納するためだけにコンテナを
+作ったりしない。すべてのフレーム設定コード（VM / JIT / invoker、両アーキ）
+がゼロの番兵を書く。</p>
+<p>GC: <code>Lfp::mark_contents</code> は非ゼロのときだけ mark。<code>c.as_array()[SVAR_BACKREF] = val</code> の格納は <code>Array</code> の <code>DerefMut</code> が <code>write_barrier_bulk()</code> を走らせる
+のでバリア済み。</p>
+<p>実行コンテキストごとの上書き <code>root_lep</code> / <code>root_svar</code>: スレッド／ファイバー
+本体は spawner の LEP を持つブロックなので、そこを通して解決すると <code>$~</code> が
+双方向に漏れる。CRuby の <code>ec-&gt;root_lep</code> を鏡写しにしていて、
+<code>FiberInner::svar_isolated</code> で opt-out できる（Enumerator の内部は意図的に
+<strong>共有</strong>のまま）。</p>
+<h3 id="22-フックされたグローバル"><a class="header" href="#22-フックされたグローバル">2.2 フックされたグローバル</a></h3>
+<p><code>$~</code>（get / set、nil か MatchData のみ）、<code>$&amp;</code>、<code>$'</code>、<code>$`</code>、<code>$+</code>、
+<code>$1..$N</code>（<code>IdentId</code> から桁を読む）、<code>$_</code> は全部、格納された 1 つの
+<code>MatchData</code> から<strong>導出する読み手</strong>で、別の格納は無い。<code>$~</code> が設定される
+までは <code>None</code>（<code>defined?</code> が nil）を返し、<code>$~</code> 自身は常に <code>Some</code>。
+<code>stdlib/stringio.rb</code> が <code>rb_lastline_set</code> を真似るための
+<code>__set_lastline_in_caller</code> もある。</p>
+<h3 id="23-matchdatainner--rvalue-のセルに収める"><a class="header" href="#23-matchdatainner--rvalue-のセルに収める">2.3 <code>MatchDataInner</code> — RValue のセルに収める</a></h3>
+<pre><code>regex:    Option&lt;Regexp&gt;        // 8
+heystack: Value                 // 8   (String のスナップショット)
+matches:  SmallVec&lt;[Span; 2]&gt;   // 24
+                                 = 40 ≤ RValue の 48 バイト
+</code></pre>
+<p><code>Span = (u32, u32)</code> で <code>NO_MATCH = (u32::MAX, u32::MAX)</code> が不参加グループ。
+<code>usize</code> 対の半分の幅で、inline 容量 2 は「全体一致のみ」と「キャプチャ 1 つ」
+を位置の確保無しで賄う。被照合文字列は 4 GiB 未満に制限（構築時に assert）。</p>
+<p><strong>コピー無しの haystack スナップショット</strong>: <code>MatchDataInner::snapshot</code> は
+照合側が被照合 <code>Value</code> を知っていれば、それの<strong>共有 copy-on-write 部分文字列</strong>
+（<code>string_substring</code>）として保持し、知らなければ所有コピーにする。
+<code>from_captures_snap</code> が <code>$~</code> のホットな構築子で、<code>Captures::iter</code> から
+中間の位置 <code>Vec</code> 無しで span を組む。アクセサ <code>at_value</code> / <code>pre_match_value</code> /
+<code>post_match_value</code> / <code>captures_values</code> も CoW 部分文字列を返し、
+<code>string_value</code> は<strong>毎回同じ</strong> frozen スナップショットを返す
+（<code>md.string.equal?(md.string)</code>）。<code>at</code> は <code>&amp;[u8]</code> を返す — <code>/n</code> のバイト
+クラス一致で文字境界のスライスをすると <code>extern "C"</code> 境界で abort するため。</p>
+<h3 id="24-一時の-stash-と保存経路"><a class="header" href="#24-一時の-stash-と保存経路">2.4 一時の stash と保存経路</a></h3>
+<ul>
+<li><code>sp_match_regex</code>: 進行中の <code>Regexp</code>。次の <code>save_capture_special_variables</code>
+が名前付きキャプチャ用に付ける。消費されたら消える。</li>
+<li><code>sp_match_haystack</code>: 被照合 String の <code>Value</code>。<code>resolve_haystack</code> は照合側
+の <code>&amp;str</code> が本当にそのバッファを借りているかを<strong>ポインタの包含</strong>で
+検証し、<code>(subject, byte offset)</code> を返す。古い stash は単に <code>None</code> に
+解決してコピーに落ちるだけで、誤帰属はしない。</li>
+<li>両方とも <code>Executor::mark</code> の GC root（<code>MatchData</code> 確保が GC を起こす）。</li>
+<li><code>save_capture_special_variables</code> / <code>_bytes</code> が <code>MatchData</code> を組み、regexp を
+付け、<code>SVAR_BACKREF</code> に格納する。呼び出し側は <code>String#match</code> / <code>=~</code> /
+<code>[]</code> 系 / <code>split</code> / <code>sub</code> / <code>gsub</code> / <code>scan</code>、<code>Regexp#=~</code> / <code>===</code> / <code>match</code>。</li>
+</ul>
+<h3 id="25-matchdata-を確保しない場合"><a class="header" href="#25-matchdata-を確保しない場合">2.5 <code>MatchData</code> を<strong>確保しない</strong>場合</a></h3>
+<ul>
+<li><code>RegexpInner::match_pred</code>: 真偽だけの照合で、<strong><code>$~</code> に触れず <code>MatchData</code>
+も作らない</strong>。<code>Regexp#match?</code>、<code>String#match?</code>、<code>Array#grep</code> /
+<code>Enumerable#grep</code>（grep は <code>$~</code> を乱してはいけない、CRuby 準拠）。</li>
+<li><code>captures_from_pos_no_save</code>: 特殊変数の副作用無しの生の照合。<code>gsub</code> +
+ブロックの先行探索と <code>replace_all_block_inner</code> の走査。</li>
+<li><code>strscan_match</code>: <code>onig_match</code> / <code>onig_search</code> を再利用 region に、<code>$~</code>
+無し（§3.6）。</li>
+<li><code>String#match</code> / <code>Regexp#match</code> は<strong>保存したばかりの <code>$~</code> を返り値として
+再利用</strong>し、別の haystack ビュー上に 2 個目の <code>MatchData</code> を作らない
+（<code>match_one</code> / <code>rmatch</code>）。<code>str.match(re).equal?($~)</code> が CRuby と同じく
+成り立つ。</li>
+</ul>
+<p><strong>避けられていないもの</strong>: <code>str =~ /x/</code>（どちらのレシーバ順でも）は必ず
+確保する。<code>Regexp#=~</code> → <code>find_one</code> → <code>captures</code> → <code>captures_from_pos</code> →
+無条件の <code>save_capture_special_variables</code>。bytecodegen にも JIT にも
+<strong><code>$~</code> の死活解析は無い</strong>ので、JIT されたループ内の <code>if str =~ /x/</code> は
+1 反復あたり <code>MatchData</code> 1 個（+ <code>onig_region_new</code> / <code>free</code> 1 回）を確保する。
+<code>Regexp#===</code>（<code>teq</code>）も <code>find_one</code> を通るので <code>case s when /x/</code> はテストごと
+に <code>MatchData</code> を確保する — CRuby も同じだが、CRuby は busy でない
+<code>MatchData</code> オブジェクトを再利用する（§5）。</p>
+<h3 id="26-gc-での昇格"><a class="header" href="#26-gc-での昇格">2.6 GC での昇格</a></h3>
+<p><code>RValue::is_promotable</code> で <code>ObjTy::REGEXP</code> は <code>TIME</code> / <code>UMETHOD</code> とともに
+昇格可能（「この 3 つは <code>Value</code> を一切持たない」）。remember-on-promote
+（<code>young_child_exists</code>）からも参照無しの腕で除外される。効果は
+<a href="design/yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a>
+§8.6（minor GC ごとの REGEXP の mark が erubi で 291 → 5）。
+<code>ObjTy::MATCHDATA</code> は昇格<strong>しない</strong>（regexp と haystack の <code>Value</code> を持ち、
+<code>_ =&gt; false</code> の腕に落ちる）。</p>
+<hr>
+<h2 id="3-vm--jit-の経路と正規表現を使う-string-メソッド"><a class="header" href="#3-vm--jit-の経路と正規表現を使う-string-メソッド">3. VM / JIT の経路と正規表現を使う String メソッド</a></h2>
+<h3 id="30-無いもの"><a class="header" href="#30-無いもの">3.0 無いもの</a></h3>
+<ul>
+<li><strong><code>Regexp</code> にも正規表現駆動の <code>String</code> メソッドにも、インライン生成器・JIT
+intrinsic・LIR ノードは 1 つも無い。</strong> <code>builtins/regexp.rs</code> に <code>add_inline</code> /
+<code>inline_gen2!</code> は無く、<code>codegen/</code> にある regexp 形の機械語は
+<code>ConcatRegexp</code> の実行時呼び出しだけである。</li>
+<li><code>Regexp#===</code> は基本演算表に<strong>無い</strong>（<code>===</code> は Integer / Float / Symbol /
+nil / true / false だけ）。<code>case/when</code> に regexp が来ると <code>Cmp(TEq)</code> →
+<code>cmp_teq_case_values</code> → <code>cmp_teq_values_impl</code> に Regexp の腕が無く、汎用の
+<code>invoke_method(_TEQ)</code> でフルの dispatch になる。<code>OptCase</code>（ジャンプ表）は
+小さな Integer の <code>when</code> が 8 個以上のときだけで、regexp には効かない。</li>
+</ul>
+<h3 id="31-regex_view-の継ぎ目"><a class="header" href="#31-regex_view-の継ぎ目">3.1 <code>regex_view</code> の継ぎ目</a></h3>
+<p><code>RStringInner::regex_view</code> はエンジン向けに UTF-8 として妥当な <code>Cow&lt;str&gt;</code> を
+返す: UTF-8 / US-ASCII / ASCII のみの内容なら <code>check_utf8</code> 経由の<strong>借用</strong>
+ビュー、8 ビット内容を持つバイト指向エンコーディングなら各バイト <code>b</code> を
+<code>U+00bb</code> にした<strong>所有の代理像</strong>（元の 1 バイト ↔ ビューの 1 文字）。述語
+<code>needs_byte_mapping</code> は<strong>宣言された</strong>エンコーディングで決め、バイト列が
+たまたま UTF-8 として妥当かどうかは見ない。逆写像は <code>from_mapped_utf8</code>。
+全 <code>String</code> 正規表現メソッドが <code>mapped</code> フラグを持ち回って結果を戻す。
+<code>check_utf8</code> はキャッシュ済み <code>CodeRange</code> が <code>SevenBit</code> か <code>Utf8 + Valid</code>
+なら O(n) の再検証を飛ばす。</p>
+<h3 id="32-coderange--o1-の分類キャッシュ"><a class="header" href="#32-coderange--o1-の分類キャッシュ">3.2 <code>CodeRange</code> — O(1) の分類キャッシュ</a></h3>
+<p><a href="#string-の実装と最適化">string.md</a> §2 の <code>cr</code> が regexp 経路を安くしている当のもの:
+<code>is_ascii_only()</code> が「文字添字 == バイト添字」の全ショートカットをゲートし、
+<code>char_length()</code> は SevenBit で O(1)、<code>Regexp#match</code> は
+<code>code_range() != SevenBit</code> で native コーデック経路が要るかを決め、
+<code>String#match</code> / <code>#match?</code> は ASCII のみのレシーバで <code>chars().count()</code> を
+飛ばす。</p>
+<h3 id="33-バイト--文字オフセット変換"><a class="header" href="#33-バイト--文字オフセット変換">3.3 バイト ↔ 文字オフセット変換</a></h3>
+<p><strong>文字添字 → バイト添字のキャッシュは無い。</strong> 変換は毎回線形走査
+（<code>byte_to_char_index</code> は <code>char_indices().enumerate()</code>、<code>char_to_byte_pos</code> は
+<code>char_indices().nth(cp)</code>、<code>Regexp#match</code> の native 経路は
+<code>iter_char_bytes().take(cp).map(len).sum()</code>）。ASCII のみのショートカットが
+緩和のすべてで、背景と計画は
+<a href="#design-per-encoding-character-iteration-layer"><code>../encoding_char_iteration_design.md</code></a>
+（<code>CharByteIter</code>、「Onigmo coupling」の制限、多エンコーディングの Onigmo
+走査は別件という注記）。</p>
+<h3 id="34-部分文字列の共有と一巡の-splice"><a class="header" href="#34-部分文字列の共有と一巡の-splice">3.4 部分文字列の共有と一巡の splice</a></h3>
+<ul>
+<li><code>string_substring</code>: <code>len &gt; 32</code> で親がヒープ／共有ならコピー無しの CoW
+共有ビュー。全キャプチャ / pre / post 文字列と <code>scan</code> の結果に使う。</li>
+<li><code>string_snapshot</code>: ユーザーコードが生きたレシーバを書き換えても
+<code>invoke_block</code> をまたいで <code>&amp;str</code> を借りられる <strong>frozen</strong> スナップショット。
+<code>scan</code>、<code>gsub</code> + ブロック、<code>gsub</code> + Hash。</li>
+<li><code>check_string_not_modified</code>: CRuby の <code>str_mod_check</code>（長さ基準、
+<code>RuntimeError: string modified</code>）。</li>
+<li><code>RStringInner::splice_all</code>: <code>gsub</code> / <code>scan</code> の全置換を<strong>前方一巡</strong>で適用し、
+N 回の末尾シフト <code>bytesplice_with</code> の <code>O(haystack · matches)</code> を
+<code>O(haystack + Σ replacements)</code> にする（回帰テスト
+<code>gsub_many_matches_linear</code>）。</li>
+<li><code>bytesplice_with</code>: 単一一致の <code>sub</code> 用。両側が SevenBit / Valid で splice
+端点が UTF-8 境界なら変更後の code range 分類を O(1) に短縮。</li>
+</ul>
+<h3 id="35-メソッドごとの注記"><a class="header" href="#35-メソッドごとの注記">3.5 メソッドごとの注記</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>メソッド</th><th>最適化の要点</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Regexp#=~</code></td><td>nil 引数は <code>$~</code> を消して nil（エンジン呼び出し無し）。1 回の <code>from_utf8</code> 検証後 <code>from_utf8_unchecked</code> でバイト列を借り、CoW スナップショットのために被照合を stash。<strong>バイト</strong>オフセットを返す</td></tr>
+<tr><td><code>Regexp#===</code></td><td>nil / Regexp / 非文字列様の引数は照合せず false。Symbol → String、他は <code>to_str</code></td></tr>
+<tr><td><code>Regexp#match?</code></td><td><code>match_pred</code>。<code>MatchData</code> 無し、<code>$~</code> 無し、<code>sp_match_regex</code> 無し</td></tr>
+<tr><td><code>Regexp#match</code></td><td>まずエンコーディング検証。非 SevenBit でコーデックのある被照合は <strong>native コーデックのバイト経路</strong>（<code>.</code> が宣言エンコーディングに従う）、それ以外は借用 UTF-8 経路で、保存したばかりの <code>$~</code> を返す</td></tr>
+<tr><td><code>String#=~</code></td><td>Regexp 右辺が高速経路で<strong>文字</strong>添字を返す。String 右辺は <code>TypeError</code>、他は <code>to_str</code> の前に <code>rhs =~ self</code> を逆 dispatch</td></tr>
+<tr><td><code>String#match</code></td><td>両引数を借用の前に変換（ユーザーの <code>to_str</code> がレシーバを変えうる）。文字 → バイト位置は ASCII のみで O(1)、末尾超えは CRuby どおり clamp</td></tr>
+<tr><td><code>String#match?</code></td><td><code>match_pred</code>。範囲外の位置は clamp せず拒否</td></tr>
+<tr><td><code>String#[]</code> / <code>slice</code>（Regexp）</td><td>名前付きは <code>get_group_members</code> でグループ番号を解決し、最右の参加グループ。<code>$~</code> を設定</td></tr>
+<tr><td><code>String#index</code></td><td><strong>String の needle はエンジンに入らない</strong> — バイト／文字境界の部分文字列探索で <code>$~</code> を触らず（issue #721）、壊れた UTF-8 も許容。Regexp 経路はミス時に <code>$~</code> を消し、末尾のゼロ幅一致を専用に扱う</td></tr>
+<tr><td><code>String#rindex</code></td><td>前方走査ループ。最終的な <code>$~</code> は返す位置での追加 1 プローブで再確立</td></tr>
+<tr><td><code>String#sub</code> / <code>sub!</code></td><td>Hash / 置換 String / ブロックの 3 腕が <code>with_coerced_regexp</code>（Regexp・String（エスケープ）・<code>to_str</code>）に集まる。結果は <code>apply_template_encoding</code> で再タグ</td></tr>
+<tr><td><code>String#gsub</code> / <code>gsub!</code></td><td>ブロック形は <code>replace_all_block</code> が <strong>frozen スナップショットを取る前に生きたレシーバで最初の一致を先行探索</strong>する: 「一致無し」の一般的なケースがスナップショット + splice でなくコピー 1 回で済み、本走査は 0 でなく最初の一致位置から始まる（<code>gsub_block_without_a_match_probes_first</code> テスト）。ブロック結果のエンコーディング互換は文字列化前に検査</td></tr>
+<tr><td><code>String#scan</code></td><td>先に frozen スナップショット。yield する各断片は CoW <code>string_substring</code>。CRuby のゼロ幅一致を落とさないよう <code>captures_iter</code> でなく手動走査。ループ後 <code>$~</code> を<strong>最後の</strong>一致に戻す（終端の不一致で消えるため）</td></tr>
+<tr><td><code>String#split</code></td><td>区切り <code>SepKind::{Awk, Chars, Str, Re}</code>: <strong>空ソースの Regexp は文字分割、単一スペースのソースはリテラル文字列分割に降格し、どちらもエンジンに入らない</strong>。非 UTF-8 + 空区切りの専用文字経路、<code>limit == 1</code> の短絡、CRuby の <code>split_string</code> を写した空フィールドの遅延カウンタ</td></tr>
+<tr><td><code>String#start_with?</code></td><td>Regexp はエンジン（<code>m.start() == 0</code> でアンカー）。<strong>String は生の <code>starts_with</code> バイト検査</strong> + <code>enc_char_boundary</code> で、エンジンも確保も無し</td></tr>
+<tr><td><code>String#end_with?</code></td><td>Regexp は <code>TypeError</code>（CRuby どおり）。String は <code>ends_with</code> + 境界検査</td></tr>
+<tr><td><code>String#include?</code></td><td>2 つの <code>regex_view</code> に <code>str::contains</code></td></tr>
+<tr><td><code>String#tr</code> / <code>tr_s</code> / <code>delete</code> / <code>count</code> / <code>squeeze</code></td><td>3 段: (1) ASCII のみのレシーバ <strong>かつ</strong> ASCII のみの指定なら <code>[u64; 2]</code> の 128 ビットマップ（削除／否定）か平坦な <code>[u8; 128]</code> 変換表で全部バイト単位、(2) 非 ASCII レシーバに ASCII 指定は <code>tr_translate_bytes</code>、(3) 汎用の <code>chars()</code> 走査。<code>Charset</code> は <code>ascii_bitmap: [u64; 2]</code> + <code>non_ascii: BTreeSet&lt;char&gt;</code> + <code>negated</code> で、<code>contains_ascii_byte</code> はシフト / AND / XOR 各 1 回</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="36-stringscanner--唯一の手調整されたエンジン経路"><a class="header" href="#36-stringscanner--唯一の手調整されたエンジン経路">3.6 StringScanner — 唯一の手調整されたエンジン経路</a></h3>
+<p>Ruby 側は <code>stdlib/strscan.rb</code>。<code>_anchored</code> が <code>\A(?:…)</code> で包んだ regexp を
+作るのは<strong>fallback 経路だけ</strong>で、サイズ上限 512 の 3 つの Hash
+（<code>ANCHORED_RE</code>（identity キー）/ <code>ANCHORED_STR</code> / <code>PLAIN_STR</code>）にキャッシュ
+する。</p>
+<p>Rust 側の <code>String#__strscan_match</code>:</p>
+<ul>
+<li><code>thread_local! STRSCAN_REGION: RefCell&lt;onigmo_regex::Region&gt;</code> — <strong>スレッド
+全体で 1 つの再利用 region</strong> なので、グループ無しのヒットは確保ゼロ。</li>
+<li>String パターンはリテラルバイト列: アンカー時 <code>starts_with</code>、それ以外は
+<code>windows().position()</code> — Onigmo に入らない。</li>
+<li>Regexp パターンはエンジンビューがバッファそのもの（<code>is_ascii_only() || (Utf8 &amp;&amp; valid)</code>）のときだけバイトバッファ上で<strong>その場</strong>照合し、それ以外は
+<code>false</code> を返して Ruby 側がコピーに対する <code>String#match</code> に落ちる。</li>
+<li>アンカーは suffix に対する <code>onig_match</code>（<code>strscan_match</code>）で、高速経路では
+<strong><code>\A(?:…)</code> の包み regexp を決して作らない</strong>。</li>
+<li>返り値は確保を意識している: 走査位置から始まるグループ無しの全体一致は
+素の Fixnum、それ以外は平坦な <code>[b0, e0, b1, e1, …]</code> Array。</li>
+<li><code>$~</code> は触らない（CRuby の C 実装 strscan もレジスタを自分で持つ）。</li>
+</ul>
+<p>計測と経緯は
+<a href="design/yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a>
+§5.6、§8.1。</p>
+<hr>
+<h2 id="4-エンジンとエンコーディングの相互作用"><a class="header" href="#4-エンジンとエンコーディングの相互作用">4. エンジンとエンコーディングの相互作用</a></h2>
+<ul>
+<li>主経路でエンジンに渡るのは <strong>UTF-8 か ASCII だけ</strong>。より豊かな宣言
+エンコーディングは <code>declared_encoding</code> に残り、<code>#encoding</code> /
+<code>#fixed_encoding?</code> / <code>Regexp.union</code> の互換判定に使われ、走査自体は
+UTF-8 / 代理ビュー上で走る。</li>
+<li>例外は非 SevenBit でコーデックのある被照合に対する <code>Regexp#match</code>:
+<code>onigmo_encoding_for</code> → <code>native_regex</code>（<code>NATIVE_CACHE</code>）→
+<code>captures_bytes_from_pos</code> → <code>MatchDataInner::from_captures_bytes</code>。Onigmo が
+多エンコーディング照合をするのはここだけ。</li>
+<li>互換ゲートは CRuby の <code>rb_reg_prepare_enc</code> を写す: <code>check_match_encoding</code>
+の 3 規則、<code>regexp_encoding_mismatch</code>、<code>check_subject_match_encoding</code>、
+<code>warn_binary_regexp_match</code>（「historical binary regexp match /…/n
+against X string」）、<code>Regexp#match</code> の <code>ArgumentError: invalid byte sequence</code>、String 側の <code>check_pattern_encoding_compat</code> 等。</li>
+<li>代理写像は多バイトのバイト指向エンコーディングに対する CRuby のエンコー
+ディング別文字走査の<strong>バイト単位の近似</strong>である。</li>
+<li>結果のエンコーディング: <code>apply_template_encoding</code> が <code>sub</code> / <code>gsub</code> の出力を
+レシーバのエンコーディングに再タグし（置換機構は既定で UTF-8 を組む）、
+<code>Regexp#source</code> は <code>fixed_encoding?</code> に従い、補間 regexp は修飾子で固定
+されない限り補間内容から取る。</li>
+</ul>
+<hr>
+<h2 id="5-cruby-との実装差異"><a class="header" href="#5-cruby-との実装差異">5. CRuby との実装差異</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>項目</th><th>CRuby</th><th>monoruby</th></tr>
+</thead>
+<tbody>
+<tr><td><strong><code>/o</code>（once）</strong></td><td>補間リテラルを 1 回だけコンパイルして再利用</td><td><code>o</code> を<strong>パーサが落とす</strong>ので <code>/#{x}/o</code> は評価ごとに組み直す。<code>REGEX_CACHE</code> のヒットで再構築はハッシュ探索で済むが、<code>Regexp</code> オブジェクトの同一性は違う。ruby/spec の regexp 関連で唯一の失敗タグ（<code>spec/tags/language/regexp/modifiers_tags.txt</code> の “supports /o (once)”）</td></tr>
+<tr><td>非補間リテラル</td><td>1 回コンパイル、frozen、共有</td><td>同じだがさらに早く、<em>bytecodegen</em> 時にコンパイルして <code>FrozenLiteral</code> で出す。コンパイルエラーは実行時 <code>RegexpError</code> でなく<strong>ロード時の構文エラー</strong></td></tr>
+<tr><td>エンコーディング別の再コンパイル</td><td><code>rb_reg_prepare_re</code> が regexp オブジェクト上にキャッシュ</td><td><strong>プロセス全体</strong>の 2 つのキャッシュ（<code>REGEX_CACHE</code> / <code>NATIVE_CACHE</code>）、どちらも <code>RwLock&lt;HashMap&gt;</code> で<strong>上限無し</strong>。<code>Arc&lt;Regex&gt;</code> でスレッド間共有</td></tr>
+<tr><td>エンジンが見るエンコーディング</td><td>被照合の実エンコーディングで Onigmo が動く</td><td>既定で UTF-8 / ASCII。<code>Regexp#match</code> + 非 SevenBit + 対応コーデックだけ native 経路。多バイト <code>NamedByte</code>（Big5 / GB18030 / EUC-KR/TW）は意図的に除外。他はバイト ↔ <code>U+00XX</code> の代理空間</td></tr>
+<tr><td><code>$~</code> の格納</td><td>MFP の <code>vm_svar</code></td><td>同じ設計を意図的に写す: LEP の <code>LFP_SVAR</code>、遅延確保の <code>[$~, $_]</code>、ブロック / lambda が <code>outer</code> を辿る。追加で <code>is_svar_transparent</code>（monoruby の Ruby 実装コアメソッド用。CRuby はそれらを C で書くので相当物が無い）</td></tr>
+<tr><td><code>Regexp#match?</code> の <code>MatchData</code> 回避</td><td>あり（<code>rb_reg_match_p</code>）</td><td>あり（<code>match_pred</code>）。CRuby より広く <code>Array#grep</code> / <code>Enumerable#grep</code> も使う</td></tr>
+<tr><td><code>MatchData</code> オブジェクトの再利用</td><td><code>rb_reg_search0</code> が backref スロットの busy でない <code>MatchData</code> を再利用</td><td><strong>常に新規確保</strong>。40 バイトのペイロード、<code>SmallVec&lt;[Span; 2]&gt;</code> の inline 容量、コピー無しの CoW haystack スナップショットで緩和</td></tr>
+<tr><td><code>onig_region</code> の再利用</td><td>照合ごとに再利用</td><td><code>captures_from_pos</code> は照合ごとに <code>OnigRegion</code> を確保・解放。再利用は StringScanner のプリミティブ（スレッドローカル <code>Region</code>）<strong>のみ</strong>（<code>onig_region_clear</code> + memset で約 3.3 %）</td></tr>
+<tr><td>リテラル接頭辞の最適探索 / <code>ONIG_OPTION_FIND_NOT_EMPTY</code></td><td>使う</td><td>使わない。代わりに <code>scan</code> / <code>replace_repeat</code> / <code>replace_all_block_inner</code> / <code>scan_block_loop</code> で<strong>手動走査</strong>（クレートの <code>captures_iter</code> は CRuby が yield するはずのゼロ幅一致を落とすため）</td></tr>
+<tr><td><code>Regexp.timeout</code></td><td>強制（ReDoS 中断）</td><td>スレッドローカルに保存して読み返すだけで<strong>強制しない</strong></td></tr>
+<tr><td><code>Regexp#==</code> / <code>#hash</code></td><td><code>hash</code> はエンコーディングフラグを無視、<code>==</code> は無視しない</td><td>同じ非対称を写す: <code>==</code> は <code>REGEXP_EQ_OPTION_MASK</code>（m / i / x）+ <code>declared_encoding</code>、<code>hash</code> はソース + マスクのみ</td></tr>
+<tr><td>エラーメッセージ</td><td>Onigmo の文言 + <code>: /&lt;source&gt;/</code></td><td><code>pre_validate_regex</code> / <code>expand_unicode_braces</code> / キャッシュミスのエラー腕が CRuby の文言を手で再現</td></tr>
+<tr><td><code>String#index</code>（String needle）</td><td><code>$~</code> を設定しない</td><td>同じ（issue #721）。さらにエンジンにも入らない</td></tr>
+<tr><td><code>\k&lt;name&gt;</code> の重複名</td><td>最後に参加したグループ</td><td>同じ（<code>get_group_members</code> 上で実装）</td></tr>
+<tr><td><code>Regexp#initialize</code></td><td>private、再初期化は raise</td><td>private で常に raise: frozen リテラルは <code>FrozenError</code>、それ以外は <code>TypeError: already initialized regexp</code>。埋めるのは <code>allocate</code> の placeholder 経路だけ</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="6-現在の限界"><a class="header" href="#6-現在の限界">6. 現在の限界</a></h2>
+<ol>
+<li><code>REGEX_CACHE</code> と <code>NATIVE_CACHE</code> は上限が無く evict されない。<code>REGEX_CACHE</code>
+は構築のたびに<strong>書き込み</strong>ロックを取りキー <code>String</code> を確保する。</li>
+<li><code>captures_from_pos</code> は照合ごとに <code>OnigRegion</code> を確保・解放する。再利用は
+StringScanner だけ。</li>
+<li><code>$~</code> の死活解析が無いので <code>str =~ /x/</code> と <code>case … when /x/</code> は結果を
+使わなくても評価ごとに <code>MatchData</code> を確保する。</li>
+<li><code>Regexp.timeout</code> は不活性。</li>
+<li><code>Regexp#multiline?</code> は未実装（<a href="design/plan-activerecord.html"><code>../plan-activerecord.md</code></a>）。</li>
+<li>非 UTF-8 レシーバに対する Regexp 付き <code>String#slice!</code>、同一エンコーディング
+の多バイト <code>tr</code> / <code>count</code> 集合は追記予定として <code>string.rs</code> に記録がある。</li>
+</ol>
+<hr>
+<h2 id="7-テストと関連文書-1"><a class="header" href="#7-テストと関連文書-1">7. テストと関連文書</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>場所</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>value/rvalue/regexp.rs</code> の <code>regex_cache_tests</code></td><td>キャッシュの契約（Ruby だけのビットがキャッシュを分割しない、等）</td></tr>
+<tr><td><code>builtins/regexp.rs</code> のテスト</td><td><code>regexp_match_pred_does_not_set_special_vars</code>、<code>gsub_block_without_a_match_probes_first</code>、<code>regexp_hash_ignores_encoding</code>、<code>initialize</code> の raise</td></tr>
+<tr><td><code>builtins/string.rs</code> の <code>gsub_many_matches_linear</code></td><td><code>splice_all</code> の線形性</td></tr>
+<tr><td><code>builtins/fiber.rs</code> / <code>builtins/thread.rs</code> の svar テスト</td><td><code>root_svar</code> の分離</td></tr>
+<tr><td><a href="#stack-layout-for-the-bytecode-interpreter--jited-code"><code>../stack_frame.md</code></a></td><td><code>LFP_SVAR</code> スロットと LEP の所有規則</td></tr>
+<tr><td><a href="#monoruby-の-gc--機構と実装"><code>../gc.md</code></a></td><td><code>sp_match_regex</code> / <code>sp_match_haystack</code> の root</td></tr>
+<tr><td><a href="#design-per-encoding-character-iteration-layer"><code>../encoding_char_iteration_design.md</code></a></td><td>バイト ↔ 文字オフセット、<code>CharByteIter</code></td></tr>
+<tr><td><a href="#基本演算の再定義bop-redefinition"><code>../bop_redefinition.md</code></a></td><td><code>Regexp#===</code> が表に無い理由の背景</td></tr>
+<tr><td><a href="#unified-low-level-ir-lir"><code>../lir.md</code></a> / <a href="#x86-64--aarch64-jit-backend-differences"><code>../arch_difference.md</code></a></td><td><code>ConcatRegexp</code> マクロ命令</td></tr>
+<tr><td><a href="#thread--fiber--non-blocking-io--プリエンプション-の実装"><code>../threads.md</code></a> / <a href="#refinements--the-design-and-why-it-is-shaped-this-way"><code>../refinements.md</code></a></td><td>実行コンテキストごとの <code>$~</code> / <code>$_</code>、LEP 走査の再利用</td></tr>
+</tbody>
+</table>
+</div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="design-per-encoding-character-iteration-layer"><a class="header" href="#design-per-encoding-character-iteration-layer">Design: Per-Encoding Character Iteration Layer</a></h1>
 <p>Status: <strong>proposed</strong> (foundation design; precedes implementation)</p>

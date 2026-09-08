@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Architecture Overview - monoruby</title>
+        <title>Overview - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-e96d0476.css">
-        <link rel="stylesheet" href="css/chrome-d279d366.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a0bcb149.js";
+            window.path_to_searchindex_js = "../../searchindex-a0bcb149.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8a4c8fb9.js"></script>
+        <script src="../../toc-8a4c8fb9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">monoruby</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
@@ -177,109 +177,93 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <p>monoruby is a Ruby implementation written from scratch in Rust, featuring a register-based bytecode VM and a just-in-time (JIT) compiler. It has no dependency on CRuby or any other Ruby runtime. This page gives a bird’s-eye view of the system; each section links to a dedicated chapter and to the detailed design documents (rendered in the “Design Documents” section of this book, sourced from the repository’s <a href="https://github.com/sisshiki1969/monoruby/tree/master/doc"><code>doc/</code></a> directory).</p>
-<h2 id="compilation-pipeline"><a class="header" href="#compilation-pipeline">Compilation pipeline</a></h2>
-<pre><code>Ruby source
-    │
-    ▼
-prism (ruby-prism)      prism syntax tree — the official Ruby parser
-    │
-    ▼
-parser/ + ast/          monoruby AST
-    │
-    ▼
-bytecodegen/            register-based bytecode
-    │
-    ▼
-Executor (VM)           interpreted execution, machine-code VM tier
-    │  when hot (≥20 calls / ≥100 loop iterations)
-    ▼
-JIT: TraceIR            type-annotated IR built from inline-cache feedback
-    │
-    ▼
-JIT: AsmIR              register-allocated, arch-neutral assembly IR
-    │
-    ▼
-codegen/arch/&lt;arch&gt;     AsmIR → machine code (x86-64 / aarch64 backends)
-    │
-    ▼
-monoasm                 self-made dynamic assembler
-    │
-    ▼
-Native machine code
-</code></pre>
-<p>Ruby source is parsed by <a href="https://github.com/ruby/prism">prism</a> (consumed as the <code>ruby-prism</code> crate) and converted into monoruby’s own AST. The AST is compiled into register-based bytecode, which the VM executes. Hot methods (≥ 20 calls) and hot loops (≥ 100 iterations) are handed to the JIT, which uses runtime type feedback to produce specialized machine code, falling back to the VM through deoptimization when its assumptions are invalidated. See <a href="jit-compiler.html">JIT Compiler</a> for details.</p>
-<h2 id="execution-tiers"><a class="header" href="#execution-tiers">Execution tiers</a></h2>
-<ul>
-<li><strong>VM tier</strong> — the bytecode executor. Its dispatch loop and operation handlers are themselves emitted as machine code through monoasm (per target architecture), rather than being a Rust <code>match</code> loop.</li>
-<li><strong>JIT tier</strong> — specialized machine code per method / loop, guarded by type and class-version checks. Both x86-64 and aarch64 lower the full instruction set; see <a href="aarch64-backend.html">aarch64 Backend</a>.</li>
-</ul>
-<h2 id="major-subsystems"><a class="header" href="#major-subsystems">Major subsystems</a></h2>
+                        <h1 id="ランタイム最適化--目次と共通の前提"><a class="header" href="#ランタイム最適化--目次と共通の前提">ランタイム最適化 — 目次と共通の前提</a></h1>
+<p><code>runtime_optimization/</code> は、Ruby のコアクラスが monoruby の中でどう表現され、
+VM と JIT がその上のホットな操作をどう安くしているかを、クラスごとに 1 文書
+ずつまとめたものである。各文書は末尾に <strong>CRuby との実装差異</strong>の表を持つ。
+すべて日本語。</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Subsystem</th><th>Chapter</th><th>Design documents</th></tr>
+<tr><th>文書</th><th>内容</th></tr>
 </thead>
 <tbody>
-<tr><td>Value representation (64-bit tagged union)</td><td><a href="value-representation.html">Value Representation</a></td><td>—</td></tr>
-<tr><td>JIT compiler (TraceIR / AsmIR / register allocation)</td><td><a href="jit-compiler.html">JIT Compiler</a></td><td><a href="design/jit.html"><code>jit.md</code></a>, <a href="design/lir.html"><code>lir.md</code></a>, <a href="design/regalloc_separation.html"><code>regalloc_separation.md</code></a></td></tr>
-<tr><td>Garbage collection (generational mark-and-sweep)</td><td><a href="garbage-collection.html">Garbage Collection</a></td><td><a href="design/gc.html"><code>gc.md</code></a></td></tr>
-<tr><td>Green threads and fibers</td><td><a href="threads-and-fibers.html">Threads and Fibers</a></td><td><a href="design/threads.html"><code>threads.md</code></a></td></tr>
-<tr><td>Stack frames and method calls</td><td><a href="stack-frames-and-method-calls.html">Stack Frames and Method Calls</a></td><td><a href="design/stack_frame.html"><code>stack_frame.md</code></a>, <a href="design/method_args.html"><code>method_args.md</code></a></td></tr>
-<tr><td>Exception handling</td><td><a href="exception-handling.html">Exception Handling</a></td><td><a href="design/exception_handling.html"><code>exception_handling.md</code></a></td></tr>
-<tr><td>aarch64 (Apple Silicon) backend</td><td><a href="aarch64-backend.html">aarch64 Backend</a></td><td><a href="design/arch_difference.html"><code>arch_difference.md</code></a></td></tr>
+<tr><td><a href="array.html">array.md</a></td><td><code>SmallVec&lt;[Value; 5]&gt;</code> の inline / ヒープ、<code>[]</code> / <code>[]=</code> / <code>&lt;&lt;</code> / リテラル / 多重代入の VM・JIT 経路、Ruby で書かれた <code>each</code> / <code>map</code> / <code>initialize</code>、<code>sum</code> / <code>sort</code> / <code>hash</code> の注記。共有配列を持たない理由</td></tr>
+<tr><td><a href="hash.html">hash.md</a></td><td>inline（≤ 3 ペア）/ boxed 線形 / boxed 索引の 3 表現、vm 不要の prehashed probe、機械語の probe（Symbol / String キー）、2 つのハッシュ関数、Ruby で書かれた走査とそのプリミティブ、計測と残課題。<code>ar_table</code> / <code>st_table</code> との対比</td></tr>
+<tr><td><a href="string.html">string.md</a></td><td><code>SmallVec&lt;[u8; 32]&gt;</code> と共有部分文字列（隠れ frozen root、copy-on-write）、エンコーディングと code range の O(1) 畳み込み、frozen リテラルと <code>"lit".freeze</code>、補間、<code>&lt;&lt;</code> / <code>getbyte</code> / <code>setbyte</code> / <code>==</code> の JIT、Hash の String キー</td></tr>
+<tr><td><a href="regexp.html">regexp.md</a></td><td>Onigmo とプロセス全体のパターンキャッシュ、<code>FrozenLiteral</code> としてのリテラル、<code>LFP_SVAR</code> の <code>$~</code> と 40 バイトの <code>MatchData</code>、<code>MatchData</code> を作らない経路、正規表現を使う <code>String</code> メソッドの高速経路、StringScanner</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="source-layout"><a class="header" href="#source-layout">Source layout</a></h2>
-<pre><code>monoruby/                   workspace root
-├── monoruby/src/
-│   ├── parser/, ast/       prism → monoruby-AST bridge, AST definitions
-│   ├── bytecodegen/        AST → register-based bytecode
-│   ├── executor/           bytecode interpreter (VM), frames, operator dispatch
-│   ├── codegen/            JIT compiler
-│   │   ├── jitgen/         bytecode → TraceIR → AsmIR (arch-neutral front-end)
-│   │   └── arch/           per-arch backends: x86_64/ and aarch64/
-│   ├── value.rs, value/    Value type and heap objects (RValue)
-│   ├── alloc.rs            garbage collector
-│   ├── globals/            global interpreter state, function/class tables
-│   └── builtins/           built-in Ruby classes implemented in Rust
-├── monoruby/builtins/      built-in library code written in Ruby
-├── monoruby_attr/          proc macros (#[monoruby_builtin], …)
-├── rubymap/, hashbrown/    order-preserving hash map for Ruby Hash
-└── doc/                    detailed design documents
-</code></pre>
-<h2 id="key-global-registers-jit--vm-tier"><a class="header" href="#key-global-registers-jit--vm-tier">Key global registers (JIT / VM tier)</a></h2>
-<p>On x86-64, JIT-compiled code keeps interpreter state in fixed registers (the aarch64 backend uses an equivalent fixed assignment):</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Register</th><th>Holds</th></tr>
-</thead>
-<tbody>
-<tr><td><code>rbx</code></td><td><code>&amp;mut Executor</code></td></tr>
-<tr><td><code>r12</code></td><td><code>&amp;mut Globals</code></td></tr>
-<tr><td><code>r13</code></td><td>program counter</td></tr>
-<tr><td><code>r14</code></td><td>local frame pointer (LFP)</td></tr>
-</tbody>
-</table>
-</div>
-<h2 id="further-reading"><a class="header" href="#further-reading">Further reading</a></h2>
-<ul>
-<li><a href="https://github.com/sisshiki1969/monoruby/wiki/Build-and-Install">Build and Install</a> — how to build and run monoruby</li>
-<li><a href="https://github.com/sisshiki1969/monoruby/wiki/Build-options-for-performance-tuning">Build options for performance tuning</a> — bytecode / TraceIR / assembly dumps</li>
-<li><a href="https://github.com/sisshiki1969/monoruby/tree/master/doc"><code>doc/</code> directory</a> — the full set of design documents, including C-extension design notes, encoding design, and progress notes</li>
-</ul>
+<hr>
+<h2 id="共通の前提"><a class="header" href="#共通の前提">共通の前提</a></h2>
+<p>以下は 4 文書が暗黙に使う事実で、それぞれの出典を示す。</p>
+<h3 id="rvalue-は-64-バイト"><a class="header" href="#rvalue-は-64-バイト">RValue は 64 バイト</a></h3>
+<p>ヒープオブジェクトはすべて <code>RValue</code>（<code>value/rvalue.rs</code>）で、8 バイトの
+ヘッダ（live / frozen / chilled / GC の OLD・WB_UNPROTECTED・WB_ARMED /
+年齢、型タグ <code>ObjTy</code>、型別メタデータバイト <code>ty_flags</code>、クラス）、8 バイトの
+<code>var_table</code>（あふれた ivar）、<strong>48 バイトのペイロード共用体</strong> <code>ObjKind</code>
+からなる。Array / String / Hash はこの 48 バイトに「小さいものは直置き、
+大きければヒープ」の 2 段を入れていて、閾値はそれぞれ 5 要素 / 32 バイト /
+3 ペアである。値の表現（Fixnum / Flonum / 即値 / ヒープポインタ）は
+<code>CLAUDE.md</code> の「Value Representation」を参照。</p>
+<h3 id="fork-した-smallvec"><a class="header" href="#fork-した-smallvec">fork した <code>smallvec</code></a></h3>
+<p>Array と String のバッファは <code>sisshiki1969/rust-smallvec</code>（<code>const_generics</code>）
+で、fork している理由は <code>OFFSET_CAPA</code> / <code>OFFSET_INLINE</code> / <code>OFFSET_HEAP_PTR</code> /
+<code>OFFSET_HEAP_LEN</code> を公開して JIT / VM がペイロードを直接アドレッシング
+できるようにするためである。規約は「inline のあいだは <code>capacity</code> が長さを
+兼ね、<code>capacity &gt; inline 容量</code> ならヒープ変種」で、機械語の高速経路はすべて
+<code>cmp capa, N</code> の 1 命令でこれを分岐する。</p>
+<h3 id="世代別-gc-と-write-barrier"><a class="header" href="#世代別-gc-と-write-barrier">世代別 GC と write barrier</a></h3>
+<p>GC は非移動・stop-the-world・世代別（<a href="../gc.html"><code>../gc.md</code></a>）。子への参照を
+持つオブジェクトが OLD へ昇格できるのは、その参照の格納がすべて
+write barrier を通る場合だけである。Array / Hash は mutator を barrier 付きの
+ラッパで隠し、String は隠れ root への 1 本の参照だけを barrier し、Regexp は
+<code>Value</code> を持たないので無条件に昇格できる。JIT がインラインで格納するときは
+<code>emit_write_barrier_rdi</code> / <code>_bulk</code> を自分で出す。</p>
+<h3 id="インライン生成器と-bop"><a class="header" href="#インライン生成器と-bop">インライン生成器と BOP</a></h3>
+<p>JIT は組み込みメソッドの呼び出しを、<code>InlineTable::add_inline</code> に
+<code>inline_gen2!</code> で登録された生成器（抽象状態と AsmIR を受け取り、機械語を出す
+か <code>false</code> で辞退する）で置き換える。生成器は class-version ガードと
+レシーバクラスガードの後で呼ばれ、辞退すれば状態と IR が巻き戻される
+（trial inlining、<a href="../inline.html"><code>../inline.md</code></a>）。</p>
+<p><code>Array#[]</code> / <code>Array#[]=</code> / <code>Hash#[]</code> / <code>String#freeze</code> / <code>String#!=</code> など
+**基本演算（BOP）**として表（<code>globals/store/basic_op.rs</code>）に載っている組は、
+class-version ガード無しの直接発火経路を取れ、再定義は記録した依存
+（<code>record_bop_dep</code>）で該当本体だけを evict する
+（<a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a>）。表に無いメソッドは
+通常の class-version ガード付き経路に残る。</p>
+<h3 id="deopt-とcall-で逃がす"><a class="header" href="#deopt-とcall-で逃がす">deopt と「call で逃がす」</a></h3>
+<p>型ガードの失敗はインタプリタへの side exit（deopt）になるが、deopt が
+再コンパイルを起こさない場面で毎回 deopt するサイトは慢性的に遅くなる
+（<a href="../chain_deopt.html"><code>../chain_deopt.md</code></a>、<a href="../deopt_log.html"><code>../deopt_log.md</code></a>）。
+そのため各文書に出てくる高速経路は、形が合わないケースを <strong>deopt でなく
+builtin への call</strong> で逃がす設計を繰り返し選んでいる: Hash の probe が
+inline / identity / 索引の表現を <code>hashindex</code> に渡す、<code>Array#[]</code> の多相
+サイトが 2 腕の dispatch を出す、<code>String#&lt;&lt;</code> が fallback を末尾呼び出しする、
+<code>String#setbyte</code> が共有レシーバを detach して再試行する、など。</p>
+<h3 id="ruby-で書かれた組み込み"><a class="header" href="#ruby-で書かれた組み込み">Ruby で書かれた組み込み</a></h3>
+<p><code>builtins/*.rb</code> の <code>Array#each</code> / <code>Hash#each</code> / <code>Array#initialize</code> などが
+Ruby なのは、JIT がインライン展開するのが <code>FuncKind::ISeq</code> の呼び出し先だけ
+だからで、ホットなサイトではメソッド本体とブロックが <code>yield</code> の位置に展開
+される。代償として、CRuby の C 実装なら無傷な <code>Integer#&lt;</code> や <code>Array#size</code> の
+再定義が組み込みの内部に及ぶ（意図したトレードオフ、
+<a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a>）。</p>
+<h3 id="計測の規律"><a class="header" href="#計測の規律">計測の規律</a></h3>
+<p>各文書の数値は、同じ計測機で<strong>交互ラウンドの中央値の最小値</strong>を取り、
+マイクロベンチは「同じループから対象操作だけ抜いたもの」を baseline として
+差し引いている。monoruby と CRuby ではループ自体のコストが 10 倍近く違う
+ので、生の時間を並べても比較にならない。手順は <a href="hash.html">hash.md</a> §8。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="changelog.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../../design/super_resolution.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="value-representation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../../design/runtime_optimization/array.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -289,11 +273,11 @@ Native machine code
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="changelog.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../../design/super_resolution.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="value-representation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../../design/runtime_optimization/array.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -313,13 +297,13 @@ Native machine code
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-09f2665d.js"></script>
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-09f2665d.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-609e4cb8.js"></script>
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-609e4cb8.js"></script>
 
         <!-- Custom JS scripts -->
 

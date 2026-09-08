@@ -1,0 +1,771 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Hash - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../../searchindex-a0bcb149.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-8a4c8fb9.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="hash-の実装と最適化"><a class="header" href="#hash-の実装と最適化">Hash の実装と最適化</a></h1>
+<p>Ruby プログラムは Hash を「オブジェクトのフィールド袋」として使うので、
+<code>[]</code> / <code>[]=</code> / <code>key?</code> / <code>fetch</code> はアプリケーションのもっとも内側のループに
+現れる。yjit-bench の erubi では実行時間の 29 %、rack で 18 %、
+activerecord で 13 % が Hash 参照だった
+（<a href="../yjit_bench_slow_investigation_2026-09.html"><code>yjit_bench_slow_investigation_2026-09.md</code></a> §5.2）。</p>
+<p>この文書は、現在の Hash がどういう表現とどういう探索経路を持っているかを
+まとめ、そこに入れた最適化を計測とともに記録し、残っているコストと次の
+候補を優先順位付きで並べる。個々の API の意味論ではなく「1 回の参照に何が
+起きるか」に焦点を当てる。CRuby の <code>ar_table</code> / <code>st_table</code> と実装が
+どう違うかは §6 にまとめた。</p>
+<p><code>runtime_optimization/</code> の他の章（<a href="array.html">Array</a> / <a href="string.html">String</a> /
+<a href="regexp.html">Regexp</a>）と共通の前提は <a href="README.html">README.md</a> にある。</p>
+<hr>
+<h2 id="1-3-つの表現"><a class="header" href="#1-3-つの表現">1. 3 つの表現</a></h2>
+<p>Hash の表現は <code>RValue</code> ヘッダの型別メタデータバイト（<code>Metadata::ty_flags</code>）に
+入っている。48 バイトのペイロードを表現の判別に使わないので、小さい Hash は
+ペイロード全部をデータに使える。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>ビット</th><th>意味</th></tr>
+</thead>
+<tbody>
+<tr><td>0-2</td><td>表現: 0..=3 = その数のペアを inline 保持、7 = boxed</td></tr>
+<tr><td>3</td><td><code>ruby2_keywords</code> フラグ</td></tr>
+<tr><td>4-5</td><td>inline hash の反復深度（飽和カウンタ。boxed は <code>BoxedHash::iter_lev</code>）</td></tr>
+<tr><td>6</td><td>inline hash が <code>compare_by_identity</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>ゼロバイト（<code>Header::new</code> の既定値）がそのまま空の inline hash として妥当で、
+<code>dup</code> / <code>clone</code>（<code>Header::newborn</code>）はこのバイトを保存するので、表現はヘッダと
+一緒に移動する（<code>sanitize_dup_flags</code> が表現と identity ビットだけを残し、
+<code>ruby2_keywords</code> と反復深度は落とす）。</p>
+<p>表現は「3 つ」と言っているが、identity 比較の有無を掛けると形は 4 つある:
+inline（<code>eql?</code> 比較）、inline + <code>IDENT_BIT</code>、boxed の <code>HashContent::Map</code>、
+boxed の <code>HashContent::IdentMap</code>。boxed 側は <code>Box&lt;RubyMap&lt;Option&lt;Value&gt;, Value&gt;&gt;</code>
+と <code>Box&lt;RubyMap&lt;Option&lt;IdentKey&gt;, Value&gt;&gt;</code> という<strong>別の型のマップ</strong>で、
+<code>#[repr(C, usize)]</code> の判別子がオフセット 0 にあるので機械語からも見分けられる。</p>
+<h3 id="11-inline-表現-3-ペア"><a class="header" href="#11-inline-表現-3-ペア">1.1 inline 表現（≤ 3 ペア）</a></h3>
+<p><code>HashBody::inline</code> に <code>(key, value)</code> を 3 組、セルの中に直接持つ。<strong>ヒープ確保
+ゼロ</strong>、探索は 3 要素の線形走査。<code>is_inline_key</code>（<code>rvalue/hash.rs</code>）が許すキーは:</p>
+<ul>
+<li><strong>packed immediate</strong>（Fixnum / Symbol / nil / true / false / flonum）—
+同一性がそのまま内容なので、比較はビット比較で足り、プローブ時に再計算した
+ダイジェストが挿入時のものと食い違うことがない。</li>
+<li><strong>frozen String</strong> — String の <code>eql?</code> はエンコーディング規則込みのバイト比較で
+（再定義された <code>String#eql?</code> / <code>#hash</code> はどちらの表現でも参照しない）、frozen
+なら探索中に内容が変わらない。</li>
+</ul>
+<p>リテラルのキーも <code>h["k"] = v</code> の格納キー（<code>Value::frozen_hash_key</code> が
+コピーして freeze する）も frozen なので、<strong>String キーの小さな Hash リテラルは
+boxed map を作らない</strong>。</p>
+<p><code>compare_by_identity</code> な inline hash は id 走査だけなので、任意のキー（可変な
+ヒープオブジェクトを含む）を保持できる（<code>IDENT_BIT</code>）。</p>
+<p>4 ペア目、inline に置けないヒープキー、デフォルト値／デフォルト proc の設定、
+反復中の <code>delete</code> / <code>shift</code>（tombstone を置く場所が inline には無い）のいずれかが
+来ると <code>promote</code> が boxed へ移す。移送は native の再挿入で Ruby コードは
+走らず、inline の反復深度ビットは <code>iter_lev</code> に引き継がれる。逆方向は
+<code>clear</code> だけで、デフォルトが無ければ boxed の格納を手放して inline に戻る
+（identity ビットは保つ）。</p>
+<h3 id="12-boxed-表現"><a class="header" href="#12-boxed-表現">1.2 boxed 表現</a></h3>
+<p><code>BoxedHash</code> は <code>Box&lt;RubyMap&lt;Option&lt;Value&gt;, Value&gt;&gt;</code>（<code>compare_by_identity</code> なら
+<code>Option&lt;IdentKey&gt;</code> キーの別インスタンス）とデフォルト値／デフォルト proc、
+反復深度、tombstone 数を持つ。</p>
+<p><code>rubymap</code> は順序保持マップ（hashbrown のインデックステーブル + エントリ Vec）
+で、Ruby の挿入順序保持セマンティクスをそのまま表現する。反復中の <code>delete</code> は
+エントリを <strong>tombstone</strong>（キーを <code>None</code>）にして位置を保ち、<code>Option&lt;Value&gt;</code> の
+niche によりキーワードがゼロなら死んだエントリ、という判定が機械語からも
+できる。反復が終わった後の最初の変更操作が <code>compact_if_dirty</code> で詰める。</p>
+<h3 id="13-探索経路"><a class="header" href="#13-探索経路">1.3 探索経路</a></h3>
+<pre><code>JIT: Hash#[]  ──inline gen (hash_index)──►  hashindex(vm, globals, recv, key)
+                                                  │
+VM:  Hash#[]  ──builtin index───────────────────►  Hashmap::index
+                                                  │  （ミス時のみ default / default_proc）
+                                                  ▼
+                                             HashRef::get
+                                        ┌─────────┴─────────┐
+                                    inline 走査        boxed プローブ
+                                                  ┌────────┴────────┐
+                                          packed_digest      string_digest
+                                          （vm 不要）        + string_key_eq（vm 不要）
+                                                  └────────┬────────┘
+                                                  IndexMapCore::get_index_of_prehashed*
+</code></pre>
+<p>要点は <strong>prehashed probe</strong>: packed キーと String キーは Ruby コードを一切
+起動せずにダイジェストと <code>eql?</code> を決められるので、<code>vm</code> / <code>globals</code> を触らない
+専用経路を通る。汎用経路（<code>RubyMap::hash</code>）とバケットが一致することは
+<code>packed_digest</code> / <code>string_digest</code> のドキュメントコメントが不変条件として
+書いている。</p>
+<h3 id="14-機械語が直接歩く部分"><a class="header" href="#14-機械語が直接歩く部分">1.4 機械語が直接歩く部分</a></h3>
+<p><code>Hash#size</code> / <code>#__key_at</code> / <code>#__value_at</code> / <code>#__entry_count</code> / <code>#__live_at</code> /
+<code>#__get_or_key</code> / <code>#default</code> / <code>#default=</code> / <code>#compare_by_identity?</code> は JIT が
+表現を直接歩く機械語として出る。焼き込むオフセットは手計算せず
+<code>HASH_INLINE_PAIRS_OFFSET</code> などのレイアウト定数（<code>offset_of!</code> 由来）と
+<code>rubymap::EntriesLayout</code> のプローブから取る。<code>Bucket&lt;K, V&gt;</code> は <code>repr(Rust)</code> で
+キー型の niche によってフィールドが並び替わる（<code>Option&lt;Value&gt;</code> では
+value+0 / hash+8 / key+16）ため、<code>entries_layout()</code> は本物の <code>Vec</code> を作って
+実測し、<code>rubymap</code> 側の <code>raw_probe</code> / <code>layout_matches_the_safe_api</code> テストが
+その値で歩いた結果が安全な API と一致することを固定している。</p>
+<p>3 ペア以下の Hash リテラルは、<strong>キーが全部 packed immediate で互いに異なる</strong>
+場合に限り JIT がセルを bump 確保してヘッダとペアを直接書き込む
+（<code>new_hash_inline</code> → <code>emit_alloc_cell</code>）。frozen String キーは inline 表現には
+置けるが、この bump 確保の対象ではなく、<code>gen_hash</code> の実行時呼び出しを経て
+inline 表現に落ち着く。</p>
+<p><code>Hash#each</code> / <code>each_key</code> / <code>each_value</code> はこれらのプリミティブの上に Ruby で
+書かれている（<code>builtins/hash.rb</code>）ので、ホットな呼び出しサイトではメソッドと
+ブロックの両方がインライン展開される（§1.6）。</p>
+<h3 id="15-2-つのハッシュ関数"><a class="header" href="#15-2-つのハッシュ関数">1.5 2 つのハッシュ関数</a></h3>
+<p>Hash には<strong>用途の違う 2 つのハッシュ関数</strong>が共存していて、これが §4.1 の前提に
+なる。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>用途</th><th>実装</th><th>場所</th></tr>
+</thead>
+<tbody>
+<tr><td>バケッティング（マップ内部のダイジェスト）</td><td>seeded な wyhash 系 multiply-fold（<code>RubyHasher</code>、施策 5）</td><td><code>rubymap/src/hasher.rs</code></td></tr>
+<tr><td>Ruby から見える <code>Object#hash</code> の<strong>値</strong></td><td>std の <code>RandomState</code> = SipHash-1-3（<code>HASH_STATE</code>、<code>seeded_hasher()</code>）</td><td><code>value.rs</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>RubyHasher</code> は長さを最初に混ぜ、16 バイト単位のループの後に重なりを許した
+4 / 8 バイトの末尾読みをして最後にもう 1 回 fold する。シードはプロセスで 1 回
+<code>RandomState</code> から引く（<code>OnceLock&lt;u64&gt;</code>）ので、全マップと全 JIT 呼び出しサイトが
+同じシードを共有する。ハッシュ品質は <code>hasher.rs</code> のテストが固定している:
+長さごとの分離、1 ビットの変化が<strong>上位 7 ビット</strong>（hashbrown の control byte）
+まで拡散すること、等間隔の整数キーが散ること。</p>
+<p>Ruby 側の <code>#hash</code> は <code>Value::ruby_hash</code> / <code>ruby_hash_packed</code> が作る。nil /
+true / false / Symbol はビットそのもの、String は <code>RStringInner::hash</code>（生
+バイト列、エンコーディング非依存、再定義された <code>String#hash</code> は見ない）、
+Array / Hash は組み込みの <code>hash</code> が再定義されていない限り native の構造
+ハッシュ、それ以外は <code>#hash</code> を dispatch して <code>#to_int</code> で整数化する。
+<strong>Fixnum / Float だけは内側で SipHash を丸ごと 1 回回して</strong> <code>Integer#hash</code> /
+<code>Float#hash</code> の値を作り、その結果をマップ側のハッシャに流す。これは
+<code>Array#hash</code> が要素を混ぜるときに Ruby レベルの <code>#hash</code> と一致させるためで、
+バケッティングには要らない二重ハッシュである（§4.1）。</p>
+<p>異なるプロセスで <code>#hash</code> が変わること（CVE-2011-4815 対策）は
+<code>tests/hash_seed.rs</code> が本物のバイナリを 2 回起動して確認している。</p>
+<h3 id="16-ruby-で書かれた走査とそのためのプリミティブ"><a class="header" href="#16-ruby-で書かれた走査とそのためのプリミティブ">1.6 Ruby で書かれた走査と、そのためのプリミティブ</a></h3>
+<p><code>builtins/hash.rb</code> に <code>each</code> 系が Ruby で書かれている理由は、JIT が
+インライン展開するのが <code>FuncKind::ISeq</code> の呼び出し先だけだからである。
+Rust の builtin が要素ごとにブロックを起動すると 1 要素ごとにフルの
+ブロック呼び出しを払うが、Ruby の <code>each</code> なら <code>h.each { .. }</code> のホットな
+サイトでメソッド本体とブロックの両方が <code>yield</code> の位置に展開される。
+ブロック引数を <code>&amp;block</code> で受けると <code>BlockArg</code> バイトコードになって
+メソッド全体が特殊化不能になり、フレームもヒープに移る
+（<code>Iseq::has_block_arg</code>）ので、必ず <code>yield</code> で書く。</p>
+<p>そのために Rust 側が出しているプリミティブ（大半に機械語インライナがある）:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>プリミティブ</th><th>役割</th></tr>
+</thead>
+<tbody>
+<tr><td><code>__entry_count</code></td><td>エントリ配列の生の長さ（tombstone 込み）</td></tr>
+<tr><td><code>__live_at(i)</code></td><td>位置 i が生きているか</td></tr>
+<tr><td><code>__key_at(i)</code> / <code>__value_at(i)</code></td><td>O(1) の位置参照。範囲外・tombstone は nil（エラー経路が無いので <code>while</code> ループに境界機構が要らない）</td></tr>
+<tr><td><code>__set_value_at(i, v)</code></td><td>位置指定の値上書き。ダイジェストもプローブも走らない</td></tr>
+<tr><td><code>__iter_begin</code> / <code>__iter_end(g)</code></td><td>反復参照の取得・返却（inline の深度は飽和するので戻り値を必ず返す）</td></tr>
+<tr><td><code>__dup_table</code></td><td>エントリと identity モードだけを複製。デフォルトは持たず、常に素の <code>Hash</code>（CRuby の <code>hash_dup_with_compare_by_id</code>）</td></tr>
+<tr><td><code>__new_hash_with_capacity(n)</code></td><td>容量指定の空 Hash</td></tr>
+<tr><td><code>__get_or_key(k)</code></td><td><code>key?(k) ? self[k] : k</code> を 1 プローブで（CRuby の <code>rb_hash_lookup2(map, k, k)</code>）。デフォルトは見ない</td></tr>
+<tr><td><code>__pairs</code></td><td><code>[[k, v], ...]</code> のスナップショット</td></tr>
+<tr><td><code>__block_splits_pair?</code></td><td>呼び出し元ブロックの形（`</td></tr>
+</tbody>
+</table>
+</div>
+<p>この上に乗っている走査の要点:</p>
+<ul>
+<li><code>each</code> / <code>each_pair</code> / <code>each_key</code> / <code>each_value</code> は
+<code>guard = __iter_begin; ... while i &lt; __entry_count ... if __live_at(i) ... ensure __iter_end(guard)</code> の形。</li>
+<li><code>transform_values</code> は <code>__dup_table</code> + <code>__set_value_at</code> で、<strong>キーは変わらない
+ので一度も再ハッシュもプローブもしない</strong>。切り離したコピーを歩くので
+ガードも不要で、全位置が生きている。<code>transform_values!</code> は同じ位置上書きを
+<code>self</code> に対してガード付きで行う。</li>
+<li><code>transform_keys</code> はブロック無し <code>transform_keys(map)</code> にペアごとのブロック
+判定が乗らないよう 3 本のループに分け、<code>__get_or_key</code> を使う。</li>
+<li><code>to_h</code> にブロックが付いたときは <code>each</code> を経由せず位置を直接歩き、
+<code>[k, v]</code> 配列を作らない。結果は <code>__new_hash_with_capacity</code> で事前確保。</li>
+<li><code>map</code> / <code>collect</code> は <code>method(:each).owner == ::Hash</code> を確認したうえで
+<code>__block_splits_pair?</code> をループの外で 1 回だけ判定する（<code>|*vs|</code> の rest
+引数は specialized-yield の対象外になるため）。</li>
+<li><code>dig</code> を Rust に移した実験は計測で退行したので Ruby に戻してある
+（<code>hash.rb</code> のコメントに記録）。</li>
+</ul>
+<hr>
+<h2 id="2-入れた最適化"><a class="header" href="#2-入れた最適化">2. 入れた最適化</a></h2>
+<p>効果は同じ計測機で交互ラウンドの中央値の最小値で比較している（単発は ±10 %
+揺れる）。「純ルックアップ」は同じループからルックアップだけ抜いた時間を
+差し引いた値。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>#</th><th>施策</th><th>変更箇所</th><th>効果</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>≤3 ペアの packed キー Hash を inline 表現に（ヒープ確保ゼロ、JIT がセルを直接書く）</td><td><code>rvalue/hash.rs</code>、JIT の literal 経路</td><td>Symbol キーリテラル生成が boxed の 1/2 以下</td></tr>
+<tr><td>2</td><td>定数 Hash リテラルをテンプレート化し、評価ごとに複製（#1232）</td><td><code>bytecodegen/expression.rs::from_literal_pairs</code></td><td>評価ごとの挿入ループが消える</td></tr>
+<tr><td>3</td><td>汎用 <code>[]=</code>（VM と JIT の多相残余）に Hash の直接経路（#1245）</td><td><code>codegen/runtime.rs::set_index</code></td><td>rack −8 %、graphql −13 %、activerecord −8 %（他の 3 施策込み）</td></tr>
+<tr><td>4</td><td>frozen String キーを inline 表現に許可（#1246）</td><td><code>rvalue/hash.rs::is_inline_key</code></td><td><code>{"content-type" =&gt; "text/plain"}</code> 生成 134 → 57 ns（YJIT 60）、<code>h["k"]</code> 50 → 23 ns、<code>h["k"] = v</code> 40 → 22 ns。rack −7 %、activerecord −13.5 %</td></tr>
+<tr><td>5</td><td>バケット用ハッシュを SipHash-1-3 から seeded ミキサーへ（本ブランチ）</td><td><code>rubymap/src/hasher.rs</code></td><td>下表。erubi −12.4 %、graphql −4.1 %</td></tr>
+</tbody>
+</table>
+</div>
+<p>施策 5 の背景: <code>RubyMap</code> は std の <code>RandomState</code>（SipHash-1-3）を既定の
+ハッシャに継いでいて、<code>perf</code> で見るとルックアップ 1 回の <strong>1/3</strong> がそこだった
+（String キーで <code>string_digest</code> 18.7 % + <code>SipHasher13::write</code> 13.9 %、Symbol キーで
+<code>packed_digest</code> 24.6 % + 11.7 %）。CRuby の <code>st_hash</code> は seeded な非暗号ミキサー
+なので、同じトレードを取った。プロセス単位の乱数シード（<code>RandomState</code> から
+1 度引くので新規依存なし）+ wyhash 系の multiply-fold。シードを秘匿することが
+hash-flooding を抑える根拠で、混ぜ方自体は乗算 2 回。Ruby から見える
+<code>Object#hash</code> は従来どおり <code>HASH_STATE</code> 側なので変わらない。</p>
+<h3 id="純ルックアップのコスト1-回ns18-エントリの-hash"><a class="header" href="#純ルックアップのコスト1-回ns18-エントリの-hash">純ルックアップのコスト（1 回、ns。18 エントリの Hash）</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>キー</th><th style="text-align: right">施策 4 まで</th><th style="text-align: right">施策 5 後</th><th style="text-align: right">CRuby 4.0.6 + YJIT</th></tr>
+</thead>
+<tbody>
+<tr><td>String 4 バイト</td><td style="text-align: right">42.8</td><td style="text-align: right"><strong>33.7</strong></td><td style="text-align: right">17.5</td></tr>
+<tr><td>String 19 バイト</td><td style="text-align: right">49.1</td><td style="text-align: right"><strong>37.7</strong></td><td style="text-align: right">18.5</td></tr>
+<tr><td>String ミス</td><td style="text-align: right">42.0</td><td style="text-align: right"><strong>30.7</strong></td><td style="text-align: right">16.7</td></tr>
+<tr><td>Symbol</td><td style="text-align: right">39.0</td><td style="text-align: right"><strong>25.7</strong></td><td style="text-align: right">16.1</td></tr>
+<tr><td>Integer</td><td style="text-align: right">52.1</td><td style="text-align: right"><strong>39.5</strong></td><td style="text-align: right">16.4</td></tr>
+</tbody>
+</table>
+</div>
+<p>ハッシュ品質のサニティチェック: 20 万エントリで 4096 刻みの整数キー（弱い
+ミキサーが破綻する典型ケース）は 94.2 → 88.8 ns と悪化しない。</p>
+<hr>
+<h2 id="3-残っているコスト"><a class="header" href="#3-残っているコスト">3. 残っているコスト</a></h2>
+<p>施策 5 後の <code>h["name"]</code> / <code>h[:name]</code> ループの <code>perf</code> セルフ時間:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th style="text-align: right">String キー</th><th style="text-align: right">Symbol キー</th></tr>
+</thead>
+<tbody>
+<tr><td>IndexMap / hashbrown の probe</td><td style="text-align: right">31.6 %</td><td style="text-align: right">32.6 %</td></tr>
+<tr><td><code>HashRef::get</code>（2 インスタンス化の合計）</td><td style="text-align: right">25.0 %</td><td style="text-align: right">19.7 %</td></tr>
+<tr><td><code>Hashmap::index</code></td><td style="text-align: right">10.4 %</td><td style="text-align: right">13.6 %</td></tr>
+<tr><td>ダイジェスト（<code>RubyHasher</code>）</td><td style="text-align: right">7.8 %</td><td style="text-align: right">8.9 %</td></tr>
+<tr><td><code>hashindex</code> builtin</td><td style="text-align: right">7.2 %</td><td style="text-align: right">6.3 %</td></tr>
+<tr><td><code>memcmp</code>（キー比較）</td><td style="text-align: right">7.7 %</td><td style="text-align: right">—</td></tr>
+</tbody>
+</table>
+</div>
+<p>ハッシュは 33 % → 8 % まで落ち、いまの支配項は <strong>probe と 4 段のディスパッチ</strong>
+（<code>hashindex</code> → <code>Hashmap::index</code> → <code>HashRef::get</code> → <code>IndexMapCore</code>）である。</p>
+<hr>
+<h2 id="4-今後のアイデア効果の見込み順"><a class="header" href="#4-今後のアイデア効果の見込み順">4. 今後のアイデア（効果の見込み順）</a></h2>
+<h3 id="41-integer--float-キーの二重ハッシュを外す小確度高"><a class="header" href="#41-integer--float-キーの二重ハッシュを外す小確度高">4.1 Integer / Float キーの二重ハッシュを外す（小・確度高）</a></h3>
+<p><code>Value::ruby_hash_packed</code> の Fixnum / Float アームは、<code>Integer#hash</code> /
+<code>Float#hash</code> が返す<strong>値</strong>を作るために内側で <code>seeded_hasher()</code>（std の
+<code>DefaultHasher</code> = SipHash）を丸ごと 1 回回し、その結果を外側のマップハッシャに
+流している。これは <code>Array#hash</code> / <code>Hash#hash</code> が要素を混ぜるときに Ruby レベルの
+<code>#hash</code> 結果と一致させるための要請で、<strong>バケッティングには要らない</strong>。上表で
+Integer キーだけ Symbol キーより 14 ns 遅い（39.5 vs 25.7）のがそのコスト。</p>
+<p>構造ハッシュ用（Ruby から見える <code>#hash</code> 値）とバケッティング用を分ければ、
+Integer キーの参照が Symbol キーと同じところまで来るはず。</p>
+<h3 id="42-probe-を-jit-でインライン展開する大最大の残り段階-13-実装済み2026-09-0405"><a class="header" href="#42-probe-を-jit-でインライン展開する大最大の残り段階-13-実装済み2026-09-0405">4.2 probe を JIT でインライン展開する（大・最大の残り。<strong>段階 1〜3 実装済み</strong>、2026-09-04/05）</a></h3>
+<p>いまは <code>Hash#[]</code> のインライン生成が <code>hashindex</code> への直接呼び出しまでしか
+やらない（メソッドフレームは省くが、そこから先は Rust）。受信側が
+<code>Hash</code> ちょうどで boxed 表現だと分かっている呼び出しサイトなら、
+ダイジェスト → インデックステーブル引き → エントリ比較を機械語で出せる。
+上の内訳の probe 32 % + ディスパッチ 42 % のかなりの部分が対象で、YJIT との
+残差（33.7 vs 17.5 ns）を埋める本命。<code>gen_hash_entry_at</code> が既に
+<code>rubymap::EntriesLayout</code> からエントリ配列を歩いているので、必要なレイアウト
+知識は揃っている。</p>
+<h4 id="段階分け"><a class="header" href="#段階分け">段階分け</a></h4>
+<p><code>IndexMapCore</code> には 2 つの動作領域がある。<strong>≤ 8 エントリ</strong>（<code>AR_MAX</code>、CRuby の
+<code>RHASH_AR_TABLE_MAX_SIZE</code> と同じ）は <code>linear</code>、<code>indices</code> を作らず <code>entries</code> を
+線形走査して <code>entry.hash == hash</code> の一致だけキー比較する。それ以上は hashbrown
+の probe（上位 7 ビットで control byte を 16 個ずつ SIMD 比較 → 添字 →
+エントリ比較）。<code>Bucket { hash, key, value }</code> はハッシュ値を格納しているので、
+線形走査は「64 ビット比較 × N、当たったときだけキー比較」で済む。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>段階</th><th>キー</th><th>領域</th><th>状態</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>packed のうちビットがそのままミキサーに入るもの（Symbol / nil / true / false）</td><td>線形（≤ 8）</td><td><strong>実装済み</strong> <code>AsmInst::HashProbe</code>（旧 <code>HashProbePacked</code>）</td></tr>
+<tr><td>2</td><td>同上</td><td>索引（&gt; 8）— hashbrown の group probe</td><td><strong>実装済み</strong>（段階 3 と同時）</td></tr>
+<tr><td>3</td><td>String — バイト列ダイジェスト + memcmp + <code>plain_string</code> 判定</td><td>両方</td><td><strong>実装済み</strong>（erubi の 18 エントリ・String キーはここ）</td></tr>
+</tbody>
+</table>
+</div>
+<p>Integer キーは 4.1 の二重ハッシュ（SipHash を内側で 1 回回す）が解けるまで
+対象外。葉ヘルパで正しく計算はできるが、ヘルパ自体が現状のルックアップの
+大半のコストになる。</p>
+<h4 id="段階-1-の設計判断2026-09-04"><a class="header" href="#段階-1-の設計判断2026-09-04">段階 1 の設計判断（2026-09-04）</a></h4>
+<ul>
+<li><strong>ダイジェストは葉ヘルパ <code>packed_digest_c</code>、probe は機械語。</strong> fold は
+64×64→128 の乗算だが、この JIT が使う x86-64 アセンブラ（monoasm）に
+1 オペランド <code>mul</code> が<strong>無い</strong>（<code>div</code> / <code>idiv</code> はあり、<code>imul</code> は 2 オペランドの
+下位 64 ビットのみ）。aarch64 には <code>umulh</code> がある。monoasm に足したら
+ヘルパをその命令列に置き換えるだけで、他は変わらない。</li>
+<li><strong>形の不一致は deopt ではなく builtin 呼び出し。</strong> inline 表現・identity
+マップ・索引領域はすべて <code>hashindex</code> への合流で、exit しない。最初は deopt に
+していたが、この deopt は再コンパイルを起こさないので、大きな Symbol キー
+Hash のサイトが<strong>毎回 deopt</strong>することになる（4.5 の ic ゲートで踏んだのと
+同型）。builtin 呼び出しなら現状と同コストで退行しない。</li>
+<li><strong>線形領域の miss は in-line で <code>nil</code>。</strong> 走査を尽くしたら
+<code>Option&lt;Box&lt;HashDefault&gt;&gt;</code>（null = default 値も proc も無し）を 1 ロード見て、
+無ければ nil。builtin に落とすとダイジェストと走査をもう一度やり直すので、
+最初の実装では miss が 16 → 30 ns に<strong>退行</strong>していた。</li>
+<li><strong><code>EntriesLayout</code> に <code>hash_offset</code> / <code>linear_offset</code> を追加</strong>。<code>Bucket</code> は
+niche を持つキー型で並び替わる（<code>Option&lt;Value&gt;</code> では value+0 / hash+8 /
+key+16）ので、既存どおり実測で取る。</li>
+</ul>
+<h4 id="段階-1-の効果6-エントリsymbol-キー純ルックアップ交互-4-ラウンド"><a class="header" href="#段階-1-の効果6-エントリsymbol-キー純ルックアップ交互-4-ラウンド">段階 1 の効果（6 エントリ・Symbol キー、純ルックアップ、交互 4 ラウンド）</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th style="text-align: right">従来</th><th style="text-align: right">段階 1</th></tr>
+</thead>
+<tbody>
+<tr><td>hit（先頭）</td><td style="text-align: right">16.3–18.1</td><td style="text-align: right"><strong>6.3–9.7</strong></td></tr>
+<tr><td>hit（末尾）</td><td style="text-align: right">15.3–19.3</td><td style="text-align: right"><strong>8.2–11.0</strong></td></tr>
+<tr><td>miss</td><td style="text-align: right">16.5–20.4</td><td style="text-align: right"><strong>7.4–10.6</strong></td></tr>
+<tr><td>18 エントリ Symbol（索引領域、fallback）</td><td style="text-align: right">18.7–26.0</td><td style="text-align: right">15.5–21.2（退行なし）</td></tr>
+</tbody>
+</table>
+</div>
+<p>hit 経路の call は <code>packed_digest_c</code> の 1 つだけになり、<code>hashindex</code> の call は
+miss 側にしか残らない（<code>emit-asm</code> で確認）。<code>tests/hash_probe_jit.rs</code> が
+hit / miss / default 値 / default proc / nil・true・false キー / tombstone /
+索引領域・inline 表現・identity マップへの委譲 / クラスガード / 線形↔索引の
+境界を跨ぐ成長 / 生きた状態の読み取りを CRuby と突き合わせる。</p>
+<h4 id="段階-23-の設計判断2026-09-05"><a class="header" href="#段階-23-の設計判断2026-09-05">段階 2・3 の設計判断（2026-09-05）</a></h4>
+<ul>
+<li><strong>索引領域は hashbrown の <code>find_inner</code> を SIMD 無しで写す。</strong> monoasm には
+SIMD が無いので、16 バイトの control group を 64 ビット語 2 つとして読み、
+hashbrown 自身の generic backend と同じ SWAR ゼロバイト判定
+（<code>(x - 0x01..) &amp; !x &amp; 0x80..</code>、x = word ^ tag×0x01..）で候補ビットを出す。
+真の一致より後ろのバイトに偽陽性が出うるが、候補は必ずエントリの格納
+ダイジェスト（64 ビット全部）で検証するので無害。候補の添字は control
+バイト列の<strong>下</strong>にあるバケット配列（bucket i は <code>ctrl - 8(i+1)</code>）から
+読む。2 語とも見終わってから EMPTY（<code>0xFF</code> — bit 7 と 6 が立つので
+<code>w &amp; (w &lt;&lt; 1) &amp; 0x80..</code>）の有無で打ち切り、無ければ三角数列で次の group
+へ。<strong>EMPTY を見た瞬間に打ち切ってはいけない</strong>：削除で EMPTY に戻った
+スロットより後ろに、それ以前に挿入された要素が同じ group 内に居られる
+（hashbrown は group 内の一致を全部見てから EMPTY を判定する）。
+<code>rubymap</code> の <code>raw_probe</code> テストがこのアルゴリズムを生の offset だけで
+なぞり、<code>find_inner</code> と同じ答えになることを固定している。</li>
+<li><strong>レイアウトは <code>offset_of!</code> で取る。</strong> <code>EntriesLayout</code> に
+<code>indices_ctrl_offset</code> / <code>indices_mask_offset</code> / <code>group_width</code> を追加。
+hashbrown（vendored）の <code>RawTable</code> / <code>HashTable</code> に <code>ctrl_offset()</code> /
+<code>bucket_mask_offset()</code> / <code>GROUP_WIDTH</code> を生やした。group 幅が 16 で
+ない構成では索引領域を builtin に渡す（静的分岐）。</li>
+<li><strong>String キーは葉ヘルパ 2 つ + 機械語 probe。</strong> <code>string_digest_c</code>（バイト
+列の wyhash、挿入時と同じ）と <code>string_key_eq_c</code>（<code>string_key_eq</code> そのもの
+：identity → STRING×STRING バイト比較）。同一オブジェクト（frozen
+リテラル）なら eq 呼び出しを省く。<strong>格納ダイジェストが一致したのに eq が
+偽</strong>なら（64 ビット衝突か tombstone か異種キー）<code>miss</code> → builtin。こうする
+と eq 呼び出しの前後で probe のループ状態を退避する必要が無く、rdx/rcx
+と entry ポインタだけ push すれば済む。</li>
+<li><strong>サブクラスは class guard が弾く。</strong> <code>guard_class(STRING_CLASS)</code> はクラス
+一致なので、<code>eql?</code> を dispatch すべき String サブクラス（#1258）は
+probe に入らず deopt する。</li>
+<li><strong>identity マップは probe しない。</strong> <code>HashContent</code> の判別子（0 = Map,
+1 = IdentMap）を見て IdentMap なら builtin へ。段階 1 は判別子を見て
+いなかったが、Symbol は <code>IdentKey</code> のダイジェスト（<code>id()</code>）と packed
+ダイジェストが一致するので偶然正しかった。String は内容ダイジェスト ≠
+identity ダイジェストで、<strong>自分自身すら見つからず nil を返していた</strong>
+（<code>compare_by_identity</code> + String キーで検出、テスト追加）。</li>
+<li><strong>キークラスが混在するサイトは段階 1 と同じ性質。</strong> <code>h[k]</code> の k の
+クラスは抽象状態から取り、guard の失敗は plain deopt（再コンパイル無し）。
+同じサイトに String と Symbol が交互に来ると、後から来たクラスは毎回
+deopt して interpreter で実行される（計測では 12 → 24 ns）。段階 1 の
+Symbol guard も同じ。receiver 側の <code>BecamePolymorphic</code> 再コンパイルは VM
+が立てる POLY ビットで「次は generic に」と判断できるが、引数クラスには
+その仕組みが無く、再コンパイルしても同じ guard が出るだけなので保留。</li>
+</ul>
+<h4 id="補足-どこから発火しいつ機械語を諦めるか"><a class="header" href="#補足-どこから発火しいつ機械語を諦めるか">補足: どこから発火し、いつ機械語を諦めるか</a></h4>
+<ul>
+<li><code>Hash#[]</code> のインライン生成 <code>hash_index</code> は <code>fire_index_inline</code> から呼ばれ、
+受信側クラスが<strong>ちょうど <code>Hash</code></strong> のときだけ probe を出す。理由は builtin
+の <code>Hash#[]</code> がミス時に <code>default</code> <strong>メソッド</strong>を dispatch する（サブクラスや
+特異メソッドで上書きできる）のに対し、<code>hashindex</code> は格納されたデフォルトを
+直接読むからで、サブクラスは通常の class-version ガード付き呼び出しに残す。
+<code>Hash#[]</code> は <code>BASIC_OP_DEFS</code> に入っているので class-version ガードは省き、
+<code>record_bop_dep</code> で再定義を捕まえる。<code>Hash#[]=</code> は意図的に BOP に<strong>入って
+いない</strong>ので、<code>hash_index_assign</code> は通常経路のまま（<code>index_hash_assign_redefinition</code>
+テストが固定）。</li>
+<li>受信側クラスを抽象状態が確定できない多相サイトでは <code>index_dispatch</code> が
+<strong>2 腕のディスパッチ</strong>を出す: <code>BrClassNe</code> で Hash なら probe、そうでなければ
+<code>runtime::get_index</code>。外れたクラスは deopt ではなく C 呼び出しになる。</li>
+<li>キーのクラスはサイトのインラインキャッシュ／抽象状態から取り、
+Symbol / nil / true / false は <code>packed_digest_c</code>、String は <code>string_digest_c</code>
+<ul>
+<li><code>string_key_eq_c</code>、それ以外（Integer を含む）は probe を出さず
+<code>hashindex</code> の直接呼び出しに落ちる。</li>
+</ul>
+</li>
+<li><code>hash_entries_layout()</code> が <code>None</code>（2 つのマップ型でレイアウトが一致しない
+構成）か、hashbrown の group 幅が 16 でない構成では、索引領域は静的に
+<code>miss</code> へ飛ばす。いずれも性能上の後退で、正しさには関わらない。</li>
+</ul>
+<h4 id="段階-23-の効果純ルックアップ交互-2-ラウンドns"><a class="header" href="#段階-23-の効果純ルックアップ交互-2-ラウンドns">段階 2・3 の効果（純ルックアップ、交互 2 ラウンド、ns）</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th style="text-align: right">段階 1</th><th style="text-align: right">段階 3</th><th style="text-align: right">CRuby+YJIT</th></tr>
+</thead>
+<tbody>
+<tr><td>String 6 エントリ hit（先頭 / 末尾）</td><td style="text-align: right">12.4–13.7 / 14.6–16.2</td><td style="text-align: right"><strong>10.7–11.1 / 14.4–14.6</strong></td><td style="text-align: right">33.1 / 34.6</td></tr>
+<tr><td>String 6 エントリ miss</td><td style="text-align: right">13.5–15.6</td><td style="text-align: right"><strong>10.9</strong></td><td style="text-align: right">27.9</td></tr>
+<tr><td>String 18 エントリ（erubi 形）hit</td><td style="text-align: right">14.4–17.1</td><td style="text-align: right"><strong>11.7–12.3</strong></td><td style="text-align: right">26.4–40.5</td></tr>
+<tr><td>String 18 エントリ miss</td><td style="text-align: right">12.6–17.1</td><td style="text-align: right"><strong>8.1–8.3</strong></td><td style="text-align: right">18.8</td></tr>
+<tr><td>String 100 エントリ hit / miss</td><td style="text-align: right">14.7–17.1 / 12.7–14.6</td><td style="text-align: right"><strong>11.6–12.1 / 8.0–10.7</strong></td><td style="text-align: right">25.3 / 19.0</td></tr>
+<tr><td>Symbol 18 / 100 / 1000 エントリ hit</td><td style="text-align: right">10.9–13.3</td><td style="text-align: right"><strong>7.5–8.6</strong></td><td style="text-align: right">10.6</td></tr>
+<tr><td>Symbol 18 / 100 / 1000 エントリ miss</td><td style="text-align: right">11.1–15.0</td><td style="text-align: right"><strong>8.8–11.2</strong></td><td style="text-align: right">11.2</td></tr>
+</tbody>
+</table>
+</div>
+<p>String の hit は digest 呼び出し（wyhash）と eq 呼び出し（memcmp）が残るので
+Symbol ほどは縮まないが、miss は in-line で nil を返せるので 8 ns 台。
+yjit-bench の erubi（<code>benchmark_mono.rb</code>、warmup 10 + 30 反復、交互 2 ラウンド）
+は 215–221 ms → <strong>192–206 ms</strong>（−7〜−10 %）。
+<code>tests/hash_probe_jit.rs</code> に String キー（線形 / 索引 / frozen 同一 /
+default 値・proc）、索引領域の Symbol（100・3000 エントリ、削除後）、
+索引領域の tombstone、サブクラスキー、identity マップ、線形↔索引の成長、
+String → Symbol のクラス変化を追加。</p>
+<h3 id="43-呼び出しサイトのキーセットインラインキャッシュ中要検証"><a class="header" href="#43-呼び出しサイトのキーセットインラインキャッシュ中要検証">4.3 呼び出しサイトのキーセット・インラインキャッシュ（中・要検証）</a></h3>
+<p>erubi の 322 個の spec Hash は <strong>すべて同じ 18 個のキーを同じ順序で持つ</strong>
+（同じ JSON 形状から作られる）。<code>spec["name"]</code> のような「リテラルキー ×
+同形状の Hash」という組み合わせは、テンプレートエンジンや JSON 処理では
+支配的なパターンである。呼び出しサイトに「このキーセットならインデックスは
+これ」を憶えさせられれば、probe そのものを飛ばせる。CRuby のオブジェクト
+shape に相当する仕組みを Hash に持ち込むことになるので、キーセットの同一性を
+安く判定する仕掛け（挿入順の版番号など）の設計が要る。</p>
+<h3 id="44-ディスパッチ段数を減らす小中"><a class="header" href="#44-ディスパッチ段数を減らす小中">4.4 ディスパッチ段数を減らす（小〜中）</a></h3>
+<p><code>hashindex</code> → <code>Hashmap::index</code> → <code>HashRef::get</code> → <code>IndexMapCore</code> の 4 段で、
+それぞれが <code>vm</code> / <code>globals</code> を引き回している。<code>Hashmap::index</code> はミス時の
+default 処理のためだけに 1 段あり、<code>HashRef::get</code> は表現の分岐をしている。
+表現の分岐を呼び出し側に持ち上げて boxed 専用の入口を用意すれば数 ns 縮む
+見込み。4.2 を先にやると自然に消える部分もある。</p>
+<h3 id="45-frozen-string-にダイジェストをキャッシュ小"><a class="header" href="#45-frozen-string-にダイジェストをキャッシュ小">4.5 frozen String にダイジェストをキャッシュ（小）</a></h3>
+<p>施策 5 の前は有力だったが、ハッシュが 8 % まで落ちた今は上積みが小さい。
+長いキー（パスや URL）を多用するコードでは効くので、<code>RStringInner</code> に
+4 バイトの空きができたときの候補として残す。frozen なら無効化が不要という
+性質は変わらない。</p>
+<h3 id="46-inline-表現の拡張要検討"><a class="header" href="#46-inline-表現の拡張要検討">4.6 inline 表現の拡張（要検討）</a></h3>
+<p>48 バイトのペイロードにペア 3 組でちょうど埋まっている。4 組以上にするには
+<code>RValue</code> を大きくするかキー・値を別配列にするかで、どちらも Hash 以外の
+すべてのオブジェクトに影響する。erubi の Hash は 18 ペアなので、この方向で
+救えるワークロードは限られる。</p>
+<h3 id="47-rvalue-の中身のアロケータ別件だが-hash-に効く"><a class="header" href="#47-rvalue-の中身のアロケータ別件だが-hash-に効く">4.7 RValue の中身のアロケータ（別件だが Hash に効く）</a></h3>
+<p>boxed Hash の実体（インデックステーブルとエントリ Vec）は glibc malloc
+経由で、activerecord では malloc/free 系だけで 15 % を占める。<code>mimalloc</code>
+フィーチャの既定化 A/B は Hash に限らない話だが、Hash の生成・成長が多い
+ワークロードにはここが効く。</p>
+<hr>
+<h2 id="5---eql--hash-の意味論"><a class="header" href="#5---eql--hash-の意味論">5. <code>==</code> / <code>eql?</code> / <code>hash</code> の意味論</a></h2>
+<ul>
+<li><code>Hash#==</code> / <code>#eql?</code> はまず同一性で短絡する（<code>h = {x: Float::NAN}; h == h</code> が
+true になる）。空でない Hash 同士では identity モードが違えば偽。再帰構造は
+<code>exec_recursive_paired</code> で扱う。</li>
+<li><code>Hash#hash</code> はペアごとに <code>kpart ^ vpart</code> を作って順序非依存に足し合わせ、
+サイズを混ぜてから <code>from_hash_digest</code> で Fixnum 範囲に畳む。キーと値の
+<code>#hash</code> は本物の dispatch で、<code>rb_exec_recursive_outer</code> 相当の再帰保護が付く。</li>
+<li>内部の <code>HashRef::eql</code>（Hash 自身がキーになったときのキー比較）は別物で、
+モードが違えば偽を返す。</li>
+<li><code>Hash#rehash</code> は Ruby で <code>to_a; clear; 再挿入</code> と書かれていて、C レベルの
+テーブル再構築ではない。</li>
+</ul>
+<hr>
+<h2 id="6-cruby-との実装差異"><a class="header" href="#6-cruby-との実装差異">6. CRuby との実装差異</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>項目</th><th>CRuby</th><th>monoruby</th></tr>
+</thead>
+<tbody>
+<tr><td>表現の段階</td><td><code>ar_table</code>（≤ 8、線形、ハッシュ値格納）→ <code>st_table</code></td><td><strong>≤ 3 ペアは RValue のペイロードに直置き（ヒープ確保ゼロ）</strong> → boxed の線形領域（≤ 8、<code>AR_MAX</code>、CRuby と同じ閾値）→ hashbrown の索引領域。線形→索引はエントリ <code>Vec</code> を共有したまま index table を作るだけで、<code>ar</code>→<code>st</code> のような作り直しは無い</td></tr>
+<tr><td>挿入順序</td><td><code>st_table</code> のエントリ配列</td><td><code>rubymap</code>（IndexMap 系）: エントリ <code>Vec</code> + 位置の index table。観測される順序は同じ</td></tr>
+<tr><td>反復中の変更</td><td>追加は例外、<code>delete</code> は許可（<code>RHASH_ITER_LEV</code>）</td><td>同じ規則（既存キーの更新は許可）。機構は tombstone + <code>dead</code> カウンタ + <code>compact_if_dirty</code>。inline hash は tombstone を置く前に boxed へ昇格する。深度は inline が 2 ビット飽和、boxed が <code>Cell&lt;u32&gt;</code></td></tr>
+<tr><td>走査の実装</td><td><code>rb_hash_foreach</code>（C のコールバックループ）</td><td><code>each</code> は Ruby の位置ループ（§1.6）。JIT がブロックごと展開するため</td></tr>
+<tr><td>String キーの複製</td><td><code>rb_hash_key_str</code> が fstring テーブルに<strong>インターン</strong>（Hash 間で共有）</td><td><code>Value::frozen_hash_key</code> がバイト列から新しい frozen コピーを毎回作る。<strong>重複排除テーブルは無い</strong>。特異メソッドは引き継がない</td></tr>
+<tr><td>String キーの比較・ハッシュ</td><td>内容のみ、<code>String#hash</code> は dispatch しない。クラスが <code>String</code> ちょうどのときだけバイト比較で短絡（<code>rb_any_cmp</code> / <code>any_hash</code>）</td><td>同じ規則（<code>Value::eql</code>、<code>string_key_eq</code>）。ただしバイト比較は <code>RStringInner::eq</code> で<strong>エンコーディングを見ない</strong>。CRuby の <code>rb_str_hash</code> は非 ASCII 文字列でエンコーディング index を混ぜる</td></tr>
+<tr><td><code>compare_by_identity</code></td><td><code>st_table</code> の型を <code>identhash</code> に切り替えて再ハッシュ</td><td>inline は <code>IDENT_BIT</code> を立てるだけ（packed キーは <code>eql?</code> と同一性が一致するので inline のまま）。boxed は<strong>別型</strong>の <code>RubyMap&lt;Option&lt;IdentKey&gt;, Value&gt;</code> に作り直す。空マップ限定で双方向に切り替える <code>set_compare_by_identity_empty</code> があり、<code>Hash#replace</code> / <code>Set</code> が使う</td></tr>
+<tr><td>デフォルト値／proc</td><td><code>ifnone</code> スロット</td><td><code>Option&lt;Box&lt;HashDefault&gt;&gt;</code>。null なら「どちらも無し」を 1 ロードで判定でき、JIT のミス経路が in-line で nil を返せる。デフォルトを持つと boxed 強制（<code>Hash.new(7)</code> は確保する）。<code>clear</code> はデフォルトを保つ（CRuby と同じ）</td></tr>
+<tr><td>ミス時の <code>default</code></td><td><code>rb_funcall(id_default)</code></td><td>builtin の <code>Hash#[]</code> は同じく dispatch。<code>hashindex</code> / <code>runtime::get_index</code> は格納値を直接読むので、対象を <code>Hash</code> ちょうどに限定</td></tr>
+<tr><td>Ruby から見える <code>#hash</code></td><td><code>rb_hash_start</code> 系（SipHash-1-3、seeded）</td><td><code>HASH_STATE</code>（std <code>RandomState</code> = SipHash-1-3、seeded）。バケッティングは別の seeded ミキサー（§1.5）</td></tr>
+<tr><td>String ハッシュのキャッシュ</td><td>無し</td><td>無し（§4.5 に候補として残す）</td></tr>
+<tr><td>GC</td><td><code>rb_gc_mark</code></td><td><code>HashRef::mark</code> がデフォルトと生きたエントリを mark。<code>young_child_exists</code> が世代別の remember 判定、mutator と JIT の <code>emit_hash_default_assign</code> が write barrier を出す（<a href="../gc.html"><code>../gc.md</code></a>）</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="7-テストと計測の所在"><a class="header" href="#7-テストと計測の所在">7. テストと計測の所在</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>場所</th><th>何を固定しているか</th></tr>
+</thead>
+<tbody>
+<tr><td><code>monoruby/tests/hash_probe_jit.rs</code></td><td>機械語 probe: hit / miss / default 値 / default proc / nil・true・false キー / tombstone / 索引・inline・identity への委譲（<strong>call であって exit ではない</strong>）/ クラスガード / 線形↔索引の成長 / String キー（線形・索引・frozen 同一）/ サブクラスキー / String → Symbol のクラス変化</td></tr>
+<tr><td><code>monoruby/tests/hash_string_keys.rs</code></td><td>boxed と inline の String キー経路: 往復、混在、サブクラス、エンコーディング（バイト比較）、tombstone、<code>compare_by_identity</code>、<code>string_subclass_key_dispatches_eql</code></td></tr>
+<tr><td><code>monoruby/tests/hash_compare_by_identity.rs</code></td><td>identity hash は String キーを複製しない、通常 hash は複製して freeze する</td></tr>
+<tr><td><code>monoruby/tests/hash_seed.rs</code></td><td><code>#hash</code> がプロセス間で変わり、プロセス内で安定</td></tr>
+<tr><td><code>rubymap/src/lib.rs</code>（<code>raw_probe</code>, <code>layout_matches_the_safe_api</code>, <code>niche_carrying_keys_reorder_the_bucket</code>）</td><td>JIT が使う生オフセットでの探索が <code>find_inner</code> と同じ答えになること</td></tr>
+<tr><td><code>rubymap/src/hasher.rs</code> のテスト</td><td>ミキサーの品質（長さ分離、上位 7 ビットへの拡散、等間隔キー）</td></tr>
+<tr><td><code>builtins/hash.rs</code> の <code>jit_layout_matches_entry_at*</code></td><td>monoruby 側のレイアウト定数が <code>entry_at</code> と一致</td></tr>
+<tr><td><code>benchmark/jit_hash.yaml</code></td><td>1000 エントリ Hash の反復・変換ベンチ</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="8-計測手順再現用"><a class="header" href="#8-計測手順再現用">8. 計測手順（再現用）</a></h2>
+<pre><code class="language-sh"># ビルド
+cargo build --release
+cargo build --release --features perf --target-dir target-perf   # perf 用シンボル
+
+# 純ルックアップのマイクロ（baseline を引く）
+target/release/monoruby bench_hash.rb
+
+# 内訳
+perf record -F 999 -e cpu-clock -g --call-graph=fp -o h.data -- \
+  target-perf/release/monoruby h_str.rb
+perf report -i h.data --stdio --no-children --sort symbol -g none
+
+# ベンチ（交互ラウンド。単発は信用しない）
+cd ../yjit-bench &amp;&amp; export LANG=C.UTF-8
+MAX_TIME=25 RESULT_JSON_PATH=out.json \
+  /path/to/monoruby -Iharness-warmup benchmarks/erubi/benchmark.rb
+</code></pre>
+<p>マイクロは必ず「同じループからルックアップを抜いたもの」を baseline として
+測り、その差を見る。monoruby と CRuby ではループ自体のコストが 10 倍違う
+（2.5 ns 対 23 ns）ので、生の時間を並べると比較にならない。</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../design/runtime_optimization/array.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../design/runtime_optimization/string.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../design/runtime_optimization/array.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../design/runtime_optimization/string.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-09f2665d.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>
