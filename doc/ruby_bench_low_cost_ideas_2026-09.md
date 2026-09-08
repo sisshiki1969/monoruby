@@ -39,7 +39,7 @@ range window at compile time" #1290）。比較対象は rbenv でビルドし�
 |---|---|---|---|---|
 | 1 | Hash リテラルの String キーを frozen リテラルとして emit | `bytecodegen/expression.rs::gen_hash`（数十行） | `{'a'=>1,'b'=>2,'c'=>i}` 386 → ≈120（YJIT 154）、5 ペア 779 → ≈245（187） | `frozen_string_literal` なしの全コード |
 | 2 | `String#index` / `#count` / `#sub` の String パターンに memmem + ASCII 直索引の fast path | `builtins/string.rs`（`substring_char_index`, `sub_main`, `count`） | `index` 200 B 文字列 1828 → ≈100（145）、`'hello world'.index('wor')` 211 → ≈60（105）、`count('l')` 300 → ≈60（78）、`sub('o','0')` 756 → ≈300（425） | 文字列処理全般 |
-| 3 | GC 割り当て予算を在籍ページの 1/16 → 1/4（またはサバイバル率で適応） | `alloc.rs::GC_HEAP_FRACTION`（1 行） | splay −15 %（RSS +5 %）。erubi / rack / activerecord は §3.2 の A/B 参照 | ライブヒープの大きいプログラム |
+| 3 | GC 割り当て予算を在籍ページの 1/16 → 1/4（またはサバイバル率で適応） | `alloc.rs::GC_HEAP_FRACTION`（1 行） | splay −15 %（RSS +5 %）。erubi / rack / activerecord は ±0（分数の項が効くのは在籍 512 ページ以上のヒープだけ） | ライブヒープが 100 MB を超えるプログラムのみ |
 
 否定した仮説も残す（§4.3）: `Proc#call` が 4 倍遅く見えたのは、**proc を作ったフレームの
 ループが JIT されない**（`toplevel_binding.md` の「captured frame は loop JIT に乗らない」）
@@ -143,7 +143,19 @@ sweep の固定費と major の回数）。CRuby との残りの差は、生き�
 マークしてから昇格させる規則が同じである以上、マーク 1 オブジェクトあたりの速さか
 major の頻度（5 vs 2）にある。`perf` のない環境ではこれ以上分解できなかった。
 
-erubi / rack / activerecord での A/B は §3.2.1 に追記する。
+同じ A/B を headline 3 本で（各 3 ラウンド交互、`MAX_TIME=20`）:
+
+| ベンチ | 1/16 | 1/4 | RSS |
+|---|---|---|---|
+| erubi | 326 / 306 / 308 ms | 322 / 315 / 311 ms（±0） | 75 → 75 MiB |
+| rack | 84 / 82 / 82 ms | 88 / 91 / 85 ms（+5 %、ノイズ内） | 72 → 72 MiB |
+| activerecord | 283 / 266 / 269 ms | 278 / 286 / 280 ms（+3 %、ノイズ内） | 153 → 153 MiB |
+
+RSS が動いていない通り、この 3 本ではそもそも分数の項が効いていない: 予算は
+`max(PAGES_PER_GC_TRIGGER, 在籍ページ / GC_HEAP_FRACTION)` で、1/16 が 32 ページを
+超えるのは在籍 512 ページ（≈ 200 万スロット、128 MB のセル）からで、erubi / rack /
+activerecord のヒープはそれより小さい。`GC_HEAP_FRACTION` は splay や bedcov のような
+ライブヒープが数百 MB になるプログラム専用のつまみで、headline には効かない。
 
 ### 3.3 send_bmethod / fib / keyword_args / send_*_block — 呼び出しの固定費
 
@@ -273,11 +285,12 @@ Hash に入った時点で必ず frozen になるので、**キー側だけは p
 見込み: `index` 12.6x → 1x、`count` 3.9x → 1x、`sub` 1.8x → ≈ 0.7x。テンプレート、
 パーサ、`Rack::Utils`、`URI` など文字列処理はどこにでもある。
 
-### 5.3 GC 割り当て予算 — コスト最低、広さ中（メモリとのトレードオフ）
+### 5.3 GC 割り当て予算 — コスト最低、広さ小（大きなヒープのみ、メモリとのトレードオフ）
 
-`GC_HEAP_FRACTION` 16 → 4 で splay −15 %、RSS +5 %。gcbench は変わらない。先行調査で
-`PAGES_PER_GC_TRIGGER` 8 → 32 が graphql −8 % / activerecord −6.5 % だったのと同じ種類の
-効果で、headline での A/B（§3.2.1）を見て決める。より筋のよい形は CRuby の
+`GC_HEAP_FRACTION` 16 → 4 で splay −15 %、RSS +5 %。gcbench / erubi / rack / activerecord は
+変わらない（§3.2: これらのヒープでは 32 ページの下限が効いていて分数の項は使われない）。
+つまり 1 行の変更で得られるのは大きなライブヒープのプログラムだけで、広さは小さい。
+より筋のよい形は CRuby の
 `heap_free_slots_goal_ratio` 相当 —「前回の minor で若い世代の生存率が高かったら
 次の予算を伸ばす」— で、生存率は既に `GC.stat` 用に数えているので、`alloc.rs` に
 閉じた十数行で済む。
