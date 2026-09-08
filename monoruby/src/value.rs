@@ -1236,7 +1236,11 @@ impl Value {
     /// (identity hashes key on the original object).
     ///
     pub(crate) fn frozen_hash_key(self) -> Value {
-        if self.is_str().is_some() && !self.is_frozen() {
+        // Any String key, whatever its encoding or byte validity: CRuby
+        // dups and freezes a non-frozen String key on insert. (`is_str`
+        // would skip a String holding invalid UTF-8 — a BINARY key —
+        // and leave it mutable inside the Hash.)
+        if self.is_rstring_inner().is_some() && !self.is_frozen() {
             let inner = self.as_rstring_inner().clone();
             let mut dup = Value::string_from_inner(inner);
             dup.set_frozen();

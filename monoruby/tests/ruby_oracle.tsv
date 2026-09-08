@@ -1722,6 +1722,7 @@
 83b1d2a51155f5bd85651c8843b3a5ba	:OVERRIDDEN	class Float; def !; :OVERRIDDEN; end; end; !(3.0)
 83b784235d0769c7b814205d33a9ce5b	["HSub", 1]	class HSub < Hash; end\n            h = HSub.new\n            h[:a] =
 83ceae37b80f34a2aa9d0002533a67d6	42	a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_get(:@i)
+83ff67fc48b346371de94ceade941493	[[#<Encoding:UTF-8>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:UTF-8>, #<Encoding:UTF-8>], [true, true, true, true], 1, 2, 3, 4, true]	x = 1\n        h = { "café" => x, "\\xff\\xfe".b => x + 1, "tab\\tnl\\n" => 
 84084af32e200c43d9a0f21c314d8935	""	"".reverse
 842592b1bb99be694e92c22a5315ee23	[false, false, false, nil, false, false, false, nil, false, false, false, nil, false, false, false, nil, false, false, false, nil]	a = [1,2,3,nil] * 5\n        x = []\n        for e in a\n          x << e&
 8426848ab8fdf086ee8cf3191a12c5f8	"MShip2::Blob"	module MShip2\n              class Blob\n                def _dump(l)
@@ -1937,6 +1938,7 @@
 94d69a47bd08e4c9374ae38d1d60aff3	["hello", true]	require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.succes
 94de90d6e7f1c554254f3e9e9e71014f	[false, :name_error, true, :sm, 42, "Object", true]	res = []\n        obj = Object.new\n        class << obj\n          DUP_CO
 94f0bb96e02d0b85c1f18a366b6a31ed	[10, 20, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \n[s[0]
+952aa7b62a2885ff6e34605029428800	[300, 7, 299, true, true, {"a" => :over, "mid" => :m, "z" => 8}, [true, true, true], true]	x = 7\n        # Chunked construction (> 256 pairs), one dynamic value f
 952fc260871595a1d028215408c82939	[[1, 2], [1, 3]]	ar = Object.new\n            def ar.method_missing(name, *a); name =
 954dc9dfa7000421a9864eaee0a9f5b6	["O\\n", "E\\n", 2]	require "open3"; out, err, st = Open3.capture3("sh", "-c", "echo O; echo E 1>&2;
 9552245cf0a47cc05a49a09a2a019426	false	File.directory?("README.md")
@@ -2282,6 +2284,7 @@ ad3d114daa3fe697d3d65acf89424a99	[1, 2, 3]	c = Class.new\n            captured =
 ad40135a1d283484c7b5cb46e05719d4	99	class C\n              X = 99\n            end\n            C.class_ev
 ad52e0b309ea2912c81a5103e18a6a3b	true	$LOAD_PATH.equal?($:)\n            
 adb5347f268fc22c27faf56c962755bd	[[true, 0], [[5]]]	log = []\n            sched = Object.new\n            [:block, :unblo
+adef7daa01482e9be468c7bd66b6b1a6	[[true, true], true, true, true, 1, true, false, FrozenError, {"alpha" => 1, "beta" => 2}]	x = 1\n        res = []\n        a = { "alpha" => x, "beta" => x + 1 }\n  
 ae16c0ef49b811c8c9cb52504e1b3d70	"out\\nrescued\\n"	r, w = IO.pipe\n            pid = Process.spawn("echo out; echo x >&
 ae1df911ace1255e65960a00b34e7ba7	{"a" => 1, b: 2}	def m(**k); k; end; m("a"=>1, :b=>2)
 ae211f0d43594ed597c756bcdcf34bac	[3, 3, 3]	class C\n              def initialize(x)\n                @x=x\n      
@@ -2413,6 +2416,7 @@ b82f7004e67d1dce1e4af8e9795a0307	:OVERRIDDEN	class FalseClass; def !; :OVERRIDDE
 b831c7c725c3ecbf2dd649e236c9fbcd	"Hello world"	"hello world".capitalize
 b838044a3ab73c7623063d1b22818274	[1, 2, [5, 6], 3, 4]	def f\n          yield [1,2,3,4,5,6]\n        end\n        \n\n        f { |
 b843b98c578472cd813d8c5ddb8158b4	"f"	def f\n          "f"\n        end\n        alias g f\n        g\n        
+b857ede9f6bd08a0272c61d48b93bbc1	[1, 5, 1, true, 5, [true, true, true, true, true]]	class String\n          def hash; 42; end\n          def eql?(o); false; 
 b85aa27afabd41f49479b590bb38e22f	[4, 8, 73, 99, 25, 77, 66, 83, 112, 101, 99, 58, 58, 87, 105, 100, 101, 227, 129, 130, 67, 108, 97, 115, 115, 6, 58, 6, 69, 84]	module MBSpec; end\n            name = "WideあClass"\n            MBSp
 b8659d9eac8d9dda73d245a1976bcfbd	256	253.succ.succ.succ
 b8a21a20381c12eb8fd88a75578fcc20	["mm: probe [7]", "super: no superclass method 'probe'"]	res = []\n        klass = Class.new do\n          def method_missing(name
@@ -2855,6 +2859,7 @@ d7fdb13d1246ad38b82fc7261735f109	"mm:baz:[10, 20, 30]"	class Foo\n              
 d803f34a97466662863ea8f41dca21cd	["wrapped", "the cause", ["/dir/foo.rb:10:in `raising'", "/dir/bar.rb:20:in `caller'"]]	wrapped = begin\n              begin\n                raise "the caus
 d8285233ef069114e2a828a15a93a579	[[1, 2, 7], [10, 8, 3], [1, 2, 3]]	def f(a:1,b:2,c:3)\n          [a, b, c]\n        end\n        \n\n        [f
 d83209b9961e083672b237cbc756ca17	14	b = binding\n            b.eval("y = 7")\n            b.eval("y * 2")
+d8689d9e20962ebe9210065b83d189ff	[["UTF-8", "ASCII-8BIT", "UTF-8", "UTF-8"], [true, true, true, true], 1, 2, 3, 4, true, [true, true], false, false, 1]	x = 1\n        h = { "café" => x, "\\xff\\xfe".b => x + 1, "tab\\tnl\\n" => 
 d877a4927bccad0844990bad82525907	"US-ASCII"	"hello".encode("US-ASCII").capitalize.encoding.to_s
 d879edf56856687d0b1c88dcaebb0402	["C", "M2", "M1"]	module M1\n          def f\n            $res << "M1"\n          end\n      
 d889ad006dc6737982d507f7317622e8	[10, 20, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \n[s["a

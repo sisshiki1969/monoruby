@@ -1860,7 +1860,7 @@ impl<'a> BytecodeGen<'a> {
                 let old_reg = self.temp;
                 let args = self.sp();
                 for (k, v) in nodes {
-                    self.push_expr(k)?;
+                    self.push_hash_key(k)?;
                     self.push_expr(v)?;
                 }
                 self.temp = old_reg;
@@ -1950,7 +1950,7 @@ impl<'a> BytecodeGen<'a> {
             let args = self.sp();
             for _ in 0..take {
                 let (k, v) = iter.next().unwrap();
-                self.push_expr(k)?;
+                self.push_hash_key(k)?;
                 self.push_expr(v)?;
             }
             self.temp = base;
@@ -1970,6 +1970,36 @@ impl<'a> BytecodeGen<'a> {
             remaining -= take;
         }
         Ok(())
+    }
+
+    /// Push one key of a Hash literal built pair by pair (the
+    /// non-constant path of `gen_hash`).
+    ///
+    /// A String literal key is emitted as the interned frozen String —
+    /// the same object `static_hash_key` puts in a constant literal's
+    /// template — regardless of `frozen_string_literal`. A key is
+    /// frozen by the Hash anyway (`frozen_hash_key` dups and freezes a
+    /// mutable one on insert), so emitting the mutable literal only
+    /// bought two copies per evaluation: the `Literal` deep copy and the
+    /// `frozen_hash_key` clone of it, the first of which was garbage
+    /// the moment it was made. CRuby compiles such keys as frozen
+    /// fstrings too, so the key's identity across evaluations matches
+    /// (`{"a" => x}.keys[0].equal?({"a" => y}.keys[0])`). Every other
+    /// key kind is an ordinary expression.
+    fn push_hash_key(&mut self, k: Node) -> Result<()> {
+        match &k.kind {
+            NodeKind::String(_) | NodeKind::Bytes(_) | NodeKind::EncodedString(..) => {
+                let enc = self.source_encoding();
+                let v = self.static_hash_key(&k, enc);
+                let dst: BcReg = self.push().into();
+                self.emit(BytecodeInst::FrozenLiteral(dst, v), Loc::default());
+                Ok(())
+            }
+            _ => {
+                self.push_expr(k)?;
+                Ok(())
+            }
+        }
     }
 
     /// Whether `node` is a key a constant Hash literal can hold: an
