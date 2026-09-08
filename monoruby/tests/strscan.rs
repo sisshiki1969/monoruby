@@ -308,6 +308,12 @@ fn string_match_binary_subjects() {
         r << b.match(/cd/n) { |m| m[0] + "!" }
         k = "K\xC3\xA4rnten".b
         r << k.match(/[^\x0-\x1f"]+/n)[0].bytesize << k.match(/rn/)[0].encoding.to_s << k.match(/[\x80-\xff]+/n).byteoffset(0)
+        r << b.match(/zz/) << b.match(/zz/, 2) << ($~)
+        # The block form of gsub / gsub! decides a miss on the raw bytes.
+        g = k.gsub(/\\z/) { |m| m }
+        r << g << g.encoding.to_s << g.equal?(k) << ($~)
+        r << k.dup.gsub!(/\\z/) { |m| m } << k.gsub(/rn/) { |m| m.upcase } << k.dup.gsub!(/rn/) { |m| m.upcase }
+        r << t.call { k.gsub(u) { |m| m } }
         r
         "#,
     );
