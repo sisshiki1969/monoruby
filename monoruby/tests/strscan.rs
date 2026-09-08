@@ -222,10 +222,10 @@ fn strscan_register_state_across_calls() {
 
 #[test]
 fn strscan_fallback_subjects_and_pattern_types() {
-    // A byte-oriented subject with 8-bit content cannot be viewed in
-    // place, so Regexp patterns take the MatchData fallback (String
-    // patterns stay literal bytes); a pattern that is neither raises the
-    // conversion TypeError CRuby reports.
+    // A BINARY subject with 8-bit content is matched in place on its raw
+    // bytes under Onigmo's ASCII codec (String patterns stay literal
+    // bytes); a pattern that is neither raises the conversion TypeError
+    // CRuby reports.
     run_test_once(
         r#"
         require "strscan"
@@ -239,6 +239,75 @@ fn strscan_fallback_subjects_and_pattern_types() {
         r << s.scan("") << s.scan("a") << s.scan_until("a")
         r << (begin; s.scan(1); rescue TypeError => e; e.message; end)
         r << (begin; s.scan_until(:a); rescue TypeError => e; e.message; end)
+        r
+        "#,
+    );
+}
+
+/// A BINARY subject with 8-bit content, scanned the way ruby-bench's
+/// pure-Ruby JSON parser does it (`force_encoding(ASCII_8BIT)` on UTF-8
+/// text, `/n` patterns with byte-range classes and a capture group):
+/// the registers are raw byte offsets, so `[]` / `matched` / `pos` are
+/// the subject's own bytes, and the JIT-compiled scan loop agrees.
+#[test]
+fn strscan_binary_subject_with_multibyte_content() {
+    run_test(
+        r#"
+        require "strscan"
+        src = "{\"name\": \"K\xC3\xA4rnten\", \"n\": 12, \"s\": \"v\xE2\x82\xACx\"}".b
+        r = []
+        3.times do
+          s = StringScanner.new(src)
+          r << s.skip("{") << s.skip(/\s*/)
+          while (m = s.scan(/"((?:[^\x0-\x1f"\\]|\\[\x20-\xff])*)"/n))
+            key = s[1]
+            r << [m.bytesize, key, key.encoding.to_s, s.pos, s.matched.bytesize, s.pre_match.bytesize]
+            s.skip(/\s*:\s*/)
+            if s.scan(/"((?:[^\x0-\x1f"\\]|\\[\x20-\xff])*)"/n)
+              r << s[1] << s[1].bytesize << s[0].bytesize
+            else
+              r << s.scan(/-?\d+/) << s.matched_size
+            end
+            s.skip(/\s*/)
+            break unless s.skip(",")
+            s.skip(/\s*/)
+          end
+          r << s.skip("}") << s.eos? << s.rest
+        end
+        t = StringScanner.new("x\xFFy z".b)
+        r << t.scan(/./n) << t.getch << t.pos << t.check(/y/) << t.scan_until(/z/) << t.pre_match << t.eos?
+        e = StringScanner.new("\xA4\xA2\xA4\xA4 x".force_encoding("EUC-JP"))
+        # (bytesizes, not the strings: the oracle cannot round-trip the `p`
+        # output of an EUC-JP string through the test harness)
+        r << e.scan(/./)&.bytesize << e.pos << e.scan(/\S+/)&.bytesize << e.pos << e.skip(/ /) << e.scan(/x/)
+        r
+        "#,
+    );
+}
+
+/// `String#match` / `#match?` / `#=~` and `Regexp#=~` on a BINARY subject
+/// with 8-bit content: matched on the raw bytes, so the MatchData's
+/// strings keep the subject's bytes and encoding, byte offsets are the
+/// subject's own, positions count one char per byte, and a UTF-8 regexp
+/// pinned by a non-ASCII char is refused as in CRuby.
+#[test]
+fn string_match_binary_subjects() {
+    run_test(
+        r#"
+        t = ->(&blk) { begin; blk.call; rescue => e; e.class; end }
+        b = "ab\xC3\xA4cd\xE2\x82\xAC ef".b
+        r = []
+        r << b.match(/cd/n).then { |m| [m[0], m.pre_match, m.post_match, m.begin(0), m.end(0), m.byteoffset(0), m.string.encoding.to_s, m[0].encoding.to_s] }
+        r << b.match(/[\x80-\xff]+/n, 3)&.byteoffset(0) << b.match(/e/, -3)&.begin(0) << b.match(/x?/, 100)&.begin(0) << b.match(/a/, -100)
+        r << b.match?(/e/) << b.match?(/e/, 9) << b.match?(/e/, 10) << b.match?(/e/, 100) << b.match?(/[\x80-\xff]/n)
+        r << (b =~ /cd/) << (b =~ /ef/) << (b =~ /zz/) << ($~ && $~[0]) << ($~ && $~.pre_match.bytesize)
+        r << (/ef/ =~ b) << (/\xE2/n =~ b) << ($~ && $~.byteoffset(0)) << (/ef/.match(b).begin(0))
+        u = Regexp.new("\u00e4")
+        r << t.call { b.match(u) } << t.call { b =~ u } << t.call { b.match?(u) } << t.call { u.match(b) } << t.call { "abc".b.match(u) }
+        r << b.match(/(\w)(\d)?/n).then { |m| [m[1], m[2], m.captures, m.values_at(0, 2)] }
+        r << b.match(/cd/n) { |m| m[0] + "!" }
+        k = "K\xC3\xA4rnten".b
+        r << k.match(/[^\x0-\x1f"]+/n)[0].bytesize << k.match(/rn/)[0].encoding.to_s << k.match(/[\x80-\xff]+/n).byteoffset(0)
         r
         "#,
     );
