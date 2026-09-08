@@ -112,6 +112,11 @@ module Gosu
     attach_function :create_rgb_surface_with_format,
       :SDL_CreateRGBSurfaceWithFormat,
       [:uint32, :int, :int, :int, :uint32], :pointer
+    # Wraps existing pixel memory without copying or owning it; the caller
+    # must keep the memory alive until the surface is freed.
+    attach_function :create_rgb_surface_with_format_from,
+      :SDL_CreateRGBSurfaceWithFormatFrom,
+      [:pointer, :int, :int, :int, :int, :uint32], :pointer
     attach_function :convert_surface_format,  :SDL_ConvertSurfaceFormat,
       [:pointer, :uint32, :uint32], :pointer
     attach_function :lock_surface,            :SDL_LockSurface,
