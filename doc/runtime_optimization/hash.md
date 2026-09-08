@@ -4,12 +4,16 @@ Ruby プログラムは Hash を「オブジェクトのフィールド袋」と
 `[]` / `[]=` / `key?` / `fetch` はアプリケーションのもっとも内側のループに
 現れる。yjit-bench の erubi では実行時間の 29 %、rack で 18 %、
 activerecord で 13 % が Hash 参照だった
-（[`yjit_bench_slow_investigation_2026-09.md`](yjit_bench_slow_investigation_2026-09.md) §5.2）。
+（[`yjit_bench_slow_investigation_2026-09.md`](../yjit_bench_slow_investigation_2026-09.md) §5.2）。
 
 この文書は、現在の Hash がどういう表現とどういう探索経路を持っているかを
 まとめ、そこに入れた最適化を計測とともに記録し、残っているコストと次の
 候補を優先順位付きで並べる。個々の API の意味論ではなく「1 回の参照に何が
-起きるか」に焦点を当てる。
+起きるか」に焦点を当てる。CRuby の `ar_table` / `st_table` と実装が
+どう違うかは §6 にまとめた。
+
+`runtime_optimization/` の他の章（[Array](array.md) / [String](string.md) /
+[Regexp](regexp.md)）と共通の前提は [README.md](README.md) にある。
 
 ---
 
@@ -28,7 +32,14 @@ Hash の表現は `RValue` ヘッダの型別メタデータバイト（`Metadat
 
 ゼロバイト（`Header::new` の既定値）がそのまま空の inline hash として妥当で、
 `dup` / `clone`（`Header::newborn`）はこのバイトを保存するので、表現はヘッダと
-一緒に移動する。
+一緒に移動する（`sanitize_dup_flags` が表現と identity ビットだけを残し、
+`ruby2_keywords` と反復深度は落とす）。
+
+表現は「3 つ」と言っているが、identity 比較の有無を掛けると形は 4 つある:
+inline（`eql?` 比較）、inline + `IDENT_BIT`、boxed の `HashContent::Map`、
+boxed の `HashContent::IdentMap`。boxed 側は `Box<RubyMap<Option<Value>, Value>>`
+と `Box<RubyMap<Option<IdentKey>, Value>>` という**別の型のマップ**で、
+`#[repr(C, usize)]` の判別子がオフセット 0 にあるので機械語からも見分けられる。
 
 ### 1.1 inline 表現（≤ 3 ペア）
 
@@ -49,8 +60,12 @@ boxed map を作らない**。
 `compare_by_identity` な inline hash は id 走査だけなので、任意のキー（可変な
 ヒープオブジェクトを含む）を保持できる（`IDENT_BIT`）。
 
-4 ペア目、ヒープキー、デフォルト値、`compare_by_identity` のいずれかが来ると
-`promote` が boxed へ移す。
+4 ペア目、inline に置けないヒープキー、デフォルト値／デフォルト proc の設定、
+反復中の `delete` / `shift`（tombstone を置く場所が inline には無い）のいずれかが
+来ると `promote` が boxed へ移す。移送は native の再挿入で Ruby コードは
+走らず、inline の反復深度ビットは `iter_lev` に引き継がれる。逆方向は
+`clear` だけで、デフォルトが無ければ boxed の格納を手放して inline に戻る
+（identity ビットは保つ）。
 
 ### 1.2 boxed 表現
 
@@ -94,12 +109,96 @@ VM:  Hash#[]  ──builtin index───────────────�
 `#__get_or_key` / `#default` / `#default=` / `#compare_by_identity?` は JIT が
 表現を直接歩く機械語として出る。焼き込むオフセットは手計算せず
 `HASH_INLINE_PAIRS_OFFSET` などのレイアウト定数（`offset_of!` 由来）と
-`rubymap::EntriesLayout` のプローブから取る。3 ペア以下の Hash リテラルは
-JIT がセルを bump 確保してヘッダとペアを直接書き込む（`emit_alloc_cell`）。
+`rubymap::EntriesLayout` のプローブから取る。`Bucket<K, V>` は `repr(Rust)` で
+キー型の niche によってフィールドが並び替わる（`Option<Value>` では
+value+0 / hash+8 / key+16）ため、`entries_layout()` は本物の `Vec` を作って
+実測し、`rubymap` 側の `raw_probe` / `layout_matches_the_safe_api` テストが
+その値で歩いた結果が安全な API と一致することを固定している。
+
+3 ペア以下の Hash リテラルは、**キーが全部 packed immediate で互いに異なる**
+場合に限り JIT がセルを bump 確保してヘッダとペアを直接書き込む
+（`new_hash_inline` → `emit_alloc_cell`）。frozen String キーは inline 表現には
+置けるが、この bump 確保の対象ではなく、`gen_hash` の実行時呼び出しを経て
+inline 表現に落ち着く。
 
 `Hash#each` / `each_key` / `each_value` はこれらのプリミティブの上に Ruby で
 書かれている（`builtins/hash.rb`）ので、ホットな呼び出しサイトではメソッドと
-ブロックの両方がインライン展開される。
+ブロックの両方がインライン展開される（§1.6）。
+
+### 1.5 2 つのハッシュ関数
+
+Hash には**用途の違う 2 つのハッシュ関数**が共存していて、これが §4.1 の前提に
+なる。
+
+| 用途 | 実装 | 場所 |
+|---|---|---|
+| バケッティング（マップ内部のダイジェスト） | seeded な wyhash 系 multiply-fold（`RubyHasher`、施策 5） | `rubymap/src/hasher.rs` |
+| Ruby から見える `Object#hash` の**値** | std の `RandomState` = SipHash-1-3（`HASH_STATE`、`seeded_hasher()`） | `value.rs` |
+
+`RubyHasher` は長さを最初に混ぜ、16 バイト単位のループの後に重なりを許した
+4 / 8 バイトの末尾読みをして最後にもう 1 回 fold する。シードはプロセスで 1 回
+`RandomState` から引く（`OnceLock<u64>`）ので、全マップと全 JIT 呼び出しサイトが
+同じシードを共有する。ハッシュ品質は `hasher.rs` のテストが固定している:
+長さごとの分離、1 ビットの変化が**上位 7 ビット**（hashbrown の control byte）
+まで拡散すること、等間隔の整数キーが散ること。
+
+Ruby 側の `#hash` は `Value::ruby_hash` / `ruby_hash_packed` が作る。nil /
+true / false / Symbol はビットそのもの、String は `RStringInner::hash`（生
+バイト列、エンコーディング非依存、再定義された `String#hash` は見ない）、
+Array / Hash は組み込みの `hash` が再定義されていない限り native の構造
+ハッシュ、それ以外は `#hash` を dispatch して `#to_int` で整数化する。
+**Fixnum / Float だけは内側で SipHash を丸ごと 1 回回して** `Integer#hash` /
+`Float#hash` の値を作り、その結果をマップ側のハッシャに流す。これは
+`Array#hash` が要素を混ぜるときに Ruby レベルの `#hash` と一致させるためで、
+バケッティングには要らない二重ハッシュである（§4.1）。
+
+異なるプロセスで `#hash` が変わること（CVE-2011-4815 対策）は
+`tests/hash_seed.rs` が本物のバイナリを 2 回起動して確認している。
+
+### 1.6 Ruby で書かれた走査と、そのためのプリミティブ
+
+`builtins/hash.rb` に `each` 系が Ruby で書かれている理由は、JIT が
+インライン展開するのが `FuncKind::ISeq` の呼び出し先だけだからである。
+Rust の builtin が要素ごとにブロックを起動すると 1 要素ごとにフルの
+ブロック呼び出しを払うが、Ruby の `each` なら `h.each { .. }` のホットな
+サイトでメソッド本体とブロックの両方が `yield` の位置に展開される。
+ブロック引数を `&block` で受けると `BlockArg` バイトコードになって
+メソッド全体が特殊化不能になり、フレームもヒープに移る
+（`Iseq::has_block_arg`）ので、必ず `yield` で書く。
+
+そのために Rust 側が出しているプリミティブ（大半に機械語インライナがある）:
+
+| プリミティブ | 役割 |
+|---|---|
+| `__entry_count` | エントリ配列の生の長さ（tombstone 込み） |
+| `__live_at(i)` | 位置 i が生きているか |
+| `__key_at(i)` / `__value_at(i)` | O(1) の位置参照。範囲外・tombstone は nil（エラー経路が無いので `while` ループに境界機構が要らない） |
+| `__set_value_at(i, v)` | 位置指定の値上書き。ダイジェストもプローブも走らない |
+| `__iter_begin` / `__iter_end(g)` | 反復参照の取得・返却（inline の深度は飽和するので戻り値を必ず返す） |
+| `__dup_table` | エントリと identity モードだけを複製。デフォルトは持たず、常に素の `Hash`（CRuby の `hash_dup_with_compare_by_id`） |
+| `__new_hash_with_capacity(n)` | 容量指定の空 Hash |
+| `__get_or_key(k)` | `key?(k) ? self[k] : k` を 1 プローブで（CRuby の `rb_hash_lookup2(map, k, k)`）。デフォルトは見ない |
+| `__pairs` | `[[k, v], ...]` のスナップショット |
+| `__block_splits_pair?` | 呼び出し元ブロックの形（`|k, v|` か `|pair|` か）を Proc を作らずフレームから読む |
+
+この上に乗っている走査の要点:
+
+- `each` / `each_pair` / `each_key` / `each_value` は
+  `guard = __iter_begin; ... while i < __entry_count ... if __live_at(i) ...
+  ensure __iter_end(guard)` の形。
+- `transform_values` は `__dup_table` + `__set_value_at` で、**キーは変わらない
+  ので一度も再ハッシュもプローブもしない**。切り離したコピーを歩くので
+  ガードも不要で、全位置が生きている。`transform_values!` は同じ位置上書きを
+  `self` に対してガード付きで行う。
+- `transform_keys` はブロック無し `transform_keys(map)` にペアごとのブロック
+  判定が乗らないよう 3 本のループに分け、`__get_or_key` を使う。
+- `to_h` にブロックが付いたときは `each` を経由せず位置を直接歩き、
+  `[k, v]` 配列を作らない。結果は `__new_hash_with_capacity` で事前確保。
+- `map` / `collect` は `method(:each).owner == ::Hash` を確認したうえで
+  `__block_splits_pair?` をループの外で 1 回だけ判定する（`|*vs|` の rest
+  引数は specialized-yield の対象外になるため）。
+- `dig` を Rust に移した実験は計測で退行したので Ruby に戻してある
+  （`hash.rb` のコメントに記録）。
 
 ---
 
@@ -283,6 +382,28 @@ hit / miss / default 値 / default proc / nil・true・false キー / tombstone 
   が立てる POLY ビットで「次は generic に」と判断できるが、引数クラスには
   その仕組みが無く、再コンパイルしても同じ guard が出るだけなので保留。
 
+#### 補足: どこから発火し、いつ機械語を諦めるか
+
+- `Hash#[]` のインライン生成 `hash_index` は `fire_index_inline` から呼ばれ、
+  受信側クラスが**ちょうど `Hash`** のときだけ probe を出す。理由は builtin
+  の `Hash#[]` がミス時に `default` **メソッド**を dispatch する（サブクラスや
+  特異メソッドで上書きできる）のに対し、`hashindex` は格納されたデフォルトを
+  直接読むからで、サブクラスは通常の class-version ガード付き呼び出しに残す。
+  `Hash#[]` は `BASIC_OP_DEFS` に入っているので class-version ガードは省き、
+  `record_bop_dep` で再定義を捕まえる。`Hash#[]=` は意図的に BOP に**入って
+  いない**ので、`hash_index_assign` は通常経路のまま（`index_hash_assign_redefinition`
+  テストが固定）。
+- 受信側クラスを抽象状態が確定できない多相サイトでは `index_dispatch` が
+  **2 腕のディスパッチ**を出す: `BrClassNe` で Hash なら probe、そうでなければ
+  `runtime::get_index`。外れたクラスは deopt ではなく C 呼び出しになる。
+- キーのクラスはサイトのインラインキャッシュ／抽象状態から取り、
+  Symbol / nil / true / false は `packed_digest_c`、String は `string_digest_c`
+  + `string_key_eq_c`、それ以外（Integer を含む）は probe を出さず
+  `hashindex` の直接呼び出しに落ちる。
+- `hash_entries_layout()` が `None`（2 つのマップ型でレイアウトが一致しない
+  構成）か、hashbrown の group 幅が 16 でない構成では、索引領域は静的に
+  `miss` へ飛ばす。いずれも性能上の後退で、正しさには関わらない。
+
 #### 段階 2・3 の効果（純ルックアップ、交互 2 ラウンド、ns）
 
 | | 段階 1 | 段階 3 | CRuby+YJIT |
@@ -345,7 +466,56 @@ boxed Hash の実体（インデックステーブルとエントリ Vec）は g
 
 ---
 
-## 5. 計測手順（再現用）
+## 5. `==` / `eql?` / `hash` の意味論
+
+- `Hash#==` / `#eql?` はまず同一性で短絡する（`h = {x: Float::NAN}; h == h` が
+  true になる）。空でない Hash 同士では identity モードが違えば偽。再帰構造は
+  `exec_recursive_paired` で扱う。
+- `Hash#hash` はペアごとに `kpart ^ vpart` を作って順序非依存に足し合わせ、
+  サイズを混ぜてから `from_hash_digest` で Fixnum 範囲に畳む。キーと値の
+  `#hash` は本物の dispatch で、`rb_exec_recursive_outer` 相当の再帰保護が付く。
+- 内部の `HashRef::eql`（Hash 自身がキーになったときのキー比較）は別物で、
+  モードが違えば偽を返す。
+- `Hash#rehash` は Ruby で `to_a; clear; 再挿入` と書かれていて、C レベルの
+  テーブル再構築ではない。
+
+---
+
+## 6. CRuby との実装差異
+
+| 項目 | CRuby | monoruby |
+|---|---|---|
+| 表現の段階 | `ar_table`（≤ 8、線形、ハッシュ値格納）→ `st_table` | **≤ 3 ペアは RValue のペイロードに直置き（ヒープ確保ゼロ）** → boxed の線形領域（≤ 8、`AR_MAX`、CRuby と同じ閾値）→ hashbrown の索引領域。線形→索引はエントリ `Vec` を共有したまま index table を作るだけで、`ar`→`st` のような作り直しは無い |
+| 挿入順序 | `st_table` のエントリ配列 | `rubymap`（IndexMap 系）: エントリ `Vec` + 位置の index table。観測される順序は同じ |
+| 反復中の変更 | 追加は例外、`delete` は許可（`RHASH_ITER_LEV`） | 同じ規則（既存キーの更新は許可）。機構は tombstone + `dead` カウンタ + `compact_if_dirty`。inline hash は tombstone を置く前に boxed へ昇格する。深度は inline が 2 ビット飽和、boxed が `Cell<u32>` |
+| 走査の実装 | `rb_hash_foreach`（C のコールバックループ） | `each` は Ruby の位置ループ（§1.6）。JIT がブロックごと展開するため |
+| String キーの複製 | `rb_hash_key_str` が fstring テーブルに**インターン**（Hash 間で共有） | `Value::frozen_hash_key` がバイト列から新しい frozen コピーを毎回作る。**重複排除テーブルは無い**。特異メソッドは引き継がない |
+| String キーの比較・ハッシュ | 内容のみ、`String#hash` は dispatch しない。クラスが `String` ちょうどのときだけバイト比較で短絡（`rb_any_cmp` / `any_hash`） | 同じ規則（`Value::eql`、`string_key_eq`）。ただしバイト比較は `RStringInner::eq` で**エンコーディングを見ない**。CRuby の `rb_str_hash` は非 ASCII 文字列でエンコーディング index を混ぜる |
+| `compare_by_identity` | `st_table` の型を `identhash` に切り替えて再ハッシュ | inline は `IDENT_BIT` を立てるだけ（packed キーは `eql?` と同一性が一致するので inline のまま）。boxed は**別型**の `RubyMap<Option<IdentKey>, Value>` に作り直す。空マップ限定で双方向に切り替える `set_compare_by_identity_empty` があり、`Hash#replace` / `Set` が使う |
+| デフォルト値／proc | `ifnone` スロット | `Option<Box<HashDefault>>`。null なら「どちらも無し」を 1 ロードで判定でき、JIT のミス経路が in-line で nil を返せる。デフォルトを持つと boxed 強制（`Hash.new(7)` は確保する）。`clear` はデフォルトを保つ（CRuby と同じ） |
+| ミス時の `default` | `rb_funcall(id_default)` | builtin の `Hash#[]` は同じく dispatch。`hashindex` / `runtime::get_index` は格納値を直接読むので、対象を `Hash` ちょうどに限定 |
+| Ruby から見える `#hash` | `rb_hash_start` 系（SipHash-1-3、seeded） | `HASH_STATE`（std `RandomState` = SipHash-1-3、seeded）。バケッティングは別の seeded ミキサー（§1.5） |
+| String ハッシュのキャッシュ | 無し | 無し（§4.5 に候補として残す） |
+| GC | `rb_gc_mark` | `HashRef::mark` がデフォルトと生きたエントリを mark。`young_child_exists` が世代別の remember 判定、mutator と JIT の `emit_hash_default_assign` が write barrier を出す（[`../gc.md`](../gc.md)） |
+
+---
+
+## 7. テストと計測の所在
+
+| 場所 | 何を固定しているか |
+|---|---|
+| `monoruby/tests/hash_probe_jit.rs` | 機械語 probe: hit / miss / default 値 / default proc / nil・true・false キー / tombstone / 索引・inline・identity への委譲（**call であって exit ではない**）/ クラスガード / 線形↔索引の成長 / String キー（線形・索引・frozen 同一）/ サブクラスキー / String → Symbol のクラス変化 |
+| `monoruby/tests/hash_string_keys.rs` | boxed と inline の String キー経路: 往復、混在、サブクラス、エンコーディング（バイト比較）、tombstone、`compare_by_identity`、`string_subclass_key_dispatches_eql` |
+| `monoruby/tests/hash_compare_by_identity.rs` | identity hash は String キーを複製しない、通常 hash は複製して freeze する |
+| `monoruby/tests/hash_seed.rs` | `#hash` がプロセス間で変わり、プロセス内で安定 |
+| `rubymap/src/lib.rs`（`raw_probe`, `layout_matches_the_safe_api`, `niche_carrying_keys_reorder_the_bucket`） | JIT が使う生オフセットでの探索が `find_inner` と同じ答えになること |
+| `rubymap/src/hasher.rs` のテスト | ミキサーの品質（長さ分離、上位 7 ビットへの拡散、等間隔キー） |
+| `builtins/hash.rs` の `jit_layout_matches_entry_at*` | monoruby 側のレイアウト定数が `entry_at` と一致 |
+| `benchmark/jit_hash.yaml` | 1000 エントリ Hash の反復・変換ベンチ |
+
+---
+
+## 8. 計測手順（再現用）
 
 ```sh
 # ビルド

@@ -72,13 +72,27 @@ Diagrams referenced by the above: [`fiber_state_diagram.svg`](fiber_state_diagra
 |---|---|---|---|
 | [`encoding_char_iteration_design.md`](encoding_char_iteration_design.md) | EN | plan | Removing the "every String is UTF-8" assumption via a per-encoding character-boundary layer. Marked *proposed*. |
 
+## Runtime optimization (`runtime_optimization/`)
+
+How the core classes are represented and what the VM and the JIT do to
+make their hot operations cheap, one document per class, each closing with
+the places where the implementation knowingly differs from CRuby's. All in
+Japanese; [`runtime_optimization/README.md`](runtime_optimization/README.md)
+is the entry point.
+
+| Document | Lang | Kind | Answers |
+|---|---|---|---|
+| [`runtime_optimization/array.md`](runtime_optimization/array.md) | JA | reference | How an `Array` is laid out, what `[]` / `[]=` / `<<` / `each` cost in the VM and in compiled code, and where CRuby's embedded / shared arrays have no counterpart. |
+| [`runtime_optimization/hash.md`](runtime_optimization/hash.md) | JA | reference + design record | What one `Hash#[]` actually costs: the three representations (inline / boxed / identity-keyed), the vm-free prehashed probe, the machine-code probe, the optimizations landed so far with their measurements, and a ranked list of what is left. Contrasts CRuby's `ar_table` / `st_table`. |
+| [`runtime_optimization/string.md`](runtime_optimization/string.md) | JA | reference | Inline vs heap storage, shared substrings and copy-on-write, frozen literals and the literal pool, the encoding model, and how strings are hashed as keys. |
+| [`runtime_optimization/regexp.md`](runtime_optimization/regexp.md) | JA | reference | Onigmo behind `Regexp`, how compiled patterns and `$~` are stored, which `String` methods take a regexp fast path, and what CRuby does differently. |
+
 ## Compatibility and performance
 
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
 | [`ruby_spec_skip_tags.md`](ruby_spec_skip_tags.md) | JA | reference | How the ruby/spec suite avoids hangs, and the audit that cut a coarse file-level skip list down to the handful that genuinely cannot run. |
 | [`optcarrot_opt_profile.md`](optcarrot_opt_profile.md) | JA | design record | Where `bin/optcarrot --opt` spends its time, measured with `perf` and `--features profile`, and the optimizations that came out of it. |
-| [`hash_optimization.md`](hash_optimization.md) | JA | design record | What one `Hash#[]` actually costs: the three representations (inline / boxed / identity-keyed), the vm-free prehashed probe, the optimizations landed so far with their measurements, and a ranked list of what is left. |
 | [`yjit_bench_slow_investigation_2026-09.md`](yjit_bench_slow_investigation_2026-09.md) | JA | design record | Why activerecord / erubi / rack / graphql run at half of CRuby+YJIT: steady-state `perf` breakdowns, deopt-log and PMC statistics, microbenchmarks isolating each runtime cost (String-keyed Hash, GC roots, arg-class-keyed PMC, StringScanner, exceptions), and a ranked plan. |
 | [`ruby_bench_low_cost_ideas_2026-09.md`](ruby_bench_low_cost_ideas_2026-09.md) | JA | design record | The follow-up: the whole ruby-bench picture against CRuby 4.0.2+YJIT at `702e362`, why the remaining losses cluster (code footprint on `30k_*`, GC frequency on `splay`, per-call fixed cost), a 150-item micro-op sweep that surfaces monoruby-specific slow paths (non-frozen String hash-literal keys, `String#index`/`#sub`/`#count` with String patterns, `instance_variable_get`, `format`), and the ideas ranked by implementation cost. |
 
