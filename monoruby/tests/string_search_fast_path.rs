@@ -117,3 +117,73 @@ fn count_delete_squeeze_single_char() {
         "##,
     );
 }
+
+#[test]
+fn index_rindex_string_pattern_non_utf8_receivers() {
+    // Receivers the memmem fast path cannot index directly: multibyte
+    // non-UTF-8 encodings walk `iter_char_bytes` up to each hit (a hit
+    // inside a character — Shift_JIS `表` ends in the byte of `\` — is
+    // skipped), broken UTF-8 takes the same walk, and `rindex` on them
+    // tabulates the boundaries up to the anchor.
+    run_test(
+        r##"
+        r = []
+        e = "aあいうbい".encode("EUC-JP")
+        i = "い".encode("EUC-JP")
+        r << e.index(i) << e.index(i, 3) << e.index("z".encode("EUC-JP")) << e.index("b".encode("EUC-JP"), 6) << e.index("b".encode("EUC-JP"), 7)
+        r << e.rindex(i) << e.rindex(i, 2) << e.rindex(i, 5) << e.rindex("z".encode("EUC-JP")) << e.rindex("a".encode("EUC-JP"), 0) << e.rindex("う".encode("EUC-JP"), 100)
+        s = "表\\示".encode("Shift_JIS")
+        bs = "\\".encode("Shift_JIS")
+        r << s.index(bs) << s.rindex(bs) << s.index("示".encode("Shift_JIS")) << s.rindex("表".encode("Shift_JIS"), 0) << s.index("表".encode("Shift_JIS"), 1)
+        # The rightmost byte-level candidate sits inside `表`; the search
+        # must step back to the standalone `\`.
+        t = "a\\表\\表".encode("Shift_JIS")
+        r << "\\表".encode("Shift_JIS").rindex(bs) << t.rindex(bs) << t.rindex(bs, 2) << "表".encode("Shift_JIS").rindex(bs)
+        b = "ab\xffcd\xffab".b.force_encoding("UTF-8")
+        r << b.valid_encoding? << b.index("ab") << b.index("ab", 1) << b.index("zz") << b.index("cd", 100)
+        r << b.rindex("ab") << b.rindex("ab", 5) << b.rindex("zz") << b.rindex("b", 0)
+        r << "aあb".index("b", 3) << "aあb".index("z") << "aあb".index("あ", 1) << "aあb".rindex("b", 1)
+        # ASCII-only receiver in a non-UTF-8 encoding: byte == char index.
+        a = "abcabc".encode("Shift_JIS")
+        bc = "bc".encode("Shift_JIS")
+        r << a.index(bc) << a.index(bc, 2) << a.index(bc, 6) << a.rindex(bc) << a.rindex(bc, 3) << a.rindex(bc, 0) << a.rindex("zz".encode("Shift_JIS"))
+        r
+        "##,
+    );
+}
+
+#[test]
+fn string_pattern_fast_path_fallbacks() {
+    // Shapes the fast paths hand back to the general code: a
+    // non-UTF-8 receiver for `count` / `delete` / `squeeze` / `sub`, a
+    // `to_str` replacement, a non-String pattern, and the type errors.
+    run_test(
+        r##"
+        r = []
+        s = "表\\示".encode("Shift_JIS")
+        bs = "\\".encode("Shift_JIS")
+        e = "aあいうbい".encode("EUC-JP")
+        r << s.count(bs) << (s.delete(bs) == s) << e.squeeze("a".encode("EUC-JP")).bytesize
+        r << s.sub("示".encode("Shift_JIS"), "X".encode("Shift_JIS")).encoding.name
+        class ToStr; def to_str; "R"; end; end
+        r << "hello".sub("l", ToStr.new) << "hello".gsub("l", ToStr.new) << "hello".sub(/l/, "L") << "hello".gsub(/l/, "L")
+        begin; "hello".sub("l", 1); rescue TypeError => ex; r << ex.class; end
+        begin; "hello".count(1); rescue TypeError => ex; r << ex.class; end
+        r
+        "##,
+    );
+}
+
+#[test]
+fn string_pattern_backref_survives_gc() {
+    // The `$~` of a substring search holds the pattern String; it must
+    // stay alive across a collection and still serve `$~.regexp`.
+    run_test_once(
+        r##"
+        r = []
+        "hello world".sub("wor", "WOR"); GC.start; r << $~.regexp.source << $~[0] << $~.pre_match
+        "hello world".gsub("o", "0"); GC.start; r << $~.regexp.source << $~.begin(0)
+        r
+        "##,
+    );
+}

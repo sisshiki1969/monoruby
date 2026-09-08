@@ -4794,12 +4794,10 @@ impl Executor {
         end: usize,
         pattern: Value,
     ) {
-        let mut md = MatchDataInner::from_byte_span(haystack, start, end, pattern);
-        if let Some(regex_val) = self.sp_match_regex
-            && let Some(regex) = regex_val.is_regex()
-        {
-            md = md.with_regex(regex);
-        }
+        // No stashed Regexp can belong to a substring search (only the
+        // Regexp paths call `set_match_regex`); `$~.regexp` is served
+        // from `pattern` on demand instead.
+        let md = MatchDataInner::from_byte_span(haystack, start, end, pattern);
         let md_val = RValue::new_match_data_from_inner(md).pack();
         self.set_backref(md_val);
         self.sp_match_regex = None;

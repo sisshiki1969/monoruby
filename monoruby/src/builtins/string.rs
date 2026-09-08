@@ -4321,10 +4321,8 @@ fn substring_char_index(
             // A match may start at `anchor` at the latest.
             let end = anchor.saturating_add(needle.len()).min(bytes.len());
             memchr::memmem::rfind(&bytes[..end], needle)
-        } else if anchor > bytes.len() {
-            None
         } else {
-            memchr::memmem::find(&bytes[anchor..], needle).map(|p| p + anchor)
+            memchr::memmem::find(bytes.get(anchor..)?, needle).map(|p| p + anchor)
         };
     }
     if rev {
@@ -4419,11 +4417,9 @@ fn substring_char_index_rev_multibyte(
         if let Ok(cp) = bounds.binary_search(&hit) {
             return Some(cp);
         }
-        // Not a boundary: the next candidate must start before `hit`.
+        // Not a boundary (so `hit >= 1`: byte 0 always is one): the next
+        // candidate must start before `hit`.
         end = hit + needle.len() - 1;
-        if end < needle.len() {
-            return None;
-        }
     }
 }
 
