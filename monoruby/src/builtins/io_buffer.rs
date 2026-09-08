@@ -107,6 +107,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_BUFFER_CLASS, "resize", resize, 1);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "slice", slice, 0, 2, false);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "clear", clear, 0, 3, false);
+    globals.define_builtin_func(IO_BUFFER_CLASS, "__address", __address, 0);
     globals.define_builtin_func(IO_BUFFER_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(IO_BUFFER_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(IO_BUFFER_CLASS, "<=>", cmp, 1);
@@ -1261,6 +1262,25 @@ fn free(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 }
 
 ///
+/// ### IO::Buffer#__address
+///
+/// - __address -> Integer | nil
+///
+/// monoruby extension (no CRuby counterpart): the base address of the
+/// buffer's bytes, or nil when the storage has no stable address (a
+/// string-backed view, a slice, an empty buffer). The address stays valid
+/// while the buffer is alive and un-resized — the same stability contract
+/// the JIT's inlined `get_value`/`set_value` rely on. Used by the FFI
+/// shims (e.g. the gosu stub) to pass buffer memory to C without a copy.
+#[monoruby_builtin]
+fn __address(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    match lfp.self_val().as_iobuffer_inner().stable_address() {
+        Some(addr) => Ok(Value::integer(addr as i64)),
+        None => Ok(Value::nil()),
+    }
+}
+
+///
 /// ### IO::Buffer#transfer
 ///
 /// - transfer -> IO::Buffer
@@ -2341,5 +2361,33 @@ mod tests {
             r
             "##,
         );
+    }
+
+    /// `__address` is a monoruby extension (no CRuby counterpart, so no
+    /// oracle comparison): an Integer for stable storages that really
+    /// points at the bytes (cross-checked through a Fiddle read), nil for
+    /// storages whose bytes can move and for null/freed buffers.
+    #[test]
+    fn io_buffer_address() {
+        let res = run_test_no_result_check(
+            r##"
+            require "fiddle"
+            b = IO::Buffer.new(16)
+            a = b.__address
+            ok = a.is_a?(Integer) && a > 0
+            # The address is the storage itself, not a copy.
+            b.set_string("ABC")
+            ok &&= Fiddle::Pointer.new(a)[0, 3] == "ABC"
+            ok &&= b.__address == a
+            # No stable address: empty, string-backed, slice, freed.
+            ok &&= IO::Buffer.new(0).__address.nil?
+            ok &&= IO::Buffer.for("hello").__address.nil?
+            ok &&= b.slice(4, 8).__address.nil?
+            b.free
+            ok &&= b.__address.nil?
+            ok
+            "##,
+        );
+        assert_eq!(res, crate::Value::bool(true));
     }
 }
