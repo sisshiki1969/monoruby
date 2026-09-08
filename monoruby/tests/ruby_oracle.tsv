@@ -2722,6 +2722,7 @@ cd6ec7b17b336346c11d027de22134a3	"ModuleSpecs4::Mod4::N"	module ModuleSpecs4; en
 cdd817bbe04dcccd5789be10d0c9e391	true	module MBSpec2; end\n            name = "Wideあmod"\n            MBSpe
 cde7486a8ec494a41cd937151aeb8979	["global", false]	Thread.abort_on_exception = true\n            t = Thread.new { sleep
 cde8be92d24d46ac492d28d94cf6baa4	false	Float::NAN > (1 << 100)
+cdefdffb64f846e8ba86fbcd597f7112	[["cd", "ab\\xC3\\xA4", "\\xE2\\x82\\xAC ef", 4, 6, [4, 6], "ASCII-8BIT", "ASCII-8BIT"], [3, 4], 10, 12, nil, true, true, true, false, true, 4, 10, nil, nil, nil, 10, 6, nil, nil, nil, 10, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, nil, ["a", nil, ["a", nil], ["a", nil]], "cd!", 8, "ASCII-8BIT", [1, 3]]	t = ->(&blk) { begin; blk.call; rescue => e; e.class; end }\n        b =
 cdfb00531284d4111c26a83cd032ad5a	["iberico", true, true, "gouda", "stilton"]	module MM\n          class C\n            class << self\n              cla
 ce3ab0576ab0634aa202676d23eff78c	[2000, true]	parents = Array.new(2000) { [] }\n            5.times { GC.start }\n 
 ce3cb44e401aaa8cd3345ff6d95183b6	12	class Integer; alias __orig :*; def *(o); __orig(o); end; end; 3 * 4

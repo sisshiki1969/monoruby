@@ -301,7 +301,7 @@ fn string_match_binary_subjects() {
         r << b.match(/[\x80-\xff]+/n, 3)&.byteoffset(0) << b.match(/e/, -3)&.begin(0) << b.match(/x?/, 100)&.begin(0) << b.match(/a/, -100)
         r << b.match?(/e/) << b.match?(/e/, 9) << b.match?(/e/, 10) << b.match?(/e/, 100) << b.match?(/[\x80-\xff]/n)
         r << (b =~ /cd/) << (b =~ /ef/) << (b =~ /zz/) << ($~ && $~[0]) << ($~ && $~.pre_match.bytesize)
-        r << (/ef/ =~ b) << (/\xE2/n =~ b) << ($~ && $~.byteoffset(0)) << (/ef/.match(b).begin(0))
+        r << (/ef/ =~ b) << (/\xE2/n =~ b) << (/zz/ =~ b) << $~ << ($~ && $~.byteoffset(0)) << (/ef/.match(b).begin(0))
         u = Regexp.new("\u00e4")
         r << t.call { b.match(u) } << t.call { b =~ u } << t.call { b.match?(u) } << t.call { u.match(b) } << t.call { "abc".b.match(u) }
         r << b.match(/(\w)(\d)?/n).then { |m| [m[1], m[2], m.captures, m.values_at(0, 2)] }
