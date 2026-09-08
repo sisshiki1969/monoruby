@@ -37,8 +37,8 @@ range window at compile time" #1290）。比較対象は rbenv でビルドし�
 
 | 順 | 施策 | 変更箇所 | 効果（ns/op, monoruby → 見込み, YJIT） | 広さ |
 |---|---|---|---|---|
-| 1 | Hash リテラルの String キーを frozen リテラルとして emit | `bytecodegen/expression.rs::gen_hash`（数十行） | `{'a'=>1,'b'=>2,'c'=>i}` 386 → ≈120（YJIT 154）、5 ペア 779 → ≈245（187） | `frozen_string_literal` なしの全コード |
-| 2 | `String#index` / `#count` / `#sub` の String パターンに memmem + ASCII 直索引の fast path | `builtins/string.rs`（`substring_char_index`, `sub_main`, `count`） | `index` 200 B 文字列 1828 → ≈100（145）、`'hello world'.index('wor')` 211 → ≈60（105）、`count('l')` 300 → ≈60（78）、`sub('o','0')` 756 → ≈300（425） | 文字列処理全般 |
+| 1 | Hash リテラルの String キーを frozen リテラルとして emit（**実施済み**、§5.1） | `bytecodegen/expression.rs::gen_hash`（数十行） | `{'a'=>1,'b'=>2,'c'=>i}` 386 → ≈120（YJIT 154）、5 ペア 779 → ≈245（187） | `frozen_string_literal` なしの全コード |
+| 2 | `String#index` / `#count` / `#sub` の String パターンに memmem + ASCII 直索引の fast path（**実施済み**、§5.2） | `builtins/string.rs`（`substring_char_index`, `sub_main`, `count`） | `index` 200 B 文字列 1828 → ≈100（145）、`'hello world'.index('wor')` 211 → ≈60（105）、`count('l')` 300 → ≈60（78）、`sub('o','0')` 756 → ≈300（425） | 文字列処理全般 |
 | 3 | GC 割り当て予算を在籍ページの 1/16 → 1/4（またはサバイバル率で適応） | `alloc.rs::GC_HEAP_FRACTION`（1 行） | splay −15 %（RSS +5 %）。erubi / rack / activerecord は ±0（分数の項が効くのは在籍 512 ページ以上のヒープだけ） | ライブヒープが 100 MB を超えるプログラムのみ |
 
 否定した仮説も残す（§4.3）: `Proc#call` が 4 倍遅く見えたのは、**proc を作ったフレームの
@@ -266,6 +266,20 @@ Hash に入った時点で必ず frozen になるので、**キー側だけは p
 `NodeKind::String` のときに `emit_literal(frozen)` を使う数十行 + テスト
 （`String#hash` / `eql?` 再定義時の挙動は `frozen_hash_key` と同じ規則）。
 
+**実施済み**（`push_hash_key`、`bytecodegen/expression.rs`。テストは
+`tests/hash_string_keys.rs` の `dynamic_literal_string_keys_*`）。同じ機械での ns/op:
+
+| 式 | 前 | 後 | YJIT |
+|---|---:|---:|---:|
+| `{'content-type' => i}` | 117 | 39 | 73 |
+| `{'a'=>1,'b'=>2,'c'=>i}` | 266 | 85 | 119 |
+| `{'a'=>1,'b'=>2,'c'=>3,'d'=>4,'e'=>i}` | 567 | 191 | 118 |
+| `{'a'=>1, **h, 'c'=>i}` | 279 | 177 | 242 |
+
+5 ペアが YJIT に届かないのは boxed map の構築（§5.7 の template 化）の分。
+ついでに見つけた `frozen_hash_key` のバグ（`is_str` が無効 UTF-8 の String を弾くので
+BINARY のキーが frozen されずに Hash に入っていた）も直した。
+
 ### 5.2 String パターンの検索を memmem に — コスト低、広さ大
 
 - `String#index` / `rindex`（String パターン）: `substring_char_index` は
@@ -284,6 +298,32 @@ Hash に入った時点で必ず frozen になるので、**キー側だけは p
 
 見込み: `index` 12.6x → 1x、`count` 3.9x → 1x、`sub` 1.8x → ≈ 0.7x。テンプレート、
 パーサ、`Rack::Utils`、`URI` など文字列処理はどこにでもある。
+
+**実施済み**（`substring_char_index` / `string_pattern_replace` / `single_ascii_byte_set`、
+`builtins/string.rs`。`$~` は `Executor::save_capture_span` → `MatchDataInner::from_byte_span`
+で正規表現エンジンなしに設定する。テストは `tests/string_search_fast_path.rs`）。
+同じ機械での ns/op:
+
+| 式 | 前 | 後 | YJIT |
+|---|---:|---:|---:|
+| `('x'*200 + 'needle').index('needle')` | 1478 | 124 | 156 |
+| `'hello world'.index('wor')` | 211 | 85 | 124 |
+| `('héllo wörld, '*10 + 'ñeedle').index('ñeedle')` | 1314 | 185 | 172 |
+| `'hello world'.count('l')` | 288 | 77 | 102 |
+| `'hello world'.delete('l')` | 374 | 171 | 192 |
+| `'helllo world'.squeeze('l')` | 372 | 193 | 196 |
+| `'hello world'.sub('o', '0')` | 854 | 275 | 463 |
+| `'hello world'.sub('z', '0')`（不一致） | 547 | 185 | 269 |
+| `'hello world'.gsub('o', '0')` | 1352 | 327 | 772 |
+| `'hello world'.sub('o', '[\0]')`（バックスラッシュ → 従来経路） | 783 | 841 | 727 |
+
+多バイト受信側の `index` は、有効な UTF-8 なら「継続バイト以外を数える」だけで
+バイト位置 ↔ 文字位置を変換する。`rindex` は UTF-8 有効な受信側では元々
+`rmatch_indices`（Two-Way）で、変わっていない。`gsub(String)` が `$~.regexp` に
+付けていたエスケープ済み Regexp は、`MatchDataInner` に String パターンを持たせて
+`MatchData#regexp` が呼ばれたときだけ作る（毎回コンパイルすると fast path の意味が
+なくなる）。`sub(String)` は従来 `$~.regexp` が nil だったが、同じ経路で CRuby と
+同じ値を返すようになった。
 
 ### 5.3 GC 割り当て予算 — コスト最低、広さ小（大きなヒープのみ、メモリとのトレードオフ）
 
