@@ -168,6 +168,20 @@ impl IoBufferInner {
         }
     }
 
+    /// Base address of the buffer's bytes, when the storage guarantees a
+    /// stable one (owned heap memory, a file mapping) — the same guarantee
+    /// the JIT's `fast_ptr` view relies on. `None` for storages whose
+    /// bytes can move under the caller (string-backed views, slices) and
+    /// for empty buffers. Backs `IO::Buffer#__address`, which the FFI
+    /// shims use to hand buffer memory to C without a copy.
+    pub fn stable_address(&self) -> Option<usize> {
+        if self.fast_ptr.is_null() {
+            None
+        } else {
+            Some(self.fast_ptr as usize)
+        }
+    }
+
     pub(crate) fn mark(&self, alloc: &mut crate::alloc::Allocator<RValue>) {
         match &self.storage {
             BufStorage::Str { s, .. } => s.mark(alloc),

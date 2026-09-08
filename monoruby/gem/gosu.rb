@@ -23,6 +23,12 @@
 require "gosu/sdl2"
 
 module Gosu
+  # ::IO::Buffer under a module-local name. Image's per-frame paths load
+  # it; Image is the single receiver class of those methods, so a plain
+  # module constant keeps the JIT's constant cache monomorphic (see
+  # FFI::Struct.new for what happens when it isn't).
+  GcBuffer = ::IO::Buffer
+
   GP_0_BUTTON_0 = 293
   GP_0_BUTTON_1 = 294
   GP_0_BUTTON_10 = 303
@@ -778,7 +784,7 @@ module Gosu
       @_texture = nil
       @_renderer = nil  # the renderer the texture was created against
       @_owns_texture = true
-      @_rgba_blob = nil
+      @_pixels = nil
       @_retro = false
 
       if source.is_a?(String)
@@ -891,20 +897,20 @@ module Gosu
     # Captured once from the source surface; subsequent draws don't
     # affect the returned string.
     def to_blob
-      @_rgba_blob || ("\0".b * (@width.to_i * @height.to_i * 4))
+      @_pixels ? @_pixels.get_string : ("\0".b * (@width.to_i * @height.to_i * 4))
     end
 
     # Set by Gosu.render for a `retro: true` target; read by _ensure_texture.
     attr_writer :_retro
     def save(_path); end
     # Overwrites part of this image with `source`, as Gosu's Image#insert
-    # does, clipping a source that hangs over an edge. The pixel blob is
+    # does, clipping a source that hangs over an edge. The pixel buffer is
     # this image's truth and the texture is derived from it, so the texture
     # is dropped here and rebuilt from the new pixels on the next draw.
     def insert(source, x, y)
-      blob = @_rgba_blob
-      pixels, src_w, src_h = Image._pixels_of(source)
-      return self if blob.nil? || pixels.nil? || src_w <= 0 || src_h <= 0
+      dst = @_pixels
+      src_buf, src_w, src_h = Image._pixels_of(source)
+      return self if dst.nil? || src_buf.nil? || src_w <= 0 || src_h <= 0
 
       x = x.to_i
       y = y.to_i
@@ -917,30 +923,37 @@ module Gosu
       bottom = [src_h, dst_h - y].min
       return self if left >= right || top >= bottom
 
-      # Both are pixel buffers, so splice them by byte: String#[]= counts in
-      # characters, which is the wrong unit here.
-      blob = blob.force_encoding(Encoding::BINARY)
+      # One native memcpy per row, buffer to buffer.
       row_bytes = (right - left) * 4
       (top...bottom).each do |row|
         src_off = (row * src_w + left) * 4
         dst_off = ((y + row) * dst_w + (x + left)) * 4
-        blob.bytesplice(dst_off, row_bytes, pixels.byteslice(src_off, row_bytes))
+        dst.copy(src_buf, dst_off, row_bytes, src_off)
       end
-      _rebuild_from_blob(blob)
+      _destroy_texture
       self
     end
 
-    # The (pixels, width, height) of an Image or of anything shaped like
-    # `Image::BlobHelper`, the two things Gosu's #insert accepts.
+    # The (pixel IO::Buffer, width, height) of an Image or of anything
+    # shaped like `Image::BlobHelper`, the two things Gosu's #insert
+    # accepts. An Image's own buffer is handed over directly (no copy);
+    # a blob-shaped source is wrapped in a read-only String view.
     def self._pixels_of(source)
       if source.is_a?(Image)
-        [source.to_blob.b, source.width.to_i, source.height.to_i]
+        [source._pixel_buffer, source.width.to_i, source.height.to_i]
       elsif source.respond_to?(:to_blob) && source.respond_to?(:columns) &&
             source.respond_to?(:rows)
-        [source.to_blob.to_s.b, source.columns.to_i, source.rows.to_i]
+        [GcBuffer.for(source.to_blob.to_s.b),
+         source.columns.to_i, source.rows.to_i]
       else
         [nil, 0, 0]
       end
+    end
+
+    # Internal: this image's backing pixel buffer (IO::Buffer, or nil for
+    # an empty image). Exposed for Image#insert's zero-copy source path.
+    def _pixel_buffer
+      @_pixels
     end
     def subimage(_x, _y, _w, _h); Image.new; end
     def gl_tex_info; nil; end
@@ -960,65 +973,37 @@ module Gosu
     public
 
     # Adopt an already-loaded SDL surface. Used by `Image.from_text` to
-    # feed a TTF-rendered surface into a fresh Image instance. Also
-    # extracts an RGBA snapshot for `#to_blob` before the surface is
-    # eventually uploaded to a texture (and freed).
+    # feed a TTF-rendered surface into a fresh Image instance. The pixels
+    # are copied out into the image's own IO::Buffer and the surface is
+    # freed here — nothing native outlives this call.
     def _init_from_surface(surface)
-      @width  = @columns = surface.get_int32(SDL2::SURFACE_W_OFFSET)
-      @height = @rows    = surface.get_int32(SDL2::SURFACE_H_OFFSET)
-      @_rgba_blob = _surface_to_rgba(surface, @width, @height)
-      @_pending_surface  = surface  # converted to texture on first draw
-      @_texture = nil
-      @_renderer = nil
-      @_owns_texture = true
+      w = surface.get_int32(SDL2::SURFACE_W_OFFSET)
+      h = surface.get_int32(SDL2::SURFACE_H_OFFSET)
+      blob = _surface_to_rgba(surface, w, h)
+      SDL2.free_surface(surface)
+      _init_from_blob(blob, w, h)
     end
 
-    # Build a surface from raw RGBA bytes (Gosu blob layout: 4 bytes
-    # per pixel in memory order R, G, B, A).
+    # Seed the image from raw RGBA bytes (Gosu blob layout: 4 bytes per
+    # pixel in memory order R, G, B, A). The bytes live in an IO::Buffer —
+    # GC-owned memory the collector both reclaims and counts as pressure —
+    # not in an SDL surface: a texture is built from the buffer on demand
+    # in _ensure_texture, so an image that is never drawn allocates no
+    # native memory at all.
     def _init_from_blob(blob, w, h)
       needed = w * h * 4
       if blob.bytesize < needed
         raise ArgumentError,
               "blob too small: got #{blob.bytesize} bytes, need #{needed}"
       end
-      surface = SDL2.create_rgb_surface_with_format(
-        0, w, h, 32, SDL2::PIXELFORMAT_ABGR8888)
-      if surface.null?
-        raise RuntimeError,
-              "SDL_CreateRGBSurfaceWithFormat failed: #{SDL2.get_error}"
-      end
-      pitch      = surface.get_int32(SDL2::SURFACE_PITCH_OFFSET)
-      pixels_ptr = surface.get_pointer(SDL2::SURFACE_PIXELS_OFFSET)
-      row_bytes  = w * 4
-      SDL2.lock_surface(surface)
-      if pitch == row_bytes
-        pixels_ptr.put_bytes(0, blob, 0, needed)
-      else
-        h.times do |y|
-          pixels_ptr.put_bytes(y * pitch, blob, y * row_bytes, row_bytes)
-        end
-      end
-      SDL2.unlock_surface(surface)
+      pixels = GcBuffer.new(needed)
+      pixels.set_string(blob, 0, needed, 0)
       @width  = @columns = w
       @height = @rows    = h
-      # Blob is already in RGBA; reuse it directly for to_blob.
-      @_rgba_blob        = blob.byteslice(0, needed).dup
-      @_pending_surface  = surface
+      @_pixels = pixels
       @_texture = nil
       @_renderer = nil
       @_owns_texture = true
-    end
-
-    # Re-seed the surface from pixels that changed under us, releasing what
-    # the old ones own first: _init_from_blob overwrites both handles
-    # without freeing them, and #insert runs per frame.
-    def _rebuild_from_blob(blob)
-      if @_pending_surface && !@_pending_surface.null?
-        SDL2.free_surface(@_pending_surface)
-        @_pending_surface = nil
-      end
-      _destroy_texture
-      _init_from_blob(blob, @width.to_i, @height.to_i)
     end
 
     # Reset instance state used by allocate + _init_from_blob (bypassing
@@ -1027,7 +1012,7 @@ module Gosu
       @_texture = nil
       @_renderer = nil
       @_owns_texture = true
-      @_rgba_blob = nil
+      @_pixels = nil
       @_retro = false
     end
 
@@ -1069,15 +1054,22 @@ module Gosu
       return true if @_texture && @_renderer == ren
 
       _destroy_texture
-      surface = @_pending_surface
-      surface = nil unless surface && !surface.null?
+      w = @width.to_i
+      h = @height.to_i
+      addr = @_pixels && @_pixels.__address
+      return false unless addr && w > 0 && h > 0
 
-      if surface
+      # Zero-copy upload: wrap the buffer's memory in a non-owning surface
+      # (IO::Buffer#__address is stable for owned storage), build the
+      # texture from it, and free the wrapper — the texture holds its own
+      # copy of the pixels.
+      surface = SDL2.create_rgb_surface_with_format_from(
+        addr, w, h, 32, w * 4, SDL2::PIXELFORMAT_ABGR8888)
+      return false if surface.null?
+      begin
         @_texture = SDL2.create_texture_from_surface(ren, surface)
+      ensure
         SDL2.free_surface(surface)
-        @_pending_surface = nil
-      else
-        return false
       end
       if @_texture.null?
         @_texture = nil
@@ -1169,6 +1161,11 @@ module Gosu
       @_cache = {}
     end
 
+    # Upper bound on cached glyph-run textures per Font. 256 full-width
+    # strings are a few MB of texture memory; insertion order doubles as
+    # LRU-enough for the eviction in _texture_for.
+    FONT_CACHE_LIMIT = 256
+
     # draw_text(text, x, y, z = 0, scale_x = 1, scale_y = 1,
     #           color = WHITE, mode = :default)
     def draw_text(text, x, y, _z = 0, scale_x = 1.0, scale_y = 1.0,
@@ -1251,6 +1248,15 @@ module Gosu
       SDL2.free_surface(surface)
       return [nil, 0, 0] if tex.null?
       SDL2.set_texture_blend_mode(tex, 1)  # BLEND
+      # Ever-changing strings (a frame counter, a clock) would otherwise
+      # grow the cache — and its textures — without bound; evict the
+      # oldest entry past the cap. SDL_DestroyTexture flushes any batched
+      # render commands that still reference the texture, so evicting a
+      # texture drawn earlier this frame is safe.
+      if @_cache.size >= FONT_CACHE_LIMIT
+        _, (old_tex, _, _) = @_cache.shift
+        SDL2.destroy_texture(old_tex) if old_tex && !old_tex.null?
+      end
       @_cache[key] = [tex, w, h]
     end
 
