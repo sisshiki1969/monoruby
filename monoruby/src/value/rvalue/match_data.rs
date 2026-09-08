@@ -52,6 +52,12 @@ pub struct MatchDataInner {
     regex: Option<Regexp>,
     heystack: Value,
     matches: SmallVec<[Span; 2]>,
+    /// The String pattern of a substring search that produced this
+    /// match (`String#sub` / `#gsub` with a String pattern, which never
+    /// compile a Regexp). `regexp()` builds the escaped Regexp from it
+    /// on demand, so `$~.regexp` reads the same as after the regex path
+    /// without paying a compile on every match.
+    pattern: Option<Value>,
 }
 
 impl GC<RValue> for MatchDataInner {
@@ -60,6 +66,9 @@ impl GC<RValue> for MatchDataInner {
             re.mark(alloc);
         }
         self.heystack.mark(alloc);
+        if let Some(p) = &self.pattern {
+            p.mark(alloc);
+        }
     }
 }
 
@@ -98,6 +107,29 @@ impl MatchDataInner {
             regex: None,
             heystack: Self::snapshot(heystack, resolved),
             matches,
+            pattern: None,
+        }
+    }
+
+    /// Build from a single byte range of `heystack` — the whole-match
+    /// span of a String-pattern search (`String#sub` / `#gsub` with a
+    /// String pattern set `$~` without running the regex engine). Like
+    /// `from_captures_bytes`, `heystack` must be the exact String Value
+    /// the search ran over; the snapshot is a CoW substring of it.
+    /// `pattern` is the String searched for; see `regexp()`.
+    pub fn from_byte_span(heystack: Value, start: usize, end: usize, pattern: Value) -> Self {
+        let len = heystack.as_rstring_inner().as_bytes().len();
+        assert!(
+            len < u32::MAX as usize,
+            "match subject longer than 4GiB is not supported"
+        );
+        let mut matches = SmallVec::new();
+        matches.push(encode_span(Some((start, end))));
+        MatchDataInner {
+            regex: None,
+            heystack: string_substring(heystack, 0, len),
+            matches,
+            pattern: Some(pattern),
         }
     }
 
@@ -126,6 +158,7 @@ impl MatchDataInner {
             regex: None,
             heystack: string_substring(heystack, 0, len),
             matches,
+            pattern: None,
         }
     }
 
@@ -140,7 +173,15 @@ impl MatchDataInner {
     }
 
     pub fn regexp(&self) -> Option<Regexp> {
-        self.regex
+        if self.regex.is_some() {
+            return self.regex;
+        }
+        // A substring-search match: the Regexp CRuby would have
+        // attached is the escaped pattern, built here on demand.
+        let pattern = self.pattern?;
+        let text = pattern.as_rstring_inner().check_utf8().ok()?;
+        let inner = RegexpInner::from_escaped(text).ok()?;
+        Value::regexp(inner).is_regex()
     }
 
     fn heystack_bytes(&self) -> &[u8] {

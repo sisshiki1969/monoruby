@@ -4783,6 +4783,28 @@ impl Executor {
         self.sp_match_regex = None;
     }
 
+    /// As [`save_capture_special_variables`], for a match found by a
+    /// plain substring search for the String `pattern`: the whole-match
+    /// byte range `start..end` of `haystack` (the String Value
+    /// searched), no groups.
+    pub(crate) fn save_capture_span(
+        &mut self,
+        haystack: Value,
+        start: usize,
+        end: usize,
+        pattern: Value,
+    ) {
+        let mut md = MatchDataInner::from_byte_span(haystack, start, end, pattern);
+        if let Some(regex_val) = self.sp_match_regex
+            && let Some(regex) = regex_val.is_regex()
+        {
+            md = md.with_regex(regex);
+        }
+        let md_val = RValue::new_match_data_from_inner(md).pack();
+        self.set_backref(md_val);
+        self.sp_match_regex = None;
+    }
+
     /// `$_` reader — the last line read by `gets` / `readline` in the
     /// current scope (frame-local, like `$~`). `nil` when unset.
     pub(crate) fn get_last_read_line(&self) -> Value {
