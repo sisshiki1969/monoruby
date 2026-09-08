@@ -585,6 +585,7 @@
 2a5b9f708b06a2c9976d7328b5e29c89	["<int>", "<int><int>", "<int>"]	module IntTos\n              refine Integer do\n                def t
 2a5cd0c05a4c867471eb9bdcd900f0a1	[[4, 5, 6], 8]	r = []\n        calls = 0\n        10.times { |i| r << i if (calls += 1; 
 2a7ebdf4fd301bbdfa3591753316bc4d	:OVERRIDDEN	class Float; def >=(o); :OVERRIDDEN; end; end; 3.0 >= 4.0
+2a8528b266533b52014c1733d4a93306	[1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", "x", "\\xFF", 2, "y", "y z", "x\\xFFy ", true, "\\x{A4A2}", 2, "\\x{A4A4}", 4, 1, "x"]	require "strscan"\n        src = "{\\"name\\": \\"K\\xC3\\xA4rnten\\", \\"n\\": 
 2a9067ffb78152f7b45306f4f629c67a	[1, 2, 3, 4, [5, 6]]	def f(x,y,a=42,b=55,*z,c,d)\n            [x,y,a,b,z]\n        end\n       
 2aa07b3eea4d7a2718e37df9f1ed496c	5	class C\n              private def f; 5; end\n            end\n\n      
 2abcd2daf8753cc241b16a4109e46098	[true, true, true]	a = Random.new_seed\n        b = Random.new_seed\n        [a.is_a?(Intege
@@ -1204,6 +1205,7 @@
 5ba2284b4a9919cb69fea58f727dadd6	"0146"	r, w = IO.pipe\n            Process.wait Process.spawn("sh -c umask"
 5ba8c95cd0e4d8e9673a6ec6aa3742b5	true	Random.srand(42)\n        a = Random.rand(100)\n        a.is_a?(Integer) 
 5bb79adb70db2492a63d985196173e00	["the consequence", "the cause"]	begin\n              begin\n                raise "the cause"\n       
+5bf1297d9ce6de52ee7f85caac0e7762	[["cd", "ab\\xC3\\xA4", "\\xE2\\x82\\xAC ef", 4, 6, [4, 6], "ASCII-8BIT", "ASCII-8BIT"], [3, 4], 10, 12, nil, true, true, true, false, true, 4, 10, nil, nil, nil, 10, 6, [6, 7], 10, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, nil, ["a", nil, ["a", nil], ["a", nil]], "cd!", 8, "ASCII-8BIT", [1, 3]]	t = ->(&blk) { begin; blk.call; rescue => e; e.class; end }\n        b =
 5bf6ebae296f44c8abb3c8fafc8a29d1	11	def f; a=5; b=6; return a+b; end; f
 5c16d0b3014ac8f0fad144e5e1eec769	"[1, 2]3{b: 5}"	class C\n          def foo(*x, a:100, **y)\n            x.inspect + a.ins
 5c34dd38baaa6a3e378ec2dea3176199	"あabcあ"	"abc".center(5, "あ")
@@ -2722,6 +2724,7 @@ cd6ec7b17b336346c11d027de22134a3	"ModuleSpecs4::Mod4::N"	module ModuleSpecs4; en
 cdd817bbe04dcccd5789be10d0c9e391	true	module MBSpec2; end\n            name = "Wideあmod"\n            MBSpe
 cde7486a8ec494a41cd937151aeb8979	["global", false]	Thread.abort_on_exception = true\n            t = Thread.new { sleep
 cde8be92d24d46ac492d28d94cf6baa4	false	Float::NAN > (1 << 100)
+cdefdffb64f846e8ba86fbcd597f7112	[["cd", "ab\\xC3\\xA4", "\\xE2\\x82\\xAC ef", 4, 6, [4, 6], "ASCII-8BIT", "ASCII-8BIT"], [3, 4], 10, 12, nil, true, true, true, false, true, 4, 10, nil, nil, nil, 10, 6, nil, nil, nil, 10, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, nil, ["a", nil, ["a", nil], ["a", nil]], "cd!", 8, "ASCII-8BIT", [1, 3]]	t = ->(&blk) { begin; blk.call; rescue => e; e.class; end }\n        b =
 cdfb00531284d4111c26a83cd032ad5a	["iberico", true, true, "gouda", "stilton"]	module MM\n          class C\n            class << self\n              cla
 ce3ab0576ab0634aa202676d23eff78c	[2000, true]	parents = Array.new(2000) { [] }\n            5.times { GC.start }\n 
 ce3cb44e401aaa8cd3345ff6d95183b6	12	class Integer; alias __orig :*; def *(o); __orig(o); end; end; 3 * 4
@@ -2750,6 +2753,7 @@ cfaf7efe92a4e7e016bf9da03af47c5a	[true, "m"]	bytes = Marshal.dump(Enumerable)\n 
 cfd1776d77256768f5ae301400965afe	["No such file or directory - no-such-cmd-xyzzy", 127]	begin\n              Process.spawn("no-such-cmd-xyzzy")\n            
 cffe2bea88b632377cf81196a0f5adbc	:OVERRIDDEN	class Integer; def %(o); :OVERRIDDEN; end; end; 3 % 4
 d005def98ec838cc7d6f37a7bdf0aaa0	[1, 2, 42, 12]	def f(x,y,z=42,w=12)\n            [x,y,z,w]\n        end\n        \n\n      
+d00758f23a67ffb31d511123384dc457	[1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", "x", "\\xFF", 2, "y", "y z", "x\\xFFy ", true, "\\x{A4A2}", 2, "\\x{A4A4}", 4, 1, "x"]	require "strscan"\n        src = '{"name": "Kärnten", "n": 12, "s": "v€x
 d00a59254916621fa57745491676e04c	[true, false]	m = Module.new\n            m.freeze\n            ok = false\n        
 d01f7af924363a6dde43e88de3de59d1	nil	"hello".byteindex("x")
 d02239e9ea6a9ec41f97d63367a30a78	52230	class Loc\n          attr_reader :a, :b\n          def initialize(a, b) =
@@ -2805,6 +2809,7 @@ d4217108da72ed932f312a232db996af	["method", nil, "method", "method", nil, nil]	m
 d4340baf53f6574d84b54cdb783df9b8	2	$x = 0\n            begin\n              $x += 1\n              raise 
 d4349d852cf60f39c3e6adcdc9ab0313	[:bar, [{a: 1, b: 2}]]	class Foo\n              def method_missing(name, *args)\n           
 d4446ffb96e085f7f76798c18cf331c5	:OVERRIDDEN	class Integer; def >=(o); :OVERRIDDEN; end; end; 3 >= 4
+d46f65fc72a2eb122613c949a9c2ac03	[["cd", "ab\\xC3\\xA4", "\\xE2\\x82\\xAC ef", 4, 6, [4, 6], "ASCII-8BIT", "ASCII-8BIT"], [3, 4], 10, 12, nil, true, true, true, false, true, 4, 10, nil, nil, nil, 10, 6, nil, nil, nil, 10, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, nil, ["a", nil, ["a", nil], ["a", nil]], "cd!", 8, "ASCII-8BIT", [1, 3], nil, nil, nil, "K\\xC3\\xA4rnten", "ASCII-8BIT", false, nil, nil, "K\\xC3\\xA4RNten", "K\\xC3\\xA4RNten", Encoding::CompatibilityError]	t = ->(&blk) { begin; blk.call; rescue => e; e.class; end }\n        b =
 d4718d9b7f7a7afcf1379197ca836a9a	[IO, true, [ArgumentError, "wrong number of arguments (given 3, expected 1..2)"], [ArgumentError, "wrong number of arguments (given 3, expected 1..2)"], [ArgumentError, "mode specified twice"], [ArgumentError, "invalid access mode "], [Errno::EINVAL, "Invalid argument"], [TypeError, "no implicit conversion of String into Integer"], [TypeError, "no implicit conversion of IO into Integer"], Errno::EBADF, :mode_kw, :int_mode, :toint_kw, ["UTF-8", "ISO-8859-1"], ["UTF-8", "ISO-8859-1"], ["UTF-8", "nil"], "nil", [ArgumentError, "encoding specified twice"], [true, "ASCII-8BIT"], [true, "ASCII-8BIT"], "ISO-8859-1", "ISO-8859-1", [ArgumentError, "binmode specified twice"], [ArgumentError, "both textmode and binmode specified"], [ArgumentError, "both textmode and binmode specified"], [ArgumentError, "both textmode and binmode specified"], false, 3, false, true, IO, :blockval, true, [ArgumentError, "boom"]]	require "tempfile"\n            t = Tempfile.new("mrb_ionew")\n      
 d48868180accf425c1cce5bbb37022fc	:OVERRIDDEN	class FalseClass; def ==(o); :OVERRIDDEN; end; end; false == false
 d49c8d4441da431d63717840fad0ac31	[0.5, 1.0, 3]	def leaf\n          a = [1, 2]\n          a.each { |x| a }\n          a.si
@@ -2835,6 +2840,7 @@ d6b1e91ca6f365857969484299ed0f51	nil	/(?<z>foo)/ =~ "nope"
 d6b954fc5289ea6d95ff086bc292725e	[1, 2, 3]	class A < Array; end\nA[1, 2, 3]
 d6bfe4296b93f2e640133c89a4ab8e47	false	def g; proc{ 1 }; end; g == g
 d6c0eb29e576b66ef1234e2d00a6f0b7	[[1, 0], [2, 1]]	r = []; [1, 2].each.with_index(nil) { |v, i| r << [v, i] }; r
+d6f0bdbc406695c7ec64d5b4ebc4b2ea	[["cd", "ab\\xC3\\xA4", "\\xE2\\x82\\xAC ef", 4, 6, [4, 6], "ASCII-8BIT", "ASCII-8BIT"], [3, 4], 10, 12, nil, true, true, true, false, true, 4, 10, nil, nil, nil, 10, 6, [6, 7], 10, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, nil, ["a", nil, ["a", nil], ["a", nil]], "cd!", 8, "ASCII-8BIT", [1, 3]]	t = ->(&blk) { begin; blk.call; rescue => e; e.class; end }\n        b =
 d6fd88af713f62b2a7bf0032d40dad05	6	def inner(&)\n          yield 1, 2, 3\n        end\n\n        def middle(&)
 d705cb7de3a9fef3b407db97ac6df6e0	14402200	add = (0...9000).map { |k| "a = a + #{k % 7 + 1}" }.join("\\n")\n        
 d70bea4dbbc6846f998b44f536138c16	[60, true, true, "AAA", "A"]	def bapp(s, n)\n          i = 0\n          while i < n\n            s << 6
@@ -3217,6 +3223,7 @@ f40ce886b72f5217bc31de73015cbb2d	[true, true]	# 'M' + length(6 ⇒ marshal_int 0
 f40d66b495e8cfc92317f5249b69ee31	[4, 8, 73, 34, 6, 97, 6, 58, 13, 101, 110, 99, 111, 100, 105, 110, 103, 34, 11, 69, 85, 67, 45, 74, 80]	Marshal.dump("a".encode("EUC-JP")).bytes
 f4101d236b633fea5a8e14b9620d27bb	false	c = Class.new do\n              def bar; end\n              undef :"#
 f417b46ed1c24ffbbc6d828e0035f712	"aXXde"	class C; def to_str; "bc"; end; end; o = C.new\n"abcde".sub(o, "XX")
+f41c9ca8f62693d883ed93cddc8ce650	[1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", "x", "\\xFF", 2, "y", "y z", "x\\xFFy ", true, 2, 2, 2, 4, 1, "x"]	require "strscan"\n        src = "{\\"name\\": \\"K\\xC3\\xA4rnten\\", \\"n\\": 
 f42d6a1e9248b98021fa9c9e4500834f	[107000, TypeError]	class Io\n              def initialize(v) = (@v = v)\n              d
 f4581c269c9086996dbf942d463dfa96	:ok	obj = Object.new\n            def obj.inspect; self; end\n           
 f45a984e81852dd82ce24d6cb475566a	[[[], {}], [[1, 2], {}], [[1], {x: 3}], [[5], {y: 6}], [[], {}], [7, {}], [7, {z: 8}]]	class K; def initialize(*a, **kw); @a = a; @kw = kw; end\n          

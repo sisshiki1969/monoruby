@@ -1098,7 +1098,27 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // **character** index of the match start (CRuby returns a char
     // offset, not a byte offset, so multibyte subjects match CRuby).
     if other.is_regex().is_some() {
-        let given = self_val.as_rstring_inner().regex_view()?;
+        let s = self_val.as_rstring_inner();
+        // Native byte match for non-UTF-8 subjects with an Onigmo codec
+        // (see `String#match`); the result is the character index of the
+        // match start.
+        if s.code_range() != CodeRange::SevenBit
+            && let Some(native_enc) = RegexpInner::onigmo_encoding_for(s.encoding())
+        {
+            let regex = other.coerce_to_regexp_or_string(vm, globals)?;
+            super::regexp::check_match_encoding(&globals.store, &regex, s.encoding(), false)?;
+            vm.set_match_regex(regex.as_val());
+            let res = match regex.captures_bytes_from_pos(s.as_bytes(), self_val, native_enc, 0, vm)?
+            {
+                Some(captures) => {
+                    let start = captures.pos(0).map_or(0, |(b, _)| b);
+                    Value::integer(super::regexp::char_index_of_byte(s, start) as i64)
+                }
+                None => Value::nil(),
+            };
+            return Ok(res);
+        }
+        let given = s.regex_view()?;
         let given: &str = &given;
         // Enable zero-copy $~ haystack snapshots (CoW), which also
         // propagate the subject's encoding to $&/$`/$'/$1..$N.
@@ -3208,9 +3228,51 @@ fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         );
     }
     let self_ = lfp.self_val();
+    if native_gsub_block_miss(vm, globals, self_, lfp)? {
+        let s = self_.as_rstring_inner();
+        return Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
+            s.as_bytes(),
+            s.encoding(),
+        )));
+    }
     let (mut res, _) = gsub_main(vm, globals, self_, lfp)?;
     apply_template_encoding(&mut res, self_);
     Ok(Value::string_from_inner(res))
+}
+
+/// The block form of `gsub` / `gsub!` on a subject in a non-UTF-8
+/// encoding Onigmo has a native codec for (BINARY with 8-bit content,
+/// EUC-JP, ...) whose pattern does not match at all — the common shape
+/// of a normalizing `gsub!(/escapes/) { … }` over parsed tokens: decided
+/// on the raw bytes, so a miss costs no surrogate view of the subject
+/// (which the replace machinery builds, matches, and decodes back).
+/// `true` means "no match, the result is the subject unchanged"; `$~` is
+/// cleared as the replace machinery would.
+fn native_gsub_block_miss(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    lfp: Lfp,
+) -> Result<bool> {
+    if lfp.try_arg(1).is_some() || lfp.block().is_none() {
+        return Ok(false);
+    }
+    let Some(re) = lfp.arg(0).is_regex() else {
+        return Ok(false);
+    };
+    let s = self_val.as_rstring_inner();
+    if !s.needs_byte_mapping() {
+        return Ok(false);
+    }
+    let Some(enc) = RegexpInner::onigmo_encoding_for(s.encoding()) else {
+        return Ok(false);
+    };
+    super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
+    if re.match_pred_bytes(s.as_bytes(), enc, 0)? {
+        return Ok(false);
+    }
+    vm.clear_capture_special_variables();
+    Ok(true)
 }
 
 ///
@@ -3233,6 +3295,9 @@ fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
     }
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
+    if native_gsub_block_miss(vm, globals, self_, lfp)? {
+        return Ok(Value::nil());
+    }
     let (mut res, changed) = gsub_main(vm, globals, self_, lfp)?;
     apply_template_encoding(&mut res, self_);
     self_.replace_with_inner(res);
@@ -3465,6 +3530,39 @@ fn string_match(
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
     let self_ = lfp.self_val();
     let s = self_.as_rstring_inner();
+    // A subject in a non-UTF-8 encoding Onigmo has a native codec for
+    // (BINARY with 8-bit content, EUC-JP, Shift_JIS, ...) is matched on
+    // its raw bytes, so the MatchData's strings and byte offsets are the
+    // subject's own — the same path `Regexp#match` takes.
+    if s.code_range() != CodeRange::SevenBit
+        && let Some(native_enc) = RegexpInner::onigmo_encoding_for(s.encoding())
+    {
+        super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
+        let byte_pos = match raw_pos {
+            None | Some(0) => 0,
+            Some(mut pos) => {
+                if pos < 0 {
+                    pos += s.char_length() as i64;
+                    if pos < 0 {
+                        return Ok(Value::nil());
+                    }
+                }
+                // Past-the-end positions clamp to the end (see below).
+                super::regexp::byte_offset_of_char(s, pos as usize)
+            }
+        };
+        vm.set_match_regex(re.as_val());
+        let bytes = s.as_bytes();
+        let md = match re.captures_bytes_from_pos(bytes, self_, native_enc, byte_pos, vm)? {
+            Some(captures) => Value::new_matchdata_bytes(&captures, self_, re),
+            None => return Ok(Value::nil()),
+        };
+        vm.set_backref(md);
+        return match lfp.block() {
+            Some(bh) => vm.invoke_block_once(globals, bh, &[md]),
+            None => Ok(md),
+        };
+    }
     let given = s.regex_view()?;
     let byte_pos = match raw_pos {
         None | Some(0) => 0,
@@ -3586,19 +3684,39 @@ fn string_strscan_match(
             STRING_CLASS,
         ));
     };
-    // In place only when the engine view *is* the byte buffer: ASCII-only
-    // content under any encoding, or valid UTF-8. Anything else takes the
-    // Ruby-side `String#match` fallback, which knows how to view those.
-    if !(s.is_ascii_only() || (s.encoding() == Encoding::Utf8 && s.is_valid_encoding())) {
+    // In place when the engine view *is* the byte buffer: ASCII-only
+    // content under any encoding, or valid UTF-8. A subject in another
+    // encoding Onigmo has a native codec for (BINARY with 8-bit content,
+    // EUC-JP, Shift_JIS, ...) is matched in place on its raw bytes too.
+    // Anything else takes the Ruby-side `String#match` fallback, which
+    // knows how to view those.
+    let utf8_view = s.is_ascii_only() || (s.encoding() == Encoding::Utf8 && s.is_valid_encoding());
+    let native_enc = if utf8_view {
+        None
+    } else if let Some(enc) = RegexpInner::onigmo_encoding_for(s.encoding()) {
+        super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
+        Some(enc)
+    } else {
         return Ok(Value::bool(false));
-    }
-    let given = s.check_utf8()?;
-    let Some(sub) = given.get(byte_pos..) else {
-        return Ok(Value::nil());
     };
+    let bytes = s.as_bytes();
+    if byte_pos > bytes.len() || (utf8_view && !s.check_utf8()?.is_char_boundary(byte_pos)) {
+        return Ok(Value::nil());
+    }
+    let sub = &bytes[byte_pos..];
     STRSCAN_REGION.with(|region| {
         let mut region = region.borrow_mut();
-        if !re.strscan_match(sub, anchored, &mut region)? {
+        let hit = match native_enc {
+            // SAFETY: `utf8_view` proved the buffer valid UTF-8 (or
+            // ASCII-only) and `byte_pos` a char boundary.
+            None => re.strscan_match(
+                unsafe { std::str::from_utf8_unchecked(sub) },
+                anchored,
+                &mut region,
+            )?,
+            Some(enc) => re.strscan_match_bytes(sub, anchored, enc, &mut region)?,
+        };
+        if !hit {
             return Ok(Value::nil());
         }
         let n = region.len();
@@ -3648,6 +3766,22 @@ fn string_match_(
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
     let self_ = lfp.self_val();
     let s = self_.as_rstring_inner();
+    // Native byte match for non-UTF-8 subjects with an Onigmo codec (see
+    // `String#match`).
+    if s.code_range() != CodeRange::SevenBit
+        && let Some(native_enc) = RegexpInner::onigmo_encoding_for(s.encoding())
+    {
+        super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
+        let byte_pos = match raw_pos {
+            None | Some(0) => 0,
+            Some(pos) => match conv_index(pos, s.char_length()) {
+                Some(cp) => super::regexp::byte_offset_of_char(s, cp),
+                None => return Ok(Value::bool(false)),
+            },
+        };
+        let res = re.match_pred_bytes(s.as_bytes(), native_enc, byte_pos)?;
+        return Ok(Value::bool(res));
+    }
     let given = s.regex_view()?;
     let char_pos = match raw_pos {
         None | Some(0) => 0,

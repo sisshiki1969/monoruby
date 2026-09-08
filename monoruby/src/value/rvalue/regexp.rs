@@ -76,6 +76,15 @@ pub struct RegexpInner {
     /// methods that need the source (`#match`, etc.) are called on
     /// the unallocated form.
     initialized: bool,
+    /// The source bytes compiled under a native (non-UTF-8) Onigmo codec
+    /// (`native_enc`) for byte matching against a subject in that
+    /// encoding, cached per regexp so the per-match lookup is a pointer
+    /// compare rather than a hash of the source (the global
+    /// `NATIVE_CACHE` still dedups across regexps). One slot, filled by
+    /// the first native encoding met (a regexp rarely meets two), sized
+    /// to keep the payload within the RValue cell.
+    native: std::cell::OnceCell<Arc<Regex>>,
+    native_enc: std::cell::Cell<OnigmoEncoding>,
 }
 
 impl PartialEq for RegexpInner {
@@ -713,6 +722,8 @@ impl RegexpInner {
                     declared_encoding,
                     fixed_encoding,
                     initialized: true,
+                    native: Default::default(),
+                    native_enc: std::cell::Cell::new(OnigmoEncoding::UTF8),
                 })
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
@@ -728,6 +739,8 @@ impl RegexpInner {
                             declared_encoding,
                             fixed_encoding,
                             initialized: true,
+                            native: Default::default(),
+                    native_enc: std::cell::Cell::new(OnigmoEncoding::UTF8),
                         })
                     }
                     Err(err) => {
@@ -794,6 +807,11 @@ impl RegexpInner {
     pub fn onigmo_encoding_for(enc: crate::value::Encoding) -> Option<OnigmoEncoding> {
         use crate::value::Encoding as E;
         Some(match enc {
+            // BINARY: one char per byte, matched on the raw bytes. The
+            // `\xNN` escapes of a `/n` pattern denote those bytes, and an
+            // ASCII-only pattern is byte-transparent; a pattern pinned to
+            // another encoding is refused by `check_match_encoding` first.
+            E::Ascii8 => OnigmoEncoding::ASCII,
             E::EucJp => OnigmoEncoding::EUC_JP,
             // Ruby treats Shift_JIS / Windows-31J as one codec family;
             // Windows_31J is the superset CRuby actually pins for /s.
@@ -843,19 +861,30 @@ impl RegexpInner {
     fn native_regex(&self, enc: OnigmoEncoding) -> Result<Arc<Regex>> {
         static NATIVE_CACHE: LazyLock<RwLock<HashMap<(Vec<u8>, u32, OnigmoEncoding), Arc<Regex>>>> =
             LazyLock::new(|| RwLock::new(HashMap::default()));
-        let option = self.regex.option();
-        let key = (self.source.to_vec(), option, enc);
-        if let Some(re) = NATIVE_CACHE.read().unwrap().get(&key) {
+        if let Some(re) = self.native.get()
+            && self.native_enc.get() == enc
+        {
             return Ok(re.clone());
         }
-        match Regex::new_bytes_with_encoding(&self.source, option, enc) {
-            Ok(re) => {
-                let re = Arc::new(re);
-                NATIVE_CACHE.write().unwrap().insert(key, re.clone());
-                Ok(re)
+        let option = self.regex.option();
+        let key = (self.source.to_vec(), option, enc);
+        let re = if let Some(re) = NATIVE_CACHE.read().unwrap().get(&key) {
+            re.clone()
+        } else {
+            match Regex::new_bytes_with_encoding(&self.source, option, enc) {
+                Ok(re) => {
+                    let re = Arc::new(re);
+                    NATIVE_CACHE.write().unwrap().insert(key, re.clone());
+                    re
+                }
+                Err(err) => return Err(MonorubyErr::regexerr(err.to_string())),
             }
-            Err(err) => Err(MonorubyErr::regexerr(err.to_string())),
+        };
+        if self.native.get().is_none() {
+            self.native_enc.set(enc);
+            let _ = self.native.set(re.clone());
         }
+        Ok(re)
     }
 
     /// Byte-oriented match against a non-UTF-8 subject. `given` must
@@ -1459,6 +1488,44 @@ impl RegexpInner {
         };
         r.map(|r| r.is_some())
             .map_err(|err| MonorubyErr::regexerr(format!("Capture failed. {:?}", err)))
+    }
+
+    /// [`strscan_match`](Self::strscan_match) for a non-UTF-8 subject
+    /// with a native Onigmo codec (`enc`, from `onigmo_encoding_for`):
+    /// `sub` is the raw byte suffix at the scan position, matched by the
+    /// source bytes compiled under that codec, so the registers are raw
+    /// byte offsets into `sub`.
+    pub(crate) fn strscan_match_bytes(
+        &self,
+        sub: &[u8],
+        anchored: bool,
+        enc: OnigmoEncoding,
+        region: &mut onigmo_regex::Region,
+    ) -> Result<bool> {
+        let native = self.native_regex(enc)?;
+        let r = if anchored {
+            native.match_at_with_region(sub, 0, region)
+        } else {
+            native.search_with_region(sub, 0, region)
+        };
+        r.map(|r| r.is_some())
+            .map_err(|err| MonorubyErr::regexerr(format!("Capture failed. {:?}", err)))
+    }
+
+    /// Byte-oriented twin of [`match_pred`](Self::match_pred): whether the
+    /// source bytes compiled under `enc` match `bytes` at or after
+    /// `byte_pos`. Does NOT set `$~`.
+    pub(crate) fn match_pred_bytes(
+        &self,
+        bytes: &[u8],
+        enc: OnigmoEncoding,
+        byte_pos: usize,
+    ) -> Result<bool> {
+        let native = self.native_regex(enc)?;
+        match native.captures_bytes_from_pos(bytes, byte_pos) {
+            Ok(res) => Ok(res.is_some()),
+            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
+        }
     }
 
     /// Like `match_one` but returns only a boolean and does NOT set `$~`.
