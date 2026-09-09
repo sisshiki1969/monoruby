@@ -345,6 +345,7 @@ impl Executor {
         globals: &mut Globals,
         current_func: FuncId,
     ) -> ClassId {
+        let current_func = globals.store.lexical_owner(current_func);
         let frame_func = self.cfp().lfp().func_id();
         if frame_func != current_func {
             let fc = frame_func.lexical_class(globals);
@@ -367,6 +368,9 @@ impl Executor {
         name: IdentId,
         current_func: FuncId,
     ) -> Result<Option<Value>> {
+        // A `define_method` body reports itself as the method; its lexical
+        // scope is its mother's.
+        let current_func = globals.store.lexical_owner(current_func);
         // Search the current frame's lexical_context first (covers string
         // eval where the eval's ISeqInfo has the receiver's class set).
         let frame_func = self.cfp().lfp().func_id();
@@ -593,7 +597,7 @@ impl Executor {
         } = globals.store[site_id].clone();
         // SAFETY: `base` slot was populated by the bytecode compiler.
         let base = base.map(|base| unsafe { self.get_slot(base) }.unwrap());
-        let current_func = self.method_func_id();
+        let current_func = globals.store.lexical_owner(self.method_func_id());
         let parent = if let Some(base) = base {
             match base.is_class_or_module() {
                 Some(m) => m.id(),

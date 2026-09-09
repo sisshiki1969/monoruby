@@ -111,6 +111,15 @@ pub(super) struct SpecializeInfo {
     /// speculation was armed, so its body addresses that frame's FP
     /// save/spill slots and must never be recompiled standalone (#1140).
     pub(super) speculated: bool,
+    /// D1: the body's forwarding consumer routed its `...` rest straight
+    /// from the caller's argument window, and the *caller-side*
+    /// `set_arguments` was emitted without the rest `Array`. The body is
+    /// only correct paired with that caller code: a standalone recompile
+    /// would read the rest local (left `nil` by the caller) as the
+    /// forwarded arguments — `Class#new` then calls `initialize` with
+    /// nothing. Such a body recompiles by rebuilding the root unit, like
+    /// a speculated one.
+    pub(super) deferred_rest: bool,
 }
 
 ///

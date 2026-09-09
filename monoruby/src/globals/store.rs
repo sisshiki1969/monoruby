@@ -1335,9 +1335,47 @@ impl Store {
     /// parameter because `Globals::class_version()` borrows the CODEGEN
     /// RefCell, which is unavailable when this is called from JIT
     /// compilation (use `JitContext::class_version()` there).
+    /// The function whose `lexical_context` governs unqualified constant
+    /// lookup from `fid`.
+    ///
+    /// A block carries no lexical context of its own (it is written inside
+    /// its mother and inherits that scope), and `Lfp::outermost` stops at a
+    /// `define_method` body because that frame *is* the method boundary —
+    /// so a bmethod's `method_func_id` is the block itself. Climb to the
+    /// nearest mother that owns a lexical context, so `K` inside
+    /// `define_method(:m) { K }` resolves through the enclosing
+    /// `module`/`class` nesting exactly as in a plain block.
+    pub(crate) fn lexical_owner(&self, fid: FuncId) -> FuncId {
+        let mut fid = fid;
+        while let Some(iseq) = self[fid].is_iseq()
+            && self[iseq].lexical_context.is_empty()
+        {
+            let mother = self[self[iseq].mother().0].func_id();
+            if mother == fid {
+                break;
+            }
+            fid = mother;
+        }
+        fid
+    }
+
     pub(crate) fn no_to_str(&self, class_id: ClassId, version: u32) -> bool {
         if self[class_id].no_to_str_at() == Some(version) {
             return true;
+        }
+        // The JIT hands over the abstract state's class, which may be one
+        // of the synthetic tags (no module to walk): BOOL stands for a
+        // slot that is `true` or `false`, BIGNUM for a heap Integer.
+        // Anything else without a module is unknown — answer "may have
+        // `to_str`" so the caller takes the generic path.
+        if class_id == BOOL_CLASS {
+            return self.no_to_str(TRUE_CLASS, version) && self.no_to_str(FALSE_CLASS, version);
+        }
+        if class_id == BIGNUM_CLASS {
+            return self.no_to_str(INTEGER_CLASS, version);
+        }
+        if self[class_id].try_get_module().is_none() {
+            return false;
         }
         // Resolve via the uncached ancestor walk rather than
         // `method_cache`: this runs at most once per class per

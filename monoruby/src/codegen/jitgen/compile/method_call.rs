@@ -2225,6 +2225,9 @@ impl<'a> JitContext<'a> {
             info: frame.asm_info,
             patch_point,
             speculated,
+            // The same condition under which the call site below elides
+            // the rest `Array` (`SpecializedCompileResult`).
+            deferred_rest: frame_deferred_rest && !frame_needs_rest_array,
         });
         // Propagate the deopt fact one level up: if this inlined
         // sub-iseq could deopt, the caller's compiled body also

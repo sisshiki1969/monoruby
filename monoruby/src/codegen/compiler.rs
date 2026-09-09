@@ -621,14 +621,17 @@ impl Codegen {
             self_class,
             patch_point,
             speculated_root,
+            deferred_rest,
+            owner,
             ..
         } = self.specialized_info[idx].clone();
         #[cfg(feature = "jit-log")]
         eprintln!(
-            "[JIT] recompile_specialized idx={idx} iseq={:?} ({:?}) speculated={}",
+            "[JIT] recompile_specialized idx={idx} iseq={:?} ({:?}) speculated={} deferred_rest={}",
             globals.store[iseq_id].name(),
             reason,
             speculated_root.is_some(),
+            deferred_rest,
         );
         #[cfg(feature = "jit-log")]
         crate::codegen::jit_stats::bump(match reason {
@@ -641,6 +644,13 @@ impl Codegen {
             _ => &crate::codegen::jit_stats::RECOMPILE_SPEC_OTHER,
         });
         if let Some(root) = speculated_root {
+            return self.recompile_speculated_root(globals, root, reason);
+        }
+        // D1: the body reads its forwarded arguments straight out of the
+        // caller's window and that caller emits no rest `Array`; a
+        // standalone recompile would bind `initialize` from the `nil`
+        // rest local. Rebuild the root unit, which re-pairs both sides.
+        if deferred_rest && let Some(root) = owner {
             return self.recompile_speculated_root(globals, root, reason);
         }
 
@@ -681,9 +691,15 @@ impl Codegen {
             self_class,
             patch_point,
             speculated_root,
+            deferred_rest,
+            owner,
             ..
         } = self.specialized_info[idx].clone();
         if let Some(root) = speculated_root {
+            return self.recompile_speculated_root(globals, root, reason);
+        }
+        // D1 (see the x86 twin): a caller-paired body rebuilds its root.
+        if deferred_rest && let Some(root) = owner {
             return self.recompile_speculated_root(globals, root, reason);
         }
         let entry = self.jit.label();

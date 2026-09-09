@@ -254,22 +254,36 @@ impl<'a> BytecodeGen<'a> {
         if let NodeKind::MulAssign(lhs, _) = &rhs.kind {
             self.is_assign_local(&lhs[0]);
         }
-        let dst = match use_mode {
-            UseMode2::Store(dst) => dst,
-            UseMode2::Push | UseMode2::NotUse | UseMode2::Ret => self.push().into(),
-        };
-        self.gen_store_expr(dst, lhs)?;
-        self.emit_condbr(dst, exit_pos, false, false);
-        self.gen_store_expr(dst, rhs)?;
-        self.apply_label(exit_pos);
         match use_mode {
-            UseMode2::NotUse => {
+            UseMode2::Store(dst) => {
+                // Evaluate into a temporary rather than straight into
+                // `dst`: in `x = a && b` the rhs may read `x`, and the
+                // truthy value of `a` must not be visible there
+                // (`name = MAPPING[name] && MAPPING[name][variant]`).
+                let tmp = self.push().into();
+                self.gen_store_expr(tmp, lhs)?;
+                self.emit_condbr(tmp, exit_pos, false, false);
+                self.gen_store_expr(tmp, rhs)?;
+                self.apply_label(exit_pos);
                 self.pop();
+                self.emit_mov(dst, tmp);
             }
-            UseMode2::Ret => {
-                self.emit_ret(None)?;
+            _ => {
+                let dst = self.push().into();
+                self.gen_store_expr(dst, lhs)?;
+                self.emit_condbr(dst, exit_pos, false, false);
+                self.gen_store_expr(dst, rhs)?;
+                self.apply_label(exit_pos);
+                match use_mode {
+                    UseMode2::NotUse => {
+                        self.pop();
+                    }
+                    UseMode2::Ret => {
+                        self.emit_ret(None)?;
+                    }
+                    _ => {}
+                }
             }
-            _ => {}
         }
         Ok(())
     }
