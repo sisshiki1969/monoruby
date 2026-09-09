@@ -181,6 +181,14 @@ module Psych
       end
 
       @pos += 1
+      # A quoted scalar whose closing quote is on a later line
+      # (`key:\n  "first line\n  second line"`).
+      if (stripped.start_with?('"') || stripped.start_with?("'")) &&
+         !quoted_string_terminated?(stripped, stripped.getbyte(0))
+        return resolve_scalar(consume_multiline_quoted(stripped))
+      end
+      # A plain multi-line scalar: contiguous continuation lines fold
+      # into one line, the line breaks becoming single spaces.
       parts = [stripped]
       while @pos < @lines.size
         nxt = @lines[@pos]
@@ -192,7 +200,7 @@ module Psych
         parts << nxt.strip
         @pos += 1
       end
-      resolve_scalar(parts.join("\n"))
+      resolve_scalar(parts.join(" "))
     end
 
     def block_mapping_line?(line)
@@ -592,8 +600,11 @@ module Psych
           end
           return inner
         end
-      when 0x27 # '...'  single-quoted
-        return str[1..-2] if str.end_with?("'") && str.size >= 2
+      when 0x27 # '...'  single-quoted (`''` is the escaped quote)
+        if str.end_with?("'") && str.size >= 2
+          inner = str[1..-2]
+          return inner.include?("''") ? inner.gsub("''", "'") : inner
+        end
       when 0x2A # '*'    alias
         return @anchors[str[1..-1]] if str.size > 1 && !str.include?(" ")
       when 0x7E # '~'

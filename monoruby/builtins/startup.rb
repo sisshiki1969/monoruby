@@ -20,6 +20,7 @@ require_relative 'warning'
 require_relative 'process'
 require_relative 'file'
 require_relative 'thread'
+require_relative 'ractor'
 require_relative 'boolean'
 require_relative 'marshal'
 require_relative 'gc'
@@ -163,6 +164,18 @@ if host_rubylibprefix && !host_rubylibprefix.empty? && ruby_api_version && !ruby
   # meaningful for the host case; leave the vendored value otherwise.
   RbConfig::CONFIG['ENABLE_SHARED']  = 'yes' if host_configured
 end
+
+# The Unicode version RbConfig reports is the one the *regexp engine's*
+# property tables were generated from (CRuby: Onigmo's enc/unicode). The
+# vendored rbconfig snapshot carries the host CRuby's value, but the Onigmo
+# monoruby bundles ships the Unicode 12.1 tables — it knows
+# `\p{Emoji_Presentation}` but not the later property aliases
+# (`\p{EPres}`, `\p{ExtPict}`, …). Report the bundled tables' version so
+# gems that pick "native" regexps by version (unicode-emoji,
+# unicode-display_width) fall back to their portable tables instead of
+# tripping over an unknown property name at load.
+RbConfig::CONFIG['UNICODE_VERSION'] = '12.1.0'
+RbConfig::CONFIG['UNICODE_EMOJI_VERSION'] = '12.1'
 
 # CRuby's default $LOAD_PATH ends with the "gem prelude" tail — the
 # site_ruby / vendor_ruby / rubylib directories derived from RbConfig,
