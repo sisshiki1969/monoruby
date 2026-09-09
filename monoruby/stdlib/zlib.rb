@@ -15,10 +15,15 @@
 #   produced by a real zlib (PNG image data, compressed text chunks)
 #   decode correctly.
 # - The streaming `Deflate.new` / `Inflate.new` objects, buffered: input
-#   accumulates and the whole stream is processed at `finish`.
+#   accumulates and the whole stream is processed at `finish`. The
+#   `window_bits` argument selects the framing as in zlib: positive for
+#   the zlib wrapper, negative for a raw deflate stream, `+16` for gzip
+#   and `+32` (inflate only) to auto-detect zlib/gzip.
+# - gzip framing (RFC 1952): `Zlib.gzip` / `Zlib.gunzip`, and the
+#   `GzipReader` / `GzipWriter` objects over an IO (header fields, CRC-32
+#   and length trailer checks, the line-oriented reader API).
 #
-# Not provided: gzip framing (`GzipReader` / `GzipWriter` fall back to a
-# plain file), preset dictionaries, and incremental output before
+# Not provided: preset dictionaries and incremental output before
 # `finish`.
 
 module Zlib
@@ -287,6 +292,7 @@ module Zlib
       level = __to_level(level)
       raise Zlib::StreamError, "stream error" if level < -1 || level > 9
       @level = level
+      @framing = Zlib.__framing_of(window_bits, false)
     end
 
     def deflate(string, flush = NO_FLUSH)
@@ -309,20 +315,33 @@ module Zlib
       level.to_int
     end
 
-    # RFC 1950 header, RFC 1951 stored blocks, Adler-32 trailer.
+    # RFC 1950 header, RFC 1951 stored blocks, Adler-32 trailer (or the
+    # bare blocks / the gzip frame, per `window_bits`).
     def __finish_stream
       data = @input
+      @output = case @framing
+                when :raw then Deflate.__raw_blocks(data)
+                when :gzip then Zlib.__gzip_frame(data, @level)
+                else
+                  out = "".b
+                  flevel = case @level
+                           when 0, 1 then 0
+                           when 2, 3, 4, 5 then 1
+                           when 7, 8, 9 then 3
+                           else 2
+                           end
+                  cmf = 0x78
+                  flg = flevel << 6
+                  flg += 31 - ((cmf << 8) | flg) % 31
+                  out << cmf.chr << flg.chr
+                  out << Deflate.__raw_blocks(data)
+                  out << [Zlib.adler32(data)].pack("N")
+                end
+    end
+
+    # The RFC 1951 payload: stored (uncompressed) blocks.
+    def self.__raw_blocks(data)
       out = "".b
-      flevel = case @level
-               when 0, 1 then 0
-               when 2, 3, 4, 5 then 1
-               when 7, 8, 9 then 3
-               else 2
-               end
-      cmf = 0x78
-      flg = flevel << 6
-      flg += 31 - ((cmf << 8) | flg) % 31
-      out << cmf.chr << flg.chr
       size = data.bytesize
       pos = 0
       loop do
@@ -337,8 +356,7 @@ module Zlib
         pos += len
         break if final
       end
-      out << [Zlib.adler32(data)].pack("N")
-      @output = out
+      out
     end
   end
 
@@ -354,11 +372,19 @@ module Zlib
 
     def initialize(window_bits = MAX_WBITS)
       super()
+      @framing = Zlib.__framing_of(window_bits, true)
     end
 
     def inflate(string = nil)
       self << string unless string.nil?
       "".b
+    end
+
+    # Decode the RFC 1951 blocks starting at byte `pos` of `data`;
+    # returns `[decoded, position after the final block]`.
+    def self.__inflate_raw(data, pos = 0)
+      i = new(-MAX_WBITS)
+      i.__send__(:__blocks_at, data, pos)
     end
 
     def sync_point?
@@ -395,19 +421,42 @@ module Zlib
     end
 
     def __finish_stream
-      @data = @input
-      @pos = 0
+      data = @input
+      framing = @framing
+      if framing == :auto
+        framing = (data.getbyte(0) == 0x1f && data.getbyte(1) == 0x8b) ? :gzip : :zlib
+      end
+      @output = case framing
+                when :raw
+                  __blocks_at(data, 0)[0]
+                when :gzip
+                  Zlib.__gunzip_frame(data)[0]
+                else
+                  size = data.bytesize
+                  raise Zlib::BufError, "buffer error" if size < 2
+                  cmf = data.getbyte(0)
+                  flg = data.getbyte(1)
+                  if ((cmf << 8) | flg) % 31 != 0 || cmf & 0x0F != 8 || (cmf >> 4) > 7
+                    raise Zlib::DataError, "incorrect header check"
+                  end
+                  raise Zlib::NeedDict, "need dictionary" if flg & 0x20 != 0
+                  out, pos = __blocks_at(data, 2)
+                  # Check the Adler-32 trailer.
+                  raise Zlib::BufError, "buffer error" if pos + 4 > size
+                  expected = (data.getbyte(pos) << 24) | (data.getbyte(pos + 1) << 16) |
+                             (data.getbyte(pos + 2) << 8) | data.getbyte(pos + 3)
+                  raise Zlib::DataError, "incorrect data check" if Zlib.adler32(out) != expected
+                  out
+                end
+    end
+
+    # The block loop: decode from `pos` to the final block, return the
+    # output and the byte position just past it (bit buffer dropped).
+    def __blocks_at(data, pos)
+      @data = data
+      @pos = pos
       @bitbuf = 0
       @bitcnt = 0
-      size = @data.bytesize
-      raise Zlib::BufError, "buffer error" if size < 2
-      cmf = @data.getbyte(0)
-      flg = @data.getbyte(1)
-      if ((cmf << 8) | flg) % 31 != 0 || cmf & 0x0F != 8 || (cmf >> 4) > 7
-        raise Zlib::DataError, "incorrect header check"
-      end
-      raise Zlib::NeedDict, "need dictionary" if flg & 0x20 != 0
-      @pos = 2
       out = "".b
       loop do
         final = __bits(1)
@@ -419,14 +468,9 @@ module Zlib
         end
         break if final == 1
       end
-      # Drop to a byte boundary, then check the Adler-32 trailer.
       @bitbuf = 0
       @bitcnt = 0
-      raise Zlib::BufError, "buffer error" if @pos + 4 > size
-      expected = (@data.getbyte(@pos) << 24) | (@data.getbyte(@pos + 1) << 16) |
-                 (@data.getbyte(@pos + 2) << 8) | @data.getbyte(@pos + 3)
-      raise Zlib::DataError, "incorrect data check" if Zlib.adler32(out) != expected
-      @output = out
+      [out, @pos]
     end
 
     def __bits(need)
@@ -557,22 +601,475 @@ module Zlib
     end
   end
 
+  # ---------------------------------------------------------------------
+  # gzip framing (RFC 1952).
+
+  # `window_bits` → framing, as zlib reads it: 8..15 zlib wrapper, -8..-15
+  # raw deflate, 24..31 gzip, and for inflate 40..47 auto-detect.
+  def self.__framing_of(window_bits, inflate)
+    wb = window_bits.to_int
+    if wb < 0
+      :raw
+    elsif wb >= 40 && inflate
+      :auto
+    elsif wb >= 24
+      :gzip
+    else
+      :zlib
+    end
+  end
+
+  def self.__gzip_frame(data, level = DEFAULT_COMPRESSION, mtime: 0, orig_name: nil, comment: nil, os_code: OS_CODE)
+    out = "".b
+    flg = 0
+    flg |= 0x08 if orig_name
+    flg |= 0x10 if comment
+    xfl = case level
+          when 1 then 4
+          when 9 then 2
+          else 0
+          end
+    out << [0x1f, 0x8b, 8, flg, mtime.to_i, xfl, os_code].pack("CCCCVCC")
+    out << orig_name.b << "\0" if orig_name
+    out << comment.b << "\0" if comment
+    out << Deflate.__raw_blocks(data)
+    out << [Zlib.crc32(data), data.bytesize & 0xFFFFFFFF].pack("VV")
+    out
+  end
+
+  # Parse one gzip member: `[data, header, bytes consumed]`. `header` is
+  # `{mtime:, orig_name:, comment:, os_code:, level:}`.
+  def self.__gunzip_frame(data)
+    data = data.b
+    raise GzipFile::Error, "not in gzip format" if data.bytesize < 10 ||
+                                                   data.getbyte(0) != 0x1f || data.getbyte(1) != 0x8b
+    raise GzipFile::Error, "unsupported compression method #{data.getbyte(2)}" if data.getbyte(2) != 8
+    flg = data.getbyte(3)
+    mtime = data.byteslice(4, 4).unpack1("V")
+    xfl = data.getbyte(8)
+    os_code = data.getbyte(9)
+    pos = 10
+    if flg & 0x04 != 0
+      xlen = data.byteslice(pos, 2).unpack1("v")
+      pos += 2 + xlen
+    end
+    orig_name = nil
+    if flg & 0x08 != 0
+      nul = data.index("\0", pos)
+      raise GzipFile::Error, "unexpected end of file" if nul.nil?
+      orig_name = data.byteslice(pos, nul - pos)
+      pos = nul + 1
+    end
+    comment = nil
+    if flg & 0x10 != 0
+      nul = data.index("\0", pos)
+      raise GzipFile::Error, "unexpected end of file" if nul.nil?
+      comment = data.byteslice(pos, nul - pos)
+      pos = nul + 1
+    end
+    pos += 2 if flg & 0x02 != 0
+    raise GzipFile::Error, "unexpected end of file" if pos > data.bytesize
+    out, pos = Inflate.__inflate_raw(data, pos)
+    raise GzipFile::NoFooter, "footer is not found" if pos + 8 > data.bytesize
+    crc, isize = data.byteslice(pos, 8).unpack("VV")
+    raise GzipFile::CRCError, "invalid compressed data -- crc error" if crc != Zlib.crc32(out)
+    raise GzipFile::LengthError, "invalid compressed data -- length error" if isize != (out.bytesize & 0xFFFFFFFF)
+    level = case xfl
+            when 2 then BEST_COMPRESSION
+            when 4 then BEST_SPEED
+            else DEFAULT_COMPRESSION
+            end
+    [out, { mtime: mtime, orig_name: orig_name, comment: comment, os_code: os_code, level: level }, pos + 8]
+  end
+
+  def self.gzip(src, level: nil, strategy: nil)
+    src = String.try_convert(src) || raise(TypeError, "no implicit conversion of #{src.class} into String")
+    __gzip_frame(src.b, level || DEFAULT_COMPRESSION)
+  end
+
+  def self.gunzip(src)
+    src = String.try_convert(src) || raise(TypeError, "no implicit conversion of #{src.class} into String")
+    # The String API reports a truncated frame (or one too short to even
+    # hold a header) as a plain GzipFile::Error.
+    raise GzipFile::Error, "unexpected end of string" if src.bytesize < 10
+    begin
+      __gunzip_frame(src)[0]
+    rescue GzipFile::NoFooter
+      raise GzipFile::Error, "unexpected end of string"
+    end
+  end
+
   class GzipFile
-    class Error < Zlib::Error; end
+    class Error < Zlib::Error
+      attr_reader :input
+    end
     class CRCError < Error; end
     class NoFooter < Error; end
     class LengthError < Error; end
+
+    # Run the block with a fresh reader/writer over `io`, closing it
+    # afterwards; without a block just return the object.
+    def self.wrap(io, *args, **opts)
+      obj = new(io, *args, **opts)
+      return obj unless block_given?
+      begin
+        yield obj
+      ensure
+        obj.close unless obj.closed?
+      end
+    end
+
+    attr_reader :os_code, :orig_name, :comment, :level
+
+    def mtime
+      Time.at(@mtime || 0)
+    end
+
+    def to_io
+      @io
+    end
+
+    def closed?
+      @closed
+    end
+
+    def sync
+      @sync ||= false
+    end
+
+    def sync=(flag)
+      @sync = flag
+    end
+
+    def crc
+      @crc || 0
+    end
+
+    private
+
+    def __check_open
+      raise GzipFile::Error, "closed gzip stream" if @closed
+    end
   end
 
   class GzipReader < GzipFile
-    def self.open(filename, &block)
-      File.open(filename, "rb", &block)
+    include Enumerable
+
+    def self.open(filename, **opts, &block)
+      io = File.open(filename, "rb")
+      wrap(io, **opts, &block)
+    end
+
+    # Decompress every gzip member of `io` and write the result to `out`
+    # (or return it as a String).
+    def self.zcat(io, out = +"", **opts)
+      data = io.read.b
+      until data.empty?
+        body, _hdr, used = Zlib.__gunzip_frame(data)
+        out << body
+        data = data.byteslice(used..)
+      end
+      out
+    end
+
+    def initialize(io, external_encoding: nil, internal_encoding: nil, encoding: nil, **_opts)
+      @io = io
+      @closed = false
+      raw = io.read
+      raw = raw.nil? ? "".b : raw.b
+      body, header, used = Zlib.__gunzip_frame(raw)
+      @unused = used < raw.bytesize ? raw.byteslice(used..) : nil
+      @mtime = header[:mtime]
+      @orig_name = header[:orig_name]
+      @comment = header[:comment]
+      @os_code = header[:os_code]
+      @level = header[:level]
+      @crc = Zlib.crc32(body)
+      enc = external_encoding || encoding || Encoding.default_external
+      enc = Encoding.find(enc) if enc.is_a?(String)
+      @encoding = enc
+      @data = body.force_encoding(enc)
+      @pos = 0
+      @lineno = 0
+    end
+
+    attr_accessor :lineno
+
+    def unused
+      @unused
+    end
+
+    def pos
+      @pos
+    end
+    alias tell pos
+
+    def eof?
+      __check_open
+      @pos >= @data.bytesize
+    end
+    alias eof eof?
+
+    def rewind
+      __check_open
+      @pos = 0
+      @lineno = 0
+      0
+    end
+
+    def read(length = nil, outbuf = nil)
+      __check_open
+      if length.nil?
+        s = @data.byteslice(@pos..).force_encoding(@encoding)
+        @pos = @data.bytesize
+      else
+        raise ArgumentError, "negative length #{length} given" if length < 0
+        return (outbuf ? outbuf.replace("") : "".b) if length == 0
+        return nil if eof?
+        s = @data.byteslice(@pos, length)
+        @pos += s.bytesize
+      end
+      outbuf ? outbuf.replace(s) : s
+    end
+
+    def readpartial(maxlen, outbuf = nil)
+      __check_open
+      raise ArgumentError, "negative length #{maxlen} given" if maxlen < 0
+      raise EOFError, "end of file reached" if eof? && maxlen > 0
+      read(maxlen, outbuf)
+    end
+
+    def getc
+      __check_open
+      return nil if eof?
+      c = @data.byteslice(@pos..).force_encoding(@encoding)[0]
+      @pos += c.bytesize
+      c
+    end
+
+    def readchar
+      getc || raise(EOFError, "end of file reached")
+    end
+
+    def getbyte
+      __check_open
+      return nil if eof?
+      b = @data.getbyte(@pos)
+      @pos += 1
+      b
+    end
+
+    def readbyte
+      getbyte || raise(EOFError, "end of file reached")
+    end
+
+    def each_byte
+      return enum_for(:each_byte) unless block_given?
+      while (b = getbyte)
+        yield b
+      end
+      nil
+    end
+
+    def each_char
+      return enum_for(:each_char) unless block_given?
+      while (c = getc)
+        yield c
+      end
+      nil
+    end
+
+    def ungetc(s)
+      __check_open
+      s = s.chr if s.is_a?(Integer)
+      s = s.to_s.b
+      @data = (@data.byteslice(0, @pos) + s + @data.byteslice(@pos..)).force_encoding(@encoding)
+      nil
+    end
+
+    def ungetbyte(b)
+      ungetc(b.is_a?(Integer) ? (b & 0xFF).chr : b)
+    end
+
+    def gets(sep = $/, limit = nil, chomp: false)
+      __check_open
+      if sep.is_a?(Integer) && limit.nil?
+        limit = sep
+        sep = $/
+      end
+      return nil if eof?
+      rest = @data.byteslice(@pos..)
+      line = if sep.nil?
+               rest
+             elsif sep == ""
+               # Paragraph mode: up to the next run of blank lines.
+               rest = rest.sub(/\A\n+/, "")
+               @pos += (@data.bytesize - @pos) - rest.bytesize
+               idx = rest.index(/\n\n+/)
+               idx ? rest[0, idx + 2] : rest
+             else
+               idx = rest.index(sep)
+               idx ? rest.byteslice(0, idx + sep.bytesize) : rest
+             end
+      line = line.byteslice(0, limit) if limit && limit >= 0 && line.bytesize > limit
+      @pos += line.bytesize
+      @lineno += 1
+      line = line.force_encoding(@encoding)
+      line = line.chomp(sep == "" ? "\n" : sep) if chomp && !sep.nil?
+      line
+    end
+
+    def readline(*args, **opts)
+      gets(*args, **opts) || raise(EOFError, "end of file reached")
+    end
+
+    def each_line(*args, **opts)
+      return enum_for(:each_line, *args, **opts) unless block_given?
+      while (line = gets(*args, **opts))
+        yield line
+      end
+      self
+    end
+    alias each each_line
+
+    def readlines(*args, **opts)
+      lines = []
+      while (line = gets(*args, **opts))
+        lines << line
+      end
+      lines
+    end
+
+    def external_encoding
+      @encoding
+    end
+
+    def close
+      __check_open
+      @closed = true
+      @io.close if @io.respond_to?(:close)
+      @io
+    end
+
+    def finish
+      __check_open
+      @closed = true
+      @io
     end
   end
 
   class GzipWriter < GzipFile
-    def self.open(filename, level = nil, &block)
-      File.open(filename, "wb", &block)
+    def self.open(filename, level = nil, strategy = nil, **opts, &block)
+      io = File.open(filename, "wb")
+      wrap(io, level, strategy, **opts, &block)
+    end
+
+    def initialize(io, level = nil, strategy = nil, **_opts)
+      @io = io
+      @level = level.nil? ? DEFAULT_COMPRESSION : level
+      @closed = false
+      @buffer = "".b
+      @mtime = nil
+      @orig_name = nil
+      @comment = nil
+      @os_code = OS_CODE
+      @sync = false
+    end
+
+    def mtime=(time)
+      __check_open
+      @mtime = time.to_i
+      time
+    end
+
+    def orig_name=(name)
+      __check_open
+      @orig_name = name.to_str
+    end
+
+    def comment=(text)
+      __check_open
+      @comment = text.to_str
+    end
+
+    def write(*strs)
+      __check_open
+      n = 0
+      strs.each do |s|
+        s = s.to_s
+        @buffer << s.b
+        n += s.bytesize
+      end
+      n
+    end
+
+    def <<(obj)
+      write(obj)
+      self
+    end
+
+    def print(*args)
+      args = [$_] if args.empty?
+      args.each { |a| write(a.to_s) }
+      nil
+    end
+
+    def puts(*args)
+      if args.empty?
+        write("\n")
+      else
+        args.flatten.each do |a|
+          s = a.to_s
+          write(s.end_with?("\n") ? s : s + "\n")
+        end
+      end
+      nil
+    end
+
+    def printf(fmt, *args)
+      write(format(fmt, *args))
+      nil
+    end
+
+    def putc(ch)
+      write(ch.is_a?(Integer) ? (ch & 0xFF).chr : ch.to_s[0])
+      ch
+    end
+
+    def pos
+      @buffer.bytesize
+    end
+    alias tell pos
+
+    def flush(_flush = SYNC_FLUSH)
+      __check_open
+      self
+    end
+
+    # Write the gzip frame to the IO and close it; returns the IO.
+    def close
+      __check_open
+      __emit
+      @closed = true
+      @io.close if @io.respond_to?(:close)
+      @io
+    end
+
+    # Like `close`, but leaves the IO open.
+    def finish
+      __check_open
+      __emit
+      @closed = true
+      @io
+    end
+
+    private
+
+    def __emit
+      @crc = Zlib.crc32(@buffer)
+      @io.write(Zlib.__gzip_frame(@buffer, @level, mtime: @mtime || Time.now.to_i,
+                                  orig_name: @orig_name, comment: @comment, os_code: @os_code))
+      @io.flush if @io.respond_to?(:flush)
     end
   end
 end

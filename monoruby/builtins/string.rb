@@ -30,19 +30,22 @@ class String
     # entry — `str.concat str, str` triples it rather than quadrupling
     # it. The buffer carries the receiver's encoding so a codepoint
     # argument is interpreted as it would have been against `self`.
+    #
+    # The append goes through the hidden `__shl` primitive rather than
+    # `<<`: a subclass may alias `<<` to `concat` and call `super` from
+    # there (ActiveSupport::SafeBuffer), which would recurse forever.
     if args.size > 1
       buf = +""
       buf.force_encoding(encoding)
       args.each do |arg|
-        buf << arg
+        buf.__shl(arg)
       end
-      self << buf
+      __shl(buf)
     elsif args.size == 1
-      self << args[0]
+      __shl(args[0])
     end
     self
   end
-  alias append concat
 
   def prepend(*args)
     args.reverse_each do |arg|

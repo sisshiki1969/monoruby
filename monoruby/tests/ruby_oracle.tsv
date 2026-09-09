@@ -174,6 +174,7 @@
 0b006d8d0b7c3b6cbbde169c66a256f9	"hello\\n"	require "socket"\n            s = TCPServer.new("127.0.0.1", 0)\n    
 0b02d3e203d76b6ec36d970414527996	[[2.5, 4.0, 4.5, 6.0], 1.1805916207174113e+21, 1.5]	def probe(x) = x + 1.5\n            vals = [1, 2.5, 3, 4.5]\n        
 0b0604dcfa5aa2a90ccb9b55c158b24e	101	def get_binding\n              x = 100\n              binding\n       
+0b26a87ee5c24531531b5106bb440366	[[200, 100, 0], true, true, true, true, false, true, false, true, true, true]	seq = Ractor.make_shareable("GGTATT" * 100)\n        rs = [1, 2, 3].map 
 0b272bc1eee3862ebd5afe122f6530ac	[0, 50, "custom", true, false, false]	def check(x) = x.is_a?(Integer)\n            def fro(x) = x.frozen?\n
 0b360a7151ca4646f547e0ecffd6cf13	[true, true, true, true, true, ArgumentError, ArgumentError, TypeError, TypeError, Hash, false]	(ENV["MONO_T_ZZ"]="hi"; a=ENV["MONO_T_ZZ"].frozen?; b=ENV.method(:has_key?)==ENV
 0b40f53074d9e48c2b4d7383337aaada	[[1, 1, 2, 3], ArgumentError, -2, nil]	class Diff\n          attr_reader :v\n          def initialize(v) = @v = 
@@ -890,6 +891,7 @@
 442cc99068d79c4d0b979f548fff9db2	[[[1, 2, 3], {}], [[], {a: 1, b: 2}], [[9], {x: 3}], [[1, 2, 3], {}], [[:rest, :*], [:keyrest, :**]]]	def target(*a, **k); [a, k]; end\n        def d_rest(*); target(*); end\n
 442ded55291eaab4990a26fee7bf8cdc	"undef caught: foo [10, 20]"	class C\n          def foo(*args)\n            args\n          end\n       
 4433d71bfa1c5cc6691d2dd71800fbe7	[:range, :range, :type]	h = { a: 1, b: 2 }\n            if h.respond_to?(:__key_at)\n        
+443aad2a3386503f4b479987364002ff	[[31, 139, 8, 0], true, "abcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\n", "abcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\nabcabcabc\\n", "line1\\nline2\\nline3\\nxA", "a.txt", 1000000, 3, "line1\\n", 1, "line2", false, "lin", "e3\\nxA", true, nil, "", ["line1\\n", "line2\\n", "line3\\n", "xA"], nil, true, "file contents\\nfile contents\\n", Zlib::GzipFile::Error, ["file contents", "file contents"], "file contents\\nfile contents\\n", "unexpected end of string", "invalid compressed data -- crc error", [Zlib::GzipFile::Error, "unexpected end of string"], true, true, true]	require "zlib"\nrequire "stringio"\nrequire "tmpdir"\nr = []\ntext = "hello gzip\\ns
 443bfeb84d9c2d708f478b4cd0860091	[true, true, false]	r, w = IO.pipe\n            a = [r.close_on_exec?, w.close_on_exec?]
 44528032436bdb6e6e366e913d073a06	"v1\\n"	r, w = IO.pipe\n            Process.wait Process.spawn({"SPAWN_T1" =
 4452ae427b2a0862038f7f2a87830617	89.76394847667156	def call_block\n          yield\n        end\n        def w7(s, flag)\n    
@@ -1714,6 +1716,7 @@
 823f7b6229174b0da18f59b5a5c7cca0	[1, 2, "constant"]	module QTopA; X = 1; module Inner; Y = 2; end; end\n            [QTo
 82447060301c9a64b3ac42318f460e62	[1, 2, 3]	class C\n          def foo(*x)\n            x\n          end\n        end\n 
 8256e9068f6e136c99b87f2f7f97fdb8	[[ArgumentError, "negative signal name: -HUP"], "negative signal name: -INT"]	[(begin; Signal.trap("-HUP") {}; rescue => e; [e.class, e.message]; end), (begin
+82575417647315f480a84e42f3ee1d81	[{"a" => [{"k" => "line one line two", "n" => 1}, {"k" => 2}]}, {"a" => [{"k" => "line one line two", "n" => 1}, {"k" => 2}]}, {"a" => [{"k" => "plain one plain two", "n" => 1}, {"k" => 2}]}, {"a" => [{"k" => "it's two", "n" => 1}]}, {"a" => "x\\ny", "b" => "tab\\there", "c" => "don't"}, {"k" => "<p>You can (555) 567-2222.</p> <p>Our store is at <em>Rue d'Avignon 32</em>.</p>", "created_at" => "2005-04-04 12:00"}, {"pages" => [{"id" => 1, "content" => "first second", "at" => "x"}, {"id" => 2, "content" => "plain"}]}]	require "yaml"\n        docs = [\n          "a:\\n  - k:\\n      \\"line one
 829f48ebfbc6e4030ced77aaec24c37b	[200, 2]	def a4\n          v = [1, 2, 3].each do |i|\n            begin\n          
 82abda467be3a95b2f6d81fbf7dfb3da	"a:a b:{x: 100, y: 200}"	def f(a, b)\n          "a:#{a} b:#{b}"\n        end\n        \n\n        f("
 82afafb55f0b808c4e046dd1d983831d	["ASCII-8BIT", "US-ASCII", "US-ASCII"]	[/\\xc2\\xa1/n.encoding.to_s, /abc/n.encoding.to_s, /\\x7f/n.encoding.to_s]
@@ -2777,6 +2780,7 @@ d02239e9ea6a9ec41f97d63367a30a78	52230	class Loc\n          attr_reader :a, :b\n
 d03f3da52be16a5382075d9aea65e40c	[0, true]	class Symbol; def ==(o) = true; end\n        [[:a, :b].index(:z), [:a, :
 d044b1d1eedcdda6f15b67ec84350344	4	"hello".byteindex("o")
 d05976bbfb14033f00937939ab90a32c	36000000	class Lib; def twice(n); n + n; end; end\n        $lib = Lib.new\n       
+d067e8092ba68c29f3fd731c4bbc1200	[42, [Ractor::RemoteError, RuntimeError, "boom", true], "worker", true, :done]	r = Ractor.new { Ractor.receive * 2 }\n        r.send(21)\n        r2 = R
 d07ee4e87e21212dcf67ec14eaa4fbbc	Object	include Math\n        
 d08434c822205293acd0c331ff42f857	"Object"	Time.superclass.to_s
 d08702c38e94487e4a318ebe2df55f9b	["A1\\n", "A2\\n", "B1\\nB2\\n", nil, "A1\\n", "A", "2", "ASCII-8BIT", "A1\\n", "end of file reached"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{

@@ -48,6 +48,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "<=", le, 1);
     globals.define_builtin_func(STRING_CLASS, "<", lt, 1);
     globals.define_builtin_inline_func(STRING_CLASS, "<<", shl, inline_gen2!(string_shl_gen), 1);
+    // Hidden primitive behind the Ruby-level `String#concat`/`#append`: it
+    // must not dispatch through `<<`, which a subclass may alias *to*
+    // `concat` (ActiveSupport::SafeBuffer) — that would recurse forever.
+    globals.define_builtin_func(STRING_CLASS, "__shl", shl, 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
     globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
     globals.define_builtin_funcs_with(STRING_CLASS, "[]", &["slice"], index, 1, 2, false);
