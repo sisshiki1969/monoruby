@@ -364,6 +364,11 @@ External crates (fetched from git):
   (`src/builtins/digest.rs`, sha2 / md-5). Rails' cookie encryption and key
   derivation run on these with CRuby-identical output. The rest of
   `openssl.rb` (PKey, X509, SSL) is still a load-only stub.
+- `libyaml-safer` — a port of libyaml 0.2.5; the parser and emitter behind
+  `Psych` (`src/builtins/yaml.rs`: `String.__yaml_parse` dispatches the
+  events to a `Psych::Handler`, `__yaml_emitter_new` / `__yaml_emit` /
+  `__yaml_emitter_free` hold one emitter per `Psych::Emitter`). The gem's
+  Ruby half is vendored under `gem/psych/`.
 - `libz-sys` — zlib built from its bundled C source and linked statically; the
   `String.__zstream_*` builtins (`src/builtins/zlib.rs`) expose one `z_stream`
   per `Zlib::Deflate` / `Zlib::Inflate` object, and everything else in `Zlib`
@@ -416,7 +421,12 @@ reproducible build. It performs two jobs:
      gem's `Prism::Serialize` builds the node tree. The serialization format
      is per prism version, so bumping the crate means re-vendoring these
      files from the matching gem. `stdlib/ripper.rb` is
-     `Prism::Translation::Ripper` on top of it. `gem/stackprof/stackprof.rb`
+     `Prism::Translation::Ripper` on top of it. `gem/psych/` is the psych
+     5.3.1 gem's Ruby half (Ruby 4.0.2's) plus `gem/psych/psych.rb`, the
+     stand-in for its C extension: `src/builtins/yaml.rs` drives
+     `libyaml-safer` (a port of libyaml 0.2.5) as `Psych::Parser`'s event
+     source and `Psych::Emitter`'s sink, so `Psych.load` / `dump` and the
+     event API are CRuby's byte for byte. `gem/stackprof/stackprof.rb`
      stands in for `stackprof.so` as an inert profiler (its API loads, no
      sampling), since `gem "stackprof", platforms: :mri` is required at boot
      by Bundler on monoruby too.

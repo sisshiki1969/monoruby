@@ -131,6 +131,7 @@ sha2 = "0.10"
 aes-gcm = "0.10"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
+libyaml-safer = "0.3"
 
 # macOS aarch64 (Apple Silicon): the bundled libffi-sys 4.1.0 fails to
 # link `_ffi_prep_cif_machdep` (the arm64 assembly piece doesn't build

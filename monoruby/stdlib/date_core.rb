@@ -7,6 +7,10 @@ class Date
   JULIAN = Float::INFINITY
   GREGORIAN = -Float::INFINITY
 
+  # Raised by the parsers for a date that does not exist (or a
+  # `strptime` mismatch); an ArgumentError, as in date_core.
+  class Error < ArgumentError; end
+
   MONTHNAMES = [nil, "January", "February", "March", "April", "May", "June",
                 "July", "August", "September", "October", "November", "December"]
   DAYNAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
@@ -17,6 +21,7 @@ class Date
   attr_reader :year, :month, :day
 
   def initialize(year = -4712, month = 1, day = 1, _sg = ITALY)
+    @sg = _sg
     @year = year
     @month = month
     @day = day
@@ -54,6 +59,211 @@ class Date
     h = _parse(str, comp, limit: limit)
     y, m, d = _complete_frags(h, str)
     civil(y, m, d, start)
+  end
+
+  # ---------------------------------------------------------------------
+  # Date._strptime / Date.strptime — the format-directed parser
+  # (date_strptime.c). Answers the same hash `_parse` does (:year, :mon,
+  # :mday, :yday, :hour, :min, :sec, :sec_fraction, :zone, :offset,
+  # :seconds, :cwyear, :cweek, :cwday, :wday, :wnum0, :wnum1), plus
+  # :leftover for unconsumed input, or nil when the format does not match.
+
+  STRPTIME_MONTHS = %w[january february march april may june july august september october november december].freeze
+  STRPTIME_DAYS = %w[sunday monday tuesday wednesday thursday friday saturday].freeze
+
+  def self._strptime(str, fmt = "%F")
+    str = str.to_str unless str.is_a?(String)
+    fmt = fmt.to_str unless fmt.is_a?(String)
+    h = {}
+    pos = __strptime(str, 0, fmt, h)
+    return nil unless pos
+    h[:leftover] = str[pos..-1] if pos < str.length
+    if h.key?(:_cent)
+      cent = h.delete(:_cent)
+      h[:cwyear] = h[:cwyear] + cent * 100 if h[:cwyear]
+      h[:year] = h[:year] + cent * 100 if h[:year]
+    end
+    if h.key?(:_merid)
+      merid = h.delete(:_merid)
+      h[:hour] = (h[:hour] % 12) + merid if h[:hour]
+    end
+    h
+  end
+
+  # Match `fmt` against `str` from `pos`, filling `h`; the position after
+  # the match, or nil.
+  def self.__strptime(str, pos, fmt, h)
+    fi = 0
+    while fi < fmt.length
+      c = fmt[fi]
+      if c != "%"
+        if c =~ /\s/
+          # A space in the format eats any run of whitespace.
+          pos += 1 while pos < str.length && str[pos] =~ /\s/
+          fi += 1
+          next
+        end
+        return nil unless str[pos] == c
+        pos += 1
+        fi += 1
+        next
+      end
+      fi += 1
+      colons = 0
+      while fmt[fi] == ":"
+        colons += 1
+        fi += 1
+      end
+      fmt[fi] == "E" || fmt[fi] == "O" and fi += 1
+      d = fmt[fi]
+      fi += 1
+      return nil if d.nil?
+      num = lambda do |width, sign = false|
+        m = str[pos..-1].match(sign ? /\A[-+]?\d{1,#{width}}/ : /\A\d{1,#{width}}/)
+        return nil unless m
+        pos += m[0].length
+        m[0].to_i
+      end
+      case d
+      when "A", "a"
+        m = str[pos..-1].match(/\A(#{STRPTIME_DAYS.join("|")}|#{STRPTIME_DAYS.map { |x| x[0, 3] }.join("|")})/i)
+        return nil unless m
+        pos += m[0].length
+        h[:wday] = STRPTIME_DAYS.index { |x| x.start_with?(m[0].downcase[0, 3]) }
+      when "B", "b", "h"
+        m = str[pos..-1].match(/\A(#{STRPTIME_MONTHS.join("|")}|#{STRPTIME_MONTHS.map { |x| x[0, 3] }.join("|")})/i)
+        return nil unless m
+        pos += m[0].length
+        h[:mon] = STRPTIME_MONTHS.index { |x| x.start_with?(m[0].downcase[0, 3]) } + 1
+      when "C"
+        v = num.call(2, true) or return nil
+        h[:_cent] = v
+      when "c"
+        pos = __strptime(str, pos, "%a %b %e %H:%M:%S %Y", h) or return nil
+      when "D", "x"
+        pos = __strptime(str, pos, "%m/%d/%y", h) or return nil
+      when "d", "e"
+        pos += 1 while d == "e" && str[pos] == " "
+        v = num.call(2) or return nil
+        return nil unless v.between?(1, 31)
+        h[:mday] = v
+      when "F"
+        pos = __strptime(str, pos, "%Y-%m-%d", h) or return nil
+      when "G"
+        v = num.call(fmt[fi] ? 4 : 30, true) or return nil
+        h[:cwyear] = v
+      when "g"
+        v = num.call(2) or return nil
+        h[:cwyear] = v
+        h[:_cent] ||= v >= 69 ? 19 : 20
+      when "H", "k"
+        pos += 1 while d == "k" && str[pos] == " "
+        v = num.call(2) or return nil
+        return nil unless v.between?(0, 24)
+        h[:hour] = v
+      when "I", "l"
+        pos += 1 while d == "l" && str[pos] == " "
+        v = num.call(2) or return nil
+        return nil unless v.between?(1, 12)
+        h[:hour] = v
+      when "j"
+        v = num.call(3) or return nil
+        return nil unless v.between?(1, 366)
+        h[:yday] = v
+      when "L", "N"
+        m = str[pos..-1].match(/\A\d+/) or return nil
+        pos += m[0].length
+        h[:sec_fraction] = Rational(m[0].to_i, 10**m[0].length)
+      when "M"
+        v = num.call(2) or return nil
+        return nil unless v.between?(0, 59)
+        h[:min] = v
+      when "m"
+        v = num.call(2) or return nil
+        return nil unless v.between?(1, 12)
+        h[:mon] = v
+      when "n", "t"
+        pos += 1 while pos < str.length && str[pos] =~ /\s/
+      when "P", "p"
+        m = str[pos..-1].match(/\A(a\.?m\.?|p\.?m\.?)/i) or return nil
+        pos += m[0].length
+        h[:_merid] = m[0].downcase.start_with?("p") ? 12 : 0
+      when "Q"
+        m = str[pos..-1].match(/\A-?\d+/) or return nil
+        pos += m[0].length
+        h[:seconds] = Rational(m[0].to_i, 1000)
+      when "R"
+        pos = __strptime(str, pos, "%H:%M", h) or return nil
+      when "r"
+        pos = __strptime(str, pos, "%I:%M:%S %p", h) or return nil
+      when "S"
+        v = num.call(2) or return nil
+        return nil unless v.between?(0, 60)
+        h[:sec] = v
+      when "s"
+        m = str[pos..-1].match(/\A-?\d+/) or return nil
+        pos += m[0].length
+        h[:seconds] = m[0].to_i
+      when "T", "X"
+        pos = __strptime(str, pos, "%H:%M:%S", h) or return nil
+      when "U", "W"
+        v = num.call(2) or return nil
+        return nil unless v.between?(0, 53)
+        h[d == "U" ? :wnum0 : :wnum1] = v
+      when "u"
+        v = num.call(1) or return nil
+        return nil unless v.between?(1, 7)
+        h[:cwday] = v
+      when "V"
+        v = num.call(2) or return nil
+        return nil unless v.between?(1, 53)
+        h[:cweek] = v
+      when "v"
+        pos = __strptime(str, pos, "%e-%b-%Y", h) or return nil
+      when "w"
+        v = num.call(1) or return nil
+        return nil unless v.between?(0, 6)
+        h[:wday] = v
+      when "Y"
+        v = num.call(fmt[fi] =~ /\d/ ? 4 : 30, true) or return nil
+        h[:year] = v
+      when "y"
+        v = num.call(2) or return nil
+        return nil unless v.between?(0, 99)
+        h[:year] = v
+        h[:_cent] ||= v >= 69 ? 19 : 20
+      when "Z", "z"
+        m = str[pos..-1].match(/\A(?:gmt|utc?|z|[a-z]{3,4}(?:\s+dst)?|[-+]\d{1,2}(?::?\d{2}(?::?\d{2})?)?(?:\s*[-+]\d{1,2}(?::?\d{2})?)?|[a-z]+(?:\s+(?:standard|daylight)\s+time)?)/i)
+        return nil unless m
+        pos += m[0].length
+        h[:zone] = m[0]
+        h[:offset] = zone_to_diff(m[0])
+      when "+"
+        pos = __strptime(str, pos, "%a %b %e %H:%M:%S %Z %Y", h) or return nil
+      when "%"
+        return nil unless str[pos] == "%"
+        pos += 1
+      else
+        # An unknown directive matches itself literally (`%q` matches "%q").
+        return nil unless str[pos, 2] == "%#{d}"
+        pos += 2
+      end
+    end
+    pos
+  end
+
+  def self.strptime(str = "-4712-01-01", fmt = "%F", start = ITALY)
+    h = _strptime(str, fmt)
+    raise Date::Error, "invalid date" if h.nil? || h.key?(:leftover)
+    if h[:seconds]
+      return (Date.civil(1970, 1, 1) + Rational(h[:seconds], 86400)).__truncate_to_date
+    end
+    y, m, d = _complete_frags(h, str)
+    civil(y, m, d, start)
+  end
+
+  def __truncate_to_date
+    Date.jd(jd)
   end
 
   # ---------------------------------------------------------------------
@@ -560,8 +770,22 @@ class Date
     format("%04d-%02d-%02d", @year, @month, @day)
   end
 
+  # The calendar-reform start given at construction (`Date::ITALY`
+  # unless the caller chose otherwise); `inspect` shows it as CRuby does.
+  def start
+    @sg || ITALY
+  end
+
+  def __start_for_inspect
+    sg = start
+    if sg == Float::INFINITY then "Infj"
+    elsif sg == -Float::INFINITY then "-Infj"
+    else "#{sg.to_i}j"
+    end
+  end
+
   def inspect
-    "#<Date: #{to_s}>"
+    "#<Date: #{to_s} ((#{jd}j,0s,0n),+0s,#{__start_for_inspect})>"
   end
 
   def to_time
@@ -698,6 +922,36 @@ class DateTime < Date
     parse(str, true, start, limit: limit)
   end
 
+  def self._strptime(str, fmt = "%FT%T%z")
+    Date._strptime(str, fmt)
+  end
+
+  def self.strptime(str = "-4712-01-01T00:00:00+00:00", fmt = "%FT%T%z", start = ITALY)
+    h = Date._strptime(str, fmt)
+    raise Date::Error, "invalid date" if h.nil? || h.key?(:leftover)
+    if h[:seconds]
+      offset = h[:offset] || 0
+      return DateTime.civil(1970, 1, 1, 0, 0, 0, 0, start).__new_offset_seconds(h[:seconds], offset)
+    end
+    y, m, d = Date._complete_frags(h, str)
+    hour = h[:hour] || 0
+    min = h[:min] || 0
+    sec = h[:sec] || 0
+    sec = 59 if sec == 60
+    unless hour.between?(0, 24) && min.between?(0, 59) && sec.between?(0, 59)
+      raise Date::Error, "invalid date"
+    end
+    offset = h[:offset] ? Rational(h[:offset], 86400) : 0
+    dt = civil(y, m, d, hour, min, sec, offset, start)
+    dt.instance_variable_set(:@sec_fraction, h[:sec_fraction]) if h[:sec_fraction]
+    dt
+  end
+
+  # `DateTime` at `seconds` since the epoch, shown at `offset` seconds.
+  def __new_offset_seconds(seconds, offset)
+    (self + Rational(seconds, 86400)).new_offset(Rational(offset, 86400))
+  end
+
   alias minute min
   alias second sec
 
@@ -754,7 +1008,11 @@ class DateTime < Date
   alias xmlschema iso8601
 
   def inspect
-    "#<DateTime: #{to_s}>"
+    utc = new_offset(0)
+    secs = utc.hour * 3600 + utc.min * 60 + utc.sec
+    ns = (sec_fraction * 1_000_000_000).to_i
+    off = (offset * 86400).to_i
+    "#<DateTime: #{to_s} ((#{utc.jd}j,#{secs}s,#{ns}n),#{format('%+d', off)}s,#{__start_for_inspect})>"
   end
 
   def <=>(other)
