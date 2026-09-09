@@ -992,6 +992,7 @@ impl alloc::GCBox for RValue {
         }
     }
 
+    #[coverage(off)] // the abort arm is uncoverable in-test
     fn check_live(&self, alloc: &mut alloc::Allocator<RValue>) {
         if !self.header.is_live() {
             dead_rvalue_abort(self, alloc);

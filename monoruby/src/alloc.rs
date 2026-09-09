@@ -535,6 +535,7 @@ const MARK_PREFETCH_DISTANCE: usize = 8;
 /// Hint the CPU to fetch the cache line at `p` (no-op where there is no
 /// such instruction). Reading nothing, it is safe on any address.
 #[inline(always)]
+#[coverage(off)] // per-arch arms: only the host's runs, uncoverable together
 fn prefetch_read(p: *const u8) {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: a prefetch never faults, whatever the address.
@@ -585,6 +586,7 @@ pub trait GCBox: PartialEq {
     /// barrier or a stale root. The default does nothing (for cell types
     /// without a liveness flag).
     ///
+    #[coverage(off)] // the no-op default: every cell type here overrides it
     fn check_live(&self, _alloc: &mut Allocator<Self>)
     where
         Self: Sized,
@@ -1634,16 +1636,7 @@ impl<T: GCBox> Allocator<T> {
         if let Some(addr) = tracked_addr()
             && p as usize == addr
         {
-            eprintln!(
-                "[GC-TRACK] mark hit at GC #{} ({}):\n{}",
-                self.total_gc_counter,
-                if self.current_kind == 0 {
-                    "Minor"
-                } else {
-                    "Major"
-                },
-                std::backtrace::Backtrace::force_capture()
-            );
+            self.report_tracked_mark();
         }
         let page_ptr = self.get_page(p);
         let index = unsafe { (*page_ptr).get_index(p) };
@@ -1661,6 +1654,22 @@ impl<T: GCBox> Allocator<T> {
         // the queue is empty.
         self.mark_queue
             .push_back(unsafe { std::ptr::NonNull::new_unchecked(p as *mut T) });
+    }
+
+    /// Forensics (`MONORUBY_GC_TRACK=addr`): the tracked cell is being
+    /// marked; say by whom.
+    #[coverage(off)] // forensics only, uncoverable in-test
+    fn report_tracked_mark(&self) {
+        eprintln!(
+            "[GC-TRACK] mark hit at GC #{} ({}):\n{}",
+            self.total_gc_counter,
+            if self.current_kind == 0 {
+                "Minor"
+            } else {
+                "Major"
+            },
+            std::backtrace::Backtrace::force_capture()
+        );
     }
 
     ///
