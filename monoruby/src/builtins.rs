@@ -8,6 +8,7 @@ mod bool_class;
 mod class;
 mod digest;
 mod cipher;
+mod yaml;
 mod dir;
 pub(crate) mod encoding;
 pub(crate) mod errno;
@@ -150,6 +151,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     json::init(globals);
     digest::init(globals);
     cipher::init(globals);
+    yaml::init(globals);
     zlib::init(globals);
     prism::init(globals);
     main_object::init(globals);

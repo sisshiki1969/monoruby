@@ -833,6 +833,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "libyaml-safer"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d325b93a27b93b93b7cf4a57d681c5b6a4d8f910e695db989c055eb1e4f657df"
+
+[[package]]
 name = "libz-sys"
 version = "1.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -944,6 +950,7 @@ dependencies = [
  "indexmap",
  "libc",
  "libffi",
+ "libyaml-safer",
  "libz-sys",
  "md-5",
  "memchr",

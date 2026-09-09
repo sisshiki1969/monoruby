@@ -178,7 +178,33 @@ C 拡張で、Fiddle で包む規模ではなく、読み込みだけ通す偽�
 `character class has duplicated range` の警告が出る、CRuby は `-w` 時のみ）は
 別件として残す。
 
-## 7. 測定メモ
+## 7. rubocop: Psych を本物に載せ替え
+
+rubocop は設定ファイルの重複キー検出に `Psych::Parser` + `Psych::TreeBuilder`
+（イベント API）を使うが、monoruby の YAML は手書きのドキュメントローダ
+（`stdlib/psych.rb`）で、イベント API もノード木も無かった。prism と同じ構成に
+した: psych 5.3.1 gem の Ruby 側（nodes / TreeBuilder / ToRuby / YAMLTree /
+ScalarScanner …）を `gem/psych/` にそのまま同梱し、C 拡張の代わりに
+`gem/psych/psych.rb` + `src/builtins/yaml.rs` が libyaml の移植
+（`libyaml-safer` クレート、0.2.5）でパーサとエミッタを提供する。
+
+- `Psych::Parser#_native_parse`: イベントごとに `event_location` とハンドラの
+  メソッドを呼ぶ。エラーは psych と同じく context mark の位置で `SyntaxError`。
+- `Psych::Emitter`: イベントを 1 つずつネイティブのエミッタに流し、書けた分を
+  IO に `write`。libyaml の状態機械のエラー（`expected STREAM-START` 等）も
+  そのまま。`end_stream` で解放、取りこぼしはファイナライザで解放。
+- `ClassLoader#path2class` / `ToRuby#build_exception` / `YAMLTree#private_iv_get`
+  / `Psych.libyaml_version` は Ruby で。
+- ついでに要ったもの: `Date.strptime` / `_strptime` / `DateTime.strptime`
+  （ScalarScanner が日付に使う）、`Date::Error`、`Date#inspect` の CRuby 形式。
+
+`tests/psych.rs` で load / dump（引用・折り返し・インデント・タグを含めバイト
+単位）/ イベント API を CRuby と照合している。psych-load ベンチの出力比較も
+そのまま通る。手書きパーサで今日直したマージキーのような穴は、ここで一掃された。
+
+結果: rubocop ベンチが完走し、1 反復 80 ms（CRuby 4.0.2 YJIT なし 218 ms）。
+
+## 8. 測定メモ
 
 - `perf` は `perf_event_paranoid=2` とカーネル用バイナリの不在で使えない。
   `valgrind --tool=callgrind` は monoruby の brk 領域で落ちる。gdb の繰り返し
