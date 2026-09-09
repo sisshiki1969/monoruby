@@ -108,6 +108,11 @@ regex = "1.12.3"
 libc = "0.2.186"
 getrandom = "0.3.3"
 rand_mt = { version = "5.0.0", features = ["rand-traits"] }
+# The bundled zlib (built from source, statically linked) behind
+# `Zlib::Deflate` / `Zlib::Inflate` in stdlib/zlib.rb — `String.__zstream_*`
+# in src/builtins/zlib.rs. Real DEFLATE compression, byte-identical to the
+# zlib CRuby's zlib.so links (PDF writers compare output sizes).
+libz-sys = { version = "1.1", features = ["static"] }
 bitvec = "1.0.1"
 ansi_term = "0.12.1"
 dirs = "6.0.0"

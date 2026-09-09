@@ -303,6 +303,24 @@ class StringIO
       str = str.to_s unless str.is_a?(String)
       next if str.empty?
 
+      # CRuby copies bytes into the buffer: text headed for a binary (or
+      # US-ASCII) buffer is taken byte for byte, and bytes headed for a text
+      # buffer likewise — never an `Encoding::CompatibilityError` (a PDF
+      # writer streams UTF-8 fragments into a `StringIO.new("".b)`).
+      enc = @string.encoding
+      unless str.encoding == enc || str.ascii_only?
+        str = if enc == Encoding::BINARY || enc == Encoding::US_ASCII ||
+                 str.encoding == Encoding::BINARY
+                str.dup.force_encoding(enc)
+              else
+                begin
+                  str.encode(enc)
+                rescue EncodingError
+                  str.dup.force_encoding(enc)
+                end
+              end
+      end
+
       if @pos == @string.length
         @string << str
       elsif @pos > @string.length

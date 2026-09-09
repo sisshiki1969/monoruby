@@ -1,30 +1,23 @@
 # Zlib for monoruby.
 #
 # Zlib is a C extension (zlib.so) that monoruby cannot load, so this file
-# provides the module in Ruby. What it offers:
+# provides the module in Ruby, over two native backends:
 #
 # - `Zlib.crc32` / `Zlib.adler32` (and the `_combine` variants) with the
 #   real argument semantics, over the native byte walk in
 #   `src/builtins/zlib.rs` (`String.__crc32` / `String.__adler32`).
-# - `Zlib::Deflate`, which writes a genuine zlib stream — header, stored
-#   (uncompressed) deflate blocks, Adler-32 trailer — that any zlib can
-#   inflate. No compression is performed at any level; the level only
-#   picks the header's FLEVEL bits and is validated as zlib would.
-# - `Zlib::Inflate`, a complete RFC 1951 decoder (stored, fixed-Huffman
-#   and dynamic-Huffman blocks) inside the RFC 1950 wrapper, so streams
-#   produced by a real zlib (PNG image data, compressed text chunks)
-#   decode correctly.
-# - The streaming `Deflate.new` / `Inflate.new` objects, buffered: input
-#   accumulates and the whole stream is processed at `finish`. The
-#   `window_bits` argument selects the framing as in zlib: positive for
-#   the zlib wrapper, negative for a raw deflate stream, `+16` for gzip
-#   and `+32` (inflate only) to auto-detect zlib/gzip.
-# - gzip framing (RFC 1952): `Zlib.gzip` / `Zlib.gunzip`, and the
-#   `GzipReader` / `GzipWriter` objects over an IO (header fields, CRC-32
-#   and length trailer checks, the line-oriented reader API).
+# - `Zlib::Deflate` / `Zlib::Inflate` (and everything built on them:
+#   `Zlib.deflate` / `Zlib.inflate`, the gzip framing, `GzipReader` /
+#   `GzipWriter`) as thin shells over a `z_stream` of the bundled zlib
+#   (`String.__zstream_*`, libz-sys built from source). Compression is
+#   real DEFLATE with zlib's own algorithm, so the bytes are the ones
+#   CRuby's zlib.so produces for the same level / strategy / window —
+#   PDF writers that compare output sizes with a CRuby run depend on it.
+#   The `window_bits` argument is zlib's: 8..15 for the zlib wrapper,
+#   negative for a raw stream, +16 for gzip, +32 (inflate) to auto-detect.
 #
-# Not provided: preset dictionaries and incremental output before
-# `finish`.
+# Not provided: `Zlib::GzipFile` over arbitrary IO objects with
+# streaming (a reader slurps its IO, a writer emits at `close`).
 
 module Zlib
   VERSION = "3.1.0"
@@ -197,27 +190,73 @@ module Zlib
   end
 
   # ---------------------------------------------------------------------
-  # Deflate — stored blocks only.
+  # ZStream — the shell over a native zlib stream.
 
   class ZStream
+    # zlib status => the Zlib::Error subclass CRuby raises for it.
+    ERROR_CLASSES = {
+      1 => StreamEnd, 2 => NeedDict, -2 => StreamError, -3 => DataError,
+      -4 => MemError, -5 => BufError, -6 => VersionError,
+    }.freeze
+
     def initialize
-      @input = "".b
-      @output = nil
+      @handle = nil
+      @buffer = "".b
       @closed = false
       @finished = false
     end
 
-    def <<(string)
+    # Bytes of input consumed / output produced by zlib so far.
+    def total_in
       __check_open
-      @input << __coerce_string(string).b
-      self
+      String.__zstream_totals(@handle)[0]
     end
 
-    def finish
+    def total_out
       __check_open
-      __finish_stream unless @finished
-      @finished = true
-      @output
+      String.__zstream_totals(@handle)[1]
+    end
+
+    # zlib's running checksum (Adler-32 for the zlib wrapper, CRC-32 for
+    # gzip, unused for raw streams).
+    def adler
+      __check_open
+      String.__zstream_totals(@handle)[3]
+    end
+
+    def data_type
+      __check_open
+      String.__zstream_totals(@handle)[4]
+    end
+
+    # No input is ever held back: everything handed over is consumed by
+    # the same call (an inflate keeps the bytes past the end of the stream
+    # in `@unused`, see Inflate).
+    def avail_in
+      __check_open
+      0
+    end
+
+    def avail_out
+      __check_open
+      0
+    end
+
+    def avail_out=(_size)
+      __check_open
+    end
+
+    def flush_next_in
+      __check_open
+      "".b
+    end
+
+    # Output produced by `<<` / `flush` that has not been returned yet.
+    def flush_next_out
+      __check_open
+      out = @buffer
+      @buffer = "".b
+      out
     end
 
     def finished?
@@ -226,8 +265,19 @@ module Zlib
     end
     alias stream_end? finished?
 
+    def finish
+      __check_open
+      out = @buffer + __run("".b, FINISH)
+      @buffer = "".b
+      @finished = true
+      out
+    end
+
     def close
-      @closed = true
+      unless @closed
+        String.__zstream_close(@handle) if @handle
+        @closed = true
+      end
       nil
     end
     alias end close
@@ -239,28 +289,44 @@ module Zlib
 
     def reset
       __check_open
-      @input = "".b
-      @output = nil
+      String.__zstream_reset(@handle)
+      @buffer = "".b
       @finished = false
       nil
     end
 
-    def total_in
-      __check_open
-      @input.bytesize
-    end
-
-    def total_out
-      __check_open
-      @output ? @output.bytesize : 0
-    end
-
     private
+
+    def __open(inflate, level, window_bits, mem_level, strategy)
+      r = String.__zstream_new(inflate, __to_int(level), __to_int(window_bits),
+                               __to_int(mem_level), __to_int(strategy))
+      __check_status(r)
+      @handle = r
+    end
+
+    # zlib's `deflate` / `inflate` over `data` at `flush`; returns the
+    # bytes produced. Errors raise their `Zlib::*Error`.
+    def __run(data, flush)
+      status, out, consumed = String.__zstream_run(@handle, data, flush)
+      __after_run(status, data, consumed)
+      out
+    end
+
+    def __after_run(status, _data, _consumed)
+      __check_status(status)
+      @finished = true if status == 1
+    end
+
+    def __check_status(status)
+      return status if status.is_a?(Integer)
+      code, msg = status
+      raise ERROR_CLASSES.fetch(code, Zlib::Error), msg
+    end
 
     # Everything but `closed?` is an error on a closed stream
     # (`zstream_ensure_valid` in zlib.c).
     def __check_open
-      raise Zlib::Error, "stream is not ready" if @closed
+      raise Zlib::Error, "stream is not ready" if @closed || @handle.nil?
     end
 
     def __coerce_string(string)
@@ -271,353 +337,229 @@ module Zlib
       end
       converted
     end
+
+    def __to_int(v)
+      return v if v.is_a?(Integer)
+      unless v.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{v.nil? ? "nil" : v.class} into Integer"
+      end
+      v.to_int
+    end
   end
 
-  class Deflate < ZStream
-    # The largest stored block zlib itself emits when its output buffer
-    # allows (deflate_stored keeps four bytes of the 65535 maximum for
-    # the pending block header), so up to this size the
-    # `deflate(s, NO_COMPRESSION)` output is byte-identical to CRuby's.
-    STORED_BLOCK_MAX = 65531
+  # ---------------------------------------------------------------------
+  # Deflate
 
+  class Deflate < ZStream
     def self.deflate(string, level = DEFAULT_COMPRESSION)
       d = new(level)
-      d << string
-      d.finish
+      begin
+        d.deflate(string, FINISH)
+      ensure
+        d.close
+      end
     end
 
     def initialize(level = DEFAULT_COMPRESSION, window_bits = MAX_WBITS,
                    mem_level = DEF_MEM_LEVEL, strategy = DEFAULT_STRATEGY)
       super()
-      level = __to_level(level)
-      raise Zlib::StreamError, "stream error" if level < -1 || level > 9
-      @level = level
-      @framing = Zlib.__framing_of(window_bits, false)
+      __open(false, level.nil? ? DEFAULT_COMPRESSION : level, window_bits.nil? ? MAX_WBITS : window_bits,
+             mem_level.nil? ? DEF_MEM_LEVEL : mem_level, strategy.nil? ? DEFAULT_STRATEGY : strategy)
     end
 
+    # Compress `string`; with `flush` other than NO_FLUSH the output is
+    # flushed accordingly (`FINISH` ends the stream). Returns the bytes
+    # produced, together with anything `<<` had buffered.
     def deflate(string, flush = NO_FLUSH)
-      self << string
-      flush == FINISH ? finish : "".b
+      __check_open
+      data = __coerce_string(string).b
+      out = @buffer + __run(data, flush)
+      @buffer = "".b
+      @finished = true if flush == FINISH
+      out
+    end
+
+    def <<(string)
+      __check_open
+      @buffer << __run(__coerce_string(string).b, NO_FLUSH)
+      self
     end
 
     def flush(flush = SYNC_FLUSH)
-      flush == FINISH ? finish : "".b
-    end
-
-    private
-
-    def __to_level(level)
-      return level if level.is_a?(Integer)
-      return DEFAULT_COMPRESSION if level.nil?
-      unless level.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{level.class} into Integer"
-      end
-      level.to_int
-    end
-
-    # RFC 1950 header, RFC 1951 stored blocks, Adler-32 trailer (or the
-    # bare blocks / the gzip frame, per `window_bits`).
-    def __finish_stream
-      data = @input
-      @output = case @framing
-                when :raw then Deflate.__raw_blocks(data)
-                when :gzip then Zlib.__gzip_frame(data, @level)
-                else
-                  out = "".b
-                  flevel = case @level
-                           when 0, 1 then 0
-                           when 2, 3, 4, 5 then 1
-                           when 7, 8, 9 then 3
-                           else 2
-                           end
-                  cmf = 0x78
-                  flg = flevel << 6
-                  flg += 31 - ((cmf << 8) | flg) % 31
-                  out << cmf.chr << flg.chr
-                  out << Deflate.__raw_blocks(data)
-                  out << [Zlib.adler32(data)].pack("N")
-                end
-    end
-
-    # The RFC 1951 payload: stored (uncompressed) blocks.
-    def self.__raw_blocks(data)
-      out = "".b
-      size = data.bytesize
-      pos = 0
-      loop do
-        len = size - pos
-        len = STORED_BLOCK_MAX if len > STORED_BLOCK_MAX
-        final = pos + len >= size
-        out << (final ? 1 : 0).chr
-        out << (len & 0xFF).chr << (len >> 8).chr
-        nlen = len ^ 0xFFFF
-        out << (nlen & 0xFF).chr << (nlen >> 8).chr
-        out << data.byteslice(pos, len) if len > 0
-        pos += len
-        break if final
-      end
+      __check_open
+      out = @buffer
+      @buffer = "".b
+      out << __run("".b, flush) unless flush == NO_FLUSH
+      @finished = true if flush == FINISH
       out
+    end
+
+    # Change level / strategy mid-stream; output produced by the old
+    # settings is flushed into the buffer `<<` / `finish` return.
+    def params(level, strategy)
+      __check_open
+      status, out = String.__zstream_params(@handle, __to_int(level), __to_int(strategy))
+      __check_status(status)
+      @buffer << out
+      nil
+    end
+
+    def set_dictionary(dict)
+      __check_open
+      __check_status(String.__zstream_dictionary(@handle, __coerce_string(dict).b))
+      dict
     end
   end
 
   # ---------------------------------------------------------------------
-  # Inflate — a complete RFC 1951 decoder (after Mark Adler's puff.c).
+  # Inflate
 
   class Inflate < ZStream
+    # One shot: decode and finish — a truncated stream raises BufError
+    # exactly as CRuby's `Zlib::Inflate.inflate` does.
     def self.inflate(string)
+      # The class method takes a String (nil is a TypeError here, unlike the
+      # instance method's `inflate(nil)` = finish).
+      unless string.is_a?(String) || String.try_convert(string)
+        raise TypeError, "no implicit conversion of #{string.nil? ? "nil" : string.class} into String"
+      end
       i = new
-      i << string
-      i.finish
+      begin
+        out = i.inflate(string)
+        out << i.finish
+        out
+      ensure
+        i.close
+      end
     end
 
     def initialize(window_bits = MAX_WBITS)
       super()
-      @framing = Zlib.__framing_of(window_bits, true)
+      @unused = nil
+      @pending = nil
+      __open(true, 0, window_bits.nil? ? MAX_WBITS : window_bits, 0, 0)
     end
 
-    def inflate(string = nil)
-      self << string unless string.nil?
-      "".b
+    # Decompress `string` (nil ⇒ finish). Returns the bytes produced plus
+    # anything `<<` had buffered. Raises `DataError` on a corrupt stream,
+    # `NeedDict` when a preset dictionary is required.
+    def inflate(string)
+      __check_open
+      return finish if string.nil?
+      data = __coerce_string(string).b
+      out = @buffer + __feed(data)
+      @buffer = "".b
+      out
     end
 
-    # Decode the RFC 1951 blocks starting at byte `pos` of `data`;
-    # returns `[decoded, position after the final block]`.
-    def self.__inflate_raw(data, pos = 0)
-      i = new(-MAX_WBITS)
-      i.__send__(:__blocks_at, data, pos)
+    def <<(string)
+      __check_open
+      @buffer << __feed(__coerce_string(string).b)
+      self
+    end
+
+    def finish
+      __check_open
+      out = @buffer
+      @buffer = "".b
+      unless @finished
+        status, more, _consumed = String.__zstream_run(@handle, "".b, FINISH)
+        out << more
+        if status == 1
+          @finished = true
+        elsif status.is_a?(Integer)
+          # The stream was cut short: the same "buffer error" zlib.c raises.
+          raise BufError, "buffer error" if total_in > 0 || !out.empty?
+        else
+          __check_status(status)
+        end
+      end
+      @finished = true
+      out
+    end
+
+    # Bytes handed over after the end of the stream (nil if none). Not a
+    # CRuby API (`GzipReader#unused` is); kept for the gzip framing code.
+    def __unused
+      @unused
+    end
+
+    def set_dictionary(dict)
+      __check_open
+      __check_status(String.__zstream_dictionary(@handle, __coerce_string(dict).b))
+      dict
+    end
+
+    def sync(string)
+      __check_open
+      false
     end
 
     def sync_point?
+      __check_open
       false
     end
 
     private
 
-    # Base lengths / distances and their extra-bit counts, indexed by
-    # symbol (RFC 1951 §3.2.5).
-    LENGTH_BASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
-                   35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258].freeze
-    LENGTH_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
-                    3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0].freeze
-    DIST_BASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
-                 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
-                 8193, 12289, 16385, 24577].freeze
-    DIST_EXTRA = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
-                  7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13].freeze
-    # Order in which code-length code lengths are transmitted.
-    CLEN_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15].freeze
-
-    # The fixed-Huffman tables (§3.2.6), built once.
-    FIXED_TABLES = begin
-      lengths = Array.new(288)
-      288.times do |i|
-        lengths[i] = if i < 144 then 8
-                     elsif i < 256 then 9
-                     elsif i < 280 then 7
-                     else 8
-                     end
+    def __feed(data)
+      if @finished
+        @unused = (@unused || "".b) + data unless data.empty?
+        return "".b
       end
-      [lengths, Array.new(30, 5)]
+      # Input zlib could not take yet (it stopped for a preset dictionary)
+      # goes first once `set_dictionary` has been called.
+      if @pending
+        data = @pending + data
+        @pending = nil
+      end
+      status, out, consumed = String.__zstream_run(@handle, data, NO_FLUSH)
+      if status.is_a?(Array) && status[0] == 2
+        @pending = data.byteslice(consumed..)
+      end
+      __check_status(status)
+      if status == 1
+        @finished = true
+        @unused = data.byteslice(consumed..) if consumed < data.bytesize
+      end
+      out
     end
+  end
 
-    def __finish_stream
-      data = @input
-      framing = @framing
-      if framing == :auto
-        framing = (data.getbyte(0) == 0x1f && data.getbyte(1) == 0x8b) ? :gzip : :zlib
-      end
-      @output = case framing
-                when :raw
-                  __blocks_at(data, 0)[0]
-                when :gzip
-                  Zlib.__gunzip_frame(data)[0]
-                else
-                  size = data.bytesize
-                  raise Zlib::BufError, "buffer error" if size < 2
-                  cmf = data.getbyte(0)
-                  flg = data.getbyte(1)
-                  if ((cmf << 8) | flg) % 31 != 0 || cmf & 0x0F != 8 || (cmf >> 4) > 7
-                    raise Zlib::DataError, "incorrect header check"
-                  end
-                  raise Zlib::NeedDict, "need dictionary" if flg & 0x20 != 0
-                  out, pos = __blocks_at(data, 2)
-                  # Check the Adler-32 trailer.
-                  raise Zlib::BufError, "buffer error" if pos + 4 > size
-                  expected = (data.getbyte(pos) << 24) | (data.getbyte(pos + 1) << 16) |
-                             (data.getbyte(pos + 2) << 8) | data.getbyte(pos + 3)
-                  raise Zlib::DataError, "incorrect data check" if Zlib.adler32(out) != expected
-                  out
-                end
+  def self.deflate(string, level = DEFAULT_COMPRESSION)
+    Deflate.deflate(string, level)
+  end
+
+  def self.inflate(string)
+    Inflate.inflate(string)
+  end
+
+  # Raw DEFLATE (no wrapper) of `data`, one shot.
+  def self.__deflate_raw(data, level = DEFAULT_COMPRESSION)
+    d = Deflate.new(level, -MAX_WBITS)
+    begin
+      d.deflate(data, FINISH)
+    ensure
+      d.close
     end
+  end
 
-    # The block loop: decode from `pos` to the final block, return the
-    # output and the byte position just past it (bit buffer dropped).
-    def __blocks_at(data, pos)
-      @data = data
-      @pos = pos
-      @bitbuf = 0
-      @bitcnt = 0
-      out = "".b
-      loop do
-        final = __bits(1)
-        case __bits(2)
-        when 0 then __stored(out)
-        when 1 then __codes(out, __huffman(FIXED_TABLES[0]), __huffman(FIXED_TABLES[1]))
-        when 2 then __dynamic(out)
-        else raise Zlib::DataError, "invalid block type"
-        end
-        break if final == 1
-      end
-      @bitbuf = 0
-      @bitcnt = 0
-      [out, @pos]
-    end
-
-    def __bits(need)
-      while @bitcnt < need
-        b = @data.getbyte(@pos)
-        raise Zlib::BufError, "buffer error" if b.nil?
-        @pos += 1
-        @bitbuf |= b << @bitcnt
-        @bitcnt += 8
-      end
-      v = @bitbuf & ((1 << need) - 1)
-      @bitbuf >>= need
-      @bitcnt -= need
-      v
-    end
-
-    def __stored(out)
-      @bitbuf = 0
-      @bitcnt = 0
-      raise Zlib::BufError, "buffer error" if @pos + 4 > @data.bytesize
-      len = @data.getbyte(@pos) | (@data.getbyte(@pos + 1) << 8)
-      nlen = @data.getbyte(@pos + 2) | (@data.getbyte(@pos + 3) << 8)
-      raise Zlib::DataError, "invalid stored block lengths" if len != (nlen ^ 0xFFFF)
-      @pos += 4
-      raise Zlib::BufError, "buffer error" if @pos + len > @data.bytesize
-      out << @data.byteslice(@pos, len)
-      @pos += len
-    end
-
-    # Canonical Huffman table from code lengths: `[count, symbol]`, where
-    # `count[len]` is how many codes have that length and `symbol` lists
-    # the symbols in code order.
-    def __huffman(lengths)
-      count = Array.new(16, 0)
-      lengths.each { |l| count[l] += 1 }
-      count[0] = 0
-      offs = Array.new(16, 0)
-      len = 1
-      while len < 15
-        offs[len + 1] = offs[len] + count[len]
-        len += 1
-      end
-      symbol = Array.new(lengths.size, 0)
-      lengths.each_with_index do |l, s|
-        next if l == 0
-        symbol[offs[l]] = s
-        offs[l] += 1
-      end
-      [count, symbol]
-    end
-
-    def __decode(table)
-      count, symbol = table
-      code = 0
-      first = 0
-      index = 0
-      len = 1
-      while len <= 15
-        code |= __bits(1)
-        c = count[len]
-        return symbol[index + (code - first)] if code - c < first
-        index += c
-        first += c
-        first <<= 1
-        code <<= 1
-        len += 1
-      end
-      raise Zlib::DataError, "invalid code"
-    end
-
-    def __codes(out, lencode, distcode)
-      loop do
-        sym = __decode(lencode)
-        if sym < 256
-          out << sym.chr
-        elsif sym == 256
-          return
-        else
-          sym -= 257
-          raise Zlib::DataError, "invalid literal/length code" if sym >= 29
-          len = LENGTH_BASE[sym] + __bits(LENGTH_EXTRA[sym])
-          dsym = __decode(distcode)
-          raise Zlib::DataError, "invalid distance code" if dsym >= 30
-          dist = DIST_BASE[dsym] + __bits(DIST_EXTRA[dsym])
-          raise Zlib::DataError, "invalid distance too far back" if dist > out.bytesize
-          start = out.bytesize - dist
-          if dist >= len
-            out << out.byteslice(start, len)
-          else
-            # Overlapping copy: the run repeats itself.
-            len.times { |k| out << out.getbyte(start + k).chr }
-          end
-        end
-      end
-    end
-
-    def __dynamic(out)
-      nlen = __bits(5) + 257
-      ndist = __bits(5) + 1
-      ncode = __bits(4) + 4
-      raise Zlib::DataError, "too many length or distance symbols" if nlen > 286 || ndist > 30
-      lengths = Array.new(19, 0)
-      ncode.times { |i| lengths[CLEN_ORDER[i]] = __bits(3) }
-      lencode = __huffman(lengths)
-      lengths = []
-      while lengths.size < nlen + ndist
-        sym = __decode(lencode)
-        if sym < 16
-          lengths << sym
-        else
-          if sym == 16
-            raise Zlib::DataError, "invalid bit length repeat" if lengths.empty?
-            rep = lengths.last
-            n = 3 + __bits(2)
-          elsif sym == 17
-            rep = 0
-            n = 3 + __bits(3)
-          else
-            rep = 0
-            n = 11 + __bits(7)
-          end
-          raise Zlib::DataError, "invalid bit length repeat" if lengths.size + n > nlen + ndist
-          n.times { lengths << rep }
-        end
-      end
-      raise Zlib::DataError, "invalid code -- missing end-of-block" if lengths[256] == 0
-      __codes(out, __huffman(lengths[0, nlen]), __huffman(lengths[nlen, ndist]))
+  # Raw inflate of the DEFLATE blocks starting at byte `pos` of `data`;
+  # returns `[decoded, position just past the final block]`, or raises
+  # `GzipFile::NoFooter`-style truncation as `[nil, nil]`.
+  def self.__inflate_raw(data, pos = 0)
+    i = Inflate.new(-MAX_WBITS)
+    begin
+      out = i.inflate(data.byteslice(pos..))
+      return [nil, nil] unless i.finished?
+      [out, pos + i.total_in]
+    ensure
+      i.close
     end
   end
 
   # ---------------------------------------------------------------------
   # gzip framing (RFC 1952).
-
-  # `window_bits` → framing, as zlib reads it: 8..15 zlib wrapper, -8..-15
-  # raw deflate, 24..31 gzip, and for inflate 40..47 auto-detect.
-  def self.__framing_of(window_bits, inflate)
-    wb = window_bits.to_int
-    if wb < 0
-      :raw
-    elsif wb >= 40 && inflate
-      :auto
-    elsif wb >= 24
-      :gzip
-    else
-      :zlib
-    end
-  end
 
   def self.__gzip_frame(data, level = DEFAULT_COMPRESSION, mtime: 0, orig_name: nil, comment: nil, os_code: OS_CODE)
     out = "".b
@@ -632,7 +574,7 @@ module Zlib
     out << [0x1f, 0x8b, 8, flg, mtime.to_i, xfl, os_code].pack("CCCCVCC")
     out << orig_name.b << "\0" if orig_name
     out << comment.b << "\0" if comment
-    out << Deflate.__raw_blocks(data)
+    out << __deflate_raw(data, level)
     out << [Zlib.crc32(data), data.bytesize & 0xFFFFFFFF].pack("VV")
     out
   end
@@ -669,8 +611,8 @@ module Zlib
     end
     pos += 2 if flg & 0x02 != 0
     raise GzipFile::Error, "unexpected end of file" if pos > data.bytesize
-    out, pos = Inflate.__inflate_raw(data, pos)
-    raise GzipFile::NoFooter, "footer is not found" if pos + 8 > data.bytesize
+    out, pos = __inflate_raw(data, pos)
+    raise GzipFile::NoFooter, "footer is not found" if out.nil? || pos + 8 > data.bytesize
     crc, isize = data.byteslice(pos, 8).unpack("VV")
     raise GzipFile::CRCError, "invalid compressed data -- crc error" if crc != Zlib.crc32(out)
     raise GzipFile::LengthError, "invalid compressed data -- length error" if isize != (out.bytesize & 0xFFFFFFFF)
