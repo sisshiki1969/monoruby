@@ -9,7 +9,7 @@
 //! document — rather than the whole output. Every test needs the
 //! ruby-bench checkout at `$RUBY_BENCH` or `../ruby-bench` (CI clones it)
 //! and skips otherwise; the gem-backed ones also skip when the host lacks
-//! the gem (CI installs `erubi` and `chunky_png`).
+//! the gem (CI installs `erubi`, `chunky_png` and the rubocop gems).
 
 extern crate monoruby;
 use monoruby::tests::ruby_path;
@@ -208,7 +208,9 @@ p [pixels.size, Blurhash.encode_rb(204, 204, pixels), Blurhash.encode_rb(204, 20
 
 #[test]
 fn psych_loads_like_cruby() {
-    // The three YAML documents of psych-load, loaded and inspected.
+    // The three YAML documents of psych-load (the benchmark body is
+    // `Psych.load` of each), loaded and inspected; then dumped again and
+    // re-loaded, so the emitter's text and the round trip are checked too.
     compare(
         "psych-load",
         &[],
@@ -218,8 +220,44 @@ require "zlib"
 Dir["yaml/*.yaml"].sort.each do |path|
   y = Psych.load(File.read(path))
   s = y.inspect
-  puts "#{File.basename(path)}: #{y.class} #{s.size} #{Zlib.crc32(s)}"
+  d = Psych.dump(y)
+  again = Psych.load(d)
+  puts "#{File.basename(path)}: #{y.class} #{s.size} #{Zlib.crc32(s)} dump #{d.bytesize} #{Zlib.crc32(d)} round-trip #{again == y}"
 end
+"##,
+    );
+}
+
+#[test]
+fn rubocop_autocorrects_like_cruby() {
+    // The rubocop benchmark: `RuboCop::Runner` with `--autocorrect` over
+    // `fixture.rb` fed through the `stdin` option (the Ruby LSP's way),
+    // under the benchmark's `.rubocop.yml` (rubocop-performance and
+    // rubocop-rails plugins). Compared: the run's result, every offense
+    // (cop, position, severity, corrected?) and the corrected source.
+    // Result caching is off so both processes really inspect the file.
+    compare(
+        "rubocop",
+        &["rubocop", "rubocop-performance", "rubocop-rails"],
+        r##"
+require "stringio"
+require "rubocop"
+require "zlib"
+$offenses = []
+class CollectFormatter < RuboCop::Formatter::BaseFormatter
+  def file_finished(file, offenses)
+    $offenses.concat(offenses.map { |o| [o.cop_name, o.line, o.column, o.severity.name, o.corrected?] })
+  end
+end
+opts = RuboCop::Options.new.parse(["--stderr", "--force-exclusion", "--format", "CollectFormatter", "--raise-cop-error", "--autocorrect", "--cache", "false"]).first
+path = File.expand_path("fixture.rb")
+contents = File.read(path)
+opts[:stdin] = contents
+runner = RuboCop::Runner.new(opts, RuboCop::ConfigStore.new)
+ok = runner.run([path])
+corrected = opts[:stdin]
+p [ok, $offenses.size, corrected.size, Zlib.crc32(corrected), corrected == contents]
+$offenses.each { |o| p o }
 "##,
     );
 }

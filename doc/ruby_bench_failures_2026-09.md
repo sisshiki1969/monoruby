@@ -202,7 +202,46 @@ ScalarScanner …）を `gem/psych/` にそのまま同梱し、C 拡張の代�
 単位）/ イベント API を CRuby と照合している。psych-load ベンチの出力比較も
 そのまま通る。手書きパーサで今日直したマージキーのような穴は、ここで一掃された。
 
-結果: rubocop ベンチが完走し、1 反復 80 ms（CRuby 4.0.2 YJIT なし 218 ms）。
+結果: rubocop ベンチが完走した（1 反復 80 ms と出たが、7.1 のとおり
+autocorrect が効いていない数字だった。修正後は 216 ms で CRuby 4.0.2 YJIT なし
+の 218 ms と同等）。
+
+### 7.1 完走していても正しく動いていなかった
+
+出力を CRuby と比較するテスト（`tests/ruby_bench_outputs.rs`
+`rubocop_autocorrects_like_cruby`: fixture の autocorrect 結果と違反一覧）を
+書いたところ、monoruby では **1 件も autocorrect されていなかった**（40 件の
+違反はすべて `:uncorrected`、修正後ソースも異なる）。原因は rubocop の
+オプション解析: `--autocorrect` などの引数なしスイッチの値が `true` ではなく
+`nil` になっていた。optparse の
+
+```ruby
+def accept(t, pat = /.*/m, &block)
+  ...
+  unless block
+    block = pat.method(:convert).to_proc if pat.respond_to?(:convert)
+  end
+  @atype[t] = [pat, block]
+```
+
+で、`&block` 引数は monoruby では「フレームのブロックハンドラを読む
+`BlockArg` 命令」として遅延実体化されるが、本体で `block` に代入があると
+以後の参照は通常のローカルスロット（entry で nil 埋め）を読むため、実行
+されなかった代入の後では `nil` になっていた。さらに、ネストしたブロック内で
+`&block` に代入すると bytecodegen が FATAL で落ちていた。
+
+修正: parser（`LvarCollector::block_param_written`、ネストしたスコープからの
+代入は `exit_prism_scope` で親へ畳み込む）で「`&block` に代入がある」ことを
+記録し、その場合だけ bytecodegen が `&block` に本物のローカルスロットを割り
+当て、prologue で `BlockArg` により実体化する（代入の無い通常の `&block` は
+従来どおり遅延のまま、`block.call` の最適化も従来どおり）。
+`tests/block_param_assign.rs`。
+
+ついでに: `rubocop-rails` が `$VERBOSE = nil` の下で定数を再定義するのに
+「already initialized constant」警告が出ていた。`rb_warn` 相当の警告
+（定数再定義、ハッシュキー重複）は `$VERBOSE` が nil なら黙る、Onigmo の
+警告（`character class has duplicated range` 等）は `rb_warning` 相当で
+`$VERBOSE == true`（`-w`）のときだけ出す、に揃えた（`tests/warning_gating.rs`）。
 
 ## 8. 測定メモ
 

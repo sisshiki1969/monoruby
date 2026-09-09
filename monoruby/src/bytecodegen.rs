@@ -628,6 +628,7 @@ impl<'a> BytecodeGen<'a> {
         let (mother, mother_outer) = info.mother();
         let mother_params = store[store[mother].func_id()].params().clone();
         let block_param = info.block_param();
+        let block_param_slot_name = info.block_param_slot_name();
         let func_id = info.func_id();
         let sourceinfo = info.sourceinfo.clone();
         let outer = info.outer;
@@ -667,9 +668,23 @@ impl<'a> BytecodeGen<'a> {
             params.args_names.iter().for_each(|name| {
                 codegen.add_local(*name);
             });
+            // A reassigned `&block` parameter is an ordinary local from
+            // here on (`compile` fills the slot from the block handler at
+            // entry); reads and writes, from this frame or a nested
+            // block, resolve to the slot like any other local.
+            if let Some(name) = block_param_slot_name {
+                codegen.add_local(name);
+            }
         }
 
         codegen
+    }
+
+    /// The local slot of a reassigned `&block` parameter, if this iseq
+    /// has one (see `ParamsInfo::block_param_written`).
+    fn block_param_slot(&self) -> Option<BcLocal> {
+        let name = self.iseq().block_param_slot_name()?;
+        self.iseq().locals.get(&name).copied()
     }
 
     fn iseq(&self) -> &ISeqInfo {
@@ -682,6 +697,11 @@ impl<'a> BytecodeGen<'a> {
 
     fn compile(mut self, info: CompileInfo) -> Result<()> {
         self.gen_dummy_init();
+        // Materialize a reassigned `&block` parameter into its slot (a
+        // Proc, or nil without a block) before anything reads it.
+        if let Some(slot) = self.block_param_slot() {
+            self.emit(BytecodeInst::BlockArg(slot.into(), 0), Loc::default());
+        }
         // arguments preparation
         for ForParamInfo {
             dst_outer,
@@ -1150,13 +1170,17 @@ impl<'a> BytecodeGen<'a> {
         }
     }
 
+    /// Is `node` a read of the (never reassigned) `&block` parameter of
+    /// this frame or an enclosing one, i.e. the frame's own block handler?
+    /// A reassigned one lives in a local slot and is a plain local.
     fn is_refer_block_arg(&mut self, node: &Node) -> bool {
         if let NodeKind::LocalVar(outer, name) = &node.kind {
             let lvar = IdentId::get_id(name);
             if *outer == 0 {
-                return self.block_param == Some(lvar);
+                return self.block_param == Some(lvar) && !self.iseq().locals.contains_key(&lvar);
             } else {
-                return self.outer_block_param_name(*outer) == Some(lvar);
+                return self.outer_block_param_name(*outer) == Some(lvar)
+                    && self.refer_dynamic_local(*outer, lvar).is_none();
             }
         }
         false

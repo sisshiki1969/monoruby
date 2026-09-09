@@ -50,6 +50,16 @@ pub struct LvarCollector {
     pub numbered_param: Option<super::Loc>,
     pub numbered_param_max: u8,
     pub prohibit_numbered_param: Option<super::Loc>,
+    /// The `&block` parameter is assigned somewhere in the body (this
+    /// scope or a nested block). Bytecodegen then gives it a real local
+    /// slot, materialized from the block at entry, instead of reading
+    /// the frame's block handler at every reference: a slot is the only
+    /// thing that can hold a reassigned value.
+    pub block_param_written: bool,
+    /// Assignments from this scope to locals of enclosing scopes:
+    /// `(depth, name)`, depth 1 = the parent. Folded into the parent's
+    /// collector when this scope is left (`Lowerer::exit_prism_scope`).
+    pub outer_writes: Vec<(usize, String)>,
 }
 
 impl LvarCollector {
@@ -65,6 +75,8 @@ impl LvarCollector {
             numbered_param: None,
             numbered_param_max: 0,
             prohibit_numbered_param: None,
+            block_param_written: false,
+            outer_writes: vec![],
         }
     }
 }
@@ -81,6 +93,8 @@ impl LvarCollector {
             numbered_param: None,
             numbered_param_max: 0,
             prohibit_numbered_param: None,
+            block_param_written: false,
+            outer_writes: vec![],
         }
     }
 
@@ -151,6 +165,16 @@ impl LvarCollector {
     #[inline(always)]
     pub fn block_param(&self) -> Option<LvarId> {
         self.block
+    }
+
+    /// Record an assignment to the local `name` of this scope; see
+    /// `block_param_written`.
+    pub fn note_write(&mut self, name: &str) {
+        if let Some(id) = self.block {
+            if self.get_name_id(id).as_deref() == Some(name) {
+                self.block_param_written = true;
+            }
+        }
     }
 
     #[inline(always)]

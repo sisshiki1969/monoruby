@@ -1410,31 +1410,9 @@ fn const_set(
     validate_constant_name(name)?;
     let module = self_val.as_class().id();
     let val = lfp.arg(1);
-    // Warn (via Ruby's `$stderr` so mspec's `complain` matcher captures it)
-    // when overwriting an existing same-name constant on the receiver,
-    // matching CRuby's redefinition warning. The qualified name uses
-    // the full ancestor chain so reflective tests can match
-    // `/.+::Name/`.
-    if globals.store.get_constant_noautoload(module, name).is_some() {
-        let parent_name = globals.store.qualified_name(module);
-        let qual = if parent_name.is_empty() {
-            name.get_name().to_string()
-        } else {
-            format!("{parent_name}::{}", name.get_name())
-        };
-        let msg = format!("warning: already initialized constant {qual}\n");
-        let stderr_id = IdentId::get_id("$stderr");
-        let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
-        let write_id = IdentId::get_id("write");
-        let _ = vm.invoke_method_inner(
-            globals,
-            write_id,
-            stderr,
-            &[Value::string(msg)],
-            None,
-            None,
-        );
-    }
+    // Warn when overwriting an existing same-name constant on the
+    // receiver, matching CRuby's redefinition warning.
+    vm.warn_already_initialized_constant(globals, module, name);
     globals.set_constant(module, name, val);
     // Record the call-site as the constant's source location so
     // `Module#const_source_location(:Foo)` returns `[__FILE__,

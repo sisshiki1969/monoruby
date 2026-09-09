@@ -54,10 +54,11 @@ jobs:
         run: gem install erubi --no-document
       - name: Install gems for the output-equality tests
         # tests/hexapdf_output.rs and tests/ruby_bench_outputs.rs render a
-        # document / an image / a template under both CRuby and monoruby and
-        # compare the bytes; each test skips when its gem is absent, so keep
-        # them installed here to make the tests count.
-        run: gem install hexapdf chunky_png --no-document
+        # document / an image / a template / rubocop's autocorrection under
+        # both CRuby and monoruby and compare the bytes; each test skips
+        # when its gem is absent, so keep them installed here to make the
+        # tests count. The rubocop versions are ruby-bench's Gemfile.lock.
+        run: gem install hexapdf chunky_png rubocop:1.79.1 rubocop-performance:1.25.0 rubocop-rails:2.32.0 --no-document
       - name: Test
         run: bin/test
 
@@ -115,7 +116,7 @@ jobs:
         # bin/ruby-bench-diff requires `erubi`; matches the `coverage` job.
         run: gem install erubi --no-document
       - name: Install gems for the output-equality tests
-        run: gem install hexapdf chunky_png --no-document
+        run: gem install hexapdf chunky_png rubocop:1.79.1 rubocop-performance:1.25.0 rubocop-rails:2.32.0 --no-document
       - name: Install libffi + pkg-config
         # The aarch64-macOS dep block in monoruby/Cargo.toml builds libffi-sys
         # with the `system` feature; libffi is keg-only so pkg-config needs its
