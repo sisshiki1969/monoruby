@@ -523,31 +523,32 @@ const OLD_OBJECT_FLOOR: usize = 16384;
 const FREE_PAGE_RESERVE_FRACTION: usize = 8;
 const FREE_PAGE_RESERVE_MIN: usize = 2;
 
-/// How deep the mark phase may walk the object graph with plain
-/// recursion before it starts deferring children to the mark queue
-/// (`Allocator::scan_children`).
-///
-/// The traversal used to be *purely* recursive, so its stack cost was the
-/// depth of the object graph: 75K links of `a = [a]` (or a linked list,
-/// or an ivar chain) overflowed the 8MB main stack and aborted the
-/// process inside GC. Above this limit the walk switches to a
-/// breadth-first queue on the heap, which bounds the native stack at
-/// `MARK_RECURSION_LIMIT` nested `mark_children` frames — a few KB — no
-/// matter how deep the graph is. That headroom matters because a
-/// collection starts at a safepoint, on top of whatever JIT-compiled Ruby
-/// frames are already on the stack.
-///
-/// Keeping a *small* recursive prefix rather than queueing from the very
-/// first object is what makes this free: real graphs are shallow and wide,
-/// and a queue entry per marked object costs a push + a pop + 8 bytes of
-/// memory traffic. Measured on plb2 bedcov (2.7M live objects, the most
-/// mark-heavy workload here, 89 collections), mean of 13 interleaved
-/// runs: 3205 ms for the old unbounded recursion, 3225 ms (+0.6%) with
-/// this prefix, 3479 ms (+8.6%) queueing everything. 32 and 256 measured
-/// the same, so this takes the tighter stack bound.
-///
-/// Setting it to 0 makes the traversal a pure breadth-first walk.
-const MARK_RECURSION_LIMIT: u32 = 32;
+/// How many queue entries ahead of the one being scanned
+/// `drain_mark_queue` prefetches. Marking is bound by the cache miss on
+/// each object's header; the queue makes the addresses of the next
+/// objects known well before they are read, so the misses overlap.
+/// Eight entries is a few hundred nanoseconds of lead at the observed
+/// 30 ns per object, enough to hide a DRAM access without evicting
+/// what is still in use.
+const MARK_PREFETCH_DISTANCE: usize = 8;
+
+/// Hint the CPU to fetch the cache line at `p` (no-op where there is no
+/// such instruction). Reading nothing, it is safe on any address.
+#[inline(always)]
+fn prefetch_read(p: *const u8) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: a prefetch never faults, whatever the address.
+    unsafe {
+        core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(p as *const i8)
+    };
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: `prfm` never faults, whatever the address.
+    unsafe {
+        core::arch::asm!("prfm pldl1keep, [{0}]", in(reg) p, options(nostack, preserves_flags))
+    };
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let _ = p;
+}
 
 /// Number of collections an object must survive before it is promoted to
 /// the old generation. Aging (rather than promoting on first survival)
@@ -578,6 +579,19 @@ pub trait GCBox: PartialEq {
     fn new_invalid() -> Self;
 
     ///
+    /// Abort with forensics if `self` is a dead cell. Called on every
+    /// object the mark phase takes off its queue, before its children
+    /// are scanned: a dead cell reached from a live one is a missed write
+    /// barrier or a stale root. The default does nothing (for cell types
+    /// without a liveness flag).
+    ///
+    fn check_live(&self, _alloc: &mut Allocator<Self>)
+    where
+        Self: Sized,
+    {
+    }
+
+    ///
     /// Mark the objects directly referenced by `self` (its children),
     /// *without* marking `self` itself. Used to scan remembered-set
     /// entries during a minor GC, where `self` is an old object that is
@@ -598,16 +612,18 @@ pub trait GCBox: PartialEq {
     fn is_promotable(&self) -> bool;
 
     ///
-    /// Set this object's old-generation header flag. Called only after
-    /// the mark phase (never while a `&self` from marking is live), so
-    /// the `&mut` is sound. See `doc/gc.md`.
+    /// Set this object's old-generation header flag. Called from
+    /// `drain_mark_queue` through the raw queue pointer, before any
+    /// `&self` to the object exists for the scan of its children, so the
+    /// `&mut` is sound. See `doc/gc.md`.
     ///
     fn promote_to_old(&mut self);
 
     ///
     /// Increment this object's survival age and return whether it has now
-    /// reached `RGENGC_OLD_AGE` and should be promoted. Called from the
-    /// post-mark aging pass (no `&self` from marking is live).
+    /// reached `RGENGC_OLD_AGE` and should be promoted. Called from
+    /// `drain_mark_queue` under the same aliasing discipline as
+    /// `promote_to_old`.
     ///
     fn age_and_check_promote(&mut self) -> bool;
 
@@ -701,7 +717,7 @@ pub struct Allocator<T> {
     /// minor/major choice in `decide_gc_kind`.
     minors_since_major: usize,
     /// Live count of old-generation objects, maintained incrementally:
-    /// `+1` per promotion in `apply_aging`, reset to 0 by `clear_old` at a
+    /// `+1` per promotion in `drain_mark_queue`, reset to 0 by `clear_old` at a
     /// major GC (which then re-promotes survivors). Drives the adaptive
     /// major trigger; avoids an O(pages) popcount per GC.
     old_count: usize,
@@ -717,21 +733,21 @@ pub struct Allocator<T> {
     /// Whether the mark phase currently running belongs to a *major*
     /// collection. A major keeps the old generation (`old_bits` is not
     /// cleared) and marks old objects along with everything else, so it
-    /// is the only phase that has to test `old_bits` before treating a
-    /// freshly marked cell as an aging candidate.
+    /// is the only phase that has to test `old_bits` before ageing a
+    /// freshly marked cell.
     major_mark: bool,
-    /// Promotable objects marked (survived) this cycle. Their age is
-    /// incremented in the post-mark `apply_aging` pass, and those
-    /// reaching `RGENGC_OLD_AGE` are promoted there (old_bits + header
-    /// OLD). Deferred so the header writes never alias a `&self` held by
-    /// the mark traversal.
-    aging: Vec<*mut T>,
+    /// Objects promoted to the old generation this cycle (aged and
+    /// promoted as `drain_mark_queue` scanned them). `remember_promoted`
+    /// classifies them once marking is complete, when every promotion of
+    /// the cycle is visible.
+    promoted: Vec<*mut T>,
     /// Mark-phase work list: objects whose mark bit is set but whose
-    /// children have not been scanned yet, because the walk had reached
-    /// [`MARK_RECURSION_LIMIT`] when it got to them. Popped front-to-back
-    /// by [`Allocator::drain_mark_queue`], so the deep part of the
-    /// traversal is a **breadth-first** walk driven by this queue rather
-    /// than by the native stack. See `doc/gc.md`.
+    /// children have not been scanned yet. `mark` sets the bit and
+    /// pushes; [`Allocator::drain_mark_queue`] pops front-to-back and
+    /// scans, so the traversal is a **breadth-first** walk driven by this
+    /// queue rather than by the native stack, and the object headers it
+    /// is about to read can be prefetched from the entries ahead. See
+    /// `doc/gc.md`.
     ///
     /// The queue holds one pointer per *marked but unscanned* object, so
     /// it peaks below `8 bytes × live objects` against the 64-byte cells
@@ -750,17 +766,8 @@ pub struct Allocator<T> {
     /// `mark_children` frame is what called the failing `mark`), but the
     /// ancestry above it is cut off at the most recent queue hop, because
     /// that ancestor is no longer a stack frame. This names it, which is
-    /// the link the deferral costs. Maintained only where objects leave
-    /// the queue — never on the recursive fast path, which is hot. See
-    /// `RValue::mark` and `doc/gc.md`.
+    /// the link the queue costs. See `RValue::mark` and `doc/gc.md`.
     mark_scanning: Option<std::ptr::NonNull<T>>,
-    /// How many `mark_children` frames the current walk is nested in.
-    /// Compared against [`MARK_RECURSION_LIMIT`] to decide between
-    /// scanning a newly marked object's children right away and deferring
-    /// them to `mark_queue`. Incremented and decremented in matched pairs
-    /// by [`Allocator::scan_children`], so it is back at zero whenever the
-    /// mark phase returns to the root walk.
-    mark_depth: u32,
     /// Generational GC: remembered set — old-generation objects that
     /// hold a reference into the young generation, recorded by the write
     /// barrier (`RValue::write_barrier`). A minor GC scans these as
@@ -962,10 +969,9 @@ impl<T: GCBox> Allocator<T> {
             old_major_threshold: OLD_OBJECT_FLOOR,
             promoting: false,
             major_mark: false,
-            aging: Vec::new(),
+            promoted: Vec::new(),
             mark_queue: VecDeque::new(),
             mark_scanning: None,
-            mark_depth: 0,
             remembered: Vec::new(),
             pages_since_gc: 0,
             gc_enabled: true,
@@ -1476,7 +1482,7 @@ impl<T: GCBox> Allocator<T> {
         match kind {
             // Surviving old objects keep their generation across a major:
             // demoting them would make the whole live old set re-age and
-            // re-promote (an `aging` entry, three header writes and a
+            // re-promote (three header writes and a
             // `young_child_exists` scan each), and would leave the minors
             // right after a major scanning a heap with no old generation
             // at all. Their `old_bits` therefore stay set here; the bits
@@ -1498,9 +1504,8 @@ impl<T: GCBox> Allocator<T> {
         // Surviving objects may be promoted during the real mark.
         self.promoting = true;
         self.major_mark = kind == GcKind::Major;
-        // The root walk marks everything within `MARK_RECURSION_LIMIT`
-        // levels of a root and queues the rest; the drain then finishes
-        // the deep part breadth-first (see `scan_children`). Nothing may
+        // The root walk sets the mark bits of the roots and queues them;
+        // the drain scans the graph from there, breadth-first. Nothing may
         // read the mark bits between the two.
         root.mark(self);
         self.drain_mark_queue();
@@ -1512,10 +1517,9 @@ impl<T: GCBox> Allocator<T> {
         }
         self.promoting = false;
         self.major_mark = false;
-        // Age this cycle's promotable survivors and promote those old
-        // enough (deferred from the mark phase to avoid aliasing). Safe:
-        // marking is complete.
-        self.apply_aging();
+        // Survivors were aged and promoted as they were scanned; classify
+        // the promoted ones now that marking is complete.
+        self.remember_promoted();
         // The incrementally maintained `old_count` must equal the actual
         // number of old cells (popcount of `old_bits`). Dead old cells are
         // still counted in both here; sweep drops them from each together.
@@ -1618,10 +1622,14 @@ impl<T: GCBox> Allocator<T> {
         self.remembered.push(ptr);
     }
 
-    /// Mark object.
-    /// If object is already marked, return true.
-    /// If not yet, mark it and return false.
-    pub(crate) fn gc_check_and_mark(&mut self, ptr: &T) -> bool {
+    ///
+    /// Mark `ptr`: set its mark bit and, if it was not set already, queue
+    /// the object for `drain_mark_queue` to scan. Nothing of the object
+    /// itself is read here — only the page bitmap, which is hot — so the
+    /// cache miss on its header is taken in the drain, prefetched ahead.
+    /// See `doc/gc.md` §6.3.
+    ///
+    pub(crate) fn mark(&mut self, ptr: &T) {
         let p = ptr as *const T;
         if let Some(addr) = tracked_addr()
             && p as usize == addr
@@ -1638,88 +1646,80 @@ impl<T: GCBox> Allocator<T> {
             );
         }
         let page_ptr = self.get_page(p);
-
         let index = unsafe { (*page_ptr).get_index(p) };
         assert!(index < DATA_LEN);
         let bit_mask = 1 << (index % 64);
         let bitmap = unsafe { &mut (*page_ptr).mark_bits[index / 64] };
-
-        let is_marked = (*bitmap & bit_mask) != 0;
-        *bitmap |= bit_mask;
-        if !is_marked {
-            self.mark_counter += 1;
-            // Collect promotable survivors; their age is bumped (and the
-            // ones old enough are promoted) after marking, in
-            // `apply_aging`, to avoid aliasing the `&self` the mark
-            // traversal holds. Already-old objects never reach here in a
-            // minor GC (they are seeded-marked and return early above),
-            // but a major marks them like everything else — and they are
-            // old already, so aging them again would only re-do the
-            // promotion they have long since made. `major_mark` keeps the
-            // extra bitmap read off the minor path, where it can never
-            // find anything.
-            if self.promoting
-                && ptr.is_promotable()
-                && !(self.major_mark
-                    && unsafe { (*page_ptr).old_bits[index / 64] } & bit_mask != 0)
-            {
-                self.aging.push(p as *mut T);
-            }
-        }
-        is_marked
-    }
-
-    ///
-    /// Scan the children of a freshly marked object, or defer them to the
-    /// mark queue once the walk is [`MARK_RECURSION_LIMIT`] levels deep.
-    ///
-    /// Callers (`RValue::mark`) set the mark bit with
-    /// [`Allocator::gc_check_and_mark`] and, when it was not already set,
-    /// hand the object here. Deferring is what keeps the mark phase off
-    /// the native stack: a chain of N objects (`a = [a]` N times, a linked
-    /// list, an ivar chain) used to cost N nested `mark` →
-    /// `mark_children` → `mark` frames and overflowed the 8MB main stack
-    /// at ~75K links; it now costs at most `MARK_RECURSION_LIMIT` frames
-    /// plus queue entries on the heap. See `doc/gc.md`.
-    ///
-    pub(crate) fn scan_children(&mut self, ptr: &T) {
-        if self.mark_depth < MARK_RECURSION_LIMIT {
-            self.mark_depth += 1;
-            ptr.mark_children(self);
-            self.mark_depth -= 1;
+        if *bitmap & bit_mask != 0 {
             return;
         }
-        // SAFETY: `ptr` is a live cell inside one of our pages (it was
-        // just marked), so the address is non-null. Nothing frees it
-        // before the queue is drained: sweep runs only after the mark
-        // phase, by which point the queue is empty.
+        *bitmap |= bit_mask;
+        self.mark_counter += 1;
+        // SAFETY: `ptr` is a live cell inside one of our pages, so the
+        // address is non-null. Nothing frees it before the queue is
+        // drained: sweep runs only after the mark phase, by which point
+        // the queue is empty.
         self.mark_queue
-            .push_back(unsafe { std::ptr::NonNull::new_unchecked(ptr as *const T as *mut T) });
+            .push_back(unsafe { std::ptr::NonNull::new_unchecked(p as *mut T) });
     }
 
     ///
     /// Scan the children of every queued object until the queue runs dry
     /// — the mark phase's main loop. Children reached here are marked and
-    /// either scanned inline or queued in turn (`scan_children`), so one
-    /// drain reaches everything the roots did not already cover.
+    /// queued in turn (`mark`), so one drain reaches everything the roots
+    /// did not already cover. Survivors are aged and promoted here too,
+    /// on the header line the scan reads anyway.
     ///
     /// Must be called after every root-marking step and before anything
-    /// reads the mark bits (aging, `filter_remembered`, sweep).
+    /// reads the mark bits (`remember_promoted`, `filter_remembered`,
+    /// sweep).
     ///
     fn drain_mark_queue(&mut self) {
-        // Entries are queued precisely because the walk had run out of
-        // its stack budget; each one restarts it from zero.
-        debug_assert_eq!(self.mark_depth, 0);
         while let Some(ptr) = self.mark_queue.pop_front() {
+            // The next few entries are known already: start fetching the
+            // header of the one `MARK_PREFETCH_DISTANCE` ahead so its
+            // miss overlaps with the scans in between.
+            if let Some(ahead) = self.mark_queue.get(MARK_PREFETCH_DISTANCE) {
+                prefetch_read(ahead.as_ptr() as *const u8);
+            }
             // Forensics: record the entry, so a stale edge found below
             // can name where the walk resumed from (see `mark_scanning`).
             self.mark_scanning = Some(ptr);
-            // SAFETY: entries are live, marked cells (see
-            // `scan_children`); `mark_children` takes `&T` while this
-            // borrows `self` mutably, and the two never alias — marking
-            // only writes the allocator's bitmaps and side tables, never
-            // the object. Same pattern as `mark_remembered`.
-            unsafe { ptr.as_ref().mark_children(self) };
+            let raw = ptr.as_ptr();
+            // SAFETY: entries are marked cells that sweep has not run on
+            // (see `mark`). No shared reference to the cell exists at this
+            // point — the `&T` that queued it was dropped when `mark`
+            // returned — so the header writes of promotion below are
+            // unaliased. The `&T` created afterwards for `mark_children`
+            // is the only one live while it runs; marking writes only the
+            // allocator's bitmaps and side tables, never the object.
+            unsafe {
+                // A dead cell reached from a live one is a missed write
+                // barrier or a stale root: abort with the forensics.
+                (*raw).check_live(self);
+                // Age the survivor and promote it once it has survived
+                // `RGENGC_OLD_AGE` collections. Done here, on the header
+                // line the scan is about to read anyway, rather than in a
+                // second pass over every survivor after the mark. Only
+                // the promoted are collected — for the remember-on-promote
+                // check in `remember_promoted`, which must run after all
+                // of this cycle's promotions are visible. Already-old
+                // objects reached by a major are left alone.
+                if self.promoting && (*raw).is_promotable() {
+                    let page_ptr = self.get_page(raw);
+                    let index = (*page_ptr).get_index(raw);
+                    let bit_mask = 1 << (index % 64);
+                    let already_old =
+                        self.major_mark && (*page_ptr).old_bits[index / 64] & bit_mask != 0;
+                    if !already_old && (*raw).age_and_check_promote() {
+                        (*page_ptr).old_bits[index / 64] |= bit_mask;
+                        (*raw).promote_to_old();
+                        self.old_count += 1;
+                        self.promoted.push(raw);
+                    }
+                }
+                (*raw).mark_children(self);
+            }
         }
         self.mark_scanning = None;
     }
@@ -1735,37 +1735,19 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
-    /// Post-mark aging pass: bump each promotable survivor's age and
-    /// promote (set `old_bits` + header `OLD`) those reaching
-    /// `RGENGC_OLD_AGE`. Runs after marking, so no `&self` from the mark
-    /// traversal is live and the `&mut` writes are sound.
+    /// Post-mark pass over this cycle's promoted objects (aged and
+    /// promoted during `drain_mark_queue`): classify each as remembered or
+    /// barrier-armed.
     ///
-    fn apply_aging(&mut self) {
-        let aging = std::mem::take(&mut self.aging);
-        // Pass 1: age every survivor and promote (set old_bits + header
-        // OLD) those that reached the threshold. Collect them so the
-        // remember-on-promote check runs only *after* all of this cycle's
-        // promotions are visible — otherwise an object promoted before its
-        // (same-cycle) children would be needlessly remembered.
-        let mut promoted = Vec::new();
-        for p in aging {
-            // SAFETY: `p` was marked (hence live) this cycle and sweep
-            // has not run, so the cell is valid and unaliased here.
-            if unsafe { (*p).age_and_check_promote() } {
-                let page_ptr = self.get_page(p);
-                let index = unsafe { (*page_ptr).get_index(p) };
-                let bit_mask = 1 << (index % 64);
-                unsafe { (*page_ptr).old_bits[index / 64] |= bit_mask };
-                unsafe { (*p).promote_to_old() };
-                self.old_count += 1;
-                promoted.push(p);
-            }
-        }
-        // Pass 2: remember-on-promote. A freshly promoted object that
-        // still references the young generation is added to the remembered
-        // set (covering old→young edges that predate the write barrier);
-        // one with only old children is left "armed" so a future young
-        // store takes the barrier.
+    fn remember_promoted(&mut self) {
+        let promoted = std::mem::take(&mut self.promoted);
+        // Remember-on-promote. A freshly promoted object that still
+        // references the young generation is added to the remembered set
+        // (covering old→young edges that predate the write barrier); one
+        // with only old children is left "armed" so a future young store
+        // takes the barrier. Runs after the mark, so every promotion of
+        // this cycle is visible: an object promoted before its
+        // (same-cycle) children is not needlessly remembered.
         for p in promoted {
             if unsafe { (*p).young_child_exists(self) } {
                 unsafe { (*p).enter_remembered() };
@@ -1867,7 +1849,7 @@ impl<T: GCBox> Allocator<T> {
     /// live old→young edges — not to the whole old generation, which is
     /// exactly what the old rebuild-everything path cost.
     ///
-    /// Must run after `apply_aging` (so this cycle's promotions are
+    /// Must run after `remember_promoted` (so this cycle's promotions are
     /// visible) and after `filter_remembered` (so every entry is live).
     /// Marking is complete, so every child of a live old object is live
     /// too: reading them before sweep is sound.
