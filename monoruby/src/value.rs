@@ -1286,6 +1286,13 @@ impl Value {
         Value::array(ArrayInner::from_iter(iter))
     }
 
+    /// A new Array holding a copy of `slice`. One `memcpy` into
+    /// exact-capacity storage, where `array_from_iter` over the slice
+    /// would push element by element with a capacity check each time.
+    pub fn array_from_slice(slice: &[Value]) -> Self {
+        Value::array(ArrayInner::from_slice(slice))
+    }
+
     pub fn array_from_vec_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
         RValue::new_array_from_vec_with_class(v, class_id).pack()
     }

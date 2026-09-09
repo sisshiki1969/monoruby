@@ -1084,7 +1084,7 @@ fn pop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let n = n as usize;
         let len = ary.len();
         let start = if n >= len { 0 } else { len - n };
-        let result = Value::array_from_iter(ary[start..].iter().cloned());
+        let result = Value::array_from_slice(&ary[start..]);
         ary.truncate(start);
         Ok(result)
     } else {
@@ -1797,7 +1797,7 @@ fn drop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(Value::array_empty());
     };
     let ary = &ary[num..];
-    Ok(Value::array_from_iter(ary.iter().cloned()))
+    Ok(Value::array_from_slice(&ary))
 }
 
 ///
@@ -2286,7 +2286,7 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         } else {
             n as usize
         };
-        Ok(Value::array_from_iter(ary[0..n].iter().cloned()))
+        Ok(Value::array_from_slice(&ary[0..n]))
     }
 }
 
@@ -2312,7 +2312,7 @@ fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         } else {
             ary.len() - n as usize
         };
-        Ok(Value::array_from_iter(ary[n..].iter().cloned()))
+        Ok(Value::array_from_slice(&ary[n..]))
     }
 }
 
@@ -2371,7 +2371,7 @@ fn take(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     if n > ary.len() {
         Ok(ary.as_val().dup())
     } else {
-        Ok(Value::array_from_iter(ary[0..n].iter().cloned()))
+        Ok(Value::array_from_slice(&ary[0..n]))
     }
 }
 

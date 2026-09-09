@@ -98,6 +98,14 @@ impl PartialEq for RegexpInner {
     }
 }
 
+/// The error of a search that Onigmo refused (a start position past the
+/// end, an internal limit); the positions computed above keep it from
+/// happening, so this is not reachable in-test.
+#[coverage(off)]
+fn search_failed(err: onigmo_regex::OnigmoError) -> MonorubyErr {
+    MonorubyErr::regexerr(format!("Search failed. {:?}", err))
+}
+
 impl RegexpInner {
     /// Ruby's Regexp::NOENCODING constant (value 32).
     /// When set in options, the regexp uses ASCII-8BIT (binary) encoding.
@@ -1522,10 +1530,11 @@ impl RegexpInner {
         byte_pos: usize,
     ) -> Result<bool> {
         let native = self.native_regex(enc)?;
-        match native.captures_bytes_from_pos(bytes, byte_pos) {
-            Ok(res) => Ok(res.is_some()),
-            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
-        }
+        // A predicate needs no capture groups: search without a region.
+        native
+            .search_bytes(bytes, byte_pos, bytes.len(), None)
+            .map(|res| res.is_some())
+            .map_err(search_failed)
     }
 
     /// Like `match_one` but returns only a boolean and does NOT set `$~`.
@@ -1548,10 +1557,12 @@ impl RegexpInner {
                 None => return Ok(false),
             }
         };
-        match re.regex.captures_from_pos(given, byte_pos) {
-            Ok(res) => Ok(res.is_some()),
-            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
-        }
+        // A predicate needs no capture groups: search without a region,
+        // which skips the region allocation and the capture bookkeeping.
+        re.regex
+            .search(given, byte_pos, given.len(), None)
+            .map(|res| res.is_some())
+            .map_err(search_failed)
     }
 
     /// `subject` is a frozen snapshot whose `regex_view` is exactly

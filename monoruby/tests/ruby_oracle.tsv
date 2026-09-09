@@ -1232,6 +1232,7 @@
 5d37270fae8d3495ac4405dcd8502866	["fiber called across threads", "fiber called across threads", "fiber called across threads", "fiber called across threads", :r]	res = []\n            f1 = Fiber.new { :r }\n            f2 = Fiber.n
 5d3e8beda2cfe6c5baa2a2cd21c8d001	:ok	S = Struct.new(:x)\n            \n\n            s = S.new(1).freeze\n  
 5d3ec2f2c61ae49660281bbdcd726dc3	true	class C\n        end\n        C.new.is_a? C
+5d502ca059290eefdd957831c0d881cc	[[97, 233, 128512, 122], [97, 233, 128512, 122], Enumerator, [], true, [194, 466, 257024, 244], [97, 98, 99], [255, 128], String, [98, 234, 128513, 123], [122, 3], ArgumentError]	s = "aé\\u{1F600}z"\n        r = [s.codepoints, s.each_codepoint.to_a, s.
 5d53a8af94b50b97064e8d51ff1aee9b	["ASCII-8BIT", true, true, "UTF-8"]	t = Thread.new { "x" }\n            t.join\n            s = t.to_s\n  
 5d6c8b649c34e181f15d691733d4d981	[3, 5, 9, 4, 1, TypeError, [NotImplementedError, "Unsupported advice: :bogus"]]	(f="/tmp/mono_ss_#{Process.pid}"; File.write(f,"0123456789"); io=File.open(f); a
 5d7f92fded187ab734dbc79a4aec62ad	[[nil, NilClass, false], [7, NilClass, false], [nil, Proc, false], [nil, NilClass, true], [:d, NilClass, false]]	def probe(h)\n              [h.default, h.default_proc.class, h.comp
