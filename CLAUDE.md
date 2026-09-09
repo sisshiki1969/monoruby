@@ -402,6 +402,14 @@ reproducible build. It performs two jobs:
      `<root>/stub/` — monoruby's own host-independent replacements for
      C-extension-backed libraries, laid down last so they win name clashes;
      the `stub/` copy is pinned ahead of `$LOAD_PATH` by the require resolver.
+     `gem/prism/` is the prism gem's Ruby half (the version the `ruby-prism`
+     crate links, 1.9.0 today; the vendored Ruby 4.0.2 snapshot carries
+     1.8.1) plus `gem/prism/prism.rb`, monoruby's stand-in for the gem's C
+     extension: `src/builtins/prism.rs` runs libprism's serializers and the
+     gem's `Prism::Serialize` builds the node tree. The serialization format
+     is per prism version, so bumping the crate means re-vendoring these
+     files from the matching gem. `stdlib/ripper.rb` is
+     `Prism::Translation::Ripper` on top of it.
 
    These files implement parts of the Ruby standard library in Ruby rather
    than Rust. Per-version namespacing keeps concurrent builds and multiple
