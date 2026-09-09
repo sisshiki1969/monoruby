@@ -1226,6 +1226,28 @@ mod tests {
     }
 
     #[test]
+    fn struct_slot_builtins_bounds() {
+        // `__slot_get` / `__slot_set` are private and range-checked;
+        // `[]` maps its own indices first, so only a direct call sees
+        // the builtin's IndexError.
+        // monoruby-only builtins, so not oracle-checked.
+        let v = run_test_no_result_check(
+            r#"
+            s = Struct.new(:a, :b).new(1, 2)
+            r = [s.send(:__slot_get, 1), s.send(:__slot_set, 0, :z), s.to_a]
+            r << (begin; s.send(:__slot_get, 2); rescue IndexError => e; e.message; end)
+            r << (begin; s.send(:__slot_set, -1, 0); rescue IndexError => e; e.message; end)
+            r << (begin; s.freeze.send(:__slot_set, 0, 0); rescue FrozenError => e; e.class.to_s; end)
+            r << (begin; s.__slot_get(0); rescue NoMethodError => e; e.message.include?("private"); end)
+            expected = [2, :z, [:z, 2], "offset 2 too large for struct(size:2)", "offset -1 too small for struct(size:2)", "FrozenError", true]
+            raise "got #{r.inspect}" unless r == expected
+            r.size
+            "#,
+        );
+        assert_eq!(v.try_fixnum(), Some(7));
+    }
+
+    #[test]
     fn struct_dup_copies_slots() {
         // Dup'd Struct instances have independent slot vectors;
         // mutating one doesn't affect the other.

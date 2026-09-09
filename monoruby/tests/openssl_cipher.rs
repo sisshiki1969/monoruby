@@ -106,3 +106,25 @@ fn message_encryptor_round_trip_like_rails() {
         "##,
     );
 }
+
+#[test]
+fn aes_builtins_reject_bad_lengths() {
+    // The native half's own argument checks (the Ruby layer validates
+    // key and iv lengths before calling, so only a direct call reaches
+    // them); not oracle-checked, CRuby has no such builtins.
+    let v = run_test_no_result_check(
+        r##"
+        r = []
+        r << (begin; String.__aes_gcm(true, "k" * 32, "i" * 5, "", "x", ""); rescue RuntimeError => e; e.message; end)
+        r << (begin; String.__aes_gcm(false, "k" * 32, "i" * 12, "", "x", "t" * 3); rescue RuntimeError => e; e.message; end)
+        r << (begin; String.__aes_gcm(true, "k" * 5, "i" * 12, "", "x", ""); rescue RuntimeError => e; e.message; end)
+        r << (begin; String.__aes_cbc(true, "k" * 32, "i" * 5, "x"); rescue RuntimeError => e; e.message; end)
+        r << (begin; String.__aes_cbc(true, "k" * 5, "i" * 16, "x"); rescue RuntimeError => e; e.message; end)
+        r << String.__aes_gcm(true, "k" * 24, "i" * 12, "", "", "").map(&:bytesize)
+        expected = ["__cipher__:iv must be 12 bytes", "__cipher__:auth_tag must be 16 bytes", "__cipher__:key must be 16, 24 or 32 bytes", "__cipher__:iv must be 16 bytes", "__cipher__:key must be 16, 24 or 32 bytes", [0, 16]]
+        raise "got #{r.inspect}" unless r == expected
+        r.size
+        "##,
+    );
+    assert_eq!(v.try_fixnum(), Some(6));
+}
