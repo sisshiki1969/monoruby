@@ -50,6 +50,30 @@ fn prism_parses_lexes_and_queries() {
 }
 
 #[test]
+fn prism_native_half_rejects_bad_arguments() {
+    // The `Prism.__*` builtins are monoruby's own (CRuby has the C
+    // extension instead), so this one is not oracle-checked: an unknown
+    // serializer / query kind and a NUL in the encoding name are
+    // ArgumentErrors, and the version is the linked library's.
+    let v = run_test_no_result_check(
+        r##"
+        require "prism"
+        r = []
+        r << (begin; Prism.__serialize(9, "1", ""); rescue ArgumentError => e; e.message; end)
+        r << (begin; Prism.__string_query(9, "x", "UTF-8"); rescue ArgumentError => e; e.message; end)
+        r << (begin; Prism.__string_query(0, "x", "UTF\0-8"); rescue ArgumentError => e; e.message; end)
+        r << (Prism.__version == Prism::VERSION)
+        r << Prism.__parse_success?("1", "") << Prism.__parse_success?("def", "")
+        r << Prism.__serialize(3, "# c\n", "").encoding.to_s
+        expected = ["unknown serializer 9", "unknown query 9", "encoding name contains a NUL", true, true, false, "ASCII-8BIT"]
+        raise "got #{r.inspect}" unless r == expected
+        r.size
+        "##,
+    );
+    assert_eq!(v.try_fixnum(), Some(7));
+}
+
+#[test]
 fn prism_visitors_and_translations_load() {
     // The pure-Ruby layers over the tree: a Visitor walk, the pattern
     // matcher, `Prism::Translation::Ripper` (§ below) and the node

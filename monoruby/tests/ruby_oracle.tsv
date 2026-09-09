@@ -2692,6 +2692,7 @@ c8bab73ede7ee43432582e134e2a3b5a	["FrozenError"]	def fapp(s)\n          s << "x"
 c8bce95deb43e8ab5ca7f3a0947ee77a	[true, false]	require "stringio"\n            out = []\n            [true, false].e
 c8bf8011aa78146fd38ed4085528fb94	"EUC-JP"	Marshal.load(Marshal.dump("a".encode("EUC-JP"))).encoding.to_s
 c8c5061b79a576ee1e2ea779548f7e63	[[], [nil, nil, nil], [:x, :x, :x], [0, 2, 4], "negative array size", "wrong number of arguments (given 3, expected 0..2)", ["MyA", [:z, :z], false]]	class MyA < Array\n              def self.allocate; $called = true; 
+c8c5c84f68fbf76d9b7158999f69a9e6	[[[Integer, 2]], [[1, 2, 0]], [1, 2], T, [T, 3], [[1, [2]]], [[T]], [[NoAry, nil]], [5, 6], ArgumentError, "can't convert Bad to Array (Bad#to_ary gives Integer)", [[1, 2]], [[1, nil]], [[1, 2, 3]], {k: :v}, [[[1, 0], :on_ident, "x"]], [[1, 0], :on_ident], {[1, 0] => :on_ident}, [[1, 0], :on_ident], [[[1, 0], 2]], [[true, nil]], [[:o, :w]], [:o, :w], [[true, nil]]]	class T\n          def initialize(*a) = @a = a\n          def to_ary = @a
 c8e2a671d745fa2d9c8ee6d19996e1d2	0	123456789123456789123456789123456789123456789[..-3]
 c8e6f7682f6e2ba6c65474d90a14e533	"bang"	t = Thread.new { sleep }\n            t.report_on_exception = false\n
 c8ff2e0bd488186fea065275bd8a264c	[true, true]	a = [1,2,3]\n            id = a.object_id\n            \n\n            

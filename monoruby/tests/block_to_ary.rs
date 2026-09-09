@@ -43,6 +43,13 @@ fn to_ary_auto_splat_everywhere() {
         r << [t].each { |a, b| break [a, b] } << [t].map { |a, *rest| [a, rest.size] }
         plain = Class.new(BasicObject) { def initialize(x) = @x = x }.new(7)
         r << [plain].map { |a, b| [(a.equal?(plain)), b] }
+        own = Class.new(BasicObject) { def to_ary = [:o, :w] }.new
+        r << [own].map { |a, b| [a, b] } << proc { |a, b| [a, b] }.call(own)
+        declines = Class.new(BasicObject) do
+          def respond_to_missing?(name, priv = false) = false
+          def method_missing(name, *) = [:never]
+        end.new
+        r << [declines].map { |a, b| [a.equal?(declines), b] }
         r
         "##,
     );
