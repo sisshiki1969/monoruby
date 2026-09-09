@@ -171,6 +171,8 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(STRING_CLASS, "chars", chars, 0);
     globals.define_builtin_func(STRING_CLASS, "each_char", each_char, 0);
+    globals.define_builtin_func(STRING_CLASS, "codepoints", codepoints, 0);
+    globals.define_builtin_func(STRING_CLASS, "each_codepoint", each_codepoint, 0);
     globals.define_builtin_func(STRING_CLASS, "grapheme_clusters", grapheme_clusters, 0);
     globals.define_builtin_func(
         STRING_CLASS,
@@ -8175,6 +8177,61 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         Ok(lfp.self_val())
     } else {
         vm.generate_enumerator(IdentId::get_id("each_char"), lfp.self_val(), vec![], pc)
+    }
+}
+
+/// The code point of each character of `inner`, in order: the Unicode
+/// scalar for a UTF-8 compatible encoding, the leading byte otherwise
+/// (as `String#ord`).
+fn codepoint_values(inner: &RStringInner) -> Result<Vec<Value>> {
+    if inner.encoding().is_utf8_compatible() {
+        Ok(inner
+            .check_utf8()?
+            .chars()
+            .map(|c| Value::integer(c as u32 as i64))
+            .collect())
+    } else {
+        Ok(inner
+            .iter_char_bytes()
+            .map(|s| Value::integer(s[0] as i64))
+            .collect())
+    }
+}
+
+///
+/// ### String#codepoints
+///
+/// - codepoints -> [Integer]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/codepoints.html]
+#[monoruby_builtin]
+fn codepoints(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let codes = codepoint_values(&self_.as_rstring_inner())?;
+    if let Some(bh) = lfp.block() {
+        vm.invoke_block_iter1(globals, bh, codes.into_iter())?;
+        Ok(lfp.self_val())
+    } else {
+        Ok(Value::array_from_vec(codes))
+    }
+}
+
+///
+/// ### String#each_codepoint
+///
+/// - each_codepoint {|codepoint| ... } -> self
+/// - each_codepoint -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/each_codepoint.html]
+#[monoruby_builtin]
+fn each_codepoint(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if let Some(bh) = lfp.block() {
+        let codes = codepoint_values(&self_.as_rstring_inner())?;
+        vm.invoke_block_iter1(globals, bh, codes.into_iter())?;
+        Ok(lfp.self_val())
+    } else {
+        vm.generate_enumerator(IdentId::get_id("each_codepoint"), lfp.self_val(), vec![], pc)
     }
 }
 

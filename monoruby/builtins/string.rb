@@ -225,16 +225,6 @@ class String
     self
   end
 
-  def codepoints
-    each_codepoint.to_a
-  end
-
-  def each_codepoint(&block)
-    return enum_for(:each_codepoint) unless block
-    each_char { |c| block.call(c.ord) }
-    self
-  end
-
   # +@ is a Rust builtin (it must detect chilled strings, which have
   # no Ruby-level predicate).
   def -@

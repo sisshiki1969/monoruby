@@ -194,6 +194,10 @@ impl ArrayInner {
         ArrayInner(SmallVec::from_vec(v))
     }
 
+    pub fn from_slice(slice: &[Value]) -> Self {
+        ArrayInner(SmallVec::from_slice(slice))
+    }
+
     /*pub fn from_iter(iter: impl Iterator<Item = Value>) -> Self {
         ArrayInner(SmallVec::from_iter(iter))
     }*/
@@ -424,7 +428,7 @@ impl ArrayInner {
             let len = len as usize;
             let start = index;
             let end = std::cmp::min(self_len, start + len);
-            Value::array_from_iter(self[start..end].iter().cloned())
+            Value::array_from_slice(&self[start..end])
         };
         Ok(val)
     }
@@ -474,7 +478,7 @@ impl ArrayInner {
             if start >= end {
                 return Ok(Value::array_empty());
             }
-            Ok(Value::array_from_iter(self[start..end].iter().cloned()))
+            Ok(Value::array_from_slice(&self[start..end]))
         } else {
             let index = idx.coerce_to_int_i64(vm, globals)?;
             let self_len = self.len();

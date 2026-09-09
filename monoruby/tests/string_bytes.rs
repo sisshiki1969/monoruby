@@ -680,3 +680,22 @@ fn empty_slice_keeps_the_receiver_encoding() {
         "#,
     );
 }
+
+#[test]
+fn codepoints_are_native() {
+    // `String#codepoints` / `#each_codepoint` were Ruby (`each_char` +
+    // `ord`, 10x slower than CRuby); now native, with the block, the
+    // enumerator and the binary-encoding forms.
+    run_test(
+        r#"
+        s = "aé\u{1F600}z"
+        r = [s.codepoints, s.each_codepoint.to_a, s.each_codepoint.class, "".codepoints]
+        acc = []
+        r << (s.each_codepoint { |c| acc << c * 2 }).equal?(s) << acc
+        r << ("abc".b.codepoints) << ("\xff\x80".b.codepoints) << s.codepoints { |c| c }.class
+        r << (s.each_codepoint.map { |c| c + 1 }) << s.each_codepoint.with_index.to_a.last
+        r << (begin; "\xff".codepoints; rescue ArgumentError => e; e.class; end)
+        r
+        "#,
+    );
+}

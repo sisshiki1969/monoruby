@@ -1522,9 +1522,10 @@ impl RegexpInner {
         byte_pos: usize,
     ) -> Result<bool> {
         let native = self.native_regex(enc)?;
-        match native.captures_bytes_from_pos(bytes, byte_pos) {
+        // A predicate needs no capture groups: search without a region.
+        match native.search_bytes(bytes, byte_pos, bytes.len(), None) {
             Ok(res) => Ok(res.is_some()),
-            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
+            Err(err) => Err(MonorubyErr::regexerr(format!("Search failed. {:?}", err))),
         }
     }
 
@@ -1548,9 +1549,11 @@ impl RegexpInner {
                 None => return Ok(false),
             }
         };
-        match re.regex.captures_from_pos(given, byte_pos) {
+        // A predicate needs no capture groups: search without a region,
+        // which skips the region allocation and the capture bookkeeping.
+        match re.regex.search(given, byte_pos, given.len(), None) {
             Ok(res) => Ok(res.is_some()),
-            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
+            Err(err) => Err(MonorubyErr::regexerr(format!("Search failed. {:?}", err))),
         }
     }
 
