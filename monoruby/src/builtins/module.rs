@@ -1308,19 +1308,14 @@ fn lookup_constant_path(
         // classes, as `get_constant_superclass_with_class` does). For
         // later segments, only the resolved class itself is checked.
         let val = if i == 0 && inherit {
-            match vm.get_constant_superclass_with_class(globals, current, id) {
-                Ok((v, _)) => Some(v),
-                Err(_) => None,
-            }
+            vm.get_constant_superclass(globals, current, id)?
         } else if globals.store[current.id()].has_own_constant(id) {
             // For nested segments, restrict to *direct* lookup on the
-            // resolved class (no superclass walk). Use the
-            // `get_constant_checked` path so autoload triggers fire
-            // correctly; an error means "missing constant" -> None.
-            match vm.get_constant_checked(globals, current.id(), id) {
-                Ok(v) => Some(v),
-                Err(_) => None,
-            }
+            // resolved class (no superclass walk). `get_constant` fires
+            // an autoload if one is registered; an error the autoloaded
+            // file raised propagates (CRuby lets it through too), and
+            // only a genuinely missing constant answers None.
+            vm.get_constant(globals, current.id(), id)?
         } else {
             None
         };
@@ -1376,10 +1371,7 @@ fn probe_constant_path(
         // we can walk into the named class. A miss short-circuits
         // to "not defined".
         let val = if i == 0 && inherit {
-            match vm.get_constant_superclass_with_class(globals, current, id) {
-                Ok((v, _)) => Some(v),
-                Err(_) => None,
-            }
+            vm.get_constant_superclass(globals, current, id)?
         } else if globals.store[current.id()].has_own_constant(id) {
             match vm.get_constant_checked(globals, current.id(), id) {
                 Ok(v) => Some(v),

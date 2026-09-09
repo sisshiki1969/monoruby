@@ -123,7 +123,62 @@ render parser が使う範囲で CRuby の Ripper と同じ出力になる。翻
 それぞれ別の障壁（bundler の `benchmark` gem バージョン衝突、`rbs_extension`
 C 拡張）で止まっていて、Prism だけでは動かない。
 
-## 6. 測定メモ
+## 6. railsbench: 起動から 2000 リクエスト完走まで
+
+lobsters と同じ Rails 8.1 のアプリで、Prism（§5）の後に何が要るかを、
+`nokogiri` だけを使い捨ての空モジュールで差し替えて追った（`require` を
+通すためだけの探索用スタブで、同梱はしていない）。順に当たったのは次の 7 点で、
+すべて monoruby 側の不備だった。
+
+| 順 | 症状 | 原因 | 対処 |
+|---|---|---|---|
+| 1 | `Errno is not a module`（webrick/compat.rb） | `Errno` をクラスとして定義していた | モジュールに（`errno.rs`、`builtins/error.rb`） |
+| 2 | `uninitialized constant ApplicationController`（Zeitwerk eager load） | `const_get(name, false)` が autoload 先のファイルで起きた例外を握りつぶして NameError にしていた | `lookup_constant_path` が例外を伝播（`module.rs`） |
+| 3 | `undefined method 'anonymous?' for nil`（ParamsWrapper） | `Struct#to_h` / `to_a` / `[]` / `each` … がメンバのアクセサ経由で読んでいた。CRuby は生スロット（`RSTRUCT_GET`）を読むので、アクセサを上書きしたサブクラスで挙動が違う | `__slot_get` / `__slot_set` 組み込みを追加し `builtins/struct.rb` を全面的にそれ経由に |
+| 4 | `database configuration does not specify adapter` | YAML のマージキー `<<: *default` 未対応（`"<<"` というキーになっていた）。`key: &a {…}` のようにアンカー付きのフロー値も文字列になっていた | `store_pair`（マージキー、`Hash#merge!` 意味論、配列形も）とアンカー付き値の一般化（`stdlib/psych.rb`） |
+| 5 | `undefined method 'add_builtin_type' for Psych` | ActiveSupport の `omap` 登録 | `add_builtin_type` / `add_domain_type` / `safe_dump` を追加、`add_tag` のテーブル向きを Psych と同じに |
+| 6 | `OpenSSL::Digest::SHA256 is expected to implement hexdigest` | `stdlib/openssl.rb` の Digest / HMAC / KDF が空のスタブだった | 実装に置き換え（下記） |
+| 7 | `undefined method 'key_len' for OpenSSL::Cipher`（flash → セッション Cookie の暗号化） | `OpenSSL::Cipher` も空のスタブ | AES-GCM / AES-CBC を Rust で実装（下記） |
+| 8 | `stackprof.so` の LoadError | `gem "stackprof", platforms: :mri` は monoruby（`RUBY_ENGINE == "ruby"`）でも `Bundler.require` される | `gem/stackprof/stackprof.rb`（API だけの不活性版、`start` は false を返して一度だけ警告） |
+
+### OpenSSL を本物にした範囲
+
+- `OpenSSL::Digest`（`< ::Digest::Class`、`SHA1` / `SHA256` / `SHA384` /
+  `SHA512` / `MD5`、`new("sha256")` / `new("SHA-256")`）、`OpenSSL::HMAC`
+  （`digest` / `hexdigest` / `base64digest`、インスタンス API）、
+  `OpenSSL::PKCS5.pbkdf2_hmac`、`OpenSSL::KDF.pbkdf2_hmac` / `hkdf`。
+  いずれも monoruby の `Digest`（`String.__digest`、Rust の sha2 / md-5）の上の
+  純 Ruby で、出力は CRuby の openssl とバイト単位で一致する
+  （`tests/openssl_digest.rs`）。
+- `OpenSSL::Cipher`: `aes-{128,192,256}-{gcm,cbc}`。`src/builtins/cipher.rs` が
+  RustCrypto の `aes-gcm` / `aes` + `cbc` クレートで一括処理し（`update` は
+  バッファするだけで `final` で計算）、`AuthTagError` / `CipherError`、
+  `AES256.new(:GCM)` などのクラス形も openssl と同じ（`tests/openssl_cipher.rs`）。
+  Rails の `MessageEncryptor`（Cookie）と ActiveRecord Encryption が使う範囲。
+  `padding = 0` は未対応。
+- `Digest::Class` が `Digest::Instance` を include するようにした（CRuby と同じ
+  祖先順）。
+
+### 結果
+
+`nokogiri` の探索スタブ込みで railsbench（2000 リクエスト × 反復）が完走する:
+
+| | 1 反復 | RSS |
+|---|---|---|
+| CRuby 4.0.2（YJIT なし） | 4063 ms | 115 MiB |
+| monoruby | 3623–3732 ms | 350 MiB |
+
+### 残り: nokogiri
+
+`actiontext`（`require "nokogiri"` 無条件）と `rails-html-sanitizer` → `loofah`
+（`Nokogiri.uses_gumbo?` 等を読み込み時に呼ぶ）が要求する。libxml2 + gumbo の
+C 拡張で、Fiddle で包む規模ではなく、読み込みだけ通す偽物は HTML を解析しないので
+同梱しない。railsbench 自身のビュー（scaffold の posts）は sanitize を使わないため、
+本物の nokogiri があれば残りはそのまま動く。CRuby 側との出力差（起動時に
+`character class has duplicated range` の警告が出る、CRuby は `-w` 時のみ）は
+別件として残す。
+
+## 7. 測定メモ
 
 - `perf` は `perf_event_paranoid=2` とカーネル用バイナリの不在で使えない。
   `valgrind --tool=callgrind` は monoruby の brk 領域で落ちる。gdb の繰り返し

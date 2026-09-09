@@ -357,6 +357,13 @@ External crates (fetched from git):
 - `onigmo-regex` — Onigmo regular expression engine
 - `ruby-prism` — prism parser bindings (pinned `monoruby-vendored` branch; see below)
 - `smallvec` — local fork with `const_generics` (pinned via git, not vendored in-tree)
+- `aes-gcm` / `aes` / `cbc` (RustCrypto) — the native half of `OpenSSL::Cipher`
+  (`src/builtins/cipher.rs`: `String.__aes_gcm` / `__aes_cbc`, one-shot over
+  the message `stdlib/openssl.rb` buffers). `OpenSSL::Digest` / `HMAC` /
+  `PKCS5` / `KDF` in the same file are pure Ruby over `Digest`
+  (`src/builtins/digest.rs`, sha2 / md-5). Rails' cookie encryption and key
+  derivation run on these with CRuby-identical output. The rest of
+  `openssl.rb` (PKey, X509, SSL) is still a load-only stub.
 - `libz-sys` — zlib built from its bundled C source and linked statically; the
   `String.__zstream_*` builtins (`src/builtins/zlib.rs`) expose one `z_stream`
   per `Zlib::Deflate` / `Zlib::Inflate` object, and everything else in `Zlib`
@@ -409,7 +416,10 @@ reproducible build. It performs two jobs:
      gem's `Prism::Serialize` builds the node tree. The serialization format
      is per prism version, so bumping the crate means re-vendoring these
      files from the matching gem. `stdlib/ripper.rb` is
-     `Prism::Translation::Ripper` on top of it.
+     `Prism::Translation::Ripper` on top of it. `gem/stackprof/stackprof.rb`
+     stands in for `stackprof.so` as an inert profiler (its API loads, no
+     sampling), since `gem "stackprof", platforms: :mri` is required at boot
+     by Bundler on monoruby too.
 
    These files implement parts of the Ruby standard library in Ruby rather
    than Rust. Per-version namespacing keeps concurrent builds and multiple

@@ -24,3 +24,25 @@ fn yaml_multi_line_flow_scalars_fold() {
         "##,
     );
 }
+
+// The YAML merge key: `<<: *base` folds the aliased mapping in
+// (`Hash#merge!`: it overrides keys already present, later keys
+// override it), `<<: [*a, *b]` folds a sequence with the earlier
+// mappings winning, and a `<<` with a non-mapping value is an ordinary
+// key. Rails' `database.yml` is the `<<: *default` case.
+#[test]
+fn yaml_merge_key() {
+    run_test_once(
+        r##"
+        require "yaml"
+        docs = [
+          "default: &d\n  a: 1\n  b: 2\nx:\n  <<: *d\n  b: 3\n  c: 4\ny:\n  b: 9\n  <<: *d\n",
+          "a: &a\n  k: 1\nb: &b\n  k: 2\n  j: 2\nz:\n  <<: [*a, *b]\n  m: 0\n",
+          "p: &p {k: 1, l: 2}\nq: {<<: *p, l: 3}\n",
+          "s:\n  <<: plain\n  t: 1\n",
+          "default: &default\n  adapter: sqlite3\n  pool: 5\n  timeout: 5000\n\nproduction:\n  <<: *default\n  database: db/production.sqlite3\n",
+        ]
+        docs.map { |d| YAML.unsafe_load(d) }
+        "##,
+    );
+}
