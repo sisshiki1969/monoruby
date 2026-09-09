@@ -49,6 +49,7 @@ mod data_class;
 mod symbol;
 mod thread;
 mod time;
+mod prism;
 mod true_class;
 mod warning;
 mod zlib;
@@ -148,6 +149,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     json::init(globals);
     digest::init(globals);
     zlib::init(globals);
+    prism::init(globals);
     main_object::init(globals);
     globals.object_class().include_module(kernel).unwrap();
 }
