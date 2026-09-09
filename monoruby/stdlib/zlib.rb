@@ -20,7 +20,7 @@
 # streaming (a reader slurps its IO, a writer emits at `close`).
 
 module Zlib
-  VERSION = "3.1.0"
+  VERSION = "3.2.3"
   ZLIB_VERSION = "1.3"
 
   # Compression levels (zlib.h Z_NO_COMPRESSION ... Z_BEST_COMPRESSION).
@@ -88,6 +88,20 @@ module Zlib
   # to 32 bits and a Float is truncated), a nil string yields the
   # checksum of nothing regardless of the seed (0 for CRC-32, 1 for
   # Adler-32), anything else goes through `to_str`.
+
+  # The version of the zlib monoruby links (the bundled libz-sys source).
+  def self.zlib_version
+    String.__zlib_version
+  end
+
+  # The CRC-32 lookup table (the 256 entries of zlib's `get_crc_table`).
+  def self.crc_table
+    @crc_table ||= Array.new(256) do |n|
+      c = n
+      8.times { c = (c & 1 == 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1) }
+      c
+    end
+  end
 
   def self.crc32(string = nil, crc = nil)
     if string.nil?

@@ -96,3 +96,58 @@ fn inflate_streaming_and_errors() {
         "#,
     );
 }
+
+#[test]
+fn deflate_params_reset_dictionary_and_stream_state() {
+    // The remaining `__zstream_*` entry points: `params` mid-stream (the
+    // bytes flushed by the old settings, then the rest), `reset` reusing a
+    // Deflate and an Inflate, `set_dictionary` on the inflate side after
+    // NeedDict, and the counters / flags around them.
+    run_test_once(
+        r#"
+        require "zlib"
+        data = (("the quick brown fox jumps over the lazy dog. " * 40) + ("0123456789" * 200) + ("\x00\x01\x02\x03" * 500)).b
+        sig = ->(s) { [s.bytesize, Zlib.crc32(s)] }
+        r = {}
+        # (`params` right after `Deflate#deflate` raises StreamError in CRuby
+        # and on a fresh stream crashes it, so feed with `<<` first.)
+        d = Zlib::Deflate.new(1)
+        d << data.byteslice(0, 4000)
+        d.params(9, Zlib::FILTERED)
+        d << data.byteslice(4000..)
+        z = d.finish
+        r["params"] = [sig.(z), Zlib::Inflate.inflate(z) == data, d.total_in, d.total_out == z.bytesize, d.finished?]
+        r["params_closed"] = (begin; d.close; d.params(1, Zlib::DEFAULT_STRATEGY); rescue Zlib::Error => e; e.message; end)
+        d = Zlib::Deflate.new(6)
+        first = d.deflate(data, Zlib::FINISH)
+        d.reset
+        second = d.deflate(data, Zlib::FINISH)
+        r["deflate_reset"] = [first == second, first == Zlib::Deflate.deflate(data, 6), d.total_in]
+        i = Zlib::Inflate.new
+        one = i.inflate(first)
+        i.reset
+        two = i.inflate(second)
+        r["inflate_reset"] = [one == data, two == data, i.finished?, i.total_out]
+        dict = "the quick brown fox jumps over the lazy dog. ".b
+        d = Zlib::Deflate.new(6)
+        d.set_dictionary(dict)
+        zd = d.deflate(data.byteslice(0, 2000), Zlib::FINISH)
+        i = Zlib::Inflate.new
+        out = begin
+          i.inflate(zd)
+        rescue Zlib::NeedDict
+          i.set_dictionary(dict)
+          i.inflate("")
+        end
+        r["inflate_dict"] = [out == data.byteslice(0, 2000), i.finished?, (begin; Zlib::Inflate.new.tap { |j| j.inflate(zd) rescue j.set_dictionary("wrong dictionary") }; :ok; rescue Zlib::DataError => e; e.message; end)]
+        d = Zlib::Deflate.new
+        d << data.byteslice(0, 100)
+        r["state"] = [d.data_type.is_a?(Integer), d.avail_in, d.avail_out.is_a?(Integer), d.finished?, d.flush(Zlib::SYNC_FLUSH).bytesize > 0, d.flush_next_out.class, d.flush_next_in.class]
+        d.finish
+        r["after_finish"] = [d.finished?, d.total_in, d.closed?]
+        r["version"] = [Zlib.zlib_version.is_a?(String), Zlib::VERSION.is_a?(String)]
+        r["crc"] = [Zlib.crc32, Zlib.crc32("abc"), Zlib.crc32("c", Zlib.crc32("ab")), Zlib.adler32, Zlib.adler32("abc"), Zlib.adler32("c", Zlib.adler32("ab")), Zlib.crc32("abc", 0), Zlib.crc_table.size]
+        r
+        "#,
+    );
+}

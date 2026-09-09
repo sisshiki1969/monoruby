@@ -1371,6 +1371,7 @@
 67d9f8b69f6a016eade0a68a270498d3	" world"	s = "hello world"; s.bytesplice(0..4, "ABCDE", 0..-100); s
 681e3c0d02b02a91a999281604e81c60	"Ruby"	"ruby".send(:sub, /./, "R")\n        
 681fd3ccba5816796a6f87e5163660da	["US-ASCII", "US-ASCII", "US-ASCII"]	s = "abc".dup.force_encoding("US-ASCII")\n              s.rpartiti
+68297ce8819d266f9baca2a8ca466b2e	{"params" => [[123, 2185739281], true, 5800, true, true], "params_closed" => "stream is not ready", "deflate_reset" => [true, true, 5800], "inflate_reset" => [true, true, true, 5800], "inflate_dict" => [true, true, "data error"], "state" => [true, 0, true, false, true, String, String], "after_finish" => [true, 100, false], "version" => [true, true], "crc" => [0, 891568578, 891568578, 1, 38600999, 38600999, 891568578, 256]}	require "zlib"\n        data = (("the quick brown fox jumps over the laz
 6867d900d8bc23f027af9e908bfd1fbc	[File, "hello"]	path = "/tmp/mono_cov_file_new_#{Process.pid}"\n            begin\n  
 688b520eaa53b818c032ed84ebb90ba3	1234	Random.srand(1234)\n        Random.srand(4567)\n        
 688bcd73f28a1d32469337711f75b5af	["日本語", 9, 9, 3, 1, "text", "e", ["t", "e", "x", "t"], 14, " ü", 17, "日本語 text ", "nïcode 123", "nïcode 123", 10, "1", "2", "3", "3", true, nil, "本", "語", 9, "日", 3, "日", 3, "本", 3, "\\xE6", 4, "\\x9C\\xAC", 24]	require "strscan"\n        s = StringScanner.new("日本語 text ünïcode 123")
@@ -1478,6 +1479,7 @@
 70656cec0a7d05dbe074e523b3789ac3	[4611686018427387939, 4611686018427387939, 4611686018427387939, 4611686018427387949]	def __f(x)\n          \n        a = x + 4611686018427387900\n        b = a
 7068324754662230dd6cba5af8947f71	"hel"	class Foo; def to_str; "lo"; end; end\n            "hello".chomp(Foo
 7073b2cf059ea135845fa20451762fce	[1, 2, 3]	class E\n              def initialize(a); @a = a; end\n              
+7077fab9f8dbef5481d728114e0056c4	{"params" => [[123, 2185739281], true, 5800, true, true], "params_closed" => "stream is not ready", "deflate_reset" => [true, true, 5800], "inflate_reset" => [true, true, true, 5800], "inflate_dict" => [true, true, "data error"], "state" => [true, 0, 1022, false, true, String, String], "after_finish" => [true, 100, false], "version" => [true, true], "crc" => [0, 891568578, 891568578, 1, 38600999, 38600999, 891568578, 256]}	require "zlib"\n        data = (("the quick brown fox jumps over the laz
 707b7fd02add3d39fff2a8fb60b17cde	["hello", "text"]	klass = Class.new do\n          def hello; "hello"; end\n          def se
 70928ba635fab871d9d7a7cc112e80d9	[1, false, 10, "Shift_JIS", "heRlo", "heRRo", "heLlo", "heLLo", TypeError, TypeError]	r = []\n        s = "表\\\\示".encode("Shift_JIS")\n        bs = "\\\\".encode(
 70a1593046773caec35e978f0c08553c	["", "shown\\n"]	require 'stringio'\n        def cap; $stderr = StringIO.new; yield; s = 
