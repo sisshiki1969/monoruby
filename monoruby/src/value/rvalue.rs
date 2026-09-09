@@ -646,7 +646,7 @@ impl RValue {
     ///
     /// Both objects end up owning a child set they did not have before,
     /// so both need the write barrier: either one may be an OLD object
-    /// that was armed while childless (`apply_aging` takes the
+    /// that was armed while childless (`remember_promoted` takes the
     /// `arm_barrier` branch when `young_child_exists()` is false), and a
     /// minor GC seeds OLD objects as already-marked and never scans them
     /// unless they are in the remembered set. `Array#initialize`'s block
@@ -899,20 +899,12 @@ fn dead_rvalue_abort(dead: &RValue, alloc: &alloc::Allocator<RValue>) -> ! {
 
 impl alloc::GC<RValue> for RValue {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        if !self.header.is_live() {
-            dead_rvalue_abort(self, alloc);
-        }
-        if alloc.gc_check_and_mark(self) {
-            return;
-        }
-        // Let the allocator decide whether to walk into `mark_children`
-        // from here or to defer it to the mark queue: past
-        // `MARK_RECURSION_LIMIT` levels the traversal goes breadth-first
-        // over that queue, so the depth of the object graph costs heap
-        // entries instead of native stack frames. See
-        // `Allocator::scan_children`.
-        alloc.scan_children(self);
+        // Sets the mark bit and queues the object; the header is read
+        // (`check_live`, ageing) and the children are scanned when
+        // `Allocator::drain_mark_queue` gets to it. See `doc/gc.md`.
+        alloc.mark(self);
     }
+
 }
 
 impl alloc::GCBox for RValue {
@@ -997,6 +989,13 @@ impl alloc::GCBox for RValue {
             header: Header { next: None },
             kind: ObjKind::invalid(),
             var_table: None,
+        }
+    }
+
+    #[coverage(off)] // the abort arm is uncoverable in-test
+    fn check_live(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if !self.header.is_live() {
+            dead_rvalue_abort(self, alloc);
         }
     }
 

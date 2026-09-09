@@ -73,7 +73,8 @@ thread_local! { pub static ALLOC: RefCell<Allocator<RValue>> }   // alloc.rs
 | `old_count` | old 世代オブジェクト数(昇格で +1、メジャーで 0 リセット) |
 | `old_major_threshold` | 適応的メジャー閾値(`old_count` がこれに達したら次はメジャー) |
 | `promoting` | マーク中に昇格候補を収集するか(実マーク中のみ true) |
-| `aging` | 今サイクルで生存した昇格候補(マーク後に加齢) |
+| `promoted` | 今サイクルで昇格したオブジェクト(マーク後に remembered/armed へ分類) |
+| `mark_queue` | マーク済み・未走査オブジェクトのキュー(幅優先走査 + 先読み) |
 | `remembered` | remembered set(old→young 参照を持つ old オブジェクト) |
 | `pages_since_gc` | 前回の収集以降に `THRESHOLD` まで充填したページ数(`gc_trigger_pages()` で GC レーンを立てる。§4.1) |
 | `heap_frames` | ヒープに退避したフレームバッファの登録表(§9) |
@@ -334,75 +335,67 @@ old 世代全体には比例しない。
 ### 6.3 マークフェーズ
 
 1. `self.promoting = true` にしてから `root.mark(self)`(ルートは §8)。
-2. `RValue::mark`(`rvalue.rs:757`)は `gc_check_and_mark` でビットを立て、未マーク
-   だった場合のみ `scan_children` に渡す。`scan_children` は**浅いうちは
-   `mark_children` を直接呼び(深さ優先)、`MARK_RECURSION_LIMIT` 段を超えたら
-   マークキューに積んで打ち切る**(下記「マークキュー」)。
-3. `gc_check_and_mark`(`alloc.rs:1007`)は、初めてマークしたセルが `promoting` かつ
-   `is_promotable()` なら `aging` に積む(昇格候補の収集)。ヘッダ書き換えは
-   マーク走査が握る `&self` とエイリアスしないよう**マーク後に遅延**する。
-   ただし**既に old のセルは積まない**:マイナーではシードマーク済みでそもそも
-   ここに来ないが、メジャーは old も普通にマークするため `old_bits` の確認が要る
-   (`major_mark` フラグで、この余分なビットマップ読みをマイナー側に持ち込まない)。
-4. **Minor のみ** `mark_remembered()`:remembered set の各 old オブジェクトの
+2. `RValue::mark` → `Allocator::mark`(`alloc.rs`)は、**ページのビットマップだけ**を
+   見てマークビットを立て、未マークだったセルを `mark_queue`(`VecDeque`)に積む。
+   オブジェクト本体(ヘッダ)はここでは読まない。
+3. **Minor のみ** `mark_remembered()`:remembered set の各 old オブジェクトの
    *子だけ*を `mark_children` で辿る(親 old は既にシードマーク済み)。これにより
    「old からしか参照されていない young オブジェクト」に到達する。走査後、若い子が
-   いなくなった entry は set から外して `arm_barrier`(自己クリーニング;
-   `alloc.rs:1213`)。
-5. 上記 1・4 の直後に `drain_mark_queue()`。キューが空になるまで、積まれた
-   オブジェクトの `mark_children` を順に呼ぶ。ここで到達した子もまた
-   `scan_children` を通るので、1 回の drain でグラフの残り全体に届く。
-   **マークビットを読む処理(加齢・`filter_remembered`・スイープ)より前に
-   必ず drain されている**必要がある。
-6. `self.promoting = false`。
+   いなくなった entry は set から外して `arm_barrier`(自己クリーニング)。
+4. 上記 1・3 の直後に `drain_mark_queue()`。キューが空になるまで先頭から取り出し、
+   各オブジェクトについて (a) `check_live`(死んだセルなら forensics 付きで abort)、
+   (b) 加齢と昇格(§6.4)、(c) `mark_children` の順に処理する。ここで到達した子も
+   また `mark` でキューに積まれるので、1 回の drain でグラフの残り全体に届く。
+   **マークビットを読む処理(`remember_promoted`・`filter_remembered`・スイープ)より
+   前に必ず drain されている**必要がある。
+5. `self.promoting = false`。
 
-#### マークキュー(`mark_queue`, `MARK_RECURSION_LIMIT`)
+#### マークキュー(`mark_queue`)と先読み(`MARK_PREFETCH_DISTANCE`)
 
 以前のマークは純粋な再帰で、スタック消費が**オブジェクトグラフの深さに比例**して
 いた。`a = [a]` を 7.5 万回、連結リスト、ivar チェーン、入れ子 Hash — いずれも
 8MB のメインスタックを溢れさせ、**GC の最中にプロセスが abort** していた
-(`thread 'main' has overflowed its stack`)。JIT の Ruby フレームが既に積まれた
-セーフポイントから収集が始まる以上、余裕は常に読めない。
+(`thread 'main' has overflowed its stack`)。その後しばらくは「32 段までは再帰、
+それ以降はキュー」という折衷だった(全部キューに積むと bedcov で GC 時間 +9% と
+測れたため)。
 
-現在は深さが `MARK_RECURSION_LIMIT`(= 32)を超えた時点でそれ以上再帰せず、
-そのオブジェクトを `mark_queue`(`VecDeque`)に積む。深い部分の走査は
-`drain_mark_queue` による**幅優先**になり、ネイティブスタックの使用量は
-グラフの深さに関係なく `MARK_RECURSION_LIMIT` 段(数 KB)で頭打ちになる。
-キューの実体はヒープなので、500 万段の連結リストでも通る。
+現在は**全オブジェクトをキュー経由で幅優先に**辿る。決め手はスタックではなく
+キャッシュミスで、マークの費用はほぼ「オブジェクトのヘッダを 1 行読む DRAM
+アクセス」そのものだった(splay: 1 マークあたり 60–90 ns)。再帰では子のヘッダを
+読むまで次のアドレスが分からずミスが直列化するが、キューなら数個先のエントリの
+アドレスが既に手元にあるので、`drain_mark_queue` は `MARK_PREFETCH_DISTANCE`
+(= 8)個先のヘッダを `prefetch` してからいまのオブジェクトを走査する。これで
+ミスが重なり、splay のマーク走査は **1 オブジェクト 28–35 ns(2 倍強の高速化)**、
+GC 時間全体で −50% になった(§6.4 の変更込み。12 反復の GC 合計 1415 → 714 ms)。
+`mark` 側でヘッダを読まない(ビットマップのみ)ことが前提で、`is_live` の検査と
+昇格判定はすべて drain 側に移してある。
 
-浅い再帰を残しているのは純粋に性能のため。現実のグラフは浅く広く、
-キューに積むと 1 オブジェクトあたり push + pop + 8 バイトのメモリトラフィックが
-増える。plb2 bedcov(生存 270 万オブジェクト、ここで最もマークが重い負荷、
-収集 89 回)を 13 回インターリーブ実行した平均:
+キューの実体はヒープなので、500 万段の連結リストでも通り、ネイティブスタックの
+使用量はグラフの深さに依らず 1 段で済む。
 
-| 段数 | ネイティブスタック | bedcov GC 時間 |
-| --- | --- | --- |
-| 無制限(旧実装) | グラフの深さに比例(7.5 万段で溢れる) | 3205 ms |
-| `MARK_RECURSION_LIMIT = 32`(現行) | 32 段(数 KB) | 3225 ms (+0.6%) |
-| `0`(純粋な幅優先) | 1 段 | 3479 ms (+8.6%) |
+### 6.4 加齢と昇格(`drain_mark_queue` / `remember_promoted`)
 
-**全部キューに積むと GC 時間 +9%** 前後(測定バッチにより +6〜13%)。32 段の再帰を
-残すと旧実装と誤差の範囲に収まる。32 と 256 は同じ結果だったので、スタック上限が
-小さい方を採った。`0` にすれば純粋な幅優先になる。
+加齢と昇格は `drain_mark_queue` がオブジェクトを取り出した**その場**で行う
+(§6.3 の 4-(b))。取り出した生ポインタからヘッダを書き換えてから、`mark_children`
+用の `&T` を作る — この時点でそのセルへの共有参照は存在しない(キューに積んだ
+`&T` は `mark` から戻った時点で消えている)ので、ヘッダ書き込みはエイリアスしない。
+以前は「マーク走査が握る `&self` と衝突しないよう、マーク後に `aging` 配列を
+なめ直す」2 パス構成だったが、それは生存者全員をもう一度ランダムアクセスする
+パスで、splay ではマーク時間の 20–30% を占めていた。いまは走査が読むヘッダ行の
+上でそのまま加齢する。
 
-> 測定ホストの実行ごとのばらつきは ±13% 程度あり、絶対値はバッチ間で動く。
-> 意味があるのは同一バッチ内の対比較で、純粋な幅優先は 8 回の対すべてで
-> 旧実装より遅かった。FIFO を LIFO の `Vec` に替えても同じだったので、
-> コストは順序ではなくワークリストそのものにある。
-
-### 6.4 加齢と昇格(`apply_aging`, `alloc.rs:1048`)
-
-マーク完了後(生きた `&self` が無い状態)に:
-
-- **Pass 1**: `aging` の各生存者の age を +1(`age_and_check_promote`)。
-  `age >= RGENGC_OLD_AGE`(= 3)に達したものを昇格:`old_bits` をセット +
-  ヘッダ OLD をセット + `old_count += 1`。
+- **加齢**: `promoting` かつ `is_promotable()` の生存者の age を +1
+  (`age_and_check_promote`)。`age >= RGENGC_OLD_AGE`(= 3)に達したものを昇格:
+  `old_bits` をセット + ヘッダ OLD をセット + `old_count += 1` + `promoted` に記録。
   → **即時昇格ではなく「3 回生存したら昇格」**。1 回の収集でたまたま生きていた
     短命オブジェクトを old に上げてしまい浮遊ゴミ化するのを避ける。
-- **Pass 2**: remember-on-promote。昇格したオブジェクトが**まだ young を参照して
-  いる**(`young_child_exists`)なら remembered set に追加(バリア導入前から存在した
-  old→young 辺をカバー)。young 参照が無ければ `arm_barrier` して以後の young ストアに
-  備える。
+  メジャーは old も普通にマークするため、既に old のセル(`old_bits`)は加齢しない
+  (`major_mark` フラグで、この余分なビットマップ読みをマイナー側に持ち込まない)。
+- **`remember_promoted`**(マーク完了後): remember-on-promote。昇格したオブジェクトが
+  **まだ young を参照している**(`young_child_exists`)なら remembered set に追加
+  (バリア導入前から存在した old→young 辺をカバー)。young 参照が無ければ
+  `arm_barrier` して以後の young ストアに備える。今サイクルの昇格が全部見えてから
+  走るので、子より先に昇格した親が無駄に remembered されることはない。
 
 メジャーではこの後に `reclassify_remembered`(`filter_remembered` で死んだ entry を
 落とした後)が走る。生き残った entry のうち young の子を失ったもの
@@ -713,8 +706,9 @@ stderr へ出力して abort する(`alloc.rs` の `malloc_hard_limit`)。OOM �
   remembered/armed の区別はオブジェクトと寿命を共にし、死んだ old セルの後始末は
   スイープとページ回収が担う。old 世代が大きいほどメジャーが安くなる
   (old 61 万で 1 回あたり 74ms → 27ms)。
-- マークの走査は**深さ 32 段までは再帰、それ以降は幅優先のマークキュー**
-  (`mark_queue`)。ネイティブスタックの使用量はグラフの深さから切り離され、
-  浅く広いという現実のグラフの形に対しては再帰の速さをそのまま保つ。
+- マークの走査は**幅優先のマークキュー**(`mark_queue`)一本で、数個先の
+  エントリのヘッダを先読みしてキャッシュミスを重ねる。加齢・昇格も取り出した
+  その場で行い、生存者を二度なめない。ネイティブスタックの使用量はグラフの
+  深さから切り離されている。
 - 外部 malloc 圧・シグナル・`GC.start` も同じ poll ワード経由で同一のセーフ
   ポイント収集に集約される(レーン分割は `poll_flag.rs` / `doc/safepoint.md` §3)。
