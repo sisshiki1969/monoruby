@@ -348,6 +348,16 @@ pub struct Globals {
     encoding_objects: HashMap<crate::value::rvalue::Encoding, Value>,
     /// library directries.
     load_path: Value,
+    /// `lib/` directories of the host's installed (non-default) gems,
+    /// consulted by `require` only after `$LOAD_PATH` misses. CRuby does
+    /// not list them in `$LOAD_PATH` either: rubygems activates a gem on
+    /// demand and only then splices its `lib/` in. Keeping them out of
+    /// the visible array lets `Bundler.setup` (which prepends the
+    /// bundle's paths) win over every other installed version of a gem,
+    /// and keeps `$LOAD_PATH` scans (`$LOAD_PATH.detect { … }`) from
+    /// landing on an unrelated gem. A hit here is appended to
+    /// `$LOAD_PATH`, like an activation.
+    gem_lib_dirs: Vec<String>,
     /// standard PRNG
     random: Box<Prng>,
     /// `$LOADED_FEATURES` / `$"` — Array of canonicalised paths
@@ -784,6 +794,7 @@ impl Globals {
             encoding_of_object: HashMap::default(),
             encoding_objects: HashMap::default(),
             load_path: Value::array_empty(),
+            gem_lib_dirs: vec![],
             random: Box::new(Prng::new()),
             loaded_features,
             loading_features: std::collections::HashMap::default(),
@@ -942,12 +953,33 @@ impl Globals {
         // Skip blank lines (the cache file ends with a newline): an
         // empty `$LOAD_PATH` entry would make bare `require`s resolve
         // against the CWD, which CRuby forbids for security.
-        let list: Vec<_> = path_list
+        //
+        // The cached list is the host's `$LOAD_PATH` followed by every
+        // installed gem's `lib/` (see `ruby_probe`). Only the former goes
+        // into `$LOAD_PATH`; a gem `lib/` — anything under a gem root's
+        // `gems/` or `bundler/gems/` — is kept aside as a `require`
+        // fallback (`Store::gem_lib_dirs`).
+        let gem_roots: Vec<String> = std::env::var("GEM_PATH")
+            .map(|s| {
+                s.split(':')
+                    .filter(|r| !r.is_empty())
+                    .map(|r| r.trim_end_matches('/').to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let is_gem_lib = |dir: &str| {
+            gem_roots.iter().any(|root| {
+                dir.starts_with(&format!("{root}/gems/"))
+                    || dir.starts_with(&format!("{root}/bundler/gems/"))
+            })
+        };
+        let (gem_libs, list): (Vec<String>, Vec<String>) = path_list
             .split('\n')
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .collect();
+            .partition(|s| is_gem_lib(s));
         globals.extend_load_path(list.iter().cloned());
+        globals.gem_lib_dirs = gem_libs;
 
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
