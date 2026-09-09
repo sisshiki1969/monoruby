@@ -12,6 +12,7 @@ impl Codegen {
         let loop_ = self.jit.label();
         let dskip = self.jit.label();
         let dloop = self.jit.label();
+        let bskip = self.jit.label();
         // allocate stack: sp -= stack_offset * 16
         monoasm_arm64!(&mut self.jit,
             ldrh x10, [x(PC.0)];
@@ -64,6 +65,16 @@ impl Codegen {
             sub x12, x12, #(1);
             cbnz x12, loop_;
             skip:
+        // The named `&block` parameter's slot (`[PC+12]`, 0: none) starts
+        // as `BLOCK_PARAM_UNSET`: "not assigned, the frame's block handler
+        // is the value" (x86 `fill_block_param_unset`).
+            ldrh x10, [x(PC.0), #(12)];
+            cbz x10, bskip;
+            neg x10, x10;
+            add x10, x(LFP.0), x10, lsl #(3);
+            mov x14, (BLOCK_PARAM_UNSET);
+            stur x14, [x10, #(-(LFP_SELF as i32))];
+            bskip:
             add x(PC.0), x(PC.0), #(16);
         );
         // Callee-entry GC/preempt poll, mirroring x86 `vm_init`: frame

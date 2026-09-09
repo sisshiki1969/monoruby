@@ -90,3 +90,55 @@ fn block_param_of_a_block_or_define_method_can_be_reassigned() {
         "#,
     );
 }
+
+// The parameter's slot starts as an unassigned sentinel; a read
+// materializes the frame's block into one Proc and caches it in the
+// frame, so every read (and a closure's read, and `binding`) answers the
+// same object until an assignment replaces it; `yield` keeps the
+// original block regardless.
+
+#[test]
+fn block_param_reads_answer_one_proc() {
+    run_test(
+        r#"
+        def a(&b); [b.equal?(b), b.object_id == b.object_id, 3.times.map { b.object_id }.uniq.size]; end
+        def h(&b); pr = proc { b }; [pr.call.equal?(b), (b = 5; pr.call)]; end
+        def q(&b); b; end
+        x = q { }
+        y = q(&x)
+        def c(&b); x = b; b = nil; [x.class, b]; end
+        def j(&b); b = proc { :new }; [yield, b.call, [1].map(&b)]; end
+        def i(&b); b ? yield : :none; end
+        [a {}, h {}, x.equal?(y), c {}, j { :orig }, i { :y }, i]
+        "#,
+    );
+}
+
+#[test]
+fn block_param_through_binding_and_eval() {
+    run_test(
+        r#"
+        def d(&b); binding.local_variable_get(:b); end
+        def e(&b); bd = binding; bd.local_variable_set(:b, 7); [b, bd.local_variable_get(:b)]; end
+        def f(&b); r = b; [1].each { b = 2 }; [r.class, b, binding.local_variable_get(:b)]; end
+        def g(&b); eval("b").class; end
+        def r(&b); binding.local_variables.include?(:b); end
+        def s(&b); [1].each { |b| b = 9 }; b.class; end
+        [d {}.class, d.class, e {}, f {}, g {}, r {}, s {}]
+        "#,
+    );
+}
+
+#[test]
+fn anonymous_block_forwarding_has_no_slot() {
+    run_test(
+        r#"
+        def k(&b); [1, 2].map(&b); end
+        def l(&); k(&); end
+        def m(...); k(...); end
+        def n(&b); b.nil?; end
+        def o(&b); b.lambda?; end
+        [k { |x| x * 2 }, l { |x| x + 1 }, m { |x| x - 1 }, n, n {}, o(&->() {}), o {}]
+        "#,
+    );
+}

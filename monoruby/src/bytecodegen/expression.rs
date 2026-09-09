@@ -276,17 +276,19 @@ impl<'a> BytecodeGen<'a> {
                 if let Some(local2) = self.refer_local(&ident) {
                     self.emit_mov(dst, local2);
                 } else {
-                    self.emit(BytecodeInst::BlockArg(dst, 0), loc);
+                    let slot = self.block_param_slot_of(0);
+                    self.emit(BytecodeInst::BlockArg(dst, 0, slot), loc);
                 }
             }
             NodeKind::LocalVar(outer, ident) => {
                 let name = IdentId::get_id_from_string(ident);
-                if let Some(src) = self.refer_dynamic_local(outer, name) {
+                if let Some(src) = self.refer_dynamic_local_read(outer, name) {
                     let src = src.into();
                     self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 } else {
-                    assert_eq!(Some(name), self.block_param);
-                    self.emit(BytecodeInst::BlockArg(dst, outer), loc);
+                    assert_eq!(Some(name), self.outer_block_param_name(outer));
+                    let slot = self.block_param_slot_of(outer);
+                    self.emit(BytecodeInst::BlockArg(dst, outer, slot), loc);
                 }
             }
             NodeKind::Const {
@@ -681,13 +683,14 @@ impl<'a> BytecodeGen<'a> {
                     return Ok(());
                 } else {
                     let ret = self.push().into();
-                    self.emit(BytecodeInst::BlockArg(ret, 0), loc);
+                    let slot = self.block_param_slot_of(0);
+                    self.emit(BytecodeInst::BlockArg(ret, 0, slot), loc);
                 }
             }
             NodeKind::LocalVar(outer, ident) => {
                 let ret = self.push().into();
                 let lvar = IdentId::get_id_from_string(ident);
-                if let Some(src) = self.refer_dynamic_local(outer, lvar) {
+                if let Some(src) = self.refer_dynamic_local_read(outer, lvar) {
                     let src = src.into();
                     self.emit(
                         BytecodeInst::LoadDynVar {
@@ -698,7 +701,8 @@ impl<'a> BytecodeGen<'a> {
                         loc,
                     );
                 } else if Some(lvar) == self.outer_block_param_name(outer) {
-                    self.emit(BytecodeInst::BlockArg(ret, outer), loc);
+                    let slot = self.block_param_slot_of(outer);
+                    self.emit(BytecodeInst::BlockArg(ret, outer, slot), loc);
                 } else {
                     return Err(MonorubyErr::runtimeerr(format!(
                         "can't access local variable '{}' in outer block",

@@ -200,7 +200,7 @@ fn local_variable_get(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    _: BytecodePtr,
+    pc: BytecodePtr,
 ) -> Result<Value> {
     let arg = lfp.arg(0);
     let name = arg_to_local_name(arg, vm, globals)?
@@ -216,7 +216,16 @@ fn local_variable_get(
     if !it_implicit
         && let Some((host, slot)) = lookup_local_in_binding(globals, inner, name)
     {
-        return Ok(host.register(slot).unwrap_or_default());
+        let v = host.register(slot);
+        // A `&block` parameter's slot holds the unassigned sentinel until
+        // the parameter is assigned: the value is the frame's block then.
+        if v.is_none_or(|v| v.is_block_param_unset())
+            && let Some(iseq_id) = globals.store[host.func_id()].is_iseq()
+            && globals.store[iseq_id].block_param_slot() == Some(slot)
+        {
+            return vm.block_param_proc(globals, host, pc);
+        }
+        return Ok(v.unwrap_or_default());
     }
     Err(MonorubyErr::nameerr_with_name(
         format!(

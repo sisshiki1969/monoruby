@@ -1352,6 +1352,7 @@
 658a3d798e2393a25a6923d06ab095be	[:tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok]	def tmo(klass)\n              perform = Proc.new do\n                
 659055cc978aefe6697faff4fd6e1315	[[1, 2, 3], 10, 20]	def f(*pos, a:, b:)\n          [pos, a, b]\n        end\n        \n\n       
 65b60c5b39c342afed16c0ba169c3edc	20100	def target(x) = x + 1\n        s = 0\n        i = 0\n        while i < 200
+65bb5f7d0324a0abc81ebc2d0d768a36	[[true, true, 1], [true, 5], true, [Proc, nil], [:orig, :new, [:new]], :y, :none]	def a(&b); [b.equal?(b), b.object_id == b.object_id, 3.times.map { b.ob
 65d10140470d60de44657d841741db77	[0, 1, 2, 3, 4]	a = []\n            p = Proc.new {|x|\n                a << x\n       
 65f089c7f8670902b073a707f21a776d	["/p", nil]	m = Module.new { autoload :X, "/p" }\n            [m.autoload?("X"),
 660c0103d91b50d0c6f365cf1111c0c4	:OVERRIDDEN	class String; def freeze; :OVERRIDDEN; end; end; "a".freeze
@@ -2370,6 +2371,7 @@ b0a6a8263e7c30eec12325762ab54dc5	[1, 2, nil, nil, 3, 1, nil, :from_block, [:a, :
 b127614a38e6a826e83df4733ad1c138	[true, true]	require "openssl"\n        [OpenSSL::Cipher::CipherError < OpenSSL::Open
 b13eb772180c210a5c10579da6ea6cfb	true	a = []\n            a << a\n            b = Marshal.load(Marshal.dump
 b15052c5abbd93a1a9004be3b57beb9c	[:foo, :bar]	$res = []\n            obj = Object.new\n            def obj.singleto
+b15ea9d8d319614d35c4044d16eebf97	[[2, 4], [2, 3], [0, 1], true, false, true, false]	def k(&b); [1, 2].map(&b); end\n        def l(&); k(&); end\n        def 
 b18169111f27cd344540accc05f616fe	nil	File.open("Cargo.toml") { |f| IO.new(f.fileno, autoclose: false).path }
 b18a80835134d8dffe61ec8e951213f0	["あcba", "あcba", true]	s = "abcあ".dup\n              t = s.reverse!\n              [s, t, 
 b196364f0e469cc01f39c67211d6218a	["abcdef", "abcdef", "abc", ["abcdef", "UTF-8"], "abcdef"]	File.write("/tmp/mr_cr5.txt", "abcdef")\n            r = []\n        
@@ -2802,6 +2804,7 @@ cf9672bc0f3346ba3de51fd90ea702e4	[:foo]	$res = []\n            class C\n        
 cfa30b29bf3ccea5e600ee36663af61d	["US-ASCII", "US-ASCII", "US-ASCII"]	s = "abc".dup.force_encoding("US-ASCII")\n              s.partitio
 cfaf7efe92a4e7e016bf9da03af47c5a	[true, "m"]	bytes = Marshal.dump(Enumerable)\n            t = Marshal.load(bytes
 cfd1776d77256768f5ae301400965afe	["No such file or directory - no-such-cmd-xyzzy", 127]	begin\n              Process.spawn("no-such-cmd-xyzzy")\n            
+cfecea52df02aec5174050c64a869aec	[Proc, NilClass, [7, 7], [Proc, 2, 2], Proc, true, Proc]	def d(&b); binding.local_variable_get(:b); end\n        def e(&b); bd = 
 cffe2bea88b632377cf81196a0f5adbc	:OVERRIDDEN	class Integer; def %(o); :OVERRIDDEN; end; end; 3 % 4
 d005def98ec838cc7d6f37a7bdf0aaa0	[1, 2, 42, 12]	def f(x,y,z=42,w=12)\n            [x,y,z,w]\n        end\n        \n\n      
 d00758f23a67ffb31d511123384dc457	[1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", "x", "\\xFF", 2, "y", "y z", "x\\xFFy ", true, "\\x{A4A2}", 2, "\\x{A4A4}", 4, 1, "x"]	require "strscan"\n        src = '{"name": "Kärnten", "n": 12, "s": "v€x

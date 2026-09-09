@@ -17,6 +17,25 @@ mod pic;
 mod variables;
 
 impl<'a> JitContext<'a> {
+    /// The `&block` parameter's slot value when the abstract state knows
+    /// it as a constant: only this frame's (`outer == 0`), named
+    /// (`slot != 0`) parameter. `BLOCK_PARAM_UNSET` means "not assigned
+    /// so far on this path" (the frame's block handler is the value).
+    fn block_param_slot_constant(
+        &self,
+        state: &AbstractState,
+        outer: usize,
+        slot: SlotId,
+    ) -> Option<Value> {
+        if outer != 0 || slot.0 == 0 {
+            return None;
+        }
+        match state.mode(slot) {
+            LinkMode::C(v) => Some(v),
+            _ => None,
+        }
+    }
+
     pub(super) fn traceir_to_asmir(
         &mut self,
         frame: JitStackFrame,
@@ -642,29 +661,53 @@ impl<'a> JitContext<'a> {
                 // untouched.
                 self.restore_unfrozen(None);
             }
-            TraceIr::BlockArgProxy(ret, outer) => {
+            TraceIr::BlockArgProxy(ret, outer, slot) => {
                 state.flush_gp(ir);
+                // The `&block` parameter's slot decides: assigned, its
+                // value is forwarded; still the unassigned sentinel, the
+                // frame's block handler is. When the abstract state knows
+                // the slot's constant — a method-entry trace with no
+                // assignment so far (`C(BLOCK_PARAM_UNSET)`), or an
+                // assigned literal — the decision is made here and no
+                // check is emitted. An anonymous `&` / `...` has no slot.
+                let known = match self.block_param_slot_constant(state, outer, slot) {
+                    Some(v) if !v.is_block_param_unset() => {
+                        state.def_C(ret, v);
+                        return Ok(CompileResult::Continue);
+                    }
+                    known => known,
+                };
+                let unassigned = slot.0 == 0 || known.is_some();
                 // When the caller chain provably passes no block —
                 // including through `(...)` block-forwarding sites
                 // (`resolve_given_block` walks them) — the forwarded
-                // `&block` of `...` is nil at compile time. Fold the
-                // proxy to a constant `nil` instead of materializing it
-                // every call (`outer == 0`: the proxy refers to this
-                // frame's own block param). A deopt resumes the
-                // interpreter, which re-runs this `BlockArgProxy`
-                // bytecode and computes the same nil.
-                if outer == 0
+                // block is nil at compile time. Fold the proxy to a
+                // constant `nil` instead of materializing it every call
+                // (`outer == 0`: the proxy refers to this frame's own
+                // block param; `unassigned`: the handler is the value). A
+                // deopt resumes the interpreter, which re-runs this
+                // `BlockArgProxy` bytecode and computes the same nil.
+                if unassigned
+                    && outer == 0
                     && self.is_specialized()
                     && let Some(None) = self.resolve_given_block()
                 {
                     state.def_C(ret, Value::nil());
                 } else {
                     state.def_S(ret);
-                    ir.block_arg_proxy(ret, outer);
+                    let slot = if unassigned { SlotId(0) } else { slot };
+                    ir.block_arg_proxy(ret, outer, slot);
                 }
             }
-            TraceIr::BlockArg(ret, outer) => {
+            TraceIr::BlockArg(ret, outer, slot) => {
                 state.flush_gp(ir);
+                // An assigned literal needs no materialization.
+                if let Some(v) = self.block_param_slot_constant(state, outer, slot)
+                    && !v.is_block_param_unset()
+                {
+                    state.def_C(ret, v);
+                    return Ok(CompileResult::Continue);
+                }
                 state.def_S(ret);
                 ir.block_arg(state, ret, outer, pc);
                 state.unset_side_effect_guard();

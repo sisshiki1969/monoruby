@@ -419,10 +419,10 @@ impl<'a> BytecodeGen<'a> {
                 };
                 Bytecode::from_with_func_name_id(enc_www(71, op1.0, op2.0, 0), Some(name), func_id)
             }
-            BytecodeInst::BlockArgProxy(dst, outer) => {
+            BytecodeInst::BlockArgProxy(dst, outer, slot) => {
                 // 21
                 let op1 = self.slot_id(&dst);
-                Bytecode::from(enc_wl(21, op1.0, outer as u32))
+                Bytecode::from(enc_www(21, op1.0, outer as u16, slot.0))
             }
             BytecodeInst::SingletonClassDef { ret, base, func_id } => {
                 // 22
@@ -433,10 +433,10 @@ impl<'a> BytecodeGen<'a> {
                 let op2 = self.slot_id(&base);
                 Bytecode::from_with_func_name_id(enc_wl(22, op1.0, op2.0 as u32), None, func_id)
             }
-            BytecodeInst::BlockArg(dst, outer) => {
+            BytecodeInst::BlockArg(dst, outer, slot) => {
                 // 23
                 let op1 = self.slot_id(&dst);
-                Bytecode::from(enc_wl(23, op1.0, outer as u32))
+                Bytecode::from(enc_www(23, op1.0, outer as u16, slot.0))
             }
             BytecodeInst::CheckCvar { dst, name } => {
                 // 24
@@ -648,12 +648,14 @@ impl<'a> BytecodeGen<'a> {
                 Bytecode::from(enc_www(149, op1.0, op2, op3.0))
             }
             BytecodeInst::InitMethod(fn_info) => {
-                // Second word (low u32): destructured-param slot range —
-                // `destruct_start` in the low u16, `destruct_len` above it.
-                // Read back by `TraceIr` decode and the VM's `vm_init`.
-                let destruct =
-                    ((fn_info.destruct_len as u32) << 16) | (fn_info.destruct_start as u32);
-                Bytecode::from_u32(enc_www_fn_info(172, &fn_info), destruct)
+                // Second word: destructured-param slot range —
+                // `destruct_start` in the low u16, `destruct_len` above it —
+                // and the `&block` parameter's slot in bits 32..48. Read back
+                // by `TraceIr` decode and the VM's `vm_init`.
+                let op2 = ((fn_info.block_param_slot as u64) << 32)
+                    | ((fn_info.destruct_len as u64) << 16)
+                    | (fn_info.destruct_start as u64);
+                Bytecode::from_u64(enc_www_fn_info(172, &fn_info), op2)
             }
             BytecodeInst::ExpandArray(src, dst, len, rest_pos) => {
                 let op1 = self.slot_id(&src);

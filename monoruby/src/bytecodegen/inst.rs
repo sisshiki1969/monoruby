@@ -134,8 +134,10 @@ pub(super) enum BytecodeInst {
         val: BcReg,
         name: IdentId,
     },
-    BlockArgProxy(BcReg, usize),
-    BlockArg(BcReg, usize),
+    /// `dst`, the frame depth of the parameter's frame, and its local slot
+    /// in that frame (`SlotId(0)`: an anonymous `&` / `...`, no slot).
+    BlockArgProxy(BcReg, usize, SlotId),
+    BlockArg(BcReg, usize, SlotId),
     LoadDynVar {
         /// return register of the current frame.
         dst: BcReg,
@@ -338,6 +340,9 @@ pub(crate) struct FnInitInfo {
     /// them too or the poll's root scan reads stack garbage.
     pub destruct_start: usize,
     pub destruct_len: usize,
+    /// The local slot of a named `&block` parameter (0: none). The
+    /// prologue stores `BLOCK_PARAM_UNSET` there, after the nil-fill.
+    pub block_param_slot: u16,
 }
 
 impl std::fmt::Debug for FnInitInfo {
@@ -357,6 +362,7 @@ impl FnInitInfo {
         total_reg_num: usize,
         params: &ParamsInfo,
         destructed_args: std::ops::Range<usize>,
+        block_param_slot: Option<SlotId>,
     ) -> Self {
         let reg_num = total_reg_num - 1;
         let arg_num = params.args_names.len();
@@ -367,6 +373,7 @@ impl FnInitInfo {
             stack_offset,
             destruct_start: destructed_args.start,
             destruct_len: destructed_args.len(),
+            block_param_slot: block_param_slot.map_or(0, |s| s.0),
         }
     }
 }

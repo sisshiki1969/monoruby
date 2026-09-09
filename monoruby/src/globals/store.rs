@@ -1797,10 +1797,8 @@ impl Store {
             params,
             box body,
             loc,
-            lvar,
             ..
         } = info;
-        let block_param_written = lvar.block_param_written;
         let mut args_names = vec![];
         let mut keyword_names = vec![];
         let mut keyword_initializers = vec![];
@@ -1954,7 +1952,6 @@ impl Store {
             kw_required,
             kw_rest_param,
             block_param,
-            block_param_written,
             forwarding,
             it_param,
             forbid_keyword,

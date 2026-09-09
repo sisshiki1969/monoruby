@@ -132,8 +132,10 @@ pub(crate) enum TraceIr {
         exclude_end: bool,
     },
 
-    BlockArgProxy(SlotId, usize),
-    BlockArg(SlotId, usize),
+    /// `dst`, the frame depth of the `&block` parameter's frame, and the
+    /// parameter's local slot there (`SlotId(0)`: anonymous, no slot).
+    BlockArgProxy(SlotId, usize, SlotId),
+    BlockArg(SlotId, usize, SlotId),
 
     LoadConst(SlotId, ConstSiteId),
     StoreConst(SlotId, ConstSiteId),
@@ -431,13 +433,19 @@ impl TraceIr {
                 ),
                 19 => TraceIr::CheckKwRest(SlotId::new(op1_w)),
                 20 => TraceIr::CheckLocal(SlotId::new(op1_w), op1_l as i32),
-                21 => TraceIr::BlockArgProxy(SlotId::new(op1_w), op1_l as usize),
+                21 => {
+                    let (dst, outer, slot) = dec_www(op1);
+                    TraceIr::BlockArgProxy(SlotId::new(dst), outer as usize, SlotId::new(slot))
+                }
                 22 => TraceIr::SingletonClassDef {
                     dst: SlotId::from(op1_w),
                     base: SlotId::new(op1_l as u16),
                     func_id: FuncId::new((op2 >> 32) as u32),
                 },
-                23 => TraceIr::BlockArg(SlotId::new(op1_w), op1_l as usize),
+                23 => {
+                    let (dst, outer, slot) = dec_www(op1);
+                    TraceIr::BlockArg(SlotId::new(dst), outer as usize, SlotId::new(slot))
+                }
                 24 => TraceIr::CheckCvar {
                     dst: SlotId::new(op1_w),
                     name: IdentId::from(op1_l),
@@ -735,6 +743,7 @@ impl TraceIr {
                     stack_offset: op3_w3 as usize,
                     destruct_start: (op2 as u16) as usize,
                     destruct_len: ((op2 >> 16) as u16) as usize,
+                    block_param_slot: (op2 >> 32) as u16,
                 }),
                 173 => TraceIr::ExpandArray {
                     src: SlotId::new(op1_w1),
@@ -989,11 +998,11 @@ impl TraceIr {
                 let op = store[id].format();
                 format!("{op} = {:?}", src)
             }
-            TraceIr::BlockArgProxy(dst, outer) => {
-                format!("{:?} = block_proxy({outer})", dst)
+            TraceIr::BlockArgProxy(dst, outer, slot) => {
+                format!("{:?} = block_proxy({outer}, {:?})", dst, slot)
             }
-            TraceIr::BlockArg(dst, outer) => {
-                format!("{:?} = block_arg({outer})", dst)
+            TraceIr::BlockArg(dst, outer, slot) => {
+                format!("{:?} = block_arg({outer}, {:?})", dst, slot)
             }
             TraceIr::LoadDynVar(dst, src) => {
                 format!("{:?} = {:?}", dst, src)

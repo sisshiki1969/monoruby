@@ -591,31 +591,7 @@ impl<'pr> Lowerer<'pr> {
     /// to attach it to the produced `BlockInfo`).
     fn exit_prism_scope(&mut self, saved: LvarCollector) -> LvarCollector {
         self.prism_scope_level -= 1;
-        let mut inner = std::mem::replace(&mut self.lvars, saved);
-        // Assignments the scope made to its ancestors' locals land on
-        // the parent now (one level closer), so a method learns that a
-        // nested block assigns its `&block` parameter.
-        for (depth, name) in std::mem::take(&mut inner.outer_writes) {
-            self.note_lvar_write(depth - 1, &name);
-        }
-        inner
-    }
-
-    /// `adjust_lvar_depth` for an assignment target: also records the
-    /// write on the target scope's collector (`LvarCollector::note_write`),
-    /// which is how a method's `&block` parameter that is reassigned
-    /// anywhere in its body gets a real local slot.
-    fn adjust_lvar_write_depth(&mut self, depth: usize, name: &str) -> usize {
-        self.note_lvar_write(depth, name);
-        self.adjust_lvar_depth(depth, name)
-    }
-
-    fn note_lvar_write(&mut self, depth: usize, name: &str) {
-        if depth == 0 {
-            self.lvars.note_write(name);
-        } else {
-            self.lvars.outer_writes.push((depth, name.to_string()));
-        }
+        std::mem::replace(&mut self.lvars, saved)
     }
 
     /// Translate a prism-reported local variable depth into a
@@ -1122,7 +1098,7 @@ impl<'pr> Lowerer<'pr> {
                 let target = Node {
                     kind: {
                         let name = constant_name(&n.name())?;
-                        let depth = self.adjust_lvar_write_depth(n.depth() as usize, &name);
+                        let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
                         NodeKind::LocalVar(depth, name)
                     },
                     loc: location_to_loc(&n.name_loc()),
@@ -1134,7 +1110,7 @@ impl<'pr> Lowerer<'pr> {
                 let target = Node {
                     kind: {
                         let name = constant_name(&n.name())?;
-                        let depth = self.adjust_lvar_write_depth(n.depth() as usize, &name);
+                        let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
                         NodeKind::LocalVar(depth, name)
                     },
                     loc: location_to_loc(&n.name_loc()),
@@ -1146,7 +1122,7 @@ impl<'pr> Lowerer<'pr> {
                 let target = Node {
                     kind: {
                         let name = constant_name(&n.name())?;
-                        let depth = self.adjust_lvar_write_depth(n.depth() as usize, &name);
+                        let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
                         NodeKind::LocalVar(depth, name)
                     },
                     loc: location_to_loc(&n.name_loc()),
@@ -1479,7 +1455,7 @@ impl<'pr> Lowerer<'pr> {
                             {
                                 let name = constant_name(&inner.name())?;
                                 let depth =
-                                    self.adjust_lvar_write_depth(inner.depth() as usize, &name);
+                                    self.adjust_lvar_depth(inner.depth() as usize, &name);
                                 vec![(depth, name)]
                             },
                             None,
@@ -1505,7 +1481,7 @@ impl<'pr> Lowerer<'pr> {
                                 out.push({
                                     let name = constant_name(&inner.name())?;
                                     let depth = self
-                                        .adjust_lvar_write_depth(inner.depth() as usize, &name);
+                                        .adjust_lvar_depth(inner.depth() as usize, &name);
                                     (depth, name)
                                 });
                             }
@@ -2089,7 +2065,7 @@ impl<'pr> Lowerer<'pr> {
         node: &LocalVariableWriteNode<'pr>,
     ) -> Result<Node, MonorubyErr> {
         let name = constant_name(&node.name())?;
-        let depth = self.adjust_lvar_write_depth(node.depth() as usize, &name);
+        let depth = self.adjust_lvar_depth(node.depth() as usize, &name);
         let target = Node {
             kind: NodeKind::LocalVar(depth, name),
             loc: location_to_loc(&node.name_loc()),
@@ -2542,7 +2518,7 @@ impl<'pr> Lowerer<'pr> {
         let mut stmts: Vec<Node> = escaped
             .into_iter()
             .map(|name| {
-                let depth = self.adjust_lvar_write_depth(0, &name);
+                let depth = self.adjust_lvar_depth(0, &name);
                 Node::new_lvar(name, depth, loc)
             })
             .collect();
@@ -3826,7 +3802,7 @@ impl<'pr> Lowerer<'pr> {
                 Node {
                     kind: {
                         let name = constant_name(&n.name())?;
-                        let depth = self.adjust_lvar_write_depth(n.depth() as usize, &name);
+                        let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
                         NodeKind::LocalVar(depth, name)
                     },
                     loc,

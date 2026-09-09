@@ -611,14 +611,15 @@ impl ISeqInfo {
         self.args.block_param
     }
 
-    /// The `&block` parameter that needs a local slot (it is assigned
-    /// somewhere in the body), if any.
-    pub(crate) fn block_param_slot_name(&self) -> Option<IdentId> {
-        if self.args.block_param_written {
-            self.args.block_param
-        } else {
-            None
-        }
+    /// The local slot of the named `&block` parameter, if this iseq has
+    /// one (an anonymous `&` / `...` has none). The prologue stores
+    /// `BLOCK_PARAM_UNSET` there; `BlockArg` / `BlockArgProxy` read it
+    /// and an assignment to the parameter is a plain store. See
+    /// `doc/block_param.md`.
+    pub(crate) fn block_param_slot(&self) -> Option<SlotId> {
+        let name = self.args.block_param?;
+        let local = self.locals.get(&name)?;
+        Some(SlotId(1 + local.0))
     }
 
     ///
@@ -1301,11 +1302,6 @@ pub(crate) struct ParamsInfo {
     pub kw_required: Vec<bool>,
     pub kw_rest: Option<SlotId>,
     pub block_param: Option<IdentId>,
-    /// `block_param` is assigned somewhere in the body, so it lives in
-    /// a local slot (the one after the parameters) that the prologue
-    /// fills from the block handler, instead of being read through
-    /// `BlockArg` at each reference. See `LvarCollector::block_param_written`.
-    block_param_written: bool,
     forwarding: bool,
     /// `true` when the sole parameter is the implicit `it` (Ruby 3.4).
     /// `#parameters` then reports it without a name.
@@ -1327,7 +1323,6 @@ impl ParamsInfo {
         kw_required: Vec<bool>,
         kw_rest: Option<SlotId>,
         block_param: Option<IdentId>,
-        block_param_written: bool,
         forwarding: bool,
         it_param: bool,
         forbid_keyword: bool,
@@ -1343,7 +1338,6 @@ impl ParamsInfo {
             kw_required,
             kw_rest,
             block_param,
-            block_param_written,
             forwarding,
             it_param,
             forbid_keyword,
@@ -1377,7 +1371,6 @@ impl ParamsInfo {
             kw_required: vec![],
             kw_rest: None,
             block_param: None,
-            block_param_written: false,
             forwarding: false,
             it_param: false,
             forbid_keyword: false,
@@ -1413,7 +1406,6 @@ impl ParamsInfo {
                 None
             },
             block_param: None,
-            block_param_written: false,
             forwarding: false,
             it_param: false,
             forbid_keyword: false,

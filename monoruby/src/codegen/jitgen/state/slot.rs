@@ -330,6 +330,12 @@ impl SlotState {
         for i in cc.locals() {
             ctx.set_mode(i, LinkMode::C(Value::nil()));
         }
+        // The named `&block` parameter's slot holds the unassigned
+        // sentinel at entry (the prologue stores it), so a `BlockArgProxy`
+        // / `BlockArg` before any assignment resolves at compile time.
+        if let Some(slot) = cc.iseq().block_param_slot() {
+            ctx.set_mode(slot, LinkMode::C(Value::block_param_unset()));
+        }
         for i in cc.args() {
             ctx.set_mode(i, LinkMode::default());
         }

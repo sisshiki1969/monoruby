@@ -25,6 +25,7 @@ impl Codegen {
         self.vm_init_func();
         self.fill_nil();
         self.fill_destruct();
+        self.fill_block_param_unset();
         // Callee-entry GC/preempt poll. This is the one point every call
         // path funnels through — including the Rust invokers
         // (`invoke_method` / `invoke_block`), which have no call-site
@@ -84,6 +85,26 @@ impl Codegen {
             subq rax, 1;
             jne  l0;
         l1:
+        };
+    }
+
+    ///
+    /// Store `BLOCK_PARAM_UNSET` to the named `&block` parameter's slot
+    /// (`[r13 - 4]`, 0: none): "not assigned, the frame's block handler
+    /// is the value" for `BlockArg` / `BlockArgProxy`.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    fn fill_block_param_unset(&mut self) {
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            movzxw rax, [r13 - 4];
+            testq rax, rax;
+            jz   exit;
+            negq rax;
+            movq [r14 + rax * 8 - (LFP_SELF)], (BLOCK_PARAM_UNSET);
+        exit:
         };
     }
 

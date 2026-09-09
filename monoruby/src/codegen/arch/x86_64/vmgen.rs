@@ -1297,13 +1297,22 @@ impl Codegen {
     // | op|dst| outer ||               |
     // +---+---+---+---++---+---+---+---+
     //
+    //
+    // +---+---+---+---++---+---+---+---+
+    // | op|dst|out|slt||               |
+    // +---+---+---+---++---+---+---+---+
+    //
+    // The `&block` parameter's slot (`slt`, 0: anonymous) in the frame
+    // `out` levels up: an assigned value is forwarded as is; the
+    // unassigned sentinel (or an empty slot) means the frame's block
+    // handler, a proxy re-encoded with the extra depth.
     fn vm_block_arg_proxy(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        //let panic = self.entry_panic;
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
+        let from_frame = self.jit.label();
         let exit = self.jit.label();
-        self.fetch2();
+        self.fetch3();
         monoasm! { &mut self.jit,
             movq  rax, r14;
             testq rdi, rdi;
@@ -1313,13 +1322,24 @@ impl Codegen {
             subl rdi, 1;
             jnz  loop_;
         loop_exit:
+            testq rsi, rsi;
+            jz   from_frame;
+            negq rsi;
+            movq rdx, [rax + rsi * 8 - (LFP_SELF)];
+            testq rdx, rdx;
+            jz   from_frame;
+            cmpq rdx, (BLOCK_PARAM_UNSET);
+            jeq  from_frame;
+            movq rax, rdx;
+            jmp  exit;
+        from_frame:
             movq rax, [rax - (LFP_BLOCK)];
             movq rdi, (Value::nil().id());
             testq rax, rax;
             cmoveqq rax, rdi;
             testq rax, 0b1;
             jeq exit;
-            movsxl rdi, [r13 - 16];
+            movzxw rdi, [r13 - 14];
             shlq rdi, 2;
             addq rax, rdi;
             addq rax, 0b10;

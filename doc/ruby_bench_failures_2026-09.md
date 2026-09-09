@@ -230,11 +230,13 @@ def accept(t, pat = /.*/m, &block)
 されなかった代入の後では `nil` になっていた。さらに、ネストしたブロック内で
 `&block` に代入すると bytecodegen が FATAL で落ちていた。
 
-修正: parser（`LvarCollector::block_param_written`、ネストしたスコープからの
-代入は `exit_prism_scope` で親へ畳み込む）で「`&block` に代入がある」ことを
-記録し、その場合だけ bytecodegen が `&block` に本物のローカルスロットを割り
-当て、prologue で `BlockArg` により実体化する（代入の無い通常の `&block` は
-従来どおり遅延のまま、`block.call` の最適化も従来どおり）。
+修正: CRuby と同じ方式にした。名前付きの `&block` は本物のローカルスロットを
+持ち、prologue で「未代入」を表す番兵（`BLOCK_PARAM_UNSET`）を入れておく。代入は
+ただの store、値としての参照（`BlockArg`）は番兵ならフレームのブロックハンドラを
+Proc 化してフレームに書き戻す（以後同じオブジェクト）、`&block` 転送
+（`BlockArgProxy`）は番兵ならハンドラをそのまま proxy として渡す。`yield` は従来
+どおりフレームのハンドラを見る。JIT は入口でスロットを定数 `C(番兵)` として
+知っているので、代入の無いパスではチェックを出さない。`doc/block_param.md`、
 `tests/block_param_assign.rs`。
 
 ついでに: `rubocop-rails` が `$VERBOSE = nil` の下で定数を再定義するのに

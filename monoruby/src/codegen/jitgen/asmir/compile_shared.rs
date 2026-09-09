@@ -903,8 +903,8 @@ impl Codegen {
             }
             // `&block` forwarding: proxy the block handler, or materialize it
             // into a Proc value (aarch64 bails on a live fpr / range overflow).
-            AsmInst::BlockArgProxy { ret, outer } => {
-                self.encode_linst(LInst::BlockArgProxy { ret, outer })
+            AsmInst::BlockArgProxy { ret, outer, slot } => {
+                self.encode_linst(LInst::BlockArgProxy { ret, outer, slot })
             }
             AsmInst::BlockArg {
                 ret,
@@ -2044,8 +2044,8 @@ impl Codegen {
             LInst::LoopJitRspBump { offset } => {
                 self.emit_loop_jit_rsp_bump(offset);
             }
-            LInst::BlockArgProxy { ret, outer } => {
-                self.emit_block_arg_proxy(ret, outer);
+            LInst::BlockArgProxy { ret, outer, slot } => {
+                self.emit_block_arg_proxy(ret, outer, slot);
             }
             LInst::BlockArg {
                 ret,

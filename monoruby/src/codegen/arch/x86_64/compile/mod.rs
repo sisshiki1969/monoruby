@@ -1935,8 +1935,29 @@ impl Codegen {
     /// ### out
     /// - rax: block handler
     ///
-    fn block_arg_proxy(&mut self, outer: usize) {
+    /// `slot` (0: none): the `&block` parameter's slot in that frame; an
+    /// assigned value is the answer, the unassigned sentinel (or an empty
+    /// slot) means the block handler.
+    ///
+    /// ### destroy
+    /// - rax, rdi
+    ///
+    fn block_arg_proxy(&mut self, outer: usize, slot: SlotId) {
         let exit = self.jit.label();
+        if slot.0 != 0 {
+            let from_frame = self.jit.label();
+            let off = slot.0 as i32 * 8 + LFP_SELF;
+            monoasm! { &mut self.jit,
+                movq rdi, [rax - (off)];
+                testq rdi, rdi;
+                jz   from_frame;
+                cmpq rdi, (BLOCK_PARAM_UNSET);
+                jeq  from_frame;
+                movq rax, rdi;
+                jmp  exit;
+            from_frame:
+            };
+        }
         monoasm! { &mut self.jit,
             movq rax, [rax - (LFP_BLOCK)];
             testq rax, 0b1;
@@ -2875,9 +2896,10 @@ impl Codegen {
         &mut self,
         ret: SlotId,
         outer: usize,
+        slot: SlotId,
     ) -> bool {
         self.get_method_lfp(outer);
-        self.block_arg_proxy(outer);
+        self.block_arg_proxy(outer, slot);
         self.store_rax(ret);
         true
     }

@@ -27,6 +27,12 @@ pub const NIL_VALUE: u64 = 0x04; // 0000_0100
 pub const FALSE_VALUE: u64 = 0x14; // 0001_0100
 pub const TRUE_VALUE: u64 = 0x1c; // 0001_1100
 pub const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
+/// The initial content of a named `&block` parameter's local slot: "not
+/// assigned, the frame's block handler (`LFP_BLOCK`) is the value". An
+/// immediate no Ruby value can be (tag `100` with no other meaning), never
+/// visible to Ruby code: every read of the parameter goes through
+/// `BlockArg` / `BlockArgProxy`, which replace it. See `doc/block_param.md`.
+pub const BLOCK_PARAM_UNSET: u64 = 0x24; // 0010_0100
 
 pub const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 
@@ -936,6 +942,15 @@ impl Value {
         Immediate::nil().into()
     }
 
+    /// The unassigned-`&block`-parameter sentinel (`BLOCK_PARAM_UNSET`).
+    pub(crate) fn block_param_unset() -> Self {
+        Value::from_u64(BLOCK_PARAM_UNSET)
+    }
+
+    pub(crate) fn is_block_param_unset(&self) -> bool {
+        self.id() == BLOCK_PARAM_UNSET
+    }
+
     pub fn bool(b: bool) -> Self {
         Immediate::bool(b).into()
     }
@@ -1543,6 +1558,10 @@ impl Value {
                 NIL_VALUE => RV::Nil,
                 TRUE_VALUE => RV::Bool(true),
                 FALSE_VALUE => RV::Bool(false),
+                // The unassigned-`&block` sentinel is only ever in a frame
+                // slot (never a Ruby-visible value); a debug dump of that
+                // slot shows it as undefined.
+                BLOCK_PARAM_UNSET => RV::Invalid,
                 _ => unreachable!("Illegal packed value. 0x{:016x}", self.0),
             }
         }

@@ -1034,6 +1034,7 @@ pub(in crate::codegen) enum LInst {
     BlockArgProxy {
         ret: SlotId,
         outer: usize,
+        slot: SlotId,
     },
     BlockArg {
         ret: SlotId,

@@ -4442,6 +4442,71 @@ impl Executor {
         ))
     }
 
+    /// The block of the frame `lfp` as a value: `nil` without a block,
+    /// else its Proc — materialized on the first read and cached back
+    /// into the frame's block handler, so every read of a `&block`
+    /// parameter answers the same object (`b.equal?(b)`), and `yield`
+    /// and `&b` forwarding in that frame use the Proc from then on.
+    pub(crate) fn block_param_proc(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        pc: BytecodePtr,
+    ) -> Result<Value> {
+        let bh = match lfp.block() {
+            Some(bh) => bh,
+            None => return Ok(Value::nil()),
+        };
+        if bh.get().is_nil() {
+            return Ok(Value::nil());
+        }
+        // Already-materialized Proc: return it directly, *without*
+        // locating the owner frame's Cfp. This is not just a shortcut:
+        // when the owner frame belongs to a different execution context
+        // — e.g. a `&block` parameter read from inside a green thread
+        // whose lexical home is a heap-promoted frame on the *main*
+        // thread's chain — the dynamic-chain search below can never find
+        // it (and walking past a thread root used to panic on
+        // `parent_fiber.unwrap()`, aborting the whole process; see issue
+        // #950). Cross-context handlers are always materialized when
+        // their frame escapes to the heap
+        // (`materialize_escaped_block_handlers`), so this early return
+        // covers exactly those cases.
+        if let Some(proc) = bh.try_proc() {
+            return Ok(proc.into());
+        }
+        let cfp = if bh.try_proxy().is_none() {
+            // Non-proxy handler (`&:sym`, or an arbitrary object coerced
+            // through `#to_proc`): materializing it needs nothing from the
+            // owner frame, and that frame may well be gone —
+            // `def f(&b); ->{ b.call }; end` read from the returned lambda
+            // is exactly this shape.
+            self.cfp()
+        } else {
+            // Proxy handler: its (fid, depth) is relative to the frame
+            // that owns it, so locate that frame's Cfp on the current
+            // chain (crossing into parent fibers). A proxy owner is always
+            // on the current chain — an escaped frame would have had its
+            // handler materialized above — but walk defensively rather
+            // than aborting the process on a violation.
+            let mut owner = (&*self, self.cfp());
+            while owner.1.lfp() != lfp {
+                match Executor::try_prev_cfp(owner.0, owner.1) {
+                    Some(prev) => owner = prev,
+                    None => {
+                        return Err(MonorubyErr::fatal(
+                            "[BUG] block handler owner frame is not on the current frame chain",
+                        ));
+                    }
+                }
+            }
+            owner.1
+        };
+        let proc = self.generate_proc_inner(globals, cfp, bh, pc)?;
+        lfp.set_block(Some(BlockHandler::new(proc.into())));
+        Ok(proc.into())
+    }
+
     pub(crate) fn generate_lambda(
         &mut self,
         globals: &mut Globals,
