@@ -22,7 +22,7 @@ impl Executor {
     ///
     /// If an error occurs (in autoload), return Err.
     ///
-    pub(super) fn get_constant(
+    pub(crate) fn get_constant(
         &mut self,
         globals: &mut Globals,
         class_id: ClassId,
@@ -176,7 +176,7 @@ impl Executor {
         }
     }
 
-    fn get_constant_superclass(
+    pub(crate) fn get_constant_superclass(
         &mut self,
         globals: &mut Globals,
         mut module: Module,

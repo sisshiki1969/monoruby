@@ -38,6 +38,45 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRUCT_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(STRUCT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(STRUCT_CLASS, "hash", hash, 0);
+    // Raw slot access for `builtins/struct.rb`: CRuby's `Struct#to_a`,
+    // `#[]`, `#each`, ... read the member slots directly
+    // (`RSTRUCT_GET`), never through the member accessors, so a
+    // subclass overriding `name` still gets its stored `name` from
+    // `to_h` (Rails' `ParamsWrapper::Options` relies on that).
+    globals.define_private_builtin_func(STRUCT_CLASS, "__slot_get", slot_get, 1);
+    globals.define_private_builtin_func(STRUCT_CLASS, "__slot_set", slot_set, 2);
+}
+
+fn slot_index(globals: &Globals, self_val: Value, idx: Value) -> Result<usize> {
+    let len = self_val.as_struct().len();
+    let i = idx.expect_integer(&globals.store)?;
+    if i < 0 || i as usize >= len {
+        return Err(MonorubyErr::indexerr(format!(
+            "offset {i} too {} for struct(size:{len})",
+            if i < 0 { "small" } else { "large" }
+        )));
+    }
+    Ok(i as usize)
+}
+
+/// `Struct#__slot_get(index)`: the raw value of member slot *index*.
+#[monoruby_builtin]
+fn slot_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let i = slot_index(globals, self_val, lfp.arg(0))?;
+    Ok(self_val.as_struct().get(i))
+}
+
+/// `Struct#__slot_set(index, value)`: store into member slot *index*
+/// (FrozenError on a frozen struct).
+#[monoruby_builtin]
+fn slot_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    let i = slot_index(globals, self_val, lfp.arg(0))?;
+    self_val.ensure_not_frozen(&globals.store)?;
+    let val = lfp.arg(1);
+    self_val.set_struct_slot(i, val);
+    Ok(val)
 }
 
 ///
@@ -1158,6 +1197,54 @@ mod tests {
             S = Struct.new(:x, :y)
             "#,
         );
+    }
+
+    #[test]
+    fn struct_methods_read_slots_not_accessors() {
+        // `to_a` / `to_h` / `[]` / `each` / `values_at` / `dig` /
+        // `deconstruct_keys` / `select` read the raw slots, as CRuby's
+        // do, so an overridden accessor is bypassed (Rails'
+        // `ParamsWrapper::Options#name` computes its default from
+        // `to_h`; going through `name` there would recurse into nil).
+        run_test_with_prelude(
+            r#"
+            o = OverrideS.new(nil, [], nil)
+            r = [o.to_h, o.to_a, o[:klass], o[2], o.values_at(0, 2), o.dig(:klass), o.deconstruct_keys([:klass])]
+            r << o.each.to_a << o.each_pair.to_a << o.select { true } << o.to_h { |k, v| [k, v] }
+            o[:klass] = 3
+            o[0] = :n
+            r << o.to_a << o.klass << o.name
+            r
+            "#,
+            r#"
+            class OverrideS < Struct.new(:name, :format, :klass)
+              def name = super || "computed-#{to_h[:klass].inspect}"
+              def klass = :overridden
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_slot_builtins_bounds() {
+        // `__slot_get` / `__slot_set` are private and range-checked;
+        // `[]` maps its own indices first, so only a direct call sees
+        // the builtin's IndexError.
+        // monoruby-only builtins, so not oracle-checked.
+        let v = run_test_no_result_check(
+            r#"
+            s = Struct.new(:a, :b).new(1, 2)
+            r = [s.send(:__slot_get, 1), s.send(:__slot_set, 0, :z), s.to_a]
+            r << (begin; s.send(:__slot_get, 2); rescue IndexError => e; e.message; end)
+            r << (begin; s.send(:__slot_set, -1, 0); rescue IndexError => e; e.message; end)
+            r << (begin; s.freeze.send(:__slot_set, 0, 0); rescue FrozenError => e; e.class.to_s; end)
+            r << (begin; s.__slot_get(0); rescue NoMethodError => e; e.message.include?("private"); end)
+            expected = [2, :z, [:z, 2], "offset 2 too large for struct(size:2)", "offset -1 too small for struct(size:2)", "FrozenError", true]
+            raise "got #{r.inspect}" unless r == expected
+            r.size
+            "#,
+        );
+        assert_eq!(v.try_fixnum(), Some(7));
     }
 
     #[test]

@@ -23,17 +23,30 @@ module Psych
     attr_accessor :load_tags, :dump_tags, :domain_types
   end
 
+  # The tag tables have Psych's shape (`load_tags[tag] = class name`,
+  # `dump_tags[klass] = tag`, `domain_types[full tag] = [full tag,
+  # block]`), so libraries that register into them at load time
+  # (ActiveSupport's `omap` builtin type, ActiveRecord's `load_tags`
+  # entries) run; the parser does not yet consult them for `!tagged`
+  # nodes.
   def self.add_tag(tag, klass)
-    @load_tags[klass] = tag
-    @dump_tags[tag] = klass
+    @load_tags[tag] = klass.name
+    @dump_tags[klass] = tag
   end
 
   def self.remove_type(type_tag)
     @domain_types.delete(type_tag)
   end
 
-  def self.add_domain_type(domain, type_tag)
-    @domain_types[[domain, type_tag]] = nil
+  def self.add_domain_type(domain, type_tag, &block)
+    key = ["tag:#{domain}", type_tag].join(":")
+    @domain_types[key] = [key, block]
+    @domain_types["tag:#{type_tag}"] = [key, block]
+  end
+
+  def self.add_builtin_type(type_tag, &block)
+    key = ["tag", "yaml.org,2002", type_tag].join(":")
+    @domain_types[key] = [key, block]
   end
 
   def self.load(yaml, permitted_classes: [], permitted_symbols: [], aliases: false, filename: nil, fallback: nil, symbolize_names: false, strict_integer: false, freeze: false)
@@ -70,6 +83,10 @@ module Psych
     else
       out
     end
+  end
+
+  def self.safe_dump(obj, io = nil, options = {})
+    dump(obj, io, options)
   end
 
   def self.dump_stream(*objects)
@@ -274,6 +291,15 @@ module Psych
 
         key = resolve_scalar(key)
 
+        # `key: &name value` anchors the inline value, whatever its
+        # form (a flow mapping `&p {k: 1}` included); the value is
+        # parsed exactly as it would be without the anchor.
+        val_anchor = nil
+        if !rest.nil? && rest.start_with?("&") && rest =~ /\A&(\S+)\s*(.*)/
+          val_anchor = $1
+          rest = $2
+        end
+
         if rest.nil? || rest.empty? || rest.start_with?("#")
           # `key: # comment` carries no inline value; the value is on
           # the following indented line(s) — or a block sequence at the
@@ -282,19 +308,6 @@ module Psych
         elsif rest.start_with?("*")
           alias_name = rest[1..-1].strip
           value = @anchors[alias_name]
-        elsif rest.start_with?("&")
-          if rest =~ /\A&(\S+)\s*(.*)/
-            val_anchor = $1
-            val_rest = $2
-            if val_rest.empty?
-              value = parse_value(ind, true)
-            else
-              value = resolve_scalar(val_rest)
-            end
-            @anchors[val_anchor] = value
-          else
-            value = resolve_scalar(rest)
-          end
         elsif rest.start_with?("{")
           value = parse_flow_mapping(rest)
         elsif rest.start_with?("[")
@@ -320,13 +333,36 @@ module Psych
           value = resolve_scalar(rest)
         end
 
-        if anchor
-          @anchors[anchor] = value
-        end
+        @anchors[anchor] = value if anchor
+        @anchors[val_anchor] = value if val_anchor
 
-        map[key] = value
+        store_pair(map, key, value)
       end
       map
+    end
+
+    # `map[key] = value`, honouring the YAML merge key: `<<: *base`
+    # folds the mapping `base` in (`Hash#merge!`, so it overrides keys
+    # already present and later keys override it), and `<<: [*a, *b]`
+    # folds a sequence of mappings with the earlier ones winning, as
+    # Psych's `revive_hash` does. A `<<` whose value is not a mapping
+    # stays an ordinary key.
+    def store_pair(map, key, value)
+      if key == "<<"
+        case value
+        when Hash
+          map.merge!(value)
+          return
+        when Array
+          if value.all? { |v| v.is_a?(Hash) }
+            merged = {}
+            value.reverse_each { |v| merged.merge!(v) }
+            map.merge!(merged)
+            return
+          end
+        end
+      end
+      map[key] = value
     end
 
     def parse_block_sequence(base_indent)
@@ -560,7 +596,7 @@ module Psych
         if pair =~ /\A\s*(.*?)\s*:\s*(.*)\z/
           k = resolve_scalar($1)
           v = resolve_scalar($2)
-          map[k] = v
+          store_pair(map, k, v)
         end
       end
       map

@@ -183,6 +183,38 @@ fn autoload_loaderror_keeps_registration() {
     );
 }
 
+// An exception raised by the autoloaded file itself propagates out of
+// every constant-reading form (`Module#const_get` with and without
+// `inherit`, a qualified path, a bare reference), as in CRuby; it is
+// not folded into "uninitialized constant". Zeitwerk's eager loading
+// reads every constant through `const_get(name, false)`, so a swallowed
+// error there hid the real failure behind a NameError.
+#[test]
+fn autoload_propagates_the_files_error() {
+    run_test_once(
+        r#"
+        require "tmpdir"
+        dir = Dir.mktmpdir("monoruby_autoload_raise")
+        path = File.join(dir, "boom.rb")
+        File.write(path, "raise ArgumentError, 'boom from autoload'")
+        Object.autoload(:AutoBoom, path)
+        module AutoBoomNs; end
+        AutoBoomNs.autoload(:Inner, path)
+        r = []
+        r << (begin; Object.const_get(:AutoBoom, false); rescue ArgumentError => e; e.message; end)
+        r << (begin; Object.const_get(:AutoBoom); rescue ArgumentError => e; e.message; end)
+        r << (begin; Object.const_get("AutoBoom"); rescue ArgumentError => e; e.message; end)
+        r << (begin; AutoBoom; rescue ArgumentError => e; e.message; end)
+        r << (begin; Object.const_get("AutoBoomNs::Inner"); rescue ArgumentError => e; e.message; end)
+        r << (begin; AutoBoomNs.const_get(:Inner, false); rescue ArgumentError => e; e.message; end)
+        r << Object.autoload?(:AutoBoom).equal?(nil) << Object.const_defined?(:AutoBoom)
+        File.delete(path)
+        Dir.rmdir(dir)
+        r
+        "#,
+    );
+}
+
 // `Module#const_source_location(:X)` for an autoload-registered
 // constant returns the location of the `autoload` call itself, until
 // the load actually fires and overwrites the entry. Use a fresh
