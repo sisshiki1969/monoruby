@@ -4905,10 +4905,14 @@ impl<'pr> Lowerer<'pr> {
 
         // `a[i]` / `a[i, j]` come through as `CallNode` with method
         // `[]`. ruruby treats indexing as a first-class `Index` node
-        // rather than a method call, so collapse it here.
+        // rather than a method call, so collapse it here. An explicit
+        // safe-navigation spelling (`h&.[](k)`) stays a method call: the
+        // `Index` node has no nil-receiver short circuit, and the
+        // `MethodCall` below would drop the flag too.
         if block.is_none()
             && let Some(recv) = receiver_opt.as_ref()
             && method == "[]"
+            && !node.is_safe_navigation()
         {
             let base = self.lower_node(recv)?;
             // `recv[k => v]` / `recv[**h]`: the `NodeKind::Index`

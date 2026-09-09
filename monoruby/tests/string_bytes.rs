@@ -664,3 +664,19 @@ fn setbyte_edge_cases_still_deopt_correctly() {
         "#,
     );
 }
+
+#[test]
+fn empty_slice_keeps_the_receiver_encoding() {
+    // `s[i, 0]` / `s[i...i]` answer an empty String in the receiver's
+    // encoding (CRuby), not a fresh UTF-8 literal — a binary buffer sliced
+    // to nothing stays binary.
+    run_test(
+        r#"
+        b = "abc".b
+        u = "abc"
+        a = "abc".encode("US-ASCII")
+        [b[0, 0].encoding.name, b[3, 0].encoding.name, b[1...1].encoding.name, b[0..-1][0, 0].encoding.name,
+         u[0, 0].encoding.name, a[2, 0].encoding.name, b[1, 1].encoding.name, b[5, 0], "".b[0, 0].encoding.name]
+        "#,
+    );
+}

@@ -107,7 +107,8 @@ class StringIO
     _check_readable
     if length.nil?
       if @pos >= @string.length
-        result = ""
+        # An empty read still carries the buffer's encoding (CRuby).
+        result = "".b.force_encoding(@string.encoding)
       else
         result = @string[@pos..-1]
         @pos = @string.length
@@ -116,6 +117,10 @@ class StringIO
       return nil if @pos >= @string.length && length > 0
       result = @string[@pos, length] || ""
       @pos += result.length
+      # A length-limited read is a byte read: CRuby returns it as
+      # ASCII-8BIT whatever the buffer's encoding (chunky_png compares
+      # `io.read(8)` with its binary PNG signature).
+      result = result.b
     end
     if outbuf
       outbuf.replace(result)
@@ -439,9 +444,30 @@ class StringIO
     self
   end
 
+  # set_encoding(ext_enc, int_enc = nil, **opts) -> self
+  #
+  # CRuby tags the *backing string* with the external encoding (a frozen
+  # string keeps its own tag, and only `external_encoding` reports the new
+  # one); there is no separate internal encoding. `nil` means the default
+  # external encoding. chunky_png builds every PNG through
+  # `StringIO.new.set_encoding("ASCII-8BIT")`, so the bytes it `<<`s must
+  # land in a binary buffer.
   def set_encoding(ext_enc, int_enc = nil, **opts)
-    # No-op for now (single encoding)
+    enc = case ext_enc
+          when nil then Encoding.default_external
+          when Encoding then ext_enc
+          else Encoding.find(ext_enc.to_s.split(":", 2)[0])
+          end
+    @encoding = enc
+    @string.force_encoding(enc) unless @string.frozen?
     self
+  end
+
+  # binmode -> self
+  #
+  # Switch the stream to binary: the backing string becomes ASCII-8BIT.
+  def binmode
+    set_encoding(Encoding::BINARY)
   end
 
   # set_encoding_by_bom -> Encoding | nil
@@ -501,7 +527,7 @@ class StringIO
   # (the only encoding state a StringIO carries). monoruby's String
   # already tracks an encoding, so just forward to it.
   def external_encoding
-    @string.encoding
+    @encoding || @string.encoding
   end
 
   # internal_encoding -> nil
@@ -558,10 +584,6 @@ class StringIO
     false
   end
   alias tty? isatty
-
-  def binmode
-    self
-  end
 
   def fcntl(*args)
     raise NotImplementedError, "fcntl not supported on StringIO"

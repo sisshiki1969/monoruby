@@ -1055,3 +1055,18 @@ fn attr_accessor_through_symbol_proc_under_refinements() {
         "#,
     );
 }
+
+#[test]
+fn safe_navigation_with_an_explicit_index_call() {
+    // `h&.[](k)` is a method call with safe navigation, not an index
+    // expression: a nil receiver answers nil instead of raising
+    // (`@fields&.[](name) || superclass.field(name)` in hexapdf).
+    run_test(
+        r#"
+        x = nil
+        h = { a: 1 }
+        def m(o) = o&.[](0)
+        [x&.[](0), (x&.[](1) || 2), h&.[](:a), h&.fetch(:a), x&.fetch(:a), m(nil), m([5]), h&.[](:b)]
+        "#,
+    );
+}
