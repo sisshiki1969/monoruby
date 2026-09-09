@@ -110,3 +110,29 @@ fn set() {
     "##,
     ]);
 }
+
+#[test]
+fn set_subclass_with_a_wider_initialize() {
+    // `Set.new` hands every argument to `initialize`, so a subclass may
+    // widen the constructor (chunky_png's `Palette < Set` takes a second
+    // decoding map); the arity check is `initialize`'s.
+    run_test(
+        r#"
+        class Palette < Set
+          attr_reader :map
+          def initialize(enum, map = nil)
+            super(enum.sort)
+            @map = map
+          end
+        end
+        pal = Palette.new([3, 1, 2], { 1 => :a })
+        e = begin
+          Palette.new([1], 2, 3)
+        rescue ArgumentError => e
+          e.message
+        end
+        [pal.to_a, pal.map, pal.class, pal.include?(2), Set.new([1, 1, 2]).size, Set.new.size, e,
+         Set.new([1, 2]) { |x| x * 10 }.to_a]
+        "#,
+    );
+}

@@ -1202,7 +1202,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         };
         if let Some(arg1) = lfp.try_arg(1) {
             let len = match arg1.coerce_to_int_i64(vm, globals)? {
-                0 => return Ok(Value::string_from_str("")),
+                0 => return Ok(string_substring(self_, 0, 0)),
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
             };
@@ -1319,7 +1319,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 };
                 if let Some(arg1) = lfp.try_arg(1) {
                     let len = match arg1.coerce_to_int_i64(vm, globals)? {
-                        0 => return Ok(Value::string_from_str("")),
+                        0 => return Ok(string_substring(self_, 0, 0)),
                         i if i < 0 => return Ok(Value::nil()),
                         i => i as usize,
                     };

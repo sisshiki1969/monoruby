@@ -52,6 +52,12 @@ jobs:
         # bin/ruby-bench-diff requires `erubi`. The other benchmarks
         # only use stdlib gems, so a single explicit install is enough.
         run: gem install erubi --no-document
+      - name: Install gems for the output-equality tests
+        # tests/hexapdf_output.rs and tests/ruby_bench_outputs.rs render a
+        # document / an image / a template under both CRuby and monoruby and
+        # compare the bytes; each test skips when its gem is absent, so keep
+        # them installed here to make the tests count.
+        run: gem install hexapdf chunky_png --no-document
       - name: Test
         run: bin/test
 
@@ -108,6 +114,8 @@ jobs:
       - name: Install ruby-bench gem dependencies
         # bin/ruby-bench-diff requires `erubi`; matches the `coverage` job.
         run: gem install erubi --no-document
+      - name: Install gems for the output-equality tests
+        run: gem install hexapdf chunky_png --no-document
       - name: Install libffi + pkg-config
         # The aarch64-macOS dep block in monoruby/Cargo.toml builds libffi-sys
         # with the `system` feature; libffi is keg-only so pkg-config needs its

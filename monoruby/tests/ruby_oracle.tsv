@@ -1371,6 +1371,7 @@
 67d9f8b69f6a016eade0a68a270498d3	" world"	s = "hello world"; s.bytesplice(0..4, "ABCDE", 0..-100); s
 681e3c0d02b02a91a999281604e81c60	"Ruby"	"ruby".send(:sub, /./, "R")\n        
 681fd3ccba5816796a6f87e5163660da	["US-ASCII", "US-ASCII", "US-ASCII"]	s = "abc".dup.force_encoding("US-ASCII")\n              s.rpartiti
+68297ce8819d266f9baca2a8ca466b2e	{"params" => [[123, 2185739281], true, 5800, true, true], "params_closed" => "stream is not ready", "deflate_reset" => [true, true, 5800], "inflate_reset" => [true, true, true, 5800], "inflate_dict" => [true, true, "data error"], "state" => [true, 0, true, false, true, String, String], "after_finish" => [true, 100, false], "version" => [true, true], "crc" => [0, 891568578, 891568578, 1, 38600999, 38600999, 891568578, 256]}	require "zlib"\n        data = (("the quick brown fox jumps over the laz
 6867d900d8bc23f027af9e908bfd1fbc	[File, "hello"]	path = "/tmp/mono_cov_file_new_#{Process.pid}"\n            begin\n  
 688b520eaa53b818c032ed84ebb90ba3	1234	Random.srand(1234)\n        Random.srand(4567)\n        
 688bcd73f28a1d32469337711f75b5af	["日本語", 9, 9, 3, 1, "text", "e", ["t", "e", "x", "t"], 14, " ü", 17, "日本語 text ", "nïcode 123", "nïcode 123", 10, "1", "2", "3", "3", true, nil, "本", "語", 9, "日", 3, "日", 3, "本", 3, "\\xE6", 4, "\\x9C\\xAC", 24]	require "strscan"\n        s = StringScanner.new("日本語 text ünïcode 123")
@@ -1388,6 +1389,7 @@
 693f5aa61446e94a059879fc0e8410e4	C	class C\n        end\n        \n\n        a = 1\n        C.class_eval do |m|
 69454519988d1917d0cf2b32b8ad0e08	["a", "a"]	$/ = "b"; s = "ab"; r = [s.chomp!, s]; $/ = "\\n"; r
 6948d55dbe7957e5100beced57da2704	[[]]	def m; [1].map { it; local_variables }; end; m
+69574eae26faf1723ff3bb20ea2bd86a	["ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "UTF-8", "US-ASCII", "ASCII-8BIT", nil, "ASCII-8BIT"]	b = "abc".b\n        u = "abc"\n        a = "abc".encode("US-ASCII")\n    
 695a85fd2ea772e6ce3142edd7a921e4	[false, true]	S = Struct.new(:a, :b)\n            T = Struct.new(:a, :b)\n         
 695e21e95a722ab6137b89c61da5089c	42	def f\n          42\n        end\n        \n\n        f\n        
 6969aaf807e98c28a5dfa52dd28504f9	[255]	s = "".b\n            s.append_as_bytes(-1)\n            s.bytes\n    
@@ -1477,6 +1479,7 @@
 70656cec0a7d05dbe074e523b3789ac3	[4611686018427387939, 4611686018427387939, 4611686018427387939, 4611686018427387949]	def __f(x)\n          \n        a = x + 4611686018427387900\n        b = a
 7068324754662230dd6cba5af8947f71	"hel"	class Foo; def to_str; "lo"; end; end\n            "hello".chomp(Foo
 7073b2cf059ea135845fa20451762fce	[1, 2, 3]	class E\n              def initialize(a); @a = a; end\n              
+7077fab9f8dbef5481d728114e0056c4	{"params" => [[123, 2185739281], true, 5800, true, true], "params_closed" => "stream is not ready", "deflate_reset" => [true, true, 5800], "inflate_reset" => [true, true, true, 5800], "inflate_dict" => [true, true, "data error"], "state" => [true, 0, 1022, false, true, String, String], "after_finish" => [true, 100, false], "version" => [true, true], "crc" => [0, 891568578, 891568578, 1, 38600999, 38600999, 891568578, 256]}	require "zlib"\n        data = (("the quick brown fox jumps over the laz
 707b7fd02add3d39fff2a8fb60b17cde	["hello", "text"]	klass = Class.new do\n          def hello; "hello"; end\n          def se
 70928ba635fab871d9d7a7cc112e80d9	[1, false, 10, "Shift_JIS", "heRlo", "heRRo", "heLlo", "heLLo", TypeError, TypeError]	r = []\n        s = "表\\\\示".encode("Shift_JIS")\n        bs = "\\\\".encode(
 70a1593046773caec35e978f0c08553c	["", "shown\\n"]	require 'stringio'\n        def cap; $stderr = StringIO.new; yield; s = 
@@ -1950,6 +1953,7 @@
 948c8ebc5838aacb75bb4ad2c54cd528	[true, true, true]	[Process.respond_to?(:exit),\n             Process.respond_to?(:abor
 9491706684975503cce7f8dd96dffe40	:OVERRIDDEN	class NilClass; def !; :OVERRIDDEN; end; end; !(nil)
 94a248be46cc9a5b4c954fe6542cb28d	true	class C\n              def f; self; end\n            end\n            
+94d07eeaa76f58dd0ca679456a76cf69	{"level0" => [21379, 3572506483, [120, 1, 1, 120, 83, 135, 172, 84, 104, 101, 32, 113]], "level1" => [6227, 1163439534, [120, 1, 237, 219, 121, 92, 13, 237, 255, 248, 241, 84]], "level2" => [6215, 3010209757, [120, 94, 237, 220, 121, 92, 13, 237, 255, 248, 241, 54]], "level3" => [6188, 2663651605, [120, 94, 237, 219, 105, 32, 21, 237, 223, 7, 112, 91]], "level4" => [6111, 141764892, [120, 94, 237, 219, 121, 52, 85, 221, 255, 192, 113, 33]], "level5" => [6087, 2531880167, [120, 94, 237, 219, 105, 84, 78, 93, 220, 248, 241, 84]], "level6" => [6084, 616340627, [120, 156, 237, 219, 249, 55, 85, 95, 220, 192, 113, 83]], "level7" => [6082, 1460900569, [120, 218, 237, 219, 249, 55, 85, 223, 255, 7, 112, 33]], "level8" => [6059, 2726760602, [120, 218, 237, 219, 249, 55, 85, 95, 220, 7, 112, 33]], "level9" => [6059, 2726760602, [120, 218, 237, 219, 249, 55, 85, 95, 220, 7, 112, 33]], "default" => [6084, 616340627, [120, 156, 237, 219, 249, 55, 85, 95, 220, 192, 113, 83]], "strategy1" => [6088, 792098154, [120, 156, 237, 219, 249, 55, 85, 93, 252, 192, 113, 33]], "strategy2" => [15589, 132173972, [120, 1, 4, 193, 7, 192, 35, 69, 221, 7, 96, 154]], "strategy3" => [15589, 132173972, [120, 1, 4, 193, 7, 192, 35, 69, 221, 7, 96, 154]], "strategy4" => [6547, 1113258295, [120, 1, 11, 201, 72, 85, 40, 44, 205, 76, 206, 86]], "w12m6" => [7645, 2262555498, [72, 199, 236, 215, 249, 91, 15, 251, 251, 192, 113, 18]], "raw" => [6078, 357444387, [237, 219, 249, 55, 85, 95, 220, 192, 113, 83, 166, 74]], "gzip" => [6096, 652349338, [31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 237, 219]], "chunked==oneshot" => false, "flushes" => [6875, 2171434205, [120, 156, 236, 203, 203, 17, 130, 48, 20, 133, 225, 189]], "flushes_roundtrip" => true, "roundtrip" => true, "raw_roundtrip" => true, "auto_roundtrip" => true}	require "zlib"\n        # Deterministic, mildly compressible input: pros
 94d16a880c403ea2e19da802c0030a76	true	rng = Random.new(42)\n        a = rng.rand\n        a.is_a?(Float) && a >
 94d69a47bd08e4c9374ae38d1d60aff3	["hello", true]	require "open3"; out, _, st = Open3.capture3("printf", "hello"); [out, st.succes
 94de90d6e7f1c554254f3e9e9e71014f	[false, :name_error, true, :sm, 42, "Object", true]	res = []\n        obj = Object.new\n        class << obj\n          DUP_CO
@@ -2329,6 +2333,7 @@ af382db001b064f5b7f44cd44981ca11	42	k = Class.new\n            k.define_method(:
 af3b3d6c1de8cefcdb70c10300234ad5	true	class MyStr\n              def to_str\n                "world"\n      
 af48e5c222ea17b50461e99b09a9628e	[["A1\\n", "A2\\n", "B1\\n", "B2\\n"], ["A", "A2\\n", "B", "B2\\n"], ["A1\\n", "A2\\n", "B1\\n", "B2\\n"], true, "Enumerator", ["A1\\n", "A2\\n"], ["A1\\n", "A2\\n"], ["A1\\n", "A2\\n"]]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
 af72bf1cbfaf29e4742210fc2dccd3a1	["hELLO", "hELLO"]	s = "Hello".dup\n              [s.swapcase!, s]\n            
+af85aa1d9776eeee1edae5e7a4558782	[[1, 2, 3], {1 => :a}, Palette, true, 2, 0, "wrong number of arguments (given 3, expected 1..2)", [10, 20]]	class Palette < Set\n          attr_reader :map\n          def initialize
 af9c50b606859e165d88610397042afd	[true, ArgumentError]	(class KC; def initialize_clone(orig, **kw); $rec=kw; super(orig); end; end; obj
 afbcad07e617b095dc96d973a2845197	[:bar, [1, 2, 3]]	class Foo\n              def method_missing(name, *args)\n           
 afc664b3664dbfb2235fee8c114e24dc	["a\\n", "b\\n", "c"]	path = "/tmp/monoruby_io_classreadlines_#{Process.pid}_#{rand(10000
@@ -2339,6 +2344,7 @@ b0210a3ee0e2cc726743dd177d2617fa	"rescued:boom"	def a1\n          x = 0\n       
 b041b0aaea8a7d40b26a35b251c0f897	[[:req, :a], [:nokey]]	def m(a, **nil); end\n            method(:m).parameters\n            
 b050bdfac1ec47f5eeda5dc5e12bd05a	45.0	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 b06f00715b283fa26e9acda37466978d	[1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub]	class MyArray < Array\n              def [](i) = :sub\n            en
+b074a58194d91b7b13d55025d23399ce	[nil, 2, 1, 1, nil, nil, 5, nil]	x = nil\n        h = { a: 1 }\n        def m(o) = o&.[](0)\n        [x&.[]
 b07897e1515470c5f367e6c838cd3ca3	true	h = {a: 1}.compare_by_identity\n            Marshal.load(Marshal.dum
 b0a6a8263e7c30eec12325762ab54dc5	[1, 2, nil, nil, 3, 1, nil, :from_block, [:a, :b, :c, :d, :e], [:a], [:a, :b, :d, :e]]	r = []\n        begin\n          r << 1\n          break if r.size == 1\n  
 b127614a38e6a826e83df4733ad1c138	[true, true]	require "openssl"\n        [OpenSSL::Cipher::CipherError < OpenSSL::Open
@@ -2482,6 +2488,7 @@ bb3259c8518859b67fd8d6ebce8a469b	[122, 195, 97]	"a\\xC3z".dup.force_encoding("UT
 bb3cdd327fefc9a5e26b6cd23c95ac9e	[7, 7.25]	def call_block\n          yield\n        end\n        def q4\n          a =
 bb4676ea48e5e84be75e86137b7ccbf0	[[104, 101, 108, 108, 111, 226, 130, 12, 43, 172], "ASCII-8BIT"]	s = "hello".b\n            s.append_as_bytes("\\xE2\\x82", 12, 43, "\\x
 bb5498e7dcf365fa231082e385a52382	[42, 7, :nme]	class NestOuter\n              def build; def built; 42; end; end\n  
+bb55029b92e493d287a04fb0e7860f5f	{"chunked" => [true, true, 45, 15300], "closed" => [true, "stream is not ready"], "partial_finish" => "buffer error", "trailing" => [true, true, true], "corrupt" => Zlib::DataError, "bad_header" => "incorrect header check", "dict" => "abcabcabcabc", "bad_level" => "stream error", "adler" => [true, 15300, true], "module_fns" => true}	require "zlib"\n        data = ("abc" * 5000 + "xyz" * 100).b\n        z 
 bb7dc7125b3d11eacda38a33f25683d7	["global-variable", "global-variable", "global-variable", "global-variable", "global-variable"]	[defined?($/), defined?($\\), defined?($,), defined?($;), defined?($.)]
 bb7e42a0efd2830d60846fb262b25aba	:OVERRIDDEN	class FalseClass; def ===(o); :OVERRIDDEN; end; end; false === false
 bb9bac558eea3d2782caab01dd00745b	12.1	def f(a,b)\n          a + b\n        end\n        f(5.1, 7)\n        
@@ -2514,6 +2521,7 @@ bd9970837b8009b39aca5efafe329d8e	["true", "5", "", "foo"]	[true.to_s, 5.to_s, ni
 bd9f54fa26238d51503216b560dcfe9d	"M:C"	module M\n          def foo\n            "M:" + super\n          end\n     
 bdab5d25c3b4be158f0e7bd7de9daf97	[118, 592, 4147, 74705710618821783505]	def __f(x)\n          \n        a = x * 3 + 1\n        b = a * 5 + 2\n     
 bdd4254f72e55d63b4505c0909c9bd00	[6.5, 17.0]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
+bddaee7b5a8e49286bd5ef708346ccaa	[#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:UTF-8>, #<Encoding:US-ASCII>, #<Encoding:BINARY (ASCII-8BIT)>, nil, #<Encoding:BINARY (ASCII-8BIT)>]	b = "abc".b\n        u = "abc"\n        a = "abc".encode("US-ASCII")\n    
 bde4f5647e4c5f426e0b6b9de2ad09ab	[[], [:it], [:_1, :_2, :_3], [:it], [], [], []]	[\n              binding.implicit_parameters,\n              proc { i
 bde9a54a7762ba3fd118c904ccaac5c2	[:rescued]	def boom; raise "no"; end\n            def test; [1].map { begin; bo
 bdea9d1c4693119e7bb516fdfdf9210c	:done	r = false\n            t = Thread.new do\n              f = Fiber.new
@@ -3180,6 +3188,7 @@ ee506f7a4e17e46a218f4c08e690d77c	[:bar, true]	class Foo\n              def bar; 
 ee62bb9cc0c6e09de70aa7d1eb0c840b	[["UTF-8", 6, true], ["UTF-8", "abcx", true]]	def mism()\n          s = String.new(encoding: Encoding::BINARY)\n       
 ee9c2499ceaa7c8febe00ce67d194d40	[:c, :m2, :m1]	m1 = Module.new { def chain; super << :m1; end }\n            m2 = M
 eea84468101cbf88d3da51526fc75b65	["s1\\n", "s2\\n", "s3\\ns4\\n", "s5\\n"]	require "tmpdir"\n            res = []\n            Dir.mktmpdir do |
+eea91b91ea3435a323b4dd3c1b5f380d	[#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, 16, #<Encoding:BINARY (ASCII-8BIT)>, true, [73, 72, 68, 82], [0, 0, 0, 13], #<Encoding:BINARY (ASCII-8BIT)>, nil, true, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, [99, 97, 102, 195, 169, 255, 254], #<Encoding:UTF-8>, [99, 97, 102, 195, 169, 120], #<Encoding:UTF-8>, #<Encoding:BINARY (ASCII-8BIT)>]	require "stringio"\n        r = []\n        io = StringIO.new\n        io.
 eeb0097de3c9743d1d61f248aa33cb35	[[10, "abcdefghij", true, true, true, false, false], "#<IO::Buffer 0xA+10 EXTERNAL MAPPED FILE SHARED>", "XYcdefghij", [4, "XYcd"], [true, [IO::Buffer::AccessError, "Buffer is not writable!"]], [true, false], "XYcdefghij", true, "XY", [ArgumentError, "Invalid negative or zero file size!"], [904, "zzz"], true, [TypeError, "expected IO or #fileno, String given"], ["0\\x020\\x040", true, 5], "\\xF9\\xBF\\xFB\\xBF\\xFD", "\\xC9\\xBD\\xCB\\xBB\\xCD", ["\\xCE\\xCD\\xCC\\xCB\\xCA", true], "12345", [true, "0\\x020\\x040", true], "\\xF9\\xBF\\xFB\\xBF\\xFD", "\\xC9\\xBD\\xCB\\xBB\\xCD", "\\xCE\\xCD\\xCC\\xCB\\xCA", [TypeError, "wrong argument type String (expected IO::Buffer)"], [TypeError, "wrong argument type nil (expected IO::Buffer)"], [IO::Buffer::MaskError, "Zero-length mask given!"], [IO::Buffer::MaskError, "Zero-length mask given!"], [IO::Buffer::AccessError, "Buffer is not writable!"], "`\\x02"]	require "tempfile"\n            r = []\n            er = ->(&blk) { b
 eee6d3392081cf48009c24d5b945eb51	["ping", "AF_INET", "127.0.0.1", true]	require "socket"\n            s = UDPSocket.new\n            s.bind("
 eef0723453d8a81dddb6e9b4111dad43	["$stdout must have write method, NilClass given", "$stderr must have write method, Integer given"]	res = []\n        begin; $stdout = nil; rescue TypeError => e; res << e.
@@ -3313,6 +3322,7 @@ f846da7a353005966938355c81f0122a	""	f = File.open("/dev/null", "r+")\n          
 f86fcaca6e079b0178148790a1c61b5d	[200, 300, 400, 200, 300, 400]	class S\n            def f(x, y, z:10)\n                $res << x\n      
 f877dfe80be1fef652e8ae2a2601c3d0	[:foo, :foo, :foo]	$res = []\n        def foo\n            3.times do\n                $res <
 f88cf193629825654491ec6b99b61207	[true, false, true, true, true, true, -1, 0, 1, true]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
+f88dff522f39f4309359bda5da7b7926	["ASCII-8BIT", "ASCII-8BIT", 16, "ASCII-8BIT", true, [73, 72, 68, 82], [0, 0, 0, 13], "ASCII-8BIT", nil, true, "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", [99, 97, 102, 195, 169, 255, 254], "UTF-8", [99, 97, 102, 195, 169, 120], "UTF-8", "ASCII-8BIT"]	require "stringio"\n        r = []\n        io = StringIO.new\n        io.
 f8ca927bc2a92f537ed873ec7c445f36	[2, 4, 6]	[1, 2, 3].each.with_object([]) { |v, m| m << v * 2 }
 f8cdd223f55f34a3772b5ad1f97093a1	[[0], 1, "Array", false, [1], 1, "Array", false, [2], 1, "Array", false, [3], 1, "Array", false, [4], 1, "Array", false, [5], 1, "Array", false, [6], 1, "Array", false, [7], 1, "Array", false, [8], 1, "Array", false, [9], 1, "Array", false, [10], 1, "Array", false, [11], 1, "Array", false, [12], 1, "Array", false, [13], 1, "Array", false, [14], 1, "Array", false, [15], 1, "Array", false, [16], 1, "Array", false, [17], 1, "Array", false, [18], 1, "Array", false, [19], 1, "Array", false]	res = []\n        20.times do |i|\n            a = []\n            a << i\n
 f8e4e019b1c98b83b08b89e4234268af	"Complex"	42ri.class.to_s

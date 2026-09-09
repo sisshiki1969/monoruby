@@ -357,6 +357,11 @@ External crates (fetched from git):
 - `onigmo-regex` — Onigmo regular expression engine
 - `ruby-prism` — prism parser bindings (pinned `monoruby-vendored` branch; see below)
 - `smallvec` — local fork with `const_generics` (pinned via git, not vendored in-tree)
+- `libz-sys` — zlib built from its bundled C source and linked statically; the
+  `String.__zstream_*` builtins (`src/builtins/zlib.rs`) expose one `z_stream`
+  per `Zlib::Deflate` / `Zlib::Inflate` object, and everything else in `Zlib`
+  (`stdlib/zlib.rb`: the class API, gzip framing, `GzipReader` / `GzipWriter`)
+  is Ruby. Compression is byte-identical to CRuby's zlib.so.
 
 ---
 

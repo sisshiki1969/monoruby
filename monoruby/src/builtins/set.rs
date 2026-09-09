@@ -9,7 +9,7 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Set", SET_CLASS, ObjTy::HASH);
     globals.define_builtin_class_func_rest(SET_CLASS, "[]", set_index);
-    globals.define_builtin_class_func_with(SET_CLASS, "new", new, 0, 1, false);
+    globals.define_builtin_class_func_rest(SET_CLASS, "new", new);
     globals.store[SET_CLASS].set_alloc_func(set_alloc_func);
 
     globals.define_builtin_func(SET_CLASS, "<<", add, 1);
@@ -171,14 +171,16 @@ fn enum_to_vec(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<V
 /// (producing a Hash-backed instance) and then calls the Ruby-level
 /// `initialize`. Without this override, the default `Class#new` inline
 /// fast path allocates a plain Object instead of a Hash-backed Set.
+///
+/// Takes any number of arguments and hands them all to `initialize`: a
+/// subclass may widen the constructor (chunky_png's `Palette < Set` has
+/// `initialize(enum, decoding_map = nil)`), and it is `initialize`, not
+/// this trampoline, that checks the arity.
 #[monoruby_builtin]
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
     let obj =
         vm.invoke_method_inner(globals, IdentId::ALLOCATE, lfp.self_val(), &[], None, None)?;
-    let args: Vec<Value> = match lfp.try_arg(0) {
-        Some(v) => vec![v],
-        None => vec![],
-    };
+    let args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
     vm.invoke_method_inner(
         globals,
         IdentId::INITIALIZE,
