@@ -256,6 +256,13 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             stp x29, x30, [sp, #(-16)]!;
             mov x29, sp;
+        );
+        // Step `sp` past the callee frame before calling into Rust (see
+        // `a64_gen_native_func_wrapper`): an invoker lays the frame out
+        // below its `sp` and reads the saved cfp back from it after the
+        // call, so the Rust callee's own stack use must not overlap it.
+        self.a64_reserve_callee_frame();
+        monoasm_arm64!(&mut self.jit,
             ldur x0, [x(LFP.0), #(-(LFP_SELF as i32))];  // self
             mov x1, (ivar_name.get() as u64);  // name
             mov x2, x(GLOBALS.0);
@@ -268,12 +275,32 @@ impl Codegen {
         );
     }
 
+    /// `sp -= RSP_LOCAL_FRAME + LFP_ARG0 + 8 * reg_num` (16-byte
+    /// aligned): reserve the callee frame `meta` declares, as the native
+    /// wrapper does, so a Rust call from a wrapper cannot trample it.
+    fn a64_reserve_callee_frame(&mut self) {
+        monoasm_arm64!(&mut self.jit,
+            sub x10, x(LFP.0), #(LFP_REGNUM as u32);
+            ldrh x10, [x10];  // reg_num
+            add x10, x10, #(((RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1) as u32);
+            mov x11, (!1u64);
+            and x10, x10, x11;
+            lsl x10, x10, #(3);
+            mov x11, sp;
+            sub x11, x11, x10;
+            mov sp, x11;
+        );
+    }
+
     /// attr_writer: `self.@ivar_name = arg0` via the cached ivar setter.
     pub(in crate::codegen) fn a64_gen_attr_writer(&mut self, ivar_name: IdentId) {
         let cache_addr = Box::into_raw(Box::new(-1i64)) as u64;
         monoasm_arm64!(&mut self.jit,
             stp x29, x30, [sp, #(-16)]!;
             mov x29, sp;
+        );
+        self.a64_reserve_callee_frame();
+        monoasm_arm64!(&mut self.jit,
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             ldur x2, [x(LFP.0), #(-(LFP_SELF as i32))];  // self

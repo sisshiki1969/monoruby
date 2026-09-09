@@ -783,6 +783,12 @@ pub(crate) struct SpecializedPatchEntry {
     /// #1140) — a recompile request rebuilds the whole root compilation
     /// unit instead, re-arming the speculation under fresh inline caches.
     pub(crate) speculated_root: Option<(ISeqId, ClassId, Option<BytecodePtr>)>,
+    /// D1: this body's `...` rest was source-routed from the caller's
+    /// argument window and the caller elided the rest `Array`
+    /// (`SpecializeInfo::deferred_rest`). Only correct paired with that
+    /// caller code, so — like `speculated_root` — a recompile request
+    /// rebuilds the owning root unit instead of this body alone.
+    pub(crate) deferred_rest: bool,
     /// The compilation unit this body was installed under (its root). All
     /// guards of one compilation — the root's and every inlined child's —
     /// read the *same* class-version word, and the unit's inline-cache map

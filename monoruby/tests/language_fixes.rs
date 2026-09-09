@@ -951,3 +951,107 @@ fn range_new_semantics_via_class_new() {
         "#,
     );
 }
+
+#[test]
+fn and_assignment_target_read_by_rhs() {
+    // `x = a && b`: the truthy value of `a` must not be visible to `b`
+    // through `x` (the target was used as the scratch register, so
+    // `name = MAPPING[name] && MAPPING[name][variant]` looked the hash
+    // up with itself as the key).
+    run_test(
+        r#"
+        def f(x)
+          x = (x + 1) && (x + 1)
+          x
+        end
+        def g(x)
+          x = x + 1 && x + 1
+          x
+        end
+        def h(x)
+          x = (x + 1) || (x + 1)
+          x
+        end
+        m = { 'Times' => { none: 'Times-Roman' } }
+        def lookup(m, name, variant)
+          name = m[name] && m[name][variant]
+          name
+        end
+        x = 1
+        x = (x + 1) && (x + 1)
+        y = nil
+        y = y && y.foo
+        [f(1), g(1), h(1), lookup(m, 'Times', :none), lookup(m, 'Courier', :none), x, y]
+        "#,
+    );
+}
+
+#[test]
+fn string_eq_against_bool_union_slot() {
+    // The JIT's `String#==` / `#!=` constant fold asks whether the rhs
+    // class defines `to_str`; a slot toggling between `true` and `false`
+    // carries the synthetic BOOL class, which has no module to search.
+    run_test(
+        r#"
+        def f(s, i)
+          x = (i % 2 == 0)
+          [s == x, s != x, "a" == x, x == s]
+        end
+        r = []
+        40.times { |i| r << f("a", i) }
+        r.uniq
+        "#,
+    );
+}
+
+#[test]
+fn unary_op_on_bool_union_slot_under_refinements() {
+    // With refinements active, the JIT's method check for a BOOL-tagged
+    // receiver falls back to the unrefined, version-stamped lookup; that
+    // fallback must take the compile-time class version rather than
+    // re-borrow the CODEGEN RefCell the compilation already holds.
+    run_test(
+        r#"
+        module RefBool
+          refine String do
+            def shout = upcase + "!"
+          end
+        end
+        using RefBool
+        def f(i)
+          x = (i % 2 == 0)
+          [!x, x.to_s, "a".shout]
+        end
+        r = []
+        40.times { |i| r << f(i) }
+        r.uniq
+        "#,
+    );
+}
+
+#[test]
+fn attr_accessor_through_symbol_proc_under_refinements() {
+    // `ary.sum(&:attr)` dispatches the accessor through the method
+    // invoker, whose callee frame sits below its `rsp`; the attr_reader /
+    // attr_writer wrappers must reserve that frame before calling into
+    // Rust, or the saved cfp is overwritten by the C return address. With
+    // refinements active the next dispatch walks the cfp chain and
+    // crashed.
+    run_test(
+        r#"
+        module AttrRef
+          refine String do
+            def x = 1
+          end
+        end
+        using AttrRef
+        class Pt
+          attr_accessor :y
+          def initialize(y); @y = y; end
+        end
+        pts = [Pt.new(1), Pt.new(2), Pt.new(3)]
+        pts.each { |pt| pt.send(:y=, pt.y * 10) }
+        [pts.sum(&:y), pts.map(&:y), pts.each_with_object([]) { |pt, a| a << pt.y }, "a".x]
+        "#,
+    );
+}

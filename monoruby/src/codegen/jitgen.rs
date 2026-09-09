@@ -712,6 +712,7 @@ impl Codegen {
             info: specialized_info,
             patch_point,
             speculated,
+            deferred_rest,
         } in std::mem::take(&mut frame.specialized_methods)
         {
             if !frame.is_specialized() {
@@ -723,6 +724,7 @@ impl Codegen {
                     // A body compiled under the root's armed speculation
                     // recompiles by rebuilding the root unit (#1140).
                     speculated_root: speculated.then_some(root),
+                    deferred_rest,
                     owner: Some(root),
                     class_version_label: class_version.clone(),
                 });
