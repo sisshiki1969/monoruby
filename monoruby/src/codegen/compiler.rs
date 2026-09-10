@@ -361,6 +361,32 @@ impl Codegen {
         }
     }
 
+    /// Whether a `BecamePolymorphic` recompile of `(iseq_id, self_class)`
+    /// would exceed `MAX_RECOMPILES_PER_METHOD`. Only that reason is
+    /// budgeted: it is the one a body can request over and over (each fresh
+    /// body starts with a fresh `COUNT_DEOPT_RECOMPILE` budget, and a site
+    /// that overflowed its PIC misses again just as often in the new body),
+    /// while a version-guard failure means the program really redefined
+    /// something and the method must be rebuilt however often that happens.
+    fn recompile_budget_exhausted(
+        &mut self,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        reason: RecompileReason,
+    ) -> bool {
+        if !matches!(reason, RecompileReason::BecamePolymorphic) {
+            return false;
+        }
+        let n = self.recompile_counts.entry((iseq_id, self_class)).or_insert(0);
+        *n += 1;
+        if *n > MAX_RECOMPILES_PER_METHOD {
+            #[cfg(feature = "jit-log")]
+            eprintln!("[JIT] recompile budget exhausted: {iseq_id:?} for {self_class:?}");
+            return true;
+        }
+        false
+    }
+
     fn recompile_method(
         &mut self,
         globals: &mut Globals,
@@ -391,6 +417,9 @@ impl Codegen {
             }
             _ => &crate::codegen::jit_stats::RECOMPILE_METHOD_OTHER,
         });
+        if self.recompile_budget_exhausted(iseq_id, self_class, reason) {
+            return None;
+        }
         // Bail *before* compiling when there is no patch point to install
         // into — after a BOP eviction, or when the method only ever ran as a
         // specialized child of some root (its own `jit_entry` map was never
@@ -458,6 +487,9 @@ impl Codegen {
         reason: RecompileReason,
     ) -> Option<()> {
         if globals.store[iseq_id].jit_invalidated() {
+            return None;
+        }
+        if self.recompile_budget_exhausted(iseq_id, self_class, reason) {
             return None;
         }
         let slot = globals.store[iseq_id].get_jit_slot(self_class)?;
