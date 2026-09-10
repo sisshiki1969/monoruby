@@ -1760,6 +1760,7 @@
 84084af32e200c43d9a0f21c314d8935	""	"".reverse
 842592b1bb99be694e92c22a5315ee23	[false, false, false, nil, false, false, false, nil, false, false, false, nil, false, false, false, nil, false, false, false, nil]	a = [1,2,3,nil] * 5\n        x = []\n        for e in a\n          x << e&
 8426848ab8fdf086ee8cf3191a12c5f8	"MShip2::Blob"	module MShip2\n              class Blob\n                def _dump(l)
+842d7abc8c7da9f58042f513762d25ea	[[nil, Enumerator, true], [:to_s, ["1", "2"]], 7, [Proc, 4, true], [Proc, true], [Proc, 2], true]	def k(&b); [1, 2].map(&b); end\n        def none(&b); b = nil; [b, k(&b)
 846556768cd567bd24d3916bd92ff7db	[false, false, true, [true, true, false], true, false, false, ["NameError", "'a' is not an implicit parameter"], ["TypeError", "1 is not a symbol nor a string"]]	def try; yield; rescue => e; [e.class.to_s, e.message]; end\n       
 8479b8263b2031ca390cec82e34d1347	"yes-shname\\n"	env = Object.new\n            def env.to_hash = {"VIA_TO_HASH" => "y
 84b7526c4266744e31975a2bbd3771af	[true, false, true, false, true, false, false, false, false, true, false, true, true, true, false, true, false, true, false, true, false]	class P\n              def initialize(t); @t = t; end\n              

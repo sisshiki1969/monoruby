@@ -143,9 +143,11 @@ fn anonymous_block_forwarding_has_no_slot() {
     );
 }
 
-// `run_test` warms the JIT: a literal assigned to the parameter is
-// known to the abstract state, so the JIT folds the read / forwarding
-// to it (no slot test); the other cases keep the run-time test.
+// The methods are called in a loop so the method JIT compiles them (a
+// `def` re-executed by `run_test`'s repetitions gets a fresh call count).
+// A literal assigned to the parameter is known to the abstract state, so
+// the JIT folds the read / forwarding to it (no slot test); the other
+// cases keep the run-time test.
 
 #[test]
 fn jit_folds_a_literal_assigned_to_the_block_param() {
@@ -157,8 +159,13 @@ fn jit_folds_a_literal_assigned_to_the_block_param() {
         def lit(&b); b = 7; b; end
         def sym_handler(&b); [b.class, b.call(3), b.equal?(b)]; end
         def outer_store(&b); r = nil; [1].each { r = b }; [r.class, r.equal?(b)]; end
+        def inner_local(&b); [1].map { x = b; [x.class, x.call(1)] }.first; end
         def outer_value(&b); [1].map { b }.first.equal?(b); end
-        [none { :x }, sym { :x }, lit { :x }, sym_handler(&:succ), outer_store {}, outer_value {}]
+        res = nil
+        100.times do
+          res = [none { :x }, sym { :x }, lit { :x }, sym_handler(&:succ), outer_store {}, inner_local { |i| i + 1 }, outer_value {}]
+        end
+        res
         "#,
     );
 }
