@@ -154,3 +154,33 @@ mrb_xml_sax_error(void *ctx, const char *msg, ...)
     mrb_xml_sax_message(ctx, 1, msg, ap);
     va_end(ap);
 }
+
+/*
+ * `xmlXPathContext` accessors for the custom-function handler: the
+ * function being called (set by the evaluator before the call) and the
+ * function-lookup data (the running call).
+ */
+#include <libxml/xpath.h>
+
+const xmlChar *
+mrb_xpath_ctx_get_function(xmlXPathContextPtr ctx)
+{
+    return ctx->function;
+}
+
+const xmlChar *
+mrb_xpath_ctx_get_function_uri(xmlXPathContextPtr ctx)
+{
+    return ctx->functionURI;
+}
+
+/*
+ * The data registered with `xmlXPathRegisterFuncLookup` (`userData` is
+ * not usable for this: `xmlXPathSetErrorHandler` stores its own data
+ * pointer there).
+ */
+void *
+mrb_xpath_ctx_get_func_lookup_data(xmlXPathContextPtr ctx)
+{
+    return ctx->funcLookupData;
+}

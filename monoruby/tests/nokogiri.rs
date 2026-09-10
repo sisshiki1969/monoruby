@@ -1033,6 +1033,81 @@ fn nokogiri_reader() {
 }
 
 #[test]
+fn nokogiri_dup_and_xpath_handlers() {
+    compare(
+        r##"
+        r = []
+        doc = Nokogiri::XML("<r xmlns:p='http://p'><a id='1'><b>t</b></a><p:c k='v'/></r>")
+        a = doc.at_css("a")
+        d1 = a.dup
+        r << [d1.class, d1.parent, d1.document.equal?(doc), d1.to_xml, d1.equal?(a), d1.children.size, d1["id"]]
+        d0 = a.dup(0)
+        r << [d0.to_xml, d0.children.size]
+        other = Nokogiri::XML("<o/>")
+        d2 = a.dup(1, other)
+        r << [d2.document.equal?(other), d2.to_xml]
+        other.root << d2
+        r << other.to_xml
+        r << [a.clone.to_xml, a.clone.equal?(a)]
+        r << doc.at_css("b").children.first.dup.to_xml
+        r << doc.at_css("a").attribute("id").dup.to_xml
+        r << [doc.at_xpath("//p:c").dup.to_xml, doc.at_xpath("//p:c").dup.namespace&.prefix]
+        doc.root << a.dup
+        r << doc.to_xml
+        dd = doc.dup
+        r << [dd.class, dd.equal?(doc), dd.to_xml, dd.root.equal?(doc.root), dd.root.document.equal?(dd), dd.errors]
+        dd.root << Nokogiri::XML::Node.new("added", dd)
+        r << [doc.to_xml == dd.to_xml, dd.root.children.last.name]
+        r << doc.dup(0).to_xml
+        r << doc.clone.root.name
+        h = Nokogiri::HTML4("<p>x</p>").dup
+        r << [h.class, h.to_html, h.root.name]
+        frag = Nokogiri::XML::DocumentFragment.parse("<x/><y/>")
+        r << frag.dup.to_xml
+        keep = (1..50).map { |i| doc.dup }
+        GC.start
+        r << [dd.root.children.map(&:name), keep.map { |d| d.root.name }.uniq]
+        handler = Class.new {
+          def regex(set, re) = set.find_all { |n| n.text =~ /#{re}/ }
+          def upcase(s) = s.upcase
+          def count_nodes(set) = set.length
+          def half(n) = n / 2.0
+          def big(*) = 2**70
+          def yes(*) = true
+          def no(*) = false
+          def nothing(*) = nil
+          def bad(*) = Object.new
+          def boom(*) = raise(ArgumentError, "boom in handler")
+          def echo(*args) = args.map(&:class).inspect
+        }.new
+        doc = Nokogiri::XML("<r><a>foo</a><a>bar</a><a>baz</a></r>")
+        r << doc.xpath("//a[nokogiri:regex(., 'ba')]", handler).map(&:text)
+        r << doc.xpath("nokogiri:upcase(string(//a))", handler)
+        r << doc.xpath("nokogiri:count_nodes(//a)", handler)
+        r << doc.xpath("nokogiri:half(7)", handler)
+        r << doc.xpath("nokogiri:big()", handler)
+        r << doc.xpath("//a[nokogiri:yes()]", handler).size
+        r << doc.xpath("//a[nokogiri:no()]", handler).size
+        r << doc.css("a:regex('^b')", handler).map(&:text)
+        r << doc.xpath("nokogiri:regex(//a, 'z')", handler).map(&:text)
+        r << doc.xpath("nokogiri:echo(1, 'two', true, //a, count(//a))", handler)
+        r << doc.at_css("a").xpath("nokogiri:count_nodes(../a)", handler)
+        [-> { doc.xpath("//a[nokogiri:nothing()]", handler) }, -> { doc.xpath("//a[nokogiri:bad()]", handler) },
+         -> { doc.xpath("//a[nokogiri:boom()]", handler) }, -> { doc.xpath("//a[nokogiri:undefined()]", handler) },
+         -> { doc.xpath("//a[nokogiri:regex(., 'x')]") }].each do |l|
+          begin
+            r << l.call.size
+          rescue => e
+            r << [e.class, e.message]
+          end
+        end
+        r << doc.xpath("//a[nokogiri:regex(., 'o')]", handler).map(&:text)
+        p r
+        "##,
+    );
+}
+
+#[test]
 fn nokogiri_node_identity_across_gc() {
     // Every node wraps into one Ruby object that the document keeps alive;
     // unlinked nodes stay owned by their document.

@@ -289,10 +289,22 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
   `inner_xml` / `outer_xml`、`base_uri` / `lang` / `xml_version` / `encoding`、
   エラーは `errors` に積まれ `read` の失敗で aggregate を raise。
 
+- `Node#dup` / `#clone`（`initialize_copy_with_args`: `Object#dup` が作った
+  ペイロード無しのコピーに `xmlDocCopyNode` の複製を持たせる。別ドキュメントへの
+  複製も可）、`Document#dup` / `#clone`（`xmlCopyDoc`）。`RValue::replace_native`
+  でペイロードを差し替える。
+- XPath のカスタム関数ハンドラ（`evaluate(expr, handler)`、CSS の
+  `:regex()` 等の擬似クラスも通る）: `xmlXPathRegisterFuncLookup` でハンドラが
+  応答する名前を Rust の invoker に解決し、引数を Ruby 値（NodeSet / String /
+  Float / bool）に、戻り値を XPath 値（数値 / 文字列 / 真偽 / NodeSet / Array →
+  NodeSet、nil は何も積まない）に変換する。ハンドラの例外は呼び出し状態に保存して
+  `xmlXPathErr` で評価を打ち切り、`evaluate` から投げ直す。呼び出し状態は
+  コンテキストの `funcLookupData` に置く（`userData` は 2.13 の
+  `xmlXPathSetErrorHandler` が上書きするので使えない）。
+
 まだ無いもの（段階 4〜6）: `XML::Schema` / `RelaxNG`、`XSLT`（定数は `0.0.0` の
 プレースホルダ）、HTML5（gumbo）、`HTML4::ElementDescription`
-（`Node#description`）、XPath のカスタム関数ハンドラ（`evaluate` の第 2
-引数は受け取るが無視）、`Node#dup` / `Document#dup`。
+（`Node#description`）。
 
 設計上わかったこと:
 

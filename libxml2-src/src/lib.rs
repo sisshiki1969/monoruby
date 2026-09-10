@@ -589,6 +589,7 @@ unsafe extern "C" {
     // ---- documents ----
     pub fn xmlNewDoc(version: *const xmlChar) -> *mut xmlDoc;
     pub fn xmlFreeDoc(cur: *mut xmlDoc);
+    pub fn xmlCopyDoc(doc: *mut xmlDoc, recursive: c_int) -> *mut xmlDoc;
     pub fn xmlDocGetRootElement(doc: *const xmlDoc) -> *mut xmlNode;
     pub fn xmlDocSetRootElement(doc: *mut xmlDoc, root: *mut xmlNode) -> *mut xmlNode;
     pub fn xmlNewDocFragment(doc: *mut xmlDoc) -> *mut xmlNode;
@@ -864,6 +865,9 @@ unsafe extern "C" {
     pub fn mrb_xml_ctxt_get_line(ctxt: *mut xmlParserCtxt) -> c_int;
     pub fn mrb_xml_ctxt_get_column(ctxt: *mut xmlParserCtxt) -> c_int;
     pub fn mrb_xml_sax_set_message_handler(f: mrb_sax_message_fn);
+    pub fn mrb_xpath_ctx_get_function(ctx: *mut xmlXPathContext) -> *const xmlChar;
+    pub fn mrb_xpath_ctx_get_function_uri(ctx: *mut xmlXPathContext) -> *const xmlChar;
+    pub fn mrb_xpath_ctx_get_func_lookup_data(ctx: *mut xmlXPathContext) -> *mut c_void;
     pub fn mrb_xml_sax_warning(ctx: *mut c_void, msg: *const c_char, ...);
     pub fn mrb_xml_sax_error(ctx: *mut c_void, msg: *const c_char, ...);
 

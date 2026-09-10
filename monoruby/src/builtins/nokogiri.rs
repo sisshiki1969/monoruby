@@ -413,6 +413,18 @@ pub(super) unsafe fn native_mut<'a, T: NativeData>(mut v: Value) -> Option<&'a m
     }
 }
 
+/// Give `v` (a native object, e.g. the `EmptyNative` copy `Object#dup`
+/// makes) the payload `inner`.
+pub(super) fn replace_native(mut v: Value, inner: Box<dyn NativeData>) -> Result<()> {
+    match v.try_rvalue_mut() {
+        Some(rv) if rv.ty() == ObjTy::NATIVE => {
+            rv.replace_native(inner);
+            Ok(())
+        }
+        _ => Err(MonorubyErr::typeerr("expected a native object")),
+    }
+}
+
 pub(super) unsafe fn doc_native<'a>(doc: *mut xml::xmlDoc) -> Option<&'a mut XmlDocument> {
     // SAFETY: as `native_mut`.
     unsafe { native_mut::<XmlDocument>(doc_value(doc)?) }

@@ -46,6 +46,7 @@ pub(super) fn init(globals: &mut Globals, c: &Classes) {
     globals.define_builtin_func(n, "previous_element", previous_element, 0);
     globals.define_builtin_func(n, "previous_sibling", previous_sibling, 0);
     globals.define_builtin_func(n, "unlink", unlink, 0);
+    globals.define_builtin_func(n, "initialize_copy_with_args", initialize_copy_with_args, 3);
     globals.define_private_builtin_func(n, "add_child_node", add_child_node, 1);
     globals.define_private_builtin_func(n, "add_next_sibling_node", add_next_sibling_node, 1);
     globals.define_private_builtin_func(n, "add_previous_sibling_node", add_previous_sibling_node, 1);
@@ -823,6 +824,35 @@ fn create_internal_subset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _:
         xml::xmlCreateIntSubset(doc, cptr(&name), cptr(&external_id), cptr(&system_id))
     };
     wrap_node_or_nil(vm, globals, dtd as *mut xml::xmlNode)
+}
+
+/// Node#initialize_copy_with_args(other, level, new_parent_doc) -> self:
+/// the tail of `Node#dup` / `#clone` — `self` is the payload-less copy
+/// `Object#dup` made; it becomes the wrapper of a copy of `other` in
+/// `new_parent_doc` (`rb_xml_node_initialize_copy_with_args`).
+#[monoruby_builtin]
+fn initialize_copy_with_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = node_ptr(lfp.arg(0))?;
+    let level = lfp.arg(1).expect_integer(&globals.store)? as c_int;
+    let new_doc_val = lfp.arg(2);
+    let new_doc = doc_ptr(new_doc_val)?;
+    // SAFETY: live nodes; the copy is ours until the document takes it.
+    let copy = unsafe { xml::xmlDocCopyNode(other, new_doc, level) };
+    if copy.is_null() {
+        return Ok(Value::nil());
+    }
+    replace_native(self_val, Box::new(XmlNode { node: copy }))?;
+    // SAFETY: a live copy in a live document.
+    unsafe {
+        (*copy)._private = self_val.id() as *mut c_void;
+        pin_node(copy);
+        if let Some(d) = doc_native(new_doc) {
+            d.node_cache.push(self_val);
+        }
+    }
+    vm.invoke_method_inner(globals, IdentId::get_id("decorate"), new_doc_val, &[self_val], None, None)?;
+    Ok(self_val)
 }
 
 // ---- tree editing ----

@@ -14,6 +14,7 @@ pub(super) fn init(globals: &mut Globals, c: &Classes) {
     globals.define_builtin_func(d, "encoding=", set_encoding, 1);
     globals.define_builtin_func(d, "version", version, 0);
     globals.define_builtin_func(d, "url", url, 0);
+    globals.define_builtin_func(d, "initialize_copy_with_args", doc_initialize_copy_with_args, 2);
 
     let h = c.html4_document;
     globals.define_builtin_class_func(h, "read_memory", html_read_memory, 4);
@@ -346,6 +347,36 @@ fn version(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
     let doc = this(lfp)?;
     // SAFETY: a live document.
     Ok(unsafe { xml_str((*doc).version) })
+}
+
+/// Document#initialize_copy_with_args(other, level) -> self: the tail of
+/// `Document#dup` / `#clone` — `self` is the payload-less copy `Object#dup`
+/// made; it becomes the owner of a copy of `other`'s tree
+/// (`rb_xml_document_initialize_copy_with_args`).
+#[monoruby_builtin]
+fn doc_initialize_copy_with_args(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = doc_ptr(lfp.arg(0))?;
+    let level = lfp.arg(1).expect_integer(&globals.store)? as c_int;
+    // SAFETY: a live document; the copy is ours.
+    let copy = unsafe { xml::xmlCopyDoc(other, level) };
+    if copy.is_null() {
+        return Ok(Value::nil());
+    }
+    // SAFETY: a fresh document.
+    unsafe {
+        (*copy).type_ = (*other).type_;
+        (*copy)._private = self_val.id() as *mut c_void;
+    }
+    replace_native(
+        self_val,
+        Box::new(XmlDocument {
+            doc: copy,
+            node_cache: vec![],
+            unlinked: HashSet::new(),
+        }),
+    )?;
+    Ok(self_val)
 }
 
 /// Document#url -> String | nil
