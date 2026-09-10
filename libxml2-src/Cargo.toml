@@ -2,7 +2,7 @@
 name = "libxml2-src"
 version = "2.13.8"
 edition = "2024"
-description = "libxml2 2.13.8 with nokogiri's patches, built from the vendored source and linked statically; the FFI monoruby's Nokogiri uses"
+description = "libxml2 2.13.8 with nokogiri's patches, libxslt 1.1.43 and nokogiri's gumbo-parser, built from the vendored sources and linked statically; the FFI monoruby's Nokogiri uses"
 license = "MIT"
 links = "xml2"
 build = "build.rs"

@@ -29,6 +29,7 @@ mod reader;
 mod sax;
 mod schema;
 mod xpath;
+mod xslt;
 
 pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(STRING_CLASS, "__nokogiri_init", nokogiri_init, 0);
@@ -78,6 +79,8 @@ pub(super) struct Classes {
     pub element_description: ClassId,
     pub gumbo: ClassId,
     pub html5_document: ClassId,
+    pub xslt: ClassId,
+    pub stylesheet: ClassId,
 }
 
 thread_local! {
@@ -142,9 +145,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     let nokogiri = module(globals, OBJECT_CLASS, "Nokogiri");
     let xml_m = module(globals, nokogiri, "XML");
     let xpath_m = module(globals, xml_m, "XPath");
-    for m in ["HTML4", "XSLT"] {
-        module(globals, nokogiri, m);
-    }
+    let xslt_m = module(globals, nokogiri, "XSLT");
     let gumbo = module(globals, nokogiri, "Gumbo");
     let html5 = module(globals, nokogiri, "HTML5");
     let xml_sax = module(globals, xml_m, "SAX");
@@ -187,6 +188,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     let reader = native_class(globals, xml_m, "Reader", OBJECT_CLASS);
     let schema = native_class(globals, xml_m, "Schema", OBJECT_CLASS);
     let relax_ng = class(globals, xml_m, "RelaxNG", schema);
+    let stylesheet = native_class(globals, xslt_m, "Stylesheet", OBJECT_CLASS);
 
     let c = Classes {
         nokogiri,
@@ -229,6 +231,8 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
         element_description,
         gumbo,
         html5_document,
+        xslt: xslt_m,
+        stylesheet,
     };
     CLASSES.with(|cell| *cell.borrow_mut() = Some(c));
 
@@ -242,6 +246,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     sax::init(globals, &c);
     schema::init(globals, &c);
     xpath::init(globals, &c);
+    xslt::init(globals, &c);
 
     // Constants `Init_nokogiri` sets (version/info.rb reads them).
     let set = |globals: &mut Globals, name: &str, v: Value| {
@@ -275,12 +280,20 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
         "LIBXML2_PATCHES",
         Value::array_from_vec(patches.iter().map(|p| Value::string_from_str(p)).collect()),
     );
-    // libxslt is not bundled yet (doc/nokogiri.md, stage 6).
-    set(globals, "LIBXSLT_COMPILED_VERSION", Value::string_from_str("0.0.0"));
-    // The loaded version is the numeric form (`xsltEngineVersion`, "10143").
-    set(globals, "LIBXSLT_LOADED_VERSION", Value::string_from_str("00000"));
-    set(globals, "LIBXSLT_PATCHES", Value::array_from_vec(vec![]));
-    set(globals, "LIBXSLT_DATETIME_ENABLED", Value::bool(false));
+    set(globals, "LIBXSLT_COMPILED_VERSION", Value::string_from_str("1.1.43"));
+    // The loaded version is the numeric form (`xsltLibxsltVersion`, "10143").
+    // SAFETY: a constant of the library.
+    let loaded = unsafe { xml::xsltLibxsltVersion };
+    set(globals, "LIBXSLT_LOADED_VERSION", Value::string(loaded.to_string()));
+    // nokogiri's only libxslt patch (build system: config.guess / config.sub).
+    set(
+        globals,
+        "LIBXSLT_PATCHES",
+        Value::array_from_vec(vec![Value::string_from_str(
+            "0001-update-config.guess-and-config.sub-for-libxslt.patch",
+        )]),
+    );
+    set(globals, "LIBXSLT_DATETIME_ENABLED", Value::bool(true));
     Ok(Value::nil())
 }
 

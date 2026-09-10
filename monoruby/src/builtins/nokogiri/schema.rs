@@ -96,7 +96,7 @@ fn from_document_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Res
 /// parser would strip it from under the wrapper, so the schema is then
 /// compiled from a copy (`noko_xml_document_has_wrapped_blank_nodes_p`,
 /// nokogiri #2001).
-unsafe fn has_wrapped_blank_nodes(doc: *mut xml::xmlDoc) -> bool {
+pub(super) unsafe fn has_wrapped_blank_nodes(doc: *mut xml::xmlDoc) -> bool {
     // SAFETY: a live document; every cached wrapper's node is live.
     unsafe {
         let Some(d) = doc_native(doc) else {

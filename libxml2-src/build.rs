@@ -1,10 +1,12 @@
 //! Build the vendored libxml2 (2.13.8 + nokogiri's patches, see
-//! `vendor/libxml2/NOKOGIRI-PATCHES`) and nokogiri's gumbo-parser (the
-//! HTML5 parser, `vendor/gumbo-parser`) with `cc`, without autotools or
-//! cmake: `config.h` is the checked-in unix version in `config/`, and
-//! `libxml/xmlversion.h` is generated here from the upstream template with
-//! the feature set nokogiri builds (`--with-c14n --with-debug
-//! --with-threads`, no legacy / zlib / lzma / http / ftp / python).
+//! `vendor/libxml2/NOKOGIRI-PATCHES`), nokogiri's gumbo-parser (the HTML5
+//! parser, `vendor/gumbo-parser`) and libxslt / libexslt (1.1.43,
+//! `vendor/libxslt`) with `cc`, without autotools or cmake: the `config.h`s
+//! are the checked-in unix versions in `config/`, and `libxml/xmlversion.h`
+//! / `libxslt/xsltconfig.h` / `libexslt/exsltconfig.h` are generated here
+//! from the upstream templates with the feature set nokogiri builds
+//! (`--with-c14n --with-debug --with-threads`, no legacy / zlib / lzma /
+//! http / ftp / python; libxslt without crypto and plugins).
 
 use std::env;
 use std::fs;
@@ -149,6 +151,75 @@ fn main() {
     build.file(manifest.join("glue/monoruby_gumbo.c"));
     build.compile("gumbo");
 
+    // libxslt + libexslt (1.1.43, unmodified: nokogiri's only libxslt patch
+    // touches config.guess / config.sub). Their `xsltconfig.h` /
+    // `exsltconfig.h` come from the upstream templates, their `config.h`
+    // is `config/xslt-config.h`; all three live in a separate include root
+    // so the two libraries' `config.h`s never meet.
+    let xslt = manifest.join("vendor/libxslt");
+    let xslt_include = out.join("xslt-include");
+    fs::create_dir_all(xslt_include.join("libxslt")).unwrap();
+    fs::create_dir_all(xslt_include.join("libexslt")).unwrap();
+    let template = fs::read_to_string(xslt.join("libxslt/xsltconfig.h.in")).unwrap();
+    let mut xsltconfig_h = template
+        .replace("@VERSION@", "1.1.43")
+        .replace("@LIBXSLT_VERSION_NUMBER@", "10143")
+        .replace("@LIBXSLT_VERSION_EXTRA@", "")
+        .replace("@LIBXSLT_DEFAULT_PLUGINS_PATH@", "");
+    for (name, on) in [
+        ("XSLT_DEBUG", 1),
+        ("TRIO", 0),
+        ("DEBUGGER", 1),
+        ("PROFILER", 1),
+        ("MODULES", 0),
+    ] {
+        xsltconfig_h = xsltconfig_h.replace(&format!("@WITH_{name}@"), &on.to_string());
+    }
+    assert!(
+        !xsltconfig_h.contains("@WITH_"),
+        "unsubstituted placeholder in xsltconfig.h.in"
+    );
+    fs::write(xslt_include.join("libxslt/xsltconfig.h"), xsltconfig_h).unwrap();
+    let template = fs::read_to_string(xslt.join("libexslt/exsltconfig.h.in")).unwrap();
+    let exsltconfig_h = template
+        .replace("@LIBEXSLT_VERSION_NUMBER@", "824")
+        .replace("@LIBEXSLT_VERSION_EXTRA@", "")
+        .replace("@LIBEXSLT_VERSION@", "0.8.24")
+        .replace("@WITH_CRYPTO@", "0");
+    assert!(
+        !exsltconfig_h.contains("@WITH_"),
+        "unsubstituted placeholder in exsltconfig.h.in"
+    );
+    fs::write(xslt_include.join("libexslt/exsltconfig.h"), exsltconfig_h).unwrap();
+    fs::copy(
+        manifest.join("config/xslt-config.h"),
+        xslt_include.join("config.h"),
+    )
+    .unwrap();
+
+    let mut build = cc::Build::new();
+    build
+        .include(&xslt_include)
+        .include(&xslt)
+        .include(&gen_include)
+        .include(vendor.join("include"))
+        .opt_level(2)
+        .warnings(false)
+        .flag_if_supported("-Wno-unused-parameter")
+        .flag_if_supported("-fvisibility=hidden")
+        .define("_GNU_SOURCE", None);
+    for lib in ["libxslt", "libexslt"] {
+        for entry in fs::read_dir(xslt.join(lib)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "c") {
+                build.file(path);
+            }
+        }
+    }
+    // The generic-error capture and the `_private` accessors.
+    build.file(manifest.join("glue/monoruby_xslt.c"));
+    build.compile("xslt");
+
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "macos" {
         // iconv is a separate library on Darwin (libc has it on glibc).
@@ -161,6 +232,9 @@ fn main() {
     println!("cargo:rerun-if-changed=config/config.h");
     println!("cargo:rerun-if-changed=glue/monoruby_glue.c");
     println!("cargo:rerun-if-changed=glue/monoruby_gumbo.c");
+    println!("cargo:rerun-if-changed=config/xslt-config.h");
+    println!("cargo:rerun-if-changed=glue/monoruby_xslt.c");
     println!("cargo:rerun-if-changed=vendor/gumbo-parser");
     println!("cargo:rerun-if-changed=vendor/libxml2");
+    println!("cargo:rerun-if-changed=vendor/libxslt");
 }
