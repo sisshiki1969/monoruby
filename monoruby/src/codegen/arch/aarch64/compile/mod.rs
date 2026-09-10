@@ -1438,6 +1438,75 @@ impl Codegen {
                 self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
             }
             // Deopt if the receiver (rdi) is frozen.
+            // Inline `Module#===`: see `AsmInst::KindOfConst` and the x86
+            // `kind_of_const`. x9 = class id / scratch, x10 = target class
+            // id, x11 = class object pointer during the walk.
+            LInst::KindOfConst { reg, class } => {
+                let r = reg.a64().0;
+                let rax = GP::Rax.a64().0;
+                assert!(r != rax && r != 9 && r != 10 && r != 11);
+                let heap = self.jit.label();
+                let have = self.jit.label();
+                let walk = self.jit.label();
+                let hit = self.jit.label();
+                let miss = self.jit.label();
+                let exit = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (0b111);
+                    and x9, x(r), x9;
+                    cbz x9, heap;                          // heap object
+                    mov x9, (INTEGER_CLASS.u32() as u64);
+                    tbnz x(r), #(0), have;                 // fixnum
+                    mov x9, (FLOAT_CLASS.u32() as u64);
+                    tbnz x(r), #(1), have;                 // flonum
+                    mov x9, (0xff);
+                    and x9, x(r), x9;
+                    cmp x9, #(TAG_SYMBOL as u32);
+                    mov x9, (SYMBOL_CLASS.u32() as u64);
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &have);
+                monoasm_arm64!(&mut self.jit,
+                    cmp x(r), #(NIL_VALUE as u32);
+                    mov x9, (NIL_CLASS.u32() as u64);
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &have);
+                monoasm_arm64!(&mut self.jit,
+                    cmp x(r), #(TRUE_VALUE as u32);
+                    mov x9, (TRUE_CLASS.u32() as u64);
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &have);
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (FALSE_CLASS.u32() as u64);
+                    b have;
+                heap:
+                    ldr w9, [x(r), #(RVALUE_OFFSET_CLASS as u32)];  // class id
+                have:
+                    mov x10, (class.u32() as u64);
+                    cmp x9, x10;
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &hit);
+                monoasm_arm64!(&mut self.jit,
+                    mov x11, (GLOBALS_CLASS_OBJECTS as u64);
+                    add x11, x20, x11;                 // x20 = &Globals
+                    ldr x11, [x11];                    // objects table data ptr
+                    ldr x11, [x11, x9, lsl #3];        // class object (or 0)
+                walk:
+                    cbz x11, miss;
+                    ldr x11, [x11, #(MODULE_OFFSET_SUPERCLASS as u32)];
+                    cbz x11, miss;
+                    ldr w9, [x11, #(MODULE_OFFSET_CLASS_ID as u32)];
+                    cmp x9, x10;
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &walk);
+                monoasm_arm64!(&mut self.jit,
+                hit:
+                    mov x(rax), (TRUE_VALUE);
+                    b exit;
+                miss:
+                    mov x(rax), (FALSE_VALUE);
+                exit:
+                );
+            }
             LInst::GuardFrozen { deopt } => {
                 let rdi = GP::Rdi.a64().0;
                 monoasm_arm64!(&mut self.jit,

@@ -746,6 +746,9 @@ impl Codegen {
                 let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(reg));
                 self.encode_linst(LInst::GuardArrayTy { reg, deopt });
             }
+            AsmInst::KindOfConst { reg, class } => {
+                self.encode_linst(LInst::KindOfConst { reg, class });
+            }
             AsmInst::GuardFrozen { deopt } => {
                 let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
                 self.encode_linst(LInst::GuardFrozen { deopt });

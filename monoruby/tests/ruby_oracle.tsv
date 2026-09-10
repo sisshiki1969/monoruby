@@ -495,6 +495,7 @@
 23fb7df204a374180f0628ebb762f0dd	[[:deprecated, :experimental, :performance, :strict_unused_block], false, true, false, false, true, true, nil, false, false, false, true]	res = []\n            res << Warning.categories\n            res << W
 2409ce9d3bc696017834648d7c8c2579	[2, [1, 2], 0, [0, 0, 0], 8, [8, 8], [1, 2], [[1, 2], [1, 2]], [[1, 2], [1, 2]], FrozenError, [0, 0]]	class M\n              def initialize; @a = 0; @b = 0; @c = 0; end\n 
 24196e0cebd247d987469fb63b77ec33	:OVERRIDDEN	class Complex; def *(o); :OVERRIDDEN; end; end; Complex(1,2) * Complex(3,4)
+244e33fc758eff800ec532834fac2b42	[[:a, 60], [:basic, 120], [:bool, 40], [:cmp, 40], [false, 1800], [:int, 40], [:nil, 20], [:num, 20], [true, 1260]]	module M; end\n            class A; end\n            class B < A; inc
 245e848f69575fb36810ea7f6796973c	TypeError	(GC.stat(7) rescue $!.class)
 246af9040a3d2f43e9ddf823ee30471c	true	(0x8000_0000_0000_0000 + 39) > (0x8000_0000_0000_0000 + 39 + 0.0)
 2475f3fc8f38ad071f66332d846bc60b	"symbol"	x = case :symbol\n        when Integer then 'integer'\n        when Float
@@ -1359,6 +1360,7 @@
 65694a727aa519d1f24a0ad7779439d7	["a", "b"]	sup = Class.new do\n          def a; "a"; end\n          def b; "b"; end\n
 658a3d798e2393a25a6923d06ab095be	[:tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok]	def tmo(klass)\n              perform = Proc.new do\n                
 659055cc978aefe6697faff4fd6e1315	[[1, 2, 3], 10, 20]	def f(*pos, a:, b:)\n          [pos, a, b]\n        end\n        \n\n       
+65b28e4dd990729047db1fc406d14d5c	[:g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :s, :none, :g, :g, :s, :none]	class G; end\n            def probe(v) = (case v when G then :g when
 65b60c5b39c342afed16c0ba169c3edc	20100	def target(x) = x + 1\n        s = 0\n        i = 0\n        while i < 200
 65bb5f7d0324a0abc81ebc2d0d768a36	[[true, true, 1], [true, 5], true, [Proc, nil], [:orig, :new, [:new]], :y, :none]	def a(&b); [b.equal?(b), b.object_id == b.object_id, 3.times.map { b.ob
 65d10140470d60de44657d841741db77	[0, 1, 2, 3, 4]	a = []\n            p = Proc.new {|x|\n                a << x\n       
@@ -3013,6 +3015,7 @@ de98b251e3ebf208ae7ea77852cdad4f	[true, true, true, nil, nil]	module Foo\n      
 dea62e9108f7ef43d5c3c4752f9330ed	"missing keywords: :amount, :unit"	M = Data.define(:amount, :unit)\nbegin; M.new; rescue ArgumentError => e; e.messa
 deafe62615f91940bdeda9cef75c0610	"strin!!"	buf = "string"; buf[-1]="!!"; buf
 deb1d91f607fb81fe26ecc9ca137d819	{life: 42}	fiber = Fiber.new(storage: {life: 42}) do\n              Thread.star
+dec152735b9f6d9b73b2051780c09747	[[0, 62], [1, 61], [false, 121], [true, 62]]	class K; end\n            class K2 < K; end\n            class Pre; d
 dec9ce41ee836366dedf2e5db7363e5b	"ok"	r, w = IO.pipe\n            w.close\n            w.close\n            
 ded6cc95036ce2f1c7d6ff7d5b3ae644	"/tmp/foo"	File.absolute_path("foo", "/tmp")
 dee21aeabe3cb960452b29b864aa6314	"1"	def foo\n          $b.call\n        end\n        \n\n        a = :a\n        
@@ -3440,6 +3443,7 @@ fe1d12a770bcd49e6528c05052a7fe89	[[42], [7]]	$log = []\n            def g(x) = 4
 fe35ca4f16663c5f99f379b4c63b25e1	:echild	pid = spawn("true")\n            Process.detach(pid).join\n          
 fe48e250f2d1d71755bfa84d1802acfa	[[0, 5, 10], :hop_broke]	class FwdE\n          attr_reader :a\n          def initialize(n)\n       
 fe6f90f2c79933a3f1d357d607b6b6fa	[true, true, true, "007"]	(a=Kernel.instance_method(:format)==Kernel.instance_method(:sprintf); b=Kernel.m
+fe85ca224218721607558b0fd261dd1a	[[false, 162], [true, 3]]	module Tagged; end\n            def probe(v) = (Tagged === v)\n      
 fefd9e3b7d143c7b4ef7f710db1241da	"<STDOUT>"	$stdout.path
 ff5dd25aa7342530d52e015376c635fd	[:ok, :mod_ok, "NoMethodError", "NoMethodError"]	class ProtBase\n          protected def prot; :ok; end\n        end\n     
 ff6ed5a6bc5556996f38110444ed4f1b	1	class Integer; alias __orig :%; def %(o); __orig(o); end; end; 13 % 4

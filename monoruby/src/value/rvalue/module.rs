@@ -255,6 +255,16 @@ pub enum ModuleType {
     IClass,
 }
 
+/// Byte offsets of `ModuleInner::class_id` / `superclass` inside a class
+/// object's `RValue`, for the JIT's inline superclass walk
+/// (`AsmInst::KindOfConst`). `Option<Module>` is a nullable pointer
+/// (`Module` wraps a `Value`, which is `NonZeroU64`), so `None` reads as 0.
+pub const MODULE_OFFSET_CLASS_ID: usize =
+    RVALUE_OFFSET_KIND + std::mem::offset_of!(ModuleInner, class_id);
+pub const MODULE_OFFSET_SUPERCLASS: usize =
+    RVALUE_OFFSET_KIND + std::mem::offset_of!(ModuleInner, superclass);
+const _: () = assert!(std::mem::size_of::<Option<Module>>() == 8);
+
 #[derive(Debug, Clone)]
 pub struct ModuleInner {
     /// ClassId of thiis module/class.

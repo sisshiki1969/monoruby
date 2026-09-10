@@ -500,6 +500,11 @@ pub(in crate::codegen) enum LInst {
         reg: GP,
         deopt: DestLabel,
     },
+    /// `rax <- Value::bool(reg is_a? class)`; see `AsmInst::KindOfConst`.
+    KindOfConst {
+        reg: GP,
+        class: ClassId,
+    },
     /// Deopt if the receiver (rdi) is frozen.
     GuardFrozen {
         deopt: DestLabel,

@@ -299,7 +299,7 @@ pub struct ClassInfo {
     ///
     /// corresponding class object.
     ///
-    object: Option<Module>,
+    pub(in crate::globals) object: Option<Module>,
     ///
     /// method table.
     ///
@@ -932,6 +932,21 @@ impl ClassInfoTable {
         self[class_id].object.unwrap()
     }
 
+    /// Whether an instance of *class* `is_a?` *target*: the same
+    /// superclass walk as `Value::is_kind_of`, started from a class id.
+    /// `false` for a class with no backing object (`BOOL_CLASS` and the
+    /// other inline-cache-only tags).
+    pub(crate) fn class_is_kind_of(&self, class: ClassId, target: ClassId) -> bool {
+        let mut cur = self[class].try_get_module();
+        while let Some(m) = cur {
+            if m.id() == target {
+                return true;
+            }
+            cur = m.superclass();
+        }
+        false
+    }
+
     pub fn object_class(&self) -> Module {
         self.get_module(OBJECT_CLASS)
     }
@@ -944,7 +959,7 @@ impl ClassInfoTable {
     ) -> Module {
         let id = self.copy_class(original_class);
         let class_obj = Value::singleton_class_empty(id, super_class.into(), base).as_class();
-        self[id].object = Some(class_obj);
+        self.set_object(id, class_obj);
         self[id].mark_dirty();
         class_obj
     }
@@ -1809,7 +1824,7 @@ impl ClassInfoTable {
             Some(p) => p == OBJECT_CLASS || self[p].is_name_permanent(),
             None => false,
         };
-        self[class_id].object = Some(class_obj.as_class());
+        self.set_object(class_id, class_obj.as_class());
         self[class_id].mark_dirty();
         self[class_id].name = name.map(|id| id.to_string());
         self[class_id].name_permanent = name.is_some() && parent_permanent;
@@ -1969,8 +1984,8 @@ impl ClassInfoTable {
         } else {
             Value::class_empty(new_id, real_super)
         };
+        self.set_object(new_id, class_obj.as_class());
         let info = &mut self[new_id];
-        info.object = Some(class_obj.as_class());
         info.name = None;
         info.parent = None;
         info.instance_ty = instance_ty;

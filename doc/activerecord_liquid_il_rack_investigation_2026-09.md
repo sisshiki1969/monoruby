@@ -144,6 +144,27 @@ superclass 鎖（include の iclass を含む）を 1 段 ≈ 30 命令で辿る
 その手前のディスパッチ（`invoke_method` inclusive 486 命令/回）。`BASIC_OP_DEFS` には Integer / Float / Symbol / nil /
 true / false の `===` しかなく、`Module#===` は BOP 扱いではない。
 
+**対処（済、コミット `<TEQFIX>`）**: 受信側が定数の Class / Module で、その `===` が
+builtin の `Module#===` に解決されるサイト（`case … when Klass` と `Klass === v`）を、
+JIT で `AsmInst::KindOfConst` に落とす。機械語で (1) 値のクラス ID を求め（即値はタグ
+判定、ヒープ値は `RValue.class`）、(2) 目的のクラス ID と比較、(3) 外れたらクラス
+オブジェクト表（`ClassInfoTable::objects`、`GLOBALS_CLASS_OBJECTS` 経由の
+`MonoVec<Option<Module>>`）からクラスオブジェクトを引き、superclass 鎖（include の
+iclass を含む）を目的の ID まで辿る。走査はすべて実行時に読むので `include` は
+再コンパイル不要。唯一の前提「`Klass.===` が builtin」は `inline_method_cache` に
+記録して class version salvage に再検証させる（`def self.===`、`Module#===` の再定義、
+refinement で外れる）。x86-64 と aarch64 の両方に実装。
+
+| マイクロベンチ（1 実行） | 前 | 後 | YJIT |
+|---|---:|---:|---:|
+| `case x when A`（x が A の直接のインスタンス） | 13.9 ns | 6.7 ns | 33.4 ns |
+| `case x when A`（4 段上のスーパークラス） | 20.0 | 9.8 | 34.4 |
+| `case x when M`（include したモジュール、x 7 クラス） | 52.9 | 10.2 | 43.2 |
+| `case String / Integer / Hash / Array`（x 7 クラス混在） | 147 | 19.6 | 46.8 |
+
+ベンチ（2 ラウンド交互、中央値）: liquid-il 279 / 291 → 251 / 248 ms（**−12 %**）、
+activerecord 184 / 181 → 176 / 167 ms（−5 %）、liquid-render・mail・sequel はばらつきの範囲内。
+
 **対策**（コスト低〜中）: 受信側が Class / Module で、その `===` の解決結果が
 builtin `Module#===` なら `is_kind_of` を直接呼ぶ。`def self.===` を持つクラス
 （Rails にも複数ある）を正しく外すには、`(MODULE_CLASS, "===")` を BOP に足すだけでは
@@ -276,7 +297,7 @@ URLMap 風の `each { return }` 536 / 516、`Rack::Request.new(env).path_info` 1
 
 | 順 | 施策 | 効くベンチ | コスト | 見込み |
 |---|---|---|---|---|
-| 1 | `Module#===` の直接判定（JIT は `when Klass` / `Klass === v` の定数を解決して `is_kind_of` をインライン、VM はインラインキャッシュ）。階層の深さで遅くならないよう、サイトごとに（値のクラス → 真偽）のキャッシュを class version ガード下に持つ | liquid-il −12 % 前後、activerecord / mail / liquid-render の `case` | 低〜中 | 1 回 310 → 30〜50 命令 |
+| 1 | `Module#===` の機械語インライン化（**済**、§4.1）。残りは VM 側のインラインキャッシュと、受信側が定数でないサイト | liquid-il −12 %、activerecord −5 % | 低〜中 | 1 回 310 → 20〜40 命令 |
 | 2 | `defined?(@ivar)` を IvarId インラインキャッシュに | activerecord −3 %、Rails 全般 | 低 | 50 万回/反復 × 100 命令 |
 | 3 | `Float#to_s` を `format!` を通さずに書く | liquid-il −4 %、Float を出力する全般 | 低 | 530 → 250 命令 |
 | 4 | `respond_to?` の (class, name, version) キャッシュ、`Encoding.find` の表引き | activerecord、mail、rack | 低 | |

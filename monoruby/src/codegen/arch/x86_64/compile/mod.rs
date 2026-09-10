@@ -117,6 +117,7 @@ impl Codegen {
             | AsmInst::FixnumNeg { .. }
             | AsmInst::FixnumBitNot { .. }
             | AsmInst::GuardArrayTy(..)
+            | AsmInst::KindOfConst { .. }
             | AsmInst::GuardFrozen { .. }
             | AsmInst::LoadIVarInline { .. }
             | AsmInst::StoreIVarInline { .. }
@@ -693,6 +694,7 @@ impl Codegen {
                 self.jit.bind_label(ok);
             }
             LInst::GuardArrayTy { reg, deopt } => self.guard_array_ty(reg, &deopt),
+            LInst::KindOfConst { reg, class } => self.kind_of_const(reg, class),
             LInst::GuardFrozen { deopt } => self.guard_frozen(&deopt),
             // Constant-load base-class guard: deopt unless the accumulator equals
             // the cached base class.

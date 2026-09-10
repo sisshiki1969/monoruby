@@ -237,6 +237,12 @@ pub(crate) fn noinline_gen(
 pub(crate) const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 
+/// Offset (from `&Globals`) of the data pointer of the class-object mirror
+/// (`ClassInfoTable::objects`): `*const Option<Module>` indexed by
+/// `ClassId`, read by the JIT's inline `Module#===` superclass walk.
+pub(crate) const GLOBALS_CLASS_OBJECTS: usize =
+    std::mem::offset_of!(Globals, store.classes.objects) + MONOVEC_PTR;
+
 /// Internal gvar name used by bytecodegen to save/restore `$!`
 /// (`Executor::errinfo`). `$!` itself is read-only from Ruby, so the
 /// generated save/restore code writes through this hooked alias instead;
