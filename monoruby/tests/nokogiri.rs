@@ -1108,6 +1108,136 @@ fn nokogiri_dup_and_xpath_handlers() {
 }
 
 #[test]
+fn nokogiri_schema_and_relax_ng() {
+    compare(
+        r##"
+        require "tempfile"
+        r = []
+        xsd = <<~XSD
+          <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+            <xs:element name="shiporder">
+              <xs:complexType>
+                <xs:sequence>
+                  <xs:element name="orderperson" type="xs:string"/>
+                  <xs:element name="item" maxOccurs="unbounded">
+                    <xs:complexType>
+                      <xs:sequence>
+                        <xs:element name="title" type="xs:string"/>
+                        <xs:element name="quantity" type="xs:positiveInteger"/>
+                      </xs:sequence>
+                    </xs:complexType>
+                  </xs:element>
+                </xs:sequence>
+                <xs:attribute name="orderid" type="xs:string" use="required"/>
+              </xs:complexType>
+            </xs:element>
+          </xs:schema>
+        XSD
+        good = "<shiporder orderid='1'><orderperson>A</orderperson><item><title>T</title><quantity>2</quantity></item></shiporder>"
+        bad = "<shiporder><orderperson>A</orderperson><item><title>T</title><quantity>-2</quantity></item><extra/></shiporder>"
+        schema = Nokogiri::XML::Schema(xsd)
+        r << [schema.class, schema.errors, schema.parse_options.class, schema.parse_options.to_i]
+        r << [schema.valid?(Nokogiri::XML(good)), schema.validate(Nokogiri::XML(good))]
+        errors = schema.validate(Nokogiri::XML(bad))
+        r << errors.map { |e| [e.class, e.message, e.line, e.column, e.level, e.domain, e.code, e.error?, e.path] }
+        r << schema.valid?(Nokogiri::XML(bad))
+        Tempfile.create(["doc", ".xml"]) do |f|
+          f.write(good); f.flush
+          r << schema.validate(f.path)
+          f.rewind; f.truncate(0); f.write(bad); f.flush
+          r << schema.validate(f.path).map(&:to_s)
+          r << schema.valid?(f.path)
+        end
+        r << Nokogiri::XML::Schema.new(xsd, Nokogiri::XML::ParseOptions::DEFAULT_SCHEMA).parse_options.to_i
+        r << Nokogiri::XML::Schema.new(xsd, Nokogiri::XML::ParseOptions.new(Nokogiri::XML::ParseOptions::NONET)).parse_options.class
+        r << Nokogiri::XML::Schema.read_memory(xsd).class
+        r << Nokogiri::XML::Schema.from_document(Nokogiri::XML(xsd)).class
+        r << Nokogiri::XML::Schema.from_document(Nokogiri::XML(xsd), nil).parse_options.to_i
+        blanks = Nokogiri::XML(xsd)
+        blanks.root.children.each { |c| c.text? }
+        r << Nokogiri::XML::Schema.from_document(blanks).valid?(Nokogiri::XML(good))
+        [-> { Nokogiri::XML::Schema("<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'><xs:element name='a' type='xs:nope'/></xs:schema>") },
+         -> { Nokogiri::XML::Schema("<not-a-schema/>") },
+         -> { Nokogiri::XML::Schema("<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'><xs:import schemaLocation='http://example.com/x.xsd'/></xs:schema>").errors.map(&:to_s) },
+         -> { Nokogiri::XML::Schema.from_document("<a/>") },
+         -> { Nokogiri::XML::Schema.from_document(Nokogiri::XML(xsd).root).class },
+         -> { schema.validate("not a file, not a doc") },
+         -> { schema.validate(Nokogiri::XML("")) },
+         -> { Nokogiri::XML::Schema.from_document }].each do |l|
+          begin
+            r << l.call
+          rescue => e
+            r << [e.class, e.message.lines.first.chomp]
+          end
+        end
+        rng = <<~RNG
+          <element name="addressBook" xmlns="http://relaxng.org/ns/structure/1.0">
+            <zeroOrMore>
+              <element name="card">
+                <element name="name"><text/></element>
+                <element name="email"><text/></element>
+              </element>
+            </zeroOrMore>
+          </element>
+        RNG
+        relax = Nokogiri::XML::RelaxNG(rng)
+        r << [relax.class, relax.class.superclass, relax.errors, relax.parse_options.to_i]
+        r << relax.validate(Nokogiri::XML("<addressBook><card><name>n</name><email>e</email></card></addressBook>"))
+        r << relax.validate(Nokogiri::XML("<addressBook><card><name>n</name><phone>p</phone></card></addressBook>")).map { |e| [e.class, e.message, e.line, e.domain] }
+        r << relax.valid?(Nokogiri::XML("<other/>"))
+        r << Nokogiri::XML::RelaxNG.read_memory(rng).class
+        r << Nokogiri::XML::RelaxNG.from_document(Nokogiri::XML(rng), nil).class
+        [-> { Nokogiri::XML::RelaxNG("<element xmlns='http://relaxng.org/ns/structure/1.0'><bogus/></element>") },
+         -> { Nokogiri::XML::RelaxNG("<nope/>") },
+         -> { Nokogiri::XML::RelaxNG.from_document(nil) },
+         -> { relax.validate("/nonexistent") }].each do |l|
+          begin
+            r << l.call
+          rescue => e
+            r << [e.class, e.message.lines.first.chomp]
+          end
+        end
+        keep = (1..30).map { Nokogiri::XML::Schema(xsd) }
+        GC.start
+        r << keep.map { |s| s.valid?(Nokogiri::XML(good)) }.uniq
+        p r
+        "##,
+    );
+}
+
+#[test]
+fn nokogiri_element_description() {
+    compare(
+        r##"
+        r = []
+        %w[a p br img table td html font center frame applet div span input nope].each do |tag|
+          d = Nokogiri::HTML4::ElementDescription[tag]
+          if d.nil?
+            r << [tag, nil]
+            next
+          end
+          r << [d.class, d.name, d.description, d.implied_start_tag?, d.implied_end_tag?, d.save_end_tag?, d.empty?,
+           d.deprecated?, d.inline?, d.block?, d.sub_elements.size, d.sub_elements.first(3), d.default_sub_element,
+           d.optional_attributes.size, d.optional_attributes.first(3), d.deprecated_attributes, d.required_attributes,
+           d.to_s, d.inspect]
+        end
+        h = Nokogiri::HTML4("<html><body><p>x<br><img src='a'></p></body></html>")
+        r << h.css("p, br, img").map { |n| [n.name, n.description&.name, n.description&.empty?] }
+        r << Nokogiri::XML("<p/>").root.description
+        begin
+          Nokogiri::HTML4::ElementDescription[nil]
+        rescue => e
+          r << [e.class, e.message]
+        end
+        keep = (1..20).map { Nokogiri::HTML4::ElementDescription["p"] }
+        GC.start
+        r << keep.map(&:name).uniq
+        p r
+        "##,
+    );
+}
+
+#[test]
 fn nokogiri_node_identity_across_gc() {
     // Every node wraps into one Ruby object that the document keeps alive;
     // unlinked nodes stay owned by their document.

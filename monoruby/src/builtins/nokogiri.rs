@@ -26,6 +26,7 @@ mod node;
 mod node_set;
 mod reader;
 mod sax;
+mod schema;
 mod xpath;
 
 pub(crate) fn init(globals: &mut Globals) {
@@ -71,6 +72,9 @@ pub(super) struct Classes {
     pub html4_sax_parser_context: ClassId,
     pub html4_sax_push_parser: ClassId,
     pub reader: ClassId,
+    pub schema: ClassId,
+    pub relax_ng: ClassId,
+    pub element_description: ClassId,
 }
 
 thread_local! {
@@ -167,7 +171,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     let html4_document = class(globals, html4, "Document", document);
     let encoding_handler = native_class(globals, nokogiri, "EncodingHandler", OBJECT_CLASS);
     let entity_lookup = class(globals, html4, "EntityLookup", OBJECT_CLASS);
-    class(globals, html4, "ElementDescription", OBJECT_CLASS);
+    let element_description = native_class(globals, html4, "ElementDescription", OBJECT_CLASS);
     let sax_parser = native_class(globals, xml_sax, "Parser", OBJECT_CLASS);
     let sax_parser_context = native_class(globals, xml_sax, "ParserContext", OBJECT_CLASS);
     let sax_push_parser = native_class(globals, xml_sax, "PushParser", OBJECT_CLASS);
@@ -175,6 +179,8 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     let html4_sax_parser_context = class(globals, html4_sax, "ParserContext", sax_parser_context);
     let html4_sax_push_parser = class(globals, html4_sax, "PushParser", sax_push_parser);
     let reader = native_class(globals, xml_m, "Reader", OBJECT_CLASS);
+    let schema = native_class(globals, xml_m, "Schema", OBJECT_CLASS);
+    let relax_ng = class(globals, xml_m, "RelaxNG", schema);
 
     let c = Classes {
         nokogiri,
@@ -212,6 +218,9 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
         html4_sax_parser_context,
         html4_sax_push_parser,
         reader,
+        schema,
+        relax_ng,
+        element_description,
     };
     CLASSES.with(|cell| *cell.borrow_mut() = Some(c));
 
@@ -222,6 +231,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     node_set::init(globals, &c);
     reader::init(globals, &c);
     sax::init(globals, &c);
+    schema::init(globals, &c);
     xpath::init(globals, &c);
 
     // Constants `Init_nokogiri` sets (version/info.rb reads them).
