@@ -63,6 +63,7 @@ pub(super) fn init(globals: &mut Globals, c: &Classes) {
     globals.define_builtin_class_func_rest(c.comment, "new", comment_new);
     globals.define_builtin_class_func_rest(c.cdata, "new", cdata_new);
     globals.define_builtin_class_func_rest(c.pi, "new", pi_new);
+    globals.define_builtin_class_func_rest(c.entity_ref, "new", entity_ref_new);
     globals.define_builtin_class_func_rest(c.attr, "new", attr_new);
     globals.define_builtin_func(c.attr, "value=", attr_set_value, 1);
     globals.define_builtin_class_func(c.document_fragment, "native_new", fragment_native_new, 1);
@@ -221,6 +222,18 @@ fn pi_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             content.as_ptr() as *const xml::xmlChar,
         )
     };
+    construct(vm, globals, lfp, Some(class), node, &args)
+}
+
+/// EntityReference.new(document, name, ...) -> EntityReference
+#[monoruby_builtin]
+fn entity_ref_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class = lfp.self_val().as_class_id();
+    let args = rest_args(lfp, 2)?;
+    let doc = doc_ptr(args[0])?;
+    let name = cstr(args[1], &globals.store)?;
+    // SAFETY: a live document.
+    let node = unsafe { xml::xmlNewReference(doc, name.as_ptr() as *const xml::xmlChar) };
     construct(vm, globals, lfp, Some(class), node, &args)
 }
 

@@ -145,16 +145,26 @@ fn parse_success(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 fn string_query(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let kind = lfp.arg(0).expect_integer(&globals.store)?;
     let (string_v, encoding_v) = (lfp.arg(1), lfp.arg(2));
-    let string = string_v.expect_bytes(&globals.store)?;
+    let bytes = string_v.expect_bytes(&globals.store)?;
+    // prism's `pm_slice_type` peeks at the byte *after* the slice (its
+    // trailing `!` / `?` / `=` check runs once the cursor reaches `end`),
+    // which is harmless for CRuby's NUL-terminated strings but reads
+    // whatever follows a bare slice here — `local?("foo")` answered false
+    // whenever the next heap byte happened to be one of those. Hand it a
+    // NUL-terminated copy so the peek is well-defined, as it is under CRuby.
+    let mut string = Vec::with_capacity(bytes.len() + 1);
+    string.extend_from_slice(bytes);
+    string.push(0);
+    let len = bytes.len();
     let encoding = std::ffi::CString::new(encoding_v.expect_str(&globals.store)?)
         .map_err(|_| MonorubyErr::argumenterr("encoding name contains a NUL"))?;
-    // SAFETY: `string` and the C string outlive the call, which only
-    // reads them.
+    // SAFETY: `string` (NUL-terminated, `len + 1` bytes) and the C string
+    // outlive the call, which only reads them.
     let res = unsafe {
         match kind {
-            0 => pm_string_query_local(string.as_ptr(), string.len(), encoding.as_ptr()),
-            1 => pm_string_query_constant(string.as_ptr(), string.len(), encoding.as_ptr()),
-            2 => pm_string_query_method_name(string.as_ptr(), string.len(), encoding.as_ptr()),
+            0 => pm_string_query_local(string.as_ptr(), len, encoding.as_ptr()),
+            1 => pm_string_query_constant(string.as_ptr(), len, encoding.as_ptr()),
+            2 => pm_string_query_method_name(string.as_ptr(), len, encoding.as_ptr()),
             _ => return Err(MonorubyErr::argumenterr(format!("unknown query {kind}"))),
         }
     };

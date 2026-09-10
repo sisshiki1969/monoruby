@@ -21,6 +21,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 
 mod document;
 mod dtd;
+mod html5;
 mod misc;
 mod node;
 mod node_set;
@@ -75,6 +76,8 @@ pub(super) struct Classes {
     pub schema: ClassId,
     pub relax_ng: ClassId,
     pub element_description: ClassId,
+    pub gumbo: ClassId,
+    pub html5_document: ClassId,
 }
 
 thread_local! {
@@ -139,9 +142,11 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     let nokogiri = module(globals, OBJECT_CLASS, "Nokogiri");
     let xml_m = module(globals, nokogiri, "XML");
     let xpath_m = module(globals, xml_m, "XPath");
-    for m in ["Gumbo", "HTML4", "HTML5", "XSLT"] {
+    for m in ["HTML4", "XSLT"] {
         module(globals, nokogiri, m);
     }
+    let gumbo = module(globals, nokogiri, "Gumbo");
+    let html5 = module(globals, nokogiri, "HTML5");
     let xml_sax = module(globals, xml_m, "SAX");
     let html4 = module(globals, nokogiri, "HTML4");
     let html4_sax = module(globals, html4, "SAX");
@@ -169,6 +174,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     let node_set = native_class(globals, xml_m, "NodeSet", OBJECT_CLASS);
     let xpath_context = native_class(globals, xml_m, "XPathContext", OBJECT_CLASS);
     let html4_document = class(globals, html4, "Document", document);
+    let html5_document = class(globals, html5, "Document", html4_document);
     let encoding_handler = native_class(globals, nokogiri, "EncodingHandler", OBJECT_CLASS);
     let entity_lookup = class(globals, html4, "EntityLookup", OBJECT_CLASS);
     let element_description = native_class(globals, html4, "ElementDescription", OBJECT_CLASS);
@@ -221,12 +227,15 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
         schema,
         relax_ng,
         element_description,
+        gumbo,
+        html5_document,
     };
     CLASSES.with(|cell| *cell.borrow_mut() = Some(c));
 
     misc::init(globals, &c);
     document::init(globals, &c);
     dtd::init(globals, &c);
+    html5::init(globals, &c);
     node::init(globals, &c);
     node_set::init(globals, &c);
     reader::init(globals, &c);

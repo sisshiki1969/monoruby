@@ -355,6 +355,24 @@ pub struct xmlRelaxNGParserCtxt {
 pub struct xmlRelaxNGValidCtxt {
     _opaque: [u8; 0],
 }
+/// gumbo-parser's parse result (opaque: the glue reads it).
+#[repr(C)]
+pub struct GumboOutput {
+    _opaque: [u8; 0],
+}
+/// `GumboOutputStatus`.
+pub const GUMBO_STATUS_OK: c_int = 0;
+pub const GUMBO_STATUS_TREE_TOO_DEEP: c_int = 1;
+pub const GUMBO_STATUS_TOO_MANY_ATTRIBUTES: c_int = 2;
+pub const GUMBO_STATUS_OUT_OF_MEMORY: c_int = 3;
+/// `GumboNamespaceEnum`.
+pub const GUMBO_NAMESPACE_HTML: c_int = 0;
+pub const GUMBO_NAMESPACE_SVG: c_int = 1;
+pub const GUMBO_NAMESPACE_MATHML: c_int = 2;
+/// `GumboQuirksModeEnum`.
+pub const GUMBO_DOCTYPE_NO_QUIRKS: c_int = 0;
+pub const GUMBO_DOCTYPE_QUIRKS: c_int = 1;
+pub const GUMBO_DOCTYPE_LIMITED_QUIRKS: c_int = 2;
 pub type xmlExternalEntityLoader = Option<
     unsafe extern "C" fn(URL: *const c_char, ID: *const c_char, context: *mut xmlParserCtxt) -> *mut xmlParserInput,
 >;
@@ -1002,6 +1020,46 @@ unsafe extern "C" {
         ID: *const c_char,
         ctxt: *mut xmlParserCtxt,
     ) -> *mut xmlParserInput;
+
+    // ---- gumbo (glue/monoruby_gumbo.c over vendor/gumbo-parser) ----
+    pub fn mrb_gumbo_parse(
+        input: *const c_char,
+        length: usize,
+        max_attributes: c_int,
+        max_errors: c_int,
+        max_tree_depth: c_int,
+        noscript_as_text: c_int,
+        is_fragment: c_int,
+        fragment_context: *const c_char,
+        fragment_namespace: c_int,
+        fragment_encoding: *const c_char,
+        quirks_mode: c_int,
+        has_form_ancestor: c_int,
+    ) -> *mut GumboOutput;
+    pub fn mrb_gumbo_output_status(output: *const GumboOutput) -> c_int;
+    pub fn mrb_gumbo_status_string(status: c_int) -> *const c_char;
+    pub fn mrb_gumbo_destroy_output(output: *mut GumboOutput);
+    pub fn mrb_gumbo_has_doctype(output: *const GumboOutput) -> c_int;
+    pub fn mrb_gumbo_doctype_name(output: *const GumboOutput) -> *const c_char;
+    pub fn mrb_gumbo_doctype_public(output: *const GumboOutput) -> *const c_char;
+    pub fn mrb_gumbo_doctype_system(output: *const GumboOutput) -> *const c_char;
+    pub fn mrb_gumbo_quirks_mode(output: *const GumboOutput) -> c_int;
+    pub fn mrb_gumbo_compute_quirks_mode(name: *const c_char, pubid: *const c_char, sysid: *const c_char) -> c_int;
+    pub fn mrb_gumbo_new_html_doc(dtd_name: *const c_char, system: *const c_char, public: *const c_char) -> *mut xmlDoc;
+    pub fn mrb_gumbo_build_document(doc: *mut xmlDoc, output: *const GumboOutput);
+    pub fn mrb_gumbo_build_fragment(doc: *mut xmlDoc, fragment: *mut xmlNode, output: *const GumboOutput);
+    pub fn mrb_gumbo_error_count(output: *const GumboOutput) -> usize;
+    pub fn mrb_gumbo_error(
+        output: *const GumboOutput,
+        i: usize,
+        input: *const c_char,
+        length: usize,
+        size: *mut usize,
+        code: *mut *const c_char,
+        line: *mut usize,
+        column: *mut usize,
+    ) -> *mut c_char;
+    pub fn mrb_gumbo_free(p: *mut c_void);
 
     // ---- HTML ----
     pub fn htmlNewParserCtxt() -> *mut xmlParserCtxt;
