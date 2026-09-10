@@ -158,10 +158,42 @@ String / Integer / nil / Hash / Array / 各 Drop … と render ごとに変わ�
   数百 µs で、8 秒に 4,556 回 = 1〜2 秒。古い本体は解放されないので JIT 領域も
   増え続ける（RSS 192 MB、CRuby は 40 MB）。
 
-本来の直し方は上限ではなく、(a) 腕に空きがあるなら share 閾値未満のクラスも腕に入れる
-（deopt しているクラス 1 つの compare は deopt より桁違いに安い）、または
-(b) PIC の出口を「前回のコンパイル以降 PMC が変わっていなければ plain deopt」にする
-ラチェット、のどちらか。§6 の 2 に含めた。
+**対処**（コミット `83b86e6`、`compile/pic.rs`）: 3 点をまとめて直した。
+
+1. **腕に空きがある限り、PMC の全クラスに腕を作る**（share 閾値を PIC から撤廃）。
+   PMC の count は miss の回数であって呼び出し回数ではないので、share は交通量を
+   表さない。deopt しているクラス 1 つの compare は deopt より桁違いに安い。
+   クラス集合ガード（`pmc_same_target_classes`）の閾値は残した: そちらは全員が同じ
+   target なので、稀なクラスを入れても compare が増えるだけで得るものがない。
+2. **再コンパイル出口の条件を「admitted < 4」から「PMC がまだ学べる」に変更**
+   （`can_learn` = entries < `PMC_WAYS` かつ overflow なし）。再構築で腕が増えるのは
+   VM が新しいクラスを記録できるときだけで、「admitted < 4」は落としたクラスがある
+   ときや 5 つ目のクラスが overflow したときにも真になり、どちらも再構築で腕は増えない。
+3. **腕を作れなかったクラス（`dropped`: 解決不能、可視性、capture、`&blk` 引数の callee、
+   非正規の accessor 呼び出し）は鎖の手前で plain deopt に振り分ける**。これらは既に
+   PMC にあるので再構築しても再び落とされる。再コンパイル出口が生きている本体でだけ
+   1 つの `BrClassNotIn` を払う。
+
+これで PIC 出口からの再コンパイルは「PMC が 1 エントリ増えた後」にしか起きず、PMC は
+最大 4 エントリなので **1 サイトあたり最大 4 回**、メソッドあたり 4 × PIC サイト数で
+必ず止まる（ラチェット）。`--features deopt` の liquid-render で確認:
+
+```
+### pic built to_liquid admitted=3 dropped=[] can_learn=true  arms=[Hash, NilClass, String]
+   → ForloopDrop が miss → VM が記録 → 1 回だけ再構築 →
+### pic built to_liquid admitted=4 dropped=[] can_learn=false arms=[Hash, NilClass, String, ForloopDrop]
+```
+
+8 秒間の `BecamePolymorphic` 再コンパイルは全体で **4 回**（前: 4,556 回。§2.2 冒頭の
+上限は保険として残す）。ベンチ時間は上限 4 回入りの直前バイナリと比べてばらつきの範囲内
+（liquid-render 118 / 119 → 121 / 123 ms、liquid-il 338 / 341 → 337 / 348 ms、sequel・mail
+同様）: 上限で時間はほぼ回収済みで、今回の変更は上限に頼らず構造的に止めるためのもの。
+
+他の 2 つの `BecamePolymorphic` 出口は元からラチェットになっている: 二項演算
+（`binary_op.rs`）は POLY ビットが立った後のコンパイルでは plain deopt、単相ガード
+（`method_call.rs` の `RecvMissMode::Learn`）は PMC に 2 エントリ以上あれば plain deopt。
+残る前提は「miss したクラスは VM の slow path で PMC に記録される」で、表現の違いで
+記録されない Integer / Bignum は既に除外済み。
 
 対策（コミット `c7cdd1a`、`Codegen::recompile_counts` /
 `Codegen::recompile_budget_exhausted`）: (iseq, self class) ごとの
@@ -418,7 +450,7 @@ US-ASCII のまま照合するので、`mbc_enc_len` / `onigenc_mbclen_approxima
 | 順 | 施策 | 効くベンチ | コスト | 見込み |
 |---|---|---|---|---|
 | 1 | `String#<<` インラインの cr 畳み込み修正（**済**、§2.1） | liquid-il、`gsub` 結果を追記する全コード | 低 | liquid-il −32 % |
-| 2 | 再コンパイル回数の上限（§2.2、**済**）。根本対策は PIC の腕に空きがある間は share 閾値未満のクラスも admit する（か、PMC が変わらない限り再コンパイルしないラチェット）。さらに PIC 超過サイトの汎用呼び出し化 | liquid-render、activerecord（先行調査 §5.5） | 低 / 中 | liquid-render −21 %、RSS −53 % |
+| 2 | 再コンパイル回数の上限と、PIC 出口のラチェット化（§2.2、**済**）。残るのは PIC 超過（5 クラス以上）サイトの汎用呼び出し化 | liquid-render、activerecord（先行調査 §5.5） | 低 / 中 | liquid-render −21 %、RSS −53 % |
 | 3 | 7 bit のソースは US-ASCII でもコンパイルし、対象文字列が 7 bit ならそちらで照合する（**済**、§2.3） | regex を使う全コード（sequel、mail、liquid、activerecord …） | 低 | `/[a-z]/i` 414 → 95 ns、`Date._parse` −26 % |
 | 4 | `Date._parse` の Ruby 実装の整理（**済**、§5.2） | sequel、`Time.parse` / `DateTime.parse` を使う全般 | 低 | `Date._parse` −37 % |
 | 5 | `Kernel#respond_to?` の (class, name, class_version) キャッシュ | liquid-render、rack、activerecord | 低 | 2 段探索 1,200 万回/8 s → 0 |
