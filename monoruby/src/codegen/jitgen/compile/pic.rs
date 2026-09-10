@@ -132,6 +132,25 @@ impl<'a> JitContext<'a> {
         let observations = pmc.observations();
         let mut classes: Vec<(ClassId, u32)> =
             pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
+        #[cfg(feature = "deopt")]
+        eprintln!(
+            "### pic pmc {:?} entries={:?} overflow={} observations={}",
+            name,
+            classes
+                .iter()
+                .map(|(c, n)| {
+                    // Pseudo-class IC tags (`BIGNUM_CLASS`) have no module.
+                    let name = if self.store[*c].try_get_module().is_some() {
+                        self.store.get_class_name(*c)
+                    } else {
+                        format!("{c:?}")
+                    };
+                    (name, *n)
+                })
+                .collect::<Vec<_>>(),
+            pmc.overflow(),
+            observations
+        );
         if classes.len() < 2 {
             refuse!("pmc-mono")
         }
@@ -199,6 +218,13 @@ impl<'a> JitContext<'a> {
                 });
             }
         }
+        #[cfg(feature = "deopt")]
+        eprintln!(
+            "### pic built {:?} admitted={} arms={:?}",
+            name,
+            admitted,
+            groups.iter().map(|g| (g.func_id, g.classes.clone())).collect::<Vec<_>>()
+        );
         if admitted < 2 {
             refuse!("admitted<2")
         }

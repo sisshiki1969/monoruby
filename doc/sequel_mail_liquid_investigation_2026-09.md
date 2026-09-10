@@ -130,11 +130,38 @@ deoptimization stats
 `find_variable` は `@scopes.find_index { |s| s.key?(key) }` → `variable.to_liquid` →
 `variable.respond_to?(:context=)` の 3 つの多相サイトを持ち、値の型が
 String / Integer / nil / Hash / Array / 各 Drop … と render ごとに変わる。
-`jitgen.rs` の再コンパイル出口は本体ごとに `COUNT_DEOPT_RECOMPILE = 10` 回の予算を
-持ち「使い切ったら二度と再コンパイルしない（one-shot）」が、再コンパイルで生まれた
-**新しい本体は新しい予算を持つ**ので、10 回 deopt → 再コンパイル → 10 回 deopt → … が
-止まらない。1 回の再コンパイルは数百 µs で、8 秒に 4,556 回 = 1〜2 秒。古い本体は
-解放されないので JIT 領域も増え続ける（RSS 192 MB、CRuby は 40 MB）。
+`to_liquid` サイトの deopt 数 45,560 は再コンパイル数 4,556 のちょうど 10 倍
+（= `COUNT_DEOPT_RECOMPILE`）で、同じサイトが本体ごとに予算を使い切って再コンパイルを
+要求し続けている。
+
+「一度多相になったサイトは戻らない」というラチェットは、VM の POLY バイトと、
+単相ガードの `RecvMissMode::Learn`（PMC に 2 クラス以上あれば plain deopt）については
+成り立つ。止まらないのは **PIC（`compile/pic.rs`）の最終腕の出口**で、こちらは
+「admitted < `PIC_WAYS`（4）なら再コンパイル出口、満杯なら plain deopt」をコンパイル
+ごとに PMC から再評価する。`--features deopt` で PIC の判定を出すと（`### pic pmc` /
+`### pic built`、今回追加した診断）:
+
+```
+### pic pmc   to_liquid entries=[("Hash", 4), ("NilClass", 4), ("String", 3), ("Liquid::ForloopDrop", 1)] overflow=0 observations=12
+### pic built to_liquid admitted=3 arms=[(Hash), (NilClass), (String)]      ← 5 回とも同じ
+```
+
+- ForloopDrop は count 1 × `PMC_SET_SHARE_DIVISOR`（8）< observations 12 なので
+  「稀な尾」として腕を作らず落とされ、admitted = 3 < 4 で出口は再コンパイル出口になる。
+- ところが **ForloopDrop の count は増えない**: PMC は VM の slow path（インライン
+  キャッシュ miss）でしか記録されず、deopt した ForloopDrop は最初の 1 回で VM の単相
+  キャッシュに入り、以後の deopt 再実行はキャッシュ hit で記録されない。他のクラスは
+  JIT 側が処理するので VM には来ない。つまり deopt しているクラスこそ count が 1 で
+  止まる（`entries=[…, ("Liquid::ForloopDrop", 1)]` が 5 回のコンパイルで不変）。
+- 再コンパイルは同じ PMC から同じ 3 腕の鎖を作り直し、新しい本体は新しい 10 回の
+  予算を持つので、10 回 deopt → 再コンパイル → … が止まらない。1 回の再コンパイルは
+  数百 µs で、8 秒に 4,556 回 = 1〜2 秒。古い本体は解放されないので JIT 領域も
+  増え続ける（RSS 192 MB、CRuby は 40 MB）。
+
+本来の直し方は上限ではなく、(a) 腕に空きがあるなら share 閾値未満のクラスも腕に入れる
+（deopt しているクラス 1 つの compare は deopt より桁違いに安い）、または
+(b) PIC の出口を「前回のコンパイル以降 PMC が変わっていなければ plain deopt」にする
+ラチェット、のどちらか。§6 の 2 に含めた。
 
 対策（コミット `c7cdd1a`、`Codegen::recompile_counts` /
 `Codegen::recompile_budget_exhausted`）: (iseq, self class) ごとの
@@ -391,7 +418,7 @@ US-ASCII のまま照合するので、`mbc_enc_len` / `onigenc_mbclen_approxima
 | 順 | 施策 | 効くベンチ | コスト | 見込み |
 |---|---|---|---|---|
 | 1 | `String#<<` インラインの cr 畳み込み修正（**済**、§2.1） | liquid-il、`gsub` 結果を追記する全コード | 低 | liquid-il −32 % |
-| 2 | 再コンパイル回数の上限（§2.2、実験済み）。本命は PIC 超過サイトの汎用呼び出し化 | liquid-render、activerecord（先行調査 §5.5） | 低 / 中 | liquid-render −21 %、RSS −53 % |
+| 2 | 再コンパイル回数の上限（§2.2、**済**）。根本対策は PIC の腕に空きがある間は share 閾値未満のクラスも admit する（か、PMC が変わらない限り再コンパイルしないラチェット）。さらに PIC 超過サイトの汎用呼び出し化 | liquid-render、activerecord（先行調査 §5.5） | 低 / 中 | liquid-render −21 %、RSS −53 % |
 | 3 | 7 bit のソースは US-ASCII でもコンパイルし、対象文字列が 7 bit ならそちらで照合する（**済**、§2.3） | regex を使う全コード（sequel、mail、liquid、activerecord …） | 低 | `/[a-z]/i` 414 → 95 ns、`Date._parse` −26 % |
 | 4 | `Date._parse` の Ruby 実装の整理（**済**、§5.2） | sequel、`Time.parse` / `DateTime.parse` を使う全般 | 低 | `Date._parse` −37 % |
 | 5 | `Kernel#respond_to?` の (class, name, class_version) キャッシュ | liquid-render、rack、activerecord | 低 | 2 段探索 1,200 万回/8 s → 0 |
