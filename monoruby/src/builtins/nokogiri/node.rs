@@ -141,7 +141,7 @@ fn text_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     if args[0].try_bytes().is_none() {
         return Err(MonorubyErr::typeerr(format!(
             "wrong argument type {} (expected String)",
-            class_name(globals, args[0])
+            builtin_type_name(globals, args[0])
         )));
     }
     let content = cstr(args[0], &globals.store)?;
@@ -167,7 +167,7 @@ fn comment_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     if args[1].try_bytes().is_none() {
         return Err(MonorubyErr::typeerr(format!(
             "wrong argument type {} (expected String)",
-            class_name(globals, args[1])
+            builtin_type_name(globals, args[1])
         )));
     }
     let content = cstr(args[1], &globals.store)?;

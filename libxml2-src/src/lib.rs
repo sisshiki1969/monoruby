@@ -323,6 +323,155 @@ pub struct xmlError {
 pub struct xmlParserCtxt {
     _opaque: [u8; 0],
 }
+#[repr(C)]
+pub struct xmlParserInput {
+    _opaque: [u8; 0],
+}
+
+// ---- SAX ----
+
+/// `xmlSAXHandler.initialized` value selecting the SAX2 interface.
+pub const XML_SAX2_MAGIC: core::ffi::c_uint = 0xDEEDBEAF;
+
+/// `xmlCharEncoding` values used by the SAX push parsers.
+pub const XML_CHAR_ENCODING_ERROR: c_int = -1;
+pub const XML_CHAR_ENCODING_NONE: c_int = 0;
+
+pub type internalSubsetSAXFunc = Option<
+    unsafe extern "C" fn(ctx: *mut c_void, name: *const xmlChar, ExternalID: *const xmlChar, SystemID: *const xmlChar),
+>;
+pub type isStandaloneSAXFunc = Option<unsafe extern "C" fn(ctx: *mut c_void) -> c_int>;
+pub type resolveEntitySAXFunc = Option<
+    unsafe extern "C" fn(ctx: *mut c_void, publicId: *const xmlChar, systemId: *const xmlChar) -> *mut xmlParserInput,
+>;
+pub type getEntitySAXFunc = Option<unsafe extern "C" fn(ctx: *mut c_void, name: *const xmlChar) -> *mut xmlEntity>;
+pub type entityDeclSAXFunc = Option<
+    unsafe extern "C" fn(
+        ctx: *mut c_void,
+        name: *const xmlChar,
+        type_: c_int,
+        publicId: *const xmlChar,
+        systemId: *const xmlChar,
+        content: *mut xmlChar,
+    ),
+>;
+pub type unparsedEntityDeclSAXFunc = Option<
+    unsafe extern "C" fn(
+        ctx: *mut c_void,
+        name: *const xmlChar,
+        publicId: *const xmlChar,
+        systemId: *const xmlChar,
+        notationName: *const xmlChar,
+    ),
+>;
+pub type startDocumentSAXFunc = Option<unsafe extern "C" fn(ctx: *mut c_void)>;
+pub type startElementSAXFunc =
+    Option<unsafe extern "C" fn(ctx: *mut c_void, name: *const xmlChar, atts: *mut *const xmlChar)>;
+pub type endElementSAXFunc = Option<unsafe extern "C" fn(ctx: *mut c_void, name: *const xmlChar)>;
+pub type charactersSAXFunc = Option<unsafe extern "C" fn(ctx: *mut c_void, ch: *const xmlChar, len: c_int)>;
+pub type processingInstructionSAXFunc =
+    Option<unsafe extern "C" fn(ctx: *mut c_void, target: *const xmlChar, data: *const xmlChar)>;
+pub type commentSAXFunc = Option<unsafe extern "C" fn(ctx: *mut c_void, value: *const xmlChar)>;
+pub type warningSAXFunc = Option<unsafe extern "C" fn(ctx: *mut c_void, msg: *const c_char, ...)>;
+pub type startElementNsSAX2Func = Option<
+    unsafe extern "C" fn(
+        ctx: *mut c_void,
+        localname: *const xmlChar,
+        prefix: *const xmlChar,
+        URI: *const xmlChar,
+        nb_namespaces: c_int,
+        namespaces: *mut *const xmlChar,
+        nb_attributes: c_int,
+        nb_defaulted: c_int,
+        attributes: *mut *const xmlChar,
+    ),
+>;
+pub type endElementNsSAX2Func = Option<
+    unsafe extern "C" fn(ctx: *mut c_void, localname: *const xmlChar, prefix: *const xmlChar, URI: *const xmlChar),
+>;
+/// A callback this crate never sets (declared for the layout only).
+pub type unusedSAXFunc = Option<unsafe extern "C" fn()>;
+
+/// `struct _xmlSAXHandler` (`parser.h`, 2.13).
+#[repr(C)]
+pub struct xmlSAXHandler {
+    pub internalSubset: internalSubsetSAXFunc,
+    pub isStandalone: isStandaloneSAXFunc,
+    pub hasInternalSubset: isStandaloneSAXFunc,
+    pub hasExternalSubset: isStandaloneSAXFunc,
+    pub resolveEntity: resolveEntitySAXFunc,
+    pub getEntity: getEntitySAXFunc,
+    pub entityDecl: entityDeclSAXFunc,
+    pub notationDecl: unusedSAXFunc,
+    pub attributeDecl: unusedSAXFunc,
+    pub elementDecl: unusedSAXFunc,
+    pub unparsedEntityDecl: unparsedEntityDeclSAXFunc,
+    pub setDocumentLocator: unusedSAXFunc,
+    pub startDocument: startDocumentSAXFunc,
+    pub endDocument: startDocumentSAXFunc,
+    pub startElement: startElementSAXFunc,
+    pub endElement: endElementSAXFunc,
+    pub reference: endElementSAXFunc,
+    pub characters: charactersSAXFunc,
+    pub ignorableWhitespace: charactersSAXFunc,
+    pub processingInstruction: processingInstructionSAXFunc,
+    pub comment: commentSAXFunc,
+    pub warning: warningSAXFunc,
+    pub error: warningSAXFunc,
+    pub fatalError: warningSAXFunc,
+    pub getParameterEntity: getEntitySAXFunc,
+    pub cdataBlock: charactersSAXFunc,
+    pub externalSubset: internalSubsetSAXFunc,
+    pub initialized: core::ffi::c_uint,
+    pub _private: *mut c_void,
+    pub startElementNs: startElementNsSAX2Func,
+    pub endElementNs: endElementNsSAX2Func,
+    pub serror: xmlStructuredErrorFunc,
+}
+
+impl xmlSAXHandler {
+    /// An all-NULL handler (`xmlSAXHandler` zeroed, as
+    /// `TypedData_Make_Struct` gives nokogiri).
+    pub const fn zeroed() -> Self {
+        xmlSAXHandler {
+            internalSubset: None,
+            isStandalone: None,
+            hasInternalSubset: None,
+            hasExternalSubset: None,
+            resolveEntity: None,
+            getEntity: None,
+            entityDecl: None,
+            notationDecl: None,
+            attributeDecl: None,
+            elementDecl: None,
+            unparsedEntityDecl: None,
+            setDocumentLocator: None,
+            startDocument: None,
+            endDocument: None,
+            startElement: None,
+            endElement: None,
+            reference: None,
+            characters: None,
+            ignorableWhitespace: None,
+            processingInstruction: None,
+            comment: None,
+            warning: None,
+            error: None,
+            fatalError: None,
+            getParameterEntity: None,
+            cdataBlock: None,
+            externalSubset: None,
+            initialized: 0,
+            _private: core::ptr::null_mut(),
+            startElementNs: None,
+            endElementNs: None,
+            serror: None,
+        }
+    }
+}
+
+/// The formatted-message sink `mrb_xml_sax_set_message_handler` takes.
+pub type mrb_sax_message_fn = Option<unsafe extern "C" fn(ctx: *mut c_void, is_error: c_int, text: *const c_char)>;
 /// Only the leading fields are declared (the ones read or written); the
 /// struct is always allocated by libxml2.
 #[repr(C)]
@@ -619,6 +768,100 @@ unsafe extern "C" {
     pub fn xmlXPathErr(ctxt: *mut xmlXPathParserContext, error: c_int);
     pub fn xmlXPathCmpNodes(node1: *mut xmlNode, node2: *mut xmlNode) -> c_int;
     pub fn xmlXPathFreeNodeSetList(obj: *mut xmlXPathObject);
+
+    // ---- SAX parsing ----
+    pub fn xmlCreateIOParserCtxt(
+        sax: *mut xmlSAXHandler,
+        user_data: *mut c_void,
+        ioread: xmlInputReadCallback,
+        ioclose: xmlInputCloseCallback,
+        ioctx: *mut c_void,
+        enc: c_int,
+    ) -> *mut xmlParserCtxt;
+    pub fn xmlCreateFileParserCtxt(filename: *const c_char) -> *mut xmlParserCtxt;
+    pub fn xmlCreateMemoryParserCtxt(buffer: *const c_char, size: c_int) -> *mut xmlParserCtxt;
+    pub fn xmlCreatePushParserCtxt(
+        sax: *mut xmlSAXHandler,
+        user_data: *mut c_void,
+        chunk: *const c_char,
+        size: c_int,
+        filename: *const c_char,
+    ) -> *mut xmlParserCtxt;
+    pub fn xmlParseChunk(ctxt: *mut xmlParserCtxt, chunk: *const c_char, size: c_int, terminate: c_int) -> c_int;
+    pub fn xmlParseDocument(ctxt: *mut xmlParserCtxt) -> c_int;
+    pub fn xmlStopParser(ctxt: *mut xmlParserCtxt);
+    pub fn xmlSwitchEncodingName(ctxt: *mut xmlParserCtxt, encoding: *const c_char) -> c_int;
+    pub fn xmlCtxtSetOptions(ctxt: *mut xmlParserCtxt, options: c_int) -> c_int;
+    pub fn xmlCtxtGetLastError(ctx: *mut c_void) -> *const xmlError;
+    pub fn xmlParseCharEncoding(name: *const c_char) -> c_int;
+    pub fn htmlCreateMemoryParserCtxt(buffer: *const c_char, size: c_int) -> *mut xmlParserCtxt;
+    pub fn htmlCreateFileParserCtxt(filename: *const c_char, encoding: *const c_char) -> *mut xmlParserCtxt;
+    pub fn htmlCreatePushParserCtxt(
+        sax: *mut xmlSAXHandler,
+        user_data: *mut c_void,
+        chunk: *const c_char,
+        size: c_int,
+        filename: *const c_char,
+        enc: c_int,
+    ) -> *mut xmlParserCtxt;
+    pub fn htmlParseChunk(ctxt: *mut xmlParserCtxt, chunk: *const c_char, size: c_int, terminate: c_int) -> c_int;
+    pub fn htmlParseDocument(ctxt: *mut xmlParserCtxt) -> c_int;
+    // libxml2's default SAX2 callbacks, used for DTDs and entities.
+    pub fn xmlSAX2StartDocument(ctx: *mut c_void);
+    pub fn xmlSAX2GetEntity(ctx: *mut c_void, name: *const xmlChar) -> *mut xmlEntity;
+    pub fn xmlSAX2GetParameterEntity(ctx: *mut c_void, name: *const xmlChar) -> *mut xmlEntity;
+    pub fn xmlSAX2InternalSubset(
+        ctx: *mut c_void,
+        name: *const xmlChar,
+        ExternalID: *const xmlChar,
+        SystemID: *const xmlChar,
+    );
+    pub fn xmlSAX2ExternalSubset(
+        ctx: *mut c_void,
+        name: *const xmlChar,
+        ExternalID: *const xmlChar,
+        SystemID: *const xmlChar,
+    );
+    pub fn xmlSAX2IsStandalone(ctx: *mut c_void) -> c_int;
+    pub fn xmlSAX2HasInternalSubset(ctx: *mut c_void) -> c_int;
+    pub fn xmlSAX2HasExternalSubset(ctx: *mut c_void) -> c_int;
+    pub fn xmlSAX2ResolveEntity(
+        ctx: *mut c_void,
+        publicId: *const xmlChar,
+        systemId: *const xmlChar,
+    ) -> *mut xmlParserInput;
+    pub fn xmlSAX2EntityDecl(
+        ctx: *mut c_void,
+        name: *const xmlChar,
+        type_: c_int,
+        publicId: *const xmlChar,
+        systemId: *const xmlChar,
+        content: *mut xmlChar,
+    );
+    pub fn xmlSAX2UnparsedEntityDecl(
+        ctx: *mut c_void,
+        name: *const xmlChar,
+        publicId: *const xmlChar,
+        systemId: *const xmlChar,
+        notationName: *const xmlChar,
+    );
+    // monoruby's glue (`glue/monoruby_glue.c`): parser-context accessors
+    // and the variadic SAX message callbacks.
+    pub fn mrb_xml_ctxt_get_private(ctxt: *mut xmlParserCtxt) -> *mut c_void;
+    pub fn mrb_xml_ctxt_set_private(ctxt: *mut xmlParserCtxt, p: *mut c_void);
+    pub fn mrb_xml_ctxt_get_sax(ctxt: *mut xmlParserCtxt) -> *mut xmlSAXHandler;
+    pub fn mrb_xml_ctxt_set_sax(ctxt: *mut xmlParserCtxt, sax: *mut xmlSAXHandler);
+    pub fn mrb_xml_ctxt_set_user_data(ctxt: *mut xmlParserCtxt, data: *mut c_void);
+    pub fn mrb_xml_ctxt_get_my_doc(ctxt: *mut xmlParserCtxt) -> *mut xmlDoc;
+    pub fn mrb_xml_ctxt_get_standalone(ctxt: *mut xmlParserCtxt) -> c_int;
+    pub fn mrb_xml_ctxt_get_encoding(ctxt: *mut xmlParserCtxt) -> *const xmlChar;
+    pub fn mrb_xml_ctxt_get_version(ctxt: *mut xmlParserCtxt) -> *const xmlChar;
+    pub fn mrb_xml_ctxt_get_options(ctxt: *mut xmlParserCtxt) -> c_int;
+    pub fn mrb_xml_ctxt_get_line(ctxt: *mut xmlParserCtxt) -> c_int;
+    pub fn mrb_xml_ctxt_get_column(ctxt: *mut xmlParserCtxt) -> c_int;
+    pub fn mrb_xml_sax_set_message_handler(f: mrb_sax_message_fn);
+    pub fn mrb_xml_sax_warning(ctx: *mut c_void, msg: *const c_char, ...);
+    pub fn mrb_xml_sax_error(ctx: *mut c_void, msg: *const c_char, ...);
 
     // ---- HTML ----
     pub fn htmlNewParserCtxt() -> *mut xmlParserCtxt;

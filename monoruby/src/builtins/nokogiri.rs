@@ -24,6 +24,7 @@ mod dtd;
 mod misc;
 mod node;
 mod node_set;
+mod sax;
 mod xpath;
 
 pub(crate) fn init(globals: &mut Globals) {
@@ -62,6 +63,12 @@ pub(super) struct Classes {
     pub html4_document: ClassId,
     pub encoding_handler: ClassId,
     pub entity_lookup: ClassId,
+    pub sax_parser: ClassId,
+    pub sax_parser_context: ClassId,
+    pub sax_push_parser: ClassId,
+    pub html4_sax_parser: ClassId,
+    pub html4_sax_parser_context: ClassId,
+    pub html4_sax_push_parser: ClassId,
 }
 
 thread_local! {
@@ -129,9 +136,9 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     for m in ["Gumbo", "HTML4", "HTML5", "XSLT"] {
         module(globals, nokogiri, m);
     }
-    module(globals, xml_m, "SAX");
+    let xml_sax = module(globals, xml_m, "SAX");
     let html4 = module(globals, nokogiri, "HTML4");
-    module(globals, html4, "SAX");
+    let html4_sax = module(globals, html4, "SAX");
 
     let syntax_error = class(globals, nokogiri, "SyntaxError", standard_error);
     let xml_syntax_error = class(globals, xml_m, "SyntaxError", syntax_error);
@@ -159,6 +166,12 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     let encoding_handler = native_class(globals, nokogiri, "EncodingHandler", OBJECT_CLASS);
     let entity_lookup = class(globals, html4, "EntityLookup", OBJECT_CLASS);
     class(globals, html4, "ElementDescription", OBJECT_CLASS);
+    let sax_parser = native_class(globals, xml_sax, "Parser", OBJECT_CLASS);
+    let sax_parser_context = native_class(globals, xml_sax, "ParserContext", OBJECT_CLASS);
+    let sax_push_parser = native_class(globals, xml_sax, "PushParser", OBJECT_CLASS);
+    let html4_sax_parser = class(globals, html4_sax, "Parser", sax_parser);
+    let html4_sax_parser_context = class(globals, html4_sax, "ParserContext", sax_parser_context);
+    let html4_sax_push_parser = class(globals, html4_sax, "PushParser", sax_push_parser);
 
     let c = Classes {
         nokogiri,
@@ -189,6 +202,12 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
         html4_document,
         encoding_handler,
         entity_lookup,
+        sax_parser,
+        sax_parser_context,
+        sax_push_parser,
+        html4_sax_parser,
+        html4_sax_parser_context,
+        html4_sax_push_parser,
     };
     CLASSES.with(|cell| *cell.borrow_mut() = Some(c));
 
@@ -197,6 +216,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     dtd::init(globals, &c);
     node::init(globals, &c);
     node_set::init(globals, &c);
+    sax::init(globals, &c);
     xpath::init(globals, &c);
 
     // Constants `Init_nokogiri` sets (version/info.rb reads them).
@@ -269,6 +289,20 @@ pub(super) unsafe fn xml_str_owned(p: *mut xml::xmlChar) -> Value {
             xml::xml_free()(p as *mut c_void);
         }
         v
+    }
+}
+
+/// The name `Check_Type` reports for a value of the wrong type: "nil" /
+/// "true" / "false" for the immediates, the class name otherwise.
+pub(super) fn builtin_type_name(globals: &Globals, v: Value) -> String {
+    if v.is_nil() {
+        "nil".to_string()
+    } else if v.id() == TRUE_VALUE {
+        "true".to_string()
+    } else if v.id() == FALSE_VALUE {
+        "false".to_string()
+    } else {
+        globals.store.get_class_name(v.class())
     }
 }
 
