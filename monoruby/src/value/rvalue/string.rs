@@ -1413,8 +1413,15 @@ impl RStringInner {
     /// (`"abc".force_encoding("UTF-16LE")` was SevenBit under
     /// UTF-8 but has odd byte count under UTF-16LE).
     pub fn set_encoding(&mut self, ty: Encoding) {
-        self.ty = ty;
-        self.cr.set(CodeRange::Unknown);
+        // Re-tagging with the same encoding changes nothing the code
+        // range describes; keep it cached. (Dropping it made every
+        // `sub` / `gsub` / `force_encoding` result an *uncached* piece,
+        // which the append fast path then folded into an Unknown
+        // receiver — see `emit_string_shl`.)
+        if self.ty != ty {
+            self.ty = ty;
+            self.cr.set(CodeRange::Unknown);
+        }
     }
 
     /// Returns the cached code range, computing it on first call.

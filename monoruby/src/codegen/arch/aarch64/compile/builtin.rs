@@ -350,6 +350,16 @@ impl Codegen {
                 cmp x9, #(6);
             );
             self.jit.bcond_label(monoasm::Cond::Gt, &fallback);
+            // The piece's cr must be cached (SevenBit / Valid): folding an
+            // uncached piece leaves the receiver Unknown, and the next
+            // mixed-encoding append re-classifies the whole buffer (see the
+            // x86-64 backend). The helper classifies and caches the piece.
+            monoasm_arm64!(&mut self.jit,
+                ldrb w9, [x3, #(crate::rvalue::STRING_CR_OFFSET as u32)];
+                sub x9, x9, #(1);   // SevenBit->0, Valid->1; Unknown wraps, Broken->2
+                cmp x9, #(1);
+            );
+            self.jit.bcond_label(monoasm::Cond::Hi, &fallback);
             monoasm_arm64!(&mut self.jit,
                 b retry;
             );

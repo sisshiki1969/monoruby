@@ -322,6 +322,16 @@ impl Codegen {
                 jne  enc_mixed;
                 cmpq rax, (6);
                 jgt  fallback;
+                // The piece's cr must be cached (SevenBit / Valid). Folding
+                // an *uncached* piece would leave the receiver Unknown, and
+                // the next mixed-encoding append (`buf << 1.to_s`) then
+                // re-classifies the whole accumulated buffer — O(n) per
+                // append, which was 25 % of liquid-il. The helper classifies
+                // the short piece once and caches it in the piece.
+                movzxb rdx, [rsi + (crate::rvalue::STRING_CR_OFFSET)];
+                subq rdx, 1;    // SevenBit→0, Valid→1; Unknown wraps, Broken→2
+                cmpq rdx, 1;
+                ja   fallback;
                 jmp  retry;
             enc_mixed:
                 cmpq rax, (2);
