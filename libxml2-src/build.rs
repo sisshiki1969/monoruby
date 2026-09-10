@@ -120,6 +120,9 @@ fn main() {
     for src in SOURCES {
         build.file(vendor.join(format!("{src}.c")));
     }
+    // monoruby's helpers (parser-context accessors, the variadic SAX
+    // message callbacks), built into the same archive.
+    build.file(manifest.join("glue/monoruby_glue.c"));
     build.compile("xml2");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -132,5 +135,6 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=config/config.h");
+    println!("cargo:rerun-if-changed=glue/monoruby_glue.c");
     println!("cargo:rerun-if-changed=vendor/libxml2");
 }

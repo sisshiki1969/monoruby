@@ -733,6 +733,226 @@ fn nokogiri_reparenting_edge_cases() {
     );
 }
 
+/// A `SAX::Document` that records every event.
+const SAX_RECORDER: &str = r##"
+        class Recorder < Nokogiri::XML::SAX::Document
+          attr_reader :events
+          def initialize; super; @events = []; end
+          def xmldecl(v, e, s) = @events << [:xmldecl, v, e, s]
+          def start_document = @events << [:start_document]
+          def end_document = @events << [:end_document]
+          def start_element(name, attrs = []) = @events << [:start_element, name, attrs]
+          def end_element(name) = @events << [:end_element, name]
+          def start_element_namespace(name, attrs = [], prefix = nil, uri = nil, ns = [])
+            @events << [:start_element_namespace, name, attrs.map(&:to_a), prefix, uri, ns]
+            super
+          end
+          def end_element_namespace(name, prefix = nil, uri = nil)
+            @events << [:end_element_namespace, name, prefix, uri]
+            super
+          end
+          def characters(s) = @events << [:characters, s]
+          def comment(s) = @events << [:comment, s]
+          def cdata_block(s) = @events << [:cdata_block, s]
+          def processing_instruction(n, c) = @events << [:pi, n, c]
+          def reference(n, c) = @events << [:reference, n, c]
+          def warning(s) = @events << [:warning, s]
+          def error(s) = @events << [:error, s]
+        end
+"##;
+
+#[test]
+fn nokogiri_sax_parser() {
+    compare(&format!(
+        r##"
+        {SAX_RECORDER}
+        xml = <<~XML
+          <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <!DOCTYPE root [ <!ENTITY ent "entity text"> ]>
+          <root xmlns="http://d" xmlns:p="http://p" p:a="1" b="2"><!-- c -->
+            <p:child>text &amp; &ent;<![CDATA[cd<>]]></p:child>
+            <?pi data?><empty/>
+          </root>
+        XML
+        r = []
+        rec = Recorder.new
+        parser = Nokogiri::XML::SAX::Parser.new(rec)
+        parser.parse(xml)
+        r << rec.events
+        rec = Recorder.new
+        Nokogiri::XML::SAX::Parser.new(rec).parse(StringIO.new(xml))
+        r << rec.events.size
+        rec2 = Recorder.new
+        Nokogiri::XML::SAX::Parser.new(rec2).parse_memory("<a x='1'>&lt;</a>")
+        r << rec2.events
+        rec3 = Recorder.new
+        Nokogiri::XML::SAX::Parser.new(rec3).parse("<a><b></a>")
+        r << rec3.events
+        rec4 = Recorder.new
+        Nokogiri::XML::SAX::Parser.new(rec4).parse("<a><b></a>") {{ |ctx| ctx.recovery = true; r << [ctx.recovery, ctx.replace_entities, ctx.line, ctx.column] }}
+        r << rec4.events
+        rec5 = Recorder.new
+        Nokogiri::XML::SAX::Parser.new(rec5).parse("<a>&ent;</a>") {{ |ctx| ctx.replace_entities = true; r << ctx.replace_entities }}
+        r << rec5.events
+        ctx = Nokogiri::XML::SAX::ParserContext.new("<a/>")
+        r << [ctx.class, ctx.line, ctx.column, ctx.recovery, ctx.replace_entities]
+        ctx = Nokogiri::XML::SAX::ParserContext.io(StringIO.new("<a/>"), Encoding::UTF_8)
+        r << [ctx.class, ctx.line, ctx.column]
+        rec6 = Recorder.new
+        Nokogiri::XML::SAX::Parser.new(rec6).parse_memory("<a>é</a>".encode("ISO-8859-1"), Encoding::ISO_8859_1)
+        r << rec6.events
+        rec7 = Recorder.new
+        Nokogiri::XML::SAX::Parser.new(rec7, "UTF-8").parse_memory("<a>x</a>")
+        r << rec7.events
+        require "tempfile"
+        Tempfile.create(["sax", ".xml"]) do |f|
+          f.write("<f><g/></f>"); f.flush
+          rec8 = Recorder.new
+          Nokogiri::XML::SAX::Parser.new(rec8).parse_file(f.path)
+          r << rec8.events
+        end
+        [-> {{ Nokogiri::XML::SAX::Parser.new.parse_memory("") }},
+         -> {{ Nokogiri::XML::SAX::Parser.new.parse_memory(nil) }},
+         -> {{ Nokogiri::XML::SAX::Parser.new.parse_memory(42) }},
+         -> {{ Nokogiri::XML::SAX::ParserContext.memory("<a/>", 5) }},
+         -> {{ Nokogiri::XML::SAX::ParserContext.io(Object.new) }},
+         -> {{ Nokogiri::XML::SAX::ParserContext.new("<a/>").parse_with(Object.new) }},
+         -> {{ Nokogiri::XML::SAX::Parser.new.parse_file("/nonexistent/x.xml") }},
+         -> {{ Nokogiri::XML::SAX::Parser.new.parse_memory("<a/>", Encoding::UTF_8).class }},
+         -> {{ Nokogiri::XML::SAX::Parser.new.parse_memory("<a/>", "NOT-AN-ENCODING") }},
+         -> {{ Nokogiri::XML::SAX::ParserContext.memory("<a/>", Encoding.find("Big5")).class }}].each do |l|
+          begin
+            r << l.call
+          rescue => e
+            r << [e.class, e.message]
+          end
+        end
+        class Boom < Nokogiri::XML::SAX::Document
+          attr_reader :seen
+          def initialize(at); super(); @at = at; @seen = []; end
+          def start_element(name, attrs = []) = (@seen << name; raise ArgumentError, "boom at #{{name}}" if name == @at)
+          def end_document = @seen << :end
+        end
+        b = Boom.new("b")
+        begin
+          Nokogiri::XML::SAX::Parser.new(b).parse("<a><b/><c/></a>")
+          r << :no_raise
+        rescue ArgumentError => e
+          r << [e.class, e.message, b.seen]
+        end
+        b = Boom.new("b")
+        begin
+          Nokogiri::XML::SAX::Parser.new(b).parse(StringIO.new("<a><b/><c/></a>"))
+        rescue ArgumentError => e
+          r << [e.message, b.seen]
+        end
+        p r
+        "##
+    ));
+}
+
+#[test]
+fn nokogiri_sax_push_parser() {
+    compare(&format!(
+        r##"
+        {SAX_RECORDER}
+        r = []
+        rec = Recorder.new
+        pp = Nokogiri::XML::SAX::PushParser.new(rec)
+        r << [pp.options, pp.replace_entities]
+        pp << "<?xml version='1.0'?><root xmlns:p='http://p'><p:a k='v'>te"
+        pp << "xt</p:a><!-- c --><![CDATA[x]]>"
+        pp.write("<b/>", false)
+        pp.write("</root>")
+        pp.finish
+        r << rec.events
+        rec = Recorder.new
+        pp = Nokogiri::XML::SAX::PushParser.new(rec, "file.xml")
+        pp.replace_entities = true
+        pp.options = Nokogiri::XML::ParseOptions::RECOVER | Nokogiri::XML::ParseOptions::NOENT
+        r << [pp.replace_entities, pp.options]
+        pp << "<a><b></a>"
+        pp.finish
+        r << rec.events
+        rec = Recorder.new
+        pp = Nokogiri::XML::SAX::PushParser.new(rec)
+        begin
+          pp << "<a><b></a>"
+          pp.finish
+          r << :no_raise
+        rescue Nokogiri::XML::SyntaxError => e
+          r << [e.class, e.message, e.line, e.column]
+        end
+        r << rec.events
+        rec = Recorder.new
+        pp = Nokogiri::XML::SAX::PushParser.new(rec)
+        pp << "<a>x"
+        begin
+          pp.write(nil, true)
+          r << :no_raise
+        rescue Nokogiri::XML::SyntaxError => e
+          r << [e.class, e.message]
+        end
+        r << rec.events
+        class Boom < Nokogiri::XML::SAX::Document
+          attr_reader :seen
+          def initialize; super; @seen = []; end
+          def start_element(name, attrs = []) = (@seen << name; raise ArgumentError, "boom at #{{name}}" if name == "b")
+          def end_document = @seen << :end
+        end
+        b = Boom.new
+        pp = Nokogiri::XML::SAX::PushParser.new(b)
+        pp << "<a>"
+        begin
+          pp << "<b/><c/>"
+          r << :no_raise
+        rescue ArgumentError => e
+          r << [e.class, e.message, b.seen]
+        end
+        rec = Recorder.new
+        hp = Nokogiri::HTML4::SAX::PushParser.new(rec)
+        hp << "<html><body><p class='c'>Hello"
+        hp << " <b>w</b>&amp;&eacute;</p><br>"
+        hp.finish
+        r << rec.events
+        rec = Recorder.new
+        Nokogiri::HTML4::SAX::PushParser.new(rec, nil, "ISO-8859-1").write("<p>\xe9</p>".b, true)
+        r << rec.events
+        begin
+          Nokogiri::HTML4::SAX::PushParser.new(Recorder.new, nil, "NOT-AN-ENCODING")
+        rescue => e
+          r << [e.class, e.message]
+        end
+        rec = Recorder.new
+        Nokogiri::HTML4::SAX::Parser.new(rec).parse("<html><head><meta charset='utf-8'></head><body><p>x</p></body></html>")
+        r << rec.events
+        rec = Recorder.new
+        Nokogiri::HTML4::SAX::Parser.new(rec).parse(StringIO.new("<p>from io<p>two"))
+        r << rec.events
+        rec = Recorder.new
+        Nokogiri::HTML4::SAX::Parser.new(rec).parse_memory("<p>mem</p>", Encoding::UTF_8)
+        r << rec.events
+        require "tempfile"
+        Tempfile.create(["sax", ".html"]) do |f|
+          f.write("<p>file</p>"); f.flush
+          rec = Recorder.new
+          Nokogiri::HTML4::SAX::Parser.new(rec).parse_file(f.path)
+          r << rec.events
+        end
+        r << Nokogiri::HTML4::EncodingReader.detect_encoding("<html><head><meta http-equiv='Content-Type' content='text/html; charset=Shift_JIS'></head><body></body></html>")
+        r << Nokogiri::HTML4::EncodingReader.detect_encoding("<html><body><p>none</p></body></html>")
+        r << Nokogiri::HTML4::EncodingReader.detect_encoding("<?xml version='1.0' encoding='EUC-JP'?><html/>")
+        d = Nokogiri::HTML4(StringIO.new("<html><head><meta charset='ISO-8859-1'></head><body><p>\xe9t\xe9</p></body></html>".b))
+        r << [d.encoding, d.at_css("p").text, d.at_css("p").text.encoding.name]
+        d = Nokogiri::HTML4(StringIO.new("<html><body><p>plain io</p></body></html>"))
+        r << [d.encoding, d.at_css("p").text]
+        d = Nokogiri::HTML4(StringIO.new(("<html><head><title>T</title></head><body>" + "<p>x</p>" * 2000 + "<meta charset='UTF-8'></body></html>")))
+        r << [d.encoding, d.css("p").size, d.title]
+        p r
+        "##
+    ));
+}
+
 #[test]
 fn nokogiri_node_identity_across_gc() {
     // Every node wraps into one Ruby object that the document keeps alive;

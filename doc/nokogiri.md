@@ -229,7 +229,7 @@ libxml2 のビルドが付く。段階 1〜3 で ext の 6 割程度（Node 54 +
 B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の mark / drop の
 形がそのまま `TypedData` の受け皿になるので、A の作業は無駄にならない。
 
-## 6. 実装状況（段階 1〜2 の一部、2026-09）
+## 6. 実装状況（段階 1〜3 と 5 の SAX、2026-09）
 
 `libxml2-src/`（libxml2 2.13.8 + nokogiri 1.18.9 の patches、`cc` でビルド、
 `config.h` は手書き、`xmlversion.h` は build.rs が生成）、
@@ -270,9 +270,20 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
   （`attribute_type` / `default` / `enumeration`）、`ElementContent`（内容モデルの
   木、`NATIVE` クラスで `@document` を持つ）、`Document#create_entity`。
 
-まだ無いもの（段階 2〜6）: `XML::SAX::*`（`SAX::PushParser` は
-`HTML4::EncodingReader` が使うので **HTML の IO からのパース**もまだ）、
-`XML::Reader`、`XML::Schema` / `RelaxNG`、`XSLT`（定数は `0.0.0` の
+- SAX（`sax.rs`）: `XML::SAX::Parser`（`xmlSAXHandler` の全コールバック:
+  `xmldecl` / `start_document` / `start_element(_namespace)` /
+  `end_element(_namespace)` / `characters` / `comment` / `cdata_block` /
+  `processing_instruction` / `reference` / `warning` / `error`、DTD と
+  エンティティは libxml2 の SAX2 既定を使う）、`SAX::ParserContext`
+  （`native_memory` / `native_io` / `native_file`、`parse_with`、
+  `replace_entities` / `recovery`、`line` / `column`）、`SAX::PushParser`
+  （`xmlParseChunk`、`options`、RECOVER 無しのエラーは `SyntaxError`）、
+  `HTML4::SAX::Parser` / `ParserContext` / `PushParser`（HTML パーサ上）。
+  これで `HTML4::EncodingReader` が動くので、**`Nokogiri::HTML4(io)` を
+  エンコーディング指定無しで**パースできる（`<meta charset>` の検出と
+  `EncodingFound` による再パース込み）。
+
+まだ無いもの（段階 4〜6）: `XML::Reader`、`XML::Schema` / `RelaxNG`、`XSLT`（定数は `0.0.0` の
 プレースホルダ）、HTML5（gumbo）、`HTML4::ElementDescription`
 （`Node#description`）、XPath のカスタム関数ハンドラ（`evaluate` の第 2
 引数は受け取るが無視）、`Node#dup` / `Document#dup`。
@@ -292,6 +303,20 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
   （`DEFAULT_HTML` に入っている）が付くと libxml2 はコンテキストのハンドラを
   素通りするが、グローバルのハンドラには依然として届く。nokogiri が
   `document.errors` を埋め、strict モードで raise できるのはこのため。
+- SAX のコールバックは libxml2 の C フレームの内側で Ruby を呼ぶ。Ruby の
+  例外は C を巻き戻せないので、コールバックは例外を `SaxCall`（`xmlParserCtxt`
+  の `_private` に置いた、呼び出し中だけ生きる構造体）に保存して
+  `xmlStopParser` し、以後のコールバックは何もせず、`xmlParseDocument` /
+  `xmlParseChunk` から戻ったネイティブメソッドが投げ直す（nokogiri は
+  longjmp で C を突き抜ける）。停止した PushParser にさらに書くと
+  `XML_ERR_USER_STOP` で RuntimeError になる（CRuby ではパーサ状態が壊れた
+  まま続く）。
+- `warning` / `error` の SAX コールバックは可変長引数（printf 形式）なので
+  Rust では書けない。`libxml2-src/glue/monoruby_glue.c` に C で置き、
+  `vsnprintf` で整形した文字列を起動時に登録した Rust の関数へ渡す。
+  同じファイルに `xmlParserCtxt` のフィールドアクセサ（`_private` / `sax` /
+  `userData` / `myDoc` / `standalone` / `encoding` / `version` / `options` /
+  行・桁）を置き、巨大でバージョン依存の構造体を Rust 側で写さずに済ませる。
 - ビルトインの中で作った `Value` を Ruby 呼び出し（`initialize`、`decorate`、
   `SyntaxError.new`）を跨いで持つときは `vm.temp_push` で根付けする
   （`doc/gc.md` §8.1）。`wrap_document` / `wrap_node_set` / `errors_to_array`
