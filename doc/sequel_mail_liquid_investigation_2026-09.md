@@ -96,7 +96,7 @@ Unknown になる。次に別エンコーディングの片（`Integer#to_s` / `
 Liquid テンプレートは値を `escape`（`gsub`）してから `_O << …` するので、liquid-il は
 まさにこの形（1 反復に 17 万回の別エンコーディング追記）。
 
-修正（コミット `c2e6acd`）:
+修正（コミット `f664238`）:
 - インライン `<<`（x86-64 / aarch64）: 追記片の `cr` が SevenBit / Valid でなければ
   インラインせずヘルパへ。ヘルパは短い片を 1 回 `classify` して片自身にキャッシュする
   ので、2 回目以降はインラインに戻る。
@@ -158,7 +158,7 @@ String / Integer / nil / Hash / Array / 各 Drop … と render ごとに変わ�
   数百 µs で、8 秒に 4,556 回 = 1〜2 秒。古い本体は解放されないので JIT 領域も
   増え続ける（RSS 192 MB、CRuby は 40 MB）。
 
-**対処**（コミット `83b86e6`、`compile/pic.rs`）: 3 点をまとめて直した。
+**対処**（コミット `a4e823d`、`compile/pic.rs`）: 3 点をまとめて直した。
 
 1. **腕に空きがある限り、PMC の全クラスに腕を作る**（share 閾値を PIC から撤廃）。
    PMC の count は miss の回数であって呼び出し回数ではないので、share は交通量を
@@ -195,7 +195,7 @@ String / Integer / nil / Hash / Array / 各 Drop … と render ごとに変わ�
 残る前提は「miss したクラスは VM の slow path で PMC に記録される」で、表現の違いで
 記録されない Integer / Bignum は既に除外済み。
 
-対策（コミット `c7cdd1a`、`Codegen::recompile_counts` /
+対策（コミット `205702f`、`Codegen::recompile_counts` /
 `Codegen::recompile_budget_exhausted`）: (iseq, self class) ごとの
 **`BecamePolymorphic` 理由の**再コンパイル回数を数え、`MAX_RECOMPILES_PER_METHOD = 4`
 を超えたら再コンパイルせず現在の本体を残す（予算は使い切っているので、そのサイトは
@@ -225,7 +225,7 @@ liquid-il は、上限に達したメソッドが本来なら 5 回目以降の�
 ### 2.3 7 bit の対象は US-ASCII でコンパイルした正規表現で照合する
 
 §5.2 で見つかった「`/i` の文字クラスだけ CRuby の 4.5 倍遅い」の対処
-（コミット `583aae3`、`RegexpInner::engine_for` / `ascii_engine`）。
+（コミット `a80fdc9`、`RegexpInner::engine_for` / `ascii_engine`）。
 
 CRuby は `rb_reg_prepare_enc` で、ソースが 7 bit でエンコーディングが固定されていない
 正規表現を US-ASCII のままコンパイルし、対象文字列が 7 bit（cr = 7BIT）ならそれで照合する。
@@ -409,7 +409,7 @@ Ruby 実装（CRuby は C の `date_parse.c`）で、`"2026-09-10 08:40:12"` 1 �
 **17.9 µs**（CRuby 7.6 µs）かかっていた: 4,000 回 × 17.9 µs = **72 ms = 1 反復 112 ms の
 64 %**。
 
-内訳と直したこと（コミット `a3d0352`）:
+内訳と直したこと（コミット `58da745`）:
 
 | 項目 | 前 | 対策 | 後 |
 |---|---:|---|---:|
