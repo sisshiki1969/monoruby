@@ -1357,6 +1357,37 @@ fn nokogiri_html5() {
         r << Nokogiri::HTML5("<p>x</p>").to_html(encoding: "ISO-8859-1").encoding.name
         r << Nokogiri::HTML5("<p>café ☃</p>").to_html(encoding: "ISO-8859-1")
         r << Nokogiri::HTML5("<p>x</p>").at_css("p").to_html(save_with: Nokogiri::XML::Node::SaveOptions::AS_XML)
+        # Node kinds gumbo never produces, serialized by the HTML5 serializer.
+        d2 = Nokogiri::HTML5("<!DOCTYPE html><body><div id='x' data-q='v'></div>")
+        div = d2.at_css("div")
+        div << Nokogiri::XML::CDATA.new(d2, "c<d&e")
+        div << Nokogiri::XML::ProcessingInstruction.new(d2, "xml-stylesheet", "href='a'")
+        div << Nokogiri::XML("<f:e xmlns:f='http://f' f:a='1' plain='2'>t</f:e>").root
+        r << d2.to_html
+        r << div.children.map { |n| [n.class, n.name, n.namespace&.prefix] }
+        div.attribute("data-q").children.each(&:unlink)
+        r << div.to_html
+        div << Nokogiri::XML::EntityReference.new(d2, "amp")
+        begin
+          r << d2.to_html
+        rescue => e
+          r << [e.class, e.message]
+        end
+        # xmlns / xmlns:xlink / xml:space are adjusted foreign attributes.
+        svg = Nokogiri::HTML5("<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' xml:space='preserve'><a xlink:href='#q'/></svg>")
+        r << svg.at_css("svg").to_html
+        r << svg.at_css("svg").attribute_nodes.map { |a| [a.name, a.namespace&.href, a.namespace&.prefix] }
+        # A form ancestor outside the HTML namespace does not count.
+        foreign = Nokogiri::XML("<form xmlns='http://other'><div xmlns='http://www.w3.org/1999/xhtml'/></form>")
+        r << Nokogiri::HTML5.fragment("<input><p>x", context: foreign.at_css("div")).to_html
+        [-> { Nokogiri::Gumbo.parse("<p>", nil, Nokogiri::HTML5::Document, max_attributes: 1, max_errors: 1) },
+         -> { Nokogiri::HTML5.fragment("<p>", context: "p\0q") }].each do |l|
+          begin
+            r << l.call
+          rescue => e
+            r << [e.class, e.message]
+          end
+        end
         keep = (1..30).map { Nokogiri::HTML5(html) }
         GC.start
         r << keep.map { |k| k.css("*").size }.uniq
