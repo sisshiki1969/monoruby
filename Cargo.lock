@@ -833,6 +833,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "libxml2-src"
+version = "2.13.8"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "libyaml-safer"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -950,6 +957,7 @@ dependencies = [
  "indexmap",
  "libc",
  "libffi",
+ "libxml2-src",
  "libyaml-safer",
  "libz-sys",
  "md-5",

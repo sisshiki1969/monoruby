@@ -102,6 +102,7 @@ is the entry point.
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
 | [`c_extention.md`](c_extention.md) | JA | plan | Design study for loading CRuby C extensions (`.so`). |
+| [`nokogiri.md`](nokogiri.md) | JA | plan | Nokogiri on monoruby: the C extension rewritten in Rust over the bundled libxml2 (`libxml2-src`), the object / lifetime model, what is implemented, versus a C-API layer or a pure-Rust engine. |
 | [`plan-activerecord.md`](plan-activerecord.md) | JA | plan | Staged plan for running ActiveRecord, and what it depends on. |
 | [`progress_2025-2026.md`](progress_2025-2026.md) | EN | history | What changed over ~500 commits, April 2025 to April 2026. |
 

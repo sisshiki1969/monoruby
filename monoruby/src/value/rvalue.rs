@@ -141,6 +141,7 @@ impl std::fmt::Debug for ObjTy {
                 27 => "THREAD",
                 28 => "ARGF",
                 29 => "FRAME",
+                30 => "NATIVE",
                 _ => return write!(f, "INVALID({ty})"),
             }
         )
@@ -188,6 +189,12 @@ impl ObjTy {
     /// (dynvar stores), so like Proc/Binding/Fiber they stay young and
     /// are re-walked on every minor GC.
     pub const FRAME: Self = Self(std::num::NonZeroU8::new(29).unwrap());
+    /// An object whose payload is native data behind the `NativeData`
+    /// trait (a libxml2 document, node, ...): the Ruby class is whatever
+    /// the constructor gave it, the payload marks the Values it holds and
+    /// is dropped with the object. Not promotable: the payload's Values
+    /// are stored without a write barrier.
+    pub const NATIVE: Self = Self(std::num::NonZeroU8::new(30).unwrap());
 }
 
 #[repr(C)]
@@ -235,6 +242,37 @@ pub union ObjKind {
     argf: ManuallyDrop<Box<ArgfInner>>,
     /// Raw parts of a promoted heap frame's buffer (see `FrameInner`).
     frame: FrameInner,
+    /// Native payload (`ObjTy::NATIVE`), a fat pointer to the boxed data.
+    native: ManuallyDrop<Box<dyn NativeData>>,
+}
+
+/// The payload of an `ObjTy::NATIVE` object: data owned by native code
+/// (a libxml2 tree, ...) that may hold Ruby values. `mark` reports those
+/// to the GC; dropping the box releases the native resources.
+pub trait NativeData: std::any::Any {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>);
+    /// A shallow copy for `Object#dup` / `#clone`; kinds that cannot be
+    /// copied answer `None`, and the copy is then a payload-less object
+    /// (the Ruby side of such classes defines its own `dup`).
+    fn dup(&self) -> Option<Box<dyn NativeData>> {
+        None
+    }
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+/// The stand-in payload of a copied native object whose data cannot be
+/// duplicated (see `NativeData::dup`).
+struct EmptyNative;
+
+impl NativeData for EmptyNative {
+    fn mark(&self, _alloc: &mut alloc::Allocator<RValue>) {}
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 /// The payload of an `ObjTy::FRAME` wrapper: the raw parts of the
@@ -533,6 +571,12 @@ impl ObjKind {
         }
     }
 
+    fn native(inner: Box<dyn NativeData>) -> Self {
+        Self {
+            native: ManuallyDrop::new(inner),
+        }
+    }
+
     fn argf(inner: ArgfInner) -> Self {
         Self {
             argf: ManuallyDrop::new(Box::new(inner)),
@@ -622,6 +666,7 @@ impl std::fmt::Debug for RValue {
                             ObjTy::ARITHMETIC_SEQUENCE => {
                                 format!("{:?}", self.kind.arithmetic_sequence)
                             }
+                            ObjTy::NATIVE => "<native>".to_string(),
                             _ => unreachable!(),
                         }
                     })
@@ -942,6 +987,7 @@ impl alloc::GCBox for RValue {
                 ObjTy::IO => ManuallyDrop::drop(&mut self.kind.io),
                 ObjTy::IO_BUFFER => ManuallyDrop::drop(&mut self.kind.io_buffer),
                 ObjTy::ARGF => ManuallyDrop::drop(&mut self.kind.argf),
+                ObjTy::NATIVE => ManuallyDrop::drop(&mut self.kind.native),
                 // SAFETY: `base`/`len` are exactly the raw parts of the
                 // original `Box<[u64]>` (recorded at promotion); this
                 // wrapper is unreachable, and the frame's only owner is
@@ -1050,6 +1096,7 @@ impl alloc::GCBox for RValue {
                 ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().mark(alloc),
                 ObjTy::IO_BUFFER => self.as_io_buffer().mark(alloc),
                 ObjTy::ARGF => self.as_argf().mark(alloc),
+                ObjTy::NATIVE => self.kind.native.mark(alloc),
                 // Walk the promoted frame's contents (registers, block,
                 // svar, outer chain). Reaching the wrapper twice in one
                 // cycle is cut off by the page bitmap before this runs.
@@ -1526,6 +1573,9 @@ impl RValue {
                     ObjTy::TIME => ObjKind::time(self.as_time().clone()),
                     ObjTy::IO_BUFFER => ObjKind::io_buffer(self.as_io_buffer().clone()),
                     ObjTy::ARGF => ObjKind::argf(self.as_argf().clone()),
+                    ObjTy::NATIVE => ObjKind::native(
+                        self.as_native().dup().unwrap_or_else(|| Box::new(EmptyNative)),
+                    ),
                     ObjTy::ARRAY => {
                         // Sized up front: a literal past the inline
                         // capacity (`[0, 1, …, 9]`) is copied on every
@@ -1623,6 +1673,9 @@ impl RValue {
                         ObjTy::ARGF => ObjKind {
                             argf: self.kind.argf.clone(),
                         },
+                        ObjTy::NATIVE => ObjKind::native(
+                            self.as_native().dup().unwrap_or_else(|| Box::new(EmptyNative)),
+                        ),
                         ObjTy::ARRAY => ObjKind {
                             array: self.kind.array.clone(),
                         },
@@ -1715,6 +1768,9 @@ impl RValue {
                         ObjTy::ARGF => ObjKind {
                             argf: self.kind.argf.clone(),
                         },
+                        ObjTy::NATIVE => ObjKind::native(
+                            self.as_native().dup().unwrap_or_else(|| Box::new(EmptyNative)),
+                        ),
                         ObjTy::ARRAY => ObjKind {
                             array: self.kind.array.clone(),
                         },
@@ -2313,6 +2369,14 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_native(class_id: ClassId, inner: Box<dyn NativeData>) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::NATIVE),
+            kind: ObjKind::native(inner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_argf(class_id: ClassId, inner: ArgfInner) -> Self {
         RValue {
             header: Header::new(class_id, ObjTy::ARGF),
@@ -2650,6 +2714,18 @@ impl RValue {
         assert_eq!(self.ty(), ObjTy::ARGF);
         // SAFETY: type checked above.
         unsafe { &mut self.kind.argf }
+    }
+
+    pub(crate) fn as_native(&self) -> &dyn NativeData {
+        assert_eq!(self.ty(), ObjTy::NATIVE);
+        // SAFETY: type checked above.
+        unsafe { &**self.kind.native }
+    }
+
+    pub(crate) fn as_native_mut(&mut self) -> &mut dyn NativeData {
+        assert_eq!(self.ty(), ObjTy::NATIVE);
+        // SAFETY: type checked above.
+        unsafe { &mut **self.kind.native }
     }
 
     pub(super) unsafe fn as_arithmetic_sequence(&self) -> &ArithmeticSequenceInner {
