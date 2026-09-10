@@ -4453,13 +4453,11 @@ impl Executor {
         lfp: Lfp,
         pc: BytecodePtr,
     ) -> Result<Value> {
+        // `Lfp::block` answers `None` for both an absent and a nil handler.
         let bh = match lfp.block() {
             Some(bh) => bh,
             None => return Ok(Value::nil()),
         };
-        if bh.get().is_nil() {
-            return Ok(Value::nil());
-        }
         // Already-materialized Proc: return it directly, *without*
         // locating the owner frame's Cfp. This is not just a shortcut:
         // when the owner frame belongs to a different execution context

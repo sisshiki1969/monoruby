@@ -142,3 +142,23 @@ fn anonymous_block_forwarding_has_no_slot() {
         "#,
     );
 }
+
+// `run_test` warms the JIT: a literal assigned to the parameter is
+// known to the abstract state, so the JIT folds the read / forwarding
+// to it (no slot test); the other cases keep the run-time test.
+
+#[test]
+fn jit_folds_a_literal_assigned_to_the_block_param() {
+    run_test(
+        r#"
+        def k(&b); [1, 2].map(&b); end
+        def none(&b); b = nil; [b, k(&b).class, block_given?]; end
+        def sym(&b); b = :to_s; [b, k(&b)]; end
+        def lit(&b); b = 7; b; end
+        def sym_handler(&b); [b.class, b.call(3), b.equal?(b)]; end
+        def outer_store(&b); r = nil; [1].each { r = b }; [r.class, r.equal?(b)]; end
+        def outer_value(&b); [1].map { b }.first.equal?(b); end
+        [none { :x }, sym { :x }, lit { :x }, sym_handler(&:succ), outer_store {}, outer_value {}]
+        "#,
+    );
+}
