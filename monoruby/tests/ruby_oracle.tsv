@@ -1086,6 +1086,7 @@
 4edbac695b5ed45b538971de1ca0ed2c	[true, true, true, false]	f = File.open("Cargo.toml")\n            begin\n              [f.binm
 4ef654f58c91b7b93cc8ea7d3a1d2da8	[false, false, false, true, false]	class MEqStrTrue; def to_str; "x"; end; def ==(o); true; end; end\n 
 4f1c2d7762a92ed3167ebc5a07dca6fc	520.0	def w3(f)\n          30.times do |i|\n            return f * i if i > 25\n
+4f901b278fdd410f8765051d2109cb68	[[:a, 100], [:b, 100], [:c, 100], [:d, 100], [:e, 100], [:f, 100]]	class Oa; def tag = :a; end\n            class Ob; def tag = :b; end
 4f93aca4bf1af1b5c4055cb5ae6b15f5	[nil, false]	t = Thread.new { sleep }\n            r = t.join(0.05)\n            t
 4fa66bde865d8b29ac7a73525c13a9c4	true	path = "/tmp/monoruby_io_dc_#{Process.pid}_#{rand(100000)}"\n       
 4fbfb4f6588f47b184c44eb72d8611a5	[File, true, [Errno::EINVAL, "Invalid argument"], File]	(f="/tmp/mono_nb_#{Process.pid}"; fh=File.new(f, "w") { raise "block called" }; 
@@ -1202,6 +1203,7 @@
 59a5cb7a0c17abeadcdd4fb2b0ab7b76	1	case 9\n        when 0,4,8\n          0\n        when 1,5,9\n          1\n  
 59a6ce8e2915130ae9576712b5a0f444	[1.0, Infinity]	[1.0, 1.0 / 0.0]
 59b430ac9ae86f562aec95304e3961db	[:FOO]	$res = []\n            class C\n              def self.const_added(na
+59fe9d3049fb74a53b64cc5407966322	[[[:a, 300], [:b, 300], [:c, 270], [:d, 30]], :e, :d]	class Ra; def tag = :a; end\n            class Rb; def tag = :b; end
 5a20645aebc0d88e162feb3d416ba777	3	class Integer; alias __orig :/; def /(o); __orig(o); end; end; 12 / 4
 5a33fd783a7b98bc5a5ed1d31a52649b	[[1, 2, 3, 4], 1, [1, 3]]	class Wrap\n          def initialize(a) = @a = a\n          def +(...)\n  
 5a5d7ffbe02389d8d6a83efb9a7937c6	[0, 2, 3, 3, true, 4]	File.open("Cargo.toml") do |f|\n              a = f.lineno\n         
@@ -3139,6 +3141,7 @@ e874e1da171336c766ccb7c7051d0664	true	e = Exception.new\n            r = Marshal
 e8962f663b29be65e4e0dd56609acec4	[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 100]	def f\n                $res << 12.times { |x|\n                    $r
 e8ad34b388352ca80000e7df317bb41a	[42, true, true]	o = Object.new\n            def o.to_str; "value"; end\n            c
 e8bf25bb3eb8bcdf2410ac76264f9ea4	[1, 2]	Enumerator.new { |y| y << 1 << 2 }.to_a
+e8ceec0aa9d3d00513f0a88f084c31e2	[[[:a, 200], [:b, 200], [:c, 200]], :d, :blk]	class Da; def tag = :a; end\n            class Db; def tag(&blk) = b
 e8e220b680848457259609fb951e4dbd	["ensure in f", "ensure in g", 42]	def g\n          begin\n            yield\n          ensure\n            $r
 e8f73c5ee545fe5b71d1c667d8bec38b	[3, [:gt, :gt]]	class Gt\n              attr_reader :calls\n              def initial
 e8fff433024d62ecc658476201cd2358	[0.0, 750.0]	def call_block\n          yield\n        end\n        def d4(n)\n          
