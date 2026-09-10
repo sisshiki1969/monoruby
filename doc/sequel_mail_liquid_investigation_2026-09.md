@@ -53,9 +53,10 @@ liquid-render ≈ 140 ms、sequel ≈ 88 ms。）
    1 列 2 回 `Date._parse` にかけ（1 反復 4,000 回）、monoruby の Ruby 実装
    `stdlib/date_core.rb` が 1 回 17.9 µs（CRuby の C 実装 7.6 µs）だった。月名パターンを
    毎回組み立て直す・文字種を見ずに全サブパーサを試す・数字だけの値にも正規表現を 5 回
-   かける、の 3 点を直して **11.3 µs（−37 %）**（§5.2）。残りの差は「7 bit の対象に
+   かける、の 3 点を直して **11.3 µs（−37 %）**（§5.2）。残りの差の主因は「7 bit の対象に
    対しても UTF-8 でコンパイルした正規表現で照合する」ことによる `/i` の遅さで、
-   これは regex を使う全コードに効く提案（§6 の 3）。
+   CRuby と同じく US-ASCII でコンパイルしたものを 7 bit の対象に使うようにした（§2.3、
+   `Date._parse` 8.4 µs、regex を使う全コードに効く）。
 
 ## 2. 直した / 試した 2 件
 
@@ -161,6 +162,51 @@ liquid-il は、上限に達したメソッドが本来なら 5 回目以降の�
 依らない汎用呼び出し（`find_method` + インラインキャッシュ、deopt なし）に落とす」。
 上限に達したメソッドはそのサイトで毎回 deopt して残りを VM で走るので、liquid-render は
 まだ CRuby インタプリタ並みに留まる。
+
+### 2.3 7 bit の対象は US-ASCII でコンパイルした正規表現で照合する
+
+§5.2 で見つかった「`/i` の文字クラスだけ CRuby の 4.5 倍遅い」の対処
+（コミット `583aae3`、`RegexpInner::engine_for` / `ascii_engine`）。
+
+CRuby は `rb_reg_prepare_enc` で、ソースが 7 bit でエンコーディングが固定されていない
+正規表現を US-ASCII のままコンパイルし、対象文字列が 7 bit（cr = 7BIT）ならそれで照合する。
+monoruby は常に UTF-8 でコンパイルしていたので、Onigmo が 1 位置ごとに `mbc_enc_len` /
+`onigenc_mbclen_approximate` を呼び、`/i` では Unicode の case fold 表を引いていた
+（sequel の warm プロファイルで 3.7 %、`Date._parse` では 6.5 %）。7 bit のデータに
+対する結果は両者で同じ。
+
+実装: `RegexpInner` が既に持つ native エンコーディング用スロット（`native` /
+`native_enc`、BINARY の対象向けに同じ US-ASCII コンパイルを使う）をそのまま流用し、
+`engine_for(given, known_ascii)` が照合ごとにエンジンを選ぶ。対象が 7 bit かどうかは
+呼び出し側の cr（`StringScanner`、`gsub` のブロック版）か、2 KiB までの `is_ascii()`
+プローブで決める（それより長い対象は UTF-8 のまま。`index(re, pos)` を長い文字列に
+繰り返す経路で O(n²) にしないため）。`scan` / `gsub` / `captures_iter` の走査は 1 回だけ
+プローブしてループ全体で同じエンジンを使う。対象外: 非 ASCII を含むソース、
+`fixed_encoding`、`\p{…}` / `\P{…}`（CRuby もこれで UTF-8 に固定する — ついでに
+`fixed_encoding?` を CRuby に合わせた）、`\u` エスケープ、US-ASCII でコンパイルに失敗する
+もの（1 回だけ試して結果を覚える）。
+
+| マイクロベンチ（19 文字の 7 bit 文字列） | 前 | 後 | CRuby |
+|---|---:|---:|---:|
+| `s.match?(/[a-z]/i)` | 414 ns | **95 ns** | 91 ns |
+| `s =~ /\b(sun|mon|…)[^-\/\d\s]*/i`（miss） | 223 ns | 171 ns | 130 ns |
+| `s =~ TIME_PAT`（`/x` の大きな交替、hit） | 1,938 ns | 1,596 ns | 2,324 ns |
+| `s.gsub(/[^-+',.\/:@[:alnum:]\[\]]+/, " ")` | 1,327 ns | 1,048 ns | 1,540 ns |
+| `Date._parse("2026-09-10 08:40:12")` | 11.3 µs | **8.4 µs** | 7.6 µs |
+
+ベンチ全体（2 ラウンド交互、中央値）:
+
+| | 前（§5.2 まで） | US-ASCII 照合 |
+|---|---:|---:|
+| sequel | 87 / 84 ms | 82 / 84 ms |
+| mail | 189 / 185 ms | 183 / 193 ms |
+| liquid-il | 355 / 353 ms | 347 / 355 ms |
+| liquid-render | 126 / 131 ms | 118 / 125 ms（−5 %） |
+
+ベンチ全体では liquid-render の −5 % 以外はばらつきの範囲内: 各ベンチの正規表現の
+比率が限られている（sequel は `Date._parse` 整理後で 1 反復の 1 割程度）ためで、
+効果はマイクロベンチの通り正規表現 1 回あたり 10〜75 %。`/i` や文字クラスを多用する
+コード（テンプレートエンジン、パーサ、`StringScanner` ベースの字句解析）ほど効く。
 
 ## 3. liquid-il に残っている分
 
@@ -346,7 +392,7 @@ US-ASCII のまま照合するので、`mbc_enc_len` / `onigenc_mbclen_approxima
 |---|---|---|---|---|
 | 1 | `String#<<` インラインの cr 畳み込み修正（**済**、§2.1） | liquid-il、`gsub` 結果を追記する全コード | 低 | liquid-il −32 % |
 | 2 | 再コンパイル回数の上限（§2.2、実験済み）。本命は PIC 超過サイトの汎用呼び出し化 | liquid-render、activerecord（先行調査 §5.5） | 低 / 中 | liquid-render −21 %、RSS −53 % |
-| 3 | **7 bit のソースは US-ASCII でもコンパイルし、対象文字列が 7 bit（cr = SevenBit）ならそちらで照合する**（CRuby の `rb_reg_prepare_enc`）。`RegexpInner` には既に native（非 UTF-8）エンコーディング用の第 2 スロット `native` / `native_enc` と `captures_bytes_from_pos` があるので、ASCII 版をそこに載せる。`\u` 非 ASCII エスケープ・非 ASCII を含むソース・`fixed_encoding` は除外 | regex を使う全コード（sequel、mail、liquid、activerecord …） | 低〜中 | `/[a-z]/i` 414 → ≈ 90 ns、`mbc_enc_len` / `mbclen_approximate` / `mbc_case_fold` の 3.7 %（sequel）が消える |
+| 3 | 7 bit のソースは US-ASCII でもコンパイルし、対象文字列が 7 bit ならそちらで照合する（**済**、§2.3） | regex を使う全コード（sequel、mail、liquid、activerecord …） | 低 | `/[a-z]/i` 414 → 95 ns、`Date._parse` −26 % |
 | 4 | `Date._parse` の Ruby 実装の整理（**済**、§5.2） | sequel、`Time.parse` / `DateTime.parse` を使う全般 | 低 | `Date._parse` −37 % |
 | 5 | `Kernel#respond_to?` の (class, name, class_version) キャッシュ | liquid-render、rack、activerecord | 低 | 2 段探索 1,200 万回/8 s → 0 |
 | 6 | `cmp_teq_values_impl` に Class 受信側の直接 `is_kind_of` 腕（BOP 未再定義時） | liquid-il、`case x when Klass` 全般 | 低 | `===` 930 万回/8 s のグローバルキャッシュ探索 → 0 |
