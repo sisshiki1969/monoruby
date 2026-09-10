@@ -954,6 +954,85 @@ fn nokogiri_sax_push_parser() {
 }
 
 #[test]
+fn nokogiri_reader() {
+    compare(
+        r##"
+        require "stringio"
+        xml = <<~XML
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!-- top -->
+          <root xmlns="http://d" xmlns:p="http://p" xml:lang="en" p:a="1" b="2" xml:base="http://base/">
+            <p:child id="c1">text &amp; more<![CDATA[cd]]><?pi data?></p:child>
+            <empty/>
+            <deep><x><y>z</y></x></deep>
+          </root>
+        XML
+        r = []
+        reader = Nokogiri::XML::Reader(xml)
+        r << [reader.class, reader.source.class, reader.errors, reader.encoding, reader.state, reader.node_type, reader.name]
+        reader.each do |node|
+          r << [node.node_type, node.name, node.local_name, node.prefix, node.namespace_uri, node.depth, node.value,
+           node.value?, node.attributes?, node.attribute_count, node.empty_element?, node.self_closing?, node.default?,
+           node.lang, node.xml_version, node.state, node.base_uri]
+          if node.node_type == Nokogiri::XML::Reader::TYPE_ELEMENT
+            r << [node.attribute_hash, node.namespaces, node.attributes, node.attribute("id"), node.attribute("p:a"),
+             node.attribute_at(0), node.attribute_at(9), node.attribute(nil), node.attribute_at(nil)]
+            r << [node.inner_xml, node.outer_xml] if node.name == "deep" || node.name == "empty"
+          end
+        end
+        r << [reader.state, reader.read, reader.encoding]
+        io_reader = Nokogiri::XML::Reader(StringIO.new("<a><b>1</b><c x='y'/></a>"), "http://u/", "UTF-8")
+        r << io_reader.map { |n| [n.name, n.node_type, n.depth, n.attribute_hash, n.base_uri] }
+        r << [io_reader.encoding, io_reader.source.class]
+        r << Nokogiri::XML::Reader.from_memory("<a>x</a>").map(&:name)
+        r << Nokogiri::XML::Reader.from_io(StringIO.new("<a>x</a>"), nil, nil, 0).map(&:name)
+        r << Nokogiri::XML::Reader.new("<a>x</a>", nil, "ISO-8859-1").tap(&:read).encoding
+        bad = Nokogiri::XML::Reader("<root><a></root>")
+        begin
+          bad.each { |n| }
+          r << :no_raise
+        rescue Nokogiri::XML::SyntaxError => e
+          r << [e.class, e.message, bad.errors.map(&:to_s), bad.errors.map(&:class).uniq]
+        end
+        rec = Nokogiri::XML::Reader("<root><a></root>") { |c| c.recover }
+        begin
+          r << rec.map(&:name)
+        rescue Nokogiri::XML::SyntaxError => e
+          r << [e.class, e.message]
+        end
+        r << rec.errors.map(&:to_s)
+        ent = Nokogiri::XML::Reader("<!DOCTYPE r [<!ENTITY e 'v'><!ATTLIST r x CDATA 'dflt'>]><r>&e;</r>")
+        r << ent.map { |n| [n.name, n.node_type, n.value, n.default?, n.attribute_hash, n.attribute_count] }
+        ent2 = Nokogiri::XML::Reader("<!DOCTYPE r [<!ENTITY e 'v'>]><r>&e;</r>", nil, nil, Nokogiri::XML::ParseOptions::NOENT | Nokogiri::XML::ParseOptions::DTDATTR)
+        r << ent2.map { |n| [n.name, n.node_type, n.value] }
+        [-> { Nokogiri::XML::Reader(nil) }, -> { Nokogiri::XML::Reader.from_io(nil) }, -> { Nokogiri::XML::Reader.from_memory(nil) },
+         -> { Nokogiri::XML::Reader.from_memory }, -> { Nokogiri::XML::Reader.from_memory("<a/>", 1) },
+         -> { Nokogiri::XML::Reader("").map(&:name) }, -> { Nokogiri::XML::Reader("<a/>").attribute_at("x") },
+         -> { Nokogiri::XML::Reader("<a/>").attribute(1) }].each do |l|
+          begin
+            r << l.call
+          rescue => e
+            r << [e.class, e.message]
+          end
+        end
+        class Boom
+          def read(n) = raise(IOError, "boom")
+        end
+        begin
+          r << Nokogiri::XML::Reader.from_io(Boom.new).map(&:name)
+        rescue => e
+          r << [e.class, e.message]
+        end
+        rd = Nokogiri::XML::Reader("<r>" + "<i k='v'>t</i>" * 200 + "</r>")
+        n = 0
+        rd.each { |node| n += node.attribute_hash.size + node.namespaces.size; GC.start if n % 50 == 0 }
+        r << n
+        p r
+        "##,
+    );
+}
+
+#[test]
 fn nokogiri_node_identity_across_gc() {
     // Every node wraps into one Ruby object that the document keeps alive;
     // unlinked nodes stay owned by their document.

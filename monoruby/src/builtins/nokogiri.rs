@@ -24,6 +24,7 @@ mod dtd;
 mod misc;
 mod node;
 mod node_set;
+mod reader;
 mod sax;
 mod xpath;
 
@@ -69,6 +70,7 @@ pub(super) struct Classes {
     pub html4_sax_parser: ClassId,
     pub html4_sax_parser_context: ClassId,
     pub html4_sax_push_parser: ClassId,
+    pub reader: ClassId,
 }
 
 thread_local! {
@@ -172,6 +174,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     let html4_sax_parser = class(globals, html4_sax, "Parser", sax_parser);
     let html4_sax_parser_context = class(globals, html4_sax, "ParserContext", sax_parser_context);
     let html4_sax_push_parser = class(globals, html4_sax, "PushParser", sax_push_parser);
+    let reader = native_class(globals, xml_m, "Reader", OBJECT_CLASS);
 
     let c = Classes {
         nokogiri,
@@ -208,6 +211,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
         html4_sax_parser,
         html4_sax_parser_context,
         html4_sax_push_parser,
+        reader,
     };
     CLASSES.with(|cell| *cell.borrow_mut() = Some(c));
 
@@ -216,6 +220,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     dtd::init(globals, &c);
     node::init(globals, &c);
     node_set::init(globals, &c);
+    reader::init(globals, &c);
     sax::init(globals, &c);
     xpath::init(globals, &c);
 

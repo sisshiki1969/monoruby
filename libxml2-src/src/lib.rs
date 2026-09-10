@@ -327,6 +327,10 @@ pub struct xmlParserCtxt {
 pub struct xmlParserInput {
     _opaque: [u8; 0],
 }
+#[repr(C)]
+pub struct xmlTextReader {
+    _opaque: [u8; 0],
+}
 
 // ---- SAX ----
 
@@ -862,6 +866,48 @@ unsafe extern "C" {
     pub fn mrb_xml_sax_set_message_handler(f: mrb_sax_message_fn);
     pub fn mrb_xml_sax_warning(ctx: *mut c_void, msg: *const c_char, ...);
     pub fn mrb_xml_sax_error(ctx: *mut c_void, msg: *const c_char, ...);
+
+    // ---- xmlreader ----
+    pub fn xmlReaderForMemory(
+        buffer: *const c_char,
+        size: c_int,
+        URL: *const c_char,
+        encoding: *const c_char,
+        options: c_int,
+    ) -> *mut xmlTextReader;
+    pub fn xmlReaderForIO(
+        ioread: xmlInputReadCallback,
+        ioclose: xmlInputCloseCallback,
+        ioctx: *mut c_void,
+        URL: *const c_char,
+        encoding: *const c_char,
+        options: c_int,
+    ) -> *mut xmlTextReader;
+    pub fn xmlFreeTextReader(reader: *mut xmlTextReader);
+    pub fn xmlTextReaderRead(reader: *mut xmlTextReader) -> c_int;
+    pub fn xmlTextReaderReadInnerXml(reader: *mut xmlTextReader) -> *mut xmlChar;
+    pub fn xmlTextReaderReadOuterXml(reader: *mut xmlTextReader) -> *mut xmlChar;
+    pub fn xmlTextReaderAttributeCount(reader: *mut xmlTextReader) -> c_int;
+    pub fn xmlTextReaderDepth(reader: *mut xmlTextReader) -> c_int;
+    pub fn xmlTextReaderHasValue(reader: *mut xmlTextReader) -> c_int;
+    pub fn xmlTextReaderIsDefault(reader: *mut xmlTextReader) -> c_int;
+    pub fn xmlTextReaderIsEmptyElement(reader: *mut xmlTextReader) -> c_int;
+    pub fn xmlTextReaderNodeType(reader: *mut xmlTextReader) -> c_int;
+    pub fn xmlTextReaderReadState(reader: *mut xmlTextReader) -> c_int;
+    pub fn xmlTextReaderConstLocalName(reader: *mut xmlTextReader) -> *const xmlChar;
+    pub fn xmlTextReaderConstName(reader: *mut xmlTextReader) -> *const xmlChar;
+    pub fn xmlTextReaderConstNamespaceUri(reader: *mut xmlTextReader) -> *const xmlChar;
+    pub fn xmlTextReaderConstPrefix(reader: *mut xmlTextReader) -> *const xmlChar;
+    pub fn xmlTextReaderConstXmlLang(reader: *mut xmlTextReader) -> *const xmlChar;
+    pub fn xmlTextReaderConstValue(reader: *mut xmlTextReader) -> *const xmlChar;
+    pub fn xmlTextReaderConstXmlVersion(reader: *mut xmlTextReader) -> *const xmlChar;
+    pub fn xmlTextReaderConstEncoding(reader: *mut xmlTextReader) -> *const xmlChar;
+    pub fn xmlTextReaderBaseUri(reader: *mut xmlTextReader) -> *mut xmlChar;
+    pub fn xmlTextReaderGetAttributeNo(reader: *mut xmlTextReader, no: c_int) -> *mut xmlChar;
+    pub fn xmlTextReaderGetAttribute(reader: *mut xmlTextReader, name: *const xmlChar) -> *mut xmlChar;
+    pub fn xmlTextReaderCurrentNode(reader: *mut xmlTextReader) -> *mut xmlNode;
+    pub fn xmlTextReaderCurrentDoc(reader: *mut xmlTextReader) -> *mut xmlDoc;
+    pub fn xmlTextReaderExpand(reader: *mut xmlTextReader) -> *mut xmlNode;
 
     // ---- HTML ----
     pub fn htmlNewParserCtxt() -> *mut xmlParserCtxt;
