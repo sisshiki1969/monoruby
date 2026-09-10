@@ -326,7 +326,31 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
   描く必要がある（gumbo のエラーはそのバッファへのポインタを持つ。コピーを
   渡すと assert で落ちる）。
 
-まだ無いもの: `XSLT`（libxslt の同梱が要る。定数は `0.0.0` のプレースホルダ）。
+- XSLT（`xslt.rs` + `libxml2-src/glue/monoruby_xslt.c`、libxslt 1.1.43 と
+  libexslt を `libxml2-src/vendor/libxslt/` に無改造で同梱。nokogiri の
+  libxslt パッチは config.guess / config.sub だけ。`xsltconfig.h` /
+  `exsltconfig.h` は build.rs がテンプレートから生成し、`config.h` は
+  `config/xslt-config.h`。libxml2 の `config.h` と衝突しないよう別の
+  include ルートに置く）: `XSLT::Stylesheet.parse_stylesheet_doc`
+  （ドキュメントのコピーを `xsltParseStylesheetDoc`、失敗は libxslt の
+  generic error をまとめた `RuntimeError`）、`#transform(doc, params)`
+  （Hash は `to_a.flatten`、`xsltApplyStylesheet`。transform 中の libxslt /
+  libxml2 の generic error は全部集めて `RuntimeError`——nokogiri と同じく、
+  terminate しない `xsl:message` でも raise する。`xsl:strip-space` を持つ
+  stylesheet で空白テキストノードに Ruby オブジェクトがある入力はコピーを
+  変換する、nokogiri #2800）、`#serialize` / `apply_to`
+  （`xsltSaveResultToString`）、`XSLT.register(uri, klass)` /
+  `XSLT.parse(xsl, modules)`（`xsltRegisterExtModule`。変換が名前空間に触れると
+  klass のインスタンスメソッド全部を `xsltRegisterExtFunction` で登録し、
+  インスタンスを 1 つ作って Stylesheet の `func_instances` に保持する。
+  関数呼び出しの引数・戻り値の変換は XPath のカスタム関数ハンドラと同じ
+  `xpath.rs::marshal_funcall`。ハンドラの例外は transform の呼び出し状態
+  （thread-local）に保存して評価を打ち切り、transform から投げ直す）。
+  EXSLT（`exsltRegisterAll`）と libxslt の extras（`xt:node-set` 等、
+  `xsltInit` が登録）が使える。generic error の可変長引数コールバックは
+  C の glue で整形する。`LIBXSLT_*` 定数は本物になった。
+
+これで `doc/nokogiri.md` の対象は全部実装済み。
 
 設計上わかったこと:
 

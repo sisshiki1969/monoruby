@@ -14,7 +14,7 @@ const NOKOGIRI_BUILTIN_URI: &[u8] = b"https://www.nokogiri.org/default_ns/ruby/b
 
 /// `xmlXPathError` codes used by the built-in functions.
 const XPATH_INVALID_ARITY: c_int = 12;
-const XPATH_INVALID_TYPE: c_int = 11;
+pub(super) const XPATH_INVALID_TYPE: c_int = 11;
 
 /// The payload of an `XPathContext`.
 pub(super) struct XPathContext {
@@ -256,8 +256,78 @@ unsafe extern "C" fn handler_lookup(data: *mut c_void, name: *const xml::xmlChar
     }
 }
 
-/// Convert the arguments, call the handler method named by the context,
-/// push its result (`Nokogiri_marshal_xpath_funcall_and_return_values`).
+/// Convert the arguments on the stack, call `handler.name(*args)`, push
+/// its result as an XPath value
+/// (`Nokogiri_marshal_xpath_funcall_and_return_values`). A handler
+/// exception or a bad return type is answered as the error; the caller
+/// aborts the evaluation with it. Shared with the XSLT extension
+/// functions.
+pub(super) unsafe fn marshal_funcall(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ctxt: *mut xml::xmlXPathParserContext,
+    nargs: c_int,
+    handler: Value,
+    document: Value,
+    name: &str,
+) -> Result<()> {
+    // SAFETY: a live parser context with `nargs` arguments on its stack.
+    unsafe {
+        // The arguments (popped last first); each conversion may run Ruby,
+        // so the ones made so far stay rooted.
+        let len = vm.temp_len();
+        let mut convert = || -> Result<Vec<Value>> {
+            let mut args = vec![Value::nil(); nargs as usize];
+            for j in (0..nargs as usize).rev() {
+                let obj = xml::valuePop(ctxt);
+                let v = xpath_to_ruby(vm, globals, obj, document);
+                xml::xmlXPathFreeObject(obj);
+                let v = v?;
+                vm.temp_push(v);
+                args[j] = v;
+            }
+            Ok(args)
+        };
+        let args = convert();
+        let result = args.and_then(|args| vm.invoke_method_inner(globals, IdentId::get_id(name), handler, &args, None, None));
+        vm.temp_clear(len);
+        let result = result?;
+        // The result as an XPath value (nil pushes nothing).
+        if result.is_nil() {
+            return Ok(());
+        }
+        let number = match result.unpack() {
+            RV::Float(f) => Some(f),
+            RV::Fixnum(i) => Some(i as f64),
+            RV::BigInt(b) => Some(b.to_f64().unwrap_or(f64::NAN)),
+            _ => None,
+        };
+        if let Some(f) = number {
+            xml::valuePush(ctxt, xml::xmlXPathNewFloat(f));
+        } else if result.id() == TRUE_VALUE {
+            xml::valuePush(ctxt, xml::xmlXPathNewBoolean(1));
+        } else if result.id() == FALSE_VALUE {
+            xml::valuePush(ctxt, xml::xmlXPathNewBoolean(0));
+        } else if result.try_bytes().is_some() {
+            let s = cstr(result, &globals.store)?;
+            xml::valuePush(ctxt, xml::xmlXPathNewString(s.as_ptr() as *const xml::xmlChar));
+        } else if result.try_native::<super::node_set::XmlNodeSet>().is_some() {
+            let set = super::node_set::set_ptr(result)?;
+            xml::valuePush(ctxt, xml::xmlXPathWrapNodeSet(xml::xmlXPathNodeSetMerge(std::ptr::null_mut(), set)));
+        } else if result.ty() == Some(ObjTy::ARRAY) {
+            let klass = globals.store.get_module(classes().node_set).as_val();
+            let set = vm.invoke_method_inner(globals, IdentId::NEW, klass, &[document, result], None, None)?;
+            let set = super::node_set::set_ptr(set)?;
+            xml::valuePush(ctxt, xml::xmlXPathWrapNodeSet(xml::xmlXPathNodeSetMerge(std::ptr::null_mut(), set)));
+        } else {
+            return Err(MonorubyErr::runtimeerr("Invalid return type"));
+        }
+        Ok(())
+    }
+}
+
+/// The handler method named by the context, called with the arguments
+/// on the stack; a failure aborts the evaluation.
 unsafe extern "C" fn handler_invoke(ctxt: *mut xml::xmlXPathParserContext, nargs: c_int) {
     // SAFETY: libxml2 calls this with its live parser context whose
     // XPath context carries the running `XPathCall`.
@@ -268,69 +338,8 @@ unsafe extern "C" fn handler_invoke(ctxt: *mut xml::xmlXPathParserContext, nargs
             xml::xmlXPathErr(ctxt, XPATH_INVALID_TYPE);
             return;
         }
-        let vm = &mut *call.vm;
-        let globals = &mut *call.globals;
         let name = CStr::from_ptr(xml::mrb_xpath_ctx_get_function(ctx) as *const c_char).to_string_lossy().into_owned();
-        // The arguments (popped last first); each conversion may run Ruby,
-        // so the ones made so far stay rooted.
-        let len = vm.temp_len();
-        let mut convert = || -> Result<Vec<Value>> {
-            let mut args = vec![Value::nil(); nargs as usize];
-            for j in (0..nargs as usize).rev() {
-                let obj = xml::valuePop(ctxt);
-                let v = xpath_to_ruby(vm, globals, obj, call.document);
-                xml::xmlXPathFreeObject(obj);
-                let v = v?;
-                vm.temp_push(v);
-                args[j] = v;
-            }
-            Ok(args)
-        };
-        let args = convert();
-        let result = args.and_then(|args| vm.invoke_method_inner(globals, IdentId::get_id(&name), call.handler, &args, None, None));
-        vm.temp_clear(len);
-        let result = match result {
-            Ok(v) => v,
-            Err(e) => {
-                call.error = Some(e);
-                xml::xmlXPathErr(ctxt, XPATH_INVALID_TYPE);
-                return;
-            }
-        };
-        // The result as an XPath value (nil pushes nothing).
-        let pushed: Result<()> = (|| {
-            if result.is_nil() {
-                return Ok(());
-            }
-            let number = match result.unpack() {
-                RV::Float(f) => Some(f),
-                RV::Fixnum(i) => Some(i as f64),
-                RV::BigInt(b) => Some(b.to_f64().unwrap_or(f64::NAN)),
-                _ => None,
-            };
-            if let Some(f) = number {
-                xml::valuePush(ctxt, xml::xmlXPathNewFloat(f));
-            } else if result.id() == TRUE_VALUE {
-                xml::valuePush(ctxt, xml::xmlXPathNewBoolean(1));
-            } else if result.id() == FALSE_VALUE {
-                xml::valuePush(ctxt, xml::xmlXPathNewBoolean(0));
-            } else if result.try_bytes().is_some() {
-                let s = cstr(result, &globals.store)?;
-                xml::valuePush(ctxt, xml::xmlXPathNewString(s.as_ptr() as *const xml::xmlChar));
-            } else if result.try_native::<super::node_set::XmlNodeSet>().is_some() {
-                let set = super::node_set::set_ptr(result)?;
-                xml::valuePush(ctxt, xml::xmlXPathWrapNodeSet(xml::xmlXPathNodeSetMerge(std::ptr::null_mut(), set)));
-            } else if result.ty() == Some(ObjTy::ARRAY) {
-                let klass = globals.store.get_module(classes().node_set).as_val();
-                let set = vm.invoke_method_inner(globals, IdentId::NEW, klass, &[call.document, result], None, None)?;
-                let set = super::node_set::set_ptr(set)?;
-                xml::valuePush(ctxt, xml::xmlXPathWrapNodeSet(xml::xmlXPathNodeSetMerge(std::ptr::null_mut(), set)));
-            } else {
-                return Err(MonorubyErr::runtimeerr("Invalid return type"));
-            }
-            Ok(())
-        })();
-        if let Err(e) = pushed {
+        if let Err(e) = marshal_funcall(&mut *call.vm, &mut *call.globals, ctxt, nargs, call.handler, call.document, &name) {
             call.error = Some(e);
             xml::xmlXPathErr(ctxt, XPATH_INVALID_TYPE);
         }

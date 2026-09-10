@@ -1117,6 +1117,72 @@ unsafe extern "C" {
     pub fn xmlSaveClose(ctxt: *mut xmlSaveCtxt) -> c_int;
 }
 
+// ---------------------------------------------------------------------
+// libxslt / libexslt (the stylesheet and the transform context are
+// opaque: the glue reads the one field nokogiri uses)
+// ---------------------------------------------------------------------
+
+#[repr(C)]
+pub struct xsltStylesheet {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct xsltTransformContext {
+    _opaque: [u8; 0],
+}
+pub type xsltExtInitFunction = Option<
+    unsafe extern "C" fn(ctxt: *mut xsltTransformContext, uri: *const xmlChar) -> *mut c_void,
+>;
+pub type xsltExtShutdownFunction = Option<
+    unsafe extern "C" fn(ctxt: *mut xsltTransformContext, uri: *const xmlChar, data: *mut c_void),
+>;
+
+unsafe extern "C" {
+    pub static xsltLibxsltVersion: c_int;
+    pub fn exsltRegisterAll();
+    pub fn xsltParseStylesheetDoc(doc: *mut xmlDoc) -> *mut xsltStylesheet;
+    pub fn xsltFreeStylesheet(style: *mut xsltStylesheet);
+    pub fn xsltNewTransformContext(
+        style: *mut xsltStylesheet,
+        doc: *mut xmlDoc,
+    ) -> *mut xsltTransformContext;
+    pub fn xsltFreeTransformContext(ctxt: *mut xsltTransformContext);
+    pub fn xsltNeedElemSpaceHandling(ctxt: *mut xsltTransformContext) -> c_int;
+    pub fn xsltApplyStylesheet(
+        style: *mut xsltStylesheet,
+        doc: *mut xmlDoc,
+        params: *const *const c_char,
+    ) -> *mut xmlDoc;
+    pub fn xsltSaveResultToString(
+        doc_txt_ptr: *mut *mut xmlChar,
+        doc_txt_len: *mut c_int,
+        result: *mut xmlDoc,
+        style: *mut xsltStylesheet,
+    ) -> c_int;
+    pub fn xsltRegisterExtModule(
+        uri: *const xmlChar,
+        init: xsltExtInitFunction,
+        shutdown: xsltExtShutdownFunction,
+    ) -> c_int;
+    pub fn xsltRegisterExtFunction(
+        ctxt: *mut xsltTransformContext,
+        name: *const xmlChar,
+        uri: *const xmlChar,
+        function: xmlXPathFunction,
+    ) -> c_int;
+    pub fn xsltGetExtData(ctxt: *mut xsltTransformContext, uri: *const xmlChar) -> *mut c_void;
+    pub fn xsltXPathGetTransformContext(
+        ctxt: *mut xmlXPathParserContext,
+    ) -> *mut xsltTransformContext;
+    // glue/monoruby_xslt.c
+    pub fn mrb_xslt_error_capture_begin(with_xml: c_int) -> *mut c_void;
+    pub fn mrb_xslt_error_capture_end(handle: *mut c_void, len: *mut usize) -> *mut c_char;
+    pub fn mrb_xslt_error_capture_free(text: *mut c_char);
+    pub fn mrb_xslt_stylesheet_get_private(style: *mut xsltStylesheet) -> *mut c_void;
+    pub fn mrb_xslt_stylesheet_set_private(style: *mut xsltStylesheet, p: *mut c_void);
+    pub fn mrb_xslt_transform_ctxt_style(ctxt: *mut xsltTransformContext) -> *mut xsltStylesheet;
+}
+
 /// The library's `free` for memory it hands out (`xmlFree`), resolved
 /// once through `xmlMemGet` so no assumption is made about how the global
 /// is exported.

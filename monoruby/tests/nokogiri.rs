@@ -1397,6 +1397,137 @@ fn nokogiri_html5() {
 }
 
 #[test]
+fn nokogiri_xslt() {
+    // XSLT over the bundled libxslt: stylesheets, params, output methods,
+    // EXSLT and libxslt's extras, the extension functions of registered
+    // Ruby classes, the errors, the blank-node defensive copy.
+    compare(
+        r##"
+        r = []
+        r << [Nokogiri::LIBXSLT_COMPILED_VERSION, Nokogiri::LIBXSLT_LOADED_VERSION, Nokogiri::LIBXSLT_PATCHES, Nokogiri::LIBXSLT_DATETIME_ENABLED]
+        r << Nokogiri::VERSION_INFO["libxslt"].reject { |k, _| k == "precompiled" }
+        staff = Nokogiri::XML(<<~XML)
+          <?xml version="1.0"?>
+          <staff>
+            <employee><employeeId>EMP0001</employeeId><position>Accountant</position></employee>
+            <employee><employeeId>EMP0002</employeeId><position>Developer</position></employee>
+          </staff>
+        XML
+        xsl = Nokogiri::XSLT(<<~XSLT)
+          <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+          <xsl:param name="title"/>
+          <xsl:template match="/">
+            <html><body><h1><xsl:value-of select="$title"/></h1>
+            <ol><xsl:for-each select="staff/employee"><li><xsl:value-of select="employeeId"/></li></xsl:for-each></ol>
+            </body></html>
+          </xsl:template>
+          </xsl:stylesheet>
+        XSLT
+        r << [xsl.class, xsl.class.superclass, xsl.transform(staff).class]
+        r << xsl.transform(staff).to_xml
+        r << xsl.transform(staff, { "title" => "'Employee List'" }).to_xml
+        r << xsl.transform(staff, Nokogiri::XSLT.quote_params({ "title" => "Aaron's List" })).to_xml
+        r << xsl.transform(staff, ["title", "'Employee List'"]).to_xml
+        r << xsl.serialize(xsl.transform(staff))
+        r << xsl.apply_to(staff, ["title", "'T'"])
+        handler = Class.new do
+          def reverse(node) node.text.reverse end
+          def upcase(str) str.upcase end
+          def count(ns) ns.length end
+          def yes(x) true end
+          def nothing(x) nil end
+          def nodes(ns) ns.to_a end
+          def num(x) x * 2 end
+        end
+        xsl2 = Nokogiri.XSLT(<<~XSL, "http://nokogiri.org/xslt/myfuncs" => handler)
+          <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:myfuncs="http://nokogiri.org/xslt/myfuncs" extension-element-prefixes="myfuncs">
+            <xsl:template match="/">
+              <reversed>
+                <xsl:for-each select="staff/employee/employeeId">
+                  <reverse><xsl:copy-of select="myfuncs:reverse(.)"/></reverse>
+                </xsl:for-each>
+                <u><xsl:value-of select="myfuncs:upcase('abc')"/></u>
+                <c><xsl:value-of select="myfuncs:count(//employee)"/></c>
+                <y><xsl:value-of select="myfuncs:yes(1)"/></y>
+                <n><xsl:copy-of select="myfuncs:nodes(//position)"/></n>
+                <m><xsl:value-of select="myfuncs:num(21)"/></m>
+              </reversed>
+            </xsl:template>
+          </xsl:stylesheet>
+        XSL
+        r << xsl2.transform(staff).to_xml
+        r << xsl2.transform(staff).to_xml
+        xml = Nokogiri::XML("<r><a>x</a><a>y</a><b n='3'>  </b><c>hello world</c></r>")
+        mk = ->(body, extra_ns = "") {
+          Nokogiri::XSLT(%(<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:exsl="http://exslt.org/common" xmlns:str="http://exslt.org/strings" xmlns:math="http://exslt.org/math" xmlns:set="http://exslt.org/sets" xmlns:dyn="http://exslt.org/dynamic" xmlns:date="http://exslt.org/dates-and-times" xmlns:func="http://exslt.org/functions" xmlns:xt="http://xmlsoft.org/XSLT/namespace" extension-element-prefixes="exsl str math set dyn date func xt" #{extra_ns}>#{body}</xsl:stylesheet>))
+        }
+        ex = mk.(%(<xsl:template match="/"><o>
+          <xsl:variable name="v"><b>1</b><b>2</b></xsl:variable>
+          <c><xsl:value-of select="count(exsl:node-set($v)/b)"/></c>
+          <d><xsl:value-of select="count(xt:node-set($v)/b)"/></d>
+          <e><xsl:value-of select="str:concat(//a)"/></e>
+          <f><xsl:value-of select="math:max(//b/@n | //a)"/></f>
+          <g><xsl:value-of select="count(set:distinct(//a | //a))"/></g>
+          <h><xsl:value-of select="dyn:evaluate('//c')"/></h>
+          <i><xsl:value-of select="date:day-in-month('2024-02-29')"/>-<xsl:value-of select="date:month-abbreviation('2024-02-29')"/></i>
+          <j><xsl:value-of select="str:replace(//c, 'o', '0')"/></j>
+          <k><xsl:copy-of select="str:tokenize(//c, ' ')"/></k>
+          <l><xsl:value-of select="exsl:object-type($v)"/></l>
+        </o></xsl:template>))
+        r << ex.transform(xml).to_xml
+        r << ex.transform(xml).root.children.map(&:name)
+        text = mk.(%(<xsl:output method="text"/><xsl:template match="/"><xsl:for-each select="//a"><xsl:value-of select="."/>,</xsl:for-each></xsl:template>))
+        r << [text.transform(xml).to_xml, text.serialize(text.transform(xml)), text.apply_to(xml), text.transform(xml).class]
+        html = mk.(%(<xsl:output method="html" indent="yes"/><xsl:template match="/"><html><body><p><xsl:value-of select="//c"/></p><br/></body></html></xsl:template>))
+        r << [html.transform(xml).to_xml, html.serialize(html.transform(xml)), html.transform(xml).class, html.transform(xml).root.name]
+        ident = mk.(%(<xsl:output method="xml" encoding="ISO-8859-1" indent="yes"/><xsl:template match="@*|node()"><xsl:copy><xsl:apply-templates select="@*|node()"/></xsl:copy></xsl:template>))
+        r << [ident.transform(xml).to_xml, ident.serialize(ident.transform(xml)), ident.transform(xml).encoding]
+        strip = mk.(%(<xsl:strip-space elements="*"/><xsl:template match="/"><n><xsl:value-of select="count(//text())"/></n></xsl:template>))
+        r << strip.transform(xml).to_xml
+        r << xml.to_xml
+        # A document whose blank text nodes have Ruby objects is transformed as a copy (nokogiri #2800).
+        blank_doc = Nokogiri::XML("<r> <a>x</a> <b>  </b> </r>")
+        blanks = blank_doc.xpath("//text()").to_a
+        r << [blanks.size, strip.transform(blank_doc).root.text, blank_doc.to_xml, blanks.map(&:to_s), blank_doc.xpath("//text()").size]
+        h4 = Nokogiri::HTML4("<html><body><p class='q'>hi</p></body></html>")
+        r << mk.(%(<xsl:template match="/"><o><xsl:value-of select="//p/@class"/>:<xsl:value-of select="//p"/></o></xsl:template>)).transform(h4).to_xml
+        r << mk.(%(<xsl:param name="p" select="1"/><xsl:template match="/"><o><xsl:value-of select="$p"/></o></xsl:template>)).transform(xml, ["p", "'q'"]).root.text
+        r << mk.(%(<xsl:param name="p" select="1"/><xsl:template match="/"><o><xsl:value-of select="$p"/></o></xsl:template>)).transform(xml, { "p" => "2 + 3" }).root.text
+        r << Nokogiri::XSLT.quote_params({ "a" => "it's", :b => 2 })
+        r << Nokogiri::XSLT.quote_params(["a", "plain"])
+        raiser = Class.new do
+          def boom(x) raise ArgumentError, "boom from handler" end
+          def bad(x) Object.new end
+        end
+        Nokogiri::XSLT.register("http://x/raiser", raiser)
+        r << Nokogiri::XSLT.instance_variable_get(:@modules).keys
+        [-> { Nokogiri::XSLT("<r/>") }, -> { Nokogiri::XSLT("<xsl:stylesheet version='1.0' xmlns:xsl='http://www.w3.org/1999/XSL/Transform'><xsl:bogus/></xsl:stylesheet>") },
+         -> { mk.(%(<xsl:template match="/"><xsl:value-of select="$undefined"/></xsl:template>)).transform(xml) },
+         -> { mk.(%(<xsl:template match="/"><xsl:message terminate="yes">stop here</xsl:message></xsl:template>)).transform(xml) },
+         -> { mk.(%(<xsl:template match="/"><xsl:message>just a note</xsl:message><o/></xsl:template>)).transform(xml) },
+         -> { mk.(%(<xsl:template match="/"><o><xsl:value-of select="rr:boom(1)"/></o></xsl:template>), "xmlns:rr='http://x/raiser'").transform(xml) },
+         -> { mk.(%(<xsl:template match="/"><o><xsl:value-of select="rr:bad(1)"/></o></xsl:template>), "xmlns:rr='http://x/raiser'").transform(xml) },
+         -> { ex.transform(xml.root) }, -> { ex.transform(xml, 42) }, -> { ex.transform(xml, [1]) }, -> { ex.serialize("x") },
+         -> { Nokogiri::XSLT::Stylesheet.parse_stylesheet_doc("x") }, -> { Nokogiri::XSLT::Stylesheet.parse_stylesheet_doc(xml.root) },
+         -> { Nokogiri::XSLT("<xsl:stylesheet version='1.0' xmlns:xsl='http://www.w3.org/1999/XSL/Transform'><xsl:template match='/'><xsl:value-of select='1 +'/></xsl:template></xsl:stylesheet>") },
+         -> { Nokogiri::XSLT("<xsl:stylesheet version='1.0' xmlns:xsl='http://www.w3.org/1999/XSL/Transform'><xsl:include href='/nonexistent/x.xsl'/></xsl:stylesheet>") },
+        ].each do |l|
+          begin
+            r << l.call.to_xml
+          rescue => e
+            r << [e.class, e.message]
+          end
+        end
+        r << ex.transform(xml).to_xml
+        keep = (1..20).map { [mk.(%(<xsl:template match="/"><o><xsl:value-of select="count(//a)"/></o></xsl:template>)), Nokogiri::XML("<r><a/><a/></r>")] }
+        GC.start
+        r << keep.map { |s, d| s.transform(d).root.text }.uniq
+        p r
+        "##,
+    );
+}
+
+#[test]
 fn nokogiri_node_identity_across_gc() {
     // Every node wraps into one Ruby object that the document keeps alive;
     // unlinked nodes stay owned by their document.
