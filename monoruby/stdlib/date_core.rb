@@ -317,14 +317,32 @@ class Date
     end
     str = str.gsub(/[^-+',.\/:@[:alnum:]\[\]]+/, " ")
     h = {}
-    __parse_day(str, h)
-    __parse_time(str, h)
-    __parse_eu(str, h) || __parse_us(str, h) || __parse_iso(str, h) ||
-      __parse_jis(str, h) || __parse_vms(str, h) || __parse_sla(str, h) ||
-      __parse_dot(str, h) || __parse_iso2(str, h) || __parse_year(str, h) ||
-      __parse_mon(str, h) || __parse_mday(str, h) || __parse_ddd(str, h)
-    __parse_bc(str, h)
-    __parse_frag(str, h)
+    # Character classes present in the string (CRuby's `check_class`).
+    # Each sub-parser is tried only when the characters its pattern
+    # needs are there at all: "2026-09-10 08:40:12" has no letters, so
+    # the month-name patterns (`__parse_eu` / `__parse_us`, several µs
+    # each as case-insensitive alternations) are never run on it.
+    alpha = str.match?(/[a-zA-Z]/)
+    digit = str.match?(/\d/)
+    dash = str.include?("-")
+    dot = str.include?(".")
+    slash = str.include?("/")
+    __parse_day(str, h) if alpha
+    __parse_time(str, h) if digit
+    (alpha && digit && __parse_eu(str, h)) ||
+      (alpha && digit && __parse_us(str, h)) ||
+      (digit && dash && __parse_iso(str, h)) ||
+      (digit && dot && __parse_jis(str, h)) ||
+      (alpha && digit && dash && __parse_vms(str, h)) ||
+      (digit && slash && __parse_sla(str, h)) ||
+      (digit && dot && __parse_dot(str, h)) ||
+      (digit && __parse_iso2(str, h)) ||
+      (digit && __parse_year(str, h)) ||
+      (alpha && __parse_mon(str, h)) ||
+      (digit && __parse_mday(str, h)) ||
+      (digit && __parse_ddd(str, h))
+    __parse_bc(str, h) if alpha
+    __parse_frag(str, h) if digit
     if h.delete(:_bc)
       h[:cwyear] = -h[:cwyear] + 1 if h[:cwyear]
       h[:year] = -h[:year] + 1 if h[:year]
@@ -449,7 +467,10 @@ class Date
           y, d = d, nil
         end
       end
-      unless y.nil?
+      # A plain (optionally signed / apostrophe-prefixed) digit run is the
+      # common case ("2026" from an ISO date); it has no trailing text, so
+      # the three regexp steps below are only needed for anything else.
+      if !y.nil? && !y.match?(/\A[-+']?\d+\z/)
         s = y.sub(/\A[^-+\d]*/, "")
         digits = s.match(/\A[-+]?\d+/)
         if digits && digits.end(0) < s.length
@@ -465,7 +486,12 @@ class Date
         y, d = d, y
       end
       unless y.nil?
-        if y =~ /([-+]?)(\d+)/
+        if y.match?(/\A\d+\z/)
+          iy = y.to_i
+          iy = -iy + 1 if bc
+          h[:year] = iy
+          h[:_comp] = false if y.length > 2
+        elsif y =~ /([-+]?)(\d+)/
           iy = $2.to_i
           iy = -iy if $1 == "-"
           iy = -iy + 1 if bc
@@ -474,21 +500,30 @@ class Date
         end
       end
       h[:_bc] = true if bc
-      h[:mon] = m[/\d+/].to_i unless m.nil?
-      h[:mday] = d[/\d+/].to_i unless d.nil?
+      h[:mon] = (m.match?(/\A\d+\z/) ? m : m[/\d+/]).to_i unless m.nil?
+      h[:mday] = (d.match?(/\A\d+\z/) ? d : d[/\d+/]).to_i unless d.nil?
       true
     end
 
+    # The month/era alternations are interpolated, so these are hoisted
+    # into constants: a `/#{...}/` literal in the method body would be
+    # rebuilt (source concatenation, validation, cache lookup) on every
+    # call, and `_parse` runs several of them per string. CRuby's C
+    # implementation compiles each of these patterns exactly once too.
+    EU_PAT = /'?(\d+)[^-\d\s]*\s*(#{MONTH_PAT})[^-\d\s']*(?:\s*(#{BC_PAT})?\s*('?-?\d+(?:(?:st|nd|rd|th)\b)?))?/i
+    US_PAT = /\b(#{MONTH_PAT})[^-\d\s']*\s*('?\d+)[^-\d\s']*(?:\s*,?\s*(#{BC_PAT})?\s*('?-?\d+))?/i
+    VMS_PAT1 = /('?-?\d+)-(#{MONTH_PAT})[^-\/.]*-('?-?\d+)/i
+    VMS_PAT2 = /\b(#{MONTH_PAT})[^-\/.]*-('?-?\d+)(?:-('?-?\d+))?/i
+    MON_PAT = /\b(#{MONTH_PAT})\S*/i
+
     def __parse_eu(str, h)
-      re = /'?(\d+)[^-\d\s]*\s*(#{MONTH_PAT})[^-\d\s']*(?:\s*(#{BC_PAT})?\s*('?-?\d+(?:(?:st|nd|rd|th)\b)?))?/i
-      return unless str.sub!(re, " ")
+      return unless str.sub!(EU_PAT, " ")
       d, mon, bc, y = $1, $2, $3, $4
       __s3e(h, y, __mon_num(mon), d, !!(bc && bc =~ /\Ab/i))
     end
 
     def __parse_us(str, h)
-      re = /\b(#{MONTH_PAT})[^-\d\s']*\s*('?\d+)[^-\d\s']*(?:\s*,?\s*(#{BC_PAT})?\s*('?-?\d+))?/i
-      return unless str.sub!(re, " ")
+      return unless str.sub!(US_PAT, " ")
       mon, d, bc, y = $1, $2, $3, $4
       __s3e(h, y, __mon_num(mon), d, !!(bc && bc =~ /\Ab/i))
     end
@@ -507,9 +542,9 @@ class Date
     end
 
     def __parse_vms(str, h)
-      if str.sub!(/('?-?\d+)-(#{MONTH_PAT})[^-\/.]*-('?-?\d+)/i, " ")
+      if str.sub!(VMS_PAT1, " ")
         __s3e(h, $3, __mon_num($2), $1)
-      elsif str.sub!(/\b(#{MONTH_PAT})[^-\/.]*-('?-?\d+)(?:-('?-?\d+))?/i, " ")
+      elsif str.sub!(VMS_PAT2, " ")
         __s3e(h, $3, __mon_num($1), $2)
       end
     end
@@ -559,7 +594,7 @@ class Date
     end
 
     def __parse_mon(str, h)
-      return unless str.sub!(/\b(#{MONTH_PAT})\S*/i, " ")
+      return unless str.sub!(MON_PAT, " ")
       h[:mon] = __mon_num($1)
       true
     end
