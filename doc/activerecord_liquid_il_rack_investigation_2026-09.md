@@ -144,7 +144,7 @@ superclass 鎖（include の iclass を含む）を 1 段 ≈ 30 命令で辿る
 その手前のディスパッチ（`invoke_method` inclusive 486 命令/回）。`BASIC_OP_DEFS` には Integer / Float / Symbol / nil /
 true / false の `===` しかなく、`Module#===` は BOP 扱いではない。
 
-**対処（済、コミット `<TEQFIX>`）**: 受信側が定数の Class / Module で、その `===` が
+**対処（済、コミット `575ac6a`）**: 受信側が定数の Class / Module で、その `===` が
 builtin の `Module#===` に解決されるサイト（`case … when Klass` と `Klass === v`）を、
 JIT で `AsmInst::KindOfConst` に落とす。機械語で (1) 値のクラス ID を求め（即値はタグ
 判定、ヒープ値は `RValue.class`）、(2) 目的のクラス ID と比較、(3) 外れたらクラス
