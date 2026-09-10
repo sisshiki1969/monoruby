@@ -1234,8 +1234,5 @@ fn native_write_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
         }
         *xml::__xmlTreeIndentString() = before;
     }
-    if let Some(err) = ioctx.error.take() {
-        return Err(err);
-    }
     Ok(io)
 }

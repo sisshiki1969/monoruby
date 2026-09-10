@@ -153,9 +153,10 @@ mark で `Node` → `Document` の参照を辿る必要がある、(3) `Document
 ### 3.3 Ruby との境界
 
 - **パース**: `read_memory` は文字列から、`read_io` は `xmlReadIO` に Ruby の
-  `IO#read` を呼ぶコールバックを渡す。コールバック中の Ruby 例外は
-  `Executor` のエラー状態に積んでパースを中断し、戻ってから投げ直す
-  （nokogiri は `rb_protect` でやっている部分）。
+  `IO#read` を呼ぶコールバックを渡す。コールバック中の Ruby 例外は nokogiri
+  （`rb_rescue` で受けて -1 を返す）と同じく握りつぶし、libxml2 には IO エラー
+  として見せる（パースなら "Unknown IO error" が `errors` に入り、書き出しなら
+  そこで止まる）。
 - **エラー**: libxml2 の structured error handler で `xmlError` を受け、
   `Nokogiri::XML::SyntaxError` を作って `document.errors` に積む。
   `RECOVER` 無しなら最初のエラーで raise。メッセージは libxml2 のものを

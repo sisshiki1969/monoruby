@@ -763,27 +763,24 @@ pub(super) fn raise(ex: Value) -> MonorubyErr {
 // ---------------------------------------------------------------------
 
 /// The context of a libxml2 IO callback that reads from / writes to a
-/// Ruby IO: an exception raised by the IO is kept here and re-raised after
-/// the library call returns.
+/// Ruby IO. An exception raised by the IO is swallowed and reported to
+/// libxml2 as an IO error (nokogiri's `noko_io_read` / `noko_io_write`
+/// run the call under `rb_rescue` and answer -1), so a parse sees
+/// "Unknown IO error" and a save stops.
 pub(super) struct IoCtx {
     pub vm: *mut Executor,
     pub globals: *mut Globals,
     pub io: Value,
-    pub error: Option<MonorubyErr>,
 }
 
 impl IoCtx {
     pub fn new(vm: &mut Executor, globals: &mut Globals, io: Value) -> Self {
-        IoCtx {
-            vm,
-            globals,
-            io,
-            error: None,
-        }
+        IoCtx { vm, globals, io }
     }
 }
 
-/// `noko_io_read`: `io.read(len)` into libxml2's buffer.
+/// `noko_io_read`: `io.read(len)` into libxml2's buffer; nil is EOF, an
+/// exception or a non-String answer is an IO error.
 pub(super) unsafe extern "C" fn io_read(ctx: *mut c_void, buffer: *mut c_char, len: c_int) -> c_int {
     // SAFETY: `ctx` is the `IoCtx` registered by the caller, alive for
     // the whole library call; `buffer` has `len` bytes.
@@ -792,23 +789,18 @@ pub(super) unsafe extern "C" fn io_read(ctx: *mut c_void, buffer: *mut c_char, l
         let vm = &mut *c.vm;
         let globals = &mut *c.globals;
         let read = IdentId::get_id("read");
-        match vm.invoke_method_inner(globals, read, c.io, &[Value::integer(len as i64)], None, None) {
-            Err(e) => {
-                c.error = Some(e);
-                -1
-            }
-            Ok(v) => {
-                if v.is_nil() {
-                    return 0;
-                }
-                let Ok(bytes) = v.expect_bytes(&globals.store) else {
-                    return -1;
-                };
-                let n = bytes.len().min(len as usize);
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer as *mut u8, n);
-                n as c_int
-            }
+        let Ok(v) = vm.invoke_method_inner(globals, read, c.io, &[Value::integer(len as i64)], None, None) else {
+            return -1;
+        };
+        if v.is_nil() {
+            return 0;
         }
+        let Some(bytes) = v.try_bytes() else {
+            return -1;
+        };
+        let n = bytes.len().min(len as usize);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer as *mut u8, n);
+        n as c_int
     }
 }
 
@@ -826,27 +818,18 @@ pub(super) unsafe extern "C" fn io_write(ctx: *mut c_void, buffer: *const c_char
         let enc = match vm.invoke_method_if_exists(globals, external_encoding, c.io, &[], None, None) {
             Ok(Some(enc)) => enc,
             Ok(None) => Value::nil(),
-            Err(e) => {
-                c.error = Some(e);
-                return -1;
-            }
+            Err(_) => return -1,
         };
         if !enc.is_nil() {
             let force = IdentId::get_id("force_encoding");
             match vm.invoke_method_inner(globals, force, chunk, &[enc], None, None) {
                 Ok(v) => chunk = v,
-                Err(e) => {
-                    c.error = Some(e);
-                    return -1;
-                }
+                Err(_) => return -1,
             }
         }
         match vm.invoke_method_inner(globals, IdentId::get_id("write"), c.io, &[chunk], None, None) {
             Ok(n) => n.try_fixnum().unwrap_or(len as i64) as c_int,
-            Err(e) => {
-                c.error = Some(e);
-                -1
-            }
+            Err(_) => -1,
         }
     }
 }

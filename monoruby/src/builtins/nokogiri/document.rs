@@ -118,13 +118,6 @@ fn read_io(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         xml::xmlFreeParserCtxt(ctxt);
         doc
     };
-    if let Some(err) = ioctx.error.take() {
-        if !doc.is_null() {
-            // SAFETY: a document nobody else holds.
-            unsafe { xml::xmlFreeDoc(doc) };
-        }
-        return Err(err);
-    }
     finish_parse(vm, globals, class, doc, &errors)
 }
 
@@ -238,13 +231,6 @@ fn html_read_io(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
         xml::xmlFreeParserCtxt(ctxt);
         doc
     };
-    if let Some(err) = ioctx.error.take() {
-        if !doc.is_null() {
-            // SAFETY: a document nobody else holds.
-            unsafe { xml::xmlFreeDoc(doc) };
-        }
-        return Err(err);
-    }
     // An `EncodingReader` wrapping the IO may have found the document's
     // encoding mid-way and asks for a re-parse (`encoding_found`).
     let encoding_found = IdentId::get_id("encoding_found");
