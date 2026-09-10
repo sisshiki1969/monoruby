@@ -1857,6 +1857,21 @@ impl ClassInfoTable {
         self.define_class_with_identid(name_id, superclass, parent)
     }
 
+    /// `define_class` with the instance object type spelled out (a class
+    /// whose instances are native objects, not `ObjTy::OBJECT`): the JIT
+    /// and the interpreter then keep its ivars in the heap table instead
+    /// of the inline slots. Subclasses inherit the type.
+    pub(crate) fn define_class_with_instance_ty(
+        &mut self,
+        name: &str,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+        instance_ty: ObjTy,
+    ) -> Module {
+        let name_id = IdentId::get_id(name);
+        self.define_class_inner(Some(name_id), superclass, Some(parent), false, Some(instance_ty))
+    }
+
     /// A class with a display name but no constant binding and a custom
     /// instance type — CRuby's `rb_class_new` + `rb_set_class_path`
     /// pattern, used for `ARGF.class` (its name cannot be a constant).

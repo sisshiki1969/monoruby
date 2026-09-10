@@ -341,7 +341,7 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashbrown`, `ruby_traits`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
@@ -350,6 +350,7 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashb
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
+| `libxml2-src`   | Vendored libxml2 (+ nokogiri's patches) built with `cc`, and its FFI |
 
 External crates (fetched from git):
 
@@ -369,6 +370,16 @@ External crates (fetched from git):
   events to a `Psych::Handler`, `__yaml_emitter_new` / `__yaml_emit` /
   `__yaml_emitter_free` hold one emitter per `Psych::Emitter`). The gem's
   Ruby half is vendored under `gem/psych/`.
+- `libxml2-src` (workspace crate) — libxml2 2.13.8 with nokogiri's patches,
+  vendored under `libxml2-src/vendor/` and built with `cc` (hand-written
+  `config.h`, generated `xmlversion.h`; no autotools / cmake), with a
+  hand-written FFI. Behind `Nokogiri` (`src/builtins/nokogiri/`): the gem's
+  Ruby half is vendored under `gem/nokogiri/` and `gem/nokogiri/nokogiri.rb`
+  stands in for nokogiri.so. Objects wrapping libxml2 pointers are
+  `ObjTy::NATIVE` RValues (`NativeData` payloads with their own `mark` /
+  `Drop`); their classes are defined with `instance_ty = NATIVE`
+  (`define_class_with_instance_ty`) so the JIT never treats the payload as
+  inline ivar slots. See `doc/nokogiri.md`.
 - `libz-sys` — zlib built from its bundled C source and linked statically; the
   `String.__zstream_*` builtins (`src/builtins/zlib.rs`) expose one `z_stream`
   per `Zlib::Deflate` / `Zlib::Inflate` object, and everything else in `Zlib`

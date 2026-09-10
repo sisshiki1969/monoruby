@@ -227,3 +227,58 @@ libxml2 のビルドが付く。段階 1〜3 で ext の 6 割程度（Node 54 +
 
 B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の mark / drop の
 形がそのまま `TypedData` の受け皿になるので、A の作業は無駄にならない。
+
+## 6. 実装状況（段階 1〜2 の一部、2026-09）
+
+`libxml2-src/`（libxml2 2.13.8 + nokogiri 1.18.9 の patches、`cc` でビルド、
+`config.h` は手書き、`xmlversion.h` は build.rs が生成）、
+`monoruby/src/builtins/nokogiri/`（Rust 側 ~2.5k 行）、`monoruby/gem/nokogiri/`
+（gem 1.19.1 の Ruby 半分をそのまま + `nokogiri/nokogiri.rb` のスタブ）。
+`tests/nokogiri.rs` が CRuby の nokogiri gem と同じスクリプトを走らせて出力を
+突き合わせる（gem が無ければ skip、CI は入れる）。
+
+動くもの:
+
+- `XML::Document`: `parse` / `read_memory` / `read_io`（Ruby の IO を
+  コールバックで読む）/ `new` / `root` / `root=` / `encoding` / `version` /
+  `url`、`errors`、strict モードの `SyntaxError`（message / line / column /
+  domain / code / level / file / str1..3 / int1 が CRuby と一致）。
+- `XML::Node` の 54 のネイティブのうち `dup` 系（`initialize_copy_with_args`）、
+  `canonicalize`、`create_entity`、`process_xincludes`、
+  `html_standard_serialize`（HTML5）、`prepend_newline?`、`create_external_subset`
+  以外: 走査、属性（`get` / `set` / `key?` / `attribute_nodes`）、名前空間、
+  `content` / `native_content=`、`path` / `line`、`unlink`、`add_child` /
+  `add_next_sibling` / `add_previous_sibling` / `replace`（`reparent_node_with`
+  と `relink_namespace` の移植: 別ドキュメントやテキストノードの複製、
+  隣接テキストの併合、名前空間の再結合）、`in_context`（`DocumentFragment`、
+  `Node#parse`、`inner_html=`、`add_child(String)`）、`native_write_to`
+  （`to_xml` / `to_html` / `to_s`、インデント、エンコーディング指定）、
+  `dump_html`。`Text` / `Comment` / `CDATA` / `ProcessingInstruction` / `Attr`
+  / `DocumentFragment` のコンストラクタ、`Attr#value=`、`Namespace`。
+- `XML::NodeSet`（`&` `|` `-` `[]` `slice` `delete` `include?` `length` `push`
+  `to_a` `unlink` `initialize_copy`）、`XML::XPathContext`（`evaluate` /
+  `register_ns` / `register_variable` / `node=`、`css-class` と
+  `local-name-is` の組み込み関数なので CSS セレクタが全部通る）。
+- `HTML4::Document`（`read_memory` / `read_io` / `new` / `type`）、
+  `HTML4::EntityLookup`、`EncodingHandler`。
+
+まだ無いもの（段階 2〜6）: `XML::SAX::*`（`SAX::PushParser` は
+`HTML4::EncodingReader` が使うので **HTML の IO からのパース**もまだ）、
+`XML::Reader`、`XML::Schema` / `RelaxNG`、`XSLT`（定数は `0.0.0` の
+プレースホルダ）、HTML5（gumbo）、`HTML4::ElementDescription`
+（`Node#description`）、XPath のカスタム関数ハンドラ（`evaluate` の第 2
+引数は受け取るが無視）、`Node#dup` / `Document#dup`。
+
+設計上わかったこと:
+
+- ネイティブオブジェクトの種別 `ObjTy::NATIVE`（`RValue` に
+  `Box<dyn NativeData>` を持たせ、`mark` と `Drop` を型ごとに実装）を足した。
+  そのクラスは **`instance_ty` を `NATIVE` で定義しなければならない**
+  （`Store::define_class_with_instance_ty`）: JIT は `instance_ty` が `OBJECT`
+  のクラスの ivar をインラインスロット（`kind` 共用体）に読み書きするので、
+  普通の `define_class` で作ると `@errors = ...` がペイロードの Box を上書きして
+  落ちる。
+- ビルトインの中で作った `Value` を Ruby 呼び出し（`initialize`、`decorate`、
+  `SyntaxError.new`）を跨いで持つときは `vm.temp_push` で根付けする
+  （`doc/gc.md` §8.1）。`wrap_document` / `wrap_node_set` / `errors_to_array`
+  / `NodeSet#to_a` がそれ。

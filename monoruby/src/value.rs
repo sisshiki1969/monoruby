@@ -1376,6 +1376,21 @@ impl Value {
         RValue::new_argf(class_id, inner).pack()
     }
 
+    /// An object of `class_id` carrying native data (see `NativeData`).
+    pub fn new_native(class_id: ClassId, inner: Box<dyn NativeData>) -> Self {
+        RValue::new_native(class_id, inner).pack()
+    }
+
+    /// The native payload of `self` as `T`, if `self` is a native object
+    /// of that kind.
+    pub(crate) fn try_native<T: NativeData>(&self) -> Option<&T> {
+        let rv = self.try_rvalue()?;
+        if rv.ty() != ObjTy::NATIVE {
+            return None;
+        }
+        rv.as_native().as_any().downcast_ref::<T>()
+    }
+
     /// GC wrapper for a promoted heap frame's `Box<[u64]>` buffer
     /// (`ObjTy::FRAME`, internal only — see `Lfp::move_frame_to_heap`).
     pub(crate) fn new_frame(base: *mut u64, len: usize) -> Self {
