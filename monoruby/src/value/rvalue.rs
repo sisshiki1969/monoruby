@@ -2728,6 +2728,18 @@ impl RValue {
         unsafe { &mut **self.kind.native }
     }
 
+    /// Replace the native payload, dropping the old one (a copy made by
+    /// `Object#dup` carries an `EmptyNative` until its constructor fills
+    /// it in).
+    pub(crate) fn replace_native(&mut self, inner: Box<dyn NativeData>) {
+        assert_eq!(self.ty(), ObjTy::NATIVE);
+        // SAFETY: type checked above; the old box is dropped exactly once.
+        unsafe {
+            ManuallyDrop::drop(&mut self.kind.native);
+            self.kind.native = ManuallyDrop::new(inner);
+        }
+    }
+
     pub(super) unsafe fn as_arithmetic_sequence(&self) -> &ArithmeticSequenceInner {
         unsafe { &self.kind.arithmetic_sequence }
     }

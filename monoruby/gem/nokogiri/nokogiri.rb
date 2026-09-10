@@ -14,15 +14,3 @@ String.__nokogiri_init
 # rubygems loaded up front, monoruby autoloads it from the CLI but not in
 # every embedding (the test harness).
 require "rubygems" unless defined?(Gem::Version)
-
-module Nokogiri
-  module XML
-    # Not implemented yet (doc/nokogiri.md, stage 5): defined so the gem's
-    # reader.rb, which aliases it at load time, loads.
-    class Reader
-      def empty_element?
-        raise NotImplementedError, "Nokogiri::XML::Reader is not implemented in monoruby yet"
-      end
-    end
-  end
-end
