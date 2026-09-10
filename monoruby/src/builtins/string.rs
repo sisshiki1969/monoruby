@@ -3793,7 +3793,8 @@ fn string_strscan_match(
     // EUC-JP, Shift_JIS, ...) is matched in place on its raw bytes too.
     // Anything else takes the Ruby-side `String#match` fallback, which
     // knows how to view those.
-    let utf8_view = s.is_ascii_only() || (s.encoding() == Encoding::Utf8 && s.is_valid_encoding());
+    let ascii = s.is_ascii_only();
+    let utf8_view = ascii || (s.encoding() == Encoding::Utf8 && s.is_valid_encoding());
     let native_enc = if utf8_view {
         None
     } else if let Some(enc) = RegexpInner::onigmo_encoding_for(s.encoding()) {
@@ -3815,6 +3816,7 @@ fn string_strscan_match(
             None => re.strscan_match(
                 unsafe { std::str::from_utf8_unchecked(sub) },
                 anchored,
+                ascii,
                 &mut region,
             )?,
             Some(enc) => re.strscan_match_bytes(sub, anchored, enc, &mut region)?,

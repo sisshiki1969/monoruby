@@ -85,6 +85,10 @@ pub struct RegexpInner {
     /// to keep the payload within the RValue cell.
     native: std::cell::OnceCell<Arc<Regex>>,
     native_enc: std::cell::Cell<OnigmoEncoding>,
+    /// Whether the US-ASCII compile of this pattern may stand in for
+    /// `regex` on a 7-bit subject (see [`ascii_engine`](Self::ascii_engine)):
+    /// 0 = not decided yet, 1 = yes (it lives in `native`), 2 = no.
+    ascii_state: std::cell::Cell<u8>,
 }
 
 impl PartialEq for RegexpInner {
@@ -552,6 +556,24 @@ fn has_non_ascii_hex_escape(source: &[u8]) -> bool {
 /// such escape, `false` if none. Used to pin the declared encoding
 /// to UTF-8 when the source contains a non-ASCII Unicode escape,
 /// matching CRuby's `\u`-fixes-encoding behavior.
+/// Whether `src` has a backslash escape whose letter is one of `letters`
+/// (`\\` pairs are stepped over, so an escaped backslash before a `p`
+/// does not count).
+fn has_escape(src: &[u8], letters: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 1 < src.len() {
+        if src[i] == b'\\' {
+            if letters.contains(&src[i + 1]) {
+                return true;
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 fn has_non_ascii_unicode_escape(src: &str) -> bool {
     let bytes = src.as_bytes();
     let mut i = 0;
@@ -690,11 +712,14 @@ impl RegexpInner {
         // CRuby pins the regex to UTF-8 when the source contains a
         // `\u` escape that decodes to a non-ASCII codepoint, even on
         // an otherwise pure-7-bit pattern (`/\u{1234}/.fixed_encoding?`
-        // is `true`). The `n`/`e`/`s` modifiers and the `NOENCODING`
-        // flag override this — they leave the explicit kcode intact.
+        // is `true`), and likewise for a `\p{…}` / `\P{…}` property
+        // class (`/\p{Alpha}/.encoding` is UTF-8 and pinned: the class
+        // is defined over Unicode, whatever the subject). The `n`/`e`/`s`
+        // modifiers and the `NOENCODING` flag override this — they leave
+        // the explicit kcode intact.
         if option & Self::NOENCODING == 0
             && kcode.map(|k| k & Self::KCODE_UTF8 != 0).unwrap_or(true)
-            && has_non_ascii_unicode_escape(&reg_str)
+            && (has_non_ascii_unicode_escape(&reg_str) || has_escape(reg_str.as_bytes(), b"pP"))
         {
             declared_encoding = crate::value::Encoding::Utf8;
             fixed_encoding = true;
@@ -732,6 +757,7 @@ impl RegexpInner {
                     initialized: true,
                     native: Default::default(),
                     native_enc: std::cell::Cell::new(OnigmoEncoding::UTF8),
+                    ascii_state: std::cell::Cell::new(0),
                 })
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
@@ -749,6 +775,7 @@ impl RegexpInner {
                             initialized: true,
                             native: Default::default(),
                     native_enc: std::cell::Cell::new(OnigmoEncoding::UTF8),
+                    ascii_state: std::cell::Cell::new(0),
                         })
                     }
                     Err(err) => {
@@ -786,13 +813,92 @@ impl RegexpInner {
         self.captures_from_pos(given, 0, vm)
     }
 
+    /// Subjects up to this many bytes are probed for 7-bit content when
+    /// the caller has no cached code range; a longer subject takes the
+    /// UTF-8 engine unless the caller says otherwise. This bounds the
+    /// probe on repeated searches deep into one long string
+    /// (`index(re, pos)` in a loop), which would otherwise rescan the
+    /// whole string per call.
+    const ASCII_PROBE_LIMIT: usize = 2048;
+
+    /// The engine for the UTF-8-view subject `given`: the US-ASCII
+    /// compile of the pattern when the subject is 7-bit (`known_ascii`
+    /// from the caller's cached code range, else a bounded probe of
+    /// `given`), otherwise the UTF-8 one.
+    ///
+    /// CRuby does the same in `rb_reg_prepare_enc`: a 7-bit pattern
+    /// whose encoding is not pinned is a US-ASCII regexp, and a 7-bit
+    /// subject is matched with it as is. Under the UTF-8 codec Onigmo
+    /// goes through `mbc_enc_len` / `onigenc_mbclen_approximate` at
+    /// every position and through Unicode case folding for `/i`; on
+    /// 7-bit data the results are identical, only slower
+    /// (`/[a-z]/i.match?(s)` took 4.5x CRuby's time). The US-ASCII
+    /// compile is the `native` slot's, shared with BINARY subjects
+    /// (`onigmo_encoding_for(Ascii8)` is `ASCII` as well).
+    fn engine_for(&self, given: &str, known_ascii: Option<bool>) -> &Regex {
+        let ascii = match known_ascii {
+            Some(ascii) => ascii,
+            None => given.len() <= Self::ASCII_PROBE_LIMIT && given.is_ascii(),
+        };
+        if ascii && let Some(re) = self.ascii_engine() {
+            re
+        } else {
+            &self.regex
+        }
+    }
+
+    /// The US-ASCII compile of this pattern, when it can stand in for
+    /// the UTF-8 one on a 7-bit subject. Eligible: a 7-bit source whose
+    /// encoding is not pinned, with no `\p{…}` / `\P{…}` (CRuby pins
+    /// those to UTF-8, and Onigmo's US-ASCII codec knows only the POSIX
+    /// classes) and no `\u` (the engine pattern carries the expanded
+    /// form, not the source). Decided once per regexp; a compile
+    /// failure — anything else the US-ASCII codec rejects — settles on
+    /// "no" as well.
+    fn ascii_engine(&self) -> Option<&Regex> {
+        match self.ascii_state.get() {
+            1 => {}
+            2 => return None,
+            _ => {
+                let eligible = self.encoding == OnigmoEncoding::UTF8
+                    && !self.fixed_encoding
+                    && self.source.is_ascii()
+                    && !has_escape(&self.source, b"pPu")
+                    && self.native_regex(OnigmoEncoding::ASCII).is_ok();
+                self.ascii_state.set(if eligible { 1 } else { 2 });
+                if !eligible {
+                    return None;
+                }
+            }
+        }
+        // The slot holds another codec if the regexp met that one first;
+        // the UTF-8 engine is still correct, so take it rather than a
+        // global-cache lookup per match.
+        match self.native.get() {
+            Some(re) if self.native_enc.get() == OnigmoEncoding::ASCII => Some(re),
+            _ => None,
+        }
+    }
+
     pub fn captures_from_pos<'a>(
         &self,
         given: &'a str,
         pos: usize,
         vm: &mut Executor,
     ) -> Result<Option<Captures<'a>>> {
-        match self.regex.captures_from_pos(given, pos) {
+        self.captures_from_pos_with(self.engine_for(given, None), given, pos, vm)
+    }
+
+    /// [`captures_from_pos`](Self::captures_from_pos) on an engine the
+    /// caller picked once (`engine_for`) for a whole walk over `given`.
+    fn captures_from_pos_with<'a>(
+        &self,
+        engine: &Regex,
+        given: &'a str,
+        pos: usize,
+        vm: &mut Executor,
+    ) -> Result<Option<Captures<'a>>> {
+        match engine.captures_from_pos(given, pos) {
             Ok(res) => {
                 if let Some(captures) = &res {
                     vm.save_capture_special_variables(captures, given)
@@ -806,7 +912,8 @@ impl RegexpInner {
     }
 
     pub fn captures_iter<'a>(&self, given: &'a str) -> FindCaptures<'_, 'a> {
-        self.regex.captures_iter(given)
+        // One probe for the whole walk: the iteration is O(len) anyway.
+        self.engine_for(given, Some(given.is_ascii())).captures_iter(given)
     }
 
     /// The `OnigmoEncoding` for a subject of Ruby encoding `enc`, or
@@ -1227,7 +1334,8 @@ impl RegexpInner {
             let first = {
                 let inner = recv.as_rstring_inner();
                 let view = inner.regex_view()?;
-                match re.captures_from_pos_no_save(&view, 0)? {
+                let engine = re.engine_for(&view, Some(inner.is_ascii_only()));
+                match Self::captures_from_pos_no_save_with(engine, &view, 0)? {
                     // What `splice_all` with no replacements would build.
                     None => return Ok((RStringInner::from_str(&view), false)),
                     // Nothing matches before this position, so the real
@@ -1272,10 +1380,11 @@ impl RegexpInner {
         // (the caller's probe found nothing before it): an empty match
         // right where the previous match ended is skipped by one
         // character rather than looping forever.
+        let engine = self.engine_for(given, Some(given.is_ascii()));
         let mut pos = first;
         let mut last_match_end: Option<usize> = None;
         while pos <= given.len() {
-            let Some(cap) = self.captures_from_pos_no_save(given, pos)? else {
+            let Some(cap) = Self::captures_from_pos_no_save_with(engine, given, pos)? else {
                 break;
             };
             let m = cap.get(0).unwrap();
@@ -1466,13 +1575,14 @@ impl RegexpInner {
 
     /// `captures_from_pos` without touching `$~`/`$1..` — the raw match
     /// for scanning primitives that must not update the special
-    /// variables (CRuby's C strscan keeps its registers to itself).
-    pub(crate) fn captures_from_pos_no_save<'a>(
-        &self,
+    /// variables (CRuby's C strscan keeps its registers to itself), on
+    /// an engine the caller picked once (`engine_for`) for its walk.
+    fn captures_from_pos_no_save_with<'a>(
+        engine: &Regex,
         given: &'a str,
         pos: usize,
     ) -> Result<Option<Captures<'a>>> {
-        self.regex
+        engine
             .captures_from_pos(given, pos)
             .map_err(|err| MonorubyErr::regexerr(format!("Capture failed. {:?}", err)))
     }
@@ -1482,17 +1592,21 @@ impl RegexpInner {
     /// (`onig_match`) or as a forward search (`onig_search`), recording the
     /// registers into the caller's reusable `region`. Returns whether it
     /// matched; the caller reads the offsets (relative to `sub`) from the
-    /// region. Never touches `$~`.
+    /// region. Never touches `$~`. `ascii` is the subject's cached code
+    /// range (7-bit or not) — the scanner calls this once per token on
+    /// an ever-shorter suffix, so it must not be probed here.
     pub(crate) fn strscan_match(
         &self,
         sub: &str,
         anchored: bool,
+        ascii: bool,
         region: &mut onigmo_regex::Region,
     ) -> Result<bool> {
+        let engine = self.engine_for(sub, Some(ascii));
         let r = if anchored {
-            self.regex.match_at_with_region(sub.as_bytes(), 0, region)
+            engine.match_at_with_region(sub.as_bytes(), 0, region)
         } else {
-            self.regex.search_with_region(sub.as_bytes(), 0, region)
+            engine.search_with_region(sub.as_bytes(), 0, region)
         };
         r.map(|r| r.is_some())
             .map_err(|err| MonorubyErr::regexerr(format!("Capture failed. {:?}", err)))
@@ -1559,7 +1673,7 @@ impl RegexpInner {
         };
         // A predicate needs no capture groups: search without a region,
         // which skips the region allocation and the capture bookkeeping.
-        re.regex
+        re.engine_for(given, None)
             .search(given, byte_pos, given.len(), None)
             .map(|res| res.is_some())
             .map_err(search_failed)
@@ -1600,9 +1714,10 @@ impl RegexpInner {
         // `"foo".scan(/(?~foo)/) == ["fo", "o", ""]`). Same loop as
         // `replace_repeat`: advance past a non-empty match, and by one
         // Unicode scalar past an empty one (past EOS to terminate).
+        let engine = self.engine_for(given, Some(given.is_ascii()));
         let mut pos = 0usize;
         while pos <= given.len() {
-            let cap = match self.captures_from_pos(given, pos, vm)? {
+            let cap = match self.captures_from_pos_with(engine, given, pos, vm)? {
                 Some(c) => c,
                 None => break,
             };
@@ -1669,9 +1784,10 @@ impl RegexpInner {
         let mut replacements = vec![];
         vm.clear_capture_special_variables();
         let mut last_captures: Option<Captures> = None;
+        let engine = self.engine_for(given, Some(given.is_ascii()));
         let mut pos = 0usize;
         while pos <= given.len() {
-            let cap = match self.captures_from_pos(given, pos, vm)? {
+            let cap = match self.captures_from_pos_with(engine, given, pos, vm)? {
                 Some(c) => c,
                 None => break,
             };
