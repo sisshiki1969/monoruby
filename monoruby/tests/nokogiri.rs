@@ -1238,6 +1238,134 @@ fn nokogiri_element_description() {
 }
 
 #[test]
+fn nokogiri_html5() {
+    compare(
+        r##"
+        require "stringio"
+        r = []
+        html = <<~HTML
+          <!DOCTYPE html>
+          <html lang="en"><head><meta charset="utf-8"><title>T &amp; T</title>
+          <script>if (a < b) { x = "<y>"; }</script></head>
+          <body class="a b">
+            <p id="p1">Hello <b>world</b>&nbsp;&lt;3 "quoted" 'single'</p>
+            <img src="a.png" alt="">
+            <pre>
+          keep
+          </pre>
+            <textarea>
+          text</textarea>
+            <ul><li>one<li>two</ul>
+            <table><tr><td>cell</table>
+            <svg viewBox="0 0 1 1"><circle r="1" xlink:href="#x"/><foreignObject><div>fo</div></foreignObject></svg>
+            <math><mi>x</mi><annotation-xml encoding="text/html"><p>in ann</p></annotation-xml></math>
+            <template><div>tpl</div></template>
+            <!-- comment --><?pi data?>
+            <custom-element data-x="1" xml:lang="en">c</custom-element>
+          </body></html>
+        HTML
+        doc = Nokogiri::HTML5(html)
+        r << [doc.class, doc.class.superclass, doc.encoding, doc.url, doc.quirks_mode, doc.errors, doc.xml?, doc.html?,
+         doc.internal_subset&.name, doc.internal_subset&.external_id, doc.internal_subset&.system_id, doc.root.name]
+        r << doc.to_html
+        r << doc.to_html(preserve_newline: true)
+        r << doc.serialize
+        r << doc.to_xml
+        r << doc.to_xhtml
+        r << [doc.at_css("p").to_html, doc.at_css("p").inner_html, doc.at_css("pre").inner_html(preserve_newline: true),
+         doc.at_css("pre").to_html, doc.at_css("pre").send(:prepend_newline?), doc.at_css("p").send(:prepend_newline?),
+         doc.at_css("textarea").to_html(preserve_newline: true)]
+        r << doc.css("svg, circle, foreignObject, math, mi, annotation-xml, custom-element").map { |n| [n.name, n.namespace&.href, n.namespace&.prefix, n.attribute_nodes.map { |a| [a.name, a.namespace&.href] }] }
+        r << [doc.at_css("circle")["xlink:href"], doc.at_css("custom-element")["xml:lang"], doc.at_css("custom-element").to_html]
+        r << doc.css("li, td, tr, tbody").map(&:name)
+        r << doc.at_css("script").text
+        r << doc.at_css("template").children.map(&:name)
+        r << doc.at_css("title").text
+        r << [doc.at_css("p").line, doc.at_css("svg").line, doc.at_css("custom-element").line]
+        r << doc.xpath("//p/b").map(&:text)
+        r << doc.css("p b").map(&:to_html)
+        r << Nokogiri::HTML5("").to_html
+        r << Nokogiri::HTML5(nil).to_html
+        r << Nokogiri::HTML5("<p>x").to_html
+        r << Nokogiri::HTML5("<!DOCTYPE html PUBLIC '-//W3C//DTD HTML 4.01//EN' 'http://www.w3.org/TR/html4/strict.dtd'><p>q").tap { |d| r << [d.quirks_mode, d.internal_subset.external_id, d.internal_subset.system_id] }.to_html
+        r << Nokogiri::HTML5("<p>quirks").quirks_mode
+        r << Nokogiri::HTML5("<!DOCTYPE html><p>no</p>").quirks_mode
+        r << Nokogiri::HTML5("<!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.0 Frameset//EN'><p>lim").quirks_mode
+        errs = Nokogiri::HTML5("<html><body><p>x</b></p><table><p>z</table>", max_errors: 10)
+        r << errs.errors.map { |e| [e.class, e.message, e.line, e.column, e.str1, e.domain, e.code, e.level, e.file] }
+        r << Nokogiri::HTML5("<p></b>", "http://u/", max_errors: 1).errors.map { |e| [e.file, e.to_s] }
+        r << Nokogiri::HTML5("<p></b></b>", max_parse_errors: 2).errors.size
+        r << Nokogiri::HTML5("<p></b></b>").errors.size
+        r << Nokogiri::HTML5::Document.parse(StringIO.new("<p>io</p>")).to_html
+        r << Nokogiri::HTML5::Document.read_memory("<p>mem</p>", "u", "UTF-8").url
+        r << Nokogiri::HTML5::Document.read_io(StringIO.new("<p>io2</p>"), nil, nil).at_css("p").text
+        r << Nokogiri::HTML5("<p>\xe9t\xe9</p>".b, encoding: "ISO-8859-1").at_css("p").text
+        r << Nokogiri::HTML5("<noscript><p>ns</p></noscript>").at_css("noscript").children.map(&:name)
+        r << Nokogiri::HTML5("<noscript><p>ns</p></noscript>", parse_noscript_content_as_text: true).at_css("noscript").children.map(&:name)
+        deep = "<div>" * 50 + "x" + "</div>" * 50
+        r << Nokogiri::HTML5(deep, max_tree_depth: 100).css("div").size
+        attrs = "<p " + (1..5).map { |i| "a#{i}='v'" }.join(" ") + ">x</p>"
+        r << Nokogiri::HTML5(attrs, max_attributes: 5).at_css("p").attributes.size
+        [-> { Nokogiri::HTML5(deep, max_tree_depth: 10) }, -> { Nokogiri::HTML5(attrs, max_attributes: 4) },
+         -> { Nokogiri::HTML5("<p>", bogus_option: 1) }, -> { Nokogiri::HTML5(42) },
+         -> { Nokogiri::Gumbo.parse("<p>", nil, Nokogiri::HTML5::Document) },
+         -> { Nokogiri::Gumbo.parse(1, nil, Nokogiri::HTML5::Document, max_attributes: 1, max_errors: 1, max_tree_depth: 1) },
+         -> { Nokogiri::HTML5(deep, max_tree_depth: -1).css("div").size }].each do |l|
+          begin
+            r << l.call
+          rescue => e
+            r << [e.class, e.message]
+          end
+        end
+        frag = Nokogiri::HTML5.fragment("<p>one<p>two<b>b")
+        r << [frag.class, frag.class.superclass, frag.document.class, frag.errors, frag.quirks_mode, frag.children.map(&:name), frag.to_html, frag.to_xml]
+        r << Nokogiri::HTML5.fragment("<tr><td>x").to_html
+        r << Nokogiri::HTML5.fragment("<tr><td>x", context: "table").to_html
+        r << Nokogiri::HTML5.fragment("<tr><td>x", context: "html:tbody").to_html
+        r << Nokogiri::HTML5.fragment("<circle/>", context: "svg").children.map { |n| [n.name, n.namespace&.href] }
+        r << Nokogiri::HTML5.fragment("<mi>x</mi>", context: "math:math").children.map { |n| [n.name, n.namespace&.href] }
+        r << Nokogiri::HTML5.fragment("<input><p>in form", context: "form").to_html
+        r << Nokogiri::HTML5.fragment("<p>x</b>", max_errors: 5).errors.map { |e| [e.file, e.to_s] }
+        r << Nokogiri::HTML5.fragment("", context: "p").to_html
+        ctx_doc = Nokogiri::HTML5("<!DOCTYPE html><body><form><div id='d'></div></form><svg id='s'/><math><annotation-xml id='a' encoding='text/html'/></math>")
+        r << Nokogiri::HTML5.fragment("<td>t<input>", context: ctx_doc.at_css("div")).to_html
+        r << Nokogiri::HTML5.fragment("<circle/>", context: ctx_doc.at_css("svg")).children.map { |n| [n.name, n.namespace&.href] }
+        r << Nokogiri::HTML5.fragment("<p>x", context: ctx_doc.at_css("annotation-xml")).children.map { |n| [n.name, n.namespace&.href] }
+        r << ctx_doc.at_css("div").fragment("<span>frag<p>p").to_html
+        r << Nokogiri::HTML5::DocumentFragment.new(ctx_doc, "<b>bold</b>", ctx_doc.at_css("div")).to_html
+        r << Nokogiri::HTML5::DocumentFragment.new(ctx_doc).to_html
+        q = Nokogiri::HTML5("<p>quirky")
+        r << Nokogiri::HTML5.fragment("<table><p>x", context: q.at_css("p")).quirks_mode
+        r << Nokogiri::HTML5.fragment("<table><p>x", context: ctx_doc.at_css("div")).quirks_mode
+        [-> { Nokogiri::HTML5.fragment("<p>", context: "bogus:p") }, -> { Nokogiri::HTML5.fragment("<p>", context: "a:b:c") },
+         -> { Nokogiri::HTML5.fragment("<p>", context: Nokogiri::XML("<r xmlns='http://other'/>").root) },
+         -> { Nokogiri::HTML5.fragment(deep, max_tree_depth: 10) }, -> { Nokogiri::HTML5.fragment("<p>", nope: 1) }].each do |l|
+          begin
+            r << l.call.to_html
+          rescue => e
+            r << [e.class, e.message]
+          end
+        end
+        d = Nokogiri::HTML5("<!DOCTYPE html><body><div id='x'></div>")
+        d.at_css("div").add_child("<p>added<span>s</span>")
+        d.at_css("div").inner_html = "<i>replaced</i>"
+        d.at_css("div") << Nokogiri::XML::Node.new("custom-tag", d)
+        d.at_css("div")["data-q"] = "a\"b&c<d>"
+        r << [d.to_html, d.at_css("div").children.map(&:class)]
+        b = Nokogiri::HTML5::Builder.new { |x| x.html { x.body { x.p.cls!("k") { x.text("t<>"); x.br } } } }
+        r << b.to_html
+        r << Nokogiri::HTML5("<p>x</p>").to_html(encoding: "ISO-8859-1").encoding.name
+        r << Nokogiri::HTML5("<p>café ☃</p>").to_html(encoding: "ISO-8859-1")
+        r << Nokogiri::HTML5("<p>x</p>").at_css("p").to_html(save_with: Nokogiri::XML::Node::SaveOptions::AS_XML)
+        keep = (1..30).map { Nokogiri::HTML5(html) }
+        GC.start
+        r << keep.map { |k| k.css("*").size }.uniq
+        p r
+        "##,
+    );
+}
+
+#[test]
 fn nokogiri_node_identity_across_gc() {
     // Every node wraps into one Ruby object that the document keeps alive;
     // unlinked nodes stay owned by their document.

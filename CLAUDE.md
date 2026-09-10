@@ -373,8 +373,10 @@ External crates (fetched from git):
 - `libxml2-src` (workspace crate) — libxml2 2.13.8 with nokogiri's patches,
   vendored under `libxml2-src/vendor/` and built with `cc` (hand-written
   `config.h`, generated `xmlversion.h`; no autotools / cmake), with a
-  hand-written FFI plus a small C glue file (`libxml2-src/glue/`) for the
-  `xmlParserCtxt` field accessors and the variadic SAX message callbacks. Behind `Nokogiri` (`src/builtins/nokogiri/`): the gem's
+  hand-written FFI plus small C glue files (`libxml2-src/glue/`) for the
+  `xmlParserCtxt` field accessors, the variadic SAX message callbacks and
+  the gumbo tree walk. The same crate builds nokogiri's gumbo-parser
+  (`libxml2-src/vendor/gumbo-parser/`, Apache-2.0, `-std=c99`) for HTML5. Behind `Nokogiri` (`src/builtins/nokogiri/`): the gem's
   Ruby half is vendored under `gem/nokogiri/` and `gem/nokogiri/nokogiri.rb`
   stands in for nokogiri.so. Objects wrapping libxml2 pointers are
   `ObjTy::NATIVE` RValues (`NativeData` payloads with their own `mark` /

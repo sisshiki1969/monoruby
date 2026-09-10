@@ -229,7 +229,7 @@ libxml2 のビルドが付く。段階 1〜3 で ext の 6 割程度（Node 54 +
 B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の mark / drop の
 形がそのまま `TypedData` の受け皿になるので、A の作業は無駄にならない。
 
-## 6. 実装状況（段階 1〜3、5、6 の Schema / RelaxNG、2026-09）
+## 6. 実装状況（XSLT 以外の全段階、2026-09）
 
 `libxml2-src/`（libxml2 2.13.8 + nokogiri 1.18.9 の patches、`cc` でビルド、
 `config.h` は手書き、`xmlversion.h` は build.rs が生成）、
@@ -311,8 +311,22 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
   `htmlTagLookup` の wrapper）: 名前・説明・各フラグ・サブ要素・属性リスト。
   `Node#description` が動く。
 
-まだ無いもの（段階 4 と 6 の残り）: `XSLT`（libxslt が要る。定数は `0.0.0` の
-プレースホルダ）、HTML5（gumbo の同梱）。
+- HTML5（`html5.rs` + `libxml2-src/glue/monoruby_gumbo.c`、nokogiri の
+  gumbo-parser を `libxml2-src/vendor/gumbo-parser/` に同梱して `-std=c99` で
+  ビルド）: `Nokogiri::Gumbo.parse` / `.fragment`（gumbo の木から libxml2 の
+  木を組む walk は nokogiri の `build_tree` を C のまま置き、Rust 側は
+  オプション・エラー・Ruby オブジェクトだけを扱う。gumbo の構造体は Rust に
+  写さない）、`quirks_mode`、`max_attributes` / `max_errors` /
+  `max_tree_depth` / `parse_noscript_content_as_text`、fragment の文脈
+  （nil / "ns:tag" / Node、form の祖先、`annotation-xml` の encoding、
+  quirks の計算）、エラーの caret 診断（`SyntaxError` の `str1` が gumbo の
+  エラーコード）、HTML5 シリアライザ（`html_standard_serialize` /
+  `prepend_newline?`、void 要素・raw text 要素・名前空間接頭辞の規則）。
+  エラー診断は **パースした文字列そのもの**（String の内部バッファ）に対して
+  描く必要がある（gumbo のエラーはそのバッファへのポインタを持つ。コピーを
+  渡すと assert で落ちる）。
+
+まだ無いもの: `XSLT`（libxslt の同梱が要る。定数は `0.0.0` のプレースホルダ）。
 
 設計上わかったこと:
 

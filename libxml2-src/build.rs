@@ -1,5 +1,6 @@
 //! Build the vendored libxml2 (2.13.8 + nokogiri's patches, see
-//! `vendor/libxml2/NOKOGIRI-PATCHES`) with `cc`, without autotools or
+//! `vendor/libxml2/NOKOGIRI-PATCHES`) and nokogiri's gumbo-parser (the
+//! HTML5 parser, `vendor/gumbo-parser`) with `cc`, without autotools or
 //! cmake: `config.h` is the checked-in unix version in `config/`, and
 //! `libxml/xmlversion.h` is generated here from the upstream template with
 //! the feature set nokogiri builds (`--with-c14n --with-debug
@@ -125,6 +126,29 @@ fn main() {
     build.file(manifest.join("glue/monoruby_glue.c"));
     build.compile("xml2");
 
+    // gumbo-parser (nokogiri's fork of libgumbo, the HTML5 parser),
+    // built as nokogiri does (`-std=c99`, -O2), with the glue that walks
+    // its tree into a libxml2 document.
+    let gumbo = manifest.join("vendor/gumbo-parser/src");
+    let mut build = cc::Build::new();
+    build
+        .include(&gumbo)
+        .include(&gen_include)
+        .include(vendor.join("include"))
+        .std("c99")
+        .opt_level(2)
+        .warnings(false)
+        .flag_if_supported("-Wno-unused-parameter")
+        .flag_if_supported("-fvisibility=hidden");
+    for entry in fs::read_dir(&gumbo).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "c") {
+            build.file(path);
+        }
+    }
+    build.file(manifest.join("glue/monoruby_gumbo.c"));
+    build.compile("gumbo");
+
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "macos" {
         // iconv is a separate library on Darwin (libc has it on glibc).
@@ -136,5 +160,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=config/config.h");
     println!("cargo:rerun-if-changed=glue/monoruby_glue.c");
+    println!("cargo:rerun-if-changed=glue/monoruby_gumbo.c");
+    println!("cargo:rerun-if-changed=vendor/gumbo-parser");
     println!("cargo:rerun-if-changed=vendor/libxml2");
 }

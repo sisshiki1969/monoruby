@@ -334,7 +334,9 @@ class StringIO
         @string[@pos, str.length] = str
       end
       @pos += str.length
-      total += str.length
+      # The count is bytes, as for IO (libxml2's output callback, for one,
+      # shrinks its buffer by it).
+      total += str.bytesize
     end
     total
   end
