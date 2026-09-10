@@ -12,7 +12,7 @@ YJIT との比較で「差が大きい」3 本（monoruby / YJIT 比 1.6〜1.8 �
 | ベンチ | monoruby | YJIT | 比 | 主因（1 反復の割合は callgrind の命令数） |
 |---|---:|---:|---:|---|
 | activerecord | 168〜178 ms | 99〜114 ms | 1.6〜1.7 | **Fiddle 経由の sqlite3 が 35 %**（`fiddle_invoke` inclusive。実 DB 処理 `sqlite3VdbeExec` は 2 %）。次点: String キー Hash 10 %、`defined?(@ivar)` の名前表引き 3 %、megamorphic な `is_a?` サイトの deopt 2.1 万回/反復、`Class#===` 連鎖 |
-| liquid-il | 280〜287 ms | 156〜159 ms | 1.8 | **`case … when Klass` の `Module#===` が 16.6 %**（20 万回/反復、1 回 ≈ 1,900 命令）、**汎用ディスパッチ（`find_method`）11.6 %**（`nil?` の PIC 超過 34 万 deopt/反復、`String#<<` 汎用経路、`to_liquid` / `is_a?`）、`Float#to_s` 7.2 %（31 万回/反復、1 回 ≈ 530 命令） |
+| liquid-il | 280〜287 ms | 156〜159 ms | 1.8 | **`Klass === value`（`case … when Klass` と明示的な `String === v`）の `Module#===` が 16.6 %**（123 万回/反復、1 回 ≈ 310 命令。JIT 済みでも毎回グローバルメソッドキャッシュ + builtin 呼び出し）、**汎用ディスパッチ（`find_method`）11.6 %**（`nil?` の PIC 超過 34 万 deopt/反復、`String#<<` 汎用経路、`to_liquid` / `is_a?`）、`Float#to_s` 7.2 %（31 万回/反復、1 回 ≈ 530 命令） |
 | rack | 53〜56 ms | 36 ms | 1.5 | 1 リクエストの**命令数は YJIT 比 +20〜30 %（47.7k vs 36.6k）なのに時間は 1.8 倍** — 命令あたりの実行効率の差が半分以上。層別では Static（`clean_path_info` + `unescape_path`）+2.5 µs vs +1.2 µs、ETag +0.6 vs 0、ContentLength +0.66 vs +0.26、Deflater +0.37 vs 0。個々の操作のマイクロベンチは monoruby が同等〜速いので、合成したときに遅い。プロファイル上は `split` 10 %、正規表現 10 %、Hash 10 %、malloc / free 8 %、GC 5 %（`--no-gc` で 7 %）、`$~` 保存 3.7 %、`Hash#dup` 3.3 %、引数処理 3〜4 %、ブロックからの非ローカル `return`（URLMap）3 % |
 
 activerecord と liquid-il は主因がはっきりしていて、それぞれ 1 つの施策で 3 割前後が
@@ -120,8 +120,9 @@ SmallVec の組み立て、mutex が走る。CRuby の sqlite3 は C 拡張で�
 
 ### 4.1 `case … when Klass` の `Module#===`: 16.6 %
 
-inclusive: `cmp_teq_case_values` 380.6 M（16.6 %）。呼び出し 20 万回/反復なので
-**1 回 ≈ 1,900 命令**。内訳は `invoke_method`（builtin へのフレーム構築）→
+inclusive: `cmp_teq_values_impl` 376 M（16.4 %、`case` 経由の `cmp_teq_case_values` は
+そのうち 20 万回分、残りは `String === v` のような明示的な `===`）。`Module#===`
+（`module::teq`）の呼び出しは 2 反復 − 1 反復で **123 万回/反復、1 回 ≈ 310 命令**。内訳は `invoke_method`（builtin へのフレーム構築）→
 `find_method` → `GlobalMethodCache::get`（self 2.7 %）→ `module::teq`（2.6 %）→
 `expect_class_or_module` → `is_kind_of` の祖先走査。`case value when String … when
 Integer … when Hash …`（`output_append`、`to_number`、`compare`）が 8 秒で
@@ -130,7 +131,17 @@ Integer … when Hash …`（`output_append`、`to_number`、`compare`）が 8 �
 
 JIT は `BinCmpBr(TEq)` を `generic_binop(cmp_teq_case_values)` に落とし
 （`compile/binary_op.rs`）、`cmp_teq_values_impl` は受信側が Class のとき `_ =>`
-腕で `invoke_method(TEQ)` する。`BASIC_OP_DEFS` には Integer / Float / Symbol / nil /
+腕で `invoke_method(TEQ)` する。マイクロベンチ（`teq-micro2.rb`）を `--features profile`
+で回すと、JIT 済みの `case x when A` でも実行回数と同じ 210 万回のグローバルメソッド
+キャッシュ引きが出るので、この経路に inline は無い。ホットな状態では 1 腕 15 ns
+（YJIT 39 ns）で済むが、liquid-il のように受信側・引数のクラスが多く、キャッシュが
+冷えている状況では 1 回 ≈ 310 命令（≈ 100 ns）になる。
+
+祖先走査そのものは安い。`case x when A` で x が A の直接のインスタンスなら 13.9 ns、
+4 段上のスーパークラスなら 20.0 ns、`when M`（include したモジュール）16.6 ns、miss
+（BasicObject まで走査）20.4 ns、x のクラスが 7 種類混在でも 15 ns。`is_kind_of` は
+superclass 鎖（include の iclass を含む）を 1 段 ≈ 30 命令で辿るだけで、遅いのは
+その手前のディスパッチ（`invoke_method` inclusive 486 命令/回）。`BASIC_OP_DEFS` には Integer / Float / Symbol / nil /
 true / false の `===` しかなく、`Module#===` は BOP 扱いではない。
 
 **対策**（コスト低〜中）: 受信側が Class / Module で、その `===` の解決結果が
@@ -265,7 +276,7 @@ URLMap 風の `each { return }` 536 / 516、`Rack::Request.new(env).path_info` 1
 
 | 順 | 施策 | 効くベンチ | コスト | 見込み |
 |---|---|---|---|---|
-| 1 | `Module#===` の直接判定（JIT は `when Klass` 定数を解決してインライン、VM はインラインキャッシュ） | liquid-il −14 %、activerecord / mail / liquid-render の `case` | 低〜中 | 1 回 1,900 → 150 命令 |
+| 1 | `Module#===` の直接判定（JIT は `when Klass` / `Klass === v` の定数を解決して `is_kind_of` をインライン、VM はインラインキャッシュ）。階層の深さで遅くならないよう、サイトごとに（値のクラス → 真偽）のキャッシュを class version ガード下に持つ | liquid-il −12 % 前後、activerecord / mail / liquid-render の `case` | 低〜中 | 1 回 310 → 30〜50 命令 |
 | 2 | `defined?(@ivar)` を IvarId インラインキャッシュに | activerecord −3 %、Rails 全般 | 低 | 50 万回/反復 × 100 命令 |
 | 3 | `Float#to_s` を `format!` を通さずに書く | liquid-il −4 %、Float を出力する全般 | 低 | 530 → 250 命令 |
 | 4 | `respond_to?` の (class, name, version) キャッシュ、`Encoding.find` の表引き | activerecord、mail、rack | 低 | |
