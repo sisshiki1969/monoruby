@@ -331,6 +331,33 @@ pub struct xmlParserInput {
 pub struct xmlTextReader {
     _opaque: [u8; 0],
 }
+#[repr(C)]
+pub struct xmlSchema {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct xmlSchemaParserCtxt {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct xmlSchemaValidCtxt {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct xmlRelaxNG {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct xmlRelaxNGParserCtxt {
+    _opaque: [u8; 0],
+}
+#[repr(C)]
+pub struct xmlRelaxNGValidCtxt {
+    _opaque: [u8; 0],
+}
+pub type xmlExternalEntityLoader = Option<
+    unsafe extern "C" fn(URL: *const c_char, ID: *const c_char, context: *mut xmlParserCtxt) -> *mut xmlParserInput,
+>;
 
 // ---- SAX ----
 
@@ -503,6 +530,25 @@ pub struct xmlSaveCtxt {
 pub struct xmlCharEncodingHandler {
     pub name: *mut c_char,
     _rest: [u8; 0],
+}
+/// `htmlElemDesc` (`HTMLparser.h`): the static description of an HTML
+/// element in libxml2's table.
+#[repr(C)]
+pub struct htmlElemDesc {
+    pub name: *const c_char,
+    pub startTag: c_char,
+    pub endTag: c_char,
+    pub saveEndTag: c_char,
+    pub empty: c_char,
+    pub depr: c_char,
+    pub dtd: c_char,
+    pub isinline: c_char,
+    pub desc: *const c_char,
+    pub subelts: *const *const c_char,
+    pub defaultsubelt: *const c_char,
+    pub attrs_opt: *const *const c_char,
+    pub attrs_depr: *const *const c_char,
+    pub attrs_req: *const *const c_char,
 }
 #[repr(C)]
 pub struct htmlEntityDesc {
@@ -913,6 +959,50 @@ unsafe extern "C" {
     pub fn xmlTextReaderCurrentDoc(reader: *mut xmlTextReader) -> *mut xmlDoc;
     pub fn xmlTextReaderExpand(reader: *mut xmlTextReader) -> *mut xmlNode;
 
+    // ---- XML Schema / RELAX NG ----
+    pub fn xmlSchemaNewDocParserCtxt(doc: *mut xmlDoc) -> *mut xmlSchemaParserCtxt;
+    pub fn xmlSchemaFreeParserCtxt(ctxt: *mut xmlSchemaParserCtxt);
+    pub fn xmlSchemaSetParserStructuredErrors(
+        ctxt: *mut xmlSchemaParserCtxt,
+        serror: xmlStructuredErrorFunc,
+        ctx: *mut c_void,
+    );
+    pub fn xmlSchemaParse(ctxt: *mut xmlSchemaParserCtxt) -> *mut xmlSchema;
+    pub fn xmlSchemaFree(schema: *mut xmlSchema);
+    pub fn xmlSchemaNewValidCtxt(schema: *mut xmlSchema) -> *mut xmlSchemaValidCtxt;
+    pub fn xmlSchemaFreeValidCtxt(ctxt: *mut xmlSchemaValidCtxt);
+    pub fn xmlSchemaSetValidStructuredErrors(
+        ctxt: *mut xmlSchemaValidCtxt,
+        serror: xmlStructuredErrorFunc,
+        ctx: *mut c_void,
+    );
+    pub fn xmlSchemaValidateDoc(ctxt: *mut xmlSchemaValidCtxt, instance: *mut xmlDoc) -> c_int;
+    pub fn xmlSchemaValidateFile(ctxt: *mut xmlSchemaValidCtxt, filename: *const c_char, options: c_int) -> c_int;
+    pub fn xmlRelaxNGNewDocParserCtxt(doc: *mut xmlDoc) -> *mut xmlRelaxNGParserCtxt;
+    pub fn xmlRelaxNGFreeParserCtxt(ctxt: *mut xmlRelaxNGParserCtxt);
+    pub fn xmlRelaxNGSetParserStructuredErrors(
+        ctxt: *mut xmlRelaxNGParserCtxt,
+        serror: xmlStructuredErrorFunc,
+        ctx: *mut c_void,
+    );
+    pub fn xmlRelaxNGParse(ctxt: *mut xmlRelaxNGParserCtxt) -> *mut xmlRelaxNG;
+    pub fn xmlRelaxNGFree(schema: *mut xmlRelaxNG);
+    pub fn xmlRelaxNGNewValidCtxt(schema: *mut xmlRelaxNG) -> *mut xmlRelaxNGValidCtxt;
+    pub fn xmlRelaxNGFreeValidCtxt(ctxt: *mut xmlRelaxNGValidCtxt);
+    pub fn xmlRelaxNGSetValidStructuredErrors(
+        ctxt: *mut xmlRelaxNGValidCtxt,
+        serror: xmlStructuredErrorFunc,
+        ctx: *mut c_void,
+    );
+    pub fn xmlRelaxNGValidateDoc(ctxt: *mut xmlRelaxNGValidCtxt, doc: *mut xmlDoc) -> c_int;
+    pub fn xmlGetExternalEntityLoader() -> xmlExternalEntityLoader;
+    pub fn xmlSetExternalEntityLoader(f: xmlExternalEntityLoader);
+    pub fn xmlNoNetExternalEntityLoader(
+        URL: *const c_char,
+        ID: *const c_char,
+        ctxt: *mut xmlParserCtxt,
+    ) -> *mut xmlParserInput;
+
     // ---- HTML ----
     pub fn htmlNewParserCtxt() -> *mut xmlParserCtxt;
     pub fn htmlCtxtReadMemory(
@@ -953,6 +1043,7 @@ unsafe extern "C" {
     pub fn xmlDelEncodingAlias(alias: *const c_char) -> c_int;
     pub fn xmlCleanupEncodingAliases();
     pub fn htmlEntityLookup(name: *const xmlChar) -> *const htmlEntityDesc;
+    pub fn htmlTagLookup(tag: *const xmlChar) -> *const htmlElemDesc;
 
     // ---- serialization ----
     pub fn xmlSaveToIO(

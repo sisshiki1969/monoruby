@@ -229,7 +229,7 @@ libxml2 のビルドが付く。段階 1〜3 で ext の 6 割程度（Node 54 +
 B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の mark / drop の
 形がそのまま `TypedData` の受け皿になるので、A の作業は無駄にならない。
 
-## 6. 実装状況（段階 1〜3 と 5、2026-09）
+## 6. 実装状況（段階 1〜3、5、6 の Schema / RelaxNG、2026-09）
 
 `libxml2-src/`（libxml2 2.13.8 + nokogiri 1.18.9 の patches、`cc` でビルド、
 `config.h` は手書き、`xmlversion.h` は build.rs が生成）、
@@ -302,9 +302,17 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
   コンテキストの `funcLookupData` に置く（`userData` は 2.13 の
   `xmlXPathSetErrorHandler` が上書きするので使えない）。
 
-まだ無いもの（段階 4〜6）: `XML::Schema` / `RelaxNG`、`XSLT`（定数は `0.0.0` の
-プレースホルダ）、HTML5（gumbo）、`HTML4::ElementDescription`
-（`Node#description`）。
+- `XML::Schema` / `XML::RelaxNG`（`schema.rs`）: `from_document`
+  （`xmlSchemaParse` / `xmlRelaxNGParse`、パースエラーは `@errors`、失敗は
+  aggregate を raise、NONET なら外部エンティティローダを `xmlNoNet` に差し替え、
+  空白テキストノードに Ruby オブジェクトがあるドキュメントはコピーしてから
+  コンパイル）、`validate_document` / `validate_file`（`SyntaxError` の配列）。
+- `HTML4::ElementDescription`（`misc.rs`、libxml2 の静的な要素表
+  `htmlTagLookup` の wrapper）: 名前・説明・各フラグ・サブ要素・属性リスト。
+  `Node#description` が動く。
+
+まだ無いもの（段階 4 と 6 の残り）: `XSLT`（libxslt が要る。定数は `0.0.0` の
+プレースホルダ）、HTML5（gumbo の同梱）。
 
 設計上わかったこと:
 
