@@ -1079,20 +1079,69 @@ impl Executor {
     /// `$stderr` (as CRuby's compile-time warnings do). Must be called
     /// after compilation and before the compiled code runs.
     ///
+    /// `rb_warn`'s gate: warnings print unless `$VERBOSE` is `nil`
+    /// (`-W0`, or code that silences itself with `$VERBOSE = nil`).
+    /// `rb_warning` (verbose-only) additionally needs `$VERBOSE == true`.
+    pub(crate) fn warnings_enabled(globals: &mut Globals) -> bool {
+        globals
+            .get_gvar(IdentId::get_id("$VERBOSE"))
+            .is_some_and(|v| !v.is_nil())
+    }
+
+    /// The "already initialized constant Foo::Bar" warning (an `rb_warn`,
+    /// so silent under `$VERBOSE = nil`) when `parent::name` is already
+    /// defined, written through the current `$stderr` so mspec's
+    /// `complain` matcher captures it. Shared by constant assignment,
+    /// `Module#const_set` and `Struct.new("Name")`. The qualified name
+    /// uses the full path (`Foo::Bar::Leaf`; anonymous parents render as
+    /// `#<Module:0x..>::Leaf`, `Object` bare).
+    pub(crate) fn warn_already_initialized_constant(
+        &mut self,
+        globals: &mut Globals,
+        parent: ClassId,
+        name: IdentId,
+    ) {
+        if globals
+            .store
+            .get_constant_noautoload(parent, name)
+            .is_none()
+            || !Self::warnings_enabled(globals)
+        {
+            return;
+        }
+        let parent_name = globals.store.qualified_name(parent);
+        let qual = if parent_name.is_empty() {
+            name.get_name().to_string()
+        } else {
+            format!("{parent_name}::{}", name.get_name())
+        };
+        let msg = format!("warning: already initialized constant {qual}\n");
+        let stderr = globals
+            .get_gvar(IdentId::get_id("$stderr"))
+            .unwrap_or(Value::nil());
+        let write_id = IdentId::get_id("write");
+        let _ = self.invoke_method_inner(globals, write_id, stderr, &[Value::string(msg)], None, None);
+    }
+
     pub(crate) fn flush_compile_warnings(&mut self, globals: &mut Globals) {
-        // Onigmo compile-time diagnostics ("nested repeat operator ...
-        // was replaced with ...") are queued on a thread-local by
-        // `RegexpInner` (regexps also compile during bytecodegen,
-        // where no `Executor` is in reach) and join the same flush.
-        // They are plain rb_warn-level warnings (not verbose-only).
+        // Onigmo compile-time diagnostics ("character class has
+        // duplicated range", "nested repeat operator ... was replaced
+        // with ...") are queued on a thread-local by `RegexpInner`
+        // (regexps also compile during bytecodegen, where no `Executor`
+        // is in reach) and join the same flush. CRuby routes them
+        // through `rb_warning` (onig_syntax_warn -> rb_warn only when
+        // `RTEST(ruby_verbose)`), so they are verbose-only: `-w` /
+        // `$VERBOSE = true` shows them, the default does not.
         let regexp_warnings = crate::value::rvalue::RegexpInner::drain_pending_warnings();
         if globals.store.compile_warnings.is_empty() && regexp_warnings.is_empty() {
             return;
         }
         let mut msgs = std::mem::take(&mut globals.store.compile_warnings);
-        msgs.extend(regexp_warnings.into_iter().map(|m| (m, false)));
-        // Verbose-level warnings (CRuby's `rb_warning`) print only when
-        // `$VERBOSE` is exactly `true` at flush time.
+        msgs.extend(regexp_warnings.into_iter().map(|m| (m, true)));
+        // `rb_warn`-level warnings print unless `$VERBOSE` is nil;
+        // verbose-level ones (CRuby's `rb_warning`) only when `$VERBOSE`
+        // is exactly `true` at flush time.
+        let enabled = Self::warnings_enabled(globals);
         let verbose = globals
             .get_gvar(IdentId::get_id("$VERBOSE"))
             .is_some_and(|v| v.as_bool());
@@ -1101,7 +1150,7 @@ impl Executor {
             .unwrap_or_default();
         let write_id = IdentId::get_id("write");
         for (m, verbose_only) in msgs {
-            if verbose_only && !verbose {
+            if !enabled || (verbose_only && !verbose) {
                 continue;
             }
             let msg_val = Value::string(format!("{m}\n"));
@@ -2528,33 +2577,7 @@ impl Executor {
         // `rb_const_set_visibility`: the same wording (and same `$stderr`
         // delivery) used by `Module#const_set` so mspec's `complain`
         // matcher catches both code-paths.
-        if globals
-            .store
-            .get_constant_noautoload(parent, name)
-            .is_some()
-        {
-            // Use the full qualified path (`Foo::Bar::Leaf`) instead of
-            // just the immediate parent's leaf name. Anonymous parents
-            // render as `#<Module:0x..>::Leaf`; `Object` renders bare.
-            let parent_name = globals.store.qualified_name(parent);
-            let qual = if parent_name.is_empty() {
-                name.get_name().to_string()
-            } else {
-                format!("{parent_name}::{}", name.get_name())
-            };
-            let msg = format!("warning: already initialized constant {qual}\n");
-            let stderr_id = IdentId::get_id("$stderr");
-            let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
-            let write_id = IdentId::get_id("write");
-            let _ = self.invoke_method_inner(
-                globals,
-                write_id,
-                stderr,
-                &[Value::string(msg)],
-                None,
-                None,
-            );
-        }
+        self.warn_already_initialized_constant(globals, parent, name);
         globals.set_constant(parent, name, val);
         if let Some((file, line)) = source_loc {
             globals.store[parent].record_constant_location(name, file, line);
@@ -4417,6 +4440,69 @@ impl Executor {
             bh.0,
             PROC_CLASS,
         ))
+    }
+
+    /// The block of the frame `lfp` as a value: `nil` without a block,
+    /// else its Proc — materialized on the first read and cached back
+    /// into the frame's block handler, so every read of a `&block`
+    /// parameter answers the same object (`b.equal?(b)`), and `yield`
+    /// and `&b` forwarding in that frame use the Proc from then on.
+    pub(crate) fn block_param_proc(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        pc: BytecodePtr,
+    ) -> Result<Value> {
+        // `Lfp::block` answers `None` for both an absent and a nil handler.
+        let bh = match lfp.block() {
+            Some(bh) => bh,
+            None => return Ok(Value::nil()),
+        };
+        // Already-materialized Proc: return it directly, *without*
+        // locating the owner frame's Cfp. This is not just a shortcut:
+        // when the owner frame belongs to a different execution context
+        // — e.g. a `&block` parameter read from inside a green thread
+        // whose lexical home is a heap-promoted frame on the *main*
+        // thread's chain — the dynamic-chain search below can never find
+        // it (and walking past a thread root used to panic on
+        // `parent_fiber.unwrap()`, aborting the whole process; see issue
+        // #950). Cross-context handlers are always materialized when
+        // their frame escapes to the heap
+        // (`materialize_escaped_block_handlers`), so this early return
+        // covers exactly those cases.
+        if let Some(proc) = bh.try_proc() {
+            return Ok(proc.into());
+        }
+        let cfp = if bh.try_proxy().is_none() {
+            // Non-proxy handler (`&:sym`, or an arbitrary object coerced
+            // through `#to_proc`): materializing it needs nothing from the
+            // owner frame, and that frame may well be gone —
+            // `def f(&b); ->{ b.call }; end` read from the returned lambda
+            // is exactly this shape.
+            self.cfp()
+        } else {
+            // Proxy handler: its (fid, depth) is relative to the frame
+            // that owns it, so locate that frame's Cfp on the current
+            // chain (crossing into parent fibers). A proxy owner is always
+            // on the current chain — an escaped frame would have had its
+            // handler materialized above — but walk defensively rather
+            // than aborting the process on a violation.
+            let mut owner = (&*self, self.cfp());
+            while owner.1.lfp() != lfp {
+                match Executor::try_prev_cfp(owner.0, owner.1) {
+                    Some(prev) => owner = prev,
+                    None => {
+                        return Err(MonorubyErr::fatal(
+                            "[BUG] block handler owner frame is not on the current frame chain",
+                        ));
+                    }
+                }
+            }
+            owner.1
+        };
+        let proc = self.generate_proc_inner(globals, cfp, bh, pc)?;
+        lfp.set_block(Some(BlockHandler::new(proc.into())));
+        Ok(proc.into())
     }
 
     pub(crate) fn generate_lambda(

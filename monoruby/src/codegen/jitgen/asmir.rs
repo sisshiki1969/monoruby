@@ -1141,8 +1141,8 @@ impl AsmIr {
         self.handle_error(error);
     }
 
-    pub(super) fn block_arg_proxy(&mut self, ret: SlotId, outer: usize) {
-        self.push(AsmInst::BlockArgProxy { ret, outer });
+    pub(super) fn block_arg_proxy(&mut self, ret: SlotId, outer: usize, slot: SlotId) {
+        self.push(AsmInst::BlockArgProxy { ret, outer, slot });
     }
 
     pub(crate) fn inline(
@@ -2484,9 +2484,14 @@ pub(super) enum AsmInst {
         using_fpr: UsingFpr,
     },
 
+    /// `&block` forwarding: the `&block` parameter's slot value if it has
+    /// been assigned, else the block handler of the frame `outer` levels
+    /// up (`slot` is `SlotId(0)` when the parameter is known unassigned or
+    /// anonymous: no slot check).
     BlockArgProxy {
         ret: SlotId,
         outer: usize,
+        slot: SlotId,
     },
     BlockArg {
         ret: SlotId,

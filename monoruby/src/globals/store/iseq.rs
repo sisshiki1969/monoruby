@@ -611,6 +611,17 @@ impl ISeqInfo {
         self.args.block_param
     }
 
+    /// The local slot of the named `&block` parameter, if this iseq has
+    /// one (an anonymous `&` / `...` has none). The prologue clears it
+    /// to 0 (`None`: not assigned); `BlockArg` / `BlockArgProxy` read it
+    /// and an assignment to the parameter is a plain store. See
+    /// `doc/block_param.md`.
+    pub(crate) fn block_param_slot(&self) -> Option<SlotId> {
+        let name = self.args.block_param?;
+        let local = self.locals.get(&name)?;
+        Some(SlotId(1 + local.0))
+    }
+
     ///
     /// Get the name of iseq.
     ///

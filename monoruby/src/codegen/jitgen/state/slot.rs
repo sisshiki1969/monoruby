@@ -330,6 +330,14 @@ impl SlotState {
         for i in cc.locals() {
             ctx.set_mode(i, LinkMode::C(Value::nil()));
         }
+        // The named `&block` parameter's slot is cleared to 0 (`None`) at
+        // entry and may be assigned by this frame or a nested block; its
+        // content is never read as a plain local (only `BlockArg` /
+        // `BlockArgProxy` consult it, and they test for 0 themselves), so
+        // the memory slot is the authority: `S`, no constant.
+        if let Some(slot) = cc.iseq().block_param_slot() {
+            ctx.set_mode(slot, LinkMode::default());
+        }
         for i in cc.args() {
             ctx.set_mode(i, LinkMode::default());
         }

@@ -667,9 +667,35 @@ impl<'a> BytecodeGen<'a> {
             params.args_names.iter().for_each(|name| {
                 codegen.add_local(*name);
             });
+            // A named `&block` parameter owns a local slot right after the
+            // parameters: the prologue clears it to 0 (`None`), an
+            // assignment is a plain store, and every read goes through
+            // `BlockArg` / `BlockArgProxy`, which take the slot's value
+            // unless it is still empty (then the frame's block handler is
+            // the value). An anonymous `&` / `...` (name "") cannot be
+            // assigned and has no slot.
+            if let Some(name) = block_param
+                && !name.get_name().is_empty()
+            {
+                codegen.add_local(name);
+            }
         }
 
         codegen
+    }
+
+    /// The `&block` parameter's local slot in the frame `outer` levels up,
+    /// or `SlotId(0)` when that frame's parameter is anonymous (no slot).
+    fn block_param_slot_of(&self, outer: usize) -> SlotId {
+        let slot = if outer == 0 {
+            self.block_param
+                .and_then(|name| self.iseq().locals.get(&name).copied())
+        } else {
+            self.store
+                .outer_locals_in(self.iseq_id, outer)
+                .and_then(|(locals, name)| locals.get(&name?).copied())
+        };
+        slot.map_or(SlotId(0), |local| SlotId(1 + local.0))
     }
 
     fn iseq(&self) -> &ISeqInfo {
@@ -1068,17 +1094,19 @@ impl<'a> BytecodeGen<'a> {
         }
     }
 
+    /// The slot to *read* the local `ident` from. `None` for the `&block`
+    /// parameter: its slot may still be empty (never assigned), so a read
+    /// is a `BlockArg` / `BlockArgProxy` instruction (which also consults
+    /// the frame's block handler), never a plain slot read.
+    /// Writes go through `assign_local`, which does use the slot.
     fn refer_local(&mut self, ident: &str) -> Option<BcReg> {
         let name = IdentId::get_id(ident);
+        if Some(name) == self.block_param {
+            return None;
+        }
         match self.iseq().locals.get(&name) {
             Some(r) => Some((*r).into()),
             None => {
-                // The block parameter is modelled as a `BlockArg` instruction,
-                // not a regular local slot, so bail out with `None` so the
-                // caller emits `BlockArg` instead.
-                if Some(name) == self.block_param {
-                    return None;
-                }
                 // The parser only emits `LocalVar` for identifiers it has
                 // already decided are locals (via `LvarCollector`). That
                 // includes forward references like `x = 1 until x`, where the
@@ -1091,6 +1119,16 @@ impl<'a> BytecodeGen<'a> {
                 Some(local.into())
             }
         }
+    }
+
+    /// `refer_dynamic_local` for a *read*: `None` for the `&block`
+    /// parameter of that frame, which is read with `BlockArg`
+    /// (see `refer_local`).
+    fn refer_dynamic_local_read(&self, outer: usize, name: IdentId) -> Option<BcLocal> {
+        if self.outer_block_param_name(outer) == Some(name) {
+            return None;
+        }
+        self.refer_dynamic_local(outer, name)
     }
 
     fn refer_dynamic_local(&self, outer: usize, name: IdentId) -> Option<BcLocal> {
@@ -1150,6 +1188,8 @@ impl<'a> BytecodeGen<'a> {
         }
     }
 
+    /// Is `node` a read of the `&block` parameter of this frame or an
+    /// enclosing one?
     fn is_refer_block_arg(&mut self, node: &Node) -> bool {
         if let NodeKind::LocalVar(outer, name) = &node.kind {
             let lvar = IdentId::get_id(name);
@@ -2010,7 +2050,16 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn replace_init(&mut self, params: &ParamsInfo) {
-        let fninfo = FnInitInfo::new(self.total_reg_num(), params, self.destructed_args.clone());
+        let block_param_slot = match self.block_param_slot_of(0) {
+            SlotId(0) => None,
+            slot => Some(slot),
+        };
+        let fninfo = FnInitInfo::new(
+            self.total_reg_num(),
+            params,
+            self.destructed_args.clone(),
+            block_param_slot,
+        );
         self.ir[0] = (BytecodeInst::InitMethod(fninfo), Loc::default());
     }
 }

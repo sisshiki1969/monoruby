@@ -136,7 +136,11 @@ fn build_prism_options(
             let (locals, block_param) = &ctx[scope_idx];
             let mut names: Vec<String> = locals.keys().map(|id: &IdentId| id.get_name()).collect();
             if let Some(blk_id) = block_param {
-                names.push(blk_id.get_name());
+                let name = blk_id.get_name();
+                // A reassigned `&block` already has a local slot.
+                if !names.contains(&name) {
+                    names.push(name);
+                }
             }
             scopes.push(prism::Scope::new(names));
         }

@@ -476,19 +476,21 @@ impl Codegen {
         p
     }
 
-    /// op 21 `BlockArgProxy`: dst `[pc+4]` <- the block handler of the frame
-    /// `[pc+0]` levels up, re-encoding a proxy handler's depth. (x86
-    /// `vm_block_arg_proxy`.)
+    /// op 21 `BlockArgProxy`: dst `[pc+4]` <- the `&block` parameter of the
+    /// frame `[pc+2]` levels up: its slot `[pc+0]` (0: anonymous) once
+    /// assigned, else that frame's block handler with a proxy's depth
+    /// re-encoded. (x86 `vm_block_arg_proxy`.)
     pub(in crate::codegen) fn a64_op_block_arg_proxy(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let loop_ = self.jit.label();
         let loop_exit = self.jit.label();
+        let from_frame = self.jit.label();
         let notzero = self.jit.label();
         let exit = self.jit.label();
         let skip = self.jit.label();
         monoasm_arm64!(&mut self.jit,
             mov x10, x(LFP.0);
-            ldr w11, [x(PC.0)];  // outer level
+            ldrh w11, [x(PC.0), #(2)];  // outer level
             cbz x11, loop_exit;
             loop_:
             ldr x10, [x10];  // walk outer chain
@@ -497,6 +499,16 @@ impl Codegen {
         self.jit.bcond_label(Cond::Ne, &loop_);
         monoasm_arm64!(&mut self.jit,
             loop_exit:
+        // the parameter's slot: an assigned value is the answer.
+            ldrh w12, [x(PC.0)];  // slot
+            cbz x12, from_frame;
+            neg x12, x12;
+            add x12, x10, x12, lsl #(3);
+            ldur x12, [x12, #(-(LFP_SELF as i32))];
+            cbz x12, from_frame;
+            mov x10, x12;
+            b exit;
+            from_frame:
         // block handler = [outer - LFP_BLOCK]
             ldur x10, [x10, #(-(LFP_BLOCK as i32))];
             cbnz x10, notzero;
@@ -504,7 +516,7 @@ impl Codegen {
             notzero:
         // if bit0 == 0 (Proc/nil), keep as-is; else re-encode proxy depth.
             tbz x10, #(0), exit;
-            ldrsw x12, [x(PC.0)];  // outer (signed)
+            ldrh w12, [x(PC.0), #(2)];  // outer
             lsl x12, x12, #(2);
             add x10, x10, x12;
             add x10, x10, #(2);

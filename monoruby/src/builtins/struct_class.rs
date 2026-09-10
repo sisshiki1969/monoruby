@@ -151,30 +151,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // matching CRuby's `Struct.new('Person', ...)` behaviour.
     if let Some(n) = name {
         let parent_class = lfp.self_val().as_class().id();
-        let prev = globals
-            .store
-            .get_constant_noautoload(parent_class, n)
-            .is_some();
-        if prev {
-            let parent_name = globals.store.qualified_name(parent_class);
-            let qual = if parent_name.is_empty() {
-                n.get_name().to_string()
-            } else {
-                format!("{parent_name}::{}", n.get_name())
-            };
-            let msg = format!("warning: already initialized constant {qual}\n");
-            let stderr_id = IdentId::get_id("$stderr");
-            let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
-            let write_id = IdentId::get_id("write");
-            let _ = vm.invoke_method_inner(
-                globals,
-                write_id,
-                stderr,
-                &[Value::string(msg)],
-                None,
-                None,
-            );
-        }
+        vm.warn_already_initialized_constant(globals, parent_class, n);
     }
 
     let new_struct = globals

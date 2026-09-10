@@ -262,6 +262,7 @@
 1164b6b299a8e58d705998fdc148adbf	1	def f(a = ($x = 1)); 1; end\n        f\n        $x\n        
 118eb5e68bd673de068374bd75347ed3	:OVERRIDDEN	class Float; def %(o); :OVERRIDDEN; end; end; 3.0 % 4.0
 11960ed2de38b87ae0166549e9b0f8a6	["expected true or false as exception: 0", "expected true or false as exception: 0", "expected true or false as exception: 0", "expected true or false as exception: 0", "expected true or false as highlight: 0", "expected true or false as highlight: 0", "expected true or false as exception: \\"false\\"", "expected true or false as exception: \\"false\\"", "expected true or false as exception: \\"false\\"", "expected true or false as exception: \\"false\\"", "expected true or false as highlight: \\"false\\"", "expected true or false as highlight: \\"false\\"", "expected true or false as exception: nil", "expected true or false as exception: nil", "expected true or false as exception: nil", "expected true or false as exception: nil", :no_error, :no_error, "expected true or false as exception: :sym", "expected true or false as exception: :sym", "expected true or false as exception: :sym", "expected true or false as exception: :sym", "expected true or false as highlight: :sym", "expected true or false as highlight: :sym"]	res = []\n        [0, "false", nil, :sym].each do |bad|\n          [-> { 
+119d229b1ab7610a5a0d2b10eb9dc477	[[nil, Enumerator, true], [:to_s, ["1", "2"]], 7, [Proc, 4, true], [Proc, true], true]	def k(&b); [1, 2].map(&b); end\n        def none(&b); b = nil; [b, k(&b)
 11bda11ec7cbf263e9f52074954288f6	"../"	class MyPath\n          def to_path\n            "../"\n          end\n    
 11cc75ade577235c4ddea752c1daddb7	[[0, 4, 8]]	def cljc_leaf\n          ls = caller(0, 3).map { |s| s[/:(\\d+):/, 1].to_
 11d8f66614d6ef25a5a6c863d202cdb1	14	f = ->{ it * 2 }; f.call(7)
@@ -579,6 +580,7 @@
 29a4782bad89b05e2a89fbdc04ec694a	[[1, :d, [], 1, nil], [1, 2, [3, 4], 1, nil], [1, 2, [], 9, nil], [1, :d, [], 1, :blk], [10, 20, [30], 1, nil], [5, 6, [7], 2, nil]]	def t(a, b = :d, *r, k: 1, &blk); [a, b, r, k, blk ? blk.call : nil
 29be5fcdba7ed7a8c6ca8dadda30fdde	["Xtail-line\\nXpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad", ["tail", "line", "padpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad"], "T-line\\npadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad", "Ytail-line\\nYpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad", "if @c  tail-line\\n  padpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadend\\n"]	s = "HEADER-LINE\\nmiddle\\ntail-line\\n" + "pad" * 20\n        s =~ /middl
 29c1437316aed84311f490aa6a4532d1	["C", "B", "A", "M3", "M2", "M1"]	module M1; end\n        module M2\n          include M1\n        end\n     
+29e2a1847c8af81977c468f7dd1163e1	[:dflt, :given, :none, :yes, 3]	r = []\n        pr = proc { |&b| b = proc { :dflt } unless b; b.call }\n 
 2a0125843d4ab599f9e3f4ec2c1ca1c3	["b", "b"]	class String; def <=>(o) = (o.length - length); end\n["b", "a", "c"].minmax
 2a04e0b26f5843b7982d5765e50f29cf	[[:c1, :c2], [:c1, :c2]]	class S\n              def s; end\n            end\n            class 
 2a054f41f0ebb76b11549882f920add6	[]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.val
@@ -732,6 +734,7 @@
 362197c8ba0c107c5b63c4c8b7e930e6	false	t = Thread.new { IO.select(nil, nil, nil, 2**62) }\n            Thre
 3634c56019b496302e0dbaf2bd90cd08	[[:from_true, :from_false, :from_true], [:from_false, :from_true]]	class TrueClass; def which = :from_true; end\n        class FalseClass; 
 366101f3454d9c3ba104d799233170e4	14	class Foo\n              def with_block; yield 7; end\n            en
+367146f794b0754d2be0142feeb12768	[:replaced, :given, [2, 4], [2, 3], 6, [9], 2, 1, [true, Proc]]	def call_it(&block); block = proc { :replaced } if block.nil?; block.ca
 367c0b57251ec6d8861445efce15a4a2	[3, 4, 5]	class MyNum; def to_int; 2; end; end\nn = MyNum.new\n[1,2,3,4,5].drop(n)
 369964a9ab023c59c6982e160cd552b5	10770.0	def g\n          a = 0.0; b = 1.0; c = 2.0; d = 3.0\n          i = 0\n    
 36e28f3b4bad007127519f2712f4d570	[39, :receiver_class, "constant", "nil", :receiver_class, "class variable access from toplevel"]	$r = []\n        m = Module.new\n        $r << m.class_eval("@@cv1 = 39; 
@@ -1110,6 +1113,7 @@
 52d70b5a956cf65a2161a0c071728cd2	[true, true]	o = Object.new\n            o.freeze\n            begin\n             
 52e034352601862a8ad528f2c0b53e00	"TEST"	/(?<t>\\w+)/ =~ "TEST"; l = -> { Regexp.last_match(:t) }; l.call
 52e3c4053b6635a9049d6b966fd6af93	["bogus", "bogus", false, false, "wxq.rb", "wxq.rb", "vxq.rb", true]	cls = Class.new do\n              def go\n                autoload :Z
+52f6ec815a152a406d7a093bdbb11700	["", "warning: already initialized constant A::X\\n/tmp/.tmpwHs3y6:7: warning: previous definition of X was here\\n", "warning: already initialized constant A::X\\n", "", 5]	require "stringio"\n        def cap; $stderr = StringIO.new; yield; s = 
 530edafd9da1b1757a0295e4d18879dd	["RSub", "x"]	class RSub < Regexp; end\n            r = Marshal.load(Marshal.dump(
 531cf8f2ea5a7d4a2006397c77062c09	[[[1, :a], [2, :b], [3, :c]], [[1, 2], [1, 9], [2, 1]], [["a", 2], ["b", 1]]]	h = { 3 => :c, 1 => :a, 2 => :b }\n        [h.sort, [[2, 1], [1, 9], [1,
 5326cacf44528935163ede17463c01c9	1	lambda { |a,| a }.arity\n            
@@ -1349,6 +1353,7 @@
 658a3d798e2393a25a6923d06ab095be	[:tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok]	def tmo(klass)\n              perform = Proc.new do\n                
 659055cc978aefe6697faff4fd6e1315	[[1, 2, 3], 10, 20]	def f(*pos, a:, b:)\n          [pos, a, b]\n        end\n        \n\n       
 65b60c5b39c342afed16c0ba169c3edc	20100	def target(x) = x + 1\n        s = 0\n        i = 0\n        while i < 200
+65bb5f7d0324a0abc81ebc2d0d768a36	[[true, true, 1], [true, 5], true, [Proc, nil], [:orig, :new, [:new]], :y, :none]	def a(&b); [b.equal?(b), b.object_id == b.object_id, 3.times.map { b.ob
 65d10140470d60de44657d841741db77	[0, 1, 2, 3, 4]	a = []\n            p = Proc.new {|x|\n                a << x\n       
 65f089c7f8670902b073a707f21a776d	["/p", nil]	m = Module.new { autoload :X, "/p" }\n            [m.autoload?("X"),
 660c0103d91b50d0c6f365cf1111c0c4	:OVERRIDDEN	class String; def freeze; :OVERRIDDEN; end; end; "a".freeze
@@ -1434,6 +1439,7 @@
 6b82ebaaa0df8e456b952c1649290d36	["INT-NE", "RAW-B", false, true, true, true, true]	class Integer; def !=(o); "INT-NE"; end; end\n        class CustomEqB; d
 6bab7203c03f2793f901298b3357f169	true	"abc".force_encoding("ISO-8859-5").encoding == Encoding::ISO_8859_5
 6bc256a131cd947b4c256d4afa639789	["y", Encoding::ConverterNotFoundError, Encoding::ConverterNotFoundError, [254, 255, 0, 97, 0, 10, 0, 98], "UTF-16", [[254, 255, 0, 97, 0, 10, 0, 98]], true, Encoding::ConverterNotFoundError]	(a="\\x79".dup.force_encoding(Encoding::BINARY).encode(Encoding::Emacs_Mule); b=(
+6c19c7800d96f277d790f0d5374e3b3e	[Integer, Proc, [2, 2], 3, :deep, Proc, [:from_proc, :from_proc]]	def m1(&block); [1].each { block = 1 }; block.class; end\n        def m2
 6c331f471496111694ecb08afb04cab9	[1, 2, 3]	v = []\n            t = Thread.new { v << 1; sleep; v << 3 }\n       
 6c6bac9e1206b463f412a2b2d96f020e	[3, 1]	class Integer; def <=>(o) = (o.to_i - to_i); end\n[3, 1, 2].minmax
 6c858418f8d579a73265ea125ceceeeb	1.5	class C; def to_f; 1.5; end; end; o = C.new\nFloat(o)
@@ -1754,9 +1760,11 @@
 84084af32e200c43d9a0f21c314d8935	""	"".reverse
 842592b1bb99be694e92c22a5315ee23	[false, false, false, nil, false, false, false, nil, false, false, false, nil, false, false, false, nil, false, false, false, nil]	a = [1,2,3,nil] * 5\n        x = []\n        for e in a\n          x << e&
 8426848ab8fdf086ee8cf3191a12c5f8	"MShip2::Blob"	module MShip2\n              class Blob\n                def _dump(l)
+842d7abc8c7da9f58042f513762d25ea	[[nil, Enumerator, true], [:to_s, ["1", "2"]], 7, [Proc, 4, true], [Proc, true], [Proc, 2], true]	def k(&b); [1, 2].map(&b); end\n        def none(&b); b = nil; [b, k(&b)
 846556768cd567bd24d3916bd92ff7db	[false, false, true, [true, true, false], true, false, false, ["NameError", "'a' is not an implicit parameter"], ["TypeError", "1 is not a symbol nor a string"]]	def try; yield; rescue => e; [e.class.to_s, e.message]; end\n       
 8479b8263b2031ca390cec82e34d1347	"yes-shname\\n"	env = Object.new\n            def env.to_hash = {"VIA_TO_HASH" => "y
 84b7526c4266744e31975a2bbd3771af	[true, false, true, false, true, false, false, false, false, true, false, true, true, true, false, true, false, true, false, true, false]	class P\n              def initialize(t); @t = t; end\n              
+84bae996b94a754bc7a7869d84b8c215	["", "", "", "warning: character class has duplicated range: /[dd]/\\n", "warning: regular expression has redundant nested repeat operator '*': /a**/\\n", "warning: character class has duplicated range: /[ee]/\\n", ""]	require "stringio"\n        def cap; $stderr = StringIO.new; yield; s = 
 84c00afd27df16e424376a4818a1da69	[VL, 2, 151115727451828646838272]	class VL\n          attr_reader :name, :lookups, :flags\n          def se
 84d91589fff917e43c1d88cde1f37516	[false, false, false, [:include, :TypeError], [:extend, :TypeError], [:r_include, :TypeError], [:r_prepend, :TypeError]]	r = Module.new { refine(String) { } }.refinements[0]\n            ou
 84f4b6da4f67b5e0629d3c8cdef84518	"A"	class A\n              def who; self.class.name; end\n            end
@@ -2357,6 +2365,7 @@ b017ead69b837578afee4295eb840ed7	"#<Class:Time>"	Time.singleton_class.to_s
 b0210a3ee0e2cc726743dd177d2617fa	"rescued:boom"	def a1\n          x = 0\n          [1].each do |i|\n            begin\n    
 b041b0aaea8a7d40b26a35b251c0f897	[[:req, :a], [:nokey]]	def m(a, **nil); end\n            method(:m).parameters\n            
 b050bdfac1ec47f5eeda5dc5e12bd05a	45.0	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
+b0646b075c1066593f9fe4287f377c37	[Proc, Proc, Proc, [Proc, 2], :dflt, :given, [nil, 1], 1, :and, nil, Proc, 42]	def v1(t, pat = /.*/m, &block)\n          unless block\n            block
 b06f00715b283fa26e9acda37466978d	[1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub]	class MyArray < Array\n              def [](i) = :sub\n            en
 b074a58194d91b7b13d55025d23399ce	[nil, 2, 1, 1, nil, nil, 5, nil]	x = nil\n        h = { a: 1 }\n        def m(o) = o&.[](0)\n        [x&.[]
 b07897e1515470c5f367e6c838cd3ca3	true	h = {a: 1}.compare_by_identity\n            Marshal.load(Marshal.dum
@@ -2364,6 +2373,7 @@ b0a6a8263e7c30eec12325762ab54dc5	[1, 2, nil, nil, 3, 1, nil, :from_block, [:a, :
 b127614a38e6a826e83df4733ad1c138	[true, true]	require "openssl"\n        [OpenSSL::Cipher::CipherError < OpenSSL::Open
 b13eb772180c210a5c10579da6ea6cfb	true	a = []\n            a << a\n            b = Marshal.load(Marshal.dump
 b15052c5abbd93a1a9004be3b57beb9c	[:foo, :bar]	$res = []\n            obj = Object.new\n            def obj.singleto
+b15ea9d8d319614d35c4044d16eebf97	[[2, 4], [2, 3], [0, 1], true, false, true, false]	def k(&b); [1, 2].map(&b); end\n        def l(&); k(&); end\n        def 
 b18169111f27cd344540accc05f616fe	nil	File.open("Cargo.toml") { |f| IO.new(f.fileno, autoclose: false).path }
 b18a80835134d8dffe61ec8e951213f0	["あcba", "あcba", true]	s = "abcあ".dup\n              t = s.reverse!\n              [s, t, 
 b196364f0e469cc01f39c67211d6218a	["abcdef", "abcdef", "abc", ["abcdef", "UTF-8"], "abcdef"]	File.write("/tmp/mr_cr5.txt", "abcdef")\n            r = []\n        
@@ -2796,6 +2806,7 @@ cf9672bc0f3346ba3de51fd90ea702e4	[:foo]	$res = []\n            class C\n        
 cfa30b29bf3ccea5e600ee36663af61d	["US-ASCII", "US-ASCII", "US-ASCII"]	s = "abc".dup.force_encoding("US-ASCII")\n              s.partitio
 cfaf7efe92a4e7e016bf9da03af47c5a	[true, "m"]	bytes = Marshal.dump(Enumerable)\n            t = Marshal.load(bytes
 cfd1776d77256768f5ae301400965afe	["No such file or directory - no-such-cmd-xyzzy", 127]	begin\n              Process.spawn("no-such-cmd-xyzzy")\n            
+cfecea52df02aec5174050c64a869aec	[Proc, NilClass, [7, 7], [Proc, 2, 2], Proc, true, Proc]	def d(&b); binding.local_variable_get(:b); end\n        def e(&b); bd = 
 cffe2bea88b632377cf81196a0f5adbc	:OVERRIDDEN	class Integer; def %(o); :OVERRIDDEN; end; end; 3 % 4
 d005def98ec838cc7d6f37a7bdf0aaa0	[1, 2, 42, 12]	def f(x,y,z=42,w=12)\n            [x,y,z,w]\n        end\n        \n\n      
 d00758f23a67ffb31d511123384dc457	[1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", "x", "\\xFF", 2, "y", "y z", "x\\xFFy ", true, "\\x{A4A2}", 2, "\\x{A4A4}", 4, 1, "x"]	require "strscan"\n        src = '{"name": "Kärnten", "n": 12, "s": "v€x
@@ -3008,6 +3019,7 @@ df98012da3173104ccfb56f7f5d32caa	[1, nil, 1.5, nil, (1/1), nil, (1+0i), nil, 1, 
 df9ef4247e8eb28799b29a3c0ceae30e	"US-ASCII"	"abc".dup.force_encoding("US-ASCII").gsub(/b/, "x").encoding.to_s
 dfa6493490a950a4a97d2766f58d2dd5	7	p = Proc.new { |x, y| x + y }\n            define_method(:bar, p)\n  
 dfb8f5dd8fef254047d34541fb3b1231	229	class C\n                def f(x,y,z,a:1000)\n                    x+y
+dfc0970ee4cd4da4680dd812f3e580e4	["", "warning: already initialized constant A::X\\n", "warning: already initialized constant A::X\\n", "", 5]	require "stringio"\n        def cap; $stderr = StringIO.new; yield; s = 
 dfc42a777c7f83e4c7bf0de522556f8b	[ArgumentError, "boom"]	h = { "d" => 4, "b" => 2, "a" => 1, "c" => 3, "e" => 5 }\n          
 e025a42ea6959b901cc28694e25f35a9	true	Random.srand(42)\n        results = 10.times.map { Random.rand }\n       
 e0378a5e80a453abed2cc017dde89a8c	[[:n, :n, :n], "wrong number of arguments (given 1, expected 0)", "wrong number of arguments (given 0, expected 1)", [nil, nil, nil], "wrong number of arguments (given 2, expected 1)", "wrong number of arguments (given 0, expected 1+)", [42, 42, 42], [42, 42, 42], "missing keyword: :k", "wrong number of arguments (given 1, expected 0; required keyword: k)", [false, false, false], [7, 7, 7], "wrong number of arguments (given 2, expected 1)", "wrong number of arguments (given 1, expected 0)", true, false, 7]	class C\n          def none = :n\n          def one(a) = nil\n          de

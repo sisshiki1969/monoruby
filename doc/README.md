@@ -24,6 +24,7 @@ Two things to know before reading:
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
 | [`stack_frame.md`](stack_frame.md) | EN | reference | What a local frame looks like in memory: LFP / CFP offsets, where `self`, the block and the registers sit. |
+| [block_param.md](block_param.md) | design | EN | The `&block` parameter: a sentinel-initialized local slot, lazy `Proc` with write-back, proxy forwarding (CRuby's scheme) |
 | [`method_args.md`](method_args.md) | JA | reference | What `pos_num`, `req_num`, `optional`, `rest` actually count, and what they exclude. |
 | [`native_func.md`](native_func.md) | EN | reference | How to declare a builtin that takes optional / rest / keyword parameters. |
 | [`super_resolution.md`](super_resolution.md) | JA | design record | The two non-obvious questions `super` has to answer — *which* name, and *which* position in the chain — and how monoruby answers them from the frame rather than from a method entry. |
