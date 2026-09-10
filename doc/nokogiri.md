@@ -244,7 +244,7 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
   `url`、`errors`、strict モードの `SyntaxError`（message / line / column /
   domain / code / level / file / str1..3 / int1 が CRuby と一致）。
 - `XML::Node` の 54 のネイティブのうち `dup` 系（`initialize_copy_with_args`）、
-  `canonicalize`、`create_entity`、`process_xincludes`、
+  `canonicalize`、`process_xincludes`、
   `html_standard_serialize`（HTML5）、`prepend_newline?`、`create_external_subset`
   以外: 走査、属性（`get` / `set` / `key?` / `attribute_nodes`）、名前空間、
   `content` / `native_content=`、`path` / `line`、`unlink`、`add_child` /
@@ -261,6 +261,13 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
   `local-name-is` の組み込み関数なので CSS セレクタが全部通る）。
 - `HTML4::Document`（`read_memory` / `read_io` / `new` / `type`）、
   `HTML4::EntityLookup`、`EncodingHandler`。
+- DTD 一式（`dtd.rs`）: `XML::DTD`（`entities` / `elements` / `attributes` /
+  `notations` の各ハッシュ、`validate`、`external_id` / `system_id`、
+  `create_internal_subset` / `internal_subset` / `external_subset`）、
+  `EntityDecl`（`content` / `original_content` / `entity_type` / 各 ID と型定数）、
+  `ElementDecl`（`element_type` / `content` / `prefix`）、`AttributeDecl`
+  （`attribute_type` / `default` / `enumeration`）、`ElementContent`（内容モデルの
+  木、`NATIVE` クラスで `@document` を持つ）、`Document#create_entity`。
 
 まだ無いもの（段階 2〜6）: `XML::SAX::*`（`SAX::PushParser` は
 `HTML4::EncodingReader` が使うので **HTML の IO からのパース**もまだ）、
@@ -278,6 +285,12 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
   のクラスの ivar をインラインスロット（`kind` 共用体）に読み書きするので、
   普通の `define_class` で作ると `@errors = ...` がペイロードの Box を上書きして
   落ちる。
+- パースのエラー収集は **libxml2 のグローバル（スレッドローカル）structured
+  handler**（`xmlSetStructuredErrorFunc`）で行い、コンテキストの
+  `xmlCtxtSetErrorHandler` は使わない。`NOERROR` / `NOWARNING` オプション
+  （`DEFAULT_HTML` に入っている）が付くと libxml2 はコンテキストのハンドラを
+  素通りするが、グローバルのハンドラには依然として届く。nokogiri が
+  `document.errors` を埋め、strict モードで raise できるのはこのため。
 - ビルトインの中で作った `Value` を Ruby 呼び出し（`initialize`、`decorate`、
   `SyntaxError.new`）を跨いで持つときは `vm.temp_push` で根付けする
   （`doc/gc.md` §8.1）。`wrap_document` / `wrap_node_set` / `errors_to_array`

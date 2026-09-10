@@ -42,6 +42,11 @@ impl NativeData for XmlNodeSet {
             }
         }
     }
+    /// `Object#dup` / `#clone`: an empty set that `initialize_copy`
+    /// fills (nokogiri allocates the copy with `xml_node_set_allocate`).
+    fn dup(&self) -> Option<Box<dyn NativeData>> {
+        Some(Box::new(XmlNodeSet::empty()))
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

@@ -68,10 +68,14 @@ fn read_memory(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     let options = lfp.arg(3).expect_integer(&globals.store)? as c_int;
     let mut errors: Vec<ErrorRecord> = vec![];
     // SAFETY: the buffers outlive the call; the error list is registered
-    // for the parser context's lifetime only.
+    // as the (thread-local) structured error handler for the call only.
+    // The global handler, not the context's: with `NOERROR` /
+    // `NOWARNING` libxml2 bypasses the context's handler but still
+    // reports through the global one, which is how nokogiri collects
+    // `errors` under `DEFAULT_HTML` (and raises under `strict`).
     let doc = unsafe {
         let ctxt = xml::xmlNewParserCtxt();
-        xml::xmlCtxtSetErrorHandler(ctxt, Some(collect_error), &mut errors as *mut _ as *mut c_void);
+        xml::xmlSetStructuredErrorFunc(&mut errors as *mut _ as *mut c_void, Some(collect_error));
         let doc = xml::xmlCtxtReadMemory(
             ctxt,
             input.as_ptr() as *const c_char,
@@ -80,6 +84,7 @@ fn read_memory(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
             cptr(&enc) as *const c_char,
             options,
         );
+        xml::xmlSetStructuredErrorFunc(std::ptr::null_mut(), None);
         xml::xmlFreeParserCtxt(ctxt);
         doc
     };
@@ -99,7 +104,7 @@ fn read_io(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // SAFETY: as `read_memory`; the IO context lives across the call.
     let doc = unsafe {
         let ctxt = xml::xmlNewParserCtxt();
-        xml::xmlCtxtSetErrorHandler(ctxt, Some(collect_error), &mut errors as *mut _ as *mut c_void);
+        xml::xmlSetStructuredErrorFunc(&mut errors as *mut _ as *mut c_void, Some(collect_error));
         let doc = xml::xmlCtxtReadIO(
             ctxt,
             Some(io_read),
@@ -109,6 +114,7 @@ fn read_io(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             cptr(&enc) as *const c_char,
             options,
         );
+        xml::xmlSetStructuredErrorFunc(std::ptr::null_mut(), None);
         xml::xmlFreeParserCtxt(ctxt);
         doc
     };
@@ -189,7 +195,7 @@ fn html_read_memory(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
     // SAFETY: as `read_memory`, with the HTML parser.
     let doc = unsafe {
         let ctxt = xml::htmlNewParserCtxt();
-        xml::xmlCtxtSetErrorHandler(ctxt, Some(collect_error), &mut errors as *mut _ as *mut c_void);
+        xml::xmlSetStructuredErrorFunc(&mut errors as *mut _ as *mut c_void, Some(collect_error));
         let doc = xml::htmlCtxtReadMemory(
             ctxt,
             input.as_ptr() as *const c_char,
@@ -198,6 +204,7 @@ fn html_read_memory(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
             cptr(&enc) as *const c_char,
             options,
         );
+        xml::xmlSetStructuredErrorFunc(std::ptr::null_mut(), None);
         xml::xmlFreeParserCtxt(ctxt);
         doc
     };
@@ -217,7 +224,7 @@ fn html_read_io(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
     // SAFETY: as `read_io`, with the HTML parser.
     let doc = unsafe {
         let ctxt = xml::htmlNewParserCtxt();
-        xml::xmlCtxtSetErrorHandler(ctxt, Some(collect_error), &mut errors as *mut _ as *mut c_void);
+        xml::xmlSetStructuredErrorFunc(&mut errors as *mut _ as *mut c_void, Some(collect_error));
         let doc = xml::htmlCtxtReadIO(
             ctxt,
             Some(io_read),
@@ -227,6 +234,7 @@ fn html_read_io(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
             cptr(&enc) as *const c_char,
             options,
         );
+        xml::xmlSetStructuredErrorFunc(std::ptr::null_mut(), None);
         xml::xmlFreeParserCtxt(ctxt);
         doc
     };

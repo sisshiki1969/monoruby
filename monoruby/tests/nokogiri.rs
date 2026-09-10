@@ -281,6 +281,256 @@ fn nokogiri_builder_and_document_new() {
 }
 
 #[test]
+fn nokogiri_node_misc_natives() {
+    compare(
+        r##"
+        doc = Nokogiri::XML(<<~XML)
+          <root xmlns:p="http://p" xml:lang="en">
+            <a p:k="pk" k="plain" id="1">one</a>
+            <b>two</b><c>three</c>
+          </root>
+        XML
+        a, b, c = doc.css("a, b, c").to_a
+        r = []
+        r << [b.next_sibling.name, b.next.name, c.previous_sibling.name, c.previous.name, a.previous_sibling.class,
+         a.next_sibling.class, doc.root.next_sibling, a.child.next_sibling]
+        r << [a.pointer_id == doc.at_css("a").pointer_id, a.pointer_id == b.pointer_id, a.pointer_id.class, a.data_ptr?]
+        r << [a.lang, doc.root.lang, b.lang]
+        b.lang = "fr"
+        r << [b.lang, b.to_xml]
+        r << [a <=> b, b <=> a, a <=> a, (a <=> doc.root), c.line]
+        c.line = 12
+        r << c.line
+        c.line = 70000
+        r << c.line
+        r << [a.attribute_with_ns("k", "http://p")&.value, a.attribute_with_ns("k", nil)&.value,
+         a.attribute_with_ns("nope", "http://p"), a.namespaced_key?("k", "http://p"), a.namespaced_key?("k", nil),
+         a.namespaced_key?("k", "http://q"), a["p:k"], a["k"], a["q:k"], a[nil], a["missing"]]
+        t = a.attribute("k").children.first
+        a["k"] = "changed"
+        r << [t.class, t.to_s, a["k"], a.attribute("k").children.size]
+        r << [a.encode_special_chars("a < b & \"c\""), doc.root.encode_special_chars("é")]
+        attr = a.attribute("id")
+        ns = attr.add_namespace_definition("x", "http://x")
+        r << [ns.class, ns.prefix, ns.href, a.to_xml, attr.namespace&.prefix]
+        d = Nokogiri::XML::Node.new("d", doc)
+        doc.root << d
+        dns = d.add_namespace_definition(nil, "http://default")
+        r << [dns.prefix, dns.href, d.namespace&.href, d.to_xml]
+        d.namespace = doc.root.namespace_definitions.find { |n| n.prefix == "p" }
+        r << [d.namespace.prefix, d.to_xml]
+        d.namespace = nil
+        r << [d.namespace, d.to_xml, d.default_namespace = "http://dd", d.namespace.href]
+        r << [a.text.to_i, a.attribute("id").node_type, a.attribute("id").parent.name, a.attribute("id").document.equal?(doc)]
+        r << [doc.internal_subset, doc.external_subset, doc.root.internal_subset]
+        dtd = doc.create_internal_subset("root", "-//X//DTD//EN", "http://x/root.dtd")
+        r << [dtd.class, dtd.name, dtd.external_id, dtd.system_id, dtd.node_type, doc.internal_subset.equal?(dtd),
+         doc.root.internal_subset.class, doc.to_xml]
+        begin
+          doc.create_internal_subset("root", nil, nil)
+        rescue => e
+          r << [e.class, e.message]
+        end
+        e = Nokogiri::XML(<<~XML)
+          <!DOCTYPE r PUBLIC "-//R//DTD R//EN" "http://r/r.dtd" [
+            <!ELEMENT r (#PCDATA | s | t)*>
+            <!ELEMENT s (t, (u | v)+)>
+            <!ELEMENT t EMPTY>
+            <!ELEMENT u ANY>
+            <!ELEMENT v (#PCDATA)>
+            <!ATTLIST r x CDATA #IMPLIED>
+            <!ATTLIST r y (one | two) "one">
+            <!ATTLIST s z ID #REQUIRED>
+            <!ENTITY ent "entity value">
+            <!ENTITY ext SYSTEM "http://r/ext.xml">
+            <!NOTATION gif PUBLIC "-//GIF//" "gif.exe">
+            <!ENTITY pic SYSTEM "a.gif" NDATA gif>
+          ]>
+          <r>&ent;<![CDATA[c]]><s z="i1"><t/><v>v</v></s></r>
+        XML
+        sub = e.internal_subset
+        r << [sub.class, sub.children.map(&:class), sub.children.map(&:name),
+         e.root.children.map(&:class), e.root.children.first.name, e.root.children.first.to_xml, e.to_xml,
+         e.children.map(&:class), sub.children.map(&:to_xml), sub.external_id, sub.system_id, sub.name,
+         sub.html_dtd?, sub.keys.sort, sub.to_a.map { |k, v| [k, v.class] }.sort]
+        r << [sub.entities.keys.sort, sub.entities.values.map(&:class).uniq, sub.elements.keys.sort, sub.attributes.keys.sort,
+         sub.notations.keys, sub.notations["gif"].class, sub.notations["gif"].to_a, e.external_subset]
+        ent = sub.entities["ent"]
+        r << [ent.class, ent.name, ent.content, ent.original_content, ent.entity_type, ent.external_id, ent.system_id,
+         ent.to_s, ent.inspect =~ /EntityDecl/ ? :ok : ent.inspect]
+        r << [sub.entities["ext"].entity_type, sub.entities["ext"].system_id, sub.entities["ext"].content,
+         sub.entities["pic"].entity_type, sub.entities["pic"].content, sub.entities["pic"].system_id]
+        el = sub.elements["s"]
+        r << [el.class, el.name, el.element_type, el.prefix, el.content.class, el.content.type, el.content.occur,
+         el.content.name, el.content.prefix, el.content.children.map(&:name), el.content.children.map(&:type),
+         el.content.children.last.children.map { |c| [c.name, c.type, c.occur] }, el.content.document.equal?(e),
+         el.content.inspect =~ /ElementContent/ ? :ok : el.content.inspect]
+        r << [sub.elements["t"].element_type, sub.elements["t"].content, sub.elements["u"].element_type,
+         sub.elements["r"].content.occur, sub.elements["r"].content.type, sub.elements["v"].content.type]
+        at = sub.attributes["y"]
+        r << [at.class, at.name, at.attribute_type, at.default, at.enumeration, sub.attributes["x"].attribute_type,
+         sub.attributes["x"].default, sub.attributes["x"].enumeration, sub.attributes["z"].attribute_type, at.to_s]
+        r << sub.validate(e).map(&:to_s)
+        bad = Nokogiri::XML("<r><w/></r>")
+        r << sub.validate(bad).map(&:to_s)
+        r << [sub.validate(bad).map(&:class).uniq, sub.validate(bad).first.level]
+        ne = Nokogiri::XML("<!DOCTYPE r><r/>")
+        r << [ne.internal_subset.entities, ne.internal_subset.elements, ne.internal_subset.attributes, ne.internal_subset.notations,
+         ne.internal_subset.external_id, ne.internal_subset.system_id]
+        d2 = Nokogiri::XML("<!DOCTYPE r><r/>")
+        made = d2.create_entity("foo", Nokogiri::XML::EntityDecl::INTERNAL_GENERAL, nil, nil, "bar")
+        r << [made.class, made.name, made.content, made.entity_type, d2.internal_subset.entities.keys, d2.to_xml]
+        made2 = Nokogiri::XML::EntityDecl.new("ext", d2, Nokogiri::XML::EntityDecl::EXTERNAL_GENERAL_PARSED, nil, "http://x/e.xml")
+        r << [made2.entity_type, made2.system_id, made2.external_id, made2.content, d2.create_entity("only").content]
+        [-> { d2.create_entity("foo", 1, nil, nil, "again") }, -> { Nokogiri::XML("<r/>").create_entity("nodtd") },
+         -> { d2.create_entity }, -> { d2.create_entity("x", "notatype") }].each do |l|
+          begin
+            r << l.call.class
+          rescue => ex
+            r << [ex.class, ex.message]
+          end
+        end
+        r << [Nokogiri::XML::Text.new("t", doc).class, Nokogiri::XML::Node.new("n", doc.root).parent,
+         Nokogiri::XML::Comment.new(doc.root, "x").to_xml, Nokogiri::XML::CDATA.new(doc.root, "y").to_xml]
+        [-> { Nokogiri::XML::Node.new("n", "notadoc") }, -> { Nokogiri::XML::Text.new(1, doc) },
+         -> { Nokogiri::XML::Text.new("s", 1) }, -> { Nokogiri::XML::Comment.new(1, "s") },
+         -> { Nokogiri::XML::Comment.new(doc, 1) }, -> { Nokogiri::XML::CDATA.new(1, "s") },
+         -> { Nokogiri::XML::Attr.new(doc.root, "k") }, -> { doc.root.add_child(1) },
+         -> { doc.root.add_child(doc.root) }, -> { doc.root.parent.add_child(doc.root) }].each do |l|
+          begin
+            l.call
+            r << :ok
+          rescue => ex
+            r << [ex.class, ex.message]
+          end
+        end
+        p r
+        "##,
+    );
+}
+
+#[test]
+fn nokogiri_document_misc_natives() {
+    compare(
+        r##"
+        r = []
+        doc = Nokogiri::XML("<old><x/></old>")
+        old = doc.root
+        doc.root = Nokogiri::XML::Node.new("new", doc)
+        r << [doc.root.name, old.parent, old.to_xml, doc.to_xml]
+        other = Nokogiri::XML("<foreign a='1'><y/></foreign>")
+        doc.root = other.root
+        r << [doc.root.name, doc.root.equal?(other.root), other.root.name, doc.to_xml, other.to_xml]
+        doc.root = nil
+        r << [doc.root, doc.to_xml]
+        begin
+          doc.root = "not a node"
+        rescue => e
+          r << [e.class, e.message]
+        end
+        r << doc.encoding
+        doc.encoding = "ISO-8859-1"
+        doc.encoding = "UTF-8"
+        r << [doc.encoding, doc.to_xml]
+        h = Nokogiri::HTML4::Document.new("http://example.com/", "-//W3C//DTD HTML 4.01//EN")
+        r << [h.type, h.to_html, h.url, h.internal_subset&.external_id, Nokogiri::HTML4::Document.new.type]
+        begin
+          Nokogiri::HTML4("<p><b>unclosed & more") { |c| c.strict }
+        rescue Nokogiri::XML::SyntaxError => e
+          r << [e.class, e.message]
+        end
+        begin
+          Nokogiri::XML::Document.parse("<r/>", nil, "NOPE-ENCODING")
+          r << :ok
+        rescue => e
+          r << [e.class, e.message]
+        end
+        r << Nokogiri::XML("<r/>", "file:///doc.xml").url
+        r << Nokogiri::XML::Document.new("1.1").version
+        r << Nokogiri::XML("<a><b/></a>") { |c| c.noblanks }.root.children.size
+        frag = doc.fragment("<q>1</q>")
+        r << [frag.document.equal?(doc), frag.to_xml]
+        p r
+        "##,
+    );
+}
+
+#[test]
+fn nokogiri_node_set_and_xpath_natives() {
+    compare(
+        r##"
+        doc = Nokogiri::XML("<r xmlns:n='http://n'><a/><b/><c/><n:d/></r>")
+        r = []
+        set = doc.css("a, b, c")
+        a, b, c = set.to_a
+        r << [set.delete(b)&.name, set.length, set.delete(b), set.map(&:name)]
+        set.push(b)
+        r << [set.map(&:name), set.include?(b), set.push(b).length]
+        copy = set.dup
+        r << [copy.class, copy.length, copy.map(&:name), copy.document.equal?(doc)]
+        r << [set[5], set[-5], set[1..].map(&:name), set[1..-1].map(&:name), set[..1].map(&:name), set[-2..].map(&:name),
+         set[1...2].map(&:name), set[4..5], set[3..].length, set[-9..], set[1, 0].length, set[1, 9].length,
+         set[3, 1].length, set[4, 1], set[-1, 1].map(&:name), set[1, -1]]
+        begin
+          set["1"]
+        rescue => e
+          r << e.class
+        end
+        empty = Nokogiri::XML::NodeSet.new(doc)
+        r << [empty.length, empty.to_a, (empty | set).length, (set & empty).length, (set - empty).length, empty[0]]
+        ns = doc.xpath("//namespace::*")
+        r << [ns.map(&:class), ns.map(&:prefix), ns.length, ns.include?(ns[0]), ns.delete(ns[0])&.href, ns.length]
+        ns = nil
+        GC.start
+        r << doc.xpath("//namespace::n").map(&:href)
+        ctx = Nokogiri::XML::XPathContext.new(doc.root)
+        ctx.register_ns("m", "http://n")
+        ctx.register_variable("v", "b")
+        r << [ctx.evaluate("count(//m:d)"), ctx.evaluate("//*[name()=$v]").map(&:name), ctx.evaluate("name(.)")]
+        ctx.node = doc.at_css("a")
+        r << [ctx.evaluate("name(.)"), ctx.evaluate("name(..)"), ctx.evaluate("count(../*)"), ctx.evaluate("boolean(../c)")]
+        begin
+          ctx.evaluate("//*[")
+        rescue Nokogiri::XML::XPath::SyntaxError => e
+          r << [e.class, e.message]
+        end
+        begin
+          ctx.evaluate("undefined-fn()")
+        rescue Nokogiri::XML::XPath::SyntaxError => e
+          r << [e.class, e.message]
+        end
+        r << doc.xpath("//*[@id=$id]", nil, id: "x").length
+        r << doc.xpath("//*[local-name()=$n]", nil, n: "d").length
+        del = doc.css("a, c")
+        del.unlink
+        r << [doc.root.children.map(&:name), del.map(&:parent)]
+        p r
+        "##,
+    );
+}
+
+#[test]
+fn nokogiri_encoding_handler() {
+    compare(
+        r##"
+        h = Nokogiri::EncodingHandler
+        r = [h["UTF-8"].class, h["UTF-8"].name, h["utf-8"].name, h["ISO-8859-1"].name, h["nonexistent-enc"], h["ASCII"]&.name]
+        r << h.alias("UTF-8", "MY-UTF-8")
+        r << h["MY-UTF-8"].name
+        r << h.delete("MY-UTF-8")
+        r << [h["MY-UTF-8"], h.delete("MY-UTF-8"), h.delete("never-existed")]
+        h.alias("ISO-8859-1", "LATIN-A")
+        r << h["LATIN-A"].name
+        r << h.clear_aliases!.equal?(h)
+        r << h["LATIN-A"]
+        r << [Nokogiri::HTML4::EntityLookup.new.get("amp").value, Nokogiri::HTML4::NamedCharacters["nope"],
+         Nokogiri::HTML4::NamedCharacters.get("lt").name]
+        p r
+        "##,
+    );
+}
+
+#[test]
 fn nokogiri_node_identity_across_gc() {
     // Every node wraps into one Ruby object that the document keeps alive;
     // unlinked nodes stay owned by their document.

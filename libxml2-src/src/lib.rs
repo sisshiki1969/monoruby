@@ -8,7 +8,7 @@
 
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 
-use core::ffi::{c_char, c_double, c_int, c_long, c_uchar, c_ushort, c_void};
+use core::ffi::{c_char, c_double, c_int, c_long, c_uchar, c_ulong, c_ushort, c_void};
 
 pub type xmlChar = c_uchar;
 
@@ -133,6 +133,104 @@ pub struct xmlAttr {
     pub atype: c_int,
     pub psvi: *mut c_void,
     pub id: *mut c_void,
+}
+
+/// `xmlEntityType`.
+pub const XML_INTERNAL_GENERAL_ENTITY: c_int = 1;
+pub const XML_EXTERNAL_GENERAL_PARSED_ENTITY: c_int = 2;
+pub const XML_EXTERNAL_GENERAL_UNPARSED_ENTITY: c_int = 3;
+pub const XML_INTERNAL_PARAMETER_ENTITY: c_int = 4;
+pub const XML_EXTERNAL_PARAMETER_ENTITY: c_int = 5;
+pub const XML_INTERNAL_PREDEFINED_ENTITY: c_int = 6;
+
+/// An `XML_ENTITY_DECL` node (`entities.h`).
+#[repr(C)]
+pub struct xmlEntity {
+    pub _private: *mut c_void,
+    pub type_: c_int,
+    pub name: *const xmlChar,
+    pub children: *mut xmlNode,
+    pub last: *mut xmlNode,
+    pub parent: *mut xmlDtd,
+    pub next: *mut xmlNode,
+    pub prev: *mut xmlNode,
+    pub doc: *mut xmlDoc,
+    pub orig: *mut xmlChar,
+    pub content: *mut xmlChar,
+    pub length: c_int,
+    pub etype: c_int,
+    pub ExternalID: *const xmlChar,
+    pub SystemID: *const xmlChar,
+    pub nexte: *mut xmlEntity,
+    pub URI: *const xmlChar,
+    pub owner: c_int,
+    pub flags: c_int,
+    pub expandedSize: c_ulong,
+}
+
+/// An `XML_ELEMENT_DECL` node.
+#[repr(C)]
+pub struct xmlElement {
+    pub _private: *mut c_void,
+    pub type_: c_int,
+    pub name: *const xmlChar,
+    pub children: *mut xmlNode,
+    pub last: *mut xmlNode,
+    pub parent: *mut xmlDtd,
+    pub next: *mut xmlNode,
+    pub prev: *mut xmlNode,
+    pub doc: *mut xmlDoc,
+    pub etype: c_int,
+    pub content: *mut xmlElementContent,
+    pub attributes: *mut xmlAttribute,
+    pub prefix: *const xmlChar,
+    pub contModel: *mut c_void,
+}
+
+/// An `XML_ATTRIBUTE_DECL` node.
+#[repr(C)]
+pub struct xmlAttribute {
+    pub _private: *mut c_void,
+    pub type_: c_int,
+    pub name: *const xmlChar,
+    pub children: *mut xmlNode,
+    pub last: *mut xmlNode,
+    pub parent: *mut xmlDtd,
+    pub next: *mut xmlNode,
+    pub prev: *mut xmlNode,
+    pub doc: *mut xmlDoc,
+    pub nexth: *mut xmlAttribute,
+    pub atype: c_int,
+    pub def: c_int,
+    pub defaultValue: *const xmlChar,
+    pub tree: *mut xmlEnumeration,
+    pub prefix: *const xmlChar,
+    pub elem: *const xmlChar,
+}
+
+#[repr(C)]
+pub struct xmlNotation {
+    pub name: *const xmlChar,
+    pub PublicID: *const xmlChar,
+    pub SystemID: *const xmlChar,
+}
+
+#[repr(C)]
+pub struct xmlEnumeration {
+    pub next: *mut xmlEnumeration,
+    pub name: *const xmlChar,
+}
+
+/// The content model tree of an element declaration.
+#[repr(C)]
+pub struct xmlElementContent {
+    pub type_: c_int,
+    pub ocur: c_int,
+    pub name: *const xmlChar,
+    pub c1: *mut xmlElementContent,
+    pub c2: *mut xmlElementContent,
+    pub parent: *mut xmlElementContent,
+    pub prefix: *const xmlChar,
 }
 
 #[repr(C)]
@@ -267,6 +365,13 @@ pub struct xmlDOMWrapCtxt {
 pub struct xmlBuffer {
     _opaque: [u8; 0],
 }
+#[repr(C)]
+pub struct xmlValidCtxt {
+    _opaque: [u8; 0],
+}
+
+pub type xmlHashScanner =
+    Option<unsafe extern "C" fn(payload: *mut c_void, data: *mut c_void, name: *const xmlChar)>;
 
 pub type xmlStructuredErrorFunc =
     Option<unsafe extern "C" fn(userData: *mut c_void, error: *const xmlError)>;
@@ -404,6 +509,22 @@ unsafe extern "C" {
     pub fn xmlFreePropList(cur: *mut xmlAttr);
     pub fn xmlFreeDtd(cur: *mut xmlDtd);
     pub fn xmlGetIntSubset(doc: *const xmlDoc) -> *mut xmlDtd;
+
+    // ---- DTD ----
+    /// `hash` is an `xmlHashTablePtr` (the `xmlDtd` tables are typed
+    /// `void *`).
+    pub fn xmlHashScan(hash: *mut c_void, scan: xmlHashScanner, data: *mut c_void);
+    pub fn xmlNewValidCtxt() -> *mut xmlValidCtxt;
+    pub fn xmlFreeValidCtxt(ctxt: *mut xmlValidCtxt);
+    pub fn xmlValidateDtd(ctxt: *mut xmlValidCtxt, doc: *mut xmlDoc, dtd: *mut xmlDtd) -> c_int;
+    pub fn xmlAddDocEntity(
+        doc: *mut xmlDoc,
+        name: *const xmlChar,
+        type_: c_int,
+        ExternalID: *const xmlChar,
+        SystemID: *const xmlChar,
+        content: *const xmlChar,
+    ) -> *mut xmlEntity;
     pub fn xmlSplitQName2(name: *const xmlChar, prefix: *mut *mut xmlChar) -> *mut xmlChar;
     pub fn xmlStrEqual(str1: *const xmlChar, str2: *const xmlChar) -> c_int;
     /// The per-thread output indentation globals (`xmlIndentTreeOutput`

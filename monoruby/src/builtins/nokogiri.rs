@@ -20,6 +20,7 @@ use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 
 mod document;
+mod dtd;
 mod misc;
 mod node;
 mod node_set;
@@ -34,6 +35,7 @@ pub(crate) fn init(globals: &mut Globals) {
 #[allow(dead_code)]
 pub(super) struct Classes {
     pub nokogiri: ClassId,
+    pub xml: ClassId,
     pub node: ClassId,
     pub element: ClassId,
     pub character_data: ClassId,
@@ -49,6 +51,7 @@ pub(super) struct Classes {
     pub entity_decl: ClassId,
     pub element_decl: ClassId,
     pub attribute_decl: ClassId,
+    pub element_content: ClassId,
     pub namespace: ClassId,
     pub node_set: ClassId,
     pub xpath_context: ClassId,
@@ -148,6 +151,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
     let entity_decl = class(globals, xml_m, "EntityDecl", node);
     let element_decl = class(globals, xml_m, "ElementDecl", node);
     let attribute_decl = class(globals, xml_m, "AttributeDecl", node);
+    let element_content = native_class(globals, xml_m, "ElementContent", OBJECT_CLASS);
     let namespace = native_class(globals, xml_m, "Namespace", OBJECT_CLASS);
     let node_set = native_class(globals, xml_m, "NodeSet", OBJECT_CLASS);
     let xpath_context = native_class(globals, xml_m, "XPathContext", OBJECT_CLASS);
@@ -158,6 +162,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
 
     let c = Classes {
         nokogiri,
+        xml: xml_m,
         node,
         element,
         character_data,
@@ -173,6 +178,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
         entity_decl,
         element_decl,
         attribute_decl,
+        element_content,
         namespace,
         node_set,
         xpath_context,
@@ -188,6 +194,7 @@ fn nokogiri_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr
 
     misc::init(globals, &c);
     document::init(globals, &c);
+    dtd::init(globals, &c);
     node::init(globals, &c);
     node_set::init(globals, &c);
     xpath::init(globals, &c);
