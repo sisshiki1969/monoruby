@@ -217,9 +217,9 @@ fn local_variable_get(
         && let Some((host, slot)) = lookup_local_in_binding(globals, inner, name)
     {
         let v = host.register(slot);
-        // A `&block` parameter's slot holds the unassigned sentinel until
-        // the parameter is assigned: the value is the frame's block then.
-        if v.is_none_or(|v| v.is_block_param_unset())
+        // A `&block` parameter's slot is empty (`None`) until the parameter
+        // is assigned: the value is the frame's block then.
+        if v.is_none()
             && let Some(iseq_id) = globals.store[host.func_id()].is_iseq()
             && globals.store[iseq_id].block_param_slot() == Some(slot)
         {

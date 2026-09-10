@@ -231,12 +231,12 @@ def accept(t, pat = /.*/m, &block)
 `&block` に代入すると bytecodegen が FATAL で落ちていた。
 
 修正: CRuby と同じ方式にした。名前付きの `&block` は本物のローカルスロットを
-持ち、prologue で「未代入」を表す番兵（`BLOCK_PARAM_UNSET`）を入れておく。代入は
-ただの store、値としての参照（`BlockArg`）は番兵ならフレームのブロックハンドラを
-Proc 化してフレームに書き戻す（以後同じオブジェクト）、`&block` 転送
-（`BlockArgProxy`）は番兵ならハンドラをそのまま proxy として渡す。`yield` は従来
-どおりフレームのハンドラを見る。JIT は入口でスロットを定数 `C(番兵)` として
-知っているので、代入の無いパスではチェックを出さない。`doc/block_param.md`、
+持ち、prologue で 0（`None`、省略された省略可能引数と同じ「値が入ったことがない」）
+にしておく。代入はただの store、値としての参照（`BlockArg`）は 0 ならフレームの
+ブロックハンドラを Proc 化してフレームに書き戻す（以後同じオブジェクト）、`&block`
+転送（`BlockArgProxy`）は 0 ならハンドラをそのまま proxy として渡す。`yield` は
+従来どおりフレームのハンドラを見る。JIT はこのスロットをメモリ正（`S`）として
+扱い、参照ごとに 0 判定を出す（代入済みのリテラルだけ畳む）。`doc/block_param.md`、
 `tests/block_param_assign.rs`。
 
 ついでに: `rubocop-rails` が `$VERBOSE = nil` の下で定数を再定義するのに

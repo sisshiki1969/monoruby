@@ -341,7 +341,8 @@ pub(crate) struct FnInitInfo {
     pub destruct_start: usize,
     pub destruct_len: usize,
     /// The local slot of a named `&block` parameter (0: none). The
-    /// prologue stores `BLOCK_PARAM_UNSET` there, after the nil-fill.
+    /// prologue clears it to 0 (`None`: "not assigned, the frame's block
+    /// handler is the value") after the nil-fill.
     pub block_param_slot: u16,
 }
 

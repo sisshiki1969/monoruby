@@ -668,12 +668,12 @@ impl<'a> BytecodeGen<'a> {
                 codegen.add_local(*name);
             });
             // A named `&block` parameter owns a local slot right after the
-            // parameters: the prologue stores `BLOCK_PARAM_UNSET` there, an
+            // parameters: the prologue clears it to 0 (`None`), an
             // assignment is a plain store, and every read goes through
             // `BlockArg` / `BlockArgProxy`, which take the slot's value
-            // unless it is still the sentinel (then the frame's block
-            // handler is the value). An anonymous `&` / `...` (name "")
-            // cannot be assigned and has no slot.
+            // unless it is still empty (then the frame's block handler is
+            // the value). An anonymous `&` / `...` (name "") cannot be
+            // assigned and has no slot.
             if let Some(name) = block_param
                 && !name.get_name().is_empty()
             {
@@ -1095,9 +1095,9 @@ impl<'a> BytecodeGen<'a> {
     }
 
     /// The slot to *read* the local `ident` from. `None` for the `&block`
-    /// parameter: its slot may still hold the unassigned sentinel, so a
-    /// read is a `BlockArg` / `BlockArgProxy` instruction (which also
-    /// consults the frame's block handler), never a plain slot read.
+    /// parameter: its slot may still be empty (never assigned), so a read
+    /// is a `BlockArg` / `BlockArgProxy` instruction (which also consults
+    /// the frame's block handler), never a plain slot read.
     /// Writes go through `assign_local`, which does use the slot.
     fn refer_local(&mut self, ident: &str) -> Option<BcReg> {
         let name = IdentId::get_id(ident);

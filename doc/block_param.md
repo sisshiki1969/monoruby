@@ -23,36 +23,41 @@ dynamic.
 
 Every named `&block` parameter (not an anonymous `&` or `...`) owns a local
 slot, right after the parameters (`ISeqInfo::block_param_slot`). The
-prologue (`InitMethod`, the VM's `fill_block_param_unset` / the JIT's
-`init_func`) stores `BLOCK_PARAM_UNSET` there: an immediate no Ruby value can
-be, meaning "not assigned; the frame's block handler is the value".
+prologue (`InitMethod`, the VM's `clear_block_param` / the JIT's
+`init_func`) clears it to 0 — `Option<Value>::None`, the same "no value was
+ever put here" a not-given optional argument has — meaning "not assigned;
+the frame's block handler is the value". A `Value` is never 0, so an
+assignment can never be mistaken for the empty state.
 
 | operation | bytecode | what it does |
 |---|---|---|
-| assignment (`block = v`, from this frame or a nested block) | a plain local store | the slot leaves the sentinel |
-| read as a value (`block`, `block.call`) | `BlockArg(dst, outer, slot)` | the slot's value if assigned; else the handler materialized into a `Proc` (`Executor::block_param_proc`), **cached back into `LFP_BLOCK`** so every read answers the same object (`b.equal?(b)`) |
-| `&block` forwarding | `BlockArgProxy(dst, outer, slot)` | the slot's value if assigned; else the handler, a proxy re-encoded with the extra frame depth |
+| assignment (`block = v`, from this frame or a nested block) | a plain local store | the slot is no longer 0 |
+| read as a value (`block`, `block.call`) | `BlockArg(dst, outer, slot)` | the slot's value if non-zero; else the handler materialized into a `Proc` (`Executor::block_param_proc`), **cached back into `LFP_BLOCK`** so every read answers the same object (`b.equal?(b)`) |
+| `&block` forwarding | `BlockArgProxy(dst, outer, slot)` | the slot's value if non-zero; else the handler, a proxy re-encoded with the extra frame depth |
 | `yield` / `block_given?` | unchanged | the frame's block handler, never the local (CRuby: `yield` after `b = proc {}` still calls the original block) |
-| `binding.local_variable_get(:block)` | `Binding#local_variable_get` | a sentinel slot answers `block_param_proc` |
+| `binding.local_variable_get(:block)` | `Binding#local_variable_get` | an empty slot answers `block_param_proc` |
 
 `outer` is the frame depth (a nested block reads its method's parameter),
 `slot` the parameter's slot in that frame; `slot == 0` is an anonymous
 parameter (no slot, no check). Bytecodegen never emits a plain slot read for
 the parameter's name (`refer_local` / `refer_dynamic_local_read` answer
-`None` for it), so the sentinel is never observed by Ruby code.
+`None` for it), so the empty slot is never observed by Ruby code. The GC
+already skips empty slots (a not-given optional argument is one too).
 
 ## Cost
 
 Nothing changes for a method that only `yield`s. A method that names its
-block pays one store at entry and one compare per reference; repeated value
-reads got cheaper (one `Proc` per frame instead of one per read).
+block pays one store at entry and one test-for-zero per reference; repeated
+value reads got cheaper (one `Proc` per frame instead of one per read).
 
 ## In the JIT
 
-`SlotState::new_method` starts the slot as the constant `C(BLOCK_PARAM_UNSET)`.
-A `BlockArgProxy` / `BlockArg` whose slot the abstract state still knows as
-that constant is compiled as the handler read alone (no check), and one whose
-slot is a known assigned literal folds to it; only an unknown slot gets the
-runtime check (`Codegen::block_arg_proxy`, both backends). The "no block
-given" nil folding of a forwarded block applies when the slot is known
-unassigned (which includes the anonymous `...` case it was written for).
+The abstract state cannot hold 0 as a constant (`Value` is non-zero), and
+reusing the `LinkMode::None` of a not-given optional argument would drag the
+parameter into every join / bridge / write-back rule written for arguments.
+So `SlotState::new_method` starts the slot as plain `S`: the memory slot is
+the authority, and `BlockArgProxy` / `BlockArg` always test it at run time
+(`Codegen::block_arg_proxy`, both backends), except that a literal the state
+knows was assigned on the path folds to it. The "no block given" nil folding
+of a forwarded block is kept only for an anonymous `&` / `...` (no slot, so
+nothing can be assigned), which is the case it was written for.

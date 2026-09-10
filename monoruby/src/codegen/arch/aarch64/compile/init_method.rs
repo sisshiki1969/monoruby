@@ -35,11 +35,11 @@ impl Codegen {
                 self.a64_frame_store(9, lfp, off);
             }
         }
-        // The named `&block` parameter's slot starts as
-        // `BLOCK_PARAM_UNSET` (x86 `init_func`).
+        // The named `&block` parameter's slot starts cleared to 0 (x86
+        // `init_func`).
         if info.block_param_slot != 0 {
             let off = info.block_param_slot as u32 * 8 + LFP_SELF as u32;
-            monoasm_arm64!(&mut self.jit, mov x9, (BLOCK_PARAM_UNSET););
+            monoasm_arm64!(&mut self.jit, mov x9, (0u64););
             self.a64_frame_store(9, lfp, off);
         }
         true

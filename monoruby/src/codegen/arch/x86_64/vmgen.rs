@@ -1303,9 +1303,9 @@ impl Codegen {
     // +---+---+---+---++---+---+---+---+
     //
     // The `&block` parameter's slot (`slt`, 0: anonymous) in the frame
-    // `out` levels up: an assigned value is forwarded as is; the
-    // unassigned sentinel (or an empty slot) means the frame's block
-    // handler, a proxy re-encoded with the extra depth.
+    // `out` levels up: an assigned value is forwarded as is; an empty slot
+    // (0, never assigned) means the frame's block handler, a proxy
+    // re-encoded with the extra depth.
     fn vm_block_arg_proxy(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let loop_ = self.jit.label();
@@ -1328,8 +1328,6 @@ impl Codegen {
             movq rdx, [rax + rsi * 8 - (LFP_SELF)];
             testq rdx, rdx;
             jz   from_frame;
-            cmpq rdx, (BLOCK_PARAM_UNSET);
-            jeq  from_frame;
             movq rax, rdx;
             jmp  exit;
         from_frame:

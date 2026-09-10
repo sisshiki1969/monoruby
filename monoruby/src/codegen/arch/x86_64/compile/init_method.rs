@@ -84,13 +84,13 @@ impl Codegen {
                 movq [rbp - (RBP_LOCAL_FRAME + (fn_info.destruct_start + i) as i32 * 8 + LFP_ARG0)], (NIL_VALUE);
             );
         }
-        // The named `&block` parameter's slot starts as `BLOCK_PARAM_UNSET`:
-        // "not assigned, the frame's block handler is the value" for
-        // `BlockArg` / `BlockArgProxy` (VM `fill_block_param_unset`).
+        // The named `&block` parameter's slot starts cleared to 0: "not
+        // assigned, the frame's block handler is the value" for `BlockArg`
+        // / `BlockArgProxy` (VM `clear_block_param`).
         if fn_info.block_param_slot != 0 {
             let off = RBP_LOCAL_FRAME + fn_info.block_param_slot as i32 * 8 + LFP_SELF;
             monoasm!( &mut self.jit,
-                movq [rbp - (off)], (BLOCK_PARAM_UNSET);
+                movq [rbp - (off)], 0;
             );
         }
         self.jit.bind_label(l1);

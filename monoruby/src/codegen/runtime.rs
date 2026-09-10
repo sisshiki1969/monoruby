@@ -550,7 +550,6 @@ pub(super) extern "C" fn block_arg(
     }
     if slot.0 != 0
         && let Some(v) = lfp.register(slot)
-        && !v.is_block_param_unset()
     {
         return Some(v);
     }

@@ -612,8 +612,8 @@ impl ISeqInfo {
     }
 
     /// The local slot of the named `&block` parameter, if this iseq has
-    /// one (an anonymous `&` / `...` has none). The prologue stores
-    /// `BLOCK_PARAM_UNSET` there; `BlockArg` / `BlockArgProxy` read it
+    /// one (an anonymous `&` / `...` has none). The prologue clears it
+    /// to 0 (`None`: not assigned); `BlockArg` / `BlockArgProxy` read it
     /// and an assignment to the parameter is a plain store. See
     /// `doc/block_param.md`.
     pub(crate) fn block_param_slot(&self) -> Option<SlotId> {

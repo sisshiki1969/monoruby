@@ -506,11 +506,6 @@ impl Codegen {
             add x12, x10, x12, lsl #(3);
             ldur x12, [x12, #(-(LFP_SELF as i32))];
             cbz x12, from_frame;
-            mov x13, (BLOCK_PARAM_UNSET);
-            cmp x12, x13;
-        );
-        self.jit.bcond_label(Cond::Eq, &from_frame);
-        monoasm_arm64!(&mut self.jit,
             mov x10, x12;
             b exit;
             from_frame:

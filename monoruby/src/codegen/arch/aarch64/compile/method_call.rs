@@ -1636,19 +1636,13 @@ impl Codegen {
         }
         let exit = self.jit.label();
         // The parameter's slot (`slot` != 0): an assigned value is the
-        // answer; the unassigned sentinel (or an empty slot) means the
-        // block handler.
+        // answer; an empty slot (0, never assigned) means the block handler.
         if slot.0 != 0 {
             let from_frame = self.jit.label();
             let slot_off = slot.0 as u32 * 8 + LFP_SELF as u32;
             self.a64_frame_load(11, rax, slot_off); // x11 <- [x0 - slot_off]
             monoasm_arm64!(&mut self.jit,
                 cbz x11, from_frame;
-                mov x12, (BLOCK_PARAM_UNSET);
-                cmp x11, x12;
-            );
-            self.jit.bcond_label(monoasm::Cond::Eq, &from_frame);
-            monoasm_arm64!(&mut self.jit,
                 mov x(rax), x11;
                 b exit;
                 from_frame:

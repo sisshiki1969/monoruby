@@ -1936,8 +1936,8 @@ impl Codegen {
     /// - rax: block handler
     ///
     /// `slot` (0: none): the `&block` parameter's slot in that frame; an
-    /// assigned value is the answer, the unassigned sentinel (or an empty
-    /// slot) means the block handler.
+    /// assigned value is the answer, an empty slot (0, never assigned)
+    /// means the block handler.
     ///
     /// ### destroy
     /// - rax, rdi
@@ -1951,8 +1951,6 @@ impl Codegen {
                 movq rdi, [rax - (off)];
                 testq rdi, rdi;
                 jz   from_frame;
-                cmpq rdi, (BLOCK_PARAM_UNSET);
-                jeq  from_frame;
                 movq rax, rdi;
                 jmp  exit;
             from_frame:
