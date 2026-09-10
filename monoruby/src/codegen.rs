@@ -110,6 +110,8 @@ const COUNT_LOOP_START_COMPILE: i32 = 100;
 const COUNT_LOOP_START_COMPILE: i32 = 15;
 const COUNT_RECOMPILE_ARECV_CLASS: i32 = 5;
 const COUNT_DEOPT_RECOMPILE: i32 = 10;
+/// See `Codegen::recompile_counts`.
+const MAX_RECOMPILES_PER_METHOD: u32 = 4;
 const COUNT_DEOPT_RECOMPILE_SPECIALIZED: i32 = 50;
 
 /// §9 9d allocatable GP pool. **Empty on both arches**: GP-pool residence
@@ -843,6 +845,14 @@ pub struct Codegen {
     /// The id is how `AsmInst::ChainExit` — pushed after the call, when the
     /// address itself is no longer at hand — names the site it belongs to.
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
+    /// `BecamePolymorphic` whole-method recompiles performed per (iseq,
+    /// self class). A body whose polymorphism keeps changing would
+    /// otherwise recompile forever — each fresh body carries a fresh deopt
+    /// budget — so past `MAX_RECOMPILES_PER_METHOD` the current body is
+    /// kept and its exhausted budget leaves it deopting plainly. Version
+    /// guard failures are not counted (see
+    /// `Codegen::recompile_budget_exhausted`).
+    recompile_counts: HashMap<(ISeqId, ClassId), u32>,
     /// `doc/chain_deopt.md` §5 step 1 / §9.3. Keyed by the return-address
     /// slot of a suspended frame (§3.4), which is all the walk has to go on:
     /// return address of a chain-eligible call -> the entry of that site's
@@ -1296,6 +1306,7 @@ impl Codegen {
             alloc_page_addr: std::ptr::null_mut(),
             compilation_unit: Vec::new(),
             asm_return_addr_table: HashMap::default(),
+            recompile_counts: HashMap::default(),
             chain_deopt_table: HashMap::default(),
             chain_cont_stub: entry_panic.clone(),
             alloc_cell: entry_panic.clone(),
