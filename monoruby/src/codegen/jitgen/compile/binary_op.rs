@@ -780,6 +780,41 @@ impl<'a> JitContext<'a> {
         // public-only call. The mode identifies the opcode, so the two need
         // not be threaded separately.
         let case_semantics = matches!(mode, BinaryInlineMode::CmpBr { .. });
+
+        // ---- 0. `Klass === v` with a constant Class / Module receiver whose
+        // `===` still resolves to the builtin `Module#===`: `case … when
+        // Klass` and the explicit `String === v`. Lowered to an inline
+        // superclass walk (`AsmInst::KindOfConst`) — no method lookup, no
+        // builtin frame — for *any* rhs class, so the site never becomes
+        // polymorphic in the first place. The resolution is the only
+        // assumption; it is recorded in `inline_method_cache` so the
+        // class-version salvage re-asks it, and a later `def self.===`
+        // (singleton), a `Module#===` redefinition or a refinement fails
+        // that check and recompiles. The walk itself reads the live chain,
+        // so `include` after compile needs nothing. liquid-il spent 16 % of
+        // an iteration dispatching this (1.23 M calls, ~310 instructions
+        // each, `doc/activerecord_liquid_il_rack_investigation_2026-09.md`).
+        if matches!(binop, BinaryOp::Cmp(CmpKind::TEq))
+            && let Some(target) = state.is_class_or_module_literal(lhs)
+            && let Some(func_id) = self.inline_module_teq(target)
+        {
+            self.inline_method_cache.push(InlineCacheEntry {
+                recv_class: target.as_val().class(),
+                name: Some(IdentId::_TEQ),
+                refinements: self.refinements(),
+                func_id,
+            });
+            self.guard_class_version(state, ir, true);
+            state.load(ir, rhs, GP::Rdi);
+            ir.push(AsmInst::KindOfConst {
+                reg: GP::Rdi,
+                class: target.id(),
+            });
+            // Leaves `Value::bool` in rax, exactly like the generic helper:
+            // `binary_cmp` parks it in *dst*, `binary_cmp_br` branches on it.
+            return Ok(BinaryLowering::Generic);
+        }
+
         let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
 
         // ---- 2. A site the VM saw comparing more than one lhs class, whose
@@ -1198,6 +1233,24 @@ impl<'a> JitContext<'a> {
             BinaryLowering::Called(res) | BinaryLowering::Ceased(res) => Ok(res),
             BinaryLowering::Folded(_) => unreachable!(),
         }
+    }
+
+    ///
+    /// Whether `target === v` may be lowered inline (`AsmInst::KindOfConst`):
+    /// the builtin `Module#===`'s `FuncId` when `===` on *target* still
+    /// resolves to it, `None` for a `def self.===` on the class, a
+    /// redefined `Module#===`, or a refinement active in the compiling body.
+    ///
+    fn inline_module_teq(&self, target: Module) -> Option<FuncId> {
+        let (fid, _) = self.jit_check_method(target.as_val().class(), IdentId::_TEQ)?;
+        // Version passed explicitly: `check_method_for_class` reads the
+        // version through the CODEGEN RefCell, which this compilation
+        // already holds mutably.
+        let builtin = self
+            .store
+            .check_method_for_class_with_version(MODULE_CLASS, IdentId::_TEQ, self.class_version())?
+            .func_id()?;
+        (fid == builtin && matches!(self.store[fid].kind, FuncKind::Builtin { .. })).then_some(fid)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2259,6 +2312,126 @@ mod tests {
               res
             end
         "##,
+        );
+    }
+
+    /// `Klass === v` / `case … when Klass` with a constant class is an
+    /// inline superclass walk (`AsmInst::KindOfConst`): every value shape —
+    /// the six immediates, a Bignum, heap builtins, a plain object, a
+    /// subclass, an included module, an object with a singleton class, a
+    /// `BasicObject` — must answer as CRuby does, for both the fused
+    /// (`case`) and the value-producing (`===`) forms.
+    #[test]
+    fn teq_class_inline_shapes() {
+        run_test(
+            r#"
+            module M; end
+            class A; end
+            class B < A; include M; end
+            class C < B; end
+            class Base < BasicObject; def me = 1; end
+            o = Object.new
+            def o.hi = 1
+            vals = [1, 2**70, 1.5, :sym, nil, true, false, "s", [1], { a: 1 }, 1..2, /re/,
+                    A.new, B.new, C.new, o, Base.new]
+            res = []
+            340.times do |i|
+              v = vals[i % vals.size]
+              res << (case v
+                      when A then :a
+                      when M then :m
+                      when Integer then :int
+                      when Numeric then :num
+                      when Comparable then :cmp
+                      when NilClass then :nil
+                      when TrueClass, FalseClass then :bool
+                      when BasicObject then :basic
+                      else :none
+                      end)
+              res << (String === v) << (Object === v) << (Kernel === v) << (BasicObject === v)
+              res << (A === v) << (M === v) << (Comparable === v) << (Integer === v) << (Float === v)
+            end
+            res.tally.sort_by { |k, _| k.to_s }
+            "#,
+        );
+    }
+
+    /// The inline assumes `Klass.===` is the builtin `Module#===`; a
+    /// singleton `def self.===` defined *after* the site compiled must be
+    /// honoured (class-version guard), as must one defined before it. A
+    /// module included after compile is found by the walk with no
+    /// recompile, because the walk reads the live chain.
+    #[test]
+    fn teq_class_inline_redefinition() {
+        // `run_test_once`: the script redefines `K.===` and includes a
+        // module part-way, so a second run of the same text would start
+        // from the redefined state (test mode compiles after 5 calls).
+        run_test_once(
+            r#"
+            class K; end
+            class K2 < K; end
+            class Pre; def self.===(v) = v == :pre; end
+            module Late; end
+            class L; end
+            def probe(v) = (case v when K then 1 else 0 end)
+            def probe_pre(v) = (Pre === v)
+            def probe_late(v) = (Late === v)
+            r = []
+            l = L.new
+            60.times do
+              r << probe(K2.new) << probe(1) << probe_pre(:pre) << probe_pre(Pre.new) << probe_late(l)
+            end
+            class K; def self.===(v) = v == :magic; end
+            r << probe(K2.new) << probe(:magic) << probe(1)
+            class L; include Late; end
+            r << probe_late(l) << probe_late(L.new) << probe_late(1)
+            r.tally.sort_by { |k, _| k.to_s }
+            "#,
+        );
+    }
+
+    /// The immediate classes are walked at run time too: a module included
+    /// into `Integer` / `NilClass` after the site compiled is found (a
+    /// baked answer would survive the class-version salvage, which only
+    /// re-checks method resolutions).
+    #[test]
+    fn teq_class_inline_include_into_immediate() {
+        run_test_once(
+            r#"
+            module Tagged; end
+            def probe(v) = (Tagged === v)
+            r = []
+            40.times { r << probe(1) << probe(nil) << probe(1.5) << probe("s") }
+            class Integer; include Tagged; end
+            class NilClass; include Tagged; end
+            r << probe(1) << probe(2**70) << probe(nil) << probe(1.5) << probe("s")
+            r.tally.sort_by { |k, _| k.to_s }
+            "#,
+        );
+    }
+
+    /// Redefining `Module#===` itself (globally) must route every class
+    /// receiver back through the method, including sites already compiled
+    /// with the inline.
+    #[test]
+    fn teq_class_inline_module_teq_redefined() {
+        run_test_once(
+            r#"
+            class G; end
+            def probe(v) = (case v when G then :g when String then :s else :none end)
+            r = []
+            40.times { r << probe(G.new) << probe("x") << probe(3) }
+            class Module
+              alias_method :__orig_teq, :===
+              def ===(v) = v == 3 ? true : __orig_teq(v)
+            end
+            r << probe(3) << probe(G.new) << probe("x")
+            class Module
+              alias_method :===, :__orig_teq
+            end
+            r << probe(3)
+            r
+            "#,
         );
     }
 }

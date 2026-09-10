@@ -133,7 +133,7 @@ pub struct Store {
     ///
     jit_iseqs: Vec<ISeqId>,
     /// class table.
-    classes: ClassInfoTable,
+    pub(in crate::globals) classes: ClassInfoTable,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
@@ -1971,6 +1971,13 @@ impl Store {
 
 pub struct ClassInfoTable {
     table: Vec<ClassInfo>,
+    /// `ClassInfo::object` mirrored into a flat, machine-code-readable
+    /// table indexed by `ClassId` (8-byte stride, `None` reads as 0), so
+    /// JIT code can go from a value's class id to its class object without
+    /// a call: the inline `Module#===` (`AsmInst::KindOfConst`) walks the
+    /// superclass chain from here through `GLOBALS_CLASS_OBJECTS`. Kept in
+    /// step by `set_object` and the growth paths below.
+    pub(in crate::globals) objects: MonoVec<Option<Module>>,
 }
 
 impl std::ops::Index<ClassId> for ClassInfoTable {
@@ -1988,9 +1995,21 @@ impl std::ops::IndexMut<ClassId> for ClassInfoTable {
 
 impl ClassInfoTable {
     fn new() -> Self {
+        let mut objects = MonoVec::with_capacity(256);
+        for _ in 0..100 {
+            objects.push(None);
+        }
         Self {
             table: vec![ClassInfo::new(); 100],
+            objects,
         }
+    }
+
+    /// Attach the class object of *id*, in both the table and its
+    /// machine-code mirror.
+    pub(in crate::globals) fn set_object(&mut self, id: ClassId, obj: Module) {
+        self.table[id.u32() as usize].object = Some(obj);
+        self.objects[id.u32() as usize] = Some(obj);
     }
 
     /// Number of slots in the class table, including the unused
@@ -2004,18 +2023,21 @@ impl ClassInfoTable {
     fn add_class(&mut self) -> ClassId {
         let id = self.table.len();
         self.table.push(ClassInfo::new());
+        self.objects.push(None);
         ClassId::new(id as u32)
     }
 
     fn copy_class(&mut self, original_class: ClassId) -> ClassId {
         let id = self.table.len();
         let info = self[original_class].copy();
+        self.objects.push(info.object);
         self.table.push(info);
         ClassId::new(id as u32)
     }
 
     fn def_builtin_class(&mut self, class: ClassId) {
         self[class] = ClassInfo::new();
+        self.objects[class.u32() as usize] = None;
     }
 
     pub(crate) fn search_method_by_class_id(

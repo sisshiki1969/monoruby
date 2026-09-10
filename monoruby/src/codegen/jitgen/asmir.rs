@@ -1625,6 +1625,21 @@ pub(super) enum AsmInst {
     /// one membership guard replaces the per-class deopt.
     GuardClassIn(GP, Box<[ClassId]>, AsmDeopt),
     GuardArrayTy(GP, AsmDeopt),
+    ///
+    /// `rax <- Value::bool(R(reg).is_a?(class))`: the inline `Module#===`
+    /// behind `case … when Klass` / `Klass === v` with a constant receiver.
+    ///
+    /// The value's class id (an immediate's by tag, a heap value's from its
+    /// header) is compared with *class*, then its class object — from the
+    /// class-object mirror (`GLOBALS_CLASS_OBJECTS`) — is walked up the
+    /// superclass chain (`MODULE_OFFSET_SUPERCLASS` / `MODULE_OFFSET_CLASS_ID`)
+    /// until *class* or the root. Everything is read at run time, so an
+    /// `include` after compile is seen without a recompile; the only baked
+    /// assumption is that `class.===` is the builtin, which the emitter
+    /// records for the class-version salvage. Clobbers rax and rcx (x9–x11
+    /// on aarch64); *reg* must be neither.
+    ///
+    KindOfConst { reg: GP, class: ClassId },
     GuardCapture(AsmDeopt),
 
     Ret,
