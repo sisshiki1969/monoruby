@@ -833,6 +833,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "libsqlite3-src"
+version = "3.48.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "libxml2-src"
 version = "2.13.8"
 dependencies = [
@@ -957,6 +964,7 @@ dependencies = [
  "indexmap",
  "libc",
  "libffi",
+ "libsqlite3-src",
  "libxml2-src",
  "libyaml-safer",
  "libz-sys",

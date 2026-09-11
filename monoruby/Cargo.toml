@@ -114,6 +114,7 @@ rand_mt = { version = "5.0.0", features = ["rand-traits"] }
 # zlib CRuby's zlib.so links (PDF writers compare output sizes).
 libz-sys = { version = "1.1", features = ["static"] }
 libxml2-src = { path = "../libxml2-src" }
+libsqlite3-src = { path = "../libsqlite3-src" }
 bitvec = "1.0.1"
 ansi_term = "0.12.1"
 dirs = "6.0.0"

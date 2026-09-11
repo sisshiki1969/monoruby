@@ -341,7 +341,7 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
@@ -351,6 +351,7 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashb
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
 | `libxml2-src`   | Vendored libxml2 (+ nokogiri's patches) built with `cc`, and its FFI |
+| `libsqlite3-src` | Vendored SQLite amalgamation built with `cc`, and its FFI |
 
 External crates (fetched from git):
 
@@ -392,6 +393,16 @@ External crates (fetched from git):
   per `Zlib::Deflate` / `Zlib::Inflate` object, and everything else in `Zlib`
   (`stdlib/zlib.rb`: the class API, gzip framing, `GzipReader` / `GzipWriter`)
   is Ruby. Compression is byte-identical to CRuby's zlib.so.
+- `libsqlite3-src` (workspace crate) — the SQLite amalgamation (3.48.0,
+  public domain) under `libsqlite3-src/vendor/`, built with `cc` and linked
+  statically, with a hand-written FFI. Behind the sqlite3 gem: the gem's
+  Ruby half is the host's, and `gem/sqlite3/sqlite3_native.rb` stands in for
+  sqlite3_native.so, calling `String.__sqlite3_init`
+  (`src/builtins/sqlite3.rs`) to build `SQLite3::Database` /
+  `SQLite3::Statement` as `ObjTy::NATIVE` classes owning the `sqlite3*` /
+  `sqlite3_stmt*`. `Statement#step` steps and reads the whole row in one
+  builtin call. Opening and closing a connection park the green thread on
+  the native pool (`NativeOp::Sqlite3`); everything else runs inline.
 
 ---
 
