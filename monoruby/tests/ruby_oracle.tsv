@@ -64,6 +64,7 @@
 03add114cdd6e1fb8f694172fc12ba42	[["method", "method"], [:se, :se]]	$dlog = []\n            def dse; $dlog << :se; 1; end\n            [[
 04053dc491e488a586338fcc5eed81e2	"hi"	c = Class.new\n            [1].each do |_|\n              c.class_eva
 040e6a190fdcb22a07dee211c3713d43	"US-ASCII"	"HELLO".encode("US-ASCII").downcase.encoding.to_s
+041551d94b8fae7395ed5ab95e2d34a0	[[[1, "x"], [2, "y"]], [["1", "x"], ["2", "y"]], [["1.5", "", nil]], [true, false, false, false], true, [], true, ["SQLite3::SQLException", "no such column: \\"no_such_col\\" - should this be a string literal in single-quotes?:\\nSELECT \\"no_such_col\\" FROM q\\n       ^"], [], 250]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 0417499cdc3487266e491725b65dcd89	[43, 42]	f = Fiber.new(storage: {life: 42}) do\n              inner = Fiber.n
 042067cf8df83644b7cd370ce04a55db	100	class C\n            class D\n              E = 1\n              def sel
 042531956d7a960e0bfee8fa3360dc99	["ASCII-8BIT", true]	begin\n              begin\n                File.stat("/missing\\xE3E4
@@ -101,6 +102,7 @@
 066392710dabdf12722c1aa1a604fa66	[1, 1, nil, 1, 2, 4, [["k", 1], [:k, 2], [3, 4]], 1, {}, nil, RuntimeError, true]	bin = "a".b\n        e = {"k" => 1, :k => 2, 3 => 4}\n        s = {"k" =>
 067076632d9bbfc6687c8a1ec746a38b	[:a, :b]	c = Class.new { attr :a, :b }\n            c.instance_methods(false)
 0671dc386fe22ac136194d005bfa5d9e	[:foo]	$res = []\n            class C\n              def self.method_undefin
+068a0ab9c9a3f0880349066404c03124	[[0]]	require "rubygems"\n        require "sqlite3"\n        require "tmpdir"\n 
 0691611dde38293b7701c47f3487d59e	[10, 10, 10, 10, 10, 20, 20, 20, 20, 20]	class C\n          def foo; 10; end\n        end\n        c = C.new\n      
 069eae9fbb818fee75b130337a249e6c	[6765, 6765, 0.0, nil]	def fib(n) = n < 2 ? n : fib(n-1) + fib(n-2)\n            res = [fib
 06a5555617326eb4ebb8f42c49df0364	[{1 => :b, 0 => :c}, 2, {1.5 => 1, 2.5 => 0}, {nil => 1, true => 2, sym: 0}, 2, {1 => :c}, 1, {1.5 => 1, 2.5 => 1}, {nil => 1, true => 2, sym: 1}, 2, {1 => :b, 2 => :c}, 2, {1.5 => 1, 2.5 => 2}, {nil => 1, true => 2, sym: 2}, 2, {1 => :b, 3 => :c}, 2, {1.5 => 1, 2.5 => 3}, {nil => 1, true => 2, sym: 3}, 2, {1 => :b, 4 => :c}, 2, {1.5 => 1, 2.5 => 4}, {nil => 1, true => 2, sym: 4}, 2, {1 => :b, 5 => :c}, 2, {1.5 => 1, 2.5 => 5}, {nil => 1, true => 2, sym: 5}, 2, {1 => :b, 6 => :c}, 2, {1.5 => 1, 2.5 => 6}, {nil => 1, true => 2, sym: 6}, 2, {1 => :b, 7 => :c}, 2, {1.5 => 1, 2.5 => 7}, {nil => 1, true => 2, sym: 7}, 2, {1 => :b, 8 => :c}, 2, {1.5 => 1, 2.5 => 8}, {nil => 1, true => 2, sym: 8}, 2, {1 => :b, 9 => :c}, 2, {1.5 => 1, 2.5 => 9}, {nil => 1, true => 2, sym: 9}, 2, {1 => :b, 10 => :c}, 2, {1.5 => 1, 2.5 => 10}, {nil => 1, true => 2, sym: 10}, 2, {1 => :b, 11 => :c}, 2, {1.5 => 1, 2.5 => 11}, {nil => 1, true => 2, sym: 11}, 2, {1 => :b, 12 => :c}, 2, {1.5 => 1, 2.5 => 12}, {nil => 1, true => 2, sym: 12}, 2, {1 => :b, 13 => :c}, 2, {1.5 => 1, 2.5 => 13}, {nil => 1, true => 2, sym: 13}, 2, {1 => :b, 14 => :c}, 2, {1.5 => 1, 2.5 => 14}, {nil => 1, true => 2, sym: 14}, 2, {1 => :b, 15 => :c}, 2, {1.5 => 1, 2.5 => 15}, {nil => 1, true => 2, sym: 15}, 2, {1 => :b, 16 => :c}, 2, {1.5 => 1, 2.5 => 16}, {nil => 1, true => 2, sym: 16}, 2, {1 => :b, 17 => :c}, 2, {1.5 => 1, 2.5 => 17}, {nil => 1, true => 2, sym: 17}, 2, {1 => :b, 18 => :c}, 2, {1.5 => 1, 2.5 => 18}, {nil => 1, true => 2, sym: 18}, 2, {1 => :b, 19 => :c}, 2, {1.5 => 1, 2.5 => 19}, {nil => 1, true => 2, sym: 19}, 2]	x = 1\n        r = []\n        20.times do |i|\n            d = {x => :a, 
@@ -630,6 +632,7 @@
 2d2ff1c3ff5d4218de0d6a13eec1eeb7	"a"	"a".reverse
 2d4ecfc6a346da8617ce2f74c132236e	[["1", "9", "0", nil], ["global-variable", nil], nil, nil]	res = []\n        "1234567890" =~ /(1)(2)(3)(4)(5)(6)(7)(8)(9)(0)/\n     
 2d6fd217fba4d2b106219e7de92e4253	["Q", "Q"]	alias $myrs $/; $myrs = "Q"; r = [$/, $myrs]; $/ = "\\n"; r
+2d7f4608a6d6c74b86f2cb600e5d9900	[["SQLite3::SQLException", "NOT SQL; INSERT INTO t VALUES (2);"], [[1]], "SQLite3::SQLException", "SQLite3::ConstraintException", [["ArgumentError", "prepare called on a closed database"], ["SQLite3::Exception", "cannot use a closed database"]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 2d87641e6927b0cdab85cb7629880462	:OVERRIDDEN	class Float; def /(o); :OVERRIDDEN; end; end; 3.0 / 4.0
 2da8a7a85c40c42e4327d1fdd2068e6c	[2020, 1, 2, 3, 4, 5, true]	t = Time.utc(2020, 1, 2, 3, 4, 5)\n            r = Marshal.load(Mars
 2dab2d60b1e963199abbf4edc69b7b17	["made:k", 3, nil, 3]	h = Hash.new { |hash, key| "made:#{key}" }\n            v = Hash.new
@@ -834,6 +837,7 @@
 3e1d53f944590acbe759e3fddf0d6b76	60000	S = Struct.new(:a, :b, :c)\n            \n\n            s = S.new(10, 
 3e2485275f7b329ad73878b64b71abed	false	define_method(:boom2) { :bam2 }\n            Object.private_method_d
 3e3b547575a051c5ad3005c1294bcc60	["heLlo", "heLlo", "heLlo", "heLLo", "heLLo", "heLLo", "heLlo", "heLlo", "heLlo", "heLLo", "heLLo", "heLLo", "heLlo", "heLlo", "heLlo", "heLLo", "heLLo", "heLLo"]	class P\n                  def to_str; "l"; end\n                
+3e49b2cae2caddf6f33f9fcc5d5b842f	[true, false, [[1, "x"], [2, "y"]], [["1", "x"], ["2", "y"]], [["1.5", "", nil]], nil]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 3e71ea53ced04beae6b8eda67e34f8fe	-1	class C; def to_str; "def"; end; end; o = C.new\n"abc" <=> o
 3e888919ce8daf33b5729ceef0ab65a8	[:load_error, "/definitely/not/a/file"]	class AutoRetry\n          autoload :Foo, "/definitely/not/a/file"\n     
 3e888c174905aa623fffe81f01020540	[]	class A3; def a(*r); r; end; end\n            class B3 < A3; def a(*
@@ -1099,6 +1103,7 @@
 501deac01fffd75eb557a2e670ad9542	[[:matched, :unmatched], "foo", nil]	def m\n              /(?<matched>foo)(?<unmatched>bar)?/ =~ "foofoo"
 50401c8da659fffc9b6001cdcb30bafb	[1, 7]	h = Hash.new(7)\n            h[:a] = 1\n            r = Marshal.load(
 50508f5aac8320c0afe66c4ad76cad0e	["EQ-RAW", false, "NE-RAW", true, true, false, "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW"]	class CustomEq; def ==(o); "EQ-RAW"; end; end\n        class CustomNe; d
+505eea339134c5d9deaaa293e210a347	[[[1, "x"], [2, "y"]], [["1", "x"], ["2", "y"]], [["1.5", "", nil]], [true, false, false, false], true, 250]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 50630a61a4b6d776c5dc73a592df1d53	[:a, :a, [:a, :b, :c], :a, ["NameError", "implicit parameter '_1' is not defined"], ["NameError", "implicit parameter '_1' is not defined"], ["NameError", "'a' is not an implicit parameter"], ["TypeError", "1 is not a symbol nor a string"]]	def try; yield; rescue => e; [e.class.to_s, e.message.split(" for "
 506afd7190c9d45ecdef2e801c939176	:te	begin; 1.instance_eval { undef to_s }; :no; rescue TypeError; :te; end
 5078669efc5be0d889fb3ff62604139e	[5350, 1, 2]	class Ka; def v = 1; end\n            class Kb; def v = 2; end\n     
@@ -1118,6 +1123,7 @@
 522c4f8c40e029c9a06a958415c5bba8	["append_features:C"]	$res = []\n        module M\n          def self.append_features(base)\n   
 525e307d40d5e0bc7aa36e1ace713254	[:small, 7, :big]	class BmR\n          define_method(:pick) { |n| return :small if n < 10;
 52737290d47684f2e53ee7646498dbeb	[1, 2, 1, 2, 1, 2, 2, 1, 2, 1, 2]	class S\n              def g\n                f\n              end\n   
+52951bd5bd2eafe538c7b07f93870c22	[[:authorizer, :authorizer=, :build_result_set, :busy_handler, :busy_handler_timeout=, :busy_timeout, :busy_timeout=, :changes, :close, :closed?, :collation, :collations, :commit, :complete?, :create_aggregate, :create_aggregate_handler, :create_function, :define_aggregator, :define_function, :define_function_with_flags, :enable_load_extension, :encoding, :errcode, :errmsg, :execute, :execute2, :execute_batch, :execute_batch2, :extended_result_codes=, :filename, :get_first_row, :get_first_value, :initialize_extensions, :interrupt, :last_insert_row_id, :load_extension, :prepare, :query, :readonly?, :results_as_hash, :results_as_hash=, :rollback, :statement_timeout=, :total_changes, :trace, :transaction, :transaction_active?], [:db_filename, :define_aggregator2, :disable_quirk_mode, :discard, :exec_batch, :load_extension_internal, :open16, :open_v2], [:active?, :bind_param, :bind_parameter_count, :bind_params, :clear_bindings!, :close, :closed?, :column_count, :column_decltype, :column_name, :columns, :done?, :each, :execute, :execute!, :expanded_sql, :memused, :must_be_open!, :remainder, :reset!, :sql, :stat, :step, :types], [:get_metadata, :prepare, :stat_for, :stats_as_hash]]	require "rubygems"\n        require "sqlite3"\n        [SQLite3::Database
 52c715d3341e07f64b568be422ce7c17	true	h = {}\n            h[:self] = h\n            g = Marshal.load(Marsha
 52cc02c8a048877c5eedd646aa6690e1	["US-ASCII", "UTF-8", "EUC-JP", "US-ASCII", "UTF-8", "US-ASCII", "UTF-8", "UTF-8"]	[ /abc/, /abc/u, /abc/e, /\\u{61}/, /\\u{3042}/,\n                Regexp.new("abc")
 52d70b5a956cf65a2161a0c071728cd2	[true, true]	o = Object.new\n            o.freeze\n            begin\n             
@@ -1644,6 +1650,7 @@
 7a7670b0fefdd322f6a8b0743e2b769f	[5, 5]	->(x, y = x) { [x, y] }.call(5)
 7a8a882460efca56e1418c13c7848cba	45	j = 42\n        f = ->(x){x + j}\n        f.call(3)\n        
 7aa104817c34af089a380bbb177b03d3	42	mod = Module.new do\n              def hash\n                42\n     
+7ab563bcc68ccb750058f87d4f93d356	[[[1, "x"], [2, "y"]], [["1", "x"], ["2", "y"]], [["1.5", "", nil]], [true, false, false, false], true, true, [[1]], 250]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 7ac6b8aa02383ba3314c395498fc236a	[[ArgumentError, "comparison of Array with Array failed"], [ArgumentError, "comparison of String with 0 failed"]]	h = { "b" => 2, "a" => 1, "c" => 3 }\n            [\n              (b
 7adfa44dbf68ad36a743e9faf5801875	"EUC-JP"	s = "文字化け".encode("euc-jp"); /#{s}/.encoding.to_s
 7afc130c6dddd70cd06a7fb2706c4350	["#<Module:0xADDR>::N", "m::N", nil, "y::N"]	m = Module.new\n            m::N = Module.new\n            a = m::N.n
@@ -1686,6 +1693,7 @@
 7dcb621c6c844f83fc03a82810bbf155	"US-ASCII"	"abc".dup.force_encoding("US-ASCII").gsub("b", "x").encoding.to_s
 7df2430b101d25b712234fd3adbbd74d	[:v, 0]	q = Queue.new\n            t = Thread.new { q.pop }\n            Thre
 7df952393eebbe3287d4e8c89d1c4fc0	true	cause = RuntimeError.new("cause")\n            begin\n              r
+7e026f85384422512b79f86f922f4337	["SQLite3::ConstraintException", "SQLite3::ConstraintException", ["SQLite3::SQLException", "SELECT FROM"], ["SQLite3::SQLException", "no such table: nope:\\nSELECT * FROM nope"], "SQLite3::NotADatabaseException", "SQLite3::ReadOnlyException"]	require "rubygems"\n        require "sqlite3"\n        require "tmpdir"\n 
 7e04e97d709154a8293c77ad4d9d2d1e	{0 => 1, x: 1}	S = Struct.new(:x, :y, :z)\n        s = S.new(1, 2, 3)\n        \ns.decons
 7e07db27a2fcc657a814b6cd413ead2f	[1, 2, 42]	def f\n          yield 1,2,3,4\n        end\n        \n\n        f {|a,b|\n  
 7e0f818aaa84a1e84c3ee62775e733f1	[[ArgumentError, "Offset can't be negative!"], [ArgumentError, "Offset can't be negative!"], [TypeError, "not an Integer"], [TypeError, "not an Integer"], [TypeError, "not an Integer"], [IO::Buffer::AccessError, "Buffer is not writable!"], [TypeError, "no implicit conversion of String into Integer"], [TypeError, "no implicit conversion to float from string"], [], [ArgumentError, "The given offset is bigger than the buffer size!"], [], 3, [ArgumentError, "Type extends beyond end of buffer! (offset=6 > size=6)"], [ArgumentError, "Offset can't be negative!"], [TypeError, "not an Integer"], [ArgumentError, "Count can't be negative!"], [ArgumentError, "Count can't be negative!"], [true, false, false, 64], [0, true], [3, "bcd", true, false], [false, 1, "Xrozen"], :no_raise, :no_raise, ["xyz", "Ayz"], [true, true, true, true], [TypeError, "wrong argument type String (expected IO::Buffer)"], [ArgumentError, "negative string size (or size too big)"], [TypeError, "no implicit conversion of String into Integer"], [[ArgumentError, "Type extends beyond end of buffer! (offset=0 > size=0)"], :no_raise, 0]]	r = []\n            er = ->(&blk) { begin; blk.call; :no_raise; resc
@@ -1895,6 +1903,7 @@
 8d2e1fd402dd54d459d9920045aa5cd5	[12, 3.5]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 8d3d0ca2dbeed6c68ea827b8891e29e3	[[[130, 160], "Shift_JIS"], [65], [65, 0], [65, 0, 0, 0], [[233], "ISO-8859-1"]]	File.binwrite("/tmp/mr_gc4.txt", [0x82, 0xA0, 0x41].pack("C*"))\n   
 8d3ded30d75b25bfe7b9b6473fe28499	"X"	File.open("Cargo.toml") { |f| IO.new(f.fileno, path: "X", autoclose: false).path
+8d4706b2ec7aefdbf1fc6ec0d3213866	[[2], false, [[1], [2]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 8d56cf68fe7c6a0dbc65f86b0fdd0789	[true, true, false]	m1 = Module.new\n            m2 = Module.new\n            c = Class.n
 8d79a95a9c94d782628a4f1a36105103	[1, [2], 3]	class MyNum; def to_int; 1; end; end\nn = MyNum.new\n[[1,[2]],3].flatten(n)
 8d830e1b0b9fd01963265a605718108d	[false, false, TypeError, TypeError, "a/b/c", [ArgumentError, "string contains null byte"], "/", ".", "."]	(a=File.directory?(STDIN); o=Object.new; def o.to_io; STDIN; end; b=File.directo
@@ -2028,6 +2037,7 @@
 977723f01dd4af9bcf43bc2fb00646d8	nil	o = Object.new; o.extend(GC); o.garbage_collect
 97830589936141f7fa5227ba7e0b4ef7	0	m = Module.new { CONST_DEDUP = 1 }\n            c = Class.new { incl
 97a184496ac3f5bea30e677881037eb1	[10, 20, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.val
+97b1a5c31ee5c94a79eab0d36ca54c7c		require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 97df2b96c4611e73fda3f92a20aae246	[[45], 1, 2]	LIMIT = 10\n        def sum_under\n          total = 0\n          (1..30).
 97f734cedb3b58d3a049801e7056dd1d	149850000	a = Array.new(300000) { |i| [i % 1000] }\n            200000.times {
 97f9bfadb4df4cf27eece30a84f5d9fe	["ArgumentError", "invalid byte sequence in UTF-8"]	("\\x80".dup.force_encoding("UTF-8") =~ /./; nil) rescue [$!.class.name, $!.messa
@@ -2167,6 +2177,7 @@ a1e955df00a16906b87178a40bfe7105	[100, 50, 250, :c, false, true, false]	class A;
 a1fa001f99d7e35b87d05cb3fd2bc842	["UTF-8", "UTF-8", 43, true, false]	def app_ok2(buf, n)\n          i = 0\n          while i < n\n            b
 a204f15cf81d104e4412940bba47afbb	[[5, 5], [9, nil, 9], [nil, nil], nil, [7, 1, 7], 42, "FrozenError"]	def drive(n)\n              r = nil\n              n.times { r = yiel
 a207205e2108ee451fae4d6f0df8308a	nil	File.open("Cargo.toml") { |f| f.ungetc(100) }
+a20d5f6e46ac5fe25c72c48a4933aa82	[["SQLite3::CantOpenException", "unable to open database file"], "SQLite3::CantOpenException", [[7]], "UTF-16LE", "SQLite3::CantOpenException"]	require "rubygems"\n        require "sqlite3"\n        require "tmpdir"\n 
 a21ceda5ef436f9167f0988b18686885	[true, true, "backtrace must be an Array of String or an Array of Thread::Backtrace::Location", true]	def probe = caller_locations\n        locs = probe\n        e = RuntimeEr
 a2258a3c861ffb257f7a53cf3eb62746	[10, 20, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.to_
 a228de78f3361a64902cd2242ba752da	[true, true, false]	class Foo\n              def bar; 1; end\n              alias_method 
@@ -2385,6 +2396,7 @@ b06f00715b283fa26e9acda37466978d	[1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub
 b074a58194d91b7b13d55025d23399ce	[nil, 2, 1, 1, nil, nil, 5, nil]	x = nil\n        h = { a: 1 }\n        def m(o) = o&.[](0)\n        [x&.[]
 b07897e1515470c5f367e6c838cd3ca3	true	h = {a: 1}.compare_by_identity\n            Marshal.load(Marshal.dum
 b0a6a8263e7c30eec12325762ab54dc5	[1, 2, nil, nil, 3, 1, nil, :from_block, [:a, :b, :c, :d, :e], [:a], [:a, :b, :d, :e]]	r = []\n        begin\n          r << 1\n          break if r.size == 1\n  
+b0fd99f84986028ca4c492df3405e97c	[1, true, true, [:autoindexes, :filter_hits, :filter_misses, :fullscan_steps, :reprepares, :runs, :sorts, :vm_steps], 1, [["ArgumentError", "unknown key: nope"], ["TypeError", "non-symbol given"], ["TypeError", "non-symbol given"]], 1, [:autoindexes, :filter_hits, :filter_misses, :fullscan_steps, :reprepares, :runs, :sorts, :vm_steps], "TypeError"]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 b127614a38e6a826e83df4733ad1c138	[true, true]	require "openssl"\n        [OpenSSL::Cipher::CipherError < OpenSSL::Open
 b13eb772180c210a5c10579da6ea6cfb	true	a = []\n            a << a\n            b = Marshal.load(Marshal.dump
 b15052c5abbd93a1a9004be3b57beb9c	[:foo, :bar]	$res = []\n            obj = Object.new\n            def obj.singleto
@@ -2561,6 +2573,7 @@ bd7a26e1f462e26d42e9543689bc3430	3862152.611328125	def calc(n, vals)\n          
 bd9970837b8009b39aca5efafe329d8e	["true", "5", "", "foo"]	[true.to_s, 5.to_s, nil.to_s, :foo.to_s]
 bd9f54fa26238d51503216b560dcfe9d	"M:C"	module M\n          def foo\n            "M:" + super\n          end\n     
 bdab5d25c3b4be158f0e7bd7de9daf97	[118, 592, 4147, 74705710618821783505]	def __f(x)\n          \n        a = x * 3 + 1\n        b = a * 5 + 2\n     
+bdcfed3ff34c6bcbac4ff043a1188ca6	["UTF-8", true, false, "", ["SQLite3::Exception", "no such bind parameter"], "SQLite3::RangeException", "SQLite3::MismatchException", [[1, "x"]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 bdd4254f72e55d63b4505c0909c9bd00	[6.5, 17.0]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 bddaee7b5a8e49286bd5ef708346ccaa	[#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:UTF-8>, #<Encoding:US-ASCII>, #<Encoding:BINARY (ASCII-8BIT)>, nil, #<Encoding:BINARY (ASCII-8BIT)>]	b = "abc".b\n        u = "abc"\n        a = "abc".encode("US-ASCII")\n    
 bde4f5647e4c5f426e0b6b9de2ad09ab	[[], [:it], [:_1, :_2, :_3], [:it], [], [], []]	[\n              binding.implicit_parameters,\n              proc { i
@@ -3140,6 +3153,7 @@ e78241f23404fdda069ce1e1d3a9efc8	[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 
 e7c6302a9b297579c8e5ac35b76c1089	"1"	def foo \n          eval("a = 1", $b)\n        end\n        \n\n        $b =
 e7ca5b8d05bd3556a711daf23dfd10c6	nil	r, _w = IO.pipe\n            r.wait(IO::READABLE, 0)\n            
 e7ea0100557a89543a11511853510192	[{"alpha" => 3, "beta" => 2}, 3, 2, nil, true, false, 2]	h = {}\n        h["alpha"] = 1\n        h["beta"] = 2\n        h["alpha" +
+e8242fdb3a667753254566fb9efd2061		require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 e832c1ba769618395a505bd13bd3d3b7	"hi"	mod = Module.new do\n          def greet; "hi"; end\n        end\n        
 e83df828ab1988d0aa930288164eeda1	[true, true, "abc", true, true]	def f = 'abc'.freeze\n        a = f; b = f\n        [a.frozen?, a.equal?(
 e841964d3dcfd7149202c80802373ee4	"Encoding::CompatibilityError"	(Regexp.new("".dup.force_encoding("US-ASCII"), Regexp::FIXEDENCODING) =~ "\\303\\2
@@ -3148,6 +3162,7 @@ e84e2a6f452bc8149fdee15dda638246	4	r = 0\n            20.times do\n             
 e8629d85bee1ecd0620fc7812cf440d4	"myfile.rb:42:"	b = binding\n            begin\n              b.eval("missing_method"
 e8663c97e820ca6aa3b720c87c95f4ff	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"	r, w = IO.pipe\n            t = Thread.new { r.read }\n            w.
 e874e1da171336c766ccb7c7051d0664	true	e = Exception.new\n            r = Marshal.load(Marshal.dump([e, e])
+e88599070c8943da135687c83d834899	["SELECT a FROM t WHERE a = ? OR a = :n", "SELECT a FROM t WHERE a = NULL OR a = NULL", "SELECT a FROM t WHERE a = 42 OR a = 'x'", true, "SELECT a FROM t WHERE a = NULL OR a = NULL", true, 2, ["SQLite3::Exception", "SQLite3::Exception", "SQLite3::Exception", "SQLite3::Exception"]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 e8962f663b29be65e4e0dd56609acec4	[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 100]	def f\n                $res << 12.times { |x|\n                    $r
 e8ad34b388352ca80000e7df317bb41a	[42, true, true]	o = Object.new\n            def o.to_str; "value"; end\n            c
 e8bf25bb3eb8bcdf2410ac76264f9ea4	[1, 2]	Enumerator.new { |y| y << 1 << 2 }.to_a
@@ -3284,6 +3299,7 @@ f25dbd56f5e0a43cccce8f621b699cac	[[false, "true", "A!"], [true, "false", "A!"]]	
 f278d110b91e27cba6d94dd2fa48e555	[680, 19, 38, 19]	def __f(x)\n          \n        acc = 0\n        i = 0\n        while i < 2
 f27aef0e47e3354ce496c90299f462ea	[["x\\ny\\nz\\n"], ["x\\n", "y\\n", "z\\n"], ["x\\n", "y\\n", "z\\n"], "ASCII-8BIT"]	File.write("/tmp/mr_rlf4.txt", "x\\ny\\nz\\n")\n            r = []\n    
 f2899713941ee3ed54e30d3b5b785abc	[1, true]	module MSx; end\n            SX = Struct.new(:a)\n            s = SX.
+f2ac88e48afb453f55b5a804f6cc1ad2	["UTF-8", #<SQLite3::Database:0x00007fe9a8fbd8a0 @tracefunc=nil, @authorizer=nil, @progress_handler=nil, @collations={}, @functions={}, @results_as_hash=nil, @readonly=false, @default_transaction_mode=:deferred>, false, "", ["SQLite3::Exception", "no such bind parameter"], "SQLite3::RangeException", "SQLite3::MismatchException", [[1, "x"]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 f2e470589175775eee4819e2df92057b	true	v = "MONORUBY_TEST_VAL"\n            r = ENV.send(:[]=, "MONORUBY_EN
 f2f61ae8dbed2bff4eb6e1bb603b94d5	5	(..5).max
 f30aa4d203b608f35977d0b328b100ae	[2, 3, 4, 4, 5, 1, 2, 6, 5, 6, 106, "x", nil, 102, [:@a, :@never2]]	class D\n              def initialize; @n = 5; @m = 5; end\n         

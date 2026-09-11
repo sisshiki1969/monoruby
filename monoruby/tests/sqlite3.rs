@@ -231,3 +231,400 @@ fn sqlite3_handles_are_released_by_gc() {
         "##,
     );
 }
+
+/// The binding's method surface must match the C extension's exactly,
+/// visibility included: the gem's Ruby half calls several of these as
+/// private methods, and a public one here would let user code reach an
+/// entry point CRuby hides.
+#[test]
+fn sqlite3_method_surface_matches_the_extension() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        [SQLite3::Database, SQLite3::Statement].flat_map { |k|
+          [(k.public_instance_methods(false) - Object.instance_methods).sort,
+           (k.private_instance_methods(false) - Object.private_instance_methods).sort]
+        }
+        "##,
+    );
+}
+
+/// `Statement#stat_for` and `#stats_as_hash` read `sqlite3_stmt_status`
+/// (both private, so reached with `send`). The counters are SQLite's, so
+/// only their shape is pinned: a statement that has run reports one run
+/// and a non-zero `vm_steps`, and an unknown key raises.
+#[test]
+fn sqlite3_statement_stats() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        db.execute("CREATE TABLE t (a)")
+        db.execute("INSERT INTO t VALUES (1), (2), (3)")
+        st = db.prepare("SELECT a FROM t ORDER BY a")
+        st.to_a
+        res = []
+        res << st.send(:stat_for, :runs)
+        res << (st.send(:stat_for, :vm_steps) > 0)
+        res << (st.send(:stat_for, :fullscan_steps) >= 0)
+        h = st.send(:stats_as_hash)
+        res << h.keys.sort
+        res << h[:runs]
+        # A Symbol and nothing else; an unknown one is refused rather
+        # than answered with zero.
+        res << [:nope, "runs", 1].map { |k|
+          begin; st.send(:stat_for, k); rescue StandardError => e; [e.class.name, e.message]; end
+        }
+        # The public wrapper over the same counters.
+        res << st.stat(:runs)
+        res << st.stat.keys.sort
+        res << (begin; st.stat("runs"); rescue StandardError => e; e.class.name; end)
+        st.close
+        db.close
+        res
+        "##,
+    );
+}
+
+/// The statement text accessors and the binding reset, all straight
+/// `sqlite3_*` calls: `sql` is the text as prepared, `expanded_sql`
+/// substitutes the bound values, and `clear_bindings!` puts them back to
+/// NULL.
+#[test]
+fn sqlite3_statement_text_and_bindings() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        db.execute("CREATE TABLE t (a)")
+        st = db.prepare("SELECT a FROM t WHERE a = ? OR a = :n")
+        res = [st.sql, st.expanded_sql]
+        st.bind_param(1, 42)
+        st.bind_param(":n", "x")
+        res << st.expanded_sql
+        res << st.clear_bindings!.equal?(st)
+        res << st.expanded_sql
+        res << (st.memused >= 0)
+        res << st.bind_parameter_count
+        st.close
+        # A closed statement refuses each of them.
+        res << [:sql, :expanded_sql, :memused, :clear_bindings!].map { |m|
+          begin; st.public_send(m); rescue SQLite3::Exception => e; e.class.name; end
+        }
+        db.close
+        res
+        "##,
+    );
+}
+
+/// The connection-level switches the gem's `Database#initialize` and its
+/// pragmas reach, plus the batch executors. `execute_batch` runs each
+/// statement for effect; `execute_batch2` collects the rows of all of
+/// them, every column as text.
+#[test]
+fn sqlite3_batch_and_switches() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        res = []
+        db.extended_result_codes = true
+        db.extended_result_codes = false
+        db.execute_batch("CREATE TABLE t (a, b); INSERT INTO t VALUES (1, 'x'); INSERT INTO t VALUES (2, 'y');")
+        res << db.execute("SELECT * FROM t ORDER BY a")
+        res << db.execute_batch2("SELECT a, b FROM t ORDER BY a")
+        res << db.execute_batch2("SELECT 1.5, X'00ff', NULL")
+        # Whether a fragment ends a statement.
+        res << ["SELECT 1;", "SELECT 1", "", "-- c\n"].map { |q| db.complete?(q) }
+        # A no-op collation (removal) is honoured; a real comparator is not.
+        res << db.collation("nocase2", nil).equal?(db)
+        # Quirk mode: SQLite otherwise reads a double-quoted unknown
+        # column name as a string literal. The gem turns that off for
+        # DDL and DML both.
+        db.execute("CREATE TABLE q (a)")
+        res << db.execute(%q{SELECT "no_such_col" FROM q})
+        res << db.send(:disable_quirk_mode)
+        res << (begin
+                  db.execute(%q{SELECT "no_such_col" FROM q})
+                rescue SQLite3::Exception => e
+                  [e.class.name, e.message]
+                end)
+        res << (begin
+                  db.execute(%q{CREATE TABLE u (a DEFAULT "x")})
+                rescue SQLite3::Exception => e
+                  e.class.name
+                end)
+        res << (db.statement_timeout = 250)
+        db.close
+        res
+        "##,
+    );
+}
+
+/// Errors SQLite raises by code, each mapping to the gem's exception
+/// subclass: a constraint violation, a file that is not a database, and
+/// a write to a read-only connection.
+#[test]
+fn sqlite3_error_classes_by_code() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        require "tmpdir"
+        res = []
+        db = SQLite3::Database.new(":memory:")
+        db.execute("CREATE TABLE t (a INTEGER PRIMARY KEY, b NOT NULL)")
+        db.execute("INSERT INTO t VALUES (1, 'x')")
+        # SQLITE_CONSTRAINT -> ConstraintException, and its subclasses.
+        res << (begin; db.execute("INSERT INTO t VALUES (1, 'y')"); rescue SQLite3::Exception => e; e.class.name; end)
+        res << (begin; db.execute("INSERT INTO t VALUES (2, NULL)"); rescue SQLite3::Exception => e; e.class.name; end)
+        # A syntax error carries the offending SQL.
+        res << (begin; db.execute("SELECT FROM"); rescue SQLite3::Exception => e; [e.class.name, e.sql]; end)
+        # An unknown table names itself in the message.
+        res << (begin; db.execute("SELECT * FROM nope"); rescue SQLite3::Exception => e; [e.class.name, e.message]; end)
+        db.close
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "not-a-db")
+          File.binwrite(path, "this is plainly not a SQLite file, padded " * 8)
+          # SQLITE_NOTADB -> NotADatabaseException.
+          res << (begin
+                    d = SQLite3::Database.new(path)
+                    d.execute("SELECT * FROM sqlite_master")
+                  rescue SQLite3::Exception => e
+                    e.class.name
+                  end)
+          ro = File.join(dir, "ro.db")
+          SQLite3::Database.new(ro) { |d| d.execute("CREATE TABLE t (a)") }
+          # SQLITE_READONLY -> ReadOnlyException.
+          res << (begin
+                    d = SQLite3::Database.new(ro, readonly: true)
+                    d.execute("INSERT INTO t VALUES (1)")
+                  rescue SQLite3::Exception => e
+                    e.class.name
+                  end)
+        end
+        res
+        "##,
+    );
+}
+
+/// A prepared statement left open is finalized when it is collected,
+/// so a loop that drops them does not grow without bound.
+///
+/// A *connection* is a different matter and is deliberately not
+/// asserted here: the gem's `ForkSafety` registry holds every
+/// `Database` in a `WeakRef`, and monoruby's weakref.rb is a stub that
+/// keeps a strong reference (there is no `ObjectSpace::WeakMap`), so an
+/// unclosed connection stays reachable and its `Drop` never runs. That
+/// predates this binding — the Fiddle bridge leaked the same way — and
+/// wants fixing where the weak reference is, not here.
+#[test]
+fn sqlite3_statements_are_finalized_when_collected() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        db.execute("CREATE TABLE t (a)")
+        db.execute("INSERT INTO t VALUES (1), (2)")
+        # Dropped unclosed, in a method so no local pins the last one.
+        def churn(db) = 300.times { db.prepare("SELECT a FROM t").step }
+        churn(db)
+        GC.start
+        # The connection is still usable, and so is a fresh statement.
+        st = db.prepare("SELECT COUNT(*) FROM t")
+        r = [st.step, st.done?]
+        st.close
+        r << db.execute("SELECT a FROM t ORDER BY a")
+        db.close
+        r
+        "##,
+    );
+}
+
+/// The entry points monoruby's binding does not implement, and the ones
+/// it accepts but ignores. Not oracle-checked: the C extension really
+/// registers these callbacks, and the whole point here is that this
+/// binding refuses instead — a SQLite callback would have to re-enter
+/// the interpreter. What is pinned is that each fails loudly, as a
+/// `SQLite3::Exception` naming the feature, rather than appearing to
+/// work.
+#[test]
+fn sqlite3_unsupported_callbacks_refuse() {
+    let v = run_test_no_result_check(
+        r##"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        agg = Class.new do
+          def self.arity; 1; end
+          def self.name; "myagg"; end
+          def step(x); end
+          def finalize; 0; end
+        end
+        r = []
+        r << (begin; db.create_function("f", 1) { |c, v| c.result = v }; rescue => e; [e.class.name, e.message]; end)
+        r << (begin; db.define_function("g") { |v| v }; rescue => e; [e.class.name, e.message]; end)
+        r << (begin; db.create_aggregate_handler(agg); rescue => e; [e.class.name, e.message]; end)
+        r << (begin; db.collation("c", Object.new); rescue => e; [e.class.name, e.message]; end)
+        r << (begin; db.load_extension("x"); rescue => e; [e.class.name, e.message]; end)
+        expected = [
+          ["SQLite3::Exception", "create_function is not supported by monoruby's sqlite3 binding"],
+          ["SQLite3::Exception", "create_function is not supported by monoruby's sqlite3 binding"],
+          ["SQLite3::Exception", "create_aggregate is not supported by monoruby's sqlite3 binding"],
+          ["SQLite3::Exception", "collation is not supported by monoruby's sqlite3 binding"],
+          ["SQLite3::Exception", "load_extension is not available: monoruby's SQLite is built without extension loading"],
+        ]
+        raise "got #{r.inspect}" unless r == expected
+        # Accepted and remembered, but nothing is registered with SQLite:
+        # `enable_load_extension` has nothing to enable, and the three
+        # callbacks below are never called back into.
+        r2 = []
+        r2 << db.enable_load_extension(true)
+        r2 << db.trace { |sql| sql }
+        r2 << (db.authorizer = proc { 0 })
+        r2 << db.busy_handler { 0 }
+        r2 << db.busy_timeout(50)
+        raise "got #{r2.inspect}" unless r2 == [nil, nil, r2[2], nil, nil] && r2[2].is_a?(Proc)
+        # `discard` abandons the connection without closing it, which is
+        # what the gem's fork safety does in a child.
+        db.send(:discard)
+        raise "not discarded" unless db.closed?
+        r.size + r2.size
+        "##,
+    );
+    assert_eq!(v.try_fixnum(), Some(10));
+}
+
+/// The failure paths of opening a connection, and `open16`, which the
+/// gem reaches when the filename is UTF-16. A directory that does not
+/// exist gives SQLITE_CANTOPEN, whose message comes off the half-open
+/// handle before it is closed.
+#[test]
+fn sqlite3_open_failures_and_utf16() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        require "tmpdir"
+        res = []
+        res << (begin
+                  SQLite3::Database.new("/nonexistent-dir-for-a-test/x.db")
+                rescue SQLite3::Exception => e
+                  [e.class.name, e.message]
+                end)
+        # A directory is not a database file either.
+        Dir.mktmpdir do |dir|
+          res << (begin
+                    SQLite3::Database.new(dir)
+                  rescue SQLite3::Exception => e
+                    e.class.name
+                  end)
+          # The UTF-16 path: `open16` rather than `open_v2`.
+          path = File.join(dir, "u16.db")
+          db = SQLite3::Database.new(path.encode("UTF-16LE"))
+          db.execute("CREATE TABLE t (a)")
+          db.execute("INSERT INTO t VALUES (7)")
+          res << db.execute("SELECT a FROM t")
+          res << db.encoding.name
+          db.close
+          res << (begin
+                    SQLite3::Database.new(File.join(dir, "no", "x.db").encode("UTF-16LE"))
+                  rescue SQLite3::Exception => e
+                    e.class.name
+                  end)
+        end
+        res
+        "##,
+    );
+}
+
+/// The error paths of the statement and batch executors: a batch whose
+/// second statement is bad has already run the first, and the failure
+/// carries the offending SQL.
+#[test]
+fn sqlite3_batch_error_paths() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        db.execute("CREATE TABLE t (a)")
+        res = []
+        res << (begin
+                  db.execute_batch("INSERT INTO t VALUES (1); NOT SQL; INSERT INTO t VALUES (2);")
+                rescue SQLite3::Exception => e
+                  [e.class.name, e.sql]
+                end)
+        # The first statement ran before the bad one was reached.
+        res << db.execute("SELECT * FROM t")
+        res << (begin
+                  db.execute_batch2("SELECT * FROM nope")
+                rescue SQLite3::Exception => e
+                  e.class.name
+                end)
+        # A constraint failure inside a batch.
+        db.execute("CREATE TABLE u (a INTEGER PRIMARY KEY)")
+        res << (begin
+                  db.execute_batch("INSERT INTO u VALUES (1); INSERT INTO u VALUES (1);")
+                rescue SQLite3::Exception => e
+                  e.class.name
+                end)
+        db.close
+        # Both refuse on a closed connection — from the gem's own guard
+        # in `Statement#initialize`, so an ArgumentError rather than a
+        # SQLite3::Exception.
+        res << [:execute_batch, :execute_batch2].map { |m|
+          begin; db.public_send(m, "SELECT 1"); rescue StandardError => e; [e.class.name, e.message]; end
+        }
+        res
+        "##,
+    );
+}
+
+/// The small connection and binding accessors, and the two refusals a
+/// bind can hit: a named parameter the statement does not declare, and
+/// a value SQLite will not store in that column.
+#[test]
+fn sqlite3_binding_and_accessor_edges() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        # `interrupt` answers the connection itself. (Its `inspect` is
+        # not compared: monoruby renders an ObjTy::NATIVE object without
+        # its ivars, which is a difference in Object#inspect, not here.)
+        res = [db.encoding.name, db.interrupt.equal?(db), db.readonly?, db.filename]
+        db.execute("CREATE TABLE t (a INTEGER PRIMARY KEY, b)")
+        st = db.prepare("SELECT b FROM t WHERE a = :a")
+        res << (begin
+                  st.bind_param(":nope", 1)
+                rescue SQLite3::Exception => e
+                  [e.class.name, e.message]
+                end)
+        # An index past the declared parameters.
+        res << (begin
+                  st.bind_param(9, 1)
+                rescue SQLite3::Exception => e
+                  e.class.name
+                end)
+        st.close
+        # SQLITE_MISMATCH: an INTEGER PRIMARY KEY takes only integers.
+        res << (begin
+                  db.execute("INSERT INTO t (a, b) VALUES (?, ?)", ["not an int", 1])
+                rescue SQLite3::Exception => e
+                  e.class.name
+                end)
+        # Interrupting an idle connection is a no-op, and it stays usable.
+        db.interrupt
+        db.execute("INSERT INTO t (a, b) VALUES (1, 'x')")
+        res << db.execute("SELECT * FROM t")
+        db.close
+        res
+        "##,
+    );
+}

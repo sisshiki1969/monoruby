@@ -84,8 +84,8 @@ fn sqlite3_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr)
 
     // ---- Database
     let d = database;
-    globals.define_builtin_func(d, "open_v2", db_open_v2, 3);
-    globals.define_builtin_func(d, "open16", db_open16, 1);
+    globals.define_private_builtin_func(d, "open_v2", db_open_v2, 3);
+    globals.define_private_builtin_func(d, "open16", db_open16, 1);
     globals.define_builtin_func(d, "close", db_close, 0);
     globals.define_builtin_func(d, "closed?", db_closed_p, 0);
     globals.define_builtin_func(d, "encoding", db_encoding, 0);
@@ -101,18 +101,29 @@ fn sqlite3_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr)
     globals.define_private_builtin_func(d, "db_filename", db_filename, 1);
     globals.define_builtin_func(d, "extended_result_codes=", db_extended_result_codes, 1);
     globals.define_builtin_func(d, "transaction_active?", db_transaction_active_p, 0);
-    globals.define_builtin_func(d, "disable_quirk_mode", db_disable_quirk_mode, 0);
-    globals.define_builtin_func(d, "exec_batch", db_exec_batch, 2);
+    // The C extension defines these six privately; the gem's Ruby half
+    // is their only caller, and `tests/sqlite3.rs` pins the split.
+    globals.define_private_builtin_func(d, "disable_quirk_mode", db_disable_quirk_mode, 0);
+    globals.define_private_builtin_func(d, "exec_batch", db_exec_batch, 2);
     globals.define_builtin_func(d, "enable_load_extension", db_enable_load_extension, 1);
-    globals.define_builtin_func(d, "load_extension_internal", db_load_extension, 1);
+    globals.define_private_builtin_func(d, "load_extension_internal", db_load_extension, 1);
     globals.define_builtin_func_rest(d, "trace", db_trace);
     globals.define_builtin_func(d, "authorizer=", db_authorizer_assign, 1);
     globals.define_builtin_func_rest(d, "define_function_with_flags", db_define_function);
-    globals.define_builtin_func(d, "define_aggregator2", db_define_aggregator, 2);
+    globals.define_builtin_func_rest(d, "define_function", db_define_function_plain);
+    globals.define_private_builtin_func(d, "define_aggregator2", db_define_aggregator, 2);
+    globals.define_builtin_func(d, "collation", db_collation, 2);
+    globals.define_builtin_func(d, "complete?", db_complete_p, 1);
+    globals.define_builtin_func(d, "statement_timeout=", db_statement_timeout_assign, 1);
+    globals.define_private_builtin_func(d, "discard", db_discard, 0);
 
     // ---- Statement
     let s = statement;
-    globals.define_builtin_func(s, "prepare", stmt_prepare, 2);
+    globals.define_private_builtin_func(s, "prepare", stmt_prepare, 2);
+    globals.define_builtin_func(s, "sql", stmt_sql, 0);
+    globals.define_builtin_func(s, "expanded_sql", stmt_expanded_sql, 0);
+    globals.define_builtin_func(s, "memused", stmt_memused, 0);
+    globals.define_builtin_func(s, "clear_bindings!", stmt_clear_bindings, 0);
     globals.define_builtin_func(s, "close", stmt_close, 0);
     globals.define_builtin_func(s, "closed?", stmt_closed_p, 0);
     globals.define_builtin_func(s, "step", stmt_step, 0);
@@ -123,8 +134,8 @@ fn sqlite3_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr)
     globals.define_builtin_func(s, "column_name", stmt_column_name, 1);
     globals.define_builtin_func(s, "column_decltype", stmt_column_decltype, 1);
     globals.define_builtin_func(s, "bind_parameter_count", stmt_bind_parameter_count, 0);
-    globals.define_builtin_func(s, "stat_for", stmt_stat_for, 1);
-    globals.define_builtin_func(s, "stats_as_hash", stmt_stats_as_hash, 0);
+    globals.define_private_builtin_func(s, "stat_for", stmt_stat_for, 1);
+    globals.define_private_builtin_func(s, "stats_as_hash", stmt_stats_as_hash, 0);
 
     Ok(Value::nil())
 }
@@ -327,39 +338,48 @@ fn stmt_of(
 // Errors
 // ---------------------------------------------------------------------
 
-/// `SQLite3::<Name>` for a primary result code — the gem's own mapping
-/// (`ext/sqlite3/exception.c`). The low 8 bits select it, so an extended
-/// code lands on its primary class.
+/// `SQLite3::<Name>` for each primary result code 1..=26, in code
+/// order — the gem's own mapping (`ext/sqlite3/exception.c`).
+const ERROR_CLASS_NAMES: [&str; 26] = [
+    "SQLException",           // 1  SQLITE_ERROR
+    "InternalException",      // 2  SQLITE_INTERNAL
+    "PermissionException",    // 3  SQLITE_PERM
+    "AbortException",         // 4  SQLITE_ABORT
+    "BusyException",          // 5  SQLITE_BUSY
+    "LockedException",        // 6  SQLITE_LOCKED
+    "MemoryException",        // 7  SQLITE_NOMEM
+    "ReadOnlyException",      // 8  SQLITE_READONLY
+    "InterruptException",     // 9  SQLITE_INTERRUPT
+    "IOException",            // 10 SQLITE_IOERR
+    "CorruptException",       // 11 SQLITE_CORRUPT
+    "NotFoundException",      // 12 SQLITE_NOTFOUND
+    "FullException",          // 13 SQLITE_FULL
+    "CantOpenException",      // 14 SQLITE_CANTOPEN
+    "ProtocolException",      // 15 SQLITE_PROTOCOL
+    "EmptyException",         // 16 SQLITE_EMPTY
+    "SchemaChangedException", // 17 SQLITE_SCHEMA
+    "TooBigException",        // 18 SQLITE_TOOBIG
+    "ConstraintException",    // 19 SQLITE_CONSTRAINT
+    "MismatchException",      // 20 SQLITE_MISMATCH
+    "MisuseException",        // 21 SQLITE_MISUSE
+    "UnsupportedException",   // 22 SQLITE_NOLFS
+    "AuthorizationException", // 23 SQLITE_AUTH
+    "FormatException",        // 24 SQLITE_FORMAT
+    "RangeException",         // 25 SQLITE_RANGE
+    "NotADatabaseException",  // 26 SQLITE_NOTADB
+];
+
+/// The class for a result code. The low 8 bits select it, so an
+/// extended code lands on its primary class; anything outside the
+/// table (0, and 27.. which SQLite has not assigned) is the base class.
 fn error_class_name(code: c_int) -> &'static str {
-    match code & 0xff {
-        1 => "SQLException",
-        2 => "InternalException",
-        3 => "PermissionException",
-        4 => "AbortException",
-        5 => "BusyException",
-        6 => "LockedException",
-        7 => "MemoryException",
-        8 => "ReadOnlyException",
-        9 => "InterruptException",
-        10 => "IOException",
-        11 => "CorruptException",
-        12 => "NotFoundException",
-        13 => "FullException",
-        14 => "CantOpenException",
-        15 => "ProtocolException",
-        16 => "EmptyException",
-        17 => "SchemaChangedException",
-        18 => "TooBigException",
-        19 => "ConstraintException",
-        20 => "MismatchException",
-        21 => "MisuseException",
-        22 => "UnsupportedException",
-        23 => "AuthorizationException",
-        24 => "FormatException",
-        25 => "RangeException",
-        26 => "NotADatabaseException",
-        _ => "Exception",
-    }
+    let primary = code & 0xff;
+    usize::try_from(primary)
+        .ok()
+        .and_then(|i| i.checked_sub(1))
+        .and_then(|i| ERROR_CLASS_NAMES.get(i))
+        .copied()
+        .unwrap_or("Exception")
 }
 
 /// A `SQLite3::Exception` with no result code, for the misuse the C
@@ -555,6 +575,13 @@ unsafe fn row_value(stmt: *mut sq::sqlite3_stmt) -> Value {
 /// `exec_batch` answers (the C extension's batch path reads through
 /// `sqlite3_column_text` whatever the storage class is).
 ///
+/// The length comes from the NUL rather than from
+/// `sqlite3_column_bytes`, because the C extension builds these with
+/// `rb_str_new2`: `execute_batch2` of a value holding a NUL — an
+/// embedded one in TEXT, or any BLOB with a zero byte — stops there,
+/// where the row readers used by `execute` keep the whole value. It
+/// looks like a bug in the gem, but it is what callers see.
+///
 /// # Safety
 /// As `column_value`.
 unsafe fn row_value_as_text(stmt: *mut sq::sqlite3_stmt) -> Value {
@@ -563,12 +590,12 @@ unsafe fn row_value_as_text(stmt: *mut sq::sqlite3_stmt) -> Value {
         let count = sq::sqlite3_column_count(stmt);
         let mut row = Vec::with_capacity(count.max(0) as usize);
         for i in 0..count {
-            let ptr = sq::sqlite3_column_text(stmt, i) as *const u8;
+            let ptr = sq::sqlite3_column_text(stmt, i) as *const c_char;
             row.push(if ptr.is_null() {
                 Value::nil()
             } else {
-                let len = sq::sqlite3_column_bytes(stmt, i).max(0) as usize;
-                Value::string_from_vec(std::slice::from_raw_parts(ptr, len).to_vec())
+                let bytes = std::ffi::CStr::from_ptr(ptr).to_bytes();
+                Value::string_from_vec(bytes.to_vec())
             });
         }
         Value::array_from_vec(row)
@@ -784,13 +811,13 @@ fn db_total_changes(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
     ))
 }
 
-/// Database#interrupt -> nil
+/// Database#interrupt -> self
 #[monoruby_builtin]
 fn db_interrupt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let db = db_of(vm, globals, lfp.self_val())?;
     // SAFETY: a live connection; interrupting is safe from any thread.
     unsafe { sq::sqlite3_interrupt(db) };
-    Ok(Value::nil())
+    Ok(lfp.self_val())
 }
 
 /// Database#errcode -> Integer
@@ -846,48 +873,27 @@ fn db_transaction_active_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _
     Ok(Value::bool(unsafe { sq::sqlite3_get_autocommit(db) } == 0))
 }
 
-/// Run `sql` with no result rows.
-fn exec_simple(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    db: *mut sq::sqlite3,
-    sql: &str,
-) -> Result<()> {
-    let sql = CString::new(sql)
-        .map_err(|_| MonorubyErr::argumenterr("string contains a NUL byte"))?;
-    let mut errmsg: *mut c_char = std::ptr::null_mut();
-    // SAFETY: a live connection, a NUL-terminated statement, no callback.
-    let rc = unsafe {
-        sq::sqlite3_exec(
-            db,
-            sql.as_ptr(),
-            None,
-            std::ptr::null_mut(),
-            &mut errmsg,
-        )
-    };
-    if rc != sq::SQLITE_OK {
-        // SAFETY: `errmsg` is SQLite-allocated and must be freed with
-        // `sqlite3_free`.
-        let msg = unsafe {
-            let m = cstr_to_string(errmsg);
-            if !errmsg.is_null() {
-                sq::sqlite3_free(errmsg as *mut c_void);
-            }
-            m
-        }
-        .unwrap_or_else(|| format!("sqlite3 error {rc}"));
-        return Err(raise_code(vm, globals, rc, msg));
-    }
-    Ok(())
-}
-
-/// Database#disable_quirk_mode -> nil
+/// Database#disable_quirk_mode -> bool
+///
+/// SQLite's "quirk" is accepting a double-quoted string as a literal
+/// where a column name was meant. The gem turns it off for both DDL and
+/// DML, and answers whether both took.
 #[monoruby_builtin]
 fn db_disable_quirk_mode(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let db = db_of(vm, globals, lfp.self_val())?;
-    exec_simple(vm, globals, db, "PRAGMA trusted_schema = OFF")?;
-    Ok(Value::nil())
+    // SAFETY: a live connection; both verbs take `(int onoff, int *pRes)`
+    // and we pass a null result pointer, which SQLite allows.
+    let ok = unsafe {
+        sq::sqlite3_db_config(db, sq::SQLITE_DBCONFIG_DQS_DDL, 0, std::ptr::null_mut::<c_int>())
+            == sq::SQLITE_OK
+            && sq::sqlite3_db_config(
+                db,
+                sq::SQLITE_DBCONFIG_DQS_DML,
+                0,
+                std::ptr::null_mut::<c_int>(),
+            ) == sq::SQLITE_OK
+    };
+    Ok(Value::bool(ok))
 }
 
 /// Database#exec_batch(sql, results_as_hash) -> Array of rows
@@ -1020,6 +1026,95 @@ fn db_define_aggregator(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: B
         globals,
         "create_aggregate is not supported by monoruby's sqlite3 binding",
     ))
+}
+
+/// Database#complete?(sql) -> bool
+///
+/// Whether the text forms one or more complete statements — what a REPL
+/// asks before deciding to keep reading.
+#[monoruby_builtin]
+fn db_complete_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    db_of(vm, globals, lfp.self_val())?;
+    let sql = lfp.arg(0).expect_string(&globals.store)?;
+    let Ok(c) = std::ffi::CString::new(sql) else {
+        // An interior NUL cannot end a statement.
+        return Ok(Value::bool(false));
+    };
+    // SAFETY: a NUL-terminated string that outlives the call.
+    Ok(Value::bool(unsafe { sq::sqlite3_complete(c.as_ptr()) } != 0))
+}
+
+/// Database#define_function(name, &block) -> raises
+///
+/// The C-level half of `create_function`. Like it, and for the same
+/// reason (a SQLite callback would have to re-enter the interpreter),
+/// this refuses rather than pretending to register anything.
+#[monoruby_builtin]
+fn db_define_function_plain(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    db_of(vm, globals, lfp.self_val())?;
+    Err(err_sqlite3(
+        vm,
+        globals,
+        "create_function is not supported by monoruby's sqlite3 binding",
+    ))
+}
+
+/// Database#collation(name, comparator) -> self
+///
+/// A comparator is a Ruby object SQLite would call back into, so only
+/// removing one (a nil comparator) can be honoured; anything else
+/// refuses, as `create_function` does.
+#[monoruby_builtin]
+fn db_collation(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    db_of(vm, globals, lfp.self_val())?;
+    if !lfp.arg(1).is_nil() {
+        return Err(err_sqlite3(
+            vm,
+            globals,
+            "collation is not supported by monoruby's sqlite3 binding",
+        ));
+    }
+    Ok(lfp.self_val())
+}
+
+/// Database#statement_timeout=(ms) -> ms
+///
+/// The gem enforces this with a progress handler, which is a Ruby
+/// callback from SQLite; the value is remembered so `initialize` and the
+/// accessor work, but nothing interrupts a long statement.
+#[monoruby_builtin]
+fn db_statement_timeout_assign(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    db_of(vm, globals, lfp.self_val())?;
+    let v = lfp.arg(0);
+    globals
+        .store
+        .set_ivar(lfp.self_val(), IdentId::get_id("@statement_timeout"), v)?;
+    Ok(v)
+}
+
+/// Database#discard -> nil
+///
+/// Abandon the connection without closing it: what the gem's fork
+/// safety does in a child, where running the parent's `close` would
+/// checkpoint and unlink files the parent still owns. The handle is
+/// dropped on the floor deliberately — the OS reclaims it with the
+/// process.
+#[monoruby_builtin]
+fn db_discard(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let h = native_mut::<DbHandle>(lfp.self_val())?;
+    h.db = std::ptr::null_mut();
+    h.funcs.clear();
+    Ok(Value::nil())
 }
 
 // ---------------------------------------------------------------------
@@ -1241,7 +1336,8 @@ fn stmt_bind_param(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
         // SAFETY: a live statement and a NUL-terminated name.
         let i = unsafe { sq::sqlite3_bind_parameter_index(stmt, c.as_ptr()) };
         if i == 0 {
-            return Err(err_sqlite3(vm, globals, &format!("no such bind parameter: {name}")));
+            // The C extension names no parameter in this message.
+            return Err(err_sqlite3(vm, globals, "no such bind parameter"));
         }
         i
     } else if let Some(sym) = key.try_symbol() {
@@ -1250,7 +1346,8 @@ fn stmt_bind_param(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
         // SAFETY: as above.
         let i = unsafe { sq::sqlite3_bind_parameter_index(stmt, c.as_ptr()) };
         if i == 0 {
-            return Err(err_sqlite3(vm, globals, &format!("no such bind parameter: {name}")));
+            // The C extension names no parameter in this message.
+            return Err(err_sqlite3(vm, globals, "no such bind parameter"));
         }
         i
     } else {
@@ -1303,6 +1400,65 @@ fn stmt_bind_parameter_count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp,
     ))
 }
 
+/// Statement#sql -> String
+///
+/// The statement's text as it was prepared.
+#[monoruby_builtin]
+fn stmt_sql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let stmt = stmt_of(vm, globals, lfp.self_val())?;
+    // SAFETY: a live statement; the text it borrows lives as long as it
+    // does, and is copied here.
+    let s = unsafe { cstr_to_string(sq::sqlite3_sql(stmt)) };
+    Ok(s.map_or_else(Value::nil, |s| Value::string(s)))
+}
+
+/// Statement#expanded_sql -> String
+///
+/// The text with the bound parameters substituted.
+#[monoruby_builtin]
+fn stmt_expanded_sql(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let stmt = stmt_of(vm, globals, lfp.self_val())?;
+    // SAFETY: a live statement. Unlike `sqlite3_sql`, this buffer is
+    // ours to free.
+    unsafe {
+        let p = sq::sqlite3_expanded_sql(stmt);
+        if p.is_null() {
+            return Ok(Value::nil());
+        }
+        let s = cstr_to_string(p);
+        sq::sqlite3_free(p as *mut c_void);
+        Ok(s.map_or_else(Value::nil, |s| Value::string(s)))
+    }
+}
+
+/// Statement#memused -> Integer
+#[monoruby_builtin]
+fn stmt_memused(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let stmt = stmt_of(vm, globals, lfp.self_val())?;
+    // SAFETY: a live statement; `reset` of 0 leaves the counter alone.
+    let n = unsafe { sq::sqlite3_stmt_status(stmt, sq::SQLITE_STMTSTATUS_MEMUSED, 0) };
+    Ok(Value::integer(n as i64))
+}
+
+/// Statement#clear_bindings! -> self
+#[monoruby_builtin]
+fn stmt_clear_bindings(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let stmt = stmt_of(vm, globals, lfp.self_val())?;
+    // SAFETY: a live statement.
+    unsafe { sq::sqlite3_clear_bindings(stmt) };
+    Ok(lfp.self_val())
+}
+
 /// The `sqlite3_stmt_status` counter a `stat_for` key names.
 fn stat_counter(name: &str) -> Option<c_int> {
     Some(match name {
@@ -1322,13 +1478,15 @@ fn stat_counter(name: &str) -> Option<c_int> {
 #[monoruby_builtin]
 fn stmt_stat_for(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let stmt = stmt_of(vm, globals, lfp.self_val())?;
-    let key = lfp.arg(0);
-    let name = match key.try_symbol() {
-        Some(s) => s.get_name(),
-        None => key.expect_string(&globals.store)?,
+    // The C extension takes a Symbol and nothing else — a String key
+    // is a TypeError, not a lookup — and rejects an unknown one rather
+    // than answering zero.
+    let Some(sym) = lfp.arg(0).try_symbol() else {
+        return Err(MonorubyErr::typeerr("non-symbol given"));
     };
+    let name = sym.get_name();
     let Some(counter) = stat_counter(&name) else {
-        return Ok(Value::integer(0));
+        return Err(MonorubyErr::argumenterr(format!("unknown key: {name}")));
     };
     // SAFETY: a live statement and a known counter.
     Ok(Value::integer(

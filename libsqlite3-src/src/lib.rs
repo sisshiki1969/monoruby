@@ -75,6 +75,12 @@ pub const SQLITE_STMTSTATUS_REPREPARE: c_int = 5;
 pub const SQLITE_STMTSTATUS_RUN: c_int = 6;
 pub const SQLITE_STMTSTATUS_FILTER_MISS: c_int = 7;
 pub const SQLITE_STMTSTATUS_FILTER_HIT: c_int = 8;
+pub const SQLITE_STMTSTATUS_MEMUSED: c_int = 99;
+
+/// `sqlite3_db_config` verbs. Double-quoted string literals are SQLite's
+/// "quirk"; the gem's `disable_quirk_mode` turns both off.
+pub const SQLITE_DBCONFIG_DQS_DML: c_int = 1013;
+pub const SQLITE_DBCONFIG_DQS_DDL: c_int = 1014;
 
 unsafe extern "C" {
     // ---- library
@@ -109,6 +115,9 @@ unsafe extern "C" {
     pub fn sqlite3_interrupt(db: *mut sqlite3);
     pub fn sqlite3_db_filename(db: *mut sqlite3, name: *const c_char) -> *const c_char;
     pub fn sqlite3_get_autocommit(db: *mut sqlite3) -> c_int;
+    /// `SQLITE_DBCONFIG_DQS_DML` / `_DDL` take `(int onoff, int *pRes)`.
+    /// Declared variadic because `sqlite3_db_config` is.
+    pub fn sqlite3_db_config(db: *mut sqlite3, op: c_int, ...) -> c_int;
     pub fn sqlite3_exec(
         db: *mut sqlite3,
         sql: *const c_char,
@@ -131,6 +140,14 @@ unsafe extern "C" {
     pub fn sqlite3_finalize(stmt: *mut sqlite3_stmt) -> c_int;
     pub fn sqlite3_reset(stmt: *mut sqlite3_stmt) -> c_int;
     pub fn sqlite3_clear_bindings(stmt: *mut sqlite3_stmt) -> c_int;
+    /// The statement's original SQL text (borrowed; valid while the
+    /// statement lives).
+    /// True when the text ends a complete SQL statement.
+    pub fn sqlite3_complete(sql: *const c_char) -> c_int;
+    pub fn sqlite3_sql(stmt: *mut sqlite3_stmt) -> *const c_char;
+    /// The SQL with the bound parameters substituted. The caller frees
+    /// the result with `sqlite3_free`.
+    pub fn sqlite3_expanded_sql(stmt: *mut sqlite3_stmt) -> *mut c_char;
     pub fn sqlite3_db_handle(stmt: *mut sqlite3_stmt) -> *mut sqlite3;
     pub fn sqlite3_stmt_status(stmt: *mut sqlite3_stmt, op: c_int, reset: c_int) -> c_int;
 
