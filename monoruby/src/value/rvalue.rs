@@ -22,6 +22,9 @@ pub use hash::*;
 pub(crate) use io::NonblockGuard;
 pub use io::{ExtEnc, IoInner, IoKind, NonblockRead, NonblockWrite, fd_is_owned};
 pub use argf::*;
+pub use weakmap::*;
+pub(crate) use weakmap::clear_dead as weakmap_clear_dead;
+pub(crate) use weakmap::register as weakmap_register;
 pub use io_buffer::*;
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
@@ -54,6 +57,7 @@ mod fiber;
 mod hash;
 pub(crate) mod io;
 mod argf;
+mod weakmap;
 mod io_buffer;
 mod ivar_table;
 mod match_data;
@@ -140,6 +144,7 @@ impl std::fmt::Debug for ObjTy {
                 26 => "IO_BUFFER",
                 27 => "THREAD",
                 28 => "ARGF",
+                31 => "WEAKMAP",
                 29 => "FRAME",
                 30 => "NATIVE",
                 _ => return write!(f, "INVALID({ty})"),
@@ -189,6 +194,8 @@ impl ObjTy {
     /// (dynvar stores), so like Proc/Binding/Fiber they stay young and
     /// are re-walked on every minor GC.
     pub const FRAME: Self = Self(std::num::NonZeroU8::new(29).unwrap());
+    /// `ObjectSpace::WeakMap` — see `rvalue/weakmap.rs`.
+    pub const WEAKMAP: Self = Self(std::num::NonZeroU8::new(31).unwrap());
     /// An object whose payload is native data behind the `NativeData`
     /// trait (a libxml2 document, node, ...): the Ruby class is whatever
     /// the constructor gave it, the payload marks the Values it holds and
@@ -240,6 +247,8 @@ pub union ObjKind {
     /// Boxed: keeps the walk state (queue, stream, encodings, in-place
     /// bookkeeping) off the fixed-size RValue cell.
     argf: ManuallyDrop<Box<ArgfInner>>,
+    /// Boxed: the pair list is owned, and the cell stays pointer-sized.
+    weakmap: ManuallyDrop<Box<WeakMapInner>>,
     /// Raw parts of a promoted heap frame's buffer (see `FrameInner`).
     frame: FrameInner,
     /// Native payload (`ObjTy::NATIVE`), a fat pointer to the boxed data.
@@ -577,6 +586,12 @@ impl ObjKind {
         }
     }
 
+    fn weakmap(inner: WeakMapInner) -> Self {
+        Self {
+            weakmap: ManuallyDrop::new(Box::new(inner)),
+        }
+    }
+
     fn argf(inner: ArgfInner) -> Self {
         Self {
             argf: ManuallyDrop::new(Box::new(inner)),
@@ -646,6 +661,7 @@ impl std::fmt::Debug for RValue {
                             ObjTy::TIME => format!("{:?}", self.kind.time),
                             ObjTy::IO_BUFFER => format!("{:?}", self.kind.io_buffer),
                             ObjTy::ARGF => format!("{:?}", self.kind.argf),
+                            ObjTy::WEAKMAP => format!("{:?}", self.kind.weakmap),
                             ObjTy::ARRAY => format!("{:?}", self.kind.array),
                             ObjTy::RANGE => format!("{:?}", self.kind.range),
                             ObjTy::EXCEPTION => format!("{:?}", self.kind.exception),
@@ -987,6 +1003,7 @@ impl alloc::GCBox for RValue {
                 ObjTy::IO => ManuallyDrop::drop(&mut self.kind.io),
                 ObjTy::IO_BUFFER => ManuallyDrop::drop(&mut self.kind.io_buffer),
                 ObjTy::ARGF => ManuallyDrop::drop(&mut self.kind.argf),
+                ObjTy::WEAKMAP => ManuallyDrop::drop(&mut self.kind.weakmap),
                 ObjTy::NATIVE => ManuallyDrop::drop(&mut self.kind.native),
                 // SAFETY: `base`/`len` are exactly the raw parts of the
                 // original `Box<[u64]>` (recorded at promotion); this
@@ -1096,6 +1113,8 @@ impl alloc::GCBox for RValue {
                 ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().mark(alloc),
                 ObjTy::IO_BUFFER => self.as_io_buffer().mark(alloc),
                 ObjTy::ARGF => self.as_argf().mark(alloc),
+                // Traces nothing: both halves of every pair are weak.
+                ObjTy::WEAKMAP => self.as_weakmap().mark(alloc),
                 ObjTy::NATIVE => self.kind.native.mark(alloc),
                 // Walk the promoted frame's contents (registers, block,
                 // svar, outer chain). Reaching the wrapper twice in one
@@ -1717,6 +1736,10 @@ impl RValue {
                         ObjTy::BINDING => ObjKind {
                             binding: ManuallyDrop::new((*self.kind.binding).clone()),
                         },
+                        // A copy of a weak map starts empty, as
+                        // CRuby's does: the pairs belong to the map
+                        // the collector registered, not to this one.
+                        ObjTy::WEAKMAP => ObjKind::weakmap(WeakMapInner::new()),
                         ty => unreachable!("{ty:?}"),
                     }
                 } else {
@@ -1812,6 +1835,10 @@ impl RValue {
                         ObjTy::BINDING => ObjKind {
                             binding: ManuallyDrop::new((*self.kind.binding).clone()),
                         },
+                        // A copy of a weak map starts empty, as
+                        // CRuby's does: the pairs belong to the map
+                        // the collector registered, not to this one.
+                        ObjTy::WEAKMAP => ObjKind::weakmap(WeakMapInner::new()),
                         ty => unreachable!("{ty:?}"),
                     }
                 } else {
@@ -2377,6 +2404,14 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_weakmap(class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::WEAKMAP),
+            kind: ObjKind::weakmap(WeakMapInner::new()),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_argf(class_id: ClassId, inner: ArgfInner) -> Self {
         RValue {
             header: Header::new(class_id, ObjTy::ARGF),
@@ -2702,6 +2737,18 @@ impl RValue {
         assert_eq!(self.ty(), ObjTy::IO_BUFFER);
         // SAFETY: type checked above.
         unsafe { &mut self.kind.io_buffer }
+    }
+
+    pub(crate) fn as_weakmap(&self) -> &WeakMapInner {
+        assert_eq!(self.ty(), ObjTy::WEAKMAP);
+        // SAFETY: the tag says this union field is the live one.
+        unsafe { &self.kind.weakmap }
+    }
+
+    pub(crate) fn as_weakmap_mut(&mut self) -> &mut WeakMapInner {
+        assert_eq!(self.ty(), ObjTy::WEAKMAP);
+        // SAFETY: as `as_weakmap`.
+        unsafe { &mut self.kind.weakmap }
     }
 
     pub(super) fn as_argf(&self) -> &ArgfInner {
