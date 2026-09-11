@@ -20,6 +20,10 @@ fn weakmap_basics() {
         m[k2] = v2
         res << [m.size, m.length, m[k1], m[k2]]
         res << [m.key?(k1), m.include?(k1), m.member?(k1), m.key?(Object.new)]
+        # Storing under a key already present replaces its value rather
+        # than adding a pair.
+        m[k1] = "one again"
+        res << [m[k1], m.size]
         # Keys are compared by identity, never by ==/eql?: two equal
         # but distinct strings are two pairs.
         a, b = "same", "same"
@@ -140,6 +144,30 @@ fn weakmap_survives_collection_while_filling() {
         # are strings the map itself is not keeping alive — so the
         # surviving count is what CRuby's is.
         [kept.size, kept.count { |k| m.key?(k) }, m.size <= 500]
+        "##,
+    );
+}
+
+/// A weak map that is itself collected takes its pairs with it, and the
+/// collector forgets it — the registry of live maps must not outlive
+/// the cells it points at.
+#[test]
+fn weakmap_itself_can_be_collected() {
+    run_test_once(
+        r##"
+        kept = ObjectSpace::WeakMap.new
+        # Both halves held, so the pair's survival turns on the map
+        # rather than on when its key or value is collected.
+        anchor, value = Object.new, Object.new
+        kept[anchor] = value
+        # Hundreds of maps, each with pairs, all dropped.
+        def churn = 300.times { m = ObjectSpace::WeakMap.new; m[Object.new] = Object.new; nil }
+        churn
+        3.times { GC.start }
+        # The surviving map is untouched and still usable.
+        held_key, held_value = Object.new, Object.new
+        kept[held_key] = held_value
+        [kept[anchor].equal?(value), kept[held_key].equal?(held_value), kept.size, kept.class.name]
         "##,
     );
 }

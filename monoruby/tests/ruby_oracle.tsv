@@ -690,6 +690,7 @@
 32dc2c8ce60f570a592f91cf451f6746	99	class C\n          X = 99\n        end\n        \nC.class_eval("X")
 32f8a3ccb6465782cb76e9906981206c	777	class C\n          private\n          def secret; 777; end\n        end\n  
 330c0d9b8d65fb03e7e8ec58a22e4a99	[300.00029999999936, 1.0]	def call_block\n          yield\n        end\n        def w2\n          a =
+330d89ab10eb5cdfc35a731befd57646	[true, true, 2, "ObjectSpace::WeakMap"]	kept = ObjectSpace::WeakMap.new\n        # Both halves held, so the pair
 3311ccd4cb9cd7e5df6df18d7421cb90	nil	Exception.new.backtrace_locations
 33151d5f5ddac3016b0004900224a63a	["warning: the block passed to 'UBWarn#unused' may be ignored\\n", "", "", "", "", "warn-bg", "", "", "silent-strict"]	def cap\n          saved = $stderr\n          buf = +""\n          io = Ob
 3320b224735f4ca919ccdcccb8c4e5bd	-450.5353775047145	def calc(i)\n          f = i * 1.1; g = i * 0.9; h = i * 1.3; j = i * 0.
@@ -1076,6 +1077,7 @@
 4da42d690f4ae363c784e239d269ee3e	true	class C\n        end\n        C === C.new
 4db6500a830cf8b2a99b743dc6b5a94d	["global-variable", "a"]	"mis-matched" =~ /s(-)m(.)/; [defined?($+), $+]
 4dba8be946c8b4278a4217d10f01181d	[[:foo, :bar, :baz], 27, [0, 10], ["Prism::IntegerNode"]]	require "prism"\n        r = []\n        names = []\n        visitor = Cla
+4dc3c7705fa44c4b798281aa03f17a9d	[nil, 1, "ObjectSpace::WeakMap"]	kept = ObjectSpace::WeakMap.new\n        anchor = Object.new\n        kep
 4dc4d26946a9b8df8a8ab0edf49e3a8d	["constant", "constant", "constant", nil, nil, "constant"]	module CovM\n              CONST = 1\n              module Inner; DEE
 4dcb81b6869dcf441ba63e6d2c098346	[]	class S\n              def f; end\n            end\n            class 
 4de1d98dbd401bf2cfb9c8d1c02844ba	[3, 3, true]	module Later; end\n        class Integer\n          prepend Later\n       
@@ -2126,6 +2128,7 @@
 9dc570781d3034551d04772d71561543	:OVERRIDDEN	class Float; def ==(o); :OVERRIDDEN; end; end; 3.0 == 4.0
 9e349938558e7f648ad2c96a5fab61e1	:NOPE	class CGetMissingNameErr; end\n            begin\n              CGetM
 9e41b878cb2cd158c0051841526faf43	:OVERRIDDEN	class Integer; def !; :OVERRIDDEN; end; end; !(3)
+9e6a755dc91f96f0b6154f440b28b5cf	[0, nil, nil, [2, 2, "one", "two"], [true, true, true, false], ["one again", 2], ["A", "B", 4], "one again", [nil, 3, false], 3, ["A", "B", "two"], 12, "ObjectSpace::WeakMap"]	m = ObjectSpace::WeakMap.new\n        k1, k2, v1, v2 = Object.new, Objec
 9e717e788200f4da9792d264e6819b02	[[], [1], [1, 2], [nil], [[1, 2]], nil, 1, [1, 2], nil, [1, 2]]	p = []\n        o = Object.new\n        def o.each\n          yield\n      
 9e7acbe5ace0bfd7fa04b1637e3d8894	-1.0	class Float; alias __orig :-; def -(o); __orig(o); end; end; 3.0 - 4.0
 9e7f15a13c2d416dcb29990ed32c87a2	["[1, 2, 3, {a: 1, b: 2}]"]	class C\n          def initialize(*a)\n            $res << a.inspect\n    
