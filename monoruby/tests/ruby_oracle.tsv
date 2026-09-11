@@ -45,6 +45,7 @@
 029c362ef9c620f171fc24ead7134c52	[["alpha\\n", "beta\\n", "gamma\\n"], nil]	path = "/tmp/monoruby_io_gets_#{Process.pid}_#{rand(100000)}"\n     
 029c3ebe189781d0b649df411808dfee	[[[:a, 1], 0], [[:b, 2], 1]]	r = []; ({a: 1, b: 2}).each.with_index { |v, i| r << [v, i] }; r
 02a7d510f273964ead93e757431a554c	[3, 2, 1]	base = Class.new { def foo(ary); ary << 1; end }\n            child 
+02b9efd8d2189aaacb0d22c54cae5e92	[2000, 0, 999]	a = []\n            2000.times { |i| a << [(i * 7919) % 1000] }\n    
 02c396b429bf65fdf9a120d44cc103f5	true	src = Module.new { def t1; end }\n            m = Module.new do\n    
 02c6f5d297eadcc0a5026d7c20a2e18c	["a", {b: "b"}]	T = Struct.new(:a, :b)\n            \n\n            s = T.new("a", b: 
 02cb9b2aa7a2eb9ebb2690e1cb412b25	200000	io = IO.popen("sleep 0.05; cat > /dev/null", "w")\n            t = T
@@ -78,6 +79,7 @@
 04cd443314c532007660c17ebab3d577	[-4, 1, 2, 5, 7, 10, 12]	class Integer\n              alias old_spaceship <=>\n              d
 050ae4a7c397fbd32b0bd2bb968461d6	[[:a, 0], [:a, 1], [:a, 2], [:b, 0], [:b, 1], [:b, 2]]	log = []\n            t1 = Thread.new { 3.times { |i| log << [:a, i]
 051c6c1a4febd93666a6dd7af8fec314	true	Class.new.method_defined?(:hash)\n            
+052141b09b61ede8409ccea5658c7508	[true, true]	minor = GC.stat(:minor_gc_count)\n            GC.start(full_mark: fa
 0529c3b994259a346f88054c03aff90d	[[Encoding::InvalidByteSequenceError, "\\"\\\\xF1\\" followed by \\"a\\" on UTF-8"], [:invalid_byte_sequence, "UTF-8", "ISO-8859-1", "\\xF1", "a"], Encoding::InvalidByteSequenceError, Encoding::UndefinedConversionError, true, "", [Encoding::InvalidByteSequenceError, "incomplete \\"\\\\xA4\\" on EUC-JP"], [:incomplete_input, "EUC-JP", "UTF-8", "\\xA4", ""], [["US-ASCII", "UTF-8"]], [["US-ASCII", "UTF-8"], ["UTF-8", "Big5"]], "crlf_newline", "crlf_newline", nil]	(t=lambda{|&b| begin; b.call; rescue Exception => e; [e.class, e.message]; end};
 053e5f5a9063fc97e841e63ef86bad82	2.0505489999999997	def call_block\n          yield\n        end\n        def w10(s, flag)\n   
 055f890657b797cbf39b10ff47a602e6	"hello"	class Bar\n              class_variable_set(:@@val, "hello")\n       
@@ -445,6 +447,7 @@
 1f223478d7394c50d8d61e0f574f55b5	[[[50, 2, 3], {e: 70, f: 80, g: 90}]]	class C\n          def f(*rest, **kw)\n            $res << [rest, kw]\n   
 1f22844ce32fd2036c65263ce0b9319d	1	x = "Z"; (/#{x}/i =~ "qzq")
 1f3121c4382667758c3988faab82811f	"US-ASCII"	"abcc".dup.force_encoding("US-ASCII").tr_s("c", "X").encoding.to_s
+1fa3e3a0998c480c3b2134908102a18f	999000	a = Array.new(2000) { |i| [i % 1000] }\n            1000.times { [1]
 1fc8a8365c050aced75377b0f9dca4f7	true	$LOAD_PATH.class == Array\n            
 1fd67713bd348911ab844e4987b761b1	[10000, 42]	a = [100 * 100]\n        class Integer\n          def *(other)\n          
 1fe144dc2e4422f0e8bc7cfdb2825361	["\\n", nil, nil, nil, 0]	[$/, $\\, $,, $;, $.]
@@ -1097,6 +1100,7 @@
 4e9bfbcee73c693e57ccc4d38d0dfa34	["x", "y"]	base = "/tmp/monoruby_dir_eachchild_#{Process.pid}_#{rand(100000)}"
 4ebe3f743c44083475b01a20ac7c38bc	false	binding.local_variable_defined?(:_10)
 4edbac695b5ed45b538971de1ca0ed2c	[true, true, true, false]	f = File.open("Cargo.toml")\n            begin\n              [f.binm
+4edf4d45c190ed9014d06dda3424cfb3	[200, true]	parents = Array.new(200) { [] }\n            5.times { GC.start }\n  
 4ef654f58c91b7b93cc8ea7d3a1d2da8	[false, false, false, true, false]	class MEqStrTrue; def to_str; "x"; end; def ==(o); true; end; end\n 
 4f1c2d7762a92ed3167ebc5a07dca6fc	520.0	def w3(f)\n          30.times do |i|\n            return f * i if i > 25\n
 4f901b278fdd410f8765051d2109cb68	[[:a, 100], [:b, 100], [:c, 100], [:d, 100], [:e, 100], [:f, 100]]	class Oa; def tag = :a; end\n            class Ob; def tag = :b; end
@@ -2610,6 +2614,7 @@ bf421e316fb7533cb8d9a80876438745	[[Infinity], {x: -Infinity}]	[[Float::INFINITY]
 bf43e4b5ea5dc43387ed9bdbb1d33e91	["A", 49, "\\n", 65, nil, nil, "end of file reached", [65, 49, 10, 65, 50, 10, 66, 49, 10, 66, 50, 10], ["A", "1", "\\n", "A", "2", "\\n"], [65, 49, 10, 65, 50, 10], [65, 49, 10], "Enumerator"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
 bf642b858ac68f1754855ea56af9f010	["inherited"]	$res = []\n        class A\n          def self.inherited(subclass)\n      
 bf69a12e40aa6429315d6d5c29ddfe91	[0, 5, 5, 0]	f = File.open("Cargo.toml")\n            begin\n              a = f.p
+bf79a4cee2d36dbbb5a38944e22e53c1	[true, true]	big = Array.new(2000) { |i| [i] }\n            5.times { GC.start }\n
 bf79cea739fcb7a0ec6546a5b4e6528a	[Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, "incompatible character encodings: UTF-16BE and US-ASCII"]	(f = ->(x) { begin; x.call; rescue => e; e.class; end }; [f.(-> { File.basename(
 bf960838169f3fd4f0850862d278a5e7	[1495, 13, 30, 7]	class Wa; def f(a, b) = a + b; end\n            class Wb; def f(a, b
 bf9d53c3fd6b4e9d4cb7eef1119ed43f	[false, nil, true, 15, nil, false]	pid = fork { sleep 5 }\n            Process.kill("TERM", pid)\n      
@@ -2898,6 +2903,7 @@ d38a6188952e22ee5c8f4c60ce1a5ac1	true	require "json"\n            original = {"k
 d38e6fd95270224ae4681f1f484197db	[:none, :none, :low, :mid, :low, :mid, :low, :mid, :high, :high, :high, :high, :none, :none]	def bucket(n)\n          case n\n          when 10, 12, 14 then :low\n    
 d3acb7d398b9ef1fed07541b51646641	[1, :a]	module M2; C = nil; end\n        x = 0\n        (x += 1; M2)::C ||= :a\n  
 d3b6f86401efda2e8d91b23f0ee0fc74	false	m = Module.new do\n              eval "module_function"\n            
+d40dff035e2e78ff7e2a3d2f72e21eeb	[true, true]	GC.config(rgengc_allow_full_mark: false)\n            begin\n        
 d41d12b7a01731a69b781898eb370912	[3, [:gt, :lt, :gt, :lt]]	class C\n              attr_reader :calls\n              def initiali
 d4217108da72ed932f312a232db996af	["method", nil, "method", "method", nil, nil]	module DefM1; end\n            class DefR\n              def respond_
 d4340baf53f6574d84b54cdb783df9b8	2	$x = 0\n            begin\n              $x += 1\n              raise 
