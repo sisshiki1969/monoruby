@@ -405,6 +405,15 @@ External crates (fetched from git):
   `sqlite3_stmt*`. `Statement#step` steps and reads the whole row in one
   builtin call. Opening and closing a connection park the green thread on
   the native pool (`NativeOp::Sqlite3`); everything else runs inline.
+  `create_function` is a real user-defined function: SQLite calls back
+  into Ruby from inside `sqlite3_step`, as nokogiri's XPath handlers do.
+  A raised exception is stashed rather than unwound through the C frames
+  and re-raised once the step returns. The callback finds the running
+  `Executor` through a thread-local map keyed by **connection**, saved
+  and restored rather than pushed and popped: green-thread switches are
+  not LIFO, so a callback that parks would otherwise let another thread
+  pop its entry. `create_aggregate` and a `collation` with a real
+  comparator are still unsupported.
 
 ---
 

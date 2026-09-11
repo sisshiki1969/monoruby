@@ -631,6 +631,7 @@
 2c4fa500f8bcf950b28e5b25417f18be	"US-ASCII"	"z".encode("US-ASCII").next.encoding.to_s
 2c60a3b58b3cec1741ef306698cffc54	"missing: hello"	class C\n          def method_missing(name, *args)\n            "missing:
 2cbffbc78f3202b93258530c17eb3aec	[1200, "abcdefghij", true]	def app_piece2(s, piece, n)\n          i = 0\n          while i < n\n     
+2ce4c46a627e56a288d69bedcb54e67d	[["ArgumentError", "boom at 2"], ["ArgumentError", "boom at 2"], [[1], [2], [3]], [[11], [12], [13]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 2cf607598595d4b3f44991e7c7f960a0	[[:typeerr], [:typeerr], [:typeerr], [:ok]]	def t(x)\n              [x].map do |v|\n                begin\n       
 2d0977c7c034e1bbf8950d44e00c27b0	[1, 20, nil, 1, 2, nil, 1, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 2d0f94c4757acfe87ab61946bc9adbbb	3	st = Process.detach(spawn("sh", "-c", "exit 3")).value; st.exitstatus
@@ -1207,6 +1208,7 @@
 581a9eeda65b4118ca39d22e6e34f801	[:caught, "boom"]	class C\n              def initialize; @h = {}; end\n              de
 582de92dfc668c66f3fca99c56ea0221	9	M = Data.define(:amount, :unit)\nM.new("amount" => 1, amount: 9, unit: "m").amoun
 58330bef80223af992dc7623e3ec3084	[312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3]]	def g(x, y, z)\n          x, y, z = z, x, y\n          x * 100 + y * 10 +
+5848d3c79a069c869e17a609e9eccaa1	[[[3]], [[3]], ["RuntimeError", "inner"], [[3]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 58536fdabdc310d1d4cdf2be1346caa2	[:broke, :b, ["0", "1", "2"]]	r1 = Array.new(4) { |i| break :broke if i == 2; i }\n        a = [9]\n   
 585f197f00dd5b3733ac8eba28e6e47d	[199, "v199"]	class P\n          attr_accessor :x, :y\n        end\n        p = P.new\n  
 58661de46a8dc941342a4319c35b9c90	1	obj = Object.new\n            def obj.infinite?; nil; end\n          
@@ -1645,6 +1647,7 @@
 78d0e78fc74998266ad2fd179077428d	[[4, 5, "s4"]]	class P\n          attr_accessor :x, :y, :z\n        end\n        def fill
 78d7ea39e2bafbf7649c9fc6b54bb309	[90300, 50, 50, [6, 6], [8, 8]]	class Base\n          def helper(x); x.succ; end\n          def m(v); [he
 7933b76f3fbc5da321278e1298f09b68	"1/2"	0.5.to_r.to_s
+793df4a57062ccad86195db16e27aa5f	[[["[[\\"Integer\\", 1], [\\"Float\\", 2.5], [\\"NilClass\\", nil], [\\"String\\", \\"\\\\x00\\\\xFF\\"], [\\"String\\", \\"txt\\"]]"]], [["int", [["integer", 7]]], ["big", [["real", 1.1805916207174113e+21]]], ["float", [["real", 1.5]]], ["nil", [["null", nil]]], ["text", [["text", "plain"]]], ["binary", [["blob", "bin"]]], ["blob", [["blob", "\\x00\\xFF"]]], ["bool", "RuntimeError", "can't return TrueClass"], ["obj", "RuntimeError", "can't return Object"]], [["got 1"]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 79444ab999b1bb6218ce359077c8b24d	true	$LOADED_FEATURES.class == Array\n            
 79670f7488f2c3d15c92d158fb9043d3	"ab20000c"	%Q(ab#{100*200}c#$a)
 797f4bcc2f336f9d89d45a2f223ea819	["Bar", "Foo"]	$a = []\n            class Foo\n                CONST = 'Foo'\n       
