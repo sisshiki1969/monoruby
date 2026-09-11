@@ -1188,6 +1188,27 @@ impl Globals {
         // re-materializes the exception and derives its implicit cause
         // from it, so the handler-time materialization must not replace it.
         let unwind_errinfo = executor.errinfo();
+        // The main script's frame is gone by now, so the only thing that
+        // still refers to its result — and, once the block below replaces
+        // `$!`, to the unwind-time errinfo — is a Rust local, which the
+        // collector does not scan. Everything from here down to the
+        // exception materialization runs arbitrary Ruby: `at_exit` blocks,
+        // `ObjectSpace` finalizers, and the ensure clauses of the threads
+        // `terminate_all` kills. Every allocation in there is a safepoint,
+        // so both have to be rooted on the temp stack for that stretch;
+        // otherwise a collection sweeps them and the caller is handed a
+        // recycled cell.
+        //
+        // `Tempfile` is the everyday way in: it registers a finalizer, so
+        // any script that opens one runs Ruby after its own result has
+        // been computed. Found by gc-stress, which collects at every
+        // safepoint and so hits this on the first allocation a finalizer
+        // makes.
+        let root_len = executor.temp_len();
+        if let Ok(v) = &res {
+            executor.temp_push(*v);
+        }
+        executor.temp_push(unwind_errinfo);
         if let Err(err) = &res
             && !matches!(err.kind(), MonorubyErrKind::SystemExit(_))
         {
@@ -1250,6 +1271,9 @@ impl Globals {
             }
             other => other,
         };
+        // Nothing Ruby-level runs past this point, so the roots taken
+        // before the exit handlers can go.
+        executor.temp_clear(root_len);
         // An exit status chosen by the handlers themselves (a
         // `SystemExit` raised in one, or status 1 after an uncaught
         // handler exception) overrides the script's own. The script's
