@@ -11,7 +11,7 @@ YJIT との比較で「差が大きい」3 本（monoruby / YJIT 比 1.6〜1.8 �
 
 | ベンチ | monoruby | YJIT | 比 | 主因（1 反復の割合は callgrind の命令数） |
 |---|---:|---:|---:|---|
-| activerecord | 168〜178 ms | 99〜114 ms | 1.6〜1.7 | **Fiddle 経由の sqlite3 が 35 %**（`fiddle_invoke` inclusive。実 DB 処理 `sqlite3VdbeExec` は 2 %）。次点: String キー Hash 10 %、`defined?(@ivar)` の名前表引き 3 %、megamorphic な `is_a?` サイトの deopt 2.1 万回/反復、`Class#===` 連鎖 |
+| activerecord | 168〜178 ms | 99〜114 ms | 1.6〜1.7 | **Fiddle 経由の sqlite3 が 35 %**（§3.1 で解消済み）（`fiddle_invoke` inclusive。実 DB 処理 `sqlite3VdbeExec` は 2 %）。次点: String キー Hash 10 %、`defined?(@ivar)` の名前表引き 3 %、megamorphic な `is_a?` サイトの deopt 2.1 万回/反復、`Class#===` 連鎖 |
 | liquid-il | 280〜287 ms | 156〜159 ms | 1.8 | **`Klass === value`（`case … when Klass` と明示的な `String === v`）の `Module#===` が 16.6 %**（123 万回/反復、1 回 ≈ 310 命令。JIT 済みでも毎回グローバルメソッドキャッシュ + builtin 呼び出し）、**汎用ディスパッチ（`find_method`）11.6 %**（`nil?` の PIC 超過 34 万 deopt/反復、`String#<<` 汎用経路、`to_liquid` / `is_a?`）、`Float#to_s` 7.2 %（31 万回/反復、1 回 ≈ 530 命令） |
 | rack | 53〜56 ms | 36 ms | 1.5 | 1 リクエストの**命令数は YJIT 比 +20〜30 %（47.7k vs 36.6k）なのに時間は 1.8 倍** — 命令あたりの実行効率の差が半分以上。層別では Static（`clean_path_info` + `unescape_path`）+2.5 µs vs +1.2 µs、ETag +0.6 vs 0、ContentLength +0.66 vs +0.26、Deflater +0.37 vs 0。個々の操作のマイクロベンチは monoruby が同等〜速いので、合成したときに遅い。プロファイル上は `split` 10 %、正規表現 10 %、Hash 10 %、malloc / free 8 %、GC 5 %（`--no-gc` で 7 %）、`$~` 保存 3.7 %、`Hash#dup` 3.3 %、引数処理 3〜4 %、ブロックからの非ローカル `return`（URLMap）3 % |
 
@@ -85,10 +85,36 @@ railsbench / rubocop / ruby-lsp / shipit は N/A。
 1 呼び出しごとに引数の `Value` → C 値変換、libffi の型分類、戻り値の `Value` 化、
 SmallVec の組み立て、mutex が走る。CRuby の sqlite3 は C 拡張で直接呼ぶ。
 
-**対策**: sqlite3 を Rust 側の builtin にする。libxml2 / libz と同じくソースを bundle
-して静的リンクし（`libsqlite3-src` crate 相当）、`Statement#step` + 全列読み出しを
-1 回の builtin にまとめる。中程度の作業量で、activerecord の 3 割強、sequel でも
-（先行調査で FFI 30 回/クエリ）同程度が消える。
+**対処（済、コミット `50b9442`）**: sqlite3 を Rust 側の builtin にした。
+SQLite の amalgamation（3.48.0）を `libsqlite3-src` crate に vendor して `cc` で
+静的リンクし（libxml2 / libz と同じ方式。ホストの libsqlite3 に依存しなくなった）、
+gem の Ruby 半分（2.7.3）も nokogiri / psych と同様 `gem/sqlite3/` に vendor して
+ホストの gem に依存しないようにしたうえで、
+`src/builtins/sqlite3.rs` が C 拡張の API をそのまま実装する。`SQLite3::Database` /
+`SQLite3::Statement` は `ObjTy::NATIVE` のクラスで、`sqlite3*` / `sqlite3_stmt*` を
+payload として所有し、GC 時に閉じる（接続は `sqlite3_close_v2` なので statement が
+残っていても順序に関係なく安全）。**`Statement#step` が step と全列読み出しを 1 回の
+builtin で行う**ので、1 行あたり `1 + 2n` 回あった C 境界の往復が 1 回になる。
+Fiddle と libffi は経路から完全に消えた。
+
+ベンチ（3 ラウンド交互、中央値）:
+
+| | 前（Fiddle） | 後（native） |
+|---|---:|---:|
+| activerecord | 279 / 285 / 263 ms | 228 / 219 / 201 ms（**−22 %**） |
+| sequel | 104 / 103 / 103 ms | 88 / 94 / 91 ms（**−12 %**） |
+
+これで activerecord / YJIT 比は 1.7 倍から 1.3 倍に、残る主因は String キー Hash と
+`defined?(@ivar)` に移る（§3.2）。
+
+C 拡張との差分は `tests/sqlite3.rs` で CRuby と突き合わせて潰した（BLOB 列は
+`SQLite3::Blob` ではなく BINARY の String、`execute_batch2` は全列を text で返す、
+閉じた statement / connection は `SQLite3::Exception`、`step` は DONE 後に nil を
+返して再実行しない、bind は nil / Integer / Float / String 以外を
+`can't prepare <Class>` で拒否し、i64 に収まらない Integer は double で束縛する）。
+接続の open / close はグリーンスレッドを止めないよう native pool のワーカーで走る
+（Fiddle 版の `blocking: true` と同じ）。`create_function` / `create_aggregate` は
+Fiddle 版と同じく未対応のまま。
 
 ### 3.2 その他（合計で 2 割程度）
 
@@ -301,7 +327,7 @@ URLMap 風の `each { return }` 536 / 516、`Rack::Request.new(env).path_info` 1
 | 2 | `defined?(@ivar)` を IvarId インラインキャッシュに | activerecord −3 %、Rails 全般 | 低 | 50 万回/反復 × 100 命令 |
 | 3 | `Float#to_s` を `format!` を通さずに書く | liquid-il −4 %、Float を出力する全般 | 低 | 530 → 250 命令 |
 | 4 | `respond_to?` の (class, name, version) キャッシュ、`Encoding.find` の表引き | activerecord、mail、rack | 低 | |
-| 5 | sqlite3 のネイティブ builtin 化（bundle + 静的リンク、`step` + 全列読み出しを 1 呼び出し） | activerecord −30 %、sequel | 中 | Fiddle 35 % → 数 % |
+| 5 | sqlite3 のネイティブ builtin 化（**済**、§3.1） | activerecord −22 %、sequel −12 % | 中 | Fiddle 35 % → 0 |
 | 6 | PMC 超過サイトの残余腕を汎用呼び出しに（deopt しない） | liquid-il −10 % 前後、activerecord の `cast`、liquid-render | 中 | 34 万 deopt/反復 → 0 |
 | 7 | String キーの小 Hash のインライン表現（ar_table） | rack、activerecord、erubi | 中 | malloc 2 回/Hash → 0 |
 | 8 | `$~` 保存の省略、`[]` / `[]=` の builtin 直呼び、非ローカル return の直接アンワインド | rack | 低〜中 | 各 3〜6 % |

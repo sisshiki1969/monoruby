@@ -45,6 +45,7 @@ mod range;
 mod regexp;
 mod set;
 mod socket;
+pub(crate) mod sqlite3;
 pub(crate) mod spawn;
 pub(crate) mod string;
 pub(crate) mod struct_class;
@@ -155,6 +156,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     nokogiri::init(globals);
     yaml::init(globals);
     zlib::init(globals);
+    sqlite3::init(globals);
     prism::init(globals);
     main_object::init(globals);
     globals.object_class().include_module(kernel).unwrap();
