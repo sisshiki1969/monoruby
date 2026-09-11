@@ -55,35 +55,44 @@ fn weakmap_drops_collected_pairs() {
         m = ObjectSpace::WeakMap.new
         kept_k, kept_v = Object.new, Object.new
         m[kept_k] = kept_v
+        # `hold` keeps every half alive while the pairs are counted, so
+        # `before` says how many pairs went in rather than how soon the
+        # collector got to them — under gc-stress it runs at every
+        # allocation, and the garbage would already be gone by here.
+        hold = []
         # Both halves garbage.
-        def both(m) = 200.times { m[Object.new] = Object.new }
+        def both(m, hold) = 200.times { k, v = Object.new, Object.new; hold << k << v; m[k] = v }
         # Only the value garbage; the key is held.
         keys = []
-        def values_only(m, keys) = 200.times { k = Object.new; keys << k; m[k] = Object.new }
+        def values_only(m, keys, hold) = 200.times { k = Object.new; keys << k; v = Object.new; hold << v; m[k] = v }
         # Only the key garbage; the value is held.
         vals = []
-        def keys_only(m, vals) = 200.times { v = Object.new; vals << v; m[Object.new] = v }
-        both(m)
-        values_only(m, keys)
-        keys_only(m, vals)
+        def keys_only(m, vals, hold) = 200.times { v = Object.new; vals << v; k = Object.new; hold << k; m[k] = v }
+        both(m, hold)
+        values_only(m, keys, hold)
+        keys_only(m, vals, hold)
         before = m.size
+        hold.clear
         3.times { GC.start }
         [before, m.size, m[kept_k].equal?(kept_v), keys.size, vals.size]
         "##,
     );
 }
 
-/// An immediate is accepted, and reads back, but has no cell for the
-/// collector to watch: a pair keyed by one is dropped on the next pass,
-/// while an immediate *value* keeps its pair, having nothing to wait
-/// for.
+/// An immediate is accepted and reads back, but has no cell for the
+/// collector to watch: it is simply always live, so a pair with an
+/// immediate half lives exactly as long as its *other* half does. The
+/// values here are therefore held, which is what makes the pairs
+/// outlive a collection — leaving them to the map alone would only be
+/// testing how soon the collector runs.
 #[test]
 fn weakmap_immediate_keys_and_values() {
     run_test_once(
         r##"
         m = ObjectSpace::WeakMap.new
         imm = [1, :sym, nil, true, false, 2.5]
-        imm.each { |v| m[v] = "keyed by #{v.inspect}" }
+        strs = imm.map { |v| "keyed by #{v.inspect}" }
+        imm.each_with_index { |v, i| m[v] = strs[i] }
         held = Object.new
         m[held] = 42
         res = [imm.map { |v| m[v] }, m[held], m.size]
