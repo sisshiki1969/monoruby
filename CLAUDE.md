@@ -396,7 +396,9 @@ External crates (fetched from git):
 - `libsqlite3-src` (workspace crate) — the SQLite amalgamation (3.48.0,
   public domain) under `libsqlite3-src/vendor/`, built with `cc` and linked
   statically, with a hand-written FFI. Behind the sqlite3 gem: the gem's
-  Ruby half is the host's, and `gem/sqlite3/sqlite3_native.rb` stands in for
+  Ruby half (2.7.3) is vendored under `gem/sqlite3/` (+ `gem/sqlite3.rb`)
+  as nokogiri's and psych's are, so no host sqlite3 gem is needed, and
+  `gem/sqlite3/sqlite3_native.rb` stands in for
   sqlite3_native.so, calling `String.__sqlite3_init`
   (`src/builtins/sqlite3.rs`) to build `SQLite3::Database` /
   `SQLite3::Statement` as `ObjTy::NATIVE` classes owning the `sqlite3*` /

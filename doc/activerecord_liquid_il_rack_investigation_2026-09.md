@@ -88,6 +88,8 @@ SmallVec の組み立て、mutex が走る。CRuby の sqlite3 は C 拡張で�
 **対処（済、コミット `50b9442`）**: sqlite3 を Rust 側の builtin にした。
 SQLite の amalgamation（3.48.0）を `libsqlite3-src` crate に vendor して `cc` で
 静的リンクし（libxml2 / libz と同じ方式。ホストの libsqlite3 に依存しなくなった）、
+gem の Ruby 半分（2.7.3）も nokogiri / psych と同様 `gem/sqlite3/` に vendor して
+ホストの gem に依存しないようにしたうえで、
 `src/builtins/sqlite3.rs` が C 拡張の API をそのまま実装する。`SQLite3::Database` /
 `SQLite3::Statement` は `ObjTy::NATIVE` のクラスで、`sqlite3*` / `sqlite3_stmt*` を
 payload として所有し、GC 時に閉じる（接続は `sqlite3_close_v2` なので statement が
