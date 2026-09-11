@@ -2930,6 +2930,7 @@ d5eb36d331547e68e65b5e236315bb2c	false	File.exist?("../LICENCE-MIT")
 d5ec889974c38262d62062c5b088a2ff	"ASCII-8BIT"	"abc".b.reverse.encoding.to_s
 d5f2b019270b0aa4e77071d07cc78f9c	"secret"	class Foo\n          private\n          def secret; "secret"; end\n       
 d6091e4e156deac18f133b8aca6d3e2a	[[103, 111, 111, 100, 32, 100, 97, 121, 32, 128], "UTF-8", false, [103, 111, 111, 100, 32, 100, 97, 121, 32, 128], false, [103, 111, 111, 100, 32, 100, 97, 121, 32, 128], false]	a = sprintf("good day %{invalid}", invalid: "\\x80")\n            b =
+d645a11530555bae2d4983500a78983b	498500.0	def f(n)\n          x = 0.0\n          i = 0\n          while i < n\n      
 d66a6a23a3ed91b71d300b263592de36	[[1, 3], [2, 4]]	o = Object.new\n               def o.to_int; 3; end\n               r = []; [1, 2]
 d66e832dd58d8b0895c00647a07051e9	"ab"	r, w = IO.pipe\n            w.write("ab")\n            out = r.sysrea
 d68149041b7bd9d31e303f70e9b68d9e	[true, false, true, false, "closed stream"]	require 'fcntl'\n            require 'io/nonblock'\n            res =
