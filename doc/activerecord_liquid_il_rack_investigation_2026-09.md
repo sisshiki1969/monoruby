@@ -85,7 +85,7 @@ railsbench / rubocop / ruby-lsp / shipit は N/A。
 1 呼び出しごとに引数の `Value` → C 値変換、libffi の型分類、戻り値の `Value` 化、
 SmallVec の組み立て、mutex が走る。CRuby の sqlite3 は C 拡張で直接呼ぶ。
 
-**対処（済、コミット `<SQLFIX>`）**: sqlite3 を Rust 側の builtin にした。
+**対処（済、コミット `50b9442`）**: sqlite3 を Rust 側の builtin にした。
 SQLite の amalgamation（3.48.0）を `libsqlite3-src` crate に vendor して `cc` で
 静的リンクし（libxml2 / libz と同じ方式。ホストの libsqlite3 に依存しなくなった）、
 `src/builtins/sqlite3.rs` が C 拡張の API をそのまま実装する。`SQLite3::Database` /
