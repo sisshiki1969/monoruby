@@ -690,6 +690,7 @@
 32dc2c8ce60f570a592f91cf451f6746	99	class C\n          X = 99\n        end\n        \nC.class_eval("X")
 32f8a3ccb6465782cb76e9906981206c	777	class C\n          private\n          def secret; 777; end\n        end\n  
 330c0d9b8d65fb03e7e8ec58a22e4a99	[300.00029999999936, 1.0]	def call_block\n          yield\n        end\n        def w2\n          a =
+330d89ab10eb5cdfc35a731befd57646	[true, true, 2, "ObjectSpace::WeakMap"]	kept = ObjectSpace::WeakMap.new\n        # Both halves held, so the pair
 3311ccd4cb9cd7e5df6df18d7421cb90	nil	Exception.new.backtrace_locations
 33151d5f5ddac3016b0004900224a63a	["warning: the block passed to 'UBWarn#unused' may be ignored\\n", "", "", "", "", "warn-bg", "", "", "silent-strict"]	def cap\n          saved = $stderr\n          buf = +""\n          io = Ob
 3320b224735f4ca919ccdcccb8c4e5bd	-450.5353775047145	def calc(i)\n          f = i * 1.1; g = i * 0.9; h = i * 1.3; j = i * 0.
@@ -838,6 +839,7 @@
 3e2485275f7b329ad73878b64b71abed	false	define_method(:boom2) { :bam2 }\n            Object.private_method_d
 3e3b547575a051c5ad3005c1294bcc60	["heLlo", "heLlo", "heLlo", "heLLo", "heLLo", "heLLo", "heLlo", "heLlo", "heLlo", "heLLo", "heLLo", "heLLo", "heLlo", "heLlo", "heLlo", "heLLo", "heLLo", "heLLo"]	class P\n                  def to_str; "l"; end\n                
 3e49b2cae2caddf6f33f9fcc5d5b842f	[true, false, [[1, "x"], [2, "y"]], [["1", "x"], ["2", "y"]], [["1.5", "", nil]], nil]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
+3e5c1ae7df78ce81cf15697dd7cd9d56	[0, nil, nil, [2, 2, "one", "two"], [true, true, true, false], ["A", "B", 4], "one", [nil, 3, false], 3, ["A", "B", "two"], 12, "ObjectSpace::WeakMap"]	m = ObjectSpace::WeakMap.new\n        k1, k2, v1, v2 = Object.new, Objec
 3e71ea53ced04beae6b8eda67e34f8fe	-1	class C; def to_str; "def"; end; end; o = C.new\n"abc" <=> o
 3e888919ce8daf33b5729ceef0ab65a8	[:load_error, "/definitely/not/a/file"]	class AutoRetry\n          autoload :Foo, "/definitely/not/a/file"\n     
 3e888c174905aa623fffe81f01020540	[]	class A3; def a(*r); r; end; end\n            class B3 < A3; def a(*
@@ -926,6 +928,7 @@
 44a71a0aaf4c652c114d8a3ee53bb9f0	["other", "other", "other", "z0", "z1", "z2", "z3", "z4", "z5", "z6", "z7", "z8", "z9", "other", "other", "other", "other"]	def classify(n)\n          case n\n          when 0 then "z0"\n          w
 44bed6dfa52341a2aab87a99ffd81034	[["UTF-8", "ISO-8859-1"], "wrong number of arguments (given 3, expected 1..2)", [nil, nil], nil, nil, nil]	path = "/tmp/monoruby_test_ioenc_#{Process.pid}_#{rand(100000)}"\n  
 44e35e721c76737a34dd6351e19f068d	[1024, 243, 100000, 1, 16, -32, 1, 0, 4611686018427387904, 1267650600228229401496703205376, (1/8)]	def pow_a; 2 ** 10; end\n            def pow_b; 3 ** 5; end\n        
+44e57f818794e73382077def2e12f5bb	[[true, "A STRING", 8, false], 0, ["WeakRef::RefError", "Invalid Reference - probably recycled"], [true, "A STRING", "a string"]]	require "weakref"\n        res = []\n        strong = "a string"\n        
 44e68a42fc21864d3655bc7637e9b548	[1, 2]	c = Class.new { def foo(*a); a; end; ruby2_keywords "foo" }\n       
 44ef14cc0315a5970badc2886bcac2ee	"mm:bar:[1, 2]"	class Foo\n              private\n              def method_missing(na
 44f1637501a6c7cf0fd3b221e1aa900d	6.466855489220472e+219	def fact(x)\n                if x <= 1.0 then\n                    1.
@@ -1074,6 +1077,7 @@
 4da42d690f4ae363c784e239d269ee3e	true	class C\n        end\n        C === C.new
 4db6500a830cf8b2a99b743dc6b5a94d	["global-variable", "a"]	"mis-matched" =~ /s(-)m(.)/; [defined?($+), $+]
 4dba8be946c8b4278a4217d10f01181d	[[:foo, :bar, :baz], 27, [0, 10], ["Prism::IntegerNode"]]	require "prism"\n        r = []\n        names = []\n        visitor = Cla
+4dc3c7705fa44c4b798281aa03f17a9d	[nil, 1, "ObjectSpace::WeakMap"]	kept = ObjectSpace::WeakMap.new\n        anchor = Object.new\n        kep
 4dc4d26946a9b8df8a8ab0edf49e3a8d	["constant", "constant", "constant", nil, nil, "constant"]	module CovM\n              CONST = 1\n              module Inner; DEE
 4dcb81b6869dcf441ba63e6d2c098346	[]	class S\n              def f; end\n            end\n            class 
 4de1d98dbd401bf2cfb9c8d1c02844ba	[3, 3, true]	module Later; end\n        class Integer\n          prepend Later\n       
@@ -1119,6 +1123,7 @@
 5174f3c6fa3195d1fbd047639e4a904d	[[true, {data: 42}], ["async", "ctx"], [[[true, ["both"]], [false, []]], true, "both", false]]	r = []\n            de = Class.new(StandardError) { attr_reader :dat
 51be01e0d292ac0d9c77567390f1d11f	["Bbar", "B[239, 191, 189]", "Bdbar", "Btbar", Encoding::UndefinedConversionError, [ArgumentError, "too big fallback string"], TypeError, Encoding::UndefinedConversionError]	(r=[]; r << "B�".encode(Encoding::US_ASCII, fallback: { "�" => "bar" }); r << "B
 51bf1bd2c44ca7c76c217e78a6007ece	[true, 3]	a = ARGF.class.new('/dev/zero')\n            [a.read(100) == "\\0" * 
+51d87dc27970f55ee0f0c347def4e386	[5, 0, true]	m = ObjectSpace::WeakMap.new\n        kept = []\n        500.times do |i|
 521f16239cbd7625cbdbd1830aff0d66	[4, "FILE:20: warning: given block not used\\n", 4, "FILE:21: warning: given block not used\\n", "FILE:29: warning: plain\\n", "warning: deep\\n"]	require "stringio"\n        def capture\n          old = $stderr\n        
 522c4f8c40e029c9a06a958415c5bba8	["append_features:C"]	$res = []\n        module M\n          def self.append_features(base)\n   
 525e307d40d5e0bc7aa36e1ace713254	[:small, 7, :big]	class BmR\n          define_method(:pick) { |n| return :small if n < 10;
@@ -1131,6 +1136,7 @@
 52e3c4053b6635a9049d6b966fd6af93	["bogus", "bogus", false, false, "wxq.rb", "wxq.rb", "vxq.rb", true]	cls = Class.new do\n              def go\n                autoload :Z
 52f6ec815a152a406d7a093bdbb11700	["", "warning: already initialized constant A::X\\n/tmp/.tmpwHs3y6:7: warning: previous definition of X was here\\n", "warning: already initialized constant A::X\\n", "", 5]	require "stringio"\n        def cap; $stderr = StringIO.new; yield; s = 
 530edafd9da1b1757a0295e4d18879dd	["RSub", "x"]	class RSub < Regexp; end\n            r = Marshal.load(Marshal.dump(
+531ac7c9f10a05bfb700f26b98f47d99	[["keyed by 1", "keyed by :sym", "keyed by nil", "keyed by true", "keyed by false", "keyed by 2.5"], 42, 7, ["keyed by 1", "keyed by :sym", "keyed by nil", "keyed by true", "keyed by false", "keyed by 2.5"], [42, true, 7]]	m = ObjectSpace::WeakMap.new\n        imm = [1, :sym, nil, true, false, 
 531cf8f2ea5a7d4a2006397c77062c09	[[[1, :a], [2, :b], [3, :c]], [[1, 2], [1, 9], [2, 1]], [["a", 2], ["b", 1]]]	h = { 3 => :c, 1 => :a, 2 => :b }\n        [h.sort, [[2, 1], [1, 9], [1,
 5326cacf44528935163ede17463c01c9	1	lambda { |a,| a }.arity\n            
 532f5d7ba05f7843743de0b52969bba8	["PSubB", :x, 2, 9]	class PSubB < Proc; def initialize(a, b); @a = a; @b = b; end; attr_reader :a, :
@@ -2122,6 +2128,7 @@
 9dc570781d3034551d04772d71561543	:OVERRIDDEN	class Float; def ==(o); :OVERRIDDEN; end; end; 3.0 == 4.0
 9e349938558e7f648ad2c96a5fab61e1	:NOPE	class CGetMissingNameErr; end\n            begin\n              CGetM
 9e41b878cb2cd158c0051841526faf43	:OVERRIDDEN	class Integer; def !; :OVERRIDDEN; end; end; !(3)
+9e6a755dc91f96f0b6154f440b28b5cf	[0, nil, nil, [2, 2, "one", "two"], [true, true, true, false], ["one again", 2], ["A", "B", 4], "one again", [nil, 3, false], 3, ["A", "B", "two"], 12, "ObjectSpace::WeakMap"]	m = ObjectSpace::WeakMap.new\n        k1, k2, v1, v2 = Object.new, Objec
 9e717e788200f4da9792d264e6819b02	[[], [1], [1, 2], [nil], [[1, 2]], nil, 1, [1, 2], nil, [1, 2]]	p = []\n        o = Object.new\n        def o.each\n          yield\n      
 9e7acbe5ace0bfd7fa04b1637e3d8894	-1.0	class Float; alias __orig :-; def -(o); __orig(o); end; end; 3.0 - 4.0
 9e7f15a13c2d416dcb29990ed32c87a2	["[1, 2, 3, {a: 1, b: 2}]"]	class C\n          def initialize(*a)\n            $res << a.inspect\n    
@@ -3062,6 +3069,7 @@ e0982ecc832e3a0a37c3aabbe59b1ec2	[{"name" => 100, "version" => 2, sym: 3, 4 => 5
 e0a574583b5fc83f8c4cabc65c564a05	259.5522608117453	def call_block\n          yield\n        end\n        def p1\n          k =
 e0aaed5b5073da72fc373f05fb574de1	true	S = Struct.new(:a, :b)\n            \n\n            S.new(1, 2).hash !
 e0ae1b5209fe6fb6e963db3c6c00894e	"UTF-8"	e = "".force_encoding("EUC-JP"); "#{""}#{e}#{"x"}".encoding.to_s
+e0aec6d887a4f7f98579173ba676c5f5	[601, 1, true, 200, 200]	m = ObjectSpace::WeakMap.new\n        kept_k, kept_v = Object.new, Objec
 e0c2bb61aa5c5d76757d6084b37a58e5	[:a, :b, nil]	class K\n              def initialize(n); @n = n; end\n              
 e0f9f78e42b543aa7b6cc1f45ec6316a	[true, 9]	pid = fork { sleep 5 }\n            Process.kill(:KILL, pid)\n       
 e1010476a8bc2919139c68c49e0376c2	[999, 999, 999]	$flag = false\n        def lvl3\n          Integer.class_eval("def +(o); 
@@ -3267,6 +3275,7 @@ ef6e901117e21756738320abd8a842eb	"US-ASCII"	"a".encode("US-ASCII").succ.encoding
 ef731e0d5eee1968eb1204321c4f743e	"boom"	t = Thread.new { raise ArgumentError, "boom" }\n            begin\n  
 ef9eae4bb22bcd7cab82ca0055ddcb28	[4, true]	_r, w = IO.pipe\n            [w.wait(IO::WRITABLE, 0), w.wait_writab
 efa7697984f335d655c682cfd15b66ef	["RuntimeError", "", "#<RuntimeError: RuntimeError>", "RuntimeError", "#<RuntimeError: msg>"]	res = []\n        begin; raise; rescue => e; res << e.inspect << e.messa
+efdf13ba0236082dfdc49bc9ac7068d0	[0, nil, nil, [2, 2, "one", "two"], [true, true, true, false], ["A", "B", 4], "one", [nil, 3, false], 3, ["A", "B", "two"], 12, "ObjectSpace::WeakMap"]	m = ObjectSpace::WeakMap.new\n        k1, k2, v1, v2 = Object.new, Objec
 efee58d26b26212a55202a9cf2bc294e	[:a, :b, :c]	Struct.new(:a, :b, :c).new.members\n        
 f02372e49e9616a18cf3432bddd7f5f4	[1, :done]	t = Thread.new do\n              f = Fiber.new { Fiber.yield 1; :don
 f03b1d37814a9387de9ee11f8651b4db	[1, true, :utf8, 2]	a = "abc"\n        b = "abc".dup.force_encoding("ASCII-8BIT")\n        h 
@@ -3479,3 +3488,4 @@ ffdafa4805c47b0449e1f54f6393dba9	[:missing, :orphan, [7]]	class Parent\n        
 ffdb24889c89007dbdeeef12634ddfcf	[:after, "VSChild", true]	class VSParent\n              private\n              def m; :before; 
 ffdd37a11749e039dc0a5ce43f52d1ed	[0, 1, 2, 3, 4, 5, 6, 7, 8]	def f(*x)\n          x\n        end\n        \n\n        f(*[0,1,2,3,4,5,6,7
 ffde28977dbecc25c890234d824d2303	"US-ASCII"	s = "hello".dup.force_encoding("US-ASCII")\n              s[/ell/]
+ffffc9d05f58bd0715fa23981fb53829	[:ok, :ok, :ok, :ok, :ok, :ok, :ok, :ok, :ok, :ok, :ok, :ok]	m = ObjectSpace::WeakMap.new\n        [1, :sym, nil, true, false, 2.5].f

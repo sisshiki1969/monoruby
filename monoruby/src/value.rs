@@ -155,6 +155,16 @@ pub enum RoundHalf {
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);
 
+/// A copied weak map is a new cell, and the collector tracks cells:
+/// `dup` / `clone` must enrol it or its (initially empty) pairs would
+/// never be swept.
+fn register_if_weakmap(v: Value) -> Value {
+    if v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::WEAKMAP) {
+        crate::value::rvalue::weakmap_register(v);
+    }
+    v
+}
+
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.unpack())
@@ -901,7 +911,7 @@ impl Value {
 
     pub(crate) fn dup(&self) -> Self {
         if let Some(rv) = self.try_rvalue() {
-            rv.dup().pack()
+            register_if_weakmap(rv.dup().pack())
         } else {
             *self
         }
@@ -909,7 +919,7 @@ impl Value {
 
     pub(crate) fn clone_value(&self) -> Self {
         if let Some(rv) = self.try_rvalue() {
-            rv.clone_value().pack()
+            register_if_weakmap(rv.clone_value().pack())
         } else {
             *self
         }
@@ -1374,6 +1384,14 @@ impl Value {
 
     pub fn new_argf(class_id: ClassId, inner: ArgfInner) -> Self {
         RValue::new_argf(class_id, inner).pack()
+    }
+
+    /// An empty `ObjectSpace::WeakMap`, registered with the collector so
+    /// its pairs are broken as their halves die.
+    pub fn new_weakmap(class_id: ClassId) -> Self {
+        let v = RValue::new_weakmap(class_id).pack();
+        crate::value::rvalue::weakmap_register(v);
+        v
     }
 
     /// An object of `class_id` carrying native data (see `NativeData`).
@@ -3059,6 +3077,17 @@ impl Value {
 
     pub fn as_iobuffer_inner_mut(&mut self) -> &mut IoBufferInner {
         self.rvalue_mut().as_io_buffer_mut()
+    }
+
+    /// The receiver's WeakMapInner. `None` unless the value really is
+    /// an `ObjectSpace::WeakMap` (`ObjTy::WEAKMAP`).
+    pub fn try_weakmap_inner(&self) -> Option<&WeakMapInner> {
+        let rv = self.try_rvalue()?;
+        (rv.ty() == ObjTy::WEAKMAP).then(|| rv.as_weakmap())
+    }
+
+    pub fn as_weakmap_inner_mut(&mut self) -> &mut WeakMapInner {
+        self.rvalue_mut().as_weakmap_mut()
     }
 
     /// The receiver's ArgfInner. `None` unless the value is an ARGF

@@ -566,6 +566,17 @@ pub trait GC<T: GCBox> {
 pub trait GCRoot<T: GCBox>: GC<T> {
     #[cfg(feature = "gc-debug")]
     fn startup_flag(&self) -> bool;
+
+    ///
+    /// Break the weak references whose referent did not survive.
+    ///
+    /// Called once per collection, after the mark has drained and
+    /// before anything is reclaimed — the only window in which a mark
+    /// bit both means "live this cycle" and still describes a cell that
+    /// exists. The default does nothing, for heaps with no weak
+    /// references.
+    ///
+    fn clear_weak_refs(&self, _alloc: &mut Allocator<T>) {}
 }
 
 pub trait GCBox: PartialEq {
@@ -1531,6 +1542,10 @@ impl<T: GCBox> Allocator<T> {
         if root.startup_flag() {
             eprintln!("marked: {}  ", self.mark_counter);
         }
+        // Marking is complete: every survivor's bit is set and nothing
+        // has been reclaimed, so this is where a weak reference learns
+        // whether its referent lived.
+        root.clear_weak_refs(self);
         // Drop dead entries from the remembered set before sweep frees
         // them: keep only objects still marked this cycle.
         self.filter_remembered();
@@ -1951,6 +1966,13 @@ impl<T: GCBox> Allocator<T> {
     /// Test whether `ptr` is marked in the current cycle (read-only;
     /// does not set the bit).
     ///
+    /// Whether `ptr`'s mark bit is set for the collection in progress.
+    /// Weak references read this between the mark and the sweep to tell
+    /// a survivor from a corpse.
+    pub(crate) fn is_marked_ref(&self, ptr: &T) -> bool {
+        self.is_marked(ptr)
+    }
+
     fn is_marked(&self, ptr: &T) -> bool {
         let ptr = ptr as *const T;
         let page_ptr = self.get_page(ptr);

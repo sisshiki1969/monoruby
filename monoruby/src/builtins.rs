@@ -51,6 +51,7 @@ pub(crate) mod string;
 pub(crate) mod struct_class;
 mod data_class;
 mod symbol;
+mod object_space;
 mod thread;
 mod time;
 mod prism;
@@ -158,6 +159,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     zlib::init(globals);
     sqlite3::init(globals);
     prism::init(globals);
+    object_space::init(globals);
     main_object::init(globals);
     globals.object_class().include_module(kernel).unwrap();
 }
