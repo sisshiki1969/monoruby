@@ -608,6 +608,9 @@ impl Codegen {
         let const_version_label = (!const_folds.is_empty())
             .then(|| self.jit.const_i64(const_version as _));
         self.unit_const_version = const_version_label.clone();
+        // Every `**kwrest` call site's table, for the same reason: laid down
+        // now so the emission site can name it by address.
+        self.resolve_rest_kw_tables(&mut frame.asm_info);
         // Bind the fresh snapshot words now: the aarch64 lowering bakes their
         // *addresses* into the guard sequences as immediates, so the labels
         // must be resolved before `gen_machine_code` runs (x86 reads them
@@ -705,6 +708,49 @@ impl Codegen {
             bop_deps,
             const_map,
         ))
+    }
+
+    /// Lay down every `RestKw`'s (name, slot-id) table in the constant area
+    /// and record its label in the instruction, before any of the unit's
+    /// code is emitted.
+    ///
+    /// The emission site needs the table's *address*, and nothing else. On
+    /// aarch64 it cannot take that address PC-relatively: constants are
+    /// emitted at `finalize`, behind the whole unit, and `adr` reaches
+    /// ±1 MiB, so a call site early in a large unit could not name its own
+    /// table. Resolving the label first lets the backend bake an absolute
+    /// address instead, which has no range at all — what the unit's
+    /// class-version word beside this already does. x86 reads the table
+    /// rip-relative either way; building it here keeps one path.
+    fn resolve_rest_kw_tables(&mut self, info: &mut AsmInfo) {
+        for (_, ir) in info.iter_ir_mut() {
+            self.build_rest_kw_table_in(ir);
+        }
+        for (ir, _, _) in info.iter_outline_bridges_mut() {
+            self.build_rest_kw_table_in(ir);
+        }
+        for (ir, _) in info.iter_inline_bridges_mut() {
+            self.build_rest_kw_table_in(ir);
+        }
+        for context::SpecializeInfo { info, .. } in info.iter_specialized_methods_mut() {
+            self.resolve_rest_kw_tables(info);
+        }
+    }
+
+    fn build_rest_kw_table_in(&mut self, ir: &mut AsmIr) {
+        for inst in ir.inst_iter_mut() {
+            if let AsmInst::RestKw { rest_kw, table } = inst {
+                let data = self.jit.const_align8();
+                for (slot, name) in rest_kw.iter() {
+                    self.jit.const_i32(name.get() as i32);
+                    self.jit.const_i32(slot.0 as i32);
+                }
+                // Terminator: `correct_rest_kw` reads until a zero name.
+                self.jit.const_i32(0);
+                self.jit.const_i32(0);
+                *table = Some(data);
+            }
+        }
     }
 }
 

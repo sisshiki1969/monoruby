@@ -1608,9 +1608,12 @@ impl Codegen {
             }
             // Trap for statically-unreachable code: call the panicking helper.
             AsmInst::Unreachable => self.encode_linst(LInst::Unreachable),
-            // `**kwrest` fixup: build a (name, slot) const table and call
-            // `correct_rest_kw(&table, lfp) -> kwrest Hash`.
-            AsmInst::RestKw { rest_kw } => self.encode_linst(LInst::RestKw { rest_kw }),
+            // `**kwrest` fixup: call `correct_rest_kw(&table, lfp)`, which
+            // answers the Hash. The (name, slot) table was laid down before
+            // this unit's code (`Codegen::resolve_rest_kw_tables`).
+            AsmInst::RestKw { table, .. } => self.encode_linst(LInst::RestKw {
+                table: table.expect("kwrest table laid down before codegen"),
+            }),
             // Not a shared instruction: hand off to the per-arch backend.
             // (§9a-ii) Not-yet-LIR-ized arms still emit directly in the per-arch
             // `compile_asmir_arch`. During the buffering pass, defer them as
@@ -2126,8 +2129,8 @@ impl Codegen {
             LInst::Unreachable => {
                 self.emit_unreachable();
             }
-            LInst::RestKw { rest_kw } => {
-                self.emit_rest_kw(rest_kw);
+            LInst::RestKw { table } => {
+                self.emit_rest_kw(table);
             }
             LInst::GuardClassVersion {
                 class_version,
