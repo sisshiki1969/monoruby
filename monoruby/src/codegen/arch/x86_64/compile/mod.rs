@@ -297,17 +297,9 @@ impl Codegen {
 
     /// `**kwrest` fixup: build a const table of (name, slot) pairs and call
     /// `correct_rest_kw(&table, lfp) -> kwrest Hash`.
-    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
-        let data = self.jit.const_align8();
-        for (i, name) in rest_kw.into_iter() {
-            self.jit.const_i32(name.get() as i32);
-            self.jit.const_i32(i.0 as i32);
-        }
-        self.jit.const_i32(0);
-        self.jit.const_i32(0);
-
+    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, table: DestLabel) {
         monoasm!( &mut self.jit,
-            lea  rdi, [rip + data];
+            lea  rdi, [rip + table];
             movq rsi, r14;
             movq rax, (runtime::correct_rest_kw);
             call rax;

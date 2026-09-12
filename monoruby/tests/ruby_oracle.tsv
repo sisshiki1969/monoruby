@@ -1103,6 +1103,7 @@
 4e91589759e06abf5967280f353d07c5	[9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError"]	def g(a, b, c) = yield(a + b + c)\n        def f(...) = g(1, ...)\n      
 4e9433807c6ac2166e6457fd13ba0a0f	[nil, nil, nil, 6, 18, :back, 3000, 3000]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 4e9bfbcee73c693e57ccc4d38d0dfa34	["x", "y"]	base = "/tmp/monoruby_dir_eachchild_#{Process.pid}_#{rand(100000)}"
+4ebdeda32efe3cd6cc9c7246b7edb219	6399880	add = (0...40000).map { |k| "a = a + #{k % 7 + 1}" }.join("\\n")\n       
 4ebe3f743c44083475b01a20ac7c38bc	false	binding.local_variable_defined?(:_10)
 4edbac695b5ed45b538971de1ca0ed2c	[true, true, true, false]	f = File.open("Cargo.toml")\n            begin\n              [f.binm
 4edf4d45c190ed9014d06dda3424cfb3	[200, true]	parents = Array.new(200) { [] }\n            5.times { GC.start }\n  

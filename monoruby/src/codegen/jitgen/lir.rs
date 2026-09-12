@@ -1090,7 +1090,7 @@ pub(in crate::codegen) enum LInst {
     },
     Unreachable,
     RestKw {
-        rest_kw: Vec<(SlotId, IdentId)>,
+        table: DestLabel,
     },
     GuardClassVersion {
         class_version: DestLabel,

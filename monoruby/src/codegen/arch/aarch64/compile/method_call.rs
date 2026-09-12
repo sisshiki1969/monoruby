@@ -1127,22 +1127,21 @@ impl Codegen {
         );
     }
 
-    /// `RestKw`: build a const-data table of (name: i32, slot-id: i32) pairs
-    /// terminated by (0, 0), then call `correct_rest_kw(&table, lfp)` which
-    /// reads the listed slots and returns the `**kwrest` Hash in x0. Mirrors
-    /// the x86 `RestKw` arm; the const-table emission is arch-neutral and the
-    /// table address is taken with PC-relative `adr` (as in OptCase).
-    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
-        let data = self.jit.const_align8();
-        for (i, name) in rest_kw.into_iter() {
-            self.jit.const_i32(name.get() as i32);
-            self.jit.const_i32(i.0 as i32);
-        }
-        self.jit.const_i32(0);
-        self.jit.const_i32(0);
+    /// `RestKw`: call `correct_rest_kw(&table, lfp)`, which reads the slots
+    /// the table lists and returns the `**kwrest` Hash in x0. The table of
+    /// (name: i32, slot-id: i32) pairs, terminated by (0, 0), was laid down
+    /// in the constant area by `Codegen::resolve_rest_kw_tables` before this
+    /// unit's code, so its address is known here and goes in as an immediate.
+    ///
+    /// PC-relative `adr` is what this cannot use: it reaches ±1 MiB, and the
+    /// constant area sits behind the whole unit, so a call site early in a
+    /// large one could not name its own table (`Codegen::far_branch_mode` is
+    /// the same reach, for branches). An absolute address has no range.
+    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, table: DestLabel) {
+        let data = self.jit.get_label_address(&table).as_ptr() as u64;
         let f = runtime::correct_rest_kw as *const () as u64;
         monoasm_arm64!(&mut self.jit,
-            adr x0, data;          // &table
+            mov x0, (data);        // &table
             mov x1, x22;           // lfp (R14)
             str x30, [sp, #-16]!;
             mov x9, (f);
