@@ -23,7 +23,7 @@
 use super::*;
 use crate::alloc::GC;
 use libsqlite3_src as sq;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 
 pub(crate) fn init(globals: &mut Globals) {
@@ -109,8 +109,8 @@ fn sqlite3_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr)
     globals.define_private_builtin_func(d, "load_extension_internal", db_load_extension, 1);
     globals.define_builtin_func_rest(d, "trace", db_trace);
     globals.define_builtin_func(d, "authorizer=", db_authorizer_assign, 1);
-    globals.define_builtin_func_rest(d, "define_function_with_flags", db_define_function);
-    globals.define_builtin_func_rest(d, "define_function", db_define_function_plain);
+    globals.define_builtin_func(d, "define_function_with_flags", db_define_function, 2);
+    globals.define_builtin_func(d, "define_function", db_define_function_plain, 1);
     globals.define_private_builtin_func(d, "define_aggregator2", db_define_aggregator, 2);
     globals.define_builtin_func(d, "collation", db_collation, 2);
     globals.define_builtin_func(d, "complete?", db_complete_p, 1);
@@ -938,8 +938,16 @@ fn db_exec_batch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
         }
         let guard = StmtHandle { stmt, done: false };
         loop {
+            // A user function in this statement reaches the interpreter
+            // through this guard, as in `stmt_step`.
+            let mut call = CallGuard::new(vm, globals, db);
             // SAFETY: a live statement.
             let rc = unsafe { sq::sqlite3_step(stmt) };
+            let err = call.take_error();
+            drop(call);
+            if let Some(e) = err {
+                return Err(e);
+            }
             match rc {
                 // SAFETY: positioned on a row.
                 sq::SQLITE_ROW => rows.push(unsafe { row_value_as_text(stmt) }),
@@ -1006,15 +1014,376 @@ fn db_authorizer_assign(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: B
     Ok(Value::nil())
 }
 
-/// Database#define_function_with_flags(name, flags, &block) -> raises
+// ---------------------------------------------------------------------
+// User-defined functions
+// ---------------------------------------------------------------------
+
+/// One registered scalar function: the Proc `create_function` was given.
+///
+/// SQLite keeps this as the function's `pApp` for as long as the function
+/// is defined, so it is a leaked `Box` freed by the `xDestroy` below. The
+/// same Proc is also held in `DbHandle::funcs`, which is what roots it
+/// for the collector — this copy is never the only reference.
+struct FuncEntry {
+    block: Value,
+}
+
+/// `xDestroy`: SQLite calls this when the function is replaced or its
+/// connection closes.
+unsafe extern "C" fn func_destroy(app: *mut c_void) {
+    if !app.is_null() {
+        // SAFETY: the `Box` leaked at registration, handed back once.
+        drop(unsafe { Box::from_raw(app as *mut FuncEntry) });
+    }
+}
+
+/// What a callback needs to re-enter the interpreter, and where it leaves
+/// an exception for the step that caused it.
+///
+/// A Ruby exception must not unwind through SQLite's C frames, so the
+/// callback stashes it here, tells SQLite the function failed, and the
+/// builtin that called `sqlite3_step` re-raises it once control is back
+/// in Rust. This is how `nokogiri`'s XPath handlers work
+/// (`builtins/nokogiri/xpath.rs`).
+struct CallState {
+    vm: *mut Executor,
+    globals: *mut Globals,
+    error: Option<MonorubyErr>,
+}
+
+thread_local! {
+    /// The step in progress on each connection.
+    ///
+    /// Keyed by connection, and saved-and-restored rather than pushed
+    /// and popped, because green-thread switches are not LIFO: a
+    /// callback that parks (any `sleep` or IO in the block) lets another
+    /// green thread run, and it may finish its own step first. A plain
+    /// stack would then have one thread pop the other's entry and hand a
+    /// callback the wrong `Executor`. Per connection, two green threads
+    /// stepping two connections never meet; nesting on one connection —
+    /// which SQLite allows, and the C extension permits — still works,
+    /// since the inner guard restores the outer on the way out.
+    static CALLS: RefCell<HashMap<usize, *mut CallState>> =
+        RefCell::new(HashMap::default());
+}
+
+thread_local! {
+    /// Whether any user function has been defined on this thread.
+    ///
+    /// `stmt_step` is the hot path — one call per row — and installing a
+    /// guard costs an allocation and a map write. Almost no program
+    /// defines a function, so the guard is skipped entirely while this
+    /// is zero, leaving that path exactly as it was.
+    ///
+    /// It only ever grows: closing a connection drops its functions, but
+    /// SQLite frees them from whichever thread runs the close, and this
+    /// counter is per thread. Undercounting would skip a guard a
+    /// callback needs, so the count is deliberately never reduced except
+    /// when a registration fails outright. The cost of overcounting is
+    /// one guard per step in a program that used a function and then
+    /// stopped.
+    static FUNC_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Make `vm` / `globals` reachable from a callback for the duration of a
+/// step, and take back any exception a callback left behind.
+///
+/// `None` when no function is defined: there is then nothing that could
+/// call back, so there is nothing to guard.
+struct CallGuard {
+    inner: Option<CallGuardInner>,
+}
+
+struct CallGuardInner {
+    db: usize,
+    prev: Option<*mut CallState>,
+    state: Box<CallState>,
+}
+
+impl CallGuard {
+    fn new(vm: &mut Executor, globals: &mut Globals, db: *mut sq::sqlite3) -> Self {
+        if FUNC_COUNT.with(|n| n.get()) == 0 {
+            return Self { inner: None };
+        }
+        // Boxed so the address stays put however the map grows.
+        let mut state = Box::new(CallState {
+            vm,
+            globals,
+            error: None,
+        });
+        let p: *mut CallState = &mut *state;
+        let db = db as usize;
+        let prev = CALLS.with(|c| c.borrow_mut().insert(db, p));
+        Self {
+            inner: Some(CallGuardInner { db, prev, state }),
+        }
+    }
+
+    /// The exception a callback raised during this step, if any.
+    fn take_error(&mut self) -> Option<MonorubyErr> {
+        self.inner.as_mut().and_then(|i| i.state.error.take())
+    }
+}
+
+impl Drop for CallGuard {
+    fn drop(&mut self) {
+        let Some(i) = &self.inner else { return };
+        CALLS.with(|c| {
+            let mut c = c.borrow_mut();
+            match i.prev {
+                Some(p) => c.insert(i.db, p),
+                None => c.remove(&i.db),
+            };
+        });
+    }
+}
+
+/// The step running on `db`, or `None` when SQLite reached a callback
+/// from somewhere this binding does not guard.
+fn current_call(db: *mut sq::sqlite3) -> Option<*mut CallState> {
+    CALLS.with(|c| c.borrow().get(&(db as usize)).copied())
+}
+
+/// A function argument as Ruby, by the same mapping the row readers use.
+///
+/// # Safety
+/// `v` is a live `sqlite3_value` for the duration of the callback.
+unsafe fn arg_value(v: *mut sq::sqlite3_value) -> Value {
+    // SAFETY: the caller's contract.
+    unsafe {
+        match sq::sqlite3_value_type(v) {
+            sq::SQLITE_INTEGER => Value::integer(sq::sqlite3_value_int64(v)),
+            sq::SQLITE_FLOAT => Value::float(sq::sqlite3_value_double(v)),
+            sq::SQLITE_NULL => Value::nil(),
+            sq::SQLITE_BLOB => {
+                let ptr = sq::sqlite3_value_blob(v) as *const u8;
+                if ptr.is_null() {
+                    Value::bytes_from_slice(&[])
+                } else {
+                    let len = sq::sqlite3_value_bytes(v).max(0) as usize;
+                    Value::bytes_from_slice(std::slice::from_raw_parts(ptr, len))
+                }
+            }
+            _ => {
+                let ptr = sq::sqlite3_value_text(v) as *const c_char;
+                if ptr.is_null() {
+                    Value::nil()
+                } else {
+                    let len = sq::sqlite3_value_bytes(v).max(0) as usize;
+                    let bytes = std::slice::from_raw_parts(ptr as *const u8, len);
+                    Value::string_from_vec(bytes.to_vec())
+                }
+            }
+        }
+    }
+}
+
+/// Hand the block's answer back to SQLite, by the same rules `bind_param`
+/// uses for a bound value. The C extension refuses anything else with a
+/// RuntimeError rather than storing a NULL.
+fn set_result(
+    globals: &mut Globals,
+    ctx: *mut sq::sqlite3_context,
+    value: Value,
+) -> Result<()> {
+    // SAFETY: a live context, and buffers SQLite copies before returning
+    // (`SQLITE_TRANSIENT`).
+    unsafe {
+        match value.unpack() {
+            RV::Nil => sq::sqlite3_result_null(ctx),
+            RV::Fixnum(i) => sq::sqlite3_result_int64(ctx, i),
+            RV::Float(f) => sq::sqlite3_result_double(ctx, f),
+            RV::BigInt(b) => match num::ToPrimitive::to_i64(b) {
+                Some(i) => sq::sqlite3_result_int64(ctx, i),
+                None => sq::sqlite3_result_double(
+                    ctx,
+                    num::ToPrimitive::to_f64(b).unwrap_or(f64::INFINITY),
+                ),
+            },
+            RV::String(s) => {
+                let bytes = s.as_bytes();
+                if s.encoding() == crate::value::Encoding::Ascii8 || is_blob(globals, value) {
+                    sq::sqlite3_result_blob(
+                        ctx,
+                        bytes.as_ptr() as *const c_void,
+                        bytes.len() as c_int,
+                        sq::SQLITE_TRANSIENT(),
+                    )
+                } else {
+                    sq::sqlite3_result_text(
+                        ctx,
+                        bytes.as_ptr() as *const c_char,
+                        bytes.len() as c_int,
+                        sq::SQLITE_TRANSIENT(),
+                    )
+                }
+            }
+            _ => {
+                return Err(MonorubyErr::runtimeerr(format!(
+                    "can't return {}",
+                    value.get_real_class_name(&globals.store)
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Tell SQLite the function failed. The message is only what SQLite
+/// reports; the Ruby exception itself travels in `CallState::error`.
+fn result_error(ctx: *mut sq::sqlite3_context, msg: &str) {
+    if let Ok(c) = CString::new(msg) {
+        // SAFETY: a live context and a NUL-terminated string SQLite copies.
+        unsafe { sq::sqlite3_result_error(ctx, c.as_ptr(), -1) };
+    }
+}
+
+/// `xFunc`: SQLite calls this once per row the function appears in,
+/// from inside `sqlite3_step`.
+unsafe extern "C" fn func_invoke(
+    ctx: *mut sq::sqlite3_context,
+    argc: c_int,
+    argv: *mut *mut sq::sqlite3_value,
+) {
+    // SAFETY: SQLite passes a live context, and `argv` holds `argc` live
+    // values for the duration of the call.
+    unsafe {
+        let Some(state) = current_call(sq::sqlite3_context_db_handle(ctx)) else {
+            // No step of ours is running, so there is no interpreter to
+            // re-enter and nowhere to put an exception.
+            result_error(ctx, "sqlite3 function called outside a query");
+            return;
+        };
+        let state = &mut *state;
+        // A previous row already failed; this evaluation is being torn
+        // down, so do not run the block again.
+        if state.error.is_some() {
+            result_error(ctx, "aborted");
+            return;
+        }
+        let vm = &mut *state.vm;
+        let globals = &mut *state.globals;
+        let entry = &*(sq::sqlite3_user_data(ctx) as *const FuncEntry);
+
+        // The arguments stay rooted while they are built: each one is a
+        // fresh object, and allocating the next may collect.
+        let len = vm.temp_len();
+        let mut args = Vec::with_capacity(argc.max(0) as usize);
+        for i in 0..argc as isize {
+            let v = arg_value(*argv.offset(i));
+            vm.temp_push(v);
+            args.push(v);
+        }
+        let result = match entry.block.is_proc() {
+            Some(p) => vm.invoke_proc(globals, &p, &args),
+            None => Err(err_sqlite3(vm, globals, "function block is not a Proc")),
+        };
+        vm.temp_clear(len);
+
+        match result.and_then(|v| set_result(globals, ctx, v)) {
+            Ok(()) => {}
+            Err(e) => {
+                // Report a failure to SQLite so the step unwinds, and keep
+                // the exception for the builtin to re-raise.
+                result_error(ctx, &e.get_error_message(&globals.store));
+                state.error = Some(e);
+            }
+        }
+    }
+}
+
+/// Database#define_function_with_flags(name, flags, &block) -> self
+///
+/// The C-level half of `create_function`; the gem's Ruby half wraps the
+/// caller's block in one that builds a `FunctionProxy` and answers its
+/// `result`. Registered with an arity of -1, as the extension does: the
+/// arity passed to `create_function` never reaches SQLite, so
+/// `create_function("f", 1)` really does accept `f(1, 2)`.
 #[monoruby_builtin]
-fn db_define_function(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    db_of(vm, globals, lfp.self_val())?;
-    Err(err_sqlite3(
-        vm,
-        globals,
-        "create_function is not supported by monoruby's sqlite3 binding",
-    ))
+fn db_define_function(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    // The gem passes the text-rep flags straight through; UTF-8 is the
+    // only encoding this binding reads, and SQLITE_DETERMINISTIC is the
+    // one other bit worth honouring.
+    let flags = lfp.arg(1).coerce_to_i64(globals)? as c_int;
+    register_function(vm, globals, lfp, pc, flags)
+}
+
+/// Database#define_function(name, &block) -> self
+///
+/// `define_function_with_flags` with no flags.
+#[monoruby_builtin]
+fn db_define_function_plain(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    register_function(vm, globals, lfp, pc, 0)
+}
+
+/// Register `lfp.arg(0)` as a scalar function running `lfp`'s block.
+fn register_function(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    flags: c_int,
+) -> Result<Value> {
+    let db = db_of(vm, globals, lfp.self_val())?;
+    let name = lfp.arg(0).expect_string(&globals.store)?;
+    // SQLite takes a NUL-terminated name, so a name holding a NUL byte
+    // registers only the part before it — which is what the C extension
+    // does, and `"a\0b"` really does define `a`.
+    let bytes = name.as_bytes();
+    let upto = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let cname = CString::new(&bytes[..upto]).expect("no NUL before the first NUL");
+    let enc = sq::SQLITE_UTF8 | (flags & sq::SQLITE_DETERMINISTIC);
+    let Some(bh) = lfp.block() else {
+        // What `Proc.new` says, which is where the C extension ends up.
+        return Err(MonorubyErr::argumenterr(
+            "tried to create Proc object without a block",
+        ));
+    };
+    let block: Value = vm.generate_proc(globals, bh, pc)?.into();
+    // Rooted here for as long as SQLite may call it; the `FuncEntry`
+    // below holds the same Value but is invisible to the collector.
+    native_mut::<DbHandle>(lfp.self_val())?.funcs.push(block);
+    // The C extension also records it under the name the caller gave,
+    // which `Database#functions` exposes.
+    let funcs = globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("@functions"))
+        .unwrap_or_default();
+    if let Some(mut h) = funcs.try_hash_ty() {
+        h.insert(Value::string_from_str(&name), block, vm, globals)?;
+    }
+    let entry = Box::into_raw(Box::new(FuncEntry { block }));
+    // From here on `stmt_step` installs a guard: something can call back.
+    FUNC_COUNT.with(|n| n.set(n.get() + 1));
+    // SAFETY: a live connection and a NUL-terminated name; `entry` is
+    // handed to SQLite, which gives it back to `func_destroy`.
+    let rc = unsafe {
+        sq::sqlite3_create_function_v2(
+            db,
+            cname.as_ptr(),
+            -1,
+            enc,
+            entry as *mut c_void,
+            Some(func_invoke),
+            None,
+            None,
+            Some(func_destroy),
+        )
+    };
+    if rc != sq::SQLITE_OK {
+        // SQLite did not take the function, so `xDestroy` never runs and
+        // the box is ours to free.
+        // SAFETY: the box just leaked, still unshared.
+        drop(unsafe { Box::from_raw(entry) });
+        FUNC_COUNT.with(|n| n.set(n.get() - 1));
+        check(vm, globals, db, rc)?;
+    }
+    Ok(lfp.self_val())
 }
 
 /// Database#define_aggregator2(klass, name) -> raises
@@ -1042,26 +1411,6 @@ fn db_complete_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
     };
     // SAFETY: a NUL-terminated string that outlives the call.
     Ok(Value::bool(unsafe { sq::sqlite3_complete(c.as_ptr()) } != 0))
-}
-
-/// Database#define_function(name, &block) -> raises
-///
-/// The C-level half of `create_function`. Like it, and for the same
-/// reason (a SQLite callback would have to re-enter the interpreter),
-/// this refuses rather than pretending to register anything.
-#[monoruby_builtin]
-fn db_define_function_plain(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    db_of(vm, globals, lfp.self_val())?;
-    Err(err_sqlite3(
-        vm,
-        globals,
-        "create_function is not supported by monoruby's sqlite3 binding",
-    ))
 }
 
 /// Database#collation(name, comparator) -> self
@@ -1197,8 +1546,18 @@ fn stmt_step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         return Ok(Value::nil());
     }
     let stmt = h.stmt;
+    // A user function reaches the interpreter through this guard, and
+    // leaves an exception on it rather than unwinding through SQLite.
+    // SAFETY: a live statement.
+    let db = unsafe { sq::sqlite3_db_handle(stmt) };
+    let mut guard = CallGuard::new(vm, globals, db);
     // SAFETY: a live statement.
     let rc = unsafe { sq::sqlite3_step(stmt) };
+    if let Some(e) = guard.take_error() {
+        return Err(e);
+    }
+    drop(guard);
+    let h = native_mut::<StmtHandle>(lfp.self_val())?;
     match rc {
         sq::SQLITE_ROW => {
             h.done = false;
