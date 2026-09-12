@@ -1308,6 +1308,7 @@
 5f4db5ebb75f3bf2b8fad5e3973d2488	false	Signal.list.key?("STKFLT")
 5f502389a3a181f8cfec5b92a9db85e4	true	class C; def to_hash; {a: 1, b: 2}; end; end; o = C.new\n{a: 1} < o
 5f637862fb315cc465da084fe56c166d	["hello", "text"]	sup = Class.new do\n          def self.message; "text"; end\n          de
+5f7bb3d687ecacaf94783d8a4a690725	[[[63]], [["a", 3], ["b", 60]], [[0]], ["SQLite3::SQLException", "wrong number of arguments to function mysum():"], [[63, 68]], [[126]], [[30]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 5f968c34cfb703342017f7f54f8c80f2	[[[:p, 1], [:q, 2]], [[:p, 1], [:q, 2]], [[[:p, 1]], [[:q, 2]]]]	cls = Class.new(Hash)\n            h = cls.new\n            h[:p] = 1
 5fb588dcb4947000799dc1e9785f944e	["[1, 2] {a: 100}", "[3] {e: 70, f: 80, g: 90}", "[2, 50, 3] {e: 70, f: 80, g: 90}"]	class C\n          def g(*rest, **kw)\n            $res << "#{rest} #{kw}
 5fcac55c31908b7b4a4a1adfec76e1e7	[:x, :y]	D = Data.define(:x, :y)\nClass.new(D).members
@@ -1779,6 +1780,7 @@
 82447060301c9a64b3ac42318f460e62	[1, 2, 3]	class C\n          def foo(*x)\n            x\n          end\n        end\n 
 8256e9068f6e136c99b87f2f7f97fdb8	[[ArgumentError, "negative signal name: -HUP"], "negative signal name: -INT"]	[(begin; Signal.trap("-HUP") {}; rescue => e; [e.class, e.message]; end), (begin
 82575417647315f480a84e42f3ee1d81	[{"a" => [{"k" => "line one line two", "n" => 1}, {"k" => 2}]}, {"a" => [{"k" => "line one line two", "n" => 1}, {"k" => 2}]}, {"a" => [{"k" => "plain one plain two", "n" => 1}, {"k" => 2}]}, {"a" => [{"k" => "it's two", "n" => 1}]}, {"a" => "x\\ny", "b" => "tab\\there", "c" => "don't"}, {"k" => "<p>You can (555) 567-2222.</p> <p>Our store is at <em>Rue d'Avignon 32</em>.</p>", "created_at" => "2005-04-04 12:00"}, {"pages" => [{"id" => 1, "content" => "first second", "at" => "x"}, {"id" => 2, "content" => "plain"}]}]	require "yaml"\n        docs = [\n          "a:\\n  - k:\\n      \\"line one
+8271dea172f15ee665f12b31debc89bb	[60, ["g0", 93], ["g9", 93], [93], [5580]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 829f48ebfbc6e4030ced77aaec24c37b	[200, 2]	def a4\n          v = [1, 2, 3].each do |i|\n            begin\n          
 82abda467be3a95b2f6d81fbf7dfb3da	"a:a b:{x: 100, y: 200}"	def f(a, b)\n          "a:#{a} b:#{b}"\n        end\n        \n\n        f("
 82afafb55f0b808c4e046dd1d983831d	["ASCII-8BIT", "US-ASCII", "US-ASCII"]	[/\\xc2\\xa1/n.encoding.to_s, /abc/n.encoding.to_s, /\\x7f/n.encoding.to_s]
@@ -2090,6 +2092,7 @@
 9a0db96111752b4a7ebf036bac1d4c9d	[nil, nil]	[\n              NameError.new.name,\n              NameError.new("ju
 9a1505ab976bab44314875f75f0aad94	true	o = Object.new\n            def o.to_str = "CORE"\n            Proces
 9a22f6dc0c7579d2bfa1447443b56f1f	[42, "nil"]	def bar\n              begin\n                raise "err"\n           
+9a29e613d3183de95f2d0f2acb84a31a	[["ArgumentError", "step boom"], ["RuntimeError", "final boom"], [[3]], [[6]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 9a380b66d043485e0a0a37c95be6a53e	["LoadError", "nonexistent_file_that_does_not_exist_12345"]	begin\n              require "nonexistent_file_that_does_not_exist_1
 9a6e41140cc5bce63cf4551de96c121c	[{a: 1, b: "x"}, 1, nil]	Fiber[:a] = 1\n            Fiber[:b] = "x"\n            [Fiber.curren
 9a7c12c16e1ba0fafa05ddfb9e353d1b	[7, 3]	def leaky\n          [1].each { return 9 }\n        ensure\n          retu
