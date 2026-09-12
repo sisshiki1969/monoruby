@@ -352,6 +352,13 @@ struct LoopInfo {
     next_dest: Label,
     redo_dest: Label,
     ret: Option<BcReg>,
+    /// Stack depth at `break_dest`. A loop that produces a value has that
+    /// value pushed by the time the label is applied, while a `break` writes
+    /// the value slot (`ret`) without pushing anything, so a break exits one
+    /// slot short of the merge. It is emitted at this depth instead, which
+    /// keeps the value it just stored on the stack as far as the JIT's
+    /// per-instruction sp is concerned.
+    break_sp: BcTemp,
     /// Depth of the `ensure` stack when the loop was entered. A `break` /
     /// `next` that jumps out of `begin/ensure` blocks nested inside the
     /// loop body must run those `ensure` clauses (the ones at indices
@@ -967,12 +974,22 @@ impl<'a> BytecodeGen<'a> {
         redo_dest: Label,
         ret: Option<BcReg>,
     ) {
+        // The depth at `break_dest`: a loop that produces a value has that
+        // value in `ret`, and every construct applies the label with `ret`
+        // pushed (the prefix `while` pushes it before the loop, the postfix
+        // form and `for` push it just before the label). A `break` writes
+        // `ret` without pushing, so its own depth is one short of the merge's.
+        let break_sp = match ret {
+            Some(BcReg::Temp(BcTemp(slot))) => BcTemp(slot + 1),
+            _ => BcTemp(self.temp),
+        };
         self.loops.push(LoopInfo {
             break_dest,
             next_dest,
             redo_dest,
             ret,
             ensure_depth: self.ensure.len(),
+            break_sp,
         });
     }
 

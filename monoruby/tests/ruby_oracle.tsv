@@ -2377,6 +2377,7 @@ acabc0312a822b618b976d7b03a36850	["a1e1ca65d05c669fd66fb42fca66bb467bf8c2531fe5f
 acaecec60e1d4df64f4888d1585ffb87	[[1, 5], [2, 6]]	[1, 2].each.with_index(5).to_a
 ace3583fa43b814b77f102993799e3b9	["Array", true, true, "nil", true]	res = []\n            t = Thread.new { sleep }\n            Thread.pa
 aced21e1e31e2ddc5465a70187f24f60	["para1a\\npara1b\\n\\npara2\\n", "para", "ASCII-8BIT", "ra1a", "para1b\\n\\npara2\\n", "para1a\\npara1b\\n\\npara2\\n", nil, "US-ASCII", ["para1a\\n", "para1b\\n", "\\n", "para2\\n"], ["para1a\\n", "para1b\\n\\npara2\\n"], ["para1a\\npara1b\\n\\npara2\\n"], ["para1a", "para1b", "", "para2"], ["para1a\\npara1b\\n\\n", "para2\\n"], ["pa", "ra", "1", "a\\n", "pa", "ra", "1", "b\\n", "\\np", "ar", "a2", "\\n"]]	require 'tmpdir'\n            f = File.join(Dir.tmpdir, "file_read_a
+ad063a5a7b5850775d75f6df196eaae1	[nil, 7, 1, 2, 4, 3, 8, 1]	def a; begin; break; end while false; end\n            def b; begin;
 ad1ae32a9a55d70e4730df3370a823db	[1, 2]	class C; def to_ary; [1, 2]; end; end\nArray.try_convert(C.new)
 ad3d114daa3fe697d3d65acf89424a99	[1, 2, 3]	c = Class.new\n            captured = nil\n            c.class_exec(1
 ad40135a1d283484c7b5cb46e05719d4	99	class C\n              X = 99\n            end\n            C.class_ev
