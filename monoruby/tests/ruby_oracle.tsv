@@ -182,6 +182,7 @@
 0b272bc1eee3862ebd5afe122f6530ac	[0, 50, "custom", true, false, false]	def check(x) = x.is_a?(Integer)\n            def fro(x) = x.frozen?\n
 0b360a7151ca4646f547e0ecffd6cf13	[true, true, true, true, true, ArgumentError, ArgumentError, TypeError, TypeError, Hash, false]	(ENV["MONO_T_ZZ"]="hi"; a=ENV["MONO_T_ZZ"].frozen?; b=ENV.method(:has_key?)==ENV
 0b40f53074d9e48c2b4d7383337aaada	[[1, 1, 2, 3], ArgumentError, -2, nil]	class Diff\n          attr_reader :v\n          def initialize(v) = @v = 
+0b45e95b3c2f86584c9598881d58fac9	[42, 90, 15, "1/2", "7:8", "argerr"]	def a0; 42; end\n        def a1(x); x * 10; end\n        def a5(a, b, c, 
 0b56e400524c40599f5741f2c015962d	7	class Foo\n              def method_missing(name, *args)\n           
 0b645df6fa816084c17746fbb8754151	-4	class Integer; alias __orig :~; def ~; __orig; end; end; ~(3)
 0b67f0becaeeca974d1e74004df4c680	[[:x], [1, :y]]	class C\n                 def initialize; @log = []; end\n                 def []=
@@ -202,6 +203,7 @@
 0c31062b279dfc18d7d2c88b1de29087	[:pro1, :pro2]	c = Class.new do\n              def pub; end\n              protected
 0c59e4ca52f8b258d616906a2685e60a	[999, 999]	$flag = false\n        def maybe_redefine\n          if $flag\n           
 0c59ef50cf993e559eee5d6f90c6a39e	[1, 1, 8, [2, 3, 4], 1, 2, 4, nil, 9, 9, 8, [9, 3, 4], 0, 2, 4, nil, 9, 3, 8, [9, 3, 4], 1, 2, 4, nil, 9, 4, 8, [9, 2, 4], 2, 2, 4, nil, 9, 5, 8, [9, 2, 3], 3, 2, 4, nil, 9, 6, 8, [9, 2, 3], 4, 2, 4, nil, 9, 7, 8, [9, 2, 3], 5, 2, 4, nil, 9, 8, 8, [9, 2, 3], 6, 2, 4, nil, 9, 9, 7, [9, 2, 3], 7, 2, 4, nil, 9, 9, 7, [9, 2, 3], 8, 2, 4, nil, 9, 2, 7, [9, 2, 3], 9, 2, 4, nil, 9, 3, 7, [9, 10, 3], 10, 2, 4, nil, 9, 4, 7, [9, 10, 11], 11, 2, 4, nil, 9, 5, 7, [9, 10, 11], 12, 2, 4, nil, 9, 6, 7, [9, 10, 11], 13, 2, 4, nil, 9, 7, 7, [9, 10, 11], 14, 2, 4, nil, 9, 9, 15, [9, 10, 11], 15, 2, 4, nil, 9, 9, 15, [9, 10, 11], 16, 2, 4, nil, 9, 10, 15, [9, 10, 11], 17, 2, 4, nil, 9, 11, 15, [9, 18, 11], 18, 2, 4, nil, 9, 12, 15, [9, 18, 19], 19, 2, 4, nil, 9, 13, 15, [9, 18, 19], 20, 2, 4, nil, 9, 14, 15, [9, 18, 19], 21, 2, 4, nil, 9, 15, 15, [9, 18, 19], 22, 2, 4, nil, 9, 9, 23, [9, 18, 19], 23, 2, 4, nil, 9, 9, 23, [9, 18, 19], 24, 2, 4, nil, 9, 18, 23, [9, 18, 19], 25, 2, 4, nil, 9, 19, 23, [9, 26, 19], 26, 2, 4, nil, 9, 20, 23, [9, 26, 27], 27, 2, 4, nil, 9, 21, 23, [9, 26, 27], 28, 2, 4, nil, [9, 9, 26, 27, 28, 29, 22, 23], {a: 29, "b" => 2, 3 => 4}]	def drive\n              a = [1, 2, 3, 4, 5, 6, 7, 8]\n              
+0c6e353ff13fe41f9b75d21b3a621fe5	[601, 1, true, 200, 200]	m = ObjectSpace::WeakMap.new\n        kept_k, kept_v = Object.new, Objec
 0c73d03517bb4f3119910e3eaaaec7c7	"[]\\n"	ENV["SPAWN_T2"] = "parent"\n            r, w = IO.pipe\n            P
 0cace142624c1e6cb89f728eba20c289	[39, 39, 39, "zzz", [39, 39, "39"]]	def __f(x)\n          \n        a = x\n        b = a\n        s = "z" * 3\n 
 0cc1878ea30baafb813863f3ce8b91b6	[90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90]	def real(a, *r) = yield(a + r.sum)\n        def g(...) = real(...)\n     
@@ -1321,6 +1323,7 @@
 60fa84926456bf38e08b292f42e6048b	[true, false, true]	parent = Class.new do\n              protected; def parent_pro; end\n
 60fba8f11f422d913f9063b5a6042917	[1, "KwHash", 1..5, 2, [1, 2, 3, 4, 5], 2020, 0, 3]	class KwHash < Hash\n          attr_reader :opt\n          def initialize
 61004613ce868620a7ea63f5833c5be8	[100, 200]	def f(&p)\n            g(&p)\n        end\n                \n        def g(
+610be275fcd8db9f9253050ade7d323a	["m0", 420, 21, "m0", 0, 4, 109, 30, 777, 5, 880, 24, "argerr", "NoMethodError", "m0", 70, 0]	class C\n          def m0; "m0"; end\n          def m1(a); a * 10; end\n  
 610beb27fdef4abad74c027625346d0e	"I:#<Integer:0xADDR>"	class Integer; def to_s; "I:" + super; end; end\n                5.to_s.sub(/0x[0
 610cff7c16d66dbb480b5af49ae1652c	"hello"	m = Module.new\n        m.module_eval do\n          def hello; "hello"; e
 61163d4d16d5c6f9c2f86809889cf976	[[:v]]	r = []; Enumerator.new { |y| y.yield :v }.each { |*a| r << a }; r
@@ -1698,6 +1701,7 @@
 7d4fb0ea252c3834303824e7d9f4f7c8	false	arr = [1, 2]; x = *arr; x.equal?(arr)
 7d566060f439422030b6a00d4ff60ee1	true	Integer.instance_method(:inspect) == Integer.instance_method(:to_s)
 7d6854cd651142049c443c4e92d72f00	50	x = 10\n        eval("x * 5")\n        
+7d735c813693382a1b0336954d0c89f2	40000	class Lib; def twice(n); n + n; end; end\n        $lib = Lib.new\n       
 7d8b0536aa2c8c96c141de63562053a8	[16, 8]	f = proc { |x| x * x }; g = proc { |x| x + x }; [(f << g).call(2), (g << f).call
 7dbf766e4faeae2f9ef65b162d2a7f4b	["no 0", "match 1", "no 2", "NoMethodError"]	klass = Class.new do\n          def ===(o); o == 1; end\n          privat
 7dcb621c6c844f83fc03a82810bbf155	"US-ASCII"	"abc".dup.force_encoding("US-ASCII").gsub("b", "x").encoding.to_s
@@ -1721,6 +1725,7 @@
 7ea4a8b6207a7718a57b9eda8672c800	[[1.5, 2, 3], [1, 1180591620717411303424, 1208925819614629174706176], [:a, :b, :c], ArgumentError, ArgumentError, [], [7]]	mixed = [2, 1.5, 3]\n        bigs = [2**70, 1, 2**80]\n        syms = [:c
 7eb0d4817551a97def8fe2bf1a9f7035	[[0, 2, 4, 6], 106]	class FwdA\n          attr_reader :a\n          def initialize(n)\n       
 7f230ec5e7c81dcb14df9d04bf7eb5df	"raised"	class BadInt\n                  def to_int; "not an integer"; en
+7f2bcf2ec173056f353c8989fad11530	["A==5", "B==5"]	class A; def ==(o); "A==#{o}"; end; end\n        class B; def ==(o); "B=
 7f31a0877dd67722a0d7d14c5b74abb0	[[], ["warning: given block not used"], ["warning: block supersedes default value argument"], ["warning: block supersedes default value argument"], [], []]	require 'stringio'\n        def capw\n          $stderr = StringIO.new\n  
 7f39046674eb2565ca621a342f701cae	[true, true, true]	M = Data.define(:amount, :unit)\n\n            a = M.allocate\n            a.send(:
 7f48ec6081718c6875731cb8393d7b9c	["echo hello", true]	def `(cmd); [cmd, cmd.frozen?]; end\n        %x{echo hello}\n        
@@ -1908,6 +1913,7 @@
 8cccb4747cfdbfa71bed00dbdaf949ab	[["RuntimeError", "TypeError"], ["RuntimeError", nil], "TypeError", ["RuntimeError", nil], "ArgumentError"]	def t; yield; rescue Exception => e; [e.class.to_s, (e.cause && e.c
 8cf4538ff9dc5775c6aa04d3c95d1924	[[:pa, 1000], [:pb, 1000], [:pc, 1000]]	class Vbase; def val = @v; end\n            class Va < Vbase; def in
 8cf61f75f99a0e9c53f3bf071168dad0	[:foo]	class P\n              def foo; end\n              def bar; end\n     
+8d0a1944580afa656cee33f2e1515dd4	[["keyed by 1", "keyed by :sym", "keyed by nil", "keyed by true", "keyed by false", "keyed by 2.5"], 42, 7, ["keyed by 1", "keyed by :sym", "keyed by nil", "keyed by true", "keyed by false", "keyed by 2.5"], [42, true, 7]]	m = ObjectSpace::WeakMap.new\n        imm = [1, :sym, nil, true, false, 
 8d0d1f75a100d8c5b699b633c2b00f08	[64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, ["Z-0", "Z-1", "Z-2", "Z-3", "Z-4", "Z-5", "Z-6", "Z-7", "Z-8", "Z-9", "-10", "-11", "-12", "-13", "-14", "-15", "-16", "-17", "-18", "-19"], 20, 201]	r = []\n        copies = []\n        20.times do |i|\n            t = "abc
 8d2889917a7f7f98ff652806d0833021	[195]	"\\xC3".dup.force_encoding("UTF-8").reverse.bytes
 8d2e1fd402dd54d459d9920045aa5cd5	[12, 3.5]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
@@ -2144,6 +2150,7 @@
 9ec21f255b64bf6cee16e04bbbaa7ae3	[[:C1, :C2, :S1], [:C1, :C2]]	class S\n              S1 = 100\n            end\n            class C 
 9ed3763bcd2664e8cf0aae5654b5955d	[nil, false, 1]	class String; def hash = 0; def eql?(o) = true; end\n        [{"p" => 1}
 9ed470f69b7adeaf9e790c17d1dcce76	[150, 199, :absent]	def nlr_y3\n          yield\n        end\n        def find_it(n)\n         
+9ee5793f09dedfe9c6cd4714aaad32b5	[15150, [10, 105, 20000000000000000000000000000000000000000, 10000000000000000000000000000000000000100, 20000000000000000000000000000000000000002, 10000000000000000000000000000000000000101, 14, 107, 200000000000000000000000000000000000000000000000000000000000000000000000000000000, 100000000000000000000000000000000000000000000000000000000000000000000000000000100, 18, 109, -16, 92, -20000000000000000000000000000000000000000, -9999999999999999999999999999999999999900]]	class Integer\n          def dbl; self * 2; end\n          def add5(x); s
 9eeb8d867dcde677d9837c5ba30e2c40	[:yes, "NoMethodError", false]	module EscA\n              refine(String) { def only_here; :yes; end
 9f0c968145034ea2d742ba8456a2e243	["Scheduler must implement #block", "Scheduler must implement #unblock", "Scheduler must implement #kernel_sleep", "Scheduler must implement #io_wait", true, nil]	required = [:block, :unblock, :kernel_sleep, :io_wait]\n            
 9f1a90eeaa16fa36daa6ad13a43b2591	{a: Infinity, b: -Infinity}	{ a: 1.0 / 0.0, b: -1.0 / 0.0 }
@@ -2182,6 +2189,7 @@ a161e71f31bf14603b9f94a476644366	[:a, :a]	-> { a = it; binding.local_variable_se
 a164c646ebdbe3551b16c27fa5e2aab0	5	def f; return 5; end; f
 a17f4a8a2beeb2a7e6652eb0c268a320	6.0	def kill_dyn(n, vals)\n          acc = 0.0\n          n.times do |i|\n    
 a189356012c67f14ffd149bedd2d23b2	nil	$/ = "xyz"; r = "abcde".chomp!; $/ = "\\n"; r
+a19474330777374fd8e9f255dc6aec66	11340	def e\n          10.times do\n            $x += yield\n          end\n     
 a1a984bb2edd75a78229a94547d15825	[true, true, :outer, "nil", ["NoMethodError", "RuntimeError"], "RuntimeError"]	def restore_check(log)\n          outer = StandardError.new "outer"\n    
 a1c461fb313f0da82569acd28c4ca299	[1, 3, 5, 7]	(1..7).filter(&:odd?)
 a1e955df00a16906b87178a40bfe7105	[100, 50, 250, :c, false, true, false]	class A; end\n            class B; end\n            class C; end\n    
@@ -2561,6 +2569,7 @@ bba413775b9fdc4e5a5520013caecba6	true	Process.getpriority(Process::PRIO_USER, 0)
 bbaa97341f97063e08a9dcdec4033b2d	[:no_raise, :no_raise, :no_raise, :no_raise, :no_raise, [RangeError, "bignum too big to convert into 'unsigned long long'"], [RangeError, "bignum out of range of unsigned long long"], [RangeError, "bignum too big to convert into 'unsigned long long'"], [RangeError, "bignum too big to convert into 'unsigned long long'"], [RangeError, "bignum too big to convert into 'unsigned long long'"], :no_raise, [RangeError, "bignum too big to convert into 'long long'"], [RangeError, "bignum too big to convert into 'long long'"], :no_raise, :no_raise, [RangeError, "integer -2147483649 too small to convert to 'unsigned int'"], [RangeError, "integer 4294967296 too big to convert to 'unsigned int'"], [RangeError, "integer 9223372036854775808 too big to convert to 'unsigned int'"], [RangeError, "integer 18446744073709551615 too big to convert to 'unsigned int'"], [RangeError, "bignum too big to convert into 'unsigned long'"], [RangeError, "integer -9223372036854775808 too small to convert to 'unsigned int'"], [RangeError, "bignum out of range of unsigned long"], [RangeError, "bignum too big to convert into 'unsigned long'"], :no_raise, :no_raise, [RangeError, "integer 1099511627776 too big to convert to 'unsigned int'"], :no_raise, [RangeError, "integer 2147483648 too big to convert to 'int'"], [RangeError, "integer -2147483649 too small to convert to 'int'"], [RangeError, "bignum too big to convert into 'long'"], :no_raise, [RangeError, "integer -2147483649 too small to convert to 'int'"], :no_raise, :no_raise, :no_raise, :no_raise, [RangeError, "float 1e+20 out of range of unsigned long long"], [RangeError, "float -1e+19 out of range of unsigned long long"], [RangeError, "float NaN out of range of unsigned long long"], [RangeError, "float Inf out of range of unsigned long long"], [RangeError, "float 1e+19 out of range of long long"], [RangeError, "float -1e+19 out of range of long long"], [RangeError, "integer 10000000000 too big to convert to 'int'"], [RangeError, "integer -10000000000 too small to convert to 'int'"], [RangeError, "float 1e+30 out of range of integer"], [RangeError, "float NaN out of range of integer"], :no_raise, [RangeError, "float 1e+30 out of range of integer"], :no_raise, :no_raise, :no_raise, [TypeError, "no implicit conversion of nil into Integer"], [TypeError, "no implicit conversion of String into Integer"], :no_raise, :no_raise]	r = []\n            er = ->(&blk) { begin; blk.call; :no_raise; resc
 bbb536d6446e4acae479f2a76bbc22b8	[false, true, "payload"]	base = "/tmp/monoruby_test_rename_#{Process.pid}_#{rand(100000)}"\n 
 bbb85dbe840092bcd2beeba3f4a669d0	[2, 6, 1, 5, 1, 3, 4, nil, 7, nil, 5, 1, 1, 6, 2, nil, 8, 8, 250, 249, Encoding::CompatibilityError, nil]	s = "aあbいcあb"\n        r = [\n          s.index("b"), s.index("b", 3), s.
+bbc6b60d27eb5cad82b53e233df0c6e8	280	class Object\n          def tag = 7\n        end\n        \n\n        res = 
 bbf39b957f63dc57cf6be6b238e3322a	"HELLO world"	s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0..-7); s
 bbf88be1f5615be8cbe5cfdbb37cd357	[23025.0, 152.0, 300]	$n = 0\n        def g\n          a = 0.0; c = 2.0\n          i = 0\n       
 bc0ccc0a16c986d29598ed69b9038ff8	[false, true, true]	h = {}\n        before = h.compare_by_identity?\n        ret = h.compare_

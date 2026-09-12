@@ -896,24 +896,40 @@ pub(super) unsafe extern "C" fn io_write(ctx: *mut c_void, buffer: *const c_char
         let vm = &mut *c.vm;
         let globals = &mut *c.globals;
         let bytes = std::slice::from_raw_parts(buffer as *const u8, len as usize);
-        let mut chunk = Value::bytes(bytes.to_vec());
-        let external_encoding = IdentId::get_id("external_encoding");
-        let enc = match vm.invoke_method_if_exists(globals, external_encoding, c.io, &[], None, None) {
-            Ok(Some(enc)) => enc,
-            Ok(None) => Value::nil(),
-            Err(_) => return -1,
-        };
-        if !enc.is_nil() {
-            let force = IdentId::get_id("force_encoding");
-            match vm.invoke_method_inner(globals, force, chunk, &[enc], None, None) {
-                Ok(v) => chunk = v,
+        // `chunk` is freshly allocated and, until it is handed to a call as
+        // an argument, lives only in this Rust local — which the collector
+        // does not scan. The `external_encoding` dispatch below re-enters
+        // Ruby, and so allocates: without a root, a collection there sweeps
+        // the chunk and `force_encoding` is then dispatched on a recycled
+        // cell. `force_encoding`'s result needs the same treatment before
+        // the `write` dispatch. Root them for the duration; the scope also
+        // covers the `-1` early returns.
+        vm.with_temp_scope(|vm| {
+            let mut chunk = Value::bytes(bytes.to_vec());
+            vm.temp_push(chunk);
+            let external_encoding = IdentId::get_id("external_encoding");
+            let enc = match vm.invoke_method_if_exists(globals, external_encoding, c.io, &[], None, None)
+            {
+                Ok(Some(enc)) => enc,
+                Ok(None) => Value::nil(),
                 Err(_) => return -1,
+            };
+            if !enc.is_nil() {
+                let force = IdentId::get_id("force_encoding");
+                match vm.invoke_method_inner(globals, force, chunk, &[enc], None, None) {
+                    Ok(v) => {
+                        chunk = v;
+                        vm.temp_push(v);
+                    }
+                    Err(_) => return -1,
+                }
             }
-        }
-        match vm.invoke_method_inner(globals, IdentId::get_id("write"), c.io, &[chunk], None, None) {
-            Ok(n) => n.try_fixnum().unwrap_or(len as i64) as c_int,
-            Err(_) => -1,
-        }
+            match vm.invoke_method_inner(globals, IdentId::get_id("write"), c.io, &[chunk], None, None)
+            {
+                Ok(n) => n.try_fixnum().unwrap_or(len as i64) as c_int,
+                Err(_) => -1,
+            }
+        })
     }
 }
 
