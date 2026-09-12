@@ -183,6 +183,7 @@
 0b360a7151ca4646f547e0ecffd6cf13	[true, true, true, true, true, ArgumentError, ArgumentError, TypeError, TypeError, Hash, false]	(ENV["MONO_T_ZZ"]="hi"; a=ENV["MONO_T_ZZ"].frozen?; b=ENV.method(:has_key?)==ENV
 0b40f53074d9e48c2b4d7383337aaada	[[1, 1, 2, 3], ArgumentError, -2, nil]	class Diff\n          attr_reader :v\n          def initialize(v) = @v = 
 0b45e95b3c2f86584c9598881d58fac9	[42, 90, 15, "1/2", "7:8", "argerr"]	def a0; 42; end\n        def a1(x); x * 10; end\n        def a5(a, b, c, 
+0b4f45356eb0234401ec06e247eb53b6	[[["[[\\"Integer\\", 1], [\\"Float\\", 2.5], [\\"NilClass\\", nil], [\\"String\\", \\"\\\\x00\\\\xFF\\"], [\\"String\\", \\"txt\\"]]"]], [["int", [["integer", 7]]], ["big", [["real", 1.1805916207174113e+21]]], ["float", [["real", 1.5]]], ["nil", [["null", nil]]], ["text", [["text", "plain"]]], ["binary", [["blob", "bin"]]], ["blob", [["blob", "\\x00\\xFF"]]], ["bool", "RuntimeError", "can't return TrueClass"], ["obj", "RuntimeError", "can't return Object"]], [["got 1"]], [[[15]], [[0]]], ["ArgumentError", "tried to create Proc object without a block"], [[14]], ["a\\u0000b", "one", "ret", "triple", "types"], [[2]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 0b56e400524c40599f5741f2c015962d	7	class Foo\n              def method_missing(name, *args)\n           
 0b645df6fa816084c17746fbb8754151	-4	class Integer; alias __orig :~; def ~; __orig; end; end; ~(3)
 0b67f0becaeeca974d1e74004df4c680	[[:x], [1, :y]]	class C\n                 def initialize; @log = []; end\n                 def []=

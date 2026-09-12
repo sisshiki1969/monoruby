@@ -666,6 +666,20 @@ fn sqlite3_create_function() {
         # call with a different count still runs.
         db.create_function("one", 1) { |fp, a| fp.result = "got #{a.inspect}" }
         res << db.execute("SELECT one(1, 2)")
+        # `define_function` is the same thing without flags, and hands
+        # the block the arguments directly rather than a FunctionProxy.
+        db.define_function("triple") { |v| v.to_i * 3 }
+        res << [db.execute("SELECT triple(5)"), db.execute("SELECT triple(NULL)")]
+        res << (begin; db.define_function("nb"); rescue StandardError => e; [e.class.name, e.message]; end)
+        # SQLite takes a NUL-terminated name, so a name holding a NUL
+        # defines only the part before it — while the registry the
+        # extension keeps is keyed by the whole string.
+        db.define_function("a\0b") { |v| v.to_i * 7 }
+        res << db.execute("SELECT a(2)")
+        res << db.instance_variable_get(:@functions).keys.sort
+        # SQLITE_DETERMINISTIC passes through.
+        db.define_function_with_flags("det", 0x800) { |v| v.to_i + 1 }
+        res << db.execute("SELECT det(1)")
         db.close
         res
         "##,

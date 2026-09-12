@@ -1331,17 +1331,32 @@ fn register_function(
 ) -> Result<Value> {
     let db = db_of(vm, globals, lfp.self_val())?;
     let name = lfp.arg(0).expect_string(&globals.store)?;
-    let Ok(cname) = CString::new(name.as_str()) else {
-        return Err(MonorubyErr::argumenterr("string contains a NUL byte"));
-    };
+    // SQLite takes a NUL-terminated name, so a name holding a NUL byte
+    // registers only the part before it — which is what the C extension
+    // does, and `"a\0b"` really does define `a`.
+    let bytes = name.as_bytes();
+    let upto = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let cname = CString::new(&bytes[..upto]).expect("no NUL before the first NUL");
     let enc = sq::SQLITE_UTF8 | (flags & sq::SQLITE_DETERMINISTIC);
     let Some(bh) = lfp.block() else {
-        return Err(MonorubyErr::argumenterr("no block given"));
+        // What `Proc.new` says, which is where the C extension ends up.
+        return Err(MonorubyErr::argumenterr(
+            "tried to create Proc object without a block",
+        ));
     };
     let block: Value = vm.generate_proc(globals, bh, pc)?.into();
     // Rooted here for as long as SQLite may call it; the `FuncEntry`
     // below holds the same Value but is invisible to the collector.
     native_mut::<DbHandle>(lfp.self_val())?.funcs.push(block);
+    // The C extension also records it under the name the caller gave,
+    // which `Database#functions` exposes.
+    let funcs = globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("@functions"))
+        .unwrap_or_default();
+    if let Some(mut h) = funcs.try_hash_ty() {
+        h.insert(Value::string_from_str(&name), block, vm, globals)?;
+    }
     let entry = Box::into_raw(Box::new(FuncEntry { block }));
     // From here on `stmt_step` installs a guard: something can call back.
     FUNC_COUNT.with(|n| n.set(n.get() + 1));
