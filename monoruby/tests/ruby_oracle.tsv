@@ -2008,6 +2008,7 @@
 9343abce32f04d953cc04ff67ed4bf31	["Socket", "Addrinfo", "127.0.0.1", true]	require "socket"\n            srv = Socket.new(:INET, :STREAM)\n     
 935122a7066cc663cf26533147c2cda5	[true, true, true, nil, false, false, true, "main", false, true, true, true, :meth, :clean]	$probe = []\n            path = "/tmp/mrb_load_wrap_t1_#{Process.pid
 9367674835b7363d7b25734fa0d598d3	[["a", "b"], ["a|b"]]	$; = "|"; r = ["a|b".split, "a|b".split(",")]; $; = nil; r
+938f2c5c071fe55c0abe16c17f25401b	["ret-1", "brk-1", "thr-3"]	def ret_through_ensure\n          begin\n            return ["ret", 1].jo
 93c5aa7882439219082961392f4d9537	["can't convert Object to Array (Object#to_ary gives Integer)", "N\\na\\n[...]\\n"]	r, w = IO.pipe\n            bad = Object.new\n            def bad.to_
 93e0fd9789bb5c32798b9de710a89935	67	putc(65); putc("Hi"); o=Object.new; def o.to_int; 66; end; putc(o); putc(67)
 93e6ef7313e6853be460ee30b0736410	[true, 5]	pid = fork { exit 5 }\n            w = Process.detach(pid)\n         

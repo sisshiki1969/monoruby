@@ -150,25 +150,30 @@ impl MonorubyErr {
     }
 
     ///
-    /// Mark every `Value` reachable from this error so the GC keeps
-    /// them alive while the error is in flight (held by `Executor`'s
-    /// pending exception slot or wrapped in a heap-allocated
-    /// `ExceptionInner`). Most error kinds carry only metadata
-    /// (class ids, identifier symbols, paths), but a few smuggle
-    /// real `Value`s — the relevant variants are dispatched
-    /// explicitly so that adding a new error kind that owns a
-    /// `Value` will not silently regress.
+    /// Call `f` with every `Value` this error carries. Most error kinds
+    /// hold only metadata (class ids, identifier symbols, paths), but a
+    /// few smuggle real `Value`s — those variants are dispatched
+    /// explicitly so that adding a new error kind that owns a `Value`
+    /// will not silently regress.
     ///
-    pub(crate) fn mark(&self, alloc: &mut alloc::Allocator<crate::value::RValue>) {
-        use alloc::GC;
-        if let Some(original) = &self.original {
-            original.mark(alloc);
+    /// Both callers need the same set, which is why they share one
+    /// walk. [`MonorubyErr::mark`] keeps them alive while the error is
+    /// in flight (held by `Executor`'s pending exception slot, or
+    /// wrapped in a heap-allocated `ExceptionInner`); it adds only the
+    /// `Lfp` of the non-local-return kinds, a frame pointer rather than
+    /// a `Value`. `Globals::run_with_prelude` roots them on the temp
+    /// stack, because it holds an error in a Rust local — which the
+    /// collector does not scan — across the exit handlers.
+    ///
+    pub(crate) fn for_each_value(&self, mut f: impl FnMut(Value)) {
+        if let Some(original) = self.original {
+            f(original);
         }
-        if let Some(cause) = &self.explicit_cause {
-            cause.mark(alloc);
+        if let Some(cause) = self.explicit_cause {
+            f(cause);
         }
-        if let Some((val, _)) = &self.payload {
-            val.mark(alloc);
+        if let Some((val, _)) = self.payload {
+            f(val);
         }
         match &self.kind {
             // The receiver that triggered the NoMethodError (set by
@@ -176,34 +181,40 @@ impl MonorubyErr {
             MonorubyErrKind::NotMethod {
                 receiver: Some(recv),
                 ..
-            } => {
-                recv.mark(alloc);
-            }
+            } => f(*recv),
             // Receiver / key Values for KeyError.
             MonorubyErrKind::Key(Some((recv, key))) => {
-                recv.mark(alloc);
-                key.mark(alloc);
+                f(*recv);
+                f(*key);
             }
             // Receiver Value for NameError / FrozenError.
-            MonorubyErrKind::Name(_, Some(recv)) | MonorubyErrKind::Frozen(Some(recv)) => {
-                recv.mark(alloc);
-            }
-            // Non-local return: carries the return value and the
-            // captured frame pointer it must return to.
-            MonorubyErrKind::MethodReturn(v, lfp) => {
-                v.mark(alloc);
-                lfp.mark(alloc);
-            }
-            MonorubyErrKind::BlockBreak(v, _, lfp) => {
-                v.mark(alloc);
-                lfp.mark(alloc);
-            }
+            MonorubyErrKind::Name(_, Some(recv)) | MonorubyErrKind::Frozen(Some(recv)) => f(*recv),
+            // Non-local return: the return value (the frame pointer it
+            // must return to is `mark`'s business, not a `Value`).
+            MonorubyErrKind::MethodReturn(v, _) | MonorubyErrKind::BlockBreak(v, _, _) => f(*v),
             // Kernel#throw: carries the tag and value.
             MonorubyErrKind::Throw(tag, val) => {
-                tag.mark(alloc);
-                val.mark(alloc);
+                f(*tag);
+                f(*val);
             }
             // The remaining kinds carry no `Value` payload.
+            _ => {}
+        }
+    }
+
+    ///
+    /// Mark every `Value` reachable from this error, plus the captured
+    /// frame a non-local return carries, so the GC keeps them alive
+    /// while the error is in flight.
+    ///
+    pub(crate) fn mark(&self, alloc: &mut alloc::Allocator<crate::value::RValue>) {
+        use alloc::GC;
+        self.for_each_value(|v| v.mark(alloc));
+        match &self.kind {
+            // The captured frame a non-local return must return to.
+            MonorubyErrKind::MethodReturn(_, lfp) | MonorubyErrKind::BlockBreak(_, _, lfp) => {
+                lfp.mark(alloc)
+            }
             _ => {}
         }
     }
