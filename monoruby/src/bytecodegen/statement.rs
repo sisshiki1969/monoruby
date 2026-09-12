@@ -1007,6 +1007,29 @@ mod test {
     }
 
     #[test]
+    fn break_keeps_the_loop_value() {
+        // A `break` stores the loop's value into the loop's `ret` slot
+        // instead of pushing it, so the generator's depth at the exit is one
+        // short of the merge's at `break_dest`. The JIT discards every slot
+        // above an instruction's recorded sp, so emitted at the lower depth
+        // the value is dropped the instant it is stored, and the merge then
+        // compiles a `ret` of an undefined slot. The calls before the result
+        // are what makes the method hot enough to be compiled.
+        run_test(
+            r##"
+            def a; begin; break; end while false; end
+            def b; begin; break 7; end while false; end
+            def c(x); begin; break 1 if x; break 2; end while false; end
+            def d; i = 0; while true; i += 1; break i if i > 3; end; end
+            def e; for i in 0..10; break i if i > 2; end; end
+            def g; begin; begin; break 8; ensure; $ens = 1; end; end while false; end
+            60.times { a; b; c(true); c(false); d; e; g }
+            [a, b, c(true), c(false), d, e, g, $ens]
+            "##,
+        );
+    }
+
+    #[test]
     fn redo_loop() {
         // `redo` restarts the loop body without re-evaluating the condition
         // (so a side-effecting condition like `(i += 1)` does not re-run).
