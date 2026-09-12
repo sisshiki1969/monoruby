@@ -2238,6 +2238,7 @@ a3c1f3715d0c4e66afd79ece55a249ad	[1, "c", Errno::EEXIST, [ArgumentError, "invali
 a3ee8370b62260dbe97cbc7ed605dd03	"missing keyword: :x"	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:,
 a3fbe69a6d5dbf4f950d529b546578ff	[true, true]	def bar(x); x * 2; end\n        m = method(:bar)\n        loc = m.source_
 a40cda8b2c175e21feb1879eeb9ab44f	[]	def m\n              "foofoo" =~ /(?<matched>foo)/\n              loc
+a412e7cd426cce32db94f655f3ff9e81	2406136	class Picker\n  def pick(n, mask)\n    case n & mask\n    when 0 then 1\n    when 1 
 a4149a238fc4b1eb2b5d83d5a3a1df6e	[1, [2, 3, 4], 5]	->((a, *b, c)) { [a, b, c] }.call([1, 2, 3, 4, 5])
 a41897885873df2832ff2e4ca224faf4	true	class Foo\n              def initialize\n                @a = 1\n     
 a438a5b6095e3a044e9fc3a4b29764a8	[false, true, true, false, false, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true]	class StrMock\n          def to_str; "abc"; end\n          def ==(o); o =
