@@ -452,26 +452,18 @@ fn sqlite3_statements_are_finalized_when_collected() {
 /// binding refuses loudly instead, with a `SQLite3::Exception` naming
 /// the feature, rather than appearing to work.
 ///
-/// `create_function` is no longer among them — see
-/// `sqlite3_create_function`.
+/// `create_function` and `create_aggregate` are no longer among them —
+/// see `sqlite3_create_function` and `sqlite3_create_aggregate`.
 #[test]
 fn sqlite3_unsupported_callbacks_refuse() {
     let v = run_test_no_result_check(
         r##"
         require "sqlite3"
         db = SQLite3::Database.new(":memory:")
-        agg = Class.new do
-          def self.arity; 1; end
-          def self.name; "myagg"; end
-          def step(x); end
-          def finalize; 0; end
-        end
         r = []
-        r << (begin; db.create_aggregate_handler(agg); rescue => e; [e.class.name, e.message]; end)
         r << (begin; db.collation("c", Object.new); rescue => e; [e.class.name, e.message]; end)
         r << (begin; db.load_extension("x"); rescue => e; [e.class.name, e.message]; end)
         expected = [
-          ["SQLite3::Exception", "create_aggregate is not supported by monoruby's sqlite3 binding"],
           ["SQLite3::Exception", "collation is not supported by monoruby's sqlite3 binding"],
           ["SQLite3::Exception", "load_extension is not available: monoruby's SQLite is built without extension loading"],
         ]
@@ -493,7 +485,7 @@ fn sqlite3_unsupported_callbacks_refuse() {
         r.size + r2.size
         "##,
     );
-    assert_eq!(v.try_fixnum(), Some(8));
+    assert_eq!(v.try_fixnum(), Some(7));
 }
 
 /// The failure paths of opening a connection, and `open16`, which the
@@ -744,6 +736,130 @@ fn sqlite3_function_reentrancy() {
         db.create_function("wrap", 0) { |fp| fp.result = db.execute("SELECT inner_bad()").flatten.first }
         res << (begin; db.execute("SELECT wrap()"); rescue StandardError => e; [e.class.name, e.message]; end)
         res << db.execute("SELECT COUNT(*) FROM t")
+        db.close
+        res
+        "##,
+    );
+}
+
+/// `create_aggregate` over the native binding. The gem builds a class
+/// whose instances hold a `FunctionProxy`; the binding makes one per
+/// aggregation group, steps it per row, and finalizes it once.
+#[test]
+fn sqlite3_create_aggregate() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        db.execute("CREATE TABLE t (g, v)")
+        [["a", 1], ["a", 2], ["b", 10], ["b", 20], ["b", 30]].each { |g, v|
+          db.execute("INSERT INTO t VALUES (?, ?)", [g, v])
+        }
+        db.create_aggregate("mysum", 1) do
+          step { |ctx, v| ctx[:sum] = (ctx[:sum] || 0) + v.to_i }
+          finalize { |ctx| ctx.result = ctx[:sum] || 0 }
+        end
+        res = [db.execute("SELECT mysum(v) FROM t")]
+        res << db.execute("SELECT g, mysum(v) FROM t GROUP BY g ORDER BY g")
+        # A group with no rows still finalizes, on a fresh instance.
+        res << db.execute("SELECT mysum(v) FROM t WHERE g = 'zzz'")
+        # Unlike a scalar function, an aggregate's arity is registered.
+        res << (begin
+                  db.execute("SELECT mysum(v, v) FROM t")
+                rescue SQLite3::Exception => e
+                  [e.class.name, e.message.lines.first.chomp]
+                end)
+        # Two aggregates in one query accumulate independently.
+        res << db.execute("SELECT mysum(v), mysum(v + 1) FROM t")
+        # And one composed with a scalar function.
+        db.create_function("dbl", 1) { |fp, v| fp.result = v.to_i * 2 }
+        res << db.execute("SELECT mysum(dbl(v)) FROM t")
+        # `create_aggregate_handler` takes a class directly.
+        handler = Class.new do
+          def self.arity = 1
+          def self.name = "handlermax"
+          def initialize; @m = nil; end
+          def step(ctx, v); @m = v.to_i if @m.nil? || v.to_i > @m; end
+          def finalize(ctx); ctx.result = @m; end
+        end
+        db.create_aggregate_handler(handler)
+        res << db.execute("SELECT handlermax(v) FROM t")
+        db.close
+        res
+        "##,
+    );
+}
+
+/// A raise from either callback must not unwind through SQLite's C
+/// frames: it is carried out of the step and re-raised unchanged, and
+/// the connection stays usable.
+#[test]
+fn sqlite3_aggregate_exceptions() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        db.execute("CREATE TABLE t (v)")
+        db.execute("INSERT INTO t VALUES (1), (2), (3)")
+        res = []
+        db.create_aggregate("boomstep", 1) do
+          step { |ctx, v| raise ArgumentError, "step boom" if v.to_i == 2 }
+          finalize { |ctx| ctx.result = 0 }
+        end
+        res << (begin
+                  db.execute("SELECT boomstep(v) FROM t")
+                rescue StandardError => e
+                  [e.class.name, e.message]
+                end)
+        db.create_aggregate("boomfin", 1) do
+          step { |ctx, v| }
+          finalize { |ctx| raise "final boom" }
+        end
+        res << (begin
+                  db.execute("SELECT boomfin(v) FROM t")
+                rescue StandardError => e
+                  [e.class.name, e.message]
+                end)
+        # Unaffected afterwards, and a working aggregate still runs.
+        res << db.execute("SELECT COUNT(*) FROM t")
+        db.create_aggregate("ok", 1) do
+          step { |ctx, v| ctx[:n] = (ctx[:n] || 0) + v.to_i }
+          finalize { |ctx| ctx.result = ctx[:n] }
+        end
+        res << db.execute("SELECT ok(v) FROM t")
+        db.close
+        res
+        "##,
+    );
+}
+
+/// Every group holds a live instance the collector must not reclaim,
+/// and a finished group's slot must be reused rather than leaked.
+#[test]
+fn sqlite3_aggregate_group_state() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        db.execute("CREATE TABLE t (g, v)")
+        db.execute("BEGIN")
+        60.times { |i| 3.times { |j| db.execute("INSERT INTO t VALUES (?, ?)", ["g#{i}", j]) } }
+        db.execute("COMMIT")
+        # The block allocates on every row, so a collection can land
+        # between them while every group's instance is in flight.
+        db.create_aggregate("collect", 1) do
+          step { |ctx, v| (ctx[:a] ||= []) << ("y" * 30 + v.to_s) }
+          finalize { |ctx| ctx.result = (ctx[:a] || []).map(&:size).sum }
+        end
+        rows = db.execute("SELECT g, collect(v) FROM t GROUP BY g ORDER BY g")
+        res = [rows.size, rows.first, rows.last, rows.map { |r| r[1] }.uniq]
+        # Running it again must reuse the slots the first run released.
+        3.times { db.execute("SELECT g, collect(v) FROM t GROUP BY g") }
+        GC.start
+        res << db.execute("SELECT collect(v) FROM t").flatten
         db.close
         res
         "##,
