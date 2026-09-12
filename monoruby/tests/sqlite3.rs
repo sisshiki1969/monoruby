@@ -672,6 +672,15 @@ fn sqlite3_create_function() {
         # SQLITE_DETERMINISTIC passes through.
         db.define_function_with_flags("det", 0x800) { |v| v.to_i + 1 }
         res << db.execute("SELECT det(1)")
+        # A name SQLite refuses is reported, and the connection is
+        # unharmed: the registration SQLite dropped takes its own data
+        # with it.
+        res << (begin
+                  db.create_function("w" * 300, 1) { |fp, v| fp.result = 1 }
+                rescue SQLite3::Exception => e
+                  [e.class.name, e.message]
+                end)
+        res << db.execute("SELECT det(2)")
         db.close
         res
         "##,
@@ -775,6 +784,15 @@ fn sqlite3_create_aggregate() {
         # And one composed with a scalar function.
         db.create_function("dbl", 1) { |fp, v| fp.result = v.to_i * 2 }
         res << db.execute("SELECT mysum(dbl(v)) FROM t")
+        # A name SQLite refuses is reported, and leaves nothing behind.
+        res << (begin
+                  db.create_aggregate("z" * 300, 1) do
+                    step { |ctx, v| }
+                    finalize { |ctx| ctx.result = 1 }
+                  end
+                rescue SQLite3::Exception => e
+                  [e.class.name, e.message]
+                end)
         # `create_aggregate_handler` takes a class directly.
         handler = Class.new do
           def self.arity = 1
@@ -860,6 +878,15 @@ fn sqlite3_aggregate_group_state() {
         3.times { db.execute("SELECT g, collect(v) FROM t GROUP BY g") }
         GC.start
         res << db.execute("SELECT collect(v) FROM t").flatten
+        # A collection forced from inside `step` must find every group's
+        # instance live, including the ones not being stepped.
+        db.create_aggregate("gcsum", 1) do
+          step { |ctx, v| GC.start; ctx[:n] = (ctx[:n] || 0) + v.to_i }
+          finalize { |ctx| ctx.result = ctx[:n] || -1 }
+        end
+        res << db.execute(
+          "SELECT g, gcsum(v) FROM t WHERE g IN ('g0', 'g1') GROUP BY g ORDER BY g"
+        )
         db.close
         res
         "##,

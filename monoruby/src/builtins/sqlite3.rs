@@ -1031,18 +1031,18 @@ fn db_authorizer_assign(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: B
 // User-defined functions
 // ---------------------------------------------------------------------
 
-/// One registered scalar function: the Proc `create_function` was given.
+/// One registered function: the Proc `create_function` was given, or the
+/// class `create_aggregate` was given. Which of the two it is follows
+/// from the callbacks registered beside it — `func_invoke` is only ever
+/// given a Proc, `agg_step` / `agg_final` only ever a class — so the
+/// entry does not carry the distinction a second time.
 ///
 /// SQLite keeps this as the function's `pApp` for as long as the function
 /// is defined, so it is a leaked `Box` freed by the `xDestroy` below. The
-/// same Proc is also held in `DbHandle::funcs`, which is what roots it
+/// same value is also held in `DbHandle::funcs`, which is what roots it
 /// for the collector — this copy is never the only reference.
-enum FuncEntry {
-    /// `create_function`: one block, run per row.
-    Scalar { block: Value },
-    /// `create_aggregate`: a class, instantiated once per group. Its
-    /// instances answer `step(*args)` per row and `finalize` once.
-    Aggregate { klass: Value },
+struct FuncEntry {
+    value: Value,
 }
 
 /// `xDestroy`: SQLite calls this when the function is replaced or its
@@ -1307,11 +1307,7 @@ unsafe extern "C" fn func_invoke(
             vm.temp_push(v);
             args.push(v);
         }
-        let FuncEntry::Scalar { block } = entry else {
-            result_error(ctx, "not a scalar function");
-            return;
-        };
-        let result = match block.is_proc() {
+        let result = match entry.value.is_proc() {
             Some(p) => vm.invoke_proc(globals, &p, &args),
             None => Err(err_sqlite3(vm, globals, "function block is not a Proc")),
         };
@@ -1331,11 +1327,11 @@ unsafe extern "C" fn func_invoke(
 
 /// The instance accumulating this group, creating it on the first row.
 ///
-/// SQLite's per-group memory is a slot number into the connection's
-/// instance table; zero means "not started", so slots are stored
-/// one-based. `n` is the size to allocate — zero asks without
-/// allocating, which is what `xFinal` does to tell an empty group from
-/// one that stepped.
+/// SQLite's per-group memory is four bytes holding a slot number into
+/// the connection's instance table; zero means "not started yet", so
+/// slots are stored one-based. The pointer to those bytes comes back
+/// with the instance, so `xFinal` can free the slot without asking for
+/// it a second time.
 ///
 /// # Safety
 /// A live context belonging to `state`'s connection.
@@ -1343,29 +1339,28 @@ unsafe fn aggregate_instance(
     state: &mut CallState,
     ctx: *mut sq::sqlite3_context,
     klass: Value,
-    create: bool,
-) -> Result<Option<Value>> {
+) -> Result<(Value, *mut u32)> {
     // SAFETY: the caller's contract.
-    let slot_ptr = unsafe {
-        sq::sqlite3_aggregate_context(ctx, if create { 4 } else { 0 }) as *mut u32
-    };
+    let slot_ptr = unsafe { sq::sqlite3_aggregate_context(ctx, 4) as *mut u32 };
     if slot_ptr.is_null() {
-        // Out of memory, or `xFinal` on a group that never stepped.
-        return Ok(None);
+        // The one failure SQLite reports this way.
+        return Err(MonorubyErr::runtimeerr("out of memory"));
     }
     // SAFETY: four bytes SQLite zeroed for us and keeps for this group.
     let slot = unsafe { *slot_ptr };
-    let vm = unsafe { &mut *state.vm };
-    let globals = unsafe { &mut *state.globals };
-    if slot != 0 {
-        let table = &native_mut::<DbHandle>(state.db_obj)?.aggregates;
-        return Ok(table.get(slot as usize - 1).copied().flatten());
-    }
-    if !create {
-        return Ok(None);
+    if slot != 0
+        && let Some(inst) = native_mut::<DbHandle>(state.db_obj)?
+            .aggregates
+            .get(slot as usize - 1)
+            .copied()
+            .flatten()
+    {
+        return Ok((inst, slot_ptr));
     }
     // First row of this group: one instance of the proxy class, which
     // holds the caller's `FunctionProxy` as its context.
+    let vm = unsafe { &mut *state.vm };
+    let globals = unsafe { &mut *state.globals };
     let inst = vm.invoke_method_inner(globals, IdentId::NEW, klass, &[], None, None)?;
     let table = &mut native_mut::<DbHandle>(state.db_obj)?.aggregates;
     let index = match table.iter().position(|e| e.is_none()) {
@@ -1381,24 +1376,16 @@ unsafe fn aggregate_instance(
     // SAFETY: as above; SQLite hands back the same four bytes for every
     // row of this group.
     unsafe { *slot_ptr = index as u32 + 1 };
-    Ok(Some(inst))
+    Ok((inst, slot_ptr))
 }
 
 /// Drop this group's instance, freeing its slot for the next group.
 ///
 /// # Safety
-/// As `aggregate_instance`.
-unsafe fn release_aggregate(state: &mut CallState, ctx: *mut sq::sqlite3_context) {
-    // SAFETY: the caller's contract; asking with 0 never allocates.
-    let slot_ptr = unsafe { sq::sqlite3_aggregate_context(ctx, 0) as *mut u32 };
-    if slot_ptr.is_null() {
-        return;
-    }
-    // SAFETY: four bytes SQLite kept for this group.
+/// The slot `aggregate_instance` handed back for a group still running.
+unsafe fn release_aggregate(state: &mut CallState, slot_ptr: *mut u32) {
+    // SAFETY: the caller's contract; the slot is one-based and non-zero.
     let slot = unsafe { *slot_ptr };
-    if slot == 0 {
-        return;
-    }
     if let Ok(h) = native_mut::<DbHandle>(state.db_obj)
         && let Some(e) = h.aggregates.get_mut(slot as usize - 1)
     {
@@ -1406,6 +1393,27 @@ unsafe fn release_aggregate(state: &mut CallState, ctx: *mut sq::sqlite3_context
     }
     // SAFETY: as above.
     unsafe { *slot_ptr = 0 };
+}
+
+/// Free a group's instance when `xFinal` cannot run normally — almost
+/// always because an earlier row raised and the step is unwinding. The
+/// group is over either way, so leaving the instance in the table would
+/// pin it, and its slot, for the life of the connection.
+///
+/// # Safety
+/// A live context, inside `xFinal`.
+unsafe fn release_aborted_aggregate(ctx: *mut sq::sqlite3_context) {
+    // SAFETY: the caller's contract; asking with 0 never allocates, so
+    // a group that never stepped answers null and has nothing to free.
+    let slot_ptr = unsafe { sq::sqlite3_aggregate_context(ctx, 0) as *mut u32 };
+    // SAFETY: as above.
+    let Some(state) = (unsafe { current_call(sq::sqlite3_context_db_handle(ctx)) }) else {
+        return;
+    };
+    if !slot_ptr.is_null() {
+        // SAFETY: the slot SQLite kept for this group, still one-based.
+        unsafe { release_aggregate(&mut *state, slot_ptr) };
+    }
 }
 
 /// Recover the running step and this function's registration, or report
@@ -1442,19 +1450,14 @@ unsafe extern "C" fn agg_step(
         let Some((state, entry)) = callback_state(ctx) else {
             return;
         };
-        let FuncEntry::Aggregate { klass } = entry else {
-            result_error(ctx, "not an aggregate function");
-            return;
-        };
+        let klass = entry.value;
         let vm = &mut *state.vm;
         let globals = &mut *state.globals;
         // The instance and the arguments stay rooted while the rest are
         // built: each is fresh, and allocating the next may collect.
         let len = vm.temp_len();
         let result = (|| -> Result<()> {
-            let Some(inst) = aggregate_instance(state, ctx, *klass, true)? else {
-                return Err(MonorubyErr::runtimeerr("out of memory"));
-            };
+            let (inst, _) = aggregate_instance(state, ctx, klass)?;
             let vm = &mut *state.vm;
             let globals = &mut *state.globals;
             vm.temp_push(inst);
@@ -1484,19 +1487,20 @@ unsafe extern "C" fn agg_final(ctx: *mut sq::sqlite3_context) {
     // SAFETY: SQLite passes a live context.
     unsafe {
         let Some((state, entry)) = callback_state(ctx) else {
+            release_aborted_aggregate(ctx);
             return;
         };
-        let FuncEntry::Aggregate { klass } = entry else {
-            result_error(ctx, "not an aggregate function");
-            return;
-        };
+        let klass = entry.value;
         let vm = &mut *state.vm;
         let len = vm.temp_len();
+        // The slot this group's instance sits in, so it can be freed
+        // below whether `finalize` answered or raised.
+        let mut slot_ptr: *mut u32 = std::ptr::null_mut();
         let result = (|| -> Result<()> {
-            // `create` here is what makes an empty group answer.
-            let Some(inst) = aggregate_instance(state, ctx, *klass, true)? else {
-                return Err(MonorubyErr::runtimeerr("out of memory"));
-            };
+            // A group that never stepped starts its instance here, which
+            // is what makes an aggregate over no rows answer.
+            let (inst, p) = aggregate_instance(state, ctx, klass)?;
+            slot_ptr = p;
             let vm = &mut *state.vm;
             let globals = &mut *state.globals;
             vm.temp_push(inst);
@@ -1508,7 +1512,9 @@ unsafe extern "C" fn agg_final(ctx: *mut sq::sqlite3_context) {
         let vm = &mut *state.vm;
         vm.temp_clear(len);
         // The group is over either way: its instance must not outlive it.
-        release_aggregate(state, ctx);
+        if !slot_ptr.is_null() {
+            release_aggregate(state, slot_ptr);
+        }
         if let Err(e) = result {
             let globals = &mut *state.globals;
             result_error(ctx, &e.get_error_message(&globals.store));
@@ -1544,7 +1550,7 @@ fn db_define_aggregator(
         .coerce_to_i64(globals)? as c_int;
     // Rooted for as long as SQLite may instantiate it.
     native_mut::<DbHandle>(lfp.self_val())?.funcs.push(klass);
-    let entry = Box::into_raw(Box::new(FuncEntry::Aggregate { klass }));
+    let entry = Box::into_raw(Box::new(FuncEntry { value: klass }));
     FUNC_COUNT.with(|n| n.set(n.get() + 1));
     // SAFETY: a live connection and a NUL-terminated name; `entry` goes
     // to SQLite, which gives it back to `func_destroy`.
@@ -1562,8 +1568,9 @@ fn db_define_aggregator(
         )
     };
     if rc != sq::SQLITE_OK {
-        // SAFETY: the box just leaked, still unshared.
-        drop(unsafe { Box::from_raw(entry) });
+        // `entry` is not ours to free: SQLite runs `xDestroy` on the
+        // application data when the registration itself fails, so the
+        // box has already been dropped by the time this is reached.
         FUNC_COUNT.with(|n| n.set(n.get() - 1));
         check(vm, globals, db, rc)?;
     }
@@ -1635,7 +1642,7 @@ fn register_function(
     if let Some(mut h) = funcs.try_hash_ty() {
         h.insert(Value::string_from_str(&name), block, vm, globals)?;
     }
-    let entry = Box::into_raw(Box::new(FuncEntry::Scalar { block }));
+    let entry = Box::into_raw(Box::new(FuncEntry { value: block }));
     // From here on `stmt_step` installs a guard: something can call back.
     FUNC_COUNT.with(|n| n.set(n.get() + 1));
     // SAFETY: a live connection and a NUL-terminated name; `entry` is
@@ -1654,10 +1661,8 @@ fn register_function(
         )
     };
     if rc != sq::SQLITE_OK {
-        // SQLite did not take the function, so `xDestroy` never runs and
-        // the box is ours to free.
-        // SAFETY: the box just leaked, still unshared.
-        drop(unsafe { Box::from_raw(entry) });
+        // As above: a failed registration still runs `xDestroy`, so the
+        // box is already gone and freeing it here would double-free.
         FUNC_COUNT.with(|n| n.set(n.get() - 1));
         check(vm, globals, db, rc)?;
     }
