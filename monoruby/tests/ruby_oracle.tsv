@@ -2427,6 +2427,7 @@ b074a58194d91b7b13d55025d23399ce	[nil, 2, 1, 1, nil, nil, 5, nil]	x = nil\n     
 b07897e1515470c5f367e6c838cd3ca3	true	h = {a: 1}.compare_by_identity\n            Marshal.load(Marshal.dum
 b0a6a8263e7c30eec12325762ab54dc5	[1, 2, nil, nil, 3, 1, nil, :from_block, [:a, :b, :c, :d, :e], [:a], [:a, :b, :d, :e]]	r = []\n        begin\n          r << 1\n          break if r.size == 1\n  
 b0fd99f84986028ca4c492df3405e97c	[1, true, true, [:autoindexes, :filter_hits, :filter_misses, :fullscan_steps, :reprepares, :runs, :sorts, :vm_steps], 1, [["ArgumentError", "unknown key: nope"], ["TypeError", "non-symbol given"], ["TypeError", "non-symbol given"]], 1, [:autoindexes, :filter_hits, :filter_misses, :fullscan_steps, :reprepares, :runs, :sorts, :vm_steps], "TypeError"]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
+b10be18d4e367e7c54a931cb46aa1a17	[749250.0, 1488.0, 1498.5]	def store(b, off, v) = b.set_value(:f64, off, v)\n            def fe
 b127614a38e6a826e83df4733ad1c138	[true, true]	require "openssl"\n        [OpenSSL::Cipher::CipherError < OpenSSL::Open
 b13eb772180c210a5c10579da6ea6cfb	true	a = []\n            a << a\n            b = Marshal.load(Marshal.dump
 b15052c5abbd93a1a9004be3b57beb9c	[:foo, :bar]	$res = []\n            obj = Object.new\n            def obj.singleto
