@@ -877,11 +877,14 @@ fn fiddle_write_inline(
     };
 
     let val_slot = args + 2usize;
-    state.load_fixnum(ir, args, GP::Rdi);
 
     match kind {
         WriteKind::F64 => {
+            // `load_fpr` destroys rdi: a value that is not already in an fpr
+            // is converted through it. So the value reaches its register
+            // before the address is put in rdi, never after.
             let xsrc = state.load_fpr(ir, val_slot);
+            state.load_fixnum(ir, args, GP::Rdi);
             let deopt = ir.new_deopt(state);
             ir.inline(move |r#gen, _, labels, base| {
                 let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
@@ -889,6 +892,7 @@ fn fiddle_write_inline(
             });
         }
         _ => {
+            state.load_fixnum(ir, args, GP::Rdi);
             state.load_fixnum(ir, val_slot, GP::Rsi);
             let deopt = ir.new_deopt(state);
             let width = match kind {
@@ -1189,6 +1193,29 @@ mod tests {
               raise unless Fiddle.___read(ptr, TY_INT) == 0x41424344
               Fiddle.___write(ptr, TY_DOUBLE, 3.14)
               raise unless Fiddle.___read(ptr, TY_DOUBLE) == 3.14
+            ensure
+              Fiddle.___free(ptr)
+            end
+            :ok
+            "#
+        ));
+    }
+
+    // A double that arrives as a method argument is not already in an fpr,
+    // so the inlined `___write` converts it into one, and that conversion
+    // goes through rdi, where the address had been put. `Fiddle::Pointer`'s
+    // own `write_double` is exactly this shape. The literal in the test
+    // above never reaches it: a constant loads straight into an fpr.
+    #[test]
+    fn fiddle_write_double_argument() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            def store(ptr, v) = Fiddle.___write(ptr, TY_DOUBLE, v)
+            ptr = Fiddle.___malloc(8)
+            raise "malloc returned NULL" if ptr == 0
+            begin
+              1000.times {{ |i| store(ptr, i * 1.5) }}
+              raise unless Fiddle.___read(ptr, TY_DOUBLE) == 1498.5
             ensure
               Fiddle.___free(ptr)
             end
