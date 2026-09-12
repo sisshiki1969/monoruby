@@ -446,13 +446,14 @@ fn sqlite3_statements_are_finalized_when_collected() {
     );
 }
 
-/// The entry points monoruby's binding does not implement, and the ones
-/// it accepts but ignores. Not oracle-checked: the C extension really
-/// registers these callbacks, and the whole point here is that this
-/// binding refuses instead — a SQLite callback would have to re-enter
-/// the interpreter. What is pinned is that each fails loudly, as a
-/// `SQLite3::Exception` naming the feature, rather than appearing to
-/// work.
+/// The entry points monoruby's binding still does not implement, and the
+/// ones it accepts but ignores. Not oracle-checked: the C extension
+/// really registers these callbacks, and the point here is that this
+/// binding refuses loudly instead, with a `SQLite3::Exception` naming
+/// the feature, rather than appearing to work.
+///
+/// `create_function` is no longer among them — see
+/// `sqlite3_create_function`.
 #[test]
 fn sqlite3_unsupported_callbacks_refuse() {
     let v = run_test_no_result_check(
@@ -466,14 +467,10 @@ fn sqlite3_unsupported_callbacks_refuse() {
           def finalize; 0; end
         end
         r = []
-        r << (begin; db.create_function("f", 1) { |c, v| c.result = v }; rescue => e; [e.class.name, e.message]; end)
-        r << (begin; db.define_function("g") { |v| v }; rescue => e; [e.class.name, e.message]; end)
         r << (begin; db.create_aggregate_handler(agg); rescue => e; [e.class.name, e.message]; end)
         r << (begin; db.collation("c", Object.new); rescue => e; [e.class.name, e.message]; end)
         r << (begin; db.load_extension("x"); rescue => e; [e.class.name, e.message]; end)
         expected = [
-          ["SQLite3::Exception", "create_function is not supported by monoruby's sqlite3 binding"],
-          ["SQLite3::Exception", "create_function is not supported by monoruby's sqlite3 binding"],
           ["SQLite3::Exception", "create_aggregate is not supported by monoruby's sqlite3 binding"],
           ["SQLite3::Exception", "collation is not supported by monoruby's sqlite3 binding"],
           ["SQLite3::Exception", "load_extension is not available: monoruby's SQLite is built without extension loading"],
@@ -496,7 +493,7 @@ fn sqlite3_unsupported_callbacks_refuse() {
         r.size + r2.size
         "##,
     );
-    assert_eq!(v.try_fixnum(), Some(10));
+    assert_eq!(v.try_fixnum(), Some(8));
 }
 
 /// The failure paths of opening a connection, and `open16`, which the
@@ -623,6 +620,130 @@ fn sqlite3_binding_and_accessor_edges() {
         db.interrupt
         db.execute("INSERT INTO t (a, b) VALUES (1, 'x')")
         res << db.execute("SELECT * FROM t")
+        db.close
+        res
+        "##,
+    );
+}
+
+/// `create_function` over the native binding. The gem's Ruby half wraps
+/// the caller's block in one that fills a `FunctionProxy`; the block
+/// below it runs inside `sqlite3_step`, reached from SQLite's C
+/// callback, which is what every case here exercises.
+#[test]
+fn sqlite3_create_function() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        res = []
+        # Arguments arrive by the same mapping the row readers use.
+        db.create_function("types", -1) { |fp, *a| fp.result = a.map { |x| [x.class.name, x] }.inspect }
+        res << db.execute("SELECT types(1, 2.5, NULL, x'00ff', 'txt')")
+        # Results: the classes SQLite can store, and the refusal for the rest.
+        db.create_function("ret", 1) { |fp, kind|
+          fp.result = case kind
+            when "int" then 7
+            when "big" then 2**70
+            when "float" then 1.5
+            when "nil" then nil
+            when "text" then "plain"
+            when "binary" then "bin".dup.force_encoding("BINARY")
+            when "blob" then SQLite3::Blob.new("\x00\xff")
+            when "bool" then true
+            when "obj" then Object.new
+            end
+        }
+        res << %w[int big float nil text binary blob bool obj].map { |k|
+          begin
+            [k, db.execute("SELECT typeof(ret(?)), ret(?)", [k, k])]
+          rescue StandardError => e
+            [k, e.class.name, e.message]
+          end
+        }
+        # The arity given to create_function never reaches SQLite, so a
+        # call with a different count still runs.
+        db.create_function("one", 1) { |fp, a| fp.result = "got #{a.inspect}" }
+        res << db.execute("SELECT one(1, 2)")
+        # `define_function` is the same thing without flags, and hands
+        # the block the arguments directly rather than a FunctionProxy.
+        db.define_function("triple") { |v| v.to_i * 3 }
+        res << [db.execute("SELECT triple(5)"), db.execute("SELECT triple(NULL)")]
+        res << (begin; db.define_function("nb"); rescue StandardError => e; [e.class.name, e.message]; end)
+        # SQLite takes a NUL-terminated name, so a name holding a NUL
+        # defines only the part before it — while the registry the
+        # extension keeps is keyed by the whole string.
+        db.define_function("a\0b") { |v| v.to_i * 7 }
+        res << db.execute("SELECT a(2)")
+        res << db.instance_variable_get(:@functions).keys.sort
+        # SQLITE_DETERMINISTIC passes through.
+        db.define_function_with_flags("det", 0x800) { |v| v.to_i + 1 }
+        res << db.execute("SELECT det(1)")
+        db.close
+        res
+        "##,
+    );
+}
+
+/// A block that raises must not unwind through SQLite's C frames: the
+/// exception is carried out of the step and re-raised unchanged, the
+/// scan stops, and the connection stays usable.
+#[test]
+fn sqlite3_function_exceptions() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        db.execute("CREATE TABLE t (a)")
+        db.execute("INSERT INTO t VALUES (1), (2), (3)")
+        res = []
+        db.create_function("failat", 1) { |fp, v| raise ArgumentError, "boom at #{v}" if v.to_i == 2; fp.result = v }
+        res << (begin
+                  db.execute("SELECT failat(a) FROM t ORDER BY a")
+                rescue StandardError => e
+                  [e.class.name, e.message]
+                end)
+        # The same through the batch executor, which steps on its own.
+        res << (begin
+                  db.execute_batch2("SELECT failat(a) FROM t ORDER BY a")
+                rescue StandardError => e
+                  [e.class.name, e.message]
+                end)
+        # Unaffected afterwards.
+        res << db.execute("SELECT a FROM t ORDER BY a")
+        db.create_function("ok", 1) { |fp, v| fp.result = v.to_i + 10 }
+        res << db.execute("SELECT ok(a) FROM t ORDER BY a")
+        db.close
+        res
+        "##,
+    );
+}
+
+/// SQLite lets a function callback run another statement on the same
+/// connection, and the C extension allows it, so the call state a
+/// callback finds has to nest.
+#[test]
+fn sqlite3_function_reentrancy() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        db.execute("CREATE TABLE t (a)")
+        db.execute("INSERT INTO t VALUES (1), (2), (3)")
+        res = []
+        db.create_function("count_rows", 0) { |fp| fp.result = db.execute("SELECT COUNT(*) FROM t").flatten.first }
+        res << db.execute("SELECT count_rows()")
+        # A function whose block calls a query that calls another function.
+        db.create_function("outer", 0) { |fp| fp.result = db.execute("SELECT count_rows()").flatten.first }
+        res << db.execute("SELECT outer()")
+        # A raise from the inner one still reaches the caller.
+        db.create_function("inner_bad", 0) { |fp| raise "inner" }
+        db.create_function("wrap", 0) { |fp| fp.result = db.execute("SELECT inner_bad()").flatten.first }
+        res << (begin; db.execute("SELECT wrap()"); rescue StandardError => e; [e.class.name, e.message]; end)
+        res << db.execute("SELECT COUNT(*) FROM t")
         db.close
         res
         "##,

@@ -200,6 +200,9 @@ unsafe extern "C" {
         x_destroy: Option<unsafe extern "C" fn(*mut c_void)>,
     ) -> c_int;
     pub fn sqlite3_user_data(ctx: *mut sqlite3_context) -> *mut c_void;
+    /// The connection a function is running on, which is how a callback
+    /// finds the step that invoked it.
+    pub fn sqlite3_context_db_handle(ctx: *mut sqlite3_context) -> *mut sqlite3;
     pub fn sqlite3_aggregate_context(ctx: *mut sqlite3_context, n: c_int) -> *mut c_void;
     pub fn sqlite3_result_null(ctx: *mut sqlite3_context);
     pub fn sqlite3_result_int64(ctx: *mut sqlite3_context, v: sqlite3_int64);
