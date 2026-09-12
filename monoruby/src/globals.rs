@@ -1204,17 +1204,28 @@ impl Globals {
         // been computed. Found by gc-stress, which collects at every
         // safepoint and so hits this on the first allocation a finalizer
         // makes.
+        //
+        // An `Err` carries `Value`s of its own — the re-raised exception
+        // object, an explicit `cause:`, a kind's payload, a NoMethodError
+        // receiver, a KeyError's receiver and key — and they are in the
+        // same Rust local, so they need the same rooting. The
+        // materialization below happens to cover most of them while the
+        // handlers run (it hangs them off the exception object it puts in
+        // `$!`), but that lapses at the `set_errinfo` restore, with
+        // `terminate_all` still to run Ruby and the report below still to
+        // dereference them. Root them outright instead of relying on that.
         let root_len = executor.temp_len();
         if let Ok(v) = &res {
             executor.temp_push(*v);
         }
         executor.temp_push(unwind_errinfo);
-        if let Err(err) = &res
-            && !matches!(err.kind(), MonorubyErrKind::SystemExit(_))
-        {
-            executor.set_error(err.clone());
-            let err_val = executor.take_ex_obj(self);
-            executor.set_errinfo(err_val);
+        if let Err(err) = &res {
+            err.for_each_value(|v| executor.temp_push(v));
+            if !matches!(err.kind(), MonorubyErrKind::SystemExit(_)) {
+                executor.set_error(err.clone());
+                let err_val = executor.take_ex_obj(self);
+                executor.set_errinfo(err_val);
+            }
         }
         let handler_status = executor.run_exit_handlers(self);
         executor.set_errinfo(unwind_errinfo);
