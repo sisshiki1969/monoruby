@@ -155,7 +155,7 @@ mod alloc_policy {
 /// can never disagree with the placements. Indices `0..PHYS_FPR_POOL` map to
 /// physical `xmm2..xmm15`; `>= PHYS_FPR_POOL` are stack spills.
 ///
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub(super) struct FprAllocator {
     /// Ids issued so far: the pool prefix plus every spill id this file
     /// has ever issued or been grown to. A spill id is never re-issued
@@ -225,7 +225,7 @@ impl PoolOccupancy {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub(crate) struct SlotState {
     /// One record per slot: placement + type (`LinkMode`), liveness, and
     /// the outer-float provenance hints. Every per-slot fact is added,
@@ -243,7 +243,7 @@ pub(crate) struct SlotState {
 ///
 /// One slot of an abstract frame.
 ///
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 struct Slot {
     /// Where the live copies of the value are, and what is known about
     /// its type.
@@ -284,7 +284,7 @@ struct Slot {
 /// captured at the read so the consult site (deep in the state machinery,
 /// with no `JitContext` at hand) can emit it verbatim.
 ///
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::codegen::jitgen) struct DynVarAliasLoad {
     pub(in crate::codegen::jitgen) ids: Vec<crate::codegen::jitgen::context::SpecializedId>,
     pub(in crate::codegen::jitgen) extra: usize,
@@ -347,10 +347,42 @@ impl SlotState {
             ..
         } = cc.jit_type()
         {
+            // D1/K1: a forwarding trampoline's `...` rest and its
+            // `**kwrest` may be deferred, in which case `set_arguments`
+            // stores a real `nil` into the slot and the consumer routes
+            // from the caller's window. The `S(Array)` / `S(Hash)` that
+            // `LinkMode::from_caller` synthesizes for those parameters
+            // describes the objects that were *not* built, so it must
+            // not become a claim here.
+            let deferred = cc.forward_rest_deferral();
+            let is_deferred = |slot: SlotId| {
+                deferred.as_ref().is_some_and(|df| {
+                    df.rest_local == slot || df.kw.as_ref().is_some_and(|(kw, ..)| *kw == slot)
+                })
+            };
             for (i, arg) in args.iter().enumerate() {
+                let slot = SlotId(i as u16);
                 match arg {
                     LinkMode::C(_) | LinkMode::MaybeNone | LinkMode::None => {
-                        ctx.set_mode(SlotId(i as u16), *arg);
+                        ctx.set_mode(slot, *arg);
+                    }
+                    // The caller's *placement* does not survive the call:
+                    // `set_arguments` copies the value into this frame's
+                    // own slot, so an fpr binding is the caller's alone
+                    // and an `F`/`Sf` argument arrives boxed in its slot.
+                    // Its *type* does survive — it is the same value — so
+                    // the guard the caller proved is this frame's to keep,
+                    // and the parameter's first use needs no guard of its
+                    // own.
+                    //
+                    // `self` (position 0) is excluded: `SlotState::new`
+                    // already guarded it with the class this body is
+                    // specialized for, which is never weaker than what
+                    // the call site could prove about the receiver.
+                    LinkMode::S(_) | LinkMode::F(_) | LinkMode::Sf(_, _)
+                        if i != 0 && !is_deferred(slot) =>
+                    {
+                        ctx.set_S_with_guard(slot, arg.guarded());
                     }
                     _ => {}
                 }
@@ -394,6 +426,50 @@ impl SlotState {
         self.all_regs()
             .map(|i| self.ty(i).join(&other.ty(i)))
             .collect()
+    }
+
+    ///
+    /// Equality at the granularity a specialized-call memo needs: every
+    /// per-slot fact, but the use record only through
+    /// [`IsUsed::observable`]. Two states that agree here drive every
+    /// consumer of a walk's result the same way.
+    ///
+    /// [`Self::memo_hash`] hashes exactly these fields; the two are
+    /// kept adjacent so they stay in step.
+    ///
+    pub(in crate::codegen::jitgen) fn memo_eq(&self, other: &Self) -> bool {
+        if self.slots_len() != other.slots_len()
+            || self.local_num != other.local_num
+            || self.fpr_alloc != other.fpr_alloc
+            || self.gp_regfile != other.gp_regfile
+        {
+            return false;
+        }
+        self.all_regs().all(|i| {
+            let (a, b) = (&self.slots[i.0 as usize], &other.slots[i.0 as usize]);
+            a.mode == b.mode
+                && a.dynvar_src == b.dynvar_src
+                && a.subtree_float_read == b.subtree_float_read
+                && a.dynvar_alias == b.dynvar_alias
+                && a.used.observable() == b.used.observable()
+        })
+    }
+
+    /// See [`Self::memo_eq`].
+    pub(in crate::codegen::jitgen) fn memo_hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        use std::hash::Hash;
+        self.slots_len().hash(state);
+        self.local_num.hash(state);
+        self.fpr_alloc.hash(state);
+        self.gp_regfile.hash(state);
+        for i in self.all_regs() {
+            let s = &self.slots[i.0 as usize];
+            s.mode.hash(state);
+            s.dynvar_src.hash(state);
+            s.subtree_float_read.hash(state);
+            s.dynvar_alias.hash(state);
+            s.used.observable().hash(state);
+        }
     }
 
     pub(super) fn equiv(&self, other: &Self) -> bool {
@@ -1895,7 +1971,7 @@ impl AbstractFrame {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(in crate::codegen::jitgen) enum SfGuarded {
     Fixnum,
     Float,
@@ -2014,7 +2090,7 @@ impl AsmIr {
 ///
 /// Mode of linkage between stack slot and fpr registers.
 ///
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     /// No Value.
@@ -2194,7 +2270,7 @@ impl LinkMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Eq, Hash)]
 pub enum Guarded {
     #[default]
     Value,

@@ -27,7 +27,7 @@ pub(crate) struct SpecializedId(pub(super) usize);
 /// caller passes literal keywords — the caller's kw window that backs
 /// `f`'s un-materialized `**kwrest` Hash (K1).
 ///
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DeferredForward {
     /// `f`'s synthetic rest local slot.
     pub rest_local: SlotId,
@@ -89,7 +89,7 @@ pub(super) fn max_virt_fpreg_id(asm_info: &AsmInfo) -> Option<usize> {
     max
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum JitType {
     /// JIT for method / block.
     Entry,
@@ -158,7 +158,7 @@ impl JitBlockInfo {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub(super) struct JitArgumentInfo(pub Option<Vec<LinkMode>>);
 
 impl JitArgumentInfo {
@@ -982,6 +982,13 @@ pub(crate) struct JitContext<'a> {
     /// iteration.
     ///
     widened_outer_log: Vec<(usize, SlotId)>,
+    ///
+    /// What the analysis walks of this compilation have already compiled
+    /// at each specialized call site, shared with every throwaway
+    /// context ([`Self::analysis_clone`]) so a walk answers a call site
+    /// the previous walks already reached — see [`spec_memo::SpecMemo`].
+    ///
+    spec_memo: std::rc::Rc<std::cell::RefCell<spec_memo::SpecMemo>>,
 }
 
 impl<'a> JitContext<'a> {
@@ -1015,6 +1022,7 @@ impl<'a> JitContext<'a> {
             kept_outer_views: vec![],
             outer_claim_barrier: false,
             widened_outer_log: vec![],
+            spec_memo: Default::default(),
         }
     }
 
@@ -1071,6 +1079,9 @@ impl<'a> JitContext<'a> {
             // empty — the resolve pass never runs against this ir.
             next_specialized_id: 0,
             specialized_frame_sizes: HashMap::default(),
+            // Shared, not reset: answering one walk's call sites from
+            // what the previous walks compiled is the whole point.
+            spec_memo: self.spec_memo.clone(),
         }
     }
 
@@ -2164,6 +2175,297 @@ impl<'a> JitContext<'a> {
     /// Mark for [`Self::drain_kept_outer_views`].
     pub(super) fn kept_outer_views_mark(&self) -> usize {
         self.kept_outer_views.len()
+    }
+
+    // ===== Specialized-call memo (analysis walks only) =====
+
+    ///
+    /// The frame at *pos* as one floor of the abstract-frame tower.
+    ///
+    /// The exhaustive pattern is the contract: a new `JitStackFrame`
+    /// field has to be classified here (part of the tower, part of the
+    /// call site's identity, or out of the memo's reach) rather than
+    /// silently left out.
+    ///
+    fn frame_state(&self, pos: usize) -> spec_memo::FrameState {
+        let JitStackFrame {
+            // The emission side: `AsmIr`, labels, the specialized-method
+            // list, the frame's own sizes. All codegen, and the memo is
+            // consulted only where no code is emitted. `jit_type` and
+            // `ivar_heap_accessed` are read out of it through the
+            // `Deref` below.
+            asm_info: _,
+            // The frame's identity, carried by
+            // [`spec_memo::SpecCallSite::chain`]. `callid` is set and
+            // cleared around the call by `specialized_compile`, so at
+            // a call site it is back to what the chain recorded.
+            outer: _,
+            specialized_id: _,
+            callid: _,
+            // Read only through `JitContext::loop_count`, i.e. of the
+            // frame being compiled, which for the whole of a nested
+            // call is the callee's own.
+            loop_count: _,
+            // Per-frame compile state of the frame's *own* walk. A
+            // nested compile addresses `current_frame_mut()`, which is
+            // the callee's frame for the whole call, so none of these
+            // is reachable from one.
+            loop_info: _,
+            loop_outer_reads: _,
+            return_edges: _,
+            branch_map: _,
+            backedge_map: _,
+            spliced_ensures: _,
+            call_site_using_fpr: _,
+            deferred_rest: _,
+            needs_rest_array: _,
+            // The tower itself.
+            is_not_block,
+            stack_offset,
+            base_stack_offset,
+            spill_home_watermark,
+            speculation_poisoned,
+            had_deopt,
+            generic_yield,
+            speculated_using_fpr,
+            speculated_floats,
+            spill_home_ids,
+            return_context,
+            abstract_state,
+        } = &self.stack_frame[pos];
+        spec_memo::FrameState {
+            is_not_block: *is_not_block,
+            stack_offset: *stack_offset,
+            base_stack_offset: *base_stack_offset,
+            spill_home_watermark: *spill_home_watermark,
+            speculation_poisoned: *speculation_poisoned,
+            had_deopt: *had_deopt,
+            generic_yield: *generic_yield,
+            ivar_heap_accessed: self.stack_frame[pos].ivar_heap_accessed,
+            speculated_using_fpr: *speculated_using_fpr,
+            speculated_floats: speculated_floats.clone(),
+            spill_home_ids: spill_home_ids.clone(),
+            return_context: return_context.clone(),
+            jit_type: self.stack_frame[pos].jit_type.clone(),
+            abstract_state: spec_memo::MemoFrame(abstract_state.clone()),
+        }
+    }
+
+    ///
+    /// Put the frame at *pos* back on the floor *state* describes. The
+    /// fields a specialized call cannot write are bound and dropped:
+    /// the tower they belong to was compared before the replay, so they
+    /// already hold these values.
+    ///
+    fn restore_frame_state(&mut self, pos: usize, state: &spec_memo::FrameState) {
+        let spec_memo::FrameState {
+            is_not_block: _,
+            base_stack_offset: _,
+            speculated_using_fpr: _,
+            speculated_floats: _,
+            jit_type: _,
+            stack_offset: _,
+            spill_home_watermark,
+            speculation_poisoned,
+            had_deopt,
+            generic_yield,
+            ivar_heap_accessed,
+            spill_home_ids,
+            return_context,
+            abstract_state,
+        } = state;
+        let frame = &mut self.stack_frame[pos];
+        frame.spill_home_watermark = *spill_home_watermark;
+        frame.speculation_poisoned = *speculation_poisoned;
+        frame.had_deopt = *had_deopt;
+        frame.generic_yield = *generic_yield;
+        frame.ivar_heap_accessed = *ivar_heap_accessed;
+        frame.spill_home_ids = spill_home_ids.clone();
+        frame.return_context = return_context.clone();
+        frame.abstract_state = abstract_state.0.clone();
+    }
+
+    ///
+    /// The inlining path the current compile stands on, by identity.
+    /// See [`spec_memo::SpecCallSite::chain`].
+    ///
+    pub(super) fn spec_call_chain(&self) -> Vec<spec_memo::ChainStep> {
+        self.stack_frame
+            .iter()
+            .map(|f| spec_memo::ChainStep {
+                iseq_id: f.iseq_id,
+                self_class: f.self_class,
+                callid: f.callid,
+                outer: f.outer,
+                specialize_level: f.specialize_level,
+                specialized_id: f.specialized_id,
+            })
+            .collect()
+    }
+
+    ///
+    /// The abstract-frame tower as it stands right now, over *state* as
+    /// the live chain.
+    ///
+    pub(super) fn tower(&self, state: &AbstractState) -> spec_memo::Tower {
+        spec_memo::Tower {
+            flags: spec_memo::CtxFlags {
+                fused_skip: self.fused_skip,
+                in_dispatch_arm: self.in_dispatch_arm,
+                in_set_guarded_arm: self.in_set_guarded_arm,
+                unfrozen_slots: self.unfrozen_slots.clone(),
+                instr_unfrozen: self.instr_unfrozen.clone(),
+            },
+            frames: (0..self.stack_frame.len())
+                .map(|p| self.frame_state(p))
+                .collect(),
+            state: spec_memo::MemoChain(state.clone()),
+        }
+    }
+
+    ///
+    /// A digest of [`Self::tower`], over the same live data and without
+    /// copying it. A lookup rejects entries by digest and snapshots
+    /// only when one matches; the tower comparison, not the digest,
+    /// decides the answer, so a digest that misses a field costs hits
+    /// and never correctness.
+    ///
+    pub(super) fn tower_hash(&self, state: &AbstractState) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = fxhash::FxHasher64::default();
+        self.fused_skip.hash(&mut h);
+        self.in_dispatch_arm.hash(&mut h);
+        self.in_set_guarded_arm.hash(&mut h);
+        self.unfrozen_slots.hash(&mut h);
+        self.instr_unfrozen.hash(&mut h);
+        spec_memo::hash_chain(state, &mut h);
+        for frame in &self.stack_frame {
+            frame.jit_type.hash(&mut h);
+            frame.is_not_block.hash(&mut h);
+            frame.stack_offset.hash(&mut h);
+            frame.base_stack_offset.hash(&mut h);
+            frame.speculated_floats.hash(&mut h);
+            frame.speculated_using_fpr.hash(&mut h);
+            spec_memo::hash_parked(&frame.abstract_state, &mut h);
+            frame.spill_home_watermark.hash(&mut h);
+            frame.spill_home_ids.len().hash(&mut h);
+            frame.speculation_poisoned.hash(&mut h);
+            frame.had_deopt.hash(&mut h);
+            frame.generic_yield.hash(&mut h);
+            frame.ivar_heap_accessed.hash(&mut h);
+            frame.return_context.len().hash(&mut h);
+        }
+        h.finish()
+    }
+
+    pub(super) fn spec_memo_marks(&self) -> spec_memo::CallMarks {
+        spec_memo::CallMarks {
+            widened: self.widened_outer_log.len(),
+            kept: self.kept_outer_views.len(),
+            capture_events: self.capture_events,
+            claim_barrier: self.outer_claim_barrier,
+        }
+    }
+
+    ///
+    /// What the compile left behind that its returned tower does not
+    /// hold.
+    ///
+    pub(super) fn spec_call_effect(
+        &self,
+        marks: spec_memo::CallMarks,
+        result: spec_memo::SpecializedCompileResultMemo,
+    ) -> spec_memo::Effect {
+        spec_memo::Effect {
+            widened: self.widened_outer_log[marks.widened..].to_vec(),
+            kept: self.kept_outer_views[marks.kept..].to_vec(),
+            claim_barrier: self.outer_claim_barrier && !marks.claim_barrier,
+            capture_events: self.capture_events - marks.capture_events,
+            result,
+        }
+    }
+
+    ///
+    /// Stand the recorded tower back up, and apply the effect that goes
+    /// with it, in place of running the compile. The caller has already
+    /// established that the tower entered matches the one the pair was
+    /// recorded under.
+    ///
+    fn spec_memo_replay(
+        &mut self,
+        state: &mut AbstractState,
+        returned: &spec_memo::Tower,
+        effect: &spec_memo::Effect,
+    ) -> spec_memo::SpecializedCompileResultMemo {
+        debug_assert_eq!(self.stack_frame.len(), returned.frames.len());
+        for (pos, frame) in returned.frames.iter().enumerate() {
+            self.restore_frame_state(pos, frame);
+        }
+        let spec_memo::CtxFlags {
+            fused_skip,
+            in_dispatch_arm,
+            in_set_guarded_arm,
+            unfrozen_slots,
+            instr_unfrozen,
+        } = returned.flags.clone();
+        self.fused_skip = fused_skip;
+        self.in_dispatch_arm = in_dispatch_arm;
+        self.in_set_guarded_arm = in_set_guarded_arm;
+        self.unfrozen_slots = unfrozen_slots;
+        self.instr_unfrozen = instr_unfrozen;
+        *state = returned.state.0.clone();
+        self.widened_outer_log.extend_from_slice(&effect.widened);
+        self.kept_outer_views.extend_from_slice(&effect.kept);
+        if effect.claim_barrier {
+            self.outer_claim_barrier = true;
+        }
+        self.capture_events += effect.capture_events;
+        effect.result.clone()
+    }
+
+    ///
+    /// Replay the pair recorded for this call site under the tower it
+    /// is entering with, if one is recorded. `None` leaves *state* and
+    /// the context untouched, so the caller compiles the call for real.
+    ///
+    pub(super) fn spec_memo_try_replay(
+        &mut self,
+        site: &spec_memo::SpecCallSite,
+        hash: u64,
+        state: &mut AbstractState,
+    ) -> Option<spec_memo::SpecializedCompileResultMemo> {
+        // The table outlives every throwaway context, so take a handle
+        // to it before borrowing `self` mutably for the replay.
+        let memo = self.spec_memo.clone();
+        if !memo.borrow().may_have(site, hash) {
+            spec_memo::count_miss();
+            return None;
+        }
+        let entered = self.tower(state);
+        let table = memo.borrow();
+        let Some((returned, effect)) = table.get(site, hash, &entered) else {
+            spec_memo::count_miss();
+            return None;
+        };
+        spec_memo::count_hit();
+        Some(self.spec_memo_replay(state, returned, effect))
+    }
+
+    pub(super) fn spec_memo_is_full(&self, site: &spec_memo::SpecCallSite) -> bool {
+        self.spec_memo.borrow().is_full(site)
+    }
+
+    pub(super) fn spec_memo_insert(
+        &self,
+        site: spec_memo::SpecCallSite,
+        hash: u64,
+        entered: spec_memo::Tower,
+        returned: spec_memo::Tower,
+        effect: spec_memo::Effect,
+    ) {
+        self.spec_memo
+            .borrow_mut()
+            .insert(site, hash, entered, returned, effect);
     }
 
     ///
