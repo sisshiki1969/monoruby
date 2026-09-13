@@ -975,11 +975,23 @@ impl<'a> JitContext<'a> {
                 // specialization (and D1) removes — so don't gate them
                 // on the immediate-arg heuristic.
                 let forwarding_callee = self.store[func_id].params().forwarding();
+                // An unboxed float argument is the other kind of thing
+                // worth specializing for. The callee's entry binds the
+                // parameter `Float` (`SlotState::new_method`), so its
+                // first use needs no guard, and the value crosses the
+                // call in a register in both directions
+                // (`plan_float_args`, `JitStackFrame::float_return`)
+                // instead of through `f64_to_val` and back. Without this
+                // the gate is blind to exactly the code that would gain
+                // most: a computed float is neither an immediate constant
+                // nor a forwarded argument, so float-heavy call sites
+                // never specialized at all.
                 let specializable = self.store.is_simple_call(func_id, callid)
                     && (forwarding_callee
                         || state.is_C_immediate(callsite.recv)
                         || (pos_num != 0
-                            && (args..args + pos_num).any(|i| state.is_C_immediate(i))));
+                            && (args..args + pos_num)
+                                .any(|i| state.is_C_immediate(i) || state.is_fpr_resident(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
                 // The forwarded `initialize` inside the Ruby `Class#new`
                 // (the privileged `recv.__builtin_initialize__(...)`

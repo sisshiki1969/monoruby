@@ -336,3 +336,37 @@ fn a_float_return_survives_a_specialized_recompile() {
         "#,
     );
 }
+
+/// The same, for a float *argument*: the call site hands it over in a
+/// register and the entry binds it `Sf`, so a recompiled body that reads
+/// the parameter's slot must still find the boxed copy there.
+#[test]
+fn a_float_argument_survives_a_specialized_recompile() {
+    run_test_once(
+        r#"
+        class C
+          def initialize
+            @a = [0.0, 1.0, 2.0]
+            @hit = 0
+          end
+          def poison(v) = @a[1] = v
+          def f(d)
+            s = 160.0 / d
+            @a.each do |x|
+              @hit += 1 if !x.nil? && x < s
+            end
+            s * 2.0
+          end
+        end
+        c = C.new
+        res = 0.0
+        acc = 0.0
+        5000.times do |i|
+          c.poison(i % 97 == 96 ? nil : (i % 17).to_f)
+          res = c.f(2.0 + (i % 13))
+          acc += res
+        end
+        [res, acc]
+        "#,
+    );
+}

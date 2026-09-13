@@ -600,6 +600,15 @@ impl SlotState {
     pub(in crate::codegen::jitgen) fn is_C_immediate(&self, slot: SlotId) -> bool {
         matches!(self.mode(slot), LinkMode::C(v) if v.is_immediate().is_some())
     }
+
+    /// Whether *slot* holds a raw f64 in an fpr, the other thing a call
+    /// site knows about an argument that a specialized callee can use:
+    /// its entry binds the parameter `Float` instead of re-proving it,
+    /// and the value crosses the call unboxed
+    /// (`JitContext::plan_float_args`).
+    pub(in crate::codegen::jitgen) fn is_fpr_resident(&self, slot: SlotId) -> bool {
+        matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _))
+    }
 }
 
 impl SlotState {
