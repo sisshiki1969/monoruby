@@ -89,6 +89,7 @@ impl Codegen {
             | AsmInst::FprToStack(..)
             | AsmInst::FloatRetStore(..)
             | AsmInst::FloatRetLoad(..)
+            | AsmInst::FloatArgMove { .. }
             | AsmInst::FprSave(..)
             | AsmInst::FprRestore(..)
             | AsmInst::IntegerBinOpReg { .. }
@@ -814,6 +815,16 @@ impl Codegen {
                 // The call site tests rax for the error signal; the value
                 // itself travels in xmm1, so rax only has to be non-zero.
                 monoasm!( &mut self.jit, movq rax, (NIL_VALUE); );
+            }
+            LInst::FloatArgMove { src, dst, base } => {
+                let (FPRegLoc::Xmm(d), s) = (PhysMap::new(base).resolve(dst), PhysMap::new(base).resolve(src))
+                else {
+                    unreachable!("float-argument destination is not pool-resident: {dst:?}")
+                };
+                match s {
+                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq xmm(d), xmm(p); ),
+                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq xmm(d), [rbp - (off)]; ),
+                }
             }
             LInst::FloatRetLoad { dst, base } => {
                 match PhysMap::new(base).resolve(dst) {

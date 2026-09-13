@@ -698,6 +698,10 @@ impl AsmIr {
         self.push(AsmInst::FloatRetLoad(fpr));
     }
 
+    pub fn float_arg_move(&mut self, src: FPReg, dst: FPReg) {
+        self.push(AsmInst::FloatArgMove { src, dst });
+    }
+
     pub fn lit2stack(&mut self, v: Value, reg: SlotId) {
         self.push(AsmInst::LitToStack(v, reg));
     }
@@ -1552,6 +1556,16 @@ pub(super) enum AsmInst {
     /// restored, which touches only the pool.
     ///
     FloatRetLoad(FPReg),
+    ///
+    /// Stage a specialized call's float argument in the pool register the
+    /// callee's entry state binds it to (`JitContext::plan_float_args`).
+    /// Both ids are pool ids, whose physical register is the same in
+    /// every frame, so this one instruction spans the call boundary.
+    ///
+    /// Emitted last in `set_arguments`: everything the pool survives from
+    /// here to the callee's entry poll is the plan's premise.
+    ///
+    FloatArgMove { src: FPReg, dst: FPReg },
     ///
     /// Move Value *v* to stack slot *reg*.
     ///

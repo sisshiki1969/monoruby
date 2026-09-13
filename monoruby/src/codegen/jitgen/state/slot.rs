@@ -343,7 +343,7 @@ impl SlotState {
         }
 
         if let JitType::Specialized {
-            args_info: JitArgumentInfo(Some(args)),
+            args_info: JitArgumentInfo(Some(args), float_args),
             ..
         } = cc.jit_type()
         {
@@ -362,6 +362,15 @@ impl SlotState {
             };
             for (i, arg) in args.iter().enumerate() {
                 let slot = SlotId(i as u16);
+                // Also handed over raw in `fpr`
+                // (`JitContext::plan_float_args`). `Sf`, not `F`: the
+                // boxed copy `set_arguments` stored stays canonical, so
+                // the parameter's first float use reads the register
+                // with no unbox while a value use still reads the slot.
+                if let Some((_, fpr)) = float_args.iter().find(|(s, _)| *s == slot) {
+                    ctx.set_Sf(slot, *fpr, SfGuarded::Float);
+                    continue;
+                }
                 match arg {
                     LinkMode::C(_) | LinkMode::MaybeNone | LinkMode::None => {
                         ctx.set_mode(slot, *arg);
@@ -527,7 +536,7 @@ impl SlotState {
         self.temp_start()..SlotId(self.slots_len() as u16)
     }
 
-    pub(super) fn temp_start(&self) -> SlotId {
+    pub(in crate::codegen::jitgen) fn temp_start(&self) -> SlotId {
         SlotId((1 + self.local_num) as u16)
     }
 

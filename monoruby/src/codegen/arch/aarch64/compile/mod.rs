@@ -1688,6 +1688,12 @@ impl Codegen {
             LInst::FloatRetLoad { dst, base } => {
                 self.a64_fpr_save(dst, 1, base);
             }
+            LInst::FloatArgMove { src, dst, base } => {
+                let FPRegLoc::Xmm(d) = PhysMap::new(base).resolve(dst) else {
+                    unreachable!("float-argument destination is not pool-resident: {dst:?}")
+                };
+                self.a64_fpr_load(src, d as u32, base);
+            }
             LInst::FprSwap { lhs, rhs, base } => {
                 // Force both values into scratch, then store back crossed.
                 self.a64_fpr_load(lhs, 0, base);

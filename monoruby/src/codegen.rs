@@ -207,6 +207,14 @@ impl FPReg {
     fn new(id: usize) -> Self {
         Self(id)
     }
+
+    /// A pool-resident id, i.e. one whose physical `xmm` is the same in
+    /// every frame. Only such an id can name a register two frames agree
+    /// on: a spill id resolves against the frame's own stack base.
+    pub(crate) fn from_pool(id: usize) -> Self {
+        debug_assert!(id < PHYS_FPR_POOL);
+        Self(id)
+    }
 }
 
 ///

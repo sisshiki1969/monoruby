@@ -145,11 +145,20 @@ impl JitBlockInfo {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
-pub(super) struct JitArgumentInfo(pub Option<Vec<LinkMode>>);
+pub(super) struct JitArgumentInfo(
+    pub Option<Vec<LinkMode>>,
+    ///
+    /// The parameters this call hands over in a register instead of in
+    /// the callee's frame slot, with the pool register each arrives in
+    /// (`JitContext::plan_float_args`). Part of the callee's identity:
+    /// it is the callee's entry state that binds them.
+    ///
+    pub Vec<(SlotId, FPReg)>,
+);
 
 impl JitArgumentInfo {
     pub(super) fn new(slot: Vec<LinkMode>) -> Self {
-        Self(Some(slot))
+        Self(Some(slot), vec![])
     }
 }
 

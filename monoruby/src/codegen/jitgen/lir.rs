@@ -620,6 +620,13 @@ pub(in crate::codegen) enum LInst {
         dst: FPReg,
         base: usize,
     },
+    /// Move a pool register into another pool register, across a
+    /// specialized call boundary.
+    FloatArgMove {
+        src: FPReg,
+        dst: FPReg,
+        base: usize,
+    },
     /// Swap two FP registers (spill-aware).
     FprSwap {
         lhs: FPReg,

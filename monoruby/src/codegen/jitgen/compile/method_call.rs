@@ -1195,7 +1195,16 @@ impl<'a> JitContext<'a> {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: state.pc().as_ptr() as u64,
         });
-        state.set_arguments(&self.store, ir, callid, callee_fid, false, &arg_hints, None);
+        state.set_arguments(
+            &self.store,
+            ir,
+            callid,
+            callee_fid,
+            false,
+            &arg_hints,
+            None,
+            &[],
+        );
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -2055,11 +2064,12 @@ impl<'a> JitContext<'a> {
         bmethod_outer: Option<Option<Lfp>>,
     ) -> JitResult<CompileResult> {
         let dst = self.store[callid].dst;
-        let args_info = if specializable {
+        let mut args_info = if specializable {
             JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, state))
         } else {
             JitArgumentInfo::default()
         };
+        let float_args = self.plan_float_args(state, &mut args_info, fid, callid);
         // What this frame is holding as a constant on the way in. The
         // callee's compile may take some of those claims away — its block
         // stores into our frame, and `store_dynvar` says so — and a claim
@@ -2159,6 +2169,7 @@ impl<'a> JitContext<'a> {
             bmethod_outer,
             using_fpr,
             &arg_hints,
+            &float_args,
         );
         let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
         state.immediate_evict(ir, evict);
@@ -2336,6 +2347,110 @@ impl<'a> JitContext<'a> {
             self.spec_memo_insert(site, hash, entered, returned, effect);
         }
         Ok(res)
+    }
+
+    ///
+    /// Decide which of this specialized call's positional arguments travel
+    /// to the callee in a pool register instead of boxed into its frame
+    /// slot, and record the decision in `args_info`, which the callee's
+    /// entry state reads (`SlotState::new_method`).
+    ///
+    /// The frame slot is still written, so this buys the callee's unbox
+    /// and its type guard, not the caller's box. Dropping the store, and
+    /// binding the parameter `F` to say the slot is stale, measured no
+    /// faster and costs the accuracy: both copies are live and agree,
+    /// which is what `Sf` means, and every reader of the slot — a value
+    /// use, a write-back, the entry poll — finds a `Value` there without
+    /// the register having to be consulted.
+    ///
+    /// The enabling shape is narrow on purpose. Between the move and the
+    /// callee's entry the value lives only in a register, so the call
+    /// site is only eligible when nothing after the move can take the
+    /// pool with it: no block argument to write back, no rest `Array` or
+    /// keyword `Hash` to build. Boxing an argument is fine — `f64_to_val`
+    /// works in the scratch registers and preserves the pool. The
+    /// callee's registers are chosen clear of the caller's sources so the
+    /// moves cannot destroy one another.
+    ///
+    /// The arguments must also be temps. The plan is made before the
+    /// callee is compiled but read after, and a callee's compile can widen
+    /// the caller's slots out from under it — but only its *locals*
+    /// (`AbstractState::barrier_outer_claims` walks `locals()`, and the
+    /// kept outer views it drains are of locals too), so a temp still
+    /// holds at `set_arguments` what it held here.
+    ///
+    /// Everything from the call's `fpr_save_cont` to the callee's entry
+    /// poll preserves the pool: the frame setup and the call write no fpr,
+    /// the prologue's nil-fill is integer stores, and the poll's slow path
+    /// saves and restores the pool around `execute_gc`. The poll's own
+    /// write-back is what first gives the parameter a boxed slot, which is
+    /// exactly the `LinkMode::F` contract.
+    ///
+    fn plan_float_args(
+        &self,
+        state: &AbstractState,
+        args_info: &mut JitArgumentInfo,
+        callee_fid: FuncId,
+        callid: CallSiteId,
+    ) -> Vec<(SlotId, FPReg)> {
+        let Some(modes) = args_info.0.as_mut() else {
+            return vec![];
+        };
+        let callee = &self.store[callee_fid];
+        let cs = &self.store[callid];
+        if !self.store.is_simple_call(callee_fid, callid)
+            || cs.block_arg.is_some()
+            || !cs.splat_pos.is_empty()
+            || cs.kw_may_exists()
+            || callee.is_rest()
+            || callee.kw_rest().is_some()
+            || !callee.kw_names().is_empty()
+            || callee.opt_num() != 0
+            || callee.post_num() != 0
+            || cs.pos_num != callee.req_num()
+            || self.forward_rest_deferral().is_some()
+        {
+            return vec![];
+        }
+        // The receiver is fetched like any argument, so an fpr-resident
+        // one would box on the way in.
+        let fpr_resident =
+            |slot: SlotId| matches!(state.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _));
+        if fpr_resident(cs.recv) || cs.args < state.temp_start() {
+            return vec![];
+        }
+        let sources: Vec<(SlotId, FPReg)> = (0..cs.pos_num)
+            .filter_map(|i| {
+                let slot = cs.args + i;
+                match state.mode(slot) {
+                    LinkMode::F(x) | LinkMode::Sf(x, _) => Some((SlotId(1 + i as u16), x)),
+                    _ => None,
+                }
+            })
+            .collect();
+        if sources.is_empty() {
+            return vec![];
+        }
+        // Any source left behind would be boxed by `set_arguments`, which
+        // calls out and takes the pool with it.
+        let taken: Vec<usize> = sources
+            .iter()
+            .filter(|(_, x)| x.0 < crate::codegen::PHYS_FPR_POOL)
+            .map(|(_, x)| x.0)
+            .collect();
+        let mut free = (0..crate::codegen::PHYS_FPR_POOL).filter(|id| !taken.contains(id));
+        let mut plan = Vec::with_capacity(sources.len());
+        for (param, _) in &sources {
+            let Some(id) = free.next() else {
+                return vec![];
+            };
+            plan.push((*param, FPReg::from_pool(id)));
+        }
+        for (param, fpr) in &plan {
+            modes[param.0 as usize] = LinkMode::F(*fpr);
+        }
+        args_info.1 = plan.clone();
+        plan
     }
 
     fn compile_specialized_func_uncached(
@@ -2657,7 +2772,16 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(store, ir, callid, callee_fid, false, &arg_hints, recv_override);
+        self.set_arguments(
+            store,
+            ir,
+            callid,
+            callee_fid,
+            false,
+            &arg_hints,
+            recv_override,
+            &[],
+        );
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -2715,6 +2839,9 @@ impl AbstractState {
         // Pre-flush GP-pool residents (captured by the caller alongside
         // `using_fpr`) — see `send`'s direct argument stores.
         arg_hints: &[(GP, SlotId)],
+        // The parameters handed over in a register
+        // (`JitContext::plan_float_args`), by callee parameter slot.
+        float_args: &[(SlotId, FPReg)],
     ) {
         // D1: skip the caller-side `create_array` only when at least
         // one forwarding consume was source-routed AND no forwarding
@@ -2729,7 +2856,16 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(store, ir, callid, callee_fid, defer_rest, arg_hints, None);
+        self.set_arguments(
+            store,
+            ir,
+            callid,
+            callee_fid,
+            defer_rest,
+            arg_hints,
+            None,
+            float_args,
+        );
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -2915,6 +3051,9 @@ impl AbstractState {
         arg_hints: &[(GP, SlotId)],
         // See `send`.
         recv_override: Option<SlotId>,
+        // The parameters handed over in a register
+        // (`JitContext::plan_float_args`), by callee parameter slot.
+        float_args: &[(SlotId, FPReg)],
     ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
@@ -3045,6 +3184,21 @@ impl AbstractState {
                     let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                     ir.u64torsp_offset(NIL_VALUE, ofs);
                 }
+            }
+
+            // Last: everything above can call out (a block-arg write
+            // back, a rest `Array`, a boxed float), and a call takes the
+            // whole pool with it.
+            for (param, dst) in float_args {
+                let i = param.0 as usize - 1;
+                let src = match self.mode(args + i) {
+                    LinkMode::F(x) | LinkMode::Sf(x, _) => x,
+                    // A temp, so nothing between the plan and here could
+                    // have widened it — see `plan_float_args`.
+                    mode => unreachable!("float-passed argument is not fpr-resident: {mode:?}"),
+                };
+                self.use_as_float_at(args + i);
+                ir.float_arg_move(src, *dst);
             }
 
             // fill keyword arguments
