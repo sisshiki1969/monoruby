@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-47a27308.js";
+            window.path_to_searchindex_js = "searchindex-998a2738.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -5824,6 +5824,14 @@ forwarding callsite に対しても、</p>
 （<code>bypass_visibility</code> 付きの forwarding call）という<em>まさにこの形</em>なので、
 <code>X.new(a, b)</code> が <strong>allocate + ivar ストア 2 本</strong>にまで落ちる。これが実利上
 最大の効果である。</p>
+<p>ただしこれはトランポリンがそのコンパイル単位に<strong>インラインされたとき
+だけ</strong>成立する（D1 の注釈を付けるのが specialize されたフレームなので、
+specialization 深度上限を使い切った深い呼び出し位置では成立しない）。
+そこで現在は <code>JitContext::inline_class_new</code> が <code>X.new</code> を呼び出しサイトで
+直接展開する（allocate に続けて fold / ivar ストア展開 / <code>initialize</code> への
+直接呼び出しの 3 択）ため、<code>(...)</code> 転送自体が起きない。上記の D1 経由の
+最適化は inline_class_new が降りた場合（ブロック付き、キーワード付き、splat、
+<code>define_method</code> の <code>initialize</code> など）のフォールバックである。</p>
 <h2 id="4-フォールバック条件汎用パス据置"><a class="header" href="#4-フォールバック条件汎用パス据置">4. フォールバック条件（汎用パス据置）</a></h2>
 <ul>
 <li><strong>named keyword パラメータを持つ callee</strong> への転送 / <code>super</code>
