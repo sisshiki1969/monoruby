@@ -2348,6 +2348,7 @@ aa9826a02db68be1092571574e433dbe	"bar is true"	foo = false\n        bar = true\n
 aa9dc49c4157aab8cd435e0906d16a35	true	m = Module.new do\n              module_function\n              defin
 aa9e9d2d059255551ef82b97e189dbf9	0	Time.utc(2000).utc_offset
 aa9ed623ce6b393da6e8302088781719	[42, 1.5, [42, 1.5]]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
+aaa4915a3c9f363b036669c78778de6a	["", "", "", "ab", "ab", "", 200, "ASCII-8BIT"]	r = []\n            r << String.new(capacity: 0)\n            r << St
 aab458ff0c2a03718b6c9b73c90f2db1	:ok	old_stderr = $stderr\n            captured = String.new\n            
 aab9942daadbde6b7f6d2ea8f2774472	[:Receiver, :singleton]	module IEv\n              module ReceiverScope\n                class
 aac724226cfcaf6fac1a6d9fa08ab5f2	0	h = Object.new\n            def h.finalize(id); end\n            Obje
@@ -2532,6 +2533,7 @@ b76b635413644a9ee6cb10accbfe88d1	false	class Float; alias __orig :>=; def >=(o);
 b76d6e4320dd94711348a48796e6ef33	[42, 100]	$res = []\n        class S\n          class C\n            def f\n         
 b7b526853ed3aa9d81b2dda6dbba1cf2	1	class Integer; def <=>(o) = (o.to_i - to_i); end\n[3, 1, 2].max
 b7b791ae9b8a5b32ebb0e713566b57b5	[:foo, [1], {x: 10, y: 20}]	class C\n          def method_missing(name, *args, **kwargs)\n           
+b7c292b4419c2c859e85115540f26230	[TypeError, TypeError, "bignum too big to convert into 'long'", "failed to allocate memory", FrozenError, FrozenError]	r = []\n            begin; String.new(capacity: "x"); rescue TypeErr
 b7cb35744fdfaa984b6e9aa7ca2b4447	[4000, 3999]	n = 0; a = [n, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
 b7d68f9088d3f3aed2ab62dc9d949be5	[true, true]	class Foo\n              def bar; 42; end\n            end\n          
 b82f7004e67d1dce1e4af8e9795a0307	:OVERRIDDEN	class FalseClass; def !; :OVERRIDDEN; end; end; !(false)
