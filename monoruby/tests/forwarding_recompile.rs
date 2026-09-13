@@ -37,3 +37,45 @@ fn deferred_rest_specialized_body_recompiles_its_root() {
         "#,
     );
 }
+
+// A caller that specialized a callee for its call site takes the callee's
+// return state into its own: a `ReturnValue::Const` leaves it with no store
+// at all, the folded value baked into its code. That is only true of the
+// body it was compiled against, so replacing that body alone leaves the
+// caller reading a constant nothing computes any more.
+//
+// Here `c(3)` folds to `3 * SCALE`. Redefining `SCALE` moves the constant
+// version, the callee's `GuardConstVersion` fails, and the recompile has to
+// rebuild the caller's unit too — otherwise the caller answers 6 forever,
+// while CRuby (and monoruby --no-jit) answer 15.
+
+#[test]
+fn a_folded_return_survives_a_specialized_recompile() {
+    run_test_once(
+        r#"
+        SCALE = 2
+        class C
+          def initialize(v); @v = v; end
+          def hit = @v
+          def c(k)
+            hit
+            k * SCALE
+          end
+        end
+        def b(o)
+          s = 0
+          i = 0
+          while i < 200_000
+            s = o.c(3)
+            i += 1
+          end
+          s
+        end
+        o = C.new(1)
+        r1 = b(o)
+        Object.send(:remove_const, :SCALE)
+        Object.const_set(:SCALE, 5)
+        [r1, b(o), b(o)]
+        "#,
+    );
+}
