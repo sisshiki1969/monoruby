@@ -802,7 +802,7 @@ impl<'a> JitContext<'a> {
                             ISeqHint::Normal => {}
                         }
                     }
-                    if self.specialize_level() < 5 {
+                    if self.specialize_level() < SPECIALIZE_DEPTH_LIMIT {
                         return self.specialized_iseq(
                             state,
                             ir,
@@ -999,7 +999,7 @@ impl<'a> JitContext<'a> {
                 // Inside a dispatch arm, specialization is off: the arm
                 // cannot back out of a `CompileError`, and a `Cease` return
                 // would leave it with no path to the merge.
-                if (((specializable || forwarded_initialize) && self.specialize_level() < 5)
+                if (((specializable || forwarded_initialize) && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT)
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
                 {
@@ -2362,6 +2362,20 @@ impl<'a> JitContext<'a> {
         }
     }
 }
+
+
+/// How deep method specialization may keep inlining callee iseqs into one
+/// compilation unit.
+///
+/// The cost of this number is exponential in it, not linear: every level
+/// multiplies the frames one unit can hold by the specializable call sites
+/// per frame. On a call tree with three such sites per level the largest
+/// unit holds 363 specialized frames at 5, 120 at 4 and 39 at 3; on
+/// activerecord, 61 at 5 and 29 at 3. What that buys back is not
+/// measurable — across ruby-bench only 17 of 54 benchmarks compile
+/// anything at all past level 3, and their run times move by less than the
+/// spread of repeated runs.
+const SPECIALIZE_DEPTH_LIMIT: usize = 3;
 
 impl AbstractState {
     ///
