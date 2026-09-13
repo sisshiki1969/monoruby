@@ -101,6 +101,7 @@
 0639fd7a5d2bbe9305ea95f45248e727	[[nil], [:v], [[1, 2]]]	[Enumerator.new { |y| y.yield },\n                Enumerator.new { |y| y.yield :v
 06434e99eae696dd4168e81e0a57cf74	[8.5, -1.0]	def call_block\n          yield\n        end\n        def p6(n)\n          
 0645bcf03de3613af42e57886acd5057	"ClassKwOuter::ClassKwInner"	class ClassKwOuter\n              class ClassKwInner; end\n          
+0654c2e9fe3c8a7f3f90bfef58a18f0c	["x", 6]	class CNDeep\n          def initialize(a)\n            @a = a * 2\n       
 066265d0228305a399c4298d3fde2292	[[0, 1, 2, 3, 4], true, nil]	q = Queue.new\n            prod = Thread.new { 5.times { |i| q.push 
 066392710dabdf12722c1aa1a604fa66	[1, 1, nil, 1, 2, 4, [["k", 1], [:k, 2], [3, 4]], 1, {}, nil, RuntimeError, true]	bin = "a".b\n        e = {"k" => 1, :k => 2, 3 => 4}\n        s = {"k" =>
 067076632d9bbfc6687c8a1ec746a38b	[:a, :b]	c = Class.new { attr :a, :b }\n            c.instance_methods(false)
@@ -664,6 +665,8 @@
 2f3c934c9f013395202064f7b669614d	["b", "nil"]	r = begin\n              begin\n                raise "a"\n           
 2f922c304c94e10148d4493f457eb26e	:OVERRIDDEN	class Integer; def |(o); :OVERRIDDEN; end; end; 3 | 4
 2f9cea09fc9016f79e2054e732f21dea	42	class C; def to_int; 42; end; end; o = C.new\nInteger(o)
+2fdb9050b1a5d03ad336a6fbc113e162	12	class CNDm\n          define_method(:initialize) { |a| @a = a * 3 }\n    
+2fdfd5e264a5506e71aa34bed897a435	[ArgumentError, ArgumentError, ArgumentError, TypeError, ArgumentError, "no", 3, TypeError]	class CNOne; def initialize(a); @a = a; end; end\n        class CNRaise\n
 2fdfe913dc96ddd87614afdfb1ae9f18	[[:a, 100], [:b, 50]]	class La; def tag = :a; end\n            class Lb; def tag = :b; end
 2ff8cc9459e03d11d492cea61ad183f7	["/home", "user"]	File.split("/home/user/")
 2ffa5525ad2d35c4035401aa68c3c27a	["bb", "bbXX", ["", 0], "bbcc", "ii", "ArgumentError", ["keep", "keep"]]	base = "/tmp/monoruby_test_reopenm_#{Process.pid}_#{rand(100000)}"\n
@@ -673,6 +676,7 @@
 3053f18f888b1ea24f609aa1ec916fec	{amount: 1}	M = Data.define(:amount, :unit)\nM.new(1, "m").deconstruct_keys([:amount])
 3063c096c70750fca8ad43016f8a7351	[:considered, :moved, :moved_up, :moved_down]	GC.compact.keys
 308b0e3069363f729a784cb6ad223bb3	[1, 2]	klass = Data.define(:a, :b)\n            inst = klass.new(1, 2)\n    
+30da1a8eb4c207410e9146da15639ec4	[ArgumentError, ArgumentError, ArgumentError, TypeError, ArgumentError, "no", 3, TypeError]	class CNOne; def initialize(a); @a = a; end; end\n        class CNRaise\n
 3118b9df8fc7baabff879159ce2bf50f	"..hello..."	class MyInt\n              def to_int\n                10\n           
 3119a476e7d9eec457e1b59214ad40f2	[false, false, true, true]	was = GC.config[:rgengc_allow_full_mark]\n            begin\n        
 313f624ae2ea092da9e1d1cbca713465	[true, true, true, true, true, true, nil]	GC::Profiler.clear\n            GC::Profiler.enable\n            begi
@@ -1053,6 +1057,7 @@
 4b5b45123447283c4530b768dbe566cd	"US-ASCII"	"hello".encode("US-ASCII").upcase.encoding.to_s
 4b630bdfdd9f1ce5cacddd03b49d4446	[true, false, false, false]	class A; end\n        [A.singleton_class.singleton_class?, A.singleton_c
 4b6fe109f1f968bc1a8d4646ba46c194	"377"	class HasToInt; def to_int; 255; end; end\n            sprintf("%o",
+4b79a5778782952b20f3c06848a4b70e	[1, 101, 40]	class CNVer; def initialize(a); @a = a; end; def a = @a; end\n        r 
 4b91108237bdda9802ca4299f4114874	[[:singleton_method_added, :singleton_method_added], [:method_added, :foo], [:singleton_method_added, :foo]]	$res = []\n            module M\n              def self.method_added(
 4b97615f1fd9c5dced851f3adf53042b	[:thrown, [:ens]]	$log = []\n            r = catch(:t) do\n              begin\n        
 4ba2572278d477946c8815ee58fef0de	"hello"	class Foo\n              def hello; "hello"; end\n              alias
@@ -1370,6 +1375,7 @@
 63b722f43834fba8b8578809e4d8f64d	false	File.open("Cargo.toml") do |f|\n              g = File.new(f.fileno,
 63e644345315a92587e6531509cddace	true	require "json"\n            data = JSON.parse("{\\"name\\": \\"Nokogiri
 6400ae64c9910a3864a764454ee1737f	["SystemExit", true, 0]	begin\n              Process.exit(0)\n            rescue SystemExit =
+640da9cbbc523231a93e51fe1989039b	["x", 6]	class CNDeep\n          def initialize(a)\n            @a = a * 2\n       
 64304d338b2e1d9153798436746ba67c	[:plus, :lt, :bang, :aref, 3, true, false, 9]	class BopUser\n              def +(o); :plus; end\n              def 
 6453b5e2bc4a58561702b08638c14ead	["ab", 2, "ab", nil, "\\xFFc", "\\xFFc", 4, "c", 3, "d ef", "d", 1, "ef", "f", true, "ASCII-8BIT", "", nil, nil, "no implicit conversion of Integer into String", "no implicit conversion of Symbol into String"]	require "strscan"\n        r = []\n        b = StringScanner.new("ab\\xFFc
 646b6df81e3b78ea650391aa2912e6d4	["0.33333e1", "0.3333333333e1", "0.25e2"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
@@ -1875,6 +1881,7 @@
 88bd39fde3bf31060646706246e601d5	[7199000, true]	add = (0...9000).map { |k| "a = a + #{k % 7 + 1}" }.join("\\n")\n        
 88c361bca62c3fbea0462a14aedadf27	[15, 11, 3, [77, 2], [:key, :key, :side, :side]]	class C\n          def initialize; @h = {}; @w = nil; end\n          def 
 88d4180cc8261b799934c513e7ea401c	13	def f(a,b)\n          a + b\n        end\n        f(5,7)\n        f(4,9)\n  
+88e299a55c1c4d2394214e1e0a6feb3d	["", "ab", "ab", {}, 7, [nil, nil, nil], [:v, :v, :v], [1, 2], [1, 2]]	r = []\n        300.times do\n          r = [\n            String.new,\n   
 88f8e9f112097e82f8a521e470848673	["<1>", "'x'"]	module AncInner\n              refine(Integer) { def wrap; "<#{to_s}
 88fba5d2266fa4ee0bba24a92af6c067	[[], 1]	->((*a, b)) { [a, b] }.call([1])
 890a5b6de0ff467859398b23a4f4c43a	[true, true, true, true, true, true, true, true, true, true, true, true]	require "set"\n        class Never\n          def ==(o) = false\n         
@@ -2381,6 +2388,7 @@ ace3583fa43b814b77f102993799e3b9	["Array", true, true, "nil", true]	res = []\n  
 aced21e1e31e2ddc5465a70187f24f60	["para1a\\npara1b\\n\\npara2\\n", "para", "ASCII-8BIT", "ra1a", "para1b\\n\\npara2\\n", "para1a\\npara1b\\n\\npara2\\n", nil, "US-ASCII", ["para1a\\n", "para1b\\n", "\\n", "para2\\n"], ["para1a\\n", "para1b\\n\\npara2\\n"], ["para1a\\npara1b\\n\\npara2\\n"], ["para1a", "para1b", "", "para2"], ["para1a\\npara1b\\n\\n", "para2\\n"], ["pa", "ra", "1", "a\\n", "pa", "ra", "1", "b\\n", "\\np", "ar", "a2", "\\n"]]	require 'tmpdir'\n            f = File.join(Dir.tmpdir, "file_read_a
 ad063a5a7b5850775d75f6df196eaae1	[nil, 7, 1, 2, 4, 3, 8, 1]	def a; begin; break; end while false; end\n            def b; begin;
 ad1ae32a9a55d70e4730df3370a823db	[1, 2]	class C; def to_ary; [1, 2]; end; end\nArray.try_convert(C.new)
+ad351c76c4db959c30dbfa4271bcd7ae	["s", [0, 0], nil, [1, 2]]	class CNStr < String; end\n        class CNAry < Array; end\n        clas
 ad3d114daa3fe697d3d65acf89424a99	[1, 2, 3]	c = Class.new\n            captured = nil\n            c.class_exec(1
 ad40135a1d283484c7b5cb46e05719d4	99	class C\n              X = 99\n            end\n            C.class_ev
 ad52e0b309ea2912c81a5103e18a6a3b	true	$LOAD_PATH.equal?($:)\n            
@@ -2485,6 +2493,7 @@ b4da8c820c2dab4428659d300baa5cc4	[:foo]	$res = []\n            class C\n        
 b4de022176f4c5de67942bada3f160da	[[Fold], [FoldRest], [FoldOpt], [Impure], 99, ArgumentError, ArgumentError, ArgumentError, Fold, 100]	$effects = []\n            class Fold\n              def initialize(x
 b4ebc0e6f5be99ec71ef0910baf89efa	"redefined:false"	class String\n          def freeze = "redefined:#{frozen?}"\n        end\n
 b4ebd9e4bda33219cab1ca52fb00c022	[[[1, 2, 3], [[:x, 10], [:y, 20]]]]	class C\n          def f(*args, **kw)\n            $res << [args, kw.sort
+b4f3833fdaeec7790cab7805a880ab7b	[[12, "12", 3], [1, 10], [3, 2, 1]]	class CNBig\n          def initialize(a)\n            @a = a\n            
 b50aa88cac9a4ea0fd9adfd0ecc7d571	20	Random.urandom(0).size\n        Random.urandom(1).size\n        Random.ur
 b5186a1f8fc3fcc5d73748e08564545a	[1, 1]	->(a = 1, b = a) { [a, b] }.call
 b51eae0c2c71a30215e7785e93ca25f3	[true, false, true, false, true, true, true, false]	res = []\n        class CrefCtx\n          T = Object.new\n          def T
@@ -2610,6 +2619,7 @@ bd9f54fa26238d51503216b560dcfe9d	"M:C"	module M\n          def foo\n            
 bdab5d25c3b4be158f0e7bd7de9daf97	[118, 592, 4147, 74705710618821783505]	def __f(x)\n          \n        a = x * 3 + 1\n        b = a * 5 + 2\n     
 bdcfed3ff34c6bcbac4ff043a1188ca6	["UTF-8", true, false, "", ["SQLite3::Exception", "no such bind parameter"], "SQLite3::RangeException", "SQLite3::MismatchException", [[1, "x"]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 bdd4254f72e55d63b4505c0909c9bd00	[6.5, 17.0]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
+bdd6e55d53b01f3d09785591fba25823	12	class CNDm\n          define_method(:initialize) { |a| @a = a * 3 }\n    
 bddaee7b5a8e49286bd5ef708346ccaa	[#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:UTF-8>, #<Encoding:US-ASCII>, #<Encoding:BINARY (ASCII-8BIT)>, nil, #<Encoding:BINARY (ASCII-8BIT)>]	b = "abc".b\n        u = "abc"\n        a = "abc".encode("US-ASCII")\n    
 bde4f5647e4c5f426e0b6b9de2ad09ab	[[], [:it], [:_1, :_2, :_3], [:it], [], [], []]	[\n              binding.implicit_parameters,\n              proc { i
 bde9a54a7762ba3fd118c904ccaac5c2	[:rescued]	def boom; raise "no"; end\n            def test; [1].map { begin; bo
@@ -2664,6 +2674,7 @@ c08acbdd18f61a8d59ca99c4b368848f	"US-ASCII"	"abc".encode("US-ASCII").rjust(5).en
 c095a2c797a127b8e7be93cfb4834bac	300000	def osr_sum(x)\n          total = 0\n          i = 0\n          while i < 
 c09c839979cea217eea20b122b702919	"T:#<TrueClass:0xADDR>"	class TrueClass; def to_s; "T:" + super; end; end\n                true.to_s.sub(
 c09d6cb41615f95536118d7f2c2d3ac5	"UTF-8"	-> { e = __ENCODING__; e.name }.call
+c0b44f864839d7a475238efd36beac81	[1, 101, 600]	class CNVer; def initialize(a); @a = a; end; def a = @a; end\n        r 
 c0bd20c1f72134f81f9605cb0369bad4	["hello", "helloworld", "helloworld"]	path = "/tmp/mr_buf_rw.txt"\n            res = []\n            f = Fi
 c0ccecf51a28d34a9407d29cd759ff8a	[:f, :f]	class C; def f; 1; end; end\n            \n\n            m = C.new.met
 c0d486ae823c1add3b9717cbf806e267	54	[2, 3, 4, 5].inject(0) {|result, item| result + item ** 2 }
@@ -2717,6 +2728,7 @@ c48885b3fbd7a1a20faf1adae918a3e1	[true, true, true, true, true, false, false, ni
 c4aad381945577c7d224be25741b79c1	["Hello ", "there, ", "Dave", "!\\n"]	class Interpreter\n              def do_a() $res << "there, "; end\n 
 c4b18be49d96a9fcf781e931b81a7adb	true	h = {a: 1, b: 2}; h.rehash.equal?(h)
 c4bd1413a0e0e43d5ccb56e00501ef61	[[[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1, 3], [:b, 2, 3]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [["Proc", true], ["Proc", true]]]	h = {a: 1, b: 2}\n            def two(k, v) = [k, v]\n            def
+c5195f96aced55b86e481e9f4df58cd6	["", "ab", "ab", {}, 7, [nil, nil, nil], [:v, :v, :v], [1, 2], [1, 2]]	r = []\n        20.times do\n          r = [\n            String.new,\n    
 c520fc850e949eb2bf64f11afc5f2940	"Foo"	module Foo; end\n        Foo.to_s\n        
 c5374e944984f6dd8304adbe5f87f4d5	[10, 20]	fiber1 = Fiber.new { true }\n            fiber2 = Fiber.new { fiber1
 c53a4d5b6fe802b427b290829cb4dc35	[5, [:a, :b, :c, :d, :e], 0, 3, false, 5, [:a, :b, :c, :d, :e], 1, 3, false, 5, [:a, :b, :c, :d, :e], 2, 3, false, 5, [:a, :b, :c, :d, :e], 3, 3, false, 5, [:a, :b, :c, :d, :e], 4, 3, false, 5, [:a, :b, :c, :d, :e], 5, 3, false, 5, [:a, :b, :c, :d, :e], 6, 3, false, 5, [:a, :b, :c, :d, :e], 7, 3, false, 5, [:a, :b, :c, :d, :e], 8, 3, false, 5, [:a, :b, :c, :d, :e], 9, 3, false, 5, [:a, :b, :c, :d, :e], 10, 3, false, 5, [:a, :b, :c, :d, :e], 11, 3, false, 5, [:a, :b, :c, :d, :e], 12, 3, false, 5, [:a, :b, :c, :d, :e], 13, 3, false, 5, [:a, :b, :c, :d, :e], 14, 3, false, 5, [:a, :b, :c, :d, :e], 15, 3, false, 5, [:a, :b, :c, :d, :e], 16, 3, false, 5, [:a, :b, :c, :d, :e], 17, 3, false, 5, [:a, :b, :c, :d, :e], 18, 3, false, 5, [:a, :b, :c, :d, :e], 19, 3, false]	def m(i) = {a: i, b: 2, c: 3}\n        r = []\n        20.times do |i|\n  
@@ -2819,6 +2831,7 @@ cb7c9ec2433344c197fcd2854cff3c52	"abc"	"abc".center(3)
 cb9f3248f2f6bc5c98916096bf18af2d	[false, nil, nil]	class NilClass; def to_a; $flag = true; super; end; end\n        $flag =
 cba3d63bf788ac7a61926a8c9c04217f	[80, 40]	def __f(x)\n          \n        a = x + 1\n        b = a\n        a = a + a
 cba85401e6793856ca7879fbbe19af13	1000	Process.euid
+cbbf42a89ec11e2789db20b978d74905	[[12, "12", 3], [1, 10], [3, 2, 1]]	class CNBig\n          def initialize(a)\n            @a = a\n            
 cbc5428b9ea75e034300c93910733635	[10, 20, 30]	class C\n              attr_accessor :x,:y,:z\n            end\n      
 cbe2fdfe5524a2252322956fc39595d8	{}	M = Data.define(:amount, :unit)\nM.new(1, "m").deconstruct_keys([:amount, :x, :un
 cbe3f9d7f0f78ad36ec65a1451b615ad	["hello", "hello", nil]	s = "HELLO".dup\n              [s.downcase!, s, s.downcase!]\n     
@@ -3398,6 +3411,7 @@ f635d2b04e7d853cebc06ba31f5c8a82	20	class C; def to_int; 1; end; end; o = C.new\
 f642a2f41f870a29780f497378032b77	["negative array size", "negative array size", "no implicit conversion of String into Integer", TypeError]	r = []\n        begin; Array.new(-1); rescue ArgumentError => e; r << e.
 f65b176caaf8d76c616a0ef5ed8857e9	[1, 1000, 2, 1001, 3, 1002, 5, 1003, 8, 1004, 13, 1005, 21, 1006, 34, 1007, 55, 1008, 89, 1009, nil]	fib = Enumerator.new do |y|\n                a = b = 1\n             
 f666332b734a470db3c29c7d1c1fcbda	true	require "json"\n            s = "tab\\there\\nnewline\\r\\nand\\\\backslas
+f66defb51797eecc1d5833fe7389c0d6	["s", [0, 0], nil, [1, 2]]	class CNStr < String; end\n        class CNAry < Array; end\n        clas
 f677948e40b8cdfc7bd01fe6eddf352e	[true, false, false]	File.open("Cargo.toml") do |f|\n              before = f.autoclose?\n
 f68ec4570fce796ce1f3fb8aef0cb21e	"あabca"	"あ".ljust(5, "abc")
 f692d7c01396875808d70ca97155bd6f	[1, 2, 3, 4, 5, 6, 7, 8]	class C < Array\n          def initialize\n            @a = 1\n           
