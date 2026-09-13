@@ -151,7 +151,7 @@ pub enum RoundHalf {
     Even,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);
 

@@ -412,8 +412,12 @@ External crates (fetched from git):
   `Executor` through a thread-local map keyed by **connection**, saved
   and restored rather than pushed and popped: green-thread switches are
   not LIFO, so a callback that parks would otherwise let another thread
-  pop its entry. `create_aggregate` and a `collation` with a real
-  comparator are still unsupported.
+  pop its entry. `create_aggregate` rides the same machinery with
+  `xStep` / `xFinal`: each aggregation group gets one instance of the
+  gem's proxy class, held in `DbHandle::aggregates` (where `mark` finds
+  it) and addressed by a slot number kept in SQLite's per-group
+  `sqlite3_aggregate_context`, which is C memory the collector cannot
+  see. A `collation` with a real comparator is still unsupported.
 
 ---
 

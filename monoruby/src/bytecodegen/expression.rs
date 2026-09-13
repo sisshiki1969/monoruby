@@ -845,6 +845,7 @@ impl<'a> BytecodeGen<'a> {
                     break_dest,
                     ret,
                     ensure_depth,
+                    break_sp,
                     ..
                 } = match self.loops.last() {
                     Some(data) => data.clone(),
@@ -862,6 +863,15 @@ impl<'a> BytecodeGen<'a> {
                         }
                     }
                 };
+                // A `break` writes the loop's value into `ret` instead of
+                // pushing it, so the generator's depth here is one short of
+                // the merge's at `break_dest`. Emit the whole exit at the
+                // merge's depth: the JIT discards every slot above an
+                // instruction's recorded sp, and the value slot is the one
+                // just above it, so at the lower depth the value is dropped
+                // the instant it is stored.
+                let saved_temp = self.temp;
+                self.temp = break_sp.0;
                 if let Some(reg) = ret {
                     self.gen_store_expr(reg, val)?;
                 } else {
@@ -869,7 +879,9 @@ impl<'a> BytecodeGen<'a> {
                 }
                 // Run `ensure` blocks nested inside the loop before exiting.
                 self.gen_loop_pending_ensures(ensure_depth)?;
+                self.add_merge(break_dest);
                 self.emit(BytecodeInst::Br(break_dest), loc);
+                self.temp = saved_temp;
                 if use_mode == UseMode2::Push {
                     self.push();
                 }

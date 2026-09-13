@@ -544,11 +544,14 @@ fn set_value_inline(
     };
 
     let val_slot = args + 2usize;
-    state.load(ir, recv, GP::Rdi);
-    state.load_fixnum(ir, args + 1usize, GP::Rsi);
     match kind {
         ValKind::Float => {
+            // `load_fpr` destroys rdi: a value that is not already in an fpr
+            // is converted through it. So the value reaches its register
+            // before the receiver is put in rdi, never after.
             let xsrc = state.load_fpr(ir, val_slot);
+            state.load(ir, recv, GP::Rdi);
+            state.load_fixnum(ir, args + 1usize, GP::Rsi);
             let deopt = ir.new_deopt(state);
             ir.inline(move |r#gen, _, labels, base| {
                 let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
@@ -556,6 +559,8 @@ fn set_value_inline(
             });
         }
         _ => {
+            state.load(ir, recv, GP::Rdi);
+            state.load_fixnum(ir, args + 1usize, GP::Rsi);
             let signed = kind == ValKind::Signed;
             // Read the value's link mode *before* `load_fixnum` materializes
             // it: a constant it can see settles the store's range window here
@@ -1845,6 +1850,25 @@ mod tests {
             20.times { |i| t.set_value(:u32, 0, i); res << t.get_value(:u32, 0) << er.call { b3.get_value(:u32, 0) } }
             [r, res]
 
+            "##,
+        );
+    }
+
+    /// A float that arrives as a method argument is not already in an fpr, so
+    /// the inlined `:f64` store converts it into one, and that conversion goes
+    /// through rdi. With the receiver loaded into rdi first, the store read
+    /// the float's bits as the buffer. The block above never reaches that
+    /// path: its own arithmetic leaves the value in an fpr already.
+    #[test]
+    fn io_buffer_set_value_f64_argument() {
+        run_test(
+            r##"
+            def store(b, off, v) = b.set_value(:f64, off, v)
+            def fetch(b, off) = b.get_value(:f64, off)
+            b = IO::Buffer.new(64)
+            sum = 0.0
+            1000.times { |i| store(b, (i % 8) * 8, i * 1.5); sum += fetch(b, (i % 8) * 8) }
+            [sum, fetch(b, 0), fetch(b, 56)]
             "##,
         );
     }

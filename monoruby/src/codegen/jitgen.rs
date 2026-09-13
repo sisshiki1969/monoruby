@@ -44,6 +44,7 @@ mod guard;
 // Unified low-level IR (Phase-1 Stage 1: data model only, not yet wired in).
 pub(in crate::codegen) mod lir;
 mod merge;
+mod spec_memo;
 mod state;
 pub mod trace_ir;
 
@@ -608,11 +609,30 @@ impl Codegen {
         let const_version_label = (!const_folds.is_empty())
             .then(|| self.jit.const_i64(const_version as _));
         self.unit_const_version = const_version_label.clone();
+        // Every `**kwrest` call site's table, for the same reason: laid down
+        // now so the emission site can name it by address.
+        self.resolve_rest_kw_tables(&mut frame.asm_info);
         // Bind the fresh snapshot words now: the aarch64 lowering bakes their
         // *addresses* into the guard sequences as immediates, so the labels
         // must be resolved before `gen_machine_code` runs (x86 reads them
         // rip-relative and doesn't care).
         self.jit.finalize();
+        // aarch64 branch relaxation (see `Codegen::far_branch_mode`): decided
+        // once for the whole unit, root and inlined callees together, from the
+        // unit's total AsmIr instruction count. 64 bytes per AsmInst is a
+        // generous per-instruction bound, so 8192 instructions stays
+        // comfortably inside the ±1 MiB Imm19/Adr reach even doubled by the
+        // long forms; anything larger emits BB edges in long form and inlines
+        // opt_case's jump tables. The reach that matters is not frame-local:
+        // constants — opt_case's near-form jump tables among them — are
+        // emitted at finalize behind the *entire* unit, so an `adr` in a
+        // small inlined frame still spans everything emitted after it. A
+        // per-frame decision let exactly that overflow (a generated sqlite
+        // module placed a jump table 1.55 MiB past its `adr`).
+        #[cfg(target_arch = "aarch64")]
+        {
+            self.far_branch_mode = unit_inst_len(&mut frame.asm_info) > 8192;
+        }
         // x86: collect this unit's class-version imm32 patch sites (one per
         // emitted guard, root and inlined children alike — one compilation
         // is atomic at one version). Cleared here so an earlier aborted
@@ -690,6 +710,71 @@ impl Codegen {
             const_map,
         ))
     }
+
+    /// Lay down every `RestKw`'s (name, slot-id) table in the constant area
+    /// and record its label in the instruction, before any of the unit's
+    /// code is emitted.
+    ///
+    /// The emission site needs the table's *address*, and nothing else. On
+    /// aarch64 it cannot take that address PC-relatively: constants are
+    /// emitted at `finalize`, behind the whole unit, and `adr` reaches
+    /// ±1 MiB, so a call site early in a large unit could not name its own
+    /// table. Resolving the label first lets the backend bake an absolute
+    /// address instead, which has no range at all — what the unit's
+    /// class-version word beside this already does. x86 reads the table
+    /// rip-relative either way; building it here keeps one path.
+    fn resolve_rest_kw_tables(&mut self, info: &mut AsmInfo) {
+        for (_, ir) in info.iter_ir_mut() {
+            self.build_rest_kw_table_in(ir);
+        }
+        for (ir, _, _) in info.iter_outline_bridges_mut() {
+            self.build_rest_kw_table_in(ir);
+        }
+        for (ir, _) in info.iter_inline_bridges_mut() {
+            self.build_rest_kw_table_in(ir);
+        }
+        for context::SpecializeInfo { info, .. } in info.iter_specialized_methods_mut() {
+            self.resolve_rest_kw_tables(info);
+        }
+    }
+
+    fn build_rest_kw_table_in(&mut self, ir: &mut AsmIr) {
+        for inst in ir.inst_iter_mut() {
+            if let AsmInst::RestKw { rest_kw, table } = inst {
+                let data = self.jit.const_align8();
+                for (slot, name) in rest_kw.iter() {
+                    self.jit.const_i32(name.get() as i32);
+                    self.jit.const_i32(slot.0 as i32);
+                }
+                // Terminator: `correct_rest_kw` reads until a zero name.
+                self.jit.const_i32(0);
+                self.jit.const_i32(0);
+                *table = Some(data);
+            }
+        }
+    }
+}
+
+/// Total AsmIr instruction count of a whole compilation unit: the frame's
+/// blocks and bridges plus, recursively, every inlined specialized callee's.
+#[cfg(target_arch = "aarch64")]
+fn unit_inst_len(info: &mut AsmInfo) -> usize {
+    let mut total: usize = info
+        .iter_ir_mut()
+        .map(|(_, ir)| ir.inst_len())
+        .sum::<usize>()
+        + info
+            .iter_outline_bridges_mut()
+            .map(|(ir, _, _)| ir.inst_len())
+            .sum::<usize>()
+        + info
+            .iter_inline_bridges_mut()
+            .map(|(ir, _)| ir.inst_len())
+            .sum::<usize>();
+    for specialized in info.specialized_methods.iter_mut() {
+        total += unit_inst_len(&mut specialized.info);
+    }
+    total
 }
 
 impl Codegen {
@@ -767,30 +852,6 @@ impl Codegen {
         let pair = self.get_address_pair();
 
         let mut ir_vec = frame.detach_ir();
-
-        // aarch64 branch relaxation (see `Codegen::far_branch_mode`): decide
-        // from the frame's total AsmIr instruction count whether a BB-edge
-        // Imm19/Adr reference could exceed its ±1 MiB reach. 64 bytes per
-        // AsmInst is a generous per-instruction bound, so 8192 instructions
-        // stays comfortably inside 1 MiB even doubled by the long forms;
-        // anything larger emits BB edges in long form. The flag is saved and
-        // restored around this frame because `gen_machine_code` recursed into
-        // the inlined callees above — each frame decides for itself.
-        #[cfg(target_arch = "aarch64")]
-        let far_branch_saved = {
-            let total: usize = ir_vec.iter().map(|(_, ir)| ir.inst_len()).sum::<usize>()
-                + frame
-                    .iter_outline_bridges_mut()
-                    .map(|(ir, _, _)| ir.inst_len())
-                    .sum::<usize>()
-                + frame
-                    .iter_inline_bridges_mut()
-                    .map(|(ir, _)| ir.inst_len())
-                    .sum::<usize>();
-            let saved = self.far_branch_mode;
-            self.far_branch_mode = total > 8192;
-            saved
-        };
 
         // §21 — AsmIR optimization seam (Path 2). `inst` is the ordered,
         // replayable instruction stream; this is the arch-neutral layer where
@@ -898,10 +959,7 @@ impl Codegen {
         #[cfg(target_arch = "aarch64")]
         self.a64_drain_side_exits(&mut frame, !had_outline_bridges && fallthrough_in);
         #[cfg(target_arch = "aarch64")]
-        {
-            self.a64_patch_jump_tables();
-            self.far_branch_mode = far_branch_saved;
-        }
+        self.a64_patch_jump_tables();
         #[cfg(not(target_arch = "aarch64"))]
         let _ = had_outline_bridges;
 

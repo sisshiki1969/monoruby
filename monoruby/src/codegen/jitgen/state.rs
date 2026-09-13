@@ -27,7 +27,7 @@ pub(super) use slot::{Guarded, Keep, LinkMode, SlotState};
 /// per-slot walk over them collapses to a pointer compare.
 pub(in crate::codegen::jitgen) type FrameRef = std::rc::Rc<AbstractFrame>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct AbstractState {
     frames: Vec<FrameRef>,
 }
@@ -525,7 +525,7 @@ impl AbstractState {
 ///
 /// Context of an each basic block.
 ///
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub(crate) struct AbstractFrame {
     /// current program counter on the bytecode.
     pc: Option<BytecodePtr>,
@@ -657,6 +657,32 @@ impl AbstractFrame {
 
     fn equiv(&self, other: &Self) -> bool {
         self.slot_state.equiv(&other.slot_state) && self.invariants == other.invariants
+    }
+
+    ///
+    /// Equality at the granularity a specialized-call memo needs: see
+    /// [`SlotState::memo_eq`]. `pc`, `next_sp`, `deferred_forward` and
+    /// `lexical_outer` are fixed by the call site and the inlining path
+    /// a memo entry is keyed on, so comparing them costs nothing.
+    ///
+    pub(in crate::codegen::jitgen) fn memo_eq(&self, other: &Self) -> bool {
+        self.pc == other.pc
+            && self.next_sp == other.next_sp
+            && self.invariants == other.invariants
+            && self.deferred_forward == other.deferred_forward
+            && self.lexical_outer == other.lexical_outer
+            && self.slot_state.memo_eq(&other.slot_state)
+    }
+
+    /// See [`Self::memo_eq`].
+    pub(in crate::codegen::jitgen) fn memo_hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        use std::hash::Hash;
+        self.pc.hash(state);
+        self.next_sp.hash(state);
+        self.invariants.hash(state);
+        self.deferred_forward.hash(state);
+        self.lexical_outer.hash(state);
+        self.slot_state.memo_hash(state);
     }
 
     pub(in crate::codegen::jitgen) fn slot_state(&self) -> &SlotState {
@@ -1080,13 +1106,13 @@ impl AbstractFrame {
 
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct ReturnState {
     ret: ReturnValue,
     invariants: Invariants,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum ReturnValue {
     UD,
     Const(Value),
@@ -1183,7 +1209,7 @@ impl ReturnState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
 struct Invariants {
     /// guard for class version. true if guaranteed the class version is not changed.
     class_version_guard: bool,

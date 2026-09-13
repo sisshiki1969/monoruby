@@ -802,7 +802,7 @@ impl<'a> JitContext<'a> {
                             ISeqHint::Normal => {}
                         }
                     }
-                    if self.specialize_level() < 5 {
+                    if self.specialize_level() < SPECIALIZE_DEPTH_LIMIT {
                         return self.specialized_iseq(
                             state,
                             ir,
@@ -999,7 +999,7 @@ impl<'a> JitContext<'a> {
                 // Inside a dispatch arm, specialization is off: the arm
                 // cannot back out of a `CompileError`, and a `Cease` return
                 // would leave it with no path to the merge.
-                if (((specializable || forwarded_initialize) && self.specialize_level() < 5)
+                if (((specializable || forwarded_initialize) && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT)
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
                 {
@@ -2098,6 +2098,42 @@ pub(super) struct SpecializedCompileResult {
     pub generic_yield: bool,
 }
 
+impl SpecializedCompileResult {
+    fn to_memo(&self) -> spec_memo::SpecializedCompileResultMemo {
+        spec_memo::SpecializedCompileResultMemo {
+            return_state: self.return_state.clone(),
+            deferred_rest: self.deferred_rest,
+            needs_rest_array: self.needs_rest_array,
+            had_deopt: self.had_deopt,
+            generic_yield: self.generic_yield,
+            spec_id: self.spec_id,
+            using_fpr: self.using_fpr,
+        }
+    }
+
+    fn from_memo(entry: JitLabel, memo: spec_memo::SpecializedCompileResultMemo) -> Self {
+        let spec_memo::SpecializedCompileResultMemo {
+            return_state,
+            deferred_rest,
+            needs_rest_array,
+            had_deopt,
+            generic_yield,
+            spec_id,
+            using_fpr,
+        } = memo;
+        Self {
+            entry,
+            return_state,
+            deferred_rest,
+            needs_rest_array,
+            had_deopt,
+            generic_yield,
+            spec_id,
+            using_fpr,
+        }
+    }
+}
+
 impl<'a> JitContext<'a> {
     fn new_specialized_frame(
         &self,
@@ -2123,7 +2159,86 @@ impl<'a> JitContext<'a> {
         )
     }
 
+    ///
+    /// Compile *iseq_id* as an inlined callee of this call site.
+    ///
+    /// During an analysis walk the same call site is reached once per
+    /// walk, and a walk can arrive on the abstract-frame tower a
+    /// previous walk arrived on — in which case the compile, and the
+    /// fixpoints of every loop inside the callee, would be repeated
+    /// verbatim. [`spec_memo::SpecMemo`] answers such an arrival with
+    /// the tower the recorded compile returned. Codegen has to run for
+    /// real: its output is the emitted code, which a replay does not
+    /// produce.
+    ///
     fn compile_specialized_func(
+        &mut self,
+        state: &mut AbstractState,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        patch_point: Option<JitLabel>,
+        args_info: JitArgumentInfo,
+        outer: Option<usize>,
+        callid: CallSiteId,
+        bmethod: bool,
+    ) -> JitResult<SpecializedCompileResult> {
+        // The memo pays for itself only where the compile it stands in
+        // for is the expensive kind. A tower spans the whole frame
+        // chain, which a deep inlining stack makes large, while a
+        // loop-free callee compiles in one pass over its blocks: below
+        // the fixpoint there is nothing to save. A loop-free wrapper is
+        // no loss — the loop-carrying callee it inlines is memoized at
+        // its own call site.
+        if self.codegen_mode() || !self.store[iseq_id].bb_info.has_loop() {
+            return self.compile_specialized_func_uncached(
+                state,
+                iseq_id,
+                self_class,
+                patch_point,
+                args_info,
+                outer,
+                callid,
+                bmethod,
+            );
+        }
+        let site = spec_memo::SpecCallSite {
+            iseq_id,
+            self_class,
+            outer,
+            callid,
+            bmethod,
+            args_info: args_info.clone(),
+            chain: self.spec_call_chain(),
+        };
+        let hash = self.tower_hash(state);
+        if let Some(result) = self.spec_memo_try_replay(&site, hash, state) {
+            // The label is the one piece a replay cannot inherit: it
+            // indexes the *current* frame's label table.
+            return Ok(SpecializedCompileResult::from_memo(self.label(), result));
+        }
+        // A site that has spent its entries records nothing more, so
+        // skip the snapshot its recording would have needed.
+        let entered = (!self.spec_memo_is_full(&site)).then(|| self.tower(state));
+        let marks = self.spec_memo_marks();
+        let res = self.compile_specialized_func_uncached(
+            state,
+            iseq_id,
+            self_class,
+            patch_point,
+            args_info,
+            outer,
+            callid,
+            bmethod,
+        )?;
+        if let Some(entered) = entered {
+            let returned = self.tower(state);
+            let effect = self.spec_call_effect(marks, res.to_memo());
+            self.spec_memo_insert(site, hash, entered, returned, effect);
+        }
+        Ok(res)
+    }
+
+    fn compile_specialized_func_uncached(
         &mut self,
         state: &mut AbstractState,
         iseq_id: ISeqId,
@@ -2362,6 +2477,20 @@ impl<'a> JitContext<'a> {
         }
     }
 }
+
+
+/// How deep method specialization may keep inlining callee iseqs into one
+/// compilation unit.
+///
+/// The cost of this number is exponential in it, not linear: every level
+/// multiplies the frames one unit can hold by the specializable call sites
+/// per frame. On a call tree with three such sites per level the largest
+/// unit holds 363 specialized frames at 5, 120 at 4 and 39 at 3; on
+/// activerecord, 61 at 5 and 29 at 3. What that buys back is not
+/// measurable — across ruby-bench only 17 of 54 benchmarks compile
+/// anything at all past level 3, and their run times move by less than the
+/// spread of repeated runs.
+const SPECIALIZE_DEPTH_LIMIT: usize = 3;
 
 impl AbstractState {
     ///

@@ -192,6 +192,14 @@ impl BasicBlockInfo {
         self.bb_map[i.to_usize()]
     }
 
+    ///
+    /// Whether this body has any loop, i.e. whether compiling it runs a
+    /// back-edge fixpoint.
+    ///
+    pub(crate) fn has_loop(&self) -> bool {
+        !self.loops.is_empty()
+    }
+
     pub(crate) fn is_loop_begin(
         &self,
         bb_id: BasicBlockId,

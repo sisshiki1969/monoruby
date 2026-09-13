@@ -51,6 +51,30 @@ fn an_opt_case_in_a_far_frame() {
     );
 }
 
+/// A `**kwrest` call site inside a far frame: the (name, slot-id) table it
+/// hands `correct_rest_kw` is constant-area data too, emitted behind the
+/// whole unit, so its address is baked in absolutely rather than reached
+/// with `adr`. It was the one const-area reference the relaxation did not
+/// cover, and a frame this size puts the table out of `adr`'s reach.
+///
+/// Unlike the shapes above this one goes through the *method* JIT, whose
+/// caller does not catch a panic from the emitter (the loop JIT's does,
+/// and simply leaves the loop interpreted), and it is sized to clear the
+/// ±1 MiB reach outright rather than merely cross the relaxation
+/// threshold: 120k AsmInsts, about 1.8 MiB of aarch64 code.
+#[test]
+fn a_kwrest_call_in_a_far_frame() {
+    run_test_once(
+        r#"
+        add = (0...40000).map { |k| "a = a + #{k % 7 + 1}" }.join("\n")
+        eval "def sink(x, **opts)\n x + opts.size\nend\ndef big(v)\n a = sink(v, k: 1, j: 2)\n #{add}\n a & 0xffffff\nend"
+        r = 0
+        40.times { r = big(r) }
+        r
+        "#,
+    );
+}
+
 /// Floats across the far split: the long form keeps the original fcmp
 /// condition (an inverted one flips the unordered/NaN direction), so the
 /// float compares must behave identically at either scale.

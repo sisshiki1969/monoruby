@@ -846,7 +846,10 @@ impl AsmIr {
     }
 
     pub(super) fn kw_rest(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
-        self.push(AsmInst::RestKw { rest_kw });
+        self.push(AsmInst::RestKw {
+            rest_kw,
+            table: None,
+        });
     }
 
     ///
@@ -2833,8 +2836,14 @@ pub(super) enum AsmInst {
         src: SlotId,
         len: usize,
     },
+    /// Hand `correct_rest_kw` the `**kwrest` Hash built from the listed
+    /// slots. `table` is where those (name, slot-id) pairs live: it is
+    /// filled in by `Codegen::resolve_rest_kw_tables` before any of the
+    /// unit's code is emitted, so the emission site can name the table by
+    /// an absolute address rather than a PC-relative one.
     RestKw {
         rest_kw: Vec<(SlotId, IdentId)>,
+        table: Option<DestLabel>,
     },
 
     UndefMethod {
