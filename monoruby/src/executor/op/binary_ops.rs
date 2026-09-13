@@ -218,6 +218,24 @@ macro_rules! binop_values {
                 rhs: Value,
                 is_func_call: bool,
             ) -> Option<Value> {
+                // Integer operands answered here rather than through
+                // `RealKind`, whose `try_from` clones a BigInt receiver.
+                match (lhs.unpack(), rhs.unpack()) {
+                    (RV::Fixnum(l), RV::Fixnum(r)) => {
+                        return Some(match l.[<checked_ $op>](r) {
+                            Some(c) => Value::integer(c),
+                            None => Value::bigint(BigInt::from(l).$op(BigInt::from(r))),
+                        })
+                    }
+                    (RV::BigInt(l), RV::Fixnum(r)) => {
+                        return Some(Value::bigint(l.$op(BigInt::from(r))))
+                    }
+                    (RV::Fixnum(l), RV::BigInt(r)) => {
+                        return Some(Value::bigint(BigInt::from(l).$op(r)))
+                    }
+                    (RV::BigInt(l), RV::BigInt(r)) => return Some(Value::bigint(l.$op(r))),
+                    _ => {}
+                }
                 match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
                     (Some(lhs), Some(rhs)) => return Some((lhs.$op(rhs)).into()),
                     _ => {}
