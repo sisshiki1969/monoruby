@@ -2129,6 +2129,8 @@ pub(crate) mod jit_stats {
     pub static CHAIN_CONV_EMPTY: AtomicUsize = AtomicUsize::new(0);
     pub static CHAIN_CONV_FLOAT: AtomicUsize = AtomicUsize::new(0);
     pub static CHAIN_CONV_ALLOC: AtomicUsize = AtomicUsize::new(0);
+    pub static SPEC_MEMO_HIT: AtomicUsize = AtomicUsize::new(0);
+    pub static SPEC_MEMO_MISS: AtomicUsize = AtomicUsize::new(0);
 
     pub fn bump(c: &AtomicUsize) {
         c.fetch_add(1, Ordering::Relaxed);
@@ -2153,6 +2155,14 @@ pub(crate) mod jit_stats {
         eprintln!(
             "    replay can allocate:             {}",
             g(&CHAIN_CONV_ALLOC)
+        );
+        eprintln!(
+            "  specialized-call memo hits:        {}",
+            g(&SPEC_MEMO_HIT)
+        );
+        eprintln!(
+            "    lookups that missed:             {}",
+            g(&SPEC_MEMO_MISS)
         );
         eprintln!("  class_version incs:                {}", g(&CLASS_VER_INC));
         eprintln!("  const_version incs:                {}", g(&CONST_VER_INC));

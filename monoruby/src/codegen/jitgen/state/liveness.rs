@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub(in crate::codegen::jitgen) struct Liveness(
     Vec<IsUsed>,
     /// Stage-A use propagation: per-slot flag — an inlined callee read the
@@ -95,7 +95,7 @@ impl Liveness {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Eq, Hash)]
 pub(super) enum IsUsed {
     ///
     /// Not be used nor be killed.
@@ -132,6 +132,33 @@ impl IsUsed {
         }
     }
 
+    ///
+    /// Everything the compiler can observe about this record: whether
+    /// it is the `Killed` variant, which is the kill set
+    /// ([`Liveness::killed`]), and the float verdict, which is the
+    /// loop-entry float adoption ([`Liveness::loop_used_as_float`]).
+    /// Those two are the record's only readers, so two records that
+    /// agree here are interchangeable to both.
+    ///
+    /// Not preserved by [`Self::join`]: `Used(NonFloat)` and `ND` agree
+    /// here, yet joining each with `Used(Float)` gives `Both` and
+    /// `Float`, whose verdicts differ. A consumer that equates the two
+    /// therefore accepts a `use_float` hint derived from the other
+    /// arrival, which decides a slot's representation at a loop entry
+    /// and never its value.
+    ///
+    pub(in crate::codegen::jitgen) fn observable(&self) -> (bool, Option<bool>) {
+        let verdict = match self {
+            IsUsed::Used(used) if !used.killed => match used.ty {
+                UseTy::Float => Some(true),
+                UseTy::Both => Some(false),
+                UseTy::NonFloat => None,
+            },
+            _ => None,
+        };
+        (matches!(self, IsUsed::Killed), verdict)
+    }
+
     pub(super) fn kill(&mut self) {
         match self {
             IsUsed::Killed => {}
@@ -141,7 +168,7 @@ impl IsUsed {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct UsedAs {
     ty: UseTy,
     killed: bool,
@@ -191,7 +218,7 @@ impl UsedAs {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum UseTy {
     /// The slot is used as f64 with no conversion.
     Float,

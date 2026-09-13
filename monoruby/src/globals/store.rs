@@ -2394,7 +2394,7 @@ impl CallSiteInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct CallSiteId(pub u32);
 
