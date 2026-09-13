@@ -1964,7 +1964,6 @@ pub(super) enum AsmInst {
     ///
     SpecializedCall {
         entry: JitLabel,
-        patch_point: Option<JitLabel>,
         evict: AsmEvict,
     },
     /// Store the call-site bytecode pc into the outgoing cont-frame

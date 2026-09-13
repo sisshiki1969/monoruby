@@ -341,17 +341,10 @@ impl Codegen {
         self.set_deopt_with_return_addr(return_addr, evict);
     }
 
-    pub(in crate::codegen::jitgen) fn do_specialized_call(
-        &mut self,
-        entry: DestLabel,
-        patch_point: Option<DestLabel>,
-    ) -> CodePtr {
+    pub(in crate::codegen::jitgen) fn do_specialized_call(&mut self, entry: DestLabel) -> CodePtr {
         self.set_lfp();
         self.push_frame();
 
-        if let Some(patch) = patch_point {
-            self.jit.bind_label(patch);
-        }
         monoasm! { &mut self.jit,
             call entry;    // CALL_SITE
         }

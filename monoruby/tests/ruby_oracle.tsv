@@ -1175,6 +1175,7 @@
 54fdd2cc3d02bd64d61ab84f56fff772	[[7, 8, 9], :inner_broke]	class FwdG\n          attr_reader :a\n          def initialize(n)\n       
 550657b209502598ac09bdd6794b2088	[Encoding::CompatibilityError, "5!", ArgumentError]	[ (begin; format("hello %s".encode("utf-8"), "world".encode("UTF-16LE")); rescue
 55124e846ccfc03a163c2cfdf4d72203	:raised	class E\n              def initialize() @a = {k: 1} end\n            
+55206a7cfcafed16d27c6938f342039c	[6, 15, 15]	SCALE = 2\n        class C\n          def initialize(v); @v = v; end\n    
 553588ca0ab5030b1fb038e8bcdbc8f5	"Bar"	class Bar; end\n        Bar.to_s\n        
 5560cb313539dc27e921167b0c6a08ea	[1, 2]	[1, 2].each.with_index { |v, i| }
 55773114dd0b8ead142eab813c0583af	[1, "made-y", 1, :dflt, 2]	h = Hash.new { |hash, k| hash[k] = "made-#{k}" }\n        h["x"] = 1\n   
