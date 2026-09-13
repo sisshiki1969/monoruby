@@ -1183,7 +1183,7 @@ fn lookup_struct_members(globals: &Globals, mut class: Module) -> Option<Array> 
     loop {
         if let Some(v) = globals
             .store
-            .get_ivar(class.as_val(), IdentId::get_id("/members"))
+            .get_ivar(class.as_val(), IdentId::_MEMBERS)
             && let Some(arr) = v.try_array_ty()
         {
             return Some(arr);

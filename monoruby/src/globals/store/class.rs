@@ -446,7 +446,7 @@ pub fn struct_members_len(store: &super::Store, class_id: ClassId) -> usize {
     use crate::IdentId;
     let mut cls = store[class_id].get_module();
     loop {
-        if let Some(m) = store.get_ivar(cls.as_val(), IdentId::get_id("/members"))
+        if let Some(m) = store.get_ivar(cls.as_val(), IdentId::_MEMBERS)
             && let Some(arr) = m.try_array_ty()
         {
             break arr.len();

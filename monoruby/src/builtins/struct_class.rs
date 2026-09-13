@@ -162,7 +162,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     if let Some(v) = keyword_init_arg {
         globals
             .store
-            .set_ivar(new_struct, IdentId::get_id("/keyword_init"), v)
+            .set_ivar(new_struct, IdentId::_KEYWORD_INIT, v)
             .unwrap();
     }
 
@@ -264,7 +264,9 @@ fn struct_initialize(
         vm.invoke_method_added(globals, class_id, writer_name, None)?;
     }
 
-    new_struct.set_instance_var(&mut globals.store, "/members", Value::array(members))?;
+    globals
+        .store
+        .set_ivar(new_struct, IdentId::_MEMBERS, Value::array(members))?;
 
     if let Some(bh) = lfp.block() {
         vm.module_eval(globals, new_module, bh)?;
@@ -289,7 +291,7 @@ pub(super) fn struct_members(
 pub(super) fn get_members(store: &Store, mut class: Module) -> Result<Array> {
     let mut members = None;
     loop {
-        if let Some(m) = store.get_ivar(class.as_val(), IdentId::get_id("/members")) {
+        if let Some(m) = store.get_ivar(class.as_val(), IdentId::_MEMBERS) {
             members = Some(m);
             break;
         } else if let Some(s) = class.superclass()
@@ -455,7 +457,7 @@ fn initialize(
 fn is_keyword_init(globals: &Globals, class_obj: Module) -> bool {
     let v = match globals
         .store
-        .get_ivar(class_obj.as_val(), IdentId::get_id("/keyword_init"))
+        .get_ivar(class_obj.as_val(), IdentId::_KEYWORD_INIT)
     {
         Some(v) => v,
         None => return false,
@@ -757,7 +759,7 @@ fn keyword_init_p(
 ) -> Result<Value> {
     let v = globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/keyword_init"))
+        .get_ivar(lfp.self_val(), IdentId::_KEYWORD_INIT)
         .unwrap_or(Value::nil());
     if v.is_nil() {
         Ok(Value::nil())
