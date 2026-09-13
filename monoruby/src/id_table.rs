@@ -269,6 +269,13 @@ impl IdentId {
     /// `freeze`: the `StringFreeze` opcode (`"lit".freeze`) asks the
     /// basic-op table about `String#freeze` on every interpreted execution.
     pub const FREEZE: IdentId = id!(97);
+    /// The hidden ivars a `Struct` / `Data` subclass carries: the member
+    /// list and `keyword_init:`. Every instance creation reads both
+    /// (`get_members`, `is_keyword_init`), so interning them by name on
+    /// each `Struct.new` cost two `RwLock` reads and two string hashes
+    /// per object.
+    pub const _MEMBERS: IdentId = id!(98);
+    pub const _KEYWORD_INIT: IdentId = id!(99);
 
     // The special global variables whose assignment `write_special_check`
     // (globals/gvar.rs) validates or coerces. Deliberately a *consecutive*
@@ -556,6 +563,8 @@ impl IdentifierTable {
         }
         table.set_id("/encoding_override", IdentId::_ENCODING_OVERRIDE);
         table.set_id("freeze", IdentId::FREEZE);
+        table.set_id("/members", IdentId::_MEMBERS);
+        table.set_id("/keyword_init", IdentId::_KEYWORD_INIT);
         table
     }
 

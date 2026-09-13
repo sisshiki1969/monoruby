@@ -2101,21 +2101,22 @@ fn check_pattern_encoding_compat(
 fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let self_inner = self_.as_rstring_inner();
-    if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
-        check_string_encoding_compat(self_inner, &arg_inner, globals)?;
+    let arg = lfp.arg(0);
+    let arg_inner = arg.is_rstring_inner();
+    if let Some(arg_inner) = &arg_inner {
+        check_string_encoding_compat(self_inner, arg_inner, globals)?;
     }
     let string = self_inner.regex_view()?;
     // View the needle in the same (surrogate or direct) space as the
-    // receiver so 8-bit needles line up byte-wise.
-    let owned;
-    let substr_s: &str = if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
-        owned = arg_inner.regex_view()?.into_owned();
-        &owned
-    } else {
-        owned = lfp.arg(0).coerce_to_str(vm, globals)?;
-        &owned
+    // receiver so 8-bit needles line up byte-wise. `regex_view` borrows
+    // unless the receiver needs byte mapping, and the search only reads,
+    // so the needle stays a `Cow` — copying it cost a malloc + memcpy +
+    // free on every call (three per request in ruby-bench's `grape`).
+    let found = match &arg_inner {
+        Some(arg_inner) => string.contains(&*arg_inner.regex_view()?),
+        None => string.contains(&*arg.coerce_to_str(vm, globals)?),
     };
-    Ok(Value::bool(string.contains(substr_s)))
+    Ok(Value::bool(found))
 }
 
 ///

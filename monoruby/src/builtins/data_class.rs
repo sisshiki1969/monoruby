@@ -79,7 +79,9 @@ fn data_define_class(
 
     let members = ArrayInner::from_iter(members_arg.iter().cloned());
     let inline = members.len() <= crate::value::STRUCT_INLINE_SLOTS;
-    new_class.set_instance_var(&mut globals.store, "/members", Value::array(members))?;
+    globals
+        .store
+        .set_ivar(new_class, IdentId::_MEMBERS, Value::array(members))?;
 
     // Readers only — Data is immutable, so no writers are installed;
     // `__data_init` stores through the slots directly.
