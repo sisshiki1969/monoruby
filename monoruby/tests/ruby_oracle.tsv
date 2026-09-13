@@ -676,6 +676,7 @@
 3026addc0fcd2b67ebcfb55aa32756bc	true	m = Module.new\n        m.is_a?(Module)\n        
 3053f18f888b1ea24f609aa1ec916fec	{amount: 1}	M = Data.define(:amount, :unit)\nM.new(1, "m").deconstruct_keys([:amount])
 3063c096c70750fca8ad43016f8a7351	[:considered, :moved, :moved_up, :moved_down]	GC.compact.keys
+30776c327427182563f43447a37fc8b5	[[1, nil, 1, 2], [101, 7, 51, 4], 40]	class CNVer; def initialize(a); @a = a; end; def a = @a; end\n        cl
 308b0e3069363f729a784cb6ad223bb3	[1, 2]	klass = Data.define(:a, :b)\n            inst = klass.new(1, 2)\n    
 30da1a8eb4c207410e9146da15639ec4	[ArgumentError, ArgumentError, ArgumentError, TypeError, ArgumentError, "no", 3, TypeError]	class CNOne; def initialize(a); @a = a; end; end\n        class CNRaise\n
 3118b9df8fc7baabff879159ce2bf50f	"..hello..."	class MyInt\n              def to_int\n                10\n           
