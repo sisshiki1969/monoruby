@@ -347,10 +347,42 @@ impl SlotState {
             ..
         } = cc.jit_type()
         {
+            // D1/K1: a forwarding trampoline's `...` rest and its
+            // `**kwrest` may be deferred, in which case `set_arguments`
+            // stores a real `nil` into the slot and the consumer routes
+            // from the caller's window. The `S(Array)` / `S(Hash)` that
+            // `LinkMode::from_caller` synthesizes for those parameters
+            // describes the objects that were *not* built, so it must
+            // not become a claim here.
+            let deferred = cc.forward_rest_deferral();
+            let is_deferred = |slot: SlotId| {
+                deferred.as_ref().is_some_and(|df| {
+                    df.rest_local == slot || df.kw.as_ref().is_some_and(|(kw, ..)| *kw == slot)
+                })
+            };
             for (i, arg) in args.iter().enumerate() {
+                let slot = SlotId(i as u16);
                 match arg {
                     LinkMode::C(_) | LinkMode::MaybeNone | LinkMode::None => {
-                        ctx.set_mode(SlotId(i as u16), *arg);
+                        ctx.set_mode(slot, *arg);
+                    }
+                    // The caller's *placement* does not survive the call:
+                    // `set_arguments` copies the value into this frame's
+                    // own slot, so an fpr binding is the caller's alone
+                    // and an `F`/`Sf` argument arrives boxed in its slot.
+                    // Its *type* does survive — it is the same value — so
+                    // the guard the caller proved is this frame's to keep,
+                    // and the parameter's first use needs no guard of its
+                    // own.
+                    //
+                    // `self` (position 0) is excluded: `SlotState::new`
+                    // already guarded it with the class this body is
+                    // specialized for, which is never weaker than what
+                    // the call site could prove about the receiver.
+                    LinkMode::S(_) | LinkMode::F(_) | LinkMode::Sf(_, _)
+                        if i != 0 && !is_deferred(slot) =>
+                    {
+                        ctx.set_S_with_guard(slot, arg.guarded());
                     }
                     _ => {}
                 }
