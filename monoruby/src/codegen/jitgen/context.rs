@@ -106,20 +106,6 @@ pub(super) enum JitType {
 pub(super) struct SpecializeInfo {
     pub(super) entry: JitLabel,
     pub(super) info: AsmInfo,
-    pub(super) patch_point: Option<JitLabel>,
-    /// The subtree was compiled while an enclosing frame's unboxed-Float
-    /// speculation was armed, so its body addresses that frame's FP
-    /// save/spill slots and must never be recompiled standalone (#1140).
-    pub(super) speculated: bool,
-    /// D1: the body's forwarding consumer routed its `...` rest straight
-    /// from the caller's argument window, and the *caller-side*
-    /// `set_arguments` was emitted without the rest `Array`. The body is
-    /// only correct paired with that caller code: a standalone recompile
-    /// would read the rest local (left `nil` by the caller) as the
-    /// forwarded arguments — `Class#new` then calls `initialize` with
-    /// nothing. Such a body recompiles by rebuilding the root unit, like
-    /// a speculated one.
-    pub(super) deferred_rest: bool,
 }
 
 ///
@@ -1892,18 +1878,6 @@ impl<'a> JitContext<'a> {
 
     // ===== Unboxed-locals speculation (doc/chain_deopt.md §5 steps 4–5) =====
 
-    ///
-    /// Whether any frame on the compile stack currently has an armed
-    /// unboxed-Float speculation. Sampled when a specialized subtree is
-    /// recorded (`compile_specialized_func`): a subtree compiled under an
-    /// armed speculation reads the arming frame's FP save/spill area and
-    /// must not be recompiled standalone (#1140).
-    ///
-    pub(super) fn under_armed_speculation(&self) -> bool {
-        self.stack_frame
-            .iter()
-            .any(|f| !f.speculated_floats.is_empty())
-    }
 
     fn check_exception_handler(&self, begin: usize, end: usize) -> bool {
         self.stack_frame[begin..end].iter().any(|f| {

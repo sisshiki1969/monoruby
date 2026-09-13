@@ -1164,7 +1164,6 @@ impl<'a> JitContext<'a> {
             state,
             iseq,
             self_class,
-            None,
             args_info,
             Some(outer),
             callid,
@@ -1957,12 +1956,6 @@ impl<'a> JitContext<'a> {
         } else {
             JitArgumentInfo::default()
         };
-        let patch_point = if self.is_specialized() {
-            None
-        } else {
-            Some(self.label())
-        };
-        let used_patch_point = patch_point;
         // What this frame is holding as a constant on the way in. The
         // callee's compile may take some of those claims away — its block
         // stores into our frame, and `store_dynvar` says so — and a claim
@@ -1976,7 +1969,6 @@ impl<'a> JitContext<'a> {
             state,
             iseq,
             recv_class,
-            used_patch_point,
             args_info,
             None,
             callid,
@@ -2056,7 +2048,6 @@ impl<'a> JitContext<'a> {
             callid,
             fid,
             entry,
-            used_patch_point,
             evict,
             deferred_rest,
             needs_rest_array,
@@ -2176,7 +2167,6 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         iseq_id: ISeqId,
         self_class: ClassId,
-        patch_point: Option<JitLabel>,
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
@@ -2194,7 +2184,6 @@ impl<'a> JitContext<'a> {
                 state,
                 iseq_id,
                 self_class,
-                patch_point,
                 args_info,
                 outer,
                 callid,
@@ -2224,7 +2213,6 @@ impl<'a> JitContext<'a> {
             state,
             iseq_id,
             self_class,
-            patch_point,
             args_info,
             outer,
             callid,
@@ -2243,7 +2231,6 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         iseq_id: ISeqId,
         self_class: ClassId,
-        patch_point: Option<JitLabel>,
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
@@ -2334,15 +2321,9 @@ impl<'a> JitContext<'a> {
             );
         }
         let entry = self.label();
-        let speculated = self.under_armed_speculation();
         self.specialized_methods_push(context::SpecializeInfo {
             entry,
             info: frame.asm_info,
-            patch_point,
-            speculated,
-            // The same condition under which the call site below elides
-            // the rest `Array` (`SpecializedCompileResult`).
-            deferred_rest: frame_deferred_rest && !frame_needs_rest_array,
         });
         // Propagate the deopt fact one level up: if this inlined
         // sub-iseq could deopt, the caller's compiled body also
@@ -2576,7 +2557,6 @@ impl AbstractState {
         callid: CallSiteId,
         callee_fid: FuncId,
         inlined_entry: JitLabel,
-        patch_point: Option<JitLabel>,
         evict: AsmEvict,
         deferred_rest: bool,
         needs_rest_array: bool,
@@ -2616,7 +2596,6 @@ impl AbstractState {
         });
         ir.push(AsmInst::SpecializedCall {
             entry: inlined_entry,
-            patch_point,
             evict,
         });
         self.chain_exit(ir, evict, using_fpr, store[callid].dst);

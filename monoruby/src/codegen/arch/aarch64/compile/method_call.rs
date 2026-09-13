@@ -1054,8 +1054,8 @@ impl Codegen {
 
     /// `SpecializedCall` / `SpecializedYield`: a direct branch-with-link into
     /// an inlined method/block entry already emitted in this code buffer.
-    /// Mirrors x86 `do_specialized_call`: set_lfp + push_frame, optionally bind
-    /// the recompile re-entry `patch_point`, `bl entry`, then pop_frame. Returns
+    /// Mirrors x86 `do_specialized_call`: set_lfp + push_frame, `bl entry`,
+    /// then pop_frame. Returns
     /// the post-`bl` address (the return continuation); the caller records it via
     /// `set_deopt_with_return_addr` so the chain-deopt walk (`Codegen::chain_deopt`)
     /// can find this site's replay data from a suspended frame's return-address
@@ -1063,7 +1063,6 @@ impl Codegen {
     pub(in crate::codegen::jitgen::asmir) fn do_specialized_call(
         &mut self,
         entry: DestLabel,
-        patch_point: Option<DestLabel>,
     ) -> CodePtr {
         // set_lfp + push_frame (mirror a64_do_call).
         monoasm_arm64!(&mut self.jit,
@@ -1074,9 +1073,6 @@ impl Codegen {
             sub x22, sp, #(RSP_LOCAL_FRAME as u32);  // callee LFP
             stur x22, [sp, #(-((RSP_CFP + CFP_LFP) as i32))];  // new_cfp.lfp = LFP
         );
-        if let Some(patch) = patch_point {
-            self.jit.bind_label(patch);
-        }
         monoasm_arm64!(&mut self.jit, bl entry;);
         let return_addr = self.jit.get_current_address();
         // pop_frame: restore caller cfp + lfp from x29 (== x86 rbp).
