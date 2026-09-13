@@ -1295,6 +1295,7 @@
 5da42f6c8778648a29ceb2994861a7cb	[1, 3, 5, 7]	[1, 2, 3, 4, 5, 6, 7].filter { |x| x.odd? }
 5dbf9a8047fd94fd04731be638681e64	[true, Time, Time, "hello", 0, 0]	(f="/tmp/mono_cov_#{Process.pid}.txt"; File.write(f,"hello world"); io=File.open
 5dd6439377bb9ba0cd5bad7fbf28a410	[false, false, true, false, true, true]	f = -> x { x * x }\n        g = proc { |x| x + x }\n        l = -> x { x 
+5dd83004bbe96bada155526bffdf912e	20000100000.0	def scaled(x, &blk)\n          blk.call(x * 2.0)\n        end\n        s =
 5dd8cc466f78b091e4a3dd39040187a0	true	k = Class.new\n            k.new.is_a?(k)\n            
 5de8fff5a504694236094c2a361ed684	[960, true, true]	def grow(s, n)\n          i = 0\n          while i < n\n            s << "
 5dec0ce6276f9df416cee244f966b93e	0.0	Math.acosh(1)
@@ -2239,6 +2240,7 @@ a32e5a59e048d15bbb352b6fdb7e1699	[0, 0.0, 6, 8.5, 15.25, "abc"]	[[].sum, [].sum(
 a32ecda935b7e94450e788b8832e13a4	[3, 1, 5, 3]	class C\n            include Comparable\n            attr_accessor :x\n 
 a331276eee9103e6d3857063f69777b4	[:foo, :bar]	$res = []\n            class C\n              def self.singleton_meth
 a34c4e369e6d5139f06cb9ce6026b999	42	class C\n          def self.class_method\n            42\n          end\n  
+a350f18bfa74eb691291c66f2ed106e8	11200072.0	def clamped(d)\n          return 0.0 if d < 1.0\n          160.0 / d\n    
 a359b845a5de697d94d846bfda30d830	14614	class C\n          def initialize\n            @a = [0.0, 1.0, 2.0]\n     
 a3618f8ad00f6c37b513a42900293bee	[[233], "Windows-1250", [234, 247, 241], "Ω≈±", [240, 210, 201, 215, 197, 212], "Привет", [146, 165, 225, 226], "абв"]	(a="é".encode("Windows-1250").bytes; b="é".encode("Windows-1250").encoding.name;
 a3921c92237d852a5bc1ad370ba61b79	["Enumerator::Yielder", true]	y = nil\n            Enumerator.new { |yy| y = yy; yy.yield 1 }.firs
@@ -2754,6 +2756,7 @@ c6683cf0ef52f6cb79ff46704cbc5877	["MyFiber", :done]	class MyFiber < Fiber\n     
 c67abacc118f750b4c4602e5803bf054	[true, false]	klass = Class.new do\n              define_method(:initialize) { }\n 
 c68a937ebbf20dbda216eebda6b83971	["x", "x"]	class C; def to_int; 2; end; end; o = C.new\nArray.new(o, "x")
 c69571585acd0ae97070c46877ef1630	"uninitialized constant MdName::NOPE"	m = Module.new { def self.name; "MdName"; end }\n            begin; 
+c6a6be2b7870ba097e242bf620676800	[160.0, 800000.0]	class C\n          def initialize\n            @a = [0.0, 1.0, 2.0]\n     
 c6aa47f3d7123c5ac7cf49f88732c23f	[true, [:waiting, :woken]]	m = Mutex.new\n            cv = ConditionVariable.new\n            lo
 c6c590c4f5e99e29b5e950ed25d95e8a	"abcabcabc"	class MyInt\n              def to_int\n                3\n            
 c6cf506f9e1bf56b2c88982b59d4a0fe	[(13/25), (1000/1), (3/200), (3/1), (10000/1), (1/2), (-191/30), "invalid value for convert(): \\"1/-2\\"", :zde, :ae, :ae2, (13/25), (1/1), (1/1), (-191/30), (0/1), (1/100), (19/2), (3/1), (7/2), (0/1), nil, nil, :tie, nil, ["Complex", (1/5), (-2/5)], (1/2)]	bad_to_int = Object.new\n            def bad_to_int.to_int; raise No
@@ -3412,6 +3415,7 @@ f635d2b04e7d853cebc06ba31f5c8a82	20	class C; def to_int; 1; end; end; o = C.new\
 f642a2f41f870a29780f497378032b77	["negative array size", "negative array size", "no implicit conversion of String into Integer", TypeError]	r = []\n        begin; Array.new(-1); rescue ArgumentError => e; r << e.
 f65b176caaf8d76c616a0ef5ed8857e9	[1, 1000, 2, 1001, 3, 1002, 5, 1003, 8, 1004, 13, 1005, 21, 1006, 34, 1007, 55, 1008, 89, 1009, nil]	fib = Enumerator.new do |y|\n                a = b = 1\n             
 f666332b734a470db3c29c7d1c1fcbda	true	require "json"\n            s = "tab\\there\\nnewline\\r\\nand\\\\backslas
+f6679878247d6c34380783782cebe666	[35.55555555555556, 277257.248529247]	class C\n          def initialize\n            @a = [0.0, 1.0, 2.0]\n     
 f66defb51797eecc1d5833fe7389c0d6	["s", [0, 0], nil, [1, 2]]	class CNStr < String; end\n        class CNAry < Array; end\n        clas
 f677948e40b8cdfc7bd01fe6eddf352e	[true, false, false]	File.open("Cargo.toml") do |f|\n              before = f.autoclose?\n
 f68ec4570fce796ce1f3fb8aef0cb21e	"あabca"	"あ".ljust(5, "abc")

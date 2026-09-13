@@ -359,6 +359,19 @@ impl Codegen {
                 slot,
                 base: frame.base_stack_offset,
             }),
+            AsmInst::FloatRetStore(x) => self.encode_linst(LInst::FloatRetStore {
+                src: x,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::FloatRetLoad(x) => self.encode_linst(LInst::FloatRetLoad {
+                dst: x,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::FloatArgMove { src, dst } => self.encode_linst(LInst::FloatArgMove {
+                src,
+                dst,
+                base: frame.base_stack_offset,
+            }),
             // Save / restore live FP pool registers around a C-call.
             AsmInst::FprSave(using_fpr, cont) => {
                 self.encode_linst(LInst::FprSave { using_fpr, cont })

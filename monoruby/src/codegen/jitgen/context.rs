@@ -145,11 +145,20 @@ impl JitBlockInfo {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
-pub(super) struct JitArgumentInfo(pub Option<Vec<LinkMode>>);
+pub(super) struct JitArgumentInfo(
+    pub Option<Vec<LinkMode>>,
+    ///
+    /// The parameters this call hands over in a register instead of in
+    /// the callee's frame slot, with the pool register each arrives in
+    /// (`JitContext::plan_float_args`). Part of the callee's identity:
+    /// it is the callee's entry state that binds them.
+    ///
+    pub Vec<(SlotId, FPReg)>,
+);
 
 impl JitArgumentInfo {
     pub(super) fn new(slot: Vec<LinkMode>) -> Self {
-        Self(Some(slot))
+        Self(Some(slot), vec![])
     }
 }
 
@@ -594,6 +603,25 @@ pub(super) struct JitStackFrame {
     pub(super) needs_rest_array: bool,
 
     ///
+    /// Some path returns out of this frame with a boxed `rax` that no
+    /// return segment emitted: a non-local `return` or a `break`, whose
+    /// teardown returns on its own. Their value cannot follow the
+    /// float-return convention, so its presence anywhere in the subtree
+    /// rules the convention out for this frame. Propagated one level up
+    /// in `compile_specialized_func`, like `had_deopt`.
+    ///
+    pub(super) has_boxed_return: bool,
+
+    ///
+    /// This frame's compiled return segments hand the value to the call
+    /// site as a raw f64 in the float-return register rather than boxed
+    /// in rax (`AsmInst::FloatRetStore`). Decided once, in
+    /// `build_return_segments`, and binding on the call site: a site that
+    /// read rax here would read the placeholder.
+    ///
+    pub(super) float_return: bool,
+
+    ///
     /// Unboxed-locals speculation (`doc/chain_deopt.md` §5 steps 4–5):
     /// non-empty exactly while this frame's qualifying block-passing
     /// call site compiles its specialized subtree. Each entry is a
@@ -735,6 +763,8 @@ impl JitStackFrame {
             call_site_using_fpr: UsingFpr::default(),
             deferred_rest: false,
             needs_rest_array: false,
+            has_boxed_return: false,
+            float_return: false,
             speculated_floats: vec![],
             speculated_using_fpr: UsingFpr::default(),
             speculation_poisoned: false,
@@ -773,6 +803,8 @@ impl JitStackFrame {
             call_site_using_fpr: self.call_site_using_fpr,
             deferred_rest: self.deferred_rest,
             needs_rest_array: self.needs_rest_array,
+            has_boxed_return: self.has_boxed_return,
+            float_return: self.float_return,
             speculated_floats: self.speculated_floats.clone(),
             speculated_using_fpr: self.speculated_using_fpr,
             speculation_poisoned: self.speculation_poisoned,
@@ -2193,6 +2225,10 @@ impl<'a> JitContext<'a> {
             call_site_using_fpr: _,
             deferred_rest: _,
             needs_rest_array: _,
+            // Set once, in `build_return_segments`, on the frame whose
+            // segments are being built — never on a suspended outer
+            // frame, so a nested call cannot move it.
+            float_return: _,
             // The tower itself.
             is_not_block,
             stack_offset,
@@ -2201,6 +2237,7 @@ impl<'a> JitContext<'a> {
             speculation_poisoned,
             had_deopt,
             generic_yield,
+            has_boxed_return,
             speculated_using_fpr,
             speculated_floats,
             spill_home_ids,
@@ -2215,6 +2252,7 @@ impl<'a> JitContext<'a> {
             speculation_poisoned: *speculation_poisoned,
             had_deopt: *had_deopt,
             generic_yield: *generic_yield,
+            has_boxed_return: *has_boxed_return,
             ivar_heap_accessed: self.stack_frame[pos].ivar_heap_accessed,
             speculated_using_fpr: *speculated_using_fpr,
             speculated_floats: speculated_floats.clone(),
@@ -2243,6 +2281,7 @@ impl<'a> JitContext<'a> {
             speculation_poisoned,
             had_deopt,
             generic_yield,
+            has_boxed_return,
             ivar_heap_accessed,
             spill_home_ids,
             return_context,
@@ -2253,6 +2292,7 @@ impl<'a> JitContext<'a> {
         frame.speculation_poisoned = *speculation_poisoned;
         frame.had_deopt = *had_deopt;
         frame.generic_yield = *generic_yield;
+        frame.has_boxed_return = *has_boxed_return;
         frame.ivar_heap_accessed = *ivar_heap_accessed;
         frame.spill_home_ids = spill_home_ids.clone();
         frame.return_context = return_context.clone();
@@ -3112,11 +3152,46 @@ impl<'a> JitContext<'a> {
         crate::codegen::jitgen::state::ChainSurrender { per_level }
     }
 
+    ///
+    /// Whether this specialized body may hand its return value to the
+    /// call site as a raw f64 instead of boxing it (`AsmInst::FloatRetStore`).
+    ///
+    /// Three things have to hold, and each is load-bearing.
+    ///
+    /// * Every return edge already holds the value in an fpr. A boxed
+    ///   `S(Float)` would have to be unboxed here to be re-boxed at the
+    ///   call site, which is the round trip this exists to remove.
+    /// * No path returns out of this frame with a boxed `rax` of its own
+    ///   (`has_boxed_return`): the convention is per frame, and the call
+    ///   site cannot tell the two kinds of return apart.
+    /// * The iseq carries no exception handler. `AsmInst::Ret` then emits
+    ///   the parked-deferral check (see `emit_ret`), whose call clobbers
+    ///   the register the value travels in.
+    ///
+    fn float_return_ok(
+        &self,
+        frame: &JitStackFrame,
+        edges: &[(
+            JitLabel,
+            Vec<FrameRef>,
+            AbstractFrame,
+            SlotId,
+            BasicBlockId,
+        )],
+    ) -> bool {
+        !frame.has_boxed_return
+            && !self.store[frame.iseq_id].has_exception_handler()
+            && edges
+                .iter()
+                .all(|(_, _, inner, ret_slot, _)| float_ret_src(inner.mode(*ret_slot)).is_some())
+    }
+
     fn build_return_segments(&mut self, frame: &mut JitStackFrame) -> Option<Vec<FrameRef>> {
         let edges = std::mem::take(&mut frame.return_edges);
         if edges.is_empty() {
             return None;
         }
+        frame.float_return = self.float_return_ok(frame, &edges);
         let mut target: Vec<FrameRef> = edges[0].1.clone();
         for (_, chain, ..) in edges.iter().skip(1) {
             debug_assert_eq!(target.len(), chain.len());
@@ -3192,7 +3267,16 @@ impl<'a> JitContext<'a> {
                     }
                 }
             }
-            inner.load(&mut ir, ret_slot, GP::Rax);
+            // Last thing before the `ret`: `f64_to_val`, which the bridge
+            // writes above call, clobbers the same scratch registers the
+            // value travels in.
+            if frame.float_return {
+                let src = float_ret_src(inner.mode(ret_slot))
+                    .expect("float_return edge carries no raw f64");
+                ir.float_ret_store(src);
+            } else {
+                inner.load(&mut ir, ret_slot, GP::Rax);
+            }
             ir.push(AsmInst::Ret);
             frame.outline_bridges.push((ir, seg, bbid));
         }
@@ -3228,6 +3312,7 @@ impl<'a> JitContext<'a> {
     /// Add new return branch with `state`.
     ///
     pub(super) fn new_method_return(&mut self, ret: ReturnState) {
+        self.current_frame_mut().has_boxed_return = true;
         if let Some(pos) = self.method_caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_method_return:{:?}", ret);
@@ -3239,6 +3324,7 @@ impl<'a> JitContext<'a> {
     /// Add new return branch with `state`.
     ///
     pub(super) fn new_break(&mut self, ret: ReturnState) {
+        self.current_frame_mut().has_boxed_return = true;
         if let Some(pos) = self.iter_caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_break:{:?}", ret);
@@ -3273,5 +3359,23 @@ impl<'a> JitContext<'a> {
         frame.deferred_rest |= ir.deferred_rest();
         frame.needs_rest_array |= ir.needs_rest_array();
         frame.outline_bridges.push((ir, dest, bbid));
+    }
+}
+
+///
+/// The raw f64 a return edge can hand to its call site, if it has one
+/// without emitting a guard.
+///
+/// `S` is deliberately absent even when its guard says Float: reading it
+/// back means an unbox, which is the very round trip the convention
+/// exists to remove, and the unbox is guarded, so it would put a deopt on
+/// a path that had none.
+///
+fn float_ret_src(mode: LinkMode) -> Option<crate::codegen::jitgen::asmir::OuterFprSrc> {
+    use crate::codegen::jitgen::asmir::OuterFprSrc;
+    match mode {
+        LinkMode::F(fpr) | LinkMode::Sf(fpr, _) => Some(OuterFprSrc::Fpr(fpr)),
+        LinkMode::C(v) => v.try_float().map(|f| OuterFprSrc::Imm(f.to_bits())),
+        _ => None,
     }
 }
