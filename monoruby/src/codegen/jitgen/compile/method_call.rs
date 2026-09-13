@@ -999,7 +999,18 @@ impl<'a> JitContext<'a> {
                 // Inside a dispatch arm, specialization is off: the arm
                 // cannot back out of a `CompileError`, and a `Cease` return
                 // would leave it with no path to the merge.
-                if (((specializable || forwarded_initialize) && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT)
+                // A forwarding callee does not spend depth. `def f(...)`
+                // bodies — `Class#new` above all — are trampolines whose
+                // whole cost is the `...` they re-materialize, which is
+                // exactly what specializing them removes, and whose bodies
+                // add almost nothing to the unit. Gating them on depth made
+                // an allocation loop 7x slower whenever the frames above it
+                // happened to spend the budget first: the same loop ran at
+                // 4 ms or 30 ms depending only on how deeply its caller was
+                // nested. That is the same reasoning that already keeps
+                // them out of the immediate-arg heuristic above.
+                if (((specializable || forwarded_initialize)
+                    && (forwarding_callee || self.specialize_level() < SPECIALIZE_DEPTH_LIMIT))
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
                 {
