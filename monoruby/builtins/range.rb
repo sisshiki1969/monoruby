@@ -234,6 +234,11 @@ class Range
   end
 
   def cover?(val)
+    # The numeric case (both endpoints and the argument) is two
+    # comparisons in Rust; `nil` means "not that shape", and the general
+    # implementation below decides.
+    fast = __cover_num_q(val)
+    return fast unless fast.nil?
     if val.is_a?(Range)
       __cover_range_q(val)
     else
@@ -242,10 +247,14 @@ class Range
   end
 
   def ===(val)
+    fast = __cover_num_q(val)
+    return fast unless fast.nil?
     cover?(val)
   end
 
   def include?(val)
+    fast = __cover_num_q(val)
+    return fast unless fast.nil?
     b = self.begin
     e = self.end
     # Fully-open range: accept "linear" values (CRuby's linear_object_p:

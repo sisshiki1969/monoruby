@@ -38,6 +38,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "each", each, 0);
     //globals.define_builtin_func(RANGE_CLASS, "reject", reject, 0);
     globals.define_builtin_funcs(RANGE_CLASS, "include?", &["member?"], include_, 1);
+    globals.define_builtin_func(RANGE_CLASS, "__cover_num_q", cover_num_q, 1);
     globals.define_builtin_func(RANGE_CLASS, "===", teq, 1);
     globals.define_builtin_func(RANGE_CLASS, "all?", all_, 0);
     globals.define_builtin_funcs(RANGE_CLASS, "collect", &["map"], map, 0);
@@ -557,6 +558,46 @@ fn range_include_impl(start: Value, end: Value, val: Value, excl: bool) -> Resul
 /// - member?(obj) -> bool
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/i/include=3f.html]
+///
+/// The numeric case of `Range#cover?` / `#include?` / `#===`, answered
+/// in Rust.
+///
+/// Those three are written in Ruby (`builtins/range.rb`) because their
+/// general semantics need `succ` iteration, `to_str` coercion and `<=>`
+/// on arbitrary objects. The numeric case is none of that — two
+/// comparisons — but it was reaching that answer through `include?`,
+/// four `is_a?` tests, `cover?`, and `__cover_val_q`'s two
+/// `Integer#<=>` calls: about ten dispatches for what a bounds check
+/// should cost. `(0...n).include?(i)` is the ordinary way to write one
+/// (it is 31 % of ruby-bench's `lee`), so it gets the short path.
+///
+/// Returns `nil` — not `false` — when the shape is anything else, so
+/// the Ruby side falls through to the general implementation. That is
+/// every non-numeric endpoint or argument, and a redefined `<=>` on
+/// Integer or Float, which the general path honours and this one
+/// cannot.
+///
+#[monoruby_builtin]
+fn cover_num_q(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    fn is_num(v: Value) -> bool {
+        matches!(v.unpack(), RV::Fixnum(_) | RV::Float(_) | RV::BigInt(_))
+    }
+    use crate::executor::op::cmp_redefined;
+    let self_ = lfp.self_val();
+    let range = self_.as_range();
+    let (start, end, val) = (range.start(), range.end(), lfp.arg(0));
+    if !is_num(val)
+        || !(start.is_nil() || is_num(start))
+        || !(end.is_nil() || is_num(end))
+        || cmp_redefined(globals, INTEGER_CLASS)
+        || cmp_redefined(globals, FLOAT_CLASS)
+    {
+        return Ok(Value::nil());
+    }
+    let b = range_include_impl(start, end, val, range.exclude_end())?;
+    Ok(Value::bool(b))
+}
+
 #[monoruby_builtin]
 fn include_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
