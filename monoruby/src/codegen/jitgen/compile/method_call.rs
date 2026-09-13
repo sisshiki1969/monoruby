@@ -1,5 +1,8 @@
 use crate::{
-    codegen::jitgen::{context::JitStackFrame, state::LinkMode},
+    codegen::jitgen::{
+        context::JitStackFrame,
+        state::{Guarded, LinkMode},
+    },
     executor::inline::InlineFuncInfo,
 };
 
@@ -1027,7 +1030,7 @@ impl<'a> JitContext<'a> {
         // `recv_class`'s JIT body — hand `None` so the lowering dispatches
         // through the callee's wrapper (see `AsmInst::Call::recv_class`).
         let proven_recv_class = (!same_target_set_guarded).then_some(recv_class);
-        state.send(ir, &self.store, callid, fid, proven_recv_class, outer_lfp);
+        state.send(ir, &self.store, callid, fid, proven_recv_class, outer_lfp, None);
 
         Ok(CompileResult::Continue)
     }
@@ -1192,7 +1195,7 @@ impl<'a> JitContext<'a> {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: state.pc().as_ptr() as u64,
         });
-        state.set_arguments(&self.store, ir, callid, callee_fid, false, &arg_hints);
+        state.set_arguments(&self.store, ir, callid, callee_fid, false, &arg_hints, None);
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -1615,19 +1618,53 @@ impl<'a> JitContext<'a> {
     /// *caller's* instructions instead, so an argument-less construction
     /// costs exactly the allocation.
     ///
-    /// Declines (⇒ the ordinary specialized call) unless the whole
-    /// construction is expressible without a frame:
+    /// The trampoline also costs an `Array` per construction. Its `(...)`
+    /// binds the arguments into a rest parameter, and that rest `Array` is
+    /// elided only when the forward is proved to go straight back out
+    /// again (D1) — which needs the trampoline *inlined* into this
+    /// compilation unit, i.e. a specialization-depth budget a deeply
+    /// nested caller has already spent. So the very same construction loop
+    /// allocated one empty `Array` per object, or none, depending on how
+    /// far from the top of its unit it happened to sit (measured at 4x on
+    /// ruby-bench's `string_malloc_pressure`). Emitting the construction
+    /// here takes the trampoline out of the picture entirely: the site's
+    /// own positionals bind straight into `initialize`, at any depth.
     ///
-    /// * the site hands its arguments over as plain positionals — the
-    ///   trampoline's `(...)` forward is transparent only when there is
-    ///   nothing to re-shape;
+    /// Three plans, in decreasing order of what they fold away:
+    ///
+    /// * a trivial `initialize` body (`ISeqHint::ConstReturn` /
+    ///   `SelfReturn`) — nothing but the allocation is emitted. This is
+    ///   every class that does not define one, since
+    ///   `BasicObject#initialize` is an empty Ruby body;
+    /// * a plain ivar-store constructor — expanded into the caller's own
+    ///   stores (`expand_ivar_stores`);
+    /// * anything else — an ordinary call to `initialize` on the object
+    ///   just allocated (`AbstractState::send`'s receiver override). One
+    ///   frame where the trampoline made two, and no rest `Array` in
+    ///   either. This is the leg that covers a native `initialize`
+    ///   (`String`, `Hash`) and a body too big to expand.
+    ///
+    /// Declines (⇒ the ordinary specialized call *through* the
+    /// trampoline) unless:
+    ///
+    /// * the site hands its arguments over as plain positionals, with no
+    ///   block and no keywords — the trampoline's `(...)` forward is
+    ///   transparent only when there is nothing to re-shape;
     /// * the receiver is (provably, see the identity guard) the attached
-    ///   class object, and its allocator is the stock object one, so the
-    ///   allocation is the `InlineAlloc::Object` sequence;
-    /// * `initialize` resolves to a Ruby body this compile can consume —
-    ///   trivial (folded away) or a plain ivar-store constructor
-    ///   (expanded), with an argument shape that binds without
-    ///   `ArgumentError`.
+    ///   class object;
+    /// * `initialize` binds those positionals without `ArgumentError`.
+    ///
+    /// The allocator need *not* be the stock one: a class with its own
+    /// `alloc_func` (String, Array, Hash, …) keeps the runtime call
+    /// `Class#allocate` would have made — `emit_class_allocate` with no
+    /// inline payload — and still sheds the trampoline.
+    ///
+    /// One observable consequence of the call leg: `initialize` runs with
+    /// no `Class#new` frame above it, so a backtrace (or `Kernel#caller`)
+    /// taken inside it is one level shorter. That is what CRuby's own
+    /// `opt_new` does as of 3.5 (Feature #21254) — there as a bytecode
+    /// change, so it holds in its interpreter too, while here a cold site
+    /// still pushes the frame.
     ///
     /// Soundness rides on the site's class-version guard (emitted before
     /// this point): defining `new`, `initialize`, or an `allocate` anywhere
@@ -1669,19 +1706,27 @@ impl<'a> JitContext<'a> {
         if class_id == CLASS_CLASS || self.store[class_id].get_module().is_singleton().is_some() {
             return false;
         }
-        // Only the stock object allocator is emitted inline: anything with
-        // its own `alloc_func` (Array, Hash, String, …) builds a payload
-        // this cannot write, and its `initialize` is native anyway. The
-        // ivar-count gate is the same pure optimization gate as in
-        // `gen_class_allocate_inline`.
         let Some(alloc_func) = self.store[class_id].alloc_func() else {
             return false;
         };
-        if !std::ptr::fn_addr_eq(alloc_func, crate::default_alloc_func as AllocFunc)
-            || self.store[class_id].ivar_len() > OBJECT_INLINE_IVAR
-        {
-            return false;
-        }
+        // How the allocation itself is emitted — the same choice
+        // `gen_class_allocate_inline` makes for a bare `Foo.allocate`,
+        // including its two pure-optimization gates (an object whose ivars
+        // overflow the inline slots, a Struct whose members do, both keep
+        // the call because the allocator pre-sizes a heap buffer for them).
+        // A class with its own `alloc_func` (Array, Hash, String, …) builds
+        // a payload this cannot write and so keeps the runtime call; that
+        // still leaves the construction one call instead of a call plus the
+        // trampoline frame, which is the whole point below.
+        let stock_object = crate::default_alloc_func as AllocFunc;
+        let inline_alloc = if std::ptr::fn_addr_eq(alloc_func, stock_object) {
+            (self.store[class_id].ivar_len() <= OBJECT_INLINE_IVAR).then_some(InlineAlloc::Object)
+        } else if std::ptr::fn_addr_eq(alloc_func, crate::struct_alloc_func as AllocFunc) {
+            let len = crate::struct_members_len(&self.store, class_id);
+            (len <= STRUCT_INLINE_SLOTS).then_some(InlineAlloc::Struct(len as u16))
+        } else {
+            None
+        };
 
         // Resolve `initialize` for the allocated class. `new` reaches it
         // through the privileged spelling, so its `private` visibility is
@@ -1697,16 +1742,8 @@ impl<'a> JitContext<'a> {
         let Some(init_fid) = init_fid else {
             return false;
         };
-        let Some(init_iseq) = self.store[init_fid].is_iseq() else {
-            return false;
-        };
-        let callee = &self.store[init_fid];
-        if !callee.no_keyword() || callee.single_arg_expand() || !callee.positional_arity_ok(pos_num)
-        {
-            return false;
-        }
 
-        // Decide the whole plan before emitting anything: the expansion is
+        // Decide the whole plan before emitting anything: every leg is
         // all-or-nothing, and the allocation is already emitted by the time
         // `expand_ivar_stores` would report a miss.
         enum InitPlan {
@@ -1714,38 +1751,76 @@ impl<'a> JitContext<'a> {
             Fold,
             /// A plain constructor, expanded into the caller.
             Stores(frameless::IvarStoreBody),
+            /// Anything else: a real call to `initialize`, taking the
+            /// object just allocated as its receiver.
+            Call,
         }
-        let plan = match self.store[init_iseq].hint {
+
+        // The frame-free legs consume the body itself, so they need an
+        // `initialize` whose parameters are plain positionals binding
+        // exactly these arguments. The call leg only needs the ordinary
+        // simple-call shape `set_arguments` lowers — which admits a
+        // *native* `initialize` (String, Hash) and one declaring optional
+        // keywords the site does not pass.
+        let callee = &self.store[init_fid];
+        let frameless_shape = callee.no_keyword()
+            && !callee.single_arg_expand()
+            && callee.positional_arity_ok(pos_num);
+        // `send` enters a callee through its `meta` plus entry code
+        // pointer, which covers a Ruby body and a native one. The other
+        // kinds never reach it even on the generic path — an attr /
+        // `Struct` accessor is lowered in place by `compile_method_call`,
+        // and a `define_method` proc-method is entered on the *inner*
+        // block's FuncId with its definition-time outer LFP — so an
+        // `alias_method :initialize, :x=` keeps the trampoline.
+        let callable = matches!(
+            self.store[init_fid].kind,
+            FuncKind::ISeq(_) | FuncKind::Builtin { .. }
+        );
+        let plan = match self.store[init_fid].is_iseq().filter(|_| frameless_shape) {
             // `SelfReturn` is `def initialize = self`, which returns the
             // new object — and `new` discards the return value either way.
-            ISeqHint::ConstReturn(_) | ISeqHint::SelfReturn => InitPlan::Fold,
-            ISeqHint::Normal => {
-                // The stores are written into the object this very
-                // instruction allocated, so its slot must exist — and must
-                // not be one of the argument slots the stores then read
-                // (the new object lands in `dst` *before* they run).
-                let Some(d) = dst else {
-                    return false;
-                };
-                if (0..pos_num).any(|i| args + i == d) {
-                    return false;
-                }
-                let Some(body) = frameless::ivar_store_body(&self.store, init_iseq) else {
-                    return false;
-                };
-                if pos_num != self.store[init_fid].params().total_positional_args()
-                    || !self.store[class_id].is_object_ty_instance()
-                    || !body.stores.iter().all(|&(name, _)| {
-                        self.store[class_id]
-                            .get_ivarid(name)
-                            .is_some_and(|id| id.is_inline())
-                    })
-                {
-                    return false;
-                }
-                InitPlan::Stores(body)
+            Some(init_iseq)
+                if matches!(
+                    self.store[init_iseq].hint,
+                    ISeqHint::ConstReturn(_) | ISeqHint::SelfReturn
+                ) =>
+            {
+                InitPlan::Fold
             }
+            Some(init_iseq) => frameless::ivar_store_body(&self.store, init_iseq)
+                .filter(|body| {
+                    pos_num == self.store[init_fid].params().total_positional_args()
+                        && self.store[class_id].is_object_ty_instance()
+                        && body.stores.iter().all(|&(name, _)| {
+                            self.store[class_id]
+                                .get_ivarid(name)
+                                .is_some_and(|id| id.is_inline())
+                        })
+                })
+                .map_or(InitPlan::Call, InitPlan::Stores),
+            None => InitPlan::Call,
         };
+
+        if !matches!(plan, InitPlan::Fold) {
+            // Both other legs run against the object this very instruction
+            // allocates, so its slot must exist — and must not be one of
+            // the argument slots they then read, since the object lands in
+            // `dst` *before* they run.
+            match dst {
+                Some(d) if !(0..pos_num).any(|i| args + i == d) => {}
+                _ => return false,
+            }
+        }
+        // The call leg additionally needs `initialize` to bind these
+        // arguments through the *inline* argument setup: the generic
+        // runtime binding re-reads the receiver from the call site, where
+        // it is still the class.
+        if matches!(plan, InitPlan::Call)
+            && !(callable && self.store.is_simple_call(init_fid, callid))
+        {
+            return false;
+        }
 
         // Runtime identity guard, for the same reason `Class#allocate`
         // needs one: the dispatch class is not injective over receivers —
@@ -1760,24 +1835,52 @@ impl<'a> JitContext<'a> {
         let using_fpr = state.get_using_fpr(ir);
         ir.fpr_save(using_fpr);
         ir.inline(move |r#gen, _, _, _| {
-            r#gen.emit_class_allocate(
-                class_id.u32(),
-                alloc_func as *const () as u64,
-                Some(InlineAlloc::Object),
-            )
+            r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64, inline_alloc)
         });
         ir.fpr_restore(using_fpr);
+        // Stores the object to `dst`'s home, which is both what the two
+        // legs below read it back from and what roots it for a GC inside
+        // `initialize`.
         state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
 
-        if let InitPlan::Stores(body) = plan {
-            let dst = dst.unwrap();
-            let arg_slots: Vec<frameless::ArgSlot> =
-                (0..pos_num).map(|i| frameless::ArgSlot::Own(args + i)).collect();
-            // The constructor's return value is discarded by `new`, so the
-            // expansion writes no destination — `dst` keeps the object.
-            let ok = self.expand_ivar_stores(state, ir, class_id, dst, None, &body, &arg_slots);
-            // The plan was fully resolved above, so this cannot miss.
-            debug_assert!(ok);
+        match plan {
+            InitPlan::Fold => {}
+            InitPlan::Stores(body) => {
+                let dst = dst.unwrap();
+                let arg_slots: Vec<frameless::ArgSlot> =
+                    (0..pos_num).map(|i| frameless::ArgSlot::Own(args + i)).collect();
+                // The constructor's return value is discarded by `new`, so
+                // the expansion writes no destination — `dst` keeps the
+                // object.
+                let ok = self.expand_ivar_stores(state, ir, class_id, dst, None, &body, &arg_slots);
+                // The plan was fully resolved above, so this cannot miss.
+                debug_assert!(ok);
+            }
+            InitPlan::Call => {
+                let dst = dst.unwrap();
+                // `o.__builtin_initialize__(...)` without the trampoline
+                // that spells it: the arguments are already laid out as
+                // this site's plain positionals, so they bind straight into
+                // `initialize`'s frame — no forwarded `…`, and therefore
+                // none of the rest `Array` whose elision D1 has to prove.
+                // The receiver is the object in `dst` and the result is
+                // dropped, which is what `new` does with it.
+                state.send(
+                    ir,
+                    &self.store,
+                    callid,
+                    init_fid,
+                    Some(class_id),
+                    None,
+                    Some(dst),
+                );
+                // The call cleared the dead temp window, and `dst` may have
+                // been in it. Its home still holds the object (nothing
+                // wrote the slot, and a frame capture during the call would
+                // have side-exited at `immediate_evict`'s guard), so
+                // re-establish the link rather than reload.
+                state.def_S_guarded(dst, Guarded::from_class(class_id));
+            }
         }
         true
     }
@@ -2512,9 +2615,21 @@ impl AbstractState {
         // `AsmInst::Call::recv_class`.
         recv_class: Option<ClassId>,
         outer_lfp: Option<Lfp>,
+        // `Some(slot)`: bind the callee's `self` from this slot instead of
+        // the one the call site names, and throw the return value away.
+        // Both halves belong together: the call site's `dst` is then not
+        // this call's destination but the *emitting* operation's — it is
+        // `inline_class_new`'s `initialize` leg, where `dst` already holds
+        // the object being constructed and `Class#new` discards what
+        // `initialize` returns.
+        recv_override: Option<SlotId>,
     ) {
         let evict = ir.new_evict();
-        let dst = store[callid].dst;
+        let dst = if recv_override.is_some() {
+            None
+        } else {
+            store[callid].dst
+        };
         // Stack check only — no call-site GC/preempt poll. Ruby callees
         // poll at their entry (`InitMethod` / `vm_init`); native callees
         // are bounded between the caller's loop-edge/entry polls.
@@ -2543,7 +2658,7 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(store, ir, callid, callee_fid, false, &arg_hints);
+        self.set_arguments(store, ir, callid, callee_fid, false, &arg_hints, recv_override);
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -2616,7 +2731,7 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(store, ir, callid, callee_fid, defer_rest, arg_hints);
+        self.set_arguments(store, ir, callid, callee_fid, defer_rest, arg_hints, None);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -2801,10 +2916,18 @@ impl AbstractState {
         callee_fid: FuncId,
         defer_rest: bool,
         arg_hints: &[(GP, SlotId)],
+        // See `send`.
+        recv_override: Option<SlotId>,
     ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
-        if store.is_simple_call(callee_fid, callid) {
+        let simple = store.is_simple_call(callee_fid, callid);
+        // Only the simple-call lowering below honours the override; the
+        // generic arms hand the whole binding to a runtime helper that
+        // re-reads the receiver from the call site. The one caller that
+        // overrides gates itself on the same `is_simple_call`.
+        debug_assert!(recv_override.is_none() || simple);
+        if simple {
             let args = callsite.args;
             let pos_num = callsite.pos_num;
             let kw_pos = callsite.kw_pos;
@@ -2854,7 +2977,7 @@ impl AbstractState {
 
             // fill self.
             let ofs = stack_offset - LFP_SELF;
-            self.fetch_for_callee(ir, callsite.recv, ofs);
+            self.fetch_for_callee(ir, recv_override.unwrap_or(callsite.recv), ofs);
 
             let req = filled_req.len();
             let opt = filled_opt.len();

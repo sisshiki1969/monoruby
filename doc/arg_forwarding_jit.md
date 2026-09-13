@@ -324,6 +324,15 @@ forwarding callsite に対しても、
 `X.new(a, b)` が **allocate + ivar ストア 2 本**にまで落ちる。これが実利上
 最大の効果である。
 
+ただしこれはトランポリンがそのコンパイル単位に**インラインされたとき
+だけ**成立する（D1 の注釈を付けるのが specialize されたフレームなので、
+specialization 深度上限を使い切った深い呼び出し位置では成立しない）。
+そこで現在は `JitContext::inline_class_new` が `X.new` を呼び出しサイトで
+直接展開する（allocate に続けて fold / ivar ストア展開 / `initialize` への
+直接呼び出しの 3 択）ため、`(...)` 転送自体が起きない。上記の D1 経由の
+最適化は inline_class_new が降りた場合（ブロック付き、キーワード付き、splat、
+`define_method` の `initialize` など）のフォールバックである。
+
 ## 4. フォールバック条件（汎用パス据置）
 
 - **named keyword パラメータを持つ callee** への転送 / `super`
