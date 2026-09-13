@@ -48,19 +48,24 @@ ruby-head の ZJIT がこの 3 本すべてで monoruby より速い、という
   `__cover_val_q` を経由して `Integer#<=>` を **2 回**呼ぶ。この 2 項目だけで
   1 反復の命令数の **31 %**（§4）。
 
-### 1.3 プロトタイプで確かめた効き幅
+### 1.3 この調査から入れた 2 つの修正
 
-原因の裏取りのため、最小の修正を当てて測った（実装は §5 の A・B、コードはこの
-コミットには含めない）。
+原因の裏取りを兼ねて §5 の B（`Encoding.find`）と A（Range の数値 fast path）を
+実装した。いずれも挙動は変えていない（§2.3, §4.3）。
 
-| ベンチ | 変更前 | A: Range 数値 fast path | B: `Encoding.find` の O(1) 経路 | A+B |
-|---|---:|---:|---:|---:|
-| mail | 164 ms | — | **110 ms（−33 %）** | 109 ms |
-| lee | 378 ms | **353 ms（−6.6 %）** | — | 341 ms（−9.8 %） |
-| grape | 792 ms | — | — | **718 ms（−9.3 %）** |
+| ベンチ | 変更前 | B: `Encoding.find` の O(1) 経路 | A: Range 数値 fast path |
+|---|---:|---:|---:|
+| mail | 164 ms | **111 ms（−32 %）** | — |
+| lee | 382 ms | — | **360 ms（−5.8 %）** |
+| grape | 778 ms | — | **755 ms（−3.0 %）** |
 
-mail は対 YJIT 0.60 → **0.89** になる。grape が A+B で 9 % 縮むのは、Rack と
-Mustermann が `Range#===` / `cover?` を経路判定に使うため。
+mail は対 YJIT 0.60 → **0.89** になる。grape が A で縮むのは、Rack と Mustermann が
+`Range#===` / `cover?` を経路判定に使うため。
+
+Range の方は**再ビルドしながら交互に測った**値（lee: 382/382 → 363/357、
+grape: 788/768 → 755/755）。`builtins/*.rb` は共有のインストールルート
+（`~/.monoruby/v<version>/`）に置かれるので、バイナリだけ差し替えて A/B すると
+同じ `range.rb` を 2 回測ることになる。
 
 ---
 
@@ -131,9 +136,10 @@ callgrind の呼び出し数（1 通あたり）:
 ### 2.3 検証
 
 別名表 `enc_name_to_const`（`"UTF-8"` → `UTF_8`）を先に引き、その定数の canonical 名が
-正規化一致したときだけ即返す、という 15 行の追加で:
+正規化一致したときだけ即返す。併せて名前の比較を無確保にした（`enc_name_eq`: ASCII の
+大文字小文字と `-` / `_` を無視して 1 バイトずつ突き合わせる）:
 
-- mail **164 → 110 ms（−33 %）**、対 YJIT 0.60 → 0.89
+- mail **164 → 111 ms（−32 %）**、対 YJIT 0.60 → 0.89
 - `Encoding.find("Big5-HKSCS")` のような「別名表が前方一致で誤解決しうる」名前は
   一致判定で弾かれて従来の走査に落ちるので、挙動は変わらない
   （`utf8` / `binary` / `ASCII-8BIT` / `Encoding` オブジェクト / 未知名 →
@@ -243,12 +249,14 @@ end
 ### 4.3 検証
 
 `Range#include?` / `#cover?` / `#===` の先頭で、両端と引数がすべて数値なら Rust の
-`range_include_impl` に直行する `__cover_fast` を呼ぶ、という 25 行のプロトタイプで:
+`range_include_impl` に直行する `__cover_num_q` を呼ぶ（数値でなければ `nil` を返して
+従来の Ruby 実装に落ちる。Integer / Float の `<=>` が再定義されていたら fast path は
+降りる）:
 
-- lee **378 → 353 ms（−6.6 %）**
-- grape も **−9.3 %**（A+B 合算、Rack / Mustermann の `===` 経路）
+- lee **382 → 360 ms（−5.8 %）**、grape **778 → 755 ms（−3.0 %）**
+- `(0...100).include?(50)` 100 万回: 82.5 → 71.9 ms
 - Range の**確保自体は残っている**（`include?` を呼ぶ前に Range を作るのは
-  bytecode の形のまま）ので、17.7 % の方はまだ丸ごと残っている
+  bytecode の形のまま）ので、17.7 % の方はまだ丸ごと残っている（§5 の C）
 
 ---
 
@@ -256,18 +264,16 @@ end
 
 | # | 施策 | 変更箇所 | 実測/見積り |
 |---|---|---|---|
-| **B** | `Encoding.find` を別名表 → O(1) で解決。外れたときだけ従来の走査 | `builtins/encoding.rs`（15 行） | **mail −33 %**（実測） |
-| **B'** | さらに `norm` の確保を無くす（正規化比較をバイト単位で行う）／正規化名 → Encoding の memo 表を class_version でキャッシュ | 同上 | 走査に落ちる名前も O(1) 化 |
-| **A** | `Range#include?` / `#cover?` / `#===` に数値 fast path | `builtins/range.rb` + `builtins/range.rs`（25 行） | **lee −6.6 %、grape −9.3 %**（実測） |
+| **B**（実施済み） | `Encoding.find` を別名表 → O(1) で解決し、名前比較を無確保にする。外れたときだけ従来の走査 | `builtins/encoding.rs` | **mail −32 %**（実測） |
+| **B'** | 正規化名 → Encoding の memo 表を class_version でキャッシュし、走査そのものを消す | 同上 | 走査に落ちる名前も O(1) 化 |
+| **A**（実施済み） | `Range#include?` / `#cover?` / `#===` に数値 fast path | `builtins/range.rb` + `builtins/range.rs` | **lee −5.8 %、grape −3.0 %**（実測） |
 | **C** | Range リテラル + `include?` / `cover?` / `===` の畳み込み（レシーバが他で使われないなら Range を確保せず比較 2 個に落とす） | bytecodegen または TraceIR のピープホール | lee の 17.7 % と GC 分 |
 | **D** | `String#include?` が針を毎回 `into_owned()` してコピーしている（`Cow::Borrowed` でも確保する） | `builtins/string.rs:2112` | grape で malloc 3 回/req |
 | **E** | `Struct` のメンバ名を `IdentId` で保持し、生成のたびの intern をやめる | `builtins/struct_class.rs` | lee 3.8 % |
 | **F** | JIT のグローバル変数読みをインラインキャッシュ化 | `codegen/` | grape 14 回/req の runtime 呼び出し |
 | **G** | ペイロードの malloc を減らす（短い String / 小さい Array / 小さい Hash の埋め込み、あるいは size-class 別のフリーリスト） | `alloc.rs`, `value/rvalue/*` | grape の malloc 9.8 %（YJIT 比 7.7 倍）。重いが効く範囲は広い |
 
-A・B は実装済みのプロトタイプがあり、挙動も確認した（§2.3, §4.3。`cargo test --lib
-builtins::range` 22 件と `builtins::encoding` 59 件が通る）。本コミットにはコードを
-含めていない。C・G は設計が要る。
+A・B はこのブランチで実装した。C・G は設計が要る。
 
 ---
 
