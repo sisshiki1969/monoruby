@@ -4079,36 +4079,7 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         }
         _ => {}
     }
-    // First, try an exact (separator/case-insensitive) match against
-    // the canonical name of every registered encoding. This lets
-    // `Encoding.find(e.name)` round-trip for *every* encoding in
-    // `Encoding.list` (the hand-maintained `enc_name_to_const` table
-    // below only covers common aliases and would mis-resolve names
-    // like "Big5-HKSCS" to a prefix match).
-    let norm = |s: &str| s.to_uppercase().replace(['-', '_'], "");
-    let want = norm(&name);
-    for cname in globals.store.get_constant_names(enc_class) {
-        if let Some(v) = globals.store.get_constant_noautoload(enc_class, cname)
-            && v.class() == enc_class
-            && let Some(es) = globals
-                .store
-                .get_ivar(v, IdentId::_ENCODING)
-                .and_then(|ev| ev.is_str().map(|s| s.to_string()))
-            && norm(&es) == want
-        {
-            return Ok(v);
-        }
-    }
-    // Fall back to the alias / pseudo-name table (LOCALE, UTF8, …).
-    let const_name = enc_name_to_const(&name);
-    let result = if let Some(c) = const_name {
-        globals
-            .store
-            .get_constant_noautoload(enc_class, IdentId::get_id(c))
-    } else {
-        None
-    };
-    match result {
+    match find_encoding_object(globals, &name) {
         Some(v) => Ok(v),
         None => Err(MonorubyErr::argumenterr(format!(
             "unknown encoding name - {}",
@@ -4123,22 +4094,69 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// Mirrors `Encoding.find` without the `to_str`/error handling.
 pub(super) fn find_encoding_object(globals: &Globals, name: &str) -> Option<Value> {
     let enc_class = encoding_class(globals);
-    let norm = |s: &str| s.to_uppercase().replace(['-', '_'], "");
-    let want = norm(name);
+    // The alias table names a constant directly, which answers the
+    // common names ("UTF-8", "ASCII-8BIT", …) without touching the rest
+    // of the table. It is only trusted here when the constant it names
+    // really does carry this canonical name — the table is
+    // hand-maintained and would otherwise mis-resolve a name like
+    // "Big5-HKSCS" to a prefix match — so anything it gets wrong falls
+    // through to the scan below, which is what decides.
+    if let Some(v) = enc_name_to_const(name)
+        .and_then(|c| globals.store.get_constant_noautoload(enc_class, IdentId::get_id(c)))
+        && v.class() == enc_class
+        && encoding_object_name_is(globals, v, name)
+    {
+        return Some(v);
+    }
+    // An exact (separator/case-insensitive) match against the canonical
+    // name of every registered encoding, so `Encoding.find(e.name)`
+    // round-trips for *every* encoding in `Encoding.list`.
     for cname in globals.store.get_constant_names(enc_class) {
         if let Some(v) = globals.store.get_constant_noautoload(enc_class, cname)
             && v.class() == enc_class
-            && let Some(es) = globals
-                .store
-                .get_ivar(v, IdentId::_ENCODING)
-                .and_then(|ev| ev.is_str().map(|s| s.to_string()))
-            && norm(&es) == want
+            && encoding_object_name_is(globals, v, name)
         {
             return Some(v);
         }
     }
+    // Last, the alias / pseudo-name table without the canonical-name
+    // check — this is what resolves the names no `Encoding` carries
+    // (LOCALE, UTF8, …).
     enc_name_to_const(name)
         .and_then(|c| globals.store.get_constant_noautoload(enc_class, IdentId::get_id(c)))
+}
+
+/// `v`'s canonical name (its `_ENCODING` ivar) is `name`, compared the
+/// way `Encoding.find` compares names.
+fn encoding_object_name_is(globals: &Globals, v: Value, name: &str) -> bool {
+    match globals.store.get_ivar(v, IdentId::_ENCODING) {
+        Some(ev) => match ev.is_str() {
+            Some(es) => enc_name_eq(es, name),
+            None => false,
+        },
+        None => false,
+    }
+}
+
+/// Two encoding names are the same name when they agree ignoring case
+/// and the `-` / `_` separators ("utf8" == "UTF-8").
+///
+/// Encoding names are ASCII, so this compares ASCII case and allocates
+/// nothing — where the previous `to_uppercase().replace(…)` built two
+/// `String`s for *every candidate* of *every* lookup (`Encoding.find`
+/// scans ~107 encodings, and the mail benchmark calls it 80 times per
+/// message: 17,000 temporary strings a message).
+fn enc_name_eq(a: &str, b: &str) -> bool {
+    let sep = |c: &u8| *c != b'-' && *c != b'_';
+    let mut a = a.bytes().filter(sep);
+    let mut b = b.bytes().filter(sep);
+    loop {
+        match (a.next(), b.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) if x.eq_ignore_ascii_case(&y) => {}
+            _ => return false,
+        }
+    }
 }
 
 /// The canonical name string carried by an `Encoding` object's
