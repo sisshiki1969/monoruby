@@ -1763,6 +1763,21 @@ impl<'a> JitContext<'a> {
         let Some(init_fid) = init_fid else {
             return false;
         };
+        // Record that resolution as an assumption of this compilation unit.
+        // The call site's own entry says `#<Class:Foo>#new -> Class#new`,
+        // which a redefinition of `Foo#initialize` leaves true — so without
+        // this, `salvage_method_unit` re-validates the unit, finds nothing
+        // changed, re-stamps the version word, and keeps code holding a
+        // stale `initialize`: its folded body, its expanded stores, or the
+        // `FuncId` the call leg dispatches to. Defining `initialize` where
+        // it was inherited, or overriding an inherited one in a subclass,
+        // both silently kept the old behaviour at an already-hot site.
+        self.inline_method_cache.push(InlineCacheEntry {
+            recv_class: class_id,
+            name: Some(IdentId::INITIALIZE),
+            refinements: self.refinements(),
+            func_id: init_fid,
+        });
 
         // Decide the whole plan before emitting anything: every leg is
         // all-or-nothing, and the allocation is already emitted by the time

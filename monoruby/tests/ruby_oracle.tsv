@@ -489,6 +489,7 @@
 22b54a288bd5ab601d9196768156489a	"[yes][]\\n"	# unsetenv_others with an env hash keeps only the given vars\n      
 22c0902963ab6d1ef3fbd095ba2b81fb	[:in_progress, :zero, 0, true]	require "socket"\n            res = []\n            srv = TCPServer.n
 22c7f5e30abd7c5832dafc79b391e2e5	[[4, 2], [:x, :y]]	def m\n              binding\n            end\n            b = m\n     
+22d2fd2fd69043dd239edb33330dec7d	[[1, nil, 1, 2], [101, 7, 51, 4], 600]	class CNVer; def initialize(a); @a = a; end; def a = @a; end\n        cl
 22d9ce17cd0900bf1a0ac981d5637c79	[{name: nil, format: [], klass: nil}, [nil, [], nil], nil, nil, [nil, nil], nil, {klass: nil}, [nil, [], nil], [[:name, nil], [:format, []], [:klass, nil]], [nil, [], nil], {name: nil, format: [], klass: nil}, [:n, [], 3], :overridden, :n]	class OverrideS < Struct.new(:name, :format, :klass)\n              
 22e93d16a9649d57ab7475c4472c954f	["malformed format string", "malformed format string", "malformed format string", "malformed format string", "malformed format string", "malformed format string", "malformed format string", "malformed format string"]	fmts = ["%\\n", " % ", "%.\\n3f", "%.3\\nf", "%\\0", "hello %1$", "%v",
 2304be5a9de8bae9c9cd4757fb54bed5	[true, true]	def foo; end\n        m = method(:foo)\n        loc = m.source_location\n 
@@ -1057,7 +1058,6 @@
 4b5b45123447283c4530b768dbe566cd	"US-ASCII"	"hello".encode("US-ASCII").upcase.encoding.to_s
 4b630bdfdd9f1ce5cacddd03b49d4446	[true, false, false, false]	class A; end\n        [A.singleton_class.singleton_class?, A.singleton_c
 4b6fe109f1f968bc1a8d4646ba46c194	"377"	class HasToInt; def to_int; 255; end; end\n            sprintf("%o",
-4b79a5778782952b20f3c06848a4b70e	[1, 101, 40]	class CNVer; def initialize(a); @a = a; end; def a = @a; end\n        r 
 4b91108237bdda9802ca4299f4114874	[[:singleton_method_added, :singleton_method_added], [:method_added, :foo], [:singleton_method_added, :foo]]	$res = []\n            module M\n              def self.method_added(
 4b97615f1fd9c5dced851f3adf53042b	[:thrown, [:ens]]	$log = []\n            r = catch(:t) do\n              begin\n        
 4ba2572278d477946c8815ee58fef0de	"hello"	class Foo\n              def hello; "hello"; end\n              alias
@@ -2677,7 +2677,6 @@ c08acbdd18f61a8d59ca99c4b368848f	"US-ASCII"	"abc".encode("US-ASCII").rjust(5).en
 c095a2c797a127b8e7be93cfb4834bac	300000	def osr_sum(x)\n          total = 0\n          i = 0\n          while i < 
 c09c839979cea217eea20b122b702919	"T:#<TrueClass:0xADDR>"	class TrueClass; def to_s; "T:" + super; end; end\n                true.to_s.sub(
 c09d6cb41615f95536118d7f2c2d3ac5	"UTF-8"	-> { e = __ENCODING__; e.name }.call
-c0b44f864839d7a475238efd36beac81	[1, 101, 600]	class CNVer; def initialize(a); @a = a; end; def a = @a; end\n        r 
 c0bd20c1f72134f81f9605cb0369bad4	["hello", "helloworld", "helloworld"]	path = "/tmp/mr_buf_rw.txt"\n            res = []\n            f = Fi
 c0ccecf51a28d34a9407d29cd759ff8a	[:f, :f]	class C; def f; 1; end; end\n            \n\n            m = C.new.met
 c0d486ae823c1add3b9717cbf806e267	54	[2, 3, 4, 5].inject(0) {|result, item| result + item ** 2 }
