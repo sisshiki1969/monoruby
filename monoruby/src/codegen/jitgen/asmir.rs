@@ -690,6 +690,14 @@ impl AsmIr {
         self.push(AsmInst::FprToStack(fpr, reg));
     }
 
+    pub fn float_ret_store(&mut self, src: OuterFprSrc) {
+        self.push(AsmInst::FloatRetStore(src));
+    }
+
+    pub fn float_ret_load(&mut self, fpr: FPReg) {
+        self.push(AsmInst::FloatRetLoad(fpr));
+    }
+
     pub fn lit2stack(&mut self, v: Value, reg: SlotId) {
         self.push(AsmInst::LitToStack(v, reg));
     }
@@ -1524,6 +1532,26 @@ pub(super) enum AsmInst {
     /// - rcx
     ///
     FprToStack(FPReg, SlotId),
+    ///
+    /// Hand the specialized body's return value to its call site as a raw
+    /// f64 in the float-return register, in place of a boxed `rax`.
+    ///
+    /// Emitted as the last instruction of a return segment, after every
+    /// bridge write: `f64_to_val` uses the same scratch registers, so
+    /// anything emitted afterwards would destroy the value.
+    ///
+    /// ### out
+    /// - float-return register: f64
+    /// - rax: a non-zero placeholder, so the call site's `handle_error`
+    ///   (which tests rax for the error signal) reads "no error"
+    ///
+    FloatRetStore(OuterFprSrc),
+    ///
+    /// Read back what [`AsmInst::FloatRetStore`] left, into this frame's
+    /// *dst*. Emitted at the call site after the fpr save area is
+    /// restored, which touches only the pool.
+    ///
+    FloatRetLoad(FPReg),
     ///
     /// Move Value *v* to stack slot *reg*.
     ///

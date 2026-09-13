@@ -2754,6 +2754,7 @@ c6683cf0ef52f6cb79ff46704cbc5877	["MyFiber", :done]	class MyFiber < Fiber\n     
 c67abacc118f750b4c4602e5803bf054	[true, false]	klass = Class.new do\n              define_method(:initialize) { }\n 
 c68a937ebbf20dbda216eebda6b83971	["x", "x"]	class C; def to_int; 2; end; end; o = C.new\nArray.new(o, "x")
 c69571585acd0ae97070c46877ef1630	"uninitialized constant MdName::NOPE"	m = Module.new { def self.name; "MdName"; end }\n            begin; 
+c6a6be2b7870ba097e242bf620676800	[160.0, 800000.0]	class C\n          def initialize\n            @a = [0.0, 1.0, 2.0]\n     
 c6aa47f3d7123c5ac7cf49f88732c23f	[true, [:waiting, :woken]]	m = Mutex.new\n            cv = ConditionVariable.new\n            lo
 c6c590c4f5e99e29b5e950ed25d95e8a	"abcabcabc"	class MyInt\n              def to_int\n                3\n            
 c6cf506f9e1bf56b2c88982b59d4a0fe	[(13/25), (1000/1), (3/200), (3/1), (10000/1), (1/2), (-191/30), "invalid value for convert(): \\"1/-2\\"", :zde, :ae, :ae2, (13/25), (1/1), (1/1), (-191/30), (0/1), (1/100), (19/2), (3/1), (7/2), (0/1), nil, nil, :tie, nil, ["Complex", (1/5), (-2/5)], (1/2)]	bad_to_int = Object.new\n            def bad_to_int.to_int; raise No

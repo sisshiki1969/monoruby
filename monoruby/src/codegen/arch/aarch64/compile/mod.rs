@@ -1671,6 +1671,23 @@ impl Codegen {
             LInst::FprToStack { src, slot, base } => {
                 self.emit_fpr_to_stack(src, slot, base);
             }
+            LInst::FloatRetStore { src, base } => {
+                // d1 is reserved scratch and never aliases a pool register,
+                // so it carries the value across the `ret` to the call site.
+                match src {
+                    OuterFprSrc::Fpr(src) => self.a64_fpr_load(src, 1, base),
+                    OuterFprSrc::Imm(bits) => monoasm_arm64!(&mut self.jit,
+                        mov x9, (bits);
+                        fmov d1, x9;
+                    ),
+                }
+                // The call site tests x0 for the error signal; the value
+                // itself travels in d1, so x0 only has to be non-zero.
+                monoasm_arm64!(&mut self.jit, mov x0, (NIL_VALUE as u64););
+            }
+            LInst::FloatRetLoad { dst, base } => {
+                self.a64_fpr_save(dst, 1, base);
+            }
             LInst::FprSwap { lhs, rhs, base } => {
                 // Force both values into scratch, then store back crossed.
                 self.a64_fpr_load(lhs, 0, base);

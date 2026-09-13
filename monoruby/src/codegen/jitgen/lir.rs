@@ -608,6 +608,18 @@ pub(in crate::codegen) enum LInst {
         slot: SlotId,
         base: usize,
     },
+    /// Hand a raw f64 to the specialized call site in the float-return
+    /// register, and set rax to a non-zero placeholder for its
+    /// `handle_error`.
+    FloatRetStore {
+        src: OuterFprSrc,
+        base: usize,
+    },
+    /// Read the float-return register into `dst`.
+    FloatRetLoad {
+        dst: FPReg,
+        base: usize,
+    },
     /// Swap two FP registers (spill-aware).
     FprSwap {
         lhs: FPReg,

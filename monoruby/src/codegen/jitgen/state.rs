@@ -926,14 +926,35 @@ impl AbstractFrame {
         }
     }
 
+    ///
+    /// Store a specialized call's result, as the compiled callee left it.
+    ///
+    /// `float_return` is the callee's own verdict
+    /// ([`JitStackFrame::float_return`]), not a preference: when it holds,
+    /// rax carries only a placeholder and the value is in the
+    /// float-return register, so every arm below that reads rax is wrong.
+    ///
     pub(in crate::codegen::jitgen) fn def_rax2acc_return(
         &mut self,
         ir: &mut AsmIr,
         dst: impl Into<Option<SlotId>>,
         return_state: Option<ReturnState>,
+        float_return: bool,
     ) -> CompileResult {
         if let Some(return_state) = return_state {
             self.invariants.join(&return_state.invariants);
+            if float_return {
+                // The callee's deopt paths never reach here (a side exit
+                // under the call converts the chain, which rewrites this
+                // site's return address), so the joined `ret` those paths
+                // widened is not the value that arrives: what arrives is
+                // always the Float the return segments emitted.
+                if let Some(dst) = dst.into() {
+                    let fpr = self.def_F(dst);
+                    ir.float_ret_load(fpr);
+                }
+                return CompileResult::Continue;
+            }
             match return_state.ret {
                 ReturnValue::UD => {
                     ir.push(AsmInst::Unreachable);

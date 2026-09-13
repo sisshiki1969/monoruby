@@ -87,6 +87,8 @@ impl Codegen {
             | AsmInst::FixnumToFpr(..)
             | AsmInst::FloatToFpr(..)
             | AsmInst::FprToStack(..)
+            | AsmInst::FloatRetStore(..)
+            | AsmInst::FloatRetLoad(..)
             | AsmInst::FprSave(..)
             | AsmInst::FprRestore(..)
             | AsmInst::IntegerBinOpReg { .. }
@@ -797,6 +799,27 @@ impl Codegen {
             }
             LInst::FprToStack { src, slot, base } => {
                 self.fpr_to_stack(src, &[slot], base);
+            }
+            LInst::FloatRetStore { src, base } => {
+                match src {
+                    OuterFprSrc::Fpr(src) => match PhysMap::new(base).resolve(src) {
+                        FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq xmm1, xmm(p); ),
+                        FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq xmm1, [rbp - (off)]; ),
+                    },
+                    OuterFprSrc::Imm(bits) => monoasm!( &mut self.jit,
+                        movq rax, (bits);
+                        movq xmm1, rax;
+                    ),
+                }
+                // The call site tests rax for the error signal; the value
+                // itself travels in xmm1, so rax only has to be non-zero.
+                monoasm!( &mut self.jit, movq rax, (NIL_VALUE); );
+            }
+            LInst::FloatRetLoad { dst, base } => {
+                match PhysMap::new(base).resolve(dst) {
+                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq xmm(p), xmm1; ),
+                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq [rbp - (off)], xmm1; ),
+                }
             }
             LInst::FprSwap { lhs, rhs, base } => {
                 if lhs != rhs {

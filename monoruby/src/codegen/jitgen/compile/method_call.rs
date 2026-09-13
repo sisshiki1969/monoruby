@@ -1163,6 +1163,7 @@ impl<'a> JitContext<'a> {
             generic_yield: _,
             spec_id,
             using_fpr: frozen_using_fpr,
+            float_return,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -1205,7 +1206,7 @@ impl<'a> JitContext<'a> {
         state.chain_exit(ir, evict, using_fpr, dst);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
-        let res = state.def_rax2acc_return(ir, dst, return_state);
+        let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
         state.immediate_evict(ir, evict);
         Ok(res)
     }
@@ -2097,6 +2098,7 @@ impl<'a> JitContext<'a> {
             generic_yield,
             spec_id,
             using_fpr: frozen_using_fpr,
+            float_return,
         } = compiled;
         // The call site passes a block literal: if the callee heapifies
         // its *own* frame during the call (`Proc.new` / `lambda` /
@@ -2158,7 +2160,7 @@ impl<'a> JitContext<'a> {
             using_fpr,
             &arg_hints,
         );
-        let res = state.def_rax2acc_return(ir, dst, return_state);
+        let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
         state.immediate_evict(ir, evict);
         return Ok(res);
     }
@@ -2190,6 +2192,10 @@ pub(super) struct SpecializedCompileResult {
     /// A `yield` in the compiled subtree was not inlined — see
     /// [`JitStackFrame::generic_yield`].
     pub generic_yield: bool,
+    /// The compiled body leaves its return value as a raw f64 in the
+    /// float-return register, not boxed in rax — see
+    /// [`JitStackFrame::float_return`]. Binding on this call site.
+    pub float_return: bool,
 }
 
 impl SpecializedCompileResult {
@@ -2202,6 +2208,7 @@ impl SpecializedCompileResult {
             generic_yield: self.generic_yield,
             spec_id: self.spec_id,
             using_fpr: self.using_fpr,
+            float_return: self.float_return,
         }
     }
 
@@ -2214,6 +2221,7 @@ impl SpecializedCompileResult {
             generic_yield,
             spec_id,
             using_fpr,
+            float_return,
         } = memo;
         Self {
             entry,
@@ -2224,6 +2232,7 @@ impl SpecializedCompileResult {
             generic_yield,
             spec_id,
             using_fpr,
+            float_return,
         }
     }
 }
@@ -2376,6 +2385,8 @@ impl<'a> JitContext<'a> {
         let frame_deferred_rest = frame.deferred_rest;
         let frame_needs_rest_array = frame.needs_rest_array;
         let frame_generic_yield = frame.generic_yield;
+        let frame_float_return = frame.float_return;
+        let frame_has_boxed_return = frame.has_boxed_return;
         // `has_exception_handler` taints the return state so the caller
         // doesn't propagate a speculative `Const` past us: the BB graph
         // doesn't include rescue/ensure successors, so the computed
@@ -2437,6 +2448,12 @@ impl<'a> JitContext<'a> {
         if frame_had_deopt {
             self.current_frame_mut().had_deopt = true;
         }
+        // A non-local return or a break under this call returns with a
+        // boxed rax of its own, so the enclosing frame cannot adopt the
+        // float-return convention either.
+        if frame_has_boxed_return {
+            self.current_frame_mut().has_boxed_return = true;
+        }
         // Same one-level propagation: a non-inlined `yield` anywhere under
         // this call means some block ran outside this unit, which the
         // caller's own kept constants have to answer for too.
@@ -2467,6 +2484,7 @@ impl<'a> JitContext<'a> {
             generic_yield: frame_generic_yield,
             spec_id,
             using_fpr: frame_using_fpr,
+            float_return: frame_float_return,
         })
     }
 
@@ -2967,6 +2985,13 @@ impl AbstractState {
                 if direct_filled.contains(&i) {
                     continue;
                 }
+                // Handed over in a register instead. The slot still gets
+                // a real `nil`: nothing has ever written this stack
+                // address in this frame, and the frame is scannable from
+                // the moment it is linked, so leaving it would hand the
+                // collector whatever the previous frame left there. Same
+                // reasoning as the deferred rest below, and just as cheap
+                // — an immediate store, no boxing call.
                 let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                 self.fetch_for_callee(ir, args + i, ofs);
             }
