@@ -8,12 +8,12 @@ class Class
   # specialized JIT compile source-routes the caller's argument slots
   # straight into `initialize`'s frame (D1), so construction allocates
   # nothing but the object itself. A hot JIT site skips this frame
-  # altogether: `JitContext::inline_class_new` emits the allocation as the
-  # *caller's* instructions, followed by nothing when `initialize` is
-  # trivial, by the ivar stores when it is a plain constructor, and by a
-  # direct call to `initialize` otherwise — never by the `(...)` forward,
-  # whose rest Array D1 can only elide when this body is inlined into the
-  # caller's own compilation unit.
+  # altogether when it can emit the whole construction without a call:
+  # `JitContext::inline_class_new` emits the allocation as the *caller's*
+  # instructions, followed by nothing when `initialize` is trivial and by
+  # the ivar stores when it is a plain constructor. Every other shape (a
+  # native `initialize`, a body too big to expand, a block, keywords, a
+  # splat) runs this body, where the `(...)` forward is D1's to elide.
   def new(...)
     o = __builtin_allocate__
     o.__builtin_initialize__(...)
