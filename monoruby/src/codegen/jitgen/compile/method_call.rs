@@ -1008,13 +1008,36 @@ impl<'a> JitContext<'a> {
                 // initialize compiled for exactly that class.
                 let forwarded_initialize = callsite.forwarding && callsite.bypass_visibility;
 
+                // A forwarding hop does not spend the depth budget.
+                //
+                // The budget bounds how many callee frames one unit may
+                // hold, because each one costs code. A forwarding
+                // trampoline is the case where *not* inlining costs more:
+                // its body is a single call, so it adds almost no code,
+                // while leaving it out means the caller builds the rest
+                // `Array` its `(...)` binds — `send` passes
+                // `defer_rest: false` unconditionally, so only a
+                // specialized frame can carry D1's elision. `Class#new` is
+                // the case that matters: every `Foo.new` deeper in a call
+                // tree than the budget reaches paid one `Array` per
+                // construction, purely because of where it sat.
+                //
+                // Exempting both ends of the hop — a callee declared
+                // `(...)`, and the privileged `__builtin_initialize__(...)`
+                // forward inside `Class#new` — is what lets the whole
+                // chain through; a partial exemption would be worse than
+                // none (see `FORWARD_EXEMPT_RECURSION_CAP`).
+                let forward_exempt = (forwarding_callee || forwarded_initialize)
+                    && self.specialize_level() < FORWARD_EXEMPT_RECURSION_CAP;
+
                 // Method specialization (inlining a callee iseq) and block-
                 // argument inlining (`iseq_block`, which drives specialized
                 // `yield`) are both lowered on x86 and aarch64 now.
                 // Inside a dispatch arm, specialization is off: the arm
                 // cannot back out of a `CompileError`, and a `Cease` return
                 // would leave it with no path to the merge.
-                if (((specializable || forwarded_initialize) && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT)
+                if (((specializable || forwarded_initialize)
+                    && (forward_exempt || self.specialize_level() < SPECIALIZE_DEPTH_LIMIT))
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
                 {
@@ -2735,6 +2758,22 @@ impl<'a> JitContext<'a> {
 /// anything at all past level 3, and their run times move by less than the
 /// spread of repeated runs.
 const SPECIALIZE_DEPTH_LIMIT: usize = 3;
+
+/// How deep a chain of *forwarding* frames may go, which is a recursion
+/// backstop rather than a budget — see `forward_exempt` at the
+/// specialization gate for why forwarding is exempt from the budget
+/// itself. `def f(...) = f(...)` is a legal Ruby program whose
+/// specialization would otherwise descend forever at compile time, and a
+/// chain of mutually forwarding methods does the same; this number is the
+/// only thing stopping it. It is set far above any forwarding chain real
+/// code writes (the deepest this repo's own corpus reaches is 6, through
+/// `Class#new` inside a block inside `Array#initialize`) precisely so that
+/// it never acts as a budget: a chain cut half way is *worse* than one not
+/// entered at all, because each forwarding frame that lands beyond the cut
+/// is emitted as a generic call, and a generic call to a forwarding
+/// trampoline materializes the rest `Array` that D1 exists to elide
+/// (`send` passes `defer_rest: false` unconditionally).
+const FORWARD_EXEMPT_RECURSION_CAP: usize = 32;
 
 impl AbstractState {
     ///

@@ -63,6 +63,7 @@
 0365d874d3091255ffafa6a537178e6a	nil	a=Object.new; a.instance_variable_get(:@i)
 0366a74fdcc076e9a2a06c94bbd26362	[nil, "a", ".", 2, 4, "b.", 2, "a.", "c a+b", "b.", nil, "c a+", "c a+", 8, "+", "a.b.c a", 1, 1, true, nil, false, "", 0, "", "a.b", IndexError]	require "strscan"\n        s = StringScanner.new("a.b.c a+b")\n        r 
 0379b90699980103ce98cdf1fd4b6457	[42, false, true]	class Foo\n          def !\n            42\n          end\n        end\n    
+03916ea188fcdfb6d76a7e9ac03adb5c	[ArgumentError, ArgumentError, [1, 2]]	def fd_two(a, b) = [a, b]\n        def fd_fwd(...) = fd_two(...)\n       
 03add114cdd6e1fb8f694172fc12ba42	[["method", "method"], [:se, :se]]	$dlog = []\n            def dse; $dlog << :se; 1; end\n            [[
 04053dc491e488a586338fcc5eed81e2	"hi"	c = Class.new\n            [1].each do |_|\n              c.class_eva
 040e6a190fdcb22a07dee211c3713d43	"US-ASCII"	"HELLO".encode("US-ASCII").downcase.encoding.to_s
@@ -456,6 +457,7 @@
 1f22844ce32fd2036c65263ce0b9319d	1	x = "Z"; (/#{x}/i =~ "qzq")
 1f3121c4382667758c3988faab82811f	"US-ASCII"	"abcc".dup.force_encoding("US-ASCII").tr_s("c", "X").encoding.to_s
 1fa3e3a0998c480c3b2134908102a18f	999000	a = Array.new(2000) { |i| [i % 1000] }\n            1000.times { [1]
+1fb362f649dfd01438a6bfb9bfb1f7a7	[0, :done]	def fd_rec(n, ...) = n <= 0 ? 0 : fd_rec(n - 1, ...)\n        def fd_mut
 1fc8a8365c050aced75377b0f9dca4f7	true	$LOAD_PATH.class == Array\n            
 1fd67713bd348911ab844e4987b761b1	[10000, 42]	a = [100 * 100]\n        class Integer\n          def *(other)\n          
 1fe144dc2e4422f0e8bc7cfdb2825361	["\\n", nil, nil, nil, 0]	[$/, $\\, $,, $;, $.]
@@ -1120,6 +1122,7 @@
 4edf4d45c190ed9014d06dda3424cfb3	[200, true]	parents = Array.new(200) { [] }\n            5.times { GC.start }\n  
 4ef654f58c91b7b93cc8ea7d3a1d2da8	[false, false, false, true, false]	class MEqStrTrue; def to_str; "x"; end; def ==(o); true; end; end\n 
 4f1c2d7762a92ed3167ebc5a07dca6fc	520.0	def w3(f)\n          30.times do |i|\n            return f * i if i > 25\n
+4f5db8d804d9f380dc11c2dc2db028fb	[[[3, 0], [3, 1]], "x", 0]	class FDPoint\n          def initialize(x, y); @x = x; @y = y; end\n     
 4f901b278fdd410f8765051d2109cb68	[[:a, 100], [:b, 100], [:c, 100], [:d, 100], [:e, 100], [:f, 100]]	class Oa; def tag = :a; end\n            class Ob; def tag = :b; end
 4f93aca4bf1af1b5c4055cb5ae6b15f5	[nil, false]	t = Thread.new { sleep }\n            r = t.join(0.05)\n            t
 4fa66bde865d8b29ac7a73525c13a9c4	true	path = "/tmp/monoruby_io_dc_#{Process.pid}_#{rand(100000)}"\n       
@@ -1289,6 +1292,7 @@
 5d0c9438a810db95f43044dee3f665ba	[true, true]	class CSrcLocScopeOuter\n              class Inner\n                I
 5d133754b00e49c763d011ae4b0d6b42	[1, :seven, :str, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 12, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 5d2068c7082fde255a8c47d3b3b3e849	nil	$stdout.write("a")\n            print "b"\n            $stdout.write(
+5d2e5835d898500cac990d35acb987f8	[3, 4, 7]	def fd_e(a, b) = [a, b, a + b]\n        def fd_d(...) = fd_e(...)\n      
 5d33630c505ca95acb062afbe222be3f	"Float"	before = Time.now\n            (Time.now - before).class.to_s
 5d37270fae8d3495ac4405dcd8502866	["fiber called across threads", "fiber called across threads", "fiber called across threads", "fiber called across threads", :r]	res = []\n            f1 = Fiber.new { :r }\n            f2 = Fiber.n
 5d3e8beda2cfe6c5baa2a2cd21c8d001	:ok	S = Struct.new(:x)\n            \n\n            s = S.new(1).freeze\n  
@@ -1484,6 +1488,7 @@
 6ab691ea9d97f4c04bf963dc81c69487	[true, 0, 2, true, 0, 1, 1, true, 0, 1, 0, NaN]	class Never\n          def ==(o) = false\n        end\n        n = Never.n
 6adba7a52d188043ac47d2a6ceae5508	42	class C\n              def bar\n                42\n              end\n
 6aff68386825a6831642fe95c7e580e7	:raised	r = nil\n            100.times do\n              begin\n              
+6b02cc02c41ea7dcdb98753a061eb3ae	[[1, 1, 2], [1, 9, 2], [1, 1, 8], 9, [1, 5], [1, 2]]	def fd_kw_target(a, b: 1, c: 2) = [a, b, c]\n        def fd_kw(...) = fd
 6b0b243416e0d106d617e4ad489ecdf7	42	class C\n          attr_writer :x\n          def get_x; @x; end\n        e
 6b3c869c4119e716ff2561b706f41427	"UTF-16LE"	Regexp.new("a".encode("UTF-16LE")).encoding.to_s
 6b4af7ca5b9a5430ebaa6f57763959e3	true	(1 << 53) == (1 << 53).to_f
