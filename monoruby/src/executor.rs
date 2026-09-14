@@ -24,38 +24,64 @@ pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp, BytecodePtr
 /// back through JIT-assembled frames (which carry no unwind info), so
 /// the unwinder would abort anyway. A single hook here is the one place
 /// panics are surfaced — caller-visible diagnostics, then abort.
+/// Bitmask (bit N = fd N) of the std fds that were CLOSED when this
+/// process started, sampled by [`record_closed_std_fds`] before Rust's
+/// runtime could paper over them. `0` when that constructor did not run
+/// (an unsupported target, or the lib used outside the binary).
+static STD_FDS_CLOSED_AT_START: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
+
+/// Sample which of fds 0/1/2 arrived closed, as a pre-`main` constructor.
+///
+/// This has to run before `std::rt::init`, which "sanitizes" closed std
+/// fds by opening `/dev/null` O_RDWR on them — after that, a closed-at-exec
+/// stdout is indistinguishable from a genuine `1<>/dev/null` redirect, and
+/// guessing from that signature poisoned real ones (`subprocess.DEVNULL`
+/// opens `/dev/null` read-write, and so does a shell's `<>`). ELF
+/// `.init_array` / Mach-O `__mod_init_func` entries run from the dynamic
+/// loader, i.e. ahead of any Rust runtime setup.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+extern "C" fn record_closed_std_fds() {
+    let mut mask = 0u8;
+    for fd in 0..3 {
+        // SAFETY: `fcntl(F_GETFD)` on a std fd number; touches no memory.
+        // Nothing here allocates or needs the Rust runtime, which has not
+        // started yet.
+        let closed = unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF);
+        if closed {
+            mask |= 1 << fd;
+        }
+    }
+    STD_FDS_CLOSED_AT_START.store(mask, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[used]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".init_array"))]
+#[cfg_attr(target_os = "macos", unsafe(link_section = "__DATA,__mod_init_func"))]
+static RECORD_CLOSED_STD_FDS: extern "C" fn() = record_closed_std_fds;
+
 /// Normalize std fds (0/1/2) that arrived CLOSED at exec, CRuby-style
 /// (`fill_standard_fds`): stdin gets `/dev/null` (read-only), while a
 /// missing stdout/stderr becomes the WRITE end of a pipe whose read end
 /// is closed — so a user write raises `Errno::EPIPE` instead of silently
 /// landing in whatever file the interpreter opened onto the freed slot.
 ///
-/// Rust's std runtime has already "sanitized" closed std fds before
-/// `main` by opening `/dev/null` O_RDWR on them, so "was closed at
-/// exec" is detected as exactly that signature (`/dev/null` + O_RDWR —
-/// a shell redirect uses O_WRONLY/O_RDONLY, so real redirections are
-/// left alone).
+/// "Arrived closed" is what [`record_closed_std_fds`] saw before Rust's
+/// runtime reopened those slots on `/dev/null`; an fd closed after that
+/// (a caller of this function, its own test) is caught live. An fd that
+/// is *open* on `/dev/null` is left alone whatever its access mode — it
+/// is a redirection the caller asked for.
 pub fn fill_closed_std_fds() {
-    // SAFETY: plain fcntl/fstat/open/pipe/dup2 syscalls on our own fds.
+    let at_start = STD_FDS_CLOSED_AT_START.load(std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: plain fcntl/open/pipe/dup2 syscalls on our own fds.
     unsafe {
         for fd in 0..3 {
-            let closed = libc::fcntl(fd, libc::F_GETFD) == -1
-                && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF);
-            #[cfg(target_os = "linux")]
-            let sanitized = if closed {
-                false
-            } else {
-                let mut st: libc::stat = std::mem::zeroed();
-                let is_devnull = libc::fstat(fd, &mut st) == 0
-                    && (st.st_mode & libc::S_IFMT) == libc::S_IFCHR
-                    && st.st_rdev == libc::makedev(1, 3);
-                is_devnull && (libc::fcntl(fd, libc::F_GETFL) & libc::O_ACCMODE) == libc::O_RDWR
-            };
-            // The /dev/null device numbering above is Linux's; elsewhere
-            // only genuinely closed fds are (conservatively) normalized.
-            #[cfg(not(target_os = "linux"))]
-            let sanitized = false;
-            if !(closed || sanitized) {
+            let closed = (at_start & (1 << fd)) != 0
+                || (libc::fcntl(fd, libc::F_GETFD) == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF));
+            if !closed {
                 continue;
             }
             if fd == 0 {
