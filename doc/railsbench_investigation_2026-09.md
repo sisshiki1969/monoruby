@@ -421,8 +421,63 @@ escalated side exit ごとに、ユニット内の d 段（d = `current_frame_po
 BOP 再定義（`check_bop_redefine`）だけはユニット境界を越える必要があるので walk のまま
 残す（コメントが明記。ブート後の頻度はほぼ 0）。
 
-未確認で残るのは `Error` exit の unwind 経路（§8.4「a rewritten return-address slot is
-also on the unwind path」）が、ユニット外のフレームにも書き換えを要求していないか。
+**`Error` exit の unwind もユニット内で閉じている（確認済み）**
+
+`doc/chain_deopt.md` §8.4 は「a rewritten return-address slot is also on the unwind
+path」と書いていて、ユニット外のフレームにも書き換えが要るように読めるが、要らない。
+
+unwind の実体は `entry_raise`（`arch/x86_64/jit_module.rs:80`）:
+
+```
+raise:
+    ... call handle_error       ; rax: Option<Value>, rdx: Option<BytecodePtr>
+    testq rdx, rdx
+    jne  goto                   ; このフレームに handler があれば そこから再開
+    leave
+    ret                         ; 無ければ 通常のエピローグ + ret（rax = 0 がエラー信号）
+```
+
+つまり**戻り番地スロットを経由して `ret` する**。書き換えられていないスロットなら、
+呼び出し元のコンパイル済み post-call エラーチェックに落ちる —— chain deopt 以前から
+ある通常の JIT エラー経路である。§8.4 が言っているのは「*変換済み*フレームを
+unwind が通っても stub が `rax == 0` で正しく振る舞う」ことであって、より多くの
+フレームを変換せよ、ではない。
+
+そしてこの「未変換の JIT フレームを unwind が通る」経路は既に**通常経路**である:
+`escalate_side_exits() = current_frame_pos() > 0` なので、**ユニットの根で起きた raise は
+escalate しない**。その時点でサスペンド中の JIT 呼び出し元は未変換のまま unwind が
+通り抜ける。walk をユニット内に限るということは、深さ > 0 の Error exit を、深さ 0 の
+Error exit が既にやっていることに揃えるだけである。
+
+コードベース自身がユニット外の扱いを明言してもいる
+（`context.rs:2722` `method_caller_specialized_ids`）:
+
+> the final `ret` returns from the home to its **dynamic** caller, whose post-call
+> frame pop is rbp-derived and therefore correct **no matter how many inlined frames
+> were flown over**.
+
+`method_return_specialized`（`lea rbp += Σ; leave; ret`）は、ユニット内の
+インラインフレームを**静的オフセットで一気に飛び越えて**ユニット外の動的呼び出し元へ
+`ret` する。①②の主張が既に別の形で実装されている 3 つ目の例であり、同時に
+「ユニット外のフレームは unwind に対して何も要求しない」ことの直接の証拠でもある。
+
+§8.4 が `method_return_specialized` について言う「the slot belonging to the
+*outermost* inlined call」は、深さ 0→1 の呼び出しのスロット（深さ 1 のフレームにある）
+で、これは深さ 0 のサイトの replay stub が書き換える。d 回のループは深さ d−1 … 0 を
+カバーするので、**含まれている**。
+
+なお同じコメントは、無条件 escalation が `throw` ベンチで
+「**`return` 1 回につき chain-deopt walk 1 回**」を招いたため、静的 teardown の適用範囲を
+広げて回避した経緯も記録している。walk のコストは既知で、静的なユニット内フレーム算術が
+このコードベースでの定石になっている。
+
+実測: raise / rescue をインラインフレームの各段で起こす、`ensure`、`retry`、
+ブロックからの `return` / `break`、`throw`/`catch`、`ensure` 付き `return` の
+40 行バッテリーが CRuby と一致。
+
+（`method_caller_specialized_ids` は `check_exception_handler(begin, end)` で、飛び越える
+フレームに handler があれば静的 teardown を諦める。静的 chain 変換はフレームを
+飛び越えず 1 段ずつ変換するので、このゲートは不要。）
 
 ---
 
