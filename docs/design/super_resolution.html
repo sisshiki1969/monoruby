@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-7a894903.js";
+            window.path_to_searchindex_js = "../searchindex-e06c7a4c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -357,7 +357,13 @@ send / specialized send / yield / specialized yield の 4 箇所すべてで発�
 <li>検証に通れば <strong><code>entry.original_name</code></strong> を検索名とする。これで
 define_method 複数名(1.1: original_name = 各インストール名)と
 alias(1.2: original_name = 元定義名)の両方が CRuby と一致する。</li>
-<li>復元できない場合は従来どおり <code>FuncInfo::name()</code>(焼き付け名)に
+<li>コールサイト PC が無い場合(invoker 境界)は、<code>Executor::invoked_as</code>
+—— <code>send</code> / <code>Method#call</code> / <code>UnboundMethod#bind_call</code> / Rust 側の
+<code>invoke_method_*</code> が「いま何という名前でディスパッチしているか」を
+退避・復元付きで記録するフィールド —— を代わりに読む。読んだ名前は
+3 と同じ検証(そのエントリが本当にこの本体へディスパッチするか)を
+通すので、古い名前が残っていても誤用されない。</li>
+<li>それでも復元できない場合のみ <code>FuncInfo::name()</code>(焼き付け名)に
 フォールバックする。</li>
 </ol>
 <h3 id="42-出現インデックスoccurrenceの復元"><a class="header" href="#42-出現インデックスoccurrenceの復元">4.2 出現インデックス(occurrence)の復元</a></h3>
@@ -410,7 +416,13 @@ loop:
 呼び名や出現位置で行き先が変わる)。そのため:</p>
 <ul>
 <li><strong>VM</strong>: <code>find_super</code> が cacheable フラグを返す。
-<code>!is_block_style &amp;&amp; super_occurrences(...) &lt;= 1</code> のときだけキャッシュ可。
+<code>!is_block_style &amp;&amp; !is_proc_method &amp;&amp; super_occurrences(...) &lt;= 1</code> の
+ときだけキャッシュ可。<code>is_proc_method</code> を見るのが必須である:
+<code>define_method</code> は本体を(厳密 arity のために)method-style にするので
+<code>is_block_style</code> では捕まらず、これを落とすと最初の呼び名の解決結果が
+サイトに焼き付き、以降どの名前で呼んでも同じ親が呼ばれる(#1346)。
+JIT 側の ambiguous-super ガードは元から同じ条件を見ており、VM が
+キャッシュしないことを前提にしている。
 不可なら <code>find_method</code> はキャッシュタグに <strong>ClassId 0</strong> を返す
 (<code>ClassId</code> は <code>NonZeroU32</code> なので実クラスと一致せず、そのサイトは
 毎回スローパスで再解決される)。</li>
@@ -427,10 +439,11 @@ VM がキャッシュを温めない(タグ 0)ため再コンパイルが収束�
 <h2 id="6-既知の限界"><a class="header" href="#6-既知の限界">6. 既知の限界</a></h2>
 <ul>
 <li><strong>invoker 境界</strong>: <code>Method#call</code> / <code>send</code> / Fiber などで入ったフレームは
-cont-frame スロットが無効なので、呼び出し名の復元も出現カウントも
-フォールバックに落ちる(焼き付け名 + 旧ヒューリスティック)。
-define_method 複数名のメソッドを <code>send</code> で呼ぶと、super の検索名は
-焼き付け名になる。</li>
+cont-frame スロットが無効である。<strong>呼び出し名</strong>は <code>invoked_as</code>
+(§4.1-5)で復元できるので <code>send</code> / <code>Method#call</code> /
+<code>UnboundMethod#bind_call</code> は CRuby と一致するが、<strong>出現カウント</strong>は
+依然フォールバック(<code>exact=false</code> → 旧ヒューリスティック)になる。
+名前を持たない経路(Fiber の再開など)は焼き付け名のままである。</li>
 <li><strong>可視性シャドウの staleness</strong>: <code>public :derp</code> はシャドウエントリに
 継承先の FuncId をコピーするため、その後に継承元が再定義されると
 シャドウが旧本体をディスパッチする(CRuby の ZSUPER エントリは委譲なので
