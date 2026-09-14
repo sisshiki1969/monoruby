@@ -1362,6 +1362,41 @@ pub(super) extern "C" fn object_send_missing(
         .ok()
 }
 
+///
+/// `Method#call` on a `method_missing` proxy Method.
+///
+/// The inlined `Method#call` (`Codegen::method_object_call_inline`) reads
+/// the bound `FuncId` and receiver straight out of the `MethodInner` and
+/// builds the callee frame itself, which cannot express the proxy's
+/// dispatch: `receiver.method_missing(target, *args)` with the target name
+/// prepended. A proxy therefore leaves the inline path here, and this
+/// rebuilds the call from the caller's frame the way the builtin does.
+///
+/// Reached only for a call site the inline generator accepted, so the
+/// arguments are simple and positional.
+///
+pub(super) extern "C" fn method_object_call_proxy(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    lfp: Lfp,
+) -> Option<Value> {
+    let cs = &globals.store[callid];
+    let (recv_slot, args_slot, pos_num) = (cs.recv, cs.args, cs.pos_num);
+    let bh = cs.block_handler(lfp);
+    // SAFETY: the slots come from the call site being executed, so they
+    // name live registers of this very frame.
+    let method = lfp.register(recv_slot).unwrap();
+    let method = method.as_method();
+    let receiver = method.receiver();
+    let target = method.method_missing_name().unwrap();
+    let mut args = vec![Value::symbol(target)];
+    args.extend(unsafe { lfp.args_to_vec(args_slot, pos_num) });
+    vm.invoke_method_inner(globals, IdentId::METHOD_MISSING, receiver, &args, bh, None)
+        .map_err(|err| vm.set_error(err))
+        .ok()
+}
+
 pub(crate) extern "C" fn invoke_method_missing(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1570,6 +1605,31 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
     ) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+/// Argument transfer for an inlined `Method#call`: the call site's
+/// positional slots map one to one onto the bound method's parameters,
+/// with none of `send`'s leading-name slot to strip.
+pub(super) extern "C" fn jit_handle_arguments_no_block_for_method_object(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    caller_lfp: Lfp,
+    callee_lfp: Lfp,
+    callid: CallSiteId,
+) -> Option<Value> {
+    let (args_slot, pos_num) = {
+        let cs = &globals.store[callid];
+        (cs.args, cs.pos_num)
+    };
+    let src = caller_lfp.register_ptr(args_slot) as *const Value;
+    match set_frame_arguments_simple(vm, globals, callee_lfp, caller_lfp, callid, src, pos_num) {
+        Ok(_) => Some(Value::nil()),
+        Err(mut err) => {
+            err.push_internal_trace(callee_lfp.func_id());
             vm.set_error(err);
             None
         }

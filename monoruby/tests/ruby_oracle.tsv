@@ -106,6 +106,7 @@
 066392710dabdf12722c1aa1a604fa66	[1, 1, nil, 1, 2, 4, [["k", 1], [:k, 2], [3, 4]], 1, {}, nil, RuntimeError, true]	bin = "a".b\n        e = {"k" => 1, :k => 2, 3 => 4}\n        s = {"k" =>
 067076632d9bbfc6687c8a1ec746a38b	[:a, :b]	c = Class.new { attr :a, :b }\n            c.instance_methods(false)
 0671dc386fe22ac136194d005bfa5d9e	[:foo]	$res = []\n            class C\n              def self.method_undefin
+067251dc6695e67519000a3be52e5569	[1, 2]	class C\n          def each2\n            yield 1\n            yield 2\n   
 068a0ab9c9a3f0880349066404c03124	[[0]]	require "rubygems"\n        require "sqlite3"\n        require "tmpdir"\n 
 0691611dde38293b7701c47f3487d59e	[10, 10, 10, 10, 10, 20, 20, 20, 20, 20]	class C\n          def foo; 10; end\n        end\n        c = C.new\n      
 069eae9fbb818fee75b130337a249e6c	[6765, 6765, 0.0, nil]	def fib(n) = n < 2 ? n : fib(n-1) + fib(n-2)\n            res = [fib
@@ -130,6 +131,7 @@
 075794323ea386fc27f4ad61a4164ace	4	obj = Object.new\n            def (obj).qux; 4; end\n            obj.
 078a80c14641af84738f69e79b6f4d43	:OVERRIDDEN	class Complex; def -@; :OVERRIDDEN; end; end; -(Complex(1,2))
 078daf4fd77243c21d945dee4f1f3c8a	[1, 1, 20, 1, 100]	class C\n            def foo\n                1\n            end\n         
+078fec8748b59ed25358bea49b41a013	29999	class C\n          def g(x) = x ^ x >> 16\n        end\n        m = C.new.
 07949d484137fbc2f7b3dc559cdc9ccf	:nme	class Integer; def +(o); super(o) * 10; end; end\n                begin; 1 + 2; r
 07955b63ba38d4cd83594a1c65d6ce2e	[1, 2]	File.write('/tmp/monoruby_resync.rb', "$resync_counter = ($resync_c
 07ae3460afd871d9e296a49f2d2affb1	"a"	class MyStr\n                  def to_str; "abc"; end\n          
@@ -187,6 +189,7 @@
 0b45e95b3c2f86584c9598881d58fac9	[42, 90, 15, "1/2", "7:8", "argerr"]	def a0; 42; end\n        def a1(x); x * 10; end\n        def a5(a, b, c, 
 0b4f45356eb0234401ec06e247eb53b6	[[["[[\\"Integer\\", 1], [\\"Float\\", 2.5], [\\"NilClass\\", nil], [\\"String\\", \\"\\\\x00\\\\xFF\\"], [\\"String\\", \\"txt\\"]]"]], [["int", [["integer", 7]]], ["big", [["real", 1.1805916207174113e+21]]], ["float", [["real", 1.5]]], ["nil", [["null", nil]]], ["text", [["text", "plain"]]], ["binary", [["blob", "bin"]]], ["blob", [["blob", "\\x00\\xFF"]]], ["bool", "RuntimeError", "can't return TrueClass"], ["obj", "RuntimeError", "can't return Object"]], [["got 1"]], [[[15]], [[0]]], ["ArgumentError", "tried to create Proc object without a block"], [[14]], ["a\\u0000b", "one", "ret", "triple", "types"], [[2]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 0b56e400524c40599f5741f2c015962d	7	class Foo\n              def method_missing(name, *args)\n           
+0b63fbdd1138fbc95382e627f7e211d9	[[:zap, [1]], 3]	class P\n          def respond_to_missing?(n, p) = n == :zap\n          d
 0b645df6fa816084c17746fbb8754151	-4	class Integer; alias __orig :~; def ~; __orig; end; end; ~(3)
 0b67f0becaeeca974d1e74004df4c680	[[:x], [1, :y]]	class C\n                 def initialize; @log = []; end\n                 def []=
 0b6f7cc39b8a933c537afbbde31e4c61	[0, 198, 9900]	def nlr_a\n          yield\n        end\n        def nlr_b\n          nlr_a
@@ -757,6 +760,7 @@
 3634c56019b496302e0dbaf2bd90cd08	[[:from_true, :from_false, :from_true], [:from_false, :from_true]]	class TrueClass; def which = :from_true; end\n        class FalseClass; 
 366101f3454d9c3ba104d799233170e4	14	class Foo\n              def with_block; yield 7; end\n            en
 367146f794b0754d2be0142feeb12768	[:replaced, :given, [2, 4], [2, 3], 6, [9], 2, 1, [true, Proc]]	def call_it(&block); block = proc { :replaced } if block.nil?; block.ca
+367a93d59959f04960bf95912d5fc648	["HELLO", 15]	m = "hello".method(:upcase)\n        n = 10.method(:+)\n        res = []\n
 367c0b57251ec6d8861445efce15a4a2	[3, 4, 5]	class MyNum; def to_int; 2; end; end\nn = MyNum.new\n[1,2,3,4,5].drop(n)
 369964a9ab023c59c6982e160cd552b5	10770.0	def g\n          a = 0.0; b = 1.0; c = 2.0; d = 3.0\n          i = 0\n    
 36e28f3b4bad007127519f2712f4d570	[39, :receiver_class, "constant", "nil", :receiver_class, "class variable access from toplevel"]	$r = []\n        m = Module.new\n        $r << m.class_eval("@@cv1 = 39; 
@@ -790,6 +794,7 @@
 3962b2ffd2b48bcb5feb55745b8b6b37	[[40, 50], [40, 50]]	[1, 2].map { [4, 5].map { it * 10 } }
 39740411375592c29d3f5adde2165332	[[10, 20], [0, 10, 20, 9], 1, true, 2, 1, true, 1, true, :type_error]	def m(*a) = a\n        class Obj\n          def initialize(v) = @v = v\n  
 397660fb68b22813a4bbe91972c0b9bf	nil	print 1
+39ab90db8c2175cc97c356aa3d383c0f	[Infinity, Infinity]	class C\n          def f(x) = x * 2.0\n        end\n        m = C.new.meth
 39af2a1340a7198301238c30503a4079	true	Fiber.current.is_a?(Fiber)
 39b040323d16819b1a965df73071e65f	[[true, true, true], [IO::Buffer::AccessError, "Buffer is not writable!"], "HELLO", true, true, "test\\x00\\x00\\x00", "cdef", "abXYefgh", [false, false], [true, false], [6, "\\xC3\\xA9", "\\xC3\\xA9llo"], [ArgumentError, "The given offset is bigger than the buffer size!"], [ArgumentError, "Specified offset+length is bigger than the buffer size!"], "\\x00ab\\x00", 3, "\\x00AAA\\x00"]	r = []\n            s = IO::Buffer.for("abc")\n            r << [s.ex
 39c92c0308629107e62585945ff18f41	7	f = ->{ _1 + _2 }; f.call(3, 4)
@@ -1138,6 +1143,7 @@
 5174f3c6fa3195d1fbd047639e4a904d	[[true, {data: 42}], ["async", "ctx"], [[[true, ["both"]], [false, []]], true, "both", false]]	r = []\n            de = Class.new(StandardError) { attr_reader :dat
 51be01e0d292ac0d9c77567390f1d11f	["Bbar", "B[239, 191, 189]", "Bdbar", "Btbar", Encoding::UndefinedConversionError, [ArgumentError, "too big fallback string"], TypeError, Encoding::UndefinedConversionError]	(r=[]; r << "B�".encode(Encoding::US_ASCII, fallback: { "�" => "bar" }); r << "B
 51bf1bd2c44ca7c76c217e78a6007ece	[true, 3]	a = ARGF.class.new('/dev/zero')\n            [a.read(100) == "\\0" * 
+51d0dfda74a87a35fec40f86ffc25f4a	[:zap, [1, 2]]	class P\n          def respond_to_missing?(n, p) = n == :zap\n          d
 51d87dc27970f55ee0f0c347def4e386	[5, 0, true]	m = ObjectSpace::WeakMap.new\n        kept = []\n        500.times do |i|
 521f16239cbd7625cbdbd1830aff0d66	[4, "FILE:20: warning: given block not used\\n", 4, "FILE:21: warning: given block not used\\n", "FILE:29: warning: plain\\n", "warning: deep\\n"]	require "stringio"\n        def capture\n          old = $stderr\n        
 522c4f8c40e029c9a06a958415c5bba8	["append_features:C"]	$res = []\n        module M\n          def self.append_features(base)\n   
@@ -1660,6 +1666,7 @@
 78a9147b5bb75312ad6a700a83ce8209	["can't create instance of singleton class", "can't create instance of singleton class", "ok", true]	o = Object.new\n        msgs = []\n        begin; o.singleton_class.new; 
 78d0e78fc74998266ad2fd179077428d	[[4, 5, "s4"]]	class P\n          attr_accessor :x, :y, :z\n        end\n        def fill
 78d7ea39e2bafbf7649c9fc6b54bb309	[90300, 50, 50, [6, 6], [8, 8]]	class Base\n          def helper(x); x.succ; end\n          def m(v); [he
+792946a28d15a8e7c81701076d594402	[11, 3, [1, 2, 3], 6]	class C\n          def opt(a, b = 10) = a + b\n          def rest(*a) = a
 7933b76f3fbc5da321278e1298f09b68	"1/2"	0.5.to_r.to_s
 793df4a57062ccad86195db16e27aa5f	[[["[[\\"Integer\\", 1], [\\"Float\\", 2.5], [\\"NilClass\\", nil], [\\"String\\", \\"\\\\x00\\\\xFF\\"], [\\"String\\", \\"txt\\"]]"]], [["int", [["integer", 7]]], ["big", [["real", 1.1805916207174113e+21]]], ["float", [["real", 1.5]]], ["nil", [["null", nil]]], ["text", [["text", "plain"]]], ["binary", [["blob", "bin"]]], ["blob", [["blob", "\\x00\\xFF"]]], ["bool", "RuntimeError", "can't return TrueClass"], ["obj", "RuntimeError", "can't return Object"]], [["got 1"]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 79444ab999b1bb6218ce359077c8b24d	true	$LOADED_FEATURES.class == Array\n            
@@ -2366,6 +2373,7 @@ ab63839dbe29e9f17d36f1cc7849d7da	[[3, 4, 5, 6, 7, 0, 1, 2], [0, 1, 2, 3], [2, 3,
 ab6ac3209d2195ae9950646eb1022c17	:OVERRIDDEN	class Integer; def <<(o); :OVERRIDDEN; end; end; 3 << 4
 ab785c969ef5be187ff55eb3416a3a0f	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
 ab8885657a2a64a7b6e8875e78bb2e7b	Array	class C < Array; end\nC[1,2,3].sort.class
+ab901ead45a8ee90c8abe444f89403b8	[1, 2]	class C\n          def initialize(n) = @n = n\n          def get = @n\n   
 ab957de646f7c725670ace2cad00bc40	1700	class C\n              def bar\n                "bar"\n              e
 ab9797f0718836e71434ef89cce1af7b	[:a]	def m(a, **nil); local_variables; end\n            m(1)\n            
 abac46e7f888623f5b3b5c9004331c85	nil	GC::Profiler.clear
@@ -2713,6 +2721,7 @@ c2a32c061a6df0b6f062900fb9a8b1de	["Not matched", "Matched 1", "Matched 1", "Matc
 c2d8a47ea38993301137ebb001049fb2	[1, 2]	c = Class.new { def foo(*a); a; end; ruby2_keywords :foo }\n        
 c2d97a349b86a09c5fd224aef7dda8c9	["unknown keywords: :b, :c", "unknown keyword: :z", "missing keyword: :a", "missing keyword: :y", "missing keywords: :x, :y", "missing keyword: :a"]	def one(a:); end\n        def two(x:, y:); end\n        msgs = []\n       
 c2ddc4b987960c63ecfe548001121a15	501	def f; 1; end\n            a = 0; i = 0\n            while i < 20000\n
+c2ed8ee508fc72ce81d419b84e00a7c3	"wrong number of arguments (given 2, expected 1)"	class C\n          def one(a) = a\n        end\n        o = C.new\n        
 c2f1188cf58009e1f4929f6667b6493e	["C", "M"]	module M\n            end\n            class S\n            end\n      
 c3423608f46c2ab24a0a71094cd5ae93	[1, 2, 1, 2]	class MyNum; def to_int; 2; end; end\nn = MyNum.new\nres = []; [1,2].cycle(n) { |x
 c36b1e25498098fb5ed62d696afcb18a	[true, true, true, true, true, true, true, true]	class Never\n          def ==(o) = false\n          def eql?(o) = false\n 
@@ -2972,6 +2981,7 @@ d5ec889974c38262d62062c5b088a2ff	"ASCII-8BIT"	"abc".b.reverse.encoding.to_s
 d5f2b019270b0aa4e77071d07cc78f9c	"secret"	class Foo\n          private\n          def secret; "secret"; end\n       
 d6091e4e156deac18f133b8aca6d3e2a	[[103, 111, 111, 100, 32, 100, 97, 121, 32, 128], "UTF-8", false, [103, 111, 111, 100, 32, 100, 97, 121, 32, 128], false, [103, 111, 111, 100, 32, 100, 97, 121, 32, 128], false]	a = sprintf("good day %{invalid}", invalid: "\\x80")\n            b =
 d645a11530555bae2d4983500a78983b	498500.0	def f(n)\n          x = 0.0\n          i = 0\n          while i < n\n      
+d65af4ca7a062b2f91007b49b9f2b775	[42, 10, 6, 14, 18]	class C\n          def none = 42\n          def one(a) = a * 2\n          
 d66a6a23a3ed91b71d300b263592de36	[[1, 3], [2, 4]]	o = Object.new\n               def o.to_int; 3; end\n               r = []; [1, 2]
 d66e832dd58d8b0895c00647a07051e9	"ab"	r, w = IO.pipe\n            w.write("ab")\n            out = r.sysrea
 d68149041b7bd9d31e303f70e9b68d9e	[true, false, true, false, "closed stream"]	require 'fcntl'\n            require 'io/nonblock'\n            res =
@@ -3053,6 +3063,7 @@ dbc18dfb07e0bf31beaad3fdb0a50b52	3	"hello".byteindex("lo", -3)
 dbc20278d0d856cfb185f95ac488161b	[nil, 3, 5, "abcde"]	path = "/tmp/mr_buf_points.txt"\n            res = []\n            f 
 dbf25e1b967821afefbd465ccf25e8f2		require "yaml"\n        require "stringio"\n        r = []\n        # The 
 dc0885a7e9180887b8b86834b910e71a	10	class A\n              @@shared = 10\n            end\n            cla
+dc0ee6667754ed7a449089be016de3e8	"wrong number of arguments (given 2, expected 1)"	class C\n          def one(a) = a\n        end\n        m = C.new.method(:
 dc345e0d19a0322fc6ca94e04b4104b0	"nil"	path = "/tmp/monoruby_io_bomg3_#{Process.pid}_#{rand(100000)}"\n    
 dc394b9cda9ab3b993fea72b28cac8a0	[:imported, "ArgumentError: #rm", "ArgumentError: #dm", :imported, "ArgumentError: #foo", "ArgumentError: #am", "ArgumentError: #kw"]	probe = lambda do |src|\n              begin\n                Module.
 dc3f2c1c601ee25acabb218a6cdbf2ba	"custom_argv0\\n"	r, w = IO.pipe\n            Process.wait Process.spawn(["/bin/sh", "

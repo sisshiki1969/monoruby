@@ -558,6 +558,150 @@ impl Codegen {
     }
 
     ///
+    /// Inlined `Method#call` / `Method#[]` / `Method#===`.
+    ///
+    /// The receiver's class was proved `Method` by the call site's own
+    /// guard, and a `Method` already holds a resolved `FuncId` and the
+    /// receiver it is bound to. So unlike `send` there is no name to
+    /// resolve and no cache to keep: read both fields, build the callee
+    /// frame and call it. That replaces the builtin's rest-`Array`
+    /// allocation and its re-entry through `invoke_func_inner`.
+    ///
+    /// A `method_missing` proxy Method is the one shape this cannot
+    /// express (it has to prepend the target name), so it leaves for
+    /// `method_object_call_proxy` and rejoins at `done`.
+    ///
+    /// ### out
+    /// - rax: the call's result
+    ///
+    pub(crate) fn method_object_call_inline(
+        &mut self,
+        callid: CallSiteId,
+        store: &Store,
+        using_fpr: UsingFpr,
+        error: &DestLabel,
+    ) {
+        let CallSiteInfo {
+            recv,
+            args,
+            pos_num,
+            block_fid,
+            block_arg,
+            ..
+        } = store[callid];
+        let proxy = self.jit.label();
+        let done = self.jit.label();
+
+        self.fpr_save(using_fpr);
+        monoasm! { &mut self.jit,
+            movq rdi, [rbp - (rbp_local(recv))];
+            cmpl [rdi + (METHOD_MM_NAME_OFFSET as i32)], 0;
+            jne  proxy;
+            movl rdx, [rdi + (METHOD_FUNC_ID_OFFSET as i32)];
+        }
+        self.get_func_data();
+        // r15 <- &FuncData
+
+        monoasm! { &mut self.jit,
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
+            movq rax, [r15 + (FUNCDATA_META)];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
+            // Zero SVAR — method-introducing frame's lazy `$~`
+            // container is allocated on first MatchData write.
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
+        };
+        self.set_block(block_fid, block_arg);
+        monoasm!( &mut self.jit,
+            movq rax, [rbp - (rbp_local(recv))];
+            movq rax, [rax + (METHOD_RECEIVER_OFFSET as i32)];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
+        );
+        self.method_object_call_handle_arguments(args, pos_num, callid, error);
+        self.call_funcdata();
+        monoasm! { &mut self.jit,
+        done:
+        }
+        self.fpr_restore(using_fpr);
+        self.handle_error(error);
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        proxy:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (callid.get());
+            movq rcx, r14;
+            movq rax, (runtime::method_object_call_proxy);
+            call rax;
+            jmp  done;
+        }
+        self.jit.select_page(0);
+    }
+
+    ///
+    /// Argument transfer for an inlined `Method#call`: the same
+    /// exact-arity slot copy `object_send_handle_arguments` does, without
+    /// the leading method-name slot to skip.
+    ///
+    fn method_object_call_handle_arguments(
+        &mut self,
+        args: SlotId,
+        pos_num: usize,
+        callid: CallSiteId,
+        error: &DestLabel,
+    ) {
+        let loop0 = self.jit.label();
+        let not_simple = self.jit.label();
+        let arg_error = self.jit.label();
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            movzxb rax, [r15 + ((FUNCDATA_META + META_KIND) as i32)];
+            testq rax, 0b1_0000;
+            jz   not_simple;
+            movzxw rax, [r15 + (FUNCDATA_MIN)];
+            cmpw  rax, (pos_num);
+            jne  arg_error;
+        }
+        if pos_num > 0 {
+            monoasm! { &mut self.jit,
+                lea  rdi, [rbp - (rbp_local(args))];
+                lea  rdx, [rsp - (RSP_LOCAL_FRAME + LFP_ARG0)];
+                movq r8, (pos_num + 1);
+            loop0:
+                subq r8, 1;
+                jz  exit;
+                movq rax, [rdi];
+                movq [rdx], rax;
+                subq rdi, 8;
+                subq rdx, 8;
+                jmp  loop0;
+            }
+        }
+        monoasm! { &mut self.jit,
+        exit:
+        }
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        arg_error:
+            movq rsi, rax;
+            movq rdi, rbx;
+            movq rdx, (pos_num);
+            movq rax, (wrong_number_of_arg);
+            call rax;
+            jmp  error;
+        not_simple:
+            movl r8, (callid.get()); // CallSiteId
+        }
+        self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_method_object);
+        self.handle_error(error);
+        monoasm! { &mut self.jit,
+            jmp exit;
+        }
+        self.jit.select_page(0);
+    }
+
+    ///
     /// Call `method_missing` for a call site whose method does not exist,
     /// through the same runtime helper the VM uses — see
     /// `JitContext::compile_method_missing` for why the dispatch is not
@@ -708,9 +852,12 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm! { &mut self.jit,
         arg_error:
+            // `wrong_number_of_arg(vm, expected, given)`: the callee's
+            // min arity is what it expects, the call site's count is what
+            // it was given.
+            movq rsi, rax;
             movq rdi, rbx;
-            movq rsi, (pos_num - 1);
-            movq rdx, rax;
+            movq rdx, (pos_num - 1);
             movq rax, (wrong_number_of_arg);
             call rax;
             jmp  error;
