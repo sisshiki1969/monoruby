@@ -180,6 +180,12 @@ fn main() {
         }
     }
 
+    // The commit this binary was built from, reported by `-v` /
+    // `RUBY_DESCRIPTION` and as `RUBY_REVISION` (CRuby's convention).
+    // Best effort: a build from a source tree without git (e.g. a crate
+    // tarball) simply omits it.
+    emit_git_revision();
+
     // Best-effort host `RUBY_PLATFORM`. This is the *only* place the build
     // still consults a host `ruby`, and it is purely additive: when no
     // suitable host Ruby is present the runtime derives the platform from a
@@ -255,6 +261,43 @@ fn main() {
     // path is tracked above via cargo:rerun-if-changed, so deleting the
     // install root makes the next build re-run this script.
     fs::write(&stamp, tree_stamp).unwrap();
+}
+
+fn git(args: &[&str]) -> Option<String> {
+    let output = Command::new("git").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(output.stdout).ok()?;
+    let s = s.trim();
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+/// Bake the HEAD commit hash into `MONORUBY_GIT_REVISION`.
+///
+/// The script is re-run when HEAD moves: `HEAD` itself changes on a
+/// checkout, the branch's loose ref (or `packed-refs`) on a commit. Paths
+/// come from `git rev-parse --git-path`, so worktrees resolve HEAD to the
+/// per-worktree git dir and refs to the common one. Only existing files are
+/// tracked — Cargo re-runs a script on every build for a missing one.
+fn emit_git_revision() {
+    let Some(rev) = git(&["rev-parse", "HEAD"]) else {
+        return;
+    };
+    println!("cargo:rustc-env=MONORUBY_GIT_REVISION={rev}");
+    let mut tracked = vec!["HEAD".to_string(), "packed-refs".to_string()];
+    if let Some(r) = git(&["rev-parse", "--symbolic-full-name", "HEAD"])
+        && r != "HEAD"
+    {
+        tracked.push(r);
+    }
+    for name in tracked {
+        if let Some(path) = git(&["rev-parse", "--git-path", &name])
+            && Path::new(&path).exists()
+        {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
 }
 
 /// Stable content hash of a directory tree: file names, lengths and bytes,

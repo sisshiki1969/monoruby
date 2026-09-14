@@ -1480,6 +1480,20 @@ impl RValue {
         Some(ary.iter().copied().collect())
     }
 
+    ///
+    /// A String literal template the JIT may instantiate without the
+    /// generic deep copy: see [`RStringInner::inline_copyable`]. A
+    /// frozen template is excluded because copying it is
+    /// `share_string_buffer`'s CoW job, not a byte copy.
+    ///
+    pub(crate) fn inline_copyable_string(&self) -> Option<(Vec<u8>, u8, u8)> {
+        if self.ty() != ObjTy::STRING || self.var_table.is_some() || self.is_frozen() {
+            return None;
+        }
+        // SAFETY: the type check above proves the `string` variant is active.
+        unsafe { self.as_rstring() }.inline_copyable()
+    }
+
     pub(crate) fn get_ivar_by_ivarid(&self, id: IvarId) -> Option<Value> {
         let mut i = id.into_usize();
         if self.ty() == ObjTy::OBJECT {

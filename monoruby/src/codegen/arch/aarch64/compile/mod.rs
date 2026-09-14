@@ -2714,6 +2714,9 @@ impl Codegen {
         v: Value,
         using_fpr: UsingFpr,
     ) -> bool {
+        if self.emit_inline_string_lit(v, using_fpr) {
+            return true;
+        }
         if let Some(elems) = v
             .inline_copyable_array()
             .filter(|_| !self.alloc_free_head_addr.is_null())
@@ -2742,6 +2745,54 @@ impl Codegen {
             return true;
         }
         self.deep_copy_lit_call(v, using_fpr);
+        true
+    }
+
+    ///
+    /// aarch64 twin of the x86 `emit_inline_string_lit`: a String
+    /// literal whose bytes fit the copy's own inline buffer is built in
+    /// the fresh cell instead of going through `value_deep_copy`.
+    ///
+    fn emit_inline_string_lit(&mut self, v: Value, using_fpr: UsingFpr) -> bool {
+        if self.alloc_free_head_addr.is_null() || crate::value::debug_frozen_string_log() {
+            return false;
+        }
+        let Some((bytes, ty, cr)) = v.inline_copyable_string() else {
+            return false;
+        };
+        let rax = GP::Rax.a64().0; // x0 (result)
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        self.emit_alloc_cell(CellHeader::NewbornOf(v.id()), &slow);
+        monoasm_arm64!(&mut self.jit,
+            mov x12, #0;
+            str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
+            mov x12, (bytes.len() as u64);
+            // The inline `SmallVec`'s capacity slot holds its length.
+            str x12, [x(rax), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+        );
+        // Whole words, zero-padded past the end: the tail bytes sit
+        // beyond the recorded length inside the same inline buffer.
+        for (k, chunk) in bytes.chunks(8).enumerate() {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            let off = RVALUE_OFFSET_INLINE as u32 + (k as u32) * 8;
+            let w = u64::from_le_bytes(word);
+            monoasm_arm64!(&mut self.jit,
+                mov x12, (w);
+                str x12, [x(rax), #(off)];
+            );
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x12, (ty as u64);
+            strb w12, [x(rax), #(crate::rvalue::STRING_TY_OFFSET as u32)];
+            mov x12, (cr as u64);
+            strb w12, [x(rax), #(crate::rvalue::STRING_CR_OFFSET as u32)];
+            b cont;
+        );
+        self.jit.bind_label(slow);
+        self.deep_copy_lit_call(v, using_fpr);
+        self.jit.bind_label(cont);
         true
     }
 

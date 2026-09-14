@@ -142,6 +142,7 @@
 07fc55c9c66fdcb526a444ef6361069c	[1, 5, nil, 1, :dflt, 1, "proc:q"]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 080f42d888ea5e1a7eb7a4c43d6b5064	"US-ASCII"	"Hello".encode("US-ASCII").swapcase.encoding.to_s
 080f929287fc4ac492b6fb2c6fb2aaac	[:interrupted]	def run_masked(timing, blocking = true)\n              klass = Class
+08173e888ad3955b2850a0c982cab8e3	["old", "new"]	class R; def t = "old"; end\n        o = R.new\n        out = []\n        
 082c922854391d30efbd21f4e18518c3	true	File.writable?("/tmp")
 082f54363bbaa6f37b522a29ab6c1e74	true	f = File.new("Cargo.toml", "r")\n            result = f.read(10).is_
 082ffdcafa629eb9c1ce2f11988484e1	[0, "A1", 2, "A1\\n", "A2\\n", "B1\\n", "B1\\n", "no stream to tell", "no stream to seek", "no stream to rewind", "no stream", "closed stream"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
@@ -354,6 +355,7 @@
 17ae0b2d4d216a1477c7c1095d2b4f96	[true, "EvalDefIM", true, true, :ce, :ie, true]	res = []\n        class EvalDefIM\n          def make\n            eval "d
 17b4dcf867d28ec5b1dd631ad5583e17	{}	/(?<f>x)/.match("x").deconstruct_keys(['s', :f])
 17ead718ac7923b2a550775f94df059c	3	class A < Array\n        end\n        \n\n        a = A.new\n        a << 10
+180b54626a25ee82d172fb3e69c446d4	[8, 97, 104, nil, [97, 98, 99, 100, 101, 102, 103, 104], "a", "h", "ASCII-8BIT"]	res = nil\n        i = 0\n        while i < 3000\n          s = "abcdefgh"
 181190488544c9b5c85380245eaff93b	["B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 9|[]"]	class A\n          def m(a, *r) = "A #{a}|#{r.inspect}"\n        end\n    
 1821c10c6ad04de6330183a77e1e0216	["Binding", 41, 42, 41]	x = 41\n            b = binding\n            b2 = b.dup\n            b
 182caa69fa07777b5c852ab6d6cd523b	[:@b]	class Foo\n              def initialize\n                @a = 1\n     
@@ -475,6 +477,7 @@
 209dfca7e20d5b08fbea7e352067e47e	1	begin\n          abort("test")\n        rescue SystemExit => e\n          
 20a29c3694791809267cf4fb4c026f0b	[true, true, true, true, true]	class C\n              def f(a, b); a + b; end\n            end\n     
 20a5e889d929c3cfef9d0249a0d89866	1	class Foo\n              def initialize\n                @a = 1\n     
+20a92e285f5e69434b431a04c2b3b7d3	[[0, 0, true, "UTF-8", false], [1, 1, true, "UTF-8", false], [2, 2, true, "UTF-8", false], [3, 3, true, "UTF-8", false], [4, 4, true, "UTF-8", false], [5, 5, true, "UTF-8", false], [6, 6, true, "UTF-8", false], [7, 7, true, "UTF-8", false], [8, 8, true, "UTF-8", false], [9, 9, true, "UTF-8", false], [10, 10, true, "UTF-8", false], [11, 11, true, "UTF-8", false], [12, 12, true, "UTF-8", false], [13, 13, true, "UTF-8", false], [14, 14, true, "UTF-8", false], [15, 15, true, "UTF-8", false], [16, 16, true, "UTF-8", false], [17, 17, true, "UTF-8", false], [18, 18, true, "UTF-8", false], [19, 19, true, "UTF-8", false], [20, 20, true, "UTF-8", false], [21, 21, true, "UTF-8", false], [22, 22, true, "UTF-8", false], [23, 23, true, "UTF-8", false], [24, 24, true, "UTF-8", false], [25, 25, true, "UTF-8", false], [26, 26, true, "UTF-8", false], [27, 27, true, "UTF-8", false], [28, 28, true, "UTF-8", false], [29, 29, true, "UTF-8", false], [30, 30, true, "UTF-8", false], [31, 31, true, "UTF-8", false], [32, 32, true, "UTF-8", false], [33, 33, true, "UTF-8", false], [34, 34, true, "UTF-8", false], [35, 35, true, "UTF-8", false], [36, 36, true, "UTF-8", false], [37, 37, true, "UTF-8", false], [38, 38, true, "UTF-8", false], [39, 39, true, "UTF-8", false], [40, 40, true, "UTF-8", false], [64, 64, true, "UTF-8", false], [100, 100, true, "UTF-8", false], [200, 200, true, "UTF-8", false]]	(0..40).to_a.push(64, 100, 200).map { |n|\n          s = eval('"' + ("a"
 20c118ce0b43441a370030eae9e5f304	[11, "no block"]	def baz(&)\n          if block_given?\n            yield 10\n          els
 20e45524efcf74f976e1ee0d9e08a133	[100, 200, "#<struct S a=100, b=200>"]	S = Struct.new(:a,:b)\n        \n\n        s = S.new(100,200)\n        [s.a
 2145ee25155f67c8b900f252952714be	:ok	old_stderr = $stderr\n            captured = String.new\n            
@@ -790,6 +793,7 @@
 37a3982f27875fdfc73737a1139fb6f7	[[:dm, :dm], :from_send, :normal, nil]	(class MC; define_method(:dm){ [__method__, __callee__] }; def from_send; send "
 37bc41b6eddcd7d75a01000d291a6db3	true	Math.log1p(Float::NAN).nan?
 37c013e01cc33ebbf72b216e9b61f984	2	b = binding\n            b.eval("1 + 1")\n            
+37d0eeb4eb7c15c516659d6062d5409f	983085416	acc = 0\n        i = 0\n        while i < 30000\n          b = [i * 265443
 382b0a8d2ba3e8d5eac237fadf834cdd	25275.0	def with_block(&blk)\n          acc = 0.0\n          j = 0\n          whil
 3849de0738411075598f560268990dd7	[100, 200]	module M\n              def initialize\n                $res << self.
 38b6176ce634343e8a5c7383c6c60ed5	["hel", "l", "o"]	$/ = "l"; a = []; "hello".each_line { |x| a << x }; $/ = "\\n"; a
@@ -906,6 +910,7 @@
 41196e2784709a38db16b2ac20d45c21	[47, 47, 0, 47, 39]	def __f(x)\n          \n        v0 = x\n        v1 = (v0 + 8) & 4095\n     
 4127f9d58f69e19b5bcf5c3c3cefe969	[true, true, false, :fired]	Thread.handle_interrupt(StandardError => :never) do\n              c
 41308fa046142fe3ed9d2bce06bdeb37	[4, 8, 91, 7, 73, 117, 58, 13, 85, 68, 80, 114, 111, 116, 111, 50, 7, 104, 105, 6, 58, 6, 69, 84, 64, 6]	class UDProto2\n              def initialize(s); @s = s; end\n       
+4160fd234e24b4b1d31e6231f8bcddb9	["a", 0, true, "UTF-8", false, true]	res = nil\n        i = 0\n        while i < 30000\n          s = ""\n      
 4164abe514d409bfc2cda3938bbf6fa7	["hell0 world", "hell0 w0rld", "hello world", "hello world", "Xhello world", "-h-e-l-l-o- -w-o-r-l-d-", "", "heo word", "he[l]lo world", "he<l><l>o wor<l>d", "he\\\\lo world", "helo world", "hello hello |'ld", "héLlo wörld", "héllo world", "UTF-8", 300, 198, nil, "heLLo", "heLLo", "heLLo", "heLLo", nil, false, "UTF-8", FrozenError]	s = "hello world"\n        r = []\n        r << s.sub("o", "0") << s.gsub
 41709673073e0a9bac7681363b4962df	"語本日"	"日本語".reverse
 417394f1be1fb3cb921d2758ca5edc19	nil	defined?($there_is_no_such_global_xxxxx)\n            
@@ -1593,6 +1598,7 @@
 723ea63495140106ebdfae5448e3e464	80	class C\n          def f(a, b)\n            a + b\n          end\n        e
 7252f1c8ab400b2d14e205f52ce07f84	["warned", "silent", "warned", "silent", "warned", "warned"]	require "stringio"\n        res = []\n        capture = proc do |verbose,
 725d2fdc2eaf1d2bff1408d39bfaa2f4	["BA"]	module SVSE_A\n          private\n          def derp(message)\n           
+7263504ac9ceebe6b67e47cc63c33f66	["F1", "F2", ["F1", "F2"]]	class F1; def go = "F1"; end\n        class F2; def go = "F2"; end\n     
 72646a541277ded41b2f584e45b344f9	[true, true, false, false]	res = []\n            f = Fiber.new { Fiber.yield }\n            res 
 7279cfebff4f2431e12a11ac0cd8b2fc	:ok	Enumerator.new { |y| y.yield(1) }.first; :ok
 728b693008cde91b8e668b5188312960	"stream closed in another thread"	require "socket"\n            s = TCPServer.new("127.0.0.1", 0)\n    
@@ -1717,6 +1723,7 @@
 7b555b52656a57bad5a5fdc143ced21c	["yield", "yield", "yield", "yield", "yield", nil, nil, nil, nil, nil, "yield", "yield", "yield", "yield", "yield"]	def f\n                5.times { $x << (defined? yield) }\n          
 7b5681c9ae3d68fbc0040ffb94ea2759	[1, 0, 1, 1, 2, true]	def lvl3\n              [\n                caller(1, 1).size,    # im
 7b5f68952152e7580c6ab25f3f926de2	[false, false, false, nil, false, false, false, nil, false, false, false, nil, false, false, false, nil, false, false, false, nil]	def f(x)\n          x&.nil?\n        end\n\n        a = [1,2,3,nil] * 5\n   
+7b7382bff24374a10257dadb57855605	[true, false, true, 4, false, true, 4]	res = []\n        i = 0\n        while i < 3000\n          a = "abc"\n     
 7b7476abdf009af6db3f49d35ef4d89d	[]	def g(*a); a; end; g(*nil)
 7b7f468fd7e708b03afd14b1c5882f15	"hELLO, wORLD!"	"Hello, World!".swapcase
 7b8a6623c250c4690f74c23e3bf712f7	[[[:real, nil], [:mm, :poke, []], [:real, nil]], [[:mm, :poke, []]], :raised, [[:real, nil]]]	class MM\n          def method_missing(name, *args) = [:mm, name, args]\n
@@ -1967,6 +1974,7 @@
 8d830e1b0b9fd01963265a605718108d	[false, false, TypeError, TypeError, "a/b/c", [ArgumentError, "string contains null byte"], "/", ".", "."]	(a=File.directory?(STDIN); o=Object.new; def o.to_io; STDIN; end; b=File.directo
 8d9530b39ee52f718426ea8687708e0f	"data"	path = "/tmp/monoruby_test_filewrite_kw_#{Process.pid}_#{rand(10000
 8d974b46554a5e083a4cc64738f912b3	[true, true, true]	r, w = IO.pipe\n            v = [r.external_encoding.equal?(Encoding
+8da7366bb9237437c206166655b43ef6	[true, false, false, true, false, false, true]	res = []\n        i = 0\n        while i < 3000\n          res = ["fz".fre
 8daa6433e635cb816f0ee8a52cea83ef	[:initialize_clone, :initialize_copy]	$called = []\n            class Foo\n              def initialize_clo
 8daf37824b1f3c973b8f0c2a54183cdd	"[{1:2},{3:4}]"	module Json\n              refine(Integer) { def fmt; to_s; end }\n  
 8db37e22413acdf65493704315f3fd6b	100	def create_fiber\n              a = 100\n              Fiber.new do\n 
@@ -2257,6 +2265,7 @@ a2e679bc25d5bbcdcffa24d1390f7717	[true, 0, true, true, true, 0]	pid = fork { exi
 a2fe58a4b8970857e7e6bc4daf663e90	[["UTF-8", "EUC-JP", 1, false], ["UTF-8", "EUC-JP", 1, false], ["UTF-8", "EUC-JP"], [true, "ASCII-8BIT", true], 1, [42, []]]	path = "/tmp/monoruby_test_iostate_#{Process.pid}_#{rand(100000)}"\n
 a315e27bdfdf0dfa963d5e510f6c345b	[[2, 3.5, 4, 5.5], [3.5, 5.5, 7.5], 1180591620717411303425, 1.1805916207174113e+21]	def disagree(x) = x + 1\n            def unstable(x, y) = x + y\n    
 a31930a9e915d99cf23e80f66584373b	["m0", 420, 21, "m0", 0, 4, 109, 30, 777, 5, 880, 24, "argerr", "NoMethodError", "m0", 70, 0]	class C\n          def m0; "m0"; end\n          def m1(a); a * 10; end\n  
+a31d9a27768b00a22860cc50caf2803a	[["target", "mine:t"], "target"]	class S; def t = "target"; end\n        o = S.new\n        out = []\n     
 a325e684a0135d4aab296b6018ac921e	[true, true]	class Sub < String; end\n        [Sub.new("b").between?("a", "c"), Sub.a
 a32adc46f1bb4ed6ce92840c775bbf19	""	"".upcase
 a32db795d17419028fabd7b655b6becb	"bar"	class Foo\n              def bar; "bar"; end\n              alias :'b
@@ -2335,6 +2344,7 @@ a88bdad4ba8d9e033a1c6a53c309f4ea	["42", 100]	class C\n          def [](idx)\n   
 a893feccfcbaee91bc5522b1657fcd1f	[true, true, false, nil]	ENV["MONORUBY_ENV_TEST_HV"] = "uniq_v_9999"\n            r = [\n     
 a8a0ba72dab0adb84480e368a4e097dd	[301, 1, 9999]	s = { 9999 => 1 }; h = { 0 => 0, 1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6,
 a8a204fa65005f1986e0577c71740024	[100, 200]	def f(&blk)\n          $res << blk.call\n        end\n        \n\n        $r
+a8a7aefd3abc010b7b687c3cf51ea490	["v5w", "ab", "cd", "eee", "5y", "long zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz tail"]	x = 5\n        res = nil\n        i = 0\n        while i < 3000\n          
 a8ba12681e022f58d203e578e86db197	[true, true, false, false]	class Foo; def ==(other); other == 42; end; end\n            \n[42 ==
 a8c21cc1d90e2fb1a53cf94a2f4d4a2a	[21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError", 21, "ArgumentError"]	def g(a) = a * 3\n        def f(...) = g(...)\n        \n\n        $r = []\n
 a8d3b539aad843935d7deedb87352417	23100	def mk(n) = ->{ n += 1 }\n            fs = (1..150).map { |i| mk(i) 
@@ -2720,6 +2730,7 @@ c18661906ca2e772fdad430ac1e5b9bb	[true, true]	a = -49.52\n            id = a.obj
 c197a049cd35567cfceeaf1bd6c3713f	["path name contains null byte", :no_raise, "path name contains null byte", "path name contains null byte"]	%w[entries foreach children].map { |m|\n              begin\n        
 c19bc4eec6fab3848d5a490d13f7ba1c	["5:in 'Object#inner'", "10:in 'Object#outer'", "11:in '<main>'"]	def inner\n          begin\n            raise "x"\n          rescue => e\n 
 c1acb2e84caf5248f3e686e286fabd3b	[1, true]	base = "/tmp/monoruby_dir_brace_#{Process.pid}_#{rand(100000)}"\n   
+c1b0b041f162a6888b897fc7f16b1ba3	["hello", "Jello!"]	res = []\n        i = 0\n        while i < 30000\n          s = "hello"\n  
 c1b37b0c67caf29fc851a4986dea8d03	0	class MyAry; def to_ary; [1,2,3]; end; end\nobj = MyAry.new\n([1,2,3] <=> obj)
 c1b8f9f9b21272f2e4d55644d9a62241	20	f = lambda { _1 * 10 }; f.call(2)
 c1bb063ef8447e04a64c4c5e22ad4b5c	100	class C\n              D ||= 100\n              D\n            end\n   
@@ -2747,6 +2758,7 @@ c36b1e25498098fb5ed62d696afcb18a	[true, true, true, true, true, true, true, true
 c371620ea2df438989e85db786cb3351	[true, true]	GC.config(rgengc_allow_full_mark: false)\n            begin\n        
 c374efe593f3736150bcf4d3b491c4f6	:te2	ar = Object.new; def ar.to_ary; 5; end; begin; [1].product(ar); rescue TypeError
 c395a855a07a1b6fc115ed058695bea2	"İSTANBUL"	"istanbul".upcase(:turkic)
+c39ca0d357f60118a6330a5340168ab0	["mm:nope:2"]	class M\n          def method_missing(name, *a) = "mm:#{name}:#{a.size}"
 c3a07328ee0431ca943190fff38d871d	[1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034]	class A\n          def m(a, b) = a * 10 + b\n        end\n        class B 
 c3bd239c90e457c144a5f47e376ddfee	[true, false, 42]	c = Class.new { attr :foo }\n            i = c.new\n            i.ins
 c3ca1c783780c3d76d7669a9f4d0d745	[true, 5]	class PSubA < Proc; end; p = PSubA.new { 5 }; [p.is_a?(PSubA), p.call]
@@ -2881,6 +2893,7 @@ ccd878c1f1810dfef13a53d1e1a05fb8	:te	begin; :sym.instance_eval { alias :foo :to_
 ccdd40701f9797edf931ec9bb16c3abf	[:alpha, 1.5, :beta, 2.5]	class PmF\n          def tag = :alpha\n          def rate = 1.5\n        e
 ccebcacf1f0e521c283f27ea3d09e042	[[[:hit, 1], [:miss, 299]], :hit, :miss, :hit, :hit, :miss]	def probe(prev, key)\n              if prev == key\n                :
 ccee79e211a63a6f8408eaaa13a6aee9	[{a: 1}, [1, {a: 1}], {}, "no implicit conversion of Object into Hash", "can't convert Object to Hash (Object#to_hash gives Integer)"]	def f(**o) = o\n            def g(a, **o) = [a, o]\n            m = O
+ccf76894a3fb54890c63d16592556fa7	["pub0", "pri", "pro", 3, 42, "pub9", "pub1"]	class C\n          def pub(x) = "pub#{x}"\n          private def pri = "p
 cd2701bc81848b76a6ea4326a7d33198	[[[:eq, 1], [:hit, 2], [:miss, 598], [:ne, 299]], :hit, :eq, :hit, :miss, :hit, :miss]	def hit(prev, key)\n              if prev == key then :hit else :mis
 cd29ece16f52c170d36a353d72be8fb8	[1, 2, [3, 4, 5, 6, 7]]	def f(x,y,*z)\n            [x,y,z]\n        end\n        \n\n        f(1,2,3
 cd2df73dc4bb642c9c1db8166dee2691	true	t = File.birthtime("Cargo.toml") rescue :unsupported\n            t 
@@ -2990,6 +3003,7 @@ d506260ac377e92b5498fb8e6ec73750	true	GC.stat(nil).is_a?(Hash)
 d51949e16f4c8e33f4baabff8fb4b4dc	[[72, 104, 104], [73, 104, 104]]	src = "hello world"\n        out = []\n        20.times do |k|\n          
 d52efc39591dfa6b41cc1b74f647a5cf	["ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError"]	def g(a, b) = a + b\n        def f(...) = g(10, 20, 30, ...)\n        \n\n 
 d55e1c488a964698d1d9d4f121c8d95c	[["UTF-8", nil, nil, nil], ["ISO-8859-1", "nil"], ["ISO-8859-1", "UTF-8"], ["ISO-8859-1", "UTF-8"], ["UTF-8", "ISO-8859-1"], "nil", "ISO-8859-1", "ISO-8859-1", :tohash_ok, :blockresult, [true, true], [true, true], :inner_close_ok, [MrbPipeSub, MrbPipeSub], [:init, :init], [MrbPipeSub2, MrbPipeSub2], "through\\n"]	r = []\n            IO.pipe { |a, b| r << [a.external_encoding&.to_s
+d56a453681c730611b776454bf5d0efe	[["P1", "P2", "P3"]]	class P1; def go = "P1"; end\n        class P2; def go = "P2"; end\n     
 d56f2419ff718092d450e601c3289b76	[nil, "a\\nb"]	$/ = nil; s = "a\\nb"; r = [s.chomp!, s]; $/ = "\\n"; r
 d580dc9cae27404632621b762b7de5a8	""	f = File.open("/dev/null")\n            f.read\n        
 d596c9980b2a827151179a99b5e3af5e	{"amount" => 1}	M = Data.define(:amount, :unit)\nM.new(1, "m").deconstruct_keys(["amount"])
@@ -3111,6 +3125,7 @@ de246ca85dbac4cf3bf0eb1e991fd929	["example.comx", false, false, nil, "example.co
 de380c92af41a21d06d2ec9ba8e97c01	[1, 2, 42]	def f\n          yield [1,2]\n        end\n        \n\n        f { |a,b,c=42
 de387ac8bf934d8f07086b9e2b4a50ed	42	$. = 42; $.
 de3f2322030d1ec856a9f41781bd41a8	[[:amount, :unit], [:amount, :unit]]	M = Data.define(:amount, :unit)\n[M.members, M.new(1, "m").members]
+de44f763080ccc11f63701bb376ae44c	[{"key" => 2}, 2, true, true, -1, true]	h = {}\n        i = 0\n        while i < 3000\n          h = {}\n          
 de45ad555f2bc9cedadc3fa83f510527	:timeout_ok	m = Mutex.new\n            cv = ConditionVariable.new\n            m.
 de521c9dde3d5c4cdfdcda53477a4a7a	[7, 11, [:v, :v=, :w, :w=]]	c = class A\n          def f(x,y)\n            @v = x\n            @w = y\n
 de57150bfa4b34df0976085e285fdbdc	[5.5, 15.0, 33.75, 1]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
@@ -3215,6 +3230,7 @@ e593b3ab51cf8529ec2abe41389fbd41	[2, 2, 2, "Times-Roman", nil, 2, nil]	def f(x)\
 e5949e2a7f7ad7762866cb540934d760	[4, 1, 7]	r = []\n        store_me = proc { |i| r << i if (i == 4)..(i == 7) }\n   
 e5a3f82fe99eb062a625f7d7fad989ef	[91, 112, 97]	f = File.open("Cargo.toml")\n            begin\n              [f.getb
 e5b6caddf0926a77ca0debe16a0d139d	:linux	def f(x); end\n            f(:windows)\n            a = :linux\n      
+e5e0bd691c34bf90bff88a5a70e2ac6f	[1, 2, 3, "hi"]	class N; def f(x) = x + 1; end\n        class Bare < BasicObject; def hi
 e5f22b981e4a6ed9bfbde224b1a43306	"constant"	module AutoloadProbe\n          autoload :Bar, "/nonexistent/probe/file"
 e5fbcacb7034291e96616d4e0bf14525	[111, 999]	TOP_CONST = 999\n        class C\n          TOP_CONST = 111\n          def
 e60570cf39218d754a8da43cd162e6df	[1, 2, 3]	class C; def to_int; 3; end; end; o = C.new\n[1,2,3,4,5].take(o)
@@ -3429,6 +3445,7 @@ f4ae9a977bb37e4a32deda5423c008ac	[[[], {}], false, [[{}], {}], [[], {a: 1}], [[{
 f4b80b82bc111558b4b507c564b821d2	[2, 5, nil, nil, nil, 5, 2, 5, nil, 0, 3, 1, 1, 2, 0, nil, false, 0, 6, nil, nil, 6, 0, nil, nil, nil, nil, 1, nil]	r = []\n        e = "aあいうbい".encode("EUC-JP")\n        i = "い".encode("EU
 f4cc159c69dc86f34d5c5c1a1739908b	nil	$!\n        
 f4dbd65859826724c9fb5648c3f84c3a	[:re]	def m\n              re = /(?<matched>foo)/\n              re =~ "foo
+f4dc835b8d345b2785add9766e7079ba	[[0, 0, "UTF-8", true, true], [1, 1, "UTF-8", true, true], [3, 3, "UTF-8", true, true], [1, 1, "ASCII-8BIT", true, false], [3, 1, "UTF-8", true, false], [15, 5, "UTF-8", true, false], [2, 1, "UTF-8", true, false], [31, 31, "UTF-8", true, true], [32, 32, "UTF-8", true, true], [33, 33, "UTF-8", true, true], [27, 9, "UTF-8", true, false]]	strs = ["", "a", "abc", "\\xff".b, "あ", "あいうえお", "é",\n                "a
 f4e35e264294b3bd8913c077f24dea7a	[{"a" => 10, "b" => 20}, {1 => :a, 2 => :b}, {}]	h = { a: 1, b: 2 }\n            [h.to_h { |k, v| [k.to_s, v * 10] },
 f4ef37c05309c4811b6d78d2a1b7c9ce	[true, true]	S = Struct.new(:a, :b)\n            \n\n            a = S.new(1, "x")\n
 f4f168f8c67128f9b1bc02c608e68a9c	[[[false, 499], [true, 101]], true, true]	def probe(a, b) = (a == b)\n            res = []\n            300.tim
@@ -3474,6 +3491,7 @@ f7def5e956befcf960758ab5702f9e69	[[["x", "y"]], ["x"]]	cls = Class.new(Hash) do\
 f7e776bb10e4af66fcf286090cd8667f	[[[[:a, 1], [:b, 2]], [39, 117], [[:x, 1], [:y, 2]], []], 2, 40, 2, 0]	def entries(h)\n              return h.to_a unless h.respond_to?(:__
 f7e9c268010e0b7cba0749999aca06e9	Array	class C < Array; end\nC[1,nil,2].compact.class
 f7fda309a2cddb02c53a68d5e37f646d	:OVERRIDDEN	class Complex; def -(o); :OVERRIDDEN; end; end; Complex(1,2) - Complex(3,4)
+f81854bec21fe00c6e876874a85101a2	[["xyz", "xy", "xy"], 3, "xy", "xy"]	a = []\n        i = 0\n        while i < 3000\n          a = []\n          
 f82a7e53e5b4c9005508afdb8ccf08bd	["Shift_JIS", "Shift_JIS", [130, 160]]	s = "\\x82\\xa0".dup.force_encoding(Encoding::Shift_JIS); r = Regexp.new(s);\n     
 f84400191eda84ab1fc835694d236552	[:bar, [{a: 1, b: 2}]]	class Foo\n              def method_missing(name, *args)\n           
 f846da7a353005966938355c81f0122a	""	f = File.open("/dev/null", "r+")\n            f.read(nil)\n        

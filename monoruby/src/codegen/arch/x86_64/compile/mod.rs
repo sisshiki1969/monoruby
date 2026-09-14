@@ -1646,6 +1646,9 @@ impl Codegen {
         v: Value,
         using_fpr: UsingFpr,
     ) -> bool {
+        if self.emit_inline_string_lit(v, using_fpr) {
+            return true;
+        }
         let Some(elems) = v
             .inline_copyable_array()
             .filter(|_| !self.alloc_free_head_addr.is_null())
@@ -1668,6 +1671,65 @@ impl Codegen {
             }
         }
         monoasm! { &mut self.jit,
+            jmp  cont;
+        slow:
+        }
+        self.deepcopy_literal(v, using_fpr);
+        monoasm! { &mut self.jit,
+        cont:
+        }
+        true
+    }
+
+    ///
+    /// A String literal whose bytes fit the copy's own inline buffer:
+    /// allocate the cell and write the bytes, encoding and code range
+    /// straight into it, instead of calling `value_deep_copy`. String
+    /// literals were the one common literal without this path — an
+    /// Array or Hash literal costs ~10 ns and an empty *string* literal
+    /// cost 41, all of it the call and the generic copy's dispatch.
+    ///
+    /// Returns false when the shape does not qualify, leaving the
+    /// caller to emit whatever it would have.
+    ///
+    fn emit_inline_string_lit(&mut self, v: Value, using_fpr: UsingFpr) -> bool {
+        if self.alloc_free_head_addr.is_null() {
+            return false;
+        }
+        // `value_deep_copy` records each copy's origin under
+        // `--debug-frozen-string-literal`; this path cannot, so it
+        // stands aside while that is on.
+        if crate::value::debug_frozen_string_log() {
+            return false;
+        }
+        let Some((bytes, ty, cr)) = v.inline_copyable_string() else {
+            return false;
+        };
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        // The header carries the template's class, type and
+        // frozen/chilled bits, read at run time (`NewbornOf`).
+        self.emit_alloc_cell(CellHeader::NewbornOf(v.id()), &slow);
+        monoasm! { &mut self.jit,
+            movq [rax + (RVALUE_OFFSET_VAR)], 0;  // var_table = None
+            // The inline `SmallVec`'s capacity slot holds its length.
+            movq [rax + (RVALUE_OFFSET_ARY_CAPA)], (bytes.len() as i32);
+        }
+        // Whole words, zero-padded past the end: the tail bytes sit
+        // beyond the recorded length inside the same inline buffer.
+        for (k, chunk) in bytes.chunks(8).enumerate() {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            let off = RVALUE_OFFSET_INLINE as i32 + (k as i32) * 8;
+            let w = u64::from_le_bytes(word);
+            monoasm! { &mut self.jit,
+                movq rcx, (w);
+                movq [rax + (off)], rcx;
+            }
+        }
+        monoasm! { &mut self.jit,
+            movb [rax + (crate::rvalue::STRING_TY_OFFSET)], (ty as u64);
+            movb [rax + (crate::rvalue::STRING_CR_OFFSET)], (cr as u64);
             jmp  cont;
         slow:
         }

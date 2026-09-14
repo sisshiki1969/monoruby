@@ -2517,6 +2517,10 @@ impl Value {
         self.try_rvalue()?.inline_copyable_array()
     }
 
+    pub(crate) fn inline_copyable_string(&self) -> Option<(Vec<u8>, u8, u8)> {
+        self.try_rvalue()?.inline_copyable_string()
+    }
+
     pub(crate) fn try_array_ty(&self) -> Option<Array> {
         let rv = self.try_rvalue()?;
         match rv.ty() {

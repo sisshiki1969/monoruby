@@ -56,7 +56,7 @@ pub(super) fn init(globals: &mut Globals) {
         Effect::EVAL,
     );
 
-    globals.define_builtin_inline_funcs_with_kw(
+    let send_fid = globals.define_builtin_inline_funcs_with_kw(
         BASIC_OBJECT_CLASS,
         "__send__",
         &[],
@@ -68,6 +68,7 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         true,
     );
+    globals.store.record_object_send_fid(send_fid);
     globals.define_builtin_func(OBJECT_CLASS, "freeze", freeze, 0);
     globals.define_builtin_inline_func(
         OBJECT_CLASS,
