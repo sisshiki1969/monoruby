@@ -302,6 +302,10 @@ impl Codegen {
         {
             let wb = wb.clone();
             let bb_label = frame.resolve_label(&mut self.jit, bb);
+            #[cfg(feature = "deopt")]
+            let exit_id = crate::codegen::jitgen::deopt_log::register_exit(
+                crate::codegen::jitgen::deopt_log::DeoptExit::Deopt { chain },
+            );
             self.a64_gen_deopt(
                 pc,
                 &wb,
@@ -309,6 +313,8 @@ impl Codegen {
                 frame.loop_jit_spill_bytes,
                 frame.base_stack_offset,
                 chain,
+                #[cfg(feature = "deopt")]
+                exit_id,
             );
             return;
         }
@@ -537,6 +543,7 @@ impl Codegen {
         loop_jit_spill_bytes: usize,
         base: usize,
         chain: u32,
+        #[cfg(feature = "deopt")] exit_id: u32,
     ) {
         self.jit.bind_label(entry);
         // Write back FIRST, while the loop sp-bump still keeps sp below the
@@ -546,6 +553,14 @@ impl Codegen {
         // `side_exit_with_label` and doc/regalloc_separation.md §39).
         self.a64_gen_write_back_for_deopt(wb, base);
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
+        // Same position as the x86 twin: after the write-back, with nothing
+        // live in registers, and before the chain walk.
+        #[cfg(any(feature = "deopt", feature = "profile"))]
+        self.a64_call_log_deoptimize(
+            pc,
+            #[cfg(feature = "deopt")]
+            exit_id,
+        );
         // Chain escalation (`doc/chain_deopt.md` §5 step 4): convert this
         // compilation unit's `chain` suspended frames before this frame
         // resumes in the interpreter. After the write-back, so the frame is
@@ -559,6 +574,30 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x21, (pc_ptr);
             b fetch;
+        );
+    }
+
+    /// `log_deoptimize(vm, globals, pc[, exit_id])`, which feeds the `deopt`
+    /// log and the `profile` deopt table. x19 holds `&mut Executor` and x20
+    /// `&mut Globals`.
+    #[cfg(any(feature = "deopt", feature = "profile"))]
+    fn a64_call_log_deoptimize(&mut self, pc: BytecodePtr, #[cfg(feature = "deopt")] exit_id: u32) {
+        let f = crate::globals::log_deoptimize as *const () as u64;
+        let pc_ptr = pc.as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            mov x2, (pc_ptr);
+        );
+        #[cfg(feature = "deopt")]
+        monoasm_arm64!(&mut self.jit,
+            mov x3, (exit_id as u64);
+        );
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;              // save LR (16-aligned)
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;                // restore LR
         );
     }
 
@@ -1876,20 +1915,32 @@ impl Codegen {
                 entry,
                 loop_jit_spill_bytes,
                 base,
-                // aarch64 handlers do not call `log_deoptimize` (they never
-                // have), so the exit id is recorded but unused here.
                 #[cfg(feature = "deopt")]
-                    exit_id: _,
+                exit_id,
             } => match kind {
-                LSideExitKind::Deopt { chain } => {
-                    self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
-                }
-                LSideExitKind::Evict => {
-                    // Never escalates: the handler is only reached through a
-                    // chain-wide eviction walk that already converted every
-                    // suspended frame in one pass.
-                    self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, 0)
-                }
+                LSideExitKind::Deopt { chain } => self.a64_gen_deopt(
+                    pc,
+                    &wb,
+                    entry,
+                    loop_jit_spill_bytes,
+                    base,
+                    chain,
+                    #[cfg(feature = "deopt")]
+                    exit_id,
+                ),
+                // Never escalates: the handler is only reached through a
+                // chain-wide eviction walk that already converted every
+                // suspended frame in one pass.
+                LSideExitKind::Evict => self.a64_gen_deopt(
+                    pc,
+                    &wb,
+                    entry,
+                    loop_jit_spill_bytes,
+                    base,
+                    0,
+                    #[cfg(feature = "deopt")]
+                    exit_id,
+                ),
                 // A monomorphically-compiled site (e.g. a `BinCmp`) whose
                 // receiver-class guard missed because it went polymorphic.
                 // Route the miss through the same counter-gated recompiler the
@@ -1930,7 +1981,16 @@ impl Codegen {
                         );
                     }
                     self.emit_recompile_deopt(target, &deopt_body, Some(&error_body), reason);
-                    self.a64_gen_deopt(pc, &wb, deopt_body, loop_jit_spill_bytes, base, chain);
+                    self.a64_gen_deopt(
+                        pc,
+                        &wb,
+                        deopt_body,
+                        loop_jit_spill_bytes,
+                        base,
+                        chain,
+                        #[cfg(feature = "deopt")]
+                        exit_id,
+                    );
                     self.a64_gen_handle_error(pc, &wb, error_body, loop_jit_spill_bytes, base, chain);
                 }
                 LSideExitKind::Error { chain } => {

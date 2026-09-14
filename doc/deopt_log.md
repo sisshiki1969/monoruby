@@ -109,7 +109,17 @@ Everything here is `cfg(feature = "deopt")`. Normal builds emit byte-identical
 code: `deopt_label` compiles to the bare handler label and the `cause`
 argument is discarded. `profile`-only builds keep their original call site.
 
-aarch64 is out of scope, unchanged: `a64_gen_deopt` has never called
-`log_deoptimize`, so aarch64 `deopt` builds print nothing. Adding it later is
-a contained job — x19/x20/x21 mirror rbx/r12/r13, and the trampoline becomes
-`str x_cause,[x19,#CAUSE]; mov w12,#id; str w12,[x19,#SITE]; b deopt`.
+aarch64 records every deopt but not the branch that took it. `a64_gen_deopt`
+calls `log_deoptimize` at the x86 position (after the write-back, before the
+chain walk), so `deopt` builds print each record with its bytecode index and
+exit kind, and `profile` builds fill the deoptimization table. There are no
+trampolines, so every aarch64 record reads
+`guard: unknown (handler entered without a trampoline)`.
+Until the call existed, an aarch64 guard that failed on every execution was
+invisible to both builds.
+
+The trampoline cannot be copied from x86 as is. x86 parks it on the cold
+page; aarch64 guards reach their handlers with `tbz`/`tbnz` (±32 KiB), which
+is why the handlers are emitted as islands within reach
+(`a64_thunk_side_exits`), and a cold-page trampoline would be out of range.
+A port has to place the trampolines in the same islands as the handlers.
