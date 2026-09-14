@@ -28,7 +28,9 @@ module Digest
     end
   end
 
-  # Class-level (one-shot) API shared by every algorithm.
+  # Class-level (one-shot) API shared by every algorithm. As in CRuby,
+  # `Digest::Class` includes `Digest::Instance` (so `OpenSSL::Digest`,
+  # which subclasses it, has the instance API and the same ancestry).
   class Class
     def self.digest(str, *args)
       new(*args).update(str).digest!
@@ -129,10 +131,12 @@ module Digest
     end
   end
 
+  class Class
+    include Instance
+  end
+
   # Base class for the buffered algorithm implementations.
   class Base < Digest::Class
-    include Instance
-
     def initialize
       @buffer = ''.b
     end

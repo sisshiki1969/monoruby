@@ -1,3 +1,9 @@
+# Every member read / write below goes through the private `__slot_get`
+# / `__slot_set` builtins (the raw slot vector), not the member
+# accessors: CRuby's `Struct#to_a` / `#[]` / `#each` / ... read
+# `RSTRUCT_GET` directly, so a subclass overriding an accessor (Rails'
+# `ParamsWrapper::Options#name` computes a default over `to_h`) still
+# sees the stored value here.
 class Struct
   include Enumerable
 
@@ -12,7 +18,7 @@ class Struct
   # otherwise.
   def each
     return to_enum(:each) { size } unless block_given?
-    members.each { |m| yield send(m) }
+    size.times { |i| yield __slot_get(i) }
     self
   end
 
@@ -26,16 +32,16 @@ class Struct
     # `s.each_pair.map { |pair| pair }` both behave correctly — the
     # latter reaches here through Enumerable's internal `|*vs|` block.
     if blk.arity > 1
-      members.each { |m| yield m, send(m) }
+      members.each_with_index { |m, i| yield m, __slot_get(i) }
     else
-      members.each { |m| yield [m, send(m)] }
+      members.each_with_index { |m, i| yield [m, __slot_get(i)] }
     end
     self
   end
 
   # Array of values, in member order.
   def to_a
-    members.map { |m| send(m) }
+    Array.new(size) { |i| __slot_get(i) }
   end
   alias values to_a
   alias deconstruct to_a
@@ -62,11 +68,12 @@ class Struct
       i += size if i < 0
       raise IndexError, "offset #{key} too small for struct (size:#{size})" if i < 0
       raise IndexError, "offset #{key} too large for struct (size:#{size})" if i >= size
-      send(members[i])
+      __slot_get(i)
     elsif key.is_a?(Symbol) || key.is_a?(String)
       sym = key.to_sym
-      raise NameError, "no member '#{key}' in struct" unless members.include?(sym)
-      send(sym)
+      i = members.index(sym)
+      raise NameError, "no member '#{key}' in struct" unless i
+      __slot_get(i)
     else
       raise TypeError, "no implicit conversion of #{key.class} into Integer"
     end
@@ -79,11 +86,12 @@ class Struct
       i += size if i < 0
       raise IndexError, "offset #{key} too small for struct (size:#{size})" if i < 0
       raise IndexError, "offset #{key} too large for struct (size:#{size})" if i >= size
-      send("#{members[i]}=", value)
+      __slot_set(i, value)
     elsif key.is_a?(Symbol) || key.is_a?(String)
       sym = key.to_sym
-      raise NameError, "no member '#{key}' in struct" unless members.include?(sym)
-      send("#{sym}=", value)
+      i = members.index(sym)
+      raise NameError, "no member '#{key}' in struct" unless i
+      __slot_set(i, value)
     else
       raise TypeError, "no implicit conversion of #{key.class} into Integer"
     end
@@ -102,7 +110,7 @@ class Struct
         last += size if last < 0
         last -= 1 if idx.exclude_end?
         (first..last).each do |i|
-          result << (i < size ? send(members[i]) : nil)
+          result << (i < size ? __slot_get(i) : nil)
         end
       else
         i = if idx.is_a?(Integer)
@@ -121,7 +129,7 @@ class Struct
         elsif adj >= size
           raise IndexError, "offset #{i} too large for struct(size:#{size})"
         end
-        result << send(members[adj])
+        result << __slot_get(adj)
       end
     end
     result
@@ -136,11 +144,11 @@ class Struct
         if idx < 0 || idx >= size
           nil
         else
-          send(members[idx])
+          __slot_get(idx)
         end
       elsif key.is_a?(Symbol) || key.is_a?(String)
-        sym = key.to_sym
-        members.include?(sym) ? send(sym) : nil
+        idx = members.index(key.to_sym)
+        idx ? __slot_get(idx) : nil
       else
         # Mirror Struct#[] coercion path; unsupported types raise TypeError.
         self[key]
@@ -159,11 +167,11 @@ class Struct
     h = {}
     keys.each do |k|
       if k.is_a?(Symbol) || k.is_a?(String)
-        sym = k.to_sym
-        return h unless members.include?(sym)
+        idx = members.index(k.to_sym)
+        return h unless idx
         # Preserve the caller-supplied key (Symbol stays Symbol, String
         # stays String) per CRuby `rb_struct_deconstruct_keys`.
-        h[k] = send(sym)
+        h[k] = __slot_get(idx)
       else
         i = if k.is_a?(Integer)
               k
@@ -178,7 +186,7 @@ class Struct
         idx += size if idx < 0
         return h if idx < 0 || idx >= size
         # Position numbers are returned AS the original key in the output.
-        h[k] = send(members[idx])
+        h[k] = __slot_get(idx)
       end
     end
     h

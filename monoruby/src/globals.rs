@@ -237,6 +237,12 @@ pub(crate) fn noinline_gen(
 pub(crate) const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 
+/// Offset (from `&Globals`) of the data pointer of the class-object mirror
+/// (`ClassInfoTable::objects`): `*const Option<Module>` indexed by
+/// `ClassId`, read by the JIT's inline `Module#===` superclass walk.
+pub(crate) const GLOBALS_CLASS_OBJECTS: usize =
+    std::mem::offset_of!(Globals, store.classes.objects) + MONOVEC_PTR;
+
 /// Internal gvar name used by bytecodegen to save/restore `$!`
 /// (`Executor::errinfo`). `$!` itself is read-only from Ruby, so the
 /// generated save/restore code writes through this hooked alias instead;
@@ -348,6 +354,16 @@ pub struct Globals {
     encoding_objects: HashMap<crate::value::rvalue::Encoding, Value>,
     /// library directries.
     load_path: Value,
+    /// `lib/` directories of the host's installed (non-default) gems,
+    /// consulted by `require` only after `$LOAD_PATH` misses. CRuby does
+    /// not list them in `$LOAD_PATH` either: rubygems activates a gem on
+    /// demand and only then splices its `lib/` in. Keeping them out of
+    /// the visible array lets `Bundler.setup` (which prepends the
+    /// bundle's paths) win over every other installed version of a gem,
+    /// and keeps `$LOAD_PATH` scans (`$LOAD_PATH.detect { … }`) from
+    /// landing on an unrelated gem. A hit here is appended to
+    /// `$LOAD_PATH`, like an activation.
+    gem_lib_dirs: Vec<String>,
     /// standard PRNG
     random: Box<Prng>,
     /// `$LOADED_FEATURES` / `$"` — Array of canonicalised paths
@@ -784,6 +800,7 @@ impl Globals {
             encoding_of_object: HashMap::default(),
             encoding_objects: HashMap::default(),
             load_path: Value::array_empty(),
+            gem_lib_dirs: vec![],
             random: Box::new(Prng::new()),
             loaded_features,
             loading_features: std::collections::HashMap::default(),
@@ -942,12 +959,33 @@ impl Globals {
         // Skip blank lines (the cache file ends with a newline): an
         // empty `$LOAD_PATH` entry would make bare `require`s resolve
         // against the CWD, which CRuby forbids for security.
-        let list: Vec<_> = path_list
+        //
+        // The cached list is the host's `$LOAD_PATH` followed by every
+        // installed gem's `lib/` (see `ruby_probe`). Only the former goes
+        // into `$LOAD_PATH`; a gem `lib/` — anything under a gem root's
+        // `gems/` or `bundler/gems/` — is kept aside as a `require`
+        // fallback (`Store::gem_lib_dirs`).
+        let gem_roots: Vec<String> = std::env::var("GEM_PATH")
+            .map(|s| {
+                s.split(':')
+                    .filter(|r| !r.is_empty())
+                    .map(|r| r.trim_end_matches('/').to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let is_gem_lib = |dir: &str| {
+            gem_roots.iter().any(|root| {
+                dir.starts_with(&format!("{root}/gems/"))
+                    || dir.starts_with(&format!("{root}/bundler/gems/"))
+            })
+        };
+        let (gem_libs, list): (Vec<String>, Vec<String>) = path_list
             .split('\n')
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .collect();
+            .partition(|s| is_gem_lib(s));
         globals.extend_load_path(list.iter().cloned());
+        globals.gem_lib_dirs = gem_libs;
 
         // set constants
         let pcg_name = env!("CARGO_PKG_NAME");
@@ -1037,8 +1075,43 @@ impl Globals {
     }
 
     pub fn new_test() -> Self {
+        Self::pin_test_nss_to_files();
         Globals::new(1, false, true)
     }
+
+    /// On glibc hosts, pin the test process's passwd/group NSS lookups
+    /// to the `files` service. The differential tests probe nonexistent
+    /// users and groups (`Etc.getpwnam` errors, `~no_such_user`
+    /// expansion, `Process.groups=` by unknown name), and any NSS
+    /// service listed after `files` turns each such miss into that
+    /// service's timeout — WSL2's nss-systemd waits out systemd's
+    /// 45-second varlink timeout per miss, which alone put five tests
+    /// at 90-136 s. Existing entries resolve from `files` identically;
+    /// only the miss path changes, only inside this process (the
+    /// host's nsswitch.conf is untouched), and only for test Globals.
+    /// Must run before the process's first passwd/group lookup — glibc
+    /// parses nsswitch.conf once per database on first use.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn pin_test_nss_to_files() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            unsafe extern "C" {
+                fn __nss_configure_lookup(
+                    dbname: *const std::ffi::c_char,
+                    string: *const std::ffi::c_char,
+                ) -> std::ffi::c_int;
+            }
+            // SAFETY: both arguments are valid NUL-terminated C strings;
+            // the glibc extension only records the override.
+            unsafe {
+                __nss_configure_lookup(c"passwd".as_ptr(), c"files".as_ptr());
+                __nss_configure_lookup(c"group".as_ptr(), c"files".as_ptr());
+            }
+        });
+    }
+
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    fn pin_test_nss_to_files() {}
 
     pub fn locals_len(&self, func_id: FuncId) -> usize {
         match self.store[func_id].kind {
@@ -1115,12 +1188,44 @@ impl Globals {
         // re-materializes the exception and derives its implicit cause
         // from it, so the handler-time materialization must not replace it.
         let unwind_errinfo = executor.errinfo();
-        if let Err(err) = &res
-            && !matches!(err.kind(), MonorubyErrKind::SystemExit(_))
-        {
-            executor.set_error(err.clone());
-            let err_val = executor.take_ex_obj(self);
-            executor.set_errinfo(err_val);
+        // The main script's frame is gone by now, so the only thing that
+        // still refers to its result — and, once the block below replaces
+        // `$!`, to the unwind-time errinfo — is a Rust local, which the
+        // collector does not scan. Everything from here down to the
+        // exception materialization runs arbitrary Ruby: `at_exit` blocks,
+        // `ObjectSpace` finalizers, and the ensure clauses of the threads
+        // `terminate_all` kills. Every allocation in there is a safepoint,
+        // so both have to be rooted on the temp stack for that stretch;
+        // otherwise a collection sweeps them and the caller is handed a
+        // recycled cell.
+        //
+        // `Tempfile` is the everyday way in: it registers a finalizer, so
+        // any script that opens one runs Ruby after its own result has
+        // been computed. Found by gc-stress, which collects at every
+        // safepoint and so hits this on the first allocation a finalizer
+        // makes.
+        //
+        // An `Err` carries `Value`s of its own — the re-raised exception
+        // object, an explicit `cause:`, a kind's payload, a NoMethodError
+        // receiver, a KeyError's receiver and key — and they are in the
+        // same Rust local, so they need the same rooting. The
+        // materialization below happens to cover most of them while the
+        // handlers run (it hangs them off the exception object it puts in
+        // `$!`), but that lapses at the `set_errinfo` restore, with
+        // `terminate_all` still to run Ruby and the report below still to
+        // dereference them. Root them outright instead of relying on that.
+        let root_len = executor.temp_len();
+        if let Ok(v) = &res {
+            executor.temp_push(*v);
+        }
+        executor.temp_push(unwind_errinfo);
+        if let Err(err) = &res {
+            err.for_each_value(|v| executor.temp_push(v));
+            if !matches!(err.kind(), MonorubyErrKind::SystemExit(_)) {
+                executor.set_error(err.clone());
+                let err_val = executor.take_ex_obj(self);
+                executor.set_errinfo(err_val);
+            }
         }
         let handler_status = executor.run_exit_handlers(self);
         executor.set_errinfo(unwind_errinfo);
@@ -1177,6 +1282,9 @@ impl Globals {
             }
             other => other,
         };
+        // Nothing Ruby-level runs past this point, so the roots taken
+        // before the exit handlers can go.
+        executor.temp_clear(root_len);
         // An exit status chosen by the handlers themselves (a
         // `SystemExit` raised in one, or status 1 after an uncaught
         // handler exception) overrides the script's own. The script's

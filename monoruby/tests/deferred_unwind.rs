@@ -123,3 +123,47 @@ fn a_compiled_return_inside_an_osr_loop_in_an_ensure() {
         "#,
     );
 }
+
+/// A deferred unwind's payload must survive a collection *inside* the
+/// `ensure` that deferred it. While the handler runs, the parked error is
+/// the only thing holding the returned / broken / thrown value, and
+/// `Executor::mark` reaches it solely through
+/// `Executor::deferred_unwind` → `MonorubyErr::mark`. Each case collects
+/// and then allocates in the handler, so a value left unmarked would come
+/// back as a recycled cell rather than the string it built.
+#[test]
+fn a_deferred_unwind_payload_survives_a_gc_in_the_ensure() {
+    run_test(
+        r#"
+        def ret_through_ensure
+          begin
+            return ["ret", 1].join("-")
+          ensure
+            GC.start
+            300.times { Object.new }
+          end
+        end
+        def break_through_ensure
+          [1, 2].each do |i|
+            begin
+              break ["brk", i].join("-")
+            ensure
+              GC.start
+              300.times { Object.new }
+            end
+          end
+        end
+        def throw_through_ensure
+          catch(:tag) do
+            begin
+              throw :tag, ["thr", 3].join("-")
+            ensure
+              GC.start
+              300.times { Object.new }
+            end
+          end
+        end
+        [ret_through_ensure, break_through_ensure, throw_through_ensure]
+        "#,
+    );
+}

@@ -2,12 +2,12 @@ use num::{BigInt, Zero};
 use smallvec::SmallVec;
 
 use super::*;
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 use crate::value::rvalue::{eucjp_char_width, sjis_char_width};
 #[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
 #[cfg(target_arch = "aarch64")]
 use jitgen::{AbstractState, JitContext};
-use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 //
 // String class
@@ -48,6 +48,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "<=", le, 1);
     globals.define_builtin_func(STRING_CLASS, "<", lt, 1);
     globals.define_builtin_inline_func(STRING_CLASS, "<<", shl, inline_gen2!(string_shl_gen), 1);
+    // Hidden primitive behind the Ruby-level `String#concat`/`#append`: it
+    // must not dispatch through `<<`, which a subclass may alias *to*
+    // `concat` (ActiveSupport::SafeBuffer) — that would recurse forever.
+    globals.define_builtin_func(STRING_CLASS, "__shl", shl, 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
     globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
     globals.define_builtin_funcs_with(STRING_CLASS, "[]", &["slice"], index, 1, 2, false);
@@ -167,6 +171,8 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func(STRING_CLASS, "chars", chars, 0);
     globals.define_builtin_func(STRING_CLASS, "each_char", each_char, 0);
+    globals.define_builtin_func(STRING_CLASS, "codepoints", codepoints, 0);
+    globals.define_builtin_func(STRING_CLASS, "each_codepoint", each_codepoint, 0);
     globals.define_builtin_func(STRING_CLASS, "grapheme_clusters", grapheme_clusters, 0);
     globals.define_builtin_func(
         STRING_CLASS,
@@ -274,7 +280,10 @@ pub(super) fn init(globals: &mut Globals) {
 /// is binary, and bare `String.new` inherits that default because
 /// `#initialize` without a source argument leaves self untouched).
 pub(crate) extern "C" fn string_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
-    Value::string_from_inner_with_class(RStringInner::from_encoding(b"", Encoding::Ascii8), class_id)
+    Value::string_from_inner_with_class(
+        RStringInner::from_encoding(b"", Encoding::Ascii8),
+        class_id,
+    )
 }
 
 ///
@@ -380,7 +389,6 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let h = lfp.self_val().calculate_hash(vm, globals)?;
     Ok(Value::from_hash_digest(h))
 }
-
 
 /// JIT inliner for `String#==` (and its aliases `===` / `eql?`): when the
 /// rhs class is known at JIT-compile time, the reverse-dispatch question
@@ -507,7 +515,10 @@ fn string_eq_bool(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     // user-defined `==` decide. (Note: `to_str` is *not* actually
     // called.) This lets a mock that defines both `to_str` and a
     // custom `==` exercise the fallback branch.
-    if !globals.store.no_to_str(rhs.class(), Globals::class_version()) {
+    if !globals
+        .store
+        .no_to_str(rhs.class(), Globals::class_version())
+    {
         let result =
             vm.invoke_method_inner(globals, IdentId::_EQ, rhs, &[lfp.self_val()], None, None)?;
         return Ok(result.as_bool());
@@ -811,13 +822,10 @@ fn shl_inner(
             self_.extend_from_slice_checked(encoded.as_bytes())?;
         } else {
             let bytes = codepoint_bytes(enc, ch).map_err(|e| match e {
-                CodepointErr::Invalid => MonorubyErr::rangeerr(format!(
-                    "invalid codepoint 0x{ch:X} in {}",
-                    enc.name()
-                )),
-                CodepointErr::OutOfRange => {
-                    MonorubyErr::char_out_of_range(&globals.store, other_v)
+                CodepointErr::Invalid => {
+                    MonorubyErr::rangeerr(format!("invalid codepoint 0x{ch:X} in {}", enc.name()))
                 }
+                CodepointErr::OutOfRange => MonorubyErr::char_out_of_range(&globals.store, other_v),
             })?;
             self_.extend_from_slice_checked(&bytes)?;
         }
@@ -1096,7 +1104,27 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // **character** index of the match start (CRuby returns a char
     // offset, not a byte offset, so multibyte subjects match CRuby).
     if other.is_regex().is_some() {
-        let given = self_val.as_rstring_inner().regex_view()?;
+        let s = self_val.as_rstring_inner();
+        // Native byte match for non-UTF-8 subjects with an Onigmo codec
+        // (see `String#match`); the result is the character index of the
+        // match start.
+        if s.code_range() != CodeRange::SevenBit
+            && let Some(native_enc) = RegexpInner::onigmo_encoding_for(s.encoding())
+        {
+            let regex = other.coerce_to_regexp_or_string(vm, globals)?;
+            super::regexp::check_match_encoding(&globals.store, &regex, s.encoding(), false)?;
+            vm.set_match_regex(regex.as_val());
+            let res = match regex.captures_bytes_from_pos(s.as_bytes(), self_val, native_enc, 0, vm)?
+            {
+                Some(captures) => {
+                    let start = captures.pos(0).map_or(0, |(b, _)| b);
+                    Value::integer(super::regexp::char_index_of_byte(s, start) as i64)
+                }
+                None => Value::nil(),
+            };
+            return Ok(res);
+        }
+        let given = s.regex_view()?;
         let given: &str = &given;
         // Enable zero-copy $~ haystack snapshots (CoW), which also
         // propagate the subject's encoding to $&/$`/$'/$1..$N.
@@ -1176,7 +1204,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         };
         if let Some(arg1) = lfp.try_arg(1) {
             let len = match arg1.coerce_to_int_i64(vm, globals)? {
-                0 => return Ok(Value::string_from_str("")),
+                0 => return Ok(string_substring(self_, 0, 0)),
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
             };
@@ -1293,7 +1321,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 };
                 if let Some(arg1) = lfp.try_arg(1) {
                     let len = match arg1.coerce_to_int_i64(vm, globals)? {
-                        0 => return Ok(Value::string_from_str("")),
+                        0 => return Ok(string_substring(self_, 0, 0)),
                         i if i < 0 => return Ok(Value::nil()),
                         i => i as usize,
                     };
@@ -1459,8 +1487,14 @@ fn index_assign(
         // calling `to_str` on the replacement; spec exercises this with a
         // mock that should not receive `to_str` when the match fails.
         let (start, end) = locate_regex_match(vm, &re, &lfp.self_val(), arg1_opt, globals)?;
-        let subst = arg_val.coerce_to_string(vm, globals)?;
-        replace_byte_range(globals, lfp.self_val(), start, end, &subst)?;
+        let subst = replacement_string(vm, globals, arg_val)?;
+        replace_byte_range(
+            globals,
+            lfp.self_val(),
+            start,
+            end,
+            subst.as_rstring_inner(),
+        )?;
         return Ok(arg_val);
     }
 
@@ -1472,24 +1506,47 @@ fn index_assign(
             ));
         }
         let needle = arg0_val.is_str().unwrap().to_string();
-        let subst = arg_val.coerce_to_string(vm, globals)?;
+        let subst = replacement_string(vm, globals, arg_val)?;
         let self_ = lfp.self_val();
         let lhs = self_.expect_str(globals)?;
         let pos = match lhs.find(needle.as_str()) {
             Some(p) => p,
             None => return Err(MonorubyErr::indexerr("string not matched")),
         };
-        replace_byte_range(globals, lfp.self_val(), pos, pos + needle.len(), &subst)?;
+        replace_byte_range(
+            globals,
+            lfp.self_val(),
+            pos,
+            pos + needle.len(),
+            subst.as_rstring_inner(),
+        )?;
         return Ok(arg_val);
     }
 
-    let subst = arg_val.coerce_to_string(vm, globals)?;
+    let subst_val = replacement_string(vm, globals, arg_val)?;
+    let subst_inner = subst_val.as_rstring_inner();
     let self_ = lfp.self_val();
-    // Non-UTF-8 receiver: resolve the character index/range and splice
-    // bytes via the encoding-aware `get_range` (the `&str` path below
-    // would error on EUC-JP / Shift_JIS multibyte content). `subst`
-    // is ASCII or same-encoding (compat checked above).
-    if !self_.as_rstring_inner().encoding().is_utf8_compatible() {
+    // The `&str` path below rebuilds the receiver as a Rust String and
+    // splices a `&str` into it, so it can only serve a receiver and a
+    // replacement that are both really UTF-8. Anything else takes the
+    // byte route, where `get_range` walks the declared encoding and
+    // `bytesplice_with` settles the result's encoding and code range.
+    //
+    // The two sides are judged differently. The receiver keeps its
+    // encoding, and the `&str` path would rebuild it as UTF-8, so an
+    // ASCII-only EUC-JP receiver has to stay on the byte route as much as
+    // a multibyte one: its declared encoding decides. The replacement
+    // only has to survive the trip through a `&str`, which ASCII-only
+    // bytes do whatever their encoding, and which broken UTF-8 does not:
+    // encoding alone cannot say, since ASCII-8BIT is `valid_encoding?`
+    // whatever its bytes while UTF-8 may be broken. A UTF-8 receiver
+    // holding broken bytes is no more rebuildable as a Rust String than a
+    // EUC-JP one, so its code range is asked as well.
+    let recv_inner = self_.as_rstring_inner();
+    let recv_is_utf8 = recv_inner.encoding().is_utf8_compatible() && recv_inner.is_valid_encoding();
+    let subst_is_utf8 = subst_inner.is_ascii_only()
+        || (subst_inner.encoding().is_utf8_compatible() && subst_inner.is_valid_encoding());
+    if !recv_is_utf8 || !subst_is_utf8 {
         let inner = self_.as_rstring_inner();
         let char_len = inner.char_length();
         if let Some(idx) = arg0_val.try_fixnum().or_else(|| {
@@ -1518,7 +1575,7 @@ fn index_assign(
                 1
             };
             let r = inner.get_range(start, len);
-            replace_byte_range(globals, self_, r.start, r.end, &subst)?;
+            replace_byte_range(globals, self_, r.start, r.end, subst_inner)?;
             return Ok(arg_val);
         }
         if let Some(info) = arg0_val.is_range() {
@@ -1553,10 +1610,11 @@ fn index_assign(
                 0
             };
             let r = inner.get_range(start_char, count);
-            replace_byte_range(globals, self_, r.start, r.end, &subst)?;
+            replace_byte_range(globals, self_, r.start, r.end, subst_inner)?;
             return Ok(arg_val);
         }
     }
+    let subst = subst_inner.to_str()?;
     let mut lhs = self_.expect_string(globals)?;
     let len = lhs.chars().count();
     if let Some(arg0) = arg0_val.try_fixnum() {
@@ -1718,11 +1776,32 @@ fn replace_byte_range(
     mut self_val: Value,
     start: usize,
     end: usize,
-    subst: &str,
+    subst: &RStringInner,
 ) -> Result<()> {
-    let repl = RStringInner::from_str_scanned(subst);
     let inner = self_val.as_rstring_inner_mut();
-    inner.bytesplice_with(start, end - start, &repl, &globals.store)
+    inner.bytesplice_with(start, end - start, subst, &globals.store)
+}
+
+/// The replacement of `s[...] = val`, as a Ruby string, so that its bytes
+/// survive: a Rust `String` cannot hold a byte >= 0x80 outside UTF-8, and
+/// `coerce_to_string` renders such a byte as the four characters of the
+/// text `\xFF`, which would then be spliced in literally.
+fn replacement_string(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<Value> {
+    // `is_str` demands valid UTF-8, which is exactly what a binary
+    // replacement is not; `is_rstring_inner` accepts any Ruby string.
+    if val.is_rstring_inner().is_some() {
+        return Ok(val);
+    }
+    // Run `to_str` here rather than leaving it to `coerce_to_string`, so
+    // that a binary string handed back by it keeps its bytes too.
+    if let Some(func_id) = globals.check_method(val, IdentId::TO_STR) {
+        let converted = vm.invoke_func_inner(globals, func_id, val, &[], None, None)?;
+        if converted.is_rstring_inner().is_some() {
+            return Ok(converted);
+        }
+    }
+    // Nothing usable came back: let the usual coercion raise TypeError.
+    Ok(Value::string(val.coerce_to_string(vm, globals)?))
 }
 
 ///
@@ -2022,21 +2101,22 @@ fn check_pattern_encoding_compat(
 fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let self_inner = self_.as_rstring_inner();
-    if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
-        check_string_encoding_compat(self_inner, &arg_inner, globals)?;
+    let arg = lfp.arg(0);
+    let arg_inner = arg.is_rstring_inner();
+    if let Some(arg_inner) = &arg_inner {
+        check_string_encoding_compat(self_inner, arg_inner, globals)?;
     }
     let string = self_inner.regex_view()?;
     // View the needle in the same (surrogate or direct) space as the
-    // receiver so 8-bit needles line up byte-wise.
-    let owned;
-    let substr_s: &str = if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
-        owned = arg_inner.regex_view()?.into_owned();
-        &owned
-    } else {
-        owned = lfp.arg(0).coerce_to_str(vm, globals)?;
-        &owned
+    // receiver so 8-bit needles line up byte-wise. `regex_view` borrows
+    // unless the receiver needs byte mapping, and the search only reads,
+    // so the needle stays a `Cow` — copying it cost a malloc + memcpy +
+    // free on every call (three per request in ruby-bench's `grape`).
+    let found = match &arg_inner {
+        Some(arg_inner) => string.contains(&*arg_inner.regex_view()?),
+        None => string.contains(&*arg.coerce_to_str(vm, globals)?),
     };
-    Ok(Value::bool(string.contains(substr_s)))
+    Ok(Value::bool(found))
 }
 
 ///
@@ -2564,7 +2644,8 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             return Ok(Value::nil());
         }
         let removed = RStringInner::from_encoding(&self_.as_rstring_inner()[r.clone()], enc);
-        replace_byte_range(globals, self_, r.start, r.end, "")?;
+        let empty = RStringInner::from_str_scanned("");
+        replace_byte_range(globals, self_, r.start, r.end, &empty)?;
         return Ok(Value::string_from_inner(removed));
     }
     let lhs = self_.expect_string(globals)?;
@@ -3040,6 +3121,97 @@ fn require_sub_block_or_replacement(lfp: &Lfp, _name: &str) -> Result<()> {
     Ok(())
 }
 
+/// The one ASCII byte a `count` / `delete` / `squeeze` character-set
+/// argument list denotes, when it is a single String of exactly one
+/// 7-bit byte (any such byte is literal in `tr` syntax: `^`, `-` and
+/// `\\` only carry meaning inside longer specs) and the receiver is
+/// ASCII-only or valid UTF-8 — where an ASCII byte never occurs inside
+/// a multibyte character, so a byte scan is exact. `None` sends every
+/// other shape through `Charset::parse`.
+fn single_ascii_byte_set(args: Array, recv: &RStringInner) -> Option<u8> {
+    if args.len() != 1 {
+        return None;
+    }
+    let set = args[0].is_rstring_inner()?;
+    let bytes = set.as_bytes();
+    if bytes.len() != 1 || !bytes[0].is_ascii() {
+        return None;
+    }
+    if recv.is_ascii_only() || (recv.encoding().is_utf8_compatible() && recv.is_valid_encoding()) {
+        Some(bytes[0])
+    } else {
+        None
+    }
+}
+
+/// `sub` / `gsub` with a String pattern and a String replacement that
+/// holds no backslash: `memmem` over the receiver's bytes and a splice,
+/// instead of compiling the escaped pattern into a Regexp and running
+/// onigmo (`RegexpInner::with_coerced_regexp`). `$~` is set from the
+/// (last) match span, or cleared on a miss, as the regex path does;
+/// `$~.regexp` (the escaped pattern, which `gsub` attached eagerly) is
+/// built only when asked for (`MatchDataInner::regexp`).
+///
+/// Both strings must be ASCII-only or valid UTF-8: a valid UTF-8
+/// needle can only match at a character boundary of a valid UTF-8
+/// haystack (a lead byte never equals a continuation byte), so no
+/// boundary check is needed. Everything else — a backslash in the
+/// replacement (`\0`, `\&`, `` \` ``, `\'` expand), an empty
+/// pattern, a byte-oriented encoding, a non-String replacement —
+/// returns `None` and takes the regex path.
+fn string_pattern_replace(
+    vm: &mut Executor,
+    self_val: Value,
+    pattern: Value,
+    replacement: Value,
+    all: bool,
+) -> Option<(RStringInner, bool)> {
+    fn plain(s: &RStringInner) -> bool {
+        s.is_ascii_only() || (s.encoding().is_utf8_compatible() && s.is_valid_encoding())
+    }
+    let recv = self_val.is_rstring_inner()?;
+    let pat = pattern.is_rstring_inner()?;
+    let rep = replacement.is_rstring_inner()?;
+    if !plain(&recv) || !plain(&pat) || !plain(&rep) {
+        return None;
+    }
+    let needle = pat.as_bytes();
+    let rep_bytes = rep.as_bytes();
+    if needle.is_empty() || memchr::memchr(b'\\', rep_bytes).is_some() {
+        return None;
+    }
+    let hay = recv.as_bytes();
+    let enc = recv.encoding();
+    let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(hay.len());
+    let mut last = 0usize;
+    let mut last_hit = None;
+    if all {
+        for hit in memchr::memmem::find_iter(hay, needle) {
+            out.extend_from_slice(&hay[last..hit]);
+            out.extend_from_slice(rep_bytes);
+            last = hit + needle.len();
+            last_hit = Some(hit);
+        }
+    } else if let Some(hit) = memchr::memmem::find(hay, needle) {
+        out.extend_from_slice(&hay[..hit]);
+        out.extend_from_slice(rep_bytes);
+        last = hit + needle.len();
+        last_hit = Some(hit);
+    }
+    out.extend_from_slice(&hay[last..]);
+    let res = RStringInner::from_encoding_scanned(&out, enc);
+    match last_hit {
+        Some(hit) => {
+            vm.save_capture_span(self_val, hit, hit + needle.len(), pattern);
+            Some((res, true))
+        }
+        None => {
+            vm.clear_capture_special_variables();
+            Some((res, false))
+        }
+    }
+}
+
 fn sub_main(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -3059,6 +3231,9 @@ fn sub_main(
             RegexpInner::replace_one_hash(vm, globals, lfp.arg(0), &given, arg1, mapped_enc)
         } else {
             check_replacement_encoding_compat(globals, self_val, arg1)?;
+            if let Some(res) = string_pattern_replace(vm, self_val, lfp.arg(0), arg1, false) {
+                return Ok(res);
+            }
             let replace = replacement_view(vm, globals, arg1, mapped_enc.is_some())?;
             // Borrow after the coercion above (a user `to_str` could
             // mutate the receiver); the replacement loop runs no Ruby,
@@ -3103,7 +3278,6 @@ fn replacement_view(
     }
     arg.coerce_to_str(vm, globals)
 }
-
 
 /// Raise `Encoding::CompatibilityError` if `self_val` (the receiver
 /// of `gsub`/`sub`) and `replacement` (the explicit replacement
@@ -3155,9 +3329,51 @@ fn gsub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         );
     }
     let self_ = lfp.self_val();
+    if native_gsub_block_miss(vm, globals, self_, lfp)? {
+        let s = self_.as_rstring_inner();
+        return Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
+            s.as_bytes(),
+            s.encoding(),
+        )));
+    }
     let (mut res, _) = gsub_main(vm, globals, self_, lfp)?;
     apply_template_encoding(&mut res, self_);
     Ok(Value::string_from_inner(res))
+}
+
+/// The block form of `gsub` / `gsub!` on a subject in a non-UTF-8
+/// encoding Onigmo has a native codec for (BINARY with 8-bit content,
+/// EUC-JP, ...) whose pattern does not match at all — the common shape
+/// of a normalizing `gsub!(/escapes/) { … }` over parsed tokens: decided
+/// on the raw bytes, so a miss costs no surrogate view of the subject
+/// (which the replace machinery builds, matches, and decodes back).
+/// `true` means "no match, the result is the subject unchanged"; `$~` is
+/// cleared as the replace machinery would.
+fn native_gsub_block_miss(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    lfp: Lfp,
+) -> Result<bool> {
+    if lfp.try_arg(1).is_some() || lfp.block().is_none() {
+        return Ok(false);
+    }
+    let Some(re) = lfp.arg(0).is_regex() else {
+        return Ok(false);
+    };
+    let s = self_val.as_rstring_inner();
+    if !s.needs_byte_mapping() {
+        return Ok(false);
+    }
+    let Some(enc) = RegexpInner::onigmo_encoding_for(s.encoding()) else {
+        return Ok(false);
+    };
+    super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
+    if re.match_pred_bytes(s.as_bytes(), enc, 0)? {
+        return Ok(false);
+    }
+    vm.clear_capture_special_variables();
+    Ok(true)
 }
 
 ///
@@ -3180,6 +3396,9 @@ fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
     }
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
+    if native_gsub_block_miss(vm, globals, self_, lfp)? {
+        return Ok(Value::nil());
+    }
     let (mut res, changed) = gsub_main(vm, globals, self_, lfp)?;
     apply_template_encoding(&mut res, self_);
     self_.replace_with_inner(res);
@@ -3208,6 +3427,9 @@ fn gsub_main(
             RegexpInner::replace_all_hash(vm, globals, lfp.arg(0), self_val, arg1)
         } else {
             check_replacement_encoding_compat(globals, self_val, arg1)?;
+            if let Some(res) = string_pattern_replace(vm, self_val, lfp.arg(0), arg1, true) {
+                return Ok(res);
+            }
             let replace = replacement_view(vm, globals, arg1, mapped_enc.is_some())?;
             // Borrow after `coerce_to_str` (its `to_str` could mutate
             // the receiver); the string-replacement loop runs no Ruby,
@@ -3220,7 +3442,14 @@ fn gsub_main(
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
             Some(bh) => {
                 let self_enc = self_val.as_rstring_inner().encoding();
-                RegexpInner::replace_all_block(vm, globals, lfp.arg(0), self_val, bh, Some(self_enc))
+                RegexpInner::replace_all_block(
+                    vm,
+                    globals,
+                    lfp.arg(0),
+                    self_val,
+                    bh,
+                    Some(self_enc),
+                )
             }
         }
     }
@@ -3405,6 +3634,39 @@ fn string_match(
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
     let self_ = lfp.self_val();
     let s = self_.as_rstring_inner();
+    // A subject in a non-UTF-8 encoding Onigmo has a native codec for
+    // (BINARY with 8-bit content, EUC-JP, Shift_JIS, ...) is matched on
+    // its raw bytes, so the MatchData's strings and byte offsets are the
+    // subject's own — the same path `Regexp#match` takes.
+    if s.code_range() != CodeRange::SevenBit
+        && let Some(native_enc) = RegexpInner::onigmo_encoding_for(s.encoding())
+    {
+        super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
+        let byte_pos = match raw_pos {
+            None | Some(0) => 0,
+            Some(mut pos) => {
+                if pos < 0 {
+                    pos += s.char_length() as i64;
+                    if pos < 0 {
+                        return Ok(Value::nil());
+                    }
+                }
+                // Past-the-end positions clamp to the end (see below).
+                super::regexp::byte_offset_of_char(s, pos as usize)
+            }
+        };
+        vm.set_match_regex(re.as_val());
+        let bytes = s.as_bytes();
+        let md = match re.captures_bytes_from_pos(bytes, self_, native_enc, byte_pos, vm)? {
+            Some(captures) => Value::new_matchdata_bytes(&captures, self_, re),
+            None => return Ok(Value::nil()),
+        };
+        vm.set_backref(md);
+        return match lfp.block() {
+            Some(bh) => vm.invoke_block_once(globals, bh, &[md]),
+            None => Ok(md),
+        };
+    }
     let given = s.regex_view()?;
     let byte_pos = match raw_pos {
         None | Some(0) => 0,
@@ -3526,19 +3788,41 @@ fn string_strscan_match(
             STRING_CLASS,
         ));
     };
-    // In place only when the engine view *is* the byte buffer: ASCII-only
-    // content under any encoding, or valid UTF-8. Anything else takes the
-    // Ruby-side `String#match` fallback, which knows how to view those.
-    if !(s.is_ascii_only() || (s.encoding() == Encoding::Utf8 && s.is_valid_encoding())) {
+    // In place when the engine view *is* the byte buffer: ASCII-only
+    // content under any encoding, or valid UTF-8. A subject in another
+    // encoding Onigmo has a native codec for (BINARY with 8-bit content,
+    // EUC-JP, Shift_JIS, ...) is matched in place on its raw bytes too.
+    // Anything else takes the Ruby-side `String#match` fallback, which
+    // knows how to view those.
+    let ascii = s.is_ascii_only();
+    let utf8_view = ascii || (s.encoding() == Encoding::Utf8 && s.is_valid_encoding());
+    let native_enc = if utf8_view {
+        None
+    } else if let Some(enc) = RegexpInner::onigmo_encoding_for(s.encoding()) {
+        super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
+        Some(enc)
+    } else {
         return Ok(Value::bool(false));
-    }
-    let given = s.check_utf8()?;
-    let Some(sub) = given.get(byte_pos..) else {
-        return Ok(Value::nil());
     };
+    let bytes = s.as_bytes();
+    if byte_pos > bytes.len() || (utf8_view && !s.check_utf8()?.is_char_boundary(byte_pos)) {
+        return Ok(Value::nil());
+    }
+    let sub = &bytes[byte_pos..];
     STRSCAN_REGION.with(|region| {
         let mut region = region.borrow_mut();
-        if !re.strscan_match(sub, anchored, &mut region)? {
+        let hit = match native_enc {
+            // SAFETY: `utf8_view` proved the buffer valid UTF-8 (or
+            // ASCII-only) and `byte_pos` a char boundary.
+            None => re.strscan_match(
+                unsafe { std::str::from_utf8_unchecked(sub) },
+                anchored,
+                ascii,
+                &mut region,
+            )?,
+            Some(enc) => re.strscan_match_bytes(sub, anchored, enc, &mut region)?,
+        };
+        if !hit {
             return Ok(Value::nil());
         }
         let n = region.len();
@@ -3588,6 +3872,22 @@ fn string_match_(
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
     let self_ = lfp.self_val();
     let s = self_.as_rstring_inner();
+    // Native byte match for non-UTF-8 subjects with an Onigmo codec (see
+    // `String#match`).
+    if s.code_range() != CodeRange::SevenBit
+        && let Some(native_enc) = RegexpInner::onigmo_encoding_for(s.encoding())
+    {
+        super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
+        let byte_pos = match raw_pos {
+            None | Some(0) => 0,
+            Some(pos) => match conv_index(pos, s.char_length()) {
+                Some(cp) => super::regexp::byte_offset_of_char(s, cp),
+                None => return Ok(Value::bool(false)),
+            },
+        };
+        let res = re.match_pred_bytes(s.as_bytes(), native_enc, byte_pos)?;
+        return Ok(Value::bool(res));
+    }
     let given = s.regex_view()?;
     let char_pos = match raw_pos {
         None | Some(0) => 0,
@@ -3639,17 +3939,19 @@ fn string_index(
         // Never enters the regex engine, so `$~` is untouched (CRuby
         // only sets the backref for Regexp patterns — issue #721) and
         // broken-UTF-8 receivers work (CRuby allows them here).
-        let from = match given.conv_char_index(char_pos) {
-            Some(p) => p,
-            None => return Ok(Value::nil()),
+        let from = if char_pos == 0 {
+            0
+        } else {
+            match given.conv_char_index(char_pos) {
+                Some(p) => p,
+                None => return Ok(Value::nil()),
+            }
         };
         let needle = arg_inner.as_bytes().to_vec();
-        return Ok(
-            match substring_char_index(&given, &needle, from, false) {
-                Some(cp) => Value::integer(cp as i64),
-                None => Value::nil(),
-            },
-        );
+        return Ok(match substring_char_index(&given, &needle, from, false) {
+            Some(cp) => Value::integer(cp as i64),
+            None => Value::nil(),
+        });
     }
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
@@ -3744,10 +4046,12 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 "offset {byte_offset} does not land on character boundary"
             )));
         }
-        return Ok(match byte_search_fwd(haystack, needle.as_bytes(), byte_offset) {
-            Some(p) => Value::integer(p as i64),
-            None => Value::nil(),
-        });
+        return Ok(
+            match byte_search_fwd(haystack, needle.as_bytes(), byte_offset) {
+                Some(p) => Value::integer(p as i64),
+                None => Value::nil(),
+            },
+        );
     }
 
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
@@ -3822,10 +4126,12 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 "offset {byte_offset} does not land on character boundary"
             )));
         }
-        return Ok(match byte_search_rev(haystack, needle.as_bytes(), byte_offset) {
-            Some(p) => Value::integer(p as i64),
-            None => Value::nil(),
-        });
+        return Ok(
+            match byte_search_rev(haystack, needle.as_bytes(), byte_offset) {
+                Some(p) => Value::integer(p as i64),
+                None => Value::nil(),
+            },
+        );
     }
 
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
@@ -3878,7 +4184,6 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     })
 }
 
-
 /// Whether `pos` lands on a character boundary of `inner` in its
 /// declared encoding (broken bytes count as single characters, like
 /// CRuby's byte-position checks). `0` and `inner.len()` are always
@@ -3915,7 +4220,9 @@ fn byte_search_rev(haystack: &[u8], needle: &[u8], upto: usize) -> Option<usize>
         return Some(upto.min(haystack.len()));
     }
     let last = haystack.len().checked_sub(needle.len())?;
-    (0..=last.min(upto)).rev().find(|&i| haystack[i..].starts_with(needle))
+    (0..=last.min(upto))
+        .rev()
+        .find(|&i| haystack[i..].starts_with(needle))
 }
 
 /// Coerce a value to a `Regexp` for `byteindex`/`byterindex`. Accepts
@@ -4047,7 +4354,12 @@ fn string_rindex(
                 last_byte_pos = captures.get(0).unwrap().start();
                 if last_byte_pos == byte_pos {
                     if char_pos > max_char_pos {
-                        rindex_set_backref(vm, &re, s, last_char_pos.map(|p| char_to_byte_pos(s, p)))?;
+                        rindex_set_backref(
+                            vm,
+                            &re,
+                            s,
+                            last_char_pos.map(|p| char_to_byte_pos(s, p)),
+                        )?;
                         return Ok(match last_char_pos {
                             Some(pos) => Value::integer(pos as i64),
                             None => Value::nil(),
@@ -4078,7 +4390,6 @@ fn string_rindex(
         None => Value::nil(),
     })
 }
-
 
 /// Final `$~` fix-up for the `rindex`-style forward scans: the loop
 /// probes *past* the match it ends up returning, leaving `$~` as the
@@ -4130,14 +4441,8 @@ fn substring_char_index(
     rev: bool,
 ) -> Option<usize> {
     let bytes = inner.as_bytes();
-    let mut bounds: Vec<usize> = Vec::new();
-    let mut off = 0usize;
-    for ch in inner.iter_char_bytes() {
-        bounds.push(off);
-        off += ch.len();
-    }
-    let char_len = bounds.len();
     if needle.is_empty() {
+        let char_len = inner.char_length();
         return if rev {
             Some(anchor.min(char_len))
         } else if anchor <= char_len {
@@ -4146,14 +4451,118 @@ fn substring_char_index(
             None
         };
     }
-    let hit = |cp: usize| {
-        let bp = bounds[cp];
-        bytes[bp..].starts_with(needle)
-    };
+    // The search itself is `memmem` over the raw bytes; character
+    // boundaries only enter twice — turning the anchor into a byte
+    // offset, and the hit back into a character index. On an ASCII-only
+    // receiver both are the identity, so this is one `find` / `rfind`.
+    // (Tabulating every boundary of the receiver into a `Vec` and
+    // probing each with `starts_with`, as this used to, was an O(n)
+    // allocation and comparison on every call — 12x slower than CRuby
+    // on a 200-byte receiver.)
+    if inner.is_ascii_only() {
+        return if rev {
+            // A match may start at `anchor` at the latest.
+            let end = anchor.saturating_add(needle.len()).min(bytes.len());
+            memchr::memmem::rfind(&bytes[..end], needle)
+        } else {
+            memchr::memmem::find(bytes.get(anchor..)?, needle).map(|p| p + anchor)
+        };
+    }
     if rev {
-        (0..char_len.min(anchor + 1)).rev().find(|&cp| hit(cp))
-    } else {
-        (anchor..char_len).find(|&cp| hit(cp))
+        return substring_char_index_rev_multibyte(inner, needle, anchor);
+    }
+    if inner.encoding().is_utf8_compatible() && inner.is_valid_encoding() {
+        // Valid UTF-8: a character starts at every non-continuation
+        // byte, so the anchor and the hit convert by counting those —
+        // a branch-free scan the compiler vectorizes — and a hit on a
+        // continuation byte (only possible for a needle that is not
+        // itself valid UTF-8) is skipped.
+        let is_lead = |b: &u8| (*b & 0xC0) != 0x80;
+        let mut off = 0usize;
+        if anchor > 0 {
+            let mut seen = 0usize;
+            loop {
+                if off >= bytes.len() {
+                    return None;
+                }
+                if is_lead(&bytes[off]) {
+                    if seen == anchor {
+                        break;
+                    }
+                    seen += 1;
+                }
+                off += 1;
+            }
+        }
+        let finder = memchr::memmem::Finder::new(needle);
+        let mut search_from = off;
+        loop {
+            let hit = search_from + finder.find(&bytes[search_from..])?;
+            if is_lead(&bytes[hit]) {
+                return Some(bytes[..hit].iter().filter(|b| is_lead(b)).count());
+            }
+            search_from = hit + 1;
+        }
+    }
+    // Other multibyte encodings (`iter_char_bytes` knows their
+    // boundaries): walk the boundaries lazily, only as far as each hit.
+    // A hit that lands inside a character is not a match; resume one
+    // byte later.
+    let mut chars = inner.iter_char_bytes();
+    let mut cp = 0usize;
+    let mut off = 0usize;
+    while cp < anchor {
+        let ch = chars.next()?;
+        off += ch.len();
+        cp += 1;
+    }
+    let finder = memchr::memmem::Finder::new(needle);
+    let mut search_from = off;
+    loop {
+        let hit = search_from + finder.find(&bytes[search_from..])?;
+        while off < hit {
+            let ch = chars.next()?;
+            off += ch.len();
+            cp += 1;
+        }
+        if off == hit {
+            return Some(cp);
+        }
+        search_from = hit + 1;
+    }
+}
+
+/// `substring_char_index` with `rev` on a multibyte receiver: the
+/// rightmost boundary-aligned hit starting at character `anchor` or
+/// earlier. Boundaries are tabulated only up to the anchor, and each
+/// `rfind` candidate is checked against them by binary search.
+fn substring_char_index_rev_multibyte(
+    inner: &RStringInner,
+    needle: &[u8],
+    anchor: usize,
+) -> Option<usize> {
+    let bytes = inner.as_bytes();
+    let mut bounds: Vec<usize> = Vec::new();
+    let mut off = 0usize;
+    for ch in inner.iter_char_bytes() {
+        if bounds.len() > anchor {
+            break;
+        }
+        bounds.push(off);
+        off += ch.len();
+    }
+    let mut end = match bounds.get(anchor) {
+        Some(&b) => b.saturating_add(needle.len()).min(bytes.len()),
+        None => bytes.len(),
+    };
+    loop {
+        let hit = memchr::memmem::rfind(&bytes[..end], needle)?;
+        if let Ok(cp) = bounds.binary_search(&hit) {
+            return Some(cp);
+        }
+        // Not a boundary (so `hit >= 1`: byte 0 always is one): the next
+        // candidate must start before `hit`.
+        end = hit + needle.len() - 1;
     }
 }
 
@@ -4958,12 +5367,13 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             // Same as the receiver's range above: an out-of-range left
             // boundary is a RangeError naming the range.
             let src_start_i = src_start;
-            let src_start = conv_byte_index_for_splice(src_start_i, str_byte_len).map_err(|_| {
-                MonorubyErr::rangeerr(format!(
-                    "{} out of range",
-                    lfp.arg(str_arg_idx + 1).inspect(&globals.store)
-                ))
-            })?;
+            let src_start =
+                conv_byte_index_for_splice(src_start_i, str_byte_len).map_err(|_| {
+                    MonorubyErr::rangeerr(format!(
+                        "{} out of range",
+                        lfp.arg(str_arg_idx + 1).inspect(&globals.store)
+                    ))
+                })?;
             let src_end_val = if src_end >= 0 {
                 let e = if src_range.exclude_end() {
                     src_end as usize
@@ -6608,6 +7018,18 @@ fn delete_compute(
             "wrong number of arguments (given 0, expected 1+)",
         ));
     }
+    let inner = self_val.as_rstring_inner();
+    if let Some(b) = single_ascii_byte_set(args, &inner) {
+        let bytes = inner.as_bytes();
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
+        let mut last = 0;
+        for p in memchr::memchr_iter(b, bytes) {
+            out.extend_from_slice(&bytes[last..p]);
+            last = p + 1;
+        }
+        out.extend_from_slice(&bytes[last..]);
+        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+    }
     let strs: Vec<String> = args
         .iter()
         .map(|arg| tr_set_view(vm, globals, *arg))
@@ -6616,7 +7038,6 @@ fn delete_compute(
         .iter()
         .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
-    let inner = self_val.as_rstring_inner();
 
     // Non-UTF-8 receiver: delete by character via the encoding-aware
     // iterator (multibyte chars are kept unless the set is negated).
@@ -7239,6 +7660,12 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             "wrong number of arguments (given 0, expected 1+)",
         ));
     }
+    let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
+    if let Some(b) = single_ascii_byte_set(args, inner) {
+        let n = memchr::memchr_iter(b, inner.as_bytes()).count();
+        return Ok(Value::integer(n as i64));
+    }
     let strs: Vec<String> = args
         .iter()
         .map(|arg| tr_set_view(vm, globals, *arg))
@@ -7247,8 +7674,6 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         .iter()
         .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
-    let self_ = lfp.self_val();
-    let inner = self_.as_rstring_inner();
 
     // Non-UTF-8 receiver: walk the encoding-aware char iterator.
     if let Some(sets) = nonutf8_ascii_charsets(globals, &inner, args)? {
@@ -7330,6 +7755,24 @@ fn squeeze_compute(
     rest_arg: Value,
 ) -> Result<RStringInner> {
     let args = rest_arg.as_array();
+    let inner = self_val.as_rstring_inner();
+    if let Some(b) = single_ascii_byte_set(args, &inner) {
+        let bytes = inner.as_bytes();
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
+        let mut prev_hit = false;
+        for &c in bytes {
+            if c == b {
+                if prev_hit {
+                    continue;
+                }
+                prev_hit = true;
+            } else {
+                prev_hit = false;
+            }
+            out.push(c);
+        }
+        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+    }
     let strs: Vec<String> = args
         .iter()
         .map(|a| tr_set_view(vm, globals, *a))
@@ -7339,7 +7782,6 @@ fn squeeze_compute(
         .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
     let squeeze_all = sets.is_empty();
-    let inner = self_val.as_rstring_inner();
 
     // Non-UTF-8 receiver: collapse runs of identical *characters*
     // via the encoding-aware iterator.
@@ -7600,7 +8042,54 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         let enc = super::encoding::value_to_encoding(vm, globals, enc_v)?;
         lfp.self_val().as_rstring_inner_mut().set_encoding(enc);
     }
+    // `capacity:` — pre-size the buffer. Nothing about it is observable
+    // from Ruby (no `capacity` reader), but the allocation it avoids is
+    // the whole point at a site that appends in a loop, and the argument
+    // *checking* is observable.
+    //
+    // `nil` counts as absent, which is `rb_str_init`'s rule and so what
+    // CRuby does for a String subclass and for a direct
+    // `send(:initialize, capacity: nil)`. CRuby's `String.new` has a
+    // second, faster path of its own that converts without the nil check
+    // and so raises TypeError there — an asymmetry between `String.new`
+    // and `SubclassOfString.new` that is not worth reproducing, since
+    // every construction here goes through this one method.
+    if let Some(cap_v) = lfp.try_arg(2)
+        && !cap_v.is_nil()
+    {
+        // Raises TypeError for a non-Integer (`#to_int` is honoured) and
+        // RangeError for a Bignum, both as CRuby does.
+        let cap = cap_v.coerce_to_int_i64(vm, globals)?;
+        // A frozen receiver raises even when the capacity is 0 or
+        // negative — CRuby checks before it looks at the value.
+        lfp.self_val().ensure_string_mutable(vm, globals)?;
+        if cap > 0
+            && !lfp
+                .self_val()
+                .as_rstring_inner_mut()
+                .try_reserve_capacity(cap as usize)
+        {
+            return Err(no_memory_error(vm, globals));
+        }
+    }
     Ok(lfp.self_val())
+}
+
+/// `NoMemoryError`, for a `capacity:` the allocator will not satisfy.
+/// Built through the class object because the error kind is not one of
+/// `MonorubyErrKind`'s own variants.
+fn no_memory_error(vm: &mut Executor, globals: &mut Globals) -> MonorubyErr {
+    const MSG: &str = "failed to allocate memory";
+    let Some(klass) = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("NoMemoryError"))
+    else {
+        return MonorubyErr::runtimeerr(MSG);
+    };
+    match vm.invoke_method_inner(globals, IdentId::NEW, klass, &[Value::string_from_str(MSG)], None, None) {
+        Ok(ex) => MonorubyErr::new_from_exception(&ex.is_exception().unwrap().clone()),
+        Err(e) => e,
+    }
 }
 
 ///
@@ -7741,6 +8230,61 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     }
 }
 
+/// The code point of each character of `inner`, in order: the Unicode
+/// scalar for a UTF-8 compatible encoding, the leading byte otherwise
+/// (as `String#ord`).
+fn codepoint_values(inner: &RStringInner) -> Result<Vec<Value>> {
+    if inner.encoding().is_utf8_compatible() {
+        Ok(inner
+            .check_utf8()?
+            .chars()
+            .map(|c| Value::integer(c as u32 as i64))
+            .collect())
+    } else {
+        Ok(inner
+            .iter_char_bytes()
+            .map(|s| Value::integer(s[0] as i64))
+            .collect())
+    }
+}
+
+///
+/// ### String#codepoints
+///
+/// - codepoints -> [Integer]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/codepoints.html]
+#[monoruby_builtin]
+fn codepoints(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let codes = codepoint_values(&self_.as_rstring_inner())?;
+    if let Some(bh) = lfp.block() {
+        vm.invoke_block_iter1(globals, bh, codes.into_iter())?;
+        Ok(lfp.self_val())
+    } else {
+        Ok(Value::array_from_vec(codes))
+    }
+}
+
+///
+/// ### String#each_codepoint
+///
+/// - each_codepoint {|codepoint| ... } -> self
+/// - each_codepoint -> Enumerator
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/each_codepoint.html]
+#[monoruby_builtin]
+fn each_codepoint(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if let Some(bh) = lfp.block() {
+        let codes = codepoint_values(&self_.as_rstring_inner())?;
+        vm.invoke_block_iter1(globals, bh, codes.into_iter())?;
+        Ok(lfp.self_val())
+    } else {
+        vm.generate_enumerator(IdentId::get_id("each_codepoint"), lfp.self_val(), vec![], pc)
+    }
+}
+
 ///
 /// ### String#center
 ///
@@ -7841,7 +8385,8 @@ fn next_mut(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
-    let template = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    let template = template.to_str()?;
     rvalue::unpack(
         &self_.as_rstring_inner()[offset..],
         &template,
@@ -7861,7 +8406,8 @@ fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
-    let template = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    let template = template.to_str()?;
     rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, true, offset)
 }
 
@@ -7899,10 +8445,9 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     } else {
         Encoding::Utf8
     };
-    Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
-        dumped.as_bytes(),
-        enc,
-    )))
+    Ok(Value::string_from_inner(
+        RStringInner::from_encoding_scanned(dumped.as_bytes(), enc),
+    ))
 }
 
 ///
@@ -8393,6 +8938,73 @@ fn unicode_normalize_(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn string_new_capacity() {
+        // `capacity:` is an allocation hint with no Ruby-visible state,
+        // so what a test can pin down is the argument checking and that
+        // a pre-sized buffer still behaves like any other String.
+        run_test(
+            r#"
+            r = []
+            r << String.new(capacity: 0)
+            r << String.new(capacity: -1)            # negative: ignored, no error
+            r << String.new(capacity: 3.7)           # Float truncates
+            r << String.new("ab", capacity: 100)     # contents win over the hint
+            r << String.new("ab", capacity: 1)       # hint below the length
+            o = Object.new
+            def o.to_int = 64
+            r << String.new(capacity: o)             # implicit #to_int
+            s = String.new(capacity: 1024)
+            100.times { s << "xy" }
+            r << s.size
+            r << String.new(capacity: 4096, encoding: "ASCII-8BIT").encoding.to_s
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn string_new_capacity_errors() {
+        run_test(
+            r#"
+            r = []
+            begin; String.new(capacity: "x"); rescue TypeError => e; r << e.class; end
+            begin; String.new(capacity: Object.new); rescue TypeError => e; r << e.class; end
+            begin; String.new(capacity: 2 ** 70); rescue RangeError => e; r << e.message; end
+            begin; String.new(capacity: 2 ** 62); rescue NoMemoryError => e; r << e.message; end
+            # A frozen receiver raises even for a capacity that asks for
+            # nothing \u2014 the check precedes the value.
+            begin; "abc".freeze.send(:initialize, capacity: 0); rescue FrozenError => e; r << e.class; end
+            begin; "abc".freeze.send(:initialize, capacity: -1); rescue FrozenError => e; r << e.class; end
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn string_new_capacity_nil_is_absent() {
+        // `nil` counts as absent (`rb_str_init`'s rule). CRuby's
+        // `String.new` fast path converts without the nil check and so
+        // raises TypeError there, while its own String *subclass* and a
+        // direct `send(:initialize, capacity: nil)` do not \u2014 an asymmetry
+        // monoruby does not reproduce, since every construction goes
+        // through this one method. Not a `run_test`: it would compare
+        // against the CRuby fast path.
+        // The script asserts for itself: `run_test_no_result_check`
+        // panics if the code raises, and nothing here needs a CRuby
+        // reference.
+        run_test_no_result_check(
+            r#"
+            got = [String.new(capacity: nil),
+                   String.allocate.send(:initialize, capacity: nil),
+                   Class.new(String).new(capacity: nil).class.superclass.to_s,
+                   "abc".freeze.send(:initialize, capacity: nil)]
+            want = ["", "", "String", "abc"]
+            raise "capacity: nil -> #{got.inspect}, want #{want.inspect}" unless got == want
+            "#,
+        );
+    }
 
     #[test]
     fn index_family_string_pattern_preserves_backref() {
@@ -9945,6 +10557,87 @@ mod tests {
     }
 
     #[test]
+    fn index_assign_binary_replacement() {
+        // A replacement holding bytes >= 0x80 has to be spliced as bytes.
+        // Routed through a Rust String it arrived as the *text* "\xFF",
+        // four characters, and was spliced in literally.
+        run_tests(&[
+            r#"s = "\x00".b * 8; s[2, 4] = [255, 128, 64, 255].pack("C*"); s.bytes"#,
+            r#"s = "\x00".b * 8; s[0] = 255.chr; s.bytes"#,
+            r#"s = "\x00".b * 8; s[1..3] = [200, 201].pack("C*"); s.bytes"#,
+            r#"s = "\x00".b * 8; s[2, 4] = [1, 2].pack("C*"); s.bytes"#,
+            // A UTF-8 receiver demotes to ASCII-8BIT, as CRuby's does.
+            r#"s = "abcdef"; s[2, 2] = [255, 128].pack("C*"); [s.bytes, s.encoding.to_s]"#,
+            r#"s = "abcdef"; s["cd"] = [255, 128].pack("C*"); s.bytes"#,
+            r#"s = "abcdef"; s[/cd/] = [255, 128].pack("C*"); s.bytes"#,
+        ]);
+    }
+
+    #[test]
+    fn index_assign_encoding_and_code_range() {
+        // The result's encoding and code range are as much part of the
+        // splice as its bytes: `valid_encoding?` and `ascii_only?` read
+        // the code range, `length` counts characters under the encoding,
+        // and the receiver's encoding has to survive a splice that does
+        // not force it to change.
+        run_tests(&[
+            r#"s = "abcdef"; s[2, 2] = [255, 128].pack("C*"); [s.encoding.to_s, s.valid_encoding?, s.ascii_only?, s.length, s.bytes]"#,
+            r#"s = "abcdef"; s[2, 2] = "AB".b; [s.encoding.to_s, s.ascii_only?, s.length, s.bytes]"#,
+            r#"s = "\x00".b * 6; s[2, 2] = "\u3042"; [s.encoding.to_s, s.valid_encoding?, s.length, s.bytes]"#,
+            r#"s = "\x00".b * 6; s[2, 2] = "xy"; [s.encoding.to_s, s.ascii_only?, s.length, s.bytes]"#,
+            r#"s = "abcdef"; s[2, 2] = "\u3042".encode("EUC-JP"); [s.encoding.to_s, s.length, s.bytes]"#,
+            r#"s = "abc".encode("EUC-JP"); s[1] = "z"; [s.encoding.to_s, s.ascii_only?, s.bytes]"#,
+            r#"s = "abc"; s[3] = [255, 128].pack("C*"); [s.encoding.to_s, s.ascii_only?, s.bytes]"#,
+            r#"s = "abcdef"; s[2, 2] = ""; [s.encoding.to_s, s.ascii_only?, s.length, s.bytes]"#,
+            r#"begin; s = "\u3042\u3044".dup; s[1] = [255].pack("C*"); rescue => e; e.class.to_s; end"#,
+        ]);
+    }
+
+    #[test]
+    fn index_assign_to_str_replacement() {
+        // The replacement is taken through `to_str`, and a binary string
+        // handed back by it keeps its bytes just as a direct one does.
+        run_tests(&[
+            r#"class RA; def to_str; [255, 128].pack("C*"); end; end; s = "\x00".b * 6; s[2, 2] = RA.new; s.bytes"#,
+            r#"class RB; def to_str; "XY"; end; end; s = "abcdef"; s[2, 2] = RB.new; [s, s.encoding.to_s]"#,
+            r#"class RC; def to_str; [255, 128].pack("C*"); end; end; s = "abcdef"; s[2, 2] = RC.new; [s.encoding.to_s, s.bytes]"#,
+            // Nothing to convert with still raises, as it did before.
+            r#"begin; s = "abcdef"; s[2, 2] = 42; rescue => e; e.class.to_s; end"#,
+        ]);
+    }
+
+    #[test]
+    fn slice_bang_on_binary_receiver() {
+        // `slice!` shares index_assign's byte-splice path.
+        run_tests(&[
+            r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1, 2); [r.bytes, r.encoding.to_s, s.bytes]"#,
+            r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1); [r.bytes, s.bytes]"#,
+            r#"s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1..2); [r.bytes, s.bytes]"#,
+        ]);
+    }
+
+    #[test]
+    fn splice_keeps_a_broken_encoding() {
+        // A splice that leaves the string invalid keeps the encoding
+        // `compatible_encoding` negotiated: CRuby reports
+        // `valid_encoding?` false rather than re-tagging it ASCII-8BIT,
+        // which would also claim the result valid.
+        run_tests(&[
+            r#"s = [255, 97, 98].pack("C*").force_encoding("UTF-8"); s.bytesplice(1, 1, "z"); [s.encoding.to_s, s.valid_encoding?, s.bytes]"#,
+            r#"s = [255, 97, 98].pack("C*").force_encoding("UTF-8"); s.bytesplice(1, 1, ""); [s.encoding.to_s, s.valid_encoding?, s.bytes]"#,
+            // The same receiver through `[]=`, which splices the same way.
+            r#"s = [255, 97, 98].pack("C*").force_encoding("UTF-8"); s[1] = "z"; [s.encoding.to_s, s.valid_encoding?, s.bytes]"#,
+            // Negotiation still decides the encoding where it applies.
+            r#"s = "abcdef".b; s.bytesplice(2, 2, "\u3042"); [s.encoding.to_s, s.valid_encoding?, s.bytes]"#,
+            r#"s = "abcdef".dup; s.bytesplice(2, 2, [255, 128].pack("C*")); [s.encoding.to_s, s.bytes]"#,
+            // And an incompatible pair still raises rather than demoting.
+            r#"begin; s = [255, 97, 98].pack("C*").force_encoding("UTF-8"); s.bytesplice(1, 1, [255, 128].pack("C*")); rescue => e; e.class.to_s; end"#,
+            // `bytesplice` keeps rejecting a non-boundary offset.
+            r#"begin; s = "\u3042\u3044".dup; s.bytesplice(1, 1, "z"); rescue => e; e.class.to_s; end"#,
+        ]);
+    }
+
+    #[test]
     fn index_assign_special_int_cases() {
         // CRuby permits `""[0] = "..."` (zero index on an empty
         // string) and `s[length] = "..."` (append at end).
@@ -10361,9 +11054,9 @@ mod tests {
             // pos clamps the maximum match-start position.
             r#""hello".rindex("l", 2)"#,
             r#""hello".rindex("l", 1)"#,
-            r#""hello".rindex("l", 100)"#, // positive clamp
+            r#""hello".rindex("l", 100)"#,    // positive clamp
             r#""hello".rindex("hello", -1)"#, // negative-but-in-range
-            r#""hello".rindex("a", -100)"#, // negative overflow → nil
+            r#""hello".rindex("a", -100)"#,   // negative overflow → nil
             r#""ababab".rindex("ab", 3)"#,
             // string_rindex_string_empty_needle
             // Empty needle returns `pos` (capped at char_len).
@@ -10896,8 +11589,8 @@ mod tests {
             r#""blablabla".byterindex(/\z/)"#,
             r#""blablabla\n".byterindex(/\Z/)"#,
             // string_byterindex_multibyte
-            r#""ありがりがとう".byterindex("が")"#, // 12
-            r#""ありがりがとう".byterindex(/が/)"#, // 12
+            r#""ありがりがとう".byterindex("が")"#,    // 12
+            r#""ありがりがとう".byterindex(/が/)"#,    // 12
             r#""ありがりがとう".byterindex("が", 9)"#, // 6
         ]);
     }
@@ -11274,7 +11967,9 @@ mod tests {
 
     #[test]
     fn string_plus_returns_string() {
-        run_test(r#"class StrPlusSub < String; end; (StrPlusSub.new("a") + "b").instance_of?(String)"#);
+        run_test(
+            r#"class StrPlusSub < String; end; (StrPlusSub.new("a") + "b").instance_of?(String)"#,
+        );
         run_test(r#"("foo" + "bar")"#);
     }
 

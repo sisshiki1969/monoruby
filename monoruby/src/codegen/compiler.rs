@@ -361,6 +361,32 @@ impl Codegen {
         }
     }
 
+    /// Whether a `BecamePolymorphic` recompile of `(iseq_id, self_class)`
+    /// would exceed `MAX_RECOMPILES_PER_METHOD`. Only that reason is
+    /// budgeted: it is the one a body can request over and over (each fresh
+    /// body starts with a fresh `COUNT_DEOPT_RECOMPILE` budget, and a site
+    /// that overflowed its PIC misses again just as often in the new body),
+    /// while a version-guard failure means the program really redefined
+    /// something and the method must be rebuilt however often that happens.
+    fn recompile_budget_exhausted(
+        &mut self,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        reason: RecompileReason,
+    ) -> bool {
+        if !matches!(reason, RecompileReason::BecamePolymorphic) {
+            return false;
+        }
+        let n = self.recompile_counts.entry((iseq_id, self_class)).or_insert(0);
+        *n += 1;
+        if *n > MAX_RECOMPILES_PER_METHOD {
+            #[cfg(feature = "jit-log")]
+            eprintln!("[JIT] recompile budget exhausted: {iseq_id:?} for {self_class:?}");
+            return true;
+        }
+        false
+    }
+
     fn recompile_method(
         &mut self,
         globals: &mut Globals,
@@ -391,6 +417,9 @@ impl Codegen {
             }
             _ => &crate::codegen::jit_stats::RECOMPILE_METHOD_OTHER,
         });
+        if self.recompile_budget_exhausted(iseq_id, self_class, reason) {
+            return None;
+        }
         // Bail *before* compiling when there is no patch point to install
         // into — after a BOP eviction, or when the method only ever ran as a
         // specialized child of some root (its own `jit_entry` map was never
@@ -458,6 +487,9 @@ impl Codegen {
         reason: RecompileReason,
     ) -> Option<()> {
         if globals.store[iseq_id].jit_invalidated() {
+            return None;
+        }
+        if self.recompile_budget_exhausted(iseq_id, self_class, reason) {
             return None;
         }
         let slot = globals.store[iseq_id].get_jit_slot(self_class)?;
@@ -577,17 +609,12 @@ impl Codegen {
     }
 
     ///
-    /// A specialized body compiled under an armed unboxed-Float speculation
-    /// must not be replaced standalone: its dynvar accesses address the FP
-    /// save/spill slots of the root body that armed the speculation, and a
-    /// context-free recompile would read the caller's speculated locals
-    /// through never-written LFP slots (issue #1140). Rebuild the whole root
-    /// compilation unit instead — the fresh root re-specializes (and
-    /// re-arms) under the inline caches that triggered the recompile, and
-    /// takes over via its own entry patch; the old root body stays
-    /// internally consistent for frames already running it.
+    /// Rebuild a whole compilation unit: the fresh root re-specializes
+    /// every body it inlines under the inline caches that triggered the
+    /// request, and takes over via its own entry patch. The old root body
+    /// stays internally consistent for frames already running it.
     ///
-    fn recompile_speculated_root(
+    fn recompile_root_unit(
         &mut self,
         globals: &mut Globals,
         root: (ISeqId, ClassId, Option<BytecodePtr>),
@@ -596,7 +623,7 @@ impl Codegen {
         let (iseq_id, self_class, position) = root;
         #[cfg(feature = "jit-log")]
         eprintln!(
-            "[JIT] speculated specialized entry: rebuilding root {:?} pos={:?} ({:?})",
+            "[JIT] rebuilding root unit {:?} pos={:?} ({:?})",
             iseq_id, position, reason
         );
         match position {
@@ -609,7 +636,34 @@ impl Codegen {
         }
     }
 
-    #[cfg(target_arch = "x86_64")]
+    ///
+    /// A recompile request naming a specialized body rebuilds the whole
+    /// compilation unit the body was installed under.
+    ///
+    /// The body cannot be replaced on its own. A standalone compile of
+    /// `(iseq, self_class)` knows nothing of the call site it would be
+    /// patched into — it is a plain `JitType::Entry` compile, with no
+    /// `args_info`, no inlining chain — while the caller's code is left
+    /// untouched, still holding everything the *old* body told it. Some of
+    /// that is only true of that body:
+    ///
+    /// * an armed unboxed-Float speculation, whose dynvar accesses address
+    ///   the root's FP save/spill slots (issue #1140);
+    /// * a source-routed `...` rest, for which the caller emitted no rest
+    ///   `Array` (D1);
+    /// * a return value the caller folded into its own state — a
+    ///   `ReturnValue::Const` leaves the caller with no store at all, so a
+    ///   replacement body that computes a different value is never read.
+    ///
+    /// The first two used to be special-cased here and the rest ran
+    /// standalone, which made the invariant one of enumeration: every new
+    /// agreement between a caller and the body it specialized had to be
+    /// added to the list, and the third one above was not (a constant
+    /// redefined under a folded return kept the stale value forever).
+    /// Rebuilding the root re-pairs both sides by construction, and the
+    /// fresh root re-specializes under the inline caches that triggered
+    /// the request.
+    ///
     fn recompile_specialized(
         &mut self,
         globals: &mut Globals,
@@ -617,18 +671,15 @@ impl Codegen {
         reason: RecompileReason,
     ) -> Option<()> {
         let SpecializedPatchEntry {
-            iseq_id,
-            self_class,
-            patch_point,
-            speculated_root,
+            iseq_id: _iseq_id,
+            owner,
             ..
         } = self.specialized_info[idx].clone();
         #[cfg(feature = "jit-log")]
         eprintln!(
-            "[JIT] recompile_specialized idx={idx} iseq={:?} ({:?}) speculated={}",
-            globals.store[iseq_id].name(),
+            "[JIT] recompile_specialized idx={idx} iseq={:?} ({:?})",
+            globals.store[_iseq_id].name(),
             reason,
-            speculated_root.is_some(),
         );
         #[cfg(feature = "jit-log")]
         crate::codegen::jit_stats::bump(match reason {
@@ -640,77 +691,10 @@ impl Codegen {
             }
             _ => &crate::codegen::jit_stats::RECOMPILE_SPEC_OTHER,
         });
-        if let Some(root) = speculated_root {
-            return self.recompile_speculated_root(globals, root, reason);
-        }
-
-        let entry = self.jit.label();
-        let class_version = self.class_version();
-        self.compile(
-            globals,
-            iseq_id,
-            self_class,
-            None,
-            entry.clone(),
-            class_version,
-            Some(reason),
-        )?;
-
-        let patch_point = self.jit.get_label_address(&patch_point);
-        self.jit.apply_jmp_patch_address(patch_point, &entry);
-        // The fresh body reads its own version words; the owner's salvage
-        // records no longer cover it (see `SpecializedPatchEntry::owner`).
-        self.specialized_info[idx].owner = None;
-        Some(())
-    }
-
-    /// aarch64 specialized recompile. Mirrors the x86 variant, but installs the
-    /// recompiled body by rewriting the `SpecializedCall` site's `bl` to it
-    /// (aarch64 has no `apply_jmp_patch_address`, but it can patch a single
-    /// branch instruction — see [`Codegen::patch_call_to_entry`]). Bails
-    /// (leaving the old specialized body in place) if the lowering bails.
-    #[cfg(target_arch = "aarch64")]
-    fn recompile_specialized(
-        &mut self,
-        globals: &mut Globals,
-        idx: usize,
-        reason: RecompileReason,
-    ) -> Option<()> {
-        let SpecializedPatchEntry {
-            iseq_id,
-            self_class,
-            patch_point,
-            speculated_root,
-            ..
-        } = self.specialized_info[idx].clone();
-        if let Some(root) = speculated_root {
-            return self.recompile_speculated_root(globals, root, reason);
-        }
-        let entry = self.jit.label();
-        let class_version = self.class_version();
-        let compiled = self
-            .compile(
-                globals,
-                iseq_id,
-                self_class,
-                None,
-                entry.clone(),
-                class_version,
-                Some(reason),
-            )
-            .is_some();
-        // Re-arm executable permission / flush the I-cache for the freshly
-        // emitted body (and resolve `entry`'s address) before patching.
-        self.jit.finalize();
-        if !compiled {
-            return None;
-        }
-        let patch_point = self.jit.get_label_address(&patch_point);
-        self.patch_call_to_entry(patch_point, &entry);
-        // The fresh body reads its own version words; the owner's salvage
-        // records no longer cover it (see `SpecializedPatchEntry::owner`).
-        self.specialized_info[idx].owner = None;
-        Some(())
+        // `None` only for a body an earlier standalone recompile detached;
+        // nothing detaches one now. Leaving the body in place is safe — a
+        // failing guard deopts it on every call.
+        self.recompile_root_unit(globals, owner?, reason)
     }
 }
 

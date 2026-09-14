@@ -591,25 +591,39 @@ fn block_arg_to_ary(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resul
     // multiple-assignment path and dispatch `#to_ary` through the normal
     // method-resolution machinery (so `method_missing` is honoured too).
     //
-    // An object that does not even respond to `#respond_to?` (a bare
-    // `BasicObject`) cannot be coerced: pass it through as a single scalar
-    // argument rather than raising `NoMethodError`, matching CRuby.
-    if globals
-        .check_method(v, IdentId::get_id("respond_to?"))
-        .is_none()
-    {
-        return Ok(None);
-    }
-    let responds = vm
-        .invoke_method_inner(
+    // An object without `#respond_to?` (a `BasicObject` subclass) is
+    // probed the way CRuby's `rb_check_funcall` probes it: a `#to_ary` of
+    // its own counts, and otherwise `#respond_to_missing?(:to_ary, true)`
+    // decides whether `#method_missing` supplies one (prism's
+    // `LexCompat::Token` delegates to its array that way). Anything else
+    // passes through as a single scalar argument, never a NoMethodError.
+    let respond_to = IdentId::get_id("respond_to?");
+    let responds = if globals.check_method(v, respond_to).is_some() {
+        vm.invoke_method_inner(
             globals,
-            IdentId::get_id("respond_to?"),
+            respond_to,
             v,
             &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
             None,
             None,
         )?
-        .as_bool();
+        .as_bool()
+    } else if globals.check_method(v, IdentId::TO_ARY).is_some() {
+        true
+    } else {
+        let respond_to_missing = IdentId::get_id("respond_to_missing?");
+        globals.check_method(v, respond_to_missing).is_some()
+            && vm
+                .invoke_method_inner(
+                    globals,
+                    respond_to_missing,
+                    v,
+                    &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
+                    None,
+                    None,
+                )?
+                .as_bool()
+    };
     if !responds {
         return Ok(None);
     }
@@ -1583,6 +1597,27 @@ fn invoker_arguments_inner(
     } else {
         None
     };
+
+    // Block auto-splat for a direct invocation (`Proc#call`, a builtin
+    // yielding one value): a lone non-Array argument to a multi-param
+    // block is coerced via `#to_ary`, as at a `yield` site. The coerced
+    // array is held here while `positional_invoker` reads its buffer.
+    let single_arg_expand = info.single_arg_expand();
+    let coerced: Value;
+    // SAFETY: with one argument `args` points at it whichever way the
+    // caller laid its arguments out.
+    let args = if single_arg_expand
+        && arg_num == 1
+        && ex.is_none()
+        && !unsafe { *args }.is_array_ty()
+        && let Some(ary) = block_arg_to_ary(vm, globals, unsafe { *args })?
+    {
+        coerced = ary;
+        &coerced as *const Value
+    } else {
+        args
+    };
+    let info = &globals.store[callee_fid];
 
     // required + optional + post + rest
     positional_invoker(info, callee_lfp, args, arg_num, upward, ex)?;

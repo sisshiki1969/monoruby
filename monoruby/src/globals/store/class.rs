@@ -89,6 +89,26 @@ pub const YIELDER_CLASS: ClassId = ClassId::new(60);
 /// on (for `Module.used_modules` and for `#to_s`).
 pub const REFINEMENT_CLASS: ClassId = ClassId::new(61);
 
+/// Internal "Bignum" tag — like [`BOOL_CLASS`], not a Ruby-visible class:
+/// every Integer keeps its `Integer` identity at the user level. The
+/// binop/cmp inline caches (and the PMC they feed) record a heap Integer
+/// under this tag instead of `INTEGER_CLASS`, so the profile machinery
+/// sees the two *representations* as two classes: a site that has only
+/// ever seen fixnums stays monomorphic, and the first Bignum operand is a
+/// class change — it stamps the site's POLY byte and lands in the PMC,
+/// exactly like `nil` arriving at an Integer compare. The existing
+/// polymorphic treatments then apply unchanged: the two-arm dispatch's
+/// `Integer` arm is the fixnum tag test, so the Bignum share falls to the
+/// guard-free generic arm instead of deopting forever, and the
+/// `BecamePolymorphic` heal's POLY-byte gate passes for genuinely
+/// Bignum-visited sites (it exists to block exactly the sites the old
+/// vocabulary could not describe). Method resolution for the tag
+/// delegates to `INTEGER_CLASS` (see
+/// `check_method_for_class_with_version`); the JIT never emits an inline
+/// arm or a class guard for it — a Bignum-profiled receiver takes the
+/// generic call, which is where a heap Integer wants to be anyway.
+pub const BIGNUM_CLASS: ClassId = ClassId::new(62);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ClassId(NonZeroU32);
@@ -155,6 +175,7 @@ impl std::fmt::Debug for ClassId {
             55 => write!(f, "ARITHMETIC_SEQUENCE"),
             56 => write!(f, "SIGNAL_EXCEPTION"),
             57 => write!(f, "INTERRUPT"),
+            62 => write!(f, "BIGNUM"),
             n => write!(f, "ClassId({n})"),
         }
     }
@@ -278,7 +299,7 @@ pub struct ClassInfo {
     ///
     /// corresponding class object.
     ///
-    object: Option<Module>,
+    pub(in crate::globals) object: Option<Module>,
     ///
     /// method table.
     ///
@@ -371,6 +392,16 @@ pub struct ClassInfo {
     /// copy-hook dispatch and return the raw shallow copy.
     ///
     default_copy_at: std::cell::Cell<Option<u32>>,
+    ///
+    /// Version-stamped memo: as of class_version `.0`, `hash` on this class
+    /// resolves to `.1` (`None` = the chain defines no `hash`). Every Hash
+    /// and Set operation with a non-immediate key asks whether the key still
+    /// carries the builtin `hash` (`has_builtin_identity_hash` /
+    /// `has_builtin_container_hash`); without the memo each of those was a
+    /// probe of the global method cache — about 150 a request in
+    /// ruby-bench's `railsbench`.
+    ///
+    hash_method_at: std::cell::Cell<Option<(u32, Option<FuncId>)>>,
 }
 
 /// C-level allocator function pointer. Given a class id (and a globals
@@ -425,7 +456,7 @@ pub fn struct_members_len(store: &super::Store, class_id: ClassId) -> usize {
     use crate::IdentId;
     let mut cls = store[class_id].get_module();
     loop {
-        if let Some(m) = store.get_ivar(cls.as_val(), IdentId::get_id("/members"))
+        if let Some(m) = store.get_ivar(cls.as_val(), IdentId::_MEMBERS)
             && let Some(arr) = m.try_array_ty()
         {
             break arr.len();
@@ -513,6 +544,7 @@ impl ClassInfo {
             no_to_str_at: std::cell::Cell::new(None),
             neq_basic_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
+            hash_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
         }
     }
@@ -540,6 +572,7 @@ impl ClassInfo {
             no_to_str_at: std::cell::Cell::new(None),
             neq_basic_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
+            hash_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
         }
     }
@@ -612,6 +645,14 @@ impl ClassInfo {
 
     pub(super) fn match_method_at(&self) -> Option<(u32, FuncId)> {
         self.match_method_at.get()
+    }
+
+    pub(super) fn hash_method_at(&self) -> Option<(u32, Option<FuncId>)> {
+        self.hash_method_at.get()
+    }
+
+    pub(super) fn set_hash_method_at(&self, version: u32, fid: Option<FuncId>) {
+        self.hash_method_at.set(Some((version, fid)));
     }
 
     pub(super) fn set_match_method_at(&self, version: u32, fid: FuncId) {
@@ -911,6 +952,21 @@ impl ClassInfoTable {
         self[class_id].object.unwrap()
     }
 
+    /// Whether an instance of *class* `is_a?` *target*: the same
+    /// superclass walk as `Value::is_kind_of`, started from a class id.
+    /// `false` for a class with no backing object (`BOOL_CLASS` and the
+    /// other inline-cache-only tags).
+    pub(crate) fn class_is_kind_of(&self, class: ClassId, target: ClassId) -> bool {
+        let mut cur = self[class].try_get_module();
+        while let Some(m) = cur {
+            if m.id() == target {
+                return true;
+            }
+            cur = m.superclass();
+        }
+        false
+    }
+
     pub fn object_class(&self) -> Module {
         self.get_module(OBJECT_CLASS)
     }
@@ -923,7 +979,7 @@ impl ClassInfoTable {
     ) -> Module {
         let id = self.copy_class(original_class);
         let class_obj = Value::singleton_class_empty(id, super_class.into(), base).as_class();
-        self[id].object = Some(class_obj);
+        self.set_object(id, class_obj);
         self[id].mark_dirty();
         class_obj
     }
@@ -1788,7 +1844,7 @@ impl ClassInfoTable {
             Some(p) => p == OBJECT_CLASS || self[p].is_name_permanent(),
             None => false,
         };
-        self[class_id].object = Some(class_obj.as_class());
+        self.set_object(class_id, class_obj.as_class());
         self[class_id].mark_dirty();
         self[class_id].name = name.map(|id| id.to_string());
         self[class_id].name_permanent = name.is_some() && parent_permanent;
@@ -1834,6 +1890,21 @@ impl ClassInfoTable {
     ) -> Module {
         let name_id = IdentId::get_id(name);
         self.define_class_with_identid(name_id, superclass, parent)
+    }
+
+    /// `define_class` with the instance object type spelled out (a class
+    /// whose instances are native objects, not `ObjTy::OBJECT`): the JIT
+    /// and the interpreter then keep its ivars in the heap table instead
+    /// of the inline slots. Subclasses inherit the type.
+    pub(crate) fn define_class_with_instance_ty(
+        &mut self,
+        name: &str,
+        superclass: impl Into<Option<Module>>,
+        parent: ClassId,
+        instance_ty: ObjTy,
+    ) -> Module {
+        let name_id = IdentId::get_id(name);
+        self.define_class_inner(Some(name_id), superclass, Some(parent), false, Some(instance_ty))
     }
 
     /// A class with a display name but no constant binding and a custom
@@ -1933,8 +2004,8 @@ impl ClassInfoTable {
         } else {
             Value::class_empty(new_id, real_super)
         };
+        self.set_object(new_id, class_obj.as_class());
         let info = &mut self[new_id];
-        info.object = Some(class_obj.as_class());
         info.name = None;
         info.parent = None;
         info.instance_ty = instance_ty;

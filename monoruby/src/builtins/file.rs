@@ -3163,7 +3163,14 @@ mod tests {
         // ~user expands via getpwnam, mid-path ~ stays literal.
         // ~root is OS-dependent (/root vs /var/root) — live CRuby.
         run_test_once_live(
-            r##"[File.expand_path("////some/path"), File.expand_path("//some/path"), File.expand_path("/some////path"), File.expand_path("/a/./b/../c//d/"), File.expand_path("~root/x"), File.expand_path("/~root/a"), File.expand_path("a", "/"), File.expand_path("../../bin", "/tmp/x"), (begin; File.expand_path("~no_such_user_zzq"); rescue => e; [e.class, e.message]; end)]"##,
+            r##"[File.expand_path("////some/path"), File.expand_path("//some/path"), File.expand_path("/some////path"), File.expand_path("/a/./b/../c//d/"), File.expand_path("~root/x"), File.expand_path("/~root/a"), File.expand_path("a", "/"), File.expand_path("../../bin", "/tmp/x")]"##,
+        );
+        // The unknown-user error is CRuby's own, OS-independent — keep
+        // it oracle-backed so a live ruby (whose miss lookup can hang
+        // for 45 s behind WSL2's nss-systemd) is spawned at most once,
+        // at recording time.
+        run_test_once(
+            r##"(begin; File.expand_path("~no_such_user_zzq"); rescue => e; [e.class, e.message]; end)"##,
         );
     }
 

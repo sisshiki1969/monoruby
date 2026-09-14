@@ -1,0 +1,14 @@
+[package]
+name = "libsqlite3-src"
+version = "3.48.0"
+edition = "2024"
+description = "SQLite 3.48.0 built from the vendored amalgamation and linked statically; the FFI monoruby's SQLite3 gem uses"
+license = "blessing"
+links = "sqlite3"
+build = "build.rs"
+publish = false
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.0"

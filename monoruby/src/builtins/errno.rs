@@ -350,19 +350,16 @@ const ERRNO_ALIASES: &[(&str, &str)] = &[
 ];
 
 pub(super) fn init(globals: &mut Globals) {
-    let object = globals.object_class();
     let syscall_err = globals
         .store
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("SystemCallError"))
         .expect("SystemCallError must be defined before errno::init");
     let syscall_err_module = syscall_err.expect_class(globals).unwrap();
 
-    // `Errno` is a plain class containing the per-errno exception classes,
-    // matching CRuby (which exposes it as a module — we use a class here for
-    // continuity with the existing `monoruby/builtins/error.rb`, which the
-    // Ruby side reopens after this).
-    let errno = globals.define_class("Errno", object, OBJECT_CLASS);
-    let errno_id = errno.id();
+    // `Errno` is a module, as in CRuby: libraries reopen it with
+    // `module Errno` to add their own exception classes (webrick's
+    // `Errno::EPROTO`), which a class would reject with a TypeError.
+    let errno_id = globals.define_toplevel_module("Errno").id();
 
     for (name, num) in ERRNO_TABLE {
         let cls = globals.define_class(name, syscall_err_module, errno_id);

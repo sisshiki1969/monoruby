@@ -315,7 +315,19 @@ impl Globals {
                 return Some(p);
             }
         }
-        None
+
+        // Installed-gem fallback (what rubygems' `require` does through
+        // `Gem.try_activate` on a miss): the first gem `lib/` holding the
+        // file is spliced into `$LOAD_PATH` — so the gem's other files
+        // resolve through the ordinary walk from now on — and answers.
+        let hit = self
+            .gem_lib_dirs
+            .iter()
+            .position(|lib| std::path::Path::new(lib).join(cand).exists())?;
+        let lib = self.gem_lib_dirs.remove(hit);
+        let p = probe(std::path::Path::new(&lib), cand);
+        self.extend_load_path(std::iter::once(lib));
+        p
     }
 
     ///

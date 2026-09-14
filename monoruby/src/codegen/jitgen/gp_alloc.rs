@@ -107,7 +107,7 @@ pub(in crate::codegen::jitgen) enum GpAction {
 }
 
 /// One slot an allocatable register currently caches.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Holder {
     slot: SlotId,
     /// the register's value differs from `slot`'s stack home (a binop result,
@@ -135,7 +135,7 @@ struct Holder {
 /// It is flushed empty at every basic-block boundary, so although it rides
 /// inside the cloned/merged `SlotState` it never actually carries state across a
 /// block merge (the per-block-locality the design requires).
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(in crate::codegen::jitgen) struct GpRegFile {
     /// `holders[i]` is the set of slots `GP_ALLOC_SET[i]` caches (empty = free).
     holders: Vec<Vec<Holder>>,

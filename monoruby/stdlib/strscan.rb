@@ -188,7 +188,7 @@ class StringScanner
         count = _group_count
         n += count if n < 0
         return nil if n < 0 || n >= count
-        if Integer === @match_spans
+        if @match_spans.is_a?(Integer)
           matched # count == 1, so n == 0: the whole match
         else
           b = @match_spans[2 * n]
@@ -286,7 +286,7 @@ class StringScanner
   end
 
   def _group_count
-    Integer === @match_spans ? 1 : @match_spans.size / 2
+    @match_spans.is_a?(Integer) ? 1 : @match_spans.size / 2
   end
 
   # Group count across both representations (for `captures`).
@@ -296,11 +296,11 @@ class StringScanner
 
   # Whole-match byte offsets relative to @prev_pos (register path).
   def _match_begin
-    Integer === @match_spans ? 0 : @match_spans[0]
+    @match_spans.is_a?(Integer) ? 0 : @match_spans[0]
   end
 
   def _match_end
-    Integer === @match_spans ? @match_spans : @match_spans[1]
+    @match_spans.is_a?(Integer) ? @match_spans : @match_spans[1]
   end
 
   # Both match paths hand the engine only the rest of the string, so
@@ -335,7 +335,7 @@ class StringScanner
     @match_spans = spans
     return nil unless spans
     @match_re = pattern
-    len = Integer === spans ? spans : spans[1]
+    len = spans.is_a?(Integer) ? spans : spans[1]
     @pos += len if advance
     len
   end
@@ -352,7 +352,7 @@ class StringScanner
     @match_spans = spans
     return nil unless spans
     @match_re = pattern
-    end_pos = Integer === spans ? spans : spans[1]
+    end_pos = spans.is_a?(Integer) ? spans : spans[1]
     @pos += end_pos if advance
     end_pos
   end

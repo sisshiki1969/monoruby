@@ -1308,19 +1308,14 @@ fn lookup_constant_path(
         // classes, as `get_constant_superclass_with_class` does). For
         // later segments, only the resolved class itself is checked.
         let val = if i == 0 && inherit {
-            match vm.get_constant_superclass_with_class(globals, current, id) {
-                Ok((v, _)) => Some(v),
-                Err(_) => None,
-            }
+            vm.get_constant_superclass(globals, current, id)?
         } else if globals.store[current.id()].has_own_constant(id) {
             // For nested segments, restrict to *direct* lookup on the
-            // resolved class (no superclass walk). Use the
-            // `get_constant_checked` path so autoload triggers fire
-            // correctly; an error means "missing constant" -> None.
-            match vm.get_constant_checked(globals, current.id(), id) {
-                Ok(v) => Some(v),
-                Err(_) => None,
-            }
+            // resolved class (no superclass walk). `get_constant` fires
+            // an autoload if one is registered; an error the autoloaded
+            // file raised propagates (CRuby lets it through too), and
+            // only a genuinely missing constant answers None.
+            vm.get_constant(globals, current.id(), id)?
         } else {
             None
         };
@@ -1376,10 +1371,7 @@ fn probe_constant_path(
         // we can walk into the named class. A miss short-circuits
         // to "not defined".
         let val = if i == 0 && inherit {
-            match vm.get_constant_superclass_with_class(globals, current, id) {
-                Ok((v, _)) => Some(v),
-                Err(_) => None,
-            }
+            vm.get_constant_superclass(globals, current, id)?
         } else if globals.store[current.id()].has_own_constant(id) {
             match vm.get_constant_checked(globals, current.id(), id) {
                 Ok(v) => Some(v),
@@ -1418,31 +1410,9 @@ fn const_set(
     validate_constant_name(name)?;
     let module = self_val.as_class().id();
     let val = lfp.arg(1);
-    // Warn (via Ruby's `$stderr` so mspec's `complain` matcher captures it)
-    // when overwriting an existing same-name constant on the receiver,
-    // matching CRuby's redefinition warning. The qualified name uses
-    // the full ancestor chain so reflective tests can match
-    // `/.+::Name/`.
-    if globals.store.get_constant_noautoload(module, name).is_some() {
-        let parent_name = globals.store.qualified_name(module);
-        let qual = if parent_name.is_empty() {
-            name.get_name().to_string()
-        } else {
-            format!("{parent_name}::{}", name.get_name())
-        };
-        let msg = format!("warning: already initialized constant {qual}\n");
-        let stderr_id = IdentId::get_id("$stderr");
-        let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
-        let write_id = IdentId::get_id("write");
-        let _ = vm.invoke_method_inner(
-            globals,
-            write_id,
-            stderr,
-            &[Value::string(msg)],
-            None,
-            None,
-        );
-    }
+    // Warn when overwriting an existing same-name constant on the
+    // receiver, matching CRuby's redefinition warning.
+    vm.warn_already_initialized_constant(globals, module, name);
     globals.set_constant(module, name, val);
     // Record the call-site as the constant's source location so
     // `Module#const_source_location(:Foo)` returns `[__FILE__,

@@ -192,6 +192,68 @@ impl Codegen {
     }
 
     ///
+    /// `rax <- Value::bool(R(reg).is_a?(class))` — see `AsmInst::KindOfConst`.
+    ///
+    /// The value's class id goes to eax (an immediate's by tag test, a heap
+    /// value's from `RValue.class`); a hit on *class* answers at once,
+    /// otherwise the class object (from the `GLOBALS_CLASS_OBJECTS` mirror)
+    /// is walked up the superclass chain — included modules sit in it as
+    /// iclasses — until *class* or the root. Clobbers rax and rcx.
+    ///
+    pub(super) fn kind_of_const(&mut self, reg: GP, class: ClassId) {
+        assert!(!matches!(reg, GP::Rax | GP::Rcx));
+        let heap = self.jit.label();
+        let have = self.jit.label();
+        let walk = self.jit.label();
+        let hit = self.jit.label();
+        let miss = self.jit.label();
+        let exit = self.jit.label();
+        let class_id = class.u32();
+        monoasm!( &mut self.jit,
+            testq R(reg as _), 0b111;
+            jz   heap;
+            movl rax, (INTEGER_CLASS.u32());
+            testq R(reg as _), 0b001;
+            jnz  have;
+            movl rax, (FLOAT_CLASS.u32());
+            testq R(reg as _), 0b010;
+            jnz  have;
+            movl rax, (SYMBOL_CLASS.u32());
+            cmpb R(reg as _), (TAG_SYMBOL);
+            jeq  have;
+            movl rax, (NIL_CLASS.u32());
+            cmpq R(reg as _), (NIL_VALUE);
+            jeq  have;
+            movl rax, (TRUE_CLASS.u32());
+            cmpq R(reg as _), (TRUE_VALUE);
+            jeq  have;
+            movl rax, (FALSE_CLASS.u32());
+            jmp  have;
+        heap:
+            movl rax, [R(reg as _) + (RVALUE_OFFSET_CLASS)];
+        have:
+            cmpl rax, (class_id);
+            jeq  hit;
+            movq rcx, [r12 + (GLOBALS_CLASS_OBJECTS)];
+            movq rcx, [rcx + rax * 8];
+        walk:
+            testq rcx, rcx;
+            jz   miss;
+            movq rcx, [rcx + (MODULE_OFFSET_SUPERCLASS)];
+            testq rcx, rcx;
+            jz   miss;
+            cmpl [rcx + (MODULE_OFFSET_CLASS_ID)], (class_id);
+            jne  walk;
+        hit:
+            movq rax, (TRUE_VALUE);
+            jmp  exit;
+        miss:
+            movq rax, (FALSE_VALUE);
+        exit:
+        );
+    }
+
+    ///
     /// Route a class-guard miss through the `profile` recorder, then on to
     /// *deopt*.
     ///
@@ -228,14 +290,26 @@ impl Codegen {
             movq [rsp], rax;
         );
         self.save_registers();
+        // The guard jumps here straight out of the body, so the stack
+        // parity is whatever the unit happened to run at — a Loop-JIT
+        // frame with an odd spill-slot count sits 8 bytes off the parity a
+        // method frame has, and a fixed `subq` would call the recorder
+        // misaligned there (Rust code then faults on the first `movdqa`
+        // spill — seen as a SIGSEGV inside a `HashMap::insert`). Align
+        // explicitly instead of assuming, exactly as a signal handler
+        // must: stash rsp below the red-zone hop, round down to 16, and
+        // restore from the stash.
         monoasm!( &mut self.jit,
             movq rdx, rdi;      // the value that failed the guard
             movq rdi, rbx;      // &mut Executor
             movq rsi, r12;      // &mut Globals
+            movq rax, rsp;
+            subq rsp, 4112;
+            andq rsp, (-16);
+            movq [rsp], rax;
             movq rax, (guard_fail);
-            subq rsp, 4088;
             call rax;
-            addq rsp, 4088;
+            movq rsp, [rsp];
         );
         self.restore_registers();
         monoasm!( &mut self.jit,

@@ -294,3 +294,79 @@ fn a_deferred_home_read_after_a_side_exit() {
         "#,
     );
 }
+
+/// A specialized callee that returns its float in a register, recompiled
+/// while the call site that reads the register stays in place.
+///
+/// `Codegen::recompile_specialized` replaces such a body by compiling
+/// `(iseq, self_class)` on its own and patching the call into it. That
+/// compile knows nothing of the call site, so it returns boxed in rax and
+/// the caller reads a register nothing wrote — unless the body is marked
+/// caller-paired and the recompile rebuilds the root unit instead.
+///
+/// The `nil` poisoning is what forces the recompile: the block's
+/// comparison side-exits once the array stops being all Floats.
+#[test]
+fn a_float_return_survives_a_specialized_recompile() {
+    run_test_once(
+        r#"
+        class C
+          def initialize
+            @a = [0.0, 1.0, 2.0]
+            @hit = 0
+          end
+          def poison(v) = @a[1] = v
+          def f(d)
+            s = 160.0 / d
+            @a.each do |x|
+              @hit += 1 if !x.nil? && x < s
+            end
+            s * 2.0
+          end
+        end
+        c = C.new
+        res = 0.0
+        acc = 0.0
+        5000.times do |i|
+          c.poison(i % 97 == 96 ? nil : (i % 17).to_f)
+          res = c.f(2.0)
+          acc += res
+        end
+        [res, acc]
+        "#,
+    );
+}
+
+/// The same, for a float *argument*: the call site hands it over in a
+/// register and the entry binds it `Sf`, so a recompiled body that reads
+/// the parameter's slot must still find the boxed copy there.
+#[test]
+fn a_float_argument_survives_a_specialized_recompile() {
+    run_test_once(
+        r#"
+        class C
+          def initialize
+            @a = [0.0, 1.0, 2.0]
+            @hit = 0
+          end
+          def poison(v) = @a[1] = v
+          def f(d)
+            s = 160.0 / d
+            @a.each do |x|
+              @hit += 1 if !x.nil? && x < s
+            end
+            s * 2.0
+          end
+        end
+        c = C.new
+        res = 0.0
+        acc = 0.0
+        5000.times do |i|
+          c.poison(i % 97 == 96 ? nil : (i % 17).to_f)
+          res = c.f(2.0 + (i % 13))
+          acc += res
+        end
+        [res, acc]
+        "#,
+    );
+}

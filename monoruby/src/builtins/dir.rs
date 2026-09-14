@@ -1239,7 +1239,13 @@ mod tests {
         // Dir.home("root") is OS-dependent (/root on Linux, /var/root on
         // macOS): verify against a live CRuby, not the oracle.
         run_test_once_live(
-            r##"(a=Dir.home("root"); b=(begin; Dir.home("no_such_user_zzq"); rescue => e; e.class; end); c=Dir.foreach("/").is_a?(Enumerator); d=Dir.foreach("/").size; e2=(begin; Dir.fchdir(-1); rescue => x; [x.class, x.message]; end); f=(Dir.glob("**").sort==Dir.glob("*").sort); [a,b,c,d,e2,f])"##,
+            r##"(a=Dir.home("root"); c=Dir.foreach("/").is_a?(Enumerator); d=Dir.foreach("/").size; e2=(begin; Dir.fchdir(-1); rescue => x; [x.class, x.message]; end); f=(Dir.glob("**").sort==Dir.glob("*").sort); [a,c,d,e2,f])"##,
+        );
+        // The unknown-user ArgumentError is CRuby's own, OS-independent —
+        // oracle-backed, so a live ruby (whose miss lookup can hang for
+        // 45 s behind WSL2's nss-systemd) is spawned at most once.
+        run_test_once(
+            r##"(begin; Dir.home("no_such_user_zzq"); rescue => e; e.class; end)"##,
         );
     }
 

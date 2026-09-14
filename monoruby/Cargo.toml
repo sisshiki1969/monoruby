@@ -72,14 +72,6 @@ shadow-placement = []
 # formula it replaces (verified via `shadow-placement` digests); the seam where
 # P4's loop-aware allocator swaps in. Default-off until the M1 A/B gate clears.
 phys-table = []
-# §5 §27.3 Stage-2: the loop-aware FP allocation policy. ① (the back-edge
-# fixpoint) records the loop-carried float set `L`; the phase-1 spill-victim
-# policy then keeps `L`'s `Sf` caches resident (a fresh value spills instead of
-# evicting a loop-carried float), cutting in-loop reloads. NON-byte-identical by
-# design (§26): it changes placement / removes back-edge moves, so the
-# `shadow-placement` digest becomes a *delta* meter, not an equality check, and
-# the gate is M1 perf A/B (§27.3-2c). Default-off until that gate clears.
-phys-loop-aware = []
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 
@@ -101,6 +93,7 @@ indexmap = "2.14.0"
 num = "0.4.3"
 console = "0.15.11"
 fxhash = "0.2.1"
+memchr = "2"
 tempfile = "3.27.0"
 dtoa = "1.0.11"
 chrono = "0.4.44"
@@ -115,6 +108,13 @@ regex = "1.12.3"
 libc = "0.2.186"
 getrandom = "0.3.3"
 rand_mt = { version = "5.0.0", features = ["rand-traits"] }
+# The bundled zlib (built from source, statically linked) behind
+# `Zlib::Deflate` / `Zlib::Inflate` in stdlib/zlib.rb — `String.__zstream_*`
+# in src/builtins/zlib.rs. Real DEFLATE compression, byte-identical to the
+# zlib CRuby's zlib.so links (PDF writers compare output sizes).
+libz-sys = { version = "1.1", features = ["static"] }
+libxml2-src = { path = "../libxml2-src" }
+libsqlite3-src = { path = "../libsqlite3-src" }
 bitvec = "1.0.1"
 ansi_term = "0.12.1"
 dirs = "6.0.0"
@@ -127,9 +127,17 @@ divrem = "1.0.0"
 libffi = "5.1.0"
 # Digest builtins (`builtins/digest.rs`) — used on every platform, so these
 # must stay in the cross-platform `[dependencies]`, not a target block.
+# `hmac` / `pbkdf2` back `OpenSSL::HMAC` and `OpenSSL::PKCS5.pbkdf2_hmac`,
+# whose per-iteration work would otherwise run as Ruby.
 md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"
+hmac = { version = "0.12", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+aes-gcm = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+libyaml-safer = "0.3"
 
 # macOS aarch64 (Apple Silicon): the bundled libffi-sys 4.1.0 fails to
 # link `_ffi_prep_cif_machdep` (the arm64 assembly piece doesn't build

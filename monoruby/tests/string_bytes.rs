@@ -664,3 +664,38 @@ fn setbyte_edge_cases_still_deopt_correctly() {
         "#,
     );
 }
+
+#[test]
+fn empty_slice_keeps_the_receiver_encoding() {
+    // `s[i, 0]` / `s[i...i]` answer an empty String in the receiver's
+    // encoding (CRuby), not a fresh UTF-8 literal — a binary buffer sliced
+    // to nothing stays binary.
+    run_test(
+        r#"
+        b = "abc".b
+        u = "abc"
+        a = "abc".encode("US-ASCII")
+        [b[0, 0].encoding.name, b[3, 0].encoding.name, b[1...1].encoding.name, b[0..-1][0, 0].encoding.name,
+         u[0, 0].encoding.name, a[2, 0].encoding.name, b[1, 1].encoding.name, b[5, 0], "".b[0, 0].encoding.name]
+        "#,
+    );
+}
+
+#[test]
+fn codepoints_are_native() {
+    // `String#codepoints` / `#each_codepoint` were Ruby (`each_char` +
+    // `ord`, 10x slower than CRuby); now native, with the block, the
+    // enumerator and the binary-encoding forms.
+    run_test(
+        r#"
+        s = "aé\u{1F600}z"
+        r = [s.codepoints, s.each_codepoint.to_a, s.each_codepoint.class, "".codepoints]
+        acc = []
+        r << (s.each_codepoint { |c| acc << c * 2 }).equal?(s) << acc
+        r << ("abc".b.codepoints) << ("\xff\x80".b.codepoints) << s.codepoints { |c| c }.class
+        r << (s.each_codepoint.map { |c| c + 1 }) << s.each_codepoint.with_index.to_a.last
+        r << (begin; "\xff".codepoints; rescue ArgumentError => e; e.class; end)
+        r
+        "#,
+    );
+}

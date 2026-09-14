@@ -881,7 +881,7 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///     ASCII-compatible *and* the subject is entirely 7-bit.
 ///   - Otherwise (a non-fixed, ASCII-compatible regexp on an
 ///     ASCII-compatible subject) any content is fine.
-fn check_match_encoding(
+pub(super) fn check_match_encoding(
     store: &Store,
     regex: &RegexpInner,
     str_enc: crate::value::Encoding,
@@ -988,6 +988,24 @@ fn regexp_match(
     let arg0 = lfp.arg(0);
     check_subject_match_encoding(&globals.store, &regex, arg0)?;
     warn_binary_regexp_match(vm, globals, &regex, arg0);
+    // A subject in a non-UTF-8 encoding Onigmo has a native codec for
+    // is matched on its raw bytes (see `Regexp#match`); the result is
+    // the *character* index of the match start.
+    if let Some(rs) = arg0.is_rstring()
+        && rs.code_range() != CodeRange::SevenBit
+        && let Some(native_enc) = RegexpInner::onigmo_encoding_for(rs.encoding())
+    {
+        vm.set_match_regex(self_);
+        let bytes = arg0.as_rstring_inner().as_bytes();
+        let res = match regex.captures_bytes_from_pos(bytes, arg0, native_enc, 0, vm)? {
+            Some(captures) => {
+                let start = captures.pos(0).map_or(0, |(s, _)| s);
+                Value::integer(char_index_of_byte(arg0.as_rstring_inner(), start) as i64)
+            }
+            None => Value::nil(),
+        };
+        return Ok(res);
+    }
     let given_owned;
     let given: &str = match arg0.is_rstring() {
         Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
@@ -1006,6 +1024,27 @@ fn regexp_match(
         None => Value::nil(),
     };
     Ok(res)
+}
+
+/// The character index of byte offset `byte` in `s`, walking the
+/// string's own encoding (one char per byte for single-byte encodings).
+pub(super) fn char_index_of_byte(s: &crate::value::rvalue::RStringInner, byte: usize) -> usize {
+    let mut chars = 0;
+    let mut off = 0;
+    for c in s.iter_char_bytes() {
+        if off >= byte {
+            break;
+        }
+        off += c.len();
+        chars += 1;
+    }
+    chars
+}
+
+/// The byte offset of character index `cp` in `s`, walking the string's
+/// own encoding; clamps to the end for a position past it.
+pub(super) fn byte_offset_of_char(s: &crate::value::rvalue::RStringInner, cp: usize) -> usize {
+    s.iter_char_bytes().take(cp).map(|c| c.len()).sum()
 }
 
 ///

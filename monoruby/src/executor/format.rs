@@ -516,6 +516,21 @@ fn force_decimal_point(s: &str) -> String {
     }
 }
 
+/// The `%g` image of `f` at the default precision, sign included —
+/// the form CRuby's `rb_raise` uses in "float %g out of range of ..."
+/// messages (e.g. `1e+19`, `-2.5`, `NaN`, `-Inf`).
+pub(crate) fn float_g_image(f: f64) -> String {
+    if f.is_nan() {
+        return "NaN".to_string();
+    }
+    let s = normalize_sci_exponent(&format_g(f.abs(), 6, false, true));
+    if f.is_sign_negative() {
+        format!("-{s}")
+    } else {
+        s
+    }
+}
+
 fn format_g(f: f64, precision: usize, uppercase: bool, strip: bool) -> String {
     if f == 0.0 {
         return "0".to_string();

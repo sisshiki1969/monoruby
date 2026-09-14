@@ -167,26 +167,35 @@ impl Codegen {
     ///
     /// Generate attr_reader.
     ///
+    /// The wrapper calls into Rust, so it must first step `rsp` past the
+    /// callee frame exactly as `gen_native_func_wrapper` does: an invoker
+    /// (`Executor::invoke_func` — `ary.sum(&:attr)`) lays the frame out
+    /// *below* its `rsp` and reads the saved cfp back from
+    /// `[rsp - RSP_CFP]` after the call, so a plain `sub rsp, 8; call`
+    /// would push the C return address straight over that slot and
+    /// leave `Executor::cfp` pointing into machine code.
+    ///
     fn gen_attr_reader(&mut self, ivar_name: IdentId) {
         let cache = self.jit.data_i64(-1);
+        self.attr_wrapper_prologue();
         monoasm!( &mut self.jit,
             movq rdi, [r14 - (LFP_SELF)];  // self: Value
             movq rsi, (ivar_name.get()); // name: IdentId
             movq rdx, r12; // &mut Globals
             lea  rcx, [rip + cache];
             movq rax, (get_instance_var_with_cache);
-            subq rsp, 8;
             call rax;
-            addq rsp, 8;
+            leave;
             ret;
         );
     }
 
     ///
-    /// Generate attr_writer.
+    /// Generate attr_writer (same frame discipline as `gen_attr_reader`).
     ///
     fn gen_attr_writer(&mut self, ivar_name: IdentId) {
         let cache = self.jit.data_i64(-1);
+        self.attr_wrapper_prologue();
         monoasm!( &mut self.jit,
             movq rdi, rbx; //&mut Executor
             movq rsi, r12; //&mut Globals
@@ -195,10 +204,24 @@ impl Codegen {
             movq r8, [r14 - (LFP_ARG0)];  //val: Value
             lea  r9, [rip + cache];
             movq rax, (set_instance_var_with_cache);
-            subq rsp, 8;
             call rax;
-            addq rsp, 8;
+            leave;
             ret;
+        );
+    }
+
+    /// `push rbp; mov rbp, rsp; sub rsp, <frame>` — reserve the callee
+    /// frame (`RSP_LOCAL_FRAME` + the registers `meta` declares, rounded
+    /// to keep `rsp` 16-byte aligned) before calling out to Rust.
+    fn attr_wrapper_prologue(&mut self) {
+        monoasm!( &mut self.jit,
+            pushq rbp;
+            movq rbp, rsp;
+            movzxw rax, [r14 - (LFP_REGNUM)];
+            addq rax, ((RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1);
+            andq rax, (-2);
+            shlq rax, 3;
+            subq rsp, rax;
         );
     }
 

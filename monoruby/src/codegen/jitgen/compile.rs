@@ -17,10 +17,30 @@ mod pic;
 mod variables;
 
 impl<'a> JitContext<'a> {
+    /// The `&block` parameter's slot value when the abstract state knows
+    /// it as a constant (a literal assigned to the parameter on this
+    /// path): only this frame's (`outer == 0`), named (`slot != 0`)
+    /// parameter. An unassigned parameter (the slot is 0) is never a
+    /// constant: the memory slot decides at run time.
+    fn block_param_slot_constant(
+        &self,
+        state: &AbstractState,
+        outer: usize,
+        slot: SlotId,
+    ) -> Option<Value> {
+        if outer != 0 || slot.0 == 0 {
+            return None;
+        }
+        match state.mode(slot) {
+            LinkMode::C(v) => Some(v),
+            _ => None,
+        }
+    }
+
     pub(super) fn traceir_to_asmir(
         &mut self,
         frame: JitStackFrame,
-        entry_chain: Option<Vec<AbstractFrame>>,
+        entry_chain: Option<Vec<FrameRef>>,
     ) -> JitResult<JitStackFrame> {
         self.push_frame(frame);
 
@@ -300,13 +320,6 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         assert!(state.no_capture_guard());
-        // Stage-A use propagation: land the float-consumed dynvar reads the
-        // previous instruction queued on the owner frames' parked states,
-        // while this frame's `outer` distances are still the ones the reads
-        // were recorded under.
-        for (outer, slot) in state.take_pending_outer_float_reads() {
-            state.mark_outer_float_read(outer as usize, slot);
-        }
         // A fusing arm (e.g. `try_fuse_array_minmax`) already emitted this
         // instruction's work together with its predecessor's.
         if self.fused_skip == Some(bc_pos) {
@@ -336,11 +349,11 @@ impl<'a> JitContext<'a> {
         // `SlotState::get_using_fpr`), so an arm that reaches it (directly, via the
         // cached `send`, or inside its `ir.<helper>` / `jit_*` builder) before any
         // clobber needs no head flush. Every slot *read* goes through the
-        // GP-resident-aware `load` / `write_back_slot` / `to_S_unguarded` /
-        // `copy_slot`, each of which re-homes a live resident rather than reading a
-        // stale stack home, so leaving a resident live into such an arm is safe.
-        // (That resident-awareness was missing from `write_back_slot` /
-        // `to_S_unguarded` / `copy_slot` and showed up as `string_scrub_block_form`
+        // GP-resident-aware `load` / `write_back` / `copy_slot`, each of which
+        // re-homes a live resident rather than reading a stale stack home, so
+        // leaving a resident live into such an arm is safe. (That
+        // resident-awareness was missing from the write-backs and `copy_slot`
+        // and showed up as `string_scrub_block_form`
         // / `hash_*` JIT miscompiles until fixed.) A head flush is also a no-op when
         // the register file is empty.
         //
@@ -389,7 +402,12 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
                 assert_ne!(0, self.loop_count());
                 self.dec_loop_count();
-                if self.is_loop() && self.loop_count() == 0 {
+                // The positional check backs up the counter: when an inner
+                // loop's `loop_end` sits in dead code the counter never
+                // returns to zero, but the region's own `loop_end` must
+                // still emit the exit bridge — otherwise execution falls
+                // off the end of the compiled unit into unemitted memory.
+                if self.is_loop() && (self.loop_count() == 0 || self.is_loop_region_end(bc_pos)) {
                     ir.deopt(state);
                     return Ok(CompileResult::ExitLoop);
                 }
@@ -397,6 +415,16 @@ impl<'a> JitContext<'a> {
             TraceIr::FrozenLiteral(dst, val) => {
                 if let Some(imm) = val.is_immediate() {
                     state.def_C(dst, imm);
+                } else if matches!(val.unpack(), RV::BigInt(_)) {
+                    // A bignum literal (`x >= 0x8000_0000_0000_0000`, the
+                    // dewasm sign-test idiom) folds as `LinkMode::C` like a
+                    // bignum from the constant cache (`load_constant`), so
+                    // the comparison/binop lowerings see its compile-time
+                    // sign instead of emitting a fixnum guard the heap
+                    // Integer fails on every execution. GC safety is the
+                    // const fold's: `wb_literal` writes the value back to
+                    // the stack slot before every safepoint.
+                    state.def_C(dst, val);
                 } else {
                     // Load the literal straight into a GP-pool register resident
                     // rather than through rax to the stack home (see `def_lit2gp`).
@@ -600,7 +628,7 @@ impl<'a> JitContext<'a> {
                             reg: src.reg,
                         });
                     if let Some(home) = self.outer_fpr_home_hint(ids, extra, src.outer, afpr) {
-                        let dfpr = state.def_F_new(dst);
+                        let dfpr = state.def_F(dst);
                         ir.push(AsmInst::LoadOuterFprHomeF { dst: dfpr, home });
                         if let Some(alias) = alias {
                             state.set_dynvar_alias(dst, alias);
@@ -614,8 +642,8 @@ impl<'a> JitContext<'a> {
                 state.def_rax2acc(ir, dst);
                 // Stage-A use propagation: remember where the value came
                 // from — a later raw-f64 consumption of *dst* is float-use
-                // evidence about the owner's slot (`use_as_float` queues
-                // it, the `compile_instruction` boundary lands it).
+                // evidence about the owner's slot, which
+                // `AbstractState::use_as_float` lands on the chain.
                 state.set_dynvar_src(dst, src_outer, src_reg);
                 // LFP-chain walk + loads: transparent.
                 self.restore_unfrozen(Some(dst));
@@ -634,29 +662,45 @@ impl<'a> JitContext<'a> {
                 // untouched.
                 self.restore_unfrozen(None);
             }
-            TraceIr::BlockArgProxy(ret, outer) => {
+            TraceIr::BlockArgProxy(ret, outer, slot) => {
                 state.flush_gp(ir);
+                // The `&block` parameter's slot decides at run time:
+                // assigned (non-zero), its value is forwarded; empty, the
+                // frame's block handler is. Only a literal the abstract
+                // state knows was assigned on this path folds here. An
+                // anonymous `&` / `...` has no slot (`slot == 0`).
+                if let Some(v) = self.block_param_slot_constant(state, outer, slot) {
+                    state.def_C(ret, v);
+                    return Ok(CompileResult::Continue);
+                }
                 // When the caller chain provably passes no block —
                 // including through `(...)` block-forwarding sites
                 // (`resolve_given_block` walks them) — the forwarded
-                // `&block` of `...` is nil at compile time. Fold the
-                // proxy to a constant `nil` instead of materializing it
-                // every call (`outer == 0`: the proxy refers to this
-                // frame's own block param). A deopt resumes the
-                // interpreter, which re-runs this `BlockArgProxy`
-                // bytecode and computes the same nil.
-                if outer == 0
+                // block of an anonymous parameter (which cannot be
+                // assigned) is nil at compile time. Fold the proxy to a
+                // constant `nil` instead of materializing it every call
+                // (`outer == 0`: the proxy refers to this frame's own
+                // block param). A deopt resumes the interpreter, which
+                // re-runs this `BlockArgProxy` bytecode and computes the
+                // same nil.
+                if slot.0 == 0
+                    && outer == 0
                     && self.is_specialized()
                     && let Some(None) = self.resolve_given_block()
                 {
                     state.def_C(ret, Value::nil());
                 } else {
                     state.def_S(ret);
-                    ir.block_arg_proxy(ret, outer);
+                    ir.block_arg_proxy(ret, outer, slot);
                 }
             }
-            TraceIr::BlockArg(ret, outer) => {
+            TraceIr::BlockArg(ret, outer, slot) => {
                 state.flush_gp(ir);
+                // An assigned literal needs no materialization.
+                if let Some(v) = self.block_param_slot_constant(state, outer, slot) {
+                    state.def_C(ret, v);
+                    return Ok(CompileResult::Continue);
+                }
                 state.def_S(ret);
                 ir.block_arg(state, ret, outer, pc);
                 state.unset_side_effect_guard();
@@ -745,9 +789,15 @@ impl<'a> JitContext<'a> {
                 }
                 // Not inlined: the block becomes a unit of its own, and
                 // whatever it stores it stores where we cannot see it. So
-                // hand the whole lexical chain over in its slots and keep
+                // hand the block's home chain over in its slots and keep
                 // no claim about any of it, exactly as a call that passes a
-                // block to a callee outside the unit does.
+                // block to a callee outside the unit does. When
+                // `resolve_given_block` pinned the block to an in-unit
+                // literal (`block_info.outer` frames up — a builtin-bodied
+                // block, or a dispatch arm), that home chain is in this
+                // state; otherwise the block came in through the root's own
+                // block argument, its home lies outside the unit, and no
+                // in-chain frame is reachable through it.
                 //
                 // Belt and braces with the `generic_yield` flag below: the
                 // flag settles what the *caller* may still believe when
@@ -757,7 +807,10 @@ impl<'a> JitContext<'a> {
                 // and the lexical chain stops at the enclosing method). One
                 // does not cover the other, and neither is worth resting on
                 // a per-case proof.
-                state.all_frames_unbox_to_S(self, ir);
+                let home = self.current_method_given_block().and_then(|bi| {
+                    state.innermost_level().checked_sub(bi.outer)
+                });
+                state.unbox_to_S_for_outgoing_block(self, ir, home);
                 self.set_generic_yield();
                 state.compile_yield(ir, &self.store, callid);
             }
@@ -792,7 +845,7 @@ impl<'a> JitContext<'a> {
             TraceIr::ToA { dst, src } => {
                 state.flush_gp(ir);
                 let error = ir.new_error(state);
-                state.write_back_slot(ir, src);
+                state.write_back(ir, src, Keep::All);
                 ir.to_a(state, src);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
@@ -940,7 +993,7 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::DefinedYield { dst, using_fpr });
             }
             TraceIr::DefinedConst { dst, siteid } => {
-                state.to_S_unguarded(ir, dst);
+                state.write_back(ir, dst, Keep::Nothing);
                 let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedConst {
                     dst,
@@ -950,7 +1003,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::DefinedMethod { dst, recv, name } => {
                 state.write_back_slots(ir, &[recv]);
-                state.to_S_unguarded(ir, dst);
+                state.write_back(ir, dst, Keep::Nothing);
                 let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedMethod {
                     dst,
@@ -974,7 +1027,7 @@ impl<'a> JitContext<'a> {
                 });
             }
             TraceIr::DefinedIvar { dst, name } => {
-                state.to_S_unguarded(ir, dst);
+                state.write_back(ir, dst, Keep::Nothing);
                 let using_fpr = state.get_using_fpr(ir);
                 ir.push(AsmInst::DefinedIvar {
                     dst,
@@ -1320,7 +1373,8 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
         recv_miss: RecvMissMode,
     ) -> JitResult<CompileResult> {
-        if let Some((fid, visibility)) = self.jit_check_method(lhs_class, name.into()) {
+        let name = name.into();
+        if let Some((fid, visibility)) = self.jit_check_method(lhs_class, name) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, lhs);
             assert_eq!(self.store[callid].args, rhs);
@@ -1443,17 +1497,24 @@ impl<'a> JitContext<'a> {
     ///
     fn jit_check_method(&self, class_id: ClassId, name: IdentId) -> Option<(FuncId, Visibility)> {
         let refinements = self.refinements();
+        let class_version = self.class_version();
         let entry = if refinements.is_empty() {
-            let class_version = self.class_version();
             self.store
                 .check_method_for_class_with_version(class_id, name, class_version)?
         } else {
             // The compiling body activated refinements, so resolution is
             // a function of its set too. Recorded with the result in
             // `inline_method_cache`, so the class-version repair asks the
-            // same question later (`doc/refinements.md` §6.6).
-            self.store
-                .check_method_with_refinements(class_id, name, refinements)?
+            // same question later (`doc/refinements.md` §6.6). The
+            // version is passed explicitly: the BOOL fallback inside is
+            // version-stamped and must not touch the CODEGEN RefCell,
+            // which this compilation already holds.
+            self.store.check_method_with_refinements_with_version(
+                class_id,
+                name,
+                refinements,
+                class_version,
+            )?
         };
         Some((entry.func_id()?, entry.visibility()))
     }

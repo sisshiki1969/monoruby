@@ -359,6 +359,19 @@ impl Codegen {
                 slot,
                 base: frame.base_stack_offset,
             }),
+            AsmInst::FloatRetStore(x) => self.encode_linst(LInst::FloatRetStore {
+                src: x,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::FloatRetLoad(x) => self.encode_linst(LInst::FloatRetLoad {
+                dst: x,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::FloatArgMove { src, dst } => self.encode_linst(LInst::FloatArgMove {
+                src,
+                dst,
+                base: frame.base_stack_offset,
+            }),
             // Save / restore live FP pool registers around a C-call.
             AsmInst::FprSave(using_fpr, cont) => {
                 self.encode_linst(LInst::FprSave { using_fpr, cont })
@@ -746,6 +759,9 @@ impl Codegen {
                 let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(reg));
                 self.encode_linst(LInst::GuardArrayTy { reg, deopt });
             }
+            AsmInst::KindOfConst { reg, class } => {
+                self.encode_linst(LInst::KindOfConst { reg, class });
+            }
             AsmInst::GuardFrozen { deopt } => {
                 let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
                 self.encode_linst(LInst::GuardFrozen { deopt });
@@ -903,8 +919,8 @@ impl Codegen {
             }
             // `&block` forwarding: proxy the block handler, or materialize it
             // into a Proc value (aarch64 bails on a live fpr / range overflow).
-            AsmInst::BlockArgProxy { ret, outer } => {
-                self.encode_linst(LInst::BlockArgProxy { ret, outer })
+            AsmInst::BlockArgProxy { ret, outer, slot } => {
+                self.encode_linst(LInst::BlockArgProxy { ret, outer, slot })
             }
             AsmInst::BlockArg {
                 ret,
@@ -1337,20 +1353,14 @@ impl Codegen {
             // this site. Labels are resolved now (frame); the call runs at drain
             // time, where `do_specialized_call`'s return address is the correct
             // position.
-            AsmInst::SpecializedCall {
-                entry,
-                patch_point,
-                evict,
-            } => {
-                let patch_point =
-                    patch_point.map(|label| frame.resolve_label(&mut self.jit, label));
+            AsmInst::SpecializedCall { entry, evict } => {
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
                 self.lower_via_inline(
                     store,
                     labels,
                     frame.base_stack_offset,
                     move |cg, _, _, _| {
-                        let return_addr = cg.do_specialized_call(entry_label, patch_point);
+                        let return_addr = cg.do_specialized_call(entry_label);
                         cg.set_deopt_with_return_addr(return_addr, evict);
                     },
                 );
@@ -1389,7 +1399,7 @@ impl Codegen {
                     labels,
                     frame.base_stack_offset,
                     move |cg, _, _, _| {
-                        let return_addr = cg.do_specialized_call(entry_label, None);
+                        let return_addr = cg.do_specialized_call(entry_label);
                         cg.set_deopt_with_return_addr(return_addr, evict);
                     },
                 );
@@ -1605,9 +1615,12 @@ impl Codegen {
             }
             // Trap for statically-unreachable code: call the panicking helper.
             AsmInst::Unreachable => self.encode_linst(LInst::Unreachable),
-            // `**kwrest` fixup: build a (name, slot) const table and call
-            // `correct_rest_kw(&table, lfp) -> kwrest Hash`.
-            AsmInst::RestKw { rest_kw } => self.encode_linst(LInst::RestKw { rest_kw }),
+            // `**kwrest` fixup: call `correct_rest_kw(&table, lfp)`, which
+            // answers the Hash. The (name, slot) table was laid down before
+            // this unit's code (`Codegen::resolve_rest_kw_tables`).
+            AsmInst::RestKw { table, .. } => self.encode_linst(LInst::RestKw {
+                table: table.expect("kwrest table laid down before codegen"),
+            }),
             // Not a shared instruction: hand off to the per-arch backend.
             // (§9a-ii) Not-yet-LIR-ized arms still emit directly in the per-arch
             // `compile_asmir_arch`. During the buffering pass, defer them as
@@ -2044,8 +2057,8 @@ impl Codegen {
             LInst::LoopJitRspBump { offset } => {
                 self.emit_loop_jit_rsp_bump(offset);
             }
-            LInst::BlockArgProxy { ret, outer } => {
-                self.emit_block_arg_proxy(ret, outer);
+            LInst::BlockArgProxy { ret, outer, slot } => {
+                self.emit_block_arg_proxy(ret, outer, slot);
             }
             LInst::BlockArg {
                 ret,
@@ -2123,8 +2136,8 @@ impl Codegen {
             LInst::Unreachable => {
                 self.emit_unreachable();
             }
-            LInst::RestKw { rest_kw } => {
-                self.emit_rest_kw(rest_kw);
+            LInst::RestKw { table } => {
+                self.emit_rest_kw(table);
             }
             LInst::GuardClassVersion {
                 class_version,

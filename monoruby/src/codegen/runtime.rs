@@ -531,76 +531,30 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
     }
 }
 
+/// `BlockArg`: the value of the `&block` parameter of the frame `outer`
+/// levels up (`pc` carries `outer` and the parameter's slot there). The
+/// slot's value once assigned; until then the frame's block handler,
+/// materialized into a Proc on first read and cached back into the frame
+/// (`Executor::block_param_proc`), so every read answers the same object.
 pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
     globals: &mut Globals,
     mut lfp: Lfp,
     pc: BytecodePtr,
 ) -> Option<Value> {
-    let outer = pc.op1() as u32;
+    let op = pc.op1();
+    let outer = (op >> 16) as u16;
+    let slot = SlotId::new(op as u16);
     for _ in 0..outer {
         lfp = lfp.outer().unwrap();
     }
-    let bh = match lfp.block() {
-        Some(bh) => bh,
-        None => {
-            return Some(Value::nil());
-        }
-    };
-    if bh.get().is_nil() {
-        return Some(Value::nil());
+    if slot.0 != 0
+        && let Some(v) = lfp.register(slot)
+    {
+        return Some(v);
     }
-    // Already-materialized Proc: return it directly, *without* locating
-    // the owner frame's Cfp. This is not just a shortcut: when the owner
-    // frame belongs to a different execution context — e.g. a `&block`
-    // parameter read from inside a green thread whose lexical home is a
-    // heap-promoted frame on the *main* thread's chain — the dynamic-chain
-    // search below can never find it (and walking past a thread root used
-    // to panic on `parent_fiber.unwrap()`, aborting the whole process; see
-    // issue #950). Cross-context handlers are always materialized when
-    // their frame escapes to the heap (`materialize_escaped_block_handlers`),
-    // so this early return covers exactly those cases.
-    if let Some(proc) = bh.try_proc() {
-        return Some(proc.into());
-    }
-    // Non-proxy handler (`&:sym`, or an arbitrary object coerced through
-    // `#to_proc`): materializing it needs nothing from the owner frame,
-    // and that frame may well be gone — `def f(&b); ->{ b.call }; end`
-    // read from the returned lambda is exactly this shape. Convert here
-    // and cache the Proc back into the frame so repeated reads keep
-    // returning the same object.
-    if bh.try_proxy().is_none() {
-        return match vm.generate_proc_inner(globals, vm.cfp(), bh, pc) {
-            Ok(proc) => {
-                lfp.set_block(Some(BlockHandler::new(proc.into())));
-                Some(proc.into())
-            }
-            Err(err) => {
-                vm.set_error(err);
-                None
-            }
-        };
-    }
-    // Proxy handler: its (fid, depth) is relative to the frame that owns
-    // it, so locate that frame's Cfp on the current chain (crossing into
-    // parent fibers). A proxy owner is always on the current chain — an
-    // escaped frame would have had its handler materialized above — but
-    // walk defensively rather than aborting the process on a violation.
-    let mut owner = (&*vm, vm.cfp());
-    while owner.1.lfp() != lfp {
-        match Executor::try_prev_cfp(owner.0, owner.1) {
-            Some(prev) => owner = prev,
-            None => {
-                vm.set_error(MonorubyErr::fatal(
-                    "[BUG] block handler owner frame is not on the current frame chain",
-                ));
-                return None;
-            }
-        }
-    }
-    let cfp = owner.1;
-    match vm.generate_proc_inner(globals, cfp, bh, pc) {
-        Ok(val) => Some(val.into()),
+    match vm.block_param_proc(globals, lfp, pc) {
+        Ok(v) => Some(v),
         Err(err) => {
             vm.set_error(err);
             None
@@ -1408,6 +1362,41 @@ pub(super) extern "C" fn object_send_missing(
         .ok()
 }
 
+///
+/// `Method#call` on a `method_missing` proxy Method.
+///
+/// The inlined `Method#call` (`Codegen::method_object_call_inline`) reads
+/// the bound `FuncId` and receiver straight out of the `MethodInner` and
+/// builds the callee frame itself, which cannot express the proxy's
+/// dispatch: `receiver.method_missing(target, *args)` with the target name
+/// prepended. A proxy therefore leaves the inline path here, and this
+/// rebuilds the call from the caller's frame the way the builtin does.
+///
+/// Reached only for a call site the inline generator accepted, so the
+/// arguments are simple and positional.
+///
+pub(super) extern "C" fn method_object_call_proxy(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    lfp: Lfp,
+) -> Option<Value> {
+    let cs = &globals.store[callid];
+    let (recv_slot, args_slot, pos_num) = (cs.recv, cs.args, cs.pos_num);
+    let bh = cs.block_handler(lfp);
+    // SAFETY: the slots come from the call site being executed, so they
+    // name live registers of this very frame.
+    let method = lfp.register(recv_slot).unwrap();
+    let method = method.as_method();
+    let receiver = method.receiver();
+    let target = method.method_missing_name().unwrap();
+    let mut args = vec![Value::symbol(target)];
+    args.extend(unsafe { lfp.args_to_vec(args_slot, pos_num) });
+    vm.invoke_method_inner(globals, IdentId::METHOD_MISSING, receiver, &args, bh, None)
+        .map_err(|err| vm.set_error(err))
+        .ok()
+}
+
 pub(crate) extern "C" fn invoke_method_missing(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1616,6 +1605,31 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
     ) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+/// Argument transfer for an inlined `Method#call`: the call site's
+/// positional slots map one to one onto the bound method's parameters,
+/// with none of `send`'s leading-name slot to strip.
+pub(super) extern "C" fn jit_handle_arguments_no_block_for_method_object(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    caller_lfp: Lfp,
+    callee_lfp: Lfp,
+    callid: CallSiteId,
+) -> Option<Value> {
+    let (args_slot, pos_num) = {
+        let cs = &globals.store[callid];
+        (cs.args, cs.pos_num)
+    };
+    let src = caller_lfp.register_ptr(args_slot) as *const Value;
+    match set_frame_arguments_simple(vm, globals, callee_lfp, caller_lfp, callid, src, pos_num) {
+        Ok(_) => Some(Value::nil()),
+        Err(mut err) => {
+            err.push_internal_trace(callee_lfp.func_id());
             vm.set_error(err);
             None
         }

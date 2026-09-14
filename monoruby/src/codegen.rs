@@ -110,6 +110,8 @@ const COUNT_LOOP_START_COMPILE: i32 = 100;
 const COUNT_LOOP_START_COMPILE: i32 = 15;
 const COUNT_RECOMPILE_ARECV_CLASS: i32 = 5;
 const COUNT_DEOPT_RECOMPILE: i32 = 10;
+/// See `Codegen::recompile_counts`.
+const MAX_RECOMPILES_PER_METHOD: u32 = 4;
 const COUNT_DEOPT_RECOMPILE_SPECIALIZED: i32 = 50;
 
 /// §9 9d allocatable GP pool. **Empty on both arches**: GP-pool residence
@@ -203,6 +205,14 @@ pub struct FPReg(pub(crate) usize);
 
 impl FPReg {
     fn new(id: usize) -> Self {
+        Self(id)
+    }
+
+    /// A pool-resident id, i.e. one whose physical `xmm` is the same in
+    /// every frame. Only such an id can name a register two frames agree
+    /// on: a spill id resolves against the frame's own stack base.
+    pub(crate) fn from_pool(id: usize) -> Self {
+        debug_assert!(id < PHYS_FPR_POOL);
         Self(id)
     }
 }
@@ -773,27 +783,16 @@ pub(crate) enum CellHeader {
 #[derive(Clone)]
 pub(crate) struct SpecializedPatchEntry {
     pub(crate) iseq_id: ISeqId,
-    pub(crate) self_class: ClassId,
-    pub(crate) patch_point: DestLabel,
-    /// `Some((root_iseq, root_class, root_position))` when this body was
-    /// compiled under an armed unboxed-Float speculation of its root frame
-    /// (doc/chain_deopt.md §11): its dynvar accesses address the root's FP
-    /// save/spill slots, which only exist in the root body that armed them.
-    /// Such a body must never be replaced by a standalone compile (issue
-    /// #1140) — a recompile request rebuilds the whole root compilation
-    /// unit instead, re-arming the speculation under fresh inline caches.
-    pub(crate) speculated_root: Option<(ISeqId, ClassId, Option<BytecodePtr>)>,
-    /// The compilation unit this body was installed under (its root). All
-    /// guards of one compilation — the root's and every inlined child's —
-    /// read the *same* class-version word, and the unit's inline-cache map
-    /// covers them all, so a child's class-version guard failure can be
-    /// salvaged by re-validating the owner unit (`salvage_method_unit` /
-    /// `salvage_loop_unit`) instead of recompiling this body.
+    /// The compilation unit this body was installed under (its root).
     ///
-    /// Cleared (`None`) when the body is *individually* recompiled: the
-    /// fresh compile reads its own freshly-created version words, which the
-    /// owner's records no longer name — a "successful" owner salvage would
-    /// patch words this body never reads, deopting it on every call forever.
+    /// Two things ride on it. All guards of one compilation — the root's
+    /// and every inlined child's — read the *same* class-version word, and
+    /// the unit's inline-cache map covers them all, so a child's
+    /// class-version guard failure can be salvaged by re-validating the
+    /// owner unit (`salvage_method_unit` / `salvage_loop_unit`). And a
+    /// recompile request names the unit to rebuild
+    /// (`Codegen::recompile_specialized`), since a specialized body is
+    /// never replaced on its own.
     pub(crate) owner: Option<(ISeqId, ClassId, Option<BytecodePtr>)>,
     /// The class-version word this entry's compiled body actually reads —
     /// the owning root compilation's cell (one `const_i32` per root compile,
@@ -837,6 +836,14 @@ pub struct Codegen {
     /// The id is how `AsmInst::ChainExit` — pushed after the call, when the
     /// address itself is no longer at hand — names the site it belongs to.
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
+    /// `BecamePolymorphic` whole-method recompiles performed per (iseq,
+    /// self class). A body whose polymorphism keeps changing would
+    /// otherwise recompile forever — each fresh body carries a fresh deopt
+    /// budget — so past `MAX_RECOMPILES_PER_METHOD` the current body is
+    /// kept and its exhausted budget leaves it deopting plainly. Version
+    /// guard failures are not counted (see
+    /// `Codegen::recompile_budget_exhausted`).
+    recompile_counts: HashMap<(ISeqId, ClassId), u32>,
     /// `doc/chain_deopt.md` §5 step 1 / §9.3. Keyed by the return-address
     /// slot of a suspended frame (§3.4), which is all the walk has to go on:
     /// return address of a chain-eligible call -> the entry of that site's
@@ -1290,6 +1297,7 @@ impl Codegen {
             alloc_page_addr: std::ptr::null_mut(),
             compilation_unit: Vec::new(),
             asm_return_addr_table: HashMap::default(),
+            recompile_counts: HashMap::default(),
             chain_deopt_table: HashMap::default(),
             chain_cont_stub: entry_panic.clone(),
             alloc_cell: entry_panic.clone(),
@@ -1836,30 +1844,6 @@ impl Codegen {
         }
     }
 
-    /// aarch64 specialized recompile: overwrite the single 4-byte `bl entry`
-    /// instruction at `patch_point` (the `SpecializedCall` site, bound just
-    /// before the `bl` in `do_specialized_call`) so it now branches into
-    /// the freshly compiled body at `entry`. Writes a `BL` (`0x9400_0000 |
-    /// imm26`) with a ±128 MiB range, under the writable / I-cache-synchronize
-    /// dance AArch64 requires for self-modifying code (it keeps no I/D
-    /// coherence). The new `bl` keeps the same return continuation
-    /// (the next instruction), so the post-call frame teardown is unchanged.
-    #[cfg(target_arch = "aarch64")]
-    fn patch_call_to_entry(&mut self, patch_point: CodePtr, entry: &DestLabel) {
-        self.jit.set_writable();
-        let dest = self.jit.get_label_address(entry);
-        let disp = dest - patch_point;
-        debug_assert!(
-            (-(1i64 << 27)..(1i64 << 27)).contains(&(disp as i64)),
-            "patch_call_to_entry: BL displacement out of imm26 range: {disp:#x}"
-        );
-        let imm26 = ((disp >> 2) as u32) & 0x03ff_ffff;
-        let word = 0x9400_0000u32 | imm26;
-        // SAFETY: `patch_point` is the 4-byte-aligned address of the `bl`
-        // emitted by `do_specialized_call`.
-        unsafe { (patch_point.as_ptr() as *mut u32).write(word) };
-        self.jit.set_executable();
-    }
 }
 
 #[repr(C)]
@@ -2112,6 +2096,8 @@ pub(crate) mod jit_stats {
     pub static CHAIN_CONV_EMPTY: AtomicUsize = AtomicUsize::new(0);
     pub static CHAIN_CONV_FLOAT: AtomicUsize = AtomicUsize::new(0);
     pub static CHAIN_CONV_ALLOC: AtomicUsize = AtomicUsize::new(0);
+    pub static SPEC_MEMO_HIT: AtomicUsize = AtomicUsize::new(0);
+    pub static SPEC_MEMO_MISS: AtomicUsize = AtomicUsize::new(0);
 
     pub fn bump(c: &AtomicUsize) {
         c.fetch_add(1, Ordering::Relaxed);
@@ -2136,6 +2122,14 @@ pub(crate) mod jit_stats {
         eprintln!(
             "    replay can allocate:             {}",
             g(&CHAIN_CONV_ALLOC)
+        );
+        eprintln!(
+            "  specialized-call memo hits:        {}",
+            g(&SPEC_MEMO_HIT)
+        );
+        eprintln!(
+            "    lookups that missed:             {}",
+            g(&SPEC_MEMO_MISS)
         );
         eprintln!("  class_version incs:                {}", g(&CLASS_VER_INC));
         eprintln!("  const_version incs:                {}", g(&CONST_VER_INC));

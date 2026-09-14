@@ -178,6 +178,10 @@ fn system_call_error_construction() {
         r#"Errno::EINVAL.new.errno"#,
         r#"Class.new(Errno::ENOENT).new("custom").message"#,
         r#"SystemCallError.instance_method(:initialize).arity"#,
+        // `Errno` is a module: libraries reopen it (webrick adds
+        // `Errno::EPROTO` with `module Errno`).
+        r#"Errno.class"#,
+        r#"(module Errno; class EXYZZY < SystemCallError; end; end; [Errno::EXYZZY.superclass, Errno::EXYZZY.name])"#,
     ]);
 }
 

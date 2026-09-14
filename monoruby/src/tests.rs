@@ -12,6 +12,14 @@ static RUBY: LazyLock<String> = LazyLock::new(|| {
     find_ruby()
 });
 
+/// The reference CRuby the harness resolved (PATH, then rbenv/rvm shims —
+/// see [`find_ruby`]). Integration tests that spawn `ruby` themselves must
+/// use this rather than `Command::new("ruby")`, which breaks in shells
+/// where only a version manager provides Ruby.
+pub fn ruby_path() -> &'static str {
+    &RUBY
+}
+
 pub fn run_test(code: &str) {
     let wrapped = format!(
         r##"

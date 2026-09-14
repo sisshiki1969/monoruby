@@ -1,74 +1,52 @@
-# Minimal ObjectSpace stub for monoruby.
+# ObjectSpace for monoruby.
 #
-# monoruby has no support for weak references or general object iteration.
-# Provide just enough surface area for libraries that defensively reference
-# ObjectSpace constants (ActiveSupport::DescendantsTracker, ConnectionPool,
-# weakref) — `WeakMap` is implemented as a strong-referenced hash so keys
-# are never GCed while held by the map. That is semantically weaker than
-# CRuby but correct enough for class loading and most non-GC-sensitive use.
+# `WeakMap` is a real weak map: its storage is `ObjTy::WEAKMAP`
+# (`src/value/rvalue/weakmap.rs`), which the collector never traces, and
+# whose pairs it breaks as their halves die. The class, its allocator and
+# the primitives below it are defined in `src/builtins/object_space.rs`;
+# this file only adds the methods derived from them.
+#
+# Object iteration is still unsupported: `each_object` answers nothing.
 module ObjectSpace
   class WeakMap
     include ::Enumerable if defined?(::Enumerable)
 
-    def initialize
-      @map = {}
-    end
-
-    def [](key)
-      @map[key.object_id]&.first
-    end
-
-    def []=(key, value)
-      @map[key.object_id] = [value, key]
-      value
-    end
-
-    def key?(key)
-      @map.key?(key.object_id)
-    end
     alias include? key?
     alias member? key?
+    alias length size
 
-    def delete(key)
-      pair = @map.delete(key.object_id)
-      pair ? pair.first : nil
-    end
-
-    def keys
-      @map.values.map { |pair| pair[1] }
-    end
-
-    def values
-      @map.values.map { |pair| pair[0] }
-    end
-
+    # The pairs, as of the moment `each` was called. A block is free to
+    # allocate — and so to collect, which breaks pairs — so iteration
+    # walks a snapshot rather than the live map.
     def each
       return to_enum(:each) unless block_given?
-      @map.each_value { |pair| yield pair[1], pair[0] }
+      e = __entries
+      i = 0
+      while i < e.size
+        yield e[i], e[i + 1]
+        i += 2
+      end
       self
     end
     alias each_pair each
 
     def each_key
       return to_enum(:each_key) unless block_given?
-      @map.each_value { |pair| yield pair[1] }
+      keys.each { |k| yield k }
       self
     end
 
     def each_value
       return to_enum(:each_value) unless block_given?
-      @map.each_value { |pair| yield pair[0] }
+      values.each { |v| yield v }
       self
     end
-
-    def size
-      @map.size
-    end
-    alias length size
 
     def inspect
       "#<ObjectSpace::WeakMap:#{format('0x%016x', object_id << 1)} size=#{size}>"
     end
+
+    private :__entries
   end
 
   def self.each_object(klass = nil)

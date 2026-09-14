@@ -87,6 +87,9 @@ impl Codegen {
             | AsmInst::FixnumToFpr(..)
             | AsmInst::FloatToFpr(..)
             | AsmInst::FprToStack(..)
+            | AsmInst::FloatRetStore(..)
+            | AsmInst::FloatRetLoad(..)
+            | AsmInst::FloatArgMove { .. }
             | AsmInst::FprSave(..)
             | AsmInst::FprRestore(..)
             | AsmInst::IntegerBinOpReg { .. }
@@ -117,6 +120,7 @@ impl Codegen {
             | AsmInst::FixnumNeg { .. }
             | AsmInst::FixnumBitNot { .. }
             | AsmInst::GuardArrayTy(..)
+            | AsmInst::KindOfConst { .. }
             | AsmInst::GuardFrozen { .. }
             | AsmInst::LoadIVarInline { .. }
             | AsmInst::StoreIVarInline { .. }
@@ -296,17 +300,9 @@ impl Codegen {
 
     /// `**kwrest` fixup: build a const table of (name, slot) pairs and call
     /// `correct_rest_kw(&table, lfp) -> kwrest Hash`.
-    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
-        let data = self.jit.const_align8();
-        for (i, name) in rest_kw.into_iter() {
-            self.jit.const_i32(name.get() as i32);
-            self.jit.const_i32(i.0 as i32);
-        }
-        self.jit.const_i32(0);
-        self.jit.const_i32(0);
-
+    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, table: DestLabel) {
         monoasm!( &mut self.jit,
-            lea  rdi, [rip + data];
+            lea  rdi, [rip + table];
             movq rsi, r14;
             movq rax, (runtime::correct_rest_kw);
             call rax;
@@ -693,6 +689,7 @@ impl Codegen {
                 self.jit.bind_label(ok);
             }
             LInst::GuardArrayTy { reg, deopt } => self.guard_array_ty(reg, &deopt),
+            LInst::KindOfConst { reg, class } => self.kind_of_const(reg, class),
             LInst::GuardFrozen { deopt } => self.guard_frozen(&deopt),
             // Constant-load base-class guard: deopt unless the accumulator equals
             // the cached base class.
@@ -803,6 +800,37 @@ impl Codegen {
             }
             LInst::FprToStack { src, slot, base } => {
                 self.fpr_to_stack(src, &[slot], base);
+            }
+            LInst::FloatRetStore { src, base } => {
+                match src {
+                    OuterFprSrc::Fpr(src) => match PhysMap::new(base).resolve(src) {
+                        FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq xmm1, xmm(p); ),
+                        FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq xmm1, [rbp - (off)]; ),
+                    },
+                    OuterFprSrc::Imm(bits) => monoasm!( &mut self.jit,
+                        movq rax, (bits);
+                        movq xmm1, rax;
+                    ),
+                }
+                // The call site tests rax for the error signal; the value
+                // itself travels in xmm1, so rax only has to be non-zero.
+                monoasm!( &mut self.jit, movq rax, (NIL_VALUE); );
+            }
+            LInst::FloatArgMove { src, dst, base } => {
+                let (FPRegLoc::Xmm(d), s) = (PhysMap::new(base).resolve(dst), PhysMap::new(base).resolve(src))
+                else {
+                    unreachable!("float-argument destination is not pool-resident: {dst:?}")
+                };
+                match s {
+                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq xmm(d), xmm(p); ),
+                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq xmm(d), [rbp - (off)]; ),
+                }
+            }
+            LInst::FloatRetLoad { dst, base } => {
+                match PhysMap::new(base).resolve(dst) {
+                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq xmm(p), xmm1; ),
+                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq [rbp - (off)], xmm1; ),
+                }
             }
             LInst::FprSwap { lhs, rhs, base } => {
                 if lhs != rhs {
@@ -1618,6 +1646,9 @@ impl Codegen {
         v: Value,
         using_fpr: UsingFpr,
     ) -> bool {
+        if self.emit_inline_string_lit(v, using_fpr) {
+            return true;
+        }
         let Some(elems) = v
             .inline_copyable_array()
             .filter(|_| !self.alloc_free_head_addr.is_null())
@@ -1640,6 +1671,65 @@ impl Codegen {
             }
         }
         monoasm! { &mut self.jit,
+            jmp  cont;
+        slow:
+        }
+        self.deepcopy_literal(v, using_fpr);
+        monoasm! { &mut self.jit,
+        cont:
+        }
+        true
+    }
+
+    ///
+    /// A String literal whose bytes fit the copy's own inline buffer:
+    /// allocate the cell and write the bytes, encoding and code range
+    /// straight into it, instead of calling `value_deep_copy`. String
+    /// literals were the one common literal without this path — an
+    /// Array or Hash literal costs ~10 ns and an empty *string* literal
+    /// cost 41, all of it the call and the generic copy's dispatch.
+    ///
+    /// Returns false when the shape does not qualify, leaving the
+    /// caller to emit whatever it would have.
+    ///
+    fn emit_inline_string_lit(&mut self, v: Value, using_fpr: UsingFpr) -> bool {
+        if self.alloc_free_head_addr.is_null() {
+            return false;
+        }
+        // `value_deep_copy` records each copy's origin under
+        // `--debug-frozen-string-literal`; this path cannot, so it
+        // stands aside while that is on.
+        if crate::value::debug_frozen_string_log() {
+            return false;
+        }
+        let Some((bytes, ty, cr)) = v.inline_copyable_string() else {
+            return false;
+        };
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        // The header carries the template's class, type and
+        // frozen/chilled bits, read at run time (`NewbornOf`).
+        self.emit_alloc_cell(CellHeader::NewbornOf(v.id()), &slow);
+        monoasm! { &mut self.jit,
+            movq [rax + (RVALUE_OFFSET_VAR)], 0;  // var_table = None
+            // The inline `SmallVec`'s capacity slot holds its length.
+            movq [rax + (RVALUE_OFFSET_ARY_CAPA)], (bytes.len() as i32);
+        }
+        // Whole words, zero-padded past the end: the tail bytes sit
+        // beyond the recorded length inside the same inline buffer.
+        for (k, chunk) in bytes.chunks(8).enumerate() {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            let off = RVALUE_OFFSET_INLINE as i32 + (k as i32) * 8;
+            let w = u64::from_le_bytes(word);
+            monoasm! { &mut self.jit,
+                movq rcx, (w);
+                movq [rax + (off)], rcx;
+            }
+        }
+        monoasm! { &mut self.jit,
+            movb [rax + (crate::rvalue::STRING_TY_OFFSET)], (ty as u64);
+            movb [rax + (crate::rvalue::STRING_CR_OFFSET)], (cr as u64);
             jmp  cont;
         slow:
         }
@@ -1935,8 +2025,27 @@ impl Codegen {
     /// ### out
     /// - rax: block handler
     ///
-    fn block_arg_proxy(&mut self, outer: usize) {
+    /// `slot` (0: none): the `&block` parameter's slot in that frame; an
+    /// assigned value is the answer, an empty slot (0, never assigned)
+    /// means the block handler.
+    ///
+    /// ### destroy
+    /// - rax, rdi
+    ///
+    fn block_arg_proxy(&mut self, outer: usize, slot: SlotId) {
         let exit = self.jit.label();
+        if slot.0 != 0 {
+            let from_frame = self.jit.label();
+            let off = slot.0 as i32 * 8 + LFP_SELF;
+            monoasm! { &mut self.jit,
+                movq rdi, [rax - (off)];
+                testq rdi, rdi;
+                jz   from_frame;
+                movq rax, rdi;
+                jmp  exit;
+            from_frame:
+            };
+        }
         monoasm! { &mut self.jit,
             movq rax, [rax - (LFP_BLOCK)];
             testq rax, 0b1;
@@ -2875,9 +2984,10 @@ impl Codegen {
         &mut self,
         ret: SlotId,
         outer: usize,
+        slot: SlotId,
     ) -> bool {
         self.get_method_lfp(outer);
-        self.block_arg_proxy(outer);
+        self.block_arg_proxy(outer, slot);
         self.store_rax(ret);
         true
     }

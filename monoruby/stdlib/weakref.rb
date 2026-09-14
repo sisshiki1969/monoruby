@@ -1,44 +1,65 @@
-# WeakRef stub for monoruby.
-#
-# monoruby does not implement ObjectSpace::WeakMap, so the real weakref.rb
-# (which wraps WeakMap) cannot load. This stub provides a WeakRef class
-# that behaves like the real one from the caller's perspective — it
-# responds to `new`, `__getobj__`, and `weakref_alive?` — but strong-holds
-# its referent. That is semantically weaker than a real weakref (objects
-# won't be GCed while referenced) but is correct enough for ActiveRecord's
-# descendants_tracker and connection_pool::reaper to function.
+# frozen_string_literal: true
+require "delegate"
 
-class WeakRef
+# Weak Reference class that allows a referenced object to be
+# garbage-collected.
+#
+# A WeakRef may be used exactly like the object it references.
+#
+# Usage:
+#
+#   foo = Object.new            # create a new object instance
+#   p foo.to_s                  # original's class
+#   foo = WeakRef.new(foo)      # reassign foo with WeakRef instance
+#   p foo.to_s                  # should be same class
+#   GC.start                    # start the garbage collector
+#   p foo.to_s                  # should raise exception (recycled)
+#
+
+# On monoruby this is CRuby's weakref.rb unchanged. It works because
+# `ObjectSpace::WeakMap` is a real weak map here: its storage
+# (`src/value/rvalue/weakmap.rs`) is never traced by the collector, which
+# breaks each pair as its key or value dies. Until that existed, monoruby
+# shipped a stub that strong-held the referent, so nothing given to a
+# WeakRef was ever collected.
+class WeakRef < Delegator
+  # The version string
   VERSION = "0.1.4"
+
+  ##
+  # RefError is raised when a referenced object has been recycled by the
+  # garbage collector
 
   class RefError < StandardError
   end
 
+  @@__map = ::ObjectSpace::WeakMap.new
+
+  ##
+  # Creates a weak reference to +orig+
+
   def initialize(orig)
-    @__monoruby_obj = orig
+    case orig
+    when true, false, nil
+      @delegate_sd_obj = orig
+    else
+      @@__map[self] = orig
+    end
+    super
   end
 
-  def __getobj__
-    @__monoruby_obj
+  def __getobj__(&_block) # :nodoc:
+    @@__map[self] or defined?(@delegate_sd_obj) ? @delegate_sd_obj :
+      Kernel::raise(RefError, "Invalid Reference - probably recycled", Kernel::caller(2))
   end
 
-  def __setobj__(obj)
-    @__monoruby_obj = obj
+  def __setobj__(obj) # :nodoc:
   end
+
+  ##
+  # Returns true if the referenced object is still alive.
 
   def weakref_alive?
-    !@__monoruby_obj.nil?
-  end
-
-  def method_missing(name, *args, &block)
-    if @__monoruby_obj.respond_to?(name)
-      @__monoruby_obj.__send__(name, *args, &block)
-    else
-      super
-    end
-  end
-
-  def respond_to_missing?(name, include_private = false)
-    @__monoruby_obj.respond_to?(name, include_private) || super
+    @@__map.key?(self) or defined?(@delegate_sd_obj)
   end
 end

@@ -114,12 +114,51 @@ impl<'a> ByteIter<'a> {
     }
 }
 
+/// `unpack1` of one fixed-width numeric directive, the mirror of
+/// [`pack_single_numeric`]. A string too short for the directive yields
+/// `nil`, as the general path does.
+fn unpack1_single_numeric(packed: &[u8], template: &str) -> Option<Value> {
+    let (dir, width, big) = single_numeric_directive(template)?;
+    if packed.len() < width {
+        return Some(Value::nil());
+    }
+    let b = &packed[..width];
+    let mut raw = [0u8; 8];
+    if big {
+        raw[8 - width..].copy_from_slice(b);
+    } else {
+        raw[..width].copy_from_slice(b);
+    }
+    let bits = if big {
+        u64::from_be_bytes(raw)
+    } else {
+        u64::from_le_bytes(raw)
+    };
+    Some(match dir {
+        b'c' => Value::integer(bits as u8 as i8 as i64),
+        b'C' => Value::integer(bits as u8 as i64),
+        b's' => Value::integer(bits as u16 as i16 as i64),
+        b'S' | b'v' | b'n' => Value::integer(bits as u16 as i64),
+        b'i' | b'l' => Value::integer(bits as u32 as i32 as i64),
+        b'I' | b'L' | b'V' | b'N' => Value::integer(bits as u32 as i64),
+        b'q' | b'j' => Value::integer(bits as i64),
+        b'Q' | b'J' => Value::integer_from_u64(bits),
+        b'e' | b'f' | b'F' | b'g' => Value::float(f32::from_bits(bits as u32) as f64),
+        _ => Value::float(f64::from_bits(bits)),
+    })
+}
+
 pub(crate) fn unpack(
     packed: &[u8],
     template: &str,
     once: bool,
     base_offset: usize,
 ) -> Result<Value> {
+    if once
+        && let Some(value) = unpack1_single_numeric(packed, template)
+    {
+        return Ok(value);
+    }
     let mut template = parse_template(template, true)?;
     if once {
         template.truncate(1);
@@ -546,6 +585,96 @@ pub(crate) fn unpack(
     })
 }
 
+/// The width and byte order of a single fixed-width numeric directive,
+/// or `None` if the template is anything else. `<` / `>` override the
+/// directive's own order where CRuby allows the modifier; a template
+/// carrying one where it does not is left to the general path, which
+/// raises for it.
+fn single_numeric_directive(template: &str) -> Option<(u8, usize, bool)> {
+    let b = template.as_bytes();
+    let (dir, modifier) = match b {
+        [d] => (*d, None),
+        [d, m @ (b'<' | b'>')] => (*d, Some(*m)),
+        _ => return None,
+    };
+    let (width, big) = match dir {
+        b'c' | b'C' => (1, false),
+        b's' | b'S' | b'v' => (2, false),
+        b'n' => (2, true),
+        b'i' | b'I' | b'l' | b'L' | b'V' => (4, false),
+        b'N' => (4, true),
+        b'q' | b'Q' | b'j' | b'J' => (8, false),
+        b'e' | b'f' | b'F' => (4, false),
+        b'g' => (4, true),
+        b'E' | b'd' | b'D' => (8, false),
+        b'G' => (8, true),
+        _ => return None,
+    };
+    let big = match modifier {
+        None => big,
+        // `c` / `C` reject the modifier; everything else here accepts it.
+        Some(_) if dir == b'c' || dir == b'C' => return None,
+        Some(m) => m == b'>',
+    };
+    Some((dir, width, big))
+}
+
+/// One fixed-width numeric directive, one value, no `buffer:` — what
+/// binary encoders and dewasm-generated code use for every value they
+/// write. The general path's cost per directive is an order of magnitude
+/// above the work itself, so this answers the shape directly.
+///
+/// Shape is decided before anything can raise or run Ruby code, so
+/// declining here costs the general path nothing.
+fn pack_single_numeric(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: &[Value],
+    template: &str,
+) -> Option<Result<Value>> {
+    if ary.len() != 1 {
+        return None;
+    }
+    let (dir, width, big) = single_numeric_directive(template)?;
+    let mut buf = StringBuf::new();
+    let is_float = matches!(dir, b'e' | b'f' | b'F' | b'g' | b'E' | b'd' | b'D' | b'G');
+    if is_float {
+        let f = match coerce_to_pack_f64(vm, globals, &ary[0]) {
+            Ok(f) => f,
+            Err(err) => return Some(Err(err)),
+        };
+        match (width, big) {
+            (4, false) => buf.extend_from_slice(&f32::to_le_bytes(f as f32)),
+            (4, true) => buf.extend_from_slice(&f32::to_be_bytes(f as f32)),
+            (8, false) => buf.extend_from_slice(&f64::to_le_bytes(f)),
+            _ => buf.extend_from_slice(&f64::to_be_bytes(f)),
+        }
+    } else {
+        let i = match ary[0].coerce_to_pack_u64(vm, globals) {
+            Ok(i) => i,
+            Err(err) => return Some(Err(err)),
+        };
+        let bytes = if big {
+            u64::to_be_bytes(i)
+        } else {
+            u64::to_le_bytes(i)
+        };
+        // A big-endian value's bytes are the *last* `width` of the u64's
+        // eight; a little-endian value's are the first.
+        if big {
+            buf.extend_from_slice(&bytes[8 - width..]);
+        } else {
+            buf.extend_from_slice(&bytes[..width]);
+        }
+    }
+    let cr = Encoding::Ascii8.classify(&buf);
+    Some(Ok(Value::string_from_inner(RStringInner::from_buf_cr(
+        buf,
+        Encoding::Ascii8,
+        cr,
+    ))))
+}
+
 pub(crate) fn pack(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -553,6 +682,11 @@ pub(crate) fn pack(
     template: &str,
     buffer: Option<Value>,
 ) -> Result<Value> {
+    if buffer.is_none()
+        && let Some(result) = pack_single_numeric(vm, globals, ary, template)
+    {
+        return result;
+    }
     let template = parse_template(template, false)?;
     // Validate the `buffer:` keyword. pack writes *into* the buffer
     // (appending at the end, or overwriting from an `@` offset), then the
@@ -572,7 +706,9 @@ pub(crate) fn pack(
             Template::AtPos => true,
             _ => false,
         });
-    let mut packed = Vec::new();
+    // Built in the String's own representation so the finished bytes move
+    // into the result with no copy, and a short result never reaches the heap.
+    let mut packed = StringBuf::new();
     if let Some(buf_val) = buffer {
         buf_val.ensure_not_frozen(&globals.store)?;
         match buf_val.is_rstring_inner() {
@@ -1153,15 +1289,19 @@ pub(crate) fn pack(
             (false, Some(enc)) => enc,
             (_, None) => Encoding::Ascii8,
         };
-        Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
-            &packed,
+        let cr = result_encoding.classify(&packed);
+        Ok(Value::string_from_inner(RStringInner::from_buf_cr(
+            packed,
             result_encoding,
+            cr,
         )))
     }
 }
 
-fn parse_template(template: &str, is_unpack: bool) -> Result<Vec<TemplateNode>> {
-    let mut temp = vec![];
+type TemplateNodes = SmallVec<[TemplateNode; 4]>;
+
+fn parse_template(template: &str, is_unpack: bool) -> Result<TemplateNodes> {
+    let mut temp = TemplateNodes::new();
     let mut iter = template.chars().peekable();
     while let Some(ch) = iter.next() {
         // Skip whitespace between directives (space, tab, newline, vertical tab, form feed, carriage return)
@@ -1724,7 +1864,7 @@ fn uu_decode_char(c: u8) -> u32 {
 // Each byte stores 7 bits; bit 7 (the MSB) signals "more bytes
 // follow." For SLEB128 the final byte is sign-extended from bit 6.
 
-fn encode_uleb128(buf: &mut Vec<u8>, mut val: u64) {
+fn encode_uleb128(buf: &mut StringBuf, mut val: u64) {
     loop {
         let mut byte = (val & 0x7F) as u8;
         val >>= 7;
@@ -1738,7 +1878,7 @@ fn encode_uleb128(buf: &mut Vec<u8>, mut val: u64) {
     }
 }
 
-fn encode_sleb128(buf: &mut Vec<u8>, mut val: i64) {
+fn encode_sleb128(buf: &mut StringBuf, mut val: i64) {
     loop {
         let byte = (val & 0x7F) as u8;
         // `val` arithmetically shifts (sign-extends) since it's i64.
@@ -1828,7 +1968,7 @@ fn unpack_sleb128(b: &mut ByteIter) -> SlebOutcome {
 /// BER-compress one `w` argument. Uses the arbitrary-precision path for a
 /// Bignum (which doesn't fit a `u64`); otherwise coerces via `#to_int`.
 fn ber_encode_value(
-    buf: &mut Vec<u8>,
+    buf: &mut StringBuf,
     vm: &mut Executor,
     globals: &mut Globals,
     value: Value,
@@ -1851,7 +1991,7 @@ fn ber_encode_value(
 
 /// BER-compress a non-negative arbitrary-precision integer: base-128,
 /// big-endian, with the high bit set on every group but the last.
-fn ber_encode_bigint(buf: &mut Vec<u8>, val: &num::BigInt) {
+fn ber_encode_bigint(buf: &mut StringBuf, val: &num::BigInt) {
     use num::{ToPrimitive, Zero};
     let mask = num::BigInt::from(0x7Fu8);
     let mut v = val.clone();
@@ -1866,7 +2006,7 @@ fn ber_encode_bigint(buf: &mut Vec<u8>, val: &num::BigInt) {
     buf.extend_from_slice(&tmp);
 }
 
-fn ber_encode(buf: &mut Vec<u8>, mut val: u64) {
+fn ber_encode(buf: &mut StringBuf, mut val: u64) {
     if val == 0 {
         buf.push(0);
         return;
@@ -1885,7 +2025,7 @@ fn ber_encode(buf: &mut Vec<u8>, mut val: u64) {
 
 // --- UTF-8 encoding/decoding ---
 
-fn utf8_encode_one(buf: &mut Vec<u8>, cp: u32) {
+fn utf8_encode_one(buf: &mut StringBuf, cp: u32) {
     // CRuby's `pack("U")` extends past the strict Unicode range:
     // codepoints up to 0x1FFFFF produce 4-byte sequences (above
     // U+10FFFF, technically invalid Unicode but valid 4-byte UTF-8

@@ -132,3 +132,29 @@ fn shared_block_as_bmethod_and_proc() {
         "#,
     );
 }
+
+#[test]
+fn bmethod_resolves_lexical_constants() {
+    // A `define_method` body is its own method boundary (`method_func_id`
+    // is the block itself), but its lexical scope is its mother's: an
+    // unqualified constant — in the body or in a default argument —
+    // resolves through the enclosing `module`/`class` nesting.
+    run_test(
+        r#"
+        module BmK
+          K = 7
+          class C
+            define_method(:dm) { |o = K| o }
+            define_method(:dm2) { |o = BmK::K| o }
+            define_method(:dm3) { |o = nil| o || K }
+            def self.mk; define_method(:dm4) { |o = K| o }; end
+            mk
+            define_method(:dm5) { K }
+            define_method(:dm6) { defined?(K) }
+          end
+        end
+        c = BmK::C.new
+        [c.dm, c.dm2, c.dm3, c.dm4, c.dm5, c.dm6]
+        "#,
+    );
+}

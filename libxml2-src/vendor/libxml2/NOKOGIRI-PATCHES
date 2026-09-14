@@ -1,0 +1,15 @@
+libxml2 2.13.8 (https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.8.tar.xz,
+sha256 277294cb33119ab71b2bc81f2f445e9bc9435b893ad15bb2cd2b0e859a0ee84a), the
+sources and headers needed to build it (tests, docs, python, fuzz, build
+system dropped), with nokogiri 1.18.9's patches/libxml2/*.patch applied:
+
+0001-Remove-script-macro-support.patch
+0002-Update-entities-to-remove-handling-of-ssi.patch
+0009-allow-wildcard-namespaces.patch
+0010-update-config.guess-and-config.sub-for-libxml2.patch (build system only)
+0011-rip-out-libxml2-s-libc_single_threaded-support.patch
+0019-xpath-Use-separate-static-hash-table-for-standard-fu.patch
+0020-CVE-2025-6021-tree-Fix-integer-overflow-in-xmlBuildQ.patch
+0021-CVE-2025-6170-Fix-potential-buffer-overflows-of-inte.patch
+0022-CVE-2025-49795-schematron-Fix-null-pointer-dereferen.patch
+0023-CVE-2025-49794-CVE-2025-49796-schematron-Fix-xmlSche.patch

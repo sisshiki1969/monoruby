@@ -91,6 +91,8 @@ monoruby/                   # Workspace root
 │   ├── README.md           # Index of every document, with kind + language
 │   ├── jit.md              # JIT stub code details
 │   ├── method_args.md      # Method argument handling
+│   ├── runtime_optimization/ # Array / Hash / String / Regexp: representation,
+│   │                       #   VM+JIT fast paths, CRuby differences (JA)
 │   └── progress_2025-2026.md # Progress notes
 ├── Cargo.toml              # Workspace manifest
 └── rust-toolchain.toml     # Pins nightly-2026-08-18
@@ -339,7 +341,7 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashbrown`, `ruby_traits`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
@@ -348,6 +350,8 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashb
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
+| `libxml2-src`   | Vendored libxml2 (+ nokogiri's patches) built with `cc`, and its FFI |
+| `libsqlite3-src` | Vendored SQLite amalgamation built with `cc`, and its FFI |
 
 External crates (fetched from git):
 
@@ -355,6 +359,65 @@ External crates (fetched from git):
 - `onigmo-regex` — Onigmo regular expression engine
 - `ruby-prism` — prism parser bindings (pinned `monoruby-vendored` branch; see below)
 - `smallvec` — local fork with `const_generics` (pinned via git, not vendored in-tree)
+- `aes-gcm` / `aes` / `cbc` (RustCrypto) — the native half of `OpenSSL::Cipher`
+  (`src/builtins/cipher.rs`: `String.__aes_gcm` / `__aes_cbc`, one-shot over
+  the message `stdlib/openssl.rb` buffers). `OpenSSL::Digest` / `HMAC` /
+  `PKCS5` / `KDF` in the same file are pure Ruby over `Digest`
+  (`src/builtins/digest.rs`, sha2 / md-5). Rails' cookie encryption and key
+  derivation run on these with CRuby-identical output. The rest of
+  `openssl.rb` (PKey, X509, SSL) is still a load-only stub.
+- `libyaml-safer` — a port of libyaml 0.2.5; the parser and emitter behind
+  `Psych` (`src/builtins/yaml.rs`: `String.__yaml_parse` dispatches the
+  events to a `Psych::Handler`, `__yaml_emitter_new` / `__yaml_emit` /
+  `__yaml_emitter_free` hold one emitter per `Psych::Emitter`). The gem's
+  Ruby half is vendored under `gem/psych/`.
+- `libxml2-src` (workspace crate) — libxml2 2.13.8 with nokogiri's patches,
+  vendored under `libxml2-src/vendor/` and built with `cc` (hand-written
+  `config.h`, generated `xmlversion.h`; no autotools / cmake), with a
+  hand-written FFI plus small C glue files (`libxml2-src/glue/`) for the
+  `xmlParserCtxt` field accessors, the variadic SAX message callbacks and
+  the gumbo tree walk. The same crate builds nokogiri's gumbo-parser
+  (`libxml2-src/vendor/gumbo-parser/`, Apache-2.0, `-std=c99`) for HTML5,
+  and libxslt 1.1.43 + libexslt (`libxml2-src/vendor/libxslt/`, unmodified;
+  generated `xsltconfig.h` / `exsltconfig.h`, hand-written
+  `config/xslt-config.h` in a separate include root) for
+  `Nokogiri::XSLT`. Behind `Nokogiri` (`src/builtins/nokogiri/`): the gem's
+  Ruby half is vendored under `gem/nokogiri/` and `gem/nokogiri/nokogiri.rb`
+  stands in for nokogiri.so. Objects wrapping libxml2 pointers are
+  `ObjTy::NATIVE` RValues (`NativeData` payloads with their own `mark` /
+  `Drop`); their classes are defined with `instance_ty = NATIVE`
+  (`define_class_with_instance_ty`) so the JIT never treats the payload as
+  inline ivar slots. See `doc/nokogiri.md`.
+- `libz-sys` — zlib built from its bundled C source and linked statically; the
+  `String.__zstream_*` builtins (`src/builtins/zlib.rs`) expose one `z_stream`
+  per `Zlib::Deflate` / `Zlib::Inflate` object, and everything else in `Zlib`
+  (`stdlib/zlib.rb`: the class API, gzip framing, `GzipReader` / `GzipWriter`)
+  is Ruby. Compression is byte-identical to CRuby's zlib.so.
+- `libsqlite3-src` (workspace crate) — the SQLite amalgamation (3.48.0,
+  public domain) under `libsqlite3-src/vendor/`, built with `cc` and linked
+  statically, with a hand-written FFI. Behind the sqlite3 gem: the gem's
+  Ruby half (2.7.3) is vendored under `gem/sqlite3/` (+ `gem/sqlite3.rb`)
+  as nokogiri's and psych's are, so no host sqlite3 gem is needed, and
+  `gem/sqlite3/sqlite3_native.rb` stands in for
+  sqlite3_native.so, calling `String.__sqlite3_init`
+  (`src/builtins/sqlite3.rs`) to build `SQLite3::Database` /
+  `SQLite3::Statement` as `ObjTy::NATIVE` classes owning the `sqlite3*` /
+  `sqlite3_stmt*`. `Statement#step` steps and reads the whole row in one
+  builtin call. Opening and closing a connection park the green thread on
+  the native pool (`NativeOp::Sqlite3`); everything else runs inline.
+  `create_function` is a real user-defined function: SQLite calls back
+  into Ruby from inside `sqlite3_step`, as nokogiri's XPath handlers do.
+  A raised exception is stashed rather than unwound through the C frames
+  and re-raised once the step returns. The callback finds the running
+  `Executor` through a thread-local map keyed by **connection**, saved
+  and restored rather than pushed and popped: green-thread switches are
+  not LIFO, so a callback that parks would otherwise let another thread
+  pop its entry. `create_aggregate` rides the same machinery with
+  `xStep` / `xFinal`: each aggregation group gets one instance of the
+  gem's proxy class, held in `DbHandle::aggregates` (where `mark` finds
+  it) and addressed by a slot number kept in SQLite's per-group
+  `sqlite3_aggregate_context`, which is C memory the collector cannot
+  see. A `collation` with a real comparator is still unsupported.
 
 ---
 
@@ -395,6 +458,22 @@ reproducible build. It performs two jobs:
      `<root>/stub/` — monoruby's own host-independent replacements for
      C-extension-backed libraries, laid down last so they win name clashes;
      the `stub/` copy is pinned ahead of `$LOAD_PATH` by the require resolver.
+     `gem/prism/` is the prism gem's Ruby half (the version the `ruby-prism`
+     crate links, 1.9.0 today; the vendored Ruby 4.0.2 snapshot carries
+     1.8.1) plus `gem/prism/prism.rb`, monoruby's stand-in for the gem's C
+     extension: `src/builtins/prism.rs` runs libprism's serializers and the
+     gem's `Prism::Serialize` builds the node tree. The serialization format
+     is per prism version, so bumping the crate means re-vendoring these
+     files from the matching gem. `stdlib/ripper.rb` is
+     `Prism::Translation::Ripper` on top of it. `gem/psych/` is the psych
+     5.3.1 gem's Ruby half (Ruby 4.0.2's) plus `gem/psych/psych.rb`, the
+     stand-in for its C extension: `src/builtins/yaml.rs` drives
+     `libyaml-safer` (a port of libyaml 0.2.5) as `Psych::Parser`'s event
+     source and `Psych::Emitter`'s sink, so `Psych.load` / `dump` and the
+     event API are CRuby's byte for byte. `gem/stackprof/stackprof.rb`
+     stands in for `stackprof.so` as an inert profiler (its API loads, no
+     sampling), since `gem "stackprof", platforms: :mri` is required at boot
+     by Bundler on monoruby too.
 
    These files implement parts of the Ruby standard library in Ruby rather
    than Rust. Per-version namespacing keeps concurrent builds and multiple
@@ -670,6 +749,18 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 2. **Architecture-specific backends**: The VM and JIT emit machine code directly per `target_arch` (`codegen/arch/{x86_64,aarch64}/`). Both backends lower the full AsmInst set; aarch64 never bails (large immediates go through scratch registers, so the `bool` "decline" return is vestigial — see `doc/arch_difference.md`). Adding/altering low-level codegen usually means touching both backends. Use `bin/test-aarch64` / `bin/setup-aarch64-cross` for the aarch64 path.
 3. **Ruby in PATH**: Tests compare output against a system `ruby` binary matching the vendored pin (`4.0.2`, see `vendor/ruby-stdlib/.ruby-version`). The single-code helpers replay the checked-in snapshot oracle (`monoruby/tests/ruby_oracle.tsv`) and only spawn `ruby` on a cache miss, but the batched helpers (`run_tests` etc.) and several integration tests still invoke it directly — keep a matching Ruby installed for full-suite runs, and use `MONORUBY_TEST_ORACLE=ruby` after a version bump to refresh the oracle.
 4. **optcarrot**: The full CI test requires optcarrot cloned at `../optcarrot` relative to the repo root.
-5. **Library path**: `build.rs` does **not** invoke a host `ruby` for `$LOAD_PATH` / `RUBY_VERSION` (those come from the vendored snapshot). Host-installed *non-default* gems are discovered at run time by `src/ruby_probe.rs`, which invokes a host `ruby` once if present and caches `~/.monoruby/{library_path,gem_path}`. That cache is the **only** place a non-default gem's `lib/` is listed — rubygems boots lazily (`builtins/gem_prelude.rb` autoloads `Gem`), so CRuby's spec-index `require` fallback is not installed at startup. `ruby_probe::cache_is_stale` therefore re-probes whenever `library_path` is older than any `<gem root>/specifications` directory, so a `gem install` becomes visible on the next start; `MONORUBY_REPROBE=1` forces a probe regardless. If no host Ruby is found, those caches stay empty and a warning is printed at startup, but the vendored stdlib still loads from the per-version install root (`~/.monoruby/v<version>/lib`).
-6. **gc-stress in tests**: `gc-stress` is **opt-in** — `export GC_STRESS=1` before `bin/test` and it applies to **every** phase (nextest *and* the benchmark binary, so optcarrot / ruby-spec are stressed too). Since the true-stress restoration this means a collection at **every safepoint**, so a `GC_STRESS=1` run of the full scope is an hours-scale job. Nothing enables it implicitly, so the automatic CI never pays it; run the manual `gc-stress` workflow instead. Tests whose loop counts exist only to reach the JIT thresholds should shrink them under `cfg!(feature = "gc-stress")` (see `tests/method_call.rs`) — otherwise they blow past nextest's per-test cap.
-7. **Thread-local CODEGEN**: The JIT compiler is a thread-local singleton. Do not attempt to use it across threads.
+5. **Weak references**: `ObjectSpace::WeakMap` is real — its storage is
+   `ObjTy::WEAKMAP` (`src/value/rvalue/weakmap.rs`), whose `mark` traces
+   neither half of a pair, and the collector breaks the pairs whose key or
+   value did not survive. That happens in `GCRoot::clear_weak_refs`, called
+   from `Allocator::gc` after the mark has drained and before anything is
+   reclaimed — the only window where a mark bit means "live this cycle" and
+   still describes a cell that exists. Live maps are found through a
+   thread-local registry of raw cells, pruned in the same pass. Keys are
+   compared by identity, never `hash` / `eql?`, which would have to re-enter
+   the interpreter from inside a collection. `stdlib/weakref.rb` is CRuby's
+   own, unmodified, on top of it. `ObjectSpace::WeakKeyMap` is still absent.
+
+6. **Library path**: `build.rs` does **not** invoke a host `ruby` for `$LOAD_PATH` / `RUBY_VERSION` (those come from the vendored snapshot). Host-installed *non-default* gems are discovered at run time by `src/ruby_probe.rs`, which invokes a host `ruby` once if present and caches `~/.monoruby/{library_path,gem_path}`. That cache is the **only** place a non-default gem's `lib/` is listed — rubygems boots lazily (`builtins/gem_prelude.rb` autoloads `Gem`), so CRuby's spec-index `require` fallback is not installed at startup. `ruby_probe::cache_is_stale` therefore re-probes whenever `library_path` is older than any `<gem root>/specifications` directory — so a `gem install` becomes visible on the next start — and whenever **every** cached gem root has vanished (the probed Ruby was removed wholesale, e.g. an rbenv version upgrade deleted the old tree); `MONORUBY_REPROBE=1` forces a probe regardless. If no host Ruby is found, those caches stay empty and a warning is printed at startup, but the vendored stdlib still loads from the per-version install root (`~/.monoruby/v<version>/lib`).
+7. **gc-stress in tests**: `gc-stress` is **opt-in** — `export GC_STRESS=1` before `bin/test` and it applies to **every** phase (nextest *and* the benchmark binary, so optcarrot / ruby-spec are stressed too). Since the true-stress restoration this means a collection at **every safepoint**, so a `GC_STRESS=1` run of the full scope is an hours-scale job. Nothing enables it implicitly, so the automatic CI never pays it; run the manual `gc-stress` workflow instead. Tests whose loop counts exist only to reach the JIT thresholds should shrink them under `cfg!(feature = "gc-stress")` (see `tests/method_call.rs`) — otherwise they blow past nextest's per-test cap.
+8. **Thread-local CODEGEN**: The JIT compiler is a thread-local singleton. Do not attempt to use it across threads.

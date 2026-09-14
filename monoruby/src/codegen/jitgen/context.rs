@@ -27,7 +27,7 @@ pub(crate) struct SpecializedId(pub(super) usize);
 /// caller passes literal keywords — the caller's kw window that backs
 /// `f`'s un-materialized `**kwrest` Hash (K1).
 ///
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DeferredForward {
     /// `f`'s synthetic rest local slot.
     pub rest_local: SlotId,
@@ -89,7 +89,7 @@ pub(super) fn max_virt_fpreg_id(asm_info: &AsmInfo) -> Option<usize> {
     max
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum JitType {
     /// JIT for method / block.
     Entry,
@@ -106,11 +106,6 @@ pub(super) enum JitType {
 pub(super) struct SpecializeInfo {
     pub(super) entry: JitLabel,
     pub(super) info: AsmInfo,
-    pub(super) patch_point: Option<JitLabel>,
-    /// The subtree was compiled while an enclosing frame's unboxed-Float
-    /// speculation was armed, so its body addresses that frame's FP
-    /// save/spill slots and must never be recompiled standalone (#1140).
-    pub(super) speculated: bool,
 }
 
 ///
@@ -149,12 +144,21 @@ impl JitBlockInfo {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub(super) struct JitArgumentInfo(pub Option<Vec<LinkMode>>);
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub(super) struct JitArgumentInfo(
+    pub Option<Vec<LinkMode>>,
+    ///
+    /// The parameters this call hands over in a register instead of in
+    /// the callee's frame slot, with the pool register each arrives in
+    /// (`JitContext::plan_float_args`). Part of the callee's identity:
+    /// it is the callee's entry state that binds them.
+    ///
+    pub Vec<(SlotId, FPReg)>,
+);
 
 impl JitArgumentInfo {
     pub(super) fn new(slot: Vec<LinkMode>) -> Self {
-        Self(Some(slot))
+        Self(Some(slot), vec![])
     }
 }
 
@@ -474,7 +478,7 @@ pub(super) struct JitStackFrame {
     ///
     return_edges: Vec<(
         JitLabel,
-        Vec<AbstractFrame>,
+        Vec<FrameRef>,
         AbstractFrame,
         SlotId,
         BasicBlockId,
@@ -524,7 +528,7 @@ pub(super) struct JitStackFrame {
     /// Outer frames are carried because a block handed out of the unit can
     /// write their locals, so their modes have to be merged (and written
     /// back) at the loop head like the innermost frame's.
-    backedge_map: HashMap<BasicBlockId, Vec<SlotState>>,
+    backedge_map: HashMap<BasicBlockId, Vec<FrameRef>>,
     ///
     /// Contexts for returning from this frame.
     ///
@@ -580,6 +584,13 @@ pub(super) struct JitStackFrame {
     /// store it makes into an outer frame is invisible here.
     ///
     pub(super) generic_yield: bool,
+    ///
+    /// The caller's FP save set frozen when this frame's specialized
+    /// compile began (`specialized_compile`): the callee's static
+    /// frame-chain offsets are laid out over it, so the call emission
+    /// must save exactly this set. Filled by `specialized_compile`.
+    ///
+    pub(super) call_site_using_fpr: UsingFpr,
     /// D1: set when the trampoline forwarding consumer routed `g(...)`
     /// straight from the caller source (elided `f`'s rest Array).
     /// Aggregated from `AsmIr::deferred_rest()` like `had_deopt`,
@@ -590,6 +601,25 @@ pub(super) struct JitStackFrame {
     /// `deferred_rest`; producer skips `create_array` only when
     /// `deferred_rest && !needs_rest_array`.
     pub(super) needs_rest_array: bool,
+
+    ///
+    /// Some path returns out of this frame with a boxed `rax` that no
+    /// return segment emitted: a non-local `return` or a `break`, whose
+    /// teardown returns on its own. Their value cannot follow the
+    /// float-return convention, so its presence anywhere in the subtree
+    /// rules the convention out for this frame. Propagated one level up
+    /// in `compile_specialized_func`, like `had_deopt`.
+    ///
+    pub(super) has_boxed_return: bool,
+
+    ///
+    /// This frame's compiled return segments hand the value to the call
+    /// site as a raw f64 in the float-return register rather than boxed
+    /// in rax (`AsmInst::FloatRetStore`). Decided once, in
+    /// `build_return_segments`, and binding on the call site: a site that
+    /// read rax here would read the placeholder.
+    ///
+    pub(super) float_return: bool,
 
     ///
     /// Unboxed-locals speculation (`doc/chain_deopt.md` §5 steps 4–5):
@@ -730,8 +760,11 @@ impl JitStackFrame {
             specialized_id: SpecializedId(usize::MAX),
             had_deopt: false,
             generic_yield: false,
+            call_site_using_fpr: UsingFpr::default(),
             deferred_rest: false,
             needs_rest_array: false,
+            has_boxed_return: false,
+            float_return: false,
             speculated_floats: vec![],
             speculated_using_fpr: UsingFpr::default(),
             speculation_poisoned: false,
@@ -767,8 +800,11 @@ impl JitStackFrame {
             specialized_id: self.specialized_id,
             had_deopt: self.had_deopt,
             generic_yield: self.generic_yield,
+            call_site_using_fpr: self.call_site_using_fpr,
             deferred_rest: self.deferred_rest,
             needs_rest_array: self.needs_rest_array,
+            has_boxed_return: self.has_boxed_return,
+            float_return: self.float_return,
             speculated_floats: self.speculated_floats.clone(),
             speculated_using_fpr: self.speculated_using_fpr,
             speculation_poisoned: self.speculation_poisoned,
@@ -948,7 +984,7 @@ pub(crate) struct JitContext<'a> {
     ///
     /// Stage-C loop adoption: set when this context compiled anything
     /// that can rewrite an outer frame's slot *invisibly* — a call that
-    /// hands a block out of the unit (`all_frames_unbox_to_S`), a call
+    /// hands a block out of the unit (`unbox_to_S_for_outgoing_block`), a call
     /// site forwarding an explicit `&blk`, or a capture event. A loop
     /// analysed while this fires must not adopt an outer view: the
     /// compile-time widen hooks do not cover such stores, so the adopted
@@ -964,6 +1000,13 @@ pub(crate) struct JitContext<'a> {
     /// iteration.
     ///
     widened_outer_log: Vec<(usize, SlotId)>,
+    ///
+    /// What the analysis walks of this compilation have already compiled
+    /// at each specialized call site, shared with every throwaway
+    /// context ([`Self::analysis_clone`]) so a walk answers a call site
+    /// the previous walks already reached — see [`spec_memo::SpecMemo`].
+    ///
+    spec_memo: std::rc::Rc<std::cell::RefCell<spec_memo::SpecMemo>>,
 }
 
 impl<'a> JitContext<'a> {
@@ -997,12 +1040,29 @@ impl<'a> JitContext<'a> {
             kept_outer_views: vec![],
             outer_claim_barrier: false,
             widened_outer_log: vec![],
+            spec_memo: Default::default(),
         }
     }
 
-    pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
+    ///
+    /// The throwaway context for one analysis walk over the loop headed at
+    /// *loop_start* (whose `LoopStart` is at *pc*). The walk merges every
+    /// inner loop head with the back edge recorded for it by the previous
+    /// walks, so those entries come along; the walked loop's own entry
+    /// does not — its recorded back edge is joined into the walk's entry
+    /// state by `analyse_loop`, and its liveness belongs to the real merge.
+    ///
+    pub(super) fn loop_analysis(&self, pc: BytecodePtr, loop_start: BasicBlockId) -> Self {
         let mut ctx = self.analysis_clone();
-        ctx.stack_frame.last_mut().unwrap().jit_type = JitType::Loop(pc);
+        let frame = ctx.stack_frame.last_mut().unwrap();
+        frame.jit_type = JitType::Loop(pc);
+        frame.loop_info = self
+            .current_frame()
+            .loop_info
+            .iter()
+            .filter(|(head, _)| **head != loop_start)
+            .map(|(head, info)| (*head, info.clone()))
+            .collect();
         ctx
     }
 
@@ -1037,6 +1097,9 @@ impl<'a> JitContext<'a> {
             // empty — the resolve pass never runs against this ir.
             next_specialized_id: 0,
             specialized_frame_sizes: HashMap::default(),
+            // Shared, not reset: answering one walk's call sites from
+            // what the previous walks compiled is the whole point.
+            spec_memo: self.spec_memo.clone(),
         }
     }
 
@@ -1314,7 +1377,17 @@ impl<'a> JitContext<'a> {
         // Stage-B home-aliased reads: the callee can store through the
         // frame chain, so no alias survives a specialized call either.
         state.clear_dynvar_aliases();
-        let stack_offset = state.using_fpr_offset().offset();
+        // The call site's FP save set, frozen *here*: the callee's static
+        // frame-chain offsets (`extra`) are laid out over `stack_offset`,
+        // so the call emission after this compile must save exactly this
+        // set — not the set the caller's state holds *then*. The callee
+        // can widen the caller's slots while it compiles (a `StoreDynVar`
+        // through the chain drops an `Sf`/`F` view to `S`), which would
+        // shrink a freshly derived set and shift every offset the callee
+        // already baked in. It rides back to the call site on the compiled
+        // frame (`call_site_using_fpr`).
+        let using_fpr = state.using_fpr_offset();
+        let stack_offset = using_fpr.offset();
         // The live chain's invariants are maintained lexically (see
         // `unset_lexical_no_capture_guard`), so the entry chain is simply
         // this path's live frames.
@@ -1330,6 +1403,7 @@ impl<'a> JitContext<'a> {
         assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
 
         let mut frame = self.traceir_to_asmir(frame, Some(entry_chain))?;
+        frame.call_site_using_fpr = using_fpr;
 
         // Every plain `Ret` in the callee branched to a return segment;
         // build them (and the join of the return-path chains) now, while
@@ -1355,7 +1429,7 @@ impl<'a> JitContext<'a> {
             // resuming level" only at its own caller's resume, where this
             // same rule applies.
             let joined_caller = chain.last().unwrap().clone();
-            *chain.last_mut().unwrap() = innermost;
+            *chain.last_mut().unwrap() = FrameRef::new(innermost);
             state.set_frames(chain);
             state.overlay_kept_constants_innermost(joined_caller.slot_state());
         } else {
@@ -1368,7 +1442,7 @@ impl<'a> JitContext<'a> {
             // arrives here — and every later merge's claims are
             // established by its *reachable* entries' bridges.
             let mut chain = fallback_chain;
-            *chain.last_mut().unwrap() = innermost;
+            *chain.last_mut().unwrap() = FrameRef::new(innermost);
             state.set_frames(chain);
             for (pos, slot) in self.widened_outer_log[widen_mark..].to_vec() {
                 state.invalidate_at(pos, slot);
@@ -1514,7 +1588,7 @@ impl<'a> JitContext<'a> {
     /// believing a mode this store just invalidated.
     ///
     /// A frame's locals cross a call boundary with their `Guarded` intact
-    /// (`all_frames_unbox_to_S`), which is only sound if a callee that
+    /// (`unbox_to_S_for_outgoing_block`), which is only sound if a callee that
     /// writes one of them says so: an `S(Guarded::Float)` a callee stores
     /// a String into would otherwise still be read as a Float once the
     /// call returns.
@@ -1766,13 +1840,13 @@ impl<'a> JitContext<'a> {
     /// frame) covers both. Lexical (dynvar) addressing walks the per-frame
     /// links, exactly as [`Self::outer_pos`] walks `stack_frame`.
     ///
-    pub(super) fn trace_contexts(&self) -> Vec<AbstractFrame> {
+    pub(super) fn trace_contexts(&self) -> Vec<FrameRef> {
         let end = self.stack_frame.len() - 1;
         (0..end)
             .map(|pos| {
                 let mut f = self.stack_frame[pos].abstract_state.clone().unwrap();
                 f.set_lexical_outer(self.stack_frame[pos].outer);
-                f
+                FrameRef::new(f)
             })
             .collect()
     }
@@ -1836,18 +1910,6 @@ impl<'a> JitContext<'a> {
 
     // ===== Unboxed-locals speculation (doc/chain_deopt.md §5 steps 4–5) =====
 
-    ///
-    /// Whether any frame on the compile stack currently has an armed
-    /// unboxed-Float speculation. Sampled when a specialized subtree is
-    /// recorded (`compile_specialized_func`): a subtree compiled under an
-    /// armed speculation reads the arming frame's FP save/spill area and
-    /// must not be recompiled standalone (#1140).
-    ///
-    pub(super) fn under_armed_speculation(&self) -> bool {
-        self.stack_frame
-            .iter()
-            .any(|f| !f.speculated_floats.is_empty())
-    }
 
     fn check_exception_handler(&self, begin: usize, end: usize) -> bool {
         self.stack_frame[begin..end].iter().any(|f| {
@@ -2119,6 +2181,305 @@ impl<'a> JitContext<'a> {
     /// Mark for [`Self::drain_kept_outer_views`].
     pub(super) fn kept_outer_views_mark(&self) -> usize {
         self.kept_outer_views.len()
+    }
+
+    // ===== Specialized-call memo (analysis walks only) =====
+
+    ///
+    /// The frame at *pos* as one floor of the abstract-frame tower.
+    ///
+    /// The exhaustive pattern is the contract: a new `JitStackFrame`
+    /// field has to be classified here (part of the tower, part of the
+    /// call site's identity, or out of the memo's reach) rather than
+    /// silently left out.
+    ///
+    fn frame_state(&self, pos: usize) -> spec_memo::FrameState {
+        let JitStackFrame {
+            // The emission side: `AsmIr`, labels, the specialized-method
+            // list, the frame's own sizes. All codegen, and the memo is
+            // consulted only where no code is emitted. `jit_type` and
+            // `ivar_heap_accessed` are read out of it through the
+            // `Deref` below.
+            asm_info: _,
+            // The frame's identity, carried by
+            // [`spec_memo::SpecCallSite::chain`]. `callid` is set and
+            // cleared around the call by `specialized_compile`, so at
+            // a call site it is back to what the chain recorded.
+            outer: _,
+            specialized_id: _,
+            callid: _,
+            // Read only through `JitContext::loop_count`, i.e. of the
+            // frame being compiled, which for the whole of a nested
+            // call is the callee's own.
+            loop_count: _,
+            // Per-frame compile state of the frame's *own* walk. A
+            // nested compile addresses `current_frame_mut()`, which is
+            // the callee's frame for the whole call, so none of these
+            // is reachable from one.
+            loop_info: _,
+            loop_outer_reads: _,
+            return_edges: _,
+            branch_map: _,
+            backedge_map: _,
+            spliced_ensures: _,
+            call_site_using_fpr: _,
+            deferred_rest: _,
+            needs_rest_array: _,
+            // Set once, in `build_return_segments`, on the frame whose
+            // segments are being built — never on a suspended outer
+            // frame, so a nested call cannot move it.
+            float_return: _,
+            // The tower itself.
+            is_not_block,
+            stack_offset,
+            base_stack_offset,
+            spill_home_watermark,
+            speculation_poisoned,
+            had_deopt,
+            generic_yield,
+            has_boxed_return,
+            speculated_using_fpr,
+            speculated_floats,
+            spill_home_ids,
+            return_context,
+            abstract_state,
+        } = &self.stack_frame[pos];
+        spec_memo::FrameState {
+            is_not_block: *is_not_block,
+            stack_offset: *stack_offset,
+            base_stack_offset: *base_stack_offset,
+            spill_home_watermark: *spill_home_watermark,
+            speculation_poisoned: *speculation_poisoned,
+            had_deopt: *had_deopt,
+            generic_yield: *generic_yield,
+            has_boxed_return: *has_boxed_return,
+            ivar_heap_accessed: self.stack_frame[pos].ivar_heap_accessed,
+            speculated_using_fpr: *speculated_using_fpr,
+            speculated_floats: speculated_floats.clone(),
+            spill_home_ids: spill_home_ids.clone(),
+            return_context: return_context.clone(),
+            jit_type: self.stack_frame[pos].jit_type.clone(),
+            abstract_state: spec_memo::MemoFrame(abstract_state.clone()),
+        }
+    }
+
+    ///
+    /// Put the frame at *pos* back on the floor *state* describes. The
+    /// fields a specialized call cannot write are bound and dropped:
+    /// the tower they belong to was compared before the replay, so they
+    /// already hold these values.
+    ///
+    fn restore_frame_state(&mut self, pos: usize, state: &spec_memo::FrameState) {
+        let spec_memo::FrameState {
+            is_not_block: _,
+            base_stack_offset: _,
+            speculated_using_fpr: _,
+            speculated_floats: _,
+            jit_type: _,
+            stack_offset: _,
+            spill_home_watermark,
+            speculation_poisoned,
+            had_deopt,
+            generic_yield,
+            has_boxed_return,
+            ivar_heap_accessed,
+            spill_home_ids,
+            return_context,
+            abstract_state,
+        } = state;
+        let frame = &mut self.stack_frame[pos];
+        frame.spill_home_watermark = *spill_home_watermark;
+        frame.speculation_poisoned = *speculation_poisoned;
+        frame.had_deopt = *had_deopt;
+        frame.generic_yield = *generic_yield;
+        frame.has_boxed_return = *has_boxed_return;
+        frame.ivar_heap_accessed = *ivar_heap_accessed;
+        frame.spill_home_ids = spill_home_ids.clone();
+        frame.return_context = return_context.clone();
+        frame.abstract_state = abstract_state.0.clone();
+    }
+
+    ///
+    /// The inlining path the current compile stands on, by identity.
+    /// See [`spec_memo::SpecCallSite::chain`].
+    ///
+    pub(super) fn spec_call_chain(&self) -> Vec<spec_memo::ChainStep> {
+        self.stack_frame
+            .iter()
+            .map(|f| spec_memo::ChainStep {
+                iseq_id: f.iseq_id,
+                self_class: f.self_class,
+                callid: f.callid,
+                outer: f.outer,
+                specialize_level: f.specialize_level,
+                specialized_id: f.specialized_id,
+            })
+            .collect()
+    }
+
+    ///
+    /// The abstract-frame tower as it stands right now, over *state* as
+    /// the live chain.
+    ///
+    pub(super) fn tower(&self, state: &AbstractState) -> spec_memo::Tower {
+        spec_memo::Tower {
+            flags: spec_memo::CtxFlags {
+                fused_skip: self.fused_skip,
+                in_dispatch_arm: self.in_dispatch_arm,
+                in_set_guarded_arm: self.in_set_guarded_arm,
+                unfrozen_slots: self.unfrozen_slots.clone(),
+                instr_unfrozen: self.instr_unfrozen.clone(),
+            },
+            frames: (0..self.stack_frame.len())
+                .map(|p| self.frame_state(p))
+                .collect(),
+            state: spec_memo::MemoChain(state.clone()),
+        }
+    }
+
+    ///
+    /// A digest of [`Self::tower`], over the same live data and without
+    /// copying it. A lookup rejects entries by digest and snapshots
+    /// only when one matches; the tower comparison, not the digest,
+    /// decides the answer, so a digest that misses a field costs hits
+    /// and never correctness.
+    ///
+    pub(super) fn tower_hash(&self, state: &AbstractState) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = fxhash::FxHasher64::default();
+        self.fused_skip.hash(&mut h);
+        self.in_dispatch_arm.hash(&mut h);
+        self.in_set_guarded_arm.hash(&mut h);
+        self.unfrozen_slots.hash(&mut h);
+        self.instr_unfrozen.hash(&mut h);
+        spec_memo::hash_chain(state, &mut h);
+        for frame in &self.stack_frame {
+            frame.jit_type.hash(&mut h);
+            frame.is_not_block.hash(&mut h);
+            frame.stack_offset.hash(&mut h);
+            frame.base_stack_offset.hash(&mut h);
+            frame.speculated_floats.hash(&mut h);
+            frame.speculated_using_fpr.hash(&mut h);
+            spec_memo::hash_parked(&frame.abstract_state, &mut h);
+            frame.spill_home_watermark.hash(&mut h);
+            frame.spill_home_ids.len().hash(&mut h);
+            frame.speculation_poisoned.hash(&mut h);
+            frame.had_deopt.hash(&mut h);
+            frame.generic_yield.hash(&mut h);
+            frame.ivar_heap_accessed.hash(&mut h);
+            frame.return_context.len().hash(&mut h);
+        }
+        h.finish()
+    }
+
+    pub(super) fn spec_memo_marks(&self) -> spec_memo::CallMarks {
+        spec_memo::CallMarks {
+            widened: self.widened_outer_log.len(),
+            kept: self.kept_outer_views.len(),
+            capture_events: self.capture_events,
+            claim_barrier: self.outer_claim_barrier,
+        }
+    }
+
+    ///
+    /// What the compile left behind that its returned tower does not
+    /// hold.
+    ///
+    pub(super) fn spec_call_effect(
+        &self,
+        marks: spec_memo::CallMarks,
+        result: spec_memo::SpecializedCompileResultMemo,
+    ) -> spec_memo::Effect {
+        spec_memo::Effect {
+            widened: self.widened_outer_log[marks.widened..].to_vec(),
+            kept: self.kept_outer_views[marks.kept..].to_vec(),
+            claim_barrier: self.outer_claim_barrier && !marks.claim_barrier,
+            capture_events: self.capture_events - marks.capture_events,
+            result,
+        }
+    }
+
+    ///
+    /// Stand the recorded tower back up, and apply the effect that goes
+    /// with it, in place of running the compile. The caller has already
+    /// established that the tower entered matches the one the pair was
+    /// recorded under.
+    ///
+    fn spec_memo_replay(
+        &mut self,
+        state: &mut AbstractState,
+        returned: &spec_memo::Tower,
+        effect: &spec_memo::Effect,
+    ) -> spec_memo::SpecializedCompileResultMemo {
+        debug_assert_eq!(self.stack_frame.len(), returned.frames.len());
+        for (pos, frame) in returned.frames.iter().enumerate() {
+            self.restore_frame_state(pos, frame);
+        }
+        let spec_memo::CtxFlags {
+            fused_skip,
+            in_dispatch_arm,
+            in_set_guarded_arm,
+            unfrozen_slots,
+            instr_unfrozen,
+        } = returned.flags.clone();
+        self.fused_skip = fused_skip;
+        self.in_dispatch_arm = in_dispatch_arm;
+        self.in_set_guarded_arm = in_set_guarded_arm;
+        self.unfrozen_slots = unfrozen_slots;
+        self.instr_unfrozen = instr_unfrozen;
+        *state = returned.state.0.clone();
+        self.widened_outer_log.extend_from_slice(&effect.widened);
+        self.kept_outer_views.extend_from_slice(&effect.kept);
+        if effect.claim_barrier {
+            self.outer_claim_barrier = true;
+        }
+        self.capture_events += effect.capture_events;
+        effect.result.clone()
+    }
+
+    ///
+    /// Replay the pair recorded for this call site under the tower it
+    /// is entering with, if one is recorded. `None` leaves *state* and
+    /// the context untouched, so the caller compiles the call for real.
+    ///
+    pub(super) fn spec_memo_try_replay(
+        &mut self,
+        site: &spec_memo::SpecCallSite,
+        hash: u64,
+        state: &mut AbstractState,
+    ) -> Option<spec_memo::SpecializedCompileResultMemo> {
+        // The table outlives every throwaway context, so take a handle
+        // to it before borrowing `self` mutably for the replay.
+        let memo = self.spec_memo.clone();
+        if !memo.borrow().may_have(site, hash) {
+            spec_memo::count_miss();
+            return None;
+        }
+        let entered = self.tower(state);
+        let table = memo.borrow();
+        let Some((returned, effect)) = table.get(site, hash, &entered) else {
+            spec_memo::count_miss();
+            return None;
+        };
+        spec_memo::count_hit();
+        Some(self.spec_memo_replay(state, returned, effect))
+    }
+
+    pub(super) fn spec_memo_is_full(&self, site: &spec_memo::SpecCallSite) -> bool {
+        self.spec_memo.borrow().is_full(site)
+    }
+
+    pub(super) fn spec_memo_insert(
+        &self,
+        site: spec_memo::SpecCallSite,
+        hash: u64,
+        entered: spec_memo::Tower,
+        returned: spec_memo::Tower,
+        effect: spec_memo::Effect,
+    ) {
+        self.spec_memo
+            .borrow_mut()
+            .insert(site, hash, entered, returned, effect);
     }
 
     ///
@@ -2548,6 +2909,25 @@ impl<'a> JitContext<'a> {
         matches!(self.jit_type(), JitType::Loop(_))
     }
 
+    /// Whether `bc_pos` sits in the basic block holding this loop
+    /// compile's terminating `loop_end` (the structural pair of
+    /// `position()`'s `loop_start`). The nesting counter alone cannot
+    /// detect the region end: an inner loop's `loop_end` swallowed by
+    /// dead code (e.g. behind an unconditional deopt on a
+    /// never-profiled path) leaves the counter high, and counting alone
+    /// would let the compile run off the end of the region without
+    /// emitting the exit bridge.
+    pub(super) fn is_loop_region_end(&self, bc_pos: BcIndex) -> bool {
+        let Some(pc) = self.position() else {
+            return false;
+        };
+        let iseq = self.iseq();
+        let start_pos = iseq.get_pc_index(Some(pc));
+        let bb_begin = iseq.bb_info.get_bb_id(start_pos);
+        let (_, bb_end) = iseq.bb_info.is_loop_begin(bb_begin).unwrap();
+        iseq.bb_info.get_bb_id(bc_pos) == bb_end
+    }
+
     pub(super) fn get_bb_label(&self, bb: BasicBlockId) -> JitLabel {
         self.current_frame().get_bb_label(bb)
     }
@@ -2611,7 +2991,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().branch_map.remove(&bb)
     }
 
-    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<Vec<SlotState>> {
+    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<Vec<FrameRef>> {
         self.current_frame_mut().backedge_map.remove(&bb)
     }
 
@@ -2698,7 +3078,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Add new backward branch from *src_idx* to *dest* with `state`.
     ///
-    pub(super) fn new_backedge(&mut self, target: Vec<SlotState>, bb_pos: BasicBlockId) {
+    pub(super) fn new_backedge(&mut self, target: Vec<FrameRef>, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.current_frame_mut().backedge_map.insert(bb_pos, target);
@@ -2772,16 +3152,56 @@ impl<'a> JitContext<'a> {
         crate::codegen::jitgen::state::ChainSurrender { per_level }
     }
 
-    fn build_return_segments(&mut self, frame: &mut JitStackFrame) -> Option<Vec<AbstractFrame>> {
+    ///
+    /// Whether this specialized body may hand its return value to the
+    /// call site as a raw f64 instead of boxing it (`AsmInst::FloatRetStore`).
+    ///
+    /// Three things have to hold, and each is load-bearing.
+    ///
+    /// * Every return edge already holds the value in an fpr. A boxed
+    ///   `S(Float)` would have to be unboxed here to be re-boxed at the
+    ///   call site, which is the round trip this exists to remove.
+    /// * No path returns out of this frame with a boxed `rax` of its own
+    ///   (`has_boxed_return`): the convention is per frame, and the call
+    ///   site cannot tell the two kinds of return apart.
+    /// * The iseq carries no exception handler. `AsmInst::Ret` then emits
+    ///   the parked-deferral check (see `emit_ret`), whose call clobbers
+    ///   the register the value travels in.
+    ///
+    fn float_return_ok(
+        &self,
+        frame: &JitStackFrame,
+        edges: &[(
+            JitLabel,
+            Vec<FrameRef>,
+            AbstractFrame,
+            SlotId,
+            BasicBlockId,
+        )],
+    ) -> bool {
+        !frame.has_boxed_return
+            && !self.store[frame.iseq_id].has_exception_handler()
+            && edges
+                .iter()
+                .all(|(_, _, inner, ret_slot, _)| float_ret_src(inner.mode(*ret_slot)).is_some())
+    }
+
+    fn build_return_segments(&mut self, frame: &mut JitStackFrame) -> Option<Vec<FrameRef>> {
         let edges = std::mem::take(&mut frame.return_edges);
         if edges.is_empty() {
             return None;
         }
-        let mut target: Vec<AbstractFrame> = edges[0].1.clone();
+        frame.float_return = self.float_return_ok(frame, &edges);
+        let mut target: Vec<FrameRef> = edges[0].1.clone();
         for (_, chain, ..) in edges.iter().skip(1) {
             debug_assert_eq!(target.len(), chain.len());
             for (t, e) in target.iter_mut().zip(chain.iter()) {
-                t.join_no_alloc(e);
+                // Identity fast path: the frame no path has touched joins
+                // with itself — a pointer compare instead of a slot walk.
+                if FrameRef::ptr_eq(t, e) {
+                    continue;
+                }
+                FrameRef::make_mut(t).join_no_alloc(e);
             }
         }
         for (seg, chain, mut inner, ret_slot, bbid) in edges {
@@ -2847,7 +3267,16 @@ impl<'a> JitContext<'a> {
                     }
                 }
             }
-            inner.load(&mut ir, ret_slot, GP::Rax);
+            // Last thing before the `ret`: `f64_to_val`, which the bridge
+            // writes above call, clobbers the same scratch registers the
+            // value travels in.
+            if frame.float_return {
+                let src = float_ret_src(inner.mode(ret_slot))
+                    .expect("float_return edge carries no raw f64");
+                ir.float_ret_store(src);
+            } else {
+                inner.load(&mut ir, ret_slot, GP::Rax);
+            }
             ir.push(AsmInst::Ret);
             frame.outline_bridges.push((ir, seg, bbid));
         }
@@ -2883,6 +3312,7 @@ impl<'a> JitContext<'a> {
     /// Add new return branch with `state`.
     ///
     pub(super) fn new_method_return(&mut self, ret: ReturnState) {
+        self.current_frame_mut().has_boxed_return = true;
         if let Some(pos) = self.method_caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_method_return:{:?}", ret);
@@ -2894,6 +3324,7 @@ impl<'a> JitContext<'a> {
     /// Add new return branch with `state`.
     ///
     pub(super) fn new_break(&mut self, ret: ReturnState) {
+        self.current_frame_mut().has_boxed_return = true;
         if let Some(pos) = self.iter_caller_pos() {
             #[cfg(feature = "jit-debug")]
             eprintln!("   new_break:{:?}", ret);
@@ -2928,5 +3359,23 @@ impl<'a> JitContext<'a> {
         frame.deferred_rest |= ir.deferred_rest();
         frame.needs_rest_array |= ir.needs_rest_array();
         frame.outline_bridges.push((ir, dest, bbid));
+    }
+}
+
+///
+/// The raw f64 a return edge can hand to its call site, if it has one
+/// without emitting a guard.
+///
+/// `S` is deliberately absent even when its guard says Float: reading it
+/// back means an unbox, which is the very round trip the convention
+/// exists to remove, and the unbox is guarded, so it would put a deopt on
+/// a path that had none.
+///
+fn float_ret_src(mode: LinkMode) -> Option<crate::codegen::jitgen::asmir::OuterFprSrc> {
+    use crate::codegen::jitgen::asmir::OuterFprSrc;
+    match mode {
+        LinkMode::F(fpr) | LinkMode::Sf(fpr, _) => Some(OuterFprSrc::Fpr(fpr)),
+        LinkMode::C(v) => v.try_float().map(|f| OuterFprSrc::Imm(f.to_bits())),
+        _ => None,
     }
 }

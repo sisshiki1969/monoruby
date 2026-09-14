@@ -276,17 +276,19 @@ impl<'a> BytecodeGen<'a> {
                 if let Some(local2) = self.refer_local(&ident) {
                     self.emit_mov(dst, local2);
                 } else {
-                    self.emit(BytecodeInst::BlockArg(dst, 0), loc);
+                    let slot = self.block_param_slot_of(0);
+                    self.emit(BytecodeInst::BlockArg(dst, 0, slot), loc);
                 }
             }
             NodeKind::LocalVar(outer, ident) => {
                 let name = IdentId::get_id_from_string(ident);
-                if let Some(src) = self.refer_dynamic_local(outer, name) {
+                if let Some(src) = self.refer_dynamic_local_read(outer, name) {
                     let src = src.into();
                     self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 } else {
-                    assert_eq!(Some(name), self.block_param);
-                    self.emit(BytecodeInst::BlockArg(dst, outer), loc);
+                    assert_eq!(Some(name), self.outer_block_param_name(outer));
+                    let slot = self.block_param_slot_of(outer);
+                    self.emit(BytecodeInst::BlockArg(dst, outer, slot), loc);
                 }
             }
             NodeKind::Const {
@@ -681,13 +683,14 @@ impl<'a> BytecodeGen<'a> {
                     return Ok(());
                 } else {
                     let ret = self.push().into();
-                    self.emit(BytecodeInst::BlockArg(ret, 0), loc);
+                    let slot = self.block_param_slot_of(0);
+                    self.emit(BytecodeInst::BlockArg(ret, 0, slot), loc);
                 }
             }
             NodeKind::LocalVar(outer, ident) => {
                 let ret = self.push().into();
                 let lvar = IdentId::get_id_from_string(ident);
-                if let Some(src) = self.refer_dynamic_local(outer, lvar) {
+                if let Some(src) = self.refer_dynamic_local_read(outer, lvar) {
                     let src = src.into();
                     self.emit(
                         BytecodeInst::LoadDynVar {
@@ -698,7 +701,8 @@ impl<'a> BytecodeGen<'a> {
                         loc,
                     );
                 } else if Some(lvar) == self.outer_block_param_name(outer) {
-                    self.emit(BytecodeInst::BlockArg(ret, outer), loc);
+                    let slot = self.block_param_slot_of(outer);
+                    self.emit(BytecodeInst::BlockArg(ret, outer, slot), loc);
                 } else {
                     return Err(MonorubyErr::runtimeerr(format!(
                         "can't access local variable '{}' in outer block",
@@ -841,6 +845,7 @@ impl<'a> BytecodeGen<'a> {
                     break_dest,
                     ret,
                     ensure_depth,
+                    break_sp,
                     ..
                 } = match self.loops.last() {
                     Some(data) => data.clone(),
@@ -858,6 +863,15 @@ impl<'a> BytecodeGen<'a> {
                         }
                     }
                 };
+                // A `break` writes the loop's value into `ret` instead of
+                // pushing it, so the generator's depth here is one short of
+                // the merge's at `break_dest`. Emit the whole exit at the
+                // merge's depth: the JIT discards every slot above an
+                // instruction's recorded sp, and the value slot is the one
+                // just above it, so at the lower depth the value is dropped
+                // the instant it is stored.
+                let saved_temp = self.temp;
+                self.temp = break_sp.0;
                 if let Some(reg) = ret {
                     self.gen_store_expr(reg, val)?;
                 } else {
@@ -865,7 +879,9 @@ impl<'a> BytecodeGen<'a> {
                 }
                 // Run `ensure` blocks nested inside the loop before exiting.
                 self.gen_loop_pending_ensures(ensure_depth)?;
+                self.add_merge(break_dest);
                 self.emit(BytecodeInst::Br(break_dest), loc);
+                self.temp = saved_temp;
                 if use_mode == UseMode2::Push {
                     self.push();
                 }
@@ -1860,7 +1876,7 @@ impl<'a> BytecodeGen<'a> {
                 let old_reg = self.temp;
                 let args = self.sp();
                 for (k, v) in nodes {
-                    self.push_expr(k)?;
+                    self.push_hash_key(k)?;
                     self.push_expr(v)?;
                 }
                 self.temp = old_reg;
@@ -1950,7 +1966,7 @@ impl<'a> BytecodeGen<'a> {
             let args = self.sp();
             for _ in 0..take {
                 let (k, v) = iter.next().unwrap();
-                self.push_expr(k)?;
+                self.push_hash_key(k)?;
                 self.push_expr(v)?;
             }
             self.temp = base;
@@ -1970,6 +1986,36 @@ impl<'a> BytecodeGen<'a> {
             remaining -= take;
         }
         Ok(())
+    }
+
+    /// Push one key of a Hash literal built pair by pair (the
+    /// non-constant path of `gen_hash`).
+    ///
+    /// A String literal key is emitted as the interned frozen String —
+    /// the same object `static_hash_key` puts in a constant literal's
+    /// template — regardless of `frozen_string_literal`. A key is
+    /// frozen by the Hash anyway (`frozen_hash_key` dups and freezes a
+    /// mutable one on insert), so emitting the mutable literal only
+    /// bought two copies per evaluation: the `Literal` deep copy and the
+    /// `frozen_hash_key` clone of it, the first of which was garbage
+    /// the moment it was made. CRuby compiles such keys as frozen
+    /// fstrings too, so the key's identity across evaluations matches
+    /// (`{"a" => x}.keys[0].equal?({"a" => y}.keys[0])`). Every other
+    /// key kind is an ordinary expression.
+    fn push_hash_key(&mut self, k: Node) -> Result<()> {
+        match &k.kind {
+            NodeKind::String(_) | NodeKind::Bytes(_) | NodeKind::EncodedString(..) => {
+                let enc = self.source_encoding();
+                let v = self.static_hash_key(&k, enc);
+                let dst: BcReg = self.push().into();
+                self.emit(BytecodeInst::FrozenLiteral(dst, v), Loc::default());
+                Ok(())
+            }
+            _ => {
+                self.push_expr(k)?;
+                Ok(())
+            }
+        }
     }
 
     /// Whether `node` is a key a constant Hash literal can hold: an

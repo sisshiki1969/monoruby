@@ -151,9 +151,19 @@ pub enum RoundHalf {
     Even,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);
+
+/// A copied weak map is a new cell, and the collector tracks cells:
+/// `dup` / `clone` must enrol it or its (initially empty) pairs would
+/// never be swept.
+fn register_if_weakmap(v: Value) -> Value {
+    if v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::WEAKMAP) {
+        crate::value::rvalue::weakmap_register(v);
+    }
+    v
+}
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -901,7 +911,7 @@ impl Value {
 
     pub(crate) fn dup(&self) -> Self {
         if let Some(rv) = self.try_rvalue() {
-            rv.dup().pack()
+            register_if_weakmap(rv.dup().pack())
         } else {
             *self
         }
@@ -909,7 +919,7 @@ impl Value {
 
     pub(crate) fn clone_value(&self) -> Self {
         if let Some(rv) = self.try_rvalue() {
-            rv.clone_value().pack()
+            register_if_weakmap(rv.clone_value().pack())
         } else {
             *self
         }
@@ -1236,7 +1246,11 @@ impl Value {
     /// (identity hashes key on the original object).
     ///
     pub(crate) fn frozen_hash_key(self) -> Value {
-        if self.is_str().is_some() && !self.is_frozen() {
+        // Any String key, whatever its encoding or byte validity: CRuby
+        // dups and freezes a non-frozen String key on insert. (`is_str`
+        // would skip a String holding invalid UTF-8 — a BINARY key —
+        // and leave it mutable inside the Hash.)
+        if self.is_rstring_inner().is_some() && !self.is_frozen() {
             let inner = self.as_rstring_inner().clone();
             let mut dup = Value::string_from_inner(inner);
             dup.set_frozen();
@@ -1280,6 +1294,13 @@ impl Value {
 
     pub fn array_from_iter(iter: impl Iterator<Item = Value>) -> Self {
         Value::array(ArrayInner::from_iter(iter))
+    }
+
+    /// A new Array holding a copy of `slice`. One `memcpy` into
+    /// exact-capacity storage, where `array_from_iter` over the slice
+    /// would push element by element with a capacity check each time.
+    pub fn array_from_slice(slice: &[Value]) -> Self {
+        Value::array(ArrayInner::from_slice(slice))
     }
 
     pub fn array_from_vec_with_class(v: Vec<Value>, class_id: ClassId) -> Self {
@@ -1363,6 +1384,29 @@ impl Value {
 
     pub fn new_argf(class_id: ClassId, inner: ArgfInner) -> Self {
         RValue::new_argf(class_id, inner).pack()
+    }
+
+    /// An empty `ObjectSpace::WeakMap`, registered with the collector so
+    /// its pairs are broken as their halves die.
+    pub fn new_weakmap(class_id: ClassId) -> Self {
+        let v = RValue::new_weakmap(class_id).pack();
+        crate::value::rvalue::weakmap_register(v);
+        v
+    }
+
+    /// An object of `class_id` carrying native data (see `NativeData`).
+    pub fn new_native(class_id: ClassId, inner: Box<dyn NativeData>) -> Self {
+        RValue::new_native(class_id, inner).pack()
+    }
+
+    /// The native payload of `self` as `T`, if `self` is a native object
+    /// of that kind.
+    pub(crate) fn try_native<T: NativeData>(&self) -> Option<&T> {
+        let rv = self.try_rvalue()?;
+        if rv.ty() != ObjTy::NATIVE {
+            return None;
+        }
+        rv.as_native().as_any().downcast_ref::<T>()
     }
 
     /// GC wrapper for a promoted heap frame's `Box<[u64]>` buffer
@@ -2473,6 +2517,10 @@ impl Value {
         self.try_rvalue()?.inline_copyable_array()
     }
 
+    pub(crate) fn inline_copyable_string(&self) -> Option<(Vec<u8>, u8, u8)> {
+        self.try_rvalue()?.inline_copyable_string()
+    }
+
     pub(crate) fn try_array_ty(&self) -> Option<Array> {
         let rv = self.try_rvalue()?;
         match rv.ty() {
@@ -2946,6 +2994,11 @@ impl Value {
         unsafe { self.rvalue_mut().as_range_mut() }
     }
 
+    pub(crate) fn as_iobuffer(&self) -> IoBuffer {
+        assert_eq!(ObjTy::IO_BUFFER, self.rvalue().ty());
+        IoBuffer::new_unchecked(*self)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn as_io_inner(&self) -> &IoInner {
         assert_eq!(ObjTy::IO, self.rvalue().ty());
@@ -3017,12 +3070,28 @@ impl Value {
         unsafe { self.rvalue_mut().as_enumerator_mut() }
     }
 
-    pub fn as_io_buffer_inner(&self) -> &IoBufferInner {
+    pub fn try_iobuffer_inner(&self) -> Option<&IoBufferInner> {
+        let rv = self.try_rvalue()?;
+        (rv.ty() == ObjTy::IO_BUFFER).then(|| rv.as_io_buffer())
+    }
+
+    pub fn as_iobuffer_inner(&self) -> &IoBufferInner {
         self.rvalue().as_io_buffer()
     }
 
-    pub fn as_io_buffer_inner_mut(&mut self) -> &mut IoBufferInner {
+    pub fn as_iobuffer_inner_mut(&mut self) -> &mut IoBufferInner {
         self.rvalue_mut().as_io_buffer_mut()
+    }
+
+    /// The receiver's WeakMapInner. `None` unless the value really is
+    /// an `ObjectSpace::WeakMap` (`ObjTy::WEAKMAP`).
+    pub fn try_weakmap_inner(&self) -> Option<&WeakMapInner> {
+        let rv = self.try_rvalue()?;
+        (rv.ty() == ObjTy::WEAKMAP).then(|| rv.as_weakmap())
+    }
+
+    pub fn as_weakmap_inner_mut(&mut self) -> &mut WeakMapInner {
+        self.rvalue_mut().as_weakmap_mut()
     }
 
     /// The receiver's ArgfInner. `None` unless the value is an ARGF

@@ -38,6 +38,45 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRUCT_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(STRUCT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(STRUCT_CLASS, "hash", hash, 0);
+    // Raw slot access for `builtins/struct.rb`: CRuby's `Struct#to_a`,
+    // `#[]`, `#each`, ... read the member slots directly
+    // (`RSTRUCT_GET`), never through the member accessors, so a
+    // subclass overriding `name` still gets its stored `name` from
+    // `to_h` (Rails' `ParamsWrapper::Options` relies on that).
+    globals.define_private_builtin_func(STRUCT_CLASS, "__slot_get", slot_get, 1);
+    globals.define_private_builtin_func(STRUCT_CLASS, "__slot_set", slot_set, 2);
+}
+
+fn slot_index(globals: &Globals, self_val: Value, idx: Value) -> Result<usize> {
+    let len = self_val.as_struct().len();
+    let i = idx.expect_integer(&globals.store)?;
+    if i < 0 || i as usize >= len {
+        return Err(MonorubyErr::indexerr(format!(
+            "offset {i} too {} for struct(size:{len})",
+            if i < 0 { "small" } else { "large" }
+        )));
+    }
+    Ok(i as usize)
+}
+
+/// `Struct#__slot_get(index)`: the raw value of member slot *index*.
+#[monoruby_builtin]
+fn slot_get(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let i = slot_index(globals, self_val, lfp.arg(0))?;
+    Ok(self_val.as_struct().get(i))
+}
+
+/// `Struct#__slot_set(index, value)`: store into member slot *index*
+/// (FrozenError on a frozen struct).
+#[monoruby_builtin]
+fn slot_set(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    let i = slot_index(globals, self_val, lfp.arg(0))?;
+    self_val.ensure_not_frozen(&globals.store)?;
+    let val = lfp.arg(1);
+    self_val.set_struct_slot(i, val);
+    Ok(val)
 }
 
 ///
@@ -112,30 +151,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // matching CRuby's `Struct.new('Person', ...)` behaviour.
     if let Some(n) = name {
         let parent_class = lfp.self_val().as_class().id();
-        let prev = globals
-            .store
-            .get_constant_noautoload(parent_class, n)
-            .is_some();
-        if prev {
-            let parent_name = globals.store.qualified_name(parent_class);
-            let qual = if parent_name.is_empty() {
-                n.get_name().to_string()
-            } else {
-                format!("{parent_name}::{}", n.get_name())
-            };
-            let msg = format!("warning: already initialized constant {qual}\n");
-            let stderr_id = IdentId::get_id("$stderr");
-            let stderr = globals.get_gvar(stderr_id).unwrap_or(Value::nil());
-            let write_id = IdentId::get_id("write");
-            let _ = vm.invoke_method_inner(
-                globals,
-                write_id,
-                stderr,
-                &[Value::string(msg)],
-                None,
-                None,
-            );
-        }
+        vm.warn_already_initialized_constant(globals, parent_class, n);
     }
 
     let new_struct = globals
@@ -146,7 +162,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     if let Some(v) = keyword_init_arg {
         globals
             .store
-            .set_ivar(new_struct, IdentId::get_id("/keyword_init"), v)
+            .set_ivar(new_struct, IdentId::_KEYWORD_INIT, v)
             .unwrap();
     }
 
@@ -248,7 +264,9 @@ fn struct_initialize(
         vm.invoke_method_added(globals, class_id, writer_name, None)?;
     }
 
-    new_struct.set_instance_var(&mut globals.store, "/members", Value::array(members))?;
+    globals
+        .store
+        .set_ivar(new_struct, IdentId::_MEMBERS, Value::array(members))?;
 
     if let Some(bh) = lfp.block() {
         vm.module_eval(globals, new_module, bh)?;
@@ -273,7 +291,7 @@ pub(super) fn struct_members(
 pub(super) fn get_members(store: &Store, mut class: Module) -> Result<Array> {
     let mut members = None;
     loop {
-        if let Some(m) = store.get_ivar(class.as_val(), IdentId::get_id("/members")) {
+        if let Some(m) = store.get_ivar(class.as_val(), IdentId::_MEMBERS) {
             members = Some(m);
             break;
         } else if let Some(s) = class.superclass()
@@ -439,7 +457,7 @@ fn initialize(
 fn is_keyword_init(globals: &Globals, class_obj: Module) -> bool {
     let v = match globals
         .store
-        .get_ivar(class_obj.as_val(), IdentId::get_id("/keyword_init"))
+        .get_ivar(class_obj.as_val(), IdentId::_KEYWORD_INIT)
     {
         Some(v) => v,
         None => return false,
@@ -741,7 +759,7 @@ fn keyword_init_p(
 ) -> Result<Value> {
     let v = globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/keyword_init"))
+        .get_ivar(lfp.self_val(), IdentId::_KEYWORD_INIT)
         .unwrap_or(Value::nil());
     if v.is_nil() {
         Ok(Value::nil())
@@ -1158,6 +1176,54 @@ mod tests {
             S = Struct.new(:x, :y)
             "#,
         );
+    }
+
+    #[test]
+    fn struct_methods_read_slots_not_accessors() {
+        // `to_a` / `to_h` / `[]` / `each` / `values_at` / `dig` /
+        // `deconstruct_keys` / `select` read the raw slots, as CRuby's
+        // do, so an overridden accessor is bypassed (Rails'
+        // `ParamsWrapper::Options#name` computes its default from
+        // `to_h`; going through `name` there would recurse into nil).
+        run_test_with_prelude(
+            r#"
+            o = OverrideS.new(nil, [], nil)
+            r = [o.to_h, o.to_a, o[:klass], o[2], o.values_at(0, 2), o.dig(:klass), o.deconstruct_keys([:klass])]
+            r << o.each.to_a << o.each_pair.to_a << o.select { true } << o.to_h { |k, v| [k, v] }
+            o[:klass] = 3
+            o[0] = :n
+            r << o.to_a << o.klass << o.name
+            r
+            "#,
+            r#"
+            class OverrideS < Struct.new(:name, :format, :klass)
+              def name = super || "computed-#{to_h[:klass].inspect}"
+              def klass = :overridden
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_slot_builtins_bounds() {
+        // `__slot_get` / `__slot_set` are private and range-checked;
+        // `[]` maps its own indices first, so only a direct call sees
+        // the builtin's IndexError.
+        // monoruby-only builtins, so not oracle-checked.
+        let v = run_test_no_result_check(
+            r#"
+            s = Struct.new(:a, :b).new(1, 2)
+            r = [s.send(:__slot_get, 1), s.send(:__slot_set, 0, :z), s.to_a]
+            r << (begin; s.send(:__slot_get, 2); rescue IndexError => e; e.message; end)
+            r << (begin; s.send(:__slot_set, -1, 0); rescue IndexError => e; e.message; end)
+            r << (begin; s.freeze.send(:__slot_set, 0, 0); rescue FrozenError => e; e.class.to_s; end)
+            r << (begin; s.__slot_get(0); rescue NoMethodError => e; e.message.include?("private"); end)
+            expected = [2, :z, [:z, 2], "offset 2 too large for struct(size:2)", "offset -1 too small for struct(size:2)", "FrozenError", true]
+            raise "got #{r.inspect}" unless r == expected
+            r.size
+            "#,
+        );
+        assert_eq!(v.try_fixnum(), Some(7));
     }
 
     #[test]

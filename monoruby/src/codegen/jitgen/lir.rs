@@ -500,6 +500,11 @@ pub(in crate::codegen) enum LInst {
         reg: GP,
         deopt: DestLabel,
     },
+    /// `rax <- Value::bool(reg is_a? class)`; see `AsmInst::KindOfConst`.
+    KindOfConst {
+        reg: GP,
+        class: ClassId,
+    },
     /// Deopt if the receiver (rdi) is frozen.
     GuardFrozen {
         deopt: DestLabel,
@@ -601,6 +606,25 @@ pub(in crate::codegen) enum LInst {
     FprToStack {
         src: FPReg,
         slot: SlotId,
+        base: usize,
+    },
+    /// Hand a raw f64 to the specialized call site in the float-return
+    /// register, and set rax to a non-zero placeholder for its
+    /// `handle_error`.
+    FloatRetStore {
+        src: OuterFprSrc,
+        base: usize,
+    },
+    /// Read the float-return register into `dst`.
+    FloatRetLoad {
+        dst: FPReg,
+        base: usize,
+    },
+    /// Move a pool register into another pool register, across a
+    /// specialized call boundary.
+    FloatArgMove {
+        src: FPReg,
+        dst: FPReg,
         base: usize,
     },
     /// Swap two FP registers (spill-aware).
@@ -1034,6 +1058,7 @@ pub(in crate::codegen) enum LInst {
     BlockArgProxy {
         ret: SlotId,
         outer: usize,
+        slot: SlotId,
     },
     BlockArg {
         ret: SlotId,
@@ -1084,7 +1109,7 @@ pub(in crate::codegen) enum LInst {
     },
     Unreachable,
     RestKw {
-        rest_kw: Vec<(SlotId, IdentId)>,
+        table: DestLabel,
     },
     GuardClassVersion {
         class_version: DestLabel,

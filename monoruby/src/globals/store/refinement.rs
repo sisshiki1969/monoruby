@@ -193,12 +193,32 @@ impl Store {
         name: IdentId,
         set: RefinementSetId,
     ) -> Option<MethodTableEntry> {
+        self.check_method_with_refinements_with_version(
+            class_id,
+            name,
+            set,
+            Globals::class_version(),
+        )
+    }
+
+    /// [`Self::check_method_with_refinements`] with the class version
+    /// supplied by the caller: the unrefined fallback is version-stamped,
+    /// and `Globals::class_version()` borrows the CODEGEN RefCell, which
+    /// is unavailable during JIT compilation (use
+    /// `JitContext::class_version()` there).
+    pub(crate) fn check_method_with_refinements_with_version(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+        set: RefinementSetId,
+        class_version: u32,
+    ) -> Option<MethodTableEntry> {
         // `BOOL_CLASS` is an internal lookup key with no module object of
         // its own; the unrefined path knows how to unify `TrueClass` and
         // `FalseClass` for it, and `Executor::find_method` retries with
         // the receiver's real class — which does walk the refined chain.
         let Some(module) = self[class_id].try_get_module().filter(|_| !set.is_empty()) else {
-            return self.check_method_for_class(class_id, name);
+            return self.check_method_for_class_with_version(class_id, name, class_version);
         };
         self.classes
             .search_method_refined(module, name, self.refinements.entries(set))

@@ -690,6 +690,18 @@ impl AsmIr {
         self.push(AsmInst::FprToStack(fpr, reg));
     }
 
+    pub fn float_ret_store(&mut self, src: OuterFprSrc) {
+        self.push(AsmInst::FloatRetStore(src));
+    }
+
+    pub fn float_ret_load(&mut self, fpr: FPReg) {
+        self.push(AsmInst::FloatRetLoad(fpr));
+    }
+
+    pub fn float_arg_move(&mut self, src: FPReg, dst: FPReg) {
+        self.push(AsmInst::FloatArgMove { src, dst });
+    }
+
     pub fn lit2stack(&mut self, v: Value, reg: SlotId) {
         self.push(AsmInst::LitToStack(v, reg));
     }
@@ -846,7 +858,10 @@ impl AsmIr {
     }
 
     pub(super) fn kw_rest(&mut self, rest_kw: Vec<(SlotId, IdentId)>) {
-        self.push(AsmInst::RestKw { rest_kw });
+        self.push(AsmInst::RestKw {
+            rest_kw,
+            table: None,
+        });
     }
 
     ///
@@ -1141,8 +1156,8 @@ impl AsmIr {
         self.handle_error(error);
     }
 
-    pub(super) fn block_arg_proxy(&mut self, ret: SlotId, outer: usize) {
-        self.push(AsmInst::BlockArgProxy { ret, outer });
+    pub(super) fn block_arg_proxy(&mut self, ret: SlotId, outer: usize, slot: SlotId) {
+        self.push(AsmInst::BlockArgProxy { ret, outer, slot });
     }
 
     pub(crate) fn inline(
@@ -1522,6 +1537,36 @@ pub(super) enum AsmInst {
     ///
     FprToStack(FPReg, SlotId),
     ///
+    /// Hand the specialized body's return value to its call site as a raw
+    /// f64 in the float-return register, in place of a boxed `rax`.
+    ///
+    /// Emitted as the last instruction of a return segment, after every
+    /// bridge write: `f64_to_val` uses the same scratch registers, so
+    /// anything emitted afterwards would destroy the value.
+    ///
+    /// ### out
+    /// - float-return register: f64
+    /// - rax: a non-zero placeholder, so the call site's `handle_error`
+    ///   (which tests rax for the error signal) reads "no error"
+    ///
+    FloatRetStore(OuterFprSrc),
+    ///
+    /// Read back what [`AsmInst::FloatRetStore`] left, into this frame's
+    /// *dst*. Emitted at the call site after the fpr save area is
+    /// restored, which touches only the pool.
+    ///
+    FloatRetLoad(FPReg),
+    ///
+    /// Stage a specialized call's float argument in the pool register the
+    /// callee's entry state binds it to (`JitContext::plan_float_args`).
+    /// Both ids are pool ids, whose physical register is the same in
+    /// every frame, so this one instruction spans the call boundary.
+    ///
+    /// Emitted last in `set_arguments`: everything the pool survives from
+    /// here to the callee's entry poll is the plan's premise.
+    ///
+    FloatArgMove { src: FPReg, dst: FPReg },
+    ///
     /// Move Value *v* to stack slot *reg*.
     ///
     /// ### destroy
@@ -1625,6 +1670,21 @@ pub(super) enum AsmInst {
     /// one membership guard replaces the per-class deopt.
     GuardClassIn(GP, Box<[ClassId]>, AsmDeopt),
     GuardArrayTy(GP, AsmDeopt),
+    ///
+    /// `rax <- Value::bool(R(reg).is_a?(class))`: the inline `Module#===`
+    /// behind `case … when Klass` / `Klass === v` with a constant receiver.
+    ///
+    /// The value's class id (an immediate's by tag, a heap value's from its
+    /// header) is compared with *class*, then its class object — from the
+    /// class-object mirror (`GLOBALS_CLASS_OBJECTS`) — is walked up the
+    /// superclass chain (`MODULE_OFFSET_SUPERCLASS` / `MODULE_OFFSET_CLASS_ID`)
+    /// until *class* or the root. Everything is read at run time, so an
+    /// `include` after compile is seen without a recompile; the only baked
+    /// assumption is that `class.===` is the builtin, which the emitter
+    /// records for the class-version salvage. Clobbers rax and rcx (x9–x11
+    /// on aarch64); *reg* must be neither.
+    ///
+    KindOfConst { reg: GP, class: ClassId },
     GuardCapture(AsmDeopt),
 
     Ret,
@@ -1946,7 +2006,6 @@ pub(super) enum AsmInst {
     ///
     SpecializedCall {
         entry: JitLabel,
-        patch_point: Option<JitLabel>,
         evict: AsmEvict,
     },
     /// Store the call-site bytecode pc into the outgoing cont-frame
@@ -2484,9 +2543,14 @@ pub(super) enum AsmInst {
         using_fpr: UsingFpr,
     },
 
+    /// `&block` forwarding: the `&block` parameter's slot value if it has
+    /// been assigned, else the block handler of the frame `outer` levels
+    /// up (`slot` is `SlotId(0)` when the parameter is known unassigned or
+    /// anonymous: no slot check).
     BlockArgProxy {
         ret: SlotId,
         outer: usize,
+        slot: SlotId,
     },
     BlockArg {
         ret: SlotId,
@@ -2813,8 +2877,14 @@ pub(super) enum AsmInst {
         src: SlotId,
         len: usize,
     },
+    /// Hand `correct_rest_kw` the `**kwrest` Hash built from the listed
+    /// slots. `table` is where those (name, slot-id) pairs live: it is
+    /// filled in by `Codegen::resolve_rest_kw_tables` before any of the
+    /// unit's code is emitted, so the emission site can name the table by
+    /// an absolute address rather than a PC-relative one.
     RestKw {
         rest_kw: Vec<(SlotId, IdentId)>,
+        table: Option<DestLabel>,
     },
 
     UndefMethod {

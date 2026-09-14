@@ -47,10 +47,7 @@
 //! ever saw take one class, is monomorphic and rightly keeps its single
 //! guard.
 
-use super::{
-    method_call::{RecvMissMode, PMC_SET_SHARE_DIVISOR},
-    *,
-};
+use super::{method_call::RecvMissMode, *};
 
 ///
 /// Maximum number of dispatch arms.
@@ -89,6 +86,25 @@ impl PicGroup {
     }
 }
 
+///
+/// What `pic_groups` decided for a site: the arms, and what the last arm's
+/// miss should do.
+///
+struct PicPlan {
+    groups: Vec<PicGroup>,
+    /// PMC entries that got no arm (their target cannot be called from an
+    /// arm: unresolvable, visibility-blocked, capturing, block-arg callee,
+    /// non-canonical accessor shape). They deopt plainly, as they did under
+    /// the monomorphic guard — and a rebuild would drop them again, so
+    /// their miss must never be the one that requests it.
+    dropped: Vec<ClassId>,
+    /// Whether a miss on a class the PMC has *not* seen can still be
+    /// recorded: the PMC has a free way and has not overflowed. Only then
+    /// can a rebuild produce a different chain, so only then is the last
+    /// arm's miss worth a recompile.
+    can_learn: bool,
+}
+
 impl<'a> JitContext<'a> {
     ///
     /// The dispatch arms for *callid*, or `None` when the site is not a
@@ -100,7 +116,7 @@ impl<'a> JitContext<'a> {
     /// unlike the class-set guard there is no single-instruction fallback to
     /// rewrite it as.
     ///
-    fn pic_groups(&mut self, callid: CallSiteId) -> Option<Vec<PicGroup>> {
+    fn pic_groups(&mut self, callid: CallSiteId) -> Option<PicPlan> {
         // Temporary diagnosis (logging builds only): name every refusal, so a
         // polymorphic site that stays on the deopting mono guard can be
         // attributed to the exact gate that turned it away.
@@ -130,23 +146,50 @@ impl<'a> JitContext<'a> {
         }
         let pmc = &callsite.pmc;
         let observations = pmc.observations();
+        let can_learn = pmc.entries().len() < PMC_WAYS && pmc.overflow() == 0;
         let mut classes: Vec<(ClassId, u32)> =
             pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
+        #[cfg(feature = "deopt")]
+        eprintln!(
+            "### pic pmc {:?} entries={:?} overflow={} observations={}",
+            name,
+            classes
+                .iter()
+                .map(|(c, n)| {
+                    // Pseudo-class IC tags (`BIGNUM_CLASS`) have no module.
+                    let name = if self.store[*c].try_get_module().is_some() {
+                        self.store.get_class_name(*c)
+                    } else {
+                        format!("{c:?}")
+                    };
+                    (name, *n)
+                })
+                .collect::<Vec<_>>(),
+            pmc.overflow(),
+            observations
+        );
         if classes.len() < 2 {
             refuse!("pmc-mono")
         }
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
         let mut groups: Vec<PicGroup> = Vec::with_capacity(classes.len());
+        let mut dropped: Vec<ClassId> = Vec::new();
         let mut admitted = 0usize;
-        for (class, count) in classes {
+        // Every recorded class gets an arm while the chain has room — no
+        // share threshold. The PMC counts *misses*, not calls, so the share
+        // it shows can be arbitrarily wrong about the traffic: a class that
+        // misses the compiled chain re-executes in the VM, whose single-entry
+        // cache then serves it without recording, so the very class that
+        // deopts is the one whose count stays at 1. Under the old 1/8 rule
+        // liquid's `Context#find_variable` dropped `ForloopDrop` on that
+        // basis on every rebuild — 4,556 identical recompiles in an 8 s run,
+        // each preceded by 10 deopts of a class one compare would have
+        // served. (The class-set guard keeps its threshold: its members
+        // resolve to one target, so a straggler there costs a compare and
+        // saves nothing.)
+        for (class, _count) in classes {
             if admitted == PIC_WAYS {
                 break;
-            }
-            // A rare tail is not worth an arm — the classes ahead of it pay
-            // its compare on every dispatch. Same threshold the class-set
-            // guard uses.
-            if count.saturating_mul(PMC_SET_SHARE_DIVISOR) < observations {
-                continue;
             }
             // A class that cannot have an arm is dropped, not fatal to the
             // site: it falls past the last arm's guard and deopts, which is
@@ -160,6 +203,7 @@ impl<'a> JitContext<'a> {
             let Some((func_id, visibility)) = self.jit_check_call(class, Some(name)) else {
                 #[cfg(feature = "deopt")]
                 eprintln!("### pic drop [no-resolve] {:?} class={:?}", name, class);
+                dropped.push(class);
                 continue;
             };
             if self.jit_visibility_blocks(callid, visibility)
@@ -167,6 +211,7 @@ impl<'a> JitContext<'a> {
             {
                 #[cfg(feature = "deopt")]
                 eprintln!("### pic drop [vis/capture] {:?} class={:?}", name, class);
+                dropped.push(class);
                 continue;
             }
             if let Some(iseq) = self.store[func_id].is_iseq()
@@ -174,6 +219,7 @@ impl<'a> JitContext<'a> {
             {
                 #[cfg(feature = "deopt")]
                 eprintln!("### pic drop [callee-block-arg] {:?} class={:?}", name, class);
+                dropped.push(class);
                 continue;
             }
             // An attr/Struct accessor target whose callsite shape is
@@ -183,6 +229,7 @@ impl<'a> JitContext<'a> {
             // the class like the other ineligible shapes, so it falls past
             // the arms and deopts.
             if !self.accessor_shape_ok(callid, func_id) {
+                dropped.push(class);
                 continue;
             }
             admitted += 1;
@@ -199,6 +246,16 @@ impl<'a> JitContext<'a> {
                 });
             }
         }
+        #[cfg(feature = "deopt")]
+        eprintln!(
+            "### pic built {:?} admitted={} dropped={:?} can_learn={} arms={:?}",
+            name,
+            admitted,
+            dropped,
+            can_learn,
+            groups.iter().map(|g| (g.func_id, g.classes.clone())).collect::<Vec<_>>()
+        );
+        let _ = observations;
         if admitted < 2 {
             refuse!("admitted<2")
         }
@@ -208,7 +265,11 @@ impl<'a> JitContext<'a> {
         if groups.len() < 2 {
             refuse!("single-target")
         }
-        Some(groups)
+        Some(PicPlan {
+            groups,
+            dropped,
+            can_learn,
+        })
     }
 
     ///
@@ -223,7 +284,12 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         callid: CallSiteId,
     ) -> JitResult<bool> {
-        let Some(groups) = self.pic_groups(callid) else {
+        let Some(PicPlan {
+            groups,
+            dropped,
+            can_learn,
+        }) = self.pic_groups(callid)
+        else {
             return Ok(false);
         };
         let CallSiteInfo {
@@ -251,6 +317,29 @@ impl<'a> JitContext<'a> {
         probe.load(ir, recv, GP::Rdi);
         let entry = probe;
 
+        // The last arm's miss requests a rebuild (below) on the strength of
+        // "the VM will record this class and the rebuilt chain will admit
+        // it". A dropped class is the one receiver that breaks that: it is
+        // already recorded, and a rebuild drops it again. Route it to a plain
+        // deopt ahead of the arms, so it can never drain the recompile
+        // counter — otherwise every body would rebuild identically, 10
+        // deopts apart, for the rest of the run. Only needed while the miss
+        // is a recompile exit; with a plain last-arm exit the dropped classes
+        // reach that plain deopt on their own.
+        let recompile_exit = can_learn
+            .then(|| self.recv_miss_recompile_target())
+            .flatten();
+        if recompile_exit.is_some() && !dropped.is_empty() {
+            let not_dropped = self.label();
+            ir.push(AsmInst::BrClassNotIn(
+                GP::Rdi,
+                dropped.into_boxed_slice(),
+                not_dropped,
+            ));
+            ir.deopt(&entry);
+            ir.push(AsmInst::Label(not_dropped));
+        }
+
         // The chain tests each arm's class set in turn and the *last* arm's
         // test is the deopting one, so a receiver is compared against the
         // union exactly once. Hoisting the deopt into a separate union guard
@@ -264,25 +353,27 @@ impl<'a> JitContext<'a> {
             }
             let mut arm = entry.clone();
             if last {
-                // Falling out of the last arm's set is a class the VM never
-                // observed here — or one it *undercounted*: the class a
-                // previous mono compile served never misses the bytecode
-                // cache (the JIT handles it), so its PMC count can sit below
-                // the share threshold while the classes that were deopting
-                // pile up counts. If this chain still has arm capacity, exit
-                // through a counter-gated recompile rather than a plain
-                // deopt: each miss here re-executes in the VM, whose cache
-                // miss *does* record the class, so the rebuilt chain admits
-                // it (a 3-class site that warmed monomorphic used to strand
-                // its original hot class in a 2-arm chain, deopting on every
-                // call — the exact shape the mono guard's `Learn` exit was
-                // built to end). At full capacity a rebuild could not add an
-                // arm, so the miss stays a plain deopt, exactly as the
-                // monomorphic guard did for every off-class receiver.
-                let admitted: usize = groups.iter().map(|g| g.classes.len()).sum();
-                let deopt = if admitted < PIC_WAYS
-                    && let Some(target) = self.recv_miss_recompile_target()
-                {
+                // Falling out of the last arm's set (past the dropped-class
+                // filter above) is a class the VM never observed here. If
+                // the PMC can still record it (`can_learn`: a free way, no
+                // overflow), exit through a counter-gated recompile rather
+                // than a plain deopt: each miss here re-executes in the VM,
+                // whose cache miss records the class, so the rebuilt chain
+                // has one more entry to admit or drop (a 3-class site that
+                // warmed monomorphic used to strand its original hot class
+                // in a 2-arm chain, deopting on every call — the exact shape
+                // the mono guard's `Learn` exit was built to end). That makes
+                // the rebuild a ratchet: every recompile this exit requests
+                // is preceded by a PMC that grew, and the PMC holds at most
+                // `PMC_WAYS` entries, so a site rebuilds at most `PMC_WAYS`
+                // times. With the PMC full or overflowed a rebuild would see
+                // the same entries and emit the same chain, so the miss
+                // stays a plain deopt, exactly as the monomorphic guard did
+                // for every off-class receiver. (`admitted < PIC_WAYS`, the
+                // old test, is the wrong proxy: it also held when a class
+                // was dropped or when a fifth class overflowed the PMC,
+                // where no rebuild can ever add the arm.)
+                let deopt = if let Some(target) = recompile_exit {
                     ir.new_recompile_deopt(&arm, RecompileReason::BecamePolymorphic, target)
                 } else {
                     ir.new_deopt(&arm)
@@ -547,6 +638,76 @@ mod tests {
               res << :nome
             end
             [res.tally.sort_by { |k, _| k.to_s }]
+            "#,
+        );
+    }
+
+    /// A class the PMC undercounts still gets an arm. `Rd` reaches the site
+    /// once per 30 calls, so its miss count sits far below the old 1/8
+    /// share — under that rule it was dropped on every rebuild and, being
+    /// the only class off the chain, deopted (and re-requested a rebuild)
+    /// for the rest of the run. Every class must answer its own method, and
+    /// a class the VM never saw (`Re`) still dispatches through the deopt.
+    #[test]
+    fn pic_admits_a_rare_class() {
+        run_test(
+            r#"
+            class Ra; def tag = :a; end
+            class Rb; def tag = :b; end
+            class Rc; def tag = :c; end
+            class Rd; def tag = :d; end
+            class Re; def tag = :e; end
+            def probe(x) = x.tag
+            common = [Ra.new, Rb.new, Rc.new]
+            rare = Rd.new
+            res = []
+            900.times { |i| res << probe(i % 30 == 29 ? rare : common[i % 3]) }
+            [res.tally.sort_by { |k, _| k.to_s }, probe(Re.new), probe(rare)]
+            "#,
+        );
+    }
+
+    /// A recorded class whose target cannot be an arm (`Db#tag` declares a
+    /// block parameter) is filtered to a plain deopt ahead of the chain, so
+    /// its every call is a deopt that never drains the rebuild counter; the
+    /// other three classes keep their arms and a fourth, unseen class still
+    /// arrives correctly through the last arm's exit.
+    #[test]
+    fn pic_dropped_class_deopts_plainly() {
+        run_test(
+            r#"
+            class Da; def tag = :a; end
+            class Db; def tag(&blk) = blk ? blk.call : :b; end
+            class Dc; def tag = :c; end
+            class Dd; def tag = :d; end
+            def probe(x) = x.tag
+            vals = [Da.new, Db.new, Dc.new]
+            res = []
+            600.times { |i| res << probe(vals[i % 3]) }
+            [res.tally.sort_by { |k, _| k.to_s }, probe(Dd.new), Db.new.tag { :blk }]
+            "#,
+        );
+    }
+
+    /// More classes than the PMC has ways: the four recorded ones fill the
+    /// chain and the overflow classes deopt on every call, with the site
+    /// never rebuilding (`can_learn` is false once the PMC overflowed). All
+    /// six must keep answering their own method.
+    #[test]
+    fn pic_overflowed_site_stays_put() {
+        run_test(
+            r#"
+            class Oa; def tag = :a; end
+            class Ob; def tag = :b; end
+            class Oc; def tag = :c; end
+            class Od; def tag = :d; end
+            class Oe; def tag = :e; end
+            class Of; def tag = :f; end
+            def probe(x) = x.tag
+            vals = [Oa.new, Ob.new, Oc.new, Od.new, Oe.new, Of.new]
+            res = []
+            600.times { |i| res << probe(vals[i % 6]) }
+            res.tally.sort_by { |k, _| k.to_s }
             "#,
         );
     }

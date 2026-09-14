@@ -149,7 +149,7 @@ class SystemCallError
   end
 end
 
-class Errno
+module Errno
   # Give every generated Errno::E* class the CRuby constructor
   # signature `new(msg = nil, location = nil)`.
   constants.each do |c|

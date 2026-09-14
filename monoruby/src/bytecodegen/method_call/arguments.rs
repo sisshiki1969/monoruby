@@ -270,10 +270,11 @@ impl<'a> BytecodeGen<'a> {
     /// the home frame on the live cfp chain at run time.
     ///
     fn emit_block_forward(&mut self, dst: BcReg, outer: usize, loc: Loc) {
+        let slot = self.block_param_slot_of(outer);
         if outer == 0 {
-            self.emit(BytecodeInst::BlockArgProxy(dst, 0), loc);
+            self.emit(BytecodeInst::BlockArgProxy(dst, 0, slot), loc);
         } else {
-            self.emit(BytecodeInst::BlockArg(dst, outer), loc);
+            self.emit(BytecodeInst::BlockArg(dst, outer, slot), loc);
         }
     }
 
@@ -378,13 +379,14 @@ impl<'a> BytecodeGen<'a> {
                 if let Some(local) = self.refer_local(&proc_local) {
                     self.emit_mov(dst, local);
                 } else {
-                    self.emit(BytecodeInst::BlockArgProxy(dst, 0), loc);
+                    let slot = self.block_param_slot_of(0);
+                    self.emit(BytecodeInst::BlockArgProxy(dst, 0, slot), loc);
                 }
             }
             NodeKind::LocalVar(outer, proc_local) => {
                 let proc_local = IdentId::get_id_from_string(proc_local);
                 let dst = self.push().into();
-                if let Some(src) = self.refer_dynamic_local(outer, proc_local) {
+                if let Some(src) = self.refer_dynamic_local_read(outer, proc_local) {
                     let src = src.into();
                     self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 } else {

@@ -197,6 +197,30 @@ impl<'a> BytecodeGen<'a> {
         };
         self.loop_push(break_dest, next_dest, loop_start, ret);
         let loc = body.loc;
+        // `begin ... end while false` (and `... until true`) runs the body
+        // exactly once and never takes the back edge: it is a labeled block
+        // whose `break` / `next` are forward jumps, not a loop. Code
+        // generators that lower a structured `block` into Ruby (dewasm's
+        // Ruby backend does) nest it deeply, and a `LoopStart` per level
+        // would make the JIT's back-edge analysis walk each nesting level's
+        // body once per enclosing level — exponential in the depth. Emit
+        // the body with no loop markers and no condition at all.
+        let single_shot = match cond.kind {
+            NodeKind::Bool(b) => b != cond_op,
+            NodeKind::Nil => cond_op,
+            _ => false,
+        };
+        if single_shot {
+            self.apply_label(loop_start);
+            self.gen_expr(body, UseMode2::NotUse)?;
+            self.apply_label(next_dest);
+            if use_value {
+                self.push_nil();
+            }
+            self.loop_pop();
+            self.apply_label(break_dest);
+            return Ok(());
+        }
         self.apply_label(loop_start);
         self.emit(BytecodeInst::LoopStart, loc);
         self.gen_expr(body, UseMode2::NotUse)?;
@@ -979,6 +1003,29 @@ mod test {
             r2 = begin; raise E1, "y"; rescue *E1; :single; end
             [r1, r2]
             "#,
+        );
+    }
+
+    #[test]
+    fn break_keeps_the_loop_value() {
+        // A `break` stores the loop's value into the loop's `ret` slot
+        // instead of pushing it, so the generator's depth at the exit is one
+        // short of the merge's at `break_dest`. The JIT discards every slot
+        // above an instruction's recorded sp, so emitted at the lower depth
+        // the value is dropped the instant it is stored, and the merge then
+        // compiles a `ret` of an undefined slot. The calls before the result
+        // are what makes the method hot enough to be compiled.
+        run_test(
+            r##"
+            def a; begin; break; end while false; end
+            def b; begin; break 7; end while false; end
+            def c(x); begin; break 1 if x; break 2; end while false; end
+            def d; i = 0; while true; i += 1; break i if i > 3; end; end
+            def e; for i in 0..10; break i if i > 2; end; end
+            def g; begin; begin; break 8; ensure; $ens = 1; end; end while false; end
+            60.times { a; b; c(true); c(false); d; e; g }
+            [a, b, c(true), c(false), d, e, g, $ens]
+            "##,
         );
     }
 

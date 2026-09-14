@@ -24,6 +24,7 @@ Two things to know before reading:
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
 | [`stack_frame.md`](stack_frame.md) | EN | reference | What a local frame looks like in memory: LFP / CFP offsets, where `self`, the block and the registers sit. |
+| [block_param.md](block_param.md) | design | EN | The `&block` parameter: a sentinel-initialized local slot, lazy `Proc` with write-back, proxy forwarding (CRuby's scheme) |
 | [`method_args.md`](method_args.md) | JA | reference | What `pos_num`, `req_num`, `optional`, `rest` actually count, and what they exclude. |
 | [`native_func.md`](native_func.md) | EN | reference | How to declare a builtin that takes optional / rest / keyword parameters. |
 | [`super_resolution.md`](super_resolution.md) | JA | design record | The two non-obvious questions `super` has to answer — *which* name, and *which* position in the chain — and how monoruby answers them from the frame rather than from a method entry. |
@@ -72,20 +73,40 @@ Diagrams referenced by the above: [`fiber_state_diagram.svg`](fiber_state_diagra
 |---|---|---|---|
 | [`encoding_char_iteration_design.md`](encoding_char_iteration_design.md) | EN | plan | Removing the "every String is UTF-8" assumption via a per-encoding character-boundary layer. Marked *proposed*. |
 
+## Runtime optimization (`runtime_optimization/`)
+
+How the core classes are represented and what the VM and the JIT do to
+make their hot operations cheap, one document per class, each closing with
+the places where the implementation knowingly differs from CRuby's. All in
+Japanese; [`runtime_optimization/README.md`](runtime_optimization/README.md)
+is the entry point.
+
+| Document | Lang | Kind | Answers |
+|---|---|---|---|
+| [`runtime_optimization/array.md`](runtime_optimization/array.md) | JA | reference | How an `Array` is laid out, what `[]` / `[]=` / `<<` / `each` cost in the VM and in compiled code, and where CRuby's embedded / shared arrays have no counterpart. |
+| [`runtime_optimization/hash.md`](runtime_optimization/hash.md) | JA | reference + design record | What one `Hash#[]` actually costs: the three representations (inline / boxed / identity-keyed), the vm-free prehashed probe, the machine-code probe, the optimizations landed so far with their measurements, and a ranked list of what is left. Contrasts CRuby's `ar_table` / `st_table`. |
+| [`runtime_optimization/string.md`](runtime_optimization/string.md) | JA | reference | Inline vs heap storage, shared substrings and copy-on-write, frozen literals and the literal pool, the encoding model, and how strings are hashed as keys. |
+| [`runtime_optimization/regexp.md`](runtime_optimization/regexp.md) | JA | reference | Onigmo behind `Regexp`, how compiled patterns and `$~` are stored, which `String` methods take a regexp fast path, and what CRuby does differently. |
+
 ## Compatibility and performance
 
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
 | [`ruby_spec_skip_tags.md`](ruby_spec_skip_tags.md) | JA | reference | How the ruby/spec suite avoids hangs, and the audit that cut a coarse file-level skip list down to the handful that genuinely cannot run. |
 | [`optcarrot_opt_profile.md`](optcarrot_opt_profile.md) | JA | design record | Where `bin/optcarrot --opt` spends its time, measured with `perf` and `--features profile`, and the optimizations that came out of it. |
-| [`hash_optimization.md`](hash_optimization.md) | JA | design record | What one `Hash#[]` actually costs: the three representations (inline / boxed / identity-keyed), the vm-free prehashed probe, the optimizations landed so far with their measurements, and a ranked list of what is left. |
 | [`yjit_bench_slow_investigation_2026-09.md`](yjit_bench_slow_investigation_2026-09.md) | JA | design record | Why activerecord / erubi / rack / graphql run at half of CRuby+YJIT: steady-state `perf` breakdowns, deopt-log and PMC statistics, microbenchmarks isolating each runtime cost (String-keyed Hash, GC roots, arg-class-keyed PMC, StringScanner, exceptions), and a ranked plan. |
+| [`ruby_bench_low_cost_ideas_2026-09.md`](ruby_bench_low_cost_ideas_2026-09.md) | JA | design record | The follow-up: the whole ruby-bench picture against CRuby 4.0.2+YJIT at `702e362`, why the remaining losses cluster (code footprint on `30k_*`, GC frequency on `splay`, per-call fixed cost), a 150-item micro-op sweep that surfaces monoruby-specific slow paths (non-frozen String hash-literal keys, `String#index`/`#sub`/`#count` with String patterns, `instance_variable_get`, `format`), and the ideas ranked by implementation cost. |
+| [`sequel_mail_liquid_investigation_2026-09.md`](sequel_mail_liquid_investigation_2026-09.md) | JA | design record | Why sequel / mail / liquid-il / liquid-render run below CRuby's *interpreter*: an O(n²) buffer re-classification behind the inline `String#<<` (fixed), a whole-method recompile livelock on polymorphic sites (capped), and the remaining runtime costs — `respond_to?`, `Module#===`, PIC overflow, `send(*args)`, Fiddle, Time — with callgrind numbers. |
+| [`activerecord_liquid_il_rack_investigation_2026-09.md`](activerecord_liquid_il_rack_investigation_2026-09.md) | JA | design record | Why activerecord / liquid-il / rack still run at 1.5–1.8× CRuby+YJIT after #1310: Fiddle-based sqlite3 is 35 % of an activerecord iteration, `case … when Klass` dispatch (`Module#===` at ~1,900 instructions a call) and PIC-overflow deopts are 30 % of liquid-il, and rack executes only 20–30 % more instructions than YJIT yet takes 1.8× the time — per-layer instruction counts, callgrind one-iteration diffs, microbenchmarks, and the ranked fixes. |
+| [`mail_lee_grape_investigation_2026-09.md`](mail_lee_grape_investigation_2026-09.md) | JA | design record | Why mail / grape lose to CRuby+YJIT and where lee's time goes: `Encoding.find`'s linear scan over 107 encodings (two temporary Strings per candidate) is 51 % of every mail, grape has no hot spot but pays 7.7× CRuby's malloc/free, and lee's `(0...n).include?(y)` bounds check allocates 3.77 M Ranges an iteration and routes through Ruby-level `cover?` — callgrind differential profiles, the counts behind each, and two prototypes measured at −33 % (mail) and −9 % (lee, grape). |
+| [`railsbench_investigation_2026-09.md`](railsbench_investigation_2026-09.md) | JA | design record | Where railsbench (the largest remaining gap to CRuby+YJIT) spends its time: monoruby wins on calls, ivars and GC but runs 2.0× the instructions inside generated code, with a 2.8× malloc bill and 1.78× the objects per request; names the hot compiled units from JIT symbol maps (Ruby-level PBKDF2/HMAC where CRuby uses libcrypto, `Array#map`, TZInfo), the ~150 global-method-cache probes a request behind `Hash` lookups, and a JIT bug where `super` inside a `define_method` body recompiles forever (3.7× slower than `--no-jit`). |
 
 ## Plans and history
 
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
 | [`c_extention.md`](c_extention.md) | JA | plan | Design study for loading CRuby C extensions (`.so`). |
+| [`nokogiri.md`](nokogiri.md) | JA | plan | Nokogiri on monoruby: the C extension rewritten in Rust over the bundled libxml2 (`libxml2-src`), the object / lifetime model, what is implemented, versus a C-API layer or a pure-Rust engine. |
 | [`plan-activerecord.md`](plan-activerecord.md) | JA | plan | Staged plan for running ActiveRecord, and what it depends on. |
 | [`progress_2025-2026.md`](progress_2025-2026.md) | EN | history | What changed over ~500 commits, April 2025 to April 2026. |
 

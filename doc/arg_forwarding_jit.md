@@ -324,6 +324,17 @@ forwarding callsite に対しても、
 `X.new(a, b)` が **allocate + ivar ストア 2 本**にまで落ちる。これが実利上
 最大の効果である。
 
+ただしこれはトランポリンがそのコンパイル単位に**インラインされたとき
+だけ**成立する（D1 の注釈を付けるのが specialize されたフレームなので、
+specialization 深度上限を使い切った深い呼び出し位置では成立しない）。
+そこで `JitContext::inline_class_new` は、呼び出しを一切出さずに済む形
+（allocate に続けて fold、または ivar ストア展開の 2 択）に限って `X.new` を
+呼び出しサイトで直接展開する。それ以外（native な `initialize`、展開できない
+本体、ブロック付き、キーワード付き、splat、`define_method` の `initialize`
+など）は Ruby の `Class#new` を通り、そこでの `(...)` 転送は D1 が畳む。
+深い位置でも D1 が効くのは、forwarding hop が specialization 深度上限を
+消費しないため（`forward_exempt`）。
+
 ## 4. フォールバック条件（汎用パス据置）
 
 - **named keyword パラメータを持つ callee** への転送 / `super`

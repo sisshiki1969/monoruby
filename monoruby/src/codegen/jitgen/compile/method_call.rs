@@ -1,5 +1,8 @@
 use crate::{
-    codegen::jitgen::{context::JitStackFrame, state::LinkMode},
+    codegen::jitgen::{
+        context::JitStackFrame,
+        state::LinkMode,
+    },
     executor::inline::InlineFuncInfo,
 };
 
@@ -73,8 +76,17 @@ impl<'a> JitContext<'a> {
         // the VM, which re-resolves per call; recompiling would never
         // stabilize.
         if callsite.name.is_none() {
+            // The body being compiled *is* the method when it was
+            // installed by `define_method` — `mother()` climbs past it to
+            // the lexically enclosing method, which is registered nowhere
+            // in the receiver's ancestry, so a compile-time resolution
+            // from there always fails. That is exactly the frame-dependent
+            // case: the super name follows the *called* name
+            // (`runtime::super_resolution`), which only the frame knows.
+            let self_fid = self.iseq().func_id();
             let mother_fid = self.store[self.iseq().mother().0].func_id();
-            let ambiguous = self.store[mother_fid].is_block_style()
+            let ambiguous = self.store[self_fid].meta().is_proc_method()
+                || self.store[mother_fid].is_block_style()
                 || match (recv_class, self.store[mother_fid].name()) {
                     (Some(rc), Some(name)) => {
                         self.store.super_occurrences(rc, mother_fid, name) > 1
@@ -227,26 +239,25 @@ impl<'a> JitContext<'a> {
     ///
     ///
     /// The recompile target a receiver-class-guard `Learn` exit uses for
-    /// this compilation unit, or `None` when no sound one exists.
+    /// this compilation unit.
     ///
-    /// A block ROOT cannot take a whole-recompile: the side exit recompiles
-    /// whatever `lfp.func_id()` names as if it were a method, which rebuilds
-    /// a block body under the wrong argument convention (see
-    /// `guard_const_version`, which learned this the hard way). Loop JITs
-    /// (position = Some) and specialized block bodies (idx route) recompile
-    /// fine.
+    /// Block ROOTs take the whole-recompile route like any other whole
+    /// unit. They used to be excluded — an early recompile path rebuilt a
+    /// block body under the method argument convention (#1127 records
+    /// `Kernel#caller_locations`' block losing its argument) — but the
+    /// compile pipeline has been iseq-driven and identical for the initial
+    /// compile and the recompile since the abstract-state unification, and
+    /// the exclusion had become the last permanent-deopt hole: a block
+    /// compiled while a receiver was still `nil` (dewasm DOOM's terminal
+    /// renderer compares `prev_row[cx] == key` — nil on the first frame,
+    /// Integer forever after) failed its class guard on every later cell
+    /// of every later frame, ~296k plain deopts per minute, with the VM
+    /// interpreting the rest of each block invocation.
     ///
     pub(super) fn recv_miss_recompile_target(&self) -> Option<RecompileTarget> {
         match self.jit_type() {
             JitType::Specialized { idx, .. } => Some(RecompileTarget::Specialized(*idx)),
-            _ => {
-                let position = self.position();
-                if position.is_none() && self.store[self.func_id()].is_block_style() {
-                    None
-                } else {
-                    Some(RecompileTarget::Whole(position))
-                }
-            }
+            _ => Some(RecompileTarget::Whole(self.position())),
         }
     }
 
@@ -529,7 +540,11 @@ impl<'a> JitContext<'a> {
             if inlined_block {
                 state.locals_unbox_to_S_keeping_claims(ir);
             } else {
-                state.all_frames_unbox_to_S(self, ir);
+                // The literal block handed out here is homed in the
+                // current frame: it can reach that frame and its lexical
+                // ancestors, and nothing else in the chain.
+                let home = state.innermost_level();
+                state.unbox_to_S_for_outgoing_block(self, ir, Some(home));
             }
         }
 
@@ -548,6 +563,22 @@ impl<'a> JitContext<'a> {
         // best and — since only one of the arm's classes is `recv_class` —
         // would deopt the rest at worst.
         let mut same_target_set_guarded = self.in_set_guarded_arm();
+        // A compile-time heap-constant receiver of the right class needs no
+        // runtime guard — its class is a static fact (`M64 - x` reaching the
+        // direct-call residual: the Integer guard is a fixnum-tag test a
+        // bignum can never pass). But it gets no representation refinement
+        // either (a bignum constant is Integer without being a fixnum), so
+        // for everything downstream it must look like the set-guarded case:
+        // class known, nothing proven untagged, generators decline or
+        // handle `None`, the ordinary builtin call carries boxed Values.
+        let mut recv_const_unrefined = false;
+        if !same_target_set_guarded
+            && state.class(recv) != Some(recv_class)
+            && state.is_const_of_class(recv, recv_class)
+        {
+            same_target_set_guarded = true;
+            recv_const_unrefined = true;
+        }
         if !same_target_set_guarded && state.class(recv) != Some(recv_class) {
             if recv_miss != RecvMissMode::PartB
                 && let Some(classes) = self.pmc_same_target_classes(callid, recv_class, func_id)
@@ -643,10 +674,20 @@ impl<'a> JitContext<'a> {
                 // `object_id` keep firing there while a generator that needs
                 // the class declines to the ordinary call.
                 InlineFuncInfo::InlineGen(f) => {
-                    let proven = (!same_target_set_guarded).then_some(recv_class);
-                    if self.inline_asm(state, ir, f, callid, proven, arg_class) {
-                        state.unset_side_effect_guard();
-                        return Ok(CompileResult::Continue);
+                    // Not behind a const-receiver guard skip: the Integer
+                    // generators load the receiver raw on the strength of
+                    // the caller's guard (a set guard's INTEGER member is
+                    // the same fixnum-tag test, so `None` there is safe) —
+                    // a skipped guard for a heap constant proves no
+                    // representation, so they must not fire (`999…9[0]`
+                    // would shift the bignum's pointer bits); fall through
+                    // to the ordinary builtin call instead.
+                    if !recv_const_unrefined {
+                        let proven = (!same_target_set_guarded).then_some(recv_class);
+                        if self.inline_asm(state, ir, f, callid, proven, arg_class) {
+                            state.unset_side_effect_guard();
+                            return Ok(CompileResult::Continue);
+                        }
                     }
                 }
                 // The operator generators still take a definite receiver
@@ -850,7 +891,7 @@ impl<'a> JitContext<'a> {
                             ISeqHint::Normal => {}
                         }
                     }
-                    if self.specialize_level() < 5 {
+                    if self.specialize_level() < SPECIALIZE_DEPTH_LIMIT {
                         return self.specialized_iseq(
                             state,
                             ir,
@@ -1020,11 +1061,23 @@ impl<'a> JitContext<'a> {
                 // specialization (and D1) removes — so don't gate them
                 // on the immediate-arg heuristic.
                 let forwarding_callee = self.store[func_id].params().forwarding();
+                // An unboxed float argument is the other kind of thing
+                // worth specializing for. The callee's entry binds the
+                // parameter `Float` (`SlotState::new_method`), so its
+                // first use needs no guard, and the value crosses the
+                // call in a register in both directions
+                // (`plan_float_args`, `JitStackFrame::float_return`)
+                // instead of through `f64_to_val` and back. Without this
+                // the gate is blind to exactly the code that would gain
+                // most: a computed float is neither an immediate constant
+                // nor a forwarded argument, so float-heavy call sites
+                // never specialized at all.
                 let specializable = self.store.is_simple_call(func_id, callid)
                     && (forwarding_callee
                         || state.is_C_immediate(callsite.recv)
                         || (pos_num != 0
-                            && (args..args + pos_num).any(|i| state.is_C_immediate(i))));
+                            && (args..args + pos_num)
+                                .any(|i| state.is_C_immediate(i) || state.is_fpr_resident(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
                 // The forwarded `initialize` inside the Ruby `Class#new`
                 // (the privileged `recv.__builtin_initialize__(...)`
@@ -1041,13 +1094,36 @@ impl<'a> JitContext<'a> {
                 // initialize compiled for exactly that class.
                 let forwarded_initialize = callsite.forwarding && callsite.bypass_visibility;
 
+                // A forwarding hop does not spend the depth budget.
+                //
+                // The budget bounds how many callee frames one unit may
+                // hold, because each one costs code. A forwarding
+                // trampoline is the case where *not* inlining costs more:
+                // its body is a single call, so it adds almost no code,
+                // while leaving it out means the caller builds the rest
+                // `Array` its `(...)` binds — `send` passes
+                // `defer_rest: false` unconditionally, so only a
+                // specialized frame can carry D1's elision. `Class#new` is
+                // the case that matters: every `Foo.new` deeper in a call
+                // tree than the budget reaches paid one `Array` per
+                // construction, purely because of where it sat.
+                //
+                // Exempting both ends of the hop — a callee declared
+                // `(...)`, and the privileged `__builtin_initialize__(...)`
+                // forward inside `Class#new` — is what lets the whole
+                // chain through; a partial exemption would be worse than
+                // none (see `FORWARD_EXEMPT_RECURSION_CAP`).
+                let forward_exempt = (forwarding_callee || forwarded_initialize)
+                    && self.specialize_level() < FORWARD_EXEMPT_RECURSION_CAP;
+
                 // Method specialization (inlining a callee iseq) and block-
                 // argument inlining (`iseq_block`, which drives specialized
                 // `yield`) are both lowered on x86 and aarch64 now.
                 // Inside a dispatch arm, specialization is off: the arm
                 // cannot back out of a `CompileError`, and a `Cease` return
                 // would leave it with no path to the merge.
-                if (((specializable || forwarded_initialize) && self.specialize_level() < 5)
+                if (((specializable || forwarded_initialize)
+                    && (forward_exempt || self.specialize_level() < SPECIALIZE_DEPTH_LIMIT))
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
                 {
@@ -1207,11 +1283,12 @@ impl<'a> JitContext<'a> {
             had_deopt: _,
             generic_yield: _,
             spec_id,
+            using_fpr: frozen_using_fpr,
+            float_return,
         } = self.compile_specialized_func(
             state,
             iseq,
             self_class,
-            None,
             args_info,
             Some(outer),
             callid,
@@ -1223,7 +1300,13 @@ impl<'a> JitContext<'a> {
         // Pre-flush GP-pool snapshot for direct argument stores — see
         // `send`.
         let arg_hints = state.peek_gp_residents();
-        let using_fpr = state.get_using_fpr(ir);
+        // The save set was frozen when the callee's compile began (its
+        // frame-chain offsets are laid out over it); the live set can only
+        // have shrunk since, so saving the frozen set is sound and keeps
+        // the offsets right. `get_using_fpr` still runs for its flushes.
+        let live = state.get_using_fpr(ir);
+        let using_fpr = frozen_using_fpr;
+        debug_assert!(using_fpr.is_superset_of(&live), "{using_fpr:?} < {live:?}");
         // Stage 1': the resolve pass places write-through refreshes into
         // this site's save area by this record.
         self.record_call_site_fpr_save(spec_id, using_fpr);
@@ -1233,7 +1316,7 @@ impl<'a> JitContext<'a> {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: state.pc().as_ptr() as u64,
         });
-        state.set_arguments(&self.store, ir, callid, callee_fid, false, &arg_hints);
+        state.set_arguments(&self.store, ir, callid, callee_fid, false, &arg_hints, &[]);
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -1244,7 +1327,7 @@ impl<'a> JitContext<'a> {
         state.chain_exit(ir, evict, using_fpr, dst);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
-        let res = state.def_rax2acc_return(ir, dst, return_state);
+        let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
         state.immediate_evict(ir, evict);
         Ok(res)
     }
@@ -1355,7 +1438,8 @@ impl<'a> JitContext<'a> {
         }
         // A provably-immediate stored value needs no GC write barrier.
         let wb = !state.is_guarded_immediate(args);
-        let src = state.load_or_reg(ir, args, GP::Rax);
+        state.load(ir, args, GP::Rax);
+        let src = GP::Rax;
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
         let using_fpr = state.get_using_fpr(ir);
         if is_object_ty && ivarid.is_inline() {
@@ -1488,6 +1572,28 @@ impl<'a> JitContext<'a> {
             }
         }
 
+        // The constants the body folded. Their values were baked in against
+        // the *callee's* inline caches, which are only right at the version
+        // they were resolved at: the body cannot redefine a constant (it
+        // contains no call), but anything else in the program can, between
+        // this compilation and a later execution of the code emitted here.
+        // So the expansion carries the same guard and salvage record a
+        // `LoadConst` in this frame would (`load_constant`) — one guard per
+        // trace covers them all — and declines a fold resolved at another
+        // version, since the ordinary call is correct.
+        if body
+            .consts
+            .iter()
+            .any(|site| site.cache.version as u64 != self.const_version())
+        {
+            return false;
+        }
+        // Emitted before anything else, so a miss still hands the whole call
+        // back — the all-or-nothing property every other guard here keeps.
+        if let Some(version) = body.consts.first().map(|site| site.cache.version) {
+            self.guard_const_version(state, ir, version);
+        }
+
         state.flush_gp(ir);
         // The receiver, for every inline ivar access and the frozen guard.
         state.load(ir, recv, GP::Rdi);
@@ -1592,6 +1698,7 @@ impl<'a> JitContext<'a> {
         for (class, name) in bop_deps {
             self.record_bop_dep(class, name);
         }
+        self.const_fold_cache.extend(body.consts.iter().cloned());
         state.def_reg2acc(ir, GP::Rax, dst);
         state.unset_side_effect_guard();
         true
@@ -1632,19 +1739,52 @@ impl<'a> JitContext<'a> {
     /// *caller's* instructions instead, so an argument-less construction
     /// costs exactly the allocation.
     ///
-    /// Declines (⇒ the ordinary specialized call) unless the whole
-    /// construction is expressible without a frame:
+    /// The trampoline also costs an `Array` per construction. Its `(...)`
+    /// binds the arguments into a rest parameter, and that rest `Array` is
+    /// elided only when the forward is proved to go straight back out
+    /// again (D1) — which needs the trampoline *inlined* into this
+    /// compilation unit, i.e. a specialization-depth budget a deeply
+    /// nested caller has already spent. So the very same construction loop
+    /// allocated one empty `Array` per object, or none, depending on how
+    /// far from the top of its unit it happened to sit (measured at 4x on
+    /// ruby-bench's `string_malloc_pressure`). Emitting the construction
+    /// here takes the trampoline out of the picture entirely: the site's
+    /// own positionals bind straight into `initialize`, at any depth.
     ///
-    /// * the site hands its arguments over as plain positionals — the
-    ///   trampoline's `(...)` forward is transparent only when there is
-    ///   nothing to re-shape;
+    /// Two plans, both of which emit the construction with no call at
+    /// all:
+    ///
+    /// * a trivial `initialize` body (`ISeqHint::ConstReturn` /
+    ///   `SelfReturn`) — nothing but the allocation is emitted. This is
+    ///   every class that does not define one, since
+    ///   `BasicObject#initialize` is an empty Ruby body;
+    /// * a plain ivar-store constructor — expanded into the caller's own
+    ///   stores (`expand_ivar_stores`).
+    ///
+    /// Anything else — a native `initialize` (`String`, `Hash`), a body
+    /// too big to expand — is left to the Ruby `Class#new`, which the
+    /// forwarding-hop exemption specializes into this unit anyway (so its
+    /// `(...)` still binds without a rest `Array`). Emitting that case as
+    /// a direct call to `initialize` here was measured at 4-13 % on the
+    /// shapes it covered, but it is a second implementation of `new`
+    /// carrying its own receiver-override plumbing and its own backtrace
+    /// shape; the Ruby definition stays the single authority instead.
+    ///
+    /// Declines (⇒ the ordinary specialized call *through* the
+    /// trampoline) unless:
+    ///
+    /// * the site hands its arguments over as plain positionals, with no
+    ///   block and no keywords — the trampoline's `(...)` forward is
+    ///   transparent only when there is nothing to re-shape;
     /// * the receiver is (provably, see the identity guard) the attached
-    ///   class object, and its allocator is the stock object one, so the
-    ///   allocation is the `InlineAlloc::Object` sequence;
-    /// * `initialize` resolves to a Ruby body this compile can consume —
-    ///   trivial (folded away) or a plain ivar-store constructor
-    ///   (expanded), with an argument shape that binds without
-    ///   `ArgumentError`.
+    ///   class object;
+    /// * `initialize` is an ISeq that binds those positionals without
+    ///   `ArgumentError`, and either folds away or expands into stores.
+    ///
+    /// The allocator need *not* be the stock one: a class with its own
+    /// `alloc_func` (String, Array, Hash, …) keeps the runtime call
+    /// `Class#allocate` would have made — `emit_class_allocate` with no
+    /// inline payload — and still sheds the trampoline.
     ///
     /// Soundness rides on the site's class-version guard (emitted before
     /// this point): defining `new`, `initialize`, or an `allocate` anywhere
@@ -1686,19 +1826,27 @@ impl<'a> JitContext<'a> {
         if class_id == CLASS_CLASS || self.store[class_id].get_module().is_singleton().is_some() {
             return false;
         }
-        // Only the stock object allocator is emitted inline: anything with
-        // its own `alloc_func` (Array, Hash, String, …) builds a payload
-        // this cannot write, and its `initialize` is native anyway. The
-        // ivar-count gate is the same pure optimization gate as in
-        // `gen_class_allocate_inline`.
         let Some(alloc_func) = self.store[class_id].alloc_func() else {
             return false;
         };
-        if !std::ptr::fn_addr_eq(alloc_func, crate::default_alloc_func as AllocFunc)
-            || self.store[class_id].ivar_len() > OBJECT_INLINE_IVAR
-        {
-            return false;
-        }
+        // How the allocation itself is emitted — the same choice
+        // `gen_class_allocate_inline` makes for a bare `Foo.allocate`,
+        // including its two pure-optimization gates (an object whose ivars
+        // overflow the inline slots, a Struct whose members do, both keep
+        // the call because the allocator pre-sizes a heap buffer for them).
+        // A class with its own `alloc_func` (Array, Hash, String, …) builds
+        // a payload this cannot write and so keeps the runtime call; that
+        // still leaves the construction one call instead of a call plus the
+        // trampoline frame, which is the whole point below.
+        let stock_object = crate::default_alloc_func as AllocFunc;
+        let inline_alloc = if std::ptr::fn_addr_eq(alloc_func, stock_object) {
+            (self.store[class_id].ivar_len() <= OBJECT_INLINE_IVAR).then_some(InlineAlloc::Object)
+        } else if std::ptr::fn_addr_eq(alloc_func, crate::struct_alloc_func as AllocFunc) {
+            let len = crate::struct_members_len(&self.store, class_id);
+            (len <= STRUCT_INLINE_SLOTS).then_some(InlineAlloc::Struct(len as u16))
+        } else {
+            None
+        };
 
         // Resolve `initialize` for the allocated class. `new` reaches it
         // through the privileged spelling, so its `private` visibility is
@@ -1714,16 +1862,7 @@ impl<'a> JitContext<'a> {
         let Some(init_fid) = init_fid else {
             return false;
         };
-        let Some(init_iseq) = self.store[init_fid].is_iseq() else {
-            return false;
-        };
-        let callee = &self.store[init_fid];
-        if !callee.no_keyword() || callee.single_arg_expand() || !callee.positional_arity_ok(pos_num)
-        {
-            return false;
-        }
-
-        // Decide the whole plan before emitting anything: the expansion is
+        // Decide the whole plan before emitting anything: both legs are
         // all-or-nothing, and the allocation is already emitted by the time
         // `expand_ivar_stores` would report a miss.
         enum InitPlan {
@@ -1732,37 +1871,72 @@ impl<'a> JitContext<'a> {
             /// A plain constructor, expanded into the caller.
             Stores(frameless::IvarStoreBody),
         }
-        let plan = match self.store[init_iseq].hint {
+
+        // Both legs consume the body itself, so they need an `initialize`
+        // whose parameters are plain positionals binding exactly these
+        // arguments.
+        let callee = &self.store[init_fid];
+        let frameless_shape = callee.no_keyword()
+            && !callee.single_arg_expand()
+            && callee.positional_arity_ok(pos_num);
+        let plan = match self.store[init_fid].is_iseq().filter(|_| frameless_shape) {
             // `SelfReturn` is `def initialize = self`, which returns the
             // new object — and `new` discards the return value either way.
-            ISeqHint::ConstReturn(_) | ISeqHint::SelfReturn => InitPlan::Fold,
-            ISeqHint::Normal => {
-                // The stores are written into the object this very
-                // instruction allocated, so its slot must exist — and must
-                // not be one of the argument slots the stores then read
-                // (the new object lands in `dst` *before* they run).
-                let Some(d) = dst else {
+            Some(init_iseq)
+                if matches!(
+                    self.store[init_iseq].hint,
+                    ISeqHint::ConstReturn(_) | ISeqHint::SelfReturn
+                ) =>
+            {
+                InitPlan::Fold
+            }
+            // Not expandable, or not this shape at all (a native
+            // `initialize`, an `alias_method :initialize, :x=`): the Ruby
+            // `Class#new` handles it.
+            Some(init_iseq) => {
+                let Some(body) = frameless::ivar_store_body(&self.store, init_iseq).filter(|body| {
+                    pos_num == self.store[init_fid].params().total_positional_args()
+                        && self.store[class_id].is_object_ty_instance()
+                        && body.stores.iter().all(|&(name, _)| {
+                            self.store[class_id]
+                                .get_ivarid(name)
+                                .is_some_and(|id| id.is_inline())
+                        })
+                }) else {
                     return false;
                 };
-                if (0..pos_num).any(|i| args + i == d) {
-                    return false;
-                }
-                let Some(body) = frameless::ivar_store_body(&self.store, init_iseq) else {
-                    return false;
-                };
-                if pos_num != self.store[init_fid].params().total_positional_args()
-                    || !self.store[class_id].is_object_ty_instance()
-                    || !body.stores.iter().all(|&(name, _)| {
-                        self.store[class_id]
-                            .get_ivarid(name)
-                            .is_some_and(|id| id.is_inline())
-                    })
-                {
-                    return false;
-                }
                 InitPlan::Stores(body)
             }
+            None => return false,
         };
+
+        if !matches!(plan, InitPlan::Fold) {
+            // The store leg runs against the object this very instruction
+            // allocates, so its slot must exist — and must not be one of
+            // the argument slots it then reads, since the object lands in
+            // `dst` *before* they run.
+            match dst {
+                Some(d) if !(0..pos_num).any(|i| args + i == d) => {}
+                _ => return false,
+            }
+        }
+
+        // Record the `initialize` resolution as an assumption of this
+        // compilation unit — but only now that the emission is certain.
+        // The call site's own entry says `#<Class:Foo>#new -> Class#new`,
+        // which a redefinition of `Foo#initialize` leaves true — so without
+        // this, `salvage_method_unit` re-validates the unit, finds nothing
+        // changed, re-stamps the version word, and keeps code holding a
+        // stale `initialize`: its folded body or its expanded stores.
+        // Defining `initialize` where it was inherited, or overriding an
+        // inherited one in a subclass, both silently kept the old behaviour
+        // at an already-hot site.
+        self.inline_method_cache.push(InlineCacheEntry {
+            recv_class: class_id,
+            name: Some(IdentId::INITIALIZE),
+            refinements: self.refinements(),
+            func_id: init_fid,
+        });
 
         // Runtime identity guard, for the same reason `Class#allocate`
         // needs one: the dispatch class is not injective over receivers —
@@ -1777,24 +1951,26 @@ impl<'a> JitContext<'a> {
         let using_fpr = state.get_using_fpr(ir);
         ir.fpr_save(using_fpr);
         ir.inline(move |r#gen, _, _, _| {
-            r#gen.emit_class_allocate(
-                class_id.u32(),
-                alloc_func as *const () as u64,
-                Some(InlineAlloc::Object),
-            )
+            r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64, inline_alloc)
         });
         ir.fpr_restore(using_fpr);
+        // Stores the object to `dst`'s home, which is both what the store
+        // leg below reads it back from and what roots it.
         state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
 
-        if let InitPlan::Stores(body) = plan {
-            let dst = dst.unwrap();
-            let arg_slots: Vec<frameless::ArgSlot> =
-                (0..pos_num).map(|i| frameless::ArgSlot::Own(args + i)).collect();
-            // The constructor's return value is discarded by `new`, so the
-            // expansion writes no destination — `dst` keeps the object.
-            let ok = self.expand_ivar_stores(state, ir, class_id, dst, None, &body, &arg_slots);
-            // The plan was fully resolved above, so this cannot miss.
-            debug_assert!(ok);
+        match plan {
+            InitPlan::Fold => {}
+            InitPlan::Stores(body) => {
+                let dst = dst.unwrap();
+                let arg_slots: Vec<frameless::ArgSlot> =
+                    (0..pos_num).map(|i| frameless::ArgSlot::Own(args + i)).collect();
+                // The constructor's return value is discarded by `new`, so
+                // the expansion writes no destination — `dst` keeps the
+                // object.
+                let ok = self.expand_ivar_stores(state, ir, class_id, dst, None, &body, &arg_slots);
+                // The plan was fully resolved above, so this cannot miss.
+                debug_assert!(ok);
+            }
         }
         true
     }
@@ -1841,10 +2017,10 @@ impl<'a> JitContext<'a> {
             // keeps the barrier; an own slot elides it when the state
             // proves the value immediate.
             let (src, wb) = match src_slot {
-                frameless::ArgSlot::Own(slot) => (
-                    state.load_or_reg(ir, slot, GP::Rax),
-                    !state.is_guarded_immediate(slot),
-                ),
+                frameless::ArgSlot::Own(slot) => {
+                    state.load(ir, slot, GP::Rax);
+                    (GP::Rax, !state.is_guarded_immediate(slot))
+                }
                 frameless::ArgSlot::Caller(slot) => {
                     ir.push(AsmInst::LoadCallerSlot {
                         slot,
@@ -1940,7 +2116,8 @@ impl<'a> JitContext<'a> {
         state.load(ir, recv, GP::Rdi);
         let deopt = ir.new_deopt(state);
         ir.guard_frozen(deopt);
-        let src = state.load_or_reg(ir, args, GP::Rax);
+        state.load(ir, args, GP::Rax);
+        let src = GP::Rax;
         if inline {
             ir.push(AsmInst::StoreStructSlotInline { src, slot_index });
         } else {
@@ -1968,17 +2145,12 @@ impl<'a> JitContext<'a> {
         bmethod_outer: Option<Option<Lfp>>,
     ) -> JitResult<CompileResult> {
         let dst = self.store[callid].dst;
-        let args_info = if specializable {
+        let mut args_info = if specializable {
             JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, state))
         } else {
             JitArgumentInfo::default()
         };
-        let patch_point = if self.is_specialized() {
-            None
-        } else {
-            Some(self.label())
-        };
-        let used_patch_point = patch_point;
+        let float_args = self.plan_float_args(state, &mut args_info, fid, callid);
         // What this frame is holding as a constant on the way in. The
         // callee's compile may take some of those claims away — its block
         // stores into our frame, and `store_dynvar` says so — and a claim
@@ -1986,13 +2158,12 @@ impl<'a> JitContext<'a> {
         // we still know what they were.
         let held = state.held_constants();
         // The same, for the float locals whose boxed slot store the
-        // block-handing `unbox_to_S` deferred to a spill home.
+        // block-handing `write_back(Keep::Claims)` deferred to a spill home.
         let deferred_homes = state.deferred_float_homes();
         let compiled = self.compile_specialized_func(
             state,
             iseq,
             recv_class,
-            used_patch_point,
             args_info,
             None,
             callid,
@@ -2017,6 +2188,8 @@ impl<'a> JitContext<'a> {
             had_deopt,
             generic_yield,
             spec_id,
+            using_fpr: frozen_using_fpr,
+            float_return,
         } = compiled;
         // The call site passes a block literal: if the callee heapifies
         // its *own* frame during the call (`Proc.new` / `lambda` /
@@ -2032,7 +2205,7 @@ impl<'a> JitContext<'a> {
             // the block would be compiled into this unit — see
             // `compile_method_call`. Confirm the bet now that the callee's
             // body is compiled, and give the claims up unless it holds. The
-            // values are in their slots either way (`unbox_to_S` wrote them
+            // values are in their slots either way (the write-back wrote them
             // on the way in), so this costs no code.
             //
             // Two ways it fails. A `yield` that was not inlined runs the
@@ -2059,9 +2232,11 @@ impl<'a> JitContext<'a> {
         // Pre-flush GP-pool snapshot for direct argument stores — see
         // `send`. Captured before `get_using_fpr`'s flush.
         let arg_hints = state.peek_gp_residents();
-        // Snapshot the save set here (it is what `fpr_save_cont` below
-        // will emit) and record it for the resolve pass — stage 1'.
-        let using_fpr = state.get_using_fpr(ir);
+        // The save set was frozen when the callee's compile began — see
+        // the yield site above and `specialized_compile`.
+        let live = state.get_using_fpr(ir);
+        let using_fpr = frozen_using_fpr;
+        debug_assert!(using_fpr.is_superset_of(&live), "{using_fpr:?} < {live:?}");
         self.record_call_site_fpr_save(spec_id, using_fpr);
         state.send_specialized(
             ir,
@@ -2069,15 +2244,15 @@ impl<'a> JitContext<'a> {
             callid,
             fid,
             entry,
-            used_patch_point,
             evict,
             deferred_rest,
             needs_rest_array,
             bmethod_outer,
             using_fpr,
             &arg_hints,
+            &float_args,
         );
-        let res = state.def_rax2acc_return(ir, dst, return_state);
+        let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
         state.immediate_evict(ir, evict);
         return Ok(res);
     }
@@ -2102,9 +2277,56 @@ pub(super) struct SpecializedCompileResult {
     /// The compiled callee instance, keying its call site's recorded FP
     /// save layout (stage 1' write-through).
     pub spec_id: context::SpecializedId,
+    /// The FP save set the call site must emit: the caller's set frozen
+    /// when the callee's compile began, over which the callee's
+    /// frame-chain offsets were laid out (`specialized_compile`).
+    pub using_fpr: UsingFpr,
     /// A `yield` in the compiled subtree was not inlined — see
     /// [`JitStackFrame::generic_yield`].
     pub generic_yield: bool,
+    /// The compiled body leaves its return value as a raw f64 in the
+    /// float-return register, not boxed in rax — see
+    /// [`JitStackFrame::float_return`]. Binding on this call site.
+    pub float_return: bool,
+}
+
+impl SpecializedCompileResult {
+    fn to_memo(&self) -> spec_memo::SpecializedCompileResultMemo {
+        spec_memo::SpecializedCompileResultMemo {
+            return_state: self.return_state.clone(),
+            deferred_rest: self.deferred_rest,
+            needs_rest_array: self.needs_rest_array,
+            had_deopt: self.had_deopt,
+            generic_yield: self.generic_yield,
+            spec_id: self.spec_id,
+            using_fpr: self.using_fpr,
+            float_return: self.float_return,
+        }
+    }
+
+    fn from_memo(entry: JitLabel, memo: spec_memo::SpecializedCompileResultMemo) -> Self {
+        let spec_memo::SpecializedCompileResultMemo {
+            return_state,
+            deferred_rest,
+            needs_rest_array,
+            had_deopt,
+            generic_yield,
+            spec_id,
+            using_fpr,
+            float_return,
+        } = memo;
+        Self {
+            entry,
+            return_state,
+            deferred_rest,
+            needs_rest_array,
+            had_deopt,
+            generic_yield,
+            spec_id,
+            using_fpr,
+            float_return,
+        }
+    }
 }
 
 impl<'a> JitContext<'a> {
@@ -2132,12 +2354,191 @@ impl<'a> JitContext<'a> {
         )
     }
 
+    ///
+    /// Compile *iseq_id* as an inlined callee of this call site.
+    ///
+    /// During an analysis walk the same call site is reached once per
+    /// walk, and a walk can arrive on the abstract-frame tower a
+    /// previous walk arrived on — in which case the compile, and the
+    /// fixpoints of every loop inside the callee, would be repeated
+    /// verbatim. [`spec_memo::SpecMemo`] answers such an arrival with
+    /// the tower the recorded compile returned. Codegen has to run for
+    /// real: its output is the emitted code, which a replay does not
+    /// produce.
+    ///
     fn compile_specialized_func(
         &mut self,
         state: &mut AbstractState,
         iseq_id: ISeqId,
         self_class: ClassId,
-        patch_point: Option<JitLabel>,
+        args_info: JitArgumentInfo,
+        outer: Option<usize>,
+        callid: CallSiteId,
+        bmethod: bool,
+    ) -> JitResult<SpecializedCompileResult> {
+        // The memo pays for itself only where the compile it stands in
+        // for is the expensive kind. A tower spans the whole frame
+        // chain, which a deep inlining stack makes large, while a
+        // loop-free callee compiles in one pass over its blocks: below
+        // the fixpoint there is nothing to save. A loop-free wrapper is
+        // no loss — the loop-carrying callee it inlines is memoized at
+        // its own call site.
+        if self.codegen_mode() || !self.store[iseq_id].bb_info.has_loop() {
+            return self.compile_specialized_func_uncached(
+                state,
+                iseq_id,
+                self_class,
+                args_info,
+                outer,
+                callid,
+                bmethod,
+            );
+        }
+        let site = spec_memo::SpecCallSite {
+            iseq_id,
+            self_class,
+            outer,
+            callid,
+            bmethod,
+            args_info: args_info.clone(),
+            chain: self.spec_call_chain(),
+        };
+        let hash = self.tower_hash(state);
+        if let Some(result) = self.spec_memo_try_replay(&site, hash, state) {
+            // The label is the one piece a replay cannot inherit: it
+            // indexes the *current* frame's label table.
+            return Ok(SpecializedCompileResult::from_memo(self.label(), result));
+        }
+        // A site that has spent its entries records nothing more, so
+        // skip the snapshot its recording would have needed.
+        let entered = (!self.spec_memo_is_full(&site)).then(|| self.tower(state));
+        let marks = self.spec_memo_marks();
+        let res = self.compile_specialized_func_uncached(
+            state,
+            iseq_id,
+            self_class,
+            args_info,
+            outer,
+            callid,
+            bmethod,
+        )?;
+        if let Some(entered) = entered {
+            let returned = self.tower(state);
+            let effect = self.spec_call_effect(marks, res.to_memo());
+            self.spec_memo_insert(site, hash, entered, returned, effect);
+        }
+        Ok(res)
+    }
+
+    ///
+    /// Decide which of this specialized call's positional arguments travel
+    /// to the callee in a pool register instead of boxed into its frame
+    /// slot, and record the decision in `args_info`, which the callee's
+    /// entry state reads (`SlotState::new_method`).
+    ///
+    /// The frame slot is still written, so this buys the callee's unbox
+    /// and its type guard, not the caller's box. Dropping the store, and
+    /// binding the parameter `F` to say the slot is stale, measured no
+    /// faster and costs the accuracy: both copies are live and agree,
+    /// which is what `Sf` means, and every reader of the slot — a value
+    /// use, a write-back, the entry poll — finds a `Value` there without
+    /// the register having to be consulted.
+    ///
+    /// The enabling shape is narrow on purpose. Between the move and the
+    /// callee's entry the value lives only in a register, so the call
+    /// site is only eligible when nothing after the move can take the
+    /// pool with it: no block argument to write back, no rest `Array` or
+    /// keyword `Hash` to build. Boxing an argument is fine — `f64_to_val`
+    /// works in the scratch registers and preserves the pool. The
+    /// callee's registers are chosen clear of the caller's sources so the
+    /// moves cannot destroy one another.
+    ///
+    /// The arguments must also be temps. The plan is made before the
+    /// callee is compiled but read after, and a callee's compile can widen
+    /// the caller's slots out from under it — but only its *locals*
+    /// (`AbstractState::barrier_outer_claims` walks `locals()`, and the
+    /// kept outer views it drains are of locals too), so a temp still
+    /// holds at `set_arguments` what it held here.
+    ///
+    /// Everything from the call's `fpr_save_cont` to the callee's entry
+    /// poll preserves the pool: the frame setup and the call write no fpr,
+    /// the prologue's nil-fill is integer stores, and the poll's slow path
+    /// saves and restores the pool around `execute_gc`. The poll's own
+    /// write-back is what first gives the parameter a boxed slot, which is
+    /// exactly the `LinkMode::F` contract.
+    ///
+    fn plan_float_args(
+        &self,
+        state: &AbstractState,
+        args_info: &mut JitArgumentInfo,
+        callee_fid: FuncId,
+        callid: CallSiteId,
+    ) -> Vec<(SlotId, FPReg)> {
+        let Some(modes) = args_info.0.as_mut() else {
+            return vec![];
+        };
+        let callee = &self.store[callee_fid];
+        let cs = &self.store[callid];
+        if !self.store.is_simple_call(callee_fid, callid)
+            || cs.block_arg.is_some()
+            || !cs.splat_pos.is_empty()
+            || cs.kw_may_exists()
+            || callee.is_rest()
+            || callee.kw_rest().is_some()
+            || !callee.kw_names().is_empty()
+            || callee.opt_num() != 0
+            || callee.post_num() != 0
+            || cs.pos_num != callee.req_num()
+            || self.forward_rest_deferral().is_some()
+        {
+            return vec![];
+        }
+        // The receiver is fetched like any argument, so an fpr-resident
+        // one would box on the way in.
+        let fpr_resident =
+            |slot: SlotId| matches!(state.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _));
+        if fpr_resident(cs.recv) || cs.args < state.temp_start() {
+            return vec![];
+        }
+        let sources: Vec<(SlotId, FPReg)> = (0..cs.pos_num)
+            .filter_map(|i| {
+                let slot = cs.args + i;
+                match state.mode(slot) {
+                    LinkMode::F(x) | LinkMode::Sf(x, _) => Some((SlotId(1 + i as u16), x)),
+                    _ => None,
+                }
+            })
+            .collect();
+        if sources.is_empty() {
+            return vec![];
+        }
+        // Any source left behind would be boxed by `set_arguments`, which
+        // calls out and takes the pool with it.
+        let taken: Vec<usize> = sources
+            .iter()
+            .filter(|(_, x)| x.0 < crate::codegen::PHYS_FPR_POOL)
+            .map(|(_, x)| x.0)
+            .collect();
+        let mut free = (0..crate::codegen::PHYS_FPR_POOL).filter(|id| !taken.contains(id));
+        let mut plan = Vec::with_capacity(sources.len());
+        for (param, _) in &sources {
+            let Some(id) = free.next() else {
+                return vec![];
+            };
+            plan.push((*param, FPReg::from_pool(id)));
+        }
+        for (param, fpr) in &plan {
+            modes[param.0 as usize] = LinkMode::F(*fpr);
+        }
+        args_info.1 = plan.clone();
+        plan
+    }
+
+    fn compile_specialized_func_uncached(
+        &mut self,
+        state: &mut AbstractState,
+        iseq_id: ISeqId,
+        self_class: ClassId,
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
@@ -2175,10 +2576,13 @@ impl<'a> JitContext<'a> {
         self.merge_return_context(return_context);
         // Capture before `frame.asm_info` is moved below.
         let spec_id = frame.asm_info.specialized_id;
+        let frame_using_fpr = frame.call_site_using_fpr;
         let frame_had_deopt = frame.had_deopt;
         let frame_deferred_rest = frame.deferred_rest;
         let frame_needs_rest_array = frame.needs_rest_array;
         let frame_generic_yield = frame.generic_yield;
+        let frame_float_return = frame.float_return;
+        let frame_has_boxed_return = frame.has_boxed_return;
         // `has_exception_handler` taints the return state so the caller
         // doesn't propagate a speculative `Const` past us: the BB graph
         // doesn't include rescue/ensure successors, so the computed
@@ -2227,12 +2631,9 @@ impl<'a> JitContext<'a> {
             );
         }
         let entry = self.label();
-        let speculated = self.under_armed_speculation();
         self.specialized_methods_push(context::SpecializeInfo {
             entry,
             info: frame.asm_info,
-            patch_point,
-            speculated,
         });
         // Propagate the deopt fact one level up: if this inlined
         // sub-iseq could deopt, the caller's compiled body also
@@ -2242,6 +2643,12 @@ impl<'a> JitContext<'a> {
         // and popped the sub-frame internally).
         if frame_had_deopt {
             self.current_frame_mut().had_deopt = true;
+        }
+        // A non-local return or a break under this call returns with a
+        // boxed rax of its own, so the enclosing frame cannot adopt the
+        // float-return convention either.
+        if frame_has_boxed_return {
+            self.current_frame_mut().has_boxed_return = true;
         }
         // Same one-level propagation: a non-inlined `yield` anywhere under
         // this call means some block ran outside this unit, which the
@@ -2272,6 +2679,8 @@ impl<'a> JitContext<'a> {
             had_deopt: frame_had_deopt,
             generic_yield: frame_generic_yield,
             spec_id,
+            using_fpr: frame_using_fpr,
+            float_return: frame_float_return,
         })
     }
 
@@ -2367,6 +2776,36 @@ impl<'a> JitContext<'a> {
     }
 }
 
+
+/// How deep method specialization may keep inlining callee iseqs into one
+/// compilation unit.
+///
+/// The cost of this number is exponential in it, not linear: every level
+/// multiplies the frames one unit can hold by the specializable call sites
+/// per frame. On a call tree with three such sites per level the largest
+/// unit holds 363 specialized frames at 5, 120 at 4 and 39 at 3; on
+/// activerecord, 61 at 5 and 29 at 3. What that buys back is not
+/// measurable — across ruby-bench only 17 of 54 benchmarks compile
+/// anything at all past level 3, and their run times move by less than the
+/// spread of repeated runs.
+const SPECIALIZE_DEPTH_LIMIT: usize = 3;
+
+/// How deep a chain of *forwarding* frames may go, which is a recursion
+/// backstop rather than a budget — see `forward_exempt` at the
+/// specialization gate for why forwarding is exempt from the budget
+/// itself. `def f(...) = f(...)` is a legal Ruby program whose
+/// specialization would otherwise descend forever at compile time, and a
+/// chain of mutually forwarding methods does the same; this number is the
+/// only thing stopping it. It is set far above any forwarding chain real
+/// code writes (the deepest this repo's own corpus reaches is 6, through
+/// `Class#new` inside a block inside `Array#initialize`) precisely so that
+/// it never acts as a budget: a chain cut half way is *worse* than one not
+/// entered at all, because each forwarding frame that lands beyond the cut
+/// is emitted as a generic call, and a generic call to a forwarding
+/// trampoline materializes the rest `Array` that D1 exists to elide
+/// (`send` passes `defer_rest: false` unconditionally).
+const FORWARD_EXEMPT_RECURSION_CAP: usize = 32;
+
 impl AbstractState {
     ///
     /// ### in
@@ -2418,7 +2857,7 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(store, ir, callid, callee_fid, false, &arg_hints);
+        self.set_arguments(store, ir, callid, callee_fid, false, &arg_hints, &[]);
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -2465,7 +2904,6 @@ impl AbstractState {
         callid: CallSiteId,
         callee_fid: FuncId,
         inlined_entry: JitLabel,
-        patch_point: Option<JitLabel>,
         evict: AsmEvict,
         deferred_rest: bool,
         needs_rest_array: bool,
@@ -2477,6 +2915,9 @@ impl AbstractState {
         // Pre-flush GP-pool residents (captured by the caller alongside
         // `using_fpr`) — see `send`'s direct argument stores.
         arg_hints: &[(GP, SlotId)],
+        // The parameters handed over in a register
+        // (`JitContext::plan_float_args`), by callee parameter slot.
+        float_args: &[(SlotId, FPReg)],
     ) {
         // D1: skip the caller-side `create_array` only when at least
         // one forwarding consume was source-routed AND no forwarding
@@ -2491,7 +2932,15 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(store, ir, callid, callee_fid, defer_rest, arg_hints);
+        self.set_arguments(
+            store,
+            ir,
+            callid,
+            callee_fid,
+            defer_rest,
+            arg_hints,
+            float_args,
+        );
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -2505,7 +2954,6 @@ impl AbstractState {
         });
         ir.push(AsmInst::SpecializedCall {
             entry: inlined_entry,
-            patch_point,
             evict,
         });
         self.chain_exit(ir, evict, using_fpr, store[callid].dst);
@@ -2676,10 +3124,14 @@ impl AbstractState {
         callee_fid: FuncId,
         defer_rest: bool,
         arg_hints: &[(GP, SlotId)],
+        // The parameters handed over in a register
+        // (`JitContext::plan_float_args`), by callee parameter slot.
+        float_args: &[(SlotId, FPReg)],
     ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
-        if store.is_simple_call(callee_fid, callid) {
+        let simple = store.is_simple_call(callee_fid, callid);
+        if simple {
             let args = callsite.args;
             let pos_num = callsite.pos_num;
             let kw_pos = callsite.kw_pos;
@@ -2724,7 +3176,7 @@ impl AbstractState {
 
             // write back block argument.
             if let Some(block_arg) = callsite.block_arg {
-                self.write_back_slot(ir, block_arg);
+                self.write_back(ir, block_arg, Keep::All);
             }
 
             // fill self.
@@ -2740,6 +3192,13 @@ impl AbstractState {
                 if direct_filled.contains(&i) {
                     continue;
                 }
+                // Handed over in a register instead. The slot still gets
+                // a real `nil`: nothing has ever written this stack
+                // address in this frame, and the frame is scannable from
+                // the moment it is linked, so leaving it would hand the
+                // collector whatever the previous frame left there. Same
+                // reasoning as the deferred rest below, and just as cheap
+                // — an immediate store, no boxing call.
                 let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                 self.fetch_for_callee(ir, args + i, ofs);
             }
@@ -2793,6 +3252,21 @@ impl AbstractState {
                     let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
                     ir.u64torsp_offset(NIL_VALUE, ofs);
                 }
+            }
+
+            // Last: everything above can call out (a block-arg write
+            // back, a rest `Array`, a boxed float), and a call takes the
+            // whole pool with it.
+            for (param, dst) in float_args {
+                let i = param.0 as usize - 1;
+                let src = match self.mode(args + i) {
+                    LinkMode::F(x) | LinkMode::Sf(x, _) => x,
+                    // A temp, so nothing between the plan and here could
+                    // have widened it — see `plan_float_args`.
+                    mode => unreachable!("float-passed argument is not fpr-resident: {mode:?}"),
+                };
+                self.use_as_float_at(args + i);
+                ir.float_arg_move(src, *dst);
             }
 
             // fill keyword arguments
@@ -4153,6 +4627,97 @@ mod tests {
               def ==(o); :redefined_eq; end
             end
             res << run(c, 500)
+            res
+            "#,
+        );
+    }
+
+    /// A constant operand. `def size = @size / PAGE_SIZE` is the shape that
+    /// motivates it: without the constant the recogniser turned away every
+    /// leaf body that names one, which is most of the ones worth expanding.
+    ///
+    /// The value is the callee's inline cache, so it is folded into the
+    /// caller exactly as a `LoadConst` in the caller's own frame would be —
+    /// same fixnum-only test, same version guard, same salvage record.
+    #[test]
+    fn frameless_leaf_bodies_const() {
+        run_test(
+            r#"
+            module M
+              N = 7
+            end
+            class C
+              K = 10
+              S = "abc"
+              F = 2.5
+              def initialize; @n = 100; end
+              def div_k; @n / K; end
+              def sum(x); @n + K + x; end
+              def just_k; K; end
+              def gt_k; @n > K; end
+              def store_k; @m = @n * K; end
+              # Declined, each for its own reason: a non-fixnum constant
+              # cannot be baked into the caller (no GC root, and the
+              # arithmetic is fixnum-only), and a constant reached through a
+              # runtime base needs a guard on the callee's own slot.
+              def flt; @n + F; end
+              def str_size; @n / S.size; end
+              def based(m); @n / m::N; end
+              # A prefix qualifier is not a runtime base: it resolves at
+              # compile time and its names go into the salvage record, so
+              # this one is folded like any other.
+              def prefixed; @n / M::N; end
+              attr_reader :m
+            end
+            c = C.new
+            300.times { c.div_k; c.sum(1); c.just_k; c.gt_k; c.store_k;
+                        c.flt; c.str_size; c.based(M); c.prefixed }
+            [c.div_k, c.sum(5), c.just_k, c.gt_k, c.store_k, c.m,
+             c.flt, c.str_size, c.based(M), c.prefixed]
+            "#,
+        );
+    }
+
+    /// The folded value is only right at the const version it was resolved
+    /// at. The body cannot redefine a constant itself — it contains no call
+    /// — but anything else in the program can, between the caller's
+    /// compilation and a later execution of it, and the caller then holds a
+    /// stale immediate in its instruction stream. So the expansion emits
+    /// the same `GuardConstVersion` a `LoadConst` in the caller's frame
+    /// would, and records the fold for salvage.
+    ///
+    /// `loop_div` is compiled on its first call, with `K` folded in as 10;
+    /// every later call must see the current `K`. Dropping the guard makes
+    /// the second and third rows below keep answering 10.
+    #[test]
+    fn frameless_leaf_bodies_const_redefine() {
+        run_test_once(
+            r#"
+            class C
+              K = 10
+              def initialize; @n = 100; end
+              def div_k; @n / K; end
+            end
+            def loop_div(c, n)
+              r = 0
+              i = 0
+              while i < n
+                r = c.div_k
+                i += 1
+              end
+              r
+            end
+            c = C.new
+            res = [loop_div(c, 500)]
+            C.send(:remove_const, :K); C.const_set(:K, 4)
+            res << loop_div(c, 500)
+            # A constant that stops being a fixnum has to leave the fold
+            # behind entirely, not just re-fold: the recompiled body
+            # declines and the ordinary call runs.
+            C.send(:remove_const, :K); C.const_set(:K, 2.5)
+            res << loop_div(c, 500)
+            C.send(:remove_const, :K); C.const_set(:K, 20)
+            res << loop_div(c, 500)
             res
             "#,
         );

@@ -7,13 +7,20 @@ impl AbstractState {
     pub(in crate::codegen::jitgen) fn join(&mut self, other: &AbstractState) {
         let innermost = self.frames.len() - 1;
         for (level, (lhs, rhs)) in self.frames.iter_mut().zip(other.frames.iter()).enumerate() {
+            // Identity fast path: a frame neither path has touched since
+            // they forked is the *same* `Rc` on both sides — the meet is
+            // itself, no slot walk needed. In a deep specialization tower
+            // this is every suspended outer frame of every merge.
+            if FrameRef::ptr_eq(lhs, rhs) {
+                continue;
+            }
             // Only the innermost frame owns fp registers today: a call that
             // hands out a block spills every live one, so an outer frame
             // holds nothing unboxed and the merge must not hand it one
             // either — the two frames' fpr allocators are separate, and an
             // outer bridge has no way to load a slot into an fpr. Lifting
             // this is what carrying `F`/`Sf` across the boundary will need.
-            lhs.join_with(rhs, level == innermost);
+            FrameRef::make_mut(lhs).join_with(rhs, level == innermost);
         }
     }
 }

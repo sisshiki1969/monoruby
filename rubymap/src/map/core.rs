@@ -100,10 +100,19 @@ fn get_hash<K, V>(entries: &[Bucket<K, V>]) -> impl Fn(&usize) -> u64 + '_ {
 
 #[inline]
 fn equivalent<'a, K, V, E, G, R, Q: ?Sized + Equivalent<K, E, G, R>>(
+    hash: HashValue,
     key: &'a Q,
     entries: &'a [Bucket<K, V>],
 ) -> impl Fn(&usize, &mut E, &mut G) -> Result<bool, R> + 'a {
-    move |&i, e, g| Q::equivalent(key, &entries[i].key, e, g)
+    // Stored-hash compare FIRST, `eql` only on a hash match — the Ruby key
+    // contract (two keys are the same iff their hashes are identical AND
+    // they are `eql?`), and what `linear_find` already does. The indices
+    // table only matches 7 bits of the hash (hashbrown's control byte), so
+    // without this an over-broad `eql?` — `def eql?(o) = true` — matched a
+    // colliding *different-hash* entry about once per 128 candidate slots
+    // (seed-dependent: monoruby's `string_subclass_key_dispatches_eql`
+    // failed ~1/70 processes, returning a stranger's value).
+    move |&i, e, g| Ok(entries[i].hash == hash && Q::equivalent(key, &entries[i].key, e, g)?)
 }
 
 #[inline]
@@ -420,7 +429,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         if self.linear {
             return self.linear_find(hash, key, e, g);
         }
-        let eq = equivalent(key, &self.entries);
+        let eq = equivalent(hash, key, &self.entries);
         Ok(self.indices.find(hash.get(), eq, e, g)?.copied())
     }
 
@@ -458,7 +467,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
             // Crossing AR_MAX: build the table once, then fall through.
             self.ensure_indexed();
         }
-        let eq = equivalent(&key, &self.entries);
+        let eq = equivalent(hash, &key, &self.entries);
         let hasher = get_hash(&self.entries);
         match self.indices.entry(hash.get(), eq, hasher, e, g)? {
             hash_table::Entry::Occupied(entry) => {
@@ -672,7 +681,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         K: RubyEql<E, G, R>,
     {
         self.ensure_indexed();
-        let eq = equivalent(&key, &self.entries);
+        let eq = equivalent(hash, &key, &self.entries);
         let hasher = get_hash(&self.entries);
         match self.indices.entry(hash.get(), eq, hasher, e, g)? {
             hash_table::Entry::Occupied(entry) => {
@@ -725,7 +734,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         Q: ?Sized + Equivalent<K, E, G, R>,
     {
         self.ensure_indexed();
-        let eq = equivalent(key, &self.entries);
+        let eq = equivalent(hash, key, &self.entries);
         Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
             Ok(entry) => {
                 let (index, _) = entry.remove();
@@ -813,7 +822,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
                 None => None,
             });
         }
-        let eq = equivalent(key, &self.entries);
+        let eq = equivalent(hash, key, &self.entries);
         Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
             Ok(entry) => {
                 let (index, _) = entry.remove();
@@ -886,7 +895,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
                 None => None,
             });
         }
-        let eq = equivalent(key, &self.entries);
+        let eq = equivalent(hash, key, &self.entries);
         Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
             Ok(entry) => {
                 let (index, _) = entry.remove();

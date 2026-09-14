@@ -22,11 +22,14 @@ pub use hash::*;
 pub(crate) use io::NonblockGuard;
 pub use io::{ExtEnc, IoInner, IoKind, NonblockRead, NonblockWrite, fd_is_owned};
 pub use argf::*;
+pub use weakmap::*;
+pub(crate) use weakmap::clear_dead as weakmap_clear_dead;
+pub(crate) use weakmap::register as weakmap_register;
 pub use io_buffer::*;
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
 pub use method::*;
-pub use module::{Module, ModuleInner, ModuleType};
+pub use module::{MODULE_OFFSET_CLASS_ID, MODULE_OFFSET_SUPERCLASS, Module, ModuleInner, ModuleType};
 pub use proc::*;
 pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, RangeInner};
 pub use rational::{RationalFloorResult, RationalInner};
@@ -54,6 +57,7 @@ mod fiber;
 mod hash;
 pub(crate) mod io;
 mod argf;
+mod weakmap;
 mod io_buffer;
 mod ivar_table;
 mod match_data;
@@ -140,7 +144,9 @@ impl std::fmt::Debug for ObjTy {
                 26 => "IO_BUFFER",
                 27 => "THREAD",
                 28 => "ARGF",
+                31 => "WEAKMAP",
                 29 => "FRAME",
+                30 => "NATIVE",
                 _ => return write!(f, "INVALID({ty})"),
             }
         )
@@ -188,6 +194,14 @@ impl ObjTy {
     /// (dynvar stores), so like Proc/Binding/Fiber they stay young and
     /// are re-walked on every minor GC.
     pub const FRAME: Self = Self(std::num::NonZeroU8::new(29).unwrap());
+    /// `ObjectSpace::WeakMap` — see `rvalue/weakmap.rs`.
+    pub const WEAKMAP: Self = Self(std::num::NonZeroU8::new(31).unwrap());
+    /// An object whose payload is native data behind the `NativeData`
+    /// trait (a libxml2 document, node, ...): the Ruby class is whatever
+    /// the constructor gave it, the payload marks the Values it holds and
+    /// is dropped with the object. Not promotable: the payload's Values
+    /// are stored without a write barrier.
+    pub const NATIVE: Self = Self(std::num::NonZeroU8::new(30).unwrap());
 }
 
 #[repr(C)]
@@ -233,8 +247,41 @@ pub union ObjKind {
     /// Boxed: keeps the walk state (queue, stream, encodings, in-place
     /// bookkeeping) off the fixed-size RValue cell.
     argf: ManuallyDrop<Box<ArgfInner>>,
+    /// Boxed: the pair list is owned, and the cell stays pointer-sized.
+    weakmap: ManuallyDrop<Box<WeakMapInner>>,
     /// Raw parts of a promoted heap frame's buffer (see `FrameInner`).
     frame: FrameInner,
+    /// Native payload (`ObjTy::NATIVE`), a fat pointer to the boxed data.
+    native: ManuallyDrop<Box<dyn NativeData>>,
+}
+
+/// The payload of an `ObjTy::NATIVE` object: data owned by native code
+/// (a libxml2 tree, ...) that may hold Ruby values. `mark` reports those
+/// to the GC; dropping the box releases the native resources.
+pub trait NativeData: std::any::Any {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>);
+    /// A shallow copy for `Object#dup` / `#clone`; kinds that cannot be
+    /// copied answer `None`, and the copy is then a payload-less object
+    /// (the Ruby side of such classes defines its own `dup`).
+    fn dup(&self) -> Option<Box<dyn NativeData>> {
+        None
+    }
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+/// The stand-in payload of a copied native object whose data cannot be
+/// duplicated (see `NativeData::dup`).
+struct EmptyNative;
+
+impl NativeData for EmptyNative {
+    fn mark(&self, _alloc: &mut alloc::Allocator<RValue>) {}
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 /// The payload of an `ObjTy::FRAME` wrapper: the raw parts of the
@@ -533,6 +580,18 @@ impl ObjKind {
         }
     }
 
+    fn native(inner: Box<dyn NativeData>) -> Self {
+        Self {
+            native: ManuallyDrop::new(inner),
+        }
+    }
+
+    fn weakmap(inner: WeakMapInner) -> Self {
+        Self {
+            weakmap: ManuallyDrop::new(Box::new(inner)),
+        }
+    }
+
     fn argf(inner: ArgfInner) -> Self {
         Self {
             argf: ManuallyDrop::new(Box::new(inner)),
@@ -602,6 +661,7 @@ impl std::fmt::Debug for RValue {
                             ObjTy::TIME => format!("{:?}", self.kind.time),
                             ObjTy::IO_BUFFER => format!("{:?}", self.kind.io_buffer),
                             ObjTy::ARGF => format!("{:?}", self.kind.argf),
+                            ObjTy::WEAKMAP => format!("{:?}", self.kind.weakmap),
                             ObjTy::ARRAY => format!("{:?}", self.kind.array),
                             ObjTy::RANGE => format!("{:?}", self.kind.range),
                             ObjTy::EXCEPTION => format!("{:?}", self.kind.exception),
@@ -622,6 +682,7 @@ impl std::fmt::Debug for RValue {
                             ObjTy::ARITHMETIC_SEQUENCE => {
                                 format!("{:?}", self.kind.arithmetic_sequence)
                             }
+                            ObjTy::NATIVE => "<native>".to_string(),
                             _ => unreachable!(),
                         }
                     })
@@ -646,7 +707,7 @@ impl RValue {
     ///
     /// Both objects end up owning a child set they did not have before,
     /// so both need the write barrier: either one may be an OLD object
-    /// that was armed while childless (`apply_aging` takes the
+    /// that was armed while childless (`remember_promoted` takes the
     /// `arm_barrier` branch when `young_child_exists()` is false), and a
     /// minor GC seeds OLD objects as already-marked and never scans them
     /// unless they are in the remembered set. `Array#initialize`'s block
@@ -899,20 +960,12 @@ fn dead_rvalue_abort(dead: &RValue, alloc: &alloc::Allocator<RValue>) -> ! {
 
 impl alloc::GC<RValue> for RValue {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        if !self.header.is_live() {
-            dead_rvalue_abort(self, alloc);
-        }
-        if alloc.gc_check_and_mark(self) {
-            return;
-        }
-        // Let the allocator decide whether to walk into `mark_children`
-        // from here or to defer it to the mark queue: past
-        // `MARK_RECURSION_LIMIT` levels the traversal goes breadth-first
-        // over that queue, so the depth of the object graph costs heap
-        // entries instead of native stack frames. See
-        // `Allocator::scan_children`.
-        alloc.scan_children(self);
+        // Sets the mark bit and queues the object; the header is read
+        // (`check_live`, ageing) and the children are scanned when
+        // `Allocator::drain_mark_queue` gets to it. See `doc/gc.md`.
+        alloc.mark(self);
     }
+
 }
 
 impl alloc::GCBox for RValue {
@@ -950,6 +1003,8 @@ impl alloc::GCBox for RValue {
                 ObjTy::IO => ManuallyDrop::drop(&mut self.kind.io),
                 ObjTy::IO_BUFFER => ManuallyDrop::drop(&mut self.kind.io_buffer),
                 ObjTy::ARGF => ManuallyDrop::drop(&mut self.kind.argf),
+                ObjTy::WEAKMAP => ManuallyDrop::drop(&mut self.kind.weakmap),
+                ObjTy::NATIVE => ManuallyDrop::drop(&mut self.kind.native),
                 // SAFETY: `base`/`len` are exactly the raw parts of the
                 // original `Box<[u64]>` (recorded at promotion); this
                 // wrapper is unreachable, and the frame's only owner is
@@ -997,6 +1052,13 @@ impl alloc::GCBox for RValue {
             header: Header { next: None },
             kind: ObjKind::invalid(),
             var_table: None,
+        }
+    }
+
+    #[coverage(off)] // the abort arm is uncoverable in-test
+    fn check_live(&self, alloc: &mut alloc::Allocator<RValue>) {
+        if !self.header.is_live() {
+            dead_rvalue_abort(self, alloc);
         }
     }
 
@@ -1051,6 +1113,9 @@ impl alloc::GCBox for RValue {
                 ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().mark(alloc),
                 ObjTy::IO_BUFFER => self.as_io_buffer().mark(alloc),
                 ObjTy::ARGF => self.as_argf().mark(alloc),
+                // Traces nothing: both halves of every pair are weak.
+                ObjTy::WEAKMAP => self.as_weakmap().mark(alloc),
+                ObjTy::NATIVE => self.kind.native.mark(alloc),
                 // Walk the promoted frame's contents (registers, block,
                 // svar, outer chain). Reaching the wrapper twice in one
                 // cycle is cut off by the page bitmap before this runs.
@@ -1415,6 +1480,20 @@ impl RValue {
         Some(ary.iter().copied().collect())
     }
 
+    ///
+    /// A String literal template the JIT may instantiate without the
+    /// generic deep copy: see [`RStringInner::inline_copyable`]. A
+    /// frozen template is excluded because copying it is
+    /// `share_string_buffer`'s CoW job, not a byte copy.
+    ///
+    pub(crate) fn inline_copyable_string(&self) -> Option<(Vec<u8>, u8, u8)> {
+        if self.ty() != ObjTy::STRING || self.var_table.is_some() || self.is_frozen() {
+            return None;
+        }
+        // SAFETY: the type check above proves the `string` variant is active.
+        unsafe { self.as_rstring() }.inline_copyable()
+    }
+
     pub(crate) fn get_ivar_by_ivarid(&self, id: IvarId) -> Option<Value> {
         let mut i = id.into_usize();
         if self.ty() == ObjTy::OBJECT {
@@ -1527,6 +1606,9 @@ impl RValue {
                     ObjTy::TIME => ObjKind::time(self.as_time().clone()),
                     ObjTy::IO_BUFFER => ObjKind::io_buffer(self.as_io_buffer().clone()),
                     ObjTy::ARGF => ObjKind::argf(self.as_argf().clone()),
+                    ObjTy::NATIVE => ObjKind::native(
+                        self.as_native().dup().unwrap_or_else(|| Box::new(EmptyNative)),
+                    ),
                     ObjTy::ARRAY => {
                         // Sized up front: a literal past the inline
                         // capacity (`[0, 1, …, 9]`) is copied on every
@@ -1624,6 +1706,9 @@ impl RValue {
                         ObjTy::ARGF => ObjKind {
                             argf: self.kind.argf.clone(),
                         },
+                        ObjTy::NATIVE => ObjKind::native(
+                            self.as_native().dup().unwrap_or_else(|| Box::new(EmptyNative)),
+                        ),
                         ObjTy::ARRAY => ObjKind {
                             array: self.kind.array.clone(),
                         },
@@ -1665,6 +1750,10 @@ impl RValue {
                         ObjTy::BINDING => ObjKind {
                             binding: ManuallyDrop::new((*self.kind.binding).clone()),
                         },
+                        // A copy of a weak map starts empty, as
+                        // CRuby's does: the pairs belong to the map
+                        // the collector registered, not to this one.
+                        ObjTy::WEAKMAP => ObjKind::weakmap(WeakMapInner::new()),
                         ty => unreachable!("{ty:?}"),
                     }
                 } else {
@@ -1716,6 +1805,9 @@ impl RValue {
                         ObjTy::ARGF => ObjKind {
                             argf: self.kind.argf.clone(),
                         },
+                        ObjTy::NATIVE => ObjKind::native(
+                            self.as_native().dup().unwrap_or_else(|| Box::new(EmptyNative)),
+                        ),
                         ObjTy::ARRAY => ObjKind {
                             array: self.kind.array.clone(),
                         },
@@ -1757,6 +1849,10 @@ impl RValue {
                         ObjTy::BINDING => ObjKind {
                             binding: ManuallyDrop::new((*self.kind.binding).clone()),
                         },
+                        // A copy of a weak map starts empty, as
+                        // CRuby's does: the pairs belong to the map
+                        // the collector registered, not to this one.
+                        ObjTy::WEAKMAP => ObjKind::weakmap(WeakMapInner::new()),
                         ty => unreachable!("{ty:?}"),
                     }
                 } else {
@@ -2314,6 +2410,22 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_native(class_id: ClassId, inner: Box<dyn NativeData>) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::NATIVE),
+            kind: ObjKind::native(inner),
+            var_table: None,
+        }
+    }
+
+    pub(super) fn new_weakmap(class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::WEAKMAP),
+            kind: ObjKind::weakmap(WeakMapInner::new()),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_argf(class_id: ClassId, inner: ArgfInner) -> Self {
         RValue {
             header: Header::new(class_id, ObjTy::ARGF),
@@ -2641,6 +2753,18 @@ impl RValue {
         unsafe { &mut self.kind.io_buffer }
     }
 
+    pub(crate) fn as_weakmap(&self) -> &WeakMapInner {
+        assert_eq!(self.ty(), ObjTy::WEAKMAP);
+        // SAFETY: the tag says this union field is the live one.
+        unsafe { &self.kind.weakmap }
+    }
+
+    pub(crate) fn as_weakmap_mut(&mut self) -> &mut WeakMapInner {
+        assert_eq!(self.ty(), ObjTy::WEAKMAP);
+        // SAFETY: as `as_weakmap`.
+        unsafe { &mut self.kind.weakmap }
+    }
+
     pub(super) fn as_argf(&self) -> &ArgfInner {
         assert_eq!(self.ty(), ObjTy::ARGF);
         // SAFETY: type checked above.
@@ -2651,6 +2775,30 @@ impl RValue {
         assert_eq!(self.ty(), ObjTy::ARGF);
         // SAFETY: type checked above.
         unsafe { &mut self.kind.argf }
+    }
+
+    pub(crate) fn as_native(&self) -> &dyn NativeData {
+        assert_eq!(self.ty(), ObjTy::NATIVE);
+        // SAFETY: type checked above.
+        unsafe { &**self.kind.native }
+    }
+
+    pub(crate) fn as_native_mut(&mut self) -> &mut dyn NativeData {
+        assert_eq!(self.ty(), ObjTy::NATIVE);
+        // SAFETY: type checked above.
+        unsafe { &mut **self.kind.native }
+    }
+
+    /// Replace the native payload, dropping the old one (a copy made by
+    /// `Object#dup` carries an `EmptyNative` until its constructor fills
+    /// it in).
+    pub(crate) fn replace_native(&mut self, inner: Box<dyn NativeData>) {
+        assert_eq!(self.ty(), ObjTy::NATIVE);
+        // SAFETY: type checked above; the old box is dropped exactly once.
+        unsafe {
+            ManuallyDrop::drop(&mut self.kind.native);
+            self.kind.native = ManuallyDrop::new(inner);
+        }
     }
 
     pub(super) unsafe fn as_arithmetic_sequence(&self) -> &ArithmeticSequenceInner {

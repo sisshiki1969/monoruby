@@ -1438,6 +1438,75 @@ impl Codegen {
                 self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
             }
             // Deopt if the receiver (rdi) is frozen.
+            // Inline `Module#===`: see `AsmInst::KindOfConst` and the x86
+            // `kind_of_const`. x9 = class id / scratch, x10 = target class
+            // id, x11 = class object pointer during the walk.
+            LInst::KindOfConst { reg, class } => {
+                let r = reg.a64().0;
+                let rax = GP::Rax.a64().0;
+                assert!(r != rax && r != 9 && r != 10 && r != 11);
+                let heap = self.jit.label();
+                let have = self.jit.label();
+                let walk = self.jit.label();
+                let hit = self.jit.label();
+                let miss = self.jit.label();
+                let exit = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (0b111);
+                    and x9, x(r), x9;
+                    cbz x9, heap;                          // heap object
+                    mov x9, (INTEGER_CLASS.u32() as u64);
+                    tbnz x(r), #(0), have;                 // fixnum
+                    mov x9, (FLOAT_CLASS.u32() as u64);
+                    tbnz x(r), #(1), have;                 // flonum
+                    mov x9, (0xff);
+                    and x9, x(r), x9;
+                    cmp x9, #(TAG_SYMBOL as u32);
+                    mov x9, (SYMBOL_CLASS.u32() as u64);
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &have);
+                monoasm_arm64!(&mut self.jit,
+                    cmp x(r), #(NIL_VALUE as u32);
+                    mov x9, (NIL_CLASS.u32() as u64);
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &have);
+                monoasm_arm64!(&mut self.jit,
+                    cmp x(r), #(TRUE_VALUE as u32);
+                    mov x9, (TRUE_CLASS.u32() as u64);
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &have);
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (FALSE_CLASS.u32() as u64);
+                    b have;
+                heap:
+                    ldr w9, [x(r), #(RVALUE_OFFSET_CLASS as u32)];  // class id
+                have:
+                    mov x10, (class.u32() as u64);
+                    cmp x9, x10;
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &hit);
+                monoasm_arm64!(&mut self.jit,
+                    mov x11, (GLOBALS_CLASS_OBJECTS as u64);
+                    add x11, x20, x11;                 // x20 = &Globals
+                    ldr x11, [x11];                    // objects table data ptr
+                    ldr x11, [x11, x9, lsl #3];        // class object (or 0)
+                walk:
+                    cbz x11, miss;
+                    ldr x11, [x11, #(MODULE_OFFSET_SUPERCLASS as u32)];
+                    cbz x11, miss;
+                    ldr w9, [x11, #(MODULE_OFFSET_CLASS_ID as u32)];
+                    cmp x9, x10;
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &walk);
+                monoasm_arm64!(&mut self.jit,
+                hit:
+                    mov x(rax), (TRUE_VALUE);
+                    b exit;
+                miss:
+                    mov x(rax), (FALSE_VALUE);
+                exit:
+                );
+            }
             LInst::GuardFrozen { deopt } => {
                 let rdi = GP::Rdi.a64().0;
                 monoasm_arm64!(&mut self.jit,
@@ -1601,6 +1670,29 @@ impl Codegen {
             }
             LInst::FprToStack { src, slot, base } => {
                 self.emit_fpr_to_stack(src, slot, base);
+            }
+            LInst::FloatRetStore { src, base } => {
+                // d1 is reserved scratch and never aliases a pool register,
+                // so it carries the value across the `ret` to the call site.
+                match src {
+                    OuterFprSrc::Fpr(src) => self.a64_fpr_load(src, 1, base),
+                    OuterFprSrc::Imm(bits) => monoasm_arm64!(&mut self.jit,
+                        mov x9, (bits);
+                        fmov d1, x9;
+                    ),
+                }
+                // The call site tests x0 for the error signal; the value
+                // itself travels in d1, so x0 only has to be non-zero.
+                monoasm_arm64!(&mut self.jit, mov x0, (NIL_VALUE as u64););
+            }
+            LInst::FloatRetLoad { dst, base } => {
+                self.a64_fpr_save(dst, 1, base);
+            }
+            LInst::FloatArgMove { src, dst, base } => {
+                let FPRegLoc::Xmm(d) = PhysMap::new(base).resolve(dst) else {
+                    unreachable!("float-argument destination is not pool-resident: {dst:?}")
+                };
+                self.a64_fpr_load(src, d as u32, base);
             }
             LInst::FprSwap { lhs, rhs, base } => {
                 // Force both values into scratch, then store back crossed.
@@ -1808,6 +1900,27 @@ impl Codegen {
                     let deopt_body = self.jit.label();
                     let error_body = self.jit.label();
                     self.jit.bind_label(entry);
+                    // `BecamePolymorphic` is checked, not assumed: recompile
+                    // only once the VM has actually stamped the site's POLY
+                    // byte (`opcode_sub`, set by the interpreter on an
+                    // operand/receiver *class* change). A miss the profile
+                    // cannot describe as a class change never moves the
+                    // byte, so the gate keeps such a site on the plain deopt
+                    // instead of recompiling against an unchanged profile
+                    // every N misses. (Binop/cmp ICs record a heap Integer
+                    // under the `BIGNUM_CLASS` tag, so a Bignum miss *is* a
+                    // class change there and heals into the dispatch; the
+                    // gate still protects the send-side exits, whose ICs
+                    // class every Integer alike.) Mirrors the x86 gate in
+                    // `side_exit_with_label`.
+                    if reason == RecompileReason::BecamePolymorphic {
+                        let poly_byte = pc.as_ptr() as u64 + 7;
+                        monoasm_arm64!(&mut self.jit,
+                            mov x9, (poly_byte);
+                            ldrb w9, [x9];
+                            cbz w9, deopt_body;
+                        );
+                    }
                     self.emit_recompile_deopt(target, &deopt_body, Some(&error_body), reason);
                     self.a64_gen_deopt(pc, &wb, deopt_body, loop_jit_spill_bytes, base, chain);
                     self.a64_gen_handle_error(pc, &wb, error_body, loop_jit_spill_bytes, base, chain);
@@ -2593,6 +2706,9 @@ impl Codegen {
         v: Value,
         using_fpr: UsingFpr,
     ) -> bool {
+        if self.emit_inline_string_lit(v, using_fpr) {
+            return true;
+        }
         if let Some(elems) = v
             .inline_copyable_array()
             .filter(|_| !self.alloc_free_head_addr.is_null())
@@ -2621,6 +2737,54 @@ impl Codegen {
             return true;
         }
         self.deep_copy_lit_call(v, using_fpr);
+        true
+    }
+
+    ///
+    /// aarch64 twin of the x86 `emit_inline_string_lit`: a String
+    /// literal whose bytes fit the copy's own inline buffer is built in
+    /// the fresh cell instead of going through `value_deep_copy`.
+    ///
+    fn emit_inline_string_lit(&mut self, v: Value, using_fpr: UsingFpr) -> bool {
+        if self.alloc_free_head_addr.is_null() || crate::value::debug_frozen_string_log() {
+            return false;
+        }
+        let Some((bytes, ty, cr)) = v.inline_copyable_string() else {
+            return false;
+        };
+        let rax = GP::Rax.a64().0; // x0 (result)
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        self.emit_alloc_cell(CellHeader::NewbornOf(v.id()), &slow);
+        monoasm_arm64!(&mut self.jit,
+            mov x12, #0;
+            str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
+            mov x12, (bytes.len() as u64);
+            // The inline `SmallVec`'s capacity slot holds its length.
+            str x12, [x(rax), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+        );
+        // Whole words, zero-padded past the end: the tail bytes sit
+        // beyond the recorded length inside the same inline buffer.
+        for (k, chunk) in bytes.chunks(8).enumerate() {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            let off = RVALUE_OFFSET_INLINE as u32 + (k as u32) * 8;
+            let w = u64::from_le_bytes(word);
+            monoasm_arm64!(&mut self.jit,
+                mov x12, (w);
+                str x12, [x(rax), #(off)];
+            );
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x12, (ty as u64);
+            strb w12, [x(rax), #(crate::rvalue::STRING_TY_OFFSET as u32)];
+            mov x12, (cr as u64);
+            strb w12, [x(rax), #(crate::rvalue::STRING_CR_OFFSET as u32)];
+            b cont;
+        );
+        self.jit.bind_label(slow);
+        self.deep_copy_lit_call(v, using_fpr);
+        self.jit.bind_label(cont);
         true
     }
 

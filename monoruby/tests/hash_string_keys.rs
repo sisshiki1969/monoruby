@@ -272,3 +272,133 @@ fn string_subclass_key_dispatches_eql() {
         "##,
     );
 }
+
+/// Ruby key identity is hash equality AND `eql?`, in that order — `eql?`
+/// may only decide between keys whose hashes already match. A subclass
+/// with an over-broad `eql?` (always true) and its own `#hash` must not
+/// match a plain-String entry in either representation: the boxed map's
+/// indexed probe used to consult `eql?` on a mere control-byte (7-bit)
+/// hash collision, matching a stranger's entry on ~1/70 hash seeds
+/// (`string_subclass_key_dispatches_eql`'s flake), and the inline scan
+/// consulted `eql?` without hashing at all, matching deterministically.
+#[test]
+fn eql_needs_a_full_hash_match_first() {
+    run_test_once(
+        r##"
+        class Sticky < String
+          def hash; 1; end
+          def eql?(o); true; end
+        end
+        res = []
+        # Inline representation (single pair, then a few).
+        h1 = { "pad1" => 1 }
+        res << h1[Sticky.new("q")] << h1.key?(Sticky.new("q"))
+        h3 = { "pad1" => 1, "pad2" => 2, "pad3" => 3 }
+        res << h3[Sticky.new("q")]
+        # Boxed representation.
+        hb = {}
+        (1...18).each { |i| hb["pad#{i}"] = i }
+        res << hb[Sticky.new("q")] << hb.key?(Sticky.new("q"))
+        # The subclass still finds itself: same #hash, eql? true.
+        hb[Sticky.new("s")] = :self
+        res << hb[Sticky.new("t")] << hb.size
+        # And deleting through the over-broad eql? only takes the
+        # hash-matching entry with it.
+        res << hb.delete(Sticky.new("u")) << hb.size
+        res << hb.delete("pad9") << hb.size
+        res
+        "##,
+    );
+}
+
+// A Hash literal that is *not* constant (some value is an expression)
+// is built pair by pair, and its String literal keys are emitted as
+// the interned frozen String — the same object the constant-literal
+// template holds — instead of a mutable literal that the insert then
+// dups and freezes again (`push_hash_key` in bytecodegen/expression.rs).
+// CRuby compiles such keys as frozen fstrings, so identity, frozenness
+// and lookup behaviour are compared against it for every shape: the
+// short path, the chunked path (> 256 pairs) and the `**splat` path.
+
+#[test]
+fn dynamic_literal_string_keys_are_frozen_and_shared() {
+    run_test(
+        r##"
+        x = 1
+        res = []
+        a = { "alpha" => x, "beta" => x + 1 }
+        b = { "alpha" => x * 3 }
+        res << a.keys.map(&:frozen?) << a.keys[0].equal?(b.keys[0])
+        # The same literal evaluated twice hands out the same key object.
+        ks = 2.times.map { |i| { "k" => i }.keys[0] }
+        res << ks[0].equal?(ks[1]) << ks[0].frozen?
+        # Lookup with a fresh (mutable, unfrozen) probe still works, and a
+        # frozen literal key from a constant literal is the same object.
+        res << a["alpha" + ""] << a.key?("beta".dup) << a.keys[1].equal?({ "beta" => 2 }.keys[1])
+        # Mutating a key through `keys` raises, as it does in CRuby.
+        begin
+          a.keys[0] << "!"
+        rescue => e
+          res << e.class
+        end
+        res << a
+        res
+        "##,
+    );
+}
+
+#[test]
+fn dynamic_literal_string_keys_chunked_and_splat() {
+    run_test_once(
+        r##"
+        x = 7
+        # Chunked construction (> 256 pairs), one dynamic value forces the
+        # pair-by-pair path.
+        src = (0...300).map { |i| "\"k#{i}\" => #{i == 150 ? 'x' : i}" }.join(", ")
+        h = eval("{ #{src} }")
+        res = [h.size, h["k150"], h["k299"], h.keys.all?(&:frozen?), h.keys[0].equal?({ "k0" => x }.keys[0])]
+        # `**splat` interleaved with String keys.
+        extra = { "mid" => :m, "a" => :over }
+        s = { "a" => x, **extra, "z" => x + 1 }
+        res << s << s.keys.map(&:frozen?) << s.keys[0].equal?({ "a" => 0 }.keys[0])
+        res
+        "##,
+    );
+}
+
+#[test]
+fn dynamic_literal_string_keys_encodings_and_escapes() {
+    run_test_once(
+        r##"
+        x = 1
+        h = { "café" => x, "\xff\xfe".b => x + 1, "tab\tnl\n" => x + 2, 'single' => x + 3 }
+        res = [h.keys.map { |k| k.encoding.name }, h.keys.map(&:frozen?), h["café"], h["\xff\xfe".b], h["tab\tnl\n"], h["single"]]
+        res << h.keys[0].equal?({ "café" => 0 }.keys[0])
+        # A non-literal BINARY key is dup'd and frozen on insert like any
+        # other String key (literal form and `[]=` alike).
+        k = "\xff\xfe".b
+        g = { k => 1 }
+        g["\xfe".b + "\xff".b] = 2
+        res << g.keys.map(&:frozen?) << k.frozen? << g.keys[0].equal?(k) << g[k]
+        res
+        "##,
+    );
+}
+
+#[test]
+fn dynamic_literal_string_keys_ignore_redefined_string_hash() {
+    // `String#hash` / `eql?` are never consulted for a String literal
+    // key, before and after this change alike (a frozen literal is
+    // still a plain String).
+    run_test_once(
+        r##"
+        class String
+          def hash; 42; end
+          def eql?(o); false; end
+        end
+        x = 1
+        h = { "a" => x, "b" => x + 1, "c" => x + 2, "d" => x + 3, "e" => x + 4 }
+        [h["a"], h["e"], h["a".dup], h.key?("c"), h.size, h.keys.map(&:frozen?)]
+        "##,
+    );
+}

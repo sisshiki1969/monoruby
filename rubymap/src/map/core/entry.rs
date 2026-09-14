@@ -19,7 +19,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         // flavour about both modes.
         self.ensure_indexed();
         let entries = &mut self.entries;
-        let eq = equivalent(&key, entries);
+        let eq = equivalent(hash, &key, entries);
         Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
             Ok(index) => Entry::Occupied(OccupiedEntry { entries, index }),
             Err(absent) => Entry::Vacant(VacantEntry {

@@ -1,8 +1,10 @@
 use super::*;
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 use crate::value::rvalue::{
     BUF_EXTERNAL, BUF_INTERNAL, BUF_LOCKED, BUF_MAPPED, BUF_PRIVATE, BUF_READONLY, BUF_SHARED,
     BufStorage, IoBufferInner,
 };
+use jitgen::{AbstractState, JitContext};
 
 //
 // IO::Buffer — a fixed-size byte buffer (CRuby 3.1+, io_buffer.c).
@@ -32,13 +34,29 @@ pub(super) fn init(globals: &mut Globals) {
     let _ = klass;
     globals.store[IO_BUFFER_CLASS].set_alloc_func(io_buffer_alloc_func);
 
-    globals.set_constant_by_str(IO_BUFFER_CLASS, "EXTERNAL", Value::integer(BUF_EXTERNAL as i64));
-    globals.set_constant_by_str(IO_BUFFER_CLASS, "INTERNAL", Value::integer(BUF_INTERNAL as i64));
+    globals.set_constant_by_str(
+        IO_BUFFER_CLASS,
+        "EXTERNAL",
+        Value::integer(BUF_EXTERNAL as i64),
+    );
+    globals.set_constant_by_str(
+        IO_BUFFER_CLASS,
+        "INTERNAL",
+        Value::integer(BUF_INTERNAL as i64),
+    );
     globals.set_constant_by_str(IO_BUFFER_CLASS, "MAPPED", Value::integer(BUF_MAPPED as i64));
     globals.set_constant_by_str(IO_BUFFER_CLASS, "SHARED", Value::integer(BUF_SHARED as i64));
     globals.set_constant_by_str(IO_BUFFER_CLASS, "LOCKED", Value::integer(BUF_LOCKED as i64));
-    globals.set_constant_by_str(IO_BUFFER_CLASS, "PRIVATE", Value::integer(BUF_PRIVATE as i64));
-    globals.set_constant_by_str(IO_BUFFER_CLASS, "READONLY", Value::integer(BUF_READONLY as i64));
+    globals.set_constant_by_str(
+        IO_BUFFER_CLASS,
+        "PRIVATE",
+        Value::integer(BUF_PRIVATE as i64),
+    );
+    globals.set_constant_by_str(
+        IO_BUFFER_CLASS,
+        "READONLY",
+        Value::integer(BUF_READONLY as i64),
+    );
     globals.set_constant_by_str(
         IO_BUFFER_CLASS,
         "PAGE_SIZE",
@@ -56,11 +74,7 @@ pub(super) fn init(globals: &mut Globals) {
         "BIG_ENDIAN",
         Value::bool(cfg!(target_endian = "big")),
     );
-    globals.set_constant_by_str(
-        IO_BUFFER_CLASS,
-        "HOST_ENDIAN",
-        Value::bool(true),
-    );
+    globals.set_constant_by_str(IO_BUFFER_CLASS, "HOST_ENDIAN", Value::bool(true));
 
     globals.define_builtin_class_func_with(IO_BUFFER_CLASS, "for", buffer_for, 1, 1, false);
     globals.define_builtin_class_func(IO_BUFFER_CLASS, "string", buffer_string, 1);
@@ -86,11 +100,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_BUFFER_CLASS, "locked", locked_block, 0);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "get_string", get_string, 0, 3, false);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "set_string", set_string, 1, 4, false);
+    globals.define_builtin_func_with(IO_BUFFER_CLASS, "copy", copy, 1, 4, false);
+    globals.define_private_builtin_func(IO_BUFFER_CLASS, "initialize_copy", initialize_copy, 1);
     globals.define_builtin_func(IO_BUFFER_CLASS, "free", free, 0);
     globals.define_builtin_func(IO_BUFFER_CLASS, "transfer", transfer, 0);
     globals.define_builtin_func(IO_BUFFER_CLASS, "resize", resize, 1);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "slice", slice, 0, 2, false);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "clear", clear, 0, 3, false);
+    globals.define_builtin_func(IO_BUFFER_CLASS, "__address", __address, 0);
     globals.define_builtin_func(IO_BUFFER_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(IO_BUFFER_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(IO_BUFFER_CLASS, "<=>", cmp, 1);
@@ -104,8 +121,20 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_BUFFER_CLASS, "or!", bit_or_inplace, 1);
     globals.define_builtin_func(IO_BUFFER_CLASS, "xor!", bit_xor_inplace, 1);
     globals.define_builtin_func(IO_BUFFER_CLASS, "not!", bit_not_inplace, 0);
-    globals.define_builtin_func(IO_BUFFER_CLASS, "get_value", get_value, 2);
-    globals.define_builtin_func(IO_BUFFER_CLASS, "set_value", set_value, 3);
+    globals.define_builtin_inline_func(
+        IO_BUFFER_CLASS,
+        "get_value",
+        get_value,
+        inline_gen2!(get_value_inline),
+        2,
+    );
+    globals.define_builtin_inline_func(
+        IO_BUFFER_CLASS,
+        "set_value",
+        set_value,
+        inline_gen2!(set_value_inline),
+        3,
+    );
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "each", each, 1, 3, false);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "values", values, 1, 3, false);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "each_byte", each_byte, 0, 2, false);
@@ -114,7 +143,7 @@ pub(super) fn init(globals: &mut Globals) {
 /// A get/set_value type symbol: byte width, kind, endianness.
 /// Lowercase multi-byte names are little-endian, uppercase big-endian
 /// (`:U8`/`:S8` have no endianness).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ValKind {
     Unsigned,
     Signed,
@@ -147,11 +176,27 @@ fn parse_value_type(name: &str) -> Option<(usize, ValKind, bool)> {
 }
 
 fn value_type_arg(v: Value) -> Result<(usize, ValKind, bool)> {
-    let name = match v.try_symbol_or_string() {
-        Some(id) => id.get_name(),
-        None => return Err(MonorubyErr::argumenterr("Invalid type name!")),
-    };
-    parse_value_type(&name).ok_or_else(|| MonorubyErr::argumenterr("Invalid type name!"))
+    // get/set_value sit on every wasm-style memory access, so resolve the
+    // type symbol by interned id — `IdentId::get_name` allocates a String
+    // per call, and that alone showed up at several percent of a DOOM run.
+    // An 18-entry linear scan of u32 ids: SipHashing the IdentId for a
+    // HashMap cost ~2% of the same run.
+    static TABLE: std::sync::OnceLock<[(IdentId, (usize, ValKind, bool)); 18]> =
+        std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        [
+            "u32", "u64", "U8", "S8", "u16", "U16", "s16", "S16", "U32", "s32", "S32", "U64",
+            "s64", "S64", "f32", "F32", "f64", "F64",
+        ]
+        .map(|name| (IdentId::get_id(name), parse_value_type(name).unwrap()))
+    });
+    v.try_symbol_or_string()
+        .and_then(|id| {
+            table
+                .iter()
+                .find_map(|(tid, spec)| (*tid == id).then_some(*spec))
+        })
+        .ok_or_else(|| MonorubyErr::argumenterr("Invalid type name!"))
 }
 
 fn decode_value(bytes: &[u8], kind: ValKind, big: bool) -> Value {
@@ -179,7 +224,116 @@ fn decode_value(bytes: &[u8], kind: ValKind, big: bool) -> Value {
 }
 
 fn mask(width: usize) -> u64 {
-    if width == 8 { u64::MAX } else { (1u64 << (width * 8)) - 1 }
+    if width == 8 {
+        u64::MAX
+    } else {
+        (1u64 << (width * 8)) - 1
+    }
+}
+
+/// Coerce an integer argument for `set_value` the way CRuby's per-type
+/// converters do (io_buffer.c): widths below 8 go through
+/// `NUM2UINT`/`NUM2INT` and then truncate, the 64-bit types through
+/// `NUM2ULL`/`NUM2LL` — so `:u64` accepts the whole `[-2^63, 2^64)`
+/// window (negative values wrap), and each type raises CRuby's own
+/// RangeError message beyond its window. Returns the value's low bits,
+/// already masked to `width`.
+fn coerce_int_for_type(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+    width: usize,
+    kind: ValKind,
+) -> Result<u64> {
+    use num::ToPrimitive;
+    // Reduce to an i128 (every representable argument fits; a bignum
+    // outside i128 is beyond every window below, and the messages there
+    // don't depend on how far out it is, so i128::MAX stands in).
+    let i: i128 = match v.unpack() {
+        RV::Fixnum(i) => i as i128,
+        RV::BigInt(b) => b.to_i128().unwrap_or(i128::MAX),
+        RV::Float(f) => {
+            // C double→integer conversion window of the underlying
+            // converter; a float inside it truncates and then takes the
+            // integer checks below.
+            let (lo, hi, what) = match (width, kind) {
+                (8, ValKind::Unsigned) => (-(2f64.powi(63)), 2f64.powi(64), "unsigned long long"),
+                (8, _) => (-(2f64.powi(63)), 2f64.powi(63), "long long"),
+                (_, ValKind::Unsigned) => (-(2f64.powi(63)), 2f64.powi(64), "integer"),
+                _ => (-(2f64.powi(63)), 2f64.powi(63), "integer"),
+            };
+            if f.is_nan() || f < lo || f >= hi {
+                return Err(MonorubyErr::rangeerr(format!(
+                    "float {} out of range of {what}",
+                    crate::executor::format::float_g_image(f)
+                )));
+            }
+            f.trunc() as i128
+        }
+        _ => match v.coerce_to_int(vm, globals)?.unpack() {
+            RV::Fixnum(i) => i as i128,
+            RV::BigInt(b) => b.to_i128().unwrap_or(i128::MAX),
+            _ => unreachable!(),
+        },
+    };
+    match (width, kind) {
+        (8, ValKind::Unsigned) => {
+            // NUM2ULL: [-2^63, 2^64), negative wraps two's-complement.
+            if (-(1i128 << 63)..(1i128 << 64)).contains(&i) {
+                Ok(i as u64)
+            } else if i < 0 && i > -(1i128 << 64) {
+                Err(MonorubyErr::rangeerr(
+                    "bignum out of range of unsigned long long",
+                ))
+            } else {
+                Err(MonorubyErr::rangeerr(
+                    "bignum too big to convert into 'unsigned long long'",
+                ))
+            }
+        }
+        (8, _) => {
+            // NUM2LL: strict i64.
+            if let Ok(i) = i64::try_from(i) {
+                Ok(i as u64)
+            } else {
+                Err(MonorubyErr::rangeerr(
+                    "bignum too big to convert into 'long long'",
+                ))
+            }
+        }
+        (_, ValKind::Unsigned) => {
+            // NUM2UINT: the combined int/uint window wraps, anything
+            // else that still fits the ulong converter reports the
+            // value, and only a true ulong overflow blames the bignum.
+            if (-(1i128 << 31)..(1i128 << 32)).contains(&i) {
+                Ok((i as u64) & mask(width))
+            } else if (-(1i128 << 63)..(1i128 << 64)).contains(&i) {
+                let side = if i > 0 { "big" } else { "small" };
+                Err(MonorubyErr::rangeerr(format!(
+                    "integer {i} too {side} to convert to 'unsigned int'"
+                )))
+            } else if i < 0 && i > -(1i128 << 64) {
+                Err(MonorubyErr::rangeerr("bignum out of range of unsigned long"))
+            } else {
+                Err(MonorubyErr::rangeerr(
+                    "bignum too big to convert into 'unsigned long'",
+                ))
+            }
+        }
+        _ => {
+            // NUM2INT: strict i32 window before truncating to width.
+            if (-(1i128 << 31)..(1i128 << 31)).contains(&i) {
+                Ok((i as u64) & mask(width))
+            } else if i64::try_from(i).is_ok() {
+                let side = if i > 0 { "big" } else { "small" };
+                Err(MonorubyErr::rangeerr(format!(
+                    "integer {i} too {side} to convert to 'int'"
+                )))
+            } else {
+                Err(MonorubyErr::rangeerr("bignum too big to convert into 'long'"))
+            }
+        }
+    }
 }
 
 fn encode_value(
@@ -194,8 +348,21 @@ fn encode_value(
         ValKind::Float => {
             let f = if let Some(f) = v.try_float() {
                 f
+            } else if matches!(v.unpack(), RV::Fixnum(_) | RV::BigInt(_)) {
+                // Integer#to_f semantics — a bignum beyond i64 still
+                // converts (losing precision), it does not raise.
+                v.coerce_to_f64(vm, globals)?
             } else {
-                v.coerce_to_int_i64(vm, globals)? as f64
+                // CRuby's rb_to_float message, with the lowercased
+                // class word ("string", "nil", ...).
+                let desc = if v.is_nil() {
+                    "nil".to_string()
+                } else {
+                    v.get_real_class_name(globals).to_lowercase()
+                };
+                return Err(MonorubyErr::typeerr(format!(
+                    "no implicit conversion to float from {desc}"
+                )));
             };
             if width == 4 {
                 (f as f32).to_bits() as u64
@@ -203,7 +370,7 @@ fn encode_value(
                 f.to_bits()
             }
         }
-        _ => (v.coerce_to_int_i64(vm, globals)? as u64) & mask(width),
+        _ => coerce_int_for_type(vm, globals, v, width, kind)?,
     };
     let mut out = [0u8; 8];
     if big {
@@ -221,10 +388,9 @@ fn encode_value(
 ///
 #[monoruby_builtin]
 fn get_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
     let (width, kind, big) = value_type_arg(lfp.arg(0))?;
-    let offset = lfp.arg(1).coerce_to_int_i64(vm, globals)?.max(0) as usize;
-    let buf = self_.as_io_buffer_inner();
+    let offset = strict_index_arg(vm, globals, lfp.arg(1), "Offset can't be negative!")?;
+    let buf = lfp.self_val().as_iobuffer();
     if offset + width > buf.size {
         return Err(MonorubyErr::argumenterr(format!(
             "Type extends beyond end of buffer! (offset={} > size={})",
@@ -242,55 +408,225 @@ fn get_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 #[monoruby_builtin]
 fn set_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    check_writable(globals, self_.as_io_buffer_inner())?;
+    let mut buf = lfp.self_val().as_iobuffer();
+    check_writable(globals, &buf)?;
     let (width, kind, big) = value_type_arg(lfp.arg(0))?;
-    let offset = lfp.arg(1).coerce_to_int_i64(vm, globals)?.max(0) as usize;
-    if offset + width > self_.as_io_buffer_inner().size {
+    let offset = strict_index_arg(vm, globals, lfp.arg(1), "Offset can't be negative!")?;
+    if offset + width > buf.size {
         return Err(MonorubyErr::argumenterr(format!(
             "Type extends beyond end of buffer! (offset={} > size={})",
-            offset,
-            self_.as_io_buffer_inner().size
+            offset, buf.size
         )));
     }
     let encoded = encode_value(vm, globals, lfp.arg(2), width, kind, big)?;
-    self_
-        .as_io_buffer_inner_mut()
-        .write_at(offset, &encoded[..width])?;
+    buf.write_at(offset, &encoded[..width])?;
     // CRuby returns the offset just past the written value.
     Ok(Value::integer((offset + width) as i64))
 }
 
+// ---------------------------------------------------------------------------
+// Inline JIT specializations for get_value / set_value
+//
+// wasm-derived code (dewasm's Ruby backend) performs every linear-memory
+// access through `@buffer.get_value(:u32, addr)` / `set_value`, thousands
+// of call sites per program, so the builtin round trip — frame setup, the
+// type-symbol lookup, the strict offset conversion, the decode — was half
+// of a DOOM tick. With the type a symbol literal, the access compiles to a
+// bounds check and one typed load/store against the buffer's cached data
+// pointer (`IoBufferInner`'s fast view). Little-endian integer types and
+// `:f64` are inlined; the big-endian and `:f32` forms, and every buffer
+// without a stable data pointer, take the builtin. The 64-bit integer
+// types deopt to the builtin for values that need a Bignum, and the
+// narrower `set_value` types for values outside CRuby's conversion
+// window, so the builtin still raises the exact error.
+// ---------------------------------------------------------------------------
+
+/// The (width, kind) of a `get_value` / `set_value` type-symbol literal in
+/// `slot` that the JIT inlines, or `None` for anything the builtin keeps.
+fn inline_value_type(state: &AbstractState, slot: SlotId) -> Option<(u8, ValKind)> {
+    let id = state.is_symbol_literal(slot)?;
+    let (width, kind, big) = parse_value_type(&id.get_name())?;
+    if big || (kind == ValKind::Float && width != 8) {
+        return None;
+    }
+    Some((width as u8, kind))
+}
+
+fn get_value_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: Option<ClassId>,
+    _: Option<ClassId>,
+) -> bool {
+    if recv_class != Some(IO_BUFFER_CLASS) {
+        return false;
+    }
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 2 {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    let Some(dst) = dst else {
+        return false;
+    };
+    let Some((width, kind)) = inline_value_type(state, args) else {
+        return false;
+    };
+
+    state.load(ir, recv, GP::Rdi);
+    state.load_fixnum(ir, args + 1usize, GP::Rsi);
+    let deopt = ir.new_deopt(state);
+    match kind {
+        ValKind::Float => {
+            let fret = state.def_F(dst);
+            ir.inline(move |r#gen, _, labels, base| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_read_f64(fret, &d, base);
+            });
+        }
+        _ => {
+            let signed = kind == ValKind::Signed;
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_read_int(width, signed, &d);
+            });
+            state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+        }
+    }
+    true
+}
+
+///
+/// Whether `slot` holds a compile-time constant that already satisfies the
+/// `NUM2UINT` / `NUM2INT` window `emit_io_buffer_write_int` tests for a
+/// narrower-than-64-bit store.
+///
+/// A constant outside the window answers `false`, so the check stays and the
+/// deopt hands the store to the builtin, which raises exactly as CRuby does.
+/// The window itself is the emitter's: `[-2^31, 2^32)` unsigned,
+/// `[-2^31, 2^31)` signed, read off the untagged value.
+///
+fn constant_fits_write_window(state: &AbstractState, slot: SlotId, signed: bool) -> bool {
+    let Some(v) = state.is_fixnum_literal(slot) else {
+        return false;
+    };
+    let v = v.get();
+    let hi = if signed { 1i64 << 31 } else { 1i64 << 32 };
+    (-(1i64 << 31)..hi).contains(&v)
+}
+
+fn set_value_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: Option<ClassId>,
+    _: Option<ClassId>,
+) -> bool {
+    if recv_class != Some(IO_BUFFER_CLASS) {
+        return false;
+    }
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 3 {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    let Some((width, kind)) = inline_value_type(state, args) else {
+        return false;
+    };
+
+    let val_slot = args + 2usize;
+    match kind {
+        ValKind::Float => {
+            // `load_fpr` destroys rdi: a value that is not already in an fpr
+            // is converted through it. So the value reaches its register
+            // before the receiver is put in rdi, never after.
+            let xsrc = state.load_fpr(ir, val_slot);
+            state.load(ir, recv, GP::Rdi);
+            state.load_fixnum(ir, args + 1usize, GP::Rsi);
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels, base| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_write_f64(xsrc, &d, base);
+            });
+        }
+        _ => {
+            state.load(ir, recv, GP::Rdi);
+            state.load_fixnum(ir, args + 1usize, GP::Rsi);
+            let signed = kind == ValKind::Signed;
+            // Read the value's link mode *before* `load_fixnum` materializes
+            // it: a constant it can see settles the store's range window here
+            // rather than in five instructions per store.
+            let check_range = !constant_fits_write_window(state, val_slot, signed);
+            state.load_fixnum(ir, val_slot, GP::Rdx);
+            let deopt = ir.new_deopt(state);
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rsi));
+                r#gen.emit_io_buffer_write_int(width, signed, check_range, &d);
+            });
+        }
+    }
+    state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
+}
+
 /// Iterate `(absolute_offset, decoded_value)` pairs of `type` starting at
 /// `offset` for `count` items (or to the end of the buffer).
-fn each_values(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-) -> Result<Vec<(usize, Value)>> {
-    let self_ = lfp.self_val();
+fn each_values(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Vec<(usize, Value)>> {
+    let buf = lfp.self_val().as_iobuffer();
     let (width, kind, big) = value_type_arg(lfp.arg(0))?;
-    let buf = self_.as_io_buffer_inner();
     let mut offset = match lfp.try_arg(1) {
-        Some(v) if !v.is_nil() => v.coerce_to_int_i64(vm, globals)?.max(0) as usize,
-        _ => 0,
+        Some(v) => strict_index_arg(vm, globals, v, "Offset can't be negative!")?,
+        None => 0,
     };
     let count = match lfp.try_arg(2) {
-        Some(v) if !v.is_nil() => Some(v.coerce_to_int_i64(vm, globals)?.max(0) as usize),
+        Some(v) if !v.is_nil() => Some(strict_index_arg(vm, globals, v, "Count can't be negative!")?),
         _ => None,
     };
     let bytes = buf.read_bytes()?;
+    if offset > bytes.len() {
+        return Err(MonorubyErr::argumenterr(
+            "The given offset is bigger than the buffer size!",
+        ));
+    }
     let mut out = Vec::new();
-    let mut n = 0usize;
-    while offset + width <= bytes.len() {
-        if let Some(c) = count
-            && n >= c
-        {
-            break;
+    match count {
+        // An explicit count reads exactly that many items; running past
+        // the end is an error (CRuby validates each read), while the
+        // default form stops at the last whole item.
+        Some(c) => {
+            for _ in 0..c {
+                if offset + width > bytes.len() {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "Type extends beyond end of buffer! (offset={} > size={})",
+                        offset,
+                        bytes.len()
+                    )));
+                }
+                out.push((
+                    offset,
+                    decode_value(&bytes[offset..offset + width], kind, big),
+                ));
+                offset += width;
+            }
         }
-        out.push((offset, decode_value(&bytes[offset..offset + width], kind, big)));
-        offset += width;
-        n += 1;
+        None => {
+            while offset + width <= bytes.len() {
+                out.push((
+                    offset,
+                    decode_value(&bytes[offset..offset + width], kind, big),
+                ));
+                offset += width;
+            }
+        }
     }
     Ok(out)
 }
@@ -352,16 +688,22 @@ fn each_byte(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         return vm.generate_enumerator(IdentId::get_id("each_byte"), self_, args, pc);
     };
     let offset = match lfp.try_arg(0) {
-        Some(v) if !v.is_nil() => v.coerce_to_int_i64(vm, globals)?.max(0) as usize,
-        _ => 0,
+        Some(v) => strict_index_arg(vm, globals, v, "Offset can't be negative!")?,
+        None => 0,
     };
     let count = match lfp.try_arg(1) {
-        Some(v) if !v.is_nil() => Some(v.coerce_to_int_i64(vm, globals)?.max(0) as usize),
+        Some(v) if !v.is_nil() => Some(strict_index_arg(vm, globals, v, "Count can't be negative!")?),
         _ => None,
     };
-    let bytes = self_.as_io_buffer_inner().read_bytes()?;
+    let bytes = self_.as_iobuffer_inner().read_bytes()?;
+    if offset > bytes.len() {
+        return Err(MonorubyErr::argumenterr(
+            "The given offset is bigger than the buffer size!",
+        ));
+    }
+    // An overlong count clamps (unlike #each/#values, which validate).
     let end = count
-        .map(|c| (offset + c).min(bytes.len()))
+        .map(|c| offset.saturating_add(c).min(bytes.len()))
         .unwrap_or(bytes.len());
     let p = vm.get_block_data(globals, bh)?;
     for &b in bytes.get(offset..end).unwrap_or(&[]) {
@@ -478,7 +820,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         };
         IoBufferInner::owned(vec![0u8; size], flags)
     };
-    *lfp.self_val().as_io_buffer_inner_mut() = inner;
+    *lfp.self_val().as_iobuffer_inner_mut() = inner;
     Ok(lfp.self_val())
 }
 
@@ -505,7 +847,7 @@ fn buffer_for(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             // Without a block the buffer snapshots the string's bytes
             // (CRuby acquires a frozen copy): later mutation of the
             // original must not show through.
-            let snapshot = Value::bytes(rs.as_bytes().to_vec());
+            let snapshot = RString::bytes(rs.as_bytes().to_vec());
             let inner = IoBufferInner::string_backed(snapshot, size, BUF_EXTERNAL | BUF_READONLY);
             Ok(Value::new_io_buffer(inner))
         }
@@ -516,14 +858,14 @@ fn buffer_for(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             if s.is_frozen() {
                 flags |= BUF_READONLY;
             }
-            let inner = IoBufferInner::string_backed(s, size, flags);
+            let inner = IoBufferInner::string_backed(rs, size, flags);
             let buf_val = Value::new_io_buffer(inner);
             let result = vm.with_temp_scope(|vm| {
                 vm.temp_push(buf_val);
                 vm.invoke_block_once(globals, bh, &[buf_val])
             });
             let mut bv = buf_val;
-            *bv.as_io_buffer_inner_mut() = IoBufferInner::null();
+            *bv.as_iobuffer_inner_mut() = IoBufferInner::null();
             result
         }
     }
@@ -545,28 +887,32 @@ fn buffer_string(
 ) -> Result<Value> {
     let len = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if len < 0 {
-        return Err(MonorubyErr::argumenterr("negative string size (or size too big)"));
+        return Err(MonorubyErr::argumenterr(
+            "negative string size (or size too big)",
+        ));
     }
     let bh = lfp
         .block()
         .ok_or_else(|| MonorubyErr::localjumperr("no block given"))?;
-    let mut string = Value::bytes(vec![0u8; len as usize]);
+    let mut string = RString::bytes(vec![0u8; len as usize]);
     let inner = IoBufferInner::string_backed(string, len as usize, BUF_EXTERNAL);
     let buf_val = Value::new_io_buffer(inner);
     vm.with_temp_scope(|vm| {
-        vm.temp_push(string);
+        vm.temp_push(string.into());
         vm.temp_push(buf_val);
         vm.invoke_block_once(globals, bh, &[buf_val])
     })?;
     let mut bv = buf_val;
-    *bv.as_io_buffer_inner_mut() = IoBufferInner::null();
-    string.as_rstring_inner_mut().set_encoding(crate::value::Encoding::Ascii8);
-    Ok(string)
+    *bv.as_iobuffer_inner_mut() = IoBufferInner::null();
+    string.set_encoding(crate::value::Encoding::Ascii8);
+    Ok(string.into())
 }
 
 #[monoruby_builtin]
 fn size(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::integer(lfp.self_val().as_io_buffer_inner().size as i64))
+    Ok(Value::integer(
+        lfp.self_val().as_iobuffer_inner().size as i64,
+    ))
 }
 
 #[monoruby_builtin]
@@ -575,7 +921,7 @@ fn valid_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
     // (including freed/transferred ones) are trivially valid; a slice is
     // valid while it still fits its source.
     let self_ = lfp.self_val();
-    let buf = self_.as_io_buffer_inner();
+    let buf = self_.as_iobuffer_inner();
     let ok = match &buf.storage {
         BufStorage::Slice { .. } | BufStorage::Str { .. } => buf.read_bytes().is_ok(),
         _ => true,
@@ -585,21 +931,19 @@ fn valid_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
 
 #[monoruby_builtin]
 fn null_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().as_io_buffer_inner().is_null()))
+    Ok(Value::bool(lfp.self_val().as_iobuffer().is_null()))
 }
 
 #[monoruby_builtin]
 fn empty_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().as_io_buffer_inner().size == 0))
+    Ok(Value::bool(lfp.self_val().as_iobuffer().size == 0))
 }
 
 macro_rules! flag_predicate {
     ($name:ident, $flag:expr) => {
         #[monoruby_builtin]
         fn $name(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-            Ok(Value::bool(
-                lfp.self_val().as_io_buffer_inner().flags & $flag != 0,
-            ))
+            Ok(Value::bool(lfp.self_val().as_iobuffer().flags & $flag != 0))
         }
     };
 }
@@ -612,7 +956,7 @@ flag_predicate!(readonly_, BUF_READONLY);
 
 #[monoruby_builtin]
 fn locked_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().as_io_buffer_inner().locked))
+    Ok(Value::bool(lfp.self_val().as_iobuffer().locked))
 }
 
 ///
@@ -627,19 +971,19 @@ fn locked_block(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    if self_.as_io_buffer_inner().locked {
+    let mut buf = lfp.self_val().as_iobuffer();
+    if buf.locked {
         return Err(locked_err(globals, "Buffer already locked!"));
     }
     let bh = lfp
         .block()
         .ok_or_else(|| MonorubyErr::localjumperr("no block given (yield)"))?;
-    self_.as_io_buffer_inner_mut().locked = true;
-    let result = vm.invoke_block_once(globals, bh, &[self_]);
+    buf.locked = true;
+    let result = vm.invoke_block_once(globals, bh, &[buf.into()]);
     // CRuby only unlocks on a normal return: an exception raised inside
     // the block leaves the buffer locked.
     if result.is_ok() {
-        self_.as_io_buffer_inner_mut().locked = false;
+        buf.locked = false;
     }
     result
 }
@@ -694,71 +1038,217 @@ fn offset_length(
 ///
 #[monoruby_builtin]
 fn get_string(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let buf = self_.as_io_buffer_inner();
-    ensure_view_valid(globals, buf)?;
+    let buf = lfp.self_val().as_iobuffer();
+    ensure_view_valid(globals, &buf)?;
     let (offset, length) = offset_length(vm, globals, lfp, buf.size, 0, 1)?;
     let bytes = {
         let all = buf.read_bytes()?;
         all[offset..offset + length].to_vec()
     };
-    let mut s = Value::bytes(bytes);
+    let mut s = RString::bytes(bytes);
+    // An Encoding object or an encoding name String; CRuby silently
+    // falls back to BINARY for a name it does not know.
     let enc = match lfp.try_arg(2) {
-        Some(v) if !v.is_nil() => super::io::enc_obj_to_enum(globals, v),
+        Some(v) if !v.is_nil() => match v.is_str() {
+            Some(name) => crate::value::Encoding::try_from_str(name).ok(),
+            None => super::io::enc_obj_to_enum(globals, v),
+        },
         _ => Some(crate::value::Encoding::Ascii8),
     };
-    s.as_rstring_inner_mut()
-        .set_encoding(enc.unwrap_or(crate::value::Encoding::Ascii8));
-    Ok(s)
+    s.set_encoding(enc.unwrap_or(crate::value::Encoding::Ascii8));
+    Ok(s.into())
 }
 
 ///
 /// ### IO::Buffer#set_string
 ///
-/// - set_string(string, offset = 0, string_offset = 0, string_length = nil) -> Integer
+/// - set_string(string, offset = 0, length = nil, source_offset = 0) -> Integer
 ///
+/// Same argument shape and error set as #copy with the string as the
+/// source. CRuby's check order: string conversion and strict index
+/// extraction first, then writability, then the source-side range
+/// checks, then the destination bounds.
 #[monoruby_builtin]
 fn set_string(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    {
-        let buf = self_.as_io_buffer_inner();
-        check_writable(globals, buf)?;
-        ensure_view_valid(globals, buf)?;
-    }
     let src = lfp.arg(0).coerce_to_rstring(vm, globals)?;
-    let src_bytes = src.as_bytes();
     let offset = match lfp.try_arg(1) {
+        Some(v) => strict_index_arg(vm, globals, v, "Offset can't be negative!")?,
+        None => 0,
+    };
+    let length = match lfp.try_arg(2) {
         Some(v) if !v.is_nil() => {
-            let o = v.coerce_to_int_i64(vm, globals)?;
-            if o < 0 {
-                return Err(MonorubyErr::argumenterr("Offset can't be negative!"));
-            }
-            o as usize
+            Some(strict_index_arg(vm, globals, v, "Length can't be negative!")?)
         }
-        _ => 0,
+        _ => None,
     };
-    let src_offset = match lfp.try_arg(2) {
-        Some(v) if !v.is_nil() => (v.coerce_to_int_i64(vm, globals)?).max(0) as usize,
-        _ => 0,
+    let source_offset = match lfp.try_arg(3) {
+        Some(v) => strict_index_arg(vm, globals, v, "Offset can't be negative!")?,
+        None => 0,
     };
-    let src_len = match lfp.try_arg(3) {
-        Some(v) if !v.is_nil() => (v.coerce_to_int_i64(vm, globals)?).max(0) as usize,
-        _ => src_bytes.len().saturating_sub(src_offset),
-    };
-    let data = &src_bytes[src_offset.min(src_bytes.len())..(src_offset + src_len).min(src_bytes.len())];
-    let buf_size = self_.as_io_buffer_inner().size;
-    if offset > buf_size {
+
+    let mut buf = lfp.self_val().as_iobuffer();
+    check_writable(globals, &buf)?;
+    ensure_view_valid(globals, &buf)?;
+
+    let src_bytes = src.as_bytes();
+    let source_size = src_bytes.len();
+    if source_offset > source_size {
         return Err(MonorubyErr::argumenterr(
-            "The given offset is bigger than the buffer size!",
+            "The given source offset is bigger than the source itself!",
         ));
     }
-    if offset + data.len() > buf_size {
+    let length = match length {
+        Some(l) => {
+            if source_offset.checked_add(l).is_none_or(|e| e > source_size) {
+                return Err(MonorubyErr::argumenterr(
+                    "The computed source range exceeds the size of the source buffer!",
+                ));
+            }
+            l
+        }
+        None => source_size - source_offset,
+    };
+    if offset.checked_add(length).is_none_or(|e| e > buf.size) {
         return Err(MonorubyErr::argumenterr(
             "Specified offset+length is bigger than the buffer size!",
         ));
     }
-    self_.as_io_buffer_inner_mut().write_at(offset, data)?;
-    Ok(Value::integer(data.len() as i64))
+    // The source string can be the buffer's own backing store
+    // (`IO::Buffer.for(str) { |b| b.set_string(str, ...) }`); snapshot
+    // that aliasing case, like #copy, so `write_at`'s `&mut` never
+    // overlaps the borrowed source bytes.
+    if src_bytes.as_ptr() as usize == buf.storage_root() {
+        let data = src_bytes[source_offset..source_offset + length].to_vec();
+        buf.write_at(offset, &data)?;
+    } else {
+        let data = &src_bytes[source_offset..source_offset + length];
+        buf.write_at(offset, data)?;
+    }
+    Ok(Value::integer(length as i64))
+}
+
+/// Strict Integer extraction for offset/length/count arguments
+/// (#copy, #set_string, #get_value/#set_value, #each/#values/#each_byte):
+/// CRuby's io_buffer_extract_* take Integers only (no nil, no #to_int),
+/// and reject negatives with a per-argument message.
+fn strict_index_arg(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+    neg_msg: &str,
+) -> Result<usize> {
+    if !matches!(v.unpack(), RV::Fixnum(_) | RV::BigInt(_)) {
+        return Err(MonorubyErr::typeerr("not an Integer"));
+    }
+    let n = v.coerce_to_int_i64(vm, globals)?;
+    if n < 0 {
+        return Err(MonorubyErr::argumenterr(neg_msg));
+    }
+    Ok(n as usize)
+}
+
+///
+/// ### IO::Buffer#initialize_copy (the #dup / #clone hook)
+///
+/// CRuby materializes a writable INTERNAL copy of the source's bytes: a
+/// mapped, external, readonly, or slice source all dup to a plain
+/// internal buffer of the same size; a zero-size source stays null;
+/// locked state does not transfer (and a locked source may be duped).
+#[monoruby_builtin]
+fn initialize_copy(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let src = lfp.arg(0).as_iobuffer();
+    let inner = if src.size == 0 {
+        IoBufferInner::null()
+    } else {
+        IoBufferInner::owned(src.read_bytes()?.to_vec(), BUF_INTERNAL)
+    };
+    *self_.as_iobuffer_inner_mut() = inner;
+    Ok(self_)
+}
+
+///
+/// ### IO::Buffer#copy
+///
+/// - copy(source, offset = 0, length = nil, source_offset = 0) -> Integer
+///
+/// Copies `length` bytes (default: the rest of `source` past
+/// `source_offset`) out of the `source` buffer into this buffer at
+/// `offset`, returning the byte count. The source span is snapshotted
+/// before writing, so overlapping self-copies behave like CRuby's
+/// memmove. CRuby's check order is kept: source-side extraction and
+/// range errors come before the writability check, which comes before
+/// the destination bounds check; a locked buffer may still be written.
+#[monoruby_builtin]
+fn copy(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let source_v = lfp.arg(0);
+    let Some(source) = source_v.try_iobuffer_inner() else {
+        // CRuby renders nil as "nil", not "NilClass", here.
+        let name = if source_v.is_nil() {
+            "nil".to_string()
+        } else {
+            source_v.get_real_class_name(globals)
+        };
+        return Err(MonorubyErr::typeerr(format!(
+            "wrong argument type {name} (expected IO::Buffer)"
+        )));
+    };
+    let offset = match lfp.try_arg(1) {
+        Some(v) => strict_index_arg(vm, globals, v, "Offset can't be negative!")?,
+        None => 0,
+    };
+    let length = match lfp.try_arg(2) {
+        Some(v) if !v.is_nil() => {
+            Some(strict_index_arg(vm, globals, v, "Length can't be negative!")?)
+        }
+        _ => None,
+    };
+    let source_offset = match lfp.try_arg(3) {
+        Some(v) => strict_index_arg(vm, globals, v, "Offset can't be negative!")?,
+        None => 0,
+    };
+
+    let source_size = source.size;
+    if source_offset > source_size {
+        return Err(MonorubyErr::argumenterr(
+            "The given source offset is bigger than the source itself!",
+        ));
+    }
+    let length = match length {
+        Some(l) => {
+            if source_offset.checked_add(l).is_none_or(|e| e > source_size) {
+                return Err(MonorubyErr::argumenterr(
+                    "The computed source range exceeds the size of the source buffer!",
+                ));
+            }
+            l
+        }
+        None => source_size - source_offset,
+    };
+
+    let mut buf = lfp.self_val().as_iobuffer();
+    check_writable(globals, &buf)?;
+    if offset.checked_add(length).is_none_or(|e| e > buf.size) {
+        return Err(MonorubyErr::argumenterr(
+            "Specified offset+length is bigger than the buffer size!",
+        ));
+    }
+
+    // The common case — distinct buffers — copies straight from the
+    // source's span. Only when both spans resolve to the same
+    // allocation (a self-copy, slices of one buffer, views of one
+    // String) can they overlap; snapshotting just that case keeps
+    // memmove's overlap semantics without aliasing `write_at`'s
+    // `&mut` with a borrow of the same bytes (which is UB — it
+    // miscompiled to an infinite loop).
+    if source.storage_root() == buf.storage_root() {
+        let data = source.read_bytes()?[source_offset..source_offset + length].to_vec();
+        buf.write_at(offset, &data)?;
+    } else {
+        let data = &source.read_bytes()?[source_offset..source_offset + length];
+        buf.write_at(offset, data)?;
+    }
+    Ok(Value::integer(length as i64))
 }
 
 ///
@@ -768,12 +1258,31 @@ fn set_string(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 #[monoruby_builtin]
 fn free(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    if self_.as_io_buffer_inner().locked {
+    let mut buf = lfp.self_val().as_iobuffer();
+    if buf.locked {
         return Err(locked_err(globals, "Buffer is locked!"));
     }
-    *self_.as_io_buffer_inner_mut() = IoBufferInner::null();
-    Ok(self_)
+    *buf = IoBufferInner::null();
+    Ok(buf.into())
+}
+
+///
+/// ### IO::Buffer#__address
+///
+/// - __address -> Integer | nil
+///
+/// monoruby extension (no CRuby counterpart): the base address of the
+/// buffer's bytes, or nil when the storage has no stable address (a
+/// string-backed view, a slice, an empty buffer). The address stays valid
+/// while the buffer is alive and un-resized — the same stability contract
+/// the JIT's inlined `get_value`/`set_value` rely on. Used by the FFI
+/// shims (e.g. the gosu stub) to pass buffer memory to C without a copy.
+#[monoruby_builtin]
+fn __address(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    match lfp.self_val().as_iobuffer_inner().stable_address() {
+        Some(addr) => Ok(Value::integer(addr as i64)),
+        None => Ok(Value::nil()),
+    }
 }
 
 ///
@@ -785,13 +1294,18 @@ fn free(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn transfer(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    if self_.as_io_buffer_inner().locked {
-        return Err(locked_err(globals, "Cannot transfer ownership of locked buffer!"));
+    if self_.as_iobuffer_inner().locked {
+        return Err(locked_err(
+            globals,
+            "Cannot transfer ownership of locked buffer!",
+        ));
     }
-    let inner = std::mem::replace(self_.as_io_buffer_inner_mut(), IoBufferInner::null());
+    let inner = std::mem::replace(self_.as_iobuffer_inner_mut(), IoBufferInner::null());
     // The nulled original keeps its flag bits (CRuby: "+0 NULL INTERNAL");
     // #free, by contrast, clears them.
-    self_.as_io_buffer_inner_mut().flags = inner.flags;
+    let nulled = self_.as_iobuffer_inner_mut();
+    nulled.flags = inner.flags;
+    nulled.refresh_fast();
     Ok(Value::new_io_buffer(inner))
 }
 
@@ -802,8 +1316,8 @@ fn transfer(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 #[monoruby_builtin]
 fn resize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    if self_.as_io_buffer_inner().locked {
+    let mut buf = lfp.self_val().as_iobuffer();
+    if buf.locked {
         return Err(locked_err(globals, "Cannot resize locked buffer!"));
     }
     if !matches!(lfp.arg(0).unpack(), RV::Fixnum(_) | RV::BigInt(_)) {
@@ -814,7 +1328,6 @@ fn resize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         return Err(MonorubyErr::argumenterr("Size can't be negative!"));
     }
     let new_size = new_size as usize;
-    let buf = self_.as_io_buffer_inner();
     match &buf.storage {
         BufStorage::Str { .. } | BufStorage::Slice { .. } => {
             return Err(access_err(globals, "Cannot resize external buffer!"));
@@ -826,19 +1339,23 @@ fn resize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
         _ => {}
     }
-    let mut bytes = buf.read_bytes()?;
+    let mut bytes = buf.read_bytes()?.to_vec();
     bytes.resize(new_size, 0);
     let flags = if buf.is_null() {
-        if new_size < page_size() { BUF_INTERNAL } else { BUF_MAPPED }
+        if new_size < page_size() {
+            BUF_INTERNAL
+        } else {
+            BUF_MAPPED
+        }
     } else {
         buf.flags
     };
-    *self_.as_io_buffer_inner_mut() = if new_size == 0 {
+    *buf = if new_size == 0 {
         IoBufferInner::null()
     } else {
         IoBufferInner::owned(bytes, flags)
     };
-    Ok(self_)
+    Ok(buf.into())
 }
 
 ///
@@ -850,8 +1367,7 @@ fn resize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// independent lock state.
 #[monoruby_builtin]
 fn slice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let buf = self_.as_io_buffer_inner();
+    let buf = lfp.self_val().as_iobuffer();
     let (offset, length) = offset_length(vm, globals, lfp, buf.size, 0, 1)?;
     // A slice inherits only the passthrough flags (readonly), not the
     // storage-kind flags — matching CRuby, where `slice.internal?` is
@@ -873,7 +1389,7 @@ fn slice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         )));
     }
     Ok(Value::new_io_buffer(IoBufferInner::slice_of(
-        self_, offset, length, flags,
+        buf, offset, length, flags,
     )))
 }
 
@@ -884,25 +1400,39 @@ fn slice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 #[monoruby_builtin]
 fn clear(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    {
-        let buf = self_.as_io_buffer_inner();
-        check_writable(globals, buf)?;
-    }
+    let mut buf = lfp.self_val().as_iobuffer();
+    check_writable(globals, &buf)?;
     let value = match lfp.try_arg(0) {
         Some(v) if !v.is_nil() => (v.coerce_to_int_i64(vm, globals)? & 0xff) as u8,
         _ => 0,
     };
-    let size = self_.as_io_buffer_inner().size;
+    let size = buf.size;
     let (offset, length) = offset_length(vm, globals, lfp, size, 1, 2)?;
-    self_
-        .as_io_buffer_inner_mut()
-        .write_at(offset, &vec![value; length])?;
-    Ok(self_)
+    buf.write_at(offset, &vec![value; length])?;
+    Ok(buf.into())
 }
 
 /// Render the CRuby single-line description: address, size, flag names.
-fn describe(buf: &IoBufferInner, addr: u64) -> String {
+fn describe(buf: &IoBufferInner) -> String {
+    /// The address shown in #to_s / #inspect is the *storage* base pointer
+    /// (CRuby prints the mapped/allocated base): #transfer moves the storage
+    /// to a new object, and transfer_spec asserts the description string —
+    /// address included — carries over.
+    fn buffer_addr(buf: &IoBufferInner) -> u64 {
+        match &buf.storage {
+            BufStorage::Owned(vec) => {
+                if vec.is_empty() {
+                    0
+                } else {
+                    vec.as_ptr() as u64
+                }
+            }
+            BufStorage::FileMap { ptr, .. } => *ptr as u64,
+            BufStorage::Str { s, offset } => s.as_bytes().as_ptr() as u64 + *offset as u64,
+            BufStorage::Slice { parent, offset } => buffer_addr(parent) + *offset as u64,
+        }
+    }
+    let addr = buffer_addr(buf);
     let mut s = format!("#<IO::Buffer 0x{:016x}+{}", addr, buf.size);
     if buf.is_null() {
         s.push_str(" NULL");
@@ -932,7 +1462,10 @@ fn describe(buf: &IoBufferInner, addr: u64) -> String {
         if buf.flags & BUF_READONLY != 0 {
             s.push_str(" READONLY");
         }
-        if matches!(buf.storage, BufStorage::Str { .. } | BufStorage::Slice { .. }) {
+        if matches!(
+            buf.storage,
+            BufStorage::Str { .. } | BufStorage::Slice { .. }
+        ) {
             s.push_str(" SLICE");
         }
     }
@@ -940,28 +1473,11 @@ fn describe(buf: &IoBufferInner, addr: u64) -> String {
     s
 }
 
-/// The address shown in #to_s / #inspect is the *storage* base pointer
-/// (CRuby prints the mapped/allocated base): #transfer moves the storage
-/// to a new object, and transfer_spec asserts the description string —
-/// address included — carries over.
-fn buffer_addr(v: Value) -> u64 {
-    let buf = v.as_io_buffer_inner();
-    match &buf.storage {
-        BufStorage::Null => 0,
-        BufStorage::Owned(vec) => vec.as_ptr() as u64,
-        BufStorage::FileMap { ptr, .. } => *ptr as u64,
-        BufStorage::Str { s, offset } => {
-            s.as_rstring_inner().as_bytes().as_ptr() as u64 + *offset as u64
-        }
-        BufStorage::Slice { parent, offset } => buffer_addr(*parent) + *offset as u64,
-    }
-}
-
 #[monoruby_builtin]
 fn to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let buf = self_.as_io_buffer_inner();
-    Ok(Value::string(describe(buf, buffer_addr(self_))))
+    let buf = self_.as_iobuffer();
+    Ok(Value::string(describe(&buf)))
 }
 
 fn hexdump_string(bytes: &[u8]) -> String {
@@ -989,7 +1505,7 @@ fn hexdump_string(bytes: &[u8]) -> String {
 #[monoruby_builtin]
 fn hexdump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let buf = self_.as_io_buffer_inner();
+    let buf = self_.as_iobuffer_inner();
     let bytes = buf.read_bytes()?;
     Ok(Value::string(hexdump_string(&bytes)))
 }
@@ -997,8 +1513,8 @@ fn hexdump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 #[monoruby_builtin]
 fn inspect(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let buf = self_.as_io_buffer_inner();
-    let mut s = describe(buf, buffer_addr(self_));
+    let buf = self_.as_iobuffer_inner();
+    let mut s = describe(buf);
     if !buf.is_null() {
         let bytes = buf.read_bytes()?;
         if !bytes.is_empty() {
@@ -1013,14 +1529,17 @@ fn inspect(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 fn cmp(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let other = lfp.arg(0);
-    if other.try_rvalue().is_none_or(|rv| rv.ty() != ObjTy::IO_BUFFER) {
+    if other
+        .try_rvalue()
+        .is_none_or(|rv| rv.ty() != ObjTy::IO_BUFFER)
+    {
         return Err(MonorubyErr::typeerr(format!(
             "wrong argument type {} (expected IO::Buffer)",
             other.get_real_class_name(globals)
         )));
     }
-    let a = self_.as_io_buffer_inner().read_bytes()?;
-    let b = other.as_io_buffer_inner().read_bytes()?;
+    let a = self_.as_iobuffer_inner().read_bytes()?;
+    let b = other.as_iobuffer_inner().read_bytes()?;
     let ord = a.cmp(&b);
     Ok(Value::integer(match ord {
         std::cmp::Ordering::Less => -1,
@@ -1043,7 +1562,10 @@ fn buffer_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let io_v = lfp.arg(0);
     let fd = if io_v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::IO) {
         io_v.as_io_inner().fileno()?
-    } else if globals.check_method(io_v, IdentId::get_id("fileno")).is_some() {
+    } else if globals
+        .check_method(io_v, IdentId::get_id("fileno"))
+        .is_some()
+    {
         vm.invoke_method_inner(globals, IdentId::get_id("fileno"), io_v, &[], None, None)?
             .coerce_to_int_i64(vm, globals)? as i32
     } else {
@@ -1171,8 +1693,8 @@ fn buffer_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 
 /// Coerce the bitwise-op argument to a non-empty mask byte vector with
 /// CRuby's messages ("nil", not "NilClass", in the TypeError).
-fn mask_arg(globals: &mut Globals, v: Value) -> Result<Vec<u8>> {
-    if v.try_rvalue().is_none_or(|rv| rv.ty() != ObjTy::IO_BUFFER) {
+fn mask_arg<'a>(globals: &mut Globals, v: &'a Value) -> Result<&'a [u8]> {
+    let Some(buf) = v.try_iobuffer_inner() else {
         let name = if v.is_nil() {
             "nil".to_string()
         } else {
@@ -1182,8 +1704,8 @@ fn mask_arg(globals: &mut Globals, v: Value) -> Result<Vec<u8>> {
             "wrong argument type {} (expected IO::Buffer)",
             name
         )));
-    }
-    let mask = v.as_io_buffer_inner().read_bytes()?;
+    };
+    let mask = buf.read_bytes()?;
     if mask.is_empty() {
         return Err(buffer_err(globals, "MaskError", "Zero-length mask given!"));
     }
@@ -1203,11 +1725,21 @@ fn bitwise_bytes(bytes: &[u8], mask: &[u8], op: impl Fn(u8, u8) -> u8) -> Vec<u8
 macro_rules! bitwise_new {
     ($name:ident, $op:expr) => {
         #[monoruby_builtin]
-        fn $name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-            let mask = mask_arg(globals, lfp.arg(0))?;
-            let bytes = lfp.self_val().as_io_buffer_inner().read_bytes()?;
+        fn $name(
+            _: &mut Executor,
+            globals: &mut Globals,
+            lfp: Lfp,
+            _: BytecodePtr,
+        ) -> Result<Value> {
+            let arg0 = lfp.arg(0);
+            let mask = mask_arg(globals, &arg0)?;
+            let buf = lfp.self_val().as_iobuffer();
+            let bytes = buf.read_bytes()?;
             let out = bitwise_bytes(&bytes, &mask, $op);
-            Ok(Value::new_io_buffer(IoBufferInner::owned(out, BUF_INTERNAL)))
+            Ok(Value::new_io_buffer(IoBufferInner::owned(
+                out,
+                BUF_INTERNAL,
+            )))
         }
     };
 }
@@ -1218,15 +1750,21 @@ bitwise_new!(bit_xor, |a, b| a ^ b);
 macro_rules! bitwise_inplace {
     ($name:ident, $op:expr) => {
         #[monoruby_builtin]
-        fn $name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+        fn $name(
+            _: &mut Executor,
+            globals: &mut Globals,
+            lfp: Lfp,
+            _: BytecodePtr,
+        ) -> Result<Value> {
             let mut self_ = lfp.self_val();
+            let arg0 = lfp.arg(0);
             // CRuby validates the mask (type, then emptiness) before the
             // writability of the receiver.
-            let mask = mask_arg(globals, lfp.arg(0))?;
-            check_writable(globals, self_.as_io_buffer_inner())?;
-            let bytes = self_.as_io_buffer_inner().read_bytes()?;
+            let mask = mask_arg(globals, &arg0)?;
+            check_writable(globals, self_.as_iobuffer_inner())?;
+            let bytes = self_.as_iobuffer_inner().read_bytes()?;
             let out = bitwise_bytes(&bytes, &mask, $op);
-            self_.as_io_buffer_inner_mut().write_at(0, &out)?;
+            self_.as_iobuffer_inner_mut().write_at(0, &out)?;
             Ok(self_)
         }
     };
@@ -1237,24 +1775,103 @@ bitwise_inplace!(bit_xor_inplace, |a, b| a ^ b);
 
 #[monoruby_builtin]
 fn bit_not(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let bytes = lfp.self_val().as_io_buffer_inner().read_bytes()?;
+    let buf = lfp.self_val().as_iobuffer();
+    let bytes = buf.read_bytes()?;
     let out: Vec<u8> = bytes.iter().map(|b| !b).collect();
-    Ok(Value::new_io_buffer(IoBufferInner::owned(out, BUF_INTERNAL)))
+    Ok(Value::new_io_buffer(IoBufferInner::owned(
+        out,
+        BUF_INTERNAL,
+    )))
 }
 
 #[monoruby_builtin]
-fn bit_not_inplace(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    check_writable(globals, self_.as_io_buffer_inner())?;
-    let bytes = self_.as_io_buffer_inner().read_bytes()?;
+fn bit_not_inplace(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut buf = lfp.self_val().as_iobuffer();
+    check_writable(globals, &buf)?;
+    let bytes = buf.read_bytes()?;
     let out: Vec<u8> = bytes.iter().map(|b| !b).collect();
-    self_.as_io_buffer_inner_mut().write_at(0, &out)?;
-    Ok(self_)
+    buf.write_at(0, &out)?;
+    Ok(buf.into())
 }
 
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// The JIT-inlined `get_value` / `set_value` (little-endian integer
+    /// types and `:f64` with a literal type symbol): every type, the
+    /// 64-bit values that need a Bignum, the narrow-type conversion windows,
+    /// bounds and negative offsets, non-fixnum arguments, read-only /
+    /// String-backed / sliced / duplicated / resized / freed / transferred
+    /// buffers — all of which leave the inlined path for the builtin.
+    #[test]
+    fn io_buffer_get_set_value_jit() {
+        run_test(
+            r##"
+            b = IO::Buffer.new(64)
+            r = nil
+            40.times do |i|
+              b.set_value(:U8, 0, i); b.set_value(:S8, 1, -i); b.set_value(:u16, 2, i * 300); b.set_value(:s16, 4, -i * 300)
+              b.set_value(:u32, 8, i * 70000); b.set_value(:s32, 12, -i * 70000)
+              b.set_value(:u64, 16, i * 3000000000); b.set_value(:s64, 24, -i * 3000000000)
+              b.set_value(:f64, 32, i * 0.5); b.set_value(:f64, 40, i)
+              r = [b.get_value(:U8, 0), b.get_value(:S8, 1), b.get_value(:u16, 2), b.get_value(:s16, 4),
+                   b.get_value(:u32, 8), b.get_value(:s32, 12), b.get_value(:u64, 16), b.get_value(:s64, 24),
+                   b.get_value(:f64, 32), b.get_value(:f64, 40), b.set_value(:U8, 63, 1), b.get_value(:U32, 8), b.get_value(:f32, 32)]
+            end
+            er = ->(&blk) { begin; blk.call; rescue => e; [e.class, e.message]; end }
+            res = []
+            20.times do
+              b.set_value(:u64, 40, 2**63 + 5); res << b.get_value(:u64, 40) << b.get_value(:s64, 40)
+              b.set_value(:s64, 48, -2**62 - 1); res << b.get_value(:s64, 48) << b.get_value(:u64, 48)
+              b.set_value(:u64, 56, 2**62); res << b.get_value(:u64, 56) << b.get_value(:s64, 56)
+              res << er.call { b.set_value(:u32, 8, 2**32) } << er.call { b.set_value(:s16, 4, 2**31) } << er.call { b.set_value(:U8, 0, -2**31 - 1) }
+              res << er.call { b.set_value(:s32, 12, -2**31 - 1) } << b.set_value(:s32, 12, -2**31) << b.get_value(:s32, 12)
+              res << b.set_value(:U8, 0, -1) << b.get_value(:U8, 0) << b.set_value(:u32, 8, -1) << b.get_value(:u32, 8) << b.get_value(:s32, 8)
+              res << er.call { b.get_value(:u32, 62) } << er.call { b.get_value(:u32, -1) } << er.call { b.set_value(:u32, 61, 1) } << er.call { b.get_value(:U8, 64) } << b.get_value(:U8, 63)
+              res << b.set_value(:f64, 32, 3) << b.get_value(:f64, 32)
+              res << er.call { b.set_value(:u32, 8, "x") } << er.call { b.get_value(:u32, 1.5) } << er.call { b.set_value(:u32, nil, 1) }
+              ro = IO::Buffer.for("abcdefgh"); res << ro.get_value(:u32, 0) << er.call { ro.set_value(:u32, 0, 1) }
+              IO::Buffer.for(+"abcdefgh") { |w| w.set_value(:U8, 0, 65); res << w.get_value(:U8, 0) }
+              sl = b.slice(8, 8); res << sl.get_value(:u32, 0); sl.set_value(:u32, 4, 77); res << b.get_value(:u32, 12)
+              d = b.dup; d.set_value(:u32, 8, 99); res << [d.get_value(:u32, 8), b.get_value(:u32, 8)]
+            end
+            b2 = IO::Buffer.new(16)
+            20.times { |i| b2.set_value(:u32, 0, i); b2.resize(32) if i == 5; res << b2.get_value(:u32, 0) << (i >= 5 ? b2.set_value(:U8, 31, i) : nil) }
+            b2.free
+            res << er.call { b2.get_value(:u32, 0) }
+            b3 = IO::Buffer.new(8)
+            t = b3.transfer
+            20.times { |i| t.set_value(:u32, 0, i); res << t.get_value(:u32, 0) << er.call { b3.get_value(:u32, 0) } }
+            [r, res]
+
+            "##,
+        );
+    }
+
+    /// A float that arrives as a method argument is not already in an fpr, so
+    /// the inlined `:f64` store converts it into one, and that conversion goes
+    /// through rdi. With the receiver loaded into rdi first, the store read
+    /// the float's bits as the buffer. The block above never reaches that
+    /// path: its own arithmetic leaves the value in an fpr already.
+    #[test]
+    fn io_buffer_set_value_f64_argument() {
+        run_test(
+            r##"
+            def store(b, off, v) = b.set_value(:f64, off, v)
+            def fetch(b, off) = b.get_value(:f64, off)
+            b = IO::Buffer.new(64)
+            sum = 0.0
+            1000.times { |i| store(b, (i % 8) * 8, i * 1.5); sum += fetch(b, (i % 8) * 8) }
+            [sum, fetch(b, 0), fetch(b, 56)]
+            "##,
+        );
+    }
 
     #[test]
     fn io_buffer_map_and_bitwise() {
@@ -1314,6 +1931,299 @@ mod tests {
             r << er.call { IO::Buffer.for("abc").and!(m) }
             lk = IO::Buffer.new(2); lk.set_string("ab")
             lk.locked { lk.and!(m); r << lk.get_string }
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_buffer_copy() {
+        // Argument forms, memmove overlap semantics, slices on either
+        // side, empty/freed sources, and CRuby's error classes, messages
+        // and check ordering (source range before writability before
+        // destination bounds; locked buffers stay writable).
+        run_test_once(
+            r##"
+            r = []
+            er = ->(&blk) { begin; blk.call; :no_raise; rescue => e; [e.class, e.message]; end }
+            src = IO::Buffer.for("ABCDEFGH")
+            b = IO::Buffer.new(16)
+            r << b.copy(src) << b.get_string
+            r << b.copy(src, 4) << b.get_string
+            r << b.copy(src, 2, 3) << b.copy(src, 0, 3, 5) << b.get_string
+            r << b.copy(src, 0, 0) << b.copy(src, 0, nil, 5)
+            # overlap within the same buffer: memmove semantics
+            o = IO::Buffer.new(10)
+            o.set_string("0123456789")
+            r << o.copy(o, 2, 6, 0) << o.get_string
+            # slice as source and as destination (writes through to parent)
+            sl = src.slice(2, 4)
+            r << b.copy(sl) << b.get_string(0, 4)
+            d = IO::Buffer.new(8)
+            dsl = d.slice(2, 4)
+            r << dsl.copy(src, 0, 3) << d.get_string
+            # empty and freed sources copy 0 bytes; a zero-size destination
+            # only fails when there is something to copy
+            n = IO::Buffer.new(0)
+            r << b.copy(n)
+            f = IO::Buffer.new(4); f.free
+            r << b.copy(f)
+            r << er.call { n.copy(src) } << n.copy(src, 0, 0)
+            # bounds and type errors
+            r << er.call { b.copy(src, 0, 4, 6) }
+            r << er.call { b.copy(src, 14, 4) }
+            r << er.call { b.copy(src, -1) }
+            r << er.call { b.copy(src, 0, -2) }
+            r << er.call { b.copy(src, 0, 2, -1) }
+            r << er.call { b.copy(src, 0, 2, 9) }
+            r << er.call { b.copy(src, 0, nil, 9) }
+            r << er.call { b.copy(123) }
+            r << er.call { b.copy(nil) }
+            r << er.call { b.copy("str") }
+            r << er.call { b.copy(src, 1.5) }
+            r << er.call { b.copy(src, 0, 2, nil) }
+            # readonly: source-side errors win, then AccessError before
+            # the destination bounds check
+            ro = IO::Buffer.for("frozen")
+            r << er.call { ro.copy(src) }
+            r << er.call { ro.copy(src, 0, 2, 9) }
+            r << er.call { ro.copy(src, -1) }
+            # locked buffers may still be copied into and out of
+            lk = IO::Buffer.new(8)
+            lk.locked { r << lk.copy(src, 0, 2) }
+            r << lk.get_string
+            lk.locked { r << b.copy(lk, 0, 2) }
+            r
+            "##,
+        );
+        run_test_error(r#"IO::Buffer.new(4).copy"#);
+        run_test_error(r#"s = IO::Buffer.for("ab"); IO::Buffer.new(4).copy(s, 0, 1, 0, 0)"#);
+    }
+
+    #[test]
+    fn io_buffer_string_args_and_views() {
+        // The CRuby-verified fine print of the string-facing API:
+        // get_string's encoding argument (Encoding object, name String,
+        // unknown-name fallback to BINARY, nil offset/length), set_string's
+        // (offset, length, source_offset) shape with #copy's error set and
+        // check order, slice argument forms and invalidation, clear
+        // defaults and value masking, hexdump, and each_byte bounds.
+        run_test_once(
+            r##"
+            r = []
+            er = ->(&blk) { begin; blk.call; :no_raise; rescue => e; [e.class, e.message]; end }
+            g = IO::Buffer.new(8); g.set_string("h\xC3\xA9llo")
+            r << [g.get_string(0, 3, Encoding::UTF_8).encoding.name, g.get_string(0, 3).encoding.name]
+            r << [g.get_string(0, 3, "UTF-8").encoding.name, g.get_string(0, 2, "BINARY").encoding.name]
+            r << [g.get_string(0, 2, "ASCII-8BIT").encoding.name, g.get_string(0, 2, "BOGUS").encoding.name]
+            r << [g.get_string(nil).bytesize, g.get_string(0, nil).bytesize, g.get_string(0, 2, Encoding::BINARY).encoding.name]
+            # set_string: (string, offset = 0, length = nil, source_offset = 0)
+            w = IO::Buffer.new(8)
+            r << [w.set_string("abcdef", 1, 2), w.get_string]
+            r << [w.set_string("abcdef", 0, 2, 3), w.get_string]
+            r << [w.set_string("abc", 0, nil, 2), w.get_string(0, 2)]
+            r << [w.set_string(""), w.set_string("", 8)]
+            o = Object.new; def o.to_str; "XY"; end
+            r << [w.set_string(o, 6), w.get_string(6)]
+            r << er.call { w.set_string(123) } << er.call { w.set_string(:ab) }
+            r << er.call { w.set_string("abc", 0, 5) }
+            r << er.call { w.set_string("abc", 0, 2, 5) }
+            r << er.call { w.set_string("abc", -1) } << er.call { w.set_string("abc", nil) }
+            r << er.call { w.set_string("abc", 0, -1) } << er.call { w.set_string("abc", 0, 1, -1) }
+            r << er.call { w.set_string("aa", 100) } << er.call { w.set_string("", 9) }
+            # readonly: conversion and index extraction beat AccessError,
+            # AccessError beats the source-range checks
+            ro = IO::Buffer.for("frozen")
+            r << er.call { ro.set_string("x") } << er.call { ro.set_string("x", -1) }
+            r << er.call { ro.set_string(123) } << er.call { ro.set_string("x", 0, 5) }
+            # the source string may be the buffer's own backing store
+            str = +"abcd"
+            IO::Buffer.for(str) { |bb| bb.set_string(str, 1, 3) }
+            r << str
+            # slice forms, nesting, bounds, invalidation
+            p8 = IO::Buffer.new(8); p8.set_string("abcdefgh")
+            r << [p8.slice.size, p8.slice(3).get_string, p8.slice(2, 4).slice(1, 2).get_string]
+            r << er.call { p8.slice(9) } << er.call { p8.slice(0, 9) }
+            r << er.call { p8.slice(-1) } << er.call { p8.slice(0, -1) }
+            rsl = IO::Buffer.for("frozen").slice(1, 3)
+            r << [rsl.readonly?, er.call { rsl.set_string("x") }]
+            big = IO::Buffer.new(8); bsl = big.slice(4, 4); big.resize(2)
+            r << er.call { bsl.get_string }
+            fb = IO::Buffer.new(8); fsl = fb.slice(0, 4); fb.free
+            r << er.call { fsl.get_string }
+            # clear: default value/offset, values masked to a byte
+            c = IO::Buffer.new(4)
+            r << [c.clear(0x41).get_string, c.clear.get_string.bytes, c.clear(0x141).get_string.bytes]
+            r << er.call { IO::Buffer.for("ab").clear(1) }
+            # hexdump
+            h = IO::Buffer.new(20); h.set_string("Hello World! \x01\x02")
+            r << h.hexdump
+            # each_byte: bounds check the offset. An overlong count is NOT
+            # compared: CRuby yields exactly count items, reading past the
+            # end of the buffer (garbage bytes); monoruby clamps at size.
+            eb = IO::Buffer.for("abcdef")
+            r << [eb.each_byte(2).to_a, eb.each_byte(1, 3).to_a]
+            r << er.call { eb.each_byte(7) {} } << (eb.each_byte(6) {} && :ok)
+            r << er.call { eb.each_byte(-1) {} } << er.call { eb.each_byte(nil) {} }
+            r << er.call { eb.each_byte(0, -1) {} }
+            # resize: growth zero-fills and keeps content
+            gr = IO::Buffer.new(4); gr.set_string("abcd"); gr.resize(8)
+            r << [gr.size, gr.get_string.bytes]
+            r << er.call { gr.resize("x") } << er.call { gr.resize(-1) }
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_buffer_set_value_constant_range() {
+        // The inlined narrow store tests CRuby's `NUM2UINT` / `NUM2INT`
+        // window at run time, which a value the compiler can see settles
+        // statically instead. Both halves of that have to hold: a constant
+        // inside the window stores the same byte the checked path would,
+        // and one outside keeps the check, so the deopt still hands the
+        // store to the builtin and CRuby's own `RangeError` comes out.
+        //
+        // Both the type symbol and the value must be literal at the call
+        // site for the store to inline at all, so each case needs its own
+        // method rather than a lambda over a table.
+        run_test(
+            r#"
+            b = IO::Buffer.new(64)
+            def w_u8(b, n)  = (i=0; while i<n; b.set_value(:U8,  0, 200);         i+=1; end)
+            def w_s8(b, n)  = (i=0; while i<n; b.set_value(:S8,  0, -100);        i+=1; end)
+            def w_u16(b, n) = (i=0; while i<n; b.set_value(:u16, 2, 60000);       i+=1; end)
+            def w_s16(b, n) = (i=0; while i<n; b.set_value(:s16, 4, -30000);      i+=1; end)
+            def w_u32(b, n) = (i=0; while i<n; b.set_value(:u32, 8, 4000000000);  i+=1; end)
+            def w_s32(b, n) = (i=0; while i<n; b.set_value(:s32, 12, -2000000000); i+=1; end)
+            def w_u64(b, n) = (i=0; while i<n; b.set_value(:u64, 16, 12345);      i+=1; end)
+            # The window's own edges, which must stay inside it.
+            def w_lo(b, n)  = (i=0; while i<n; b.set_value(:u32, 24, -2147483648); i+=1; end)
+            def w_hi(b, n)  = (i=0; while i<n; b.set_value(:u32, 28, 4294967295);  i+=1; end)
+            def w_slo(b, n) = (i=0; while i<n; b.set_value(:s32, 32, -2147483648); i+=1; end)
+            # Outside it: the check stays, and the builtin raises.
+            def w_over(b, n)    = (i=0; while i<n; b.set_value(:u32, 36, 4294967296);  i+=1; end)
+            def w_under(b, n)   = (i=0; while i<n; b.set_value(:u32, 40, -2147483649); i+=1; end)
+            def w_s32over(b, n) = (i=0; while i<n; b.set_value(:s32, 44, 2147483648);  i+=1; end)
+            def w_u8over(b, n)  = (i=0; while i<n; b.set_value(:U8,  48, 4294967296);  i+=1; end)
+
+            r = []
+            [[:w_u8, :U8, 0], [:w_s8, :S8, 0], [:w_u16, :u16, 2], [:w_s16, :s16, 4],
+             [:w_u32, :u32, 8], [:w_s32, :s32, 12], [:w_u64, :u64, 16],
+             [:w_lo, :u32, 24], [:w_hi, :u32, 28], [:w_slo, :s32, 32]].each do |m, t, off|
+              send(m, b, 400)
+              r << [m, b.get_value(t, off)]
+            end
+            [:w_over, :w_under, :w_s32over, :w_u8over].each do |m|
+              r << [m, (begin; send(m, b, 400); :no_raise; rescue => e; [e.class, e.message]; end)]
+            end
+            # The wrapper shape a wasm backend emits: a literal argument makes
+            # the wrapper specializable, so the mask folds and the store's
+            # value is a compile-time constant one frame further in.
+            class Mem
+              def initialize(b) = @b = b
+              def iwsb(a, v) = @b.set_value(:U8, a, v & 0xff)
+              def iws(a, v)  = @b.set_value(:u32, a, v & 0xffffffff)
+            end
+            def drive(m, n) = (i=0; while i<n; m.iwsb(52, 300); m.iws(56, -1); i+=1; end)
+            drive(Mem.new(b), 500)
+            r << [:wrapped, b.get_value(:U8, 52), b.get_value(:u32, 56)]
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_buffer_set_value_integer_ranges() {
+        // CRuby coerces each value type with its own converter
+        // (io_buffer.c: NUM2UINT/NUM2INT below 8 bytes, NUM2ULL/NUM2LL
+        // for the 64-bit types), so `:u64` takes the whole
+        // [-2^63, 2^64) window — wasm runtimes (dewasm) store negative
+        // i64s through it as masked bignums — narrow types wrap inside
+        // the C int window and raise CRuby's exact messages outside it,
+        // and floats truncate with their own range check.
+        run_test_once(
+            r##"
+            r = []
+            er = ->(&blk) { begin; blk.call; :no_raise; rescue => e; [e.class, e.message]; end }
+            b = IO::Buffer.new(8)
+            wr = ->(t, v) { er.call { b.set_value(t, 0, v); b.get_value(t, 0) } }
+            # u64/U64: NUM2ULL window, negative wraps
+            r << wr.(:u64, 2**64 - 1) << wr.(:u64, -1) << wr.(:u64, 2**63) << wr.(:U64, 2**64 - 1)
+            r << wr.(:u64, -2**63) << wr.(:u64, 2**64) << wr.(:u64, -2**63 - 1) << wr.(:u64, -2**64)
+            r << wr.(:u64, 2**200) << wr.(:u64, -(2**200))
+            # s64: strict i64
+            r << wr.(:s64, -2**63) << wr.(:s64, 2**63) << wr.(:s64, -2**63 - 1)
+            # u32/u16/U8: int/uint window wraps, then the ulong messages
+            r << wr.(:u32, -1) << wr.(:u32, -2**31) << wr.(:u32, -2**31 - 1) << wr.(:u32, 2**32)
+            r << wr.(:u32, 2**63) << wr.(:u32, 2**64 - 1) << wr.(:u32, 2**64)
+            r << wr.(:u32, -2**63) << wr.(:u32, -2**63 - 1) << wr.(:u32, -2**64)
+            r << wr.(:U8, 256) << wr.(:U8, -1) << wr.(:U8, 2**40) << wr.(:u16, 70000)
+            # s32/s16/S8: strict i32 window, truncate to width
+            r << wr.(:s32, 2**31) << wr.(:s32, -2**31 - 1) << wr.(:s32, 2**64)
+            r << wr.(:s16, 40000) << wr.(:S8, -2**31 - 1)
+            # floats truncate inside the converter's window
+            r << wr.(:u64, 2.5) << wr.(:u64, -1.5) << wr.(:u64, 1.8e19) << wr.(:u64, -1e18)
+            r << wr.(:u64, 1e20) << wr.(:u64, -1e19) << wr.(:u64, Float::NAN) << wr.(:u64, Float::INFINITY)
+            r << wr.(:s64, 1e19) << wr.(:s64, -1e19)
+            r << wr.(:s32, 1e10) << wr.(:s32, -1e10) << wr.(:s32, 1e30) << wr.(:s32, Float::NAN)
+            r << wr.(:u32, -1e9) << wr.(:u32, 1e30) << wr.(:u32, 2.5)
+            # to_int is honored, nil names the literal in the TypeError
+            r << wr.(:s16, Object.new.tap { |o| def o.to_int = 300 })
+            r << wr.(:u64, Object.new.tap { |o| def o.to_int = 2**64 - 1 })
+            r << wr.(:u64, nil) << wr.(:u64, "x")
+            # integers beyond i64 still convert for the float types
+            r << wr.(:f64, 2**64) << wr.(:f32, 2**200)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_buffer_value_bounds_and_dup() {
+        // Strict Integer offsets for get/set_value, per-item validation
+        // of an explicit each/values count, the float conversion
+        // TypeError, #dup's writable-internal-copy semantics, and the
+        // Comparable family riding on <=>.
+        run_test_once(
+            r##"
+            r = []
+            er = ->(&blk) { begin; blk.call; :no_raise; rescue => e; [e.class, e.message]; end }
+            b = IO::Buffer.new(8)
+            r << er.call { b.get_value(:U8, -1) } << er.call { b.set_value(:U8, -1, 0) }
+            r << er.call { b.get_value(:U8, nil) } << er.call { b.get_value(:U8, 1.5) }
+            r << er.call { b.set_value(:U8, nil, 1) }
+            r << er.call { IO::Buffer.for("abcd").set_value(:U8, 0, 1) }
+            r << er.call { b.set_value(:U8, 0, "x") } << er.call { b.set_value(:f32, 0, "x") }
+            # each/values: up-front offset bound, per-item count validation
+            e6 = IO::Buffer.for("abcdef")
+            r << e6.values(:U8, 6) << er.call { e6.values(:U8, 7) }
+            r << e6.values(:u16, 5) << e6.values(:u16, 0, 3).size
+            r << er.call { e6.values(:u16, 0, 4) }
+            r << er.call { e6.each(:U8, -1) {} } << er.call { e6.values(:U8, nil) }
+            r << er.call { e6.values(:U8, 0, -1) } << er.call { e6.each(:U8, 0, -1) {} }
+            # dup / clone: a writable INTERNAL copy, whatever the source
+            m = IO::Buffer.new(64, IO::Buffer::MAPPED).dup
+            r << [m.internal?, m.mapped?, m.readonly?, m.size]
+            n0 = IO::Buffer.new(0).dup
+            r << [n0.size, n0.null?]
+            dsl = IO::Buffer.for("abcdef").slice(1, 3).dup
+            r << [dsl.size, dsl.get_string, dsl.internal?, dsl.external?]
+            rd = IO::Buffer.for("frozen").dup
+            r << [rd.readonly?, rd.set_string("X"), rd.get_string]
+            lk = IO::Buffer.new(4)
+            lk.locked { r << er.call { lk.dup } << er.call { lk.clone } }
+            str = +"xyz"
+            IO::Buffer.for(str) { |v| dv = v.dup; dv.set_string("A"); r << [str, dv.get_string] }
+            # Comparable rides on <=>; a non-buffer operand is a TypeError
+            x = IO::Buffer.for("ab"); y = IO::Buffer.for("ac")
+            r << [x < y, x <= y, y > x, x.between?(x, y)]
+            r << er.call { x == "ab" }
+            # .string argument errors
+            r << er.call { IO::Buffer.string(-1) { } } << er.call { IO::Buffer.string("x") { } }
+            # a freed buffer still answers size; data access fails
+            fr = IO::Buffer.new(4); fr.free
+            r << [er.call { fr.get_value(:U8, 0) }, er.call { fr.get_string }, fr.size]
             r
             "##,
         );
@@ -1475,5 +2385,33 @@ mod tests {
             r
             "##,
         );
+    }
+
+    /// `__address` is a monoruby extension (no CRuby counterpart, so no
+    /// oracle comparison): an Integer for stable storages that really
+    /// points at the bytes (cross-checked through a Fiddle read), nil for
+    /// storages whose bytes can move and for null/freed buffers.
+    #[test]
+    fn io_buffer_address() {
+        let res = run_test_no_result_check(
+            r##"
+            require "fiddle"
+            b = IO::Buffer.new(16)
+            a = b.__address
+            ok = a.is_a?(Integer) && a > 0
+            # The address is the storage itself, not a copy.
+            b.set_string("ABC")
+            ok &&= Fiddle::Pointer.new(a)[0, 3] == "ABC"
+            ok &&= b.__address == a
+            # No stable address: empty, string-backed, slice, freed.
+            ok &&= IO::Buffer.new(0).__address.nil?
+            ok &&= IO::Buffer.for("hello").__address.nil?
+            ok &&= b.slice(4, 8).__address.nil?
+            b.free
+            ok &&= b.__address.nil?
+            ok
+            "##,
+        );
+        assert_eq!(res, crate::Value::bool(true));
     }
 }

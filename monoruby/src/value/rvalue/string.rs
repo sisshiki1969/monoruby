@@ -55,6 +55,12 @@ pub(crate) fn sjis_char_width(b: &[u8]) -> Option<usize> {
 #[monoruby_object]
 pub struct RString(Value);
 
+impl RString {
+    pub fn bytes(v: Vec<u8>) -> Self {
+        Self(Value::bytes(v))
+    }
+}
+
 /// Iterator yielding one character's worth of bytes per call,
 /// honouring the declared encoding. For UTF-8, walks valid UTF-8
 /// scalars; broken byte sequences advance one byte at a time so the
@@ -220,8 +226,7 @@ pub enum Encoding {
 /// Canonical names for [`Encoding::Other`] variants (stateful /
 /// dummy byte encodings monoruby has no native codec for). The
 /// index is the `Encoding::Other` payload.
-pub(crate) const OTHER_ENC_NAMES: &[&str] =
-    &["UTF-7", "CP50220", "CP50221", "UTF-16", "UTF-32"];
+pub(crate) const OTHER_ENC_NAMES: &[&str] = &["UTF-7", "CP50220", "CP50221", "UTF-16", "UTF-32"];
 
 /// `(display name, `Encoding::<CONST>` suffix)` for
 /// [`Encoding::NamedByte`] variants — ASCII-compatible byte
@@ -570,33 +575,33 @@ impl Encoding {
             "TIS_620" | "TIS620" => Ok(Encoding::NamedByte(named_byte_index("TIS_620").unwrap())),
             "KOI8_R" => Ok(Encoding::NamedByte(named_byte_index("KOI8_R").unwrap())),
             "KOI8_U" => Ok(Encoding::NamedByte(named_byte_index("KOI8_U").unwrap())),
-            "WINDOWS_1250" | "CP1250" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1250").unwrap()))
-            }
-            "WINDOWS_1251" | "CP1251" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1251").unwrap()))
-            }
-            "WINDOWS_1252" | "CP1252" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1252").unwrap()))
-            }
-            "WINDOWS_1253" | "CP1253" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1253").unwrap()))
-            }
-            "WINDOWS_1254" | "CP1254" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1254").unwrap()))
-            }
-            "WINDOWS_1255" | "CP1255" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1255").unwrap()))
-            }
-            "WINDOWS_1256" | "CP1256" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1256").unwrap()))
-            }
-            "WINDOWS_1257" | "CP1257" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1257").unwrap()))
-            }
-            "WINDOWS_1258" | "CP1258" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_1258").unwrap()))
-            }
+            "WINDOWS_1250" | "CP1250" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1250").unwrap(),
+            )),
+            "WINDOWS_1251" | "CP1251" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1251").unwrap(),
+            )),
+            "WINDOWS_1252" | "CP1252" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1252").unwrap(),
+            )),
+            "WINDOWS_1253" | "CP1253" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1253").unwrap(),
+            )),
+            "WINDOWS_1254" | "CP1254" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1254").unwrap(),
+            )),
+            "WINDOWS_1255" | "CP1255" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1255").unwrap(),
+            )),
+            "WINDOWS_1256" | "CP1256" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1256").unwrap(),
+            )),
+            "WINDOWS_1257" | "CP1257" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1257").unwrap(),
+            )),
+            "WINDOWS_1258" | "CP1258" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_1258").unwrap(),
+            )),
             "IBM437" | "CP437" => Ok(Encoding::NamedByte(named_byte_index("IBM437").unwrap())),
             "IBM737" | "CP737" => Ok(Encoding::NamedByte(named_byte_index("IBM737").unwrap())),
             "IBM775" | "CP775" => Ok(Encoding::NamedByte(named_byte_index("IBM775").unwrap())),
@@ -618,8 +623,8 @@ impl Encoding {
             // Byte encodings we still fold onto ASCII-8BIT without
             // name preservation (Mac* — kept as the prior behaviour to
             // avoid ASCII-compat edge cases).
-            "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN"
-            | "MACROMANIA" | "MACTHAI" | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
+            "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN" | "MACROMANIA" | "MACTHAI"
+            | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
 
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unknown encoding name - {s}"
@@ -1371,6 +1376,30 @@ impl RStringInner {
         unsafe { &mut self.content.owned }
     }
 
+    /// Grow the owned buffer so it can hold `cap` bytes without
+    /// reallocating — `String.new(capacity:)`'s allocation hint. A
+    /// shared view is detached first: a sharer has no buffer of its own
+    /// to grow. Nothing observable changes, so the cached code range
+    /// stays valid.
+    ///
+    /// Fallible on purpose. `capacity: 2 ** 62` is a legal Ruby
+    /// expression that CRuby answers with `NoMemoryError`; an
+    /// infallible `reserve` would abort the process instead.
+    pub(crate) fn try_reserve_capacity(&mut self, cap: usize) -> bool {
+        let buf = self.owned_mut();
+        let additional = cap.saturating_sub(buf.len());
+        if additional == 0 {
+            return true;
+        }
+        // Ask the `MONORUBY_MALLOC_HARD_LIMIT` guard first: it aborts the
+        // process rather than failing the allocation, so `try_reserve`
+        // would never get to report a `capacity: 2 ** 62`.
+        if crate::alloc::would_exceed_malloc_hard_limit(additional) {
+            return false;
+        }
+        buf.try_reserve(additional).is_ok()
+    }
+
     /// The bytes, for overwriting in place at the same length (a shared
     /// view is detached first). The cached code range is dropped, since
     /// the caller may write anything.
@@ -1408,8 +1437,15 @@ impl RStringInner {
     /// (`"abc".force_encoding("UTF-16LE")` was SevenBit under
     /// UTF-8 but has odd byte count under UTF-16LE).
     pub fn set_encoding(&mut self, ty: Encoding) {
-        self.ty = ty;
-        self.cr.set(CodeRange::Unknown);
+        // Re-tagging with the same encoding changes nothing the code
+        // range describes; keep it cached. (Dropping it made every
+        // `sub` / `gsub` / `force_encoding` result an *uncached* piece,
+        // which the append fast path then folded into an Unknown
+        // receiver — see `emit_string_shl`.)
+        if self.ty != ty {
+            self.ty = ty;
+            self.cr.set(CodeRange::Unknown);
+        }
     }
 
     /// Returns the cached code range, computing it on first call.
@@ -1463,7 +1499,11 @@ impl RStringInner {
             // from_utf8 -- a SevenBit string can answer in O(1).
             Encoding::Utf8 => match self.code_range() {
                 CodeRange::SevenBit => self.len(),
-                CodeRange::Valid => self.as_bytes().iter().filter(|&&b| (b & 0xC0) != 0x80).count(),
+                CodeRange::Valid => self
+                    .as_bytes()
+                    .iter()
+                    .filter(|&&b| (b & 0xC0) != 0x80)
+                    .count(),
                 CodeRange::Broken => self.iter_char_bytes().count(),
                 // code_range() always populates `cr` to a concrete
                 // variant before returning; Unknown is unreachable.
@@ -1887,6 +1927,30 @@ impl RStringInner {
 
     /// Owned, with the byte buffer spilled to the heap (so its address
     /// is stable and shareable).
+    ///
+    /// The bytes, encoding tag and code range of a literal template the
+    /// JIT may instantiate inline: owned content the copy can hold in
+    /// its own inline buffer, so there is no heap buffer to clone and
+    /// nothing for [`share_string_buffer`] to convert.
+    ///
+    /// Declines an encoding carrying a payload byte, for which the tag
+    /// alone would not reproduce the value.
+    ///
+    pub(crate) fn inline_copyable(&self) -> Option<(Vec<u8>, u8, u8)> {
+        if self.content.is_shared() || self.owned_spilled() {
+            return None;
+        }
+        match self.ty {
+            Encoding::Ascii8 | Encoding::Utf8 | Encoding::UsAscii => {}
+            _ => return None,
+        }
+        Some((
+            self.content.as_slice().to_vec(),
+            self.ty.tag(),
+            self.cr.get() as u8,
+        ))
+    }
+
     fn owned_spilled(&self) -> bool {
         // SAFETY: tag-discriminated; `owned` is the live variant.
         !self.content.is_shared() && unsafe { self.content.owned.spilled() }
@@ -2376,9 +2440,9 @@ impl RStringInner {
     /// the post-mutation classification: when both sides are
     /// SevenBit/Valid and the splice falls on UTF-8 character
     /// boundaries we set the result cr in O(1) without re-walking
-    /// the whole buffer. Broken results on UTF-8-compatible
-    /// encodings demote to ASCII-8BIT, matching CRuby and
-    /// `bytesplice`.
+    /// the whole buffer. A broken result keeps the encoding
+    /// `compatible_encoding` negotiated, as CRuby's does, and is simply
+    /// classified Broken.
     pub fn bytesplice_with(
         &mut self,
         start: usize,
@@ -2428,16 +2492,12 @@ impl RStringInner {
         // Slow path: re-classify the whole buffer. Caching the
         // result keeps a chain of in-place splices O(N) rather than
         // O(N²).
-        let cr = self.ty.classify(self.as_bytes());
-        if matches!(cr, CodeRange::Broken) && self.ty.is_utf8_compatible() {
-            // CRuby downgrades to ASCII-8BIT when UTF-8-tagged
-            // content becomes invalid; under that tag every byte is
-            // valid.
-            self.ty = Encoding::Ascii8;
-            self.cr.set(CodeRange::Valid);
-        } else {
-            self.cr.set(cr);
-        }
+        // The encoding is whatever `compatible_encoding` negotiated, and a
+        // broken result does not change it: CRuby leaves the string under
+        // its own tag and lets `valid_encoding?` report false. Splicing
+        // ASCII into an already-broken UTF-8 string keeps it UTF-8 there,
+        // where re-tagging it ASCII-8BIT would also claim it valid.
+        self.cr.set(self.ty.classify(self.as_bytes()));
         Ok(())
     }
 
@@ -2724,8 +2784,14 @@ mod encoding_tests {
         // Bare `UTF-16` / `UTF-32` are CRuby's BOM-based *dummy*
         // encodings — distinct ASCII-incompatible `Other` variants,
         // not the real LE codecs.
-        assert_eq!(Encoding::try_from_str("UTF-16").unwrap(), Encoding::Other(3));
-        assert_eq!(Encoding::try_from_str("UTF-32").unwrap(), Encoding::Other(4));
+        assert_eq!(
+            Encoding::try_from_str("UTF-16").unwrap(),
+            Encoding::Other(3)
+        );
+        assert_eq!(
+            Encoding::try_from_str("UTF-32").unwrap(),
+            Encoding::Other(4)
+        );
         // Japanese.
         assert_eq!(Encoding::try_from_str("EUC-JP").unwrap(), Encoding::EucJp);
         assert_eq!(
@@ -3475,18 +3541,22 @@ mod encoding_tests {
     }
 
     #[test]
-    fn bytesplice_with_breaks_utf8_boundary_demotes_to_ascii8() {
+    fn bytesplice_with_breaks_utf8_boundary_stays_utf8() {
         // Splicing into the middle of a multi-byte UTF-8 character
-        // produces broken bytes; under Utf8 tagging CRuby (and our
-        // implementation) demotes to ASCII-8BIT.
+        // produces broken bytes. The string keeps its UTF-8 tag and is
+        // classified Broken: re-tagging it ASCII-8BIT would also declare
+        // it valid, and CRuby reports `valid_encoding?` false instead.
+        // `String#bytesplice` itself never gets here, rejecting a
+        // non-boundary offset with IndexError as CRuby does; this is the
+        // helper that `index_assign` also splices through.
         let globals = Globals::new_test();
         let mut s = RStringInner::from_str_scanned("あ"); // 3 bytes
         let repl = RStringInner::from_str_scanned("X");
 
         // Replace byte 1 (middle of "あ") — boundary check fails.
         s.bytesplice_with(1, 0, &repl, &globals.store).unwrap();
-        assert_eq!(s.encoding(), Encoding::Ascii8);
-        assert_eq!(s.cr.get(), CodeRange::Valid);
+        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.cr.get(), CodeRange::Broken);
     }
 }
 
@@ -3501,7 +3571,10 @@ mod shared_string_tests {
     /// SmallVec rather than trusting the (non-repr(C)) SmallVec layout.
     #[test]
     fn shared_overlay_matches_spilled_smallvec_layout() {
-        assert_eq!(std::mem::offset_of!(SharedContent, tag), smallvec::OFFSET_CAPA);
+        assert_eq!(
+            std::mem::offset_of!(SharedContent, tag),
+            smallvec::OFFSET_CAPA
+        );
         assert_eq!(
             std::mem::offset_of!(SharedContent, ptr),
             smallvec::OFFSET_HEAP_PTR
@@ -3518,7 +3591,11 @@ mod shared_string_tests {
         // A spilled owned buffer read through the `shared` overlay must
         // expose its heap ptr / len on the same offsets.
         let bytes: Vec<u8> = (0..100u8).collect();
-        let inner = RStringInner::from(SmallVec::from_slice(&bytes), Encoding::Ascii8, CodeRange::Valid);
+        let inner = RStringInner::from(
+            SmallVec::from_slice(&bytes),
+            Encoding::Ascii8,
+            CodeRange::Valid,
+        );
         assert!(inner.owned_spilled());
         let (ptr, len) = unsafe { (inner.content.shared.ptr, inner.content.shared.len) };
         assert_eq!(ptr, inner.as_ptr());
@@ -3542,7 +3619,10 @@ mod shared_string_tests {
         let root = child.as_rstring_inner().shared_root().unwrap();
         assert_eq!(parent.as_rstring_inner().shared_root(), Some(root));
         assert!(root.is_frozen());
-        assert_eq!(child.as_rstring_inner().as_bytes(), &src.as_bytes()[50..200]);
+        assert_eq!(
+            child.as_rstring_inner().as_bytes(),
+            &src.as_bytes()[50..200]
+        );
         assert_eq!(parent.as_rstring_inner().as_bytes(), src.as_bytes());
         // Both views alias the root's buffer (no copy happened).
         assert_eq!(

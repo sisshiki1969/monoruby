@@ -140,7 +140,7 @@ pub struct Store {
     ///
     jit_iseqs: Vec<ISeqId>,
     /// class table.
-    classes: ClassInfoTable,
+    pub(in crate::globals) classes: ClassInfoTable,
     /// call site info.
     callsite_info: Vec<CallSiteInfo>,
     /// const access site info.
@@ -619,10 +619,31 @@ impl Store {
             ObjTy::HASH => self.hash_hash_fid,
             _ => return false,
         };
-        match (builtin, self.check_method(obj, IdentId::HASH)) {
+        match (builtin, self.hash_method(obj.class())) {
             (Some(builtin), Some(found)) => builtin == found,
             _ => false,
         }
+    }
+
+    ///
+    /// Resolve `hash` on `class_id`, memoized per class_version — the same
+    /// shape as `match_method`. Both callers below run on every Hash / Set
+    /// operation whose key is not an immediate, so the uncached path (a
+    /// global-method-cache probe, and an ancestor walk on a miss) is worth
+    /// collapsing to a `Cell` load and a compare.
+    ///
+    fn hash_method(&self, class_id: ClassId) -> Option<FuncId> {
+        let version = Globals::class_version();
+        if let Some((v, fid)) = self[class_id].hash_method_at()
+            && v == version
+        {
+            return fid;
+        }
+        let fid = self
+            .check_method_for_class_with_version(class_id, IdentId::HASH, version)
+            .and_then(|e| e.func_id());
+        self[class_id].set_hash_method_at(version, fid);
+        fid
     }
 
     ///
@@ -636,7 +657,7 @@ impl Store {
     /// interpreter frame it replaces.
     ///
     pub(crate) fn has_builtin_identity_hash(&self, obj: Value) -> bool {
-        match (self.kernel_hash_fid, self.check_method(obj, IdentId::HASH)) {
+        match (self.kernel_hash_fid, self.hash_method(obj.class())) {
             (Some(builtin), Some(found)) => builtin == found,
             _ => false,
         }
@@ -1361,9 +1382,47 @@ impl Store {
     /// parameter because `Globals::class_version()` borrows the CODEGEN
     /// RefCell, which is unavailable when this is called from JIT
     /// compilation (use `JitContext::class_version()` there).
+    /// The function whose `lexical_context` governs unqualified constant
+    /// lookup from `fid`.
+    ///
+    /// A block carries no lexical context of its own (it is written inside
+    /// its mother and inherits that scope), and `Lfp::outermost` stops at a
+    /// `define_method` body because that frame *is* the method boundary —
+    /// so a bmethod's `method_func_id` is the block itself. Climb to the
+    /// nearest mother that owns a lexical context, so `K` inside
+    /// `define_method(:m) { K }` resolves through the enclosing
+    /// `module`/`class` nesting exactly as in a plain block.
+    pub(crate) fn lexical_owner(&self, fid: FuncId) -> FuncId {
+        let mut fid = fid;
+        while let Some(iseq) = self[fid].is_iseq()
+            && self[iseq].lexical_context.is_empty()
+        {
+            let mother = self[self[iseq].mother().0].func_id();
+            if mother == fid {
+                break;
+            }
+            fid = mother;
+        }
+        fid
+    }
+
     pub(crate) fn no_to_str(&self, class_id: ClassId, version: u32) -> bool {
         if self[class_id].no_to_str_at() == Some(version) {
             return true;
+        }
+        // The JIT hands over the abstract state's class, which may be one
+        // of the synthetic tags (no module to walk): BOOL stands for a
+        // slot that is `true` or `false`, BIGNUM for a heap Integer.
+        // Anything else without a module is unknown — answer "may have
+        // `to_str`" so the caller takes the generic path.
+        if class_id == BOOL_CLASS {
+            return self.no_to_str(TRUE_CLASS, version) && self.no_to_str(FALSE_CLASS, version);
+        }
+        if class_id == BIGNUM_CLASS {
+            return self.no_to_str(INTEGER_CLASS, version);
+        }
+        if self[class_id].try_get_module().is_none() {
+            return false;
         }
         // Resolve via the uncached ancestor walk rather than
         // `method_cache`: this runs at most once per class per
@@ -1486,6 +1545,13 @@ impl Store {
         if class_id == BOOL_CLASS {
             return self.check_bool_method_with_version(name, class_version);
         }
+        // The Bignum tag is a representation, not a method namespace: every
+        // heap Integer resolves methods exactly as a fixnum does.
+        let class_id = if class_id == BIGNUM_CLASS {
+            INTEGER_CLASS
+        } else {
+            class_id
+        };
         let mut cache = self.method_cache.borrow_mut();
         if let Some(entry) = cache.get(class_id, name, class_version) {
             return entry.cloned();
@@ -1952,6 +2018,13 @@ impl Store {
 
 pub struct ClassInfoTable {
     table: Vec<ClassInfo>,
+    /// `ClassInfo::object` mirrored into a flat, machine-code-readable
+    /// table indexed by `ClassId` (8-byte stride, `None` reads as 0), so
+    /// JIT code can go from a value's class id to its class object without
+    /// a call: the inline `Module#===` (`AsmInst::KindOfConst`) walks the
+    /// superclass chain from here through `GLOBALS_CLASS_OBJECTS`. Kept in
+    /// step by `set_object` and the growth paths below.
+    pub(in crate::globals) objects: MonoVec<Option<Module>>,
 }
 
 impl std::ops::Index<ClassId> for ClassInfoTable {
@@ -1969,9 +2042,21 @@ impl std::ops::IndexMut<ClassId> for ClassInfoTable {
 
 impl ClassInfoTable {
     fn new() -> Self {
+        let mut objects = MonoVec::with_capacity(256);
+        for _ in 0..100 {
+            objects.push(None);
+        }
         Self {
             table: vec![ClassInfo::new(); 100],
+            objects,
         }
+    }
+
+    /// Attach the class object of *id*, in both the table and its
+    /// machine-code mirror.
+    pub(in crate::globals) fn set_object(&mut self, id: ClassId, obj: Module) {
+        self.table[id.u32() as usize].object = Some(obj);
+        self.objects[id.u32() as usize] = Some(obj);
     }
 
     /// Number of slots in the class table, including the unused
@@ -1985,18 +2070,21 @@ impl ClassInfoTable {
     fn add_class(&mut self) -> ClassId {
         let id = self.table.len();
         self.table.push(ClassInfo::new());
+        self.objects.push(None);
         ClassId::new(id as u32)
     }
 
     fn copy_class(&mut self, original_class: ClassId) -> ClassId {
         let id = self.table.len();
         let info = self[original_class].copy();
+        self.objects.push(info.object);
         self.table.push(info);
         ClassId::new(id as u32)
     }
 
     fn def_builtin_class(&mut self, class: ClassId) {
         self[class] = ClassInfo::new();
+        self.objects[class.u32() as usize] = None;
     }
 
     pub(crate) fn search_method_by_class_id(
@@ -2362,7 +2450,7 @@ impl CallSiteInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct CallSiteId(pub u32);
 

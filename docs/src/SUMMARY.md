@@ -59,7 +59,15 @@
 - [TOPLEVEL_BINDING and the main script](design/toplevel_binding.md)
 - [super resolution via the caller PC (Japanese)](design/super_resolution.md)
 
----
+# Runtime Optimization (Japanese)
+
+- [Overview](design/runtime_optimization/README.md)
+- [Array](design/runtime_optimization/array.md)
+- [Hash](design/runtime_optimization/hash.md)
+- [String](design/runtime_optimization/string.md)
+- [Regexp](design/runtime_optimization/regexp.md)
+
+# Design Documents (continued)
 
 - [Per-encoding character iteration design](design/encoding_char_iteration_design.md)
 - [C extension support — design notes (Japanese)](design/c_extention.md)
