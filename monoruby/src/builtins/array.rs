@@ -4237,7 +4237,8 @@ fn slice_inner(mut aref: Array, start: usize, len: usize) -> Value {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/pack.html]
 #[monoruby_builtin]
 fn pack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let template = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    let template = template.to_str()?;
     let buffer = lfp.try_arg(1);
     let ary = lfp.self_val().as_array();
     rvalue::pack(vm, globals, &ary, &template, buffer)
