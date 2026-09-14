@@ -723,15 +723,54 @@ impl<'a> BytecodeGen<'a> {
             args,
             pos_num,
             recv,
+            block_fid,
+            send_direct_name,
             ..
         } = callsite;
         let ret = match dst {
             None => 0,
             Some(ret) => self.slot_id(&ret).0,
         };
+        let arg_slot = self.slot_id(&args);
+        let recv_slot = self.slot_id(&recv);
+        let dst_slot = dst.map(|r| self.slot_id(&r));
         let callid = self.new_callsite(callsite, bc_pos)?;
         self.store
             .new_callsite_map_entry(self.iseq_id, bc_pos, callid);
+        // The direct-call twin of `recv.send(:foo, ...)`: same receiver,
+        // the arguments past the name (`args + 1`, already contiguous in
+        // this frame), the same result slot, and `bypass_visibility` —
+        // `send` reaches a private method, and the twin must too. It gets
+        // no entry in the callsite map: no bytecode executes it, and only
+        // the JIT ever looks it up (`CallSiteInfo::send_direct`).
+        if let Some(name) = send_direct_name {
+            let direct = self.store.new_callsite(
+                Some(name),
+                bc_pos,
+                pos_num - 1,
+                SlotId(0),
+                indexmap::IndexMap::default(),
+                vec![],
+                vec![],
+                block_fid,
+                None,
+                // `send(:foo)` alone leaves the twin with no arguments;
+                // point it at the receiver, the convention a zero-argument
+                // call site uses elsewhere (`CallSite::unary`), rather than
+                // one past the name slot.
+                if pos_num == 1 {
+                    recv_slot
+                } else {
+                    arg_slot + 1usize
+                },
+                recv_slot,
+                dst_slot,
+                false,
+                true,
+                false,
+            );
+            self.store.set_send_direct(callid, direct);
+        }
         let op1 = enc_wl(opcode, ret, callid.get());
         let op2 = enc_www(
             0,
@@ -764,6 +803,9 @@ impl<'a> BytecodeGen<'a> {
             forwarding,
             bypass_visibility,
             vcall,
+            // Consumed by `encode_call`, which builds the twin call site
+            // before handing the original here.
+            send_direct_name: _,
         } = callsite;
 
         let args = self.slot_id(&args);

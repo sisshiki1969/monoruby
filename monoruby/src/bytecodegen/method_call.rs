@@ -118,6 +118,27 @@ impl<'a> BytecodeGen<'a> {
             None
         };
 
+        // `recv.send(:foo, ...)` / `recv.__send__(:foo, ...)` spelled with
+        // a literal Symbol. Noted here, while the argument nodes are still
+        // in hand, and turned into the direct-call twin by `encode_call`;
+        // the JIT decides whether to use it (the VM never does), so a
+        // redefinition of `send` is still honoured — see
+        // `CallSiteInfo::send_direct`.
+        let send_direct_name = if !safe_nav
+            && (method == IdentId::get_id("send") || method == IdentId::get_id("__send__"))
+            && !arglist.splat
+            && !arglist.forwarding
+            && !arglist.delegate_block
+            && arglist.kw_args.is_empty()
+            && arglist.hash_splat.is_empty()
+            && let Some(first) = arglist.args.first()
+            && let NodeKind::Symbol(sym) = &first.kind
+        {
+            Some(IdentId::get_id(sym))
+        } else {
+            None
+        };
+
         // Privileged intrinsic: `recv.__builtin_initialize__(...)` is a
         // visibility-bypassing call to `recv.initialize(...)`. Used by
         // the Ruby `Class#new` (startup.rb) so a class's private
@@ -140,6 +161,16 @@ impl<'a> BytecodeGen<'a> {
             callid.bypass_visibility = true;
         }
         callid.vcall = vcall;
+        // Only the plain shape: the twin hands the callee the arguments
+        // past the name, which needs them contiguous from `args + 1` with
+        // nothing else in the window.
+        if let Some(name) = send_direct_name
+            && callid.is_simple()
+            && !callid.forwarding
+            && callid.pos_num >= 1
+        {
+            callid.send_direct_name = Some(name);
+        }
 
         self.temp = old_temp;
         if push_flag {

@@ -142,6 +142,7 @@
 07fc55c9c66fdcb526a444ef6361069c	[1, 5, nil, 1, :dflt, 1, "proc:q"]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 080f42d888ea5e1a7eb7a4c43d6b5064	"US-ASCII"	"Hello".encode("US-ASCII").swapcase.encoding.to_s
 080f929287fc4ac492b6fb2c6fb2aaac	[:interrupted]	def run_masked(timing, blocking = true)\n              klass = Class
+08173e888ad3955b2850a0c982cab8e3	["old", "new"]	class R; def t = "old"; end\n        o = R.new\n        out = []\n        
 082c922854391d30efbd21f4e18518c3	true	File.writable?("/tmp")
 082f54363bbaa6f37b522a29ab6c1e74	true	f = File.new("Cargo.toml", "r")\n            result = f.read(10).is_
 082ffdcafa629eb9c1ce2f11988484e1	[0, "A1", 2, "A1\\n", "A2\\n", "B1\\n", "B1\\n", "no stream to tell", "no stream to seek", "no stream to rewind", "no stream", "closed stream"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
@@ -1597,6 +1598,7 @@
 723ea63495140106ebdfae5448e3e464	80	class C\n          def f(a, b)\n            a + b\n          end\n        e
 7252f1c8ab400b2d14e205f52ce07f84	["warned", "silent", "warned", "silent", "warned", "warned"]	require "stringio"\n        res = []\n        capture = proc do |verbose,
 725d2fdc2eaf1d2bff1408d39bfaa2f4	["BA"]	module SVSE_A\n          private\n          def derp(message)\n           
+7263504ac9ceebe6b67e47cc63c33f66	["F1", "F2", ["F1", "F2"]]	class F1; def go = "F1"; end\n        class F2; def go = "F2"; end\n     
 72646a541277ded41b2f584e45b344f9	[true, true, false, false]	res = []\n            f = Fiber.new { Fiber.yield }\n            res 
 7279cfebff4f2431e12a11ac0cd8b2fc	:ok	Enumerator.new { |y| y.yield(1) }.first; :ok
 728b693008cde91b8e668b5188312960	"stream closed in another thread"	require "socket"\n            s = TCPServer.new("127.0.0.1", 0)\n    
@@ -2263,6 +2265,7 @@ a2e679bc25d5bbcdcffa24d1390f7717	[true, 0, true, true, true, 0]	pid = fork { exi
 a2fe58a4b8970857e7e6bc4daf663e90	[["UTF-8", "EUC-JP", 1, false], ["UTF-8", "EUC-JP", 1, false], ["UTF-8", "EUC-JP"], [true, "ASCII-8BIT", true], 1, [42, []]]	path = "/tmp/monoruby_test_iostate_#{Process.pid}_#{rand(100000)}"\n
 a315e27bdfdf0dfa963d5e510f6c345b	[[2, 3.5, 4, 5.5], [3.5, 5.5, 7.5], 1180591620717411303425, 1.1805916207174113e+21]	def disagree(x) = x + 1\n            def unstable(x, y) = x + y\n    
 a31930a9e915d99cf23e80f66584373b	["m0", 420, 21, "m0", 0, 4, 109, 30, 777, 5, 880, 24, "argerr", "NoMethodError", "m0", 70, 0]	class C\n          def m0; "m0"; end\n          def m1(a); a * 10; end\n  
+a31d9a27768b00a22860cc50caf2803a	[["target", "mine:t"], "target"]	class S; def t = "target"; end\n        o = S.new\n        out = []\n     
 a325e684a0135d4aab296b6018ac921e	[true, true]	class Sub < String; end\n        [Sub.new("b").between?("a", "c"), Sub.a
 a32adc46f1bb4ed6ce92840c775bbf19	""	"".upcase
 a32db795d17419028fabd7b655b6becb	"bar"	class Foo\n              def bar; "bar"; end\n              alias :'b
@@ -2755,6 +2758,7 @@ c36b1e25498098fb5ed62d696afcb18a	[true, true, true, true, true, true, true, true
 c371620ea2df438989e85db786cb3351	[true, true]	GC.config(rgengc_allow_full_mark: false)\n            begin\n        
 c374efe593f3736150bcf4d3b491c4f6	:te2	ar = Object.new; def ar.to_ary; 5; end; begin; [1].product(ar); rescue TypeError
 c395a855a07a1b6fc115ed058695bea2	"İSTANBUL"	"istanbul".upcase(:turkic)
+c39ca0d357f60118a6330a5340168ab0	["mm:nope:2"]	class M\n          def method_missing(name, *a) = "mm:#{name}:#{a.size}"
 c3a07328ee0431ca943190fff38d871d	[1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034, 1034]	class A\n          def m(a, b) = a * 10 + b\n        end\n        class B 
 c3bd239c90e457c144a5f47e376ddfee	[true, false, 42]	c = Class.new { attr :foo }\n            i = c.new\n            i.ins
 c3ca1c783780c3d76d7669a9f4d0d745	[true, 5]	class PSubA < Proc; end; p = PSubA.new { 5 }; [p.is_a?(PSubA), p.call]
@@ -2889,6 +2893,7 @@ ccd878c1f1810dfef13a53d1e1a05fb8	:te	begin; :sym.instance_eval { alias :foo :to_
 ccdd40701f9797edf931ec9bb16c3abf	[:alpha, 1.5, :beta, 2.5]	class PmF\n          def tag = :alpha\n          def rate = 1.5\n        e
 ccebcacf1f0e521c283f27ea3d09e042	[[[:hit, 1], [:miss, 299]], :hit, :miss, :hit, :hit, :miss]	def probe(prev, key)\n              if prev == key\n                :
 ccee79e211a63a6f8408eaaa13a6aee9	[{a: 1}, [1, {a: 1}], {}, "no implicit conversion of Object into Hash", "can't convert Object to Hash (Object#to_hash gives Integer)"]	def f(**o) = o\n            def g(a, **o) = [a, o]\n            m = O
+ccf76894a3fb54890c63d16592556fa7	["pub0", "pri", "pro", 3, 42, "pub9", "pub1"]	class C\n          def pub(x) = "pub#{x}"\n          private def pri = "p
 cd2701bc81848b76a6ea4326a7d33198	[[[:eq, 1], [:hit, 2], [:miss, 598], [:ne, 299]], :hit, :eq, :hit, :miss, :hit, :miss]	def hit(prev, key)\n              if prev == key then :hit else :mis
 cd29ece16f52c170d36a353d72be8fb8	[1, 2, [3, 4, 5, 6, 7]]	def f(x,y,*z)\n            [x,y,z]\n        end\n        \n\n        f(1,2,3
 cd2df73dc4bb642c9c1db8166dee2691	true	t = File.birthtime("Cargo.toml") rescue :unsupported\n            t 
@@ -2998,6 +3003,7 @@ d506260ac377e92b5498fb8e6ec73750	true	GC.stat(nil).is_a?(Hash)
 d51949e16f4c8e33f4baabff8fb4b4dc	[[72, 104, 104], [73, 104, 104]]	src = "hello world"\n        out = []\n        20.times do |k|\n          
 d52efc39591dfa6b41cc1b74f647a5cf	["ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError"]	def g(a, b) = a + b\n        def f(...) = g(10, 20, 30, ...)\n        \n\n 
 d55e1c488a964698d1d9d4f121c8d95c	[["UTF-8", nil, nil, nil], ["ISO-8859-1", "nil"], ["ISO-8859-1", "UTF-8"], ["ISO-8859-1", "UTF-8"], ["UTF-8", "ISO-8859-1"], "nil", "ISO-8859-1", "ISO-8859-1", :tohash_ok, :blockresult, [true, true], [true, true], :inner_close_ok, [MrbPipeSub, MrbPipeSub], [:init, :init], [MrbPipeSub2, MrbPipeSub2], "through\\n"]	r = []\n            IO.pipe { |a, b| r << [a.external_encoding&.to_s
+d56a453681c730611b776454bf5d0efe	[["P1", "P2", "P3"]]	class P1; def go = "P1"; end\n        class P2; def go = "P2"; end\n     
 d56f2419ff718092d450e601c3289b76	[nil, "a\\nb"]	$/ = nil; s = "a\\nb"; r = [s.chomp!, s]; $/ = "\\n"; r
 d580dc9cae27404632621b762b7de5a8	""	f = File.open("/dev/null")\n            f.read\n        
 d596c9980b2a827151179a99b5e3af5e	{"amount" => 1}	M = Data.define(:amount, :unit)\nM.new(1, "m").deconstruct_keys(["amount"])
@@ -3224,6 +3230,7 @@ e593b3ab51cf8529ec2abe41389fbd41	[2, 2, 2, "Times-Roman", nil, 2, nil]	def f(x)\
 e5949e2a7f7ad7762866cb540934d760	[4, 1, 7]	r = []\n        store_me = proc { |i| r << i if (i == 4)..(i == 7) }\n   
 e5a3f82fe99eb062a625f7d7fad989ef	[91, 112, 97]	f = File.open("Cargo.toml")\n            begin\n              [f.getb
 e5b6caddf0926a77ca0debe16a0d139d	:linux	def f(x); end\n            f(:windows)\n            a = :linux\n      
+e5e0bd691c34bf90bff88a5a70e2ac6f	[1, 2, 3, "hi"]	class N; def f(x) = x + 1; end\n        class Bare < BasicObject; def hi
 e5f22b981e4a6ed9bfbde224b1a43306	"constant"	module AutoloadProbe\n          autoload :Bar, "/nonexistent/probe/file"
 e5fbcacb7034291e96616d4e0bf14525	[111, 999]	TOP_CONST = 999\n        class C\n          TOP_CONST = 111\n          def
 e60570cf39218d754a8da43cd162e6df	[1, 2, 3]	class C; def to_int; 3; end; end; o = C.new\n[1,2,3,4,5].take(o)

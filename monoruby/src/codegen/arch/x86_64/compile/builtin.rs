@@ -140,13 +140,21 @@ impl Codegen {
             movb [rdi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::Unknown as u64);
         exit:
             jmp  done;
-        shared:
         }
         // Out-of-line detach-and-retry: `str_detach` copies the viewed
         // bytes into a fresh owned buffer (plain malloc, no Value
         // allocation, no GC), after which the reload takes the owned path.
         // rdi (recv) / rsi (untagged idx) / rdx (untagged byte) survive in
         // the save area.
+        //
+        // Emitted on the cold page: a shared receiver is the rare case,
+        // while `save_registers`/`restore_registers` alone are ~50
+        // instructions — in line they dwarfed the ~34-instruction fast path
+        // this inliner exists for (84 instructions per site before, 35
+        // now). (aarch64 keeps it in line: its b/b.cond cannot reach the
+        // second page — see `arch/aarch64/compile/index.rs`.)
+        self.jit.select_page(1);
+        self.jit.bind_label(shared);
         self.jit.save_registers();
         monoasm! { &mut self.jit,
             movq rax, (crate::codegen::runtime::str_detach as *const u8);
@@ -155,6 +163,9 @@ impl Codegen {
         self.jit.restore_registers();
         monoasm! { &mut self.jit,
             jmp  reload;
+        }
+        self.jit.select_page(0);
+        monoasm! { &mut self.jit,
         done:
         }
     }
@@ -839,8 +850,18 @@ impl Codegen {
         next:
             addq r11, (bucket_size);
             jmp  lp;
-        indexed:
         }
+        // The indexed regime goes on the cold page. The linear regime
+        // above serves every map still in its `ar_table` form (`AR_MAX` = 8
+        // entries, rubymap's `map::core`), and the group walk below is ~90
+        // instructions — nearly two thirds of what a `Hash#[]` site emitted
+        // when it shared the hot page (153 instructions for a Symbol key,
+        // 53 now). An indexed lookup pays one cross-page jump for it, which
+        // measured as no change on a 256-entry hash. (aarch64 cannot do
+        // this: its b/b.cond cannot reach the second page — see
+        // `arch/aarch64/compile/index.rs`.)
+        self.jit.select_page(1);
+        self.jit.bind_label(indexed);
         if layout.group_width == 16 {
             let lo = 0x0101_0101_0101_0101u64;
             let hi = 0x8080_8080_8080_8080u64;
@@ -886,6 +907,7 @@ impl Codegen {
             // builtin walks the table.
             monoasm! { &mut self.jit, jmp miss; }
         }
+        self.jit.select_page(0);
         monoasm! { &mut self.jit,
         exhausted:
             // Not present. Without a default that *is* the answer, and the

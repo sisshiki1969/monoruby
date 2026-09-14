@@ -110,6 +110,13 @@ pub struct Store {
     /// skipped (`MONORUBY_SKIP_STARTUP`), which simply disables that
     /// specialization.
     class_new_fid: Option<FuncId>,
+    /// `FuncId`s of the builtin `send` / `__send__` (one on `Kernel`, one
+    /// on `BasicObject`), recorded at registration. A call site that
+    /// resolves to one of them and whose method-name argument is a literal
+    /// Symbol is compiled as a direct call to the named method instead of
+    /// the runtime name lookup — see `CallSiteInfo::send_direct` and
+    /// `JitContext::compile_method_call`.
+    object_send_fids: Vec<FuncId>,
     /// ISeq info.
     pub(crate) iseqs: Vec<ISeqInfo>,
     ///
@@ -363,6 +370,7 @@ impl Store {
             basic_ops: basic_op::BasicOpTable::new(),
             kernel_hash_fid: None,
             class_new_fid: None,
+            object_send_fids: vec![],
             array_hash_fid: None,
             hash_hash_fid: None,
             iseqs: vec![],
@@ -575,6 +583,17 @@ impl Store {
     /// The Ruby `Class#new` trampoline's `FuncId`, if the bootstrap ran.
     pub(crate) fn class_new_fid(&self) -> Option<FuncId> {
         self.class_new_fid
+    }
+
+    /// Record a builtin `send` / `__send__`. Called at registration
+    /// (`Kernel#send` and `BasicObject#__send__`).
+    pub(crate) fn record_object_send_fid(&mut self, fid: FuncId) {
+        self.object_send_fids.push(fid);
+    }
+
+    /// Whether `fid` is a builtin `send` / `__send__`.
+    pub(crate) fn is_object_send(&self, fid: FuncId) -> bool {
+        self.object_send_fids.contains(&fid)
     }
 
     pub(crate) fn set_array_hash_fid(&mut self, fid: FuncId) {
@@ -1257,8 +1276,15 @@ impl Store {
             bypass_visibility,
             vcall,
             pmc: PolyCache::default(),
+            send_direct: None,
         });
         id
+    }
+
+    /// Attach the direct-call twin of a literal-name `send` site — see
+    /// [`CallSiteInfo::send_direct`].
+    pub(crate) fn set_send_direct(&mut self, callid: CallSiteId, direct: CallSiteId) {
+        self.callsite_info[callid.0 as usize].send_direct = Some(direct);
     }
 
     pub(crate) fn new_constsite(
@@ -2300,6 +2326,15 @@ pub struct CallSiteInfo {
     /// Polymorphic method cache — the receiver(-pair) classes the VM
     /// observed at this site. See [`PolyCache`].
     pub pmc: PolyCache,
+    /// For `recv.send(:name, ...)` / `recv.__send__(:name, ...)` written
+    /// with a literal Symbol: an alternate call site describing the direct
+    /// call `recv.name(...)` — same receiver, the arguments past the name,
+    /// the same result slot, and `bypass_visibility` (a `send` reaches
+    /// private methods). Prepared by bytecodegen and never executed by the
+    /// VM; the JIT compiles it in place of the name lookup once it has
+    /// established that this site still resolves to the builtin `send`
+    /// (a redefinition moves the class version, which retires the code).
+    pub(crate) send_direct: Option<CallSiteId>,
 }
 
 impl CallSiteInfo {
