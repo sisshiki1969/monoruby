@@ -1523,13 +1523,9 @@ impl Globals {
 
     /// Push monoruby's own stdout buffer out to the kernel.
     ///
-    /// `Kernel#p` / `#print` and `$stdout.write` share that one buffer, so
-    /// their output can never be reordered relative to each other — which
-    /// a second, Rust-side writer over the same fd would allow.
-    pub fn flush_stdout(&mut self) -> Result<()> {
-        crate::rvalue::io::flush_stdout(&self.store)
-    }
-
+    /// `Kernel#puts` / `#print` and `$stdout.write` share that one buffer,
+    /// so their output can never be reordered relative to each other —
+    /// which a second, Rust-side writer over the same fd would allow.
     pub fn write_stdout(&mut self, bytes: &[u8]) -> Result<()> {
         crate::rvalue::io::write_stdout(bytes, &self.store)
     }

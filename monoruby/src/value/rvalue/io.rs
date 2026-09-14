@@ -62,19 +62,13 @@ pub fn flush_std_streams() {
 }
 
 /// Append to monoruby's stdout buffer, flushing per the stream's policy.
-/// Used by `Kernel#p` / `#print`, which write to the process's stdout
+/// Used by `Kernel#puts` / `#print`, which write to the process's stdout
 /// without going through a Ruby `IO` object — sharing the one buffer
 /// keeps their output ordered against `$stdout.write`.
 pub fn write_stdout(bytes: &[u8], store: &Store) -> Result<()> {
     let mut progress = 0;
     stdout_buf()
         .write(bytes, &mut progress, &signal_pending)
-        .map_err(|e| drain_err(e, store))
-}
-
-pub fn flush_stdout(store: &Store) -> Result<()> {
-    stdout_buf()
-        .drain(&signal_pending)
         .map_err(|e| drain_err(e, store))
 }
 

@@ -621,6 +621,12 @@ pub(crate) fn do_spawn(
     globals: &mut Globals,
     spec: &ExecSpec,
 ) -> Result<i64> {
+    // Hand our buffered stdout/stderr to the kernel first: the child
+    // inherits a copy of the buffer along with the fds, so anything left
+    // in it would be written twice (or, once the child execs, land after
+    // output the child produced first). CRuby flushes before its forks
+    // for the same reason.
+    crate::rvalue::io::flush_std_streams();
     // CLOEXEC so a successful execve closes the write end and the
     // parent sees EOF.
     let (rfd, wfd) = pipe_cloexec()

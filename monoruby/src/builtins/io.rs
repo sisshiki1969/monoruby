@@ -1152,9 +1152,10 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 vm.invoke_method_inner(globals, write_id, self_val, &[write_str], None, None)?;
             }
         }
-        // Flush after all writes
-        let mut self_ = lfp.self_val();
-        self_.as_io_inner_mut().flush(&globals.store)?;
+        // No flush: `rb_io_puts` is `#write` and nothing more, so the
+        // stream's own policy (`IO#sync`, or a TTY, which writes through)
+        // decides when the bytes leave. Flushing here made every `puts`
+        // hit the kernel, which is CRuby's behaviour only for a TTY.
         Ok(Value::nil())
     })
 }

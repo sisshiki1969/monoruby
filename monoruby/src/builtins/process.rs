@@ -1509,6 +1509,10 @@ fn process_fork(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // The child inherits a copy of our buffers; flush first so the
+    // pending bytes are written once, by us. (CRuby flushes before
+    // forking too.)
+    crate::rvalue::io::flush_std_streams();
     // SAFETY: fork() in a green-thread (single OS thread) process.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -1555,6 +1559,9 @@ fn process_daemon(
     };
     let nochdir = bool_arg(globals, lfp.try_arg(0), "nochdir")?;
     let noclose = bool_arg(globals, lfp.try_arg(1), "noclose")?;
+    // As in `_fork`: nothing buffered may cross the fork — here the
+    // daemon child's std fds are about to become `/dev/null`.
+    crate::rvalue::io::flush_std_streams();
     // SAFETY: fork/setsid/chdir/open/dup2 on our own process; green
     // threads mean the child is single-threaded.
     unsafe {

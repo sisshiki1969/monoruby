@@ -173,13 +173,18 @@ module Kernel
   # because `$_` is frame-local (it would read print's own nil slot).
 
   def p(*args)
+    # `rb_f_p` flushes stdout once it has written everything, unlike
+    # `puts` — `p` is a debugging aid, so its output must not sit in the
+    # buffer while the program keeps running.
     if args.size == 1
       $stdout.puts(args[0].inspect)
+      $stdout.flush
       args[0]
     elsif args.empty?
       nil
     else
       args.each { |a| $stdout.puts(a.inspect) }
+      $stdout.flush
       args
     end
   end

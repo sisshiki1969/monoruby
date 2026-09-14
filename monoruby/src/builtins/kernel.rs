@@ -110,7 +110,6 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         inline_gen2!(kernel_block_given),
         0,
     );
-    //globals.define_builtin_module_func_rest(kernel_class, "p", p);
     globals.define_builtin_module_func_rest(kernel_class, "format", format);
     globals.define_builtin_module_func_rest(kernel_class, "sprintf", format);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
@@ -622,7 +621,10 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         globals.write_stdout(b"\n")?;
     }
-    globals.flush_stdout()?;
+    // No flush: `rb_io_puts` is ordinary buffered output, so on a
+    // non-TTY stdout the bytes wait for the buffer to fill, an explicit
+    // `#flush`, a fork, or exit. (`Kernel#p` below does flush, as CRuby's
+    // `rb_p` does.)
     Ok(Value::nil())
 }
 
@@ -1198,30 +1200,6 @@ pub(crate) fn cause_chain_contains(globals: &Globals, start: Value, target: Valu
 #[monoruby_builtin]
 fn block_given(vm: &mut Executor, _globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(vm.cfp().prev().unwrap().block_given()))
-}
-
-///
-/// ### Kernel.#p
-///
-/// - p(*arg) -> object | Array
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/p.html]
-#[monoruby_builtin]
-fn p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let len = lfp.arg(0).as_array().len();
-    let mut buf = String::new();
-    for v in lfp.arg(0).as_array().iter() {
-        let inspected = vm.invoke_method_inner(globals, IdentId::INSPECT, *v, &[], None, None)?;
-        buf += &inspected.to_s(&globals.store);
-        buf += "\n";
-    }
-    globals.write_stdout(buf.as_bytes())?;
-    globals.flush_stdout()?;
-    Ok(match len {
-        0 => Value::nil(),
-        1 => lfp.arg(0).as_array()[0],
-        _ => lfp.arg(0),
-    })
 }
 
 ///
@@ -3543,6 +3521,9 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             args.push(v.coerce_to_string(vm, globals)?);
         }
     }
+    // The child inherits our std fds; flush so our own pending output
+    // precedes whatever it writes (CRuby orders them this way).
+    crate::rvalue::io::flush_std_streams();
     let mut child = match Command::new(&program).args(&args).spawn() {
         Ok(child) => child,
         // ENOEXEC (an executable file without a shebang that isn't a
