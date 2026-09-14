@@ -225,8 +225,10 @@ Rails のスタックは深いので、1 回の escalation ごとに **76 フレ
 JIT フレームが新しく積まれることはない）。
 
 したがって **最初の cont stub フレームで walk を打ち切ってよく**、訪問フレームの
-**76 %（58.11 / 76.39）** が消える。inclusive 43,246 Ir/req のうち約 33 k Ir/req、
-1 リクエストの **約 1.1 %** に当たる。
+**76 %（58.11 / 76.39）** が消える。消えるのはフレームごとの巡回コストだけで、
+変換そのもの（site stub 呼び出し、9,377 Ir/req）は打ち切り位置より手前にあるので残る。
+inclusive 43,246 − 9,377 = 33,869 Ir/req の 76 %、**約 26 k Ir/req ＝ 1 リクエストの
+約 0.8 %** が見込み。
 
 escalation の発生元（deopt したフレームのメソッド）の内訳:
 
@@ -348,7 +350,7 @@ VM 側は正しく解決できている（`--no-jit` が速いのはそのため
 | **C（実施済み）** | `OpenSSL::PKCS5.pbkdf2_hmac` と `HMAC` の反復ループを Rust に落とす（digest 核は既に Rust） | `builtins/digest.rs`, `stdlib/openssl.rb` | PBKDF2 2\*\*16 **2,143 → 85 ms**、HMAC-SHA256 **222 → 54 ms**。railsbench **3,157,820 → 3,086,274 Ir/req（−2.27 %）** |
 | D | ペイロードの malloc 削減（size-class 別フリーリスト、Hash テーブル）。**短い String / 小さい Array の埋め込みは実装済み**（§2.4 の訂正） | `alloc.rs`, `value/rvalue/*` | railsbench malloc 295 k Ir/req（CRuby の 2.79 倍）。まず 2.5 malloc/オブジェクトの内訳を採り直す |
 | E | 生成コードのフットプリント削減（side-exit 領域の共有化、17.5 k 箇所 → 圧縮） | `codegen/` | 命令数比 1.22x に対し実時間比 1.54x の差＝ IPC。i-cache 側の効き |
-| **F（測定済み・対策候補あり）** | chain deopt の walk を、最初の「変換済み（戻り番地が cont stub）」フレームで打ち切る | `codegen.rs` | 訪問フレームの 76 % が消える。約 33 k Ir/req ≒ 1 リクエストの 1.1 %（§2.5） |
+| **F（測定済み・対策候補あり）** | chain deopt の walk を、最初の「変換済み（戻り番地が cont stub）」フレームで打ち切る | `codegen.rs` | 訪問フレームの 76 % が消える。約 26 k Ir/req ≒ 1 リクエストの 0.8 %（§2.5） |
 | ~~G~~（棄却） | TZInfo の zoneinfo 読み直し | — | **読み直していない**。実測 0.04 %/req。§1.3 の帰属誤り（§2.6） |
 
 A・B・C をこのブランチで実施した。callgrind で測った railsbench の命令数は
