@@ -489,6 +489,7 @@
 22b54a288bd5ab601d9196768156489a	"[yes][]\\n"	# unsetenv_others with an env hash keeps only the given vars\n      
 22c0902963ab6d1ef3fbd095ba2b81fb	[:in_progress, :zero, 0, true]	require "socket"\n            res = []\n            srv = TCPServer.n
 22c7f5e30abd7c5832dafc79b391e2e5	[[4, 2], [:x, :y]]	def m\n              binding\n            end\n            b = m\n     
+22d2fd2fd69043dd239edb33330dec7d	[[1, nil, 1, 2], [101, 7, 51, 4], 600]	class CNVer; def initialize(a); @a = a; end; def a = @a; end\n        cl
 22d9ce17cd0900bf1a0ac981d5637c79	[{name: nil, format: [], klass: nil}, [nil, [], nil], nil, nil, [nil, nil], nil, {klass: nil}, [nil, [], nil], [[:name, nil], [:format, []], [:klass, nil]], [nil, [], nil], {name: nil, format: [], klass: nil}, [:n, [], 3], :overridden, :n]	class OverrideS < Struct.new(:name, :format, :klass)\n              
 22e93d16a9649d57ab7475c4472c954f	["malformed format string", "malformed format string", "malformed format string", "malformed format string", "malformed format string", "malformed format string", "malformed format string", "malformed format string"]	fmts = ["%\\n", " % ", "%.\\n3f", "%.3\\nf", "%\\0", "hello %1$", "%v",
 2304be5a9de8bae9c9cd4757fb54bed5	[true, true]	def foo; end\n        m = method(:foo)\n        loc = m.source_location\n 
@@ -675,6 +676,7 @@
 3026addc0fcd2b67ebcfb55aa32756bc	true	m = Module.new\n        m.is_a?(Module)\n        
 3053f18f888b1ea24f609aa1ec916fec	{amount: 1}	M = Data.define(:amount, :unit)\nM.new(1, "m").deconstruct_keys([:amount])
 3063c096c70750fca8ad43016f8a7351	[:considered, :moved, :moved_up, :moved_down]	GC.compact.keys
+30776c327427182563f43447a37fc8b5	[[1, nil, 1, 2], [101, 7, 51, 4], 40]	class CNVer; def initialize(a); @a = a; end; def a = @a; end\n        cl
 308b0e3069363f729a784cb6ad223bb3	[1, 2]	klass = Data.define(:a, :b)\n            inst = klass.new(1, 2)\n    
 30da1a8eb4c207410e9146da15639ec4	[ArgumentError, ArgumentError, ArgumentError, TypeError, ArgumentError, "no", 3, TypeError]	class CNOne; def initialize(a); @a = a; end; end\n        class CNRaise\n
 3118b9df8fc7baabff879159ce2bf50f	"..hello..."	class MyInt\n              def to_int\n                10\n           
@@ -1057,7 +1059,6 @@
 4b5b45123447283c4530b768dbe566cd	"US-ASCII"	"hello".encode("US-ASCII").upcase.encoding.to_s
 4b630bdfdd9f1ce5cacddd03b49d4446	[true, false, false, false]	class A; end\n        [A.singleton_class.singleton_class?, A.singleton_c
 4b6fe109f1f968bc1a8d4646ba46c194	"377"	class HasToInt; def to_int; 255; end; end\n            sprintf("%o",
-4b79a5778782952b20f3c06848a4b70e	[1, 101, 40]	class CNVer; def initialize(a); @a = a; end; def a = @a; end\n        r 
 4b91108237bdda9802ca4299f4114874	[[:singleton_method_added, :singleton_method_added], [:method_added, :foo], [:singleton_method_added, :foo]]	$res = []\n            module M\n              def self.method_added(
 4b97615f1fd9c5dced851f3adf53042b	[:thrown, [:ens]]	$log = []\n            r = catch(:t) do\n              begin\n        
 4ba2572278d477946c8815ee58fef0de	"hello"	class Foo\n              def hello; "hello"; end\n              alias
@@ -2347,6 +2348,7 @@ aa9826a02db68be1092571574e433dbe	"bar is true"	foo = false\n        bar = true\n
 aa9dc49c4157aab8cd435e0906d16a35	true	m = Module.new do\n              module_function\n              defin
 aa9e9d2d059255551ef82b97e189dbf9	0	Time.utc(2000).utc_offset
 aa9ed623ce6b393da6e8302088781719	[42, 1.5, [42, 1.5]]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
+aaa4915a3c9f363b036669c78778de6a	["", "", "", "ab", "ab", "", 200, "ASCII-8BIT"]	r = []\n            r << String.new(capacity: 0)\n            r << St
 aab458ff0c2a03718b6c9b73c90f2db1	:ok	old_stderr = $stderr\n            captured = String.new\n            
 aab9942daadbde6b7f6d2ea8f2774472	[:Receiver, :singleton]	module IEv\n              module ReceiverScope\n                class
 aac724226cfcaf6fac1a6d9fa08ab5f2	0	h = Object.new\n            def h.finalize(id); end\n            Obje
@@ -2531,6 +2533,7 @@ b76b635413644a9ee6cb10accbfe88d1	false	class Float; alias __orig :>=; def >=(o);
 b76d6e4320dd94711348a48796e6ef33	[42, 100]	$res = []\n        class S\n          class C\n            def f\n         
 b7b526853ed3aa9d81b2dda6dbba1cf2	1	class Integer; def <=>(o) = (o.to_i - to_i); end\n[3, 1, 2].max
 b7b791ae9b8a5b32ebb0e713566b57b5	[:foo, [1], {x: 10, y: 20}]	class C\n          def method_missing(name, *args, **kwargs)\n           
+b7c292b4419c2c859e85115540f26230	[TypeError, TypeError, "bignum too big to convert into 'long'", "failed to allocate memory", FrozenError, FrozenError]	r = []\n            begin; String.new(capacity: "x"); rescue TypeErr
 b7cb35744fdfaa984b6e9aa7ca2b4447	[4000, 3999]	n = 0; a = [n, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
 b7d68f9088d3f3aed2ab62dc9d949be5	[true, true]	class Foo\n              def bar; 42; end\n            end\n          
 b82f7004e67d1dce1e4af8e9795a0307	:OVERRIDDEN	class FalseClass; def !; :OVERRIDDEN; end; end; !(false)
@@ -2677,7 +2680,6 @@ c08acbdd18f61a8d59ca99c4b368848f	"US-ASCII"	"abc".encode("US-ASCII").rjust(5).en
 c095a2c797a127b8e7be93cfb4834bac	300000	def osr_sum(x)\n          total = 0\n          i = 0\n          while i < 
 c09c839979cea217eea20b122b702919	"T:#<TrueClass:0xADDR>"	class TrueClass; def to_s; "T:" + super; end; end\n                true.to_s.sub(
 c09d6cb41615f95536118d7f2c2d3ac5	"UTF-8"	-> { e = __ENCODING__; e.name }.call
-c0b44f864839d7a475238efd36beac81	[1, 101, 600]	class CNVer; def initialize(a); @a = a; end; def a = @a; end\n        r 
 c0bd20c1f72134f81f9605cb0369bad4	["hello", "helloworld", "helloworld"]	path = "/tmp/mr_buf_rw.txt"\n            res = []\n            f = Fi
 c0ccecf51a28d34a9407d29cd759ff8a	[:f, :f]	class C; def f; 1; end; end\n            \n\n            m = C.new.met
 c0d486ae823c1add3b9717cbf806e267	54	[2, 3, 4, 5].inject(0) {|result, item| result + item ** 2 }

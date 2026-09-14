@@ -154,18 +154,50 @@ fn class_new_error_paths() {
 fn class_new_redefined_initialize() {
     // The class-version guard the whole inline rides on: redefining
     // `initialize` mid-loop must be observed by the compiled site.
-    run_test(&format!(
+    //
+    // Every construction below goes through ONE call site, inside a method
+    // that is already hot and compiled when the redefinition lands. That is
+    // what makes this a test: a second, separate site would simply compile
+    // afresh against the new `initialize` and pass no matter what the first
+    // one kept. Here the site's own inline-cache entry
+    // (`#<Class:CNVer>#new -> Class#new`) is still true after the
+    // redefinition, so `salvage_method_unit` only rejects the unit because
+    // `inline_class_new` records the `initialize` resolution it baked in.
+    //
+    // All three legs are covered, and the last two change the resolution
+    // from an *inherited* `initialize` to an own one:
+    //   CNVer  — redefined ivar-store body      (expand leg)
+    //   CNAdd  — none, then defined             (fold leg -> expand leg)
+    //   CNSub  — inherited, then overridden     (expand leg)
+    //   CNStrS — String's native one, then own  (call leg)
+    //
+    // `run_test_once`, not `run_test`: the redefinitions persist across a
+    // repeated run in the same process, so the second run's `before` would
+    // already see them. The inner loops warm the JIT within the one run.
+    run_test_once(&format!(
         r#"
         class CNVer; def initialize(a); @a = a; end; def a = @a; end
+        class CNAdd; def a = @a; end
+        class CNBase; def initialize(a); @a = a; end; def a = @a; end
+        class CNSub < CNBase; end
+        class CNStrS < String; end
+
+        def cn_v = CNVer.new(1).a
+        def cn_a = CNAdd.new.a
+        def cn_s = CNSub.new(1).a
+        def cn_t = CNStrS.new("ab").size
+
         r = []
-        {LOOP}.times {{ r << CNVer.new(1).a }}
-        class CNVer
-          def initialize(a)
-            @a = a + 100
-          end
-        end
-        {LOOP}.times {{ r << CNVer.new(1).a }}
-        [r.first, r.last, r.size]
+        {LOOP}.times {{ r << [cn_v, cn_a, cn_s, cn_t] }}
+        before = r.last
+
+        class CNVer; def initialize(a); @a = a + 100; end; end
+        class CNAdd; def initialize; @a = 7; end; end
+        class CNSub; def initialize(a); @a = a + 50; end; end
+        class CNStrS; def initialize(s); super(s + "zz"); end; end
+
+        {LOOP}.times {{ r << [cn_v, cn_a, cn_s, cn_t] }}
+        [before, r.last, r.size]
         "#
     ));
 }

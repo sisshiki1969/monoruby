@@ -1376,6 +1376,30 @@ impl RStringInner {
         unsafe { &mut self.content.owned }
     }
 
+    /// Grow the owned buffer so it can hold `cap` bytes without
+    /// reallocating — `String.new(capacity:)`'s allocation hint. A
+    /// shared view is detached first: a sharer has no buffer of its own
+    /// to grow. Nothing observable changes, so the cached code range
+    /// stays valid.
+    ///
+    /// Fallible on purpose. `capacity: 2 ** 62` is a legal Ruby
+    /// expression that CRuby answers with `NoMemoryError`; an
+    /// infallible `reserve` would abort the process instead.
+    pub(crate) fn try_reserve_capacity(&mut self, cap: usize) -> bool {
+        let buf = self.owned_mut();
+        let additional = cap.saturating_sub(buf.len());
+        if additional == 0 {
+            return true;
+        }
+        // Ask the `MONORUBY_MALLOC_HARD_LIMIT` guard first: it aborts the
+        // process rather than failing the allocation, so `try_reserve`
+        // would never get to report a `capacity: 2 ** 62`.
+        if crate::alloc::would_exceed_malloc_hard_limit(additional) {
+            return false;
+        }
+        buf.try_reserve(additional).is_ok()
+    }
+
     /// The bytes, for overwriting in place at the same length (a shared
     /// view is detached first). The cached code range is dropped, since
     /// the caller may write anything.
