@@ -8385,7 +8385,8 @@ fn next_mut(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
-    let template = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    let template = template.to_str()?;
     rvalue::unpack(
         &self_.as_rstring_inner()[offset..],
         &template,
@@ -8405,7 +8406,8 @@ fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
-    let template = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    let template = template.to_str()?;
     rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, true, offset)
 }
 
