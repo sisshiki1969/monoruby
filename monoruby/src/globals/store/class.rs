@@ -392,6 +392,16 @@ pub struct ClassInfo {
     /// copy-hook dispatch and return the raw shallow copy.
     ///
     default_copy_at: std::cell::Cell<Option<u32>>,
+    ///
+    /// Version-stamped memo: as of class_version `.0`, `hash` on this class
+    /// resolves to `.1` (`None` = the chain defines no `hash`). Every Hash
+    /// and Set operation with a non-immediate key asks whether the key still
+    /// carries the builtin `hash` (`has_builtin_identity_hash` /
+    /// `has_builtin_container_hash`); without the memo each of those was a
+    /// probe of the global method cache — about 150 a request in
+    /// ruby-bench's `railsbench`.
+    ///
+    hash_method_at: std::cell::Cell<Option<(u32, Option<FuncId>)>>,
 }
 
 /// C-level allocator function pointer. Given a class id (and a globals
@@ -534,6 +544,7 @@ impl ClassInfo {
             no_to_str_at: std::cell::Cell::new(None),
             neq_basic_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
+            hash_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
         }
     }
@@ -561,6 +572,7 @@ impl ClassInfo {
             no_to_str_at: std::cell::Cell::new(None),
             neq_basic_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
+            hash_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
         }
     }
@@ -633,6 +645,14 @@ impl ClassInfo {
 
     pub(super) fn match_method_at(&self) -> Option<(u32, FuncId)> {
         self.match_method_at.get()
+    }
+
+    pub(super) fn hash_method_at(&self) -> Option<(u32, Option<FuncId>)> {
+        self.hash_method_at.get()
+    }
+
+    pub(super) fn set_hash_method_at(&self, version: u32, fid: Option<FuncId>) {
+        self.hash_method_at.set(Some((version, fid)));
     }
 
     pub(super) fn set_match_method_at(&self, version: u32, fid: FuncId) {
