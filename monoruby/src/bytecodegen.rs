@@ -254,6 +254,11 @@ struct CallSite {
     /// parens): a failed lookup raises NameError instead of
     /// NoMethodError.
     vcall: bool,
+    /// `recv.send(:foo, ...)` / `recv.__send__(:foo, ...)` written with a
+    /// literal Symbol: the name it spells. `encode_call` turns it into the
+    /// direct-call twin the JIT compiles in place of the runtime name
+    /// lookup — see `CallSiteInfo::send_direct`.
+    send_direct_name: Option<IdentId>,
 }
 
 impl CallSite {
@@ -283,6 +288,7 @@ impl CallSite {
             forwarding,
             bypass_visibility: false,
             vcall: false,
+            send_direct_name: None,
         }
     }
 

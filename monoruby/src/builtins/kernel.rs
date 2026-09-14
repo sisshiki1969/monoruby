@@ -342,7 +342,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         inline_gen2!(kernel_is_a),
         1,
     );
-    globals.define_builtin_inline_funcs_with_kw(
+    let send_fid = globals.define_builtin_inline_funcs_with_kw(
         kernel_class,
         "send",
         &["__send__"],
@@ -354,6 +354,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         &[],
         true,
     );
+    globals.store.record_object_send_fid(send_fid);
     globals.define_builtin_funcs_with_kw(
         kernel_class,
         "public_send",
@@ -8481,6 +8482,167 @@ mod tests {
             o.send(:b, x, 2, 3)
           end
             "##,
+        );
+    }
+
+    ///
+    /// `send(:literal)` is resolved at compile time and compiled as the
+    /// direct call it spells (`CallSiteInfo::send_direct`), so these cover
+    /// the semantics that rewrite has to keep. Every loop is long enough
+    /// that the site is JIT-compiled inside a single evaluation.
+    ///
+    #[test]
+    fn object_send_literal_name() {
+        // What `send` is for: private and protected targets, plus an
+        // accessor, a block and the `__send__` spelling.
+        run_test_with_prelude(
+            r##"
+        o = C.new
+        o.at = 3
+        acc = []
+        i = 0
+        while i < 300
+          acc << o.send(:pub, i % 2)
+          acc << o.send(:pri)
+          acc << o.send(:pro)
+          acc << o.send(:at)
+          acc << o.send(:blk) { |x| x * 2 }
+          acc << o.__send__(:pub, 9)
+          i += 1
+        end
+        acc.uniq
+        "##,
+            r##"
+        class C
+          def pub(x) = "pub#{x}"
+          private def pri = "pri"
+          protected def pro = "pro"
+          def blk = (yield 21)
+          attr_accessor :at
+        end
+        "##,
+        );
+        // A polymorphic site: the receiver classes agree on `send` and on
+        // nothing else, so no one class's resolution may be baked in.
+        run_test(
+            r##"
+        class P1; def go = "P1"; end
+        class P2; def go = "P2"; end
+        class P3; def go = "P3"; end
+        objs = [P1.new, P2.new, P3.new]
+        out = []
+        i = 0
+        while i < 300
+          out << objs[i % 3].send(:go)
+          i += 1
+        end
+        out.each_slice(3).to_a.uniq
+        "##,
+        );
+        // No compile-time resolution: the name lookup has to stay, and
+        // find `method_missing`.
+        run_test(
+            r##"
+        class M
+          def method_missing(name, *a) = "mm:#{name}:#{a.size}"
+          def respond_to_missing?(n, p = false) = true
+        end
+        o = M.new
+        out = []
+        i = 0
+        while i < 300
+          out << o.send(:nope, 1, 2)
+          i += 1
+        end
+        out.uniq
+        "##,
+        );
+        // `send(:send, ...)`, and a BasicObject receiver.
+        run_test(
+            r##"
+        class N; def f(x) = x + 1; end
+        class Bare < BasicObject; def hi = "hi"; end
+        o = N.new
+        b = Bare.new
+        out = []
+        i = 0
+        while i < 300
+          out << o.send(:send, :f, i % 3)
+          out << b.__send__(:hi)
+          i += 1
+        end
+        out.uniq.sort_by { |x| x.to_s }
+        "##,
+        );
+        // The receiver class flips after the site has been compiled with
+        // one class's resolution baked in. The miss takes the site's
+        // ordinary recompile policy, and the recompile reads the `send`
+        // site's polymorphic method cache — by then holding both classes —
+        // so it settles on the name lookup instead of flip-flopping.
+        run_test(
+            r##"
+        class F1; def go = "F1"; end
+        class F2; def go = "F2"; end
+        out = []
+        o = F1.new
+        i = 0
+        while i < 600
+          out << o.send(:go)
+          o = F2.new if i == 300
+          i += 1
+        end
+        [out.first, out.last, out.uniq]
+        "##,
+        );
+        // The argument count is still the target's business.
+        run_test_error(
+            r##"
+        class N; def f(x) = x + 1; end
+        o = N.new
+        i = 0
+        while i < 300
+          o.send(:f, 1)
+          i += 1
+        end
+        o.send(:f, 1, 2)
+        "##,
+        );
+    }
+
+    ///
+    /// A definition that lands after the `send(:literal)` site is compiled
+    /// has to retire the resolution baked into it — the target's, and
+    /// `send`'s own.
+    ///
+    #[test]
+    fn object_send_literal_name_redefinition() {
+        run_test_once(
+            r##"
+        class R; def t = "old"; end
+        o = R.new
+        out = []
+        i = 0
+        while i < 300
+          out << o.send(:t)
+          eval('class R; def t = "new"; end') if i == 200
+          i += 1
+        end
+        out.uniq
+        "##,
+        );
+        run_test_once(
+            r##"
+        class S; def t = "target"; end
+        o = S.new
+        out = []
+        i = 0
+        while i < 300
+          out << o.send(:t)
+          eval('class S; def send(*a) = "mine:#{a[0]}"; end') if i == 200
+          i += 1
+        end
+        [out.uniq, o.__send__(:t)]
+        "##,
         );
     }
 

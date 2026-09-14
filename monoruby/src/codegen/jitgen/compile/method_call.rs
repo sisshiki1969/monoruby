@@ -393,6 +393,83 @@ impl<'a> JitContext<'a> {
                 refinements: self.refinements(),
                 func_id,
             });
+
+        // `recv.send(:foo, ...)` with a literal method name: resolve the
+        // name here and compile the direct call, instead of the runtime
+        // name lookup `object_send_inline` emits (a class-version check, a
+        // three-way inline-cache walk with its LRU reshuffle, and a frame
+        // build — 97 instructions at the site, against 7 for the same call
+        // written out). Everything past this point is then the ordinary
+        // call path, so the target gets the ordinary treatment too:
+        // specialization, ISeq-hint folding, the frameless expansions.
+        //
+        // Two things keep it sound. The entry just pushed records that
+        // *this* site resolved `send` to the builtin, so redefining `send`
+        // moves the class version and the repair asks that question again
+        // (and re-resolution then fails to reach the builtin, so the
+        // rewrite stops firing); and the recursive call pushes its own
+        // entry for the resolved name, so redefining *that* is caught as
+        // well. The twin call site carries `bypass_visibility`, which is
+        // what lets a private target compile — that is what `send` is for,
+        // and `public_send` is a different method with no twin.
+        if let Some(direct) = callsite.send_direct
+            && self.store.is_object_send(func_id)
+            // The receiver's class has to be *proven* for the resolution
+            // below to be this receiver's. Inside a set-guarded dispatch
+            // arm it is only known to be one of the arm's classes, and what
+            // makes them one arm is that they agree on `send` — they say
+            // nothing about what `:foo` resolves to.
+            && !self.in_set_guarded_arm()
+            // A site the VM has already seen take more than one receiver
+            // class keeps the ordinary path: the class-set guard below
+            // admits them all and the name lookup serves them all, where a
+            // direct call would bake in one class's resolution and deopt
+            // the rest.
+            && !callsite.pmc.is_polymorphic()
+        {
+            let name = self.store[direct].name.unwrap();
+            // The literal bytecodegen read off the name argument must still
+            // be what the slot holds. `is_symbol_literal` answers `None`
+            // when the state has lost track of the constant (a merge, a
+            // spill), which is no reason to decline — nothing but that
+            // literal writes the slot — but a *disagreement* would mean
+            // this is not the site bytecodegen saw, so leave it alone.
+            if state
+                .is_symbol_literal(callsite.args)
+                .is_none_or(|n| n == name)
+                && let Some((target, visibility)) = self.jit_check_method(recv_class, name)
+            {
+                let arg_class = {
+                    let direct = &self.store[direct];
+                    if direct.is_simple() && direct.pos_num == 1 {
+                        state.class(direct.args)
+                    } else {
+                        None
+                    }
+                };
+                return self.compile_method_call(
+                    state,
+                    ir,
+                    recv_class,
+                    arg_class,
+                    target,
+                    visibility,
+                    direct,
+                    // The receiver guard the nested call emits is this
+                    // site's only one, so the site keeps the miss policy it
+                    // came in with. Under `Learn` a miss recompiles once —
+                    // and the recompile reads the *original* site's PMC,
+                    // which the VM filled while it ran the deopted `send`,
+                    // so the second receiver class makes the test above
+                    // decline and the site settles on the name lookup. The
+                    // twin's own PMC stays empty (no bytecode executes it),
+                    // which is why the ratchet has to live in that test
+                    // rather than in `use_recompile`'s.
+                    recv_miss,
+                );
+            }
+        }
+
         let recv = callsite.recv;
 
         if self.store[func_id].possibly_capture_without_block() {
