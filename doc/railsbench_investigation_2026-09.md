@@ -349,6 +349,69 @@ chain deopt にはそのままでは使えない。上の「LFP をスロット�
 捨てている**。§8.5 が「strictly more conversion than the speculation will need,
 which is sound」と自認している部分の実際の量がこれ。
 
+**キャプチャされたフレームは安全か — 2 つの懸念を潰した**
+
+*(a) `forward_rest` の rbp 相対読み出し*
+
+replay stub の `movq rcx, [rsi]` → `lea rdi, [rcx - rbp_local(src)]` は、変換対象の
+さらに 1 つ外側のフレームへの rbp 相対ローカル読み出し。`forward_rest_deferral`
+（`context.rs:2849`）のゲートは `is_specialized()` かつ
+`forwarding_trampoline_rest(fid)`（＝`def f(...) = g(...)` という形）かつ
+`is_simple_call`、`**` splat なし・block 引数なし。つまり読み出し元はトランポリンの
+動的呼び出し元 1 段上＝ユニットの根で、読むのは**その呼び出しの引数ウィンドウ**である。
+
+引数ウィンドウは呼び出し直前に書かれる呼び出し元のテンポラリで、呼び出しが返るまで
+誰も書かない。名前付きローカルではないので `binding` / dynvar からも届かない。
+したがって呼び出し中にフレームがヒープ昇格しても、スタックコピーのウィンドウは正しい
+ままで、読み出しは安全。静的化しても `rsi` が `prev_cfp.frame_bp()` から
+`rbp + 定数` になるだけで、同じマシン番地・同じ命令列。
+
+実測: `def f(...) = g(...)` を呼び出し元フレーム昇格中に回し、型を途中で変えて
+`forward_rest` の materialize を強制するテストを CRuby と照合 —— 21 行一致。
+このテストが実際に当該経路を出していることは、`gen_forward_rest_materialize` の
+発行を数えて確認した（**12 サイト**）。
+
+*(b) 祖先だけが昇格するケース*
+
+`move_frame_to_heap(L)` は L を複製してから `heap_lfp.outer()` を再帰的に昇格させる。
+つまり昇格は**ブロックリテラル / binding が字句上ぶら下がっているフレームから外向きに
+しか進まない**。ブロックリテラルの `outer` はそれが書かれたフレームなので、昇格を
+引き起こしたフレーム自身が必ず昇格する。そのフレームは呼び出し復帰後に
+`pop_frame` → `restore_lfp`（`movq r14, [rbp - 16]`）で生きた LFP を読み直し、
+`guard_capture`（`testb [r14 - (LFP_META - META_KIND)], 0b1000_1000`、
+`0b1000_0000` = on_heap / `0b0000_1000` = 昇格の tombstone）が meta の汚れを見て
+deopt する。`immediate_evict` のコメント「catches ancestor promotions」はこの理由で
+成立している。
+
+実測（`store_dyn_var_specialized` が確かに出る形＝aobench 型の `while` +
+インラインブロック + Float 外側ローカルで実施し、発行数を数えて確認）:
+
+| 形 | 発行サイト数 | CRuby との一致 |
+|---|---:|---|
+| キャプチャなし | 1 | — |
+| ブロック内で `binding` | **0**（特殊化が抑止される） | 一致 |
+| ブロック内で `take { x }`（ブロックリテラルを渡す） | **0**（同上） | 一致 |
+| ブロック内で `proc { x }` | **6**（特殊化されたまま） | **一致** |
+| メソッド側フレームで `binding` | 0 | 一致 |
+
+`proc { x }` の行が本命で、**最初の反復でキャプチャしたあと特殊化ブロックから
+62,499 回書き込んでも、捕まえた Proc は正しい値を読む**。さらにキャプチャした Proc
+経由の書き込みをブロック内の書き込みと交互に入れる、`binding.local_variable_set` で
+外から書く、2 段ネストにする、といった変種も全て CRuby と一致した。
+
+構造的に非対称になりうる唯一の入口は `materialize_toplevel_binding`（任意のフレームから
+main script フレームだけを昇格させる）で、これも直接試して一致した。「A の中で書かれた
+ブロックを、A の子ブロックが Proc 化する」という形は Ruby で書けない（ブロック
+リテラルの `outer` はそれが書かれたフレームなので、Proc 化すればそのフレームが先に
+昇格する）ため、再現は作れなかった。
+
+なおこのアドレッシングは Rails で多用されている（railsbench で **433 サイト**発行）。
+つまりゲートは実際に効いている。
+
+**そして静的 chain 変換はこの論点から独立している。** LFP をスロットから読む方式
+（`movq rdx, [rbp + (K_i - 16)]`）なので、祖先が昇格していようがいまいが生きたコピーに
+書く。現在の `store_dyn_var_specialized` の `[rbp + 定数]` 直接アクセスより厳密に安全。
+
 **結論**
 
 escalated side exit ごとに、ユニット内の d 段（d = `current_frame_pos()`、コンパイル時
