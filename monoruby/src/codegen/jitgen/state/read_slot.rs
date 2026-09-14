@@ -471,6 +471,13 @@ impl AbstractState {
     /// against the chain as it stands at the consumption, which is the
     /// chain the read was recorded under).
     ///
+    /// [`Self::use_as_float`] for a consumer outside this module: a float
+    /// argument handed to a specialized callee in a register is a raw-f64
+    /// read of the slot it came from, exactly like any other.
+    pub(in crate::codegen::jitgen) fn use_as_float_at(&mut self, slot: SlotId) {
+        self.use_as_float(slot);
+    }
+
     pub(super) fn use_as_float(&mut self, slot: SlotId) {
         if let Some((outer, src)) = self.dynvar_src(slot) {
             self.mark_outer_float_read(outer as usize, src);

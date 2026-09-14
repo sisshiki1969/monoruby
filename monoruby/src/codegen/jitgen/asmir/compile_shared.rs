@@ -359,6 +359,19 @@ impl Codegen {
                 slot,
                 base: frame.base_stack_offset,
             }),
+            AsmInst::FloatRetStore(x) => self.encode_linst(LInst::FloatRetStore {
+                src: x,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::FloatRetLoad(x) => self.encode_linst(LInst::FloatRetLoad {
+                dst: x,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::FloatArgMove { src, dst } => self.encode_linst(LInst::FloatArgMove {
+                src,
+                dst,
+                base: frame.base_stack_offset,
+            }),
             // Save / restore live FP pool registers around a C-call.
             AsmInst::FprSave(using_fpr, cont) => {
                 self.encode_linst(LInst::FprSave { using_fpr, cont })
@@ -1340,20 +1353,14 @@ impl Codegen {
             // this site. Labels are resolved now (frame); the call runs at drain
             // time, where `do_specialized_call`'s return address is the correct
             // position.
-            AsmInst::SpecializedCall {
-                entry,
-                patch_point,
-                evict,
-            } => {
-                let patch_point =
-                    patch_point.map(|label| frame.resolve_label(&mut self.jit, label));
+            AsmInst::SpecializedCall { entry, evict } => {
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
                 self.lower_via_inline(
                     store,
                     labels,
                     frame.base_stack_offset,
                     move |cg, _, _, _| {
-                        let return_addr = cg.do_specialized_call(entry_label, patch_point);
+                        let return_addr = cg.do_specialized_call(entry_label);
                         cg.set_deopt_with_return_addr(return_addr, evict);
                     },
                 );
@@ -1392,7 +1399,7 @@ impl Codegen {
                     labels,
                     frame.base_stack_offset,
                     move |cg, _, _, _| {
-                        let return_addr = cg.do_specialized_call(entry_label, None);
+                        let return_addr = cg.do_specialized_call(entry_label);
                         cg.set_deopt_with_return_addr(return_addr, evict);
                     },
                 );

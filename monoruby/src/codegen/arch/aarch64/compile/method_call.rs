@@ -386,13 +386,14 @@ impl Codegen {
             self.a64_frame_store(9, 13, (LFP_ARG0 + 8 * k as i32) as u32);
         }
         monoasm_arm64!(&mut self.jit, b exit;);
-        // arity mismatch (inline): raise. `wrong_number_of_arg(vm, expected, given)`
-        // matches x86: expected = pos_num-1, given = the callee min arity in w9.
+        // arity mismatch (inline): raise. `wrong_number_of_arg(vm, expected,
+        // given)` matches x86: the callee's min arity is what it expects,
+        // the call site's count is what it was given.
         self.jit.bind_label(arg_error);
         monoasm_arm64!(&mut self.jit,
-            mov x2, x9;                               // given (callee min arity)
+            mov x1, x9;                               // expected (callee min arity)
             mov x0, x19;                              // vm
-            mov x1, #((pos_num - 1) as u64);          // expected
+            mov x2, #((pos_num - 1) as u64);          // given
             str x30, [sp, #-16]!;
             mov x9, (wrong_number_of_arg as *const () as u64);
             blr x9;
@@ -408,6 +409,143 @@ impl Codegen {
         self.emit_handle_error(error);
         monoasm_arm64!(&mut self.jit, b exit;);
         self.jit.bind_label(exit);
+    }
+
+    /// aarch64 argument transfer for an inlined `Method#call`. Twin of x86
+    /// `method_object_call_handle_arguments`: the exact-arity slot copy of
+    /// `object_send_handle_arguments` without the leading method-name slot
+    /// to skip.
+    fn method_object_call_handle_arguments(
+        &mut self,
+        args: SlotId,
+        pos_num: usize,
+        callid: CallSiteId,
+        error: &DestLabel,
+    ) {
+        let lfp = GP::R14.a64().0;
+        let not_simple = self.jit.label();
+        let arg_error = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            ldrb w9, [x26, #((FUNCDATA_META + META_KIND) as u32)];
+            tbz w9, #(4), not_simple;                 // not a simple iseq -> generic
+            ldrh w9, [x26, #(FUNCDATA_MIN as u32)];    // callee min arity
+            cmp w9, #(pos_num as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &arg_error);
+        monoasm_arm64!(&mut self.jit, sub x13, sp, #(RSP_LOCAL_FRAME as u32););
+        for k in 0..pos_num {
+            self.a64_frame_load(9, lfp, conv(args + k) as u32);
+            self.a64_frame_store(9, 13, (LFP_ARG0 + 8 * k as i32) as u32);
+        }
+        monoasm_arm64!(&mut self.jit, b exit;);
+        self.jit.bind_label(arg_error);
+        monoasm_arm64!(&mut self.jit,
+            mov x1, x9;                               // expected (callee min arity)
+            mov x0, x19;                              // vm
+            mov x2, #(pos_num as u64);                // given
+            str x30, [sp, #-16]!;
+            mov x9, (wrong_number_of_arg as *const () as u64);
+            blr x9;
+            ldr x30, [sp], #16;
+            b error;
+        );
+        self.jit.bind_label(not_simple);
+        self.a64_generic_handle_arguments(
+            crate::runtime::jit_handle_arguments_no_block_for_method_object as *const () as u64,
+            callid,
+        );
+        self.emit_handle_error(error);
+        monoasm_arm64!(&mut self.jit, b exit;);
+        self.jit.bind_label(exit);
+    }
+
+    /// aarch64 inlined `Method#call`. Twin of x86
+    /// `method_object_call_inline`: read the bound `FuncId` and receiver
+    /// out of the `MethodInner`, build the callee frame from the resolved
+    /// `&FuncData` (x26, callee-saved) and tail into its codeptr. Result in
+    /// x0. A `method_missing` proxy Method leaves for
+    /// `method_object_call_proxy` and rejoins at `done`.
+    pub(crate) fn method_object_call_inline(
+        &mut self,
+        callid: CallSiteId,
+        store: &Store,
+        using_fpr: UsingFpr,
+        error: &DestLabel,
+    ) {
+        let CallSiteInfo {
+            recv,
+            args,
+            pos_num,
+            block_fid,
+            block_arg,
+            ..
+        } = store[callid];
+        let lfp = GP::R14.a64().0;
+        let proxy = self.jit.label();
+        let done = self.jit.label();
+
+        self.emit_fpr_save(using_fpr, false);
+        self.a64_frame_load(11, lfp, conv(recv) as u32); // x11 = the Method
+        monoasm_arm64!(&mut self.jit,
+            ldr w9, [x11, #(METHOD_MM_NAME_OFFSET as u32)];
+            cbnz w9, proxy;
+            ldr w2, [x11, #(METHOD_FUNC_ID_OFFSET as u32)];
+        );
+        self.a64_get_func_data_x2(); // x9 = &FuncData
+        monoasm_arm64!(&mut self.jit, mov x26, x9;);
+        // callee frame fields: OUTER=0, META from funcdata, SVAR=0, block, SELF.
+        monoasm_arm64!(&mut self.jit, mov x9, #0;);
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+        monoasm_arm64!(&mut self.jit, ldr x9, [x26, #(FUNCDATA_META as u32)];);
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_META) as u32);
+        monoasm_arm64!(&mut self.jit, mov x9, #0;);
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+        self.a64_set_block(block_fid, block_arg);
+        self.a64_frame_load(9, lfp, conv(recv) as u32);
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x9, #(METHOD_RECEIVER_OFFSET as u32)];
+        );
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+        self.method_object_call_handle_arguments(args, pos_num, callid, error);
+        // call the resolved funcdata (x26), the shape object_send_inline uses.
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];
+            str x11, [x19, #(EXECUTOR_CFP as u32)];
+            sub x22, sp, #(RSP_LOCAL_FRAME as u32);       // callee LFP
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x22, [x10];
+            sub x3, x21, #(16u32);                        // call-site bc ptr
+            ldr x21, [x26, #(FUNCDATA_PC as u32)];
+            ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
+            blr x10;                                       // x0 = result
+            sub x11, sp, #(RSP_CFP as u32);
+            ldr x10, [x11];
+            str x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x22, [x10];
+        );
+        self.jit.b_label(&done);
+
+        // There is no cold page on aarch64 (single-page layout), so the
+        // proxy path sits inline, branched around.
+        self.jit.bind_label(proxy);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                              // vm
+            mov x1, x20;                              // globals
+            mov x2, (callid.get() as u64);            // CallSiteId
+            mov x3, x22;                              // caller LFP
+            str x30, [sp, #-16]!;
+            mov x9, (crate::codegen::runtime::method_object_call_proxy as *const () as u64);
+            blr x9;                                   // x0 = Option<Value>
+            ldr x30, [sp], #16;
+        );
+
+        self.jit.bind_label(done);
+        self.emit_fpr_restore(using_fpr, false);
+        self.emit_handle_error(error);
     }
 
     /// aarch64 `Object#send` / `#__send__` inline body. Twin of x86
@@ -1054,8 +1192,8 @@ impl Codegen {
 
     /// `SpecializedCall` / `SpecializedYield`: a direct branch-with-link into
     /// an inlined method/block entry already emitted in this code buffer.
-    /// Mirrors x86 `do_specialized_call`: set_lfp + push_frame, optionally bind
-    /// the recompile re-entry `patch_point`, `bl entry`, then pop_frame. Returns
+    /// Mirrors x86 `do_specialized_call`: set_lfp + push_frame, `bl entry`,
+    /// then pop_frame. Returns
     /// the post-`bl` address (the return continuation); the caller records it via
     /// `set_deopt_with_return_addr` so the chain-deopt walk (`Codegen::chain_deopt`)
     /// can find this site's replay data from a suspended frame's return-address
@@ -1063,7 +1201,6 @@ impl Codegen {
     pub(in crate::codegen::jitgen::asmir) fn do_specialized_call(
         &mut self,
         entry: DestLabel,
-        patch_point: Option<DestLabel>,
     ) -> CodePtr {
         // set_lfp + push_frame (mirror a64_do_call).
         monoasm_arm64!(&mut self.jit,
@@ -1074,9 +1211,6 @@ impl Codegen {
             sub x22, sp, #(RSP_LOCAL_FRAME as u32);  // callee LFP
             stur x22, [sp, #(-((RSP_CFP + CFP_LFP) as i32))];  // new_cfp.lfp = LFP
         );
-        if let Some(patch) = patch_point {
-            self.jit.bind_label(patch);
-        }
         monoasm_arm64!(&mut self.jit, bl entry;);
         let return_addr = self.jit.get_current_address();
         // pop_frame: restore caller cfp + lfp from x29 (== x86 rbp).

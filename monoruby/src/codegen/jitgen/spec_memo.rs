@@ -168,6 +168,7 @@ pub(super) struct FrameState {
     pub(super) speculation_poisoned: bool,
     pub(super) had_deopt: bool,
     pub(super) generic_yield: bool,
+    pub(super) has_boxed_return: bool,
     pub(super) ivar_heap_accessed: bool,
     pub(super) speculated_using_fpr: UsingFpr,
     pub(super) speculated_floats: Vec<(SlotId, FPReg)>,
@@ -238,6 +239,7 @@ pub(super) struct SpecializedCompileResultMemo {
     pub(super) generic_yield: bool,
     pub(super) spec_id: SpecializedId,
     pub(super) using_fpr: UsingFpr,
+    pub(super) float_return: bool,
 }
 
 /// How often the memo answered a call site and how often it could not,

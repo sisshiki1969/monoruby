@@ -276,6 +276,25 @@ fn malloc_hard_limit() -> usize {
     parsed
 }
 
+/// Would a single allocation of `size` bytes trip the
+/// `MONORUBY_MALLOC_HARD_LIMIT` guard?
+///
+/// The guard *aborts* rather than returning null, so code that means to
+/// answer an over-large request with `NoMemoryError` rather than a crash
+/// — `String.new(capacity:)` — has to ask before it allocates; a
+/// `try_reserve` never gets to report the failure. Always false when no
+/// limit is set, which is every build outside CI, and there an
+/// unsatisfiable request fails in the allocator as usual.
+///
+/// Approximate in one direction: `size` is what the caller asked for,
+/// while a growing collection may round it up. A request that clears
+/// this check and still trips the cap aborts as before — which is the
+/// guard working, since by then the process really is near the ceiling.
+pub(crate) fn would_exceed_malloc_hard_limit(size: usize) -> bool {
+    let limit = malloc_hard_limit();
+    limit != 0 && MALLOC_AMOUNT.load(Ordering::Relaxed).saturating_add(size) > limit
+}
+
 /// `"123"`, `"512K"`, `"64M"`, `"3G"` → bytes. Anything else → None.
 fn parse_byte_size(s: &str) -> Option<usize> {
     let (num, mult) = match s.as_bytes().last()? {

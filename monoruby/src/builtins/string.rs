@@ -8042,7 +8042,54 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         let enc = super::encoding::value_to_encoding(vm, globals, enc_v)?;
         lfp.self_val().as_rstring_inner_mut().set_encoding(enc);
     }
+    // `capacity:` — pre-size the buffer. Nothing about it is observable
+    // from Ruby (no `capacity` reader), but the allocation it avoids is
+    // the whole point at a site that appends in a loop, and the argument
+    // *checking* is observable.
+    //
+    // `nil` counts as absent, which is `rb_str_init`'s rule and so what
+    // CRuby does for a String subclass and for a direct
+    // `send(:initialize, capacity: nil)`. CRuby's `String.new` has a
+    // second, faster path of its own that converts without the nil check
+    // and so raises TypeError there — an asymmetry between `String.new`
+    // and `SubclassOfString.new` that is not worth reproducing, since
+    // every construction here goes through this one method.
+    if let Some(cap_v) = lfp.try_arg(2)
+        && !cap_v.is_nil()
+    {
+        // Raises TypeError for a non-Integer (`#to_int` is honoured) and
+        // RangeError for a Bignum, both as CRuby does.
+        let cap = cap_v.coerce_to_int_i64(vm, globals)?;
+        // A frozen receiver raises even when the capacity is 0 or
+        // negative — CRuby checks before it looks at the value.
+        lfp.self_val().ensure_string_mutable(vm, globals)?;
+        if cap > 0
+            && !lfp
+                .self_val()
+                .as_rstring_inner_mut()
+                .try_reserve_capacity(cap as usize)
+        {
+            return Err(no_memory_error(vm, globals));
+        }
+    }
     Ok(lfp.self_val())
+}
+
+/// `NoMemoryError`, for a `capacity:` the allocator will not satisfy.
+/// Built through the class object because the error kind is not one of
+/// `MonorubyErrKind`'s own variants.
+fn no_memory_error(vm: &mut Executor, globals: &mut Globals) -> MonorubyErr {
+    const MSG: &str = "failed to allocate memory";
+    let Some(klass) = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("NoMemoryError"))
+    else {
+        return MonorubyErr::runtimeerr(MSG);
+    };
+    match vm.invoke_method_inner(globals, IdentId::NEW, klass, &[Value::string_from_str(MSG)], None, None) {
+        Ok(ex) => MonorubyErr::new_from_exception(&ex.is_exception().unwrap().clone()),
+        Err(e) => e,
+    }
 }
 
 ///
@@ -8338,7 +8385,8 @@ fn next_mut(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
-    let template = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    let template = template.to_str()?;
     rvalue::unpack(
         &self_.as_rstring_inner()[offset..],
         &template,
@@ -8358,7 +8406,8 @@ fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
-    let template = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    let template = template.to_str()?;
     rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, true, offset)
 }
 
@@ -8889,6 +8938,73 @@ fn unicode_normalize_(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn string_new_capacity() {
+        // `capacity:` is an allocation hint with no Ruby-visible state,
+        // so what a test can pin down is the argument checking and that
+        // a pre-sized buffer still behaves like any other String.
+        run_test(
+            r#"
+            r = []
+            r << String.new(capacity: 0)
+            r << String.new(capacity: -1)            # negative: ignored, no error
+            r << String.new(capacity: 3.7)           # Float truncates
+            r << String.new("ab", capacity: 100)     # contents win over the hint
+            r << String.new("ab", capacity: 1)       # hint below the length
+            o = Object.new
+            def o.to_int = 64
+            r << String.new(capacity: o)             # implicit #to_int
+            s = String.new(capacity: 1024)
+            100.times { s << "xy" }
+            r << s.size
+            r << String.new(capacity: 4096, encoding: "ASCII-8BIT").encoding.to_s
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn string_new_capacity_errors() {
+        run_test(
+            r#"
+            r = []
+            begin; String.new(capacity: "x"); rescue TypeError => e; r << e.class; end
+            begin; String.new(capacity: Object.new); rescue TypeError => e; r << e.class; end
+            begin; String.new(capacity: 2 ** 70); rescue RangeError => e; r << e.message; end
+            begin; String.new(capacity: 2 ** 62); rescue NoMemoryError => e; r << e.message; end
+            # A frozen receiver raises even for a capacity that asks for
+            # nothing \u2014 the check precedes the value.
+            begin; "abc".freeze.send(:initialize, capacity: 0); rescue FrozenError => e; r << e.class; end
+            begin; "abc".freeze.send(:initialize, capacity: -1); rescue FrozenError => e; r << e.class; end
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn string_new_capacity_nil_is_absent() {
+        // `nil` counts as absent (`rb_str_init`'s rule). CRuby's
+        // `String.new` fast path converts without the nil check and so
+        // raises TypeError there, while its own String *subclass* and a
+        // direct `send(:initialize, capacity: nil)` do not \u2014 an asymmetry
+        // monoruby does not reproduce, since every construction goes
+        // through this one method. Not a `run_test`: it would compare
+        // against the CRuby fast path.
+        // The script asserts for itself: `run_test_no_result_check`
+        // panics if the code raises, and nothing here needs a CRuby
+        // reference.
+        run_test_no_result_check(
+            r#"
+            got = [String.new(capacity: nil),
+                   String.allocate.send(:initialize, capacity: nil),
+                   Class.new(String).new(capacity: nil).class.superclass.to_s,
+                   "abc".freeze.send(:initialize, capacity: nil)]
+            want = ["", "", "String", "abc"]
+            raise "capacity: nil -> #{got.inspect}, want #{want.inspect}" unless got == want
+            "#,
+        );
+    }
 
     #[test]
     fn index_family_string_pattern_preserves_backref() {

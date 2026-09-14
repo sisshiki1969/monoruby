@@ -1,5 +1,16 @@
 use super::*;
 
+/// Field offsets the JIT reads directly, so `Method#call` can reach the
+/// bound receiver and `FuncId` without a builtin call.
+pub const METHOD_RECEIVER_OFFSET: usize =
+    RVALUE_OFFSET_KIND + std::mem::offset_of!(MethodInner, receiver);
+pub const METHOD_FUNC_ID_OFFSET: usize =
+    RVALUE_OFFSET_KIND + std::mem::offset_of!(MethodInner, func_id);
+/// `Option<IdentId>` over a `NonZeroU32`, so zero is `None` and a
+/// four-byte compare against zero is the "not a method_missing proxy" test.
+pub const METHOD_MM_NAME_OFFSET: usize =
+    RVALUE_OFFSET_KIND + std::mem::offset_of!(MethodInner, mm_name);
+
 #[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct MethodInner {
