@@ -76,8 +76,17 @@ impl<'a> JitContext<'a> {
         // the VM, which re-resolves per call; recompiling would never
         // stabilize.
         if callsite.name.is_none() {
+            // The body being compiled *is* the method when it was
+            // installed by `define_method` — `mother()` climbs past it to
+            // the lexically enclosing method, which is registered nowhere
+            // in the receiver's ancestry, so a compile-time resolution
+            // from there always fails. That is exactly the frame-dependent
+            // case: the super name follows the *called* name
+            // (`runtime::super_resolution`), which only the frame knows.
+            let self_fid = self.iseq().func_id();
             let mother_fid = self.store[self.iseq().mother().0].func_id();
-            let ambiguous = self.store[mother_fid].is_block_style()
+            let ambiguous = self.store[self_fid].meta().is_proc_method()
+                || self.store[mother_fid].is_block_style()
                 || match (recv_class, self.store[mother_fid].name()) {
                     (Some(rc), Some(name)) => {
                         self.store.super_occurrences(rc, mother_fid, name) > 1

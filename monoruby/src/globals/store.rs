@@ -600,10 +600,31 @@ impl Store {
             ObjTy::HASH => self.hash_hash_fid,
             _ => return false,
         };
-        match (builtin, self.check_method(obj, IdentId::HASH)) {
+        match (builtin, self.hash_method(obj.class())) {
             (Some(builtin), Some(found)) => builtin == found,
             _ => false,
         }
+    }
+
+    ///
+    /// Resolve `hash` on `class_id`, memoized per class_version — the same
+    /// shape as `match_method`. Both callers below run on every Hash / Set
+    /// operation whose key is not an immediate, so the uncached path (a
+    /// global-method-cache probe, and an ancestor walk on a miss) is worth
+    /// collapsing to a `Cell` load and a compare.
+    ///
+    fn hash_method(&self, class_id: ClassId) -> Option<FuncId> {
+        let version = Globals::class_version();
+        if let Some((v, fid)) = self[class_id].hash_method_at()
+            && v == version
+        {
+            return fid;
+        }
+        let fid = self
+            .check_method_for_class_with_version(class_id, IdentId::HASH, version)
+            .and_then(|e| e.func_id());
+        self[class_id].set_hash_method_at(version, fid);
+        fid
     }
 
     ///
@@ -617,7 +638,7 @@ impl Store {
     /// interpreter frame it replaces.
     ///
     pub(crate) fn has_builtin_identity_hash(&self, obj: Value) -> bool {
-        match (self.kernel_hash_fid, self.check_method(obj, IdentId::HASH)) {
+        match (self.kernel_hash_fid, self.hash_method(obj.class())) {
             (Some(builtin), Some(found)) => builtin == found,
             _ => false,
         }
