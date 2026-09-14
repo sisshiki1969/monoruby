@@ -1020,7 +1020,18 @@ impl Globals {
         // gem's built C-extension directory. The cfg!-derived default is
         // only the fallback when no Ruby was available at build time.
         let platform = ruby_platform();
-        let mut ruby_description = Value::string(format!("{pcg_name} {pcg_version} [{platform}]"));
+        // The commit build.rs found at HEAD, if the source tree was a git
+        // checkout. Like CRuby, `RUBY_DESCRIPTION` carries its first 10 hex
+        // digits and `RUBY_REVISION` the full hash.
+        let git_revision = option_env!("MONORUBY_GIT_REVISION");
+        let ruby_description = match git_revision {
+            Some(rev) => format!(
+                "{pcg_name} {pcg_version} (revision {}) [{platform}]",
+                &rev[..rev.len().min(10)]
+            ),
+            None => format!("{pcg_name} {pcg_version} [{platform}]"),
+        };
+        let mut ruby_description = Value::string(ruby_description);
         let mut ruby_engine = Value::string_from_str("ruby");
         let mut ruby_version_val = Value::string_from_str(&ruby_version);
         let mut ruby_engine_version = Value::string_from_str(&ruby_version);
@@ -1028,7 +1039,7 @@ impl Globals {
         let mut ruby_copyright =
             Value::string_from_str("ruby - Copyright (C) 1993-2025 Yukihiro Matsumoto");
         let mut ruby_release_date = Value::string_from_str("2025-12-25");
-        let mut ruby_revision = Value::string_from_str("monoruby");
+        let mut ruby_revision = Value::string_from_str(git_revision.unwrap_or("monoruby"));
         let ruby_patchlevel = Value::integer(0);
 
         for v in [
@@ -1627,7 +1638,8 @@ impl Globals {
         BACKTRACE_LIMIT.store(limit, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// The `RUBY_DESCRIPTION` string (e.g. `monoruby 0.3.0 [x86_64-linux]`),
+    /// The `RUBY_DESCRIPTION` string (e.g.
+    /// `monoruby 0.3.0 (revision 9837586a6d) [x86_64-linux]`),
     /// printed by the `-v` / `--version` command-line switches.
     pub fn ruby_description(&self) -> String {
         self.top_string_constant("RUBY_DESCRIPTION")
