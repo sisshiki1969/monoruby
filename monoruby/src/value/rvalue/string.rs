@@ -1388,7 +1388,16 @@ impl RStringInner {
     pub(crate) fn try_reserve_capacity(&mut self, cap: usize) -> bool {
         let buf = self.owned_mut();
         let additional = cap.saturating_sub(buf.len());
-        additional == 0 || buf.try_reserve(additional).is_ok()
+        if additional == 0 {
+            return true;
+        }
+        // Ask the `MONORUBY_MALLOC_HARD_LIMIT` guard first: it aborts the
+        // process rather than failing the allocation, so `try_reserve`
+        // would never get to report a `capacity: 2 ** 62`.
+        if crate::alloc::would_exceed_malloc_hard_limit(additional) {
+            return false;
+        }
+        buf.try_reserve(additional).is_ok()
     }
 
     /// The bytes, for overwriting in place at the same length (a shared
