@@ -153,9 +153,11 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         );
     }
 
-    vm.invoke_func_inner(
+    let name = method.lookup_name(&globals.store);
+    vm.invoke_func_named(
         globals,
         func_id,
+        name,
         receiver,
         &lfp.arg(0).as_array(),
         lfp.block(),
@@ -862,9 +864,11 @@ fn bind_call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let owner = method.owner();
     let func_id = method.func_id();
     check_bind_receiver(globals, owner, receiver)?;
-    vm.invoke_func_inner(
+    let name = method.lookup_name(&globals.store);
+    vm.invoke_func_named(
         globals,
         func_id,
+        name,
         receiver,
         &args,
         lfp.block(),
