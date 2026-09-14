@@ -1,7 +1,7 @@
 use crate::{
     codegen::jitgen::{
         context::JitStackFrame,
-        state::{Guarded, LinkMode},
+        state::LinkMode,
     },
     executor::inline::InlineFuncInfo,
 };
@@ -1008,13 +1008,36 @@ impl<'a> JitContext<'a> {
                 // initialize compiled for exactly that class.
                 let forwarded_initialize = callsite.forwarding && callsite.bypass_visibility;
 
+                // A forwarding hop does not spend the depth budget.
+                //
+                // The budget bounds how many callee frames one unit may
+                // hold, because each one costs code. A forwarding
+                // trampoline is the case where *not* inlining costs more:
+                // its body is a single call, so it adds almost no code,
+                // while leaving it out means the caller builds the rest
+                // `Array` its `(...)` binds — `send` passes
+                // `defer_rest: false` unconditionally, so only a
+                // specialized frame can carry D1's elision. `Class#new` is
+                // the case that matters: every `Foo.new` deeper in a call
+                // tree than the budget reaches paid one `Array` per
+                // construction, purely because of where it sat.
+                //
+                // Exempting both ends of the hop — a callee declared
+                // `(...)`, and the privileged `__builtin_initialize__(...)`
+                // forward inside `Class#new` — is what lets the whole
+                // chain through; a partial exemption would be worse than
+                // none (see `FORWARD_EXEMPT_RECURSION_CAP`).
+                let forward_exempt = (forwarding_callee || forwarded_initialize)
+                    && self.specialize_level() < FORWARD_EXEMPT_RECURSION_CAP;
+
                 // Method specialization (inlining a callee iseq) and block-
                 // argument inlining (`iseq_block`, which drives specialized
                 // `yield`) are both lowered on x86 and aarch64 now.
                 // Inside a dispatch arm, specialization is off: the arm
                 // cannot back out of a `CompileError`, and a `Cease` return
                 // would leave it with no path to the merge.
-                if (((specializable || forwarded_initialize) && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT)
+                if (((specializable || forwarded_initialize)
+                    && (forward_exempt || self.specialize_level() < SPECIALIZE_DEPTH_LIMIT))
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
                 {
@@ -1042,7 +1065,7 @@ impl<'a> JitContext<'a> {
         // `recv_class`'s JIT body — hand `None` so the lowering dispatches
         // through the callee's wrapper (see `AsmInst::Call::recv_class`).
         let proven_recv_class = (!same_target_set_guarded).then_some(recv_class);
-        state.send(ir, &self.store, callid, fid, proven_recv_class, outer_lfp, None);
+        state.send(ir, &self.store, callid, fid, proven_recv_class, outer_lfp);
 
         Ok(CompileResult::Continue)
     }
@@ -1207,16 +1230,7 @@ impl<'a> JitContext<'a> {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: state.pc().as_ptr() as u64,
         });
-        state.set_arguments(
-            &self.store,
-            ir,
-            callid,
-            callee_fid,
-            false,
-            &arg_hints,
-            None,
-            &[],
-        );
+        state.set_arguments(&self.store, ir, callid, callee_fid, false, &arg_hints, &[]);
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -1651,19 +1665,24 @@ impl<'a> JitContext<'a> {
     /// here takes the trampoline out of the picture entirely: the site's
     /// own positionals bind straight into `initialize`, at any depth.
     ///
-    /// Three plans, in decreasing order of what they fold away:
+    /// Two plans, both of which emit the construction with no call at
+    /// all:
     ///
     /// * a trivial `initialize` body (`ISeqHint::ConstReturn` /
     ///   `SelfReturn`) — nothing but the allocation is emitted. This is
     ///   every class that does not define one, since
     ///   `BasicObject#initialize` is an empty Ruby body;
     /// * a plain ivar-store constructor — expanded into the caller's own
-    ///   stores (`expand_ivar_stores`);
-    /// * anything else — an ordinary call to `initialize` on the object
-    ///   just allocated (`AbstractState::send`'s receiver override). One
-    ///   frame where the trampoline made two, and no rest `Array` in
-    ///   either. This is the leg that covers a native `initialize`
-    ///   (`String`, `Hash`) and a body too big to expand.
+    ///   stores (`expand_ivar_stores`).
+    ///
+    /// Anything else — a native `initialize` (`String`, `Hash`), a body
+    /// too big to expand — is left to the Ruby `Class#new`, which the
+    /// forwarding-hop exemption specializes into this unit anyway (so its
+    /// `(...)` still binds without a rest `Array`). Emitting that case as
+    /// a direct call to `initialize` here was measured at 4-13 % on the
+    /// shapes it covered, but it is a second implementation of `new`
+    /// carrying its own receiver-override plumbing and its own backtrace
+    /// shape; the Ruby definition stays the single authority instead.
     ///
     /// Declines (⇒ the ordinary specialized call *through* the
     /// trampoline) unless:
@@ -1673,19 +1692,13 @@ impl<'a> JitContext<'a> {
     ///   transparent only when there is nothing to re-shape;
     /// * the receiver is (provably, see the identity guard) the attached
     ///   class object;
-    /// * `initialize` binds those positionals without `ArgumentError`.
+    /// * `initialize` is an ISeq that binds those positionals without
+    ///   `ArgumentError`, and either folds away or expands into stores.
     ///
     /// The allocator need *not* be the stock one: a class with its own
     /// `alloc_func` (String, Array, Hash, …) keeps the runtime call
     /// `Class#allocate` would have made — `emit_class_allocate` with no
     /// inline payload — and still sheds the trampoline.
-    ///
-    /// One observable consequence of the call leg: `initialize` runs with
-    /// no `Class#new` frame above it, so a backtrace (or `Kernel#caller`)
-    /// taken inside it is one level shorter. That is what CRuby's own
-    /// `opt_new` does as of 3.5 (Feature #21254) — there as a bytecode
-    /// change, so it holds in its interpreter too, while here a cold site
-    /// still pushes the frame.
     ///
     /// Soundness rides on the site's class-version guard (emitted before
     /// this point): defining `new`, `initialize`, or an `allocate` anywhere
@@ -1763,23 +1776,7 @@ impl<'a> JitContext<'a> {
         let Some(init_fid) = init_fid else {
             return false;
         };
-        // Record that resolution as an assumption of this compilation unit.
-        // The call site's own entry says `#<Class:Foo>#new -> Class#new`,
-        // which a redefinition of `Foo#initialize` leaves true — so without
-        // this, `salvage_method_unit` re-validates the unit, finds nothing
-        // changed, re-stamps the version word, and keeps code holding a
-        // stale `initialize`: its folded body, its expanded stores, or the
-        // `FuncId` the call leg dispatches to. Defining `initialize` where
-        // it was inherited, or overriding an inherited one in a subclass,
-        // both silently kept the old behaviour at an already-hot site.
-        self.inline_method_cache.push(InlineCacheEntry {
-            recv_class: class_id,
-            name: Some(IdentId::INITIALIZE),
-            refinements: self.refinements(),
-            func_id: init_fid,
-        });
-
-        // Decide the whole plan before emitting anything: every leg is
+        // Decide the whole plan before emitting anything: both legs are
         // all-or-nothing, and the allocation is already emitted by the time
         // `expand_ivar_stores` would report a miss.
         enum InitPlan {
@@ -1787,32 +1784,15 @@ impl<'a> JitContext<'a> {
             Fold,
             /// A plain constructor, expanded into the caller.
             Stores(frameless::IvarStoreBody),
-            /// Anything else: a real call to `initialize`, taking the
-            /// object just allocated as its receiver.
-            Call,
         }
 
-        // The frame-free legs consume the body itself, so they need an
-        // `initialize` whose parameters are plain positionals binding
-        // exactly these arguments. The call leg only needs the ordinary
-        // simple-call shape `set_arguments` lowers — which admits a
-        // *native* `initialize` (String, Hash) and one declaring optional
-        // keywords the site does not pass.
+        // Both legs consume the body itself, so they need an `initialize`
+        // whose parameters are plain positionals binding exactly these
+        // arguments.
         let callee = &self.store[init_fid];
         let frameless_shape = callee.no_keyword()
             && !callee.single_arg_expand()
             && callee.positional_arity_ok(pos_num);
-        // `send` enters a callee through its `meta` plus entry code
-        // pointer, which covers a Ruby body and a native one. The other
-        // kinds never reach it even on the generic path — an attr /
-        // `Struct` accessor is lowered in place by `compile_method_call`,
-        // and a `define_method` proc-method is entered on the *inner*
-        // block's FuncId with its definition-time outer LFP — so an
-        // `alias_method :initialize, :x=` keeps the trampoline.
-        let callable = matches!(
-            self.store[init_fid].kind,
-            FuncKind::ISeq(_) | FuncKind::Builtin { .. }
-        );
         let plan = match self.store[init_fid].is_iseq().filter(|_| frameless_shape) {
             // `SelfReturn` is `def initialize = self`, which returns the
             // new object — and `new` discards the return value either way.
@@ -1824,8 +1804,11 @@ impl<'a> JitContext<'a> {
             {
                 InitPlan::Fold
             }
-            Some(init_iseq) => frameless::ivar_store_body(&self.store, init_iseq)
-                .filter(|body| {
+            // Not expandable, or not this shape at all (a native
+            // `initialize`, an `alias_method :initialize, :x=`): the Ruby
+            // `Class#new` handles it.
+            Some(init_iseq) => {
+                let Some(body) = frameless::ivar_store_body(&self.store, init_iseq).filter(|body| {
                     pos_num == self.store[init_fid].params().total_positional_args()
                         && self.store[class_id].is_object_ty_instance()
                         && body.stores.iter().all(|&(name, _)| {
@@ -1833,30 +1816,41 @@ impl<'a> JitContext<'a> {
                                 .get_ivarid(name)
                                 .is_some_and(|id| id.is_inline())
                         })
-                })
-                .map_or(InitPlan::Call, InitPlan::Stores),
-            None => InitPlan::Call,
+                }) else {
+                    return false;
+                };
+                InitPlan::Stores(body)
+            }
+            None => return false,
         };
 
         if !matches!(plan, InitPlan::Fold) {
-            // Both other legs run against the object this very instruction
+            // The store leg runs against the object this very instruction
             // allocates, so its slot must exist — and must not be one of
-            // the argument slots they then read, since the object lands in
+            // the argument slots it then reads, since the object lands in
             // `dst` *before* they run.
             match dst {
                 Some(d) if !(0..pos_num).any(|i| args + i == d) => {}
                 _ => return false,
             }
         }
-        // The call leg additionally needs `initialize` to bind these
-        // arguments through the *inline* argument setup: the generic
-        // runtime binding re-reads the receiver from the call site, where
-        // it is still the class.
-        if matches!(plan, InitPlan::Call)
-            && !(callable && self.store.is_simple_call(init_fid, callid))
-        {
-            return false;
-        }
+
+        // Record the `initialize` resolution as an assumption of this
+        // compilation unit — but only now that the emission is certain.
+        // The call site's own entry says `#<Class:Foo>#new -> Class#new`,
+        // which a redefinition of `Foo#initialize` leaves true — so without
+        // this, `salvage_method_unit` re-validates the unit, finds nothing
+        // changed, re-stamps the version word, and keeps code holding a
+        // stale `initialize`: its folded body or its expanded stores.
+        // Defining `initialize` where it was inherited, or overriding an
+        // inherited one in a subclass, both silently kept the old behaviour
+        // at an already-hot site.
+        self.inline_method_cache.push(InlineCacheEntry {
+            recv_class: class_id,
+            name: Some(IdentId::INITIALIZE),
+            refinements: self.refinements(),
+            func_id: init_fid,
+        });
 
         // Runtime identity guard, for the same reason `Class#allocate`
         // needs one: the dispatch class is not injective over receivers —
@@ -1874,9 +1868,8 @@ impl<'a> JitContext<'a> {
             r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64, inline_alloc)
         });
         ir.fpr_restore(using_fpr);
-        // Stores the object to `dst`'s home, which is both what the two
-        // legs below read it back from and what roots it for a GC inside
-        // `initialize`.
+        // Stores the object to `dst`'s home, which is both what the store
+        // leg below reads it back from and what roots it.
         state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
 
         match plan {
@@ -1891,31 +1884,6 @@ impl<'a> JitContext<'a> {
                 let ok = self.expand_ivar_stores(state, ir, class_id, dst, None, &body, &arg_slots);
                 // The plan was fully resolved above, so this cannot miss.
                 debug_assert!(ok);
-            }
-            InitPlan::Call => {
-                let dst = dst.unwrap();
-                // `o.__builtin_initialize__(...)` without the trampoline
-                // that spells it: the arguments are already laid out as
-                // this site's plain positionals, so they bind straight into
-                // `initialize`'s frame — no forwarded `…`, and therefore
-                // none of the rest `Array` whose elision D1 has to prove.
-                // The receiver is the object in `dst` and the result is
-                // dropped, which is what `new` does with it.
-                state.send(
-                    ir,
-                    &self.store,
-                    callid,
-                    init_fid,
-                    Some(class_id),
-                    None,
-                    Some(dst),
-                );
-                // The call cleared the dead temp window, and `dst` may have
-                // been in it. Its home still holds the object (nothing
-                // wrote the slot, and a frame capture during the call would
-                // have side-exited at `immediate_evict`'s guard), so
-                // re-establish the link rather than reload.
-                state.def_S_guarded(dst, Guarded::from_class(class_id));
             }
         }
         true
@@ -2736,6 +2704,22 @@ impl<'a> JitContext<'a> {
 /// spread of repeated runs.
 const SPECIALIZE_DEPTH_LIMIT: usize = 3;
 
+/// How deep a chain of *forwarding* frames may go, which is a recursion
+/// backstop rather than a budget — see `forward_exempt` at the
+/// specialization gate for why forwarding is exempt from the budget
+/// itself. `def f(...) = f(...)` is a legal Ruby program whose
+/// specialization would otherwise descend forever at compile time, and a
+/// chain of mutually forwarding methods does the same; this number is the
+/// only thing stopping it. It is set far above any forwarding chain real
+/// code writes (the deepest this repo's own corpus reaches is 6, through
+/// `Class#new` inside a block inside `Array#initialize`) precisely so that
+/// it never acts as a budget: a chain cut half way is *worse* than one not
+/// entered at all, because each forwarding frame that lands beyond the cut
+/// is emitted as a generic call, and a generic call to a forwarding
+/// trampoline materializes the rest `Array` that D1 exists to elide
+/// (`send` passes `defer_rest: false` unconditionally).
+const FORWARD_EXEMPT_RECURSION_CAP: usize = 32;
+
 impl AbstractState {
     ///
     /// ### in
@@ -2756,21 +2740,9 @@ impl AbstractState {
         // `AsmInst::Call::recv_class`.
         recv_class: Option<ClassId>,
         outer_lfp: Option<Lfp>,
-        // `Some(slot)`: bind the callee's `self` from this slot instead of
-        // the one the call site names, and throw the return value away.
-        // Both halves belong together: the call site's `dst` is then not
-        // this call's destination but the *emitting* operation's — it is
-        // `inline_class_new`'s `initialize` leg, where `dst` already holds
-        // the object being constructed and `Class#new` discards what
-        // `initialize` returns.
-        recv_override: Option<SlotId>,
     ) {
         let evict = ir.new_evict();
-        let dst = if recv_override.is_some() {
-            None
-        } else {
-            store[callid].dst
-        };
+        let dst = store[callid].dst;
         // Stack check only — no call-site GC/preempt poll. Ruby callees
         // poll at their entry (`InitMethod` / `vm_init`); native callees
         // are bounded between the caller's loop-edge/entry polls.
@@ -2799,16 +2771,7 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(
-            store,
-            ir,
-            callid,
-            callee_fid,
-            false,
-            &arg_hints,
-            recv_override,
-            &[],
-        );
+        self.set_arguments(store, ir, callid, callee_fid, false, &arg_hints, &[]);
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -2890,7 +2853,6 @@ impl AbstractState {
             callee_fid,
             defer_rest,
             arg_hints,
-            None,
             float_args,
         );
         self.discard(store[callid].dst);
@@ -3076,8 +3038,6 @@ impl AbstractState {
         callee_fid: FuncId,
         defer_rest: bool,
         arg_hints: &[(GP, SlotId)],
-        // See `send`.
-        recv_override: Option<SlotId>,
         // The parameters handed over in a register
         // (`JitContext::plan_float_args`), by callee parameter slot.
         float_args: &[(SlotId, FPReg)],
@@ -3085,11 +3045,6 @@ impl AbstractState {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
         let simple = store.is_simple_call(callee_fid, callid);
-        // Only the simple-call lowering below honours the override; the
-        // generic arms hand the whole binding to a runtime helper that
-        // re-reads the receiver from the call site. The one caller that
-        // overrides gates itself on the same `is_simple_call`.
-        debug_assert!(recv_override.is_none() || simple);
         if simple {
             let args = callsite.args;
             let pos_num = callsite.pos_num;
@@ -3140,7 +3095,7 @@ impl AbstractState {
 
             // fill self.
             let ofs = stack_offset - LFP_SELF;
-            self.fetch_for_callee(ir, recv_override.unwrap_or(callsite.recv), ofs);
+            self.fetch_for_callee(ir, callsite.recv, ofs);
 
             let req = filled_req.len();
             let opt = filled_opt.len();
