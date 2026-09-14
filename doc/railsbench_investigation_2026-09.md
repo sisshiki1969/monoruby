@@ -196,6 +196,74 @@ malloc が付く**のが原因。
 malloc はその閾値を超えたペイロードと Hash テーブルの分で、2.5 回/オブジェクト
 という比率の内訳は改めて採り直す必要がある。
 
+### 2.5 chain deopt の walk がスタック全体を毎回歩いている（F、約 43 k Ir/req）
+
+`chain_deopt_into` は §1.3 で Rust 側のシンボルとして出ていた唯一の JIT 内部関数で、
+こちらは名前で束ねた値なので**当初の 27.8 k Ir/req という数字は正しかった**
+（再計測で self 31,769 Ir/req、`runtime::chain_deopt` からの inclusive 43,246 Ir/req）。
+
+何が起きているかを見るため、walk に一時的なカウンタを入れて railsbench を
+2,000 リクエスト測った（WARM=2000。計測後にカウンタは外してある）:
+
+| | 合計 | /リクエスト | /walk |
+|---|---:|---:|---:|
+| walk 回数 | 27,057 | 13.53 | 1.00 |
+| 訪問したフレーム数 | 2,066,961 | 1,033.48 | **76.39** |
+| 変換したフレーム数 | 402,636 | 201.32 | 14.88 |
+| 戻り番地が cont stub だったフレーム（＝変換済み） | 1,293,121 | 646.56 | 47.79 |
+| 最初の変換済みフレームより先で訪問したフレーム | 1,572,210 | 786.11 | **58.11** |
+| 最初の変換済みフレームより先での変換 | **0** | 0.00 | 0.00 |
+
+Rails のスタックは深いので、1 回の escalation ごとに **76 フレーム**を歩き、
+`chain_deopt_table` を引き直している。そのうち **48 フレームは前回の walk が既に
+変換済み**で、`check_vm_address` に弾かれて何もしない。
+
+最後の行が効く: **29,057 回の walk を通じて、最初の変換済みフレームより先で変換が
+起きたことは一度もない**。これは仕組みから言えることでもある —— walk は必ず
+スタックの底まで走るので、あるフレームの戻り番地が cont stub になっている時点で、
+その下は前回の walk が処理し終えている（下＝より古いフレームなので、その間に
+JIT フレームが新しく積まれることはない）。
+
+したがって **最初の cont stub フレームで walk を打ち切ってよく**、訪問フレームの
+**76 %（58.11 / 76.39）** が消える。inclusive 43,246 Ir/req のうち約 33 k Ir/req、
+1 リクエストの **約 1.1 %** に当たる。
+
+escalation の発生元（deopt したフレームのメソッド）の内訳:
+
+| メソッド | walk/req |
+|---|---:|
+| `block in ActionView::Helpers::TagHelper::TagBuilder#tag_options` | 4.53 |
+| `ActiveSupport::InheritableOptions#initialize` | 2.00 |
+| `block in ActiveSupport::Notifications::Fanout#build_handle` | 1.00 |
+| `SQLite3::Statement#each` | 1.00 |
+| `ActionView::OutputFlow#initialize` | 1.00 |
+| `ActiveSupport::Callbacks#run_callbacks` | 1.00 |
+| `Enumerable#__gather_each` | 1.00 |
+| `ActiveRecord::ConnectionAdapters::ConnectionHandler#each_connection_pool` | 1.00 |
+| `Hash#each` | 0.99 |
+
+walk 回数そのものを減らす（この 13.5 回の deopt がなぜ定常状態で起き続けるのか）は
+別の問題で、まだ追っていない。
+
+### 2.6 TZInfo は毎リクエストの zoneinfo 読み直しをしていない（G、棄却）
+
+§1.3 は TZInfo に約 65,000 Ir/req を割り当てていたが、これは §1.3 の注記どおりの
+帰属の誤りだった。gem のメソッドにカウンタを差し込んで 300 リクエスト測ると:
+
+| | /req（CRuby・monoruby とも） |
+|---|---:|
+| `ZoneinfoReader#read` / `#parse` / `#derive_offsets` | **0** |
+| `ZoneinfoDataSource#load_timezone_info` | **0** |
+| `TZInfo::Timezone.get` / `DataSource#get_timezone_info` | **0** |
+| `ActiveSupport::TimeZone.[]` | 0.667 |
+| `ActiveSupport::TimeZone#period_for_utc` → `Timezone#period_for_utc` | 0.667 |
+
+ウォームアップ後は zoneinfo ファイルに一切触っていない。残るのは既にロード済みの
+ゾーンオブジェクトに対する変換だけで、単体コストは monoruby で
+`period_for_utc` 507 ns、`TimeZone.[]` 204 ns（CRuby+YJIT は 659 ns / 114 ns）。
+0.667 回/req を掛けて **約 474 ns/req ≒ 1,150 Ir/req、1 リクエストの 0.04 %**。
+**G は対策不要**。
+
 ---
 
 ## 3. JIT のバグ: `define_method` の本体からの `super` が再コンパイルループになる
@@ -280,8 +348,8 @@ VM 側は正しく解決できている（`--no-jit` が速いのはそのため
 | **C（実施済み）** | `OpenSSL::PKCS5.pbkdf2_hmac` と `HMAC` の反復ループを Rust に落とす（digest 核は既に Rust） | `builtins/digest.rs`, `stdlib/openssl.rb` | PBKDF2 2\*\*16 **2,143 → 85 ms**、HMAC-SHA256 **222 → 54 ms**。railsbench **3,157,820 → 3,086,274 Ir/req（−2.27 %）** |
 | D | ペイロードの malloc 削減（size-class 別フリーリスト、Hash テーブル）。**短い String / 小さい Array の埋め込みは実装済み**（§2.4 の訂正） | `alloc.rs`, `value/rvalue/*` | railsbench malloc 295 k Ir/req（CRuby の 2.79 倍）。まず 2.5 malloc/オブジェクトの内訳を採り直す |
 | E | 生成コードのフットプリント削減（side-exit 領域の共有化、17.5 k 箇所 → 圧縮） | `codegen/` | 命令数比 1.22x に対し実時間比 1.54x の差＝ IPC。i-cache 側の効き |
-| F | `chain_deopt_into` が定常状態で 27.8 k Ir/req 走っている理由の確認 | `codegen.rs` | 未調査 |
-| G | TZInfo の zoneinfo 読み直し（約 65 k Ir/req）がキャッシュされているかの確認 | 調査のみ | 未確認（プローブが §4 の再帰で潰れた） |
+| **F（測定済み・対策候補あり）** | chain deopt の walk を、最初の「変換済み（戻り番地が cont stub）」フレームで打ち切る | `codegen.rs` | 訪問フレームの 76 % が消える。約 33 k Ir/req ≒ 1 リクエストの 1.1 %（§2.5） |
+| ~~G~~（棄却） | TZInfo の zoneinfo 読み直し | — | **読み直していない**。実測 0.04 %/req。§1.3 の帰属誤り（§2.6） |
 
 A・B・C をこのブランチで実施した。callgrind で測った railsbench の命令数は
 
