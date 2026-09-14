@@ -247,6 +247,122 @@ escalation の発生元（deopt したフレームのメソッド）の内訳:
 walk 回数そのものを減らす（この 13.5 回の deopt がなぜ定常状態で起き続けるのか）は
 別の問題で、まだ追っていない。
 
+### 2.5.1 walk はそもそも不要 —— 静的に焼ける（検証済み）
+
+§2.5 は「walk を短くする」話だが、**walk 自体が要らない**。コンパイラはコンパイル単位内の
+全フレームサイズを把握しているので、変換対象フレームの位置は rbp からの定数変位で出せる。
+以下は 2 つの前提の検証結果。
+
+**前提①: ユニット内の全フレームサイズをコンパイラが把握している — 成立（既に実装で使っている）**
+
+`JitContext::specialized_frame_sizes: HashMap<SpecializedId, FrameSizes { total, base }>` に
+`pop_frame()` が確定値を記録し、`DynVarOffset::Hint { ids, extra }` を
+`resolve_dyn_var_offsets` が `Concrete(usize)` に潰す。その結果が:
+
+```rust
+// arch/x86_64/compile/variables.rs — 同一ユニット内の外側ローカルへの書き込み
+pub(in crate::codegen::jitgen) fn store_dyn_var_specialized(&mut self, offset: usize, dst: SlotId, src: GP) {
+    monoasm!( &mut self.jit,
+        movq [rbp + ((offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(dst) as usize))], R(src as _);
+    );
+}
+```
+
+**`movq [rbp + 定数]` 1 命令**で外側フレームのスロットに届いている。汎用版
+（`store_dyn_var` → `get_outer`）が `movq rax, [r14]` → `movq rax, [rax]` …
+とポインタを辿るのと対照的。つまり①は主張ではなく**既に動いている事実**。
+
+**前提②: 静的なフレーム深さが実行時の CFP 段数と一致する — 成立**
+
+`do_specialized_call`（`arch/x86_64/compile/method_call.rs:344`）:
+
+```rust
+self.set_lfp();
+self.push_frame();      // 実 CFP フレームを 1 つ押す
+monoasm! { &mut self.jit, call entry; }
+self.pop_frame();
+```
+
+specialized call は必ず実 CFP フレーム 1 つと実 `call` を出す。`trace_contexts()` の
+ドキュメントも「every suspended frame of this compilation, outermost first,
+**1:1 with `stack_frame`**」と書いている。Loop JIT の根フレームだけは JIT が
+プロローグを出さない（既存のインタプリタ / invoker フレームに乗る）が、根は深さ 0 で
+`escalate_side_exits() = current_frame_pos() > 0` により escalate しないので、この
+経路には現れない。
+
+実測でも裏づけられる。walk 1 回あたりの**ユニット内**変換数のヒストグラム
+（railsbench、27,057 walk）は **1 / 2 / 4 の 3 値だけ**:
+
+| ユニット内変換数 | walk 数 |
+|---:|---:|
+| 1 | 8,000 |
+| 2 | 17,057 |
+| 4 | 2,000 |
+
+サイトごとにコンパイル時定数、という形をしている。
+
+**唯一の引っかかりだった lfp のヒープ昇格は、静的化の障害にならない**
+
+`move_frame_to_heap` はフレームをヒープに複製し、`cfp.set_lfp(heap_lfp)` で CFP の
+LFP スロットを差し替え、スタック側を `set_invalidated()` する。以後 `cfp.lfp()` は
+ヒープを指すので、`[rbp + 定数]` でスロットに書くと死んだコピーに書くことになる。
+
+しかし replay stub（`gen_chain_replay_stub`）の 3 引数のうち:
+
+| 引数 | 用途 | 昇格の影響 |
+|---|---|---|
+| rdi = callee bp | cont pad `[rdi+24]` と戻り番地 `[rdi+8]` の書き込み | なし（必ずスタック側でなければならない） |
+| rsi = caller bp | spill 領域の f64 読み出し `[rsi - off]` | なし（spill はマシンスタック。`frame_bytes()` が複製するのは LFP_SELF + 8×reg_num の Ruby ローカル領域だけ） |
+| rdx = caller lfp | スロットへの書き込み `[rdx - conv(slot)]` | **あり** |
+
+そして rdx は**静的に算出する必要がない**。LFP は CFP のスロットに入っている
+（`BP_CFP = 8`, `CFP_LFP = 8` なので LFP スロットは `bp - 16`）。各フレームの bp が
+`rbp + 定数` である以上、
+
+```
+movq rdx, [rbp + (K_i - 16)]      ; そのフレームの LFP スロットを読む
+```
+
+の **1 ロード**で足りる。昇格済みならヒープのコピーが返るので自動的に正しい。現在の
+walk も結局同じ読み出しをしているだけで、違いは `cfp.prev()` を辿ってから読むか、
+定数変位で読むかだけである。
+
+（既存の `no_capture_guard` —— `unset_outer_no_capture_guard` のコメント
+「a heapified copy of the frame would carry stale LFP slots」—— は同じ危険に対する
+ゲートだが、**字句上の**外側チェーンに対して維持されるもので、呼び出しチェーンを扱う
+chain deopt にはそのままでは使えない。上の「LFP をスロットから読む」方式なら
+ゲート自体が不要になる。）
+
+**今の walk がどれだけ余計に変換しているか**
+
+変換サイトにコンパイル単位 ID を刻んで測った（railsbench 2,000 リクエスト）:
+
+| | /walk | /req |
+|---|---:|---:|
+| 訪問フレーム | 76.39 | 1,033.48 |
+| **deopt したユニット内の変換** | **1.85** | 25.06 |
+| **他ユニットの変換** | **13.03** | **176.26** |
+
+変換の **87.6 % がユニット外**。`escalate_side_exits` のコメントの論証
+（「Both things escalation buys are confined to a single compilation unit」）に従えば
+これらは変換不要で、**1 リクエストあたり 176 フレーム分の有効なコンパイル済み実行を
+捨てている**。§8.5 が「strictly more conversion than the speculation will need,
+which is sound」と自認している部分の実際の量がこれ。
+
+**結論**
+
+escalated side exit ごとに、ユニット内の d 段（d = `current_frame_pos()`、コンパイル時
+定数、実測で 1〜4）を定数変位で処理するストレートラインのスタブ 1 本に置き換えられる。
+`chain_deopt_table`（HashMap）、`check_vm_address`、`cfp.prev()` / `Cfp::return_addr()`、
+`runtime::chain_deopt` と `CODEGEN.borrow_mut()` が、この経路から全部消える。
+BOP 再定義（`check_bop_redefine`）だけはユニット境界を越える必要があるので walk のまま
+残す（コメントが明記。ブート後の頻度はほぼ 0）。
+
+未確認で残るのは `Error` exit の unwind 経路（§8.4「a rewritten return-address slot is
+also on the unwind path」）が、ユニット外のフレームにも書き換えを要求していないか。
+
+---
+
 ### 2.6 TZInfo は毎リクエストの zoneinfo 読み直しをしていない（G、棄却）
 
 §1.3 は TZInfo に約 65,000 Ir/req を割り当てていたが、これは §1.3 の注記どおりの
@@ -350,7 +466,7 @@ VM 側は正しく解決できている（`--no-jit` が速いのはそのため
 | **C（実施済み）** | `OpenSSL::PKCS5.pbkdf2_hmac` と `HMAC` の反復ループを Rust に落とす（digest 核は既に Rust） | `builtins/digest.rs`, `stdlib/openssl.rb` | PBKDF2 2\*\*16 **2,143 → 85 ms**、HMAC-SHA256 **222 → 54 ms**。railsbench **3,157,820 → 3,086,274 Ir/req（−2.27 %）** |
 | D | ペイロードの malloc 削減（size-class 別フリーリスト、Hash テーブル）。**短い String / 小さい Array の埋め込みは実装済み**（§2.4 の訂正） | `alloc.rs`, `value/rvalue/*` | railsbench malloc 295 k Ir/req（CRuby の 2.79 倍）。まず 2.5 malloc/オブジェクトの内訳を採り直す |
 | E | 生成コードのフットプリント削減（side-exit 領域の共有化、17.5 k 箇所 → 圧縮） | `codegen/` | 命令数比 1.22x に対し実時間比 1.54x の差＝ IPC。i-cache 側の効き |
-| **F（測定済み・対策候補あり）** | chain deopt の walk を、最初の「変換済み（戻り番地が cont stub）」フレームで打ち切る | `codegen.rs` | 訪問フレームの 76 % が消える。約 26 k Ir/req ≒ 1 リクエストの 0.8 %（§2.5） |
+| **F（測定済み・対策候補あり）** | escalated side exit の chain deopt を**静的に焼く** —— ユニット内 d 段（コンパイル時定数、実測 1〜4）を rbp 定数変位で処理するスタブに置き換え、CFP walk・`chain_deopt_table`・`check_vm_address` を廃止。BOP 再定義の経路だけ walk を残す | `codegen.rs`, `jitgen.rs` | walk 43 k Ir/req のほぼ全部。加えて**ユニット外の過剰変換 176 フレーム/req** が止まる（§2.5.1） |
 | ~~G~~（棄却） | TZInfo の zoneinfo 読み直し | — | **読み直していない**。実測 0.04 %/req。§1.3 の帰属誤り（§2.6） |
 
 A・B・C をこのブランチで実施した。callgrind で測った railsbench の命令数は
