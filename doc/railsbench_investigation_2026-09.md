@@ -412,14 +412,56 @@ main script フレームだけを昇格させる）で、これも直接試し�
 （`movq rdx, [rbp + (K_i - 16)]`）なので、祖先が昇格していようがいまいが生きたコピーに
 書く。現在の `store_dyn_var_specialized` の `[rbp + 定数]` 直接アクセスより厳密に安全。
 
-**結論**
+**実施済み: walk をユニット内に限定した**
 
-escalated side exit ごとに、ユニット内の d 段（d = `current_frame_pos()`、コンパイル時
-定数、実測で 1〜4）を定数変位で処理するストレートラインのスタブ 1 本に置き換えられる。
-`chain_deopt_table`（HashMap）、`check_vm_address`、`cfp.prev()` / `Cfp::return_addr()`、
-`runtime::chain_deopt` と `CODEGEN.borrow_mut()` が、この経路から全部消える。
-BOP 再定義（`check_bop_redefine`）だけはユニット境界を越える必要があるので walk のまま
-残す（コメントが明記。ブート後の頻度はほぼ 0）。
+まず walk の**範囲**だけを直した（アドレッシングの静的化は次段）。
+`JitContext::escalate_side_exits`（bool）を `chain_deopt_frames() -> u32`
+（＝`current_frame_pos()`）に置き換え、`AsmIr` が従来どおり各 side exit に焼き込み、
+ハンドラが `runtime::chain_deopt(vm, frames)` に渡して walk をそこで止める。
+BOP 再定義（`check_bop_redefine`）は `None` を渡して従来どおり底まで走る。
+
+境界の前提は毎回検査する。bounded loop の中の `debug_assert!` が、ユニット内の
+フレームの戻り番地は「変換されるか、VM コードとして読める（前回の walk が変換済み）」
+のどちらかでなければならないことを確かめる —— そうでなければ静的深さと実行時チェーンが
+ずれており、walk が根に届かずに止まっていることになる。全スイートで発火しなかった。
+
+callgrind（同一手法で取り直したペア）:
+
+| | Ir/req |
+|---|---:|
+| ベースライン | 3,084,280 |
+| **ユニット内に限定** | **3,004,061（−2.60 %）** |
+
+| 関数 | before | after |
+|---|---:|---:|
+| `chain_deopt_into` self | 32,175 | **3,336**（−89.6 %） |
+| `CodePtr::add` | 8,319 | **456**（−94.5 %） |
+| 生成コード全体 | 526,629 | 506,766 |
+| `runtime::vm_get_constant` | 4,137 | 1,146 |
+| `Executor::const_lexical_self_key` | 1,493 | 410 |
+| `runtime::args::fill_positional_args` | 31,584 | 30,021 |
+| `GlobalMethodCache::get` | 23,216 | 22,253 |
+
+walk そのものが消えただけでなく、**インタプリタ側のヘルパも軒並み減っている**
+（`vm_get_constant`、`const_lexical_self_key`、`expand_array`、`find_method`、
+`fill_positional_args`）。ユニット外のフレームを VM に落とさなくなった分、それらが
+コンパイル済みのまま走り続けている効果で、§2.5.1 の「過剰変換 176 フレーム/req」が
+実際にコストだったことの裏返しである。
+
+実時間はベースライン中央値 1.751 → 1.658 ms/req。方向は一致するが ±5 % の中。
+
+回帰チェックはすべてベースラインと同一（新規失敗ゼロ）: `cargo test --workspace
+--release` 3993 passed / 1 failed（既知の `angle`）、`-C debug-assertions=yes` でも同じ、
+`cargo check --target aarch64-unknown-linux-gnu`、ruby/spec core の array / hash /
+string / proc / method / enumerable / exception / range / integer / float / binding /
+kernel / class / module、`benchmark/*.rb` の出力（`app_aobench` と `trick` は
+`srand` 未固定とアニメーションのため元々非決定的。`srand(0)` を入れた aobench は
+ベースライン・変更後・CRuby の 3 者が md5 一致）。
+
+**次段（未実施）**: 残る d 回のテーブル引きも、`store_dyn_var_specialized` と同じ
+rbp 定数変位に置き換えられる。`chain_deopt_table`（HashMap）、`check_vm_address`、
+`cfp.prev()` / `Cfp::return_addr()`、`runtime::chain_deopt` と `CODEGEN.borrow_mut()`
+がこの経路から全部消える。d は 1〜4 なので残コストは小さく、優先度は低い。
 
 **`Error` exit の unwind もユニット内で閉じている（確認済み）**
 
@@ -584,21 +626,23 @@ VM 側は正しく解決できている（`--no-jit` が速いのはそのため
 | **C（実施済み）** | `OpenSSL::PKCS5.pbkdf2_hmac` と `HMAC` の反復ループを Rust に落とす（digest 核は既に Rust） | `builtins/digest.rs`, `stdlib/openssl.rb` | PBKDF2 2\*\*16 **2,143 → 85 ms**、HMAC-SHA256 **222 → 54 ms**。railsbench **3,157,820 → 3,086,274 Ir/req（−2.27 %）** |
 | D | ペイロードの malloc 削減（size-class 別フリーリスト、Hash テーブル）。**短い String / 小さい Array の埋め込みは実装済み**（§2.4 の訂正） | `alloc.rs`, `value/rvalue/*` | railsbench malloc 295 k Ir/req（CRuby の 2.79 倍）。まず 2.5 malloc/オブジェクトの内訳を採り直す |
 | E | 生成コードのフットプリント削減（side-exit 領域の共有化、17.5 k 箇所 → 圧縮） | `codegen/` | 命令数比 1.22x に対し実時間比 1.54x の差＝ IPC。i-cache 側の効き |
-| **F（測定済み・対策候補あり）** | escalated side exit の chain deopt を**静的に焼く** —— ユニット内 d 段（コンパイル時定数、実測 1〜4）を rbp 定数変位で処理するスタブに置き換え、CFP walk・`chain_deopt_table`・`check_vm_address` を廃止。BOP 再定義の経路だけ walk を残す | `codegen.rs`, `jitgen.rs` | walk 43 k Ir/req のほぼ全部。加えて**ユニット外の過剰変換 176 フレーム/req** が止まる（§2.5.1） |
+| **F（実施済み）** | escalated side exit の chain deopt を**コンパイル単位内に限定** —— 変換するフレーム数（= `current_frame_pos()`、コンパイル時定数、実測 1〜4）を side exit に焼き込み、walk をそこで止める。BOP 再定義の経路だけ従来どおり底まで走る | `jitgen/context.rs`, `jitgen/asmir.rs`, `codegen.rs`, `codegen/runtime.rs` | railsbench **3,084,280 → 3,004,061 Ir/req（−2.60 %）**。`chain_deopt_into` self 32,175 → 3,336（§2.5.1） |
 | ~~G~~（棄却） | TZInfo の zoneinfo 読み直し | — | **読み直していない**。実測 0.04 %/req。§1.3 の帰属誤り（§2.6） |
 
-A・B・C をこのブランチで実施した。callgrind で測った railsbench の命令数は
+A・B・C・F をこのブランチで実施した。callgrind で測った railsbench の命令数は
 
 | | Ir/req | |
 |---|---:|---|
 | master（A・B 前） | 3,204,229 | |
 | ＋ A・B | 3,132,872 | −2.23 % |
 | ＋ その後の master（C の測定基準） | 3,157,820 | |
-| ＋ C | **3,086,274** | −2.27 % |
+| ＋ C | 3,086,274 | −2.27 % |
+| ＋ その後の master（F の測定基準） | 3,084,280 | |
+| ＋ F | **3,004,061** | −2.60 % |
 
 A・B の内訳は `GlobalMethodCache::get` 29.1 k → 23.0 k、
 `check_method_for_class_with_version` 25.6 k → 20.2 k（どちらも −21 %）、
-JIT コンパイラ（`Codegen`）38.1 k → 31.8 k（−17 %）。C の内訳は §2.2。
+JIT コンパイラ（`Codegen`）38.1 k → 31.8 k（−17 %）。C の内訳は §2.2、F は §2.5.1。
 
 > 2026-09-14 訂正: ここには当初 A・B を **4,915,558 → 4,849,888 Ir/req（−1.34 %）**
 > と書いていたが、同じ `.cg` ファイルを callgrind の `summary:` 行と突き合わせて
