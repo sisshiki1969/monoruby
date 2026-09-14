@@ -66,6 +66,16 @@ micro 系（send_bmethod 0.38、30k_methods 0.39、30k_ifelse 0.43）を除く�
 
 ### 1.3 生成コードの中身（Ir/リクエスト、シンボルマップで帰属）
 
+> **この表の数字は上限として読むこと**（2026-09-14 追記）。生成コードの領域は
+> callgrind の出力ではアドレスでしか識別されず、そのアドレスは実行ごとに変わる。
+> 差分法で N の違う 2 回を引き算するとき、片方にしか現れないアドレスは丸ごと
+> 「1 リクエストあたりの増分」として計上されてしまう。railsbench の 2 回では
+> 生成コード領域 21,743 / 21,768 個のうち共通なのは 19,418 個で、片方にしか
+> 無い領域が 1 リクエストあたり 1.34 M Ir 分の幻の増分を作る。**名前で束ねた
+> 合計**（Rust 側のシンボル、および「生成コード」全体）は正しいが、以下の
+> 個別の Ruby メソッドへの帰属は過大に出ている。C の実測（§2.2）でこれが
+> 判明した。
+
 | 単位 | Ir/req |
 |---|---:|
 | `Array#map`（monoruby の `builtins/array.rb`、Ruby 実装） | **296,729** |
@@ -125,6 +135,27 @@ digest の核（SHA-256 圧縮関数）は Rust の `sha2` が CRuby の C と�
 | `OpenSSL::Digest.canonical_name` / `#finish` / `Digest::Instance#update` / `#digest!` | 32,483 |
 | 合計 | **≈ 154,000（リクエストの 3.1 %）** |
 
+**実測（2026-09-14 追記）**: この外側ループを Rust に落として（§5 の C）測り直した
+ところ、railsbench の命令数は **3,157,820 → 3,086,274 Ir/req（−71,546、−2.27 %）**
+だった。上の 154,000 は §1.3 の注記どおり過大で、実際に消えたのはその半分以下である。
+名前で束ねた内訳（Ir/req）は:
+
+| 単位 | before | after |
+|---|---:|---:|
+| 生成コード全体 | 542,608 | 525,317 |
+| `Hashmap::insert` | 11,907 | 1,588 |
+| `SmallVec<[u8; 32]>::insert_from_slice` | 25,848 | 18,375 |
+| `Value::coerce_to_pack_u64`（`pack("C*")` / `pack("N")`） | 4,689 | 0 |
+| `string::pack::pack` | 4,665 | 1,546 |
+| `__memcpy_avx_unaligned_erms` | 51,096 | 46,883 |
+| `Value::unpack` | 31,900 | 28,104 |
+| `_int_malloc` / `malloc` / `_int_free` | 238,196 | 233,414 |
+
+マイクロでは効きがはるかに大きい（PBKDF2 2\*\*16 で 2,143 → 85 ms、HMAC-SHA256 で
+222 → 54 ms）。railsbench で 2 % に留まるのは、`ActiveSupport::KeyGenerator` が
+派生鍵をキャッシュしていて PBKDF2 がリクエストごとには走らないためで、毎回通るのは
+署名 cookie の HMAC だけである。
+
 ### 2.3 メソッド探索のハッシュ表引き（≈ 55 k Ir/req）
 
 `--features profile` のグローバルメソッドキャッシュ統計（4,000 リクエスト）を
@@ -155,7 +186,15 @@ digest の核（SHA-256 圧縮関数）は Rust の `sha2` が CRuby の C と�
 1 リクエストで Ruby オブジェクト 1,548 個（CRuby 869 個）、malloc 約 3,840 回。
 オブジェクト 1 個につき malloc 2.5 回という比率は grape の解析（§ mail/lee/grape の 3.2）と
 同じ構造で、**ペイロード（String バッファ、Array バッファ、Hash テーブル）ごとに
-malloc が付く**のが原因。CRuby は短い String / 小さい Array を埋め込みで持つ。
+malloc が付く**のが原因。
+
+ただし **「短い String / 小さい Array の埋め込み」は monoruby にも既にある**
+（2026-09-14 訂正）。`StringContent` は `SmallVec<[u8; STRING_INLINE_CAP]>`
+（`STRING_INLINE_CAP = 32`）、`ArrayInner` は `SmallVec<[Value; ARRAY_INLINE_CAPA]>`
+（`ARRAY_INLINE_CAPA = 5`）で、どちらもインラインバッファは `RValue` の中
+（`RVALUE_OFFSET_INLINE`）にあり、この範囲なら malloc は起きない。つまり残る
+malloc はその閾値を超えたペイロードと Hash テーブルの分で、2.5 回/オブジェクト
+という比率の内訳は改めて採り直す必要がある。
 
 ---
 
@@ -238,18 +277,31 @@ VM 側は正しく解決できている（`--no-jit` が速いのはそのため
 |---|---|---|---|
 | **A（実施済み）** | `super` サイトの「フレーム依存」判定を、字句上の親ではなく**コンパイル中の本体自身の `is_proc_method` ビット**で行い、再コンパイルではなく VM への plain deopt に落とす | `codegen/jitgen/compile/method_call.rs` | マイクロ **29.6 → 3.7 ms**（YJIT 4.5、`--no-jit` 6.9）。`SHA256.new` 50.3 → 22.2 ms、再コンパイル 1,814 → 0 |
 | **B（実施済み）** | `hash` の解決を ClassInfo の class_version 付き `Cell` にメモ化（`match_method` と同型） | `globals/store.rs`, `store/class.rs` | オブジェクトキー `Hash#[]` **64.5 → 57.3 ns**、Array キー 128.5 → 119.3 ns |
-| C | `OpenSSL::PKCS5.pbkdf2_hmac` と `HMAC` の反復ループを Rust に落とす（digest 核は既に Rust） | `builtins/digest.rs`, `builtins/cipher.rs`, `stdlib/openssl.rb` | railsbench 約 154 k Ir/req（3.1 %）。Rails の署名 cookie / CSRF に直撃 |
-| D | ペイロードの malloc 削減（短い String / 小さい Array の埋め込み、size-class 別フリーリスト） | `alloc.rs`, `value/rvalue/*` | railsbench malloc 295 k Ir/req（CRuby の 2.79 倍）。grape・mail にも同じ構造 |
+| **C（実施済み）** | `OpenSSL::PKCS5.pbkdf2_hmac` と `HMAC` の反復ループを Rust に落とす（digest 核は既に Rust） | `builtins/digest.rs`, `stdlib/openssl.rb` | PBKDF2 2\*\*16 **2,143 → 85 ms**、HMAC-SHA256 **222 → 54 ms**。railsbench **3,157,820 → 3,086,274 Ir/req（−2.27 %）** |
+| D | ペイロードの malloc 削減（size-class 別フリーリスト、Hash テーブル）。**短い String / 小さい Array の埋め込みは実装済み**（§2.4 の訂正） | `alloc.rs`, `value/rvalue/*` | railsbench malloc 295 k Ir/req（CRuby の 2.79 倍）。まず 2.5 malloc/オブジェクトの内訳を採り直す |
 | E | 生成コードのフットプリント削減（side-exit 領域の共有化、17.5 k 箇所 → 圧縮） | `codegen/` | 命令数比 1.22x に対し実時間比 1.54x の差＝ IPC。i-cache 側の効き |
 | F | `chain_deopt_into` が定常状態で 27.8 k Ir/req 走っている理由の確認 | `codegen.rs` | 未調査 |
 | G | TZInfo の zoneinfo 読み直し（約 65 k Ir/req）がキャッシュされているかの確認 | 調査のみ | 未確認（プローブが §4 の再帰で潰れた） |
 
-A と B はこのブランチで実施した。callgrind で測った railsbench の命令数は
-**4,915,558 → 4,849,888 Ir/req（−1.34 %）**で、内訳は
-`GlobalMethodCache::get` 29.1 k → 23.0 k、`check_method_for_class_with_version`
-25.6 k → 20.2 k（どちらも −21 %）、JIT コンパイラ（`Codegen`）38.1 k → 31.8 k（−17 %）。
-実時間はこの機械のばらつき（railsbench で ±5 %）に埋もれるので、確かなのはこの命令数と
-§5 のマイクロの数字。C は中規模、D・E は設計が要る。
+A・B・C をこのブランチで実施した。callgrind で測った railsbench の命令数は
+
+| | Ir/req | |
+|---|---:|---|
+| master（A・B 前） | 3,204,229 | |
+| ＋ A・B | 3,132,872 | −2.23 % |
+| ＋ その後の master（C の測定基準） | 3,157,820 | |
+| ＋ C | **3,086,274** | −2.27 % |
+
+A・B の内訳は `GlobalMethodCache::get` 29.1 k → 23.0 k、
+`check_method_for_class_with_version` 25.6 k → 20.2 k（どちらも −21 %）、
+JIT コンパイラ（`Codegen`）38.1 k → 31.8 k（−17 %）。C の内訳は §2.2。
+
+> 2026-09-14 訂正: ここには当初 A・B を **4,915,558 → 4,849,888 Ir/req（−1.34 %）**
+> と書いていたが、同じ `.cg` ファイルを callgrind の `summary:` 行と突き合わせて
+> 数え直すと上表になる。当初の数字は 1 リクエストあたりへの割り戻し方を誤っていた。
+
+実時間はこの機械のばらつき（railsbench で ±5 %、実測 1.23〜1.44 ms/req）に埋もれるので、
+確かなのはこの命令数と §5 のマイクロの数字。D・E は設計が要る。
 
 ---
 
@@ -273,6 +325,12 @@ MAX_TIME=40 ruby --yjit -I harness-warmup benchmarks/railsbench/benchmark.rb
 WARM=1000 N=100 valgrind --tool=callgrind --callgrind-out-file=s.cg --cache-sim=no monoruby benchmarks/railsbench/small.rb
 WARM=1000 N=600 valgrind --tool=callgrind --callgrind-out-file=l.cg --cache-sim=no monoruby benchmarks/railsbench/small.rb
 ```
+
+1 リクエストあたりの総命令数は、各 `.cg` の末尾にある `summary:` 行（＝全関数の
+self コストの総和）を引いて `N` の差で割る。`fn=` 単位の差分を合計しても**一致しない**:
+生成コードの領域はアドレスでしか識別されず、そのアドレスは実行ごとに変わるので、
+片方にしか現れないキーを落とすか丸ごと足すかで数万〜百万 Ir/req ずれる（§1.3 の注記）。
+名前で束ねる（`0x…` を「生成コード」1 つにまとめる）と `summary:` と一致する。
 
 生成コードの帰属には JIT シンボルマップを使う。**valgrind の下では JIT のマップ先が
 `0x1_0000_0000` 起点になり、callgrind が `???` に付ける番地と一致する**ので、
