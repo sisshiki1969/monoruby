@@ -622,7 +622,10 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         globals.write_stdout(b"\n")?;
     }
-    globals.flush_stdout()?;
+    // No flush: `rb_io_puts` is ordinary buffered output, so on a
+    // non-TTY stdout the bytes wait for the buffer to fill, an explicit
+    // `#flush`, a fork, or exit. (`Kernel#p` below does flush, as CRuby's
+    // `rb_p` does.)
     Ok(Value::nil())
 }
 
@@ -3543,6 +3546,9 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             args.push(v.coerce_to_string(vm, globals)?);
         }
     }
+    // The child inherits our std fds; flush so our own pending output
+    // precedes whatever it writes (CRuby orders them this way).
+    crate::rvalue::io::flush_std_streams();
     let mut child = match Command::new(&program).args(&args).spawn() {
         Ok(child) => child,
         // ENOEXEC (an executable file without a shebang that isn't a
