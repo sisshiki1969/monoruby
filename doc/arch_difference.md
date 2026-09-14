@@ -200,7 +200,7 @@ stack alone — no code is patched, on either arch. See `doc/chain_deopt.md`
 
 | Guard                         | x86-64                                                            | aarch64                                                                 |
 | ----------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `guard_class` immediates      | Fixnum/nil/true/false/symbol/float via `testq`/`cmpq`            | same set via `tbz`/`tbnz`/`cmp`                                        |
+| `guard_class` immediates      | Fixnum/nil/true/false/bool/symbol/float via `testq`/`cmpq`       | same set via `tbz`/`tbnz`/`cmp`                                        |
 | `guard_class` heap            | `guard_rvalue` (low-3-bits + class compare)                      | `a64_guard_rvalue` (same logic, `and`/`cbnz`/`ldr w`)                  |
 | `guard_class2` (BigNum→VM)    | yes, from the monomorphic method-entry patch path (`codegen/patch.rs`) | yes — `a64_guard_class2`, from `wrapper.rs`; only `INTEGER_CLASS` differs |
 | `guard_array_ty`              | yes (`ObjTy::ARRAY` at `RVALUE_OFFSET_TY`)                        | yes                                                                    |

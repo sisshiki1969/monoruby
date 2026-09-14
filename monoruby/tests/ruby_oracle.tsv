@@ -796,6 +796,7 @@
 37d0eeb4eb7c15c516659d6062d5409f	983085416	acc = 0\n        i = 0\n        while i < 30000\n          b = [i * 265443
 382b0a8d2ba3e8d5eac237fadf834cdd	25275.0	def with_block(&blk)\n          acc = 0.0\n          j = 0\n          whil
 3849de0738411075598f560268990dd7	[100, 200]	module M\n              def initialize\n                $res << self.
+38a7647e803c7532eebd476c3c04e1c0	[false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, :custom, true, false]	class NotBool\n          def !\n            :custom\n          end\n       
 38b6176ce634343e8a5c7383c6c60ed5	["hel", "l", "o"]	$/ = "l"; a = []; "hello".each_line { |x| a << x }; $/ = "\\n"; a
 38c61140d1fbae4f76a1b87985cac70e	["This", nil, " ", "This", nil, " ", "This", " is a", "line2"]	require "strscan"\n        s = StringScanner.new("This is a test")\n     
 38de781e254a5ac2c4c68f48b757c162	["HUP", "EXIT", "ABRT"]	class X\n              def to_int; 6; end\n            end\n          
@@ -2751,6 +2752,7 @@ c2a32c061a6df0b6f062900fb9a8b1de	["Not matched", "Matched 1", "Matched 1", "Matc
 c2d8a47ea38993301137ebb001049fb2	[1, 2]	c = Class.new { def foo(*a); a; end; ruby2_keywords :foo }\n        
 c2d97a349b86a09c5fd224aef7dda8c9	["unknown keywords: :b, :c", "unknown keyword: :z", "missing keyword: :a", "missing keyword: :y", "missing keywords: :x, :y", "missing keyword: :a"]	def one(a:); end\n        def two(x:, y:); end\n        msgs = []\n       
 c2ddc4b987960c63ecfe548001121a15	501	def f; 1; end\n            a = 0; i = 0\n            while i < 20000\n
+c2e070662c7e542b918d113d110588a6	20	def bang_float_cmp(n)\n          x = 0.0\n          c = 0\n          i = 0
 c2ed8ee508fc72ce81d419b84e00a7c3	"wrong number of arguments (given 2, expected 1)"	class C\n          def one(a) = a\n        end\n        o = C.new\n        
 c2f1188cf58009e1f4929f6667b6493e	["C", "M"]	module M\n            end\n            class S\n            end\n      
 c3423608f46c2ab24a0a71094cd5ae93	[1, 2, 1, 2]	class MyNum; def to_int; 2; end; end\nn = MyNum.new\nres = []; [1,2].cycle(n) { |x
