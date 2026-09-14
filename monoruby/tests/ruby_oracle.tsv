@@ -679,6 +679,7 @@
 2f3c934c9f013395202064f7b669614d	["b", "nil"]	r = begin\n              begin\n                raise "a"\n           
 2f922c304c94e10148d4493f457eb26e	:OVERRIDDEN	class Integer; def |(o); :OVERRIDDEN; end; end; 3 | 4
 2f9cea09fc9016f79e2054e732f21dea	42	class C; def to_int; 42; end; end; o = C.new\nInteger(o)
+2fa57f909d61eb3427eb35f6895a4fda	[["Sub(Base#a)", "Sub(Base#b)", "Al2(Al1#name)", ["anon", "anon", "non-anon"]]]	class SupBase5\n          def a = "Base#a"\n          def b = "Base#b"\n  
 2fdb9050b1a5d03ad336a6fbc113e162	12	class CNDm\n          define_method(:initialize) { |a| @a = a * 3 }\n    
 2fdfd5e264a5506e71aa34bed897a435	[ArgumentError, ArgumentError, ArgumentError, TypeError, ArgumentError, "no", 3, TypeError]	class CNOne; def initialize(a); @a = a; end; end\n        class CNRaise\n
 2fdfe913dc96ddd87614afdfb1ae9f18	[[:a, 100], [:b, 50]]	class La; def tag = :a; end\n            class Lb; def tag = :b; end
@@ -1826,12 +1827,14 @@
 829f48ebfbc6e4030ced77aaec24c37b	[200, 2]	def a4\n          v = [1, 2, 3].each do |i|\n            begin\n          
 82abda467be3a95b2f6d81fbf7dfb3da	"a:a b:{x: 100, y: 200}"	def f(a, b)\n          "a:#{a} b:#{b}"\n        end\n        \n\n        f("
 82afafb55f0b808c4e046dd1d983831d	["ASCII-8BIT", "US-ASCII", "US-ASCII"]	[/\\xc2\\xa1/n.encoding.to_s, /abc/n.encoding.to_s, /\\x7f/n.encoding.to_s]
+82c8f327a78b94b403c8885d012491e3	["Sub(Base#a)", "Sub(Base#b)"]	class SupBase2\n          def a = "Base#a"\n          def b = "Base#b"\n  
 82c9966b62ff6ac43f8a7ad749c3fa16	1	p = proc {\n          a = 10\n        }\n        a = 1\n        p.call\n    
 82d2886da2e2f69f6d67c227ed1596b4	[ArgumentError, "array size too big", ArgumentError, "array size too big", ArgumentError, "array size too big", RangeError, "bignum too big to convert into 'long'", RangeError, "bignum too big to convert into 'long'", RangeError, "bignum too big to convert into 'long'", ArgumentError, "negative array size"]	r = []\n        begin; Array.new(4611686018427387904); rescue => e; r <<
 82e2b73c1395323ecb44d17bc3a32421	Complex	8.0.quo(Complex(2, 1)).class
 82ea00d4003b7161aa2102e05ff69c66	3	"わたし".byteindex("た")
 82ff14b74e3eca76717b9af689a3898e	[:foo, [1, 2, 3, 4]]	class C\n          def method_missing(name, *args)\n            [name, ar
 8305358285ffef3eabb5f06f63fe896b	[[[1, 2], [:a, :b]], [[1, nil], [nil, nil]], [[1, 2]], [[1, 2]]]	def drive(a)\n              acc = []\n              a.each_with_yield
+83332a7cea94c4e4ba8b0e4a5f8c0709	[RuntimeError, "implicit argument passing of super from method defined by define_method() is not supported. Specify all arguments explicitly."]	class SupBase6\n          def a = "Base#a"\n        end\n        class Sup
 8370c5ed8e43de9e99d7f41038618f1b	[true, true, true, [1, 2]]	Nc = 1\n        module RM1; end\n        RM2 = Class.new\n        msgs = [
 838053b506518776673e7a731351065b	[10, 11, 21]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 83806d03f4525939aff12798777778b6	[ArgumentError, "incompatible encodings: UTF-16LE and UTF-16BE"]	(Regexp.union(Regexp.new("a".encode("UTF-16LE")), Regexp.new("b".encode("UTF-16B
@@ -2338,6 +2341,7 @@ a7ea202d40851dfadabc161faaaaffb7	true	GC.config({}) == GC.config
 a800cb1d66d4f7c50d700a30535cce0f	["UTF-16LE", [97, 0, 98, 0, 99, 0]]	File.write("/tmp/mr_rd2.txt", "abc")\n            r = []\n           
 a8018262ffba8fba491e3b1e7bcd20b9	42	module M\n              @x = 42\n              remove_instance_variab
 a81d22f2a88cfcc16513b0ca5f20189b	2970.0	def inner(k)\n          arr = [k + 2, k, k + 1]\n          arr.sort! { |a
+a85ece8a866ffed1ab6cefec507c9caf	["Sub(Base#b)", "Sub(Base#a)", "Sub(Base#b)", "Sub(Base#b)", "Sub(Base#a)", "Sub(Base#b)"]	class SupBase3\n          def a = "Base#a"\n          def b = "Base#b"\n  
 a86010e766462d5eea966a5e9133b6f0	[nil, true, nil, true]	a = Signal.trap(:EXIT, proc { })\n            b = Signal.trap(:EXIT,
 a87019ce1fb4a58da98eb0fcd22f397c	[1.0, "caught", 2.0, "caught", 3.0, "done"]	x = 0.0\n            $res = []\n            begin\n              x += 
 a88bdad4ba8d9e033a1c6a53c309f4ea	["42", 100]	class C\n          def [](idx)\n            idx.to_s\n          end\n      
@@ -2533,6 +2537,7 @@ b4da8c820c2dab4428659d300baa5cc4	[:foo]	$res = []\n            class C\n        
 b4de022176f4c5de67942bada3f160da	[[Fold], [FoldRest], [FoldOpt], [Impure], 99, ArgumentError, ArgumentError, ArgumentError, Fold, 100]	$effects = []\n            class Fold\n              def initialize(x
 b4ebc0e6f5be99ec71ef0910baf89efa	"redefined:false"	class String\n          def freeze = "redefined:#{frozen?}"\n        end\n
 b4ebd9e4bda33219cab1ca52fb00c022	[[[1, 2, 3], [[:x, 10], [:y, 20]]]]	class C\n          def f(*args, **kw)\n            $res << [args, kw.sort
+b4f35364ea6f087b04c26c861d3b0f64	["Sub(Base#a)", "Sub(Base#b)", "Sub(Base#b)", "Sub(Base#a)"]	class SupBase\n          def a = "Base#a"\n          def b = "Base#b"\n   
 b4f3833fdaeec7790cab7805a880ab7b	[[12, "12", 3], [1, 10], [3, 2, 1]]	class CNBig\n          def initialize(a)\n            @a = a\n            
 b50aa88cac9a4ea0fd9adfd0ecc7d571	20	Random.urandom(0).size\n        Random.urandom(1).size\n        Random.ur
 b5186a1f8fc3fcc5d73748e08564545a	[1, 1]	->(a = 1, b = a) { [a, b] }.call
@@ -3081,6 +3086,7 @@ da5e06d1fe5eed1ee4258f71a99b2332	0	a = "abc".dup.force_encoding("UTF-8")\n      
 da64841b8187b9d8951f84703a56f5e9	[true, false]	$x = []\n            path = "/tmp/monoruby_test_mkdir_#{Process.pid}
 da6b246283b4f211581ca1d5eb140461	"a b\\n"	IO.popen(["echo", "a b"]) { |io| io.read }\n            
 daa7019f1dfb40422c47287a212b59ec	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]	class C\n          def foo; 1; end\n        end\n        res = []\n        
+dadc24d7048ed4366c071526b9479288	["Sub(Base#a)", "Sub(Base#b)"]	class SupBase4\n          def a = "Base#a"\n          def b = "Base#b"\n  
 dae52af79f68fd59e79d94c60e7c3a75	"US-ASCII"	s = "abc".dup.force_encoding("ASCII-8BIT")\n              s.unpack
 dae678c7230abbc68fd9e71f3ce16a0c	8400	class Target\n          def value_plus(n) = 2 + n\n        end\n        cl
 dae90ab3ae1aa4e8058cace910bd3a82	[40, 40, -1, 0, 39, ["k0", "k1", "k2"], 780]	def big; {"k0"=>0,"k1"=>1,"k2"=>2,"k3"=>3,"k4"=>4,"k5"=>5,"k6"=>6,"

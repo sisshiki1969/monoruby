@@ -201,7 +201,13 @@ send 系オペコード(`bytecodegen/encode.rs`):
 4. 検証に通れば **`entry.original_name`** を検索名とする。これで
    define_method 複数名(1.1: original_name = 各インストール名)と
    alias(1.2: original_name = 元定義名)の両方が CRuby と一致する。
-5. 復元できない場合は従来どおり `FuncInfo::name()`(焼き付け名)に
+5. コールサイト PC が無い場合(invoker 境界)は、`Executor::invoked_as`
+   —— `send` / `Method#call` / `UnboundMethod#bind_call` / Rust 側の
+   `invoke_method_*` が「いま何という名前でディスパッチしているか」を
+   退避・復元付きで記録するフィールド —— を代わりに読む。読んだ名前は
+   3 と同じ検証(そのエントリが本当にこの本体へディスパッチするか)を
+   通すので、古い名前が残っていても誤用されない。
+6. それでも復元できない場合のみ `FuncInfo::name()`(焼き付け名)に
    フォールバックする。
 
 ### 4.2 出現インデックス(occurrence)の復元
@@ -263,7 +269,13 @@ super の解決結果はコールサイトのインラインキャッシュに
 呼び名や出現位置で行き先が変わる)。そのため:
 
 - **VM**: `find_super` が cacheable フラグを返す。
-  `!is_block_style && super_occurrences(...) <= 1` のときだけキャッシュ可。
+  `!is_block_style && !is_proc_method && super_occurrences(...) <= 1` の
+  ときだけキャッシュ可。`is_proc_method` を見るのが必須である:
+  `define_method` は本体を(厳密 arity のために)method-style にするので
+  `is_block_style` では捕まらず、これを落とすと最初の呼び名の解決結果が
+  サイトに焼き付き、以降どの名前で呼んでも同じ親が呼ばれる(#1346)。
+  JIT 側の ambiguous-super ガードは元から同じ条件を見ており、VM が
+  キャッシュしないことを前提にしている。
   不可なら `find_method` はキャッシュタグに **ClassId 0** を返す
   (`ClassId` は `NonZeroU32` なので実クラスと一致せず、そのサイトは
   毎回スローパスで再解決される)。
@@ -282,10 +294,11 @@ super の解決結果はコールサイトのインラインキャッシュに
 ## 6. 既知の限界
 
 - **invoker 境界**: `Method#call` / `send` / Fiber などで入ったフレームは
-  cont-frame スロットが無効なので、呼び出し名の復元も出現カウントも
-  フォールバックに落ちる(焼き付け名 + 旧ヒューリスティック)。
-  define_method 複数名のメソッドを `send` で呼ぶと、super の検索名は
-  焼き付け名になる。
+  cont-frame スロットが無効である。**呼び出し名**は `invoked_as`
+  (§4.1-5)で復元できるので `send` / `Method#call` /
+  `UnboundMethod#bind_call` は CRuby と一致するが、**出現カウント**は
+  依然フォールバック(`exact=false` → 旧ヒューリスティック)になる。
+  名前を持たない経路(Fiber の再開など)は焼き付け名のままである。
 - **可視性シャドウの staleness**: `public :derp` はシャドウエントリに
   継承先の FuncId をコピーするため、その後に継承元が再定義されると
   シャドウが旧本体をディスパッチする(CRuby の ZSUPER エントリは委譲なので

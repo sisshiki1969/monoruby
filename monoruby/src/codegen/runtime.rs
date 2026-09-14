@@ -374,6 +374,10 @@ fn super_resolution(
     let (k, entry_callid, exact) = super_run(vm, globals, func_id);
     let func_name = entry_callid
         .and_then(|callid| globals.store[callid].name)
+        // No callsite PC to read the name from: the frame was entered
+        // through an invoker (`send`, `Method#call`, a Rust-side
+        // dispatch), which records the name it called instead.
+        .or_else(|| vm.invoked_as())
         .and_then(|called| {
             let entry = globals.store.check_method_for_class(self_class, called)?;
             let entry_fid = entry.func_id()?;
@@ -417,6 +421,15 @@ fn find_super(
     let self_class = self_val.class();
     let (func_name, occurrence) = super_resolution(vm, globals, func_id, self_class);
     let cacheable = !globals.store[func_id].is_block_style()
+        // A `define_method` body: the same block can be installed under
+        // several names, and `super` searches under the name it was
+        // *called* as, so one call site's answer does not hold for the
+        // next. `is_block_style` does not catch it — `define_method`
+        // turns the body method-style for its strict arity — and the JIT
+        // already excludes this case by the same test
+        // (`compile/method_call.rs`'s ambiguous-super guard), which
+        // relies on the VM not caching here.
+        && !globals.store[func_id].meta().is_proc_method()
         && globals
             .store
             .super_occurrences(self_class, func_id, func_name)

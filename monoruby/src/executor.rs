@@ -357,6 +357,19 @@ pub struct Executor {
     /// overwrites it, so it never carries stale state into a later
     /// dispatch.
     method_missing_style: MethodMissingStyle,
+    /// The name of the method currently being dispatched through an
+    /// *invoker* (`send`, `Method#call`, a Rust-side `invoke_method_*`),
+    /// i.e. a call that leaves no callsite PC in the callee's cont-frame
+    /// slot. `super` needs the name its frame was called under
+    /// (`runtime::super_resolution`); it normally reads it back from that
+    /// slot, and reads this instead when the slot is not a callsite.
+    ///
+    /// Saved and restored around each dispatch rather than pushed and
+    /// popped: a frame reads it while it is running, so the innermost
+    /// invoker dispatch still on the stack is its own. A stale name is
+    /// harmless — the resolution verifies that the named entry really
+    /// dispatches to the running body before using it.
+    invoked_as: Option<IdentId>,
     require_level: usize,
     /// Stack of canonical paths currently being executed via `require` /
     /// autoload. Used so that `Module#autoload :Foo, path` can detect
@@ -465,6 +478,7 @@ impl std::default::Default for Executor {
             hook_sites: Vec::new(),
             temp_stack: vec![],
             method_missing_style: MethodMissingStyle::Plain,
+            invoked_as: None,
             require_level: 0,
             loading_paths: vec![],
             catch_tags: vec![],
@@ -3481,7 +3495,9 @@ impl Executor {
         is_func_call: bool,
     ) -> Result<Value> {
         match self.find_method(globals, receiver, method, is_func_call) {
-            Ok(func_id) => self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args),
+            Ok(func_id) => {
+                self.invoke_func_named(globals, func_id, method, receiver, args, bh, kw_args)
+            }
             Err(original_err) => {
                 // Fall back to method_missing, matching CRuby behavior.
                 self.method_missing_style = MethodMissingStyle::Plain;
@@ -3490,7 +3506,15 @@ impl Executor {
                         let mut mm_args = Vec::with_capacity(args.len() + 1);
                         mm_args.push(Value::symbol(method));
                         mm_args.extend_from_slice(args);
-                        self.invoke_func_inner(globals, mm_func_id, receiver, &mm_args, bh, kw_args)
+                        self.invoke_func_named(
+                            globals,
+                            mm_func_id,
+                            IdentId::METHOD_MISSING,
+                            receiver,
+                            &mm_args,
+                            bh,
+                            kw_args,
+                        )
                     }
                     Err(_) => Err(original_err),
                 }
@@ -4153,6 +4177,33 @@ impl Executor {
     ) -> Result<Value> {
         self.invoke_func(globals, func_id, receiver, args, bh, kw_args)
             .ok_or_else(|| self.take_error())
+    }
+
+    /// [`Self::invoke_func_inner`] for a dispatch that knows the name it
+    /// is calling: the callee frame gets no callsite PC, so record the
+    /// name in `invoked_as` for the duration — `super` inside a
+    /// `define_method` body searches under the name it was called as
+    /// (see the field's doc).
+    pub(crate) fn invoke_func_named(
+        &mut self,
+        globals: &mut Globals,
+        func_id: FuncId,
+        name: IdentId,
+        receiver: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw_args: Option<Hashmap>,
+    ) -> Result<Value> {
+        let saved = self.invoked_as.replace(name);
+        let res = self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args);
+        self.invoked_as = saved;
+        res
+    }
+
+    /// The name of the innermost invoker dispatch still on the stack, if
+    /// any. See the `invoked_as` field.
+    pub(crate) fn invoked_as(&self) -> Option<IdentId> {
+        self.invoked_as
     }
 }
 
