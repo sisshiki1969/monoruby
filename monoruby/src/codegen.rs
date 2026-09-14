@@ -1727,7 +1727,10 @@ impl Codegen {
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             if std::mem::replace(&mut codegen.bop_eviction_pending, false) {
-                codegen.chain_deopt_into(cfp);
+                // BOP redefinition is the one caller that must cross unit
+                // boundaries, so it walks to the bottom instead of passing a
+                // frame count (`JitContext::chain_deopt_frames`).
+                codegen.chain_deopt_into(cfp, None);
             }
         });
     }
@@ -1768,8 +1771,8 @@ impl Codegen {
     }
 
     ///
-    /// Convert every suspended JIT frame in *cfp*'s control-frame chain into
-    /// an interpreter frame (`doc/chain_deopt.md` §2, eager form §9.3).
+    /// Convert suspended JIT frames in *cfp*'s control-frame chain into
+    /// interpreter frames (`doc/chain_deopt.md` §2, eager form §9.3).
     ///
     /// This is the **only** way an on-stack JIT frame is dropped to the
     /// interpreter, and it serves both callers: an escalated side exit
@@ -1780,6 +1783,17 @@ impl Codegen {
     /// with no chain entry — but registration is now unconditional, so that
     /// fallback covered nothing the walk does not, and self-modifying code
     /// has left the picture entirely.
+    ///
+    /// `frames` is how far to go. A side exit passes `Some(d)`, its own
+    /// depth in the compilation, because the two things escalation buys — a
+    /// narrowed return tag and an unboxed outer local — exist only inside
+    /// one compilation unit (`JitContext::chain_deopt_frames`). The walk
+    /// then costs `d` steps, not the depth of the whole Ruby stack, and it
+    /// stops converting frames that never needed it: on railsbench 13 of
+    /// the 14.9 conversions a walk used to make were other units' frames,
+    /// whose compiled execution was being discarded for nothing. BOP
+    /// redefinition passes `None` and walks to the bottom, because a
+    /// redefined operator does invalidate compiled code across units.
     ///
     /// Each frame is left exactly where it is. The conversion is performed by
     /// the site's own **compiled** stub (`gen_chain_replay_stub`, emitted
@@ -1805,9 +1819,13 @@ impl Codegen {
     /// entered by something that is not a compiled call site, and it holds
     /// no cross-frame state this walk is responsible for.
     ///
-    pub(crate) fn chain_deopt_into(&mut self, mut cfp: Cfp) {
+    pub(crate) fn chain_deopt_into(&mut self, mut cfp: Cfp, frames: Option<usize>) {
+        let mut remaining = frames.unwrap_or(usize::MAX);
         let mut return_addr = unsafe { cfp.return_addr() };
-        while let Some(prev_cfp) = cfp.prev() {
+        while remaining != 0
+            && let Some(prev_cfp) = cfp.prev()
+        {
+            remaining -= 1;
             // A frame with a previous control frame was entered by a
             // `call`/`bl`, so its return-address slot holds a real address.
             // `None` means the CFP chain or the frame layout is corrupt;
@@ -1815,6 +1833,18 @@ impl Codegen {
             // body this walk has just decided must not run, so abort loudly
             // instead (as the pre-chain-deopt eviction walk always did).
             let ret = return_addr.expect("suspended control frame has a null return address");
+            // Within a compilation unit every frame was pushed by a compiled
+            // call/yield site, and every such site registers, so a bounded
+            // walk must find either a conversion or an address that reads as
+            // VM code (a frame an earlier walk already converted). Anything
+            // else means the compile-time depth and the runtime chain have
+            // drifted apart, and the walk would stop short of the root.
+            debug_assert!(
+                frames.is_none()
+                    || self.check_vm_address(ret)
+                    || self.chain_deopt_table.contains_key(&ret),
+                "chain deopt: unregistered return address inside the compilation unit"
+            );
             if !self.check_vm_address(ret)
                 && let Some(site_stub) = self.chain_deopt_table.get(&ret).copied()
             {

@@ -119,12 +119,12 @@ mod enabled {
     #[derive(Clone, Copy)]
     pub(crate) enum DeoptExit {
         Deopt {
-            chain: bool,
+            chain: u32,
         },
         Evict,
         Recompile {
             reason: RecompileReason,
-            chain: bool,
+            chain: u32,
         },
     }
 

@@ -212,13 +212,13 @@ pub(crate) struct AsmIr {
     /// generic / native callee). Producer skips `create_array` only
     /// when `deferred_rest && !needs_rest_array`.
     needs_rest_array: bool,
-    /// Every interpreter-resuming side exit built through this IR escalates
-    /// to chain deopt (`doc/chain_deopt.md` §5 step 4 / §6): the handler runs
-    /// the chain-deopt walk after its write-back, converting every suspended
-    /// JIT frame in the caller chain before the interpreter resumes. Stamped
-    /// once from [`JitContext::escalate_side_exits`] so the side-exit
+    /// How many suspended frames every interpreter-resuming side exit built
+    /// through this IR converts after its write-back (`doc/chain_deopt.md`
+    /// §5 step 4 / §6); `0` = no escalation. It is this frame's depth in the
+    /// compilation, so the walk covers the unit's own frames and stops.
+    /// Stamped once from [`JitContext::chain_deopt_frames`] so the side-exit
     /// constructors are the single consultation point.
-    escalate_exits: bool,
+    chain_frames: u32,
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -259,7 +259,7 @@ impl AsmIr {
             had_deopt: false,
             deferred_rest: false,
             needs_rest_array: false,
-            escalate_exits: ctx.escalate_side_exits(),
+            chain_frames: ctx.chain_deopt_frames(),
         }
     }
 
@@ -415,7 +415,7 @@ impl AsmIr {
     pub(super) fn pure_deopt_target(
         &self,
         deopt: AsmDeopt,
-    ) -> Option<(BytecodePtr, &WriteBack, bool)> {
+    ) -> Option<(BytecodePtr, &WriteBack, u32)> {
         if self.side_exit.len() == 1
             && let SideExit::Deoptimize(pc, wb, chain) = &self.side_exit[deopt.0]
         {
@@ -467,7 +467,7 @@ impl AsmIr {
         let i = self.new_label(SideExit::Deoptimize(
             pc,
             state.get_write_back(),
-            self.escalate_exits,
+            self.chain_frames,
         ));
         self.had_deopt = true;
         AsmDeopt(i)
@@ -511,7 +511,7 @@ impl AsmIr {
         let i = self.new_label(SideExit::Deoptimize(
             point.pc(),
             point.write_back().clone(),
-            self.escalate_exits,
+            self.chain_frames,
         ));
         self.had_deopt = true;
         AsmDeopt(i)
@@ -540,7 +540,7 @@ impl AsmIr {
             state.get_write_back(),
             reason,
             target,
-            self.escalate_exits,
+            self.chain_frames,
         ));
         self.had_deopt = true;
         AsmDeopt(i)
@@ -550,7 +550,7 @@ impl AsmIr {
         let i = self.new_label(SideExit::Error(
             pc,
             state.get_write_back(),
-            self.escalate_exits,
+            self.chain_frames,
         ));
         AsmError(i)
     }
@@ -3141,13 +3141,13 @@ impl AsmInst {
 #[derive(Debug)]
 pub enum SideExit {
     Evict(Option<(BytecodePtr, WriteBack)>),
-    /// The trailing `bool` is the **chain-escalation** flag
+    /// The trailing `u32` is the **chain-escalation frame count**
     /// (`doc/chain_deopt.md` §5 step 4 / §6), on `Deoptimize` /
-    /// `RecompileDeoptimize` / `Error` alike: the handler calls
-    /// `runtime::chain_deopt` after its write-back, so every suspended JIT
-    /// frame in the caller chain is converted into an interpreter frame
-    /// before this frame resumes in the interpreter (or starts unwinding).
-    Deoptimize(BytecodePtr, WriteBack, bool),
+    /// `RecompileDeoptimize` / `Error` alike: `0` does not escalate, `n`
+    /// makes the handler call `runtime::chain_deopt` after its write-back
+    /// to convert the `n` suspended frames of this compilation unit before
+    /// this frame resumes in the interpreter (or starts unwinding).
+    Deoptimize(BytecodePtr, WriteBack, u32),
     ///
     /// A deopt that, after a small number of misses, recompiles the
     /// target (whole method/loop, or one specialized entry) with the
@@ -3163,9 +3163,9 @@ pub enum SideExit {
         WriteBack,
         RecompileReason,
         RecompileTarget,
-        bool,
+        u32,
     ),
-    Error(BytecodePtr, WriteBack, bool),
+    Error(BytecodePtr, WriteBack, u32),
 }
 
 ///
@@ -3205,10 +3205,10 @@ impl Codegen {
     ) {
         let mut side_exits = SideExitLabels::new();
         #[cfg(feature = "deopt")]
-        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, bool), (DestLabel, u32)> =
+        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, u32), (DestLabel, u32)> =
             HashMap::default();
         #[cfg(not(feature = "deopt"))]
-        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, bool), DestLabel> =
+        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, u32), DestLabel> =
             HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
         let base = frame.base_stack_offset;

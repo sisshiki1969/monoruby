@@ -277,13 +277,14 @@ impl LAluOp {
 /// `SideExit` cases the JIT records while building `AsmIr`.
 #[derive(Debug, Clone)]
 pub(in crate::codegen::jitgen) enum LSideExitKind {
-    /// Plain deoptimization back to the VM fetch loop. `chain` escalates the
-    /// exit to chain deopt (`doc/chain_deopt.md` §5 step 4 / §6): after the
-    /// write-back the handler calls `runtime::chain_deopt`, converting every
-    /// suspended JIT frame in the caller chain into an interpreter frame
+    /// Plain deoptimization back to the VM fetch loop. `chain` is the number
+    /// of suspended frames to convert (`doc/chain_deopt.md` §5 step 4 / §6);
+    /// `0` does not escalate. A non-zero count makes the handler call
+    /// `runtime::chain_deopt` after its write-back, converting this
+    /// compilation unit's own suspended frames into interpreter frames
     /// before this frame resumes in the interpreter.
     Deopt {
-        chain: bool,
+        chain: u32,
     },
     /// Immediate eviction (BOP redefinition) — same shape as `Deopt`, with a
     /// distinct `cfg(deopt/profile)` log reason. Never chain-escalated: the
@@ -296,7 +297,7 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
     RecompileDeopt {
         reason: RecompileReason,
         target: RecompileTarget,
-        chain: bool,
+        chain: u32,
     },
     /// Error handler: write back then jump to the raise/`handle_error` path.
     /// `chain` as on `Deopt` — an in-frame `rescue` resumes this frame in the
@@ -304,7 +305,7 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
     /// return-address slots of the suspended callers (`doc/chain_deopt.md`
     /// §8.4), so the walk must have run either way.
     Error {
-        chain: bool,
+        chain: u32,
     },
 }
 
