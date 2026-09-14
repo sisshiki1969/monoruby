@@ -127,9 +127,13 @@ divrem = "1.0.0"
 libffi = "5.1.0"
 # Digest builtins (`builtins/digest.rs`) — used on every platform, so these
 # must stay in the cross-platform `[dependencies]`, not a target block.
+# `hmac` / `pbkdf2` back `OpenSSL::HMAC` and `OpenSSL::PKCS5.pbkdf2_hmac`,
+# whose per-iteration work would otherwise run as Ruby.
 md-5 = "0.10"
 sha1 = "0.10"
 sha2 = "0.10"
+hmac = { version = "0.12", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 aes-gcm = "0.10"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }

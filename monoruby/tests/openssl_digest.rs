@@ -39,3 +39,68 @@ fn openssl_digest_hmac_and_kdf_match_cruby() {
         "##,
     );
 }
+
+// HMAC and PBKDF2 are computed natively (`String.__hmac` /
+// `String.__pbkdf2_hmac`). The key-length boundaries are the interesting
+// part: HMAC hashes a key longer than the block and zero-pads a shorter
+// one, which used to be done in Ruby and is now the crate's job.
+#[test]
+fn openssl_hmac_key_lengths_match_cruby() {
+    run_test_once(
+        r##"
+        require "openssl"
+        r = []
+        %w[MD5 SHA1 SHA256 SHA384 SHA512].each do |algo|
+          block = OpenSSL::Digest.new(algo).block_length
+          ["", "k", "a" * (block - 1), "a" * block, "a" * (block + 1), "a" * 200, "\xff\x00\x01".b].each do |key|
+            ["", "abc", "\x00\xff".b, "x" * 1000].each do |data|
+              r << OpenSSL::HMAC.hexdigest(algo, key, data)
+            end
+          end
+        end
+        r << OpenSSL::HMAC.hexdigest("sha-256", "k", "d")
+        r << OpenSSL::HMAC.hexdigest("sha256", "k", "d")
+        r << OpenSSL::HMAC.digest("SHA256", "k", "d").encoding.to_s
+        r
+        "##,
+    );
+}
+
+// PBKDF2 against the RFC 6070 vectors plus the shapes Rails asks for.
+#[test]
+fn openssl_pbkdf2_matches_cruby() {
+    run_test_once(
+        r##"
+        require "openssl"
+        r = []
+        [
+          ["password", "salt", 1, 20, "SHA1"],
+          ["password", "salt", 2, 20, "SHA1"],
+          ["password", "salt", 4096, 20, "SHA1"],
+          ["passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt", 4096, 25, "SHA1"],
+          ["pass\0word", "sa\0lt", 4096, 16, "SHA1"],
+          ["password", "salt", 1, 32, "SHA256"],
+          ["password", "salt", 1000, 64, "SHA256"],
+          ["p", "s", 10, 0, "SHA256"],
+          ["p", "s", 10, 1, "SHA512"],
+          ["p", "s", 10, 100, "MD5"],
+          ["", "", 5, 16, "SHA256"],
+        ].each do |pass, salt, iter, len, algo|
+          d = OpenSSL::PKCS5.pbkdf2_hmac(pass, salt, iter, len, algo)
+          r << [d.unpack1("H*"), d.bytesize, d.encoding.to_s]
+        end
+        r << OpenSSL::PKCS5.pbkdf2_hmac("p", "s", 5, 20, OpenSSL::Digest.new("SHA1")).unpack1("H*")
+        r << OpenSSL::KDF.hkdf("ikm", salt: "", info: "", length: 16, hash: "SHA1").unpack1("H*")
+        r
+        "##,
+    );
+}
+
+// The native helpers reject an algorithm they do not implement rather
+// than hashing with the wrong one.
+#[test]
+fn native_hmac_pbkdf2_reject_unknown_algorithm() {
+    run_test_error(r#"String.__hmac("bogus", "k", "d")"#);
+    run_test_error(r#"String.__pbkdf2_hmac("bogus", "p", "s", 1, 16)"#);
+    run_test_error(r#"String.__pbkdf2_hmac("sha256", "p", "s", 1, -1)"#);
+}

@@ -35,10 +35,11 @@ module OpenSSL
   end
 
   # Digests, HMAC and PBKDF2 are real: they run on monoruby's native
-  # `Digest` (`String.__digest`, src/builtins/digest.rs), so cookie
-  # signing, `ActiveSupport::KeyGenerator` and ETags produce the same
-  # bytes as CRuby's openssl. `OpenSSL::Digest` has openssl's class
-  # shape (`< ::Digest::Class`, algorithm subclasses, `new("sha256")`).
+  # backends (`String.__digest` / `__hmac` / `__pbkdf2_hmac`,
+  # src/builtins/digest.rs), so cookie signing,
+  # `ActiveSupport::KeyGenerator` and ETags produce the same bytes as
+  # CRuby's openssl. `OpenSSL::Digest` has openssl's class shape
+  # (`< ::Digest::Class`, algorithm subclasses, `new("sha256")`).
   class Digest < ::Digest::Class
     class DigestError < OpenSSLError; end
 
@@ -116,13 +117,11 @@ module OpenSSL
     # `digest` is an algorithm name or an `OpenSSL::Digest` instance (a
     # class is a TypeError, as in openssl).
     def initialize(key, digest)
-      @name = HMAC.digest_name(digest)
-      @block = ::OpenSSL::Digest.new(@name).block_length
-      key = key.b
-      key = ::OpenSSL::Digest.digest(@name, key) if key.bytesize > @block
-      key = key.ljust(@block, "\0")
-      @ipad = key.bytes.map { |b| b ^ 0x36 }.pack("C*")
-      @opad = key.bytes.map { |b| b ^ 0x5c }.pack("C*")
+      @name = ::OpenSSL::Digest.canonical_name(HMAC.digest_name(digest))
+      @algo = @name.downcase
+      # HMAC hashes a key longer than the block and zero-pads a shorter
+      # one itself, so the key goes to the native side as given.
+      @key = key.b
       @data = "".b
     end
 
@@ -146,8 +145,7 @@ module OpenSSL
     end
 
     def digest
-      inner = ::OpenSSL::Digest.digest(@name, @ipad + @data)
-      ::OpenSSL::Digest.digest(@name, @opad + inner)
+      String.__hmac(@algo, @key, @data)
     end
 
     def hexdigest = digest.unpack1("H*")
@@ -162,24 +160,13 @@ module OpenSSL
   end
 
   module PKCS5
-    # PBKDF2 (RFC 8018 §5.2) over `HMAC`.
+    # PBKDF2 (RFC 8018 §5.2) over `HMAC`, derived natively
+    # (`String.__pbkdf2_hmac`, src/builtins/digest.rs). Rails asks for
+    # `2**16` iterations per key, which is 65,536 HMACs — the one place
+    # where the Ruby-level loop was worth replacing outright.
     def self.pbkdf2_hmac(pass, salt, iter, keylen, digest)
-      name = HMAC.digest_name(digest)
-      hlen = ::OpenSSL::Digest.new(name).digest_length
-      out = "".b
-      block = 1
-      while out.bytesize < keylen
-        u = HMAC.digest(name, pass, salt.b + [block].pack("N"))
-        t = u.bytes
-        (iter - 1).times do
-          u = HMAC.digest(name, pass, u)
-          ub = u.bytes
-          t.each_index { |i| t[i] ^= ub[i] }
-        end
-        out << t.pack("C*")
-        block += 1
-      end
-      out.byteslice(0, keylen)
+      name = ::OpenSSL::Digest.canonical_name(HMAC.digest_name(digest))
+      String.__pbkdf2_hmac(name.downcase, pass.b, salt.b, iter, keylen)
     end
 
     def self.pbkdf2_hmac_sha1(pass, salt, iter, keylen)
