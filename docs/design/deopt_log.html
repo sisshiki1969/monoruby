@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a8fc5141.js";
+            window.path_to_searchindex_js = "../searchindex-7a894903.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -275,10 +275,19 @@ four hypotheses before the log could state it.</p>
 <p>Everything here is <code>cfg(feature = "deopt")</code>. Normal builds emit byte-identical
 code: <code>deopt_label</code> compiles to the bare handler label and the <code>cause</code>
 argument is discarded. <code>profile</code>-only builds keep their original call site.</p>
-<p>aarch64 is out of scope, unchanged: <code>a64_gen_deopt</code> has never called
-<code>log_deoptimize</code>, so aarch64 <code>deopt</code> builds print nothing. Adding it later is
-a contained job — x19/x20/x21 mirror rbx/r12/r13, and the trampoline becomes
-<code>str x_cause,[x19,#CAUSE]; mov w12,#id; str w12,[x19,#SITE]; b deopt</code>.</p>
+<p>aarch64 records every deopt but not the branch that took it. <code>a64_gen_deopt</code>
+calls <code>log_deoptimize</code> at the x86 position (after the write-back, before the
+chain walk), so <code>deopt</code> builds print each record with its bytecode index and
+exit kind, and <code>profile</code> builds fill the deoptimization table. There are no
+trampolines, so every aarch64 record reads
+<code>guard: unknown (handler entered without a trampoline)</code>.
+Until the call existed, an aarch64 guard that failed on every execution was
+invisible to both builds.</p>
+<p>The trampoline cannot be copied from x86 as is. x86 parks it on the cold
+page; aarch64 guards reach their handlers with <code>tbz</code>/<code>tbnz</code> (±32 KiB), which
+is why the handlers are emitted as islands within reach
+(<code>a64_thunk_side_exits</code>), and a cold-page trampoline would be out of range.
+A port has to place the trampolines in the same islands as the handlers.</p>
 
                     </main>
 

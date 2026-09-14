@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a8fc5141.js";
+            window.path_to_searchindex_js = "../searchindex-7a894903.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -357,7 +357,7 @@ stack alone — no code is patched, on either arch. See <code>doc/chain_deopt.md
 <tr><th>Guard</th><th>x86-64</th><th>aarch64</th></tr>
 </thead>
 <tbody>
-<tr><td><code>guard_class</code> immediates</td><td>Fixnum/nil/true/false/symbol/float via <code>testq</code>/<code>cmpq</code></td><td>same set via <code>tbz</code>/<code>tbnz</code>/<code>cmp</code></td></tr>
+<tr><td><code>guard_class</code> immediates</td><td>Fixnum/nil/true/false/bool/symbol/float via <code>testq</code>/<code>cmpq</code></td><td>same set via <code>tbz</code>/<code>tbnz</code>/<code>cmp</code></td></tr>
 <tr><td><code>guard_class</code> heap</td><td><code>guard_rvalue</code> (low-3-bits + class compare)</td><td><code>a64_guard_rvalue</code> (same logic, <code>and</code>/<code>cbnz</code>/<code>ldr w</code>)</td></tr>
 <tr><td><code>guard_class2</code> (BigNum→VM)</td><td>yes, from the monomorphic method-entry patch path (<code>codegen/patch.rs</code>)</td><td>yes — <code>a64_guard_class2</code>, from <code>wrapper.rs</code>; only <code>INTEGER_CLASS</code> differs</td></tr>
 <tr><td><code>guard_array_ty</code></td><td>yes (<code>ObjTy::ARRAY</code> at <code>RVALUE_OFFSET_TY</code>)</td><td>yes</td></tr>
@@ -365,6 +365,7 @@ stack alone — no code is patched, on either arch. See <code>doc/chain_deopt.md
 <tr><td><code>float_to_f64</code> unbox</td><td>yes (flonum / heap-Float, 0.0 sign-bit trick)</td><td>yes (mirrored)</td></tr>
 <tr><td>class-version guard</td><td>unit snapshot word + recovery jump-back (§4.1)</td><td>same — recovery jump-back ported (§4.1)</td></tr>
 <tr><td>eviction on BOP redefinition</td><td>arch-neutral chain-deopt walk, no code patching (§4.2)</td><td>identical (§4.2)</td></tr>
+<tr><td>deopt recording (<code>deopt</code> / <code>profile</code>)</td><td><code>log_deoptimize</code> from every deopt handler, per-guard trampolines, class-guard miss recorder</td><td><code>log_deoptimize</code> from every deopt handler; no trampolines (<code>guard: unknown</code>, see <code>doc/deopt_log.md</code>) and no class-guard miss recorder</td></tr>
 </tbody>
 </table>
 </div>
