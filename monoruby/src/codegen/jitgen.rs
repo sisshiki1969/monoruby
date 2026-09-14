@@ -1531,7 +1531,7 @@ impl Codegen {
         wb: WriteBack,
         entry: DestLabel,
         base: usize,
-        chain: bool,
+        chain: u32,
     ) {
         let raise = self.entry_raise();
         assert_eq!(0, self.jit.get_page());
@@ -1542,12 +1542,16 @@ impl Codegen {
         self.gen_write_back_for_deopt(&wb, base);
         // Chain escalation (`doc/chain_deopt.md` §5 step 4): the raise may be
         // rescued *inside* this frame (resuming it in the interpreter) or
-        // unwind through the suspended callers — either way every suspended
-        // JIT frame above must be converted first. The write-back has run, so
-        // the frame is fully homed for the walk.
-        if chain {
+        // unwind through the suspended callers — either way this unit's own
+        // suspended frames must be converted first. `chain` is how many
+        // (this frame's depth in the compilation); frames below the unit's
+        // root keep their compiled error handling, which is what a
+        // root-frame raise has always done. The write-back has run, so the
+        // frame is fully homed for the walk.
+        if chain != 0 {
             monoasm!( &mut self.jit,
                 movq rdi, rbx;
+                movl rsi, (chain);
                 movq rax, (runtime::chain_deopt);
                 call rax;
             );
@@ -1572,7 +1576,7 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
-        chain: bool,
+        chain: u32,
         #[cfg(feature = "deopt")] exit_id: u32,
     ) {
         self.side_exit_with_label(
@@ -1607,7 +1611,7 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
-        chain: bool,
+        chain: u32,
         #[cfg(feature = "deopt")] exit_id: u32,
     ) {
         self.side_exit_with_label(
@@ -1647,7 +1651,7 @@ impl Codegen {
             None,
             loop_jit_spill_bytes,
             base,
-            false,
+            0,
             #[cfg(feature = "deopt")]
             exit_id,
         )
@@ -1668,7 +1672,7 @@ impl Codegen {
         recompile: Option<(RecompileReason, RecompileTarget)>,
         loop_jit_spill_bytes: usize,
         base: usize,
-        chain: bool,
+        chain: u32,
         #[cfg(feature = "deopt")] exit_id: u32,
     ) {
         assert_eq!(0, self.jit.get_page());
@@ -1730,13 +1734,14 @@ impl Codegen {
                 call rax;
             );
         }
-        // Chain escalation (`doc/chain_deopt.md` §5 step 4): convert every
-        // suspended JIT frame in the caller chain before this frame resumes
-        // in the interpreter. Runs after the write-back (the frame is fully
-        // homed in the LFP) and before the recompile hook / fetch.
-        if chain {
+        // Chain escalation (`doc/chain_deopt.md` §5 step 4): convert this
+        // compilation unit's `chain` suspended frames before this frame
+        // resumes in the interpreter. Runs after the write-back (the frame is
+        // fully homed in the LFP) and before the recompile hook / fetch.
+        if chain != 0 {
             monoasm!( &mut self.jit,
                 movq rdi, rbx;
+                movl rsi, (chain);
                 movq rax, (runtime::chain_deopt);
                 call rax;
             );

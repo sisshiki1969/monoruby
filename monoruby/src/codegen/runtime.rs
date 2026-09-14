@@ -24,11 +24,25 @@ pub const PROCDATA_FUNCID: i64 = std::mem::offset_of!(ProcData, func_id) as _;
 /// safe to run under the `CODEGEN` borrow. The deopting frame's *own*
 /// return-address slot is rewritten too — that is what converts its caller
 /// once the now-interpreted frame eventually returns.
-pub(super) extern "C" fn chain_deopt(vm: &mut Executor) {
+///
+/// `frames` is how many suspended frames to convert: the deopting frame's
+/// depth in its compilation, so the walk covers this unit's own frames and
+/// stops. Frames below the unit's root belong to other compilations, hold
+/// neither a narrowed return tag of ours nor an unboxed local of ours, and
+/// keep their compiled bodies — the same situation a root-frame side exit
+/// (which does not escalate at all) has always left them in.
+pub(super) extern "C" fn chain_deopt(vm: &mut Executor, frames: u32) {
     let cfp = vm.cfp();
     #[cfg(feature = "chain-deopt-log")]
-    eprintln!("### chain deopt: escalated from {:?}", cfp.lfp().func_id());
-    CODEGEN.with(|codegen| codegen.borrow_mut().chain_deopt_into(cfp));
+    eprintln!(
+        "### chain deopt: escalated from {:?}, {frames} frame(s)",
+        cfp.lfp().func_id()
+    );
+    CODEGEN.with(|codegen| {
+        codegen
+            .borrow_mut()
+            .chain_deopt_into(cfp, Some(frames as usize))
+    });
 }
 
 /// Detach a shared (copy-on-write) String receiver so the JIT's inline

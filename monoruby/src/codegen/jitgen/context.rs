@@ -1108,11 +1108,20 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Whether every interpreter-resuming side exit emitted for the frame
-    /// currently being compiled must **escalate to chain deopt** — i.e. run
-    /// the chain-deopt walk (converting every suspended JIT frame in the
-    /// caller chain into an interpreter frame) before falling back to the
-    /// interpreter (`doc/chain_deopt.md` §5 step 4 / §6).
+    /// How many suspended frames an interpreter-resuming side exit emitted
+    /// for the frame currently being compiled must convert before falling
+    /// back to the interpreter (`doc/chain_deopt.md` §5 step 4 / §6).
+    /// `0` means the exit does not escalate at all.
+    ///
+    /// The count is the frame's own depth in this compilation, so the walk
+    /// converts exactly the unit's frames — depth `d-1` down to the root —
+    /// and stops. Everything below the root belongs to other compilations
+    /// and needs nothing from us; see the confinement argument below. The
+    /// depth is a compile-time constant of the site because a specialized
+    /// body is compiled per call site, and it matches the runtime control
+    /// frames one-for-one because `do_specialized_call` emits a real
+    /// `push_frame` + `call` for each (`trace_contexts` states the same
+    /// 1:1).
     ///
     /// This is the "mechanical guarantee" §6 asks for: the flag is consulted
     /// in exactly one place — [`AsmIr::new`], which stamps it onto the IR so
@@ -1143,14 +1152,22 @@ impl<'a> JitContext<'a> {
     /// entered through a call this compiler did not compile, holding no
     /// narrowed tag and no unboxed local of ours. Frames deeper than that
     /// still escalate — the callers they have to convert are the
-    /// specialized frames this same compilation built above them.
+    /// specialized frames this same compilation built above them, and
+    /// those are exactly the `d` frames this count names.
+    ///
+    /// The same confinement covers an `Error` exit's unwind. `entry_raise`
+    /// unwinds by `leave; ret` with the error signal in rax, through the
+    /// frame's return-address slot — so an *unrewritten* slot lands in the
+    /// caller's compiled post-call error check, the ordinary JIT error
+    /// path a root-frame raise has always taken.
     ///
     /// Basic-op redefinition is unaffected: it evicts through
     /// `Codegen::check_bop_redefine`, a separate entry point, and it does
-    /// have to convert frames across unit boundaries.
+    /// have to convert frames across unit boundaries — so it walks the
+    /// whole chain instead of passing a count.
     ///
-    pub(super) fn escalate_side_exits(&self) -> bool {
-        self.current_frame_pos() > 0
+    pub(super) fn chain_deopt_frames(&self) -> u32 {
+        self.current_frame_pos() as u32
     }
 
     pub(super) fn in_dispatch_arm(&self) -> bool {

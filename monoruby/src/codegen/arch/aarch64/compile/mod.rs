@@ -326,12 +326,12 @@ impl Codegen {
         let mut labels = SideExitLabels::new();
         #[cfg(feature = "deopt")]
         let mut deopt_table: std::collections::HashMap<
-            (BytecodePtr, WriteBack, bool),
+            (BytecodePtr, WriteBack, u32),
             (DestLabel, u32, usize),
         > = std::collections::HashMap::new();
         #[cfg(not(feature = "deopt"))]
         let mut deopt_table: std::collections::HashMap<
-            (BytecodePtr, WriteBack, bool),
+            (BytecodePtr, WriteBack, u32),
             (DestLabel, usize),
         > = std::collections::HashMap::new();
         // Loop-JIT entry sp-bump to undo before any exit resumes the VM.
@@ -536,7 +536,7 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
-        chain: bool,
+        chain: u32,
     ) {
         self.jit.bind_label(entry);
         // Write back FIRST, while the loop sp-bump still keeps sp below the
@@ -546,12 +546,12 @@ impl Codegen {
         // `side_exit_with_label` and doc/regalloc_separation.md §39).
         self.a64_gen_write_back_for_deopt(wb, base);
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
-        // Chain escalation (`doc/chain_deopt.md` §5 step 4): convert every
-        // suspended JIT frame in the caller chain before this frame resumes
-        // in the interpreter. After the write-back, so the frame is fully
-        // homed in the LFP for the walk.
-        if chain {
-            self.a64_call_chain_deopt();
+        // Chain escalation (`doc/chain_deopt.md` §5 step 4): convert this
+        // compilation unit's `chain` suspended frames before this frame
+        // resumes in the interpreter. After the write-back, so the frame is
+        // fully homed in the LFP for the walk.
+        if chain != 0 {
+            self.a64_call_chain_deopt(chain);
         }
         let pc_ptr = pc.as_ptr() as u64;
         let fetch = self.vm_fetch();
@@ -562,13 +562,16 @@ impl Codegen {
         );
     }
 
-    /// `runtime::chain_deopt(vm)` — the escalated-side-exit walk. x19 holds
-    /// `&mut Executor`; LR is saved around the `blr` like every other runtime
-    /// call emitted into a JIT body.
-    fn a64_call_chain_deopt(&mut self) {
+    /// `runtime::chain_deopt(vm, frames)` — the escalated-side-exit walk.
+    /// x19 holds `&mut Executor`; `frames` (this compilation unit's frame
+    /// count, a compile-time constant) goes in x1. LR is saved around the
+    /// `blr` like every other runtime call emitted into a JIT body.
+    fn a64_call_chain_deopt(&mut self, frames: u32) {
         let f = runtime::chain_deopt as *const () as u64;
+        let frames = frames as u64;
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
+            mov x1, (frames);
             str x30, [sp, #-16]!;              // save LR (16-aligned)
             mov x9, (f);
             blr x9;
@@ -593,7 +596,7 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
-        chain: bool,
+        chain: u32,
     ) {
         self.jit.bind_label(entry);
         // Write back before undoing the bump — same spill-clobber reason as
@@ -602,10 +605,12 @@ impl Codegen {
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
         // Chain escalation: the raise may be rescued *inside* this frame
         // (resuming it in the interpreter) or unwind through the suspended
-        // callers — either way they must be converted first
-        // (`doc/chain_deopt.md` §5 step 4 / §8.4).
-        if chain {
-            self.a64_call_chain_deopt();
+        // callers — either way this unit's own frames must be converted
+        // first (`doc/chain_deopt.md` §5 step 4 / §8.4). Frames below the
+        // unit's root keep their compiled error handling, as they do for a
+        // root-frame raise.
+        if chain != 0 {
+            self.a64_call_chain_deopt(chain);
         }
         let pc0 = pc.as_ptr() as u64;
         let raise = self.entry_raise();
@@ -1880,7 +1885,10 @@ impl Codegen {
                     self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
                 }
                 LSideExitKind::Evict => {
-                    self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, false)
+                    // Never escalates: the handler is only reached through a
+                    // chain-wide eviction walk that already converted every
+                    // suspended frame in one pass.
+                    self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, 0)
                 }
                 // A monomorphically-compiled site (e.g. a `BinCmp`) whose
                 // receiver-class guard missed because it went polymorphic.
