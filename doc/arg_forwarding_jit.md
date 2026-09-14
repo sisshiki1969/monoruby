@@ -327,11 +327,13 @@ forwarding callsite に対しても、
 ただしこれはトランポリンがそのコンパイル単位に**インラインされたとき
 だけ**成立する（D1 の注釈を付けるのが specialize されたフレームなので、
 specialization 深度上限を使い切った深い呼び出し位置では成立しない）。
-そこで現在は `JitContext::inline_class_new` が `X.new` を呼び出しサイトで
-直接展開する（allocate に続けて fold / ivar ストア展開 / `initialize` への
-直接呼び出しの 3 択）ため、`(...)` 転送自体が起きない。上記の D1 経由の
-最適化は inline_class_new が降りた場合（ブロック付き、キーワード付き、splat、
-`define_method` の `initialize` など）のフォールバックである。
+そこで `JitContext::inline_class_new` は、呼び出しを一切出さずに済む形
+（allocate に続けて fold、または ivar ストア展開の 2 択）に限って `X.new` を
+呼び出しサイトで直接展開する。それ以外（native な `initialize`、展開できない
+本体、ブロック付き、キーワード付き、splat、`define_method` の `initialize`
+など）は Ruby の `Class#new` を通り、そこでの `(...)` 転送は D1 が畳む。
+深い位置でも D1 が効くのは、forwarding hop が specialization 深度上限を
+消費しないため（`forward_exempt`）。
 
 ## 4. フォールバック条件（汎用パス据置）
 

@@ -3,19 +3,18 @@ use monoruby::tests::*;
 
 // `JitContext::inline_class_new` emits `Foo.new` as the caller's own
 // instructions instead of entering the Ruby `Class#new` trampoline. It has
-// three legs — fold the `initialize` away, expand it into ivar stores, or
-// call it on the object just allocated — and the call leg is the one that
-// reaches a class with its own `alloc_func` (String, Array, Hash) and a
-// native or non-expandable `initialize`. Every case below loops past the
-// JIT thresholds so the compiled form, not the interpreter, is compared.
+// two legs — fold the `initialize` away, or expand it into ivar stores —
+// and declines everything else (a native `initialize`, a body too big to
+// expand), which then runs through the Ruby `Class#new`. Both sides are
+// covered here. Every case below loops past the JIT thresholds so the
+// compiled form, not the interpreter, is compared.
 
 const LOOP: usize = if cfg!(feature = "gc-stress") { 20 } else { 300 };
 
 #[test]
-fn class_new_call_leg_native_initialize() {
-    // A custom `alloc_func` plus a native `initialize`: neither half was
-    // emittable in line before, so the whole construction went through the
-    // trampoline (and its forwarded rest Array).
+fn class_new_declined_native_initialize() {
+    // A custom `alloc_func` plus a native `initialize`: `inline_class_new`
+    // declines, so the construction runs through the Ruby `Class#new`.
     run_test(&format!(
         r#"
         r = []
@@ -38,11 +37,11 @@ fn class_new_call_leg_native_initialize() {
 }
 
 #[test]
-fn class_new_call_leg_iseq_initialize() {
+fn class_new_declined_iseq_initialize() {
     // A Ruby `initialize` that is neither trivial nor a plain ivar-store
-    // body, so it is entered as a real call with the new object as its
-    // receiver — including one declaring an optional keyword the call site
-    // does not pass, and one taking a rest parameter.
+    // body, so `inline_class_new` declines and the Ruby `Class#new` runs
+    // it — including one declaring an optional keyword the call site does
+    // not pass, and one taking a rest parameter.
     run_test(&format!(
         r#"
         class CNBig
@@ -164,12 +163,12 @@ fn class_new_redefined_initialize() {
     // redefinition, so `salvage_method_unit` only rejects the unit because
     // `inline_class_new` records the `initialize` resolution it baked in.
     //
-    // All three legs are covered, and the last two change the resolution
-    // from an *inherited* `initialize` to an own one:
+    // Both legs are covered, and the last two change the resolution from
+    // an *inherited* `initialize` to an own one:
     //   CNVer  — redefined ivar-store body      (expand leg)
     //   CNAdd  — none, then defined             (fold leg -> expand leg)
     //   CNSub  — inherited, then overridden     (expand leg)
-    //   CNStrS — String's native one, then own  (call leg)
+    //   CNStrS — String's native one, then own  (declined either way)
     //
     // `run_test_once`, not `run_test`: the redefinitions persist across a
     // repeated run in the same process, so the second run's `before` would
