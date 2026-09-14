@@ -4,13 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       arch:
-        description: "Which benchmark jobs to run (darwin/arm64 only runs from here)"
+        description: "Which benchmark jobs to run"
         type: choice
         default: arm64
         options:
           - arm64
           - amd64
           - both
+  # The darwin/arm64 benchmark runs on this daily schedule (once per
+  # day, against master's HEAD at fire time), never on push — the
+  # ~4.3 h three-engine pass is too expensive for the macOS runner
+  # allowance to pay per commit. 15:47 UTC = 00:47 JST, so the arm64
+  # dashboard is fresh by the (JST) morning.
+  schedule:
+    - cron: '47 15 * * *'
   push:
     branches: [master]
     paths:
@@ -31,6 +38,9 @@ jobs:
   bench-amd64:
     # Runs on every master push; a manual dispatch includes it only when
     # asked (arch: amd64 / both — the dispatch default is arm64-only).
+    # The daily `schedule` trigger is the arm64 job's alone: this
+    # condition is false on schedule events, so amd64 never runs twice
+    # for the same day's work.
     if: ${{ github.event_name == 'push' || inputs.arch == 'amd64' || inputs.arch == 'both' }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -246,12 +256,14 @@ jobs:
           retention-days: 30
 
   bench-arm64:
-    # NEVER runs automatically: the ~4.3 h three-engine pass burns far
-    # too much of the macOS runner allowance to pay on every master
-    # push. Run it from the Actions tab (workflow_dispatch, arch: arm64
-    # — the default — or both); the publish job tolerates its absence
-    # and simply leaves the arm64 dashboard at its last snapshot.
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.arch == 'arm64' || inputs.arch == 'both') }}
+    # Runs automatically at most once per day (the `schedule` trigger
+    # above), never on push: the ~4.3 h three-engine pass burns far too
+    # much of the macOS runner allowance to pay per commit. It can also
+    # be kicked from the Actions tab (workflow_dispatch, arch: arm64 —
+    # the default — or both). On push-triggered runs the publish job
+    # tolerates its absence and leaves the arm64 dashboard at its last
+    # snapshot.
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.arch == 'arm64' || inputs.arch == 'both')) }}
     runs-on: macos-latest
     # The three-engine pass needs ~245-260 min on this runner (the zjit
     # pass alone is ~2.5 h on arm64): the first zjit run hit the old
