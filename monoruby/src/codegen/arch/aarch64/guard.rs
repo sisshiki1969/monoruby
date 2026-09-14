@@ -36,6 +36,20 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit, cmp x(r), #(FALSE_VALUE as u32););
                 self.jit.bcond_label(monoasm::Cond::Ne, &fail);
             }
+            BOOL_CLASS => {
+                // TRUE_VALUE (0x1c) and FALSE_VALUE (0x14) differ only in
+                // bit 3, so OR'ing bit 3 in collapses both to TRUE_VALUE.
+                // No other tagged value lands at 0x1c after the OR. Use x9
+                // as scratch so the source register is preserved for the
+                // downstream consumer. Without this arm BOOL fell through to
+                // the heap-object guard, which rejects every true/false.
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (0b1000);
+                    orr x9, x(r), x9;
+                    cmp x9, #(TRUE_VALUE as u32);
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &fail);
+            }
             SYMBOL_CLASS => {
                 monoasm_arm64!(&mut self.jit,
                     mov x9, (0xff);

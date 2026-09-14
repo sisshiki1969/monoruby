@@ -200,7 +200,7 @@ stack alone — no code is patched, on either arch. See `doc/chain_deopt.md`
 
 | Guard                         | x86-64                                                            | aarch64                                                                 |
 | ----------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `guard_class` immediates      | Fixnum/nil/true/false/symbol/float via `testq`/`cmpq`            | same set via `tbz`/`tbnz`/`cmp`                                        |
+| `guard_class` immediates      | Fixnum/nil/true/false/bool/symbol/float via `testq`/`cmpq`       | same set via `tbz`/`tbnz`/`cmp`                                        |
 | `guard_class` heap            | `guard_rvalue` (low-3-bits + class compare)                      | `a64_guard_rvalue` (same logic, `and`/`cbnz`/`ldr w`)                  |
 | `guard_class2` (BigNum→VM)    | yes, from the monomorphic method-entry patch path (`codegen/patch.rs`) | yes — `a64_guard_class2`, from `wrapper.rs`; only `INTEGER_CLASS` differs |
 | `guard_array_ty`              | yes (`ObjTy::ARRAY` at `RVALUE_OFFSET_TY`)                        | yes                                                                    |
@@ -208,6 +208,7 @@ stack alone — no code is patched, on either arch. See `doc/chain_deopt.md`
 | `float_to_f64` unbox          | yes (flonum / heap-Float, 0.0 sign-bit trick)                    | yes (mirrored)                                                         |
 | class-version guard           | unit snapshot word + recovery jump-back (§4.1)                    | same — recovery jump-back ported (§4.1)                                 |
 | eviction on BOP redefinition  | arch-neutral chain-deopt walk, no code patching (§4.2)          | identical (§4.2)                                                        |
+| deopt recording (`deopt` / `profile`) | `log_deoptimize` from every deopt handler, per-guard trampolines, class-guard miss recorder | `log_deoptimize` from every deopt handler; no trampolines (`guard: unknown`, see `doc/deopt_log.md`) and no class-guard miss recorder |
 
 Both `a64_guard_class` and `a64_guard_rvalue` always emit (they return a `bool`
 for symmetry with x86, but never return `false` — every `ClassId` is handled,

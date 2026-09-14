@@ -155,13 +155,13 @@ mod enabled {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
                 Self::Deopt { chain } => {
-                    write!(f, "deopt{}", if *chain { " (chained)" } else { "" })
+                    write!(f, "deopt{}", if *chain != 0 { " (chained)" } else { "" })
                 }
                 Self::Evict => write!(f, "evict"),
                 Self::Recompile { reason, chain } => write!(
                     f,
                     "recompile[{reason:?}]{}",
-                    if *chain { " (chained)" } else { "" }
+                    if *chain != 0 { " (chained)" } else { "" }
                 ),
             }
         }
