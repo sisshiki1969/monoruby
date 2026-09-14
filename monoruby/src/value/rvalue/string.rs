@@ -1927,6 +1927,30 @@ impl RStringInner {
 
     /// Owned, with the byte buffer spilled to the heap (so its address
     /// is stable and shareable).
+    ///
+    /// The bytes, encoding tag and code range of a literal template the
+    /// JIT may instantiate inline: owned content the copy can hold in
+    /// its own inline buffer, so there is no heap buffer to clone and
+    /// nothing for [`share_string_buffer`] to convert.
+    ///
+    /// Declines an encoding carrying a payload byte, for which the tag
+    /// alone would not reproduce the value.
+    ///
+    pub(crate) fn inline_copyable(&self) -> Option<(Vec<u8>, u8, u8)> {
+        if self.content.is_shared() || self.owned_spilled() {
+            return None;
+        }
+        match self.ty {
+            Encoding::Ascii8 | Encoding::Utf8 | Encoding::UsAscii => {}
+            _ => return None,
+        }
+        Some((
+            self.content.as_slice().to_vec(),
+            self.ty.tag(),
+            self.cr.get() as u8,
+        ))
+    }
+
     fn owned_spilled(&self) -> bool {
         // SAFETY: tag-discriminated; `owned` is the live variant.
         !self.content.is_shared() && unsafe { self.content.owned.spilled() }
