@@ -236,15 +236,20 @@ VM 側は正しく解決できている（`--no-jit` が速いのはそのため
 
 | # | 施策 | 変更箇所 | 見込み |
 |---|---|---|---|
-| A | `jit_check_super` を bmethod 境界に対応させる（解決できないときは `method_missing` 相当の汎用呼び出しに落とし、再コンパイルを求めない） | `codegen/jitgen/compile.rs` | `define_method`+`super` のループ解消。マイクロで 25.8 → 7 ms 前後 |
-| B | `has_builtin_identity_hash` / `has_builtin_container_hash` を ClassInfo に class_version 付きでメモ化 | `globals/store.rs`, `store/class.rs` | railsbench 55 k Ir/req（1.1 %）、Hash を使う全コードに効く |
+| **A（実施済み）** | `super` サイトの「フレーム依存」判定を、字句上の親ではなく**コンパイル中の本体自身の `is_proc_method` ビット**で行い、再コンパイルではなく VM への plain deopt に落とす | `codegen/jitgen/compile/method_call.rs` | マイクロ **29.6 → 3.7 ms**（YJIT 4.5、`--no-jit` 6.9）。`SHA256.new` 50.3 → 22.2 ms、再コンパイル 1,814 → 0 |
+| **B（実施済み）** | `hash` の解決を ClassInfo の class_version 付き `Cell` にメモ化（`match_method` と同型） | `globals/store.rs`, `store/class.rs` | オブジェクトキー `Hash#[]` **64.5 → 57.3 ns**、Array キー 128.5 → 119.3 ns |
 | C | `OpenSSL::PKCS5.pbkdf2_hmac` と `HMAC` の反復ループを Rust に落とす（digest 核は既に Rust） | `builtins/digest.rs`, `builtins/cipher.rs`, `stdlib/openssl.rb` | railsbench 約 154 k Ir/req（3.1 %）。Rails の署名 cookie / CSRF に直撃 |
 | D | ペイロードの malloc 削減（短い String / 小さい Array の埋め込み、size-class 別フリーリスト） | `alloc.rs`, `value/rvalue/*` | railsbench malloc 295 k Ir/req（CRuby の 2.79 倍）。grape・mail にも同じ構造 |
 | E | 生成コードのフットプリント削減（side-exit 領域の共有化、17.5 k 箇所 → 圧縮） | `codegen/` | 命令数比 1.22x に対し実時間比 1.54x の差＝ IPC。i-cache 側の効き |
 | F | `chain_deopt_into` が定常状態で 27.8 k Ir/req 走っている理由の確認 | `codegen.rs` | 未調査 |
 | G | TZInfo の zoneinfo 読み直し（約 65 k Ir/req）がキャッシュされているかの確認 | 調査のみ | 未確認（プローブが §4 の再帰で潰れた） |
 
-A と B は小さく、C は中規模、D・E は設計が要る。
+A と B はこのブランチで実施した。callgrind で測った railsbench の命令数は
+**4,915,558 → 4,849,888 Ir/req（−1.34 %）**で、内訳は
+`GlobalMethodCache::get` 29.1 k → 23.0 k、`check_method_for_class_with_version`
+25.6 k → 20.2 k（どちらも −21 %）、JIT コンパイラ（`Codegen`）38.1 k → 31.8 k（−17 %）。
+実時間はこの機械のばらつき（railsbench で ±5 %）に埋もれるので、確かなのはこの命令数と
+§5 のマイクロの数字。C は中規模、D・E は設計が要る。
 
 ---
 
