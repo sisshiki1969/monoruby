@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(target_arch = "aarch64")]
+use jitgen::{AbstractState, JitContext};
 
 //
 // Method / UnboundMethod class
@@ -11,8 +13,17 @@ pub(super) fn init(globals: &mut Globals) {
     // (`lfp.try_arg(1)`) and forwarded to the target method as keywords,
     // so `m.call(a: 1)` reaches `def foo(a:)` / `def foo(**kw)` correctly
     // instead of degrading into a positional Hash.
-    globals.define_builtin_funcs_with_kw(
-        METHOD_CLASS, "call", &["[]", "==="], call, 0, 0, true, &[], true,
+    globals.define_builtin_inline_funcs_with_kw(
+        METHOD_CLASS,
+        "call",
+        &["[]", "==="],
+        call,
+        inline_gen2!(method_object_call),
+        0,
+        0,
+        true,
+        &[],
+        true,
     );
     globals.define_builtin_func(METHOD_CLASS, "arity", arity, 0);
     globals.define_builtin_func(METHOD_CLASS, "to_proc", to_proc, 0);
@@ -150,6 +161,43 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         lfp.block(),
         forwarded_kw(lfp, 1),
     )
+}
+
+///
+/// JIT generator for `Method#call`: read the bound `FuncId` and receiver
+/// out of the `Method` and call it directly, instead of gathering the
+/// arguments into a rest `Array` and re-entering through the builtin.
+///
+/// Declines unless the call site proved a `Method` receiver, since the
+/// emitted code reads `MethodInner` fields off it.
+///
+pub fn method_object_call(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: Option<ClassId>,
+    _: Option<ClassId>,
+) -> bool {
+    if recv_class != Some(METHOD_CLASS) {
+        return false;
+    }
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+
+    state.write_back_recv_and_callargs(ir, callsite);
+    let using_fpr = state.get_using_fpr(ir);
+    let error = ir.new_error(state);
+    let callid = callsite.id;
+    ir.inline(move |r#gen, store, labels, _| {
+        let error = &labels[error];
+        r#gen.method_object_call_inline(callid, store, using_fpr, error);
+    });
+    state.def_reg2acc(ir, GP::Rax, callsite.dst);
+    true
 }
 
 ///
