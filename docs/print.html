@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e82cd634.js";
+            window.path_to_searchindex_js = "searchindex-9486dfb5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -7156,7 +7156,10 @@ CRuby が静的表を引くのも同じ理由による。</p>
 </tbody>
 </table>
 </div>
-<h3 id="step-1-が露出させたもの--ruby-実装ビルトインの脆さ"><a class="header" href="#step-1-が露出させたもの--ruby-実装ビルトインの脆さ">Step 1 が露出させたもの — Ruby 実装ビルトインの脆さ</a></h3>
+<h3 id="step-1-が露出させたもの--ruby-実装ビルトインの脆さ--解決済み1135"><a class="header" href="#step-1-が露出させたもの--ruby-実装ビルトインの脆さ--解決済み1135">Step 1 が露出させたもの — Ruby 実装ビルトインの脆さ — <strong>解決済み（#1135）</strong></a></h3>
+<blockquote>
+<p><strong>注</strong>: 本節は問題の記述である。最後に解決の記録を足してある。</p>
+</blockquote>
 <p>再定義が<strong>実際に効くようになった</strong>結果、monoruby が Ruby で書いている
 ビルトイン（<code>builtins/*.rb</code>、約 9,000 行）がその再定義を踏むようになった。</p>
 <pre><code class="language-ruby">class Integer; def &lt;(o); :OV; end; end
@@ -7178,6 +7181,91 @@ C なのでディスパッチしない。</p>
 <p>塞ぐには、<code>builtins/*.rb</code> の演算子をビルトインに束縛する（＝ CRuby が C で
 書くことで無料で得ている性質を明示的に作る）必要がある。粒度とは独立の課題
 なので Step 2 の前提ではないが、Step 1 の帰結として記録しておく。</p>
+<h4 id="解決1135"><a class="header" href="#解決1135">解決（#1135）</a></h4>
+<p>その束縛を入れた。<code>builtins/*.rb</code> 由来のフレームにはもともと 1 ビットが
+立っている（<code>Meta::set_internal_builtin</code>。<code>$~</code>/<code>$_</code> を持たせないためと、
+refinements を届かせないため —— 後者は #1066 で、<strong>まったく同じ理由</strong>で
+同じ判断をしている: 「<code>Array#map</code> 自身の <code>i += 1</code> はライブラリのコードで、
+CRuby では C だから refinement には見えない」）。再定義もそこに届かせない。</p>
+<p>読む場所は 3 つ:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>場所</th><th>役割</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Executor::dispatch_redefined_op</code></td><td>VM ヘルパ（<code>*_values</code> 系）のガード。内部ビルトインのフレームからなら <code>_raw</code> へ落とす</td></tr>
+<tr><td><code>JitContext::resolve_basic_op</code></td><td>JIT の fast path 解決。生のメソッド表ではなく <strong>arm 時のスナップショット</strong>（<code>Store::basic_op_armed_func</code>）を引く</td></tr>
+<tr><td><code>JitContext::basic_op_assumable</code></td><td>上で解決したものをガード無しで inline してよい、という licence</td></tr>
+</tbody>
+</table>
+</div>
+<p>VM 側だけでは直らない。JIT は <code>jit_check_method</code> で <code>Integer#+</code> を<em>生の</em>
+メソッド表から引き、再定義後はユーザのメソッドに解決して inline generator を
+失う —— つまり <code>basic_op_assumable</code> に到達すらしない。スナップショット解決が
+その半分である。</p>
+<p><strong>差分スイープ（8 種の再定義 × 28 プローブ = 224 セル、CRuby 4.0.2 と比較）</strong>:
+CRuby と異なるセルが <strong>30 → 1</strong>。</p>
+<p>残る 1 セルは <code>Integer#&lt;</code> を再定義したときの <code>5.times</code>: CRuby は <code>[]</code> を返す。
+<strong>CRuby の <code>Integer#times</code> も Ruby で書かれている</strong>ためである。推定ではなく
+CRuby 自身に吐かせた:</p>
+<pre><code>$ ruby -e 'p Integer.instance_method(:times).source_location'
+["&lt;internal:numeric&gt;", 255]        # upto / Array#each は nil（= C）
+</code></pre>
+<p>その iseq の逆アセンブル（ループ本体）:</p>
+<pre><code>0020 getlocal_WC_0   i
+0022 invokeblock     &lt;argc:1&gt;                        # yield i
+0025 getlocal_WC_0   i
+0027 opt_succ        &lt;calldata!mid:succ, argc:0&gt;     # i = i.succ
+0029 setlocal_WC_0   i
+0031 getlocal_WC_0   i
+0034 opt_lt          &lt;calldata!mid:&lt;, argc:1&gt;        # while i &lt; self
+0036 branchif        20
+</code></pre>
+<p><code>+</code> を呼ぶ箇所が無いので <code>Integer#+</code> の再定義は届かない。<code>succ</code> と <code>&lt;</code> は実際に
+呼んでいるので届く —— <code>opt_succ</code> / <code>opt_lt</code> は BOP 高速命令だが、再定義されれば
+<code>BASIC_OP_UNREDEFINED_P</code> が落ちて本物のディスパッチに戻る。monoruby が Step 1 以降
+踏んでいたのとまったく同じ構造である。裏取りとして <code>succ</code> を <code>self + 2</code> に再定義
+すると CRuby の <code>times</code> は <code>[0, 2, 4]</code> を返す。</p>
+<p>monoruby は <code>+</code> / <code>&lt;</code> / <code>succ</code> のいずれに対しても免疫になった。CRuby の同種の
+瑕疵をわざわざ再現しない、という判断である。</p>
+<h4 id="将来の選択肢--intrinsic-による粒度の精密化見送り"><a class="header" href="#将来の選択肢--intrinsic-による粒度の精密化見送り">将来の選択肢 — intrinsic による粒度の精密化（見送り）</a></h4>
+<p>フレーム単位の束縛は「このファイルの演算子は全部ビルトイン束縛」としか言えず、
+<strong>ライブラリ自身の帳簿</strong>（<code>i += 1</code>）と<strong>呼び出し側のための演算</strong>（<code>sort</code> の
+<code>&lt;=&gt;</code>）を区別できない。区別は今のところ手作業で保っている
+（<code>EqSearch::new</code> と <code>op/sort.rs</code> は意図的に束縛の外）。</p>
+<p>原理的に正しいのは issue #1135 が第一候補として挙げた方向 ——
+<code>__add</code> / <code>__lt</code> のような<strong>再定義されない内部呼び出し</strong>を導入し、
+1 箇所ずつ明示する。実装するなら「本物のメソッド」ではなく
+<strong>bytecodegen が名前を認識して通常の <code>BinOp</code> 命令に落とす</strong>形にすること。
+本物のメソッドにすると VM 階層の演算子高速路を失う（<code>i += 1</code> → <code>i.succ</code> で
+増分が実測 1.8 倍）。名前を「再定義チェックを外す印」として使い命令自体は
+同じにすれば、性能は不変になる。</p>
+<p><strong>規模（実測）</strong>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th style="text-align: right"></th></tr>
+</thead>
+<tbody>
+<tr><td>CRuby のコアメソッドのうち Ruby 実装</td><td style="text-align: right">74 / 1061（7%）</td></tr>
+<tr><td>— うちループを回すもの</td><td style="text-align: right"><code>Integer#times</code> のみ</td></tr>
+<tr><td><code>builtins/*.rb</code> の演算子使用</td><td style="text-align: right">約 1,058 箇所 / 11,217 行</td></tr>
+<tr><td>— うちループ帳簿（<code>+= 1</code> / <code>-= 1</code> / <code>while … &lt;</code>）</td><td style="text-align: right">約 150（機械的）</td></tr>
+<tr><td>— 残り（<code>==</code> 199, <code>&lt;</code> 168, <code>&lt;=&gt;</code> 43 …）</td><td style="text-align: right">約 900（1 件ずつ判断が要る）</td></tr>
+</tbody>
+</table>
+</div>
+<p>CRuby 側が C なのは 93% なので「CRuby が C のものだけ intrinsic 化」は事実上
+ほぼ全部が対象になる。そして残り約 900 箇所の多くは呼び出し側の値を比較して
+おり、<strong>intrinsic 化してはいけない</strong> —— 判断を誤ると今回のバグと逆向きに、
+同じくサイレントに壊れる。</p>
+<p>したがって一度に移行はしない。<strong>フレーム単位の束縛を既定の安全側とし、粒度が
+粗すぎて実害が出た箇所から漸進的に intrinsic 化する</strong>方針とする（2026-09、
+#1362 のレビューで決定）。なお CRuby との完全一致だけが目的なら、intrinsic
+より安い道がある —— Ruby 実装側の 74 件を束縛から除外する方向で、<code>Integer#times</code>
+なら「印から除外」＋「増分を <code>i.succ</code> に変更」の 2 箇所で <code>+</code> / <code>&lt;</code> / <code>succ</code> の
+3 セルとも一致する。こちらも採らない（CRuby の瑕疵の再現になるため）。</p>
 <h3 id="step-2a--vm-を-クラス-粒度にする--実装済み"><a class="header" href="#step-2a--vm-を-クラス-粒度にする--実装済み">Step 2a — VM を (クラス) 粒度にする — <strong>実装済み</strong></a></h3>
 <p><strong>鍵になった観測</strong>: VM の asm fast path は<strong>すべて fixnum 限定</strong>である。
 <code>vm_binops_opt</code> / <code>vm_cmp_opt!</code> / <code>vm_neg</code> … はどれも
