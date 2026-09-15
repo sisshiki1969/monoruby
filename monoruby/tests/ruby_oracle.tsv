@@ -417,6 +417,7 @@
 1c12dc08811d9019e8d7783f90126800	[Proc, "42"]	def take_block(&blk); blk; end\n              bl = take_block(&:to
 1c1cbd948574428a9c87e8b3ffbf5e17	42	k = Class.new { |c| c.define_method(:foo) { 42 } }\n            k.ne
 1c1fcbdbc611eaff60a3065b29f2ad48	[2, :te]	pth = "/tmp/mono_cov_#{Process.pid}_#{rand(1 << 30)}.rb"\n        File.w
+1c2142ea9c90f682daf866ad5baf06fd	[[3, 1, 2], true]	class Integer; def <=>(o); 0; end; end\n        [[3, 1, 2].sort, [1, 2, 
 1c4c2d6d15f9c496df0430ac01991d10	0	255[..-2]
 1c55df1a2ab9f2b7ce881cce3520b3da	["File::Stat", 8, true, false, true, true, true, true, true, "file", false, 8, true, true, true, true, true]	path = "/tmp/monoruby_test_stat_#{Process.pid}_#{rand(100000)}"\n   
 1c6926fa6e1462140ee74bc77342fcc8	[nil, :nme, true]	module PrivC\n              class Sec; end\n              private_con
@@ -440,6 +441,7 @@
 1dc4e6b9d13cbb4bda8ad0cf13be134b	[2, "hi"]	(f="/tmp/mono_oa_#{Process.pid}"; n=IO.write(f, "hi", open_args: ["w", nil, {enc
 1dc6884272715101af309365600555df	[:ensured, "boom"]	log = []\n            begin\n              Enumerator.new { |y| begin
 1e08e67e4ca265bf528592b1dae413d1	42	class Foo\n              @@x = 42\n              def self.get_x; clas
+1e172a461f0c16b5db64904d90096356	[[:mul, :mul, :mul], [[1, 0], [2, 1], [3, 2]]]	class Integer; def *(o); :mul; end; end\n        [[1, 2, 3].map { |x| x 
 1e1f5f728efe927c10f8e284ecc655b0	[1, 2, [3, 4]]	class C\n              define_method(:m) { |a, b, *c| [a, b, c] }\n  
 1e57e3ebdd46e74aa95a5d68b15b50ce	:raised	b = "\\xFF"\n        e = "あ".encode("EUC-JP")\n        begin\n          r =
 1e62e613c49125303aafa003efcbc639	[1, 2, 3]	f = ->{ [_1, _2, _3] }; f.call(1, 2, 3)
@@ -984,6 +986,7 @@
 453d44137039b2306963eb515050023d	:re	a = [1,2,3,4]; begin; a[-5..10] = ""; rescue RangeError; :re; end
 454539e2b45442d94b7989495b4563ef	["UTF-8", [227, 129, 130]]	File.binwrite("/tmp/mr_gc2.txt", [164, 162].pack("C*"))\n           
 454e2e87849398aff023ffd47ce0568a	"hello"	c = Class.new\n            c.class_exec do\n              def hello\n 
+456220a755178b723d1c84012301fb7c	[[999, 999, 999], 999]	class Integer; def +(o); 999; end; end\n        r = []\n        3.times {
 4578bd5fa7148d23a652a1a92eb517df	false	Enumerator.new { |y| y << caller.empty? }.first
 457f6a743618e9a691a1720e9d5b31b0	[1575.0276087749185, 6.073454154620117]	def call_block\n          yield\n        end\n        def f(n)\n          a
 4590827ce0f8f39bce38419577946094	[[1, true], [1, true], [1, true], [1, true], [1, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true]]	def row\n          res = []\n          x = 0\n          while x < 60\n     
@@ -1096,6 +1099,7 @@
 4bf63b7ab095dc317e165b1b582247af	[10, 1]	def m(y: 10) = y; [m, m(y: 1)]
 4c1c6f6c3f836877abf737896a925b9d	[true, true, true]	S = Struct.new(:a, :b, :c)\n            \n\n            s = S.new(1, 2
 4c2abed4507b2755e1ec53fe8226c80f	[true, true, :done, :finished]	(a=loop.instance_of?(Enumerator); b=(loop.size == Float::INFINITY); sub=Class.ne
+4c2f6dc6106e7cb9d4743fa657e9aca3	[[10, 20, 30], [1, 2, 3], :OV]	class Integer; def <(o); :OV; end; end\n        [[10, 20, 30].each { |x|
 4c3cdf6fdb768ce2061972f6724dd416	42	class Foo\n              def initialize(x)\n                @x = x\n  
 4c417c7d5c4ca0cfc5e0182ee4cb0ce0	[true, true, true, true, true, true, true, "[[...]]", "{x: {...}}"]	a = []\n        a << a\n        b = []\n        b << b\n        h = {}\n    
 4c6323de719d0ad254c106b3de0e1ff1	99	b = binding\n            b.local_variable_set("bar", 99)\n           
@@ -1321,6 +1325,7 @@
 5d04703a221875b0b4d2a0813111741a	nil	class CSrcLocMissing; end\n            CSrcLocMissing.const_source_l
 5d0c9438a810db95f43044dee3f665ba	[true, true]	class CSrcLocScopeOuter\n              class Inner\n                I
 5d133754b00e49c763d011ae4b0d6b42	[1, :seven, :str, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 12, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
+5d17c7c2c22240da3f0305743809ace9	[3, true, 1]	class Integer; def <(o); :OV; end; end\n        [5.clamp(1, 3), 5.betwee
 5d2068c7082fde255a8c47d3b3b3e849	nil	$stdout.write("a")\n            print "b"\n            $stdout.write(
 5d2e5835d898500cac990d35acb987f8	[3, 4, 7]	def fd_e(a, b) = [a, b, a + b]\n        def fd_d(...) = fd_e(...)\n      
 5d33630c505ca95acb062afbe222be3f	"Float"	before = Time.now\n            (Time.now - before).class.to_s
@@ -2176,6 +2181,7 @@
 9b5c13115b5bff8bc6f4a7e3fca92e18	["B", "M2", "A", "M1"]	module M1; end\n        module M2; end\n        class A\n          include
 9b61bcda595469dd25e2e58381c1be05	["first", true, true]	begin\n          raise "x"\n        rescue => e\n          e.backtrace.uns
 9b647520e61fd7b3680dcbb7c919469b	[true, true, "Windows-1250", [228, 224], "Windows-1251", "abc"]	(a=(Encoding::CP1251 == Encoding::Windows_1251); b=(Encoding::CP437 == Encoding:
+9b669535e692789e91d6326e7c61dcf9	[120, 0, 100, 119]	$flag = false\n        def noraise\n          Integer.class_eval("def +(o
 9b8994e2e94d4a2a2b7af7119922b89c	[[195], "Windows-31J", [], [169]]	m = /./s.match("\\303\\251".dup.force_encoding(Encoding::Windows_31J))\n           
 9b8ade67bac5e3b7bdf9490af877bbc4	200	def nlr_foo\n          yield\n        end\n        def nlr_bar\n          n
 9bcad6e1f55d1f4c7fc6bfeb8c9bbe56	[2, 18000, 3]	m = Object.new; def m.to_str; "feb"; end\n            s = Object.new
@@ -2187,6 +2193,7 @@
 9c378cc8b7903c3d2a6f4b5fa41e0546	6	def f(a,b,c=12,d=23)\n          a+b+c+d\n        end\n        \n\n        f(
 9c42c89245729b05ebbfbcbfe0ac6866	[[[], {a: 38}], [[{b: 38}], {}], [[], {a: 39}], [[{b: 39}], {}]]	def target(*args, **kw); [args, kw]; end\n        class << self\n        
 9c4ebeae14bfd545fcd9f97591a4f7ea	[42, true]	called = nil\n            Process.singleton_class.send(:alias_method
+9c683ba42daa332a259b0d97f6191b0e	[[0, 1, 2, 3, 4], 999]	Integer.class_eval("def +(o); 999; end")\n        r = []\n        5.times
 9c8dba1032bde3183b8033406c275203	"FiberError"	t = Thread.new { Fiber.yield rescue $!.class.to_s }\n            t.v
 9caa03a6554f9f51a6930123fab2a973	0	Process.setpriority(Process::PRIO_PROCESS, 0, Process.getpriority(Process::PRIO_
 9caf922308b53f4f109f9e4810fe3065	true	a = "/tmp/monoruby_offload_fork_parent"\n        b = "/tmp/monoruby_offl
@@ -3231,6 +3238,7 @@ e2f631ba3fe2cfe362b742fe8ef597f9	[700.012271, 2.699313]	def t2\n          a = 2.
 e2f7855c9efc89267cc4efaf17ca2b83	[true, true]	[Thread.current == Thread.main, Thread.current.alive?]
 e30802fc039d0a7dafc2afa6978a2fd8	[true, true]	stop = false\n            t = Thread.new { stop = true }\n           
 e3153e08936de555d02588b7435ba4c8	nil	begin\n              raise "err"\n            rescue\n            end\n
+e350fbd82365d9d22f20872fe9e12df8	[[1, 2, 3], [[1, 2], [3]], [[1, 0], [2, 1], [3, 2]], [:a, :b], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5]]	class Integer; def +(o); 999; end; end\n        [\n          [1, 2, 3].ta
 e358ab5ec7cd3f4599432855b55c2865	[[:ensure_ran], "reraised"]	$log = []\n            def m\n              raise "orig"\n            
 e383349a267c6ca9fda59d2f6df0e56c	[81, true]	require "stringio"\n            old = $stderr\n            begin\n    
 e39fd220262a3610b4d7b6874ada52af	[2.5, 3.0]	class RS1\n          def initialize = (@flag = true)\n          attr_writ
@@ -3428,6 +3436,7 @@ f137e5150f7ecf2f213388be98ce909f	[1, 2, 3, 4, 5, 6, 7, 8]	class C\n          def
 f1443f24a111ef2b12274668b17f02be	[["TypeError", "exception class/object expected"], ["a.rb:1"], ["single.rb:2"], "Array", "TypeError", ["newmsg", ["b.rb:2"], false], ["StandardError", "[\\"foo\\"]"], ["TypeError", "exception object expected"], ["TypeError", "exception class/object expected"], "StopIteration", ["StopIteration", "m"]]	def t; yield; rescue Exception => e; [e.class.to_s, e.message[0, 60
 f167361721c3652dc52d4b8e72006f82	[1, 3, 5, 7]	(1..7).filter { |x| x.odd? }
 f18ced4d69b03539ee72ed63d73186fb	[3.5, 3.5, [5, 98]]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
+f1993f86c9358ac9622c10a7bd04b794	[[1, 2], [1, 2, 3], 3, -5]	class Integer; def -@; :neg; end; end\n        class Array; def [](i); :
 f1babbbb29fbb271146a71d94071fa7c	[Module, Module]	module M\n            end\n        \n[M.class, M.singleton_class.super
 f1cb099660b804e23a65b0ec39a9e7c4	[nil, true, true, nil]	a = Signal.trap(:EXIT, proc { })\n            b = Signal.trap('EXIT'
 f1d0da92c682d95eff2dcfbc176360b2	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]	module M\n          def bar; 100; end\n        end\n        class C\n      

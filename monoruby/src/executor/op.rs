@@ -222,9 +222,7 @@ macro_rules! cmp_values {
                 rhs: Value,
                 is_func_call: bool,
             ) -> Option<Value> {
-                if globals.store.basic_op_redefined()
-                    && globals.store.basic_op_redefined_for(lhs.class(), $op_str)
-                {
+                if vm.dispatch_redefined_op(globals, lhs.class(), $op_str) {
                     return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
                 }
                 [<cmp_ $op _values_raw>](vm, globals, lhs, rhs, is_func_call)
@@ -373,11 +371,7 @@ impl Executor {
         // Every arm of the implementation answers without a lookup for nil /
         // booleans / Integer / Float / Symbol / String, so a redefined `==`
         // on the receiver's class has to take over here.
-        if globals.store.basic_op_redefined()
-            && globals
-                .store
-                .basic_op_redefined_for(lhs.class(), IdentId::_EQ)
-        {
+        if self.dispatch_redefined_op(globals, lhs.class(), IdentId::_EQ) {
             return self.invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None);
         }
         self.eq_values_vis_raw(globals, lhs, rhs, is_func_call)
@@ -733,11 +727,7 @@ fn cmp_teq_values_impl(
     rhs: Value,
     private_ok: bool,
 ) -> Option<Value> {
-    if globals.store.basic_op_redefined()
-        && globals
-            .store
-            .basic_op_redefined_for(lhs.class(), IdentId::_TEQ)
-    {
+    if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_TEQ) {
         return vm.invoke_method(globals, IdentId::_TEQ, private_ok, lhs, &[rhs], None, None);
     }
     let b = match (lhs.unpack(), rhs.unpack()) {
@@ -1028,7 +1018,9 @@ impl Executor {
                     info.sourceinfo.file_name(),
                     info.sourceinfo.get_line(&loc)
                 );
-                if !store[func_id].meta().is_svar_transparent() {
+                // Internal builtins stand in for CRuby's C frames, which
+                // carry no source location of their own.
+                if !store[func_id].meta().is_internal_builtin() {
                     return Some(location);
                 }
                 if internal_fallback.is_none() {
@@ -1083,11 +1075,7 @@ impl Executor {
         // the receiver's own pair worth checking. (Before this check
         // `[3,1,2].sort` kept comparing fixnums directly through a
         // redefined `Integer#<=>`, where CRuby raises.)
-        if globals.store.basic_op_redefined()
-            && globals
-                .store
-                .basic_op_redefined_for(lhs.class(), IdentId::_CMP)
-        {
+        if self.dispatch_redefined_op(globals, lhs.class(), IdentId::_CMP) {
             return Ok(self.dispatch_cmp(globals, lhs, rhs)?);
         }
         let res = match (lhs.unpack(), rhs.unpack()) {
@@ -1161,11 +1149,7 @@ pub(crate) extern "C" fn neg_value(
     lhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    if globals.store.basic_op_redefined()
-        && globals
-            .store
-            .basic_op_redefined_for(lhs.class(), IdentId::_UMINUS)
-    {
+    if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_UMINUS) {
         return vm.invoke_method(globals, IdentId::_UMINUS, is_func_call, lhs, &[], None, None);
     }
     neg_value_raw(vm, globals, lhs, is_func_call)
@@ -1214,11 +1198,7 @@ pub(crate) extern "C" fn pos_value(
     lhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    if globals.store.basic_op_redefined()
-        && globals
-            .store
-            .basic_op_redefined_for(lhs.class(), IdentId::_UPLUS)
-    {
+    if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_UPLUS) {
         return vm.invoke_method(globals, IdentId::_UPLUS, is_func_call, lhs, &[], None, None);
     }
     pos_value_raw(vm, globals, lhs, is_func_call)
@@ -1250,11 +1230,7 @@ pub(crate) extern "C" fn not_value(
     lhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    if globals.store.basic_op_redefined()
-        && globals
-            .store
-            .basic_op_redefined_for(lhs.class(), IdentId::_NOT)
-    {
+    if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_NOT) {
         return vm.invoke_method(globals, IdentId::_NOT, is_func_call, lhs, &[], None, None);
     }
     not_value_raw(vm, globals, lhs, is_func_call)
@@ -1291,11 +1267,7 @@ pub(crate) extern "C" fn bitnot_value(
     lhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    if globals.store.basic_op_redefined()
-        && globals
-            .store
-            .basic_op_redefined_for(lhs.class(), IdentId::_BNOT)
-    {
+    if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_BNOT) {
         return vm.invoke_method(globals, IdentId::_BNOT, is_func_call, lhs, &[], None, None);
     }
     bitnot_value_raw(vm, globals, lhs, is_func_call)

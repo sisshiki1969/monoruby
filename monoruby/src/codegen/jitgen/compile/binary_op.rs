@@ -154,6 +154,18 @@ impl<'a> JitContext<'a> {
         if !self.store.is_basic_op_pair(class, op) {
             return false;
         }
+        // Except in monoruby's own Ruby-written core (`builtins/*.rb`),
+        // which stands in for CRuby's C implementations: `Array#each`'s own
+        // `i += 1` is `rb_int_plus` there, and cannot see `Integer#+` being
+        // redefined *or* refined at all. The runtime twins of this are
+        // `Executor::dispatch_redefined_op` (#1135) and
+        // `Executor::basic_op_refinements` (#1066), which decline for the
+        // same reason; without it, the compiled body of every such method
+        // dispatched into the redefinition and returned a silently short
+        // result.
+        if self.in_internal_builtin() {
+            return true;
+        }
         // An ordinary redefinition binds everywhere.
         if self.store.basic_op_globally_redefined_for(class, op) {
             return false;
@@ -236,7 +248,7 @@ impl<'a> JitContext<'a> {
         if lhs_class == BIGNUM_CLASS {
             return None;
         }
-        let (fid, _visibility) = self.jit_check_method(lhs_class, op)?;
+        let (fid, _visibility) = self.resolve_basic_op(lhs_class, op)?;
         let inline = self.store.inline_info.get_inline(fid)?;
         if !matches!(
             inline,

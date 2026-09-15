@@ -198,9 +198,7 @@ macro_rules! binop_values {
                 rhs: Value,
                 is_func_call: bool,
             ) -> Option<Value> {
-                if globals.store.basic_op_redefined()
-                    && globals.store.basic_op_redefined_for(lhs.class(), $op_str)
-                {
+                if vm.dispatch_redefined_op(globals, lhs.class(), $op_str) {
                     return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
                 }
                 [<$op _values_raw>](vm, globals, lhs, rhs, is_func_call)
@@ -315,9 +313,7 @@ macro_rules! bop_entry {
             rhs: Value,
             is_func_call: bool,
         ) -> Option<Value> {
-            if globals.store.basic_op_redefined()
-                && globals.store.basic_op_redefined_for(lhs.class(), $op)
-            {
+            if vm.dispatch_redefined_op(globals, lhs.class(), $op) {
                 return vm.invoke_method(globals, $op, is_func_call, lhs, &[rhs], None, None);
             }
             $raw(vm, globals, lhs, rhs, is_func_call)
@@ -630,9 +626,7 @@ macro_rules! int_binop_values {
                 // fast path at all — the VM calls straight here — so this
                 // check is the only thing standing between a redefined
                 // `Integer#&` and a wrong answer.
-                if globals.store.basic_op_redefined()
-                    && globals.store.basic_op_redefined_for(lhs.class(), $op_str)
-                {
+                if vm.dispatch_redefined_op(globals, lhs.class(), $op_str) {
                     return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
                 }
                 let v = match (lhs.unpack(), rhs.unpack()) {

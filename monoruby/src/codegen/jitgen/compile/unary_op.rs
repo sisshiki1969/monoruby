@@ -30,7 +30,7 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         bc_pos: BcIndex,
     ) -> bool {
-        let Some((fid, _visibility)) = self.jit_check_method(recv_class, op) else {
+        let Some((fid, _visibility)) = self.resolve_basic_op(recv_class, op) else {
             return false;
         };
         let Some(InlineFuncInfo::InlineGenUnary(f)) = self.store.inline_info.get_inline(fid) else {
