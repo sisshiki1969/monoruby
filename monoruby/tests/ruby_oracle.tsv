@@ -3284,6 +3284,7 @@ e8962f663b29be65e4e0dd56609acec4	[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 100]	def f\n 
 e8ad34b388352ca80000e7df317bb41a	[42, true, true]	o = Object.new\n            def o.to_str; "value"; end\n            c
 e8bf25bb3eb8bcdf2410ac76264f9ea4	[1, 2]	Enumerator.new { |y| y << 1 << 2 }.to_a
 e8ceec0aa9d3d00513f0a88f084c31e2	[[[:a, 200], [:b, 200], [:c, 200]], :d, :blk]	class Da; def tag = :a; end\n            class Db; def tag(&blk) = b
+e8d378ac2de74d8f8a7585a1b80eb15c	[Errno::EINVAL, Errno::EBADF, 0, 0]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
 e8e220b680848457259609fb951e4dbd	["ensure in f", "ensure in g", 42]	def g\n          begin\n            yield\n          ensure\n            $r
 e8f73c5ee545fe5b71d1c667d8bec38b	[3, [:gt, :gt]]	class Gt\n              attr_reader :calls\n              def initial
 e8fff433024d62ecc658476201cd2358	[0.0, 750.0]	def call_block\n          yield\n        end\n        def d4(n)\n          

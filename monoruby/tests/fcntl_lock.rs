@@ -56,6 +56,45 @@ fn record_locks_take_a_packed_struct_flock() {
     ));
 }
 
+/// The error paths: a command the kernel rejects, and a lock the fd
+/// cannot take — the latter through the offloaded `F_SETLKW`, so its
+/// errno travels back from the worker. Plus Linux's open-file-description
+/// locks, which wait the same way and are reachable only by their raw
+/// number (neither CRuby's `Fcntl` nor ours defines a constant).
+#[test]
+fn lock_errors_and_ofd_locks() {
+    run_test_once(&format!(
+        r#"{FLOCK_PRELUDE}
+        path = "/tmp/monoruby_fcntl_lock_errors"
+        File.write(path, "x")
+        r = []
+        File.open(path, "r+") do |f|
+          r << (begin
+            f.fcntl(-1, flock_struct(Fcntl::F_WRLCK))
+          rescue => e
+            e.class
+          end)
+        end
+        # A write lock wants a writable fd.
+        File.open(path, "r") do |f|
+          r << (begin
+            f.fcntl(Fcntl::F_SETLKW, flock_struct(Fcntl::F_WRLCK))
+          rescue => e
+            e.class
+          end)
+        end
+        unless DARWIN
+          File.open(path, "r+") do |f|
+            r << f.fcntl(38, flock_struct(Fcntl::F_WRLCK))   # F_OFD_SETLKW
+            r << f.fcntl(37, flock_struct(Fcntl::F_UNLCK))   # F_OFD_SETLK
+          end
+        end
+        File.unlink(path)
+        r
+        "#
+    ));
+}
+
 /// A green thread waiting for a record lock must not stop the others:
 /// the wait happens on a native worker (`native_pool`), not on the
 /// interpreter thread.
