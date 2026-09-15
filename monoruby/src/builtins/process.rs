@@ -1513,17 +1513,23 @@ fn process_fork(
     // pending bytes are written once, by us. (CRuby flushes before
     // forking too.)
     crate::rvalue::io::flush_std_streams();
+    // Hold the native pool's locks across the fork, so the child cannot
+    // inherit one a worker was holding (`native_pool::ForkLocks`).
+    let pool_locks = crate::native_pool::prepare_fork();
     // SAFETY: fork() in a green-thread (single OS thread) process.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         let err = std::io::Error::last_os_error();
+        drop(pool_locks);
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fork"));
     }
     if pid == 0 {
         // Child: only the forking green thread survives — and neither do
         // the native offload workers.
+        pool_locks.reset_child();
         crate::scheduler::fork_child_reset_threads(vm);
-        crate::native_pool::reset_after_fork();
+    } else {
+        drop(pool_locks);
     }
     Ok(Value::integer(pid as i64))
 }
@@ -1567,17 +1573,19 @@ fn process_daemon(
     // SAFETY: fork/setsid/chdir/open/dup2 on our own process; green
     // threads mean the child is single-threaded.
     unsafe {
+        let pool_locks = crate::native_pool::prepare_fork();
         let pid = libc::fork();
         if pid < 0 {
             let err = std::io::Error::last_os_error();
+            drop(pool_locks);
             return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fork"));
         }
         if pid > 0 {
             // The daemonizing parent must NOT run at_exit handlers.
             libc::_exit(0);
         }
+        pool_locks.reset_child();
         crate::scheduler::fork_child_reset_threads(vm);
-        crate::native_pool::reset_after_fork();
         libc::setsid();
         if !nochdir {
             libc::chdir(c"/".as_ptr());

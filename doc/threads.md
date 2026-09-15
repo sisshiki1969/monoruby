@@ -467,10 +467,21 @@ poll(2) で readiness を待てるもの(ソケット等)はスケジューラ�
   ワーカーが全員塞がっているときだけ新しく生やす —— カーネルでブロック中の
   ワーカーは何分も戻らないことがあり、その後ろにキューイングしたら §9 が避けたい
   ストールそのものになるため。ワーカーは 10 秒 idle で終了する。
-- **fork(2) の子ではワーカーは生き残らない**。子は `idle` カウントと親のキューだけを
-  受け継ぐので、`Process._fork` / `Process.daemon` の子側で
-  `native_pool::reset_after_fork` がそれを捨てる(捨てないと、子の最初の `submit` が
-  「idle ワーカーが拾う」と信じて永久に待つ)。
+- **fork(2) の子ではワーカーは生き残らない**。子は `idle` カウントと親のキュー、
+  親宛ての `results` / `orphans` を受け継ぐので、`Process._fork` / `Process.daemon` の
+  子側で `native_pool::ForkLocks::reset_child` がそれを捨てる(捨てないと、子の最初の
+  `submit` が「idle ワーカーが拾う」と信じて永久に待つ)。
+  そのロック自体も fork をまたいで**フォークするスレッドが**先に取る
+  (`native_pool::prepare_fork`、`pthread_atfork` の prepare/parent/child を手で書いた
+  もの)。ワーカーがロックを握った瞬間に fork すると、そのワーカーのいない子は
+  誰も解放しないロックを受け継ぎ、最初の `lock()` で永久に止まる。
+  `do_spawn` も同じ扱いにしてある(その子は exec するだけでこれらのロックを取らないが、
+  「すべての fork(2) は pool を静止させてから」という不変条件を揃えておく)。
+- **完了パイプは子で作り直す**(`replace_pipe`)。`fork(2)` が複製するのは fd テーブルで
+  あってパイプではないので、親子が同じバッファを読み書きすることになる。親の waiter が
+  取るはずだった完了バイトを子の `drain` が飲んでしまうと、その waiter は結果が
+  `results` に載ったまま永久に park する —— 親側には異常が何もないのに復帰できない。
+  子で継承端を close しても影響するのは子の fd テーブルだけなので、親のパイプは無傷。
 - **ワーカーは Ruby ヒープにも VM のスレッドローカルにも触れない**。`NativeOp` は生 fd /
   フラグ / `CString` パスだけを運ぶ(ヒープ参照を持たない)。共有状態はプロセスグローバル:
   `results`(`Mutex<HashMap<ticket, Completion{ret, errno}>>`)、`orphans`、`NEXT_ID`。

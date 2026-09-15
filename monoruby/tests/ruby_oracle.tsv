@@ -762,6 +762,7 @@
 3565c58dca7325f9f598f2c1ae3626b3	true	GC.config.is_a?(Hash)
 356bbf9786b1d2f6d8025e7e3cda3118	[4, [0, 104, 0, 105], [104, 233], "Encoding::UndefinedConversionError"]	path = "/tmp/monoruby_test_iowt_#{Process.pid}_#{rand(100000)}"\n   
 35768788c2eb049dca56e52a4a8fcc7e	["str", 12, 1.5]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
+35775e13c022c60a0c23b8a5d98d75a1	[20, :done]	a = "/tmp/monoruby_forkrace_parent"\n        b = "/tmp/monoruby_forkrace
 3578263ee9b00b995172d8097fe872a6	["Windows-31J", true, "US-ASCII", "Windows-31J"]	[ /foo/ensuensuens.encoding.to_s,\n                /foo/ensuensuens == /foo/s,\n  
 3586b2a0d44e304e2cc0c8333c54cc78	S	class S\n              def f; end\n            end\n            class 
 35893713489f04b55c3edbf76271232f	true	GC.stat.is_a?(Hash)
