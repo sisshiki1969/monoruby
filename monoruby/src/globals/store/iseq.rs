@@ -744,23 +744,62 @@ impl ISeqInfo {
     }
 
     ///
+    /// The `ensure` a non-local exit (`break` / non-local `return`, and the
+    /// `Throw` family) must run when it leaves a frame stopped at *pc*:
+    /// the **innermost** covering entry that *has* one.
+    ///
+    /// Not `get_exception_dest`'s entry. That returns the innermost covering
+    /// entry whatever it is, so a nested rescue-only region hid an outer
+    /// `ensure` from the unwind and the body was silently skipped:
+    ///
+    /// ```ruby
+    /// [1].each do
+    ///   begin
+    ///     begin
+    ///       return 1          # or `break`
+    ///     rescue TypeError    # never matches — but it is the innermost entry
+    ///     end
+    ///   ensure
+    ///     puts "skipped"      # CRuby runs this
+    ///   end
+    /// end
+    /// ```
+    ///
+    /// Running the innermost *ensure-bearing* region is enough to chain the
+    /// rest: its `EnsureEnd` re-delivers the exit from a pc outside that
+    /// region, where this lookup finds the next one out. The rescue-only
+    /// entries in between need nothing — a `rescue` does not intercept a
+    /// non-local exit — beyond the `$!` restore
+    /// ([`Self::errinfo_restore_slots`]), which is keyed on the rescue
+    /// *clause* spans and so covers them all independently.
+    ///
+    pub(crate) fn covering_ensure(&self, pc: BcIndex) -> Option<BcIndex> {
+        self.exception_map
+            .iter()
+            .filter(|entry| entry.range.contains(&pc))
+            .find_map(|entry| entry.ensure_pc)
+    }
+
+    ///
     /// The `ensure` destination for a JIT-spliced non-local exit at *pc*
-    /// (issue #1185): `Some(ensure_pc)` iff **exactly one** exception-table
-    /// entry covers *pc* and it has an `ensure`. More than one covering
-    /// entry means nested protected regions — a spliced exit would have to
-    /// chain through every `ensure`, which the stage-1 splice refuses (the
-    /// generic unwind handles it).
+    /// (issue #1185): `Some(ensure_pc)` iff exactly **one** covering
+    /// exception-table entry has an `ensure`. Rescue-only entries may
+    /// nest around it freely — they contribute no unwind work — but two
+    /// ensure-bearing regions would need the exit chained through both
+    /// bodies, which the splice does not do (the generic unwind handles
+    /// it).
     ///
     pub(crate) fn single_covering_ensure(&self, pc: BcIndex) -> Option<BcIndex> {
         let mut covering = self
             .exception_map
             .iter()
-            .filter(|entry| entry.range.contains(&pc));
+            .filter(|entry| entry.range.contains(&pc))
+            .filter_map(|entry| entry.ensure_pc);
         let first = covering.next()?;
         if covering.next().is_some() {
             return None;
         }
-        first.ensure_pc
+        Some(first)
     }
 
     ///
@@ -796,6 +835,22 @@ impl ISeqInfo {
             rescue_range,
             errinfo_slot,
         ));
+    }
+
+    ///
+    /// Whether a non-local exit leaving a frame stopped at *pc* needs the
+    /// generic (`handle_error`) unwind rather than the JIT's specialized
+    /// teardown, which is a pure machine-level frame pop.
+    ///
+    /// Two things only the generic unwind does: run an `ensure` the exit
+    /// crosses, and restore `$!` when the frame stopped inside a `rescue`
+    /// clause. A covering region that is neither — a plain
+    /// `begin`..`rescue` the exit merely passes through — asks for
+    /// nothing, because a `rescue` does not intercept a non-local exit
+    /// (#1185).
+    ///
+    pub(crate) fn nonlocal_exit_needs_vm_unwind(&self, pc: BcIndex) -> bool {
+        self.covering_ensure(pc).is_some() || !self.errinfo_restore_slots(pc).is_empty()
     }
 
     /// `$!` save slots of every rescue-clause span covering *pc*,

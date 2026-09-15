@@ -1928,18 +1928,30 @@ impl<'a> JitContext<'a> {
     // ===== Unboxed-locals speculation (doc/chain_deopt.md §5 steps 4–5) =====
 
 
+    ///
+    /// Whether any *suspended* frame of `[begin..end)` would need the
+    /// generic unwind at its in-progress call site — an `ensure` to run, or
+    /// a `$!` restore owed because it stopped inside a `rescue` clause. The
+    /// specialized teardown is a pure machine-level frame pop and does
+    /// neither, so either one forces the whole exit onto the generic path.
+    ///
+    /// It used to be *any* covering exception-table entry. A plain
+    /// `begin`..`rescue` the exit merely passes through is not one: a
+    /// `rescue` does not intercept a non-local exit, so nothing of that
+    /// region runs on the way out (#1185).
+    ///
     fn check_exception_handler(&self, begin: usize, end: usize) -> bool {
         self.stack_frame[begin..end].iter().any(|f| {
-            let iseq_id = f.iseq_id();
-            let callsite = f.callid.unwrap();
-            let pc = self.store[callsite].bc_pos;
-            self.store[iseq_id].get_exception_dest(pc).is_some()
+            let pc = self.store[f.callid.unwrap()].bc_pos;
+            self.store[f.iseq_id()].nonlocal_exit_needs_vm_unwind(pc)
         })
     }
 
     ///
-    /// Whether the *current* frame's instruction at `bc_pos` is covered by
-    /// an entry of its iseq's exception table.
+    /// Whether the *current* frame's instruction at `bc_pos` needs the
+    /// generic unwind: an `ensure` of its own iseq covers it, or it sits
+    /// inside a `rescue` clause whose `$!` save must be restored on the way
+    /// out.
     ///
     /// The companion to [`Self::check_exception_handler`], which covers only
     /// the chain's *suspended* frames (each at its in-progress call site) —
@@ -1948,11 +1960,15 @@ impl<'a> JitContext<'a> {
     /// `begin`..`ensure` region asks this before choosing the specialized
     /// teardown: that teardown is a pure machine-level frame pop, and only
     /// the generic path's `handle_error` unwind runs the `ensure` bodies
-    /// (and the `$!` restore on leaving a rescue clause). Conservative like
-    /// its companion: any table entry forces the generic path (#1179).
+    /// (#1179).
+    ///
+    /// Both checks used to refuse on *any* covering table entry. A region
+    /// the exit merely passes through is not a reason to: a `rescue` does
+    /// not intercept a non-local exit, so nothing of it runs on the way out
+    /// (#1185).
     ///
     pub(super) fn in_protected_region(&self, bc_pos: BcIndex) -> bool {
-        self.iseq().get_exception_dest(bc_pos).is_some()
+        self.iseq().nonlocal_exit_needs_vm_unwind(bc_pos)
     }
 
     ///
@@ -1995,6 +2011,13 @@ impl<'a> JitContext<'a> {
             SplicedExitKind::MethodReturn => self.method_caller_specialized_ids()?,
         };
         let iseq = self.iseq();
+        // The exit's own frame may owe a `$!` restore too (it stopped
+        // inside a `rescue` clause). `handle_error` does that before it
+        // enters the `ensure` body; the splice has nowhere to emit it, so
+        // it keeps the generic unwind.
+        if !iseq.errinfo_restore_slots(bc_pos).is_empty() {
+            return None;
+        }
         // Exactly one covering region, and it has an `ensure`.
         let ensure_pc = iseq.single_covering_ensure(bc_pos)?;
         // The shared `ensure` copy practically always heads a basic block

@@ -565,6 +565,7 @@
 2772497c43d33acdc7bca38b5ecb5e24	["Thread#backtrace_locations", "Object#tbl_probe", false, [true, "Thread::Backtrace::Location"], true, "no block given"]	r = []\n            def tbl_probe\n              locs = Thread.curren
 2774b5033b68bbb515f44f151dde4aee	[true, true, true]	def pa; end\n            public\n            def pb; end\n            
 277a36e61a4858f3a5504efad927d367	99	module M; class N; CONST = 99; end; end\n            \nObject.const_g
+278ad63aa49d3cb02d291d6dc2ac5304	[9, :none, "nil"]	def m(a)\n          begin\n            a.each { |x| return x * 3 if x > 2
 27b801313ba7d0170407403d3ed2ed9a	[7, "n=7"]	class Built < StandardError\n              def initialize(n); super(
 27bbd9728c02599e57c39a078921ec2f	["X", "X"]	$/ = "X"; r = [$/, $-0]; $/ = "\\n"; r
 27e09cfb8d3e196da639bfe49a480262	"----hi----"	class Foo; def to_str; "-"; end; end\n            "hi".center(10, Fo
@@ -658,6 +659,7 @@
 2d87641e6927b0cdab85cb7629880462	:OVERRIDDEN	class Float; def /(o); :OVERRIDDEN; end; end; 3.0 / 4.0
 2da8a7a85c40c42e4327d1fdd2068e6c	[2020, 1, 2, 3, 4, 5, true]	t = Time.utc(2020, 1, 2, 3, 4, 5)\n            r = Marshal.load(Mars
 2dab2d60b1e963199abbf4edc69b7b17	["made:k", 3, nil, 3]	h = Hash.new { |hash, key| "made:#{key}" }\n            v = Hash.new
+2db4d01f98f00950e6e1a12fb9ef0acf	[21, "nil"]	def inner(a)\n          begin\n            a.each { |x| yield x }\n       
 2dd04b99ea4c74004cb7f6ebf42c571c	"ASCII-8BIT"	Regexp.new('([\\x00-\\xFF])', Regexp::IGNORECASE | Regexp::NOENCODING).encoding.to
 2de87dc95cc7a1a9c4edb24ea1657ff8	:nonpositive	begin; SizedQueue.new(0); rescue ArgumentError; :nonpositive; end\n 
 2e1334cbf1ce1ad1f0ead6825d8ea907	[nil, true, true, true, "", "x"]	require "io/wait"\n            r, w = IO.pipe\n            res = []\n 
@@ -783,6 +785,7 @@
 37098ec530fdee99de199ec187ef4aff	["Array", "Array"]	res = nil\n            watcher = Thread.new do\n              res = T
 370a61883bde042b4dd2b533f9826e7d	[1, 15]	module M4; C = 10; end\n        x = 0\n        (x += 1; M4)::C += 5\n     
 3713f9ff76a4ac253e9a68abe86f9490	["NameError: some_undefined_bare_name", "NoMethodError", "NoMethodError", "NameError: _9999", "mm:completely_undefined", "NoMethodError"]	res = []\n        check = proc do |blk|\n          begin\n            blk.
+373a9be9d0ea831e92a58619fc3f13c7	[30, [1, 2, 3]]	$log = []\n        def m(a)\n          a.each do |x|\n            begin\n  
 373dce0647a3563f6f8d43e85dae4894	["B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 7|[]|8"]	class A\n          def m(a, *r, z) = "A #{a}|#{r.inspect}|#{z}"\n        
 3741f01e297724922a35197b47bec177	42	class A\n          def f\n            42\n          end\n        end\n      
 374384aa580f716ec8ced15bccf04ef2	[200, "UTF-8", true, true, "abcdeabcde", "abcde"]	def app_ascii(s, n)\n          i = 0\n          while i < n\n            s
@@ -1139,6 +1142,7 @@
 4edf4d45c190ed9014d06dda3424cfb3	[200, true]	parents = Array.new(200) { [] }\n            5.times { GC.start }\n  
 4ef654f58c91b7b93cc8ea7d3a1d2da8	[false, false, false, true, false]	class MEqStrTrue; def to_str; "x"; end; def ==(o); true; end; end\n 
 4f1c2d7762a92ed3167ebc5a07dca6fc	520.0	def w3(f)\n          30.times do |i|\n            return f * i if i > 25\n
+4f25590928a9fdd7675c4622bca8951a	[[3, ArgumentError], "nil"]	def m(a)\n          begin\n            raise ArgumentError, "boom"\n      
 4f5db8d804d9f380dc11c2dc2db028fb	[[[3, 0], [3, 1]], "x", 0]	class FDPoint\n          def initialize(x, y); @x = x; @y = y; end\n     
 4f901b278fdd410f8765051d2109cb68	[[:a, 100], [:b, 100], [:c, 100], [:d, 100], [:e, 100], [:f, 100]]	class Oa; def tag = :a; end\n            class Ob; def tag = :b; end
 4f93aca4bf1af1b5c4055cb5ae6b15f5	[nil, false]	t = Thread.new { sleep }\n            r = t.join(0.05)\n            t
@@ -1276,6 +1280,7 @@
 5a5d7ffbe02389d8d6a83efb9a7937c6	[0, 2, 3, 3, true, 4]	File.open("Cargo.toml") do |f|\n              a = f.lineno\n         
 5a735dfa86fec86676f6e6204efc5ceb	"UTF-8"	"abc".reverse.encoding.to_s
 5a8e5757dd64b417433416b14e098c89	-2	class C; define_method(:m) { |a, *| a }; end\n            C.new.meth
+5a9ec9964fa563c4bfa0816e3f3aac3b	[3, [:inner, :outer, :inner, :outer, :inner, :outer]]	$log = []\n        def m(a)\n          a.each do |x|\n            begin\n  
 5aa2446f1aac6500e421882c7a6c2c76	[4633.776677988511, 1.5, 5691.4790284806795, 3.5]	def multi(n)\n          a = 0.5\n          b = 1.5\n          c = 2.5\n    
 5ab18a8afa5b4ef499cdca6770a28a63	["MyStr", "hi"]	class MyStr < String; end\n            r = Marshal.load(Marshal.dump
 5ab18cd50f5e88dfaffed040fa6b1cd0	42	class C; def to_int; "1"; end; def to_i; 42; end; end; o = C.new\nInteger(o)
@@ -1768,6 +1773,7 @@
 7e0f818aaa84a1e84c3ee62775e733f1	[[ArgumentError, "Offset can't be negative!"], [ArgumentError, "Offset can't be negative!"], [TypeError, "not an Integer"], [TypeError, "not an Integer"], [TypeError, "not an Integer"], [IO::Buffer::AccessError, "Buffer is not writable!"], [TypeError, "no implicit conversion of String into Integer"], [TypeError, "no implicit conversion to float from string"], [], [ArgumentError, "The given offset is bigger than the buffer size!"], [], 3, [ArgumentError, "Type extends beyond end of buffer! (offset=6 > size=6)"], [ArgumentError, "Offset can't be negative!"], [TypeError, "not an Integer"], [ArgumentError, "Count can't be negative!"], [ArgumentError, "Count can't be negative!"], [true, false, false, 64], [0, true], [3, "bcd", true, false], [false, 1, "Xrozen"], :no_raise, :no_raise, ["xyz", "Ayz"], [true, true, true, true], [TypeError, "wrong argument type String (expected IO::Buffer)"], [ArgumentError, "negative string size (or size too big)"], [TypeError, "no implicit conversion of String into Integer"], [[ArgumentError, "Type extends beyond end of buffer! (offset=0 > size=0)"], :no_raise, 0]]	r = []\n            er = ->(&blk) { begin; blk.call; :no_raise; resc
 7e1690daa5a419c7c3840bcdd22ff153	["string_path"]	def boom; raise "no"; end\n            def test; [1].map { begin; bo
 7e1ed6afd9824cec85287b40fc6d7254	[600, 1, 256, 257, 600]	n = 1; a = [n + 0, n + 1, n + 2, n + 3, n + 4, n + 5, n + 6, n + 7, n + 8, n + 9
+7e20a1aba5210fed226c848b716041e6	[[6, ArgumentError], "nil"]	def m(a)\n          begin\n            raise ArgumentError, "u"\n         
 7e375b6e36df88ed1b40fe29c199fe50	[1, true]	r, w = IO.pipe\n            w.write("hi")\n            a = r.wait(IO:
 7e414128a427ed5dd5b917799233dfae	[true, true, true, true, [], "ARGF", "ARGF", true, true, true]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
 7e4559b70c502c86877961c7b64752d8	nil	a = "abc".dup.force_encoding("UTF-8")\n              b = "abc".dup
@@ -2554,6 +2560,7 @@ b52b7ae0ebcd04b048eece7e69745703	nil	Struct.new(:a, :b).keyword_init?
 b5364021df82a5d981ffb0442dee337f	["global-variable", "global-variable", "global-variable", "global-variable"]	"abc" =~ /(b)/\n            [defined?($&), defined?($'), defined?($`
 b5723530913b7d276ae3a021dcd95908	["a", "b", "c"]	class C; def to_str; ","; end; end; o = C.new\na = []; "a,b,c".split(o) {|p| a <<
 b57826ceb9ae42340cd8925b6d77b11c	["THX1138", true, true]	md = /(.)(\\d+)/.match("THX1138"); [md.string, md.string.frozen?, md.string.equal
+b5b2cbe2b06f85d2a8cd77ee74d22c72	[3, [1, 2, 3]]	$log = []\n        def m(a)\n          a.each do |x|\n            begin\n  
 b5be46d949f1eea1ccbb975b82d2b2eb	[nil, nil]	r, _w = IO.pipe\n            [r.wait(IO::READABLE, 0), r.wait_readab
 b5bfc59cf1f27ffbdc15d96514f4adfa	"unknown keyword: :system"	M = Data.define(:amount, :unit)\nbegin; M.new(amount: 1, unit: "m", system: "x");
 b5e1a6c63376ab03776669f38829f3e6	[false, false, false, false, false]	a = proc{ :foo }; b = proc{ :foo }\n               [a == b, (->(){:x}) == (->(){:
@@ -2653,6 +2660,7 @@ bbf39b957f63dc57cf6be6b238e3322a	"HELLO world"	s = "hello world"; s.bytesplice(0
 bbf88be1f5615be8cbe5cfdbb37cd357	[23025.0, 152.0, 300]	$n = 0\n        def g\n          a = 0.0; c = 2.0\n          i = 0\n       
 bc0ccc0a16c986d29598ed69b9038ff8	[false, true, true]	h = {}\n        before = h.compare_by_identity?\n        ret = h.compare_
 bc2025afe3d4e746f87d06a3bac3e3db	[[]]	r = []; Enumerator.new { |y| y.yield }.each { |*a| r << a }; r
+bc2b1ee1de6f3682128abc80b07feddc	[[3, ArgumentError], "nil"]	def m(a)\n          a.each do |x|\n            begin\n              raise 
 bc2e5f3b4a16256b7dc6b55712d5a785	nil	Encoding.default_internal
 bc3dddbacac3d7f8c64e3bc43ea8697d	[true, true]	class S\n        end\n        class C < S\n        end\n        c = C.new\n 
 bc4a7a2f49371fc147939e3a5a54bd45	[nil, true]	r, w = IO.pipe\n            pid = fork { r.close; Signal.trap("TERM"
@@ -2666,6 +2674,7 @@ bd22533535800c77fe48058df3d9f037	"1"	def foo\n          eval("a = 1", $b)\n     
 bd24763614b3434c4b3cad2ef0cf23cd	"1234"	from_out, from_in = IO.pipe\n            to_out, to_in = IO.pipe\n   
 bd36bb84fd6bb7a503446ba088e410d5	100	X = raise("err") rescue 100\n            X\n        
 bd3f9345b51422969e152af15f9cd73c	[10, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.val
+bd52273e9a7c488f92450c115364950c	[[3, ArgumentError], "nil"]	def m(a)\n          begin\n            raise "outer"\n          rescue Run
 bd5bcb876056c6cb8592a7ad4872c350	Array	class C < Array; end\nC[1,2,2].uniq.class
 bd72323eccae40b197ebea1283639273	[nil, 42]	a = []\n        a << $std\n        $std = 42\n        a << $std\n        $s
 bd7a26e1f462e26d42e9543689bc3430	3862152.611328125	def calc(n, vals)\n          a = 0.0; b = 1.0; c = 2.0; d = 3.0\n        
@@ -2756,6 +2765,7 @@ c2223c03773eac42c8717805d9010dc8	[true, 15]	s = Random.new.bytes(15)\n        [s
 c23c0da3e526eae19f62c4292b4742ae	[1, 2, 3, 4]	(1..10).take_while { |i| i < 5 }
 c246464bb5079a22d329f9492e66ad21	2	"hello".byteindex("ll")
 c24e889e6534a23037c752be10f59b59	[false, "This", nil, " ", nil, "is", 1, "an", 3, " example", 10, " example str", 22, "str", "This is an example ", "ing", 2, 1, "g", 24, "g", true, ""]	require "strscan"\n        s = StringScanner.new("This is an example str
+c2528d574fb48c1f52a49fb0e4226ee9	[3, [1, 2, 3]]	def m(a)\n          log = []\n          begin\n            a.each do |x|\n 
 c257bb9e864287f47978774c855dc69c	"UTF-8"	def f(e); e.name; end; f(__ENCODING__)
 c261d781b9877973a753350ce81c1a13	[9, true, 9]	it = 5; binding.local_variable_set(:it, 9); [binding.local_variable_get(:it), bi
 c28bae0a3135ba3b9c4c6679a486ac05	[4, 8, 67, 58, 9, 72, 97, 115, 104, 123, 6, 58, 6, 97, 105, 6]	Marshal.dump({a: 1}.compare_by_identity).bytes
@@ -2798,6 +2808,7 @@ c5a28c5f978023ef4ce7e9a6bcff4faf	[ArgumentError, "comparison of String with 0 fa
 c5a9ac24fee6ccfc26954a34f012d3d1	"UTF-8"	"\\xFF#{1}".encoding.to_s
 c5f5ea4d7ccb33511960c242704f06f0	[[195], [169], 3, [195, 169], [195]]	s = "\\303\\251\\303".dup.force_encoding(Encoding::Windows_31J)\n               m = 
 c60883d6df2480fbe9ec2ae4e169130c	[200, 300, 250, 60, 200, 300, 250, 60]	class S\n            def f(x, y, a:10, b:20)\n                $res << x\n
+c6102eb378f052a17c45ba81a08239e7	[3, [:ens]]	$log = []\n        def m(a)\n          catch(:done) do\n            begin\n
 c617cc39117c830a63eb6334242e1a40	[2, "aa", 2, "cc", 2, "bb"]	require "socket"\n            srv = UDPSocket.new\n            srv.bi
 c622030023f401e5576556f338a06cf1	:typeerr	class Bad\n              def to_int; "not an int"; end\n            e
 c62977ddda7102f63ccbfd212390f727	277.5	acc = 0.0\n        i = 0\n        while i < 30\n          acc += i.to_f * 

@@ -17,7 +17,8 @@ Primary sources:
   deferral.
 - `../monoruby/src/codegen/jit_module.rs` — `handle_error` (the unwinder).
 - `../monoruby/src/globals/store/iseq.rs` — the per-method exception table
-  (`get_exception_dest`, `errinfo_restore_slots`).
+  (`get_exception_dest`, `covering_ensure`, `errinfo_restore_slots`,
+  `nonlocal_exit_needs_vm_unwind`).
 - `../monoruby/src/builtins/exception.rs`, `../monoruby/builtins/startup.rb`
   — the Ruby-visible `Exception` API (`#backtrace`, `#backtrace_locations`,
   `#set_backtrace`, `#cause`, …).
@@ -156,6 +157,16 @@ current frame's `FuncKind`:
    region-entry save on the way out (`restore_errinfo_on_exit`).
 3. **Throw** (`jit_module.rs:157`) — run any intervening `ensure`, else keep
    propagating (a matching `Kernel#catch` frame consumes it).
+
+   These three non-local-exit arms ask `covering_ensure(pc)`, not
+   `get_exception_dest(pc)`: the `ensure` to run is the innermost covering
+   region that *has* one, which is not always the innermost covering region.
+   Nest a rescue-only `begin` inside an `ensure` region and the tightest
+   entry carries no `ensure`, so asking `get_exception_dest` concluded there
+   was none and skipped the body outright (#1185). Running the innermost
+   ensure-bearing region chains the rest by itself — its `EnsureEnd`
+   re-delivers the exit from a pc outside that region, where the next one out
+   is now innermost.
 4. **BlockBreak** (`jit_module.rs:173`) — at the block's defining frame, if the
    in-progress call site is the one that received this block, resume it with
    the break value (CRuby's `BREAK` catch table); otherwise degrade to
@@ -183,7 +194,9 @@ and unwinds. Builtins have no Ruby-level `rescue`.
 
 The exception table itself is built by bytecodegen and stored per method
 (`iseq.rs:504`). Entries nest innermost-first, so `get_exception_dest` returns
-the tightest enclosing region.
+the tightest enclosing region — right for a raise, which the tightest `rescue`
+catches, but not for a non-local exit, which wants the tightest `ensure` (see
+arm 2 above).
 
 ### CRuby contrast
 
@@ -205,6 +218,13 @@ control can leave a frame while it is *suspended inside a rescue clause* (a
 saved into a bytecode slot, and `restore_errinfo_on_exit`
 (`jit_module.rs:72`) replays those saves (outermost wins) when such a frame is
 exited. `errinfo_restore_slots` (`iseq.rs:543`) enumerates the relevant slots.
+
+Only the generic unwind replays them, so a frame owing one cannot take the
+JIT's specialized teardown — `ISeqInfo::nonlocal_exit_needs_vm_unwind` pairs
+that condition with `covering_ensure` as the two reasons a non-local exit has
+to go through `handle_error` at all. A protected region that is neither (a
+plain `begin`..`rescue` the exit merely passes through) contributes nothing: a
+`rescue` does not intercept a non-local exit.
 
 ---
 
