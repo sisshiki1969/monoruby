@@ -79,6 +79,18 @@ fn allocate_undefined(
     ))
 }
 
+/// A capture-name argument (Symbol or String) as the string the regexp's
+/// group names are compared against. A String is read as it is: it used to
+/// be interned into a symbol first, which for a name the regexp does not
+/// have meant one more symbol for every wrong name ever asked about.
+fn group_name_of(arg: Value) -> Option<String> {
+    if let Some(sym) = arg.try_symbol() {
+        return Some(sym.get_name());
+    }
+    let inner = arg.is_rstring_inner()?;
+    Some(String::from_utf8_lossy(inner.as_bytes()).into_owned())
+}
+
 /// Resolve a `begin`/`end`/`offset`/`bytebegin`/`byteend`/`byteoffset`
 /// argument to a non-negative capture index. Accepts Integer / String /
 /// Symbol; for the latter two, looks up the named capture and returns
@@ -91,8 +103,7 @@ fn resolve_capture_index(
     m: &crate::value::rvalue::MatchDataInner,
     arg: Value,
 ) -> Result<usize> {
-    if let Some(name) = arg.try_symbol_or_string() {
-        let group_name = name.to_string();
+    if let Some(group_name) = group_name_of(arg) {
         if let Some(i) = m
             .regexp()
             .and_then(|r| r.capture_names().ok())
@@ -442,8 +453,7 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             continue;
         }
         // Symbol/String: named-capture lookup.
-        if let Some(name) = a.try_symbol_or_string() {
-            let group_name = name.to_string();
+        if let Some(group_name) = group_name_of(*a) {
             let i = m
                 .regexp()
                 .and_then(|r| r.capture_names().ok())
@@ -537,10 +547,10 @@ fn match_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         }
         Ok(m.at_value(idx)
             .unwrap_or_default())
-    } else if let Some(sym) = arg.try_symbol_or_string() {
+    } else if let Some(sym) = group_name_of(arg) {
         if let Some(i) = m
             .regexp()
-            .map(|r| r.get_group_members(&format!("{sym}")))
+            .map(|r| r.get_group_members(&sym))
             .and_then(|g| g.last().copied())
         {
             Ok(m.at_value(i as usize)
@@ -581,10 +591,10 @@ fn match_length(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
             if v < 0 { return Ok(Value::nil()); }
             v as usize
         }
-    } else if let Some(sym) = arg.try_symbol_or_string() {
+    } else if let Some(sym) = group_name_of(arg) {
         if let Some(i) = m
             .regexp()
-            .map(|r| r.get_group_members(&format!("{sym}")))
+            .map(|r| r.get_group_members(&sym))
             .and_then(|g| g.last().copied())
         {
             i as usize
@@ -690,10 +700,10 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             None => return Ok(Value::nil()),
         };
         Ok(slice_match_data(&m, start, slice_len))
-    } else if let Some(sym) = lfp.arg(0).try_symbol_or_string() {
+    } else if let Some(sym) = group_name_of(lfp.arg(0)) {
         let members = m
             .regexp()
-            .map(|r| r.get_group_members(&format!("{sym}")))
+            .map(|r| r.get_group_members(&sym))
             .unwrap_or_default();
         if members.is_empty() {
             return Err(MonorubyErr::indexerr(format!(

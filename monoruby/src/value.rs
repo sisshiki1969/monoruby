@@ -2354,6 +2354,26 @@ impl Value {
     }
 
     ///
+    /// [`try_symbol_or_string`] for a query that must not intern: `Some(Some)`
+    /// for a Symbol or a String naming an identifier that already exists,
+    /// `Some(None)` for a String that names nothing yet — which such a query
+    /// answers as "absent" — and `None` for anything else.
+    ///
+    pub(crate) fn try_symbol_or_existing_string(&self) -> Option<Option<IdentId>> {
+        if let Some(sym) = self.try_symbol() {
+            return Some(Some(sym));
+        }
+        if let Some(s) = self.is_str() {
+            return Some(IdentId::try_get_id(s));
+        }
+        let inner = self.is_rstring_inner()?;
+        Some(IdentId::try_get_id_from_bytes(
+            inner.as_bytes(),
+            inner.encoding(),
+        ))
+    }
+
+    ///
     /// Check if `self` is a flonum.
     ///
     fn is_flonum(&self) -> bool {
@@ -2820,6 +2840,16 @@ impl Value {
 
     pub(crate) fn expect_symbol_or_string(&self, store: &Store) -> Result<IdentId> {
         self.try_symbol_or_string()
+            .ok_or_else(|| MonorubyErr::is_not_symbol_nor_string(store, *self))
+    }
+
+    /// [`expect_symbol_or_string`] that looks up instead of interning; see
+    /// [`try_symbol_or_existing_string`].
+    pub(crate) fn expect_symbol_or_existing_string(
+        &self,
+        store: &Store,
+    ) -> Result<Option<IdentId>> {
+        self.try_symbol_or_existing_string()
             .ok_or_else(|| MonorubyErr::is_not_symbol_nor_string(store, *self))
     }
 
