@@ -444,6 +444,12 @@ poll(2) で readiness を待てるもの(ソケット等)はスケジューラ�
     カーネルでブロックしないのでインライン実行。
   - **FIFO** に対するブロッキング `open(2)`(相手が開くまでブロックする)。事前に
     `stat` して FIFO のときだけオフロードし、それ以外の open はインライン。
+  - `fcntl(2)` の**待つコマンド**(`NativeOp::Fcntl`): `F_SETLKW`(および Linux の
+    `F_OFD_SETLKW`)は record lock が空くまでカーネルで待つ。`IO#fcntl` に String
+    (packed `struct flock`)を渡す形だけが対象で、待たないコマンドは
+    インライン実行のまま(`F_GETLK` は文字列バッファに書き戻すため、なおさら
+    インラインでなければならない)。待つコマンドは構造体を読むだけなので、
+    ジョブは自分のコピーを持ち、結果を書き戻す必要がない。
   - **blocking 指定された FFI 呼び出し**(`NativeOp::Ffi`)。上 2 つと違い走るのは
     Ruby プログラムが選んだ任意の C なので、「生データのみ」の規律は fiddle 側で
     担保する: `FfiWorkerCall` は不死の descriptor のアドレスとマーシャル済み C 引数
@@ -452,12 +458,19 @@ poll(2) で readiness を待てるもの(ソケット等)はスケジューラ�
     - **opt-in**: `Fiddle.___prepare` の flags(`2 = BLOCKING`)で宣言する。
       FFI では `attach_function ..., blocking: true`、sqlite3 ブリッジでは
       `attach_function ..., blocking: true`。
-    - **本当にブロックする関数だけに付ける**。オフロード往復は idle 時で 60〜110µs
-      (thread spawn + park/wake)。CPU 密な green thread がいると再開はタイムスライス
-      1 回分待たされる。**行単位で呼ばれる関数に付けてはならない**
-      (`sqlite3_step` を blocking にすると 2000 行の SELECT が ~2ms → ~200ms になる)。
-- **プールではない**: `submit` は操作ごとに `std::thread::spawn` で**専用の短命 OS
-  スレッドを 1 本**生やし、syscall が返ったら終了する(ワーカー数・キュー・再利用なし)。
+    - **本当にブロックする関数だけに付ける**。オフロード往復はワーカーが温まっていて
+      40µs 前後(condvar 受け渡し + park/wake)。CPU 密な green thread がいると再開は
+      タイムスライス 1 回分待たされる。**行単位で呼ばれる関数に付けてはならない**
+      (`sqlite3_step` を blocking にすると 2000 行の SELECT が ~2ms → ~80ms になる)。
+- **ワーカープール**: `submit` はジョブをキューに積み、**park 中のワーカーがいれば
+  それに渡す**(往復は thread spawn ではなく condvar の受け渡しになる)。
+  ワーカーが全員塞がっているときだけ新しく生やす —— カーネルでブロック中の
+  ワーカーは何分も戻らないことがあり、その後ろにキューイングしたら §9 が避けたい
+  ストールそのものになるため。ワーカーは 10 秒 idle で終了する。
+- **fork(2) の子ではワーカーは生き残らない**。子は `idle` カウントと親のキューだけを
+  受け継ぐので、`Process._fork` / `Process.daemon` の子側で
+  `native_pool::reset_after_fork` がそれを捨てる(捨てないと、子の最初の `submit` が
+  「idle ワーカーが拾う」と信じて永久に待つ)。
 - **ワーカーは Ruby ヒープにも VM のスレッドローカルにも触れない**。`NativeOp` は生 fd /
   フラグ / `CString` パスだけを運ぶ(ヒープ参照を持たない)。共有状態はプロセスグローバル:
   `results`(`Mutex<HashMap<ticket, Completion{ret, errno}>>`)、`orphans`、`NEXT_ID`。
@@ -477,23 +490,25 @@ poll(2) で readiness を待てるもの(ソケット等)はスケジューラ�
 ## 10. 既知の制限と今後
 
 1. **シグナルは「ポーリングしたスレッド」で変換される**(CRuby は main に配送)。
-2. `Thread.new` のサブクラスは Ruby の `initialize` オーバーライドを実行しない。
+2. (解消済み)`Thread` のサブクラスは Ruby の `initialize` オーバーライドを実行する
+   —— `class MyThread < Thread; def initialize(*a); ...; super; end; end` は CRuby と
+   一致する。
 3. `Thread#priority` は保存のみ(スケジューリングに影響しない)。`native_thread_id` は
    実 tid ではなくオブジェクト単位トークン。`ThreadGroup` / `fork` との相互作用、
    `Thread.ignore_deadlock` の実効(検出器の停止)は未実装。
-4. ネイティブオフロード(§9)は flock / FIFO open / blocking 指定の FFI 呼び出しのみ。
-   `fcntl(F_SETLKW)` 等、他のカーネルブロッキング操作は未対応(将来 `NativeOp` を
-   増やす余地)。また `submit` が操作ごとに thread spawn する(プールではない)ため
-   往復が 60〜110µs かかり、頻繁に呼ばれる関数はオフロードできない。実例として
-   `sqlite3_step` は busy_timeout 待ちで長時間ブロックしうるが行単位で呼ばれるため
-   blocking にしておらず、その待ちは今も他の green thread を止める。真のワーカー
-   プール化がこの制約を外す前提になる。
+4. ネイティブオフロード(§9)の往復は、ワーカープール化後も 40µs 前後ある
+   (park/wake の往復そのもの)。`sqlite3_step` のように**行単位で呼ばれる**関数は
+   依然オフロードできず、busy_timeout 待ちは他の green thread を止める。これを
+   外すには往復を無くす方向(呼び出しをインラインで試し、ブロックしそうなときだけ
+   逃がす等)が要る。対象操作は flock / FIFO open / blocking 指定 FFI /
+   `fcntl` の待つコマンドで、まだ増やす余地はある。
 5. 真の並列化は別の話(Ractor 型の分離が現アーキテクチャ —
    OS スレッドごとの ALLOC / CODEGEN / SCHEDULER — と整合的)。
 
 (解決済み: `Thread.handle_interrupt` マスキング、mid-operation の IO ブロック(§7 の
 would-block エミュレーション)、タイムスライス・プリエンプション(§8)、
-カーネルブロッキング syscall のオフロード(§9)。)
+カーネルブロッキング syscall のオフロード(§9)、オフロードのワーカープール化と
+`fcntl(F_SETLKW)` 対応(§9)。)
 
 ## 11. テスト
 

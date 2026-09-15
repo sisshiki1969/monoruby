@@ -1159,6 +1159,7 @@
 5103d830753ac483d2d4c39e44bc03b5	[0, 0, nil]	["‌" =~ /[[:word:]]/, "‍" =~ /[[:word:]]/, "‌" =~ /\\w/]
 511247f2a3b645da0c49c9876a105a9e	[1.687070598505588, 300]	def call_block\n          yield\n        end\n        def w6\n          s =
 5125ae5b4839d2d086156969d67bcc50	ArgumentError	class String; def <=>(o); :OVERRIDDEN; end; end\n            begin\n 
+514fa64cc2ca2813856a14f1731f5c07	[0, 0, 0, 2, FrozenError]	require 'fcntl'\n        fmt = "s!s!l!l!i!"\n        path = "/tmp/monorub
 5153f5263b097f08fb57811bdbdc5aaa	[true, true, true, false, true, true, true, false, false, false, false]	class A\n          def method1; end\n          protected\n          def pr
 5174f3c6fa3195d1fbd047639e4a904d	[[true, {data: 42}], ["async", "ctx"], [[[true, ["both"]], [false, []]], true, "both", false]]	r = []\n            de = Class.new(StandardError) { attr_reader :dat
 51be01e0d292ac0d9c77567390f1d11f	["Bbar", "B[239, 191, 189]", "Bdbar", "Btbar", Encoding::UndefinedConversionError, [ArgumentError, "too big fallback string"], TypeError, Encoding::UndefinedConversionError]	(r=[]; r << "B�".encode(Encoding::US_ASCII, fallback: { "�" => "bar" }); r << "B
@@ -1259,6 +1260,7 @@
 59104be79a3c34af64f1252be7287e04	42	x = 1\n            binding.eval("x = 42")\n            x\n            
 591cc1df80c9acab4811bc6f380f4314	"<STDIN>"	$stdin.path
 5935b2a14b1389efa07807ca17f49618	true	f = File.open("Cargo.toml")\n            begin\n              f.flush
+596860b159ef241b182864379aa164bc	[:locked, true]	require 'fcntl'\n        fmt = "s!s!l!l!i!"\n        path = "/tmp/monorub
 5977ceb1393805e0581d80719dcdd920	["US-ASCII", "UTF-8", "US-ASCII"]	s = "ab,cd".dup.force_encoding("US-ASCII")\n              s.partit
 599a1aeb51d29b478a71e17f2ffd3eeb	"hi"	r, w = IO.pipe\n            stop = false\n            busy = Thread.n
 59a5cb7a0c17abeadcdd4fb2b0ab7b76	1	case 9\n        when 0,4,8\n          0\n        when 1,5,9\n          1\n  
@@ -2172,6 +2174,7 @@
 9c4ebeae14bfd545fcd9f97591a4f7ea	[42, true]	called = nil\n            Process.singleton_class.send(:alias_method
 9c8dba1032bde3183b8033406c275203	"FiberError"	t = Thread.new { Fiber.yield rescue $!.class.to_s }\n            t.v
 9caa03a6554f9f51a6930123fab2a973	0	Process.setpriority(Process::PRIO_PROCESS, 0, Process.getpriority(Process::PRIO_
+9caf922308b53f4f109f9e4810fe3065	true	a = "/tmp/monoruby_offload_fork_parent"\n        b = "/tmp/monoruby_offl
 9cb40e91c3bf1f1111516d74ff94afdb	[0, false]	acc = 0\n        f = 0.0\n        i = 0\n        while i < 30000\n         
 9cb8e00505ce4bf6a3d19ab5bc5bfa5f	["HELLO", "HELLO", nil]	s = "hello".dup\n              [s.upcase!, s, s.upcase!]\n         
 9cbc8483c184024824b4e71cd3ea679a	"UTF-8"	eval(%Q{# encoding: ascii-8bit\\nx = 7\\n"\\\\u3042\\#{x}".encoding.to_s})

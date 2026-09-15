@@ -2669,9 +2669,14 @@ fn io_fileno(
 /// ### IO#fcntl
 /// - fcntl(cmd, arg = 0) -> Integer
 ///
-/// Thin wrapper over fcntl(2). `arg` must be an Integer (the String
-/// forms some exotic commands take are not supported). Raises `IOError`
-/// on a closed stream and the matching `Errno::*` on syscall failure.
+/// Thin wrapper over fcntl(2). `arg` is an Integer, or a String holding
+/// the struct the command takes — a packed `struct flock` for the record
+/// locking commands, which the kernel reads, and writes back into for
+/// `F_GETLK`, as in CRuby.
+///
+/// `F_SETLKW` waits in the kernel for the lock, with no fd to poll, so
+/// it runs on a native worker while this green thread parks (see
+/// `native_pool`); every other command is immediate and runs inline.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fcntl.html]
 #[monoruby_builtin]
@@ -2679,9 +2684,44 @@ fn io_fcntl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let self_ = lfp.self_val();
     let fd = self_.as_io_inner().fileno()?;
     let cmd = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
-    let arg = match lfp.try_arg(1) {
-        Some(v) if !v.is_nil() => v.coerce_to_int_i64(vm, globals)?,
-        _ => 0,
+    let arg = lfp.try_arg(1).filter(|v| !v.is_nil());
+    if let Some(v) = arg
+        && let Some(mut s) = v.is_rstring()
+    {
+        if v.is_frozen() {
+            return Err(MonorubyErr::cant_modify_frozen(&globals.store, v));
+        }
+        let ret = if fcntl_waits(cmd) {
+            let comp = crate::native_pool::run_blocking(
+                vm,
+                globals,
+                crate::native_pool::NativeOp::Fcntl {
+                    fd,
+                    cmd,
+                    arg: s.as_bytes().to_vec(),
+                },
+            )?;
+            if comp.ret == -1 {
+                let err = std::io::Error::from_raw_os_error(comp.errno);
+                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fcntl"));
+            }
+            comp.ret as i32
+        } else {
+            // SAFETY: fcntl(2) with a pointer third argument, aimed at
+            // this String's own buffer — the command may write back into
+            // it (`F_GETLK`), which is what CRuby lets it do. Nothing
+            // re-enters Ruby while the borrow is live.
+            unsafe { libc::fcntl(fd, cmd, s.as_bytes_mut().as_mut_ptr()) }
+        };
+        if ret == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fcntl"));
+        }
+        return Ok(Value::integer(ret as i64));
+    }
+    let arg = match arg {
+        Some(v) => v.coerce_to_int_i64(vm, globals)?,
+        None => 0,
     };
     // SAFETY: fcntl(2) with an integer third argument; no memory is
     // passed, so there are no aliasing concerns.
@@ -2691,6 +2731,21 @@ fn io_fcntl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fcntl"));
     }
     Ok(Value::integer(ret as i64))
+}
+
+/// Whether `cmd` is an `fcntl(2)` command that waits in the kernel, and
+/// so must not run on the interpreter thread.
+fn fcntl_waits(cmd: i32) -> bool {
+    if cmd == libc::F_SETLKW {
+        return true;
+    }
+    // The open-file-description locks (Linux 3.15+) have the same
+    // blocking form; `libc` only exposes the constant on Linux.
+    #[cfg(target_os = "linux")]
+    if cmd == libc::F_OFD_SETLKW {
+        return true;
+    }
+    false
 }
 
 ///
