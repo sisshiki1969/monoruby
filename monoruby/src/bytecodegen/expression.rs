@@ -951,14 +951,31 @@ impl<'a> BytecodeGen<'a> {
                 if use_mode == UseMode2::Push {
                     self.push();
                 }
-                match self.retry_labels.last() {
-                    Some(&label) => {
-                        self.emit(BytecodeInst::Retry(label), loc);
-                    }
-                    None => {
-                        return Err(self.syntax_error("Invalid retry.", loc));
-                    }
+                let Some(&RetryTarget {
+                    dest,
+                    errinfo_save,
+                    ensure_depth,
+                }) = self.retry_labels.last()
+                else {
+                    return Err(self.syntax_error("Invalid retry.", loc));
                 };
+                // Re-entering the begin body leaves the rescue clause, so
+                // run the `ensure` bodies of the regions opened inside it
+                // (each seeing its own region's `$!`), then restore the
+                // retried region's entry save — exactly what completing
+                // the clause normally emits (#1357). The region's own
+                // `ensure` stays pending: `retry` does not leave it.
+                self.gen_loop_pending_ensures(ensure_depth)?;
+                if let Some(save) = errinfo_save {
+                    self.emit(
+                        BytecodeInst::StoreGvar {
+                            val: save,
+                            name: IdentId::get_id(crate::globals::ERRINFO_INTERNAL_GVAR),
+                        },
+                        Loc::default(),
+                    );
+                }
+                self.emit(BytecodeInst::Retry(dest), loc);
                 return Ok(());
             }
             NodeKind::Return(box val) => {

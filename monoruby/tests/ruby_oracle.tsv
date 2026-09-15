@@ -749,6 +749,7 @@
 347cffbb4c975e8f7aba48cffa253e3a	"a-b"	path = "/tmp/monoruby_test_io_open_#{Process.pid}_#{rand(100000)}"\n
 347ded99ca3c221cee5c3206c74cd8fe	true	dirs = %w[c C s S v n i I l L V N q Q j J e f F g E d D G]\n        s = 
 3491bb9ea3ef0d8e8dc6e9d966784850	[true, true, false]	klass = Class.new\n            Class.new do\n              klass.send
+34999ef83c7703639fe093334167a3b7	[[[1, 2, "nil"], [2, 2, "nil"]], "nil"]	def blk\n          out = [1, 2].map do |x|\n            k = 0\n           
 349e53ae6578322c234c26b4a09583dd	[0, "Item-12", "Item", "12", 5, "ITEM-7", [["Item", "12"], ["ITEM", "7"], ["thing", "003"]], "<Item:12>, <ITEM:7> and <thing:003>", "12=Item, ITEM-7 and thing-003", 9, 20, true, ["", "Item", "12", ", ", "ITEM", "7", " and ", "thing", "003"], "Item", 0, "Item-12", "Item", "12", 5, "dinge-003", [["Item", "12"], ["dinge", "003"]], "<Item:12>, ITÉM-7 und <dinge:003> — ok", "12=Item, ITÉM-7 und dinge-003 — ok", 20, 20, true, ["", "Item", "12", ", ITÉM-7 und ", "dinge", "003", " — ok"], "Item", 0, "Item-12", "Item", "12", 5, "ITEM-7", [["Item", "12"], ["ITEM", "7"], ["thing", "003"]], "<Item:12>, <ITEM:7> and <thing:003>", "12=Item, ITEM-7 and thing-003", 9, 20, true, ["", "Item", "12", ", ", "ITEM", "7", " and ", "thing", "003"], "Item"]	re = /\\b([a-z]+)-(\\d+)\\b/i\n        ascii = "Item-12, ITEM-7 and thing-0
 349f590d26b1d8c968d1a0e8cbacad45	"Hash"	(GC.compact if GC.respond_to?(:compact)).class.to_s
 34af1f2f62dae8cd51151425c5414771	"err"	def foo\n              begin\n                raise "err"\n           
@@ -950,6 +951,7 @@
 43ac301501bd4f9ceee646d818f6e415	[:next, :next, :nameerror]	a = Class.new\n            b = Class.new(a)\n            c = Class.ne
 43ccf9c44caf043039162c566a3cf9bd	[4, nil, 7]	a=1\n            x=0\n            b=while a<4 do\n                a=a+
 43cf8f6733d05eaa7ee0c56b3da5cbdf	7074.1	CONST = 5.7\n            sum = 0\n            for i in 0..19 do\n     
+43d6956f3222ff8b1f5171229e0bb84a	[["nil", "nil", "nil"], "nil"]	seen = []\n        j = 0\n        begin\n          j += 1\n          seen <
 4414dae807897b8e6f7a80f599a5a60d	[[false, 300], ["no", 1], [:weird, 300]]	class Weird\n              def ==(other) = (other == 7 ? (raise Argu
 441632d0adc7cf1139fe425ab23da30c	true	class Integer; alias __orig :<=; def <=(o); __orig(o); end; end; 3 <= 4
 44206b9628b17b33c675e72762330bd5	[true]	io = IO.popen("cat", "r+")\n            res = [io.sync]\n            
@@ -1122,6 +1124,7 @@
 4dc3c7705fa44c4b798281aa03f17a9d	[nil, 1, "ObjectSpace::WeakMap"]	kept = ObjectSpace::WeakMap.new\n        anchor = Object.new\n        kep
 4dc4d26946a9b8df8a8ab0edf49e3a8d	["constant", "constant", "constant", nil, nil, "constant"]	module CovM\n              CONST = 1\n              module Inner; DEE
 4dcb81b6869dcf441ba63e6d2c098346	[]	class S\n              def f; end\n            end\n            class 
+4dd5dee528c020148c21e64d9030085e	[2, "nil"]	n = 0\n        begin\n          n += 1\n          raise "b" if n < 2\n     
 4de1d98dbd401bf2cfb9c8d1c02844ba	[3, 3, true]	module Later; end\n        class Integer\n          prepend Later\n       
 4defe7bb5ad979e91a414effdfdd78fb	[true, false, true]	c = Class.new\n            c.class_variable_set(:@@x, 1)\n           
 4e054da7ff8f209d32d166db442d2dc4	"[\\"/\\", 0, true]"	r, w = IO.pipe\n            pid = fork do\n              r.close\n    
@@ -1803,6 +1806,7 @@
 7fe6acbcc38e6d331c6b562b26a7766b	true	"abc".force_encoding("ISO-8859-2").encoding == Encoding::ISO_8859_2
 7ff094dc5234c9caf5899a3d37c42266	[[:sa, 100], [:sb, 50]]	class Sa; def tag = :sa; end\n            class Sb; def tag = :sb; e
 7ff29e4f8d290ec73b7f9a83c58fdd4d	[ArgumentError, "ASCII incompatible encoding: UTF-16LE"]	(Regexp.union(Regexp.new("a".encode("UTF-16LE")), Regexp.new("b".encode("UTF-8")
+8007b2fd9713c3e7ce7f18d27edf41c5	[[[:before, "#<RuntimeError: y>"], [:ens, "#<RuntimeError: y>"], [:before, "#<RuntimeError: y>"], [:ens, "#<RuntimeError: y>"]], 3, "nil"]	log = []\n        m = 0\n        begin\n          m += 1\n          raise "
 802afed6b72de3b24ee1a133b61d9447	["s199"]	class P\n          attr_reader :v\n          def put(x)\n            @v = 
 8043ee50b7e295aec19dfea005b5d206	"US-ASCII"	"abc".encode("US-ASCII").reverse.encoding.to_s
 804b1557848b61bcf447552cac485286	:ok	c = Class.new\n            c.freeze\n            begin\n              
@@ -2193,6 +2197,7 @@
 9cde6b4c9ea3125d8d47145a80290cdd	[10, 1, 2, 3]	def f(x, a:, b:, c:)\n          [x, a, b, c]\n        end\n        \n\n     
 9ce400382b1e9ef3649d2b40a548257d	:re	a = [1,2,3,4]; begin; a[-5..-5] = ""; rescue RangeError; :re; end
 9d02c77d162d28eea621b8b9bfb99df5	0	begin\n          exit\n        rescue SystemExit => e\n          e.status\n
+9d1da690a1417a59217d409808cdde15	["#<RuntimeError: outer>", "nil"]	seen = nil\n        begin\n          raise "outer"\n        rescue\n       
 9d2eca396f0625dffe0e9284609ca429	[true, 2, true]	class CSrcLocBasic\n              MY_CONST = 1\n            end\n     
 9d342dce67e67be32b5b4e4410deaf44	ArgumentError	(GC.stat(:bogus_key) rescue $!.class)
 9d345c691cfd0eb9929bd91286d2cad6	["/nope", true, "/nope"]	m = Module.new\n        m.autoload :Lazy, "/nope"\n        a = m.autoload
@@ -3067,6 +3072,7 @@ d75925b6d715ab922640059a7e8b5f45	[true, true, true]	r = Random.allocate\n       
 d7727c6111808f529a320fda4e7cb48b	[[195]]	m = /#{/./}/s.match("\\303\\251".dup.force_encoding(Encoding::Windows_31J))\n      
 d774e46c066fe58e1b5886fed882b4a9	5	c = Class.new { def orig; 5; end }\n            c.class_eval { alias
 d77d6e3d33b3312be174ad8da7e0e5f2	100	::E = 100\n            \n\n          Object::E\n            
+d7a20376c3bfd6332a00d7acc6f22cac	[["#<RuntimeError: PRE>"], 2, "nil"]	out = []\n        c = 0\n        begin\n          raise "PRE"\n        resc
 d7a8eac3a6c15ba148aee3036a8d25e9	[1, 2]	class A\n              def initialize\n                @a = 1\n       
 d7b7a2adf595d788eafc6107fd926703	:ok	class C\n              def to_str\n                raise "to_str call
 d7cddd59ea5e58d2b97def80b58cf0b7	"bar"	class Foo\n              def bar; "bar"; end\n              x = "ba"\n
@@ -3325,6 +3331,7 @@ eab3682bef9745a9bdc35589ab85d379	[false, true, 3, false, 3, 5]	path = "/tmp/mr_b
 eab54708ae29dd6658147eb4b5b22b5e	"fake_name"	m = Module.new\n            module m::N; end\n            m::N.set_te
 eabf9a2cd37caa66db02496f147f9c38	"ababababax"	"x".rjust(10, "ab")
 eac5ac27d0ec5d247be231335410fc77	:woke	t = Thread.new { sleep 0.01; :woke }\n            t.value\n          
+eae9d34aa61754dc498e836f4b96190d	[[:E], 3, "nil"]	log = []\n        n = 0\n        begin\n          n += 1\n          raise "
 eb030791795360c8d2798e96c1b4c064	[:typeerr, :typeerr, :typeerr, :typeerr, :typeerr]	def t(x)\n              begin\n                Signal.signame(x)\n    
 eb0341a3d38f4211b05aabb593c43552	true	a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_defined?(:@
 eb08522009d362d68363c6fe111130db	[0, 1, 2, 3, 4, 5, [0, 5], 100, 1, 2, 3, 4, 5, [1, 4], 100, 2, 3, 4, 5, [2, 3], 100, 3, 4, 5, [3, 2], 100, 4, 5, [4, 1], 100, 5, [5, 0], 100, 6, [6, 0], 100, 200]	def f\n                7.times { |x|\n                    $res << 7.t
