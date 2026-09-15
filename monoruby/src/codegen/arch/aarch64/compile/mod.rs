@@ -3662,6 +3662,62 @@ impl Codegen {
         true
     }
 
+    /// `SplicedExitToOuter` (#1185, stage 2) — mirror of x86
+    /// `emit_spliced_exit_to_outer`. Build the error here (x19's cfp is
+    /// still the exiting frame, which is what resolves a `break`'s
+    /// target) but key the deferral on the host frame's LFP, read from
+    /// `[host_x29 - (BP_CFP + CFP_LFP)]`; then tag x0 and run the
+    /// `method_return_specialized` teardown down to the frame the host
+    /// called, whose `ret` lands at the host's call site.
+    pub(in crate::codegen::jitgen) fn emit_spliced_exit_to_outer(
+        &mut self,
+        kind: SplicedExitKind,
+        host: usize,
+        callee: usize,
+        pc: BytecodePtr,
+    ) -> bool {
+        let raise = self.entry_raise();
+        let f = match kind {
+            SplicedExitKind::Break => runtime::defer_block_break_at as *const () as u64,
+            SplicedExitKind::MethodReturn => runtime::defer_method_return_at as *const () as u64,
+        };
+        let val = GP::Rdx.a64().0;
+        let tag = kind.outer_tag();
+        let cont = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x(val);          // value
+            mov x10, (host as u64);
+            add x10, x29, x10;       // host frame base
+            ldur x3, [x10, #(-((BP_CFP + CFP_LFP) as i32))];  // host LFP
+            mov x0, x19;             // vm
+            mov x1, x20;             // globals
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                  // 0 = deferred / nonzero = error in-flight
+            ldr x30, [sp], #16;
+            cbz x0, cont;
+            mov x21, (pc.as_ptr() as u64);
+            b raise;
+            cont:
+            mov x0, (tag);
+        );
+        self.method_return_specialized(callee);
+        true
+    }
+
+    /// The host-side half: branch to *dest* when x0 carries this kind's
+    /// marker. Mirror of x86 `emit_spliced_exit_landing`.
+    pub(in crate::codegen::jitgen) fn emit_spliced_exit_landing(
+        &mut self,
+        kind: SplicedExitKind,
+        dest: &DestLabel,
+    ) -> bool {
+        let tag = kind.outer_tag();
+        monoasm_arm64!(&mut self.jit, cmp x0, #(tag as u32););
+        self.jit.bcond_label(monoasm::Cond::Eq, dest);
+        true
+    }
+
     /// If the outer LFP in `x(reg)` points at a stack frame already promoted to
     /// the heap (its Meta `kind` byte at `[lfp - 1]` has the `invalidated` bit
     /// 0b1000 set), forward the pointer to the live heap copy stored in the

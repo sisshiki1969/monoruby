@@ -2711,17 +2711,56 @@ pub(super) extern "C" fn defer_block_break(
     globals: &mut Globals,
     val: Value,
 ) -> usize {
+    let lfp = vm.cfp().lfp();
+    defer_block_break_at(vm, globals, val, lfp)
+}
+
+///
+/// The cross-frame form of [`defer_block_break`] (issue #1185, stage 2):
+/// the `ensure` body that must run sits in an *intermediate* frame of the
+/// inlined chain, so the deferral is keyed on that frame's LFP — `host`,
+/// computed at the exit site from the frame chain — rather than on the
+/// exiting block's. The error itself is still built here, where `vm.cfp()`
+/// is the exiting frame and `err_block_break` can resolve the break's
+/// target from it; the machine-level teardown down to `host` runs
+/// afterwards, on success only.
+///
+pub(super) extern "C" fn defer_block_break_at(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+    host: Lfp,
+) -> usize {
     err_block_break(vm, globals, val);
-    if matches!(
-        vm.exception().map(|e| e.kind()),
-        Some(MonorubyErrKind::BlockBreak(..))
-    ) {
-        let lfp = vm.cfp().lfp();
-        vm.defer_unwind(lfp);
+    if host_can_receive_splice(host)
+        && matches!(
+            vm.exception().map(|e| e.kind()),
+            Some(MonorubyErrKind::BlockBreak(..))
+        )
+    {
+        vm.defer_unwind(host);
         0
     } else {
         1
     }
+}
+
+///
+/// Whether the host frame of a stage-2 splice may still be entered by
+/// compiled code — the runtime half of the JIT's capture guard
+/// (`branch_if_captured`: `Meta::kind & 0b1000_1000`).
+///
+/// The splice lands in the middle of the host's compiled body, which
+/// addresses its locals off `rbp`; a frame the callee promoted to the
+/// heap (`Proc.new` / `binding` over a passed block) no longer lives
+/// there. The landing edge's abstract state asserts the same invariant
+/// the call site's `immediate_evict` guard would have re-proved, so this
+/// check is what makes that assertion true — a captured host degenerates
+/// to the generic unwind, which is correct for every frame layout.
+///
+fn host_can_receive_splice(host: Lfp) -> bool {
+    let meta = host.meta();
+    meta.on_stack() && !meta.invalidated()
 }
 
 ///
@@ -2735,13 +2774,28 @@ pub(super) extern "C" fn defer_method_return(
     globals: &mut Globals,
     val: Value,
 ) -> usize {
+    let lfp = vm.cfp().lfp();
+    defer_method_return_at(vm, globals, val, lfp)
+}
+
+///
+/// The `host`-keyed twin of [`defer_block_break_at`] for a non-local
+/// `return` spliced across an intermediate frame's `ensure` (#1185).
+///
+pub(super) extern "C" fn defer_method_return_at(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+    host: Lfp,
+) -> usize {
     err_method_return(vm, globals, val);
-    if matches!(
-        vm.exception().map(|e| e.kind()),
-        Some(MonorubyErrKind::MethodReturn(..))
-    ) {
-        let lfp = vm.cfp().lfp();
-        vm.defer_unwind(lfp);
+    if host_can_receive_splice(host)
+        && matches!(
+            vm.exception().map(|e| e.kind()),
+            Some(MonorubyErrKind::MethodReturn(..))
+        )
+    {
+        vm.defer_unwind(host);
         0
     } else {
         1

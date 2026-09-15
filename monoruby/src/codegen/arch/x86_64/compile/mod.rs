@@ -168,6 +168,8 @@ impl Codegen {
             | AsmInst::Redo(..)
             | AsmInst::EnsureEnd { .. }
             | AsmInst::DeferSplicedExit { .. }
+            | AsmInst::SplicedExitToOuter { .. }
+            | AsmInst::SplicedExitLanding { .. }
             | AsmInst::Yield { .. }
             | AsmInst::MethodRetSpecialized { .. }
             | AsmInst::BlockBreakSpecialized { .. }
@@ -2960,6 +2962,74 @@ impl Codegen {
             movq r13, (pc.as_ptr());
             jmp  raise;
         cont:
+        };
+        true
+    }
+
+    ///
+    /// `SplicedExitToOuter` (#1185, stage 2) — the exit's own frame has no
+    /// `ensure`, but an intermediate frame of the inlined chain does.
+    ///
+    /// Build the break / method-return error here, where `vm.cfp()` is
+    /// still the exiting frame (that is what resolves a `break`'s target),
+    /// but key the deferral on the *host* frame's LFP, which sits at
+    /// `[host_rbp - (BP_CFP + CFP_LFP)]`. Then set rbp to the frame the
+    /// host called and `leave; ret`: that lands at the host's call site
+    /// with `kind.outer_tag()` in rax, which `emit_spliced_exit_landing`
+    /// picks up. A degenerate error (`LocalJumpError`) tears nothing down
+    /// and raises generically from this exit's own pc.
+    ///
+    /// ### in
+    /// - rdx: the exit value
+    ///
+    pub(in crate::codegen::jitgen) fn emit_spliced_exit_to_outer(
+        &mut self,
+        kind: SplicedExitKind,
+        host: usize,
+        callee: usize,
+        pc: BytecodePtr,
+    ) -> bool {
+        let raise = self.entry_raise();
+        let f = match kind {
+            SplicedExitKind::Break => runtime::defer_block_break_at as *const u8,
+            SplicedExitKind::MethodReturn => runtime::defer_method_return_at as *const u8,
+        };
+        let tag = kind.outer_tag();
+        let cont = self.jit.label();
+        monoasm! { &mut self.jit,
+            lea  rcx, [rbp + (host)];
+            movq rcx, [rcx - (BP_CFP + CFP_LFP)];
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (f);
+            call rax;
+            testq rax, rax;
+            jz   cont;
+            movq r13, (pc.as_ptr());
+            jmp  raise;
+        cont:
+            movq rax, (tag);
+        };
+        self.method_return_specialized(callee);
+        true
+    }
+
+    ///
+    /// The host-side half of the same splice: recognize the marker a
+    /// `SplicedExitToOuter` returned with and branch to *dest*, the
+    /// outline bridge into this frame's `ensure` body. A normal return
+    /// value can never equal the marker (see `SplicedExitKind::outer_tag`),
+    /// so this falls through untouched.
+    ///
+    pub(in crate::codegen::jitgen) fn emit_spliced_exit_landing(
+        &mut self,
+        kind: SplicedExitKind,
+        dest: &DestLabel,
+    ) -> bool {
+        let tag = kind.outer_tag();
+        monoasm! { &mut self.jit,
+            cmpq rax, (tag);
+            jeq  dest;
         };
         true
     }

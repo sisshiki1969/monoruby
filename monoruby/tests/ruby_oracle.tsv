@@ -89,6 +89,7 @@
 05950871938fb64822a955fd038dac97	["included:C"]	$res = []\n        module M\n          def self.included(base)\n          
 059f2e066a6a22fbabc5151c1605ddbe	[18000, 1700000000, -32401, 18000, 0, 1700000000, 500]	t = 1_700_000_000\n            a = Time.at(t, in: "+05:00")\n        
 05a71640804c40648923d410749f1c98	:puts	method(:puts).name
+05a8eeefe9d161cbf62cc252e917d252	[[9], 280]	$n = 0\n        def mid(arr)\n          d = 7\n          begin\n           
 05ba98f1d4beb06be92e32569f86f319	[false, false, false]	s = "abc"\n              [s.ljust(2).equal?(s), s.rjust(2).equal?(
 05bbb0c3d15dc87a5d509b5e40f01863	"Encoding::CompatibilityError"	(Regexp.new("".dup.force_encoding("UTF-16LE"), Regexp::FIXEDENCODING) =~ " ".enc
 05bebba3f7ecc9b53acb11fcf8edd8ef	"ss"	"ß".downcase(:fold)
@@ -644,6 +645,7 @@
 2b80e35e675c69b12c235aeda04b3512	[true, true, true, false, false, false]	class Object\n              def tp1; 1; end\n              protected 
 2b87eaf9abc9671b3f0ed0a3582bc372	[100, 100, 42]	$res = []\n        class C\n        \tdef f\n        \t\t100\n      
 2b92ff3de3e79725a67adfb4ee7eddd7	1	c = Class.new\n            c.const_set(:FOO, 1)\n            c.send(:
+2b9fa248d5be4cd1e8f5dd4c2ee0e05a	[16575.0, 272.0]	def run(n)\n          c = 2.0\n          acc = 0.0\n          i = 0\n      
 2bc0eb33664b2981d37291b029907b9c	["A==5", "B==5"]	class A; def ==(o); "A==#{o}"; end; end\n        class B; def ==(o); "B=
 2c2ea327822066e54a80236b6c834904	[1, 5, 255, 1000000, -1, -7, 0, 2, 10, 510, 2000000, -2, -14, 0, 4, 20, 1020, 4000000, -4, -28, 0, 1073741824, 5368709120, 273804165120, 1073741824000000, -1073741824, -7516192768, 0, 2147483648, 10737418240, 547608330240, 2147483648000000, -2147483648, -15032385536, 0, 288230376151711744, 1441151880758558720, 73498745918686494720, 288230376151711744000000, -288230376151711744, -2017612633061982208, 0, 576460752303423488, 2882303761517117440, 146997491837372989440, 576460752303423488000000, -576460752303423488, -4035225266123964416, 0, 1152921504606846976, 5764607523034234880, 293994983674745978880, 1152921504606846976000000, -1152921504606846976, -8070450532247928832, 0, 2305843009213693952, 11529215046068469760, 587989967349491957760, 2305843009213693952000000, -2305843009213693952, -16140901064495857664, 0, 4611686018427387904, 23058430092136939520, 1175979934698983915520, 4611686018427387904000000, -4611686018427387904, -32281802128991715328, 0, 9223372036854775808, 46116860184273879040, 2351959869397967831040, 9223372036854775808000000, -9223372036854775808, -64563604257983430656, 0, 18446744073709551616, 92233720368547758080, 4703919738795935662080, 18446744073709551616000000, -18446744073709551616, -129127208515966861312, 0, 1267650600228229401496703205376, 6338253001141147007483516026880, 323250903058198497381659317370880, 1267650600228229401496703205376000000, -1267650600228229401496703205376, -8873554201597605810476922437632, 0, 0, 2, 127, 500000, -1, -4, 0, 0, 0, 0, 0, -1, -1, 0, 0, 0, 0, 0, -1, -1, 0]	res = []\n        [0, 1, 2, 30, 31, 58, 59, 60, 61, 62, 63, 64, 100, -1,
 2c3d92f1421f92a44e5d4e1e94f9a0f3	[:one, :two, Hash]	klass = Class.new(Hash) do\n              def initialize(*args)\n    
@@ -835,6 +837,7 @@
 3aff5d6537c677c0f944ab936ad4f4d2	false	GC.auto_compact = false; GC.auto_compact
 3b1644af44f2b478814ac2f40d1b9037	[3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22]	module Foo\n              @@foo = 1\n              def foo\n          
 3b2c8f065c5ebcd815f411c69823e2f8	[true, "hi", "hi", "hi"]	class ReSubA < Regexp; def initialize(*a); super; @a = a; end; attr_reader :a; e
+3b31ad9a0b1b239abb470c77a4dfeb4d	[[2, [:completed, :after]], 40]	$n = 0\n        def mid(arr)\n          v = begin\n            arr.each { 
 3b321e6a12da0e61ced761fb33a302e2	"[\\"/\\", 1, 2]"	require "tmpdir"\n            Dir.mktmpdir do |d|\n              out 
 3b322fd7da566474e06ac3cf66a73833	"0"	ENV["MONORUBY_ENV_TEST_FF"] = "0"\n            begin\n              E
 3b39e9db52a30f710cbc3acfcfed2261	["Errno::EINVAL", true]	require 'fcntl'\n            File.open("/tmp") do |f|\n              
@@ -899,6 +902,7 @@
 3f6f1c23deee61068ec39f5295c45a16	[[], [:f]]	class S\n              def f; end\n            end\n            class 
 3f839e4337603d2011e09f2f712091a4	[:bar, :foo]	class A\n              def foo; end\n              def bar; end\n     
 3f92dae4c5bb5d0850bb428a743f7317	[4, 5]	r = []\n        10.times { |i| r << i if (i == 4)...(i == 5) }\n        r
+3f9bc283176b2ee563ab3a04dc4a637b	[[2], 0]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 3fb8c0c6f9028a8a1d17e01958b4d1f5	[0, true, 2, 0, true, 1, 0, 0, nil]	class Always\n          def ==(o) = true\n        end\n        class Only1
 3fcbc9935b035dee352be56a30398754	"world"	IO.popen("echo world") { |io| io.read.chomp }\n            
 3fef9f42692341177896868638c71b46	[["v1", "v2"], [nil, nil, "new"]]	ENV["MONORUBY_ENV_TEST_MN1"] = "v1"\n            ENV["MONORUBY_ENV_T
@@ -927,6 +931,7 @@
 419d77b6e939231fdafd53d3c6c6ea9d	[1, 2, 42, 55, []]	def f(x,y,a=42,b=55,*z)\n            [x,y,a,b,z]\n        end\n        \n\n 
 419ee2f4a5f8c62a9f32d72169a9b695	[true, 100, 91, 97, 112]	[\n              Errno::ENETDOWN.ancestors.include?(SystemCallError)
 41ddfa3d947230443c7eb469c3269928	[{a: 3, "s" => 4, 1 => 6}, 3, [:a, "s", 1]]	def d; {a: 1, "s" => 2, a: 3, "s" => 4, 1 => 5, 1 => 6}; end\n      
+41ea26ef4d9889d1fd64c6e220bca834	[[:ljerr], 40]	$n = 0\n        def mid(arr, &blk)\n          begin\n            arr.each 
 4201651c81088820aab64210097ab3f7	[2, "NoMethodError"]	r = Module.new do\n              refine Array do\n                ali
 420fd4ef995831a71e5964759ba88f3b	"ああabc"	"abc".rjust(5, "あ")
 421b2694d3c8d4c86d2dafb625fb56b3	["/no/such/path", nil]	m = Module.new do\n              autoload :Foo, "/no/such/path"\n    
@@ -1822,6 +1827,7 @@
 809281e76b95d635f181be9aa9c1cf05	[1, [], true]	S = Struct.new(:x) do\n              FLAGS = { foo: 1 }\n            
 8098133adc30ffe32c8d9dbe5ae12a78	[1, 2, [3, 4, 5, 6], 7]	def f(x,y,*z,a)\n            [x,y,z,a]\n        end\n        \n\n        f(1
 80baa197387e4aa5b6889e7c3b340c5a	[:initialize_dup, :initialize_copy]	$called = []\n            class Foo\n              def initialize_dup
+80c6e2de0450a23be774507d6a74142e	[[2, "from ensure"], 40]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 80e2d4c5ff1560bcfc1187ccd3d8b8b3	["Psych::Nodes::Stream", 1, ["Psych::Nodes::Document", [], [], true, true], ["Psych::Nodes::Mapping", nil, nil, true, 1, 0, 0, 5, 0], [["Scalar", "a", nil, nil, [true, false, 1], 0, 0, 0, 1], ["Scalar", "1", nil, nil, [true, false, 1], 0, 3, 0, 4], ["Scalar", "b", nil, nil, [true, false, 1], 1, 0, 1, 1], ["Sequence", nil, "x", nil, 2, 1, 3, 1, 12], ["Scalar", "c", nil, nil, [true, false, 1], 2, 0, 2, 1], ["Alias", nil, "x", nil, nil, 2, 3, 2, 5], ["Scalar", "d", nil, nil, [true, false, 1], 3, 0, 3, 1], ["Scalar", "lit\\n", nil, nil, [false, true, 4], 3, 3, 5, 0]], [{"a" => 1, "b" => [1, 2], "c" => [1, 2], "d" => "lit\\n"}], "Hash", "1", "FalseClass", [[:loc, 0, 0, 0, 0], [:start_stream, 1], [:loc, 0, 0, 2, 3], [:start_document, [1, 1], [["!e!", "tag:example.com,2000:"]], false], [:loc, 2, 4, 3, 0], [:start_sequence, "a", "tag:example.com,2000:foo", false, 1], [:loc, 3, 2, 3, 5], [:scalar, "q", nil, nil, false, true, 2], [:loc, 4, 2, 4, 4], [:alias, "a"], [:loc, 5, 0, 5, 0], [:end_sequence], [:loc, 5, 0, 5, 3], [:end_document, false], [:loc, 6, 0, 6, 0], [:end_stream]], [[0, 2, "a"]], "Psych::Nodes::Stream", ["(cfg.yml): did not find expected node content while parsing a flow node at line 2 column 1", "cfg.yml"], "%YAML 1.1\\n%TAG !e! tag:example.com,2000:\\n---\\nkey: &s !e%21foo [one, \\"two\\"]\\nref: *s\\nlit: ! |\\n  a\\n  b\\n", "a: [1, {b: c}]\\n", "x: &y 1\\nz: *y\\n", "a: 1\\n", "expected STREAM-START", "expected DOCUMENT-START or STREAM-END", [5, true, 40], "wrong argument type Integer (expected Array)", "tag tuple must be of length 2", [0, 2, 5]]	require "yaml"\n        require "stringio"\n        r = []\n        # The 
 8102d033b6a3823b4f48b0cf3c51ecae	[7, 8]	o = Object.new\n            def o.respond_to?(name, *) = true\n      
 812c40542c17a0b548a32baae3a41bd3	[0, 0, true, true, "root", "root", true, 0, true, true]	require "etc"\n            pw = Etc.getpwnam("root")\n            gr 
@@ -2067,6 +2073,7 @@
 9270be8e025f7cd9ba1ea30eee9c9d76	[[:f, :f], [:f, :g], [:f, :h], [[:blk, :blk], [:blk, :blk]], [[:blk, :blk2], [:blk, :blk2]], [:dm, :dm], [:dm, :dm2], [:helper, :helper], [:f, :f], [nil, nil]]	class CA\n              def f; [__method__, __callee__]; end\n       
 929ec88122ad3533893000031753c174	[999, 999]	def m_dyn(a, b)\n          yield\n          a + b\n        end\n        def
 92ae34eef31e84efce3356329a17c934	"US-ASCII"	"\\x01".unpack("b")[0].encoding.to_s
+92c1d243b1a7bcb2d6b0b7ba9c56fd9e	[[20], 40]	$n = 0\n        def mid\n          begin\n            yield 1\n            
 92c320086797b71e965185f0332f276e	[true, "nil"]	begin\n              raise "x"\n            rescue => e\n             
 92c7fd1254ddfbf42a32cc10aff9632c	[0, 99, 50, nil, nil, nil, 51, 99, :n, :t, :f, 7, 3000, 3000]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 92c81d1822b4b41aa65c4eff4e01c590	[[100, 200, 300], [[:a, 250], [:c, 400]], [100, 200, 300], [[:a, 250], [:c, 400]]]	class S\n            def f(*x, **y)\n                $res << x\n         
@@ -2259,6 +2266,7 @@ a0c737e8c20c63632912e6e053757479	"1!"	ENV["MONORUBY_ENV_TEST_TOH"] = "1"\n      
 a0c8c214c743f932e1377fb1194651a2	["US", true, "bar"]	class US < String; end\n            s = US.new("x")\n            s.in
 a0ca30adffd4c4596c95a3912134c5cd	2	0.5.to_r.denominator
 a0d8a60091bf358a78984cd54491c359	[true, 12, true, false, false]	t = Thread.new { 3 * 4 }\n            [t.is_a?(Thread), t.value, t.j
+a0e830cc4b85ac752a98ae9fe6cfc117	[[30], 40]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 a0ed7fceb0bb6c6c16a0106636e9eb4a	"あ"	s = "hello"; s.bytesplice(0..4, "あいう", 0..2); s
 a0edb82d021a16c867f58024ff7e30c9	[:raised]	class P\n          attr_accessor :x, :y\n        end\n        def swap_fil
 a119cef46ae9c1190d2bbd29791572a2	true	def `(cmd); cmd.frozen?; end\n        def m; `ab`; end\n        m\n       
@@ -2510,6 +2518,7 @@ b07897e1515470c5f367e6c838cd3ca3	true	h = {a: 1}.compare_by_identity\n          
 b0a6a8263e7c30eec12325762ab54dc5	[1, 2, nil, nil, 3, 1, nil, :from_block, [:a, :b, :c, :d, :e], [:a], [:a, :b, :d, :e]]	r = []\n        begin\n          r << 1\n          break if r.size == 1\n  
 b0fd99f84986028ca4c492df3405e97c	[1, true, true, [:autoindexes, :filter_hits, :filter_misses, :fullscan_steps, :reprepares, :runs, :sorts, :vm_steps], 1, [["ArgumentError", "unknown key: nope"], ["TypeError", "non-symbol given"], ["TypeError", "non-symbol given"]], 1, [:autoindexes, :filter_hits, :filter_misses, :fullscan_steps, :reprepares, :runs, :sorts, :vm_steps], "TypeError"]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 b10be18d4e367e7c54a931cb46aa1a17	[749250.0, 1488.0, 1498.5]	def store(b, off, v) = b.set_value(:f64, off, v)\n            def fe
+b10dbdd33c4238b33bb45eebf78e2f62	[662.0, 120]	def guarded(arr, log)\n          begin\n            arr.each { |y| yield 
 b127614a38e6a826e83df4733ad1c138	[true, true]	require "openssl"\n        [OpenSSL::Cipher::CipherError < OpenSSL::Open
 b13eb772180c210a5c10579da6ea6cfb	true	a = []\n            a << a\n            b = Marshal.load(Marshal.dump
 b15052c5abbd93a1a9004be3b57beb9c	[:foo, :bar]	$res = []\n            obj = Object.new\n            def obj.singleto
@@ -2691,6 +2700,7 @@ bd52273e9a7c488f92450c115364950c	[[3, ArgumentError], "nil"]	def m(a)\n         
 bd5bcb876056c6cb8592a7ad4872c350	Array	class C < Array; end\nC[1,2,2].uniq.class
 bd72323eccae40b197ebea1283639273	[nil, 42]	a = []\n        a << $std\n        $std = 42\n        a << $std\n        $s
 bd7a26e1f462e26d42e9543689bc3430	3862152.611328125	def calc(n, vals)\n          a = 0.0; b = 1.0; c = 2.0; d = 3.0\n        
+bd83dae9ec66f0896a7c8a6e37807efa	[[2], [:inner, :inner, :outer]]	$log = []\n        def mid(arr)\n          begin\n            arr.each { |
 bd9970837b8009b39aca5efafe329d8e	["true", "5", "", "foo"]	[true.to_s, 5.to_s, nil.to_s, :foo.to_s]
 bd9f54fa26238d51503216b560dcfe9d	"M:C"	module M\n          def foo\n            "M:" + super\n          end\n     
 bdab5d25c3b4be158f0e7bd7de9daf97	[118, 592, 4147, 74705710618821783505]	def __f(x)\n          \n        a = x * 3 + 1\n        b = a * 5 + 2\n     
@@ -3213,6 +3223,7 @@ e13869548fa19a771b07f33adfda8184	[true, [1, 2, 3]]	acc = []\n            initial
 e154b3c6984d91ffa32cd89a1908494b	false	File.directory?("monoruby")
 e167a456c7b69a77638b0dd3c251ab26	true	"abc".casecmp?("ABC")
 e19e475a8598d24cded21068c47654dd	"abc"	"abc".rjust(3)
+e1ab8e7fca529a0f63032ace320b58f8	[[2], [:inner, :outer]]	$log = []\n        def inner(arr)\n          begin\n            arr.each {
 e1b505f2197e0465fd5bc85b29e4ab80	[604, -1, -2, 1, -2]	n = 1; x = [-1, -2]; a = [*x, n + 0, n + 1, n + 2, n + 3, n + 4, n + 5, n + 6, n
 e1ba7519a727204602c379e31e7f6a90	[nil, false, nil, nil, false, nil, 18, nil, 18, 9, 17]	class Sticky < String\n          def hash; 1; end\n          def eql?(o);
 e1c2cb8e9e01d860acf3a63296e8f6a3	[nil, nil]	s = "\\303".dup.force_encoding(Encoding::Windows_31J)\n               [/z/s.match(
@@ -3331,6 +3342,7 @@ e9ed3c91c241cacff421ec62d7907898	"!"	$\\ = "!"; r = $\\; $\\ = nil; r
 e9f926668828584ed6da3a112bc1d4b5	["abcdZf", FrozenError, IndexError, "index 5 out of string", false, 5]	r = []\n        20.times do\n          s = "abcdef".dup\n          s.setby
 ea07ecaa90c2d393514090eaf2eb6009	[1.0, -Infinity]	[1.0, -1.0 / 0.0]
 ea4e91b1bfa0887ef9ecf7398be00cf1	[:direct, :forwarded, :mapped, :enum, :hash, :sorted, :ewo, [1]]	res = []\n        res << [1,2].each { break :direct }\n        def fwd(&b
+ea5045a7d270732496085053cdcddfcf	[[30], 40]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 ea543154e9094ead8bd5a8628be70621	false	File.file?("README.md")
 ea6c74c225623156a7866f81483625e3	true	dirs = %w[c C s S v n i I l L V N q Q j J e f F g E d D G]\n        def 
 ea946aefd6f7e19064e3e6c18f306dd5	[1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2]	a = [1,2]\n        b = []\n        7.times do\n            b.prepend(*a)\n 

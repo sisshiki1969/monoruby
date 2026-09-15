@@ -246,6 +246,86 @@ this with a **deferred-unwind stack** (`executor.rs:1102`–`1153`):
 This mirrors CRuby's `CATCH_TYPE_ENSURE` continuation plus the "ensure result
 overrides pending throw" rule.
 
+### 6.1 Spliced non-local exits (issue #1185)
+
+A `break` / non-local `return` whose whole chain is specialized-inlined into
+one JIT unit lowers to the **specialized teardown** (`lea rbp += Σ; leave;
+ret`) — three instructions, no `handle_error`. An `ensure` on the way out
+used to disqualify that outright: `nonlocal_exit_needs_vm_unwind` (§5) sent
+the exit down the generic unwind, which interprets the `ensure` bodies,
+converts the suspended frames by the chain-deopt walk, and — for `break` —
+leaves the defining frame in the VM until the next `loop_start` re-enters by
+OSR.
+
+Splicing keeps the teardown and reaches the `ensure` body as ordinary
+compiled code. In both shapes the exit **defers** its unwind exactly as
+`handle_error` would (`defer_block_break` / `defer_method_return`), and the
+region's `EnsureEnd` delivers it: `ensure_end_spliced` classifies the parked
+deferral and the compiled arm runs the teardown for that kind. The gain is
+that the unwind edge now *exists in the CFG*, so the `ensure`'s writes are
+visible to the abstract interpreter instead of happening behind its back.
+
+**Stage 1 — the exit's own frame** (`SplicePlan::SameFrame`). The body is a
+block of the iseq being compiled, so the exit is an ordinary forward branch
+to it (`AsmInst::DeferSplicedExit`, then `CompileResult::Branch`).
+
+**Stage 2 — an intermediate frame** (`SplicePlan::Outer`). The owner is a
+*suspended* frame: its compile is parked at the call that leads to the exit,
+and its `ensure` body is several machine frames away, so there is no branch
+to emit. The splice travels by the machine's own return path instead:
+
+1. `AsmInst::SplicedExitToOuter`, at the exit, builds the error where
+   `vm.cfp()` is still the exiting frame (that is what resolves a `break`'s
+   target) but keys the deferral on the **host** frame's LFP, read from the
+   frame chain — `defer_block_break_at` / `defer_method_return_at`.
+2. The same instruction then sets rbp to the frame the host called and
+   `leave; ret`s. That lands at the host's call site with
+   `SplicedExitKind::outer_tag()` in the return register — a value no
+   normal return can produce (low three bits `000`, and no `RValue` lives
+   at address 8 or 16).
+3. `AsmInst::SplicedExitLanding`, emitted after that call whenever a nested
+   compile asked for one, recognizes the marker and branches into the
+   host's `ensure` body. It is an ordinary **side branch of the host's own
+   CFG**, so the body's entry merge sees this path exactly as it sees the
+   normal fall-through.
+
+The landing edge's state is the host's state right after the call, which is
+what the `ret` really arrives at, with two corrections: every widen the call
+reached is re-applied (the resume adopts the *return* join's kept claims,
+and a spliced exit is by definition not a returning path), and every temp
+still void at the call is claimed as a boxed `Value` in its slot (a temp the
+`ensure` body keeps live may only be written later in the begin body; the
+prologue nil-fills the frame, so the claim is true, and nothing on this path
+reads it).
+
+One invariant is re-proved rather than inherited: the call site's own capture
+guard (`immediate_evict`) is emitted *after* the landing, so
+`defer_*_at` checks the host's `Meta` for the two bits `branch_if_captured`
+tests and degenerates to the generic unwind when the callee promoted the host
+frame to the heap. A degenerate error (`LocalJumpError` out of a proc-escaped
+block) takes the same exit: nothing is torn down and the generic raise runs
+from the exit's own pc.
+
+`try_splice_exit` refuses everything it cannot prove: a dispatch arm, a
+loop-rooted frame (whose compile may not cover the body), a `$!` restore
+owed anywhere on the way out, more than one `ensure` to run (chaining hop by
+hop is the natural extension — each `EnsureEnd` would tear down to the next
+host — but is not built), a body that is not a basic-block head, a body
+containing an exit of its own (`next` / `break` / `return` / `retry` /
+`redo`, which would leave the deferral parked past the frame) or a nested
+handler, and a host whose in-progress call site is not one of the two shapes
+that emit a landing. Every refusal falls back to the generic unwind, which
+handles every case.
+
+Measured on the shape the issue names — a `break`-with-`ensure` that is the
+normal exit of an inner iteration inside a hot loop in the block's defining
+frame — stage 2 is worth roughly 10% (0.79–0.83 s → 0.69–0.77 s over
+repeated runs). The same exit *without* the `ensure` runs in 0.35 s, so most
+of what is left is the deferral machinery itself — two runtime calls and a
+`MonorubyErr` per exit — rather than the unwind the splice removed. On a
+chain that merely tears down (no hot continuation to return to) the
+difference is within noise.
+
 ---
 
 ## 7. Backtrace construction — the key contrast
@@ -381,11 +461,13 @@ prints only the origin (e.g. `SyntaxError`, which also gets a source excerpt).
 | catch-time caller walk               | `../monoruby/src/executor.rs` (`complete_backtrace_for_rescue`) |
 | object materialization + cause       | `../monoruby/src/executor.rs` (`take_ex_obj`, `chain_cause`) |
 | per-method exception table           | `../monoruby/src/globals/store/iseq.rs`              |
+| JIT-spliced non-local exits (§6.1)   | `../monoruby/src/codegen/jitgen/context.rs` (`try_splice_exit`), `jitgen/compile.rs` (`emit_spliced_exit`), `jitgen/compile/method_call.rs` (`emit_spliced_landing`) |
 | frame-label rendering                | `../monoruby/src/globals/store.rs` (`func_description`) |
 | Ruby `Exception` API (Rust side)     | `../monoruby/src/builtins/exception.rs`              |
 | Ruby `Exception` API (Ruby side)     | `../monoruby/builtins/startup.rb`                    |
 | `Kernel#raise` / `#loop` / `#caller` | `../monoruby/src/builtins/kernel.rs`                 |
 | differential tests                   | `../monoruby/tests/backtrace.rs`, `tests/exception_api.rs` |
+| spliced-exit regression tests        | `../monoruby/tests/nonlocal_exit_ensure.rs`, `tests/nonlocal_exit_intermediate_ensure.rs`, `tests/nonlocal_exit_rescue.rs` |
 
 ---
 
