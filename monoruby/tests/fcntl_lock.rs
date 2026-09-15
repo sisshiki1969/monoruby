@@ -2,40 +2,58 @@ extern crate monoruby;
 use monoruby::tests::*;
 
 // The native offload path (`src/native_pool.rs`) and its first new
-// caller: `IO#fcntl` with a String argument — the packed `struct flock` the
-// record-locking commands take. `F_SETLKW` waits in the kernel with no
-// fd to poll, so it runs on a native worker while the calling green
+// caller: `IO#fcntl` with a String argument — the packed `struct flock`
+// the record-locking commands take. `F_SETLKW` waits in the kernel with
+// no fd to poll, so it runs on a native worker while the calling green
 // thread parks; every other command is immediate and runs inline, with
 // the kernel writing back into the String for `F_GETLK` (issue #1345).
+
+/// `struct flock` is laid out differently per platform, and the buffer
+/// has to be the size and shape the kernel expects — prepended to each
+/// test's code so both the interpreter under test and the CRuby oracle
+/// build the same bytes.
+///
+/// * Linux: `short l_type; short l_whence; off_t l_start; off_t l_len;
+///   pid_t l_pid;` — 32 bytes with the alignment padding.
+/// * macOS: `off_t l_start; off_t l_len; pid_t l_pid; short l_type;
+///   short l_whence;` — 24 bytes.
+const FLOCK_PRELUDE: &str = r#"
+        require 'fcntl'
+        DARWIN = RUBY_PLATFORM.include?("darwin")
+        FMT = DARWIN ? "q!q!i!s!s!" : "s!s!x4q!q!i!x4"
+        def flock_struct(type)
+          DARWIN ? [0, 0, 0, type, IO::SEEK_SET].pack(FMT)
+                 : [type, IO::SEEK_SET, 0, 0, 0].pack(FMT)
+        end
+        def flock_type(buf) = DARWIN ? buf.unpack(FMT)[3] : buf.unpack(FMT)[0]
+"#;
 
 /// The lock commands round-trip through a packed `struct flock`, and
 /// `F_GETLK` writes its answer back into the String.
 #[test]
 fn record_locks_take_a_packed_struct_flock() {
-    run_test_once(
-        r#"
-        require 'fcntl'
-        fmt = "s!s!l!l!i!"
+    run_test_once(&format!(
+        r#"{FLOCK_PRELUDE}
         path = "/tmp/monoruby_fcntl_lock_basic"
         File.write(path, "x")
         f = File.open(path, "r+")
         r = []
-        r << f.fcntl(Fcntl::F_SETLKW, [Fcntl::F_WRLCK, IO::SEEK_SET, 0, 0, 0].pack(fmt))
-        r << f.fcntl(Fcntl::F_SETLK, [Fcntl::F_UNLCK, IO::SEEK_SET, 0, 0, 0].pack(fmt))
+        r << f.fcntl(Fcntl::F_SETLKW, flock_struct(Fcntl::F_WRLCK))
+        r << f.fcntl(Fcntl::F_SETLK, flock_struct(Fcntl::F_UNLCK))
         # F_GETLK reports the lock that would block us, into the buffer.
-        buf = [Fcntl::F_WRLCK, IO::SEEK_SET, 0, 0, 0].pack(fmt)
+        buf = flock_struct(Fcntl::F_WRLCK)
         r << f.fcntl(Fcntl::F_GETLK, buf)
-        r << buf.unpack(fmt)[0]     # F_UNLCK: nothing in the way
+        r << flock_type(buf)        # F_UNLCK: nothing in the way
         r << (begin
-          f.fcntl(Fcntl::F_GETLK, [Fcntl::F_WRLCK, IO::SEEK_SET, 0, 0, 0].pack(fmt).freeze)
+          f.fcntl(Fcntl::F_GETLK, flock_struct(Fcntl::F_WRLCK).freeze)
         rescue => e
           e.class
         end)
         f.close
         File.unlink(path)
         r
-        "#,
-    );
+        "#
+    ));
 }
 
 /// A green thread waiting for a record lock must not stop the others:
@@ -43,25 +61,21 @@ fn record_locks_take_a_packed_struct_flock() {
 /// interpreter thread.
 #[test]
 fn a_blocked_lock_wait_lets_other_green_threads_run() {
-    run_test_once(
-        r#"
-        require 'fcntl'
-        fmt = "s!s!l!l!i!"
+    run_test_once(&format!(
+        r#"{FLOCK_PRELUDE}
         path = "/tmp/monoruby_fcntl_lock_live"
         File.write(path, "x")
         # A child process holds the lock for a while.
         child = fork do
           f = File.open(path, "r+")
-          f.fcntl(Fcntl::F_SETLKW, [Fcntl::F_WRLCK, IO::SEEK_SET, 0, 0, 0].pack(fmt))
+          f.fcntl(Fcntl::F_SETLKW, flock_struct(Fcntl::F_WRLCK))
           sleep 0.4
           exit!(0)
         end
         sleep 0.15
 
         waiter = Thread.new do
-          File.open(path, "r+") do |f|
-            f.fcntl(Fcntl::F_SETLKW, [Fcntl::F_WRLCK, IO::SEEK_SET, 0, 0, 0].pack(fmt))
-          end
+          File.open(path, "r+") {{ |f| f.fcntl(Fcntl::F_SETLKW, flock_struct(Fcntl::F_WRLCK)) }}
           :locked
         end
         # ... while this thread keeps being scheduled.
@@ -75,8 +89,8 @@ fn a_blocked_lock_wait_lets_other_green_threads_run() {
         result = waiter.value
         File.unlink(path)
         [result, ticks > 5]
-        "#,
-    );
+        "#
+    ));
 }
 
 /// A forked child keeps offloading. Workers do not survive `fork(2)`,

@@ -1168,6 +1168,7 @@
 51d87dc27970f55ee0f0c347def4e386	[5, 0, true]	m = ObjectSpace::WeakMap.new\n        kept = []\n        500.times do |i|
 521f16239cbd7625cbdbd1830aff0d66	[4, "FILE:20: warning: given block not used\\n", 4, "FILE:21: warning: given block not used\\n", "FILE:29: warning: plain\\n", "warning: deep\\n"]	require "stringio"\n        def capture\n          old = $stderr\n        
 522c4f8c40e029c9a06a958415c5bba8	["append_features:C"]	$res = []\n        module M\n          def self.append_features(base)\n   
+524367ed511f6b1b9b39540a39ff9acd	[0, 0, 0, 2, FrozenError]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
 525e307d40d5e0bc7aa36e1ace713254	[:small, 7, :big]	class BmR\n          define_method(:pick) { |n| return :small if n < 10;
 52737290d47684f2e53ee7646498dbeb	[1, 2, 1, 2, 1, 2, 2, 1, 2, 1, 2]	class S\n              def g\n                f\n              end\n   
 52951bd5bd2eafe538c7b07f93870c22	[[:authorizer, :authorizer=, :build_result_set, :busy_handler, :busy_handler_timeout=, :busy_timeout, :busy_timeout=, :changes, :close, :closed?, :collation, :collations, :commit, :complete?, :create_aggregate, :create_aggregate_handler, :create_function, :define_aggregator, :define_function, :define_function_with_flags, :enable_load_extension, :encoding, :errcode, :errmsg, :execute, :execute2, :execute_batch, :execute_batch2, :extended_result_codes=, :filename, :get_first_row, :get_first_value, :initialize_extensions, :interrupt, :last_insert_row_id, :load_extension, :prepare, :query, :readonly?, :results_as_hash, :results_as_hash=, :rollback, :statement_timeout=, :total_changes, :trace, :transaction, :transaction_active?], [:db_filename, :define_aggregator2, :disable_quirk_mode, :discard, :exec_batch, :load_extension_internal, :open16, :open_v2], [:active?, :bind_param, :bind_parameter_count, :bind_params, :clear_bindings!, :close, :closed?, :column_count, :column_decltype, :column_name, :columns, :done?, :each, :execute, :execute!, :expanded_sql, :memused, :must_be_open!, :remainder, :reset!, :sql, :stat, :step, :types], [:get_metadata, :prepare, :stat_for, :stats_as_hash]]	require "rubygems"\n        require "sqlite3"\n        [SQLite3::Database
@@ -1212,6 +1213,7 @@
 55d4331ac5b0d6b85a29b08cd75d814c	["echo hi", false]	def `(cmd); [cmd, cmd.frozen?]; end\n        x = "hi"\n        `echo #{x}
 55e0c5f6cdca1e7736c6f5a8ef3c31a9	[[[:a, 1], [:b, 2], [:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]]]	S = Struct.new(:a, :b)\n               s = S.new(1, 2)\n               r = []\n    
 55f0fc54d8a7b9fc5936d77ffe989680	true	File.absolute_path?("/tmp")
+56038da008a973f6fabe8d8e55d4ebe0	[:locked, true]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
 5625d0e94e4d1bc9b84e2742fce64c08	true	class Foo\n              def initialize\n                @a = 1\n     
 562f4d8b35d5fe503594b38617eafdc0	[[[:missing, :arrives]], [:defined], [[:missing, :arrives]]]	class Late\n          def method_missing(name, *args) = [:missing, name]
 565141a1ed8e896232b365303c5ac4d4	:OVERRIDDEN	class Integer; def ===(o); :OVERRIDDEN; end; end; 3 === 4
