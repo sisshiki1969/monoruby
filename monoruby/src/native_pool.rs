@@ -85,29 +85,33 @@ fn orphans() -> &'static Mutex<std::collections::HashSet<u64>> {
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Create this thread's completion pipe: `(read, write)`. The read end
+/// is non-blocking so [`drain`] can slurp it dry.
+fn new_pipe() -> (i32, i32) {
+    let mut fds = [0i32; 2];
+    // SAFETY: plain pipe(2); fds array is properly sized.
+    let r = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    assert_eq!(r, 0, "native_pool: pipe(2) failed");
+    // SAFETY: fds are the freshly created pipe ends.
+    unsafe {
+        libc::fcntl(fds[0], libc::F_SETFL, libc::O_NONBLOCK);
+        libc::fcntl(fds[0], libc::F_SETFD, libc::FD_CLOEXEC);
+        libc::fcntl(fds[1], libc::F_SETFD, libc::FD_CLOEXEC);
+    }
+    (fds[0], fds[1])
+}
+
 thread_local! {
     /// Completion pipe for this interpreter OS thread: `(read, write)`.
     /// The read end is what waiters park on; workers write one byte to
-    /// the write end per completion. Lazily created; the read end is
-    /// non-blocking so `drain` can slurp it dry.
-    static PIPE: (i32, i32) = {
-        let mut fds = [0i32; 2];
-        // SAFETY: plain pipe(2); fds array is properly sized.
-        let r = unsafe { libc::pipe(fds.as_mut_ptr()) };
-        assert_eq!(r, 0, "native_pool: pipe(2) failed");
-        // SAFETY: fds are the freshly created pipe ends.
-        unsafe {
-            libc::fcntl(fds[0], libc::F_SETFL, libc::O_NONBLOCK);
-            libc::fcntl(fds[0], libc::F_SETFD, libc::FD_CLOEXEC);
-            libc::fcntl(fds[1], libc::F_SETFD, libc::FD_CLOEXEC);
-        }
-        (fds[0], fds[1])
-    };
+    /// the write end per completion. Lazily created; replaced wholesale
+    /// in a forked child ([`replace_pipe`]).
+    static PIPE: std::cell::Cell<(i32, i32)> = std::cell::Cell::new(new_pipe());
 }
 
 /// The fd waiters park on (readable when a completion has arrived).
 pub(crate) fn wake_fd() -> i32 {
-    PIPE.with(|p| p.0)
+    PIPE.with(|p| p.get().0)
 }
 
 /// Drain the completion pipe (called by a woken waiter before it
@@ -117,7 +121,30 @@ pub(crate) fn drain() {
     PIPE.with(|p| {
         let mut buf = [0u8; 64];
         // SAFETY: reading our own non-blocking pipe read end.
-        while unsafe { libc::read(p.0, buf.as_mut_ptr() as _, buf.len()) } > 0 {}
+        while unsafe { libc::read(p.get().0, buf.as_mut_ptr() as _, buf.len()) } > 0 {}
+    });
+}
+
+/// Give a freshly forked child its own completion pipe.
+///
+/// `fork(2)` copies the fd *table*, not the pipe: both processes end up
+/// reading and writing one shared buffer. A completion byte the parent's
+/// waiter was about to consume can then be swallowed by the child's own
+/// [`drain`], and that waiter parks forever with its result already
+/// sitting in the parent's table — a hang the parent cannot recover from,
+/// with nothing wrong on its side. Closing the inherited ends in the
+/// child affects only the child's fd table, so the parent's pipe is
+/// untouched.
+fn replace_pipe() {
+    PIPE.with(|p| {
+        let (r, w) = p.get();
+        // SAFETY: our own pipe ends, and the forking thread is the only
+        // thread the child has.
+        unsafe {
+            libc::close(r);
+            libc::close(w);
+        }
+        p.set(new_pipe());
     });
 }
 
@@ -160,7 +187,7 @@ const WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 /// avoid.
 pub(crate) fn submit(op: NativeOp) -> u64 {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let wake = PIPE.with(|p| p.1);
+    let wake = PIPE.with(|p| p.get().1);
     let (lock, cv) = pool();
     let mut pool = lock.lock().unwrap();
     pool.queue.push_back(Job { id, op, wake });
@@ -218,20 +245,64 @@ fn complete(job: Job) {
     }
 }
 
-/// Forget the inherited pool in a freshly forked child.
+/// Every lock this module owns, held across a `fork(2)`.
 ///
-/// Workers do not survive `fork(2)`: the child has only the forking
-/// thread. What it does inherit is the bookkeeping — an `idle` count
-/// naming workers that no longer exist, and jobs queued for them, which
-/// belong to the parent. Left alone, the child's first [`submit`] would
-/// see "an idle worker will take it" and wait for a thread that will
-/// never run. Called from the child side of every fork that keeps
-/// interpreting (`Process._fork`, `Process.daemon`).
-pub(crate) fn reset_after_fork() {
-    let (lock, _) = pool();
-    let mut pool = lock.lock().unwrap();
-    pool.queue.clear();
-    pool.idle = 0;
+/// Acquired by the forking thread *before* the fork and released after
+/// it, in whichever process goes on running. Without that, a worker can
+/// be holding one at the moment of the fork — and the child does not get
+/// that worker, only the forking thread, so it inherits a locked mutex
+/// nobody will ever release. The child then blocks forever on its first
+/// `lock()`, which is [`ForkLocks::reset_child`]'s own. Held by the
+/// forking thread instead, the lock is owned in both processes by a
+/// thread that exists there.
+///
+/// This is the `pthread_atfork` prepare/parent/child dance, written out:
+/// the lock order is the one every other path here uses (pool, then
+/// `complete`'s orphans-before-results), so it cannot deadlock against a
+/// worker.
+pub(crate) struct ForkLocks {
+    pool: std::sync::MutexGuard<'static, Pool>,
+    orphans: std::sync::MutexGuard<'static, std::collections::HashSet<u64>>,
+    results: std::sync::MutexGuard<'static, HashMap<u64, Completion>>,
+}
+
+/// Quiesce the pool for a `fork(2)` — see [`ForkLocks`]. The guard must be
+/// dropped (parent) or spent on [`ForkLocks::reset_child`] (child) as soon
+/// as the fork returns; nothing that offloads may run in between.
+pub(crate) fn prepare_fork() -> ForkLocks {
+    // A poisoned lock is no reason to leave the child wedged: the state
+    // behind it is about to be reset anyway.
+    let pool = pool().0.lock().unwrap_or_else(|e| e.into_inner());
+    let orphans = orphans().lock().unwrap_or_else(|e| e.into_inner());
+    let results = results().lock().unwrap_or_else(|e| e.into_inner());
+    ForkLocks {
+        pool,
+        orphans,
+        results,
+    }
+}
+
+impl ForkLocks {
+    /// Forget the inherited pool in a freshly forked child, and release
+    /// the locks there.
+    ///
+    /// Workers do not survive `fork(2)`: the child has only the forking
+    /// thread. What it does inherit is the bookkeeping — an `idle` count
+    /// naming workers that no longer exist, jobs queued for them, and
+    /// results addressed to waiters that belong to the parent. Left
+    /// alone, the child's first [`submit`] would see "an idle worker will
+    /// take it" and wait for a thread that will never run. The completion
+    /// pipe goes with it ([`replace_pipe`]), because that one is shared
+    /// with the parent rather than copied. Called from the child side of
+    /// every fork that keeps interpreting (`Process._fork`,
+    /// `Process.daemon`).
+    pub(crate) fn reset_child(mut self) {
+        self.pool.queue.clear();
+        self.pool.idle = 0;
+        self.orphans.clear();
+        self.results.clear();
+        replace_pipe();
+    }
 }
 
 /// Take the completion for `id`, if the worker has finished.

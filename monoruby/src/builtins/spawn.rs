@@ -631,12 +631,19 @@ pub(crate) fn do_spawn(
     // parent sees EOF.
     let (rfd, wfd) = pipe_cloexec()
         .map_err(|err| MonorubyErr::errno_with_msg(&globals.store, &err, "pipe2"))?;
+    // Quiesce the native pool across the fork, as `Process._fork` does
+    // (`native_pool::ForkLocks`). This child only `execve`s or `_exit`s,
+    // so it never takes these locks itself — holding them here keeps the
+    // invariant uniform across every `fork(2)` in the tree, so anything
+    // added between the fork and the exec cannot reintroduce the hazard.
+    let pool_locks = crate::native_pool::prepare_fork();
     // SAFETY: monoruby's threads are green (single OS thread), so the
     // child is single-threaded and consistent; everything it touches was
     // prepared pre-fork.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         let err = std::io::Error::last_os_error();
+        drop(pool_locks);
         unsafe {
             libc::close(rfd);
             libc::close(wfd);
@@ -655,6 +662,7 @@ pub(crate) fn do_spawn(
         }
     }
     // ===== parent =====
+    drop(pool_locks);
     // SAFETY: plain fd syscalls on fds owned here.
     unsafe {
         libc::close(wfd);
