@@ -1938,11 +1938,13 @@ extern "C" fn stack_overflow(executor: &mut Executor) -> Option<Value> {
 }
 
 #[cfg(feature = "profile")]
-extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Value) {
+extern "C" fn guard_fail(vm: &mut Executor, globals: &mut Globals, self_val: Option<Value>) {
     let func_id = vm.cfp().lfp().func_id();
     // A failing guard may be probing a slot whose heap object has already
-    // been freed; record stats only for live values instead of panicking.
-    if let Some(class) = self_val.debug_class() {
+    // been freed, or one that was never written (a `None` slot reads as raw
+    // 0, which `Value`'s niche cannot represent, so take it as an Option);
+    // record stats only for live values instead of faulting.
+    if let Some(class) = self_val.and_then(|v| v.debug_class()) {
         globals.jit_class_guard_failed(func_id, class);
     }
 }
