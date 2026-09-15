@@ -6,12 +6,19 @@
 # Ruby(yarv2llvm) version by Hideki Miura
 #
 
-IMAGE_WIDTH = 256
-IMAGE_HEIGHT = 256
+# As a benchmark this renders 256x256, unchanged. AO_SIZE shrinks the image so
+# the same render can be diffed against a reference cheaply -- bin/test uses it,
+# where the point is to compare bytes rather than to measure time.
+IMAGE_WIDTH = Integer(ENV.fetch("AO_SIZE", 256))
+IMAGE_HEIGHT = IMAGE_WIDTH
 NSUBSAMPLES = 2
 NAO_SAMPLES = 8
 
-#srand(0)
+# The ambient-occlusion sampling below draws from `rand`, so without a fixed
+# seed every run renders a different image and the output cannot be diffed
+# against a reference at all. MT19937 is seeded identically on CRuby and
+# monoruby, so seeding it makes the image byte-identical across both.
+srand(0)
 
 class Vec
   def initialize(x, y, z)
