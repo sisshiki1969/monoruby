@@ -931,7 +931,7 @@ Ir では 13 k だが、**実時間では 1 回 5〜10 µs × 9 ≒ 1 リクエ�
 | | 回/req | Ir/req | 何 |
 |---|---:|---:|---|
 | `String#unpack("H*")` の `format!("{:02x}")` | 64 | 30,700 | バイトごとに `core::fmt`。nibble テーブルで 1/10 |
-| `Regexp#match?` の `expect_symbol_or_string()?.to_string()` | 45 | 27,000 | 対象文字列を Rust `String` に丸ごとコピー（`regexp.rs:1126`） |
+| `Regexp#match?` の `expect_symbol_or_string()?.to_string()` | 45 | 27,000 | 対象文字列を**シンボルとしてインターン**してから String に戻す（`regexp.rs:1126`）。§7.7 のリークの原因そのもの |
 | `MatchData#[]` の `format!("{sym}")` | 14 | 12,600 | 名前付きグループ参照で IdentId を Display 経由で文字列化 |
 | `Encoding::classify` | 90 | 22,400 | 1 回 250 Ir の走査。CRuby の `coderange_scan` は 7.7 k |
 | `Value::calculate_hash`（Array を Hash キーにする `hash`） | 27 | 62,000 | `exec_recursive` の HashSet 登録 + 要素ごとの `hash` ディスパッチ。CRuby の 2 倍 |
@@ -1023,7 +1023,27 @@ monoruby の Symbol は GC されず、`Value::try_symbol_or_string` / `expect_s
 名前だけ引き、無ければインターンせずに「無い」と答える —— なので、問い合わせに
 一意な文字列を渡しても表は増えない。1 個あたり String の複製 + hashbrown の項目 +
 `names` の項目で ≈ 500 B、2 個で ≈ 1.1 KB/req、`malloc_increase_bytes` の傾きと一致する。
-<<LEAK_ENTRY>>
+
+`IdentId::get_id` のミス経路に backtrace を仕込んだ scratch ビルドで、両方の呼び出し元は
+**`builtins::regexp::match_` = `Regexp#match?`** だった。`regexp.rs:1126` の
+
+```rust
+let given = arg0.expect_symbol_or_string(globals)?.to_string();
+```
+
+は、マッチ**対象の文字列**をメソッド名と同じ経路で受けている —— String を丸ごと
+インターンして IdentId にし、`to_string()` でまた String に戻す。Rails は
+`ActionDispatch::RequestId` が `X-Request-Id` を、`Rack::Utils` がクッキー値を
+`/…/.match?(str)` で検証するので、リクエストごとに一意な 2 つの文字列が永久に残る。
+`Regexp#match?` を動的な文字列に使うアプリすべてで起きる（§7.4.9 の 27 k Ir/req の
+正体でもある: 対象文字列の SipHash + 複製 2 回）。最小再現:
+
+```ruby
+r = /\A[\w\-]{1,255}\z/
+100_000.times { |i| r.match?("request-#{i}") }   # monoruby: Symbol.all_symbols +100,000（CRuby +0）
+100_000.times { |i| "request-#{i}" =~ r }        # +0
+100_000.times { |i| r.match("request-#{i}") }    # +0
+```
 
 対策: 問い合わせ系 API に非インターンの `IdentId::try_get_id(&str) -> Option<IdentId>`
 （`rev_table` の read lock 1 回）を通し、`get_id` は定義・代入の経路だけに残す。
@@ -1054,7 +1074,7 @@ monoruby の Symbol は GC されず、`Value::try_symbol_or_string` / `expect_s
 | L | `Hash#each` でブロックが 2 引数なら pair Array を作らない | `builtins/hash.rb` | −69 個/req の Array |
 | M | `File.file?` / `exist?` を `metadata` に | `builtins/file.rs:833,846` | 実時間 3〜6 %（syscall） |
 | N | `unpack("H*")` の nibble テーブル、`Regexp#match?` のコピー排除、`MatchData#[]` の `format!` 排除 | `string/pack.rs`、`builtins/regexp.rs:1126`、`match_data.rs` | −60 k |
-| O | 問い合わせ系 API（`respond_to?`・`send`・`MatchData#[]` …）を非インターンの `try_get_id` に（§7.7） | `id_table.rs`、`value.rs:2337`、呼び出し側 49 か所 | **RSS +1.2 KB/req の無限増加が止まる**。`get_id` の SipHash 分（K）も減る |
+| **O** | `Regexp#match?` が対象文字列をインターンしないようにする（`expect_string` で受ける、1 行）。次いで問い合わせ系 API（`respond_to?`・`send`・`MatchData#[]` …）を非インターンの `try_get_id` に（§7.7） | `builtins/regexp.rs:1126`、その後 `id_table.rs`・`value.rs:2337` と呼び出し側 49 か所 | **RSS +1.2 KB/req の無限増加が止まる**、−27 k Ir/req。`Regexp#match?` を動的入力に使う全アプリのリーク |
 | P | Rust runtime から呼ぶ `==` / `to_ary` / `to_s` / `default` のサイト別インラインキャッシュ | `globals/store`、`executor` | −50〜80 k |
 | Q | 文字列補間の一括確保（合計長を先に計算） | `codegen/runtime.rs:893` | −40 k |
 
