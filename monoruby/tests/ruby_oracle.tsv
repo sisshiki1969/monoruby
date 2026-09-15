@@ -1159,6 +1159,7 @@
 5103d830753ac483d2d4c39e44bc03b5	[0, 0, nil]	["‌" =~ /[[:word:]]/, "‍" =~ /[[:word:]]/, "‌" =~ /\\w/]
 511247f2a3b645da0c49c9876a105a9e	[1.687070598505588, 300]	def call_block\n          yield\n        end\n        def w6\n          s =
 5125ae5b4839d2d086156969d67bcc50	ArgumentError	class String; def <=>(o); :OVERRIDDEN; end; end\n            begin\n 
+514fa64cc2ca2813856a14f1731f5c07	[0, 0, 0, 2, FrozenError]	require 'fcntl'\n        fmt = "s!s!l!l!i!"\n        path = "/tmp/monorub
 5153f5263b097f08fb57811bdbdc5aaa	[true, true, true, false, true, true, true, false, false, false, false]	class A\n          def method1; end\n          protected\n          def pr
 5174f3c6fa3195d1fbd047639e4a904d	[[true, {data: 42}], ["async", "ctx"], [[[true, ["both"]], [false, []]], true, "both", false]]	r = []\n            de = Class.new(StandardError) { attr_reader :dat
 51be01e0d292ac0d9c77567390f1d11f	["Bbar", "B[239, 191, 189]", "Bdbar", "Btbar", Encoding::UndefinedConversionError, [ArgumentError, "too big fallback string"], TypeError, Encoding::UndefinedConversionError]	(r=[]; r << "B�".encode(Encoding::US_ASCII, fallback: { "�" => "bar" }); r << "B
@@ -1167,6 +1168,7 @@
 51d87dc27970f55ee0f0c347def4e386	[5, 0, true]	m = ObjectSpace::WeakMap.new\n        kept = []\n        500.times do |i|
 521f16239cbd7625cbdbd1830aff0d66	[4, "FILE:20: warning: given block not used\\n", 4, "FILE:21: warning: given block not used\\n", "FILE:29: warning: plain\\n", "warning: deep\\n"]	require "stringio"\n        def capture\n          old = $stderr\n        
 522c4f8c40e029c9a06a958415c5bba8	["append_features:C"]	$res = []\n        module M\n          def self.append_features(base)\n   
+524367ed511f6b1b9b39540a39ff9acd	[0, 0, 0, 2, FrozenError]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
 525e307d40d5e0bc7aa36e1ace713254	[:small, 7, :big]	class BmR\n          define_method(:pick) { |n| return :small if n < 10;
 52737290d47684f2e53ee7646498dbeb	[1, 2, 1, 2, 1, 2, 2, 1, 2, 1, 2]	class S\n              def g\n                f\n              end\n   
 52951bd5bd2eafe538c7b07f93870c22	[[:authorizer, :authorizer=, :build_result_set, :busy_handler, :busy_handler_timeout=, :busy_timeout, :busy_timeout=, :changes, :close, :closed?, :collation, :collations, :commit, :complete?, :create_aggregate, :create_aggregate_handler, :create_function, :define_aggregator, :define_function, :define_function_with_flags, :enable_load_extension, :encoding, :errcode, :errmsg, :execute, :execute2, :execute_batch, :execute_batch2, :extended_result_codes=, :filename, :get_first_row, :get_first_value, :initialize_extensions, :interrupt, :last_insert_row_id, :load_extension, :prepare, :query, :readonly?, :results_as_hash, :results_as_hash=, :rollback, :statement_timeout=, :total_changes, :trace, :transaction, :transaction_active?], [:db_filename, :define_aggregator2, :disable_quirk_mode, :discard, :exec_batch, :load_extension_internal, :open16, :open_v2], [:active?, :bind_param, :bind_parameter_count, :bind_params, :clear_bindings!, :close, :closed?, :column_count, :column_decltype, :column_name, :columns, :done?, :each, :execute, :execute!, :expanded_sql, :memused, :must_be_open!, :remainder, :reset!, :sql, :stat, :step, :types], [:get_metadata, :prepare, :stat_for, :stats_as_hash]]	require "rubygems"\n        require "sqlite3"\n        [SQLite3::Database
@@ -1211,6 +1213,7 @@
 55d4331ac5b0d6b85a29b08cd75d814c	["echo hi", false]	def `(cmd); [cmd, cmd.frozen?]; end\n        x = "hi"\n        `echo #{x}
 55e0c5f6cdca1e7736c6f5a8ef3c31a9	[[[:a, 1], [:b, 2], [:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]]]	S = Struct.new(:a, :b)\n               s = S.new(1, 2)\n               r = []\n    
 55f0fc54d8a7b9fc5936d77ffe989680	true	File.absolute_path?("/tmp")
+56038da008a973f6fabe8d8e55d4ebe0	[:locked, true]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
 5625d0e94e4d1bc9b84e2742fce64c08	true	class Foo\n              def initialize\n                @a = 1\n     
 562f4d8b35d5fe503594b38617eafdc0	[[[:missing, :arrives]], [:defined], [[:missing, :arrives]]]	class Late\n          def method_missing(name, *args) = [:missing, name]
 565141a1ed8e896232b365303c5ac4d4	:OVERRIDDEN	class Integer; def ===(o); :OVERRIDDEN; end; end; 3 === 4
@@ -1259,6 +1262,7 @@
 59104be79a3c34af64f1252be7287e04	42	x = 1\n            binding.eval("x = 42")\n            x\n            
 591cc1df80c9acab4811bc6f380f4314	"<STDIN>"	$stdin.path
 5935b2a14b1389efa07807ca17f49618	true	f = File.open("Cargo.toml")\n            begin\n              f.flush
+596860b159ef241b182864379aa164bc	[:locked, true]	require 'fcntl'\n        fmt = "s!s!l!l!i!"\n        path = "/tmp/monorub
 5977ceb1393805e0581d80719dcdd920	["US-ASCII", "UTF-8", "US-ASCII"]	s = "ab,cd".dup.force_encoding("US-ASCII")\n              s.partit
 599a1aeb51d29b478a71e17f2ffd3eeb	"hi"	r, w = IO.pipe\n            stop = false\n            busy = Thread.n
 59a5cb7a0c17abeadcdd4fb2b0ab7b76	1	case 9\n        when 0,4,8\n          0\n        when 1,5,9\n          1\n  
@@ -2172,6 +2176,7 @@
 9c4ebeae14bfd545fcd9f97591a4f7ea	[42, true]	called = nil\n            Process.singleton_class.send(:alias_method
 9c8dba1032bde3183b8033406c275203	"FiberError"	t = Thread.new { Fiber.yield rescue $!.class.to_s }\n            t.v
 9caa03a6554f9f51a6930123fab2a973	0	Process.setpriority(Process::PRIO_PROCESS, 0, Process.getpriority(Process::PRIO_
+9caf922308b53f4f109f9e4810fe3065	true	a = "/tmp/monoruby_offload_fork_parent"\n        b = "/tmp/monoruby_offl
 9cb40e91c3bf1f1111516d74ff94afdb	[0, false]	acc = 0\n        f = 0.0\n        i = 0\n        while i < 30000\n         
 9cb8e00505ce4bf6a3d19ab5bc5bfa5f	["HELLO", "HELLO", nil]	s = "hello".dup\n              [s.upcase!, s, s.upcase!]\n         
 9cbc8483c184024824b4e71cd3ea679a	"UTF-8"	eval(%Q{# encoding: ascii-8bit\\nx = 7\\n"\\\\u3042\\#{x}".encoding.to_s})
@@ -3279,6 +3284,7 @@ e8962f663b29be65e4e0dd56609acec4	[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 100]	def f\n 
 e8ad34b388352ca80000e7df317bb41a	[42, true, true]	o = Object.new\n            def o.to_str; "value"; end\n            c
 e8bf25bb3eb8bcdf2410ac76264f9ea4	[1, 2]	Enumerator.new { |y| y << 1 << 2 }.to_a
 e8ceec0aa9d3d00513f0a88f084c31e2	[[[:a, 200], [:b, 200], [:c, 200]], :d, :blk]	class Da; def tag = :a; end\n            class Db; def tag(&blk) = b
+e8d378ac2de74d8f8a7585a1b80eb15c	[Errno::EINVAL, Errno::EBADF, 0, 0]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
 e8e220b680848457259609fb951e4dbd	["ensure in f", "ensure in g", 42]	def g\n          begin\n            yield\n          ensure\n            $r
 e8f73c5ee545fe5b71d1c667d8bec38b	[3, [:gt, :gt]]	class Gt\n              attr_reader :calls\n              def initial
 e8fff433024d62ecc658476201cd2358	[0.0, 750.0]	def call_block\n          yield\n        end\n        def d4(n)\n          

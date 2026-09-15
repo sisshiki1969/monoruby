@@ -25,9 +25,10 @@
 //! worker itself is left to finish harmlessly (there is no portable way
 //! to cancel a blocked syscall).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::Duration;
 
 /// A kernel-blocking operation. Raw bytes and fds only: workers must
 /// never touch the Ruby heap or the interpreter's thread-locals.
@@ -38,6 +39,13 @@ pub(crate) enum NativeOp {
     /// Blocking `open(2)` — used for FIFOs, whose open blocks until the
     /// peer end appears.
     Open { path: std::ffi::CString, flags: i32, mode: u32 },
+    /// `fcntl(fd, cmd, &arg)` for a command that waits in the kernel —
+    /// `F_SETLKW` (and its open-file-description twin where the platform
+    /// has one), which blocks until the record lock it asks for is
+    /// available. `arg` is this job's own copy of the packed
+    /// `struct flock`: the waiting commands only read it, so nothing has
+    /// to travel back.
+    Fcntl { fd: i32, cmd: i32, arg: Vec<u8> },
     /// A foreign call the binding declared blocking (`attach_function ...,
     /// blocking: true`). Unlike the two syscalls above, what runs here is
     /// arbitrary C chosen by the Ruby program, so the raw-data discipline is
@@ -113,32 +121,117 @@ pub(crate) fn drain() {
     });
 }
 
+/// One submitted operation, as a worker sees it: the ticket, the work,
+/// and the completion pipe of the interpreter thread waiting for it
+/// (workers are shared, so the fd travels with the job).
+struct Job {
+    id: u64,
+    op: NativeOp,
+    wake: i32,
+}
+
+#[derive(Default)]
+struct Pool {
+    queue: VecDeque<Job>,
+    /// Workers parked on the condvar, i.e. available to take a job now.
+    idle: usize,
+}
+
+fn pool() -> &'static (Mutex<Pool>, Condvar) {
+    static POOL: OnceLock<(Mutex<Pool>, Condvar)> = OnceLock::new();
+    POOL.get_or_init(|| (Mutex::new(Pool::default()), Condvar::new()))
+}
+
+/// How long a worker waits for its next job before exiting. Long enough
+/// that a program offloading steadily keeps its workers hot, short
+/// enough that a burst does not leave threads parked for the rest of the
+/// process.
+const WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Submit `op` to a worker thread; returns the ticket to poll with
 /// [`try_take`].
+///
+/// Reuses a parked worker when there is one — the round trip is then a
+/// condvar handoff rather than a `clone(2)`, which is what makes
+/// offloading affordable for anything called often. A new worker is
+/// started only when every existing one is busy: a worker busy with a
+/// kernel-blocking syscall may not come back for minutes, so queueing
+/// behind it would reintroduce exactly the stall this module exists to
+/// avoid.
 pub(crate) fn submit(op: NativeOp) -> u64 {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let wake = PIPE.with(|p| p.1);
-    std::thread::spawn(move || {
-        let (ret, errno) = run_op(&op);
-        let comp = Completion { ret, errno };
-        {
-            let mut orphans = orphans().lock().unwrap();
-            if orphans.remove(&id) {
-                // Waiter is gone; drop the result.
-                return;
-            }
-            results().lock().unwrap().insert(id, comp);
-        }
-        // SAFETY: `wake` is the submitting interpreter's pipe write end,
-        // which lives for that interpreter thread's lifetime. A failed
-        // or short write only delays the waiter until the next poller
-        // pass triggered by another completion — never corrupts state.
-        unsafe {
-            let byte = 1u8;
-            let _ = libc::write(wake, &byte as *const u8 as _, 1);
-        }
-    });
+    let (lock, cv) = pool();
+    let mut pool = lock.lock().unwrap();
+    pool.queue.push_back(Job { id, op, wake });
+    if pool.queue.len() > pool.idle {
+        std::thread::spawn(worker);
+    } else {
+        cv.notify_one();
+    }
     id
+}
+
+/// A pool worker: take jobs until idle for [`WORKER_IDLE_TIMEOUT`].
+fn worker() {
+    let (lock, cv) = pool();
+    let mut pool = lock.lock().unwrap();
+    loop {
+        let job = loop {
+            if let Some(job) = pool.queue.pop_front() {
+                break Some(job);
+            }
+            pool.idle += 1;
+            let (guard, timeout) = cv.wait_timeout(pool, WORKER_IDLE_TIMEOUT).unwrap();
+            pool = guard;
+            pool.idle -= 1;
+            if timeout.timed_out() && pool.queue.is_empty() {
+                break None;
+            }
+        };
+        let Some(job) = job else { return };
+        drop(pool);
+        complete(job);
+        pool = lock.lock().unwrap();
+    }
+}
+
+/// Run one job and hand its result to the waiter.
+fn complete(job: Job) {
+    let (ret, errno) = run_op(&job.op);
+    let comp = Completion { ret, errno };
+    {
+        let mut orphans = orphans().lock().unwrap();
+        if orphans.remove(&job.id) {
+            // Waiter is gone; drop the result.
+            return;
+        }
+        results().lock().unwrap().insert(job.id, comp);
+    }
+    // SAFETY: `wake` is the submitting interpreter's pipe write end,
+    // which lives for that interpreter thread's lifetime. A failed
+    // or short write only delays the waiter until the next poller
+    // pass triggered by another completion — never corrupts state.
+    unsafe {
+        let byte = 1u8;
+        let _ = libc::write(job.wake, &byte as *const u8 as _, 1);
+    }
+}
+
+/// Forget the inherited pool in a freshly forked child.
+///
+/// Workers do not survive `fork(2)`: the child has only the forking
+/// thread. What it does inherit is the bookkeeping — an `idle` count
+/// naming workers that no longer exist, and jobs queued for them, which
+/// belong to the parent. Left alone, the child's first [`submit`] would
+/// see "an idle worker will take it" and wait for a thread that will
+/// never run. Called from the child side of every fork that keeps
+/// interpreting (`Process._fork`, `Process.daemon`).
+pub(crate) fn reset_after_fork() {
+    let (lock, _) = pool();
+    let mut pool = lock.lock().unwrap();
+    pool.queue.clear();
+    pool.idle = 0;
 }
 
 /// Take the completion for `id`, if the worker has finished.
@@ -173,6 +266,19 @@ fn run_op(op: &NativeOp) -> (i64, i32) {
             // SAFETY: NUL-terminated path, plain open(2).
             let r = unsafe { libc::open(path.as_ptr(), *flags, *mode as libc::c_uint) };
             if r >= 0 {
+                return (r as i64, 0);
+            }
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            if errno != libc::EINTR {
+                return (-1, errno);
+            }
+        },
+        NativeOp::Fcntl { fd, cmd, arg } => loop {
+            // SAFETY: fcntl(2) with a pointer third argument — this job
+            // owns `arg` for as long as the worker runs, and the waiter
+            // is parked meanwhile.
+            let r = unsafe { libc::fcntl(*fd, *cmd, arg.as_ptr()) };
+            if r != -1 {
                 return (r as i64, 0);
             }
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);

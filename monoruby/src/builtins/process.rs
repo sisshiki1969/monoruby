@@ -1520,8 +1520,10 @@ fn process_fork(
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fork"));
     }
     if pid == 0 {
-        // Child: only the forking green thread survives.
+        // Child: only the forking green thread survives — and neither do
+        // the native offload workers.
         crate::scheduler::fork_child_reset_threads(vm);
+        crate::native_pool::reset_after_fork();
     }
     Ok(Value::integer(pid as i64))
 }
@@ -1575,6 +1577,7 @@ fn process_daemon(
             libc::_exit(0);
         }
         crate::scheduler::fork_child_reset_threads(vm);
+        crate::native_pool::reset_after_fork();
         libc::setsid();
         if !nochdir {
             libc::chdir(c"/".as_ptr());
