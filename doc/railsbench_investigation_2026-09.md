@@ -1171,3 +1171,247 @@ JIT の帰属は §6 のとおり perf マップで行うが、**YJIT のマッ�
 が付ける番地が直前の断片の終端と一致することが多い。完全一致で見つからなければ 4 KiB
 以内の直前の項目に倒すと 281 k / 343 k が名前に解決する（残り 62 k は ruby バイナリ側の
 シンボル無し領域）。monoruby のマップは 1 メソッド 1 項目で 502 k / 507 k が解決する。
+
+## 8. 再々計測（2026-09-15、master `2f1bd40e`、#1365 の後）
+
+H・O・I・M（#1365）を入れた master で、§6 / §7.11 と同じ手法で取り直した。結論から:
+
+**命令数では CRuby+YJIT を下回った（0.97 倍）。実時間は定常状態で 1.19 倍（§7 では 1.4 倍）。
+残る差は (1) オブジェクト数 1.71 倍とその malloc/free（3 倍）、(2) Rust 側から Ruby を呼ぶ
+経路の引数マーシャリング（キーワード引数 92 k、`method_missing` 連鎖 154 k）、(3)
+`gsub!(regex, Hash)` の残り 134 k、(4) 文字列補間 80 k、(5) 実行時メソッド探索 60 k、
+(6) 学習しない多相サイト（PMC の 4 way が起動時のクラスで埋まる）である。**
+
+### 8.1 数字
+
+| 指標 | monoruby `2f1bd40e` | CRuby 4.0.6+YJIT | 比 | §7（`b730d15d`） |
+|---|---:|---:|---:|---:|
+| Ir/req（WARM=1,000 直後、差分法） | **2,937,075** | 3,038,397 | **0.97x** | 3,057,451（1.01x） |
+| 実時間 small.rb（warm 2,000 + 計測 2,000、3 回の中央値） | 1.290 ms/req | 1.244 ms/req | 1.04x | 1.468（1.08x） |
+| 実時間 定常状態（`blocks.rb` ブロック 5〜11 の平均） | **1.35 ms/req** | **1.13 ms/req** | **1.19x** | 1.50 / 1.05（1.4x） |
+| オブジェクト確保（`GC.stat`） | **1,569 個/req** | 919 個/req | **1.71x** | 1,590 |
+| GC 回数（1,000 req あたり） | 5 | 9 | — | 5 |
+| RSS の伸び（`blocks.rb` 24,000 req） | 281 → 284 MiB（**≈ 0.1 KB/req**） | 129 → 135 MiB | — | +1.2 KB/req |
+
+`blocks.rb`（12 ブロック × 2,000 req、ms/req）:
+
+| ブロック | 0 | 1 | 2 | 3 | 5 | 7 | 9 | 11 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| monoruby | 1.42 | 1.27 | 1.27 | 1.32 | 1.41 | 1.32 | 1.33 | 1.34 |
+| CRuby+YJIT | 1.57 | 1.19 | 1.22 | 1.24 | 1.11 | 1.19 | 1.14 | 1.10 |
+
+monoruby は 2,000 req 以降平坦、CRuby は §7.2 のとおり GC 回数が減りながら 1.10 まで
+下がる。O でシンボル表の増加が止まったので RSS の伸びは 1.2 KB/req → 0.1 KB/req
+（残りは Rails 側のキャッシュと思われる。CRuby も 6 MiB 増える）。
+
+### 8.2 サブシステム別（早期、Ir/req）
+
+JIT 生成コードは 2 回の実行で番地が違うので、名前つきシンボルの差分の残り（合計 −
+名前つき）として出した（perf マップ帰属の 502,190 と一致する）。
+
+| バケット | monoruby | % | CRuby+YJIT | % | 比 | §7.3 からの差 |
+|---|---:|---:|---:|---:|---:|---:|
+| JIT 生成コード | 502,082 | 17.1 | 339,583 | 11.2 | 1.48x | −9.7 k |
+| Hash | 347,122 | 11.8 | 416,736 | 13.7 | 0.83x | +1.2 k |
+| libc malloc/free | **342,754** | 11.7 | 118,958 | 3.9 | **2.88x** | −24.5 k |
+| その他 | 293,211 | 10.0 | 254,476 | 8.4 | 1.15x | |
+| VM / 呼び出し / runtime | 242,696 | 8.3 | 457,332 | 15.1 | 0.53x | −7.4 k |
+| GC + オブジェクト確保 | 239,960 | 8.2 | 496,343 | 16.3 | 0.48x | −6.7 k |
+| String | 223,603 | 7.6 | 220,520 | 7.3 | 1.01x | −14.3 k |
+| Regexp | 198,701 | 6.8 | 206,341 | 6.8 | 0.96x | −19.5 k |
+| Value 操作 | 121,892 | 4.2 | — | — | — | −2.6 k |
+| メソッド / 定数探索 | **116,641** | 4.0 | 58,218 | 1.9 | **2.00x** | +2.0 k |
+| builtins（Rust） / （C） | 102,935 | 3.5 | 138,980 | 4.6 | 0.74x | −1.1 k |
+| Digest | 100,706 | 3.4 | 144,331 | 4.8 | 0.70x | −1.1 k |
+| libc mem\* | 65,530 | 2.2 | 33,464 | 1.1 | 1.96x | −4.2 k |
+| JIT コンパイラ | 27,925 | 1.0 | 91,498 | 3.0 | 0.31x | +5.9 k |
+| ivar / shape | 11,318 | 0.4 | 30,161 | 1.0 | 0.38x | |
+| **合計** | **2,937,075** | 100 | **3,038,397** | 100 | **0.97x** | −120.4 k |
+
+構図は §7.3 と同じ: 呼び出し・GC・Hash・Digest で勝ち、malloc（2.9 倍）・メソッド探索
+（2 倍）・生成コード（1.5 倍）で負けている。
+
+### 8.3 profile 統計（定常状態: WARM=2,000 の N=600 と N=100 の差分、1 req あたり）
+
+**deopt 29.4 回/req**（§7.4.5 では 48）。`Hash#[]` のキークラスの 11 回は消えた。残りは 2 群:
+
+| サイト | 回/req | 種別 |
+|---|---:|---|
+| `block in Fanout#listening?` の `silenced?` | 6.0 | POLYMORPHIC、PMC 溢れ |
+| `ConnectionHandling#connection_specification_name` | 4.0 | POLYMORPHIC、PMC 溢れ（下記） |
+| `block in LazyAttributeSet#fetch_value` の `deserialize` | 2.4 | POLYMORPHIC |
+| `InheritableOptions#initialize`・`each_connection_pool`（本体とブロック）の `ret` | 2.0 × 3 | **capture guard**（下記） |
+| `render_template`・`__gather_each`・`_layout_for_option` の `ret` | 1.0 × 3 | capture guard |
+| `changed?`・`build_handle`・`from_pairs`・`response_body=` の `super` ほか | 1.0 × 6 | POLYMORPHIC / 戻り値 |
+
+- **PMC 溢れ**: `connection_specification_name` の PMC は `#<Class:ActionMailbox::Record>`
+  x1・`#<Class:ActiveStorage::Record>` x2・`#<Class:ActionText::Record>`・`#<Class:ActiveRecord::Base>`
+  x5168 で 4 way が埋まり、リクエストが実際に使う `#<Class:ApplicationRecord>`（guard
+  failed 5136 回）は溢れ（overflow 5164）に落ちている。`pic.rs` のコメントどおり、PMC が
+  満杯なら再コンパイルしても同じ chain になるので最後の arm のミスは素の deopt のまま
+  ——つまり **起動時に 1〜2 回だけ通ったクラスが way を占有し、本番のクラスが永遠に
+  deopt する**。`silenced?`（Subscribers の 5 種目）も同じ。
+- **capture guard**: `--features deopt` の exit ログで、`ret` の deopt はすべて
+  `AsmInst::GuardCapture`（ブロックつき呼び出しの後、フレームが Proc に捕まっていたら
+  deopt、`immediate_evict`）だった。`InheritableOptions#initialize` の `super() { |h, k|
+  @parent._get(k) }` は default_proc としてブロックを保存するので、呼び出し元のフレームが
+  毎回昇格し、直後の `ret` で毎回 deopt する。9 回/req。deopt 経路自体は F で軽くなった
+  （`chain_deopt` 10.2 回/req で 2.7 k Ir）ので実害は小さいが、フレーム昇格
+  （`move_frame_to_heap` 35 回/req、`wrap_promoted_frame` 36 個/req の確保）とセット。
+
+**再コンパイルは実質ゼロ**（全 2,600 req で 62 回、起動時の `NotCached` /
+`ConstVersionGuardFailed` のみ）。
+
+**グローバルメソッドキャッシュの表引き 180 回/req**（§7.4.6 の 390 は起動込み）:
+`==` 72（Object 22・BOOL 20・Thread 11・BasicObject 10・NilClass 7）、`default` 34
+（InheritableOptions 21・Rack::Headers 13）、`to_ary` 17、`method_missing` 16、
+`to_s` / `to_str` Integer 14、`respond_to?` 系 13、`Hash#[]` 13。すべて Rust runtime が
+起点の呼び出しで、サイト別インラインキャッシュがない（§7.9 の P）。
+
+### 8.4 ボトルネック（証拠つき、コスト順）
+
+callgrind の差分法（§6）、呼び出し元は perf マップで解決（§7.11）。
+
+#### 8.4.1 `gsub!(regex, Hash)` —— 3 回/req、134 k Ir/req（4.6 %）
+
+§7.4.1 の残り。`replace_all_hash` 3.0 回/req で 134,006 Ir（1 回 45 k、対象は 260〜340
+バイト）。呼び出し元は `ActiveSupport::JSON::Encoding::JSONGemEncoder#encode` の
+`gsub!(/>|<|&/, ESCAPED_CHARS)` 2 回と `URI._encode_uri_component` の
+`gsub!(/[^*\-.0-9A-Z_a-z]/, TBL)` 1 回（`gsubprobe.rb`）。1 バイトあたり ≈ 150 Ir で、
+onigmo の `FindCaptures::next`（capture 付き反復）が大半。CRuby の `str_gsub` は
+`rb_reg_search` を capture region 付きで回すのは同じだが、MatchData は BUSY でなければ
+再利用し、`rb_hash_aref` は C の直接呼び出しである。
+
+#### 8.4.2 `method_missing` 連鎖（Rails config）—— 17 回/req、154 k Ir/req（5.2 %）
+
+§7.4.2 の再測。`Executor::invoke_method_missing` 16.9 回/req。inclusive は入れ子で
+読めないので、`mmprobe.rb`（`InheritableOptions` を 2 段重ねて `leaf.logger` を 100,000
+回読む）で 1 アクセスあたりを取った:
+
+| | Ir / 1 アクセス |
+|---|---:|
+| monoruby | **9,061** |
+| CRuby+YJIT | 5,322 |
+
+monoruby 側の内訳（self、上位）: 引数マーシャリング ≈ 1,760（`fill_positional_args`
+512・`set_callee_frame_arguments` 432・`handle_invoker_arguments` 330・**`handle_keyword`
+198 + `check_missing_keyword` 165**——`method_missing(name, *args)` にキーワードは
+無いのに走る——・`jit_generic_set_arguments` 126）、確保と解放 ≈ 960（alloc 395・
+`RValue::free` 271・`_int_free` 166・malloc 129）、メソッド探索 ≈ 620（`GlobalMethodCache`
+171・`find_method` 159・`check_method_for_class_with_version` 153・`check_method_with_refinements`
+141）、**`IdentId::get_id` 383**（`OrderedOptions#[]` の `super(key.to_sym)` と `Hash#[]`
+ミス時の `IdentId::get_id("default")` で毎回インターン表を引く）、`String#end_with?` 276、
+**`Symbol#to_s` 220**（`name.to_s` が ID 表の String を clone）、`invoke_method_missing`
+191、SmallVec の extend 325（引数配列）。差 3.7 k のうち構造的なのは Rust 発の呼び出し
+経路（引数マーシャリング + 探索 ≈ 2.4 k、CRuby の `setup_parameters_complex` +
+`vm_call_method_missing_body` ≈ 0.5 k）。
+
+#### 8.4.3 キーワード引数のマーシャリング —— 76 回/req、92 k Ir/req（3.1 %）
+
+`jit_generic_set_arguments` 62 回/req → `set_callee_frame_arguments` 115 k、うち
+`handle_keyword` 76 回/req で **91,656 Ir（1 回 1.2 k）**。内訳: `CallSiteInfo::clone`
+45 回/req **26 k**（§7.4.3 の J: サイト情報を呼び出しごとに clone）、`RubyMap`
+（kwargs Hash）の構築 12 k + `Value::hash` 4 k、`free` 115 回/req 10 k、
+`Vec<String>` の extend + drop 5 k（`check_missing_keyword` がキーワード名の String
+ベクタを毎回作る）、`indexmap` の clone 2 k。CRuby の `setup_parameters_complex` は
+1 回 ≈ 180 Ir。
+
+#### 8.4.4 オブジェクトが 1.71 倍 —— malloc/free 343 k、GC 240 k Ir/req
+
+`GC.stat` で 1,569 個/req（CRuby 919）。確保の入口（`ALLOC.with`）1,200 回/req の
+呼び出し元:
+
+| 確保元 | 個/req | 何か |
+|---|---:|---|
+| `runtime::create_array` | **269** | 実行時に作る Array（splat・多重代入・`*args` の転送、`Array()`） |
+| `args::fill_positional_args` | **127** | `*rest` 引数の Array（`method_missing(name, *args)` ほか） |
+| `string_substring` | 80 | `String#[]` / slice |
+| `concatenate_string_inner` | 55 | 文字列補間の結果 |
+| `Symbol#to_s` | 46 | ID 表の名前を毎回 clone した String |
+| `default_alloc_func` | 44 | ふつうのオブジェクト（`Class#new`） |
+| `String#b` | 41 | `URI` / JSON エスケープの `.b` |
+| `wrap_promoted_frame` | 36 | Proc に捕まって昇格したフレーム（8.3 の capture guard） |
+| `save_capture_special_variables` | 31 | 正規表現 1 回ごとの `$~`（MatchData） |
+| `RValue::pack` / `Kernel#dup` / `set_backref` / `Array#join` / `__escape_html` | 26 / 21 / 19 / 19 / 18 | |
+| `Value::hash` / `Array.allocate` / `Hash#clone` / `Hash#merge` / `invoke_method_missing` | 18 / 16 / 15 / 13 / 12 | |
+
+CRuby との差 650 個/req の大半は **上 2 行（引数まわりの Array 396 個/req）** と、
+CRuby なら再利用する `$~` の MatchData、`Symbol#to_s` の clone である。malloc の呼び出し
+そのものは Rust 側（`__rust_alloc` 924 回/req: `Vec` の伸長 258・`CallSiteInfo::clone`
+92・**`String::clone` 92**（`Symbol#to_s` 53 + `IdentId::get_name` 39）・`SmallVec<[u8;32]>`
+50・`invoke_method_missing` 40・`move_frame_to_heap` 28・`coerce_hash_splat_args` 21・
+`Encoding#ascii_compatible?` 18——H で `cgi/escape.rb` に足した判定が Encoding オブジェクトを
+確保している——・`handle_keyword` 15）。
+
+#### 8.4.5 文字列補間 —— 55 回/req、80 k Ir/req（2.7 %）
+
+`concatenate_string` 54.9 回/req で 78,248 Ir（**1 回 1.45 k**、§7.4.7 の 191 k は起動込み
+の値）。中身は `append_piece` 230 回/req 32 k と `invoke_tos` 225 回/req 20 k（piece
+ごとに `to_s` をディスパッチ、String でも通る）、結果の確保 3.8 k。呼び出し元は
+`TagBuilder#tag_option` 34 回/req、`FileHandler#each_precompressed_filepath` 28 回、
+`TemplatePath.virtual` 19 回、`OpenSSL::Cipher#initialize`（stdlib 側の Ruby）16 回、
+`content_tag_string` 14 回、`set_cookie_header` 13 回。CRuby の `"#{a}#{b}"`
+（`rb_str_concat_literals` + `objtostring`）は 1 回 ≈ 400 Ir。
+
+#### 8.4.6 実行時メソッド探索 —— 258 + 389 回/req、≈ 60 k Ir/req（2.0 %）
+
+`Executor::find_method` 258 回/req 40 k（`invoke_method_inner_vis` 130・`eq_values_vis_raw`
+44・`runtime::find_method` 40・`invoke_method` 26・`rb_equal_search_slow` 10）と
+`GlobalMethodCache::get` 389 回/req 22 k（`check_method_for_class_with_version` 経由
+293、`array_join` 17、`flatten` 28、`Kernel#Array` 12、`respond_to?` 10）。8.3 の表引き
+180 回/req と同じ根: Rust runtime から `==` / `to_ary` / `to_s` / `default` /
+`method_missing` を呼ぶ箇所にサイト別キャッシュがない。
+
+#### 8.4.7 学習しない多相サイト —— deopt 29 回/req
+
+8.3 のとおり。deopt 経路は軽い（2.7 k）ので命令数への直接の寄与は小さいが、(a) PMC
+溢れの原因が「起動時にだけ通ったクラス」なのは profile の品質問題で、`connection_
+specification_name` は同じ ISeq に解決する singleton class の集合（same-target）なのに
+`pmc_same_target_classes` が builtin 限定で使えない、(b) 溢れたサイトの最後の arm が
+generic な呼び出しではなく deopt になっている、の 2 点が構造的。
+
+#### 8.4.8 小さいが確実なもの
+
+- `Symbol#to_s` が ID 表の String を clone（46 回/req、9.8 k）、`IdentId::get_name` の
+  `to_string_lossy`（39 回/req、6.6 k）: §7.9 の K。
+- `IdentId::get_id("default")`（`Hash#[]` ミスごと）と `super(key.to_sym)` のインターン表
+  引き: 8.4.2 の 383 Ir/アクセス。
+- `Encoding#ascii_compatible?` が Encoding を確保（18 回/req、1.6 k）: `__escape_html`
+  側で判定して非対応なら nil を返せば `cgi/escape.rb` の判定は要らない。
+- `$~` の MatchData を毎回確保（31 回/req）: CRuby は BUSY でなければ再利用。
+
+### 8.5 対策候補（コスト順）
+
+| # | 施策 | 変更箇所 | 見込み（Ir/req） |
+|---|---|---|---|
+| R | `gsub` / `gsub!` の Hash 置換: 素の Hash（default_proc なし・`default` 未再定義）なら `Hash#[]` を直接引き、MatchData と `$~` は最後の 1 回だけ。onigmo の検索を capture 無しで回して一致区間だけ region を取る | `rvalue/regexp.rs` `replace_all_hash` | **−100 k** |
+| S | Rust 発の呼び出し（`invoke_method_inner`）の引数経路: キーワードを受けない callee では `handle_keyword` を通さない、`CallSiteInfo` を借用、`check_missing_keyword` の `Vec<String>` を作らない、kwrest 不要なら `RubyMap` を作らない | `codegen/runtime/args.rs` | **−70〜90 k**（8.4.2 + 8.4.3） |
+| T | `method_missing` 連鎖: `OrderedOptions#[]` の `to_sym` と `Hash#[]` ミスの `get_id("default")` を定数 IdentId に、`Symbol#to_s` を 0 clone に（K） | `builtins/hash.rs:959`、`builtins/symbol.rs`、`id_table.rs` | −25 k |
+| U | 文字列補間: 合計長を先に計算して 1 回で確保、String piece は `to_s` をディスパッチしない（Q） | `codegen/runtime.rs` `concatenate_string` | −40 k |
+| P | Rust runtime から呼ぶ `==` / `to_ary` / `to_s` / `default` / `method_missing` のサイト別インラインキャッシュ | `executor.rs`、`globals/store` | −40〜50 k |
+| V | `*rest` と実行時 Array: `method_missing(name, *args)` などの rest Array を遅延生成、`create_array` の 269 回/req の内訳を取る | `codegen/runtime/args.rs`、`runtime.rs` | −50〜100 個/req |
+| W | PMC: 溢れたときは観測数最小の way を追い出す（起動時のクラスが本番のクラスを締め出さない）。溢れサイトの最後の arm を generic call に。`pmc_same_target_classes` を ISeq にも | `globals/store.rs` `PolyCache::record`、`jitgen/compile/pic.rs`、`method_call.rs` | deopt 29 → ≈ 10 回/req、`connection_specification_name` / `silenced?` の VM 再実行分 |
+| X | `$~` の MatchData 再利用、`Encoding#ascii_compatible?` の確保排除 | `executor.rs` `save_capture_special_variables`、`builtins/string.rs` | −50 個/req |
+
+R〜U で命令数 −250 k（8.5 %）前後、V〜X でオブジェクト −150〜200 個/req が見込める。
+CRuby との実時間差 1.19 倍のうち命令数はもう逆転しているので、残りは §7.6 の命令
+キャッシュ（生成コード 1.48 倍）とオブジェクト数（malloc/free 2.9 倍）に帰着する。
+
+### 8.6 追加した計測手順
+
+```sh
+# gsub(regex, Hash) の呼び出し元（String#gsub / gsub! を差し替えて caller_locations を集計）
+WARM=300 N=200 monoruby benchmarks/railsbench/gsubprobe.rb
+# config アクセス 1 回の Ir（InheritableOptions 2 段、100,000 回の差分）
+N=20000 valgrind --tool=callgrind ... monoruby benchmarks/railsbench/mmprobe.rb
+N=120000 valgrind --tool=callgrind ... monoruby benchmarks/railsbench/mmprobe.rb
+# 定常状態の profile 統計: N=600 と N=100（同じ WARM）の差分を 500 で割る
+N=600 WARM=2000 target-prof/release/monoruby benchmarks/railsbench/small.rb
+N=100 WARM=2000 target-prof/release/monoruby benchmarks/railsbench/small.rb
+# deopt の出口（どのガードか）: --features deopt の exit ログを (サイト, 命令, guard, emit) で集計
+N=20 WARM=400 target-deopt/release/monoruby benchmarks/railsbench/small.rb 2> deopt.log
+```
+
+サブシステム別の表は、JIT 生成コードの番地が 2 回の実行で異なる（番地ごとの差分は
+正負が相殺せず 3 倍に膨らむ）ので、名前つきシンボルの差分を取り、JIT 生成コードは
+合計との残りとして出す。perf マップ帰属（§7.11）の値と一致する。
