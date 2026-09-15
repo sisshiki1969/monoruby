@@ -698,7 +698,7 @@ A〜F を入れた後の master で、同じ手法（§6）に加えて cache �
 
 **命令数ではもう負けていない。負けているのは (1) 1 リクエストあたりのオブジェクト数
 （1.73 倍）とその malloc/free、(2) 数か所の「Ruby で書かれた C 拡張」経路
-（`CGI.escapeHTML`・`method_missing` 連鎖・キーワード引数）、(3) 学習しない JIT サイト
+（`gsub(regex, Hash)`——`CGI.escapeHTML`・JSON エンコーダ・`URI`——、`method_missing` 連鎖・キーワード引数）、(3) 学習しない JIT サイト
 （`Hash#[]` のキークラス）、(4) 直線的に増え続ける RSS（≈ 1.2 KB/req）、そして命令数が
 同じなのに実時間が 1.4 倍になる理由としての (5) 命令キャッシュミス（+33 %/req）である。**
 
@@ -793,13 +793,21 @@ CRuby の ≈ 1.1〜1.15 倍**（早期の同条件では 1.01 倍）で、実�
 
 すべて callgrind の差分法（§6）で、呼び出し元は JIT シンボルマップで名前に解決した。
 
-#### 7.4.1 `CGI.escapeHTML` が `gsub(/['&"<>]/, HASH)` —— 175 k Ir/req（5.7 %）
+#### 7.4.1 `gsub(regex, HASH)` が Ruby で書かれた C 拡張の経路 —— 175 k Ir/req（5.7 %）
 
-`monoruby/stdlib/cgi/escape.rb:80` は `string.gsub(/['&\"<>]/, TABLE_FOR_ESCAPE_HTML__)`
-で、CRuby の C 拡張 `optimized_escape_html`（CRuby 側で 5.3 k Ir/req）の代わりに
-正規表現エンジンを走らせている。ERB テンプレートの `<%= %>` ごとに呼ばれ 21 回/req:
+`String#gsub` / `gsub!` の置換が Hash のとき（`replace_all_hash`）が 1 リクエストあたり
+175 k Ir。呼び出し元は 3 か所（`gsubprobe.rb`: `String#gsub` / `gsub!` を差し替えて
+Hash 置換の呼び出し元を `caller_locations` で集計）:
 
-| 内訳（`replace_all_hash`、Ir/req） | |
+| 呼び出し元 | 回/req | 平均長 | 実測 Ir/req |
+|---|---:|---:|---:|
+| `CGI.escapeHTML` —— `monoruby/stdlib/cgi/escape.rb:80` の `string.gsub(/['&\"<>]/, TABLE)`。CRuby は C 拡張 `optimized_escape_html`（5.3 k Ir/req） | 21 | 短い | **34 k**（H の実測差分） |
+| `ActiveSupport::JSON::Encoding::JSONGemEncoder#encode` —— `json.gsub!(/>\|<\|&/, ESCAPED_CHARS)`（生成した JSON 全体を走査） | 2 | 261 B | ≈ 140 k（残り） |
+| `URI._encode_uri_component` —— `str.gsub!(/[^*\-.0-9A-Z_a-z]/, TBLENCURICOMP_)`（CRuby の `uri/common.rb` も同じ実装） | 1 | 336 B | 〃 |
+
+`replace_all_hash` の内訳（Ir/req）:
+
+| | |
 |---|---:|
 | `FindCaptures::next`（onigmo の capture 付き反復） | 111,700 |
 | `splice_all` | 12,369 |
@@ -808,9 +816,12 @@ CRuby の ≈ 1.1〜1.15 倍**（早期の同条件では 1.01 倍）で、実�
 | `regex_view` / `string_snapshot` | 12,313 |
 | 合計 | **≈ 175,000** |
 
-対策: `CGI.escapeHTML` / `escape_html` / `h` を Rust のバイト走査で実装する（5 文字の
-テーブル引き）。見込み −170 k Ir/req。`gsub(regex, hash)` 一般も、hash が素の Hash なら
-`Hash#[]` を直接引き、`$~` は最後の 1 回だけ設定すればよい。
+当初はこの 175 k をすべて `CGI.escapeHTML`（21 回/req で最多の呼び出し元）に帰属させて
+いたが、H（escapeHTML をバイト走査に）の実測差分は −34 k で、大半は 2〜3 回/req の
+**長い文字列に対する `gsub!`** だった（`>|<|&` の 3 択と否定文字クラスは onigmo の
+先頭バイト最適化が効きにくく、1 バイトあたり ≈ 140 Ir）。残り ≈ 140 k の対策は
+`gsub(regex, Hash)` 一般: hash が `default_proc` も `default` の再定義も持たない素の
+Hash なら `Hash#[]` を直接引き、MatchData と `$~` の設定は最後の 1 回だけにする。
 
 #### 7.4.2 `method_missing` 連鎖（Rails の config アクセス）—— 17 回/req、154 k Ir/req（5.0 %）
 
@@ -1087,7 +1098,7 @@ r = /\A[\w\-]{1,255}\z/
 
 | # | 施策 | 変更箇所 | 見込み（Ir/req） |
 |---|---|---|---|
-| H | `CGI.escapeHTML` / `h` を Rust のバイト走査に | `builtins/`（新）、`stdlib/cgi/escape.rb` | **−170 k（5.6 %）** |
+| H（実施済み） | `CGI.escapeHTML` / `h` を Rust のバイト走査に（`String#__escape_html`） | `builtins/string.rs`、`stdlib/cgi/escape.rb` | 見込み −170 k → **実測 −34 k（1.1 %）**。175 k の帰属を誤っていた（§7.4.1）。残り ≈ 140 k は `gsub!(regex, Hash)` 一般（JSON エンコーダ・`URI._encode_uri_component`） |
 | I | `Hash#[]` の Index サイトをキークラスで `BecamePolymorphic` 再コンパイルする（またはガードを外す） | `jitgen/compile/index.rs`、PMC | deopt 11 回/req 分。§7.4.5 の再現で確認できる |
 | J | キーワード引数: `CallSiteInfo` を clone せず借用、kwrest 不要なら `RubyMap` を作らない | `codegen/runtime/args.rs:1392-1400` | −40 k |
 | K | `Symbol#to_s` を 1 lock・0 clone に、インターン表を FxHash に、`"default"` を定数 IdentId に | `builtins/symbol.rs`、`id_table.rs`、`builtins/hash.rs:959` | −55 k |

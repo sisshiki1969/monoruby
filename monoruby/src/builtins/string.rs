@@ -52,6 +52,9 @@ pub(super) fn init(globals: &mut Globals) {
     // must not dispatch through `<<`, which a subclass may alias *to*
     // `concat` (ActiveSupport::SafeBuffer) — that would recurse forever.
     globals.define_builtin_func(STRING_CLASS, "__shl", shl, 1);
+    // The byte scan behind `CGI.escapeHTML` (stdlib/cgi/escape.rb): the C
+    // extension's job, which was a `gsub(regex, hash)` here.
+    globals.define_builtin_func(STRING_CLASS, "__escape_html", escape_html, 0);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
     globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
     globals.define_builtin_funcs_with(STRING_CLASS, "[]", &["slice"], index, 1, 2, false);
@@ -6388,6 +6391,65 @@ fn ascii_case_fast_path(inner: &RStringInner, op: CaseOp, mode: CaseMode) -> Opt
 fn reverse(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let inner = lfp.self_val().as_rstring_inner().reverse();
     Ok(Value::string_from_inner(inner))
+}
+
+///
+/// ### String#__escape_html
+///
+/// - __escape_html -> String
+///
+/// `CGI.escapeHTML` for an ASCII-compatible encoding: a byte scan that
+/// rewrites the five characters `& < > " '` and copies everything else,
+/// which is exactly what CRuby's C extension (`optimized_escape_html`)
+/// does. The result is a new, unfrozen String in the receiver's encoding
+/// even when nothing needed escaping (CRuby returns a copy there too);
+/// multibyte and invalid sequences pass through untouched, since in every
+/// ASCII-compatible encoding those five bytes never occur inside a
+/// multibyte character. Only ASCII is inserted, so the receiver's code
+/// range still describes the result. `stdlib/cgi/escape.rb` routes the
+/// non-ASCII-compatible encodings (UTF-16/32) elsewhere before calling this.
+///
+#[monoruby_builtin]
+fn escape_html(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let inner = self_val.as_rstring_inner();
+    let enc = inner.encoding();
+    if !enc.is_ascii_compatible() {
+        return Err(MonorubyErr::argumenterr(
+            "__escape_html: encoding must be ASCII-compatible",
+        ));
+    }
+    let bytes = inner.as_bytes();
+    let extra: usize = bytes
+        .iter()
+        .map(|b| match b {
+            b'&' | b'\'' => 4,
+            b'<' | b'>' => 3,
+            b'"' => 5,
+            _ => 0,
+        })
+        .sum();
+    let out = if extra == 0 {
+        bytes.to_vec()
+    } else {
+        let mut out = Vec::with_capacity(bytes.len() + extra);
+        for &b in bytes {
+            match b {
+                b'&' => out.extend_from_slice(b"&amp;"),
+                b'<' => out.extend_from_slice(b"&lt;"),
+                b'>' => out.extend_from_slice(b"&gt;"),
+                b'"' => out.extend_from_slice(b"&quot;"),
+                b'\'' => out.extend_from_slice(b"&#39;"),
+                _ => out.push(b),
+            }
+        }
+        out
+    };
+    Ok(Value::string_from_inner(RStringInner::from_vec_cr(
+        out,
+        enc,
+        inner.code_range(),
+    )))
 }
 
 ///
@@ -13876,6 +13938,30 @@ mod tests {
             // receivers.
             r#"l = "h\xE9llo".dup.force_encoding("ISO-8859-1"); [l.dump, l.dump.encoding.to_s]"#,
             r#"b = "\xff".b; [b.dump, b.dump.encoding.to_s]"#,
+        ]);
+    }
+
+    #[test]
+    fn cgi_escape_html_byte_scan() {
+        // `CGI.escapeHTML` is `String#__escape_html` for ASCII-compatible
+        // encodings; every case is checked against CRuby's C extension.
+        run_tests(&[
+            r#"require "cgi"; CGI.escapeHTML(%q{<a href="x">Tom & Jerry's</a>})"#,
+            // A copy even when nothing needs escaping: new object, unfrozen,
+            // same encoding; a frozen input gives an unfrozen result.
+            r#"require "cgi"; s = "abc"; e = CGI.escapeHTML(s); [e, e.equal?(s), e.frozen?, e.encoding.to_s]"#,
+            r#"require "cgi"; f = "a<b".freeze; e = CGI.escapeHTML(f); [e, e.frozen?, f]"#,
+            r#"require "cgi"; e = CGI.escapeHTML(""); [e, e.frozen?, e.encoding.to_s]"#,
+            // Bytes outside the five pass through in every ASCII-compatible
+            // encoding: binary, UTF-8 multibyte, invalid UTF-8, Shift_JIS.
+            r#"require "cgi"; e = CGI.escapeHTML("<a>\xFF".b); [e.bytes, e.encoding.to_s]"#,
+            r#"require "cgi"; e = CGI.escapeHTML("<\u00e9>"); [e, e.encoding.to_s, e.valid_encoding?]"#,
+            r#"require "cgi"; e = CGI.escapeHTML("<\xff>".dup.force_encoding("UTF-8")); [e.bytes, e.valid_encoding?]"#,
+            r#"require "cgi"; e = CGI.escapeHTML("<\x82\xa0>".dup.force_encoding("Shift_JIS")); [e.bytes, e.encoding.to_s]"#,
+            r#"require "cgi"; CGI.escapeHTML("<a>".encode("US-ASCII")).encoding.to_s"#,
+            // The aliases and the type check.
+            r#"require "cgi"; [CGI.escape_html("<"), CGI.h("&")]"#,
+            r#"require "cgi"; [(CGI.escapeHTML(:sym) rescue $!.class), (CGI.escapeHTML(nil) rescue $!.class)]"#,
         ]);
     }
 }

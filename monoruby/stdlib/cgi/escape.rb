@@ -77,8 +77,19 @@ class CGI
   end
 
   unless respond_to?(:escapeHTML)
+    # The C extension's escapeHTML is a byte scan; `String#__escape_html`
+    # (src/builtins/string.rs) is that scan. It covers every ASCII-compatible
+    # encoding, which is all Rails ever hands it; a UTF-16/32 string takes
+    # the table path as before.
     def self.escapeHTML(string)
-      string.gsub(/['&\"<>]/, TABLE_FOR_ESCAPE_HTML__)
+      unless string.is_a?(String)
+        raise TypeError, "no implicit conversion of #{string.class} into String"
+      end
+      if string.encoding.ascii_compatible?
+        string.__escape_html
+      else
+        string.gsub(/['&\"<>]/, TABLE_FOR_ESCAPE_HTML__)
+      end
     end
     class << self
       alias escape_html escapeHTML
