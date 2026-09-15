@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-edd23775.js";
+            window.path_to_searchindex_js = "../searchindex-42a5033e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -194,7 +194,8 @@ backtrace formatting.</li>
 deferral.</li>
 <li><code>../monoruby/src/codegen/jit_module.rs</code> — <code>handle_error</code> (the unwinder).</li>
 <li><code>../monoruby/src/globals/store/iseq.rs</code> — the per-method exception table
-(<code>get_exception_dest</code>, <code>errinfo_restore_slots</code>).</li>
+(<code>get_exception_dest</code>, <code>covering_ensure</code>, <code>errinfo_restore_slots</code>,
+<code>nonlocal_exit_needs_vm_unwind</code>).</li>
 <li><code>../monoruby/src/builtins/exception.rs</code>, <code>../monoruby/builtins/startup.rb</code>
 — the Ruby-visible <code>Exception</code> API (<code>#backtrace</code>, <code>#backtrace_locations</code>,
 <code>#set_backtrace</code>, <code>#cause</code>, …).</li>
@@ -312,26 +313,48 @@ folds it into one Rust enum.</p>
 current frame’s <code>FuncKind</code>:</p>
 <p><strong>ISeq (Ruby) frames:</strong></p>
 <ol>
-<li><strong>Retry/Redo</strong> (<code>jit_module.rs:106</code>) — take the error and <code>goto</code> the
-begin-region / loop start encoded in the instruction. No trace, no object.</li>
-<li><strong>MethodReturn</strong> (<code>jit_module.rs:118</code>) — if this frame is the target <code>lfp</code>,
+<li>
+<p><strong>Retry/Redo</strong> (<code>jit_module.rs:106</code>) — take the error and <code>goto</code> the
+begin-region / loop start encoded in the instruction. No trace, no object.</p>
+</li>
+<li>
+<p><strong>MethodReturn</strong> (<code>jit_module.rs:118</code>) — if this frame is the target <code>lfp</code>,
 return the value here; if an <code>ensure</code> sits in the way, defer the unwind
 across it; otherwise keep propagating. <code>$!</code> is restored from the
-region-entry save on the way out (<code>restore_errinfo_on_exit</code>).</li>
-<li><strong>Throw</strong> (<code>jit_module.rs:157</code>) — run any intervening <code>ensure</code>, else keep
-propagating (a matching <code>Kernel#catch</code> frame consumes it).</li>
-<li><strong>BlockBreak</strong> (<code>jit_module.rs:173</code>) — at the block’s defining frame, if the
+region-entry save on the way out (<code>restore_errinfo_on_exit</code>).</p>
+</li>
+<li>
+<p><strong>Throw</strong> (<code>jit_module.rs:157</code>) — run any intervening <code>ensure</code>, else keep
+propagating (a matching <code>Kernel#catch</code> frame consumes it).</p>
+<p>These three non-local-exit arms ask <code>covering_ensure(pc)</code>, not
+<code>get_exception_dest(pc)</code>: the <code>ensure</code> to run is the innermost covering
+region that <em>has</em> one, which is not always the innermost covering region.
+Nest a rescue-only <code>begin</code> inside an <code>ensure</code> region and the tightest
+entry carries no <code>ensure</code>, so asking <code>get_exception_dest</code> concluded there
+was none and skipped the body outright (#1185). Running the innermost
+ensure-bearing region chains the rest by itself — its <code>EnsureEnd</code>
+re-delivers the exit from a pc outside that region, where the next one out
+is now innermost.</p>
+</li>
+<li>
+<p><strong>BlockBreak</strong> (<code>jit_module.rs:173</code>) — at the block’s defining frame, if the
 in-progress call site is the one that received this block, resume it with
 the break value (CRuby’s <code>BREAK</code> catch table); otherwise degrade to
-<code>LocalJumpError</code> (“break from proc-closure”).</li>
-<li><strong>Incremental trace capture</strong> (<code>jit_module.rs:242</code>) —
+<code>LocalJumpError</code> (“break from proc-closure”).</p>
+</li>
+<li>
+<p><strong>Incremental trace capture</strong> (<code>jit_module.rs:242</code>) —
 <code>push_error_location(loc, sourceinfo, fid)</code> appends this frame’s cheap
-tuple. Only <em>real</em> exceptions reach here.</li>
-<li><strong>Fatal</strong> (<code>jit_module.rs:247</code>) — never caught; skip <code>rescue</code>/<code>ensure</code>,
-propagate to the top.</li>
-<li><strong>Exception table lookup</strong> (<code>jit_module.rs:251</code>) — <code>get_exception_dest(pc)</code>
+tuple. Only <em>real</em> exceptions reach here.</p>
+</li>
+<li>
+<p><strong>Fatal</strong> (<code>jit_module.rs:247</code>) — never caught; skip <code>rescue</code>/<code>ensure</code>,
+propagate to the top.</p>
+</li>
+<li>
+<p><strong>Exception table lookup</strong> (<code>jit_module.rs:251</code>) — <code>get_exception_dest(pc)</code>
 returns <code>(rescue_pc, ensure_pc, err_slot)</code> for the innermost region
-covering <code>pc</code>:
+covering <code>pc</code>:</p>
 <ul>
 <li><strong>rescue</strong> → call <code>complete_backtrace_for_rescue</code> (§7), materialize the
 object with <code>take_ex_obj</code>, store it into <code>$!</code> and the handler’s error
@@ -349,7 +372,9 @@ that can pass through a builtin are handled (<code>MethodReturn</code>, <code>Th
 and unwinds. Builtins have no Ruby-level <code>rescue</code>.</p>
 <p>The exception table itself is built by bytecodegen and stored per method
 (<code>iseq.rs:504</code>). Entries nest innermost-first, so <code>get_exception_dest</code> returns
-the tightest enclosing region.</p>
+the tightest enclosing region — right for a raise, which the tightest <code>rescue</code>
+catches, but not for a non-local exit, which wants the tightest <code>ensure</code> (see
+arm 2 above).</p>
 <h3 id="cruby-contrast-2"><a class="header" href="#cruby-contrast-2">CRuby contrast</a></h3>
 <p>CRuby’s unwinder (<code>vm_exec_handle_exception</code> / the <code>catch_table</code> on each ISEQ)
 is structurally the same idea: a per-ISEQ table of <code>(type, start, end, cont, sp)</code> entries scanned as the stack unwinds, with <code>CATCH_TYPE_RESCUE</code>,
@@ -364,6 +389,12 @@ control can leave a frame while it is <em>suspended inside a rescue clause</em> 
 saved into a bytecode slot, and <code>restore_errinfo_on_exit</code>
 (<code>jit_module.rs:72</code>) replays those saves (outermost wins) when such a frame is
 exited. <code>errinfo_restore_slots</code> (<code>iseq.rs:543</code>) enumerates the relevant slots.</p>
+<p>Only the generic unwind replays them, so a frame owing one cannot take the
+JIT’s specialized teardown — <code>ISeqInfo::nonlocal_exit_needs_vm_unwind</code> pairs
+that condition with <code>covering_ensure</code> as the two reasons a non-local exit has
+to go through <code>handle_error</code> at all. A protected region that is neither (a
+plain <code>begin</code>..<code>rescue</code> the exit merely passes through) contributes nothing: a
+<code>rescue</code> does not intercept a non-local exit.</p>
 <hr>
 <h2 id="6-ensure-and-deferred-unwind"><a class="header" href="#6-ensure-and-deferred-unwind">6. <code>ensure</code> and deferred unwind</a></h2>
 <p><code>ensure</code> complicates unwinding because the ensure body must run <em>with an empty
