@@ -923,6 +923,15 @@ sym = {a: 1, b: 2}; str = {"a" => 1, "b" => 2}; ary = {[1] => 1, [2] => 2}
 走っていない**。§5 の「9（非数値の BinOp/Index サイトを引数クラスで keying しない）」
 は PMC 側だけで、JIT のガードは残っている。
 
+**I（実施済み）**: `hash_index`（`builtins/hash.rs` のインライン生成器）のキークラス
+ガードを、`guard_recv_class` と同じカウンタ付き `BecamePolymorphic` 再コンパイル出口
+（`JitContext::arg_miss_deopt`）にした。VM の `vm_save_binary_class` は引数クラスの変化
+でも POLY バイトを立てて PMC に (Hash, キークラス) を記録するので、再コンパイル時に
+PMC が Hash 受け手に 2 種以上のキークラスを持つサイトはプローブを使わず、キーに
+依存しない `hashindex` の直接呼び出しに落ちる（受け手多相で POLY が立っただけの
+サイトはキー単相のままプローブを使う）。同じ最小再現: deopt **200,000 → 11 回**、
+再コンパイル 0 → 1 回、実時間 0.87 → 0.67 s（2,000,000 反復、−23 %）。
+
 #### 7.4.6 グローバルメソッドキャッシュの表引き —— 390 回/req、115 k Ir/req
 
 `GlobalMethodCache::get` 22.3 k + `check_method_for_class_with_version` 19.5 k +
@@ -1099,13 +1108,13 @@ r = /\A[\w\-]{1,255}\z/
 | # | 施策 | 変更箇所 | 見込み（Ir/req） |
 |---|---|---|---|
 | H（実施済み） | `CGI.escapeHTML` / `h` を Rust のバイト走査に（`String#__escape_html`） | `builtins/string.rs`、`stdlib/cgi/escape.rb` | 見込み −170 k → **実測 −34 k（1.1 %）**。175 k の帰属を誤っていた（§7.4.1）。残り ≈ 140 k は `gsub!(regex, Hash)` 一般（JSON エンコーダ・`URI._encode_uri_component`） |
-| I | `Hash#[]` の Index サイトをキークラスで `BecamePolymorphic` 再コンパイルする（またはガードを外す） | `jitgen/compile/index.rs`、PMC | deopt 11 回/req 分。§7.4.5 の再現で確認できる |
+| I（実施済み） | `Hash#[]` のインライン生成器のキークラスガードを `BecamePolymorphic` 再コンパイル出口にし、PMC がキー多相を示すサイトはキー非依存の直接呼び出しに | `builtins/hash.rs`、`jitgen/compile/method_call.rs`（`arg_miss_deopt`） | 最小再現で deopt 200,000 → 11 回、−23 % 実時間。railsbench の profile 統計から `[Hash][String]` / `[Hash][Array]` の 3 サイト（計 11 回/req）が消えた（§7.4.5） |
 | J | キーワード引数: `CallSiteInfo` を clone せず借用、kwrest 不要なら `RubyMap` を作らない | `codegen/runtime/args.rs:1392-1400` | −40 k |
 | K | `Symbol#to_s` を 1 lock・0 clone に、インターン表を FxHash に、`"default"` を定数 IdentId に | `builtins/symbol.rs`、`id_table.rs`、`builtins/hash.rs:959` | −55 k |
 | L | `Hash#each` でブロックが 2 引数なら pair Array を作らない | `builtins/hash.rb` | −69 個/req の Array |
-| M | `File.file?` / `exist?` を `metadata` に | `builtins/file.rs:833,846` | 実時間 3〜6 %（syscall） |
+| M（実施済み） | `File.file?` / `exist?` を `canonicalize`（realpath: 構成要素ごとの readlink）から 1 回の `stat`（`std::fs::metadata`）に。パスは正規化せず生のバイト列で渡す（CRuby の `rb_stat` と同じく、末尾 `/` の通常ファイルは ENOTDIR → false） | `builtins/file.rs` | syscall 数の削減（実時間 3〜6 % 見込み、§7.6） |
 | N | `unpack("H*")` の nibble テーブル、`Regexp#match?` のコピー排除、`MatchData#[]` の `format!` 排除 | `string/pack.rs`、`builtins/regexp.rs:1126`、`match_data.rs` | −60 k |
-| **O** | `Regexp#match?` が対象文字列をインターンしないようにする（`expect_string` で受ける、1 行）。次いで問い合わせ系 API（`respond_to?`・`send`・`MatchData#[]` …）を非インターンの `try_get_id` に（§7.7） | `builtins/regexp.rs:1126`、その後 `id_table.rs`・`value.rs:2337` と呼び出し側 49 か所 | **RSS +1.2 KB/req の無限増加が止まる**、−27 k Ir/req。`Regexp#match?` を動的入力に使う全アプリのリーク |
+| **O（実施済み）** | `Regexp#match?` / `=~` / `match` が対象文字列をインターンしない（文字列として読む）。問い合わせ系 API（`respond_to?`・`autoload?`・`MatchData` の名前参照）は非インターンの `IdentId::try_get_id`（CRuby の `rb_check_id`）で引く。`respond_to?` は CRuby の `obj_respond_to` の 2 形態（Symbol 名は `(Symbol, bool)` で真偽化、Symbol のない String 名はインターンして第 2 引数と戻り値を素通し）に揃え、`respond_to_missing?` が定数を返す本体ならインターンもしない | `id_table.rs`、`value.rs`、`builtins/{regexp,kernel,module,match_data}.rs` | **シンボル数が 10,000 req で一定（32,671）、RSS・malloc_increase も一定** —— +2 シンボル/req の増加が止まった |
 | P | Rust runtime から呼ぶ `==` / `to_ary` / `to_s` / `default` のサイト別インラインキャッシュ | `globals/store`、`executor` | −50〜80 k |
 | Q | 文字列補間の一括確保（合計長を先に計算） | `codegen/runtime.rs:893` | −40 k |
 

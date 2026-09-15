@@ -261,6 +261,27 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    ///
+    /// The side exit for an inline generator's guard on the class of its
+    /// site's *argument* (`Hash#[]`'s key, say): a counter-gated
+    /// `BecamePolymorphic` recompile of the enclosing unit rather than a
+    /// plain deopt, for the same reason `guard_recv_class` heals — a site
+    /// compiled before the program started feeding it a second class must
+    /// not side-exit forever. The exit only recompiles once the VM has
+    /// stamped the site's POLY byte, which an argument-class change does
+    /// (`vm_save_binary_class` compares both operands), and the re-executed
+    /// instruction records the new pair in the PMC, so the recompile sees
+    /// the variance and the generator can take its class-independent path.
+    ///
+    pub(crate) fn arg_miss_deopt(&self, state: &AbstractState, ir: &mut AsmIr) -> AsmDeopt {
+        match self.recv_miss_recompile_target() {
+            Some(target) => {
+                ir.new_recompile_deopt(state, RecompileReason::BecamePolymorphic, target)
+            }
+            None => ir.new_deopt(state),
+        }
+    }
+
     fn pmc_same_target_classes(
         &mut self,
         callid: CallSiteId,

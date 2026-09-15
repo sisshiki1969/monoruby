@@ -438,6 +438,43 @@ mod tests {
         );
     }
 
+    /// Rails' `tag_options` shape: one `Hash#[]` site compiled while its
+    /// key was always a Symbol, then fed Strings (and, at another site,
+    /// Arrays after Symbols). The inlined probe guards the key class; that
+    /// guard must heal into the class-independent builtin call — a
+    /// `BecamePolymorphic` recompile once the PMC shows the second key
+    /// class — rather than side-exit on every call from then on. Checked
+    /// for correctness here; the deopt count is the `profile` feature's.
+    #[test]
+    fn index_hash_key_becomes_polymorphic() {
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def idx(h, k) = h[k]
+            def drive
+              sym = { a: 1, b: 2 }
+              str = { "a" => 3, "b" => 4 }
+              ary = { [1] => 5, [2] => 6 }
+              res = []
+              i = 0
+              while i < 40
+                res << idx(sym, i.even? ? :a : :b)
+                i += 1
+              end
+              while i < 120
+                res << idx(str, i.even? ? "a" : "b")
+                res << idx(ary, i.even? ? [1] : [2])
+                res << idx(sym, i.even? ? :a : :c)
+                i += 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
     /// A polymorphic site where *neither* observed receiver has an inline
     /// generator, and one where the receivers are heap objects with their
     /// own `#[]` — the dispatch must decline or dispatch correctly, never
