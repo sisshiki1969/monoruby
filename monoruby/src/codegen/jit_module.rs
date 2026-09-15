@@ -142,7 +142,7 @@ pub(super) extern "C" fn handle_error(
                 // needed on the error path: a propagating exception
                 // overwrites `$!` wherever it is caught.
                 restore_errinfo_on_exit(vm, info, pc, lfp);
-                return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                return if let Some(ensure) = info.covering_ensure(pc) {
                     // Suspend the non-local return across the ensure body so
                     // the body can `raise` (set_error) without tripping the
                     // empty-exception guard; `EnsureEnd` restores it.
@@ -172,7 +172,7 @@ pub(super) extern "C" fn handle_error(
             if let MonorubyErrKind::Throw(..) | MonorubyErrKind::FiberKill =
                 vm.exception().unwrap().kind()
             {
-                return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                return if let Some(ensure) = info.covering_ensure(pc) {
                     vm.defer_unwind(lfp);
                     ErrorReturn::goto(bc_base + ensure)
                 } else {
@@ -202,7 +202,7 @@ pub(super) extern "C" fn handle_error(
                     // frame below resumes inside its rescue clause and
                     // must keep the caught exception in `$!`.
                     restore_errinfo_on_exit(vm, info, pc, lfp);
-                    if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                    if let Some(ensure) = info.covering_ensure(pc) {
                         vm.defer_unwind(lfp);
                         return ErrorReturn::goto(bc_base + ensure);
                     }
