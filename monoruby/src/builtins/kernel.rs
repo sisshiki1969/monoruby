@@ -4623,23 +4623,38 @@ fn public_send(
     }
     let method = ary[0].expect_symbol_or_string(globals)?;
     let receiver = lfp.self_val();
-    // public_send only allows public methods.
-    // Both private and protected are rejected unconditionally.
+    // public_send only allows public methods. Both private and protected
+    // are rejected unconditionally — unlike an ordinary call, where a
+    // protected method is reachable from a caller whose `self` is a kind
+    // of the owner.
+    //
+    // A rejection is not raised here, though: CRuby's
+    // `rb_method_call_status` hands a visibility violation to
+    // `method_missing` exactly as it hands over a missing method, so a
+    // receiver that defines one sees `:priv` arrive there. `NoMethodError`
+    // is then what the *default* `method_missing` raises — and ours
+    // re-derives the visibility to word it "private method 'priv'
+    // called…" rather than "undefined method" (`bo_method_missing`), so
+    // the message for a receiver without a handler is unchanged.
     let class_id = receiver.class();
-    if let Some(entry) = globals.check_method_for_class(class_id, method) {
-        match entry.visibility() {
-            Visibility::Private => {
-                return Err(MonorubyErr::private_method_called(
-                    globals, method, receiver,
-                ));
-            }
-            Visibility::Protected => {
-                return Err(MonorubyErr::protected_method_called(
-                    globals, method, receiver,
-                ));
-            }
-            _ => {}
-        }
+    if let Some(entry) = globals.check_method_for_class(class_id, method)
+        && matches!(
+            entry.visibility(),
+            Visibility::Private | Visibility::Protected
+        )
+    {
+        let mut mm_args = Vec::with_capacity(ary.len());
+        mm_args.push(Value::symbol(method));
+        mm_args.extend_from_slice(&ary[1..]);
+        vm.reset_method_missing_vcall();
+        return vm.invoke_method_inner(
+            globals,
+            IdentId::METHOD_MISSING,
+            receiver,
+            &mm_args,
+            lfp.block(),
+            forwarded_kw_hash(lfp),
+        );
     }
     vm.invoke_method_inner(
         globals,
@@ -4647,15 +4662,22 @@ fn public_send(
         receiver,
         &ary[1..],
         lfp.block(),
-        if let Some(kw) = lfp.try_arg(1)
-            && let Some(kw) = kw.try_hash_ty()
-            && !kw.is_empty()
-        {
-            Some(kw)
-        } else {
-            None
-        },
+        forwarded_kw_hash(lfp),
     )
+}
+
+/// The keyword arguments `public_send` / `send` forward: the trailing
+/// Hash the call site collected, dropped when empty so the callee does
+/// not see an empty keyword split.
+fn forwarded_kw_hash(lfp: Lfp) -> Option<Hashmap> {
+    if let Some(kw) = lfp.try_arg(1)
+        && let Some(kw) = kw.try_hash_ty()
+        && !kw.is_empty()
+    {
+        Some(kw)
+    } else {
+        None
+    }
 }
 
 #[monoruby_builtin]

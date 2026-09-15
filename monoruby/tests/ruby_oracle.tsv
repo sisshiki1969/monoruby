@@ -786,6 +786,7 @@
 373dce0647a3563f6f8d43e85dae4894	["B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 1|[2, 3, 4]|5", "B->A 7|[]|8"]	class A\n          def m(a, *r, z) = "A #{a}|#{r.inspect}|#{z}"\n        
 3741f01e297724922a35197b47bec177	42	class A\n          def f\n            42\n          end\n        end\n      
 374384aa580f716ec8ced15bccf04ef2	[200, "UTF-8", true, true, "abcdeabcde", "abcde"]	def app_ascii(s, n)\n          i = 0\n          while i < n\n            s
+3743cfd39c179e98112d30ff61233216	["priv", "mm:priv", "mm:prot", "mm:prot", "prot", "priv", false, true]	class PsE\n          private def priv = "priv"\n          protected def p
 374be36fbc601473f1499f1bddc9c77a	:OVERRIDDEN	class String; def ==(o); :OVERRIDDEN; end; end; "a" == "b"
 3761b5221f2c41c01988c22c8c014546	["class or module required for rescue clause", "caught", "caught", "unmatched", :fine]	res = []\n        [[42], [RuntimeError], [TypeError, RuntimeError], []].
 376e7a0bc570cc88bf4722d793dbdfbd	"US-ASCII"	"abc".dup.force_encoding("US-ASCII").sub("a", "z").encoding.to_s
@@ -1694,6 +1695,7 @@
 78a9147b5bb75312ad6a700a83ce8209	["can't create instance of singleton class", "can't create instance of singleton class", "ok", true]	o = Object.new\n        msgs = []\n        begin; o.singleton_class.new; 
 78d0e78fc74998266ad2fd179077428d	[[4, 5, "s4"]]	class P\n          attr_accessor :x, :y, :z\n        end\n        def fill
 78d7ea39e2bafbf7649c9fc6b54bb309	[90300, 50, 50, [6, 6], [8, 8]]	class Base\n          def helper(x); x.succ; end\n          def m(v); [he
+7926072e4db949ddf6f18d696286f438	[[NoMethodError, "private method 'priv' called for an instance of PsB"], [NoMethodError, "protected method 'prot' called for an instance of PsB"], [NoMethodError, "undefined method 'nope' for an instance of PsB"], "pub"]	class PsB\n          private def priv = "priv"\n          protected def p
 792946a28d15a8e7c81701076d594402	[11, 3, [1, 2, 3], 6]	class C\n          def opt(a, b = 10) = a + b\n          def rest(*a) = a
 7933b76f3fbc5da321278e1298f09b68	"1/2"	0.5.to_r.to_s
 793df4a57062ccad86195db16e27aa5f	[[["[[\\"Integer\\", 1], [\\"Float\\", 2.5], [\\"NilClass\\", nil], [\\"String\\", \\"\\\\x00\\\\xFF\\"], [\\"String\\", \\"txt\\"]]"]], [["int", [["integer", 7]]], ["big", [["real", 1.1805916207174113e+21]]], ["float", [["real", 1.5]]], ["nil", [["null", nil]]], ["text", [["text", "plain"]]], ["binary", [["blob", "bin"]]], ["blob", [["blob", "\\x00\\xFF"]]], ["bool", "RuntimeError", "can't return TrueClass"], ["obj", "RuntimeError", "can't return Object"]], [["got 1"]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
@@ -2579,6 +2581,7 @@ b76b635413644a9ee6cb10accbfe88d1	false	class Float; alias __orig :>=; def >=(o);
 b76d6e4320dd94711348a48796e6ef33	[42, 100]	$res = []\n        class S\n          class C\n            def f\n         
 b7b526853ed3aa9d81b2dda6dbba1cf2	1	class Integer; def <=>(o) = (o.to_i - to_i); end\n[3, 1, 2].max
 b7b791ae9b8a5b32ebb0e713566b57b5	[:foo, [1], {x: 10, y: 20}]	class C\n          def method_missing(name, *args, **kwargs)\n           
+b7bc1c9a640be32260be8c5e3209e368	[["mm", :priv, [1, 2, 3], {k: 4}, :blk], ["mm", :prot, [7], {}, nil], ["mm", :nope, [5], {}, nil]]	class PsC\n          private def priv(a, b = 2, *rest, k: 9, &blk) = [a,
 b7c292b4419c2c859e85115540f26230	[TypeError, TypeError, "bignum too big to convert into 'long'", "failed to allocate memory", FrozenError, FrozenError]	r = []\n            begin; String.new(capacity: "x"); rescue TypeErr
 b7cb35744fdfaa984b6e9aa7ca2b4447	[4000, 3999]	n = 0; a = [n, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
 b7d68f9088d3f3aed2ab62dc9d949be5	[true, true]	class Foo\n              def bar; 42; end\n            end\n          
@@ -3530,6 +3533,7 @@ f9753df55ca02e85298ba3037065394b	true	class A; end\n        class B < A\n       
 f97a3c1533bab985c4e4a17d0d0e6546	[true, [IO::Buffer::LockedError, "Buffer already locked!"], false, [IO::Buffer::LockedError, "Cannot resize locked buffer!"], true, [IO::Buffer::LockedError, "Buffer is locked!"], [IO::Buffer::LockedError, "Cannot transfer ownership of locked buffer!"], :ret, [true, true, 4], [4, "\\x00\\x00\\x00\\x00"], [IO::Buffer::AccessError, "Cannot resize external buffer!"], [4, true], [true, 0], [false, -1], [TypeError, "wrong argument type String (expected IO::Buffer)"]]	r = []\n            er = ->(&blk) { begin; blk.call; :no_raise; resc
 f981198b05794e558868cf5544fa9b88	[99, 99]	$a = 10\n            alias $b $a\n            $b = 99\n            [$a
 f9843389511d15fa6d856351a7f3000b	["Mod-Parent", "Mod-Parent"]	module Mod\n              def foo_super; "Mod-" + super; end\n       
+f98636a5c452b2bf2cf48d563bbb96d9	["pmm:priv", "gmm:sing"]	class PsD\n          private def priv = 1\n          private def method_m
 f991ea366558cbeb02b13d2f5a671d4d	[1, 3]	class C; def to_ary; [2]; end; end; o = C.new\n[1, 2, 3] - o
 f9bd6b4338c4b0d51b05730024cea911	[20, 10, 52]	$res = []\n        def f(x)\n          binding\n        end\n        b = f(
 f9e2ff5c15a628ba0c0c0e3ecb0620a9	[true, true]	klass = Class.new do\n              define_method(:bar) { :bar }\n   
