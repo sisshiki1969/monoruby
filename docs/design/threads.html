@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-42a5033e.js";
+            window.path_to_searchindex_js = "../searchindex-e82cd634.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -643,10 +643,21 @@ FFI では <code>attach_function ..., blocking: true</code>、sqlite3 ブリッ�
 ワーカーが全員塞がっているときだけ新しく生やす —— カーネルでブロック中の
 ワーカーは何分も戻らないことがあり、その後ろにキューイングしたら §9 が避けたい
 ストールそのものになるため。ワーカーは 10 秒 idle で終了する。</li>
-<li><strong>fork(2) の子ではワーカーは生き残らない</strong>。子は <code>idle</code> カウントと親のキューだけを
-受け継ぐので、<code>Process._fork</code> / <code>Process.daemon</code> の子側で
-<code>native_pool::reset_after_fork</code> がそれを捨てる(捨てないと、子の最初の <code>submit</code> が
-「idle ワーカーが拾う」と信じて永久に待つ)。</li>
+<li><strong>fork(2) の子ではワーカーは生き残らない</strong>。子は <code>idle</code> カウントと親のキュー、
+親宛ての <code>results</code> / <code>orphans</code> を受け継ぐので、<code>Process._fork</code> / <code>Process.daemon</code> の
+子側で <code>native_pool::ForkLocks::reset_child</code> がそれを捨てる(捨てないと、子の最初の
+<code>submit</code> が「idle ワーカーが拾う」と信じて永久に待つ)。
+そのロック自体も fork をまたいで<strong>フォークするスレッドが</strong>先に取る
+(<code>native_pool::prepare_fork</code>、<code>pthread_atfork</code> の prepare/parent/child を手で書いた
+もの)。ワーカーがロックを握った瞬間に fork すると、そのワーカーのいない子は
+誰も解放しないロックを受け継ぎ、最初の <code>lock()</code> で永久に止まる。
+<code>do_spawn</code> も同じ扱いにしてある(その子は exec するだけでこれらのロックを取らないが、
+「すべての fork(2) は pool を静止させてから」という不変条件を揃えておく)。</li>
+<li><strong>完了パイプは子で作り直す</strong>(<code>replace_pipe</code>)。<code>fork(2)</code> が複製するのは fd テーブルで
+あってパイプではないので、親子が同じバッファを読み書きすることになる。親の waiter が
+取るはずだった完了バイトを子の <code>drain</code> が飲んでしまうと、その waiter は結果が
+<code>results</code> に載ったまま永久に park する —— 親側には異常が何もないのに復帰できない。
+子で継承端を close しても影響するのは子の fd テーブルだけなので、親のパイプは無傷。</li>
 <li><strong>ワーカーは Ruby ヒープにも VM のスレッドローカルにも触れない</strong>。<code>NativeOp</code> は生 fd /
 フラグ / <code>CString</code> パスだけを運ぶ(ヒープ参照を持たない)。共有状態はプロセスグローバル:
 <code>results</code>(<code>Mutex&lt;HashMap&lt;ticket, Completion{ret, errno}&gt;&gt;</code>)、<code>orphans</code>、<code>NEXT_ID</code>。</li>
