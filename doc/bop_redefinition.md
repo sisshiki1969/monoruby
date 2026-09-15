@@ -329,10 +329,35 @@ VM 側だけでは直らない。JIT は `jit_check_method` で `Integer#+` を*
 CRuby と異なるセルが **30 → 1**。
 
 残る 1 セルは `Integer#<` を再定義したときの `5.times`: CRuby は `[]` を返す。
-**CRuby の `Integer#times` も Ruby で書かれている**ためで、実測すると `<` の
-再定義でも `succ` の再定義でも打ち切られ、`+` の再定義では打ち切られない
-（= `while i < self` / `i.succ`）。monoruby はこの 3 つすべてに対して免疫に
-なった。CRuby の同種の瑕疵をわざわざ再現しない、という判断である。
+**CRuby の `Integer#times` も Ruby で書かれている**ためである。推定ではなく
+CRuby 自身に吐かせた:
+
+```
+$ ruby -e 'p Integer.instance_method(:times).source_location'
+["<internal:numeric>", 255]        # upto / Array#each は nil（= C）
+```
+
+その iseq の逆アセンブル（ループ本体）:
+
+```
+0020 getlocal_WC_0   i
+0022 invokeblock     <argc:1>                        # yield i
+0025 getlocal_WC_0   i
+0027 opt_succ        <calldata!mid:succ, argc:0>     # i = i.succ
+0029 setlocal_WC_0   i
+0031 getlocal_WC_0   i
+0034 opt_lt          <calldata!mid:<, argc:1>        # while i < self
+0036 branchif        20
+```
+
+`+` を呼ぶ箇所が無いので `Integer#+` の再定義は届かない。`succ` と `<` は実際に
+呼んでいるので届く —— `opt_succ` / `opt_lt` は BOP 高速命令だが、再定義されれば
+`BASIC_OP_UNREDEFINED_P` が落ちて本物のディスパッチに戻る。monoruby が Step 1 以降
+踏んでいたのとまったく同じ構造である。裏取りとして `succ` を `self + 2` に再定義
+すると CRuby の `times` は `[0, 2, 4]` を返す。
+
+monoruby は `+` / `<` / `succ` のいずれに対しても免疫になった。CRuby の同種の
+瑕疵をわざわざ再現しない、という判断である。
 
 ### Step 2a — VM を (クラス) 粒度にする — **実装済み**
 

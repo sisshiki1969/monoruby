@@ -27,9 +27,20 @@
 //!
 //! **Where this diverges from CRuby**, deliberately: `5.times` under a
 //! redefined `Integer#<`. CRuby answers `[]`, because CRuby's own
-//! `Integer#times` is written in Ruby too — `while i < self`, incrementing
-//! with `i.succ`. Measured: redefining `<` *or* `succ` truncates it in
-//! CRuby, while `+` does not. monoruby's is now immune to all three. Every
+//! `Integer#times` is written in Ruby too —
+//! `Integer.instance_method(:times).source_location` is
+//! `["<internal:numeric>", 255]`, where `upto` and `Array#each` answer nil,
+//! and its iseq disassembles to `opt_succ` for the increment and `opt_lt`
+//! for the condition, with no `+` anywhere:
+//!
+//! ```text
+//! 0027 opt_succ  <calldata!mid:succ, argc:0>     # i = i.succ
+//! 0034 opt_lt    <calldata!mid:<, argc:1>        # while i < self
+//! ```
+//!
+//! So redefining `<` truncates it there and redefining `succ` does too
+//! (`def succ; self + 2; end` makes CRuby's `times` yield `0, 2, 4`), while
+//! `+` cannot reach it at all. monoruby's is now immune to all three. Every
 //! other shape in the differential sweep moves toward CRuby (30 differing
 //! cells to 1), so that cell is the price of not reproducing a CRuby wart
 //! on purpose. It has no test here: `run_test` compares against CRuby.
