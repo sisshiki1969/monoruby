@@ -1792,7 +1792,11 @@ mod tests {
             r#"[/x/.match?(:sym_x), /y/.match?(:sym_x), (/a/.match?(1) rescue $!.class), /a/ =~ :xa, /b/.match(:abc)&.begin(0)]"#,
             r#"[/a/.match?("\xE9a".b), /a/.match?("\x82\xa0a".dup.force_encoding("Shift_JIS")), (/a/.match?("\xff".dup.force_encoding("UTF-8")) rescue $!.class)]"#,
             r#"m = /(?<name>a)/.match("a"); [m[:name], m["name"], (m["nope"] rescue $!.class), m.begin("name"), m.end(:name), m.values_at("name"), (m.begin("nope") rescue $!.class)]"#,
+            r#"m = /(?<name>a)/.match("a"); [m.match("name"), m.match(:name), (m.match("nope") rescue $!.class), m.match_length("name"), m.match_length(:name), (m.match_length("nope") rescue $!.class)]"#,
             r#"[Object.autoload?("NoSuchConstZz"), Object.autoload?(:NoSuchConstZz2), autoload?("NoSuchConstZz3")]"#,
+            // A name that is not UTF-8 is looked up among the raw-bytes
+            // symbols: absent, then present once `to_sym` made one.
+            r#"o = Object.new; b = "\xff\xfe".b; sj = "\x82\xa0".dup.force_encoding("Shift_JIS"); r1 = [o.respond_to?(b), Object.autoload?(b), autoload?(sj), (/(?<name>a)/.match("a")[b] rescue $!.class)]; b.to_sym; sj.to_sym; r1 + [o.respond_to?(b), o.respond_to?(sj, true), Object.autoload?(b), autoload?(sj)]"#,
         ]);
     }
 
@@ -1809,6 +1813,8 @@ mod tests {
             // symbol shape on the next call — in CRuby too.)
             r#"class RtmQ; def respond_to_missing?(n, p) = [n.class, n.to_s.start_with?("never_defined_zz"), p]; end; $rtmq = ($rtmq || 0) + 1; q = RtmQ.new; [q.respond_to?("never_defined_zz_a#{$rtmq}"), q.respond_to?("never_defined_zz_b#{$rtmq}", 7), q.respond_to?(:never_defined_zz_2), q.respond_to?(:never_defined_zz_2, 7), q.respond_to?("to_s")]"#,
             r#"class RtmN; def respond_to_missing?(n, p) = nil; end; class RtmT; def respond_to_missing?(n, p) = 42; end; [RtmN.new.respond_to?("never_defined_zz_3"), RtmN.new.respond_to?(:never_defined_zz_4), RtmT.new.respond_to?("never_defined_zz_5"), RtmT.new.respond_to?(:never_defined_zz_6)]"#,
+            // An exception from the override propagates in both shapes.
+            r#"class RtmE; def respond_to_missing?(n, p) = raise(ArgumentError, "rtm #{n.class}"); end; e = RtmE.new; $rtme = ($rtme || 0) + 1; [(e.respond_to?(:never_defined_zz_7) rescue $!.message), (e.respond_to?("never_defined_zz_e#{$rtme}") rescue $!.message), (e.respond_to?("never_defined_zz_e#{$rtme}b", true) rescue $!.class)]"#,
         ]);
         // CRuby interns the name in that second shape too (`rb_to_symbol`);
         // monoruby does not when `respond_to_missing?` is the default or

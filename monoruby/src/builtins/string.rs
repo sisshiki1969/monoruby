@@ -13964,4 +13964,12 @@ mod tests {
             r#"require "cgi"; [(CGI.escapeHTML(:sym) rescue $!.class), (CGI.escapeHTML(nil) rescue $!.class)]"#,
         ]);
     }
+
+    #[test]
+    fn escape_html_rejects_a_non_ascii_compatible_encoding() {
+        // `cgi/escape.rb` keeps UTF-16/32 on the table path; the byte scan
+        // itself refuses them, since its five bytes would land inside
+        // code units there.
+        run_test_error(r#""a<b".encode("UTF-16LE").__escape_html"#);
+    }
 }
