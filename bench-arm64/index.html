@@ -85,9 +85,9 @@
   <h2>Per-benchmark history</h2>
   <p class="meta">
     monoruby and ZJIT per-commit history relative to the YJIT&nbsp;4.0.2 baseline, one
-    chart per benchmark. Only successful measurements are plotted (the ZJIT line starts
-    at the commit it was first measured); benchmarks that never produced a comparable
-    result are omitted entirely.
+    chart per benchmark. Lines connect adjacent measurements only — a commit whose
+    measurement failed leaves a gap instead of being bridged; benchmarks that never
+    produced a comparable result are omitted entirely.
   </p>
   <div class="controls">
     <label class="control-yratio">
@@ -497,17 +497,26 @@ function parseCsv(text) {
   function render(name) {
     const showRatio = yRatioBox.checked;
     const entry = cards.get(name);
-    const points = byName.get(name).filter(usable);
+    // Every recorded commit stays on the axis, including ones whose
+    // measurement failed: those map to null below, and with
+    // spanGaps: false the line breaks there instead of bridging the
+    // gap — only adjacent measurements are ever connected.
+    const points = byName.get(name);
     const hasZ = points.some(p => p.zjit_ms != null);
 
     // Both ratios are "speed as a multiple of YJIT's": yjit time over
     // the engine's own time, higher = faster than YJIT, 1 = parity.
-    const mrRatio = p => p.monoruby_ms == null ? null
+    const mrRatio = p => p.monoruby_ms == null || p.yjit_ms == null ? null
       : (p.ratio != null ? p.ratio : p.yjit_ms / p.monoruby_ms);
-    const zjRatio = p => p.zjit_ms == null ? null : p.yjit_ms / p.zjit_ms;
+    const zjRatio = p => p.zjit_ms == null || p.yjit_ms == null ? null : p.yjit_ms / p.zjit_ms;
 
-    // Latest measured values, shown next to the title.
-    const last = points[points.length - 1];
+    // Latest measured values, shown next to the title (the newest row
+    // may itself be a failure, so walk back to the last measured one;
+    // `names` only lists benchmarks that have at least one).
+    let last = points[points.length - 1];
+    for (let i = points.length - 1; i >= 0; i--) {
+      if (usable(points[i])) { last = points[i]; break; }
+    }
     if (showRatio) {
       const mv = mrRatio(last), zv = zjRatio(last);
       if (mv != null && zv == null) {
@@ -531,12 +540,22 @@ function parseCsv(text) {
     const labels  = points.map(p => p.timestamp);
     const commits = points.map(p => p.commit);
 
+    // A measurement whose neighbours on both sides are gaps would be
+    // invisible with radius 0 (no segment reaches it), so isolated
+    // points get a visible dot; everything else stays a bare line.
+    const isolatedDot = ctx => {
+      const d = ctx.dataset.data, i = ctx.dataIndex;
+      if (d[i] == null) return 0;
+      const prev = i > 0 ? d[i - 1] : null;
+      const next = i < d.length - 1 ? d[i + 1] : null;
+      return (prev == null && next == null) ? 2 : 0;
+    };
     const lineDefaults = {
       tension: 0.15,
       borderWidth: 2,
-      pointRadius: 0,
+      pointRadius: isolatedDot,
       pointHoverRadius: 4,
-      spanGaps: true,
+      spanGaps: false,
     };
     const datasets = showRatio
       ? [
