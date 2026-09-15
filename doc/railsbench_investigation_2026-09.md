@@ -988,7 +988,45 @@ I1/D1 32 KB・LL 8 MB なので絶対値は目安だが、両者を同じ条件�
 
 `blocks.rb` で 100,000 リクエスト: 282 → 401 MiB、2,000 リクエストあたり +2.4 MiB
 （≈ 1.2 KB/req）で直線的、GC 回数は 10/2,000 で一定、ms/req も一定。CRuby は
-125 → 133 MiB で止まる。<<LEAK>>
+125 → 133 MiB で止まる。
+
+どこが増えているかは `GC.stat` で切り分けられる（`leak.rb`、ブロックごとに `GC.start`
+してから採取、3 回・計 122,000 リクエスト）:
+
+| | ブロック 0 | ブロック 24（48,000 req 後） |
+|---|---:|---:|
+| RSS | 282 MiB | 336 MiB |
+| `heap_live_slots` | 98,491 | 98,499 |
+| `heap_allocated_pages` | 70 | 72 |
+| `old_objects` | 88,819 | 88,823 |
+| `malloc_increase_bytes` | 242.9 MB | **297.8 MB（+1.14 KB/req）** |
+
+**Ruby ヒープは完全に一定で、増えているのは Rust 側の malloc** である。
+
+JIT ではない: `--features jit-log` でウォームアップ 2,000 リクエストの後に印を打つと、
+続く 200 リクエストでコンパイルされたのは `Arel.sql` の 1 件だけ（3,146 件のコンパイル
+はすべてブートとウォームアップ中）。
+
+正体は **インターン表**である。`Symbol.all_symbols.size` を 2,000 リクエストごとに見ると
+monoruby は 37,978 → 41,960 → 45,942 → … と **+2 個/req** で増え続け（CRuby は 33,936 で
+一定）、差分を取ると毎リクエストの新顔は 2 つ:
+
+```
+:"7856e18e-86af-4763-bc91-8f570ebfd3e2"          # X-Request-Id の UUID
+:"_railsbench_session=4mvOj4mB1O7vAkx3GG...（300 バイト超）"   # Set-Cookie の値
+```
+
+monoruby の Symbol は GC されず、`Value::try_symbol_or_string` / `expect_symbol_or_string`
+（49 か所: `respond_to?`・`send`・`public_send`・`instance_variable_get`・`const_defined?`・
+`method_defined?`・`MatchData#[]` …）が **String を渡されると無条件に `IdentId::get_id`
+でインターンする**。CRuby の同じ API は `rb_check_id` —— 既にシンボルとして存在する
+名前だけ引き、無ければインターンせずに「無い」と答える —— なので、問い合わせに
+一意な文字列を渡しても表は増えない。1 個あたり String の複製 + hashbrown の項目 +
+`names` の項目で ≈ 500 B、2 個で ≈ 1.1 KB/req、`malloc_increase_bytes` の傾きと一致する。
+<<LEAK_ENTRY>>
+
+対策: 問い合わせ系 API に非インターンの `IdentId::try_get_id(&str) -> Option<IdentId>`
+（`rev_table` の read lock 1 回）を通し、`get_id` は定義・代入の経路だけに残す。
 
 ### 7.8 副産物
 
@@ -1000,6 +1038,10 @@ I1/D1 32 KB・LL 8 MB なので絶対値は目安だが、両者を同じ条件�
   タイミングが乗ったもの。`GC.stat` で数えた objects/req は F 前 1,592.7 / F 1,589.7 /
   master 1,589.7 で変化なし。§6 の差分法は GC 由来の行を ±10 k 程度揺らす。
 - `--yjit-perf` の +250 k Ir/req（§7.1 の注意）。
+- `leak.rb` の最初の実行（ブロックごとに `GC.start`）で 18,000〜20,000 リクエスト目に
+  1 回だけ **HTTP 500** が返った。その後 24,000・50,000 リクエストの 2 回では再現せず、
+  最初の実行は例外テキストを取りこぼしている。GC 直後に限って起きるなら根付け漏れの
+  可能性があるので、`GC_STRESS=1` の手動ワークフローで railsbench を回す価値がある。
 
 ### 7.9 対策候補（コスト順）
 
@@ -1012,7 +1054,7 @@ I1/D1 32 KB・LL 8 MB なので絶対値は目安だが、両者を同じ条件�
 | L | `Hash#each` でブロックが 2 引数なら pair Array を作らない | `builtins/hash.rb` | −69 個/req の Array |
 | M | `File.file?` / `exist?` を `metadata` に | `builtins/file.rs:833,846` | 実時間 3〜6 %（syscall） |
 | N | `unpack("H*")` の nibble テーブル、`Regexp#match?` のコピー排除、`MatchData#[]` の `format!` 排除 | `string/pack.rs`、`builtins/regexp.rs:1126`、`match_data.rs` | −60 k |
-| O | RSS の伸びの特定と修正（§7.7） | — | メモリ。1.2 KB/req |
+| O | 問い合わせ系 API（`respond_to?`・`send`・`MatchData#[]` …）を非インターンの `try_get_id` に（§7.7） | `id_table.rs`、`value.rs:2337`、呼び出し側 49 か所 | **RSS +1.2 KB/req の無限増加が止まる**。`get_id` の SipHash 分（K）も減る |
 | P | Rust runtime から呼ぶ `==` / `to_ary` / `to_s` / `default` のサイト別インラインキャッシュ | `globals/store`、`executor` | −50〜80 k |
 | Q | 文字列補間の一括確保（合計長を先に計算） | `codegen/runtime.rs:893` | −40 k |
 
