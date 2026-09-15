@@ -1040,7 +1040,7 @@ fn hash_default_assign(
 fn hash_index(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     recv_class: Option<ClassId>,
@@ -1071,7 +1071,32 @@ fn hash_index(
     // site's inline cache, so it is guarded; the receiver's shape is checked
     // inside the probe, and a shape it does not handle is answered by the
     // builtin call, not by an exit.
-    let probe = idx_class.and_then(|kc| match kc {
+    //
+    // The inline cache holds the *last* key class. A site the VM has seen
+    // index a Hash with more than one key class (Rails' `tag_options`
+    // reads its options Hash with a Symbol and then with a String) takes
+    // the builtin call, which keys on nothing: the probe's guard would miss
+    // on every other call. The PMC is what says so — the POLY byte alone
+    // does not, since it is stamped for a receiver-class change as well,
+    // and a receiver-polymorphic site's Hash arm may still be
+    // key-monomorphic.
+    let key_polymorphic = {
+        let pmc = &callsite.pmc;
+        let mut seen: Option<Option<ClassId>> = None;
+        pmc.overflow() != 0
+            || pmc
+                .entries()
+                .iter()
+                .filter(|e| e.recv == HASH_CLASS)
+                .any(|e| match seen {
+                    None => {
+                        seen = Some(e.arg);
+                        false
+                    }
+                    Some(first) => first != e.arg,
+                })
+    };
+    let probe = idx_class.filter(|_| !key_polymorphic).and_then(|kc| match kc {
         SYMBOL_CLASS | NIL_CLASS | TRUE_CLASS | FALSE_CLASS => {
             Some((kc, packed_digest_c as *const () as u64, None))
         }
@@ -1083,7 +1108,11 @@ fn hash_index(
         _ => None,
     });
     if let (Some(layout), Some((kc, digest, key_eq))) = (hash_entries_layout(), probe) {
-        let deopt = ir.new_deopt(state);
+        // A key-monomorphic site's guard must not deopt forever once the
+        // program does start feeding it a second key class: its miss is a
+        // counter-gated recompile, after which the PMC shows the variance
+        // and the site takes the builtin call above.
+        let deopt = ctx.arg_miss_deopt(state, ir);
         state.guard_class(ir, callsite.args, GP::Rcx, kc, deopt);
         let using_fpr = state.get_using_fpr(ir);
         ir.fpr_save(using_fpr);

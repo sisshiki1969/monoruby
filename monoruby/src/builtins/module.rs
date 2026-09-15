@@ -788,7 +788,11 @@ fn autoload_query(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    // No symbol for the name means no autoload is registered under it;
+    // answer without interning (a query must not grow the symbol table).
+    let Some(name) = lfp.arg(0).expect_symbol_or_existing_string(globals)? else {
+        return Ok(Value::nil());
+    };
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
     autoload_query_on(globals, lfp.self_val().as_class(), name, inherit)
 }

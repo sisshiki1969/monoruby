@@ -370,6 +370,31 @@ impl IdentId {
     }
 
     ///
+    /// The *IdentId* already interned for *name*, or `None`.
+    ///
+    /// A lookup, never an interning. The query APIs — `respond_to?`,
+    /// `autoload?`, a named-capture reference, a regex subject — are
+    /// handed arbitrary strings, and a symbol is never collected: interning
+    /// on their behalf grew the table by two entries on every railsbench
+    /// request (the request id and the session cookie) and RSS with it.
+    /// CRuby's `rb_check_id` draws the same line.
+    ///
+    pub fn try_get_id(name: &str) -> Option<IdentId> {
+        ID.read().unwrap().rev_table.get(name).copied()
+    }
+
+    ///
+    /// As [`try_get_id`], for the raw-bytes symbols of a non-UTF-8 String.
+    ///
+    pub fn try_get_id_from_bytes(bytes: &[u8], enc: crate::value::Encoding) -> Option<IdentId> {
+        ID.read()
+            .unwrap()
+            .rev_table_bytes
+            .get(&(bytes.to_vec(), enc))
+            .copied()
+    }
+
+    ///
     /// Get *IdentId* from String (UTF-8).
     ///
     pub fn get_id_from_string(name: String) -> IdentId {

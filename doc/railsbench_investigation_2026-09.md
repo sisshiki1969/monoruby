@@ -698,7 +698,7 @@ A〜F を入れた後の master で、同じ手法（§6）に加えて cache �
 
 **命令数ではもう負けていない。負けているのは (1) 1 リクエストあたりのオブジェクト数
 （1.73 倍）とその malloc/free、(2) 数か所の「Ruby で書かれた C 拡張」経路
-（`CGI.escapeHTML`・`method_missing` 連鎖・キーワード引数）、(3) 学習しない JIT サイト
+（`gsub(regex, Hash)`——`CGI.escapeHTML`・JSON エンコーダ・`URI`——、`method_missing` 連鎖・キーワード引数）、(3) 学習しない JIT サイト
 （`Hash#[]` のキークラス）、(4) 直線的に増え続ける RSS（≈ 1.2 KB/req）、そして命令数が
 同じなのに実時間が 1.4 倍になる理由としての (5) 命令キャッシュミス（+33 %/req）である。**
 
@@ -793,13 +793,21 @@ CRuby の ≈ 1.1〜1.15 倍**（早期の同条件では 1.01 倍）で、実�
 
 すべて callgrind の差分法（§6）で、呼び出し元は JIT シンボルマップで名前に解決した。
 
-#### 7.4.1 `CGI.escapeHTML` が `gsub(/['&"<>]/, HASH)` —— 175 k Ir/req（5.7 %）
+#### 7.4.1 `gsub(regex, HASH)` が Ruby で書かれた C 拡張の経路 —— 175 k Ir/req（5.7 %）
 
-`monoruby/stdlib/cgi/escape.rb:80` は `string.gsub(/['&\"<>]/, TABLE_FOR_ESCAPE_HTML__)`
-で、CRuby の C 拡張 `optimized_escape_html`（CRuby 側で 5.3 k Ir/req）の代わりに
-正規表現エンジンを走らせている。ERB テンプレートの `<%= %>` ごとに呼ばれ 21 回/req:
+`String#gsub` / `gsub!` の置換が Hash のとき（`replace_all_hash`）が 1 リクエストあたり
+175 k Ir。呼び出し元は 3 か所（`gsubprobe.rb`: `String#gsub` / `gsub!` を差し替えて
+Hash 置換の呼び出し元を `caller_locations` で集計）:
 
-| 内訳（`replace_all_hash`、Ir/req） | |
+| 呼び出し元 | 回/req | 平均長 | 実測 Ir/req |
+|---|---:|---:|---:|
+| `CGI.escapeHTML` —— `monoruby/stdlib/cgi/escape.rb:80` の `string.gsub(/['&\"<>]/, TABLE)`。CRuby は C 拡張 `optimized_escape_html`（5.3 k Ir/req） | 21 | 短い | **34 k**（H の実測差分） |
+| `ActiveSupport::JSON::Encoding::JSONGemEncoder#encode` —— `json.gsub!(/>\|<\|&/, ESCAPED_CHARS)`（生成した JSON 全体を走査） | 2 | 261 B | ≈ 140 k（残り） |
+| `URI._encode_uri_component` —— `str.gsub!(/[^*\-.0-9A-Z_a-z]/, TBLENCURICOMP_)`（CRuby の `uri/common.rb` も同じ実装） | 1 | 336 B | 〃 |
+
+`replace_all_hash` の内訳（Ir/req）:
+
+| | |
 |---|---:|
 | `FindCaptures::next`（onigmo の capture 付き反復） | 111,700 |
 | `splice_all` | 12,369 |
@@ -808,9 +816,12 @@ CRuby の ≈ 1.1〜1.15 倍**（早期の同条件では 1.01 倍）で、実�
 | `regex_view` / `string_snapshot` | 12,313 |
 | 合計 | **≈ 175,000** |
 
-対策: `CGI.escapeHTML` / `escape_html` / `h` を Rust のバイト走査で実装する（5 文字の
-テーブル引き）。見込み −170 k Ir/req。`gsub(regex, hash)` 一般も、hash が素の Hash なら
-`Hash#[]` を直接引き、`$~` は最後の 1 回だけ設定すればよい。
+当初はこの 175 k をすべて `CGI.escapeHTML`（21 回/req で最多の呼び出し元）に帰属させて
+いたが、H（escapeHTML をバイト走査に）の実測差分は −34 k で、大半は 2〜3 回/req の
+**長い文字列に対する `gsub!`** だった（`>|<|&` の 3 択と否定文字クラスは onigmo の
+先頭バイト最適化が効きにくく、1 バイトあたり ≈ 140 Ir）。残り ≈ 140 k の対策は
+`gsub(regex, Hash)` 一般: hash が `default_proc` も `default` の再定義も持たない素の
+Hash なら `Hash#[]` を直接引き、MatchData と `$~` の設定は最後の 1 回だけにする。
 
 #### 7.4.2 `method_missing` 連鎖（Rails の config アクセス）—— 17 回/req、154 k Ir/req（5.0 %）
 
@@ -911,6 +922,15 @@ sym = {a: 1, b: 2}; str = {"a" => 1, "b" => 2}; ary = {[1] => 1, [2] => 2}
 再コンパイルされるので、**Index サイトだけキーのクラスで再コンパイルの判定が
 走っていない**。§5 の「9（非数値の BinOp/Index サイトを引数クラスで keying しない）」
 は PMC 側だけで、JIT のガードは残っている。
+
+**I（実施済み）**: `hash_index`（`builtins/hash.rs` のインライン生成器）のキークラス
+ガードを、`guard_recv_class` と同じカウンタ付き `BecamePolymorphic` 再コンパイル出口
+（`JitContext::arg_miss_deopt`）にした。VM の `vm_save_binary_class` は引数クラスの変化
+でも POLY バイトを立てて PMC に (Hash, キークラス) を記録するので、再コンパイル時に
+PMC が Hash 受け手に 2 種以上のキークラスを持つサイトはプローブを使わず、キーに
+依存しない `hashindex` の直接呼び出しに落ちる（受け手多相で POLY が立っただけの
+サイトはキー単相のままプローブを使う）。同じ最小再現: deopt **200,000 → 11 回**、
+再コンパイル 0 → 1 回、実時間 0.87 → 0.67 s（2,000,000 反復、−23 %）。
 
 #### 7.4.6 グローバルメソッドキャッシュの表引き —— 390 回/req、115 k Ir/req
 
@@ -1087,21 +1107,54 @@ r = /\A[\w\-]{1,255}\z/
 
 | # | 施策 | 変更箇所 | 見込み（Ir/req） |
 |---|---|---|---|
-| H | `CGI.escapeHTML` / `h` を Rust のバイト走査に | `builtins/`（新）、`stdlib/cgi/escape.rb` | **−170 k（5.6 %）** |
-| I | `Hash#[]` の Index サイトをキークラスで `BecamePolymorphic` 再コンパイルする（またはガードを外す） | `jitgen/compile/index.rs`、PMC | deopt 11 回/req 分。§7.4.5 の再現で確認できる |
+| H（実施済み） | `CGI.escapeHTML` / `h` を Rust のバイト走査に（`String#__escape_html`） | `builtins/string.rs`、`stdlib/cgi/escape.rb` | 見込み −170 k → **実測 −34 k（1.1 %）**。175 k の帰属を誤っていた（§7.4.1）。残り ≈ 140 k は `gsub!(regex, Hash)` 一般（JSON エンコーダ・`URI._encode_uri_component`） |
+| I（実施済み） | `Hash#[]` のインライン生成器のキークラスガードを `BecamePolymorphic` 再コンパイル出口にし、PMC がキー多相を示すサイトはキー非依存の直接呼び出しに | `builtins/hash.rs`、`jitgen/compile/method_call.rs`（`arg_miss_deopt`） | 最小再現で deopt 200,000 → 11 回、−23 % 実時間。railsbench の profile 統計から `[Hash][String]` / `[Hash][Array]` の 3 サイト（計 11 回/req）が消えた（§7.4.5） |
 | J | キーワード引数: `CallSiteInfo` を clone せず借用、kwrest 不要なら `RubyMap` を作らない | `codegen/runtime/args.rs:1392-1400` | −40 k |
 | K | `Symbol#to_s` を 1 lock・0 clone に、インターン表を FxHash に、`"default"` を定数 IdentId に | `builtins/symbol.rs`、`id_table.rs`、`builtins/hash.rs:959` | −55 k |
 | L | `Hash#each` でブロックが 2 引数なら pair Array を作らない | `builtins/hash.rb` | −69 個/req の Array |
-| M | `File.file?` / `exist?` を `metadata` に | `builtins/file.rs:833,846` | 実時間 3〜6 %（syscall） |
+| M（実施済み） | `File.file?` / `exist?` を `canonicalize`（realpath: 構成要素ごとの readlink）から 1 回の `stat`（`std::fs::metadata`）に。パスは正規化せず生のバイト列で渡す（CRuby の `rb_stat` と同じく、末尾 `/` の通常ファイルは ENOTDIR → false） | `builtins/file.rs` | syscall 数の削減（実時間 3〜6 % 見込み、§7.6） |
 | N | `unpack("H*")` の nibble テーブル、`Regexp#match?` のコピー排除、`MatchData#[]` の `format!` 排除 | `string/pack.rs`、`builtins/regexp.rs:1126`、`match_data.rs` | −60 k |
-| **O** | `Regexp#match?` が対象文字列をインターンしないようにする（`expect_string` で受ける、1 行）。次いで問い合わせ系 API（`respond_to?`・`send`・`MatchData#[]` …）を非インターンの `try_get_id` に（§7.7） | `builtins/regexp.rs:1126`、その後 `id_table.rs`・`value.rs:2337` と呼び出し側 49 か所 | **RSS +1.2 KB/req の無限増加が止まる**、−27 k Ir/req。`Regexp#match?` を動的入力に使う全アプリのリーク |
+| **O（実施済み）** | `Regexp#match?` / `=~` / `match` が対象文字列をインターンしない（文字列として読む）。問い合わせ系 API（`respond_to?`・`autoload?`・`MatchData` の名前参照）は非インターンの `IdentId::try_get_id`（CRuby の `rb_check_id`）で引く。`respond_to?` は CRuby の `obj_respond_to` の 2 形態（Symbol 名は `(Symbol, bool)` で真偽化、Symbol のない String 名はインターンして第 2 引数と戻り値を素通し）に揃え、`respond_to_missing?` が定数を返す本体ならインターンもしない | `id_table.rs`、`value.rs`、`builtins/{regexp,kernel,module,match_data}.rs` | **シンボル数が 10,000 req で一定（32,671）、RSS・malloc_increase も一定** —— +2 シンボル/req の増加が止まった |
 | P | Rust runtime から呼ぶ `==` / `to_ary` / `to_s` / `default` のサイト別インラインキャッシュ | `globals/store`、`executor` | −50〜80 k |
 | Q | 文字列補間の一括確保（合計長を先に計算） | `codegen/runtime.rs:893` | −40 k |
 
 H〜N は互いに独立で、それぞれ 1 コミットの大きさ。合計で命令数 −350〜400 k（12 %）、
 加えて M の実時間分。P と O は設計が要る。
 
-### 7.10 追加した計測手順
+### 7.10 H・O・I・M の実施結果
+
+§7.9 の H・O・I・M を順に入れた（4 コミット）。同じ差分法（WARM=1,000、N=100/600）と
+`small.rb` の実時間（WARM=2,000、N=2,000、3 回の中央値。**両側とも再ビルドして計測**:
+`build.rs` が共有 install root にその木の stdlib を入れるので、古いバイナリを新しい
+`cgi/escape.rb` に対して走らせると `__escape_html` が無く 500 になる）:
+
+| | Ir/req | 実時間 ms/req |
+|---|---:|---:|
+| master `b730d15d` | 3,057,451 | 1.468 |
+| + H | 3,023,430（−34,021） | — |
+| + H, O, I, M | **2,937,444（−120,007、−3.9 %）** | **1.339（−8.8 %）** |
+
+命令数より実時間の方が大きく縮んだのは M（syscall は callgrind の Ir に載らない）。
+H から H+O+I+M への −86 k を名前つきシンボルで内訳すると（JIT コードの番地はビルド間で
+動くので相殺して −9 k）:
+
+| 内訳（Ir/req） | |
+|---|---:|
+| ファイルシステム（`realpath`、`Components::next`、`normalize_pathbuf`）—— M | −19,611 |
+| インターン（`IdentId::get_id` / `get_name` / `to_string_lossy`）—— O | −10,955 |
+| malloc / free（M のパスバッファ、O のインターン文字列と MatchData） | −21,829 |
+| deopt 経路（`chain_deopt_into`）—— I | −1,643 |
+| VM / JIT コード（I で消えた VM 再実行を含む） | −9,101 |
+
+profile ビルドでは `[Hash][String]` / `[Hash][Array]` の deopt サイト 3 つ（11 回/req）が
+統計から消え、`newsyms.rb` のシンボル数は 10,000 req で一定になった（§7.7 のリークは
+O で止まった）。`railsbench_check.rb` は 15 チェックすべて通る（出力は変わらない）。
+
+残る大物は変わらず: オブジェクト数（§7.3）、`gsub!(regex, Hash)` の残り ≈ 140 k
+（§7.4.1: JSON エンコーダと `URI._encode_uri_component`）、`method_missing` 連鎖（§7.4.2）、
+キーワード引数（§7.4.3）、グローバルメソッドキャッシュ（§7.4.6）。
+
+### 7.11 追加した計測手順
 
 ```sh
 # ブロックごとの ms/req・RSS・GC 回数（CRuby のウォームアップ長を見る）

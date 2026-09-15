@@ -1014,7 +1014,7 @@ fn regexp_match(
             unsafe { std::str::from_utf8_unchecked(arg0.as_rstring_inner().as_bytes()) }
         }
         _ => {
-            given_owned = arg0.expect_symbol_or_string(globals)?.to_string();
+            given_owned = subject_to_string(globals, arg0)?;
             &given_owned
         }
     };
@@ -1121,9 +1121,34 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if arg0.is_nil() {
         return Ok(Value::bool(false));
     }
+    // A subject String that is invalid in its own encoding can't be
+    // matched — CRuby raises ArgumentError before scanning (as `match`
+    // does here; this path used to read such a subject lossily instead).
+    if let Some(inner) = arg0.is_rstring_inner()
+        && !inner.is_valid_encoding()
+    {
+        return Err(MonorubyErr::argumenterr(format!(
+            "invalid byte sequence in {}",
+            inner.encoding().name()
+        )));
+    }
     check_subject_match_encoding(&globals.store, &regex, arg0)?;
     warn_binary_regexp_match(vm, globals, &regex, arg0);
-    let given = arg0.expect_symbol_or_string(globals)?.to_string();
+    // Borrow a valid-UTF-8 String subject in place, as `match` / `=~` do;
+    // anything else goes through `subject_to_string`. This used to read the
+    // subject as an identifier, interning every string ever asked about —
+    // on railsbench the request id and the session cookie, forever.
+    let given_owned: String;
+    let given: &str = match arg0.is_rstring() {
+        Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
+            // SAFETY: just validated as UTF-8.
+            unsafe { std::str::from_utf8_unchecked(arg0.as_rstring_inner().as_bytes()) }
+        }
+        _ => {
+            given_owned = subject_to_string(globals, arg0)?;
+            &given_owned
+        }
+    };
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
         match conv_index(pos.coerce_to_int_i64(vm, globals)?, given.chars().count()) {
             Some(pos) => pos,
@@ -1138,7 +1163,21 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // and the per-vm match-regex stash that `set_match_regex`
     // would otherwise leave behind for `Regexp.last_match`.
     let _ = vm;
-    Ok(Value::bool(RegexpInner::match_pred(&regex, &given, char_pos)?))
+    Ok(Value::bool(RegexpInner::match_pred(&regex, given, char_pos)?))
+}
+
+/// The subject of a match as an owned UTF-8 String, for the operands the
+/// zero-copy path cannot borrow: a Symbol's name, or a String that is not
+/// valid UTF-8, read lossily as before. Never interns — the subject is
+/// arbitrary data, and a symbol is never collected.
+fn subject_to_string(store: &Store, subject: Value) -> Result<String> {
+    if let Some(sym) = subject.try_symbol() {
+        return Ok(sym.get_name());
+    }
+    if let Some(inner) = subject.is_rstring_inner() {
+        return Ok(String::from_utf8_lossy(inner.as_bytes()).into_owned());
+    }
+    Err(MonorubyErr::is_not_symbol_nor_string(store, subject))
 }
 
 ///
@@ -1227,7 +1266,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             unsafe { std::str::from_utf8_unchecked(arg0.as_rstring_inner().as_bytes()) }
         }
         _ => {
-            heystack_owned = arg0.expect_symbol_or_string(globals)?.to_string();
+            heystack_owned = subject_to_string(globals, arg0)?;
             &heystack_owned
         }
     };
@@ -1731,6 +1770,65 @@ mod tests {
     #[test]
     fn regexp_error2() {
         run_test_error(r#"Regexp.new("+")"#);
+    }
+
+    #[test]
+    fn query_apis_do_not_intern_their_string() {
+        // A symbol is never collected, so `Regexp#match?` reading its subject
+        // as an identifier (and `autoload?`, a named-capture reference
+        // reading their argument that way) grew the symbol table on every
+        // distinct string ever asked about — on railsbench, the request id
+        // and the session cookie of every request. CRuby's `rb_check_id`
+        // looks up without interning; so do these now. (The symbol table
+        // is process-wide and other tests intern in parallel, so each
+        // snippet counts its own prefix rather than the table's size.)
+        run_tests(&[
+            r#"r = /\A[\w\-]{1,255}\z/; 3000.times { |i| r.match?("qmatch_#{i}") }; Symbol.all_symbols.count { |s| s.start_with?("qmatch_") }"#,
+            r#"r = /x/; 3000.times { |i| "qeq_#{i}" =~ r; r.match("qeq2_#{i}"); r =~ "qeq3_#{i}" }; Symbol.all_symbols.count { |s| s.start_with?("qeq") }"#,
+            r#"3000.times { |i| Object.autoload?("Qauto#{i}"); autoload?("Qauto2#{i}") }; Symbol.all_symbols.count { |s| s.start_with?("Qauto") }"#,
+            r#"m = /(?<name>a)/.match("a"); 3000.times { |i| (m["qgrp_#{i}"] rescue nil); (m.begin("qgrp_#{i}") rescue nil); (m.values_at("qgrp_#{i}") rescue nil) }; Symbol.all_symbols.count { |s| s.start_with?("qgrp_") }"#,
+            // Symbol subjects and names still work, and non-UTF-8 subjects
+            // are read as before.
+            r#"[/x/.match?(:sym_x), /y/.match?(:sym_x), (/a/.match?(1) rescue $!.class), /a/ =~ :xa, /b/.match(:abc)&.begin(0)]"#,
+            r#"[/a/.match?("\xE9a".b), /a/.match?("\x82\xa0a".dup.force_encoding("Shift_JIS")), (/a/.match?("\xff".dup.force_encoding("UTF-8")) rescue $!.class)]"#,
+            r#"m = /(?<name>a)/.match("a"); [m[:name], m["name"], (m["nope"] rescue $!.class), m.begin("name"), m.end(:name), m.values_at("name"), (m.begin("nope") rescue $!.class)]"#,
+            r#"m = /(?<name>a)/.match("a"); [m.match("name"), m.match(:name), (m.match("nope") rescue $!.class), m.match_length("name"), m.match_length(:name), (m.match_length("nope") rescue $!.class)]"#,
+            r#"[Object.autoload?("NoSuchConstZz"), Object.autoload?(:NoSuchConstZz2), autoload?("NoSuchConstZz3")]"#,
+            // A name that is not UTF-8 is looked up among the raw-bytes
+            // symbols: absent, then present once `to_sym` made one.
+            r#"o = Object.new; b = "\xff\xfe".b; sj = "\x82\xa0".dup.force_encoding("Shift_JIS"); r1 = [o.respond_to?(b), Object.autoload?(b), autoload?(sj), (/(?<name>a)/.match("a")[b] rescue $!.class)]; b.to_sym; sj.to_sym; r1 + [o.respond_to?(b), o.respond_to?(sj, true), Object.autoload?(b), autoload?(sj)]"#,
+        ]);
+    }
+
+    #[test]
+    fn respond_to_with_a_string_no_symbol_exists_for() {
+        // CRuby's `respond_to?` has two shapes of the `respond_to_missing?`
+        // call: a name that is a symbol goes `(Symbol, bool)` and the answer
+        // is truthified; a String no symbol existed for is interned and
+        // passed with the second argument *as given* (nil when omitted),
+        // and the override's answer comes back as is.
+        run_tests(&[
+            r#"o = Object.new; [o.respond_to?("to_s"), o.respond_to?("no_such_zz"), o.respond_to?(:to_s), o.respond_to?("no_such_zz", true), (o.respond_to?(1) rescue $!.class)]"#,
+            // (A fresh name each time: once interned, the name takes the
+            // symbol shape on the next call — in CRuby too.)
+            r#"class RtmQ; def respond_to_missing?(n, p) = [n.class, n.to_s.start_with?("never_defined_zz"), p]; end; $rtmq = ($rtmq || 0) + 1; q = RtmQ.new; [q.respond_to?("never_defined_zz_a#{$rtmq}"), q.respond_to?("never_defined_zz_b#{$rtmq}", 7), q.respond_to?(:never_defined_zz_2), q.respond_to?(:never_defined_zz_2, 7), q.respond_to?("to_s")]"#,
+            r#"class RtmN; def respond_to_missing?(n, p) = nil; end; class RtmT; def respond_to_missing?(n, p) = 42; end; [RtmN.new.respond_to?("never_defined_zz_3"), RtmN.new.respond_to?(:never_defined_zz_4), RtmT.new.respond_to?("never_defined_zz_5"), RtmT.new.respond_to?(:never_defined_zz_6)]"#,
+            // An exception from the override propagates in both shapes.
+            r#"class RtmE; def respond_to_missing?(n, p) = raise(ArgumentError, "rtm #{n.class}"); end; e = RtmE.new; $rtme = ($rtme || 0) + 1; [(e.respond_to?(:never_defined_zz_7) rescue $!.message), (e.respond_to?("never_defined_zz_e#{$rtme}") rescue $!.message), (e.respond_to?("never_defined_zz_e#{$rtme}b", true) rescue $!.class)]"#,
+        ]);
+        // CRuby interns the name in that second shape too (`rb_to_symbol`);
+        // monoruby does not when `respond_to_missing?` is the default or
+        // answers a literal, since such a body never reads it. CRuby's
+        // count is collector-dependent, so this side is checked alone.
+        let res = run_test_no_result_check(
+            r#"
+            class RtmC; def respond_to_missing?(n, p) = false; end
+            o = Object.new; c = RtmC.new
+            3000.times { |i| o.respond_to?("qrtm_#{i}"); o.respond_to?("qrtm_#{i}", true); c.respond_to?("qrtm_#{i}") }
+            Symbol.all_symbols.count { |s| s.start_with?("qrtm_") }
+            "#,
+        );
+        assert_eq!(res.try_fixnum(), Some(0));
     }
 
     #[test]

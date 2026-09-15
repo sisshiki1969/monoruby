@@ -3332,7 +3332,9 @@ fn autoload_query(
     _: BytecodePtr,
 ) -> Result<Value> {
     let cbase = kernel_cbase(vm, globals);
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let Some(name) = lfp.arg(0).expect_symbol_or_existing_string(globals)? else {
+        return Ok(Value::nil());
+    };
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
     let module = globals.store.get_module(cbase);
     super::module::autoload_query_on(globals, module, name, inherit)
@@ -5318,7 +5320,9 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/respond_to=3f.html]
 #[monoruby_builtin]
 fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    // A name no symbol exists for cannot be a method, so it is not interned
+    // to find that out (CRuby's `rb_check_id`).
+    let name = lfp.arg(0).expect_symbol_or_existing_string(globals)?;
     let include_all = if let Some(arg1) = lfp.try_arg(1) {
         arg1.as_bool()
     } else {
@@ -5327,10 +5331,11 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // Ruby 4.0 has the reflective entry points honour refinements, so
     // this resolves through the *caller's* set, not through none.
     let set = vm.caller_refinements(globals);
-    let found = match globals
-        .store
-        .check_method_with_refinements(lfp.self_val().class(), name, set)
-    {
+    let found = match name.and_then(|name| {
+        globals
+            .store
+            .check_method_with_refinements(lfp.self_val().class(), name, set)
+    }) {
         Some(entry) => {
             entry.func_id().is_some()
                 && (include_all || entry.visibility() == Visibility::Public)
@@ -5340,22 +5345,65 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     if found {
         return Ok(Value::bool(true));
     }
-    // Call respond_to_missing?(name, include_all) as CRuby does.
+    // Call respond_to_missing? as CRuby does. CRuby has two shapes of that
+    // call: for a name that is a symbol (`basic_obj_respond_to`) it passes
+    // `(Symbol, bool)` and truthifies the answer; for a String no symbol
+    // existed for (`obj_respond_to`) it interns the name and passes it
+    // with the second argument *as given* (nil when omitted), returning
+    // the override's answer as is.
     let respond_to_missing = IdentId::RESPOND_TO_MISSING_;
     if let Some(fid) = globals.check_method(lfp.self_val(), respond_to_missing) {
         // The default `Object#respond_to_missing?` is `false` — an ISeq
         // whose hint says it returns a constant — and so is the common
-        // user override that answers a literal; `invoke_func` answers
-        // those from the hint without a Ruby call.
-        let result = vm.invoke_func_inner(
-            globals,
-            fid,
-            lfp.self_val(),
-            &[Value::symbol(name), Value::bool(include_all)],
-            None,
-            None,
-        )?;
-        return Ok(Value::bool(result.as_bool()));
+        // user override that answers a literal. Such a body never reads
+        // its arguments, so answer from the hint here (the same shortcut
+        // `invoke_func_inner` takes) without a Ruby call and, for a name
+        // no symbol existed for, without interning it.
+        let func = &globals.store[fid];
+        let const_return = if let Some(iseq) = func.is_iseq()
+            && func.is_not_block()
+            && let ISeqHint::ConstReturn(v) = globals.store[iseq].hint
+            && func.no_keyword()
+            && func.positional_arity_ok(2)
+        {
+            Some(Value::from(v))
+        } else {
+            None
+        };
+        let result = match name {
+            Some(name) => {
+                if let Some(v) = const_return {
+                    return Ok(Value::bool(v.as_bool()));
+                }
+                let result = vm.invoke_func_inner(
+                    globals,
+                    fid,
+                    lfp.self_val(),
+                    &[Value::symbol(name), Value::bool(include_all)],
+                    None,
+                    None,
+                )?;
+                Value::bool(result.as_bool())
+            }
+            None => {
+                if let Some(v) = const_return {
+                    return Ok(v);
+                }
+                // Only now, and only for a body that will see it, is the
+                // name interned.
+                let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+                let priv_ = lfp.try_arg(1).unwrap_or(Value::nil());
+                vm.invoke_func_inner(
+                    globals,
+                    fid,
+                    lfp.self_val(),
+                    &[Value::symbol(name), priv_],
+                    None,
+                    None,
+                )?
+            }
+        };
+        return Ok(result);
     }
     Ok(Value::bool(false))
 }

@@ -829,9 +829,23 @@ fn file_extname(
 #[monoruby_builtin]
 fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // Validate the argument type first (raises TypeError for non-string)
-    let path = to_path(vm, globals, lfp.arg(0))?;
-    let b = path.canonicalize().is_ok();
+    let path = to_stat_path(vm, globals, lfp.arg(0))?;
+    // One `stat` (following symlinks), as CRuby's `rb_stat`. This used to
+    // be `canonicalize`, a `realpath` — a `readlink` per path component on
+    // top of the `stat` — for an answer that never needed the resolved
+    // path; on railsbench, Sprockets and Zeitwerk ask this a few hundred
+    // times a request.
+    let b = std::fs::metadata(&path).is_ok();
     Ok(Value::bool(b))
+}
+
+/// The path a `stat`-answered predicate asks about: coerced like
+/// `to_path`, but the bytes as given, not lexically normalized — the
+/// kernel resolves `..` through symlinks and refuses a trailing slash on
+/// a regular file (ENOTDIR), as CRuby's `rb_stat` lets it.
+fn to_stat_path(vm: &mut Executor, globals: &mut Globals, file: Value) -> Result<std::path::PathBuf> {
+    let file = to_path_rstring(vm, globals, file)?;
+    Ok(bytes_to_pathbuf(file.as_bytes()))
 }
 
 ///
@@ -842,11 +856,13 @@ fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn file_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // Validate the argument type first (raises TypeError for non-string)
-    let path = to_path(vm, globals, lfp.arg(0))?;
-    match path.canonicalize() {
-        Ok(path) => Ok(Value::bool(path.is_file())),
-        Err(_) => Ok(Value::bool(false)),
-    }
+    let path = to_stat_path(vm, globals, lfp.arg(0))?;
+    // One `stat`, as `File.exist?` above; a symlink answers for its target.
+    let b = match std::fs::metadata(&path) {
+        Ok(meta) => meta.is_file(),
+        Err(_) => false,
+    };
+    Ok(Value::bool(b))
 }
 
 ///
@@ -3419,6 +3435,39 @@ mod tests {
         run_test(r##"File.file?("monoruby")"##);
         run_test(r##"File.file?("README.md")"##);
         run_test(r##"File.file?("readme.md")"##);
+    }
+
+    /// `exist?` / `file?` are one `stat` each: a symlink answers for its
+    /// target, a dangling one is absent, a directory exists but is no file,
+    /// a trailing slash on a file is ENOTDIR, and a non-path argument is a
+    /// TypeError — for `File` and `FileTest` alike.
+    #[test]
+    fn exist_and_file_are_a_stat() {
+        run_test(
+            r##"
+            d = "/tmp/mono_ex_#{Process.pid}"
+            Dir.mkdir(d)
+            f = "#{d}/f"
+            File.write(f, "x")
+            File.symlink(f, "#{d}/link")
+            File.symlink("#{d}/nope", "#{d}/dangling")
+            res = [
+              File.exist?(f), File.file?(f),
+              File.exist?(d), File.file?(d),
+              File.exist?("#{d}/link"), File.file?("#{d}/link"),
+              File.exist?("#{d}/dangling"), File.file?("#{d}/dangling"),
+              File.exist?("#{d}/nope"), File.file?("#{d}/nope"),
+              File.exist?(""), File.file?(""),
+              File.exist?("#{f}/"), File.file?("#{f}/"),
+              File.exist?("#{d}/"), File.file?("#{d}/."),
+              FileTest.exist?(f), FileTest.file?(d),
+              (File.exist?(nil) rescue $!.class), (File.file?(1) rescue $!.class),
+            ]
+            File.delete("#{d}/link", "#{d}/dangling", f)
+            Dir.rmdir(d)
+            res
+        "##,
+        );
     }
 
     #[test]
