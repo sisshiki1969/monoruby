@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9486dfb5.js";
+            window.path_to_searchindex_js = "../searchindex-c5f4f6c8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -412,6 +412,77 @@ other path so its <code>EnsureEnd</code> will not consume it.</li>
 </ul>
 <p>This mirrors CRuby’s <code>CATCH_TYPE_ENSURE</code> continuation plus the “ensure result
 overrides pending throw” rule.</p>
+<h3 id="61-spliced-non-local-exits-issue-1185"><a class="header" href="#61-spliced-non-local-exits-issue-1185">6.1 Spliced non-local exits (issue #1185)</a></h3>
+<p>A <code>break</code> / non-local <code>return</code> whose whole chain is specialized-inlined into
+one JIT unit lowers to the <strong>specialized teardown</strong> (<code>lea rbp += Σ; leave; ret</code>) — three instructions, no <code>handle_error</code>. An <code>ensure</code> on the way out
+used to disqualify that outright: <code>nonlocal_exit_needs_vm_unwind</code> (§5) sent
+the exit down the generic unwind, which interprets the <code>ensure</code> bodies,
+converts the suspended frames by the chain-deopt walk, and — for <code>break</code> —
+leaves the defining frame in the VM until the next <code>loop_start</code> re-enters by
+OSR.</p>
+<p>Splicing keeps the teardown and reaches the <code>ensure</code> body as ordinary
+compiled code. In both shapes the exit <strong>defers</strong> its unwind exactly as
+<code>handle_error</code> would (<code>defer_block_break</code> / <code>defer_method_return</code>), and the
+region’s <code>EnsureEnd</code> delivers it: <code>ensure_end_spliced</code> classifies the parked
+deferral and the compiled arm runs the teardown for that kind. The gain is
+that the unwind edge now <em>exists in the CFG</em>, so the <code>ensure</code>’s writes are
+visible to the abstract interpreter instead of happening behind its back.</p>
+<p><strong>Stage 1 — the exit’s own frame</strong> (<code>SplicePlan::SameFrame</code>). The body is a
+block of the iseq being compiled, so the exit is an ordinary forward branch
+to it (<code>AsmInst::DeferSplicedExit</code>, then <code>CompileResult::Branch</code>).</p>
+<p><strong>Stage 2 — an intermediate frame</strong> (<code>SplicePlan::Outer</code>). The owner is a
+<em>suspended</em> frame: its compile is parked at the call that leads to the exit,
+and its <code>ensure</code> body is several machine frames away, so there is no branch
+to emit. The splice travels by the machine’s own return path instead:</p>
+<ol>
+<li><code>AsmInst::SplicedExitToOuter</code>, at the exit, builds the error where
+<code>vm.cfp()</code> is still the exiting frame (that is what resolves a <code>break</code>’s
+target) but keys the deferral on the <strong>host</strong> frame’s LFP, read from the
+frame chain — <code>defer_block_break_at</code> / <code>defer_method_return_at</code>.</li>
+<li>The same instruction then sets rbp to the frame the host called and
+<code>leave; ret</code>s. That lands at the host’s call site with
+<code>SplicedExitKind::outer_tag()</code> in the return register — a value no
+normal return can produce (low three bits <code>000</code>, and no <code>RValue</code> lives
+at address 8 or 16).</li>
+<li><code>AsmInst::SplicedExitLanding</code>, emitted after that call whenever a nested
+compile asked for one, recognizes the marker and branches into the
+host’s <code>ensure</code> body. It is an ordinary <strong>side branch of the host’s own
+CFG</strong>, so the body’s entry merge sees this path exactly as it sees the
+normal fall-through.</li>
+</ol>
+<p>The landing edge’s state is the host’s state right after the call, which is
+what the <code>ret</code> really arrives at, with two corrections: every widen the call
+reached is re-applied (the resume adopts the <em>return</em> join’s kept claims,
+and a spliced exit is by definition not a returning path), and every temp
+still void at the call is claimed as a boxed <code>Value</code> in its slot (a temp the
+<code>ensure</code> body keeps live may only be written later in the begin body; the
+prologue nil-fills the frame, so the claim is true, and nothing on this path
+reads it).</p>
+<p>One invariant is re-proved rather than inherited: the call site’s own capture
+guard (<code>immediate_evict</code>) is emitted <em>after</em> the landing, so
+<code>defer_*_at</code> checks the host’s <code>Meta</code> for the two bits <code>branch_if_captured</code>
+tests and degenerates to the generic unwind when the callee promoted the host
+frame to the heap. A degenerate error (<code>LocalJumpError</code> out of a proc-escaped
+block) takes the same exit: nothing is torn down and the generic raise runs
+from the exit’s own pc.</p>
+<p><code>try_splice_exit</code> refuses everything it cannot prove: a dispatch arm, a
+loop-rooted frame (whose compile may not cover the body), a <code>$!</code> restore
+owed anywhere on the way out, more than one <code>ensure</code> to run (chaining hop by
+hop is the natural extension — each <code>EnsureEnd</code> would tear down to the next
+host — but is not built), a body that is not a basic-block head, a body
+containing an exit of its own (<code>next</code> / <code>break</code> / <code>return</code> / <code>retry</code> /
+<code>redo</code>, which would leave the deferral parked past the frame) or a nested
+handler, and a host whose in-progress call site is not one of the two shapes
+that emit a landing. Every refusal falls back to the generic unwind, which
+handles every case.</p>
+<p>Measured on the shape the issue names — a <code>break</code>-with-<code>ensure</code> that is the
+normal exit of an inner iteration inside a hot loop in the block’s defining
+frame — stage 2 is worth roughly 10% (0.79–0.83 s → 0.69–0.77 s over
+repeated runs). The same exit <em>without</em> the <code>ensure</code> runs in 0.35 s, so most
+of what is left is the deferral machinery itself — two runtime calls and a
+<code>MonorubyErr</code> per exit — rather than the unwind the splice removed. On a
+chain that merely tears down (no hot continuation to return to) the
+difference is within noise.</p>
 <hr>
 <h2 id="7-backtrace-construction--the-key-contrast"><a class="header" href="#7-backtrace-construction--the-key-contrast">7. Backtrace construction — the key contrast</a></h2>
 <p>This is where the laziness pays off and where the recent work (PR #896)
@@ -538,11 +609,13 @@ prints only the origin (e.g. <code>SyntaxError</code>, which also gets a source 
 <tr><td>catch-time caller walk</td><td><code>../monoruby/src/executor.rs</code> (<code>complete_backtrace_for_rescue</code>)</td></tr>
 <tr><td>object materialization + cause</td><td><code>../monoruby/src/executor.rs</code> (<code>take_ex_obj</code>, <code>chain_cause</code>)</td></tr>
 <tr><td>per-method exception table</td><td><code>../monoruby/src/globals/store/iseq.rs</code></td></tr>
+<tr><td>JIT-spliced non-local exits (§6.1)</td><td><code>../monoruby/src/codegen/jitgen/context.rs</code> (<code>try_splice_exit</code>), <code>jitgen/compile.rs</code> (<code>emit_spliced_exit</code>), <code>jitgen/compile/method_call.rs</code> (<code>emit_spliced_landing</code>)</td></tr>
 <tr><td>frame-label rendering</td><td><code>../monoruby/src/globals/store.rs</code> (<code>func_description</code>)</td></tr>
 <tr><td>Ruby <code>Exception</code> API (Rust side)</td><td><code>../monoruby/src/builtins/exception.rs</code></td></tr>
 <tr><td>Ruby <code>Exception</code> API (Ruby side)</td><td><code>../monoruby/builtins/startup.rb</code></td></tr>
 <tr><td><code>Kernel#raise</code> / <code>#loop</code> / <code>#caller</code></td><td><code>../monoruby/src/builtins/kernel.rs</code></td></tr>
 <tr><td>differential tests</td><td><code>../monoruby/tests/backtrace.rs</code>, <code>tests/exception_api.rs</code></td></tr>
+<tr><td>spliced-exit regression tests</td><td><code>../monoruby/tests/nonlocal_exit_ensure.rs</code>, <code>tests/nonlocal_exit_intermediate_ensure.rs</code>, <code>tests/nonlocal_exit_rescue.rs</code></td></tr>
 </tbody>
 </table>
 </div>
