@@ -1495,6 +1495,31 @@ impl<'a> JitContext<'a> {
     /// need not look the entry up twice (once for the target, once for the
     /// visibility gate in `compile_method_call`).
     ///
+    ///
+    /// Resolve `class_id#name` for one of the basic-op fast paths.
+    ///
+    /// Inside monoruby's own Ruby-written core (`builtins/*.rb`) the answer
+    /// is the definition the basic-op table armed at bootstrap, not the live
+    /// one. Those bodies stand in for CRuby's C implementations, where
+    /// `Array#each`'s own `i += 1` is `rb_int_plus` and a later
+    /// `def Integer#+` cannot reach it; resolving live sent the compiled
+    /// body into the redefinition and ended the loop after one iteration
+    /// (issue #1135). `basic_op_assumable` then licenses the inline for the
+    /// same frames, and `Executor::dispatch_redefined_op` is the runtime
+    /// twin for the VM.
+    ///
+    /// Basic ops are public by definition, so the snapshot carries no
+    /// visibility of its own.
+    ///
+    fn resolve_basic_op(&self, class_id: ClassId, name: IdentId) -> Option<(FuncId, Visibility)> {
+        if self.in_internal_builtin()
+            && let Some(fid) = self.store.basic_op_armed_func(class_id, name)
+        {
+            return Some((fid, Visibility::Public));
+        }
+        self.jit_check_method(class_id, name)
+    }
+
     fn jit_check_method(&self, class_id: ClassId, name: IdentId) -> Option<(FuncId, Visibility)> {
         let refinements = self.refinements();
         let class_version = self.class_version();

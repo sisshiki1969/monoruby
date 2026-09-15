@@ -2789,7 +2789,7 @@ impl Executor {
             //
             // The library's *own* operations are the opposite case, and
             // `lexical_frame_refinements` handles them.
-            if !globals.store[fid].meta().is_svar_transparent()
+            if !globals.store[fid].meta().is_internal_builtin()
                 && let Some(iseq) = globals.store[fid].is_iseq()
             {
                 return globals.store.iseq_refinements(iseq);
@@ -2815,11 +2815,42 @@ impl Executor {
     /// An operator is never a conversion performed on the caller's behalf,
     /// so the operator paths ask this instead. See #1066.
     ///
+    ///
+    /// Whether the frame currently running is one of monoruby's Ruby-written
+    /// core builtins (`builtins/*.rb`) — see [`Meta::set_internal_builtin`].
+    ///
+    pub(crate) fn in_internal_builtin(&self) -> bool {
+        self.cfp
+            .is_some_and(|c| c.lfp().meta().is_internal_builtin())
+    }
+
+    ///
+    /// Whether an operator applied to a receiver of `class` must be handed
+    /// to a user redefinition instead of being computed by the builtin.
+    ///
+    /// The redefinition twin of [`Self::basic_op_refinements`], and it
+    /// declines for the same reason: `Array#map`'s own `i += 1` is the
+    /// library's code, and in CRuby it is C — `rb_int_plus`, which cannot
+    /// see `Integer#+` being redefined at all. Letting the redefinition
+    /// reach it ended the loop after one iteration and returned a silently
+    /// short result (issue #1135).
+    ///
+    pub(crate) fn dispatch_redefined_op(
+        &self,
+        globals: &Globals,
+        class: ClassId,
+        op: IdentId,
+    ) -> bool {
+        globals.store.basic_op_redefined()
+            && globals.store.basic_op_redefined_for(class, op)
+            && !self.in_internal_builtin()
+    }
+
     pub(crate) fn basic_op_refinements(&self, globals: &Globals) -> RefinementSetId {
         let mut cfp = self.cfp;
         while let Some(c) = cfp {
             let fid = c.lfp().func_id();
-            if globals.store[fid].meta().is_svar_transparent() {
+            if globals.store[fid].meta().is_internal_builtin() {
                 return RefinementSetId::EMPTY;
             }
             if let Some(iseq) = globals.store[fid].is_iseq() {
@@ -4745,7 +4776,7 @@ impl Executor {
         while {
             let lfp = cfp.lfp();
             let meta = lfp.meta();
-            meta.is_native() || meta.is_svar_transparent()
+            meta.is_native() || meta.is_internal_builtin()
         } {
             cfp = cfp.prev()?;
         }

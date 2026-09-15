@@ -36,7 +36,7 @@ impl<'a> JitContext<'a> {
         idx_class: Option<ClassId>,
         bc_pos: BcIndex,
     ) -> bool {
-        let Some((fid, visibility)) = self.jit_check_method(recv_class, op) else {
+        let Some((fid, visibility)) = self.resolve_basic_op(recv_class, op) else {
             return false;
         };
         let Some(InlineFuncInfo::InlineGen(f)) = self.store.inline_info.get_inline(fid) else {

@@ -692,6 +692,15 @@ impl Store {
         self.basic_ops.redefined_pair(class_id, name)
     }
 
+    /// What `class_id#name` resolved to when the basic-op table was armed
+    /// (after the builtins finished defining themselves, before user code
+    /// ran) — the definition monoruby's own Ruby-written core is bound to,
+    /// whatever the live method table says now. `None` for a pair the table
+    /// does not track, or before it is armed.
+    pub(crate) fn basic_op_armed_func(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
+        self.basic_ops.armed_func(class_id, name).flatten()
+    }
+
     /// Whether `class_id#name` was replaced by something no lexical scope
     /// escapes — an ordinary redefinition rather than a refinement. The JIT
     /// must never inline one of these; see
@@ -997,8 +1006,8 @@ thread_local! {
 
 /// True for sources shipped in the interpreter's own `builtins/`
 /// bootstrap tree — the core methods monoruby implements in Ruby but
-/// CRuby implements in C. Their frames are `$~` / `$_`-transparent
-/// (see `Meta::set_svar_transparent`).
+/// CRuby implements in C. Their frames stand in for C frames
+/// (see `Meta::set_internal_builtin`).
 fn is_internal_source(source: &SourceInfoRef) -> bool {
     BUILTINS_DIR.with(|dir| source.path.starts_with(dir))
 }
@@ -1085,7 +1094,7 @@ impl Store {
         let iseq = self.new_iseq(info);
         let mut info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
         if internal {
-            info.set_svar_transparent();
+            info.set_internal_builtin();
         }
         self.functions.info.push(info);
         Ok(func_id)
@@ -1114,7 +1123,7 @@ impl Store {
         let iseq = self.new_iseq(info);
         let mut info = FuncInfo::new_method_iseq(name, func_id, iseq, params_info, top_level);
         if internal {
-            info.set_svar_transparent();
+            info.set_internal_builtin();
         }
         self.functions.info.push(info);
         Ok(func_id)
@@ -1139,7 +1148,7 @@ impl Store {
         let iseq = self.new_iseq(info);
         let mut info = FuncInfo::new_block_iseq(func_id, iseq, params_info, is_block_style);
         if internal {
-            info.set_svar_transparent();
+            info.set_internal_builtin();
         }
         self.functions.info.push(info);
         Ok(func_id)

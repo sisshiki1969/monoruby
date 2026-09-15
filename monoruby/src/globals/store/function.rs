@@ -252,19 +252,25 @@ impl Meta {
         (self.kind & 0b10) != 0
     }
 
-    /// Mark this frame as owning no `$~` / `$_` scope. Set for the
-    /// core builtins monoruby implements in Ruby (`builtins/*.rb`):
-    /// CRuby implements the same methods in C, and a C frame is
-    /// skipped by `vm_svar_lep`, so a match performed under one of
-    /// them lands in the *caller's* container. Without this, a
-    /// `$~` set inside e.g. `Enumerable#map`'s `each` call would be
-    /// invisible to the user block map yields to.
-    fn set_svar_transparent(&mut self) {
+    /// Mark this frame as one of the core builtins monoruby implements in
+    /// Ruby (`builtins/*.rb`) — the methods CRuby implements in C. The bit
+    /// says "behave as the C frame would", and two things follow from it:
+    ///
+    /// 1. **It owns no `$~` / `$_` scope.** A C frame is skipped by
+    ///    `vm_svar_lep`, so a match performed under one of these lands in
+    ///    the *caller's* container. Without this, a `$~` set inside e.g.
+    ///    `Enumerable#map`'s `each` call would be invisible to the user
+    ///    block map yields to.
+    /// 2. **Its basic operators are bound to the builtin.** A C
+    ///    implementation's `i + 1` is `rb_int_plus`; it cannot see a
+    ///    redefinition of `Integer#+`, so neither may `Integer#times`'s
+    ///    loop counter (issue #1135). See `Executor::in_internal_builtin`.
+    fn set_internal_builtin(&mut self) {
         self.kind |= 0b0100_0000
     }
 
-    /// See [`Self::set_svar_transparent`].
-    pub(crate) fn is_svar_transparent(&self) -> bool {
+    /// See [`Self::set_internal_builtin`].
+    pub(crate) fn is_internal_builtin(&self) -> bool {
         (self.kind & 0b0100_0000) != 0
     }
 
@@ -1242,10 +1248,10 @@ impl FuncInfo {
         self.data.meta.set_proc_method();
     }
 
-    /// Mark this function's frames as owning no `$~` / `$_` scope.
-    /// See [`Meta::set_svar_transparent`].
-    pub(crate) fn set_svar_transparent(&mut self) {
-        self.data.meta.set_svar_transparent();
+    /// Mark this function's frames as C-equivalent core builtins.
+    /// See [`Meta::set_internal_builtin`].
+    pub(crate) fn set_internal_builtin(&mut self) {
+        self.data.meta.set_internal_builtin();
     }
 
     ///

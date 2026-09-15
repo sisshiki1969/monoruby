@@ -1241,6 +1241,15 @@ impl<'a> JitContext<'a> {
         &self.store[self.current_frame().iseq_id]
     }
 
+    ///
+    /// Whether the frame being compiled is one of monoruby's Ruby-written
+    /// core builtins (`builtins/*.rb`) — see [`Meta::set_internal_builtin`].
+    /// The compile-time twin of `Executor::in_internal_builtin`.
+    ///
+    pub(super) fn in_internal_builtin(&self) -> bool {
+        self.store[self.func_id()].meta().is_internal_builtin()
+    }
+
     #[cfg(feature = "emit-bc")]
     pub(super) fn dump_iseq(&self) {
         self.store.dump_iseq(self.iseq_id());
