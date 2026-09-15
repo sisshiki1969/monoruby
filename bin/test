@@ -155,6 +155,32 @@ diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
 rm benchmark/*.ppm
 
+# app_aobench renders its ambient occlusion from `rand`, which used to make its
+# output different on every run and therefore undiffable. The benchmark now
+# seeds with srand(0), and MT19937 is seeded identically on CRuby and monoruby,
+# so the three renders below must agree byte for byte.
+#
+# AO_SIZE shrinks the image for this diff only; run as a benchmark the script
+# still renders its own 256x256. At that size the --no-jit arm alone is ~55 s in
+# a release build (~17x so_mandelbrot's whole phase) and minutes in this
+# instrumented debug one, and it buys no coverage 64x64 does not already give:
+# the same methods compile, just fewer times over. Under GC_STRESS=1 shrink it
+# again rather than skip it — a Vec per vector operation is exactly the
+# allocation-heavy JIT x GC interaction the stress run exists to exercise, and
+# per-safepoint collection is superlinear in live heap (the plb2 story above).
+AO_SIZE=64
+if [ "$GC_STRESS_ON" = "1" ]; then
+  AO_SIZE=16
+fi
+
+phase "benchmark: app_aobench (AO_SIZE=$AO_SIZE)"
+AO_SIZE=$AO_SIZE $MONORUBY benchmark/app_aobench.rb > benchmark/ao1.ppm
+AO_SIZE=$AO_SIZE $MONORUBY --no-jit benchmark/app_aobench.rb > benchmark/ao2.ppm
+AO_SIZE=$AO_SIZE "${RUBY[@]}" benchmark/app_aobench.rb > benchmark/ao.ppm
+diff -s benchmark/ao.ppm benchmark/ao1.ppm
+diff -s benchmark/ao.ppm benchmark/ao2.ppm
+rm benchmark/ao.ppm benchmark/ao1.ppm benchmark/ao2.ppm
+
 # Per-safepoint collection runs optcarrot at ~0.2 frames/min, so the
 # default 180 frames (`-b`) is a ~14-hour run — twice — and the first full
 # GC_STRESS=1 run of this phase sat in it for 4.6h until the job's
