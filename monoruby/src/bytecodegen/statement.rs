@@ -497,7 +497,11 @@ impl<'a> BytecodeGen<'a> {
             let match_temp = self.temp;
             let rescue_pos = self.new_label();
             self.apply_label(rescue_pos);
-            self.retry_labels.push(body_start);
+            self.retry_labels.push(RetryTarget {
+                dest: body_start,
+                errinfo_save,
+                ensure_depth: self.ensure.len(),
+            });
 
             for RescueEntry {
                 exception_list,

@@ -149,6 +149,26 @@ impl std::fmt::Debug for BcLocal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct Label(usize);
 
+///
+/// Where a `retry` in a rescue clause jumps, and what it owes on the way.
+///
+/// Re-entering the begin body *leaves the rescue clause*, so a `retry` has
+/// the same two obligations as completing the clause normally: run the
+/// `ensure` bodies of the regions opened inside it, and put `$!` back to
+/// the value this region saved on entry (issue #1357). The region's own
+/// `ensure` is not one of them — `retry` stays inside it.
+///
+#[derive(Debug, Clone, Copy)]
+struct RetryTarget {
+    /// Start of the begin body.
+    dest: Label,
+    /// The region's `$!` entry save (`gen_begin`'s `errinfo_save`).
+    errinfo_save: Option<BcReg>,
+    /// `self.ensure.len()` with this region's own entry already pushed, so
+    /// only regions opened inside the clause are unwound.
+    ensure_depth: usize,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum LvalueKind {
     Const {
@@ -600,7 +620,7 @@ struct BytecodeGen<'a> {
     /// The label for redo.
     redo_label: Label,
     /// The labels for retry (stack of begin body_start labels).
-    retry_labels: Vec<Label>,
+    retry_labels: Vec<RetryTarget>,
     /// The current register id.
     temp: u16,
     /// The number of temporary registers.
