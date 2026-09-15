@@ -1253,6 +1253,24 @@ impl Codegen {
             AsmInst::DeferSplicedExit { kind, pc } => {
                 self.encode_linst(LInst::DeferSplicedExit { kind, pc })
             }
+            // The same splice across an *intermediate* frame's `ensure`:
+            // defer keyed on that frame, tear down to its call site and
+            // return into it tagged (#1185, stage 2).
+            AsmInst::SplicedExitToOuter {
+                kind,
+                host,
+                callee,
+                pc,
+            } => self.encode_linst(LInst::SplicedExitToOuter {
+                kind,
+                host: host.unwrap_concrete(),
+                callee: callee.unwrap_concrete(),
+                pc,
+            }),
+            AsmInst::SplicedExitLanding { kind, dest } => {
+                let dest = frame.resolve_label(&mut self.jit, dest);
+                self.encode_linst(LInst::SplicedExitLanding { kind, dest })
+            }
             // Generic `yield` (block target resolved at runtime). aarch64 builds
             // the block frame and calls the funcdata indirectly; both arches
             // record the block call's return address under `evict` for the
@@ -2112,6 +2130,17 @@ impl Codegen {
             }
             LInst::DeferSplicedExit { kind, pc } => {
                 self.emit_defer_spliced_exit(kind, pc);
+            }
+            LInst::SplicedExitToOuter {
+                kind,
+                host,
+                callee,
+                pc,
+            } => {
+                self.emit_spliced_exit_to_outer(kind, host, callee, pc);
+            }
+            LInst::SplicedExitLanding { kind, dest } => {
+                self.emit_spliced_exit_landing(kind, &dest);
             }
             LInst::StoreOuterFprHomeF { src, disp, base } => {
                 self.emit_store_outer_fpr_home_f(src, disp, base);

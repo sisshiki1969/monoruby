@@ -417,6 +417,25 @@ impl AsmInfo {
 }
 
 ///
+/// How a JIT-spliced non-local exit reaches the `ensure` body it must run
+/// (issue #1185) — see [`JitContext::try_splice_exit`].
+///
+pub(in crate::codegen) enum SplicePlan {
+    /// The region belongs to the frame being compiled: branch into its
+    /// shared `ensure` body (stage 1, #1187).
+    SameFrame { dest_bb: BasicBlockId },
+    /// The region belongs to a suspended frame the unwind crosses: tear
+    /// down to that frame's in-progress call site and land there (stage
+    /// 2). Both offsets are distances from the current rbp — to the host
+    /// frame (whose LFP keys the deferral) and to the frame the host
+    /// called (where the teardown's `leave; ret` returns from).
+    Outer {
+        host: DynVarOffset,
+        callee: DynVarOffset,
+    },
+}
+
+///
 /// Virtual Stack frame for specialized compilation.
 ///
 pub(super) struct JitStackFrame {
@@ -649,12 +668,35 @@ pub(super) struct JitStackFrame {
     pub(super) speculation_poisoned: bool,
     ///
     /// `ensure` regions of this frame with JIT-spliced non-local exits
-    /// (issue #1185), keyed by the region's `EnsureEnd` bc index. The
-    /// value records which exit kinds spliced into it, so the `EnsureEnd`
-    /// arm knows which specialized-teardown dispatch arms to emit.
-    /// `(break, method_return)`.
+    /// (issue #1185), keyed by the region's `EnsureEnd` bc index. Each
+    /// half records the *stack position* the exit of that kind unwinds
+    /// to, so the `EnsureEnd` arm knows which specialized-teardown
+    /// dispatch arms to emit and how far each tears down. `(break,
+    /// method_return)`.
     ///
-    pub(super) spliced_ensures: HashMap<BcIndex, (bool, bool)>,
+    /// The position is recorded at splice time because the exit may not
+    /// live in this frame at all: a stage-2 splice is requested by a
+    /// *nested* frame whose unwind crosses this one, and its home is
+    /// resolved there, not here (`iter_caller_pos` asked at the
+    /// `EnsureEnd` would answer for this frame).
+    ///
+    pub(super) spliced_ensures: HashMap<BcIndex, (Option<usize>, Option<usize>)>,
+    ///
+    /// Stage-2 splice (#1185): the landing this frame's *in-progress*
+    /// specialized call must emit, requested by the nested compile
+    /// running inside it. `(ensure body's entry block, break, return)`.
+    /// Consumed — and cleared — by the call site once the nested compile
+    /// returns.
+    ///
+    pub(super) pending_splice_landing: Option<(BasicBlockId, bool, bool)>,
+    ///
+    /// Whether the specialized call this frame is currently compiling
+    /// emits a stage-2 landing after it. Only the two call sites that
+    /// push a specialized frame set it (a method send and an inlined
+    /// `yield`); a nested exit refuses to splice through a frame whose
+    /// call site would have nowhere to receive the tagged return.
+    ///
+    pub(super) landing_sink: bool,
 }
 
 impl std::fmt::Debug for JitStackFrame {
@@ -769,6 +811,8 @@ impl JitStackFrame {
             speculated_using_fpr: UsingFpr::default(),
             speculation_poisoned: false,
             spliced_ensures: HashMap::default(),
+            pending_splice_landing: None,
+            landing_sink: false,
         }
     }
 
@@ -809,6 +853,8 @@ impl JitStackFrame {
             speculated_using_fpr: self.speculated_using_fpr,
             speculation_poisoned: self.speculation_poisoned,
             spliced_ensures: self.spliced_ensures.clone(),
+            pending_splice_landing: self.pending_splice_landing,
+            landing_sink: self.landing_sink,
         }
     }
 
@@ -1343,6 +1389,11 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn pop_frame(&mut self) -> JitStackFrame {
         let mut frame = self.stack_frame.pop().unwrap();
+        // A stage-2 landing is owed to the call this frame was compiling
+        // (#1185); reaching the pop with one outstanding would mean a
+        // nested exit's teardown returns into a call site with nothing to
+        // catch its marker.
+        debug_assert!(frame.pending_splice_landing.is_none());
         // Grow `stack_offset` by the JIT-owned spill region — every
         // `VirtFPReg(N)` with `N >= PHYS_FPR_POOL` claims 8 bytes
         // at the top of the frame's local area. Walk the
@@ -1816,6 +1867,21 @@ impl<'a> JitContext<'a> {
     /// that walk the trace chain (whose positions align with
     /// `stack_frame`) rather than a lexical distance.
     ///
+    ///
+    /// The current end of [`Self::widened_outer_log`], to be paired with
+    /// [`Self::widened_outer_since`] around a nested compile.
+    ///
+    pub(super) fn widen_log_mark(&self) -> usize {
+        self.widened_outer_log.len()
+    }
+
+    ///
+    /// Every `(stack position, slot)` a widen reached since *mark*.
+    ///
+    pub(super) fn widened_outer_since(&self, mark: usize) -> Vec<(usize, SlotId)> {
+        self.widened_outer_log[mark..].to_vec()
+    }
+
     pub(super) fn widen_outer_at_pos(&mut self, pos: usize, slot: SlotId) {
         if pos + 1 >= self.stack_frame.len() {
             return;
@@ -1982,26 +2048,36 @@ impl<'a> JitContext<'a> {
 
     ///
     /// Try to arrange a JIT-spliced non-local exit (issue #1185): a
-    /// `break` / non-local `return` written inside its own frame's
-    /// `begin`..`ensure` region can *defer* its unwind and jump straight
-    /// into the shared `ensure` body — which is ordinary, already-compiled
-    /// code of this frame — whose `EnsureEnd` then delivers it through the
-    /// specialized teardown. That models the unwind edge in the CFG (the
-    /// `ensure`'s writes become visible to the abstract interpreter) and
-    /// skips the whole generic unwind / chain-deopt / VM stint.
+    /// `break` / non-local `return` whose unwind crosses a
+    /// `begin`..`ensure` region can *defer* its unwind and reach the
+    /// shared `ensure` body as ordinary compiled code, whose `EnsureEnd`
+    /// then delivers it through the specialized teardown. That models the
+    /// unwind edge in the CFG (the `ensure`'s writes become visible to the
+    /// abstract interpreter) and skips the whole generic unwind /
+    /// chain-deopt / VM stint.
     ///
-    /// Returns the `ensure` body's entry block on success, after recording
-    /// the region's `EnsureEnd` in the frame's [`JitStackFrame::spliced_ensures`]
-    /// registry. `None` refuses (stage 1 is deliberately narrow) and the
-    /// caller falls back to the generic lowering, which handles every case.
+    /// Two shapes, by which frame owns the region:
+    ///
+    /// * [`SplicePlan::SameFrame`] — the exit's own frame (stage 1). The
+    ///   body is a block of the iseq being compiled, so an ordinary
+    ///   forward branch reaches it.
+    /// * [`SplicePlan::Outer`] — a *suspended* frame the unwind crosses
+    ///   (stage 2). Its `ensure` body is ordinary compiled code too, but
+    ///   of a frame whose compile is parked at the call that leads here,
+    ///   so the exit tears the machine frames down to that call and
+    ///   returns into it tagged; the landing there branches into the body.
+    ///
+    /// `None` refuses and the caller falls back to the generic lowering,
+    /// which handles every case.
     ///
     pub(super) fn try_splice_exit(
         &mut self,
         bc_pos: BcIndex,
         kind: SplicedExitKind,
-    ) -> Option<BasicBlockId> {
+    ) -> Option<SplicePlan> {
         // A dispatch arm compiles straight-line per-class code at one call
         // site; it must not spawn branch entries into the frame's CFG.
+        // Context-wide, so this covers a suspended host frame too.
         if self.in_dispatch_arm() {
             return None;
         }
@@ -2012,23 +2088,131 @@ impl<'a> JitContext<'a> {
         if matches!(self.jit_type(), JitType::Loop(_)) {
             return None;
         }
-        // The specialized teardown must exist: an in-unit chain with no
-        // handler in any *suspended* frame. (The current frame's own
-        // handler is the very thing being spliced.)
-        match kind {
-            SplicedExitKind::Break => self.iter_caller_specialized_ids()?,
-            SplicedExitKind::MethodReturn => self.method_caller_specialized_ids()?,
+        // Where this exit unwinds to: the first frame the teardown pops.
+        // The frames it flies over are `[target, current)`.
+        let target_pos = match kind {
+            SplicedExitKind::Break => self.iter_caller_pos()? + 1,
+            SplicedExitKind::MethodReturn => {
+                let (_, dist) = self.current_method_frame()?;
+                self.stack_frame.len() - 1 - dist
+            }
         };
-        let iseq = self.iseq();
-        // The exit's own frame may owe a `$!` restore too (it stopped
-        // inside a `rescue` clause). `handle_error` does that before it
-        // enters the `ensure` body; the splice has nowhere to emit it, so
-        // it keeps the generic unwind.
-        if !iseq.errinfo_restore_slots(bc_pos).is_empty() {
+        let current_pos = self.stack_frame.len() - 1;
+        // Every region the unwind passes through that actually runs
+        // something, innermost first. A `$!` restore anywhere is a hard
+        // refusal: only the generic unwind replays those saves.
+        if !self.iseq().errinfo_restore_slots(bc_pos).is_empty() {
             return None;
         }
+        let mut hosts = if self.iseq().covering_ensure(bc_pos).is_some() {
+            vec![current_pos]
+        } else {
+            vec![]
+        };
+        for pos in (target_pos..current_pos).rev() {
+            let frame = &self.stack_frame[pos];
+            let pc = self.store[frame.callid?].bc_pos;
+            let iseq = &self.store[frame.iseq_id()];
+            if !iseq.errinfo_restore_slots(pc).is_empty() {
+                return None;
+            }
+            if iseq.covering_ensure(pc).is_some() {
+                hosts.push(pos);
+            }
+        }
+        // Nothing to run: the caller keeps the plain specialized teardown.
+        // More than one: chaining hop by hop is the natural extension of
+        // this protocol (each `EnsureEnd` would tear down to the next
+        // host instead of to the target), but stage 2 does one.
+        if hosts.len() != 1 {
+            return None;
+        }
+        let host_pos = hosts[0];
+        if host_pos == current_pos {
+            let (dest_bb, end) = self.spliceable_ensure_region(self.iseq_id(), bc_pos)?;
+            self.record_spliced_ensure(current_pos, end, kind, target_pos);
+            return Some(SplicePlan::SameFrame { dest_bb });
+        }
+        // Stage 2. The host is suspended at the call that (transitively)
+        // reached this exit; its landing rides on that call site, which
+        // must be one of the two shapes that emit one.
+        if !self.stack_frame[host_pos].landing_sink {
+            return None;
+        }
+        // A loop-rooted host compiles only its loop's blocks — same
+        // reason as the current frame's check above.
+        if matches!(self.stack_frame[host_pos].jit_type, JitType::Loop(_)) {
+            return None;
+        }
+        let host_callid = self.stack_frame[host_pos].callid?;
+        let host_pc = self.store[host_callid].bc_pos;
+        let (dest_bb, end) =
+            self.spliceable_ensure_region(self.stack_frame[host_pos].iseq_id(), host_pc)?;
+        // The teardown reads the host's LFP and pops down to the frame
+        // the host called, whose `ret` lands at the host's call site.
+        let host = self.specialized_ids_at_pos(host_pos);
+        let callee = self.specialized_ids_at_pos(host_pos + 1);
+        // The teardown returns into the host's call site with a *boxed*
+        // marker in the return register, so every frame it flies over —
+        // the one the host called above all, whose convention that call
+        // site reads — must be off the raw-f64 return convention
+        // (`float_return_ok`). `new_break` / `new_method_return` would
+        // have said this for the exiting frame; here the whole flown-over
+        // run says it, since none of them returns normally on this path.
+        for pos in host_pos + 1..=current_pos {
+            self.stack_frame[pos].has_boxed_return = true;
+        }
+        self.record_spliced_ensure(host_pos, end, kind, target_pos);
+        let landing = self.stack_frame[host_pos]
+            .pending_splice_landing
+            .get_or_insert((dest_bb, false, false));
+        debug_assert_eq!(landing.0, dest_bb);
+        match kind {
+            SplicedExitKind::Break => landing.1 = true,
+            SplicedExitKind::MethodReturn => landing.2 = true,
+        }
+        Some(SplicePlan::Outer {
+            host: DynVarOffset::Hint {
+                ids: host.0,
+                extra: host.1,
+            },
+            callee: DynVarOffset::Hint {
+                ids: callee.0,
+                extra: callee.1,
+            },
+        })
+    }
+
+    fn record_spliced_ensure(
+        &mut self,
+        pos: usize,
+        end: BcIndex,
+        kind: SplicedExitKind,
+        target_pos: usize,
+    ) {
+        let entry = self.stack_frame[pos]
+            .spliced_ensures
+            .entry(end)
+            .or_insert((None, None));
+        match kind {
+            SplicedExitKind::Break => entry.0 = Some(target_pos),
+            SplicedExitKind::MethodReturn => entry.1 = Some(target_pos),
+        }
+    }
+
+    ///
+    /// The `ensure` region of *iseq* covering *pc*, when it is one a
+    /// non-local exit can be spliced into: `(the body's entry block, the
+    /// region's `EnsureEnd`)`.
+    ///
+    fn spliceable_ensure_region(
+        &self,
+        iseq_id: ISeqId,
+        pc: BcIndex,
+    ) -> Option<(BasicBlockId, BcIndex)> {
+        let iseq = &self.store[iseq_id];
         // Exactly one covering region, and it has an `ensure`.
-        let ensure_pc = iseq.single_covering_ensure(bc_pos)?;
+        let ensure_pc = iseq.single_covering_ensure(pc)?;
         // The shared `ensure` copy practically always heads a basic block
         // (rescue clauses branch to it; without rescue it coincides with
         // the `else` join) — but refuse rather than assume.
@@ -2067,16 +2251,7 @@ impl<'a> JitContext<'a> {
         if iseq.any_handler_intersects(ensure_pc..end) {
             return None;
         }
-        let entry = self
-            .current_frame_mut()
-            .spliced_ensures
-            .entry(end)
-            .or_insert((false, false));
-        match kind {
-            SplicedExitKind::Break => entry.0 = true,
-            SplicedExitKind::MethodReturn => entry.1 = true,
-        }
-        Some(dest_bb)
+        Some((dest_bb, end))
     }
 
     ///
@@ -2270,8 +2445,16 @@ impl<'a> JitContext<'a> {
             return_edges: _,
             branch_map: _,
             backedge_map: _,
-            spliced_ensures: _,
             call_site_using_fpr: _,
+            // Splice bookkeeping (#1185). Unlike the rest of this group
+            // a nested compile *can* reach these — a stage-2 splice
+            // records on the suspended host frame — but both are pure
+            // emission steering (which `EnsureEnd` dispatch arms to
+            // build, which landing the call site owes), and the memo is
+            // consulted only where no code is emitted.
+            spliced_ensures: _,
+            pending_splice_landing: _,
+            landing_sink: _,
             deferred_rest: _,
             needs_rest_array: _,
             // Set once, in `build_return_segments`, on the frame whose
@@ -2643,6 +2826,14 @@ impl<'a> JitContext<'a> {
                 if let DynVarOffset::Hint { ids, extra } = offset {
                     let resolved = self.resolve_specialized_id_chain(ids) + *extra;
                     *offset = DynVarOffset::Concrete(resolved);
+                }
+            }
+            AsmInst::SplicedExitToOuter { host, callee, .. } => {
+                for off in [host, callee] {
+                    if let DynVarOffset::Hint { ids, extra } = off {
+                        let resolved = self.resolve_specialized_id_chain(ids) + *extra;
+                        *off = DynVarOffset::Concrete(resolved);
+                    }
                 }
             }
             AsmInst::Init {
@@ -3372,6 +3563,34 @@ impl<'a> JitContext<'a> {
     ///
     /// Add new return branch with `state`.
     ///
+    ///
+    /// The return context a JIT-spliced exit's `EnsureEnd` delivers into
+    /// (#1185): the frame below *target_pos*, i.e. the one the teardown's
+    /// `leave; ret` returns to. `new_break` / `new_method_return` are the
+    /// same call with the position re-derived from the current frame;
+    /// this form takes it from the splice record, which is the only way a
+    /// stage-2 splice — requested by a nested frame — can be honoured
+    /// here.
+    ///
+    pub(super) fn new_spliced_exit_return(&mut self, target_pos: usize, ret: ReturnState) {
+        self.current_frame_mut().has_boxed_return = true;
+        if let Some(pos) = target_pos.checked_sub(1) {
+            #[cfg(feature = "jit-debug")]
+            eprintln!("   new_spliced_exit_return:{:?}", ret);
+            self.push_return_context(pos, ret);
+        }
+    }
+
+    ///
+    /// The teardown distance a spliced `EnsureEnd` arm runs: from the
+    /// frame being compiled down to *target_pos*, whose `leave; ret`
+    /// returns to its caller.
+    ///
+    pub(super) fn spliced_teardown_offset(&self, target_pos: usize) -> DynVarOffset {
+        let (ids, extra) = self.specialized_ids_at_pos(target_pos);
+        DynVarOffset::Hint { ids, extra }
+    }
+
     pub(super) fn new_break(&mut self, ret: ReturnState) {
         self.current_frame_mut().has_boxed_return = true;
         if let Some(pos) = self.iter_caller_pos() {

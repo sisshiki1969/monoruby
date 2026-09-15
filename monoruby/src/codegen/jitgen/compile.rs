@@ -209,6 +209,55 @@ impl<'a> JitContext<'a> {
         Ok(ir)
     }
 
+    ///
+    /// Lower a non-local exit [`JitContext::try_splice_exit`] accepted
+    /// (issue #1185).
+    ///
+    /// Both shapes defer the unwind and then reach the shared `ensure`
+    /// body as ordinary compiled code; they differ only in how far the
+    /// machine has to travel to get there.
+    ///
+    fn emit_spliced_exit(
+        &mut self,
+        ir: &mut AsmIr,
+        state: &mut AbstractState,
+        plan: SplicePlan,
+        kind: SplicedExitKind,
+        ret: SlotId,
+        pc: BytecodePtr,
+    ) -> JitResult<CompileResult> {
+        // The degenerate fallback inside both instructions raises
+        // generically from this pc, so home the locals exactly as the
+        // generic arms do.
+        state.locals_to_S(ir);
+        state.load(ir, ret, GP::Rdx);
+        match plan {
+            SplicePlan::SameFrame { dest_bb } => {
+                ir.push(AsmInst::DeferSplicedExit { kind, pc });
+                // Enter the `ensure` body with the temp level its join
+                // expects.
+                let dest_sp = self.iseq().get_sp(self.iseq().bb_info[dest_bb].begin);
+                state.set_next_sp(dest_sp);
+                state.clear_above_next_sp();
+                Ok(CompileResult::Branch(dest_bb))
+            }
+            SplicePlan::Outer { host, callee } => {
+                // The host frame's own compile emits the landing and the
+                // branch into its `ensure` body when its call site is
+                // reached again (`emit_spliced_landing`); this path just
+                // leaves, so it registers no return context of its own —
+                // the host's `EnsureEnd` delivers the value.
+                ir.push(AsmInst::SplicedExitToOuter {
+                    kind,
+                    host,
+                    callee,
+                    pc,
+                });
+                Ok(CompileResult::Raise)
+            }
+        }
+    }
+
     fn prepare_next(&mut self, state: AbstractState, end: BcIndex) {
         let next_idx = end + 1;
         let next_bbid = self.iseq().bb_info.is_bb_head(next_idx).unwrap();
@@ -1076,22 +1125,15 @@ impl<'a> JitContext<'a> {
                 // whose `EnsureEnd` delivers it through the specialized
                 // teardown. The region's `ensure` then runs compiled and
                 // state-visible instead of interpreted mid-unwind.
-                if let Some(dest_bb) = self.try_splice_exit(bc_pos, SplicedExitKind::MethodReturn) {
-                    // The degenerate fallback inside `DeferSplicedExit` raises
-                    // generically from this pc, so home the locals exactly as
-                    // the generic arm below does.
-                    state.locals_to_S(ir);
-                    state.load(ir, ret, GP::Rdx);
-                    ir.push(AsmInst::DeferSplicedExit {
-                        kind: SplicedExitKind::MethodReturn,
+                if let Some(plan) = self.try_splice_exit(bc_pos, SplicedExitKind::MethodReturn) {
+                    return self.emit_spliced_exit(
+                        ir,
+                        state,
+                        plan,
+                        SplicedExitKind::MethodReturn,
+                        ret,
                         pc,
-                    });
-                    // Enter the `ensure` body with the temp level its join
-                    // expects.
-                    let dest_sp = self.iseq().get_sp(self.iseq().bb_info[dest_bb].begin);
-                    state.set_next_sp(dest_sp);
-                    state.clear_above_next_sp();
-                    return Ok(CompileResult::Branch(dest_bb));
+                    );
                 }
                 // A non-local `return` written inside a protected region must
                 // otherwise unwind through `handle_error`, which runs this
@@ -1134,17 +1176,15 @@ impl<'a> JitContext<'a> {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
                 // Splice first — see `MethodRet` above (#1185).
-                if let Some(dest_bb) = self.try_splice_exit(bc_pos, SplicedExitKind::Break) {
-                    state.locals_to_S(ir);
-                    state.load(ir, ret, GP::Rdx);
-                    ir.push(AsmInst::DeferSplicedExit {
-                        kind: SplicedExitKind::Break,
+                if let Some(plan) = self.try_splice_exit(bc_pos, SplicedExitKind::Break) {
+                    return self.emit_spliced_exit(
+                        ir,
+                        state,
+                        plan,
+                        SplicedExitKind::Break,
+                        ret,
                         pc,
-                    });
-                    let dest_sp = self.iseq().get_sp(self.iseq().bb_info[dest_bb].begin);
-                    state.set_next_sp(dest_sp);
-                    state.clear_above_next_sp();
-                    return Ok(CompileResult::Branch(dest_bb));
+                    );
                 }
                 // Otherwise: a `break` inside a protected region relies on
                 // `handle_error` to run this frame's `ensure` during the
@@ -1207,21 +1247,21 @@ impl<'a> JitContext<'a> {
                 let spliced = self.current_frame().spliced_ensures.get(&bc_pos).copied();
                 let (spliced_break, spliced_ret) = match spliced {
                     Some((brk, mret)) => {
-                        let brk_off = brk
-                            .then(|| self.iter_caller_specialized_ids())
-                            .flatten()
-                            .map(|(ids, extra)| DynVarOffset::Hint { ids, extra });
-                        let ret_off = mret
-                            .then(|| self.method_caller_specialized_ids())
-                            .flatten()
-                            .map(|(ids, extra)| DynVarOffset::Hint { ids, extra });
-                        if brk_off.is_some() {
+                        // The teardown each arm runs is measured from THIS
+                        // frame to the position the splice recorded — the
+                        // exit's home, resolved where the exit was written
+                        // (a stage-2 splice was requested by a nested frame,
+                        // whose `break` home is nothing this frame could
+                        // re-derive).
+                        let brk_off = brk.map(|pos| self.spliced_teardown_offset(pos));
+                        let ret_off = mret.map(|pos| self.spliced_teardown_offset(pos));
+                        if let Some(pos) = brk {
                             self.unset_return_context_side_effect_guard();
-                            self.new_break(state.as_return_any());
+                            self.new_spliced_exit_return(pos, state.as_return_any());
                         }
-                        if ret_off.is_some() {
+                        if let Some(pos) = mret {
                             self.unset_return_context_side_effect_guard();
-                            self.new_method_return(state.as_return_any());
+                            self.new_spliced_exit_return(pos, state.as_return_any());
                         }
                         (brk_off, ret_off)
                     }

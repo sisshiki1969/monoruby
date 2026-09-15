@@ -15,6 +15,7 @@ use crate::{
 
 pub(crate) use crate::basic_block::{BasicBlockId, BasicBlockInfoEntry};
 pub(crate) use self::context::JitContext;
+pub(in crate::codegen) use self::context::SplicePlan;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
 use state::{DeoptPoint, FrameRef, Keep, LinkMode, ReturnState};
 

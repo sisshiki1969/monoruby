@@ -1056,6 +1056,24 @@ pub(in crate::codegen) enum LInst {
         kind: SplicedExitKind,
         pc: BytecodePtr,
     },
+    /// Defer a spliced non-local exit keyed on an *intermediate* frame's
+    /// LFP, then tear down to that frame's call site and return into it
+    /// with the kind's marker in the return register (#1185, stage 2).
+    /// `host` / `callee` are the resolved rbp distances to the host frame
+    /// and to the frame it called; the value rides in `GP::Rdx`, and the
+    /// degenerate outcome raises generically from `pc`.
+    SplicedExitToOuter {
+        kind: SplicedExitKind,
+        host: usize,
+        callee: usize,
+        pc: BytecodePtr,
+    },
+    /// The host-side half: branch to `dest` when the return register
+    /// carries this kind's marker (#1185, stage 2).
+    SplicedExitLanding {
+        kind: SplicedExitKind,
+        dest: DestLabel,
+    },
     BlockArgProxy {
         ret: SlotId,
         outer: usize,

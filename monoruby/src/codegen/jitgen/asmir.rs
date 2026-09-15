@@ -1338,6 +1338,27 @@ pub(crate) enum SplicedExitKind {
     MethodReturn,
 }
 
+impl SplicedExitKind {
+    ///
+    /// The marker a [`AsmInst::SplicedExitToOuter`] leaves in the return
+    /// register so the landing at the host frame's call site recognizes
+    /// the arrival (#1185, stage 2).
+    ///
+    /// A specialized call returns either a `Value` (never zero — `Value`
+    /// is a `NonZeroU64`) or 0 for "error pending", which
+    /// [`AsmInst::HandleError`] tests for. These two markers are neither:
+    /// their low three bits are `000`, so a `Value` reading them would be
+    /// a raw `*const RValue` — and no `RValue` ever lives at address 8 or
+    /// 16 (the arena hands out 64-byte-aligned cells inside 256 KB pages).
+    ///
+    pub(crate) fn outer_tag(self) -> u64 {
+        match self {
+            Self::Break => 8,
+            Self::MethodReturn => 16,
+        }
+    }
+}
+
 ///
 /// Where an *outer* frame's `Sf` float view lives while the current frame
 /// runs — the raw-f64 home a write-through store refreshes (outer-F
@@ -1727,6 +1748,43 @@ pub(super) enum AsmInst {
     DeferSplicedExit {
         kind: SplicedExitKind,
         pc: BytecodePtr,
+    },
+    ///
+    /// A JIT-spliced non-local exit whose `ensure` body lives in an
+    /// *intermediate* frame of the inlined chain (issue #1185, stage 2).
+    ///
+    /// Build and defer the break / method-return error for the value in
+    /// rdx — keyed on the host frame's LFP, which `host` locates — then
+    /// tear the machine frames down to the host's call site and return
+    /// into it with [`SplicedExitKind::outer_tag`] in the return register,
+    /// where the host's [`Self::SplicedExitLanding`] takes over. When the
+    /// error degenerates (a `LocalJumpError`), nothing is torn down and
+    /// the generic raise runs from this exit's own `pc`.
+    ///
+    /// ### in
+    /// - rdx: the exit value
+    ///
+    SplicedExitToOuter {
+        kind: SplicedExitKind,
+        /// Bytes between the current rbp and the *host* frame's rbp —
+        /// the frame whose `ensure` runs. Used to read the host's LFP.
+        host: DynVarOffset,
+        /// Bytes between the current rbp and the rbp of the frame the
+        /// host called: the teardown sets rbp there and `leave; ret`s,
+        /// which lands exactly at the host's call site.
+        callee: DynVarOffset,
+        pc: BytecodePtr,
+    },
+    ///
+    /// The host-side half of [`Self::SplicedExitToOuter`]: emitted right
+    /// after a specialized call that a nested exit splices through, it
+    /// recognizes the marker in the return register and branches to
+    /// *dest* — the outline bridge into this frame's shared `ensure`
+    /// body. A normal return falls through untouched.
+    ///
+    SplicedExitLanding {
+        kind: SplicedExitKind,
+        dest: JitLabel,
     },
     ///
     /// Conditional branch
@@ -2974,6 +3032,7 @@ impl AsmInst {
                 | Self::MethodRet(_)
                 | Self::BlockBreakSpecialized { .. }
                 | Self::MethodRetSpecialized { .. }
+                | Self::SplicedExitToOuter { .. }
                 | Self::Raise
                 | Self::Retry(_)
                 | Self::Redo(_)

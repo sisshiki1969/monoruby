@@ -1275,6 +1275,9 @@ impl<'a> JitContext<'a> {
         // `forget_constants` bet-confirmation drops every claim. The old
         // `converge_block_entry` probe fixpoint approximated exactly
         // those joins from before the chain spanned the whole trace.
+        // See the method-send site: this call can receive a stage-2
+        // splice landing too (#1185).
+        let splice_widen_mark = self.widen_log_mark();
         let SpecializedCompileResult {
             entry,
             return_state,
@@ -1285,15 +1288,21 @@ impl<'a> JitContext<'a> {
             spec_id,
             using_fpr: frozen_using_fpr,
             float_return,
-        } = self.compile_specialized_func(
-            state,
-            iseq,
-            self_class,
-            args_info,
-            Some(outer),
-            callid,
-            false,
-        )?;
+        } = {
+            self.current_frame_mut().landing_sink = true;
+            let compiled = self.compile_specialized_func(
+                state,
+                iseq,
+                self_class,
+                args_info,
+                Some(outer),
+                callid,
+                false,
+            );
+            // See the method-send site: disarmed before the `?`.
+            self.current_frame_mut().landing_sink = false;
+            compiled?
+        };
         // Stack check only: the specialized block body compiles its own
         // `InitMethod` entry poll, so no call-site GC poll is needed.
         state.check_stack(ir);
@@ -1327,9 +1336,99 @@ impl<'a> JitContext<'a> {
         state.chain_exit(ir, evict, using_fpr, dst);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
+        self.emit_spliced_landing(ir, state, callid, splice_widen_mark);
         let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
         state.immediate_evict(ir, evict);
         Ok(res)
+    }
+
+    ///
+    /// Emit the host half of a stage-2 splice (#1185) for the specialized
+    /// call just emitted, if a nested exit requested one.
+    ///
+    /// The exit tore the machine frames down to this call site and
+    /// returned into it with its kind's marker in the return register;
+    /// the `SplicedExitLanding` recognizes the marker and branches into
+    /// this frame's shared `ensure` body — an ordinary side branch, so the
+    /// merge at the body's entry block sees this path exactly as it sees
+    /// the normal fall-through, and the `ensure`'s writes are modelled.
+    ///
+    /// The edge's state is this frame's state right after the call: the
+    /// exit arrives through a `ret`, so the physical situation is the
+    /// normal return's minus the value in the return register, which is
+    /// not consumed until after this point.
+    ///
+    fn emit_spliced_landing(
+        &mut self,
+        ir: &mut AsmIr,
+        state: &AbstractState,
+        callid: CallSiteId,
+        widen_mark: usize,
+    ) {
+        let Some((dest_bb, brk, mret)) = self.current_frame_mut().pending_splice_landing.take()
+        else {
+            return;
+        };
+        debug_assert!(state.peek_gp_residents().is_empty());
+        let bc_pos = self.store[callid].bc_pos;
+        let dest_sp = self.iseq().get_sp(self.iseq().bb_info[dest_bb].begin);
+        // The resumed state is the *return* join's view: a claim the
+        // callee gave up only on a non-returning path can survive into
+        // it, and the spliced exit is exactly such a path. Re-apply every
+        // widen the call reached, as the no-return-path resume does. This
+        // is sound rather than merely conservative: a widen is caused by
+        // a `StoreDynVar`, which writes the slot, so "unknown, read the
+        // slot" is true at the landing.
+        let widened = self.widened_outer_since(widen_mark);
+        for (kind, wanted) in [
+            (SplicedExitKind::Break, brk),
+            (SplicedExitKind::MethodReturn, mret),
+        ] {
+            if !wanted {
+                continue;
+            }
+            let dest = self.label();
+            ir.push(AsmInst::SplicedExitLanding { kind, dest });
+            let mut edge = state.clone();
+            for &(pos, slot) in &widened {
+                edge.invalidate_at(pos, slot);
+            }
+            // The call site's own capture guard is emitted after this
+            // point (`immediate_evict`), so the state here does not yet
+            // carry the invariant every instruction asserts. The splice
+            // re-proves it on its own side instead: `defer_*_at` checks
+            // the host frame's Meta — the same two bits
+            // `branch_if_captured` tests — and degenerates to the generic
+            // unwind when the callee promoted this frame to the heap, so
+            // the edge is only ever taken with the frame still on the
+            // stack.
+            edge.set_lexical_no_capture_guard();
+            // Enter the `ensure` body with the temp level its join expects.
+            edge.set_next_sp(dest_sp);
+            edge.clear_above_next_sp();
+            // A temp the `ensure` body's entry keeps live may not be
+            // defined yet at this branch: the call's own result slot
+            // (`def_rax2acc_return` sits after this point) and every temp
+            // the rest of the begin body would have written — a region
+            // that is an *expression* (`def m; ..; ensure; ..; end` keeps
+            // the body's value across the `ensure` to return it) holds
+            // exactly such a slot. Leaving one void here would collapse it
+            // at the merge and take the normal path's value with it.
+            //
+            // Claim the weakest truth instead: an unknown boxed `Value` in
+            // its slot. It is true — the prologue nil-fills the frame, so
+            // every slot holds a real `Value` — and on this path nothing
+            // reads it: the region's `EnsureEnd` always delivers the
+            // deferred exit through the teardown (the body cannot exit or
+            // rescue its way to the continuation; `spliceable_ensure_region`
+            // refuses such a body).
+            for slot in SlotId(0)..dest_sp {
+                if matches!(edge.mode(slot), LinkMode::V) {
+                    edge.set_S(slot);
+                }
+            }
+            self.new_side_branch(bc_pos, dest_bb, edge, dest);
+        }
     }
 
     /// Whether `callid` has the canonical shape for `func_id` when the
@@ -2160,6 +2259,11 @@ impl<'a> JitContext<'a> {
         // The same, for the float locals whose boxed slot store the
         // block-handing `write_back(Keep::Claims)` deferred to a spill home.
         let deferred_homes = state.deferred_float_homes();
+        // #1185 stage 2: an exit compiled anywhere under this call may
+        // want to run THIS frame's `ensure` on the way out, which needs a
+        // landing after the call below. Say so for the duration.
+        self.current_frame_mut().landing_sink = true;
+        let splice_widen_mark = self.widen_log_mark();
         let compiled = self.compile_specialized_func(
             state,
             iseq,
@@ -2168,7 +2272,13 @@ impl<'a> JitContext<'a> {
             None,
             callid,
             bmethod_outer.is_some(),
-        )?;
+        );
+        // Disarmed before the `?`: the flag is only ever true while the
+        // call it belongs to is compiling, so an aborted compile cannot
+        // leave a later call site of this frame accepting a landing it
+        // does not emit.
+        self.current_frame_mut().landing_sink = false;
+        let compiled = compiled?;
         // The callee is compiled but its call is not emitted yet (that is
         // `send_specialized`, below), so this is still *before* the call in
         // the instruction stream — which is the only placement that both
@@ -2252,6 +2362,7 @@ impl<'a> JitContext<'a> {
             &arg_hints,
             &float_args,
         );
+        self.emit_spliced_landing(ir, state, callid, splice_widen_mark);
         let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
         state.immediate_evict(ir, evict);
         return Ok(res);
