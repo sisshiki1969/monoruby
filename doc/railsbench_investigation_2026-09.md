@@ -688,3 +688,433 @@ self コストの総和）を引いて `N` の差で割る。`fn=` 単位の差�
 
 deopt・再コンパイル・グローバルメソッドキャッシュ・GC の統計は
 `cargo build --release --features profile,gc-log` のバイナリが終了時に stderr へ出す。
+
+---
+
+## 7. 再調査（2026-09-15、master `169ec687`）
+
+A〜F を入れた後の master で、同じ手法（§6）に加えて cache シミュレーション・JIT
+シンボルマップ帰属・profile 統計・時系列計測を足して取り直した。結論から:
+
+**命令数ではもう負けていない。負けているのは (1) 1 リクエストあたりのオブジェクト数
+（1.73 倍）とその malloc/free、(2) 数か所の「Ruby で書かれた C 拡張」経路
+（`CGI.escapeHTML`・`method_missing` 連鎖・キーワード引数）、(3) 学習しない JIT サイト
+（`Hash#[]` のキークラス）、(4) 直線的に増え続ける RSS（≈ 1.2 KB/req）、そして命令数が
+同じなのに実時間が 1.4 倍になる理由としての (5) 命令キャッシュミス（+33 %/req）である。**
+
+### 7.1 数字
+
+| 指標 | monoruby | CRuby+YJIT | 比 |
+|---|---:|---:|---:|
+| Ir/req（WARM=1,000 直後、§6 の差分法） | 3,057,452 | 3,038,397 | **1.01x** |
+| Ir/req（定常状態、WARM=12,000、§7.2 の注意） | 3,293,410 | ≈ 2.87 M（GC 除き 2,653,417 実測、GC ≈ 218 k 推定） | **≈ 1.1〜1.15x** |
+| 実時間 公式ハーネス（MAX_TIME=40、2,000 req/iter の中央値） | 3,012 ms（1.506 ms/req） | 2,149 ms（1.075 ms/req） | **1.40x** |
+| 実時間 small.rb（warm 2,000 + 計測 2,000） | 1.41 ms/req | 1.30 ms/req | 1.08x |
+| オブジェクト確保（`GC.stat[:total_allocated_objects]`） | **1,590 個/req** | 919 個/req | **1.73x** |
+| malloc 呼び出し | 3,573 回/req | 1,071 回/req | 3.34x |
+| RSS（ハーネス中央値） | 309 MiB | 137 MiB | 2.25x |
+| RSS の伸び（`blocks.rb`、2,000 req ごと） | **+1.2 KB/req、100k req で 282 → 401 MiB、頭打ちなし** | 125 → 133 MiB で安定 | — |
+
+> **CRuby の命令数について 2 つの注意。** (a) `--yjit-perf` を付けた CRuby は
+> 3,289,171 Ir/req で、付けないと 3,038,397 —— perf マップの書き出しが **+250,774
+> Ir/req（8.3 %）** も乗る。§1.2・§5 の CRuby 側の数字は付けて測っていたので、その分
+> 過大だった。本節の CRuby の Ir はすべてマップ無しの値。monoruby 側の `--features
+> perf` は 3,041,248 でほぼ無料。(b) 早期（WARM=1,000）と定常状態で CRuby の値は
+> 大きく違う（下の §7.2）。
+
+### 7.2 実時間の食い違い: CRuby は 20,000 リクエストかけて速くなる
+
+公式ハーネス（1.40x）と small.rb（1.08x）が食い違うのは、CRuby 側のウォームアップが
+長いためである。2,000 リクエストごとに区切って測ると（`blocks.rb`）:
+
+| ブロック（×2,000 req） | monoruby ms/req | monoruby GC 回 | CRuby ms/req | CRuby GC 回 |
+|---:|---:|---:|---:|---:|
+| 0 | 1.58 | 10 | 1.71 | 27 |
+| 1 | 1.45 | 10 | 1.27 | 24 |
+| 3 | 1.54 | 11 | 1.30 | 19 |
+| 6 | 1.52 | 10 | 1.16 | 14 |
+| 9 | 1.50 | 10 | 1.16 | 13 |
+| 11 | 1.51 | 10 | **1.03** | 11 |
+
+monoruby は 2,000 リクエストで定常状態に入り以後平坦（GC も 1 回/200 req で一定）。
+CRuby はヒープの自動調整で GC が 27 → 11 回/2,000 req まで減り続け、24,000 リクエスト
+時点で 1.03 ms/req に達する。**定常状態どうしの比較は 1.50 vs 1.03〜1.07 ms/req ≒
+1.4 倍**で、公式ハーネスの数字が正しい。§1.2 の「1.51 vs 0.98」も同じ。
+
+§6 の差分法は WARM=1,000 の直後を測るので、CRuby の GC がまだ多い時点の値になる。
+CRuby の GC バケットは早期で 496 k Ir/req（16 %）あり、定常状態では GC 回数が 2.5 分の
+1 になるぶん Ir も減る。
+
+**定常状態を差分法で取るときの注意**: WARM=12,000 で N=100 / N=600 の 2 回を引き算すると、
+CRuby の GC バケットが **−1,201,462 Ir/req** という負の値になった。12,000 リクエストの
+ウォームアップの中で major GC（1 回 ≈ 1 G Ir）が N=100 側にだけ落ちたためで、2 回の
+ウォームアップが等価という差分法の前提が GC のタイミングで崩れる。そこで GC を除いた
+値と GC の見積もりに分ける:
+
+| CRuby+YJIT、Ir/req | 早期（WARM=1,000） | 定常（WARM=12,000） |
+|---|---:|---:|
+| GC を除く（実測） | 2,542,055 | 2,653,417（+4 %、うち JIT コンパイラ 91 k → 17 k、VM +97 k） |
+| GC（早期は実測、定常は GC 回数 12.5 → 5.5 回/1,000 req で按分） | 496,343 | ≈ 218,000 |
+| 合計 | 3,038,397 | **≈ 2.87 M** |
+
+monoruby は GC 回数が最初から一定（1 回/200 req）で GC バケットも 246 k で変わらないが、
+合計は 3,057,452 → **3,293,410（+7.7 %）**になる。増分は生成コード +34 k・VM +34 k・
+malloc +16 k と分散していて特定の関数に集中しない。実時間は §7.2 の表のとおり平坦なので、
+差分法の 2 回のウォームアップが等価でないこと（表の拡張、§7.7 の 24,000 個増えた
+シンボル表など）が乗っていると見る。どちらの取り方でも **定常状態の命令数は monoruby が
+CRuby の ≈ 1.1〜1.15 倍**（早期の同条件では 1.01 倍）で、実時間の 1.4 倍との差の残りが
+§7.6 の命令キャッシュである。
+
+### 7.3 サブシステム別（早期、Ir/req）
+
+| バケット | monoruby | % | CRuby+YJIT | % | 比 |
+|---|---:|---:|---:|---:|---:|
+| JIT 生成コード | 511,812 | 16.7 | 339,583 | 11.2 | 1.51x |
+| libc malloc/free | **367,232** | 12.0 | 118,958 | 3.9 | **3.09x** |
+| Hash | 345,947 | 11.3 | 416,736 | 13.7 | 0.83x |
+| VM / 呼び出し / runtime | 250,132 | 8.2 | 457,332 | 15.1 | 0.55x |
+| GC + オブジェクト確保 | 246,693 | 8.1 | 496,343 | 16.3 | 0.50x |
+| String | 237,873 | 7.8 | 220,520 | 7.3 | 1.08x |
+| Regexp | 218,212 | 7.1 | 206,341 | 6.8 | 1.06x |
+| Value 操作（unpack など） | 124,498 | 4.1 | — | — | — |
+| メソッド / 定数探索 | **114,644** | 3.7 | 58,218 | 1.9 | **1.97x** |
+| builtins（Rust） / （C） | 104,011 | 3.4 | 138,980 | 4.6 | 0.75x |
+| Digest | 101,794 | 3.3 | 144,331 | 4.8 | 0.71x |
+| libc mem\* | 69,693 | 2.3 | 33,464 | 1.1 | 2.08x |
+| JIT コンパイラ | 22,045 | 0.7 | 91,498 | 3.0 | 0.24x |
+| ivar / shape | 11,136 | 0.4 | 30,161 | 1.0 | 0.37x |
+| その他 | 331,731 | 10.8 | 285,934 | 9.4 | 1.16x |
+| **合計** | **3,057,452** | 100 | **3,038,397** | 100 | 1.01x |
+
+呼び出し・GC・ivar・Hash で勝ち、malloc（3 倍）・メソッド探索（2 倍）・生成コード
+（1.5 倍）で負けている、という §1.2 の構図は変わっていない。ただし合計はもう同じ。
+
+### 7.4 ボトルネック（証拠つき、コスト順）
+
+すべて callgrind の差分法（§6）で、呼び出し元は JIT シンボルマップで名前に解決した。
+
+#### 7.4.1 `CGI.escapeHTML` が `gsub(/['&"<>]/, HASH)` —— 175 k Ir/req（5.7 %）
+
+`monoruby/stdlib/cgi/escape.rb:80` は `string.gsub(/['&\"<>]/, TABLE_FOR_ESCAPE_HTML__)`
+で、CRuby の C 拡張 `optimized_escape_html`（CRuby 側で 5.3 k Ir/req）の代わりに
+正規表現エンジンを走らせている。ERB テンプレートの `<%= %>` ごとに呼ばれ 21 回/req:
+
+| 内訳（`replace_all_hash`、Ir/req） | |
+|---|---:|
+| `FindCaptures::next`（onigmo の capture 付き反復） | 111,700 |
+| `splice_all` | 12,369 |
+| `lookup_hash_replacement` —— 1 マッチごとに **`Hash#[]` をメソッド呼び出し** | 12,135 |
+| `save_capture_special_variables` —— 1 マッチごとに **MatchData を確保して `$~` を設定** | 8,301 |
+| `regex_view` / `string_snapshot` | 12,313 |
+| 合計 | **≈ 175,000** |
+
+対策: `CGI.escapeHTML` / `escape_html` / `h` を Rust のバイト走査で実装する（5 文字の
+テーブル引き）。見込み −170 k Ir/req。`gsub(regex, hash)` 一般も、hash が素の Hash なら
+`Hash#[]` を直接引き、`$~` は最後の 1 回だけ設定すればよい。
+
+#### 7.4.2 `method_missing` 連鎖（Rails の config アクセス）—— 17 回/req、154 k Ir/req（5.0 %）
+
+`ActionController::Base.logger`（12.7 回/req）、`#csrf_token_storage_strategy`、
+`#logger`、`LogSubscriber.flush_all!` などの config 由来アクセサが
+`ActiveSupport::OrderedOptions#method_missing` → `Hash#[]` ミス → `default` →
+`InheritableOptions#method_missing` → 親、と連鎖する。1 回あたり **9 k Ir**。連鎖の
+各段で monoruby 固有のコストが積み上がる:
+
+| 段 | 回/req | Ir/req | 何が高いか |
+|---|---:|---:|---|
+| `Symbol#to_s`（`+name.to_s`） | 46 | 24,000 | `get_ident_name_clone()` で String を clone → さらに `RStringInner` にコピー、`symbol_encoding()` で read lock をもう 1 回 |
+| `String#to_sym` / `try_symbol_or_string` → `IdentId::get_id` | 207 | ≈ 50,000 | `rev_table` が `RandomState`（SipHash）: `get_id` 19.4 k + `sip::Hasher::write` 19.3 k + `hash_one` 11.8 k |
+| `Hash#[]` ミス → `IdentId::get_id("default")` を**毎回**実行（`builtins/hash.rs:959`） | 36 | ≈ 9,000 | 文字列リテラルの再インターン。定数 IdentId にすれば 0 |
+| `default` / `method_missing` / `respond_to_missing?` のグローバルキャッシュ表引き | 53 | ≈ 6,000 | §2.3 と同じ、サイト別インラインキャッシュがない |
+| `invoke_method_missing` 自身: `cs.kw_args.clone()`（IndexMap の clone）+ `args_to_vec` | 17 | ≈ 15,000 | 呼び出しごとの clone と Vec |
+
+対策は段ごとに小さい: `Symbol#to_s` を 1 回の read lock で借用から直接生成（−20 k）、
+インターン表を FxHash に（−30 k）、`"default"` を定数 IdentId に（−9 k）、
+`invoke_method_missing` の clone を借用に（−10 k）。
+
+#### 7.4.3 引数マーシャリング —— 122 回/req、158 k Ir/req（5.2 %）
+
+JIT が特殊化できない呼び出し（キーワード引数・splat・`method_missing`）は
+`jit_generic_set_arguments`（62 回、114 k）と `set_frame_arguments`（60 回、44 k）を通る。
+中身はほぼキーワード引数:
+
+| | 回/req | Ir/req |
+|---|---:|---:|
+| `handle_keyword` | 76 | **90,969** |
+| ├ `CallSiteInfo::clone`（`hash_splat_and_kw_rest` の `globals[caller].clone()`、`args.rs:1396`） | 45 | 25,507 |
+| ├ kwrest の `RubyMap` 構築 | 42 | 16,233 |
+| ├ `free`（その解放） | 116 | 9,905 |
+| ├ `kw_names().to_vec()` ほか | 76 | ≈ 5,000 |
+| `fill_positional_args` | 123 | 21,236 |
+| `coerce_hash_splat_args`（`**opts` ごとに Hash を新規確保） | 83 | 9,174 |
+
+キーワード引数 1 回あたり 1,200 Ir。CRuby はキーワードをスタック上で渡し Hash を作らない。
+対策: `CallSiteInfo` を clone せず借用する（−25 k、一番安い）、callee に kwrest が
+無ければ `RubyMap` を作らない（−16 k）。
+
+#### 7.4.4 オブジェクトが 1.73 倍 —— malloc/free 367 k、GC 247 k Ir/req
+
+1,590 個/req のうち名前で辿れた主な生成元:
+
+| 生成元 | 個/req | 備考 |
+|---|---:|---|
+| `runtime::create_array` | **527** | CRuby の Array 生成は ≈ 190/req |
+| ├ `ActiveSupport::Callbacks::CallbackChain::DefaultTerminator#call` | 92 | `catch(:abort){}` と `result_lambda.call` の引数パック |
+| ├ `ActiveSupport::OrderedOptions#method_missing(method, *args)` | 78 | `*args`（CRuby も確保する） |
+| ├ **`Hash#each`（`builtins/hash.rb:38` の `yield [__key_at(i), __value_at(i)]`）** | 69 | CRuby はブロックが 2 引数なら pair Array を作らない（`rb_yield_values(2, k, v)`） |
+| ├ `Class#new(...)` の転送 | 39 | 共有本体の `(...)` が rest を実体化 |
+| ├ `FileHandler#file_readable?` / `OptimizedUrlHelper#call` / `Array#each` / `silenced?` | 28 / 28 / 26 / 22 | |
+| キーワード引数の Hash（`r2k_hash` 38 + kwrest `RubyMap` 20 + `coerce_hash_splat` 83） | ≈ 140 | 7.4.3 |
+| `move_frame_to_heap`（`generate_proc` 20 + `generate_lambda` 10） | 35 | CRuby の `rb_imemo_new` 76/req に相当。差ではない |
+| `MatchData`（`save_capture_special_variables`、regex 操作ごと） | 33 | `gsub`/`match?`/`=~` 1 回ごと |
+| `Symbol#to_s` / `String#b`（`stdlib/openssl.rb` の Ruby 実装） / `dup` | 46 / 41 / 21 | |
+| `RValue::new_object_with_ivar_capacity` | 44 | |
+
+malloc 3,573 回/req の呼び出し元は `__rust_alloc` 1,034（`RawVec::finish_grow` 325、
+`String::clone` 143、`CallSiteInfo::clone` 92、`SmallVec<[u8;32]>::try_grow` 53、
+`invoke_method_missing` 40、`move_frame_to_heap` 28）、`__rust_realloc` 366、
+`onig_region_new/resize` 190、`new_object_with_ivar_capacity` 32、`Hash promote` 23。
+free 5,682 回/req の 1,776 回は GC の sweep（`Allocator` からの payload 解放）。
+
+monoruby 自身の malloc ラッパ（`__rust_alloc` の `malloc_hard_limit` 22.9 k +
+`MALLOC_AMOUNT` 追跡 31 k）で ≈ 54 k Ir/req（1.8 %）を使っている点も小さくない。
+
+#### 7.4.5 学習しない JIT サイト —— deopt 48 回/req、うち 11 回は `Hash#[]` のキークラス
+
+profile ビルド（4,000 req）の deopt 統計を 1 リクエストに割り戻すと:
+
+| サイト | 回/req | 種別 |
+|---|---:|---|
+| `block in Fanout#listening?` の `silenced?` | 6.0 | POLYMORPHIC（EventObject ほか、PMC 溢れ） |
+| `TagBuilder#tag_options` の `%4.[%1]` | 4.1 | **[Hash][String] のクラスガード** |
+| `IsolatedExecutionState.[]` の `%2.[%1]` | 4.0 | **[Hash][String]** |
+| `ConnectionHandling#connection_specification_name` | 4.0 | POLYMORPHIC（singleton class 4 種で溢れ） |
+| `TZInfo::AnnualRules#apply_rule` | 3.1 | POLYMORPHIC |
+| `NonConcurrentMapBackend#[]` の `%2.[%1]` | 3.0 | **[Hash][Array]** |
+| `LazyAttributeSet#fetch_value` の `deserialize` | 1.5 | POLYMORPHIC |
+| `ZoneinfoReader#make_signed_int64` の `<<` | 1.7 | [Integer][Integer]（Bignum 溢れ） |
+| `ret` 系（`InheritableOptions#initialize` ほか） | ≈ 6 | 戻り値の推測外れ |
+
+`Hash#[]` の 3 サイトは**毎回** deopt している（4,000 req で 16,296 回 = 呼び出し回数）。
+最小再現:
+
+```ruby
+def idx(h, k) = h[k]
+sym = {a: 1, b: 2}; str = {"a" => 1, "b" => 2}; ary = {[1] => 1, [2] => 2}
+20_000.times { |i| idx(sym, i.even? ? :a : :b) }        # Symbol キーで JIT
+100_000.times { |i| idx(str, i.even? ? "a" : "b"); idx(ary, i.even? ? [1] : [2]) }
+```
+
+→ `Object#idx [:00001] %3 = %1.[%2] [Hash][Array]` が **200,000 回 deopt**（String
+100,000 + Array 100,000 のクラスガード失敗）、再コンパイルは 0 回。メソッド呼び出し
+サイトの同じ形（受け手が 2 クラス）は 11 回 deopt して `BecamePolymorphic` で
+再コンパイルされるので、**Index サイトだけキーのクラスで再コンパイルの判定が
+走っていない**。§5 の「9（非数値の BinOp/Index サイトを引数クラスで keying しない）」
+は PMC 側だけで、JIT のガードは残っている。
+
+#### 7.4.6 グローバルメソッドキャッシュの表引き —— 390 回/req、115 k Ir/req
+
+`GlobalMethodCache::get` 22.3 k + `check_method_for_class_with_version` 19.5 k +
+`find_method` 13.9 k + `check_method_with_refinements` 13.9 k + `hash_method` 4.8 k …。
+profile 統計の上位（回/req）: `==`/Object 22、`default`/InheritableOptions 21、
+`==`/BOOL 17、`==`/Symbol 15、`[]`/Hash 14、`default`/Rack::Headers 13、
+`method_missing`/InheritableOptions 12、**`to_ary`/Integer 12**、`==`/Thread 11.5、
+`==`/BasicObject 10、`respond_to_missing?`/String 7、`<<`/String 7、`local_to_utc`/Integer 7、
+`respond_to?`/Object 6、`to_s`/Integer 6、`to_str`/Integer 6、`to_ary`/String 5。
+
+`==` の 75 回は Hash のキー比較・`Array#include?` から、`to_ary` の 17 回は
+多重代入 / splat の暗黙変換から、`to_s`/`to_str` は文字列補間から。CRuby はこれらを
+呼び出しサイトのインラインキャッシュ（`rb_check_array_type` などは `basic_definition_p`）
+で済ませる。Rust 側の runtime から呼ぶ `==` / `to_ary` / `to_s` / `default` にサイト別
+キャッシュを持たせるのが対策。
+
+#### 7.4.7 文字列補間 —— 140 回/req、191 k Ir/req（6.3 %）
+
+`"#{a}#{b}"` は `runtime::concatenate_string` で、1 回 1,365 Ir。内訳は piece ごとの
+`append_piece` 141 Ir（うち `SmallVec::insert_from_slice` 85）、`invoke_tos` 87 Ir
+（String は短絡済み、実際にディスパッチするのは 3 回/req）、確保 70、encoding 交渉。
+呼び出し元は `FileHandler#each_precompressed_filepath` 28（下記）、`TagBuilder#tag_option`
+35、`content_tag_string` 14、`TemplatePath.virtual` 19、`set_cookie_header` 13、
+`OpenSSL::Cipher#initialize` 16。piece が平均 4 個で ≈ 600 Ir 分が `append_piece` の
+SmallVec 成長。合計長を先に計算して一度に確保すれば半分になる。
+
+#### 7.4.8 `File.file?` / `File.exist?` が `canonicalize`（realpath）—— 9 回/req、syscall
+
+`builtins/file.rs:833,846` は `path.canonicalize()` で判定している。Rails の
+`ActionDispatch::FileHandler` が毎リクエスト `public/posts/1.html`・`.br`・`.gz` を
+`File.file?` / `readable?` で探すので 9 回/req の realpath（各 3〜5 回の syscall）。
+Ir では 13 k だが、**実時間では 1 回 5〜10 µs × 9 ≒ 1 リクエストの 3〜6 %**。
+`std::fs::metadata` に置き換えるだけ。
+
+#### 7.4.9 小さいが確実なもの
+
+| | 回/req | Ir/req | 何 |
+|---|---:|---:|---|
+| `String#unpack("H*")` の `format!("{:02x}")` | 64 | 30,700 | バイトごとに `core::fmt`。nibble テーブルで 1/10 |
+| `Regexp#match?` の `expect_symbol_or_string()?.to_string()` | 45 | 27,000 | 対象文字列を**シンボルとしてインターン**してから String に戻す（`regexp.rs:1126`）。§7.7 のリークの原因そのもの |
+| `MatchData#[]` の `format!("{sym}")` | 14 | 12,600 | 名前付きグループ参照で IdentId を Display 経由で文字列化 |
+| `Encoding::classify` | 90 | 22,400 | 1 回 250 Ir の走査。CRuby の `coderange_scan` は 7.7 k |
+| `Value::calculate_hash`（Array を Hash キーにする `hash`） | 27 | 62,000 | `exec_recursive` の HashSet 登録 + 要素ごとの `hash` ディスパッチ。CRuby の 2 倍 |
+| `Class#new` 共有本体の megamorphic 溢れ | 15.6 | ≈ 6,000 | §5 の 15 で呼び出しサイトにインライン化した残り |
+
+### 7.5 生成コードのメソッド別比較（Ir/req、名前で束ねた値）
+
+| monoruby（502 k 中） | | CRuby+YJIT（281 k 中） | |
+|---|---:|---|---:|
+| `Hash#each`（Ruby 実装） | 16,201 | `find@lookup_context` | 58,204 |
+| method-invoker | 12,996 | `id@attribute_methods` | 31,687 |
+| `Array#each`（Ruby 実装） | 12,473 | `_layout@layouts` | 24,278 |
+| block-invoker | 11,989 | `options@request` | 20,377 |
+| `Rack::Request::Env#get_header` | 9,307 | `start@notifications` | 16,917 |
+| `Callbacks::Filters::Before#call` | 8,196 | `block in call@middleware` | 16,873 |
+| `ActionDispatch::Http::URL.path_for` | 8,097 | `info@logger` | 16,251 |
+| `IsolatedExecutionState.[]` | 6,801 | `presence@core_ext` | 13,419 |
+| `Class#new`（Ruby 実装、2 版） | 11,691 | `block in commit!` | 12,890 |
+| `_app_views_posts_show_html_erb` | 6,489 | `create_message` | 8,119 |
+| `JSONGemEncoder#jsonify` | 5,548 | `process_action` | 7,667 |
+| `_app_views_posts_index_html_erb` | 5,106 | `format@journey` | 6,534 |
+| monoruby-vm（インタプリタ tier） | 4,456 | `rb_vm_exec` + `vm_exec_core` | 66,515 |
+
+monoruby 側は 1.5 倍の生成コードが **Ruby で書かれたコア（`Hash#each`・`Array#each`・
+`Class#new` で 40 k）と invoker（25 k）** に散っている。YJIT は `find`・`id`・`_layout`
+に集中していて、これらは monoruby では ≈ 2 k 以下——インライン化と型特殊化は monoruby
+の方が効いている。インタプリタ tier は 4.5 k しかなく、deopt の後は短時間で戻っている。
+
+### 7.6 IPC（cache シミュレーション）
+
+この VM ではハードウェアカウンタが使えない（`perf stat` が `<not supported>`）ので
+`valgrind --cache-sim=yes --branch-sim=yes` で代替した（1k Ir あたり）:
+
+| | monoruby | CRuby+YJIT |
+|---|---:|---:|
+| I1 ミス（`I1mr`） | **36.92**（113,003/req） | 28.02（85,148/req） |
+| D1 読みミス（`D1mr`） | 6.71 | 8.66 |
+| LL 読みミス（`DLmr`） | 0.34 | 0.67 |
+| LL 書きミス（`DLmw`） | 0.18（566/req） | 0.06（182/req） |
+| 条件分岐予測ミス（`Bcm`） | **14.48**（44,333/req） | 12.79（38,849/req） |
+| 間接分岐予測ミス（`Bim`） | 1.82（5,570/req） | 5.13（15,592/req） |
+| データ書き込み（`Dw`） | 186.6（571,028/req） | 167.8（509,798/req） |
+
+データ側は monoruby の方が良い（D1・LL の読みミスが少なく、間接分岐は 3 分の 1）。
+悪いのは **命令キャッシュ**で、1 リクエストあたり I1 ミスが 113 k 対 85 k（+33 %）、
+条件分岐の予測ミスが 44 k 対 39 k（+14 %）、LL への書き戻しが 3 倍（malloc/free と
+GC の sweep が触るメモリ）。命令数が同じで実時間が 1.4 倍なのは、まずこの I1 ミス
++28 k/req（L2 から埋めるとして 1 回 10〜20 cycle → 0.3〜0.6 M cycle ≒ 0.1〜0.2 ms）
+で説明がつく。§1.2 で見た「生成コードが 17.5 k 領域・シンボルマップ 91 k 行、YJIT の
+2.4 倍」の footprint（E）がそのまま効いている。valgrind の cache モデルは汎用の
+I1/D1 32 KB・LL 8 MB なので絶対値は目安だが、両者を同じ条件で比べた相対値である。
+
+### 7.7 RSS が増え続ける
+
+`blocks.rb` で 100,000 リクエスト: 282 → 401 MiB、2,000 リクエストあたり +2.4 MiB
+（≈ 1.2 KB/req）で直線的、GC 回数は 10/2,000 で一定、ms/req も一定。CRuby は
+125 → 133 MiB で止まる。
+
+どこが増えているかは `GC.stat` で切り分けられる（`leak.rb`、ブロックごとに `GC.start`
+してから採取、3 回・計 122,000 リクエスト）:
+
+| | ブロック 0 | ブロック 24（48,000 req 後） |
+|---|---:|---:|
+| RSS | 282 MiB | 336 MiB |
+| `heap_live_slots` | 98,491 | 98,499 |
+| `heap_allocated_pages` | 70 | 72 |
+| `old_objects` | 88,819 | 88,823 |
+| `malloc_increase_bytes` | 242.9 MB | **297.8 MB（+1.14 KB/req）** |
+
+**Ruby ヒープは完全に一定で、増えているのは Rust 側の malloc** である。
+
+JIT ではない: `--features jit-log` でウォームアップ 2,000 リクエストの後に印を打つと、
+続く 200 リクエストでコンパイルされたのは `Arel.sql` の 1 件だけ（3,146 件のコンパイル
+はすべてブートとウォームアップ中）。
+
+正体は **インターン表**である。`Symbol.all_symbols.size` を 2,000 リクエストごとに見ると
+monoruby は 37,978 → 41,960 → 45,942 → … と **+2 個/req** で増え続け（CRuby は 33,936 で
+一定）、差分を取ると毎リクエストの新顔は 2 つ:
+
+```
+:"7856e18e-86af-4763-bc91-8f570ebfd3e2"          # X-Request-Id の UUID
+:"_railsbench_session=4mvOj4mB1O7vAkx3GG...（300 バイト超）"   # Set-Cookie の値
+```
+
+monoruby の Symbol は GC されず、`Value::try_symbol_or_string` / `expect_symbol_or_string`
+（49 か所: `respond_to?`・`send`・`public_send`・`instance_variable_get`・`const_defined?`・
+`method_defined?`・`MatchData#[]` …）が **String を渡されると無条件に `IdentId::get_id`
+でインターンする**。CRuby の同じ API は `rb_check_id` —— 既にシンボルとして存在する
+名前だけ引き、無ければインターンせずに「無い」と答える —— なので、問い合わせに
+一意な文字列を渡しても表は増えない。1 個あたり String の複製 + hashbrown の項目 +
+`names` の項目で ≈ 500 B、2 個で ≈ 1.1 KB/req、`malloc_increase_bytes` の傾きと一致する。
+
+`IdentId::get_id` のミス経路に backtrace を仕込んだ scratch ビルドで、両方の呼び出し元は
+**`builtins::regexp::match_` = `Regexp#match?`** だった。`regexp.rs:1126` の
+
+```rust
+let given = arg0.expect_symbol_or_string(globals)?.to_string();
+```
+
+は、マッチ**対象の文字列**をメソッド名と同じ経路で受けている —— String を丸ごと
+インターンして IdentId にし、`to_string()` でまた String に戻す。Rails は
+`ActionDispatch::RequestId` が `X-Request-Id` を、`Rack::Utils` がクッキー値を
+`/…/.match?(str)` で検証するので、リクエストごとに一意な 2 つの文字列が永久に残る。
+`Regexp#match?` を動的な文字列に使うアプリすべてで起きる（§7.4.9 の 27 k Ir/req の
+正体でもある: 対象文字列の SipHash + 複製 2 回）。最小再現:
+
+```ruby
+r = /\A[\w\-]{1,255}\z/
+100_000.times { |i| r.match?("request-#{i}") }   # monoruby: Symbol.all_symbols +100,000（CRuby +0）
+100_000.times { |i| "request-#{i}" =~ r }        # +0
+100_000.times { |i| r.match("request-#{i}") }    # +0
+```
+
+対策: 問い合わせ系 API に非インターンの `IdentId::try_get_id(&str) -> Option<IdentId>`
+（`rev_table` の read lock 1 回）を通し、`get_id` は定義・代入の経路だけに残す。
+
+### 7.8 副産物
+
+- **`--features profile` のビルドが railsbench で segfault** していた（`guard_fail` が
+  未書き込みスロットの raw 0 を `Value` として受け、`debug_class` で NULL を deref）。
+  引数を `Option<Value>` にして修正した（本ブランチ）。JIT はクラスガードの対象に
+  `None` のスロットを渡すことがある。
+- F の後の master で「+53 k Ir/req」に見えた差は、`GCBox::free` / `mark` の差分に GC の
+  タイミングが乗ったもの。`GC.stat` で数えた objects/req は F 前 1,592.7 / F 1,589.7 /
+  master 1,589.7 で変化なし。§6 の差分法は GC 由来の行を ±10 k 程度揺らす。
+- `--yjit-perf` の +250 k Ir/req（§7.1 の注意）。
+- `leak.rb` の最初の実行（ブロックごとに `GC.start`）で 18,000〜20,000 リクエスト目に
+  1 回だけ **HTTP 500** が返った。その後 24,000・50,000 リクエストの 2 回では再現せず、
+  最初の実行は例外テキストを取りこぼしている。GC 直後に限って起きるなら根付け漏れの
+  可能性があるので、`GC_STRESS=1` の手動ワークフローで railsbench を回す価値がある。
+
+### 7.9 対策候補（コスト順）
+
+| # | 施策 | 変更箇所 | 見込み（Ir/req） |
+|---|---|---|---|
+| H | `CGI.escapeHTML` / `h` を Rust のバイト走査に | `builtins/`（新）、`stdlib/cgi/escape.rb` | **−170 k（5.6 %）** |
+| I | `Hash#[]` の Index サイトをキークラスで `BecamePolymorphic` 再コンパイルする（またはガードを外す） | `jitgen/compile/index.rs`、PMC | deopt 11 回/req 分。§7.4.5 の再現で確認できる |
+| J | キーワード引数: `CallSiteInfo` を clone せず借用、kwrest 不要なら `RubyMap` を作らない | `codegen/runtime/args.rs:1392-1400` | −40 k |
+| K | `Symbol#to_s` を 1 lock・0 clone に、インターン表を FxHash に、`"default"` を定数 IdentId に | `builtins/symbol.rs`、`id_table.rs`、`builtins/hash.rs:959` | −55 k |
+| L | `Hash#each` でブロックが 2 引数なら pair Array を作らない | `builtins/hash.rb` | −69 個/req の Array |
+| M | `File.file?` / `exist?` を `metadata` に | `builtins/file.rs:833,846` | 実時間 3〜6 %（syscall） |
+| N | `unpack("H*")` の nibble テーブル、`Regexp#match?` のコピー排除、`MatchData#[]` の `format!` 排除 | `string/pack.rs`、`builtins/regexp.rs:1126`、`match_data.rs` | −60 k |
+| **O** | `Regexp#match?` が対象文字列をインターンしないようにする（`expect_string` で受ける、1 行）。次いで問い合わせ系 API（`respond_to?`・`send`・`MatchData#[]` …）を非インターンの `try_get_id` に（§7.7） | `builtins/regexp.rs:1126`、その後 `id_table.rs`・`value.rs:2337` と呼び出し側 49 か所 | **RSS +1.2 KB/req の無限増加が止まる**、−27 k Ir/req。`Regexp#match?` を動的入力に使う全アプリのリーク |
+| P | Rust runtime から呼ぶ `==` / `to_ary` / `to_s` / `default` のサイト別インラインキャッシュ | `globals/store`、`executor` | −50〜80 k |
+| Q | 文字列補間の一括確保（合計長を先に計算） | `codegen/runtime.rs:893` | −40 k |
+
+H〜N は互いに独立で、それぞれ 1 コミットの大きさ。合計で命令数 −350〜400 k（12 %）、
+加えて M の実時間分。P と O は設計が要る。
+
+### 7.10 追加した計測手順
+
+```sh
+# ブロックごとの ms/req・RSS・GC 回数（CRuby のウォームアップ長を見る）
+BLOCKS=12 PER=2000 monoruby benchmarks/railsbench/blocks.rb      # ruby-bench 側に置いた薄いドライバ
+# objects/req
+WARM=1000 N=1000 monoruby benchmarks/railsbench/alloc_count.rb   # GC.stat[:total_allocated_objects] の差
+# 定常状態の callgrind（WARM を上げる）
+WARM=12000 N=100 valgrind --tool=callgrind --cache-sim=no ...
+# cache/branch シミュレーション（HW カウンタの代替）
+valgrind --tool=callgrind --cache-sim=yes --branch-sim=yes ...   # summary: 行の Ir I1mr D1mr DLmr Bc Bcm Bi Bim
+```
+
+JIT の帰属は §6 のとおり perf マップで行うが、**YJIT のマップは断片的**で、callgrind
+が付ける番地が直前の断片の終端と一致することが多い。完全一致で見つからなければ 4 KiB
+以内の直前の項目に倒すと 281 k / 343 k が名前に解決する（残り 62 k は ruby バイナリ側の
+シンボル無し領域）。monoruby のマップは 1 メソッド 1 項目で 502 k / 507 k が解決する。
