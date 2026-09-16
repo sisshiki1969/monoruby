@@ -239,6 +239,28 @@ impl<'a> JitContext<'a> {
                 let dest_sp = self.iseq().get_sp(self.iseq().bb_info[dest_bb].begin);
                 state.set_next_sp(dest_sp);
                 state.clear_above_next_sp();
+                // A temp the `ensure` body's entry keeps live need not be
+                // written yet at the exit: a region that is an *expression*
+                // holds the begin body's value across the body, and an exit
+                // taken before that value is produced leaves the slot void.
+                // Leaving it so collapses it at the merge and takes the
+                // normal path's value with it — and the `Ret` that reads it
+                // after the region then has nothing to return, which is the
+                // `as_return` on a void slot that `arr.each { begin; break;
+                // ensure; end }` used to panic the compiler with.
+                //
+                // Claim the weakest truth instead: an unknown boxed `Value`
+                // in its slot. It is true — the prologue nil-fills the frame
+                // — and nothing on this path reads it, because the region's
+                // `EnsureEnd` always delivers the deferred exit through the
+                // teardown (`spliceable_ensure_region` refuses a body that
+                // could exit or rescue its way to the continuation). The
+                // stage-2 landing does the same for the same reason.
+                for slot in SlotId(0)..dest_sp {
+                    if matches!(state.mode(slot), LinkMode::V) {
+                        state.set_S(slot);
+                    }
+                }
                 Ok(CompileResult::Branch(dest_bb))
             }
             SplicePlan::Outer { host, callee } => {
