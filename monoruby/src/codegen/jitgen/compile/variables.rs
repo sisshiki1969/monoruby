@@ -454,6 +454,17 @@ impl AbstractState {
 
     pub(super) fn jit_load_gvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
+        // `$(errinfo)` — bytecodegen's name for a protected region's
+        // entry save of `$!` — is read once per invocation of every
+        // method carrying such a region, and `$!` is a plain `Value`
+        // field of the `Executor`. Read it directly instead of paying the
+        // generic hooked-global call, whose FP save set and GP flush cost
+        // more than the load itself.
+        if name == IdentId::GVAR_ERRINFO_INTERNAL {
+            ir.push(AsmInst::LoadErrinfo);
+            self.def_rax2acc(ir, dst);
+            return;
+        }
         let using_fpr = self.get_using_fpr(ir);
         ir.push(AsmInst::LoadGVar { name, using_fpr });
         self.def_rax2acc(ir, dst);

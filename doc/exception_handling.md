@@ -246,7 +246,80 @@ this with a **deferred-unwind stack** (`executor.rs:1102`–`1153`):
 This mirrors CRuby's `CATCH_TYPE_ENSURE` continuation plus the "ensure result
 overrides pending throw" rule.
 
-### 6.1 Spliced non-local exits (issue #1185)
+Note that **bytecodegen compiles the body once per edge**, which is what makes
+the compiled `EnsureEnd` cheap (below). A `begin`..`ensure` without `rescue`
+still gets a `rescue_pc`: it names a *second copy* of the body that ends in
+`raise` rather than `EnsureEnd`.
+
+```text
+def m(a); begin; a * 2; ensure; $n = 1; end; end
+
+[(:00002..:00004, rescue=:00005, ensure=:00008, err_slot=%4)]
+  BB1  :00005 %5 = 1 / :00006 $n = %5 / :00007 raise %4    <- the exception edge
+  BB2  :00008 %4 = 1 / :00009 $n = %4 / :00010 ensure_end  <- the normal edge
+```
+
+So an exception takes BB1 and never reaches BB2's `EnsureEnd`; a non-local exit
+takes `handle_error`'s `goto(ensure)` into BB2 **in the VM**; and compiled code
+falls into BB2 only on normal completion.
+
+### 6.1 The compiled `EnsureEnd`'s gate
+
+`EnsureEnd` asks one question — "is a deferred unwind parked for this frame?" —
+and for JIT-compiled code the answer is always no. `defer_unwind` has five call
+sites: three in `handle_error`, each immediately followed by
+`ErrorReturn::goto(ensure)`, which resumes the VM, and two in the splice helpers
+(§6.3), which pair with `ensure_end_spliced` rather than with this call. The
+exception edge cannot arrive either, per the two-copy layout above.
+
+It was nevertheless a runtime call on the normal path of every compiled
+`ensure` region — measured at about 40 cycles per execution: a trivial
+`begin`..`ensure` made a hot method 63% slower than the same method without
+one. It now sits behind the same one-word mirror `emit_ret` tests
+(`Executor::deferred_top_lfp`, #1186): a compare and a not-taken branch.
+
+The gate is conservative rather than an elision — when the mirror *does* name
+this frame it runs exactly the old sequence — which matters because compiled
+code demonstrably can run with a deferral parked: a loop inside an `ensure`
+body entered by an unwind can be re-entered by OSR, which is why `emit_ret`
+carries the same gate. Worth about 10% on a hot method with a trivial
+`ensure`, and 14% on §6.3's find-first shape.
+
+### 6.2 The region-entry `$!` save
+
+A protected region saves `$!` at its entry so a non-local exit leaving a
+`rescue` clause can put it back (§5). That save read `$!` through the generic
+hooked-global runtime call, once per invocation of *every* method carrying a
+`begin`..`ensure` or `begin`..`rescue`:
+
+```text
+:00001 %2 = $(errinfo)
+      mov  rdi,rbx / mov rsi,r12 / mov edx,0x6a      before
+      movabs rax,<runtime::get_global_var> / call rax
+
+      mov  rax,QWORD PTR [rbx+0x198]                 after
+```
+
+`$!` is a plain `Value` field of the `Executor` and `$(errinfo)`'s hook is
+`Some(vm.errinfo())`, so `AsmInst::LoadErrinfo` is the same read — with the
+call's FP save set and GP flush gone with it. The load is equivalent only
+because `rbx` is the *current* `Executor`, which is what `$!` is per (CRuby
+keeps errinfo per execution context, and so does monoruby), so a Fiber or
+Thread reads its own.
+
+Only the internal name is specialized. `$(errinfo)` is what bytecodegen emits
+and is not a name Ruby's parser can produce, so no program can alias it,
+`trace_var` it or otherwise put a hook in the way; user-written `$!` reads keep
+the generic path. The name is pre-interned as
+`IdentId::GVAR_ERRINFO_INTERNAL` so the recognition is an integer compare
+rather than a lock and a string hash.
+
+Worth about 28% on a hot method with a trivial `ensure` (0.663-0.675 s ->
+0.475-0.486 s over three runs). Together with the gate above, the surcharge for
+putting a `begin`..`ensure` around a hot method's body falls from +63% to +23%
+over the same method without one.
+
+### 6.3 Spliced non-local exits (issue #1185)
 
 A `break` / non-local `return` whose whole chain is specialized-inlined into
 one JIT unit lowers to the **specialized teardown** (`lea rbp += Σ; leave;
@@ -461,13 +534,15 @@ prints only the origin (e.g. `SyntaxError`, which also gets a source excerpt).
 | catch-time caller walk               | `../monoruby/src/executor.rs` (`complete_backtrace_for_rescue`) |
 | object materialization + cause       | `../monoruby/src/executor.rs` (`take_ex_obj`, `chain_cause`) |
 | per-method exception table           | `../monoruby/src/globals/store/iseq.rs`              |
-| JIT-spliced non-local exits (§6.1)   | `../monoruby/src/codegen/jitgen/context.rs` (`try_splice_exit`), `jitgen/compile.rs` (`emit_spliced_exit`), `jitgen/compile/method_call.rs` (`emit_spliced_landing`) |
+| JIT-spliced non-local exits (§6.3)   | `../monoruby/src/codegen/jitgen/context.rs` (`try_splice_exit`), `jitgen/compile.rs` (`emit_spliced_exit`), `jitgen/compile/method_call.rs` (`emit_spliced_landing`) |
 | frame-label rendering                | `../monoruby/src/globals/store.rs` (`func_description`) |
 | Ruby `Exception` API (Rust side)     | `../monoruby/src/builtins/exception.rs`              |
 | Ruby `Exception` API (Ruby side)     | `../monoruby/builtins/startup.rb`                    |
 | `Kernel#raise` / `#loop` / `#caller` | `../monoruby/src/builtins/kernel.rs`                 |
 | differential tests                   | `../monoruby/tests/backtrace.rs`, `tests/exception_api.rs` |
 | spliced-exit regression tests        | `../monoruby/tests/nonlocal_exit_ensure.rs`, `tests/nonlocal_exit_intermediate_ensure.rs`, `tests/nonlocal_exit_rescue.rs` |
+| `EnsureEnd` gate tests (§6.1)        | `../monoruby/tests/ensure_end_deferral_gate.rs` |
+| region-entry `$!` tests (§6.2)       | `../monoruby/tests/errinfo_inline_load.rs` |
 
 ---
 

@@ -67,6 +67,7 @@ impl Codegen {
             | AsmInst::GuardConstVersion { .. }
             | AsmInst::StoreConstant { .. }
             | AsmInst::LoadGVar { .. }
+            | AsmInst::LoadErrinfo
             | AsmInst::StoreGVar { .. }
             | AsmInst::LoadCVar { .. }
             | AsmInst::LoadDynVar { .. }
@@ -1208,6 +1209,15 @@ impl Codegen {
         using_fpr: UsingFpr,
     ) -> bool {
         self.load_gvar(name, using_fpr);
+        true
+    }
+
+    /// `rax <- $!`. The whole of `AsmInst::LoadErrinfo`: `$!` is a plain
+    /// `Value` field of the `Executor` that rbx already points at.
+    pub(in crate::codegen::jitgen) fn emit_load_errinfo(&mut self) -> bool {
+        monoasm! { &mut self.jit,
+            movq rax, [rbx + (EXECUTOR_ERRINFO)];
+        };
         true
     }
 
@@ -2781,8 +2791,31 @@ impl Codegen {
     ) -> bool {
         let raise = self.entry_raise();
         if spliced_break.is_none() && spliced_ret.is_none() {
+            // The plain form asks one question — "is a deferred unwind
+            // parked for this frame?" — and the answer reaching *compiled*
+            // code is always no. `defer_unwind` has five call sites: three
+            // in `handle_error`, each immediately followed by
+            // `ErrorReturn::goto(ensure)`, which resumes the **VM** (so the
+            // body and its `EnsureEnd` run interpreted from there), and two
+            // in the splice helpers, which pair with `ensure_end_spliced`
+            // below rather than with this call. Nor can the body's own
+            // raise arrive here: bytecodegen compiles a *separate* copy of
+            // the body for the exception edge, ending in `raise`
+            // (`rescue_pc`), so an exception never reaches this
+            // `EnsureEnd` at all.
+            //
+            // Rather than rest on that, gate the call on the same one-word
+            // mirror `emit_ret` tests (#1186): a compare and a not-taken
+            // branch on the normal path, with the old sequence intact
+            // behind it. When the mirror *does* name this frame,
+            // `finish_ensure` re-raises the deferral, so the gate's taken
+            // path always ends in the raise — it is a slow path, never a
+            // second way to continue.
             let cont = self.jit.label();
             monoasm! { &mut self.jit,
+                movq rdi, [rbx + (EXECUTOR_DEFERRED_TOP)];
+                cmpq rdi, r14;
+                jne  cont;
                 movq rdi, rbx;
                 movq rax, (runtime::ensure_end);
                 call rax;
