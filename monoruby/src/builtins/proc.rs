@@ -540,8 +540,15 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
         result.push(entry);
         name_idx += 1;
     }
-    // optional params
-    for _ in 0..params.opt_num() {
+    // optional params — a variadic native's fixed slots are how its
+    // `*rest` is stored, not optionals (`[[:rest]]`, as CRuby reports
+    // `String#end_with?` or `:sym.to_proc`).
+    let opt_num = if params.native_rest_optional() {
+        0
+    } else {
+        params.opt_num()
+    };
+    for _ in 0..opt_num {
         let entry = if let Some(Some(name)) = args_names.get(name_idx) {
             Value::array2(opt_tag, Value::symbol(*name))
         } else {

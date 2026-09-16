@@ -599,13 +599,14 @@ pub(crate) fn symbol_to_proc_body(
     let symbol = symbol_val
         .try_symbol()
         .expect("symbol_to_proc_body invoked with non-symbol outer self");
-    let recv = lfp.arg(0);
-    let rest_val = lfp.arg(1);
-    let rest_array = rest_val.as_array();
+    // `(recv, *args)` in the variadic slots: a yield of one value (the
+    // `ary.map(&:to_s)` shape) allocates nothing here.
+    let args = lfp.variadic_args();
+    let Some((recv, rest)) = args.split_first() else {
+        return Err(MonorubyErr::argumenterr("no receiver given"));
+    };
     let bh = lfp.block();
-    // The rest array is rooted by this frame, and the collector does not
-    // move objects, so the dispatch can read the arguments in place.
-    vm.dispatch_symbol_proc(globals, symbol, recv, &rest_array[..], bh)
+    vm.dispatch_symbol_proc(globals, symbol, *recv, rest, bh)
 }
 
 ///
@@ -631,8 +632,12 @@ pub(crate) fn method_to_proc_body(
     let method = method_val.as_method();
     let receiver = method.receiver();
     let func_id = method.func_id();
-    let args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+    let args = lfp.variadic_args();
     let bh = lfp.block();
+    let kw = lfp
+        .variadic_kw()
+        .and_then(|v| v.try_hash_ty())
+        .filter(|h| !h.is_empty());
     if let Some(target) = method.method_missing_name() {
         // Mirror `Method#call`: dispatch `receiver.method_missing(name, …)`
         // by name so a later `method_missing` redefinition is honored.
@@ -645,10 +650,10 @@ pub(crate) fn method_to_proc_body(
             receiver,
             &mm_args,
             bh,
-            None,
+            kw,
         );
     }
-    vm.invoke_func_inner(globals, func_id, receiver, &args, bh, None)
+    vm.invoke_func_inner(globals, func_id, receiver, &args, bh, kw)
 }
 
 impl Funcs {

@@ -8570,6 +8570,10 @@ mod tests {
             r##"pr = proc { |*a, **k| [a, k] }; [pr.call, pr.call(1, 2), pr.call(*(1..9)), pr.call(*(1..13)), pr.call(1, k: 2), pr[*(1..9)], pr.yield(1, 2), pr === 5, pr.call({ a: 1 })]"##,
             r##"l = lambda { |a, b = 2, *c| [a, b, c] }; [l.call(1), l.call(*(1..9)), (l.call rescue $!.class)]"##,
             r##"class VE; def m(*a, **k, &b) = [a, k, b&.call]; end; c = VE.new; [:+.to_proc.call(1, 2), :m.to_proc.call(c, *(1..8)), :m.to_proc.call(c, *(1..12)), :m.to_proc.call(c, 1, k: 2), :m.to_proc.call(c, 1) { 7 }, (:m.to_proc.call rescue $!.class)]"##,
+            // The `&:sym` and `&method(:m)` bodies through yield, map and
+            // call, with keywords, and what they report as parameters.
+            r##"class VF; def m(*a, **k, &b) = [a, k, b&.call]; def mm = 1; end; c = VF.new; def vf_y(&b) = yield(VF.new, *(1..9)); def vf_y0(&b) = yield; [[1, 2, 3].map(&:to_s), [[1, 2]].map(&:first), vf_y(&:m), (vf_y0(&:to_s) rescue $!.class), :m.to_proc.curry(2)[c][1], [c].map(&:m), :m.to_proc.arity, :m.to_proc.parameters, :m.to_proc.lambda?, "".method(:end_with?).parameters, "".method(:end_with?).arity, :abc.method(:end_with?).arity]"##,
+            r##"class VG; def m(*a, **k, &b) = [a, k, b&.call]; def mm = 1; end; c = VG.new; def vg_y2(&b) = yield(1, 2, 3); o = Object.new; def o.method_missing(n, *a, **k) = [n, a, k]; def o.respond_to_missing?(*) = true; [c.method(:mm).to_proc.call, c.method(:m).to_proc.call(1, 2), c.method(:m).to_proc.call(*(1..9)), c.method(:m).to_proc.call(*(1..13)), c.method(:m).to_proc.call(1, k: 2), c.method(:m).to_proc.call(1) { 5 }, [1, 2].map(&c.method(:m)), vg_y2(&c.method(:m)), o.method(:zz).to_proc.call(1, 2), o.method(:zz).to_proc.call(1, k: 3), c.method(:m).to_proc.arity, c.method(:m).to_proc.parameters, c.method(:m).to_proc.lambda?]"##,
         ]);
     }
 
