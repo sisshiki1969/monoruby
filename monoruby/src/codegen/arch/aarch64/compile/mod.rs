@@ -3636,39 +3636,6 @@ impl Codegen {
         true
     }
 
-    /// A JIT-spliced non-local exit (#1185): build and defer the exit's
-    /// unwind (value in the `GP::Rdx`-mapped register) so the following
-    /// compiled branch enters the shared `ensure` body directly. A
-    /// degenerate outcome raises generically from the exit's own pc.
-    /// Mirrors x86 `emit_defer_spliced_exit`.
-    pub(in crate::codegen::jitgen) fn emit_defer_spliced_exit(
-        &mut self,
-        kind: SplicedExitKind,
-        pc: BytecodePtr,
-    ) -> bool {
-        let raise = self.entry_raise();
-        let f = match kind {
-            SplicedExitKind::Break => runtime::defer_block_break as *const () as u64,
-            SplicedExitKind::MethodReturn => runtime::defer_method_return as *const () as u64,
-        };
-        let val = GP::Rdx.a64().0;
-        let cont = self.jit.label();
-        monoasm_arm64!(&mut self.jit,
-            mov x2, x(val);          // value
-            mov x0, x19;             // vm
-            mov x1, x20;             // globals
-            str x30, [sp, #-16]!;
-            mov x9, (f);
-            blr x9;                  // 0 = deferred / nonzero = error in-flight
-            ldr x30, [sp], #16;
-            cbz x0, cont;
-            mov x21, (pc.as_ptr() as u64);
-            b raise;
-            cont:
-        );
-        true
-    }
-
     /// `SplicedExitToOuter` (#1185, stage 2) — mirror of x86
     /// `emit_spliced_exit_to_outer`. Build the error here (x19's cfp is
     /// still the exiting frame, which is what resolves a `break`'s

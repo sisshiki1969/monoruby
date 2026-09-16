@@ -1052,13 +1052,6 @@ pub(in crate::codegen) enum LInst {
         offset: usize,
         reg: SlotId,
     },
-    /// Defer a spliced non-local exit's unwind before jumping into the
-    /// shared `ensure` body (#1185). The value rides in `GP::Rdx`; the
-    /// degenerate outcome raises generically from `pc`.
-    DeferSplicedExit {
-        kind: SplicedExitKind,
-        pc: BytecodePtr,
-    },
     /// Defer a spliced non-local exit keyed on an *intermediate* frame's
     /// LFP, then tear down to that frame's call site and return into it
     /// with the kind's marker in the return register (#1185, stage 2).

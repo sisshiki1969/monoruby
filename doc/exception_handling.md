@@ -331,21 +331,27 @@ leaves the defining frame in the VM until the next `loop_start` re-enters by
 OSR.
 
 Splicing keeps the teardown and reaches the `ensure` body as ordinary
-compiled code. In both shapes the exit **defers** its unwind exactly as
-`handle_error` would (`defer_block_break` / `defer_method_return`), and the
-region's `EnsureEnd` delivers it: `ensure_end_spliced` classifies the parked
+compiled code: the exit **defers** its unwind exactly as `handle_error`
+would (`defer_block_break_at` / `defer_method_return_at`), and the region's
+`EnsureEnd` delivers it — `ensure_end_spliced` classifies the parked
 deferral and the compiled arm runs the teardown for that kind. The gain is
 that the unwind edge now *exists in the CFG*, so the `ensure`'s writes are
 visible to the abstract interpreter instead of happening behind its back.
 
-**Stage 1 — the exit's own frame** (`SplicePlan::SameFrame`). The body is a
-block of the iseq being compiled, so the exit is an ordinary forward branch
-to it (`AsmInst::DeferSplicedExit`, then `CompileResult::Branch`).
+This was built in two stages, by which frame owns the region. **Stage 1**
+(`SplicePlan::SameFrame`, #1187) handled the exit's *own* frame, where the
+body is a block of the iseq being compiled and the exit is an ordinary
+forward branch to it. §6.5 removed the need for it: the exit now replays
+its own frame's bodies inline and crosses no region of its own, so
+`covering_ensure` never names the current frame at an exit's pc.
+Measured over the whole test suite, stage 1 went from 304 splices to 0, and
+it was deleted; `try_splice_exit` still refuses a same-frame host rather
+than assuming, in case bytecodegen ever stops replaying. What remains is:
 
-**Stage 2 — an intermediate frame** (`SplicePlan::Outer`). The owner is a
-*suspended* frame: its compile is parked at the call that leads to the exit,
-and its `ensure` body is several machine frames away, so there is no branch
-to emit. The splice travels by the machine's own return path instead:
+**An intermediate frame** (stage 2). The owner is a *suspended* frame: its
+compile is parked at the call that leads to the exit, and its `ensure` body
+is several machine frames away, so there is no branch to emit. The splice
+travels by the machine's own return path instead:
 
 1. `AsmInst::SplicedExitToOuter`, at the exit, builds the error where
    `vm.cfp()` is still the exiting frame (that is what resolves a `break`'s
@@ -392,7 +398,7 @@ handles every case.
 
 Measured on the shape the issue names — a `break`-with-`ensure` that is the
 normal exit of an inner iteration inside a hot loop in the block's defining
-frame — stage 2 is worth roughly 10% (0.79–0.83 s → 0.69–0.77 s over
+frame — this is worth roughly 10% (0.79–0.83 s → 0.69–0.77 s over
 repeated runs). The same exit *without* the `ensure` runs in 0.35 s, so most
 of what is left is the deferral machinery itself — two runtime calls and a
 `MonorubyErr` per exit — rather than the unwind the splice removed. On a
