@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c26531a9.js";
+            window.path_to_searchindex_js = "searchindex-07e2ef8b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -11160,6 +11160,60 @@ of what is left is the deferral machinery itself — two runtime calls and a
 <code>MonorubyErr</code> per exit — rather than the unwind the splice removed. On a
 chain that merely tears down (no hot continuation to return to) the
 difference is within noise.</p>
+<h3 id="64-replayed-ensure-bodies-and-the-exception-table"><a class="header" href="#64-replayed-ensure-bodies-and-the-exception-table">6.4 Replayed <code>ensure</code> bodies and the exception table</a></h3>
+<p>The two copies above are not the only ones. A <strong>non-local exit written inside
+a region</strong> — a local <code>return</code>, a loop <code>break</code> / <code>next</code> / <code>redo</code>, <code>retry</code> —
+does not go through <code>handle_error</code> at all: bytecodegen replays the bodies of
+every region the exit leaves <em>inline</em>, innermost first, immediately ahead of
+the exit instruction (<code>gen_all_pending_ensures</code>, <code>gen_loop_pending_ensures</code>).</p>
+<p>Those inline copies sit lexically <strong>inside</strong> the very regions they replay, so
+the exception table covered them like any other code in the region. A copy
+that raised was therefore handed straight back to the region whose body was
+running, and the body ran a second time:</p>
+<pre><code class="language-ruby">begin
+  begin
+    return :never
+  ensure
+    $log &lt;&lt; :inner     # ran twice; CRuby runs it once
+    raise "E"
+  end
+ensure
+  $log &lt;&lt; :outer
+end
+</code></pre>
+<p>The generator already states the rule on its own side: while it emits the body
+of the region at stack index <code>idx</code>, it truncates its <code>ensure</code> stack to
+<code>ensures[..idx]</code>, so a <code>return</code> <em>written</em> in an ensure body does not
+re-generate that body (and <code>begin return 1 ensure return 2 end</code> returns 2, as
+in CRuby). The table now says the same thing at run time.</p>
+<p>Each region gets an <strong>id</strong> (<code>BytecodeGen::new_region_id</code>), carried by every
+exception-table entry it emits and by its entry on the <code>ensure</code> stack. Each
+replayed copy is recorded as a <strong>replay span</strong> — a <code>BcIndex</code> range plus the
+ids of the regions it runs outside of: the one whose body it is, and the inner
+ones the exit has already replayed. <code>ISeqInfo::active_entries</code> drops those
+entries, and every “which regions are in force at this pc” lookup goes through
+it (<code>get_exception_dest</code>, <code>covering_ensure</code>, <code>single_covering_ensure</code>), so the
+raise path and the non-local-exit path agree.</p>
+<p>Ids rather than nesting depths, because a <code>begin</code> written <strong>inside</strong> an ensure
+body is a region of its own and must keep catching:</p>
+<pre><code class="language-ruby">begin
+  return :done
+ensure
+  begin
+    raise "E"
+  rescue =&gt; e     # still catches
+  end
+end
+</code></pre>
+<p>Bodies are generated once per copy, so that nested region gets a fresh id in
+each copy and never collides with the region being replayed — where a depth
+count would, since the generator’s truncated stack gives it the same depth as
+the region whose body it is in.</p>
+<p>Spans nest, too (an ensure body may hold an exit that replays further bodies),
+so a pc is checked against <em>every</em> span covering it, not just the innermost.
+<code>errinfo_restore_slots</code> is deliberately left outside this filter: it is keyed
+on rescue-<em>clause</em> spans and is only ever asked about the exit instruction’s
+own pc, which no replay span covers.</p>
 <hr>
 <h2 id="7-backtrace-construction--the-key-contrast"><a class="header" href="#7-backtrace-construction--the-key-contrast">7. Backtrace construction — the key contrast</a></h2>
 <p>This is where the laziness pays off and where the recent work (PR #896)
