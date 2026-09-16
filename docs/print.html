@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4ce5193a.js";
+            window.path_to_searchindex_js = "searchindex-ac6c360b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -11098,19 +11098,25 @@ converts the suspended frames by the chain-deopt walk, and — for <code>break</
 leaves the defining frame in the VM until the next <code>loop_start</code> re-enters by
 OSR.</p>
 <p>Splicing keeps the teardown and reaches the <code>ensure</code> body as ordinary
-compiled code. In both shapes the exit <strong>defers</strong> its unwind exactly as
-<code>handle_error</code> would (<code>defer_block_break</code> / <code>defer_method_return</code>), and the
-region’s <code>EnsureEnd</code> delivers it: <code>ensure_end_spliced</code> classifies the parked
+compiled code: the exit <strong>defers</strong> its unwind exactly as <code>handle_error</code>
+would (<code>defer_block_break_at</code> / <code>defer_method_return_at</code>), and the region’s
+<code>EnsureEnd</code> delivers it — <code>ensure_end_spliced</code> classifies the parked
 deferral and the compiled arm runs the teardown for that kind. The gain is
 that the unwind edge now <em>exists in the CFG</em>, so the <code>ensure</code>’s writes are
 visible to the abstract interpreter instead of happening behind its back.</p>
-<p><strong>Stage 1 — the exit’s own frame</strong> (<code>SplicePlan::SameFrame</code>). The body is a
-block of the iseq being compiled, so the exit is an ordinary forward branch
-to it (<code>AsmInst::DeferSplicedExit</code>, then <code>CompileResult::Branch</code>).</p>
-<p><strong>Stage 2 — an intermediate frame</strong> (<code>SplicePlan::Outer</code>). The owner is a
-<em>suspended</em> frame: its compile is parked at the call that leads to the exit,
-and its <code>ensure</code> body is several machine frames away, so there is no branch
-to emit. The splice travels by the machine’s own return path instead:</p>
+<p>This was built in two stages, by which frame owns the region. <strong>Stage 1</strong>
+(<code>SplicePlan::SameFrame</code>, #1187) handled the exit’s <em>own</em> frame, where the
+body is a block of the iseq being compiled and the exit is an ordinary
+forward branch to it. §6.5 removed the need for it: the exit now replays
+its own frame’s bodies inline and crosses no region of its own, so
+<code>covering_ensure</code> never names the current frame at an exit’s pc.
+Measured over the whole test suite, stage 1 went from 304 splices to 0, and
+it was deleted; <code>try_splice_exit</code> still refuses a same-frame host rather
+than assuming, in case bytecodegen ever stops replaying. What remains is:</p>
+<p><strong>An intermediate frame</strong> (stage 2). The owner is a <em>suspended</em> frame: its
+compile is parked at the call that leads to the exit, and its <code>ensure</code> body
+is several machine frames away, so there is no branch to emit. The splice
+travels by the machine’s own return path instead:</p>
 <ol>
 <li><code>AsmInst::SplicedExitToOuter</code>, at the exit, builds the error where
 <code>vm.cfp()</code> is still the exiting frame (that is what resolves a <code>break</code>’s
@@ -11154,7 +11160,7 @@ that emit a landing. Every refusal falls back to the generic unwind, which
 handles every case.</p>
 <p>Measured on the shape the issue names — a <code>break</code>-with-<code>ensure</code> that is the
 normal exit of an inner iteration inside a hot loop in the block’s defining
-frame — stage 2 is worth roughly 10% (0.79–0.83 s → 0.69–0.77 s over
+frame — this is worth roughly 10% (0.79–0.83 s → 0.69–0.77 s over
 repeated runs). The same exit <em>without</em> the <code>ensure</code> runs in 0.35 s, so most
 of what is left is the deferral machinery itself — two runtime calls and a
 <code>MonorubyErr</code> per exit — rather than the unwind the splice removed. On a
