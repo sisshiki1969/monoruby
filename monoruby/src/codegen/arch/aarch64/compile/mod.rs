@@ -3443,8 +3443,15 @@ impl Codegen {
         let cont = self.jit.label();
         let pc0 = pc.as_ptr() as u64;
         if spliced_break.is_none() && spliced_ret.is_none() {
+            // Mirror of x86 `emit_ensure_end`'s gate — see the reasoning
+            // there: the call can only answer "nothing to do" on a path
+            // that reaches compiled code, so it sits behind the same
+            // one-word deferral mirror `emit_ret` tests (#1186).
             let f = runtime::ensure_end as *const () as u64;
             monoasm_arm64!(&mut self.jit,
+                ldr x10, [x19, #(EXECUTOR_DEFERRED_TOP as u32)];
+                cmp x10, x22;
+                b.ne cont;
                 mov x0, x19;             // vm
                 str x30, [sp, #-16]!;
                 mov x9, (f);
