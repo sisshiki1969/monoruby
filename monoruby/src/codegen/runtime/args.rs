@@ -1622,15 +1622,18 @@ fn invoker_arguments_inner(
         }
         Some(v)
     } else if let Some(kw_arg) = kw_arg {
-        let mut s = "unknown keywords: ".to_string();
-        for (i, (name, _)) in kw_arg.iter().enumerate() {
-            if i == 0 {
-                s.push_str(&format!(":{name}"));
-            } else {
-                s.push_str(&format!(", :{name}"));
-            }
-        }
-        return Err(MonorubyErr::argumenterr(s));
+        // The same message the call-site path builds: `unknown keyword:
+        // :b` for one, `unknown keywords: :b, :c` for several, a String
+        // key by its `inspect`. (This used to say `unknown keywords: ::b`
+        // — the Symbol's own display already carries the colon.)
+        let unknowns = kw_arg
+            .iter()
+            .map(|(k, _)| match k.try_symbol() {
+                Some(sym) => format!(":{sym}"),
+                None => k.inspect(&globals.store),
+            })
+            .collect();
+        return Err(unknown_keyword_err(unknowns));
     } else {
         None
     };
@@ -2080,6 +2083,16 @@ mod tests {
             r#"def m(x:) = x; e = []; e << (m(y: 1) rescue $!.message); e << (m(**{y: 1}) rescue $!.message); e << (m(x: 1, y: 2) rescue $!.message); e << (m(**{x: 1, "y" => 2}) rescue $!.message); e"#,
             r#"def f(**nil) = :ok; e = [f, f(**{})]; e << (f(k: 1) rescue $!.message); e << (f(**{k: 1}) rescue $!.message); e"#,
             r#"class Kw; def initialize(a, b: 1, **o) = (@v = [a, b, o]); attr_reader :v; end; h = {b: 2, c: 3}; [Kw.new(1).v, Kw.new(1, **h).v, Kw.new(1, c: 4, **{d: 5}).v, Kw.new(*[1], **h).v]"#,
+            // `**obj` goes through `#to_hash` (and its two failure shapes),
+            // and a key present in two `**` sources takes the later value.
+            r#"class ToH; def initialize(h) = (@h = h); def to_hash = @h; end; class BadH; def to_hash = 42; end; def m(a:, **r) = [a, r]; e = [m(**ToH.new({a: 1, b: 2})), m(x: 0, **ToH.new({a: 3}))]; e << (m(**BadH.new) rescue [$!.class, $!.message]); e << (m(**Object.new) rescue [$!.class, $!.message]); e << m(**{a: 1, b: 2}, **{a: 9}); e"#,
+            // The invoker path (a call the runtime starts, here `send`)
+            // binds keywords too, and reports an unknown one as the
+            // call-site path does.
+            r#"def m(a:, **r) = [a, r]; def n(a: 1) = a; e = [send(:m, a: 1, **{c: 2}), send(:m, a: 5, c: 6), send(:n, a: 2)]; e << (send(:n, b: 1) rescue [$!.class, $!.message]); e << (send(:n, b: 1, c: 2) rescue [$!.class, $!.message]); e"#,
+            // A ruby2_keywords forward delivers the flagged trailing hash
+            // as keywords; a plain Hash argument stays positional.
+            r#"def m(a:, **r) = [a, r]; def fwd(*args) = m(*args); ruby2_keywords :fwd; e = [fwd(a: 7, b: 8)]; e << (fwd({a: 7}) rescue [$!.class, $!.message]); e"#,
         ]);
     }
 
