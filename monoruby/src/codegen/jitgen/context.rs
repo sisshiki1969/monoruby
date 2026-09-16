@@ -446,6 +446,10 @@ pub(in crate::codegen) struct SplicePlan {
 /// its body has run (issue #1185): the position it tears down to, and
 /// whether that is the end of the road.
 ///
+/// A host's recorded route for one kind of spliced exit: where it goes,
+/// and what the exits taking it claimed about their value (joined).
+pub(super) type SplicedRoute = (SpliceHop, ReturnState);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SpliceHop {
     /// Deliver: pop down to the frame at this position and `ret` the
@@ -694,7 +698,9 @@ pub(super) struct JitStackFrame {
     /// half records the *stack position* the exit of that kind unwinds
     /// to, so the `EnsureEnd` arm knows which specialized-teardown
     /// dispatch arms to emit and where each hands the exit: `(break,
-    /// method_return)`, each a [`SpliceHop`].
+    /// method_return)`, each a [`SpliceHop`] with the join of the claims
+    /// the exits routed through it made about their value, which the
+    /// delivering host's return context carries to the target.
     ///
     /// The position is recorded at splice time because the exit may not
     /// live in this frame at all: a stage-2 splice is requested by a
@@ -702,7 +708,7 @@ pub(super) struct JitStackFrame {
     /// resolved there, not here (`iter_caller_pos` asked at the
     /// `EnsureEnd` would answer for this frame).
     ///
-    pub(super) spliced_ensures: HashMap<BcIndex, (Option<SpliceHop>, Option<SpliceHop>)>,
+    pub(super) spliced_ensures: HashMap<BcIndex, (Option<SplicedRoute>, Option<SplicedRoute>)>,
     ///
     /// Stage-2 splice (#1185): the landing this frame's *in-progress*
     /// specialized call must emit, requested by the nested compile
@@ -2091,10 +2097,16 @@ impl<'a> JitContext<'a> {
     /// `None` refuses and the caller falls back to the generic lowering,
     /// which handles every case.
     ///
+    /// *claim* is what the exit's own state says about the value it
+    /// leaves with (`as_return`): it rides to the delivering host's
+    /// return context, so the target's continuation learns the value's
+    /// class or constant exactly as it would from a plain specialized
+    /// exit.
     pub(super) fn try_splice_exit(
         &mut self,
         bc_pos: BcIndex,
         kind: SplicedExitKind,
+        claim: ReturnState,
     ) -> Option<SplicePlan> {
         // A dispatch arm compiles straight-line per-class code at one call
         // site; it must not spawn branch entries into the frame's CFG.
@@ -2222,7 +2234,7 @@ impl<'a> JitContext<'a> {
             self.stack_frame[pos].has_boxed_return = true;
         }
         for (&(pos, dest_bb, end), &hop) in chain.iter().zip(&hops) {
-            self.record_spliced_ensure(pos, end, kind, hop);
+            self.record_spliced_ensure(pos, end, kind, hop, claim.clone());
             let landing = self.stack_frame[pos]
                 .pending_splice_landing
                 .get_or_insert((dest_bb, false, false));
@@ -2266,37 +2278,47 @@ impl<'a> JitContext<'a> {
             SplicedExitKind::Break => brk,
             SplicedExitKind::MethodReturn => mret,
         };
-        existing.is_some_and(|h| h != hop)
+        existing.as_ref().is_some_and(|(h, _)| *h != hop)
     }
 
+    /// Record the route, joining *claim* with what earlier exits through
+    /// the same host claimed (the route itself is the same by
+    /// [`Self::spliced_ensure_conflicts`]).
     fn record_spliced_ensure(
         &mut self,
         pos: usize,
         end: BcIndex,
         kind: SplicedExitKind,
         hop: SpliceHop,
+        claim: ReturnState,
     ) {
         let entry = self.stack_frame[pos]
             .spliced_ensures
             .entry(end)
             .or_insert((None, None));
-        match kind {
-            SplicedExitKind::Break => entry.0 = Some(hop),
-            SplicedExitKind::MethodReturn => entry.1 = Some(hop),
+        let slot = match kind {
+            SplicedExitKind::Break => &mut entry.0,
+            SplicedExitKind::MethodReturn => &mut entry.1,
+        };
+        match slot {
+            Some((_, joined)) => joined.join(&claim),
+            None => *slot = Some((hop, claim)),
         }
     }
 
     /// The arm a spliced region's `EnsureEnd` emits for one kind
-    /// (#1185), from the hop recorded for it: a delivery registers the
-    /// exit's return context at the target, exactly as the plain
-    /// specialized exit would; a hand-on registers nothing, as the exit
-    /// itself did not — the next host's landing is a branch edge of that
-    /// host's own CFG.
-    pub(super) fn spliced_arm(&mut self, hop: SpliceHop, state: &AbstractState) -> SplicedArm {
+    /// (#1185), from the route recorded for it: a delivery registers the
+    /// exit's return context at the target — carrying the exits' own
+    /// claim about the value, so the target learns its class or constant
+    /// exactly as from a plain specialized exit — while a hand-on
+    /// registers nothing, as the exit itself did not: the next host's
+    /// landing is a branch edge of that host's own CFG.
+    pub(super) fn spliced_arm(&mut self, route: SplicedRoute, state: &AbstractState) -> SplicedArm {
+        let (hop, claim) = route;
         match hop {
             SpliceHop::Final(pos) => {
                 self.unset_return_context_side_effect_guard();
-                self.new_spliced_exit_return(pos, state.as_return_any());
+                self.new_spliced_exit_return(pos, state.as_return_like(&claim));
                 SplicedArm::Final {
                     teardown: self.spliced_teardown_offset(pos),
                 }

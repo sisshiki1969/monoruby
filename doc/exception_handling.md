@@ -449,6 +449,18 @@ route a kind through a host somewhere other than an exit already recorded is
 refused (`spliced_ensure_conflicts`; the second route used to be silently
 overwritten, a latent stage-2 bug with one host too).
 
+The route also carries **what the exit claimed about its value**. The value
+the delivering `EnsureEnd` hands over is the very one the exit left with (it
+rides the deferral unchanged), so the `ReturnState` the exit's own state made
+(`as_return`: the constant it is, or its class) holds at delivery. Each exit
+routed through a host joins its claim into the route, and the delivering host
+registers the joined claim — under *its own* invariants, since the `ensure`
+bodies ran in between — as the exit's return context at the target
+(`as_return_like`). The target's continuation therefore learns the class or
+the constant exactly as it would from a plain specialized `break` / `return`,
+and a spliced exit whose value agrees with the normal return path no longer
+collapses that join to `Value`. (It used to register `as_return_any`.)
+
 `try_splice_exit` refuses everything it cannot prove: a dispatch arm, a
 loop-rooted frame (whose compile may not cover the body), a `$!` restore
 owed anywhere on the way out, a conflicting route through a host, a body that

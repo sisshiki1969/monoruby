@@ -1114,7 +1114,12 @@ impl<'a> JitContext<'a> {
                 // whose `EnsureEnd` delivers it through the specialized
                 // teardown. The region's `ensure` then runs compiled and
                 // state-visible instead of interpreted mid-unwind.
-                if let Some(plan) = self.try_splice_exit(bc_pos, SplicedExitKind::MethodReturn) {
+                // What this state says about the value leaving: the spliced
+                // `EnsureEnd` that delivers it carries the claim to the
+                // target (taken before `emit_spliced_exit` homes the locals).
+                let claim = state.as_return_or_any(ret);
+                if let Some(plan) = self.try_splice_exit(bc_pos, SplicedExitKind::MethodReturn, claim)
+                {
                     return self.emit_spliced_exit(
                         ir,
                         state,
@@ -1165,7 +1170,8 @@ impl<'a> JitContext<'a> {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
                 // Splice first — see `MethodRet` above (#1185).
-                if let Some(plan) = self.try_splice_exit(bc_pos, SplicedExitKind::Break) {
+                let claim = state.as_return_or_any(ret);
+                if let Some(plan) = self.try_splice_exit(bc_pos, SplicedExitKind::Break, claim) {
                     return self.emit_spliced_exit(
                         ir,
                         state,
@@ -1233,7 +1239,7 @@ impl<'a> JitContext<'a> {
                 // `try_splice_exit` verified; if they are unexpectedly gone,
                 // the un-emitted arm is covered by the runtime dispatch's
                 // re-raise fallback.
-                let spliced = self.current_frame().spliced_ensures.get(&bc_pos).copied();
+                let spliced = self.current_frame().spliced_ensures.get(&bc_pos).cloned();
                 let (spliced_break, spliced_ret) = match spliced {
                     Some((brk, mret)) => {
                         // Each arm's teardown is measured from THIS frame to
@@ -1242,8 +1248,8 @@ impl<'a> JitContext<'a> {
                         // was written (a stage-2 splice was requested by a
                         // nested frame, whose `break` home is nothing this
                         // frame could re-derive).
-                        let brk = brk.map(|hop| self.spliced_arm(hop, state));
-                        let mret = mret.map(|hop| self.spliced_arm(hop, state));
+                        let brk = brk.map(|route| self.spliced_arm(route, state));
+                        let mret = mret.map(|route| self.spliced_arm(route, state));
                         (brk, mret)
                     }
                     None => (None, None),

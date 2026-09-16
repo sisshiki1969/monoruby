@@ -507,6 +507,7 @@
 22421076f8f454c7c15a47288a0294eb	0.25	Rational(3, 4) - 0.5
 22583330547d3269783ffa0a1569db8a	[]	def m; local_variables; end; m
 2262e52c9c6dce5cc613425701fddf85	["D(a)", [1, "D(b)"], :singleton]	def drive(n)\n              r = nil\n              n.times { r = yiel
+22ab3f3275bb5d73afdf46d5efea84b7	[105.0, 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 22b54a288bd5ab601d9196768156489a	"[yes][]\\n"	# unsetenv_others with an env hash keeps only the given vars\n      
 22c0902963ab6d1ef3fbd095ba2b81fb	[:in_progress, :zero, 0, true]	require "socket"\n            res = []\n            srv = TCPServer.n
 22c7f5e30abd7c5832dafc79b391e2e5	[[4, 2], [:x, :y]]	def m\n              binding\n            end\n            b = m\n     
@@ -1852,6 +1853,7 @@
 809281e76b95d635f181be9aa9c1cf05	[1, [], true]	S = Struct.new(:x) do\n              FLAGS = { foo: 1 }\n            
 8098133adc30ffe32c8d9dbe5ae12a78	[1, 2, [3, 4, 5, 6], 7]	def f(x,y,*z,a)\n            [x,y,z,a]\n        end\n        \n\n        f(1
 80baa197387e4aa5b6889e7c3b340c5a	[:initialize_dup, :initialize_copy]	$called = []\n            class Foo\n              def initialize_dup
+80c6965f312228677cb136b64b9b6fa6	[[1, 11, 21, 31], 80]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 80c6e2de0450a23be774507d6a74142e	[[2, "from ensure"], 40]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 80e2d4c5ff1560bcfc1187ccd3d8b8b3	["Psych::Nodes::Stream", 1, ["Psych::Nodes::Document", [], [], true, true], ["Psych::Nodes::Mapping", nil, nil, true, 1, 0, 0, 5, 0], [["Scalar", "a", nil, nil, [true, false, 1], 0, 0, 0, 1], ["Scalar", "1", nil, nil, [true, false, 1], 0, 3, 0, 4], ["Scalar", "b", nil, nil, [true, false, 1], 1, 0, 1, 1], ["Sequence", nil, "x", nil, 2, 1, 3, 1, 12], ["Scalar", "c", nil, nil, [true, false, 1], 2, 0, 2, 1], ["Alias", nil, "x", nil, nil, 2, 3, 2, 5], ["Scalar", "d", nil, nil, [true, false, 1], 3, 0, 3, 1], ["Scalar", "lit\\n", nil, nil, [false, true, 4], 3, 3, 5, 0]], [{"a" => 1, "b" => [1, 2], "c" => [1, 2], "d" => "lit\\n"}], "Hash", "1", "FalseClass", [[:loc, 0, 0, 0, 0], [:start_stream, 1], [:loc, 0, 0, 2, 3], [:start_document, [1, 1], [["!e!", "tag:example.com,2000:"]], false], [:loc, 2, 4, 3, 0], [:start_sequence, "a", "tag:example.com,2000:foo", false, 1], [:loc, 3, 2, 3, 5], [:scalar, "q", nil, nil, false, true, 2], [:loc, 4, 2, 4, 4], [:alias, "a"], [:loc, 5, 0, 5, 0], [:end_sequence], [:loc, 5, 0, 5, 3], [:end_document, false], [:loc, 6, 0, 6, 0], [:end_stream]], [[0, 2, "a"]], "Psych::Nodes::Stream", ["(cfg.yml): did not find expected node content while parsing a flow node at line 2 column 1", "cfg.yml"], "%YAML 1.1\\n%TAG !e! tag:example.com,2000:\\n---\\nkey: &s !e%21foo [one, \\"two\\"]\\nref: *s\\nlit: ! |\\n  a\\n  b\\n", "a: [1, {b: c}]\\n", "x: &y 1\\nz: *y\\n", "a: 1\\n", "expected STREAM-START", "expected DOCUMENT-START or STREAM-END", [5, true, 40], "wrong argument type Integer (expected Array)", "tag tuple must be of length 2", [0, 2, 5]]	require "yaml"\n        require "stringio"\n        r = []\n        # The 
 8102d033b6a3823b4f48b0cf3c51ecae	[7, 8]	o = Object.new\n            def o.respond_to?(name, *) = true\n      
@@ -1877,6 +1879,7 @@
 82447060301c9a64b3ac42318f460e62	[1, 2, 3]	class C\n          def foo(*x)\n            x\n          end\n        end\n 
 8256e9068f6e136c99b87f2f7f97fdb8	[[ArgumentError, "negative signal name: -HUP"], "negative signal name: -INT"]	[(begin; Signal.trap("-HUP") {}; rescue => e; [e.class, e.message]; end), (begin
 82575417647315f480a84e42f3ee1d81	[{"a" => [{"k" => "line one line two", "n" => 1}, {"k" => 2}]}, {"a" => [{"k" => "line one line two", "n" => 1}, {"k" => 2}]}, {"a" => [{"k" => "plain one plain two", "n" => 1}, {"k" => 2}]}, {"a" => [{"k" => "it's two", "n" => 1}]}, {"a" => "x\\ny", "b" => "tab\\there", "c" => "don't"}, {"k" => "<p>You can (555) 567-2222.</p> <p>Our store is at <em>Rue d'Avignon 32</em>.</p>", "created_at" => "2005-04-04 12:00"}, {"pages" => [{"id" => 1, "content" => "first second", "at" => "x"}, {"id" => 2, "content" => "plain"}]}]	require "yaml"\n        docs = [\n          "a:\\n  - k:\\n      \\"line one
+826eb259cdf8b57469f91e86d8b2b698	[[1, 2.5, 4.0, 5.5], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 8271dea172f15ee665f12b31debc89bb	[60, ["g0", 93], ["g9", 93], [93], [5580]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 829f48ebfbc6e4030ced77aaec24c37b	[200, 2]	def a4\n          v = [1, 2, 3].each do |i|\n            begin\n          
 82abda467be3a95b2f6d81fbf7dfb3da	"a:a b:{x: 100, y: 200}"	def f(a, b)\n          "a:#{a} b:#{b}"\n        end\n        \n\n        f("
@@ -2077,6 +2080,7 @@
 90a1c0092c608b8199143c079d1b053f	:OVERRIDDEN	class Float; def +@; :OVERRIDDEN; end; end; +(3.0)
 90d0b935f23f20e9b8e82361062e98ac	[nil, nil, nil]	class CovP; def pm; end; private :pm; end\n            class CovU; d
 90dbab7731d0c6bb6ffa218659b675cd	["child", "main"]	$_ = "main"\n            t = Thread.new { $_ = "child"; $_ }\n       
+90e36de0ec3d9ec7071adca38b7d3217	[[0, 11, 21, 31], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 90e98d9804a827ad88c11c1513efb60b	["a", "b", "c"]	$; = ","; r = "a,b,c".split; $; = nil; r
 90edc31ad26249dccd0721e307bdd03e	["RuntimeError", "boom"]	e = RuntimeError.new("boom")\n            r = Marshal.load(Marshal.d
 90fefcb11c2ecef2592a0fd5d37b2825	[:blk, :none, [1, 2], [1, 3], 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, [0, 0]]	class Blocky\n          def initialize; @r = block_given? ? yield : :non
@@ -2541,6 +2545,7 @@ afbcad07e617b095dc96d973a2845197	[:bar, [1, 2, 3]]	class Foo\n              def 
 afc664b3664dbfb2235fee8c114e24dc	["a\\n", "b\\n", "c"]	path = "/tmp/monoruby_io_classreadlines_#{Process.pid}_#{rand(10000
 afe017e12ee32ba781bc419214f2db54	"e\\n\\nCopyright (c) 202"	File.binread("../LICENSE-MIT", 20, 10)
 afecc303354ce360b53ad03479bdb2f0	2	t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end\n      
+b008ebf522732565f6b3405764b20518	[[8], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 b017ead69b837578afee4295eb840ed7	"#<Class:Time>"	Time.singleton_class.to_s
 b0210a3ee0e2cc726743dd177d2617fa	"rescued:boom"	def a1\n          x = 0\n          [1].each do |i|\n            begin\n    
 b041b0aaea8a7d40b26a35b251c0f897	[[:req, :a], [:nokey]]	def m(a, **nil); end\n            method(:m).parameters\n            
@@ -2822,6 +2827,7 @@ c1d87157ff5a01d47e7d4063803b73dd	["sleep", false, true, false]	t = Thread.new { 
 c2014a49d1e30b9f6c135aaec1772a50	[1, 99, 2, 3]	class MyNum; def to_int; 1; end; end\nn = MyNum.new\na = [1,2,3]; a.insert(n, 99);
 c2165d7ba0399023a5673c5d758b88c0	"a:1 b:2 c:[3, {x: 100, y: 200}]"	def f\n          yield 1,2,3,x:100,y:200\n        end\n        \n\n        f
 c2223c03773eac42c8717805d9010dc8	[true, 15]	s = Random.new.bytes(15)\n        [s.is_a?(String), s.bytesize]\n        
+c2297d3bbbdb6d8e10eeee1e82f05261	[[1, 11, 21, 31], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 c23c0da3e526eae19f62c4292b4742ae	[1, 2, 3, 4]	(1..10).take_while { |i| i < 5 }
 c246464bb5079a22d329f9492e66ad21	2	"hello".byteindex("ll")
 c24e889e6534a23037c752be10f59b59	[false, "This", nil, " ", nil, "is", 1, "an", 3, " example", 10, " example str", 22, "str", "This is an example ", "ing", 2, 1, "g", 24, "g", true, ""]	require "strscan"\n        s = StringScanner.new("This is an example str
@@ -3540,6 +3546,7 @@ f45a984e81852dd82ce24d6cb475566a	[[[], {}], [[1, 2], {}], [[1], {x: 3}], [[5], {
 f45ca1bbef67b0bd784d12241e1f0ab4	[:foo, [1, 2, 3]]	class C\n          def method_missing(name, *args)\n            [name, ar
 f4666e0beb4a9dba2624be2b8454a53a	[[8080, "127.0.0.1"], "/tmp/x.sock", "ASCII-8BIT", :bad_family]	require "socket"\n            sa = Socket.pack_sockaddr_in(8080, "12
 f472802ede17f83a774ab175d4905fc9	[60, [10, 20, 30], [10, 20, 30], 1]	module AttrRef\n          refine String do\n            def x = 1\n       
+f48c1d81f2c731a88b44edd4cc2d898f	[[1, 21, 101], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 f497000bb152f7f24a2088c903bb0ecf	Array	class C < Array; end\nC[1,2].union([3]).class
 f4aa08105629d74597d023c3cdbec98f	["xAB", ["a", "b"], "stuvv", "ab", "qrq", false]	class SafeBuf < String\n          attr_reader :log\n          def concat(
 f4ad36c6de81d987a04ca9991fdecec4	["NilClass", "nil", "outer", "again"]	res = []\n        def f(res)\n          begin\n            raise "x"\n     
