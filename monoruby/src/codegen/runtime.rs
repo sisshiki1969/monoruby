@@ -2689,9 +2689,19 @@ pub(in crate::codegen) struct EnsureEndDispatch {
 /// spliced `break` / `return` so the compiled code can run its specialized
 /// teardown instead of re-raising through the generic unwind.
 ///
-pub(super) extern "C" fn ensure_end_spliced(vm: &mut Executor) -> EnsureEndDispatch {
+///
+/// *brk_next* / *ret_next*: for each kind, the host the exit is handed on
+/// to when another `ensure` is still owed on the way out, or null when
+/// this region's arm delivers it. See [`Executor::finish_ensure_spliced`]
+/// for the codes.
+///
+pub(super) extern "C" fn ensure_end_spliced(
+    vm: &mut Executor,
+    brk_next: Option<Lfp>,
+    ret_next: Option<Lfp>,
+) -> EnsureEndDispatch {
     let lfp = vm.cfp().lfp();
-    let (code, val) = vm.finish_ensure_spliced(lfp);
+    let (code, val) = vm.finish_ensure_spliced(lfp, brk_next, ret_next);
     EnsureEndDispatch { code, val }
 }
 

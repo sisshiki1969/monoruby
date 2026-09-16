@@ -417,16 +417,58 @@ the plain form (§6.1): a host's *normal* completion reaches it far more often
 than a spliced exit does, and with nothing parked for the frame the dispatch
 could only have answered "continue".
 
+With the hop at ~100 ns, chaining pays: a `break` crossing **two**
+intermediate `ensure`s went from 1.28 s (the generic unwind) to 0.83 s on the
+same 1.28M-exit benchmark whose no-`ensure` baseline is 0.63 s and whose
+one-host time is 0.75 s — the second hop costs about what the first does,
+where the generic unwind's second region had cost ~0.08 s on top of its
+~0.35 s entry. That arithmetic is why the hop had to be made cheap first: at
+the ~270 ns it cost before deliveries took the arm, a second hop would have
+lost to the generic path.
+
+**More than one `ensure` on the way out** chains hop by hop. `try_splice_exit`
+collects every host the unwind crosses (innermost first) and, once each has
+passed the checks below, records on each host's `EnsureEnd` what to do with
+the exit once its body has run (`SpliceHop`): every host but the last **hands
+it on** — `SplicedArm::Hop` re-keys the deferral on the next host (the mirror
+follows, so that host's `EnsureEnd` gate sees it), tears down to the frame the
+next host called and `ret`s the marker into its landing, which is the tail of
+the exit's own hop run from the `EnsureEnd` instead — and the last host
+**delivers** through the teardown arm as above (`SplicedArm::Final`). Each
+landing is requested on its host at the exit, all at once; hosts emit them as
+their own compiles resume, innermost host first, which is the order the
+recursion unwinds in anyway. The exit registers one return context, at the
+target, from the last host; a hand-on registers none, as the exit's own hop
+does not — the next host's landing is a branch edge of that host's CFG. A
+next host that can no longer be entered by compiled code (captured to the
+heap since) puts the error back in flight at that `EnsureEnd`, and the generic
+unwind resumes from there with every frame below it still intact.
+
+A host's arm is static — one destination per kind — so an exit that would
+route a kind through a host somewhere other than an exit already recorded is
+refused (`spliced_ensure_conflicts`; the second route used to be silently
+overwritten, a latent stage-2 bug with one host too).
+
+The route also carries **what the exit claimed about its value**. The value
+the delivering `EnsureEnd` hands over is the very one the exit left with (it
+rides the deferral unchanged), so the `ReturnState` the exit's own state made
+(`as_return`: the constant it is, or its class) holds at delivery. Each exit
+routed through a host joins its claim into the route, and the delivering host
+registers the joined claim — under *its own* invariants, since the `ensure`
+bodies ran in between — as the exit's return context at the target
+(`as_return_like`). The target's continuation therefore learns the class or
+the constant exactly as it would from a plain specialized `break` / `return`,
+and a spliced exit whose value agrees with the normal return path no longer
+collapses that join to `Value`. (It used to register `as_return_any`.)
+
 `try_splice_exit` refuses everything it cannot prove: a dispatch arm, a
 loop-rooted frame (whose compile may not cover the body), a `$!` restore
-owed anywhere on the way out, more than one `ensure` to run (chaining hop by
-hop is the natural extension — each `EnsureEnd` would tear down to the next
-host — but is not built), a body that is not a basic-block head, a body
-containing an exit of its own (`next` / `break` / `return` / `retry` /
-`redo`, which would leave the deferral parked past the frame) or a nested
-handler, and a host whose in-progress call site is not one of the two shapes
-that emit a landing. Every refusal falls back to the generic unwind, which
-handles every case.
+owed anywhere on the way out, a conflicting route through a host, a body that
+is not a basic-block head, a body containing an exit of its own (`next` /
+`break` / `return` / `retry` / `redo`, which would leave the deferral parked
+past the frame) or a nested handler, and a host whose in-progress call site is
+not one of the two shapes that emit a landing. Every refusal falls back to the
+generic unwind, which handles every case.
 
 Measured on the shape the issue names — a `break`-with-`ensure` that is the
 normal exit of an inner iteration inside a hot loop in the block's defining

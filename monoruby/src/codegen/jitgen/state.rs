@@ -780,12 +780,33 @@ impl AbstractFrame {
         }
     }
 
-    /// A return state with no compile-time claim about the value — for an
-    /// exit whose value is produced at runtime (a spliced `EnsureEnd`
-    /// delivering a deferred `break` / `return`, issue #1185).
+    /// A return state with no compile-time claim about the value.
     pub(super) fn as_return_any(&self) -> ReturnState {
         ReturnState {
             ret: ReturnValue::Value,
+            invariants: self.invariants.clone(),
+        }
+    }
+
+    /// [`Self::as_return`], but a slot with no value yet claims nothing
+    /// instead of being an error — for an exit that may be taken before
+    /// its operand is defined.
+    pub(super) fn as_return_or_any(&self, slot: SlotId) -> ReturnState {
+        match self.mode(slot) {
+            LinkMode::MaybeNone | LinkMode::None | LinkMode::V => self.as_return_any(),
+            _ => self.as_return(slot),
+        }
+    }
+
+    /// *claim*'s value claim under *this* state's invariants — for a
+    /// spliced non-local exit (issue #1185): the value the exit's
+    /// `EnsureEnd` delivers is exactly the one the exit had in its slot,
+    /// so the claim the exit's own state made about it holds at delivery;
+    /// the invariants do not travel, because the `ensure` bodies run in
+    /// between, and are this state's — the delivering `EnsureEnd`'s.
+    pub(super) fn as_return_like(&self, claim: &ReturnState) -> ReturnState {
+        ReturnState {
+            ret: claim.ret,
             invariants: self.invariants.clone(),
         }
     }

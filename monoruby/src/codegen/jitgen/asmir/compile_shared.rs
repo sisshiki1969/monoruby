@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::codegen::jitgen::deopt_log::DeoptCause;
-use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg};
+use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSplicedArm};
 
 impl Codegen {
     ///
@@ -1246,8 +1246,8 @@ impl Codegen {
             } => self.encode_linst(LInst::EnsureEnd {
                 pc,
                 loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
-                spliced_break: spliced_break.map(|o| o.unwrap_concrete()),
-                spliced_ret: spliced_ret.map(|o| o.unwrap_concrete()),
+                spliced_break: spliced_break.map(lower_spliced_arm),
+                spliced_ret: spliced_ret.map(lower_spliced_arm),
             }),
             // The same splice across an *intermediate* frame's `ensure`:
             // defer keyed on that frame, tear down to its call site and
@@ -2308,4 +2308,17 @@ pub(in crate::codegen::jitgen) extern "C" fn set_array_integer_index(
         .set_index(index, src)
         .map_err(|err| vm.set_error(err))
         .ok()
+}
+
+/// Resolve a [`SplicedArm`]'s offsets for the lowering (#1185).
+fn lower_spliced_arm(arm: SplicedArm) -> LSplicedArm {
+    match arm {
+        SplicedArm::Final { teardown } => LSplicedArm::Final {
+            teardown: teardown.unwrap_concrete(),
+        },
+        SplicedArm::Hop { host, callee } => LSplicedArm::Hop {
+            host: host.unwrap_concrete(),
+            callee: callee.unwrap_concrete(),
+        },
+    }
 }
