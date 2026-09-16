@@ -2835,9 +2835,17 @@ impl Codegen {
         // `entry_raise` surfaces the (error-less) state as a fatal — by
         // construction the runtime only returns codes for kinds this unit
         // spliced.
+        //
+        // The same one-word gate as the plain form first: the region's
+        // *normal* completion reaches this `EnsureEnd` far more often than
+        // a spliced exit does, and with no deferral parked for this frame
+        // the dispatch could only answer "continue".
         let cont = self.jit.label();
         let reraise = self.jit.label();
         monoasm! { &mut self.jit,
+            movq rdi, [rbx + (EXECUTOR_DEFERRED_TOP)];
+            cmpq rdi, r14;
+            jne  cont;
             movq rdi, rbx;
             movq rax, (runtime::ensure_end_spliced);
             call rax;
@@ -2989,6 +2997,7 @@ impl Codegen {
         kind: SplicedExitKind,
         host: usize,
         callee: usize,
+        expect: usize,
         pc: BytecodePtr,
     ) -> bool {
         let raise = self.entry_raise();
@@ -3001,6 +3010,8 @@ impl Codegen {
         monoasm! { &mut self.jit,
             lea  rcx, [rbp + (host)];
             movq rcx, [rcx - (BP_CFP + CFP_LFP)];
+            lea  r8, [rbp + (expect)];
+            movq r8, [r8 - (BP_CFP + CFP_LFP)];
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (f);

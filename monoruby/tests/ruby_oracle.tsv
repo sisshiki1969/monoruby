@@ -558,6 +558,7 @@
 260aadbc1eafcac4daf5a56eb84558cd	true	$/.frozen?
 260b6583e5dde4f43cbcd1c33fb20174	[true, false, 1, nil, 1, 2, 1, true, false, 1, 0, 0, 2, 1, 1, false, true, false, 0, 2, 2, "a", false, nil, 0]	ints = [1, 2, 3]\n        syms = [:a, :b]\n        flags = [nil, true, fa
 2635fffd46a3e17a2174ca9ccb6fc7a3	["-", "A"]	module UsingA\n              refine(String) { def tag; "A"; end }\n  
+26394858cf22ea1dd25c45363de66342	[[[10, :after], [20, :after], [30, :after], [:not_found, :after]], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 264b0263d3d2c06bbb4abdb266123919	[:missing_constant, "test message"]	e = NameError.new("test message", :missing_constant)\n            [e
 266e77b9e0f7c96253fed71dffed0fc7	:type_error	class BadAry\n          def to_ary; 42; end\n        end\n        begin\n  
 269718bdf89b8bdcb0901cb7e5ff324c	["nil", "outer"]	res = []\n        catch(:a) do\n          begin\n            raise "boom"\n
@@ -675,6 +676,7 @@
 2db4d01f98f00950e6e1a12fb9ef0acf	[21, "nil"]	def inner(a)\n          begin\n            a.each { |x| yield x }\n       
 2dd04b99ea4c74004cb7f6ebf42c571c	"ASCII-8BIT"	Regexp.new('([\\x00-\\xFF])', Regexp::IGNORECASE | Regexp::NOENCODING).encoding.to
 2de87dc95cc7a1a9c4edb24ea1657ff8	:nonpositive	begin; SizedQueue.new(0); rescue ArgumentError; :nonpositive; end\n 
+2debc56e3dbda46a2bbb885e9310661c	[[10, 20, 30], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 2e1334cbf1ce1ad1f0ead6825d8ea907	[nil, true, true, true, "", "x"]	require "io/wait"\n            r, w = IO.pipe\n            res = []\n 
 2e2f576be92d459836040d95a711ae05	[[42, 401], [99, 201]]	class Foo\n              BAR = 42\n              def get = BAR\n      
 2e3240715d51786905761f3b658e380a	["can't convert Object to Hash (Object#to_hash gives Integer)", "can't convert Object to Hash (Object#to_hash gives Integer)", "can't convert Object to Hash (Object#to_hash gives Integer)", "can't convert Object to Integer (Object#to_i gives String)", "can't convert Object to String (Object#to_str gives Float)", "can't convert Object to Array (Object#to_ary gives Symbol)"]	bad = Object.new\n        def bad.to_hash = 42\n        def bad.to_str = 
@@ -1217,6 +1219,7 @@
 5344f32f5c73af78489308d9a5575a7d	[["TypeError", "1 is not a symbol nor a string"], ["TypeError", "1 is not a symbol nor a string"], ["TypeError", "1 is not a symbol nor a string"]]	def try; yield; rescue => e; [e.class.to_s, e.message]; end\n       
 536366d9b0b405f788174be1f1a39cb3	[true, true, true, "\\e[1mx (\\e[1;4mRuntimeError\\e[m\\e[1m)\\e[m\\n\\e[1my\\e[m"]	res = []\n        begin\n          begin\n            raise "the cause"\n  
 538fe09e5b06e4ccde36d8fd223d3558	[ArgumentError, "Can't create Binding from C level Proc"]	begin\n          :to_s.to_proc.binding\n        rescue => e\n          [e.
+53955dc17535a7269220cd8814a051b8	[[[:fell, [:brk, 2]], [:ret, 1], [:ret, 3]], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 53a0e18814663d90c976b6d913746bc6	[true, :blocked_ok, :locked, :done]	require 'tmpdir'\n            path = File.join(Dir.tmpdir, "mrb_floc
 53b4a48788c7eb9435ed883b3ae1d2f3	[[2], 120]	$n = 0\n        def f(arr, t)\n          arr.each do |x|\n            begi
 53c684da33e546973dbfb03625ab4bc6	"Outer::Inner"	module Outer\n          class Inner\n            def self.name_test\n     
@@ -2194,6 +2197,7 @@
 9a22f6dc0c7579d2bfa1447443b56f1f	[42, "nil"]	def bar\n              begin\n                raise "err"\n           
 9a29e613d3183de95f2d0f2acb84a31a	[["ArgumentError", "step boom"], ["RuntimeError", "final boom"], [[3]], [[6]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 9a380b66d043485e0a0a37c95be6a53e	["LoadError", "nonexistent_file_that_does_not_exist_12345"]	begin\n              require "nonexistent_file_that_does_not_exist_1
+9a58b637620220adb6559dcd29ab4ce1	[[10, 20, 30, :not_found], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 9a6e41140cc5bce63cf4551de96c121c	[{a: 1, b: "x"}, 1, nil]	Fiber[:a] = 1\n            Fiber[:b] = "x"\n            [Fiber.curren
 9a7c12c16e1ba0fafa05ddfb9e353d1b	[7, 3]	def leaky\n          [1].each { return 9 }\n        ensure\n          retu
 9a932583042db11061d16bd05d100137	[1, 2, 3, 10, 11, 12, 13, 14]	a = [1, 2, 3]\n            seen = []\n            i = 0\n            a
@@ -2968,6 +2972,7 @@ cc8aebeeff87148f768f16c8f957f04b	[File, Errno::EEXIST, "hello\\nmore\\n", nil, "
 cca80bdce242e79abc49108091469b12	3	module MShip\n              class Widget\n                attr_reader
 ccd878c1f1810dfef13a53d1e1a05fb8	:te	begin; :sym.instance_eval { alias :foo :to_s }; :no; rescue TypeError; :te; end
 ccdd40701f9797edf931ec9bb16c3abf	[:alpha, 1.5, :beta, 2.5]	class PmF\n          def tag = :alpha\n          def rate = 1.5\n        e
+cce86af121005215daaa46f26558f5ee	[118.5, 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 ccebcacf1f0e521c283f27ea3d09e042	[[[:hit, 1], [:miss, 299]], :hit, :miss, :hit, :hit, :miss]	def probe(prev, key)\n              if prev == key\n                :
 ccee79e211a63a6f8408eaaa13a6aee9	[{a: 1}, [1, {a: 1}], {}, "no implicit conversion of Object into Hash", "can't convert Object to Hash (Object#to_hash gives Integer)"]	def f(**o) = o\n            def g(a, **o) = [a, o]\n            m = O
 ccf76894a3fb54890c63d16592556fa7	["pub0", "pri", "pro", 3, 42, "pub9", "pub1"]	class C\n          def pub(x) = "pub#{x}"\n          private def pri = "p
@@ -3353,6 +3358,7 @@ e874e1da171336c766ccb7c7051d0664	true	e = Exception.new\n            r = Marshal
 e88599070c8943da135687c83d834899	["SELECT a FROM t WHERE a = ? OR a = :n", "SELECT a FROM t WHERE a = NULL OR a = NULL", "SELECT a FROM t WHERE a = 42 OR a = 'x'", true, "SELECT a FROM t WHERE a = NULL OR a = NULL", true, 2, ["SQLite3::Exception", "SQLite3::Exception", "SQLite3::Exception", "SQLite3::Exception"]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 e889ad07ee40049b513a3a933fb0546e	["E2", [:inner, :outer]]	$log = []\n        def f\n          begin\n            begin\n             
 e8962f663b29be65e4e0dd56609acec4	[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 100]	def f\n                $res << 12.times { |x|\n                    $r
+e8aadf93260d71986addcb8ee351186b	[[:done], [1, 3], 40]	$n = 0\n        def inner(arr, &b)\n          begin\n            arr.each(
 e8ad34b388352ca80000e7df317bb41a	[42, true, true]	o = Object.new\n            def o.to_str; "value"; end\n            c
 e8bf25bb3eb8bcdf2410ac76264f9ea4	[1, 2]	Enumerator.new { |y| y << 1 << 2 }.to_a
 e8ceec0aa9d3d00513f0a88f084c31e2	[[[:a, 200], [:b, 200], [:c, 200]], :d, :blk]	class Da; def tag = :a; end\n            class Db; def tag(&blk) = b

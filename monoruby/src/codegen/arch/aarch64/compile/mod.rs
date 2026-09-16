@@ -3478,9 +3478,15 @@ impl Codegen {
         // whose `loop_jit_spill_bytes` is 0, so no sp-bump undo is owed on
         // any arm here — but keep the undo on the re-raise path anyway to
         // stay exactly equivalent to the plain form.
+        //
+        // Same gate as the plain form first: the normal completion is the
+        // common path. See x86 for the reasoning.
         let reraise = self.jit.label();
         let f = runtime::ensure_end_spliced as *const () as u64;
         monoasm_arm64!(&mut self.jit,
+            ldr x10, [x19, #(EXECUTOR_DEFERRED_TOP as u32)];
+            cmp x10, x22;
+            b.ne cont;
             mov x0, x19;             // vm
             str x30, [sp, #-16]!;
             mov x9, (f);
@@ -3648,6 +3654,7 @@ impl Codegen {
         kind: SplicedExitKind,
         host: usize,
         callee: usize,
+        expect: usize,
         pc: BytecodePtr,
     ) -> bool {
         let raise = self.entry_raise();
@@ -3663,6 +3670,9 @@ impl Codegen {
             mov x10, (host as u64);
             add x10, x29, x10;       // host frame base
             ldur x3, [x10, #(-((BP_CFP + CFP_LFP) as i32))];  // host LFP
+            mov x10, (expect as u64);
+            add x10, x29, x10;       // the static target's frame base
+            ldur x4, [x10, #(-((BP_CFP + CFP_LFP) as i32))];  // its LFP
             mov x0, x19;             // vm
             mov x1, x20;             // globals
             str x30, [sp, #-16]!;

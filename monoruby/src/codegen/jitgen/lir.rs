@@ -1062,6 +1062,9 @@ pub(in crate::codegen) enum LInst {
         kind: SplicedExitKind,
         host: usize,
         callee: usize,
+        /// Resolved rbp distance to the frame the exit's static target
+        /// is; its LFP is checked against the runtime-resolved target.
+        expect: usize,
         pc: BytecodePtr,
     },
     /// The host-side half: branch to `dest` when the return register

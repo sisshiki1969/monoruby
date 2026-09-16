@@ -436,6 +436,9 @@ impl AsmInfo {
 pub(in crate::codegen) struct SplicePlan {
     pub host: DynVarOffset,
     pub callee: DynVarOffset,
+    /// The frame the exit's target is in the JIT's layout — see
+    /// [`AsmInst::SplicedExitToOuter`]'s `expect`.
+    pub expect: DynVarOffset,
 }
 
 ///
@@ -2153,6 +2156,19 @@ impl<'a> JitContext<'a> {
         // the host called, whose `ret` lands at the host's call site.
         let host = self.specialized_ids_at_pos(host_pos);
         let callee = self.specialized_ids_at_pos(host_pos + 1);
+        // Where the exit ends up, as this compile laid the chain out: the
+        // host's `EnsureEnd` pops down to `target_pos` and `ret`s into
+        // its caller, so a `break` is delivered into the defining frame
+        // one below the popped iter frame, and a `return` returns from
+        // the popped home method itself. The runtime resolves the same
+        // target from the frame's *current* style (a block promoted to a
+        // lambda, a `define_method` body the static walk passed through)
+        // and refuses the splice — before any teardown — unless they
+        // agree.
+        let expect = self.specialized_ids_at_pos(match kind {
+            SplicedExitKind::Break => target_pos - 1,
+            SplicedExitKind::MethodReturn => target_pos,
+        });
         // The teardown returns into the host's call site with a *boxed*
         // marker in the return register, so every frame it flies over —
         // the one the host called above all, whose convention that call
@@ -2180,6 +2196,10 @@ impl<'a> JitContext<'a> {
             callee: DynVarOffset::Hint {
                 ids: callee.0,
                 extra: callee.1,
+            },
+            expect: DynVarOffset::Hint {
+                ids: expect.0,
+                extra: expect.1,
             },
         })
     }
@@ -2829,8 +2849,13 @@ impl<'a> JitContext<'a> {
                     *offset = DynVarOffset::Concrete(resolved);
                 }
             }
-            AsmInst::SplicedExitToOuter { host, callee, .. } => {
-                for off in [host, callee] {
+            AsmInst::SplicedExitToOuter {
+                host,
+                callee,
+                expect,
+                ..
+            } => {
+                for off in [host, callee, expect] {
                     if let DynVarOffset::Hint { ids, extra } = off {
                         let resolved = self.resolve_specialized_id_chain(ids) + *extra;
                         *off = DynVarOffset::Concrete(resolved);
