@@ -31,7 +31,36 @@ fn queue_regexp_warnings(regex: &Regex) {
 }
 
 #[derive(Debug, Default)]
-struct RegexCache(HashMap<(String, u32, OnigmoEncoding), Arc<Regex>>);
+struct RegexCache(HashMap<(String, u32, OnigmoEncoding), Arc<CachedRegex>>);
+
+/// A compiled pattern as the cache holds it, shared by every
+/// `RegexpInner` built from the same (pattern, option, encoding), with
+/// what is decided once per compiled pattern alongside it. Derefs to
+/// the engine.
+#[derive(Debug)]
+struct CachedRegex {
+    engine: Regex,
+    /// The 256-bit byte set of a pattern that is a single-byte class
+    /// (see [`RegexpInner::single_byte_class`]); `Some(None)` once
+    /// decided not to be one.
+    byte_class: std::sync::OnceLock<Option<[u64; 4]>>,
+}
+
+impl CachedRegex {
+    fn new(engine: Regex) -> Self {
+        Self {
+            engine,
+            byte_class: std::sync::OnceLock::new(),
+        }
+    }
+}
+
+impl std::ops::Deref for CachedRegex {
+    type Target = Regex;
+    fn deref(&self) -> &Regex {
+        &self.engine
+    }
+}
 
 impl RegexCache {
     fn new() -> Self {
@@ -44,7 +73,7 @@ pub struct Regexp(Value);
 
 #[derive(Clone, Debug)]
 pub struct RegexpInner {
-    regex: Arc<Regex>,
+    regex: Arc<CachedRegex>,
     /// The original regex *source* bytes, exactly as supplied (before
     /// `\u{}` expansion and without any escaping of non-UTF-8 input),
     /// in `declared_encoding`. The matching engine (`regex`) only ever
@@ -764,7 +793,7 @@ impl RegexpInner {
                 match Regex::new_with_option_and_encoding(&reg_str, onigmo_option, encoding) {
                     Ok(regexp) => {
                         queue_regexp_warnings(&regexp);
-                        let regex = Arc::new(regexp);
+                        let regex = Arc::new(CachedRegex::new(regexp));
                         entry.insert(regex.clone());
                         Ok(RegexpInner {
                             regex,
@@ -843,7 +872,7 @@ impl RegexpInner {
         if ascii && let Some(re) = self.ascii_engine() {
             re
         } else {
-            &self.regex
+            &self.regex.engine
         }
     }
 
@@ -909,6 +938,26 @@ impl RegexpInner {
             }
             Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
         }
+    }
+
+    /// The byte set of a pattern that matches exactly one ASCII
+    /// character from a fixed set — an alternation of single characters
+    /// (`>|<|&`), one bracket class (`[^*\-.0-9A-Z_a-z]`, `['&"<>]`),
+    /// or one literal character — as 256 bits, so that an ASCII-only
+    /// subject can be scanned with a table lookup per byte instead of
+    /// an `onig_search` per match. Decided once per regexp; anything
+    /// the classifier does not understand is "no", never a guess (see
+    /// [`single_byte_class_of`]).
+    pub(crate) fn single_byte_class(&self) -> Option<&[u64; 4]> {
+        // Classified from the engine's pattern (the cache key: the
+        // source with `\u{}` expanded), so every `RegexpInner` sharing
+        // the compiled pattern shares the answer.
+        self.regex
+            .byte_class
+            .get_or_init(|| {
+                single_byte_class_of(self.regex.engine.as_str().as_bytes(), self.regex.engine.option())
+            })
+            .as_ref()
     }
 
     pub fn captures_iter<'a>(&self, given: &'a str) -> FindCaptures<'_, 'a> {
@@ -1542,17 +1591,67 @@ impl RegexpInner {
             return Ok(None);
         }
         let given: &str = recv_inner.check_utf8()?;
+        // The replacement a hash value stands for: nil is the empty
+        // string, a String is itself, anything else would need `to_s`
+        // (`None`: the generic path's business).
+        let inner_of = |value: Value| -> Option<RStringInner> {
+            if value.is_nil() {
+                Some(RStringInner::from_str_scanned(""))
+            } else {
+                value.is_rstring_inner().cloned()
+            }
+        };
+
+        let mut replacements: Vec<(std::ops::Range<usize>, RStringInner)> = vec![];
+        // The groups of the last match: the region below is cleared by
+        // the search that finds nothing more, so they are copied out.
+        let mut last: smallvec::SmallVec<[Option<(usize, usize)>; 2]> = smallvec::SmallVec::new();
+        vm.clear_capture_special_variables();
+
+        if let Some(set) = self.single_byte_class()
+            && recv_inner.is_ascii_only()
+        {
+            // A single-byte class over an ASCII-only subject: every
+            // match is one byte, found by a table lookup; the engine is
+            // not entered at all. One key is looked up per distinct
+            // byte — the map cannot change under the scan, so the
+            // value is the same for every occurrence.
+            let bytes = given.as_bytes();
+            let mut seen: smallvec::SmallVec<[(u8, RStringInner); 8]> = smallvec::SmallVec::new();
+            for (i, &b) in bytes.iter().enumerate() {
+                if set[(b >> 6) as usize] & (1u64 << (b & 63)) == 0 {
+                    continue;
+                }
+                let rep = match seen.iter().find(|(sb, _)| *sb == b) {
+                    Some((_, rep)) => rep.clone(),
+                    None => {
+                        let key = string_substring(recv, i, i + 1);
+                        let Some(rep) = inner_of(hash.get(key, vm, globals)?.unwrap_or(miss)) else {
+                            return Ok(None);
+                        };
+                        seen.push((b, rep.clone()));
+                        rep
+                    }
+                };
+                replacements.push((i..i + 1, rep));
+            }
+            if let Some((range, _)) = replacements.last() {
+                last.push(Some((range.start, range.end)));
+            }
+            let is_empty = replacements.is_empty();
+            let res = RStringInner::splice_all(&globals.store, given, &replacements)?;
+            if !is_empty {
+                vm.set_match_regex(self.backref_regexp(re_val));
+                vm.save_capture_spans(&last, given);
+            }
+            return Ok(Some((res, !is_empty)));
+        }
 
         // Same walk as `replace_repeat`: past a non-empty match, and by
         // one Unicode scalar past an empty one (past EOS to terminate),
         // so the zero-width matches CRuby yields are all seen.
         let engine = self.engine_for(given, Some(given.is_ascii()));
         let mut region = onigmo_regex::Region::new();
-        let mut replacements: Vec<(std::ops::Range<usize>, RStringInner)> = vec![];
-        // The groups of the last match: the region is cleared by the
-        // search that finds nothing more, so they are copied out.
-        let mut last: smallvec::SmallVec<[Option<(usize, usize)>; 2]> = smallvec::SmallVec::new();
-        vm.clear_capture_special_variables();
         let mut pos = 0usize;
         while pos <= given.len() {
             let found = engine
@@ -1567,14 +1666,7 @@ impl RegexpInner {
             // carry a singleton `[]`: the probe is what CRuby's
             // `rb_hash_aref` does regardless.
             let key = string_substring(recv, start, end);
-            let value = hash.get(key, vm, globals)?.unwrap_or(miss);
-            let rep = if value.is_nil() {
-                RStringInner::from_str_scanned("")
-            } else if let Some(inner) = value.is_rstring_inner() {
-                inner.clone()
-            } else {
-                // Coerced with `to_s`, which can run Ruby: the generic
-                // path's business, from the top.
+            let Some(rep) = inner_of(hash.get(key, vm, globals)?.unwrap_or(miss)) else {
                 return Ok(None);
             };
             replacements.push((start..end, rep));
@@ -2144,6 +2236,253 @@ fn block_result_to_inner(
 /// (where `[]` returns `nil` because no default is set) are replaced
 /// with the empty string. Values are coerced via `Object#to_s` per
 /// CRuby.
+/// Classify a regexp source as a single-byte class: `Some(set)` when
+/// the pattern matches exactly one ASCII character from `set`, and
+/// nothing else, under `option` (Onigmo's bits). Accepted: a top-level
+/// alternation of one-character atoms, or a single such atom, where an
+/// atom is a literal character, a `\`-escaped punctuation character,
+/// a control escape (`\n` `\t` `\r` `\f` `\v` `\a` `\e`), `\xHH` below
+/// 0x80, one of `\d` `\w` `\s` `\h` and their negations (ASCII-only in
+/// Ruby), or a bracket class of those plus ranges (`a-z`), optionally
+/// negated. The `i` option folds ASCII case. Everything else — a
+/// quantifier, a group, an anchor, `.`, a POSIX or nested class, `&&`,
+/// `x` mode, a non-ASCII source — is `None`: this is a pure
+/// recognizer, never a guess, so the caller's scan stays exact.
+///
+/// The set is meant for ASCII-only subjects: a negated class also
+/// matches non-ASCII characters (as whole characters), which the byte
+/// table cannot express, so callers must not use it on any other.
+fn single_byte_class_of(src: &[u8], option: u32) -> Option<[u64; 4]> {
+    if src.is_empty() || !src.is_ascii() || option & onigmo_regex::ONIG_OPTION_EXTEND != 0 {
+        return None;
+    }
+    let mut set = [0u64; 4];
+    let mut i = 0;
+    loop {
+        i = byte_class_atom(src, i, &mut set)?;
+        // A quantifier would make the atom match more than one byte.
+        if i < src.len() && matches!(src[i], b'*' | b'+' | b'?' | b'{') {
+            return None;
+        }
+        if i == src.len() {
+            break;
+        }
+        if src[i] != b'|' {
+            return None;
+        }
+        i += 1;
+        if i == src.len() {
+            // A trailing `|` is an empty alternative: zero-width.
+            return None;
+        }
+    }
+    if option & onigmo_regex::ONIG_OPTION_IGNORECASE != 0 {
+        for c in b'a'..=b'z' {
+            let u = c.to_ascii_uppercase();
+            if byte_set_has(&set, c) || byte_set_has(&set, u) {
+                byte_set_add(&mut set, c);
+                byte_set_add(&mut set, u);
+            }
+        }
+    }
+    Some(set)
+}
+
+fn byte_set_has(set: &[u64; 4], b: u8) -> bool {
+    set[(b >> 6) as usize] & (1u64 << (b & 63)) != 0
+}
+
+fn byte_set_add(set: &mut [u64; 4], b: u8) {
+    set[(b >> 6) as usize] |= 1u64 << (b & 63);
+}
+
+/// One character-or-class item of a pattern, as [`single_byte_class_of`]
+/// understands it.
+enum ByteClassItem {
+    /// One byte.
+    Byte(u8),
+    /// A predefined class (`\d` and friends), already as a set.
+    Set([u64; 4]),
+}
+
+/// Parse one top-level atom of `src` at `i` into `set`; the index past
+/// it, or `None` for anything that is not a one-byte atom.
+fn byte_class_atom(src: &[u8], i: usize, set: &mut [u64; 4]) -> Option<usize> {
+    match src[i] {
+        b'[' => byte_class_bracket(src, i + 1, set),
+        // Groups, quantifiers, anchors, any-char, an empty alternative
+        // or a stray `]`.
+        b'(' | b')' | b'*' | b'+' | b'?' | b'{' | b'}' | b'^' | b'$' | b'.' | b'|' | b']' => None,
+        _ => {
+            let (item, next) = byte_class_char(src, i)?;
+            match item {
+                ByteClassItem::Byte(b) => byte_set_add(set, b),
+                ByteClassItem::Set(s) => {
+                    for (d, x) in set.iter_mut().zip(s) {
+                        *d |= x;
+                    }
+                }
+            }
+            Some(next)
+        }
+    }
+}
+
+/// Parse a bracket class whose body starts at `i` (just past the `[`)
+/// into `set`; the index past the closing `]`.
+fn byte_class_bracket(src: &[u8], mut i: usize, set: &mut [u64; 4]) -> Option<usize> {
+    let negate = src.get(i) == Some(&b'^');
+    if negate {
+        i += 1;
+    }
+    let mut class = [0u64; 4];
+    let mut any = false;
+    loop {
+        match *src.get(i)? {
+            b']' if any => break,
+            // An empty class, a nested or POSIX class, an intersection.
+            b']' | b'[' => return None,
+            b'&' if src.get(i + 1) == Some(&b'&') => return None,
+            _ => {}
+        }
+        let (item, next) = byte_class_char(src, i)?;
+        any = true;
+        i = next;
+        match item {
+            ByteClassItem::Set(s) => {
+                for (d, x) in class.iter_mut().zip(s) {
+                    *d |= x;
+                }
+            }
+            // `a-z`: a range, unless the `-` is the last character
+            // before `]` (then it is a literal, added on the next turn).
+            ByteClassItem::Byte(lo) if src.get(i) == Some(&b'-') && src.get(i + 1) != Some(&b']') => {
+                if lo == b'-' {
+                    return None;
+                }
+                let (hi, next) = byte_class_char(src, i + 1)?;
+                let ByteClassItem::Byte(hi) = hi else {
+                    return None;
+                };
+                if lo > hi {
+                    return None;
+                }
+                for b in lo..=hi {
+                    byte_set_add(&mut class, b);
+                }
+                i = next;
+            }
+            ByteClassItem::Byte(b) => byte_set_add(&mut class, b),
+        }
+    }
+    if negate {
+        // Within ASCII: the callers only ever scan ASCII-only subjects.
+        class[0] = !class[0];
+        class[1] = !class[1];
+        class[2] = 0;
+        class[3] = 0;
+    }
+    for (d, x) in set.iter_mut().zip(class) {
+        *d |= x;
+    }
+    Some(i + 1)
+}
+
+/// Parse one character (literal or escaped) or predefined class at
+/// `i`; `None` for any escape the recognizer does not know.
+fn byte_class_char(src: &[u8], i: usize) -> Option<(ByteClassItem, usize)> {
+    let c = *src.get(i)?;
+    if c != b'\\' {
+        return Some((ByteClassItem::Byte(c), i + 1));
+    }
+    let e = *src.get(i + 1)?;
+    let byte = |b: u8| Some((ByteClassItem::Byte(b), i + 2));
+    let class = |members: &dyn Fn(u8) -> bool, negate: bool| {
+        let mut s = [0u64; 4];
+        for b in 0u8..128 {
+            if members(b) != negate {
+                byte_set_add(&mut s, b);
+            }
+        }
+        Some((ByteClassItem::Set(s), i + 2))
+    };
+    match e {
+        b'n' => byte(b'\n'),
+        b't' => byte(b'\t'),
+        b'r' => byte(b'\r'),
+        b'f' => byte(0x0c),
+        b'v' => byte(0x0b),
+        b'a' => byte(0x07),
+        b'e' => byte(0x1b),
+        b'd' | b'D' => class(&|b| b.is_ascii_digit(), e == b'D'),
+        b'w' | b'W' => class(&|b| b.is_ascii_alphanumeric() || b == b'_', e == b'W'),
+        b's' | b'S' => class(&|b| matches!(b, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'), e == b'S'),
+        b'h' | b'H' => class(&|b| b.is_ascii_hexdigit(), e == b'H'),
+        b'x' => {
+            let hex = |k: usize| src.get(i + 2 + k).and_then(|d| (*d as char).to_digit(16));
+            let d0 = hex(0)?;
+            match hex(1) {
+                Some(d1) => {
+                    let v = d0 * 16 + d1;
+                    (v < 0x80).then(|| (ByteClassItem::Byte(v as u8), i + 4))
+                }
+                None => Some((ByteClassItem::Byte(d0 as u8), i + 3)),
+            }
+        }
+        // `\b` `\A` `\z` `\p{..}` `\k<..>` `\1` `\cX` `\u...` and the rest.
+        _ if e.is_ascii_alphanumeric() => None,
+        // An escaped punctuation character stands for itself.
+        _ => byte(e),
+    }
+}
+
+#[cfg(test)]
+mod byte_class_tests {
+    use super::single_byte_class_of;
+
+    fn members(src: &str, option: u32) -> Option<Vec<u8>> {
+        single_byte_class_of(src.as_bytes(), option)
+            .map(|set| (0u8..=255).filter(|b| super::byte_set_has(&set, *b)).collect())
+    }
+
+    #[test]
+    fn accepts_single_byte_classes() {
+        assert_eq!(members(">|<|&", 0), Some(b"&<>".to_vec()));
+        assert_eq!(members("['&\\\"<>]", 0), Some(b"\"&'<>".to_vec()));
+        assert_eq!(members("a", 0), Some(b"a".to_vec()));
+        assert_eq!(members("\\.", 0), Some(b".".to_vec()));
+        assert_eq!(members("[a-c]", 0), Some(b"abc".to_vec()));
+        assert_eq!(members("[-a]", 0), Some(b"-a".to_vec()));
+        assert_eq!(members("[a-]", 0), Some(b"-a".to_vec()));
+        assert_eq!(members("[\\-a]", 0), Some(b"-a".to_vec()));
+        assert_eq!(members("\\d", 0), Some(b"0123456789".to_vec()));
+        assert_eq!(members("[\\s]", 0), Some(b"\t\n\x0b\x0c\r ".to_vec()));
+        assert_eq!(members("\\x41|\\x2", 0), Some(b"\x02A".to_vec()));
+        assert_eq!(members("a\\|b", 0), None);
+        let uri = members("[^*\\-.0-9A-Z_a-z]", 0).unwrap();
+        assert!(uri.contains(&b'/') && uri.contains(&b' ') && uri.contains(&0));
+        assert!(!uri.contains(&b'-') && !uri.contains(&b'*') && !uri.contains(&b'Z'));
+        assert!(!uri.contains(&0x80) && !uri.contains(&0xff));
+        assert_eq!(
+            members("[a-c]", onigmo_regex::ONIG_OPTION_IGNORECASE),
+            Some(b"ABCabc".to_vec())
+        );
+        assert_eq!(members("\\D", 0).map(|v| v.len()), Some(128 - 10));
+    }
+
+    #[test]
+    fn rejects_anything_else() {
+        for src in [
+            "", "a+", "a*", "a?", "a{1}", "[ab]+", "ab", "a|bc", "(a)", "(?:a)", ".", "^a", "a$",
+            "\\A", "\\ba", "\\1", "\\u0041", "\\p{Alpha}", "[[:alpha:]]", "[a[b]]", "[a&&b]",
+            "[]", "[^]", "[z-a]", "a|", "|a", "[--a]", "\\x80", "\\cA", "é", "[é]", "\\M-a",
+        ] {
+            assert_eq!(members(src, 0), None, "{src:?}");
+        }
+        assert_eq!(members("a", onigmo_regex::ONIG_OPTION_EXTEND), None);
+    }
+}
+
 /// The replacement `hash_val` yields for the matched text `key`: CRuby's
 /// `rb_hash_aref` followed by `rb_obj_as_string`. `rb_hash_aref` reads
 /// the map directly — a redefined `Hash#[]`, on a subclass, a singleton
@@ -2299,7 +2638,7 @@ mod regex_cache_tests {
 
     #[test]
     fn cache_hit_returns_same_arc() {
-        // First call lands in the Vacant arm and inserts an Arc<Regex>;
+        // First call lands in the Vacant arm and inserts an Arc<CachedRegex>;
         // second call lands in the Occupied arm and clones the same
         // Arc back out. Both pass through the cache lookup chain
         // (`REGEX_CACHE.write().unwrap().0.entry(...)`), exercising
@@ -2310,14 +2649,14 @@ mod regex_cache_tests {
             .expect("second compile");
         assert!(
             Arc::ptr_eq(&r1.regex, &r2.regex),
-            "second compile should reuse the cached Arc<Regex>",
+            "second compile should reuse the cached Arc<CachedRegex>",
         );
     }
 
     #[test]
     fn cache_miss_for_different_source() {
         // Distinct source strings hash to distinct cache keys, so each
-        // gets its own Arc<Regex>.
+        // gets its own Arc<CachedRegex>.
         let r1 = RegexpInner::with_option_and_encoding(SRC_MISS_A, 0, OnigmoEncoding::UTF8)
             .expect("compile A");
         let r2 = RegexpInner::with_option_and_encoding(SRC_MISS_B, 0, OnigmoEncoding::UTF8)

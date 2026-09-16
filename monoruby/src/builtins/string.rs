@@ -3095,7 +3095,13 @@ fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// helpers (`replace_all`, `replace_one`, etc.) build their output
 /// `RStringInner` as UTF-8 by default; this restores the original
 /// receiver's declared encoding so `gsub`/`sub`/`scan` results
-/// inherit it instead of silently switching to UTF-8.
+/// inherit it instead of silently switching to UTF-8 — except where
+/// CRuby's append rules (`rb_enc_cr_str_buf_cat`) let a replacement
+/// decide: a result that `splice_all` already settled on a
+/// replacement's encoding (non-ASCII content in, say, BINARY, over a
+/// 7-bit receiver) keeps it, and so does UTF-8 when a 7-bit receiver
+/// in another ASCII-compatible encoding picked up non-ASCII UTF-8
+/// content from a replacement.
 fn apply_template_encoding(result: &mut RStringInner, template: Value) {
     if let Some(t) = template.is_rstring_inner() {
         if t.needs_byte_mapping() {
@@ -3108,7 +3114,14 @@ fn apply_template_encoding(result: &mut RStringInner, template: Value) {
                 return;
             }
         }
-        result.set_encoding(t.encoding());
+        let t_enc = t.encoding();
+        if result.encoding() != Encoding::Utf8 || t_enc == Encoding::Utf8 {
+            return;
+        }
+        if t.is_ascii_only() && !result.is_ascii_only() {
+            return;
+        }
+        result.set_encoding(t_enc);
     }
 }
 
@@ -10831,6 +10844,51 @@ mod tests {
             r##"k = "x" * 40; (k + "y" + k).gsub(/x+/, k => "K")"##,
             r##""\xff\xfeab".b.gsub(/a/n, "a" => "Z").bytes"##,
             r##"s = "abc".freeze; begin; s.gsub!(/a/, "a" => "b"); rescue => e; e.class; end"##,
+        ]);
+    }
+
+    #[test]
+    fn gsub_hash_single_byte_class_scan() {
+        // A pattern that is one ASCII character from a fixed set (an
+        // alternation of single characters, a bracket class, `\d` and
+        // friends, case-folded under `i`) over an ASCII-only subject is
+        // scanned with a byte table, never entering the regex engine;
+        // `$~` still describes the last match. Patterns the recognizer
+        // must decline (quantifiers, groups, `.`, anchors, POSIX
+        // classes, `x` mode) and subjects it must decline (non-ASCII,
+        // where a negated class matches whole characters) take the
+        // engine, with the same answers.
+        run_tests(&[
+            r##"s = '{"a":"<b>&c</b>"}'; [s.gsub(/>|<|&/, ">" => "G", "<" => "L", "&" => "A"), $~.to_a, $~.begin(0), $~.regexp.source]"##,
+            r##""aAbBcC".gsub(/[ab]/i, "a" => "1", "A" => "2", "b" => "3", "B" => "4")"##,
+            r##""aAbB".gsub(/a|B/i, "a" => "1", "A" => "2", "b" => "3", "B" => "4")"##,
+            r##""a1b22c".gsub(/\d/, "1" => "one", "2" => "two")"##,
+            r##""a1b2".gsub(/\D/, "a" => "A")"##,
+            r##""a b\tc\nd".gsub(/\s/, " " => "_", "\t" => "T", "\n" => "N")"##,
+            r##""a-b*c d/e".gsub(/[^*\-.0-9A-Z_a-z]/, " " => "%20", "/" => "%2F")"##,
+            r##""a bücあ".gsub(/[^*\-.0-9A-Z_a-z]/, " " => "%20", "ü" => "U", "あ" => "A")"##,
+            r##""aüb".gsub(/[^a-z]/, {})"##,
+            r##""a.b-c]d[e\\f".gsub(/[\.\-\]\[\\]/, "." => "1", "-" => "2", "]" => "3", "[" => "4", "\\" => "5")"##,
+            r##""a-z_".gsub(/[a-]/, "a" => "A", "-" => "D")"##,
+            r##""A\x02b".gsub(/\x41|\x2/, "A" => "x", "\x02" => "y")"##,
+            r##""a b".gsub(/a | b/x, "a" => "1", "b" => "2")"##,
+            r##""aab".gsub(/a+/, "aa" => "X", "a" => "Y")"##,
+            r##""ab".gsub(/(a)/, "a" => "X"); [$1, $~.to_a]"##,
+            r##""a\nb".gsub(/./, "a" => "1", "b" => "2")"##,
+            r##""a1".gsub(/[[:alpha:]]/, "a" => "X")"##,
+            r##""aa".gsub(/^a/, "a" => "X")"##,
+            r##""".gsub(/a/, "a" => "X")"##,
+            r##""xyz".gsub(/[ab]/, "a" => "X"); $~"##,
+            r##""a-b-c".gsub(/-/, "-" => "+"); [$~.begin(0), $~.end(0), $`, $', $&]"##,
+            r##"s = "a-b".freeze; begin; s.gsub!(/-/, "-" => "+"); rescue => e; e.class; end"##,
+            r##"("<" * 20 + ">" * 20).gsub(/<|>/, "<" => "L", ">" => "G")"##,
+            r##""aé".gsub(/[aé]/, "a" => "1", "é" => "2")"##,
+            r##""a".gsub(/a/, "a" => "é").encoding.to_s"##,
+            // A BINARY replacement with non-ASCII content: the result
+            // takes its encoding (`splice_all`).
+            r##"r = "a-b".gsub(/-/, "-" => "\xff".b); [r.bytes, r.encoding.to_s]"##,
+            r##"r = "a-b".gsub(/-/, "-" => "\xff".b, "b" => "c"); [r.bytes, r.encoding.to_s]"##,
+            r##"begin; "a-bé".gsub(/-/, "-" => "\xff".b); rescue => e; e.class; end"##,
         ]);
     }
 
