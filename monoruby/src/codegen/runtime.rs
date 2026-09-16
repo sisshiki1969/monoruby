@@ -2696,34 +2696,20 @@ pub(super) extern "C" fn ensure_end_spliced(vm: &mut Executor) -> EnsureEndDispa
 }
 
 ///
-/// JIT splice of a `break` written inside its own frame's protected
-/// region (issue #1185): build the break error exactly as
-/// [`err_block_break`] would, then *defer* it for this frame — the
-/// compiled code jumps straight into the shared `ensure` body, whose
-/// `EnsureEnd` ([`ensure_end_spliced`]) delivers the break through the
-/// specialized teardown. Returns 0 on success; non-zero when the error
-/// degenerated (e.g. `LocalJumpError` for a proc-escaped block), in which
-/// case the error is left in-flight and the caller must raise generically
-/// from the exit's own pc.
+/// JIT splice of a `break` whose `ensure` body sits in an *intermediate*
+/// frame of the inlined chain (issue #1185): build the break error exactly
+/// as [`err_block_break`] would, then *defer* it keyed on that frame's LFP
+/// — `host`, computed at the exit site from the frame chain — rather than
+/// on the exiting block's. The error itself is built here, where
+/// `vm.cfp()` is the exiting frame and `err_block_break` can resolve the
+/// break's target from it; the machine-level teardown down to `host` runs
+/// afterwards, on success only, and the host's `EnsureEnd`
+/// ([`ensure_end_spliced`]) delivers the break through the specialized
+/// teardown.
 ///
-pub(super) extern "C" fn defer_block_break(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    val: Value,
-) -> usize {
-    let lfp = vm.cfp().lfp();
-    defer_block_break_at(vm, globals, val, lfp)
-}
-
-///
-/// The cross-frame form of [`defer_block_break`] (issue #1185, stage 2):
-/// the `ensure` body that must run sits in an *intermediate* frame of the
-/// inlined chain, so the deferral is keyed on that frame's LFP — `host`,
-/// computed at the exit site from the frame chain — rather than on the
-/// exiting block's. The error itself is still built here, where `vm.cfp()`
-/// is the exiting frame and `err_block_break` can resolve the break's
-/// target from it; the machine-level teardown down to `host` runs
-/// afterwards, on success only.
+/// Returns 0 on success; non-zero when the error degenerated (e.g.
+/// `LocalJumpError` for a proc-escaped block), in which case it is left
+/// in-flight and the caller must raise generically from the exit's own pc.
 ///
 pub(super) extern "C" fn defer_block_break_at(
     vm: &mut Executor,
@@ -2764,23 +2750,11 @@ fn host_can_receive_splice(host: Lfp) -> bool {
 }
 
 ///
-/// The non-local-`return` twin of [`defer_block_break`]: build the
-/// method-return error as [`err_method_return`] would and defer it. The
-/// degenerate outcomes (`LocalJumpError` across a thread barrier or a
-/// class body) stay in-flight and return non-zero for the generic raise.
-///
-pub(super) extern "C" fn defer_method_return(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    val: Value,
-) -> usize {
-    let lfp = vm.cfp().lfp();
-    defer_method_return_at(vm, globals, val, lfp)
-}
-
-///
-/// The `host`-keyed twin of [`defer_block_break_at`] for a non-local
-/// `return` spliced across an intermediate frame's `ensure` (#1185).
+/// The non-local-`return` twin of [`defer_block_break_at`]: build the
+/// method-return error as [`err_method_return`] would and defer it keyed
+/// on the host frame. The degenerate outcomes (`LocalJumpError` across a
+/// thread barrier or a class body) stay in-flight and return non-zero for
+/// the generic raise.
 ///
 pub(super) extern "C" fn defer_method_return_at(
     vm: &mut Executor,

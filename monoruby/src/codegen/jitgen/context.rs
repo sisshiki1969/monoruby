@@ -420,19 +420,22 @@ impl AsmInfo {
 /// How a JIT-spliced non-local exit reaches the `ensure` body it must run
 /// (issue #1185) — see [`JitContext::try_splice_exit`].
 ///
-pub(in crate::codegen) enum SplicePlan {
-    /// The region belongs to the frame being compiled: branch into its
-    /// shared `ensure` body (stage 1, #1187).
-    SameFrame { dest_bb: BasicBlockId },
-    /// The region belongs to a suspended frame the unwind crosses: tear
-    /// down to that frame's in-progress call site and land there (stage
-    /// 2). Both offsets are distances from the current rbp — to the host
-    /// frame (whose LFP keys the deferral) and to the frame the host
-    /// called (where the teardown's `leave; ret` returns from).
-    Outer {
-        host: DynVarOffset,
-        callee: DynVarOffset,
-    },
+/// The region belongs to a *suspended* frame the unwind crosses: tear down
+/// to that frame's in-progress call site and land there. Both offsets are
+/// distances from the current rbp — to the host frame (whose LFP keys the
+/// deferral) and to the frame the host called (where the teardown's
+/// `leave; ret` returns from).
+///
+/// There was a second shape, `SameFrame`: the region belonging to the
+/// frame being compiled, reached by an ordinary forward branch into its
+/// shared `ensure` body (stage 1, #1187). It became unreachable when
+/// bytecodegen started replaying a frame's own `ensure` bodies inline
+/// ahead of the exit (#1370) — the exit then crosses no region of its own
+/// — and was removed.
+///
+pub(in crate::codegen) struct SplicePlan {
+    pub host: DynVarOffset,
+    pub callee: DynVarOffset,
 }
 
 ///
@@ -2056,16 +2059,15 @@ impl<'a> JitContext<'a> {
     /// abstract interpreter) and skips the whole generic unwind /
     /// chain-deopt / VM stint.
     ///
-    /// Two shapes, by which frame owns the region:
+    /// The region is owned by a *suspended* frame the unwind crosses. Its
+    /// `ensure` body is ordinary compiled code too, but of a frame whose
+    /// compile is parked at the call that leads here, so the exit tears
+    /// the machine frames down to that call and returns into it tagged;
+    /// the landing there branches into the body.
     ///
-    /// * [`SplicePlan::SameFrame`] — the exit's own frame (stage 1). The
-    ///   body is a block of the iseq being compiled, so an ordinary
-    ///   forward branch reaches it.
-    /// * [`SplicePlan::Outer`] — a *suspended* frame the unwind crosses
-    ///   (stage 2). Its `ensure` body is ordinary compiled code too, but
-    ///   of a frame whose compile is parked at the call that leads here,
-    ///   so the exit tears the machine frames down to that call and
-    ///   returns into it tagged; the landing there branches into the body.
+    /// The exit's *own* frame is never a host: bytecodegen replays that
+    /// frame's `ensure` bodies inline ahead of the exit (#1370), so
+    /// `covering_ensure` names nothing there.
     ///
     /// `None` refuses and the caller falls back to the generic lowering,
     /// which handles every case.
@@ -2104,11 +2106,7 @@ impl<'a> JitContext<'a> {
         if !self.iseq().errinfo_restore_slots(bc_pos).is_empty() {
             return None;
         }
-        let mut hosts = if self.iseq().covering_ensure(bc_pos).is_some() {
-            vec![current_pos]
-        } else {
-            vec![]
-        };
+        let mut hosts = vec![];
         for pos in (target_pos..current_pos).rev() {
             let frame = &self.stack_frame[pos];
             let pc = self.store[frame.callid?].bc_pos;
@@ -2124,18 +2122,21 @@ impl<'a> JitContext<'a> {
         // More than one: chaining hop by hop is the natural extension of
         // this protocol (each `EnsureEnd` would tear down to the next
         // host instead of to the target), but stage 2 does one.
-        if hosts.len() != 1 {
+        //
+        // The exit's *own* frame is never a host — bytecodegen replays its
+        // regions inline ahead of the exit (#1370), so `covering_ensure`
+        // names nothing there — but the loop above deliberately leaves it
+        // out and this refuses if it ever has one, rather than assuming.
+        // The stage-1 splice that used to serve that case is gone, and the
+        // code below would index `current_pos + 1`, off the end of the
+        // frame stack.
+        if hosts.len() != 1 || self.iseq().covering_ensure(bc_pos).is_some() {
             return None;
         }
         let host_pos = hosts[0];
-        if host_pos == current_pos {
-            let (dest_bb, end) = self.spliceable_ensure_region(self.iseq_id(), bc_pos)?;
-            self.record_spliced_ensure(current_pos, end, kind, target_pos);
-            return Some(SplicePlan::SameFrame { dest_bb });
-        }
-        // Stage 2. The host is suspended at the call that (transitively)
-        // reached this exit; its landing rides on that call site, which
-        // must be one of the two shapes that emit one.
+        // The host is suspended at the call that (transitively) reached
+        // this exit; its landing rides on that call site, which must be
+        // one of the two shapes that emit one.
         if !self.stack_frame[host_pos].landing_sink {
             return None;
         }
@@ -2171,7 +2172,7 @@ impl<'a> JitContext<'a> {
             SplicedExitKind::Break => landing.1 = true,
             SplicedExitKind::MethodReturn => landing.2 = true,
         }
-        Some(SplicePlan::Outer {
+        Some(SplicePlan {
             host: DynVarOffset::Hint {
                 ids: host.0,
                 extra: host.1,

@@ -1249,11 +1249,6 @@ impl Codegen {
                 spliced_break: spliced_break.map(|o| o.unwrap_concrete()),
                 spliced_ret: spliced_ret.map(|o| o.unwrap_concrete()),
             }),
-            // A spliced non-local exit defers its unwind and falls through to
-            // the branch into the shared `ensure` body (#1185).
-            AsmInst::DeferSplicedExit { kind, pc } => {
-                self.encode_linst(LInst::DeferSplicedExit { kind, pc })
-            }
             // The same splice across an *intermediate* frame's `ensure`:
             // defer keyed on that frame, tear down to its call site and
             // return into it tagged (#1185, stage 2).
@@ -2131,9 +2126,6 @@ impl Codegen {
                 spliced_ret,
             } => {
                 self.emit_ensure_end(pc, loop_jit_spill_bytes, spliced_break, spliced_ret);
-            }
-            LInst::DeferSplicedExit { kind, pc } => {
-                self.emit_defer_spliced_exit(kind, pc);
             }
             LInst::SplicedExitToOuter {
                 kind,

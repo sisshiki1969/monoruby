@@ -168,7 +168,6 @@ impl Codegen {
             | AsmInst::Retry(..)
             | AsmInst::Redo(..)
             | AsmInst::EnsureEnd { .. }
-            | AsmInst::DeferSplicedExit { .. }
             | AsmInst::SplicedExitToOuter { .. }
             | AsmInst::SplicedExitLanding { .. }
             | AsmInst::Yield { .. }
@@ -2966,36 +2965,6 @@ impl Codegen {
                 movq [rbp - (off)], rax;
             },
         }
-        true
-    }
-
-    /// A JIT-spliced non-local exit (#1185): build and defer the exit's
-    /// unwind (value in rdx) so the following compiled branch enters the
-    /// shared `ensure` body directly. A degenerate outcome (the runtime
-    /// helper returns non-zero, error left in-flight) raises generically
-    /// from the exit's own pc.
-    pub(in crate::codegen::jitgen) fn emit_defer_spliced_exit(
-        &mut self,
-        kind: SplicedExitKind,
-        pc: BytecodePtr,
-    ) -> bool {
-        let raise = self.entry_raise();
-        let f = match kind {
-            SplicedExitKind::Break => runtime::defer_block_break as *const u8,
-            SplicedExitKind::MethodReturn => runtime::defer_method_return as *const u8,
-        };
-        let cont = self.jit.label();
-        monoasm! { &mut self.jit,
-            movq rdi, rbx;
-            movq rsi, r12;
-            movq rax, (f);
-            call rax;
-            testq rax, rax;
-            jz   cont;
-            movq r13, (pc.as_ptr());
-            jmp  raise;
-        cont:
-        };
         true
     }
 

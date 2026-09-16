@@ -1739,17 +1739,6 @@ pub(super) enum AsmInst {
         spliced_ret: Option<DynVarOffset>,
     },
     ///
-    /// A JIT-spliced non-local exit (issue #1185): build and *defer* the
-    /// break / method-return error for the value in rax, so the compiled
-    /// jump that follows (emitted by the driver's `Branch` handling) can
-    /// enter the shared `ensure` body directly. When the error degenerates
-    /// (e.g. `LocalJumpError`), fall back to the generic raise from `pc`.
-    ///
-    DeferSplicedExit {
-        kind: SplicedExitKind,
-        pc: BytecodePtr,
-    },
-    ///
     /// A JIT-spliced non-local exit whose `ensure` body lives in an
     /// *intermediate* frame of the inlined chain (issue #1185, stage 2).
     ///
