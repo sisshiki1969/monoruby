@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-07e2ef8b.js";
+            window.path_to_searchindex_js = "searchindex-4ce5193a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -11211,9 +11211,44 @@ count would, since the generator’s truncated stack gives it the same depth as
 the region whose body it is in.</p>
 <p>Spans nest, too (an ensure body may hold an exit that replays further bodies),
 so a pc is checked against <em>every</em> span covering it, not just the innermost.
-<code>errinfo_restore_slots</code> is deliberately left outside this filter: it is keyed
-on rescue-<em>clause</em> spans and is only ever asked about the exit instruction’s
-own pc, which no replay span covers.</p>
+<code>errinfo_restore_slots</code> takes the same cut for the same reason — a replayed
+body is preceded by its region’s <code>$!</code> restore, so restoring again on the way
+out would undo whatever the body did to <code>$!</code> — but it cannot go through
+<code>active_entries</code>, because it is keyed on the rescue <em>clause</em> spans rather than
+the region spans. It applies the replay-span filter directly
+(<code>ISeqInfo::is_replayed_at</code>).</p>
+<h3 id="65-non-local-exits-replay-their-own-frame-inline-issue-1185"><a class="header" href="#65-non-local-exits-replay-their-own-frame-inline-issue-1185">6.5 Non-local exits replay their own frame inline (issue #1185)</a></h3>
+<p>A <code>break</code> out of a block and a non-local <code>return</code> were the last exits that left
+the job to <code>handle_error</code>: the unwinder found the covering region, deferred the
+exit, ran the body interpreted, and re-delivered it from <code>EnsureEnd</code>. That is
+what §6.3’s splice machinery was built to compile around.</p>
+<p>They now replay their own frame’s open regions inline, exactly as <code>emit_ret</code>
+does for a local <code>return</code> — same set, same order, same <code>$!</code> protocol
+(<code>gen_method_return</code> / <code>gen_block_break</code> → <code>replay_ensures_for_nonlocal_exit</code>).
+With the bodies emitted ahead of the exit there is nothing left to compile
+around: the exit crosses no region, the JIT lowers it to the plain specialized
+teardown, and no deferral is created.</p>
+<p>The exit value is generated <em>before</em> the replay and popped <em>after</em> it, so the
+bodies take their temps above it and the exit instruction’s recorded <code>sp</code> is
+unchanged — raising it by the value’s own slot changed JIT liveness even for
+exits that replay nothing, and cost about 4%.</p>
+<p>What stops the bodies running a second time is the §6.4 machinery, reused
+rather than duplicated: <code>emit_nonlocal_exit</code> extends the spans that replay just
+recorded over the <strong>exit instruction itself</strong>. <code>handle_error</code> is handed exactly
+that pc, and asks the same “which regions are in force here?” question the
+raise path asks — so <code>covering_ensure</code> finds nothing to run,
+<code>errinfo_restore_slots</code> nothing to restore, <code>nonlocal_exit_needs_vm_unwind</code>
+answers <code>false</code>, and <code>try_splice_exit</code> (which starts from
+<code>single_covering_ensure</code>) declines on its own. No separate table, and no third
+place to keep in sync.</p>
+<p>A span is therefore recorded even when the body generated no code: an
+<code>ensure nil end</code> still has a region the unwinder would otherwise run through
+the VM. The empty span is inert until the exit extends it.</p>
+<p>Measured on the <code>break</code>-inside-its-own-<code>begin</code>..<code>ensure</code> shape, with a trivial
+body so the machinery is what is being timed: <strong>0.389 s → 0.207 s</strong> against
+0.185 s for the same loop with no <code>ensure</code> at all — a 2.1× surcharge down to
+1.12×. With a body that does real work (<code>$n += 1</code>) the remaining gap is the
+body: 0.690 s → 0.605 s. Standard benchmarks are unchanged.</p>
 <hr>
 <h2 id="7-backtrace-construction--the-key-contrast"><a class="header" href="#7-backtrace-construction--the-key-contrast">7. Backtrace construction — the key contrast</a></h2>
 <p>This is where the laziness pays off and where the recent work (PR #896)
