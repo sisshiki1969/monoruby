@@ -1141,6 +1141,13 @@ impl<'a> BytecodeGen<'a> {
         BcTemp(self.temp)
     }
 
+    /// The temp on top of the stack, without popping it — for an exit that
+    /// must keep its value live across generated code (a replayed `ensure`
+    /// body) before consuming it.
+    fn peek(&self) -> BcTemp {
+        BcTemp(self.temp - 1)
+    }
+
     fn popn(&mut self, len: usize) {
         self.temp -= len as u16;
     }
@@ -1331,6 +1338,51 @@ impl<'a> BytecodeGen<'a> {
         self.sp.push(BcTemp(self.temp));
     }
 
+    ///
+    /// Replay this frame's open `ensure` bodies ahead of a non-local exit,
+    /// returning the mark [`Self::emit_nonlocal_exit`] needs to close the
+    /// spans over the exit instruction.
+    ///
+    /// A `break` out of a block and a non-local `return` leave this frame
+    /// for good, so every region it has open must run — the same set, in
+    /// the same order, that a local `return` replays through
+    /// [`Self::emit_ret`]. Doing it here rather than leaving it to
+    /// `handle_error` means the exit crosses no protected region as far as
+    /// the unwinder and the JIT are concerned: the JIT lowers it to the
+    /// plain specialized teardown, and nothing is deferred.
+    ///
+    fn replay_ensures_for_nonlocal_exit(&mut self) -> Result<usize> {
+        let mark = self.replay_spans.len();
+        self.gen_all_pending_ensures()?;
+        Ok(mark)
+    }
+
+    ///
+    /// Emit a non-local exit, extending the replay spans
+    /// [`Self::replay_ensures_for_nonlocal_exit`] just recorded (those
+    /// from *mark* on) over the instruction itself.
+    ///
+    /// The unwinder is handed *this* pc when the exit reaches
+    /// `handle_error`, and asks the same "which regions are in force
+    /// here?" question the raise path asks. Covering the instruction
+    /// answers it with the truth — those bodies have already run — so
+    /// `covering_ensure` and `errinfo_restore_slots` both fall silent for
+    /// them and the exit needs no VM unwind at all. Without it the
+    /// unwinder would run every body a second time.
+    ///
+    /// The instruction is emitted at the same temp depth as before the
+    /// replay existed: the recorded `sp` decides which slots the JIT
+    /// keeps live at this point, and raising it by the exit value's own
+    /// slot changed code generation for exits that replay nothing.
+    ///
+    fn emit_nonlocal_exit(&mut self, mark: usize, op: BytecodeInst, loc: Loc) {
+        self.emit(op, loc);
+        let end = BcIndex::from(self.ir.len());
+        for span in &mut self.replay_spans[mark..] {
+            span.range.end = end;
+        }
+    }
+
     /// Emit every currently-open `ensure` body (innermost first) with
     /// the `$!` restore protocol — for exits that leave all of this
     /// frame's begin regions at once (`return`, block-level `redo`).
@@ -1387,18 +1439,21 @@ impl<'a> BytecodeGen<'a> {
     /// Note that `[start, here)` holds a replayed copy of an `ensure`
     /// body, run outside the regions *replayed* (the one whose body it is,
     /// innermost first, plus the inner ones this exit already ran).
+    ///
+    /// Recorded even when the body generated no code — an `ensure nil end`
+    /// still has a region, and a span left empty here is inert until
+    /// [`Self::emit_nonlocal_exit`] extends it over the exit instruction,
+    /// which is precisely where that region has to be seen as already run.
     fn record_replay_span(
         &mut self,
         start: BcIndex,
         replayed: &[(Option<Node>, Option<BcReg>, u32)],
     ) {
         let end = BcIndex::from(self.ir.len());
-        if start != end {
-            self.replay_spans.push(ReplaySpan {
-                range: start..end,
-                off: replayed.iter().map(|(_, _, id)| *id).collect(),
-            });
-        }
+        self.replay_spans.push(ReplaySpan {
+            range: start..end,
+            off: replayed.iter().map(|(_, _, id)| *id).collect(),
+        });
     }
 
     fn emit_ret(&mut self, src: Option<BcReg>) -> Result<()> {

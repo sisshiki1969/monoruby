@@ -2455,11 +2455,18 @@ impl<'a> BytecodeGen<'a> {
 
     fn gen_method_return(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
-            self.emit(BytecodeInst::MethodRet(local), Loc::default());
+            let mark = self.replay_ensures_for_nonlocal_exit()?;
+            self.emit_nonlocal_exit(mark, BytecodeInst::MethodRet(local), Loc::default());
         } else {
+            // The value stays pushed across the replay so the `ensure`
+            // bodies take their temps above it (as `emit_ret` does for a
+            // local `return`), and is popped before the exit is emitted so
+            // the instruction's recorded `sp` is what it always was.
             self.gen_expr(val, UseMode2::Push)?;
-            let ret = self.pop().into();
-            self.emit(BytecodeInst::MethodRet(ret), Loc::default());
+            let ret = self.peek().into();
+            let mark = self.replay_ensures_for_nonlocal_exit()?;
+            self.pop();
+            self.emit_nonlocal_exit(mark, BytecodeInst::MethodRet(ret), Loc::default());
         }
         if use_mode == UseMode2::Push {
             self.push();
@@ -2469,11 +2476,15 @@ impl<'a> BytecodeGen<'a> {
 
     fn gen_block_break(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
-            self.emit(BytecodeInst::BlockBreak(local), Loc::default());
+            let mark = self.replay_ensures_for_nonlocal_exit()?;
+            self.emit_nonlocal_exit(mark, BytecodeInst::BlockBreak(local), Loc::default());
         } else {
+            // See `gen_method_return` for the push/replay/pop order.
             self.gen_expr(val, UseMode2::Push)?;
-            let ret = self.pop().into();
-            self.emit(BytecodeInst::BlockBreak(ret), Loc::default());
+            let ret = self.peek().into();
+            let mark = self.replay_ensures_for_nonlocal_exit()?;
+            self.pop();
+            self.emit_nonlocal_exit(mark, BytecodeInst::BlockBreak(ret), Loc::default());
         }
         if use_mode == UseMode2::Push {
             self.push();
