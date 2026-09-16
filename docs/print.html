@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-56ba4894.js";
+            window.path_to_searchindex_js = "searchindex-c26531a9.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -11049,7 +11049,7 @@ falls into BB2 only on normal completion.</p>
 and for JIT-compiled code the answer is always no. <code>defer_unwind</code> has five call
 sites: three in <code>handle_error</code>, each immediately followed by
 <code>ErrorReturn::goto(ensure)</code>, which resumes the VM, and two in the splice helpers
-(§6.2), which pair with <code>ensure_end_spliced</code> rather than with this call. The
+(§6.3), which pair with <code>ensure_end_spliced</code> rather than with this call. The
 exception edge cannot arrive either, per the two-copy layout above.</p>
 <p>It was nevertheless a runtime call on the normal path of every compiled
 <code>ensure</code> region — measured at about 40 cycles per execution: a trivial
@@ -11061,12 +11061,35 @@ this frame it runs exactly the old sequence — which matters because compiled
 code demonstrably can run with a deferral parked: a loop inside an <code>ensure</code>
 body entered by an unwind can be re-entered by OSR, which is why <code>emit_ret</code>
 carries the same gate. Worth about 10% on a hot method with a trivial
-<code>ensure</code>, and 14% on §6.2’s find-first shape.</p>
-<p>What remains on that path is larger than what this removed: a protected region
-still loads <code>$!</code> at entry through the generic hooked-global runtime call
-(<code>:00001 %2 = $(errinfo)</code>), once per invocation, although <code>$!</code> is a plain
-<code>Executor</code> field.</p>
-<h3 id="62-spliced-non-local-exits-issue-1185"><a class="header" href="#62-spliced-non-local-exits-issue-1185">6.2 Spliced non-local exits (issue #1185)</a></h3>
+<code>ensure</code>, and 14% on §6.3’s find-first shape.</p>
+<h3 id="62-the-region-entry--save"><a class="header" href="#62-the-region-entry--save">6.2 The region-entry <code>$!</code> save</a></h3>
+<p>A protected region saves <code>$!</code> at its entry so a non-local exit leaving a
+<code>rescue</code> clause can put it back (§5). That save read <code>$!</code> through the generic
+hooked-global runtime call, once per invocation of <em>every</em> method carrying a
+<code>begin</code>..<code>ensure</code> or <code>begin</code>..<code>rescue</code>:</p>
+<pre><code class="language-text">:00001 %2 = $(errinfo)
+      mov  rdi,rbx / mov rsi,r12 / mov edx,0x6a      before
+      movabs rax,&lt;runtime::get_global_var&gt; / call rax
+
+      mov  rax,QWORD PTR [rbx+0x198]                 after
+</code></pre>
+<p><code>$!</code> is a plain <code>Value</code> field of the <code>Executor</code> and <code>$(errinfo)</code>’s hook is
+<code>Some(vm.errinfo())</code>, so <code>AsmInst::LoadErrinfo</code> is the same read — with the
+call’s FP save set and GP flush gone with it. The load is equivalent only
+because <code>rbx</code> is the <em>current</em> <code>Executor</code>, which is what <code>$!</code> is per (CRuby
+keeps errinfo per execution context, and so does monoruby), so a Fiber or
+Thread reads its own.</p>
+<p>Only the internal name is specialized. <code>$(errinfo)</code> is what bytecodegen emits
+and is not a name Ruby’s parser can produce, so no program can alias it,
+<code>trace_var</code> it or otherwise put a hook in the way; user-written <code>$!</code> reads keep
+the generic path. The name is pre-interned as
+<code>IdentId::GVAR_ERRINFO_INTERNAL</code> so the recognition is an integer compare
+rather than a lock and a string hash.</p>
+<p>Worth about 28% on a hot method with a trivial <code>ensure</code> (0.663-0.675 s -&gt;
+0.475-0.486 s over three runs). Together with the gate above, the surcharge for
+putting a <code>begin</code>..<code>ensure</code> around a hot method’s body falls from +63% to +23%
+over the same method without one.</p>
+<h3 id="63-spliced-non-local-exits-issue-1185"><a class="header" href="#63-spliced-non-local-exits-issue-1185">6.3 Spliced non-local exits (issue #1185)</a></h3>
 <p>A <code>break</code> / non-local <code>return</code> whose whole chain is specialized-inlined into
 one JIT unit lowers to the <strong>specialized teardown</strong> (<code>lea rbp += Σ; leave; ret</code>) — three instructions, no <code>handle_error</code>. An <code>ensure</code> on the way out
 used to disqualify that outright: <code>nonlocal_exit_needs_vm_unwind</code> (§5) sent
@@ -11263,7 +11286,7 @@ prints only the origin (e.g. <code>SyntaxError</code>, which also gets a source 
 <tr><td>catch-time caller walk</td><td><code>../monoruby/src/executor.rs</code> (<code>complete_backtrace_for_rescue</code>)</td></tr>
 <tr><td>object materialization + cause</td><td><code>../monoruby/src/executor.rs</code> (<code>take_ex_obj</code>, <code>chain_cause</code>)</td></tr>
 <tr><td>per-method exception table</td><td><code>../monoruby/src/globals/store/iseq.rs</code></td></tr>
-<tr><td>JIT-spliced non-local exits (§6.2)</td><td><code>../monoruby/src/codegen/jitgen/context.rs</code> (<code>try_splice_exit</code>), <code>jitgen/compile.rs</code> (<code>emit_spliced_exit</code>), <code>jitgen/compile/method_call.rs</code> (<code>emit_spliced_landing</code>)</td></tr>
+<tr><td>JIT-spliced non-local exits (§6.3)</td><td><code>../monoruby/src/codegen/jitgen/context.rs</code> (<code>try_splice_exit</code>), <code>jitgen/compile.rs</code> (<code>emit_spliced_exit</code>), <code>jitgen/compile/method_call.rs</code> (<code>emit_spliced_landing</code>)</td></tr>
 <tr><td>frame-label rendering</td><td><code>../monoruby/src/globals/store.rs</code> (<code>func_description</code>)</td></tr>
 <tr><td>Ruby <code>Exception</code> API (Rust side)</td><td><code>../monoruby/src/builtins/exception.rs</code></td></tr>
 <tr><td>Ruby <code>Exception</code> API (Ruby side)</td><td><code>../monoruby/builtins/startup.rb</code></td></tr>
@@ -11271,6 +11294,7 @@ prints only the origin (e.g. <code>SyntaxError</code>, which also gets a source 
 <tr><td>differential tests</td><td><code>../monoruby/tests/backtrace.rs</code>, <code>tests/exception_api.rs</code></td></tr>
 <tr><td>spliced-exit regression tests</td><td><code>../monoruby/tests/nonlocal_exit_ensure.rs</code>, <code>tests/nonlocal_exit_intermediate_ensure.rs</code>, <code>tests/nonlocal_exit_rescue.rs</code></td></tr>
 <tr><td><code>EnsureEnd</code> gate tests (§6.1)</td><td><code>../monoruby/tests/ensure_end_deferral_gate.rs</code></td></tr>
+<tr><td>region-entry <code>$!</code> tests (§6.2)</td><td><code>../monoruby/tests/errinfo_inline_load.rs</code></td></tr>
 </tbody>
 </table>
 </div>
