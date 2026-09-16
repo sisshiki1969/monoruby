@@ -276,6 +276,11 @@ impl IdentId {
     /// per object.
     pub const _MEMBERS: IdentId = id!(98);
     pub const _KEYWORD_INIT: IdentId = id!(99);
+    /// `$(errinfo)` — the internal name bytecodegen uses for the
+    /// region-entry `$!` save of a protected region. Pre-interned so the
+    /// JIT can recognize it with an integer compare rather than a lock and
+    /// a string hash (`jit_load_gvar`'s fast path).
+    pub const GVAR_ERRINFO_INTERNAL: IdentId = id!(100);
 
     // The special global variables whose assignment `write_special_check`
     // (globals/gvar.rs) validates or coerces. Deliberately a *consecutive*
@@ -499,7 +504,7 @@ impl IdentifierTable {
         let mut table = IdentifierTable {
             rev_table: HashMap::default(),
             rev_table_bytes: HashMap::default(),
-            table: vec![IdentName::Utf8(String::new()); 100],
+            table: vec![IdentName::Utf8(String::new()); 101],
             enc_map: HashMap::default(),
         };
         table.set_id("initialize", IdentId::INITIALIZE);
@@ -590,6 +595,10 @@ impl IdentifierTable {
         table.set_id("freeze", IdentId::FREEZE);
         table.set_id("/members", IdentId::_MEMBERS);
         table.set_id("/keyword_init", IdentId::_KEYWORD_INIT);
+        table.set_id(
+            crate::globals::ERRINFO_INTERNAL_GVAR,
+            IdentId::GVAR_ERRINFO_INTERNAL,
+        );
         table
     }
 

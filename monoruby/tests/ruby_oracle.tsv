@@ -301,6 +301,7 @@
 13323a8d5c81e35bcd4ad9f525e2542e	[true, 2, 9, 0]	h = Signal.list\n            [h.is_a?(Hash), h["INT"], h["KILL"], h[
 136d5b53ff9c773153c7fac5ff0b733b	[200, [:sym, "s", :sym, "s"], "strx!", 8, ["ac", "ab"], 3, [false, true]]	def push(a, x) = a << x\n            a = []\n            200.times { 
 138e62ffcfc71d0338a5247a729e81fb	[true, true]	[$:.equal?($LOAD_PATH), $:.equal?($-I)]\n        
+139488b66d8d23e3507bc325fe2402e7	[[["e0", true, "ArgumentError"], ["e1", true, "ArgumentError"], ["e2", true, "ArgumentError"]], "nil"]	def inner(n)\n          begin\n            raise ArgumentError, "e#{n}"\n 
 13ad4da7c9b738e48c91a58c2101c684	[false, true, false, false, true]	r, w = IO.pipe\n            res = [$stdout.sync, $stderr.sync, $stdi
 13c09eba52c55ecec3e82b015d3b4f59	[true, true, true]	C = Class.new\n            D = Class.new(C)\n            \n[C.new.clas
 13e499657f84b7c697664ba59ec4b9f4	[true, false, ArgumentError, false, true]	(o=Object.new; a=o.clone(freeze: true).frozen?; b=(x="s".freeze; x.clone(freeze:
@@ -1436,6 +1437,7 @@
 6453b5e2bc4a58561702b08638c14ead	["ab", 2, "ab", nil, "\\xFFc", "\\xFFc", 4, "c", 3, "d ef", "d", 1, "ef", "f", true, "ASCII-8BIT", "", nil, nil, "no implicit conversion of Integer into String", "no implicit conversion of Symbol into String"]	require "strscan"\n        r = []\n        b = StringScanner.new("ab\\xFFc
 646b6df81e3b78ea650391aa2912e6d4	["0.33333e1", "0.3333333333e1", "0.25e2"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
 64745fd3594011f602b1ae98a52ab4ae	["Array", true, ["prompt>"], ["prompt>"]]	require "expect"\n            res = []\n            r, w = IO.pipe\n  
+647ffbbf00a05ebdfe455831178357bd	[:nil, "in main"]	def inner\n          begin\n            $!.nil? ? :nil : $!.message\n     
 64813a4dde67dc42192c53915b8c2dc5	true	M = Data.define(:amount, :unit)\nM.new(42, "km").frozen?
 64843c02e7455fb4484247761ff462ec	[10, 20, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \n[s[:a
 6494dbd0fb783a11fa0b05b82041e84f	[3, [[0, 0], ["j", 0], [0, 1], ["j", 1], ["i", 0], [1, 0], ["j", 0], ["i", 1], "foo"]]	def foo\n              2.times do |i|\n                2.times  do |j
@@ -2348,6 +2350,7 @@ a53b92743804f7c6164c3d95e576c03e	"\\x04\\bo:\\bFoo\\a:\\a@xi\\x06:\\a@yi\\a"	cla
 a5402a7dbd2394336f436588929fbb2c	false	File.executable?("nonexistent_file_xyz")
 a54f6b24c80364648f5efeda11e21170	[:ensured, "boom"]	log = []\n            begin\n              Enumerator.new { |y| begin
 a55b98e9b8eb1d3f7e509f6d3ac592c0	"missing keyword: :x"	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; msg { pro
+a5a8b2725b47e41ea7b4be022125abdd	[["outer", true], "nil"]	def inner\n          begin\n            :body\n          ensure\n          
 a5b4244b815843859e162c8ca4f4db2a	[4, 8, 67, 58, 10, 77, 121, 65, 114, 114, 91, 7, 105, 6, 105, 7]	class MyArr < Array; end\n            Marshal.dump(MyArr.new([1, 2])
 a5d8327abff55336ba0aca5e5b3d3676	[[:r0, []], [:r0, [1, 2, 3]], [:r1, 1, []], [:r1, 1, [2, 3]], [:ro, 1, :dy, []], [:ro, 1, 2, []], [:ro, 1, 2, [3, 4]], [:rk, [], {}], [:rk, [1, 2], {}], [:ro, :L, :dy, []], [:ro, :L, 1, [2, 3]], "wrong number of arguments (given 0, expected 1+)", [1, 2, 3], [1, 2]]	def r0(*a) = [:r0, a]\n            def r1(x, *a) = [:r1, x, a]\n     
 a5d96ad6d6abcfbe7ebc92d3c098653f	:no_raise	begin\n          eval("x=1; y=2; x..y if x")\n          :no_raise\n       
@@ -2614,6 +2617,7 @@ b6e1b26f26c510fe896a5e3a645bc4c5	"42"	class HasToInt; def to_int; 42; end; end\n
 b7009118e9f964641491220f6e4f7ab4	["unix!\\n", "/s.sock"]	require "socket"\n            require "tmpdir"\n            path = Fi
 b7091d188869013ccaa15480c8f7b154	["Block isn't given.", "Block is given."]	def check\n            if block_given?\n                "Block is given."
 b72e139f9584a1a1c990a63100a2e98c	[["NoMemoryError", nil, true], ["ScriptError", nil, true], ["SecurityError", nil, true], ["SignalException", nil, true], ["SystemStackError", nil, true], ["LoadError", nil, true], ["SyntaxError", nil, true], ["NotImplementedError", nil, true]]	[\n              NoMemoryError, ScriptError, SecurityError, SignalEx
+b73b7136573b35c4ac6010cc5c6ad859	[["inner", "outer"]]	def inner\n          begin\n            begin\n              raise "inner"
 b76b635413644a9ee6cb10accbfe88d1	false	class Float; alias __orig :>=; def >=(o); __orig(o); end; end; 3.0 >= 4.0
 b76d6e4320dd94711348a48796e6ef33	[42, 100]	$res = []\n        class S\n          class C\n            def f\n         
 b7b526853ed3aa9d81b2dda6dbba1cf2	1	class Integer; def <=>(o) = (o.to_i - to_i); end\n[3, 1, 2].max
@@ -3614,6 +3618,7 @@ fb9529273f11c1528afb6a800e0aa32c	:arg_error	begin\n          NameError.new.recei
 fb9df3e5d8ac26f84e71588e0b39e86a	["line1\\n", "line2\\n", "line3\\n"]	path = "/tmp/monoruby_io_readlines_#{Process.pid}_#{rand(100000)}"\n
 fbb5ae93ec763bbd96e01d2ae35f7d2f	["x", nil]	ENV["MONORUBY_ENV_TEST_DEL"] = "x"\n            before = ENV["MONORU
 fbb6a99a9e767f50065c0f1b714f7960	["RuntimeError", "boom", false]	f = Fiber.new { Fiber.yield :first; :second }\n            f.resume\n
+fbc7ea687c1c0733da6d31301a7ac6a9	["in main", :nil, "in fiber"]	def inner\n          begin\n            $!.nil? ? :nil : $!.message\n     
 fbfbbb9d05ea7dc5ddb91d5f6aa274ad	"EUC-JP"	e = "あ".encode("EUC-JP"); "#{""}#{e}".encoding.to_s
 fc2292041cacaef7aa439e177107ed46	[42, 90, 15, "1/2", "7:8", "argerr"]	def a0; 42; end\n        def a1(x); x * 10; end\n        def a5(a, b, c, 
 fc22a4cd64bea4559dace662cad4cc26	[[1, 2]]	r = []; Enumerator.new { |y| y.yield 1, 2 }.each { |*a| r << a }; r
