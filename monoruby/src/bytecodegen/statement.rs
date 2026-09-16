@@ -461,7 +461,12 @@ impl<'a> BytecodeGen<'a> {
         } else {
             None
         };
-        self.ensure.push((ensure.as_deref().cloned(), errinfo_save));
+        // This region's id, shared by every exception entry it emits
+        // below and by its entry on the `ensure` stack, so a replayed copy
+        // of its body can name it.
+        let region_id = self.new_region_id();
+        self.ensure
+            .push((ensure.as_deref().cloned(), errinfo_save, region_id));
         let ensure_label = self.new_label();
         let body_use = if else_.is_some() {
             // if else_ exists, rescue must also exists.
@@ -655,6 +660,7 @@ impl<'a> BytecodeGen<'a> {
             self.emit(BytecodeInst::Raise(err_reg), Loc::default());
 
             self.exception_table.push(ExceptionEntry {
+                region_id,
                 range,
                 rescue: Some(rescue_pos),
                 ensure: if ensure.is_some() {
@@ -678,6 +684,7 @@ impl<'a> BytecodeGen<'a> {
             // exception simply propagates, which is already correct).
             if ensure.is_some() {
                 self.exception_table.push(ExceptionEntry {
+                    region_id,
                     range: rescue_pos..no_match_pos,
                     rescue: Some(no_match_pos),
                     ensure: Some(ensure_label),
@@ -712,6 +719,7 @@ impl<'a> BytecodeGen<'a> {
                 self.pop();
 
                 self.exception_table.push(ExceptionEntry {
+                    region_id,
                     range,
                     rescue: Some(rescue_pos),
                     ensure: Some(ensure_label),
@@ -721,6 +729,7 @@ impl<'a> BytecodeGen<'a> {
                 });
             } else {
                 self.exception_table.push(ExceptionEntry {
+                    region_id,
                     range,
                     rescue: None,
                     ensure: None,

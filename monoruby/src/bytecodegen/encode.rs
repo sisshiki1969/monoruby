@@ -64,6 +64,7 @@ impl<'a> BytecodeGen<'a> {
 
         for ExceptionEntry {
             range,
+            region_id,
             rescue,
             ensure,
             err_reg,
@@ -81,8 +82,15 @@ impl<'a> BytecodeGen<'a> {
             let err_reg = err_reg.map(|reg| self.slot_id(&reg));
             let rescue_range = rescue_range.map(|r| self[r.start]..self[r.end]);
             let errinfo_save = errinfo_save.map(|reg| self.slot_id(&reg));
-            self.iseq_mut()
-                .exception_push(start..end, rescue, ensure, err_reg, rescue_range, errinfo_save);
+            self.iseq_mut().exception_push(
+                start..end,
+                region_id,
+                rescue,
+                ensure,
+                err_reg,
+                rescue_range,
+                errinfo_save,
+            );
         }
 
         let sp: Vec<_> = std::mem::take(&mut self.sp)
@@ -90,7 +98,12 @@ impl<'a> BytecodeGen<'a> {
             .map(|r| self.slot_id(&BcReg::from(r)))
             .collect();
 
+        let spans: Vec<_> = std::mem::take(&mut self.replay_spans)
+            .into_iter()
+            .map(|s| (s.range, s.off))
+            .collect();
         let info = self.iseq_mut();
+        info.set_replay_spans(spans);
         info.temp_num = temp_num;
         info.non_temp_num = non_temp_num;
         info.sp = sp;

@@ -9,6 +9,11 @@ use crate::{
 #[derive(Clone, Debug)]
 struct ExceptionMapEntry {
     range: std::ops::Range<BcIndex>, // range of capturing exception
+    /// Identifies the `begin` region this entry belongs to, unique within
+    /// the iseq. Read only by [`ISeqInfo::active_entries`], to tell the
+    /// regions a replayed `ensure` body runs *outside* of from the ones it
+    /// is still inside.
+    region_id: u32,
     rescue_pc: Option<BcIndex>,      // rescue destination pc
     ensure_pc: Option<BcIndex>,      // ensure destination pc
     error_slot: Option<SlotId>,      // a slot where an error object is assigned
@@ -23,6 +28,7 @@ struct ExceptionMapEntry {
 impl ExceptionMapEntry {
     fn new(
         range: std::ops::Range<BcIndex>,
+        region_id: u32,
         rescue_pc: Option<BcIndex>,
         ensure_pc: Option<BcIndex>,
         error_slot: Option<SlotId>,
@@ -31,6 +37,7 @@ impl ExceptionMapEntry {
     ) -> Self {
         ExceptionMapEntry {
             range,
+            region_id,
             rescue_pc,
             ensure_pc,
             error_slot,
@@ -241,6 +248,18 @@ pub struct ISeqInfo {
     /// Exception handling map.
     ///
     exception_map: Vec<ExceptionMapEntry>,
+    ///
+    /// Spans holding an inline copy of an `ensure` body, replayed ahead of
+    /// an exit that leaves the region, each with the ids of the regions
+    /// that copy runs outside of.
+    ///
+    /// The copy sits lexically inside the regions it replays, so without
+    /// this the table would hand a raise there back to the region whose
+    /// body is running — and that body would run a second time. A region
+    /// written *inside* the body is a region of its own and stays active,
+    /// which is why this names regions rather than counting levels.
+    ///
+    replay_spans: Vec<(std::ops::Range<BcIndex>, Vec<u32>)>,
     ///
     /// Information of parameters.
     ///
@@ -485,6 +504,7 @@ impl ISeqInfo {
             sourcemap: vec![],
             sp: vec![],
             exception_map: vec![],
+            replay_spans: vec![],
             args,
             locals: Default::default(),
             non_temp_num: 0,
@@ -727,19 +747,42 @@ impl ISeqInfo {
     ///
     /// Explore exception table for pc(*BcPc*) and return error handler's pc(*BcPc*) and the slot where an error object is to be stored.
     ///
+    pub(crate) fn set_replay_spans(&mut self, v: Vec<(std::ops::Range<BcIndex>, Vec<u32>)>) {
+        self.replay_spans = v;
+    }
+
+    ///
+    /// The exception-table entries covering *pc*, innermost first, minus
+    /// the ones a replayed `ensure` body at *pc* runs outside of.
+    ///
+    /// An exit that leaves a region replays the body inline ahead of
+    /// itself, and that copy sits lexically inside the very regions it is
+    /// replaying. Handing a raise there back to the region whose body is
+    /// running would run the body a second time — which is exactly what
+    /// `begin; begin; return; ensure; raise; end; ensure; end` used to do,
+    /// logging the inner body twice where CRuby logs it once.
+    ///
+    /// Every lookup that asks "which regions are in force at *pc*" goes
+    /// through here, so the raise path and the non-local-exit path agree.
+    ///
+    fn active_entries(&self, pc: BcIndex) -> impl Iterator<Item = &ExceptionMapEntry> {
+        self.exception_map.iter().filter(move |entry| {
+            entry.range.contains(&pc)
+                && !self.replay_spans.iter().any(|(range, off)| {
+                    // An `ensure` body may itself hold an exit that
+                    // replays further bodies, so spans nest; every span
+                    // covering *pc* switches its own regions off.
+                    range.contains(&pc) && off.contains(&entry.region_id)
+                })
+        })
+    }
+
     pub(crate) fn get_exception_dest(
         &self,
         pc: BcIndex,
     ) -> Option<(Option<BcIndex>, Option<BcIndex>, Option<SlotId>)> {
-        self.exception_map
-            .iter()
-            .filter_map(|entry| {
-                if entry.range.contains(&pc) {
-                    Some((entry.rescue_pc, entry.ensure_pc, entry.error_slot))
-                } else {
-                    None
-                }
-            })
+        self.active_entries(pc)
+            .map(|entry| (entry.rescue_pc, entry.ensure_pc, entry.error_slot))
             .nth(0)
     }
 
@@ -774,10 +817,7 @@ impl ISeqInfo {
     /// *clause* spans and so covers them all independently.
     ///
     pub(crate) fn covering_ensure(&self, pc: BcIndex) -> Option<BcIndex> {
-        self.exception_map
-            .iter()
-            .filter(|entry| entry.range.contains(&pc))
-            .find_map(|entry| entry.ensure_pc)
+        self.active_entries(pc).find_map(|entry| entry.ensure_pc)
     }
 
     ///
@@ -790,11 +830,7 @@ impl ISeqInfo {
     /// it).
     ///
     pub(crate) fn single_covering_ensure(&self, pc: BcIndex) -> Option<BcIndex> {
-        let mut covering = self
-            .exception_map
-            .iter()
-            .filter(|entry| entry.range.contains(&pc))
-            .filter_map(|entry| entry.ensure_pc);
+        let mut covering = self.active_entries(pc).filter_map(|entry| entry.ensure_pc);
         let first = covering.next()?;
         if covering.next().is_some() {
             return None;
@@ -821,6 +857,7 @@ impl ISeqInfo {
     pub(crate) fn exception_push(
         &mut self,
         range: std::ops::Range<BcIndex>,
+        region_id: u32,
         rescue: Option<BcIndex>,
         ensure: Option<BcIndex>,
         err_reg: Option<SlotId>,
@@ -829,6 +866,7 @@ impl ISeqInfo {
     ) {
         self.exception_map.push(ExceptionMapEntry::new(
             range,
+            region_id,
             rescue,
             ensure,
             err_reg,
@@ -857,6 +895,11 @@ impl ISeqInfo {
     /// innermost first (entries are pushed inner regions first).
     /// A non-local exit unwinding a frame suspended at *pc* restores
     /// them in order — the last (outermost) save wins.
+    ///
+    /// Not filtered through [`Self::active_entries`]: this is keyed on the
+    /// rescue *clause* spans, and is only ever asked about an exit
+    /// instruction's own pc, which lies past the replayed body ahead of
+    /// it and so is covered by no replay span.
     pub(crate) fn errinfo_restore_slots(&self, pc: BcIndex) -> Vec<SlotId> {
         self.exception_map
             .iter()
