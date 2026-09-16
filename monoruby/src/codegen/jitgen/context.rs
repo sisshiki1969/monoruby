@@ -2106,11 +2106,7 @@ impl<'a> JitContext<'a> {
         if !self.iseq().errinfo_restore_slots(bc_pos).is_empty() {
             return None;
         }
-        let mut hosts = if self.iseq().covering_ensure(bc_pos).is_some() {
-            vec![current_pos]
-        } else {
-            vec![]
-        };
+        let mut hosts = vec![];
         for pos in (target_pos..current_pos).rev() {
             let frame = &self.stack_frame[pos];
             let pc = self.store[frame.callid?].bc_pos;
@@ -2126,17 +2122,18 @@ impl<'a> JitContext<'a> {
         // More than one: chaining hop by hop is the natural extension of
         // this protocol (each `EnsureEnd` would tear down to the next
         // host instead of to the target), but stage 2 does one.
-        if hosts.len() != 1 {
+        //
+        // The exit's *own* frame is never a host — bytecodegen replays its
+        // regions inline ahead of the exit (#1370), so `covering_ensure`
+        // names nothing there — but the loop above deliberately leaves it
+        // out and this refuses if it ever has one, rather than assuming.
+        // The stage-1 splice that used to serve that case is gone, and the
+        // code below would index `current_pos + 1`, off the end of the
+        // frame stack.
+        if hosts.len() != 1 || self.iseq().covering_ensure(bc_pos).is_some() {
             return None;
         }
         let host_pos = hosts[0];
-        // The exit's own frame, which bytecodegen has already settled
-        // (#1370) — so `covering_ensure` should not have named it. Refuse
-        // rather than assume: the splice that used to serve this case is
-        // gone, and running the body here would run it twice.
-        if host_pos == current_pos {
-            return None;
-        }
         // The host is suspended at the call that (transitively) reached
         // this exit; its landing rides on that call site, which must be
         // one of the two shapes that emit one.
