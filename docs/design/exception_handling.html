@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-ac6c360b.js";
+            window.path_to_searchindex_js = "../searchindex-61cdfde4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -522,13 +522,43 @@ still void at the call is claimed as a boxed <code>Value</code> in its slot (a t
 <code>ensure</code> body keeps live may only be written later in the begin body; the
 prologue nil-fills the frame, so the claim is true, and nothing on this path
 reads it).</p>
-<p>One invariant is re-proved rather than inherited: the call site’s own capture
-guard (<code>immediate_evict</code>) is emitted <em>after</em> the landing, so
-<code>defer_*_at</code> checks the host’s <code>Meta</code> for the two bits <code>branch_if_captured</code>
-tests and degenerates to the generic unwind when the callee promoted the host
-frame to the heap. A degenerate error (<code>LocalJumpError</code> out of a proc-escaped
-block) takes the same exit: nothing is torn down and the generic raise runs
-from the exit’s own pc.</p>
+<p>Two things are re-proved at the exit rather than inherited, both by
+<code>defer_*_at</code> and both <em>before</em> anything is torn down, so a refusal is the
+generic raise from the exit’s own pc with every frame still in place:</p>
+<ul>
+<li>the call site’s own capture guard (<code>immediate_evict</code>) is emitted <em>after</em>
+the landing, so <code>defer_*_at</code> checks the host’s <code>Meta</code> for the two bits
+<code>branch_if_captured</code> tests and degenerates when the callee promoted the
+host frame to the heap;</li>
+<li>the exit’s <strong>target</strong>. The JIT laid the chain out statically — a <code>break</code>
+returns into the defining frame one below the popped iter frame, a
+<code>return</code> returns from the popped home method — and hands <code>defer_*_at</code> that
+frame’s LFP (<code>SplicedExitToOuter::expect</code>, read off the chain at a static
+rbp offset exactly as the host’s is). The runtime resolved the same target
+from the frame’s <em>current</em> style (<code>err_block_break</code> / <code>err_method_return</code>:
+a block promoted to a lambda breaks locally, a <code>define_method</code> body catches
+a <code>return</code> the static walk passed through), and the splice proceeds only
+when the two agree. A refusal here matters more than it looks: the runtime
+target may be one of the very frames the hop would pop, and a mismatch
+found only at the host’s <code>EnsureEnd</code> would have nowhere left to deliver.</li>
+</ul>
+<p>A degenerate error (<code>LocalJumpError</code> out of a proc-escaped block) takes the
+same exit. With the target settled at the exit, <code>finish_ensure_spliced</code>
+classifies a parked deferral by kind alone.</p>
+<p>That is not where the check started. It used to sit at the <code>EnsureEnd</code>, as a
+comparison against the host’s own <code>outer()</code> / <code>outermost()</code> — the relation the
+<em>exiting block’s</em> frame satisfies (stage 1) and one an intermediate method
+host never does, having no <code>outer</code>. So every stage-2 delivery took the
+re-raise instead of the arm: <code>handle_error</code>, the chain-deopt walk, the VM and
+an OSR re-entry, on top of the deferral. Instrumented over the whole test
+suite, codes 2 / 3 had never once been returned. Measured on the 1-host shape
+with a trivial body so the machinery is what is timed, the hop went from
+<strong>~270 ns to ~105 ns</strong> per exit once deliveries took the arm, and the
+surcharge over the same loop with no <code>ensure</code> from 1.62× to 1.20×.</p>
+<p>The spliced <code>EnsureEnd</code> also sits behind the same one-word deferral gate as
+the plain form (§6.1): a host’s <em>normal</em> completion reaches it far more often
+than a spliced exit does, and with nothing parked for the frame the dispatch
+could only have answered “continue”.</p>
 <p><code>try_splice_exit</code> refuses everything it cannot prove: a dispatch arm, a
 loop-rooted frame (whose compile may not cover the body), a <code>$!</code> restore
 owed anywhere on the way out, more than one <code>ensure</code> to run (chaining hop by
