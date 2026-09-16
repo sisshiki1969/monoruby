@@ -954,14 +954,27 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         // `#default` are honoured. The default `Hash#default` builtin
         // returns the stored value / runs the default proc, so plain
         // hashes behave exactly as before.
-        vm.invoke_method_inner(
-            globals,
-            IdentId::get_id("default"),
-            self_val,
-            &[key],
-            None,
-            None,
-        )
+        vm.invoke_method_inner(globals, IdentId::DEFAULT, self_val, &[key], None, None)
+    }
+}
+
+/// Whether `default` on a Hash of class `class_id` (a subclass or a
+/// singleton class included) is still the builtin `Hash#default` — the
+/// stored default value, or the default proc — rather than a user
+/// redefinition: CRuby's `rb_method_basic_definition_p(CLASS_OF(hash),
+/// id_default)`, the test `rb_hash_aref` makes on a miss before it
+/// reads the default itself instead of dispatching.
+pub(crate) fn hash_default_is_builtin(store: &Store, class_id: ClassId) -> bool {
+    match store
+        .check_method_for_class(class_id, IdentId::DEFAULT)
+        .and_then(|entry| entry.func_id())
+    {
+        Some(fid) => matches!(
+            store[fid].kind,
+            FuncKind::Builtin { abs_address }
+                if abs_address == default as BuiltinFn as *const u8 as u64
+        ),
+        None => false,
     }
 }
 

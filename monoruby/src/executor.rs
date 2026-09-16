@@ -4969,6 +4969,21 @@ impl Executor {
         self.sp_match_regex = None;
     }
 
+    /// As [`save_capture_special_variables`], from the group spans of a
+    /// match read out of a caller-owned onigmo `Region` (a scan that
+    /// reuses one region across matches and saves `$~` once, at the end).
+    pub(crate) fn save_capture_spans(&mut self, spans: &[Option<(usize, usize)>], haystack: &str) {
+        let mut md = MatchDataInner::from_spans(spans, haystack, self.resolve_haystack(haystack));
+        if let Some(regex_val) = self.sp_match_regex
+            && let Some(regex) = regex_val.is_regex()
+        {
+            md = md.with_regex(regex);
+        }
+        let md_val = RValue::new_match_data_from_inner(md).pack();
+        self.set_backref(md_val);
+        self.sp_match_regex = None;
+    }
+
     /// As [`save_capture_special_variables`], for byte-oriented
     /// matches against non-UTF-8 subjects. `haystack` is the String
     /// Value whose raw bytes the byte offsets in `captures` index.

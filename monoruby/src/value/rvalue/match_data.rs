@@ -111,6 +111,27 @@ impl MatchDataInner {
         }
     }
 
+    /// As [`Self::from_captures_snap`], from the group spans already
+    /// read out of an onigmo `Region` (`None` for a group that did not
+    /// participate), for a scan that reuses one region across matches
+    /// and builds `$~` once at the end, for the last match.
+    pub fn from_spans(
+        spans: &[Option<(usize, usize)>],
+        heystack: &str,
+        resolved: Option<(Value, usize)>,
+    ) -> Self {
+        assert!(
+            heystack.len() < u32::MAX as usize,
+            "match subject longer than 4GiB is not supported"
+        );
+        MatchDataInner {
+            regex: None,
+            heystack: Self::snapshot(heystack, resolved),
+            matches: spans.iter().map(|m| encode_span(*m)).collect(),
+            pattern: None,
+        }
+    }
+
     /// Build from a single byte range of `heystack` — the whole-match
     /// span of a String-pattern search (`String#sub` / `#gsub` with a
     /// String pattern set `$~` without running the regex engine). Like

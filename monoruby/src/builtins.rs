@@ -23,7 +23,7 @@ pub(crate) mod fiddle;
 mod file;
 mod fnmatch;
 mod gc;
-mod hash;
+pub(crate) mod hash;
 mod io;
 mod io_buffer;
 mod io_console;

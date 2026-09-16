@@ -281,6 +281,11 @@ impl IdentId {
     /// JIT can recognize it with an integer compare rather than a lock and
     /// a string hash (`jit_load_gvar`'s fast path).
     pub const GVAR_ERRINFO_INTERNAL: IdentId = id!(100);
+    /// `default`: what `Hash#[]` runs on a miss (CRuby's
+    /// `rb_funcall(hash, id_default, 1, key)`), asked for on every miss;
+    /// and what `gsub(regex, Hash)` checks is still the builtin before it
+    /// probes the map directly instead of calling `Hash#[]`.
+    pub const DEFAULT: IdentId = id!(101);
 
     // The special global variables whose assignment `write_special_check`
     // (globals/gvar.rs) validates or coerces. Deliberately a *consecutive*
@@ -504,7 +509,7 @@ impl IdentifierTable {
         let mut table = IdentifierTable {
             rev_table: HashMap::default(),
             rev_table_bytes: HashMap::default(),
-            table: vec![IdentName::Utf8(String::new()); 101],
+            table: vec![IdentName::Utf8(String::new()); 102],
             enc_map: HashMap::default(),
         };
         table.set_id("initialize", IdentId::INITIALIZE);
@@ -599,6 +604,7 @@ impl IdentifierTable {
             crate::globals::ERRINFO_INTERNAL_GVAR,
             IdentId::GVAR_ERRINFO_INTERNAL,
         );
+        table.set_id("default", IdentId::DEFAULT);
         table
     }
 

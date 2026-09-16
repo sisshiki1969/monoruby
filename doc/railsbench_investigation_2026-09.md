@@ -1287,6 +1287,17 @@ onigmo の `FindCaptures::next`（capture 付き反復）が大半。CRuby の `
 `rb_reg_search` を capture region 付きで回すのは同じだが、MatchData は BUSY でなければ
 再利用し、`rb_hash_aref` は C の直接呼び出しである。
 
+**R の実施で分かったこと（後述 §8.5 R）**: 「1 バイトあたり」ではなく「1 マッチあたり」と
+「1 検索あたり」の固定費だった。同じ 2 形を密にマッチさせる `gsubhash.rb`（JSON 265 B +
+URI 336 B、計 118 マッチ/回）は 441,615 Ir/回（CRuby+YJIT 432,603）で、1 マッチ ≈ 3.7 k:
+`Region` の malloc/free、MatchData、`Hash#[]` のディスパッチ、キー String、スナップショット
+（内訳は `callgrind_annotate --inclusive=yes`: `FindCaptures::next` 32 %、
+`lookup_hash_replacement` 25 %、`save_capture_special_variables` 16 %、`string_substring`
+11 %）。これらを外した後（R の前半）の railsbench では、残り 115 k/req のうち **69 k が
+`onig_search` そのもの**で、呼び出しは 15.5 回/req しかない（1 回 ≈ 4.5 k、平均 70 バイト
+の前方走査）。パターンは `>|<|&` と否定文字クラスの「1 バイト集合」なので、正規表現
+エンジンに入らずバイト表で走査できる（R の後半）。
+
 #### 8.4.2 `method_missing` 連鎖（Rails config）—— 17 回/req、154 k Ir/req（5.2 %）
 
 §7.4.2 の再測。`Executor::invoke_method_missing` 16.9 回/req。inclusive は入れ子で
@@ -1389,12 +1400,12 @@ generic な呼び出しではなく deopt になっている、の 2 点が構�
 
 | # | 施策 | 変更箇所 | 見込み（Ir/req） |
 |---|---|---|---|
-| R | `gsub` / `gsub!` の Hash 置換: 素の Hash（default_proc なし・`default` 未再定義）なら `Hash#[]` を直接引き、MatchData と `$~` は最後の 1 回だけ。onigmo の検索を capture 無しで回して一致区間だけ region を取る | `rvalue/regexp.rs` `replace_all_hash` | **−100 k** |
+| R（実施済み） | `gsub` / `gsub!` の Hash 置換。**前半**: `default` が builtin のままで default_proc を持たず、値が String か nil の Hash なら、受信者をスナップショットせずその場で走査し、`Region` 1 個を `search_with_region` で使い回し、map を直接引き（ディスパッチ無し）、`$~` は最後のマッチから 1 回だけ組む（`MatchDataInner::from_spans` / `Executor::save_capture_spans`）。**後半**: パターンが「固定集合の ASCII 1 文字」（単文字の選択・1 つの文字クラス・`\d` 等、`i` は大小畳み込み）なら 256 ビット集合に分類して（`single_byte_class_of`、コンパイル済みパターンごとに 1 回、`CachedRegex` に保持）、ASCII のみの受信者はバイト表で走査してエンジンに入らない。同時に、CRuby の `str_gsub` は `rb_hash_aref` で引く（再定義された `Hash#[]` は見ない、ミスは `default` を builtin なら直接・再定義なら呼ぶ）という意味論に両経路を合わせ、`splice_all` / `apply_template_encoding` の結果エンコーディング（BINARY の置換値）を CRuby に合わせた | `rvalue/regexp.rs` `replace_all_hash_plain`、`single_byte_class_of`、`builtins/hash.rs` `hash_default_is_builtin`、`id_table.rs` `IdentId::DEFAULT` | 見込み −100 k → 実測 **−61,135 Ir/req（2.2 %）**（2,834,482 → 2,809,343（前半）→ **2,773,347**）。`replace_all_hash` は 134 k → 45.6 k/req（3 回、1 回 15 k: キー String・map の probe・`splice_all`・エンコーディング判定が残り）。railsbench 全体の `onig_search` は 88 回/req・97 k Ir/req が残る（`Regex::search` 59 回、`captures_from_pos` 29 回: `=~` / `match?` / `sub` / `scan` の側）。`gsubhash.rb`（118 マッチ/回）は 441,615 → 249,709（前半）→ **77,544**（CRuby+YJIT 432,603 の 0.18 倍） |
 | S（実施済み） | 汎用引数経路。**キーワード側**（#1369）: `CallSiteInfo` / `kw_args` / `kw_names` / `hash_splat_pos` の clone を全部やめて index で再借用、キーワードを受けない callee では `handle_keyword` を即 return、`**hash` → `**kwrest` のマージは remove せずスキップ。**位置引数側**: invoker 経路（Rust 発の呼び出し）にも「キーワード無し・callee もキーワード無し・auto-splat 無し」の高速路を置いて位置引数の配置だけで戻る、`fill_positional_args` はコピー方向の分岐をループ外へ・必須パラメータ丁度の呼び出しは 1 ループ・`*rest` の Array は slice から 1 memcpy、`method_missing` の引数バッファを SmallVec に | `codegen/runtime/args.rs`、`executor.rs` | キーワード側 **−72,307 Ir/req**（2,937,075 → 2,864,768）: `CallSiteInfo::clone` −8.7 k、`IndexMap::clone` −5.2 k、malloc/free −24 k、`handle_keyword` −4.9 k。位置引数側 **−12,619 Ir/req**（merge 後の master 2,847,101 → 2,834,482）: 引数 SmallVec の extend −19 k、`check_missing_keyword` −3.9 k、`handle_invoker_arguments` −2.7 k。`mmprobe.rb` 9,061 → 8,623 → 8,246。残るのは rest Array の遅延生成（V） |
 | T | `method_missing` 連鎖: `OrderedOptions#[]` の `to_sym` と `Hash#[]` ミスの `get_id("default")` を定数 IdentId に、`Symbol#to_s` を 0 clone に（K） | `builtins/hash.rs:959`、`builtins/symbol.rs`、`id_table.rs` | −25 k |
 | U | 文字列補間: 合計長を先に計算して 1 回で確保、String piece は `to_s` をディスパッチしない（Q） | `codegen/runtime.rs` `concatenate_string` | −40 k |
 | P | Rust runtime から呼ぶ `==` / `to_ary` / `to_s` / `default` / `method_missing` のサイト別インラインキャッシュ | `executor.rs`、`globals/store` | −40〜50 k |
-| V | `*rest` と実行時 Array: `method_missing(name, *args)` などの rest Array を遅延生成、`create_array` の 269 回/req の内訳を取る | `codegen/runtime/args.rs`、`runtime.rs` | −50〜100 個/req |
+| V（内訳を実測、方針変更） | `*rest` の Array 127 個/req の callee 別内訳（rest 生成点に callee ごとの計数を入れた一時ビルド、N=600 と N=100 の差分）: **ネイティブ builtin の rest 引数 ≈ 51**（`String#end_with?` 23.9、`Kernel#send` 11.0、class.rb の `Class#new` 9.0、`instance_exec` 3.0、`Proc#call` 3.0、`public_send` 1.2 —— `lfp.arg(0).as_array()` を舐めるか再度引数窓に並べ直すだけで、Array は不要）、**再 splat だけの委譲 ≈ 22**（Rails の `process_action(*)` / `initialize(...)` の `super` 連鎖 ≈ 12、`BroadcastLogger#method_missing` 3.0、`Rotator#initialize` 3.0、`Rack::BodyProxy#method_missing` 1.0 —— 既存の遅延 `(...)` マーカー `lazy_forwarding_rest` は `super` / `yield` / ブロックリテラルを含む本体を除外するので対象外になっている）、**分岐によっては値を使う ≈ 12**（`OrderedOptions#method_missing` 11.9: setter 分岐でだけ `args.first`）、**値として使う ≈ 42**（route helper `post_path` 等 14.1、`HashWithIndifferentAccess#update` 4.0、`enumerable.rb` の `\|*args\|` ブロック 7.6 など —— 遅延しても最後に Array が要る）。したがって「rest Array の遅延生成」一般ではなく、(1) ネイティブ rest builtin を引数窓から直接読む規約、(2) `super` 経由の転送を遅延マーカーの対象に広げる（zsuper 側でマーカーを解決する）、の 2 つに分ける | `builtins/*`（rest builtin）、`bytecodegen/encode.rs` `forwarding_no_escape`、`codegen/runtime/args.rs` | (1) −51 個/req、(2) −22 個/req |
 | W | PMC: 溢れたときは観測数最小の way を追い出す（起動時のクラスが本番のクラスを締め出さない）。溢れサイトの最後の arm を generic call に。`pmc_same_target_classes` を ISeq にも | `globals/store.rs` `PolyCache::record`、`jitgen/compile/pic.rs`、`method_call.rs` | deopt 29 → ≈ 10 回/req、`connection_specification_name` / `silenced?` の VM 再実行分 |
 | X | `$~` の MatchData 再利用、`Encoding#ascii_compatible?` の確保排除 | `executor.rs` `save_capture_special_variables`、`builtins/string.rs` | −50 個/req |
 
@@ -1407,6 +1418,10 @@ CRuby との実時間差 1.19 倍のうち命令数はもう逆転している�
 ```sh
 # gsub(regex, Hash) の呼び出し元（String#gsub / gsub! を差し替えて caller_locations を集計）
 WARM=300 N=200 monoruby benchmarks/railsbench/gsubprobe.rb
+# gsub!(regex, Hash) の 2 形（JSON エスケープ・URI エンコード）を密にマッチさせる 1 回あたりの Ir
+#（N=200 と N=1200 の差分を 1000 で割る）
+valgrind --tool=callgrind ... monoruby benchmarks/railsbench/gsubhash.rb 200
+valgrind --tool=callgrind ... monoruby benchmarks/railsbench/gsubhash.rb 1200
 # config アクセス 1 回の Ir（InheritableOptions 2 段、100,000 回の差分）
 N=20000 valgrind --tool=callgrind ... monoruby benchmarks/railsbench/mmprobe.rb
 N=120000 valgrind --tool=callgrind ... monoruby benchmarks/railsbench/mmprobe.rb
@@ -1420,3 +1435,21 @@ N=20 WARM=400 target-deopt/release/monoruby benchmarks/railsbench/small.rb 2> de
 サブシステム別の表は、JIT 生成コードの番地が 2 回の実行で異なる（番地ごとの差分は
 正負が相殺せず 3 倍に膨らむ）ので、名前つきシンボルの差分を取り、JIT 生成コードは
 合計との残りとして出す。perf マップ帰属（§7.11）の値と一致する。
+
+### 8.7 副産物（R の実施中に見つかった、未修正のもの）
+
+- BINARY（非 ASCII バイトを含む）の受信者に対する `gsub` / `scan` の block 形と
+  Hash 形は、マッチ文字列を surrogate 空間の view から作るときに U+FFFD に化ける
+  （`"a\xffb".b.scan(/[^a-z]/n)` → `["\xEF\xBF\xBD"]`、CRuby は `["\xFF"]`）。
+  `replace_all_hash_inner` / `scan` の `from_mapped_utf8` / `view_slice` 側。
+- 置換値が非 ASCII の BINARY 文字列のとき、`gsub(regex, String)` は `\xff` を U+00FF
+  に、`gsub(regex) { }` と `sub(regex, Hash)` は U+FFFD に変換してしまう（`is_str` が
+  失敗して `to_s` → lossy）。Hash 形の `gsub` だけは R で `RStringInner` をそのまま
+  clone するようになり CRuby と一致する。
+- 環境: この cargo の配置では `target/debug/build/monoruby/<hash>/out/` に monoruby
+  パッケージの各ユニットの成果物（lib テスト、bin、`tests/*.rs` の統合テスト実行体
+  約 130 個、debuginfo 込みで 1 個 150 MB）が置かれ、`cargo test` 1 回で 18 GB になる
+  （`target/debug/deps/` は無い）。古いものではないので消すと次回の `cargo test` が
+  全部作り直す。全スイートを回すにはこの分の空きが要る。同時に lib テスト実行体は
+  RSS 6〜7 GB まで育つので、16 GB の機械では release ビルドや callgrind と並走させ
+  ないこと（並走で swap 無しのままメモリ枯渇し、sys 99 % で全ジョブが数時間止まった）。

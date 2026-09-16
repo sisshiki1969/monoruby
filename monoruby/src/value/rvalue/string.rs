@@ -2392,16 +2392,29 @@ impl RStringInner {
         .max(0) as usize;
         let mut buf: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(cap);
         let mut last = 0usize;
+        // The result's encoding, as CRuby's `rb_enc_cr_str_buf_cat`
+        // settles it while appending: the haystack's, unless a
+        // replacement with non-ASCII content in another encoding is
+        // compatible with the (then 7-bit) haystack, which the result
+        // takes — `"a-b".gsub(/-/, "\xff".b)` is BINARY. Two such
+        // replacements in different encodings cannot both fit.
+        let mut enc = given_inner.encoding();
         for (r, rep) in replacements {
-            given_inner.compatible_encoding(rep).ok_or_else(|| {
+            let e = given_inner.compatible_encoding(rep).ok_or_else(|| {
                 MonorubyErr::incompatible_encoding(store, given_inner.encoding(), rep.encoding())
             })?;
+            if e != given_inner.encoding() {
+                if enc != given_inner.encoding() && enc != e {
+                    return Err(MonorubyErr::incompatible_encoding(store, enc, e));
+                }
+                enc = e;
+            }
             buf.extend_from_slice(&bytes[last..r.start]);
             buf.extend_from_slice(rep.as_bytes());
             last = r.end;
         }
         buf.extend_from_slice(&bytes[last..]);
-        Ok(RStringInner::from(buf, Encoding::Utf8, CodeRange::Unknown))
+        Ok(RStringInner::from(buf, enc, CodeRange::Unknown))
     }
 
     /// Mutate `self.content` in place: replace bytes `start..end` with
