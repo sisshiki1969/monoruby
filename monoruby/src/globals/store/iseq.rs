@@ -768,12 +768,10 @@ impl ISeqInfo {
     fn active_entries(&self, pc: BcIndex) -> impl Iterator<Item = &ExceptionMapEntry> {
         self.exception_map.iter().filter(move |entry| {
             entry.range.contains(&pc)
-                && !self.replay_spans.iter().any(|(range, off)| {
-                    // An `ensure` body may itself hold an exit that
-                    // replays further bodies, so spans nest; every span
-                    // covering *pc* switches its own regions off.
-                    range.contains(&pc) && off.contains(&entry.region_id)
-                })
+                // An `ensure` body may itself hold an exit that replays
+                // further bodies, so spans nest; every span covering *pc*
+                // switches its own regions off.
+                && !self.is_replayed_at(pc, entry.region_id)
         })
     }
 
@@ -887,6 +885,9 @@ impl ISeqInfo {
     /// nothing, because a `rescue` does not intercept a non-local exit
     /// (#1185).
     ///
+    /// A non-local exit whose frame's regions bytecodegen already replayed
+    /// inline answers `false` on its own: the replay spans cover the exit
+    /// instruction, so both halves see the regions as already run.
     pub(crate) fn nonlocal_exit_needs_vm_unwind(&self, pc: BcIndex) -> bool {
         self.covering_ensure(pc).is_some() || !self.errinfo_restore_slots(pc).is_empty()
     }
@@ -896,21 +897,33 @@ impl ISeqInfo {
     /// A non-local exit unwinding a frame suspended at *pc* restores
     /// them in order — the last (outermost) save wins.
     ///
-    /// Not filtered through [`Self::active_entries`]: this is keyed on the
-    /// rescue *clause* spans, and is only ever asked about an exit
-    /// instruction's own pc, which lies past the replayed body ahead of
-    /// it and so is covered by no replay span.
+    /// Keyed on the rescue *clause* spans rather than the region spans, so
+    /// it cannot go through [`Self::active_entries`] — but it takes the
+    /// same replay-span cut, and for the same reason: a replayed body is
+    /// preceded by its region's `$!` restore, so restoring again on the
+    /// way out would undo whatever the body did to `$!`.
     pub(crate) fn errinfo_restore_slots(&self, pc: BcIndex) -> Vec<SlotId> {
         self.exception_map
             .iter()
             .filter_map(|e| {
-                if e.rescue_range.as_ref().is_some_and(|r| r.contains(&pc)) {
+                if e.rescue_range.as_ref().is_some_and(|r| r.contains(&pc))
+                    && !self.is_replayed_at(pc, e.region_id)
+                {
                     e.errinfo_slot
                 } else {
                     None
                 }
             })
             .collect()
+    }
+
+    /// Whether *pc* sits in a replayed copy of an `ensure` body that runs
+    /// outside the region *region_id* — i.e. that region's body has
+    /// already run for the exit in progress.
+    fn is_replayed_at(&self, pc: BcIndex, region_id: u32) -> bool {
+        self.replay_spans
+            .iter()
+            .any(|(range, off)| range.contains(&pc) && off.contains(&region_id))
     }
 
     pub(crate) fn has_exception_handler(&self) -> bool {

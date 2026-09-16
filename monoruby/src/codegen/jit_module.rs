@@ -141,6 +141,11 @@ pub(super) extern "C" fn handle_error(
                 // bytecodegen restore only covers local exits. Not
                 // needed on the error path: a propagating exception
                 // overwrites `$!` wherever it is caught.
+                //
+                // Both lookups already know when the exiting frame's own
+                // regions are settled: bytecodegen replays them inline
+                // ahead of a non-local exit and the replay spans cover the
+                // exit instruction, so they answer nothing for those.
                 restore_errinfo_on_exit(vm, info, pc, lfp);
                 return if let Some(ensure) = info.covering_ensure(pc) {
                     // Suspend the non-local return across the ensure body so

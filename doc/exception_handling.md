@@ -461,9 +461,51 @@ the region whose body it is in.
 
 Spans nest, too (an ensure body may hold an exit that replays further bodies),
 so a pc is checked against *every* span covering it, not just the innermost.
-`errinfo_restore_slots` is deliberately left outside this filter: it is keyed
-on rescue-*clause* spans and is only ever asked about the exit instruction's
-own pc, which no replay span covers.
+`errinfo_restore_slots` takes the same cut for the same reason — a replayed
+body is preceded by its region's `$!` restore, so restoring again on the way
+out would undo whatever the body did to `$!` — but it cannot go through
+`active_entries`, because it is keyed on the rescue *clause* spans rather than
+the region spans. It applies the replay-span filter directly
+(`ISeqInfo::is_replayed_at`).
+
+### 6.5 Non-local exits replay their own frame inline (issue #1185)
+
+A `break` out of a block and a non-local `return` were the last exits that left
+the job to `handle_error`: the unwinder found the covering region, deferred the
+exit, ran the body interpreted, and re-delivered it from `EnsureEnd`. That is
+what §6.3's splice machinery was built to compile around.
+
+They now replay their own frame's open regions inline, exactly as `emit_ret`
+does for a local `return` — same set, same order, same `$!` protocol
+(`gen_method_return` / `gen_block_break` → `replay_ensures_for_nonlocal_exit`).
+With the bodies emitted ahead of the exit there is nothing left to compile
+around: the exit crosses no region, the JIT lowers it to the plain specialized
+teardown, and no deferral is created.
+
+The exit value is generated *before* the replay and popped *after* it, so the
+bodies take their temps above it and the exit instruction's recorded `sp` is
+unchanged — raising it by the value's own slot changed JIT liveness even for
+exits that replay nothing, and cost about 4%.
+
+What stops the bodies running a second time is the §6.4 machinery, reused
+rather than duplicated: `emit_nonlocal_exit` extends the spans that replay just
+recorded over the **exit instruction itself**. `handle_error` is handed exactly
+that pc, and asks the same "which regions are in force here?" question the
+raise path asks — so `covering_ensure` finds nothing to run,
+`errinfo_restore_slots` nothing to restore, `nonlocal_exit_needs_vm_unwind`
+answers `false`, and `try_splice_exit` (which starts from
+`single_covering_ensure`) declines on its own. No separate table, and no third
+place to keep in sync.
+
+A span is therefore recorded even when the body generated no code: an
+`ensure nil end` still has a region the unwinder would otherwise run through
+the VM. The empty span is inert until the exit extends it.
+
+Measured on the `break`-inside-its-own-`begin`..`ensure` shape, with a trivial
+body so the machinery is what is being timed: **0.389 s → 0.207 s** against
+0.185 s for the same loop with no `ensure` at all — a 2.1× surcharge down to
+1.12×. With a body that does real work (`$n += 1`) the remaining gap is the
+body: 0.690 s → 0.605 s. Standard benchmarks are unchanged.
 
 
 ---
