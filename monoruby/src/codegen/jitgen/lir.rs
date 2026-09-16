@@ -340,6 +340,17 @@ pub(in crate::codegen) enum ConstMiss {
     Salvage,
 }
 
+/// Resolved form of `SplicedArm` (#1185): rbp distances from the frame
+/// whose `EnsureEnd` this is.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::codegen) enum LSplicedArm {
+    /// Tear down to the target and deliver the value.
+    Final { teardown: usize },
+    /// Re-key the deferral on the host at `host`, tear down to `callee` and
+    /// `ret` the kind's marker into that host's landing.
+    Hop { host: usize, callee: usize },
+}
+
 #[derive(Debug)]
 pub(in crate::codegen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
@@ -1062,6 +1073,9 @@ pub(in crate::codegen) enum LInst {
         kind: SplicedExitKind,
         host: usize,
         callee: usize,
+        /// Resolved rbp distance to the frame the exit's static target
+        /// is; its LFP is checked against the runtime-resolved target.
+        expect: usize,
         pc: BytecodePtr,
     },
     /// The host-side half: branch to `dest` when the return register
@@ -1110,11 +1124,11 @@ pub(in crate::codegen) enum LInst {
         /// `entry_raise` so `handle_error`'s table lookup is aligned.
         pc: BytecodePtr,
         loop_jit_spill_bytes: usize,
-        /// Resolved teardown chain offsets for JIT-spliced exits landing at
-        /// this `EnsureEnd` (#1185); both `None` keeps the plain two-way
-        /// (continue / re-raise) form.
-        spliced_break: Option<usize>,
-        spliced_ret: Option<usize>,
+        /// Resolved arms for JIT-spliced exits parked at this `EnsureEnd`
+        /// (#1185); both `None` keeps the plain two-way (continue /
+        /// re-raise) form.
+        spliced_break: Option<LSplicedArm>,
+        spliced_ret: Option<LSplicedArm>,
     },
     Yield {
         callid: CallSiteId,

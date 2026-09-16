@@ -1360,6 +1360,25 @@ impl SplicedExitKind {
 }
 
 ///
+/// What a spliced region's `EnsureEnd` does with a parked exit of one
+/// kind (issue #1185).
+///
+#[derive(Clone, Debug)]
+pub(super) enum SplicedArm {
+    /// The last `ensure` on the way out: tear down to the exit's target
+    /// frame with the value in the accumulator (`BlockBreakSpecialized` /
+    /// `MethodRetSpecialized`'s sequence) and `ret` it into the target's
+    /// caller.
+    Final { teardown: DynVarOffset },
+    /// Another `ensure` is still owed further out: re-key the deferral on
+    /// that host (`host` locates its LFP), tear down to the frame it
+    /// called and `ret` the kind's marker into its landing — the tail of
+    /// [`AsmInst::SplicedExitToOuter`], run from here instead of from the
+    /// exit.
+    Hop { host: DynVarOffset, callee: DynVarOffset },
+}
+
+///
 /// Where an *outer* frame's `Sf` float view lives while the current frame
 /// runs — the raw-f64 home a write-through store refreshes (outer-F
 /// roadmap, stage 1'). A pool-resident fpr was saved into the owner's
@@ -1731,12 +1750,11 @@ pub(super) enum AsmInst {
         /// exception-table lookup in `handle_error`.
         pc: BytecodePtr,
         /// When this region has JIT-spliced non-local exits (issue #1185),
-        /// the teardown chain offsets the dispatch delivers through:
-        /// a spliced `break`'s `BlockBreakSpecialized`-equivalent offset,
-        /// and a spliced `return`'s `MethodRetSpecialized`-equivalent one.
-        /// Both `None` keeps the plain two-way (continue / re-raise) form.
-        spliced_break: Option<DynVarOffset>,
-        spliced_ret: Option<DynVarOffset>,
+        /// what the dispatch does with a parked exit of each kind — deliver
+        /// it, or hand it on to the next `ensure` on the way out. Both
+        /// `None` keeps the plain two-way (continue / re-raise) form.
+        spliced_break: Option<SplicedArm>,
+        spliced_ret: Option<SplicedArm>,
     },
     ///
     /// A JIT-spliced non-local exit whose `ensure` body lives in an
@@ -1747,8 +1765,9 @@ pub(super) enum AsmInst {
     /// tear the machine frames down to the host's call site and return
     /// into it with [`SplicedExitKind::outer_tag`] in the return register,
     /// where the host's [`Self::SplicedExitLanding`] takes over. When the
-    /// error degenerates (a `LocalJumpError`), nothing is torn down and
-    /// the generic raise runs from this exit's own `pc`.
+    /// error degenerates (a `LocalJumpError`), or resolves to a target
+    /// other than the one the static teardown was built for, nothing is
+    /// torn down and the generic raise runs from this exit's own `pc`.
     ///
     /// ### in
     /// - rdx: the exit value
@@ -1762,6 +1781,13 @@ pub(super) enum AsmInst {
         /// host called: the teardown sets rbp there and `leave; ret`s,
         /// which lands exactly at the host's call site.
         callee: DynVarOffset,
+        /// Bytes between the current rbp and the rbp of the frame the
+        /// exit's *target* is, as the JIT laid the chain out: the
+        /// defining frame for a `break`, the home method for a `return`.
+        /// Its LFP is handed to the runtime, which built the error from
+        /// the frame's style at run time, to confirm the two agree before
+        /// anything is torn down.
+        expect: DynVarOffset,
         pc: BytecodePtr,
     },
     ///

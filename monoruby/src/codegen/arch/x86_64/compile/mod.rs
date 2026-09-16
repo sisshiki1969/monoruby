@@ -12,7 +12,9 @@ mod variables;
 
 use super::compile_shared::{extend_ivar, unreachable};
 use crate::alloc::{BUMP_INLINE_LIMIT, CELL_SIZE_SHIFT, PAGE_DATA_OFFSET};
-use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind};
+use crate::codegen::jitgen::lir::{
+    LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind, LSplicedArm,
+};
 use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 /// Resolve a LIR register operand to its x86 register number. The scratch
@@ -2785,8 +2787,8 @@ impl Codegen {
         &mut self,
         pc: BytecodePtr,
         _loop_jit_spill_bytes: usize,
-        spliced_break: Option<usize>,
-        spliced_ret: Option<usize>,
+        spliced_break: Option<LSplicedArm>,
+        spliced_ret: Option<LSplicedArm>,
     ) -> bool {
         let raise = self.entry_raise();
         if spliced_break.is_none() && spliced_ret.is_none() {
@@ -2827,18 +2829,54 @@ impl Codegen {
             return true;
         }
         // Spliced form (#1185): the runtime dispatch classifies the deferred
-        // unwind — rax = code (0 continue / 1 re-raise / 2 spliced break /
-        // 3 spliced return), rdx = the delivered value. The teardown arms are
-        // the same machine sequence as `BlockBreakSpecialized` /
-        // `MethodRetSpecialized`, with the value moved into rax first. A code
-        // whose arm was not emitted falls through to the re-raise, whose
-        // `entry_raise` surfaces the (error-less) state as a fatal — by
-        // construction the runtime only returns codes for kinds this unit
-        // spliced.
+        // unwind — rax = code (0 continue / 1 re-raise / 2 deliver break /
+        // 3 deliver return / 4 hand break on / 5 hand return on), rdx = the
+        // delivered value for 2 / 3. A delivery arm is the same machine
+        // sequence as `BlockBreakSpecialized` / `MethodRetSpecialized` with
+        // the value moved into rax first; a hand-on arm is the tail of
+        // `emit_spliced_exit_to_outer` — the marker in rax, teardown to the
+        // frame the next host called, whose `ret` lands at that host's
+        // landing. A code whose arm was not emitted falls through to the
+        // re-raise, whose `entry_raise` surfaces the (error-less) state as
+        // a fatal — by construction the runtime only returns codes for the
+        // kinds and arms this unit spliced.
+        //
+        // The same one-word gate as the plain form first: the region's
+        // *normal* completion reaches this `EnsureEnd` far more often than
+        // a spliced exit does, and with no deferral parked for this frame
+        // the dispatch could only answer "continue".
+        //
+        // For each kind whose arm hands on, the dispatch is given the next
+        // host's LFP (read off the chain at the arm's static offset, as the
+        // exit read this host's) to re-key the deferral on; null means
+        // this arm delivers.
         let cont = self.jit.label();
         let reraise = self.jit.label();
         monoasm! { &mut self.jit,
+            movq rdi, [rbx + (EXECUTOR_DEFERRED_TOP)];
+            cmpq rdi, r14;
+            jne  cont;
             movq rdi, rbx;
+        };
+        match spliced_break {
+            Some(LSplicedArm::Hop { host, .. }) => monoasm! { &mut self.jit,
+                lea  rsi, [rbp + (host)];
+                movq rsi, [rsi - (BP_CFP + CFP_LFP)];
+            },
+            _ => monoasm! { &mut self.jit,
+                xorq rsi, rsi;
+            },
+        }
+        match spliced_ret {
+            Some(LSplicedArm::Hop { host, .. }) => monoasm! { &mut self.jit,
+                lea  rdx, [rbp + (host)];
+                movq rdx, [rdx - (BP_CFP + CFP_LFP)];
+            },
+            _ => monoasm! { &mut self.jit,
+                xorq rdx, rdx;
+            },
+        }
+        monoasm! { &mut self.jit,
             movq rax, (runtime::ensure_end_spliced);
             call rax;
             testq rax, rax;
@@ -2846,24 +2884,39 @@ impl Codegen {
             cmpq rax, 1;
             jeq  reraise;
         };
-        if let Some(off) = spliced_break {
+        for (kind, arm) in [
+            (SplicedExitKind::Break, spliced_break),
+            (SplicedExitKind::MethodReturn, spliced_ret),
+        ] {
+            let Some(arm) = arm else { continue };
             let skip = self.jit.label();
-            monoasm! { &mut self.jit,
-                cmpq rax, 2;
-                jne  skip;
-                movq rax, rdx;
-            };
-            self.method_return_specialized(off);
-            self.jit.bind_label(skip);
-        }
-        if let Some(off) = spliced_ret {
-            let skip = self.jit.label();
-            monoasm! { &mut self.jit,
-                cmpq rax, 3;
-                jne  skip;
-                movq rax, rdx;
-            };
-            self.method_return_specialized(off);
+            match arm {
+                LSplicedArm::Final { teardown } => {
+                    let code: i64 = match kind {
+                        SplicedExitKind::Break => 2,
+                        SplicedExitKind::MethodReturn => 3,
+                    };
+                    monoasm! { &mut self.jit,
+                        cmpq rax, (code);
+                        jne  skip;
+                        movq rax, rdx;
+                    };
+                    self.method_return_specialized(teardown);
+                }
+                LSplicedArm::Hop { callee, .. } => {
+                    let code: i64 = match kind {
+                        SplicedExitKind::Break => 4,
+                        SplicedExitKind::MethodReturn => 5,
+                    };
+                    let tag = kind.outer_tag();
+                    monoasm! { &mut self.jit,
+                        cmpq rax, (code);
+                        jne  skip;
+                        movq rax, (tag);
+                    };
+                    self.method_return_specialized(callee);
+                }
+            }
             self.jit.bind_label(skip);
         }
         monoasm! { &mut self.jit,
@@ -2989,6 +3042,7 @@ impl Codegen {
         kind: SplicedExitKind,
         host: usize,
         callee: usize,
+        expect: usize,
         pc: BytecodePtr,
     ) -> bool {
         let raise = self.entry_raise();
@@ -3001,6 +3055,8 @@ impl Codegen {
         monoasm! { &mut self.jit,
             lea  rcx, [rbp + (host)];
             movq rcx, [rcx - (BP_CFP + CFP_LFP)];
+            lea  r8, [rbp + (expect)];
+            movq r8, [r8 - (BP_CFP + CFP_LFP)];
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (f);
