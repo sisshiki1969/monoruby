@@ -677,7 +677,8 @@ fn coerce_hash_splat_args(
     callid: CallSiteId,
     mut caller_lfp: Lfp,
 ) -> Result<()> {
-    for pos in globals[callid].hash_splat_pos.clone() {
+    for i in 0..globals[callid].hash_splat_pos.len() {
+        let pos = globals[callid].hash_splat_pos[i];
         if let Some(v) = caller_lfp.register(pos)
             && !v.is_nil()
             && v.try_hash_ty().is_none()
@@ -768,16 +769,20 @@ fn set_callee_frame_arguments(
     let ex = if globals[callee_fid].no_keyword() && globals[callid].kw_may_exists() {
         // handle excessive keyword arguments
         let mut h = RubyMap::default();
-        for (k, id) in globals[callid].kw_args.clone().iter() {
-            let v = caller_lfp.register(globals[callid].kw_pos + *id).unwrap();
-            h.insert_sym(RubySymbol::new(*k), v);
-        }
-        for v in globals[callid]
-            .hash_splat_pos
-            .clone()
-            .into_iter()
-            .map(|pos| caller_lfp.register(pos).unwrap())
         {
+            let cs = &globals[callid];
+            for (k, id) in cs.kw_args.iter() {
+                let v = caller_lfp.register(cs.kw_pos + *id).unwrap();
+                h.insert_sym(RubySymbol::new(*k), v);
+            }
+        }
+        // Indexed rather than iterated: the body re-enters Ruby (`#to_hash`,
+        // `#hash` / `#eql?`), which needs `globals` mutably, so the call
+        // site is re-borrowed per position instead of cloned.
+        for i in 0..globals[callid].hash_splat_pos.len() {
+            let v = caller_lfp
+                .register(globals[callid].hash_splat_pos[i])
+                .unwrap();
             if v.is_nil() {
                 continue;
             }
@@ -1189,6 +1194,15 @@ fn handle_keyword(
         }
         return Ok(());
     }
+    // A callee with neither keyword parameters nor `**kwrest` has nothing
+    // to bind: any keywords the call site passed were already folded into
+    // the trailing positional Hash by the caller, and there is no required
+    // keyword to miss. The three helpers below would each establish that
+    // for themselves — on railsbench this call was made 76 times a request,
+    // most of them for exactly this shape.
+    if globals[callee].no_keyword() {
+        return Ok(());
+    }
     let mut unknowns = ordinary_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
     unknowns.extend(hash_splat_and_kw_rest(
         vm, globals, callee, caller, callee_lfp, caller_lfp, r2k_kw,
@@ -1385,33 +1399,44 @@ fn hash_splat_and_kw_rest(
     caller_lfp: Lfp,
     r2k_kw: Option<Value>,
 ) -> Result<Vec<String>> {
-    if globals[callee].no_keyword() {
-        return Ok(vec![]);
-    }
+    // Only reached through `handle_keyword`, which has already returned
+    // for a callee with neither keyword parameters nor `**kwrest`.
+    debug_assert!(!globals[callee].no_keyword());
 
-    let CallSiteInfo {
-        kw_pos,
-        hash_splat_pos,
-        ..
-    } = globals[caller].clone();
-
+    // Everything below re-enters Ruby (`#hash` / `#eql?` on the keys), which
+    // needs `globals` mutably, so the call site and the callee are read by
+    // index and re-borrowed per step rather than cloned up front: this used
+    // to copy the whole `CallSiteInfo` (its Vecs, its `IndexMap`, its PMC)
+    // and the callee's keyword-name Vec on every keyword-passing call.
+    let kw_pos = globals[caller].kw_pos;
     let callee_kw_pos = globals[callee].kw_reg_pos();
-    let kw_names = globals[callee].kw_names().to_vec();
+    let kw_num = globals[callee].kw_names().len();
+    let splat_num = globals[caller].hash_splat_pos.len();
+    // The keyword-hash sources, in order: each `**hash` at the call site,
+    // then the ruby2_keywords hash promoted from a `*args` splat, if any.
+    let source = |globals: &Globals, i: usize| -> Value {
+        if i < splat_num {
+            caller_lfp
+                .register(globals[caller].hash_splat_pos[i])
+                .unwrap()
+        } else {
+            r2k_kw.unwrap()
+        }
+    };
+    let source_num = splat_num + usize::from(r2k_kw.is_some());
     let mut unknowns = Vec::new();
 
-    for h in hash_splat_pos
-        .iter()
-        .map(|pos| caller_lfp.register(*pos).unwrap())
-        .chain(r2k_kw)
-    {
+    for i in 0..source_num {
+        let h = source(globals, i);
         if h.is_nil() {
             continue;
         }
         let h = h.expect_hash_ty(globals)?;
         let mut unused = h.len();
-        for (id, param_name) in kw_names.iter().enumerate() {
+        for id in 0..kw_num {
+            let param_name = globals[callee].kw_names()[id];
             unsafe {
-                let sym = Value::symbol(*param_name);
+                let sym = Value::symbol(param_name);
                 if let Some(v) = h.get(sym, vm, globals)? {
                     unused -= 1;
                     let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
@@ -1446,19 +1471,20 @@ fn hash_splat_and_kw_rest(
             unsafe { callee_lfp.set_register(rest, Some(Value::nil())) }
         } else {
             let mut kw_rest = RubyMap::default();
-            for (name, i) in globals[caller].kw_args.clone().into_iter() {
-                if kw_names.contains(&name) {
+            for i in 0..globals[caller].kw_args.len() {
+                let (name, idx) = {
+                    let (name, idx) = globals[caller].kw_args.get_index(i).unwrap();
+                    (*name, *idx)
+                };
+                if globals[callee].kw_names().contains(&name) {
                     continue;
                 }
-                let v = caller_lfp.register(kw_pos + i).unwrap();
+                let v = caller_lfp.register(kw_pos + idx).unwrap();
                 kw_rest.insert_sym(RubySymbol::new(name), v);
             }
 
-            for h in hash_splat_pos
-                .iter()
-                .map(|pos| caller_lfp.register(*pos).unwrap())
-                .chain(r2k_kw)
-            {
+            for i in 0..source_num {
+                let h = source(globals, i);
                 // A nil hash-splat is `**nil` — no keyword arguments.
                 // (The other hash-splat readers already skip nil; this
                 // kw-rest-building loop must too, so a deferred/elided
@@ -1466,12 +1492,19 @@ fn hash_splat_and_kw_rest(
                 if h.is_nil() {
                     continue;
                 }
-                let mut h = h.as_hashmap_inner().clone_inner();
-                for name in kw_names.iter() {
-                    let sym = Value::symbol(*name);
-                    h.remove(sym, vm, globals)?;
-                }
-                for (k, v) in h.iter() {
+                // A snapshot, not the live Hash: inserting into `kw_rest`
+                // may call a key's `#hash` / `#eql?`, which could mutate the
+                // source under the iteration. The keys bound to declared
+                // keyword parameters above are skipped here rather than
+                // removed from the snapshot first (a Symbol key matches a
+                // parameter name by identity, as the removal did).
+                let src = h.as_hashmap_inner().clone_inner();
+                for (k, v) in src.iter() {
+                    if let Some(sym) = k.try_symbol()
+                        && globals[callee].kw_names().contains(&sym)
+                    {
+                        continue;
+                    }
                     kw_rest.insert(k, v, vm, globals)?;
                 }
             }
@@ -1538,7 +1571,11 @@ fn invoker_arguments_inner(
 
     // keyword
     let callee_kw_pos = info.kw_reg_pos();
-    for (id, name) in info.kw_names().to_vec().into_iter().enumerate() {
+    let kw_num = info.kw_names().len();
+    for id in 0..kw_num {
+        // Re-borrowed per keyword: `remove` re-enters Ruby for the key's
+        // `#hash` / `#eql?` and needs `globals` mutably.
+        let name = globals.store[callee_fid].kw_names()[id];
         let v = match &mut kw_arg {
             Some(map) => map.remove(Value::symbol(name), vm, globals)?,
             None => None,
@@ -1585,15 +1622,18 @@ fn invoker_arguments_inner(
         }
         Some(v)
     } else if let Some(kw_arg) = kw_arg {
-        let mut s = "unknown keywords: ".to_string();
-        for (i, (name, _)) in kw_arg.iter().enumerate() {
-            if i == 0 {
-                s.push_str(&format!(":{name}"));
-            } else {
-                s.push_str(&format!(", :{name}"));
-            }
-        }
-        return Err(MonorubyErr::argumenterr(s));
+        // The same message the call-site path builds: `unknown keyword:
+        // :b` for one, `unknown keywords: :b, :c` for several, a String
+        // key by its `inspect`. (This used to say `unknown keywords: ::b`
+        // — the Symbol's own display already carries the colon.)
+        let unknowns = kw_arg
+            .iter()
+            .map(|(k, _)| match k.try_symbol() {
+                Some(sym) => format!(":{sym}"),
+                None => k.inspect(&globals.store),
+            })
+            .collect();
+        return Err(unknown_keyword_err(unknowns));
     } else {
         None
     };
@@ -2022,6 +2062,38 @@ mod tests {
             B3.new.a(1, 2)
             "#,
         );
+    }
+
+    /// The generic keyword-binding path (`hash_splat_and_kw_rest`) with
+    /// every source it merges: literal `k: v` pairs, one or more `**hash`
+    /// splats, declared keyword parameters and a `**kwrest`; a
+    /// keyword-less callee reached through a splat; and the error order
+    /// (a missing required keyword before an unknown one). Compared
+    /// against CRuby, with the JIT warm.
+    #[test]
+    fn keyword_binding_sources() {
+        run_tests(&[
+            r#"def m(a:, **rest) = [a, rest]; h = {a: 1, b: 2, "c" => 3}; [m(**h), m(z: 0, **h), m(**h, **{d: 4}), m(a: 5), m(a: 6, **{})]"#,
+            // (A literal pair *after* a `**hash` is not covered: bytecodegen
+            // lays literal pairs out ahead of every splat, so `n(**h, b: 2)`
+            // yields `{b: 2, a: 1}` where CRuby keeps source order.)
+            r#"def n(**o) = o; h = {a: 1}; r = n(**h); [r, r.equal?(h), n(b: 2, **h), n(**h, **{c: 3}), n(**{}), n]"#,
+            r#"def pw(x, *r) = [x, r]; a = [1, 2]; [pw(*a, k: 3), pw(1, k: 3), pw(*a), pw(*a, **{})]"#,
+            r#"def q(x:, y: 2) = [x, y]; g = {x: 1}; h = {y: 9}; [q(**g), q(**g, **h), q(**h, x: 0)]"#,
+            r#"def m(x:) = x; e = []; e << (m(y: 1) rescue $!.message); e << (m(**{y: 1}) rescue $!.message); e << (m(x: 1, y: 2) rescue $!.message); e << (m(**{x: 1, "y" => 2}) rescue $!.message); e"#,
+            r#"def f(**nil) = :ok; e = [f, f(**{})]; e << (f(k: 1) rescue $!.message); e << (f(**{k: 1}) rescue $!.message); e"#,
+            r#"class Kw; def initialize(a, b: 1, **o) = (@v = [a, b, o]); attr_reader :v; end; h = {b: 2, c: 3}; [Kw.new(1).v, Kw.new(1, **h).v, Kw.new(1, c: 4, **{d: 5}).v, Kw.new(*[1], **h).v]"#,
+            // `**obj` goes through `#to_hash` (and its two failure shapes),
+            // and a key present in two `**` sources takes the later value.
+            r#"class ToH; def initialize(h) = (@h = h); def to_hash = @h; end; class BadH; def to_hash = 42; end; def m(a:, **r) = [a, r]; e = [m(**ToH.new({a: 1, b: 2})), m(x: 0, **ToH.new({a: 3}))]; e << (m(**BadH.new) rescue [$!.class, $!.message]); e << (m(**Object.new) rescue [$!.class, $!.message]); e << m(**{a: 1, b: 2}, **{a: 9}); e"#,
+            // The invoker path (a call the runtime starts, here `send`)
+            // binds keywords too, and reports an unknown one as the
+            // call-site path does.
+            r#"def m(a:, **r) = [a, r]; def n(a: 1) = a; e = [send(:m, a: 1, **{c: 2}), send(:m, a: 5, c: 6), send(:n, a: 2)]; e << (send(:n, b: 1) rescue [$!.class, $!.message]); e << (send(:n, b: 1, c: 2) rescue [$!.class, $!.message]); e << (send(:n, **{"b" => 1}) rescue [$!.class, $!.message]); e"#,
+            // A ruby2_keywords forward delivers the flagged trailing hash
+            // as keywords; a plain Hash argument stays positional.
+            r#"def m(a:, **r) = [a, r]; def fwd(*args) = m(*args); ruby2_keywords :fwd; e = [fwd(a: 7, b: 8)]; e << (fwd({a: 7}) rescue [$!.class, $!.message]); e"#,
+        ]);
     }
 
     #[test]
