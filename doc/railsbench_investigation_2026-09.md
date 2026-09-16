@@ -1390,7 +1390,7 @@ generic な呼び出しではなく deopt になっている、の 2 点が構�
 | # | 施策 | 変更箇所 | 見込み（Ir/req） |
 |---|---|---|---|
 | R | `gsub` / `gsub!` の Hash 置換: 素の Hash（default_proc なし・`default` 未再定義）なら `Hash#[]` を直接引き、MatchData と `$~` は最後の 1 回だけ。onigmo の検索を capture 無しで回して一致区間だけ region を取る | `rvalue/regexp.rs` `replace_all_hash` | **−100 k** |
-| S | Rust 発の呼び出し（`invoke_method_inner`）の引数経路: キーワードを受けない callee では `handle_keyword` を通さない、`CallSiteInfo` を借用、`check_missing_keyword` の `Vec<String>` を作らない、kwrest 不要なら `RubyMap` を作らない | `codegen/runtime/args.rs` | **−70〜90 k**（8.4.2 + 8.4.3） |
+| S（キーワード側は実施済み） | 汎用引数経路のキーワード処理: `CallSiteInfo` / `kw_args` / `kw_names` / `hash_splat_pos` の clone を全部やめて index で再借用、キーワードを受けない callee では `handle_keyword` を即 return、`**hash` → `**kwrest` のマージは remove せずスキップ | `codegen/runtime/args.rs` | **実測 -72,307 Ir/req（2,864,768）**: `CallSiteInfo::clone` −8.7 k、`IndexMap::clone` −5.2 k、malloc/free −24 k、`handle_keyword` 自身 −4.9 k。`mmprobe.rb` 9,061 → 8,623。残り（位置引数の `fill_positional_args` / `set_callee_frame_arguments` / `handle_invoker_arguments` ≈ 1.3 k/アクセス）は未着手 |
 | T | `method_missing` 連鎖: `OrderedOptions#[]` の `to_sym` と `Hash#[]` ミスの `get_id("default")` を定数 IdentId に、`Symbol#to_s` を 0 clone に（K） | `builtins/hash.rs:959`、`builtins/symbol.rs`、`id_table.rs` | −25 k |
 | U | 文字列補間: 合計長を先に計算して 1 回で確保、String piece は `to_s` をディスパッチしない（Q） | `codegen/runtime.rs` `concatenate_string` | −40 k |
 | P | Rust runtime から呼ぶ `==` / `to_ary` / `to_s` / `default` / `method_missing` のサイト別インラインキャッシュ | `executor.rs`、`globals/store` | −40〜50 k |
