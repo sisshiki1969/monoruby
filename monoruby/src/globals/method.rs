@@ -261,6 +261,43 @@ impl Globals {
         self.define_builtin_funcs_with_kw(class_id, name, alias, address, 0, 0, true, &[], false)
     }
 
+    /// A native taking any number of positional arguments without a rest
+    /// Array: the first `VARIADIC_CAP` land in fixed slots and only an
+    /// overflow is boxed (`Lfp::variadic_args`). `min` is enforced by the
+    /// binder as for any native.
+    pub(crate) fn define_builtin_func_variadic(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        min: usize,
+    ) -> FuncId {
+        self.define_builtin_funcs_variadic(class_id, name, &[], address, min)
+    }
+
+    pub(crate) fn define_builtin_funcs_variadic(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        min: usize,
+    ) -> FuncId {
+        let fid = self.define_builtin_funcs_with_kw(
+            class_id,
+            name,
+            alias,
+            address,
+            min,
+            crate::executor::frame::VARIADIC_CAP,
+            true,
+            &[],
+            false,
+        );
+        self.store[fid].set_native_variadic();
+        fid
+    }
+
     pub(crate) fn define_builtin_func_with(
         &mut self,
         class_id: ClassId,

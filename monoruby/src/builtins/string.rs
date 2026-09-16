@@ -59,8 +59,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
     globals.define_builtin_funcs_with(STRING_CLASS, "[]", &["slice"], index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "[]=", index_assign, 2, 3, false);
-    globals.define_builtin_func_rest(STRING_CLASS, "start_with?", start_with);
-    globals.define_builtin_func_rest(STRING_CLASS, "end_with?", end_with);
+    globals.define_builtin_func_variadic(STRING_CLASS, "start_with?", start_with, 0);
+    globals.define_builtin_func_variadic(STRING_CLASS, "end_with?", end_with, 0);
     globals.define_builtin_func(STRING_CLASS, "include?", include_, 1);
     globals.define_builtin_func(STRING_CLASS, "delete_prefix!", delete_prefix_, 1);
     globals.define_builtin_func(STRING_CLASS, "delete_prefix", delete_prefix, 1);
@@ -1961,11 +1961,21 @@ pub fn str_next(self_: &str) -> String {
 #[monoruby_builtin]
 fn start_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let self_inner = self_.as_rstring_inner();
+    let args = lfp.variadic_args();
+    string_start_with(vm, globals, self_.as_rstring_inner(), &args)
+}
+
+/// `String#start_with?` over `self_inner` (a String's, or a Symbol's name
+/// for `Symbol#start_with?`), with the prefixes `args`.
+pub(crate) fn string_start_with(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_inner: &RStringInner,
+    args: &[Value],
+) -> Result<Value> {
     let self_enc = self_inner.encoding();
     let self_bytes = self_inner.as_bytes();
-    let arg0 = lfp.arg(0).as_array();
-    for v in arg0.iter() {
+    for v in args.iter() {
         if let Some(re) = v.is_regex() {
             let string = self_inner.check_utf8()?;
             if let Some(mat) = re.captures(string, vm)? {
@@ -2001,11 +2011,20 @@ fn start_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 #[monoruby_builtin]
 fn end_with(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let self_inner = self_.as_rstring_inner();
+    let args = lfp.variadic_args();
+    string_end_with(vm, globals, self_.as_rstring_inner(), &args)
+}
+
+/// `String#end_with?` over `self_inner`, with the suffixes `args`.
+pub(crate) fn string_end_with(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_inner: &RStringInner,
+    args: &[Value],
+) -> Result<Value> {
     let self_enc = self_inner.encoding();
     let self_bytes = self_inner.as_bytes();
-    let arg0 = lfp.arg(0).as_array();
-    for v in arg0.iter() {
+    for v in args.iter() {
         if v.is_regex().is_some() {
             return Err(MonorubyErr::typeerr(
                 "no implicit conversion of Regexp into String",

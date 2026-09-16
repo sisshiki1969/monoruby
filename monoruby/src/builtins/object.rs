@@ -45,16 +45,17 @@ pub(super) fn init(globals: &mut Globals) {
         true,
         Effect::EVAL,
     );
-    globals.define_builtin_funcs_with_effect(
+    let instance_exec_fid = globals.define_builtin_funcs_with_effect(
         BASIC_OBJECT_CLASS,
         "instance_exec",
         &[],
         instance_exec,
         0,
-        0,
+        crate::executor::frame::VARIADIC_CAP,
         true,
         Effect::EVAL,
     );
+    globals.store[instance_exec_fid].set_native_variadic();
 
     let send_fid = globals.define_builtin_inline_funcs_with_kw(
         BASIC_OBJECT_CLASS,
@@ -63,11 +64,12 @@ pub(super) fn init(globals: &mut Globals) {
         crate::builtins::send,
         inline_gen2!(crate::builtins::object_send),
         0,
-        0,
+        crate::executor::frame::VARIADIC_CAP,
         true,
         &[],
         true,
     );
+    globals.store[send_fid].set_native_variadic();
     globals.store.record_object_send_fid(send_fid);
     globals.define_builtin_func(OBJECT_CLASS, "freeze", freeze, 0);
     globals.define_builtin_inline_func(
@@ -482,7 +484,7 @@ fn instance_exec(
     let self_val = lfp.self_val();
     let bh = lfp.expect_block()?;
     let data = vm.get_block_data(globals, bh)?;
-    let args = lfp.arg(0).as_array();
+    let args = lfp.variadic_args();
     vm.push_instance_eval_context(self_val);
     let res = vm.invoke_block_with_self(globals, &data, self_val, &args);
     vm.pop_class_context();

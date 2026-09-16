@@ -1337,6 +1337,16 @@ impl FuncInfo {
         self.ext.params.is_rest()
     }
 
+    /// A variadic native whose rest slot stays `None` when nothing
+    /// overflows its fixed slots (`ParamsInfo::native_rest_optional`).
+    pub(crate) fn native_rest_optional(&self) -> bool {
+        self.ext.params.native_rest_optional()
+    }
+
+    pub(crate) fn set_native_variadic(&mut self) {
+        self.ext.params.set_native_rest_optional();
+    }
+
     ///
     /// Static callee-frame layout for a D1 source-routed forwarding call
     /// (`def f(...) = g(...)` whose `...` rest was deferred).

@@ -20,17 +20,18 @@ pub(super) fn init(globals: &mut Globals) {
         Effect::CAPTURE,
     );
     globals.store[PROC_CLASS].clear_alloc_func();
-    globals.define_builtin_funcs_with_kw(
+    let call_fid = globals.define_builtin_funcs_with_kw(
         PROC_CLASS,
         "call",
         &["[]", "yield", "==="],
         call,
         0,
-        0,
+        crate::executor::frame::VARIADIC_CAP,
         true,
         &[],
         true,
     );
+    globals.store[call_fid].set_native_variadic();
     globals.define_builtin_func(PROC_CLASS, "binding", binding_, 0);
     globals.define_builtin_func(PROC_CLASS, "source_location", source_location, 0);
     globals.define_builtin_funcs(PROC_CLASS, "to_s", &["inspect"], to_s, 0);
@@ -315,12 +316,12 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> R
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
     // `Proc#call` is declared with keyword-rest, so trailing keyword
-    // arguments land in the kw-rest slot (`arg(1)`, after the
-    // positional rest at `arg(0)`). Forward them to the block invoker
+    // arguments land in the kw-rest slot (after the variadic positional
+    // slots, `Lfp::variadic_kw`). Forward them to the block invoker
     // so the *block's own* signature decides whether they bind to
     // keyword parameters or fold into a trailing positional Hash
     // (matches CRuby; previously these were dropped).
-    let kw = match lfp.try_arg(1) {
+    let kw = match lfp.variadic_kw() {
         Some(v)
             if v.ty() == Some(ObjTy::HASH) && !Hashmap::new(v).inner().is_empty() =>
         {
@@ -336,19 +337,18 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             .self_val()
             .try_symbol()
             .expect("symbol-to-proc outer self is not a Symbol");
-        let args_val = lfp.arg(0);
-        let args = args_val.as_array();
+        let args = lfp.variadic_args();
         let Some((recv, rest)) = args.split_first() else {
             return Err(MonorubyErr::argumenterr("no receiver given"));
         };
         let bh = lfp.block();
         // Same dispatch as a yield to this proc — one public-restricted
-        // lookup, and the arguments read in place (the array is rooted by
-        // this frame, and the collector does not move objects).
+        // lookup, the arguments still rooted by this frame's slots.
         return vm.dispatch_symbol_proc_kw(globals, symbol_id, *recv, rest, bh, kw);
     }
     let bh = lfp.block();
-    vm.invoke_proc_with_block(globals, &proc, &lfp.arg(0).as_array(), bh, kw)
+    let args = lfp.variadic_args();
+    vm.invoke_proc_with_block(globals, &proc, &args, bh, kw)
 }
 
 ///

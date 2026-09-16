@@ -875,7 +875,37 @@ impl Lfp {
         }
         max
     }
+
+    /// The positional arguments of a variadic native
+    /// (`define_builtin_func_variadic`): the leading ones sit in the
+    /// `VARIADIC_CAP` fixed slots (`None` past the last one passed), and
+    /// only when more were passed does slot `VARIADIC_CAP` hold an Array
+    /// with the overflow — so a call within the cap allocates nothing.
+    /// The values are copied out (an inline `SmallVec` up to the cap);
+    /// they stay rooted by this frame for the call.
+    pub fn variadic_args(&self) -> smallvec::SmallVec<[Value; VARIADIC_CAP]> {
+        let mut args = smallvec::SmallVec::new();
+        for i in 0..VARIADIC_CAP {
+            match self.try_arg(i) {
+                Some(v) => args.push(v),
+                None => return args,
+            }
+        }
+        if let Some(rest) = self.try_arg(VARIADIC_CAP) {
+            args.extend(rest.as_array().iter().cloned());
+        }
+        args
+    }
+
+    /// The `**kwrest` slot of a variadic native declared with keyword
+    /// rest: the slot after the overflow slot.
+    pub fn variadic_kw(&self) -> Option<Value> {
+        self.try_arg(VARIADIC_CAP + 1)
+    }
 }
+
+/// Fixed argument slots of a variadic native (`Lfp::variadic_args`).
+pub const VARIADIC_CAP: usize = 8;
 
 #[cfg(test)]
 mod tests {
