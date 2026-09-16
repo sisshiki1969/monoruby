@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-61cdfde4.js";
+            window.path_to_searchindex_js = "../searchindex-1ac99a5c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -559,16 +559,54 @@ surcharge over the same loop with no <code>ensure</code> from 1.62× to 1.20×.<
 the plain form (§6.1): a host’s <em>normal</em> completion reaches it far more often
 than a spliced exit does, and with nothing parked for the frame the dispatch
 could only have answered “continue”.</p>
+<p>With the hop at ~100 ns, chaining pays: a <code>break</code> crossing <strong>two</strong>
+intermediate <code>ensure</code>s went from 1.28 s (the generic unwind) to 0.83 s on the
+same 1.28M-exit benchmark whose no-<code>ensure</code> baseline is 0.63 s and whose
+one-host time is 0.75 s — the second hop costs about what the first does,
+where the generic unwind’s second region had cost ~0.08 s on top of its
+~0.35 s entry. That arithmetic is why the hop had to be made cheap first: at
+the ~270 ns it cost before deliveries took the arm, a second hop would have
+lost to the generic path.</p>
+<p><strong>More than one <code>ensure</code> on the way out</strong> chains hop by hop. <code>try_splice_exit</code>
+collects every host the unwind crosses (innermost first) and, once each has
+passed the checks below, records on each host’s <code>EnsureEnd</code> what to do with
+the exit once its body has run (<code>SpliceHop</code>): every host but the last <strong>hands
+it on</strong> — <code>SplicedArm::Hop</code> re-keys the deferral on the next host (the mirror
+follows, so that host’s <code>EnsureEnd</code> gate sees it), tears down to the frame the
+next host called and <code>ret</code>s the marker into its landing, which is the tail of
+the exit’s own hop run from the <code>EnsureEnd</code> instead — and the last host
+<strong>delivers</strong> through the teardown arm as above (<code>SplicedArm::Final</code>). Each
+landing is requested on its host at the exit, all at once; hosts emit them as
+their own compiles resume, innermost host first, which is the order the
+recursion unwinds in anyway. The exit registers one return context, at the
+target, from the last host; a hand-on registers none, as the exit’s own hop
+does not — the next host’s landing is a branch edge of that host’s CFG. A
+next host that can no longer be entered by compiled code (captured to the
+heap since) puts the error back in flight at that <code>EnsureEnd</code>, and the generic
+unwind resumes from there with every frame below it still intact.</p>
+<p>A host’s arm is static — one destination per kind — so an exit that would
+route a kind through a host somewhere other than an exit already recorded is
+refused (<code>spliced_ensure_conflicts</code>; the second route used to be silently
+overwritten, a latent stage-2 bug with one host too).</p>
+<p>The route also carries <strong>what the exit claimed about its value</strong>. The value
+the delivering <code>EnsureEnd</code> hands over is the very one the exit left with (it
+rides the deferral unchanged), so the <code>ReturnState</code> the exit’s own state made
+(<code>as_return</code>: the constant it is, or its class) holds at delivery. Each exit
+routed through a host joins its claim into the route, and the delivering host
+registers the joined claim — under <em>its own</em> invariants, since the <code>ensure</code>
+bodies ran in between — as the exit’s return context at the target
+(<code>as_return_like</code>). The target’s continuation therefore learns the class or
+the constant exactly as it would from a plain specialized <code>break</code> / <code>return</code>,
+and a spliced exit whose value agrees with the normal return path no longer
+collapses that join to <code>Value</code>. (It used to register <code>as_return_any</code>.)</p>
 <p><code>try_splice_exit</code> refuses everything it cannot prove: a dispatch arm, a
 loop-rooted frame (whose compile may not cover the body), a <code>$!</code> restore
-owed anywhere on the way out, more than one <code>ensure</code> to run (chaining hop by
-hop is the natural extension — each <code>EnsureEnd</code> would tear down to the next
-host — but is not built), a body that is not a basic-block head, a body
-containing an exit of its own (<code>next</code> / <code>break</code> / <code>return</code> / <code>retry</code> /
-<code>redo</code>, which would leave the deferral parked past the frame) or a nested
-handler, and a host whose in-progress call site is not one of the two shapes
-that emit a landing. Every refusal falls back to the generic unwind, which
-handles every case.</p>
+owed anywhere on the way out, a conflicting route through a host, a body that
+is not a basic-block head, a body containing an exit of its own (<code>next</code> /
+<code>break</code> / <code>return</code> / <code>retry</code> / <code>redo</code>, which would leave the deferral parked
+past the frame) or a nested handler, and a host whose in-progress call site is
+not one of the two shapes that emit a landing. Every refusal falls back to the
+generic unwind, which handles every case.</p>
 <p>Measured on the shape the issue names — a <code>break</code>-with-<code>ensure</code> that is the
 normal exit of an inner iteration inside a hot loop in the block’s defining
 frame — this is worth roughly 10% (0.79–0.83 s → 0.69–0.77 s over
