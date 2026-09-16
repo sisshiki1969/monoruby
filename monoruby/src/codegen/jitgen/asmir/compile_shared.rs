@@ -233,6 +233,7 @@ impl Codegen {
             }
             // Variable access. gvar/cvar go via a runtime call; dynvar walks the
             // outer-LFP chain.
+            AsmInst::LoadErrinfo => self.encode_linst(LInst::LoadErrinfo),
             AsmInst::LoadGVar { name, using_fpr } => {
                 self.encode_linst(LInst::LoadGVar { name, using_fpr })
             }
@@ -1825,6 +1826,9 @@ impl Codegen {
                 error,
             } => {
                 self.emit_store_constant(id, using_fpr, &error);
+            }
+            LInst::LoadErrinfo => {
+                self.emit_load_errinfo();
             }
             LInst::LoadGVar { name, using_fpr } => {
                 self.emit_load_gvar(name, using_fpr);

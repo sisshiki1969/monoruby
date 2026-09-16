@@ -67,6 +67,7 @@ impl Codegen {
             | AsmInst::GuardConstVersion { .. }
             | AsmInst::StoreConstant { .. }
             | AsmInst::LoadGVar { .. }
+            | AsmInst::LoadErrinfo
             | AsmInst::StoreGVar { .. }
             | AsmInst::LoadCVar { .. }
             | AsmInst::LoadDynVar { .. }
@@ -1208,6 +1209,15 @@ impl Codegen {
         using_fpr: UsingFpr,
     ) -> bool {
         self.load_gvar(name, using_fpr);
+        true
+    }
+
+    /// `rax <- $!`. The whole of `AsmInst::LoadErrinfo`: `$!` is a plain
+    /// `Value` field of the `Executor` that rbx already points at.
+    pub(in crate::codegen::jitgen) fn emit_load_errinfo(&mut self) -> bool {
+        monoasm! { &mut self.jit,
+            movq rax, [rbx + (EXECUTOR_ERRINFO)];
+        };
         true
     }
 

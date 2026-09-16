@@ -785,6 +785,9 @@ pub(in crate::codegen) enum LInst {
         using_fpr: UsingFpr,
         error: DestLabel,
     },
+    /// `rax <- $!` read straight off the `Executor` — see
+    /// `AsmInst::LoadErrinfo`.
+    LoadErrinfo,
     LoadGVar {
         name: IdentId,
         using_fpr: UsingFpr,

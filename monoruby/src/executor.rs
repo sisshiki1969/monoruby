@@ -187,6 +187,9 @@ const SVAR_LASTLINE: usize = 1;
 pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
 pub(crate) const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
 pub(crate) const EXECUTOR_DEFERRED_TOP: i64 = std::mem::offset_of!(Executor, deferred_top_lfp) as _;
+/// `$!`. A plain `Value` field, so the JIT reads it with one load instead
+/// of the generic hooked-global runtime call — see `AsmInst::LoadErrinfo`.
+pub(crate) const EXECUTOR_ERRINFO: i64 = std::mem::offset_of!(Executor, errinfo) as _;
 pub(crate) const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
 pub(crate) const EXECUTOR_STACK_LIMIT: i64 = std::mem::offset_of!(Executor, stack_limit) as _;
 /// Scratch words a deopt trampoline fills in before branching to its

@@ -67,6 +67,15 @@ impl Codegen {
         true
     }
 
+    /// `x0 <- $!`. The whole of `AsmInst::LoadErrinfo`: `$!` is a plain
+    /// `Value` field of the `Executor` that x19 already points at.
+    pub(in crate::codegen::jitgen) fn emit_load_errinfo(&mut self) -> bool {
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x19, #(EXECUTOR_ERRINFO as u32)];
+        );
+        true
+    }
+
     /// $gvar <- src via runtime::set_global_var(vm, globals, name, val).
     pub(in crate::codegen::jitgen) fn emit_store_gvar(
         &mut self,
