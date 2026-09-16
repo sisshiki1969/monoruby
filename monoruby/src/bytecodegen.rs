@@ -395,6 +395,11 @@ struct LoopInfo {
 #[derive(Debug)]
 struct ExceptionEntry {
     range: std::ops::Range<Label>,
+    /// Identifies the `begin` region these entries belong to, unique
+    /// within the iseq. A replayed `ensure` body runs with the regions it
+    /// replays switched off (see [`ReplaySpan`]), which is stated as a
+    /// list of these ids.
+    region_id: u32,
     rescue: Option<Label>,
     ensure: Option<Label>,
     err_reg: Option<BcReg>,
@@ -406,6 +411,30 @@ struct ExceptionEntry {
     rescue_range: Option<std::ops::Range<Label>>,
     /// The hidden local holding `$!` as of region entry.
     errinfo_save: Option<BcReg>,
+}
+
+///
+/// A span of code holding an inline copy of an `ensure` body, replayed
+/// ahead of an exit that leaves the region (`gen_all_pending_ensures` /
+/// `gen_loop_pending_ensures`).
+///
+/// The copy sits lexically *inside* the very regions it is replaying, so
+/// without this the exception table would hand a raise there back to the
+/// region whose body is running — which runs that body a second time.
+/// `off` lists the regions switched off for the span: the one whose body
+/// this is, and the inner ones this exit already ran. Regions further out
+/// stay active — they have not run yet — and so does a region written
+/// *inside* the body, which is a region of its own and never appears in
+/// the list.
+///
+/// It is the table-side statement of the same rule the generator already
+/// follows for exits written inside a replayed body, where
+/// `gen_all_pending_ensures` truncates its own `ensure` stack.
+///
+#[derive(Debug, Clone)]
+struct ReplaySpan {
+    range: std::ops::Range<BcIndex>,
+    off: Vec<u32>,
 }
 
 ///
@@ -614,7 +643,7 @@ struct BytecodeGen<'a> {
     /// (`return`, `break`, `next`) crossing a region restore `$!` from
     /// the slot and run the ensure body, innermost first — mirroring
     /// CRuby's per-frame errinfo restore during unwinding.
-    ensure: Vec<(Option<Node>, Option<BcReg>)>,
+    ensure: Vec<(Option<Node>, Option<BcReg>, u32)>,
     /// The name of the block param.
     block_param: Option<IdentId>,
     /// The label for redo.
@@ -632,6 +661,13 @@ struct BytecodeGen<'a> {
 
     /// Exception jump table.
     exception_table: Vec<ExceptionEntry>,
+    ///
+    /// Spans holding a *replayed* copy of an `ensure` body, with the
+    /// regions that copy runs outside of.
+    ///
+    replay_spans: Vec<ReplaySpan>,
+    /// Source of the region ids handed out by [`Self::new_region_id`].
+    next_region_id: u32,
     /// Merge info.
     merge_info: HashMap<Label, (Option<BcTemp>, Vec<MergeSourceInfo>)>,
     /// Slot range (arg-area indices) of destructured-parameter locals
@@ -688,6 +724,8 @@ impl<'a> BytecodeGen<'a> {
             sourceinfo,
 
             exception_table: vec![],
+            replay_spans: vec![],
+            next_region_id: 0,
             merge_info: HashMap::default(),
             destructed_args: 0..0,
         };
@@ -1027,7 +1065,8 @@ impl<'a> BytecodeGen<'a> {
         let in_rescue = self.rescue_depth > 0;
         let ensures: Vec<_> = std::mem::take(&mut self.ensure);
         for idx in (ensure_depth..ensures.len()).rev() {
-            let (ensure, errinfo_save) = ensures[idx].clone();
+            let span_start = BcIndex::from(self.ir.len());
+            let (ensure, errinfo_save, _) = ensures[idx].clone();
             // Regions outside the body being generated stay active —
             // same truncation protocol as `gen_all_pending_ensures`.
             self.ensure = ensures[..idx].to_vec();
@@ -1047,6 +1086,7 @@ impl<'a> BytecodeGen<'a> {
             if let Some(ensure) = ensure {
                 self.gen_expr(ensure, UseMode2::NotUse)?;
             }
+            self.record_replay_span(span_start, &ensures[idx..]);
         }
         self.ensure = ensures;
         Ok(())
@@ -1305,7 +1345,8 @@ impl<'a> BytecodeGen<'a> {
         let in_rescue = self.rescue_depth > 0;
         let ensures: Vec<_> = std::mem::take(&mut self.ensure);
         for idx in (0..ensures.len()).rev() {
-            let (ensure, errinfo_save) = ensures[idx].clone();
+            let span_start = BcIndex::from(self.ir.len());
+            let (ensure, errinfo_save, _) = ensures[idx].clone();
             self.ensure = ensures[..idx].to_vec();
             // When leaving a rescue clause, restore `$!` to the
             // region's entry value *before* its ensure body runs (a
@@ -1327,9 +1368,37 @@ impl<'a> BytecodeGen<'a> {
             if let Some(ensure) = ensure {
                 self.gen_expr(ensure, UseMode2::NotUse)?;
             }
+            self.record_replay_span(span_start, &ensures[idx..]);
         }
         self.ensure = ensures;
         Ok(())
+    }
+
+    /// A fresh region id. Every `begin` region gets one, including the
+    /// separate copies an `ensure` body is generated into, so a region
+    /// written inside a replayed body is never mistaken for one of the
+    /// regions being replayed.
+    fn new_region_id(&mut self) -> u32 {
+        let id = self.next_region_id;
+        self.next_region_id += 1;
+        id
+    }
+
+    /// Note that `[start, here)` holds a replayed copy of an `ensure`
+    /// body, run outside the regions *replayed* (the one whose body it is,
+    /// innermost first, plus the inner ones this exit already ran).
+    fn record_replay_span(
+        &mut self,
+        start: BcIndex,
+        replayed: &[(Option<Node>, Option<BcReg>, u32)],
+    ) {
+        let end = BcIndex::from(self.ir.len());
+        if start != end {
+            self.replay_spans.push(ReplaySpan {
+                range: start..end,
+                off: replayed.iter().map(|(_, _, id)| *id).collect(),
+            });
+        }
     }
 
     fn emit_ret(&mut self, src: Option<BcReg>) -> Result<()> {

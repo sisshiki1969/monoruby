@@ -72,7 +72,12 @@ impl<'a> BytecodeGen<'a> {
                             let recv = self.gen_temp_expr(b)?;
                             self.apply_label(body_end);
                             self.emit(BytecodeInst::DefinedMethod { ret, recv, name }, node.loc);
+                            // A synthetic `defined?` guard: a region of its own,
+                            // never replayed, so it never appears in a replay
+                            // span's off-list.
+                            let region_id = self.new_region_id();
                             self.exception_table.push(ExceptionEntry {
+                                region_id,
                                 range: body_start..body_end,
                                 rescue: Some(nil_label),
                                 ensure: None,
@@ -130,7 +135,12 @@ impl<'a> BytecodeGen<'a> {
                     self.apply_label(body_start);
                     let _ = self.gen_temp_expr(n)?;
                     self.apply_label(body_end);
+                    // A synthetic `defined?` guard: a region of its
+                    // own, never replayed, so it never appears in a
+                    // replay span's off-list.
+                    let region_id = self.new_region_id();
                     self.exception_table.push(ExceptionEntry {
+                        region_id,
                         range: body_start..body_end,
                         rescue: Some(nil_label),
                         ensure: None,
@@ -188,7 +198,12 @@ impl<'a> BytecodeGen<'a> {
                         BinOp::LAnd | BinOp::LOr => unreachable!(),
                     };
                     self.emit(BytecodeInst::DefinedMethod { ret, recv, name }, node.loc);
+                    // A synthetic `defined?` guard: a region of its
+                    // own, never replayed, so it never appears in a
+                    // replay span's off-list.
+                    let region_id = self.new_region_id();
                     self.exception_table.push(ExceptionEntry {
+                        region_id,
                         range: body_start..body_end,
                         rescue: Some(nil_label),
                         ensure: None,
@@ -244,7 +259,12 @@ impl<'a> BytecodeGen<'a> {
                     let recv = self.gen_temp_expr(r)?;
                     self.apply_label(body_end);
                     self.emit(BytecodeInst::DefinedMethod { ret, recv, name }, node.loc);
+                    // A synthetic `defined?` guard: a region of its
+                    // own, never replayed, so it never appears in a
+                    // replay span's off-list.
+                    let region_id = self.new_region_id();
                     self.exception_table.push(ExceptionEntry {
+                        region_id,
                         range: body_start..body_end,
                         rescue: Some(nil_label),
                         ensure: None,
@@ -283,7 +303,12 @@ impl<'a> BytecodeGen<'a> {
                         },
                         node.loc,
                     );
+                    // A synthetic `defined?` guard: a region of its
+                    // own, never replayed, so it never appears in a
+                    // replay span's off-list.
+                    let region_id = self.new_region_id();
                     self.exception_table.push(ExceptionEntry {
+                        region_id,
                         range: body_start..body_end,
                         rescue: Some(nil_label),
                         ensure: None,
@@ -316,7 +341,12 @@ impl<'a> BytecodeGen<'a> {
                     self.apply_label(body_start);
                     let base = self.gen_temp_expr(parent)?;
                     self.apply_label(body_end);
+                    // A synthetic `defined?` guard: a region of its
+                    // own, never replayed, so it never appears in a
+                    // replay span's off-list.
+                    let region_id = self.new_region_id();
                     self.exception_table.push(ExceptionEntry {
+                        region_id,
                         range: body_start..body_end,
                         rescue: Some(nil_label),
                         ensure: None,

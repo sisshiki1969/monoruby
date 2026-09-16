@@ -399,6 +399,73 @@ of what is left is the deferral machinery itself — two runtime calls and a
 chain that merely tears down (no hot continuation to return to) the
 difference is within noise.
 
+### 6.4 Replayed `ensure` bodies and the exception table
+
+The two copies above are not the only ones. A **non-local exit written inside
+a region** — a local `return`, a loop `break` / `next` / `redo`, `retry` —
+does not go through `handle_error` at all: bytecodegen replays the bodies of
+every region the exit leaves *inline*, innermost first, immediately ahead of
+the exit instruction (`gen_all_pending_ensures`, `gen_loop_pending_ensures`).
+
+Those inline copies sit lexically **inside** the very regions they replay, so
+the exception table covered them like any other code in the region. A copy
+that raised was therefore handed straight back to the region whose body was
+running, and the body ran a second time:
+
+```ruby
+begin
+  begin
+    return :never
+  ensure
+    $log << :inner     # ran twice; CRuby runs it once
+    raise "E"
+  end
+ensure
+  $log << :outer
+end
+```
+
+The generator already states the rule on its own side: while it emits the body
+of the region at stack index `idx`, it truncates its `ensure` stack to
+`ensures[..idx]`, so a `return` *written* in an ensure body does not
+re-generate that body (and `begin return 1 ensure return 2 end` returns 2, as
+in CRuby). The table now says the same thing at run time.
+
+Each region gets an **id** (`BytecodeGen::new_region_id`), carried by every
+exception-table entry it emits and by its entry on the `ensure` stack. Each
+replayed copy is recorded as a **replay span** — a `BcIndex` range plus the
+ids of the regions it runs outside of: the one whose body it is, and the inner
+ones the exit has already replayed. `ISeqInfo::active_entries` drops those
+entries, and every "which regions are in force at this pc" lookup goes through
+it (`get_exception_dest`, `covering_ensure`, `single_covering_ensure`), so the
+raise path and the non-local-exit path agree.
+
+Ids rather than nesting depths, because a `begin` written **inside** an ensure
+body is a region of its own and must keep catching:
+
+```ruby
+begin
+  return :done
+ensure
+  begin
+    raise "E"
+  rescue => e     # still catches
+  end
+end
+```
+
+Bodies are generated once per copy, so that nested region gets a fresh id in
+each copy and never collides with the region being replayed — where a depth
+count would, since the generator's truncated stack gives it the same depth as
+the region whose body it is in.
+
+Spans nest, too (an ensure body may hold an exit that replays further bodies),
+so a pc is checked against *every* span covering it, not just the innermost.
+`errinfo_restore_slots` is deliberately left outside this filter: it is keyed
+on rescue-*clause* spans and is only ever asked about the exit instruction's
+own pc, which no replay span covers.
+
+
 ---
 
 ## 7. Backtrace construction — the key contrast

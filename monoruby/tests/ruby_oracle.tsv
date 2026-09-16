@@ -156,6 +156,7 @@
 08afdef663fa588e146ea15e587897fc	[false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], []]	def m = []\n        r = []\n        20.times do\n            a = m\n       
 08b7202003237b5589f045034e865e7b	{a: 10, b: 20, c: 30}	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.to_
 08d5901aeb4f2144e9a820f898cbcd1e	[false]	r = []; Enumerator.new { |y| y << caller.empty? }.with_index { |v, i| r << v }; 
+08e8e9ac4c18586669018d45bdf513c4	["caught:E", [:inner, :rescued]]	$log = []\n        def f\n          begin\n            begin\n             
 08fc54bc0f437875557068bccc618cc9	[true, true]	class Qux\n          def !\n            99\n          end\n        end\n    
 090184d49e436724223ec248497eaf4d	true	def foo\n              caller\n            end\n            foo.is_a?(
 0908fa5a55bea9aee9bc7bed9a5b9f10	[42, 7, 11, 17]	class A\n          attr_accessor :w, :x, :y, :z\n          def initialize
@@ -372,6 +373,7 @@
 18b3f31c36b0241cca4cd3e50f3ef25a	"hi world"	class Foo\n              def hello(x); "hi #{x}"; end\n            en
 18ccddd91be7d564a96e8bbe8f35689c	true	[Process.ppid, Process.uid, Process.gid, Process.egid].all? { |v| v.is_a?(Intege
 18e53719759492ee280d0bf682120775	"pong\\n"	require "socket"\n            s = TCPServer.new("127.0.0.1", 0)\n    
+18e8a50567cd47579b9362f8877dc796	["E", [:inner, :outer]]	$log = []\n        def f\n          while true\n            begin\n        
 18ee9f38f586cbb66857420f64f8aa85	[1, true, Errno::EINVAL, IOError, Errno::EINVAL, Errno::EINVAL, "xxx"]	(f="/tmp/mono_ut_#{Process.pid}"; File.write(f,"x"*10); n=File.utime(nil, nil, f
 18f089886e8d365939940fbda5792632	:OVERRIDDEN	class NilClass; def ==(o); :OVERRIDDEN; end; end; nil == nil
 191fb9b97f7511e2b57d567935998d83	"para\\n\\n"	r, w = IO.pipe\n            t = Thread.new { r.gets("") }\n          
@@ -544,6 +546,7 @@
 255446c3b754da9870de5a3f4fa85c65	[:wait_readable, "k"]	r, w = IO.pipe\n            a = r.read_nonblock(1, exception: false)
 2564e3ad2fe7fb1fdc5d2fa9b88997a2	"US-ASCII"	"\\x01".unpack("h")[0].encoding.to_s
 256686756b653a14cc54ed2fe66c19a5	"hello from Foo"	class Foo\n              def hello\n                "hello from Foo"\n
+256b5f4adf478415aa6b27cc91c02515	["E", [:inner, :outer]]	$log = []\n        def f\n          begin\n            begin\n             
 25ab3bc8851895e51c03504e71ee2483	[true, false, "a1"]	x = 1\n        s = "a#{x}".freeze\n        t = "a#{x}".freeze\n        [s.
 25bf8c5753369088e3ee3a5e22313082	["Z", "\\n"]	tr = []\n            trace_var(:$/) { |v| tr << v }\n            $/ =
 25bfb835555c41988ae49ab62e4ae633	["ok", "ok", "ok", "ok", "ok", "abcok"]	class MTosInt; def to_s; 42; end; end\n            class MTosNil; de
@@ -1039,6 +1042,7 @@
 47a466639c2c1b1719397c1a7d85ddbb	"MIT License\\n\\nCopyright (c) 2022 monochrome\\n\\nPermission is hereby granted, free of charge, to any person obtaining a copy\\nof this software and associated documentation files (the \\"Software\\"), to deal\\nin the Software without restriction, including without limitation the rights\\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\\ncopies of the Software, and to permit persons to whom the Software is\\nfurnished to do so, subject to the following conditions:\\n\\nThe above copyright notice and this permission notice shall be included in all\\ncopies or substantial portions of the Software.\\n\\nTHE SOFTWARE IS PROVIDED \\"AS IS\\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\\nSOFTWARE.\\n"	File.read("../LICENSE-MIT")
 47ae976bfcfac15927d61a026a17110e	false	Module.new.method_defined?(:hash)\n            
 47b4a9d964ab14f6ade2bbe2ebb0af86	true	Enumerator.new { |y| y.yield }.each { |a| a }.nil?
+47bd16deb47f6e4fff8b14d985e59bea	[:done, [:inner, "caught:E"]]	$log = []\n        def f\n          while true\n            begin\n        
 47d7351976024e90fdb66ae5f2d39fcc	[true, true]	[Process.respond_to?(:_fork), Process.respond_to?(:fork)]\n         
 47e7e98a04a78c655d67c571def18c17	"US-ASCII"	"abc".dup.force_encoding("US-ASCII").gsub(/b/) { |m| "X" }.encoding.to_s
 47ff59203a8ee9640145c8b1f5b27aa1	[1, 2, 3, nil, 4, nil]	def f\n          yield 1,[2,3],4\n        end\n        \n\n        f {|a,(b,
@@ -1193,6 +1197,7 @@
 521f16239cbd7625cbdbd1830aff0d66	[4, "FILE:20: warning: given block not used\\n", 4, "FILE:21: warning: given block not used\\n", "FILE:29: warning: plain\\n", "warning: deep\\n"]	require "stringio"\n        def capture\n          old = $stderr\n        
 522c4f8c40e029c9a06a958415c5bba8	["append_features:C"]	$res = []\n        module M\n          def self.append_features(base)\n   
 524367ed511f6b1b9b39540a39ff9acd	[0, 0, 0, 2, FrozenError]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
+524412f37cf12fbc3afbccff0fb0321e	["E", [:inner, :outer]]	$log = []\n        def f\n          begin\n            begin\n             
 525e307d40d5e0bc7aa36e1ace713254	[:small, 7, :big]	class BmR\n          define_method(:pick) { |n| return :small if n < 10;
 52737290d47684f2e53ee7646498dbeb	[1, 2, 1, 2, 1, 2, 2, 1, 2, 1, 2]	class S\n              def g\n                f\n              end\n   
 52951bd5bd2eafe538c7b07f93870c22	[[:authorizer, :authorizer=, :build_result_set, :busy_handler, :busy_handler_timeout=, :busy_timeout, :busy_timeout=, :changes, :close, :closed?, :collation, :collations, :commit, :complete?, :create_aggregate, :create_aggregate_handler, :create_function, :define_aggregator, :define_function, :define_function_with_flags, :enable_load_extension, :encoding, :errcode, :errmsg, :execute, :execute2, :execute_batch, :execute_batch2, :extended_result_codes=, :filename, :get_first_row, :get_first_value, :initialize_extensions, :interrupt, :last_insert_row_id, :load_extension, :prepare, :query, :readonly?, :results_as_hash, :results_as_hash=, :rollback, :statement_timeout=, :total_changes, :trace, :transaction, :transaction_active?], [:db_filename, :define_aggregator2, :disable_quirk_mode, :discard, :exec_batch, :load_extension_internal, :open16, :open_v2], [:active?, :bind_param, :bind_parameter_count, :bind_params, :clear_bindings!, :close, :closed?, :column_count, :column_decltype, :column_name, :columns, :done?, :each, :execute, :execute!, :expanded_sql, :memused, :must_be_open!, :remainder, :reset!, :sql, :stat, :step, :types], [:get_metadata, :prepare, :stat_for, :stats_as_hash]]	require "rubygems"\n        require "sqlite3"\n        [SQLite3::Database
@@ -2018,6 +2023,7 @@
 8d830e1b0b9fd01963265a605718108d	[false, false, TypeError, TypeError, "a/b/c", [ArgumentError, "string contains null byte"], "/", ".", "."]	(a=File.directory?(STDIN); o=Object.new; def o.to_io; STDIN; end; b=File.directo
 8d9530b39ee52f718426ea8687708e0f	"data"	path = "/tmp/monoruby_test_filewrite_kw_#{Process.pid}_#{rand(10000
 8d974b46554a5e083a4cc64738f912b3	[true, true, true]	r, w = IO.pipe\n            v = [r.external_encoding.equal?(Encoding
+8d9b6e04643af271795861af415a3475	["E", [[:inner, 1], [:outer, 1], [:inner, 2], [:outer, 2]]]	$log = []\n        def f\n          i = 0\n          while i < 3\n         
 8da7366bb9237437c206166655b43ef6	[true, false, false, true, false, false, true]	res = []\n        i = 0\n        while i < 3000\n          res = ["fz".fre
 8daa6433e635cb816f0ee8a52cea83ef	[:initialize_clone, :initialize_copy]	$called = []\n            class Foo\n              def initialize_clo
 8daf37824b1f3c973b8f0c2a54183cdd	"[{1:2},{3:4}]"	module Json\n              refine(Integer) { def fmt; to_s; end }\n  
@@ -2240,6 +2246,7 @@
 9dbc194b1b0f6de59813ff04a2e9663a	[20, 20, 100, 2, 2]	Bar = 100\n            class Foo\n              autoload :Bar, "./c"\n
 9dbef04511724f84642f3b1be7361af9	[:get_raised, :set_raised]	class D\n              def initialize() @a = {k: 1} end\n            
 9dc570781d3034551d04772d71561543	:OVERRIDDEN	class Float; def ==(o); :OVERRIDDEN; end; end; 3.0 == 4.0
+9dc5dada6517c93364e4657584df6b8b	[:done, [:inner, "caught:E", :outer]]	$log = []\n        def f\n          begin\n            begin\n             
 9e349938558e7f648ad2c96a5fab61e1	:NOPE	class CGetMissingNameErr; end\n            begin\n              CGetM
 9e41b878cb2cd158c0051841526faf43	:OVERRIDDEN	class Integer; def !; :OVERRIDDEN; end; end; !(3)
 9e6a755dc91f96f0b6154f440b28b5cf	[0, nil, nil, [2, 2, "one", "two"], [true, true, true, false], ["one again", 2], ["A", "B", 4], "one again", [nil, 3, false], 3, ["A", "B", "two"], 12, "ObjectSpace::WeakMap"]	m = ObjectSpace::WeakMap.new\n        k1, k2, v1, v2 = Object.new, Objec
@@ -3143,6 +3150,7 @@ da20ef8164c16f9d050189c7530ccdda	13	case 4\n        when 0\n          a = 10\n  
 da337801ffb5841d6913419d4806674b	[[1, 2, 3], [1, 2, 3], 1, 3, [1, 3]]	a = [3, 1, 2]\n            [\n              a.sort { |x, y| (x <=> y)
 da4116da4a0b35a76e2faef0a98c7685	[42, 300]	$m = 0\n        def h\n          [1].each do |x|\n            begin\n      
 da424b8ae2f6063fa60766fab8bac34a	false	t = Thread.new { sleep(2**62) }\n            Thread.pass while t.sta
+da48230942e60b233c8123b262b16bca	["E", [:inner, :outer]]	$log = []\n        def f\n          [1, 2, 3].each do |x|\n            beg
 da52e290ddf3ec3f474fa3a4bb76acdd	[2.5, 2.5, 3.5, TypeError, 4611686018427387904, Integer, FrozenError, 1]	class L\n              def initialize(n, a); @n = n; @a = a; end\n   
 da5e06d1fe5eed1ee4258f71a99b2332	0	a = "abc".dup.force_encoding("UTF-8")\n              b = "abc".dup
 da64841b8187b9d8951f84703a56f5e9	[true, false]	$x = []\n            path = "/tmp/monoruby_test_mkdir_#{Process.pid}
@@ -3337,6 +3345,7 @@ e8629d85bee1ecd0620fc7812cf440d4	"myfile.rb:42:"	b = binding\n            begin\
 e8663c97e820ca6aa3b720c87c95f4ff	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"	r, w = IO.pipe\n            t = Thread.new { r.read }\n            w.
 e874e1da171336c766ccb7c7051d0664	true	e = Exception.new\n            r = Marshal.load(Marshal.dump([e, e])
 e88599070c8943da135687c83d834899	["SELECT a FROM t WHERE a = ? OR a = :n", "SELECT a FROM t WHERE a = NULL OR a = NULL", "SELECT a FROM t WHERE a = 42 OR a = 'x'", true, "SELECT a FROM t WHERE a = NULL OR a = NULL", true, 2, ["SQLite3::Exception", "SQLite3::Exception", "SQLite3::Exception", "SQLite3::Exception"]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
+e889ad07ee40049b513a3a933fb0546e	["E2", [:inner, :outer]]	$log = []\n        def f\n          begin\n            begin\n             
 e8962f663b29be65e4e0dd56609acec4	[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 100]	def f\n                $res << 12.times { |x|\n                    $r
 e8ad34b388352ca80000e7df317bb41a	[42, true, true]	o = Object.new\n            def o.to_str; "value"; end\n            c
 e8bf25bb3eb8bcdf2410ac76264f9ea4	[1, 2]	Enumerator.new { |y| y << 1 << 2 }.to_a
@@ -3598,6 +3607,7 @@ f9f55e3d74d8690d687b64db069b8892	[:baz, true]	class Foo\n              def metho
 f9f99c93173a012d54a69a45e15215e8	false	File.file?("monoruby")
 f9fa14a275f704ee73210dcb18d2784d	{"x" => 1, "y" => 2}	S = Struct.new(:x, :y, :z)\n        s = S.new(1, 2, 3)\n        \ns.decons
 f9fab5f087a78b8a69b7a50182209e75	false	File.absolute_path?("tmp")
+fa004442166245412f68d2f95d42d135	["E", [:i, :m, :o]]	$log = []\n        def f\n          begin\n            begin\n             
 fa095bf0fa81fb0d8dba5ea996dd4a85	"a\\\\.b"	o = Object.new\n            def o.to_str; "a.b"; end\n            Reg
 fa18bc1056456d7e5cc4f8f09ad84803	"hello world"	class C; def to_str; " world"; end; end; o = C.new\ns = "hello"; s << o; s
 fa47fb1c9e7a32070609887554293ca5	5	def f; a=5; return a; end; f
