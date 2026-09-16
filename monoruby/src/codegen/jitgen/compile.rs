@@ -1236,23 +1236,15 @@ impl<'a> JitContext<'a> {
                 let spliced = self.current_frame().spliced_ensures.get(&bc_pos).copied();
                 let (spliced_break, spliced_ret) = match spliced {
                     Some((brk, mret)) => {
-                        // The teardown each arm runs is measured from THIS
-                        // frame to the position the splice recorded — the
-                        // exit's home, resolved where the exit was written
-                        // (a stage-2 splice was requested by a nested frame,
-                        // whose `break` home is nothing this frame could
-                        // re-derive).
-                        let brk_off = brk.map(|pos| self.spliced_teardown_offset(pos));
-                        let ret_off = mret.map(|pos| self.spliced_teardown_offset(pos));
-                        if let Some(pos) = brk {
-                            self.unset_return_context_side_effect_guard();
-                            self.new_spliced_exit_return(pos, state.as_return_any());
-                        }
-                        if let Some(pos) = mret {
-                            self.unset_return_context_side_effect_guard();
-                            self.new_spliced_exit_return(pos, state.as_return_any());
-                        }
-                        (brk_off, ret_off)
+                        // Each arm's teardown is measured from THIS frame to
+                        // the position the splice recorded — the exit's
+                        // home, or the next host — resolved where the exit
+                        // was written (a stage-2 splice was requested by a
+                        // nested frame, whose `break` home is nothing this
+                        // frame could re-derive).
+                        let brk = brk.map(|hop| self.spliced_arm(hop, state));
+                        let mret = mret.map(|hop| self.spliced_arm(hop, state));
+                        (brk, mret)
                     }
                     None => (None, None),
                 };

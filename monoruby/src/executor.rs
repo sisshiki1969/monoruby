@@ -1917,7 +1917,23 @@ impl Executor {
     /// does (a method host has no `outer`), so every stage-2 delivery
     /// took the re-raise instead of the arm.
     ///
-    pub(crate) fn finish_ensure_spliced(&mut self, lfp: Lfp) -> (u64, Value) {
+    /// Codes: 0 nothing parked for this frame (continue); 1 an error is
+    /// in flight (re-raise); 2 / 3 deliver the parked `break` / `return`
+    /// with its value; 4 / 5 the same kinds *handed on* — when *brk_next*
+    /// / *ret_next* names the next host owed an `ensure`, the deferral is
+    /// re-keyed on it (the mirror follows, so that host's `EnsureEnd`
+    /// gate sees it) and stays parked; the caller tears down into that
+    /// host's landing. A next host that can no longer be entered by
+    /// compiled code (captured to the heap since) puts the error back in
+    /// flight for the generic unwind, which resumes from this frame with
+    /// every frame below it still intact.
+    ///
+    pub(crate) fn finish_ensure_spliced(
+        &mut self,
+        lfp: Lfp,
+        brk_next: Option<Lfp>,
+        ret_next: Option<Lfp>,
+    ) -> (u64, Value) {
         let top_is_mine = matches!(self.deferred_unwind.last(), Some((l, _)) if *l == lfp);
         if self.exception.is_some() {
             // The ensure body raised its own error: it supersedes the
@@ -1931,11 +1947,26 @@ impl Executor {
         if !top_is_mine {
             return (0, Value::nil());
         }
+        let (kind_code, next) = match self.deferred_unwind.last().unwrap().1.kind() {
+            MonorubyErrKind::BlockBreak(..) => (2, brk_next),
+            MonorubyErrKind::MethodReturn(..) => (3, ret_next),
+            _ => (1, None),
+        };
+        if let Some(next) = next
+            && kind_code != 1
+        {
+            let meta = next.meta();
+            if meta.on_stack() && !meta.invalidated() {
+                self.deferred_unwind.last_mut().unwrap().0 = next;
+                self.sync_deferred_top();
+                return (kind_code + 2, Value::nil());
+            }
+        }
         let (_, err) = self.deferred_unwind.pop().unwrap();
         self.sync_deferred_top();
         match err.kind() {
-            MonorubyErrKind::BlockBreak(val, ..) => (2, *val),
-            MonorubyErrKind::MethodReturn(val, _) => (3, *val),
+            MonorubyErrKind::BlockBreak(val, ..) if next.is_none() => (2, *val),
+            MonorubyErrKind::MethodReturn(val, _) if next.is_none() => (3, *val),
             _ => {
                 self.set_error(err);
                 (1, Value::nil())

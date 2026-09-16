@@ -16,6 +16,7 @@ use crate::codegen::jitgen::asmir::compile_shared::{
     extend_ivar, set_array_integer_index, set_ivar, unreachable,
 };
 use crate::codegen::jitgen::lir::{
+    LSplicedArm,
     LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind, Lir,
 };
 
@@ -3436,8 +3437,8 @@ impl Codegen {
         &mut self,
         pc: BytecodePtr,
         loop_jit_spill_bytes: usize,
-        spliced_break: Option<usize>,
-        spliced_ret: Option<usize>,
+        spliced_break: Option<LSplicedArm>,
+        spliced_ret: Option<LSplicedArm>,
     ) -> bool {
         let raise = self.entry_raise();
         let cont = self.jit.label();
@@ -3481,12 +3482,33 @@ impl Codegen {
         //
         // Same gate as the plain form first: the normal completion is the
         // common path. See x86 for the reasoning.
+        //
+        // Per kind, a hand-on arm gives the dispatch the next host's LFP
+        // (x1 / x2; zero means this arm delivers) — see x86 for the codes.
         let reraise = self.jit.label();
         let f = runtime::ensure_end_spliced as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             ldr x10, [x19, #(EXECUTOR_DEFERRED_TOP as u32)];
             cmp x10, x22;
             b.ne cont;
+        );
+        match spliced_break {
+            Some(LSplicedArm::Hop { host, .. }) => monoasm_arm64!(&mut self.jit,
+                mov x10, (host as u64);
+                add x10, x29, x10;
+                ldur x1, [x10, #(-((BP_CFP + CFP_LFP) as i32))];  // next host's LFP
+            ),
+            _ => monoasm_arm64!(&mut self.jit, mov x1, (0u64);),
+        }
+        match spliced_ret {
+            Some(LSplicedArm::Hop { host, .. }) => monoasm_arm64!(&mut self.jit,
+                mov x10, (host as u64);
+                add x10, x29, x10;
+                ldur x2, [x10, #(-((BP_CFP + CFP_LFP) as i32))];
+            ),
+            _ => monoasm_arm64!(&mut self.jit, mov x2, (0u64);),
+        }
+        monoasm_arm64!(&mut self.jit,
             mov x0, x19;             // vm
             str x30, [sp, #-16]!;
             mov x9, (f);
@@ -3496,20 +3518,41 @@ impl Codegen {
             cmp x0, #1;
         );
         self.jit.bcond_label(monoasm::Cond::Eq, &reraise);
-        if let Some(off) = spliced_break {
+        for (kind, arm) in [
+            (SplicedExitKind::Break, spliced_break),
+            (SplicedExitKind::MethodReturn, spliced_ret),
+        ] {
+            let Some(arm) = arm else { continue };
             let skip = self.jit.label();
-            monoasm_arm64!(&mut self.jit, cmp x0, #2;);
-            self.jit.bcond_label(monoasm::Cond::Ne, &skip);
-            monoasm_arm64!(&mut self.jit, mov x0, x1;); // value -> accumulator
-            self.method_return_specialized(off);
-            self.jit.bind_label(skip);
-        }
-        if let Some(off) = spliced_ret {
-            let skip = self.jit.label();
-            monoasm_arm64!(&mut self.jit, cmp x0, #3;);
-            self.jit.bcond_label(monoasm::Cond::Ne, &skip);
-            monoasm_arm64!(&mut self.jit, mov x0, x1;);
-            self.method_return_specialized(off);
+            match arm {
+                LSplicedArm::Final { teardown } => {
+                    let code: u64 = match kind {
+                        SplicedExitKind::Break => 2,
+                        SplicedExitKind::MethodReturn => 3,
+                    };
+                    monoasm_arm64!(&mut self.jit,
+                        mov x10, (code);
+                        cmp x0, x10;
+                    );
+                    self.jit.bcond_label(monoasm::Cond::Ne, &skip);
+                    monoasm_arm64!(&mut self.jit, mov x0, x1;); // value -> accumulator
+                    self.method_return_specialized(teardown);
+                }
+                LSplicedArm::Hop { callee, .. } => {
+                    let code: u64 = match kind {
+                        SplicedExitKind::Break => 4,
+                        SplicedExitKind::MethodReturn => 5,
+                    };
+                    let tag = kind.outer_tag();
+                    monoasm_arm64!(&mut self.jit,
+                        mov x10, (code);
+                        cmp x0, x10;
+                    );
+                    self.jit.bcond_label(monoasm::Cond::Ne, &skip);
+                    monoasm_arm64!(&mut self.jit, mov x0, (tag););
+                    self.method_return_specialized(callee);
+                }
+            }
             self.jit.bind_label(skip);
         }
         self.jit.bind_label(reraise);
