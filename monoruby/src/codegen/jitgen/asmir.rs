@@ -2888,6 +2888,23 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_fpr: UsingFpr,
     },
+    ///
+    /// `rax <- $!`, the fast form of [`Self::LoadGVar`] for
+    /// `$(errinfo)` — the internal name bytecodegen emits for a protected
+    /// region's entry save, once per invocation of every method carrying
+    /// one.
+    ///
+    /// `$!` is a plain `Value` field of the `Executor` and its hook is
+    /// `vm.errinfo()`, so the generic path's runtime call (plus its FP
+    /// save set and GP flush) buys nothing. The name is interned as
+    /// `IdentId::GVAR_ERRINFO_INTERNAL` and cannot be written, aliased or
+    /// traced from Ruby — it is not a name the parser can produce — so
+    /// there is no hook for a program to install in the way.
+    ///
+    /// ### out
+    /// - rax: the current `$!`
+    ///
+    LoadErrinfo,
     StoreGVar {
         name: IdentId,
         src: SlotId,
