@@ -1905,6 +1905,18 @@ impl Executor {
     /// unexpected deferral re-raises through the generic machinery, which
     /// handles every kind.
     ///
+    /// The deferred exit's target was checked against the compiled
+    /// teardown's at the exit (`defer_block_break_at` /
+    /// `defer_method_return_at`), before anything was torn down, so a
+    /// deferral parked for this frame is by construction one its arm can
+    /// deliver: classify by kind only.
+    ///
+    /// This used to re-check against *this* frame's own `outer()` /
+    /// `outermost()` — what the exiting block's frame satisfies (the
+    /// stage-1 same-frame splice) and what an intermediate host never
+    /// does (a method host has no `outer`), so every stage-2 delivery
+    /// took the re-raise instead of the arm.
+    ///
     pub(crate) fn finish_ensure_spliced(&mut self, lfp: Lfp) -> (u64, Value) {
         let top_is_mine = matches!(self.deferred_unwind.last(), Some((l, _)) if *l == lfp);
         if self.exception.is_some() {
@@ -1922,12 +1934,8 @@ impl Executor {
         let (_, err) = self.deferred_unwind.pop().unwrap();
         self.sync_deferred_top();
         match err.kind() {
-            MonorubyErrKind::BlockBreak(val, _, outer) if Some(*outer) == lfp.outer() => (2, *val),
-            // The static teardown returns from this frame's outermost
-            // method frame; a deferred return targeting anything else
-            // (e.g. the block was promoted to a lambda after compile)
-            // must go through the generic unwind.
-            MonorubyErrKind::MethodReturn(val, target) if *target == lfp.outermost().0 => (3, *val),
+            MonorubyErrKind::BlockBreak(val, ..) => (2, *val),
+            MonorubyErrKind::MethodReturn(val, _) => (3, *val),
             _ => {
                 self.set_error(err);
                 (1, Value::nil())

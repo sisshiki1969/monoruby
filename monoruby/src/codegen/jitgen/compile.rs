@@ -232,11 +232,16 @@ impl<'a> JitContext<'a> {
         // generic arms do.
         state.locals_to_S(ir);
         state.load(ir, ret, GP::Rdx);
-        let SplicePlan { host, callee } = plan;
+        let SplicePlan {
+            host,
+            callee,
+            expect,
+        } = plan;
         ir.push(AsmInst::SplicedExitToOuter {
             kind,
             host,
             callee,
+            expect,
             pc,
         });
         Ok(CompileResult::Raise)

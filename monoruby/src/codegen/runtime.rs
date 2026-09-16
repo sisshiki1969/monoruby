@@ -2711,17 +2711,24 @@ pub(super) extern "C" fn ensure_end_spliced(vm: &mut Executor) -> EnsureEndDispa
 /// `LocalJumpError` for a proc-escaped block), in which case it is left
 /// in-flight and the caller must raise generically from the exit's own pc.
 ///
+/// *expect* is the defining frame the compiled teardown will return into.
+/// `err_block_break` resolved the break's target from the frame's current
+/// style; unless it is exactly that frame (a block promoted to a lambda
+/// breaks locally instead, and comes back as a `MethodReturn`), the
+/// splice is refused here, with nothing torn down yet.
+///
 pub(super) extern "C" fn defer_block_break_at(
     vm: &mut Executor,
     globals: &mut Globals,
     val: Value,
     host: Lfp,
+    expect: Lfp,
 ) -> usize {
     err_block_break(vm, globals, val);
     if host_can_receive_splice(host)
         && matches!(
             vm.exception().map(|e| e.kind()),
-            Some(MonorubyErrKind::BlockBreak(..))
+            Some(MonorubyErrKind::BlockBreak(_, _, outer)) if *outer == expect
         )
     {
         vm.defer_unwind(host);
@@ -2756,17 +2763,23 @@ fn host_can_receive_splice(host: Lfp) -> bool {
 /// thread barrier or a class body) stay in-flight and return non-zero for
 /// the generic raise.
 ///
+/// *expect* is the home method the compiled teardown will return from;
+/// `err_method_return`'s walk stops early at a `define_method` body or a
+/// promoted lambda, and such a target — possibly one of the very frames
+/// the hop would pop — refuses the splice here instead.
+///
 pub(super) extern "C" fn defer_method_return_at(
     vm: &mut Executor,
     globals: &mut Globals,
     val: Value,
     host: Lfp,
+    expect: Lfp,
 ) -> usize {
     err_method_return(vm, globals, val);
     if host_can_receive_splice(host)
         && matches!(
             vm.exception().map(|e| e.kind()),
-            Some(MonorubyErrKind::MethodReturn(..))
+            Some(MonorubyErrKind::MethodReturn(_, target)) if *target == expect
         )
     {
         vm.defer_unwind(host);

@@ -377,13 +377,45 @@ still void at the call is claimed as a boxed `Value` in its slot (a temp the
 prologue nil-fills the frame, so the claim is true, and nothing on this path
 reads it).
 
-One invariant is re-proved rather than inherited: the call site's own capture
-guard (`immediate_evict`) is emitted *after* the landing, so
-`defer_*_at` checks the host's `Meta` for the two bits `branch_if_captured`
-tests and degenerates to the generic unwind when the callee promoted the host
-frame to the heap. A degenerate error (`LocalJumpError` out of a proc-escaped
-block) takes the same exit: nothing is torn down and the generic raise runs
-from the exit's own pc.
+Two things are re-proved at the exit rather than inherited, both by
+`defer_*_at` and both *before* anything is torn down, so a refusal is the
+generic raise from the exit's own pc with every frame still in place:
+
+- the call site's own capture guard (`immediate_evict`) is emitted *after*
+  the landing, so `defer_*_at` checks the host's `Meta` for the two bits
+  `branch_if_captured` tests and degenerates when the callee promoted the
+  host frame to the heap;
+- the exit's **target**. The JIT laid the chain out statically — a `break`
+  returns into the defining frame one below the popped iter frame, a
+  `return` returns from the popped home method — and hands `defer_*_at` that
+  frame's LFP (`SplicedExitToOuter::expect`, read off the chain at a static
+  rbp offset exactly as the host's is). The runtime resolved the same target
+  from the frame's *current* style (`err_block_break` / `err_method_return`:
+  a block promoted to a lambda breaks locally, a `define_method` body catches
+  a `return` the static walk passed through), and the splice proceeds only
+  when the two agree. A refusal here matters more than it looks: the runtime
+  target may be one of the very frames the hop would pop, and a mismatch
+  found only at the host's `EnsureEnd` would have nowhere left to deliver.
+
+A degenerate error (`LocalJumpError` out of a proc-escaped block) takes the
+same exit. With the target settled at the exit, `finish_ensure_spliced`
+classifies a parked deferral by kind alone.
+
+That is not where the check started. It used to sit at the `EnsureEnd`, as a
+comparison against the host's own `outer()` / `outermost()` — the relation the
+*exiting block's* frame satisfies (stage 1) and one an intermediate method
+host never does, having no `outer`. So every stage-2 delivery took the
+re-raise instead of the arm: `handle_error`, the chain-deopt walk, the VM and
+an OSR re-entry, on top of the deferral. Instrumented over the whole test
+suite, codes 2 / 3 had never once been returned. Measured on the 1-host shape
+with a trivial body so the machinery is what is timed, the hop went from
+**~270 ns to ~105 ns** per exit once deliveries took the arm, and the
+surcharge over the same loop with no `ensure` from 1.62× to 1.20×.
+
+The spliced `EnsureEnd` also sits behind the same one-word deferral gate as
+the plain form (§6.1): a host's *normal* completion reaches it far more often
+than a spliced exit does, and with nothing parked for the frame the dispatch
+could only have answered "continue".
 
 `try_splice_exit` refuses everything it cannot prove: a dispatch arm, a
 loop-rooted frame (whose compile may not cover the body), a `$!` restore

@@ -1256,11 +1256,13 @@ impl Codegen {
                 kind,
                 host,
                 callee,
+                expect,
                 pc,
             } => self.encode_linst(LInst::SplicedExitToOuter {
                 kind,
                 host: host.unwrap_concrete(),
                 callee: callee.unwrap_concrete(),
+                expect: expect.unwrap_concrete(),
                 pc,
             }),
             AsmInst::SplicedExitLanding { kind, dest } => {
@@ -2131,9 +2133,10 @@ impl Codegen {
                 kind,
                 host,
                 callee,
+                expect,
                 pc,
             } => {
-                self.emit_spliced_exit_to_outer(kind, host, callee, pc);
+                self.emit_spliced_exit_to_outer(kind, host, callee, expect, pc);
             }
             LInst::SplicedExitLanding { kind, dest } => {
                 self.emit_spliced_exit_landing(kind, &dest);
