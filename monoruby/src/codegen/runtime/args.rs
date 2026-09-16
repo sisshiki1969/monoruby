@@ -1399,9 +1399,9 @@ fn hash_splat_and_kw_rest(
     caller_lfp: Lfp,
     r2k_kw: Option<Value>,
 ) -> Result<Vec<String>> {
-    if globals[callee].no_keyword() {
-        return Ok(vec![]);
-    }
+    // Only reached through `handle_keyword`, which has already returned
+    // for a callee with neither keyword parameters nor `**kwrest`.
+    debug_assert!(!globals[callee].no_keyword());
 
     // Everything below re-enters Ruby (`#hash` / `#eql?` on the keys), which
     // needs `globals` mutably, so the call site and the callee are read by
