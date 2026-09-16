@@ -1446,6 +1446,10 @@ N=20 WARM=400 target-deopt/release/monoruby benchmarks/railsbench/small.rb 2> de
   に、`gsub(regex) { }` と `sub(regex, Hash)` は U+FFFD に変換してしまう（`is_str` が
   失敗して `to_s` → lossy）。Hash 形の `gsub` だけは R で `RStringInner` をそのまま
   clone するようになり CRuby と一致する。
-- 環境: `cargo build` / `cargo test` のたびに `target/debug/build/monoruby/<hash>/`
-  （ビルドスクリプトの実行体、1 個 150 MB）が増え続け、1 セッションで 130 個超・18 GB
-  になってディスクを使い切った。`ls -t ... | tail -n +4 | xargs rm -rf` で古いものを消す。
+- 環境: この cargo の配置では `target/debug/build/monoruby/<hash>/out/` に monoruby
+  パッケージの各ユニットの成果物（lib テスト、bin、`tests/*.rs` の統合テスト実行体
+  約 130 個、debuginfo 込みで 1 個 150 MB）が置かれ、`cargo test` 1 回で 18 GB になる
+  （`target/debug/deps/` は無い）。古いものではないので消すと次回の `cargo test` が
+  全部作り直す。全スイートを回すにはこの分の空きが要る。同時に lib テスト実行体は
+  RSS 6〜7 GB まで育つので、16 GB の機械では release ビルドや callgrind と並走させ
+  ないこと（並走で swap 無しのままメモリ枯渇し、sys 99 % で全ジョブが数時間止まった）。
