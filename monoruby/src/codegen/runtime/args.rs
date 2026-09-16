@@ -2089,7 +2089,7 @@ mod tests {
             // The invoker path (a call the runtime starts, here `send`)
             // binds keywords too, and reports an unknown one as the
             // call-site path does.
-            r#"def m(a:, **r) = [a, r]; def n(a: 1) = a; e = [send(:m, a: 1, **{c: 2}), send(:m, a: 5, c: 6), send(:n, a: 2)]; e << (send(:n, b: 1) rescue [$!.class, $!.message]); e << (send(:n, b: 1, c: 2) rescue [$!.class, $!.message]); e"#,
+            r#"def m(a:, **r) = [a, r]; def n(a: 1) = a; e = [send(:m, a: 1, **{c: 2}), send(:m, a: 5, c: 6), send(:n, a: 2)]; e << (send(:n, b: 1) rescue [$!.class, $!.message]); e << (send(:n, b: 1, c: 2) rescue [$!.class, $!.message]); e << (send(:n, **{"b" => 1}) rescue [$!.class, $!.message]); e"#,
             // A ruby2_keywords forward delivers the flagged trailing hash
             // as keywords; a plain Hash argument stays positional.
             r#"def m(a:, **r) = [a, r]; def fwd(*args) = m(*args); ruby2_keywords :fwd; e = [fwd(a: 7, b: 8)]; e << (fwd({a: 7}) rescue [$!.class, $!.message]); e"#,
