@@ -3424,9 +3424,11 @@ fn gsub_main(
             eprintln!("warning: default value argument supersedes block");
         }
         if arg1.try_hash_ty().is_some() {
-            // Hash form: `Hash#[]` (default_proc) may run Ruby that
-            // mutates the receiver, so pass the live receiver and let
-            // `replace_all_hash` match against a frozen snapshot.
+            // Hash form: a miss runs the hash's `default` (a default
+            // proc, or a redefinition), which may mutate the receiver,
+            // so pass the live receiver and let `replace_all_hash`
+            // decide whether it can match in place or needs a frozen
+            // snapshot.
             RegexpInner::replace_all_hash(vm, globals, lfp.arg(0), self_val, arg1)
         } else {
             check_replacement_encoding_compat(globals, self_val, arg1)?;
@@ -10761,6 +10763,75 @@ mod tests {
     fn sub_without_block_or_replacement_raises() {
         run_test_error(r#""abc".sub(/a/)"#);
         run_test_error(r#""abc".sub!(/a/)"#);
+    }
+
+    #[test]
+    fn gsub_hash_reads_the_map_like_rb_hash_aref() {
+        // `gsub(regex, Hash)` looks the matched text up the way CRuby's
+        // `str_gsub` does — `rb_hash_aref`, then `rb_obj_as_string`:
+        // the map is read directly (a redefined `Hash#[]`, on the class,
+        // a subclass or a singleton, is never consulted), a miss runs
+        // the hash's `default` (the stored value or the default proc
+        // while `default` is the builtin, the redefinition otherwise),
+        // and a non-String value goes through `to_s`. The plain shape
+        // (builtin `default`, no default proc, String / nil values) is
+        // matched in place with one `$~` for the last match; the rest
+        // takes the generic path against a snapshot. Both must agree
+        // with CRuby on every case here.
+        run_tests(&[
+            r##"h = { "a" => "1", "b" => "2" }; "abcab".gsub(/[ab]/, h)"##,
+            r##"h = { "a" => "1", "b" => "2" }; s = +"abcab"; [s.gsub!(/[ab]/, h), s]"##,
+            r##"h = { "a" => "1", "b" => "2" }; s = +"xyz"; [s.gsub!(/[ab]/, h), s, $~]"##,
+            // `$~` after the scan: the last match, with its groups and
+            // its Regexp.
+            r##"h = { "a" => "1", "b" => "2" }; "abcab".gsub(/(a)(b)?/, h); [$~.to_a, $&, $`, $', $1, $2, $~.pre_match, $~.regexp.source, Regexp.last_match(1)]"##,
+            r##"h = { "a" => "1" }; "abcab" =~ /c/; "zzz".gsub(/[ab]/, h); $~"##,
+            r##""a1b2".gsub(/([a-z])(\d)/, "a1" => "A", "b2" => "B"); [$1, $2, $~.begin(0), $~.end(0)]"##,
+            // Misses: nil, a String default, a non-String default (to_s).
+            r##"h = { "a" => "1", "b" => "2" }; "abcab".gsub(/[abc]/, h)"##,
+            r##"h = { "a" => "1", "b" => "2" }; "abcab".gsub(/[abc]/, Hash.new("D").merge(h))"##,
+            r##"h = { "a" => "1", "b" => "2" }; "abcab".gsub(/[abc]/, Hash.new(7).merge(h))"##,
+            // Non-String values and a nil value.
+            r##""abcab".gsub(/[ab]/, "a" => 1, "b" => :sym)"##,
+            r##""abcab".gsub(/[ab]/, "a" => nil, "b" => "B")"##,
+            // The default proc, including one that reads `$~` (the
+            // generic path saves it per match) and one that mutates the
+            // receiver (`RuntimeError: string modified`).
+            r##""abcab".gsub(/[abc]/, Hash.new { |h, k| k.upcase * 2 })"##,
+            r##""abc".gsub(/[ab]/, Hash.new { |h, k| $~ ? $~[0] * 2 : "nil" })"##,
+            r##"s = +"abcab"; begin; s.gsub!(/[abc]/, Hash.new { |h, k| s << "!"; "X" }); rescue => e; e.class; end"##,
+            // A redefined `[]` is ignored (subclass, singleton, `Hash`
+            // itself); a redefined `default` is honoured on a miss.
+            r##"class SubH < Hash; def [](k); "S#{k}"; end; end; "abcab".gsub(/[ab]/, SubH.new)"##,
+            r##"class SubH2 < Hash; def [](k); "S#{k}"; end; end; h = SubH2.new; h["a"] = "1"; "abcab".gsub(/[ab]/, h)"##,
+            r##"h = { "a" => "1", "b" => "2" }; def h.[](k); "G#{k}"; end; "abcab".gsub(/[ab]/, h)"##,
+            r##"
+            h = { "a" => "1", "b" => "2" }
+            Hash.class_eval { alias_method :__orig_idx, :[]; def [](k); "R#{k}"; end }
+            r = "abcab".gsub(/[abc]/, h)
+            Hash.class_eval { alias_method :[], :__orig_idx }
+            [r, "abcab".gsub(/[abc]/, h)]
+            "##,
+            r##"
+            h = { "a" => "1", "b" => "2" }
+            Hash.class_eval { alias_method :__orig_def, :default; def default(k = nil); "D#{k}"; end }
+            r = "abcab".gsub(/[abc]/, h)
+            Hash.class_eval { alias_method :default, :__orig_def }
+            [r, "abcab".gsub(/[abc]/, h)]
+            "##,
+            r##"class SubD < Hash; def default(k); "D#{k}"; end; end; h = SubD.new; h["a"] = "1"; "abcab".gsub(/[abc]/, h)"##,
+            r##"h = { "a" => "1" }; def h.default(k); "D#{k}"; end; "abcab".gsub(/[abc]/, h)"##,
+            // Zero-width matches, multibyte subjects, identity keys,
+            // long (buffer-sharing) keys.
+            r##""abc".gsub(//, "" => "-")"##,
+            r##""aab".gsub(/a*/, "aa" => "X", "" => "-")"##,
+            r##""ぱabぱ".gsub(/[ぱa]/, "ぱ" => "P", "a" => "A")"##,
+            r##""ぱb".gsub(/x*/, "" => "-").bytes"##,
+            r##"h = { "a" => "1" }.compare_by_identity; "abc".gsub(/a/, h)"##,
+            r##"k = "x" * 40; (k + "y" + k).gsub(/x+/, k => "K")"##,
+            r##""\xff\xfeab".b.gsub(/a/n, "a" => "Z").bytes"##,
+            r##"s = "abc".freeze; begin; s.gsub!(/a/, "a" => "b"); rescue => e; e.class; end"##,
+        ]);
     }
 
     #[test]

@@ -1483,19 +1483,130 @@ impl RegexpInner {
         hash_val: Value,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
+            if let Some(res) = re.replace_all_hash_plain(vm, globals, re_val, recv, hash_val)? {
+                return Ok(res);
+            }
             let subject = string_snapshot(recv);
             let tmp = vm.temp_len();
             vm.temp_push(subject);
-            let res = re.replace_all_hash_inner(vm, globals, subject, recv, hash_val);
+            let res = re.replace_all_hash_inner(vm, globals, re_val, subject, recv, hash_val);
             vm.temp_clear(tmp);
             res
         })
+    }
+
+    /// The Regexp `$~` reports after a replace driven by `self`: `re_val`
+    /// itself when it is one, else a fresh Regexp for a pattern that was
+    /// coerced from a String.
+    fn backref_regexp(&self, re_val: Value) -> Value {
+        if re_val.is_regex().is_some() {
+            re_val
+        } else {
+            Value::regexp(self.clone())
+        }
+    }
+
+    /// `gsub(regex, hash)` when nothing between two matches can run
+    /// Ruby: the hash's `default` is still the builtin and it has no
+    /// default proc (see [`lookup_hash_replacement`] for what a miss
+    /// runs), and every replacement it yields is a String or nil (a
+    /// miss answers the stored default, nil unless `Hash.new(x)`). Then
+    /// the receiver cannot change under the scan, so it is matched in
+    /// place with no snapshot and no per-match length check; one onigmo
+    /// `Region` serves every match instead of one allocated and freed
+    /// per match; and `$~` is built once, for the last match, which is
+    /// all a caller can observe. `None` when the shape does not qualify
+    /// (the subject is byte-mapped, or a value would need `to_s`):
+    /// nothing observable has happened by then, so the generic path
+    /// starts over.
+    fn replace_all_hash_plain(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        re_val: Value,
+        recv: Value,
+        hash_val: Value,
+    ) -> Result<Option<(RStringInner, bool)>> {
+        let hash = Hashmap::new(hash_val);
+        if hash.defalut_proc().is_some()
+            || !crate::builtins::hash::hash_default_is_builtin(&globals.store, hash_val.class())
+        {
+            return Ok(None);
+        }
+        let miss = hash.defalut_value().unwrap_or_default();
+        if !miss.is_nil() && miss.is_rstring_inner().is_none() {
+            return Ok(None);
+        }
+        let recv_inner = recv.as_rstring_inner();
+        if recv_inner.needs_byte_mapping() {
+            return Ok(None);
+        }
+        let given: &str = recv_inner.check_utf8()?;
+
+        // Same walk as `replace_repeat`: past a non-empty match, and by
+        // one Unicode scalar past an empty one (past EOS to terminate),
+        // so the zero-width matches CRuby yields are all seen.
+        let engine = self.engine_for(given, Some(given.is_ascii()));
+        let mut region = onigmo_regex::Region::new();
+        let mut replacements: Vec<(std::ops::Range<usize>, RStringInner)> = vec![];
+        // The groups of the last match: the region is cleared by the
+        // search that finds nothing more, so they are copied out.
+        let mut last: smallvec::SmallVec<[Option<(usize, usize)>; 2]> = smallvec::SmallVec::new();
+        vm.clear_capture_special_variables();
+        let mut pos = 0usize;
+        while pos <= given.len() {
+            let found = engine
+                .search_with_region(given.as_bytes(), pos, &mut region)
+                .map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
+            if found.is_none() {
+                break;
+            }
+            let (start, end) = region.pos(0).unwrap();
+            // A String key probes vm-free (`HashRef::get`), so no Ruby
+            // runs here either. `hash_val` may be a subclass instance or
+            // carry a singleton `[]`: the probe is what CRuby's
+            // `rb_hash_aref` does regardless.
+            let key = string_substring(recv, start, end);
+            let value = hash.get(key, vm, globals)?.unwrap_or(miss);
+            let rep = if value.is_nil() {
+                RStringInner::from_str_scanned("")
+            } else if let Some(inner) = value.is_rstring_inner() {
+                inner.clone()
+            } else {
+                // Coerced with `to_s`, which can run Ruby: the generic
+                // path's business, from the top.
+                return Ok(None);
+            };
+            replacements.push((start..end, rep));
+            last.clear();
+            last.extend((0..region.len()).map(|i| region.pos(i)));
+            pos = if end > start {
+                end
+            } else if start >= given.len() {
+                given.len() + 1
+            } else {
+                let mut next = start + 1;
+                while next < given.len() && !given.is_char_boundary(next) {
+                    next += 1;
+                }
+                next
+            };
+        }
+
+        let is_empty = replacements.is_empty();
+        let res = RStringInner::splice_all(&globals.store, given, &replacements)?;
+        if !is_empty {
+            vm.set_match_regex(self.backref_regexp(re_val));
+            vm.save_capture_spans(&last, given);
+        }
+        Ok(Some((res, !is_empty)))
     }
 
     fn replace_all_hash_inner(
         &self,
         vm: &mut Executor,
         globals: &mut Globals,
+        re_val: Value,
         subject: Value,
         recv: Value,
         hash_val: Value,
@@ -1521,6 +1632,7 @@ impl RegexpInner {
             } else {
                 string_substring(subject, m.start(), m.end())
             };
+            vm.set_match_regex(self.backref_regexp(re_val));
             vm.save_capture_special_variables(&cap, given);
             let replacement = lookup_hash_replacement(vm, globals, hash_val, key, mapped)?;
             check_string_not_modified(recv, recv_len)?;
@@ -2032,15 +2144,34 @@ fn block_result_to_inner(
 /// (where `[]` returns `nil` because no default is set) are replaced
 /// with the empty string. Values are coerced via `Object#to_s` per
 /// CRuby.
+/// The replacement `hash_val` yields for the matched text `key`: CRuby's
+/// `rb_hash_aref` followed by `rb_obj_as_string`. `rb_hash_aref` reads
+/// the map directly — a redefined `Hash#[]`, on a subclass, a singleton
+/// or `Hash` itself, is not consulted — and on a miss runs the hash's
+/// `default`: the stored value or the default proc while that is still
+/// the builtin (`rb_hash_default_value`), the redefinition otherwise.
 fn lookup_hash_replacement(
     vm: &mut Executor,
     globals: &mut Globals,
-    hash: Value,
+    hash_val: Value,
     key: Value,
     mapped: bool,
 ) -> Result<RStringInner> {
-    let v =
-        vm.invoke_method_inner(globals, IdentId::_INDEX, hash, &[key], None, None)?;
+    let hash = Hashmap::new(hash_val);
+    let v = match hash.get(key, vm, globals)? {
+        Some(v) => v,
+        None => {
+            if crate::builtins::hash::hash_default_is_builtin(&globals.store, hash_val.class()) {
+                if let Some(proc) = hash.defalut_proc() {
+                    vm.invoke_proc(globals, &proc, &[hash_val, key])?
+                } else {
+                    hash.defalut_value().unwrap_or_default()
+                }
+            } else {
+                vm.invoke_method_inner(globals, IdentId::DEFAULT, hash_val, &[key], None, None)?
+            }
+        }
+    };
     if v.is_nil() {
         Ok(RStringInner::from_str_scanned(""))
     } else if v.is_rstring_inner().is_some() || v.is_str().is_some() {
