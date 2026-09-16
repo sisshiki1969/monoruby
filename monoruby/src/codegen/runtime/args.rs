@@ -996,7 +996,11 @@ fn fill_positional_args(
         unsafe { std::slice::from_raw_parts_mut(dst.sub(end).add(1), end - start).fill(val) }
     }
 
-    fn memcpy<'a>(
+    // The callee's slots run downward in memory (`dst.sub(i)`) whichever
+    // way the source runs, so this is a reversing copy either way; the
+    // direction is decided once, outside the loop. `Option<Value>` has the
+    // same layout as `Value` (the NonZero niche), so `Some` is a plain store.
+    fn memcpy(
         dst: *mut Option<Value>,
         offset: usize,
         ptr: *const Value,
@@ -1004,16 +1008,29 @@ fn fill_positional_args(
         upward: bool,
     ) {
         let len = range.len();
-        for i in 0..len {
-            unsafe {
-                *dst.sub(offset + i) = Some(if upward {
-                    *ptr.add(range.start + i)
-                } else {
-                    *ptr.sub(range.start + i)
-                })
-            };
+        if upward {
+            for i in 0..len {
+                unsafe { *dst.sub(offset + i) = Some(*ptr.add(range.start + i)) };
+            }
+        } else {
+            for i in 0..len {
+                unsafe { *dst.sub(offset + i) = Some(*ptr.sub(range.start + i)) };
+            }
         }
     }
+
+    // Exact arity against required parameters only (`def m(a, b)` called
+    // with two): one copy, nothing to nil-fill and no rest to build. The
+    // general path below reaches the same stores through five boundary
+    // computations and three empty fills.
+    if !callee.is_block_style()
+        && buf_len == callee.req_num()
+        && callee.total_positional_args() == buf_len
+    {
+        memcpy(dst, 0, buf_ptr, 0..buf_len, upward);
+        return Ok(());
+    }
+
     let min_args = callee.min_positional_args();
     let max_args = callee.max_positional_args();
     let is_block_style = callee.is_block_style();
@@ -1086,11 +1103,11 @@ fn fill_positional_args(
     if let Some(rest_pos) = callee.rest_pos() {
         let ary = unsafe {
             if upward {
-                Value::array_from_iter(
-                    std::slice::from_raw_parts(buf_ptr.add(rest.start), rest.len())
-                        .iter()
-                        .cloned(),
-                )
+                // One `memcpy` into exact-capacity storage.
+                Value::array_from_slice(std::slice::from_raw_parts(
+                    buf_ptr.add(rest.start),
+                    rest.len(),
+                ))
             } else {
                 Value::array_from_iter(
                     std::slice::from_raw_parts(buf_ptr.sub(rest.end).add(1), rest.len())
@@ -1568,6 +1585,25 @@ fn invoker_arguments_inner(
 ) -> Result<Value> {
     let callee_fid = callee_lfp.func_id();
     let info = &globals.store[callee_fid];
+
+    // Fast path, the invoker's twin of the one in
+    // `set_callee_frame_arguments`: no keywords passed and a callee with
+    // neither keyword parameters nor `**kwrest` (nor `**nil`), no block
+    // auto-splat. Binding is then the positional fill alone; the keyword
+    // scaffolding below (the parameter loop, the `**nil` check, the
+    // `**kwrest` slot, the trailing-hash fold, the missing-keyword check)
+    // would each find nothing to do. This is the shape of nearly every
+    // call the runtime starts — `==`, `to_s`, `default`, `method_missing`,
+    // a builtin yielding to a block.
+    if kw_arg.as_ref().is_none_or(|m| m.is_empty())
+        && info.no_keyword()
+        && !info.forbid_keyword()
+        && !info.single_arg_expand()
+    {
+        let dst = callee_lfp.register_ptr(SlotId(1));
+        fill_positional_args(dst, info, args, arg_num, upward)?;
+        return Ok(Value::nil());
+    }
 
     // keyword
     let callee_kw_pos = info.kw_reg_pos();
@@ -2093,6 +2129,24 @@ mod tests {
             // A ruby2_keywords forward delivers the flagged trailing hash
             // as keywords; a plain Hash argument stays positional.
             r#"def m(a:, **r) = [a, r]; def fwd(*args) = m(*args); ruby2_keywords :fwd; e = [fwd(a: 7, b: 8)]; e << (fwd({a: 7}) rescue [$!.class, $!.message]); e"#,
+        ]);
+    }
+
+    /// Calls the runtime starts (the invoker path: `send`, a `==` from
+    /// `Array#include?`, a builtin yielding into a block, `method_missing`
+    /// reached from a runtime call) bind positionals through
+    /// `invoker_arguments_inner`; its keyword-less fast path must give
+    /// every arity shape the same answer as the general path, and stay
+    /// out of the block auto-splat case.
+    #[test]
+    fn positional_invoker_shapes() {
+        run_tests(&[
+            r#"def m2(a, b) = [a, b]; def mo(a, b = 2) = [a, b]; def mr(a, *r) = [a, r]; def mp(a, *r, z) = [a, r, z]; def m0 = :none; [send(:m2, 1, 2), send(:mo, 1), send(:mo, 1, 3), send(:mr, 1), send(:mr, 1, 2, 3), send(:mp, 1, 2), send(:mp, 1, 2, 3, 4), send(:m0)]"#,
+            r#"def m2(a, b) = [a, b]; e = []; e << (send(:m2, 1) rescue $!.message); e << (send(:m2, 1, 2, 3) rescue $!.message); e << (send(:m0x) rescue $!.class); e"#,
+            r#"class Eq; attr_reader :v; def initialize(v) = (@v = v); def ==(o) = o.is_a?(Eq) && o.v == @v; end; a = [Eq.new(1), Eq.new(2)]; [a.include?(Eq.new(2)), a.include?(Eq.new(3)), a.index(Eq.new(1)), [1, [2, 3]].include?([2, 3])]"#,
+            r#"r = []; [[1, 2], [3, 4]].each { |a, b| r << [a, b] }; [[1, 2]].each { |a| r << a }; {k: 1}.each { |k, v| r << [k, v] }; {k: 1}.each { |kv| r << kv }; [[1, [2, 3]]].each { |a, (b, c)| r << [a, b, c] }; r"#,
+            r#"class MM; def method_missing(n, *a) = [n, a]; def respond_to_missing?(*) = true; end; o = MM.new; [o.send(:zz, 1, 2), o.zz(3), [o].map { |x| x.yy }, o.public_send(:ww)]"#,
+            r#"def blk = yield(1, 2); def blk1 = yield([1, 2]); [blk { |a, b| [a, b] }, blk1 { |a, b| [a, b] }, blk1 { |a| a }, blk { |a| a }, blk { |*a| a }, blk1 { |a, *b| [a, b] }]"#,
         ]);
     }
 

@@ -3465,7 +3465,11 @@ impl Executor {
                 self.method_missing_style = MethodMissingStyle::Plain;
                 match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
                     Ok(mm_func_id) => {
-                        let mut mm_args = Vec::with_capacity(args.len() + 1);
+                        // On the stack for the usual few arguments: this is
+                        // Rails' config access path (17 a request on
+                        // railsbench), and the Vec was one of its mallocs.
+                        let mut mm_args: smallvec::SmallVec<[Value; 8]> =
+                            smallvec::SmallVec::with_capacity(args.len() + 1);
                         mm_args.push(Value::symbol(method));
                         mm_args.extend_from_slice(args);
                         return self
@@ -3537,7 +3541,11 @@ impl Executor {
                 self.method_missing_style = MethodMissingStyle::Plain;
                 match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
                     Ok(mm_func_id) => {
-                        let mut mm_args = Vec::with_capacity(args.len() + 1);
+                        // On the stack for the usual few arguments: this is
+                        // Rails' config access path (17 a request on
+                        // railsbench), and the Vec was one of its mallocs.
+                        let mut mm_args: smallvec::SmallVec<[Value; 8]> =
+                            smallvec::SmallVec::with_capacity(args.len() + 1);
                         mm_args.push(Value::symbol(method));
                         mm_args.extend_from_slice(args);
                         self.invoke_func_named(
