@@ -84,7 +84,79 @@ fn zstd_errors() {
         res << [Zstd.read_skippable_frame(f), t.() { Zstd.decompress(f) }]
         res << t.() { Zstd::StreamingCompress.new(dict: 1) }
         res << t.() { Zstd::StreamingDecompress.new(foo: 1) }
+        # a frame header without a content size, then a reserved block type:
+        # the streamed-out path of decompress hits the corruption
+        corrupt = "\x28\xb5\x2f\xfd\x00\x58\x07\x00\x00".b
+        res << t.() { Zstd.decompress(corrupt) }
+        res << t.() { Zstd::StreamingDecompress.new.decompress(corrupt) }
         res
+        "##,
+    );
+}
+
+/// The `String.__zstd_*` builtins' own guards, which the Ruby half never
+/// trips (it checks the dictionary's class and owns every handle): a
+/// handle of the wrong kind, a closed or negative handle, an end directive
+/// out of range, and freeing twice. monoruby only — CRuby has no such
+/// methods — so the script checks its own expectations.
+#[test]
+fn zstd_builtin_guards() {
+    run_test_no_result_check(
+        r##"
+        require "rubygems"
+        require "zstd-ruby"
+        t = ->(&b) { begin; b.call; rescue => e; [e.class, e.message]; end }
+        dict = ("the quick brown fox jumps over the lazy dog " * 50).b
+        cd = String.__zstd_cdict_new(dict, nil)
+        dd = String.__zstd_ddict_new(dict)
+        got = []
+        got << [String.__zstd_dict_id(cd), String.__zstd_dict_id(dd)]
+        got << t.() { String.__zstd_dict_id(-1) }
+        got << t.() { String.__zstd_dict_id(999_999) }
+        got << t.() { String.__zstd_compress("x", 3, -1) }
+        got << t.() { String.__zstd_compress("x", 3, dd) }
+        got << t.() { String.__zstd_decompress(Zstd.compress("x"), cd) }
+        cs = String.__zstd_cstream_new(3, cd)
+        got << t.() { String.__zstd_cstream_run(cs, "", 3) }
+        got << t.() { String.__zstd_cstream_run(999_999, "", 0) }
+        got << t.() { String.__zstd_dstream_run(-1, "") }
+        ds = String.__zstd_dstream_new(dd)
+        got << t.() { String.__zstd_cstream_run(ds, "x", 0) }
+        got << t.() { String.__zstd_dstream_run(cs, "x") }
+        got << [String.__zstd_dict_free(-1), String.__zstd_stream_free(-1),
+                String.__zstd_dict_free(999_999), String.__zstd_stream_free(999_999)]
+        got << String.__zstd_dstream_run(ds, Zstd.compress("abc"))
+        String.__zstd_stream_free(cs)
+        String.__zstd_stream_free(ds)
+        got << t.() { String.__zstd_cstream_run(cs, "x", 0) }
+        got << t.() { String.__zstd_dstream_run(ds, "x") }
+        String.__zstd_dict_free(cd)
+        String.__zstd_dict_free(dd)
+        got << t.() { String.__zstd_decompress(Zstd.compress("x"), dd) }
+        got << t.() { String.__zstd_cstream_new(3, cd) }
+        expected = [
+          [0, 0],
+          [ArgumentError, "closed handle"],
+          [ArgumentError, "closed dictionary"],
+          [ArgumentError, "closed dictionary"],
+          [RuntimeError, "ZSTD_CCtx_refCDict failed"],
+          [RuntimeError, "ZSTD_DCtx_refDDict failed"],
+          [ArgumentError, "invalid end directive"],
+          [ArgumentError, "closed stream"],
+          [ArgumentError, "closed handle"],
+          [RuntimeError, "compress error error code: No error detected"],
+          [RuntimeError, "decompress error error code: No error detected"],
+          [nil, nil, nil, nil],
+          "abc",
+          [ArgumentError, "closed stream"],
+          [ArgumentError, "closed stream"],
+          [ArgumentError, "closed dictionary"],
+          [ArgumentError, "closed dictionary"],
+        ]
+        got.zip(expected).each_with_index do |(g, e), i|
+          raise "case #{i}: #{g.inspect} != #{e.inspect}" unless g == e
+        end
+        true
         "##,
     );
 }
