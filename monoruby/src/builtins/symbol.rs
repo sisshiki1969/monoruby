@@ -569,6 +569,18 @@ mod tests {
     }
 
     #[test]
+    fn symbol_to_proc_zero_arguments() {
+        // A `&:sym` block yielded nothing raises the body's own
+        // "no receiver given" (#1380), not the binder's arity error; the
+        // proc still reports `(recv, *args)`.
+        run_tests(&[
+            r##"def y0(&b) = yield; def y1(&b) = yield(1); def y2(&b) = yield(1, 2); def ya(&b) = yield([3, 4]); [(y0(&:to_s) rescue [$!.class, $!.message]), y1(&:to_s), y2(&:+), ya(&:first), (:to_s.to_proc.call rescue [$!.class, $!.message]), (:to_s.to_proc[] rescue $!.class), (:to_s.to_proc.yield rescue $!.class)]"##,
+            r##"[:to_s.to_proc.arity, :to_s.to_proc.parameters, :to_s.to_proc.parameters(lambda: false), :to_s.to_proc.lambda?, (:+.to_proc.curry[1][2] rescue $!.class), :+.to_proc.curry.arity, (1.instance_exec(&:to_s) rescue [$!.class, $!.message]), :to_s.to_proc.call(nil)]"##,
+            r##"c = Class.new { define_method(:m, &:to_s) }; [(c.new.m rescue [$!.class, $!.message]), (c.new.m(1) rescue $!.class), c.instance_method(:m).arity, c.instance_method(:m).parameters]"##,
+        ]);
+    }
+
+    #[test]
     fn symbol_to_proc_metadata() {
         run_tests(&[
             // Arity is -2 (one required + rest)

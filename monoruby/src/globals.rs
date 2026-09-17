@@ -901,7 +901,7 @@ impl Globals {
         );
         assert_eq!(
             SYMBOL_TO_PROC_BODY_FUNCID,
-            globals.define_builtin_func_variadic(OBJECT_CLASS, "", symbol_to_proc_body, 1)
+            globals.define_builtin_func_variadic(OBJECT_CLASS, "", symbol_to_proc_body, 0)
         );
         assert_eq!(METHOD_TO_PROC_BODY_FUNCID, {
             // `(*args, **kw, &blk)`: keywords reach the method as keywords.

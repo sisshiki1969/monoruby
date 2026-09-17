@@ -507,6 +507,15 @@ fn parameters(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// and named methods use `:req`, while non-lambda procs (blocks) use `:opt`.
 pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bool) -> Value {
     let func_info = &globals[func_id];
+    // The `Symbol#to_proc` body: `(recv, *args)` as CRuby reports it
+    // (see `FuncInfo::is_symbol_proc_body`), whatever it binds, and
+    // `:req` even under `parameters(lambda: false)`.
+    if func_info.is_symbol_proc_body() {
+        return Value::array2(
+            Value::array1(Value::symbol(IdentId::get_id("req"))),
+            Value::array1(Value::symbol(IdentId::get_id("rest"))),
+        );
+    }
     // A native builtin reports as a C method does in CRuby: `n`
     // anonymous `[:req]` for a fixed arity, `[[:rest]]` for anything
     // variable — never its optional or keyword slots

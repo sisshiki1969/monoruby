@@ -1448,9 +1448,7 @@ impl FuncInfo {
     pub(crate) fn native_fixed_arity(&self) -> Option<Option<usize>> {
         // Ruby-level bodies (an iseq, or the proc behind a
         // `define_method`) report their own parameters.
-        if matches!(self.kind, FuncKind::ISeq(_) | FuncKind::Proc(_))
-            || self.meta().func_id() == SYMBOL_TO_PROC_BODY_FUNCID
-        {
+        if matches!(self.kind, FuncKind::ISeq(_) | FuncKind::Proc(_)) || self.is_symbol_proc_body() {
             return None;
         }
         let p = &self.ext.params;
@@ -1461,7 +1459,19 @@ impl FuncInfo {
         Some(fixed.then(|| self.req_num()))
     }
 
+    /// The `Symbol#to_proc` body, directly or behind a `define_method(&:sym)`
+    /// proc-method. It binds nothing (a zero-argument yield must reach its
+    /// own "no receiver given") but is `(recv, *args)` to the observer,
+    /// as in CRuby: arity -2, parameters `[[:req], [:rest]]`.
+    pub(crate) fn is_symbol_proc_body(&self) -> bool {
+        self.meta().func_id() == SYMBOL_TO_PROC_BODY_FUNCID
+            || matches!(&self.kind, FuncKind::Proc(p) if p.func_id() == SYMBOL_TO_PROC_BODY_FUNCID)
+    }
+
     pub(crate) fn arity(&self) -> i64 {
+        if self.is_symbol_proc_body() {
+            return -2;
+        }
         if let Some(fixed) = self.native_fixed_arity() {
             return match fixed {
                 Some(n) => n as i64,
