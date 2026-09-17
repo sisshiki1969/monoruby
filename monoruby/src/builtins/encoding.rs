@@ -5184,9 +5184,13 @@ mod tests {
 
     #[test]
     fn gsub_raises_compat_error_on_replacement() {
-        // Receiver is UTF-8 with non-ASCII content, replacement is
-        // an ASCII-8BIT broken byte → CompatibilityError.
-        run_test_error(r#""é".gsub(/é/, "\xff".force_encoding("ASCII-8BIT"))"#);
+        // Receiver is UTF-8 with non-ASCII content that survives the
+        // replace, replacement is an ASCII-8BIT byte → CompatibilityError.
+        // (When the receiver's only non-ASCII text is what gets
+        // replaced, CRuby lets the result take the replacement's
+        // encoding instead: `"é".gsub(/é/, "\xff".b)` is "\xFF" in
+        // BINARY — see tests/gsub_binary_replacement.rs.)
+        run_test_error(r#""éa".gsub(/a/, "\xff".force_encoding("ASCII-8BIT"))"#);
     }
 
     #[test]

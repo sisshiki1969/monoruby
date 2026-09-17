@@ -3265,7 +3265,12 @@ fn sub_main(
             let given = self_val.as_rstring_inner().regex_view()?;
             RegexpInner::replace_one_hash(vm, globals, lfp.arg(0), &given, arg1, mapped_enc)
         } else {
-            check_replacement_encoding_compat(globals, self_val, arg1)?;
+            if mapped_enc.is_some() {
+                // The surrogate-space replace cannot settle the encoding
+                // piece by piece; the receiver has 8-bit content, so a
+                // replacement it cannot merge with is refused up front.
+                check_replacement_encoding_compat(globals, self_val, arg1)?;
+            }
             if let Some(res) = string_pattern_replace(vm, self_val, lfp.arg(0), arg1, false) {
                 return Ok(res);
             }
@@ -3295,31 +3300,47 @@ fn pattern_mapped_enc(self_val: Value) -> Option<crate::value::Encoding> {
     inner.needs_byte_mapping().then(|| inner.encoding())
 }
 
-/// Resolve the explicit replacement argument of `sub`/`gsub` to the
-/// string the splice machinery consumes. In surrogate (`mapped`)
-/// mode the replacement's raw bytes are forward-mapped so they
-/// splice as U+00XX characters; otherwise the plain `to_str`
-/// coercion (which validates UTF-8) runs as before.
+/// Resolve the explicit replacement argument of `sub`/`gsub` (a String,
+/// or anything with a `#to_str`) to the template the splice machinery
+/// consumes: the String as it is — its bytes under its own encoding, so
+/// a BINARY template with 8-bit content is spliced as those bytes and
+/// the result takes its encoding over a 7-bit receiver (#1378). In
+/// surrogate (`mapped`) mode the raw bytes are forward-mapped instead,
+/// so they splice as U+00XX characters and survive the final decode.
 fn replacement_view(
     vm: &mut Executor,
     globals: &mut Globals,
     arg: Value,
     mapped: bool,
-) -> Result<String> {
+) -> Result<RStringInner> {
+    let template = |inner: &RStringInner| {
+        if mapped {
+            RStringInner::from_string_scanned(crate::value::rvalue::map_bytes_to_utf8(
+                inner.as_bytes(),
+            ))
+        } else {
+            inner.clone()
+        }
+    };
     if let Some(inner) = arg.is_rstring_inner() {
-        if mapped || inner.needs_byte_mapping() {
-            return Ok(crate::value::rvalue::map_bytes_to_utf8(inner.as_bytes()));
+        return Ok(template(inner));
+    }
+    if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
+        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        if let Some(inner) = result.is_rstring_inner() {
+            return Ok(template(inner));
         }
     }
-    arg.coerce_to_str(vm, globals)
+    // Not a String and no usable `#to_str`: the coercion's own error.
+    Ok(RStringInner::from_string_scanned(arg.coerce_to_str(vm, globals)?))
 }
 
 /// Raise `Encoding::CompatibilityError` if `self_val` (the receiver
-/// of `gsub`/`sub`) and `replacement` (the explicit replacement
-/// String) have incompatible encodings. The block-form callers
-/// don't go through this — block return values are coerced
-/// per-iteration and CRuby ties the result encoding to whichever
-/// chunk first introduces a non-7-bit byte.
+/// of `String#[]=`, or of `gsub`/`sub` when it has 8-bit content in a
+/// byte-oriented encoding) and `replacement` (the explicit replacement
+/// String) have incompatible encodings. A receiver `splice_all` can
+/// settle piece by piece does not go through this: CRuby lets a 7-bit
+/// receiver take a BINARY replacement, and a miss never raises.
 fn check_replacement_encoding_compat(
     globals: &Globals,
     self_val: Value,
@@ -3463,7 +3484,11 @@ fn gsub_main(
             // snapshot.
             RegexpInner::replace_all_hash(vm, globals, lfp.arg(0), self_val, arg1)
         } else {
-            check_replacement_encoding_compat(globals, self_val, arg1)?;
+            if mapped_enc.is_some() {
+                // As in `sub_main`: the surrogate-space replace cannot
+                // settle the encoding piece by piece.
+                check_replacement_encoding_compat(globals, self_val, arg1)?;
+            }
             if let Some(res) = string_pattern_replace(vm, self_val, lfp.arg(0), arg1, true) {
                 return Ok(res);
             }
