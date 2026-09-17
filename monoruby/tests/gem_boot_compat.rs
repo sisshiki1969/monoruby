@@ -141,6 +141,7 @@ fn binary_regexp_from_escapes() {
           r.match?("a\xC3\x9F".b), r.match("a\xC3\x9F".b)[0].bytes,
           /\xC3/n.match?("\xC3".b), /[\xC2-\xDF]/n.match?("\xC3".b),
           /[\xC2-\xDF]/n.match?("a\xC3".b, 1), /[\xC2-\xDF]/n.match?("a\xC3".b, 2),
+          /[\xC2-\xDF]/n.match?("a\xC3".b, 5), /[\xC2-\xDF]/n.match?("a\xC3".b, -1),
           Regexp.new("[\xC2-\xDF]".b).encoding.name, Regexp.new("[\xC2-\xDF]".b).match?("\xC3".b),
           Regexp.new("(?-mix:[\xC2-\xDF])+".b).match?("\xC3".b),
           Regexp.new("abc".b).encoding.name, Regexp.new("abc".b).fixed_encoding?,
@@ -233,6 +234,14 @@ fn time_and_date_compare_through_spaceship() {
           def <=>(o); o.is_a?(Time) ? __orig_cmp(o) : (o == :less ? -1 : 1); end
         end
         overridden = [t < 5, t > 5, t <= 5, t >= 5, t == 5, t < :less, t.between?(1, 2), t < t + 1, t >= Time.at(0)]
+        class Time
+          def <=>(o); o.is_a?(Time) ? __orig_cmp(o) : (o == :less ? -0.5 : 0.5); end
+        end
+        floaty = [t < 5, t > 5, t <= :less, t >= :less]
+        class Time
+          def <=>(o); o.is_a?(Time) ? __orig_cmp(o) : "x"; end
+        end
+        stringy = (t < 5 rescue $!.class)
         class Time; alias <=> __orig_cmp; end
         d = DateTime.new(2026, 9, 17, 1, 2, 3, "+09:00")
         scalar = Class.new do
@@ -242,7 +251,7 @@ fn time_and_date_compare_through_spaceship() {
           def coerce(other); [self.class.new(other), self]; end
         end
         dur = scalar.new(3600)
-        [errs, overridden,
+        [errs, overridden, floaty, stringy,
          d <=> 3600, Date.new(2026, 9, 17) <=> 2461301.5r, Date.new(2026, 9, 17).ajd, d.ajd, d.amjd,
          Date.new(2026, 9, 17) <=> 2461300, Date.new(2026, 9, 17) <=> "x",
          Date.new(2026, 9, 17) <=> DateTime.new(2026, 9, 17, 0, 0, 1),
@@ -272,6 +281,26 @@ fn finalized_object_ids_stay_unique() {
           GC.start if i % 7 == 0
         end
         [ids.uniq.size, ids.size]
+        "##,
+    );
+}
+
+/// The finalizer registry after the change above: a finalizer `==` to
+/// one already registered on the object is recorded once, and `dup` /
+/// `clone` copy the object's finalizers (CRuby does both).
+#[test]
+fn finalizer_registry_dedupe_and_copy() {
+    run_test_once(
+        r##"
+        o = Object.new
+        pr = proc { |id| }
+        a = ObjectSpace.define_finalizer(o, pr)
+        b = ObjectSpace.define_finalizer(o, pr)
+        c = ObjectSpace.define_finalizer(o, proc { |id| })
+        d = o.dup
+        e = o.clone
+        ObjectSpace.undefine_finalizer(d)
+        [a[0], b[1].equal?(pr), c[1].equal?(pr), a[1].equal?(b[1]), d.frozen?, e.frozen?]
         "##,
     );
 }
