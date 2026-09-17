@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1ac99a5c.js";
+            window.path_to_searchindex_js = "searchindex-4fb1d3ab.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -15580,6 +15580,37 @@ RbConfig::CONFIG["CFLAGS"]        &lt;&lt; " -DMONORUBY=1"
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="rubyspec-ハング対策-skiptxt--tags-移行"><a class="header" href="#rubyspec-ハング対策-skiptxt--tags-移行">ruby/spec ハング対策: <code>skip.txt</code> → <code>tags/</code> 移行</a></h1>
+<blockquote>
+<p><strong>更新(2026-09-17): <code>core/process/wait_tags.txt</code> を追加(#1386)。</strong>
+rubyspec-stats の 2026-09-17 の run(nightly = 900252fd)で core が空になった。
+<code>spec/default.mspec</code> の example トレースが指す最後の example は
+<code>Process.wait doesn't block if no child is available when WNOHANG is used</code>
+(wait_spec.rb): <code>Process.fork</code> した子が <code>Signal.trap("TERM") { exit! }</code> して
+<code>sleep</code>、親が pipe で同期してから <code>Process.kill("TERM")</code> → <code>Process.wait</code>
+するもので、07:06:02 に入ったまま 07:25:42 の <code>timeout -k 5 1200</code> の TERM で
+抜けた(その TERM で次の example のトレースが 1 行出てから KILL、exit 137)。
+前日の run(a1aa2ec1e6)では同じ example が 20 ms で通っている。</p>
+<p>ローカルでは再現しない: release ビルドの master(bf089972)で core 全体を
+15 回(各 25 秒、23163 examples)、<code>taskset -c 0</code> の 1 CPU で core/process を
+4 回、さらに CI と同じ 900252fd をビルドして core 全体と wait_spec を走らせたが
+いずれも完走した。stdin を閉じる / <code>/dev/null</code> にする、mspec の
+<code>--timeout</code> 監視スレッドや fd 待ちスレッド・busy スレッドを立てた状態で
+fork する、といった条件でも通る。900252fd と a1aa2ec1e6 の間の 7 コミット
+(#1370-#1376)に fork / wait / signal を触るものは無い。</p>
+<p>つまり GitHub runner 上でだけ起きる <code>fork</code> した子 + <code>Process.wait</code> のハング
+で、<code>fork_tags.txt</code>(fork_spec の 5 例、同じ「fork した子を wait する」型)と
+同じ族。原因が掴めるまで同じ扱いにし、この 1 例を <code>critical(hangs)</code> で外す。
+監視スレッド・ready キュー・fd 待ちを fork 直後の子で dispatch する経路
+(<code>scheduler::fork_child_reset_threads</code>)は Dead マークで弾かれていることを
+ローカルで確認済み。</p>
+<p>タグが効いているかをローカルで確かめるときの注意: mspec は spec ファイルの
+<strong>実パス</strong>に <code>[%r(spec/), 'spec/tags/']</code> を当ててタグファイルを探す
+(action.yml のコメント参照)。<code>spec/ruby</code> を ruby/spec の checkout への
+symlink にした workspace では <code>&lt;checkout&gt;/tags/core/process/wait_tags.txt</code>
+に置かないと “0 tagged” のまま黙って全例が走る。CI の action は
+<code>spec/tags/ruby/</code> と <code>spec/ruby/tags/</code> の両方にコピーしているので、
+手元でも同じ 2 か所に置けば <code>mspec ci</code> が <code>1 tagged</code> と報告する。</p>
+</blockquote>
 <blockquote>
 <p><strong>更新(2026-08-09): 最後のタグを削除、タグはゼロに。</strong> #1065 で
 <code>Process.kill</code> がプロセスグループ宛て負シグナル(<code>-TERM</code> / 負の番号)を
