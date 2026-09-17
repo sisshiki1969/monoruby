@@ -946,6 +946,15 @@ impl alloc::GC<RValue> for FuncInfo {
 }
 
 impl FuncInfo {
+    /// The body a proc-based `define_method` wraps (`FuncKind::Proc`),
+    /// `None` for every other kind.
+    pub(crate) fn proc_method_body(&self) -> Option<FuncId> {
+        match &self.kind {
+            FuncKind::Proc(proc) => Some(proc.func_id()),
+            _ => None,
+        }
+    }
+
     fn new(
         name: impl Into<Option<IdentId>>,
         kind: FuncKind,
