@@ -10,8 +10,10 @@ use monoruby::tests::*;
 // `require "rubygems"` first: the harness spawns the reference CRuby with
 // `--disable=gems`, and zstd-ruby is an ordinary gem.
 
-/// One-shot `Zstd.compress` / `decompress`: the bytes (a frame with the
-/// content size, so `decompress` sizes its buffer from the header), the
+/// One-shot `Zstd.compress` / `decompress`: the libzstd version number
+/// (the gem's own `Zstd::VERSION` is whatever gem is installed, so it is
+/// not compared), the bytes (a frame with the content size, so
+/// `decompress` sizes its buffer from the header), the
 /// levels (positional or `level:`), an empty input, the result
 /// encodings, a dictionary as bytes / `CDict` / `DDict` (identical output
 /// either way), the deprecated `*_using_dict` forms, a frame without a
@@ -25,7 +27,7 @@ fn zstd_one_shot() {
         data = ("hello zstd world " * 200).b
         dict = ("the quick brown fox jumps over the lazy dog " * 50).b
         res = []
-        res << [Zstd.zstd_version, Zstd::VERSION]
+        res << Zstd.zstd_version
         c = Zstd.compress(data)
         res << [c.bytesize, c.bytes, c.encoding.name]
         res << [1, 3, 9, 19, -5].map { |l| Zstd.compress(data, level: l).bytes }
