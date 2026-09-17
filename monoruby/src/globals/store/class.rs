@@ -1130,6 +1130,18 @@ impl ClassInfoTable {
     /// If not exists, create a new singleton class.
     ///
     pub(crate) fn get_singleton(&mut self, mut obj: Value) -> Result<Module> {
+        // A class object's singleton is its metaclass, which lives in
+        // MRI's eigenclass tower (`get_metaclass`). Its class field may
+        // already point at a singleton attached to some *other* class —
+        // S(Class) for a metaclass, by that tower — so the "already a
+        // singleton" shortcut below would hand back a stranger's:
+        // `Foo.singleton_class.extend(M)` then landed M on S(Class),
+        // i.e. on the singleton of every class (found on lobsters'
+        // Rails boot: a `class << self; extend Forwardable` made
+        // ActiveSupport's `Module#delegate` resolve to Forwardable's).
+        if obj.ty() == Some(ObjTy::CLASS) {
+            return Ok(self.get_metaclass(obj.as_class_id()));
+        }
         let org_class = self[obj.class()].get_module();
         if org_class.is_singleton().is_some() {
             return Ok(org_class);

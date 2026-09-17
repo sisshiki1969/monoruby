@@ -148,6 +148,8 @@ fn unpack1_single_numeric(packed: &[u8], template: &str) -> Option<Value> {
     })
 }
 
+/// `packed` is the whole string; unpacking starts at `base_offset`
+/// (`offset:`), and `@n` positions are absolute in `packed`.
 pub(crate) fn unpack(
     packed: &[u8],
     template: &str,
@@ -155,16 +157,26 @@ pub(crate) fn unpack(
     base_offset: usize,
 ) -> Result<Value> {
     if once
-        && let Some(value) = unpack1_single_numeric(packed, template)
+        && let Some(value) = unpack1_single_numeric(&packed[base_offset..], template)
     {
         return Ok(value);
     }
     let mut template = parse_template(template, true)?;
     if once {
-        template.truncate(1);
+        // `unpack1` yields the first *value*: the position directives
+        // (`@`, `x`, `X`) ahead of it produce none and must stay, so
+        // `"…".unpack1("@3E")` reads the double at byte 3 rather than
+        // stopping at the `@` with nothing (ActiveSupport's cache
+        // coder addresses every field of its header that way).
+        let first_value = template
+            .iter()
+            .position(|n| !matches!(n.template, Template::AtPos | Template::Null | Template::Back))
+            .map_or(template.len(), |i| i + 1);
+        template.truncate(first_value);
     }
 
     let mut b = ByteIter::new(packed);
+    b.i = base_offset;
     let mut ary = Vec::new();
 
     macro_rules! unpack {
@@ -567,13 +579,10 @@ pub(crate) fn unpack(
                 }
             }
             Template::Offset => {
-                // '^' — current byte offset since the start of
-                // unpacking. Always emits one Integer regardless of
-                // count. We add the caller's `base_offset` so the
-                // value is absolute when `unpack` was invoked with an
-                // `offset:` keyword (`"abc".unpack("^", offset: 1)`
-                // returns `[1]`).
-                ary.push(Value::integer((base_offset + b.i) as i64));
+                // '^' — the current byte offset, absolute in the string
+                // (the cursor starts at the `offset:` keyword's position,
+                // so `"abc".unpack("^", offset: 1)` returns `[1]`).
+                ary.push(Value::integer(b.i as i64));
             }
         };
     }

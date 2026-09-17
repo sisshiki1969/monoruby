@@ -4897,7 +4897,7 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     if copy.class() != real {
         copy.change_class(real);
     }
-    copy_finalizers(globals, self_val.id(), copy.id());
+    copy_finalizers(globals, self_val, copy);
     // When the class uses the default (no-op) copy hooks, skip the hook
     // dispatch entirely and return the raw shallow copy — `dup` always
     // produces a same-class copy, so the default `initialize_copy`
@@ -4923,14 +4923,14 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     Ok(copy)
 }
 
-/// Re-register every finalizer attached to `from` (an object id) onto
-/// `to`, so that `dup`/`clone` copies of an object inherit its
-/// finalizers, matching CRuby.
-fn copy_finalizers(globals: &mut Globals, from: u64, to: u64) {
-    let copied: Vec<(u64, Value)> = globals
+/// Re-register every finalizer attached to `from` onto `to`, so that
+/// `dup`/`clone` copies of an object inherit its finalizers, matching
+/// CRuby.
+fn copy_finalizers(globals: &mut Globals, from: Value, to: Value) {
+    let copied: Vec<(Value, Value)> = globals
         .finalizers
         .iter()
-        .filter(|(k, _)| *k == from)
+        .filter(|(o, _)| o.id() == from.id())
         .map(|(_, callable)| (to, *callable))
         .collect();
     globals.finalizers.extend(copied);
@@ -4966,7 +4966,7 @@ fn clone_val(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     };
 
     let mut copy = self_val.clone_value();
-    copy_finalizers(globals, self_val.id(), copy.id());
+    copy_finalizers(globals, self_val, copy);
     if self_val.is_class_or_module().is_some() {
         return Ok(copy);
     }
@@ -5082,7 +5082,7 @@ fn register_finalizer(
     let existing: Vec<Value> = globals
         .finalizers
         .iter()
-        .filter(|(k, _)| *k == id)
+        .filter(|(o, _)| o.id() == id)
         .map(|(_, c)| *c)
         .collect();
     for c in existing {
@@ -5090,7 +5090,7 @@ fn register_finalizer(
             return Ok(c);
         }
     }
-    globals.finalizers.push((id, callable));
+    globals.finalizers.push((obj, callable));
     Ok(callable)
 }
 
@@ -5110,7 +5110,7 @@ fn unregister_finalizer(
         return Err(MonorubyErr::cant_modify_frozen(&globals.store, obj));
     }
     let id = obj.id();
-    globals.finalizers.retain(|(k, _)| *k != id);
+    globals.finalizers.retain(|(o, _)| o.id() != id);
     Ok(obj)
 }
 

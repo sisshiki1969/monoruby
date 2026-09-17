@@ -17,6 +17,9 @@
 # accessors.
 
 class StringScanner
+  # The strscan version CRuby 4.0.2 ships (rexml 3.4 branches on it).
+  Version = "3.1.6"
+
   class Error < StandardError; end
 
   def initialize(str)

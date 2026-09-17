@@ -143,6 +143,11 @@ impl Globals {
             // their canonical (symlink-resolved) form.
             let canon_dirs: Vec<PathBuf> = entries.iter().map(|d| canonical_dir_of(d)).collect();
             let bundler_priority = path_str == "bundler" || path_str.starts_with("bundler/");
+            // Every candidate is checked against the loaded features
+            // before any is searched for (CRuby's `rb_feature_p` runs
+            // ahead of the load-path walk): `require "fiber"` with
+            // `fiber.so` pre-listed must answer `false`, not load a
+            // `fiber.rb` that a load-path dir happens to hold.
             for cand in require_candidates(file_name) {
                 if self.is_feature_loaded(&cand) {
                     return Ok(RequireLoad::AlreadyLoaded(cand));
@@ -156,6 +161,8 @@ impl Globals {
                 if let Some(hit) = self.feature_suffix_loaded(&cand, &canon_dirs) {
                     return Ok(RequireLoad::AlreadyLoaded(hit));
                 }
+            }
+            for cand in require_candidates(file_name) {
                 if let Some(found) = self.search_candidate(&cand, &entries, bundler_priority) {
                     return self.require_lib_file(found);
                 }

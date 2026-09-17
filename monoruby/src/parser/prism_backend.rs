@@ -520,6 +520,15 @@ struct Lowerer<'pr> {
     /// `enter_prism_scope` / `exit_prism_scope` and consumed by
     /// `adjust_lvar_depth`.
     prism_scope_level: u32,
+    /// Prism scope levels whose parameter list bound the anonymous rest
+    /// (`*`) / keyword rest (`**`) local, innermost last (popped on
+    /// scope exit). A forwarding `foo(*)` / `foo(**)` written inside a
+    /// block or lambda of that scope reads the local through the outer
+    /// chain, so its depth is the number of scopes between the use and
+    /// the binder — hardcoding 0 read the block's own (absent) slot, and
+    /// ActionView's `capture(*, **) { yield(*, **) }` yielded nothing.
+    anon_rest_levels: Vec<u32>,
+    anon_kwrest_levels: Vec<u32>,
     /// Prism scope levels at which the lowerer synthesized a closure
     /// scope prism doesn't know about (currently only the hidden
     /// `at_exit` block wrapping an `END { ... }` body). A local
@@ -564,6 +573,8 @@ impl<'pr> Lowerer<'pr> {
             line_offset: 0,
             lvars: LvarCollector::new(),
             prism_scope_level: 0,
+            anon_rest_levels: Vec::new(),
+            anon_kwrest_levels: Vec::new(),
             scope_wraps: Vec::new(),
             warnings: Vec::new(),
             eval_parse: false,
@@ -590,8 +601,22 @@ impl<'pr> Lowerer<'pr> {
     /// returns the scope's own collector (used by block/def lowering
     /// to attach it to the produced `BlockInfo`).
     fn exit_prism_scope(&mut self, saved: LvarCollector) -> LvarCollector {
+        let leaving = self.prism_scope_level;
+        while self.anon_rest_levels.last() == Some(&leaving) {
+            self.anon_rest_levels.pop();
+        }
+        while self.anon_kwrest_levels.last() == Some(&leaving) {
+            self.anon_kwrest_levels.pop();
+        }
         self.prism_scope_level -= 1;
         std::mem::replace(&mut self.lvars, saved)
+    }
+
+    /// Depth of the anonymous `*` / `**` local bound at `binder_level`
+    /// as seen from the current scope (0 in the binding scope itself).
+    fn anon_param_depth(&mut self, binder_level: Option<u32>, name: &str) -> usize {
+        let depth = binder_level.map_or(0, |l| (self.prism_scope_level - l) as usize);
+        self.adjust_lvar_depth(depth, name)
     }
 
     /// Translate a prism-reported local variable depth into a
@@ -858,11 +883,16 @@ impl<'pr> Lowerer<'pr> {
                 let expr = match inner.expression() {
                     Some(e) => self.lower_node(&e)?,
                     // Anonymous `*` (forwarding `foo(*)`): splat the reserved
-                    // anonymous-rest local bound by the enclosing `def m(*)`.
-                    None => Node {
-                        kind: NodeKind::LocalVar(0, ANON_REST_NAME.to_owned()),
-                        loc,
-                    },
+                    // anonymous-rest local bound by the enclosing `def m(*)`,
+                    // however many blocks / lambdas down the use sits.
+                    None => {
+                        let binder = self.anon_rest_levels.last().copied();
+                        let depth = self.anon_param_depth(binder, ANON_REST_NAME);
+                        Node {
+                            kind: NodeKind::LocalVar(depth, ANON_REST_NAME.to_owned()),
+                            loc,
+                        }
+                    }
                 };
                 Node {
                     kind: NodeKind::Splat(Box::new(expr)),
@@ -3048,11 +3078,17 @@ impl<'pr> Lowerer<'pr> {
                                 Some(v) => self.lower_node(&v)?,
                                 // Anonymous `**` (forwarding `foo(**)`): splat
                                 // the reserved anonymous-kwrest local bound by
-                                // the enclosing `def m(**)`.
-                                None => Node {
-                                    kind: NodeKind::LocalVar(0, ANON_KWREST_NAME.to_owned()),
-                                    loc: location_to_loc(&s.location()),
-                                },
+                                // the enclosing `def m(**)`, at its depth from
+                                // here.
+                                None => {
+                                    let binder = self.anon_kwrest_levels.last().copied();
+                                    let depth =
+                                        self.anon_param_depth(binder, ANON_KWREST_NAME);
+                                    Node {
+                                        kind: NodeKind::LocalVar(depth, ANON_KWREST_NAME.to_owned()),
+                                        loc: location_to_loc(&s.location()),
+                                    }
+                                }
                             };
                             hash_splat.push(inner);
                         }
@@ -4711,7 +4747,10 @@ impl<'pr> Lowerer<'pr> {
                         Some(id) => Some(constant_name(&id)?),
                         // Anonymous `*`: bind a reserved, unspellable local
                         // so `foo(*)` forwarding can splat it.
-                        None => Some(ANON_REST_NAME.to_owned()),
+                        None => {
+                            self.anon_rest_levels.push(self.prism_scope_level);
+                            Some(ANON_REST_NAME.to_owned())
+                        }
                     };
                     if let Some(n) = &name {
                         self.lvars.insert(n);
@@ -4807,7 +4846,10 @@ impl<'pr> Lowerer<'pr> {
                         Some(id) => Some(constant_name(&id)?),
                         // Anonymous `**`: bind a reserved, unspellable local
                         // so `foo(**)` forwarding can splat it.
-                        None => Some(ANON_KWREST_NAME.to_owned()),
+                        None => {
+                            self.anon_kwrest_levels.push(self.prism_scope_level);
+                            Some(ANON_KWREST_NAME.to_owned())
+                        }
                     };
                     if let Some(n) = &name_opt {
                         self.lvars.insert_kwrest_param(n.clone());

@@ -449,6 +449,7 @@
 1dbac381063982c828c61a6698e1e664	[42, 42, 42]	$a = 1\n            alias $b $a\n            alias $c $b\n            
 1dc4e6b9d13cbb4bda8ad0cf13be134b	[2, "hi"]	(f="/tmp/mono_oa_#{Process.pid}"; n=IO.write(f, "hi", open_args: ["w", nil, {enc
 1dc6884272715101af309365600555df	[:ensured, "boom"]	log = []\n            begin\n              Enumerator.new { |y| begin
+1df4fdb4369c9047a1c7804c911c41c5	[Module, true, true]	require "socket"\n        class W\n          include ::Socket::Constants\n
 1e08e67e4ca265bf528592b1dae413d1	42	class Foo\n              @@x = 42\n              def self.get_x; clas
 1e172a461f0c16b5db64904d90096356	[[:mul, :mul, :mul], [[1, 0], [2, 1], [3, 2]]]	class Integer; def *(o); :mul; end; end\n        [[1, 2, 3].map { |x| x 
 1e1f5f728efe927c10f8e284ecc655b0	[1, 2, [3, 4]]	class C\n              define_method(:m) { |a, b, *c| [a, b, c] }\n  
@@ -875,10 +876,12 @@
 3c7f081b962e4c7272b51d99d568feb4	["outer", "outer", "outer", "outer", "nil"]	def brk_while(log)\n          outer = StandardError.new "outer"\n        
 3c8c62dfbc6ab8e4b391463cee4bdbb0	[true, true]	require "io/wait"\n            [IO.instance_method(:wait_readable).i
 3c8d308b1dc06f94ef88b63745ff08be	[false, true, [:a, :b], nil]	t = Thread.new {}.join\n            t.thread_variable_set(:a, 1)\n   
+3c8ff8a61fbbe949e66a439108e31147	["ASCII-8BIT", "ASCII-8BIT", true, true, [97, 195, 159], true, true, true, false, "ASCII-8BIT", true, true, "US-ASCII", false, true, "ASCII-8BIT", RegexpError]	u = Regexp.union(/[\\x01-\\x7f]/n, /[\\xC2-\\xDF][\\x80-\\xBF]/n)\n        r =
 3ca7dc56ff22d6c2b33235faf84f9b0e	[:gets, :read, :gets_threaded]	require "socket"\n            res = []\n            s = TCPServer.new
 3cf87379e16fe1d3a9d2d96970f0d8bd	true	A = Struct.new(:x)\n            B = Struct.new(:x)\n            \n\n   
 3d28365ff908f010d20822a67b2846df	["ensure in f", "ensure in g", 42]	def g\n          begin\n            yield\n          ensure\n            $r
 3d4f40c1f15e87af5d8f2875562332f0	true	"".dup.force_encoding("UTF-16BE") == "".dup.force_encoding("UTF-8")
+3d53b4ceab9d44b28e2361aaffa33eb9	[false, false, false, false, false, false, false]	%w[enumerator thread fiber rational complex ruby2_keywords set].map { |
 3d5aaee333bdf3c4bc36ded91dcd0aaf	[1, :nme]	class TrueClass; def only_true713; 1; end; end\n        res = []\n       
 3d5adde3fb0edf69c5646dd0efeadc07	["PSubC", :dup, :clone]	class PSubC < Proc\n                 def initialize_dup(o); super; @tag = :dup; e
 3d7615175fabd68b3fa63cd412a212f0	[:n, :t, :f, 1, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
@@ -914,6 +917,7 @@
 3f4c9f0f73ccb21af0e353b87eaa363b	["---\\na: 1\\nb:\\n- 1\\n- 2\\n- c:\\n:d: e\\nf: |-\\n  multi\\n  line\\ng: true\\nh: 1.5\\ni: '1'\\nj: ''\\nk: \\" lead\\"\\nl: 'yes'\\n", "--- plain\\n", "--- []\\n", "--- {}\\n", "---\\n", "--- :sym\\n", "--- !ruby/range\\nbegin: 1\\nend: 3\\nexcl: false\\n", "--- 'with: colon'\\n", "--- \\"#hash\\"\\n", "--- 'a: b'\\n", "--- 'trail '\\n", "--- \\"tab\\\\there\\"\\n", "--- 'null'\\n", "--- \\"~\\"\\n", "--- '1.0'\\n", "--- '0x1f'\\n", "--- '2024-01-02'\\n", "--- 'true'\\n", "--- \\"- dash\\"\\n", "--- \\"[bracket\\"\\n", "--- \\"{brace\\"\\n", "--- \\"'quote'\\"\\n", "--- '\\"dq\\"'\\n", "--- \\"&amp\\"\\n", "--- \\"*star\\"\\n", "--- \\"!bang\\"\\n", "--- \\"%pct\\"\\n", "--- \\"@at\\"\\n", "--- \\"`tick\\"\\n", "--- \\"|pipe\\"\\n", "--- \\">gt\\"\\n", "--- \\"?q\\"\\n", "--- |\\n  line1\\n  line2\\n", "--- |-\\n  line1\\n  line2\\n", "--- \\"\\\\n\\"\\n", "--- |2-\\n    indented\\n  second\\n", "--- |-\\n  x\\n\\n\\n  y\\n", "---\\nlong: 'x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x\\n  x x x x x x x x x x x x x x x x x x x x x x '\\n", "---\\nlong: 'x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x '\\n", "---\\nlong: \\"x x x x x x x x\\n  x x x x x x x x x x\\n  x x x x x x x x x x\\n  x x x x x x x x x x\\n  x x x x x x x x x x\\n  x x x x x x x x x x\\n  x x \\"\\n", "---\\n- 1\\n-   - 2\\n    -   - 3\\n", "---\\na:\\n   b:\\n      c: 1\\n", "%YAML 1.1\\n--- a\\n", "%YAML 1.1\\n---\\n- 1\\n- 2\\n", "--- 2024-01-02 03:04:05.000000000 Z\\n", "--- 2024-01-02 03:04:05.123456000 Z\\n", "--- 2024-01-02\\n", "--- 1180591620717411303424\\n", "--- -3\\n", "--- 0.3333333333333333\\n", "--- .inf\\n", "--- -.inf\\n", "--- .nan\\n", "--- 1.0e+20\\n", "--- !ruby/object:Rational\\ndenominator: 3\\nnumerator: 1\\n", "--- !ruby/object:Complex\\nreal: 1\\nimage: 2\\n", "---\\n1: int key\\n! '': nil key\\n? - 1\\n  - 2\\n: array key\\ntrue: bool key\\n", "---\\n- - 1\\n  - 2\\n- a:\\n  - 3\\n- []\\n- {}\\n- -\\n- - ''\\n", "---\\n- shared\\n- shared\\n", "---\\n- - 1\\n- - 1\\n", "--- &1\\nself: *1\\n", "--- !ruby/struct:Point\\nx: 1\\ny: 2\\n", true, ["--- !ruby/object:Foo\\n", "a: 1\\n", "b: two\\n"], ["Foo", 1, "two"], "--- !ruby/exception:Exception\\nmessage: boom\\nbacktrace:\\n", "--- !ruby/exception:ArgumentError\\nmessage: ArgumentError\\nbacktrace:\\n", ["RuntimeError", "again"], "--- !ruby/object:Set\\nhash:\\n  1: true\\n  2: true\\n", "--- !ruby/regexp /a.b/i\\n", "--- :with space\\n", "--- !binary |-\\n  w6k=\\n", "--- !binary |-\\n  /w==\\n", "--- 1\\n--- 2\\n", "---\\na: 1\\n---\\n- 2\\n", "---\\n- 1\\n- two\\n-\\n", "---\\nk: :v\\n", "--- str\\n", "--- 3\\n", "--- x\\n", "---\\na:\\n- 1\\n", "--- >-\\n  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n", "---\\n{\\n  ? \\"a\\"\\n  : ! \\"1\\",\\n}\\n"]	require "yaml"\n        r = []\n        r << YAML.dump({"a" => 1, "b" => 
 3f4dfe13f5216cef0f89b04300d4b2aa	true	GC.enable; GC.disable; GC.enable
 3f6f1c23deee61068ec39f5295c45a16	[[], [:f]]	class S\n              def f; end\n            end\n            class 
+3f72b0848d8da9ce1adc72b87da21e56	["2026-09-17", "2026-09-17T01:02:03+09:00", "2026-09-17T01:02:03.500+09:00", (3/8), (1/2), true, "2026-01-02T03:04:05-05:00", "2026-09-17 01:02:03 +0900", 0, true, "#<Date: 2026-09-17 ((2461301j,0s,0n),+0s,-Infj)>", -Infinity, true, 2361222, "2026-10-17"]	require "date"\n        t = Time.new(2026, 9, 17, 1, 2, 3.5r, "+09:00")\n
 3f839e4337603d2011e09f2f712091a4	[:bar, :foo]	class A\n              def foo; end\n              def bar; end\n     
 3f92dae4c5bb5d0850bb428a743f7317	[4, 5]	r = []\n        10.times { |i| r << i if (i == 4)...(i == 5) }\n        r
 3f9bc283176b2ee563ab3a04dc4a637b	[[2], 0]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
@@ -1174,6 +1178,7 @@
 4f25590928a9fdd7675c4622bca8951a	[[3, ArgumentError], "nil"]	def m(a)\n          begin\n            raise ArgumentError, "boom"\n      
 4f5db8d804d9f380dc11c2dc2db028fb	[[[3, 0], [3, 1]], "x", 0]	class FDPoint\n          def initialize(x, y); @x = x; @y = y; end\n     
 4f901b278fdd410f8765051d2109cb68	[[:a, 100], [:b, 100], [:c, 100], [:d, 100], [:e, 100], [:f, 100]]	class Oa; def tag = :a; end\n            class Ob; def tag = :b; end
+4f910f3237fde2de42a80a06ee889404	[[[Integer], {}, nil], [[Integer], {}, :blk], [[Integer, 2], {}, :blk], [[], {}, :blk], [[], {k: 1}, nil], [[Integer], {}, :blk], [9, [[String, 1], {}, nil]], [[Integer], {}, nil]]	class S\n          def use(*a, **kw, &b); [a, kw, b ? :blk : nil]; end\n 
 4f93aca4bf1af1b5c4055cb5ae6b15f5	[nil, false]	t = Thread.new { sleep }\n            r = t.join(0.05)\n            t
 4fa66bde865d8b29ac7a73525c13a9c4	true	path = "/tmp/monoruby_io_dc_#{Process.pid}_#{rand(100000)}"\n       
 4fbfb4f6588f47b184c44eb72d8611a5	[File, true, [Errno::EINVAL, "Invalid argument"], File]	(f="/tmp/mono_nb_#{Process.pid}"; fh=File.new(f, "w") { raise "block called" }; 
@@ -1254,6 +1259,7 @@
 5625d0e94e4d1bc9b84e2742fce64c08	true	class Foo\n              def initialize\n                @a = 1\n     
 562f4d8b35d5fe503594b38617eafdc0	[[[:missing, :arrives]], [:defined], [[:missing, :arrives]]]	class Late\n          def method_missing(name, *args) = [:missing, name]
 565141a1ed8e896232b365303c5ac4d4	:OVERRIDDEN	class Integer; def ===(o); :OVERRIDDEN; end; end; 3 === 4
+56530b1b894806d51d2f40d02d49d9c7	[["comparison of Time with 1 failed", "comparison of Time with String failed", "comparison of Time with nil failed", "comparison of Time with :s failed", "comparison of Time with 1.5 failed"], [false, true, false, true, false, true, false, true, true], 1, -1, (4922601/2), (70885444841/28800), (1765430441/28800), 1, nil, -1, 1, 1, false, false, true, true, true, true]	require "date"\n        t = Time.at(1_700_000_000)\n        errs = [1, "a
 56568fdc7f4e0b46c94d29cb9def4ec2	["renudged-to-main", 0]	r, w = IO.pipe\n            pid = fork do\n              r.close\n    
 5667fbe0e0218a0e00101f5832e7fa6e	[2, 1, true, 2, nil]	class Yes\n          def ==(o) = true\n        end\n        class No\n     
 5674c6743eb1f8cb3c5480370147f096	[10, 20]	class A\n          def initialize(x)\n            @x = x\n          end\n  
@@ -1796,6 +1802,7 @@
 7cb9811ddfc93318db7e1d0abe07127d	["0.123e3", "0.456e0", "0.0", "0.456e0", "0.1e3", "0.0"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
 7ccce38a43a199c2eea56a72eda7f6dc	[[], [:foo], [], [:foo]]	res = []\n        class S\n          def foo\n            "foo"\n          
 7cd1d5bab06d282edfbce720b2d1606b	[1, 2, [], 3, 12]	def f\n          yield [1,2,3]\n        end\n        \n\n        f { |a,b,x=
+7ce7d9209e35937c15ae54be5638b9ed	[[:x, {k: 1}], [:x, {k: 1}], [:x, {k: 1}], :x, {k: 1}, [[[[1, 2], {}]]], [[[1], {k: 2}, [[1], {}]]], [[3], {z: 4}]]	def h(*a, **k); [a, k]; end\n        def a(*, **, &block); v = nil; [1].
 7d0c6bafe5a5ef234657281422caca93	["[", "p", "a"]	f = File.open("Cargo.toml")\n            begin\n              [f.getc
 7d1501ee72153df4a1af95a0a484f13b	[true, false]	GC::Profiler.enable; r = GC::Profiler.enabled?; GC::Profiler.disable; [r, GC::Pr
 7d4fb0ea252c3834303824e7d9f4f7c8	false	arr = [1, 2]; x = *arr; x.equal?(arr)
@@ -2126,6 +2133,7 @@
 940e03901c8843bf06aca61f6ac64658	true	pid = Process.fork { exit 0 }\n            pid.is_a?(Integer)\n      
 94317fffff39c9093268791671c631b0	[true, false, 1, -1, nil, true, false, true, false, false, true, false, false, true]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
 9441f2118acd3193fe370775231fdcac	[[101, 101, 1001], 100]	class P\n              def initialize; @n = 1; end\n              def
+9454576c808d739198bc5f2aca3a4623	[false, true, true, :hi, false, false, ["#<Class:#<Class:Bar>>", "M", "#<Class:#<Class:Object>>"], true, false]	module M; def hi; :hi; end; end\n        class Foo\n          class << se
 9455609d2dcf2780b3bf58180504fb90	["a", nil, "b"]	ENV["MONORUBY_ENV_TEST_VA1"] = "a"\n            ENV["MONORUBY_ENV_TE
 948c8ebc5838aacb75bb4ad2c54cd528	[true, true, true]	[Process.respond_to?(:exit),\n             Process.respond_to?(:abor
 9491706684975503cce7f8dd96dffe40	:OVERRIDDEN	class NilClass; def !; :OVERRIDDEN; end; end; !(nil)
@@ -2720,6 +2728,7 @@ bbb536d6446e4acae479f2a76bbc22b8	[false, true, "payload"]	base = "/tmp/monoruby_
 bbb85dbe840092bcd2beeba3f4a669d0	[2, 6, 1, 5, 1, 3, 4, nil, 7, nil, 5, 1, 1, 6, 2, nil, 8, 8, 250, 249, Encoding::CompatibilityError, nil]	s = "aあbいcあb"\n        r = [\n          s.index("b"), s.index("b", 3), s.
 bbc6b60d27eb5cad82b53e233df0c6e8	280	class Object\n          def tag = 7\n        end\n        \n\n        res = 
 bbf39b957f63dc57cf6be6b238e3322a	"HELLO world"	s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0..-7); s
+bbf66697a6eb90adc6711051d2149b60	["2026-09-17", "2026-09-17T01:02:03+09:00", "2026-09-17T01:02:03.500+09:00", (3/8), (1/2), true, "2026-01-02T03:04:05-05:00", "2026-09-17 01:02:03 +0900", 0, true]	require "date"\n        t = Time.new(2026, 9, 17, 1, 2, 3.5r, "+09:00")\n
 bbf88be1f5615be8cbe5cfdbb37cd357	[23025.0, 152.0, 300]	$n = 0\n        def g\n          a = 0.0; c = 2.0\n          i = 0\n       
 bc0ccc0a16c986d29598ed69b9038ff8	[false, true, true]	h = {}\n        before = h.compare_by_identity?\n        ret = h.compare_
 bc2025afe3d4e746f87d06a3bac3e3db	[[]]	r = []; Enumerator.new { |y| y.yield }.each { |*a| r << a }; r
@@ -2779,6 +2788,7 @@ bf642b858ac68f1754855ea56af9f010	["inherited"]	$res = []\n        class A\n     
 bf69a12e40aa6429315d6d5c29ddfe91	[0, 5, 5, 0]	f = File.open("Cargo.toml")\n            begin\n              a = f.p
 bf79a4cee2d36dbbb5a38944e22e53c1	[true, true]	big = Array.new(2000) { |i| [i] }\n            5.times { GC.start }\n
 bf79cea739fcb7a0ec6546a5b4e6528a	[Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, "incompatible character encodings: UTF-16BE and US-ASCII"]	(f = ->(x) { begin; x.call; rescue => e; e.class; end }; [f.(-> { File.basename(
+bf86d96bf0d1e9daf2b53699e9f3ecf9	[1, 123.5, -1, "cd", "ab", "b", "cd", nil, 1, "xa", [1, 123.5, -1], 67305985, 97]	s = "\\x00\\x11".b + [1, 123.5, -1].pack("CEl<") + "payload"\n        [s.u
 bf960838169f3fd4f0850862d278a5e7	[1495, 13, 30, 7]	class Wa; def f(a, b) = a + b; end\n            class Wb; def f(a, b
 bf9d53c3fd6b4e9d4cb7eef1119ed43f	[false, nil, true, 15, nil, false]	pid = fork { sleep 5 }\n            Process.kill("TERM", pid)\n      
 bfb3c432ce87e3afc690e1a4090e98dd	1	e = [1,2,3,4,5].to_enum\n        e.next\n        
@@ -3060,6 +3070,7 @@ d1fb6e221ee581e85d0263cbc4321970	[false, false, false]	[$VERBOSE, $-v, $-w]
 d22622fcd363dab097a0d4aa0bfe2e93	30	def f(a:, b:)\n          a + b\n        end\n        \n\n        f(a: 10, b:
 d241f6cfa000d985ad83831917fcd9ab	15	def f(x)\n          yield *x\n        end\n        \n\n        f([1,2,3,4,5]
 d248c4c75d6d6152979eacdd22264ac7	[true, "3.2", "OS"]	T = Struct.new(:version, :platform)\n            \n\n            pos =
+d249a352e7a0516aae9724b52c800e6e	3	require "forwardable"\n        class Module\n          def delegate(*name
 d251e356957ab6fc062c3f28a863a7d8	[[TypeError, "wrong element type Integer (expected array)"], [ArgumentError, "element has wrong array length (expected 2, was 3)"], [ArgumentError, "element has wrong array length (expected 2, was 1)"]]	h = { a: 1 }\n            [\n              (begin; h.to_h { |k, v| 5 
 d28ba746b6e9c87f48b3e3e7b6c1a0f5	[["x", "y"], false, false]	base = "/tmp/monoruby_dir_instchildren_#{Process.pid}_#{rand(100000
 d2a85e324b33b9f9990c7beff0a3d580	[:found, :found, ["EvA::EvB", "EvA::EvB", "EvA"], :found, :found]	module EvA\n              Lookup = :found\n              module EvB\n 
@@ -3215,6 +3226,7 @@ dd6ba415513db8cf6aad7ef750eaedc1	[99, 97, 102, 101, 204, 129]	s = "café".dup\n 
 dd7215ba379fc74d14dd5dd32b95ff3e	"circular causes"	begin\n              begin\n                raise "Error 1"\n         
 dd8750e730148376d88a9f3c0768a481	[true, true, true, true, true, true]	_r, w = IO.pipe\n            [\n              w.wait(:w, 0) == w,\n   
 dd9fdf5bf20e5c51c71f01d1236eba44	Array	class C < Array; end\n(C[1,2] + [3]).class
+ddbc522e56430e519362712fbc31cfa9	[#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, true, true, [97, 195, 159], true, true, true, false, #<Encoding:BINARY (ASCII-8BIT)>, true, true, #<Encoding:US-ASCII>, false, true, #<Encoding:BINARY (ASCII-8BIT)>, RegexpError]	u = Regexp.union(/[\\x01-\\x7f]/n, /[\\xC2-\\xDF][\\x80-\\xBF]/n)\n        r =
 dde678d4f6ec4280c7043b73a85391df	[140, [70, 10]]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 ddf316887c271d6578314a6be120991f	[300, 300, 599, 0, 299]	h = { 0 => 0, 1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 7, 8 => 8, 9 
 de101e25e7a853fe0c9708bc2adb754c	true	FileTest.executable?("/bin/sh")
@@ -3511,6 +3523,7 @@ f2104384e6be9965ec5da4ad860b37f4	[1, 4, 2]	[IO::READABLE, IO::WRITABLE, IO::PRIO
 f212deed776e67ad2663d333efdef52c	true	b = binding\n            b.eval("z = 1")\n            b.local_variabl
 f216b4de4c4cc3516688e358d154cc58	[{k: 0}, 1, {a: 1, b: 0}, [:a, :b], [1, 0], false, true, {k: 1}, 1, {a: 1, b: 1}, [:a, :b], [1, 1], false, true, {k: 2}, 1, {a: 1, b: 2}, [:a, :b], [1, 2], false, true, {k: 3}, 1, {a: 1, b: 3}, [:a, :b], [1, 3], false, true, {k: 4}, 1, {a: 1, b: 4}, [:a, :b], [1, 4], false, true, {k: 5}, 1, {a: 1, b: 5}, [:a, :b], [1, 5], false, true, {k: 6}, 1, {a: 1, b: 6}, [:a, :b], [1, 6], false, true, {k: 7}, 1, {a: 1, b: 7}, [:a, :b], [1, 7], false, true, {k: 8}, 1, {a: 1, b: 8}, [:a, :b], [1, 8], false, true, {k: 9}, 1, {a: 1, b: 9}, [:a, :b], [1, 9], false, true, {k: 10}, 1, {a: 1, b: 10}, [:a, :b], [1, 10], false, true, {k: 11}, 1, {a: 1, b: 11}, [:a, :b], [1, 11], false, true, {k: 12}, 1, {a: 1, b: 12}, [:a, :b], [1, 12], false, true, {k: 13}, 1, {a: 1, b: 13}, [:a, :b], [1, 13], false, true, {k: 14}, 1, {a: 1, b: 14}, [:a, :b], [1, 14], false, true, {k: 15}, 1, {a: 1, b: 15}, [:a, :b], [1, 15], false, true, {k: 16}, 1, {a: 1, b: 16}, [:a, :b], [1, 16], false, true, {k: 17}, 1, {a: 1, b: 17}, [:a, :b], [1, 17], false, true, {k: 18}, 1, {a: 1, b: 18}, [:a, :b], [1, 18], false, true, {k: 19}, 1, {a: 1, b: 19}, [:a, :b], [1, 19], false, true]	res = []\n        20.times do |i|\n            h = {}\n            h[:k] =
 f25dbd56f5e0a43cccce8f621b699cac	[[false, "true", "A!"], [true, "false", "A!"]]	module RefBool\n          refine String do\n            def shout = upcas
+f26668c920f1005b0bda63f17b161606	["3.1.6", true]	require "strscan"\n        [StringScanner::Version, StringScanner::Versi
 f278d110b91e27cba6d94dd2fa48e555	[680, 19, 38, 19]	def __f(x)\n          \n        acc = 0\n        i = 0\n        while i < 2
 f27aef0e47e3354ce496c90299f462ea	[["x\\ny\\nz\\n"], ["x\\n", "y\\n", "z\\n"], ["x\\n", "y\\n", "z\\n"], "ASCII-8BIT"]	File.write("/tmp/mr_rlf4.txt", "x\\ny\\nz\\n")\n            r = []\n    
 f2899713941ee3ed54e30d3b5b785abc	[1, true]	module MSx; end\n            SX = Struct.new(:a)\n            s = SX.

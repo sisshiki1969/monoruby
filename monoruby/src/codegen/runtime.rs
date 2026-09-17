@@ -1102,7 +1102,38 @@ pub(super) extern "C" fn concatenate_regexp(
     };
     let inner = s_val.as_rstring_inner();
     let bytes = inner.as_bytes().to_vec();
-    let enc = inner.encoding();
+    let mut enc = inner.encoding();
+    let mut option = option;
+    // A fixed-encoding Regexp fragment pins the literal's encoding
+    // (CRuby's `rb_reg_preprocess_dregexp`), whatever the String
+    // concatenation above decided: `/#{/[\xC2-\xDF]/n}+/` is BINARY and
+    // byte-matched, although the fragment's `to_s` is 7-bit text and
+    // would compile under UTF-8 as "too short multibyte code string".
+    let mut pinned: Option<Encoding> = None;
+    for i in 0..len {
+        // SAFETY: fragments occupy the `len` operand slots below `arg`.
+        let v = unsafe { *arg.sub(i) };
+        if let Some(re) = v.is_regex()
+            && re.fixed_encoding()
+        {
+            let e = re.declared_encoding();
+            match pinned {
+                Some(p) if p != e => {
+                    vm.set_error(MonorubyErr::regexerr(format!(
+                        "incompatible encodings: {} and {}",
+                        p.name(),
+                        e.name()
+                    )));
+                    return None;
+                }
+                _ => pinned = Some(e),
+            }
+        }
+    }
+    if let Some(e) = pinned {
+        enc = e;
+        option |= RegexpInner::FIXEDENCODING;
+    }
     // The matching engine only understands UTF-8/ASCII; feed it a
     // best-effort UTF-8 view while the raw bytes + encoding drive
     // `Regexp#source` / `#encoding`.

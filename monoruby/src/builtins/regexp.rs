@@ -260,7 +260,15 @@ fn build_regexp_inner(
     } else {
         default_option.unwrap_or(onigmo_regex::ONIG_OPTION_NONE)
     };
-    let encoding = if option & RegexpInner::NOENCODING != 0 {
+    // A BINARY source carrying high bytes — raw, or as `\xHH` escapes
+    // (`Regexp.new("[\xC2-\xDF]".b)`, what `Regexp.union` of `/…/n`
+    // regexps hands back) — is matched byte-wise like `/…/n`; under the
+    // UTF-8 codec such an escape is "too short multibyte code string".
+    let binary_source = source_encoding == Some(crate::value::Encoding::Ascii8)
+        && source_bytes.as_ref().is_some_and(|b| {
+            b.iter().any(|&c| c >= 0x80) || RegexpInner::has_non_ascii_hex_escape(b)
+        });
+    let encoding = if option & RegexpInner::NOENCODING != 0 || binary_source {
         onigmo_regex::OnigmoEncoding::ASCII
     } else {
         onigmo_regex::OnigmoEncoding::UTF8
@@ -1134,6 +1142,24 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     check_subject_match_encoding(&globals.store, &regex, arg0)?;
     warn_binary_regexp_match(vm, globals, &regex, arg0);
+    // A subject in a non-UTF-8 encoding Onigmo has a native codec for is
+    // matched on its raw bytes, as `match` / `=~` do: read lossily, a
+    // BINARY "\xC3" became U+FFFD and `/\xC3/n.match?` answered false.
+    if let Some(rs) = arg0.is_rstring()
+        && rs.code_range() != CodeRange::SevenBit
+        && let Some(native_enc) = RegexpInner::onigmo_encoding_for(rs.encoding())
+    {
+        let byte_pos = if let Some(pos) = lfp.try_arg(1) {
+            match conv_index(pos.coerce_to_int_i64(vm, globals)?, rs.char_length()) {
+                Some(cp) => rs.iter_char_bytes().take(cp).map(|c| c.len()).sum(),
+                None => return Ok(Value::bool(false)),
+            }
+        } else {
+            0
+        };
+        let bytes = arg0.as_rstring_inner().as_bytes();
+        return Ok(Value::bool(regex.match_pred_bytes(bytes, native_enc, byte_pos)?));
+    }
     // Borrow a valid-UTF-8 String subject in place, as `match` / `=~` do;
     // anything else goes through `subject_to_string`. This used to read the
     // subject as an identifier, interning every string ever asked about —
