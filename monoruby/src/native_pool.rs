@@ -54,17 +54,12 @@ pub(crate) enum NativeOp {
     /// `run` never touches the Ruby heap. `ret` is the raw 64-bit result,
     /// which the waiter boxes; `errno` is unused.
     Ffi(crate::builtins::fiddle::FfiWorkerCall),
-    /// Opening or closing a SQLite connection
-    /// (`src/builtins/sqlite3.rs`). These touch the filesystem — creating
-    /// the file, replaying a WAL, checkpointing on close — so they run
-    /// here rather than freezing every green thread, which is what the
-    /// Fiddle bridge they replaced did with `blocking: true`. Everything
-    /// else (`step`, `prepare`, the column reads) runs inline: it is
-    /// short, and the round trip here costs tens of microseconds.
-    #[cfg(feature = "sqlite3")]
-    Sqlite3(crate::builtins::sqlite3::Sqlite3WorkerCall),
     /// A dynamically loaded extension's `call_blocking` (`src/ext.rs`):
-    /// its own function and argument, raw, as `Ffi`.
+    /// its own function and argument, raw, as `Ffi`. (The sqlite3
+    /// extension opens and closes its connections here — they touch the
+    /// filesystem — and its SQLite is `SQLITE_THREADSAFE=1`, so a
+    /// connection opened on a worker is usable from the interpreter
+    /// thread afterwards.)
     Ext(crate::ext::ExtWorkerCall),
 }
 
@@ -364,11 +359,6 @@ fn run_op(op: &NativeOp) -> (i64, i32) {
         // No EINTR loop: the foreign function owns its own restart policy,
         // and retrying an arbitrary C call would not generally be safe.
         NativeOp::Ffi(call) => (call.run(), 0),
-        // As `Ffi`: raw handles and byte buffers only, and the SQLite
-        // build is `SQLITE_THREADSAFE=1`, so a connection opened here is
-        // usable from the interpreter thread afterwards.
-        #[cfg(feature = "sqlite3")]
-        NativeOp::Sqlite3(call) => (call.run(), 0),
         NativeOp::Ext(call) => (call.run(), 0),
     }
 }

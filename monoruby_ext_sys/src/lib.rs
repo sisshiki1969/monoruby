@@ -119,6 +119,10 @@ pub struct MrNativeOps {
     pub dup: Option<unsafe extern "C" fn(data: *mut c_void) -> *mut c_void>,
 }
 
+// SAFETY: the table is immutable data (a name pointer and function
+// pointers), kept in a `static` by the extension and only ever read.
+unsafe impl Sync for MrNativeOps {}
+
 /// What `type_of` answers.
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -257,6 +261,9 @@ pub struct MrApi {
     /// Ruby runs. NULL with a TypeError pending when `v` is not a String.
     pub str_ptr:
         unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue, len: *mut usize) -> *const u8,
+    /// The name of a String's encoding (`"UTF-8"`, `"ASCII-8BIT"`, ...)
+    /// as a String; `MR_UNDEF` with a TypeError pending for a non-String.
+    pub str_encoding: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> MrValue,
     pub sym_new: unsafe extern "C" fn(ctx: *mut MrContext, ptr: *const u8, len: usize) -> MrValue,
     /// A Symbol's name as a String.
     pub sym_to_str: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> MrValue,

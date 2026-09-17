@@ -1,0 +1,13 @@
+[package]
+name = "monoruby-ext"
+version = "0.1.0"
+edition = "2024"
+description = "Safe Rust over monoruby-ext-sys for writing monoruby extensions (doc/native_extension_loading.md)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "monoruby_ext"
+
+[dependencies]
+monoruby-ext-sys = { path = "../monoruby_ext_sys" }

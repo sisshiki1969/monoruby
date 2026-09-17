@@ -292,12 +292,15 @@ impl Globals {
                 return Some(p);
             }
         }
-        // A `.so` candidate names a native extension when one of that
-        // stem is installed (`lib<stem>.so` next to the binary or in the
-        // install root's `ext/`, see `ext::find_extension`); the stem
-        // alone is matched, as rubygems nests a gem's `.so` under
-        // `<gem>/<ruby version>/` while monoruby's extension dir is flat.
+        // A bare `.so` candidate (`require "sqlite3_native.so"`, no
+        // directory) names a native extension when one of that stem is
+        // installed (`lib<stem>.so` next to the binary or in the install
+        // root's `ext/`, see `ext::find_extension`). Only the bare form:
+        // a gem's own `require "sqlite3/4.0/sqlite3_native"` must keep
+        // reaching the `.rb` stand-in (which is what requires the bare
+        // `.so`), not jump to the library and skip the Ruby it carries.
         if cand.extension().map(|e| e.as_bytes()) == Some(b"so")
+            && cand.parent().is_none_or(|p| p.as_os_str().is_empty())
             && let Some(stem) = cand.file_stem()
             && let Some(p) = crate::ext::find_extension(&stem.to_string_lossy())
         {

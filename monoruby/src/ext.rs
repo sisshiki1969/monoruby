@@ -307,7 +307,7 @@ const DLEXT: &str = if cfg!(target_os = "macos") {
 /// when it is not — where `cargo build` leaves a workspace member's
 /// cdylib), and the install root's `ext/`.
 fn search_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![];
+    let mut dirs = extra_dirs().lock().unwrap().clone();
     if let Some(p) = std::env::var_os("MONORUBY_EXT_PATH") {
         dirs.extend(std::env::split_paths(&p));
     }
@@ -327,6 +327,21 @@ fn search_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Directories added at run time, ahead of the rest — the test harness
+/// builds extension crates into their own target dir and registers it.
+fn extra_dirs() -> &'static std::sync::Mutex<Vec<PathBuf>> {
+    static EXTRA: std::sync::OnceLock<std::sync::Mutex<Vec<PathBuf>>> = std::sync::OnceLock::new();
+    EXTRA.get_or_init(|| std::sync::Mutex::new(vec![]))
+}
+
+pub fn add_search_dir(dir: PathBuf) {
+    let dir = dir.canonicalize().unwrap_or(dir);
+    let mut dirs = extra_dirs().lock().unwrap();
+    if !dirs.contains(&dir) {
+        dirs.push(dir);
+    }
+}
+
 /// The shared library `require "<stem>.so"` loads, if one is installed.
 pub(crate) fn find_extension(stem: &str) -> Option<PathBuf> {
     let file = format!("lib{stem}.{DLEXT}");
@@ -340,10 +355,13 @@ pub(crate) fn find_extension(stem: &str) -> Option<PathBuf> {
 /// Whether `path` is a file `find_extension` would have answered — the
 /// require resolver's cue to load it natively rather than as Ruby.
 pub(crate) fn is_extension_path(path: &Path) -> bool {
+    let same = |a: &Path, b: &Path| {
+        a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+    };
     path.extension().is_some_and(|e| e == DLEXT)
         && path
             .parent()
-            .is_some_and(|dir| search_dirs().iter().any(|d| d == dir))
+            .is_some_and(|dir| search_dirs().iter().any(|d| same(d, dir)))
 }
 
 /// `Init_<name>`, `name` being the file stem without its `lib` prefix,
@@ -448,6 +466,7 @@ pub(crate) static MR_API: MrApi = MrApi {
     str_new: mr_str_new,
     bytes_new: mr_bytes_new,
     str_ptr: mr_str_ptr,
+    str_encoding: mr_str_encoding,
     sym_new: mr_sym_new,
     sym_to_str: mr_sym_to_str,
     ary_new: mr_ary_new,
@@ -1279,4 +1298,21 @@ unsafe extern "C" fn mr_call_blocking(
 
 unsafe extern "C" fn mr_ruby_version() -> *const c_char {
     concat!(env!("MONORUBY_RUBY_VERSION"), "\0").as_ptr() as *const c_char
+}
+
+unsafe extern "C" fn mr_str_encoding(ctx: *mut MrContext, v: MrValue) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(v) = val(v) else { return MR_UNDEF };
+    if v.try_rvalue().is_none_or(|rv| rv.ty() != ObjTy::STRING) {
+        set_err(
+            vm,
+            MonorubyErr::typeerr(format!(
+                "String expected, got {}",
+                v.inspect(&globals.store)
+            )),
+        );
+        return MR_UNDEF;
+    }
+    Value::string_from_str(v.as_rstring_inner().encoding().name()).id()
 }

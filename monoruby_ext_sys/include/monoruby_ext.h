@@ -121,6 +121,7 @@ struct MrApi {
     MrValue (*str_new)(MrContext *, const uint8_t *ptr, size_t len);
     MrValue (*bytes_new)(MrContext *, const uint8_t *ptr, size_t len);
     const uint8_t *(*str_ptr)(MrContext *, MrValue v, size_t *len);
+    MrValue (*str_encoding)(MrContext *, MrValue v);   /* the encoding's name as a String */
     MrValue (*sym_new)(MrContext *, const uint8_t *ptr, size_t len);
     MrValue (*sym_to_str)(MrContext *, MrValue v);
     MrValue (*ary_new)(MrContext *);

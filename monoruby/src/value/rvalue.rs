@@ -2783,7 +2783,7 @@ impl RValue {
         unsafe { &**self.kind.native }
     }
 
-    #[cfg_attr(not(any(feature = "nokogiri", feature = "sqlite3")), allow(dead_code))]
+    #[cfg_attr(not(feature = "nokogiri"), allow(dead_code))]
     pub(crate) fn as_native_mut(&mut self) -> &mut dyn NativeData {
         assert_eq!(self.ty(), ObjTy::NATIVE);
         // SAFETY: type checked above.
@@ -2793,7 +2793,7 @@ impl RValue {
     /// Replace the native payload, dropping the old one (a copy made by
     /// `Object#dup` carries an `EmptyNative` until its constructor fills
     /// it in).
-    #[cfg_attr(not(any(feature = "nokogiri", feature = "sqlite3")), allow(dead_code))]
+    #[cfg_attr(not(feature = "nokogiri"), allow(dead_code))]
     pub(crate) fn replace_native(&mut self, inner: Box<dyn NativeData>) {
         assert_eq!(self.ty(), ObjTy::NATIVE);
         // SAFETY: type checked above; the old box is dropped exactly once.

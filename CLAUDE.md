@@ -341,18 +341,20 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
 | `monoruby`      | Main interpreter + JIT (includes the prism→AST bridge)   |
 | `monoruby_attr` | Proc macros: `#[monoruby_builtin]`, `#[monoruby_object]` |
 | `monoruby_ext_sys` | The C ABI handed to dynamically loaded extensions (`MrValue`, `MrContext`, the `MrApi` table; `include/monoruby_ext.h` for C). The interpreter side is `monoruby/src/ext.rs`; see `doc/native_extension_loading.md` |
+| `monoruby_ext` | Safe Rust over `monoruby_ext_sys` for writing an extension in Rust (`Ctx`, `Value`, the `method!` / `native!` macros) |
+| `ext/sqlite3` | The sqlite3 gem's native half as a dynamically loaded extension (`libsqlite3_native.so`, crate `sqlite3_native`) over `libsqlite3-src` — the first stand-in moved out of the core |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
 | `libxml2-src`   | Vendored libxml2 (+ nokogiri's patches) built with `cc`, and its FFI |
-| `libsqlite3-src` | Vendored SQLite amalgamation built with `cc`, and its FFI |
+| `libsqlite3-src` | Vendored SQLite amalgamation built with `cc`, and its FFI (used by `ext/sqlite3`) |
 
 External crates (fetched from git):
 
@@ -407,13 +409,18 @@ External crates (fetched from git):
   statically, with a hand-written FFI. Behind the sqlite3 gem: the gem's
   Ruby half (2.7.3) is vendored under `gem/sqlite3/` (+ `gem/sqlite3.rb`)
   as nokogiri's and psych's are, so no host sqlite3 gem is needed, and
-  `gem/sqlite3/sqlite3_native.rb` stands in for
-  sqlite3_native.so, calling `String.__sqlite3_init`
-  (`src/builtins/sqlite3.rs`) to build `SQLite3::Database` /
-  `SQLite3::Statement` as `ObjTy::NATIVE` classes owning the `sqlite3*` /
-  `sqlite3_stmt*`. `Statement#step` steps and reads the whole row in one
-  builtin call. Opening and closing a connection park the green thread on
-  the native pool (`NativeOp::Sqlite3`); everything else runs inline.
+  `gem/sqlite3/sqlite3_native.rb` stands in for sqlite3_native.so by
+  requiring `sqlite3_native.so` — **a dynamically loaded extension**, the
+  workspace crate `ext/sqlite3` (a `cdylib` over `monoruby_ext` and
+  `libsqlite3-src`, never linking `monoruby`), whose `Init_sqlite3_native`
+  builds `SQLite3::Database` / `SQLite3::Statement` as native-payload
+  classes owning the `sqlite3*` / `sqlite3_stmt*`. `cargo build` at the
+  workspace root builds it next to the binary; `tests/sqlite3.rs` builds
+  it through `tests::ensure_extension` (into `target/ext/`, since the
+  outer cargo holds the main target dir's lock). `Statement#step` steps
+  and reads the whole row in one call. Opening and closing a connection
+  park the green thread on the native pool (`NativeOp::Ext`); everything
+  else runs inline.
   `create_function` is a real user-defined function: SQLite calls back
   into Ruby from inside `sqlite3_step`, as nokogiri's XPath handlers do.
   A raised exception is stashed rather than unwound through the C frames
@@ -614,7 +621,7 @@ Modes via `MONORUBY_TEST_ORACLE`:
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
 | `dump-require`      | Log `require`/`load` file resolution                                   |
-| `nokogiri`, `sqlite3`, `zstd`, `psych`, `zlib` | **Default on.** The native-backed library stand-ins (bundled libxml2 / SQLite / libzstd / libyaml port / zlib). Switching one off compiles out its builtins *and* leaves its `gem/` / `stdlib/` stand-in uninstalled, so `require` raises LoadError as CRuby does without the extension. `cargo check --no-default-features` is a CI step. |
+| `nokogiri`, `zstd`, `psych`, `zlib` | **Default on.** The native-backed library stand-ins still compiled into the core (bundled libxml2 / libzstd / libyaml port / zlib; sqlite3 is a dynamically loaded extension instead, see `ext/sqlite3`). Switching one off compiles out its builtins *and* leaves its `gem/` / `stdlib/` stand-in uninstalled, so `require` raises LoadError as CRuby does without the extension. `cargo check --no-default-features` is a CI step. |
 
 Chain deopt (`doc/chain_deopt.md`) is always on: every deopt / error side
 exit escalates through the chain-deopt walk, and BOP eviction converts

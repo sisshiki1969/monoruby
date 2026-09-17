@@ -47,8 +47,6 @@ mod range;
 mod regexp;
 mod set;
 mod socket;
-#[cfg(feature = "sqlite3")]
-pub(crate) mod sqlite3;
 pub(crate) mod spawn;
 pub(crate) mod string;
 pub(crate) mod struct_class;
@@ -168,8 +166,6 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     zlib::init(globals);
     #[cfg(feature = "zstd")]
     zstd::init(globals);
-    #[cfg(feature = "sqlite3")]
-    sqlite3::init(globals);
     prism::init(globals);
     object_space::init(globals);
     main_object::init(globals);

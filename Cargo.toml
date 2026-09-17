@@ -1,5 +1,5 @@
 [workspace]
-members = ["monoruby", "monoruby_attr", "monoruby_ext_sys", "rubymap", "hashbrown", "ruby_traits", "libxml2-src", "libsqlite3-src"]
+members = ["monoruby", "monoruby_attr", "monoruby_ext_sys", "monoruby_ext", "ext/sqlite3", "rubymap", "hashbrown", "ruby_traits", "libxml2-src", "libsqlite3-src"]
 resolver = "2"
 
 [profile.dev]

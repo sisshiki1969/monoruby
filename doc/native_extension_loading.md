@@ -320,7 +320,37 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
   数が多い」gem が本当に必要になった時点で判断する。それまでは B + G
   （ホット: 独自拡張、コールド: Fiddle 上の Ruby）で足りる。
 
-## 6. 参考
+## 6. 実装状況（2026-09）
+
+| 段階 | 状態 | 場所 |
+|---|---|---|
+| 1. feature 分割 | 済 | `nokogiri` / `zstd` / `psych` / `zlib` が default-on の feature。off にすると builtin が消え、`build.rs` がその stand-in を install しない（`v0.3.0-without-…` の別 root）。CI に `cargo check --no-default-features --tests`。 |
+| 2. C ABI | 済 | `monoruby_ext_sys/`（`MrValue` / `MrContext` / `MrApi`、`include/monoruby_ext.h`）、`monoruby/src/ext.rs`（表の実装、trampoline、`ExtNative`、loader）、`monoruby_ext/`（Rust 向け安全ラッパ: `Ctx` / `Value` / `method!` / `native!`）。`tests/native_ext.rs` が C で書いた拡張をヘッダから `cc` でビルドして全項目を通す。 |
+| 3. sqlite3 の分離 | 済 | `ext/sqlite3/`（crate `sqlite3_native`、cdylib）。`gem/sqlite3/sqlite3_native.rb` が `require "sqlite3_native.so"` する。`tests/sqlite3.rs` の 23 本は無変更で通る。コアから `src/builtins/sqlite3.rs`（2.2k 行）と `libsqlite3-src` 依存が消えた。 |
+| 3. zlib / zstd / psych / nokogiri | 未 | |
+| 4. `bundled` / `system` feature | 未 | |
+| 5. CRuby API 互換層 | 未 | |
+
+### 6.1 実際の ABI（§4.2 との差）
+
+§4.2 の案から変わった点:
+
+- **`MrContext` は呼び出しごと**（`api` と VM 側の不透明ポインタ）。`Init_<name>(MrContext*)` も同じ形。C コールバック（sqlite の `xFunc`）からは、その呼び出しの `ctx` をそのまま使う（park を跨いでも有効）。
+- **クラスは `MrValue`**（クラスオブジェクトそのもの）。別の handle 型は作らなかった。
+- **alloc 関数は ABI に無い。** `MR_CLASS_NATIVE` のクラスは core 側の汎用 alloc がペイロード無しの instance を作り、拡張の `initialize` / `open` が `native_set` で埋める。`native_data(obj, ops)` は `ops` の一致で種類を判定する（`MrNativeOps` のアドレスが型の identity）。
+- **メソッドは `fn(ctx, self, argc, argv, block) -> MrValue`**、`argc` は固定数か `MR_ARGC_VARIADIC`。`Lfp` / `BytecodePtr` は出さない。`MR_UNDEF`（= 0、`Value` の niche）が「エラー保留」。
+- **例外の stash は exception object で**: `error_take` が保留中のエラーを exception object として取り出し、`raise_exception` で戻す（C フレームを跨ぐ間は temp stack に載せる）。
+- `str_encoding`（エンコーディング名）を追加。sqlite3 の BLOB 判定に要った。
+- `mr_call_blocking` は `fn(void*) -> i64` + 引数ポインタ。Rust ラッパでは closure。
+
+### 6.2 分かったこと
+
+- **拡張の `static` はプロセス共通、`Init_` はインタプリタごと。** テストハーネスは 1 プロセスに多数の `Globals` を作るので、拡張が定義したクラスを `static` に持つと 2 つ目のインタプリタで壊れる。`Ctx::interpreter_id`（globals ポインタ）で key する。sqlite3 は thread-local + id 照合にした。
+- **`require "x/4.0/x_native"` は `.rb` stand-in に届かなければならない。** ext の探索は bare な `require "x_native.so"` だけに限定した（gem の nested `.so` 名で ext に飛ぶと stand-in が持つ Ruby 側の定義を飛ばす）。
+- **テストから拡張をビルドするときは別の target dir**（`target/ext/`）。外側の `cargo test` が target dir のロックを持ったままテストを走らせるので、同じ dir への nested `cargo build` は待ち続ける。aarch64 の qemu 実行では `--target` を明示する必要がある。
+- 配布: `cargo build`（workspace root）で `.so` がバイナリの隣にできる。`cargo install` 時の `<install root>/ext/` への配置は未着手（§5）。
+
+## 7. 参考
 
 - `doc/c_extention.md` — CRuby C API 互換層の設計検討（Path A / B / C、
   TruffleRuby の事例、レイアウト不一致の吸収、`gem install` のフロー）
