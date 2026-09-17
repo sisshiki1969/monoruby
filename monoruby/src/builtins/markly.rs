@@ -405,7 +405,12 @@ impl Row {
         if t.len() != T_LEN {
             return Err(MonorubyErr::argumenterr("malformed Markly node tuple"));
         }
-        let ty = t[T_TYPE].expect_symbol(&globals.store)?.get_name();
+        let ty = t[T_TYPE]
+            .try_symbol()
+            .ok_or_else(|| {
+                MonorubyErr::no_implicit_conversion(&globals.store, t[T_TYPE], SYMBOL_CLASS)
+            })?
+            .get_name();
         Ok(Row { ty, t })
     }
 
