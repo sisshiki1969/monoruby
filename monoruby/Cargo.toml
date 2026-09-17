@@ -24,9 +24,8 @@ name = "irm"
 # `require` of that library raises LoadError instead of finding a Ruby half
 # whose `String.__*` primitives are missing (see build.rs). Step 1 of
 # doc/native_extension_loading.md.
-default = ["nokogiri", "psych"]
+default = ["nokogiri"]
 nokogiri = ["dep:libxml2-src"]
-psych = ["dep:libyaml-safer"]
 dump-bc = []
 dump-traceir = []
 emit-asm = ["dump-bc", "dump-traceir", "jit-log"]
@@ -141,7 +140,6 @@ pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 aes-gcm = "0.10"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
-libyaml-safer = { version = "0.3", optional = true }
 
 # macOS aarch64 (Apple Silicon): the bundled libffi-sys 4.1.0 fails to
 # link `_ffi_prep_cif_machdep` (the arm64 assembly piece doesn't build

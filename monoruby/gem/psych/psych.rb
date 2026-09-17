@@ -7,9 +7,10 @@
 # `TreeBuilder`, `ToRuby`, `YAMLTree`, the scalar scanner, ...) is the
 # gem's own Ruby, vendored unchanged under gem/psych/. The native
 # pieces here are `String.__yaml_parse` / `__yaml_emit` /
-# `__yaml_libyaml_version` (src/builtins/yaml.rs, over `libyaml-safer`,
-# a port of libyaml 0.2.5), so events and emitted text are the ones
-# CRuby's psych produces.
+# `__yaml_libyaml_version`, from the dynamically loaded extension
+# `ext/psych` (libpsych_native.so, required just below; over
+# `libyaml-safer`, a port of libyaml 0.2.5), so events and emitted text
+# are the ones CRuby's psych produces.
 #
 # Defined here, before the gem's files reopen them: `Psych.libyaml_version`,
 # `Psych::Parser` (`_native_parse`, `mark`, the encoding constants),
@@ -17,6 +18,7 @@
 # `Psych::Visitors::ToRuby#build_exception` and
 # `Psych::Visitors::YAMLTree#private_iv_get`.
 
+require "psych_native.so"
 require_relative 'handler'
 require_relative 'syntax_error'
 

@@ -74,6 +74,7 @@ fn compare(bench: &str, gems: &[&str], script: &str) {
     let mut mono = Command::new(env!("CARGO_BIN_EXE_monoruby"));
     // Every fingerprint here is a `Zlib.crc32`, so the zlib extension must
     // be reachable from the spawned binary.
+    ensure_extension("psych_native");
     mono.env("MONORUBY_EXT_PATH", ensure_extension("zlib_native"));
     mono.args(["-e", script]);
     let got = run(mono, &cwd);
@@ -211,7 +212,6 @@ p [pixels.size, Blurhash.encode_rb(204, 204, pixels), Blurhash.encode_rb(204, 20
 }
 
 #[test]
-#[cfg(feature = "psych")]
 fn psych_loads_like_cruby() {
     // The three YAML documents of psych-load (the benchmark body is
     // `Psych.load` of each), loaded and inspected; then dumped again and

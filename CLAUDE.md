@@ -341,7 +341,7 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zlib`, `ext/zstd`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zlib`, `ext/zstd`, `ext/psych`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
@@ -352,6 +352,7 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys
 | `ext/sqlite3` | The sqlite3 gem's native half as a dynamically loaded extension (`libsqlite3_native.so`, crate `sqlite3_native`) over `libsqlite3-src` — the first stand-in moved out of the core |
 | `ext/zlib` | `Zlib`'s native half (`libzlib_native.so`, crate `zlib_native`): the `String.__zstream_*` streams over the bundled zlib (`libz-sys`) and the `__crc32` / `__adler32` byte walks |
 | `ext/zstd` | The zstd-ruby gem's native half (`libzstd_native.so`, crate `zstd_native`) over the bundled libzstd (`zstd-sys`) |
+| `ext/psych` | Psych's native half (`libpsych_native.so`, crate `psych_native`): libyaml's parser as `Psych::Parser`'s event source and its emitter as `Psych::Emitter`'s sink, over `libyaml-safer` |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
@@ -372,8 +373,9 @@ External crates (fetched from git):
   derivation run on these with CRuby-identical output. The rest of
   `openssl.rb` (PKey, X509, SSL) is still a load-only stub.
 - `libyaml-safer` — a port of libyaml 0.2.5; the parser and emitter behind
-  `Psych` (`src/builtins/yaml.rs`: `String.__yaml_parse` dispatches the
-  events to a `Psych::Handler`, `__yaml_emitter_new` / `__yaml_emit` /
+  `Psych`, **in the `ext/psych` extension** (`libpsych_native.so`, required
+  by `gem/psych/psych.rb`: `String.__yaml_parse` dispatches the events to a
+  `Psych::Handler`, `__yaml_emitter_new` / `__yaml_emit` /
   `__yaml_emitter_free` hold one emitter per `Psych::Emitter`). The gem's
   Ruby half is vendored under `gem/psych/`.
 - `libxml2-src` (workspace crate) — libxml2 2.13.8 with nokogiri's patches,
@@ -489,10 +491,10 @@ reproducible build. It performs two jobs:
      files from the matching gem. `stdlib/ripper.rb` is
      `Prism::Translation::Ripper` on top of it. `gem/psych/` is the psych
      5.3.1 gem's Ruby half (Ruby 4.0.2's) plus `gem/psych/psych.rb`, the
-     stand-in for its C extension: `src/builtins/yaml.rs` drives
-     `libyaml-safer` (a port of libyaml 0.2.5) as `Psych::Parser`'s event
-     source and `Psych::Emitter`'s sink, so `Psych.load` / `dump` and the
-     event API are CRuby's byte for byte. `gem/stackprof/stackprof.rb`
+     stand-in for its C extension: it requires the `ext/psych` extension,
+     which drives `libyaml-safer` (a port of libyaml 0.2.5) as
+     `Psych::Parser`'s event source and `Psych::Emitter`'s sink, so
+     `Psych.load` / `dump` and the event API are CRuby's byte for byte. `gem/stackprof/stackprof.rb`
      stands in for `stackprof.so` as an inert profiler (its API loads, no
      sampling), since `gem "stackprof", platforms: :mri` is required at boot
      by Bundler on monoruby too.
@@ -627,7 +629,7 @@ Modes via `MONORUBY_TEST_ORACLE`:
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
 | `dump-require`      | Log `require`/`load` file resolution                                   |
-| `nokogiri`, `psych` | **Default on.** The native-backed library stand-ins still compiled into the core (bundled libxml2 / libyaml port; sqlite3, zlib and zstd are dynamically loaded extensions instead, see `ext/`). Switching one off compiles out its builtins *and* leaves its `gem/` / `stdlib/` stand-in uninstalled, so `require` raises LoadError as CRuby does without the extension. `cargo check --no-default-features` is a CI step. |
+| `nokogiri` | **Default on.** The one native-backed library stand-in still compiled into the core (bundled libxml2; sqlite3, zlib, zstd and psych are dynamically loaded extensions instead, see `ext/`). Switching one off compiles out its builtins *and* leaves its `gem/` / `stdlib/` stand-in uninstalled, so `require` raises LoadError as CRuby does without the extension. `cargo check --no-default-features` is a CI step. |
 
 Chain deopt (`doc/chain_deopt.md`) is always on: every deopt / error side
 exit escalates through the chain-deopt walk, and BOP eviction converts

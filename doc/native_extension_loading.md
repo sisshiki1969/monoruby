@@ -324,11 +324,12 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 
 | 段階 | 状態 | 場所 |
 |---|---|---|
-| 1. feature 分割 | 済 | `nokogiri` / `zstd` / `psych` / `zlib` が default-on の feature。off にすると builtin が消え、`build.rs` がその stand-in を install しない（`v0.3.0-without-…` の別 root）。CI に `cargo check --no-default-features --tests`。 |
+| 1. feature 分割 | 済 | `nokogiri` が default-on の feature（zstd / psych / zlib もそうだったが、3 で拡張に出た）。off にすると builtin が消え、`build.rs` がその stand-in を install しない（`v0.3.0-without-…` の別 root）。CI に `cargo check --no-default-features --tests`。 |
 | 2. C ABI | 済 | `monoruby_ext_sys/`（`MrValue` / `MrContext` / `MrApi`、`include/monoruby_ext.h`）、`monoruby/src/ext.rs`（表の実装、trampoline、`ExtNative`、loader）、`monoruby_ext/`（Rust 向け安全ラッパ: `Ctx` / `Value` / `method!` / `native!`）。`tests/native_ext.rs` が C で書いた拡張をヘッダから `cc` でビルドして全項目を通す。 |
 | 3. sqlite3 の分離 | 済 | `ext/sqlite3/`（crate `sqlite3_native`、cdylib）。`gem/sqlite3/sqlite3_native.rb` が `require "sqlite3_native.so"` する。`tests/sqlite3.rs` の 23 本は無変更で通る。コアから `src/builtins/sqlite3.rs`（2.2k 行）と `libsqlite3-src` 依存が消えた。 |
 | 3. zlib / zstd の分離 | 済 | `ext/zlib/`（`zlib_native`、checksum と `__zstream_*`）、`ext/zstd/`（`zstd_native`）。`stdlib/zlib.rb` / `gem/zstd-ruby/zstdruby.rb` が `require "…_native.so"` する。コアから `libz-sys` / `zstd-safe` が消えた。rubygems が `zlib` を要るので、インストール時は `bin/install` が 3 拡張を `<install root>/ext/` に置く。 |
-| 3. psych / nokogiri | 未 | |
+| 3. psych の分離 | 済 | `ext/psych/`（`psych_native`、`__yaml_parse` は `Psych::Handler` を `funcall` で駆動）。`gem/psych/psych.rb` が `require "psych_native.so"` する。コアから `libyaml-safer` が消えた。 |
+| 3. nokogiri | 未 | |
 | 4. `bundled` / `system` feature | 未 | |
 | 5. CRuby API 互換層 | 未 | |
 

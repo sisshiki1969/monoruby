@@ -113,7 +113,7 @@ cov_build "${BENCH_FEATURES[@]}"
 # — without the instrumentation flags (they are not measured).
 phase "build extensions next to the benchmark binary"
 env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS -u LLVM_PROFILE_FILE \
-  cargo build -p sqlite3_native -p zlib_native -p zstd_native \
+  cargo build -p sqlite3_native -p zlib_native -p zstd_native -p psych_native \
   --target-dir "$(dirname "$(dirname "$MONORUBY")")"
 
 phase "benchmarks: app_fib / tarai / so_nbody"

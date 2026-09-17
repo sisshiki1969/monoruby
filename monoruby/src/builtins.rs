@@ -10,8 +10,6 @@ mod digest;
 mod cipher;
 #[cfg(feature = "nokogiri")]
 mod nokogiri;
-#[cfg(feature = "psych")]
-mod yaml;
 mod dir;
 pub(crate) mod encoding;
 pub(crate) mod errno;
@@ -156,8 +154,6 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     cipher::init(globals);
     #[cfg(feature = "nokogiri")]
     nokogiri::init(globals);
-    #[cfg(feature = "psych")]
-    yaml::init(globals);
     prism::init(globals);
     object_space::init(globals);
     main_object::init(globals);

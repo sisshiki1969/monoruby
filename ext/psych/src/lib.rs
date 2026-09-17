@@ -1,46 +1,64 @@
-use super::*;
+//! Psych's native half (`psych_native.so`) as a monoruby extension —
+//! `gem/psych/psych.rb` stands in for the gem's C extension, psych.so, and
+//! requires this library.
+//!
+//! The psych gem is a thin Ruby layer (nodes, TreeBuilder, ToRuby,
+//! YAMLTree, ...) over libyaml's event API: the extension only drives
+//! libyaml's parser, calling `Handler` methods per event, and feeds
+//! `Psych::Emitter` events to libyaml's emitter. `libyaml-safer` is a
+//! port of libyaml 0.2.5, so parse events and emitted text are the ones
+//! CRuby's psych produces.
+//!
+//! An emitter is a native object (libyaml's is stateful across the
+//! events of a stream, and rejects them out of order with "expected
+//! STREAM-START" etc.), held in a thread-local table and addressed by an
+//! integer handle; the Ruby `Psych::Emitter` frees it at `end_stream` and
+//! from a finalizer.
+//!
+//! This is `src/builtins/yaml.rs` moved out of the interpreter
+//! (doc/native_extension_loading.md, step 3).
+
 use libyaml_safer::{
     Emitter, Encoding, Event, EventData, MappingStyle, Parser, ScalarStyle, SequenceStyle,
     TagDirective, VersionDirective,
 };
+use monoruby_ext::*;
+use std::ffi::c_int;
 
-//
-// YAML — the native half of Psych (gem/psych/psych.rb stands in for the
-// gem's C extension, psych.so).
-//
-// The psych gem is a thin Ruby layer (nodes, TreeBuilder, ToRuby,
-// YAMLTree, ...) over libyaml's event API: the extension only drives
-// libyaml's parser, calling `Handler` methods per event, and feeds
-// `Psych::Emitter` events to libyaml's emitter. `libyaml-safer` is a
-// port of libyaml 0.2.5, so parse events and emitted text are the ones
-// CRuby's psych produces.
-//
-// An emitter is a native object (libyaml's is stateful across the
-// events of a stream, and rejects them out of order with "expected
-// STREAM-START" etc.), held in a thread-local table and addressed by an
-// integer handle; the Ruby `Psych::Emitter` frees it at `end_stream` and
-// from a finalizer.
-//
-
-pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_func(STRING_CLASS, "__yaml_parse", yaml_parse, 2);
-    globals.define_builtin_class_func(STRING_CLASS, "__yaml_emitter_new", emitter_new, 3);
-    globals.define_builtin_class_func(STRING_CLASS, "__yaml_emit", yaml_emit, 2);
-    globals.define_builtin_class_func(STRING_CLASS, "__yaml_emitter_free", emitter_free, 1);
-    globals.define_builtin_class_func(STRING_CLASS, "__yaml_libyaml_version", libyaml_version, 0);
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Init_psych_native(ctx: *mut MrContext) -> c_int {
+    // SAFETY: the interpreter's contract for `Init_`.
+    unsafe { init(ctx, init_psych) }
 }
 
-fn opt_str(v: Value, globals: &Globals) -> Result<Option<String>> {
+fn init_psych(ctx: &mut Ctx) -> Result<()> {
+    let string = ctx.const_get(Value::UNDEF, "String").ok_or(Error)?;
+    let s = MR_METHOD_SINGLETON;
+    ctx.define_method(string, "__yaml_parse", method!(yaml_parse), 2, s);
+    ctx.define_method(string, "__yaml_emitter_new", method!(emitter_new), 3, s);
+    ctx.define_method(string, "__yaml_emit", method!(yaml_emit), 2, s);
+    ctx.define_method(string, "__yaml_emitter_free", method!(emitter_free), 1, s);
+    ctx.define_method(
+        string,
+        "__yaml_libyaml_version",
+        method!(libyaml_version),
+        0,
+        s,
+    );
+    Ok(())
+}
+
+fn opt_str(ctx: &mut Ctx, v: Value) -> Result<Option<String>> {
     if v.is_nil() {
         Ok(None)
     } else {
-        Ok(Some(v.expect_str(&globals.store)?.to_string()))
+        Ok(Some(ctx.str_string(v)?))
     }
 }
 
-fn opt_str_value(s: &Option<String>) -> Value {
+fn opt_str_value(ctx: &Ctx, s: &Option<String>) -> Value {
     match s {
-        Some(s) => Value::string_from_str(s),
+        Some(s) => ctx.str(s),
         None => Value::nil(),
     }
 }
@@ -56,29 +74,12 @@ fn opt_str_value(s: &Option<String>) -> Value {
 /// implicit, style)`, `end_sequence`, `start_mapping(...)`,
 /// `end_mapping`, `end_stream`. A syntax error answers its position and
 /// texts for the Ruby side to raise as `Psych::SyntaxError`.
-#[monoruby_builtin]
-fn yaml_parse(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let handler = lfp.arg(0);
-    let src_v = lfp.arg(1);
-    let src = src_v.expect_bytes(&globals.store)?.to_vec();
+fn yaml_parse(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let handler = args[0];
+    let src = ctx.str_vec(args[1])?;
     let mut input: &[u8] = &src;
     let mut parser = Parser::new();
     parser.set_input_string(&mut input);
-
-    let event_location = IdentId::get_id("event_location");
-    let ids: [IdentId; 11] = [
-        IdentId::get_id("start_stream"),
-        IdentId::get_id("end_stream"),
-        IdentId::get_id("start_document"),
-        IdentId::get_id("end_document"),
-        IdentId::get_id("alias"),
-        IdentId::get_id("scalar"),
-        IdentId::get_id("start_sequence"),
-        IdentId::get_id("end_sequence"),
-        IdentId::get_id("start_mapping"),
-        IdentId::get_id("end_mapping"),
-        IdentId::get_id("empty"),
-    ];
 
     loop {
         let event = match parser.parse() {
@@ -94,52 +95,56 @@ fn yaml_parse(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 };
                 let offset = 0;
                 let context = match e.context() {
-                    Some(c) => Value::string_from_str(c),
+                    Some(c) => ctx.str(c),
                     None => Value::nil(),
                 };
-                return Ok(Value::array_from_vec(vec![
-                    Value::integer(line),
-                    Value::integer(column),
-                    Value::integer(offset),
-                    Value::string_from_str(e.problem()),
+                let problem = ctx.str(e.problem());
+                return Ok(ctx.ary_from(&[
+                    Value::int(line),
+                    Value::int(column),
+                    Value::int(offset),
+                    problem,
                     context,
                 ]));
             }
         };
         let loc = [
-            Value::integer(event.start_mark.line as i64),
-            Value::integer(event.start_mark.column as i64),
-            Value::integer(event.end_mark.line as i64),
-            Value::integer(event.end_mark.column as i64),
+            Value::int(event.start_mark.line as i64),
+            Value::int(event.start_mark.column as i64),
+            Value::int(event.end_mark.line as i64),
+            Value::int(event.end_mark.column as i64),
         ];
-        vm.invoke_method_inner(globals, event_location, handler, &loc, None, None)?;
-        let (id, args): (IdentId, Vec<Value>) = match event.data {
+        ctx.funcall(handler, "event_location", &loc, None)?;
+        // The event's Values are built, then handed to the handler in one
+        // call: nothing runs Ruby between the allocations and the call
+        // that roots them in its frame.
+        let (name, args): (&str, Vec<Value>) = match event.data {
             EventData::StreamStart { encoding } => {
-                (ids[0], vec![Value::integer(encoding as i64)])
+                ("start_stream", vec![Value::int(encoding as i64)])
             }
-            EventData::StreamEnd => (ids[1], vec![]),
+            EventData::StreamEnd => ("end_stream", vec![]),
             EventData::DocumentStart {
                 version_directive,
                 tag_directives,
                 implicit,
             } => {
                 let version = match version_directive {
-                    Some(v) => Value::array2(
-                        Value::integer(v.major as i64),
-                        Value::integer(v.minor as i64),
-                    ),
-                    None => Value::array_empty(),
+                    Some(v) => {
+                        ctx.ary_from(&[Value::int(v.major as i64), Value::int(v.minor as i64)])
+                    }
+                    None => ctx.ary_new(),
                 };
-                let tags = Value::array_from_iter(tag_directives.iter().map(|t| {
-                    Value::array2(
-                        Value::string_from_str(&t.handle),
-                        Value::string_from_str(&t.prefix),
-                    )
-                }));
-                (ids[2], vec![version, tags, Value::bool(implicit)])
+                let tags = ctx.ary_new();
+                for t in tag_directives.iter() {
+                    let h = ctx.str(&t.handle);
+                    let p = ctx.str(&t.prefix);
+                    let pair = ctx.ary_from(&[h, p]);
+                    ctx.ary_push(tags, pair)?;
+                }
+                ("start_document", vec![version, tags, Value::bool(implicit)])
             }
-            EventData::DocumentEnd { implicit } => (ids[3], vec![Value::bool(implicit)]),
-            EventData::Alias { anchor } => (ids[4], vec![Value::string(anchor)]),
+            EventData::DocumentEnd { implicit } => ("end_document", vec![Value::bool(implicit)]),
+            EventData::Alias { anchor } => ("alias", vec![ctx.str(anchor)]),
             EventData::Scalar {
                 anchor,
                 tag,
@@ -148,14 +153,14 @@ fn yaml_parse(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 quoted_implicit,
                 style,
             } => (
-                ids[5],
+                "scalar",
                 vec![
-                    Value::string(value),
-                    opt_str_value(&anchor),
-                    opt_str_value(&tag),
+                    ctx.str(value),
+                    opt_str_value(ctx, &anchor),
+                    opt_str_value(ctx, &tag),
                     Value::bool(plain_implicit),
                     Value::bool(quoted_implicit),
-                    Value::integer(style as i64),
+                    Value::int(style as i64),
                 ],
             ),
             EventData::SequenceStart {
@@ -164,35 +169,35 @@ fn yaml_parse(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 implicit,
                 style,
             } => (
-                ids[6],
+                "start_sequence",
                 vec![
-                    opt_str_value(&anchor),
-                    opt_str_value(&tag),
+                    opt_str_value(ctx, &anchor),
+                    opt_str_value(ctx, &tag),
                     Value::bool(implicit),
-                    Value::integer(style as i64),
+                    Value::int(style as i64),
                 ],
             ),
-            EventData::SequenceEnd => (ids[7], vec![]),
+            EventData::SequenceEnd => ("end_sequence", vec![]),
             EventData::MappingStart {
                 anchor,
                 tag,
                 implicit,
                 style,
             } => (
-                ids[8],
+                "start_mapping",
                 vec![
-                    opt_str_value(&anchor),
-                    opt_str_value(&tag),
+                    opt_str_value(ctx, &anchor),
+                    opt_str_value(ctx, &tag),
                     Value::bool(implicit),
-                    Value::integer(style as i64),
+                    Value::int(style as i64),
                 ],
             ),
-            EventData::MappingEnd => (ids[9], vec![]),
+            EventData::MappingEnd => ("end_mapping", vec![]),
             #[allow(unreachable_patterns)]
-            _ => (ids[10], vec![]),
+            _ => ("empty", vec![]),
         };
-        let done = id == ids[1];
-        vm.invoke_method_inner(globals, id, handler, &args, None, None)?;
+        let done = name == "end_stream";
+        ctx.funcall(handler, name, &args, None)?;
         if done {
             return Ok(Value::nil());
         }
@@ -204,7 +209,10 @@ fn yaml_parse(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// library's own parser: a one-line document carrying the directive is
 /// parsed and the directive lifted off its DOCUMENT-START event. Only
 /// `Psych.dump(..., version:)` and tag directives reach here.
-fn directives_of(src: &str) -> Result<(Option<VersionDirective>, Vec<TagDirective>)> {
+fn directives_of(
+    ctx: &mut Ctx,
+    src: &str,
+) -> Result<(Option<VersionDirective>, Vec<TagDirective>)> {
     let bytes = src.as_bytes();
     let mut input: &[u8] = bytes;
     let mut parser = Parser::new();
@@ -219,29 +227,31 @@ fn directives_of(src: &str) -> Result<(Option<VersionDirective>, Vec<TagDirectiv
                         ..
                     },
                 ..
-            }) => return Ok((version_directive, tag_directives)),
+            }) => {
+                return Ok((version_directive, tag_directives));
+            }
             Ok(Event {
                 data: EventData::StreamEnd,
                 ..
-            }) => return Err(MonorubyErr::runtimeerr("no document")),
+            }) => return Err(ctx.runtime_error("no document")),
             Ok(_) => {}
-            Err(e) => return Err(MonorubyErr::runtimeerr(e.problem().to_string())),
+            Err(e) => return Err(ctx.runtime_error(e.problem())),
         }
     }
 }
 
-fn version_directive(major: i64, minor: i64) -> Result<VersionDirective> {
-    let (v, _) = directives_of(&format!("%YAML {major}.{minor}\n--- a\n"))?;
-    v.ok_or_else(|| MonorubyErr::runtimeerr("invalid version directive"))
+fn version_directive(ctx: &mut Ctx, major: i64, minor: i64) -> Result<VersionDirective> {
+    let (v, _) = directives_of(ctx, &format!("%YAML {major}.{minor}\n--- a\n"))?;
+    v.ok_or_else(|| ctx.runtime_error("invalid version directive"))
 }
 
-fn tag_directive(handle: &str, prefix: &str) -> Result<TagDirective> {
+fn tag_directive(ctx: &mut Ctx, handle: &str, prefix: &str) -> Result<TagDirective> {
     if handle.contains(char::is_whitespace) || prefix.contains(char::is_whitespace) {
-        return Err(MonorubyErr::runtimeerr("invalid tag directive"));
+        return Err(ctx.runtime_error("invalid tag directive"));
     }
-    let (_, mut tags) = directives_of(&format!("%TAG {handle} {prefix}\n--- a\n"))?;
+    let (_, mut tags) = directives_of(ctx, &format!("%TAG {handle} {prefix}\n--- a\n"))?;
     if tags.is_empty() {
-        return Err(MonorubyErr::runtimeerr("invalid tag directive"));
+        return Err(ctx.runtime_error("invalid tag directive"));
     }
     Ok(tags.remove(0))
 }
@@ -325,11 +335,10 @@ thread_local! {
 ///
 /// A libyaml emitter with psych's settings (unicode output, and the
 /// `DumperOptions` given), answering its handle.
-#[monoruby_builtin]
-fn emitter_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let canonical = lfp.arg(0).as_bool();
-    let indent = lfp.arg(1).expect_integer(&globals.store)?;
-    let width = lfp.arg(2).expect_integer(&globals.store)?;
+fn emitter_new(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let canonical = args[0].truthy();
+    let indent = ctx.int(args[1])?;
+    let width = ctx.int(args[2])?;
     let buf = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let sink = Box::into_raw(Box::new(SinkWriter(buf.clone())));
     let mut emitter = Emitter::new();
@@ -357,13 +366,12 @@ fn emitter_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
             t.len() - 1
         }
     });
-    Ok(Value::integer(handle as i64))
+    Ok(Value::int(handle as i64))
 }
 
 /// String.__yaml_emitter_free(handle) -> nil
-#[monoruby_builtin]
-fn emitter_free(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let handle = lfp.arg(0).expect_integer(&globals.store)? as usize;
+fn emitter_free(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let handle = ctx.int(args[0])? as usize;
     EMITTERS.with(|t| {
         let mut t = t.borrow_mut();
         if let Some(slot) = t.get_mut(handle) {
@@ -371,6 +379,11 @@ fn emitter_free(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
         }
     });
     Ok(Value::nil())
+}
+
+/// The `i`th element of the event array, `nil` past its end.
+fn arg(ctx: &Ctx, ev: Value, i: usize) -> Value {
+    ctx.ary_get(ev, i).unwrap_or(Value::nil())
 }
 
 /// String.__yaml_emit(handle, event) -> String
@@ -383,80 +396,90 @@ fn emitter_free(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 /// implicit, style), 6 end_sequence, 7 start_mapping(anchor, tag,
 /// implicit, style), 8 end_mapping, 9 alias(anchor). An emitter error
 /// ("expected STREAM-START", ...) is a RuntimeError, as in psych.
-#[monoruby_builtin]
-fn yaml_emit(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let handle = lfp.arg(0).expect_integer(&globals.store)? as usize;
-    let ev = lfp.arg(1).expect_array_ty(&globals.store)?;
-    let kind = ev
-        .first()
-        .copied()
-        .unwrap_or(Value::nil())
-        .expect_integer(&globals.store)?;
-    let arg = |i: usize| ev.get(i).copied().unwrap_or(Value::nil());
+fn yaml_emit(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let handle = ctx.int(args[0])? as usize;
+    let ev = args[1];
+    if ctx.type_of(ev) != MrType::Array {
+        return Err(ctx.type_error("event must be an Array"));
+    }
+    let kind = ctx.int(arg(ctx, ev, 0))?;
     let event = match kind {
-        0 => Event::stream_start(encoding_of(arg(1).expect_integer(&globals.store)?)),
+        0 => {
+            let enc = ctx.int(arg(ctx, ev, 1))?;
+            Event::stream_start(encoding_of(enc))
+        }
         1 => Event::stream_end(),
         2 => {
-            let version = match arg(1).try_array_ty() {
-                Some(v) if v.len() >= 2 => Some(version_directive(
-                    v[0].expect_integer(&globals.store)?,
-                    v[1].expect_integer(&globals.store)?,
-                )?),
-                _ => None,
+            let v = arg(ctx, ev, 1);
+            let version = if ctx.type_of(v) == MrType::Array && ctx.ary_len(v) >= 2 {
+                let major = ctx.int(arg(ctx, v, 0))?;
+                let minor = ctx.int(arg(ctx, v, 1))?;
+                Some(version_directive(ctx, major, minor)?)
+            } else {
+                None
             };
             let mut tags = Vec::new();
-            if let Some(list) = arg(2).try_array_ty() {
-                for pair in list.iter() {
-                    let pair = pair.expect_array_ty(&globals.store)?;
-                    if pair.len() < 2 {
-                        return Err(MonorubyErr::runtimeerr("tag tuple must be of length 2"));
+            let list = arg(ctx, ev, 2);
+            if ctx.type_of(list) == MrType::Array {
+                for i in 0..ctx.ary_len(list) {
+                    let pair = arg(ctx, list, i);
+                    if ctx.type_of(pair) != MrType::Array {
+                        return Err(ctx.type_error("tag tuple must be an Array"));
                     }
-                    tags.push(tag_directive(
-                        pair[0].expect_str(&globals.store)?,
-                        pair[1].expect_str(&globals.store)?,
-                    )?);
+                    if ctx.ary_len(pair) < 2 {
+                        return Err(ctx.runtime_error("tag tuple must be of length 2"));
+                    }
+                    let handle = ctx.str_string(arg(ctx, pair, 0))?;
+                    let prefix = ctx.str_string(arg(ctx, pair, 1))?;
+                    tags.push(tag_directive(ctx, &handle, &prefix)?);
                 }
             }
-            Event::document_start(version, &tags, arg(3).as_bool())
+            Event::document_start(version, &tags, arg(ctx, ev, 3).truthy())
         }
-        3 => Event::document_end(arg(1).as_bool()),
+        3 => Event::document_end(arg(ctx, ev, 1).truthy()),
         4 => {
-            let value = arg(1).expect_str(&globals.store)?.to_string();
-            let anchor = opt_str(arg(2), globals)?;
-            let tag = opt_str(arg(3), globals)?;
+            let value = ctx.str_string(arg(ctx, ev, 1))?;
+            let anchor = opt_str(ctx, arg(ctx, ev, 2))?;
+            let tag = opt_str(ctx, arg(ctx, ev, 3))?;
+            let style = ctx.int(arg(ctx, ev, 6))?;
             Event::scalar(
                 anchor.as_deref(),
                 tag.as_deref(),
                 &value,
-                arg(4).as_bool(),
-                arg(5).as_bool(),
-                scalar_style(arg(6).expect_integer(&globals.store)?),
+                arg(ctx, ev, 4).truthy(),
+                arg(ctx, ev, 5).truthy(),
+                scalar_style(style),
             )
         }
         5 => {
-            let anchor = opt_str(arg(1), globals)?;
-            let tag = opt_str(arg(2), globals)?;
+            let anchor = opt_str(ctx, arg(ctx, ev, 1))?;
+            let tag = opt_str(ctx, arg(ctx, ev, 2))?;
+            let style = ctx.int(arg(ctx, ev, 4))?;
             Event::sequence_start(
                 anchor.as_deref(),
                 tag.as_deref(),
-                arg(3).as_bool(),
-                sequence_style(arg(4).expect_integer(&globals.store)?),
+                arg(ctx, ev, 3).truthy(),
+                sequence_style(style),
             )
         }
         6 => Event::sequence_end(),
         7 => {
-            let anchor = opt_str(arg(1), globals)?;
-            let tag = opt_str(arg(2), globals)?;
+            let anchor = opt_str(ctx, arg(ctx, ev, 1))?;
+            let tag = opt_str(ctx, arg(ctx, ev, 2))?;
+            let style = ctx.int(arg(ctx, ev, 4))?;
             Event::mapping_start(
                 anchor.as_deref(),
                 tag.as_deref(),
-                arg(3).as_bool(),
-                mapping_style(arg(4).expect_integer(&globals.store)?),
+                arg(ctx, ev, 3).truthy(),
+                mapping_style(style),
             )
         }
         8 => Event::mapping_end(),
-        9 => Event::alias(arg(1).expect_str(&globals.store)?),
-        k => return Err(MonorubyErr::argumenterr(format!("unknown emitter event {k}"))),
+        9 => {
+            let anchor = ctx.str_string(arg(ctx, ev, 1))?;
+            Event::alias(&anchor)
+        }
+        k => return Err(ctx.argument_error(format!("unknown emitter event {k}"))),
     };
     let flush = kind == 1 || kind == 3;
     let res: std::result::Result<Vec<u8>, String> = EMITTERS.with(|t| {
@@ -468,29 +491,23 @@ fn yaml_emit(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         if let Err(e) = entry.emitter.emit(event) {
             return Err(e.problem().to_string());
         }
-        if flush {
-            if let Err(e) = entry.emitter.flush() {
-                return Err(e.problem().to_string());
-            }
+        if flush && let Err(e) = entry.emitter.flush() {
+            return Err(e.problem().to_string());
         }
         Ok(std::mem::take(&mut *entry.buf.borrow_mut()))
     });
     match res {
-        Ok(out) => Ok(match String::from_utf8(out) {
-            Ok(s) => Value::string(s),
-            Err(e) => Value::bytes(e.into_bytes()),
+        Ok(out) => Ok(if std::str::from_utf8(&out).is_ok() {
+            ctx.str(&out)
+        } else {
+            ctx.bytes(&out)
         }),
-        Err(msg) => Err(MonorubyErr::runtimeerr(msg)),
+        Err(msg) => Err(ctx.runtime_error(msg)),
     }
 }
 
 /// String.__yaml_libyaml_version -> [major, minor, patch]
-#[monoruby_builtin]
-fn libyaml_version(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn libyaml_version(ctx: &mut Ctx, _: Value, _: &[Value], _: Block) -> Result<Value> {
     // libyaml-safer is a port of libyaml 0.2.5.
-    Ok(Value::array_from_vec(vec![
-        Value::integer(0),
-        Value::integer(2),
-        Value::integer(5),
-    ]))
+    Ok(ctx.ary_from(&[Value::int(0), Value::int(2), Value::int(5)]))
 }
