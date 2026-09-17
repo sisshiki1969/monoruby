@@ -61,19 +61,34 @@ lobsters の RSS 差は、finalizer 保持（§2 #12）ではなく元からの�
 2 通り（Ruby で書き直す / C ソースを `cc` で同梱して FFI を書く）のどちらか。
 
 **fluentd** — 起動に必要で、ベンチの計測経路（`LabeledTSVParser#parse`）には
-どれも乗らない:
+どれも乗らない。**5 つとも実装済み**（`monoruby/gem/` の stand-in、いずれも
+本物の gem を CRuby で動かした結果と突き合わせる `tests/{msgpack,yajl,strptime,
+coolio,zstd}.rs` 付き）。`-I stubs` 無しで `benchmarks/fluentd/benchmark.rb`
+が最後まで走る:
 
-- `yajl-ruby`: `Yajl::Parser` / `Encoder` の C クラス。JSON の上に Ruby で
-  書ける（スタブがそれ）。
-- `msgpack`: `Packer` / `Unpacker` / `Factory` / `Buffer` / `ExtensionValue`。
-  gem の Ruby 側（`lib/msgpack/*.rb`）はこれらを reopen する。純 Ruby で 300 行
-  程度（スタブは ~250 行で fluentd の起動を通した）。
-- `strptime`: `Strptime` / `Strftime`。`Time.strptime` の上に書ける。
-- `cool.io`: `Coolio::Loop` / `IOWatcher` / `TimerWatcher` / `StatWatcher`。
-  起動時は定義だけで良いが、実際にイベントループを回す plugin_helper が使う。
-  libev の同梱は大きい。
-- `zstd-ruby`: `Zlib` と同じ形で libzstd を同梱するか、`compressable.rb` の
-  ロードだけ通す殻か。
+- `yajl-ruby` → `gem/yajl/yajl.rb`: yajl 1.x の字句解析器・パーサ状態機械・
+  ジェネレータと gem のビルダ callback を Ruby に移植。エラー文（`(right
+  here) ------^` の整形まで）、複数値ストリーム、`on_parse_complete`、
+  `pretty` / `html_safe` / `entities` / `terminator`、`to_json` 経由の
+  オブジェクト、数値は callback を発火しないという癖も同じ。
+- `msgpack` → `gem/msgpack/msgpack.rb`: `Buffer` / `Packer` / `Unpacker` /
+  `Factory` / `ExtensionValue` と例外クラス。型ディスパッチ（core クラスそのもの
+  は拡張型を引かない）、文字列の encoding による str / bin 選択、拡張型レジストリ
+  の探索順、再帰拡張型、resumable な unpacker（`feed_each` でチャンクを跨ぐ）、
+  frozen な Packer / Unpacker（`Factory::Pool`）、`skip_nil` が消費しない癖。
+- `strptime` → `gem/strptime/strptime.rb`: `strptime.c` / `strftime.c` の移植。
+  対応 directive だけを受け付け（他は `invalid format`）、幅までの桁読み、月名
+  の大文字小文字無視、未指定フィールドの既定値、`%z` の有無で固定オフセット /
+  UTC / ローカル。
+- `cool.io` → `gem/cool.io_ext.rb`: libev の代わりに `IO.select` で回すループ。
+  `@watchers` / `@active_watchers` の帳簿、`attached?` が 0 を返す癖、attach 済み
+  watcher の再 attach が ArgumentError になる癖、`TimerWatcher#reset`、
+  `StatWatcher` のポーリング、`Buffer`（`read_from` / `write_to` は nonblock）。
+- `zstd-ruby` → `gem/zstd-ruby/zstdruby.rb` + `src/builtins/zstd.rs`
+  （`String.__zstd_*`、zstd-sys 同梱の libzstd 1.5.7 = gem が link する版）。
+  `Zlib` と同じ handle 方式で、`ZSTD_compress2` / `compressStream2` を拡張と
+  同じ手順で呼ぶので圧縮結果はバイト単位で一致する。`CDict` / `DDict`、
+  `StreamingCompress` / `StreamingDecompress`、skippable frame。
 
 **lobsters**:
 
