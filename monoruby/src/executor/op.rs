@@ -869,8 +869,8 @@ impl Executor {
         // Finalizers run last. Draining the vector (rather than iterating a
         // snapshot) lets a finalizer define further finalizers that then
         // run too, matching CRuby.
-        while let Some((id, callable)) = globals.finalizers.pop() {
-            let arg = Value::integer(id as i64);
+        while let Some((obj, callable)) = globals.finalizers.pop() {
+            let arg = Value::integer(obj.id() as i64);
             if let Err(err) = self.invoke_method_inner(globals, call, callable, &[arg], None, None) {
                 self.report_finalizer_error(globals, err);
             }

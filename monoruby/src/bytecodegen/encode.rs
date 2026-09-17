@@ -156,6 +156,12 @@ impl<'a> BytecodeGen<'a> {
     /// - a block literal (`block_fid` on a call site) — the block body
     ///   (or a block nested inside it) can contain a zsuper that reads
     ///   this frame's param slots through the outer chain.
+    /// - a lambda literal (`-> { }`) — the same nested scope as a block
+    ///   literal, only created without a call: its body forwards `(...)`
+    ///   by reading this frame's rest slot through the outer chain, and
+    ///   the resolver keys the marker on the *calling* frame, which is
+    ///   then the lambda's, not this one's — so the raw marker would be
+    ///   passed on as an Integer.
     ///
     /// `defined?(super)` / `defined?(yield)` only probe callability
     /// (no argument collection), but are included for conservatism.
@@ -168,7 +174,8 @@ impl<'a> BytecodeGen<'a> {
             BytecodeInst::Super(_)
             | BytecodeInst::Yield(_)
             | BytecodeInst::DefinedSuper { .. }
-            | BytecodeInst::DefinedYield { .. } => false,
+            | BytecodeInst::DefinedYield { .. }
+            | BytecodeInst::Lambda { .. } => false,
             BytecodeInst::MethodCall(callsite) => callsite.block_fid.is_none(),
             _ => true,
         })

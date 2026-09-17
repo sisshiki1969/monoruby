@@ -183,6 +183,12 @@ impl RegexpInner {
         self.encoding
     }
 
+    /// Whether `source` embeds a byte >= 0x80 through a `\xHH` escape
+    /// (see [`has_non_ascii_hex_escape`]).
+    pub fn has_non_ascii_hex_escape(source: &[u8]) -> bool {
+        has_non_ascii_hex_escape(source)
+    }
+
     /// CRuby-visible source encoding (set at construction time
     /// from source-string encoding + `n`/`u`/`e`/`s` modifiers).
     pub fn declared_encoding(&self) -> crate::value::Encoding {
@@ -521,6 +527,12 @@ pub(crate) fn resolve_declared_encoding(
         };
         return (enc, true);
     }
+    // A BINARY source whose only high bytes are `\xHH` escapes is still
+    // binary content (CRuby's `unescape_nonascii` pins ASCII-8BIT on
+    // such an escape): `Regexp.new("[\xC2-\xDF]".b).encoding` is BINARY.
+    if source_encoding == Some(Encoding::Ascii8) && has_non_ascii_hex_escape(source) {
+        return (Encoding::Ascii8, true);
+    }
     source_encoding_fallback(source_encoding, has_non_ascii, option)
 }
 
@@ -550,7 +562,7 @@ fn source_encoding_fallback(
 /// embeds high bytes via escapes (`/\xc2\xa1/n.encoding == BINARY`).
 /// A literal escaped backslash (`\\`) is skipped so `\\xFF` is not
 /// mistaken for a high-byte escape.
-fn has_non_ascii_hex_escape(source: &[u8]) -> bool {
+pub(crate) fn has_non_ascii_hex_escape(source: &[u8]) -> bool {
     let mut i = 0;
     while i + 1 < source.len() {
         if source[i] != b'\\' {

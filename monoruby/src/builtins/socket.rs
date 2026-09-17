@@ -52,10 +52,11 @@ pub(super) fn init(globals: &mut Globals) {
     let usrv_id = unixserver.id();
     globals.define_class("SocketError", standard_error, OBJECT_CLASS);
 
-    // Socket::Constants, and the same constants directly on Socket
-    // (CRuby's Socket includes Socket::Constants).
+    // Socket::Constants (a module, as in CRuby — io-endpoint does
+    // `include ::Socket::Constants`), and the same constants directly
+    // on Socket (CRuby's Socket includes Socket::Constants).
     let consts_id = globals
-        .define_class("Constants", None, sock_id)
+        .define_module_with_identid(IdentId::get_id("Constants"), sock_id)
         .id();
     for (name, v) in SOCKET_CONSTANTS {
         let id = IdentId::get_id(name);

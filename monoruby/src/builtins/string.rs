@@ -8483,12 +8483,10 @@ fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
     let template = template.to_str()?;
-    rvalue::unpack(
-        &self_.as_rstring_inner()[offset..],
-        &template,
-        false,
-        offset,
-    )
+    // The whole string goes in, with `offset` as the starting position:
+    // `@n` seeks to an absolute byte position (before the offset too)
+    // and `X` backs up into the bytes ahead of it, as in CRuby.
+    rvalue::unpack(self_.as_rstring_inner().as_bytes(), &template, false, offset)
 }
 
 ///
@@ -8504,7 +8502,7 @@ fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
     let template = template.to_str()?;
-    rvalue::unpack(&self_.as_rstring_inner()[offset..], &template, true, offset)
+    rvalue::unpack(self_.as_rstring_inner().as_bytes(), &template, true, offset)
 }
 
 fn unpack_offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, len: usize) -> Result<usize> {

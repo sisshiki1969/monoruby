@@ -99,7 +99,16 @@ module Comparable
     end
   end
 
+  # CRuby asks `self <=> min` / `self <=> max` (never the operands'
+  # `<=>`), so a receiver whose `<=>` answers for foreign operands —
+  # ActiveSupport's Time, say — is honoured, and a nil answer is the
+  # usual comparison failure.
   def between?(min, max)
-    (min <=> self) <= 0 && (self <=> max) <= 0
+    c = (self <=> min)
+    raise ArgumentError, "comparison of #{self.class} with #{min.class} failed" if c.nil?
+    return false if c < 0
+    c = (self <=> max)
+    raise ArgumentError, "comparison of #{self.class} with #{max.class} failed" if c.nil?
+    c <= 0
   end
 end

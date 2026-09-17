@@ -430,7 +430,15 @@ pub struct Globals {
     /// termination. The callables are GC roots (see `mark`). monoruby
     /// runs finalizers only at exit, never asynchronously at GC time,
     /// which the spec explicitly permits.
-    pub(crate) finalizers: Vec<(u64, Value)>,
+    ///
+    /// The object itself is held (and marked) too: `object_id` is the
+    /// object's address, so a finalized object's id would be handed to
+    /// another object once its cell is reused — Tempfile's
+    /// `FinalizerManager` keys its open files by `object_id`, and a
+    /// recycled id made it `close` a `nil`. Keeping the object alive until
+    /// its finalizer runs (or is undefined) keeps its id unique, and
+    /// changes nothing observable: monoruby runs finalizers at exit only.
+    pub(crate) finalizers: Vec<(Value, Value)>,
     /// The program-argument array: the single object behind the `ARGV`
     /// constant, `$*`, and the file-name queue that `ARGF` and
     /// `Kernel#gets` consume. CRuby keeps it in a C global (`rb_argv`)
@@ -612,7 +620,8 @@ impl alloc::GC<RValue> for Globals {
         if let Some(v) = &self.exit_trap_handler {
             v.mark(alloc);
         }
-        for (_, v) in &self.finalizers {
+        for (obj, v) in &self.finalizers {
+            obj.mark(alloc);
             v.mark(alloc);
         }
     }
@@ -769,8 +778,25 @@ impl Globals {
 
         let main_object = Value::object(OBJECT_CLASS);
 
-        let loaded_features =
-            Value::array_from_iter(["thread.rb"].iter().map(|s| Value::string_from_str(s)));
+        // CRuby's built-in features: `require` of any of these answers
+        // `false` without a load (`ruby --disable-gems -e 'p $LOADED_FEATURES'`
+        // on 4.0.2, minus the encoding tables and `pathname.so`, whose
+        // Ruby half monoruby loads from the vendored stdlib). `set.rb`
+        // and `fiber.rb` in `stdlib/` are no-op stand-ins that this list
+        // now answers ahead of.
+        let loaded_features = Value::array_from_iter(
+            [
+                "enumerator.so",
+                "thread.rb",
+                "fiber.so",
+                "rational.so",
+                "complex.so",
+                "ruby2_keywords.rb",
+                "set.rb",
+            ]
+            .iter()
+            .map(|s| Value::string_from_str(s)),
+        );
 
         let invokers = CODEGEN.with(|codegen| {
             let codegen = codegen.borrow();

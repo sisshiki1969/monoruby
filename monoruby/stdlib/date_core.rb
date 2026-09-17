@@ -790,12 +790,52 @@ class Date
     end
   end
 
+  # Astronomical Julian day number (CRuby `Date#ajd`): the Julian day
+  # count taken from noon, so a civil date is `jd - 1/2`; `DateTime`
+  # adds its time of day in UTC. `amjd` is the modified form (from
+  # 1858-11-17).
+  def ajd
+    Rational(jd * 2 - 1, 2)
+  end
+
+  def amjd
+    ajd - Rational(4800001, 2)
+  end
+
+  # CRuby's `d_lite_cmp`: a Date (or DateTime) compares by `ajd`, a
+  # Numeric is compared against `ajd` directly, and anything else is
+  # given the chance to `coerce` — that is how ActiveSupport's
+  # `time <= 1.hour` (a `Duration`, which coerces to a `Scalar`) gets
+  # an answer instead of "comparison failed".
   def <=>(other)
     case other
     when Date
-      [year, month, day] <=> [other.year, other.month, other.day]
+      ajd <=> other.ajd
+    when Numeric
+      ajd <=> other
     else
-      nil
+      if other.respond_to?(:coerce)
+        a, b = other.coerce(self)
+        a <=> b
+      end
+    end
+  end
+
+  # CRuby's `d_lite_equal` (`Date#===`): the same local Julian day,
+  # against a Date or a day number.
+  def ===(other)
+    case other
+    when Date
+      jd == other.jd
+    when Numeric
+      jd == other
+    else
+      if other.respond_to?(:coerce)
+        a, b = other.coerce(self)
+        a == b
+      else
+        false
+      end
     end
   end
 
@@ -889,6 +929,20 @@ class Date
   def julian?    ; false ; end
   def gregorian? ; true  ; end
 
+  # The calendar-reform switches. Every date here is proleptic
+  # Gregorian, so these only record the start `Date#start` / `inspect`
+  # report (ActiveSupport's `Time#advance` goes through
+  # `to_date.gregorian.advance`); the day arithmetic does not change.
+  def new_start(sg = ITALY)
+    d = dup
+    d.instance_variable_set(:@sg, sg)
+    d
+  end
+  def gregorian ; new_start(GREGORIAN) ; end
+  def julian    ; new_start(JULIAN)    ; end
+  def italy     ; new_start(ITALY)     ; end
+  def england   ; new_start(ENGLAND)   ; end
+
   # Pattern-matching deconstructor (CRuby 3.2+):
   # `keys=nil` ⇒ all four keys; otherwise only the matching ones.
   def deconstruct_keys(keys)
@@ -917,8 +971,20 @@ class DateTime < Date
     super(year, month, day, _sg)
     @hour = hour
     @min = min
+    # A fractional second is kept apart, as `sec_fraction` (CRuby stores
+    # `DateTime.new(…, 3.5r)` as sec 3 + fraction 1/2), and a String
+    # offset (`"+09:00"`) becomes the Rational fraction of a day the
+    # rest of the class reads.
+    unless sec.is_a?(Integer)
+      frac = sec - sec.floor
+      @sec_fraction = frac.to_r unless frac == 0
+      sec = sec.floor
+    end
     @sec = sec
-    @offset = offset
+    @offset = case offset
+              when String then Rational(Date.send(:zone_to_diff, offset) || 0, 86400)
+              else offset
+              end
   end
 
   def self.civil(year = -4712, month = 1, day = 1, hour = 0, min = 0, sec = 0, offset = 0, sg = ITALY)
@@ -1050,15 +1116,9 @@ class DateTime < Date
     "#<DateTime: #{to_s} ((#{utc.jd}j,#{secs}s,#{ns}n),#{format('%+d', off)}s,#{__start_for_inspect})>"
   end
 
-  def <=>(other)
-    case other
-    when DateTime
-      [to_time.to_r, sec_fraction] <=> [other.to_time.to_r, other.sec_fraction]
-    when Date
-      [year, month, day] <=> [other.year, other.month, other.day]
-    else
-      nil
-    end
+  # The day fraction (time of day in UTC) on top of `Date#ajd`.
+  def ajd
+    super + Rational(@hour * 3600 + @min * 60 + @sec, 86400) + sec_fraction / 86400 - offset
   end
 
   def to_time
@@ -1082,5 +1142,25 @@ class DateTime < Date
 
   def to_datetime
     self
+  end
+end
+
+# `date` reopens Time with the conversions to its own classes (CRuby's
+# `date_core.c`: `time_to_time` / `time_to_date` / `time_to_datetime`).
+# ActiveSupport's `Time#advance` reaches `to_date` on every session
+# commit (`Rack::Session` sets the cookie expiry with `+ duration`).
+class Time
+  def to_time
+    self
+  end
+
+  def to_date
+    Date.civil(year, mon, mday)
+  end
+
+  def to_datetime
+    dt = DateTime.civil(year, mon, mday, hour, min, sec, Rational(utc_offset, 86400))
+    dt.instance_variable_set(:@sec_fraction, Rational(nsec, 1_000_000_000)) unless nsec == 0
+    dt
   end
 end

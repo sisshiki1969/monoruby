@@ -2803,6 +2803,27 @@ impl Ord for TimeInner {
 /// Compare `self` against `other` for Time#<=>, Time#<, etc.
 /// Returns `None` when `other` isn't a Time (CRuby: `<=>` ⇒ nil,
 /// the relational operators ⇒ ArgumentError).
+/// The Comparable route for a non-Time operand: ask `<=>` through
+/// method dispatch — so a redefinition is honoured (ActiveSupport's
+/// `compare_with_coercion` makes `time <= 1.hour` answerable) — and
+/// fail as `Comparable` does when it says nil. CRuby's Time defines
+/// only `<=>`; `<` and friends are Comparable's.
+fn time_cmp_via_spaceship(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    other: Value,
+) -> Result<std::cmp::Ordering> {
+    let res = vm.invoke_method_inner(globals, IdentId::_CMP, self_val, &[other], None, None)?;
+    if let Some(i) = res.try_fixnum() {
+        return Ok(i.cmp(&0));
+    }
+    if let Some(f) = res.try_float() {
+        return Ok(f.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal));
+    }
+    Err(crate::executor::op::cmperr(&globals.store, self_val, other))
+}
+
 fn time_cmp_opt(self_: Value, other: Value) -> Option<std::cmp::Ordering> {
     let rv = other.try_rvalue()?;
     if rv.ty() != ObjTy::TIME {
@@ -2862,39 +2883,39 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 }
 
 #[monoruby_builtin]
-fn lt(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
-        Some(ord) => Value::bool(ord == std::cmp::Ordering::Less),
-        None => return Err(MonorubyErr::argumenterr("comparison of Time with non-Time")),
-    })
+fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+        Some(ord) => ord,
+        None => time_cmp_via_spaceship(vm, globals, lfp.self_val(), lfp.arg(0))?,
+    };
+    Ok(Value::bool(ord == std::cmp::Ordering::Less))
 }
 
 #[monoruby_builtin]
-fn le(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
-        Some(ord) => Value::bool(ord != std::cmp::Ordering::Greater),
-        None => {
-            return Err(MonorubyErr::argumenterr("comparison of Time with non-Time"));
-        }
-    })
+fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+        Some(ord) => ord,
+        None => time_cmp_via_spaceship(vm, globals, lfp.self_val(), lfp.arg(0))?,
+    };
+    Ok(Value::bool(ord != std::cmp::Ordering::Greater))
 }
 
 #[monoruby_builtin]
-fn gt(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
-        Some(ord) => Value::bool(ord == std::cmp::Ordering::Greater),
-        None => return Err(MonorubyErr::argumenterr("comparison of Time with non-Time")),
-    })
+fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+        Some(ord) => ord,
+        None => time_cmp_via_spaceship(vm, globals, lfp.self_val(), lfp.arg(0))?,
+    };
+    Ok(Value::bool(ord == std::cmp::Ordering::Greater))
 }
 
 #[monoruby_builtin]
-fn ge(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
-        Some(ord) => Value::bool(ord != std::cmp::Ordering::Less),
-        None => {
-            return Err(MonorubyErr::argumenterr("comparison of Time with non-Time"));
-        }
-    })
+fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ord = match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+        Some(ord) => ord,
+        None => time_cmp_via_spaceship(vm, globals, lfp.self_val(), lfp.arg(0))?,
+    };
+    Ok(Value::bool(ord != std::cmp::Ordering::Less))
 }
 
 #[monoruby_builtin]
