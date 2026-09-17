@@ -267,6 +267,8 @@ fn coerce(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let wrapped = Value::complex(re, Real::from(0));
         return Ok(Value::array2(wrapped, self_val));
     }
+    // `Complex#coerce` itself names the operand by class (CRuby's
+    // `nucomp_coerce`), unlike the operators' `coerce_failed`.
     Err(MonorubyErr::typeerr(format!(
         "{} can't be coerced into Complex",
         other.get_real_class_name(globals)
@@ -430,7 +432,7 @@ fn fdiv(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         _ => {
             return Err(MonorubyErr::typeerr(format!(
                 "{} can't be coerced into Float",
-                other.get_real_class_name(globals)
+                other.coerce_failed_name(globals)
             )));
         }
     }
@@ -578,7 +580,7 @@ fn complex_to_real(
     if !is_exact_zero {
         return Err(MonorubyErr::rangeerr(format!(
             "can't convert {} into {}",
-            self_val.get_real_class_name(&globals.store),
+            self_val.to_s(&globals.store),
             error_label
         )));
     }
@@ -621,7 +623,7 @@ fn to_r(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     if !is_zero {
         return Err(MonorubyErr::rangeerr(format!(
             "can't convert {} into Rational",
-            self_val.get_real_class_name(&globals.store)
+            self_val.to_s(&globals.store)
         )));
     }
     let to_r_id = IdentId::get_id("to_r");
@@ -904,7 +906,7 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     if globals.check_method(other, coerce_id).is_none() {
         return Err(MonorubyErr::typeerr(format!(
             "{} can't be coerced into Complex",
-            other.get_real_class_name(&globals.store)
+            other.coerce_failed_name(&globals.store)
         )));
     }
     let result = vm.invoke_method_inner(globals, coerce_id, other, &[self_val], None, None)?;
@@ -941,7 +943,7 @@ fn rationalize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     if !is_exact_zero {
         return Err(MonorubyErr::rangeerr(format!(
             "can't convert {} into Rational",
-            self_val.get_real_class_name(&globals.store)
+            self_val.to_s(&globals.store)
         )));
     }
     let rationalize_id = IdentId::get_id("rationalize");
@@ -987,7 +989,7 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 if globals.check_method(rhs, coerce_id).is_none() {
                     return Err(MonorubyErr::typeerr(format!(
                         "{} can't be coerced into Complex",
-                        rhs.get_real_class_name(&globals.store)
+                        rhs.coerce_failed_name(&globals.store)
                     )));
                 }
                 let result = vm.invoke_method_inner(globals, coerce_id, rhs, &[self_val], None, None)?;
@@ -997,10 +999,7 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                         return vm.invoke_method_inner(globals, pow_id, ary[0], &[ary[1]], None, None);
                     }
                 }
-                return Err(MonorubyErr::typeerr(format!(
-                    "{} can't be coerced into Complex",
-                    rhs.get_real_class_name(&globals.store)
-                )));
+                return Err(MonorubyErr::typeerr("coerce must return [x, y]"));
             }
         }
     };

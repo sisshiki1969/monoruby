@@ -70,13 +70,13 @@ class Rational
   end
 
   def div(other)
-    raise TypeError, "#{other.class} can't be coerced into Rational" unless other.is_a?(Numeric)
+    raise TypeError, "#{__coerce_failed_name(other)} can't be coerced into Rational" unless other.is_a?(Numeric)
     raise ZeroDivisionError, "divided by 0" if other == 0
     (self / other).floor
   end
 
   def divmod(other)
-    raise TypeError, "#{other.class} can't be coerced into Rational" unless other.is_a?(Numeric)
+    raise TypeError, "#{__coerce_failed_name(other)} can't be coerced into Rational" unless other.is_a?(Numeric)
     raise ZeroDivisionError, "divided by 0" if other == 0
     q = (self / other).floor
     [q, self - q * other]

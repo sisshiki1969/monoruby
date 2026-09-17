@@ -14,6 +14,31 @@ module Kernel
 
   private
 
+  # How a type error names an argument (CRuby's rb_builtin_class_name):
+  # nil / true / false by keyword, anything else by its class — "no
+  # implicit conversion of nil into String", "wrong argument type true
+  # (expected Module)", but "... of Symbol into String".
+  def __builtin_class_name(v)
+    case v
+    when nil then "nil"
+    when true then "true"
+    when false then "false"
+    else v.class
+    end
+  end
+
+  # How a failed coercion or comparison names the operand (CRuby's
+  # coerce_failed / rb_cmperr): a special constant — nil, true, false, a
+  # Symbol, an Integer, a Float — by inspect, so `1 + :a` says ":a can't
+  # be coerced into Integer" and `1 < nil` says "comparison of Integer
+  # with nil failed"; anything else by its class.
+  def __coerce_failed_name(v)
+    case v
+    when nil, true, false, Symbol, Integer, Float then v.inspect
+    else v.class
+    end
+  end
+
   # Internal helper: coerce value to Integer via to_int.
   # Raises TypeError with CRuby-compatible message if conversion fails.
   def __to_int(val)
@@ -25,7 +50,7 @@ module Kernel
       end
       result
     else
-      raise TypeError, "no implicit conversion of #{val.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(val)} into Integer"
     end
   end
 
@@ -40,7 +65,7 @@ module Kernel
       end
       result
     else
-      raise TypeError, "no implicit conversion of #{val.class} into String"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(val)} into String"
     end
   end
 end
@@ -63,7 +88,7 @@ module Kernel
         end
       else
         raise TypeError,
-              "no implicit conversion of #{category.class} into Symbol"
+              "no implicit conversion of #{__builtin_class_name(category)} into Symbol"
       end
     end
 
@@ -228,7 +253,7 @@ module Kernel
       end
       name = name.to_path if name.respond_to?(:to_path)
       name = name.to_str if name.respond_to?(:to_str)
-      raise TypeError, "no implicit conversion of #{name.class} into String" unless name.is_a?(String)
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(name)} into String" unless name.is_a?(String)
       File.open(name, *args, **kw, &block)
     end
   end

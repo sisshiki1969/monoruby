@@ -237,7 +237,7 @@ class Array
   def cycle(n = (no_n = true; nil))
     unless block_given?
       unless no_n || n.nil? || n.is_a?(Integer)
-        raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer" unless n.respond_to?(:to_int)
         n = n.to_int
         raise TypeError, "can't convert to Integer" unless n.is_a?(Integer)
       end
@@ -267,7 +267,7 @@ class Array
       end
     else
       unless n.is_a?(Integer)
-        raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer" unless n.respond_to?(:to_int)
         n = n.to_int
         raise TypeError, "can't convert to Integer" unless n.is_a?(Integer)
       end

@@ -144,7 +144,7 @@ class Integer
       a, b = other.coerce(self)
       a.fdiv(b)
     else
-      raise TypeError, "#{other.class} can't be coerced into Integer"
+      raise TypeError, "#{__coerce_failed_name(other)} can't be coerced into Integer"
     end
   end
 
@@ -178,7 +178,7 @@ class Integer
 
   def allbits?(mask)
     unless mask.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{mask.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(mask)} into Integer"
     end
     mask = mask.to_int
     (self & mask) == mask
@@ -186,7 +186,7 @@ class Integer
 
   def anybits?(mask)
     unless mask.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{mask.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(mask)} into Integer"
     end
     mask = mask.to_int
     (self & mask) != 0
@@ -194,7 +194,7 @@ class Integer
 
   def nobits?(mask)
     unless mask.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{mask.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(mask)} into Integer"
     end
     mask = mask.to_int
     (self & mask) == 0
@@ -212,7 +212,9 @@ class Integer
     elsif other.is_a?(Complex)
       [other, Complex(self)]
     elsif other.nil? || other.equal?(true) || other.equal?(false) || other.is_a?(Symbol)
-      raise TypeError, "#{other.class} can't be coerced into Integer"
+      # CRuby's rb_int_coerce goes through rb_Float(): its error, not
+      # the operators' "can't be coerced".
+      raise TypeError, "can't convert #{__builtin_class_name(other)} into Float"
     elsif other.is_a?(String)
       stripped = other.strip
       if stripped.empty? || stripped !~ /\A[+-]?(\d+\.?\d*|\d*\.?\d+)([eE][+-]?\d+)?\z/
@@ -226,7 +228,7 @@ class Integer
       end
       [result, self.to_f]
     else
-      raise TypeError, "#{other.class} can't be coerced into Integer"
+      raise TypeError, "can't convert #{other.class} into Float"
     end
   end
 
@@ -254,7 +256,7 @@ class Integer
           raise TypeError, "can't convert #{n.class} into Integer (#{n.class}#to_int gives #{n.class})"
         end
       else
-        raise TypeError, "no implicit conversion of #{n.class} into Integer"
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
       end
     end
     raise Math::DomainError, "out of domain - isqrt" if n < 0
@@ -305,14 +307,14 @@ class Integer
     elsif ndigits.respond_to?(:to_int)
       result = ndigits.to_int
       if result.nil?
-        raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(ndigits)} into Integer"
       end
       unless result.is_a?(Integer)
         raise TypeError, "can't convert #{ndigits.class} into Integer (#{ndigits.class}#to_int gives #{result.class})"
       end
       ndigits = result
     else
-      raise TypeError, "no implicit conversion of #{ndigits.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(ndigits)} into Integer"
     end
     # Check for large values after conversion
     if ndigits > 0x3FFFFFFF || ndigits < -0x40000000

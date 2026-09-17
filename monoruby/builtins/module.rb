@@ -71,7 +71,7 @@ class Module
     # though `Class < Module`). And the receiver is *not* counted as one of
     # its own included modules — `M.include?(M)` is `false`.
     if !mod.is_a?(Module) || mod.is_a?(Class)
-      raise TypeError, "wrong argument type #{mod.class} (expected Module)"
+      raise TypeError, "wrong argument type #{__builtin_class_name(mod)} (expected Module)"
     end
     return false if equal?(mod)
     ancestors.include?(mod)

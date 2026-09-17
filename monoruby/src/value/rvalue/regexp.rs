@@ -1312,7 +1312,7 @@ impl RegexpInner {
         globals: &mut Globals,
         re_val: Value,
         given: &str,
-        replace: &str,
+        replace: &RStringInner,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             re.replace_once(vm, &globals.store, given, replace)
@@ -1339,7 +1339,6 @@ impl RegexpInner {
                 Some(captures) => {
                     let m = captures.get(0).unwrap();
                     let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
-                    let mut res = RStringInner::from_str_scanned(given);
                     let matched = match mapped_enc {
                         Some(enc) => Value::string_from_inner(
                             RStringInner::from_mapped_utf8(matched_str, enc),
@@ -1349,7 +1348,8 @@ impl RegexpInner {
                     let result = vm.invoke_block_once(globals, bh, &[matched])?;
                     let rep_inner =
                         block_result_to_inner(vm, globals, result, mapped_enc.is_some())?;
-                    res.bytesplice_with(start, end - start, &rep_inner, &globals.store)?;
+                    let res =
+                        RStringInner::splice_all(&globals.store, given, &[(start..end, rep_inner)])?;
                     Ok((res, true))
                 }
             }
@@ -1362,7 +1362,7 @@ impl RegexpInner {
         globals: &mut Globals,
         regexp: Value,
         given: &str,
-        replace: &str,
+        replace: &RStringInner,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, regexp, |re, vm, globals| {
             re.replace_repeat(vm, &globals.store, given, replace)
@@ -1515,7 +1515,6 @@ impl RegexpInner {
                 Some(captures) => {
                     let m = captures.get(0).unwrap();
                     let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
-                    let mut res = RStringInner::from_str_scanned(given);
                     let key = match mapped_enc {
                         Some(enc) => Value::string_from_inner(
                             RStringInner::from_mapped_utf8(matched_str, enc),
@@ -1524,7 +1523,8 @@ impl RegexpInner {
                     };
                     let rep_inner =
                         lookup_hash_replacement(vm, globals, hash_val, key, mapped_enc.is_some())?;
-                    res.bytesplice_with(start, end - start, &rep_inner, &globals.store)?;
+                    let res =
+                        RStringInner::splice_all(&globals.store, given, &[(start..end, rep_inner)])?;
                     Ok((res, true))
                 }
             }
@@ -1988,7 +1988,7 @@ impl RegexpInner {
         vm: &mut Executor,
         store: &Store,
         given: &str,
-        replace: &str,
+        replace: &RStringInner,
     ) -> Result<(RStringInner, bool)> {
         // Walk the haystack manually rather than relying on
         // `captures_iter`, which can skip the zero-width match that
@@ -2009,8 +2009,8 @@ impl RegexpInner {
             };
             let m = cap.get(0).unwrap();
             let (start, end) = (m.start(), m.end());
-            let rep = self.expand_backref(replace, given, &cap);
-            replacements.push((start..end, RStringInner::from_string_scanned(rep)));
+            let (rep, mixed) = self.expand_backref(replace.as_bytes(), given, &cap);
+            replacements.push((start..end, expansion_inner(store, &rep, replace, mixed)?));
             last_captures = Some(cap);
             pos = if end > start {
                 end
@@ -2038,8 +2038,9 @@ impl RegexpInner {
         Ok((res, !is_empty))
     }
 
-    /// Expand backreference sequences in `replace` using `captures`
-    /// against `given` (the original haystack). Recognises:
+    /// Expand backreference sequences in `replace` (the raw bytes of the
+    /// replacement template, in whatever encoding it carries) using
+    /// `captures` against `given` (the original haystack). Recognises:
     ///
     /// - `\0`, `\1`-`\9`: numbered captures (`\0` is the full match).
     /// - `\&`: same as `\0` (full match).
@@ -2050,28 +2051,43 @@ impl RegexpInner {
     /// - `\\`: literal backslash.
     /// - Trailing `\` is left as a literal backslash.
     /// - Other `\X` sequences are passed through verbatim.
+    ///
+    /// Works on bytes so a template with non-ASCII bytes in a
+    /// byte-oriented encoding (`"\xff".b`) is spliced as those bytes,
+    /// never re-encoded; see [`expansion_inner`] for the encoding the
+    /// expansion is tagged with.
+    ///
+    /// The flag is whether any captured text (as opposed to the template
+    /// itself) carried non-ASCII bytes — what decides, in
+    /// [`expansion_inner`], whether the two can share an encoding.
     fn expand_backref(
         &self,
-        replace: &str,
+        replace: &[u8],
         given: &str,
         captures: &Captures,
-    ) -> String {
-        let bytes = replace.as_bytes();
-        let mut rep = String::new();
+    ) -> (Vec<u8>, bool) {
+        let bytes = replace;
+        let mut rep: Vec<u8> = Vec::with_capacity(bytes.len());
+        let mut captured_non_ascii = false;
+        let mut push_captured = |rep: &mut Vec<u8>, s: &str| {
+            captured_non_ascii |= !s.is_ascii();
+            rep.extend_from_slice(s.as_bytes());
+        };
         let mut i = 0;
         while i < bytes.len() {
-            let ch = bytes[i];
-            if ch != b'\\' {
-                // copy one UTF-8 scalar
-                let len = utf8_char_len(ch);
-                rep.push_str(&replace[i..i + len]);
-                i += len;
+            if bytes[i] != b'\\' {
+                // Copy the run up to the next backslash verbatim.
+                let run = bytes[i..]
+                    .iter()
+                    .position(|&b| b == b'\\')
+                    .unwrap_or(bytes.len() - i);
+                rep.extend_from_slice(&bytes[i..i + run]);
+                i += run;
                 continue;
             }
-            // ch == '\\'
             if i + 1 >= bytes.len() {
                 // Trailing backslash: copy verbatim (CRuby leaves it).
-                rep.push('\\');
+                rep.push(b'\\');
                 i += 1;
                 continue;
             }
@@ -2080,25 +2096,25 @@ impl RegexpInner {
                 b'0'..=b'9' => {
                     let idx = (next - b'0') as usize;
                     if let Some(m) = captures.get(idx) {
-                        rep.push_str(m.as_str());
+                        push_captured(&mut rep, m.as_str());
                     }
                     i += 2;
                 }
                 b'&' => {
                     if let Some(m) = captures.get(0) {
-                        rep.push_str(m.as_str());
+                        push_captured(&mut rep, m.as_str());
                     }
                     i += 2;
                 }
                 b'`' => {
                     if let Some(m) = captures.get(0) {
-                        rep.push_str(&given[..m.start()]);
+                        push_captured(&mut rep, &given[..m.start()]);
                     }
                     i += 2;
                 }
                 b'\'' => {
                     if let Some(m) = captures.get(0) {
-                        rep.push_str(&given[m.end()..]);
+                        push_captured(&mut rep, &given[m.end()..]);
                     }
                     i += 2;
                 }
@@ -2111,14 +2127,14 @@ impl RegexpInner {
                     while idx > 1 {
                         idx -= 1;
                         if let Some(m) = captures.get(idx) {
-                            rep.push_str(m.as_str());
+                            push_captured(&mut rep, m.as_str());
                             break;
                         }
                     }
                     i += 2;
                 }
                 b'\\' => {
-                    rep.push('\\');
+                    rep.push(b'\\');
                     i += 2;
                 }
                 b'k' => {
@@ -2127,24 +2143,20 @@ impl RegexpInner {
                         if let Some(end_off) = bytes[i + 3..].iter().position(|&b| b == b'>') {
                             let name_start = i + 3;
                             let name_end = name_start + end_off;
-                            let name = &replace[name_start..name_end];
-                            // Onigmo stores capture names; look up the
-                            // rightmost group with this name (CRuby
-                            // chooses the last participating one).
+                            let name = String::from_utf8_lossy(&bytes[name_start..name_end]);
                             // Onigmo allows multiple groups to share
                             // a name; pick the highest-numbered one
                             // that participated, matching CRuby.
-                            let members = self.get_group_members(name);
+                            let members = self.get_group_members(&name);
                             let mut chosen: Option<usize> = None;
                             for &m_idx in members.iter() {
-                                if let Some(m) = captures.get(m_idx as usize) {
-                                    let _ = m;
+                                if captures.get(m_idx as usize).is_some() {
                                     chosen = Some(m_idx as usize);
                                 }
                             }
                             if let Some(idx) = chosen {
                                 if let Some(m) = captures.get(idx) {
-                                    rep.push_str(m.as_str());
+                                    push_captured(&mut rep, m.as_str());
                                 }
                             }
                             i = name_end + 1;
@@ -2152,20 +2164,19 @@ impl RegexpInner {
                         }
                     }
                     // Malformed `\k…`: copy verbatim.
-                    rep.push('\\');
-                    rep.push('k');
+                    rep.extend_from_slice(b"\\k");
                     i += 2;
                 }
                 _ => {
-                    // Unknown `\X`: keep as-is (preserves e.g. `\d`).
-                    let len = utf8_char_len(next);
-                    rep.push('\\');
-                    rep.push_str(&replace[i + 1..i + 1 + len]);
-                    i += 1 + len;
+                    // Unknown `\X`: keep as-is (preserves e.g. `\d`); the
+                    // rest of a multibyte X is copied by the next run.
+                    rep.push(b'\\');
+                    rep.push(next);
+                    i += 2;
                 }
             }
         }
-        rep
+        (rep, captured_non_ascii)
     }
 
     /// Replaces the leftmost-first match for `self` in `given` string with `replace`.
@@ -2178,16 +2189,15 @@ impl RegexpInner {
         vm: &mut Executor,
         store: &Store,
         given: &'a str,
-        replace: &str,
+        replace: &RStringInner,
     ) -> Result<(RStringInner, Option<Captures<'a>>)> {
         match self.captures(given, vm)? {
             None => Ok((RStringInner::from_str_scanned(given), None)),
             Some(captures) => {
-                let mut res = RStringInner::from_str_scanned(given);
                 let m = captures.get(0).unwrap();
-                let rep = self.expand_backref(replace, given, &captures);
-                let rep_inner = RStringInner::from_string_scanned(rep);
-                res.bytesplice_with(m.start(), m.end() - m.start(), &rep_inner, store)?;
+                let (rep, mixed) = self.expand_backref(replace.as_bytes(), given, &captures);
+                let rep_inner = expansion_inner(store, &rep, replace, mixed)?;
+                let res = RStringInner::splice_all(store, given, &[(m.range(), rep_inner)])?;
                 Ok((res, Some(captures)))
             }
         }
@@ -2201,11 +2211,11 @@ impl RegexpInner {
 /// return a String. Returns the `RStringInner` directly so callers
 /// don't have to round-trip through `String` and re-classify.
 ///
-/// Result encoding mirrors `block_result_to_string`'s pre-existing
-/// behaviour: `is_str()` validates the bytes are UTF-8 and surfaces
-/// `ArgumentError: invalid byte sequence in UTF-8` for non-UTF-8
-/// receivers. Callers (e.g. `replace_all_block`) layer their own
-/// `Encoding::CompatibilityError` checks on top.
+/// A String (the result itself, or what its `to_s` answered) is taken
+/// as it is — its bytes under its own encoding — so a BINARY value with
+/// 8-bit content splices as those bytes and `splice_all` settles the
+/// result's encoding from it (#1378). Callers (e.g. `replace_all_block`)
+/// layer their own `Encoding::CompatibilityError` checks on top.
 fn block_result_to_inner(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -2215,31 +2225,54 @@ fn block_result_to_inner(
     // When the surrounding replace runs in surrogate space (`mapped`),
     // a String result must be forward-mapped so its 8-bit bytes splice
     // as U+00XX characters and survive the caller's final decode.
-    if mapped {
-        if let Some(inner) = v.is_rstring_inner() {
-            return Ok(RStringInner::from_string_scanned(
-                map_bytes_to_utf8(inner.as_bytes()),
-            ));
+    let as_replacement = |inner: &RStringInner| {
+        if mapped {
+            RStringInner::from_string_scanned(map_bytes_to_utf8(inner.as_bytes()))
+        } else {
+            inner.clone()
         }
-    }
-    if let Some(s) = v.is_str() {
-        return Ok(RStringInner::from_str_scanned(s));
+    };
+    if let Some(inner) = v.is_rstring_inner() {
+        return Ok(as_replacement(inner));
     }
     let coerced = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
-    if mapped {
-        if let Some(inner) = coerced.is_rstring_inner() {
-            return Ok(RStringInner::from_string_scanned(
-                map_bytes_to_utf8(inner.as_bytes()),
-            ));
-        }
-    }
-    if let Some(s) = coerced.is_str() {
-        Ok(RStringInner::from_str_scanned(s))
+    if let Some(inner) = coerced.is_rstring_inner() {
+        Ok(as_replacement(inner))
     } else {
         // Intrinsic fallback produces `String`; pre-classify it
         // so the splice that follows lands on a fast path.
         Ok(RStringInner::from_string_scanned(coerced.to_s(&globals.store)))
     }
+}
+
+/// The expanded replacement (`expand_backref`'s bytes) as a string: under
+/// the template's encoding when the template carries non-ASCII bytes
+/// (`"\xff".b` splices as BINARY, and `splice_all` lets the result take
+/// that encoding over a 7-bit haystack, as CRuby's `rb_enc_cr_str_buf_cat`
+/// does), else the haystack's, so captured text keeps its own. Non-ASCII
+/// captured text (`captured_non_ascii`) pasted into a non-ASCII template
+/// of another encoding is CRuby's `rb_reg_regsub` failure:
+/// `Encoding::CompatibilityError`, the template's encoding first.
+fn expansion_inner(
+    store: &Store,
+    bytes: &[u8],
+    template: &RStringInner,
+    captured_non_ascii: bool,
+) -> Result<RStringInner> {
+    let enc = if template.is_ascii_only() {
+        crate::value::Encoding::Utf8
+    } else {
+        let enc = template.encoding();
+        if captured_non_ascii && enc != crate::value::Encoding::Utf8 {
+            return Err(MonorubyErr::incompatible_encoding(
+                store,
+                enc,
+                crate::value::Encoding::Utf8,
+            ));
+        }
+        enc
+    };
+    Ok(RStringInner::from_encoding_scanned(bytes, enc))
 }
 
 /// Look up the replacement string for a `String#sub`/`#gsub` match

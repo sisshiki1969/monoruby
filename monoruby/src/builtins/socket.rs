@@ -268,7 +268,7 @@ fn value_to_host(globals: &Globals, v: Value) -> Result<Option<String>> {
         Some(s) => Ok(Some(s.to_string())),
         None => Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into String",
-            globals.store.get_class_name(v.class())
+            v.builtin_class_name(&globals.store)
         ))),
     }
 }
@@ -1587,7 +1587,7 @@ fn sockaddr_arg(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Ve
     }
     Err(MonorubyErr::typeerr(format!(
         "no implicit conversion of {} into String",
-        globals.store.get_class_name(v.class())
+        v.builtin_class_name(&globals.store)
     )))
 }
 
@@ -1837,7 +1837,7 @@ fn unix_path_bytes(globals: &Globals, v: Value, allow_nul: bool) -> Result<Vec<u
         None => {
             return Err(MonorubyErr::typeerr(format!(
                 "no implicit conversion of {} into String",
-                globals.store.get_class_name(v.class())
+                v.builtin_class_name(&globals.store)
             )));
         }
     };

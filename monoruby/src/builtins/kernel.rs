@@ -2068,7 +2068,7 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
     }
     Err(MonorubyErr::typeerr(format!(
         "can't convert {} into Integer",
-        arg0.get_real_class_name(globals),
+        arg0.builtin_class_name(globals),
     )))
 }
 
@@ -2531,7 +2531,7 @@ fn kernel_complex(
             if exception {
                 return Err(MonorubyErr::typeerr(format!(
                     "can't convert {} into Complex",
-                    arg0.get_real_class_name(globals)
+                    arg0.builtin_class_name(globals)
                 )));
             }
             return Ok(Value::nil());
@@ -3087,15 +3087,7 @@ fn bad_to_r_error(globals: &Globals, v: Value, result: Value) -> MonorubyErr {
 /// echoed literally (CRuby's conversion-error convention), everything
 /// else by class name.
 fn rational_type_error(globals: &Globals, v: Value) -> MonorubyErr {
-    let name = if v.is_nil() {
-        "nil".to_string()
-    } else if v == Value::bool(true) {
-        "true".to_string()
-    } else if v == Value::bool(false) {
-        "false".to_string()
-    } else {
-        v.get_real_class_name(&globals.store)
-    };
+    let name = v.builtin_class_name(&globals.store);
     MonorubyErr::typeerr(format!("can't convert {name} into Rational"))
 }
 
@@ -3192,7 +3184,7 @@ fn kernel_array(
             return Ok(Value::array1(arg));
         }
         return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} into Array ({}#to_a gives {})",
+            "can't convert {} to Array ({}#to_a gives {})",
             arg.get_real_class_name(globals),
             arg.get_real_class_name(globals),
             result.get_real_class_name(globals),
@@ -4762,7 +4754,7 @@ fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         if v.is_module().is_none() {
             return Err(MonorubyErr::typeerr(format!(
                 "wrong argument type {} (expected Module)",
-                v.get_real_class_name(&globals.store)
+                v.builtin_class_name(&globals.store)
             )));
         }
     }

@@ -29,7 +29,8 @@ class Float
     elsif other.is_a?(String)
       [Float(other), self]
     else
-      raise TypeError, "#{other.class} can't be coerced into Float"
+      # CRuby's flo_coerce is num_coerce: rb_Float()'s error.
+      raise TypeError, "can't convert #{__builtin_class_name(other)} into Float"
     end
   end
 

@@ -2393,27 +2393,47 @@ impl RStringInner {
         let mut buf: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(cap);
         let mut last = 0usize;
         // The result's encoding, as CRuby's `rb_enc_cr_str_buf_cat`
-        // settles it while appending: the haystack's, unless a
-        // replacement with non-ASCII content in another encoding is
-        // compatible with the (then 7-bit) haystack, which the result
-        // takes — `"a-b".gsub(/-/, "\xff".b)` is BINARY. Two such
-        // replacements in different encodings cannot both fit.
-        let mut enc = given_inner.encoding();
-        for (r, rep) in replacements {
-            let e = given_inner.compatible_encoding(rep).ok_or_else(|| {
-                MonorubyErr::incompatible_encoding(store, given_inner.encoding(), rep.encoding())
-            })?;
-            if e != given_inner.encoding() {
-                if enc != given_inner.encoding() && enc != e {
-                    return Err(MonorubyErr::incompatible_encoding(store, enc, e));
+        // settles it while appending piece by piece (a stretch of the
+        // haystack, a replacement): 7-bit pieces never change it; the
+        // first piece with non-ASCII content decides it — so
+        // `"a-b".gsub(/-/, "\xff".b)` is BINARY, while `"aéb"` stays
+        // UTF-8 whatever 7-bit replacement it takes — and a later
+        // non-ASCII piece in another encoding cannot fit
+        // (`Encoding::CompatibilityError`).
+        let given_enc = given_inner.encoding();
+        let given_7bit = given_inner.is_ascii_only();
+        let mut enc = given_enc;
+        let mut seven_bit = true;
+        let mut append = |piece: &[u8], piece_enc: Encoding, piece_7bit: bool| -> Result<()> {
+            if !piece_7bit {
+                if seven_bit {
+                    enc = piece_enc;
+                    seven_bit = false;
+                } else if enc != piece_enc {
+                    return Err(MonorubyErr::incompatible_encoding(store, enc, piece_enc));
                 }
-                enc = e;
             }
-            buf.extend_from_slice(&bytes[last..r.start]);
-            buf.extend_from_slice(rep.as_bytes());
+            buf.extend_from_slice(piece);
+            Ok(())
+        };
+        for (r, rep) in replacements {
+            // A replacement in an ASCII-incompatible encoding (UTF-16,
+            // ...) never fits an ASCII-compatible haystack, 7-bit or not,
+            // unless it is empty.
+            let rep_enc = rep.encoding();
+            if !rep.is_empty()
+                && rep_enc != given_enc
+                && !(rep_enc.is_ascii_compatible() && given_enc.is_ascii_compatible())
+            {
+                return Err(MonorubyErr::incompatible_encoding(store, given_enc, rep_enc));
+            }
+            let stretch = &bytes[last..r.start];
+            append(stretch, given_enc, given_7bit || stretch.is_ascii())?;
+            append(rep.as_bytes(), rep_enc, rep.is_ascii_only())?;
             last = r.end;
         }
-        buf.extend_from_slice(&bytes[last..]);
+        let tail = &bytes[last..];
+        append(tail, given_enc, given_7bit || tail.is_ascii())?;
         Ok(RStringInner::from(buf, enc, CodeRange::Unknown))
     }
 

@@ -237,6 +237,12 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         RV::Float(f) => Ok(Value::float(lhs.to_f() + f)),
         _ => {
             let coerce_id = IdentId::get_id("coerce");
+            globals.check_method(rhs, coerce_id).ok_or_else(|| {
+                MonorubyErr::typeerr(format!(
+                    "{} can't be coerced into Rational",
+                    rhs.coerce_failed_name(&globals.store)
+                ))
+            })?;
             let result =
                 vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
@@ -245,10 +251,7 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                     return vm.invoke_method_inner(globals, add_id, ary[0], &[ary[1]], None, None);
                 }
             }
-            Err(MonorubyErr::typeerr(format!(
-                "{} can't be coerced into Rational",
-                rhs.get_real_class_name(&globals.store)
-            )))
+            Err(MonorubyErr::typeerr("coerce must return [x, y]"))
         }
     }
 }
@@ -268,6 +271,12 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         RV::Float(f) => Ok(Value::float(lhs.to_f() - f)),
         _ => {
             let coerce_id = IdentId::get_id("coerce");
+            globals.check_method(rhs, coerce_id).ok_or_else(|| {
+                MonorubyErr::typeerr(format!(
+                    "{} can't be coerced into Rational",
+                    rhs.coerce_failed_name(&globals.store)
+                ))
+            })?;
             let result =
                 vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
@@ -276,10 +285,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                     return vm.invoke_method_inner(globals, sub_id, ary[0], &[ary[1]], None, None);
                 }
             }
-            Err(MonorubyErr::typeerr(format!(
-                "{} can't be coerced into Rational",
-                rhs.get_real_class_name(&globals.store)
-            )))
+            Err(MonorubyErr::typeerr("coerce must return [x, y]"))
         }
     }
 }
@@ -299,6 +305,12 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         RV::Float(f) => Ok(Value::float(lhs.to_f() * f)),
         _ => {
             let coerce_id = IdentId::get_id("coerce");
+            globals.check_method(rhs, coerce_id).ok_or_else(|| {
+                MonorubyErr::typeerr(format!(
+                    "{} can't be coerced into Rational",
+                    rhs.coerce_failed_name(&globals.store)
+                ))
+            })?;
             let result =
                 vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
@@ -307,10 +319,7 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                     return vm.invoke_method_inner(globals, mul_id, ary[0], &[ary[1]], None, None);
                 }
             }
-            Err(MonorubyErr::typeerr(format!(
-                "{} can't be coerced into Rational",
-                rhs.get_real_class_name(&globals.store)
-            )))
+            Err(MonorubyErr::typeerr("coerce must return [x, y]"))
         }
     }
 }
@@ -330,6 +339,12 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         RV::Float(f) => Ok(Value::float(lhs.to_f() / f)),
         _ => {
             let coerce_id = IdentId::get_id("coerce");
+            globals.check_method(rhs, coerce_id).ok_or_else(|| {
+                MonorubyErr::typeerr(format!(
+                    "{} can't be coerced into Rational",
+                    rhs.coerce_failed_name(&globals.store)
+                ))
+            })?;
             let result =
                 vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
@@ -338,10 +353,7 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                     return vm.invoke_method_inner(globals, div_id, ary[0], &[ary[1]], None, None);
                 }
             }
-            Err(MonorubyErr::typeerr(format!(
-                "{} can't be coerced into Rational",
-                rhs.get_real_class_name(&globals.store)
-            )))
+            Err(MonorubyErr::typeerr("coerce must return [x, y]"))
         }
     }
 }
@@ -394,7 +406,7 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             if globals.check_method(rhs, coerce_id).is_none() {
                 return Err(MonorubyErr::typeerr(format!(
                     "{} can't be coerced into Rational",
-                    rhs.get_real_class_name(&globals.store),
+                    rhs.coerce_failed_name(&globals.store),
                 )));
             }
             let result =
@@ -405,10 +417,7 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                     return vm.invoke_method_inner(globals, pow_id, ary[0], &[ary[1]], None, None);
                 }
             }
-            Err(MonorubyErr::typeerr(format!(
-                "{} can't be coerced into Rational",
-                rhs.get_real_class_name(&globals.store),
-            )))
+            Err(MonorubyErr::typeerr("coerce must return [x, y]"))
         }
     }
 }

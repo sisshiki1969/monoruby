@@ -167,10 +167,10 @@ class String
       if max.respond_to?(:to_str)
         max = max.to_str
         unless max.is_a?(String)
-          raise TypeError, "no implicit conversion of #{max.class} into String"
+          raise TypeError, "no implicit conversion of #{__builtin_class_name(max)} into String"
         end
       else
-        raise TypeError, "no implicit conversion of #{max.class} into String"
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(max)} into String"
       end
     end
     return to_enum(:upto, max, exclusive) unless block

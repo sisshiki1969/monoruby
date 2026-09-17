@@ -1652,16 +1652,19 @@ fn transcode_with_fallback(
                 } else if globals.check_method(rep, IdentId::TO_STR).is_some() {
                     let converted = vm.invoke_method_inner(globals, IdentId::TO_STR, rep, &[], None, None)?;
                     if converted.is_str().is_none() {
-                        return Err(MonorubyErr::typeerr(format!(
-                            "no implicit conversion of {} into String",
-                            globals.get_class_name(rep.class())
-                        )));
+                        return Err(MonorubyErr::cant_convert_error(
+                            globals,
+                            rep,
+                            converted,
+                            "String",
+                            IdentId::TO_STR,
+                        ));
                     }
                     converted
                 } else {
                     return Err(MonorubyErr::typeerr(format!(
                         "no implicit conversion of {} into String",
-                        globals.get_class_name(rep.class())
+                        rep.builtin_class_name(globals)
                     )));
                 };
                 let inner = rep_str.as_rstring_inner();
@@ -5181,9 +5184,13 @@ mod tests {
 
     #[test]
     fn gsub_raises_compat_error_on_replacement() {
-        // Receiver is UTF-8 with non-ASCII content, replacement is
-        // an ASCII-8BIT broken byte → CompatibilityError.
-        run_test_error(r#""é".gsub(/é/, "\xff".force_encoding("ASCII-8BIT"))"#);
+        // Receiver is UTF-8 with non-ASCII content that survives the
+        // replace, replacement is an ASCII-8BIT byte → CompatibilityError.
+        // (When the receiver's only non-ASCII text is what gets
+        // replaced, CRuby lets the result take the replacement's
+        // encoding instead: `"é".gsub(/é/, "\xff".b)` is "\xFF" in
+        // BINARY — see tests/gsub_binary_replacement.rs.)
+        run_test_error(r#""éa".gsub(/a/, "\xff".force_encoding("ASCII-8BIT"))"#);
     }
 
     #[test]

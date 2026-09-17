@@ -160,7 +160,7 @@ pub(crate) fn parse_spawn_args(
                             } else if v.try_symbol().is_some() {
                                 return Err(MonorubyErr::typeerr(format!(
                                     "wrong argument type {} (expected Integer)",
-                                    v.get_real_class_name(&globals.store)
+                                    v.builtin_class_name(&globals.store)
                                 )));
                             } else {
                                 let n = v.coerce_to_int_i64(vm, globals)?;

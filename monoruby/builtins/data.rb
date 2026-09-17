@@ -13,7 +13,7 @@ class Data
       case m
       when Symbol then m
       when String then m.to_sym
-      else raise TypeError, "#{m} is not a symbol"
+      else raise TypeError, "#{m.inspect} is not a symbol nor a string"
       end
     end
     seen = {}
@@ -96,11 +96,11 @@ class Data
           if k.respond_to?(:to_str)
             s = k.to_str
             unless s.is_a?(::String)
-              raise TypeError, "can't convert #{k.class} into String"
+              raise TypeError, "can't convert #{__builtin_class_name(k)} into String"
             end
             [s.to_sym, s]
           else
-            raise TypeError, "#{k} is not a symbol nor a string"
+            raise TypeError, "#{k.inspect} is not a symbol nor a string"
           end
         end
       break unless ms.include?(sym)
@@ -157,10 +157,10 @@ class Data
     else
       if k.respond_to?(:to_str)
         s = k.to_str
-        raise TypeError, "can't convert #{k.class} into String" unless s.is_a?(String)
+        raise TypeError, "can't convert #{__builtin_class_name(k)} into String" unless s.is_a?(String)
         [s.to_sym, s.inspect]
       else
-        raise TypeError, "#{k} is not a symbol nor a string"
+        raise TypeError, "#{k.inspect} is not a symbol nor a string"
       end
     end
   end

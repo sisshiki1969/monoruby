@@ -816,7 +816,7 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         } else {
             Err(MonorubyErr::typeerr(format!(
                 "wrong argument type {} (expected MatchData)",
-                val.get_real_class_name(&globals.store)
+                val.builtin_class_name(&globals.store)
             )))
         }
     }

@@ -135,7 +135,7 @@ fn validate_storage(globals: &Globals, hash: Value) -> Result<()> {
     let Some(h) = hash.try_hash_ty() else {
         return Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into Hash",
-            hash.get_real_class_name(&globals.store)
+            hash.builtin_class_name(&globals.store)
         )));
     };
     if hash.is_frozen() {
@@ -145,7 +145,7 @@ fn validate_storage(globals: &Globals, hash: Value) -> Result<()> {
         if k.try_symbol().is_none() {
             return Err(MonorubyErr::typeerr(format!(
                 "wrong argument type {} (expected Symbol)",
-                k.get_real_class_name(&globals.store)
+                k.builtin_class_name(&globals.store)
             )));
         }
     }
@@ -163,10 +163,7 @@ fn storage_key(vm: &mut Executor, globals: &mut Globals, key: Value) -> Result<V
         let id = key.coerce_to_symbol_or_string(vm, globals)?;
         return Ok(Value::symbol(id));
     }
-    Err(MonorubyErr::typeerr(format!(
-        "wrong argument type {} (expected Symbol)",
-        key.get_real_class_name(&globals.store)
-    )))
+    Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, key))
 }
 
 ///

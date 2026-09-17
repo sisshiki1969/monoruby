@@ -270,12 +270,7 @@ macro_rules! cmp_values {
                                 return None;
                             }
                         }
-                        let err = MonorubyErr::argumenterr(format!(
-                            "comparison of {} with {} failed",
-                            lhs.get_real_class_name(globals),
-                            rhs.get_real_class_name(globals),
-                        ));
-                        vm.set_error(err);
+                        vm.set_error(cmperr(&globals.store, lhs, rhs));
                         return None;
                     }
 
@@ -305,12 +300,7 @@ macro_rules! cmp_values {
                                 return None;
                             }
                         }
-                        let err = MonorubyErr::argumenterr(format!(
-                            "comparison of {} with {} failed",
-                            lhs.get_real_class_name(globals),
-                            rhs.get_real_class_name(globals),
-                        ));
-                        vm.set_error(err);
+                        vm.set_error(cmperr(&globals.store, lhs, rhs));
                         return None;
                     }
                     _ => {

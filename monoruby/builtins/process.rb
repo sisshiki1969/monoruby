@@ -9,7 +9,7 @@ module Process
   def self.detach(pid)
     unless pid.is_a?(Integer)
       unless pid.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{pid.nil? ? "nil" : pid.class} into Integer"
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(pid)} into Integer"
       end
       converted = pid.to_int
       unless converted.is_a?(Integer)
