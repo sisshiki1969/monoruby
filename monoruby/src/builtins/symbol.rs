@@ -27,7 +27,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "=~", sym_match_op, 1);
     globals.define_builtin_funcs_with(SYMBOL_CLASS, "[]", &["slice"], sym_aref, 1, 2, false);
     globals.define_builtin_func_with(SYMBOL_CLASS, "match", sym_match, 1, 2, false);
-    globals.define_builtin_func_rest(SYMBOL_CLASS, "start_with?", sym_start_with);
+    globals.define_builtin_func_variadic(SYMBOL_CLASS, "start_with?", sym_start_with, 0);
+    globals.define_builtin_func_variadic(SYMBOL_CLASS, "end_with?", sym_end_with, 0);
     // Symbol.new is undefined (raises NoMethodError). Insert the undef
     // tombstone directly: `Class#new` is now the Ruby trampoline defined
     // later by startup.rb, so there is no `new` to look up yet — but the
@@ -51,7 +52,15 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/to_s.html]
 #[monoruby_builtin]
 fn sym_to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let sym = lfp.self_val().as_symbol();
+    let inner = symbol_string_inner(lfp.self_val().as_symbol());
+    let mut result = Value::string_from_inner(inner);
+    result.set_chilled();
+    Ok(result)
+}
+
+/// The String content of `Symbol#to_s`, without the object: the name's
+/// bytes under the symbol's encoding.
+pub(crate) fn symbol_string_inner(sym: IdentId) -> RStringInner {
     let ident_name = sym.get_ident_name_clone();
     let (bytes, default_enc) = match &ident_name {
         IdentName::Utf8(s) => {
@@ -67,10 +76,7 @@ fn sym_to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
     // A recorded source encoding (set by `String#to_sym` for
     // UTF-16/32 etc.) overrides the byte-derived default.
     let enc = sym.symbol_encoding().unwrap_or(default_enc);
-    let inner = RStringInner::from_encoding(bytes, enc);
-    let mut result = Value::string_from_inner(inner);
-    result.set_chilled();
-    Ok(result)
+    RStringInner::from_encoding(bytes, enc)
 }
 
 ///
@@ -210,8 +216,9 @@ fn sym_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// - start_with?(*prefixes) -> bool
 ///
-/// Delegates to `to_s.start_with?(*prefixes)`; native so a Regexp
-/// prefix sets `$~` on the caller.
+/// `to_s.start_with?(*prefixes)` run directly on the name's bytes (no
+/// String, no rest Array); native so a Regexp prefix sets `$~` on the
+/// caller.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/start_with=3f.html]
 #[monoruby_builtin]
@@ -221,9 +228,30 @@ fn sym_start_with(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let s = sym_self_string(vm, globals, lfp.self_val())?;
-    let args: Vec<Value> = lfp.arg(0).as_array().iter().cloned().collect();
-    vm.invoke_method_inner(globals, IdentId::get_id("start_with?"), s, &args, None, None)
+    let inner = symbol_string_inner(lfp.self_val().as_symbol());
+    let args = lfp.variadic_args();
+    crate::builtins::string::string_start_with(vm, globals, &inner, &args)
+}
+
+///
+/// ### Symbol#end_with?
+///
+/// - end_with?(*suffixes) -> bool
+///
+/// `to_s.end_with?(*suffixes)` run directly on the name's bytes. Hot in
+/// Rails (`name.end_with?("=")` in attribute and option dispatch).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/end_with=3f.html]
+#[monoruby_builtin]
+fn sym_end_with(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let inner = symbol_string_inner(lfp.self_val().as_symbol());
+    let args = lfp.variadic_args();
+    crate::builtins::string::string_end_with(vm, globals, &inner, &args)
 }
 
 ///

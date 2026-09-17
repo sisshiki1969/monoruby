@@ -1420,6 +1420,10 @@ pub(crate) struct ParamsInfo {
     /// `true` for `**nil` — the definition explicitly accepts no keywords,
     /// so passing any keyword raises `ArgumentError("no keywords accepted")`.
     forbid_keyword: bool,
+    /// A variadic native (`define_builtin_func_variadic`): its rest slot
+    /// is left `None` when nothing overflows the `VARIADIC_CAP` fixed
+    /// slots, instead of an empty Array — see `Lfp::variadic_args`.
+    native_rest_optional: bool,
 }
 
 impl ParamsInfo {
@@ -1439,6 +1443,7 @@ impl ParamsInfo {
         forbid_keyword: bool,
     ) -> Self {
         ParamsInfo {
+            native_rest_optional: false,
             required_num,
             optional_num,
             rest,
@@ -1472,6 +1477,7 @@ impl ParamsInfo {
 
     pub fn new_attr_writer() -> Self {
         ParamsInfo {
+            native_rest_optional: false,
             required_num: 1,
             optional_num: 0,
             rest: None,
@@ -1498,6 +1504,7 @@ impl ParamsInfo {
         let mut p = max;
         let kw_num = kw_names.len();
         ParamsInfo {
+            native_rest_optional: false,
             required_num: min,
             optional_num: max - min,
             rest: if rest {
@@ -1587,6 +1594,15 @@ impl ParamsInfo {
     ///
     pub fn is_rest(&self) -> Option<u16> {
         self.rest.map(|i| i as u16)
+    }
+
+    /// See the `native_rest_optional` field.
+    pub(crate) fn native_rest_optional(&self) -> bool {
+        self.native_rest_optional
+    }
+
+    pub(crate) fn set_native_rest_optional(&mut self) {
+        self.native_rest_optional = true;
     }
 
     /// Like `is_rest`, but only returns the position when `rest` is

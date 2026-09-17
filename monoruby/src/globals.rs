@@ -875,12 +875,24 @@ impl Globals {
         );
         assert_eq!(
             SYMBOL_TO_PROC_BODY_FUNCID,
-            globals.define_builtin_func_with(OBJECT_CLASS, "", symbol_to_proc_body, 1, 1, true)
+            globals.define_builtin_func_variadic(OBJECT_CLASS, "", symbol_to_proc_body, 1)
         );
-        assert_eq!(
-            METHOD_TO_PROC_BODY_FUNCID,
-            globals.define_builtin_func_rest(OBJECT_CLASS, "", method_to_proc_body)
-        );
+        assert_eq!(METHOD_TO_PROC_BODY_FUNCID, {
+            // `(*args, **kw, &blk)`: keywords reach the method as keywords.
+            let fid = globals.define_builtin_funcs_with_kw(
+                OBJECT_CLASS,
+                "",
+                &[],
+                method_to_proc_body,
+                0,
+                crate::executor::frame::VARIADIC_CAP,
+                true,
+                &[],
+                true,
+            );
+            globals.store[fid].set_native_variadic();
+            fid
+        });
         assert_eq!(
             PROC_CURRY_BODY_FUNCID,
             globals.define_builtin_func_rest(

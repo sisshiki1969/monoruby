@@ -348,23 +348,25 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         crate::builtins::send,
         inline_gen2!(crate::builtins::object_send),
         0,
-        0,
+        crate::executor::frame::VARIADIC_CAP,
         true,
         &[],
         true,
     );
+    globals.store[send_fid].set_native_variadic();
     globals.store.record_object_send_fid(send_fid);
-    globals.define_builtin_funcs_with_kw(
+    let public_send_fid = globals.define_builtin_funcs_with_kw(
         kernel_class,
         "public_send",
         &[],
         public_send,
         0,
-        0,
+        crate::executor::frame::VARIADIC_CAP,
         true,
         &[],
         true,
     );
+    globals.store[public_send_fid].set_native_variadic();
     globals.define_builtin_func(kernel_class, "method", method, 1);
     globals.define_builtin_func(kernel_class, "public_method", public_method, 1);
     globals.define_builtin_func(kernel_class, "singleton_method", singleton_method, 1);
@@ -4619,11 +4621,11 @@ fn public_send(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let ary = lfp.arg(0).as_array();
-    if ary.len() < 1 {
-        return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
+    let args = lfp.variadic_args();
+    if args.is_empty() {
+        return Err(MonorubyErr::argumenterr("no method name given"));
     }
-    let method = ary[0].expect_symbol_or_string(globals)?;
+    let method = args[0].expect_symbol_or_string(globals)?;
     let receiver = lfp.self_val();
     // public_send only allows public methods. Both private and protected
     // are rejected unconditionally — unlike an ordinary call, where a
@@ -4645,9 +4647,9 @@ fn public_send(
             Visibility::Private | Visibility::Protected
         )
     {
-        let mut mm_args = Vec::with_capacity(ary.len());
+        let mut mm_args = Vec::with_capacity(args.len());
         mm_args.push(Value::symbol(method));
-        mm_args.extend_from_slice(&ary[1..]);
+        mm_args.extend_from_slice(&args[1..]);
         vm.reset_method_missing_vcall();
         return vm.invoke_method_inner(
             globals,
@@ -4662,7 +4664,7 @@ fn public_send(
         globals,
         method,
         receiver,
-        &ary[1..],
+        &args[1..],
         lfp.block(),
         forwarded_kw_hash(lfp),
     )
@@ -4672,7 +4674,7 @@ fn public_send(
 /// Hash the call site collected, dropped when empty so the callee does
 /// not see an empty keyword split.
 fn forwarded_kw_hash(lfp: Lfp) -> Option<Hashmap> {
-    if let Some(kw) = lfp.try_arg(1)
+    if let Some(kw) = lfp.variadic_kw()
         && let Some(kw) = kw.try_hash_ty()
         && !kw.is_empty()
     {
@@ -4689,18 +4691,18 @@ pub(crate) fn send(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let ary = lfp.arg(0).as_array();
-    if ary.len() < 1 {
-        return Err(MonorubyErr::wrong_number_of_arg_min(ary.len(), 1));
+    let args = lfp.variadic_args();
+    if args.is_empty() {
+        return Err(MonorubyErr::argumenterr("no method name given"));
     }
-    let method = ary[0].expect_symbol_or_string(globals)?;
+    let method = args[0].expect_symbol_or_string(globals)?;
     vm.invoke_method_inner(
         globals,
         method,
         lfp.self_val(),
-        &ary[1..],
+        &args[1..],
         lfp.block(),
-        if let Some(kw) = lfp.try_arg(1)
+        if let Some(kw) = lfp.variadic_kw()
             && let Some(kw) = kw.try_hash_ty()
             && !kw.is_empty()
         {
@@ -8542,6 +8544,39 @@ mod tests {
     /// the semantics that rewrite has to keep. Every loop is long enough
     /// that the site is JIT-compiled inside a single evaluation.
     ///
+    #[test]
+    fn variadic_native_arguments() {
+        // Natives declared `define_builtin_func_variadic` take their
+        // positionals in `VARIADIC_CAP` fixed slots and box only an
+        // overflow (`Lfp::variadic_args`): every arity around the cap,
+        // with keywords, a block, and through the Symbol#to_proc fast
+        // path, against CRuby with the JIT warm.
+        run_tests(&[
+            r##"big = Array.new(13) { |i| "x#{i}" }; ["abc".start_with?, "abc".start_with?("ab"), "abc".start_with?(*Array.new(7, "zz"), "a"), "abc".start_with?(*Array.new(8, "zz"), "a"), "abc".start_with?(*big, "ab"), "abc".start_with?(*big)]"##,
+            r##"r = "abc".start_with?(/a(b)/); [r, $~[1]]"##,
+            r##"["abc".end_with?, "abc".end_with?("bc"), "abc".end_with?(*Array.new(8, "zz"), "c"), "abc".end_with?(*Array.new(12, "zz"), "c"), "abc".end_with?(*Array.new(12, "zz"))]"##,
+            r##"begin; "abc".end_with?(/c/); rescue => e; e.class; end"##,
+            r##"begin; "abc".end_with?(1); rescue => e; e.class; end"##,
+            r##"begin; "a\xff".b.end_with?("é"); rescue => e; e.class; end"##,
+            r##"[:abc.start_with?("a", "zz"), :abc.start_with?(*Array.new(8, "zz"), "a"), :abc.start_with?, :abc.end_with?("c"), :abc.end_with?, :abc.end_with?(*Array.new(8, "zz"), "c"), :abc.end_with?(*Array.new(12, "zz"), "c"), :"é=".end_with?("="), :"é=".end_with?("é")]"##,
+            r##"r = :abc.start_with?(/a(b)/); [r, $~[1]]"##,
+            r##"begin; :abc.end_with?(/c/); rescue => e; e.class; end"##,
+            r##"class VC; def m(*a, **k, &b) = [a, k, b&.call]; private def priv(x) = x * 2; def method_missing(n, *a) = [:mm, n, a]; end; c = VC.new; [c.send(:m), c.send(:m, *(1..8)), c.send(:m, *(1..12)), c.send(:m, 1, a: 2), c.send(:m, 1) { 42 }, c.send(:priv, 3), c.send("priv", 4), c.send(:nope, 1, 2), c.__send__(:m, *(1..8), z: 1)]"##,
+            r##"class VD; def m(*a, **k) = [a, k]; private def priv(x) = x; def method_missing(n, *a) = [:mm, n, a]; end; c = VD.new; [c.public_send(:m, 1, 2), c.public_send(:m, *(1..9)), c.public_send(:priv, 3), c.public_send(:m, k: 1)]"##,
+            r##"c = Object.new; begin; c.send; rescue => e; [e.class, e.message]; end"##,
+            r##"c = Object.new; begin; c.public_send; rescue => e; [e.class, e.message]; end"##,
+            r##"class VB < BasicObject; def hi(*a, **k) = [:hi, a, k]; end; b = VB.new; [b.__send__(:hi), b.__send__(:hi, *(1..9)), b.__send__(:hi, 1, k: 2)]"##,
+            r##"c = Object.new; [c.instance_exec { self.class }, c.instance_exec(1, 2, 3) { |*a| a }, c.instance_exec(*(1..9)) { |*a| a }, c.instance_exec(*(1..13)) { |a, *b, z| [a, b.size, z] }]"##,
+            r##"pr = proc { |*a, **k| [a, k] }; [pr.call, pr.call(1, 2), pr.call(*(1..9)), pr.call(*(1..13)), pr.call(1, k: 2), pr[*(1..9)], pr.yield(1, 2), pr === 5, pr.call({ a: 1 })]"##,
+            r##"l = lambda { |a, b = 2, *c| [a, b, c] }; [l.call(1), l.call(*(1..9)), (l.call rescue $!.class)]"##,
+            r##"class VE; def m(*a, **k, &b) = [a, k, b&.call]; end; c = VE.new; [:+.to_proc.call(1, 2), :m.to_proc.call(c, *(1..8)), :m.to_proc.call(c, *(1..12)), :m.to_proc.call(c, 1, k: 2), :m.to_proc.call(c, 1) { 7 }, (:m.to_proc.call rescue $!.class)]"##,
+            // The `&:sym` and `&method(:m)` bodies through yield, map and
+            // call, with keywords, and what they report as parameters.
+            r##"class VF; def m(*a, **k, &b) = [a, k, b&.call]; def mm = 1; end; c = VF.new; def vf_y(&b) = yield(VF.new, *(1..9)); def vf_y0(&b) = yield; [[1, 2, 3].map(&:to_s), [[1, 2]].map(&:first), vf_y(&:m), (vf_y0(&:to_s) rescue $!.class), :m.to_proc.curry(2)[c][1], [c].map(&:m), :m.to_proc.arity, :m.to_proc.parameters, :m.to_proc.lambda?, "".method(:end_with?).parameters, "".method(:end_with?).arity, :abc.method(:end_with?).arity]"##,
+            r##"class VG; def m(*a, **k, &b) = [a, k, b&.call]; def mm = 1; end; c = VG.new; def vg_y2(&b) = yield(1, 2, 3); o = Object.new; def o.method_missing(n, *a, **k) = [n, a, k]; def o.respond_to_missing?(*) = true; [c.method(:mm).to_proc.call, c.method(:m).to_proc.call(1, 2), c.method(:m).to_proc.call(*(1..9)), c.method(:m).to_proc.call(*(1..13)), c.method(:m).to_proc.call(1, k: 2), c.method(:m).to_proc.call(1) { 5 }, [1, 2].map(&c.method(:m)), vg_y2(&c.method(:m)), o.method(:zz).to_proc.call(1, 2), o.method(:zz).to_proc.call(1, k: 3), c.method(:m).to_proc.arity, c.method(:m).to_proc.parameters, c.method(:m).to_proc.lambda?]"##,
+        ]);
+    }
+
     #[test]
     fn object_send_literal_name() {
         // What `send` is for: private and protected targets, plus an

@@ -1101,6 +1101,12 @@ fn fill_positional_args(
     memcpy(dst, slice0.0, buf_ptr, slice0.1, upward);
     memcpy(dst, slice1.0, buf_ptr, slice1.1, upward);
     if let Some(rest_pos) = callee.rest_pos() {
+        // A variadic native takes an empty overflow as `None` (see
+        // `Lfp::variadic_args`), not as an Array it would never read.
+        if rest.is_empty() && callee.native_rest_optional() {
+            unsafe { *dst.sub(rest_pos as usize) = None };
+            return Ok(());
+        }
         let ary = unsafe {
             if upward {
                 // One `memcpy` into exact-capacity storage.

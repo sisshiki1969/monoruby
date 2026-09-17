@@ -4,6 +4,8 @@ class Symbol
   # `[]` / `slice`, `=~`, `match`, `start_with?` are native (see
   # builtins/symbol.rs): they must set the frame-local `$~` on the
   # *caller's* LEP, which a pure-Ruby `to_s`-delegation can't do.
+  # `end_with?` is native too, for speed: it runs on the name's bytes
+  # without a String or a rest Array.
 
   def size
     to_s.size
@@ -31,10 +33,6 @@ class Symbol
 
   def swapcase
     to_s.swapcase.to_sym
-  end
-
-  def end_with?(*args)
-    to_s.end_with?(*args)
   end
 
   def encoding
