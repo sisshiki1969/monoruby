@@ -491,8 +491,18 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// reverse dispatch. This basic op shortcuts the dispatch but must
 /// keep that negation exact — a strict byte-compare here diverges for
 /// a rhs that defines both `to_str` and a custom `==`.
+///
+/// The receiver side has the same obligation: an instance of a String
+/// subclass negates *its own* `==` (`BCrypt::Password#==` hashes the
+/// other side first), which the JIT reaches through this body when
+/// `!=` resolves here for the subclass.
 #[monoruby_builtin]
 fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if self_.class() != STRING_CLASS {
+        let eq = vm.eq_values_vis(globals, self_, lfp.arg(0), true)?;
+        return Ok(Value::bool(!eq.as_bool()));
+    }
     Ok(Value::bool(!string_eq_bool(vm, globals, lfp)?))
 }
 

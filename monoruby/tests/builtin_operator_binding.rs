@@ -178,3 +178,30 @@ fn sort_still_dispatches_the_users_spaceship() {
         "#,
     );
 }
+
+/// A String subclass's own `==` wins over the inline fast path. CRuby's
+/// `opt_eq` only takes the string comparison when both sides are exactly
+/// `String`; monoruby's VM and JIT `==` helpers checked the BOP table
+/// (which tracks `String#==` itself) and then compared the bytes, so a
+/// subclass's redefinition — `BCrypt::Password#==`, which hashes the
+/// other side before comparing — was never called.
+#[test]
+fn string_subclass_eq_is_dispatched() {
+    run_test(
+        r##"
+        class S < String
+          def ==(o)
+            super(o.to_s.upcase)
+          end
+        end
+        class T < String; end
+        s = S.new("A")
+        t = T.new("A")
+        r = []
+        10.times do
+          r << [s == "a", s == "A", s == "b", "a" == s, t == "A", t == "a", s == t, s != "a", s.eql?("a")]
+        end
+        r.uniq
+        "##,
+    );
+}

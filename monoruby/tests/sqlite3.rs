@@ -892,3 +892,63 @@ fn sqlite3_aggregate_group_state() {
         "##,
     );
 }
+
+/// `SQLite3::Backup` (the online-backup API Lobsters uses to load a file
+/// database into an in-memory one): `step(-1)` copies everything at once,
+/// `remaining` / `pagecount` track the pages, `finish` closes the handle,
+/// a stepwise copy with `step(1)` finishes with `DONE`, and the errors
+/// for an unknown schema name, the same connection on both sides and a
+/// finished backup.
+#[test]
+fn sqlite3_backup() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        require "tmpdir"
+        res = []
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "src.sqlite3")
+          src = SQLite3::Database.new(path)
+          src.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+          src.execute("INSERT INTO t VALUES (1, 'x'), (2, 'y')")
+          src.execute("CREATE TABLE big (v BLOB)")
+          20.times { src.execute("INSERT INTO big VALUES (?)", [SQLite3::Blob.new("z" * 4096)]) }
+          src.close
+          file_db = SQLite3::Database.new(path)
+          mem_db = SQLite3::Database.new(":memory:")
+          b = SQLite3::Backup.new(mem_db, "main", file_db, "main")
+          res << [b.class.name, b.remaining, b.pagecount]
+          rc = b.step(-1)
+          res << [rc, rc == SQLite3::Constants::ErrorCode::DONE, b.remaining, b.pagecount > 0]
+          res << b.finish
+          res << mem_db.execute("SELECT * FROM t ORDER BY id")
+          res << mem_db.get_first_value("SELECT count(*) FROM big")
+          probe = lambda { |&blk| begin; blk.call; rescue => e; [e.class.name, e.message]; end }
+          res << probe.call { b.step(1) }
+          res << probe.call { b.remaining }
+          mem2 = SQLite3::Database.new(":memory:")
+          b2 = SQLite3::Backup.new(mem2, "main", file_db, "main")
+          steps = []
+          while (rc = b2.step(1)) == SQLite3::Constants::ErrorCode::OK
+            steps << [b2.remaining < b2.pagecount, b2.pagecount]
+          end
+          res << [rc, steps.size > 1, steps.map(&:first).uniq, steps.map(&:last).uniq.size]
+          b2.finish
+          res << mem2.execute("SELECT name FROM t ORDER BY id").flatten
+          res << probe.call { SQLite3::Backup.new(mem2, "nope", file_db, "main") }
+          res << probe.call { SQLite3::Backup.new(file_db, "main", file_db, "main") }
+          res << probe.call { SQLite3::Backup.new(mem2, "main", file_db, "main", 1) }
+          res << probe.call { SQLite3::Backup.new("x", "main", file_db, "main") }
+          # Backing up into a database that is already read from is fine.
+          mem2.execute("DROP TABLE t")
+          b3 = SQLite3::Backup.new(mem2, "main", file_db, "main")
+          res << [b3.step(-1) == SQLite3::Constants::ErrorCode::DONE, b3.finish, mem2.execute("SELECT count(*) FROM t")]
+          file_db.close
+          mem_db.close
+          mem2.close
+        end
+        res
+        "##,
+    );
+}
