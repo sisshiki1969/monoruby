@@ -74,6 +74,18 @@ pub struct CharByteIter<'a> {
     encoding: Encoding,
 }
 
+/// The byte width of the character of `encoding` starting at
+/// `bytes[pos]` (1 for a byte past the end or a malformed lead), and
+/// the number of characters in `bytes` — the two boundary questions the
+/// byte-offset pattern walkers (`Subject`) ask of a non-UTF-8 subject.
+pub(crate) fn char_width_at(encoding: Encoding, bytes: &[u8], pos: usize) -> usize {
+    CharByteIter { bytes, pos, encoding }.next().map_or(1, |c| c.len())
+}
+
+pub(crate) fn char_count(encoding: Encoding, bytes: &[u8]) -> usize {
+    CharByteIter { bytes, pos: 0, encoding }.count()
+}
+
 impl<'a> Iterator for CharByteIter<'a> {
     type Item = &'a [u8];
 
@@ -2358,8 +2370,9 @@ impl RStringInner {
         RStringInner::from(SmallVec::from_vec(self.as_bytes().repeat(len)), self.ty, cr)
     }
 
-    /// Apply a set of non-overlapping replacements to `given` (a valid
-    /// UTF-8 haystack) in a single forward pass, producing a fresh
+    /// Apply a set of non-overlapping replacements to the haystack
+    /// `bytes` (in encoding `given_enc`; `given_7bit` says it is
+    /// ASCII-only) in a single forward pass, producing a fresh
     /// `RStringInner`. `replacements` must be sorted by start position
     /// and non-overlapping — `gsub`/`sub` collect them that way.
     ///
@@ -2367,24 +2380,20 @@ impl RStringInner {
     /// O(`given` · matches) you get from applying each replacement with
     /// an individual buffer-shifting `bytesplice_with` (which `copy_within`s
     /// the tail every time — quadratic in the match count). Each
-    /// replacement is still encoding-compatibility-checked against the
-    /// haystack, raising `Encoding::CompatibilityError` to preserve the
-    /// per-splice behaviour. The result is tagged UTF-8 with a lazy code
-    /// range because every `gsub`/`sub` caller re-tags the encoding
-    /// afterward via `apply_template_encoding` (which resets the cr).
+    /// replacement is still encoding-compatibility-checked, raising
+    /// `Encoding::CompatibilityError` where the pieces cannot share an
+    /// encoding. The result's code range is lazy.
     pub fn splice_all(
         store: &Store,
-        given: &str,
+        bytes: &[u8],
+        given_enc: Encoding,
+        given_7bit: bool,
         replacements: &[(std::ops::Range<usize>, RStringInner)],
     ) -> Result<RStringInner> {
-        // The haystack drives the compat check, exactly as the old
-        // `res = from_str_scanned(given)` receiver did.
-        let given_inner = RStringInner::from_str_scanned(given);
-        let bytes = given.as_bytes();
         // Final length is non-negative (ranges are within `given` and
         // non-overlapping), but the running sum can dip, so compute in
         // signed space.
-        let cap = (given.len() as i64
+        let cap = (bytes.len() as i64
             + replacements
                 .iter()
                 .map(|(r, rep)| rep.len() as i64 - (r.end - r.start) as i64)
@@ -2400,8 +2409,6 @@ impl RStringInner {
         // UTF-8 whatever 7-bit replacement it takes — and a later
         // non-ASCII piece in another encoding cannot fit
         // (`Encoding::CompatibilityError`).
-        let given_enc = given_inner.encoding();
-        let given_7bit = given_inner.is_ascii_only();
         let mut enc = given_enc;
         let mut seven_bit = true;
         let mut append = |piece: &[u8], piece_enc: Encoding, piece_7bit: bool| -> Result<()> {

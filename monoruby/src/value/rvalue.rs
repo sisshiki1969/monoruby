@@ -34,6 +34,7 @@ pub use proc::*;
 pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, RangeInner};
 pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
+pub(crate) use regexp::{Spans, Subject, save_spans, spans_of};
 pub(crate) use string::pack::*;
 pub use string::{
     CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET,
@@ -43,7 +44,9 @@ pub(crate) use string::{
     STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer,
     string_snapshot, string_substring,
 };
-pub(crate) use string::{eucjp_char_width, named_byte_const_name, sjis_char_width};
+pub(crate) use string::{
+    char_count, char_width_at, eucjp_char_width, named_byte_const_name, sjis_char_width,
+};
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
 pub use thread::*;
 

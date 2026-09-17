@@ -154,6 +154,22 @@ impl MatchDataInner {
         }
     }
 
+    /// As `from_captures_bytes`, from group spans read out of a
+    /// caller-owned onigmo `Region` over `heystack`'s raw bytes.
+    pub fn from_spans_bytes(spans: &[Option<(usize, usize)>], heystack: Value) -> Self {
+        let len = heystack.as_rstring_inner().as_bytes().len();
+        assert!(
+            len < u32::MAX as usize,
+            "match subject longer than 4GiB is not supported"
+        );
+        MatchDataInner {
+            regex: None,
+            heystack: string_substring(heystack, 0, len),
+            matches: spans.iter().map(|m| encode_span(*m)).collect(),
+            pattern: None,
+        }
+    }
+
     /// `from_captures_snap` without a haystack Value (always copies).
     pub fn from_captures(captures: &Captures, heystack: &str) -> Self {
         Self::from_captures_snap(captures, heystack, None)

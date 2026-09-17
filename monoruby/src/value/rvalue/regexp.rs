@@ -1268,6 +1268,265 @@ fn view_slice(given: &str, range: std::ops::Range<usize>) -> std::borrow::Cow<'_
     }
 }
 
+/// The group spans of one match: byte offsets into the subject.
+pub(crate) type Spans = smallvec::SmallVec<[Option<(usize, usize)>; 4]>;
+
+/// What the iterating and slicing pattern operations (`scan`, `split`,
+/// `sub` / `gsub`, `slice`, `index`, …) walk: the bytes the engine sees
+/// and the coordinate system every span is in.
+///
+/// - Text: a UTF-8 `&str` — the subject's own bytes (UTF-8 / US-ASCII /
+///   ASCII-only content), or, for a byte-oriented encoding Onigmo has
+///   no codec for, `regex_view`'s surrogate image (`mapped`), which the
+///   caller decodes back to bytes with `from_mapped_utf8`.
+/// - Bytes: the raw bytes of a byte-oriented subject with 8-bit content
+///   (BINARY, Shift_JIS, EUC-JP, ISO-8859-x, …), matched by the source
+///   compiled under Onigmo's codec for that encoding (`native_regex`),
+///   so `/[^a-z]/n` over `"a\xffb".b` matches the one byte 0xFF and a
+///   span is a byte range of the subject itself (#1377). The same path
+///   `String#match` takes.
+pub(crate) struct Subject<'a> {
+    bytes: &'a [u8],
+    text: Option<&'a str>,
+    /// The subject's own encoding — what the chunks cut from it carry.
+    enc: crate::value::Encoding,
+    /// A text subject that is the surrogate image of a byte-oriented
+    /// subject without a codec.
+    mapped: bool,
+    native: Option<OnigmoEncoding>,
+    ascii: bool,
+}
+
+impl<'a> Subject<'a> {
+    /// A text subject of a string in encoding `enc`; `mapped` when `s`
+    /// is its surrogate image rather than its own bytes.
+    pub(crate) fn text(s: &'a str, enc: crate::value::Encoding, mapped: bool) -> Self {
+        Subject {
+            bytes: s.as_bytes(),
+            text: Some(s),
+            enc,
+            mapped,
+            native: None,
+            ascii: s.is_ascii(),
+        }
+    }
+
+    /// The raw bytes of `inner`, to be matched under `native`.
+    pub(crate) fn bytes(inner: &'a RStringInner, native: OnigmoEncoding) -> Self {
+        Subject {
+            bytes: inner.as_bytes(),
+            text: None,
+            enc: inner.encoding(),
+            mapped: false,
+            native: Some(native),
+            ascii: false,
+        }
+    }
+
+    pub(crate) fn as_bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub(crate) fn is_ascii(&self) -> bool {
+        self.ascii
+    }
+
+    /// The text of a text subject.
+    pub(crate) fn as_text(&self) -> Option<&'a str> {
+        self.text
+    }
+
+    /// Surrogate image of a byte-oriented subject without a codec.
+    pub(crate) fn mapped(&self) -> bool {
+        self.mapped
+    }
+
+    /// The encoding of the subject's own bytes.
+    pub(crate) fn encoding(&self) -> crate::value::Encoding {
+        self.enc
+    }
+
+    /// The encoding the walked bytes are in: UTF-8 for any text subject
+    /// (a surrogate image included), the subject's own otherwise.
+    pub(crate) fn view_encoding(&self) -> crate::value::Encoding {
+        if self.text.is_some() {
+            crate::value::Encoding::Utf8
+        } else {
+            self.enc
+        }
+    }
+
+    /// The byte index just past the character at `pos` (`pos < len`):
+    /// how a walk steps over an empty match.
+    pub(crate) fn next_char_boundary(&self, pos: usize) -> usize {
+        match self.text {
+            Some(s) => {
+                let mut next = pos + 1;
+                while next < s.len() && !s.is_char_boundary(next) {
+                    next += 1;
+                }
+                next
+            }
+            None => pos + crate::value::rvalue::char_width_at(self.enc, self.bytes, pos),
+        }
+    }
+
+    /// The byte offset every character starts at.
+    pub(crate) fn char_boundaries(&self) -> Vec<usize> {
+        match self.text {
+            Some(s) => s.char_indices().map(|(b, _)| b).collect(),
+            None => {
+                let mut v = vec![];
+                let mut off = 0;
+                while off < self.bytes.len() {
+                    v.push(off);
+                    off += crate::value::rvalue::char_width_at(self.enc, self.bytes, off);
+                }
+                v
+            }
+        }
+    }
+
+    /// The number of characters in `bytes[..pos]`.
+    pub(crate) fn char_index(&self, pos: usize) -> usize {
+        match self.text {
+            Some(s) => s[..pos].chars().count(),
+            None => crate::value::rvalue::char_count(self.enc, &self.bytes[..pos]),
+        }
+    }
+
+    /// The byte offset of character index `cp`, clamped to the end.
+    pub(crate) fn byte_offset(&self, cp: usize) -> usize {
+        match self.text {
+            Some(s) => s.char_indices().nth(cp).map_or(s.len(), |(b, _)| b),
+            None => {
+                let mut off = 0;
+                for _ in 0..cp {
+                    if off >= self.bytes.len() {
+                        break;
+                    }
+                    off += crate::value::rvalue::char_width_at(self.enc, self.bytes, off);
+                }
+                off.min(self.bytes.len())
+            }
+        }
+    }
+
+    /// `bytes[range]` as a String of the subject's own encoding: a
+    /// shared view of `owner` (the Value whose buffer `bytes` is, when
+    /// it is stable) or a copy; a surrogate image is decoded back.
+    pub(crate) fn chunk(&self, owner: Option<Value>, range: std::ops::Range<usize>) -> Value {
+        if self.mapped() {
+            let s = self.text.unwrap();
+            return Value::string_from_inner(RStringInner::from_mapped_utf8(
+                &view_slice(s, range),
+                self.enc,
+            ));
+        }
+        match owner {
+            Some(v) => string_substring(v, range.start, range.end),
+            None => Value::string_from_inner(RStringInner::from_encoding(
+                &self.bytes[range],
+                self.enc,
+            )),
+        }
+    }
+
+    /// The walked bytes as a fresh string, in `view_encoding`.
+    pub(crate) fn to_inner(&self) -> RStringInner {
+        match self.text {
+            Some(s) => RStringInner::from_str_scanned(s),
+            None => RStringInner::from_encoding_scanned(self.bytes, self.enc),
+        }
+    }
+}
+
+/// The group spans in `region` after a successful search.
+pub(crate) fn spans_of(region: &onigmo_regex::Region) -> Spans {
+    (0..region.len()).map(|i| region.pos(i)).collect()
+}
+
+/// Save `spans` (a match over `subject`) as `$~`; `owner` is the String
+/// Value whose bytes a byte subject walks.
+pub(crate) fn save_spans(vm: &mut Executor, subject: &Subject, spans: &[Option<(usize, usize)>], owner: Value) {
+    match subject.as_text() {
+        Some(s) => vm.save_capture_spans(spans, s),
+        None => vm.save_capture_spans_bytes(spans, owner),
+    }
+}
+
+impl RegexpInner {
+    /// The byte subject for `inner` when it is a byte-oriented string
+    /// with 8-bit content and Onigmo has a codec for its encoding (after
+    /// the regexp/subject encoding check); `None` when the text path
+    /// (`regex_view`) applies.
+    ///
+    /// Only a real Regexp takes this path (`regexp_pattern`): a pattern
+    /// coerced from a String was escaped from the String's surrogate
+    /// view, so its source is not the raw bytes a native compile needs.
+    pub(crate) fn native_subject<'a>(
+        &self,
+        inner: &'a RStringInner,
+        store: &Store,
+        regexp_pattern: bool,
+    ) -> Result<Option<Subject<'a>>> {
+        if !regexp_pattern || !inner.needs_byte_mapping() {
+            return Ok(None);
+        }
+        let Some(native) = Self::onigmo_encoding_for(inner.encoding()) else {
+            return Ok(None);
+        };
+        crate::builtins::check_match_encoding(store, self, inner.encoding(), false)?;
+        // CRuby refuses a regexp search over a broken string
+        // (`rb_reg_prepare_re`: "invalid byte sequence").
+        if !inner.is_valid_encoding() {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid byte sequence in {}",
+                inner.encoding().name()
+            )));
+        }
+        Ok(Some(Subject::bytes(inner, native)))
+    }
+
+    /// Search `subject` from byte offset `pos`, recording the match's
+    /// registers into `region`. Never touches `$~`.
+    pub(crate) fn find_spans(
+        &self,
+        subject: &Subject,
+        pos: usize,
+        region: &mut onigmo_regex::Region,
+    ) -> Result<bool> {
+        let r = match (subject.as_text(), subject.native) {
+            (Some(s), _) => self
+                .engine_for(s, Some(subject.is_ascii()))
+                .search_with_region(s.as_bytes(), pos, region),
+            (None, Some(enc)) => {
+                self.native_regex(enc)?
+                    .search_bytes(subject.as_bytes(), pos, subject.len(), Some(region))
+            }
+            (None, None) => unreachable!("a byte subject always has a codec"),
+        };
+        r.map(|r| r.is_some()).map_err(search_failed)
+    }
+
+    /// The position a walk continues from after the match `start..end`
+    /// found from `pos`: past a non-empty match, one character past an
+    /// empty one (past the end to terminate).
+    fn next_walk_pos(subject: &Subject, start: usize, end: usize) -> usize {
+        if end > start {
+            end
+        } else if start >= subject.len() {
+            subject.len() + 1
+        } else {
+            subject.next_char_boundary(start)
+        }
+    }
+}
+
 // Utility methods
 
 impl RegexpInner {
@@ -1306,66 +1565,68 @@ impl RegexpInner {
         f(&re, vm, globals)
     }
 
-    /// Replaces the leftmost-first match with `replace`.
+    /// Replaces the leftmost-first match with `replace`. `owner` is the
+    /// String Value `subject` walks (for `$~`).
     pub(crate) fn replace_one(
         vm: &mut Executor,
         globals: &mut Globals,
         re_val: Value,
-        given: &str,
+        subject: &Subject,
+        owner: Value,
         replace: &RStringInner,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
-            re.replace_once(vm, &globals.store, given, replace)
+            re.replace_once(vm, &globals.store, subject, owner, replace)
         })
-        .map(|(s, c)| (s, c.is_some()))
     }
 
-    /// `mapped_enc`: when the caller passed `given` in the
-    /// byte↔U+00XX surrogate space (`RStringInner::regex_view` of a
-    /// byte-oriented receiver), the receiver's encoding — used to
-    /// decode the matched chunk before yielding it to the block and
-    /// to forward-map the block's replacement back into that space.
+    /// Replaces the leftmost-first match with what the block answers for
+    /// it. `owner` is the String Value `subject` walks (for `$~`); the
+    /// matched chunk handed to the block is a copy, since the block may
+    /// mutate the receiver.
     pub(crate) fn replace_one_block(
         vm: &mut Executor,
         globals: &mut Globals,
         re_val: Value,
-        given: &str,
+        subject: &Subject,
+        owner: Value,
         bh: BlockHandler,
-        mapped_enc: Option<crate::value::Encoding>,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
-            match re.captures(given, vm)? {
-                None => Ok((RStringInner::from_str_scanned(given), false)),
-                Some(captures) => {
-                    let m = captures.get(0).unwrap();
-                    let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
-                    let matched = match mapped_enc {
-                        Some(enc) => Value::string_from_inner(
-                            RStringInner::from_mapped_utf8(matched_str, enc),
-                        ),
-                        None => Value::string_from_str(matched_str),
-                    };
-                    let result = vm.invoke_block_once(globals, bh, &[matched])?;
-                    let rep_inner =
-                        block_result_to_inner(vm, globals, result, mapped_enc.is_some())?;
-                    let res =
-                        RStringInner::splice_all(&globals.store, given, &[(start..end, rep_inner)])?;
-                    Ok((res, true))
-                }
+            let mut region = onigmo_regex::Region::new();
+            if !re.find_spans(subject, 0, &mut region)? {
+                vm.clear_capture_special_variables();
+                return Ok((subject.to_inner(), false));
             }
+            let spans = spans_of(&region);
+            let (start, end) = spans[0].unwrap();
+            save_spans(vm, subject, &spans, owner);
+            let matched = subject.chunk(None, start..end);
+            let result = vm.invoke_block_once(globals, bh, &[matched])?;
+            let rep_inner = block_result_to_inner(vm, globals, result, subject.mapped())?;
+            let res = RStringInner::splice_all(
+                &globals.store,
+                subject.as_bytes(),
+                subject.view_encoding(),
+                subject.is_ascii(),
+                &[(start..end, rep_inner)],
+            )?;
+            Ok((res, true))
         })
     }
 
-    /// Replaces all non-overlapping matches in `given` string with `replace`.
+    /// Replaces all non-overlapping matches in `subject` with `replace`.
+    /// `owner` is the String Value `subject` walks (for `$~`).
     pub(crate) fn replace_all(
         vm: &mut Executor,
         globals: &mut Globals,
         regexp: Value,
-        given: &str,
+        subject: &Subject,
+        owner: Value,
         replace: &RStringInner,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, regexp, |re, vm, globals| {
-            re.replace_repeat(vm, &globals.store, given, replace)
+            re.replace_repeat(vm, &globals.store, subject, owner, replace)
         })
     }
 
@@ -1392,24 +1653,40 @@ impl RegexpInner {
             // `gsub(/[^allowed]/) { … }` — then costs one copy of the
             // receiver instead of a frozen snapshot plus a splice.
             vm.clear_capture_special_variables();
+            let regexp_pattern = re_val.is_regex().is_some();
             let first = {
                 let inner = recv.as_rstring_inner();
-                let view = inner.regex_view()?;
-                let engine = re.engine_for(&view, Some(inner.is_ascii_only()));
-                match Self::captures_from_pos_no_save_with(engine, &view, 0)? {
+                let view;
+                let subject = match re.native_subject(inner, &globals.store, regexp_pattern)? {
+                    Some(subject) => subject,
+                    None => {
+                        view = inner.regex_view()?;
+                        Subject::text(&view, inner.encoding(), inner.needs_byte_mapping())
+                    }
+                };
+                let mut region = onigmo_regex::Region::new();
+                if !re.find_spans(&subject, 0, &mut region)? {
                     // What `splice_all` with no replacements would build.
-                    None => return Ok((RStringInner::from_str(&view), false)),
-                    // Nothing matches before this position, so the real
-                    // walk over the snapshot can start here instead of
-                    // repeating the scan from the beginning.
-                    Some(cap) => cap.get(0).unwrap().start(),
+                    return Ok((subject.to_inner(), false));
                 }
+                // Nothing matches before this position, so the real
+                // walk over the snapshot can start here instead of
+                // repeating the scan from the beginning.
+                region.pos(0).unwrap().0
             };
-            let subject = string_snapshot(recv);
+            let snapshot = string_snapshot(recv);
             let tmp = vm.temp_len();
-            vm.temp_push(subject);
-            let res =
-                re.replace_all_block_inner(vm, globals, subject, recv, bh, self_enc, first);
+            vm.temp_push(snapshot);
+            let res = re.replace_all_block_inner(
+                vm,
+                globals,
+                snapshot,
+                recv,
+                bh,
+                self_enc,
+                first,
+                regexp_pattern,
+            );
             vm.temp_clear(tmp);
             res
         })
@@ -1419,19 +1696,24 @@ impl RegexpInner {
         &self,
         vm: &mut Executor,
         globals: &mut Globals,
-        subject: Value,
+        snapshot: Value,
         recv: Value,
         bh: BlockHandler,
         self_enc: Option<crate::value::Encoding>,
         first: usize,
+        regexp_pattern: bool,
     ) -> Result<(RStringInner, bool)> {
-        // `subject` is frozen and temp-rooted by the caller, so `given`
-        // and the matched views stay valid across `invoke_block`.
-        let subject_inner = subject.as_rstring_inner();
-        let mapped = subject_inner.needs_byte_mapping();
-        let subject_enc = subject_inner.encoding();
-        let view = subject_inner.regex_view()?;
-        let given: &str = &view;
+        // `snapshot` is frozen and temp-rooted by the caller, so the
+        // subject and the matched views stay valid across `invoke_block`.
+        let inner = snapshot.as_rstring_inner();
+        let view;
+        let subject = match self.native_subject(inner, &globals.store, regexp_pattern)? {
+            Some(subject) => subject,
+            None => {
+                view = inner.regex_view()?;
+                Subject::text(&view, inner.encoding(), inner.needs_byte_mapping())
+            }
+        };
         let recv_len = recv.as_rstring_inner().len();
         let mut range = vec![];
         let data = vm.get_block_data(globals, bh)?;
@@ -1441,34 +1723,24 @@ impl RegexpInner {
         // (the caller's probe found nothing before it): an empty match
         // right where the previous match ended is skipped by one
         // character rather than looping forever.
-        let engine = self.engine_for(given, Some(given.is_ascii()));
+        let mut region = onigmo_regex::Region::new();
         let mut pos = first;
         let mut last_match_end: Option<usize> = None;
-        while pos <= given.len() {
-            let Some(cap) = Self::captures_from_pos_no_save_with(engine, given, pos)? else {
+        while pos <= subject.len() {
+            if !self.find_spans(&subject, pos, &mut region)? {
                 break;
-            };
-            let m = cap.get(0).unwrap();
-            if m.start() == m.end() && last_match_end == Some(m.end()) {
-                pos += given[pos..].chars().next().map_or(1, |c| c.len_utf8());
+            }
+            let spans = spans_of(&region);
+            let (start, end) = spans[0].unwrap();
+            if start == end && last_match_end == Some(end) {
+                pos = subject.next_char_boundary(pos);
                 continue;
             }
-            pos = m.end();
-            last_match_end = Some(m.end());
+            pos = end;
+            last_match_end = Some(end);
 
-            // In surrogate space the zero-copy substring view would
-            // carry mapped UTF-8 bytes at mapped offsets — decode the
-            // matched chunk back to the subject's own bytes/encoding
-            // for the block instead.
-            let matched = if mapped {
-                Value::string_from_inner(RStringInner::from_mapped_utf8(
-                    &view_slice(given, m.range()),
-                    subject_enc,
-                ))
-            } else {
-                string_substring(subject, m.start(), m.end())
-            };
-            vm.save_capture_special_variables(&cap, given);
+            let matched = subject.chunk(Some(snapshot), start..end);
+            save_spans(vm, &subject, &spans, snapshot);
             let result = vm.invoke_block(globals, &data, &[matched])?;
             check_string_not_modified(recv, recv_len)?;
             // CRuby raises Encoding::CompatibilityError if the
@@ -1486,48 +1758,55 @@ impl RegexpInner {
                     }
                 }
             }
-            let replace = block_result_to_inner(vm, globals, result, mapped)?;
+            let replace = block_result_to_inner(vm, globals, result, subject.mapped())?;
 
-            range.push((m.range(), replace));
+            range.push((start..end, replace));
         }
 
         let is_empty = range.is_empty();
-        let res = RStringInner::splice_all(&globals.store, given, &range)?;
+        let res = RStringInner::splice_all(
+            &globals.store,
+            subject.as_bytes(),
+            subject.view_encoding(),
+            subject.is_ascii(),
+            &range,
+        )?;
 
         Ok((res, !is_empty))
     }
 
-    /// Replaces the first match in `given` string using hash lookup.
-    /// For each match, the matched text is looked up as a key in the
-    /// hash via `Hash#[]` so that any user-defined `default` / `default_proc`
-    /// fires; values are coerced via `to_s`.
+    /// Replaces the first match in `subject` using hash lookup. The
+    /// matched text is looked up as a key in the hash via `Hash#[]` so
+    /// that any user-defined `default` / `default_proc` fires; values
+    /// are coerced via `to_s`. `owner` is the String Value `subject`
+    /// walks (for `$~`).
     pub(crate) fn replace_one_hash(
         vm: &mut Executor,
         globals: &mut Globals,
         re_val: Value,
-        given: &str,
+        subject: &Subject,
+        owner: Value,
         hash_val: Value,
-        mapped_enc: Option<crate::value::Encoding>,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
-            match re.captures(given, vm)? {
-                None => Ok((RStringInner::from_str_scanned(given), false)),
-                Some(captures) => {
-                    let m = captures.get(0).unwrap();
-                    let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
-                    let key = match mapped_enc {
-                        Some(enc) => Value::string_from_inner(
-                            RStringInner::from_mapped_utf8(matched_str, enc),
-                        ),
-                        None => Value::string_from_str(matched_str),
-                    };
-                    let rep_inner =
-                        lookup_hash_replacement(vm, globals, hash_val, key, mapped_enc.is_some())?;
-                    let res =
-                        RStringInner::splice_all(&globals.store, given, &[(start..end, rep_inner)])?;
-                    Ok((res, true))
-                }
+            let mut region = onigmo_regex::Region::new();
+            if !re.find_spans(subject, 0, &mut region)? {
+                vm.clear_capture_special_variables();
+                return Ok((subject.to_inner(), false));
             }
+            let spans = spans_of(&region);
+            let (start, end) = spans[0].unwrap();
+            save_spans(vm, subject, &spans, owner);
+            let key = subject.chunk(None, start..end);
+            let rep_inner = lookup_hash_replacement(vm, globals, hash_val, key, subject.mapped())?;
+            let res = RStringInner::splice_all(
+                &globals.store,
+                subject.as_bytes(),
+                subject.view_encoding(),
+                subject.is_ascii(),
+                &[(start..end, rep_inner)],
+            )?;
+            Ok((res, true))
         })
     }
 
@@ -1651,7 +1930,13 @@ impl RegexpInner {
                 last.push(Some((range.start, range.end)));
             }
             let is_empty = replacements.is_empty();
-            let res = RStringInner::splice_all(&globals.store, given, &replacements)?;
+            let res = RStringInner::splice_all(
+                &globals.store,
+                given.as_bytes(),
+                recv_inner.encoding(),
+                recv_inner.is_ascii_only(),
+                &replacements,
+            )?;
             if !is_empty {
                 vm.set_match_regex(self.backref_regexp(re_val));
                 vm.save_capture_spans(&last, given);
@@ -1698,7 +1983,13 @@ impl RegexpInner {
         }
 
         let is_empty = replacements.is_empty();
-        let res = RStringInner::splice_all(&globals.store, given, &replacements)?;
+        let res = RStringInner::splice_all(
+                &globals.store,
+                given.as_bytes(),
+                recv_inner.encoding(),
+                recv_inner.is_ascii_only(),
+                &replacements,
+            )?;
         if !is_empty {
             vm.set_match_regex(self.backref_regexp(re_val));
             vm.save_capture_spans(&last, given);
@@ -1711,41 +2002,57 @@ impl RegexpInner {
         vm: &mut Executor,
         globals: &mut Globals,
         re_val: Value,
-        subject: Value,
+        snapshot: Value,
         recv: Value,
         hash_val: Value,
     ) -> Result<(RStringInner, bool)> {
-        let subject_inner = subject.as_rstring_inner();
-        let mapped = subject_inner.needs_byte_mapping();
-        let subject_enc = subject_inner.encoding();
-        let view = subject_inner.regex_view()?;
-        let given: &str = &view;
+        let inner = snapshot.as_rstring_inner();
+        let view;
+        let regexp_pattern = re_val.is_regex().is_some();
+        let subject = match self.native_subject(inner, &globals.store, regexp_pattern)? {
+            Some(subject) => subject,
+            None => {
+                view = inner.regex_view()?;
+                Subject::text(&view, inner.encoding(), inner.needs_byte_mapping())
+            }
+        };
         let recv_len = recv.as_rstring_inner().len();
         let mut range = vec![];
 
         vm.clear_capture_special_variables();
-        for cap in self.captures_iter(given) {
-            let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
-            let m = cap.get(0).unwrap();
+        let mut region = onigmo_regex::Region::new();
+        let mut pos = 0usize;
+        let mut last_match_end: Option<usize> = None;
+        while pos <= subject.len() {
+            if !self.find_spans(&subject, pos, &mut region)? {
+                break;
+            }
+            let spans = spans_of(&region);
+            let (start, end) = spans[0].unwrap();
+            if start == end && last_match_end == Some(end) {
+                pos = subject.next_char_boundary(pos);
+                continue;
+            }
+            pos = end;
+            last_match_end = Some(end);
 
-            let key = if mapped {
-                Value::string_from_inner(RStringInner::from_mapped_utf8(
-                    &view_slice(given, m.range()),
-                    subject_enc,
-                ))
-            } else {
-                string_substring(subject, m.start(), m.end())
-            };
+            let key = subject.chunk(Some(snapshot), start..end);
             vm.set_match_regex(self.backref_regexp(re_val));
-            vm.save_capture_special_variables(&cap, given);
-            let replacement = lookup_hash_replacement(vm, globals, hash_val, key, mapped)?;
+            save_spans(vm, &subject, &spans, snapshot);
+            let replacement = lookup_hash_replacement(vm, globals, hash_val, key, subject.mapped())?;
             check_string_not_modified(recv, recv_len)?;
 
-            range.push((m.range(), replacement));
+            range.push((start..end, replacement));
         }
 
         let is_empty = range.is_empty();
-        let res = RStringInner::splice_all(&globals.store, given, &range)?;
+        let res = RStringInner::splice_all(
+            &globals.store,
+            subject.as_bytes(),
+            subject.view_encoding(),
+            subject.is_ascii(),
+            &range,
+        )?;
 
         Ok((res, !is_empty))
     }
@@ -1787,20 +2094,6 @@ impl RegexpInner {
                 }
             }
         }
-    }
-
-    /// `captures_from_pos` without touching `$~`/`$1..` — the raw match
-    /// for scanning primitives that must not update the special
-    /// variables (CRuby's C strscan keeps its registers to itself), on
-    /// an engine the caller picked once (`engine_for`) for its walk.
-    fn captures_from_pos_no_save_with<'a>(
-        engine: &Regex,
-        given: &'a str,
-        pos: usize,
-    ) -> Result<Option<Captures<'a>>> {
-        engine
-            .captures_from_pos(given, pos)
-            .map_err(|err| MonorubyErr::regexerr(format!("Capture failed. {:?}", err)))
     }
 
     /// `StringScanner` primitive: match `sub` (the byte suffix at the scan
@@ -1895,33 +2188,17 @@ impl RegexpInner {
             .map_err(search_failed)
     }
 
-    /// `subject` is a frozen snapshot whose `regex_view` is exactly
-    /// `given`; each match/capture is returned as a zero-copy shared
-    /// (CoW) substring view of it (`string_substring`), inheriting
-    /// its encoding — or, when the subject runs through the
-    /// byte↔U+00XX surrogate space, as a decoded copy in the
-    /// subject's own encoding. The caller keeps `subject` alive.
+    /// `String#scan` without a block over `subject` (the walk of
+    /// `snapshot`, a frozen copy of the receiver): the matches, or the
+    /// groups of each. `$~` is left at the last match.
     pub(crate) fn scan(
         &self,
         vm: &mut Executor,
-        subject: Value,
-        given: &str,
+        snapshot: Value,
+        subject: &Subject,
     ) -> Result<Vec<Value>> {
-        let subject_inner = subject.as_rstring_inner();
-        let mapped = subject_inner.needs_byte_mapping();
-        let subject_enc = subject_inner.encoding();
-        let chunk = |start: usize, end: usize| {
-            if mapped {
-                Value::string_from_inner(RStringInner::from_mapped_utf8(
-                    &view_slice(given, start..end),
-                    subject_enc,
-                ))
-            } else {
-                string_substring(subject, start, end)
-            }
-        };
         let mut ary = vec![];
-        let mut last_captures: Option<Captures> = None;
+        let mut last: Option<Spans> = None;
         vm.clear_capture_special_variables();
         // Walk the haystack manually rather than via `captures_iter`, which
         // drops zero-width matches the CRuby scan is expected to yield — the
@@ -1929,65 +2206,53 @@ impl RegexpInner {
         // at end-of-string after a non-empty one (e.g.
         // `"foo".scan(/(?~foo)/) == ["fo", "o", ""]`). Same loop as
         // `replace_repeat`: advance past a non-empty match, and by one
-        // Unicode scalar past an empty one (past EOS to terminate).
-        let engine = self.engine_for(given, Some(given.is_ascii()));
+        // character past an empty one (past EOS to terminate).
+        let mut region = onigmo_regex::Region::new();
         let mut pos = 0usize;
-        while pos <= given.len() {
-            let cap = match self.captures_from_pos_with(engine, given, pos, vm)? {
-                Some(c) => c,
-                None => break,
-            };
-            let m = cap.get(0).unwrap();
-            let (start, end) = (m.start(), m.end());
-            match cap.len() {
+        while pos <= subject.len() {
+            if !self.find_spans(subject, pos, &mut region)? {
+                break;
+            }
+            let spans = spans_of(&region);
+            let (start, end) = spans[0].unwrap();
+            match spans.len() {
                 0 => unreachable!(),
-                1 => ary.push(chunk(start, end)),
+                1 => ary.push(subject.chunk(Some(snapshot), start..end)),
                 len => {
                     let mut vec = vec![];
-                    for i in 1..len {
-                        match cap.get(i) {
-                            Some(m) => vec.push(chunk(m.start(), m.end())),
+                    for &span in &spans[1..len] {
+                        match span {
+                            Some((s, e)) => vec.push(subject.chunk(Some(snapshot), s..e)),
                             None => vec.push(Value::nil()),
                         }
                     }
                     ary.push(Value::array_from_vec(vec));
                 }
             }
-            last_captures = Some(cap);
-            pos = if end > start {
-                end
-            } else if start >= given.len() {
-                given.len() + 1
-            } else {
-                let mut next = start + 1;
-                while next < given.len() && !given.is_char_boundary(next) {
-                    next += 1;
-                }
-                next
-            };
+            last = Some(spans);
+            pos = Self::next_walk_pos(subject, start, end);
         }
 
-        if let Some(c) = last_captures {
-            vm.save_capture_special_variables(&c, given)
+        if let Some(spans) = last {
+            save_spans(vm, subject, &spans, snapshot);
         }
         Ok(ary)
     }
 }
 
 impl RegexpInner {
-    /// Replace all matches for `self` in `given` string with `replace`.
+    /// Replace all matches for `self` in `subject` with `replace`.
     ///
     /// ### return
-    /// `(replaced: RStringInner, is_replaced?: bool)`. The result
-    /// inherits the receiver-side encoding implicit in `given`
-    /// (always UTF-8 today, since the caller goes through
-    /// `expect_str`); cr is propagated through `bytesplice_with`
-    /// rather than re-classified after the fact.
+    /// `(replaced: RStringInner, is_replaced?: bool)`. The result is in
+    /// `subject.view_encoding()` unless a replacement's non-ASCII content
+    /// settled another (`splice_all`).
     fn replace_repeat(
         &self,
         vm: &mut Executor,
         store: &Store,
-        given: &str,
+        subject: &Subject,
+        owner: Value,
         replace: &RStringInner,
     ) -> Result<(RStringInner, bool)> {
         // Walk the haystack manually rather than relying on
@@ -1996,43 +2261,41 @@ impl RegexpInner {
         // `"¿por qué?".gsub(/([a-z\d]*)/, "*")` — the empty position
         // immediately after `"por"` is observable in CRuby but the
         // bundled iterator collapses it). For empty matches we
-        // advance by one Unicode scalar so the loop terminates.
+        // advance by one character so the loop terminates.
         let mut replacements = vec![];
         vm.clear_capture_special_variables();
-        let mut last_captures: Option<Captures> = None;
-        let engine = self.engine_for(given, Some(given.is_ascii()));
+        let mut last: Option<Spans> = None;
+        let mut region = onigmo_regex::Region::new();
         let mut pos = 0usize;
-        while pos <= given.len() {
-            let cap = match self.captures_from_pos_with(engine, given, pos, vm)? {
-                Some(c) => c,
-                None => break,
-            };
-            let m = cap.get(0).unwrap();
-            let (start, end) = (m.start(), m.end());
-            let (rep, mixed) = self.expand_backref(replace.as_bytes(), given, &cap);
-            replacements.push((start..end, expansion_inner(store, &rep, replace, mixed)?));
-            last_captures = Some(cap);
-            pos = if end > start {
-                end
-            } else if start >= given.len() {
-                given.len() + 1
-            } else {
-                let mut next = start + 1;
-                while next < given.len() && !given.is_char_boundary(next) {
-                    next += 1;
-                }
-                next
-            };
+        while pos <= subject.len() {
+            if !self.find_spans(subject, pos, &mut region)? {
+                break;
+            }
+            let spans = spans_of(&region);
+            let (start, end) = spans[0].unwrap();
+            let (rep, mixed) = self.expand_backref(replace.as_bytes(), subject.as_bytes(), &spans);
+            replacements.push((
+                start..end,
+                expansion_inner(store, &rep, replace, mixed, subject.view_encoding())?,
+            ));
+            last = Some(spans);
+            pos = Self::next_walk_pos(subject, start, end);
         }
         let is_empty = replacements.is_empty();
         // Single forward pass instead of N tail-shifting splices.
-        let res = RStringInner::splice_all(store, given, &replacements)?;
+        let res = RStringInner::splice_all(
+            store,
+            subject.as_bytes(),
+            subject.view_encoding(),
+            subject.is_ascii(),
+            &replacements,
+        )?;
 
-        if let Some(c) = last_captures {
+        if let Some(spans) = last {
             // Attach the (possibly coerced-from-String) Regexp to `$~` so
             // `$~.regexp` works after `gsub(String)`.
             vm.set_match_regex(Value::regexp(self.clone()));
-            vm.save_capture_special_variables(&c, given)
+            save_spans(vm, subject, &spans, owner);
         }
 
         Ok((res, !is_empty))
@@ -2063,15 +2326,18 @@ impl RegexpInner {
     fn expand_backref(
         &self,
         replace: &[u8],
-        given: &str,
-        captures: &Captures,
+        given: &[u8],
+        spans: &[Option<(usize, usize)>],
     ) -> (Vec<u8>, bool) {
         let bytes = replace;
         let mut rep: Vec<u8> = Vec::with_capacity(bytes.len());
         let mut captured_non_ascii = false;
-        let mut push_captured = |rep: &mut Vec<u8>, s: &str| {
+        let mut push_captured = |rep: &mut Vec<u8>, s: &[u8]| {
             captured_non_ascii |= !s.is_ascii();
-            rep.extend_from_slice(s.as_bytes());
+            rep.extend_from_slice(s);
+        };
+        let group = |i: usize| -> Option<&[u8]> {
+            spans.get(i).copied().flatten().map(|(s, e)| &given[s..e])
         };
         let mut i = 0;
         while i < bytes.len() {
@@ -2095,26 +2361,26 @@ impl RegexpInner {
             match next {
                 b'0'..=b'9' => {
                     let idx = (next - b'0') as usize;
-                    if let Some(m) = captures.get(idx) {
-                        push_captured(&mut rep, m.as_str());
+                    if let Some(m) = group(idx) {
+                        push_captured(&mut rep, m);
                     }
                     i += 2;
                 }
                 b'&' => {
-                    if let Some(m) = captures.get(0) {
-                        push_captured(&mut rep, m.as_str());
+                    if let Some(m) = group(0) {
+                        push_captured(&mut rep, m);
                     }
                     i += 2;
                 }
                 b'`' => {
-                    if let Some(m) = captures.get(0) {
-                        push_captured(&mut rep, &given[..m.start()]);
+                    if let Some((start, _)) = spans.first().copied().flatten() {
+                        push_captured(&mut rep, &given[..start]);
                     }
                     i += 2;
                 }
                 b'\'' => {
-                    if let Some(m) = captures.get(0) {
-                        push_captured(&mut rep, &given[m.end()..]);
+                    if let Some((_, end)) = spans.first().copied().flatten() {
+                        push_captured(&mut rep, &given[end..]);
                     }
                     i += 2;
                 }
@@ -2123,11 +2389,11 @@ impl RegexpInner {
                     // (1..). If the regex has no capture groups —
                     // even when there's a full match — `\+` expands
                     // to the empty string, matching CRuby.
-                    let mut idx = captures.len();
+                    let mut idx = spans.len();
                     while idx > 1 {
                         idx -= 1;
-                        if let Some(m) = captures.get(idx) {
-                            push_captured(&mut rep, m.as_str());
+                        if let Some(m) = group(idx) {
+                            push_captured(&mut rep, m);
                             break;
                         }
                     }
@@ -2150,13 +2416,13 @@ impl RegexpInner {
                             let members = self.get_group_members(&name);
                             let mut chosen: Option<usize> = None;
                             for &m_idx in members.iter() {
-                                if captures.get(m_idx as usize).is_some() {
+                                if group(m_idx as usize).is_some() {
                                     chosen = Some(m_idx as usize);
                                 }
                             }
                             if let Some(idx) = chosen {
-                                if let Some(m) = captures.get(idx) {
-                                    push_captured(&mut rep, m.as_str());
+                                if let Some(m) = group(idx) {
+                                    push_captured(&mut rep, m);
                                 }
                             }
                             i = name_end + 1;
@@ -2179,28 +2445,34 @@ impl RegexpInner {
         (rep, captured_non_ascii)
     }
 
-    /// Replaces the leftmost-first match for `self` in `given` string with `replace`.
-    ///
-    /// `(replaced: RStringInner, captures)`. See `replace_repeat`
-    /// for why we build the result via `bytesplice_with` rather
-    /// than `String::replace_range`.
-    fn replace_once<'a>(
+    /// Replaces the leftmost-first match for `self` in `subject` with
+    /// `replace`.
+    fn replace_once(
         &self,
         vm: &mut Executor,
         store: &Store,
-        given: &'a str,
+        subject: &Subject,
+        owner: Value,
         replace: &RStringInner,
-    ) -> Result<(RStringInner, Option<Captures<'a>>)> {
-        match self.captures(given, vm)? {
-            None => Ok((RStringInner::from_str_scanned(given), None)),
-            Some(captures) => {
-                let m = captures.get(0).unwrap();
-                let (rep, mixed) = self.expand_backref(replace.as_bytes(), given, &captures);
-                let rep_inner = expansion_inner(store, &rep, replace, mixed)?;
-                let res = RStringInner::splice_all(store, given, &[(m.range(), rep_inner)])?;
-                Ok((res, Some(captures)))
-            }
+    ) -> Result<(RStringInner, bool)> {
+        let mut region = onigmo_regex::Region::new();
+        if !self.find_spans(subject, 0, &mut region)? {
+            vm.clear_capture_special_variables();
+            return Ok((subject.to_inner(), false));
         }
+        let spans = spans_of(&region);
+        let (start, end) = spans[0].unwrap();
+        let (rep, mixed) = self.expand_backref(replace.as_bytes(), subject.as_bytes(), &spans);
+        let rep_inner = expansion_inner(store, &rep, replace, mixed, subject.view_encoding())?;
+        let res = RStringInner::splice_all(
+            store,
+            subject.as_bytes(),
+            subject.view_encoding(),
+            subject.is_ascii(),
+            &[(start..end, rep_inner)],
+        )?;
+        save_spans(vm, subject, &spans, owner);
+        Ok((res, true))
     }
 }
 
@@ -2258,17 +2530,14 @@ fn expansion_inner(
     bytes: &[u8],
     template: &RStringInner,
     captured_non_ascii: bool,
+    hay_enc: crate::value::Encoding,
 ) -> Result<RStringInner> {
     let enc = if template.is_ascii_only() {
-        crate::value::Encoding::Utf8
+        hay_enc
     } else {
         let enc = template.encoding();
-        if captured_non_ascii && enc != crate::value::Encoding::Utf8 {
-            return Err(MonorubyErr::incompatible_encoding(
-                store,
-                enc,
-                crate::value::Encoding::Utf8,
-            ));
+        if captured_non_ascii && enc != hay_enc {
+            return Err(MonorubyErr::incompatible_encoding(store, enc, hay_enc));
         }
         enc
     };
