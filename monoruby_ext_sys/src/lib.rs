@@ -288,6 +288,9 @@ pub struct MrApi {
     ) -> c_int,
     /// `v.inspect` (without calling Ruby).
     pub inspect: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> MrValue,
+    /// Whether `v` has a method `name` (private ones included), by
+    /// lookup alone — no `respond_to?` / `respond_to_missing?` runs.
+    pub respond_to: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue, name: *const c_char) -> c_int,
 
     // ---- native objects ------------------------------------------------
     /// An instance of `klass` (defined with `MR_CLASS_NATIVE`) owning

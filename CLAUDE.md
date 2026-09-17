@@ -353,6 +353,7 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys
 | `ext/zlib` | `Zlib`'s native half (`libzlib_native.so`, crate `zlib_native`): the `String.__zstream_*` streams over the bundled zlib (`libz-sys`) and the `__crc32` / `__adler32` byte walks |
 | `ext/zstd` | The zstd-ruby gem's native half (`libzstd_native.so`, crate `zstd_native`) over the bundled libzstd (`zstd-sys`) |
 | `ext/psych` | Psych's native half (`libpsych_native.so`, crate `psych_native`): libyaml's parser as `Psych::Parser`'s event source and its emitter as `Psych::Emitter`'s sink, over `libyaml-safer` |
+| `ext/nokogiri` | Nokogiri's native half (`libnokogiri_native.so`, crate `nokogiri_native`): what the gem's nokogiri.so provides, over `libxml2-src` — the last stand-in moved out of the core, and the one with the most involved object lifetimes (see `doc/nokogiri.md`) |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
@@ -388,13 +389,18 @@ External crates (fetched from git):
   and libxslt 1.1.43 + libexslt (`libxml2-src/vendor/libxslt/`, unmodified;
   generated `xsltconfig.h` / `exsltconfig.h`, hand-written
   `config/xslt-config.h` in a separate include root) for
-  `Nokogiri::XSLT`. Behind `Nokogiri` (`src/builtins/nokogiri/`): the gem's
-  Ruby half is vendored under `gem/nokogiri/` and `gem/nokogiri/nokogiri.rb`
-  stands in for nokogiri.so. Objects wrapping libxml2 pointers are
-  `ObjTy::NATIVE` RValues (`NativeData` payloads with their own `mark` /
-  `Drop`); their classes are defined with `instance_ty = NATIVE`
-  (`define_class_with_instance_ty`) so the JIT never treats the payload as
-  inline ivar slots. See `doc/nokogiri.md`.
+  `Nokogiri::XSLT`. It is linked **into the `ext/nokogiri` extension**
+  (`libnokogiri_native.so`, crate `nokogiri_native`), not the core: the
+  gem's Ruby half is vendored under `gem/nokogiri/` and
+  `gem/nokogiri/nokogiri.rb` stands in for nokogiri.so by requiring the
+  extension. Objects wrapping libxml2 pointers are native objects
+  (`MR_CLASS_NATIVE` classes, payloads declared with `native!` and their
+  own `mark` / `Drop`); each `xmlNode` maps to at most one Ruby object,
+  remembered in the node's `_private` and kept alive by its document's
+  node cache. libxml2's callbacks (SAX, XPath handlers, XSLT extension
+  functions, IO) reach Ruby through the `Ctx` of the native method that
+  is running; an exception they raise is stashed (`error_take`) and
+  re-raised once the library call returns. See `doc/nokogiri.md`.
 - `libz-sys` — zlib built from its bundled C source and linked statically
   **into the `ext/zlib` extension** (`libzlib_native.so`, required by
   `stdlib/zlib.rb`); its `String.__zstream_*` primitives expose one
@@ -629,7 +635,6 @@ Modes via `MONORUBY_TEST_ORACLE`:
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
 | `dump-require`      | Log `require`/`load` file resolution                                   |
-| `nokogiri` | **Default on.** The one native-backed library stand-in still compiled into the core (bundled libxml2; sqlite3, zlib, zstd and psych are dynamically loaded extensions instead, see `ext/`). Switching one off compiles out its builtins *and* leaves its `gem/` / `stdlib/` stand-in uninstalled, so `require` raises LoadError as CRuby does without the extension. `cargo check --no-default-features` is a CI step. |
 
 Chain deopt (`doc/chain_deopt.md`) is always on: every deopt / error side
 exit escalates through the chain-deopt walk, and BOP eviction converts

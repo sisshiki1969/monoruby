@@ -479,6 +479,7 @@ pub(crate) static MR_API: MrApi = MrApi {
     ivar_get: mr_ivar_get,
     ivar_set: mr_ivar_set,
     inspect: mr_inspect,
+    respond_to: mr_respond_to,
     native_new: mr_native_new,
     native_data: mr_native_data,
     native_set: mr_native_set,
@@ -870,10 +871,7 @@ unsafe extern "C" fn mr_str_ptr(ctx: *mut MrContext, v: MrValue, len: *mut usize
     if v.try_rvalue().is_none_or(|rv| rv.ty() != ObjTy::STRING) {
         set_err(
             vm,
-            MonorubyErr::typeerr(format!(
-                "String expected, got {}",
-                v.inspect(&globals.store)
-            )),
+            MonorubyErr::no_implicit_conversion(&globals.store, v, STRING_CLASS),
         );
         return std::ptr::null();
     }
@@ -1307,12 +1305,20 @@ unsafe extern "C" fn mr_str_encoding(ctx: *mut MrContext, v: MrValue) -> MrValue
     if v.try_rvalue().is_none_or(|rv| rv.ty() != ObjTy::STRING) {
         set_err(
             vm,
-            MonorubyErr::typeerr(format!(
-                "String expected, got {}",
-                v.inspect(&globals.store)
-            )),
+            MonorubyErr::no_implicit_conversion(&globals.store, v, STRING_CLASS),
         );
         return MR_UNDEF;
     }
     Value::string_from_str(v.as_rstring_inner().encoding().name()).id()
+}
+
+unsafe extern "C" fn mr_respond_to(ctx: *mut MrContext, v: MrValue, name: *const c_char) -> c_int {
+    // SAFETY: the table's contract.
+    let (_, globals) = unsafe { parts(ctx) };
+    let name = unsafe { cstr(name) };
+    let Some(v) = val(v) else { return 0 };
+    globals
+        .store
+        .check_method_for_class(v.class(), IdentId::get_id(name))
+        .is_some() as c_int
 }

@@ -91,6 +91,13 @@ impl Value {
     }
 }
 
+/// `nil`.
+impl Default for Value {
+    fn default() -> Value {
+        Value::NIL
+    }
+}
+
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Value({:#x})", self.0)
@@ -484,6 +491,19 @@ impl Ctx {
         self.inspect(self.class_of(v))
     }
 
+    /// Whether `v` has a method `name` (private ones included), by lookup
+    /// alone — nothing runs.
+    pub fn respond_to(&self, v: Value, name: &str) -> bool {
+        let c = cstring(name);
+        // SAFETY: a live context and a NUL-terminated name.
+        unsafe { (self.api().respond_to)(self.raw, v.0, c.as_ptr()) != 0 }
+    }
+
+    /// `recv.name(*args)` if `recv` has such a method, `None` otherwise.
+    pub fn funcall_if_exists(&mut self, recv: Value, name: &str, args: &[Value]) -> Result<Option<Value>> {
+        if self.respond_to(recv, name) { self.funcall(recv, name, args, None).map(Some) } else { Ok(None) }
+    }
+
     // ---- native objects ------------------------------------------------
 
     /// An instance of `klass` (defined with `MR_CLASS_NATIVE`) owning
@@ -670,8 +690,15 @@ fn cstring(s: &str) -> CString {
 /// The collector's cursor, inside [`Native::mark`].
 pub struct Marker(*mut MrMarker);
 
+impl From<&Value> for Value {
+    fn from(v: &Value) -> Value {
+        *v
+    }
+}
+
 impl Marker {
-    pub fn mark(&mut self, v: Value) {
+    pub fn mark(&mut self, v: impl Into<Value>) {
+        let v: Value = v.into();
         if !v.is_undef() {
             // SAFETY: a marker the interpreter is passing right now.
             unsafe { (api().gc_mark)(self.0, v.0) }

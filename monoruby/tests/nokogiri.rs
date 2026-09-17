@@ -1,13 +1,12 @@
-//! Nokogiri on monoruby (`src/builtins/nokogiri/` over the bundled
-//! libxml2, the gem's Ruby half under `gem/nokogiri/`), compared with
+//! Nokogiri on monoruby (the `nokogiri_native` extension, `ext/nokogiri`,
+//! over the bundled libxml2; the gem's Ruby half under `gem/nokogiri/`),
+//! compared with
 //! CRuby's nokogiri gem: each script runs under the `monoruby` binary and
 //! under the host CRuby (with rubygems, so not through the snapshot
 //! oracle) and the outputs must match byte for byte. Skips when the host
 //! ruby has no nokogiri (CI installs it).
-#![cfg(feature = "nokogiri")]
-
 extern crate monoruby;
-use monoruby::tests::ruby_path;
+use monoruby::tests::{ensure_extension, ruby_path};
 use std::process::Command;
 
 fn gem_available(name: &str) -> bool {
@@ -47,6 +46,7 @@ fn compare(script: &str) {
     ruby.args(["-E", "UTF-8", "-e", &script]);
     let expected = run(ruby);
     let mut mono = Command::new(env!("CARGO_BIN_EXE_monoruby"));
+    mono.env("MONORUBY_EXT_PATH", ensure_extension("nokogiri_native"));
     mono.args(["-e", &script]);
     let got = run(mono);
     eprintln!("ruby:\n{expected}\nmonoruby:\n{got}");

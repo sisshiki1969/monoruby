@@ -324,12 +324,12 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 
 | 段階 | 状態 | 場所 |
 |---|---|---|
-| 1. feature 分割 | 済 | `nokogiri` が default-on の feature（zstd / psych / zlib もそうだったが、3 で拡張に出た）。off にすると builtin が消え、`build.rs` がその stand-in を install しない（`v0.3.0-without-…` の別 root）。CI に `cargo check --no-default-features --tests`。 |
+| 1. feature 分割 | 済（役目を終えて撤去） | 5 つを default-on の feature にし、off で builtin が消え `build.rs` がその stand-in を install しない形にした。3 で全部が拡張に出たので、feature も `build.rs` の gating も CI の `--no-default-features` チェックも取り除いた。 |
 | 2. C ABI | 済 | `monoruby_ext_sys/`（`MrValue` / `MrContext` / `MrApi`、`include/monoruby_ext.h`）、`monoruby/src/ext.rs`（表の実装、trampoline、`ExtNative`、loader）、`monoruby_ext/`（Rust 向け安全ラッパ: `Ctx` / `Value` / `method!` / `native!`）。`tests/native_ext.rs` が C で書いた拡張をヘッダから `cc` でビルドして全項目を通す。 |
 | 3. sqlite3 の分離 | 済 | `ext/sqlite3/`（crate `sqlite3_native`、cdylib）。`gem/sqlite3/sqlite3_native.rb` が `require "sqlite3_native.so"` する。`tests/sqlite3.rs` の 23 本は無変更で通る。コアから `src/builtins/sqlite3.rs`（2.2k 行）と `libsqlite3-src` 依存が消えた。 |
 | 3. zlib / zstd の分離 | 済 | `ext/zlib/`（`zlib_native`、checksum と `__zstream_*`）、`ext/zstd/`（`zstd_native`）。`stdlib/zlib.rb` / `gem/zstd-ruby/zstdruby.rb` が `require "…_native.so"` する。コアから `libz-sys` / `zstd-safe` が消えた。rubygems が `zlib` を要るので、インストール時は `bin/install` が 3 拡張を `<install root>/ext/` に置く。 |
 | 3. psych の分離 | 済 | `ext/psych/`（`psych_native`、`__yaml_parse` は `Psych::Handler` を `funcall` で駆動）。`gem/psych/psych.rb` が `require "psych_native.so"` する。コアから `libyaml-safer` が消えた。 |
-| 3. nokogiri | 未 | |
+| 3. nokogiri の分離 | 済 | `ext/nokogiri/`（`nokogiri_native`、12 ファイル ~7k 行）。`gem/nokogiri/nokogiri.rb` が `require "nokogiri_native.so"` する。コアから `src/builtins/nokogiri/` と `libxml2-src` 依存が消え、`ObjTy::NATIVE` を使う builtin はコア側に無くなった（`ext.rs` の `ExtNative` だけ）。`tests/nokogiri.rs` の 23 本（CRuby の gem と出力比較）はスクリプト無変更。 |
 | 4. `bundled` / `system` feature | 未 | |
 | 5. CRuby API 互換層 | 未 | |
 
@@ -350,6 +350,9 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 - **拡張の `static` はプロセス共通、`Init_` はインタプリタごと。** テストハーネスは 1 プロセスに多数の `Globals` を作るので、拡張が定義したクラスを `static` に持つと 2 つ目のインタプリタで壊れる。`Ctx::interpreter_id`（globals ポインタ）で key する。sqlite3 は thread-local + id 照合にした。
 - **`require "x/4.0/x_native"` は `.rb` stand-in に届かなければならない。** ext の探索は bare な `require "x_native.so"` だけに限定した（gem の nested `.so` 名で ext に飛ぶと stand-in が持つ Ruby 側の定義を飛ばす）。
 - **テストから拡張をビルドするときは別の target dir**（`target/ext/`）。外側の `cargo test` が target dir のロックを持ったままテストを走らせるので、同じ dir への nested `cargo build` は待ち続ける。aarch64 の qemu 実行では `--target` を明示する必要がある。
+- **alloc 関数が無い代わりの「遅延 payload」。** nokogiri の `SAX::Parser` / `SAX::PushParser` / `NodeSet` はコア側で alloc 関数を持ち、`new` の時点でペイロードを作っていた。拡張では汎用 alloc がペイロード無しの instance を作るので、最初にペイロードへ触るアクセサ（`handler_ptr` / `install_push_ctxt` / `set_ptr`）が `is_kind_of` で確かめて `native_set` で埋める。`Object#dup` のコピーも同じ経路で埋まる。
+- **variadic の引数は平らに渡る。** コアの rest builtin は `lfp.arg(0)` が rest 配列だったが、trampoline は `MR_ARGC_VARIADIC` の `argv` に要素を展開する。移植で `ary_vec(args[0])` を残すと最初の引数を配列として読んで壊れる（nokogiri で 6 箇所）。
+- **C パーサの出力が入力バッファを指す場合は `str_bytes` の生ポインタを使う。** gumbo の error record は入力の中を指す。`str_vec`（コピー）だと `add_errors` が別のメモリに対して診断を描くので、`Ctx::str_bytes` の `(ptr, len)` を取り出して渡す（collector は動かさないので String が生きている限り有効）。
 - 配布: `cargo build`（workspace root）で `.so` がバイナリの隣にできる。`cargo install` はバイナリしか置かないので、`bin/install` が拡張をビルドして `<install root>/ext/` にコピーする（`bin/spec` もこれを使う）。`bin/test` / `bin/test-aarch64` はベンチマーク用バイナリの隣に拡張をビルドする。
 
 ## 7. 参考

@@ -91,7 +91,7 @@ true
 42
 2199023255552
 "hello, world"
-[TypeError, "String expected, got 1"]
+[TypeError, "no implicit conversion of Integer into String"]
 [Hello::Error, "bang", true]
 [0, 10, 20]
 [RuntimeError, "in block 1"]

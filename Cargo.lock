@@ -998,7 +998,6 @@ dependencies = [
  "indexmap",
  "libc",
  "libffi",
- "libxml2-src",
  "md-5",
  "memchr",
  "mimalloc",
@@ -1066,6 +1065,15 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+]
+
+[[package]]
+name = "nokogiri_native"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libxml2-src",
+ "monoruby-ext",
 ]
 
 [[package]]

@@ -8,8 +8,6 @@ mod bool_class;
 mod class;
 mod digest;
 mod cipher;
-#[cfg(feature = "nokogiri")]
-mod nokogiri;
 mod dir;
 pub(crate) mod encoding;
 pub(crate) mod errno;
@@ -152,8 +150,6 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     json::init(globals);
     digest::init(globals);
     cipher::init(globals);
-    #[cfg(feature = "nokogiri")]
-    nokogiri::init(globals);
     prism::init(globals);
     object_space::init(globals);
     main_object::init(globals);

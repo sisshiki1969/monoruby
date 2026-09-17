@@ -134,6 +134,7 @@ struct MrApi {
     MrValue (*ivar_get)(MrContext *, MrValue obj, const char *name);
     int     (*ivar_set)(MrContext *, MrValue obj, const char *name, MrValue v);
     MrValue (*inspect)(MrContext *, MrValue v);
+    int     (*respond_to)(MrContext *, MrValue v, const char *name);  /* method lookup only */
 
     /* native objects */
     MrValue (*native_new)(MrContext *, MrValue klass, void *data, const MrNativeOps *ops);

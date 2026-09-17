@@ -57,14 +57,10 @@ jobs:
         # document / an image / a template / rubocop's autocorrection under
         # both CRuby and monoruby and compare the bytes, and
         # tests/nokogiri.rs runs the same scripts under CRuby's nokogiri
-        # gem and monoruby's own (src/builtins/nokogiri); each test skips
+        # gem and monoruby's own (ext/nokogiri); each test skips
         # when its gem is absent, so keep them installed here to make the
         # tests count. The rubocop versions are ruby-bench's Gemfile.lock.
         run: gem install hexapdf chunky_png rubocop:1.79.1 rubocop-performance:1.25.0 rubocop-rails:2.32.0 nokogiri msgpack strptime cool.io zstd-ruby:1.5.7.0 yajl-ruby --no-document
-      - name: Check the build with the native-backed stand-ins compiled out
-        # nokogiri / sqlite3 / zstd / psych / zlib are default features; a
-        # `#[cfg]` missed on one of their uses only shows up here.
-        run: cargo check -p monoruby --no-default-features --tests
       - name: Test
         run: bin/test
 

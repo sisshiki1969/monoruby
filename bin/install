@@ -19,7 +19,7 @@ if [ "${1:-}" = "--debug" ]; then
   INSTALL_ARGS=(--debug)
 fi
 
-cargo build "${CARGO_PROFILE_ARGS[@]}" -p sqlite3_native -p zlib_native -p zstd_native -p psych_native
+cargo build "${CARGO_PROFILE_ARGS[@]}" -p sqlite3_native -p zlib_native -p zstd_native -p psych_native -p nokogiri_native
 cargo install --path monoruby "${INSTALL_ARGS[@]}"
 
 # The per-version install root build.rs populated (`MONORUBY_INSTALL_ROOT`,
@@ -31,7 +31,7 @@ case "$(uname -s)" in
   Darwin) EXT=dylib ;;
   *) EXT=so ;;
 esac
-for lib in sqlite3_native zlib_native zstd_native psych_native; do
+for lib in sqlite3_native zlib_native zstd_native psych_native nokogiri_native; do
   cp "target/$PROFILE/lib$lib.$EXT" "$ROOT/ext/"
 done
 echo "installed $(command -v monoruby) and the extensions in $ROOT/ext"

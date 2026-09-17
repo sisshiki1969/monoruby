@@ -1427,10 +1427,6 @@ impl Value {
 
     /// The native payload of `self` as `T`, if `self` is a native object
     /// of that kind.
-    // Only the native-backed extensions reach the payload today; the
-    // extension ABI (doc/native_extension_loading.md) will call this from
-    // core unconditionally, and the allow goes with it.
-    #[cfg_attr(not(feature = "nokogiri"), allow(dead_code))]
     pub(crate) fn try_native<T: NativeData>(&self) -> Option<&T> {
         let rv = self.try_rvalue()?;
         if rv.ty() != ObjTy::NATIVE {
