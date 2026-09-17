@@ -889,7 +889,7 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///     ASCII-compatible *and* the subject is entirely 7-bit.
 ///   - Otherwise (a non-fixed, ASCII-compatible regexp on an
 ///     ASCII-compatible subject) any content is fine.
-pub(super) fn check_match_encoding(
+pub(crate) fn check_match_encoding(
     store: &Store,
     regex: &RegexpInner,
     str_enc: crate::value::Encoding,
@@ -920,8 +920,8 @@ fn regexp_encoding_mismatch(
         store,
         format!(
             "incompatible encoding regexp match ({} regexp with {} string)",
-            reg_enc.name(),
-            str_enc.name()
+            reg_enc.inspect_label(),
+            str_enc.inspect_label()
         ),
     )
 }
