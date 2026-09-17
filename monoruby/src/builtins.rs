@@ -58,6 +58,7 @@ mod prism;
 mod true_class;
 mod warning;
 mod zlib;
+mod zstd;
 
 #[cfg(target_arch = "x86_64")]
 use crate::codegen::jitgen::AbstractState;
@@ -157,6 +158,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     nokogiri::init(globals);
     yaml::init(globals);
     zlib::init(globals);
+    zstd::init(globals);
     sqlite3::init(globals);
     prism::init(globals);
     object_space::init(globals);

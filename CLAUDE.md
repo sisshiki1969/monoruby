@@ -393,6 +393,14 @@ External crates (fetched from git):
   per `Zlib::Deflate` / `Zlib::Inflate` object, and everything else in `Zlib`
   (`stdlib/zlib.rb`: the class API, gzip framing, `GzipReader` / `GzipWriter`)
   is Ruby. Compression is byte-identical to CRuby's zlib.so.
+- `zstd-safe` / `zstd-sys` — libzstd 1.5.7 built from source and linked
+  statically, behind the zstd-ruby gem: `String.__zstd_*`
+  (`src/builtins/zstd.rs`, raw `zstd_sys` calls in the extension's own order)
+  hold the contexts and dictionaries in handle tables, and
+  `gem/zstd-ruby/zstdruby.rb` is the gem's C extension in Ruby on top
+  (`Zstd.compress` / `decompress`, `CDict` / `DDict`, `StreamingCompress` /
+  `StreamingDecompress`, skippable frames). Output is byte-identical to the
+  gem's zstdruby.so.
 - `libsqlite3-src` (workspace crate) — the SQLite amalgamation (3.48.0,
   public domain) under `libsqlite3-src/vendor/`, built with `cc` and linked
   statically, with a hand-written FFI. Behind the sqlite3 gem: the gem's
@@ -474,6 +482,21 @@ reproducible build. It performs two jobs:
      stands in for `stackprof.so` as an inert profiler (its API loads, no
      sampling), since `gem "stackprof", platforms: :mri` is required at boot
      by Bundler on monoruby too.
+
+     The `.so` stand-ins fluentd boots on take the same shape (the gem's own
+     Ruby half comes from the installed gem, only the extension is replaced;
+     the `stub/` copy wins over the gem's `.so` because a `.rb` candidate is
+     searched first): `gem/msgpack/msgpack.rb` (`Buffer` / `Packer` /
+     `Unpacker` / `Factory` in Ruby, the extension's wire format, type
+     dispatch and resumable unpacking), `gem/yajl/yajl.rb` (yajl's lexer,
+     parser and generator ported, error rendering included),
+     `gem/strptime/strptime.rb` (`Strptime` / `Strftime` with exactly the
+     extension's directives and defaults), `gem/cool.io_ext.rb` (an
+     `IO.select` loop with libev's watcher bookkeeping) and
+     `gem/zstd-ruby/zstdruby.rb` over `src/builtins/zstd.rs`. Each is
+     pinned to the real gem by `tests/{msgpack,yajl,strptime,coolio,zstd}.rs`,
+     which run the same code on the host CRuby with the gem's C extension
+     (CI installs the five gems).
 
    These files implement parts of the Ruby standard library in Ruby rather
    than Rust. Per-version namespacing keeps concurrent builds and multiple
