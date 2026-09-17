@@ -3780,7 +3780,7 @@ fn coerce_to_array_for_transpose(
     }
     Err(MonorubyErr::typeerr(format!(
         "no implicit conversion of {} into Array",
-        val.get_real_class_name(globals)
+        val.builtin_class_name(globals)
     )))
 }
 

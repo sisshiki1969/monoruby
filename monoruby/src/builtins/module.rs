@@ -1238,14 +1238,14 @@ fn constant_path_segments(
             None => {
                 return Err(MonorubyErr::typeerr(format!(
                     "no implicit conversion of {} into String",
-                    name_arg.get_real_class_name(&globals.store)
+                    name_arg.builtin_class_name(&globals.store)
                 )));
             }
         }
     } else {
         return Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into String",
-            name_arg.get_real_class_name(&globals.store)
+            name_arg.builtin_class_name(&globals.store)
         )));
     };
 
@@ -2113,8 +2113,8 @@ fn require_module_argument(globals: &Globals, arg: Value, op: &str) -> Result<()
         Ok(())
     } else {
         Err(MonorubyErr::typeerr(format!(
-            "wrong argument type {} (expected Module) in {op}",
-            arg.get_real_class_name(&globals.store),
+            "wrong argument type {} (expected Module)",
+            arg.builtin_class_name(&globals.store),
         )))
     }
 }
@@ -3082,7 +3082,7 @@ fn refine(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         None => {
             return Err(MonorubyErr::typeerr(format!(
                 "wrong argument type {} (expected Class or Module)",
-                arg.get_real_class_name(&globals.store)
+                arg.builtin_class_name(&globals.store)
             )));
         }
     };
@@ -3160,7 +3160,7 @@ fn import_methods(
             _ => {
                 return Err(MonorubyErr::typeerr(format!(
                     "wrong argument type {} (expected Module)",
-                    v.get_real_class_name(&globals.store)
+                    v.builtin_class_name(&globals.store)
                 )));
             }
         }
@@ -3360,7 +3360,7 @@ pub(super) fn expect_refinement_module(globals: &Globals, arg: Value) -> Result<
         Some(module) if module.is_module() => Ok(module.id()),
         _ => Err(MonorubyErr::typeerr(format!(
             "wrong argument type {} (expected Module)",
-            arg.get_real_class_name(&globals.store)
+            arg.builtin_class_name(&globals.store)
         ))),
     }
 }

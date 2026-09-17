@@ -237,7 +237,7 @@ module Enumerable
   def take(n)
     n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
     unless n.is_a?(Integer)
-      raise TypeError, "no implicit conversion of #{n.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
     end
     raise ArgumentError, "attempt to take negative size" if n < 0
     res = []
@@ -252,7 +252,7 @@ module Enumerable
   def drop(n)
     n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
     unless n.is_a?(Integer)
-      raise TypeError, "no implicit conversion of #{n.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
     end
     raise ArgumentError, "attempt to drop negative size" if n < 0
     res = []
@@ -399,7 +399,7 @@ module Enumerable
     unless hash.nil?
       unless hash.is_a?(Hash)
         hash = hash.to_hash if hash.respond_to?(:to_hash)
-        raise TypeError, "wrong argument type #{hash.class} (expected Hash)" unless hash.is_a?(Hash)
+        raise TypeError, "wrong argument type #{__builtin_class_name(hash)} (expected Hash)" unless hash.is_a?(Hash)
       end
       raise FrozenError, "can't modify frozen Hash: #{hash.inspect}" if hash.frozen?
     end
@@ -650,7 +650,7 @@ module Enumerable
     n = args[0]
     n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
     unless n.is_a?(Integer)
-      raise TypeError, "no implicit conversion of #{n.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
     end
     raise ArgumentError, "negative array size" if n < 0
     # CRuby converts the count with NUM2LONG; a Bignum that does not
@@ -753,7 +753,7 @@ module Enumerable
             first = false
           else
             cmp = yield(x, m)
-            raise ArgumentError, "comparison of #{x.class} with #{m.class} failed" if cmp.nil?
+            raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(m)} failed" if cmp.nil?
             m = x if cmp < 0
           end
         end
@@ -763,7 +763,7 @@ module Enumerable
             m = x
             first = false
           elsif (cmp = (x <=> m)).nil?
-            raise ArgumentError, "comparison of #{x.class} with #{m.class} failed"
+            raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(m)} failed"
           elsif cmp < 0
             m = x
           end
@@ -793,7 +793,7 @@ module Enumerable
             first = false
           else
             cmp = yield(x, m)
-            raise ArgumentError, "comparison of #{x.class} with #{m.class} failed" if cmp.nil?
+            raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(m)} failed" if cmp.nil?
             m = x if cmp > 0
           end
         end
@@ -803,7 +803,7 @@ module Enumerable
             m = x
             first = false
           elsif (cmp = (x <=> m)).nil?
-            raise ArgumentError, "comparison of #{x.class} with #{m.class} failed"
+            raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(m)} failed"
           elsif cmp > 0
             m = x
           end
@@ -834,10 +834,10 @@ module Enumerable
           first = false
         else
           cmp_mn = block.call(x, mn)
-          raise ArgumentError, "comparison of #{x.class} with #{mn.class} failed" if cmp_mn.nil?
+          raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(mn)} failed" if cmp_mn.nil?
           mn = x if cmp_mn < 0
           cmp_mx = block.call(x, mx)
-          raise ArgumentError, "comparison of #{x.class} with #{mx.class} failed" if cmp_mx.nil?
+          raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(mx)} failed" if cmp_mx.nil?
           mx = x if cmp_mx > 0
         end
       end
@@ -977,7 +977,7 @@ module Enumerable
           n = n.to_int
           raise TypeError, "can't convert to Integer" unless n.is_a?(Integer)
         else
-          raise TypeError, "no implicit conversion of #{n.class} into Integer"
+          raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
         end
       end
       return to_enum(:cycle, n) { respond_to?(:size) ? (n <= 0 ? 0 : size * n) : nil } unless block_given?

@@ -157,7 +157,7 @@ pub(crate) fn try_coerce_and_apply_bit(
                         _ => {
                             let err = MonorubyErr::typeerr(format!(
                                 "{} can't be coerced into Integer",
-                                rhs.get_real_class_name(&globals.store),
+                                rhs.coerce_failed_name(&globals.store),
                             ));
                             vm.set_error(err);
                             return None;
@@ -706,14 +706,13 @@ pub(crate) extern "C" fn shr_values_raw(
             }
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            // >> requires to_int conversion (not coerce), supports BigInt shift amounts
+            // >> requires to_int conversion (not coerce), supports BigInt shift amounts.
+            // The conversion's own error is the message (CRuby's rb_to_int:
+            // "no implicit conversion of Symbol into Integer").
             match rhs.coerce_to_int(vm, globals) {
                 Ok(rhs_int) => return shr_values(vm, globals, lhs, rhs_int, is_func_call).into(),
-                Err(_) => {
-                    vm.set_error(MonorubyErr::typeerr(format!(
-                        "{} can't be coerced into Integer",
-                        rhs.get_real_class_name(&globals.store),
-                    )));
+                Err(err) => {
+                    vm.set_error(err);
                     return None;
                 }
             }
@@ -784,14 +783,13 @@ pub(crate) extern "C" fn shl_values_raw(
             }
         }
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            // << requires to_int conversion (not coerce), supports BigInt shift amounts
+            // << requires to_int conversion (not coerce), supports BigInt shift amounts.
+            // The conversion's own error is the message (CRuby's rb_to_int:
+            // "no implicit conversion of Symbol into Integer").
             match rhs.coerce_to_int(vm, globals) {
                 Ok(rhs_int) => return shl_values(vm, globals, lhs, rhs_int, is_func_call).into(),
-                Err(_) => {
-                    vm.set_error(MonorubyErr::typeerr(format!(
-                        "{} can't be coerced into Integer",
-                        rhs.get_real_class_name(&globals.store),
-                    )));
+                Err(err) => {
+                    vm.set_error(err);
                     return None;
                 }
             }

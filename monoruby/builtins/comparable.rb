@@ -11,62 +11,62 @@ module Comparable
     elsif res.is_a?(Numeric)
       res == 0
     else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     end
   end
 
   def !=(other)
     res = self <=> other
     if res.nil?
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     elsif res.is_a?(Numeric)
       res != 0
     else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     end
   end
 
   def >=(other)
     res = self <=> other
     if res.nil?
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     elsif res.is_a?(Numeric)
       res >= 0
     else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     end
   end
 
   def >(other)
     res = self <=> other
     if res.nil?
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     elsif res.is_a?(Numeric)
       res > 0
     else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     end
   end
 
   def <=(other)
     res = self <=> other
     if res.nil?
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     elsif res.is_a?(Numeric)
       res <= 0
     else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     end
   end
 
   def <(other)
     res = self <=> other
     if res.nil?
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     elsif res.is_a?(Numeric)
       res < 0
     else
-      raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
     end
   end
 
@@ -86,17 +86,25 @@ module Comparable
     end
     if min_val && max_val
       cmp = min_val <=> max_val
-      if cmp.nil? || cmp > 0
-        raise ArgumentError, "min argument must be less than or equal to max argument"
-      end
+      # CRuby compares the bounds with OPTIMIZED_CMP: an incomparable
+      # pair is the usual comparison failure, naming the bounds.
+      raise ArgumentError, "comparison of #{min_val.class} with #{__coerce_failed_name(max_val)} failed" if cmp.nil?
+      raise ArgumentError, "min argument must be less than or equal to max argument" if cmp > 0
     end
-    if min_val && (self <=> min_val) < 0
-      min_val
-    elsif max_val && (self <=> max_val) > 0
-      max_val
-    else
-      self
+    # `self <=> bound`, as CRuby's cmp_clamp: a nil answer is
+    # "comparison of X with Y failed", never a NoMethodError on nil.
+    if min_val
+      c = (self <=> min_val)
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(min_val)} failed" if c.nil?
+      return self if c == 0
+      return min_val if c < 0
     end
+    if max_val
+      c = (self <=> max_val)
+      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(max_val)} failed" if c.nil?
+      return max_val if c > 0
+    end
+    self
   end
 
   # CRuby asks `self <=> min` / `self <=> max` (never the operands'
@@ -105,10 +113,10 @@ module Comparable
   # usual comparison failure.
   def between?(min, max)
     c = (self <=> min)
-    raise ArgumentError, "comparison of #{self.class} with #{min.class} failed" if c.nil?
+    raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(min)} failed" if c.nil?
     return false if c < 0
     c = (self <=> max)
-    raise ArgumentError, "comparison of #{self.class} with #{max.class} failed" if c.nil?
+    raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(max)} failed" if c.nil?
     c <= 0
   end
 end

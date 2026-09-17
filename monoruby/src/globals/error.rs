@@ -824,16 +824,9 @@ impl MonorubyErr {
         val: Value,
         target_class: ClassId,
     ) -> MonorubyErr {
-        // CRuby (rb_builtin_class_name) names the literal, not the
-        // class, for nil / true / false.
-        let name = match val.unpack() {
-            RV::Nil => "nil".to_string(),
-            RV::Bool(b) => b.to_string(),
-            _ => val.get_real_class_name(store),
-        };
         MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into {}",
-            name,
+            val.builtin_class_name(store),
             store.get_class_name(target_class)
         ))
     }
@@ -863,21 +856,21 @@ impl MonorubyErr {
     ///
     #[allow(dead_code)]
     pub(crate) fn is_not_symbol(store: &Store, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{} is not a symbol", val.to_s(store)))
+        MonorubyErr::typeerr(format!("{} is not a symbol", val.inspect(store)))
     }
 
     ///
     /// Set TypeError with message "*name* is not Symbol nor String".
     ///
     pub(crate) fn is_not_symbol_nor_string(store: &Store, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{} is not a symbol nor a string", val.to_s(store)))
+        MonorubyErr::typeerr(format!("{} is not a symbol nor a string", val.inspect(store)))
     }
 
     ///
     /// Set TypeError with message "*name* is not Regexp nor String".
     ///
     pub(crate) fn is_not_regexp_nor_string(store: &Store, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{} is not a regexp nor a string", val.to_s(store)))
+        MonorubyErr::typeerr(format!("{} is not a regexp nor a string", val.inspect(store)))
     }
 
     /// Build an `Encoding::CompatibilityError` with the CRuby-format
@@ -987,17 +980,20 @@ impl MonorubyErr {
     }
 
     ///
-    /// Set TypeError with message "can't convert *class of val* into Float".
+    /// Set TypeError with message "can't convert *class of val* into Float"
+    /// (nil / true / false by keyword).
     ///
     pub(crate) fn cant_convert_into_float(store: &Store, val: Value) -> MonorubyErr {
         MonorubyErr::typeerr(format!(
             "can't convert {} into Float",
-            val.get_real_class_name(store)
+            val.builtin_class_name(store)
         ))
     }
 
     ///
-    /// Set TypeError with message "{op}: *class of val* can't be coerced into {`msg`}".
+    /// Set TypeError with message "*val* can't be coerced into {`msg`}",
+    /// naming `val` as CRuby's `coerce_failed` does (a special constant
+    /// by `inspect`, anything else by class).
     ///
     pub(crate) fn cant_coerced_into(
         store: &Store,
@@ -1007,7 +1003,7 @@ impl MonorubyErr {
     ) -> MonorubyErr {
         MonorubyErr::typeerr(format!(
             "{} can't be coerced into {msg}",
-            val.get_real_class_name(store)
+            val.coerce_failed_name(store)
         ))
     }
 
@@ -1018,7 +1014,7 @@ impl MonorubyErr {
     ) -> MonorubyErr {
         MonorubyErr::typeerr(format!(
             "wrong argument type {} (expected {expected})",
-            val.get_real_class_name(store),
+            val.builtin_class_name(store),
         ))
     }
 

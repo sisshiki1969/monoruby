@@ -614,11 +614,11 @@ fn string_cmp2(lfp: Lfp, vm: &mut Executor, globals: &mut Globals) -> Result<std
     match string_cmp(lfp, vm, globals)? {
         Some(ord) => Ok(ord),
         None => {
-            let other = lfp.arg(0);
-            Err(MonorubyErr::argumenterr(format!(
-                "comparison of String with {} failed",
-                other.inspect(&globals.store)
-            )))
+            Err(crate::executor::op::cmperr(
+                &globals.store,
+                lfp.self_val(),
+                lfp.arg(0),
+            ))
         }
     }
 }
@@ -4288,20 +4288,11 @@ fn coerce_pattern_for_byte_search(
             )));
         }
     }
-    // CRuby's "no implicit conversion of X into String" wording uses
-    // the keyword for nil/true/false (rather than the class name).
-    let label = if v.is_nil() {
-        "nil".to_string()
-    } else if v == Value::bool(true) {
-        "true".to_string()
-    } else if v == Value::bool(false) {
-        "false".to_string()
-    } else {
-        v.get_real_class_name(&globals.store)
-    };
-    Err(MonorubyErr::typeerr(format!(
-        "no implicit conversion of {label} into String"
-    )))
+    Err(MonorubyErr::no_implicit_conversion(
+        &globals.store,
+        v,
+        STRING_CLASS,
+    ))
 }
 
 fn next_char_boundary(s: &str, p: usize) -> usize {

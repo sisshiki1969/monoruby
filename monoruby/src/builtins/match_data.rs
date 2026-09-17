@@ -185,7 +185,7 @@ fn deconstruct_keys_md(
             let Some(sym) = key.try_symbol() else {
                 return Err(MonorubyErr::typeerr(format!(
                     "wrong argument type {} (expected Symbol)",
-                    key.get_real_class_name(globals)
+                    key.builtin_class_name(globals)
                 )));
             };
             let name = sym.get_name();
@@ -199,7 +199,7 @@ fn deconstruct_keys_md(
     } else {
         return Err(MonorubyErr::typeerr(format!(
             "wrong argument type {} (expected Array)",
-            arg.get_real_class_name(globals)
+            arg.builtin_class_name(globals)
         )));
     }
     Ok(Value::hash(map))
@@ -563,7 +563,7 @@ fn match_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     } else {
         Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into Integer",
-            arg.get_real_class_name(globals)
+            arg.builtin_class_name(globals)
         )))
     }
 }
@@ -666,13 +666,13 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         let start = lfp.arg(0).try_fixnum().ok_or_else(|| {
             MonorubyErr::typeerr(format!(
                 "no implicit conversion of {} into Integer",
-                lfp.arg(0).get_real_class_name(globals)
+                lfp.arg(0).builtin_class_name(globals)
             ))
         })?;
         let len = arg1.try_fixnum().ok_or_else(|| {
             MonorubyErr::typeerr(format!(
                 "no implicit conversion of {} into Integer",
-                arg1.get_real_class_name(globals)
+                arg1.builtin_class_name(globals)
             ))
         })?;
         return Ok(slice_match_data(&m, start, len));
@@ -722,7 +722,7 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     } else {
         Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into Integer",
-            lfp.arg(0).get_real_class_name(globals)
+            lfp.arg(0).builtin_class_name(globals)
         )))
     }
 }

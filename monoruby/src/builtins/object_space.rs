@@ -53,7 +53,7 @@ fn map_of<'a>(globals: &Globals, v: &'a Value) -> Result<&'a WeakMapInner> {
         Some(m) => Ok(m),
         None => Err(MonorubyErr::typeerr(format!(
             "wrong argument type {} (expected ObjectSpace::WeakMap)",
-            v.get_real_class_name(&globals.store)
+            v.builtin_class_name(&globals.store)
         ))),
     }
 }

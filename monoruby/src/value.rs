@@ -862,6 +862,32 @@ impl Value {
         store.get_class_name(self.real_class(store).id())
     }
 
+    /// What a type error names an argument by (CRuby's
+    /// `rb_builtin_class_name`): `nil`, `true` and `false` by keyword,
+    /// everything else by its real class — `no implicit conversion of nil
+    /// into String`, `wrong argument type true (expected Module)`, but
+    /// `... of Symbol into String`.
+    pub(crate) fn builtin_class_name(self, store: &Store) -> String {
+        match self.unpack() {
+            RV::Nil => "nil".to_string(),
+            RV::Bool(b) => b.to_string(),
+            _ => self.get_real_class_name(store),
+        }
+    }
+
+    /// What a failed numeric coercion names the operand by (CRuby's
+    /// `coerce_failed`): a special constant — nil, true, false, a
+    /// Symbol, a Fixnum, a flonum — by `inspect`, so `1 + :a` says
+    /// `:a can't be coerced into Integer` and `1 + nil` says `nil`;
+    /// anything else by its class.
+    pub(crate) fn coerce_failed_name(self, store: &Store) -> String {
+        if self.is_packed_value() {
+            self.inspect(store)
+        } else {
+            self.get_real_class_name(store)
+        }
+    }
+
     pub(crate) fn is_kind_of(self, store: &Store, class: ClassId) -> bool {
         let mut obj_class = Some(self.get_class_obj(store));
         while let Some(obj_class_inner) = obj_class {

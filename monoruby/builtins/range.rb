@@ -313,7 +313,7 @@ class Range
   def __minmax_n(n)
     unless n.is_a?(Integer)
       unless n.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{n.class} into Integer"
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
       end
       conv = n.to_int
       unless conv.is_a?(Integer)
@@ -762,11 +762,11 @@ class Range
     elsif step_arg.respond_to?(:coerce)
       _, s = step_arg.coerce(b)
       unless s.is_a?(Numeric)
-        raise TypeError, "no implicit conversion of #{step_arg.class} into Integer"
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(step_arg)} into Integer"
       end
       s
     else
-      raise TypeError, "#{step_arg.class} can't be coerced into Integer"
+      raise TypeError, "#{__coerce_failed_name(step_arg)} can't be coerced into Integer"
     end
   end
 

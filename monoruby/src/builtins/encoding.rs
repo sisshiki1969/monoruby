@@ -1654,14 +1654,14 @@ fn transcode_with_fallback(
                     if converted.is_str().is_none() {
                         return Err(MonorubyErr::typeerr(format!(
                             "no implicit conversion of {} into String",
-                            globals.get_class_name(rep.class())
+                            rep.builtin_class_name(globals)
                         )));
                     }
                     converted
                 } else {
                     return Err(MonorubyErr::typeerr(format!(
                         "no implicit conversion of {} into String",
-                        globals.get_class_name(rep.class())
+                        rep.builtin_class_name(globals)
                     )));
                 };
                 let inner = rep_str.as_rstring_inner();
