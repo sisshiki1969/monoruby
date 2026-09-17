@@ -999,10 +999,7 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                         return vm.invoke_method_inner(globals, pow_id, ary[0], &[ary[1]], None, None);
                     }
                 }
-                return Err(MonorubyErr::typeerr(format!(
-                    "{} can't be coerced into Complex",
-                    rhs.coerce_failed_name(&globals.store)
-                )));
+                return Err(MonorubyErr::typeerr("coerce must return [x, y]"));
             }
         }
     };

@@ -1236,10 +1236,13 @@ fn constant_path_segments(
         {
             Some(id) => (id, false),
             None => {
-                return Err(MonorubyErr::typeerr(format!(
-                    "no implicit conversion of {} into String",
-                    name_arg.builtin_class_name(&globals.store)
-                )));
+                return Err(MonorubyErr::cant_convert_error(
+                    &globals.store,
+                    name_arg,
+                    result,
+                    "String",
+                    IdentId::TO_STR,
+                ));
             }
         }
     } else {
@@ -3080,9 +3083,10 @@ fn refine(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let refined = match arg.is_class_or_module() {
         Some(m) => m.id(),
         None => {
+            // CRuby names the class here (`rb_obj_class`), keyword or not.
             return Err(MonorubyErr::typeerr(format!(
                 "wrong argument type {} (expected Class or Module)",
-                arg.builtin_class_name(&globals.store)
+                arg.get_real_class_name(&globals.store)
             )));
         }
     };

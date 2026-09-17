@@ -628,10 +628,11 @@ fn ldexp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                         }
                     }
                 } else {
-                    return Err(MonorubyErr::typeerr(format!(
-                        "can't convert {} into Integer",
-                        exp_val.builtin_class_name(&globals.store),
-                    )));
+                    return Err(MonorubyErr::no_implicit_conversion(
+                        &globals.store,
+                        exp_val,
+                        INTEGER_CLASS,
+                    ));
                 }
             }
         }

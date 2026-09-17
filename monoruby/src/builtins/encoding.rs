@@ -1652,10 +1652,13 @@ fn transcode_with_fallback(
                 } else if globals.check_method(rep, IdentId::TO_STR).is_some() {
                     let converted = vm.invoke_method_inner(globals, IdentId::TO_STR, rep, &[], None, None)?;
                     if converted.is_str().is_none() {
-                        return Err(MonorubyErr::typeerr(format!(
-                            "no implicit conversion of {} into String",
-                            rep.builtin_class_name(globals)
-                        )));
+                        return Err(MonorubyErr::cant_convert_error(
+                            globals,
+                            rep,
+                            converted,
+                            "String",
+                            IdentId::TO_STR,
+                        ));
                     }
                     converted
                 } else {
