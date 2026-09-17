@@ -452,7 +452,7 @@ class Hash
 
   def flatten(level = 1)
     level = level.to_int if level.respond_to?(:to_int) && !level.is_a?(Integer)
-    raise TypeError, "no implicit conversion of #{level.class} into Integer" unless level.is_a?(Integer)
+    raise TypeError, "no implicit conversion of #{__builtin_class_name(level)} into Integer" unless level.is_a?(Integer)
     to_a.flatten(level)
   end
 

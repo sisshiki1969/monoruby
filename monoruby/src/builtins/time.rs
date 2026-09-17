@@ -211,6 +211,7 @@ fn deconstruct_keys_(
         }
     } else {
         return Err(MonorubyErr::typeerr(format!(
+            // CRuby names the class here (`rb_obj_class`), keyword or not.
             "wrong argument type {} (expected Array or nil)",
             arg.get_real_class_name(globals)
         )));

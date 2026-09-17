@@ -3236,7 +3236,7 @@ fn io_advise(
     let sym = arg0.try_symbol().ok_or_else(|| {
         MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into Symbol",
-            globals.get_class_name(arg0.class()),
+            arg0.builtin_class_name(globals),
         ))
     })?;
     let name = sym.get_name();
@@ -4223,7 +4223,7 @@ fn value_to_fd(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i32
     }
     Err(MonorubyErr::typeerr(format!(
         "no implicit conversion of {} into IO",
-        globals.get_class_name(v.class())
+        v.builtin_class_name(globals)
     )))
 }
 
@@ -5283,7 +5283,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         } else {
             return Err(MonorubyErr::typeerr(format!(
                 "no implicit conversion of {} into IO",
-                src_v.get_real_class_name(globals)
+                src_v.builtin_class_name(globals)
             )));
         };
         Src::Obj(src_v, m)
@@ -5307,7 +5307,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     } else {
         return Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into IO",
-            dst_v.get_real_class_name(globals)
+            dst_v.builtin_class_name(globals)
         )));
     };
 

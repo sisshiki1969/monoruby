@@ -84,7 +84,7 @@ class Numeric
 
   def quo(other)
     unless other.is_a?(Numeric)
-      raise TypeError, "#{other.class} can't be coerced into Rational"
+      raise TypeError, "#{__coerce_failed_name(other)} can't be coerced into Rational"
     end
     Rational(self) / other
   end
@@ -135,13 +135,15 @@ class Numeric
     if self.class == other.class
       [other, self]
     else
+      # CRuby's num_coerce goes through rb_Float() on both sides: its
+      # error ("can't convert nil into Float"), not "can't be coerced".
       if other.nil? || other.equal?(true) || other.equal?(false) || other.is_a?(Symbol)
-        raise TypeError, "#{other.class} can't be coerced into #{self.class}"
+        raise TypeError, "can't convert #{__builtin_class_name(other)} into Float"
       end
       begin
         [Float(other), Float(self)]
       rescue TypeError
-        raise TypeError, "#{other.class} can't be coerced into #{self.class}"
+        raise TypeError, "can't convert #{other.class} into Float"
       end
     end
   end

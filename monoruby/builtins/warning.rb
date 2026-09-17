@@ -11,7 +11,7 @@ module Warning
   def warn(msg, category: nil)
     unless category.nil?
       unless category.is_a?(Symbol)
-        raise TypeError, "wrong argument type #{category.class} (expected Symbol)"
+        raise TypeError, "wrong argument type #{__builtin_class_name(category)} (expected Symbol)"
       end
       unless Warning.categories.include?(category)
         raise ArgumentError, "unknown category: #{category}"

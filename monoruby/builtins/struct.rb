@@ -75,7 +75,7 @@ class Struct
       raise NameError, "no member '#{key}' in struct" unless i
       __slot_get(i)
     else
-      raise TypeError, "no implicit conversion of #{key.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(key)} into Integer"
     end
   end
 
@@ -93,7 +93,7 @@ class Struct
       raise NameError, "no member '#{key}' in struct" unless i
       __slot_set(i, value)
     else
-      raise TypeError, "no implicit conversion of #{key.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(key)} into Integer"
     end
   end
 
@@ -117,10 +117,10 @@ class Struct
               idx
             elsif idx.respond_to?(:to_int)
               c = idx.to_int
-              raise TypeError, "no implicit conversion of #{idx.class} into Integer" unless c.is_a?(Integer)
+              raise TypeError, "no implicit conversion of #{__builtin_class_name(idx)} into Integer" unless c.is_a?(Integer)
               c
             else
-              raise TypeError, "no implicit conversion of #{idx.class} into Integer"
+              raise TypeError, "no implicit conversion of #{__builtin_class_name(idx)} into Integer"
             end
         adj = i
         adj += size if adj < 0
@@ -180,7 +180,7 @@ class Struct
               raise TypeError, "can't convert #{k.class} into Integer (#{k.class}#to_int gives #{c.class})" unless c.is_a?(Integer)
               c
             else
-              raise TypeError, "no implicit conversion of #{k.class} into Integer"
+              raise TypeError, "no implicit conversion of #{__builtin_class_name(k)} into Integer"
             end
         idx = i
         idx += size if idx < 0

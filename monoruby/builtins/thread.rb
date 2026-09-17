@@ -53,7 +53,7 @@ class Thread
               "can't convert #{name.class} to String (#{name.class}#to_str gives #{name.class})"
           end
         else
-          Kernel.raise TypeError, "no implicit conversion of #{name.class} into String"
+          Kernel.raise TypeError, "no implicit conversion of #{__builtin_class_name(name)} into String"
         end
       end
       if name.include?("\0")
@@ -255,7 +255,7 @@ class Thread
   def priority=(value)
     unless value.is_a?(Integer)
       unless value.respond_to?(:to_int) && (value = value.to_int).is_a?(Integer)
-        Kernel.raise TypeError, "no implicit conversion of #{value.class} into Integer"
+        Kernel.raise TypeError, "no implicit conversion of #{__builtin_class_name(value)} into Integer"
       end
     end
     # CRuby clamps the stored priority to -3..3.
@@ -546,7 +546,7 @@ class Thread
       unless enum.nil?
         # CRuby's rb_convert_type protocol (to_a), messages included.
         unless enum.respond_to?(:to_a)
-          raise TypeError, "can't convert #{enum.class} into Array"
+          raise TypeError, "can't convert #{__builtin_class_name(enum)} into Array"
         end
         ary = enum.to_a # a NoMethodError raised inside #to_a propagates
         unless ary.is_a?(Array)
@@ -588,7 +588,7 @@ class Thread
         raise TypeError, "no implicit conversion to float from #{desc}"
       end
       unless timeout.respond_to?(:to_f)
-        raise TypeError, "can't convert #{timeout.class} into Float"
+        raise TypeError, "can't convert #{__builtin_class_name(timeout)} into Float"
       end
       f = timeout.to_f
       unless Float === f
@@ -680,7 +680,7 @@ class Thread
     def __check_capacity(v)
       unless v.is_a?(Integer)
         unless v.respond_to?(:to_int)
-          raise TypeError, "no implicit conversion of #{v.class} into Integer"
+          raise TypeError, "no implicit conversion of #{__builtin_class_name(v)} into Integer"
         end
         klass = v.class
         v = v.to_int
@@ -865,7 +865,7 @@ class Thread
         r = v.to_int
         return r if r.is_a?(Integer)
       end
-      raise TypeError, "no implicit conversion of #{v.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(v)} into Integer"
     end
 
     class Location

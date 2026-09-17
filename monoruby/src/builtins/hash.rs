@@ -474,7 +474,7 @@ fn ruby2_keywords_hash(
     if h.try_hash_ty().is_none() {
         return Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into Hash",
-            h.get_real_class_name(&globals.store)
+            h.builtin_class_name(&globals.store)
         )));
     }
     // A full dup: preserves the receiver's class (Hash subclass) and
@@ -500,7 +500,7 @@ fn ruby2_keywords_hash_p(
     if h.try_hash_ty().is_none() {
         return Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into Hash",
-            h.get_real_class_name(&globals.store)
+            h.builtin_class_name(&globals.store)
         )));
     }
     Ok(Value::bool(h.as_hashmap_inner().ruby2_keywords_flag()))

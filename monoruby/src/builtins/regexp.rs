@@ -706,7 +706,7 @@ fn format_union_member(
             return Ok(RegexpInner::escape(s));
         }
     }
-    let class = arg.get_real_class_name(&globals.store);
+    let class = arg.builtin_class_name(&globals.store);
     Err(MonorubyErr::typeerr(format!(
         "no implicit conversion of {class} into String"
     )))

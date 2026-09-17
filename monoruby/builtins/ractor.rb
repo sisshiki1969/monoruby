@@ -53,7 +53,7 @@ class Ractor
     def new(*args, name: nil, &block)
       raise ArgumentError, "must be called with a block" unless block
       unless name.nil? || name.is_a?(String)
-        raise TypeError, "no implicit conversion of #{name.class} into String"
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(name)} into String"
       end
       r = allocate
       r.__send__(:__ractor_init, args, name, block)

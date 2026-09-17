@@ -34,7 +34,7 @@ class IO
       write(ch[0])
     else
       i = ch.is_a?(Integer) ? ch : (ch.respond_to?(:to_int) ? ch.to_int : nil)
-      raise TypeError, "no implicit conversion of #{ch.class} into Integer" if i.nil?
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(ch)} into Integer" if i.nil?
       write((i & 0xff).chr)
     end
     ch

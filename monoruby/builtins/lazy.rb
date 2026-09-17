@@ -89,7 +89,7 @@ class Enumerator
     private def __lazy_to_int(n)
       return n if n.is_a?(Integer)
       unless n.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{n.class} into Integer"
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
       end
       i = n.to_int
       unless i.is_a?(Integer)

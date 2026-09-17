@@ -40,7 +40,7 @@ fn coerce_to_rstring_inner(
     }
     Err(MonorubyErr::typeerr(format!(
         "no implicit conversion of {} into String",
-        recv.get_real_class_name(&globals.store)
+        recv.builtin_class_name(&globals.store)
     )))
 }
 
@@ -246,7 +246,7 @@ impl Value {
         }
         Err(MonorubyErr::typeerr(format!(
             "can't convert {} into Integer",
-            self.get_real_class_name(&globals.store)
+            self.builtin_class_name(&globals.store)
         )))
     }
 
@@ -587,7 +587,7 @@ impl Value {
                         "no implicit conversion from nil to integer",
                     ))
                 } else {
-                    let class_name = self.get_real_class_name(&globals.store);
+                    let class_name = self.builtin_class_name(&globals.store);
                     Err(MonorubyErr::typeerr(format!(
                         "no implicit conversion of {class_name} into Integer"
                     )))

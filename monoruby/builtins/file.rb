@@ -94,10 +94,10 @@ class File
   def self.dirname(path, level = 1)
     path = path.to_path if !path.is_a?(String) && path.respond_to?(:to_path)
     path = path.to_str  if !path.is_a?(String) && path.respond_to?(:to_str)
-    raise TypeError, "no implicit conversion of #{path.class} into String" unless path.is_a?(String)
+    raise TypeError, "no implicit conversion of #{__builtin_class_name(path)} into String" unless path.is_a?(String)
     unless level.is_a?(Integer)
       unless level.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{level.class} into Integer"
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(level)} into Integer"
       end
       level = level.to_int
     end

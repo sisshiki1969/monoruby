@@ -1868,7 +1868,7 @@ fn resolve_id_arg(_vm: &mut Executor, globals: &mut Globals, v: Value, group: bo
     }
     Err(MonorubyErr::typeerr(format!(
         "no implicit conversion of {} into Integer",
-        v.get_real_class_name(&globals.store)
+        v.builtin_class_name(&globals.store)
     )))
 }
 

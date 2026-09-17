@@ -76,7 +76,7 @@ class SystemCallError
     end
     return errno.to_i if errno.is_a?(Numeric)
     unless errno.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{errno.class} into Integer"
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(errno)} into Integer"
     end
     errno.to_int
   end
@@ -129,7 +129,7 @@ class SystemCallError
       if msg.respond_to?(:to_str)
         msg = msg.to_str
       else
-        raise TypeError, "no implicit conversion of #{msg.class} into String"
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(msg)} into String"
       end
     end
     @__errno = reported_errno.nil? ? errno : reported_errno

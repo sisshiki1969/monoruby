@@ -1184,14 +1184,11 @@ fn copy(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let source_v = lfp.arg(0);
     let Some(source) = source_v.try_iobuffer_inner() else {
         // CRuby renders nil as "nil", not "NilClass", here.
-        let name = if source_v.is_nil() {
-            "nil".to_string()
-        } else {
-            source_v.get_real_class_name(globals)
-        };
-        return Err(MonorubyErr::typeerr(format!(
-            "wrong argument type {name} (expected IO::Buffer)"
-        )));
+        return Err(MonorubyErr::wrong_argument_type(
+            globals,
+            source_v,
+            "IO::Buffer",
+        ));
     };
     let offset = match lfp.try_arg(1) {
         Some(v) => strict_index_arg(vm, globals, v, "Offset can't be negative!")?,
@@ -1535,7 +1532,7 @@ fn cmp(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     {
         return Err(MonorubyErr::typeerr(format!(
             "wrong argument type {} (expected IO::Buffer)",
-            other.get_real_class_name(globals)
+            other.builtin_class_name(globals)
         )));
     }
     let a = self_.as_iobuffer_inner().read_bytes()?;
@@ -1695,15 +1692,7 @@ fn buffer_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// CRuby's messages ("nil", not "NilClass", in the TypeError).
 fn mask_arg<'a>(globals: &mut Globals, v: &'a Value) -> Result<&'a [u8]> {
     let Some(buf) = v.try_iobuffer_inner() else {
-        let name = if v.is_nil() {
-            "nil".to_string()
-        } else {
-            v.get_real_class_name(globals)
-        };
-        return Err(MonorubyErr::typeerr(format!(
-            "wrong argument type {} (expected IO::Buffer)",
-            name
-        )));
+        return Err(MonorubyErr::wrong_argument_type(globals, *v, "IO::Buffer"));
     };
     let mask = buf.read_bytes()?;
     if mask.is_empty() {
