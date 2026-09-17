@@ -99,6 +99,8 @@ monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "aarch
 onigmo-regex = { git = "https://github.com/sisshiki1969/onigmo-regex.git" }
 ruby-prism = { git = "https://github.com/sisshiki1969/prism.git", branch = "monoruby-vendored" }
 monoruby-attr = { path = "../monoruby_attr" }
+# The C ABI handed to dynamically loaded extensions (src/ext.rs).
+monoruby-ext-sys = { path = "../monoruby_ext_sys" }
 rubymap = { path = "../rubymap" }
 indexmap = "2.14.0"
 num = "0.4.3"

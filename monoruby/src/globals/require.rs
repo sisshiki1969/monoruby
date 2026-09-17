@@ -7,6 +7,10 @@ pub(crate) enum RequireLoad {
     /// Not yet loaded: execute this body, registered in
     /// `$LOADED_FEATURES` under the given canonical path.
     Load(Vec<u8>, std::path::PathBuf),
+    /// A native extension (`src/ext.rs`), registered in
+    /// `$LOADED_FEATURES` under this path: `dlopen` it and run its
+    /// `Init_`.
+    Native(std::path::PathBuf),
     /// Already present in `$LOADED_FEATURES` under this path — which
     /// includes a load still *in progress* on another thread (features
     /// register before their body runs); `Executor::require` uses the
@@ -288,6 +292,17 @@ impl Globals {
                 return Some(p);
             }
         }
+        // A `.so` candidate names a native extension when one of that
+        // stem is installed (`lib<stem>.so` next to the binary or in the
+        // install root's `ext/`, see `ext::find_extension`); the stem
+        // alone is matched, as rubygems nests a gem's `.so` under
+        // `<gem>/<ruby version>/` while monoruby's extension dir is flat.
+        if cand.extension().map(|e| e.as_bytes()) == Some(b"so")
+            && let Some(stem) = cand.file_stem()
+            && let Some(p) = crate::ext::find_extension(&stem.to_string_lossy())
+        {
+            return Some(p);
+        }
 
         // `bundler` (and everything under `bundler/`) must resolve to the
         // *host* copy whenever one is installed, never the vendored snapshot
@@ -362,6 +377,10 @@ impl Globals {
         );
         if self.is_feature_loaded(&canonicalized_path) {
             return Ok(RequireLoad::AlreadyLoaded(canonicalized_path));
+        }
+        if crate::ext::is_extension_path(&canonicalized_path) {
+            self.add_loaded_feature(&canonicalized_path);
+            return Ok(RequireLoad::Native(canonicalized_path));
         }
         let (file_body, _resolved) = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
             let monoruby_lib = install_root().join("lib");

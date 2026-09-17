@@ -347,6 +347,7 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashb
 | --------------- | -------------------------------------------------------- |
 | `monoruby`      | Main interpreter + JIT (includes the prism→AST bridge)   |
 | `monoruby_attr` | Proc macros: `#[monoruby_builtin]`, `#[monoruby_object]` |
+| `monoruby_ext_sys` | The C ABI handed to dynamically loaded extensions (`MrValue`, `MrContext`, the `MrApi` table; `include/monoruby_ext.h` for C). The interpreter side is `monoruby/src/ext.rs`; see `doc/native_extension_loading.md` |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |

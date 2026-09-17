@@ -1,0 +1,12 @@
+[package]
+name = "monoruby-ext-sys"
+version = "0.1.0"
+edition = "2024"
+description = "The C ABI monoruby hands to dynamically loaded extensions: MrValue, MrContext, the MrApi table (doc/native_extension_loading.md)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "monoruby_ext_sys"
+
+[dependencies]

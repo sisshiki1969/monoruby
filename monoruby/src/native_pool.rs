@@ -63,6 +63,9 @@ pub(crate) enum NativeOp {
     /// short, and the round trip here costs tens of microseconds.
     #[cfg(feature = "sqlite3")]
     Sqlite3(crate::builtins::sqlite3::Sqlite3WorkerCall),
+    /// A dynamically loaded extension's `call_blocking` (`src/ext.rs`):
+    /// its own function and argument, raw, as `Ffi`.
+    Ext(crate::ext::ExtWorkerCall),
 }
 
 pub(crate) struct Completion {
@@ -366,6 +369,7 @@ fn run_op(op: &NativeOp) -> (i64, i32) {
         // usable from the interpreter thread afterwards.
         #[cfg(feature = "sqlite3")]
         NativeOp::Sqlite3(call) => (call.run(), 0),
+        NativeOp::Ext(call) => (call.run(), 0),
     }
 }
 
