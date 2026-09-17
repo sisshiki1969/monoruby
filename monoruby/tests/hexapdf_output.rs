@@ -1,3 +1,4 @@
+#![cfg(feature = "zlib")]
 extern crate monoruby;
 use monoruby::tests::ruby_path;
 use std::process::Command;

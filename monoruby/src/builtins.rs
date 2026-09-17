@@ -8,7 +8,9 @@ mod bool_class;
 mod class;
 mod digest;
 mod cipher;
+#[cfg(feature = "nokogiri")]
 mod nokogiri;
+#[cfg(feature = "psych")]
 mod yaml;
 mod dir;
 pub(crate) mod encoding;
@@ -45,6 +47,7 @@ mod range;
 mod regexp;
 mod set;
 mod socket;
+#[cfg(feature = "sqlite3")]
 pub(crate) mod sqlite3;
 pub(crate) mod spawn;
 pub(crate) mod string;
@@ -57,7 +60,9 @@ mod time;
 mod prism;
 mod true_class;
 mod warning;
+#[cfg(feature = "zlib")]
 mod zlib;
+#[cfg(feature = "zstd")]
 mod zstd;
 
 #[cfg(target_arch = "x86_64")]
@@ -155,10 +160,15 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     json::init(globals);
     digest::init(globals);
     cipher::init(globals);
+    #[cfg(feature = "nokogiri")]
     nokogiri::init(globals);
+    #[cfg(feature = "psych")]
     yaml::init(globals);
+    #[cfg(feature = "zlib")]
     zlib::init(globals);
+    #[cfg(feature = "zstd")]
     zstd::init(globals);
+    #[cfg(feature = "sqlite3")]
     sqlite3::init(globals);
     prism::init(globals);
     object_space::init(globals);

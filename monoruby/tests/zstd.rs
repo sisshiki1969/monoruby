@@ -1,3 +1,4 @@
+#![cfg(feature = "zstd")]
 extern crate monoruby;
 use monoruby::tests::*;
 

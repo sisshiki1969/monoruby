@@ -613,6 +613,7 @@ Modes via `MONORUBY_TEST_ORACLE`:
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
 | `dump-require`      | Log `require`/`load` file resolution                                   |
+| `nokogiri`, `sqlite3`, `zstd`, `psych`, `zlib` | **Default on.** The native-backed library stand-ins (bundled libxml2 / SQLite / libzstd / libyaml port / zlib). Switching one off compiles out its builtins *and* leaves its `gem/` / `stdlib/` stand-in uninstalled, so `require` raises LoadError as CRuby does without the extension. `cargo check --no-default-features` is a CI step. |
 
 Chain deopt (`doc/chain_deopt.md`) is always on: every deopt / error side
 exit escalates through the chain-deopt walk, and BOP eviction converts

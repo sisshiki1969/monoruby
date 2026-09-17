@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{fs, io};
+use std::{env, fs, io};
 
 /// Minimum CRuby version whose `RUBY_PLATFORM` monoruby is willing to bake
 /// at build time. Older Rubies (Debian's system 3.0, for example) lack APIs
@@ -89,7 +89,42 @@ fn main() {
     // stale checkout's binary read another's files). The absolute path is
     // baked into the binary as `MONORUBY_INSTALL_ROOT` and read back at run
     // time (see `globals::install_root`).
-    let install_root = lib_path.join(format!("v{}", env!("CARGO_PKG_VERSION")));
+    // The stand-in of a native-backed library that is compiled out
+    // (`--no-default-features`, or a default feature switched off) is not
+    // installed either: its Ruby half calls `String.__*` primitives the
+    // binary then lacks, and a `require` that finds the `.rb` and fails
+    // on the first primitive is worse than one that finds nothing and
+    // raises LoadError as CRuby does without the extension. Top-level
+    // entries of `stdlib/` and `gem/`, keyed by the feature that provides
+    // them (Cargo exports each enabled feature as CARGO_FEATURE_<NAME>).
+    let gated: [(&str, &[&str]); 5] = [
+        ("nokogiri", &["gem/nokogiri", "gem/nokogiri.rb"]),
+        ("sqlite3", &["gem/sqlite3", "gem/sqlite3.rb"]),
+        ("zstd", &["gem/zstd-ruby"]),
+        ("psych", &["gem/psych", "gem/psych.rb", "gem/yaml.rb"]),
+        ("zlib", &["stdlib/zlib.rb"]),
+    ];
+    let disabled: Vec<&str> = gated
+        .iter()
+        .map(|(feature, _)| *feature)
+        .filter(|feature| env::var_os(format!("CARGO_FEATURE_{}", feature.to_uppercase())).is_none())
+        .collect();
+    let skip: Vec<PathBuf> = gated
+        .iter()
+        .filter(|(feature, _)| disabled.contains(feature))
+        .flat_map(|(_, paths)| paths.iter().map(PathBuf::from))
+        .collect();
+
+    // A build with some of those features off installs a different tree
+    // (the stand-ins above are missing from it), so it gets its own root —
+    // `v0.3.0-without-psych-zlib` — rather than replacing the full tree a
+    // default build of the same version baked into *its* binary.
+    let root_name = if disabled.is_empty() {
+        format!("v{}", env!("CARGO_PKG_VERSION"))
+    } else {
+        format!("v{}-without-{}", env!("CARGO_PKG_VERSION"), disabled.join("-"))
+    };
+    let install_root = lib_path.join(root_name);
     println!(
         "cargo:rustc-env=MONORUBY_INSTALL_ROOT={}",
         install_root.display()
@@ -212,7 +247,7 @@ fn main() {
     }
 
     for (src, dst) in &sources {
-        copy_dir_all(src, dst).unwrap();
+        copy_dir_all_except(src, dst, &skip).unwrap();
     }
 
     // Content-address the staged tree. When the installed root already
@@ -321,15 +356,25 @@ fn hash_tree(root: &Path, h: &mut DefaultHasher) -> io::Result<()> {
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> io::Result<()> {
+    copy_dir_all_except(src, dst, &[])
+}
+
+/// `copy_dir_all`, skipping the entries of `src` whose path (as given,
+/// e.g. `gem/psych`) is listed in `skip`. Only direct children of the
+/// source roots are ever skipped, so the check is one `contains` per entry.
+fn copy_dir_all_except(src: &Path, dst: &Path, skip: &[PathBuf]) -> io::Result<()> {
     if !fs::exists(dst)? {
         fs::create_dir_all(dst)?;
     }
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let from = entry.path();
+        if skip.contains(&from) {
+            continue;
+        }
         let to = dst.join(entry.file_name());
         if from.is_dir() {
-            copy_dir_all(&from, &to)?;
+            copy_dir_all_except(&from, &to, skip)?;
         } else {
             fs::copy(&from, &to)?;
         }

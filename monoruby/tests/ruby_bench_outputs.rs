@@ -79,6 +79,7 @@ fn compare(bench: &str, gems: &[&str], script: &str) {
 }
 
 #[test]
+#[cfg(feature = "zlib")]
 fn erubi_template_renders_like_cruby() {
     // The gem-server index template over real gem specs: the generated
     // Ruby source and the rendered HTML (166563 bytes on both).
@@ -105,6 +106,7 @@ p [src.size, Zlib.crc32(src), out.size, Zlib.crc32(out), out.encoding.name]
 }
 
 #[test]
+#[cfg(feature = "zlib")]
 fn etanni_template_renders_like_cruby() {
     // The same template in the Etanni dialect (pure Ruby: `eval` of a
     // heredoc-spliced Proc and `instance_eval`).
@@ -137,6 +139,7 @@ p [out.size, Zlib.crc32(out), out.encoding.name]
 }
 
 #[test]
+#[cfg(feature = "zlib")]
 fn chunky_png_encodes_like_cruby() {
     // Every encoding the benchmark exercises: the PNG bytes depend on the
     // filter heuristics *and* on zlib producing the same deflate stream.
@@ -170,6 +173,7 @@ r.each { |k, v| puts "#{k}: #{v.inspect}" }
 }
 
 #[test]
+#[cfg(feature = "zlib")]
 fn protoboeuf_decodes_and_encodes_like_cruby() {
     // The generated pure-Ruby protobuf codec over the recorded parking-lot
     // messages: decode every message, re-encode it, and fingerprint both.
@@ -207,6 +211,7 @@ p [pixels.size, Blurhash.encode_rb(204, 204, pixels), Blurhash.encode_rb(204, 20
 }
 
 #[test]
+#[cfg(all(feature = "psych", feature = "zlib"))]
 fn psych_loads_like_cruby() {
     // The three YAML documents of psych-load (the benchmark body is
     // `Psych.load` of each), loaded and inspected; then dumped again and
@@ -229,6 +234,7 @@ end
 }
 
 #[test]
+#[cfg(feature = "zlib")]
 fn rubocop_autocorrects_like_cruby() {
     // The rubocop benchmark: `RuboCop::Runner` with `--autocorrect` over
     // `fixture.rb` fed through the `stdin` option (the Ruby LSP's way),

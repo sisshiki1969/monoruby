@@ -61,6 +61,7 @@ pub(crate) enum NativeOp {
     /// Fiddle bridge they replaced did with `blocking: true`. Everything
     /// else (`step`, `prepare`, the column reads) runs inline: it is
     /// short, and the round trip here costs tens of microseconds.
+    #[cfg(feature = "sqlite3")]
     Sqlite3(crate::builtins::sqlite3::Sqlite3WorkerCall),
 }
 
@@ -363,6 +364,7 @@ fn run_op(op: &NativeOp) -> (i64, i32) {
         // As `Ffi`: raw handles and byte buffers only, and the SQLite
         // build is `SQLITE_THREADSAFE=1`, so a connection opened here is
         // usable from the interpreter thread afterwards.
+        #[cfg(feature = "sqlite3")]
         NativeOp::Sqlite3(call) => (call.run(), 0),
     }
 }

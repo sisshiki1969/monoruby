@@ -956,6 +956,7 @@ impl ClassInfoTable {
     /// superclass walk as `Value::is_kind_of`, started from a class id.
     /// `false` for a class with no backing object (`BOOL_CLASS` and the
     /// other inline-cache-only tags).
+    #[cfg_attr(not(any(feature = "nokogiri", feature = "sqlite3")), allow(dead_code))]
     pub(crate) fn class_is_kind_of(&self, class: ClassId, target: ClassId) -> bool {
         let mut cur = self[class].try_get_module();
         while let Some(m) = cur {

@@ -1,3 +1,4 @@
+#![cfg(feature = "psych")]
 extern crate monoruby;
 use monoruby::tests::*;
 

@@ -4,6 +4,7 @@
 //! under the host CRuby (with rubygems, so not through the snapshot
 //! oracle) and the outputs must match byte for byte. Skips when the host
 //! ruby has no nokogiri (CI installs it).
+#![cfg(feature = "nokogiri")]
 
 extern crate monoruby;
 use monoruby::tests::ruby_path;

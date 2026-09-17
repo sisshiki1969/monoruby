@@ -18,7 +18,18 @@ name = "irm"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = []
+# The native-backed library stand-ins. Each pulls a bundled C library (or a
+# port of one) into the binary, so each is optional; all are on by default.
+# With one off, its `gem/` / `stdlib/` stand-in is not installed either, so
+# `require` of that library raises LoadError instead of finding a Ruby half
+# whose `String.__*` primitives are missing (see build.rs). Step 1 of
+# doc/native_extension_loading.md.
+default = ["nokogiri", "sqlite3", "zstd", "psych", "zlib"]
+nokogiri = ["dep:libxml2-src"]
+sqlite3 = ["dep:libsqlite3-src"]
+zstd = ["dep:zstd-safe"]
+psych = ["dep:libyaml-safer"]
+zlib = ["dep:libz-sys"]
 dump-bc = []
 dump-traceir = []
 emit-asm = ["dump-bc", "dump-traceir", "jit-log"]
@@ -112,13 +123,13 @@ rand_mt = { version = "5.0.0", features = ["rand-traits"] }
 # `Zlib::Deflate` / `Zlib::Inflate` in stdlib/zlib.rb — `String.__zstream_*`
 # in src/builtins/zlib.rs. Real DEFLATE compression, byte-identical to the
 # zlib CRuby's zlib.so links (PDF writers compare output sizes).
-libz-sys = { version = "1.1", features = ["static"] }
+libz-sys = { version = "1.1", features = ["static"], optional = true }
 # The bundled zstd (zstd-sys builds libzstd 1.5.7 from source, statically
 # linked) behind the zstd-ruby gem's `Zstd` module — `String.__zstd_*` in
 # src/builtins/zstd.rs, the Ruby half in gem/zstd-ruby/zstdruby.rb.
-zstd-safe = { version = "8.0", features = ["std"] }
-libxml2-src = { path = "../libxml2-src" }
-libsqlite3-src = { path = "../libsqlite3-src" }
+zstd-safe = { version = "8.0", features = ["std"], optional = true }
+libxml2-src = { path = "../libxml2-src", optional = true }
+libsqlite3-src = { path = "../libsqlite3-src", optional = true }
 bitvec = "1.0.1"
 ansi_term = "0.12.1"
 dirs = "6.0.0"
@@ -141,7 +152,7 @@ pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 aes-gcm = "0.10"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
-libyaml-safer = "0.3"
+libyaml-safer = { version = "0.3", optional = true }
 
 # macOS aarch64 (Apple Silicon): the bundled libffi-sys 4.1.0 fails to
 # link `_ffi_prep_cif_machdep` (the arm64 assembly piece doesn't build

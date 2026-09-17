@@ -1,3 +1,4 @@
+#![cfg(feature = "sqlite3")]
 extern crate monoruby;
 use monoruby::tests::*;
 
