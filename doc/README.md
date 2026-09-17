@@ -107,6 +107,7 @@ is the entry point.
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
 | [`c_extention.md`](c_extention.md) | JA | plan | Design study for loading CRuby C extensions (`.so`). |
+| [`native_extension_loading.md`](native_extension_loading.md) | JA | plan | How to stop bundling every native library in the core binary (17.5 MB of C source, 6.6 MB of linked objects, 11k lines of Rust glue): a CRuby C-API layer, a monoruby-specific C ABI for dlopen'd C / Rust extensions, system shared libraries, feature gating, out-of-process, WASM and Fiddle-backed Ruby compared, with a staged recommendation — feature-gate, then move the existing sqlite3 / zlib / zstd / psych / nokogiri halves behind a `mr_*` C ABI into `~/.monoruby/v<ver>/ext/`, then a CRuby shim on top if needed. |
 | [`nokogiri.md`](nokogiri.md) | JA | plan | Nokogiri on monoruby: the C extension rewritten in Rust over the bundled libxml2 (`libxml2-src`), the object / lifetime model, what is implemented, versus a C-API layer or a pure-Rust engine. |
 | [`plan-activerecord.md`](plan-activerecord.md) | JA | plan | Staged plan for running ActiveRecord, and what it depends on. |
 | [`progress_2025-2026.md`](progress_2025-2026.md) | EN | history | What changed over ~500 commits, April 2025 to April 2026. |
