@@ -341,7 +341,7 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zlib`, `ext/zstd`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
@@ -350,6 +350,8 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys
 | `monoruby_ext_sys` | The C ABI handed to dynamically loaded extensions (`MrValue`, `MrContext`, the `MrApi` table; `include/monoruby_ext.h` for C). The interpreter side is `monoruby/src/ext.rs`; see `doc/native_extension_loading.md` |
 | `monoruby_ext` | Safe Rust over `monoruby_ext_sys` for writing an extension in Rust (`Ctx`, `Value`, the `method!` / `native!` macros) |
 | `ext/sqlite3` | The sqlite3 gem's native half as a dynamically loaded extension (`libsqlite3_native.so`, crate `sqlite3_native`) over `libsqlite3-src` — the first stand-in moved out of the core |
+| `ext/zlib` | `Zlib`'s native half (`libzlib_native.so`, crate `zlib_native`): the `String.__zstream_*` streams over the bundled zlib (`libz-sys`) and the `__crc32` / `__adler32` byte walks |
+| `ext/zstd` | The zstd-ruby gem's native half (`libzstd_native.so`, crate `zstd_native`) over the bundled libzstd (`zstd-sys`) |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
@@ -391,19 +393,23 @@ External crates (fetched from git):
   `Drop`); their classes are defined with `instance_ty = NATIVE`
   (`define_class_with_instance_ty`) so the JIT never treats the payload as
   inline ivar slots. See `doc/nokogiri.md`.
-- `libz-sys` — zlib built from its bundled C source and linked statically; the
-  `String.__zstream_*` builtins (`src/builtins/zlib.rs`) expose one `z_stream`
-  per `Zlib::Deflate` / `Zlib::Inflate` object, and everything else in `Zlib`
-  (`stdlib/zlib.rb`: the class API, gzip framing, `GzipReader` / `GzipWriter`)
-  is Ruby. Compression is byte-identical to CRuby's zlib.so.
+- `libz-sys` — zlib built from its bundled C source and linked statically
+  **into the `ext/zlib` extension** (`libzlib_native.so`, required by
+  `stdlib/zlib.rb`); its `String.__zstream_*` primitives expose one
+  `z_stream` per `Zlib::Deflate` / `Zlib::Inflate` object, `__crc32` /
+  `__adler32` are the checksum byte walks, and everything else in `Zlib`
+  (the class API, gzip framing, `GzipReader` / `GzipWriter`) is Ruby.
+  Compression is byte-identical to CRuby's zlib.so. rubygems needs `zlib`
+  for `.gem` files, so an installed monoruby needs this extension:
+  `bin/install` puts it (with the others) in the install root's `ext/`.
 - `zstd-safe` / `zstd-sys` — libzstd 1.5.7 built from source and linked
-  statically, behind the zstd-ruby gem: `String.__zstd_*`
-  (`src/builtins/zstd.rs`, raw `zstd_sys` calls in the extension's own order)
-  hold the contexts and dictionaries in handle tables, and
-  `gem/zstd-ruby/zstdruby.rb` is the gem's C extension in Ruby on top
-  (`Zstd.compress` / `decompress`, `CDict` / `DDict`, `StreamingCompress` /
-  `StreamingDecompress`, skippable frames). Output is byte-identical to the
-  gem's zstdruby.so.
+  statically **into the `ext/zstd` extension** (`libzstd_native.so`, required
+  by `gem/zstd-ruby/zstdruby.rb`), behind the zstd-ruby gem: `String.__zstd_*`
+  (raw `zstd_sys` calls in the gem extension's own order) hold the contexts
+  and dictionaries in handle tables, and `zstdruby.rb` is the gem's C
+  extension in Ruby on top (`Zstd.compress` / `decompress`, `CDict` / `DDict`,
+  `StreamingCompress` / `StreamingDecompress`, skippable frames). Output is
+  byte-identical to the gem's zstdruby.so.
 - `libsqlite3-src` (workspace crate) — the SQLite amalgamation (3.48.0,
   public domain) under `libsqlite3-src/vendor/`, built with `cc` and linked
   statically, with a hand-written FFI. Behind the sqlite3 gem: the gem's
@@ -621,7 +627,7 @@ Modes via `MONORUBY_TEST_ORACLE`:
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
 | `dump-require`      | Log `require`/`load` file resolution                                   |
-| `nokogiri`, `zstd`, `psych`, `zlib` | **Default on.** The native-backed library stand-ins still compiled into the core (bundled libxml2 / libzstd / libyaml port / zlib; sqlite3 is a dynamically loaded extension instead, see `ext/sqlite3`). Switching one off compiles out its builtins *and* leaves its `gem/` / `stdlib/` stand-in uninstalled, so `require` raises LoadError as CRuby does without the extension. `cargo check --no-default-features` is a CI step. |
+| `nokogiri`, `psych` | **Default on.** The native-backed library stand-ins still compiled into the core (bundled libxml2 / libyaml port; sqlite3, zlib and zstd are dynamically loaded extensions instead, see `ext/`). Switching one off compiles out its builtins *and* leaves its `gem/` / `stdlib/` stand-in uninstalled, so `require` raises LoadError as CRuby does without the extension. `cargo check --no-default-features` is a CI step. |
 
 Chain deopt (`doc/chain_deopt.md`) is always on: every deopt / error side
 exit escalates through the chain-deopt walk, and BOP eviction converts

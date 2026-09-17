@@ -58,10 +58,6 @@ mod time;
 mod prism;
 mod true_class;
 mod warning;
-#[cfg(feature = "zlib")]
-mod zlib;
-#[cfg(feature = "zstd")]
-mod zstd;
 
 #[cfg(target_arch = "x86_64")]
 use crate::codegen::jitgen::AbstractState;
@@ -162,10 +158,6 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     nokogiri::init(globals);
     #[cfg(feature = "psych")]
     yaml::init(globals);
-    #[cfg(feature = "zlib")]
-    zlib::init(globals);
-    #[cfg(feature = "zstd")]
-    zstd::init(globals);
     prism::init(globals);
     object_space::init(globals);
     main_object::init(globals);

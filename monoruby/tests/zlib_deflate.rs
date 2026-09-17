@@ -1,4 +1,3 @@
-#![cfg(feature = "zlib")]
 extern crate monoruby;
 use monoruby::tests::*;
 
@@ -10,6 +9,7 @@ use monoruby::tests::*;
 
 #[test]
 fn deflate_bytes_match_zlib_for_every_level_and_strategy() {
+    ensure_extension("zlib_native");
     run_test_once(
         r#"
         require "zlib"
@@ -59,6 +59,7 @@ fn deflate_bytes_match_zlib_for_every_level_and_strategy() {
 
 #[test]
 fn inflate_streaming_and_errors() {
+    ensure_extension("zlib_native");
     run_test_once(
         r#"
         require "zlib"
@@ -104,6 +105,7 @@ fn deflate_params_reset_dictionary_and_stream_state() {
     // bytes flushed by the old settings, then the rest), `reset` reusing a
     // Deflate and an Inflate, `set_dictionary` on the inflate side after
     // NeedDict, and the counters / flags around them.
+    ensure_extension("zlib_native");
     run_test_once(
         r#"
         require "zlib"
@@ -151,4 +153,81 @@ fn deflate_params_reset_dictionary_and_stream_state() {
         r
         "#,
     );
+}
+
+// The checks that lived beside the native half while it was in the core
+// (`src/builtins/zlib.rs`): the checksum argument semantics, stored-block
+// deflate, and inflating streams a real zlib produced. `run_tests` spawns
+// the host CRuby for each expression.
+
+#[test]
+fn zlib_checksums() {
+    ensure_extension("zlib_native");
+    run_tests(&[
+        r#"require "zlib"; [Zlib.crc32, Zlib.adler32, Zlib.crc32(nil), Zlib.crc32(nil, 5), Zlib.adler32(nil, 5), Zlib.crc32("", 5), Zlib.adler32("", 5)]"#,
+        r#"require "zlib"; [Zlib.crc32("abc"), Zlib.adler32("abc"), Zlib.crc32("abc", 2**32 - 1), Zlib.crc32("abc", 2**32), Zlib.crc32("abc", 2**40 + 7), Zlib.crc32("abc", -1), Zlib.crc32("abc", 1.5)]"#,
+        r#"require "zlib"; [Zlib.crc32("あ"), Zlib.adler32("あ"), Zlib.crc32("abc", Zlib.crc32("IDAT"))]"#,
+        r#"require "zlib"; o = Object.new; def o.to_str; "abc"; end; [Zlib.crc32(o), Zlib.adler32(o)]"#,
+        r#"require "zlib"; s = ("x" * 7000) + (0..255).map(&:chr).join; [Zlib.crc32(s), Zlib.adler32(s), Zlib.crc32(s, Zlib.crc32(s))]"#,
+        // `crc32_combine(_, crc2, 0)` only with `crc2 == 0`: zlib < 1.2.12
+        // short-circuits a zero `len2` to `crc1` where 1.2.12+ still XORs
+        // `crc2` in, so any other seed pair depends on the host's zlib.
+        r#"require "zlib"; a = "abc" * 10; b = "defg" * 500; [Zlib.crc32_combine(Zlib.crc32(a), Zlib.crc32(b), b.bytesize) == Zlib.crc32(a + b), Zlib.adler32_combine(Zlib.adler32(a), Zlib.adler32(b), b.bytesize) == Zlib.adler32(a + b), Zlib.crc32_combine(7, 0, 0), Zlib.adler32_combine(7, 9, 0)]"#,
+    ]);
+    // The stub follows zlib 1.2.12+ (`crc1 ^ crc2` even for a zero
+    // `len2`); pin that without consulting the host's CRuby, whose
+    // linked zlib may be older and answer `crc1`.
+    assert!(run_test_no_result_check(r#"require "zlib"; Zlib.crc32_combine(7, 9, 0) == 14"#).as_bool());
+    run_test_error(r#"require "zlib"; Zlib.crc32("abc", "1")"#);
+    run_test_error(r#"require "zlib"; Zlib.crc32(123)"#);
+    run_test_error(r#"require "zlib"; Zlib.adler32(:abc)"#);
+}
+
+#[test]
+fn zlib_deflate_stored() {
+    ensure_extension("zlib_native");
+    // Up to one stored block the NO_COMPRESSION output is
+    // byte-identical to CRuby's. Past that the split point moved
+    // between zlib 1.3 and 1.3.1 (`deflate_stored` keeps a few more
+    // bytes back), and which one the host CRuby links varies, so from
+    // 65530 bytes on only the framing, the trailer and the round trip
+    // are compared. The other levels differ in the header's FLEVEL
+    // bits alone, which is all a stored stream can carry of them.
+    run_tests(&[
+        r#"require "zlib"; [0, 1, 5, 100, 65529].map { |n| s = "x" * n; d = Zlib::Deflate.deflate(s, 0); [d.bytesize, d.encoding.name, d[0, 7].unpack("C*"), d[-4..].unpack("C*"), Zlib::Inflate.inflate(d) == s] }"#,
+        r#"require "zlib"; [65530, 65531, 65532, 70000, 200000].map { |n| s = "x" * n; d = Zlib::Deflate.deflate(s, 0); [d.encoding.name, d[0, 2].unpack("C*"), d[-4..].unpack("C*"), Zlib::Inflate.inflate(d) == s] }"#,
+        r#"require "zlib"; s = (0..255).map(&:chr).join * 3; d = Zlib::Deflate.deflate(s, Zlib::NO_COMPRESSION); [d == Zlib::Deflate.deflate(s, 0), Zlib::Inflate.inflate(d) == s.b, Zlib::Inflate.inflate(d).encoding.name]"#,
+        r#"require "zlib"; [-1, 0, 1, 2, 5, 6, 7, 9, nil].map { |l| d = l.nil? ? Zlib::Deflate.deflate("abc") : Zlib::Deflate.deflate("abc", l); [d[0, 2].unpack("C*"), Zlib::Inflate.inflate(d)] }"#,
+        r#"require "zlib"; d = Zlib::Deflate.new(Zlib::NO_COMPRESSION); d << "abc"; r = [d.finished?, d.total_in]; d << "def"; out = d.finish; r << d.finished? << d.total_out; d.close; r << d.closed?; [out.unpack("C*"), r]"#,
+        r#"require "zlib"; d = Zlib::Deflate.new(0); out = d.deflate("hello", Zlib::FINISH); [out.unpack("C*"), Zlib::Inflate.inflate(out)]"#,
+        r#"require "zlib"; o = Object.new; def o.to_str; "abc"; end; Zlib::Inflate.inflate(Zlib::Deflate.deflate(o, 0))"#,
+    ]);
+    run_test_error(r#"require "zlib"; Zlib::Deflate.deflate("abc", 10)"#);
+    run_test_error(r#"require "zlib"; Zlib::Deflate.deflate("abc", -2)"#);
+    run_test_error(r#"require "zlib"; Zlib::Deflate.deflate(nil)"#);
+    run_test_error(r#"require "zlib"; Zlib::Deflate.deflate(123)"#);
+    // A closed stream answers nothing but `closed?`.
+    run_test_error(r#"require "zlib"; d = Zlib::Deflate.new; d.close; d.finished?"#);
+    run_test_error(r#"require "zlib"; d = Zlib::Deflate.new; d.close; d << "x""#);
+}
+
+#[test]
+fn zlib_inflate() {
+    ensure_extension("zlib_native");
+    // Streams a real zlib produced: a fixed-Huffman block, a
+    // dynamic-Huffman block, and stored blocks with a multi-block
+    // split. Each is decoded and compared with its plaintext.
+    run_tests(&[
+        r#"require "zlib"; Zlib::Inflate.inflate([120, 156, 203, 72, 205, 201, 201, 87, 200, 64, 39, 117, 20, 202, 243, 139, 114, 82, 20, 1, 184, 181, 11, 70].pack("C*"))"#,
+        r#"require "zlib"; text = (1..20).map { |i| "line #{i}: #{i * i} #{(i * 7919) % 1000}\n" }.join; d = [120, 218, 45, 207, 203, 13, 67, 49, 8, 68, 209, 253, 171, 98, 74, 240, 240, 179, 113, 63, 89, 68, 122, 74, 255, 203, 96, 153, 229, 69, 8, 29, 222, 239, 239, 3, 110, 16, 201, 124, 222, 83, 178, 97, 88, 186, 110, 233, 70, 98, 250, 188, 101, 181, 25, 136, 25, 55, 125, 67, 28, 158, 126, 51, 54, 52, 224, 180, 155, 179, 14, 37, 76, 245, 230, 218, 8, 131, 186, 220, 204, 141, 69, 200, 228, 77, 142, 58, 61, 6, 152, 163, 7, 71, 37, 172, 97, 187, 88, 48, 154, 65, 90, 70, 61, 152, 68, 90, 227, 120, 116, 25, 88, 209, 60, 30, 95, 1, 231, 106, 32, 227, 128, 3, 115, 52, 145, 101, 148, 149, 8, 105, 36, 75, 169, 98, 112, 107, 38, 243, 60, 69, 88, 52, 84, 10, 106, 5, 213, 53, 158, 63, 235, 56, 74, 2].pack("C*"); [Zlib::Inflate.inflate(d) == text, Zlib::Inflate.inflate(d).encoding.name]"#,
+        r#"require "zlib"; s = ("ab" * 40000) + "\x00\xff".b * 10; d = Zlib::Deflate.deflate(s, 0); i = Zlib::Inflate.new; i << d[0, 1000]; i << d[1000..]; out = i.finish; i.close; [out == s.b, out.bytesize, i.closed?]"#,
+        r#"require "zlib"; Zlib::Inflate.inflate("\x78\x01\x01\x03\x00\xfc\xffabc\x02\x4d\x01\x27".b)"#,
+        r#"require "zlib"; [Zlib::Inflate.inflate("\x78\x01\x03\x00\x00\x00\x00\x01".b), Zlib::Inflate.inflate(Zlib::Deflate.deflate("", 0))]"#,
+    ]);
+    // Bad header, bad Adler-32, truncated stream, preset dictionary.
+    run_test_error(r#"require "zlib"; Zlib::Inflate.inflate("garbage")"#);
+    run_test_error(r#"require "zlib"; Zlib::Inflate.inflate("\x78\x01\x01\x03\x00\xfc\xffabc\x02\x4d\x01\x28".b)"#);
+    run_test_error(r#"require "zlib"; Zlib::Inflate.inflate("\x78\x01\x01\x03\x00\xfc\xffab".b)"#);
+    run_test_error(r#"require "zlib"; Zlib::Inflate.inflate("\x78\x20\x01\x03\x00\xfc\xffabc\x02\x4d\x01\x27".b)"#);
+    run_test_error(r#"require "zlib"; Zlib::Inflate.inflate(nil)"#);
 }

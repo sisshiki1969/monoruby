@@ -23,17 +23,15 @@ pub fn ruby_path() -> &'static str {
 /// Build the extension crate `name` (a `cdylib` workspace member, e.g.
 /// `sqlite3_native`) in this test binary's profile and put its output
 /// directory on the extension search path, so `require "<name>.so"` in
-/// a test finds it. Built into `target/ext/` rather than the test's own
+/// a test finds it; the directory is answered too, for a test that spawns
+/// the `monoruby` binary (pass it as `MONORUBY_EXT_PATH`). Built into `target/ext/` rather than the test's own
 /// target dir: the outer `cargo test` holds that directory's lock while
 /// the tests run, and a nested `cargo build` on it would wait forever.
 /// Once per process; a build failure panics with cargo's output.
-pub fn ensure_extension(name: &str) {
+pub fn ensure_extension(name: &str) -> PathBuf {
     use std::sync::Mutex;
     static BUILT: Mutex<Vec<String>> = Mutex::new(Vec::new());
     let mut built = BUILT.lock().unwrap();
-    if built.iter().any(|n| n == name) {
-        return;
-    }
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
     // The library must be built for the arch this test binary runs on,
@@ -45,6 +43,10 @@ pub fn ensure_extension(name: &str) {
         if cfg!(target_os = "macos") { "apple-darwin" } else { "unknown-linux-gnu" }
     );
     let target = workspace.join("target/ext");
+    let dir = target.join(&triple).join(profile);
+    if built.iter().any(|n| n == name) {
+        return dir;
+    }
     let mut cmd = std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
     cmd.current_dir(&workspace)
         .args(["build", "-p", name, "--target", &triple, "--target-dir"])
@@ -64,8 +66,9 @@ pub fn ensure_extension(name: &str) {
         "building extension {name} failed:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    crate::ext::add_search_dir(target.join(&triple).join(profile));
+    crate::ext::add_search_dir(dir.clone());
     built.push(name.to_string());
+    dir
 }
 
 pub fn run_test(code: &str) {

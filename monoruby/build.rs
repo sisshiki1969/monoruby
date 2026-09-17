@@ -97,11 +97,9 @@ fn main() {
     // raises LoadError as CRuby does without the extension. Top-level
     // entries of `stdlib/` and `gem/`, keyed by the feature that provides
     // them (Cargo exports each enabled feature as CARGO_FEATURE_<NAME>).
-    let gated: [(&str, &[&str]); 4] = [
+    let gated: [(&str, &[&str]); 2] = [
         ("nokogiri", &["gem/nokogiri", "gem/nokogiri.rb"]),
-        ("zstd", &["gem/zstd-ruby"]),
         ("psych", &["gem/psych", "gem/psych.rb", "gem/yaml.rb"]),
-        ("zlib", &["stdlib/zlib.rb"]),
     ];
     let disabled: Vec<&str> = gated
         .iter()

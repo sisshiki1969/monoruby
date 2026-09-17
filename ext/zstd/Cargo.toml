@@ -1,0 +1,16 @@
+[package]
+name = "zstd_native"
+version = "0.1.0"
+edition = "2024"
+description = "The zstd-ruby gem's native half for monoruby, as a dynamically loaded extension over the bundled libzstd (zstd-sys)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "zstd_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+monoruby-ext = { path = "../../monoruby_ext" }
+zstd-safe = { version = "8.0", features = ["std"] }
+libc = "0.2"

@@ -1,4 +1,3 @@
-#![cfg(feature = "zstd")]
 extern crate monoruby;
 use monoruby::tests::*;
 
@@ -21,6 +20,7 @@ use monoruby::tests::*;
 /// content size (streamed out), and a larger input.
 #[test]
 fn zstd_one_shot() {
+    ensure_extension("zstd_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -61,6 +61,7 @@ fn zstd_one_shot() {
 /// skippable frame.
 #[test]
 fn zstd_errors() {
+    ensure_extension("zstd_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -102,6 +103,7 @@ fn zstd_errors() {
 /// methods — so the script checks its own expectations.
 #[test]
 fn zstd_builtin_guards() {
+    ensure_extension("zstd_native");
     run_test_no_result_check(
         r##"
         require "rubygems"
@@ -169,6 +171,7 @@ fn zstd_builtin_guards() {
 /// skippable-frame helpers.
 #[test]
 fn zstd_streaming() {
+    ensure_extension("zstd_native");
     run_test_once(
         r##"
         require "rubygems"

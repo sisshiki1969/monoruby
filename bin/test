@@ -107,6 +107,15 @@ cov_nextest "${NEXTEST_FEATURES[@]}"
 phase "build benchmark binary"
 cov_build "${BENCH_FEATURES[@]}"
 
+# The dynamically loaded extensions (doc/native_extension_loading.md) go
+# next to the binary, where `require "<name>.so"` looks first. Built into the
+# same target dir as the binary — under llvm-cov that is target/llvm-cov-target
+# — without the instrumentation flags (they are not measured).
+phase "build extensions next to the benchmark binary"
+env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS -u LLVM_PROFILE_FILE \
+  cargo build -p sqlite3_native -p zlib_native -p zstd_native \
+  --target-dir "$(dirname "$(dirname "$MONORUBY")")"
+
 phase "benchmarks: app_fib / tarai / so_nbody"
 $MONORUBY benchmark/app_fib.rb > monoruby.log 2> /dev/null
 "${RUBY[@]}" benchmark/app_fib.rb > ruby.log

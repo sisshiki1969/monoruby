@@ -1,4 +1,3 @@
-#![cfg(feature = "zlib")]
 extern crate monoruby;
 use monoruby::tests::*;
 
@@ -11,6 +10,7 @@ use monoruby::tests::*;
 
 #[test]
 fn gzip_round_trips_and_reader_writer_api() {
+    ensure_extension("zlib_native");
     run_test_once(
         r#"
 require "zlib"

@@ -1,0 +1,16 @@
+[package]
+name = "zlib_native"
+version = "0.1.0"
+edition = "2024"
+description = "Zlib's native half for monoruby, as a dynamically loaded extension over the bundled zlib (libz-sys)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "zlib_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+monoruby-ext = { path = "../../monoruby_ext" }
+libz-sys = { version = "1.1", features = ["static"] }
+libc = "0.2"

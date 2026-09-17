@@ -106,6 +106,8 @@ fi
 
 say "building release binary for benchmark diffs"
 cargo build --target "$TARGET" --release --bin monoruby
+# The dynamically loaded extensions, next to it (see bin/test).
+cargo build --target "$TARGET" --release -p sqlite3_native -p zlib_native -p zstd_native
 
 MONORUBY="$PWD/${TARGET_DIR}/release/monoruby"
 

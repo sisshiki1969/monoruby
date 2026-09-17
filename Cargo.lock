@@ -1000,7 +1000,6 @@ dependencies = [
  "libffi",
  "libxml2-src",
  "libyaml-safer",
- "libz-sys",
  "md-5",
  "memchr",
  "mimalloc",
@@ -1026,7 +1025,6 @@ dependencies = [
  "unicode-general-category",
  "unicode-normalization",
  "unicode-segmentation",
- "zstd-safe",
 ]
 
 [[package]]
@@ -2129,6 +2127,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zlib_native"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libz-sys",
+ "monoruby-ext",
+]
+
+[[package]]
 name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2151,4 +2158,13 @@ checksum = "0ef0a8027ec3ee71300ab3bcbcd0393f434aa72b91ca6d635a39941deae8eea0"
 dependencies = [
  "cc",
  "pkg-config",
+]
+
+[[package]]
+name = "zstd_native"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "monoruby-ext",
+ "zstd-safe",
 ]

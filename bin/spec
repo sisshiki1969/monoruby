@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-cargo install --path monoruby
+bin/install
 MONORUBY="${MONORUBY:-$(command -v monoruby)}"
 
 # Run ruby/spec with instrumented binary for coverage

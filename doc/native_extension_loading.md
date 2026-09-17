@@ -327,7 +327,8 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 | 1. feature 分割 | 済 | `nokogiri` / `zstd` / `psych` / `zlib` が default-on の feature。off にすると builtin が消え、`build.rs` がその stand-in を install しない（`v0.3.0-without-…` の別 root）。CI に `cargo check --no-default-features --tests`。 |
 | 2. C ABI | 済 | `monoruby_ext_sys/`（`MrValue` / `MrContext` / `MrApi`、`include/monoruby_ext.h`）、`monoruby/src/ext.rs`（表の実装、trampoline、`ExtNative`、loader）、`monoruby_ext/`（Rust 向け安全ラッパ: `Ctx` / `Value` / `method!` / `native!`）。`tests/native_ext.rs` が C で書いた拡張をヘッダから `cc` でビルドして全項目を通す。 |
 | 3. sqlite3 の分離 | 済 | `ext/sqlite3/`（crate `sqlite3_native`、cdylib）。`gem/sqlite3/sqlite3_native.rb` が `require "sqlite3_native.so"` する。`tests/sqlite3.rs` の 23 本は無変更で通る。コアから `src/builtins/sqlite3.rs`（2.2k 行）と `libsqlite3-src` 依存が消えた。 |
-| 3. zlib / zstd / psych / nokogiri | 未 | |
+| 3. zlib / zstd の分離 | 済 | `ext/zlib/`（`zlib_native`、checksum と `__zstream_*`）、`ext/zstd/`（`zstd_native`）。`stdlib/zlib.rb` / `gem/zstd-ruby/zstdruby.rb` が `require "…_native.so"` する。コアから `libz-sys` / `zstd-safe` が消えた。rubygems が `zlib` を要るので、インストール時は `bin/install` が 3 拡張を `<install root>/ext/` に置く。 |
+| 3. psych / nokogiri | 未 | |
 | 4. `bundled` / `system` feature | 未 | |
 | 5. CRuby API 互換層 | 未 | |
 
@@ -348,7 +349,7 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 - **拡張の `static` はプロセス共通、`Init_` はインタプリタごと。** テストハーネスは 1 プロセスに多数の `Globals` を作るので、拡張が定義したクラスを `static` に持つと 2 つ目のインタプリタで壊れる。`Ctx::interpreter_id`（globals ポインタ）で key する。sqlite3 は thread-local + id 照合にした。
 - **`require "x/4.0/x_native"` は `.rb` stand-in に届かなければならない。** ext の探索は bare な `require "x_native.so"` だけに限定した（gem の nested `.so` 名で ext に飛ぶと stand-in が持つ Ruby 側の定義を飛ばす）。
 - **テストから拡張をビルドするときは別の target dir**（`target/ext/`）。外側の `cargo test` が target dir のロックを持ったままテストを走らせるので、同じ dir への nested `cargo build` は待ち続ける。aarch64 の qemu 実行では `--target` を明示する必要がある。
-- 配布: `cargo build`（workspace root）で `.so` がバイナリの隣にできる。`cargo install` 時の `<install root>/ext/` への配置は未着手（§5）。
+- 配布: `cargo build`（workspace root）で `.so` がバイナリの隣にできる。`cargo install` はバイナリしか置かないので、`bin/install` が拡張をビルドして `<install root>/ext/` にコピーする（`bin/spec` もこれを使う）。`bin/test` / `bin/test-aarch64` はベンチマーク用バイナリの隣に拡張をビルドする。
 
 ## 7. 参考
 
