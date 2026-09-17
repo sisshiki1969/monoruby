@@ -338,10 +338,16 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             .try_symbol()
             .expect("symbol-to-proc outer self is not a Symbol");
         let args = lfp.variadic_args();
+        let bh = lfp.block();
         let Some((recv, rest)) = args.split_first() else {
+            // Keywords alone are the receiver: `:to_s.to_proc.call(k: 1)`
+            // is `{k: 1}.to_s` in CRuby, the body having no keyword
+            // parameters to bind them to.
+            if let Some(kw) = kw {
+                return vm.dispatch_symbol_proc_kw(globals, symbol_id, kw.as_val(), &[], bh, None);
+            }
             return Err(MonorubyErr::argumenterr("no receiver given"));
         };
-        let bh = lfp.block();
         // Same dispatch as a yield to this proc — one public-restricted
         // lookup, the arguments still rooted by this frame's slots.
         return vm.dispatch_symbol_proc_kw(globals, symbol_id, *recv, rest, bh, kw);

@@ -1038,6 +1038,16 @@ fn fill_positional_args(
     // comma) rest doesn't accept extras — CRuby's
     // `define_method(:m) { |a,| }; m(1, 2)` raises ArgumentError.
     // Only an *explicit* `*rest`/`*` lifts the upper bound.
+    // The `Symbol#to_proc` body is declared with one required parameter
+    // (its receiver) so that `arity` / `parameters` read as CRuby's, but a
+    // yield of nothing to `&:sym` is CRuby's "no receiver given", not an
+    // arity failure (#1380).
+    if buf_len == 0
+        && (callee.meta().func_id() == SYMBOL_TO_PROC_BODY_FUNCID
+            || callee.proc_method_body() == Some(SYMBOL_TO_PROC_BODY_FUNCID))
+    {
+        return Err(MonorubyErr::argumenterr("no receiver given"));
+    }
     if !is_block_style && (buf_len < min_args || (buf_len > max_args && !callee.is_explicit_rest()))
     {
         return Err(wrong_number_of_arg_with_kw(
