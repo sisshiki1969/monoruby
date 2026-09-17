@@ -1438,7 +1438,36 @@ impl FuncInfo {
     /// keyword behaves like one optional argument and forces the
     /// negative form.
     ///
+    /// A native builtin as CRuby's `Method#arity` / `#parameters` see a
+    /// C-implemented method: `Some(n)` when it takes exactly `n`
+    /// positionals and nothing else (`rb_define_method(.., n)`), `None`
+    /// when it is variable (`-1`, `[[:rest]]`) — optionals, a rest and
+    /// keywords all count as variable, whatever the native declares.
+    /// `None` also for a Ruby-level function, and for the
+    /// `Symbol#to_proc` body, which CRuby reports as `(recv, *args)`.
+    pub(crate) fn native_fixed_arity(&self) -> Option<Option<usize>> {
+        // Ruby-level bodies (an iseq, or the proc behind a
+        // `define_method`) report their own parameters.
+        if matches!(self.kind, FuncKind::ISeq(_) | FuncKind::Proc(_))
+            || self.meta().func_id() == SYMBOL_TO_PROC_BODY_FUNCID
+        {
+            return None;
+        }
+        let p = &self.ext.params;
+        let fixed = self.opt_num() == 0
+            && !self.is_rest()
+            && !p.has_keyword()
+            && self.kw_rest().is_none();
+        Some(fixed.then(|| self.req_num()))
+    }
+
     pub(crate) fn arity(&self) -> i64 {
+        if let Some(fixed) = self.native_fixed_arity() {
+            return match fixed {
+                Some(n) => n as i64,
+                None => -1,
+            };
+        }
         let p = &self.ext.params;
         let req = self.min_positional_args() as i64;
         let has_required_kw = p.required_kw_num() > 0;
