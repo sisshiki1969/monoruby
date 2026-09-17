@@ -71,8 +71,13 @@ fn sqlite3_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr)
         .store
         .define_class_with_instance_ty("Statement", object, sqlite3, ObjTy::NATIVE)
         .id();
+    let backup = globals
+        .store
+        .define_class_with_instance_ty("Backup", object, sqlite3, ObjTy::NATIVE)
+        .id();
     globals.store[database].set_alloc_func(database_alloc_func);
     globals.store[statement].set_alloc_func(statement_alloc_func);
+    globals.store[backup].set_alloc_func(backup_alloc_func);
 
     CLASSES.with(|cell| *cell.borrow_mut() = Some(Classes { sqlite3 }));
 
@@ -81,6 +86,14 @@ fn sqlite3_init(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr)
     globals.define_builtin_class_func(sqlite3, "libversion_string", libversion_string, 0);
     globals.define_builtin_class_func(sqlite3, "threadsafe", threadsafe, 0);
     globals.define_builtin_class_func(sqlite3, "sqlcipher?", sqlcipher_p, 0);
+
+    // ---- Backup (the online backup API; `backup.c` of the extension)
+    let b = backup;
+    globals.define_private_builtin_func(b, "initialize", backup_initialize, 4);
+    globals.define_builtin_func(b, "step", backup_step, 1);
+    globals.define_builtin_func(b, "finish", backup_finish, 0);
+    globals.define_builtin_func(b, "remaining", backup_remaining, 0);
+    globals.define_builtin_func(b, "pagecount", backup_pagecount, 0);
 
     // ---- Database
     let d = database;
@@ -297,6 +310,41 @@ extern "C" fn database_alloc_func(class_id: ClassId, _globals: &mut Globals) -> 
     )
 }
 
+/// An online backup in progress (`sqlite3_backup`), finished by `finish`
+/// or, if the object is collected first, by `Drop`.
+struct BackupHandle {
+    p: *mut sq::sqlite3_backup,
+}
+
+impl NativeData for BackupHandle {
+    fn mark(&self, _alloc: &mut crate::alloc::Allocator<RValue>) {}
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+impl Drop for BackupHandle {
+    fn drop(&mut self) {
+        if !self.p.is_null() {
+            // SAFETY: our own backup object, not finished yet.
+            unsafe { sq::sqlite3_backup_finish(self.p) };
+        }
+    }
+}
+
+/// `Backup.allocate`: filled in by `initialize`.
+extern "C" fn backup_alloc_func(class_id: ClassId, _globals: &mut Globals) -> Value {
+    Value::new_native(
+        class_id,
+        Box::new(BackupHandle {
+            p: std::ptr::null_mut(),
+        }),
+    )
+}
+
 /// `Statement.allocate`: filled in by `prepare`.
 extern "C" fn statement_alloc_func(class_id: ClassId, _globals: &mut Globals) -> Value {
     Value::new_native(
@@ -321,6 +369,135 @@ fn native_mut<T: NativeData>(mut v: Value) -> Result<&'static mut T> {
         .as_any_mut()
         .downcast_mut::<T>()
         .ok_or_else(|| MonorubyErr::typeerr("expected a native SQLite3 object"))
+}
+
+/// The live backup of `self`; the extension's `REQUIRE_OPEN_BACKUP`.
+fn backup_of(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<*mut sq::sqlite3_backup> {
+    let h = native_mut::<BackupHandle>(v)?;
+    if h.p.is_null() {
+        return Err(err_sqlite3(vm, globals, "cannot use a closed backup"));
+    }
+    Ok(h.p)
+}
+
+///
+/// ### SQLite3::Backup#initialize
+///
+/// - new(dstdb, dstname, srcdb, srcname) -> Backup
+///
+/// `sqlite3_backup_init`: a backup of database `srcname` of `srcdb` into
+/// database `dstname` of `dstdb` (`"main"`, `"temp"`, or an attached
+/// name). The connections stay open and owned by their Database
+/// objects.
+///
+#[monoruby_builtin]
+fn backup_initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    // The extension checks both connections with the Backup type's own
+    // `TypedData_Get_Struct`, hence the odd "expected" in its message.
+    for v in [lfp.arg(0), lfp.arg(2)] {
+        if !v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::NATIVE) {
+            return Err(MonorubyErr::typeerr(format!(
+                "wrong argument type {} (expected SQLite3::Backup)",
+                globals.store.get_class_name(v.class())
+            )));
+        }
+    }
+    let dst = db_of(vm, globals, lfp.arg(0))?;
+    let dst_name = to_cstring(&globals.store, lfp.arg(1))?;
+    let src = db_of(vm, globals, lfp.arg(2))?;
+    let src_name = to_cstring(&globals.store, lfp.arg(3))?;
+    // SAFETY: both connections are live, the names are NUL-terminated.
+    let p = unsafe { sq::sqlite3_backup_init(dst, dst_name.as_ptr(), src, src_name.as_ptr()) };
+    if p.is_null() {
+        // The error is reported on the destination connection, with the
+        // gem's per-code exception class.
+        let (rc, msg) = unsafe {
+            (
+                sq::sqlite3_errcode(dst),
+                cstr_to_string(sq::sqlite3_errmsg(dst)).unwrap_or_default(),
+            )
+        };
+        return Err(raise_code(vm, globals, rc, msg));
+    }
+    let h = native_mut::<BackupHandle>(lfp.self_val())?;
+    if !h.p.is_null() {
+        unsafe { sq::sqlite3_backup_finish(h.p) };
+    }
+    h.p = p;
+    Ok(Value::nil())
+}
+
+///
+/// ### SQLite3::Backup#step
+///
+/// - step(pages) -> Integer
+///
+/// Copies up to `pages` pages (`-1` for all of them); the SQLite result
+/// code (`SQLITE_OK` while pages remain, `SQLITE_DONE` when finished,
+/// `SQLITE_BUSY` / `SQLITE_LOCKED` to retry).
+///
+#[monoruby_builtin]
+fn backup_step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let p = backup_of(vm, globals, lfp.self_val())?;
+    let pages = lfp.arg(0).expect_integer(&globals.store)? as c_int;
+    // SAFETY: live backup.
+    let rc = unsafe { sq::sqlite3_backup_step(p, pages) };
+    Ok(Value::integer(rc as i64))
+}
+
+///
+/// ### SQLite3::Backup#finish
+///
+/// - finish -> nil
+///
+/// Releases the backup (`sqlite3_backup_finish`); the object is closed
+/// afterwards.
+///
+#[monoruby_builtin]
+fn backup_finish(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let p = backup_of(vm, globals, lfp.self_val())?;
+    let h = native_mut::<BackupHandle>(lfp.self_val())?;
+    h.p = std::ptr::null_mut();
+    // SAFETY: live backup, released exactly once.
+    unsafe { sq::sqlite3_backup_finish(p) };
+    Ok(Value::nil())
+}
+
+///
+/// ### SQLite3::Backup#remaining
+///
+/// - remaining -> Integer
+///
+#[monoruby_builtin]
+fn backup_remaining(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let p = backup_of(vm, globals, lfp.self_val())?;
+    Ok(Value::integer(unsafe { sq::sqlite3_backup_remaining(p) } as i64))
+}
+
+///
+/// ### SQLite3::Backup#pagecount
+///
+/// - pagecount -> Integer
+///
+#[monoruby_builtin]
+fn backup_pagecount(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let p = backup_of(vm, globals, lfp.self_val())?;
+    Ok(Value::integer(unsafe { sq::sqlite3_backup_pagecount(p) } as i64))
 }
 
 /// The open connection of `self`; every method but `closed?` raises on a

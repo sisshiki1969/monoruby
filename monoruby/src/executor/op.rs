@@ -364,6 +364,16 @@ impl Executor {
         if self.dispatch_redefined_op(globals, lhs.class(), IdentId::_EQ) {
             return self.invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None);
         }
+        // The String arms below are `String#==`'s own; an instance of a
+        // subclass takes the lookup, so a `==` the subclass defines wins
+        // (`BCrypt::Password#==`). CRuby's fast path is for exactly
+        // `rb_cString` too.
+        if let Some(rv) = lhs.try_rvalue()
+            && rv.ty() == ObjTy::STRING
+            && rv.class() != STRING_CLASS
+        {
+            return self.invoke_eq_raw_vis(globals, lhs, rhs, is_func_call);
+        }
         self.eq_values_vis_raw(globals, lhs, rhs, is_func_call)
     }
 
