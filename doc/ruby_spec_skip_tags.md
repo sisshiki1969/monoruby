@@ -1,5 +1,38 @@
 # ruby/spec ハング対策: `skip.txt` → `tags/` 移行
 
+> **更新(2026-09-17): `core/process/wait_tags.txt` を追加(#1386)。**
+> rubyspec-stats の 2026-09-17 の run(nightly = 900252fd)で core が空になった。
+> `spec/default.mspec` の example トレースが指す最後の example は
+> `Process.wait doesn't block if no child is available when WNOHANG is used`
+> (wait_spec.rb): `Process.fork` した子が `Signal.trap("TERM") { exit! }` して
+> `sleep`、親が pipe で同期してから `Process.kill("TERM")` → `Process.wait`
+> するもので、07:06:02 に入ったまま 07:25:42 の `timeout -k 5 1200` の TERM で
+> 抜けた(その TERM で次の example のトレースが 1 行出てから KILL、exit 137)。
+> 前日の run(a1aa2ec1e6)では同じ example が 20 ms で通っている。
+>
+> ローカルでは再現しない: release ビルドの master(bf089972)で core 全体を
+> 15 回(各 25 秒、23163 examples)、`taskset -c 0` の 1 CPU で core/process を
+> 4 回、さらに CI と同じ 900252fd をビルドして core 全体と wait_spec を走らせたが
+> いずれも完走した。stdin を閉じる / `/dev/null` にする、mspec の
+> `--timeout` 監視スレッドや fd 待ちスレッド・busy スレッドを立てた状態で
+> fork する、といった条件でも通る。900252fd と a1aa2ec1e6 の間の 7 コミット
+> (#1370-#1376)に fork / wait / signal を触るものは無い。
+>
+> つまり GitHub runner 上でだけ起きる `fork` した子 + `Process.wait` のハング
+> で、`fork_tags.txt`(fork_spec の 5 例、同じ「fork した子を wait する」型)と
+> 同じ族。原因が掴めるまで同じ扱いにし、この 1 例を `critical(hangs)` で外す。
+> 監視スレッド・ready キュー・fd 待ちを fork 直後の子で dispatch する経路
+> (`scheduler::fork_child_reset_threads`)は Dead マークで弾かれていることを
+> ローカルで確認済み。
+>
+> タグが効いているかをローカルで確かめるときの注意: mspec は spec ファイルの
+> **実パス**に `[%r(spec/), 'spec/tags/']` を当ててタグファイルを探す
+> (action.yml のコメント参照)。`spec/ruby` を ruby/spec の checkout への
+> symlink にした workspace では `<checkout>/tags/core/process/wait_tags.txt`
+> に置かないと "0 tagged" のまま黙って全例が走る。CI の action は
+> `spec/tags/ruby/` と `spec/ruby/tags/` の両方にコピーしているので、
+> 手元でも同じ 2 か所に置けば `mspec ci` が `1 tagged` と報告する。
+
 > **更新(2026-08-09): 最後のタグを削除、タグはゼロに。** #1065 で
 > `Process.kill` がプロセスグループ宛て負シグナル(`-TERM` / 負の番号)を
 > 実装し、`core/process/kill_tags.txt` の3件は pass するようになった。

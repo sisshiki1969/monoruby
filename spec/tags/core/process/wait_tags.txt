@@ -1,0 +1,1 @@
+critical(hangs):Process.wait doesn't block if no child is available when WNOHANG is used
