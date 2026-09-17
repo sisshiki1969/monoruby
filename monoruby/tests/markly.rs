@@ -243,8 +243,6 @@ fn markly_tree_edits() {
 
         d = Markly.parse("# H\n\n- a\n- b").dup
         res << [d.type, d.to_html]
-        item = Markly.parse("- a").first_child.first_child.dup
-        res << [item.type, item.parent&.type]
 
         h = Markly.parse("# x").first_child
         h.header_level = 3
@@ -352,3 +350,51 @@ fn markly_ruby_renderer() {
         "##,
     );
 }
+
+/// markly 0.19's additions — `_dup` (a detached deep copy behind `dup`),
+/// `code_info` / `code_info=` / `code_language`, `fence`, the
+/// `:front_matter` node — guarded by the installed gem's version so the
+/// comparison holds on a host with 0.15 as well.
+#[test]
+fn markly_0_19_api() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "markly"
+        res = []
+        if Gem::Version.new(Markly::VERSION) >= Gem::Version.new("0.19.0")
+          doc = Markly.parse("# H\n\n- a\n- *b* `c`\n\n```ruby x\ncode\n```\n\n    indented\n")
+          item = doc.first_child.next.first_child.dup
+          res << [item.type, item.parent, item.each.map(&:type), item.to_html]
+          copy = doc.dup
+          copy.first_child.first_child.string_content = "changed"
+          res << [doc.first_child.first_child.string_content, copy.first_child.first_child.string_content, copy.parent]
+          cb = doc.walk.find { |n| n.type == :code_block }
+          ind = doc.walk.select { |n| n.type == :code_block }.last
+          res << [cb.code_info, cb.code_language, cb.fence.to_a, cb.fence.class.name, ind.code_info, ind.code_language, ind.fence]
+          cb.code_info = "js"
+          res << [cb.code_info, cb.fence_info, cb.to_html]
+          cb.code_info = nil
+          res << [cb.code_info, cb.to_html]
+          code = doc.walk.find { |n| n.type == :code }
+          res << [code.code_info, code.code_language, code.to_html]
+          probe = lambda { |&b| begin; b.call; rescue => e; [e.class.name, e.message]; end }
+          res << probe.call { doc.first_child.code_info }
+          res << probe.call { doc.first_child.code_info = "x" }
+          res << probe.call { cb.code_info = 1 }
+          res << Markly::Node.new(:code_block).fence
+          res << Markly::Node.new(:code_block).code_info
+          res << Markly.parse("~~~~ py\nx\n~~~~").first_child.fence.to_a
+          res << Markly::Renderer::HTML.new.render(doc)
+          fm = Markly.parse("---\ntitle: x\n---\n\n# H\n", flags: Markly::FRONT_MATTER)
+          res << fm.walk.map(&:type)
+          res << [fm.first_child.type_string, fm.first_child.string_content, fm.first_child.code_info, fm.to_html]
+          res << Markly.parse("---\ntitle: x\n---\n\n# H\n").walk.map(&:type)
+        else
+          res << :skipped
+        end
+        res
+        "##,
+    );
+}
+

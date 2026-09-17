@@ -17,6 +17,11 @@
 #
 # `markly/flags.rb` is loaded after this file, so the flag constants are
 # looked up lazily here.
+#
+# Both gem lines are served: markly 0.15.x (`dup` re-parses `to_markdown`)
+# and 0.19.x (`_dup`, `code_info`, `fence`, the `:front_matter` node and
+# the `FRONT_MATTER` flag). `INLINE_CODE_INFO` and `HTML_BLOCK_BLANK_LINES`
+# (0.19) have no comrak counterpart and are ignored.
 
 module Markly
   class Error < StandardError; end
@@ -89,7 +94,7 @@ module Markly
 
     # Types whose literal `string_content` reads and writes
     # (cmark_node_get_literal / set_literal).
-    LITERAL_TYPES = %i[code_block html text inline_html code footnote_reference footnote_definition].freeze
+    LITERAL_TYPES = %i[code_block html text inline_html code footnote_reference footnote_definition front_matter].freeze
     private_constant :LITERAL_TYPES
 
     # cmark_node_get_type_string for the gem's symbols.
@@ -103,6 +108,7 @@ module Markly
       footnote_reference: "footnote_reference",
       footnote_definition: "footnote_definition",
       custom_block: "custom_block", custom_inline: "custom_inline",
+      front_matter: "front_matter",
     }.freeze
     private_constant :TYPE_STRINGS
 
@@ -144,8 +150,9 @@ module Markly
       @sourcepos = [0, 0, 0, 0]
       case type
       when :header then @level = 1
-      when :code_block then @content = +""; @fence_info = +""
-      when :html, :text, :inline_html, :code, :footnote_reference then @content = +""
+      when :code_block then @content = +""; @fence_info = +""; @fenced = false
+      when :code then @content = +""; @fence_info = +""
+      when :html, :text, :inline_html, :footnote_reference then @content = +""
       when :link, :image then @url = +""; @title = +""
       when :list_item then @list_start = 0
       end
@@ -185,6 +192,11 @@ module Markly
       @last_child = prev
     end
     private :__init_row
+
+    # A detached deep copy (markly 0.19's `Node#dup`).
+    def _dup
+      Node.__from_row(__row, nil)
+    end
 
     def __row
       [
@@ -286,7 +298,7 @@ module Markly
     BLOCK_TYPES = %i[
       document blockquote list list_item code_block html paragraph header
       hrule footnote_definition custom_block table table_header table_row
-      table_cell
+      table_cell front_matter
     ].freeze
     private_constant :BLOCK_TYPES
 
@@ -503,6 +515,35 @@ module Markly
       raise Error, "could not set fence_info" unless @type == :code_block
       @fence_info = info.dup
       nil
+    end
+
+    # markly 0.19: the info string of a code block, an inline code span
+    # or the front matter (its format hint).
+    def code_info
+      unless @type == :code_block || @type == :code || @type == :front_matter
+        raise Error, "could not get code_info"
+      end
+      (@fence_info || "").dup
+    end
+
+    def code_info=(info)
+      unless info.nil? || info.is_a?(String)
+        raise TypeError, "wrong argument type #{info.class} (expected String)"
+      end
+      unless @type == :code_block || @type == :code || @type == :front_matter
+        raise Error, "could not set code_info"
+      end
+      @fence_info = info&.dup
+      nil
+    end
+
+    Fence = Struct.new(:character, :length, :indent)
+
+    # markly 0.19: the fence of a fenced code block, nil otherwise.
+    def fence
+      return nil unless @type == :code_block && @fenced
+      char, length, indent = @extra.is_a?(Array) ? @extra : nil
+      Fence.new(char || "`", length || 3, indent || 0)
     end
 
     def table_alignments

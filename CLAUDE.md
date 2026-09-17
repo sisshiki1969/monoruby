@@ -443,7 +443,10 @@ External crates (fetched from git):
   cmark-gfm's; `to_commonmark` is comrak's own serialization style (list
   indent, fence spacing, hard-break escape), and list end source
   positions are comrak's. The plain-text renderer is a port of
-  cmark-gfm's `plaintext.c`.
+  cmark-gfm's `plaintext.c`. Both gem lines load: 0.15 (Lobsters'
+  Gemfile.lock) and 0.19 (`_dup`, `code_info`, `fence`, `:front_matter`
+  / `FRONT_MATTER`; `INLINE_CODE_INFO` and `HTML_BLOCK_BLANK_LINES` are
+  ignored).
 
 ---
 

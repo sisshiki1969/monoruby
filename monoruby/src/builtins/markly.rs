@@ -60,6 +60,9 @@ const OPT_GITHUB_PRE_LANG: i64 = 1 << 11;
 const OPT_FOOTNOTES: i64 = 1 << 13;
 const OPT_FULL_INFO_STRING: i64 = 1 << 16;
 const OPT_UNSAFE: i64 = 1 << 17;
+// markly 0.19; `INLINE_CODE_INFO` (1 << 19) and `HTML_BLOCK_BLANK_LINES`
+// (1 << 20) have no comrak counterpart.
+const OPT_FRONT_MATTER: i64 = 1 << 18;
 
 /// The tuple's slots.
 const T_TYPE: usize = 0;
@@ -97,6 +100,9 @@ fn options(flags: i64, extensions: &[String], width: usize) -> Options<'static> 
     o.render.github_pre_lang = flags & OPT_GITHUB_PRE_LANG != 0;
     o.render.full_info_string = flags & OPT_FULL_INFO_STRING != 0;
     o.render.r#unsafe = flags & OPT_UNSAFE != 0;
+    if flags & OPT_FRONT_MATTER != 0 {
+        o.extension.front_matter_delimiter = Some("---".to_string());
+    }
     o.render.width = width;
     for ext in extensions {
         match ext.as_str() {
@@ -284,7 +290,29 @@ fn to_tuple<'a>(node: &'a AstNode<'a>) -> Value {
             t[T_CONTENT] = Value::string_from_str(&cb.literal);
             t[T_FENCE_INFO] = Value::string_from_str(&cb.info);
             t[T_FENCED] = Value::bool(cb.fenced);
+            t[T_EXTRA] = Value::array_from_vec(vec![
+                Value::string((cb.fence_char as char).to_string()),
+                Value::integer(cb.fence_length as i64),
+                Value::integer(cb.fence_offset as i64),
+            ]);
             "code_block"
+        }
+        NodeValue::FrontMatter(s) => {
+            // comrak keeps the delimiter lines; cmark-gfm's node holds only
+            // what lies between them.
+            let mut lines: Vec<&str> = s.lines().collect();
+            if lines.first().is_some_and(|l| l.trim_end() == "---") {
+                lines.remove(0);
+            }
+            if let Some(end) = lines.iter().position(|l| l.trim_end() == "---") {
+                lines.truncate(end);
+            }
+            let mut inner = lines.join("\n");
+            if !lines.is_empty() {
+                inner.push('\n');
+            }
+            t[T_CONTENT] = Value::string(inner);
+            "front_matter"
         }
         NodeValue::HtmlBlock(hb) => {
             t[T_CONTENT] = Value::string_from_str(&hb.literal);
@@ -546,8 +574,9 @@ fn from_tuple<'a>(
     };
     match row.ty.as_str() {
         "list_item" | "item" => {
+            // Loose: cmark renders a parentless item's paragraphs as `<p>`.
             let list = holder(NodeValue::List(NodeList {
-                tight: true,
+                tight: false,
                 bullet_char: b'-',
                 padding: 2,
                 ..NodeList::default()
@@ -597,16 +626,25 @@ fn build<'a>(
         }
         "code_block" => {
             let fenced = row.t[T_FENCED].is_nil() || row.truthy(T_FENCED);
+            let (fence_char, fence_length, fence_offset) = match row.t[T_EXTRA].try_array_ty() {
+                Some(a) if a.len() == 3 => (
+                    a[0].expect_bytes(&globals.store)?.first().copied().unwrap_or(b'`'),
+                    a[1].expect_integer(&globals.store)?.max(0) as usize,
+                    a[2].expect_integer(&globals.store)?.max(0) as usize,
+                ),
+                _ => (b'`', 3, 0),
+            };
             NodeValue::CodeBlock(Box::new(NodeCodeBlock {
                 fenced,
-                fence_char: b'`',
-                fence_length: 3,
-                fence_offset: 0,
+                fence_char,
+                fence_length,
+                fence_offset,
                 info: row.str(globals, T_FENCE_INFO)?,
                 literal: row.str(globals, T_CONTENT)?,
                 closed: true,
             }))
         }
+        "front_matter" => NodeValue::FrontMatter(row.str(globals, T_CONTENT)?),
         "html" | "html_block" => NodeValue::HtmlBlock(NodeHtmlBlock {
             block_type: 6,
             literal: row.str(globals, T_CONTENT)?,
