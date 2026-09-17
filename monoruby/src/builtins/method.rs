@@ -1357,6 +1357,21 @@ mod tests {
     }
 
     #[test]
+    fn native_method_parameters_and_arity() {
+        // A native builtin reports as a C-implemented method does in
+        // CRuby: `[[:req]] * n` / `n` for a fixed arity, `[[:rest]]` /
+        // `-1` for anything variable — never the native's optional or
+        // keyword slots (#1381). The `Symbol#to_proc` body keeps its
+        // `(recv, *args)` shape, and a `Method#to_proc` proc reports its
+        // method.
+        run_tests(&[
+            r##"[method(:send), method(:public_send), method(:__send__), method(:instance_exec), proc {}.method(:call), "".method(:sub), "".method(:gsub), "".method(:index), [].method(:push), [].method(:insert), {}.method(:fetch), "".method(:encode), 1.method(:round), $stdout.method(:puts), $stdout.method(:printf), 1.method(:to_s), Struct.method(:new), String.instance_method(:sub), 1.method(:+), [].method(:fill), Integer.instance_method(:times)].map { |m| [m.parameters, m.arity] }"##,
+            r##"[:a.to_proc.parameters, :a.to_proc.arity, 1.method(:+).to_proc.parameters, 1.method(:+).to_proc.arity, "".method(:sub).to_proc.parameters, "".method(:sub).to_proc.arity, "".method(:sub).to_proc.lambda?]"##,
+            r##"[1.method(:+).curry.arity, 1.method(:+).curry[2], "".method(:end_with?).curry(2)["x"]["ab"]]"##,
+        ]);
+    }
+
+    #[test]
     fn method_arity_keyword_args() {
         // Keyword arguments participate in Method#arity exactly as
         // CRuby: a required keyword folds into one mandatory argument,
