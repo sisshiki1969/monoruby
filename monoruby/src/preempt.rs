@@ -144,10 +144,94 @@ fn timer_loop(shared: Arc<Shared>) {
     }
 }
 
+/// What a `fork(2)` has to hand the child instead of the timer's lock.
+///
+/// The timer thread takes `flag_addr`'s mutex at every tick, and it is
+/// not one of the threads a child gets: a fork that catches it holding
+/// the lock leaves the child a mutex nobody will ever unlock, and the
+/// child then blocks the first time it touches the poll word — in
+/// practice at its own exit, where dropping `Codegen` calls
+/// [`codegen_dropped`]. (`native_pool::ForkLocks` is the same hazard on
+/// the pool's locks, solved by holding them across the fork. That does
+/// not work here: the timer is not quiesced for the fork, it just
+/// ticks.)
+///
+/// So the child does not inherit the lock at all. The forking thread
+/// reads the poll-word address here, before the fork, and
+/// [`ForkState::reset_child`] gives the child a whole new [`Shared`]
+/// carrying it — the inherited one is simply abandoned, locked or not.
+pub(crate) struct ForkState {
+    flag_addr: usize,
+}
+
+/// Snapshot the poll-word address for a `fork(2)` — see [`ForkState`].
+/// Runs on the forking thread before the fork; the timer holds the lock
+/// only for the length of one `fetch_or`, so this cannot wedge.
+pub(crate) fn prepare_fork() -> ForkState {
+    let flag_addr = STATE
+        .try_with(|st| *st.borrow().shared.flag_addr.lock().unwrap())
+        .unwrap_or(0);
+    ForkState { flag_addr }
+}
+
+impl ForkState {
+    /// Give a freshly forked child its own timer state.
+    ///
+    /// The timer thread does not exist here, so its `JoinHandle` is
+    /// dropped rather than joined (joining would wait forever), and the
+    /// `Shared` it and the parent share is replaced by a fresh one with
+    /// the same poll-word address. The old one stays allocated — the
+    /// absent timer's `Arc` clone still counts in this address space —
+    /// which is the price of never touching its lock again. A child that
+    /// goes on to run two green threads starts a timer of its own
+    /// through [`on_thread_count`], against the new `Shared`.
+    pub(crate) fn reset_child(self) {
+        let _ = STATE.try_with(|st| {
+            let mut st = st.borrow_mut();
+            st.shared = Arc::new(Shared {
+                stop: AtomicBool::new(false),
+                flag_addr: Mutex::new(self.flag_addr),
+            });
+            st.timer = None;
+        });
+    }
+}
+
 /// Stress mode: re-arm the lane so the very next poll site fires again.
 pub(crate) fn stress_renudge() {
     if !stress() {
         return;
     }
     crate::poll_flag::set_preempt();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The hazard [`ForkState`] exists for: a `fork(2)` that catches the
+    /// timer thread holding `flag_addr`. That thread is not one of the
+    /// child's, so in the child the lock is held by nobody and released
+    /// by nobody — and the child blocks the first time it takes it,
+    /// which is at its own exit, in [`codegen_dropped`]. Here the fork
+    /// is simulated by leaking the guard: without `reset_child` the
+    /// `codegen_dropped` below never returns.
+    #[test]
+    fn reset_child_abandons_the_lock_the_timer_held_at_the_fork() {
+        let mut word: u32 = 0;
+        let addr = &mut word as *mut u32;
+        register_flag(addr);
+        // The forking thread's snapshot, taken before the fork.
+        let forked = prepare_fork();
+        // The timer, caught mid-tick.
+        STATE.with(|st| std::mem::forget(st.borrow().shared.flag_addr.lock().unwrap()));
+        forked.reset_child();
+        // The child's own state: same poll word, a lock it can take.
+        STATE.with(|st| {
+            assert_eq!(*st.borrow().shared.flag_addr.lock().unwrap(), addr as usize);
+            assert!(st.borrow().timer.is_none());
+        });
+        codegen_dropped();
+        STATE.with(|st| assert_eq!(*st.borrow().shared.flag_addr.lock().unwrap(), 0));
+    }
 }
