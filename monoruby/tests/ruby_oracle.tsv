@@ -2054,6 +2054,7 @@
 8bc5ef741a233aec240c5b062658f9b1	[4, 2, 4, 2, []]	splat = BasicObject.new\n        def splat.to_a; [2, 3, 4]; end\n        
 8bc9d3da4bf1a6f87b5745a463b34756	0	base = "/tmp/monoruby_dir_openblk_#{Process.pid}_#{rand(100000)}"\n 
 8be3c3f98ba598dac745b5259d3d2b29	[[1, :m], [2, :m]]	[1, 2].each.with_object(:m).to_a
+8bef1152c2834ccc311252d5074254ea	[true, true]	path = "/tmp/mono_cov_sysopen_#{Process.pid}"\n            begin\n   
 8c030a2b323ad9f1ba7df7f60a9bf461	[:interrupted]	def run_masked(timing, blocking = true)\n              klass = Class
 8c04e9b6af13aa499a29667f5c6c462c	true	m = Module.new\n            m.define_method(:foo) { 42 }\n           
 8c09f107c66edc66f1023e099d91b200	[3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true, 3, 3, 7, 4, 4, 0.5, true, false, false, true, true, true]	def drive\n              res = []\n              j = 0\n              
@@ -2165,6 +2166,7 @@
 933b1066338fc62cc4297ee4bc493e32	[[[:x, 9]], [[[:x, 9]]], "ArgumentError", [[]]]	cls = Class.new(Hash) { def each; yield [:x, 9]; end }\n            
 9343abce32f04d953cc04ff67ed4bf31	["Socket", "Addrinfo", "127.0.0.1", true]	require "socket"\n            srv = Socket.new(:INET, :STREAM)\n     
 935122a7066cc663cf26533147c2cda5	[true, true, true, nil, false, false, true, "main", false, true, true, true, :meth, :clean]	$probe = []\n            path = "/tmp/mrb_load_wrap_t1_#{Process.pid
+9365e9cbbecb8abeec0477936c4e63f4	[0, "", 8, "Line one"]	src = "/tmp/mono_cov_cs_src_#{Process.pid}"\n            dst = "/tmp
 9367674835b7363d7b25734fa0d598d3	[["a", "b"], ["a|b"]]	$; = "|"; r = ["a|b".split, "a|b".split(",")]; $; = nil; r
 938f2c5c071fe55c0abe16c17f25401b	["ret-1", "brk-1", "thr-3"]	def ret_through_ensure\n          begin\n            return ["ret", 1].jo
 93c5aa7882439219082961392f4d9537	["can't convert Object to Array (Object#to_ary gives Integer)", "N\\na\\n[...]\\n"]	r, w = IO.pipe\n            bad = Object.new\n            def bad.to_
@@ -2447,6 +2449,7 @@ a6543c8de298e00b7a80c6733b286111	[["MONORUBY_ENV_TEST_RASSOC", "uniq_value_1234"
 a6544dcf937b0f3548e6509ea65a3df5	[true, false, false, true]	res = []\n            begin\n              [1].fetch(5)\n            r
 a65f043ef2457f2fffdc0c3ec7c6e584	["#<Object:0xX @host=\\"h\\", @user=\\"u\\", @password=\\"p\\">", "#<Object:0xX @host=\\"h\\", @user=\\"u\\">", "#<Object:0xX>", "#<Object:0xX @x=1, @y=2>"]	o = Object.new\n            o.instance_eval { @host="h"; @user="u"; 
 a673d29f8eccc1337bd03a34d5c90188	"a message\\n"	class MyIO; def initialize; @s=+""; end; def write(*a); a.each{|x| @s<<
+a677f9f68faa77a9f40b1162b4e9f2fb	["123", true, "123", "234", "ASCII-8BIT"]	path = "/tmp/mono_cov_read_kw_#{Process.pid}"\n            begin\n   
 a67981aa119a7af5876972896067ed8c	[[97, 255, 98], "UTF-8"]	s = "a\\xffb".force_encoding("UTF-8")\n            e = Regexp.escape(
 a68743ceca70ef6224e2fdb19aa54955	["foo\\n", "foo\\n", "bar\\n", "bar\\n", nil, nil, "a\\n", "x\\n"]	require 'stringio'\n        res = []\n        sio = StringIO.new("foo\\nba
 a68c0cccee2a55ed8f794145ed571e40	[true, false]	class Foo\n              def respond_to_missing?(name, ia)\n         
@@ -2587,6 +2590,7 @@ aed061dc6e19d21ef29d6c8d825a05cb	"ASCII-8BIT"	Regexp.union(/abc/, /[\\x00-\\x7f]
 aed53099ff3853e38b0609e15583d008	[true, true]	S = Struct.new(:a, :b)\n            \n\n            x = S.new(nil, "ta
 aeef9bd39cae0a88c4fb5f9174a5dbbf	["NoArg", "wrong number of arguments (given 1, expected 0)", "ArgumentError", "BasicObject"]	class NoArg; end\n            res = []\n            res << NoArg.new.
 af01a63acba6bf69555376a4548815fe	["sleep", "aborting", false]	r = []\n            q = []\n            t = Thread.new { begin; q << 
+af02b51b0c19215887e33b9c73132b67	["myname pv\\n", ["ArgumentError", "expected true or false as unsetenv_others: 1"], ["ArgumentError", "expected true or false as unsetenv_others: \\"true\\""], ["ArgumentError", "expected true or false as close_others: 1"], :ok]	r = []\n            # [cmdname, argv0]: the child runs `cmdname` but
 af2115fbacf6ff881e536a9721478bf1	true	old_dep = Warning[:deprecated]\n            old_stderr = $stderr\n   
 af24445d9bfdc33c636c496d63505764	[["anon", "anon", "non-anon"]]	unless defined?(SCDMB_Twice)\n          class SCDMB_Base\n            def
 af365d29a316e30f9da873398ef58d55	:OVERRIDDEN	class Float; def **(o); :OVERRIDDEN; end; end; 3.0 ** 4.0
@@ -2943,6 +2947,7 @@ c622030023f401e5576556f338a06cf1	:typeerr	class Bad\n              def to_int; "
 c62977ddda7102f63ccbfd212390f727	277.5	acc = 0.0\n        i = 0\n        while i < 30\n          acc += i.to_f * 
 c62bb457e32daf91f80df5e888b47539	[true, false, "fresh"]	ENV["MONORUBY_ENV_TEST_REPL_OLD"] = "old"\n            saved = ENV.t
 c637ccc2b9f394757d125bf066549adf	[0, 1, true]	S = Struct.new(:a, :b)\n            \n\n            [\n              S.
+c638c7dd0312f3c4e8744d6c0e559f45	[["TypeError", "no implicit conversion of nil into String"], ["ArgumentError", "unexpected value for newline option: invalid"], ["ArgumentError", "unexpected value for newline option"], :ok, ["ArgumentError", "newline decorator with binary mode"], ["ArgumentError", "ASCII incompatible encoding needs binmode"], ["UTF-16BE", "UTF-16LE"]]	path = "/tmp/mono_cov_set_enc_#{Process.pid}"\n            begin\n   
 c63ea340dc59e43dec7863d62bc28a36	[:neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false]	class Neg\n              def -@ = :neg\n              def +@ = :pos\n 
 c645f7f040f5628747baf4113d682cec	Array	class C < Array; end\n\n            a = C.new([1, 2, 3])\n            a.shuffle.cla
 c65203960bc3757c2aa2a247a3461786	[true, true]	S = Struct.new(:name, :legs, keyword_init: true)\n            \n\n    
@@ -3085,6 +3090,7 @@ cf1d7ef2fb786f57a3cf9e0f019f1486	true	Regexp.private_instance_methods.include?(:
 cf347485acd73ea7a73489e5f1fbd249	"ASCII-8BIT"	("hello %s" % 195.chr).encoding.to_s
 cf356b4efb46036b428c784f29f8dc15	["3.140000", "1-2", "raised"]	class MAry1; def to_ary; [3.14]; end; end\n            class MAry2; 
 cf3b55682f6ea08ebc4b9fe0dcc62971	[[0, 3, 5, 9, 12, 4], A]	class A < Array\n        end\n        \n\n        mul = 3\n        a = A.new
+cf56124e51afcac2f1d3d18e31e5d1fa	["\\r\\n", "\\r", "\\n", "\\n", 7, "H\\xEBll\\xF6\\r\\n", "a\\r\\nb\\r\\n", "plain\\n"]	path = "/tmp/mono_cov_newline_#{Process.pid}"\n            begin\n   
 cf6872bba5781ae3921f031445dcb5b8	[1, 2]	class C\n              define_method(:m) { |a| a }\n            end\n 
 cf6bd38f8f98b72059f152760441d427	[true, 5, false, nil, false, nil, false, false, true, 1280, true, false, false, true, true, true, true]	pid = fork { exit 5 }\n            Process.wait(pid)\n            s =
 cf85f9548841ec0b0c470064817b4d36	""	f = File.open("/dev/null", "r")\n            f.read(0)\n        

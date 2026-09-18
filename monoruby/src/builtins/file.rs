@@ -1165,7 +1165,11 @@ fn open_kw(lfp: Lfp, name: &str) -> Option<Value> {
 /// options Hash so the shared IO option readers (`io_open_opts`,
 /// `init_io_encodings`) see keyword and positional-Hash call forms
 /// uniformly.
-fn open_kw_hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<Value>> {
+pub(super) fn open_kw_hash(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<Option<Value>> {
     let mut map = RubyMap::default();
     let mut any = false;
     for (i, name) in OPEN_KW.iter().enumerate() {

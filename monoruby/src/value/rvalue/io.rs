@@ -538,6 +538,45 @@ pub struct IoInner {
     ext_state: ExtEnc,
     /// `IO#binmode?`.
     binmode: bool,
+    /// The `newline:` write decorator the stream was opened with.
+    newline: NewlineMode,
+}
+
+/// The `newline:` open option's write side: what a `"\n"` in the data
+/// is written as. (The read side — universal newline conversion — is
+/// not implemented; CRuby only converts on input for `:universal`.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NewlineMode {
+    /// No decorator: bytes go out unchanged.
+    #[default]
+    None,
+    Crlf,
+    Cr,
+}
+
+impl NewlineMode {
+    /// Apply the decorator to a to-be-written buffer. Returns the
+    /// original slice untouched when there is nothing to do.
+    pub fn apply<'a>(self, data: &'a [u8]) -> std::borrow::Cow<'a, [u8]> {
+        use std::borrow::Cow;
+        let replacement: &[u8] = match self {
+            Self::None => return Cow::Borrowed(data),
+            Self::Crlf => b"\r\n",
+            Self::Cr => b"\r",
+        };
+        if !data.contains(&b'\n') {
+            return Cow::Borrowed(data);
+        }
+        let mut out = Vec::with_capacity(data.len() + 8);
+        for &b in data {
+            if b == b'\n' {
+                out.extend_from_slice(replacement);
+            } else {
+                out.push(b);
+            }
+        }
+        Cow::Owned(out)
+    }
 }
 
 /// Outcome of a non-blocking `IO#read_nonblock`.
@@ -607,6 +646,7 @@ impl IoInner {
             int: None,
             ext_state: ExtEnc::Unset,
             binmode: false,
+            newline: NewlineMode::None,
         }
     }
 
@@ -636,6 +676,15 @@ impl IoInner {
 
     pub fn set_binmode(&mut self) {
         self.binmode = true;
+    }
+
+    /// The `newline:` write decorator (`IO.new` / `File.open`).
+    pub fn newline(&self) -> NewlineMode {
+        self.newline
+    }
+
+    pub fn set_newline(&mut self, mode: NewlineMode) {
+        self.newline = mode;
     }
 
     /// `IO#external_encoding`'s state, and its object when `Fixed`.
@@ -827,6 +876,7 @@ impl IoInner {
         self.int = other.int;
         self.ext_state = other.ext_state;
         self.binmode = other.binmode;
+        self.newline = other.newline;
     }
 
     /// Replace the underlying stream while keeping the per-object state
