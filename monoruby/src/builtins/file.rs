@@ -28,7 +28,10 @@ pub(super) fn init(globals: &mut Globals) {
     // with `perm: 0o700`).
     // File.write / File.binwrite are inherited from IO (implemented in
     // Ruby, builtins/io.rb) — CRuby defines them on IO too.
-    globals.define_builtin_class_func_with(file, "read", file_read, 1, 4, false);
+    // `File.read` is *not* defined here: CRuby inherits `IO.read`
+    // through the singleton chain, and so does monoruby. The
+    // File-specific copy that used to live here silently ignored
+    // `mode:` / `external_encoding:` and never consumed a `BOM|` mark.
     globals.define_builtin_class_func_with(file, "binread", file_binread, 1, 3, false);
 
     // IO class methods that share semantics with File.* class methods.
@@ -185,99 +188,6 @@ pub(super) fn init(globals: &mut Globals) {
     );
 }
 
-
-///
-/// ### IO.read
-///
-/// - read(path, [NOT SUPPORTED]**opt) -> String | nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/read.html]
-#[monoruby_builtin]
-fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let filename = to_path(vm, globals, lfp.arg(0))?;
-    let mut file = match File::open(&filename) {
-        Ok(file) => file,
-        Err(err) => {
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &err,
-                "rb_sysopen",
-                &filename,
-            ));
-        }
-    };
-    // Optional length / offset, plus a trailing options Hash
-    // (`File.read(path, length, offset)` /
-    //  `File.read(path, encoding: "...", mode: "...")`).
-    let mut positional: Vec<Value> = vec![];
-    let mut opts_enc: Option<Value> = None;
-    for i in 1..=3 {
-        let Some(v) = lfp.try_arg(i) else { break };
-        if v.is_nil() {
-            positional.push(v);
-        } else if let Some(h) = v.try_hash_ty() {
-            opts_enc = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?;
-        } else {
-            positional.push(v);
-        }
-    }
-    let length = match positional.first() {
-        Some(v) if !v.is_nil() => {
-            let l = v.coerce_to_int_i64(vm, globals)?;
-            if l < 0 {
-                return Err(MonorubyErr::argumenterr(format!("negative length {l} given")));
-            }
-            Some(l as usize)
-        }
-        _ => None,
-    };
-    let offset = match positional.get(1) {
-        Some(v) if !v.is_nil() => v.coerce_to_int_i64(vm, globals)?.max(0) as u64,
-        _ => 0,
-    };
-    if offset > 0 {
-        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(offset)).map_err(|err| {
-            MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_read", &filename)
-        })?;
-    }
-    let mut contents = vec![];
-    let res = match length {
-        Some(l) => std::io::Read::read_to_end(&mut std::io::Read::take(file, l as u64), &mut contents),
-        None => std::io::Read::read_to_end(&mut file, &mut contents),
-    };
-    if let Err(err) = res {
-        return Err(MonorubyErr::errno_with_path(
-            &globals.store,
-            &err,
-            "rb_io_read",
-            &filename,
-        ));
-    }
-    // A sized read that hits EOF immediately reads as nil; sized reads
-    // come back binary, like `IO#read(len)`. An `encoding:` option tags
-    // the result explicitly.
-    let res = match length {
-        Some(l) if l > 0 && contents.is_empty() => return Ok(Value::nil()),
-        Some(_) => Value::bytes(contents),
-        None => Value::string_from_vec(contents),
-    };
-    if let Some(enc_v) = opts_enc {
-        let name = if let Some(s) = enc_v.is_str() {
-            Some(s.to_string())
-        } else {
-            super::encoding::encoding_object_name(globals, enc_v)
-        };
-        if let Some(name) = name
-            && let Ok(enc) = crate::value::Encoding::try_from_str(&name)
-        {
-            let bytes = res.as_rstring_inner().as_bytes().to_vec();
-            return Ok(Value::string_from_inner(RStringInner::from_encoding(
-                &bytes, enc,
-            )));
-        }
-    }
-    Ok(res)
-}
 
 ///
 /// ### IO.binread
@@ -3098,6 +3008,33 @@ mod tests {
 
     /// Errno messages keep a non-UTF-8 path's exact bytes as an
     /// ASCII-8BIT string (CRuby keeps the path's own bytes).
+    #[test]
+    fn file_read_is_io_read() {
+        // `File.read` and `IO.read` are the same method, so the mode
+        // string's encoding parts apply to both — including `BOM|`.
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_file_read_bom_#{Process.pid}_#{rand(100000)}"
+            begin
+              r = []
+              r << File.method(:read).owner.to_s
+              File.binwrite(path, "\xEF\xBB\xBFdata")
+              r << File.read(path, mode: "rb:BOM|utf-8").force_encoding("binary")
+              File.binwrite(path, "\xFF\xFEd\x00")
+              r << File.read(path, mode: "rb:BOM|utf-8").force_encoding("binary").bytes
+              File.binwrite(path, "plain")
+              r << File.read(path, mode: "rb:BOM|utf-8").force_encoding("binary")
+              r << File.read(path, 2)
+              r << File.read(path, 2, 1)
+              r << File.read(path, encoding: "ASCII-8BIT").encoding.to_s
+              r
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
     #[test]
     fn errno_message_binary_path() {
         run_tests(&[

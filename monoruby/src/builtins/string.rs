@@ -2194,6 +2194,31 @@ fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 }
 
 ///
+/// The byte length `prefix` deletes from `self_inner`, or `None` when it
+/// is not a prefix at all.
+///
+/// Byte-oriented like CRuby's `deleted_prefix_length`: the encodings are
+/// negotiated first, and a byte prefix that would cut a character in
+/// half deletes nothing (`"\u3042".delete_prefix("\xE3")`).
+fn deleted_prefix_length(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_inner: &RStringInner,
+    arg: Value,
+) -> Result<Option<usize>> {
+    let arg_inner = coerce_to_rstring_inner(&arg, vm, globals)?;
+    let self_enc = self_inner.encoding();
+    let self_bytes = self_inner.as_bytes();
+    check_encoding_compat(self_enc, self_bytes, &arg_inner, globals)?;
+    let arg_bytes = arg_inner.as_bytes();
+    if !self_bytes.starts_with(arg_bytes) || !enc_char_boundary(self_enc, self_bytes, arg_bytes.len())
+    {
+        return Ok(None);
+    }
+    Ok(Some(arg_bytes.len()))
+}
+
+///
 /// ### String#delete_prefix!
 ///
 /// - delete_prefix!(prefix) -> self | nil
@@ -2208,14 +2233,13 @@ fn delete_prefix_(
 ) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_ = lfp.self_val();
-    let string = self_.expect_str(globals)?;
-    let arg = lfp.arg(0).coerce_to_str(vm, globals)?;
-    if let Some(stripped) = string.strip_prefix(arg.as_str()) {
-        lfp.self_val().replace_str(stripped);
-        Ok(lfp.self_val())
-    } else {
-        Ok(Value::nil())
-    }
+    let inner = self_.as_rstring_inner();
+    let Some(len) = deleted_prefix_length(vm, globals, inner, lfp.arg(0))? else {
+        return Ok(Value::nil());
+    };
+    let rest = RStringInner::from_encoding(&inner.as_bytes()[len..], inner.encoding());
+    lfp.self_val().replace_with_inner(rest);
+    Ok(lfp.self_val())
 }
 
 ///
@@ -2232,13 +2256,12 @@ fn delete_prefix(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    let string = self_.expect_str(globals)?;
-    let arg = lfp.arg(0).coerce_to_str(vm, globals)?;
-    if let Some(stripped) = string.strip_prefix(arg.as_str()) {
-        Ok(Value::string_from_str(stripped))
-    } else {
-        Ok(Value::string_from_str(string))
-    }
+    let inner = self_.as_rstring_inner();
+    let len = deleted_prefix_length(vm, globals, inner, lfp.arg(0))?.unwrap_or(0);
+    Ok(Value::string_from_inner(RStringInner::from_encoding(
+        &inner.as_bytes()[len..],
+        inner.encoding(),
+    )))
 }
 
 /// Check if a byte position in a UTF-8 byte slice is at a character boundary.
@@ -2911,17 +2934,37 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// bytes so that strings with invalid encoding (e.g.
 /// `"\xa0\xa1\n"` — invalid UTF-8 but with a literal trailing
 /// `\n`) still get their separator stripped, matching CRuby.
-fn chomp_byte_end(bytes: &[u8], rs: &[u8]) -> usize {
+/// The byte sequence an ASCII character occupies in `enc`. Only the
+/// fixed-width UTF-16/32 forms pad it out; every other encoding
+/// monoruby knows keeps ASCII where ASCII is.
+fn ascii_char_bytes(enc: Encoding, ch: u8) -> Vec<u8> {
+    match enc {
+        Encoding::Utf16Be => vec![0, ch],
+        Encoding::Utf16Le => vec![ch, 0],
+        Encoding::Utf32Be => vec![0, 0, 0, ch],
+        Encoding::Utf32Le => vec![ch, 0, 0, 0],
+        _ => vec![ch],
+    }
+}
+
+fn chomp_byte_end(bytes: &[u8], rs: &[u8], enc: Encoding) -> usize {
+    // The line terminators, spelled in the receiver's encoding: the
+    // separator reaching here is the ASCII default (`$/`), and CRuby
+    // matches it as a *character* — `"abc\r\n".encode("utf-32be")`
+    // chomps to `"abc"`, not to a stray `\0\0\0`.
+    let nl = ascii_char_bytes(enc, b'\n');
+    let cr = ascii_char_bytes(enc, b'\r');
+    let ends_with = |end: usize, pat: &[u8]| end >= pat.len() && &bytes[end - pat.len()..end] == pat;
     if rs.is_empty() {
         // Paragraph mode: iteratively strip trailing `\r\n` / `\n`.
         let mut end = bytes.len();
         loop {
             let prev = end;
-            while end >= 2 && &bytes[end - 2..end] == b"\r\n" {
-                end -= 2;
+            while ends_with(end, &nl) && ends_with(end - nl.len(), &cr) {
+                end -= cr.len() + nl.len();
             }
-            if end >= 1 && bytes[end - 1] == b'\n' {
-                end -= 1;
+            if ends_with(end, &nl) {
+                end -= nl.len();
             }
             if end == prev {
                 break;
@@ -2931,21 +2974,24 @@ fn chomp_byte_end(bytes: &[u8], rs: &[u8]) -> usize {
     } else if rs == b"\n" {
         // Default: remove ONE trailing `\r\n` / `\n` / `\r`.
         let end = bytes.len();
-        if end >= 2 && &bytes[end - 2..end] == b"\r\n" {
-            end - 2
-        } else if end >= 1 && (bytes[end - 1] == b'\n' || bytes[end - 1] == b'\r') {
-            end - 1
+        if ends_with(end, &nl) && ends_with(end - nl.len(), &cr) {
+            end - nl.len() - cr.len()
+        } else if ends_with(end, &nl) {
+            end - nl.len()
+        } else if ends_with(end, &cr) {
+            end - cr.len()
         } else {
             end
         }
     } else {
-        // Explicit separator: strip iteratively. Matches the
-        // pre-existing behaviour of `&str::trim_end_matches(rs)`.
-        let mut end = bytes.len();
-        while end >= rs.len() && &bytes[end - rs.len()..end] == rs {
-            end -= rs.len();
+        // Explicit separator: remove exactly one trailing occurrence
+        // (`"abcabc".chomp("abc")` is `"abc"`, not `""`).
+        let end = bytes.len();
+        if end >= rs.len() && &bytes[end - rs.len()..end] == rs {
+            end - rs.len()
+        } else {
+            end
         }
-        end
     }
 }
 
@@ -2984,7 +3030,8 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // Operate on bytes so that strings whose declared encoding
     // doesn't actually parse (e.g. `"\xa0\xa1\n".chomp`) can still
     // have their trailing newline stripped.
-    let new_end = chomp_byte_end(self_.as_rstring_inner().as_bytes(), rs_bytes);
+    let inner = self_.as_rstring_inner();
+    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes, inner.encoding());
     // Zero-copy shared substring (CoW) for long enough results.
     Ok(string_substring(self_, 0, new_end))
 }
@@ -3022,7 +3069,7 @@ fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
     let self_len = inner.as_bytes().len();
-    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes);
+    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes, inner.encoding());
     if new_end == self_len {
         Ok(Value::nil())
     } else {
@@ -4879,13 +4926,21 @@ fn string_rindex_string(
             .unwrap_or(haystack_str.len())
     };
 
-    // Reverse two-way scan. `rmatch_indices` yields matches in
-    // right-to-left order, so the first hit at or before
-    // `max_byte_start` is the answer.
-    let byte_pos = haystack_str
-        .rmatch_indices(needle_str)
-        .find(|(i, _)| *i <= max_byte_start)
-        .map(|(i, _)| i);
+    // Reverse two-way scan for the rightmost match that *starts* at or
+    // before `max_byte_start`; the match itself may run past it
+    // (`"blablabla".rindex("blab", 2)` is 0). Capping the haystack at
+    // `max_byte_start + needle.len()` makes `rfind`'s rightmost
+    // contained match exactly that one. `rmatch_indices`, which this
+    // replaces, walks *non-overlapping* matches from the right, so it
+    // stepped over the earlier of two overlapping ones and answered nil.
+    // UTF-8 is self-synchronizing, so a valid needle can only match on a
+    // character boundary — the byte cap needs no boundary alignment.
+    let bytes = haystack_str.as_bytes();
+    let needle_b = needle_str.as_bytes();
+    let end = max_byte_start
+        .saturating_add(needle_b.len())
+        .min(bytes.len());
+    let byte_pos = memchr::memmem::rfind(&bytes[..end], needle_b);
 
     let Some(p) = byte_pos else {
         return Ok(Value::nil());
@@ -6077,7 +6132,25 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let s = self_.expect_str(globals)?;
+    let inner = self_.as_rstring_inner();
+    let enc = inner.encoding();
+    if !enc.is_ascii_compatible() {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!("ASCII incompatible encoding: {}", enc.name()),
+        ));
+    }
+    // The grammar is pure ASCII and every non-printable byte
+    // terminates the number, so parse the ASCII prefix of the raw
+    // bytes: a BINARY string holding `"\3771.2"` is 0.0, not an
+    // invalid-byte-sequence error.
+    let bytes = inner.as_bytes();
+    let end = bytes
+        .iter()
+        .position(|b| !b.is_ascii())
+        .unwrap_or(bytes.len());
+    // SAFETY: every byte in `bytes[..end]` is ASCII.
+    let s = unsafe { std::str::from_utf8_unchecked(&bytes[..end]) };
     let f = parse_f64(s).0;
     Ok(Value::float(f))
 }
@@ -8509,7 +8582,15 @@ fn each_grapheme_cluster(
         vm.invoke_block_iter1(globals, bh, clusters)?;
         Ok(self_)
     } else {
-        vm.generate_enumerator(IdentId::get_id("each_grapheme_cluster"), self_, vec![], pc)
+        let size =
+            Value::integer(collect_grapheme_clusters(self_.as_rstring_inner()).len() as i64);
+        vm.generate_enumerator_with_size(
+            IdentId::get_id("each_grapheme_cluster"),
+            self_,
+            vec![],
+            pc,
+            Some(size),
+        )
     }
 }
 
@@ -8534,7 +8615,14 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         vm.invoke_block_iter1(globals, bh, chars)?;
         Ok(lfp.self_val())
     } else {
-        vm.generate_enumerator(IdentId::get_id("each_char"), lfp.self_val(), vec![], pc)
+        let size = Value::integer(self_.as_rstring_inner().char_length() as i64);
+        vm.generate_enumerator_with_size(
+            IdentId::get_id("each_char"),
+            lfp.self_val(),
+            vec![],
+            pc,
+            Some(size),
+        )
     }
 }
 
@@ -8589,7 +8677,16 @@ fn each_codepoint(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: Byteco
         vm.invoke_block_iter1(globals, bh, codes.into_iter())?;
         Ok(lfp.self_val())
     } else {
-        vm.generate_enumerator(IdentId::get_id("each_codepoint"), lfp.self_val(), vec![], pc)
+        // `char_length` falls back to the byte count for broken bytes,
+        // which is the count `each_codepoint` would yield for them.
+        let size = Value::integer(self_.as_rstring_inner().char_length() as i64);
+        vm.generate_enumerator_with_size(
+            IdentId::get_id("each_codepoint"),
+            lfp.self_val(),
+            vec![],
+            pc,
+            Some(size),
+        )
     }
 }
 
@@ -9244,6 +9341,109 @@ fn unicode_normalize_(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn delete_prefix_is_byte_oriented() {
+        run_tests(&[
+            // A byte prefix that would cut a character in half deletes
+            // nothing, and the result keeps the receiver's encoding.
+            r#""\u3042b".delete_prefix("\xE3".dup.force_encoding("UTF-8")).bytes"#,
+            r#"begin
+                 "\u3042b".delete_prefix("\xE3".dup.force_encoding("BINARY"))
+               rescue => e
+                 e.class.to_s
+               end"#,
+            r#""\u3042b".delete_prefix("\u3042")"#,
+            r#""\u3042b".delete_prefix("\u3042").encoding.to_s"#,
+            r#""hello".delete_prefix("he")"#,
+            r#""hello".delete_prefix("xx")"#,
+            r#"s = "hello".dup; [s.delete_prefix!("he"), s]"#,
+            r#"s = "hello".dup; [s.delete_prefix!("xx"), s]"#,
+            r#"s = "\u3042b".dup; [s.delete_prefix!("\xE3".dup.force_encoding("UTF-8")), s]"#,
+            // `to_str` is honoured for the argument.
+            r#"o = Object.new; def o.to_str = "he"; "hello".delete_prefix(o)"#,
+        ]);
+    }
+
+    #[test]
+    fn chomp_removes_one_separator_in_the_receivers_encoding() {
+        run_tests(&[
+            // An explicit separator is removed once, not repeatedly.
+            r#""abcabc".chomp("abc")"#,
+            r#""abcabcabc".chomp("abc")"#,
+            r#""abc".chomp("def")"#,
+            r#"s = "abcabc".dup; [s.chomp!("abc"), s]"#,
+            // The default separator matches as a *character*, so a
+            // fixed-width encoding chomps its whole terminator.
+            r#""abc\r\n".encode("utf-32be").chomp.bytes"#,
+            r#""abc\r\n".encode("utf-16le").chomp.bytes"#,
+            r#""abc\n".encode("utf-32be").chomp.bytes"#,
+            r#""abc\r\n\r\n".encode("utf-32be").chomp("").bytes"#,
+            r#""abc\r\n".chomp"#,
+            r#""abc\n\n\n".chomp("")"#,
+        ]);
+    }
+
+    #[test]
+    fn to_f_parses_like_cruby() {
+        run_tests(&[
+            r#"["\v1.2".to_f, "\f1.2".to_f, "\r1.2".to_f, "\t1.2".to_f, "  1.2".to_f]"#,
+            // Every non-printable byte terminates the number, even one
+            // that is not valid UTF-8.
+            r#"["\0001.2".to_f, "\1771.2".to_f, "\2001.2".b.to_f, "\3771.2".b.to_f]"#,
+            r#"["1.e-2".to_f, "1.".to_f, "1.e+0".to_f, "-1.".to_f, ".5".to_f, "1.foo".to_f]"#,
+            r#"[Float("1.e-2"), Float("1."), Float(".5")]"#,
+            r#"begin; Float("1.5e"); rescue => e; e.class.to_s; end"#,
+            r#"begin; "1.2".encode("UTF-16").to_f; rescue => e; [e.class.to_s, e.message]; end"#,
+        ]);
+    }
+
+    #[test]
+    fn force_encoding_accepts_special_names() {
+        run_test_once(
+            r#"
+            begin
+              Encoding.default_internal = "US-ASCII"
+              a = "abc".dup.force_encoding("internal").encoding.to_s
+              Encoding.default_internal = nil
+              b = "abc".dup.force_encoding("internal").encoding.to_s
+              c = "abc".dup.force_encoding("INTERNAL").encoding.to_s
+              d = "abc".dup.force_encoding("locale").encoding == Encoding.find("locale")
+              e = "abc".dup.force_encoding("external").encoding == Encoding.default_external
+              [a, b, c, d, e]
+            ensure
+              Encoding.default_internal = nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn rindex_finds_overlapping_matches() {
+        // The rightmost match *starting* at or before the limit, even
+        // when it overlaps a later one.
+        run_tests(&[
+            r#""blablabla".rindex("blab", 2)"#,
+            r#""blablabla".rindex("blab")"#,
+            r#""aaaa".rindex("aa", 1)"#,
+            r#""aaaa".rindex("aa")"#,
+            r#""abab".rindex("abab", 0)"#,
+            r#""hello".rindex("l", -1)"#,
+            r#""hello".rindex("z")"#,
+        ]);
+    }
+
+    #[test]
+    fn char_enumerators_report_their_size() {
+        run_tests(&[
+            r#""hello".each_char.size"#,
+            r#""\u3042\u3044".each_char.size"#,
+            r#""hello".each_codepoint.size"#,
+            r#""\u3042\u3044".each_codepoint.size"#,
+            r#""hello".each_grapheme_cluster.size"#,
+            r#""".each_char.size"#,
+        ]);
+    }
 
     #[test]
     fn string_new_capacity() {

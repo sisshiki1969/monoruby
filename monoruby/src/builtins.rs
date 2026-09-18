@@ -174,7 +174,9 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
 /// and hand the result to Rust's `f64::from_str` so the final
 /// conversion uses the same correctly-rounded path Ruby relies on.
 fn parse_f64(s: &str) -> (f64, bool) {
-    let trimmed = s.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    // CRuby's `ISSPACE` also counts the vertical tab, which Rust's
+    // `is_ascii_whitespace` leaves out.
+    let trimmed = s.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '\u{b}');
     let mut iter = trimmed.chars().peekable();
     let mut buf = String::with_capacity(trimmed.len());
 
@@ -222,14 +224,19 @@ fn parse_f64(s: &str) -> (f64, bool) {
     let any_int = consume_digits(&mut iter, &mut buf);
 
     if iter.peek() == Some(&'.') {
-        // Only consume the dot if a digit follows. `"1.".to_f == 1.0`
-        // but `"1.foo".to_f` stops at the integer run.
         let mut clone = iter.clone();
         clone.next();
         if matches!(clone.peek(), Some(c) if c.is_ascii_digit()) {
             buf.push('.');
             iter.next();
             consume_digits(&mut iter, &mut buf);
+        } else if any_int {
+            // A dot may stand alone after an integer run: `"1."` is
+            // 1.0 and `"1.e-2"` is 0.01 (both accepted by `Float()`
+            // too). Rust's parser wants a digit after the dot, so
+            // normalise to `.0` — the exponent, if any, still applies.
+            buf.push_str(".0");
+            iter.next();
         }
     }
 

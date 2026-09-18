@@ -1796,6 +1796,34 @@ pub(super) fn force_encoding(
     Ok(lfp.self_val())
 }
 
+/// The four names that do not name a fixed encoding: `"internal"`,
+/// `"external"`, `"locale"` and `"filesystem"` resolve against the
+/// running interpreter's defaults. `"internal"` with no default
+/// internal encoding set is BINARY (CRuby's `rb_to_encoding` falls
+/// back to ASCII-8BIT there, unlike `Encoding.find`, which answers
+/// nil). Returns `None` for every other name.
+fn special_encoding_name(globals: &mut Globals, name: &str) -> Option<Encoding> {
+    let lowered = name.to_ascii_lowercase();
+    let value = match lowered.as_str() {
+        "internal" => {
+            let internal = globals
+                .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
+                .filter(|v| !v.is_nil());
+            match internal {
+                Some(v) => v,
+                None => return Some(Encoding::Ascii8),
+            }
+        }
+        "external" | "filesystem" => globals
+            .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+            .filter(|v| !v.is_nil())
+            .unwrap_or_else(|| Value::nil()),
+        "locale" => locale_encoding_value(globals),
+        _ => return None,
+    };
+    globals.encoding_of_object(value).or(Some(Encoding::Utf8))
+}
+
 /// Resolve an encoding operand — an `Encoding` object, a String name, or
 /// anything `#to_str`-coercible — to a monoruby `Encoding` (the argument
 /// convention shared by `String#force_encoding` and
@@ -1806,6 +1834,9 @@ pub(super) fn value_to_encoding(
     arg0: Value,
 ) -> Result<Encoding> {
     if let Some(s) = arg0.is_str() {
+        if let Some(enc) = special_encoding_name(globals, s) {
+            return Ok(enc);
+        }
         Encoding::try_from_str(s)
     } else if let Some(enc) = globals.encoding_of_object(arg0) {
         // An `Encoding::<NAME>` constant object: its `Encoding` was
@@ -1853,8 +1884,15 @@ pub(super) fn ascii_only(
     // Use the cr-cached `is_ascii_only`, not the slice's `is_ascii`,
     // so that repeated calls on a long-but-already-classified string
     // are O(1) instead of O(n) per call.
+    //
+    // A string in an encoding that is not ASCII-compatible is never
+    // ascii_only?, whatever its bytes say — an empty UTF-16 string
+    // answers `false`, because `\0` there is not the ASCII NUL
+    // (CRuby's `rb_enc_str_asciionly_p` asks the encoding first).
+    let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
     Ok(Value::bool(
-        lfp.self_val().as_rstring_inner().is_ascii_only(),
+        inner.encoding().is_ascii_compatible() && inner.is_ascii_only(),
     ))
 }
 
@@ -1888,6 +1926,58 @@ fn enc_default_external(
 }
 
 ///
+/// The `Encoding` object an `Encoding.default_external=` /
+/// `default_internal=` argument names.
+///
+/// An `Encoding` is taken as it is; anything else must be a String or
+/// convertible to one with `#to_str`, and is then resolved through
+/// `Encoding.find`. No `#to_str`, or one that answers a non-String, is
+/// the `TypeError` CRuby raises — the previous code stored any such
+/// object verbatim, so `Encoding.default_internal` could answer
+/// something that is not an encoding at all.
+///
+fn resolve_default_encoding_arg(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    enc_class: Value,
+    val: Value,
+) -> Result<Value> {
+    let enc_class_id = enc_class.expect_class_or_module(&globals.store)?.id();
+    if val.class() == enc_class_id {
+        return Ok(val);
+    }
+    let name = if val.is_str().is_some() {
+        val
+    } else {
+        let converted = match globals.check_method(val, IdentId::TO_STR) {
+            Some(fid) => vm.invoke_func_inner(globals, fid, val, &[], None, None)?,
+            None => {
+                return Err(MonorubyErr::no_implicit_conversion(
+                    &globals.store,
+                    val,
+                    STRING_CLASS,
+                ));
+            }
+        };
+        if converted.is_str().is_none() {
+            // A `#to_str` that ran and answered the wrong type is
+            // CRuby's "can't convert X to String (X#to_str gives Y)",
+            // not the "no implicit conversion" of a missing one.
+            return Err(MonorubyErr::cant_convert_error(
+                &globals.store,
+                val,
+                converted,
+                "String",
+                IdentId::TO_STR,
+            ));
+        }
+        converted
+    };
+    let find_id = IdentId::get_id("find");
+    vm.invoke_method_inner(globals, find_id, enc_class, &[name], None, None)
+}
+
+///
 /// ### Encoding.default_external=
 /// - default_external = enc -> enc
 ///
@@ -1905,14 +1995,7 @@ fn enc_set_default_external(
             "default external can not be nil",
         ));
     }
-    // A String argument is resolved through `Encoding.find`.
-    let enc_val = if val.is_str().is_some() {
-        let find_id = IdentId::get_id("find");
-        let enc_class_val = lfp.self_val();
-        vm.invoke_method_inner(globals, find_id, enc_class_val, &[val], None, None)?
-    } else {
-        val
-    };
+    let enc_val = resolve_default_encoding_arg(vm, globals, lfp.self_val(), val)?;
     globals.set_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"), enc_val);
     Ok(enc_val)
 }
@@ -2490,13 +2573,7 @@ fn converter_convert(
             let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
             let msg = store_conversion_outcome(globals, recv, result, &meta, src, dst)
                 .unwrap_or_default();
-            return Err(
-                if matches!(result, StreamConvertResult::UndefinedConversion) {
-                    MonorubyErr::undefined_conversion_error(&globals.store, msg)
-                } else {
-                    MonorubyErr::invalid_byte_sequence_error(&globals.store, msg)
-                },
-            );
+            return Err(converter_last_error_raise(globals, recv, result, msg));
         }
     }
     Ok(Value::string_from_inner(
@@ -2551,7 +2628,12 @@ fn converter_finish(
             dst,
         )
         .unwrap_or_default();
-        return Err(MonorubyErr::invalid_byte_sequence_error(&globals.store, msg));
+        return Err(converter_last_error_raise(
+            globals,
+            recv,
+            StreamConvertResult::IncompleteInput,
+            msg,
+        ));
     }
     Ok(Value::string_from_inner(
         crate::value::RStringInner::from_encoding_scanned(b"", dst),
@@ -2874,6 +2956,41 @@ fn stream_convert(
                 error_bytes: src_bytes[err_start..src_read - extra].to_vec(),
                 readagain_bytes: src_bytes[src_read - extra..src_read].to_vec(),
             };
+            // encoding_rs sometimes folds the disproving byte into the
+            // malformed run itself (EUC-JP reports `\xA1\xFF` as one
+            // 2-byte run). CRuby splits such a run at the longest
+            // prefix that is still a *pending* sequence — the bytes it
+            // was waiting on become the error, the byte that disproved
+            // them becomes read-again.
+            // UTF-16/32 are read a coding unit at a time, so a split
+            // may only fall on a unit boundary.
+            let unit = if src_rs.name().starts_with("UTF-16") {
+                2
+            } else {
+                1
+            };
+            if meta.readagain_bytes.is_empty() && meta.error_bytes.len() > unit {
+                let run = std::mem::take(&mut meta.error_bytes);
+                let pending_len = (unit..run.len()).rev().step_by(unit).find(|k| {
+                    let mut probe = src_rs.new_decoder();
+                    let mut probe_dst = vec![0u8; run.len() * 4 + 16];
+                    let (r, read, written) = probe.decode_to_utf8_without_replacement(
+                        &run[..*k],
+                        &mut probe_dst,
+                        false,
+                    );
+                    // Still waiting for more input, having produced
+                    // nothing: a genuine incomplete prefix.
+                    matches!(r, DecoderResult::InputEmpty) && read == *k && written == 0
+                });
+                match pending_len {
+                    Some(k) => {
+                        meta.readagain_bytes = run[k..].to_vec();
+                        meta.error_bytes = run[..k].to_vec();
+                    }
+                    None => meta.error_bytes = run,
+                }
+            }
             let mut consumed = src_read;
             // Distinguish "incomplete tail" from "junk in middle":
             // if there are bytes after the malformed run, it's junk;
@@ -2914,7 +3031,6 @@ fn stream_convert(
                 && consumed < src_bytes.len()
                 && is_plausible_prefix()
             {
-                let unit = if src_rs.name().starts_with("UTF-16") { 2 } else { 1 };
                 let take = unit.min(src_bytes.len() - consumed);
                 meta.readagain_bytes = src_bytes[consumed..consumed + take].to_vec();
                 consumed += take;
@@ -3252,9 +3368,15 @@ fn build_last_error_object(globals: &mut Globals, recv: Value) -> Value {
     };
     let obj = Value::new_exception_from(msg, cls.as_class_id());
     let _ = globals.store.set_ivar(obj, IdentId::get_id("@error_bytes"), ary[2]);
+    // CRuby reports "no read-again bytes" as nil, not as an empty
+    // String (the `primitive_errinfo` tuple still says "").
+    let readagain = match ary[3].is_rstring_inner() {
+        Some(s) if s.as_bytes().is_empty() => Value::nil(),
+        _ => ary[3],
+    };
     let _ = globals
         .store
-        .set_ivar(obj, IdentId::get_id("@readagain_bytes"), ary[3]);
+        .set_ivar(obj, IdentId::get_id("@readagain_bytes"), readagain);
     let incomplete = kind == Value::symbol_from_str("incomplete_input");
     let _ = globals.store.set_ivar(
         obj,
@@ -3267,7 +3389,40 @@ fn build_last_error_object(globals: &mut Globals, recv: Value) -> Value {
     let _ = globals
         .store
         .set_ivar(obj, IdentId::get_id("@destination_encoding_name"), ary[5]);
+    // `UndefinedConversionError#error_char`: the offending character,
+    // whose bytes `stream_convert` stored UTF-8-encoded (the stage
+    // source encoding for every path that can reach an undef error).
+    if kind == Value::symbol_from_str("undefined_conversion")
+        && let Some(bytes) = ary[2].is_rstring_inner().map(|s| s.as_bytes().to_vec())
+        && let Ok(text) = String::from_utf8(bytes)
+    {
+        let _ = globals
+            .store
+            .set_ivar(obj, IdentId::get_id("@error_char"), Value::string(text));
+    }
     obj
+}
+
+/// Raise the converter's stored last error as a real exception object,
+/// so `#error_bytes`, `#readagain_bytes`, `#incomplete_input?` and the
+/// encoding accessors are populated — CRuby raises the very object
+/// `#last_error` hands back afterwards. Falls back to a plain
+/// message-only error if the last-error slot could not be materialised.
+fn converter_last_error_raise(
+    globals: &mut Globals,
+    recv: Value,
+    result: StreamConvertResult,
+    msg: String,
+) -> MonorubyErr {
+    let obj = build_last_error_object(globals, recv);
+    if let Some(inner) = obj.is_exception() {
+        return MonorubyErr::new_from_exception(inner).with_original(obj);
+    }
+    if matches!(result, StreamConvertResult::UndefinedConversion) {
+        MonorubyErr::undefined_conversion_error(&globals.store, msg)
+    } else {
+        MonorubyErr::invalid_byte_sequence_error(&globals.store, msg)
+    }
 }
 
 ///
@@ -3750,30 +3905,75 @@ fn enc_set_default_internal(
     _: BytecodePtr,
 ) -> Result<Value> {
     let val = lfp.arg(0);
-    // If a string is given, convert to an Encoding object via Encoding.find
     let enc_val = if val.is_nil() {
         Value::nil()
-    } else if val.is_str().is_some() {
-        let find_id = IdentId::get_id("find");
-        let enc_class_val = lfp.self_val(); // Encoding class object
-        vm.invoke_method_inner(globals, find_id, enc_class_val, &[val], None, None)?
     } else {
-        val
+        resolve_default_encoding_arg(vm, globals, lfp.self_val(), val)?
     };
     globals.set_gvar(IdentId::get_id("$DEFAULT_INTERNAL"), enc_val);
     Ok(enc_val)
+}
+
+/// The locale's character map, as `nl_langinfo(CODESET)` would report
+/// it. Derived once from the environment, because CRuby reads the
+/// codeset when it calls `setlocale` at startup and never looks at
+/// `ENV` again — ruby/spec checks that assigning `ENV['LC_ALL']` in a
+/// running process does *not* move `Encoding.locale_charmap`.
+///
+/// glibc's `LC_ALL` > `LC_CTYPE` > `LANG` precedence applies, an empty
+/// variable counts as unset, and the codeset is the part after `.`
+/// (with any `@modifier` stripped). With no locale selected — or with
+/// the `C` / `POSIX` locale — glibc reports `ANSI_X3.4-1968`.
+fn locale_charmap_str() -> &'static str {
+    static CHARMAP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CHARMAP
+        .get_or_init(|| {
+            let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+                .iter()
+                .find_map(|key| std::env::var(key).ok().filter(|v| !v.is_empty()))
+                .unwrap_or_default();
+            let locale = locale.split('@').next().unwrap_or("");
+            match locale.split_once('.') {
+                Some((_, codeset)) => {
+                    let normalized = codeset.replace(['-', '_'], "").to_ascii_lowercase();
+                    if normalized == "utf8" {
+                        "UTF-8".to_string()
+                    } else if normalized == "ascii" || normalized == "usascii" {
+                        "ANSI_X3.4-1968".to_string()
+                    } else {
+                        codeset.to_string()
+                    }
+                }
+                // No codeset named: only the "C"/"POSIX" locale (and no
+                // locale at all) has a portable answer. Anything else
+                // picks its codeset from the system's locale definition,
+                // which we cannot read, so assume the modern default.
+                None if locale.is_empty() || locale == "C" || locale == "POSIX" => {
+                    "ANSI_X3.4-1968".to_string()
+                }
+                None => "UTF-8".to_string(),
+            }
+        })
+        .as_str()
+}
+
+/// The encoding `Encoding.find("locale")` answers with: the locale
+/// charmap's encoding when we recognise it, else UTF-8.
+fn locale_encoding_value(globals: &Globals) -> Value {
+    find_encoding_object(globals, locale_charmap_str()).unwrap_or_else(|| {
+        let enc_class = encoding_class(globals);
+        globals
+            .store
+            .get_constant_noautoload(enc_class, IdentId::UTF_8)
+            .unwrap_or(Value::nil())
+    })
 }
 
 ///
 /// ### Encoding.locale_charmap
 /// - locale_charmap -> String
 ///
-/// Returns the locale's character map name. CRuby reads this from
-/// the C locale via `nl_langinfo(CODESET)`. monoruby is locale-
-/// agnostic so we return `"UTF-8"` — the de-facto default on
-/// modern Linux desktops and the value `Encoding.find("locale")`
-/// also resolves to.
-///
+/// [https://docs.ruby-lang.org/ja/latest/method/Encoding/s/locale_charmap.html]
 #[monoruby_builtin]
 fn enc_locale_charmap(
     _vm: &mut Executor,
@@ -3781,7 +3981,7 @@ fn enc_locale_charmap(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::string_from_str("UTF-8"))
+    Ok(Value::string_from_str(locale_charmap_str()))
 }
 
 // -------------------------------------------------------
@@ -3876,6 +4076,16 @@ fn enc_err_destination_encoding_name(
     Ok(Value::string_from_str(""))
 }
 
+/// The `Encoding` object named by one of the `@*_encoding_name` ivars
+/// a converter-raised error carries, if it is set and resolvable.
+fn enc_err_named_encoding(globals: &Globals, exc: Value, ivar: &str) -> Option<Value> {
+    let name = globals
+        .store
+        .get_ivar(exc, IdentId::get_id(ivar))
+        .and_then(|v| v.is_str().map(|s| s.to_string()))?;
+    find_encoding_object(globals, &name)
+}
+
 #[monoruby_builtin]
 fn enc_err_source_encoding(
     _vm: &mut Executor,
@@ -3883,6 +4093,9 @@ fn enc_err_source_encoding(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    if let Some(v) = enc_err_named_encoding(globals, lfp.self_val(), "@source_encoding_name") {
+        return Ok(v);
+    }
     if let Some(msg) = enc_err_message(globals, lfp.self_val())
         && let Some((src, _)) = parse_enc_err_pair(&msg)
         && let Ok(enc) = crate::value::Encoding::try_from_str(&src)
@@ -3899,6 +4112,9 @@ fn enc_err_destination_encoding(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    if let Some(v) = enc_err_named_encoding(globals, lfp.self_val(), "@destination_encoding_name") {
+        return Ok(v);
+    }
     if let Some(msg) = enc_err_message(globals, lfp.self_val())
         && let Some((_, dst)) = parse_enc_err_pair(&msg)
         && let Ok(enc) = crate::value::Encoding::try_from_str(&dst)
@@ -3919,6 +4135,13 @@ fn enc_err_error_char(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    if let Some(v) = globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("@error_char"))
+        .filter(|v| !v.is_nil())
+    {
+        return Ok(v);
+    }
     let Some(msg) = enc_err_message(globals, lfp.self_val()) else {
         return Ok(Value::string_from_str(""));
     };
@@ -4061,8 +4284,14 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let name = arg0.coerce_to_string(vm, globals)?;
     // Special names resolved at query time: the filesystem/locale
     // encodings follow `default_external`, and "internal" may be nil.
-    match name.as_str() {
-        "external" | "filesystem" | "locale" => {
+    // CRuby resolves these the same way whatever the case, since the
+    // whole name lookup is case-insensitive.
+    match name.to_ascii_lowercase().as_str() {
+        // The locale encoding follows the locale charmap, which CRuby
+        // reads from the environment at startup; the other two follow
+        // `default_external`.
+        "locale" => return Ok(locale_encoding_value(globals)),
+        "external" | "filesystem" => {
             let ext = globals
                 .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
                 .filter(|v| !v.is_nil())
@@ -4325,40 +4554,24 @@ fn enc_aliases(
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut map = RubyMap::default();
-    let aliases: &[(&str, &str)] = &[
-        ("BINARY", "ASCII-8BIT"),
-        ("ASCII", "US-ASCII"),
-        ("ANSI_X3.4-1968", "US-ASCII"),
-        ("646", "US-ASCII"),
-        ("UTF8", "UTF-8"),
-        ("CP65001", "UTF-8"),
-        ("locale", "UTF-8"),
-        ("external", "UTF-8"),
-        ("filesystem", "UTF-8"),
-        ("CP932", "Windows-31J"),
-        ("csWindows31J", "Windows-31J"),
-        ("SJIS", "Shift_JIS"),
-        ("eucJP", "EUC-JP"),
-        ("CP51932", "CP51932"),
-        ("eucjp-ms", "eucJP-ms"),
-        ("euc-jp-ms", "eucJP-ms"),
-        ("EUC-CN", "GB2312"),
-        ("CP936", "GBK"),
-        ("CP949", "CP949"),
-        ("CP1250", "Windows-1250"),
-        ("CP1251", "Windows-1251"),
-        ("CP1252", "Windows-1252"),
-        ("CP1253", "Windows-1253"),
-        ("CP1254", "Windows-1254"),
-        ("CP1255", "Windows-1255"),
-        ("CP1256", "Windows-1256"),
-        ("CP1257", "Windows-1257"),
-        ("CP1258", "Windows-1258"),
-    ];
-    for (alias, name) in aliases {
+    // Derived from `ENCODING_NAMES`, the single source of truth shared with
+    // `Encoding.name_list` and `Encoding#names`, so the three stay mutually
+    // consistent (ruby/spec checks that every alias key appears in
+    // `name_list`, and that `#names` lists every alias pointing at it).
+    for (canonical, aliases) in ENCODING_NAMES {
+        for alias in *aliases {
+            map.insert(
+                Value::string_from_str(alias),
+                Value::string_from_str(canonical),
+                vm,
+                globals,
+            )?;
+        }
+    }
+    for (alias, canonical) in dynamic_encoding_aliases(globals) {
         map.insert(
             Value::string_from_str(alias),
-            Value::string_from_str(name),
+            Value::string_from_str(&canonical),
             vm,
             globals,
         )?;
@@ -4366,12 +4579,46 @@ fn enc_aliases(
     Ok(Value::hash(map))
 }
 
+/// The three alias names whose target is decided at run time:
+/// `"locale"` follows the locale charmap, `"external"` and
+/// `"filesystem"` follow `Encoding.default_external`. Returns
+/// `(alias, canonical name)` pairs so `Encoding.aliases`,
+/// `Encoding#names` and `Encoding.find` all agree.
+const DYNAMIC_ALIASES: &[&str] = &["locale", "external", "filesystem"];
+
+fn dynamic_encoding_aliases(globals: &mut Globals) -> Vec<(&'static str, String)> {
+    fn canonical_of(globals: &Globals, v: Value) -> Option<String> {
+        globals
+            .store
+            .get_ivar(v, IdentId::_ENCODING)
+            .and_then(|ev| ev.is_str().map(|s| s.to_string()))
+    }
+    let external_val = globals
+        .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+        .filter(|v| !v.is_nil());
+    let locale_val = locale_encoding_value(globals);
+    let locale = canonical_of(globals, locale_val);
+    let external = external_val
+        .and_then(|v| canonical_of(globals, v))
+        .unwrap_or_else(|| "UTF-8".to_string());
+    DYNAMIC_ALIASES
+        .iter()
+        .map(|alias| {
+            let target = match *alias {
+                "locale" => locale.clone().unwrap_or_else(|| external.clone()),
+                _ => external.clone(),
+            };
+            (*alias, target)
+        })
+        .collect()
+}
+
 /// The static set of canonical encoding names plus their aliases.
 /// Used by `Encoding.name_list` and `Encoding#names`. Each tuple is
 /// `(canonical, &[aliases])`.
 const ENCODING_NAMES: &[(&str, &[&str])] = &[
     ("ASCII-8BIT", &["BINARY"]),
-    ("UTF-8", &["CP65001", "locale", "external", "filesystem"]),
+    ("UTF-8", &["CP65001"]),
     ("US-ASCII", &["ASCII", "ANSI_X3.4-1968", "646"]),
     ("UTF-16BE", &[]),
     ("UTF-16LE", &[]),
@@ -4456,6 +4703,9 @@ fn enc_name_list(
             add(&mut names, &mut seen, alias);
         }
     }
+    for alias in DYNAMIC_ALIASES {
+        add(&mut names, &mut seen, alias);
+    }
     // Also include the canonical name of every encoding exposed by
     // `Encoding.list` so `name_list` is a superset of it (spec:
     // "name_list includes all non-dummy encodings").
@@ -4498,6 +4748,11 @@ fn enc_names(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 names.push(Value::string_from_str(alias));
             }
             break;
+        }
+    }
+    for (alias, target) in dynamic_encoding_aliases(globals) {
+        if target.eq_ignore_ascii_case(&canonical) {
+            names.push(Value::string_from_str(alias));
         }
     }
     Ok(Value::array_from_iter(names.into_iter()))
@@ -4619,11 +4874,13 @@ fn rb_enc_compatible(a: &EncodedOperand, b: &EncodedOperand) -> Option<Encoding>
     }
     // Orient so the (only / first) String is the left operand; the
     // coderange negotiation below is written from that viewpoint.
-    let (s1, s2, enc1, enc2) = if !a.is_string {
-        (b, a, enc2, enc1)
-    } else {
-        (a, b, enc1, enc2)
-    };
+    // `enc1` / `enc2` deliberately stay bound to the *original*
+    // operands: CRuby's swap in `enc_compatible_latter` permutes the
+    // encoding indices twice, so they come out unchanged while the
+    // string values are exchanged. `Encoding.compatible?(regexp, str)`
+    // relies on that asymmetry (it answers with the String's encoding,
+    // while the reversed call answers with the Regexp's).
+    let (s1, s2) = if !a.is_string { (b, a) } else { (a, b) };
     let cr1 = s1.code_range();
     if s2.is_string {
         let cr2 = s2.code_range();
@@ -5696,15 +5953,125 @@ mod tests {
 
     #[test]
     fn encoding_locale_charmap() {
-        // `Encoding.locale_charmap` is locale-dependent in CRuby; in
-        // monoruby it always returns "UTF-8". Assert only that it
-        // returns a String to stay portable across CI environments.
+        // `Encoding.locale_charmap` follows the locale environment, so
+        // assert only the properties that hold on every CI host: it is
+        // a String, it names an encoding `Encoding.find` knows, and it
+        // is the encoding `Encoding.find("locale")` answers with.
         run_test_no_result_check(
             r#"
               raise unless Encoding.locale_charmap.is_a?(String)
-              raise unless Encoding.locale_charmap == "UTF-8"
+              raise unless Encoding.find(Encoding.locale_charmap) == Encoding.find("locale")
+              raise unless Encoding.aliases["locale"] == Encoding.find("locale").name
             "#,
         );
+    }
+
+    #[test]
+    fn encoding_alias_tables_are_consistent() {
+        // `Encoding.aliases`, `Encoding.name_list` and `Encoding#names`
+        // are all derived from one table, so ruby/spec's
+        // self-consistency checks hold by construction.
+        run_test_no_result_check(
+            r##"
+              list = Encoding.name_list
+              Encoding.aliases.each do |a, canonical|
+                raise "#{a} missing from name_list" unless list.include?(a)
+                raise "#{a} does not resolve" unless Encoding.find(a) == Encoding.find(canonical)
+                raise "#{a} missing from names" unless Encoding.find(a).names.include?(a)
+              end
+              raise unless Encoding::ASCII_8BIT.names.first == "ASCII-8BIT"
+              raise unless Encoding::ASCII_8BIT.names.include?("BINARY")
+              raise unless Encoding.find("LOCALE") == Encoding.find("locale")
+              raise unless Encoding.find("EXTERNAL") == Encoding.find("external")
+              raise unless Encoding.find("Internal") == Encoding.find("internal")
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_error_carries_its_attributes() {
+        // The object a Converter raises is the one `#last_error`
+        // returns, so every accessor is populated — including the
+        // *stage* encodings of a multi-step conversion path.
+        run_tests(&[
+            r##"
+              ec = Encoding::Converter.new("utf-8", "iso-8859-1")
+              begin
+                ec.convert("\xf1abcd")
+              rescue Encoding::InvalidByteSequenceError => e
+                [e.error_bytes, e.error_bytes.encoding.to_s,
+                 e.readagain_bytes, e.readagain_bytes.encoding.to_s,
+                 e.incomplete_input?,
+                 e.source_encoding.to_s, e.destination_encoding.to_s,
+                 e.source_encoding_name, e.destination_encoding_name]
+              end
+            "##,
+            // EUC-JP → ISO-8859-1 goes through the UTF-8 pivot, so the
+            // decode error reports EUC-JP → UTF-8, and the malformed
+            // run splits into the pending lead byte and the byte that
+            // disproved it.
+            r##"
+              ec = Encoding::Converter.new("EUC-JP", "ISO-8859-1")
+              begin
+                ec.convert("abc\xA1\xFFdef")
+              rescue Encoding::InvalidByteSequenceError => e
+                [e.error_bytes, e.readagain_bytes,
+                 e.source_encoding.to_s, e.destination_encoding.to_s]
+              end
+            "##,
+            r##"
+              ec = Encoding::Converter.new("utf-8", "ascii")
+              begin
+                ec.convert("\u{8765}")
+              rescue Encoding::UndefinedConversionError => e
+                [e.error_char, e.error_char.encoding.to_s,
+                 e.source_encoding.to_s, e.destination_encoding.to_s,
+                 e.source_encoding_name, e.destination_encoding_name]
+              end
+            "##,
+            r##"
+              ec = Encoding::Converter.new("ISO-8859-1", "EUC-JP")
+              begin
+                ec.convert("\xA0")
+              rescue Encoding::UndefinedConversionError => e
+                [e.error_char.bytes, e.source_encoding.to_s, e.destination_encoding.to_s]
+              end
+            "##,
+            // A converter left holding an incomplete tail raises at
+            // `#finish`, with the same attributes.
+            r##"
+              ec = Encoding::Converter.new("utf-8", "iso-8859-1")
+              ec.convert("ab\xE3")
+              begin
+                ec.finish
+              rescue Encoding::InvalidByteSequenceError => e
+                [e.error_bytes, e.readagain_bytes, e.incomplete_input?,
+                 e.source_encoding.to_s]
+              end
+            "##,
+        ]);
+    }
+
+    #[test]
+    fn encoding_compatible_regexp_string_is_asymmetric() {
+        // CRuby's `enc_compatible_latter` swaps the two *values* but
+        // leaves the encodings bound to the original operands, so the
+        // answer depends on which side the Regexp is.
+        run_tests(&[
+            r#"
+              r = Regexp.new("\xa4\xa2".dup.force_encoding("euc-jp"))
+              Encoding.compatible?(r, "hello".dup.force_encoding("utf-8")).name
+            "#,
+            r#"
+              r = Regexp.new("\xa4\xa2".dup.force_encoding("euc-jp"))
+              Encoding.compatible?("hello".dup.force_encoding("utf-8"), r).name
+            "#,
+            r#"
+              r = Regexp.new("\xa4\xa2".dup.force_encoding("euc-jp"))
+              Encoding.compatible?(r, "hello".dup.force_encoding("euc-jp")).name
+            "#,
+            r#"Encoding.compatible?(/abc/, "abc".dup.force_encoding("us-ascii")).name"#,
+        ]);
     }
 
     #[test]

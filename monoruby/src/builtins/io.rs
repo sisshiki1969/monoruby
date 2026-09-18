@@ -27,6 +27,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "printf", printf, 1, 1, true);
     globals.define_builtin_func(IO_CLASS, "flush", flush, 0);
+    globals.define_builtin_func(IO_CLASS, "inspect", io_inspect, 0);
     globals.define_builtin_func_with_kw(IO_CLASS, "gets", gets, 0, 2, false, &["chomp"], true);
     globals.define_builtin_func_with_kw(
         IO_CLASS,
@@ -1767,6 +1768,28 @@ fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// - read(length = nil, outbuf = "") -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/read.html
+///
+/// ### IO#inspect
+///
+/// - inspect -> String
+///
+/// `#<CLASS:DESCRIPTOR>`, with the receiver's own class: a stream over a
+/// bare descriptor inspects as `#<IO:<STDOUT>>`, a `File` as
+/// `#<File:/path>`. Defined here rather than inherited from `Kernel` so
+/// that `IO.instance_method(:inspect).owner` is `IO`, as CRuby's is.
+/// `IO#to_s` is deliberately *not* aliased to it — CRuby leaves `to_s`
+/// to `Kernel`, so it still renders the address form.
+///
+#[monoruby_builtin]
+fn io_inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let name = globals.store.get_class_name(self_.class());
+    Ok(Value::string(format!(
+        "#<{name}:{}>",
+        self_.as_io_inner().kind().descriptor()
+    )))
+}
+
 #[monoruby_builtin]
 fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let length = match lfp.try_arg(0) {
@@ -1776,7 +1799,9 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             } else {
                 let length = v.coerce_to_int_i64(vm, globals)?;
                 if length < 0 {
-                    return Err(MonorubyErr::argumenterr("negative length"));
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "negative length {length} given"
+                    )));
                 }
                 Some(length as usize)
             }
@@ -1851,11 +1876,11 @@ fn io_class_read(
     _: BytecodePtr,
 ) -> Result<Value> {
     use std::io::{Read, Seek, SeekFrom};
-    let filename = lfp
-        .arg(0)
-        .coerce_to_path_rstring(vm, globals)?
-        .to_str()?
-        .to_string();
+    // Keep the path as raw bytes: an errno message must quote the path
+    // exactly as given, even when it is not valid UTF-8.
+    let filename = super::file::bytes_to_pathbuf(
+        lfp.arg(0).coerce_to_path_rstring(vm, globals)?.as_bytes(),
+    );
 
     // Trailing options Hash (anywhere in args 1..4).
     let mut opts = None;
@@ -2029,7 +2054,7 @@ fn io_class_readlines(
 /// A write/append-only open mode can't be read from. CRuby still *opens*
 /// the file with that mode first — truncating it for "w", creating it if
 /// absent — before raising, so replicate the side effect and then fail.
-fn reject_unreadable_mode(path: &str, mode: &str) -> Result<()> {
+fn reject_unreadable_mode(path: impl AsRef<std::path::Path>, mode: &str) -> Result<()> {
     let base = mode.split(':').next().unwrap_or("").replace('b', "");
     if base == "w" || base == "a" {
         let mut o = std::fs::OpenOptions::new();
@@ -2039,7 +2064,7 @@ fn reject_unreadable_mode(path: &str, mode: &str) -> Result<()> {
         } else {
             o.append(true);
         }
-        let _ = o.open(path); // open errors are moot; the read error wins
+        let _ = o.open(path.as_ref()); // open errors are moot; the read error wins
         return Err(MonorubyErr::ioerr("not opened for reading"));
     }
     Ok(())
@@ -8891,6 +8916,40 @@ mod tests {
     /// `IO.open`), returning the fresh IO. The IO is only reachable from a
     /// Rust local while `io_init_from_fd` and the `warn` dispatch re-enter
     /// Ruby, which is what the rooting guards.
+    #[test]
+    fn io_inspect_names_the_receivers_class() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_cov_io_inspect_#{Process.pid}"
+            begin
+              File.write(path, "hello\n")
+              f = File.open(path, "r")
+              opened = f.inspect
+              same = f.to_s.start_with?("#<File:0x")
+              f.close
+              closed = f.inspect
+              [opened == "#<File:#{path}>", same, closed == "#<File:#{path} (closed)>",
+               STDOUT.inspect, STDIN.inspect, STDERR.inspect]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_read_negative_length_message() {
+        run_test_once(
+            r##"
+            begin
+              STDIN.read(-3)
+            rescue ArgumentError => e
+              e.message
+            end
+            "##,
+        );
+    }
+
     #[test]
     fn io_new_with_block_warns_and_returns_io() {
         run_test_once(

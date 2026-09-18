@@ -566,15 +566,34 @@ impl std::clone::Clone for IoKind {
     }
 }
 
+impl IoKind {
+    ///
+    /// What `IO#inspect` prints after the class name: the path when the
+    /// stream has one, `fd N` otherwise (the name each kind was opened
+    /// with). CRuby's `rb_io_inspect` writes `#<CLASS:DESCRIPTOR>` with
+    /// the *receiver's* class, so this half carries no class of its own.
+    ///
+    pub fn descriptor(&self) -> std::borrow::Cow<'_, str> {
+        use std::borrow::Cow;
+        match self {
+            Self::Stdin => Cow::Borrowed("<STDIN>"),
+            Self::Stdout => Cow::Borrowed("<STDOUT>"),
+            Self::Stderr => Cow::Borrowed("<STDERR>"),
+            Self::File(file) => Cow::Borrowed(file.name.as_str()),
+            Self::Popen(_) => Cow::Borrowed("popen"),
+            // A closed stream keeps the path it was opened with, which
+            // CRuby still prints ahead of the `(closed)` marker.
+            Self::Closed(Some(path)) => Cow::Owned(format!("{path} (closed)")),
+            Self::Closed(None) => Cow::Borrowed("(closed)"),
+        }
+    }
+}
+
 impl std::fmt::Display for IoKind {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::Stdin => write!(f, "#<IO:<STDIN>>"),
-            Self::Stdout => write!(f, "#<IO:<STDOUT>>"),
-            Self::Stderr => write!(f, "#<IO:<STDERR>>"),
             Self::File(file) => write!(f, "#<File:{}>", file.name),
-            Self::Popen(_) => write!(f, "#<IO:popen>"),
-            Self::Closed(..) => write!(f, "#<IO:(closed)>"),
+            other => write!(f, "#<IO:{}>", other.descriptor()),
         }
     }
 }
