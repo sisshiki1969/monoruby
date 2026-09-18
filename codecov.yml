@@ -1,0 +1,33 @@
+# Codecov configuration.
+#
+# Coverage comes from `bin/test`: `cargo llvm-cov nextest` over the
+# workspace, uploaded as lcov.info by the amd64 CI job.
+#
+# The dynamically loaded extensions (doc/native_extension_loading.md) carry
+# no coverage data. `bin/test` builds them with the instrumentation flags
+# stripped, and the interpreter reaches them through `dlopen` from that
+# separate build, whose counters the report step does not collect — so
+# their sources would be reported as essentially uncovered even though the
+# tests do exercise them through the binary (tests/sqlite3.rs,
+# zlib_deflate.rs, zlib_gzip.rs, zstd.rs, psych.rs, yaml_scalars.rs,
+# nokogiri.rs, native_ext.rs). `monoruby_ext/` is the same case: the safe
+# wrapper is linked only into those extensions, never into the instrumented
+# binary. Instrumenting the extensions — building them with the coverage
+# flags and handing each `.so` to `cargo llvm-cov report` — would bring
+# these paths back, and is the way to undo this exclusion.
+#
+# The interpreter's own half of the ABI, `monoruby/src/ext.rs`, is measured
+# as usual and is deliberately not ignored; so is `monoruby_ext_sys/`,
+# which the binary links.
+ignore:
+  - "ext/**"
+  - "monoruby_ext/**"
+
+coverage:
+  status:
+    project:
+      default:
+        # Moving the five stand-ins out of the core took their well-covered
+        # lines with it, which dilutes the remaining average by about 0.2
+        # points once. Absorb that much without hiding a real regression.
+        threshold: 1%

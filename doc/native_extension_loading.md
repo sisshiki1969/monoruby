@@ -354,6 +354,7 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 - **variadic の引数は平らに渡る。** コアの rest builtin は `lfp.arg(0)` が rest 配列だったが、trampoline は `MR_ARGC_VARIADIC` の `argv` に要素を展開する。移植で `ary_vec(args[0])` を残すと最初の引数を配列として読んで壊れる（nokogiri で 6 箇所）。
 - **C パーサの出力が入力バッファを指す場合は `str_bytes` の生ポインタを使う。** gumbo の error record は入力の中を指す。`str_vec`（コピー）だと `add_errors` が別のメモリに対して診断を描くので、`Ctx::str_bytes` の `(ptr, len)` を取り出して渡す（collector は動かさないので String が生きている限り有効）。
 - 配布: `cargo build`（workspace root）で `.so` がバイナリの隣にできる。`cargo install` はバイナリしか置かないので、`bin/install` が拡張をビルドして `<install root>/ext/` にコピーする（`bin/spec` もこれを使う）。`bin/test` / `bin/test-aarch64` はベンチマーク用バイナリの隣に拡張をビルドする。
+- **カバレッジの計測外。** `bin/test` は拡張を計装フラグ無しでビルドし、`dlopen` で読み込むので、`cargo llvm-cov report` はそのカウンタを集めない。テストは実際にバイナリ越しに拡張を通しているのに、Codecov 上は `ext/` 7409 行中 94 hit（1.3%）、`monoruby_ext/` 448 行中 0 hit と出る。そこで `codecov.yml` で `ext/**` と `monoruby_ext/**` を `ignore` にした（コア側の `monoruby/src/ext.rs` は 82% で計測されており、除外していない）。計測を取り戻すには、拡張を計装付きでビルドし、各 `.so` を `--object` として report に渡す必要がある。移設でよく覆われたコードがコアから抜けた分、全体は 0.2 ポイントほど一度だけ薄まるので、`project` の `threshold` を 1% にしてある。
 
 ## 7. 参考
 
