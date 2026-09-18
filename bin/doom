@@ -1,1 +1,2 @@
+(cd ../doom && bundle install)
 cargo run --release -- ../doom/bin/doom
