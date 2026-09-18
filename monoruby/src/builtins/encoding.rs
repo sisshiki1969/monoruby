@@ -897,7 +897,19 @@ pub(super) fn transcode_bytes_with_opts(
     store: &Store,
 ) -> Result<Vec<u8>> {
     use crate::value::Encoding as E;
-    if src_enc == dst_enc {
+    // `invalid: :replace` has work to do even when the encodings match,
+    // so a broken string with a usable codec skips the identity path
+    // and goes through decode / re-encode to be scrubbed.
+    let scrub_in_place = src_enc == dst_enc
+        && opts.invalid_replace
+        && matches!(
+            RStringInner::from_encoding_scanned(src_bytes, src_enc).code_range(),
+            crate::value::CodeRange::Broken
+        )
+        && (encoding_to_rs(src_enc).is_some()
+            || is_utf16_or_32(src_enc)
+            || single_byte_table(src_enc).is_some());
+    if src_enc == dst_enc && !scrub_in_place {
         // The newline decorators still apply to a same-encoding
         // "conversion" (`"a\n".encode("UTF-8", crlf_newline: true)`).
         if opts.has_newline() && src_enc.is_ascii_compatible() {
@@ -1070,6 +1082,21 @@ pub(super) fn transcode_bytes_with_opts(
             ),
         ));
     }
+    // `invalid: :replace`: the bytes `encoding_rs` turned into U+FFFD
+    // are replaced with the *destination's* replacement string here.
+    // Carrying U+FFFD into the encode half would make the invalid
+    // sequence come back out as an *undefined* conversion (CRuby
+    // substitutes at the point of the invalid bytes instead).
+    let decoded: std::borrow::Cow<str> = if decode_err && opts.invalid_replace {
+        let replace = opts.replace_str(dst_enc);
+        if replace == "\u{FFFD}" {
+            decoded
+        } else {
+            std::borrow::Cow::Owned(decoded.replace('\u{FFFD}', &replace))
+        }
+    } else {
+        decoded
+    };
     // Newline decorators run on the decoded text, between the decode
     // and encode halves.
     let decoded: std::borrow::Cow<str> = if opts.has_newline() {
@@ -1269,7 +1296,11 @@ fn encode_resolve_enc_arg(
 /// Returns `Some(Value)` when the `xml:` key is present (the caller
 /// should short-circuit). Returns `None` when no `xml:` option was
 /// supplied — the regular transcoding path runs.
-fn handle_xml_option(globals: &mut Globals, lfp: Lfp) -> Result<Option<Value>> {
+fn handle_xml_option(
+    globals: &mut Globals,
+    lfp: Lfp,
+    dst_enc: crate::value::Encoding,
+) -> Result<Option<Value>> {
     let opts_val = match get_options_hash_value(lfp) {
         Some(v) => v,
         None => return Ok(None),
@@ -1306,20 +1337,43 @@ fn handle_xml_option(globals: &mut Globals, lfp: Lfp) -> Result<Option<Value>> {
     if matches!(mode, XmlMode::Attr) {
         out.push('"');
     }
+    let plain = TranscodeOpts::default();
     for c in s.chars() {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '"' if matches!(mode, XmlMode::Attr) => out.push_str("&quot;"),
+            // A character the destination cannot represent becomes an
+            // upper-case hexadecimal numeric character reference — the
+            // whole point of the xml decorator.
+            _ if !c.is_ascii()
+                && transcode_bytes_with_opts(
+                    c.to_string().as_bytes(),
+                    crate::value::Encoding::Utf8,
+                    dst_enc,
+                    &plain,
+                    &globals.store,
+                )
+                .is_err() =>
+            {
+                out.push_str(&format!("&#x{:X};", c as u32));
+            }
             _ => out.push(c),
         }
     }
     if matches!(mode, XmlMode::Attr) {
         out.push('"');
     }
+    let encoded = transcode_bytes_with_opts(
+        out.as_bytes(),
+        crate::value::Encoding::Utf8,
+        dst_enc,
+        &plain,
+        &globals.store,
+    )?;
     Ok(Some(Value::string_from_inner(
-        crate::value::RStringInner::from_string_scanned(out),
+        crate::value::RStringInner::from_encoding_scanned(&encoded, dst_enc),
     )))
 }
 
@@ -1438,16 +1492,16 @@ pub(super) fn encode(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    if let Some(v) = handle_xml_option(globals, lfp)? {
-        return Ok(v);
-    }
     let self_val = lfp.self_val();
     let self_enc = self_val.as_rstring_inner().encoding();
     let (src_enc, dst_enc_opt) = resolve_encode_pair(vm, globals, lfp, self_enc)?;
-    let dst_enc = match dst_enc_opt {
-        Some(e) => e,
-        None => return Ok(self_val.dup()),
-    };
+    // With no destination (and no `default_internal`) the conversion is
+    // to the receiver's own encoding — the options still apply, so this
+    // is not a no-op: `"a\n".encode(crlf_newline: true)` converts.
+    let dst_enc = dst_enc_opt.unwrap_or(self_enc);
+    if let Some(v) = handle_xml_option(globals, lfp, dst_enc)? {
+        return Ok(v);
+    }
     let opts = parse_transcode_opts(lfp);
     let fallback = parse_fallback_opt(lfp);
     let src_bytes = self_val.as_rstring_inner().as_bytes().to_vec();
@@ -1475,7 +1529,10 @@ pub(super) fn encode_(
 ) -> Result<Value> {
     let mut self_val = lfp.self_val();
     self_val.ensure_string_mutable(vm, globals)?;
-    if let Some(v) = handle_xml_option(globals, lfp)? {
+    let self_enc = self_val.as_rstring_inner().encoding();
+    let (src_enc, dst_enc_opt) = resolve_encode_pair(vm, globals, lfp, self_enc)?;
+    let dst_enc = dst_enc_opt.unwrap_or(self_enc);
+    if let Some(v) = handle_xml_option(globals, lfp, dst_enc)? {
         // CRuby's `encode!` just `replace`s self with the encoded
         // form when xml is given.
         if let Some(inner) = v.is_rstring_inner() {
@@ -1483,12 +1540,6 @@ pub(super) fn encode_(
         }
         return Ok(self_val);
     }
-    let self_enc = self_val.as_rstring_inner().encoding();
-    let (src_enc, dst_enc_opt) = resolve_encode_pair(vm, globals, lfp, self_enc)?;
-    let dst_enc = match dst_enc_opt {
-        Some(e) => e,
-        None => return Ok(self_val),
-    };
     let opts = parse_transcode_opts(lfp);
     let fallback = parse_fallback_opt(lfp);
     let src_bytes = self_val.as_rstring_inner().as_bytes().to_vec();
@@ -1527,11 +1578,13 @@ fn parse_transcode_opts(lfp: Lfp) -> TranscodeOpts {
     if let Some(v) = find_hash_value_for_symbol(&hash, "replace") {
         if let Some(s) = v.is_str() {
             out.replace = Some(s.to_string());
-            // Specifying `replace:` implicitly enables both modes
-            // per CRuby (you can't supply a replacement without
-            // wanting to replace).
-            out.invalid_replace = true;
-            out.undef_replace = true;
+            // CRuby's `econv_opts`: a bare `replace:` implies
+            // `undef: :replace` — but only when `invalid: :replace`
+            // was *not* given, so `invalid: :replace, replace: ""`
+            // still raises on an unconvertible character.
+            if !out.invalid_replace {
+                out.undef_replace = true;
+            }
         }
     }
     for (key, flag) in [
@@ -5964,6 +6017,52 @@ mod tests {
               raise unless Encoding.aliases["locale"] == Encoding.find("locale").name
             "#,
         );
+    }
+
+    #[test]
+    fn encode_replacement_options() {
+        run_tests(&[
+            // `replace:` alone implies `undef: :replace` ...
+            r#""test\u0100".encode(Encoding::Windows_1252, replace: "?")"#,
+            // ... but not when `invalid: :replace` was given explicitly.
+            r#"begin
+                 "test\u0100".encode(Encoding::Windows_1252, invalid: :replace, replace: "")
+               rescue => e
+                 e.class.to_s
+               end"#,
+            // ... and it never turns invalid bytes into replacements.
+            r#"begin
+                 "ab\xFFc".dup.force_encoding("utf-8").encode(Encoding::ISO_8859_1, replace: "!")
+               rescue => e
+                 e.class.to_s
+               end"#,
+            // An invalid byte is replaced with the *destination's*
+            // replacement, not with U+FFFD (which would then be an
+            // undefined conversion).
+            r#""ab\xFFc".dup.force_encoding("utf-8").encode(Encoding::ISO_8859_1, invalid: :replace)"#,
+            r#""ab\xFFc".dup.force_encoding("utf-8").encode(Encoding::ISO_8859_1, invalid: :replace, replace: "!")"#,
+            // Same encoding in and out still scrubs.
+            r#""ab\xFFc".dup.force_encoding("utf-8").encode("utf-8", invalid: :replace).bytes"#,
+            r#""\u3042?\u3042".encode(Encoding::EUC_JP, undef: :replace).bytes"#,
+        ]);
+    }
+
+    #[test]
+    fn encode_decorators_without_a_destination() {
+        run_tests(&[
+            // No destination encoding: the options still apply.
+            r#"["\r\nfoo", "\rfoo", "\nfoo"].map { |s| s.encode(cr_newline: true) }"#,
+            r#"["\r\nfoo", "\rfoo", "\nfoo"].map { |s| s.encode(crlf_newline: true) }"#,
+            r#"["\r\nfoo", "\rfoo", "\nfoo"].map { |s| s.encode(universal_newline: true) }"#,
+            // The xml decorator writes numeric character references for
+            // characters the destination cannot hold, and tags the
+            // result with the destination encoding.
+            r#""\u00FCrst".encode(Encoding::US_ASCII, xml: :text)"#,
+            r#""\u00FCrst".encode(Encoding::US_ASCII, xml: :attr)"#,
+            r#""\u00FCrst".encode(Encoding::US_ASCII, xml: :text).encoding.to_s"#,
+            r#""& < > \"".encode("UTF-8", xml: :attr)"#,
+            r#""& < > \"".encode("UTF-8", xml: :text)"#,
+        ]);
     }
 
     #[test]

@@ -2237,6 +2237,10 @@ fn delete_prefix_(
     let Some(len) = deleted_prefix_length(vm, globals, inner, lfp.arg(0))? else {
         return Ok(Value::nil());
     };
+    // Deleting nothing is "no change", not a successful deletion.
+    if len == 0 {
+        return Ok(Value::nil());
+    }
     let rest = RStringInner::from_encoding(&inner.as_bytes()[len..], inner.encoding());
     lfp.self_val().replace_with_inner(rest);
     Ok(lfp.self_val())
@@ -8637,9 +8641,12 @@ fn codepoint_values(inner: &RStringInner) -> Result<Vec<Value>> {
             .map(|c| Value::integer(c as u32 as i64))
             .collect())
     } else {
+        let enc = inner.encoding();
         Ok(inner
             .iter_char_bytes()
-            .map(|s| Value::integer(s[0] as i64))
+            .map(|s| {
+                Value::integer(crate::value::rvalue::char_bytes_code(enc, s) as i64)
+            })
             .collect())
     }
 }
@@ -14008,6 +14015,73 @@ mod tests {
               s.rpartition("X").map(&:encoding).map(&:to_s)
             "#,
         );
+    }
+
+    #[test]
+    fn string_subclass_conversions_return_plain_strings() {
+        run_tests(&[
+            r#"class MyStr1 < String; end
+               s = MyStr1.new("hello")
+               [s.to_s.class.to_s, s.to_str.class.to_s, s.to_s == "hello",
+                s.partition("l").map { |x| x.class.to_s },
+                s.partition("x").map { |x| x.class.to_s },
+                s.rpartition("x").map { |x| x.class.to_s },
+                s.partition(/l./).map { |x| x.class.to_s }]"#,
+            // A plain String is still its own `to_s`.
+            r#"s = "hello"; s.to_s.equal?(s)"#,
+        ]);
+    }
+
+    #[test]
+    fn ord_and_chop_decode_fixed_width_encodings() {
+        run_tests(&[
+            // `ord` / `codepoints` decode a character, they do not
+            // report its leading byte.
+            r#""\n".encode("utf-32be").ord"#,
+            r#""\n".encode("utf-16le").ord"#,
+            r#""\u3042".encode("utf-16be").ord"#,
+            r#""\u{1F600}".encode("utf-16le").ord"#,
+            r#"s = "\u{1F600}a".encode("utf-16le"); [s.length, s.chars.map(&:bytes), s.reverse.bytes]"#,
+            r#""\xD8".b.dup.force_encoding("utf-16le").length"#,
+            r#""\u{1F600}".encode("utf-32be").codepoints"#,
+            r#""ab".encode("utf-16be").codepoints"#,
+            // ... so `chop` strips a whole CR LF in those encodings.
+            r#""abc\r\n".encode("utf-32be").chop.bytes"#,
+            r#""abc\r\n".encode("utf-16le").chop.bytes"#,
+            r#"s = "abc\r\n".encode("utf-32be").dup; s.chop!; s.bytes"#,
+            r#""abc\r\n".chop"#,
+            // A frozen receiver raises even with nothing to chop.
+            r#"begin; "".freeze.chop!; rescue => e; e.class.to_s; end"#,
+            // An empty prefix / suffix is "no change".
+            r#"s = "hello".dup; [s.delete_prefix!(""), s.delete_suffix!(""), s]"#,
+        ]);
+    }
+
+    #[test]
+    fn unpack_seek_directives_and_strict_base64() {
+        run_tests(&[
+            // '@' seeks absolutely: bare is 0, '*' does not move.
+            r#""\x01\x02\x03\x04".unpack("C2@C")"#,
+            r#""\x01\x02\x03\x04".unpack("C2@*C")"#,
+            r#""\x01\x02\x03\x04".unpack("C2@4C")"#,
+            r#""\x01\x02\x03\x04".unpack("C3@2C")"#,
+            // 'X*' rewinds by the *unread* bytes, and may not pass the
+            // start of the string.
+            r#""abcd".unpack("C3X*C")"#,
+            r#"begin; "abcd".unpack("CX*C"); rescue => e; e.class.to_s; end"#,
+            r#""\x01\x02\x03\x04".unpack("C3XC")"#,
+            r#""\x01\x02\x03\x04".unpack("C3X0C")"#,
+            // 'm0' is strict base64; 'm' skips what it cannot read.
+            r#""dGVzdA==".unpack("m0")"#,
+            r#""dGV%zdA==".unpack("m")"#,
+            r#"begin; "dGV%zdA==".unpack("m0"); rescue => e; [e.class.to_s, e.message]; end"#,
+            r#"begin; "dGVzdA".unpack("m0"); rescue => e; e.class.to_s; end"#,
+            r#"begin; "dGVzdA==\n".unpack("m0"); rescue => e; e.class.to_s; end"#,
+            r#""".unpack("m0")"#,
+            // 'w' decodes a BER integer of any width.
+            r#""\x84\x80\x80\x80\x80\x80\x80\x80\x80\x00".unpack("w")"#,
+            r#""\x00\xce\x0f\x84\x80\x80\x80\x80\x80\x80\x80\x80\x00\x01\x00".unpack("w*")"#,
+        ]);
     }
 
     #[test]
