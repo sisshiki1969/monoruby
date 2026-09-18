@@ -35,6 +35,9 @@ module Gosu
     PIXEL_PACK_BUFFER    = 0x88EB
     PIXEL_UNPACK_BUFFER  = 0x88EC
 
+    # glGetIntegerv: the program object glUseProgram last bound
+    CURRENT_PROGRAM = 0x8B8D
+
     # glPixelStorei parameters, paired with the value a context starts
     # out with: what a block reading or writing pixels is entitled to
     # assume, and what SDL does not leave behind (see `reset_transfer`).
@@ -73,6 +76,7 @@ module Gosu
       def bracket
         return yield unless available?
 
+        program = current_program
         push_attrib(ALL_ATTRIB_BITS)
         push_client_attrib(CLIENT_ALL_ATTRIB_BITS)
         matrix_mode(TEXTURE)
@@ -99,6 +103,13 @@ module Gosu
           unbind_buffers
           pop_client_attrib
           pop_attrib
+          # Neither attribute stack covers the bound program object, so a
+          # block that binds a shader of its own -- and leaves fixed-function
+          # behind, as glUseProgram(0) does -- would unbind SDL's. SDL's GL
+          # renderer remembers which program it bound and does not bind it
+          # again, so its next textured draw would run with no shader at all
+          # and come out an untextured white quad.
+          restore_program(program)
         end
       end
 
@@ -132,6 +143,17 @@ module Gosu
         bind_buffer(ELEMENT_ARRAY_BUFFER, 0)
       end
 
+      def current_program
+        return unless @use_program
+
+        get_integer_v(CURRENT_PROGRAM, @program_buf)
+        @program_buf.read_int32
+      end
+
+      def restore_program(program)
+        use_program(program) if program
+      end
+
       def _attach
         # Candidates in FFI.map_library_name order: the plain name covers
         # Linux/BSD, the soname covers runtime-only installs, and the
@@ -154,6 +176,16 @@ module Gosu
           @bind_buffer = true
         rescue LoadError
           @bind_buffer = false
+        end
+        # GL 2.0; absent from an older library, where nothing can have bound
+        # a program either.
+        begin
+          attach_function :use_program,   :glUseProgram,  [:uint32], :void
+          attach_function :get_integer_v, :glGetIntegerv, [:uint32, :pointer], :void
+          @program_buf = FFI::MemoryPointer.new(:int32)
+          @use_program = true
+        rescue LoadError
+          @use_program = false
         end
         true
       rescue LoadError, RuntimeError
