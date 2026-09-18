@@ -35,7 +35,9 @@ use comrak::nodes::{
     NodeTable, NodeTaskItem, NodeValue, Sourcepos, TableAlignment,
 };
 use comrak::{Arena, Options};
+use std::borrow::Cow;
 use std::cell::RefCell;
+use std::fmt::Write as _;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(STRING_CLASS, "__markly_parse", markly_parse, 3);
@@ -193,77 +195,88 @@ fn width_arg(globals: &Globals, v: Value) -> Result<usize> {
     }
 }
 
-/// The order cmark-gfm writes a code block's attributes in. comrak
-/// collects them in a `HashMap` and hands `into_iter()` to its tag
-/// writer, so whenever a tag carries two of them — `class` with
-/// `data-meta` under `FULL_INFO_STRING`, `lang` with `data-meta` under
-/// `GITHUB_PRE_LANG`, either with `data-sourcepos` — the emitted order
-/// follows the per-process hash seed and flips from run to run.
+/// Render a fenced or indented code block the way cmark-gfm does.
 ///
-/// Taking over the tag writing is the only hook comrak offers for this:
-/// with a `codefence_syntax_highlighter` installed it calls the adapter
-/// instead of writing the tags itself. There is no highlighting to do,
-/// so `write_highlighted` only escapes the literal, which is what the
-/// path without an adapter does (`Context::escape`).
-struct OrderedCodeTags;
-
-/// `pre` keys in cmark-gfm's order (`html.c` writes the source position
-/// first, then the language, then the meta string).
-const PRE_ATTR_ORDER: [&str; 3] = ["data-sourcepos", "lang", "data-meta"];
-/// `code` keys in cmark-gfm's order.
-const CODE_ATTR_ORDER: [&str; 2] = ["class", "data-meta"];
-
-/// Write `tag` with the attributes comrak collected, the keys named in
-/// `order` first and in that order. A key comrak may add in some later
-/// version is not dropped: it follows, sorted, so the output stays
-/// deterministic whatever arrives.
-fn write_ordered_tag(
-    output: &mut dyn std::fmt::Write,
-    tag: &str,
-    attributes: &std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
-    order: &[&str],
+/// comrak's own renderer differs from it in three ways that show in the
+/// gem comparison, all of them here rather than in a hook, because the
+/// only hook it offers (`codefence_syntax_highlighter`) is handed the
+/// attributes already computed:
+///
+/// 1. It collects the attributes in a `HashMap` and writes them in its
+///    iteration order, so a tag carrying two of them came out in an
+///    order that followed the per-process hash seed.
+/// 2. It trims the whole meta string, where cmark-gfm drops exactly the
+///    one space that ended the language and keeps the rest — so
+///    ` ```rb  x y ` is `data-meta=" x y"` there and `"x y"` here.
+/// 3. It renders a ```` ```math ```` block as its own math markup
+///    (`data-math-style`), which cmark-gfm, having no math extension,
+///    does not.
+///
+/// Everything else follows comrak's `render_code_block`: the leading
+/// `cr`, the escaped literal, the closing tags, the trailing `lf`. The
+/// codefence plugins it consults there are not consulted here, since
+/// monoruby installs none.
+fn render_code_block<T>(
+    context: &mut comrak::html::Context<T>,
+    node: &comrak::nodes::AstNode<'_>,
+    ncb: &NodeCodeBlock,
 ) -> std::fmt::Result {
-    let mut pairs: Vec<(&str, &str)> = order
-        .iter()
-        .filter_map(|k| attributes.get(*k).map(|v| (*k, v.as_ref())))
-        .collect();
-    let mut rest: Vec<(&str, &str)> = attributes
-        .iter()
-        .filter(|(k, _)| !order.contains(k))
-        .map(|(k, v)| (*k, v.as_ref()))
-        .collect();
-    rest.sort_unstable();
-    pairs.append(&mut rest);
-    // comrak's own writer, so the quoting and value escaping stay its.
-    comrak::html::write_opening_tag(output, tag, pairs)
+    context.cr()?;
+
+    // cmark-gfm's split: the language is up to the first whitespace, and
+    // the meta string is everything after that one byte — not trimmed.
+    // The parser has already stripped the info string's trailing
+    // whitespace, so no trailing run survives to matter.
+    let info = ncb.info.as_str();
+    let first_tag = info.find(|c: char| c.is_whitespace()).unwrap_or(info.len());
+    let lang = &info[..first_tag];
+    let meta = if first_tag < info.len() {
+        Some(&info[first_tag + 1..])
+    } else {
+        None
+    };
+
+    // In cmark-gfm's order: on `<pre>` the source position, the
+    // language and the meta string; on `<code>` the class and the meta
+    // string. `Vec`, so the order is the order.
+    let mut pre_attributes: Vec<(&str, Cow<'_, str>)> = Vec::new();
+    let mut code_attributes: Vec<(&str, Cow<'_, str>)> = Vec::new();
+    if context.options.render.sourcepos {
+        pre_attributes.push(("data-sourcepos", node.data().sourcepos.to_string().into()));
+    }
+    if !info.is_empty() {
+        let full_info = context.options.render.full_info_string;
+        if context.options.render.github_pre_lang {
+            pre_attributes.push(("lang", lang.into()));
+            if let Some(meta) = meta
+                && full_info
+            {
+                pre_attributes.push(("data-meta", meta.into()));
+            }
+        } else {
+            code_attributes.push(("class", format!("language-{lang}").into()));
+            if let Some(meta) = meta
+                && full_info
+            {
+                code_attributes.push(("data-meta", meta.into()));
+            }
+        }
+    }
+
+    comrak::html::write_opening_tag(context, "pre", pre_attributes)?;
+    comrak::html::write_opening_tag(context, "code", code_attributes)?;
+    context.escape(&ncb.literal)?;
+    context.write_str("</code></pre>")?;
+    context.lf()
 }
 
-impl comrak::adapters::SyntaxHighlighterAdapter for OrderedCodeTags {
-    fn write_pre_tag(
-        &self,
-        output: &mut dyn std::fmt::Write,
-        attributes: std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
-    ) -> std::fmt::Result {
-        write_ordered_tag(output, "pre", &attributes, &PRE_ATTR_ORDER)
-    }
-
-    fn write_code_tag(
-        &self,
-        output: &mut dyn std::fmt::Write,
-        attributes: std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
-    ) -> std::fmt::Result {
-        write_ordered_tag(output, "code", &attributes, &CODE_ATTR_ORDER)
-    }
-
-    fn write_highlighted(
-        &self,
-        output: &mut dyn std::fmt::Write,
-        _lang: Option<&str>,
-        code: &str,
-    ) -> std::fmt::Result {
-        comrak::html::escape(output, code)
-    }
-}
+comrak::create_formatter!(MarklyHtmlFormatter, {
+    NodeValue::CodeBlock(ref ncb) => |context, node, entering| {
+        if entering {
+            render_code_block(context, node, ncb)?;
+        }
+    },
+});
 
 ///
 /// ### String.__markly_render_html(tuple, flags, extensions)
@@ -271,10 +284,8 @@ impl comrak::adapters::SyntaxHighlighterAdapter for OrderedCodeTags {
 #[monoruby_builtin]
 fn render_html(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     render_with(globals, lfp, 0, |root, opts| {
-        let mut plugins = comrak::options::Plugins::default();
-        plugins.render.codefence_syntax_highlighter = Some(&OrderedCodeTags);
         let mut out = String::new();
-        let _ = comrak::format_html_with_plugins(root, opts, &mut out, &plugins);
+        let _ = MarklyHtmlFormatter::format_document(root, opts, &mut out);
         out
     })
 }

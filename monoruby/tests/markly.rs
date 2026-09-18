@@ -398,23 +398,43 @@ fn markly_0_19_api() {
     );
 }
 
-/// A code block's attributes come out in cmark-gfm's order, and the same
-/// input renders the same way every time. comrak collects those
-/// attributes in a `HashMap` and writes them in its iteration order, so
-/// before `src/builtins/markly.rs` took the tag writing over through
-/// comrak's `codefence_syntax_highlighter` hook, a tag carrying two of
-/// them came out in an order that followed the hash seed: `<code
-/// class="language-rb" data-meta="x">` on one run and `<code
-/// data-meta="x" class="language-rb">` on the next. Each combination is
-/// rendered many times in the one process, since a fresh `HashMap` is
-/// what varies, and every rendering must agree with the gem's.
+/// A code block's tag comes out exactly as cmark-gfm writes it: the
+/// attributes in its fixed order, the info string split into a language
+/// and a verbatim meta, and no attribute cmark-gfm does not emit.
+///
+/// comrak differs from cmark-gfm in three ways here, and
+/// `src/builtins/markly.rs` takes the whole `NodeValue::CodeBlock`
+/// rendering over to undo all of them:
+///
+/// * it collects the attributes in a `HashMap` and writes them in its
+///   iteration order, so a tag carrying two of them came out as `<code
+///   class="language-rb" data-meta="x">` on one run and `<code
+///   data-meta="x" class="language-rb">` on the next;
+/// * it trims the meta, where cmark-gfm skips exactly one character
+///   after the language, so ` ```rb  x ` means `data-meta=" x"`;
+/// * it renders a ```` ```math ```` block as a math node, adding a
+///   `data-math-style` attribute cmark-gfm knows nothing about.
+///
+/// Each combination is rendered many times in the one process, since a
+/// fresh `HashMap` is what varies, and every rendering must agree with
+/// the gem's.
 #[test]
 fn markly_code_block_attribute_order() {
     run_test_once(
         r##"
         require "rubygems"
         require "markly"
-        src = "```rb x\ncode\n```\n"
+        sources = {
+          one_space: "```rb x\ncode\n```\n",
+          two_spaces: "```rb  x y\ncode\n```\n",
+          tab: "```rb\tx\ncode\n```\n",
+          trailing_space: "```rb \ncode\n```\n",
+          lang_only: "```rb\ncode\n```\n",
+          bare: "```\ncode\n```\n",
+          math: "```math\nx^2\n```\n",
+          math_meta: "```math foo\nx^2\n```\n",
+          indented: "    code\n",
+        }
         flags = {
           plain: 0,
           full_info: Markly::FULL_INFO_STRING,
@@ -426,9 +446,11 @@ fn markly_code_block_attribute_order() {
           everything: Markly::SOURCE_POSITION | Markly::GITHUB_PRE_LANG | Markly::FULL_INFO_STRING,
         }
         res = []
-        flags.each do |name, f|
-          renderings = 40.times.map { Markly.render_html(src, flags: f) }.uniq
-          res << [name, renderings.size, renderings.first.scan(/<(?:pre|code)[^>]*>/)]
+        flags.each do |fname, f|
+          sources.each do |sname, src|
+            renderings = 40.times.map { Markly.render_html(src, flags: f) }.uniq
+            res << [fname, sname, renderings.size, renderings.first]
+          end
         end
         res
         "##,
