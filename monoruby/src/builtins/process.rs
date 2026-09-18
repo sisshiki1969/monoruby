@@ -1514,8 +1514,11 @@ fn process_fork(
     // forking too.)
     crate::rvalue::io::flush_std_streams();
     // Hold the native pool's locks across the fork, so the child cannot
-    // inherit one a worker was holding (`native_pool::ForkLocks`).
+    // inherit one a worker was holding (`native_pool::ForkLocks`), and
+    // snapshot the preempt timer's poll-word address, so the child can
+    // leave that thread's lock behind entirely (`preempt::ForkState`).
     let pool_locks = crate::native_pool::prepare_fork();
+    let preempt = crate::preempt::prepare_fork();
     // SAFETY: fork() in a green-thread (single OS thread) process.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -1525,8 +1528,9 @@ fn process_fork(
     }
     if pid == 0 {
         // Child: only the forking green thread survives — and neither do
-        // the native offload workers.
+        // the native offload workers nor the preempt timer.
         pool_locks.reset_child();
+        preempt.reset_child();
         crate::scheduler::fork_child_reset_threads(vm);
     } else {
         drop(pool_locks);
@@ -1574,6 +1578,7 @@ fn process_daemon(
     // threads mean the child is single-threaded.
     unsafe {
         let pool_locks = crate::native_pool::prepare_fork();
+        let preempt = crate::preempt::prepare_fork();
         let pid = libc::fork();
         if pid < 0 {
             let err = std::io::Error::last_os_error();
@@ -1585,6 +1590,7 @@ fn process_daemon(
             libc::_exit(0);
         }
         pool_locks.reset_child();
+        preempt.reset_child();
         crate::scheduler::fork_child_reset_threads(vm);
         libc::setsid();
         if !nochdir {
