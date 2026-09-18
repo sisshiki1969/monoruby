@@ -380,6 +380,9 @@ pub struct Globals {
     /// load lock); the id is only compared / liveness-checked, never
     /// dereferenced, so the map needs no GC marking.
     pub(crate) loading_features: std::collections::HashMap<std::path::PathBuf, u64>,
+    /// Dynamically loaded extensions: their method table, pins and
+    /// library handles (`src/ext.rs`).
+    pub(crate) ext: crate::ext::ExtState,
     /// `Kernel#trace_var` hooks: per global-variable name, the commands
     /// (Procs or Strings) fired after each Ruby-level assignment.
     pub(crate) gvar_traces: std::collections::HashMap<IdentId, Vec<Value>>,
@@ -580,6 +583,7 @@ impl alloc::GC<RValue> for Globals {
         self.load_path.mark(alloc);
         self.loaded_features.mark(alloc);
         self.store.mark(alloc);
+        self.ext.mark(alloc);
         self.gvars.mark_values(|v| v.mark(alloc));
         self.special_gvars.mark(|v| v.mark(alloc));
         self.gvar_traces
@@ -830,6 +834,7 @@ impl Globals {
             random: Box::new(Prng::new()),
             loaded_features,
             loading_features: std::collections::HashMap::default(),
+            ext: crate::ext::ExtState::default(),
             gvar_traces: std::collections::HashMap::default(),
             fiber_scheduler: None,
             random_seed_obj: Value::integer(0),

@@ -952,20 +952,6 @@ impl ClassInfoTable {
         self[class_id].object.unwrap()
     }
 
-    /// Whether an instance of *class* `is_a?` *target*: the same
-    /// superclass walk as `Value::is_kind_of`, started from a class id.
-    /// `false` for a class with no backing object (`BOOL_CLASS` and the
-    /// other inline-cache-only tags).
-    pub(crate) fn class_is_kind_of(&self, class: ClassId, target: ClassId) -> bool {
-        let mut cur = self[class].try_get_module();
-        while let Some(m) = cur {
-            if m.id() == target {
-                return true;
-            }
-            cur = m.superclass();
-        }
-        false
-    }
 
     pub fn object_class(&self) -> Module {
         self.get_module(OBJECT_CLASS)

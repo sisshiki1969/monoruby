@@ -12,6 +12,7 @@ use monoruby::tests::*;
 
 #[test]
 fn psych_loads_like_cruby() {
+    ensure_extension("psych_native");
     run_test_once(
         r##"
         require "yaml"
@@ -51,6 +52,7 @@ fn psych_loads_like_cruby() {
 
 #[test]
 fn psych_dumps_like_cruby() {
+    ensure_extension("psych_native");
     run_test_once(
         r##"
         require "yaml"
@@ -92,6 +94,7 @@ fn psych_dumps_like_cruby() {
 
 #[test]
 fn psych_event_api_like_cruby() {
+    ensure_extension("psych_native");
     run_test_once(
         r##"
         require "yaml"

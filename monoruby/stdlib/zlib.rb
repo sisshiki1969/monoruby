@@ -4,12 +4,14 @@
 # provides the module in Ruby, over two native backends:
 #
 # - `Zlib.crc32` / `Zlib.adler32` (and the `_combine` variants) with the
-#   real argument semantics, over the native byte walk in
-#   `src/builtins/zlib.rs` (`String.__crc32` / `String.__adler32`).
+#   real argument semantics, over the native byte walk of the `zlib_native`
+#   extension (`String.__crc32` / `String.__adler32`).
 # - `Zlib::Deflate` / `Zlib::Inflate` (and everything built on them:
 #   `Zlib.deflate` / `Zlib.inflate`, the gzip framing, `GzipReader` /
 #   `GzipWriter`) as thin shells over a `z_stream` of the bundled zlib
-#   (`String.__zstream_*`, libz-sys built from source). Compression is
+#   (`String.__zstream_*`, libz-sys built from source). Both backends are
+#   the dynamically loaded extension `ext/zlib` (libzlib_native.so),
+#   required just below (doc/native_extension_loading.md). Compression is
 #   real DEFLATE with zlib's own algorithm, so the bytes are the ones
 #   CRuby's zlib.so produces for the same level / strategy / window —
 #   PDF writers that compare output sizes with a CRuby run depend on it.
@@ -18,6 +20,8 @@
 #
 # Not provided: `Zlib::GzipFile` over arbitrary IO objects with
 # streaming (a reader slurps its IO, a writer emits at `close`).
+
+require "zlib_native.so"
 
 module Zlib
   VERSION = "3.2.3"

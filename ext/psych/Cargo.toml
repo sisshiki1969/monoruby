@@ -1,0 +1,15 @@
+[package]
+name = "psych_native"
+version = "0.1.0"
+edition = "2024"
+description = "Psych's native half for monoruby, as a dynamically loaded extension over libyaml-safer (a port of libyaml 0.2.5)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "psych_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+monoruby-ext = { path = "../../monoruby_ext" }
+libyaml-safer = "0.3"

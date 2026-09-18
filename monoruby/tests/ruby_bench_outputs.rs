@@ -12,6 +12,7 @@
 //! the gem (CI installs `erubi`, `chunky_png` and the rubocop gems).
 
 extern crate monoruby;
+use monoruby::tests::ensure_extension;
 use monoruby::tests::ruby_path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -71,6 +72,10 @@ fn compare(bench: &str, gems: &[&str], script: &str) {
     ruby.args(["-E", "UTF-8", "-e", script]);
     let expected = run(ruby, &cwd);
     let mut mono = Command::new(env!("CARGO_BIN_EXE_monoruby"));
+    // Every fingerprint here is a `Zlib.crc32`, so the zlib extension must
+    // be reachable from the spawned binary.
+    ensure_extension("psych_native");
+    mono.env("MONORUBY_EXT_PATH", ensure_extension("zlib_native"));
     mono.args(["-e", script]);
     let got = run(mono, &cwd);
     eprintln!("ruby:\n{expected}\nmonoruby:\n{got}");

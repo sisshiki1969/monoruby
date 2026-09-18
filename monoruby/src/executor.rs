@@ -1262,6 +1262,16 @@ impl Executor {
         let (file_body, canonicalized_path) = loop {
             match globals.require_lib(self, file_name, is_relative)? {
                 crate::globals::RequireLoad::Load(body, path) => break (body, path),
+                crate::globals::RequireLoad::Native(path) => {
+                    // `Init_` defines classes and methods and returns; it
+                    // runs no Ruby that could park, so the per-feature
+                    // load lock the Ruby path takes below is not needed.
+                    if let Err(err) = crate::ext::load_extension(self, globals, &path) {
+                        globals.remove_loaded_feature(&path);
+                        return Err(err);
+                    }
+                    return Ok(true);
+                }
                 crate::globals::RequireLoad::AlreadyLoaded(path) => {
                     // The feature is registered — but its body may still
                     // be running on another thread (features register

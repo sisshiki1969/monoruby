@@ -52,6 +52,7 @@ mod bytecode;
 mod bytecodegen;
 mod codegen;
 mod executor;
+mod ext;
 mod globals;
 mod id_table;
 mod native_pool;

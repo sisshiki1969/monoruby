@@ -1,8 +1,9 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// The sqlite3 gem over monoruby's native binding (src/builtins/sqlite3.rs,
-// the bundled SQLite of `libsqlite3-src`). Every case is compared against
+// The sqlite3 gem over monoruby's native binding (the `ext/sqlite3`
+// extension, built here by `ensure_extension` and loaded through
+// `require`; the bundled SQLite of `libsqlite3-src`). Every case is compared against
 // the host CRuby, which runs the gem's real C extension — so these pin the
 // binding to the extension's behaviour, not to a reading of it.
 //
@@ -16,6 +17,7 @@ use monoruby::tests::*;
 /// binding), NULL to nil.
 #[test]
 fn sqlite3_column_types_round_trip() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -40,6 +42,7 @@ fn sqlite3_column_types_round_trip() {
 /// as 1/0, nil as NULL.
 #[test]
 fn sqlite3_bind_storage_classes() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -80,6 +83,7 @@ fn sqlite3_bind_storage_classes() {
 /// answer for the prepared statement.
 #[test]
 fn sqlite3_statement_cursor_and_metadata() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -119,6 +123,7 @@ fn sqlite3_statement_cursor_and_metadata() {
 /// runs every statement and answers all their rows *as text*.
 #[test]
 fn sqlite3_remainder_and_batch() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -144,6 +149,7 @@ fn sqlite3_remainder_and_batch() {
 /// `Exception#message` formats it.
 #[test]
 fn sqlite3_errors() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -179,6 +185,7 @@ fn sqlite3_errors() {
 /// closing twice.
 #[test]
 fn sqlite3_connection_state() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -211,6 +218,7 @@ fn sqlite3_connection_state() {
 /// that this runs to the end without exhausting anything.
 #[test]
 fn sqlite3_handles_are_released_by_gc() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -238,6 +246,7 @@ fn sqlite3_handles_are_released_by_gc() {
 /// entry point CRuby hides.
 #[test]
 fn sqlite3_method_surface_matches_the_extension() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -256,6 +265,7 @@ fn sqlite3_method_surface_matches_the_extension() {
 /// and a non-zero `vm_steps`, and an unknown key raises.
 #[test]
 fn sqlite3_statement_stats() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -294,6 +304,7 @@ fn sqlite3_statement_stats() {
 /// NULL.
 #[test]
 fn sqlite3_statement_text_and_bindings() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -326,6 +337,7 @@ fn sqlite3_statement_text_and_bindings() {
 /// them, every column as text.
 #[test]
 fn sqlite3_batch_and_switches() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -370,6 +382,7 @@ fn sqlite3_batch_and_switches() {
 /// a write to a read-only connection.
 #[test]
 fn sqlite3_error_classes_by_code() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -424,6 +437,7 @@ fn sqlite3_error_classes_by_code() {
 /// wants fixing where the weak reference is, not here.
 #[test]
 fn sqlite3_statements_are_finalized_when_collected() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -456,6 +470,7 @@ fn sqlite3_statements_are_finalized_when_collected() {
 /// see `sqlite3_create_function` and `sqlite3_create_aggregate`.
 #[test]
 fn sqlite3_unsupported_callbacks_refuse() {
+    ensure_extension("sqlite3_native");
     let v = run_test_no_result_check(
         r##"
         require "sqlite3"
@@ -494,6 +509,7 @@ fn sqlite3_unsupported_callbacks_refuse() {
 /// handle before it is closed.
 #[test]
 fn sqlite3_open_failures_and_utf16() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -536,6 +552,7 @@ fn sqlite3_open_failures_and_utf16() {
 /// carries the offending SQL.
 #[test]
 fn sqlite3_batch_error_paths() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -579,6 +596,7 @@ fn sqlite3_batch_error_paths() {
 /// a value SQLite will not store in that column.
 #[test]
 fn sqlite3_binding_and_accessor_edges() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -624,6 +642,7 @@ fn sqlite3_binding_and_accessor_edges() {
 /// callback, which is what every case here exercises.
 #[test]
 fn sqlite3_create_function() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -692,6 +711,7 @@ fn sqlite3_create_function() {
 /// scan stops, and the connection stays usable.
 #[test]
 fn sqlite3_function_exceptions() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -727,6 +747,7 @@ fn sqlite3_function_exceptions() {
 /// callback finds has to nest.
 #[test]
 fn sqlite3_function_reentrancy() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -756,6 +777,7 @@ fn sqlite3_function_reentrancy() {
 /// aggregation group, steps it per row, and finalizes it once.
 #[test]
 fn sqlite3_create_aggregate() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -814,6 +836,7 @@ fn sqlite3_create_aggregate() {
 /// the connection stays usable.
 #[test]
 fn sqlite3_aggregate_exceptions() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -857,6 +880,7 @@ fn sqlite3_aggregate_exceptions() {
 /// and a finished group's slot must be reused rather than leaked.
 #[test]
 fn sqlite3_aggregate_group_state() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -901,6 +925,7 @@ fn sqlite3_aggregate_group_state() {
 /// finished backup.
 #[test]
 fn sqlite3_backup() {
+    ensure_extension("sqlite3_native");
     run_test_once(
         r##"
         require "rubygems"

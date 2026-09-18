@@ -106,10 +106,12 @@ monoruby/
 │   ├── vendor/         # nokogiri の dependencies.yml と同じ版に patches/ を適用したもの
 │   └── src/lib.rs      # 使う 227 関数の extern "C" 宣言（手書き。bindgen は使わない）
 ├── gumbo-src/          # nokogiri 同梱の gumbo-parser（42 ファイル）を cc でビルド
-├── monoruby/src/builtins/nokogiri/   # ext/nokogiri の移植
-│   ├── document.rs, node.rs, node_set.rs, xpath_context.rs, sax.rs, reader.rs,
-│   │   xslt.rs, schema.rs, html4.rs, html5.rs, encoding.rs, syntax_error.rs
-│   └── mod.rs          # クラス登録
+├── ext/nokogiri/       # ext/nokogiri の移植（crate nokogiri_native、cdylib）
+│   │                   # 当初は monoruby/src/builtins/nokogiri/ にあり、
+│   │                   # doc/native_extension_loading.md の 3 で拡張に出た
+│   └── src/            # document.rs, node.rs, node_set.rs, xpath.rs, sax.rs, reader.rs,
+│       │               #   xslt.rs, schema.rs, dtd.rs, html5.rs, misc.rs
+│       └── lib.rs      # クラス登録（Init_nokogiri_native）、寿命モデルの共通部
 └── monoruby/gem/nokogiri/            # gem の lib/nokogiri/** を vendoring
     └── nokogiri/nokogiri.rb          # C 拡張の代わりに読まれるスタブ（定数定義など）
 ```
@@ -233,8 +235,11 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
 
 `libxml2-src/`（libxml2 2.13.8 + nokogiri 1.18.9 の patches、`cc` でビルド、
 `config.h` は手書き、`xmlversion.h` は build.rs が生成）、
-`monoruby/src/builtins/nokogiri/`（Rust 側 ~2.5k 行）、`monoruby/gem/nokogiri/`
-（gem 1.19.1 の Ruby 半分をそのまま + `nokogiri/nokogiri.rb` のスタブ）。
+`ext/nokogiri/`（Rust 側、monoruby 拡張 `nokogiri_native`。もとは
+`monoruby/src/builtins/nokogiri/` で、`doc/native_extension_loading.md` の
+手順 3 で `monoruby_ext` の `Ctx` 越しに書き直してコアの外に出した）、
+`monoruby/gem/nokogiri/`（gem 1.19.1 の Ruby 半分をそのまま +
+`nokogiri/nokogiri.rb` のスタブ、拡張を `require` する）。
 `tests/nokogiri.rs` が CRuby の nokogiri gem と同じスクリプトを走らせて出力を
 突き合わせる（gem が無ければ skip、CI は入れる）。
 

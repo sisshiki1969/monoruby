@@ -8,6 +8,7 @@ use monoruby::tests::*;
 
 #[test]
 fn yaml_multi_line_flow_scalars_fold() {
+    ensure_extension("psych_native");
     run_test_once(
         r##"
         require "yaml"
@@ -32,6 +33,7 @@ fn yaml_multi_line_flow_scalars_fold() {
 // key. Rails' `database.yml` is the `<<: *default` case.
 #[test]
 fn yaml_merge_key() {
+    ensure_extension("psych_native");
     run_test_once(
         r##"
         require "yaml"

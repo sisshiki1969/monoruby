@@ -4,30 +4,22 @@
 //! instance methods of a Ruby class (one instance per transform).
 
 use super::xpath::{XPATH_INVALID_TYPE, marshal_funcall};
-use super::*;
+use crate::*;
 use std::cell::Cell;
 
 /// The payload of a `Stylesheet`: the compiled stylesheet, and the
 /// handler instances of the running transform (`func_instances`), which
 /// libxslt holds only as raw module data.
-pub(super) struct XsltStylesheet {
+pub(crate) struct XsltStylesheet {
     ss: *mut xml::xsltStylesheet,
     func_instances: Vec<Value>,
 }
 
-impl NativeData for XsltStylesheet {
-    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        for v in &self.func_instances {
-            v.mark(alloc);
-        }
+native!(XsltStylesheet, "XsltStylesheet", |this, m| {
+    for v in &this.func_instances {
+        m.mark(v);
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-}
+});
 
 impl Drop for XsltStylesheet {
     fn drop(&mut self) {
@@ -36,51 +28,51 @@ impl Drop for XsltStylesheet {
     }
 }
 
-pub(super) fn init(globals: &mut Globals, c: &Classes) {
-    globals.define_builtin_class_func(
+pub(crate) fn init(ctx: &mut Ctx, c: &Classes) {
+    ctx.define_method(
         c.stylesheet,
         "parse_stylesheet_doc",
-        parse_stylesheet_doc,
+        method!(parse_stylesheet_doc),
         1,
+        MR_METHOD_SINGLETON,
     );
-    globals.define_builtin_func(c.stylesheet, "serialize", serialize, 1);
-    globals.define_builtin_func_with(c.stylesheet, "transform", transform, 1, 2, false);
-    globals.define_builtin_class_func(c.xslt, "register", register, 2);
+    ctx.define_method(c.stylesheet, "serialize", method!(serialize), 1, 0);
+    ctx.define_method(c.stylesheet, "transform", method!(transform), MR_ARGC_VARIADIC, 0) /* arity 1..2 */;
+    ctx.define_method(
+        c.xslt,
+        "register",
+        method!(register),
+        2,
+        MR_METHOD_SINGLETON,
+    );
     // `@modules`: the registered handler classes by namespace URI.
-    let xslt = globals.store.get_module(c.xslt).as_val();
-    globals
-        .store
-        .set_ivar(
-            xslt,
-            IdentId::get_id("@modules"),
-            Value::hash(RubyMap::default()),
-        )
+    let xslt = c.xslt;
+    let modules = ctx.hash_new();
+    ctx.ivar_set(xslt, "@modules", modules)
         .expect("Nokogiri::XSLT is a module");
     // SAFETY: plain library initialization (`Init_nokogiri`); libxslt's own
     // extras are registered by its lazy `xsltInit`.
     unsafe { xml::exsltRegisterAll() };
 }
 
-fn this(lfp: Lfp) -> Result<*mut xml::xsltStylesheet> {
-    match lfp.self_val().try_native::<XsltStylesheet>() {
+fn recv(ctx: &mut Ctx, this: Value) -> Result<*mut xml::xsltStylesheet> {
+    match ctx.native::<XsltStylesheet>(this) {
         Some(s) => Ok(s.ss),
-        None => Err(MonorubyErr::argumenterr(
-            "expected a Nokogiri::XSLT::Stylesheet",
-        )),
+        None => Err(ctx.argument_error("expected a Nokogiri::XSLT::Stylesheet")),
     }
 }
 
 /// `noko_xml_document_unwrap`: a Document, nothing else. The error names
 /// the argument as `rb_check_typeddata` does: a wrapped node by its
 /// struct name, anything else by its class.
-fn document_ptr(globals: &Globals, v: Value) -> Result<*mut xml::xmlDoc> {
-    v.try_native::<XmlDocument>().map(|d| d.doc).ok_or_else(|| {
-        let name = if v.try_native::<XmlNode>().is_some() {
+fn document_ptr(ctx: &mut Ctx, v: Value) -> Result<*mut xml::xmlDoc> {
+    ctx.native::<XmlDocument>(v).map(|d| d.doc).ok_or_else(|| {
+        let name = if ctx.native::<XmlNode>(v).is_some() {
             "xmlNode".to_string()
         } else {
-            builtin_type_name(globals, v)
+            builtin_type_name(ctx, v)
         };
-        MonorubyErr::typeerr(format!("wrong argument type {name} (expected xmlDoc)"))
+        ctx.type_error(format!("wrong argument type {name} (expected xmlDoc)"))
     })
 }
 
@@ -110,15 +102,9 @@ unsafe fn capture_errors<T>(with_xml: bool, f: impl FnOnce() -> T) -> (T, String
 ///
 /// The stylesheet is compiled from a copy of the document (libxslt takes
 /// the copy over); a failure raises the errors reported as a RuntimeError.
-#[monoruby_builtin]
-fn parse_stylesheet_doc(
-    _: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let class = lfp.self_val().as_class_id();
-    let doc = document_ptr(globals, lfp.arg(0))?;
+fn parse_stylesheet_doc(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
+    let class = this;
+    let doc = document_ptr(ctx, args[0])?;
     // SAFETY: a live document; the copy belongs to the stylesheet on
     // success and is ours to free on failure.
     let (ss, msg) = unsafe {
@@ -130,39 +116,38 @@ fn parse_stylesheet_doc(
         (ss, msg)
     };
     if ss.is_null() {
-        return Err(MonorubyErr::runtimeerr(msg));
+        return Err(ctx.runtime_error(msg));
     }
-    let rb = Value::new_native(
+    let rb = ctx.native_new(
         class,
-        Box::new(XsltStylesheet {
+        XsltStylesheet {
             ss,
             func_instances: vec![],
-        }),
-    );
+        },
+    )?;
     // SAFETY: a live stylesheet we own; the extension callbacks find the
     // Ruby object through it.
-    unsafe { xml::mrb_xslt_stylesheet_set_private(ss, rb.id() as *mut c_void) };
+    unsafe { xml::mrb_xslt_stylesheet_set_private(ss, rb.0 as *mut c_void) };
     Ok(rb)
 }
 
 /// Stylesheet#serialize(document) -> String: the document as the
 /// stylesheet's output method says.
-#[monoruby_builtin]
-fn serialize(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let doc = document_ptr(globals, lfp.arg(0))?;
-    let ss = this(lfp)?;
+fn serialize(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
+    let doc = document_ptr(ctx, args[0])?;
+    let ss = recv(ctx, this)?;
     let mut ptr: *mut xml::xmlChar = std::ptr::null_mut();
     let mut len: c_int = 0;
     // SAFETY: a live document and stylesheet; the buffer is ours to free.
     unsafe {
         xml::xsltSaveResultToString(&mut ptr, &mut len, doc, ss);
         if ptr.is_null() {
-            return Ok(utf8(&[]));
+            return Ok(utf8(ctx, &[]));
         }
-        let s = utf8(std::slice::from_raw_parts(
-            ptr as *const u8,
-            len.max(0) as usize,
-        ));
+        let s = utf8(
+            ctx,
+            std::slice::from_raw_parts(ptr as *const u8, len.max(0) as usize),
+        );
         xml::xml_free()(ptr as *mut c_void);
         Ok(s)
     }
@@ -171,14 +156,13 @@ fn serialize(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// The state of a running `transform`, reachable from the extension
 /// callbacks libxslt makes during it.
 struct XsltCall {
-    vm: *mut Executor,
-    globals: *mut Globals,
+    ctx: *mut MrContext,
     /// The document being transformed (the node sets an extension
     /// function receives belong to it, unless they are libxslt's own).
     document: Value,
     /// The exception a handler raised (or a bad return type): the
     /// evaluation is aborted and it is re-raised by `transform`.
-    error: Option<MonorubyErr>,
+    error: Option<Value>,
 }
 
 thread_local! {
@@ -186,49 +170,38 @@ thread_local! {
 }
 
 /// Stylesheet#transform(document, params = []) -> XML::Document
-#[monoruby_builtin]
-fn transform(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let rb_document = lfp.arg(0);
-    let mut rb_param = lfp.try_arg(1).unwrap_or_default();
+fn transform(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
+    check_arity(ctx, args, 1, 2)?;
+    let rb_document = args[0];
+    let mut rb_param = args.get(1).copied().unwrap_or_default();
     if rb_param.is_nil() {
-        rb_param = Value::array_from_vec(vec![]);
+        rb_param = ctx.ary_from_vec(vec![]);
     }
-    if rb_document.try_native::<XmlDocument>().is_none() {
-        return Err(MonorubyErr::argumenterr(
-            "argument must be a Nokogiri::XML::Document",
-        ));
+    if ctx.native::<XmlDocument>(rb_document).is_none() {
+        return Err(ctx.argument_error("argument must be a Nokogiri::XML::Document"));
     }
     // A Hash of params is flattened to the name / value list.
-    if rb_param.try_hash_ty().is_some() {
-        rb_param =
-            vm.invoke_method_inner(globals, IdentId::get_id("to_a"), rb_param, &[], None, None)?;
-        rb_param = vm.invoke_method_inner(
-            globals,
-            IdentId::get_id("flatten"),
-            rb_param,
-            &[],
-            None,
-            None,
-        )?;
+    if try_hash(ctx, rb_param).is_some() {
+        rb_param = ctx.funcall(rb_param, "to_a", &[], None)?;
+        rb_param = ctx.funcall(rb_param, "flatten", &[], None)?;
     }
-    if rb_param.ty() != Some(ObjTy::ARRAY) {
-        return Err(MonorubyErr::typeerr(format!(
+    if ctx.type_of(rb_param) != MrType::Array {
+        return Err(ctx.type_error(format!(
             "wrong argument type {} (expected Array)",
-            builtin_type_name(globals, rb_param)
+            builtin_type_name(ctx, rb_param)
         )));
     }
-    let entries: Vec<Value> = rb_param.as_array().iter().cloned().collect();
+    let entries: Vec<Value> = ary_vec(ctx, rb_param)?.iter().cloned().collect();
     let mut params: Vec<CString> = Vec::with_capacity(entries.len());
     for e in entries {
-        params.push(cstr(e, &globals.store)?);
+        params.push(cstr(e, ctx)?);
     }
     let mut c_params: Vec<*const c_char> = params.iter().map(|p| p.as_ptr()).collect();
     c_params.push(std::ptr::null());
-    let ss = this(lfp)?;
-    let c_document = doc_ptr(rb_document)?;
+    let ss = recv(ctx, this)?;
+    let c_document = doc_ptr(ctx, rb_document)?;
     let mut call = XsltCall {
-        vm,
-        globals,
+        ctx: ctx.raw(),
         document: rb_document,
         error: None,
     };
@@ -242,7 +215,7 @@ fn transform(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let tc = xml::xsltNewTransformContext(ss, c_document);
         let defensive = !tc.is_null()
             && xml::xsltNeedElemSpaceHandling(tc) != 0
-            && super::schema::has_wrapped_blank_nodes(c_document);
+            && super::schema::has_wrapped_blank_nodes(ctx, c_document);
         if !tc.is_null() {
             xml::xsltFreeTransformContext(tc);
         }
@@ -270,42 +243,31 @@ fn transform(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     };
     if let Some(e) = call.error {
         discard(result);
-        return Err(e);
+        return Err(raise(ctx, e));
     }
     if !msg.is_empty() {
         discard(result);
-        return Err(MonorubyErr::runtimeerr(msg));
+        return Err(ctx.runtime_error(msg));
     }
     if result.is_null() {
-        return Err(MonorubyErr::runtimeerr("could not apply the stylesheet"));
+        return Err(ctx.runtime_error("could not apply the stylesheet"));
     }
-    wrap_document(vm, globals, classes().document, result, &[])
+    wrap_document(ctx, classes().document, result, &[])
 }
 
 /// XSLT.register(uri, klass) -> XSLT: the instance methods of `klass`
 /// become the XSLT extension functions of the namespace `uri`
 /// (globally, as nokogiri's).
-#[monoruby_builtin]
-fn register(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let this = lfp.self_val();
-    let uri = lfp.arg(0);
-    let obj = lfp.arg(1);
-    let modules = globals
-        .store
-        .get_ivar(this, IdentId::get_id("@modules"))
-        .unwrap_or_default();
+fn register(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
+    let this = this;
+    let uri = args[0];
+    let obj = args[1];
+    let modules = Some(ctx.ivar_get(this, "@modules")).unwrap_or_default();
     if modules.is_nil() {
-        return Err(MonorubyErr::runtimeerr("internal error: @modules not set"));
+        return Err(ctx.runtime_error("internal error: @modules not set"));
     }
-    vm.invoke_method_inner(
-        globals,
-        IdentId::get_id("[]="),
-        modules,
-        &[uri, obj],
-        None,
-        None,
-    )?;
-    let c_uri = cstr(uri, &globals.store)?;
+    ctx.funcall(modules, "[]=", &[uri, obj], None)?;
+    let c_uri = cstr(uri, ctx)?;
     // SAFETY: libxslt copies the URI; the callbacks are static.
     unsafe {
         xml::xsltRegisterExtModule(
@@ -319,6 +281,7 @@ fn register(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 
 /// The Ruby `Stylesheet` of a transform's stylesheet, if it has one.
 unsafe fn stylesheet_of<'a>(
+    ctx: &Ctx,
     ctxt: *mut xml::xsltTransformContext,
 ) -> Option<&'a mut XsltStylesheet> {
     // SAFETY: a live transform context; `_private` holds the Value bits
@@ -328,7 +291,7 @@ unsafe fn stylesheet_of<'a>(
         if p.is_null() {
             return None;
         }
-        native_mut::<XsltStylesheet>(Value::from_u64(p as u64))
+        ctx.native::<XsltStylesheet>(Value(p as u64))
     }
 }
 
@@ -351,36 +314,18 @@ unsafe extern "C" fn ext_init(
         if call.error.is_some() {
             return std::ptr::null_mut();
         }
-        let vm = &mut *call.vm;
-        let globals = &mut *call.globals;
+        let mut cx = Ctx::from_raw(call.ctx);
+        let ctx = &mut cx;
         let r = (|| -> Result<*mut c_void> {
-            let xslt = globals.store.get_module(classes().xslt).as_val();
-            let modules = globals
-                .store
-                .get_ivar(xslt, IdentId::get_id("@modules"))
-                .unwrap_or_default();
-            let key = xml_str(uri);
-            let obj = vm.invoke_method_inner(
-                globals,
-                IdentId::get_id("[]"),
-                modules,
-                &[key],
-                None,
-                None,
-            )?;
-            let methods = vm.invoke_method_inner(
-                globals,
-                IdentId::get_id("instance_methods"),
-                obj,
-                &[Value::bool(false)],
-                None,
-                None,
-            )?;
-            let methods: Vec<Value> = methods.as_array().iter().cloned().collect();
+            let xslt = classes().xslt;
+            let modules = ctx.ivar_get(xslt, "@modules");
+            let key = xml_str(ctx, uri);
+            let obj = ctx.funcall(modules, "[]", &[key], None)?;
+            let methods = ctx.funcall(obj, "instance_methods", &[Value::bool(false)], None)?;
+            let methods: Vec<Value> = ary_vec(ctx, methods)?.iter().cloned().collect();
             for m in methods {
-                let name =
-                    vm.invoke_method_inner(globals, IdentId::get_id("to_s"), m, &[], None, None)?;
-                let name = cstr(name, &globals.store)?;
+                let name = ctx.funcall(m, "to_s", &[], None)?;
+                let name = cstr(name, ctx)?;
                 xml::xsltRegisterExtFunction(
                     ctxt,
                     name.as_ptr() as *const xml::xmlChar,
@@ -388,16 +333,16 @@ unsafe extern "C" fn ext_init(
                     Some(ext_call),
                 );
             }
-            let inst = vm.invoke_method_inner(globals, IdentId::NEW, obj, &[], None, None)?;
-            if let Some(w) = stylesheet_of(ctxt) {
+            let inst = ctx.funcall(obj, "new", &[], None)?;
+            if let Some(w) = stylesheet_of(ctx, ctxt) {
                 w.func_instances.push(inst);
             }
-            Ok(inst.id() as *mut c_void)
+            Ok(inst.0 as *mut c_void)
         })();
         match r {
             Ok(p) => p,
-            Err(e) => {
-                call.error = Some(e);
+            Err(_) => {
+                call.error = Some(stash_error(ctx));
                 std::ptr::null_mut()
             }
         }
@@ -410,9 +355,15 @@ unsafe extern "C" fn ext_shutdown(
     _uri: *const xml::xmlChar,
     _data: *mut c_void,
 ) {
-    // SAFETY: a live transform context.
+    // SAFETY: a live transform context, inside `transform`, whose call
+    // state is registered.
     unsafe {
-        if let Some(w) = stylesheet_of(ctxt) {
+        let call_p = XSLT_CALL.with(|c| c.get());
+        if call_p.is_null() {
+            return;
+        }
+        let ctx = Ctx::from_raw((*call_p).ctx);
+        if let Some(w) = stylesheet_of(&ctx, ctxt) {
             w.func_instances.clear();
         }
     }
@@ -434,28 +385,21 @@ unsafe extern "C" fn ext_call(ctxt: *mut xml::xmlXPathParserContext, nargs: c_in
             xml::xmlXPathErr(ctxt, XPATH_INVALID_TYPE);
             return;
         }
-        let ctx = (*ctxt).context;
+        let xctx = (*ctxt).context;
         let transform = xml::xsltXPathGetTransformContext(ctxt);
-        let handler = xml::xsltGetExtData(transform, xml::mrb_xpath_ctx_get_function_uri(ctx));
+        let handler = xml::xsltGetExtData(transform, xml::mrb_xpath_ctx_get_function_uri(xctx));
         if handler.is_null() {
             xml::xmlXPathErr(ctxt, XPATH_INVALID_TYPE);
             return;
         }
-        let handler = Value::from_u64(handler as u64);
-        let name = CStr::from_ptr(xml::mrb_xpath_ctx_get_function(ctx) as *const c_char)
+        let handler = Value(handler as u64);
+        let name = CStr::from_ptr(xml::mrb_xpath_ctx_get_function(xctx) as *const c_char)
             .to_string_lossy()
             .into_owned();
-        let document = doc_value((*ctx).doc).unwrap_or(call.document);
-        if let Err(e) = marshal_funcall(
-            &mut *call.vm,
-            &mut *call.globals,
-            ctxt,
-            nargs,
-            handler,
-            document,
-            &name,
-        ) {
-            call.error = Some(e);
+        let document = doc_value((*xctx).doc).unwrap_or(call.document);
+        let mut cx = Ctx::from_raw(call.ctx);
+        if marshal_funcall(&mut cx, ctxt, nargs, handler, document, &name).is_err() {
+            call.error = Some(stash_error(&mut cx));
             xml::xmlXPathErr(ctxt, XPATH_INVALID_TYPE);
         }
     }

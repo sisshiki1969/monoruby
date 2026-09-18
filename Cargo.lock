@@ -1110,16 +1110,13 @@ dependencies = [
  "indexmap",
  "libc",
  "libffi",
- "libsqlite3-src",
- "libxml2-src",
- "libyaml-safer",
- "libz-sys",
  "md-5",
  "memchr",
  "mimalloc",
  "monoasm",
  "monoasm_macro",
  "monoruby-attr",
+ "monoruby-ext-sys",
  "num",
  "onigmo-regex",
  "paste",
@@ -1138,7 +1135,6 @@ dependencies = [
  "unicode-general-category",
  "unicode-normalization",
  "unicode-segmentation",
- "zstd-safe",
 ]
 
 [[package]]
@@ -1150,6 +1146,17 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "monoruby-ext"
+version = "0.1.0"
+dependencies = [
+ "monoruby-ext-sys",
+]
+
+[[package]]
+name = "monoruby-ext-sys"
+version = "0.1.0"
 
 [[package]]
 name = "nibble_vec"
@@ -1170,6 +1177,15 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+]
+
+[[package]]
+name = "nokogiri_native"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libxml2-src",
+ "monoruby-ext",
 ]
 
 [[package]]
@@ -1425,6 +1441,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "psych_native"
+version = "0.1.0"
+dependencies = [
+ "libyaml-safer",
+ "monoruby-ext",
 ]
 
 [[package]]
@@ -1804,6 +1828,14 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+
+[[package]]
+name = "sqlite3_native"
+version = "0.1.0"
+dependencies = [
+ "libsqlite3-src",
+ "monoruby-ext",
+]
 
 [[package]]
 name = "strsim"
@@ -2279,6 +2311,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
+name = "zlib_native"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libz-sys",
+ "monoruby-ext",
+]
+
+[[package]]
 name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2301,4 +2342,13 @@ checksum = "0ef0a8027ec3ee71300ab3bcbcd0393f434aa72b91ca6d635a39941deae8eea0"
 dependencies = [
  "cc",
  "pkg-config",
+]
+
+[[package]]
+name = "zstd_native"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "monoruby-ext",
+ "zstd-safe",
 ]

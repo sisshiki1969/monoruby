@@ -1,0 +1,37 @@
+#!/bin/bash
+# Install monoruby: the binary with `cargo install`, and the dynamically
+# loaded extensions (doc/native_extension_loading.md) into the install
+# root's `ext/`, where the installed binary looks for them after its own
+# directory. `cargo install` copies only the binary, so without this step an
+# installed monoruby has no `require "zlib"` (rubygems needs it) or sqlite3.
+#
+#   bin/install            # release build, ~/.cargo/bin/monoruby
+#   bin/install --debug    # debug build (slower binary, faster build)
+set -e
+cd "$(dirname "$0")/.."
+
+PROFILE=release
+CARGO_PROFILE_ARGS=(--release)
+INSTALL_ARGS=()
+if [ "${1:-}" = "--debug" ]; then
+  PROFILE=debug
+  CARGO_PROFILE_ARGS=()
+  INSTALL_ARGS=(--debug)
+fi
+
+cargo build "${CARGO_PROFILE_ARGS[@]}" -p sqlite3_native -p zlib_native -p zstd_native -p psych_native -p nokogiri_native
+cargo install --path monoruby "${INSTALL_ARGS[@]}"
+
+# The per-version install root build.rs populated (`MONORUBY_INSTALL_ROOT`,
+# see `globals::install_root`); the installed binary reports it.
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' monoruby/Cargo.toml | head -1)
+ROOT="${MONORUBY_INSTALL_ROOT:-$HOME/.monoruby/v$VERSION}"
+mkdir -p "$ROOT/ext"
+case "$(uname -s)" in
+  Darwin) EXT=dylib ;;
+  *) EXT=so ;;
+esac
+for lib in sqlite3_native zlib_native zstd_native psych_native nokogiri_native; do
+  cp "target/$PROFILE/lib$lib.$EXT" "$ROOT/ext/"
+done
+echo "installed $(command -v monoruby) and the extensions in $ROOT/ext"

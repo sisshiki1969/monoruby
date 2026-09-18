@@ -4,14 +4,40 @@
 //! HTML5 serializer behind `Node#to_html` on HTML5 documents
 //! (`html_standard_serialize`, `prepend_newline?`).
 
-use super::*;
+use crate::*;
 
-pub(super) fn init(globals: &mut Globals, c: &Classes) {
-    const KW: &[&str] = &["max_attributes", "max_errors", "max_tree_depth", "parse_noscript_content_as_text"];
-    globals.define_builtin_class_func_with_kw(c.gumbo, "parse", parse, 3, 3, false, KW, true);
-    globals.define_builtin_class_func_with_kw(c.gumbo, "fragment", fragment, 3, 3, false, KW, true);
-    globals.define_private_builtin_func(c.node, "html_standard_serialize", html_standard_serialize, 1);
-    globals.define_private_builtin_func(c.node, "prepend_newline?", prepend_newline, 0);
+pub(crate) fn init(ctx: &mut Ctx, c: &Classes) {
+    // Three positional arguments and keywords (`max_attributes:`,
+    // `max_errors:`, `max_tree_depth:`, `parse_noscript_content_as_text:`);
+    // a variadic registration receives the keywords as a trailing Hash.
+    ctx.define_method(
+        c.gumbo,
+        "parse",
+        method!(parse),
+        MR_ARGC_VARIADIC,
+        MR_METHOD_SINGLETON,
+    );
+    ctx.define_method(
+        c.gumbo,
+        "fragment",
+        method!(fragment),
+        MR_ARGC_VARIADIC,
+        MR_METHOD_SINGLETON,
+    );
+    ctx.define_method(
+        c.node,
+        "html_standard_serialize",
+        method!(html_standard_serialize),
+        1,
+        MR_METHOD_PRIVATE,
+    );
+    ctx.define_method(
+        c.node,
+        "prepend_newline?",
+        method!(prepend_newline),
+        0,
+        MR_METHOD_PRIVATE,
+    );
 }
 
 /// The keyword arguments of `parse` / `fragment` (`common_options`): the
@@ -24,38 +50,68 @@ struct Options {
     noscript_as_text: bool,
 }
 
-fn options(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Options> {
-    // `rb_get_kwargs`: every missing required keyword is named at once.
-    let missing: Vec<&str> = ["max_attributes", "max_errors", "max_tree_depth"]
+fn options(ctx: &mut Ctx, args: &[Value]) -> Result<Options> {
+    // The three positionals, then the keywords as one Hash (the C
+    // extension takes them with `rb_get_kwargs`: every missing required
+    // keyword is named at once, an unknown one is an error).
+    let kw = match args.get(3).copied() {
+        Some(h) if try_hash(ctx, h).is_some() => Some(h),
+        _ => None,
+    };
+    if args.len() > 4 || (args.len() == 4 && kw.is_none()) || args.len() < 3 {
+        return Err(ctx.argument_error(format!(
+            "wrong number of arguments (given {}, expected 3)",
+            args.len()
+        )));
+    }
+    let get = |ctx: &mut Ctx, name: &str| -> Result<Option<Value>> {
+        let Some(h) = kw else { return Ok(None) };
+        let k = ctx.sym(name);
+        Ok(ctx.hash_get(h, k)?.filter(|v| !v.is_nil()))
+    };
+    let mut missing: Vec<&str> = vec![];
+    let mut required = [0 as c_int; 3];
+    for (i, name) in ["max_attributes", "max_errors", "max_tree_depth"]
         .iter()
         .enumerate()
-        .filter(|(i, _)| lfp.try_arg(3 + i).is_none_or(|v| v.is_nil()))
-        .map(|(_, name)| *name)
-        .collect();
+    {
+        match get(ctx, name)? {
+            Some(v) => required[i] = ctx.int(v)? as c_int,
+            None => missing.push(name),
+        }
+    }
     if !missing.is_empty() {
         let names: Vec<String> = missing.iter().map(|n| format!(":{n}")).collect();
-        return Err(MonorubyErr::argumenterr(format!(
+        return Err(ctx.argument_error(format!(
             "missing keyword{}: {}",
             if missing.len() > 1 { "s" } else { "" },
             names.join(", ")
         )));
     }
-    let required = |i: usize| -> Result<c_int> { Ok(lfp.arg(3 + i).expect_integer(&globals.store)? as c_int) };
-    let max_attributes = required(0)?;
-    let max_errors = required(1)?;
-    let max_tree_depth = required(2)?;
-    let noscript_as_text = lfp.try_arg(6).is_some_and(|v| v.as_bool());
-    if let Some(rest) = lfp.try_arg(7)
-        && rest.try_hash_ty().is_some()
-        && let Some((k, _)) = rest.as_hash().iter().next()
-    {
-        let name = vm.invoke_method_inner(globals, IdentId::get_id("inspect"), k, &[], None, None)?;
-        return Err(MonorubyErr::argumenterr(format!("unknown keyword: {}", name.as_str())));
+    let noscript_as_text = get(ctx, "parse_noscript_content_as_text")?.is_some_and(|v| v.truthy());
+    if let Some(h) = kw {
+        let keys = ctx.funcall(h, "keys", &[], None)?;
+        for k in ary_vec(ctx, keys)? {
+            let name = match try_symbol(ctx, k) {
+                Some(n) => n,
+                None => ctx.inspect(k),
+            };
+            if ![
+                "max_attributes",
+                "max_errors",
+                "max_tree_depth",
+                "parse_noscript_content_as_text",
+            ]
+            .contains(&name.as_str())
+            {
+                return Err(ctx.argument_error(format!("unknown keyword: :{name}")));
+            }
+        }
     }
     Ok(Options {
-        max_attributes,
-        max_errors,
-        max_tree_depth,
+        max_attributes: required[0],
+        max_errors: required[1],
+        max_tree_depth: required[2],
         noscript_as_text,
     })
 }
@@ -72,24 +128,25 @@ struct Fragment {
 /// Run gumbo (`perform_parse`); the output is freed by the caller. The
 /// input must be a String (`Check_Type`).
 fn perform_parse(
-    vm: &mut Executor,
-    globals: &mut Globals,
+    ctx: &mut Ctx,
     opts: &Options,
     fragment: Option<&Fragment>,
     input: Value,
 ) -> Result<*mut xml::GumboOutput> {
-    let Some(bytes) = input.try_bytes() else {
-        return Err(MonorubyErr::typeerr(format!(
+    if !ctx.is_string(input) {
+        return Err(ctx.type_error(format!(
             "wrong argument type {} (expected String)",
-            builtin_type_name(globals, input)
+            builtin_type_name(ctx, input)
         )));
-    };
-    let bytes = bytes.as_bytes();
+    }
+    // The String's own bytes, not a copy: the errors gumbo records point
+    // into the parsed buffer, and `add_errors` renders them against it.
+    let (ptr, len) = str_raw(ctx, input)?;
     // SAFETY: the buffer outlives the call; the option strings do too.
     let output = unsafe {
         xml::mrb_gumbo_parse(
-            bytes.as_ptr() as *const c_char,
-            bytes.len(),
+            ptr as *const c_char,
+            len,
             opts.max_attributes,
             opts.max_errors,
             opts.max_tree_depth,
@@ -97,32 +154,35 @@ fn perform_parse(
             fragment.is_some() as c_int,
             fragment.map_or(std::ptr::null(), |f| f.context.as_ptr()),
             fragment.map_or(0, |f| f.namespace),
-            fragment.and_then(|f| f.encoding.as_ref()).map_or(std::ptr::null(), |e| e.as_ptr()),
+            fragment
+                .and_then(|f| f.encoding.as_ref())
+                .map_or(std::ptr::null(), |e| e.as_ptr()),
             fragment.map_or(0, |f| f.quirks_mode),
             fragment.is_some_and(|f| f.has_form_ancestor) as c_int,
         )
     };
     if output.is_null() {
-        return Err(MonorubyErr::runtimeerr("could not parse"));
+        return Err(ctx.runtime_error("could not parse"));
     }
     // SAFETY: a live output.
     let status = unsafe { xml::mrb_gumbo_output_status(output) };
     if status != xml::GUMBO_STATUS_OK {
         // SAFETY: a static message; the output is ours to free.
         let msg = unsafe {
-            let s = CStr::from_ptr(xml::mrb_gumbo_status_string(status)).to_string_lossy().into_owned();
+            let s = CStr::from_ptr(xml::mrb_gumbo_status_string(status))
+                .to_string_lossy()
+                .into_owned();
             xml::mrb_gumbo_destroy_output(output);
             s
         };
         if status == xml::GUMBO_STATUS_OUT_OF_MEMORY {
-            let klass = globals
-                .store
-                .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("NoMemoryError"))
-                .ok_or_else(|| MonorubyErr::runtimeerr(msg.clone()))?;
-            let ex = vm.invoke_method_inner(globals, IdentId::NEW, klass, &[Value::string(msg)], None, None)?;
-            return Err(raise(ex));
+            let klass = ctx
+                .const_get(ctx.object_class(), "NoMemoryError")
+                .ok_or_else(|| ctx.runtime_error(msg.clone()))?;
+            let ex = ctx.funcall(klass, "new", &[ctx.str(msg)], None)?;
+            return Err(raise(ctx, ex));
         }
-        return Err(MonorubyErr::argumenterr(msg));
+        return Err(ctx.argument_error(msg));
     }
     Ok(output)
 }
@@ -130,8 +190,7 @@ fn perform_parse(
 /// `add_errors`: the parse errors as `SyntaxError`s in the target's
 /// `@errors` (left alone when there are none).
 fn add_errors(
-    vm: &mut Executor,
-    globals: &mut Globals,
+    ctx: &mut Ctx,
     output: *const xml::GumboOutput,
     target: Value,
     input: Value,
@@ -145,11 +204,12 @@ fn add_errors(
     // The errors point into the parsed buffer: the diagnostics must be
     // rendered against that same memory (the String's own bytes, which
     // do not move), not a copy.
-    let bytes: &[u8] = match input.try_bytes() {
-        Some(b) => b.as_bytes(),
-        None => &[],
+    let (ptr, len) = if ctx.is_string(input) {
+        str_raw(ctx, input)?
+    } else {
+        (std::ptr::null(), 0)
     };
-    let file = url.try_bytes().map(|b| b.as_bytes().to_vec());
+    let file = try_bytes(ctx, url);
     let mut records = Vec::with_capacity(count);
     for i in 0..count {
         let mut size = 0usize;
@@ -160,8 +220,8 @@ fn add_errors(
             let msg = xml::mrb_gumbo_error(
                 output,
                 i,
-                bytes.as_ptr() as *const c_char,
-                bytes.len(),
+                ptr as *const c_char,
+                len,
                 &mut size,
                 &mut code,
                 &mut line,
@@ -174,7 +234,11 @@ fn add_errors(
                 xml::mrb_gumbo_free(msg as *mut c_void);
                 m
             };
-            let str1 = if code.is_null() { None } else { Some(CStr::from_ptr(code).to_bytes().to_vec()) };
+            let str1 = if code.is_null() {
+                None
+            } else {
+                Some(CStr::from_ptr(code).to_bytes().to_vec())
+            };
             (message, str1)
         };
         records.push(ErrorRecord {
@@ -192,18 +256,17 @@ fn add_errors(
             path: None,
         });
     }
-    let errors = errors_to_array(vm, globals, &records)?;
-    globals.store.set_ivar(target, IdentId::get_id("@errors"), errors)
+    let errors = errors_to_array(ctx, &records)?;
+    ctx.ivar_set(target, "@errors", errors)
 }
 
 /// Gumbo.parse(input, url, klass, **options) -> HTML5::Document
-#[monoruby_builtin]
-fn parse(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let input = lfp.arg(0);
-    let url = lfp.arg(1);
-    let klass = lfp.arg(2).as_class_id();
-    let opts = options(vm, globals, lfp)?;
-    let output = perform_parse(vm, globals, &opts, None, input)?;
+fn parse(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
+    let input = args[0];
+    let url = args[1];
+    let klass = args[2];
+    let opts = options(ctx, args)?;
+    let output = perform_parse(ctx, &opts, None, input)?;
     // SAFETY: a live output (freed below) and a fresh document that the
     // Ruby object takes over.
     let result = unsafe {
@@ -218,20 +281,20 @@ fn parse(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         };
         if doc.is_null() {
             xml::mrb_gumbo_destroy_output(output);
-            return Err(MonorubyErr::runtimeerr("could not create document"));
+            return Err(ctx.runtime_error("could not create document"));
         }
         xml::mrb_gumbo_build_document(doc, output);
         let quirks = xml::mrb_gumbo_quirks_mode(output);
-        wrap_document(vm, globals, klass, doc, &[]).and_then(|rdoc| {
+        wrap_document(ctx, klass, doc, &[]).and_then(|rdoc| {
             // `SyntaxError.new` runs Ruby: keep the document rooted.
-            let len = vm.temp_len();
-            vm.temp_push(rdoc);
+            let len = ctx.temp_len();
+            ctx.temp_push(rdoc);
             let r = (|| {
-                globals.store.set_ivar(rdoc, IdentId::get_id("@url"), url)?;
-                globals.store.set_ivar(rdoc, IdentId::get_id("@quirks_mode"), Value::integer(quirks as i64))?;
-                add_errors(vm, globals, output, rdoc, input, url)
+                ctx.ivar_set(rdoc, "@url", url)?;
+                ctx.ivar_set(rdoc, "@quirks_mode", Value::int(quirks as i64))?;
+                add_errors(ctx, output, rdoc, input, url)
             })();
-            vm.temp_clear(len);
+            ctx.temp_truncate(len);
             r.map(|()| rdoc)
         })
     };
@@ -243,18 +306,18 @@ fn parse(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// `lookup_namespace`: the gumbo namespace of a node's namespace href
 /// (HTML for none); an unknown one is an error when `require_known`,
 /// -1 otherwise.
-fn lookup_namespace(vm: &mut Executor, globals: &mut Globals, node: Value, require_known: bool) -> Result<c_int> {
-    let ns = vm.invoke_method_inner(globals, IdentId::get_id("namespace"), node, &[], None, None)?;
+fn lookup_namespace(ctx: &mut Ctx, node: Value, require_known: bool) -> Result<c_int> {
+    let ns = ctx.funcall(node, "namespace", &[], None)?;
     if ns.is_nil() {
         return Ok(xml::GUMBO_NAMESPACE_HTML);
     }
-    let href = vm.invoke_method_inner(globals, IdentId::get_id("href"), ns, &[], None, None)?;
-    let href = href.expect_bytes(&globals.store)?.to_vec();
+    let href = ctx.funcall(ns, "href", &[], None)?;
+    let href = ctx.str_vec(href)?;
     match href.as_slice() {
         b"http://www.w3.org/1999/xhtml" => Ok(xml::GUMBO_NAMESPACE_HTML),
         b"http://www.w3.org/1998/Math/MathML" => Ok(xml::GUMBO_NAMESPACE_MATHML),
         b"http://www.w3.org/2000/svg" => Ok(xml::GUMBO_NAMESPACE_SVG),
-        _ if require_known => Err(MonorubyErr::argumenterr(format!(
+        _ if require_known => Err(ctx.argument_error(format!(
             "Unexpected namespace URI \"{}\"",
             String::from_utf8_lossy(&href)
         ))),
@@ -265,22 +328,21 @@ fn lookup_namespace(vm: &mut Executor, globals: &mut Globals, node: Value, requi
 /// Gumbo.fragment(fragment, tags, context, **options) -> nil: parse
 /// `tags` as the children of `fragment` in the given context (nil: body,
 /// a "ns:tag" string, or a Node).
-#[monoruby_builtin]
-fn fragment(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let doc_fragment = lfp.arg(0);
-    let tags = lfp.arg(1);
-    let ctx = lfp.arg(2);
-    let opts = options(vm, globals, lfp)?;
-    let name_id = IdentId::get_id("name");
+fn fragment(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
+    let doc_fragment = args[0];
+    let tags = args[1];
+    let pctx = args[2];
+    let opts = options(ctx, args)?;
+    let name_id = "name";
 
     let mut namespace = xml::GUMBO_NAMESPACE_HTML;
     let mut has_form_ancestor = false;
     let mut encoding: Option<CString> = None;
     let context: CString;
-    if ctx.is_nil() {
+    if pctx.is_nil() {
         context = CString::new("body").unwrap();
-    } else if let Some(s) = ctx.try_bytes() {
-        let tag = s.as_bytes().to_vec();
+    } else if let Some(s) = try_bytes(ctx, pctx) {
+        let tag = s;
         let mut local = tag.as_slice();
         if let Some(colon) = tag.iter().position(|&b| b == b':') {
             let prefix = &tag[..colon];
@@ -292,7 +354,7 @@ fn fragment(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 _ => {
                     // (nokogiri formats the whole string here: its `%*s`
                     // takes the prefix length as a field width)
-                    return Err(MonorubyErr::argumenterr(format!(
+                    return Err(ctx.argument_error(format!(
                         "Invalid context namespace '{}'",
                         String::from_utf8_lossy(&tag)
                     )));
@@ -308,66 +370,65 @@ fn fragment(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 namespace = xml::GUMBO_NAMESPACE_MATHML;
             }
         }
-        has_form_ancestor = namespace == xml::GUMBO_NAMESPACE_HTML && local.eq_ignore_ascii_case(b"form");
-        context = CString::new(local).map_err(|_| MonorubyErr::argumenterr("string contains null byte"))?;
+        has_form_ancestor =
+            namespace == xml::GUMBO_NAMESPACE_HTML && local.eq_ignore_ascii_case(b"form");
+        context =
+            CString::new(local).map_err(|_| ctx.argument_error("string contains null byte"))?;
     } else {
-        let tag_name = vm.invoke_method_inner(globals, name_id, ctx, &[], None, None)?;
-        let tag = tag_name.expect_bytes(&globals.store)?.to_vec();
-        namespace = lookup_namespace(vm, globals, ctx, true)?;
+        let tag_name = ctx.funcall(pctx, name_id, &[], None)?;
+        let tag = ctx.str_vec(tag_name)?;
+        namespace = lookup_namespace(ctx, pctx, true)?;
         // A form ancestor, including self.
-        let element_p = IdentId::get_id("element?");
-        let parent = IdentId::get_id("parent");
-        let mut node = ctx;
+        let element_p = "element?";
+        let parent = "parent";
+        let mut node = pctx;
         while !node.is_nil() {
-            let is_element = vm.invoke_method_inner(globals, element_p, node, &[], None, None)?;
-            if is_element.as_bool() {
-                let name = vm.invoke_method_inner(globals, name_id, node, &[], None, None)?;
-                let is_form = name.try_bytes().is_some_and(|n| n.as_bytes().eq_ignore_ascii_case(b"form"));
-                if is_form && lookup_namespace(vm, globals, node, false)? == xml::GUMBO_NAMESPACE_HTML {
+            let is_element = ctx.funcall(node, element_p, &[], None)?;
+            if is_element.truthy() {
+                let name = ctx.funcall(node, name_id, &[], None)?;
+                let is_form = try_bytes(ctx, name).is_some_and(|n| n.eq_ignore_ascii_case(b"form"));
+                if is_form && lookup_namespace(ctx, node, false)? == xml::GUMBO_NAMESPACE_HTML {
                     has_form_ancestor = true;
                     break;
                 }
             }
-            node = match vm.invoke_method_if_exists(globals, parent, node, &[], None, None)? {
+            node = match funcall_if_exists(ctx, node, parent, &[])? {
                 Some(p) => p,
                 None => Value::nil(),
             };
         }
         if namespace == xml::GUMBO_NAMESPACE_MATHML && tag.eq_ignore_ascii_case(b"annotation-xml") {
-            let key = Value::string_from_str("encoding");
-            let enc = vm.invoke_method_inner(globals, IdentId::get_id("[]"), ctx, &[key], None, None)?;
-            if enc.as_bool() {
-                if enc.try_bytes().is_none() {
-                    return Err(MonorubyErr::typeerr(format!(
+            let key = ctx.str("encoding");
+            let enc = ctx.funcall(pctx, "[]", &[key], None)?;
+            if enc.truthy() {
+                if try_bytes(ctx, enc).is_none() {
+                    return Err(ctx.type_error(format!(
                         "wrong argument type {} (expected String)",
-                        builtin_type_name(globals, enc)
+                        builtin_type_name(ctx, enc)
                     )));
                 }
-                encoding = Some(cstr(enc, &globals.store)?);
+                encoding = Some(cstr(enc, ctx)?);
             }
         }
-        context = CString::new(tag).map_err(|_| MonorubyErr::argumenterr("string contains null byte"))?;
+        context = CString::new(tag).map_err(|_| ctx.argument_error("string contains null byte"))?;
     }
 
     // Quirks mode.
-    let doc = vm.invoke_method_inner(globals, IdentId::get_id("document"), doc_fragment, &[], None, None)?;
-    let dtd = vm.invoke_method_inner(globals, IdentId::get_id("internal_subset"), doc, &[], None, None)?;
-    let doc_quirks = globals
-        .store
-        .get_ivar(doc, IdentId::get_id("@quirks_mode"))
-        .unwrap_or_default();
-    let quirks_mode = if ctx.is_nil() || ctx.try_bytes().is_some() || doc_quirks.is_nil() {
+    let doc = ctx.funcall(doc_fragment, "document", &[], None)?;
+    let dtd = ctx.funcall(doc, "internal_subset", &[], None)?;
+    let doc_quirks = ctx.ivar_get(doc, "@quirks_mode");
+    let quirks_mode = if pctx.is_nil() || try_bytes(ctx, pctx).is_some() || doc_quirks.is_nil() {
         xml::GUMBO_DOCTYPE_NO_QUIRKS
     } else if dtd.is_nil() {
         xml::GUMBO_DOCTYPE_QUIRKS
     } else {
-        let get = |vm: &mut Executor, globals: &mut Globals, m: &str| -> Result<Option<CString>> {
-            let v = vm.invoke_method_inner(globals, IdentId::get_id(m), dtd, &[], None, None)?;
-            opt_cstr(v, &globals.store)
+        let get = |ctx: &mut Ctx, m: &str| -> Result<Option<CString>> {
+            let v = ctx.funcall(dtd, m, &[], None)?;
+            opt_cstr(v, ctx)
         };
-        let name = get(vm, globals, "name")?;
-        let pubid = get(vm, globals, "external_id")?;
-        let sysid = get(vm, globals, "system_id")?;
+        let name = get(ctx, "name")?;
+        let pubid = get(ctx, "external_id")?;
+        let sysid = get(ctx, "system_id")?;
         // SAFETY: NUL-terminated strings or NULL.
         unsafe {
             xml::mrb_gumbo_compute_quirks_mode(
@@ -385,17 +446,15 @@ fn fragment(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         quirks_mode,
         has_form_ancestor,
     };
-    let xml_doc = doc_ptr(doc)?;
-    let xml_frag = node_ptr(doc_fragment)?;
-    let output = perform_parse(vm, globals, &opts, Some(&frag), tags)?;
+    let xml_doc = doc_ptr(ctx, doc)?;
+    let xml_frag = node_ptr(ctx, doc_fragment)?;
+    let output = perform_parse(ctx, &opts, Some(&frag), tags)?;
     // SAFETY: a live output (freed below), a live document and fragment.
     let result = unsafe {
         xml::mrb_gumbo_build_fragment(xml_doc, xml_frag, output);
         let quirks = xml::mrb_gumbo_quirks_mode(output);
-        globals
-            .store
-            .set_ivar(doc_fragment, IdentId::get_id("@quirks_mode"), Value::integer(quirks as i64))
-            .and_then(|()| add_errors(vm, globals, output, doc_fragment, tags, Value::string_from_str("#fragment")))
+        ctx.ivar_set(doc_fragment, "@quirks_mode", Value::int(quirks as i64))
+            .and_then(|()| add_errors(ctx, output, doc_fragment, tags, ctx.str("#fragment")))
     };
     // SAFETY: the output is ours.
     unsafe { xml::mrb_gumbo_destroy_output(output) };
@@ -421,10 +480,15 @@ unsafe fn should_prepend_newline(node: *mut xml::xmlNode) -> bool {
     unsafe {
         let name = c_str((*node).name);
         let child = (*node).children;
-        if (*node).name.is_null() || child.is_null() || !matches!(name, b"pre" | b"textarea" | b"listing") {
+        if (*node).name.is_null()
+            || child.is_null()
+            || !matches!(name, b"pre" | b"textarea" | b"listing")
+        {
             return false;
         }
-        (*child).type_ == xml::XML_TEXT_NODE && !(*child).content.is_null() && *(*child).content == b'\n'
+        (*child).type_ == xml::XML_TEXT_NODE
+            && !(*child).content.is_null()
+            && *(*child).content == b'\n'
     }
 }
 
@@ -525,14 +589,43 @@ fn output_escaped(out: &mut Vec<u8>, s: &[u8], attr: bool) {
 }
 
 const VOID_ELEMENTS: &[&[u8]] = &[
-    b"area", b"base", b"basefont", b"bgsound", b"br", b"col", b"embed", b"frame", b"hr", b"img", b"input", b"keygen",
-    b"link", b"meta", b"param", b"source", b"track", b"wbr",
+    b"area",
+    b"base",
+    b"basefont",
+    b"bgsound",
+    b"br",
+    b"col",
+    b"embed",
+    b"frame",
+    b"hr",
+    b"img",
+    b"input",
+    b"keygen",
+    b"link",
+    b"meta",
+    b"param",
+    b"source",
+    b"track",
+    b"wbr",
 ];
 
-const UNESCAPED_TEXT_ELEMENTS: &[&[u8]] =
-    &[b"style", b"script", b"xmp", b"iframe", b"noembed", b"noframes", b"plaintext", b"noscript"];
+const UNESCAPED_TEXT_ELEMENTS: &[&[u8]] = &[
+    b"style",
+    b"script",
+    b"xmp",
+    b"iframe",
+    b"noembed",
+    b"noframes",
+    b"plaintext",
+    b"noscript",
+];
 
-unsafe fn output_node(out: &mut Vec<u8>, node: *mut xml::xmlNode, preserve_newline: bool) -> Result<()> {
+unsafe fn output_node(
+    ctx: &mut Ctx,
+    out: &mut Vec<u8>,
+    node: *mut xml::xmlNode,
+    preserve_newline: bool,
+) -> Result<()> {
     // SAFETY: a live node of a live document.
     unsafe {
         match (*node).type_ {
@@ -542,7 +635,7 @@ unsafe fn output_node(out: &mut Vec<u8>, node: *mut xml::xmlNode, preserve_newli
                 let mut attr = (*node).properties;
                 while !attr.is_null() {
                     out.push(b' ');
-                    output_node(out, attr as *mut xml::xmlNode, preserve_newline)?;
+                    output_node(ctx, out, attr as *mut xml::xmlNode, preserve_newline)?;
                     attr = (*attr).next;
                 }
                 out.push(b'>');
@@ -552,7 +645,7 @@ unsafe fn output_node(out: &mut Vec<u8>, node: *mut xml::xmlNode, preserve_newli
                     }
                     let mut child = (*node).children;
                     while !child.is_null() {
-                        output_node(out, child, preserve_newline)?;
+                        output_node(ctx, out, child, preserve_newline)?;
                         child = (*child).next;
                     }
                     out.extend_from_slice(b"</");
@@ -606,12 +699,12 @@ unsafe fn output_node(out: &mut Vec<u8>, node: *mut xml::xmlNode, preserve_newli
             xml::XML_DOCUMENT_NODE | xml::XML_DOCUMENT_FRAG_NODE | xml::XML_HTML_DOCUMENT_NODE => {
                 let mut child = (*node).children;
                 while !child.is_null() {
-                    output_node(out, child, preserve_newline)?;
+                    output_node(ctx, out, child, preserve_newline)?;
                     child = (*child).next;
                 }
             }
             ty => {
-                return Err(MonorubyErr::runtimeerr(format!(
+                return Err(ctx.runtime_error(format!(
                     "Unsupported document node ({ty}); this is a bug in Nokogiri"
                 )));
             }
@@ -621,19 +714,22 @@ unsafe fn output_node(out: &mut Vec<u8>, node: *mut xml::xmlNode, preserve_newli
 }
 
 /// Node#html_standard_serialize(preserve_newline) -> String
-#[monoruby_builtin]
-fn html_standard_serialize(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let node = node_ptr(lfp.self_val())?;
+fn html_standard_serialize(
+    ctx: &mut Ctx,
+    this: Value,
+    args: &[Value],
+    block: Block,
+) -> Result<Value> {
+    let node = node_ptr(ctx, this)?;
     let mut out = Vec::with_capacity(4096);
     // SAFETY: a live node.
-    unsafe { output_node(&mut out, node, lfp.arg(0).as_bool())? };
-    Ok(utf8(&out))
+    unsafe { output_node(ctx, &mut out, node, args[0].truthy())? };
+    Ok(utf8(ctx, &out))
 }
 
 /// Node#prepend_newline? -> bool
-#[monoruby_builtin]
-fn prepend_newline(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let node = node_ptr(lfp.self_val())?;
+fn prepend_newline(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
+    let node = node_ptr(ctx, this)?;
     // SAFETY: a live node.
     Ok(Value::bool(unsafe { should_prepend_newline(node) }))
 }

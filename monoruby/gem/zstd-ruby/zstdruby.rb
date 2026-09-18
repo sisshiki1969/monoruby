@@ -5,9 +5,10 @@
 # `Zstd.compress` / `decompress` (with `level:` / `dict:`), the deprecated
 # `*_using_dict` forms, `Zstd::CDict` / `DDict`, `Zstd::StreamingCompress`
 # / `StreamingDecompress` and the skippable-frame helpers. This file is
-# that extension in Ruby over `String.__zstd_*` (src/builtins/zstd.rs, the
-# bundled libzstd 1.5.7 — the version the gem links), the same split as
-# `Zlib` over `String.__zstream_*`.
+# that extension in Ruby over `String.__zstd_*` (the `ext/zstd` extension,
+# libzstd_native.so, required just below — the bundled libzstd 1.5.7, the
+# version the gem links), the same split as `Zlib` over
+# `String.__zstream_*`.
 #
 # Contexts and dictionaries are integer handles into per-thread tables on
 # the Rust side; each object frees its handle from an `ObjectSpace`
@@ -20,6 +21,8 @@
 # "`dict:` must be a Zstd::CDict or a String"), `StreamingCompress#write`
 # answers the number of bytes taken and keeps the output for `flush` /
 # `finish`, `<<` / `print` / `puts` / `printf` are IO's on top of `write`.
+
+require "zstd_native.so"
 
 module Zstd
   DEFAULT_LEVEL = 3 # ZSTD_CLEVEL_DEFAULT

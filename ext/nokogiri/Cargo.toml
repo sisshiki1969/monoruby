@@ -1,0 +1,16 @@
+[package]
+name = "nokogiri_native"
+version = "0.1.0"
+edition = "2024"
+description = "Nokogiri's native half for monoruby, as a dynamically loaded extension over the bundled libxml2 / libxslt / gumbo (libxml2-src)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "nokogiri_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+monoruby-ext = { path = "../../monoruby_ext" }
+libxml2-src = { path = "../../libxml2-src" }
+libc = "0.2"

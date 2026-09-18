@@ -1,0 +1,15 @@
+[package]
+name = "sqlite3_native"
+version = "0.1.0"
+edition = "2024"
+description = "The sqlite3 gem's native half for monoruby, as a dynamically loaded extension over the bundled SQLite (libsqlite3-src)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "sqlite3_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+monoruby-ext = { path = "../../monoruby_ext" }
+libsqlite3-src = { path = "../../libsqlite3-src" }

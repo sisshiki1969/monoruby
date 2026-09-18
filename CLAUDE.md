@@ -341,17 +341,24 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zlib`, `ext/zstd`, `ext/psych`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
 | `monoruby`      | Main interpreter + JIT (includes the prism→AST bridge)   |
 | `monoruby_attr` | Proc macros: `#[monoruby_builtin]`, `#[monoruby_object]` |
+| `monoruby_ext_sys` | The C ABI handed to dynamically loaded extensions (`MrValue`, `MrContext`, the `MrApi` table; `include/monoruby_ext.h` for C). The interpreter side is `monoruby/src/ext.rs`; see `doc/native_extension_loading.md` |
+| `monoruby_ext` | Safe Rust over `monoruby_ext_sys` for writing an extension in Rust (`Ctx`, `Value`, the `method!` / `native!` macros) |
+| `ext/sqlite3` | The sqlite3 gem's native half as a dynamically loaded extension (`libsqlite3_native.so`, crate `sqlite3_native`) over `libsqlite3-src` — the first stand-in moved out of the core |
+| `ext/zlib` | `Zlib`'s native half (`libzlib_native.so`, crate `zlib_native`): the `String.__zstream_*` streams over the bundled zlib (`libz-sys`) and the `__crc32` / `__adler32` byte walks |
+| `ext/zstd` | The zstd-ruby gem's native half (`libzstd_native.so`, crate `zstd_native`) over the bundled libzstd (`zstd-sys`) |
+| `ext/psych` | Psych's native half (`libpsych_native.so`, crate `psych_native`): libyaml's parser as `Psych::Parser`'s event source and its emitter as `Psych::Emitter`'s sink, over `libyaml-safer` |
+| `ext/nokogiri` | Nokogiri's native half (`libnokogiri_native.so`, crate `nokogiri_native`): what the gem's nokogiri.so provides, over `libxml2-src` — the last stand-in moved out of the core, and the one with the most involved object lifetimes (see `doc/nokogiri.md`) |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
 | `libxml2-src`   | Vendored libxml2 (+ nokogiri's patches) built with `cc`, and its FFI |
-| `libsqlite3-src` | Vendored SQLite amalgamation built with `cc`, and its FFI |
+| `libsqlite3-src` | Vendored SQLite amalgamation built with `cc`, and its FFI (used by `ext/sqlite3`) |
 
 External crates (fetched from git):
 
@@ -367,8 +374,9 @@ External crates (fetched from git):
   derivation run on these with CRuby-identical output. The rest of
   `openssl.rb` (PKey, X509, SSL) is still a load-only stub.
 - `libyaml-safer` — a port of libyaml 0.2.5; the parser and emitter behind
-  `Psych` (`src/builtins/yaml.rs`: `String.__yaml_parse` dispatches the
-  events to a `Psych::Handler`, `__yaml_emitter_new` / `__yaml_emit` /
+  `Psych`, **in the `ext/psych` extension** (`libpsych_native.so`, required
+  by `gem/psych/psych.rb`: `String.__yaml_parse` dispatches the events to a
+  `Psych::Handler`, `__yaml_emitter_new` / `__yaml_emit` /
   `__yaml_emitter_free` hold one emitter per `Psych::Emitter`). The gem's
   Ruby half is vendored under `gem/psych/`.
 - `libxml2-src` (workspace crate) — libxml2 2.13.8 with nokogiri's patches,
@@ -381,38 +389,52 @@ External crates (fetched from git):
   and libxslt 1.1.43 + libexslt (`libxml2-src/vendor/libxslt/`, unmodified;
   generated `xsltconfig.h` / `exsltconfig.h`, hand-written
   `config/xslt-config.h` in a separate include root) for
-  `Nokogiri::XSLT`. Behind `Nokogiri` (`src/builtins/nokogiri/`): the gem's
-  Ruby half is vendored under `gem/nokogiri/` and `gem/nokogiri/nokogiri.rb`
-  stands in for nokogiri.so. Objects wrapping libxml2 pointers are
-  `ObjTy::NATIVE` RValues (`NativeData` payloads with their own `mark` /
-  `Drop`); their classes are defined with `instance_ty = NATIVE`
-  (`define_class_with_instance_ty`) so the JIT never treats the payload as
-  inline ivar slots. See `doc/nokogiri.md`.
-- `libz-sys` — zlib built from its bundled C source and linked statically; the
-  `String.__zstream_*` builtins (`src/builtins/zlib.rs`) expose one `z_stream`
-  per `Zlib::Deflate` / `Zlib::Inflate` object, and everything else in `Zlib`
-  (`stdlib/zlib.rb`: the class API, gzip framing, `GzipReader` / `GzipWriter`)
-  is Ruby. Compression is byte-identical to CRuby's zlib.so.
+  `Nokogiri::XSLT`. It is linked **into the `ext/nokogiri` extension**
+  (`libnokogiri_native.so`, crate `nokogiri_native`), not the core: the
+  gem's Ruby half is vendored under `gem/nokogiri/` and
+  `gem/nokogiri/nokogiri.rb` stands in for nokogiri.so by requiring the
+  extension. Objects wrapping libxml2 pointers are native objects
+  (`MR_CLASS_NATIVE` classes, payloads declared with `native!` and their
+  own `mark` / `Drop`); each `xmlNode` maps to at most one Ruby object,
+  remembered in the node's `_private` and kept alive by its document's
+  node cache. libxml2's callbacks (SAX, XPath handlers, XSLT extension
+  functions, IO) reach Ruby through the `Ctx` of the native method that
+  is running; an exception they raise is stashed (`error_take`) and
+  re-raised once the library call returns. See `doc/nokogiri.md`.
+- `libz-sys` — zlib built from its bundled C source and linked statically
+  **into the `ext/zlib` extension** (`libzlib_native.so`, required by
+  `stdlib/zlib.rb`); its `String.__zstream_*` primitives expose one
+  `z_stream` per `Zlib::Deflate` / `Zlib::Inflate` object, `__crc32` /
+  `__adler32` are the checksum byte walks, and everything else in `Zlib`
+  (the class API, gzip framing, `GzipReader` / `GzipWriter`) is Ruby.
+  Compression is byte-identical to CRuby's zlib.so. rubygems needs `zlib`
+  for `.gem` files, so an installed monoruby needs this extension:
+  `bin/install` puts it (with the others) in the install root's `ext/`.
 - `zstd-safe` / `zstd-sys` — libzstd 1.5.7 built from source and linked
-  statically, behind the zstd-ruby gem: `String.__zstd_*`
-  (`src/builtins/zstd.rs`, raw `zstd_sys` calls in the extension's own order)
-  hold the contexts and dictionaries in handle tables, and
-  `gem/zstd-ruby/zstdruby.rb` is the gem's C extension in Ruby on top
-  (`Zstd.compress` / `decompress`, `CDict` / `DDict`, `StreamingCompress` /
-  `StreamingDecompress`, skippable frames). Output is byte-identical to the
-  gem's zstdruby.so.
+  statically **into the `ext/zstd` extension** (`libzstd_native.so`, required
+  by `gem/zstd-ruby/zstdruby.rb`), behind the zstd-ruby gem: `String.__zstd_*`
+  (raw `zstd_sys` calls in the gem extension's own order) hold the contexts
+  and dictionaries in handle tables, and `zstdruby.rb` is the gem's C
+  extension in Ruby on top (`Zstd.compress` / `decompress`, `CDict` / `DDict`,
+  `StreamingCompress` / `StreamingDecompress`, skippable frames). Output is
+  byte-identical to the gem's zstdruby.so.
 - `libsqlite3-src` (workspace crate) — the SQLite amalgamation (3.48.0,
   public domain) under `libsqlite3-src/vendor/`, built with `cc` and linked
   statically, with a hand-written FFI. Behind the sqlite3 gem: the gem's
   Ruby half (2.7.3) is vendored under `gem/sqlite3/` (+ `gem/sqlite3.rb`)
   as nokogiri's and psych's are, so no host sqlite3 gem is needed, and
-  `gem/sqlite3/sqlite3_native.rb` stands in for
-  sqlite3_native.so, calling `String.__sqlite3_init`
-  (`src/builtins/sqlite3.rs`) to build `SQLite3::Database` /
-  `SQLite3::Statement` as `ObjTy::NATIVE` classes owning the `sqlite3*` /
-  `sqlite3_stmt*`. `Statement#step` steps and reads the whole row in one
-  builtin call. Opening and closing a connection park the green thread on
-  the native pool (`NativeOp::Sqlite3`); everything else runs inline.
+  `gem/sqlite3/sqlite3_native.rb` stands in for sqlite3_native.so by
+  requiring `sqlite3_native.so` — **a dynamically loaded extension**, the
+  workspace crate `ext/sqlite3` (a `cdylib` over `monoruby_ext` and
+  `libsqlite3-src`, never linking `monoruby`), whose `Init_sqlite3_native`
+  builds `SQLite3::Database` / `SQLite3::Statement` as native-payload
+  classes owning the `sqlite3*` / `sqlite3_stmt*`. `cargo build` at the
+  workspace root builds it next to the binary; `tests/sqlite3.rs` builds
+  it through `tests::ensure_extension` (into `target/ext/`, since the
+  outer cargo holds the main target dir's lock). `Statement#step` steps
+  and reads the whole row in one call. Opening and closing a connection
+  park the green thread on the native pool (`NativeOp::Ext`); everything
+  else runs inline.
   `create_function` is a real user-defined function: SQLite calls back
   into Ruby from inside `sqlite3_step`, as nokogiri's XPath handlers do.
   A raised exception is stashed rather than unwound through the C frames
@@ -496,10 +518,10 @@ reproducible build. It performs two jobs:
      files from the matching gem. `stdlib/ripper.rb` is
      `Prism::Translation::Ripper` on top of it. `gem/psych/` is the psych
      5.3.1 gem's Ruby half (Ruby 4.0.2's) plus `gem/psych/psych.rb`, the
-     stand-in for its C extension: `src/builtins/yaml.rs` drives
-     `libyaml-safer` (a port of libyaml 0.2.5) as `Psych::Parser`'s event
-     source and `Psych::Emitter`'s sink, so `Psych.load` / `dump` and the
-     event API are CRuby's byte for byte. `gem/stackprof/stackprof.rb`
+     stand-in for its C extension: it requires the `ext/psych` extension,
+     which drives `libyaml-safer` (a port of libyaml 0.2.5) as
+     `Psych::Parser`'s event source and `Psych::Emitter`'s sink, so
+     `Psych.load` / `dump` and the event API are CRuby's byte for byte. `gem/stackprof/stackprof.rb`
      stands in for `stackprof.so` as an inert profiler (its API loads, no
      sampling), since `gem "stackprof", platforms: :mri` is required at boot
      by Bundler on monoruby too.

@@ -1,7 +1,7 @@
 //! Hand-written FFI for the vendored SQLite amalgamation (3.48.0): the
-//! entry points `src/builtins/sqlite3.rs` calls. The C library is built and
-//! linked statically by `build.rs`, so nothing here depends on a host
-//! libsqlite3.
+//! entry points the `ext/sqlite3` extension (monoruby's sqlite3_native.so)
+//! calls. The C library is built and linked statically by `build.rs`, so
+//! nothing here depends on a host libsqlite3.
 //!
 //! Only what is used is declared, and everything is `unsafe` to call — the
 //! connection and statement handles are owned by the `SQLite3::Database` /
