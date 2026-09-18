@@ -470,6 +470,7 @@ fn sqlite3_statements_are_finalized_when_collected() {
 /// see `sqlite3_create_function` and `sqlite3_create_aggregate`.
 #[test]
 fn sqlite3_unsupported_callbacks_refuse() {
+    ensure_extension("sqlite3_native");
     let v = run_test_no_result_check(
         r##"
         require "sqlite3"
