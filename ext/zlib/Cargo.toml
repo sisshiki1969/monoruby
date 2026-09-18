@@ -2,7 +2,7 @@
 name = "zlib_native"
 version = "0.1.0"
 edition = "2024"
-description = "Zlib's native half for monoruby, as a dynamically loaded extension over the bundled zlib (libz-sys)"
+description = "Zlib's native half for monoruby, as a dynamically loaded extension over zlib (bundled by default, the platform's with --no-default-features --features system)"
 license = "MIT"
 publish = false
 
@@ -10,7 +10,19 @@ publish = false
 name = "zlib_native"
 crate-type = ["cdylib"]
 
+# `bundled` (the default) compiles the zlib libz-sys carries and links it
+# statically, which is what keeps compressed output byte-identical to the
+# CRuby the tests compare against. `system` links the platform's shared
+# zlib instead, for a distribution that would rather ship one copy; since
+# Cargo features only ever add, it has to be selected with
+# `--no-default-features --features system`, or `bundled` would still pull
+# libz-sys's static build in. See doc/native_extension_loading.md.
+[features]
+default = ["bundled"]
+bundled = ["libz-sys/static"]
+system = []
+
 [dependencies]
 monoruby-ext = { path = "../../monoruby_ext" }
-libz-sys = { version = "1.1", features = ["static"] }
+libz-sys = "1.1"
 libc = "0.2"

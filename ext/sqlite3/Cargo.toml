@@ -10,6 +10,15 @@ publish = false
 name = "sqlite3_native"
 crate-type = ["cdylib"]
 
+# Passed through to libsqlite3-src: `bundled` (the default) compiles the
+# vendored amalgamation, `system` links the platform's libsqlite3. Select
+# it with `--no-default-features --features system`, since Cargo features
+# only ever add. See doc/native_extension_loading.md.
+[features]
+default = ["bundled"]
+bundled = ["libsqlite3-src/bundled"]
+system = ["libsqlite3-src/system"]
+
 [dependencies]
 monoruby-ext = { path = "../../monoruby_ext" }
-libsqlite3-src = { path = "../../libsqlite3-src" }
+libsqlite3-src = { path = "../../libsqlite3-src", default-features = false }
