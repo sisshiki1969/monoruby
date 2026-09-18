@@ -2162,6 +2162,17 @@ fn check_pattern_encoding_compat(
     if let Some(arg_inner) = pattern.is_rstring_inner() {
         return check_string_encoding_compat(self_inner, &arg_inner, globals);
     }
+    // A Regexp pattern negotiates by its *declared* encoding, which is
+    // a different rule from two Strings meeting (a pinned regexp only
+    // matches a subject in its own encoding).
+    if let Some(re) = pattern.is_regex() {
+        return super::regexp::check_match_encoding(
+            &globals.store,
+            &re,
+            self_inner.encoding(),
+            self_inner.is_ascii_only(),
+        );
+    }
     Ok(())
 }
 
@@ -3910,8 +3921,11 @@ fn scan_block_loop(
                         None => vec.push(Value::nil()),
                     }
                 }
+                // CRuby yields the groups as *one* Array argument
+                // (`rb_yield(result)`), so `{ |a| }` binds the whole
+                // array and `{ |a, b| }` auto-splats it as usual.
                 let val = Value::array_from_vec(vec);
-                vm.invoke_block(globals, data, &val.as_array())?;
+                vm.invoke_block(globals, data, &[val])?;
             }
         }
         check_string_not_modified(recv, recv_len)?;
@@ -4274,6 +4288,7 @@ fn string_index(
             None => Value::nil(),
         });
     }
+    check_pattern_encoding_compat(&self_.as_rstring_inner(), lfp.arg(0), globals)?;
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let char_pos = match given.conv_char_index(char_pos) {
@@ -4600,6 +4615,7 @@ fn string_rindex(
         return string_rindex_string(vm, globals, &given, lfp.arg(0), lfp.try_arg(1));
     }
 
+    check_pattern_encoding_compat(&given, lfp.arg(0), globals)?;
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let inner = self_.as_rstring_inner();
@@ -5177,6 +5193,7 @@ fn pad_string_inner(
     width: i64,
     pad_inner: &RStringInner,
     side: PadSide,
+    out_enc: crate::value::Encoding,
 ) -> RStringInner {
     let self_chars = self_inner.char_length();
     let self_bytes = self_inner.as_bytes();
@@ -5208,10 +5225,10 @@ fn pad_string_inner(
     // Output ASCII-ness is closed under concatenation: SevenBit + SevenBit
     // stays SevenBit, so we can tag the result without re-scanning.
     if self_inner.is_ascii_only() && pad_inner.is_ascii_only() {
-        return RStringInner::from_ascii_bytes(out, self_inner.encoding());
+        return RStringInner::from_ascii_bytes(out, out_enc);
     }
     // Mixed content: defer classification to first use (cr = Unknown).
-    RStringInner::from_encoding(&out, self_inner.encoding())
+    RStringInner::from_encoding(&out, out_enc)
 }
 
 /// Common entry point shared by `ljust` / `rjust` / `center`. Handles
@@ -5232,7 +5249,13 @@ fn pad_builtin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, side: PadSide
         if pad.as_bytes().is_empty() {
             return Err(MonorubyErr::zero_width_padding());
         }
-        let result = pad_string_inner(self_inner, width, &pad, side);
+        // Padding actually added makes the result the *negotiated*
+        // encoding of receiver and pad ("abc" in IBM437 padded with
+        // "あ" comes back UTF-8); the unpadded copy keeps self's.
+        let out_enc = self_inner
+            .compatible_encoding(&pad)
+            .unwrap_or_else(|| self_inner.encoding());
+        let result = pad_string_inner(self_inner, width, &pad, side, out_enc);
         Ok(Value::string_from_inner(result))
     } else {
         // Default padding is a single US-ASCII space. Synthesise it
@@ -5242,7 +5265,8 @@ fn pad_builtin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, side: PadSide
             smallvec::smallvec![b' '],
             crate::value::Encoding::UsAscii,
         );
-        let result = pad_string_inner(self_inner, width, &pad, side);
+        let enc = self_inner.encoding();
+        let result = pad_string_inner(self_inner, width, &pad, side, enc);
         Ok(Value::string_from_inner(result))
     }
 }
@@ -5505,16 +5529,12 @@ fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             };
             e.min(byte_len)
         } else {
+            // Only an out-of-range *begin* is nil; an end that resolves
+            // below zero just makes the slice empty
+            // (`"hello".byteslice(2..-99)` is `""`, not nil).
             let idx = byte_len as i64 + end;
-            if idx < 0 {
-                return Ok(Value::nil());
-            }
-            let e = if range.exclude_end() {
-                idx as usize
-            } else {
-                (idx as usize).saturating_add(1)
-            };
-            e.min(byte_len)
+            let e = if range.exclude_end() { idx } else { idx + 1 };
+            if e <= 0 { 0 } else { (e as usize).min(byte_len) }
         };
         if start > end {
             return Ok(Value::string_from_inner(RStringInner::from_encoding(
@@ -6068,29 +6088,48 @@ fn split_paragraph_ranges(s: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
     // a 2+ run) is emitted verbatim and is *not* chomped, so a lone
     // trailing `\n` survives even under `chomp: true`.
     //
-    // Newline detection is `\n`-only, matching the prior implementation;
-    // CRuby additionally treats `\r\n` pairs as paragraph newlines, but
-    // that is a separate, pre-existing divergence outside this fix.
+    // A newline here is a *unit* — `\r\n` or `\n` — as in CRuby, so
+    // `"a\r\n\r\n\nb"` terminates after the two `\r\n` and the stray
+    // `\n` is skipped with the rest of the run.
     let bytes = s.as_bytes();
     let pend = bytes.len();
+    let nl_len = |p: usize| -> Option<usize> {
+        if p >= pend {
+            None
+        } else if bytes[p] == b'\n' {
+            Some(1)
+        } else if bytes[p] == b'\r' && p + 1 < pend && bytes[p + 1] == b'\n' {
+            Some(2)
+        } else {
+            None
+        }
+    };
     let mut out = Vec::new();
     let mut i = 0usize;
     while i < pend {
         let para_start = i;
         // Scan forward to the paragraph terminator: the first run of
-        // two or more consecutive `\n`. A lone `\n` is content.
+        // two or more consecutive newline units. A lone one is content.
         let mut p = i;
         let term = loop {
             if p >= pend {
                 break None;
             }
-            if bytes[p] == b'\n' {
-                let mut run_end = p;
-                while run_end < pend && bytes[run_end] == b'\n' {
-                    run_end += 1;
+            if let Some(len) = nl_len(p) {
+                // Walk the whole run, remembering where the second unit
+                // ends — that is what the paragraph keeps.
+                let mut run_end = p + len;
+                let mut second_end = run_end;
+                let mut count = 1;
+                while let Some(l) = nl_len(run_end) {
+                    count += 1;
+                    run_end += l;
+                    if count == 2 {
+                        second_end = run_end;
+                    }
                 }
-                if run_end - p >= 2 {
-                    break Some((p, run_end));
+                if count >= 2 {
+                    break Some((p, second_end, run_end));
                 }
                 // Single newline: part of the paragraph's content.
                 p = run_end;
@@ -6099,10 +6138,10 @@ fn split_paragraph_ranges(s: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
             }
         };
         match term {
-            Some((nl, run_end)) => {
+            Some((nl, second_end, run_end)) => {
                 // Keep two terminating newlines (none when chomping);
                 // skip the rest of the run.
-                let end = if chomp { nl } else { nl + 2 };
+                let end = if chomp { nl } else { second_end };
                 out.push(para_start..end);
                 i = run_end;
             }
@@ -8373,7 +8412,14 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     for b in bytes.as_bytes() {
         sum += *b as u64;
     }
-    Ok(Value::integer((sum & ((1 << bits) - 1)) as i64))
+    // `n <= 0` means "no mask at all" (CRuby returns the plain sum);
+    // a width at or past the accumulator's is likewise a no-op.
+    let masked = if bits <= 0 || bits >= 64 {
+        sum
+    } else {
+        sum & ((1u64 << bits) - 1)
+    };
+    Ok(Value::integer(masked as i64))
 }
 
 ///
@@ -14018,6 +14064,79 @@ mod tests {
     }
 
     #[test]
+    fn sum_without_a_mask_and_scan_group_yield() {
+        run_tests(&[
+            // `n <= 0` (and a width at or past the accumulator's) means
+            // no mask at all.
+            r#"["hello".sum, "hello".sum(0), "hello".sum(-1), "hello".sum(4),
+                "hello".sum(8), "hello".sum(64), "hello".sum(100)]"#,
+            // `scan` yields the groups as one Array argument.
+            r#"r = []; "hello world".scan(/(o)(r)?/) { |a| r << a }; r"#,
+            r#"r = []; "hello world".scan(/(o)(r)?/) { |a, b| r << [a, b] }; r"#,
+            r#"r = []; "hello".scan(/(l)/) { |a| r << a }; r"#,
+            r#"r = []; "hello".scan(/l/) { |a| r << a }; r"#,
+            r#"r = []; "hello".scan(/(h)(e)(l)/) { |*a| r << a }; r"#,
+            r#""hello world".scan(/(o)(r)?/)"#,
+        ]);
+    }
+
+    #[test]
+    fn pad_result_takes_the_negotiated_encoding() {
+        run_tests(&[
+            // Padding actually added negotiates with the pad's encoding …
+            r#"s = "abc".dup.force_encoding("US-ASCII")
+               [s.ljust(5, "\u3042").encoding.to_s,
+                s.rjust(5, "\u3042").encoding.to_s,
+                s.center(7, "\u3042").encoding.to_s]"#,
+            // … while an unpadded copy and the default space keep self's.
+            r#"s = "abc".dup.force_encoding("US-ASCII")
+               [s.ljust(2, "\u3042").encoding.to_s, s.ljust(5).encoding.to_s]"#,
+            r#""abc".dup.force_encoding("US-ASCII").ljust(5, "\u3042")"#,
+            r#""\u3042\u3042".ljust(5, "x").encoding.to_s"#,
+        ]);
+    }
+
+    #[test]
+    fn index_rindex_reject_an_incompatible_regexp() {
+        run_tests(&[
+            // A regexp pinned to a native codec compiles, and refuses a
+            // subject in another encoding.
+            r#"r = Regexp.new("\u308C".encode("euc-jp"))
+               [r.source.bytes, r.encoding.to_s, r.fixed_encoding?]"#,
+            r#"r = Regexp.new("\u308C".encode("euc-jp"))
+               "\u3042\u308C".encode("euc-jp").index(r)"#,
+            r#"r = Regexp.new("\u308C".encode("euc-jp"))
+               begin; "\u3042\u308C".index(r); rescue => e; [e.class.to_s, e.message]; end"#,
+            r#"r = Regexp.new("\u308C".encode("euc-jp"))
+               begin; "\u3042\u308C".rindex(r); rescue => e; e.class.to_s; end"#,
+            r#"r = Regexp.new("\u308C".encode("euc-jp"))
+               begin; "\u3042\u308C".byteindex(r); rescue => e; e.class.to_s; end"#,
+        ]);
+    }
+
+    #[test]
+    fn paragraph_mode_counts_crlf_as_one_newline() {
+        run_tests(&[
+            r#""hello\nworld\r\n\r\n\nand\nuniverse\n\r\n\n\n\n".lines("")"#,
+            r#""hello\r\nworld\n\n\nand\nuniverse\n\n\n\r\n\r\ndog".lines("")"#,
+            r#""hello\nworld\n\n\nand\nuniverse\n\n\n\n\n".lines("")"#,
+            r#""hello\nworld\n\n\nand\nuniverse\n\n\n\n\ndog".lines("")"#,
+            r#""a\r\n\r\nb".lines("", chomp: true)"#,
+        ]);
+    }
+
+    #[test]
+    fn byteslice_range_end_below_zero_is_empty_not_nil() {
+        run_tests(&[
+            r#"["".byteslice(0..-1), "".byteslice(0...-1), "".byteslice(0..-5)]"#,
+            r#"["hello".byteslice(0..-99), "hello".byteslice(2..-99), "hello".byteslice(-1..-99)]"#,
+            // An out-of-range *begin* is still nil.
+            r#"["hello".byteslice(-99..1), "hello".byteslice(6..-1)]"#,
+            r#"["hello".byteslice(5..-1), "hello".byteslice(1..3)]"#,
+        ]);
+    }
+
+    #[test]
     fn string_subclass_conversions_return_plain_strings() {
         run_tests(&[
             r#"class MyStr1 < String; end
@@ -14052,8 +14171,15 @@ mod tests {
             r#""abc\r\n".chop"#,
             // A frozen receiver raises even with nothing to chop.
             r#"begin; "".freeze.chop!; rescue => e; e.class.to_s; end"#,
-            // An empty prefix / suffix is "no change".
+            // An empty prefix / suffix is "no change" …
             r#"s = "hello".dup; [s.delete_prefix!(""), s.delete_suffix!(""), s]"#,
+            // … but a frozen receiver still raises, match or not.
+            r#"["", "xyz", "llo"].map do |suf|
+                 begin; "hello".freeze.delete_suffix!(suf); rescue => e; e.class.to_s; end
+               end"#,
+            r#"["", "xyz", "hel"].map do |pre|
+                 begin; "hello".freeze.delete_prefix!(pre); rescue => e; e.class.to_s; end
+               end"#,
         ]);
     }
 

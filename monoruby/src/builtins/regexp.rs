@@ -268,10 +268,33 @@ fn build_regexp_inner(
         && source_bytes.as_ref().is_some_and(|b| {
             b.iter().any(|&c| c >= 0x80) || RegexpInner::has_non_ascii_hex_escape(b)
         });
+    // A source in a native ASCII-compatible codec (EUC-JP, Shift_JIS,
+    // ISO-8859-*) carrying non-ASCII bytes has to be compiled under
+    // *that* codec: the escaped UTF-8 view hands Onigmo a `\xA4\xEC`
+    // pair, which is "too short multibyte code string" under UTF-8.
+    let native_source = if option & RegexpInner::NOENCODING == 0 && !binary_source {
+        source_encoding
+            .filter(|e| {
+                !matches!(
+                    e,
+                    crate::value::Encoding::Utf8
+                        | crate::value::Encoding::UsAscii
+                        | crate::value::Encoding::Ascii8
+                )
+            })
+            .filter(|_| {
+                source_bytes.as_ref().is_some_and(|b| {
+                    b.iter().any(|&c| c >= 0x80) || RegexpInner::has_non_ascii_hex_escape(b)
+                })
+            })
+            .and_then(RegexpInner::onigmo_encoding_for)
+    } else {
+        None
+    };
     let encoding = if option & RegexpInner::NOENCODING != 0 || binary_source {
         onigmo_regex::OnigmoEncoding::ASCII
     } else {
-        onigmo_regex::OnigmoEncoding::UTF8
+        native_source.unwrap_or(onigmo_regex::OnigmoEncoding::UTF8)
     };
     // Pull the kcode bit out of the option mask before passing to
     // onigmo (which doesn't understand the modifier letters).

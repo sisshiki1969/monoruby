@@ -88,6 +88,8 @@ class String
   end
 
   def delete_suffix!(suffix)
+    # A frozen receiver raises whether or not the suffix matches.
+    raise FrozenError.new("can't modify frozen String: #{inspect}", receiver: self) if frozen?
     s = suffix.is_a?(String) ? suffix : __to_str(suffix)
     # Deleting an empty suffix changes nothing, so the bang form
     # reports "no change" rather than returning self.
