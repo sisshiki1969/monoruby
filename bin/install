@@ -7,6 +7,18 @@
 #
 #   bin/install            # release build, ~/.cargo/bin/monoruby
 #   bin/install --debug    # debug build (slower binary, faster build)
+#
+# MONORUBY_SYSTEM_LIBS names the extensions to link against the platform's
+# shared library instead of the copy they vendor — a space-separated list
+# of "sqlite3", "zlib" and "zstd", or "all" for those three:
+#
+#   MONORUBY_SYSTEM_LIBS=all bin/install
+#   MONORUBY_SYSTEM_LIBS="zlib zstd" bin/install
+#
+# psych takes no such option (libyaml-safer is a Rust port, so there is no
+# bundled C library to replace) and neither does nokogiri (its libxml2
+# carries nokogiri's patches, and the FFI mirrors that version's struct
+# layouts). See doc/native_extension_loading.md.
 set -e
 cd "$(dirname "$0")/.."
 
@@ -19,7 +31,42 @@ if [ "${1:-}" = "--debug" ]; then
   INSTALL_ARGS=(--debug)
 fi
 
-cargo build "${CARGO_PROFILE_ARGS[@]}" -p sqlite3_native -p zlib_native -p zstd_native -p psych_native -p nokogiri_native
+EXTENSIONS=(sqlite3 zlib zstd psych nokogiri)
+# The ones whose Cargo manifest has a `system` feature.
+SYSTEM_CAPABLE=(sqlite3 zlib zstd)
+
+SYSTEM_LIBS="${MONORUBY_SYSTEM_LIBS:-}"
+if [ "$SYSTEM_LIBS" = "all" ]; then
+  SYSTEM_LIBS="${SYSTEM_CAPABLE[*]}"
+fi
+for want in $SYSTEM_LIBS; do
+  case " ${SYSTEM_CAPABLE[*]} " in
+    *" $want "*) ;;
+    *)
+      echo "bin/install: MONORUBY_SYSTEM_LIBS: no system build for '$want'" >&2
+      echo "             (one of: ${SYSTEM_CAPABLE[*]}, or all)" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# `system` has to come with --no-default-features: Cargo features only ever
+# add, so the default `bundled` would otherwise still build the vendored
+# copy alongside.
+BUNDLED=()
+for ext in "${EXTENSIONS[@]}"; do
+  case " $SYSTEM_LIBS " in
+    *" $ext "*)
+      echo "building ${ext}_native against the platform's library"
+      cargo build "${CARGO_PROFILE_ARGS[@]}" -p "${ext}_native" \
+        --no-default-features --features system
+      ;;
+    *) BUNDLED+=(-p "${ext}_native") ;;
+  esac
+done
+if [ ${#BUNDLED[@]} -gt 0 ]; then
+  cargo build "${CARGO_PROFILE_ARGS[@]}" "${BUNDLED[@]}"
+fi
 cargo install --path monoruby "${INSTALL_ARGS[@]}"
 
 # The per-version install root build.rs populated (`MONORUBY_INSTALL_ROOT`,
@@ -31,7 +78,7 @@ case "$(uname -s)" in
   Darwin) EXT=dylib ;;
   *) EXT=so ;;
 esac
-for lib in sqlite3_native zlib_native zstd_native psych_native nokogiri_native; do
-  cp "target/$PROFILE/lib$lib.$EXT" "$ROOT/ext/"
+for ext in "${EXTENSIONS[@]}"; do
+  cp "target/$PROFILE/lib${ext}_native.$EXT" "$ROOT/ext/"
 done
 echo "installed $(command -v monoruby) and the extensions in $ROOT/ext"

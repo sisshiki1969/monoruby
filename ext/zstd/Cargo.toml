@@ -2,13 +2,22 @@
 name = "zstd_native"
 version = "0.1.0"
 edition = "2024"
-description = "The zstd-ruby gem's native half for monoruby, as a dynamically loaded extension over the bundled libzstd (zstd-sys)"
+description = "The zstd-ruby gem's native half for monoruby, as a dynamically loaded extension over libzstd (bundled by default, the platform's with --no-default-features --features system)"
 license = "MIT"
 publish = false
 
 [lib]
 name = "zstd_native"
 crate-type = ["cdylib"]
+
+# As `ext/zlib`: `bundled` builds the libzstd zstd-sys carries, `system`
+# links the platform's through pkg-config. Compressed output is what the
+# tests pin against the zstd-ruby gem, and it is version-dependent, so the
+# default stays bundled. See doc/native_extension_loading.md.
+[features]
+default = ["bundled"]
+bundled = []
+system = ["zstd-safe/pkg-config"]
 
 [dependencies]
 monoruby-ext = { path = "../../monoruby_ext" }

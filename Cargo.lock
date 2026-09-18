@@ -980,6 +980,7 @@ name = "libsqlite3-src"
 version = "3.48.0"
 dependencies = [
  "cc",
+ "pkg-config",
 ]
 
 [[package]]

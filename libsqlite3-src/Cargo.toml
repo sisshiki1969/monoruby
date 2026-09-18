@@ -2,7 +2,7 @@
 name = "libsqlite3-src"
 version = "3.48.0"
 edition = "2024"
-description = "SQLite 3.48.0 built from the vendored amalgamation and linked statically; the FFI monoruby's SQLite3 gem uses"
+description = "SQLite 3.48.0 built from the vendored amalgamation and linked statically (or the platform's, with --features system); the FFI monoruby's SQLite3 gem uses"
 license = "blessing"
 links = "sqlite3"
 build = "build.rs"
@@ -10,5 +10,17 @@ publish = false
 
 [dependencies]
 
+# `bundled` (the default) compiles vendor/sqlite3.c. `system` links the
+# platform's libsqlite3 instead and compiles nothing, for a distribution
+# that would rather ship one copy; it needs SQLite 3.38 or later, since the
+# FFI calls `sqlite3_error_offset`. Cargo features only ever add, so
+# `system` has to be selected with `--no-default-features --features
+# system`. See doc/native_extension_loading.md.
+[features]
+default = ["bundled"]
+bundled = []
+system = ["dep:pkg-config"]
+
 [build-dependencies]
 cc = "1.0"
+pkg-config = { version = "0.3", optional = true }

@@ -330,7 +330,7 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 | 3. zlib / zstd の分離 | 済 | `ext/zlib/`（`zlib_native`、checksum と `__zstream_*`）、`ext/zstd/`（`zstd_native`）。`stdlib/zlib.rb` / `gem/zstd-ruby/zstdruby.rb` が `require "…_native.so"` する。コアから `libz-sys` / `zstd-safe` が消えた。rubygems が `zlib` を要るので、インストール時は `bin/install` が 3 拡張を `<install root>/ext/` に置く。 |
 | 3. psych の分離 | 済 | `ext/psych/`（`psych_native`、`__yaml_parse` は `Psych::Handler` を `funcall` で駆動）。`gem/psych/psych.rb` が `require "psych_native.so"` する。コアから `libyaml-safer` が消えた。 |
 | 3. nokogiri の分離 | 済 | `ext/nokogiri/`（`nokogiri_native`、12 ファイル ~7k 行）。`gem/nokogiri/nokogiri.rb` が `require "nokogiri_native.so"` する。コアから `src/builtins/nokogiri/` と `libxml2-src` 依存が消え、`ObjTy::NATIVE` を使う builtin はコア側に無くなった（`ext.rs` の `ExtNative` だけ）。`tests/nokogiri.rs` の 23 本（CRuby の gem と出力比較）はスクリプト無変更。 |
-| 4. `bundled` / `system` feature | 未 | |
+| 4. `bundled` / `system` feature | 済（3 拡張。nokogiri / psych は対象外、§6.3） | `ext/{sqlite3,zlib,zstd}` に `default = ["bundled"]` と `system`。Cargo の feature は加算しかしないので、選ぶときは `--no-default-features --features system`。`bin/install` は `MONORUBY_SYSTEM_LIBS="zlib zstd"`（または `all`）でその拡張だけをシステム版で組む。 |
 | 5. CRuby API 互換層 | 未 | |
 
 ### 6.1 実際の ABI（§4.2 との差）
@@ -355,6 +355,39 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 - **C パーサの出力が入力バッファを指す場合は `str_bytes` の生ポインタを使う。** gumbo の error record は入力の中を指す。`str_vec`（コピー）だと `add_errors` が別のメモリに対して診断を描くので、`Ctx::str_bytes` の `(ptr, len)` を取り出して渡す（collector は動かさないので String が生きている限り有効）。
 - 配布: `cargo build`（workspace root）で `.so` がバイナリの隣にできる。`cargo install` はバイナリしか置かないので、`bin/install` が拡張をビルドして `<install root>/ext/` にコピーする（`bin/spec` もこれを使う）。`bin/test` / `bin/test-aarch64` はベンチマーク用バイナリの隣に拡張をビルドする。
 - **カバレッジの計測外。** `bin/test` は拡張を計装フラグ無しでビルドし、`dlopen` で読み込むので、`cargo llvm-cov report` はそのカウンタを集めない。テストは実際にバイナリ越しに拡張を通しているのに、Codecov 上は `ext/` 7409 行中 94 hit（1.3%）、`monoruby_ext/` 448 行中 0 hit と出る。そこで `codecov.yml` で `ext/**` と `monoruby_ext/**` を `ignore` にした（コア側の `monoruby/src/ext.rs` は 82% で計測されており、除外していない）。計測を取り戻すには、拡張を計装付きでビルドし、各 `.so` を `--object` として report に渡す必要がある。移設でよく覆われたコードがコアから抜けた分、全体は 0.2 ポイントほど一度だけ薄まるので、`project` の `threshold` を 1% にしてある。
+
+### 6.3 `system` を出した拡張と出さなかった拡張
+
+既定は 3 つとも `bundled` のまま。出力一致を守るのが第一で、`system` は
+ディストリ側が「同梱コピーを持ちたくない」と判断したときの opt-in。
+
+| 拡張 | `system` | 実測（Ubuntu 24.04 の共有ライブラリ、同梱版との比較） |
+|---|---|---|
+| zlib | あり | `libz.so.1`（1.3）にリンク。入力 5 種 × level 0–9 × strategy 4 種の **200 ケースすべてで deflate の出力バイトが同梱版（1.3.2）と一致**、crc32 / adler32 も一致。差は `Zlib.zlib_version` が `"1.3"` を返すことだけで、これはホストの CRuby と同じ値になる。 |
+| zstd | あり | `libzstd.so.1`（1.5.5）にリンク。同じ入力 5 種 × level 1 / 3 / 9 / 19 の 20 ケースのうち **1 ケースだけ圧縮バイトが同梱版（1.5.7）と食い違う**（60 KB の C ヘッダ、level 3）。復元はもちろん両方できるが、`tests/zstd.rs` は gem と byte 一致を見るので、既定が `bundled` であることに意味があるのはこの 1 件が示している。`Zstd.zstd_version` は `10505` を返す。 |
+| sqlite3 | あり | `libsqlite3.so.0`（3.45.1）にリンク。CRUD、`create_function` のコールバック、エラーメッセージ（トークン位置の `^` 付き）、FTS5 まで同梱版（3.48.0）と同じ。`SQLite3.libversion` は当然リンクした版を返す。`build.rs` の `-D` は効かないので、変数の上限は 999、拡張の有無はディストリの選択、`load_extension` が有効な場合もある。3.38 以上が要る（FFI が `sqlite3_error_offset` を呼ぶ）。 |
+| psych | なし | 置き換える C ライブラリが無い。`libyaml-safer` は libyaml 0.2.5 の Rust への移植で、システムの libyaml にリンクするなら別のバインディングを書くことになる。 |
+| nokogiri | なし | 危険が実測で確認できたので出していない。下記。 |
+
+nokogiri を外した理由は 3 つある。
+
+1. **FFI が構造体レイアウトを写している。** `libxml2-src/src/lib.rs` は
+   `xmlNode` / `xmlDoc` / `xmlSAXHandler` などをフィールド単位で持つ。
+   同梱の 2.13.8 と Ubuntu 24.04 の 2.9.14 でヘッダを突き合わせると、
+   18 個中 15 個は完全一致だが `xmlAttr` は 2.13.8 にだけ末尾の
+   `struct _xmlID *id` があり（12 対 13）、`xmlEntity` は 18 番目以降が
+   食い違う（`int checked` 対 `int flags`、21 対 20）。今 monoruby が
+   読むのは前方のフィールドだけなので実際には動く公算が高いが、外れた
+   ときの症状が静かなメモリ破壊で、リンク時にも実行時にも警告が出ない。
+2. **nokogiri のパッチが出力に効く。** 同梱しているのはパッチ適用済みの
+   libxml2 で、エラーメッセージや直列化の細部はそれ込みの挙動
+   （`doc/nokogiri.md` §1）。`tests/nokogiri.rs` は gem（こちらも自前の
+   2.13.8 を同梱する）と出力を突き合わせるので、システム版では差が出る。
+3. **どのみち半分しか外せない。** gumbo-parser は nokogiri のフォークで
+   システムパッケージが無く、`system` にしても同梱ビルドが残る。
+
+出すとすれば、FFI がレイアウトを写すのをやめる（アクセサをすべて C 側の
+glue に移す）か、検出した版に合わせて生成するかが先になる。
 
 ## 7. 参考
 
