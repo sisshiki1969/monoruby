@@ -447,7 +447,28 @@ External crates (fetched from git):
   gem's proxy class, held in `DbHandle::aggregates` (where `mark` finds
   it) and addressed by a slot number kept in SQLite's per-group
   `sqlite3_aggregate_context`, which is C memory the collector cannot
-  see. A `collation` with a real comparator is still unsupported.
+  see. `SQLite3::Backup` (the online-backup API; Lobsters loads its file
+  database into `:memory:` with it) wraps `sqlite3_backup_*` the same
+  way. A `collation` with a real comparator is still unsupported.
+- `bcrypt` (crypt_blowfish-compatible) — the native half of the bcrypt
+  gem: `String.__bcrypt_salt` / `__bcrypt_crypt` (`src/builtins/bcrypt.rs`)
+  behind `gem/bcrypt_ext.rb`, which stands in for `bcrypt_ext.so` and
+  forwards `BCrypt::Engine.__bc_salt` / `__bc_crypt`. Same salt in, same
+  60-byte hash out as the C extension, as BINARY strings.
+- `comrak` (`default-features = false`) — cmark-gfm's parser and renderers
+  behind the markly gem: `gem/markly/markly.rb` stands in for `markly.so`
+  with `Markly::Parser`, `Markly::Node` (a Ruby-side doubly linked tree
+  the gem edits in place, with cmark's `can_contain` rules) and
+  `Markly::Error`; `src/builtins/markly.rs` parses to and renders from a
+  nested-Array snapshot of that tree (`String.__markly_parse` /
+  `__markly_render_{html,commonmark,plaintext}`). HTML output matches
+  cmark-gfm's; `to_commonmark` is comrak's own serialization style (list
+  indent, fence spacing, hard-break escape), and list end source
+  positions are comrak's. The plain-text renderer is a port of
+  cmark-gfm's `plaintext.c`. Both gem lines load: 0.15 (Lobsters'
+  Gemfile.lock) and 0.19 (`_dup`, `code_info`, `fence`, `:front_matter`
+  / `FRONT_MATTER`; `INLINE_CODE_INFO` and `HTML_BLOCK_BLANK_LINES` are
+  ignored).
 
 ---
 

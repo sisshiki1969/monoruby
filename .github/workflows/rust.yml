@@ -60,7 +60,7 @@ jobs:
         # gem and monoruby's own (ext/nokogiri); each test skips
         # when its gem is absent, so keep them installed here to make the
         # tests count. The rubocop versions are ruby-bench's Gemfile.lock.
-        run: gem install hexapdf chunky_png rubocop:1.79.1 rubocop-performance:1.25.0 rubocop-rails:2.32.0 nokogiri msgpack strptime cool.io zstd-ruby:1.5.7.0 yajl-ruby --no-document
+        run: gem install hexapdf chunky_png rubocop:1.79.1 rubocop-performance:1.25.0 rubocop-rails:2.32.0 nokogiri msgpack strptime cool.io zstd-ruby:1.5.7.0 yajl-ruby bcrypt markly --no-document
       - name: Test
         run: bin/test
 
@@ -118,7 +118,7 @@ jobs:
         # bin/ruby-bench-diff requires `erubi`; matches the `coverage` job.
         run: gem install erubi --no-document
       - name: Install gems for the output-equality tests
-        run: gem install hexapdf chunky_png rubocop:1.79.1 rubocop-performance:1.25.0 rubocop-rails:2.32.0 nokogiri msgpack strptime cool.io zstd-ruby:1.5.7.0 yajl-ruby --no-document
+        run: gem install hexapdf chunky_png rubocop:1.79.1 rubocop-performance:1.25.0 rubocop-rails:2.32.0 nokogiri msgpack strptime cool.io zstd-ruby:1.5.7.0 yajl-ruby bcrypt markly --no-document
       - name: Install libffi + pkg-config
         # The aarch64-macOS dep block in monoruby/Cargo.toml builds libffi-sys
         # with the `system` feature; libffi is keg-only so pkg-config needs its

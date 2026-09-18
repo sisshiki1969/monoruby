@@ -230,7 +230,7 @@ fn sym_start_with(
 ) -> Result<Value> {
     let inner = symbol_string_inner(lfp.self_val().as_symbol());
     let args = lfp.variadic_args();
-    crate::builtins::string::string_start_with(vm, globals, &inner, &args)
+    crate::builtins::string::string_start_with(vm, globals, &inner, Value::nil(), &args)
 }
 
 ///

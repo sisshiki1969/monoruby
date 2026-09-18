@@ -71,6 +71,7 @@ fn init_sqlite3(ctx: &mut Ctx) -> Result<()> {
     let sqlite3 = ctx.define_module(Value::UNDEF, "SQLite3")?;
     let database = ctx.define_class(sqlite3, "Database", Value::UNDEF, MR_CLASS_NATIVE)?;
     let statement = ctx.define_class(sqlite3, "Statement", Value::UNDEF, MR_CLASS_NATIVE)?;
+    let backup = ctx.define_class(sqlite3, "Backup", Value::UNDEF, MR_CLASS_NATIVE)?;
     CLASSES.with(|c| *c.borrow_mut() = Some((id, Classes { sqlite3 })));
 
     // ---- SQLite3 module functions
@@ -86,9 +87,17 @@ fn init_sqlite3(ctx: &mut Ctx) -> Result<()> {
     ctx.define_method(sqlite3, "threadsafe", method!(threadsafe), 0, s);
     ctx.define_method(sqlite3, "sqlcipher?", method!(sqlcipher_p), 0, s);
 
+    // ---- Backup (the online backup API; `backup.c` of the extension)
+    let p = MR_METHOD_PRIVATE;
+    let b = backup;
+    ctx.define_method(b, "initialize", method!(backup_initialize), 4, p);
+    ctx.define_method(b, "step", method!(backup_step), 1, 0);
+    ctx.define_method(b, "finish", method!(backup_finish), 0, 0);
+    ctx.define_method(b, "remaining", method!(backup_remaining), 0, 0);
+    ctx.define_method(b, "pagecount", method!(backup_pagecount), 0, 0);
+
     // ---- Database
     let d = database;
-    let p = MR_METHOD_PRIVATE;
     ctx.define_method(d, "open_v2", method!(db_open_v2), 3, p);
     ctx.define_method(d, "open16", method!(db_open16), 1, p);
     ctx.define_method(d, "close", method!(db_close), 0, 0);
@@ -262,6 +271,24 @@ struct StmtHandle {
 
 native!(StmtHandle, "SQLite3::Statement");
 
+/// An online backup in progress (`sqlite3_backup`), finished by `finish`
+/// or, if the object is collected first, by `Drop`.
+struct BackupHandle {
+    p: *mut sq::sqlite3_backup,
+}
+
+native!(BackupHandle, "SQLite3::Backup");
+
+impl Drop for BackupHandle {
+    fn drop(&mut self) {
+        if !self.p.is_null() {
+            // SAFETY: our own backup object, not finished yet.
+            unsafe { sq::sqlite3_backup_finish(self.p) };
+            self.p = std::ptr::null_mut();
+        }
+    }
+}
+
 impl Drop for StmtHandle {
     fn drop(&mut self) {
         if !self.stmt.is_null() {
@@ -307,6 +334,16 @@ fn stmt_of(ctx: &mut Ctx, v: Value) -> Result<*mut sq::sqlite3_stmt> {
         return Err(err_sqlite3(ctx, "cannot use a closed statement"));
     }
     Ok(h.stmt)
+}
+
+/// The live backup of `self`; the extension's `REQUIRE_OPEN_BACKUP`. An
+/// instance whose `initialize` has not run has no payload at all (the
+/// generic allocator makes it empty), which reads as closed.
+fn backup_of(ctx: &mut Ctx, v: Value) -> Result<*mut sq::sqlite3_backup> {
+    match ctx.native::<BackupHandle>(v) {
+        Some(h) if !h.p.is_null() => Ok(h.p),
+        _ => Err(err_sqlite3(ctx, "cannot use a closed backup")),
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -1953,4 +1990,96 @@ fn stmt_stats_as_hash(ctx: &mut Ctx, this: Value, _: &[Value], _: Block) -> Resu
         ctx.hash_set(h, k, Value::int(v as i64))?;
     }
     Ok(h)
+}
+
+// ---------------------------------------------------------------------
+// Backup
+// ---------------------------------------------------------------------
+
+/// Backup#initialize(dstdb, dstname, srcdb, srcname) -> nil
+///
+/// `sqlite3_backup_init`: a backup of database `srcname` of `srcdb` into
+/// database `dstname` of `dstdb` (`"main"`, `"temp"`, or an attached
+/// name). The connections stay open and owned by their Database objects.
+fn backup_initialize(ctx: &mut Ctx, this: Value, args: &[Value], _: Block) -> Result<Value> {
+    // The extension checks both connections with the Backup type's own
+    // `TypedData_Get_Struct`, hence the odd "expected" in its message.
+    for v in [args[0], args[2]] {
+        if ctx.type_of(v) != MrType::Native {
+            let name = ctx.class_name(v);
+            return Err(ctx.type_error(format!(
+                "wrong argument type {name} (expected SQLite3::Backup)"
+            )));
+        }
+    }
+    let dst = db_of(ctx, args[0])?;
+    let dst_name = to_cstring(ctx, args[1])?;
+    let src = db_of(ctx, args[2])?;
+    let src_name = to_cstring(ctx, args[3])?;
+    // SAFETY: both connections are live, the names are NUL-terminated.
+    let p = unsafe { sq::sqlite3_backup_init(dst, dst_name.as_ptr(), src, src_name.as_ptr()) };
+    if p.is_null() {
+        // The error is reported on the destination connection, with the
+        // gem's per-code exception class.
+        // SAFETY: a live connection; the message is its own buffer.
+        let (rc, msg) = unsafe {
+            (
+                sq::sqlite3_errcode(dst),
+                cstr_to_string(sq::sqlite3_errmsg(dst)).unwrap_or_default(),
+            )
+        };
+        return Err(raise_code(ctx, rc, &msg, None));
+    }
+    // A re-`initialize` on the same object releases the old backup; a
+    // fresh instance has no payload at all until this point.
+    if let Some(h) = ctx.native::<BackupHandle>(this)
+        && !h.p.is_null()
+    {
+        // SAFETY: our own backup object.
+        unsafe { sq::sqlite3_backup_finish(h.p) };
+        h.p = std::ptr::null_mut();
+    }
+    ctx.native_set(this, BackupHandle { p })?;
+    Ok(Value::nil())
+}
+
+/// Backup#step(pages) -> Integer
+///
+/// Copies up to `pages` pages (`-1` for all of them); the SQLite result
+/// code (`SQLITE_OK` while pages remain, `SQLITE_DONE` when finished,
+/// `SQLITE_BUSY` / `SQLITE_LOCKED` to retry).
+fn backup_step(ctx: &mut Ctx, this: Value, args: &[Value], _: Block) -> Result<Value> {
+    let p = backup_of(ctx, this)?;
+    let pages = ctx.int(args[0])? as c_int;
+    // SAFETY: a live backup.
+    let rc = unsafe { sq::sqlite3_backup_step(p, pages) };
+    Ok(Value::int(rc as i64))
+}
+
+/// Backup#finish -> nil
+///
+/// Releases the backup (`sqlite3_backup_finish`); the object is closed
+/// afterwards.
+fn backup_finish(ctx: &mut Ctx, this: Value, _: &[Value], _: Block) -> Result<Value> {
+    let p = backup_of(ctx, this)?;
+    if let Some(h) = ctx.native::<BackupHandle>(this) {
+        h.p = std::ptr::null_mut();
+    }
+    // SAFETY: a live backup, released exactly once.
+    unsafe { sq::sqlite3_backup_finish(p) };
+    Ok(Value::nil())
+}
+
+/// Backup#remaining -> Integer
+fn backup_remaining(ctx: &mut Ctx, this: Value, _: &[Value], _: Block) -> Result<Value> {
+    let p = backup_of(ctx, this)?;
+    // SAFETY: a live backup.
+    Ok(Value::int(unsafe { sq::sqlite3_backup_remaining(p) } as i64))
+}
+
+/// Backup#pagecount -> Integer
+fn backup_pagecount(ctx: &mut Ctx, this: Value, _: &[Value], _: Block) -> Result<Value> {
+    let p = backup_of(ctx, this)?;
+    // SAFETY: a live backup.
+    Ok(Value::int(unsafe { sq::sqlite3_backup_pagecount(p) } as i64))
 }

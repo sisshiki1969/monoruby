@@ -100,3 +100,44 @@ coolio,zstd}.rs` 付き）。`-I stubs` 無しで `benchmarks/fluentd/benchmark.
   使うので計測経路に乗る。nokogiri と同じ形の同梱になる。
 - `SQLite3::Backup`: `sqlite3_backup_init` / `step` / `finish` / `remaining` /
   `pagecount` の 5 関数。`src/builtins/sqlite3.rs` への追加で小さい。
+
+## 5. lobsters の C 拡張代替 3 点の実装（2026-09-17）
+
+§4 の lobsters 側 3 点を実装し、`benchmarks/lobsters/benchmark.rb` がスタブ無しで
+最後まで走る（114 ルートすべて 200、25 反復）。いずれも本物の gem を CRuby で
+動かした結果と突き合わせるテスト付き。
+
+- `SQLite3::Backup` → `src/builtins/sqlite3.rs` に `ObjTy::NATIVE` クラスとして
+  追加（`initialize` / `step` / `finish` / `remaining` / `pagecount`）。
+  `sqlite3_backup_init` の失敗は接続側の errcode で gem のコード別例外クラスに
+  変換する（`unknown database nope` → `SQLException`）。`tests/sqlite3.rs`
+  `sqlite3_backup`。
+- `bcrypt` → C ソース同梱ではなく `bcrypt` crate（crypt_blowfish 互換）を使い、
+  `src/builtins/bcrypt.rs` が `String.__bcrypt_salt` / `__bcrypt_crypt` を、
+  `gem/bcrypt_ext.rb` が `BCrypt::Engine.__bc_salt` / `__bc_crypt` を与える。
+  同じ salt なら 60 バイトのハッシュがバイト単位で一致する（salt の 22 文字目の
+  正規化、72 バイト打ち切り、NUL を含む文字列の `ArgumentError` も同じ）。
+  `tests/bcrypt.rs`。
+- `markly` → cmark-gfm 同梱ではなく `comrak` crate（cmark-gfm 互換の Rust 実装）
+  を使う。`gem/markly/markly.rb` が `Markly::Parser` / `Node` / `Error` /
+  `Markly.extensions` を Ruby で定義し、木は Ruby 側の双方向リンク（cmark と同じ
+  `parent` / `first_child` / `next` …と `can_contain` の規則）で持つ。
+  `src/builtins/markly.rs` は木を入れ子 Array に写して parse / render する
+  （`String.__markly_parse` / `__markly_render_{html,commonmark,plaintext}`）。
+  HTML 出力は cmark-gfm と一致（GFM 拡張 5 種、SMART / UNSAFE / HARD_BREAKS /
+  FOOTNOTES / SOURCE_POSITION / GITHUB_PRE_LANG / FULL_INFO_STRING）。
+  `to_plaintext` は `plaintext.c` の移植。`to_commonmark` は comrak 自身の
+  整形（箇条書きのインデント、fence 後の空白、hard break の `\`）で、gem が
+  `dup` に使う再パースには影響しない。リストの終端 source position も comrak
+  のもの。`tests/markly.rs`。
+
+副産物: String のサブクラスが定義した `==` が `str == x` / `str != x` で呼ばれて
+いなかった（VM の `eq_values` は `String#==` の中身を直接走らせ、JIT が解決する
+`String#!=` の本体も同じ）。`BCrypt::Password == secret` がこれで常に false に
+なっていた。`Executor::eq_values_vis` と `String#!=` を、受け手が `String` そのもの
+でなければ `==` の探索に回すよう修正（CRuby の `opt_eq` fast path も `rb_cString`
+限定）。`tests/builtin_operator_binding.rs` `string_subclass_eq_is_dispatched`。
+
+fluentd は現行 master でそのまま完走する（io-event の C 拡張が無い旨の warning
+だけが出る）。
+

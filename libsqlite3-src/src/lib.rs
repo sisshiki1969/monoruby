@@ -14,6 +14,7 @@ use core::ffi::{c_char, c_double, c_int, c_uchar, c_void};
 /// Opaque handles.
 pub enum sqlite3 {}
 pub enum sqlite3_stmt {}
+pub enum sqlite3_backup {}
 pub enum sqlite3_context {}
 pub enum sqlite3_value {}
 
@@ -98,6 +99,18 @@ unsafe extern "C" {
     ) -> c_int;
     pub fn sqlite3_open16(filename: *const c_void, db: *mut *mut sqlite3) -> c_int;
     pub fn sqlite3_close_v2(db: *mut sqlite3) -> c_int;
+
+    // ---- online backup
+    pub fn sqlite3_backup_init(
+        dest: *mut sqlite3,
+        dest_name: *const c_char,
+        source: *mut sqlite3,
+        source_name: *const c_char,
+    ) -> *mut sqlite3_backup;
+    pub fn sqlite3_backup_step(p: *mut sqlite3_backup, n_page: c_int) -> c_int;
+    pub fn sqlite3_backup_finish(p: *mut sqlite3_backup) -> c_int;
+    pub fn sqlite3_backup_remaining(p: *mut sqlite3_backup) -> c_int;
+    pub fn sqlite3_backup_pagecount(p: *mut sqlite3_backup) -> c_int;
     pub fn sqlite3_errmsg(db: *mut sqlite3) -> *const c_char;
     pub fn sqlite3_errcode(db: *mut sqlite3) -> c_int;
     /// Byte offset of the token a `prepare` error is about, or -1.
