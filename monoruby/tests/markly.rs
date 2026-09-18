@@ -398,3 +398,39 @@ fn markly_0_19_api() {
     );
 }
 
+/// A code block's attributes come out in cmark-gfm's order, and the same
+/// input renders the same way every time. comrak collects those
+/// attributes in a `HashMap` and writes them in its iteration order, so
+/// before `src/builtins/markly.rs` took the tag writing over through
+/// comrak's `codefence_syntax_highlighter` hook, a tag carrying two of
+/// them came out in an order that followed the hash seed: `<code
+/// class="language-rb" data-meta="x">` on one run and `<code
+/// data-meta="x" class="language-rb">` on the next. Each combination is
+/// rendered many times in the one process, since a fresh `HashMap` is
+/// what varies, and every rendering must agree with the gem's.
+#[test]
+fn markly_code_block_attribute_order() {
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "markly"
+        src = "```rb x\ncode\n```\n"
+        flags = {
+          plain: 0,
+          full_info: Markly::FULL_INFO_STRING,
+          pre_lang: Markly::GITHUB_PRE_LANG,
+          pre_lang_full_info: Markly::GITHUB_PRE_LANG | Markly::FULL_INFO_STRING,
+          source_position: Markly::SOURCE_POSITION,
+          source_position_full_info: Markly::SOURCE_POSITION | Markly::FULL_INFO_STRING,
+          source_position_pre_lang: Markly::SOURCE_POSITION | Markly::GITHUB_PRE_LANG,
+          everything: Markly::SOURCE_POSITION | Markly::GITHUB_PRE_LANG | Markly::FULL_INFO_STRING,
+        }
+        res = []
+        flags.each do |name, f|
+          renderings = 40.times.map { Markly.render_html(src, flags: f) }.uniq
+          res << [name, renderings.size, renderings.first.scan(/<(?:pre|code)[^>]*>/)]
+        end
+        res
+        "##,
+    );
+}
