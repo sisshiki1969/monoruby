@@ -100,9 +100,103 @@ module Fiddle
     # requires the writer to exist. We follow the same shape.
     attr_accessor :size
 
-    def initialize(addr, size = 0)
+    def initialize(addr, size = 0, freefunc = nil)
       @ptr  = addr.respond_to?(:to_i) ? addr.to_i : 0
       @size = size
+      @free = freefunc
+    end
+
+    class << self
+      # Memory to hand to a C function that fills it in
+      # (`glGetShaderInfoLog(id, 4096, length, buffer)`), zero-filled, as
+      # CRuby's `Fiddle::Pointer.malloc`.
+      #
+      # Where that one hands the block to the GC with a `freefunc` to
+      # release it, this allocates a GC-owned block instead — an
+      # `IO::Buffer`, whose bytes are released when it is swept and which
+      # counts toward the collection trigger while it lives. monoruby
+      # runs finalizers only at exit, so a raw `malloc` here would leak
+      # every block a caller never freed by hand, which is most of them.
+      # `freefunc` is therefore remembered (`#free`) but never called:
+      # nothing else owns this memory. The block form still releases
+      # eagerly, and that is the form to prefer.
+      def malloc(size, freefunc = nil)
+        size = size.to_i
+        raise ArgumentError, "negative size: #{size}" if size < 0
+
+        backing = size.zero? ? nil : ::IO::Buffer.new(size)
+        address = backing ? backing.__address.to_i : 0
+        if backing && address == 0
+          raise Fiddle::DLError, "Fiddle::Pointer.malloc(#{size}) failed"
+        end
+
+        ptr = new(address, size, freefunc)
+        ptr.__send__(:_own, backing)
+        return ptr unless block_given?
+
+        begin
+          yield ptr
+        ensure
+          ptr.call_free
+        end
+      end
+
+      # `Fiddle::Pointer[val]`. A String becomes a pointer to its own
+      # bytes — the same address a C function is handed when the String
+      # itself is passed for a `void *` argument, so the two see the same
+      # memory — and, unlike CRuby, the pointer keeps the String alive
+      # for as long as it lives, rather than leaving the caller to guess
+      # when the collector may take the bytes out from under the C code.
+      def to_ptr(val)
+        case val
+        when Pointer then val
+        when String
+          ptr = new(Fiddle.___str_addr(val), val.bytesize)
+          ptr.__send__(:_own, val)
+          ptr
+        when Integer then new(val)
+        when ::IO
+          raise NotImplementedError,
+                "Fiddle::Pointer.to_ptr(IO) (the underlying FILE *) is not supported"
+        else
+          unless val.respond_to?(:to_ptr)
+            raise TypeError, "no implicit conversion of #{val.class} into Fiddle::Pointer"
+          end
+
+          converted = val.to_ptr
+          unless converted.is_a?(Pointer)
+            raise TypeError, "#{val.class}#to_ptr did not return a Fiddle::Pointer"
+          end
+
+          converted
+        end
+      end
+
+      alias_method :[], :to_ptr
+    end
+
+    # The `freefunc` this pointer was made with, as CRuby names it: the
+    # accessor, not the act of freeing (that is `#call_free`).
+    attr_accessor :free
+
+    # Gives up memory this pointer owns — the `malloc` block form on the
+    # way out, or a caller done with it early. What was allocated here is
+    # the GC's to release, so this drops the last reference to it and
+    # NULLs the address, which turns a use-after-free into a read of 0
+    # rather than a read of somebody else's memory. On a pointer that
+    # owns nothing (a `to_ptr`, an address from a C function) it only
+    # marks the pointer freed.
+    def call_free
+      return nil if @freed
+
+      @freed = true
+      @owner = nil
+      @ptr = 0
+      nil
+    end
+
+    def freed?
+      !!@freed
     end
 
     # -- address accessors ---------------------------------------------------
@@ -241,6 +335,16 @@ module Fiddle
       "#<#{self.class} address=0x#{@ptr.to_s(16)}>"
     end
     alias to_s inspect
+
+    private
+
+    # The object whose memory @ptr points into: an IO::Buffer from
+    # `malloc`, the String itself from `to_ptr`. Held so the address
+    # stays valid for as long as the pointer does.
+    def _own(owner)
+      @owner = owner
+      self
+    end
   end
 
   # Defined once, after Pointer class — no re-assignment warning.
@@ -471,6 +575,20 @@ module Fiddle
     # re-wrapped, say) — not a virtual library.
     nil
   end
+
+  # The allocator entry points CRuby publishes as plain addresses, for
+  # code that hands one to `Fiddle::Pointer.malloc` or wraps it in a
+  # `Fiddle::Function`. They are what `Fiddle.malloc` / `Fiddle.free`
+  # call, so a block from one can be released by the other. Resolved from
+  # the running program (`dlopen(NULL)`); if that cannot be done the
+  # constants still exist, as 0, rather than breaking `require "fiddle"`.
+  RUBY_FREE, RUBY_MALLOC, RUBY_REALLOC =
+    begin
+      handle = Handle.new(nil)
+      %w[free malloc realloc].map { |name| handle.sym?(name) ? handle[name] : 0 }
+    rescue StandardError
+      [0, 0, 0]
+    end
 
   def self.malloc(size)
     ptr = Fiddle.___malloc(size, true)

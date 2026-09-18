@@ -161,7 +161,12 @@ fn integer_arg_to_i64(globals: &Globals, val: Value) -> Result<i64> {
 ///
 /// `mut val` is taken by value (Value is Copy) so we can freely take an
 /// `&mut` to its underlying RValue without disturbing the caller.
-fn value_to_carg(globals: &mut Globals, mut val: Value, ty: i64) -> Result<CArg> {
+fn value_to_carg(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut val: Value,
+    ty: i64,
+) -> Result<CArg> {
     // Same alias note as type_code_to_ret_ffi_type: INTPTR_T family
     // collapses to LONG/ULONG codes in CRuby's convention.
     match ty {
@@ -193,8 +198,22 @@ fn value_to_carg(globals: &mut Globals, mut val: Value, ty: i64) -> Result<CArg>
                     Ok(CArg::U64(ptr as u64))
                 }
                 _ => {
-                    // Other objects (e.g. FFI::Pointer): coerce via to_i
-                    let addr = val.expect_integer(globals)?;
+                    // Other objects (`Fiddle::Pointer`, `FFI::Pointer`,
+                    // anything else wrapping an address): the address is
+                    // what they answer to `to_i`, as it is in CRuby.
+                    // Objects that have no such answer fall through to
+                    // the usual "no implicit conversion" TypeError.
+                    let addr = match vm.invoke_method_if_exists(
+                        globals,
+                        IdentId::get_id("to_i"),
+                        val,
+                        &[],
+                        None,
+                        None,
+                    )? {
+                        Some(v) => v.expect_integer(globals)?,
+                        None => val.expect_integer(globals)?,
+                    };
                     Ok(CArg::U64(addr as u64))
                 }
             }
@@ -219,6 +238,7 @@ fn value_to_carg(globals: &mut Globals, mut val: Value, ty: i64) -> Result<CArg>
 // ---------------------------------------------------------------------------
 
 fn fiddle_call_inner(
+    vm: &mut Executor,
     globals: &mut Globals,
     ptr: usize,
     args: &[Value],
@@ -237,7 +257,7 @@ fn fiddle_call_inner(
     let c_args: Vec<CArg> = args
         .iter()
         .zip(arg_type_codes.iter())
-        .map(|(&val, &ty)| value_to_carg(globals, val, ty))
+        .map(|(&val, &ty)| value_to_carg(vm, globals, val, ty))
         .collect::<Result<_>>()?;
 
     // libffi argument types derived from c_args (preserves exact widths)
@@ -583,7 +603,7 @@ fn fiddle_invoke(
                 i, n
             )));
         };
-        c_args.push(value_to_carg(globals, v, ty)?);
+        c_args.push(value_to_carg(vm, globals, v, ty)?);
     }
     // A call the binding declared blocking runs on a worker thread while this
     // green thread parks, so one slow C call does not freeze every other
@@ -633,7 +653,7 @@ fn fiddle_invoke(
 /// until the call itself.
 #[monoruby_builtin]
 fn fiddle_call(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -649,7 +669,7 @@ fn fiddle_call(
         .map(|v| v.expect_integer(globals))
         .collect::<Result<_>>()?;
 
-    fiddle_call_inner(globals, ptr, &args, &arg_types, ret_type)
+    fiddle_call_inner(vm, globals, ptr, &args, &arg_types, ret_type)
 }
 
 /// ### Fiddle.___read(ptr, type_code) -> Integer | Float
@@ -973,6 +993,35 @@ fn fiddle_write_bytes(
     Ok(lfp.arg(0))
 }
 
+/// ### Fiddle.___str_addr(str) -> Integer
+///
+/// The address of `str`'s own byte buffer, as `Fiddle::Pointer.to_ptr`
+/// hands it out (`Fiddle::Pointer[str]`): the pointer a C function is
+/// given when the String is passed for a `TYPE_VOIDP` argument, so what
+/// is written through it is what the String reads back. As there, the
+/// buffer is NUL-terminated in its spare capacity first, and it stays at
+/// this address as long as the String is alive and unmodified -- keeping
+/// it alive is the caller's business (`Fiddle::Pointer` holds on to it).
+#[monoruby_builtin]
+fn fiddle_str_addr(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut val = lfp.arg(0);
+    if val.is_rstring_inner().is_none() {
+        return Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            val,
+            crate::STRING_CLASS,
+        ));
+    }
+    let inner = val.as_rstring_inner_mut();
+    let ptr = inner.nul_terminated_buf_ptr();
+    Ok(Value::integer(ptr as i64))
+}
+
 /// ### Fiddle.___free(ptr)
 ///
 /// Free heap memory allocated by Fiddle.malloc / Kernel.___malloc.
@@ -1035,6 +1084,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(fiddle, "___read_bytes", fiddle_read_bytes, 2);
     globals.define_builtin_module_func(fiddle, "___write_bytes", fiddle_write_bytes, 2);
     globals.define_builtin_module_func(fiddle, "___free", fiddle_free, 1);
+    globals.define_builtin_module_func(fiddle, "___str_addr", fiddle_str_addr, 1);
 
     // dlopen / dlsym / malloc (implementations live in kernel.rs, but they
     // belong to the same primitive set, so expose them here too — a facade
@@ -1121,6 +1171,97 @@ mod tests {
               s = "t_#{{i}}"
               actual = call.call(s)
               raise "strlen=#{{actual}} bytesize=#{{s.bytesize}}" unless actual == s.bytesize
+            end
+            :ok
+            "#
+        ));
+    }
+
+    // `Fiddle::Pointer.malloc` / `Fiddle::Pointer[]`, the two ways a
+    // caller gets memory to hand to C: a fresh block, and a String's own
+    // bytes. The block a `malloc` returns is owned by the GC here rather
+    // than by a `freefunc`, so what this pins down is that it is
+    // zero-filled, readable and writable through the pointer, and
+    // released by the block form -- and that `[]` really aliases the
+    // String, rather than copying it.
+    #[test]
+    fn fiddle_pointer_malloc_and_to_ptr() {
+        run_test_no_result_check(
+            r#"
+            require "fiddle"
+
+            buf = Fiddle::Pointer.malloc(16)
+            raise "null" if buf.null?
+            raise "size" unless buf.size == 16
+            raise "zeroed" unless buf[0, 16] == "\0" * 16
+            buf[0, 5] = "hello"
+            raise "roundtrip" unless buf[0, 5] == "hello"
+
+            # The block form owns the memory and gives it up on the way out.
+            inner = nil
+            value = Fiddle::Pointer.malloc(8) do |p|
+              inner = p
+              p[0, 3] = "abc"
+              p[0, 3]
+            end
+            raise "block value" unless value == "abc"
+            raise "freed?" unless inner.freed?
+            raise "nulled" unless inner.null?
+
+            # `[]` points into the String itself: what C writes there, Ruby reads.
+            str = "abcdef".b
+            ptr = Fiddle::Pointer[str]
+            raise "size" unless ptr.size == 6
+            raise "read" unless ptr[0, 6] == "abcdef"
+            ptr[0, 3] = "XYZ"
+            raise "aliasing" unless str == "XYZdef"
+            raise "address" unless Fiddle::Pointer[str].to_i == ptr.to_i
+
+            # ... and keeps it alive, which is the caller's problem in CRuby.
+            kept = Fiddle::Pointer[("held " + "by the pointer").b]
+            3.times { GC.start }
+            raise "collected" unless kept[0, 19] == "held by the pointer"
+
+            raise "Integer" unless Fiddle::Pointer[1234].to_i == 1234
+            raise "Pointer" unless Fiddle::Pointer[ptr].equal?(ptr)
+            [nil, Object.new].each do |bad|
+              begin
+                Fiddle::Pointer[bad]
+                raise "expected TypeError for #{bad.class}"
+              rescue TypeError
+              end
+            end
+            :ok
+            "#,
+        );
+    }
+
+    // An object that answers `to_i` with an address -- `Fiddle::Pointer`
+    // itself, above all -- is a `void *` argument, through the general
+    // call path and the prepared one alike.
+    #[test]
+    fn fiddle_voidp_arg_accepts_a_pointer_object() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            require "fiddle"
+            memcpy = Fiddle.___dlsym(LIBC, "memcpy")
+
+            src = Fiddle::Pointer["abcdefgh"]
+            dst = Fiddle::Pointer.malloc(8)
+            Fiddle.___call(memcpy, [dst, src, 8], [TY_VOIDP, TY_VOIDP, TY_SIZE_T], TY_VOIDP)
+            raise "___call" unless dst[0, 8] == "abcdefgh"
+
+            prepared = Fiddle::Function.new(memcpy, [TY_VOIDP, TY_VOIDP, TY_SIZE_T], TY_VOIDP)
+            dst2 = Fiddle::Pointer.malloc(8)
+            prepared.call(dst2, src, 8)
+            raise "prepared" unless dst2[0, 8] == "abcdefgh"
+
+            # Objects with no address to give still raise, rather than
+            # passing something arbitrary to C.
+            begin
+              Fiddle.___call(memcpy, [dst, Object.new, 1], [TY_VOIDP, TY_VOIDP, TY_SIZE_T], TY_VOIDP)
+              raise "expected TypeError"
+            rescue TypeError
             end
             :ok
             "#
