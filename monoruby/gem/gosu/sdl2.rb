@@ -256,6 +256,62 @@ module Gosu
     attach_function :start_text_input,  :SDL_StartTextInput,  [], :void
     attach_function :stop_text_input,   :SDL_StopTextInput,   [], :void
     attach_function :is_text_input_active, :SDL_IsTextInputActive, [], :int
+
+    # --- OpenGL interop -------------------------------------------------
+    # `Gosu.gl` hands the window's OpenGL context to the caller's block,
+    # which only works if SDL is drawing through OpenGL itself: its
+    # `opengl` render driver creates a GL context and keeps it current,
+    # so the block and SDL's own 2D share one. `SDL_RENDER_DRIVER` names
+    # that driver (SDL still tries the others if it fails, so this is a
+    # preference and not a demand), `SDL_GL_DEPTH_SIZE` asks for the
+    # depth buffer 3D drawing needs, and `SDL_RenderFlush` empties SDL's
+    # batched 2D before foreign GL calls land on top of it.
+    HINT_RENDER_DRIVER = "SDL_RENDER_DRIVER"
+
+    # SDL_GLattr
+    GL_DOUBLEBUFFER = 5
+    GL_DEPTH_SIZE   = 6
+
+    # SDL_RendererInfo is { const char *name; Uint32 flags;
+    # Uint32 num_texture_formats; Uint32 texture_formats[16];
+    # int max_texture_width; int max_texture_height; } -- 88 bytes on
+    # x86_64, of which only the leading name pointer interests us.
+    RENDERER_INFO_SIZE = 88
+
+    attach_function :set_hint,               :SDL_SetHint,
+      [:string, :string], :int
+    attach_function :gl_set_attribute,       :SDL_GL_SetAttribute,
+      [:int, :int], :int
+    attach_function :gl_get_attribute,       :SDL_GL_GetAttribute,
+      [:int, :pointer], :int
+    attach_function :gl_get_current_context, :SDL_GL_GetCurrentContext,
+      [], :pointer
+    attach_function :get_renderer_info,      :SDL_GetRendererInfo,
+      [:pointer, :pointer], :int
+
+    # SDL_RenderFlush arrived in SDL 2.0.10. Older runtimes flush when
+    # they present and nowhere else, so there is nothing to call -- and a
+    # `Gosu.gl` block there draws under whatever 2D is still queued.
+    begin
+      attach_function :render_flush, :SDL_RenderFlush, [:pointer], :int
+      RENDER_FLUSH = true
+    rescue LoadError
+      RENDER_FLUSH = false
+      def self.render_flush(_renderer)
+        0
+      end
+    end
+
+    # The name of the driver behind `renderer` ("opengl", "software", ...).
+    def self.renderer_name(renderer)
+      return nil if renderer.nil? || renderer.null?
+
+      info = FFI::MemoryPointer.new(:uint8, RENDERER_INFO_SIZE)
+      return nil if get_renderer_info(renderer, info) != 0
+
+      name = info.get_pointer(0)
+      name.null? ? nil : name.read_string
+    end
   end
 
   # ----------------------------------------------------------------------

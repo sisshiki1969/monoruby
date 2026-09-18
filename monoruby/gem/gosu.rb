@@ -21,6 +21,7 @@
 # angle-conversion extensions, matching the real gem's public API.
 
 require "gosu/sdl2"
+require "gosu/gl"
 
 module Gosu
   # ::IO::Buffer under a module-local name. Image's per-frame paths load
@@ -468,6 +469,16 @@ module Gosu
           SDL2.set_draw_color(@_sdl_renderer, 0, 0, 0, 255)
           SDL2.render_clear(@_sdl_renderer)
           draw
+          # `Gosu.gl` parks its block in $gosu_gl_blocks so the GC cannot
+          # take it while the frame is still being drawn
+          # (gosu/swig_patches.rb), and upstream drops it again in
+          # protected_draw_2 -- which only Gosu's own C loop ever calls.
+          # This is that loop, so the dropping is ours to do; without it
+          # the list grows by one block per frame forever.
+          if $gosu_gl_blocks
+            $gosu_gl_blocks_2 = $gosu_gl_blocks
+            $gosu_gl_blocks = nil
+          end
           SDL2.render_present(@_sdl_renderer)
         end
         SDL2.delay(1)
@@ -524,6 +535,35 @@ module Gosu
     # the SDL renderer attached to the currently-showing window.
     def _sdl_renderer; @_sdl_renderer; end
 
+    # The SDL render driver in use ("opengl", "software", ...), once the
+    # window is open.
+    def _renderer_name; @_renderer_name; end
+
+    # Whether this window has an OpenGL context for `Gosu.gl` to lend out.
+    def _gl_context?; !!@_gl_context; end
+
+    # Runs `block` against that context, with SDL's queued 2D flushed out
+    # first so the block draws on top of it rather than under it, and with
+    # the GL state saved and restored around it (see gosu/gl.rb).
+    #
+    # `z` is accepted for compatibility and ignored. Upstream Gosu keeps a
+    # z-ordered draw queue and runs the block when the queue reaches `z`;
+    # this port draws straight through SDL in call order and ignores `z`
+    # everywhere else, so a z-ordered block runs where it is written too.
+    def _gl(_z = nil)
+      unless @_sdl_renderer
+        raise RuntimeError, "Gosu.gl can only be called while the window is open"
+      end
+      unless @_gl_context
+        raise RuntimeError,
+              "Gosu.gl needs an OpenGL context, but SDL is drawing through " \
+              "the #{@_renderer_name || "unknown"} renderer"
+      end
+
+      SDL2.render_flush(@_sdl_renderer)
+      Gosu::GL.bracket { yield }
+    end
+
     # Callbacks default to no-op so subclasses override only what they
     # actually use.
     def update; end
@@ -559,11 +599,27 @@ module Gosu
       flags |= SDL2::WINDOW_FULLSCREEN_DESKTOP if @fullscreen
       flags |= SDL2::WINDOW_RESIZABLE          if @resizable
       flags |= SDL2::WINDOW_BORDERLESS         if @borderless
+      # `Gosu.gl` runs its block against the context SDL draws through,
+      # so ask for the render driver that has one, for a window whose
+      # pixel format can back it, and for the depth buffer 3D drawing
+      # expects (SDL's own 2D never asks for one). All three are
+      # preferences: SDL tries the remaining drivers if `opengl` will not
+      # start, and a window that cannot get a GL visual is created
+      # without one -- `Gosu.gl` is then what fails, not `Window#show`.
+      SDL2.set_hint(SDL2::HINT_RENDER_DRIVER, "opengl")
+      SDL2.gl_set_attribute(SDL2::GL_DEPTH_SIZE, 24)
+      SDL2.gl_set_attribute(SDL2::GL_DOUBLEBUFFER, 1)
+      title = @caption.empty? ? "Gosu" : @caption
       @_sdl_window = SDL2.create_window(
-        @caption.empty? ? "Gosu" : @caption,
-        SDL2::WINDOWPOS_CENTERED, SDL2::WINDOWPOS_CENTERED,
-        @width, @height, flags
+        title, SDL2::WINDOWPOS_CENTERED, SDL2::WINDOWPOS_CENTERED,
+        @width, @height, flags | SDL2::WINDOW_OPENGL
       )
+      if @_sdl_window.null?
+        @_sdl_window = SDL2.create_window(
+          title, SDL2::WINDOWPOS_CENTERED, SDL2::WINDOWPOS_CENTERED,
+          @width, @height, flags
+        )
+      end
       if @_sdl_window.null?
         raise RuntimeError, "SDL_CreateWindow failed: #{SDL2.get_error}"
       end
@@ -579,6 +635,11 @@ module Gosu
       if @_sdl_renderer.null?
         raise RuntimeError, "SDL_CreateRenderer failed: #{SDL2.get_error}"
       end
+      # Which driver SDL settled on decides whether `Gosu.gl` has
+      # anything to hand out: only the GL drivers leave a context current
+      # on this thread.
+      @_renderer_name = SDL2.renderer_name(@_sdl_renderer)
+      @_gl_context = !SDL2.gl_get_current_context.null?
       SDL2.set_draw_color(@_sdl_renderer, 0, 0, 0, 255)
       SDL2.render_clear(@_sdl_renderer)
       SDL2.start_text_input if @text_input
@@ -1744,7 +1805,25 @@ module Gosu
       SDL2.render_geometry(ren, nil, verts, 4, idx, 6)
     end
 
-    def flush; end
+    # Draws everything that is still queued. SDL batches its draw calls
+    # and empties the batch when it presents; this empties it now, which
+    # is what callers reaching for raw GL (or for a screenshot) want.
+    def flush
+      ren = _current_window && _current_window._sdl_renderer
+      SDL2.render_flush(ren) if ren
+      nil
+    end
+
+    # The raw-OpenGL escape hatch. `Gosu.gl` (gosu/swig_patches.rb) holds
+    # on to the block and comes here; the window owns the context, so it
+    # does the work.
+    def unsafe_gl(z = nil, &block)
+      window = _current_window
+      raise RuntimeError, "Gosu.gl needs an open window" unless window
+
+      window._gl(z, &block)
+    end
+
     def record(_w, _h); yield if block_given?; nil; end
 
     # Draws the block into a new Image of the given size, as Gosu's

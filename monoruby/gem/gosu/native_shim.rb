@@ -22,6 +22,13 @@ module Gosu
     # "not exported", exactly as the real bundle would.
     FORWARDED_PREFIXES = %w[SDL_ IMG_ Mix_ TTF_].freeze
 
+    # Where those symbols actually live: the `Gosu::SDL2*` modules, which
+    # have already opened the libraries to attach their own functions.
+    # They are asked in this order and the ones that have not been bound
+    # yet are skipped -- images, audio and fonts open theirs on first use
+    # -- so this is a list of names rather than of constants.
+    FORWARDED_LIBRARIES = %i[SDL2 SDL2_image SDL2_mixer SDL2_ttf].freeze
+
     # C++ entry points, under the names the Itanium ABI gives them.
     #
     # `Gosu::shared_window()` returns the one `SDL_Window*` Gosu created.
@@ -95,13 +102,41 @@ module Gosu
       target = MANGLED_ALIASES[name] || name
       return nil unless FORWARDED_PREFIXES.any? { |p| target.start_with?(p) }
 
-      # The process already has SDL2 mapped — `Gosu::SDL2` attached its
-      # functions at load — so the global handle can name it, and this
-      # port never has to know where the host keeps libSDL2.
+      # Ask the libraries this port itself has open. Going through
+      # `Fiddle.dlopen(nil)` instead would find nothing: FFI opens them
+      # RTLD_LOCAL, so their symbols never enter the global namespace,
+      # and the real gosu.so's are reachable only because it linked SDL
+      # in. Asking the modules also means never having to know what the
+      # host calls libSDL2 or where it keeps it.
+      attached_libraries.each do |lib|
+        address = lib.find_symbol(target)&.to_i
+        return address if address && address != 0
+      end
+
+      # A host that did put the symbols in the global namespace (SDL
+      # linked into the program, or loaded RTLD_GLOBAL by something else).
       @global ||= Fiddle.dlopen(nil)
       @global.sym?(target)
     rescue StandardError
       nil
+    end
+
+    # The `FFI::DynamicLibrary`s behind the `Gosu::SDL2*` modules that
+    # have been bound so far.
+    def attached_libraries
+      FORWARDED_LIBRARIES.flat_map { |name|
+        next [] unless Gosu.const_defined?(name, false)
+
+        mod = Gosu.const_get(name, false)
+        next [] unless mod.respond_to?(:ffi_libraries)
+
+        begin
+          mod.ffi_libraries
+        rescue StandardError
+          # `ffi_libraries` raises until the module has opened one.
+          []
+        end
+      }
     end
   end
 end
