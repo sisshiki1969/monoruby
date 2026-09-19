@@ -372,6 +372,26 @@ struct KeywordArgs {
     kw_args: indexmap::IndexMap<IdentId, usize>,
     /// Positions of splat keyword arguments.
     hash_splat_pos: Vec<BcReg>,
+    /// What each register of the keyword window holds, in source order:
+    /// `kw_order[i]` describes `kw_start + i`. This is the only record
+    /// of how literal `k: v` pairs and `**hash` splats interleaved, and
+    /// the interleaving decides which value wins for a key that appears
+    /// on both sides (#1407). Built in step with the pushes below, so
+    /// the one-register-per-element invariant holds by construction.
+    kw_order: Vec<KwElem>,
+}
+
+///
+/// One register of a call site's keyword window, in source order — the
+/// bytecodegen twin of [`crate::globals::store::KwElem`], which the
+/// encoder produces from it.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KwElem {
+    /// A literal `k: v` pair, by key.
+    Kw(IdentId),
+    /// A `**hash` splat.
+    Splat,
 }
 
 #[derive(Debug, Clone)]

@@ -769,27 +769,34 @@ fn set_callee_frame_arguments(
     let ex = if globals[callee_fid].no_keyword() && globals[callid].kw_may_exists() {
         // handle excessive keyword arguments
         let mut h = RubyMap::default();
-        {
-            let cs = &globals[callid];
-            for (k, id) in cs.kw_args().iter() {
-                let v = caller_lfp.register(cs.kw_pos + *id).unwrap();
-                h.insert_sym(RubySymbol::new(*k), v);
-            }
-        }
-        // Indexed rather than iterated: the body re-enters Ruby (`#to_hash`,
-        // `#hash` / `#eql?`), which needs `globals` mutably, so the call
-        // site is re-borrowed per position instead of cloned.
-        for i in 0..globals[callid].hash_splat_pos().len() {
-            let v = caller_lfp
-                .register(globals[callid].hash_splat_pos()[i])
-                .unwrap();
-            if v.is_nil() {
-                continue;
-            }
-            // `**obj` accepts any #to_hash-convertible object (implicit
-            // conversion), not just a Hash.
-            for (k, v) in v.coerce_to_hash(vm, globals)?.iter() {
-                h.insert(k, v, vm, globals)?;
+        // In source order, so the trailing Hash this becomes carries the
+        // keys in the order they were written and a key mentioned twice
+        // keeps the later value (#1407). Indexed rather than iterated:
+        // the body re-enters Ruby (`#to_hash`, `#hash` / `#eql?`), which
+        // needs `globals` mutably, so the call site is re-borrowed per
+        // source instead of cloned.
+        for i in 0..globals[callid].kw_len() {
+            let (v, elem) = {
+                let cs = &globals[callid];
+                (caller_lfp.register(cs.kw_pos + i).unwrap(), cs.kw_order()[i])
+            };
+            match elem {
+                KwElem::Kw(name) => {
+                    if globals[callid].kw_overwritten_literal(i) {
+                        continue;
+                    }
+                    h.insert_sym(RubySymbol::new(name), v);
+                }
+                KwElem::Splat => {
+                    if v.is_nil() {
+                        continue;
+                    }
+                    // `**obj` accepts any #to_hash-convertible object
+                    // (implicit conversion), not just a Hash.
+                    for (k, v) in v.coerce_to_hash(vm, globals)?.iter() {
+                        h.insert(k, v, vm, globals)?;
+                    }
+                }
             }
         }
         if h.is_empty() {
@@ -1236,10 +1243,7 @@ fn handle_keyword(
     if globals[callee].no_keyword() {
         return Ok(());
     }
-    let mut unknowns = ordinary_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
-    unknowns.extend(hash_splat_and_kw_rest(
-        vm, globals, callee, caller, callee_lfp, caller_lfp, r2k_kw,
-    )?);
+    let unknowns = bind_keywords(vm, globals, callee, caller, callee_lfp, caller_lfp, r2k_kw)?;
     // A missing required keyword is reported before any unknown keyword,
     // matching CRuby (`m(a: 1)` for `def m(x:)` raises "missing keyword: :x",
     // not "unknown keyword: :a").
@@ -1376,53 +1380,26 @@ fn missing_keyword_err(missing: &[IdentId]) -> Result<()> {
     }
 }
 
-/// Assigns literal `k: v` keyword arguments to the callee's keyword
-/// parameters and returns any keys the callee doesn't declare (empty when
-/// it has a `**kwrest` to absorb them). The caller reports these *after*
-/// the missing-keyword check so a missing required keyword wins, as in
-/// CRuby.
-fn ordinary_keyword(
-    globals: &Globals,
-    info: FuncId,
-    callsite: CallSiteId,
-    mut callee_lfp: Lfp,
-    caller_lfp: Lfp,
-) -> Result<Vec<String>> {
-    let kw_args = globals[callsite].kw_args();
-    let CallSiteInfo { kw_pos, .. } = &globals[callsite];
-
-    let callee_kw_pos = globals[info].kw_reg_pos();
-    let mut used = 0;
-    for (id, param_name) in globals[info].kw_names().iter().enumerate() {
-        unsafe {
-            let v = kw_args
-                .get(param_name)
-                .map(|i| caller_lfp.register(*kw_pos + *i).unwrap());
-            if v.is_some() {
-                used += 1;
-            }
-            callee_lfp.set_register(callee_kw_pos + id, v);
-        }
-    }
-    if used < kw_args.len() && globals[info].kw_rest().is_none() {
-        return Ok(kw_args
-            .iter()
-            .filter(|(k, _)| !globals[info].kw_names().contains(k))
-            .map(|(k, _)| format!(":{k}"))
-            .collect());
-    }
-    Ok(vec![])
-}
-
 ///
-/// Handle hash splat arguments and a keyword rest parameter. Returns any
-/// `**hash` keys the callee doesn't declare (empty when it has a
-/// `**kwrest`); reported by the caller after the missing-keyword check.
+/// Bind the call site's keywords to `callee`'s keyword parameters and
+/// its `**kwrest`.
 ///
-/// `r2k_kw` is an additional keyword-hash source: a ruby2_keywords-
-/// flagged hash promoted from the tail of a `*args` splat. It behaves
-/// exactly like one more `**hash` at the call site.
-fn hash_splat_and_kw_rest(
+/// The sources — literal `k: v` pairs and `**hash` splats — are walked
+/// in **source order** (`CallSiteInfo::kw_order`), which is what makes
+/// the last mention of a key win (`f(**defaults, key: override)`) and a
+/// `**kwrest` hash carry the source's key order. Reading the two
+/// containers one after the other instead, as this used to, silently
+/// dropped the override (#1407).
+///
+/// Returns the keys the callee declares no parameter for (empty when it
+/// has a `**kwrest` to absorb them); the caller reports them *after* the
+/// missing-keyword check, as CRuby does.
+///
+/// `r2k_kw` is one more keyword-hash source, applied last: a
+/// ruby2_keywords-flagged hash promoted from the tail of a `*args`
+/// splat. It behaves exactly like a final `**hash` at the call site.
+///
+fn bind_keywords(
     vm: &mut Executor,
     globals: &mut Globals,
     callee: FuncId,
@@ -1435,114 +1412,111 @@ fn hash_splat_and_kw_rest(
     // for a callee with neither keyword parameters nor `**kwrest`.
     debug_assert!(!globals[callee].no_keyword());
 
-    // Everything below re-enters Ruby (`#hash` / `#eql?` on the keys), which
-    // needs `globals` mutably, so the call site and the callee are read by
-    // index and re-borrowed per step rather than cloned up front: this used
-    // to copy the whole `CallSiteInfo` (its Vecs, its `IndexMap`, its PMC)
-    // and the callee's keyword-name Vec on every keyword-passing call.
-    let kw_pos = globals[caller].kw_pos;
     let callee_kw_pos = globals[callee].kw_reg_pos();
     let kw_num = globals[callee].kw_names().len();
-    let splat_num = globals[caller].hash_splat_pos().len();
-    // The keyword-hash sources, in order: each `**hash` at the call site,
-    // then the ruby2_keywords hash promoted from a `*args` splat, if any.
-    let source = |globals: &Globals, i: usize| -> Value {
-        if i < splat_num {
-            caller_lfp
-                .register(globals[caller].hash_splat_pos()[i])
-                .unwrap()
-        } else {
-            r2k_kw.unwrap()
-        }
-    };
-    let source_num = splat_num + usize::from(r2k_kw.is_some());
+    // Every declared parameter starts unbound; the walk fills the ones
+    // the call site mentions, a later mention overwriting an earlier.
+    for id in 0..kw_num {
+        unsafe { callee_lfp.set_register(callee_kw_pos + id, None) }
+    }
+    let has_kw_rest = globals[callee].kw_rest().is_some();
+    let mut kw_rest = RubyMap::default();
     let mut unknowns = Vec::new();
 
-    for i in 0..source_num {
-        let h = source(globals, i);
-        if h.is_nil() {
-            continue;
+    // Everything below re-enters Ruby (`#hash` / `#eql?` on the keys),
+    // which needs `globals` mutably, so the call site and the callee are
+    // read by index and re-borrowed per source rather than cloned up
+    // front: this used to copy the whole `CallSiteInfo` (its Vecs, its
+    // `IndexMap`, its PMC) and the callee's keyword-name Vec on every
+    // keyword-passing call.
+    let kw_len = globals[caller].kw_len();
+    let source = |globals: &Globals, i: usize| -> (Value, KwElem) {
+        if i < kw_len {
+            let cs = &globals[caller];
+            (caller_lfp.register(cs.kw_pos + i).unwrap(), cs.kw_order()[i])
+        } else {
+            (r2k_kw.unwrap(), KwElem::Splat)
         }
-        let h = h.expect_hash_ty(globals)?;
-        let mut unused = h.len();
-        for id in 0..kw_num {
-            let param_name = globals[callee].kw_names()[id];
-            unsafe {
-                let sym = Value::symbol(param_name);
-                if let Some(v) = h.get(sym, vm, globals)? {
-                    unused -= 1;
-                    let ptr = callee_lfp.register_ptr(callee_kw_pos + id);
-                    if (*ptr).is_some() {
-                        eprintln!(
-                            " warning: key :{} is duplicated and overwritten",
-                            param_name
-                        );
-                    }
-                    *ptr = Some(v);
+    };
+    let param_id = |globals: &Globals, name: IdentId| -> Option<usize> {
+        globals[callee].kw_names().iter().position(|n| *n == name)
+    };
+
+    for i in 0..kw_len + usize::from(r2k_kw.is_some()) {
+        match source(globals, i) {
+            (v, KwElem::Kw(name)) => {
+                // A pair a later pair overwrites, at a site whose hash is
+                // built statically, was never passed at all — not to a
+                // parameter, not to `**kwrest`, and not to the unknown-
+                // keyword report.
+                if i < kw_len && globals[caller].kw_overwritten_literal(i) {
+                    continue;
+                }
+                if let Some(id) = param_id(globals, name) {
+                    unsafe { callee_lfp.set_register(callee_kw_pos + id, Some(v)) }
+                } else if has_kw_rest {
+                    kw_rest.insert_sym(RubySymbol::new(name), v);
+                } else {
+                    unknowns.push(format!(":{name}"));
                 }
             }
-        }
-        if unused > 0 && globals[callee].kw_rest().is_none() {
-            // A non-Symbol key (e.g. a String) can never name a keyword
-            // parameter, so it is always "unknown" here. CRuby reports it via
-            // the key's `inspect` (`unknown keyword: "b"`); a Symbol key uses
-            // `:name`. Collected and reported together, after missing keys.
-            for (k, _) in h.iter() {
-                match k.try_symbol() {
-                    Some(sym) if globals[callee].kw_names().contains(&sym) => {}
-                    Some(sym) => unknowns.push(format!(":{sym}")),
-                    None => unknowns.push(k.inspect(&globals.store)),
+            (h, KwElem::Splat) => {
+                // `**nil` — no keyword arguments. (A deferred / elided
+                // forwarding `**kwrest` is left as nil too, so every
+                // reader of a hash-splat register skips nil.)
+                if h.is_nil() {
+                    continue;
+                }
+                // Validated here (a `**obj` register was coerced to a
+                // Hash by `coerce_hash_splat_args` before this ran), then
+                // read as a snapshot rather than the live Hash: inserting
+                // into `kw_rest` may call a key's `#hash` / `#eql?`, which
+                // could mutate the source under the iteration.
+                h.expect_hash_ty(globals)?;
+                let src = h.as_hashmap_inner().clone_inner();
+                for (k, v) in src.iter() {
+                    match k.try_symbol() {
+                        Some(sym) if let Some(id) = param_id(globals, sym) => unsafe {
+                            callee_lfp.set_register(callee_kw_pos + id, Some(v))
+                        },
+                        _ if has_kw_rest => {
+                            kw_rest.insert(k, v, vm, globals)?;
+                        }
+                        // A non-Symbol key (e.g. a String) can never name a
+                        // keyword parameter, so it is always "unknown" here.
+                        // CRuby reports it via the key's `inspect`
+                        // (`unknown keyword: "b"`); a Symbol key uses
+                        // `:name`. Collected and reported together, after
+                        // missing keys.
+                        Some(sym) => unknowns.push(format!(":{sym}")),
+                        None => unknowns.push(k.inspect(&globals.store)),
+                    }
                 }
             }
         }
     }
 
-    if let Some(rest) = globals[callee].kw_rest() {
-        if !globals[caller].kw_may_exists() && r2k_kw.is_none() {
-            // no keyword arguments
-            unsafe { callee_lfp.set_register(rest, Some(Value::nil())) }
+    // CRuby names an unknown keyword once, where it was first written,
+    // however often it was written.
+    let mut seen: Vec<String> = Vec::new();
+    unknowns.retain(|k| {
+        if seen.contains(k) {
+            false
         } else {
-            let mut kw_rest = RubyMap::default();
-            for i in 0..globals[caller].kw_args().len() {
-                let (name, idx) = {
-                    let (name, idx) = globals[caller].kw_args().get_index(i).unwrap();
-                    (*name, *idx)
-                };
-                if globals[callee].kw_names().contains(&name) {
-                    continue;
-                }
-                let v = caller_lfp.register(kw_pos + idx).unwrap();
-                kw_rest.insert_sym(RubySymbol::new(name), v);
-            }
-
-            for i in 0..source_num {
-                let h = source(globals, i);
-                // A nil hash-splat is `**nil` — no keyword arguments.
-                // (The other hash-splat readers already skip nil; this
-                // kw-rest-building loop must too, so a deferred/elided
-                // forwarding `**kwrest` left as nil is universally safe.)
-                if h.is_nil() {
-                    continue;
-                }
-                // A snapshot, not the live Hash: inserting into `kw_rest`
-                // may call a key's `#hash` / `#eql?`, which could mutate the
-                // source under the iteration. The keys bound to declared
-                // keyword parameters above are skipped here rather than
-                // removed from the snapshot first (a Symbol key matches a
-                // parameter name by identity, as the removal did).
-                let src = h.as_hashmap_inner().clone_inner();
-                for (k, v) in src.iter() {
-                    if let Some(sym) = k.try_symbol()
-                        && globals[callee].kw_names().contains(&sym)
-                    {
-                        continue;
-                    }
-                    kw_rest.insert(k, v, vm, globals)?;
-                }
-            }
-
-            unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
+            seen.push(k.clone());
+            true
         }
+    });
+
+    if let Some(rest) = globals[callee].kw_rest() {
+        // No keyword source at all: the `**kwrest` local stays nil, the
+        // sentinel the callee prologue materializes an empty Hash from.
+        let v = if !globals[caller].kw_may_exists() && r2k_kw.is_none() {
+            Value::nil()
+        } else {
+            Value::hash(kw_rest)
+        };
+        unsafe { callee_lfp.set_register(rest, Some(v)) }
     }
     Ok(unknowns)
 }

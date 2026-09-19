@@ -3261,8 +3261,13 @@ impl<'a> JitContext<'a> {
             // `def f(...)` always declares `**kwrest`.
             let kwrest_local = self.store[fid].kw_rest()?;
             // kw_args maps name -> offset from kw_pos; record names in
-            // offset order so `names[i]` lives at `kw_pos + i`.
-            let mut names = vec![IdentId::get_id(""); cs.kw_args().len()];
+            // offset order so `names[i]` lives at `kw_pos + i`. Sized by
+            // the window, not by the entry count: a key written twice
+            // holds two registers but one entry, and the register its
+            // earlier mention holds keeps the empty name, which
+            // `kw_forward_route` refuses to route (the call then takes
+            // the generic path).
+            let mut names = vec![IdentId::get_id(""); cs.kw_len()];
             for (name, i) in cs.kw_args() {
                 names[*i] = *name;
             }

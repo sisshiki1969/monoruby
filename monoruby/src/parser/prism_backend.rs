@@ -1453,6 +1453,7 @@ impl<'pr> Lowerer<'pr> {
                 let mut args: Vec<Node> = vec![];
                 let mut kw_args: Vec<(String, Node)> = vec![];
                 let mut hash_splat: Vec<Node> = vec![];
+                let mut hash_splat_after: Vec<usize> = vec![];
                 let mut forwarding = false;
                 if let Some(prism_args) = n.arguments() {
                     for arg in prism_args.arguments().iter() {
@@ -1461,6 +1462,7 @@ impl<'pr> Lowerer<'pr> {
                             &mut args,
                             &mut kw_args,
                             &mut hash_splat,
+                            &mut hash_splat_after,
                             &mut forwarding,
                         )?;
                     }
@@ -1470,6 +1472,7 @@ impl<'pr> Lowerer<'pr> {
                 arglist.args = args;
                 arglist.kw_args = kw_args;
                 arglist.hash_splat = hash_splat;
+                arglist.hash_splat_after = hash_splat_after;
                 arglist.forwarding = forwarding;
                 arglist.splat = has_splat;
                 if let Some(block_node) = n.block() {
@@ -1518,6 +1521,7 @@ impl<'pr> Lowerer<'pr> {
                 let mut args: Vec<Node> = vec![];
                 let mut kw_args: Vec<(String, Node)> = vec![];
                 let mut hash_splat: Vec<Node> = vec![];
+                let mut hash_splat_after: Vec<usize> = vec![];
                 let mut forwarding = false;
                 if let Some(prism_args) = n.arguments() {
                     for arg in prism_args.arguments().iter() {
@@ -1526,6 +1530,7 @@ impl<'pr> Lowerer<'pr> {
                             &mut args,
                             &mut kw_args,
                             &mut hash_splat,
+                            &mut hash_splat_after,
                             &mut forwarding,
                         )?;
                     }
@@ -1534,6 +1539,7 @@ impl<'pr> Lowerer<'pr> {
                 arglist.args = args;
                 arglist.kw_args = kw_args;
                 arglist.hash_splat = hash_splat;
+                arglist.hash_splat_after = hash_splat_after;
                 arglist.forwarding = forwarding;
                 arglist.splat = has_splat;
                 Node {
@@ -3046,6 +3052,10 @@ impl<'pr> Lowerer<'pr> {
         args: &mut Vec<Node>,
         kw_args: &mut Vec<(String, Node)>,
         hash_splat: &mut Vec<Node>,
+        // Written in step with `hash_splat`: the number of `kw_args`
+        // pairs collected before each splat, which is the only record of
+        // how the two interleaved in the source (#1407).
+        hash_splat_after: &mut Vec<usize>,
         forwarding: &mut bool,
     ) -> Result<(), MonorubyErr> {
         match n {
@@ -3116,6 +3126,7 @@ impl<'pr> Lowerer<'pr> {
                             other => return Err(self.unsupported("kwarg element", &other)),
                         }
                     }
+                    hash_splat_after.push(kw_args.len());
                     hash_splat.push(Node {
                         kind: NodeKind::Hash(pairs, inner_splat),
                         loc: kh_loc,
@@ -3160,6 +3171,7 @@ impl<'pr> Lowerer<'pr> {
                                     }
                                 }
                             };
+                            hash_splat_after.push(kw_args.len());
                             hash_splat.push(inner);
                         }
                         other => return Err(self.unsupported("kwarg element", &other)),
@@ -5035,6 +5047,7 @@ impl<'pr> Lowerer<'pr> {
         let mut args: Vec<Node> = vec![];
         let mut kw_args: Vec<(String, Node)> = vec![];
         let mut hash_splat: Vec<Node> = vec![];
+        let mut hash_splat_after: Vec<usize> = vec![];
         let mut forwarding = false;
         if let Some(arglist) = node.arguments() {
             for n in arglist.arguments().iter() {
@@ -5043,6 +5056,7 @@ impl<'pr> Lowerer<'pr> {
                     &mut args,
                     &mut kw_args,
                     &mut hash_splat,
+                    &mut hash_splat_after,
                     &mut forwarding,
                 )?;
             }
@@ -5102,6 +5116,7 @@ impl<'pr> Lowerer<'pr> {
             arglist.args = args;
             arglist.kw_args = kw_args;
             arglist.hash_splat = hash_splat;
+            arglist.hash_splat_after = hash_splat_after;
             arglist.splat = has_splat;
             arglist.forwarding = forwarding;
             arglist.delegate_block = delegate_block;
@@ -5222,6 +5237,7 @@ impl<'pr> Lowerer<'pr> {
         arglist.args = args;
         arglist.kw_args = kw_args;
         arglist.hash_splat = hash_splat;
+        arglist.hash_splat_after = hash_splat_after;
         arglist.block = block;
         arglist.forwarding = forwarding;
         arglist.splat = has_splat;

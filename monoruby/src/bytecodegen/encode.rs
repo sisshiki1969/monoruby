@@ -772,6 +772,7 @@ impl<'a> BytecodeGen<'a> {
                 indexmap::IndexMap::default(),
                 vec![],
                 vec![],
+                vec![],
                 block_fid,
                 None,
                 // `send(:foo)` alone leaves the twin with no arguments;
@@ -832,10 +833,11 @@ impl<'a> BytecodeGen<'a> {
         let recv = self.slot_id(&recv);
         let block_arg = block_arg.map(|r| self.slot_id(&r));
         let dst = dst.map(|r| self.slot_id(&r));
-        let (kw_pos, kw_args, hash_splat_pos) = if let Some(KeywordArgs {
+        let (kw_pos, kw_args, hash_splat_pos, kw_order) = if let Some(KeywordArgs {
             kw_start,
             kw_args,
             hash_splat_pos,
+            kw_order,
         }) = kw
         {
             let kw_pos = self.slot_id(&kw_start);
@@ -843,9 +845,16 @@ impl<'a> BytecodeGen<'a> {
                 .into_iter()
                 .map(|r| self.slot_id(&r))
                 .collect();
-            (kw_pos, kw_args, hash_splat_pos)
+            let kw_order = kw_order
+                .into_iter()
+                .map(|e| match e {
+                    KwElem::Kw(name) => crate::globals::KwElem::Kw(name),
+                    KwElem::Splat => crate::globals::KwElem::Splat,
+                })
+                .collect();
+            (kw_pos, kw_args, hash_splat_pos, kw_order)
         } else {
-            (SlotId(0), indexmap::IndexMap::default(), vec![])
+            (SlotId(0), indexmap::IndexMap::default(), vec![], vec![])
         };
         Ok(self.store.new_callsite(
             name,
@@ -855,6 +864,7 @@ impl<'a> BytecodeGen<'a> {
             kw_args,
             splat_pos,
             hash_splat_pos,
+            kw_order,
             block_fid,
             block_arg,
             args,
