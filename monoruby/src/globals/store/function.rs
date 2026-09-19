@@ -1,6 +1,4 @@
 use super::*;
-use crate::bytecodegen::CompileInfo;
-use std::collections::VecDeque;
 
 pub(crate) const FUNCDATA_CODEPTR: u64 = std::mem::offset_of!(FuncData, codeptr) as _;
 pub(crate) const FUNCDATA_META: u64 = std::mem::offset_of!(FuncData, meta) as _;
@@ -387,12 +385,6 @@ pub(crate) struct Funcs {
     /// no maintenance beyond the one push in `new_proc_method`.
     ///
     proc_fids: Vec<FuncId>,
-    /// FIFO of not-yet-compiled function bodies, consumed by
-    /// `bytecode_compile`. A deque, not a `Vec`: entries embed the whole AST
-    /// (hundreds of bytes each), and a 30k-`def` script queues 30k of them —
-    /// `Vec::remove(0)` per pop made loading such a file quadratic in memmove
-    /// (~6 s for a 30k-method file; `pop_front` brings it to ~250 ms).
-    compile_info: VecDeque<CompileInfo>,
 }
 
 impl std::ops::Index<FuncId> for Funcs {
@@ -415,7 +407,6 @@ impl std::default::Default for Funcs {
         Self {
             info,
             proc_fids: vec![],
-            compile_info: VecDeque::new(),
         }
     }
 }
@@ -665,14 +656,6 @@ impl Funcs {
         self.info.len()
     }
 
-    pub fn get_compile_info(&mut self) -> CompileInfo {
-        self.compile_info.pop_front().unwrap()
-    }
-
-    pub(crate) fn clear_compile_info(&mut self) {
-        self.compile_info.clear();
-    }
-
     pub(super) fn new_proc_method(&mut self, proc: Proc) -> FuncId {
         let func_id = self.next_func_id();
         let is_block_style = self[proc.func_id()].is_block_style();
@@ -688,10 +671,6 @@ impl Funcs {
         ));
         self.proc_fids.push(func_id);
         func_id
-    }
-
-    pub(super) fn add_compile_info(&mut self, compile_info: CompileInfo) {
-        self.compile_info.push_back(compile_info);
     }
 
     pub(super) fn new_native_func(

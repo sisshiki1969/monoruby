@@ -891,7 +891,10 @@ fn main() {
     }
 
     if opts.syntax_check {
-        match parser::parse_program(code, path.as_path()) {
+        // Eager: an ordinary parse hands each `def` body on unlowered, and
+        // `-c` never compiles, so a construct the lowerer doesn't accept
+        // inside a method body would otherwise go unreported.
+        match parser::parse_program_eager(code, path.as_path()) {
             Ok(_) => {
                 println!("Syntax OK");
                 return;

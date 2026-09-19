@@ -20,6 +20,7 @@
 //!   error fires.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use ruby_prism::{
     self as prism, ArrayNode, BeginNode, BlockNode, ClassNode, ConstantId, ConstantList,
@@ -31,7 +32,7 @@ use ruby_prism::{
 };
 
 use crate::ast::{
-    ConstInfo,
+    ConstInfo, DeferCtx, DeferredDef, PrismTree,
     ArgList, BinOp, BlockInfo, CmpKind, DestructEntry, Loc, LvarCollector, NReal, Node, NodeKind,
     ParamKind, ParseResult, SourceInfoRef, UnOp,
 };
@@ -53,8 +54,12 @@ const ANON_KWREST_NAME: &str = "**";
 /// enclosing scope. Not a valid Ruby identifier, so it can't collide.
 const FOR_INDEX_NAME: &str = "(for)";
 
-pub(super) fn parse_program(code: Vec<u8>, path: PathBuf) -> Result<ParseResult, MonorubyErr> {
-    try_prism_inner(&code, path, None, None, 0, None, false)
+pub(super) fn parse_program(
+    code: Vec<u8>,
+    path: PathBuf,
+    defer_bodies: bool,
+) -> Result<ParseResult, MonorubyErr> {
+    try_prism_inner(code, path, None, None, 0, None, false, defer_bodies)
 }
 
 pub(super) fn parse_program_eval(
@@ -66,7 +71,34 @@ pub(super) fn parse_program_eval(
 ) -> Result<ParseResult, MonorubyErr> {
     inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
     let options = build_prism_options(extern_context, None, line_offset);
-    try_prism_inner(&code, path, Some(options), None, line_offset, default_encoding, false)
+    try_prism_inner(
+        code,
+        path,
+        Some(options),
+        None,
+        line_offset,
+        default_encoding,
+        false,
+        true,
+    )
+}
+
+///
+/// Lower the parameters and body of a [`DeferredDef`] — the `def` prism
+/// parsed and the lowerer walked past. Called by bytecodegen when it
+/// reaches the definition.
+///
+/// Returns the warnings the lowering raised along with the body; they
+/// join the parse's own in `Store::compile_warnings`.
+///
+pub(super) fn lower_deferred_def(
+    deferred: &DeferredDef,
+) -> Result<(BlockInfo, Vec<(String, bool)>), MonorubyErr> {
+    let ctx = deferred.ctx();
+    let mut lowerer =
+        Lowerer::new_deferred(ctx, deferred.scope_level(), deferred.pm_temp());
+    let info = lowerer.lower_def_body(deferred.node())?;
+    Ok((info, lowerer.warnings))
 }
 
 /// CRuby lexes an eval source in the string's *own* encoding. The
@@ -104,13 +136,14 @@ pub(super) fn parse_program_binding(
     inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
     let options = build_prism_options(extern_context, context.as_ref(), line_offset);
     try_prism_inner(
-        &code,
+        code,
         path,
         Some(options),
         context,
         line_offset,
         default_encoding,
         main_script,
+        true,
     )
 }
 
@@ -325,13 +358,14 @@ fn parse_frozen_directive(comment: &str) -> Option<bool> {
 }
 
 fn try_prism_inner(
-    code: &[u8],
+    code: Vec<u8>,
     path: PathBuf,
     options: Option<prism::Options>,
     seed_lvars: Option<LvarCollector>,
     line_offset: i64,
     default_encoding: Option<String>,
     main_script: bool,
+    defer_bodies: bool,
 ) -> Result<ParseResult, MonorubyErr> {
     let path_display = path.display().to_string();
     // `-n` / `-p`: the main script (and only the main script) gets its
@@ -345,10 +379,9 @@ fn try_prism_inner(
     // option, so we replicate the gate here when forwarding warnings.
     let cli_e_script = super::take_cli_e_script(&path);
 
-    let result = match options.as_ref() {
-        Some(opts) => prism::parse_with_options(code, opts),
-        None => prism::parse(code),
-    };
+    let tree = PrismTree::parse(code, options.as_ref());
+    let result = tree.result();
+    let code = tree.source();
     let data_loc_start = result.data_loc().map(|loc| loc.start_offset());
 
     // Detect the source encoding from the `# coding:` / `# encoding:`
@@ -454,12 +487,31 @@ fn try_prism_inner(
         })
         .collect();
 
-    let mut lowerer = Lowerer::new(code, path_display, source_info.clone());
-    lowerer.line_offset = line_offset;
-    // The main script parses with binding scopes (it executes inside
-    // TOPLEVEL_BINDING) but *is* a script top level — keep script-level
-    // warnings like "argument of top-level return is ignored".
-    lowerer.eval_parse = options.is_some() && !main_script;
+    // `data_loc` spans from the `__END__` marker to EOF; `DATA` content
+    // starts after the marker's line terminator (or at EOF when the file
+    // ends right at `__END__` with no newline). Computed here rather than
+    // at the end because it reads `code`, which borrows the tree `ctx`
+    // is about to take.
+    let data_offset = data_loc_start.map(|start| {
+        match code[start..].iter().position(|&b| b == b'\n') {
+            Some(i) => start + i + 1,
+            None => code.len(),
+        }
+    });
+
+    let ctx = Rc::new(DeferCtx {
+        tree,
+        path: path_display,
+        source_info: source_info.clone(),
+        line_offset,
+        // The main script parses with binding scopes (it executes inside
+        // TOPLEVEL_BINDING) but *is* a script top level — keep script-level
+        // warnings like "argument of top-level return is ignored".
+        eval_parse: options.is_some() && !main_script,
+    });
+    let root = ctx.tree.root();
+    let mut lowerer = Lowerer::new(&ctx);
+    lowerer.defer_bodies = defer_bodies;
     lowerer.cli_loop_wrap = cli_loop_wrap;
     if let Some(seed) = seed_lvars {
         // For `binding.eval`, monoruby preloads a `LvarCollector`
@@ -475,20 +527,10 @@ fn try_prism_inner(
     // `SyntaxError` is the correct Ruby class and — being `rescue`-
     // able — a single unsupported construct only fails its own
     // example instead of aborting the whole process.
-    let body = lowerer.lower_top(&result.node())?;
+    let body = lowerer.lower_top(&root)?;
     let mut warnings = warnings;
     warnings.append(&mut lowerer.warnings);
     let lvar_collector = lowerer.into_lvars();
-
-    // `data_loc` spans from the `__END__` marker to EOF; `DATA` content
-    // starts after the marker's line terminator (or at EOF when the file
-    // ends right at `__END__` with no newline).
-    let data_offset = data_loc_start.map(|start| {
-        match code[start..].iter().position(|&b| b == b'\n') {
-            Some(i) => start + i + 1,
-            None => code.len(),
-        }
-    });
 
     Ok(ParseResult {
         node: body,
@@ -555,6 +597,15 @@ struct Lowerer<'pr> {
     /// `-n` / `-p` command-line switches: wrap the program body in an
     /// implicit `while gets ... end` (see `lower_program`).
     cli_loop_wrap: Option<super::CliLoopWrap>,
+    /// The prism tree being walked, plus the per-file context a deferred
+    /// body needs to be lowered later. Cloned into every [`DeferredDef`],
+    /// which is what keeps the tree alive past the parse.
+    ctx: Rc<DeferCtx>,
+    /// Whether a `def` body is handed on as a [`DeferredDef`] (the normal
+    /// path) or lowered right away. Eager is for `-c`, which never
+    /// compiles and so is the one caller that would otherwise miss an
+    /// `unsupported_node` inside a method body.
+    defer_bodies: bool,
 }
 
 /// See [`Lowerer::scope_wraps`].
@@ -566,22 +617,40 @@ struct ScopeWrap {
 }
 
 impl<'pr> Lowerer<'pr> {
-    fn new(source: &'pr [u8], path: String, source_info: SourceInfoRef) -> Self {
+    fn new(ctx: &'pr Rc<DeferCtx>) -> Self {
         Self {
-            source,
-            path,
-            source_info,
-            line_offset: 0,
+            source: ctx.tree.source(),
+            path: ctx.path.clone(),
+            source_info: ctx.source_info.clone(),
+            line_offset: ctx.line_offset,
             lvars: LvarCollector::new(),
             prism_scope_level: 0,
             anon_rest_levels: Vec::new(),
             anon_kwrest_levels: Vec::new(),
             scope_wraps: Vec::new(),
             warnings: Vec::new(),
-            eval_parse: false,
+            eval_parse: ctx.eval_parse,
             pm_temp: 0,
             cli_loop_wrap: None,
+            ctx: ctx.clone(),
+            defer_bodies: true,
         }
+    }
+
+    ///
+    /// A lowerer positioned to continue inside a [`DeferredDef`].
+    ///
+    /// A method body resolves no local outside itself, so the scope level
+    /// and the hidden-local counter are the whole of the enclosing state
+    /// it needs: `anon_rest_levels` / `anon_kwrest_levels` can only name
+    /// this `def`'s own `*` / `**`, and `scope_wraps` only ever matches a
+    /// target *outside* the body, which no reference in it can have.
+    ///
+    fn new_deferred(ctx: &'pr Rc<DeferCtx>, scope_level: u32, pm_temp: usize) -> Self {
+        let mut this = Self::new(ctx);
+        this.prism_scope_level = scope_level;
+        this.pm_temp = pm_temp;
+        this
     }
 
     /// A fresh hidden local name for the pattern-matching desugar.
@@ -4353,15 +4422,48 @@ impl<'pr> Lowerer<'pr> {
         let name = constant_name(&node.name())?;
 
         // `def self.foo`, `def obj.foo` — Prism puts the receiver in
-        // `node.receiver()`. The body / params / locals story is the
-        // same as for a regular method, so we share the rest of the
-        // lowering and just emit the singleton variant once we know
-        // which receiver to attach.
+        // `node.receiver()`. It is evaluated in the *enclosing* scope
+        // (`def obj.foo` reads the local `obj`), so unlike the body it is
+        // lowered here whatever the mode.
         let singleton_receiver = match node.receiver() {
             Some(recv) => Some(self.lower_node(&recv)?),
             None => None,
         };
 
+        let pm_temp = self.pm_temp;
+        if !self.defer_bodies {
+            // `-c` consumes the tree and never compiles, so nothing would
+            // ever lower this body and an `unsupported_node` in it would
+            // go unreported. Lower it here for the error and drop it.
+            self.lower_def_body(node)?;
+        }
+
+        // Hand the parameters and the body to bytecodegen as prism's own
+        // node, so the file's `def`s don't all sit in memory as monoruby
+        // AST at once. See `crate::ast::deferred`.
+        //
+        // SAFETY: `node` is part of the tree this lowerer is walking,
+        // which is `self.ctx.tree`.
+        let body = Box::new(unsafe {
+            DeferredDef::new(self.ctx.clone(), node, self.prism_scope_level, pm_temp)
+        });
+        let kind = match singleton_receiver {
+            Some(recv) => NodeKind::SingletonMethodDef(Box::new(recv), name, body),
+            None => NodeKind::MethodDef(name, body),
+        };
+        Ok(Node { kind, loc })
+    }
+
+    ///
+    /// Lower a `def`'s parameters and body into the [`BlockInfo`] that
+    /// `Store::handle_args` consumes.
+    ///
+    /// Called either from [`Self::lower_def`] (eager mode) or, for a
+    /// [`DeferredDef`], from bytecodegen by way of
+    /// [`super::lower_deferred_def`].
+    ///
+    fn lower_def_body(&mut self, node: &DefNode<'pr>) -> Result<BlockInfo, MonorubyErr> {
+        let loc = location_to_loc(&node.location());
         let saved = self.enter_prism_scope();
         let result =
             (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
@@ -4400,18 +4502,13 @@ impl<'pr> Lowerer<'pr> {
         match result {
             Ok((params, body)) => {
                 let method_lvars = self.exit_prism_scope(saved);
-                let info = Box::new(BlockInfo {
+                Ok(BlockInfo {
                     params,
                     body: Box::new(body),
                     lvar: method_lvars,
                     loc,
                     is_lambda: false,
-                });
-                let kind = match singleton_receiver {
-                    Some(recv) => NodeKind::SingletonMethodDef(Box::new(recv), name, info),
-                    None => NodeKind::MethodDef(name, info),
-                };
-                Ok(Node { kind, loc })
+                })
             }
             Err(e) => {
                 self.exit_prism_scope(saved);
@@ -5711,7 +5808,7 @@ mod tests {
     #[test]
     fn shareable_constant_value_literal_parses() {
         let source = "# shareable_constant_value: literal\nFOO = [1, 2, 3]\n".to_owned();
-        let result = parse_program(source.into(), PathBuf::from("test.rb"));
+        let result = parse_program(source.into(), PathBuf::from("test.rb"), true);
         assert!(
             result.is_ok(),
             "parse_program should succeed; got {:?}",
@@ -6152,6 +6249,7 @@ $1
         let result = parse_program(
             "# encoding: binary\nx = 1\n".to_owned().into(),
             PathBuf::from("test.rb"),
+            true,
         )
         .expect("parse_program");
         assert_eq!(
@@ -6160,7 +6258,8 @@ $1
         );
 
         let result =
-            parse_program("x = 1\n".to_owned().into(), PathBuf::from("test.rb")).expect("parse_program");
+            parse_program("x = 1\n".to_owned().into(), PathBuf::from("test.rb"), true)
+                .expect("parse_program");
         assert_eq!(result.source_info.source_encoding, None);
     }
 
@@ -6189,5 +6288,60 @@ $1
     fn magic_comment_no_unicode_escape_keeps_source_encoding() {
         let enc = run_encoding_query("# encoding: binary\n\"abc\".encoding.to_s\n");
         assert_eq!(enc, "ASCII-8BIT");
+    }
+
+    /// A parse hands each `def` body on as a [`DeferredDef`], so the
+    /// AST carries a handle on prism's node rather than a lowered body.
+    /// `DeferredDef` has to satisfy `NodeKind`'s `Clone` / `PartialEq` /
+    /// `Debug`, and each of those reaches into the erased-lifetime node
+    /// handle — a clone duplicates it, equality reads its location.
+    #[test]
+    fn deferred_def_handle_clones_compares_and_prints() {
+        let parsed = parse_program(
+            "def a = 1\ndef b = 2\n".to_owned().into(),
+            PathBuf::from("test.rb"),
+            true,
+        )
+        .expect("parse_program");
+        let NodeKind::CompStmt(stmts) = &parsed.node.kind else {
+            panic!("expected a CompStmt, got {:?}", parsed.node.kind);
+        };
+        let body = |n: &Node| match &n.kind {
+            NodeKind::MethodDef(_, d) => (**d).clone(),
+            other => panic!("expected a deferred MethodDef, got {other:?}"),
+        };
+        let a = body(&stmts[0]);
+        let b = body(&stmts[1]);
+        // Two handles on the same `def` are equal; two different `def`s
+        // are not, and neither comparison dereferences a dead tree.
+        assert_eq!(a, a.clone());
+        assert_ne!(a, b);
+        assert!(format!("{a:?}").starts_with("DeferredDef(@"));
+        // The tree outlives the parse: the handles still resolve.
+        assert!(a.node().location().start_offset() < b.node().location().start_offset());
+        assert_eq!(a.scope_level(), 0);
+        assert_eq!(a.pm_temp(), 0);
+    }
+
+    /// `parse_program_eager` is what `-c` uses: it never compiles, so a
+    /// construct the lowerer rejects inside a method body would go
+    /// unreported. It lowers each body for the errors and drops it — the
+    /// node it produces is the same deferred handle either way.
+    ///
+    /// Observable through a warning the *lowerer* raises (prism's own are
+    /// collected either way): deferred, nothing looks inside the body.
+    #[test]
+    fn only_the_eager_parse_looks_inside_a_def_body() {
+        let src = "def a\n  $4294967296\nend\n";
+        let warns = |defer: bool| {
+            parse_program(src.to_owned().into(), PathBuf::from("test.rb"), defer)
+                .expect("parse_program")
+                .warnings
+                .iter()
+                .filter(|(m, _)| m.contains("is too big for a number variable"))
+                .count()
+        };
+        assert_eq!(warns(true), 0, "the deferred parse should not look inside");
+        assert_eq!(warns(false), 1, "the eager parse should lower the body");
     }
 }

@@ -11,11 +11,13 @@
 //! `allow(dead_code)` keeps the unused ones from warning.
 #![allow(dead_code)]
 
+mod deferred;
 mod error;
 mod lvar_collector;
 mod node;
 mod source_info;
 
+pub use deferred::*;
 pub use error::*;
 pub use lvar_collector::*;
 pub use node::*;

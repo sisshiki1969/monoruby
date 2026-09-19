@@ -1045,7 +1045,7 @@ impl Store {
         ISeqId::new(id)
     }
 
-    pub(crate) fn new_main(&mut self, result: ParseResult) -> Result<FuncId> {
+    pub(crate) fn new_main(&mut self, result: ParseResult) -> Result<(FuncId, CompileInfo)> {
         let info = BlockInfo {
             params: vec![],
             body: Box::new(result.node),
@@ -1054,14 +1054,13 @@ impl Store {
             is_lambda: false,
         };
         let compile_info = Store::handle_args(info, vec![])?;
-        let fid = self.new_iseq_method(
+        self.new_iseq_method(
             Some(IdentId::_MAIN),
             compile_info,
             Loc::default(),
             result.source_info,
             true,
-        )?;
-        Ok(fid)
+        )
     }
 
     pub(crate) fn new_classdef(
@@ -1072,9 +1071,8 @@ impl Store {
         sourceinfo: SourceInfoRef,
         is_singleton: bool,
         is_module: bool,
-    ) -> Result<FuncId> {
+    ) -> Result<(FuncId, CompileInfo)> {
         let func_id = self.functions.next_func_id();
-        self.functions.add_compile_info(compile_info);
         let internal = is_internal_source(&sourceinfo);
         let mut info = ISeqInfo::new_method(
             func_id,
@@ -1097,7 +1095,7 @@ impl Store {
             info.set_internal_builtin();
         }
         self.functions.info.push(info);
-        Ok(func_id)
+        Ok((func_id, compile_info))
     }
 
     pub(crate) fn new_iseq_method(
@@ -1107,10 +1105,9 @@ impl Store {
         loc: Loc,
         sourceinfo: SourceInfoRef,
         top_level: bool,
-    ) -> Result<FuncId> {
+    ) -> Result<(FuncId, CompileInfo)> {
         let func_id = self.functions.next_func_id();
         let params_info = compile_info.params.clone();
-        self.functions.add_compile_info(compile_info);
         let internal = is_internal_source(&sourceinfo);
         let info = ISeqInfo::new_method(
             func_id,
@@ -1126,7 +1123,7 @@ impl Store {
             info.set_internal_builtin();
         }
         self.functions.info.push(info);
-        Ok(func_id)
+        Ok((func_id, compile_info))
     }
 
     pub(crate) fn new_block(
@@ -1136,12 +1133,11 @@ impl Store {
         is_block_style: bool,
         loc: Loc,
         sourceinfo: SourceInfoRef,
-    ) -> Result<FuncId> {
+    ) -> Result<(FuncId, CompileInfo)> {
         let outer_mother = self[outer].mother();
         let mother = (outer_mother.0, outer_mother.1 + 1);
         let func_id = self.functions.next_func_id();
         let params_info = compile_info.params.clone();
-        self.functions.add_compile_info(compile_info);
         let internal = is_internal_source(&sourceinfo);
         let info =
             ISeqInfo::new_block(func_id, mother, outer, params_info.clone(), loc, sourceinfo);
@@ -1151,7 +1147,7 @@ impl Store {
             info.set_internal_builtin();
         }
         self.functions.info.push(info);
-        Ok(func_id)
+        Ok((func_id, compile_info))
     }
 
     pub(crate) fn new_eval(
@@ -1159,7 +1155,7 @@ impl Store {
         outer: ISeqId,
         result: ParseResult,
         loc: Loc,
-    ) -> Result<FuncId> {
+    ) -> Result<(FuncId, CompileInfo)> {
         let info = BlockInfo {
             params: vec![],
             body: Box::new(result.node),
@@ -1173,10 +1169,10 @@ impl Store {
         // a lambda). eval bodies and lambdas are otherwise both
         // method-style (no own params), so this flag is what keeps their
         // non-local-vs-local `return` semantics apart.
-        let fid = self.new_block(outer, compile_info, true, loc, result.source_info)?;
+        let (fid, compile_info) = self.new_block(outer, compile_info, true, loc, result.source_info)?;
         let iseq = self[fid].is_iseq().unwrap();
         self[iseq].is_eval = true;
-        Ok(fid)
+        Ok((fid, compile_info))
     }
 
     pub(crate) fn new_builtin_func(

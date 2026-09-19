@@ -117,7 +117,28 @@ pub fn parse_program(
     code: impl Into<Vec<u8>>,
     path: impl Into<PathBuf>,
 ) -> Result<ParseResult, MonorubyErr> {
-    prism_backend::parse_program(code.into(), path.into())
+    prism_backend::parse_program(code.into(), path.into(), true)
+}
+
+/// `parse_program`, but with every `def` body lowered on the spot.
+///
+/// The normal parse hands a method body on as a
+/// [`crate::ast::DeferredDef`], so it is only looked at when its bytecode
+/// is generated. The modes that consume the tree itself and never compile
+/// it — `-c` (which must report a body's `unsupported_node` error) and
+/// `--ast` (which prints it) — ask for the whole thing here.
+pub fn parse_program_eager(
+    code: impl Into<Vec<u8>>,
+    path: impl Into<PathBuf>,
+) -> Result<ParseResult, MonorubyErr> {
+    prism_backend::parse_program(code.into(), path.into(), false)
+}
+
+/// Lower the parameters and body of a `def` the parse deferred.
+pub(crate) fn lower_deferred_def(
+    deferred: &crate::ast::DeferredDef,
+) -> Result<(crate::ast::BlockInfo, Vec<(String, bool)>), MonorubyErr> {
+    prism_backend::lower_deferred_def(deferred)
 }
 
 /// `eval` / `instance_eval` / `class_eval`. The Prism backend receives

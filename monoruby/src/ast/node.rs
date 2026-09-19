@@ -118,8 +118,11 @@ pub enum NodeKind {
     Retry,
     Return(Box<Node>),
     Yield(Box<ArgList>),
-    MethodDef(String, Box<BlockInfo>), // id, params, body
-    SingletonMethodDef(Box<Node>, String, Box<BlockInfo>), // singleton_class, id, params, body
+    /// `def name(params) body end`, with the parameters and body left as
+    /// prism's own node — see [`DeferredDef`].
+    MethodDef(String, Box<DeferredDef>),
+    /// `def recv.name(params) body end`.
+    SingletonMethodDef(Box<Node>, String, Box<DeferredDef>),
     ClassDef {
         base: Option<Box<Node>>,
         name: String,
@@ -729,31 +732,10 @@ impl Node {
         Node::new(NodeKind::AssignOp(op, Box::new(lhs), Box::new(rhs)), loc)
     }
 
-    pub(crate) fn new_method_decl(
-        name: String,
-        params: Vec<FormalParam>,
-        body: Node,
-        lvar: LvarCollector,
-        loc: Loc,
-    ) -> Self {
-        let info = BlockInfo::new(params, body, lvar, loc);
-        Node::new(NodeKind::MethodDef(name, Box::new(info)), loc)
-    }
-
-    pub(crate) fn new_singleton_method_decl(
-        singleton: Node,
-        name: String,
-        params: Vec<FormalParam>,
-        body: Node,
-        lvar: LvarCollector,
-        loc: Loc,
-    ) -> Self {
-        let info = BlockInfo::new(params, body, lvar, loc);
-        Node::new(
-            NodeKind::SingletonMethodDef(Box::new(singleton), name, Box::new(info)),
-            loc,
-        )
-    }
+    // `new_method_decl` / `new_singleton_method_decl` used to live here.
+    // The lowerer builds both variants itself — a `def` carries a
+    // `DefBody`, which is a deferred handle on prism's node unless the
+    // parse asked for the eager form — so neither had a caller.
 
     pub(crate) fn new_class_decl(
         base: Option<Node>,
