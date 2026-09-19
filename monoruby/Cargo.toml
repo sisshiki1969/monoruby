@@ -18,6 +18,17 @@ name = "irm"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+# The C library each extension that has a choice links: its vendored copy
+# (`bundled-*`, the default) or the platform's shared one (`system-*`).
+# Select a system one with --no-default-features and the rest re-listed, as
+# `MONORUBY_SYSTEM_LIBS=... bin/install` does.
+default = ["bundled-sqlite3", "bundled-zlib", "bundled-zstd"]
+bundled-sqlite3 = ["sqlite3_native/bundled"]
+system-sqlite3 = ["sqlite3_native/system"]
+bundled-zlib = ["zlib_native/bundled"]
+system-zlib = ["zlib_native/system"]
+bundled-zstd = ["zstd_native/bundled"]
+system-zstd = ["zstd_native/system"]
 dump-bc = []
 dump-traceir = []
 emit-asm = ["dump-bc", "dump-traceir", "jit-log"]
@@ -144,3 +155,13 @@ libffi = { version = "5.1.0", features = ["system"] }
 
 [build-dependencies]
 dirs = "6.0.0"
+# The dynamically loaded extensions, as artifacts: build.rs copies each
+# cdylib into the install root's `ext/`, so a plain `cargo install --path
+# monoruby` installs them too (needs `-Z bindeps`, set in .cargo/config.toml).
+# Which C library the sqlite3 / zlib / zstd ones link is chosen by the
+# `bundled-*` / `system-*` features below.
+sqlite3_native = { path = "../ext/sqlite3", artifact = "cdylib", target = "target", default-features = false }
+zlib_native = { path = "../ext/zlib", artifact = "cdylib", target = "target", default-features = false }
+zstd_native = { path = "../ext/zstd", artifact = "cdylib", target = "target", default-features = false }
+psych_native = { path = "../ext/psych", artifact = "cdylib", target = "target" }
+nokogiri_native = { path = "../ext/nokogiri", artifact = "cdylib", target = "target" }

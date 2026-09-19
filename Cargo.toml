@@ -4,3 +4,10 @@ resolver = "2"
 
 [profile.dev]
 opt-level = 1
+
+# Build-dependencies are built with `build-override`, whose opt-level is 0
+# even in release. The extension cdylibs are build-dependencies of monoruby
+# (artifact dependencies, installed by its build.rs), so give them the
+# release opt-level — they are what `cargo install` puts in `ext/`.
+[profile.release.build-override]
+opt-level = 3

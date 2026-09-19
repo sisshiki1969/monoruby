@@ -1118,10 +1118,12 @@ dependencies = [
  "monoasm_macro",
  "monoruby-attr",
  "monoruby-ext-sys",
+ "nokogiri_native",
  "num",
  "onigmo-regex",
  "paste",
  "pbkdf2",
+ "psych_native",
  "rand",
  "rand_mt",
  "regex",
@@ -1132,10 +1134,13 @@ dependencies = [
  "sha2",
  "signal-hook",
  "smallvec 1.10.0",
+ "sqlite3_native",
  "tempfile",
  "unicode-general-category",
  "unicode-normalization",
  "unicode-segmentation",
+ "zlib_native",
+ "zstd_native",
 ]
 
 [[package]]

@@ -230,6 +230,7 @@ fn main() {
     let tree_stamp = format!("{}:{:016x}", env!("CARGO_PKG_VERSION"), hasher.finish());
     if fs::read_to_string(&stamp).map(|s| s == tree_stamp).unwrap_or(false) {
         let _ = fs::remove_dir_all(&staging);
+        install_extensions(&install_root);
         return;
     }
 
@@ -273,6 +274,65 @@ fn main() {
     // path is tracked above via cargo:rerun-if-changed, so deleting the
     // install root makes the next build re-run this script.
     fs::write(&stamp, tree_stamp).unwrap();
+    install_extensions(&install_root);
+}
+
+/// The dynamically loaded extensions, by the crate name Cargo keys their
+/// `CARGO_CDYLIB_FILE_*` artifact variable on.
+const EXTENSIONS: [&str; 5] = [
+    "SQLITE3_NATIVE",
+    "ZLIB_NATIVE",
+    "ZSTD_NATIVE",
+    "PSYCH_NATIVE",
+    "NOKOGIRI_NATIVE",
+];
+
+/// Copy the extension cdylibs (artifact build-dependencies, see
+/// monoruby/Cargo.toml) into the install root's `ext/`, where an installed
+/// binary finds them (`ext::search_dirs`). This is what makes a plain
+/// `cargo install --path monoruby` carry `require "psych_native.so"` & co.
+///
+/// Each file is copied beside its destination and renamed over it, so a
+/// running monoruby that has the old one mapped keeps its inode, and an
+/// unchanged library is left alone.
+///
+/// Only a release build installs them (`cargo install` builds release): the
+/// install root is shared by every build of this version, and a dev build
+/// would otherwise replace the installed binary's optimized libraries with
+/// its own. A dev binary finds the workspace's copies beside itself.
+fn install_extensions(install_root: &Path) {
+    if std::env::var("PROFILE").as_deref() != Ok("release") {
+        return;
+    }
+    let ext = install_root.join("ext");
+    if let Err(e) = fs::create_dir_all(&ext) {
+        println!("cargo:warning=cannot create {}: {e}", ext.display());
+        return;
+    }
+    for name in EXTENSIONS {
+        let Some(src) = std::env::var_os(format!("CARGO_CDYLIB_FILE_{name}")) else {
+            println!("cargo:warning=no cdylib artifact for {name}; not installed");
+            continue;
+        };
+        let src = PathBuf::from(src);
+        let Some(file) = src.file_name() else {
+            continue;
+        };
+        let dst = ext.join(file);
+        // Deleting an installed library re-runs this script, as deleting
+        // the install root does through the stamp.
+        println!("cargo:rerun-if-changed={}", dst.display());
+        if let (Ok(a), Ok(b)) = (fs::read(&src), fs::read(&dst))
+            && a == b
+        {
+            continue;
+        }
+        let tmp = ext.join(format!(".{}.{}", file.to_string_lossy(), std::process::id()));
+        if let Err(e) = fs::copy(&src, &tmp).and_then(|_| fs::rename(&tmp, &dst)) {
+            let _ = fs::remove_file(&tmp);
+            println!("cargo:warning=cannot install {}: {e}", dst.display());
+        }
+    }
 }
 
 fn git(args: &[&str]) -> Option<String> {

@@ -154,10 +154,10 @@ parent/
 #### Running core category specs
 
 ```sh
-# Build and install monoruby in release mode, with the native extensions
-# (psych, zlib, sqlite3, … — plain `cargo install` copies only the binary)
+# Build and install monoruby in release mode (build.rs also installs the
+# native extensions — psych, zlib, sqlite3, … — into the install root's ext/)
 cd monoruby
-bin/install
+cargo install --path monoruby
 
 # Run a specific category (e.g., core/array)
 cd ../spec
@@ -354,7 +354,7 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys
 | `monoruby_ext_sys` | The C ABI handed to dynamically loaded extensions (`MrValue`, `MrContext`, the `MrApi` table; `include/monoruby_ext.h` for C). The interpreter side is `monoruby/src/ext.rs`; see `doc/native_extension_loading.md` |
 | `monoruby_ext` | Safe Rust over `monoruby_ext_sys` for writing an extension in Rust (`Ctx`, `Value`, the `method!` / `native!` macros) |
 | `ext/sqlite3` | The sqlite3 gem's native half as a dynamically loaded extension (`libsqlite3_native.so`, crate `sqlite3_native`) over `libsqlite3-src` — the first stand-in moved out of the core |
-| | Each of `ext/sqlite3`, `ext/zlib` and `ext/zstd` builds its C library from the vendored source by default (`bundled`) and links the platform's shared one with `--no-default-features --features system`; `bin/install` takes `MONORUBY_SYSTEM_LIBS="zlib zstd"` (or `all`). `ext/psych` has no C library to replace and `ext/nokogiri` needs its patched libxml2, so neither offers it — see `doc/native_extension_loading.md` §6.3 |
+| | Each of `ext/sqlite3`, `ext/zlib` and `ext/zstd` builds its C library from the vendored source by default (`bundled`) and links the platform's shared one with `--no-default-features --features system` (through monoruby, its `bundled-*` / `system-*` features); `bin/install` takes `MONORUBY_SYSTEM_LIBS="zlib zstd"` (or `all`). `ext/psych` has no C library to replace and `ext/nokogiri` needs its patched libxml2, so neither offers it — see `doc/native_extension_loading.md` §6.3 |
 | `ext/zlib` | `Zlib`'s native half (`libzlib_native.so`, crate `zlib_native`): the `String.__zstream_*` streams over the bundled zlib (`libz-sys`) and the `__crc32` / `__adler32` byte walks |
 | `ext/zstd` | The zstd-ruby gem's native half (`libzstd_native.so`, crate `zstd_native`) over the bundled libzstd (`zstd-sys`) |
 | `ext/psych` | Psych's native half (`libpsych_native.so`, crate `psych_native`): libyaml's parser as `Psych::Parser`'s event source and its emitter as `Psych::Emitter`'s sink, over `libyaml-safer` |
@@ -413,8 +413,11 @@ External crates (fetched from git):
   `__adler32` are the checksum byte walks, and everything else in `Zlib`
   (the class API, gzip framing, `GzipReader` / `GzipWriter`) is Ruby.
   Compression is byte-identical to CRuby's zlib.so. rubygems needs `zlib`
-  for `.gem` files, so an installed monoruby needs this extension:
-  `bin/install` puts it (with the others) in the install root's `ext/`.
+  for `.gem` files, so an installed monoruby needs this extension. The
+  extensions are artifact build-dependencies of monoruby (`-Z bindeps`,
+  enabled in `.cargo/config.toml`), and a release build's `build.rs`
+  copies them into the install root's `ext/` — so `cargo install --path
+  monoruby` installs them too. A dev build leaves `ext/` alone.
 - `zstd-safe` / `zstd-sys` — libzstd 1.5.7 built from source and linked
   statically **into the `ext/zstd` extension** (`libzstd_native.so`, required
   by `gem/zstd-ruby/zstdruby.rb`), behind the zstd-ruby gem: `String.__zstd_*`
