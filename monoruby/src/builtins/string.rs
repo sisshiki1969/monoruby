@@ -303,15 +303,28 @@ fn string_try_convert(
     _: BytecodePtr,
 ) -> Result<Value> {
     let arg = lfp.arg(0);
-    // `rb_check_string_type` answers `nil` only for an object that has no
-    // `#to_str` at all. Once there is one, its result is converted for
-    // real: a non-String answer is the TypeError naming both classes, and
-    // an exception raised inside it propagates. Swallowing every error
-    // here turned both of those into `nil`.
-    if arg.is_rstring().is_none() && globals.check_method(arg, IdentId::TO_STR).is_none() {
-        return Ok(Value::nil());
+    if arg.is_rstring().is_some() {
+        return Ok(arg);
     }
-    Ok(arg.coerce_to_rstring(vm, globals)?.into())
+    // `rb_check_string_type` is `rb_check_convert_type` over
+    // `rb_check_funcall`: an object that does not answer to `#to_str`,
+    // and a `#to_str` that answers nil, are both just `nil`. Only a
+    // non-nil answer that is not a String is the TypeError naming both
+    // classes, and an exception raised inside `#to_str` propagates.
+    let Some(result) = crate::value::coerce::check_funcall(vm, globals, arg, IdentId::TO_STR)?
+    else {
+        return Ok(Value::nil());
+    };
+    if result.is_nil() || result.is_rstring().is_some() {
+        return Ok(result);
+    }
+    Err(MonorubyErr::cant_convert_error(
+        &globals.store,
+        arg,
+        result,
+        "String",
+        IdentId::TO_STR,
+    ))
 }
 
 ///
@@ -1354,26 +1367,11 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 }
             }
         }
-        if let Some(func_id) = globals.check_method(arg0, IdentId::TO_STR) {
-            let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
-            if let Some(s) = result.is_str() {
-                let given = lhs.check_utf8()?;
-                if given.contains(s) {
-                    // Match CRuby: tag with the coerced result's
-                    // encoding (the argument's), not the receiver's.
-                    let arg_enc = result
-                        .is_rstring_inner()
-                        .map(|r| r.encoding())
-                        .unwrap_or(Encoding::Utf8);
-                    return Ok(Value::string_from_inner(RStringInner::from_encoding(
-                        s.as_bytes(),
-                        arg_enc,
-                    )));
-                } else {
-                    return Ok(Value::nil());
-                }
-            }
-        }
+        // No `#to_str` fallback: CRuby's `rb_str_aref` only takes an
+        // Integer, a Range, a Regexp or a String that already *is* one,
+        // and anything else is `NUM2LONG`'s TypeError (pinned by
+        // ruby/spec's "doesn't call to_str on its argument").
+        //
         // An Integer that is not a Fixnum reached here because it does
         // not fit a machine word — that is a RangeError ("bignum too big
         // to convert into 'long'"), which is what the coercion raises,
@@ -1854,15 +1852,24 @@ fn replacement_string(vm: &mut Executor, globals: &mut Globals, val: Value) -> R
         return Ok(val);
     }
     // Run `to_str` here rather than leaving it to `coerce_to_string`, so
-    // that a binary string handed back by it keeps its bytes too.
-    if let Some(func_id) = globals.check_method(val, IdentId::TO_STR) {
-        let converted = vm.invoke_func_inner(globals, func_id, val, &[], None, None)?;
-        if converted.is_rstring_inner().is_some() {
-            return Ok(converted);
-        }
+    // that a binary string handed back by it keeps its bytes too — and
+    // exactly once: falling through to `coerce_to_string` on a
+    // non-String answer called it a second time.
+    match crate::value::coerce::check_funcall(vm, globals, val, IdentId::TO_STR)? {
+        Some(converted) if converted.is_rstring_inner().is_some() => Ok(converted),
+        Some(converted) => Err(MonorubyErr::cant_convert_error(
+            &globals.store,
+            val,
+            converted,
+            "String",
+            IdentId::TO_STR,
+        )),
+        None => Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            val,
+            STRING_CLASS,
+        )),
     }
-    // Nothing usable came back: let the usual coercion raise TypeError.
-    Ok(Value::string(val.coerce_to_string(vm, globals)?))
 }
 
 ///
@@ -3976,6 +3983,27 @@ fn string_match(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // CRuby's `rb_str_match_m` does not match here: it calls
+    // `pattern.match(self, pos)`, so a Regexp subclass that overrides
+    // `#match` sees the call. Only a Regexp argument can carry such an
+    // override — a String one is converted to a plain Regexp first.
+    let pat = lfp.arg(0);
+    if pat.is_regex().is_some() {
+        let match_id = IdentId::get_id("match");
+        let builtin = globals
+            .store
+            .check_method_for_class(REGEXP_CLASS, match_id)
+            .and_then(|e| e.func_id());
+        if let Some(fid) = globals.check_method(pat, match_id)
+            && Some(fid) != builtin
+        {
+            let args = match lfp.try_arg(1) {
+                Some(pos) => vec![lfp.self_val(), pos],
+                None => vec![lfp.self_val()],
+            };
+            return vm.invoke_method_inner(globals, match_id, pat, &args, lfp.block(), None);
+        }
+    }
     // Coerce both arguments before borrowing the subject: either
     // coercion may run Ruby code that mutates the receiver.
     let raw_pos = if let Some(arg1) = lfp.try_arg(1) {
@@ -4577,13 +4605,14 @@ fn coerce_pattern_for_byte_search(
             RegexpInner::with_option(s, 0)?,
         )));
     }
-    if let Some(func_id) = globals.check_method(v, IdentId::TO_STR) {
-        let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
-        if let Some(s) = result.is_str() {
-            return Ok(Regexp::new_unchecked(Value::regexp(
-                RegexpInner::with_option(s, 0)?,
-            )));
-        }
+    // The full `rb_check_funcall` probe, so a `method_missing`-backed
+    // `to_str` converts here as it does for `#rindex` / `#match`.
+    if let Some(result) = crate::value::coerce::check_funcall(vm, globals, v, IdentId::TO_STR)?
+        && let Some(s) = result.is_str()
+    {
+        return Ok(Regexp::new_unchecked(Value::regexp(
+            RegexpInner::with_option(s, 0)?,
+        )));
     }
     Err(MonorubyErr::no_implicit_conversion(
         &globals.store,
@@ -14277,6 +14306,91 @@ mod tests {
               s.rpartition("X").map(&:encoding).map(&:to_s)
             "#,
         );
+    }
+
+    #[test]
+    fn chilled_string_warns_on_singleton_and_ivar() {
+        // CRuby runs the chilled check in `singleton_class_of` and
+        // `rb_ivar_set` too, and adjacent string literals are folded
+        // into one *literal* — so all of these warn. Execute-only: the
+        // message text/stream differs from CRuby's.
+        run_test_no_result_check(
+            r#"
+            Warning[:deprecated] = true
+            cap = Object.new
+            def cap.write(*a) (@b ||= +""); @b << a.join; end
+            def cap.b; @b || ""; end
+            def cap.clear; @b = +""; end
+            old = $stderr
+            $stderr = cap
+            begin
+              got = []
+              [-> { "chilled".singleton_class },
+               -> { "chilled".instance_variable_set(:@ivar, 42) },
+               -> { s = "still" "+chilled"; s << "-mutated"; s },
+               -> { s = "chilled"; def s.foo; end },
+               -> { "chilled".extend(Module.new) },
+               -> { :chilled.to_s.singleton_class },
+               -> { :chilled.to_s.instance_variable_set(:@ivar, 42) }].each do |l|
+                cap.clear
+                l.call
+                got << cap.b
+              end
+            ensure
+              $stderr = old
+            end
+            got[0..4].each_with_index do |msg, i|
+              raise "literal #{i}: #{msg.inspect}" unless msg.include?("literal string will be frozen")
+            end
+            got[5..6].each_with_index do |msg, i|
+              raise "symbol #{i}: #{msg.inspect}" unless msg.include?("string returned by :chilled.to_s")
+            end
+            # The folded literal really is one string, not a concat.
+            raise "not folded" unless ("still" "+chilled") == "still+chilled"
+            :ok
+            "#,
+        );
+    }
+
+    #[test]
+    fn conversion_protocol_follows_check_funcall() {
+        run_tests(&[
+            // `to_str` reached through respond_to? + method_missing.
+            r#"o = Object.new
+               def o.respond_to?(a, *) true end
+               def o.method_missing(*a) "o" end
+               ["hello".rindex(o), "hello".byterindex(o), "hello".match(o)[0]]"#,
+            // ... and a plain `to_str`.
+            r#"o = Object.new; def o.to_str() "lo" end
+               ["hello".rindex(o), "hello".byterindex(o), "hello".match(o)[0]]"#,
+            // `String.try_convert` is `rb_check_convert_type`: no
+            // `to_str` and a nil answer are both nil, only a non-nil
+            // non-String is the TypeError.
+            r#"o = Object.new; def o.to_str; nil; end
+               [String.try_convert(o), String.try_convert(Object.new), String.try_convert("x")]"#,
+            r#"o = Object.new; def o.to_str; 1; end
+               begin; String.try_convert(o); rescue => e; [e.class.to_s, e.message]; end"#,
+            // `String#[]` takes no `to_str`: `NUM2LONG`'s TypeError.
+            r#"o = Object.new; def o.to_str; "ell"; end
+               begin; "hello"[o]; rescue => e; [e.class.to_s, e.message]; end"#,
+            r#"o = Object.new; def o.to_int; 1; end; "hello"[o]"#,
+            // `insert` converts the replacement before range-checking.
+            r#"[Object.new, []].map do |other|
+                 begin; "abcd".insert(-6, other); rescue => e; [e.class.to_s, e.message]; end
+               end"#,
+            // `[]=` calls `to_str` exactly once.
+            r#"n = 0
+               rep = Object.new
+               rep.define_singleton_method(:to_str) { n += 1; 42 }
+               err = begin; s = "hello".dup; s[0, 2] = rep; nil; rescue => e; [e.class.to_s, e.message]; end
+               [err, n]"#,
+            // A Regexp subclass overriding #match sees String#match.
+            r#"rec = []
+               klass = Class.new(Regexp) do
+                 define_method(:match) { |*args| rec << [:match, *args]; super(*args) }
+               end
+               ["hello".match(klass.new("."))[0], rec]"#,
+        ]);
     }
 
     #[test]

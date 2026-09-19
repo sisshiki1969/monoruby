@@ -4255,21 +4255,10 @@ fn to_ary_result(v: &Value, result: Value, globals: &mut Globals) -> Result<Opti
     Err(MonorubyErr::cant_convert_error_ary(globals, *v, result))
 }
 
-/// The element-to-array probe of `Array#flatten`, following CRuby's
-/// `rb_check_funcall` protocol exactly (pinned by ruby/spec's
-/// respond_to?/respond_to_missing?/method_missing flatten examples):
-///
-/// 1. a *user-redefined* `respond_to?` gates everything — a false
-///    answer stops the conversion even when `to_ary` exists;
-/// 2. otherwise a defined `to_ary` is called;
-/// 3. with the default `respond_to?`, a *user-defined*
-///    `respond_to_missing?` gates the missing-dispatch: falsy means
-///    "not convertible" and `method_missing` is not consulted;
-/// 4. a *user-defined* `method_missing` is then consulted with
-///    `:to_ary`. A NoMethodError it raises for that name is re-raised
-///    when the object claimed to respond (CRuby check_funcall_failed:
-///    `rb_respond_to` true → re-raise) and otherwise means "not
-///    convertible".
+/// The element-to-array probe of `Array#flatten`: CRuby's
+/// `rb_check_funcall` for `to_ary`, then the usual reading of what it
+/// answered (an Array converts, nil does not, anything else is a
+/// TypeError).
 fn try_convert_to_array(
     v: &Value,
     vm: &mut Executor,
@@ -4278,94 +4267,9 @@ fn try_convert_to_array(
     if let Some(ary) = v.try_array_ty() {
         return Ok(Some(ary));
     }
-    let respond_to = IdentId::get_id("respond_to?");
-    let default_fid = |globals: &Globals, class: ClassId, name: IdentId| {
-        globals
-            .store
-            .check_method_for_class(class, name)
-            .and_then(|e| e.func_id())
-    };
-    let user_fid = |globals: &Globals, name: IdentId, class: ClassId| {
-        let fid = globals.check_method(*v, name)?;
-        (Some(fid) != default_fid(globals, class, name)).then_some(fid)
-    };
-
-    // respond: 1 = claimed to respond, 0 = refused, -1 = undetermined
-    let mut respond: i8 = -1;
-    // 1. A user-redefined respond_to? vetoes the whole probe.
-    if let Some(fid) = user_fid(globals, respond_to, OBJECT_CLASS) {
-        let responds = vm
-            .invoke_func_inner(
-                globals,
-                fid,
-                *v,
-                &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
-                None,
-                None,
-            )?
-            .as_bool();
-        if !responds {
-            return Ok(None);
-        }
-        respond = 1;
-    }
-    // 2. A defined to_ary is simply called.
-    if let Some(fid) = globals.check_method(*v, IdentId::TO_ARY) {
-        let result = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
-        return to_ary_result(v, result, globals);
-    }
-    // 3. Default respond_to?: a user-defined respond_to_missing? gates
-    //    the missing-dispatch.
-    if respond < 0
-        && let Some(fid) = user_fid(globals, IdentId::RESPOND_TO_MISSING_, OBJECT_CLASS)
-    {
-        let responds = vm
-            .invoke_func_inner(
-                globals,
-                fid,
-                *v,
-                &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
-                None,
-                None,
-            )?
-            .as_bool();
-        if !responds {
-            return Ok(None);
-        }
-        respond = 1;
-    }
-    // 4. A user-defined method_missing is consulted with :to_ary.
-    let Some(fid) = user_fid(globals, IdentId::METHOD_MISSING, BASIC_OBJECT_CLASS) else {
-        if respond > 0 {
-            // claimed to respond (respond_to_missing? => true) but only
-            // the default method_missing exists: dispatch for real so
-            // the NoMethodError propagates (pinned by the
-            // respond_to_missing? flatten spec).
-            let result = vm.invoke_method_inner(globals, IdentId::TO_ARY, *v, &[], None, None)?;
-            return to_ary_result(v, result, globals);
-        }
-        return Ok(None);
-    };
-    match vm.invoke_func_inner(
-        globals,
-        fid,
-        *v,
-        &[Value::symbol(IdentId::TO_ARY)],
-        None,
-        None,
-    ) {
-        Ok(result) => to_ary_result(v, result, globals),
-        Err(err)
-            if respond < 0
-                && matches!(
-                    &err.kind,
-                    MonorubyErrKind::NotMethod { name, .. }
-                        if name.is_none() || *name == Some(IdentId::TO_ARY)
-                ) =>
-        {
-            Ok(None)
-        }
-        Err(err) => Err(err),
+    match crate::value::coerce::check_funcall(vm, globals, *v, IdentId::TO_ARY)? {
+        Some(result) => to_ary_result(v, result, globals),
+        None => Ok(None),
     }
 }
 

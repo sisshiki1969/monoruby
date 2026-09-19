@@ -170,22 +170,15 @@ impl Value {
     }
 
     pub(crate) fn coerce_to_int(&self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        // First try direct method lookup (fast path), then fall back to
-        // invoke_method_inner which handles method_missing.
-        let result = if let Some(func_id) = globals.check_method(*self, IdentId::TO_INT) {
-            vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?
-        } else {
-            // Try via method_missing (for Mock objects etc.)
-            match vm.invoke_method_inner(globals, IdentId::TO_INT, *self, &[], None, None) {
-                Ok(result) => result,
-                Err(_) => {
-                    return Err(MonorubyErr::no_implicit_conversion(
-                        globals,
-                        *self,
-                        INTEGER_CLASS,
-                    ));
-                }
-            }
+        // `rb_to_int` probes with `rb_check_funcall`, so a redefined
+        // `respond_to?` is consulted (and can veto) and a
+        // `method_missing`-backed `to_int` converts.
+        let Some(result) = check_funcall(vm, globals, *self, IdentId::TO_INT)? else {
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                *self,
+                INTEGER_CLASS,
+            ));
         };
         match result.unpack() {
             RV::Fixnum(_) | RV::BigInt(_) => Ok(result),
@@ -497,14 +490,14 @@ impl Value {
                 RegexpInner::with_option(s, 0)?,
             )))
         } else {
-            // Try to_str coercion
-            if let Some(func_id) = globals.check_method(*self, IdentId::TO_STR) {
-                let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
-                if let Some(s) = result.is_str() {
-                    return Ok(Regexp::new_unchecked(Value::regexp(
-                        RegexpInner::with_option(s, 0)?,
-                    )));
-                }
+            // `get_pat`'s `to_str` probe: the full `rb_check_funcall`
+            // protocol, so a `method_missing`-backed `to_str` converts.
+            if let Some(result) = check_funcall(vm, globals, *self, IdentId::TO_STR)?
+                && let Some(s) = result.is_str()
+            {
+                return Ok(Regexp::new_unchecked(Value::regexp(
+                    RegexpInner::with_option(s, 0)?,
+                )));
             }
             Err(MonorubyErr::is_not_regexp_nor_string(&globals.store, *self))
         }
@@ -594,5 +587,99 @@ impl Value {
                 }
             }
         }
+    }
+}
+
+/// CRuby's `rb_check_funcall(recv, name, 0, 0)` — the "does this object
+/// convert?" probe that every `to_str` / `to_ary` / `to_int` coercion is
+/// built on. `Ok(None)` means the object does not answer to `name`; the
+/// caller decides what a returned value means.
+///
+/// A plain method-table lookup is not enough: the protocol reaches
+/// `method_missing`, and a redefined `respond_to?` can veto a method
+/// that does exist.
+///
+/// 1. a *user-redefined* `respond_to?` gates everything — a false
+///    answer stops the probe even when the method exists;
+/// 2. otherwise a defined method is simply called;
+/// 3. with the default `respond_to?`, a *user-defined*
+///    `respond_to_missing?` gates the missing-dispatch: falsy means
+///    "does not answer" and `method_missing` is not consulted;
+/// 4. a *user-defined* `method_missing` is then consulted with the
+///    name. A `NoMethodError` it raises for that name is re-raised when
+///    the object claimed to respond (CRuby's `check_funcall_failed`)
+///    and otherwise means "does not answer".
+pub(crate) fn check_funcall(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    name: IdentId,
+) -> Result<Option<Value>> {
+    let respond_to = IdentId::get_id("respond_to?");
+    let default_fid = |globals: &Globals, class: ClassId, name: IdentId| {
+        globals
+            .store
+            .check_method_for_class(class, name)
+            .and_then(|e| e.func_id())
+    };
+    let user_fid = |globals: &Globals, method: IdentId, class: ClassId| {
+        let fid = globals.check_method(recv, method)?;
+        (Some(fid) != default_fid(globals, class, method)).then_some(fid)
+    };
+    let probe_args = [Value::symbol(name), Value::bool(true)];
+
+    // respond: 1 = claimed to respond, 0 = refused, -1 = undetermined
+    let mut respond: i8 = -1;
+    // 1. A user-redefined respond_to? vetoes the whole probe.
+    if let Some(fid) = user_fid(globals, respond_to, OBJECT_CLASS) {
+        let responds = vm
+            .invoke_func_inner(globals, fid, recv, &probe_args, None, None)?
+            .as_bool();
+        if !responds {
+            return Ok(None);
+        }
+        respond = 1;
+    }
+    // 2. A defined method is simply called.
+    if let Some(fid) = globals.check_method(recv, name) {
+        return Ok(Some(vm.invoke_func_inner(globals, fid, recv, &[], None, None)?));
+    }
+    // 3. Default respond_to?: a user-defined respond_to_missing? gates
+    //    the missing-dispatch.
+    if respond < 0
+        && let Some(fid) = user_fid(globals, IdentId::RESPOND_TO_MISSING_, OBJECT_CLASS)
+    {
+        let responds = vm
+            .invoke_func_inner(globals, fid, recv, &probe_args, None, None)?
+            .as_bool();
+        if !responds {
+            return Ok(None);
+        }
+        respond = 1;
+    }
+    // 4. A user-defined method_missing is consulted with the name.
+    let Some(fid) = user_fid(globals, IdentId::METHOD_MISSING, BASIC_OBJECT_CLASS) else {
+        if respond > 0 {
+            // Claimed to respond but only the default method_missing
+            // exists: dispatch for real so the NoMethodError propagates.
+            return Ok(Some(
+                vm.invoke_method_inner(globals, name, recv, &[], None, None)?,
+            ));
+        }
+        return Ok(None);
+    };
+    match vm.invoke_func_inner(globals, fid, recv, &[Value::symbol(name)], None, None) {
+        Ok(result) => Ok(Some(result)),
+        Err(err)
+            if respond < 0
+                && matches!(
+                    &err.kind,
+                    MonorubyErrKind::NotMethod { name: n, .. }
+                        if n.is_none() || *n == Some(name)
+                ) =>
+        {
+            Ok(None)
+        }
+        Err(err) => Err(err),
     }
 }

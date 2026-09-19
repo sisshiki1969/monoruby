@@ -15,6 +15,10 @@ class String
 
   def insert(index, other)
     index = index.is_a?(Integer) ? index : __to_int(index)
+    # `rb_str_update` converts the replacement before it range-checks
+    # the index, so an unconvertible `other` is a TypeError even when
+    # the index is out of range.
+    other = other.is_a?(String) ? other : __to_str(other)
     if index < 0
       index = self.size + 1 + index
     end
