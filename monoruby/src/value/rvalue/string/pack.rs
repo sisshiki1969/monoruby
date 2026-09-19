@@ -390,11 +390,15 @@ pub(crate) fn unpack(
                     let end = bytes.iter().position(|&x| x == 0).unwrap_or(bytes.len());
                     ary.push(Value::bytes(bytes[..end].to_vec()));
                 } else {
-                    // Z* — read to end, strip after first null
+                    // Z* — up to the first null, which is consumed with
+                    // it: a following 'Z*' resumes after the terminator
+                    // rather than at the end of the buffer. With no null
+                    // left, the rest of the buffer is the last field.
                     let bytes = b.remaining();
-                    let end = bytes.iter().position(|&x| x == 0).unwrap_or(bytes.len());
-                    let result = bytes[..end].to_vec();
-                    b.advance(bytes.len());
+                    let end = bytes.iter().position(|&x| x == 0);
+                    let result = bytes[..end.unwrap_or(bytes.len())].to_vec();
+                    let consumed = end.map(|e| e + 1).unwrap_or(bytes.len());
+                    b.advance(consumed);
                     ary.push(Value::bytes(result));
                 }
             }

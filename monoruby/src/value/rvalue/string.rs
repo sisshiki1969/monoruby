@@ -2574,11 +2574,42 @@ impl RStringInner {
         if self.len() == 0 {
             return Err(MonorubyErr::argumenterr("empty string"));
         }
-        let ord = if self.ty.is_utf8_compatible() {
-            self.check_utf8()?.chars().next().unwrap() as u32
-        } else {
-            let first = self.iter_char_bytes().next().unwrap_or(&[]);
-            char_bytes_code(self.ty, first)
+        let bytes = self.as_bytes();
+        let broken = || {
+            MonorubyErr::argumenterr(format!("invalid byte sequence in {}", self.ty.name()))
+        };
+        // CRuby's `rb_enc_codepoint_len` looks at the *first* character
+        // only: `"a\xff"` still ords to 97, while a receiver whose
+        // first character is broken for its declared encoding raises —
+        // including `"\u00a9"` bytes tagged US-ASCII, which are perfectly
+        // good UTF-8 and still not US-ASCII.
+        let ord = match self.ty {
+            Encoding::UsAscii => {
+                if bytes[0] >= 0x80 {
+                    return Err(broken());
+                }
+                bytes[0] as u32
+            }
+            Encoding::Utf8 => {
+                let head = &bytes[..bytes.len().min(4)];
+                match std::str::from_utf8(head) {
+                    Ok(s) => s.chars().next().unwrap() as u32,
+                    // A trailing truncation is the next character's, not
+                    // the first one's: decode the valid prefix instead.
+                    Err(e) if e.valid_up_to() > 0 => {
+                        // SAFETY: `valid_up_to` bounds a valid UTF-8 prefix.
+                        unsafe { std::str::from_utf8_unchecked(&head[..e.valid_up_to()]) }
+                            .chars()
+                            .next()
+                            .unwrap() as u32
+                    }
+                    Err(_) => return Err(broken()),
+                }
+            }
+            _ => {
+                let first = self.iter_char_bytes().next().unwrap_or(&[]);
+                char_bytes_code(self.ty, first)
+            }
         };
         Ok(ord)
     }

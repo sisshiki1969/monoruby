@@ -1584,6 +1584,18 @@ impl RegexpInner {
     /// it. `owner` is the String Value `subject` walks (for `$~`); the
     /// matched chunk handed to the block is a copy, since the block may
     /// mutate the receiver.
+    /// One replacement driven by a block. `bang` selects `sub!`'s
+    /// contract over `sub`'s: CRuby's `sub!` runs `str_mod_check` after
+    /// the yield and raises `RuntimeError: "string modified"` when the
+    /// block resized the receiver, while `sub` works from a copy and
+    /// reports whatever the copy says.
+    ///
+    /// The splice always runs over bytes copied out before the yield:
+    /// `subject` borrows the receiver's live buffer, which a block that
+    /// mutates the receiver may reallocate. `sub!` then re-reads the
+    /// live bytes once the length check has passed, so an in-place
+    /// same-length mutation from the block is visible to it as it is in
+    /// CRuby.
     pub(crate) fn replace_one_block(
         vm: &mut Executor,
         globals: &mut Globals,
@@ -1591,6 +1603,7 @@ impl RegexpInner {
         subject: &Subject,
         owner: Value,
         bh: BlockHandler,
+        bang: bool,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             let mut region = onigmo_regex::Region::new();
@@ -1602,13 +1615,29 @@ impl RegexpInner {
             let (start, end) = spans[0].unwrap();
             save_spans(vm, subject, &spans, owner);
             let matched = subject.chunk(None, start..end);
+            let before = subject.as_bytes().to_vec();
+            let (view_enc, is_ascii, mapped) =
+                (subject.view_encoding(), subject.is_ascii(), subject.mapped());
+            let owner_len = owner.as_rstring_inner().len();
             let result = vm.invoke_block_once(globals, bh, &[matched])?;
-            let rep_inner = block_result_to_inner(vm, globals, result, subject.mapped())?;
+            let haystack = if bang {
+                crate::value::rvalue::string::check_string_not_modified(owner, owner_len)?;
+                // A mapped subject is a surrogate view, not the
+                // receiver's bytes, so only the direct walk can re-read.
+                if mapped {
+                    before
+                } else {
+                    owner.as_rstring_inner().as_bytes().to_vec()
+                }
+            } else {
+                before
+            };
+            let rep_inner = block_result_to_inner(vm, globals, result, mapped)?;
             let res = RStringInner::splice_all(
                 &globals.store,
-                subject.as_bytes(),
-                subject.view_encoding(),
-                subject.is_ascii(),
+                &haystack,
+                view_enc,
+                is_ascii,
                 &[(start..end, rep_inner)],
             )?;
             Ok((res, true))

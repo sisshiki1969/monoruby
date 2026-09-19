@@ -715,7 +715,7 @@ mod tests {
         // after re-interning the symbol. Exercises all three
         // re-intern branches of `emit_chilled_string_mutation_warning`
         // (ASCII via get_id, non-ASCII-compat via get_id_from_bytes,
-        // invalid-UTF-8 via the Ascii8 fallback). Execute-only: the
+        // binary bytes via the Ascii8 fallback). Execute-only: the
         // message text/stream differs from CRuby's, so no comparison.
         run_test_no_result_check(
             r#"
@@ -728,7 +728,7 @@ mod tests {
             begin
               a = :hello.to_s;                       a << "x"
               b = "foo".encode("UTF-16LE").to_sym.to_s; b.upcase!
-              c = "\xA9".to_sym.to_s;                c << "z"
+              c = "\xA9".b.to_sym.to_s;              c << "z"
             ensure
               $stderr = old
             end

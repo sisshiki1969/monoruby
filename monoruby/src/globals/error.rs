@@ -890,6 +890,17 @@ impl MonorubyErr {
         Self::encoding_compatibility_error_with_store(store, msg)
     }
 
+    /// Build an `EncodingError` (the parent of the `Encoding::*` error
+    /// classes), falling back to `RuntimeError` if the class isn't
+    /// registered yet.
+    pub(crate) fn encoding_error_with_store(store: &Store, msg: String) -> MonorubyErr {
+        if let Some(c) = store.get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("EncodingError"))
+        {
+            return MonorubyErr::new(MonorubyErrKind::Other(c.as_class_id()), msg);
+        }
+        MonorubyErr::runtimeerr(msg)
+    }
+
     /// Build an `Encoding::CompatibilityError` with a free-form
     /// message. Used by call sites whose phrasing doesn't match the
     /// "A and B" template (e.g. "incompatible encoding with this

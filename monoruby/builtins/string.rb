@@ -247,9 +247,4 @@ class String
 
   # +@ is a Rust builtin (it must detect chilled strings, which have
   # no Ruby-level predicate).
-  def -@
-    frozen? ? self : dup.freeze
-  end
-  alias_method :dedup, :-@
-
 end

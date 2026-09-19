@@ -141,6 +141,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "hex", hex, 0);
     globals.define_builtin_func(STRING_CLASS, "oct", oct, 0);
     globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
+    globals.define_builtin_funcs(STRING_CLASS, "-@", &["dedup"], string_uminus, 0);
     globals.define_builtin_func_rest(STRING_CLASS, "upcase", upcase);
     globals.define_builtin_func_rest(STRING_CLASS, "upcase!", upcase_);
     globals.define_builtin_func_rest(STRING_CLASS, "downcase", downcase);
@@ -1513,6 +1514,25 @@ fn assign_range_beg_count(
     Some((beg as usize, (end - beg) as usize))
 }
 
+/// The two bounds of a Range as `Option<i64>`, with `nil` (a beginless or
+/// endless bound) mapping to `None` and everything else going through
+/// `to_int`. Paired with `assign_range_beg_count`.
+fn range_bounds(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    info: &RangeInner,
+) -> Result<(Option<i64>, Option<i64>)> {
+    let start = match info.start().is_nil() {
+        true => None,
+        false => Some(info.start().coerce_to_int_i64(vm, globals)?),
+    };
+    let end = match info.end().is_nil() {
+        true => None,
+        false => Some(info.end().coerce_to_int_i64(vm, globals)?),
+    };
+    Ok((start, end))
+}
+
 /// CRuby's `RangeError` wording for an out-of-range `String#[]=` index.
 fn assign_range_error(start_raw: Option<i64>, end_raw: Option<i64>, exclude_end: bool) -> MonorubyErr {
     let beg = start_raw.map(|v| v.to_string()).unwrap_or_default();
@@ -2777,9 +2797,16 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // the Integer / Integer+len / Range forms (Regexp / String-needle
     // on non-UTF-8 remain documented follow-ups).
     let arg0 = lfp.arg(0);
-    if !self_.as_rstring_inner().encoding().is_utf8_compatible()
-        && (arg0.try_fixnum().is_some() || arg0.is_range().is_some())
-    {
+    // A receiver whose bytes are broken for its own encoding takes the
+    // byte route too: `get_range` walks the declared encoding and
+    // counts each invalid byte as one character, where rebuilding a
+    // Rust `String` would just raise (CRuby's "treats invalid bytes as
+    // single bytes").
+    let byte_route = {
+        let inner = self_.as_rstring_inner();
+        !inner.encoding().is_utf8_compatible() || !inner.is_valid_encoding()
+    };
+    if byte_route && (arg0.try_fixnum().is_some() || arg0.is_range().is_some()) {
         let enc = self_.as_rstring_inner().encoding();
         let char_len = self_.as_rstring_inner().char_length();
         let (start, count): (usize, usize) = if let Some(i) = arg0.try_fixnum() {
@@ -2799,21 +2826,13 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             }
         } else {
             let info = arg0.is_range().unwrap();
-            let s_raw = info.start().coerce_to_int_i64(vm, globals)?;
-            let e_raw = info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
-            let start = match conv_index(s_raw, char_len) {
-                Some(i) => i,
+            let (start_raw, end_raw) = range_bounds(vm, globals, info)?;
+            // `rb_range_beg_len` order again: fold the negative bounds
+            // against the length first, then trim for `exclude_end`.
+            match assign_range_beg_count(start_raw, end_raw, info.exclude_end(), char_len) {
+                Some(v) => v,
                 None => return Ok(Value::nil()),
-            };
-            let end = if e_raw >= 0 {
-                e_raw as usize
-            } else if char_len as i64 + e_raw >= 0 {
-                (char_len as i64 + e_raw) as usize
-            } else {
-                return Ok(Value::nil());
-            };
-            let count = if end >= start { end - start + 1 } else { 0 };
-            (start, count)
+            }
         };
         let r = self_.as_rstring_inner().get_range(start, count);
         if r.is_empty() && lfp.try_arg(1).is_none() && arg0.try_fixnum().is_some() {
@@ -2882,30 +2901,13 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             }
         }
     } else if let Some(info) = lfp.arg(0).is_range() {
-        let len = lhs.chars().count();
-        let (start, end) = (
-            info.start().coerce_to_int_i64(vm, globals)?,
-            info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64,
-        );
-        let (start, len) = match (
-            conv_index(start, len),
-            if end >= 0 {
-                Some(end as usize)
-            } else if len as i64 + end >= 0 {
-                Some((len as i64 + end) as usize)
-            } else {
-                None
-            },
-        ) {
-            (Some(start), Some(end)) => {
-                if start > end {
-                    (start, 0)
-                } else {
-                    (start, end - start + 1)
-                }
-            }
-            _ => return Ok(Value::nil()),
-        };
+        let char_len = lhs.chars().count();
+        let (start_raw, end_raw) = range_bounds(vm, globals, info)?;
+        let (start, len) =
+            match assign_range_beg_count(start_raw, end_raw, info.exclude_end(), char_len) {
+                Some(v) => v,
+                None => return Ok(Value::nil()),
+            };
         let r = get_range(&lhs, start, len);
         Ok(slice_sub(lfp, lhs, r))
     } else if let Some(info) = lfp.arg(0).is_regex() {
@@ -3300,7 +3302,7 @@ fn lstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     require_sub_block_or_replacement(&lfp, "sub")?;
     let self_ = lfp.self_val();
-    let (res, _) = sub_main(vm, globals, self_, lfp)?;
+    let (res, _) = sub_main(vm, globals, self_, lfp, false)?;
     Ok(Value::string_from_inner(res))
 }
 
@@ -3316,7 +3318,7 @@ fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     require_sub_block_or_replacement(&lfp, "sub!")?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_ = lfp.self_val();
-    let (res, changed) = sub_main(vm, globals, self_, lfp)?;
+    let (res, changed) = sub_main(vm, globals, self_, lfp, true)?;
     self_.replace_with_inner(res);
     let res = if changed { self_ } else { Value::nil() };
     Ok(res)
@@ -3454,6 +3456,7 @@ fn sub_main(
     globals: &mut Globals,
     self_val: Value,
     lfp: Lfp,
+    bang: bool,
 ) -> Result<(RStringInner, bool)> {
     // Enable zero-copy $~ haystack snapshots (CoW).
     vm.set_match_haystack(self_val);
@@ -3492,7 +3495,7 @@ fn sub_main(
             Some(bh) => {
                 let (subject, view) = pattern_subject(globals, self_val, lfp.arg(0))?;
                 let res =
-                    RegexpInner::replace_one_block(vm, globals, lfp.arg(0), &subject, self_val, bh);
+                    RegexpInner::replace_one_block(vm, globals, lfp.arg(0), &subject, self_val, bh, bang);
                 decode_replaced(res, &subject, view, self_val)
             }
         }
@@ -5729,6 +5732,12 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let str_bytes = str_inner.as_bytes();
     let str_byte_len = str_bytes.len();
 
+    // The byte span of `replacement` inside `str_bytes`, kept alongside
+    // the slice: an empty span still has a position, and CRuby checks
+    // *that* position against the source's character boundaries
+    // (`"abc".bytesplice(0, 3, "\u3042\u3044", 1, 0)` is an IndexError,
+    // not a no-op).
+    let mut src_span = (0usize, 0usize);
     let replacement = if has_src_range {
         if lfp.arg(0).is_range().is_some() {
             // bytesplice(range, str, str_range)
@@ -5768,11 +5777,9 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                     e.min(str_byte_len)
                 }
             };
-            if src_start > src_end_val {
-                &[]
-            } else {
-                &str_bytes[src_start..src_end_val]
-            }
+            let src_end_val = src_end_val.max(src_start);
+            src_span = (src_start, src_end_val);
+            &str_bytes[src_start..src_end_val]
         } else {
             // bytesplice(idx, len, str, str_idx, str_len)
             let src_idx = lfp.arg(str_arg_idx + 1).coerce_to_int_i64(vm, globals)?;
@@ -5785,6 +5792,7 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             }
             let src_start = conv_byte_index_for_splice(src_idx, str_byte_len)?;
             let src_splice_len = (src_len as usize).min(str_byte_len - src_start);
+            src_span = (src_start, src_start + src_splice_len);
             &str_bytes[src_start..src_start + src_splice_len]
         }
     } else {
@@ -5813,17 +5821,7 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // Check character boundary for UTF-8 source string
     let str_enc = str_inner.encoding();
     if str_enc.is_utf8_compatible() && has_src_range {
-        // replacement slice was already extracted from str_bytes,
-        // but we need to verify the offsets used were on char boundaries.
-        // The offsets are relative to str_bytes, so we check using the
-        // replacement pointer offset from str_bytes start.
-        let rep_start = if replacement.is_empty() {
-            0
-        } else {
-            // SAFETY: replacement is a subslice of str_bytes
-            unsafe { replacement.as_ptr().offset_from(str_bytes.as_ptr()) as usize }
-        };
-        let rep_end = rep_start + replacement.len();
+        let (rep_start, rep_end) = src_span;
         if !is_char_boundary(str_bytes, rep_start) {
             return Err(MonorubyErr::indexerr(format!(
                 "offset {} does not land on character boundary",
@@ -6258,6 +6256,13 @@ fn to_c(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // The grammar is pure ASCII and anything else is trailing garbage,
     // so walk the raw bytes rather than demanding valid UTF-8.
     let inner = self_.as_rstring_inner();
+    let enc = inner.encoding();
+    if !enc.is_ascii_compatible() {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!("ASCII incompatible encoding: {}", enc.name()),
+        ));
+    }
     let (re, im) = match parse_to_c(inner.as_bytes()) {
         ToCParse::Cartesian(re, im) => (re.to_value(), im.to_value()),
         ToCParse::Polar(m, a) => (Value::float(m * a.cos()), Value::float(m * a.sin())),
@@ -6777,6 +6782,63 @@ fn parse_bigint(s: &str, radix: u32) -> BigInt {
     if sign == Some(-1) { -i } else { i }
 }
 
+/// True when this String carries any instance variable — CRuby's
+/// `FL_EXIVAR`, which keeps a string out of the frozen-string pool.
+/// `ivar_names` on `String` is empty unless some String somewhere was
+/// given one, so the common case costs nothing.
+fn string_has_ivar(globals: &Globals, v: Value) -> bool {
+    let names: Vec<IdentId> = globals.store[STRING_CLASS]
+        .ivar_names()
+        .map(|(name, _)| *name)
+        .collect();
+    names
+        .into_iter()
+        .any(|name| globals.store.get_ivar(v, name).is_some())
+}
+
+///
+/// ### String#-@
+///
+/// - -self -> String
+///
+/// ### String#dedup
+///
+/// - dedup -> String
+///
+/// `rb_str_uminus`: the receiver is deduplicated through the
+/// frozen-string pool, so two equal Strings answer the *same* frozen
+/// object. A subclass instance, or one carrying instance variables, is
+/// not poolable (CRuby's `rb_fstring` wants a bare String) and just
+/// gets a frozen copy — or itself, when it is frozen already.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2d=40.html]
+#[monoruby_builtin]
+fn string_uminus(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if self_.class() != STRING_CLASS || string_has_ivar(globals, self_) {
+        if self_.is_frozen() {
+            return Ok(self_);
+        }
+        // A fresh String, not a `dup`: CRuby's `str_new_frozen` carries
+        // the bytes and the class over but leaves the instance
+        // variables behind.
+        let mut copy = Value::string_from_inner(self_.as_rstring_inner().clone());
+        if self_.class() != STRING_CLASS {
+            copy.change_class(self_.class());
+        }
+        copy.set_frozen();
+        return Ok(copy);
+    }
+    let inner = self_.as_rstring_inner();
+    let (bytes, enc) = (inner.as_bytes().to_vec(), inner.encoding());
+    Ok(globals.store.intern_frozen_str(&bytes, enc))
+}
+
 ///
 /// ### String#intern
 ///
@@ -6790,6 +6852,18 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let inner = self_val.as_rstring_inner();
     use crate::value::Encoding as E;
     let src = inner.encoding();
+    // Bytes that are not valid in their own encoding cannot name a
+    // symbol (CRuby's `rb_str_intern` → `rb_enc_symname_type`).
+    if !inner.is_valid_encoding() {
+        return Err(MonorubyErr::encoding_error_with_store(
+            &_globals.store,
+            format!(
+                "invalid symbol in encoding {} :\"{}\"",
+                src.name(),
+                inner.inspect()
+            ),
+        ));
+    }
     // CRuby symbol-encoding rule: ASCII-only content in an
     // ASCII-compatible encoding collapses to US-ASCII (so e.g.
     // `"a".force_encoding("KOI8-R").to_sym == :a`); otherwise the
@@ -7717,6 +7791,15 @@ fn tr_set_view(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<S
     if let Some(inner) = arg.is_rstring_inner() {
         if inner.needs_byte_mapping() {
             return Ok(crate::value::rvalue::map_bytes_to_utf8(inner.as_bytes()));
+        }
+        // CRuby's `tr_trans` walks the set with the encoding's own
+        // decoder and reports a broken set as an ArgumentError, not the
+        // generic "invalid byte sequence: ..." a `to_str` would give.
+        if !inner.is_valid_encoding() {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid byte sequence in {}",
+                inner.encoding().name()
+            )));
         }
     }
     arg.coerce_to_string(vm, globals)
@@ -9136,6 +9219,13 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.expect_str(globals)?;
+    let self_enc = self_.as_rstring_inner().encoding();
+    if !self_enc.is_ascii_compatible() {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!("ASCII incompatible encoding: {}", self_enc.name()),
+        ));
+    }
     let (bytes, enc) = parse_undump(s)?;
     // The dumped form is always ASCII-compatible and we tag the result
     // as UTF-8 unless it carried a `force_encoding` suffix.
@@ -9144,7 +9234,7 @@ fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // force every later operation to re-walk the buffer through
     // `Encoding::classify`.
     Ok(Value::string_from_inner(
-        RStringInner::from_encoding_scanned(&bytes, enc.unwrap_or(Encoding::Utf8)),
+        RStringInner::from_encoding_scanned(&bytes, enc.unwrap_or(self_enc)),
     ))
 }
 
@@ -9527,6 +9617,28 @@ fn normalize_form(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<&
     }
 }
 
+/// The encodings Unicode normalization applies to (CRuby's
+/// `rb_str_unicode_normalize` accepts UTF-8, US-ASCII and the UTF-16 /
+/// UTF-32 forms). Anything else is refused whatever the content — an
+/// ASCII-only EUC-JP string too.
+fn ensure_unicode_normalizable(globals: &Globals, enc: Encoding) -> Result<()> {
+    if matches!(
+        enc,
+        Encoding::Utf8
+            | Encoding::UsAscii
+            | Encoding::Utf16Le
+            | Encoding::Utf16Be
+            | Encoding::Utf32Le
+            | Encoding::Utf32Be
+    ) {
+        return Ok(());
+    }
+    Err(MonorubyErr::encoding_compatibility_error_with_store(
+        &globals.store,
+        format!("Unicode Normalization not appropriate for {}", enc.name()),
+    ))
+}
+
 /// ### String#unicode_normalize
 /// - unicode_normalize(form = :nfc) -> String
 ///
@@ -9539,6 +9651,8 @@ fn unicode_normalize(
     _: BytecodePtr,
 ) -> Result<Value> {
     use unicode_normalization::UnicodeNormalization;
+    let enc = lfp.self_val().as_rstring_inner().encoding();
+    ensure_unicode_normalizable(globals, enc)?;
     let s = lfp.self_val().expect_string(globals)?;
     let form = normalize_form(vm, globals, lfp)?;
     let result: String = match form {
@@ -9548,7 +9662,12 @@ fn unicode_normalize(
         "nfkd" => s.nfkd().collect(),
         _ => unreachable!(),
     };
-    Ok(Value::string(result))
+    // The result keeps the receiver's encoding — normalizing US-ASCII
+    // content cannot introduce a non-ASCII byte.
+    Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
+        result.as_bytes(),
+        enc,
+    )))
 }
 
 /// ### String#unicode_normalized?
@@ -9572,25 +9691,11 @@ fn unicode_normalized_p(
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
     let enc = inner.encoding();
-    let ascii_only = inner.as_bytes().iter().all(|b| *b < 0x80);
-    if ascii_only {
+    ensure_unicode_normalizable(globals, enc)?;
+    if inner.as_bytes().iter().all(|b| *b < 0x80) {
         // Verify the form is valid even when we shortcut.
         let _ = normalize_form(vm, globals, lfp)?;
         return Ok(Value::bool(true));
-    }
-    if !enc.is_utf8_compatible()
-        && !matches!(
-            enc,
-            crate::value::rvalue::Encoding::Utf16Le
-                | crate::value::rvalue::Encoding::Utf16Be
-                | crate::value::rvalue::Encoding::Utf32Le
-                | crate::value::rvalue::Encoding::Utf32Be
-        )
-    {
-        return Err(MonorubyErr::encoding_compatibility_error_with_store(
-            &globals.store,
-            format!("incompatible encoding with this operation: {}", enc.name()),
-        ));
     }
     let s = self_.expect_string(globals)?;
     let form = normalize_form(vm, globals, lfp)?;
@@ -9616,6 +9721,7 @@ fn unicode_normalize_(
     _: BytecodePtr,
 ) -> Result<Value> {
     use unicode_normalization::UnicodeNormalization;
+    ensure_unicode_normalizable(globals, lfp.self_val().as_rstring_inner().encoding())?;
     let s = lfp.self_val().expect_string(globals)?;
     let form = normalize_form(vm, globals, lfp)?;
     let result: String = match form {
@@ -15125,6 +15231,160 @@ mod tests {
             // The aliases and the type check.
             r#"require "cgi"; [CGI.escape_html("<"), CGI.h("&")]"#,
             r#"require "cgi"; [(CGI.escapeHTML(:sym) rescue $!.class), (CGI.escapeHTML(nil) rescue $!.class)]"#,
+        ]);
+    }
+
+    #[test]
+    fn conversions_check_the_receivers_encoding() {
+        // `to_c` and `to_f`/`to_i` share CRuby's ASCII-incompatible guard;
+        // `to_sym` refuses bytes that are broken in their own encoding.
+        run_tests(&[
+            r#"("abc".encode("UTF-16LE").to_c rescue [$!.class, $!.message])"#,
+            r#"("\xE3\x81".dup.force_encoding("UTF-8").to_sym rescue [$!.class, $!.message])"#,
+            r#"("\xE3\x81".b.to_sym.encoding.to_s rescue [$!.class, $!.message])"#,
+            r#"["a".to_c.to_s, "1+2i".to_c.to_s, "abc".to_sym]"#,
+        ]);
+    }
+
+    #[test]
+    fn unicode_normalize_rejects_other_encodings() {
+        // Only the Unicode encodings (plus US-ASCII) normalize; the result
+        // keeps the receiver's encoding.
+        run_tests(&[
+            r#"("abc".encode("ISO-8859-1").unicode_normalize rescue [$!.class, $!.message])"#,
+            r#"("abc".encode("ISO-8859-1").unicode_normalized? rescue [$!.class, $!.message])"#,
+            r#"("abc".b.dup.unicode_normalize! rescue [$!.class, $!.message])"#,
+            r#"s = "h\u00e9llo"; [s.unicode_normalize(:nfd).bytes, s.unicode_normalize(:nfd).encoding.to_s]"#,
+            r#"["abc".encode("US-ASCII").unicode_normalize.encoding.to_s, "abc".unicode_normalized?]"#,
+        ]);
+    }
+
+    #[test]
+    fn undump_keeps_the_receivers_encoding() {
+        // Without a `.force_encoding(...)` suffix the dumped text carries no
+        // encoding of its own, so `undump` keeps the receiver's.
+        run_tests(&[
+            r#"l = "h\xE9llo".dup.force_encoding("ISO-8859-1"); u = l.dump.undump; [u.bytes, u.encoding.to_s, u == l]"#,
+            r#"b = "\xff".b; u = b.dump.undump; [u.bytes, u.encoding.to_s]"#,
+            r#"u = "\u00e9".dump.undump; [u, u.encoding.to_s]"#,
+        ]);
+    }
+
+    #[test]
+    fn slice_bang_walks_bytes_when_the_receiver_is_broken() {
+        // A receiver that is invalid for its own encoding has no characters
+        // to count, so CRuby falls back to single bytes instead of raising.
+        run_tests(&[
+            r#"s = "a\xffb".dup.force_encoding("UTF-8"); [s.slice!(1).bytes, s.bytes]"#,
+            r#"s = "a\xffb".dup.force_encoding("UTF-8"); [s.slice!(1..2).bytes, s.bytes]"#,
+            r#"s = "a\xffb".b; [s.slice!(1).bytes, s.bytes]"#,
+        ]);
+    }
+
+    #[test]
+    fn uminus_deduplicates_through_the_frozen_pool() {
+        // `-str` interns a plain String; a subclass, or one carrying
+        // instance variables, gets a fresh frozen copy instead (and the
+        // copy leaves the ivars behind, as `str_new_frozen` does).
+        run_tests(&[
+            r#"x = -"hello".dup; y = -"hello".dup; [x.frozen?, x.equal?(y), x]"#,
+            r#"f = "w".freeze; (-f).equal?(f)"#,
+            r#"["hi".dedup.frozen?, "hi".dedup == "hi"]"#,
+            r#"iv = "z".dup; iv.instance_variable_set(:@a, 1); c = -iv; [c.frozen?, c.instance_variables, c.equal?(iv), c]"#,
+            r#"class MyStrU < String; end; m = MyStrU.new("q"); n = -m; [n.class.to_s, n.frozen?, n.equal?(m), n]"#,
+            r#"class MyStrV < String; end; m = MyStrV.new("q").freeze; (-m).equal?(m)"#,
+            r#"e = -"".dup; [e.frozen?, e.encoding.to_s]"#,
+            r#"b = -"\xff".b; [b.frozen?, b.encoding.to_s, b.bytes]"#,
+        ]);
+    }
+
+    #[test]
+    fn slice_bang_range_folds_negative_bounds_first() {
+        // `rb_range_beg_len` order: a negative bound folds against the
+        // length before `exclude_end` trims one off. Doing it the other
+        // way made `s.slice!(0...0)` wrap its end to the last character.
+        run_tests(&[
+            r#"a = "hello".dup; r = []; r << a.slice!(1..3) << a << a.slice!(0..0) << a << a.slice!(0...0) << a"#,
+            r#"["hello".dup.slice!(-3..-9), "hello".dup.slice!(2...0), "hello".dup.slice!(5..5)]"#,
+            r#"["hello".dup.slice!(6..6), "hello".dup.slice!(-9..-8)]"#,
+            r#"[("hello".dup.slice!(1..)), ("hello".dup.slice!(..2)), ("hello".dup.slice!(..-2))]"#,
+            r#"s = "a\xffb".dup.force_encoding("UTF-8"); [s.slice!(0...0).bytes, s.bytes]"#,
+            r#"s = "a\xffb".dup.force_encoding("UTF-8"); [s.slice!(-3..-9).bytes, s.bytes]"#,
+        ]);
+    }
+
+    #[test]
+    fn ord_validates_only_the_first_character() {
+        // `rb_enc_codepoint_len` decodes the first character alone: a
+        // later broken byte is somebody else's problem, and bytes that
+        // are fine as UTF-8 are still broken when tagged US-ASCII.
+        run_tests(&[
+            r#"("\u00a9".dup.force_encoding("US-ASCII").ord rescue [$!.class, $!.message])"#,
+            r#""a\xff".dup.force_encoding("UTF-8").ord"#,
+            r#"("\xff a".dup.force_encoding("UTF-8").ord rescue [$!.class, $!.message])"#,
+            r#"("\xE3\x81".dup.force_encoding("UTF-8").ord rescue [$!.class, $!.message])"#,
+            r#"["\u3042".ord, "a".ord, "\xff".b.ord, "A".encode("US-ASCII").ord]"#,
+            r#"("".ord rescue [$!.class, $!.message])"#,
+            r#"["\n".encode("UTF-16LE").ord, "\n".encode("UTF-32BE").ord]"#,
+        ]);
+    }
+
+    #[test]
+    fn unpack_cstring_star_consumes_its_terminator() {
+        // 'Z*' stops at the first NUL and eats it, so the next 'Z*'
+        // resumes after the terminator instead of at the buffer end.
+        run_tests(&[
+            r#""a\x00\x00 b \x00c".unpack('Z*Z*Z*Z*')"#,
+            r#""a\x00 \x00b c".unpack('Z*Z*')"#,
+            r#"["abc".unpack('Z*'), "abc\x00".unpack('Z*Z*'), "abc".unpack('Z')]"#,
+            r#"["hello\x00world".unpack('Z*a*'), "a\x00 \x00b c".unpack('Z2Z2')]"#,
+        ]);
+    }
+
+    #[test]
+    fn tr_set_rejects_a_broken_argument() {
+        // CRuby's `tr_trans` walks the set with the encoding's decoder
+        // and reports a broken set as an ArgumentError, where a bare
+        // `to_str` would raise the generic "invalid byte sequence: ...".
+        run_tests(&[
+            r#"r = "\x00 - \xff".dup.force_encoding("UTF-8"); ("hello".delete(r) rescue [$!.class, $!.message])"#,
+            r#"r = "\x00 - \xff".dup.force_encoding("UTF-8"); ("hello".tr(r, "x") rescue [$!.class, $!.message])"#,
+            r#"r = "\x00 - \xff".dup.force_encoding("UTF-8"); ("hello".count(r) rescue [$!.class, $!.message])"#,
+            r#"r = "\x00 - \xff".dup.force_encoding("UTF-8"); ("hello".squeeze(r) rescue [$!.class, $!.message])"#,
+            // A BINARY set is never broken, and the ordinary sets still work.
+            r#"["hello".delete("\xff".b), "hello".delete("l"), "hello".tr("el", "ip"), "hello".count("lo")]"#,
+        ]);
+    }
+
+    #[test]
+    fn sub_with_a_block_that_mutates_the_receiver() {
+        // `sub!` runs CRuby's `str_mod_check` after the yield and raises
+        // on a resize; `sub` works from a copy taken before it and never
+        // raises.
+        run_tests(&[
+            r#"s = "hello".dup; (s.sub!(/l/) { s << "x"; "y" } rescue [$!.class, $!.message])"#,
+            r#"s = "hello".dup; [s.sub(/l/) { s << "x"; "y" }, s]"#,
+            r#"s = "hello".dup; [s.sub(//) { s[0] = "x"; "" }, s]"#,
+            r#"s = "hello".dup; [(s.sub!(//) { s[0] = "x"; "" } rescue [$!.class, $!.message]), s]"#,
+            r#"s = "hello".dup; (s.gsub(/l/) { s << "x"; "y" } rescue [$!.class, $!.message])"#,
+            // The ordinary block forms are untouched.
+            r#"["hello".sub(/l/) { |m| m.upcase }, "hello".dup.sub!(/l+/) { "_" }, "hello".sub(/z/) { "!" }]"#,
+        ]);
+    }
+
+    #[test]
+    fn bytesplice_checks_the_sources_boundaries_even_when_empty() {
+        // An empty source span still has a position, and CRuby checks
+        // *that* against the source's character boundaries.
+        run_tests(&[
+            r#"("\u3053\u3093\u306B".dup.bytesplice(3, 3, "\u3053\u3093\u306B", 1, 0) rescue [$!.class, $!.message])"#,
+            r#"("\u3053\u3093\u306B".dup.bytesplice(3, 3, "\u3053\u3093\u306B", 0, 1) rescue [$!.class, $!.message])"#,
+            r#"("\u3053\u3093\u306B".dup.bytesplice(3, 3, "\u3053\u3093\u306B", 0, 2) rescue [$!.class, $!.message])"#,
+            r#"("\u3053\u3093\u306B".dup.bytesplice(3..5, "\u3053\u3093\u306B", 1...1) rescue [$!.class, $!.message])"#,
+            r#"("\u3053\u3093\u306B".dup.bytesplice(3, 3, "\u3053\u3093\u306B", -16, 0) rescue [$!.class, $!.message])"#,
+            // A boundary-aligned empty span, and the ASCII forms, still splice.
+            r#"["\u3053\u3093\u306B".dup.bytesplice(3, 3, "\u3053\u3093\u306B", 0, 0).bytes, "abcde".dup.bytesplice(1, 2, "xyz", 1, 0)]"#,
+            r#"["abcde".dup.bytesplice(1, 2, "xyz", 1, 2), "abcde".dup.bytesplice(1..2, "xyz", 1..1)]"#,
         ]);
     }
 
