@@ -2314,6 +2314,7 @@
 9d6d362d02ec388b6d9235b807fc78d2	5	class C\n              private def f; 5; end\n              def g; f;
 9d83806180901caed6f54effcdcb82d5	[1375.093536, 8.124106059241]	def t1\n          a = 1.5\n          s = 0.0\n          i = 0\n          wh
 9d90ba7627480755e747fc4a1045f51e	[2, 1]	[1, 2, 3].each.with_index { |v, i| break [v, i] if i == 1 }
+9dace91758834f559cedd6bcda254358	[true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, Hash, true, true]	k = "MONORUBY_ENV_TEST_FROZEN"\n            ENV[k] = "uniq_value_424
 9dad3fcfbb4f15771bbac751e3869047	42	module A\n          module B\n            module C\n              VAL = 42
 9dbc194b1b0f6de59813ff04a2e9663a	[20, 20, 100, 2, 2]	Bar = 100\n            class Foo\n              autoload :Bar, "./c"\n
 9dbef04511724f84642f3b1be7361af9	[:get_raised, :set_raised]	class D\n              def initialize() @a = {k: 1} end\n            
@@ -2956,6 +2957,7 @@ c638c7dd0312f3c4e8744d6c0e559f45	[["TypeError", "no implicit conversion of nil i
 c63ea340dc59e43dec7863d62bc28a36	[:neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false, :neg, :pos, false]	class Neg\n              def -@ = :neg\n              def +@ = :pos\n 
 c645f7f040f5628747baf4113d682cec	Array	class C < Array; end\n\n            a = C.new([1, 2, 3])\n            a.shuffle.cla
 c65203960bc3757c2aa2a247a3461786	[true, true]	S = Struct.new(:name, :legs, keyword_init: true)\n            \n\n    
+c659fcdba5e98612019dac302e2050f0	[true, true, true, [Enumerator]]	n = ENV.size\n            [\n              ENV.method(:filter!) == EN
 c65dfa6cf6e1e70dbf838b908202198d	nil	->(a = a) { a }.call
 c6683cf0ef52f6cb79ff46704cbc5877	["MyFiber", :done]	class MyFiber < Fiber\n            end\n        \n\n            f = MyF
 c67abacc118f750b4c4602e5803bf054	[true, false]	klass = Class.new do\n              define_method(:initialize) { }\n 

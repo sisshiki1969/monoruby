@@ -217,7 +217,7 @@ pub(super) fn init(globals: &mut Globals) {
     let mut vm = Executor::default();
     std::env::vars().for_each(|(var, val)| {
         env_map
-            .insert(Value::string(var), Value::string(val), &mut vm, globals)
+            .insert(env_string(&var), env_string(&val), &mut vm, globals)
             .unwrap();
     });
     #[cfg(windows)]
@@ -262,6 +262,27 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_singleton_func_with(env, "merge!", env_merge_bang, 0, 0, true);
     globals.define_builtin_singleton_func_with(env, "update", env_merge_bang, 0, 0, true);
     globals.define_builtin_singleton_func(env, "replace", env_replace, 1);
+    // `ENV`'s destructive methods need `unsetenv`, which `Hash`'s do not
+    // call — without these the variable left `ENV` but stayed in the
+    // environment a child process inherits.
+    globals.define_builtin_singleton_func(env, "clear", env_clear, 0);
+    globals.define_builtin_singleton_func(env, "shift", env_shift, 0);
+    globals.define_builtin_singleton_func(env, "delete_if", env_delete_if, 0);
+    globals.define_builtin_singleton_func(env, "reject!", env_reject_bang, 0);
+    globals.define_builtin_singleton_func(env, "keep_if", env_keep_if, 0);
+    globals.define_builtin_singleton_funcs(env, "select!", &["filter!"], env_select_bang, 0);
+    // ENV's readers all hand out fresh frozen copies transcoded to
+    // `Encoding.default_internal`; `Hash`'s would expose the stored
+    // strings in the locale encoding.
+    globals.define_builtin_singleton_funcs(env, "each_pair", &["each"], env_each_pair, 0);
+    globals.define_builtin_singleton_func(env, "each_key", env_each_key, 0);
+    globals.define_builtin_singleton_func(env, "each_value", env_each_value, 0);
+    globals.define_builtin_singleton_func(env, "keys", env_keys, 0);
+    globals.define_builtin_singleton_func(env, "values", env_values, 0);
+    globals.define_builtin_singleton_func(env, "to_a", env_to_a, 0);
+    globals.define_builtin_singleton_func(env, "invert", env_invert, 0);
+    globals.define_builtin_singleton_funcs(env, "select", &["filter"], env_select, 0);
+    globals.define_builtin_singleton_func(env, "reject", env_reject, 0);
     globals.define_builtin_singleton_func_with(env, "values_at", env_values_at, 0, 0, true);
     globals.define_builtin_singleton_func_with(env, "slice", env_slice, 0, 0, true);
 }
@@ -2474,6 +2495,106 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 
 // ENV object
 
+/// The `Encoding` `Encoding.find("locale")` resolves to, for the strings
+/// the environment hands out.
+fn env_locale_encoding() -> Encoding {
+    static ENC: std::sync::OnceLock<Encoding> = std::sync::OnceLock::new();
+    *ENC.get_or_init(|| {
+        Encoding::try_from_str(super::encoding::locale_charmap_str()).unwrap_or(Encoding::Utf8)
+    })
+}
+
+/// `env_str_new`: an environment string carries the *locale* encoding,
+/// falling back to ASCII-8BIT when its bytes are not valid in it (a
+/// UTF-8 value under a US-ASCII locale is the common case).
+fn env_string(s: &str) -> Value {
+    let enc = env_locale_encoding();
+    let inner = RStringInner::from_encoding(s.as_bytes(), enc);
+    if inner.is_valid_encoding() {
+        Value::string_from_inner(inner)
+    } else {
+        Value::bytes(s.as_bytes().to_vec())
+    }
+}
+
+/// A value read out of ENV: a fresh *frozen* copy (so a caller can never
+/// mutate the live environment through it), transcoded to
+/// `Encoding.default_internal` when one is set, as `env_enc_str_new` does.
+fn env_read_string(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Value> {
+    let Some(inner) = v.is_rstring_inner() else {
+        return Ok(v);
+    };
+    let mut out = Value::string_from_inner(inner.clone());
+    if let Some(int) = super::io::enc_default_internal_obj(globals)
+        && let Some(target) = super::io::enc_obj_to_enum(globals, int)
+        && target != inner.encoding()
+    {
+        let bytes = super::encoding::transcode_for_env(
+            &globals.store,
+            inner.as_bytes(),
+            inner.encoding(),
+            target,
+        )?;
+        out = Value::string_from_inner(RStringInner::from_encoding_scanned(&bytes, target));
+    }
+    let _ = vm;
+    out.set_frozen();
+    Ok(out)
+}
+
+/// Every pair ENV hands out, as an Array of two-element Arrays: each key
+/// and value is a fresh frozen copy, transcoded to
+/// `Encoding.default_internal` when one is set, exactly as CRuby's
+/// readers build theirs with `env_enc_str_new`. The pairs are collected
+/// into a Ruby Array rather than a Rust `Vec` so the fresh strings stay
+/// reachable from one rooted `Value` — the caller must keep it rooted
+/// for as long as it uses them.
+fn env_transcoded_pairs(vm: &mut Executor, globals: &mut Globals, self_val: Value) -> Result<Value> {
+    // The stored pairs are reachable from ENV itself; only the copies
+    // made below are fresh, so only those need rooting.
+    let raw: Vec<(Value, Value)> = self_val.as_hash().iter().collect();
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(raw.len());
+        let idx = vm.temp_len() - 1;
+        for (k, v) in raw {
+            let k = env_read_string(vm, globals, k)?;
+            // Root the key while the value's copy is built.
+            vm.temp_push(k);
+            let v = env_read_string(vm, globals, v)?;
+            vm.temp_push(v);
+            let pair = Value::array_from_vec(vec![k, v]);
+            vm.temp_at(idx).as_array().push(pair);
+            vm.temp_clear(idx + 1);
+        }
+        Ok(vm.temp_at(idx))
+    })
+}
+
+/// Collect `pairs` (as `env_transcoded_pairs` returns them) into a fresh
+/// `Hash`, the way `ENV.to_h` / `select` / `reject` / `invert` answer.
+fn env_pairs_to_hash(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    pairs: Value,
+    invert: bool,
+) -> Result<Value> {
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(pairs);
+        vm.temp_push(Value::hash(RubyMap::default()));
+        let idx = vm.temp_len() - 1;
+        for pair in pairs.as_array().iter() {
+            let pair = pair.as_array();
+            let (k, v) = if invert {
+                (pair[1], pair[0])
+            } else {
+                (pair[0], pair[1])
+            };
+            vm.temp_at(idx).as_hash().insert(k, v, vm, globals)?;
+        }
+        Ok(vm.temp_at(idx))
+    })
+}
+
 /// ###ENV.[]
 /// - self[key] -> String
 ///
@@ -2490,12 +2611,7 @@ fn env_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     match lfp.self_val().as_hash().get(key, vm, globals)? {
         // ENV values are always Strings; CRuby returns a fresh *frozen* copy
         // so a caller can never mutate the live environment through it.
-        Some(v) if v.is_str().is_some() => {
-            let s = v.expect_string(&globals.store)?;
-            let mut frozen = Value::string(s);
-            frozen.set_frozen();
-            Ok(frozen)
-        }
+        Some(v) if v.is_str().is_some() => env_read_string(vm, globals, v),
         Some(v) => Ok(v),
         None => Ok(Value::nil()),
     }
@@ -2535,17 +2651,17 @@ fn env_fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 vm.ruby_warn_caller(globals, "warning: block supersedes default value argument")?;
             }
             match hash.get(key, vm, globals)? {
-                Some(v) => v,
+                Some(v) => env_read_string(vm, globals, v)?,
                 None => vm.invoke_block_once(globals, bh, &[key])?,
             }
         } else if let Some(arg1) = lfp.try_arg(1) {
             match hash.get(key, vm, globals)? {
-                Some(v) => v,
+                Some(v) => env_read_string(vm, globals, v)?,
                 None => arg1,
             }
         } else {
             match hash.get(key, vm, globals)? {
-                Some(v) => v,
+                Some(v) => env_read_string(vm, globals, v)?,
                 None => {
                     return Err(MonorubyErr::keyerr_with(
                         format!("key not found: {}", key.inspect(&globals.store)),
@@ -2626,8 +2742,8 @@ fn env_to_hash(
         Ok(vm.temp_at(map_idx))
         });
     }
-    let inner = lfp.self_val().as_hashmap_inner().clone_inner();
-    Ok(Value::hash_from_inner(inner))
+    let pairs = env_transcoded_pairs(vm, globals, lfp.self_val())?;
+    env_pairs_to_hash(vm, globals, pairs, false)
 }
 
 /// Coerce a `Value` into an owned `String` for use as an environment variable
@@ -2716,8 +2832,11 @@ fn env_index_assign(
         libc::setenv(c_key.as_ptr(), c_val.as_ptr(), 1);
     }
 
-    let key_v = Value::string(key);
-    let val_v = Value::string(value);
+    // Stored the way the environment hands strings back (`env_str_new`),
+    // so a later read reports the locale encoding rather than the one
+    // the assigned String happened to carry.
+    let key_v = env_string(&key);
+    let val_v = env_string(&value);
     lfp.self_val()
         .as_hash()
         .insert(key_v, val_v, vm, globals)?;
@@ -2834,6 +2953,9 @@ fn env_assoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let key_v = Value::string(key);
     let hash = lfp.self_val().as_hash();
     if let Some(v) = hash.get(key_v, vm, globals)? {
+        // CRuby's `env_assoc` pairs the *given* name with a fresh
+        // `env_enc_str_new` value, so only the value is transcoded.
+        let v = env_read_string(vm, globals, v)?;
         Ok(Value::array_from_vec(vec![key_v, v]))
     } else {
         Ok(Value::nil())
@@ -2860,7 +2982,14 @@ fn env_rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let hash = lfp.self_val().as_hash();
     for (k, v) in hash.iter() {
         if vm.eq_values_bool(globals, target, v)? {
-            return Ok(Value::array_from_vec(vec![k, v]));
+            // `env_rassoc` is the odd one out: it builds the name with a
+            // plain `rb_str_new` (so ASCII-8BIT, never transcoded) and
+            // pairs it with the *searched-for* value, not a fresh copy.
+            let name = match k.is_rstring_inner() {
+                Some(inner) => Value::bytes(inner.as_bytes().to_vec()),
+                None => k,
+            };
+            return Ok(Value::array_from_vec(vec![name, target]));
         }
     }
     Ok(Value::nil())
@@ -2882,7 +3011,7 @@ fn env_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let hash = lfp.self_val().as_hash();
     for (k, v) in hash.iter() {
         if vm.eq_values_bool(globals, target, v)? {
-            return Ok(k);
+            return env_read_string(vm, globals, k);
         }
     }
     Ok(Value::nil())
@@ -2966,8 +3095,11 @@ fn env_set_one(
     unsafe {
         libc::setenv(c_key.as_ptr(), c_val.as_ptr(), 1);
     }
-    let key_v = Value::string(key.to_string());
-    let val_v = Value::string(value.to_string());
+    // Stored the way the environment hands strings back (`env_str_new`),
+    // so a later read reports the locale encoding rather than the
+    // encoding the assigned String happened to carry.
+    let key_v = env_string(key);
+    let val_v = env_string(value);
     self_val.as_hash().insert(key_v, val_v, vm, globals)?;
     Ok(val_v)
 }
@@ -2988,6 +3120,323 @@ fn env_unset_one(
         libc::unsetenv(c_key.as_ptr());
     }
     Ok(())
+}
+
+/// Remove every pair for which `keep` says so, from the hash *and* from
+/// `environ`. `ENV`'s destructive methods all went through `Hash`'s,
+/// which know nothing about `unsetenv` — so the variables vanished from
+/// `ENV` while a child process still saw them.
+///
+/// Returns the number of pairs removed.
+fn env_remove_where(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    bh: BlockHandler,
+    remove_when: bool,
+) -> Result<usize> {
+    let data = vm.get_block_data(globals, bh)?;
+    let pairs: Vec<(Value, Value)> = self_val.as_hash().iter().collect();
+    let mut removed = 0;
+    for (k, v) in pairs {
+        let keep = vm.invoke_block(globals, &data, &[k, v])?.as_bool();
+        if keep == remove_when {
+            let Some(key) = k.is_str() else { continue };
+            env_unset_one(self_val, &key, vm, globals)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+///
+/// ### ENV.delete_if
+/// ### ENV.reject!
+///
+/// - delete_if {|name, value| ... } -> ENV
+/// - reject! {|name, value| ... } -> ENV | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/delete_if.html]
+#[monoruby_builtin]
+fn env_delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let Some(bh) = lfp.block() else {
+        return hash_to_sized_enum(vm, IdentId::get_id("delete_if"), lfp, pc);
+    };
+    env_remove_where(vm, globals, lfp.self_val(), bh, true)?;
+    Ok(lfp.self_val())
+}
+
+#[monoruby_builtin]
+fn env_reject_bang(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let Some(bh) = lfp.block() else {
+        return hash_to_sized_enum(vm, IdentId::get_id("reject!"), lfp, pc);
+    };
+    let removed = env_remove_where(vm, globals, lfp.self_val(), bh, true)?;
+    // `reject!` reports "nothing changed" with nil; `delete_if` always
+    // answers ENV.
+    Ok(if removed == 0 {
+        Value::nil()
+    } else {
+        lfp.self_val()
+    })
+}
+
+///
+/// ### ENV.keep_if
+/// ### ENV.select! / ENV.filter!
+///
+/// - keep_if {|name, value| ... } -> ENV
+/// - select! {|name, value| ... } -> ENV | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/keep_if.html]
+#[monoruby_builtin]
+fn env_keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let Some(bh) = lfp.block() else {
+        return hash_to_sized_enum(vm, IdentId::get_id("keep_if"), lfp, pc);
+    };
+    env_remove_where(vm, globals, lfp.self_val(), bh, false)?;
+    Ok(lfp.self_val())
+}
+
+#[monoruby_builtin]
+fn env_select_bang(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let Some(bh) = lfp.block() else {
+        return hash_to_sized_enum(vm, IdentId::get_id("select!"), lfp, pc);
+    };
+    let removed = env_remove_where(vm, globals, lfp.self_val(), bh, false)?;
+    Ok(if removed == 0 {
+        Value::nil()
+    } else {
+        lfp.self_val()
+    })
+}
+
+///
+/// ### ENV.each / ENV.each_pair
+///
+/// - each {|name, value| ... } -> ENV
+/// - each -> Enumerator
+///
+/// Yields the transcoded, frozen copies `env_enc_str_new` builds, over a
+/// snapshot — the block may change ENV as it goes.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/each.html]
+#[monoruby_builtin]
+fn env_each_pair(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let Some(bh) = lfp.block() else {
+        return hash_to_sized_enum(vm, IdentId::get_id("each_pair"), lfp, pc);
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    vm.with_temp_scope(|vm| {
+        let pairs = env_transcoded_pairs(vm, globals, lfp.self_val())?;
+        vm.temp_push(pairs);
+        for pair in pairs.as_array().iter() {
+            let pair = pair.as_array();
+            vm.invoke_block(globals, &data, &[pair[0], pair[1]])?;
+        }
+        Ok(lfp.self_val())
+    })
+}
+
+///
+/// ### ENV.each_key
+/// ### ENV.each_value
+///
+/// - each_key {|name| ... } -> ENV
+/// - each_value {|value| ... } -> ENV
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/each_key.html]
+#[monoruby_builtin]
+fn env_each_key(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    env_each_half(vm, globals, lfp, pc, 0, "each_key")
+}
+
+#[monoruby_builtin]
+fn env_each_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    env_each_half(vm, globals, lfp, pc, 1, "each_value")
+}
+
+fn env_each_half(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    half: usize,
+    name: &str,
+) -> Result<Value> {
+    let Some(bh) = lfp.block() else {
+        return hash_to_sized_enum(vm, IdentId::get_id(name), lfp, pc);
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    vm.with_temp_scope(|vm| {
+        let pairs = env_transcoded_pairs(vm, globals, lfp.self_val())?;
+        vm.temp_push(pairs);
+        for pair in pairs.as_array().iter() {
+            let pair = pair.as_array();
+            vm.invoke_block(globals, &data, &[pair[half]])?;
+        }
+        Ok(lfp.self_val())
+    })
+}
+
+///
+/// ### ENV.keys
+/// ### ENV.values
+///
+/// - keys -> [String]
+/// - values -> [String]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/keys.html]
+#[monoruby_builtin]
+fn env_keys(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    env_half(vm, globals, lfp, 0)
+}
+
+#[monoruby_builtin]
+fn env_values(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    env_half(vm, globals, lfp, 1)
+}
+
+fn env_half(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, half: usize) -> Result<Value> {
+    vm.with_temp_scope(|vm| {
+        let pairs = env_transcoded_pairs(vm, globals, lfp.self_val())?;
+        vm.temp_push(pairs);
+        let out: Vec<Value> = pairs.as_array().iter().map(|p| p.as_array()[half]).collect();
+        Ok(Value::array_from_vec(out))
+    })
+}
+
+///
+/// ### ENV.to_a
+///
+/// - to_a -> [[String, String]]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/to_a.html]
+#[monoruby_builtin]
+fn env_to_a(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    env_transcoded_pairs(vm, globals, lfp.self_val())
+}
+
+///
+/// ### ENV.invert
+///
+/// - invert -> Hash
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/invert.html]
+#[monoruby_builtin]
+fn env_invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let pairs = env_transcoded_pairs(vm, globals, lfp.self_val())?;
+    env_pairs_to_hash(vm, globals, pairs, true)
+}
+
+///
+/// ### ENV.select / ENV.filter
+/// ### ENV.reject
+///
+/// - select {|name, value| ... } -> Hash
+/// - reject {|name, value| ... } -> Hash
+///
+/// Unlike `select!` / `reject!` these leave the environment alone and
+/// answer a plain `Hash` of the transcoded copies.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/select.html]
+#[monoruby_builtin]
+fn env_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    env_filter(vm, globals, lfp, pc, true, "select")
+}
+
+#[monoruby_builtin]
+fn env_reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    env_filter(vm, globals, lfp, pc, false, "reject")
+}
+
+fn env_filter(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    keep_when: bool,
+    name: &str,
+) -> Result<Value> {
+    let Some(bh) = lfp.block() else {
+        return hash_to_sized_enum(vm, IdentId::get_id(name), lfp, pc);
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    vm.with_temp_scope(|vm| {
+        let pairs = env_transcoded_pairs(vm, globals, lfp.self_val())?;
+        vm.temp_push(pairs);
+        vm.temp_push(Value::hash(RubyMap::default()));
+        let idx = vm.temp_len() - 1;
+        for pair in pairs.as_array().iter() {
+            let pair = pair.as_array();
+            let (k, v) = (pair[0], pair[1]);
+            if vm.invoke_block(globals, &data, &[k, v])?.as_bool() == keep_when {
+                vm.temp_at(idx).as_hash().insert(k, v, vm, globals)?;
+            }
+        }
+        Ok(vm.temp_at(idx))
+    })
+}
+
+///
+/// ### ENV.clear
+///
+/// - clear -> ENV
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/clear.html]
+#[monoruby_builtin]
+fn env_clear(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let keys: Vec<Value> = lfp.self_val().as_hash().iter().map(|(k, _)| k).collect();
+    for k in keys {
+        let Some(key) = k.is_str() else { continue };
+        env_unset_one(lfp.self_val(), &key, vm, globals)?;
+    }
+    Ok(lfp.self_val())
+}
+
+///
+/// ### ENV.shift
+///
+/// - shift -> [String, String] | nil
+///
+/// Removes the first pair and returns it, from `environ` as well.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/shift.html]
+#[monoruby_builtin]
+fn env_shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    let Some((k, v)) = lfp.self_val().as_hash().iter().next() else {
+        return Ok(Value::nil());
+    };
+    let key = k.is_str().map(|s| s.to_string());
+    let pair = Value::array_from_vec(vec![
+        env_read_string(vm, globals, k)?,
+        env_read_string(vm, globals, v)?,
+    ]);
+    if let Some(key) = key {
+        env_unset_one(lfp.self_val(), &key, vm, globals)?;
+    }
+    Ok(pair)
 }
 
 ///
@@ -3143,13 +3592,21 @@ fn env_values_at(
 ) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     let hash = lfp.self_val().as_hash();
-    let mut out: Vec<Value> = Vec::with_capacity(args.len());
-    for k in args.iter() {
-        let key = coerce_env_string(*k, vm, globals)?;
-        let key_v = Value::string(key);
-        out.push(hash.get(key_v, vm, globals)?.unwrap_or_default());
-    }
-    Ok(Value::array_from_vec(out))
+    // The fresh copies accumulate in a rooted Array: each `env_read_string`
+    // allocates, so a bare Rust Vec would not keep the earlier ones alive.
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(args.len());
+        for k in args.iter() {
+            let key = coerce_env_string(*k, vm, globals)?;
+            let key_v = Value::string(key);
+            let v = match hash.get(key_v, vm, globals)? {
+                Some(v) => env_read_string(vm, globals, v)?,
+                None => Value::nil(),
+            };
+            vm.temp_array_push(v);
+        }
+        Ok(vm.temp_pop())
+    })
 }
 
 ///
@@ -3168,15 +3625,22 @@ fn env_values_at(
 fn env_slice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     let hash = lfp.self_val().as_hash();
-    let mut map = RubyMap::default();
-    for k in args.iter() {
-        let s = coerce_env_string(*k, vm, globals)?;
-        let s_v = Value::string(s);
-        if let Some(v) = hash.get(s_v, vm, globals)? {
-            map.insert(*k, v, vm, globals)?;
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(Value::hash(RubyMap::default()));
+        let idx = vm.temp_len() - 1;
+        for k in args.iter() {
+            let s = coerce_env_string(*k, vm, globals)?;
+            let s_v = Value::string(s);
+            if let Some(v) = hash.get(s_v, vm, globals)? {
+                let v = env_read_string(vm, globals, v)?;
+                // The result is keyed by the *given* name, which — as any
+                // `Hash#[]=` does — is stored as a frozen copy.
+                let k = k.frozen_hash_key();
+                vm.temp_at(idx).as_hash().insert(k, v, vm, globals)?;
+            }
         }
-    }
-    Ok(Value::hash(map))
+        Ok(vm.temp_at(idx))
+    })
 }
 
 /// Like `coerce_env_string`, but returns `Ok(None)` instead of raising
@@ -3818,6 +4282,134 @@ mod tests {
         let _ = globals.run(src, std::path::Path::new("(test)"));
         let got = unsafe { libc::getenv(c_key.as_ptr()) };
         assert!(got.is_null(), "getenv should return NULL after ENV.delete");
+    }
+
+    /// `delete_if` / `reject!` / `keep_if` / `select!` / `shift` must
+    /// reach `environ` too: before these had ENV-specific bodies they ran
+    /// `Hash`'s, so the variable left `ENV` while a child process still
+    /// inherited it.
+    #[test]
+    fn env_destructive_methods_propagate_to_libc_unsetenv() {
+        let _g = env_lock();
+        use std::ffi::CString;
+        let mut globals = crate::Globals::new_test();
+        // `shift` takes the *first* pair, so give it a hash of its own
+        // rather than the process environment's first variable.
+        for (i, expr) in [
+            r#"ENV.delete_if { |k, _| k == "{KEY}" }"#,
+            r#"ENV.reject! { |k, _| k == "{KEY}" }"#,
+            r#"ENV.keep_if { |k, _| k != "{KEY}" }"#,
+            r#"ENV.select! { |k, _| k != "{KEY}" }"#,
+            r#"ENV.filter! { |k, _| k != "{KEY}" }"#,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let key = format!("MONORUBY_ENV_TEST_DESTRUCTIVE_{i}");
+            let c_key = CString::new(key.as_str()).unwrap();
+            // SAFETY: `c_key` is NUL-terminated and outlives the call.
+            unsafe { libc::unsetenv(c_key.as_ptr()) };
+            let src = format!(
+                r#"ENV["{key}"] = "v"; {}"#,
+                expr.replace("{KEY}", &key)
+            );
+            let _ = globals.run(src, std::path::Path::new("(test)"));
+            // SAFETY: as above.
+            let got = unsafe { libc::getenv(c_key.as_ptr()) };
+            assert!(got.is_null(), "{expr} left the variable in environ");
+        }
+    }
+
+    /// Every ENV reader hands out a fresh *frozen* copy, so nothing a
+    /// caller does to the result can reach the live environment.
+    #[test]
+    fn env_readers_return_frozen_copies() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            k = "MONORUBY_ENV_TEST_FROZEN"
+            ENV[k] = "uniq_value_4242"
+            r = []
+            r << ENV[k].frozen?
+            r << ENV.fetch(k).frozen?
+            r << ENV.keys.all?(&:frozen?)
+            r << ENV.values.all?(&:frozen?)
+            r << ENV.to_h.keys.all?(&:frozen?)
+            r << ENV.to_a.flatten.all?(&:frozen?)
+            r << ENV.select { true }.values.all?(&:frozen?)
+            r << ENV.reject { false }.keys.all?(&:frozen?)
+            r << ENV.invert.values.all?(&:frozen?)
+            r << ENV.values_at(k).all?(&:frozen?)
+            r << ENV.slice(k).values.all?(&:frozen?)
+            r << ENV.key("uniq_value_4242").frozen?
+            r << ENV.assoc(k)[1].frozen?
+            ok = true
+            ENV.each_pair { |a, b| ok &&= (a.frozen? && b.frozen?) }
+            ENV.each_key { |a| ok &&= a.frozen? }
+            ENV.each_value { |b| ok &&= b.frozen? }
+            r << ok
+            r << (ENV.select { |a, _| a == k } == { k => "uniq_value_4242" })
+            r << (ENV.reject { |a, _| a != k } == { k => "uniq_value_4242" })
+            r << ENV.select { true }.class
+            r << ENV.each_pair {}.equal?(ENV)
+            r << ENV.each_key {}.equal?(ENV)
+            ENV.delete(k)
+            r
+            "##,
+        );
+    }
+
+    /// `filter!` is the *same* method as `select!` (and `filter` as
+    /// `select`), and the blockless forms answer an Enumerator whose
+    /// `size` is ENV's size — CRuby's `enum_size`.
+    #[test]
+    fn env_aliases_and_enumerator_sizes() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            n = ENV.size
+            [
+              ENV.method(:filter!) == ENV.method(:select!),
+              ENV.method(:filter) == ENV.method(:select),
+              [ENV.each_pair.size, ENV.each.size, ENV.each_key.size,
+               ENV.each_value.size, ENV.select.size, ENV.reject.size,
+               ENV.delete_if.size, ENV.keep_if.size, ENV.select!.size,
+               ENV.reject!.size].uniq == [n],
+              [ENV.each_pair.class, ENV.select.class, ENV.reject!.class].uniq,
+            ]
+            "##,
+        );
+    }
+
+    /// Environment strings carry the *locale* encoding, and every reader
+    /// transcodes to `Encoding.default_internal` when one is set
+    /// (`env_str_new` / `env_enc_str_new`). Host-dependent: the locale is
+    /// the host's, so this one always asks a live CRuby.
+    #[test]
+    fn env_strings_use_the_locale_encoding() {
+        let _g = env_lock();
+        run_test_once_live(
+            r##"
+            k = "MONORUBY_ENV_TEST_ENCODING"
+            ENV[k] = "uniq_value_9876"
+            e = ENV[k].encoding
+            r = []
+            r << [Encoding.find("locale"), Encoding::BINARY].include?(e)
+            r << ([ENV.fetch(k).encoding, ENV.values_at(k)[0].encoding,
+                   ENV.to_h[k].encoding, ENV.key("uniq_value_9876").encoding,
+                   ENV.slice(k)[k].encoding, ENV.assoc(k)[1].encoding].uniq == [e])
+            Encoding.default_internal = Encoding::IBM437
+            # Only the test variable is touched here: transcoding *every*
+            # variable would depend on what the host's environment holds.
+            r << [ENV[k].encoding.to_s, ENV.fetch(k).encoding.to_s,
+                  ENV.values_at(k)[0].encoding.to_s, ENV.slice(k)[k].encoding.to_s,
+                  ENV.key("uniq_value_9876").encoding.to_s,
+                  ENV.assoc(k)[1].encoding.to_s]
+            Encoding.default_internal = nil
+            ENV.delete(k)
+            r
+            "##,
+        );
     }
 
     // -- ENV.[]= validation ------------------------------------------------
