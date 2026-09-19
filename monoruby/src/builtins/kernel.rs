@@ -4744,6 +4744,7 @@ fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
     let self_val = lfp.self_val();
+    warn_if_chilled_string(vm, globals, self_val)?;
     // Reject non-Modules up front (CRuby checks the whole argument list
     // before extending anything).
     for v in args.iter() {
@@ -5135,6 +5136,7 @@ fn define_singleton_method(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
+    warn_if_chilled_string(vm, globals, self_val)?;
     let class_id = globals.store.get_singleton(self_val)?.id();
     if self_val.is_frozen() {
         return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
@@ -5790,9 +5792,23 @@ fn singleton_method(
 /// - singleton_class -> Class
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_class.html]
+/// CRuby warns once when a chilled String is about to gain a singleton
+/// class or an instance variable, exactly as it does for a mutation
+/// (`singleton_class_of` and `rb_ivar_set` both run the chilled check).
+fn warn_if_chilled_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut recv: Value,
+) -> Result<()> {
+    if recv.is_rstring().is_some() {
+        recv.warn_chilled_mutation(vm, globals)?;
+    }
+    Ok(())
+}
+
 #[monoruby_builtin]
 fn singleton_class(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -5801,6 +5817,7 @@ fn singleton_class(
     // observable with deduplicated `"..."` literals under
     // frozen-string-literal).
     let recv = lfp.self_val();
+    warn_if_chilled_string(vm, globals, recv)?;
     if recv.is_rstring().is_some() && recv.is_frozen() {
         return Err(MonorubyErr::typeerr("can't define singleton"));
     }
@@ -6031,6 +6048,7 @@ fn iv_defined(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 #[monoruby_builtin]
 fn iv_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    warn_if_chilled_string(vm, globals, lfp.self_val())?;
     let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
     let val = lfp.arg(1);
     globals.store.set_ivar(lfp.self_val(), id, val)?;

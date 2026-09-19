@@ -2234,6 +2234,15 @@ pub(super) extern "C" fn singleton_define_method(
         vm.set_error(MonorubyErr::typeerr("can't define singleton"));
         return None;
     }
+    // `def s.m` gives `s` a singleton class, which CRuby counts as a
+    // mutation of a chilled String.
+    let mut recv = obj;
+    if recv.is_rstring().is_some()
+        && let Err(err) = recv.warn_chilled_mutation(vm, globals)
+    {
+        vm.set_error(err);
+        return None;
+    }
     let current_func = vm.definition_func_id(globals);
     if let Some(iseq) = globals.store[func].is_iseq() {
         // See `Executor::define_method`: the parent frame may be a
