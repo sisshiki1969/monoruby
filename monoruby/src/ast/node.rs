@@ -336,6 +336,13 @@ pub struct ArgList {
     pub kw_args: Vec<(String, Node)>,
     /// double splat args (**{})
     pub hash_splat: Vec<Node>,
+    /// Where each `hash_splat` entry sat among the `kw_args` in the
+    /// source: `hash_splat_after[i]` is the number of `kw_args` pairs
+    /// written before `hash_splat[i]`, so `f(a: 1, **h, b: 2)` records
+    /// `[1]`. Neither list alone says how the two interleaved, and the
+    /// interleaving decides which value wins when a key appears on both
+    /// sides — `f(**defaults, key: override)` (#1407).
+    pub hash_splat_after: Vec<usize>,
     /// block
     pub block: Option<Box<Node>>,
     /// args forwarding
@@ -369,6 +376,7 @@ impl ArgList {
             args,
             kw_args: vec![],
             hash_splat: vec![],
+            hash_splat_after: vec![],
             block: None,
             forwarding: false,
             delegate_block: false,

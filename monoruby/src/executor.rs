@@ -3670,8 +3670,13 @@ impl Executor {
         let cs_splat_pos = cs.splat_pos().to_vec();
         let cs_kw_pos = cs.kw_pos;
         let cs_kw_len = cs.kw_len();
-        let cs_kw_args = cs.kw_args().clone();
-        let cs_hash_splat_pos = cs.hash_splat_pos().to_vec();
+        // The keyword window register by register, in source order — the
+        // shape the rebuilt keyword Hash has to be filled in (#1407) —
+        // and the registers a statically folded duplicate drops.
+        let cs_kw_order = cs.kw_order().to_vec();
+        let cs_kw_dedup_at: Vec<usize> = (0..cs_kw_order.len())
+            .filter(|i| cs.kw_overwritten_literal(*i))
+            .collect();
         let bh = cs.block_handler(lfp);
 
         let method_name = if let Some(name) = cs_name {
@@ -3711,19 +3716,26 @@ impl Executor {
             let res = self.with_temp_scope(|vm| {
                 vm.temp_push(Value::hash_from_inner(HashmapInner::default()));
                 let map_idx = vm.temp_len() - 1;
-                for (k, offset) in cs_kw_args.into_iter() {
-                    let key = Value::symbol(k);
-                    let val = lfp.register(cs_kw_pos + offset).unwrap();
-                    vm.temp_at(map_idx)
-                        .as_hash()
-                        .insert(key, val, vm, globals)?;
-                }
-                // Merge hash splat arguments into the keyword hash. `**obj`
-                // accepts any #to_hash-convertible object (implicit
-                // conversion), not just a Hash.
-                for pos in cs_hash_splat_pos.iter() {
-                    if let Some(v) = lfp.register(*pos) {
-                        if !v.is_nil() {
+                // In source order: a literal `k: v` pair writes its key,
+                // a `**hash` splat merges its own (`**obj` accepts any
+                // #to_hash-convertible object, implicit conversion), and
+                // the later of two mentions of a key wins.
+                for (i, elem) in cs_kw_order.into_iter().enumerate() {
+                    let Some(v) = lfp.register(cs_kw_pos + i) else {
+                        continue;
+                    };
+                    match elem {
+                        KwElem::Kw(name) => {
+                            if cs_kw_dedup_at.contains(&i) {
+                                continue;
+                            }
+                            let key = Value::symbol(name);
+                            vm.temp_at(map_idx).as_hash().insert(key, v, vm, globals)?;
+                        }
+                        KwElem::Splat => {
+                            if v.is_nil() {
+                                continue;
+                            }
                             let hash = v.coerce_to_hash(vm, globals)?;
                             vm.temp_push(hash.into());
                             for (k, v) in hash.iter() {

@@ -3434,13 +3434,16 @@ impl AbstractState {
                 }
             }
 
-            // check unused keyword arguments.
+            // The literal keywords the callee declares no parameter for:
+            // they go into its `**kwrest`, in source order. Walked by
+            // entry rather than by window index — the window has one
+            // register per keyword *source*, and a key written twice
+            // (`f(a: 1, a: 2)`) holds two of them but one entry, which
+            // names the later, winning register.
             let mut rest_kw = vec![];
-            for i in 0..kw_num {
-                if !used_kw.contains(&i) {
-                    let (k, v) = callsite.kw_args().get_index(i).unwrap();
-                    assert_eq!(i, *v);
-                    rest_kw.push((kw_pos + i, *k));
+            for (k, offset) in callsite.kw_args().iter() {
+                if !used_kw.contains(offset) {
+                    rest_kw.push((kw_pos + *offset, *k));
                 }
             }
 

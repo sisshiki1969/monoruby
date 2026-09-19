@@ -1330,6 +1330,7 @@ impl Store {
         kw_args: indexmap::IndexMap<IdentId, usize>,
         splat_pos: Vec<usize>,
         hash_splat_pos: Vec<SlotId>,
+        kw_order: Vec<KwElem>,
         block_fid: Option<FuncId>,
         block_arg: Option<SlotId>,
         args: SlotId,
@@ -1340,6 +1341,16 @@ impl Store {
         vcall: bool,
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
+        // `kw_order` describes the keyword window register by register,
+        // so its `Splat` entries must be exactly `hash_splat_pos`.
+        debug_assert!(
+            kw_order
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| matches!(e, KwElem::Splat))
+                .map(|(i, _)| kw_pos + i)
+                .eq(hash_splat_pos.iter().copied())
+        );
         let extra = if splat_pos.is_empty() && kw_args.is_empty() && hash_splat_pos.is_empty() {
             None
         } else {
@@ -1347,6 +1358,7 @@ impl Store {
                 splat_pos,
                 kw_args,
                 hash_splat_pos,
+                kw_order,
             }))
         };
         self.callsite_info.push(CallSiteInfo {
@@ -2387,6 +2399,27 @@ pub struct CallSiteExtra {
     pub kw_args: indexmap::IndexMap<IdentId, usize>,
     /// Position of hash splat arguments.
     pub hash_splat_pos: Vec<SlotId>,
+    /// What each register of the keyword window holds, in source order.
+    pub kw_order: Vec<KwElem>,
+}
+
+///
+/// One register of a call site's keyword window.
+///
+/// `kw_order[i]` describes the register at `kw_pos + i`, and the vector
+/// is in source order — which is what neither `kw_args` nor
+/// `hash_splat_pos` records on its own. The interleaving decides which
+/// value wins when a key appears on both sides (`f(**defaults, key:
+/// override)`) and the key order of a materialized keyword hash, so
+/// every site that builds one walks this list rather than concatenating
+/// the two containers (#1407).
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KwElem {
+    /// A literal `k: v` pair, by key; its value is in this register.
+    Kw(IdentId),
+    /// A `**hash` splat; its operand is in this register.
+    Splat,
 }
 
 /// The empty map `CallSiteInfo::kw_args` hands out for a site with no
@@ -2465,6 +2498,39 @@ impl CallSiteInfo {
         self.extra.as_ref().map_or(&[], |e| &e.hash_splat_pos)
     }
 
+    ///
+    /// The keyword window register by register, in source order:
+    /// `kw_order()[i]` describes `kw_pos + i`. Empty when the site
+    /// passes no keywords.
+    ///
+    pub fn kw_order(&self) -> &[KwElem] {
+        self.extra.as_ref().map_or(&[], |e| &e.kw_order)
+    }
+
+    ///
+    /// Whether the literal `k: v` pair in window register `i` leaves no
+    /// trace at all, because the site writes the same key again later
+    /// *and* builds its keyword hash statically.
+    ///
+    /// Without a `**hash` splat CRuby's compiler folds the whole keyword
+    /// list into one hash, so an overwritten pair is simply dropped and
+    /// the key ends up in the *later* pair's place:
+    /// `f(a: 1, b: 2, a: 3)` passes `{b: 2, a: 3}`. Add a splat anywhere
+    /// and the list is merged at run time instead, where the key keeps
+    /// the first place it was given: `f(a: 1, b: 2, a: 3, **{})` passes
+    /// `{a: 3, b: 2}`. Both are observable, so both are reproduced here.
+    ///
+    pub fn kw_overwritten_literal(&self, i: usize) -> bool {
+        if !self.hash_splat_pos().is_empty() {
+            return false;
+        }
+        let order = self.kw_order();
+        match order[i] {
+            KwElem::Kw(name) => order[i + 1..].contains(&KwElem::Kw(name)),
+            KwElem::Splat => false,
+        }
+    }
+
     pub fn kw_may_exists(&self) -> bool {
         !self.kw_args().is_empty() || !self.hash_splat_pos().is_empty()
     }
@@ -2477,8 +2543,14 @@ impl CallSiteInfo {
         !self.hash_splat_pos().is_empty()
     }
 
+    ///
+    /// The size of the keyword window — one register per keyword source,
+    /// which is *not* `kw_args().len() + hash_splat_pos().len()`: a key
+    /// written twice (`f(a: 1, a: 2)`) holds two registers but one
+    /// `kw_args` entry.
+    ///
     pub fn kw_len(&self) -> usize {
-        self.kw_args().len() + self.hash_splat_pos().len()
+        self.kw_order().len()
     }
 
     pub fn is_func_call(&self) -> bool {
@@ -2528,8 +2600,7 @@ impl CallSiteInfo {
     }
 
     pub fn format_args(&self) -> String {
-        let (splat_pos, kw_args, hash_splat_pos) =
-            (self.splat_pos(), self.kw_args(), self.hash_splat_pos());
+        let splat_pos = self.splat_pos();
         let CallSiteInfo {
             pos_num,
             kw_pos,
@@ -2550,17 +2621,17 @@ impl CallSiteInfo {
                 s += &format!("{:?}", *args + i);
             }
         }
-        for (i, (k, v)) in kw_args.iter().enumerate() {
-            if i > 0 || *pos_num > 0 {
+        // The keyword window in source order, which is the order it was
+        // written in.
+        for (i, elem) in self.kw_order().iter().enumerate() {
+            if !s.is_empty() {
                 s += ",";
             }
-            s += &format!("{}:{:?}", k, *kw_pos + *v);
-        }
-        for pos in hash_splat_pos.iter() {
-            if s.len() > 0 {
-                s += ",";
-            }
-            s += &format!("**{:?}", pos);
+            let reg = *kw_pos + i;
+            s += &match elem {
+                KwElem::Kw(name) => format!("{name}:{reg:?}"),
+                KwElem::Splat => format!("**{reg:?}"),
+            };
         }
         if let Some(block_arg) = block_arg {
             if s.len() > 0 {
