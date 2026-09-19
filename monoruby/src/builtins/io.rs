@@ -811,8 +811,11 @@ fn parse_open_encodings(
     extra: Option<Value>,
 ) -> Result<(Option<Value>, Option<Value>, bool, bool)> {
     let base = mode.split(':').next().unwrap_or("");
-    let binmode = base.contains('b');
+    let mut binmode = base.contains('b');
     let (mext, mint) = mode_encoding_names(mode);
+    // The mode string already carried an encoding, so a later
+    // `encoding:` option is CRuby's "encoding specified twice".
+    let mode_has_enc = mext.is_some();
     // A "BOM|utf-..." external requests byte-order-mark detection; the
     // name after the prefix is the fallback when no BOM is present.
     let (mext, bom) = match mext {
@@ -831,9 +834,19 @@ fn parse_open_encodings(
         .collect::<Vec<_>>();
     for arg in candidates {
         let Some(h) = arg.try_hash_ty() else { continue };
+        // `binmode: true` is the option spelling of the mode string's
+        // `b`, and it has to reach `set_binmode` the same way.
+        if let Some(v) = h.get(Value::symbol(IdentId::get_id("binmode")), vm, globals)?
+            && v.as_bool()
+        {
+            binmode = true;
+        }
         if let Some(v) = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?
             && !v.is_nil()
         {
+            if mode_has_enc {
+                return Err(MonorubyErr::argumenterr("encoding specified twice"));
+            }
             if let Some(s) = v.is_str() {
                 let mut parts = s.split(':');
                 ext = parts
@@ -1145,14 +1158,14 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             }
             return Ok(());
         }
+        // `rb_check_funcall`, not a method-table probe: CRuby offers
+        // `#to_ary` through `respond_to?` and `method_missing` too, so an
+        // object that only implements `method_missing` still sees the
+        // call before `#to_s` is used.
         if val.is_rstring().is_none()
-            && globals
-                .store
-                .check_method(val, IdentId::get_id("to_ary"))
-                .is_some()
+            && let Some(converted) =
+                crate::coerce::check_funcall(vm, globals, val, IdentId::get_id("to_ary"))?
         {
-            let converted =
-                vm.invoke_method_inner(globals, IdentId::get_id("to_ary"), val, &[], None, None)?;
             if converted.try_array_ty().is_some() {
                 // Root the fresh `#to_ary` result while its elements are
                 // walked (nested `#to_ary`s can run Ruby in between).
@@ -1957,17 +1970,8 @@ fn io_class_read(
     // The options come in as keywords (`mode:`, `encoding:`, …), which
     // `open_kw_hash` folds back into one Hash.
     let opts = super::file::open_kw_hash(vm, globals, lfp)?.map(|h| h.as_hash());
-    // length = arg1 (Integer); nil / Hash / absent => whole file.
-    let length = match lfp.try_arg(1) {
-        Some(v) if v.try_fixnum().is_some() => {
-            let n = v.try_fixnum().unwrap();
-            if n < 0 {
-                return Err(MonorubyErr::argumenterr(format!("negative length {n} given")));
-            }
-            Some(n as usize)
-        }
-        _ => None,
-    };
+    // CRuby validates the offset before the length, so
+    // `IO.read(path, -1, -1)` reports the offset.
     // offset = arg2 (Integer); nil / absent => 0.
     let offset = match lfp.try_arg(2) {
         Some(v) if v.try_fixnum().is_some() => {
@@ -1978,6 +1982,17 @@ fn io_class_read(
             n as u64
         }
         _ => 0,
+    };
+    // length = arg1 (Integer); nil / Hash / absent => whole file.
+    let length = match lfp.try_arg(1) {
+        Some(v) if v.try_fixnum().is_some() => {
+            let n = v.try_fixnum().unwrap();
+            if n < 0 {
+                return Err(MonorubyErr::argumenterr(format!("negative length {n} given")));
+            }
+            Some(n as usize)
+        }
+        _ => None,
     };
 
     let (mode, ext_obj, int_obj, bom) = class_read_opts(vm, globals, opts)?;
@@ -3663,7 +3678,14 @@ fn io_ungetbyte(
     let bytes = if arg.is_integer() {
         vec![(arg.coerce_to_pack_u64(vm, globals)? & 0xff) as u8]
     } else {
-        arg.coerce_to_string(vm, globals)?.into_bytes()
+        // Raw bytes, not `coerce_to_string`'s `\xHH` rendering.
+        match arg.is_rstring_inner() {
+            Some(inner) => inner.as_bytes().to_vec(),
+            None => arg
+                .coerce_to_rstring(vm, globals)?
+                .as_bytes()
+                .to_vec(),
+        }
     };
     lfp.self_val().as_io_inner_mut().unget(&bytes)?;
     Ok(Value::nil())
@@ -3687,15 +3709,41 @@ fn io_ungetc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     }
     let bytes = if arg.is_integer() {
         let cp = (arg.coerce_to_pack_u64(vm, globals)? & 0xffff_ffff) as u32;
-        match char::from_u32(cp) {
-            Some(c) => c.to_string().into_bytes(),
-            None => vec![cp as u8],
+        // CRuby's `rb_io_ungetc` builds the character in the stream's
+        // *external* encoding, so `ungetc(130)` on an IBM437 stream
+        // pushes the single byte 130, not U+0082's UTF-8 form.
+        let enc = io_external_encoding(globals, lfp.self_val());
+        match enc {
+            Some(e) if !e.is_utf8_compatible() && cp < 0x100 => vec![cp as u8],
+            _ => match char::from_u32(cp) {
+                Some(c) => c.to_string().into_bytes(),
+                None => vec![cp as u8],
+            },
         }
     } else {
-        arg.coerce_to_string(vm, globals)?.into_bytes()
+        // The raw bytes: `coerce_to_string` renders a non-UTF-8 String
+        // through `\xHH` escapes, which would push those characters
+        // back instead of the bytes they stand for.
+        match arg.is_rstring_inner() {
+            Some(inner) => inner.as_bytes().to_vec(),
+            None => arg
+                .coerce_to_rstring(vm, globals)?
+                .as_bytes()
+                .to_vec(),
+        }
     };
     lfp.self_val().as_io_inner_mut().unget(&bytes)?;
     Ok(Value::nil())
+}
+
+/// The stream's resolved external `Encoding`, or `None` when it has
+/// none (a write-only stream, or one explicitly set to nil).
+fn io_external_encoding(globals: &mut Globals, io: Value) -> Option<crate::value::Encoding> {
+    let obj = read_io_encoding(globals, io, false);
+    if obj.is_nil() {
+        return None;
+    }
+    enc_obj_to_enum(globals, obj)
 }
 
 ///
@@ -3917,6 +3965,8 @@ fn io_syswrite(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // `rb_io_syswrite` checks writability up front, whatever the length.
+    lfp.self_val().as_io_inner().ensure_writable()?;
     // CRuby warns (rather than raising) when a buffered `IO#write` has
     // not reached the kernel yet: `syswrite` would land before it.
     if lfp.self_val().as_io_inner().write_data_buffered() {
@@ -4256,8 +4306,13 @@ fn io_read_nonblock(
         return Err(MonorubyErr::ioerr("closed stream"));
     }
     if maxlen == 0 {
+        // CRuby clears the supplied buffer and hands it back.
         return Ok(match buffer {
-            Some(v) => v,
+            Some(mut v) => {
+                let enc = v.as_rstring_inner().encoding();
+                *v.as_rstring_inner_mut() = RStringInner::from_encoding(&[], enc);
+                v
+            }
             None => Value::string_from_vec(vec![]),
         });
     }
@@ -4762,6 +4817,10 @@ fn set_encoding(
         }
     }
     let (mut ext, mut int) = (None, None);
+    // CRuby's `"-"` internal name means *no* conversion, which is not
+    // the same as leaving it out: the latter takes
+    // `Encoding.default_internal`.
+    let mut int_suppressed = false;
     if let Some(s) = arg0.is_str() {
         // A single string may carry both as "ext:int".
         let mut parts = s.split(':');
@@ -4771,20 +4830,29 @@ fn set_encoding(
             })?);
         }
         if let Some(i) = parts.next().filter(|x| !x.is_empty()) {
-            int = Some(enc_by_name(globals, i).ok_or_else(|| {
-                MonorubyErr::argumenterr(format!("unknown encoding name - {i}"))
-            })?);
+            if i == "-" {
+                int_suppressed = true;
+            } else {
+                int = Some(enc_by_name(globals, i).ok_or_else(|| {
+                    MonorubyErr::argumenterr(format!("unknown encoding name - {i}"))
+                })?);
+            }
         }
     } else if !arg0.is_nil() {
         ext = arg_to_enc_obj(globals, arg0);
     }
     if int.is_none()
+        && !int_suppressed
         && let Some(arg1) = lfp.try_arg(1)
         && !arg1.is_nil()
         && arg1.try_hash_ty().is_none()
     {
         let arg1 = coerce_enc_arg(vm, globals, arg1)?;
-        int = arg_to_enc_obj(globals, arg1);
+        if arg1.is_str().map(|s| s == "-").unwrap_or(false) {
+            int_suppressed = true;
+        } else {
+            int = arg_to_enc_obj(globals, arg1);
+        }
     }
     let readable = self_.as_io_inner().is_readable();
     let writable = self_.as_io_inner().is_writable();
@@ -4803,6 +4871,7 @@ fn set_encoding(
             "ASCII incompatible encoding needs binmode",
         ));
     }
+    let di = if int_suppressed { None } else { di };
     let (slot, i) = resolve_io_encodings(globals, ext, int, false, readable, writable, de, di);
     store_io_encodings(globals, self_, slot, i);
     Ok(self_)
@@ -7994,6 +8063,198 @@ mod tests {
             r#"(IO.read("/dev/null", -1) rescue [$!.class, $!.message])"#,
             r#"(File.read("/dev/null", 2, -3) rescue [$!.class, $!.message])"#,
         ]);
+    }
+
+    #[test]
+    fn ungetc_pushes_bytes_not_escapes() {
+        // The pushback is raw bytes: rendering a non-UTF-8 String through
+        // `coerce_to_string` would push its `\xHH` *escapes* back. An
+        // Integer is built in the stream's external encoding, so
+        // `ungetc(130)` on IBM437 is the single byte 130.
+        run_test_no_result_check(
+            r##"
+            path = "/tmp/monoruby_io_ungetc_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.binwrite(path, "\xA4\xA2rest")
+              io = File.open(path, "r:euc-jp")
+              c = io.getc
+              raise "getc #{c.bytes.inspect}" unless c.bytes == [164, 162]
+              io.ungetc(c)
+              r = io.read(2)
+              raise "read #{r.bytes.inspect}" unless r.bytes == [164, 162]
+              io.close
+
+              File.write(path, "abcdef")
+              u = File.open(path)
+              u.set_encoding(Encoding::UTF_8)
+              u.ungetc(233)
+              c2 = u.getc
+              raise "utf8 #{c2.bytes.inspect}" unless c2.bytes == [195, 169]
+              u.set_encoding(Encoding::IBM437)
+              u.ungetc(130)
+              c3 = u.getc
+              raise "ibm437 #{c3.bytes.inspect}" unless c3.bytes == [130]
+              raise "ibm437 enc" unless c3.encoding == Encoding::IBM437
+              u.close
+
+              b = File.open(path)
+              b.ungetbyte("xy")
+              raise "ungetbyte #{b.read(4).inspect}" unless b.read(4) == "xyab"
+              b.close
+              :ok
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn read_nonblock_serves_buffered_data_first() {
+        // `read_buffered_data`: a non-blocking read serves the pushback
+        // and whatever the reader already took from the fd before it
+        // would ever report EAGAIN. A zero length clears the buffer.
+        run_test_no_result_check(
+            r##"
+            r, w = IO.pipe
+            w.write("foobar")
+            c = r.getc          # fills the read buffer with "oobar"
+            r.ungetc(c)
+            raise "first" unless r.read_nonblock(3) == "foo"
+            raise "second" unless r.read_nonblock(3) == "bar"
+            r.close; w.close
+
+            r2, w2 = IO.pipe
+            w2.write("existing")
+            buf = +"existing content"
+            res = r2.read_nonblock(0, buf)
+            raise "buffer identity" unless res.equal?(buf)
+            raise "buffer cleared #{buf.inspect}" unless buf == ""
+            raise "rest" unless r2.read_nonblock(8) == "existing"
+            r2.close; w2.close
+            :ok
+            "##,
+        );
+    }
+
+    #[test]
+    fn writability_is_checked_only_with_bytes_to_write() {
+        // `io_write` reaches `rb_io_check_writable` only once it has
+        // bytes, so a zero-length write to a read-only stream is a no-op;
+        // `rb_io_syswrite` checks up front, whatever the length.
+        run_test_no_result_check(
+            r##"
+            path = "/tmp/monoruby_io_wr_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "abc")
+              ro = File.open(path, "r")
+              raise "zero write" unless ro.write("") == 0
+              begin; ro.write("x"); raise "no error"
+              rescue IOError => e
+                raise "write msg" unless e.message == "not opened for writing"
+              end
+              [->{ ro.syswrite("") }, ->{ ro.syswrite("x") }].each do |t|
+                begin; t.call; raise "no syswrite error"
+                rescue IOError => e
+                  raise "syswrite msg #{e.message}" unless e.message == "not opened for writing"
+                end
+              end
+              ro.close
+              :ok
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn binmode_option_and_encoding_specified_twice() {
+        // `binmode: true` is the option spelling of the mode string's
+        // `b`; an encoding in *both* the mode string and `encoding:` is
+        // CRuby's "encoding specified twice".
+        run_test_no_result_check(
+            r##"
+            path = "/tmp/monoruby_io_bm_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.open(path, "w", encoding: Encoding::UTF_32LE, binmode: true) do |f|
+                raise "binmode?" unless f.binmode?
+                raise "write" unless f.write("hi") == 8
+              end
+              raise "bytes" unless File.binread(path).bytes == [104, 0, 0, 0, 105, 0, 0, 0]
+              File.open(path, "wb", encoding: Encoding::UTF_32LE) do |f|
+                raise "binmode? 2" unless f.binmode?
+              end
+              [
+                -> { IO.write(path, "hi", mode: "w:UTF-16LE:UTF-16BE", encoding: Encoding::UTF_32LE) },
+                -> { IO.write(path, "hi", mode: "w:UTF-16BE", encoding: Encoding::UTF_32LE) },
+              ].each do |t|
+                begin; t.call; raise "no twice error"
+                rescue ArgumentError => e
+                  raise "twice msg #{e.message}" unless e.message == "encoding specified twice"
+                end
+              end
+              # One or the other alone is still fine.
+              IO.write(path, "hi", mode: "w:UTF-16BE")
+              IO.write(path, "hi", encoding: Encoding::UTF_16BE)
+              :ok
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn set_encoding_dash_suppresses_the_internal_encoding() {
+        // CRuby's `"-"` internal name means *no* conversion, which is not
+        // the same as leaving it out (that takes default_internal).
+        run_test_no_result_check(
+            r##"
+            path = "/tmp/monoruby_io_dash_#{Process.pid}_#{rand(100000)}"
+            di = Encoding.default_internal
+            begin
+              File.write(path, "abc")
+              Encoding.default_internal = Encoding::UTF_16BE
+              io = File.open(path)
+              io.set_encoding(Encoding::UTF_8, "-")
+              raise "2arg dash #{io.internal_encoding.inspect}" unless io.internal_encoding.nil?
+              raise "2arg ext" unless io.external_encoding == Encoding::UTF_8
+              io.set_encoding("UTF-8:-")
+              raise "colon dash" unless io.internal_encoding.nil?
+              io.close
+              :ok
+            ensure
+              Encoding.default_internal = di
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn puts_offers_to_ary_through_the_conversion_protocol() {
+        // `rb_check_funcall`, not a method-table probe: an object that
+        // implements only `method_missing` still sees the `#to_ary` call
+        // before `#to_s` is used.
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            o = Object.new
+            def o.method_missing(n, *a); n == :to_ary ? nil : super; end
+            def o.respond_to_missing?(n, p = false); n == :to_ary; end
+            def o.to_s; "<obj>"; end
+            w.puts(o)
+            n = Object.new
+            def n.to_ary; nil; end
+            def n.to_s; "N"; end
+            w.puts(n)
+            w.close
+            res = r.read
+            r.close
+            res
+            "##,
+        );
     }
 
     #[test]
