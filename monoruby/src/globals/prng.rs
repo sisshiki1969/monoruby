@@ -92,6 +92,27 @@ impl Mt {
         out
     }
 
+    /// The 624-word state table and the position within it, for
+    /// `Random#marshal_dump` (CRuby packs the words into a Bignum and
+    /// reports the position as `left`).
+    pub(crate) fn words(&self) -> &[u32; MT_N] {
+        &self.mt
+    }
+
+    pub(crate) fn index(&self) -> usize {
+        self.mti
+    }
+
+    /// Rebuild from a state table and position, for
+    /// `Random#marshal_load`. A position past the end of the table is
+    /// clamped, as CRuby's loader clamps `left`.
+    pub(crate) fn from_words(mt: [u32; MT_N], mti: usize) -> Self {
+        Self {
+            mt,
+            mti: mti.min(MT_N),
+        }
+    }
+
     /// Rebuild a generator from `to_bytes` output; `None` if the buffer
     /// is not a well-formed state.
     pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
