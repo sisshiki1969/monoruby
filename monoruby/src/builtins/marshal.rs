@@ -708,13 +708,20 @@ impl<'a> MarshalReader<'a> {
             // Rebuild an Exception from its `:mesg` / `:bt` ivars, then
             // restore any user ivars and the backtrace.
             let mut message: Option<String> = None;
+            let mut raw_message: Option<(Vec<u8>, crate::value::Encoding)> = None;
             let mut backtrace: Option<Value> = None;
+            let mut cause: Option<Value> = None;
             let mut user_ivars: Vec<(IdentId, Value)> = Vec::new();
             for (name, val) in &ivars {
                 match name.get_name().as_str() {
                     "mesg" => {
                         if let Some(s) = val.is_rstring_inner() {
                             message = Some(String::from_utf8_lossy(s.as_bytes()).into_owned());
+                            // Keep the dumped bytes and encoding so a
+                            // BINARY message does not come back UTF-8.
+                            if s.encoding() != crate::value::Encoding::Utf8 {
+                                raw_message = Some((s.as_bytes().to_vec(), s.encoding()));
+                            }
                         }
                     }
                     "bt" => {
@@ -722,16 +729,33 @@ impl<'a> MarshalReader<'a> {
                             backtrace = Some(*val);
                         }
                     }
+                    // `#cause` lives in the internal `/cause` slot, which
+                    // `get_ivars` hides — so it arrives here as the plain
+                    // name CRuby dumps and goes back to that slot.
+                    "cause" => {
+                        if !val.is_nil() {
+                            cause = Some(*val);
+                        }
+                    }
+                    // Location objects are CRuby's own; monoruby keeps
+                    // the backtrace as strings and has nothing to restore.
+                    "bt_locations" => {}
                     _ => user_ivars.push((*name, *val)),
                 }
             }
             // A nil `:mesg` means "no explicit message"; CRuby's default
             // message is then the class name.
             let msg = message.unwrap_or_else(|| class_name.clone());
-            let exc = Value::new_exception_from_with_class(msg, module.id(), module.id());
+            let mut exc = Value::new_exception_from_with_class(msg, module.id(), module.id());
+            if raw_message.is_some() {
+                exc.is_exception_mut().unwrap().raw_message = raw_message;
+            }
             if let Some(bt) = backtrace {
                 let set_bt = IdentId::get_id("set_backtrace");
                 vm.invoke_method_inner(globals, set_bt, exc, &[bt], None, None)?;
+            }
+            if let Some(cause) = cause {
+                globals.set_ivar(exc, IdentId::get_id("/cause"), cause)?;
             }
             for (name, val) in user_ivars {
                 globals.set_ivar(exc, name, val)?;
@@ -2159,6 +2183,13 @@ fn marshal_dump_value(
                             .map(|e| e.message().to_string())
                             .unwrap_or_default();
                         let user_ivars = globals.get_ivars(obj);
+                        // `#cause` is kept in the internal `/cause` slot,
+                        // which `get_ivars` hides; CRuby dumps it as a
+                        // plain `:cause` field, and only when set.
+                        let cause = globals
+                            .store
+                            .get_ivar(obj, IdentId::get_id("/cause"))
+                            .filter(|v| !v.is_nil());
                         // #backtrace returns nil for a never-raised
                         // exception, else an array of location strings.
                         let bt = vm.invoke_method_inner(
@@ -2171,7 +2202,10 @@ fn marshal_dump_value(
                         )?;
                         buf.push(b'o');
                         marshal_write_symbol(buf, class_name_id, symbols);
-                        marshal_write_fixnum(buf, (2 + user_ivars.len()) as i32);
+                        marshal_write_fixnum(
+                            buf,
+                            (2 + usize::from(cause.is_some()) + user_ivars.len()) as i32,
+                        );
                         // :mesg — CRuby stores nil until a message is
                         // explicitly given; monoruby always materializes
                         // the default (the class name), so treat a message
@@ -2180,12 +2214,21 @@ fn marshal_dump_value(
                         if msg == class_name {
                             buf.push(b'0'); // nil
                         } else {
-                            let msg_val = Value::string_from_str(&msg);
+                            // The message's *own* bytes and encoding, not
+                            // a UTF-8 rebuild of its text: CRuby dumps a
+                            // BINARY message as a bare string, and a
+                            // UTF-8 one wrapped in `I…:E`.
+                            let msg_val = super::exception::message_value(obj);
                             marshal_dump_value(buf, msg_val, vm, globals, symbols, objects)?;
                         }
                         // :bt
                         marshal_write_symbol(buf, IdentId::get_id("bt"), symbols);
                         marshal_dump_value(buf, bt, vm, globals, symbols, objects)?;
+                        // :cause
+                        if let Some(cause) = cause {
+                            marshal_write_symbol(buf, IdentId::get_id("cause"), symbols);
+                            marshal_dump_value(buf, cause, vm, globals, symbols, objects)?;
+                        }
                         for (name, val) in user_ivars {
                             marshal_write_symbol(buf, name, symbols);
                             marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
@@ -3620,5 +3663,43 @@ mod tests {
             r#"h = Hash.new(7); h[:a] = 1; l = Marshal.load(Marshal.dump(h)); [l, l[:zz], l.default]"#,
             r#"l = Marshal.load(Marshal.dump({a: 1, b: [2]})); l"#,
         ]);
+    }
+
+    #[test]
+    fn exception_message_encoding_and_cause() {
+        // The `:mesg` field carries the message String's *own* bytes and
+        // encoding, so a BINARY message dumps as a bare string (no
+        // `I…:E` wrapper) and loads back BINARY — it used to be rebuilt
+        // as UTF-8 in both directions. `#cause` lives in the internal
+        // `/cause` slot, which the generic ivar walk hides, so it needed
+        // its own field: CRuby writes `:cause` only when one is set.
+        run_test_once(
+            r##"
+            r = []
+            e = Exception.new("foo".b)
+            r << Marshal.dump(e)
+            r << Marshal.load(Marshal.dump(e)).message.encoding.to_s
+            r << Marshal.dump(Exception.new("foo"))
+            e2 = Exception.new("foo".b)
+            e2.set_backtrace(["foo/bar.rb:10".b])
+            r << Marshal.dump(e2)
+            e3 = Exception.new("foo".b)
+            e3.instance_variable_set(:@ivar, 1)
+            r << Marshal.dump(e3)
+            r << Marshal.dump(Exception.new)
+            begin
+              begin
+                raise StandardError, "the cause"
+              rescue StandardError
+                raise RuntimeError, "the consequence"
+              end
+            rescue RuntimeError => ex
+              l = Marshal.load(Marshal.dump(ex))
+              r << [l.class.name, l.message, l.cause.class.name, l.cause.message, l.cause.cause]
+            end
+            r << Marshal.load(Marshal.dump(Exception.new("foo"))).cause
+            r
+            "##,
+        );
     }
 }

@@ -395,6 +395,7 @@
 1999cd0bdd0e91608867896ca0c71619	[true, true]	n = Process.maxgroups\n            begin\n              Process.maxgr
 19a12989023b1f415b1be2cfc30f3a90	[true, nil]	require "stringio"\n\n            io = StringIO.new("hi")\n            [io.external
 19c3117422e24db6dd0e39d531d1f3f5	[true, true, true, false, false]	class C\n            include Comparable\n            attr_accessor :x\n 
+19ef02cee33a2e5545a843ca07979cfa	["\\x04\\bo:\\x0EException\\a:\\tmesg\\"\\bfoo:\\abt0", "ASCII-8BIT", "\\x04\\bo:\\x0EException\\a:\\tmesgI\\"\\bfoo\\x06:\\x06ET:\\abt0", "\\x04\\bo:\\x0EException\\a:\\tmesg\\"\\bfoo:\\abt[\\x06\\"\\x12foo/bar.rb:10", "\\x04\\bo:\\x0EException\\b:\\tmesg\\"\\bfoo:\\abt0:\\n@ivari\\x06", "\\x04\\bo:\\x0EException\\a:\\tmesg0:\\abt0", ["RuntimeError", "the consequence", "StandardError", "the cause", nil], nil]	r = []\n            e = Exception.new("foo".b)\n            r << Mars
 19f37cc8342f248bcc7ea2bff3525fb8	true	def f; caller_locations(1, 1)[0].lineno.is_a?(Integer); end\n       
 1a0f14b93dbac347cd85f619ff9eb079	1	count = Module.constants.size\n            module ModConstSpec1; end
 1a37ac01757c7cd301967989601e5c9b	[{"k" => "v!"}, {"k" => "v"}, false, false, [{"k" => "v", s: "w"}, true, true, false, false, true]]	def m; {"k" => "v"}; end\n            a = m; a["k"] << "!"\n         
