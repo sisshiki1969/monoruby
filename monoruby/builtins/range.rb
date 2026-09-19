@@ -6,13 +6,8 @@ class Range
     i = self.begin
     raise TypeError, "can't iterate from NilClass" if i.nil?
     e = self.end
-    # CRuby probes `start <=> end` once before iterating non-numeric
-    # ranges so mocks that expect a single `<=>` call see it. Skip for
-    # endless or numeric (Integer/Float) starts where downstream paths
-    # already compare.
-    if !e.nil? && !i.is_a?(Numeric)
-      (i <=> e) rescue nil
-    end
+    # No `start <=> end` probe here: `range_each` does not compare, and
+    # building the Range already did (see `gen_range`).
     # Reject elements that have no `succ`, even if the range is empty —
     # CRuby validates this up front.
     unless i.respond_to?(:succ)
@@ -492,9 +487,8 @@ class Range
       __range_step_numeric(step_val, &block)
     else
       unless block_given?
-        # Probe <=> once at call time so mocks that expect exactly one
-        # call are satisfied regardless of later #size invocations.
-        (b <=> e) rescue nil unless e.nil?
+        # No `<=>` probe here either: building the Range already
+        # compared the endpoints (see `Range#each`).
         return to_enum(:step, step_arg) { nil }
       end
       __range_step_non_numeric(step_arg, &block)

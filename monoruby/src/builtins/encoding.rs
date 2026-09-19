@@ -18,6 +18,55 @@ pub(super) fn encoding_class(globals: &Globals) -> ClassId {
 /// underscores to hyphens; a handful (Shift_JIS, eucJP-ms, …) need
 /// explicit overrides because CRuby uses mixed-case or keeps
 /// underscores.
+/// The `Encoding::<NAME>` constants an encoding *name* contributes, per
+/// CRuby's `set_encoding_const`:
+///
+/// - a name starting with a digit (`"646"`) contributes none;
+/// - a name that already spells a constant (leading uppercase, then
+///   only alphanumerics and underscores) is registered as written;
+/// - otherwise every non-alphanumeric character becomes `_` and a
+///   leading lowercase letter is upcased — that spelling is registered
+///   when the name carries an uppercase letter anywhere
+///   (`"eucJP-ms"` → `EucJP_ms`, but `"euc-jp-ms"` → nothing here);
+/// - and a name carrying a lowercase letter anywhere also gets the
+///   all-uppercase spelling (`"Windows-31J"` → `WINDOWS_31J`).
+///
+/// Verified name for name against CRuby 4.0: the set below is exactly
+/// `Encoding.constants` for every name in `Encoding.name_list`.
+fn encoding_const_names(name: &str) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let Some(first) = name.chars().next() else {
+        return out;
+    };
+    if first.is_ascii_digit() {
+        return out;
+    }
+    let has_upper = name.bytes().any(|b| b.is_ascii_uppercase());
+    let has_lower = name.bytes().any(|b| b.is_ascii_lowercase());
+    if first.is_ascii_uppercase()
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        out.push(name.to_string());
+    }
+    let mut sanitized: String = name
+        .bytes()
+        .map(|b| if b.is_ascii_alphanumeric() { b as char } else { '_' })
+        .collect();
+    // SAFETY of the index: `sanitized` is ASCII by construction and
+    // `name` is non-empty, so byte 0 is a whole character.
+    sanitized.replace_range(0..1, &sanitized[0..1].to_ascii_uppercase());
+    if has_upper && !out.contains(&sanitized) {
+        out.push(sanitized.clone());
+    }
+    if has_lower {
+        let upper = sanitized.to_ascii_uppercase();
+        if !out.contains(&upper) {
+            out.push(upper);
+        }
+    }
+    out
+}
+
 pub(super) fn canonical_encoding_name(name: &str) -> &'static str {
     match name {
         // Underscore-preserving / mixed-case names CRuby exposes.
@@ -54,6 +103,10 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     globals.register_encoding_object(val, Encoding::Ascii8);
     globals.set_constant(enc.id(), IdentId::ASCII_8BIT, val);
     globals.set_constant_by_str(enc.id(), "BINARY", val);
+    // `(canonical display name, encoding object)` for every constant
+    // registered below, so the CRuby-spelling pass afterwards can find
+    // each encoding's object without re-deriving it.
+    let mut registered: Vec<(&'static str, Value)> = vec![];
     // Add encoding constants (placeholder objects for compatibility).
     // monoruby does not actually support these encodings natively, but the
     // constants must exist so that code like `str.encoding == Encoding::UTF_16LE`
@@ -156,7 +209,7 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         // exists so `Encoding::CESU_8` resolves.
         "CESU_8",
     ] {
-        let canonical = canonical_encoding_name(name);
+        let canonical: &'static str = canonical_encoding_name(name);
         // If a constant with the same canonical name has already been
         // registered (for example, `Shift_JIS` registered before
         // `SHIFT_JIS` — both canonicalise to "Shift_JIS"), reuse its
@@ -191,18 +244,37 @@ pub(super) fn init_encoding(globals: &mut Globals) {
             val
         };
         globals.set_constant_by_str(enc.id(), name, val);
-        // Also expose the canonical-cased constant if the input name
-        // differs (e.g. registering `SHIFT_JIS` should make
-        // `Encoding::Shift_JIS` resolve to the same Value too). Skip
-        // when the canonical-cased constant has already been seen so
-        // we don't trip the "already initialized" warning.
-        if canonical != name
-            && globals
-                .store
-                .get_constant_noautoload(enc.id(), IdentId::get_id(canonical))
-                .is_none()
-        {
-            globals.set_constant_by_str(enc.id(), canonical, val);
+        registered.push((canonical, val));
+    }
+
+    // CRuby's `set_encoding_const`: every canonical name and every
+    // alias contributes its constant spellings, so `Encoding::EUCJP`,
+    // `Encoding::SJIS`, `Encoding::ISO8859_9` and
+    // `Encoding::WINDOWS_1252` all resolve. A display name is not a
+    // constant name — the loop above registered "ISO-8859-1" verbatim,
+    // which no Ruby program can even write.
+    for (canonical, val) in registered {
+        let aliases = ENCODING_NAMES
+            .iter()
+            .find(|(c, _)| *c == canonical)
+            .map(|(_, a)| *a)
+            .unwrap_or(&[]);
+        for name in std::iter::once(canonical).chain(aliases.iter().copied()) {
+            // The three run-time aliases name whatever the locale and
+            // `default_external` currently are, so they are not
+            // constants in CRuby either.
+            if DYNAMIC_ALIASES.contains(&name) {
+                continue;
+            }
+            for c in encoding_const_names(name) {
+                if globals
+                    .store
+                    .get_constant_noautoload(enc.id(), IdentId::get_id(&c))
+                    .is_none()
+                {
+                    globals.set_constant_by_str(enc.id(), &c, val);
+                }
+            }
         }
     }
 
@@ -4364,6 +4436,13 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         }
         _ => {}
     }
+    // `rb_to_encoding` goes through `StringValueCStr`, so an embedded
+    // NUL is its own error rather than an unknown name.
+    if name.as_bytes().contains(&0) {
+        return Err(MonorubyErr::argumenterr(
+            "invalid encoding name (NUL byte)",
+        ));
+    }
     match find_encoding_object(globals, &name) {
         Some(v) => Ok(v),
         None => Err(MonorubyErr::argumenterr(format!(
@@ -4467,7 +4546,7 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         "UTF_8" | "UTF8" | "CP65001" => Some("UTF_8"),
 
         // UTF-7 (dummy)
-        "UTF_7" => Some("UTF_7"),
+        "UTF_7" | "CP65000" => Some("UTF_7"),
 
         // Emacs-Mule and other dummy ISO-2022-JP variants
         "EMACS_MULE" => Some("Emacs_Mule"),
@@ -4482,13 +4561,13 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
 
         // UTF-16
         "UTF_16" => Some("UTF_16"),
-        "UTF_16BE" => Some("UTF_16BE"),
+        "UTF_16BE" | "UCS_2BE" => Some("UTF_16BE"),
         "UTF_16LE" => Some("UTF_16LE"),
 
         // UTF-32
         "UTF_32" => Some("UTF_32"),
-        "UTF_32BE" => Some("UTF_32BE"),
-        "UTF_32LE" => Some("UTF_32LE"),
+        "UTF_32BE" | "UCS_4BE" => Some("UTF_32BE"),
+        "UTF_32LE" | "UCS_4LE" => Some("UTF_32LE"),
 
         // ISO-8859 family
         "ISO_8859_1" | "ISO8859_1" | "LATIN1" => Some("ISO_8859_1"),
@@ -4509,9 +4588,11 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
 
         // Japanese encodings
         "EUC_JP" | "EUCJP" => Some("EUC_JP"),
-        "SHIFT_JIS" | "SJIS" => Some("Shift_JIS"),
+        "SHIFT_JIS" => Some("Shift_JIS"),
         "ISO_2022_JP" | "ISO2022_JP" => Some("ISO_2022_JP"),
-        "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" => Some("Windows_31J"),
+        "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" | "PCK" | "SJIS" => {
+            Some("Windows_31J")
+        }
         "MACJAPANESE" | "MACJAPAN" => Some("MACJAPANESE"),
         // `eucJP-ms` is the canonical CRuby spelling; the lower-case
         // and partly-hyphenated user inputs (`euc-jp-ms`,
@@ -4556,11 +4637,11 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         "IBM869" | "CP869" => Some("IBM869"),
 
         // KOI8
-        "KOI8_R" => Some("KOI8_R"),
+        "KOI8_R" | "CP878" => Some("KOI8_R"),
         "KOI8_U" => Some("KOI8_U"),
 
         // Chinese encodings
-        "GB2312" | "EUC_CN" => Some("GB2312"),
+        "GB2312" | "EUC_CN" | "EUCCN" => Some("GB2312"),
         "GBK" | "CP936" => Some("GBK"),
         "GB18030" => Some("GB18030"),
         "GB12345" => Some("GB12345"),
@@ -4673,31 +4754,31 @@ const ENCODING_NAMES: &[(&str, &[&str])] = &[
     ("ASCII-8BIT", &["BINARY"]),
     ("UTF-8", &["CP65001"]),
     ("US-ASCII", &["ASCII", "ANSI_X3.4-1968", "646"]),
-    ("UTF-16BE", &[]),
+    ("UTF-16BE", &["UCS-2BE"]),
     ("UTF-16LE", &[]),
     ("UTF-16", &[]),
-    ("UTF-32BE", &[]),
-    ("UTF-32LE", &[]),
+    ("UTF-32BE", &["UCS-4BE"]),
+    ("UTF-32LE", &["UCS-4LE"]),
     ("UTF-32", &[]),
-    ("ISO-8859-1", &[]),
-    ("ISO-8859-2", &[]),
-    ("ISO-8859-3", &[]),
-    ("ISO-8859-4", &[]),
-    ("ISO-8859-5", &[]),
-    ("ISO-8859-6", &[]),
-    ("ISO-8859-7", &[]),
-    ("ISO-8859-8", &[]),
-    ("ISO-8859-9", &[]),
-    ("ISO-8859-10", &[]),
-    ("ISO-8859-11", &[]),
-    ("ISO-8859-13", &[]),
-    ("ISO-8859-14", &[]),
-    ("ISO-8859-15", &[]),
-    ("ISO-8859-16", &[]),
-    ("Shift_JIS", &["SJIS"]),
-    ("Windows-31J", &["CP932", "csWindows31J"]),
+    ("ISO-8859-1", &["ISO8859-1"]),
+    ("ISO-8859-2", &["ISO8859-2"]),
+    ("ISO-8859-3", &["ISO8859-3"]),
+    ("ISO-8859-4", &["ISO8859-4"]),
+    ("ISO-8859-5", &["ISO8859-5"]),
+    ("ISO-8859-6", &["ISO8859-6"]),
+    ("ISO-8859-7", &["ISO8859-7"]),
+    ("ISO-8859-8", &["ISO8859-8"]),
+    ("ISO-8859-9", &["ISO8859-9"]),
+    ("ISO-8859-10", &["ISO8859-10"]),
+    ("ISO-8859-11", &["ISO8859-11"]),
+    ("ISO-8859-13", &["ISO8859-13"]),
+    ("ISO-8859-14", &["ISO8859-14"]),
+    ("ISO-8859-15", &["ISO8859-15"]),
+    ("ISO-8859-16", &["ISO8859-16"]),
+    ("Shift_JIS", &[]),
+    ("Windows-31J", &["CP932", "csWindows31J", "SJIS", "PCK"]),
     ("EUC-JP", &["eucJP"]),
-    ("ISO-2022-JP", &[]),
+    ("ISO-2022-JP", &["ISO2022-JP"]),
     ("Windows-1250", &["CP1250"]),
     ("Windows-1251", &["CP1251"]),
     ("Windows-1252", &["CP1252"]),
@@ -4707,22 +4788,22 @@ const ENCODING_NAMES: &[(&str, &[&str])] = &[
     ("Windows-1256", &["CP1256"]),
     ("Windows-1257", &["CP1257"]),
     ("Windows-1258", &["CP1258"]),
-    ("KOI8-R", &[]),
+    ("KOI8-R", &["CP878"]),
     ("KOI8-U", &[]),
-    ("GB2312", &["EUC-CN"]),
+    ("GB2312", &["EUC-CN", "eucCN"]),
     ("GBK", &["CP936"]),
     ("GB18030", &[]),
     ("Big5", &[]),
-    ("EUC-KR", &[]),
-    ("EUC-TW", &[]),
+    ("EUC-KR", &["eucKR"]),
+    ("EUC-TW", &["eucTW"]),
     ("CP949", &[]),
     ("TIS-620", &[]),
-    ("MacJapanese", &[]),
+    ("MacJapanese", &["MacJapan"]),
     ("eucJP-ms", &["eucjp-ms", "euc-jp-ms"]),
     ("CP51932", &[]),
     ("stateless-ISO-2022-JP", &[]),
     ("CESU-8", &[]),
-    ("UTF-7", &[]),
+    ("UTF-7", &["CP65000"]),
     ("Emacs-Mule", &[]),
     ("CP50220", &[]),
     ("CP50221", &[]),
@@ -6083,6 +6164,40 @@ mod tests {
               raise unless Encoding.find("LOCALE") == Encoding.find("locale")
               raise unless Encoding.find("EXTERNAL") == Encoding.find("external")
               raise unless Encoding.find("Internal") == Encoding.find("internal")
+            "##,
+        );
+    }
+
+    #[test]
+    fn encoding_constants_use_crubys_spellings() {
+        // A display name is not a constant name: `Encoding::ISO-8859-1`
+        // is unwritable. `set_encoding_const`'s rule turns every name
+        // and alias into the constant(s) CRuby registers for it.
+        run_test_no_result_check(
+            r##"
+              pairs = {
+                "ISO8859_9" => "ISO-8859-9", "ISO_8859_9" => "ISO-8859-9",
+                "ISO8859_1" => "ISO-8859-1",
+                "EUCJP" => "EUC-JP", "EUC_JP" => "EUC-JP",
+                "SJIS" => "Windows-31J", "SHIFT_JIS" => "Shift_JIS",
+                "PCK" => "Windows-31J", "CP932" => "Windows-31J",
+                "WINDOWS_1252" => "Windows-1252", "Windows_1252" => "Windows-1252",
+                "CP1252" => "Windows-1252",
+                "BIG5" => "Big5", "UCS_2BE" => "UTF-16BE", "UCS_4LE" => "UTF-32LE",
+                "CP65000" => "UTF-7", "CP878" => "KOI8-R", "EUCCN" => "GB2312",
+                "ANSI_X3_4_1968" => "US-ASCII", "ASCII" => "US-ASCII",
+                "UTF_8" => "UTF-8", "CP65001" => "UTF-8",
+                "EMACS_MULE" => "Emacs-Mule", "Emacs_Mule" => "Emacs-Mule",
+              }
+              pairs.each do |const, name|
+                e = Encoding.const_get(const)
+                raise "#{const} => #{e.name}, want #{name}" unless e.name == name
+              end
+              # No constant may carry a character Ruby cannot write.
+              bad = Encoding.constants.map(&:to_s).grep(/[^A-Za-z0-9_]/)
+              raise "unwritable constants: #{bad.inspect}" unless bad.empty?
+              # A name starting with a digit contributes no constant.
+              raise unless Encoding.constants.map(&:to_s).none? { |c| c =~ /\A[0-9]/ }
             "##,
         );
     }

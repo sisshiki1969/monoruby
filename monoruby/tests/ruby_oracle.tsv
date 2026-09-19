@@ -275,6 +275,7 @@
 10763a10e14efbbc495d2a2b48c4e475	[3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22]	class Foo\n              @@foo = 1\n              def foo\n           
 10825d3f920402467ed0762277926bd9	[1, 2]	def method_with_block\n          Fiber.new {\n            [1,2].each { |x
 10992a62d5e09476c2e0a3c43fd20025	[true, [:a, :b]]	S = Struct.new(:a, :b, keyword_init: true)\n            \n\n          
+10aa84c60b3ca9b4592f7ec324b5b803	"<obj>\\nN\\n"	r, w = IO.pipe\n            o = Object.new\n            def o.method_
 10ac4da278feac457c66f69e10a1b0ec	["X1", "A", "X2"]	# super と prepend の組み合わせの例\n            module X\n              def f
 10acb8333f48a4e55ac8abb685753d0c	[false, [1, 2], Array]	class MyArr < Array; def to_a; $flag = true; super; end; end\n        $f
 10bf6df051bcd35070adae7d4ebbbb02	[:initialize, :initialize_copy, :respond_to_missing?]	class DefLifecycle\n              def initialize; end\n              

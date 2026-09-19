@@ -4166,6 +4166,27 @@ impl<'pr> Lowerer<'pr> {
     ) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let parts = self.lower_interp_parts(node.parts())?;
+        // Adjacent string literals (`"a" "b"`) reach us as a dstr whose
+        // parts are all static chunks. CRuby folds those into one
+        // string literal at parse time, and that matters beyond the
+        // allocation: the result is a *literal*, so it is chilled and
+        // warns on first mutation.
+        if !parts.is_empty()
+            && parts
+                .iter()
+                .all(|n| matches!(n.kind, NodeKind::String(_)))
+        {
+            let mut joined = String::new();
+            for part in &parts {
+                if let NodeKind::String(chunk) = &part.kind {
+                    joined.push_str(chunk);
+                }
+            }
+            return Ok(Node {
+                kind: NodeKind::String(joined),
+                loc,
+            });
+        }
         Ok(Node {
             kind: NodeKind::InterporatedString(parts),
             loc,
