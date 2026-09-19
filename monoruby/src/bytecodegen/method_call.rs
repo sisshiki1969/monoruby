@@ -546,6 +546,21 @@ impl<'a> BytecodeGen<'a> {
                         .iter_mut()
                         .for_each(|n| self.level_down(n, level));
                     if let Some(n) = assign {
+                        // `rescue => e` *binds* `e`, so it has to be
+                        // created in the enclosing scope before the level
+                        // shift turns it into a dynamic reference — the
+                        // lvalue path can only refer to an outer local,
+                        // never create one. Same treatment the mlhs
+                        // targets get above; without it a `rescue => e`
+                        // directly inside a `for` body (whose body
+                        // becomes a block sharing the outer scope) was a
+                        // fatal "dynamic var e not found".
+                        if level == 0
+                            && let NodeKind::LocalVar(0, name) = &n.kind
+                        {
+                            let name = IdentId::get_id(name);
+                            self.assign_local(name);
+                        }
                         self.level_down(n, level);
                     }
                     self.level_down(body, level);

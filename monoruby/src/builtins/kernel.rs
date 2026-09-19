@@ -1118,7 +1118,12 @@ pub(crate) fn make_exception_error(
         if msg_arg.is_some() {
             return Err(MonorubyErr::typeerr("exception class/object expected"));
         }
-        let err = MonorubyErr::runtimeerr(message.to_str()?);
+        // Keep the message's own bytes and encoding, as `Exception#initialize`
+        // does: `raise "x".b` must not report a UTF-8 message.
+        let mut err = MonorubyErr::runtimeerr(message.to_str()?);
+        if message.encoding() != crate::value::Encoding::Utf8 {
+            err.raw_message = Some((message.as_bytes().to_vec(), message.encoding()));
+        }
         return apply_cause(globals, err, None, cause_kwarg);
     }
     // Duck-typed exception. CRuby drives `arg0.exception(msg)` (or

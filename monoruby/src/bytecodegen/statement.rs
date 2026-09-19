@@ -778,6 +778,31 @@ mod test {
     }
 
     #[test]
+    fn rescue_binding_inside_a_for_body() {
+        // A `for` body becomes a block that shares the *enclosing*
+        // scope, so everything it binds has to exist there before the
+        // level shift turns it into a dynamic reference. `rescue => e`
+        // binds, but `level_down` only recursed into the target, so a
+        // `rescue => e` directly inside a `for` body was a fatal
+        // "[FATAL] Bytecodegen: dynamic var e not found" — and the
+        // variable still has to leak out of the loop, as Ruby's `for`
+        // does.
+        run_tests(&[
+            r#"r = []; for o in [1, 2]; begin; raise "x#{o}"; rescue => e; r << [o, e.message]; end; end; r << e.message; r"#,
+            r#"for o in [1]; begin; raise "q"; rescue => zz; end; end; zz.message"#,
+            r#"def m; for o in [1]; begin; raise "q"; rescue => er; end; end; er.message; end; m"#,
+            // Several clauses, and an `ensure` alongside.
+            r#"r = []; for i in [1]; begin; raise "y"; rescue ArgumentError => a; r << :no; rescue => b; r << b.message; end; end; r << b.message; r"#,
+            r#"r = []; for n in [1]; begin; raise "en"; rescue => e3; ensure; r << :ens; end; end; r << e3.message; r"#,
+            // A real nested block inside the `for` body keeps its own
+            // scope, as before.
+            r#"r = []; for k in [1]; [2].each { |y| begin; raise "z"; rescue => e2; r << e2.message; end }; end; r"#,
+            // The ordinary block form is unchanged.
+            r#"r = []; [1].each { begin; raise "b"; rescue => be; r << be.message; end }; r"#,
+        ]);
+    }
+
+    #[test]
     fn ensure_runs_when_rescue_clause_exits() {
         // An `ensure` must run — and its own `return` / `raise` must override
         // — when a rescue clause re-raises, raises a new exception, returns,

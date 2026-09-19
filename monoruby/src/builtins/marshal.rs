@@ -1962,14 +1962,27 @@ fn marshal_dump_value(
                     Some(ObjTy::HASH) => {
                         // Snapshot the pairs to avoid holding a borrow into
                         // the live hash across re-entrant user code.
-                        let (pairs, default, cbi): (Vec<(Value, Value)>, Option<Value>, bool) = {
+                        let (pairs, default, cbi, has_proc): (
+                            Vec<(Value, Value)>,
+                            Option<Value>,
+                            bool,
+                            bool,
+                        ) = {
                             let inner = obj.as_hashmap_inner();
                             (
                                 inner.iter().collect(),
                                 inner.default_value(),
                                 inner.is_compare_by_identity(),
+                                inner.defalut_proc().is_some(),
                             )
                         };
+                        // A default *proc* has no wire form — CRuby's
+                        // `w_object` refuses the hash outright.
+                        if has_proc {
+                            return Err(MonorubyErr::typeerr(
+                                "can't dump hash with default proc",
+                            ));
+                        }
                         let ivars = globals.get_ivars(obj);
                         let has_ivars = !ivars.is_empty();
                         if has_ivars {
@@ -3590,6 +3603,22 @@ mod tests {
             r##"Marshal::MAJOR_VERSION"##,
             r##"Marshal::MINOR_VERSION"##,
             r##"[Marshal::MAJOR_VERSION, Marshal::MINOR_VERSION]"##,
+        ]);
+    }
+    #[test]
+    fn undumpable_receivers() {
+        // A hash with a default *proc* has no wire form, and the thread
+        // primitives carry native state CRuby refuses to dump — each
+        // with its own wording.
+        run_tests(&[
+            r#"h = Hash.new { |hh, k| k }; (Marshal.dump(h) rescue [$!.class, $!.message])"#,
+            r#"(Marshal.dump(Mutex.new) rescue [$!.class, $!.message])"#,
+            r#"(Marshal.dump(Thread::Queue.new) rescue [$!.class, $!.message])"#,
+            r#"(Marshal.dump(Thread::SizedQueue.new(1)) rescue [$!.class, $!.message])"#,
+            r#"(Marshal.dump(Thread::ConditionVariable.new) rescue [$!.class, $!.message])"#,
+            // A hash with a default *value* still round-trips.
+            r#"h = Hash.new(7); h[:a] = 1; l = Marshal.load(Marshal.dump(h)); [l, l[:zz], l.default]"#,
+            r#"l = Marshal.load(Marshal.dump({a: 1, b: [2]})); l"#,
         ]);
     }
 }

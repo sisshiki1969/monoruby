@@ -87,12 +87,13 @@ pub struct MonorubyErr {
     /// → `#exit_value` / `#reason`; for `StopIteration` the
     /// iterator return value + `"result"` → `#result`.
     pub(crate) payload: Option<(Value, &'static str)>,
-    /// The exact message bytes when they are not valid UTF-8 — e.g. an
-    /// Errno message carrying a binary path. `message` then holds the
-    /// lossy rendering for Rust-side display, while `Exception#to_s`
-    /// materializes these bytes as an ASCII-8BIT string (CRuby keeps
-    /// the path's own bytes in the message).
-    pub(crate) raw_message: Option<Vec<u8>>,
+    /// The exact message bytes and their encoding, when a plain UTF-8
+    /// `String` would not reproduce them — an Errno message carrying a
+    /// binary path, or a message given as a String in some other
+    /// encoding. `message` then holds the lossy rendering for Rust-side
+    /// display, while `Exception#to_s` materializes these bytes in that
+    /// encoding (CRuby keeps the message String exactly as given).
+    pub(crate) raw_message: Option<(Vec<u8>, crate::value::Encoding)>,
 }
 
 impl MonorubyErr {
@@ -1279,7 +1280,7 @@ impl MonorubyErr {
         if std::str::from_utf8(bytes).is_err() {
             let mut raw = format!("{} @ {} - ", desc, syscall).into_bytes();
             raw.extend_from_slice(bytes);
-            e.raw_message = Some(raw);
+            e.raw_message = Some((raw, crate::value::Encoding::Ascii8));
         }
         e
     }
@@ -1301,7 +1302,7 @@ impl MonorubyErr {
         if std::str::from_utf8(bytes).is_err() {
             let mut raw = format!("{} - ", desc).into_bytes();
             raw.extend_from_slice(bytes);
-            e.raw_message = Some(raw);
+            e.raw_message = Some((raw, crate::value::Encoding::Ascii8));
         }
         e
     }
