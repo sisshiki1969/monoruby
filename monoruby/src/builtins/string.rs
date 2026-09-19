@@ -6226,19 +6226,244 @@ fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn to_c(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let s = self_.expect_str(globals)?;
-    let (re, im) = parse_complex(s);
-    Ok(Value::complex(parse_real(re), parse_real(im)))
+    // The grammar is pure ASCII and anything else is trailing garbage,
+    // so walk the raw bytes rather than demanding valid UTF-8.
+    let inner = self_.as_rstring_inner();
+    let (re, im) = match parse_to_c(inner.as_bytes()) {
+        ToCParse::Cartesian(re, im) => (re.to_value(), im.to_value()),
+        ToCParse::Polar(m, a) => (Value::float(m * a.cos()), Value::float(m * a.sin())),
+        ToCParse::DivideByZero => return Err(MonorubyErr::divide_by_zero()),
+    };
+    Ok(Value::complex(
+        Real::try_from(&globals.store, re)?,
+        Real::try_from(&globals.store, im)?,
+    ))
 }
 
-/// Parse a numeric string to a Real -- integer if possible, float otherwise.
-fn parse_real(s: f64) -> Real {
-    if s == (s as i64) as f64 && s.is_finite() {
-        Real::from(s as i64)
-    } else {
-        Real::from(s)
+/// One numeric literal in `String#to_c`'s grammar. A literal with a
+/// `/` is always a Rational (CRuby keeps `"4/2"` as `(2/1)`), one with
+/// a fraction or exponent is a Float, everything else an Integer.
+#[derive(Clone, Debug)]
+enum ToCNum {
+    Int(BigInt),
+    Rat(num::BigRational),
+    Float(f64),
+}
+
+impl ToCNum {
+    fn zero() -> Self {
+        ToCNum::Int(BigInt::zero())
+    }
+
+    fn unit(negative: bool) -> Self {
+        ToCNum::Int(BigInt::from(if negative { -1 } else { 1 }))
+    }
+
+    fn to_f64(&self) -> f64 {
+        use num::ToPrimitive;
+        match self {
+            ToCNum::Int(b) => b.to_f64().unwrap_or(f64::NAN),
+            ToCNum::Rat(r) => r.to_f64().unwrap_or(f64::NAN),
+            ToCNum::Float(f) => *f,
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        use num::ToPrimitive;
+        match self {
+            ToCNum::Int(b) => match b.to_i64() {
+                Some(i) => Value::integer(i),
+                None => Value::bigint(b.clone()),
+            },
+            ToCNum::Rat(r) => Value::rational(r.numer().clone(), r.denom().clone()),
+            ToCNum::Float(f) => Value::float(*f),
+        }
     }
 }
+
+/// What `String#to_c`'s grammar found: either the two cartesian parts
+/// or a polar `m@a` pair.
+enum ToCParse {
+    Cartesian(ToCNum, ToCNum),
+    Polar(f64, f64),
+    /// `"3/0"` — CRuby raises `ZeroDivisionError` rather than
+    /// answering `(0+0i)`.
+    DivideByZero,
+}
+
+/// A digit run, with `_` allowed strictly *between* two digits (`"7_9"`
+/// is 79, `"7__9"` stops after the 7).
+fn scan_to_c_digits(b: &[u8], mut i: usize) -> (String, usize) {
+    let mut out = String::new();
+    while i < b.len() {
+        if b[i].is_ascii_digit() {
+            out.push(b[i] as char);
+            i += 1;
+        } else if b[i] == b'_'
+            && !out.is_empty()
+            && b.get(i + 1).is_some_and(|c| c.is_ascii_digit())
+        {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    (out, i)
+}
+
+/// Scan one numeric literal at `i`:
+/// `[+-]? digits ('.' digits)? ([eE] [+-]? digits)? ('/' digits)?`.
+/// Returns the value and the offset just past it, or `None` when there
+/// is no numeric there at all (the sign, if any, is not consumed).
+fn scan_to_c_number(b: &[u8], i: usize) -> Option<(ToCNum, usize)> {
+    let mut j = i;
+    let negative = match b.get(j) {
+        Some(b'+') => {
+            j += 1;
+            false
+        }
+        Some(b'-') => {
+            j += 1;
+            true
+        }
+        _ => false,
+    };
+    let (int_digits, nj) = scan_to_c_digits(b, j);
+    j = nj;
+    let mut text = int_digits.clone();
+    let mut is_float = false;
+    if b.get(j) == Some(&b'.') {
+        let (frac, nj) = scan_to_c_digits(b, j + 1);
+        if !frac.is_empty() {
+            is_float = true;
+            // The integer part may be missing entirely (`".5"`).
+            if text.is_empty() {
+                text.push('0');
+            }
+            text.push('.');
+            text.push_str(&frac);
+            j = nj;
+        }
+    }
+    if int_digits.is_empty() && !is_float {
+        return None;
+    }
+    if matches!(b.get(j), Some(b'e') | Some(b'E')) {
+        let mut k = j + 1;
+        let mut exp = String::new();
+        if matches!(b.get(k), Some(b'+') | Some(b'-')) {
+            exp.push(b[k] as char);
+            k += 1;
+        }
+        let (digits, nk) = scan_to_c_digits(b, k);
+        if !digits.is_empty() {
+            is_float = true;
+            text.push('e');
+            text.push_str(&exp);
+            text.push_str(&digits);
+            j = nk;
+        }
+    }
+    let mut value = if is_float {
+        ToCNum::Float(text.parse::<f64>().unwrap_or(0.0))
+    } else {
+        ToCNum::Int(text.parse::<BigInt>().unwrap_or_else(|_| BigInt::zero()))
+    };
+    // A `/` makes it a Rational — but only with an unsigned digit run
+    // after it (`"2/-3"` is just 2, `"1/"` just 1).
+    if b.get(j) == Some(&b'/') {
+        let (den, nj) = scan_to_c_digits(b, j + 1);
+        if !den.is_empty() {
+            let den = den.parse::<BigInt>().unwrap_or_else(|_| BigInt::zero());
+            if den.is_zero() {
+                // Signalled to the caller through a NaN sentinel it
+                // cannot otherwise produce; `parse_to_c` turns it into
+                // the ZeroDivisionError.
+                return Some((ToCNum::Float(f64::NAN), usize::MAX));
+            }
+            let numer = match &value {
+                ToCNum::Int(b) => num::BigRational::new(b.clone(), BigInt::from(1)),
+                ToCNum::Float(f) => num::BigRational::from_float(*f)
+                    .unwrap_or_else(|| num::BigRational::new(BigInt::zero(), BigInt::from(1))),
+                ToCNum::Rat(r) => r.clone(),
+            };
+            value = ToCNum::Rat(numer / num::BigRational::new(den, BigInt::from(1)));
+            j = nj;
+        }
+    }
+    if negative {
+        value = match value {
+            ToCNum::Int(b) => ToCNum::Int(-b),
+            ToCNum::Rat(r) => ToCNum::Rat(-r),
+            ToCNum::Float(f) => ToCNum::Float(-f),
+        };
+    }
+    Some((value, j))
+}
+
+fn is_imaginary_unit(c: Option<&u8>) -> bool {
+    matches!(c, Some(b'i') | Some(b'I') | Some(b'j') | Some(b'J'))
+}
+
+/// CRuby's `String#to_c` grammar: leading space, then a real, an
+/// imaginary, `real [+-] imaginary`, or the polar `real@real`, with
+/// everything after the match ignored.
+fn parse_to_c(b: &[u8]) -> ToCParse {
+    let mut i = 0usize;
+    while i < b.len() && (b[i].is_ascii_whitespace() || b[i] == 0x0b) {
+        i += 1;
+    }
+    let (n1, i) = match scan_to_c_number(b, i) {
+        Some((_, usize::MAX)) => return ToCParse::DivideByZero,
+        Some(v) => v,
+        None => {
+            // No numeric: a bare imaginary unit is 1i ("Infinity" is
+            // `(0+1i)` — the `I` is the unit, the rest is garbage).
+            let mut j = i;
+            let negative = match b.get(j) {
+                Some(b'-') => {
+                    j += 1;
+                    true
+                }
+                Some(b'+') => {
+                    j += 1;
+                    false
+                }
+                _ => false,
+            };
+            return if is_imaginary_unit(b.get(j)) {
+                ToCParse::Cartesian(ToCNum::zero(), ToCNum::unit(negative))
+            } else {
+                ToCParse::Cartesian(ToCNum::zero(), ToCNum::zero())
+            };
+        }
+    };
+    if is_imaginary_unit(b.get(i)) {
+        return ToCParse::Cartesian(ToCNum::zero(), n1);
+    }
+    if b.get(i) == Some(&b'@') {
+        return match scan_to_c_number(b, i + 1) {
+            Some((_, usize::MAX)) => ToCParse::DivideByZero,
+            Some((n2, _)) => ToCParse::Polar(n1.to_f64(), n2.to_f64()),
+            None => ToCParse::Cartesian(n1, ToCNum::zero()),
+        };
+    }
+    if matches!(b.get(i), Some(b'+') | Some(b'-')) {
+        match scan_to_c_number(b, i) {
+            Some((_, usize::MAX)) => return ToCParse::DivideByZero,
+            Some((n2, j)) if is_imaginary_unit(b.get(j)) => {
+                return ToCParse::Cartesian(n1, n2);
+            }
+            None if is_imaginary_unit(b.get(i + 1)) => {
+                return ToCParse::Cartesian(n1, ToCNum::unit(b[i] == b'-'));
+            }
+            _ => {}
+        }
+    }
+    ToCParse::Cartesian(n1, ToCNum::zero())
+}
+
+
 
 ///
 /// ### String#to_r
@@ -6266,75 +6491,8 @@ fn to_r(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-/// Parse a string as a complex number, returning (real, imaginary) as f64.
-fn parse_complex(s: &str) -> (f64, f64) {
-    let s = s.trim();
-    if s.is_empty() {
-        return (0.0, 0.0);
-    }
 
-    // Handle pure imaginary: "3i", "-2i", "+5i", "i", "-i", "+i"
-    if let Some(rest) = s.strip_suffix('i') {
-        if rest.is_empty() {
-            return (0.0, 1.0);
-        }
-        if rest == "+" {
-            return (0.0, 1.0);
-        }
-        if rest == "-" {
-            return (0.0, -1.0);
-        }
-        // Try "a+bi" or "a-bi" pattern
-        // Find the last '+' or '-' that is not at the start and not part of an exponent
-        if let Some(pos) = find_complex_split(rest) {
-            let real_part = &rest[..pos];
-            let imag_part = &rest[pos..];
-            let re = parse_f64_simple(real_part);
-            let im = if imag_part == "+" {
-                1.0
-            } else if imag_part == "-" {
-                -1.0
-            } else {
-                parse_f64_simple(imag_part)
-            };
-            return (re, im);
-        }
-        // Pure imaginary
-        let im = parse_f64_simple(rest);
-        return (0.0, im);
-    }
 
-    // Pure real
-    let re = parse_f64_simple(s);
-    (re, 0.0)
-}
-
-/// Find the split point between real and imaginary parts in a complex string.
-/// Returns the position of the '+' or '-' that separates them.
-fn find_complex_split(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut i = bytes.len();
-    while i > 0 {
-        i -= 1;
-        if (bytes[i] == b'+' || bytes[i] == b'-') && i > 0 {
-            // Make sure this isn't part of a scientific notation exponent
-            if i >= 2 && (bytes[i - 1] == b'e' || bytes[i - 1] == b'E') {
-                continue;
-            }
-            return Some(i);
-        }
-    }
-    None
-}
-
-/// Simple f64 parser that returns 0.0 for invalid input.
-fn parse_f64_simple(s: &str) -> f64 {
-    let s = s.trim();
-    if s.is_empty() {
-        return 0.0;
-    }
-    s.parse::<f64>().unwrap_or(0.0)
-}
 
 ///
 /// ### String#to_i
@@ -14119,6 +14277,27 @@ mod tests {
               s.rpartition("X").map(&:encoding).map(&:to_s)
             "#,
         );
+    }
+
+    #[test]
+    fn to_c_parses_cruby_grammar() {
+        run_tests(&[
+            // Integer / Float / Rational parts keep their class.
+            r#"["3", "-3", "2.3", "-2.3", "2e3+4i", "2E3+2E4i"].map { |s| c = s.to_c; [c.to_s, c.real.class.to_s, c.imaginary.class.to_s] }"#,
+            r#"["2/3", "-2/3", "4+2/3i", "7-2/3i", "1/3", "4/2", "1.0/3", "1.5/2", "1e2/3", "1_0/2_0", "2/3i", "-2/3i"].map { |s| c = s.to_c; [c.to_s, c.real.class.to_s, c.imaginary.class.to_s] }"#,
+            // Every imaginary unit letter, and the bare unit.
+            r#"["79+4i", "79+4I", "79+4j", "79+4J", "79-i", "79+i", "i", "-i", "+i", "I"].map { |s| s.to_c.to_s }"#,
+            // A leading letter that happens to be a unit is the unit.
+            r#"["Infinity", "-Infinity", "Insecure", "-Insecure", "NaN", "ruby", ""].map { |s| s.to_c.to_s }"#,
+            // Polar form.
+            r#"["79@4", "-79@4", "79@-4"].map { |s| s.to_c.to_s }"#,
+            // Underscores, surrounding space and trailing garbage.
+            r#"["7_9+4_0i", "  79+4i", "79+4i  ", "79+4iruby", "7__9+4__0i", "1+2i+3i", "1i2"].map { |s| s.to_c.to_s }"#,
+            // Incomplete tails fall back to what was read.
+            r#"["1e", "1/", "1@", "3+", "3-", "2/-3", ".5", "-.5", ".5i", "5.", "+3"].map { |s| s.to_c.to_s }"#,
+            // A zero denominator raises.
+            r#"begin; "3/0".to_c; rescue => e; e.class.to_s; end"#,
+        ]);
     }
 
     #[test]
