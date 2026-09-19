@@ -66,7 +66,7 @@ impl<'a> JitContext<'a> {
         } else {
             let start_pos = BcIndex::default();
             let bb_begin = iseq.bb_info.get_bb_id(start_pos);
-            let bb_end = BasicBlockId(iseq.bb_info.len() - 1);
+            let bb_end = BasicBlockId::new(iseq.bb_info.len() - 1);
             (bb_begin, bb_end)
         };
 

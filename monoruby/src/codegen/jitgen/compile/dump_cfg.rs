@@ -65,8 +65,7 @@ pub(super) fn dump_cfg(
     }
 
     for bbid in bb_begin..=bb_end {
-        let entry = &iseq.bb_info[bbid];
-        for succ in &entry.succ {
+        for succ in iseq.bb_info.succ(bbid) {
             s += &format!("  {:?} -> {:?} [headport = n, tailport = s];\n", bbid, succ);
         }
     }
