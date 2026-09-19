@@ -179,6 +179,7 @@
 09e1a701e3fe1cd8ef94aa693e0b655b	[1.5, 1.5, 1.5, 2.5]	def __f(x)\n          \n        a = x > 30 ? 1.5 : x\n        b = a\n      
 0a0748b8809f0e8d7f80297870a4da1e	[200000, 0, 999]	a = []\n            200000.times { |i| a << [(i * 7919) % 1000] }\n  
 0a0f30d8ebe55e1e0abe73391dfb071f	[true, true, true, true, 2]	(o=Object.new; def o.to_path; "/tmp/mono_tp_#{Process.pid}"; end; p2=Object.new;
+0a564ce522ea92d156e5bddf6823d99a	[{a: 2}, 2, {a: 1}, 1, {a: 9}, [2, {b: 9}], [1, {b: 9}], {a: 2}, {a: 8}, 2, {b: 2, a: 1}, {a: 1, b: 2}, {a: 1, b: 2, c: 3}, {a: 1, b: 2, c: 3}, {x: 1, y: 2, z: 3}, {b: 2, a: 3}, {a: 3, b: 2}, {a: 3, b: 2}, {a: 4, b: 2, c: 3}, {c: 9, a: 3, b: 2}, {b: 2, a: 3}, {"s" => 3, b: 2}, {a: 1, b: 2, "s" => 3}, {a: 1}, {a: 1}]	def ks(**kw) = kw\n        def dec(a:) = a\n        def deck(a:, **kw) = 
 0a5b4d0ac946d24249dbf3aa75d75a4f	[27720, 62874]	n = 0\n        acc = 1\n        while true\n          n += 1\n          whi
 0a8fcb3472ef6869da4abdbb99763b0d	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
 0aa2fa3cce375400b399c989bb80cc19	[1, 0, 0, 2, 1, 1, 3, 2, 2, 5, 3, 3, 8, 4, 4, 13, 5, 5, 21, 6, 6, 34, 7, 7, 55, 8, 8, 89, 9, 9, 144, 10, 10, 233, 11, 11, 377, 12, 12, 610, 13, 13, 987, 14, 14, 1597, 15, 15]	e = Enumerator.new do |y|\n            a = b = 1\n            loop do\n   
@@ -1125,6 +1126,7 @@
 4a27834f1a4d3f1b1dbe388b001f68a5	[true, true, true, true, true]	created = Fiber.new {}\n            res = [created.inspect =~ /\\A#<F
 4a330374eb4fb47c48601113a41fc5c2	[false, true, 1]	h = {}\n        s = 'bar'\n        h[s] = 1\n        [h.keys.first.equal?(
 4a3c010763bbdcf926955a661aa391e2	true	Math.acosh(Float::NAN).nan?
+4a52c336026ee897df680c50a05b794d	[{a: 2}, 2, [2, {b: 9}], {a: 1, b: 2, c: 3}, {a: 1, b: 2}, {a: 1, b: 2}, {a: 2}, {a: 2}, {b: 2, a: 3}, {a: 3, b: 2}, [3, {b: 2}], {a: 2}]	def ks(**kw) = kw\n        def dec(a:) = a\n        def deck(a:, **kw) = 
 4a559a2616834976fdd08253452a37af	[1, 2]	def f\n                  yield 1,[2,3],4\n                end\n   
 4a6606db1e1aa4ca08a3681377e4a47e	false	at_exit { }.lambda?
 4a6bb862ea034f302be2cfbedfb744f4	["Integer", 21, 0, 9]	class UnrealNum < Numeric\n                attr_reader :value\n      
@@ -1471,6 +1473,7 @@
 626249dd96d2b17f8fbf2140e3002208	[[1, 2, [], 9, nil], [1, 5, [6], 9, nil], [1, 2, [], 3, nil], [1, 2, [], 9, :block], 3, [1]]	class Args\n          def call_me(a, b = 2, *rest, kw: 9, &blk)\n        
 62825865a591b21dbb6b9d05adb0c05a	["echo hello", true]	def `(cmd); [cmd, cmd.frozen?]; end\n        `echo hello`\n        
 628eaa8bccd2d8c621e49bd30049c6ce	[301.5, [1.5, 98.5, 195.5, 292.5]]	def call_block\n          yield\n        end\n        def bump\n          y
+629dcf3c47acf965a3f680996bea0323	[[1, 2, 3], [1, 2], [1, 2, 3], [ArgumentError, "unknown keywords: :a, :b"], [ArgumentError, "unknown keywords: :b, :a"], [ArgumentError, "unknown keywords: :b, :c"], [ArgumentError, "unknown keywords: \\"s\\", :a"], [ArgumentError, "unknown keyword: :a"], [ArgumentError, "unknown keyword: :a"], [ArgumentError, "unknown keywords: :a, :b"], [ArgumentError, "unknown keywords: :b, :a"], [ArgumentError, "unknown keywords: :a, :b"]]	def ks(**kw) = kw\n        def one(x:) = x\n        $ord = []\n        def
 62abd44369ee4b6cc7e6dbf66a868f1d	[[nil, nil, nil], [1, nil, nil], [1, 2, nil], [1, 2, 3]]	S = Struct.new(:a, :b, :c)\n            \n\n            [S.new.to_a, S
 62caa309e31dac2a3bb4c9e5ed060cf8	[false, "elefant", 4]	S = Struct.new(:name, :legs, keyword_init: false)\n            \n\n   
 62d15ca21ed1dd74ca65f3735e8b6c5a	false	File.writable?("nonexistent_file_xyz")
@@ -2228,6 +2231,7 @@
 96fd9678f0dfe97f7c36c920dd7add18	[123456789, 123456789, 123456000, 123456000, 123000000, 500000]	[Time.at(0, 123456789, :nanosecond).nsec, Time.at(0, 123456789, :nsec).nsec, Tim
 96fedae9bd7054286c64bbd79abaddb8	[[nil, true, false, 1, -1, 300, 70000, 1099511627776, -300, -70000, -1099511627776, 1.5, "abc", "x", {"a" => [1]}], ["UTF-8", "ASCII-8BIT"], 1.5, {a: {b: 1}, 1 => 2}, [true, true, true, true], [true, false], [1, 2], [1, 2], [MessagePack::StackError, "stack level too deep"], [1, 2]]	require "rubygems"\n        require "msgpack"\n        require "stringio"
 970a7c81313ab20891884b7ce441755a	false	c = Class.new do\n              def m; 1; end\n              undef :"
+971d2af23e477e6e22945812f480730a	[{a: 1, b: 2}, {b: 2, a: 1}, {a: 1, b: 2, c: 3}, {a: 2}, [:foo, [], {a: 1, b: 2}], [:foo, [1], {a: 1, b: 2, c: 3}], [:foo, [], {a: 2}], [:foo, [], {b: 2, a: 3}], [:foo, [], {a: 3, b: 2}], {b: 2, a: 3}, {a: 3, b: 2}, {a: 2}, {a: 1, b: 2}, {a: 1, b: 2, c: 3}, {a: 1, b: 2}, {a: 9, b: 2}]	def pos(h) = h\n        class M\n          def method_missing(name, *a, *
 9728f004848dcccd6ba56d23d00eddc4	[[11, :plain_mb, :plain_mb, 2, 2, :plain_sw], [:reader_arity, 8, 8, :writer_arity], [:struct_reader_arity, 4]]	class PolyPlain\n          def m(x) = x + 10\n          def mb(&b) = :pla
 972f0dda9403b085a3a271026cdf1d04	[true, 7]	S = Struct.new(:x, keyword_init: 1)\n            \n\n            s = S
 974291e66576b4792c6134bc16187092	{amount: 42, unit: "km"}	M = Data.define(:amount, :unit)\nM.new(42, "km").to_h

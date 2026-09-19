@@ -133,6 +133,8 @@ impl<'a> BytecodeGen<'a> {
                 kw_start,
                 kw_args: Default::default(),
                 hash_splat_pos,
+                // The forwarded `**kwrest` is the window's only register.
+                kw_order: vec![KwElem::Splat],
             })
         } else {
             None
@@ -213,10 +215,16 @@ impl<'a> BytecodeGen<'a> {
             } else {
                 vec![]
             };
+            // The window is the mother's keyword locals in declaration
+            // order (the frame lays `**kwrest` out right behind them),
+            // so source order is exactly that, splat last.
+            let mut kw_order: Vec<KwElem> = kw_list.iter().map(|n| KwElem::Kw(*n)).collect();
+            kw_order.extend(hash_splat_pos.iter().map(|_| KwElem::Splat));
             Some(KeywordArgs {
                 kw_start,
                 kw_args,
                 hash_splat_pos,
+                kw_order,
             })
         };
 
@@ -334,28 +342,80 @@ impl<'a> BytecodeGen<'a> {
         self.ordinary_args(std::mem::take(&mut arglist.args))
     }
 
+    ///
+    /// Evaluate a call site's keyword arguments into one contiguous
+    /// register window, **in source order**.
+    ///
+    /// Literal `k: v` pairs and `**hash` splats reach us in two lists
+    /// (`ArgList::kw_args` / `hash_splat`) plus the record of how they
+    /// interleaved (`hash_splat_after`). Walking that interleaving here
+    /// buys two things Ruby requires and the old "all pairs, then all
+    /// splats" walk did not (#1407): the operands are *evaluated* left
+    /// to right, and `kw_order` tells every consumer which source came
+    /// first, so the later one wins a duplicated key and a `**kwrest`
+    /// hash keeps the source's key order.
+    ///
+    /// One register per element, in order, so `kw_order[i]` describes
+    /// `kw_start + i` — the invariant the runtime and the encoder read
+    /// the window by.
+    ///
     fn keyword_arg(&mut self, arglist: &mut ArgList) -> Result<Option<KeywordArgs>> {
         let kw_args_list = std::mem::take(&mut arglist.kw_args);
         let hash_splat = std::mem::take(&mut arglist.hash_splat);
+        let hash_splat_after = std::mem::take(&mut arglist.hash_splat_after);
         if kw_args_list.is_empty() && hash_splat.is_empty() {
-            Ok(None)
-        } else {
-            let mut kw_args = indexmap::IndexMap::default();
-            let kw_start = self.sp().into();
-            let mut hash_splat_pos = vec![];
-            for (id, (name, node)) in kw_args_list.into_iter().enumerate() {
-                self.push_expr(node)?;
-                kw_args.insert(IdentId::get_id_from_string(name), id);
-            }
-            for node in hash_splat {
-                hash_splat_pos.push(self.push_expr(node)?.into());
-            }
-            Ok(Some(KeywordArgs {
-                kw_start,
-                kw_args,
-                hash_splat_pos,
-            }))
+            return Ok(None);
         }
+        // An `ArgList` that carries no interleaving (nothing but the
+        // prism bridge builds one with splats today) keeps the old
+        // reading: every literal keyword precedes every splat.
+        debug_assert_eq!(hash_splat_after.len(), hash_splat.len());
+        let ranks: Vec<usize> = if hash_splat_after.len() == hash_splat.len() {
+            hash_splat_after
+        } else {
+            vec![kw_args_list.len(); hash_splat.len()]
+        };
+
+        let mut kw_args = indexmap::IndexMap::default();
+        let kw_start = self.sp().into();
+        let mut hash_splat_pos = vec![];
+        let mut kw_order: Vec<KwElem> = vec![];
+        let mut pairs = kw_args_list.into_iter();
+        let mut emitted_pairs = 0usize;
+        for (node, rank) in hash_splat.into_iter().zip(ranks) {
+            while emitted_pairs < rank
+                && let Some((name, value)) = pairs.next()
+            {
+                // The offset of this pair's register from `kw_start` is
+                // the number of registers pushed so far. A repeated key
+                // overwrites the offset, so `kw_args` always names the
+                // *last* pair with that key — "last one wins" — while
+                // `kw_order` keeps every mention, which is what tells the
+                // runtime where in a `**kwrest` hash the key belongs
+                // (`CallSiteInfo::kw_overwritten_literal`).
+                let offset = kw_order.len();
+                self.push_expr(value)?;
+                let name = IdentId::get_id_from_string(name);
+                kw_args.insert(name, offset);
+                kw_order.push(KwElem::Kw(name));
+                emitted_pairs += 1;
+            }
+            kw_order.push(KwElem::Splat);
+            hash_splat_pos.push(self.push_expr(node)?.into());
+        }
+        for (name, value) in pairs {
+            let offset = kw_order.len();
+            self.push_expr(value)?;
+            let name = IdentId::get_id_from_string(name);
+            kw_args.insert(name, offset);
+            kw_order.push(KwElem::Kw(name));
+        }
+        Ok(Some(KeywordArgs {
+            kw_start,
+            kw_args,
+            hash_splat_pos,
+            kw_order,
+        }))
     }
 
     fn block_arg(&mut self, block: Node, loc: Loc) -> Result<Option<FuncId>> {
