@@ -18,8 +18,8 @@ use inst::*;
 
 pub fn bytecode_compile_script(globals: &mut Globals, mut result: ParseResult) -> Result<FuncId> {
     globals.store.compile_warnings.append(&mut result.warnings);
-    let main_fid = globals.store.new_main(result)?;
-    bytecode_compile(globals, main_fid, None)?;
+    let (main_fid, info) = globals.store.new_main(result)?;
+    bytecode_compile(globals, main_fid, info, None)?;
     Ok(main_fid)
 }
 
@@ -31,48 +31,49 @@ pub fn bytecode_compile_eval(
     binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
     globals.store.compile_warnings.append(&mut result.warnings);
-    let main_fid = globals.store.new_eval(outer, result, loc)?;
-    bytecode_compile(globals, main_fid, binding)?;
+    let (main_fid, info) = globals.store.new_eval(outer, result, loc)?;
+    bytecode_compile(globals, main_fid, info, binding)?;
     Ok(main_fid)
 }
 
+///
+/// Compile `main_fid`, and with it every function its body defines.
+///
+/// A nested `def` / `class` / block is compiled by [`compile_iseq`] at the
+/// point its definition is reached, so the whole unit is one depth-first
+/// walk and a body's AST is dropped as soon as its bytecode exists. The
+/// native wrappers are generated afterwards, in one pass over the FuncIds
+/// this call created: `BytecodeGen` holds only a `&mut Store`, while
+/// `gen_wrapper` needs the whole `Globals`.
+///
 fn bytecode_compile(
     globals: &mut Globals,
     main_fid: FuncId,
+    info: CompileInfo,
     binding: Option<LvarCollector>,
 ) -> Result<()> {
     assert!(globals.store.func_len() > main_fid.get() as usize);
-    let result = (|| {
-        bytecode_compile_func(globals, main_fid, binding)?;
-        let mut fid = FuncId::new(main_fid.get() + 1);
-        while globals.store.func_len() > fid.get() as usize {
-            bytecode_compile_func(globals, fid, None)?;
-            fid = FuncId::new(fid.get() + 1);
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        // A compile error leaves unconsumed CompileInfo entries in the queue.
-        // If not cleared, subsequent top-level loads would pick them up via
-        // FIFO, producing iseqs whose bytecode belongs to the failed file.
-        globals.functions.clear_compile_info();
+    compile_iseq(&mut globals.store, main_fid, info, binding)?;
+    let mut fid = main_fid;
+    while globals.store.func_len() > fid.get() as usize {
+        globals.gen_wrapper(fid);
+        fid = FuncId::new(fid.get() + 1);
     }
-    result
+    Ok(())
 }
 
-fn bytecode_compile_func(
-    globals: &mut Globals,
+///
+/// Compile one already-registered function from its [`CompileInfo`].
+///
+fn compile_iseq(
+    store: &mut Store,
     func_id: FuncId,
+    info: CompileInfo,
     binding: Option<LvarCollector>,
 ) -> Result<()> {
-    let info = globals.functions.get_compile_info();
-    let iseq = globals[func_id].as_iseq();
-
-    let r#gen = BytecodeGen::new(&mut globals.store, iseq, &info.params, binding);
-    r#gen.compile(info)?;
-
-    globals.gen_wrapper(func_id);
-    Ok(())
+    let iseq = store[func_id].as_iseq();
+    let r#gen = BytecodeGen::new(store, iseq, &info.params, binding);
+    r#gen.compile(info)
 }
 
 ///
@@ -986,10 +987,12 @@ impl<'a> BytecodeGen<'a> {
         loc: Loc,
     ) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        let fid = self
+        let (fid, info) = self
             .store
             .new_iseq_method(name, compile_info, loc, sourceinfo, false)?;
+        // Before the body is compiled: the nested compile reads the flag.
         self.propagate_singleton_lexical(fid);
+        compile_iseq(self.store, fid, info, None)?;
         Ok(fid)
     }
 
@@ -1002,7 +1005,7 @@ impl<'a> BytecodeGen<'a> {
         is_module: bool,
     ) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        let fid = self.store.new_classdef(
+        let (fid, info) = self.store.new_classdef(
             name,
             compile_info,
             loc,
@@ -1011,24 +1014,27 @@ impl<'a> BytecodeGen<'a> {
             is_module,
         )?;
         self.propagate_singleton_lexical(fid);
+        compile_iseq(self.store, fid, info, None)?;
         Ok(fid)
     }
 
     fn add_block(&mut self, outer: ISeqId, compile_info: CompileInfo, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        let fid = self
+        let (fid, info) = self
             .store
             .new_block(outer, compile_info, true, loc, sourceinfo)?;
         self.propagate_singleton_lexical(fid);
+        compile_iseq(self.store, fid, info, None)?;
         Ok(fid)
     }
 
     fn add_lambda(&mut self, outer: ISeqId, compile_info: CompileInfo, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        let fid = self
+        let (fid, info) = self
             .store
             .new_block(outer, compile_info, false, loc, sourceinfo)?;
         self.propagate_singleton_lexical(fid);
+        compile_iseq(self.store, fid, info, None)?;
         Ok(fid)
     }
 
