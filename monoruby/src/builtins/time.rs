@@ -399,10 +399,12 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         // `Time.new`'s `utc_offset` slot: Integer / Rational / Float
         // seconds, or `"+HH:MM"` / `"+HH:MM:SS"` String / `#to_int`.
         let fixed = parse_utc_offset(vm, globals, arg0)?;
-        match lfp.self_val().as_time() {
-            TimeInner::Local(t) => TimeInner::Local(t.with_timezone(&fixed)),
-            TimeInner::Utc(t) => TimeInner::Local(t.with_timezone(&fixed)),
-        }
+        let utc = offset_arg_is_utc(arg0);
+        let instant = match lfp.self_val().as_time() {
+            TimeInner::Local(t) => t.with_timezone(&Utc),
+            TimeInner::Utc(t) => *t,
+        };
+        time_in_offset(instant, fixed, utc)
     } else {
         match lfp.self_val().as_time() {
             TimeInner::Local(t) => {
@@ -885,7 +887,7 @@ fn time_build(
     if lfp.arg_len() == 0 || (0..7).all(|i| lfp.try_arg(i).is_none()) {
         let time_info = if let Some(off) = in_arg {
             let fixed = parse_utc_offset(vm, globals, off)?;
-            TimeInner::Local(Utc::now().with_timezone(&fixed))
+            time_in_offset(Utc::now(), fixed, offset_arg_is_utc(off))
         } else {
             TimeInner::Local(Local::now().into())
         };
@@ -937,7 +939,7 @@ fn time_build(
                         .from_local_datetime(&naive)
                         .single()
                         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
-                    TimeInner::Local(dt)
+                    time_in_offset(dt.with_timezone(&Utc), offset, offset_arg_is_utc(off_arg))
                 }
                 // A String that isn't a valid offset is resolved through the
                 // class's `.find_timezone`, if defined, to a timezone object.
@@ -1047,6 +1049,41 @@ fn from_args_skip_last(
 /// Validates ASCII-only and per-field ranges so monoruby surfaces the
 /// same `ArgumentError` shape as CRuby for the `localtime("xxx")`
 /// edge cases.
+/// Whether a `utc_offset` argument designates *UTC* rather than a mere
+/// zero offset. CRuby's `utc_offset_arg` marks a Time as UTC for the
+/// strings `"UTC"` and `"Z"` and for a **negative** zero offset
+/// (`"-00"`, `"-0000"`, `"-00:00"`, `"-00:00:00"`); `"+00:00"` and the
+/// Integer `0` are ordinary zero offsets, and `#utc?` is false for them.
+fn offset_arg_is_utc(v: Value) -> bool {
+    let Some(s) = v.is_str() else { return false };
+    offset_str_is_utc(&s)
+}
+
+/// [`offset_arg_is_utc`] for an offset that came out of a parsed
+/// date-time string (`Time.new("… Z")`).
+fn offset_str_is_utc(s: &str) -> bool {
+    if s == "UTC" || s == "Z" {
+        return true;
+    }
+    match s.strip_prefix('-') {
+        Some(rest) => {
+            let digits: String = rest.chars().filter(|&c| c != ':').collect();
+            matches!(digits.len(), 2 | 4 | 6) && digits.bytes().all(|b| b == b'0')
+        }
+        None => false,
+    }
+}
+
+/// A `TimeInner` for the instant `dt` shown in `fixed`, or as UTC when
+/// the offset argument designated UTC (see [`offset_arg_is_utc`]).
+fn time_in_offset(dt: DateTime<Utc>, fixed: FixedOffset, utc: bool) -> TimeInner {
+    if utc {
+        TimeInner::Utc(dt)
+    } else {
+        TimeInner::Local(dt.with_timezone(&fixed))
+    }
+}
+
 fn parse_utc_offset(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<FixedOffset> {
     if let Some(s) = v.is_str() {
         return parse_utc_offset_string(s);
@@ -1517,17 +1554,23 @@ fn build_time_string(
     let date = NaiveDate::from_ymd_opt(year as i32, mon, day).ok_or_else(bad)?;
     let time = NaiveTime::from_hms_opt(hh, mi, ss).ok_or_else(bad)?;
     let naive = NaiveDateTime::new(date, time);
-    let fixed = if !off_str.is_empty() {
-        Some(parse_utc_offset_string(off_str)?)
+    let (fixed, utc) = if !off_str.is_empty() {
+        (
+            Some(parse_utc_offset_string(off_str)?),
+            offset_str_is_utc(off_str),
+        )
     } else if let Some(off) = in_arg {
-        Some(parse_utc_offset(vm, globals, off)?)
+        (
+            Some(parse_utc_offset(vm, globals, off)?),
+            offset_arg_is_utc(off),
+        )
     } else {
-        None
+        (None, false)
     };
     match fixed {
         Some(fixed) => {
             let dt = fixed.from_local_datetime(&naive).single().ok_or_else(bad)?;
-            Ok(TimeInner::Local(dt))
+            Ok(time_in_offset(dt.with_timezone(&Utc), fixed, utc))
         }
         None => {
             let local = match Local.from_local_datetime(&naive) {
@@ -1561,6 +1604,19 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             ));
         }
         let inner = secs_val.as_time().clone();
+        // `Time.at(time, in: zone)` re-zones the copy, exactly as the
+        // numeric form does; the early return used to drop `in:`.
+        if let Some(off) = lfp.try_arg(3)
+            && !off.is_nil()
+        {
+            let dt = time_utc_instant(&inner);
+            if let Some(t) = time_at_with_timezone(vm, globals, dt, off, cls)? {
+                return Ok(t);
+            }
+            let fixed = parse_utc_offset(vm, globals, off)?;
+            let info = time_in_offset(dt, fixed, offset_arg_is_utc(off));
+            return Ok(Value::new_time_with_class(info, cls));
+        }
         return Ok(Value::new_time_with_class(inner, cls));
     }
     // The seconds argument is coerced as an exact number (CRuby
@@ -1628,7 +1684,7 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             return Ok(t);
         }
         let fixed = parse_utc_offset(vm, globals, off)?;
-        TimeInner::Local(dt.with_timezone(&fixed))
+        time_in_offset(dt, fixed, offset_arg_is_utc(off))
     } else {
         let local: DateTime<Local> = dt.into();
         TimeInner::Local(local.into())
@@ -2135,6 +2191,18 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             return Ok(self_val);
         }
         let target = parse_utc_offset(vm, globals, arg0)?;
+        if offset_arg_is_utc(arg0) {
+            if self_val.as_time().is_utc() {
+                return Ok(self_val);
+            }
+            self_val.ensure_not_frozen(&globals.store)?;
+            let instant = match self_val.as_time() {
+                TimeInner::Local(t) => t.with_timezone(&Utc),
+                TimeInner::Utc(t) => *t,
+            };
+            *self_val.as_time_mut() = TimeInner::Utc(instant);
+            return Ok(self_val);
+        }
         // Already in the requested zone? No-op (matches CRuby's
         // short-circuit before the frozen check).
         if let TimeInner::Local(t) = self_val.as_time() {
@@ -2654,12 +2722,13 @@ fn nsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn subsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ns = lfp.self_val().as_time().nanosecond();
-    // Returns a Rational in CRuby; monoruby doesn't have Rational, so
-    // approximate with a Float. ActiveModel only compares against 0.
+    // `time_subsec` hands back an exact Rational of nanoseconds over a
+    // second, reduced — `Time.at(0, 3).subsec` is `(3/1000000)`, not a
+    // Float. A whole second's worth reduces to the Integer 0.
     if ns == 0 {
         Ok(Value::integer(0))
     } else {
-        Ok(Value::float(ns as f64 / 1_000_000_000.0))
+        Ok(Value::rational(ns as i64, 1_000_000_000i64))
     }
 }
 
@@ -3999,6 +4068,42 @@ mod tests {
         run_test_error("Time.now + Time.now");
         run_test_error(r#"Time.now + "1""#);
         run_test_error("Time.now - nil");
+    }
+
+    #[test]
+    fn utc_designating_offsets_make_a_utc_time() {
+        // `utc_offset_arg` marks a Time as UTC for "UTC", "Z" and a
+        // *negative* zero offset; "+00:00" and the Integer 0 are
+        // ordinary zero offsets.
+        run_tests(&[
+            r#"[Time.new(2022,1,1,0,0,0,"UTC"), Time.new(2022,1,1,0,0,0,"Z"),
+                Time.new(2022,1,1,0,0,0,"-00:00"), Time.new(2022,1,1,0,0,0,"-0000"),
+                Time.new(2022,1,1,0,0,0,"-00")].map { |t| [t.utc?, t.utc_offset, t.zone] }"#,
+            r#"[Time.new(2022,1,1,0,0,0,"+00:00"), Time.new(2022,1,1,0,0,0,0)].map { |t| [t.utc?, t.utc_offset, t.zone] }"#,
+            r#"[Time.new(2022,1,1,0,0,0,in: "UTC"), Time.new("2022-01-01 00:00:00 Z"),
+                Time.new("2022-01-01 00:00:00 UTC"), Time.new("2022-01-01 00:00:00 -00:00")].map { |t| [t.utc?, t.zone] }"#,
+            r#"Time.new("2022-01-01 00:00:00 +00:00").utc?"#,
+            r#"[Time.at(0, in: "UTC"), Time.at(0, in: "Z"), Time.at(0, in: "-00:00")].map { |t| [t.utc?, t.to_i] }"#,
+            r#"[Time.at(0).getlocal("UTC"), Time.at(0).getlocal("Z")].map { |t| [t.utc?, t.to_i] }"#,
+            r#"t = Time.at(0); t.localtime("UTC"); [t.utc?, t.to_i, t.zone]"#,
+            // `Time.at(time, in: zone)` re-zones the copy; the early
+            // return for a Time argument used to drop `in:` entirely.
+            r#"[Time.at(Time.at(0), in: "UTC").utc?, Time.at(Time.at(0), in: "+09:00").utc_offset]"#,
+            r#"t = Time.at(Time.at(3600), in: "+09:00"); [t.to_i, t.utc_offset, t.utc?]"#,
+        ]);
+    }
+
+    #[test]
+    fn subsec_is_an_exact_rational() {
+        // `time_subsec` hands back nanoseconds over a second, reduced —
+        // not a Float. A whole second's worth is the Integer 0.
+        run_tests(&[
+            r#"[Time.at(Rational(3,2)).subsec, Time.at(1.5).subsec]"#,
+            r#"[Time.at(0, Rational(3,2)).subsec, Time.at(0, 1.5).subsec, Time.at(0, 3).subsec]"#,
+            r#"[Time.at(0, 1).subsec.class.to_s, Time.at(1).subsec, Time.at(1).subsec.class.to_s]"#,
+            r#"[Time.at(0, 500000).subsec, Time.at(0, 500000).subsec.class.to_s]"#,
+            r#"Time.at(0, 123456789, :nanosecond).subsec"#,
+        ]);
     }
 
     #[test]
