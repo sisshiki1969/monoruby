@@ -9244,7 +9244,14 @@ fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // The whole string goes in, with `offset` as the starting position:
     // `@n` seeks to an absolute byte position (before the offset too)
     // and `X` backs up into the bytes ahead of it, as in CRuby.
-    rvalue::unpack(self_.as_rstring_inner().as_bytes(), &template, false, offset)
+    let associated = globals.store.get_ivar(self_, rvalue::associated_ivar());
+    rvalue::unpack(
+        self_.as_rstring_inner().as_bytes(),
+        &template,
+        false,
+        offset,
+        associated,
+    )
 }
 
 ///
@@ -9260,7 +9267,14 @@ fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
     let template = template.to_str()?;
-    rvalue::unpack(self_.as_rstring_inner().as_bytes(), &template, true, offset)
+    let associated = globals.store.get_ivar(self_, rvalue::associated_ivar());
+    rvalue::unpack(
+        self_.as_rstring_inner().as_bytes(),
+        &template,
+        true,
+        offset,
+        associated,
+    )
 }
 
 fn unpack_offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, len: usize) -> Result<usize> {
@@ -15448,6 +15462,47 @@ mod tests {
             r#"["abc".unpack('Z*'), "abc\x00".unpack('Z*Z*'), "abc".unpack('Z')]"#,
             r#"["hello\x00world".unpack('Z*a*'), "a\x00 \x00b c".unpack('Z2Z2')]"#,
         ]);
+    }
+
+    #[test]
+    fn unpack_pointer_directives_resolve_associated_strings() {
+        // `pack('p'/'P')` writes the address of the packed String's own
+        // bytes and records the String on the result; `unpack` resolves
+        // the address against that record instead of dereferencing it —
+        // so a string that was never packed (or one whose pointer bytes
+        // were tampered with) raises, where reading the address would
+        // have handed back arbitrary memory or crashed.
+        run_test(
+            r##"
+            s = "hello"
+            packed = [s].pack("P")
+            r = []
+            r << packed.unpack("P5")
+            r << packed.unpack("P5")[0].equal?(s)
+            r << packed.dup.unpack("P5")
+            r << packed.unpack("P1")
+            r << packed.unpack("P1")[0].encoding.to_s
+            r << packed.unpack("P10")[0].equal?(s)
+            r << packed.unpack("P0")
+            # The record lives in an internal slot, so it stays hidden.
+            r << packed.instance_variables
+            q = [s].pack("p")
+            r << q.unpack("p")[0].equal?(s)
+            r << [nil].pack("p").unpack("p")
+            r << [nil].pack("P").unpack("P5")
+            r << [s, "x"].pack("pp").unpack("p2")
+            # `to_sym.to_s` drops the record; `dup` keeps it.
+            r << (begin; packed.to_sym.to_s.unpack("P5"); rescue => e; [e.class, e.message]; end)
+            r << (begin; "aaaaaaaa".unpack("P3"); rescue => e; [e.class, e.message]; end)
+            m = packed.dup
+            m.setbyte(0, m.getbyte(0) ^ 0xff)
+            r << (begin; m.unpack("P5"); rescue => e; [e.class, e.message]; end)
+            buf = +""
+            [s].pack("P", buffer: buf)
+            r << buf.unpack("P5")
+            r
+            "##,
+        );
     }
 
     #[test]

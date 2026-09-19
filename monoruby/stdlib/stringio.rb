@@ -5,6 +5,13 @@
 #
 
 class StringIO
+
+  # A StringIO is a T_DATA in CRuby, wrapping the native string buffer
+  # and its position, so `Marshal.dump` reports the missing `_dump_data`
+  # hook rather than serializing the object's fields.
+  def marshal_dump
+    raise TypeError, "no _dump_data is defined for class #{self.class}"
+  end
   include Enumerable
 
   # ruby/spec asserts `StringIO::VERSION` is a String of digits and

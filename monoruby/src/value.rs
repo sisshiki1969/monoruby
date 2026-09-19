@@ -648,6 +648,13 @@ impl Value {
         Value::from_u64(ptr as u64)
     }
 
+    /// The `Value` that points at `rv`. A heap `Value` *is* the address
+    /// of its `RValue`, so this is a re-tag, not a conversion: the
+    /// reference already proves the object is live.
+    pub(crate) fn from_rvalue_ref(rv: &RValue) -> Self {
+        Value::from_u64(rv as *const RValue as u64)
+    }
+
     pub(crate) fn class(&self) -> ClassId {
         if self.is_fixnum() {
             INTEGER_CLASS
@@ -1703,6 +1710,11 @@ impl Value {
                         }
                     }
                     Some(ObjTy::ARRAY) => "[...]".to_string(),
+                    // A `Struct` / `Data` that contains itself renders
+                    // its class label: `#<struct S:...>` / `#<data D:...>`.
+                    Some(ObjTy::STRUCT) => {
+                        crate::builtins::data_class::recursive_struct_label(store, *self)
+                    }
                     _ => "...".to_string(),
                 };
             }

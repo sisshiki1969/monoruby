@@ -961,6 +961,18 @@ pub(crate) fn encode_utf16_32(s: &str, enc: crate::value::Encoding) -> Vec<u8> {
     }
 }
 
+/// Transcode an environment string to `Encoding.default_internal`
+/// (`env_enc_str_new`). Plain conversion with no `invalid:` / `undef:`
+/// handling — CRuby raises on a byte it cannot map, and so does this.
+pub(super) fn transcode_for_env(
+    store: &Store,
+    bytes: &[u8],
+    src: crate::value::Encoding,
+    dst: crate::value::Encoding,
+) -> Result<Vec<u8>> {
+    transcode_bytes_with_opts(bytes, src, dst, &TranscodeOpts::default(), store)
+}
+
 pub(super) fn transcode_bytes_with_opts(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -4049,7 +4061,7 @@ fn enc_set_default_internal(
 /// variable counts as unset, and the codeset is the part after `.`
 /// (with any `@modifier` stripped). With no locale selected — or with
 /// the `C` / `POSIX` locale — glibc reports `ANSI_X3.4-1968`.
-fn locale_charmap_str() -> &'static str {
+pub(super) fn locale_charmap_str() -> &'static str {
     static CHARMAP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CHARMAP
         .get_or_init(|| {

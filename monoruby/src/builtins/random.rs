@@ -29,6 +29,82 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(klass, "seed", inst_seed, 0);
     globals.define_private_builtin_func(klass, "state", inst_state, 0);
     globals.define_builtin_func(klass, "==", inst_eq, 1);
+    // CRuby keeps both halves of the Marshal protocol private on Random.
+    globals.define_private_builtin_func(klass, "marshal_dump", marshal_dump, 0);
+    globals.define_private_builtin_func(klass, "marshal_load", marshal_load, 1);
+}
+
+/// The number of words in the Mersenne-Twister state table. CRuby's
+/// `left` counts *down* from here as words are consumed, where
+/// monoruby's `Mt` counts an index *up*: `left == MT_WORDS + 1 - mti`
+/// throughout, including the `mti == MT_WORDS` state a freshly seeded
+/// generator starts in (`left == 1`, "regenerate on the next draw").
+const MT_WORDS: usize = 624;
+
+///
+/// ### Random#marshal_dump
+///
+/// `[state, left, seed]`, as CRuby's `rand_mt_dump` writes it: the 624
+/// state words packed least-significant-word-first into one Integer,
+/// the count of words left in the current block, and the seed.
+///
+#[monoruby_builtin]
+fn marshal_dump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let (mt, _) = load_mt(globals, self_);
+    let (seed, _) = load_state(globals, self_);
+    let mut bytes = Vec::with_capacity(MT_WORDS * 4);
+    for w in mt.words() {
+        bytes.extend_from_slice(&w.to_le_bytes());
+    }
+    let state = num::BigInt::from_bytes_le(num::bigint::Sign::Plus, &bytes);
+    let left = (MT_WORDS + 1 - mt.index()) as i64;
+    Ok(Value::array_from_vec(vec![
+        Value::bigint(state),
+        Value::integer(left),
+        seed,
+    ]))
+}
+
+///
+/// ### Random#marshal_load
+///
+/// Restores the generator from `marshal_dump`'s triple, so a dump
+/// written by CRuby loads here and goes on producing the same sequence.
+///
+#[monoruby_builtin]
+fn marshal_load(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let arg = lfp.arg(0);
+    let ary = arg
+        .try_array_ty()
+        .ok_or_else(|| MonorubyErr::typeerr("marshaled random data is not an Array"))?;
+    if ary.len() != 3 {
+        return Err(MonorubyErr::argumenterr("marshaled random data is too short"));
+    }
+    let state = match ary[0].unpack() {
+        RV::BigInt(n) => n.clone(),
+        RV::Fixnum(i) => num::BigInt::from(i),
+        _ => return Err(MonorubyErr::typeerr("marshaled random state is not an Integer")),
+    };
+    let (_, mut bytes) = state.to_bytes_le();
+    bytes.resize(MT_WORDS * 4, 0);
+    let mut words = [0u32; MT_WORDS];
+    for (i, c) in bytes[..MT_WORDS * 4].chunks_exact(4).enumerate() {
+        words[i] = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+    }
+    // CRuby clamps a `left` past the table size; anything below 1 would
+    // mean "no words consumed yet", which is `left == 1` here too.
+    let left = ary[1].coerce_to_i64(&globals.store)?.clamp(1, MT_WORDS as i64) as usize;
+    let mt = Mt::from_words(words, MT_WORDS + 1 - left);
+    globals.store.set_ivar(self_, ivar_seed(), ary[2])?;
+    store_mt(globals, self_, &mt, 0)?;
+    Ok(Value::nil())
 }
 
 // --- CRuby-compatible Mersenne-Twister helpers ---------------------------
@@ -899,5 +975,35 @@ mod tests {
             r#"begin; Random.new(Complex(20,2)); :no; rescue RangeError; :range; end"#,
             r#"(o=Object.new; def o.to_int; 99; end; Random.rand(o).is_a?(Integer))"#,
         ]);
+    }
+
+    #[test]
+    fn marshal_round_trip() {
+        // `Random` had no Marshal protocol at all: a dump loaded back
+        // with `NoMethodError: undefined method 'marshal_load'`, and one
+        // written by CRuby could not be read. The wire form is CRuby's
+        // `[state, left, seed]`, where `left` counts the words remaining
+        // in the current block — the complement of the index monoruby's
+        // generator keeps.
+        run_test_once(
+            r##"
+            r = []
+            [0, 1, 5, 623, 624, 625, 1000].each do |k|
+              g = Random.new(42)
+              k.times { g.bytes(4) }
+              d = g.send(:marshal_dump)
+              r << [k, d[1], d[2], d[0].bit_length]
+            end
+            g = Random.new(42)
+            1000.times { g.rand }
+            l = Marshal.load(Marshal.dump(g))
+            r << (l == g)
+            r << [l.seed, g.seed]
+            # The two generators go on in lock step.
+            r << [3.times.map { l.rand }, 3.times.map { g.rand }]
+            r << Marshal.load(Marshal.dump(Random.new(7))).rand
+            r
+            "##,
+        );
     }
 }

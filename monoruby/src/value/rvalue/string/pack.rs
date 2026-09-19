@@ -150,11 +150,22 @@ fn unpack1_single_numeric(packed: &[u8], template: &str) -> Option<Value> {
 
 /// `packed` is the whole string; unpacking starts at `base_offset`
 /// (`offset:`), and `@n` positions are absolute in `packed`.
+/// The hidden ivar under which `pack('p'/'P')` records the String
+/// objects whose data pointers it wrote (CRuby's `str_associate`). A
+/// `/`-prefixed name is an internal slot: invisible to
+/// `#instance_variables`, Marshal and inspection, but copied by `dup` —
+/// which is exactly why `packed.dup.unpack("P5")` works and
+/// `packed.to_sym.to_s.unpack("P5")` raises.
+pub(crate) fn associated_ivar() -> IdentId {
+    IdentId::get_id("/packed_pointers")
+}
+
 pub(crate) fn unpack(
     packed: &[u8],
     template: &str,
     once: bool,
     base_offset: usize,
+    associated: Option<Value>,
 ) -> Result<Value> {
     if once
         && let Some(value) = unpack1_single_numeric(&packed[base_offset..], template)
@@ -508,7 +519,13 @@ pub(crate) fn unpack(
                 }
             }
             Template::Pointer => {
-                // 'p' — read a pointer (8 bytes on x86-64), dereference as null-terminated string
+                // 'p' — a pointer written by a previous `pack('p')`. The
+                // pointer is never dereferenced: it is looked up among the
+                // String objects that `pack` associated with this string,
+                // and the matching object itself is what comes back. A
+                // string that carries no association (or one whose bytes
+                // merely look like a pointer) raises rather than reading
+                // whatever that address happens to hold.
                 let count = repeat.unwrap_or(1);
                 for _ in 0..count {
                     if let Some(chunk) = b.next_chunk::<8>() {
@@ -516,11 +533,7 @@ pub(crate) fn unpack(
                         if ptr == 0 {
                             ary.push(Value::nil());
                         } else {
-                            // SAFETY: We trust that the pointer was produced by a prior pack("p")
-                            // call in this process, pointing to a valid null-terminated string.
-                            let cstr =
-                                unsafe { std::ffi::CStr::from_ptr(ptr as *const std::ffi::c_char) };
-                            ary.push(Value::bytes(cstr.to_bytes().to_vec()));
+                            ary.push(lookup_associated(associated, ptr)?);
                         }
                     } else {
                         break;
@@ -528,17 +541,22 @@ pub(crate) fn unpack(
                 }
             }
             Template::PointerFixed => {
-                // 'P' — read a pointer (8 bytes on x86-64), return string of specified length
+                // 'P' — as 'p', but the count is the number of bytes to
+                // read: a count shorter than the associated string yields
+                // a BINARY prefix of it, anything longer the whole object.
                 let length = repeat.unwrap_or(1);
                 if let Some(chunk) = b.next_chunk::<8>() {
                     let ptr = usize::from_ne_bytes(chunk.clone());
                     if ptr == 0 {
                         ary.push(Value::nil());
                     } else {
-                        // SAFETY: We trust that the pointer was produced by a prior pack("P")
-                        // call in this process, pointing to a valid buffer of at least `length` bytes.
-                        let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, length) };
-                        ary.push(Value::bytes(slice.to_vec()));
+                        let target = lookup_associated(associated, ptr)?;
+                        let inner = target.as_rstring_inner();
+                        if length < inner.len() {
+                            ary.push(Value::bytes(inner.as_bytes()[..length].to_vec()));
+                        } else {
+                            ary.push(target);
+                        }
                     }
                 }
             }
@@ -733,6 +751,12 @@ pub(crate) fn pack(
     // Built in the String's own representation so the finished bytes move
     // into the result with no copy, and a short result never reaches the heap.
     let mut packed = StringBuf::new();
+    // Strings whose addresses `'p'` / `'P'` wrote into `packed`; attached
+    // to the result so `unpack` can resolve those addresses back, and so
+    // the strings outlive the pointers. Each is also rooted on the temp
+    // stack (the caller wraps this in a temp scope), since a later
+    // directive can allocate before the association is attached.
+    let mut associates: Vec<Value> = vec![];
     if let Some(buf_val) = buffer {
         buf_val.ensure_not_frozen(&globals.store)?;
         match buf_val.is_rstring_inner() {
@@ -1194,40 +1218,31 @@ pub(crate) fn pack(
                 }
             }
             Template::Pointer => {
-                // 'p' — store a pointer to a null-terminated copy of the string
+                // 'p' — the address of the string's own bytes, with the
+                // string associated with the result so it (and so the
+                // address) stays alive. The old code leaked a fresh
+                // `CString` per directive instead, and `unpack` then read
+                // whatever the address held.
                 let count = repeat.unwrap_or(1);
                 for _ in 0..count {
                     if let Some(value) = iter.next() {
-                        if value.is_nil() {
-                            packed.extend_from_slice(&0u64.to_ne_bytes());
-                        } else {
-                            let s = get_pack_string(vm, globals, *value)?;
-                            // Allocate a null-terminated copy using CString.
-                            // We leak the memory so the pointer remains valid.
-                            let cstring = std::ffi::CString::new(s).map_err(|_| {
-                                MonorubyErr::argumenterr("string contains null byte for pack('p')")
-                            })?;
-                            let ptr = cstring.into_raw() as u64;
-                            packed.extend_from_slice(&ptr.to_ne_bytes());
-                        }
+                        let (target, ptr) = pack_pointer_target(vm, globals, *value)?;
+                        vm.temp_push(target);
+                        associates.push(target);
+                        packed.extend_from_slice(&(ptr as u64).to_ne_bytes());
                     } else {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
                 }
             }
             Template::PointerFixed => {
-                // 'P' — store a pointer to the string data
-                // The count specifies the length of data pointed to, not the repeat count.
+                // 'P' — as 'p'; the count is the length of the data
+                // pointed at, not a repeat count.
                 if let Some(value) = iter.next() {
-                    if value.is_nil() {
-                        packed.extend_from_slice(&0u64.to_ne_bytes());
-                    } else {
-                        let s = get_pack_string(vm, globals, *value)?;
-                        // Leak a copy of the bytes so the pointer stays valid.
-                        let boxed: Box<[u8]> = s.into_boxed_slice();
-                        let ptr = Box::into_raw(boxed) as *const u8 as u64;
-                        packed.extend_from_slice(&ptr.to_ne_bytes());
-                    }
+                    let (target, ptr) = pack_pointer_target(vm, globals, *value)?;
+                    vm.temp_push(target);
+                    associates.push(target);
+                    packed.extend_from_slice(&(ptr as u64).to_ne_bytes());
                 } else {
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
@@ -1295,6 +1310,7 @@ pub(crate) fn pack(
                 .as_rstring_inner_mut()
                 .extend_from_slice_merge_cr(&packed);
         }
+        attach_associates(globals, buf_val, associates)?;
         Ok(buf_val)
     } else if template_is_empty && packed.is_empty() {
         // Empty format string produces US-ASCII encoded empty string.
@@ -1314,12 +1330,32 @@ pub(crate) fn pack(
             (_, None) => Encoding::Ascii8,
         };
         let cr = result_encoding.classify(&packed);
-        Ok(Value::string_from_inner(RStringInner::from_buf_cr(
+        let res = Value::string_from_inner(RStringInner::from_buf_cr(
             packed,
             result_encoding,
             cr,
-        )))
+        ));
+        attach_associates(globals, res, associates)?;
+        Ok(res)
     }
+}
+
+/// Record the `'p'` / `'P'` targets on the packed string (CRuby's
+/// `str_associate`), merging with whatever a previous `pack` already
+/// attached to a reused `buffer:`.
+fn attach_associates(globals: &mut Globals, res: Value, associates: Vec<Value>) -> Result<()> {
+    if associates.is_empty() {
+        return Ok(());
+    }
+    let id = associated_ivar();
+    let list = match globals.store.get_ivar(res, id) {
+        Some(prev) if prev.is_array_ty() => prev,
+        _ => Value::array_from_vec(vec![]),
+    };
+    for v in associates {
+        list.as_array().push(v);
+    }
+    globals.store.set_ivar(res, id, list)
 }
 
 type TemplateNodes = SmallVec<[TemplateNode; 4]>;
@@ -1524,6 +1560,44 @@ fn coerce_to_pack_f64(vm: &mut Executor, globals: &mut Globals, value: &Value) -
             }
         }
     }
+}
+
+/// Resolve a pointer written by `pack('p'/'P')` back to the String it
+/// came from, among the objects `pack` associated with the string being
+/// unpacked. CRuby's `str_associated` / "no associated pointer" checks.
+fn lookup_associated(associated: Option<Value>, ptr: usize) -> Result<Value> {
+    let Some(list) = associated else {
+        return Err(MonorubyErr::argumenterr("no associated pointer"));
+    };
+    for v in list.as_array().iter() {
+        if let Some(inner) = v.is_rstring_inner()
+            && inner.as_bytes().as_ptr() as usize == ptr
+        {
+            return Ok(*v);
+        }
+    }
+    Err(MonorubyErr::argumenterr("non associated pointer"))
+}
+
+/// The String a `pack('p'/'P')` directive points at, and the address of
+/// its bytes. `nil` packs a null pointer. The String itself is what gets
+/// associated with the result, which both keeps it (and so the address)
+/// alive and lets `unpack` hand the very same object back.
+fn pack_pointer_target(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    value: Value,
+) -> Result<(Value, usize)> {
+    if value.is_nil() {
+        return Ok((value, 0));
+    }
+    let target = if value.is_rstring_inner().is_some() {
+        value
+    } else {
+        value.coerce_to_rstring(vm, globals)?.as_val()
+    };
+    let ptr = target.as_rstring_inner().as_bytes().as_ptr() as usize;
+    Ok((target, ptr))
 }
 
 fn get_pack_string(vm: &mut Executor, globals: &mut Globals, value: Value) -> Result<Vec<u8>> {

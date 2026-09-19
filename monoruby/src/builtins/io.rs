@@ -614,7 +614,7 @@ pub(super) fn enc_default_external_obj(globals: &mut Globals) -> Value {
 }
 
 /// `Encoding.default_internal` object, or `None` if unset.
-fn enc_default_internal_obj(globals: &mut Globals) -> Option<Value> {
+pub(super) fn enc_default_internal_obj(globals: &mut Globals) -> Option<Value> {
     let v = globals.get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))?;
     if v.is_nil() {
         None

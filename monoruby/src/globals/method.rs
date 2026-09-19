@@ -881,6 +881,21 @@ impl Globals {
         self.define_builtin_func(class_id, name, address, arg_num)
     }
 
+    /// Like `define_builtin_singleton_func`, but binds `alias` to the same
+    /// `FuncId`, so `obj.method(:a) == obj.method(:b)` as in CRuby
+    /// (`ENV.filter!` / `ENV.select!`).
+    pub(crate) fn define_builtin_singleton_funcs(
+        &mut self,
+        obj: Value,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        arg_num: usize,
+    ) -> FuncId {
+        let class_id = self.store.get_singleton(obj).unwrap().id();
+        self.define_builtin_funcs(class_id, name, alias, address, arg_num)
+    }
+
     pub(crate) fn define_builtin_singleton_func_with(
         &mut self,
         obj: Value,

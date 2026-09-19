@@ -468,14 +468,21 @@ fn message(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/to_s.html]
 #[monoruby_builtin]
 fn to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let ex = self_val.is_exception().unwrap();
+    Ok(message_value(lfp.self_val()))
+}
+
+///
+/// The `String` an exception's message is, with the bytes and encoding
+/// it was built from — a BINARY message stays BINARY. `#to_s` and
+/// `#message` answer this, and `Marshal.dump` writes it as the `:mesg`
+/// field, so a dump round-trips the message's encoding.
+///
+pub(crate) fn message_value(exception: Value) -> Value {
+    let ex = exception.is_exception().unwrap();
     if let Some((raw, enc)) = &ex.raw_message {
-        return Ok(Value::string_from_inner(
-            crate::value::RStringInner::from_encoding(raw, *enc),
-        ));
+        return Value::string_from_inner(crate::value::RStringInner::from_encoding(raw, *enc));
     }
-    Ok(Value::string_from_str(ex.message()))
+    Value::string_from_str(ex.message())
 }
 
 ///

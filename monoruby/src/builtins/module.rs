@@ -1698,11 +1698,13 @@ fn define_method(
             block_fid_to_decorate = None;
             umethod.func_id()
         } else {
-            return Err(MonorubyErr::wrong_argument_type(
-                globals,
-                method,
-                "Proc/Method/UnboundMethod",
-            ));
+            // `rb_mod_define_method` names the argument's *class*, so
+            // `nil` reports `NilClass` rather than the `wrong_argument_type`
+            // helper's keyword spelling.
+            return Err(MonorubyErr::typeerr(format!(
+                "wrong argument type {} (expected Proc/Method/UnboundMethod)",
+                method.get_real_class_name(&globals.store),
+            )));
         }
     } else if let Some(bh) = lfp.block() {
         let proc = vm.generate_proc(globals, bh, pc)?;
@@ -1712,7 +1714,11 @@ fn define_method(
         block_fid_to_decorate = Some(proc.func_id());
         fid
     } else {
-        return Err(MonorubyErr::wrong_number_of_arg(2, 1));
+        // No body at all: CRuby's `rb_block_lambda` reports the missing
+        // block rather than an arity mismatch.
+        return Err(MonorubyErr::argumenterr(
+            "tried to create Proc object without a block",
+        ));
     };
     let visibility = define_method_visibility(vm, class_id, name);
     // Honor the `module_function` toggle (set via `module_function`
@@ -8339,5 +8345,23 @@ mod tests {
             $lines.map { |l| l - $lines[0] }
             "#,
         );
+    }
+    #[test]
+    fn define_method_argument_errors() {
+        // `rb_mod_define_method` names the argument's *class*, so `nil`
+        // reports `NilClass`; with no body at all it is
+        // `rb_block_lambda`'s missing-block ArgumentError, not an arity
+        // mismatch.
+        run_tests(&[
+            r#"c = Class.new; (c.send(:define_method, :m, "s") rescue [$!.class, $!.message])"#,
+            r#"c = Class.new; (c.send(:define_method, :m, 5) rescue [$!.class, $!.message])"#,
+            r#"c = Class.new; (c.send(:define_method, :m, nil) rescue [$!.class, $!.message])"#,
+            r#"c = Class.new; (c.send(:define_method, :m, true) rescue [$!.class, $!.message])"#,
+            r#"c = Class.new; (c.send(:define_method, :m) rescue [$!.class, $!.message])"#,
+            // The working forms are untouched.
+            r#"c = Class.new; c.send(:define_method, :m) { 7 }; c.new.m"#,
+            r#"c = Class.new; c.send(:define_method, :m, proc { 8 }); c.new.m"#,
+            r#"c = Class.new { def orig; 9; end }; c.send(:define_method, :m, c.instance_method(:orig)); c.new.m"#,
+        ]);
     }
 }
