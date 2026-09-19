@@ -2740,10 +2740,13 @@ mod tests {
         for row in [
             "iseqs:",
             "callsites:",
+            "basic blocks:",
             "ISeqInfo headers",
             "bytecode",
             "sourcemap",
-            "bb_info",
+            "bb entries",
+            "bb pred/succ vecs",
+            "bb_map",
             "callsite_info",
             "TOTAL",
         ] {
