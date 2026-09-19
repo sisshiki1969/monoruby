@@ -365,6 +365,7 @@
 176ade062a39fa54620f862c109af764	"US-ASCII"	"abc".dup.force_encoding("US-ASCII").tr("ab", "xy").encoding.to_s
 177267179432c2c7c88151677405f37d	[true, "Process::Status", 0]	pid = fork { exit 0 }\n            ret, status = Process.wait2(pid)\n
 177aa65b5849b4e8af68b7b3b7db3c28	"01AB456789"	path = "/tmp/monoruby_test_binwrite_off_#{Process.pid}_#{rand(10000
+17a32c6641df88e9ca9968f4f5009069	[["hello"], true, ["hello"], ["h"], "ASCII-8BIT", true, [""], [], true, [nil], [nil], ["hello", "x"], [ArgumentError, "no associated pointer"], [ArgumentError, "no associated pointer"], [ArgumentError, "non associated pointer"], ["hello"]]	s = "hello"\n            packed = [s].pack("P")\n            r = []\n 
 17ae0b2d4d216a1477c7c1095d2b4f96	[true, "EvalDefIM", true, true, :ce, :ie, true]	res = []\n        class EvalDefIM\n          def make\n            eval "d
 17b4dcf867d28ec5b1dd631ad5583e17	{}	/(?<f>x)/.match("x").deconstruct_keys(['s', :f])
 17ead718ac7923b2a550775f94df059c	3	class A < Array\n        end\n        \n\n        a = A.new\n        a << 10

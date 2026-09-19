@@ -4241,7 +4241,9 @@ fn pack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let template = template.to_str()?;
     let buffer = lfp.try_arg(1);
     let ary = lfp.self_val().as_array();
-    rvalue::pack(vm, globals, &ary, &template, buffer)
+    // `pack` roots the `'p'` / `'P'` targets on the temp stack as it
+    // collects them; the scope rolls them back, including on error.
+    vm.with_temp_scope(|vm| rvalue::pack(vm, globals, &ary, &template, buffer))
 }
 
 /// Interpret the value `to_ary` (or `method_missing(:to_ary)`) produced.
