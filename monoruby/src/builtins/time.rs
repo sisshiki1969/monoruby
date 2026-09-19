@@ -1,12 +1,164 @@
 use super::*;
 use chrono::{
-    DateTime, Datelike, Duration, FixedOffset, Local, LocalResult, NaiveDate, NaiveDateTime,
-    NaiveTime, TimeZone, Timelike, Utc,
+    DateTime, Datelike, Duration, FixedOffset, LocalResult, NaiveDate, NaiveDateTime, NaiveTime,
+    TimeZone, Timelike, Utc,
 };
 
 //
 // Time class
 //
+
+// --- the system local timezone, read through libc ------------------------
+//
+// chrono's own `Local` resolves the zone once and caches it for the life
+// of the process. CRuby calls `tzset()`, which re-reads `TZ` every time,
+// so `ENV['TZ'] = "Asia/Tokyo"` changes what `Time.now` reports from the
+// next call on — and ruby/spec's `with_timezone` helper is built on
+// exactly that. With the cached zone, every such spec saw the zone the
+// process started in.
+//
+// `LocalTz` is a chrono `TimeZone` backed by `localtime_r` / `mktime`,
+// so it also brings the zone *name* (`tm_zone`) and the DST flag
+// (`tm_isdst`) that chrono does not expose at all.
+
+unsafe extern "C" {
+    /// Re-read `TZ` into libc's zone state. Not in the `libc` crate's
+    /// public surface, but part of POSIX and present in every libc
+    /// monoruby builds against.
+    fn tzset();
+}
+
+/// Re-read `TZ` when the environment has changed since the last look.
+/// `tzset()` itself is not cheap — glibc re-opens the zone file, and
+/// finding `TZ` means a scan of `environ` — and these conversions sit on
+/// `Time.now`'s path, so it runs only when monoruby wrote to the
+/// environment since the previous conversion.
+fn refresh_tz() {
+    thread_local! {
+        // Not a valid generation, so the first conversion always calls
+        // `tzset` and picks up the `TZ` the process started with.
+        static SEEN: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
+    }
+    let generation = crate::builtins::hash::env_generation();
+    if SEEN.with(|seen| seen.replace(generation)) != generation {
+        // SAFETY: `tzset` only refreshes libc's own zone state.
+        unsafe { tzset() };
+    }
+}
+
+/// libc's broken-down local time for a UTC instant.
+fn local_tm(utc_secs: i64) -> Option<libc::tm> {
+    let t = utc_secs as libc::time_t;
+    // SAFETY: `tzset` only refreshes libc's own zone state. `localtime_r`
+    // writes into `tm`, which is zeroed (and so fully initialized) here,
+    // and returns null for an instant it cannot represent.
+    refresh_tz();
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&t, &mut tm).is_null() {
+            return None;
+        }
+        Some(tm)
+    }
+}
+
+/// The local offset at a UTC instant. Falls back to UTC for an instant
+/// libc rejects, which is what chrono's `Local` does with one too.
+fn local_offset_at(utc_secs: i64) -> FixedOffset {
+    let east = local_tm(utc_secs).map_or(0, |tm| tm.tm_gmtoff as i32);
+    FixedOffset::east_opt(east).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap())
+}
+
+/// The zone's abbreviation at a UTC instant (`"JST"`, `"EDT"`, …), or
+/// `None` when libc has no name for it. This is `Time#zone`.
+pub(crate) fn local_zone_name(utc_secs: i64) -> Option<String> {
+    let tm = local_tm(utc_secs)?;
+    if tm.tm_zone.is_null() {
+        return None;
+    }
+    // SAFETY: `tm_zone` points at a NUL-terminated string owned by libc
+    // (static storage, valid until the next `tzset`), which is read and
+    // copied before returning.
+    let name = unsafe { std::ffi::CStr::from_ptr(tm.tm_zone) };
+    name.to_str().ok().filter(|s| !s.is_empty()).map(String::from)
+}
+
+/// Whether daylight saving time is in effect at a UTC instant.
+pub(crate) fn local_is_dst(utc_secs: i64) -> bool {
+    local_tm(utc_secs).is_some_and(|tm| tm.tm_isdst > 0)
+}
+
+/// The UTC instant a local wall clock names. `tm_isdst = -1` lets libc
+/// pick the side of a DST transition, as CRuby's `mktime` call does.
+fn local_naive_to_utc(naive: NaiveDateTime) -> Option<i64> {
+    refresh_tz();
+    // SAFETY: `tm` is zeroed and every field libc reads is set below;
+    // `mktime` only reads it and normalizes it in place.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        tm.tm_year = naive.year().checked_sub(1900)?;
+        tm.tm_mon = naive.month0() as i32;
+        tm.tm_mday = naive.day() as i32;
+        tm.tm_hour = naive.hour() as i32;
+        tm.tm_min = naive.minute() as i32;
+        tm.tm_sec = naive.second() as i32;
+        tm.tm_isdst = -1;
+        let t = libc::mktime(&mut tm);
+        if t == -1 && tm.tm_year == 0 {
+            // mktime failed rather than landing on 1969-12-31 23:59:59Z
+            // (it normalizes `tm` on success, so a year left at 0 means
+            // it never got that far).
+            return None;
+        }
+        Some(t as i64)
+    }
+}
+
+/// The system local timezone. A drop-in for chrono's `Local` that asks
+/// libc — and so `TZ` — on every conversion.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalTz;
+
+impl LocalTz {
+    /// The current instant in the local zone.
+    fn now() -> DateTime<FixedOffset> {
+        let utc = Utc::now();
+        utc.with_timezone(&local_offset_at(utc.timestamp()))
+    }
+}
+
+impl TimeZone for LocalTz {
+    type Offset = FixedOffset;
+
+    fn from_offset(_: &FixedOffset) -> Self {
+        LocalTz
+    }
+
+    fn offset_from_local_date(&self, local: &NaiveDate) -> LocalResult<FixedOffset> {
+        match local.and_hms_opt(0, 0, 0) {
+            Some(dt) => self.offset_from_local_datetime(&dt),
+            None => LocalResult::None,
+        }
+    }
+
+    fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<FixedOffset> {
+        match local_naive_to_utc(*local) {
+            Some(secs) => LocalResult::Single(local_offset_at(secs)),
+            None => LocalResult::None,
+        }
+    }
+
+    fn offset_from_utc_date(&self, utc: &NaiveDate) -> FixedOffset {
+        match utc.and_hms_opt(0, 0, 0) {
+            Some(dt) => self.offset_from_utc_datetime(&dt),
+            None => FixedOffset::east_opt(0).unwrap(),
+        }
+    }
+
+    fn offset_from_utc_datetime(&self, utc: &NaiveDateTime) -> FixedOffset {
+        local_offset_at(utc.and_utc().timestamp())
+    }
+}
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Time", TIME_CLASS, ObjTy::TIME);
@@ -408,12 +560,12 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     } else {
         match lfp.self_val().as_time() {
             TimeInner::Local(t) => {
-                let local: DateTime<Local> = (*t).into();
-                TimeInner::Local(local.into())
+                let local = t.with_timezone(&LocalTz);
+                TimeInner::Local(local.fixed_offset())
             }
             TimeInner::Utc(t) => {
-                let local: DateTime<Local> = (*t).into();
-                TimeInner::Local(local.into())
+                let local = t.with_timezone(&LocalTz);
+                TimeInner::Local(local.fixed_offset())
             }
         }
     };
@@ -560,7 +712,7 @@ fn _load(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             Utc.from_utc_datetime(&naive),
         )))
     } else {
-        let local = match Local.from_local_datetime(&naive) {
+        let local = match LocalTz.from_local_datetime(&naive) {
             LocalResult::Single(t) => t,
             LocalResult::Ambiguous(t, _) => t,
             LocalResult::None => {
@@ -569,7 +721,7 @@ fn _load(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 ));
             }
         };
-        Ok(Value::new_time(TimeInner::Local(local.into())))
+        Ok(Value::new_time(TimeInner::Local(local.fixed_offset())))
     }
 }
 
@@ -889,7 +1041,7 @@ fn time_build(
             let fixed = parse_utc_offset(vm, globals, off)?;
             time_in_offset(Utc::now(), fixed, offset_arg_is_utc(off))
         } else {
-            TimeInner::Local(Local::now().into())
+            TimeInner::Local(LocalTz::now())
         };
         return Ok(Value::new_time_with_class(time_info, cls));
     }
@@ -921,14 +1073,14 @@ fn time_build(
     let time_info = if let Some(off_arg) = utc_offset_arg {
         if off_arg.is_nil() {
             // Same shape as `Time.local(year, …)` — local-zone time.
-            let local = match Local.from_local_datetime(&naive) {
+            let local = match LocalTz.from_local_datetime(&naive) {
                 LocalResult::Single(t) => t,
                 LocalResult::Ambiguous(t, _) => t,
                 LocalResult::None => {
                     return Err(MonorubyErr::argumenterr("argument out of range."));
                 }
             };
-            TimeInner::Local(local.into())
+            TimeInner::Local(local.fixed_offset())
         } else if let Some(t) = time_new_with_timezone(vm, globals, naive, off_arg, cls)? {
             // A timezone object (`#local_to_utc`) rather than a utc_offset.
             return Ok(t);
@@ -955,12 +1107,12 @@ fn time_build(
             }
         }
     } else {
-        let local = match Local.from_local_datetime(&naive) {
+        let local = match LocalTz.from_local_datetime(&naive) {
             LocalResult::Single(t) => t,
             LocalResult::Ambiguous(t, _) => t,
             LocalResult::None => return Err(MonorubyErr::argumenterr("argument out of range.")),
         };
-        TimeInner::Local(local.into())
+        TimeInner::Local(local.fixed_offset())
     };
     Ok(Value::new_time_with_class(time_info, cls))
 }
@@ -1573,12 +1725,12 @@ fn build_time_string(
             Ok(time_in_offset(dt.with_timezone(&Utc), fixed, utc))
         }
         None => {
-            let local = match Local.from_local_datetime(&naive) {
+            let local = match LocalTz.from_local_datetime(&naive) {
                 LocalResult::Single(d) => d,
                 LocalResult::Ambiguous(d, _) => d,
                 LocalResult::None => return Err(bad()),
             };
-            Ok(TimeInner::Local(local.into()))
+            Ok(TimeInner::Local(local.fixed_offset()))
         }
     }
 }
@@ -1686,8 +1838,8 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         let fixed = parse_utc_offset(vm, globals, off)?;
         time_in_offset(dt, fixed, offset_arg_is_utc(off))
     } else {
-        let local: DateTime<Local> = dt.into();
-        TimeInner::Local(local.into())
+        let local = dt.with_timezone(&LocalTz);
+        TimeInner::Local(local.fixed_offset())
     };
     Ok(Value::new_time_with_class(time_info, cls))
 }
@@ -1707,8 +1859,8 @@ pub(crate) extern "C" fn time_alloc_func(class_id: ClassId, _: &mut Globals) -> 
 #[monoruby_builtin]
 fn time_local(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let cls = lfp.self_val().as_class().id();
-    let t = generate_time(vm, globals, Local, lfp)?;
-    let time_info = TimeInner::Local(t.into());
+    let t = generate_time(vm, globals, LocalTz, lfp)?;
+    let time_info = TimeInner::Local(t.fixed_offset());
     Ok(Value::new_time_with_class(time_info, cls))
 }
 
@@ -3074,8 +3226,8 @@ impl TimeInner {
         *self = match self {
             TimeInner::Local(_) => return,
             TimeInner::Utc(t) => {
-                let local: DateTime<Local> = (*t).into();
-                TimeInner::Local(local.into())
+                let local = t.with_timezone(&LocalTz);
+                TimeInner::Local(local.fixed_offset())
             }
         }
     }

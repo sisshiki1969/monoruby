@@ -3452,6 +3452,7 @@ e6d082318a4b595e9d869ba6901bd549	42	class A\n          class B\n            def 
 e702963dfc31e6655d4b927cd37aa9ae	["ASCII-8BIT", [105, 108, 95, 195, 169, 116, 97, 105, 116], "ASCII-8BIT", "UTF-8", false]	require "tmpdir"\n        path = File.join(Dir.tmpdir, "mrb_binsym_#{Pro
 e70da8f5b71b1eca86c75f08aeb24750	true	class Holder\n              class << self\n                define_met
 e73b8bab78fa8b161426778e42f99938	[[["b\\n", :deprecated], ["c\\n", nil]], "b\\nc\\n"]	$c = []\n        Warning.singleton_class.prepend(Module.new do\n         
+e748f5853964e1e5ba061509d45d8ff1	[32400, 32400, "2020-01-02 03:04:05 +0900", -18000, -14400, "1969-12-31 19:00:00 -0500", "1970-01-01 00:00:00 +0100", 7200, 3600, 0, "2020-01-01 00:00:00 +0000"]	r = []\n        old = ENV['TZ']\n        ENV['TZ'] = 'Asia/Tokyo'\n       
 e74e57427bab9d2903b1f09d7c43625c	[false, true]	GC.stress = false\n            before = GC.count\n            GC.stre
 e759b021311853223519b09db9019343	"foo12"	module Foo\n              def foo(x, y)\n                "foo" + x.to
 e76ab37d95fef8bab7fbc7bcae3ff1c2	[nil, nil, nil]	def f(a = nil, b = :sym, c = "s"); nil; end\n        [f, f(1), f(1, 2, 3

@@ -2495,6 +2495,23 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 
 // ENV object
 
+/// Bumped every time monoruby writes to the process environment.
+/// `Time`'s local-zone lookup watches it so it can skip re-reading `TZ`
+/// (a `getenv` scan plus `tzset`, which re-opens the zone file) on every
+/// conversion while nothing has changed.
+static ENV_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Record a `setenv` / `unsetenv`.
+fn env_did_change() {
+    ENV_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The current environment generation, for a cache that wants to know
+/// whether a variable it read is still current.
+pub(crate) fn env_generation() -> u64 {
+    ENV_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The `Encoding` `Encoding.find("locale")` resolves to, for the strings
 /// the environment hands out.
 fn env_locale_encoding() -> Encoding {
@@ -2811,6 +2828,7 @@ fn env_index_assign(
         unsafe {
             libc::unsetenv(c_key.as_ptr());
         }
+        env_did_change();
         return Ok(Value::nil());
     }
 
@@ -2831,6 +2849,7 @@ fn env_index_assign(
     unsafe {
         libc::setenv(c_key.as_ptr(), c_val.as_ptr(), 1);
     }
+    env_did_change();
 
     // Stored the way the environment hands strings back (`env_str_new`),
     // so a later read reports the locale encoding rather than the one
@@ -2900,6 +2919,7 @@ fn env_delete(
         unsafe {
             libc::unsetenv(c_key.as_ptr());
         }
+        env_did_change();
 
         if removed.is_none()
             && let Some(bh) = lfp.block()
@@ -3095,6 +3115,7 @@ fn env_set_one(
     unsafe {
         libc::setenv(c_key.as_ptr(), c_val.as_ptr(), 1);
     }
+    env_did_change();
     // Stored the way the environment hands strings back (`env_str_new`),
     // so a later read reports the locale encoding rather than the
     // encoding the assigned String happened to carry.
@@ -3119,6 +3140,7 @@ fn env_unset_one(
     unsafe {
         libc::unsetenv(c_key.as_ptr());
     }
+    env_did_change();
     Ok(())
 }
 
@@ -3491,6 +3513,7 @@ fn env_merge_bang(
                     unsafe {
                         libc::unsetenv(c_key.as_ptr());
                     }
+                    env_did_change();
                 }
                 continue;
             }
