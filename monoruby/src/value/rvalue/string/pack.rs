@@ -326,26 +326,30 @@ pub(crate) fn unpack(
                 }
             }
             Template::Back => {
-                if let Some(repeat) = repeat {
-                    for _ in 0..repeat {
-                        if b.back().is_none() {
-                            return Err(MonorubyErr::argumenterr("X outside of string"));
-                        }
+                // `X*` moves back by the number of bytes still unread
+                // (CRuby's pack.c: `len = send - s`), which is an error
+                // when that is further back than the string's start.
+                let count = match repeat {
+                    Some(n) => n,
+                    None => b.slice.len() - b.i,
+                };
+                for _ in 0..count {
+                    if b.back().is_none() {
+                        return Err(MonorubyErr::argumenterr("X outside of string"));
                     }
-                } else {
-                    while b.back().is_some() {}
                 }
             }
             Template::AtPos => {
-                // '@' — move to absolute position
-                if let Some(pos) = repeat {
+                // '@' — move to an absolute position. A bare `@` is
+                // position 0; `@*` leaves the position alone (CRuby
+                // reads the count as "the rest", i.e. no move).
+                if !template.explicit_count {
+                    b.i = 0;
+                } else if let Some(pos) = repeat {
                     if pos > b.slice.len() {
                         return Err(MonorubyErr::argumenterr("@ outside of string"));
                     }
                     b.i = pos;
-                } else {
-                    // @* — move to end
-                    b.i = b.slice.len();
                 }
             }
             Template::Ascii => {
@@ -395,10 +399,17 @@ pub(crate) fn unpack(
                 }
             }
             Template::Base64 => {
-                // 'm' — Base64 decode
+                // 'm' — Base64 decode. `m0` is CRuby's *strict* mode:
+                // the input must be exactly padded base64 with nothing
+                // else in it, not even a newline. `m`, `mN` and `m*`
+                // skip anything they do not recognise.
                 let data = b.remaining().to_vec();
                 b.advance(data.len());
-                let decoded = base64_decode(&data);
+                let decoded = if template.explicit_count && repeat == Some(0) {
+                    base64_decode_strict(&data)?
+                } else {
+                    base64_decode(&data)
+                };
                 ary.push(Value::bytes(decoded));
             }
             Template::QuotedPrintable => {
@@ -1625,6 +1636,42 @@ fn base64_decode_char(c: u8) -> Option<u8> {
     }
 }
 
+/// CRuby's `unpack("m0")`: every byte must be part of a well-formed,
+/// correctly padded base64 stream — no whitespace, no stray bytes, and
+/// a length that is a multiple of four.
+fn base64_decode_strict(data: &[u8]) -> Result<Vec<u8>> {
+    let invalid = || MonorubyErr::argumenterr("invalid base64");
+    if data.len() % 4 != 0 {
+        return Err(invalid());
+    }
+    let mut result = Vec::with_capacity(data.len() / 4 * 3);
+    let last = data.len() / 4;
+    for (group, quad) in data.chunks(4).enumerate() {
+        let pad = quad.iter().rev().take_while(|&&c| c == b'=').count();
+        // Padding is only legal, and at most two bytes wide, in the
+        // final group.
+        if pad > 2 || (pad > 0 && group + 1 != last) {
+            return Err(invalid());
+        }
+        let mut vals = [0u8; 4];
+        for (i, &c) in quad.iter().take(4 - pad).enumerate() {
+            vals[i] = base64_decode_char(c).ok_or_else(invalid)?;
+        }
+        let triple = (vals[0] as u32) << 18
+            | (vals[1] as u32) << 12
+            | (vals[2] as u32) << 6
+            | vals[3] as u32;
+        result.push((triple >> 16) as u8);
+        if pad < 2 {
+            result.push((triple >> 8) as u8);
+        }
+        if pad < 1 {
+            result.push(triple as u8);
+        }
+    }
+    Ok(result)
+}
+
 fn base64_decode(data: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
     let mut buf = [0u8; 4];
@@ -2110,15 +2157,36 @@ fn utf8_decode_one(b: &mut ByteIter) -> Result<u32> {
 }
 
 fn ber_decode(b: &mut ByteIter) -> Result<Value> {
+    // Accumulate in a `u64` while it fits and spill to a BigInt once the
+    // next group would overflow — a BER group can encode any width
+    // (`"\x84\x80\x80\x80\x80\x80\x80\x80\x80\x00"` is 2**65).
     let mut val: u64 = 0;
+    let mut big: Option<num::BigInt> = None;
     loop {
-        if let Some(byte) = b.next() {
-            val = (val << 7) | (byte & 0x7F) as u64;
-            if byte & 0x80 == 0 {
-                return Ok(Value::integer(val as i64));
-            }
-        } else {
+        let Some(byte) = b.next() else {
             return Err(MonorubyErr::argumenterr("malformed BER compressed integer"));
+        };
+        let group = (byte & 0x7F) as u64;
+        match &mut big {
+            Some(acc) => {
+                *acc <<= 7u32;
+                *acc += group;
+            }
+            None => match val.checked_shl(7).filter(|v| v >> 7 == val) {
+                Some(shifted) => val = shifted | group,
+                None => {
+                    let mut acc = num::BigInt::from(val);
+                    acc <<= 7u32;
+                    acc += group;
+                    big = Some(acc);
+                }
+            },
+        }
+        if byte & 0x80 == 0 {
+            return Ok(match big {
+                Some(acc) => Value::bigint(acc),
+                None => Value::integer_from_u64(val),
+            });
         }
     }
 }

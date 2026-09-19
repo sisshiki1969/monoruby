@@ -124,7 +124,28 @@ impl<'a> Iterator for CharByteIter<'a> {
                 0x81..=0x9f | 0xe0..=0xfc => 2,
                 _ => 1,
             },
-            Encoding::Utf16Le | Encoding::Utf16Be => 2,
+            // A well-formed surrogate pair is one character, four
+            // bytes wide; a lone surrogate (or a trailing odd byte)
+            // stands on its own, as CRuby's UTF-16 walker has it.
+            Encoding::Utf16Le | Encoding::Utf16Be => {
+                let rest = self.bytes.len() - self.pos;
+                let unit = |i: usize| {
+                    let (a, b) = (self.bytes[i], self.bytes[i + 1]);
+                    if self.encoding == Encoding::Utf16Be {
+                        ((a as u32) << 8) | b as u32
+                    } else {
+                        ((b as u32) << 8) | a as u32
+                    }
+                };
+                if rest >= 4
+                    && (0xD800..0xDC00).contains(&unit(self.pos))
+                    && (0xDC00..0xE000).contains(&unit(self.pos + 2))
+                {
+                    4
+                } else {
+                    2
+                }
+            }
             Encoding::Utf32Le | Encoding::Utf32Be => 4,
             Encoding::Utf8 => {
                 let b = self.bytes[self.pos];
@@ -1497,10 +1518,9 @@ impl RStringInner {
             // number of *complete* code units plus one per stray byte
             // ("adds 1 (and not 2) for a incomplete surrogate in
             // UTF-16").
-            Encoding::Utf16Le | Encoding::Utf16Be => {
-                let len = self.len();
-                len / 2 + len % 2
-            }
+            // A surrogate pair counts once, so the units have to be
+            // walked; a stray trailing byte still adds one.
+            Encoding::Utf16Le | Encoding::Utf16Be => self.iter_char_bytes().count(),
             Encoding::Utf32Le | Encoding::Utf32Be => {
                 let len = self.len();
                 len / 4 + (len % 4 > 0) as usize
@@ -2557,12 +2577,48 @@ impl RStringInner {
         let ord = if self.ty.is_utf8_compatible() {
             self.check_utf8()?.chars().next().unwrap() as u32
         } else {
-            // Binary / non-UTF-8 encodings report the leading byte;
-            // matches CRuby for ASCII-8BIT and is the conservative
-            // answer for dummy encodings we don't decode.
-            self.as_bytes()[0] as u32
+            let first = self.iter_char_bytes().next().unwrap_or(&[]);
+            char_bytes_code(self.ty, first)
         };
         Ok(ord)
+    }
+}
+
+/// The code point one character's bytes stand for in `enc`. The
+/// fixed-width UTF forms are decoded (a `"\n"` in UTF-32BE is four
+/// bytes, and its ordinal is still 10); every other non-UTF-8 encoding
+/// reports the leading byte, which is what CRuby answers for
+/// ASCII-8BIT and the conservative answer for the dummy encodings
+/// monoruby does not decode.
+pub fn char_bytes_code(enc: Encoding, bytes: &[u8]) -> u32 {
+    let unit16 = |hi: u8, lo: u8| ((hi as u32) << 8) | lo as u32;
+    match enc {
+        Encoding::Utf16Be | Encoding::Utf16Le if bytes.len() >= 2 => {
+            let be = enc == Encoding::Utf16Be;
+            let first = if be {
+                unit16(bytes[0], bytes[1])
+            } else {
+                unit16(bytes[1], bytes[0])
+            };
+            if bytes.len() >= 4 && (0xD800..0xDC00).contains(&first) {
+                let second = if be {
+                    unit16(bytes[2], bytes[3])
+                } else {
+                    unit16(bytes[3], bytes[2])
+                };
+                if (0xDC00..0xE000).contains(&second) {
+                    return 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00);
+                }
+            }
+            first
+        }
+        Encoding::Utf32Be if bytes.len() >= 4 => {
+            u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+        }
+        Encoding::Utf32Le if bytes.len() >= 4 => {
+            u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+        }
+        _ => bytes.first().copied().unwrap_or(0) as u32,
     }
 }
 

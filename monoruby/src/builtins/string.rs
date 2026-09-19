@@ -1475,6 +1475,54 @@ fn string_match_named(
     Ok(Value::nil())
 }
 
+/// Resolve a Range index for `String#[]=` against `char_len` in CRuby's
+/// `rb_range_beg_len` order: a negative bound folds against the length
+/// *first*, and only then does `exclude_end` trim one off the end.
+/// Doing the exclusive adjustment first is what made `s[0...0] = ""`
+/// wrap its end to the last character and wipe the receiver. Returns
+/// `(begin, count)`, or `None` when the begin is out of range.
+fn assign_range_beg_count(
+    start_raw: Option<i64>,
+    end_raw: Option<i64>,
+    exclude_end: bool,
+    char_len: usize,
+) -> Option<(usize, usize)> {
+    let len = char_len as i64;
+    let mut beg = start_raw.unwrap_or(0);
+    if beg < 0 {
+        beg += len;
+        if beg < 0 {
+            return None;
+        }
+    }
+    if beg > len {
+        return None;
+    }
+    // An endless range runs to the very end, with no inclusive bump.
+    let mut end = match end_raw {
+        Some(e) => {
+            let e = if e < 0 { e + len } else { e };
+            if exclude_end { e } else { e + 1 }
+        }
+        None => len,
+    };
+    if end < beg {
+        end = beg;
+    }
+    if end > len {
+        end = len;
+    }
+    Some((beg as usize, (end - beg) as usize))
+}
+
+/// CRuby's `RangeError` wording for an out-of-range `String#[]=` index.
+fn assign_range_error(start_raw: Option<i64>, end_raw: Option<i64>, exclude_end: bool) -> MonorubyErr {
+    let beg = start_raw.map(|v| v.to_string()).unwrap_or_default();
+    let fin = end_raw.map(|v| v.to_string()).unwrap_or_default();
+    let dots = if exclude_end { "..." } else { ".." };
+    MonorubyErr::rangeerr(format!("{beg}{dots}{fin} out of range"))
+}
+
 ///
 /// ### String#[]=
 ///
@@ -1610,36 +1658,20 @@ fn index_assign(
             return Ok(arg_val);
         }
         if let Some(info) = arg0_val.is_range() {
-            let start_raw = info.start().coerce_to_int_i64(vm, globals)?;
-            let end_raw = info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
-            if start_raw > char_len as i64 {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "{start_raw}..{end_raw} out of range"
-                )));
-            }
-            let start_char = match conv_index(start_raw, char_len) {
-                Some(i) => i,
-                None => {
-                    return Err(MonorubyErr::rangeerr(format!(
-                        "{start_raw}..{end_raw} out of range"
-                    )));
-                }
+            let start_raw = match info.start().is_nil() {
+                true => None,
+                false => Some(info.start().coerce_to_int_i64(vm, globals)?),
             };
-            let end_char = if end_raw < 0 {
-                let e = char_len as i64 + end_raw;
-                if e < start_char as i64 {
-                    start_char.saturating_sub(1)
-                } else {
-                    e as usize
-                }
-            } else {
-                end_raw as usize
+            let end_raw = match info.end().is_nil() {
+                true => None,
+                false => Some(info.end().coerce_to_int_i64(vm, globals)?),
             };
-            let count = if end_char >= start_char {
-                end_char - start_char + 1
-            } else {
-                0
-            };
+            let exclude_end = info.exclude_end();
+            let (start_char, count) =
+                match assign_range_beg_count(start_raw, end_raw, exclude_end, char_len) {
+                    Some(v) => v,
+                    None => return Err(assign_range_error(start_raw, end_raw, exclude_end)),
+                };
             let r = inner.get_range(start_char, count);
             replace_byte_range(globals, self_, r.start, r.end, subst_inner)?;
             return Ok(arg_val);
@@ -1654,49 +1686,34 @@ fn index_assign(
         Ok(arg_val)
     } else if let Some(info) = arg0_val.is_range() {
         let char_len = len;
-        let start_raw = info.start().coerce_to_int_i64(vm, globals)?;
-        let end_raw = info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
+        let start_raw = match info.start().is_nil() {
+            true => None,
+            false => Some(info.start().coerce_to_int_i64(vm, globals)?),
+        };
+        let end_raw = match info.end().is_nil() {
+            true => None,
+            false => Some(info.end().coerce_to_int_i64(vm, globals)?),
+        };
+        let exclude_end = info.exclude_end();
         // CRuby: a positive Range begin past `length` raises, but
         // begin == length is allowed (appends).
-        if start_raw > char_len as i64 {
-            return Err(MonorubyErr::rangeerr(format!(
-                "{}..{} out of range",
-                start_raw, end_raw
-            )));
-        }
-        let start_char = match conv_index(start_raw, char_len) {
-            Some(i) => i,
-            None => {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "{}..{} out of range",
-                    start_raw, end_raw
-                )));
-            }
-        };
-        // For Ranges, a negative end out-of-range with a positive
-        // begin acts as a zero-count delete (no-op append at start).
-        let end_char = if end_raw < 0 {
-            let e = char_len as i64 + end_raw;
-            if e < start_char as i64 {
-                start_char.saturating_sub(1)
-            } else {
-                e as usize
-            }
-        } else {
-            end_raw as usize
-        };
+        let (start_char, count) =
+            match assign_range_beg_count(start_raw, end_raw, exclude_end, char_len) {
+                Some(v) => v,
+                None => return Err(assign_range_error(start_raw, end_raw, exclude_end)),
+            };
         let byte_start = lhs
             .char_indices()
             .nth(start_char)
             .map(|(i, _)| i)
             .unwrap_or(lhs.len());
-        let byte_end = if end_char >= start_char {
+        let byte_end = if count == 0 {
+            byte_start
+        } else {
             lhs.char_indices()
-                .nth(end_char + 1)
+                .nth(start_char + count)
                 .map(|(i, _)| i)
                 .unwrap_or(lhs.len())
-        } else {
-            byte_start
         };
         lhs.replace_range(byte_start..byte_end, &subst);
         *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
@@ -2162,6 +2179,17 @@ fn check_pattern_encoding_compat(
     if let Some(arg_inner) = pattern.is_rstring_inner() {
         return check_string_encoding_compat(self_inner, &arg_inner, globals);
     }
+    // A Regexp pattern negotiates by its *declared* encoding, which is
+    // a different rule from two Strings meeting (a pinned regexp only
+    // matches a subject in its own encoding).
+    if let Some(re) = pattern.is_regex() {
+        return super::regexp::check_match_encoding(
+            &globals.store,
+            &re,
+            self_inner.encoding(),
+            self_inner.is_ascii_only(),
+        );
+    }
     Ok(())
 }
 
@@ -2194,6 +2222,31 @@ fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 }
 
 ///
+/// The byte length `prefix` deletes from `self_inner`, or `None` when it
+/// is not a prefix at all.
+///
+/// Byte-oriented like CRuby's `deleted_prefix_length`: the encodings are
+/// negotiated first, and a byte prefix that would cut a character in
+/// half deletes nothing (`"\u3042".delete_prefix("\xE3")`).
+fn deleted_prefix_length(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_inner: &RStringInner,
+    arg: Value,
+) -> Result<Option<usize>> {
+    let arg_inner = coerce_to_rstring_inner(&arg, vm, globals)?;
+    let self_enc = self_inner.encoding();
+    let self_bytes = self_inner.as_bytes();
+    check_encoding_compat(self_enc, self_bytes, &arg_inner, globals)?;
+    let arg_bytes = arg_inner.as_bytes();
+    if !self_bytes.starts_with(arg_bytes) || !enc_char_boundary(self_enc, self_bytes, arg_bytes.len())
+    {
+        return Ok(None);
+    }
+    Ok(Some(arg_bytes.len()))
+}
+
+///
 /// ### String#delete_prefix!
 ///
 /// - delete_prefix!(prefix) -> self | nil
@@ -2208,14 +2261,17 @@ fn delete_prefix_(
 ) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_ = lfp.self_val();
-    let string = self_.expect_str(globals)?;
-    let arg = lfp.arg(0).coerce_to_str(vm, globals)?;
-    if let Some(stripped) = string.strip_prefix(arg.as_str()) {
-        lfp.self_val().replace_str(stripped);
-        Ok(lfp.self_val())
-    } else {
-        Ok(Value::nil())
+    let inner = self_.as_rstring_inner();
+    let Some(len) = deleted_prefix_length(vm, globals, inner, lfp.arg(0))? else {
+        return Ok(Value::nil());
+    };
+    // Deleting nothing is "no change", not a successful deletion.
+    if len == 0 {
+        return Ok(Value::nil());
     }
+    let rest = RStringInner::from_encoding(&inner.as_bytes()[len..], inner.encoding());
+    lfp.self_val().replace_with_inner(rest);
+    Ok(lfp.self_val())
 }
 
 ///
@@ -2232,13 +2288,12 @@ fn delete_prefix(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    let string = self_.expect_str(globals)?;
-    let arg = lfp.arg(0).coerce_to_str(vm, globals)?;
-    if let Some(stripped) = string.strip_prefix(arg.as_str()) {
-        Ok(Value::string_from_str(stripped))
-    } else {
-        Ok(Value::string_from_str(string))
-    }
+    let inner = self_.as_rstring_inner();
+    let len = deleted_prefix_length(vm, globals, inner, lfp.arg(0))?.unwrap_or(0);
+    Ok(Value::string_from_inner(RStringInner::from_encoding(
+        &inner.as_bytes()[len..],
+        inner.encoding(),
+    )))
 }
 
 /// Check if a byte position in a UTF-8 byte slice is at a character boundary.
@@ -2911,17 +2966,37 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// bytes so that strings with invalid encoding (e.g.
 /// `"\xa0\xa1\n"` — invalid UTF-8 but with a literal trailing
 /// `\n`) still get their separator stripped, matching CRuby.
-fn chomp_byte_end(bytes: &[u8], rs: &[u8]) -> usize {
+/// The byte sequence an ASCII character occupies in `enc`. Only the
+/// fixed-width UTF-16/32 forms pad it out; every other encoding
+/// monoruby knows keeps ASCII where ASCII is.
+fn ascii_char_bytes(enc: Encoding, ch: u8) -> Vec<u8> {
+    match enc {
+        Encoding::Utf16Be => vec![0, ch],
+        Encoding::Utf16Le => vec![ch, 0],
+        Encoding::Utf32Be => vec![0, 0, 0, ch],
+        Encoding::Utf32Le => vec![ch, 0, 0, 0],
+        _ => vec![ch],
+    }
+}
+
+fn chomp_byte_end(bytes: &[u8], rs: &[u8], enc: Encoding) -> usize {
+    // The line terminators, spelled in the receiver's encoding: the
+    // separator reaching here is the ASCII default (`$/`), and CRuby
+    // matches it as a *character* — `"abc\r\n".encode("utf-32be")`
+    // chomps to `"abc"`, not to a stray `\0\0\0`.
+    let nl = ascii_char_bytes(enc, b'\n');
+    let cr = ascii_char_bytes(enc, b'\r');
+    let ends_with = |end: usize, pat: &[u8]| end >= pat.len() && &bytes[end - pat.len()..end] == pat;
     if rs.is_empty() {
         // Paragraph mode: iteratively strip trailing `\r\n` / `\n`.
         let mut end = bytes.len();
         loop {
             let prev = end;
-            while end >= 2 && &bytes[end - 2..end] == b"\r\n" {
-                end -= 2;
+            while ends_with(end, &nl) && ends_with(end - nl.len(), &cr) {
+                end -= cr.len() + nl.len();
             }
-            if end >= 1 && bytes[end - 1] == b'\n' {
-                end -= 1;
+            if ends_with(end, &nl) {
+                end -= nl.len();
             }
             if end == prev {
                 break;
@@ -2931,21 +3006,24 @@ fn chomp_byte_end(bytes: &[u8], rs: &[u8]) -> usize {
     } else if rs == b"\n" {
         // Default: remove ONE trailing `\r\n` / `\n` / `\r`.
         let end = bytes.len();
-        if end >= 2 && &bytes[end - 2..end] == b"\r\n" {
-            end - 2
-        } else if end >= 1 && (bytes[end - 1] == b'\n' || bytes[end - 1] == b'\r') {
-            end - 1
+        if ends_with(end, &nl) && ends_with(end - nl.len(), &cr) {
+            end - nl.len() - cr.len()
+        } else if ends_with(end, &nl) {
+            end - nl.len()
+        } else if ends_with(end, &cr) {
+            end - cr.len()
         } else {
             end
         }
     } else {
-        // Explicit separator: strip iteratively. Matches the
-        // pre-existing behaviour of `&str::trim_end_matches(rs)`.
-        let mut end = bytes.len();
-        while end >= rs.len() && &bytes[end - rs.len()..end] == rs {
-            end -= rs.len();
+        // Explicit separator: remove exactly one trailing occurrence
+        // (`"abcabc".chomp("abc")` is `"abc"`, not `""`).
+        let end = bytes.len();
+        if end >= rs.len() && &bytes[end - rs.len()..end] == rs {
+            end - rs.len()
+        } else {
+            end
         }
-        end
     }
 }
 
@@ -2984,7 +3062,8 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // Operate on bytes so that strings whose declared encoding
     // doesn't actually parse (e.g. `"\xa0\xa1\n".chomp`) can still
     // have their trailing newline stripped.
-    let new_end = chomp_byte_end(self_.as_rstring_inner().as_bytes(), rs_bytes);
+    let inner = self_.as_rstring_inner();
+    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes, inner.encoding());
     // Zero-copy shared substring (CoW) for long enough results.
     Ok(string_substring(self_, 0, new_end))
 }
@@ -3022,7 +3101,7 @@ fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
     let self_len = inner.as_bytes().len();
-    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes);
+    let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes, inner.encoding());
     if new_end == self_len {
         Ok(Value::nil())
     } else {
@@ -3859,8 +3938,11 @@ fn scan_block_loop(
                         None => vec.push(Value::nil()),
                     }
                 }
+                // CRuby yields the groups as *one* Array argument
+                // (`rb_yield(result)`), so `{ |a| }` binds the whole
+                // array and `{ |a, b| }` auto-splats it as usual.
                 let val = Value::array_from_vec(vec);
-                vm.invoke_block(globals, data, &val.as_array())?;
+                vm.invoke_block(globals, data, &[val])?;
             }
         }
         check_string_not_modified(recv, recv_len)?;
@@ -4223,6 +4305,7 @@ fn string_index(
             None => Value::nil(),
         });
     }
+    check_pattern_encoding_compat(&self_.as_rstring_inner(), lfp.arg(0), globals)?;
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let char_pos = match given.conv_char_index(char_pos) {
@@ -4549,6 +4632,7 @@ fn string_rindex(
         return string_rindex_string(vm, globals, &given, lfp.arg(0), lfp.try_arg(1));
     }
 
+    check_pattern_encoding_compat(&given, lfp.arg(0), globals)?;
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
 
     let inner = self_.as_rstring_inner();
@@ -4879,13 +4963,21 @@ fn string_rindex_string(
             .unwrap_or(haystack_str.len())
     };
 
-    // Reverse two-way scan. `rmatch_indices` yields matches in
-    // right-to-left order, so the first hit at or before
-    // `max_byte_start` is the answer.
-    let byte_pos = haystack_str
-        .rmatch_indices(needle_str)
-        .find(|(i, _)| *i <= max_byte_start)
-        .map(|(i, _)| i);
+    // Reverse two-way scan for the rightmost match that *starts* at or
+    // before `max_byte_start`; the match itself may run past it
+    // (`"blablabla".rindex("blab", 2)` is 0). Capping the haystack at
+    // `max_byte_start + needle.len()` makes `rfind`'s rightmost
+    // contained match exactly that one. `rmatch_indices`, which this
+    // replaces, walks *non-overlapping* matches from the right, so it
+    // stepped over the earlier of two overlapping ones and answered nil.
+    // UTF-8 is self-synchronizing, so a valid needle can only match on a
+    // character boundary — the byte cap needs no boundary alignment.
+    let bytes = haystack_str.as_bytes();
+    let needle_b = needle_str.as_bytes();
+    let end = max_byte_start
+        .saturating_add(needle_b.len())
+        .min(bytes.len());
+    let byte_pos = memchr::memmem::rfind(&bytes[..end], needle_b);
 
     let Some(p) = byte_pos else {
         return Ok(Value::nil());
@@ -5118,6 +5210,7 @@ fn pad_string_inner(
     width: i64,
     pad_inner: &RStringInner,
     side: PadSide,
+    out_enc: crate::value::Encoding,
 ) -> RStringInner {
     let self_chars = self_inner.char_length();
     let self_bytes = self_inner.as_bytes();
@@ -5149,10 +5242,10 @@ fn pad_string_inner(
     // Output ASCII-ness is closed under concatenation: SevenBit + SevenBit
     // stays SevenBit, so we can tag the result without re-scanning.
     if self_inner.is_ascii_only() && pad_inner.is_ascii_only() {
-        return RStringInner::from_ascii_bytes(out, self_inner.encoding());
+        return RStringInner::from_ascii_bytes(out, out_enc);
     }
     // Mixed content: defer classification to first use (cr = Unknown).
-    RStringInner::from_encoding(&out, self_inner.encoding())
+    RStringInner::from_encoding(&out, out_enc)
 }
 
 /// Common entry point shared by `ljust` / `rjust` / `center`. Handles
@@ -5173,7 +5266,13 @@ fn pad_builtin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, side: PadSide
         if pad.as_bytes().is_empty() {
             return Err(MonorubyErr::zero_width_padding());
         }
-        let result = pad_string_inner(self_inner, width, &pad, side);
+        // Padding actually added makes the result the *negotiated*
+        // encoding of receiver and pad ("abc" in IBM437 padded with
+        // "あ" comes back UTF-8); the unpadded copy keeps self's.
+        let out_enc = self_inner
+            .compatible_encoding(&pad)
+            .unwrap_or_else(|| self_inner.encoding());
+        let result = pad_string_inner(self_inner, width, &pad, side, out_enc);
         Ok(Value::string_from_inner(result))
     } else {
         // Default padding is a single US-ASCII space. Synthesise it
@@ -5183,7 +5282,8 @@ fn pad_builtin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, side: PadSide
             smallvec::smallvec![b' '],
             crate::value::Encoding::UsAscii,
         );
-        let result = pad_string_inner(self_inner, width, &pad, side);
+        let enc = self_inner.encoding();
+        let result = pad_string_inner(self_inner, width, &pad, side, enc);
         Ok(Value::string_from_inner(result))
     }
 }
@@ -5446,16 +5546,12 @@ fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             };
             e.min(byte_len)
         } else {
+            // Only an out-of-range *begin* is nil; an end that resolves
+            // below zero just makes the slice empty
+            // (`"hello".byteslice(2..-99)` is `""`, not nil).
             let idx = byte_len as i64 + end;
-            if idx < 0 {
-                return Ok(Value::nil());
-            }
-            let e = if range.exclude_end() {
-                idx as usize
-            } else {
-                (idx as usize).saturating_add(1)
-            };
-            e.min(byte_len)
+            let e = if range.exclude_end() { idx } else { idx + 1 };
+            if e <= 0 { 0 } else { (e as usize).min(byte_len) }
         };
         if start > end {
             return Ok(Value::string_from_inner(RStringInner::from_encoding(
@@ -6009,29 +6105,48 @@ fn split_paragraph_ranges(s: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
     // a 2+ run) is emitted verbatim and is *not* chomped, so a lone
     // trailing `\n` survives even under `chomp: true`.
     //
-    // Newline detection is `\n`-only, matching the prior implementation;
-    // CRuby additionally treats `\r\n` pairs as paragraph newlines, but
-    // that is a separate, pre-existing divergence outside this fix.
+    // A newline here is a *unit* — `\r\n` or `\n` — as in CRuby, so
+    // `"a\r\n\r\n\nb"` terminates after the two `\r\n` and the stray
+    // `\n` is skipped with the rest of the run.
     let bytes = s.as_bytes();
     let pend = bytes.len();
+    let nl_len = |p: usize| -> Option<usize> {
+        if p >= pend {
+            None
+        } else if bytes[p] == b'\n' {
+            Some(1)
+        } else if bytes[p] == b'\r' && p + 1 < pend && bytes[p + 1] == b'\n' {
+            Some(2)
+        } else {
+            None
+        }
+    };
     let mut out = Vec::new();
     let mut i = 0usize;
     while i < pend {
         let para_start = i;
         // Scan forward to the paragraph terminator: the first run of
-        // two or more consecutive `\n`. A lone `\n` is content.
+        // two or more consecutive newline units. A lone one is content.
         let mut p = i;
         let term = loop {
             if p >= pend {
                 break None;
             }
-            if bytes[p] == b'\n' {
-                let mut run_end = p;
-                while run_end < pend && bytes[run_end] == b'\n' {
-                    run_end += 1;
+            if let Some(len) = nl_len(p) {
+                // Walk the whole run, remembering where the second unit
+                // ends — that is what the paragraph keeps.
+                let mut run_end = p + len;
+                let mut second_end = run_end;
+                let mut count = 1;
+                while let Some(l) = nl_len(run_end) {
+                    count += 1;
+                    run_end += l;
+                    if count == 2 {
+                        second_end = run_end;
+                    }
                 }
-                if run_end - p >= 2 {
-                    break Some((p, run_end));
+                if count >= 2 {
+                    break Some((p, second_end, run_end));
                 }
                 // Single newline: part of the paragraph's content.
                 p = run_end;
@@ -6040,10 +6155,10 @@ fn split_paragraph_ranges(s: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
             }
         };
         match term {
-            Some((nl, run_end)) => {
+            Some((nl, second_end, run_end)) => {
                 // Keep two terminating newlines (none when chomping);
                 // skip the rest of the run.
-                let end = if chomp { nl } else { nl + 2 };
+                let end = if chomp { nl } else { second_end };
                 out.push(para_start..end);
                 i = run_end;
             }
@@ -6077,7 +6192,25 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let s = self_.expect_str(globals)?;
+    let inner = self_.as_rstring_inner();
+    let enc = inner.encoding();
+    if !enc.is_ascii_compatible() {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!("ASCII incompatible encoding: {}", enc.name()),
+        ));
+    }
+    // The grammar is pure ASCII and every non-printable byte
+    // terminates the number, so parse the ASCII prefix of the raw
+    // bytes: a BINARY string holding `"\3771.2"` is 0.0, not an
+    // invalid-byte-sequence error.
+    let bytes = inner.as_bytes();
+    let end = bytes
+        .iter()
+        .position(|b| !b.is_ascii())
+        .unwrap_or(bytes.len());
+    // SAFETY: every byte in `bytes[..end]` is ASCII.
+    let s = unsafe { std::str::from_utf8_unchecked(&bytes[..end]) };
     let f = parse_f64(s).0;
     Ok(Value::float(f))
 }
@@ -6093,19 +6226,244 @@ fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn to_c(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let s = self_.expect_str(globals)?;
-    let (re, im) = parse_complex(s);
-    Ok(Value::complex(parse_real(re), parse_real(im)))
+    // The grammar is pure ASCII and anything else is trailing garbage,
+    // so walk the raw bytes rather than demanding valid UTF-8.
+    let inner = self_.as_rstring_inner();
+    let (re, im) = match parse_to_c(inner.as_bytes()) {
+        ToCParse::Cartesian(re, im) => (re.to_value(), im.to_value()),
+        ToCParse::Polar(m, a) => (Value::float(m * a.cos()), Value::float(m * a.sin())),
+        ToCParse::DivideByZero => return Err(MonorubyErr::divide_by_zero()),
+    };
+    Ok(Value::complex(
+        Real::try_from(&globals.store, re)?,
+        Real::try_from(&globals.store, im)?,
+    ))
 }
 
-/// Parse a numeric string to a Real -- integer if possible, float otherwise.
-fn parse_real(s: f64) -> Real {
-    if s == (s as i64) as f64 && s.is_finite() {
-        Real::from(s as i64)
-    } else {
-        Real::from(s)
+/// One numeric literal in `String#to_c`'s grammar. A literal with a
+/// `/` is always a Rational (CRuby keeps `"4/2"` as `(2/1)`), one with
+/// a fraction or exponent is a Float, everything else an Integer.
+#[derive(Clone, Debug)]
+enum ToCNum {
+    Int(BigInt),
+    Rat(num::BigRational),
+    Float(f64),
+}
+
+impl ToCNum {
+    fn zero() -> Self {
+        ToCNum::Int(BigInt::zero())
+    }
+
+    fn unit(negative: bool) -> Self {
+        ToCNum::Int(BigInt::from(if negative { -1 } else { 1 }))
+    }
+
+    fn to_f64(&self) -> f64 {
+        use num::ToPrimitive;
+        match self {
+            ToCNum::Int(b) => b.to_f64().unwrap_or(f64::NAN),
+            ToCNum::Rat(r) => r.to_f64().unwrap_or(f64::NAN),
+            ToCNum::Float(f) => *f,
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        use num::ToPrimitive;
+        match self {
+            ToCNum::Int(b) => match b.to_i64() {
+                Some(i) => Value::integer(i),
+                None => Value::bigint(b.clone()),
+            },
+            ToCNum::Rat(r) => Value::rational(r.numer().clone(), r.denom().clone()),
+            ToCNum::Float(f) => Value::float(*f),
+        }
     }
 }
+
+/// What `String#to_c`'s grammar found: either the two cartesian parts
+/// or a polar `m@a` pair.
+enum ToCParse {
+    Cartesian(ToCNum, ToCNum),
+    Polar(f64, f64),
+    /// `"3/0"` — CRuby raises `ZeroDivisionError` rather than
+    /// answering `(0+0i)`.
+    DivideByZero,
+}
+
+/// A digit run, with `_` allowed strictly *between* two digits (`"7_9"`
+/// is 79, `"7__9"` stops after the 7).
+fn scan_to_c_digits(b: &[u8], mut i: usize) -> (String, usize) {
+    let mut out = String::new();
+    while i < b.len() {
+        if b[i].is_ascii_digit() {
+            out.push(b[i] as char);
+            i += 1;
+        } else if b[i] == b'_'
+            && !out.is_empty()
+            && b.get(i + 1).is_some_and(|c| c.is_ascii_digit())
+        {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    (out, i)
+}
+
+/// Scan one numeric literal at `i`:
+/// `[+-]? digits ('.' digits)? ([eE] [+-]? digits)? ('/' digits)?`.
+/// Returns the value and the offset just past it, or `None` when there
+/// is no numeric there at all (the sign, if any, is not consumed).
+fn scan_to_c_number(b: &[u8], i: usize) -> Option<(ToCNum, usize)> {
+    let mut j = i;
+    let negative = match b.get(j) {
+        Some(b'+') => {
+            j += 1;
+            false
+        }
+        Some(b'-') => {
+            j += 1;
+            true
+        }
+        _ => false,
+    };
+    let (int_digits, nj) = scan_to_c_digits(b, j);
+    j = nj;
+    let mut text = int_digits.clone();
+    let mut is_float = false;
+    if b.get(j) == Some(&b'.') {
+        let (frac, nj) = scan_to_c_digits(b, j + 1);
+        if !frac.is_empty() {
+            is_float = true;
+            // The integer part may be missing entirely (`".5"`).
+            if text.is_empty() {
+                text.push('0');
+            }
+            text.push('.');
+            text.push_str(&frac);
+            j = nj;
+        }
+    }
+    if int_digits.is_empty() && !is_float {
+        return None;
+    }
+    if matches!(b.get(j), Some(b'e') | Some(b'E')) {
+        let mut k = j + 1;
+        let mut exp = String::new();
+        if matches!(b.get(k), Some(b'+') | Some(b'-')) {
+            exp.push(b[k] as char);
+            k += 1;
+        }
+        let (digits, nk) = scan_to_c_digits(b, k);
+        if !digits.is_empty() {
+            is_float = true;
+            text.push('e');
+            text.push_str(&exp);
+            text.push_str(&digits);
+            j = nk;
+        }
+    }
+    let mut value = if is_float {
+        ToCNum::Float(text.parse::<f64>().unwrap_or(0.0))
+    } else {
+        ToCNum::Int(text.parse::<BigInt>().unwrap_or_else(|_| BigInt::zero()))
+    };
+    // A `/` makes it a Rational — but only with an unsigned digit run
+    // after it (`"2/-3"` is just 2, `"1/"` just 1).
+    if b.get(j) == Some(&b'/') {
+        let (den, nj) = scan_to_c_digits(b, j + 1);
+        if !den.is_empty() {
+            let den = den.parse::<BigInt>().unwrap_or_else(|_| BigInt::zero());
+            if den.is_zero() {
+                // Signalled to the caller through a NaN sentinel it
+                // cannot otherwise produce; `parse_to_c` turns it into
+                // the ZeroDivisionError.
+                return Some((ToCNum::Float(f64::NAN), usize::MAX));
+            }
+            let numer = match &value {
+                ToCNum::Int(b) => num::BigRational::new(b.clone(), BigInt::from(1)),
+                ToCNum::Float(f) => num::BigRational::from_float(*f)
+                    .unwrap_or_else(|| num::BigRational::new(BigInt::zero(), BigInt::from(1))),
+                ToCNum::Rat(r) => r.clone(),
+            };
+            value = ToCNum::Rat(numer / num::BigRational::new(den, BigInt::from(1)));
+            j = nj;
+        }
+    }
+    if negative {
+        value = match value {
+            ToCNum::Int(b) => ToCNum::Int(-b),
+            ToCNum::Rat(r) => ToCNum::Rat(-r),
+            ToCNum::Float(f) => ToCNum::Float(-f),
+        };
+    }
+    Some((value, j))
+}
+
+fn is_imaginary_unit(c: Option<&u8>) -> bool {
+    matches!(c, Some(b'i') | Some(b'I') | Some(b'j') | Some(b'J'))
+}
+
+/// CRuby's `String#to_c` grammar: leading space, then a real, an
+/// imaginary, `real [+-] imaginary`, or the polar `real@real`, with
+/// everything after the match ignored.
+fn parse_to_c(b: &[u8]) -> ToCParse {
+    let mut i = 0usize;
+    while i < b.len() && (b[i].is_ascii_whitespace() || b[i] == 0x0b) {
+        i += 1;
+    }
+    let (n1, i) = match scan_to_c_number(b, i) {
+        Some((_, usize::MAX)) => return ToCParse::DivideByZero,
+        Some(v) => v,
+        None => {
+            // No numeric: a bare imaginary unit is 1i ("Infinity" is
+            // `(0+1i)` — the `I` is the unit, the rest is garbage).
+            let mut j = i;
+            let negative = match b.get(j) {
+                Some(b'-') => {
+                    j += 1;
+                    true
+                }
+                Some(b'+') => {
+                    j += 1;
+                    false
+                }
+                _ => false,
+            };
+            return if is_imaginary_unit(b.get(j)) {
+                ToCParse::Cartesian(ToCNum::zero(), ToCNum::unit(negative))
+            } else {
+                ToCParse::Cartesian(ToCNum::zero(), ToCNum::zero())
+            };
+        }
+    };
+    if is_imaginary_unit(b.get(i)) {
+        return ToCParse::Cartesian(ToCNum::zero(), n1);
+    }
+    if b.get(i) == Some(&b'@') {
+        return match scan_to_c_number(b, i + 1) {
+            Some((_, usize::MAX)) => ToCParse::DivideByZero,
+            Some((n2, _)) => ToCParse::Polar(n1.to_f64(), n2.to_f64()),
+            None => ToCParse::Cartesian(n1, ToCNum::zero()),
+        };
+    }
+    if matches!(b.get(i), Some(b'+') | Some(b'-')) {
+        match scan_to_c_number(b, i) {
+            Some((_, usize::MAX)) => return ToCParse::DivideByZero,
+            Some((n2, j)) if is_imaginary_unit(b.get(j)) => {
+                return ToCParse::Cartesian(n1, n2);
+            }
+            None if is_imaginary_unit(b.get(i + 1)) => {
+                return ToCParse::Cartesian(n1, ToCNum::unit(b[i] == b'-'));
+            }
+            _ => {}
+        }
+    }
+    ToCParse::Cartesian(n1, ToCNum::zero())
+}
+
+
 
 ///
 /// ### String#to_r
@@ -6133,75 +6491,8 @@ fn to_r(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-/// Parse a string as a complex number, returning (real, imaginary) as f64.
-fn parse_complex(s: &str) -> (f64, f64) {
-    let s = s.trim();
-    if s.is_empty() {
-        return (0.0, 0.0);
-    }
 
-    // Handle pure imaginary: "3i", "-2i", "+5i", "i", "-i", "+i"
-    if let Some(rest) = s.strip_suffix('i') {
-        if rest.is_empty() {
-            return (0.0, 1.0);
-        }
-        if rest == "+" {
-            return (0.0, 1.0);
-        }
-        if rest == "-" {
-            return (0.0, -1.0);
-        }
-        // Try "a+bi" or "a-bi" pattern
-        // Find the last '+' or '-' that is not at the start and not part of an exponent
-        if let Some(pos) = find_complex_split(rest) {
-            let real_part = &rest[..pos];
-            let imag_part = &rest[pos..];
-            let re = parse_f64_simple(real_part);
-            let im = if imag_part == "+" {
-                1.0
-            } else if imag_part == "-" {
-                -1.0
-            } else {
-                parse_f64_simple(imag_part)
-            };
-            return (re, im);
-        }
-        // Pure imaginary
-        let im = parse_f64_simple(rest);
-        return (0.0, im);
-    }
 
-    // Pure real
-    let re = parse_f64_simple(s);
-    (re, 0.0)
-}
-
-/// Find the split point between real and imaginary parts in a complex string.
-/// Returns the position of the '+' or '-' that separates them.
-fn find_complex_split(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut i = bytes.len();
-    while i > 0 {
-        i -= 1;
-        if (bytes[i] == b'+' || bytes[i] == b'-') && i > 0 {
-            // Make sure this isn't part of a scientific notation exponent
-            if i >= 2 && (bytes[i - 1] == b'e' || bytes[i - 1] == b'E') {
-                continue;
-            }
-            return Some(i);
-        }
-    }
-    None
-}
-
-/// Simple f64 parser that returns 0.0 for invalid input.
-fn parse_f64_simple(s: &str) -> f64 {
-    let s = s.trim();
-    if s.is_empty() {
-        return 0.0;
-    }
-    s.parse::<f64>().unwrap_or(0.0)
-}
 
 ///
 /// ### String#to_i
@@ -8296,7 +8587,14 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     for b in bytes.as_bytes() {
         sum += *b as u64;
     }
-    Ok(Value::integer((sum & ((1 << bits) - 1)) as i64))
+    // `n <= 0` means "no mask at all" (CRuby returns the plain sum);
+    // a width at or past the accumulator's is likewise a no-op.
+    let masked = if bits <= 0 || bits >= 64 {
+        sum
+    } else {
+        sum & ((1u64 << bits) - 1)
+    };
+    Ok(Value::integer(masked as i64))
 }
 
 ///
@@ -8509,7 +8807,15 @@ fn each_grapheme_cluster(
         vm.invoke_block_iter1(globals, bh, clusters)?;
         Ok(self_)
     } else {
-        vm.generate_enumerator(IdentId::get_id("each_grapheme_cluster"), self_, vec![], pc)
+        let size =
+            Value::integer(collect_grapheme_clusters(self_.as_rstring_inner()).len() as i64);
+        vm.generate_enumerator_with_size(
+            IdentId::get_id("each_grapheme_cluster"),
+            self_,
+            vec![],
+            pc,
+            Some(size),
+        )
     }
 }
 
@@ -8534,7 +8840,14 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         vm.invoke_block_iter1(globals, bh, chars)?;
         Ok(lfp.self_val())
     } else {
-        vm.generate_enumerator(IdentId::get_id("each_char"), lfp.self_val(), vec![], pc)
+        let size = Value::integer(self_.as_rstring_inner().char_length() as i64);
+        vm.generate_enumerator_with_size(
+            IdentId::get_id("each_char"),
+            lfp.self_val(),
+            vec![],
+            pc,
+            Some(size),
+        )
     }
 }
 
@@ -8549,9 +8862,12 @@ fn codepoint_values(inner: &RStringInner) -> Result<Vec<Value>> {
             .map(|c| Value::integer(c as u32 as i64))
             .collect())
     } else {
+        let enc = inner.encoding();
         Ok(inner
             .iter_char_bytes()
-            .map(|s| Value::integer(s[0] as i64))
+            .map(|s| {
+                Value::integer(crate::value::rvalue::char_bytes_code(enc, s) as i64)
+            })
             .collect())
     }
 }
@@ -8589,7 +8905,16 @@ fn each_codepoint(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: Byteco
         vm.invoke_block_iter1(globals, bh, codes.into_iter())?;
         Ok(lfp.self_val())
     } else {
-        vm.generate_enumerator(IdentId::get_id("each_codepoint"), lfp.self_val(), vec![], pc)
+        // `char_length` falls back to the byte count for broken bytes,
+        // which is the count `each_codepoint` would yield for them.
+        let size = Value::integer(self_.as_rstring_inner().char_length() as i64);
+        vm.generate_enumerator_with_size(
+            IdentId::get_id("each_codepoint"),
+            lfp.self_val(),
+            vec![],
+            pc,
+            Some(size),
+        )
     }
 }
 
@@ -8743,7 +9068,18 @@ fn unpack_offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, len: usize)
 fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
-    let dumped = format!(r#""{}""#, inner.dump());
+    // A non-ASCII-compatible encoding cannot be recovered from the
+    // escaped bytes alone, so CRuby appends the call that restores it
+    // and the dumped form carries UTF-8 instead of the receiver's.
+    let dumped = if inner.encoding().is_ascii_compatible() {
+        format!(r#""{}""#, inner.dump())
+    } else {
+        format!(
+            r#""{}".dup.force_encoding("{}")"#,
+            inner.dump(),
+            inner.encoding().name()
+        )
+    };
     // CRuby keeps the receiver's encoding on the (all-ASCII) dumped
     // form for ASCII-compatible encodings.
     let enc = if inner.encoding().is_ascii_compatible() {
@@ -8771,14 +9107,15 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.expect_str(globals)?;
-    let bytes = parse_undump(s)?;
-    // The dumped form is always ASCII-compatible and we tag the
-    // result as UTF-8. `from_encoding_scanned` classifies the
-    // bytes once at construction so subsequent cr queries are
-    // O(1); skipping the eager scan would force every later
-    // operation to re-walk the buffer through `Encoding::classify`.
+    let (bytes, enc) = parse_undump(s)?;
+    // The dumped form is always ASCII-compatible and we tag the result
+    // as UTF-8 unless it carried a `force_encoding` suffix.
+    // `from_encoding_scanned` classifies the bytes once at construction
+    // so subsequent cr queries are O(1); skipping the eager scan would
+    // force every later operation to re-walk the buffer through
+    // `Encoding::classify`.
     Ok(Value::string_from_inner(
-        RStringInner::from_encoding_scanned(&bytes, Encoding::Utf8),
+        RStringInner::from_encoding_scanned(&bytes, enc.unwrap_or(Encoding::Utf8)),
     ))
 }
 
@@ -8991,21 +9328,50 @@ fn scrub_inner_with_block(
 /// Parser for the dump-quoted format. Errors are returned as
 /// `RuntimeError` with messages that match CRuby's variants, so the
 /// spec's `raise_error(RuntimeError, /.../)` matches the right kind.
-fn parse_undump(s: &str) -> Result<Vec<u8>> {
+fn parse_undump(s: &str) -> Result<(Vec<u8>, Option<Encoding>)> {
     let bytes = s.as_bytes();
     let invalid = || MonorubyErr::runtimeerr("invalid dumped string");
+    let bad_form = || {
+        MonorubyErr::runtimeerr(
+            r#"invalid dumped string; not wrapped with '"' nor '"...".force_encoding("...")' form"#,
+        )
+    };
     let unterminated = || MonorubyErr::runtimeerr("unterminated dumped string");
     let bad_hex = || MonorubyErr::runtimeerr("invalid hex escape");
     let bad_unicode = || MonorubyErr::runtimeerr("invalid Unicode escape");
     let null_byte = || MonorubyErr::runtimeerr("string contains null byte");
     let non_ascii = || MonorubyErr::runtimeerr("non-ASCII character detected");
-    if bytes.len() < 2 || bytes[0] != b'"' {
-        return Err(invalid());
+    if bytes.is_empty() || bytes[0] != b'"' {
+        return Err(bad_form());
     }
-    if bytes[bytes.len() - 1] != b'"' {
-        return Err(unterminated());
-    }
-    let inner = &bytes[1..bytes.len() - 1];
+    // Find the quote that closes the literal, honouring escapes, and
+    // read whatever follows as `dump`'s encoding-restoring suffix.
+    let mut i = 1usize;
+    let close = loop {
+        match bytes.get(i) {
+            None => return Err(unterminated()),
+            Some(b'\\') => i += 2,
+            Some(b'"') => break i,
+            Some(_) => i += 1,
+        }
+    };
+    let enc = match &s[close + 1..] {
+        "" => None,
+        rest => {
+            let rest = rest.strip_prefix(".dup").unwrap_or(rest);
+            let name = rest
+                .strip_prefix(r#".force_encoding(""#)
+                .and_then(|r| r.strip_suffix(r#"")"#))
+                .ok_or_else(bad_form)?;
+            if name.contains('"') {
+                return Err(bad_form());
+            }
+            Some(Encoding::try_from_str(name).map_err(|_| {
+                MonorubyErr::runtimeerr("dumped string has unknown encoding name")
+            })?)
+        }
+    };
+    let inner = &bytes[1..close];
     let mut out: Vec<u8> = Vec::with_capacity(inner.len());
     let mut i = 0usize;
     while i < inner.len() {
@@ -9092,7 +9458,7 @@ fn parse_undump(s: &str) -> Result<Vec<u8>> {
             _ => return Err(invalid()),
         }
     }
-    Ok(out)
+    Ok((out, enc))
 }
 
 fn hex_digit(b: u8) -> Option<u32> {
@@ -9244,6 +9610,109 @@ fn unicode_normalize_(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn delete_prefix_is_byte_oriented() {
+        run_tests(&[
+            // A byte prefix that would cut a character in half deletes
+            // nothing, and the result keeps the receiver's encoding.
+            r#""\u3042b".delete_prefix("\xE3".dup.force_encoding("UTF-8")).bytes"#,
+            r#"begin
+                 "\u3042b".delete_prefix("\xE3".dup.force_encoding("BINARY"))
+               rescue => e
+                 e.class.to_s
+               end"#,
+            r#""\u3042b".delete_prefix("\u3042")"#,
+            r#""\u3042b".delete_prefix("\u3042").encoding.to_s"#,
+            r#""hello".delete_prefix("he")"#,
+            r#""hello".delete_prefix("xx")"#,
+            r#"s = "hello".dup; [s.delete_prefix!("he"), s]"#,
+            r#"s = "hello".dup; [s.delete_prefix!("xx"), s]"#,
+            r#"s = "\u3042b".dup; [s.delete_prefix!("\xE3".dup.force_encoding("UTF-8")), s]"#,
+            // `to_str` is honoured for the argument.
+            r#"o = Object.new; def o.to_str = "he"; "hello".delete_prefix(o)"#,
+        ]);
+    }
+
+    #[test]
+    fn chomp_removes_one_separator_in_the_receivers_encoding() {
+        run_tests(&[
+            // An explicit separator is removed once, not repeatedly.
+            r#""abcabc".chomp("abc")"#,
+            r#""abcabcabc".chomp("abc")"#,
+            r#""abc".chomp("def")"#,
+            r#"s = "abcabc".dup; [s.chomp!("abc"), s]"#,
+            // The default separator matches as a *character*, so a
+            // fixed-width encoding chomps its whole terminator.
+            r#""abc\r\n".encode("utf-32be").chomp.bytes"#,
+            r#""abc\r\n".encode("utf-16le").chomp.bytes"#,
+            r#""abc\n".encode("utf-32be").chomp.bytes"#,
+            r#""abc\r\n\r\n".encode("utf-32be").chomp("").bytes"#,
+            r#""abc\r\n".chomp"#,
+            r#""abc\n\n\n".chomp("")"#,
+        ]);
+    }
+
+    #[test]
+    fn to_f_parses_like_cruby() {
+        run_tests(&[
+            r#"["\v1.2".to_f, "\f1.2".to_f, "\r1.2".to_f, "\t1.2".to_f, "  1.2".to_f]"#,
+            // Every non-printable byte terminates the number, even one
+            // that is not valid UTF-8.
+            r#"["\0001.2".to_f, "\1771.2".to_f, "\2001.2".b.to_f, "\3771.2".b.to_f]"#,
+            r#"["1.e-2".to_f, "1.".to_f, "1.e+0".to_f, "-1.".to_f, ".5".to_f, "1.foo".to_f]"#,
+            r#"[Float("1.e-2"), Float("1."), Float(".5")]"#,
+            r#"begin; Float("1.5e"); rescue => e; e.class.to_s; end"#,
+            r#"begin; "1.2".encode("UTF-16").to_f; rescue => e; [e.class.to_s, e.message]; end"#,
+        ]);
+    }
+
+    #[test]
+    fn force_encoding_accepts_special_names() {
+        run_test_once(
+            r#"
+            begin
+              Encoding.default_internal = "US-ASCII"
+              a = "abc".dup.force_encoding("internal").encoding.to_s
+              Encoding.default_internal = nil
+              b = "abc".dup.force_encoding("internal").encoding.to_s
+              c = "abc".dup.force_encoding("INTERNAL").encoding.to_s
+              d = "abc".dup.force_encoding("locale").encoding == Encoding.find("locale")
+              e = "abc".dup.force_encoding("external").encoding == Encoding.default_external
+              [a, b, c, d, e]
+            ensure
+              Encoding.default_internal = nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn rindex_finds_overlapping_matches() {
+        // The rightmost match *starting* at or before the limit, even
+        // when it overlaps a later one.
+        run_tests(&[
+            r#""blablabla".rindex("blab", 2)"#,
+            r#""blablabla".rindex("blab")"#,
+            r#""aaaa".rindex("aa", 1)"#,
+            r#""aaaa".rindex("aa")"#,
+            r#""abab".rindex("abab", 0)"#,
+            r#""hello".rindex("l", -1)"#,
+            r#""hello".rindex("z")"#,
+        ]);
+    }
+
+    #[test]
+    fn char_enumerators_report_their_size() {
+        run_tests(&[
+            r#""hello".each_char.size"#,
+            r#""\u3042\u3044".each_char.size"#,
+            r#""hello".each_codepoint.size"#,
+            r#""\u3042\u3044".each_codepoint.size"#,
+            r#""hello".each_grapheme_cluster.size"#,
+            r#""".each_char.size"#,
+        ]);
+    }
 
     #[test]
     fn string_new_capacity() {
@@ -13808,6 +14277,228 @@ mod tests {
               s.rpartition("X").map(&:encoding).map(&:to_s)
             "#,
         );
+    }
+
+    #[test]
+    fn to_c_parses_cruby_grammar() {
+        run_tests(&[
+            // Integer / Float / Rational parts keep their class.
+            r#"["3", "-3", "2.3", "-2.3", "2e3+4i", "2E3+2E4i"].map { |s| c = s.to_c; [c.to_s, c.real.class.to_s, c.imaginary.class.to_s] }"#,
+            r#"["2/3", "-2/3", "4+2/3i", "7-2/3i", "1/3", "4/2", "1.0/3", "1.5/2", "1e2/3", "1_0/2_0", "2/3i", "-2/3i"].map { |s| c = s.to_c; [c.to_s, c.real.class.to_s, c.imaginary.class.to_s] }"#,
+            // Every imaginary unit letter, and the bare unit.
+            r#"["79+4i", "79+4I", "79+4j", "79+4J", "79-i", "79+i", "i", "-i", "+i", "I"].map { |s| s.to_c.to_s }"#,
+            // A leading letter that happens to be a unit is the unit.
+            r#"["Infinity", "-Infinity", "Insecure", "-Insecure", "NaN", "ruby", ""].map { |s| s.to_c.to_s }"#,
+            // Polar form.
+            r#"["79@4", "-79@4", "79@-4"].map { |s| s.to_c.to_s }"#,
+            // Underscores, surrounding space and trailing garbage.
+            r#"["7_9+4_0i", "  79+4i", "79+4i  ", "79+4iruby", "7__9+4__0i", "1+2i+3i", "1i2"].map { |s| s.to_c.to_s }"#,
+            // Incomplete tails fall back to what was read.
+            r#"["1e", "1/", "1@", "3+", "3-", "2/-3", ".5", "-.5", ".5i", "5.", "+3"].map { |s| s.to_c.to_s }"#,
+            // A zero denominator raises.
+            r#"begin; "3/0".to_c; rescue => e; e.class.to_s; end"#,
+        ]);
+    }
+
+    #[test]
+    fn index_assign_range_resolves_like_cruby() {
+        run_tests(&[
+            // A zero-width range inserts; the exclusive bound must be
+            // folded *after* the negative bound, not before.
+            r#"s = "hello".dup; s[0...0] = ""; s"#,
+            r#"s = "hello".dup; s[0...0] = "X"; s"#,
+            r#"s = "hello".dup; s[2...2] = "Y"; s"#,
+            r#"s = "hello".dup; s[-1...-1] = "Z"; s"#,
+            r#"s = "hello".dup; s[0..0] = ""; s"#,
+            r#"s = "hello".dup; s[0...-1] = "X"; s"#,
+            r#"s = "hello".dup; s[2..-99] = "X"; s"#,
+            r#"s = "hello".dup; s[3..1] = "X"; s"#,
+            // Beginless / endless ranges.
+            r#"s = "hello".dup; s[..2] = "X"; s"#,
+            r#"s = "hello".dup; s[2..] = "X"; s"#,
+            r#"s = "hello".dup; s[..-4] = "X"; s"#,
+            // An out-of-range begin raises, spelled with the range's
+            // own dots.
+            r#"begin; s = "hello".dup; s[6...7] = "X"; rescue => e; [e.class.to_s, e.message]; end"#,
+            r#"begin; s = "hello".dup; s[-6..1] = "X"; rescue => e; e.message; end"#,
+            // Non-UTF-8 receivers take the byte route through the same
+            // resolution.
+            r#"s = "abc".dup.force_encoding("euc-jp"); s[0...0] = "X"; [s.bytes, s.encoding.to_s]"#,
+        ]);
+    }
+
+    #[test]
+    fn dump_and_undump_round_trip_the_encoding() {
+        run_tests(&[
+            r#""abc".encode("utf-16be").dump"#,
+            r#""abc".encode("utf-16le").dump"#,
+            r#"s = "abc".encode("utf-16be").dump.undump; [s.bytes, s.encoding.to_s]"#,
+            r#"s = "¤¢".dup.force_encoding("euc-jp"); [s.dump, s.dump.undump.bytes]"#,
+            r#"["abc".dump, "ÿ".b.dump, "aあ".dump]"#,
+            r#"'"\x00a".force_encoding("UTF-16BE")'.undump.bytes"#,
+            r#"begin; '"a".dup.force_encoding("nonexistent")'.undump; rescue => e; e.message; end"#,
+            r#"begin; '"a".dup'.undump; rescue => e; e.message; end"#,
+            r#"begin; '"abc'.undump; rescue => e; e.message; end"#,
+            r#"begin; 'abc"'.undump; rescue => e; e.message; end"#,
+            r#"'"\x2E force_encoding(\""'.undump.bytes"#,
+        ]);
+    }
+
+    #[test]
+    fn prepend_snapshots_its_arguments() {
+        run_tests(&[
+            r#"s = "hello".dup; s.prepend(s, s); s"#,
+            r#"s = "b".dup; [s.prepend("a"), s]"#,
+            r#"s = "c".dup; [s.prepend("a", "b"), s]"#,
+            r#"s = "a".dup; [s.prepend, s]"#,
+        ]);
+    }
+
+    #[test]
+    fn sum_without_a_mask_and_scan_group_yield() {
+        run_tests(&[
+            // `n <= 0` (and a width at or past the accumulator's) means
+            // no mask at all.
+            r#"["hello".sum, "hello".sum(0), "hello".sum(-1), "hello".sum(4),
+                "hello".sum(8), "hello".sum(64), "hello".sum(100)]"#,
+            // `scan` yields the groups as one Array argument.
+            r#"r = []; "hello world".scan(/(o)(r)?/) { |a| r << a }; r"#,
+            r#"r = []; "hello world".scan(/(o)(r)?/) { |a, b| r << [a, b] }; r"#,
+            r#"r = []; "hello".scan(/(l)/) { |a| r << a }; r"#,
+            r#"r = []; "hello".scan(/l/) { |a| r << a }; r"#,
+            r#"r = []; "hello".scan(/(h)(e)(l)/) { |*a| r << a }; r"#,
+            r#""hello world".scan(/(o)(r)?/)"#,
+        ]);
+    }
+
+    #[test]
+    fn pad_result_takes_the_negotiated_encoding() {
+        run_tests(&[
+            // Padding actually added negotiates with the pad's encoding …
+            r#"s = "abc".dup.force_encoding("US-ASCII")
+               [s.ljust(5, "\u3042").encoding.to_s,
+                s.rjust(5, "\u3042").encoding.to_s,
+                s.center(7, "\u3042").encoding.to_s]"#,
+            // … while an unpadded copy and the default space keep self's.
+            r#"s = "abc".dup.force_encoding("US-ASCII")
+               [s.ljust(2, "\u3042").encoding.to_s, s.ljust(5).encoding.to_s]"#,
+            r#""abc".dup.force_encoding("US-ASCII").ljust(5, "\u3042")"#,
+            r#""\u3042\u3042".ljust(5, "x").encoding.to_s"#,
+        ]);
+    }
+
+    #[test]
+    fn index_rindex_reject_an_incompatible_regexp() {
+        run_tests(&[
+            // A regexp pinned to a native codec compiles, and refuses a
+            // subject in another encoding.
+            r#"r = Regexp.new("\u308C".encode("euc-jp"))
+               [r.source.bytes, r.encoding.to_s, r.fixed_encoding?]"#,
+            r#"r = Regexp.new("\u308C".encode("euc-jp"))
+               "\u3042\u308C".encode("euc-jp").index(r)"#,
+            r#"r = Regexp.new("\u308C".encode("euc-jp"))
+               begin; "\u3042\u308C".index(r); rescue => e; [e.class.to_s, e.message]; end"#,
+            r#"r = Regexp.new("\u308C".encode("euc-jp"))
+               begin; "\u3042\u308C".rindex(r); rescue => e; e.class.to_s; end"#,
+            r#"r = Regexp.new("\u308C".encode("euc-jp"))
+               begin; "\u3042\u308C".byteindex(r); rescue => e; e.class.to_s; end"#,
+        ]);
+    }
+
+    #[test]
+    fn paragraph_mode_counts_crlf_as_one_newline() {
+        run_tests(&[
+            r#""hello\nworld\r\n\r\n\nand\nuniverse\n\r\n\n\n\n".lines("")"#,
+            r#""hello\r\nworld\n\n\nand\nuniverse\n\n\n\r\n\r\ndog".lines("")"#,
+            r#""hello\nworld\n\n\nand\nuniverse\n\n\n\n\n".lines("")"#,
+            r#""hello\nworld\n\n\nand\nuniverse\n\n\n\n\ndog".lines("")"#,
+            r#""a\r\n\r\nb".lines("", chomp: true)"#,
+        ]);
+    }
+
+    #[test]
+    fn byteslice_range_end_below_zero_is_empty_not_nil() {
+        run_tests(&[
+            r#"["".byteslice(0..-1), "".byteslice(0...-1), "".byteslice(0..-5)]"#,
+            r#"["hello".byteslice(0..-99), "hello".byteslice(2..-99), "hello".byteslice(-1..-99)]"#,
+            // An out-of-range *begin* is still nil.
+            r#"["hello".byteslice(-99..1), "hello".byteslice(6..-1)]"#,
+            r#"["hello".byteslice(5..-1), "hello".byteslice(1..3)]"#,
+        ]);
+    }
+
+    #[test]
+    fn string_subclass_conversions_return_plain_strings() {
+        run_tests(&[
+            r#"class MyStr1 < String; end
+               s = MyStr1.new("hello")
+               [s.to_s.class.to_s, s.to_str.class.to_s, s.to_s == "hello",
+                s.partition("l").map { |x| x.class.to_s },
+                s.partition("x").map { |x| x.class.to_s },
+                s.rpartition("x").map { |x| x.class.to_s },
+                s.partition(/l./).map { |x| x.class.to_s }]"#,
+            // A plain String is still its own `to_s`.
+            r#"s = "hello"; s.to_s.equal?(s)"#,
+        ]);
+    }
+
+    #[test]
+    fn ord_and_chop_decode_fixed_width_encodings() {
+        run_tests(&[
+            // `ord` / `codepoints` decode a character, they do not
+            // report its leading byte.
+            r#""\n".encode("utf-32be").ord"#,
+            r#""\n".encode("utf-16le").ord"#,
+            r#""\u3042".encode("utf-16be").ord"#,
+            r#""\u{1F600}".encode("utf-16le").ord"#,
+            r#"s = "\u{1F600}a".encode("utf-16le"); [s.length, s.chars.map(&:bytes), s.reverse.bytes]"#,
+            r#""\xD8".b.dup.force_encoding("utf-16le").length"#,
+            r#""\u{1F600}".encode("utf-32be").codepoints"#,
+            r#""ab".encode("utf-16be").codepoints"#,
+            // ... so `chop` strips a whole CR LF in those encodings.
+            r#""abc\r\n".encode("utf-32be").chop.bytes"#,
+            r#""abc\r\n".encode("utf-16le").chop.bytes"#,
+            r#"s = "abc\r\n".encode("utf-32be").dup; s.chop!; s.bytes"#,
+            r#""abc\r\n".chop"#,
+            // A frozen receiver raises even with nothing to chop.
+            r#"begin; "".freeze.chop!; rescue => e; e.class.to_s; end"#,
+            // An empty prefix / suffix is "no change" …
+            r#"s = "hello".dup; [s.delete_prefix!(""), s.delete_suffix!(""), s]"#,
+            // … but a frozen receiver still raises, match or not.
+            r#"["", "xyz", "llo"].map do |suf|
+                 begin; "hello".freeze.delete_suffix!(suf); rescue => e; e.class.to_s; end
+               end"#,
+            r#"["", "xyz", "hel"].map do |pre|
+                 begin; "hello".freeze.delete_prefix!(pre); rescue => e; e.class.to_s; end
+               end"#,
+        ]);
+    }
+
+    #[test]
+    fn unpack_seek_directives_and_strict_base64() {
+        run_tests(&[
+            // '@' seeks absolutely: bare is 0, '*' does not move.
+            r#""\x01\x02\x03\x04".unpack("C2@C")"#,
+            r#""\x01\x02\x03\x04".unpack("C2@*C")"#,
+            r#""\x01\x02\x03\x04".unpack("C2@4C")"#,
+            r#""\x01\x02\x03\x04".unpack("C3@2C")"#,
+            // 'X*' rewinds by the *unread* bytes, and may not pass the
+            // start of the string.
+            r#""abcd".unpack("C3X*C")"#,
+            r#"begin; "abcd".unpack("CX*C"); rescue => e; e.class.to_s; end"#,
+            r#""\x01\x02\x03\x04".unpack("C3XC")"#,
+            r#""\x01\x02\x03\x04".unpack("C3X0C")"#,
+            // 'm0' is strict base64; 'm' skips what it cannot read.
+            r#""dGVzdA==".unpack("m0")"#,
+            r#""dGV%zdA==".unpack("m")"#,
+            r#"begin; "dGV%zdA==".unpack("m0"); rescue => e; [e.class.to_s, e.message]; end"#,
+            r#"begin; "dGVzdA".unpack("m0"); rescue => e; e.class.to_s; end"#,
+            r#"begin; "dGVzdA==\n".unpack("m0"); rescue => e; e.class.to_s; end"#,
+            r#""".unpack("m0")"#,
+            // 'w' decodes a BER integer of any width.
+            r#""\x84\x80\x80\x80\x80\x80\x80\x80\x80\x00".unpack("w")"#,
+            r#""\x00\xce\x0f\x84\x80\x80\x80\x80\x80\x80\x80\x80\x00\x01\x00".unpack("w*")"#,
+        ]);
     }
 
     #[test]

@@ -6,8 +6,10 @@ class String
   # `<` / `<=` / `>` / `>=` onto the slower `<=>`-based path.
   include Comparable
 
+  # `rb_str_to_s`: a String is its own `to_s`, but a *subclass*
+  # instance converts to a plain String.
   def to_s
-    self
+    instance_of?(String) ? self : self[0, length]
   end
   alias to_str to_s
 
@@ -48,22 +50,32 @@ class String
   end
 
   def prepend(*args)
-    args.reverse_each do |arg|
-      self[0, 0] = arg
-    end
+    return self if args.empty?
+    # Build the whole head first: splicing one argument at a time
+    # re-reads an argument that *is* the receiver after it has already
+    # grown (`s.prepend(s, s)`).
+    head = +""
+    args.each { |arg| head << (arg.is_a?(String) ? arg : __to_str(arg)) }
+    self[0, 0] = head
     self
   end
 
   def chop
     return "" if empty?
-    if self[-1] == "\n" && length > 1 && self[-2] == "\r"
-      self[0..-3]
-    else
-      self[0..-2]
+    # Compare code points, not bytes: in a fixed-width encoding a
+    # terminator is several bytes wide, so `self[-1] == "\n"` (a UTF-8
+    # literal) would never match.
+    last = self[-1]
+    if length > 1 && last.valid_encoding? && last.ord == 10
+      prev = self[-2]
+      return self[0..-3] if prev.valid_encoding? && prev.ord == 13
     end
+    self[0..-2]
   end
 
   def chop!
+    # A frozen receiver raises even when there is nothing to chop.
+    raise FrozenError.new("can't modify frozen String: #{inspect}", receiver: self) if frozen?
     return nil if empty?
     result = chop
     replace(result)
@@ -80,8 +92,12 @@ class String
   end
 
   def delete_suffix!(suffix)
+    # A frozen receiver raises whether or not the suffix matches.
+    raise FrozenError.new("can't modify frozen String: #{inspect}", receiver: self) if frozen?
     s = suffix.is_a?(String) ? suffix : __to_str(suffix)
-    if end_with?(s)
+    # Deleting an empty suffix changes nothing, so the bang form
+    # reports "no change" rather than returning self.
+    if !s.empty? && end_with?(s)
       result = self[0, length - s.length]
       replace(result)
       self
@@ -97,7 +113,7 @@ class String
       if m
         [m.pre_match, m[0], m.post_match]
       else
-        [self.dup, empty, empty.dup]
+        [self[0, length], empty, empty.dup]
       end
     else
       s = sep.is_a?(String) ? sep : __to_str(sep)
@@ -105,7 +121,7 @@ class String
       if i
         [self[0, i], s, self[i + s.length..-1]]
       else
-        [self.dup, empty, empty.dup]
+        [self[0, length], empty, empty.dup]
       end
     end
   end
@@ -124,7 +140,7 @@ class String
       if last_match
         [last_match.pre_match, last_match[0], last_match.post_match]
       else
-        [empty, empty.dup, self.dup]
+        [empty, empty.dup, self[0, length]]
       end
     else
       s = sep.is_a?(String) ? sep : __to_str(sep)
@@ -132,7 +148,7 @@ class String
       if i
         [self[0, i], s, self[i + s.length..-1]]
       else
-        [empty, empty.dup, self.dup]
+        [empty, empty.dup, self[0, length]]
       end
     end
   end

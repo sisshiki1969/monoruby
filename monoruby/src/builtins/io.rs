@@ -27,6 +27,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "printf", printf, 1, 1, true);
     globals.define_builtin_func(IO_CLASS, "flush", flush, 0);
+    globals.define_builtin_func(IO_CLASS, "inspect", io_inspect, 0);
     globals.define_builtin_func_with_kw(IO_CLASS, "gets", gets, 0, 2, false, &["chomp"], true);
     globals.define_builtin_func_with_kw(
         IO_CLASS,
@@ -47,7 +48,18 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
     globals.define_builtin_func_with(IO_CLASS, "seek", seek, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 2, false);
-    globals.define_builtin_class_func_with(IO_CLASS, "read", io_class_read, 1, 4, false);
+    // `IO.read(path, length = nil, offset = 0, **opts)`: the options are
+    // keywords only, so a fourth positional Hash is an ArgumentError.
+    globals.define_builtin_class_func_with_kw(
+        IO_CLASS,
+        "read",
+        io_class_read,
+        1,
+        3,
+        false,
+        super::file::OPEN_KW,
+        true,
+    );
     globals.define_builtin_class_func_with_kw(
         IO_CLASS,
         "readlines",
@@ -949,7 +961,7 @@ pub(super) fn init_io_encodings(
     extra: Option<Value>,
 ) -> Result<()> {
     let (ext, int, binmode, bom) =
-        parse_open_encodings(vm, globals, lfp, opt_range, mode, extra)?;
+        parse_open_encodings(vm, globals, lfp, opt_range.clone(), mode, extra)?;
     // The stream's write-ability decides whether a missing external
     // encoding tracks default_external (read-only) or stays nil.
     let base = mode.split(':').next().unwrap_or("");
@@ -961,6 +973,9 @@ pub(super) fn init_io_encodings(
     if binmode {
         io.as_io_inner_mut().set_binmode();
     }
+    if let Some(nl) = parse_newline_option(vm, globals, lfp, opt_range, extra)? {
+        io.as_io_inner_mut().set_newline(nl);
+    }
     // A "BOM|utf-..." encoding: peek the stream for a byte-order mark;
     // a detected BOM is consumed and *overrides* the external encoding,
     // otherwise the declared one stays.
@@ -968,6 +983,44 @@ pub(super) fn init_io_encodings(
         detect_and_consume_bom(vm, globals, io)?;
     }
     Ok(())
+}
+
+/// The `newline:` open option's write decorator, if one was given.
+/// `:universal` and `:lf` both write plain LF, so they need no
+/// decorator; only `:crlf` and `:cr` change the bytes.
+fn parse_newline_option(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    opt_range: std::ops::Range<usize>,
+    extra: Option<Value>,
+) -> Result<Option<crate::value::rvalue::io::NewlineMode>> {
+    use crate::value::rvalue::io::NewlineMode;
+    let candidates = opt_range
+        .filter_map(|i| lfp.try_arg(i))
+        .chain(extra)
+        .collect::<Vec<_>>();
+    for arg in candidates {
+        let Some(h) = arg.try_hash_ty() else { continue };
+        let Some(v) = h
+            .get(Value::symbol(IdentId::get_id("newline")), vm, globals)?
+            .filter(|v| !v.is_nil())
+        else {
+            continue;
+        };
+        let Some(sym) = v.try_symbol() else { continue };
+        return Ok(match sym.get_name().as_str() {
+            "crlf" => Some(NewlineMode::Crlf),
+            "cr" => Some(NewlineMode::Cr),
+            "universal" | "lf" => Some(NewlineMode::None),
+            other => {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "unexpected value for newline option: {other}"
+                )));
+            }
+        });
+    }
+    Ok(None)
 }
 
 /// Allocator for `IO` and its subclasses.
@@ -995,9 +1048,16 @@ pub(super) fn bytes_for_write(
     } else {
         Value::string(vm.to_s(globals, v)?)
     };
+    // The `newline:` write decorator applies whatever the encodings do
+    // (CRuby converts on output even in binary / ASCII-8BIT mode).
+    let newline = io.as_io_inner().newline();
     let ext = match fixed_ext_encoding(globals, io) {
         Some(e) => e,
-        None => return Ok(sval.is_rstring().unwrap().to_vec()),
+        None => {
+            return Ok(newline
+                .apply(sval.is_rstring().unwrap().as_bytes())
+                .into_owned());
+        }
     };
     let same = match (
         sval.is_rstring().map(|r| r.encoding()),
@@ -1007,14 +1067,17 @@ pub(super) fn bytes_for_write(
         _ => false,
     };
     if same {
-        return Ok(sval.is_rstring().unwrap().to_vec());
+        return Ok(newline
+            .apply(sval.is_rstring().unwrap().as_bytes())
+            .into_owned());
     }
     let encoded =
         vm.invoke_method_inner(globals, IdentId::get_id("encode"), sval, &[ext], None, None)?;
-    Ok(match encoded.is_rstring() {
+    let bytes = match encoded.is_rstring() {
         Some(r) => r.to_vec(),
         None => encoded.to_s(&globals.store).into_bytes(),
-    })
+    };
+    Ok(newline.apply(&bytes).into_owned())
 }
 
 ///
@@ -1767,6 +1830,28 @@ fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// - read(length = nil, outbuf = "") -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/read.html
+///
+/// ### IO#inspect
+///
+/// - inspect -> String
+///
+/// `#<CLASS:DESCRIPTOR>`, with the receiver's own class: a stream over a
+/// bare descriptor inspects as `#<IO:<STDOUT>>`, a `File` as
+/// `#<File:/path>`. Defined here rather than inherited from `Kernel` so
+/// that `IO.instance_method(:inspect).owner` is `IO`, as CRuby's is.
+/// `IO#to_s` is deliberately *not* aliased to it — CRuby leaves `to_s`
+/// to `Kernel`, so it still renders the address form.
+///
+#[monoruby_builtin]
+fn io_inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let name = globals.store.get_class_name(self_.class());
+    Ok(Value::string(format!(
+        "#<{name}:{}>",
+        self_.as_io_inner().kind().descriptor()
+    )))
+}
+
 #[monoruby_builtin]
 fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let length = match lfp.try_arg(0) {
@@ -1776,7 +1861,9 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             } else {
                 let length = v.coerce_to_int_i64(vm, globals)?;
                 if length < 0 {
-                    return Err(MonorubyErr::argumenterr("negative length"));
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "negative length {length} given"
+                    )));
                 }
                 Some(length as usize)
             }
@@ -1851,21 +1938,15 @@ fn io_class_read(
     _: BytecodePtr,
 ) -> Result<Value> {
     use std::io::{Read, Seek, SeekFrom};
-    let filename = lfp
-        .arg(0)
-        .coerce_to_path_rstring(vm, globals)?
-        .to_str()?
-        .to_string();
+    // Keep the path as raw bytes: an errno message must quote the path
+    // exactly as given, even when it is not valid UTF-8.
+    let filename = super::file::bytes_to_pathbuf(
+        lfp.arg(0).coerce_to_path_rstring(vm, globals)?.as_bytes(),
+    );
 
-    // Trailing options Hash (anywhere in args 1..4).
-    let mut opts = None;
-    for i in 1..4 {
-        if let Some(a) = lfp.try_arg(i)
-            && let Some(h) = a.try_hash_ty()
-        {
-            opts = Some(h);
-        }
-    }
+    // The options come in as keywords (`mode:`, `encoding:`, …), which
+    // `open_kw_hash` folds back into one Hash.
+    let opts = super::file::open_kw_hash(vm, globals, lfp)?.map(|h| h.as_hash());
     // length = arg1 (Integer); nil / Hash / absent => whole file.
     let length = match lfp.try_arg(1) {
         Some(v) if v.try_fixnum().is_some() => {
@@ -2029,7 +2110,7 @@ fn io_class_readlines(
 /// A write/append-only open mode can't be read from. CRuby still *opens*
 /// the file with that mode first — truncating it for "w", creating it if
 /// absent — before raising, so replicate the side effect and then fail.
-fn reject_unreadable_mode(path: &str, mode: &str) -> Result<()> {
+fn reject_unreadable_mode(path: impl AsRef<std::path::Path>, mode: &str) -> Result<()> {
     let base = mode.split(':').next().unwrap_or("").replace('b', "");
     if base == "w" || base == "a" {
         let mut o = std::fs::OpenOptions::new();
@@ -2039,7 +2120,7 @@ fn reject_unreadable_mode(path: &str, mode: &str) -> Result<()> {
         } else {
             o.append(true);
         }
-        let _ = o.open(path); // open errors are moot; the read error wins
+        let _ = o.open(path.as_ref()); // open errors are moot; the read error wins
         return Err(MonorubyErr::ioerr("not opened for reading"));
     }
     Ok(())
@@ -2215,11 +2296,12 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
 #[monoruby_builtin]
 fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::io::IntoRawFd;
-    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
-    let mode_str = if let Some(m) = lfp.try_arg(1) {
-        m.coerce_to_str(vm, globals)?
-    } else {
-        "r".to_string()
+    // `#to_path` (then `#to_str`) converts the path, and a nil mode /
+    // permission falls back to the default, as in CRuby.
+    let path = super::file::to_path_str(vm, globals, lfp.arg(0))?;
+    let mode_str = match lfp.try_arg(1).filter(|m| !m.is_nil()) {
+        Some(m) => m.coerce_to_str(vm, globals)?,
+        None => "r".to_string(),
     };
     let mut opts = std::fs::OpenOptions::new();
     // Strip encoding suffix (e.g. ":UTF-8") and remove 'b' (binary) flag.
@@ -2431,13 +2513,33 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         if elems.len() > 1 && elems.last().is_some_and(|v| v.try_hash_ty().is_some()) {
             array_opts = elems.pop();
         }
-        let parts: Vec<std::ffi::OsString> = elems.iter().map(|v| arg_os(*v, globals)).collect();
-        if parts.is_empty() {
+        // A leading two-element Array is the `[cmdname, argv0]` form:
+        // the file to execute and the `argv[0]` the child sees.
+        let argv0 = elems
+            .first()
+            .and_then(|v| v.try_array_ty())
+            .filter(|a| a.len() == 2)
+            .map(|a| (arg_os(a[0], globals), arg_os(a[1], globals)));
+        let rest_from = if argv0.is_some() { 1 } else { 0 };
+        let parts: Vec<std::ffi::OsString> = elems
+            .iter()
+            .skip(rest_from)
+            .map(|v| arg_os(*v, globals))
+            .collect();
+        if argv0.is_none() && parts.is_empty() {
             return Err(MonorubyErr::argumenterr("popen: empty command array"));
         }
-        let name = parts[0].to_string_lossy().into_owned();
-        let mut cmd = Command::new(&parts[0]);
-        for part in &parts[1..] {
+        let (program, extra) = match &argv0 {
+            Some((path, _)) => (path.clone(), &parts[..]),
+            None => (parts[0].clone(), &parts[1..]),
+        };
+        let name = program.to_string_lossy().into_owned();
+        let mut cmd = Command::new(&program);
+        if let Some((_, zero)) = &argv0 {
+            use std::os::unix::process::CommandExt;
+            cmd.arg0(zero);
+        }
+        for part in extra {
             cmd.arg(part);
         }
         (cmd, name)
@@ -2509,6 +2611,20 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let mut int_obj: Option<Value> = None;
     for opts in [array_opts, opts_hash].into_iter().flatten() {
         let h = opts.as_hash();
+        // `unsetenv_others:` / `close_others:` only take a boolean
+        // (or nil); anything else is an ArgumentError, as for `spawn`.
+        for key in ["unsetenv_others", "close_others"] {
+            if let Some(v) = h.get(Value::symbol(IdentId::get_id(key)), vm, globals)?
+                && !v.is_nil()
+                && v != Value::bool(true)
+                && v != Value::bool(false)
+            {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "expected true or false as {key}: {}",
+                    v.inspect(&globals.store)
+                )));
+            }
+        }
         // err: [:child, :out] redirects the child's stderr to its stdout.
         if let Ok(Some(err_val)) = h.get(Value::symbol_from_str("err"), vm, globals) {
             if let Some(ary) = err_val.try_array_ty() {
@@ -4589,6 +4705,22 @@ fn set_encoding(
             "wrong number of arguments (given 3, expected 1..2)",
         ));
     }
+    // The trailing options Hash may sit in either optional slot.
+    let opts = (1..=2)
+        .rev()
+        .find_map(|i| lfp.try_arg(i).and_then(|a| a.try_hash_ty()));
+    validate_newline_option(vm, globals, self_, opts)?;
+    // `set_encoding(nil, enc)` is a TypeError: the external encoding
+    // has to be given before the internal one.
+    if lfp.arg(0).is_nil()
+        && let Some(a1) = lfp.try_arg(1)
+        && !a1.is_nil()
+        && a1.try_hash_ty().is_none()
+    {
+        return Err(MonorubyErr::typeerr(
+            "no implicit conversion of nil into String",
+        ));
+    }
     let arg0 = coerce_enc_arg(vm, globals, lfp.arg(0))?;
     let (mut ext, mut int) = (None, None);
     if let Some(s) = arg0.is_str() {
@@ -4610,6 +4742,7 @@ fn set_encoding(
     if int.is_none()
         && let Some(arg1) = lfp.try_arg(1)
         && !arg1.is_nil()
+        && arg1.try_hash_ty().is_none()
     {
         let arg1 = coerce_enc_arg(vm, globals, arg1)?;
         int = arg_to_enc_obj(globals, arg1);
@@ -4618,9 +4751,62 @@ fn set_encoding(
     let writable = self_.as_io_inner().is_writable();
     let de = enc_default_external_obj(globals);
     let di = enc_default_internal_obj(globals);
+    // A readable text-mode stream cannot decode a non-ASCII-compatible
+    // external encoding unless a conversion to an internal encoding is
+    // set up (CRuby's `validate_enc_binmode`).
+    if readable
+        && int.is_none()
+        && !self_.as_io_inner().binmode()
+        && let Some(e) = ext.or(Some(de)).and_then(|o| enc_obj_to_enum(globals, o))
+        && !e.is_ascii_compatible()
+    {
+        return Err(MonorubyErr::argumenterr(
+            "ASCII incompatible encoding needs binmode",
+        ));
+    }
     let (slot, i) = resolve_io_encodings(globals, ext, int, false, readable, writable, de, di);
     store_io_encodings(globals, self_, slot, i);
     Ok(self_)
+}
+
+/// Check the `newline:` option `IO#set_encoding` accepts: one of the
+/// four decorator symbols, and never together with binary mode.
+fn validate_newline_option(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    io: Value,
+    opts: Option<crate::value::Hashmap>,
+) -> Result<()> {
+    let Some(h) = opts else { return Ok(()) };
+    let Some(v) = h
+        .get(Value::symbol(IdentId::get_id("newline")), vm, globals)?
+        .filter(|v| !v.is_nil())
+    else {
+        return Ok(());
+    };
+    match v.try_symbol() {
+        Some(sym)
+            if matches!(
+                sym.get_name().as_str(),
+                "universal" | "lf" | "crlf" | "cr"
+            ) => {}
+        // CRuby names the offending Symbol but not an offending String.
+        Some(sym) => {
+            return Err(MonorubyErr::argumenterr(format!(
+                "unexpected value for newline option: {}",
+                sym.get_name()
+            )));
+        }
+        None => {
+            return Err(MonorubyErr::argumenterr(
+                "unexpected value for newline option",
+            ));
+        }
+    }
+    if io.as_io_inner().binmode() {
+        return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
+    }
+    Ok(())
 }
 
 ///
@@ -5226,12 +5412,6 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         _ => None,
     };
 
-    // Length 0: copy nothing — the source is not read and the
-    // destination is not written (per spec, not even dispatched to).
-    if copy_length == Some(0) {
-        return Ok(Value::integer(0));
-    }
-
     // What a copy endpoint is: a real IO, a file path, or an object
     // speaking the read/write protocol.
     enum Src {
@@ -5310,6 +5490,23 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
             dst_v.builtin_class_name(globals)
         )));
     };
+
+    // Length 0: copy nothing. The source is never read and no `#write`
+    // is dispatched, but a destination named by path is still created
+    // and truncated, as CRuby's `copy_stream` opens it either way.
+    if copy_length == Some(0) {
+        if let Dst::Path(path) = &dst {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path)
+                .map_err(|e| {
+                    MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", path)
+                })?;
+        }
+        return Ok(Value::integer(0));
+    }
 
     // A path source is opened (and closed on scope exit) as a plain
     // read-only IO; the transient Value is GC-rooted below.
@@ -8891,6 +9088,218 @@ mod tests {
     /// `IO.open`), returning the fresh IO. The IO is only reachable from a
     /// Rust local while `io_init_from_fd` and the `warn` dispatch re-enter
     /// Ruby, which is what the rooting guards.
+    #[test]
+    fn io_read_options_are_keywords_only() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_cov_read_kw_#{Process.pid}"
+            begin
+              File.write(path, "12345678901234567890")
+              r = []
+              r << IO.read(path, 3, 0, mode: "r+")
+              begin
+                IO.read(path, 3, 0, {mode: "r+"})
+                r << :ok
+              rescue ArgumentError => e
+                r << e.message.include?("wrong number of arguments")
+              end
+              r << IO.read(path, 3)
+              r << File.read(path, 3, 1)
+              r << File.read(path, encoding: "ASCII-8BIT").encoding.to_s
+              r
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_copy_stream_zero_length_still_creates_the_destination() {
+        run_test_once(
+            r##"
+            src = "/tmp/mono_cov_cs_src_#{Process.pid}"
+            dst = "/tmp/mono_cov_cs_dst_#{Process.pid}"
+            begin
+              File.write(src, "Line one\nLine two\n")
+              File.unlink(dst) rescue nil
+              r = []
+              r << IO.copy_stream(src, dst, 0)
+              r << File.read(dst)
+              r << IO.copy_stream(src, dst, 8)
+              r << File.read(dst)
+              r
+            ensure
+              File.unlink(src) rescue nil
+              File.unlink(dst) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_sysopen_converts_its_path_and_accepts_nil_mode() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_cov_sysopen_#{Process.pid}"
+            begin
+              o = Object.new
+              o.define_singleton_method(:to_path) { "/tmp/mono_cov_sysopen_#{Process.pid}" }
+              r = []
+              fd = IO.sysopen(o, "w")
+              r << fd.is_a?(Integer)
+              IO.for_fd(fd).close
+              fd = IO.sysopen(path, nil, nil)
+              r << fd.is_a?(Integer)
+              IO.for_fd(fd).close
+              r
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_newline_write_decorator() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_cov_newline_#{Process.pid}"
+            begin
+              r = []
+              [:crlf, :cr, :lf, :universal].each do |nl|
+                File.open(path, "wt", newline: nl) { |f| f.puts }
+                r << File.binread(path)
+              end
+              # The decorator applies whatever the encodings are, and
+              # counts the written (converted) bytes.
+              File.open(path, "w", newline: :crlf) do |f|
+                r << f.write("H\xEBll\xF6\n".dup.force_encoding("ISO-8859-1"))
+              end
+              r << File.binread(path)
+              File.open(path, "w:ascii-8bit", newline: :crlf) do |f|
+                f.write("a\nb\n")
+              end
+              r << File.binread(path)
+              # No decorator: bytes pass through.
+              File.open(path, "w") { |f| f.puts "plain" }
+              r << File.binread(path)
+              r
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_popen_argv0_form_and_option_validation() {
+        run_test_once(
+            r##"
+            r = []
+            # [cmdname, argv0]: the child runs `cmdname` but sees `argv0`
+            # as its $0.
+            IO.popen([{"PV" => "pv"}, ["/bin/sh", "myname"], "-c", "echo $0 $PV"]) do |io|
+              r << io.read
+            end
+            [-> { IO.popen(["true", unsetenv_others: 1]) },
+             -> { IO.popen(["true", unsetenv_others: "true"]) },
+             -> { IO.popen(["true", close_others: 1]) },
+             -> { IO.popen(["true", close_others: nil]) }].each do |l|
+              begin
+                io = l.call
+                io.close
+                r << :ok
+              rescue => e
+                r << [e.class.to_s, e.message]
+              end
+            end
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_set_encoding_validates_its_arguments() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_cov_set_enc_#{Process.pid}"
+            begin
+              File.write(path, "hello")
+              r = []
+              w = File.open(path, "w")
+              [-> { w.set_encoding(nil, Encoding::UTF_8) },
+               -> { w.set_encoding("utf-8", newline: :invalid) },
+               -> { w.set_encoding("utf-8", newline: "invalid") },
+               -> { w.set_encoding("utf-8", newline: :lf) }].each do |l|
+                begin
+                  l.call
+                  r << :ok
+                rescue => e
+                  r << [e.class.to_s, e.message]
+                end
+              end
+              w.binmode
+              begin
+                w.set_encoding("utf-8", newline: :lf)
+                r << :ok
+              rescue => e
+                r << [e.class.to_s, e.message]
+              end
+              w.close
+              f = File.open(path, "r")
+              begin
+                f.set_encoding(Encoding::UTF_16BE)
+                r << :ok
+              rescue => e
+                r << [e.class.to_s, e.message]
+              end
+              # A conversion to an internal encoding makes it legal.
+              f.set_encoding(Encoding::UTF_16BE, Encoding::UTF_16LE)
+              r << [f.external_encoding.to_s, f.internal_encoding.to_s]
+              f.close
+              r
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_inspect_names_the_receivers_class() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_cov_io_inspect_#{Process.pid}"
+            begin
+              File.write(path, "hello\n")
+              f = File.open(path, "r")
+              opened = f.inspect
+              same = f.to_s.start_with?("#<File:0x")
+              f.close
+              closed = f.inspect
+              [opened == "#<File:#{path}>", same, closed == "#<File:#{path} (closed)>",
+               STDOUT.inspect, STDIN.inspect, STDERR.inspect]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_read_negative_length_message() {
+        run_test_once(
+            r##"
+            begin
+              STDIN.read(-3)
+            rescue ArgumentError => e
+              e.message
+            end
+            "##,
+        );
+    }
+
     #[test]
     fn io_new_with_block_warns_and_returns_io() {
         run_test_once(

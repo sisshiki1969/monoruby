@@ -37,7 +37,7 @@ pub use regexp::{Regexp, RegexpInner};
 pub(crate) use regexp::{Spans, Subject, save_spans, spans_of};
 pub(crate) use string::pack::*;
 pub use string::{
-    CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET,
+    CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET, char_bytes_code,
     STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, map_bytes_to_utf8,
 };
 pub(crate) use string::{
@@ -737,7 +737,11 @@ impl RValue {
                 ObjTy::PROC => self.proc_tos(),
                 ObjTy::HASH => self.as_hashmap().debug(store),
                 ObjTy::REGEXP => self.as_regex().tos(),
-                ObjTy::IO => self.as_io().kind().to_string(),
+                ObjTy::IO => format!(
+                    "#<{}:{}>",
+                    store.get_class_name(self.class()),
+                    self.as_io().kind().descriptor()
+                ),
                 ObjTy::EXCEPTION => self.as_exception().message().to_string(),
                 ObjTy::METHOD => self.as_method().debug(store),
                 ObjTy::FIBER => self.fiber_debug(store),
@@ -778,6 +782,10 @@ impl RValue {
                 ObjTy::BINDING => self.object_tos(store),
                 ObjTy::UMETHOD => self.as_umethod().to_s(store),
                 ObjTy::MATCHDATA => self.as_match_data().to_s(),
+                // CRuby leaves `IO#to_s` to `Kernel`, so a stream
+                // stringifies to the address form; only `IO#inspect`
+                // names the descriptor.
+                ObjTy::IO => self.object_tos(store),
                 _ => self.debug(store),
             }
         }
