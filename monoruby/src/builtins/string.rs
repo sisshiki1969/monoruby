@@ -80,6 +80,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "gsub!", gsub_, 1, 2, false);
     globals.define_builtin_func(STRING_CLASS, "scan", scan, 1);
     globals.define_builtin_func_with(STRING_CLASS, "match", string_match, 1, 2, false);
+    globals.define_builtin_func(STRING_CLASS, "partition", partition, 1);
+    globals.define_builtin_func(STRING_CLASS, "rpartition", rpartition, 1);
     globals.define_builtin_func_with(STRING_CLASS, "match?", string_match_, 1, 2, false);
     globals.define_builtin_func(STRING_CLASS, "__strscan_match", string_strscan_match, 3);
     globals.define_builtin_func_with(STRING_CLASS, "index", string_index, 1, 2, false);
@@ -1408,6 +1410,113 @@ fn slice_subject<'a>(
     }
     let text: &'a str = view.insert(inner.regex_view()?);
     Ok(Subject::text(text, inner.encoding(), inner.needs_byte_mapping()))
+}
+
+/// Shared body of `String#partition` / `String#rpartition`.
+///
+/// Only the Regexp separator runs here. CRuby's `rb_str_partition` is C,
+/// so the `$~` its search sets lands on the *caller's* frame; a Ruby
+/// `partition` calling `match` would set its own frame's instead, which
+/// is why this arm is native. Everything else (a String, or an object
+/// with `to_str`) is `builtins/string.rb`'s `__partition_str` /
+/// `__rpartition_str`, which touch no backref — as CRuby's String arm
+/// does not either.
+fn partition_main(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    from_end: bool,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let sep = lfp.arg(0);
+    let Some(re) = sep.is_regex() else {
+        // CRuby's `get_pat_quoted` names the *Regexp* it wanted, where a
+        // bare `StringValue` would say "no implicit conversion".
+        let sep = if sep.is_str().is_some() {
+            sep
+        } else {
+            match crate::coerce::check_funcall(vm, globals, sep, IdentId::TO_STR)? {
+                Some(v) if v.is_str().is_some() => v,
+                _ => {
+                    return Err(MonorubyErr::typeerr(format!(
+                        "wrong argument type {} (expected Regexp)",
+                        sep.builtin_class_name(&globals.store)
+                    )));
+                }
+            }
+        };
+        let name = if from_end {
+            IdentId::get_id("__rpartition_str")
+        } else {
+            IdentId::get_id("__partition_str")
+        };
+        return vm.invoke_method_inner(globals, name, self_val, &[sep], None, None);
+    };
+    let inner = self_val.as_rstring_inner();
+    super::regexp::check_match_encoding(&globals.store, &re, inner.encoding(), false)?;
+    // Enable zero-copy `$~` haystack snapshots (CoW).
+    vm.set_match_haystack(self_val);
+    let mut view = None;
+    let subject = slice_subject(globals, inner, &re, true, &mut view)?;
+    let mut region = onigmo_regex::Region::new();
+    // `rpartition` wants the match with the greatest begin, which the
+    // forward walk finds by restarting one character past each hit.
+    let mut found: Option<Spans> = None;
+    let mut pos = 0;
+    loop {
+        if !re.find_spans(&subject, pos, &mut region)? {
+            break;
+        }
+        let spans = spans_of(&region);
+        let (start, _) = spans[0].unwrap();
+        found = Some(spans);
+        if !from_end {
+            break;
+        }
+        pos = subject.next_char_boundary(start);
+        if pos > subject.len() {
+            break;
+        }
+    }
+    let Some(spans) = found else {
+        vm.clear_capture_special_variables();
+        let whole = subject.chunk(None, 0..subject.len());
+        let empty = || Value::string_from_inner(RStringInner::from_encoding(b"", inner.encoding()));
+        return Ok(Value::array_from_vec(if from_end {
+            vec![empty(), empty(), whole]
+        } else {
+            vec![whole, empty(), empty()]
+        }));
+    };
+    save_spans(vm, &subject, &spans, self_val);
+    let (start, end) = spans[0].unwrap();
+    Ok(Value::array_from_vec(vec![
+        subject.chunk(None, 0..start),
+        subject.chunk(None, start..end),
+        subject.chunk(None, end..subject.len()),
+    ]))
+}
+
+///
+/// ### String#partition
+///
+/// - partition(sep) -> [String, String, String]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/partition.html]
+#[monoruby_builtin]
+fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    partition_main(vm, globals, lfp, false)
+}
+
+///
+/// ### String#rpartition
+///
+/// - rpartition(sep) -> [String, String, String]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/rpartition.html]
+#[monoruby_builtin]
+fn rpartition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    partition_main(vm, globals, lfp, true)
 }
 
 fn string_match_index(
@@ -15419,6 +15528,30 @@ mod tests {
             r#"o = [0x61, 0x00, 0x62].pack("c*").dup.force_encoding("UTF-16LE"); [o.valid_encoding?, o.scrub("*".encode("UTF-16LE")).bytes]"#,
             // The round trips still work.
             r#"["\u{1F600}".encode("UTF-16LE").encode("UTF-8"), "abc".encode("UTF-16LE").length]"#,
+        ]);
+    }
+
+    #[test]
+    fn partition_with_a_regexp_sets_the_callers_backref() {
+        // `rb_str_partition` is C, so the `$~` its search sets lands on
+        // the caller's frame; the Regexp arm is native for that reason.
+        // The String arm touches no backref, in CRuby or here.
+        run_tests(&[
+            r#"a = "hello!".partition(/l./); [a, $~[0], $~.string]"#,
+            r#"b = "hello!".rpartition(/l./); [b, $~[0], $~.begin(0)]"#,
+            r#""hello".partition(/(l)(l)/); [$~[0], $~[1], $~[2]]"#,
+            r#"["hello".partition(/z/), "hello".rpartition(/z/), ("hello".partition(/z/); $~)]"#,
+            r#"["hello!".partition("l"), "hello!".rpartition("l"), "hello".partition(//), "hello".rpartition(//)]"#,
+            r#"["aaa".rpartition(/a*/), "".partition(/x/), "hello".rpartition(/l/)]"#,
+            // `to_str` is honoured; anything else is CRuby's
+            // `get_pat_quoted` TypeError, naming the Regexp it wanted.
+            r#"class SepP; def to_str; "l"; end; end; ["hello".partition(SepP.new), "hello".rpartition(SepP.new)]"#,
+            r#"[("hello".partition(1) rescue [$!.class, $!.message]), ("hello".rpartition(:s) rescue [$!.class, $!.message]), ("hello".partition(nil) rescue [$!.class, $!.message])]"#,
+            // Encodings survive both arms.
+            r#""abc".partition(/b/).map { |s| s.encoding.to_s }"#,
+            r#""a\u3042b\u3044cb".encode("EUC-JP").rpartition("b").map { |x| x.encode("UTF-8") }"#,
+            r#""\u3042\u3044\u3046".partition(/\u3044/)"#,
+            r#""hello".partition(/l/).map { |s| s.class.to_s }"#,
         ]);
     }
 

@@ -110,50 +110,29 @@ class String
     end
   end
 
-  def partition(sep)
+  # The non-Regexp arm of `partition`; the Regexp arm is native (see
+  # `partition_main` in builtins/string.rs), because the `$~` its search
+  # sets has to land on the caller's frame, not on this method's.
+  def __partition_str(sep)
     empty = "".dup.force_encoding(self.encoding)
-    if sep.is_a?(Regexp)
-      m = match(sep)
-      if m
-        [m.pre_match, m[0], m.post_match]
-      else
-        [self[0, length], empty, empty.dup]
-      end
+    s = sep.is_a?(String) ? sep : __to_str(sep)
+    i = index(s)
+    if i
+      [self[0, i], s, self[i + s.length..-1]]
     else
-      s = sep.is_a?(String) ? sep : __to_str(sep)
-      i = index(s)
-      if i
-        [self[0, i], s, self[i + s.length..-1]]
-      else
-        [self[0, length], empty, empty.dup]
-      end
+      [self[0, length], empty, empty.dup]
     end
   end
 
-  def rpartition(sep)
+  # The non-Regexp arm of `rpartition`; see `__partition_str`.
+  def __rpartition_str(sep)
     empty = "".dup.force_encoding(self.encoding)
-    if sep.is_a?(Regexp)
-      # Find the last match
-      last_match = nil
-      pos = 0
-      while (m = match(sep, pos))
-        last_match = m
-        pos = m.begin(0) + 1
-        break if pos > length
-      end
-      if last_match
-        [last_match.pre_match, last_match[0], last_match.post_match]
-      else
-        [empty, empty.dup, self[0, length]]
-      end
+    s = sep.is_a?(String) ? sep : __to_str(sep)
+    i = rindex(s)
+    if i
+      [self[0, i], s, self[i + s.length..-1]]
     else
-      s = sep.is_a?(String) ? sep : __to_str(sep)
-      i = rindex(s)
-      if i
-        [self[0, i], s, self[i + s.length..-1]]
-      else
-        [empty, empty.dup, self[0, length]]
-      end
+      [empty, empty.dup, self[0, length]]
     end
   end
 
