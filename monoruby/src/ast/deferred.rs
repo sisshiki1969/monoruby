@@ -37,12 +37,6 @@ pub struct PrismTree {
     source: Box<[u8]>,
 }
 
-impl std::fmt::Debug for PrismTree {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PrismTree({} bytes)", self.source.len())
-    }
-}
-
 impl PrismTree {
     pub fn parse(source: Vec<u8>, options: Option<&prism::Options>) -> Self {
         let source: Box<[u8]> = source.into_boxed_slice();
@@ -78,7 +72,6 @@ impl PrismTree {
 ///
 /// One per parsed file, shared by every [`DeferredDef`] in it.
 ///
-#[derive(Debug)]
 pub struct DeferCtx {
     pub tree: PrismTree,
     /// The path, for `__FILE__`.

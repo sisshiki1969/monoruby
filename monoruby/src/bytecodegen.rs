@@ -1,6 +1,6 @@
 use super::*;
 use crate::ast::{
-    ConstInfo, DefBody,
+    ConstInfo, DeferredDef,
     ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LvarCollector, Node, NodeKind,
     ParseResult, RescueEntry, SourceInfoRef, UnOp,
 };

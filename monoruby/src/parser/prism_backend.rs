@@ -32,7 +32,7 @@ use ruby_prism::{
 };
 
 use crate::ast::{
-    ConstInfo, DeferCtx, DefBody, DeferredDef, PrismTree,
+    ConstInfo, DeferCtx, DeferredDef, PrismTree,
     ArgList, BinOp, BlockInfo, CmpKind, DestructEntry, Loc, LvarCollector, NReal, Node, NodeKind,
     ParamKind, ParseResult, SourceInfoRef, UnOp,
 };
@@ -4430,23 +4430,23 @@ impl<'pr> Lowerer<'pr> {
             None => None,
         };
 
+        let pm_temp = self.pm_temp;
+        if !self.defer_bodies {
+            // `-c` consumes the tree and never compiles, so nothing would
+            // ever lower this body and an `unsupported_node` in it would
+            // go unreported. Lower it here for the error and drop it.
+            self.lower_def_body(node)?;
+        }
+
         // Hand the parameters and the body to bytecodegen as prism's own
         // node, so the file's `def`s don't all sit in memory as monoruby
         // AST at once. See `crate::ast::deferred`.
-        let body = if self.defer_bodies {
-            // SAFETY: `node` is part of the tree this lowerer is walking,
-            // which is `self.ctx.tree`.
-            DefBody::Deferred(Box::new(unsafe {
-                DeferredDef::new(
-                    self.ctx.clone(),
-                    node,
-                    self.prism_scope_level,
-                    self.pm_temp,
-                )
-            }))
-        } else {
-            DefBody::Lowered(Box::new(self.lower_def_body(node)?))
-        };
+        //
+        // SAFETY: `node` is part of the tree this lowerer is walking,
+        // which is `self.ctx.tree`.
+        let body = Box::new(unsafe {
+            DeferredDef::new(self.ctx.clone(), node, self.prism_scope_level, pm_temp)
+        });
         let kind = match singleton_receiver {
             Some(recv) => NodeKind::SingletonMethodDef(Box::new(recv), name, body),
             None => NodeKind::MethodDef(name, body),
@@ -6288,5 +6288,60 @@ $1
     fn magic_comment_no_unicode_escape_keeps_source_encoding() {
         let enc = run_encoding_query("# encoding: binary\n\"abc\".encoding.to_s\n");
         assert_eq!(enc, "ASCII-8BIT");
+    }
+
+    /// A parse hands each `def` body on as a [`DeferredDef`], so the
+    /// AST carries a handle on prism's node rather than a lowered body.
+    /// `DeferredDef` has to satisfy `NodeKind`'s `Clone` / `PartialEq` /
+    /// `Debug`, and each of those reaches into the erased-lifetime node
+    /// handle — a clone duplicates it, equality reads its location.
+    #[test]
+    fn deferred_def_handle_clones_compares_and_prints() {
+        let parsed = parse_program(
+            "def a = 1\ndef b = 2\n".to_owned().into(),
+            PathBuf::from("test.rb"),
+            true,
+        )
+        .expect("parse_program");
+        let NodeKind::CompStmt(stmts) = &parsed.node.kind else {
+            panic!("expected a CompStmt, got {:?}", parsed.node.kind);
+        };
+        let body = |n: &Node| match &n.kind {
+            NodeKind::MethodDef(_, d) => (**d).clone(),
+            other => panic!("expected a deferred MethodDef, got {other:?}"),
+        };
+        let a = body(&stmts[0]);
+        let b = body(&stmts[1]);
+        // Two handles on the same `def` are equal; two different `def`s
+        // are not, and neither comparison dereferences a dead tree.
+        assert_eq!(a, a.clone());
+        assert_ne!(a, b);
+        assert!(format!("{a:?}").starts_with("DeferredDef(@"));
+        // The tree outlives the parse: the handles still resolve.
+        assert!(a.node().location().start_offset() < b.node().location().start_offset());
+        assert_eq!(a.scope_level(), 0);
+        assert_eq!(a.pm_temp(), 0);
+    }
+
+    /// `parse_program_eager` is what `-c` uses: it never compiles, so a
+    /// construct the lowerer rejects inside a method body would go
+    /// unreported. It lowers each body for the errors and drops it — the
+    /// node it produces is the same deferred handle either way.
+    ///
+    /// Observable through a warning the *lowerer* raises (prism's own are
+    /// collected either way): deferred, nothing looks inside the body.
+    #[test]
+    fn only_the_eager_parse_looks_inside_a_def_body() {
+        let src = "def a\n  $4294967296\nend\n";
+        let warns = |defer: bool| {
+            parse_program(src.to_owned().into(), PathBuf::from("test.rb"), defer)
+                .expect("parse_program")
+                .warnings
+                .iter()
+                .filter(|(m, _)| m.contains("is too big for a number variable"))
+                .count()
+        };
+        assert_eq!(warns(true), 0, "the deferred parse should not look inside");
+        assert_eq!(warns(false), 1, "the eager parse should lower the body");
     }
 }
