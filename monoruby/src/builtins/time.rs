@@ -583,7 +583,26 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         // Otherwise `getlocal(arg)` takes the same offset shapes as
         // `Time.new`'s `utc_offset` slot: Integer / Rational / Float
         // seconds, or `"+HH:MM"` / `"+HH:MM:SS"` String / `#to_int`.
-        let fixed = parse_utc_offset(vm, globals, arg0)?;
+        let fixed = match parse_utc_offset(vm, globals, arg0) {
+            Ok(fixed) => fixed,
+            // A String that is not an offset is a *zone name*, which the
+            // receiver's class resolves to a timezone object through its
+            // `.find_timezone` hook, exactly as `Time.new` does. Only a
+            // String: CRuby does not offer any other kind of argument to
+            // `.find_timezone`.
+            Err(e) => {
+                if arg0.is_str().is_some() {
+                    let cls = lfp.self_val().real_class(&globals.store).as_val();
+                    if let Some(tz) = find_timezone(vm, globals, cls, arg0)?
+                        && let Some(t) =
+                            time_at_with_timezone(vm, globals, utc_dt, tz, TIME_CLASS)?
+                    {
+                        return Ok(t);
+                    }
+                }
+                return Err(e);
+            }
+        };
         let utc = offset_arg_is_utc(arg0);
         let instant = match lfp.self_val().as_time() {
             TimeInner::Local(t, _) => t.with_timezone(&Utc),
@@ -670,22 +689,29 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///   bits 0..19  : usec
 /// ```
 ///
-/// Sub-microsecond precision and non-UTC offsets are not encoded;
-/// matches CRuby's "old marshal format" path that doesn't add the
-/// trailing extension blob.
+/// The clock in the payload is always **UTC**, whatever zone the time
+/// is in; the `:offset` ivar `Marshal` writes beside it is what puts it
+/// back in that zone. monoruby wrote the *local* clock here, which round
+/// -tripped within monoruby but not with CRuby: a dump of
+/// `Time.local(2000, 1, 1, 12, 0, 0)` under `Asia/Tokyo` read back three
+/// hours out, in either direction.
+///
+/// Sub-microsecond precision is not encoded; this matches CRuby's "old
+/// marshal format" path that doesn't add the trailing extension blob.
 #[monoruby_builtin]
 fn _dump(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let t = self_.as_time();
-    let (year, month, day, hour, min, sec, usec, is_utc) = (
-        t.year(),
-        t.month(),
-        t.day(),
-        t.hour(),
-        t.minute(),
-        t.second(),
-        t.nanosecond() / 1000,
-        t.is_utc(),
+    let is_utc = t.is_utc();
+    let utc = time_utc_instant(t).naive_utc();
+    let (year, month, day, hour, min, sec, usec) = (
+        utc.year(),
+        utc.month(),
+        utc.day(),
+        utc.hour(),
+        utc.minute(),
+        utc.second(),
+        utc.nanosecond() / 1000,
     );
     let high: u32 = (1u32 << 31)
         | ((is_utc as u32) << 30)
@@ -710,6 +736,14 @@ fn _dump(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// (bit 31 clear; high = epoch seconds, low = usec).
 #[monoruby_builtin]
 fn _load(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // The receiver is the class the dump named, so a `Time` subclass
+    // loads back as itself (CRuby's `time_load` allocates `klass`) —
+    // which is also what makes its `.find_timezone` reachable when the
+    // dump carries a zone name.
+    let cls = lfp
+        .self_val()
+        .is_class_or_module()
+        .map_or(TIME_CLASS, |m| m.id());
     let arg = lfp.arg(0);
     let bytes = arg.expect_bytes(&globals.store)?;
     if bytes.len() != 8 {
@@ -725,7 +759,7 @@ fn _load(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let nsec = low.saturating_mul(1000);
         let dt = DateTime::<Utc>::from_timestamp(secs, nsec)
             .ok_or_else(|| MonorubyErr::argumenterr("marshaled time data has out-of-range secs"))?;
-        return Ok(Value::new_time(TimeInner::Utc(dt)));
+        return Ok(Value::new_time_with_class(TimeInner::Utc(dt), cls));
     }
     let is_utc = (high >> 30) & 1 == 1;
     let year = ((high >> 14) & 0xFFFF) as i32 + 1900;
@@ -738,21 +772,14 @@ fn _load(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let naive = NaiveDate::from_ymd_opt(year, month + 1, day)
         .and_then(|d| d.and_hms_micro_opt(hour, min, sec, usec))
         .ok_or_else(|| MonorubyErr::argumenterr("marshaled time data out of range"))?;
+    // The payload's clock is UTC either way; a non-UTC time is localized
+    // here and then re-zoned by the `:offset` ivar, if the dump carries
+    // one, without moving the instant.
+    let instant = Utc.from_utc_datetime(&naive);
     if is_utc {
-        Ok(Value::new_time(TimeInner::Utc(
-            Utc.from_utc_datetime(&naive),
-        )))
+        Ok(Value::new_time_with_class(TimeInner::Utc(instant), cls))
     } else {
-        let local = match LocalTz.from_local_datetime(&naive) {
-            LocalResult::Single(t) => t,
-            LocalResult::Ambiguous(t, _) => t,
-            LocalResult::None => {
-                return Err(MonorubyErr::argumenterr(
-                    "marshaled time data does not exist in local time",
-                ));
-            }
-        };
-        Ok(Value::new_time(localize(local.with_timezone(&Utc))))
+        Ok(Value::new_time_with_class(localize(instant), cls))
     }
 }
 
@@ -791,27 +818,18 @@ pub(crate) fn time_add_nanos(mut time: Value, ns: i64) {
     *time.as_time_mut() = inner;
 }
 
-/// Marshal support: reinterpret a just-loaded time's wall clock at the
-/// given fixed offset (seconds east of UTC). `Time#_load` can only
-/// recover the wall-clock components (the payload has no zone), so
-/// Marshal records the offset in a `:offset` ivar and this reattaches it,
-/// preserving the wall clock (and thus shifting the absolute instant).
+/// Marshal support: show a just-loaded time at the offset its dump
+/// recorded (seconds east of UTC). The payload fixes the *instant*, and
+/// this only changes the zone it is read in — moving the wall clock, not
+/// the moment.
 pub(crate) fn time_reinterpret_offset(mut time: Value, offset_secs: i32) {
-    let naive = match time.as_time() {
-        TimeInner::Local(dt, _) => dt.naive_local(),
-        TimeInner::Utc(dt) => dt.naive_utc(),
-    };
+    let instant = time_utc_instant(time.as_time());
     let fixed =
         FixedOffset::east_opt(offset_secs).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap());
-    let dt = match fixed.from_local_datetime(&naive) {
-        LocalResult::Single(t) => t,
-        LocalResult::Ambiguous(t, _) => t,
-        LocalResult::None => fixed.from_utc_datetime(&naive),
-    };
     // A dump records the offset, not the zone it came from, so the
     // rebuilt time is at a plain offset — CRuby's loaded time answers
     // `#dst?` false however its `:zone` string reads.
-    *time.as_time_mut() = TimeInner::Local(dt, Zone::Fixed);
+    *time.as_time_mut() = TimeInner::Local(instant.with_timezone(&fixed), Zone::Fixed);
 }
 
 ///
@@ -968,7 +986,7 @@ fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
 #[monoruby_builtin]
 fn floor_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let p = precision_arg(vm, globals, &lfp)?;
-    Ok(Value::new_time(apply_subsec(&lfp, -1, p)))
+    derived_time(globals, lfp.self_val(), apply_subsec(&lfp, -1, p))
 }
 
 ///
@@ -982,7 +1000,7 @@ fn floor_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn ceil_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let p = precision_arg(vm, globals, &lfp)?;
-    Ok(Value::new_time(apply_subsec(&lfp, 1, p)))
+    derived_time(globals, lfp.self_val(), apply_subsec(&lfp, 1, p))
 }
 
 ///
@@ -996,7 +1014,7 @@ fn ceil_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn round_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let p = precision_arg(vm, globals, &lfp)?;
-    Ok(Value::new_time(apply_subsec(&lfp, 0, p)))
+    derived_time(globals, lfp.self_val(), apply_subsec(&lfp, 0, p))
 }
 
 ///
@@ -1072,11 +1090,18 @@ fn time_build(
     let in_arg = lfp.try_arg(7).filter(|v| !v.is_nil());
     // No positional args → "now" (optionally in a given offset).
     if lfp.arg_len() == 0 || (0..7).all(|i| lfp.try_arg(i).is_none()) {
+        let now = Utc::now();
         let time_info = if let Some(off) = in_arg {
+            // A timezone object (`#utc_to_local`) first — `Time.now(in: tz)`
+            // went straight to the offset parser, which has no idea what
+            // to make of one ("can't convert … into an exact number").
+            if let Some(t) = time_at_with_timezone(vm, globals, now, off, cls)? {
+                return Ok(t);
+            }
             let fixed = parse_utc_offset(vm, globals, off)?;
-            time_in_offset(Utc::now(), fixed, offset_arg_is_utc(off))
+            time_in_offset(now, fixed, offset_arg_is_utc(off))
         } else {
-            localize(Utc::now())
+            localize(now)
         };
         return Ok(Value::new_time_with_class(time_info, cls));
     }
@@ -1327,6 +1352,49 @@ fn value_epoch_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result
     r.coerce_to_int_i64(vm, globals)
 }
 
+/// One broken-down field of a `#utc_to_local` / `#local_to_utc` result,
+/// under whichever of its names the object answers to.
+fn zone_field(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+    names: &[&str],
+) -> Result<Option<i64>> {
+    for name in names {
+        let id = IdentId::get_id(name);
+        if globals.check_method(v, id).is_some() {
+            let r = vm.invoke_method_inner(globals, id, v, &[], None, None)?;
+            return Ok(Some(r.coerce_to_int_i64(vm, globals)?));
+        }
+    }
+    Ok(None)
+}
+
+/// The wall clock a timezone object's result names, as the epoch that
+/// clock would be *if it were UTC*.
+///
+/// CRuby reads the broken-down fields — `#year`, `#mon`, `#mday`,
+/// `#hour`, `#min`, `#sec` — and ignores the object's own `#zone` and
+/// `#utc_offset` entirely, so a Struct claiming `-5*3600` and a `Time`
+/// built at `+09:00` each describe only the clock they read. An object
+/// with no fields at all (an Integer) *is* its own epoch.
+fn zone_wall_clock_epoch(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i64> {
+    let Some(year) = zone_field(vm, globals, v, &["year"])? else {
+        return value_epoch_i64(vm, globals, v);
+    };
+    let month = zone_field(vm, globals, v, &["mon", "month"])?.unwrap_or(1);
+    let day = zone_field(vm, globals, v, &["mday", "day"])?.unwrap_or(1);
+    let hour = zone_field(vm, globals, v, &["hour"])?.unwrap_or(0);
+    let min = zone_field(vm, globals, v, &["min"])?.unwrap_or(0);
+    let sec = zone_field(vm, globals, v, &["sec"])?.unwrap_or(0);
+    let bad = || MonorubyErr::argumenterr("argument out of range");
+    let naive = NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32)
+        .ok_or_else(bad)?
+        .and_hms_opt(hour as u32, min as u32, sec as u32)
+        .ok_or_else(bad)?;
+    Ok(naive.and_utc().timestamp())
+}
+
 /// A zoned time's derived offset must be within ±24h.
 fn zone_offset_fixed(offset: i64) -> Result<FixedOffset> {
     if offset <= -86400 || offset >= 86400 {
@@ -1417,6 +1485,68 @@ fn find_timezone(
     )?))
 }
 
+/// The `:zone` a `Marshal.dump` writes for a Time.
+///
+/// A time built with a timezone *object* is dumped by that object's
+/// `#name` — CRuby asks for it and lets the `NoMethodError` through when
+/// the object has none, which is how a zone that cannot name itself
+/// makes its times undumpable. Otherwise it is the zone name a previous
+/// load attached, or the time's own abbreviation.
+pub(crate) fn time_marshal_zone(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    time: Value,
+) -> Result<Option<Value>> {
+    if !time.as_time().is_utc()
+        && let Some(zone) = globals.store.get_ivar(time, IdentId::get_id(ZONE_IVAR))
+        && !zone.is_nil()
+    {
+        if zone.is_str().is_some() {
+            return Ok(Some(zone));
+        }
+        let name =
+            vm.invoke_method_inner(globals, IdentId::get_id("name"), zone, &[], None, None)?;
+        return Ok(Some(name));
+    }
+    Ok(time_zone_abbr(time.as_time()).map(|name| {
+        Value::string_from_inner(RStringInner::from_encoding(
+            name.as_bytes(),
+            Encoding::UsAscii,
+        ))
+    }))
+}
+
+/// The `#zone` a `Marshal.load` gives a Time: the dumped name resolved
+/// through the loaded class's `.find_timezone` hook when it has one
+/// (which is how a `Time` subclass gets its timezone objects back), the
+/// name itself otherwise.
+pub(crate) fn time_resolve_marshal_zone(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    time: Value,
+    name: Value,
+) -> Result<Value> {
+    let cls = time.real_class(&globals.store).as_val();
+    match find_timezone(vm, globals, cls, name)? {
+        Some(tz) if !tz.is_nil() => Ok(tz),
+        _ => Ok(name),
+    }
+}
+
+/// A `Time` derived from `base` — arithmetic, rounding — keeps the
+/// timezone object `base` was built with as its own `#zone`, as CRuby
+/// carries the zone through every such derivation. (The offset rides
+/// along in the `TimeInner` already; only the object needed carrying.)
+fn derived_time(globals: &mut Globals, base: Value, inner: TimeInner) -> Result<Value> {
+    let derived = Value::new_time(inner);
+    if let Some(zone) = globals.store.get_ivar(base, IdentId::get_id(ZONE_IVAR))
+        && !zone.is_nil()
+    {
+        globals.store.set_ivar(derived, IdentId::get_id(ZONE_IVAR), zone)?;
+    }
+    Ok(derived)
+}
+
 /// The UTC instant of a Time.
 fn time_utc_instant(t: &TimeInner) -> DateTime<Utc> {
     match t {
@@ -1454,26 +1584,8 @@ fn utc_to_local_fixed(
         None,
         None,
     )?;
-    let wall = value_epoch_i64(vm, globals, result)?;
-    let uoff = if globals
-        .check_method(result, IdentId::get_id("utc_offset"))
-        .is_some()
-    {
-        vm.invoke_method_inner(
-            globals,
-            IdentId::get_id("utc_offset"),
-            result,
-            &[],
-            None,
-            None,
-        )?
-        .coerce_to_int_i64(vm, globals)
-        .unwrap_or(0)
-    } else {
-        0
-    };
-    let offset = wall + uoff - dt.timestamp();
-    Ok(Some(zone_offset_fixed(offset)?))
+    let wall = zone_wall_clock_epoch(vm, globals, result)?;
+    Ok(Some(zone_offset_fixed(wall - dt.timestamp())?))
 }
 
 fn parse_utc_offset_string(s: &str) -> Result<FixedOffset> {
@@ -3017,7 +3129,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         // sub-microsecond precision; String / nil raise TypeError.
         let nanos = num_exact_total_nanos(vm, globals, rhs_rv)?;
         let result = lhs - chrono::Duration::nanoseconds(nanos);
-        Ok(Value::new_time(result))
+        derived_time(globals, self_, result)
     }
 }
 
@@ -3038,7 +3150,7 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     // `#to_r` but no `#to_int`), String, and nil all raise TypeError.
     let nanos = num_exact_total_nanos(vm, globals, rhs_rv)?;
     let result = lhs + chrono::Duration::nanoseconds(nanos);
-    Ok(Value::new_time(result))
+    derived_time(globals, self_, result)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

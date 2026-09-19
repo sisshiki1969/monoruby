@@ -104,3 +104,111 @@ fn zone_name_and_dst() {
         "#,
     );
 }
+
+#[test]
+fn timezone_objects() {
+    // The timezone-object protocol. `Time.now(in: tz)` did not try it at
+    // all — it handed the object straight to the offset parser, which
+    // answered "can't convert … into an exact number" — and the offset
+    // it derives comes from the *broken-down fields* of whatever
+    // `#utc_to_local` returns, with that object's own `#zone` and
+    // `#utc_offset` ignored, as CRuby reads them. `#getlocal` resolves a
+    // zone *name* through the receiver class's `.find_timezone`, the
+    // zone object rides along through arithmetic and rounding, and
+    // `Marshal` dumps it by its `#name` and asks `.find_timezone` for it
+    // back.
+    run_test_once(
+        r#"
+        r = []
+        class TZ2
+          attr_reader :offset
+          def initialize(offset) = @offset = offset
+          def local_to_utc(t) = t - @offset
+          def utc_to_local(t) = t + @offset
+          def ==(o) = o.is_a?(TZ2) && o.offset == @offset
+        end
+        class TZName < TZ2
+          attr_reader :name
+          def initialize(name, offset) = (@name = name; super(offset))
+        end
+        class TWF2 < Time
+          def self.find_timezone(name) = TZName.new(name.to_s, 19800)
+        end
+        z = TZ2.new(5*3600+30*60)
+        t = Time.new(2012, 1, 1, 12, 0, 0, z)
+        r << [t.to_s, t.utc_offset, t.zone.class.to_s]
+        r << [(t + 1).zone.class.to_s, (t - 1).zone.class.to_s, t.round.zone.class.to_s]
+        # An Integer result is its own wall clock.
+        zi = Object.new
+        def zi.utc_to_local(tt) = tt.to_i + 3600
+        r << Time.now(in: zi).utc_offset
+        # A Struct's #zone / #utc_offset are ignored: only its fields count.
+        zs = Object.new
+        def zs.utc_to_local(tt)
+          Struct.new(:year, :mon, :mday, :hour, :min, :sec, :isdst, :to_i, :zone, :utc_offset)
+                .new(tt.year, tt.mon, tt.mday, tt.hour, tt.min, tt.sec, tt.isdst, tt.to_i, 'America/New_York', -5*60*60)
+        end
+        r << Time.now(in: zs).utc_offset
+        # Likewise a Time built at +09:00 whose fields are unchanged.
+        zt = Object.new
+        def zt.utc_to_local(tt) = Time.new(tt.year, tt.mon, tt.mday, tt.hour, tt.min, tt.sec, 9*60*60)
+        r << Time.now(in: zt).utc_offset
+        # More than a day apart is out of range.
+        zbig = Object.new
+        def zbig.utc_to_local(tt)
+          u = Time.utc(tt.year, tt.mon, tt.day, tt.hour, tt.min, tt.sec) - 24*60*60
+          Time.utc(u.year, u.mon, u.day, u.hour, u.min, u.sec)
+        end
+        begin; Time.now(in: zbig); r << :no_raise; rescue => e; r << [e.class, e.message]; end
+        g = TWF2.utc(2000, 1, 1, 12, 0, 0).getlocal("Asia/Colombo")
+        r << [g.zone.class.to_s, g.zone.name, g.utc_offset]
+        zn = TZName.new("Asia/Colombo", 19800)
+        m = TWF2.new(2000, 1, 1, 12, 0, 0, zn)
+        l = Marshal.load(Marshal.dump(m))
+        r << [l.class.to_s, l.zone.class.to_s, l.zone.name, l.utc_offset, l.to_s]
+        # A plain Time has no `.find_timezone`, so the name stays a String.
+        plain = Time.new(2000, 1, 1, 12, 0, 0, zn)
+        lp = Marshal.load(Marshal.dump(plain))
+        r << [lp.class.to_s, lp.zone, lp.utc_offset]
+        # A zone that cannot name itself makes its times undumpable.
+        begin
+          Marshal.dump(Time.new(2000, 1, 1, 12, 0, 0, z))
+          r << :no_raise
+        rescue NoMethodError => e
+          r << [e.class, e.message[/undefined method [`']name'/]]
+        end
+        r
+        "#,
+    );
+}
+
+#[test]
+fn marshal_payload_holds_the_utc_clock() {
+    // The 8-byte `Time#_dump` payload carries the **UTC** clock whatever
+    // zone the time is in; the `:offset` ivar beside it is what puts it
+    // back. monoruby wrote the *local* clock, which round-tripped within
+    // monoruby but not with CRuby — a dump of a `Asia/Tokyo` local time
+    // read back nine hours out, in either direction. These are the exact
+    // bytes CRuby 4.0.6 writes.
+    run_test_once(
+        r#"
+        old = ENV['TZ']
+        ENV['TZ'] = 'Asia/Tokyo'
+        r = []
+        t = Time.local(2000, 1, 1, 12, 0, 0)
+        r << Marshal.dump(t).bytes
+        r << Marshal.load(Marshal.dump(t)).then { |l| [l.to_s, l.utc_offset, l.zone, l.to_i] }
+        f = Time.new(2000, 1, 1, 12, 0, 0, "+05:30")
+        r << Marshal.dump(f).bytes
+        r << Marshal.load(Marshal.dump(f)).then { |l| [l.to_s, l.utc_offset, l.zone, l.to_i] }
+        u = Time.utc(2000, 1, 1, 12, 0, 0)
+        r << Marshal.dump(u).bytes
+        r << Marshal.load(Marshal.dump(u)).then { |l| [l.to_s, l.utc?, l.to_i] }
+        # A `Time` subclass loads back as itself.
+        class MarshalTimeSub < Time; end
+        r << Marshal.load(Marshal.dump(MarshalTimeSub.utc(2000, 1, 1))).class.to_s
+        ENV['TZ'] = old
+        r
+        "#,
+    );
+}

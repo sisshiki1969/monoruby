@@ -696,10 +696,14 @@ impl<'a> MarshalReader<'a> {
                             // and `#dst?` false alike.
                             "zone" => {
                                 if val.is_str().is_some() {
+                                    let zone =
+                                        crate::builtins::time::time_resolve_marshal_zone(
+                                            vm, globals, result, val,
+                                        )?;
                                     globals.set_ivar(
                                         result,
                                         IdentId::get_id(crate::builtins::time::ZONE_IVAR),
-                                        val,
+                                        zone,
                                     )?;
                                 }
                             }
@@ -1904,13 +1908,9 @@ fn marshal_try_user_protocol(
             // abbreviation at that instant — as a US-ASCII string
             // (CRuby's `:E false`). A time at a plain offset has none.
             marshal_write_symbol(buf, IdentId::get_id("zone"), symbols);
-            match crate::builtins::time::time_zone_abbr(obj.as_time()) {
-                Some(name) => {
-                    let zone = Value::string_from_inner(RStringInner::from_encoding(
-                        name.as_bytes(),
-                        Encoding::UsAscii,
-                    ));
-                    marshal_dump_value(buf, zone, vm, globals, symbols, objects, limit)?;
+            match crate::builtins::time::time_marshal_zone(vm, globals, obj)? {
+                Some(zone) => {
+                    marshal_dump_value(buf, zone, vm, globals, symbols, objects, limit)?
                 }
                 None => buf.push(b'0'), // nil
             }
