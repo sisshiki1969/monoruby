@@ -93,6 +93,20 @@ fn dump(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             if !responds {
                 return Err(MonorubyErr::typeerr("instance of IO needed"));
             }
+            // CRuby puts the port into binary mode first, when it has a
+            // `#binmode` to put it into.
+            let binmode = IdentId::get_id("binmode");
+            if let Ok(v) = vm.invoke_method_inner(
+                globals,
+                respond_to,
+                port,
+                &[Value::symbol(binmode)],
+                None,
+                None,
+            ) && v.as_bool()
+            {
+                vm.invoke_method_inner(globals, binmode, port, &[], None, None)?;
+            }
             let bytes = Value::bytes(buf);
             vm.invoke_method_inner(globals, write_id, port, &[bytes], None, None)?;
             Ok(port)
@@ -108,13 +122,23 @@ fn dump(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let source = lfp.arg(0);
-    // CRuby's Marshal.load also accepts an IO-like reader (anything
-    // responding to #read). For the moment we only handle the
-    // String-of-bytes form; IO readers can be added once the spec
-    // arity gap stops swallowing 50+ examples.
-    let data = source.expect_bytes(&globals.store)?;
+    // CRuby takes either a String of bytes or a reader: anything with
+    // both `#getbyte` and `#read`, which it first puts into binary mode.
+    // It reads the reader lazily, byte by byte; this drains it in one
+    // `#read` instead, so a stream carrying more than the one dump is
+    // consumed whole.
+    let (data, from_io) = match marshal_source_bytes(vm, globals, source)? {
+        Some(bytes) => (bytes, false),
+        None => (marshal_read_port(vm, globals, source)?, true),
+    };
     if data.len() < 2 {
-        return Err(MonorubyErr::argumenterr("marshal data too short"));
+        // A truncated *stream* ran out of bytes; a truncated String is
+        // simply bad data. CRuby distinguishes the two.
+        return Err(if from_io {
+            MonorubyErr::eoferr(&globals.store, "end of file reached")
+        } else {
+            MonorubyErr::argumenterr("marshal data too short")
+        });
     }
     if data[0] != 0x04 || data[1] != 0x08 {
         return Err(MonorubyErr::typeerr(format!(
@@ -140,6 +164,52 @@ fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     vm.with_temp_scope(|vm| {
         vm.temp_push(objects.into());
         cursor.read_value(vm, globals)
+    })
+}
+
+/// The bytes of a `Marshal.load` source given as a String (`#to_str` is
+/// honoured, as CRuby's `rb_check_string_type` does), or `None` when it
+/// is not string-like and must be read as a stream.
+fn marshal_source_bytes(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    source: Value,
+) -> Result<Option<Vec<u8>>> {
+    if let Some(s) = source.is_rstring_inner() {
+        return Ok(Some(s.as_bytes().to_vec()));
+    }
+    if globals.check_method(source, IdentId::TO_STR).is_some() {
+        let v = vm.invoke_method_inner(globals, IdentId::TO_STR, source, &[], None, None)?;
+        if let Some(s) = v.is_rstring_inner() {
+            return Ok(Some(s.as_bytes().to_vec()));
+        }
+    }
+    Ok(None)
+}
+
+/// Drain a `Marshal.load` source that is a reader rather than a String.
+/// CRuby requires both `#getbyte` and `#read`, and calls `#binmode`
+/// first when there is one.
+fn marshal_read_port(vm: &mut Executor, globals: &mut Globals, port: Value) -> Result<Vec<u8>> {
+    let respond_to = IdentId::get_id("respond_to?");
+    let responds = |vm: &mut Executor, globals: &mut Globals, name: &str| -> bool {
+        let sym = Value::symbol(IdentId::get_id(name));
+        matches!(
+            vm.invoke_method_inner(globals, respond_to, port, &[sym], None, None),
+            Ok(v) if v.as_bool()
+        )
+    };
+    if !responds(vm, globals, "getbyte") || !responds(vm, globals, "read") {
+        return Err(MonorubyErr::typeerr("instance of IO needed"));
+    }
+    if responds(vm, globals, "binmode") {
+        vm.invoke_method_inner(globals, IdentId::get_id("binmode"), port, &[], None, None)?;
+    }
+    let v = vm.invoke_method_inner(globals, IdentId::get_id("read"), port, &[], None, None)?;
+    Ok(match v.is_rstring_inner() {
+        Some(s) => s.as_bytes().to_vec(),
+        // `#read` at EOF answers nil (or an empty String).
+        None => vec![],
     })
 }
 
@@ -3776,6 +3846,49 @@ mod tests {
             s.instance_variable_set(:@a, Object.new)
             l = Marshal.load(Marshal.dump([s, s]))
             r << [l[0], l[1], l[0].equal?(l[1])]
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn load_from_a_reader_and_dump_to_a_port() {
+        // `Marshal.load` took only a String: an IO — a `StringIO`, a
+        // `File` — raised "no implicit conversion". CRuby accepts any
+        // reader with `#getbyte` and `#read`, puts it in binary mode
+        // first, and reports a stream that has nothing left with
+        // `EOFError` rather than "marshal data too short". `Marshal.dump`
+        // likewise calls `#binmode` on a port that has one, and a
+        // `StringIO` (a T_DATA in CRuby) is not dumpable at all.
+        run_test_once(
+            r##"
+            require 'stringio'
+            r = []
+            r << Marshal.load(StringIO.new(Marshal.dump("a string")))
+            io = StringIO.new("\x04\b:\vsymbol")
+            def io.binmode; raise "binmode"; end
+            begin; Marshal.load(io); r << :no_raise; rescue => e; r << [e.class, e.message]; end
+            begin
+              Marshal.load(StringIO.new(""))
+              r << :no_raise
+            rescue => e
+              r << [e.class, e.message]
+            end
+            [123, nil, :sym, Object.new, "", "\x04"].each do |x|
+              begin; Marshal.load(x); r << :no_raise; rescue => e; r << [e.class, e.message]; end
+            end
+            begin; Marshal.dump(StringIO.new); r << :no_raise; rescue => e; r << [e.class, e.message]; end
+            class MarshalPort
+              attr_reader :binmodes
+              def initialize; @binmodes = 0; @buf = +""; end
+              def write(s); @buf << s; end
+              def binmode; @binmodes += 1; end
+            end
+            w = MarshalPort.new
+            r << Marshal.dump("test", w).equal?(w)
+            r << w.binmodes
+            class MarshalToStr; def to_str; Marshal.dump(42); end; end
+            r << Marshal.load(MarshalToStr.new)
             r
             "##,
         );

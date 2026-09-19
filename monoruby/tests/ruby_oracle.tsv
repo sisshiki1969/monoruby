@@ -1504,6 +1504,7 @@
 6510451a0438417f52a7734863b53d41	[42, 7]	Thread.current[:k] = 42\n            Thread.current.thread_variable_
 6515a9a295a9e459766f100befc056c4	[4, 5]	class C; def to_int; 2; end; end; o = C.new\n[1,2,3,4,5].last(o)
 654971fbef6e7c3957b7be0b83106d49	"from ensure"	def m\n              raise "orig"\n            rescue\n              r
+6561fcf32e554e54d75b6a6879f76397	["a string", [RuntimeError, "binmode"], [EOFError, "end of file reached"], [TypeError, "instance of IO needed"], [TypeError, "instance of IO needed"], [TypeError, "instance of IO needed"], [TypeError, "instance of IO needed"], [ArgumentError, "marshal data too short"], [ArgumentError, "marshal data too short"], [TypeError, "no _dump_data is defined for class StringIO"], true, 1, 42]	require 'stringio'\n            r = []\n            r << Marshal.load
 65669ec73369ef6bc4ab9748ee3726fa	[{"a" => 10, "b" => 20}, {1 => :a, 2 => :b}, {}, {a: 1, b: 2}]	h = { a: 1, b: 2 }\n            [\n              h.to_h { |k, v| [k.t
 65694a727aa519d1f24a0ad7779439d7	["a", "b"]	sup = Class.new do\n          def a; "a"; end\n          def b; "b"; end\n
 658a3d798e2393a25a6923d06ab095be	[:tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok, :tok]	def tmo(klass)\n              perform = Proc.new do\n                
@@ -1946,6 +1947,7 @@
 8370c5ed8e43de9e99d7f41038618f1b	[true, true, true, [1, 2]]	Nc = 1\n        module RM1; end\n        RM2 = Class.new\n        msgs = [
 838053b506518776673e7a731351065b	[10, 11, 21]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 83806d03f4525939aff12798777778b6	[ArgumentError, "incompatible encodings: UTF-16LE and UTF-16BE"]	(Regexp.union(Regexp.new("a".encode("UTF-16LE")), Regexp.new("b".encode("UTF-16B
+8385a774b1d8018e5b2071014bf6670c		require 'stringio'\n            r = []\n            r << Marshal.load
 839e2c6e4a8712955a1f09c759e45e93	[]	Module.new.included_modules
 83a0672bb7917a2befc123f2ca022195	[[MatchData, "o", "hell", " world", 4, 5, ["o"]], nil, ["o", 7, "hello w"], nil, [2, "hé"], ["b", "aBc"], nil, "y", "t"]	s = "hello world"\n        r = []\n        s.sub("o", "0"); r << [$~.clas
 83a20113cd2d9bf88c262b3b65329020	[[[:s, :t]], [:s], [[:s, :t]]]	hs = {a: 1, b: 2}\n            def hs.each; yield :s, :t; end\n      
