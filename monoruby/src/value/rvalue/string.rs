@@ -540,6 +540,14 @@ impl Encoding {
     /// `init_encoding`'s constant table; unknown names raise
     /// `ArgumentError` matching CRuby.
     pub fn try_from_str(s: &str) -> Result<Self> {
+        // CRuby resolves a name through `StringValueCStr`, so an
+        // embedded NUL is rejected before any table is consulted, with
+        // a message of its own.
+        if s.as_bytes().contains(&0) {
+            return Err(MonorubyErr::argumenterr(
+                "invalid encoding name (NUL byte)",
+            ));
+        }
         // Normalize: uppercase, replace '-' / '.' with '_'.
         //
         // Every name we recognise is ASCII and short, so normalise into a

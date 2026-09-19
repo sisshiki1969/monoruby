@@ -1102,6 +1102,37 @@ impl IoInner {
         }
     }
 
+    /// CRuby's `READ_DATA_BUFFERED`: bytes that the buffered read path
+    /// has already taken from the fd, or that `ungetc` / `ungetbyte`
+    /// pushed back, and that a raw `sysread` / `sysseek` would therefore
+    /// skip over. CRuby refuses both while any are pending.
+    pub fn read_data_buffered(&self) -> bool {
+        if self.pushback_len() > 0 {
+            return true;
+        }
+        match &self.kind {
+            IoKind::File(f) => !f.reader.buffer().is_empty(),
+            IoKind::Popen(p) => p
+                .reader
+                .as_ref()
+                .is_some_and(|r| !r.buffer().is_empty()),
+            IoKind::Stdin => !stdin_buf().buffer().is_empty(),
+            _ => false,
+        }
+    }
+
+    /// Bytes accepted by a buffered `IO#write` but not yet handed to the
+    /// kernel. CRuby warns (it does not raise) when `syswrite` would
+    /// write past them.
+    pub fn write_data_buffered(&self) -> bool {
+        match &self.kind {
+            IoKind::File(f) => f.wbuf.borrow().buffered_len() > 0,
+            IoKind::Stdout => stdout_buf().buffered_len() > 0,
+            IoKind::Stderr => stderr_buf().buffered_len() > 0,
+            _ => false,
+        }
+    }
+
     fn pushback_cell(&self) -> Option<&RefCell<Vec<u8>>> {
         match &self.kind {
             IoKind::File(f) => Some(&f.pushback),
@@ -1129,6 +1160,17 @@ impl IoInner {
                 pb.splice(0..0, bytes.iter().copied());
                 Ok(())
             }
+        }
+    }
+
+    /// Drop everything `ungetc` / `ungetbyte` pushed back. `rb_io_seek`
+    /// unreads before it moves: a pushed-back byte belongs to the old
+    /// position. Only the user-facing moves (`IO#seek`, `#pos=`,
+    /// `#rewind`) do this — `IO#pos` reads the position through the same
+    /// `lseek` and must leave the pushback alone.
+    pub fn clear_pushback(&mut self) {
+        if let Some(cell) = self.pushback_cell() {
+            cell.borrow_mut().clear();
         }
     }
 

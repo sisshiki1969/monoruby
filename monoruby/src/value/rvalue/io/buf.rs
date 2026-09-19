@@ -421,6 +421,11 @@ impl<T> IoWriter<T> {
         self.buf.set_sync(sync);
     }
 
+    /// Bytes accepted from Ruby but not yet handed to the kernel.
+    pub(crate) fn buffered_len(&self) -> usize {
+        self.buf.buffered_len()
+    }
+
     pub(crate) fn get_ref(&self) -> &T {
         &self.inner
     }

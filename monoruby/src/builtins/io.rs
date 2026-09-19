@@ -702,7 +702,10 @@ fn resolve_io_encodings(
         explicit_ext
     };
     if let Some(e) = ext {
-        let mut i = explicit_int;
+        // `rb_io_ext_int_to_encs` with no internal encoding given takes
+        // `Encoding.default_internal`, so `set_encoding("UTF-8")` under a
+        // default internal transcodes to it.
+        let mut i = explicit_int.or(di);
         if enc_is_binary(globals, e) || i.map(|x| enc_same(globals, x, e)).unwrap_or(false) {
             i = None;
         }
@@ -710,12 +713,18 @@ fn resolve_io_encodings(
     }
     if explicit_int.is_none() {
         match di {
-            Some(di) => {
-                let i = if enc_is_binary(globals, de) || enc_same(globals, di, de) {
-                    None
+            // A BINARY `Encoding.default_external` cannot be transcoded
+            // from, so CRuby ignores the default internal and leaves the
+            // stream tracking `default_external` rather than pinning it.
+            Some(_) if enc_is_binary(globals, de) => {
+                if readable && !writable {
+                    (ExtSlot::Dynamic, None)
                 } else {
-                    Some(di)
-                };
+                    (ExtSlot::Nil, None)
+                }
+            }
+            Some(di) => {
+                let i = if enc_same(globals, di, de) { None } else { Some(di) };
                 (ExtSlot::Fixed(de), i)
             }
             None => {
@@ -1817,6 +1826,7 @@ fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let whence = parse_whence(vm, globals, lfp.try_arg(1))?;
     let mut self_ = lfp.self_val();
+    self_.as_io_inner_mut().clear_pushback();
     self_
         .as_io_inner_mut()
         .seek(offset, whence)
@@ -1963,7 +1973,7 @@ fn io_class_read(
         Some(v) if v.try_fixnum().is_some() => {
             let n = v.try_fixnum().unwrap();
             if n < 0 {
-                return Err(MonorubyErr::argumenterr("negative offset"));
+                return Err(MonorubyErr::argumenterr(format!("negative offset {n} given")));
             }
             n as u64
         }
@@ -3411,6 +3421,7 @@ fn io_pos_set(
     ensure_io_open(lfp.self_val())?;
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let mut self_ = lfp.self_val();
+    self_.as_io_inner_mut().clear_pushback();
     self_
         .as_io_inner_mut()
         .seek(n, 0)
@@ -3434,6 +3445,7 @@ fn io_rewind(
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
     let mut self_ = lfp.self_val();
+    self_.as_io_inner_mut().clear_pushback();
     self_
         .as_io_inner_mut()
         .seek(0, 0)
@@ -3701,6 +3713,11 @@ fn io_sysseek(
     _: BytecodePtr,
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
+    // As for `sysread`: seeking the fd under a non-empty read buffer
+    // would silently drop the bytes it holds.
+    if lfp.self_val().as_io_inner().read_data_buffered() {
+        return Err(MonorubyErr::ioerr("sysseek for buffered IO"));
+    }
     let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     let whence = parse_whence(vm, globals, lfp.try_arg(1))?;
     let mut self_ = lfp.self_val();
@@ -3900,6 +3917,11 @@ fn io_syswrite(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // CRuby warns (rather than raising) when a buffered `IO#write` has
+    // not reached the kernel yet: `syswrite` would land before it.
+    if lfp.self_val().as_io_inner().write_data_buffered() {
+        vm.ruby_warn_caller(globals, "warning: syswrite for buffered IO")?;
+    }
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     let bytes = if let Some(b) = lfp.arg(0).try_bytes() {
@@ -4073,6 +4095,12 @@ fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     };
     if lfp.self_val().as_io_inner().is_closed() {
         return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    // `rb_io_sysread` refuses to read past what the buffered path has
+    // already taken from the fd (or what `ungetc` pushed back): the two
+    // views of the stream position would disagree.
+    if lfp.self_val().as_io_inner().read_data_buffered() {
+        return Err(MonorubyErr::ioerr("sysread for buffered IO"));
     }
     if maxlen == 0 {
         // CRuby returns "" — and leaves a supplied buffer untouched.
@@ -4722,6 +4750,17 @@ fn set_encoding(
         ));
     }
     let arg0 = coerce_enc_arg(vm, globals, lfp.arg(0))?;
+    // CRuby resolves each name through `StringValueCStr`, so an
+    // embedded NUL is rejected before the name is looked up at all.
+    for a in [Some(arg0), lfp.try_arg(1)].into_iter().flatten() {
+        if let Some(s) = a.is_rstring_inner()
+            && s.as_bytes().contains(&0)
+        {
+            return Err(MonorubyErr::argumenterr(
+                "invalid encoding name (NUL byte)",
+            ));
+        }
+    }
     let (mut ext, mut int) = (None, None);
     if let Some(s) = arg0.is_str() {
         // A single string may carry both as "ext:int".
@@ -5405,7 +5444,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         Some(v) if !v.is_nil() => {
             let o = v.coerce_to_int_i64(vm, globals)?;
             if o < 0 {
-                return Err(MonorubyErr::argumenterr("negative offset"));
+                return Err(MonorubyErr::argumenterr(format!("negative offset {o} given")));
             }
             Some(o as u64)
         }
@@ -7785,6 +7824,179 @@ mod tests {
     }
 
     #[test]
+    fn sys_calls_refuse_a_buffered_stream() {
+        // `rb_io_sysread` / `rb_io_sysseek` refuse to work past bytes the
+        // buffered path already took from the fd (or that `ungetc` pushed
+        // back); `syswrite` only warns about a pending buffered write.
+        run_test_no_result_check(
+            r##"
+            path = "/tmp/monoruby_io_sysbuf_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "hello world\nsecond line\nthird\n")
+              f = File.open(path)
+              f.readline
+              begin; f.sysread(5); raise "no sysread error"
+              rescue IOError => e
+                raise "sysread msg #{e.message}" unless e.message == "sysread for buffered IO"
+              end
+              begin; f.sysseek(-5, IO::SEEK_CUR); raise "no sysseek error"
+              rescue IOError => e
+                raise "sysseek msg #{e.message}" unless e.message == "sysseek for buffered IO"
+              end
+              f.close
+              # An exact `IO#read(n)` consumes the fd without reading
+              # ahead, so `sysread` right after it is fine.
+              g = File.open(path)
+              g.read(15)
+              raise "sysread after read" unless g.sysread(5) == "ond l"
+              g.close
+              # `ungetc` alone is enough to make the stream buffered.
+              h = File.open(path)
+              h.ungetc("a")
+              begin; h.sysread(1); raise "no ungetc error"
+              rescue IOError
+              end
+              h.close
+              :ok
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn seek_drops_the_pushback() {
+        // `rb_io_seek` unreads first: a byte pushed back by `ungetc`
+        // belongs to the old position and must not survive the move.
+        run_test_no_result_check(
+            r##"
+            path = "/tmp/monoruby_io_seekpb_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "hello")
+              io = File.open(path)
+              io.ungetc("a")
+              io.seek(1, IO::SEEK_SET)
+              raise "getc #{io.getc.inspect}" unless io.getc == "e"
+              io.close
+              :ok
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn each_without_a_block_builds_the_enumerator_first() {
+        // CRuby builds the Enumerator before it looks at the stream, so
+        // a closed IO answers `each_char` with one and only iterating it
+        // raises. The zero limit of `each_line` is checked there too.
+        run_test_no_result_check(
+            r##"
+            path = "/tmp/monoruby_io_enum_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "hi\nthere\n")
+              io = File.open(path)
+              io.close
+              %i[each_char each_byte each_codepoint each_line].each do |m|
+                raise "#{m} class" unless io.send(m).is_a?(Enumerator)
+              end
+              begin; io.each_char.to_a; raise "no error"
+              rescue IOError => e
+                raise "msg" unless e.message == "closed stream"
+              end
+              begin; io.each_line { |l| }; raise "no block error"
+              rescue IOError
+              end
+              open = File.open(path)
+              raise "limit enum" unless open.each_line(0).is_a?(Enumerator)
+              begin; open.each_line(0).to_a; raise "no limit error"
+              rescue ArgumentError => e
+                raise "limit msg #{e.message}" unless e.message == "invalid limit: 0 for each_line"
+              end
+              begin; open.each_line(0) { |l| }; raise "no limit block error"
+              rescue ArgumentError
+              end
+              open.rewind
+              raise "lines" unless open.each_line.to_a == ["hi\n", "there\n"]
+              open.rewind
+              raise "chars" unless open.each_char.first(2) == ["h", "i"]
+              open.close
+              :ok
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn set_encoding_takes_the_default_internal() {
+        // `rb_io_ext_int_to_encs` with no internal encoding given takes
+        // `Encoding.default_internal`; a BINARY `default_external` drops
+        // it and leaves the stream tracking `default_external`.
+        run_test_no_result_check(
+            r##"
+            path = "/tmp/monoruby_io_enc_#{Process.pid}_#{rand(100000)}"
+            de, di = Encoding.default_external, Encoding.default_internal
+            begin
+              File.write(path, "abc")
+              Encoding.default_external = Encoding::ISO_8859_1
+              Encoding.default_internal = Encoding::UTF_16BE
+              io = File.open(path)
+              io.set_encoding(Encoding::UTF_8)
+              raise "1arg" unless io.internal_encoding == Encoding::UTF_16BE
+              io.set_encoding(Encoding::UTF_8, nil)
+              raise "2arg nil" unless io.internal_encoding == Encoding::UTF_16BE
+              io.set_encoding(Encoding::UTF_8, Encoding::EUC_JP)
+              raise "2arg" unless io.internal_encoding == Encoding::EUC_JP
+              # A BINARY external drops the internal entirely.
+              io.set_encoding(Encoding::ASCII_8BIT)
+              raise "binary" unless io.internal_encoding.nil?
+              io.close
+              # `set_encoding nil, nil` under a BINARY default_external
+              # keeps following it.
+              Encoding.default_external = Encoding::ASCII_8BIT
+              Encoding.default_internal = Encoding::ISO_8859_2
+              t = File.open(path)
+              t.set_encoding nil, nil
+              raise "nil,nil int" unless t.internal_encoding.nil?
+              Encoding.default_external = Encoding::IBM437
+              raise "nil,nil ext #{t.external_encoding}" unless t.external_encoding == Encoding::IBM437
+              t.close
+              :ok
+            ensure
+              Encoding.default_external = de
+              Encoding.default_internal = di
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn an_encoding_name_may_not_contain_a_nul() {
+        // CRuby resolves every encoding name through `StringValueCStr`,
+        // so an embedded NUL is its own error, not an unknown name.
+        run_tests(&[
+            r#"("x".dup.force_encoding("null byte") rescue [$!.class, $!.message])"#,
+            r#"(Encoding.find("a b") rescue [$!.class, $!.message])"#,
+            r#"($stdout.set_encoding("UTF-8", "null byte") rescue [$!.class, $!.message])"#,
+            r#"($stdout.set_encoding("null byte", "UTF-8") rescue [$!.class, $!.message])"#,
+        ]);
+    }
+
+    #[test]
+    fn io_read_names_the_negative_offset() {
+        run_tests(&[
+            r#"(IO.read("/dev/null", nil, -1) rescue [$!.class, $!.message])"#,
+            r#"(IO.read("/dev/null", -1) rescue [$!.class, $!.message])"#,
+            r#"(File.read("/dev/null", 2, -3) rescue [$!.class, $!.message])"#,
+        ]);
+    }
+
+    #[test]
     fn io_sysread_basic() {
         run_test_once(
             r#"
@@ -7861,22 +8073,27 @@ mod tests {
             raise "popen sysread: #{out.inspect}" unless out == "hello"
             "#,
         );
-        // ungetc pushback is drained before the underlying read.
+        // `ungetc` makes the stream buffered, and `sysread` refuses a
+        // buffered stream (CRuby's `READ_DATA_BUFFERED` check).
         run_test_no_result_check(
-            r#"
+            r##"
             path = "/tmp/monoruby_io_sysread_pb_#{Process.pid}_#{rand(100000)}"
             begin
               File.write(path, "abcdef")
               f = File.open(path, "r")
               c = f.getc          # "a"
               f.ungetc(c)         # push "a" back
-              out = f.sysread(3)  # drains pushback then reads
+              begin
+                f.sysread(3)
+                raise "no error"
+              rescue IOError => e
+                raise "pushback sysread: #{e.message}" unless e.message == "sysread for buffered IO"
+              end
               f.close
-              raise "pushback sysread: #{out.inspect}" unless out == "abc"
             ensure
               File.unlink(path) rescue nil
             end
-            "#,
+            "##,
         );
         // sysread on a write-only stream ⇒ IOError (not opened for reading).
         run_test_error(

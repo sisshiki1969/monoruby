@@ -4436,6 +4436,13 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         }
         _ => {}
     }
+    // `rb_to_encoding` goes through `StringValueCStr`, so an embedded
+    // NUL is its own error rather than an unknown name.
+    if name.as_bytes().contains(&0) {
+        return Err(MonorubyErr::argumenterr(
+            "invalid encoding name (NUL byte)",
+        ));
+    }
     match find_encoding_object(globals, &name) {
         Some(v) => Ok(v),
         None => Err(MonorubyErr::argumenterr(format!(
