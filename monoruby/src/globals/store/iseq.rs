@@ -198,6 +198,36 @@ pub enum ISeqHint {
 }
 
 ///
+/// One iseq's heap footprint, broken down by table.
+///
+#[derive(Default, Clone, Copy)]
+pub(crate) struct ISeqHeapSize {
+    pub insts: usize,
+    pub bytecode: usize,
+    pub sourcemap: usize,
+    pub sp: usize,
+    pub bb_info: usize,
+    pub callsite_map: usize,
+    pub locals: usize,
+    pub jit_entry: usize,
+    pub other: usize,
+}
+
+impl std::ops::AddAssign for ISeqHeapSize {
+    fn add_assign(&mut self, o: Self) {
+        self.insts += o.insts;
+        self.bytecode += o.bytecode;
+        self.sourcemap += o.sourcemap;
+        self.sp += o.sp;
+        self.bb_info += o.bb_info;
+        self.callsite_map += o.callsite_map;
+        self.locals += o.locals;
+        self.jit_entry += o.jit_entry;
+        self.other += o.other;
+    }
+}
+
+///
 /// Information of instruction sequences.
 ///
 #[derive(Clone)]
@@ -484,6 +514,36 @@ impl alloc::GC<RValue> for ISeqInfo {
 }
 
 impl ISeqInfo {
+    ///
+    /// Bytes this iseq owns outside its own struct, split into the
+    /// tables that scale with the bytecode and everything else.
+    /// Consumed by `Store::memory_report`.
+    ///
+    pub(crate) fn heap_size(&self) -> ISeqHeapSize {
+        let insts = self.bytecode.as_ref().map_or(0, |b| b.len());
+        ISeqHeapSize {
+            insts,
+            bytecode: insts * size_of::<Bytecode>(),
+            sourcemap: self.sourcemap.capacity() * size_of::<Loc>(),
+            sp: self.sp.capacity() * size_of::<SlotId>(),
+            bb_info: self.bb_info.heap_size(),
+            callsite_map: self.callsite_map.capacity()
+                * (size_of::<BcIndex>() + size_of::<CallSiteId>() + 1),
+            locals: self.locals.capacity()
+                * (size_of::<IdentId>() + size_of::<bytecodegen::BcLocal>() + 1),
+            jit_entry: self.jit_entry.capacity() * (size_of::<ClassId>() + size_of::<JitInfo>() + 1),
+            other: self.exception_map.capacity() * size_of::<ExceptionMapEntry>()
+                + self.replay_spans.capacity()
+                    * size_of::<(std::ops::Range<BcIndex>, Vec<u32>)>()
+                + self.lexical_context.capacity() * size_of::<ClassId>()
+                + self.jit_class_profile.capacity() * size_of::<(ClassId, u32)>()
+                + self.bop_deps.capacity() * size_of::<(ClassId, IdentId)>()
+                + self.args.args_names.capacity() * size_of::<Option<IdentId>>()
+                + self.args.kw_names.capacity() * size_of::<IdentId>()
+                + self.args.kw_required.capacity(),
+        }
+    }
+
     fn new(
         id: FuncId,
         mother: (ISeqId, usize),

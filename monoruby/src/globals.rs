@@ -1229,6 +1229,13 @@ impl Globals {
             }
             executor.exec_main_script(self, code, path)
         })();
+        // The compiled program is at its largest here: everything the
+        // script's `def`s produced is in the store, and nothing has been
+        // released. `Kernel#exit` leaves through `std::process::exit`, so
+        // this cannot wait for `main` to return.
+        if std::env::var_os("MONORUBY_STORE_STATS").is_some() {
+            eprint!("{}", self.store.memory_report());
+        }
         // Run `at_exit` handlers and `ObjectSpace` finalizers before the
         // process leaves. This must happen even when `res` is a
         // `SystemExit` (raised by `Kernel#exit`) or an uncaught

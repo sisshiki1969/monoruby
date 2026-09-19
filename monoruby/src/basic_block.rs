@@ -122,6 +122,23 @@ impl std::ops::IndexMut<BcIndex> for BasicBlockInfo {
 }
 
 impl BasicBlockInfo {
+    /// Bytes this owns outside itself, for `Store::memory_report`.
+    pub(crate) fn heap_size(&self) -> usize {
+        let entries = self.info.capacity() * size_of::<BasicBlockInfoEntry>()
+            + self
+                .info
+                .iter()
+                .map(|e| {
+                    e.pred.capacity() * size_of::<BasicBlockId>()
+                        + e.succ.capacity() * size_of::<BasicBlockId>()
+                })
+                .sum::<usize>();
+        entries
+            + self.bb_head.capacity() / 8
+            + self.bb_map.capacity() * size_of::<BasicBlockId>()
+            + self.loops.capacity() * size_of::<(BasicBlockId, BasicBlockId)>()
+    }
+
     pub(crate) fn new(incoming: Vec<Vec<BcIndex>>, ir: &BytecodeIr) -> Self {
         // generate bb_head.
         let bb_head: bitvec::vec::BitVec<_> = incoming

@@ -333,6 +333,83 @@ impl alloc::GC<RValue> for Store {
 
 impl Store {
     ///
+    /// A tally of what the compiled program costs in memory, printed at
+    /// exit when `MONORUBY_STORE_STATS` is set.
+    ///
+    /// Peak RSS says a file's compiled form is the largest thing monoruby
+    /// builds from it — several times prism's tree and an order of
+    /// magnitude more than the intermediate AST. This says which table.
+    ///
+    pub fn memory_report(&self) -> String {
+        use std::fmt::Write;
+        let mut iseq = iseq::ISeqHeapSize::default();
+        for info in self.iseqs.iter() {
+            iseq += info.heap_size();
+        }
+        let headers = self.iseqs.capacity() * size_of::<ISeqInfo>();
+        let mut out = String::new();
+        writeln!(
+            out,
+            "iseqs: {} ({} bytecode instructions), size_of::<ISeqInfo>() = {}\n\
+             callsites: {}, size_of::<CallSiteInfo>() = {}",
+            self.iseqs.len(),
+            iseq.insts,
+            size_of::<ISeqInfo>(),
+            self.callsite_info.len(),
+            size_of::<CallSiteInfo>(),
+        )
+        .unwrap();
+        let with_extras = self
+            .callsite_info
+            .iter()
+            .filter(|c| {
+                !c.splat_pos.is_empty() || !c.kw_args.is_empty() || !c.hash_splat_pos.is_empty()
+            })
+            .count();
+        writeln!(
+            out,
+            "  of which with splat/kw/hash-splat: {with_extras} ({:.1}%)",
+            100.0 * with_extras as f64 / self.callsite_info.len().max(1) as f64,
+        )
+        .unwrap();
+        let mut row = |name: &str, bytes: usize| {
+            writeln!(out, "  {name:<22} {:>9.2} MB", bytes as f64 / (1 << 20) as f64).unwrap()
+        };
+        row("ISeqInfo headers", headers);
+        row("bytecode", iseq.bytecode);
+        row("sourcemap", iseq.sourcemap);
+        row("sp", iseq.sp);
+        row("bb_info", iseq.bb_info);
+        row("callsite_map", iseq.callsite_map);
+        row("locals", iseq.locals);
+        row("jit_entry", iseq.jit_entry);
+        row("iseq other", iseq.other);
+        row(
+            "callsite_info",
+            self.callsite_info.capacity() * size_of::<CallSiteInfo>(),
+        );
+        row(
+            "constsite_info",
+            self.constsite_info.capacity() * size_of::<ConstSiteInfo>(),
+        );
+        row("literals", self.literals.capacity() * size_of::<Value>());
+        let total = headers
+            + iseq.bytecode
+            + iseq.sourcemap
+            + iseq.sp
+            + iseq.bb_info
+            + iseq.callsite_map
+            + iseq.locals
+            + iseq.jit_entry
+            + iseq.other
+            + self.callsite_info.capacity() * size_of::<CallSiteInfo>()
+            + self.constsite_info.capacity() * size_of::<ConstSiteInfo>()
+            + self.literals.capacity() * size_of::<Value>();
+        row("TOTAL", total);
+        out
+    }
+
+    ///
     /// Root a bytecode literal. Called once per literal, from bytecodegen.
     ///
     pub(crate) fn push_literal(&mut self, v: Value) {
