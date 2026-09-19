@@ -402,6 +402,12 @@ class Thread
   #    return is re-checked.
 
   class Mutex
+    # A Mutex holds native synchronization state, so it has no wire
+    # form. CRuby's T_DATA path reports the missing `_dump_data` hook.
+    def marshal_dump
+      raise TypeError, "no _dump_data is defined for class #{self.class}"
+    end
+
     def locked?
       # A thread releases its locks when it terminates (CRuby semantics), so
       # an owner that is no longer alive means the lock has been abandoned
@@ -526,6 +532,13 @@ class Thread
   end
 
   class Queue
+    # Same as ConditionVariable: the queue's waiters and monitor cannot
+    # be serialized. (`SizedQueue < Queue` inherits this, and CRuby
+    # names the receiver's own class in both.)
+    def marshal_dump
+      raise TypeError, "can't dump #{self.class}"
+    end
+
     # Layered on Mutex + ConditionVariable, exactly like CRuby's
     # thread_sync.c. Mutual exclusion (not statement ordering) is what
     # makes check-and-take atomic here: with callee-entry GC/preempt

@@ -855,15 +855,13 @@ pub(super) extern "C" fn gen_range(
     globals: &mut Globals,
     exclude_end: bool,
 ) -> Option<Value> {
-    // Validate with `<=>` only when the endpoints are different classes
-    // — same-class endpoints are always allowed (matches CRuby for
-    // user-defined types, and avoids false positives when monoruby's
-    // own `<=>` is incomplete e.g. on Time). Different-class endpoints
-    // like `9155.."s"` still need to be rejected (`<=>` returns nil).
-    if !start.is_nil()
-        && !end.is_nil()
-        && start.real_class(&globals.store).id() != end.real_class(&globals.store).id()
-    {
+    // `range_init` compares the two endpoints with `<=>` unless one is
+    // nil, whatever their classes, and rejects a nil answer. Skipping
+    // same-class endpoints meant a user-defined `<=>` never ran (and
+    // `Object.new..Object.new` was accepted); `compare_values_inner`
+    // answers the immediate classes without a dispatch, so the ordinary
+    // `0..n` literal costs nothing extra.
+    if !start.is_nil() && !end.is_nil() {
         match vm.compare_values_inner(globals, start, end) {
             Ok(Some(_)) => {}
             Ok(None) => {
@@ -2232,6 +2230,15 @@ pub(super) extern "C" fn singleton_define_method(
     let class = obj.class();
     if class == INTEGER_CLASS || class == FLOAT_CLASS || class == SYMBOL_CLASS {
         vm.set_error(MonorubyErr::typeerr("can't define singleton"));
+        return None;
+    }
+    // `def s.m` gives `s` a singleton class, which CRuby counts as a
+    // mutation of a chilled String.
+    let mut recv = obj;
+    if recv.is_rstring().is_some()
+        && let Err(err) = recv.warn_chilled_mutation(vm, globals)
+    {
+        vm.set_error(err);
         return None;
     }
     let current_func = vm.definition_func_id(globals);

@@ -398,21 +398,34 @@ pub(crate) extern "C" fn exception_alloc_func(class_id: ClassId, globals: &mut G
 fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
+    // The message String is kept as its own bytes *and* encoding: CRuby
+    // hands `#message` back the String it was given, so a BINARY or
+    // US-ASCII message must not come back as UTF-8.
+    let mut raw = None;
     let message = if let Some(msg) = lfp.try_arg(0)
         && !msg.is_nil()
     {
-        if msg.is_rstring().is_some() {
-            msg.coerce_to_string(vm, globals)?
+        let msg = if msg.is_rstring().is_some() {
+            msg
         } else {
             // CRuby accepts any message object and stringifies it
             // via #to_s (`Exception#to_s calls #to_s on the message`).
-            let s = vm.invoke_method_inner(globals, IdentId::TO_S, msg, &[], None, None)?;
-            s.coerce_to_string(vm, globals)?
+            vm.invoke_method_inner(globals, IdentId::TO_S, msg, &[], None, None)?
+        };
+        if let Some(inner) = msg.is_rstring_inner()
+            && inner.encoding() != crate::value::Encoding::Utf8
+        {
+            raw = Some((inner.as_bytes().to_vec(), inner.encoding()));
         }
+        msg.coerce_to_string(vm, globals)?
     } else {
         globals.store.get_class_name(class_id)
     };
-    self_.is_exception_mut().unwrap().set_message(message);
+    {
+        let ex = self_.is_exception_mut().unwrap();
+        ex.set_message(message);
+        ex.raw_message = raw;
+    }
     // Real keyword arguments (`receiver:` at slot 2, `key:` at slot 3) —
     // the path taken since `Exception.new` routes through `Class#new`'s
     // full dispatch. The positional-hash arms above remain for internal
@@ -457,8 +470,10 @@ fn message(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let ex = self_val.is_exception().unwrap();
-    if let Some(raw) = &ex.raw_message {
-        return Ok(Value::bytes(raw.clone()));
+    if let Some((raw, enc)) = &ex.raw_message {
+        return Ok(Value::string_from_inner(
+            crate::value::RStringInner::from_encoding(raw, *enc),
+        ));
     }
     Ok(Value::string_from_str(ex.message()))
 }
@@ -1105,6 +1120,21 @@ mod tests {
         run_test(
             r#"begin; raise(cause: nil); rescue ArgumentError => e; e.message; end"#,
         );
+    }
+
+    #[test]
+    fn message_keeps_its_encoding() {
+        // CRuby hands `#message` back the String it was given, so a
+        // BINARY or US-ASCII message must not come back as UTF-8.
+        run_tests(&[
+            r#"s = "foo".b; e = Exception.new(s); [s.encoding.to_s, e.message.encoding.to_s, e.to_s.encoding.to_s, e.message == s]"#,
+            r#"RuntimeError.new("bar".encode("US-ASCII")).message.encoding.to_s"#,
+            r#"(begin; raise("x".b); rescue => e; e.message.encoding.to_s; end)"#,
+            r#"e = Exception.new("\u00e9"); [e.message.encoding.to_s, e.message.bytes]"#,
+            // A non-String message still stringifies through `#to_s`.
+            r#"o = Object.new; def o.to_s; "S".b; end; e = Exception.new(o); [e.message, e.message.encoding.to_s]"#,
+            r#"Exception.new.message"#,
+        ]);
     }
 
     #[test]

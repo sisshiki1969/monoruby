@@ -808,6 +808,22 @@ impl Value {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<()> {
+        self.warn_chilled_mutation(vm, globals)?;
+        self.ensure_not_frozen(&globals.store)
+    }
+
+    ///
+    /// The chilled half of [`ensure_string_mutable`](Self::ensure_string_mutable),
+    /// without the frozen check: warn once and clear the flag. Used by
+    /// the operations CRuby warns about but does not refuse on a frozen
+    /// receiver — `singleton_class_of` hands a frozen String a frozen
+    /// singleton class rather than raising.
+    ///
+    pub(crate) fn warn_chilled_mutation(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
         // A chilled string that was later `freeze`d raises FrozenError
         // without the chilled warning (CRuby behaves the same).
         if self.is_chilled() && !self.is_frozen() {
@@ -820,7 +836,7 @@ impl Value {
                 emit_chilled_string_mutation_warning(vm, globals, *self)?;
             }
         }
-        self.ensure_not_frozen(&globals.store)
+        Ok(())
     }
 
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {

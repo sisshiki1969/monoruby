@@ -1034,6 +1034,15 @@ impl IoInner {
     /// `EAGAIN` park) resumes exactly where it stopped and never
     /// duplicates output.
     pub fn write(&mut self, data: &[u8], progress: &mut usize, store: &Store) -> Result<()> {
+        // `io_write` reaches `rb_io_check_writable` only once it has
+        // bytes to write, so `read_only_io.write("")` is a no-op rather
+        // than an IOError. A *closed* stream still raises.
+        if data.is_empty() {
+            if self.is_closed() {
+                return Err(MonorubyErr::ioerr("closed stream"));
+            }
+            return Ok(());
+        }
         self.ensure_writable()?;
         let res = match &mut self.kind {
             IoKind::Stdout => stdout_buf().write(data, progress, &signal_pending),
@@ -1102,6 +1111,37 @@ impl IoInner {
         }
     }
 
+    /// CRuby's `READ_DATA_BUFFERED`: bytes that the buffered read path
+    /// has already taken from the fd, or that `ungetc` / `ungetbyte`
+    /// pushed back, and that a raw `sysread` / `sysseek` would therefore
+    /// skip over. CRuby refuses both while any are pending.
+    pub fn read_data_buffered(&self) -> bool {
+        if self.pushback_len() > 0 {
+            return true;
+        }
+        match &self.kind {
+            IoKind::File(f) => !f.reader.buffer().is_empty(),
+            IoKind::Popen(p) => p
+                .reader
+                .as_ref()
+                .is_some_and(|r| !r.buffer().is_empty()),
+            IoKind::Stdin => !stdin_buf().buffer().is_empty(),
+            _ => false,
+        }
+    }
+
+    /// Bytes accepted by a buffered `IO#write` but not yet handed to the
+    /// kernel. CRuby warns (it does not raise) when `syswrite` would
+    /// write past them.
+    pub fn write_data_buffered(&self) -> bool {
+        match &self.kind {
+            IoKind::File(f) => f.wbuf.borrow().buffered_len() > 0,
+            IoKind::Stdout => stdout_buf().buffered_len() > 0,
+            IoKind::Stderr => stderr_buf().buffered_len() > 0,
+            _ => false,
+        }
+    }
+
     fn pushback_cell(&self) -> Option<&RefCell<Vec<u8>>> {
         match &self.kind {
             IoKind::File(f) => Some(&f.pushback),
@@ -1129,6 +1169,17 @@ impl IoInner {
                 pb.splice(0..0, bytes.iter().copied());
                 Ok(())
             }
+        }
+    }
+
+    /// Drop everything `ungetc` / `ungetbyte` pushed back. `rb_io_seek`
+    /// unreads before it moves: a pushed-back byte belongs to the old
+    /// position. Only the user-facing moves (`IO#seek`, `#pos=`,
+    /// `#rewind`) do this — `IO#pos` reads the position through the same
+    /// `lseek` and must leave the pushback alone.
+    pub fn clear_pushback(&mut self) {
+        if let Some(cell) = self.pushback_cell() {
+            cell.borrow_mut().clear();
         }
     }
 
@@ -1420,14 +1471,52 @@ impl IoInner {
     /// `maxlen` bytes. Drains ungetc pushback first; otherwise sets
     /// `O_NONBLOCK` and issues one raw `read(2)`. Reports `WouldBlock`
     /// on `EAGAIN`/`EWOULDBLOCK` and `Eof` on a 0-byte read.
+    /// Take up to `max` bytes the reader has already pulled from the fd,
+    /// without refilling. CRuby's `read_buffered_data`: a non-blocking
+    /// read serves these before it would ever report `EAGAIN`.
+    fn take_buffered(&mut self, max: usize) -> Vec<u8> {
+        use std::io::BufRead;
+        fn drain<T: std::io::Read>(reader: &mut IoReader<T>, max: usize) -> Vec<u8> {
+            let n = reader.buffer().len().min(max);
+            let out = reader.buffer()[..n].to_vec();
+            reader.consume(n);
+            out
+        }
+        if max == 0 {
+            return vec![];
+        }
+        match &mut self.kind {
+            IoKind::File(f) => drain(&mut Rc::get_mut(f).unwrap().reader, max),
+            IoKind::Popen(p) => match Rc::get_mut(p).unwrap().reader.as_mut() {
+                Some(r) => drain(r, max),
+                None => vec![],
+            },
+            IoKind::Stdin => drain(&mut stdin_buf(), max),
+            _ => vec![],
+        }
+    }
+
     pub fn read_nonblock(&mut self, maxlen: usize, store: &Store) -> Result<NonblockRead> {
         self.flush_wbuf_before_read()?;
-        if self.pushback_len() > 0 {
-            return Ok(NonblockRead::Data(self.take_pushback(Some(maxlen))));
+        // Pushback first, then whatever the buffered path already took
+        // from the fd; only an empty result reaches the raw read below.
+        let mut out = if self.pushback_len() > 0 {
+            self.take_pushback(Some(maxlen))
+        } else {
+            vec![]
+        };
+        if out.len() >= maxlen {
+            return Ok(NonblockRead::Data(out));
         }
         if !self.is_readable() {
             return Err(MonorubyErr::ioerr("not opened for reading"));
         }
+        let buffered = self.take_buffered(maxlen - out.len());
+        out.extend_from_slice(&buffered);
+        if !out.is_empty() {
+            return Ok(NonblockRead::Data(out));
+        }
+        let maxlen = maxlen - out.len();
         // Best-effort: sync a seekable File's BufReader to its logical
         // position (discarding its buffer) so the raw read below is at
         // the right offset; pipes/sockets aren't seekable and skip it.

@@ -1918,4 +1918,36 @@ mod tests {
         "#,
         );
     }
+    #[test]
+    fn building_a_range_compares_its_endpoints() {
+        // `range_init` compares the two endpoints with `<=>` unless one
+        // is nil, whatever their classes, and rejects a nil answer. The
+        // literal used to skip same-class endpoints, so a user-defined
+        // `<=>` never ran and `Object.new..Object.new` was accepted.
+        run_tests(&[
+            r#"class CmpR
+                 def initialize(n); @n = n; end
+                 def <=>(o); $calls << @n; 0; end
+                 def to_int; @n; end
+               end
+               $calls = []
+               a = CmpR.new(1); b = CmpR.new(-2)
+               r = (a..b)
+               [$calls, "hello there"[a..b], $calls]"#,
+            r#"((Object.new..Object.new) rescue [$!.class, $!.message])"#,
+            r#"((1.."x") rescue [$!.class, $!.message])"#,
+            // Nil ends skip the comparison, and the ordinary literals
+            // still build.
+            r#"[(1..), (..2), (1..5).to_a, ("a".."c").to_a, (1...1).to_a]"#,
+            // Neither `#each` nor a blockless `#step` compares again.
+            r#"class SuccR
+                 def initialize(n); @n = n; end
+                 def <=>(o); $c += 1; 1; end
+               end
+               $c = 0
+               x = SuccR.new(1); y = SuccR.new(2)
+               r = (x..y)
+               [$c, ((r.each { |i| i }) rescue $!.class.to_s), $c]"#,
+        ]);
+    }
 }

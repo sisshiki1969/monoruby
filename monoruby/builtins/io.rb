@@ -57,8 +57,8 @@ class IO
   end
 
   def each_byte
-    raise IOError, "closed stream" if closed?
     return to_enum(:each_byte) { nil } unless block_given?
+    raise IOError, "closed stream" if closed?
     while (b = getbyte)
       yield b
     end
@@ -66,8 +66,8 @@ class IO
   end
 
   def each_char
-    raise IOError, "closed stream" if closed?
     return to_enum(:each_char) { nil } unless block_given?
+    raise IOError, "closed stream" if closed?
     while (c = getc)
       yield c
     end
@@ -75,8 +75,8 @@ class IO
   end
 
   def each_codepoint
-    raise IOError, "closed stream" if closed?
     return to_enum(:each_codepoint) { nil } unless block_given?
+    raise IOError, "closed stream" if closed?
     each_char { |c| yield c.ord }
     self
   end
@@ -85,6 +85,20 @@ class IO
   # to_enum round-trip (a `chomp:` keyword would come back as a
   # positional Hash and be misparsed as a separator/limit).
   def __each_line(args, chomp)
+    # CRuby rejects a zero limit before it reads (a zero-limit #gets
+    # would return "" forever), but only once the walk starts: without a
+    # block `each_line(0)` is an Enumerator that raises when iterated.
+    # The limit is the second positional argument, or the first when it
+    # is not a (nil/String) separator.
+    lim = if args.size >= 2
+            args[1]
+          elsif args.size == 1 && !args[0].nil? && !args[0].is_a?(String)
+            args[0]
+          end
+    if lim.is_a?(Integer) && lim == 0
+      raise ArgumentError, "invalid limit: 0 for each_line"
+    end
+    raise IOError, "closed stream" if closed?
     # CRuby's `each_line` reads through the internal `rb_io_getline`,
     # which — unlike `IO#gets` — leaves `$_` alone. We drive `#gets`
     # (it implements the full (sep, limit, chomp:) semantics natively),
@@ -101,19 +115,9 @@ class IO
   end
   private :__each_line
 
+  # CRuby builds the Enumerator before it looks at the stream, so
+  # `closed_io.each_char` is an Enumerator and only iterating it raises.
   def each_line(*args, chomp: false, **)
-    raise IOError, "closed stream" if closed?
-    # CRuby rejects a zero limit up front (a zero-limit #gets would
-    # return "" forever). The limit is the second positional argument,
-    # or the first when it is not a (nil/String) separator.
-    lim = if args.size >= 2
-            args[1]
-          elsif args.size == 1 && !args[0].nil? && !args[0].is_a?(String)
-            args[0]
-          end
-    if lim.is_a?(Integer) && lim == 0
-      raise ArgumentError, "invalid limit: 0 for each_line"
-    end
     unless block_given?
       return to_enum(:__each_line, args, chomp) { nil }
     end
