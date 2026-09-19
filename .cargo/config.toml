@@ -1,3 +1,8 @@
+# Artifact dependencies: monoruby's build.rs receives the extension cdylibs
+# (see the [build-dependencies] in monoruby/Cargo.toml).
+[unstable]
+bindeps = true
+
 [build]
 rustflags = ["-Cforce-frame-pointers=yes"]
 

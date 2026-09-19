@@ -312,7 +312,7 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 
 - **`ext/` の配布形態**: `cargo install` 時に `build.rs` がビルドして
   install root に置く（今の stub と同じ体験）か、別パッケージにするか。
-  前者から始めるのが自然。
+  前者から始めるのが自然。→ 前者で実装した（§6.2 の「配布」）。
 - **`system` を既定にするライブラリ**: zlib / zstd は OS 版で出力が
   一致するので `system` 既定でよい可能性がある。libxml2 は nokogiri の
   パッチがあるので `bundled` 既定。
@@ -327,10 +327,10 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 | 1. feature 分割 | 済（役目を終えて撤去） | 5 つを default-on の feature にし、off で builtin が消え `build.rs` がその stand-in を install しない形にした。3 で全部が拡張に出たので、feature も `build.rs` の gating も CI の `--no-default-features` チェックも取り除いた。 |
 | 2. C ABI | 済 | `monoruby_ext_sys/`（`MrValue` / `MrContext` / `MrApi`、`include/monoruby_ext.h`）、`monoruby/src/ext.rs`（表の実装、trampoline、`ExtNative`、loader）、`monoruby_ext/`（Rust 向け安全ラッパ: `Ctx` / `Value` / `method!` / `native!`）。`tests/native_ext.rs` が C で書いた拡張をヘッダから `cc` でビルドして全項目を通す。 |
 | 3. sqlite3 の分離 | 済 | `ext/sqlite3/`（crate `sqlite3_native`、cdylib）。`gem/sqlite3/sqlite3_native.rb` が `require "sqlite3_native.so"` する。`tests/sqlite3.rs` の 23 本は無変更で通る。コアから `src/builtins/sqlite3.rs`（2.2k 行）と `libsqlite3-src` 依存が消えた。 |
-| 3. zlib / zstd の分離 | 済 | `ext/zlib/`（`zlib_native`、checksum と `__zstream_*`）、`ext/zstd/`（`zstd_native`）。`stdlib/zlib.rb` / `gem/zstd-ruby/zstdruby.rb` が `require "…_native.so"` する。コアから `libz-sys` / `zstd-safe` が消えた。rubygems が `zlib` を要るので、インストール時は `bin/install` が 3 拡張を `<install root>/ext/` に置く。 |
+| 3. zlib / zstd の分離 | 済 | `ext/zlib/`（`zlib_native`、checksum と `__zstream_*`）、`ext/zstd/`（`zstd_native`）。`stdlib/zlib.rb` / `gem/zstd-ruby/zstdruby.rb` が `require "…_native.so"` する。コアから `libz-sys` / `zstd-safe` が消えた。rubygems が `zlib` を要るので、インストール時は拡張を `<install root>/ext/` に置く（§6.2 の「配布」）。 |
 | 3. psych の分離 | 済 | `ext/psych/`（`psych_native`、`__yaml_parse` は `Psych::Handler` を `funcall` で駆動）。`gem/psych/psych.rb` が `require "psych_native.so"` する。コアから `libyaml-safer` が消えた。 |
 | 3. nokogiri の分離 | 済 | `ext/nokogiri/`（`nokogiri_native`、12 ファイル ~7k 行）。`gem/nokogiri/nokogiri.rb` が `require "nokogiri_native.so"` する。コアから `src/builtins/nokogiri/` と `libxml2-src` 依存が消え、`ObjTy::NATIVE` を使う builtin はコア側に無くなった（`ext.rs` の `ExtNative` だけ）。`tests/nokogiri.rs` の 23 本（CRuby の gem と出力比較）はスクリプト無変更。 |
-| 4. `bundled` / `system` feature | 済（3 拡張。nokogiri / psych は対象外、§6.3） | `ext/{sqlite3,zlib,zstd}` に `default = ["bundled"]` と `system`。Cargo の feature は加算しかしないので、選ぶときは `--no-default-features --features system`。`bin/install` は `MONORUBY_SYSTEM_LIBS="zlib zstd"`（または `all`）でその拡張だけをシステム版で組む。 |
+| 4. `bundled` / `system` feature | 済（3 拡張。nokogiri / psych は対象外、§6.3） | `ext/{sqlite3,zlib,zstd}` に `default = ["bundled"]` と `system`。Cargo の feature は加算しかしないので、選ぶときは `--no-default-features --features system`。monoruby 側にも `bundled-{sqlite3,zlib,zstd}`（既定）/ `system-*` があり、artifact 依存に転送する。`bin/install` は `MONORUBY_SYSTEM_LIBS="zlib zstd"`（または `all`）をこの feature に直して `cargo install` する。 |
 | 5. CRuby API 互換層 | 未 | |
 
 ### 6.1 実際の ABI（§4.2 との差）
@@ -353,7 +353,7 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 - **alloc 関数が無い代わりの「遅延 payload」。** nokogiri の `SAX::Parser` / `SAX::PushParser` / `NodeSet` はコア側で alloc 関数を持ち、`new` の時点でペイロードを作っていた。拡張では汎用 alloc がペイロード無しの instance を作るので、最初にペイロードへ触るアクセサ（`handler_ptr` / `install_push_ctxt` / `set_ptr`）が `is_kind_of` で確かめて `native_set` で埋める。`Object#dup` のコピーも同じ経路で埋まる。
 - **variadic の引数は平らに渡る。** コアの rest builtin は `lfp.arg(0)` が rest 配列だったが、trampoline は `MR_ARGC_VARIADIC` の `argv` に要素を展開する。移植で `ary_vec(args[0])` を残すと最初の引数を配列として読んで壊れる（nokogiri で 6 箇所）。
 - **C パーサの出力が入力バッファを指す場合は `str_bytes` の生ポインタを使う。** gumbo の error record は入力の中を指す。`str_vec`（コピー）だと `add_errors` が別のメモリに対して診断を描くので、`Ctx::str_bytes` の `(ptr, len)` を取り出して渡す（collector は動かさないので String が生きている限り有効）。
-- 配布: `cargo build`（workspace root）で `.so` がバイナリの隣にできる。`cargo install` はバイナリしか置かないので、`bin/install` が拡張をビルドして `<install root>/ext/` にコピーする（`bin/spec` もこれを使う）。`bin/test` / `bin/test-aarch64` はベンチマーク用バイナリの隣に拡張をビルドする。
+- 配布: `cargo build`（workspace root）で `.so` がバイナリの隣にできる。`cargo install` 自体はバイナリしか置かないので、拡張は monoruby の **artifact build-dependency**（`artifact = "cdylib", target = "target"`、`-Z bindeps` は `.cargo/config.toml` の `[unstable]` で有効化）にしてあり、release ビルドの `build.rs` が `CARGO_CDYLIB_FILE_*` を `<install root>/ext/` にコピーする。よって `cargo install --path monoruby` だけで拡張も入る。注意点が二つ: build-dependency は `build-override` プロファイルで組まれ、その opt-level は release でも 0 なので、workspace の `[profile.release.build-override]` を `opt-level = 3` にしている。また install root は同じ版の全ビルドで共有なので、dev ビルドはインストール済みの最適化版を上書きしないよう `ext/` に触れない（`bin/install --debug` は自分でコピーする）。`build.rs` が install root を差し替えるときは既存の `ext/` を新しい木へ持ち越す。`bin/test` / `bin/test-aarch64` はベンチマーク用バイナリの隣に拡張をビルドする。
 - **カバレッジの計測外。** `bin/test` は拡張を計装フラグ無しでビルドし、`dlopen` で読み込むので、`cargo llvm-cov report` はそのカウンタを集めない。テストは実際にバイナリ越しに拡張を通しているのに、Codecov 上は `ext/` 7409 行中 94 hit（1.3%）、`monoruby_ext/` 448 行中 0 hit と出る。そこで `codecov.yml` で `ext/**` と `monoruby_ext/**` を `ignore` にした（コア側の `monoruby/src/ext.rs` は 82% で計測されており、除外していない）。計測を取り戻すには、拡張を計装付きでビルドし、各 `.so` を `--object` として report に渡す必要がある。移設でよく覆われたコードがコアから抜けた分、全体は 0.2 ポイントほど一度だけ薄まるので、`project` の `threshold` を 1% にしてある。
 
 ### 6.3 `system` を出した拡張と出さなかった拡張
