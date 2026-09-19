@@ -15389,6 +15389,40 @@ mod tests {
     }
 
     #[test]
+    fn gsub_restores_its_own_backref_after_the_block() {
+        // `str_gsub` sets `$~` to *its* last match once the walk is
+        // over, so a block that matched something of its own does not
+        // leave that behind as the caller's backref. `sub` does not do
+        // this — CRuby leaves the block's match in place there.
+        run_tests(&[
+            r#"old = nil; "hello".gsub(/l/) { old = $~; "ok".match(/./); "x" }; [$~[0], $~.string, old[0]]"#,
+            r#""hello".sub(/e/) { "ok".match(/./); "x" }; [$~[0], $~.string]"#,
+            r#""hello".gsub(/z/) { "x" }; $~"#,
+            r#""hello".gsub(/l/) { "x" }; [$~[0], $~.begin(0)]"#,
+            r#""hello".gsub(/(l)(o)/) { "x" }; [$~[0], $~[1], $~[2]]"#,
+        ]);
+    }
+
+    #[test]
+    fn utf16_and_utf32_validity_follows_the_surrogate_rules() {
+        // A lone surrogate half is broken in UTF-16, and a UTF-32 unit
+        // must be a scalar value; `scrub` replaces each ill-formed
+        // coding unit.
+        run_tests(&[
+            r#"u = ("abc".encode("UTF-16LE").bytes + [0x00, 0xD8]).pack("c*").dup.force_encoding("UTF-16LE"); [u.valid_encoding?, u.scrub("*".encode("UTF-16LE")).bytes]"#,
+            r#"l = [0x00, 0xDC].pack("c*").dup.force_encoding("UTF-16LE"); [l.valid_encoding?, l.scrub("*".encode("UTF-16LE")).bytes]"#,
+            r#"["ab".encode("UTF-16LE").valid_encoding?, "\u{1F600}".encode("UTF-16LE").valid_encoding?, "\u{1F600}".encode("UTF-16BE").valid_encoding?]"#,
+            r#"b = [0x00, 0x00, 0x11, 0x00].pack("c*").dup.force_encoding("UTF-32LE"); [b.valid_encoding?, b.scrub("*".encode("UTF-32LE")).bytes]"#,
+            r#"["\u{1F600}".encode("UTF-32LE").valid_encoding?, "\u{1F600}".encode("UTF-32BE").valid_encoding?]"#,
+            // An odd tail is still broken, and scrubbing it costs one
+            // replacement.
+            r#"o = [0x61, 0x00, 0x62].pack("c*").dup.force_encoding("UTF-16LE"); [o.valid_encoding?, o.scrub("*".encode("UTF-16LE")).bytes]"#,
+            // The round trips still work.
+            r#"["\u{1F600}".encode("UTF-16LE").encode("UTF-8"), "abc".encode("UTF-16LE").length]"#,
+        ]);
+    }
+
+    #[test]
     fn escape_html_rejects_a_non_ascii_compatible_encoding() {
         // `cgi/escape.rb` keeps UTF-16/32 on the table path; the byte scan
         // itself refuses them, since its five bytes would land inside

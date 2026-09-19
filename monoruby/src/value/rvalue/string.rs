@@ -451,19 +451,56 @@ impl Encoding {
             // For encodings we don't decode natively, treat any
             // sequence as Valid unless its byte count contradicts
             // the code-unit width.
+            // The surrogate rules are part of the encoding, not of
+            // Unicode alone: a lone half is Broken in UTF-16, and a
+            // UTF-32 unit must be a scalar value.
             Encoding::Utf16Le | Encoding::Utf16Be => {
-                if bytes.len() % 2 == 0 {
-                    CodeRange::Valid
-                } else {
-                    CodeRange::Broken
+                if bytes.len() % 2 != 0 {
+                    return CodeRange::Broken;
                 }
+                let be = self == Encoding::Utf16Be;
+                let unit = |i: usize| {
+                    let (hi, lo) = if be {
+                        (bytes[i], bytes[i + 1])
+                    } else {
+                        (bytes[i + 1], bytes[i])
+                    };
+                    ((hi as u32) << 8) | lo as u32
+                };
+                let mut i = 0;
+                while i < bytes.len() {
+                    let u = unit(i);
+                    if (0xD800..0xDC00).contains(&u) {
+                        // A high surrogate needs a low one after it.
+                        if i + 4 > bytes.len() || !(0xDC00..0xE000).contains(&unit(i + 2)) {
+                            return CodeRange::Broken;
+                        }
+                        i += 4;
+                    } else if (0xDC00..0xE000).contains(&u) {
+                        // A low surrogate on its own.
+                        return CodeRange::Broken;
+                    } else {
+                        i += 2;
+                    }
+                }
+                CodeRange::Valid
             }
             Encoding::Utf32Le | Encoding::Utf32Be => {
-                if bytes.len() % 4 == 0 {
-                    CodeRange::Valid
-                } else {
-                    CodeRange::Broken
+                if bytes.len() % 4 != 0 {
+                    return CodeRange::Broken;
                 }
+                let be = self == Encoding::Utf32Be;
+                for unit in bytes.chunks_exact(4) {
+                    let u = if be {
+                        u32::from_be_bytes([unit[0], unit[1], unit[2], unit[3]])
+                    } else {
+                        u32::from_le_bytes([unit[0], unit[1], unit[2], unit[3]])
+                    };
+                    if u > 0x10FFFF || (0xD800..0xE000).contains(&u) {
+                        return CodeRange::Broken;
+                    }
+                }
+                CodeRange::Valid
             }
             Encoding::EucJp | Encoding::Sjis(_) => {
                 let char_w = if matches!(self, Encoding::EucJp) {
@@ -540,7 +577,7 @@ impl Encoding {
             // ASCII-incompatible stateful / dummy byte encodings with
             // no native codec: name-preserved, `#inspect` escapes
             // every byte, symbols are quoted (CRuby semantics).
-            "UTF_7" => Ok(Encoding::Other(0)),
+            "UTF_7" | "CP65000" => Ok(Encoding::Other(0)),
             "CP50220" => Ok(Encoding::Other(1)),
             "CP50221" => Ok(Encoding::Other(2)),
             "ASCII_8BIT" | "BINARY" => Ok(Encoding::Ascii8),
@@ -553,9 +590,9 @@ impl Encoding {
             "UTF_16" => Ok(Encoding::Other(3)),
             "UTF_32" => Ok(Encoding::Other(4)),
             "UTF_16LE" => Ok(Encoding::Utf16Le),
-            "UTF_16BE" => Ok(Encoding::Utf16Be),
-            "UTF_32LE" => Ok(Encoding::Utf32Le),
-            "UTF_32BE" => Ok(Encoding::Utf32Be),
+            "UTF_16BE" | "UCS_2BE" => Ok(Encoding::Utf16Be),
+            "UTF_32LE" | "UCS_4LE" => Ok(Encoding::Utf32Le),
+            "UTF_32BE" | "UCS_4BE" => Ok(Encoding::Utf32Be),
 
             "ISO_8859_1" | "ISO8859_1" | "LATIN1" => Ok(Encoding::Iso8859(1)),
             "ISO_8859_2" | "ISO8859_2" | "LATIN2" => Ok(Encoding::Iso8859(2)),
@@ -583,8 +620,11 @@ impl Encoding {
             | "STATELESS_ISO_2022_JP" => Ok(Encoding::EucJp),
             "ISO_2022_JP" | "ISO2022_JP" | "ISO_2022_JP_KDDI" | "ISO_2022_JP_2"
             | "ISO_2022_JP_2004" => Ok(Encoding::Iso2022Jp),
-            "SHIFT_JIS" | "SJIS" | "MACJAPANESE" | "MACJAPAN" => Ok(Encoding::Sjis(0)),
-            "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" => Ok(Encoding::Sjis(1)),
+            "SHIFT_JIS" | "MACJAPANESE" | "MACJAPAN" => Ok(Encoding::Sjis(0)),
+            // CRuby's "SJIS" is an alias of Windows-31J, not of Shift_JIS.
+            "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" | "PCK" | "SJIS" => {
+                Ok(Encoding::Sjis(1))
+            }
 
             // ASCII-compatible national byte encodings without a native
             // codec: bytes are stored raw (like ASCII-8BIT) but the
@@ -606,7 +646,7 @@ impl Encoding {
             }
             "EUC_TW" | "EUCTW" => Ok(Encoding::NamedByte(named_byte_index("EUC_TW").unwrap())),
             "TIS_620" | "TIS620" => Ok(Encoding::NamedByte(named_byte_index("TIS_620").unwrap())),
-            "KOI8_R" => Ok(Encoding::NamedByte(named_byte_index("KOI8_R").unwrap())),
+            "KOI8_R" | "CP878" => Ok(Encoding::NamedByte(named_byte_index("KOI8_R").unwrap())),
             "KOI8_U" => Ok(Encoding::NamedByte(named_byte_index("KOI8_U").unwrap())),
             "WINDOWS_1250" | "CP1250" => Ok(Encoding::NamedByte(
                 named_byte_index("Windows_1250").unwrap(),
@@ -1814,6 +1854,65 @@ impl RStringInner {
                         out.extend_from_slice(repl.as_bytes());
                         i += 1;
                     }
+                }
+            }
+            // UTF-16/32: replace each ill-formed coding unit (a lone
+            // surrogate half, a non-scalar UTF-32 unit) and the odd
+            // tail, unit by unit, as `rb_enc_str_scrub` does.
+            Encoding::Utf16Le | Encoding::Utf16Be => {
+                let be = enc == Encoding::Utf16Be;
+                let unit = |i: usize| {
+                    let (hi, lo) = if be {
+                        (bytes[i], bytes[i + 1])
+                    } else {
+                        (bytes[i + 1], bytes[i])
+                    };
+                    ((hi as u32) << 8) | lo as u32
+                };
+                let mut i = 0;
+                while i + 2 <= bytes.len() {
+                    let u = unit(i);
+                    let width = if (0xD800..0xDC00).contains(&u) {
+                        if i + 4 <= bytes.len() && (0xDC00..0xE000).contains(&unit(i + 2)) {
+                            4
+                        } else {
+                            0
+                        }
+                    } else if (0xDC00..0xE000).contains(&u) {
+                        0
+                    } else {
+                        2
+                    };
+                    if width == 0 {
+                        out.extend_from_slice(repl.as_bytes());
+                        i += 2;
+                    } else {
+                        out.extend_from_slice(&bytes[i..i + width]);
+                        i += width;
+                    }
+                }
+                if i < bytes.len() {
+                    out.extend_from_slice(repl.as_bytes());
+                }
+            }
+            Encoding::Utf32Le | Encoding::Utf32Be => {
+                let be = enc == Encoding::Utf32Be;
+                let mut i = 0;
+                while i + 4 <= bytes.len() {
+                    let u = if be {
+                        u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]])
+                    } else {
+                        u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]])
+                    };
+                    if u > 0x10FFFF || (0xD800..0xE000).contains(&u) {
+                        out.extend_from_slice(repl.as_bytes());
+                    } else {
+                        out.extend_from_slice(&bytes[i..i + 4]);
+                    }
+                    i += 4;
+                }
+                if i < bytes.len() {
+                    out.extend_from_slice(repl.as_bytes());
                 }
             }
             _ => out.extend_from_slice(bytes),
