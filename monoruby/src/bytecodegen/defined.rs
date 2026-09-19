@@ -323,12 +323,12 @@ impl<'a> BytecodeGen<'a> {
                     self.check_defined(n, nil_label, ret, false)?;
                 }
             }
-            NodeKind::Const {
+            NodeKind::Const(box ConstInfo {
                 toplevel,
                 parent,
                 prefix,
                 name,
-            } => {
+            }) => {
                 let name = IdentId::get_id_from_string(name);
                 let prefix = prefix
                     .into_iter()
@@ -443,7 +443,7 @@ fn defined_str(node: &Node) -> &'static str {
         NodeKind::GlobalVar(..) => "global-variable",
         // CRuby uses a space (not a hyphen) for class variables.
         NodeKind::ClassVar(..) => "class variable",
-        NodeKind::Const { .. } => "constant",
+        NodeKind::Const(box ConstInfo { .. }) => "constant",
         // `target ||= value` / `&&=` desugar to
         // `BinOp(LOr/LAnd, target, MulAssign([target], [value]))`;
         // `defined?` reports these as "assignment". A plain `a || b`

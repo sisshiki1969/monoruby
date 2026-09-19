@@ -31,6 +31,7 @@ use ruby_prism::{
 };
 
 use crate::ast::{
+    ConstInfo,
     ArgList, BinOp, BlockInfo, CmpKind, DestructEntry, Loc, LvarCollector, NReal, Node, NodeKind,
     ParamKind, ParseResult, SourceInfoRef, UnOp,
 };
@@ -973,10 +974,10 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::RationalNode { .. } => {
                 let n = node.as_rational_node().unwrap();
                 Node {
-                    kind: NodeKind::Rational(
+                    kind: NodeKind::Rational(Box::new((
                         prism_integer_to_bigint(&n.numerator()),
                         prism_integer_to_bigint(&n.denominator()),
-                    ),
+                    ))),
                     loc,
                 }
             }
@@ -1250,12 +1251,12 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ConstantOperatorWriteNode { .. } => {
                 let n = node.as_constant_operator_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::Const {
+                    kind: NodeKind::Const(Box::new(ConstInfo {
                         toplevel: false,
                         parent: None,
                         prefix: vec![],
                         name: constant_name(&n.name())?,
-                    },
+                    })),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
@@ -1263,12 +1264,12 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ConstantOrWriteNode { .. } => {
                 let n = node.as_constant_or_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::Const {
+                    kind: NodeKind::Const(Box::new(ConstInfo {
                         toplevel: false,
                         parent: None,
                         prefix: vec![],
                         name: constant_name(&n.name())?,
-                    },
+                    })),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
@@ -1277,12 +1278,12 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ConstantAndWriteNode { .. } => {
                 let n = node.as_constant_and_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::Const {
+                    kind: NodeKind::Const(Box::new(ConstInfo {
                         toplevel: false,
                         parent: None,
                         prefix: vec![],
                         name: constant_name(&n.name())?,
-                    },
+                    })),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
@@ -2732,12 +2733,12 @@ impl<'pr> Lowerer<'pr> {
                         let parent_loc = location_to_loc(&parent.location());
                         match self.collect_const_chain(&parent)? {
                             Some(chain) => Some(Box::new(Node {
-                                kind: NodeKind::Const {
+                                kind: NodeKind::Const(Box::new(ConstInfo {
                                     toplevel: chain.toplevel,
                                     parent: chain.parent,
                                     prefix: chain.prefix,
                                     name: chain.name,
-                                },
+                                })),
                                 loc: parent_loc,
                             })),
                             None => Some(Box::new(self.lower_node(&parent)?)),
@@ -2751,12 +2752,12 @@ impl<'pr> Lowerer<'pr> {
                     None => {
                         let path_loc = location_to_loc(&path.location());
                         Some(Box::new(Node {
-                            kind: NodeKind::Const {
+                            kind: NodeKind::Const(Box::new(ConstInfo {
                                 toplevel: true,
                                 parent: None,
                                 prefix: vec![],
                                 name: "Object".to_string(),
-                            },
+                            })),
                             loc: path_loc,
                         }))
                     }
@@ -2769,12 +2770,12 @@ impl<'pr> Lowerer<'pr> {
 
     fn lower_constant_read(&self, node: &ConstantReadNode<'pr>) -> Result<Node, MonorubyErr> {
         Ok(Node {
-            kind: NodeKind::Const {
+            kind: NodeKind::Const(Box::new(ConstInfo {
                 toplevel: false,
                 parent: None,
                 prefix: vec![],
                 name: constant_name(&node.name())?,
-            },
+            })),
             loc: location_to_loc(&node.location()),
         })
     }
@@ -2803,12 +2804,12 @@ impl<'pr> Lowerer<'pr> {
             .collect_const_chain(node)?
             .ok_or_else(|| self.unsupported_node("non-constant constant path prefix", loc))?;
         Ok(Node {
-            kind: NodeKind::Const {
+            kind: NodeKind::Const(Box::new(ConstInfo {
                 toplevel: chain.toplevel,
                 parent: chain.parent,
                 prefix: chain.prefix,
                 name: chain.name,
-            },
+            })),
             loc,
         })
     }
@@ -3868,12 +3869,12 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ConstantTargetNode { .. } => {
                 let n = node.as_constant_target_node().unwrap();
                 Node {
-                    kind: NodeKind::Const {
+                    kind: NodeKind::Const(Box::new(ConstInfo {
                         toplevel: false,
                         parent: None,
                         prefix: vec![],
                         name: constant_name(&n.name())?,
-                    },
+                    })),
                     loc,
                 }
             }
@@ -3926,12 +3927,12 @@ impl<'pr> Lowerer<'pr> {
                     },
                 };
                 Node {
-                    kind: NodeKind::Const {
+                    kind: NodeKind::Const(Box::new(ConstInfo {
                         toplevel: chain.toplevel,
                         parent: chain.parent,
                         prefix: chain.prefix,
                         name: chain.name,
-                    },
+                    })),
                     loc,
                 }
             }
@@ -4200,10 +4201,10 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::RationalNode { .. } => {
                 let inner = numeric.as_rational_node().unwrap();
                 Ok(Node {
-                    kind: NodeKind::RImaginary(
+                    kind: NodeKind::RImaginary(Box::new((
                         prism_integer_to_bigint(&inner.numerator()),
                         prism_integer_to_bigint(&inner.denominator()),
-                    ),
+                    ))),
                     loc,
                 })
             }
@@ -4305,12 +4306,12 @@ impl<'pr> Lowerer<'pr> {
         let loc = location_to_loc(&node.location());
         let name = constant_name(&node.name())?;
         let target = Node {
-            kind: NodeKind::Const {
+            kind: NodeKind::Const(Box::new(ConstInfo {
                 toplevel: false,
                 parent: None,
                 prefix: vec![],
                 name,
-            },
+            })),
             loc: location_to_loc(&node.name_loc()),
         };
         let value = self.lower_node(&node.value())?;
@@ -5202,8 +5203,8 @@ fn is_constant_literal(kind: &NodeKind) -> bool {
             | NodeKind::Bignum(_)
             | NodeKind::Float(_)
             | NodeKind::Imaginary(_)
-            | NodeKind::Rational(_, _)
-            | NodeKind::RImaginary(_, _)
+            | NodeKind::Rational(_)
+            | NodeKind::RImaginary(_)
             | NodeKind::String(_)
             | NodeKind::Bytes(_)
             | NodeKind::EncodedString(..)

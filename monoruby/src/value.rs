@@ -14,7 +14,7 @@ use crate::{
 };
 use num::{BigInt, FromPrimitive};
 
-use crate::ast::{Node, NodeKind};
+use crate::ast::{ConstInfo, Node, NodeKind};
 
 pub mod coerce;
 pub mod numeric;
@@ -3224,8 +3224,8 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
-            NodeKind::Rational(n, d) => Value::rational(n.clone(), d.clone()),
-            NodeKind::RImaginary(n, d) => {
+            NodeKind::Rational(box (n, d)) => Value::rational(n.clone(), d.clone()),
+            NodeKind::RImaginary(box (n, d)) => {
                 let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
                 Value::complex(0, f)
             }
@@ -3244,12 +3244,12 @@ impl Value {
                     .map(|node| Self::from_ast_inner(node, vm, globals, src_enc));
                 Value::array_from_iter(iter)
             }
-            NodeKind::Const {
+            NodeKind::Const(box ConstInfo {
                 toplevel,
                 parent,
                 prefix,
                 name,
-            } => {
+            }) => {
                 assert_eq!(false, *toplevel);
                 assert_eq!(None, *parent);
                 if prefix.len() == 0 {
@@ -3391,8 +3391,8 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
-            NodeKind::Rational(n, d) => Value::rational(n.clone(), d.clone()),
-            NodeKind::RImaginary(n, d) => {
+            NodeKind::Rational(box (n, d)) => Value::rational(n.clone(), d.clone()),
+            NodeKind::RImaginary(box (n, d)) => {
                 let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
                 Value::complex(0, f)
             }
