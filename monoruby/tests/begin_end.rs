@@ -76,3 +76,20 @@ fn end_handler_exception_sets_failure_status() {
 fn end_handler_exception_is_visible_as_errinfo() {
     run_both("END { puts '$!.message = ' + $!.message }; END { raise 'foo' }");
 }
+
+/// A `def` inside a `BEGIN` / `END` body. Both are lowered as closure
+/// scopes prism does not know about (`Lowerer::scope_wraps`), and a
+/// method body is lowered from bytecodegen rather than from the parse
+/// (see `tests/deferred_def.rs`) — so this is the one shape where the
+/// deferred lowering has to resume inside a synthesized scope.
+#[test]
+fn def_inside_end_body() {
+    run_both(
+        "x = 1; END { def in_end(n); m = n; [1, 2].each { m += 1 }; m; end; p [in_end(10), x] }",
+    );
+}
+
+#[test]
+fn def_inside_begin_body() {
+    run_both("BEGIN { def in_begin = 'begin' }; p in_begin");
+}

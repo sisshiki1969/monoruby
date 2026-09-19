@@ -996,14 +996,16 @@ impl<'a> BytecodeGen<'a> {
             } => {
                 return self.gen_begin(body, rescue, else_, ensure, use_mode);
             }
-            NodeKind::MethodDef(name, box block) => {
+            NodeKind::MethodDef(name, body) => {
                 let name = IdentId::get_id_from_string(name);
+                let block = self.lower_def_body(body)?;
                 self.gen_method_def(name, block, use_mode, loc)?;
                 return Ok(());
             }
-            NodeKind::SingletonMethodDef(box obj, name, box block) => {
+            NodeKind::SingletonMethodDef(box obj, name, body) => {
                 self.gen_expr(obj, UseMode2::Push)?;
                 let name = IdentId::get_id_from_string(name);
+                let block = self.lower_def_body(body)?;
                 self.gen_singleton_method_def(name, block, use_mode, loc)?;
                 return Ok(());
             }
@@ -2321,6 +2323,29 @@ impl<'a> BytecodeGen<'a> {
 // Definitions
 //
 impl<'a> BytecodeGen<'a> {
+    ///
+    /// The parameters and body of a `def`, lowering them first if the
+    /// parse deferred them (the normal case — see `crate::ast::deferred`).
+    ///
+    /// Together with the depth-first compile in `add_method`, this is what
+    /// keeps a file's method bodies from existing as monoruby AST all at
+    /// once: the body is built here, turned into bytecode, and dropped
+    /// before the next `def` is reached.
+    ///
+    fn lower_def_body(&mut self, body: DefBody) -> Result<BlockInfo> {
+        match body {
+            DefBody::Lowered(box info) => Ok(info),
+            DefBody::Deferred(box deferred) => {
+                let (info, warnings) = crate::parser::lower_deferred_def(&deferred)?;
+                // Same destination as the parse's own warnings; they are
+                // raised later than they used to be, but still before
+                // anything the compiled unit runs.
+                self.store.compile_warnings.extend(warnings);
+                Ok(info)
+            }
+        }
+    }
+
     fn gen_method_def(
         &mut self,
         name: IdentId,

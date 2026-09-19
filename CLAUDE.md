@@ -24,7 +24,8 @@ monoruby/                   # Workspace root
 │   │   ├── parser/         # prism → monoruby-AST bridge
 │   │   │   ├── mod.rs
 │   │   │   └── prism_backend.rs # Drives the `ruby-prism` crate
-│   │   ├── ast/            # monoruby AST (node, lvar_collector, source_info, error)
+│   │   ├── ast/            # monoruby AST (node, lvar_collector, source_info, error,
+│   │   │                   #   deferred: the prism tree kept alive + unlowered def bodies)
 │   │   ├── alloc.rs        # Custom GC allocator (mark-and-sweep)
 │   │   ├── poll_flag.rs    # Safepoint poll word (GC/preempt/signal byte lanes)
 │   │   ├── id_table.rs     # Interned identifier table (IdentId)
@@ -190,10 +191,12 @@ Ruby source
 prism (ruby-prism)    (prism syntax tree)
     │
     ▼
-parser/ + ast/        (monoruby AST)
-    │
-    ▼
-bytecodegen           (register-based bytecode)
+parser/ + ast/        (monoruby AST; a `def` body is *not* lowered here —
+    │                   it is handed on as an `ast::DeferredDef`, a handle on
+    │                   prism's own node, so the file's method bodies never
+    ▼                   exist as monoruby AST all at once)
+bytecodegen           (register-based bytecode; lowers each deferred body at
+    │                   its definition, compiles it, and drops it)
     │
     ▼
 Executor (VM)         (interpreted execution)

@@ -118,8 +118,8 @@ pub enum NodeKind {
     Retry,
     Return(Box<Node>),
     Yield(Box<ArgList>),
-    MethodDef(String, Box<BlockInfo>), // id, params, body
-    SingletonMethodDef(Box<Node>, String, Box<BlockInfo>), // singleton_class, id, params, body
+    MethodDef(String, DefBody),                        // id, params + body
+    SingletonMethodDef(Box<Node>, String, DefBody),    // singleton_class, id, params + body
     ClassDef {
         base: Option<Box<Node>>,
         name: String,
@@ -188,6 +188,21 @@ impl NodeKind {
             _ => None,
         }
     }
+}
+
+///
+/// The parameters and body of a `def`.
+///
+/// Deferred by default: a method body is lowered where its bytecode is
+/// generated rather than where the file is parsed, so only one body's AST
+/// exists at a time (see [`crate::ast::DeferredDef`]). `Lowered` is what
+/// `parse_program_eager` produces, for the `-c` syntax check — which
+/// never compiles, and so would otherwise miss a body's `unsupported_node`.
+///
+#[derive(Debug, Clone, PartialEq)]
+pub enum DefBody {
+    Lowered(Box<BlockInfo>),
+    Deferred(Box<DeferredDef>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -737,7 +752,10 @@ impl Node {
         loc: Loc,
     ) -> Self {
         let info = BlockInfo::new(params, body, lvar, loc);
-        Node::new(NodeKind::MethodDef(name, Box::new(info)), loc)
+        Node::new(
+            NodeKind::MethodDef(name, DefBody::Lowered(Box::new(info))),
+            loc,
+        )
     }
 
     pub(crate) fn new_singleton_method_decl(
@@ -750,7 +768,11 @@ impl Node {
     ) -> Self {
         let info = BlockInfo::new(params, body, lvar, loc);
         Node::new(
-            NodeKind::SingletonMethodDef(Box::new(singleton), name, Box::new(info)),
+            NodeKind::SingletonMethodDef(
+                Box::new(singleton),
+                name,
+                DefBody::Lowered(Box::new(info)),
+            ),
             loc,
         )
     }
