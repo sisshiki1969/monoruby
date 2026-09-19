@@ -232,6 +232,12 @@ struct MarshalReader<'a> {
     freeze: bool,
     /// `Marshal.load(src, proc)`: called with each reconstructed value.
     proc: Option<Proc>,
+    /// Object-table slots holding a value the *user protocol* built
+    /// (`'u'` / `'U'`). A `'@'` link normally hands its target to the
+    /// load proc again, but CRuby does not do that for these two.
+    user_protocol_slots: std::collections::HashSet<usize>,
+    /// The slot a `'@'` link just resolved, for that decision.
+    last_link_slot: usize,
     /// Set while reading a `'C'` (user-class) payload: the value inside
     /// is about to have its class swapped (and may then take ivars), so
     /// it must be its own object — never one shared out of the frozen
@@ -252,6 +258,8 @@ impl<'a> MarshalReader<'a> {
             objects: Array::new_empty(),
             freeze: false,
             no_intern: false,
+            user_protocol_slots: std::collections::HashSet::new(),
+            last_link_slot: usize::MAX,
             proc: None,
             building: std::collections::HashSet::new(),
         }
@@ -372,9 +380,14 @@ impl<'a> MarshalReader<'a> {
 
     /// Read and return the next marshalled value.
     fn read_value(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        // A symbol back-reference (';') is not re-visited by the load
-        // proc — CRuby only fires the proc when a symbol is first defined.
-        let is_symlink = self.data.get(self.pos) == Some(&b';');
+        // A symbol back-reference is never re-visited by the load proc —
+        // CRuby fires it only where a symbol is first defined. An object
+        // back-reference *is* re-visited, except when it points at
+        // something the user protocol built (`'u'` / `'U'`), which CRuby
+        // hands to the proc once however many times it occurs.
+        let tag = self.data.get(self.pos).copied();
+        let is_symlink = tag == Some(b';');
+        let is_objlink = tag == Some(b'@');
         let mut value = self.read_value_inner(vm, globals)?;
         // `freeze: true` deep-freezes every reconstructed object except
         // classes and modules (which CRuby leaves mutable). Immediates
@@ -383,7 +396,7 @@ impl<'a> MarshalReader<'a> {
         if self.freeze && !value.is_packed_value() && value.is_class_or_module().is_none() {
             value.set_frozen();
         }
-        if is_symlink {
+        if is_symlink || (is_objlink && self.user_protocol_slots.contains(&self.last_link_slot)) {
             return Ok(value);
         }
         // Fire the load proc (post-order: this runs after the value — and
@@ -443,6 +456,7 @@ impl<'a> MarshalReader<'a> {
             b'@' => {
                 // Object reference
                 let idx = self.read_fixnum()? as usize;
+                self.last_link_slot = idx;
                 self.objects.get(idx).copied().ok_or_else(|| {
                     MonorubyErr::argumenterr(format!(
                         "bad object reference in marshal data: {}",
@@ -947,6 +961,7 @@ impl<'a> MarshalReader<'a> {
         let result =
             vm.invoke_method_inner(globals, load_id, module.as_val(), &[payload], None, None)?;
         // Register the reconstructed object so later `'@'` links resolve.
+        self.user_protocol_slots.insert(self.objects.len());
         self.objects.push(result);
         Ok(result)
     }
@@ -1019,6 +1034,7 @@ impl<'a> MarshalReader<'a> {
         // `Complex(r, i)`) from the two-element payload array.
         if class_name == "Rational" || class_name == "Complex" {
             let idx = self.objects.len();
+            self.user_protocol_slots.insert(idx);
             self.objects.push(Value::nil()); // reserve the link slot
             let value = self.read_value(vm, globals)?;
             let parts = value.try_array_ty().ok_or_else(|| {
@@ -1038,6 +1054,7 @@ impl<'a> MarshalReader<'a> {
         // Register the object *before* reading its payload so a
         // self-reference inside the payload links back to it (this
         // mirrors the dump side, which reserves the slot first).
+        self.user_protocol_slots.insert(self.objects.len());
         self.objects.push(instance);
         let value = self.read_value(vm, globals)?;
         // Drive `instance.marshal_load(value)`. The return value is
@@ -3990,6 +4007,50 @@ mod tests {
             # No ivars and a BINARY payload: no `I` wrapper at all.
             r << Marshal.dump(MarshalDumpPlain.new)
             r << Marshal.load(Marshal.dump(a)).class.to_s
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn load_proc_and_object_links() {
+        // `Marshal.load(src, proc)` fires the proc where an object is
+        // *built*, and again for each back-reference to it — except a
+        // reference to something the user protocol built (`'u'` /
+        // `'U'`), which CRuby hands over once however often it occurs.
+        // monoruby fired it for every occurrence of everything, so a
+        // `#_dump` object appearing four times arrived four times.
+        run_test_once(
+            r##"
+            class MProcUD
+              def _dump(depth); "p".b; end
+              def self._load(s); new; end
+            end
+            class MProcUM
+              attr_reader :d
+              def initialize(d = "x"); @d = d; end
+              def marshal_dump; @d; end
+              def marshal_load(o); @d = o; end
+            end
+            def tr(dump)
+              n = []
+              Marshal.load(dump, Proc.new { |o| n << o.class.to_s; o })
+              n
+            end
+            r = []
+            b = "x".b
+            r << tr(Marshal.dump([b, b, b]))
+            o = Object.new
+            r << tr(Marshal.dump([o, o, o]))
+            d = MProcUD.new
+            r << tr(Marshal.dump([d, d, d]))
+            u = MProcUM.new
+            r << tr(Marshal.dump([u, u]))
+            r << tr(Marshal.dump("hi"))
+            r << tr(Marshal.dump([1, 2]))
+            s = +"hi"
+            r << tr(Marshal.dump([s, s]))
+            r << tr(Marshal.dump({ k: 1 }))
             r
             "##,
         );
