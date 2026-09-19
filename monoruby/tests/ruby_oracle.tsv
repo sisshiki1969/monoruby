@@ -2253,6 +2253,7 @@
 9839f0f17947005555bee6338f175943	318.75	obj = Object.new\n        acc = 0.0\n        i = 0\n        while i < 30\n 
 98411750aed4bab667c24946e33e5cb0	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]	$a = []\n            C = 100\n            \n            for i in 0..19
 9861856cd9d5f34b618738bf16e9b44c	[:seen, true, "12", false]	p1 = :to_s.to_proc\n        p1.instance_variable_set(:@tag, :seen)\n     
+9880347877a36e588f60f43e26d2f88f	[[nil, nil, false], nil, 1, [-1, 1, 0], nil, -1]	r = []\n            t = Time.at(1)\n            r << [(t <=> 2), (2 <
 988c0b8f8c44428ac627b741f329756c	100	# Ret\n            begin\n              100\n            end\n        
 98996233bfa191027494af2f2287502c	[:inner, :early, :late]	def m1\n          obj = Object.new\n          class << obj\n            re
 98bdea24e737b24b5b5e21db74beb80e	[true, 0]	pid = fork { exit 0 }\n            ret = Process.wait(pid)\n         

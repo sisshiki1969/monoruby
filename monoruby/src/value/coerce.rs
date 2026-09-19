@@ -615,6 +615,18 @@ pub(crate) fn check_funcall(
     recv: Value,
     name: IdentId,
 ) -> Result<Option<Value>> {
+    check_funcall_with(vm, globals, recv, name, &[])
+}
+
+/// [`check_funcall`] with arguments — `rb_check_funcall(recv, name,
+/// argc, argv)`. The probe is the same; only the call it guards differs.
+pub(crate) fn check_funcall_with(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    name: IdentId,
+    args: &[Value],
+) -> Result<Option<Value>> {
     let respond_to = IdentId::get_id("respond_to?");
     let default_fid = |globals: &Globals, class: ClassId, name: IdentId| {
         globals
@@ -642,7 +654,7 @@ pub(crate) fn check_funcall(
     }
     // 2. A defined method is simply called.
     if let Some(fid) = globals.check_method(recv, name) {
-        return Ok(Some(vm.invoke_func_inner(globals, fid, recv, &[], None, None)?));
+        return Ok(Some(vm.invoke_func_inner(globals, fid, recv, args, None, None)?));
     }
     // 3. Default respond_to?: a user-defined respond_to_missing? gates
     //    the missing-dispatch.
@@ -663,12 +675,15 @@ pub(crate) fn check_funcall(
             // Claimed to respond but only the default method_missing
             // exists: dispatch for real so the NoMethodError propagates.
             return Ok(Some(
-                vm.invoke_method_inner(globals, name, recv, &[], None, None)?,
+                vm.invoke_method_inner(globals, name, recv, args, None, None)?,
             ));
         }
         return Ok(None);
     };
-    match vm.invoke_func_inner(globals, fid, recv, &[Value::symbol(name)], None, None) {
+    let mut mm_args = Vec::with_capacity(args.len() + 1);
+    mm_args.push(Value::symbol(name));
+    mm_args.extend_from_slice(args);
+    match vm.invoke_func_inner(globals, fid, recv, &mm_args, None, None) {
         Ok(result) => Ok(Some(result)),
         Err(err)
             if respond < 0

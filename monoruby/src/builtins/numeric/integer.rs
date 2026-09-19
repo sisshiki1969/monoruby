@@ -633,9 +633,13 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             None => return Ok(Value::nil()),
         },
         _ => {
-            // Try coerce protocol: call rhs.coerce(lhs), propagate exceptions
+            // `rb_num_coerce_cmp`: the coerce protocol, probed as
+            // `rb_check_funcall` does — through `respond_to?`, so an
+            // object that answers it for real is asked, and one that
+            // refuses is not called. A method-table lookup skipped the
+            // question entirely.
             let coerce_id = IdentId::get_id("coerce");
-            match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
+            match crate::value::coerce::check_funcall_with(vm, globals, rhs, coerce_id, &[lhs]) {
                 Ok(Some(result)) => {
                     if let Some(ary) = result.try_array_ty() {
                         if ary.len() == 2 {
@@ -3296,6 +3300,39 @@ mod tests {
               end
               n
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn cmp_coerce_is_probed_through_respond_to() {
+        // `Integer#<=>` reached for `#coerce` with a method-table lookup,
+        // so an object that answers `respond_to?` for real was never
+        // asked — and `Time.at(1) <=> 2`, which routes back here through
+        // `rb_invcmp`, never consulted it either. It is
+        // `rb_check_funcall` now: a redefined `respond_to?` vetoes the
+        // call, and `method_missing` behind a `respond_to_missing?` is
+        // reached.
+        run_test_once(
+            r#"
+            r = []
+            t = Time.at(1)
+            r << [(t <=> 2), (2 <=> t), t.respond_to?(:coerce)]
+            calls = 0
+            o = Object.new
+            o.define_singleton_method(:respond_to?) { |*a| calls += 1; false }
+            r << (1 <=> o)
+            r << calls
+            class CoerceOK; def coerce(n) = [n, 42]; end
+            r << [(1 <=> CoerceOK.new), (100 <=> CoerceOK.new), (42 <=> CoerceOK.new)]
+            class NoCoerce; end
+            r << (1 <=> NoCoerce.new)
+            class MM
+              def method_missing(n, *a) = n == :coerce ? [1, 2] : super
+              def respond_to_missing?(n, p = false) = n == :coerce || super
+            end
+            r << (1 <=> MM.new)
+            r
             "#,
         );
     }
