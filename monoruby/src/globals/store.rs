@@ -2700,3 +2700,99 @@ impl GlobalMethodCache {
         self.method_exprolation_stats.iter().collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Globals;
+
+    ///
+    /// The report is only printed behind `MONORUBY_STORE_STATS`, so
+    /// nothing else would notice it panicking or going stale — and it is
+    /// the evidence a layout change is measured against.
+    ///
+    #[test]
+    fn memory_report_tallies_the_loaded_program() {
+        let mut globals = Globals::new_test();
+        globals
+            .run(
+                "def a(x, k: 1) = x + k\na(1, k: 2)\n",
+                std::path::Path::new("test.rb"),
+            )
+            .expect("run");
+        let report = globals.store.memory_report();
+
+        // Every table has a row, and the header carries the two counts
+        // and the struct size a shrink is judged by.
+        for row in [
+            "iseqs:",
+            "callsites:",
+            "ISeqInfo headers",
+            "bytecode",
+            "sourcemap",
+            "bb_info",
+            "callsite_info",
+            "TOTAL",
+        ] {
+            assert!(report.contains(row), "no {row:?} row in:\n{report}");
+        }
+
+        // The script defines and calls a method, so the store is not empty.
+        assert!(!globals.store.iseqs.is_empty());
+        assert!(!globals.store.callsite_info.is_empty());
+        assert!(
+            globals.store.iseqs.iter().any(|i| i.heap_size().insts > 0),
+            "no iseq carries bytecode"
+        );
+    }
+
+    ///
+    /// `extra` is allocated for exactly the call sites that pass a splat,
+    /// a keyword or a hash splat — the invariant `is_simple` and the
+    /// accessors rest on.
+    ///
+    #[test]
+    fn only_the_unusual_call_sites_allocate_extra() {
+        let mut globals = Globals::new_test();
+        globals
+            .run(
+                "def m(*a, **k) = [a, k]\nm(1)\nm(*[1, 2])\nm(k: 1)\nm(**{k: 1})\n",
+                std::path::Path::new("test.rb"),
+            )
+            .expect("run");
+        let with_extra = globals
+            .store
+            .callsite_info
+            .iter()
+            .filter(|c| c.extra.is_some())
+            .count();
+        let unusual = globals
+            .store
+            .callsite_info
+            .iter()
+            .filter(|c| {
+                !c.splat_pos().is_empty()
+                    || !c.kw_args().is_empty()
+                    || !c.hash_splat_pos().is_empty()
+            })
+            .count();
+        assert_eq!(with_extra, unusual, "extra allocated for a plain call site");
+        assert!(unusual >= 3, "expected the splat / kw / hash-splat sites");
+
+        // A site with no extra reports empty, not a panic, through every
+        // accessor — the empty map included.
+        let plain = globals
+            .store
+            .callsite_info
+            .iter()
+            .find(|c| c.extra.is_none())
+            .expect("a plain call site");
+        assert!(plain.splat_pos().is_empty());
+        assert!(plain.kw_args().is_empty());
+        assert!(plain.hash_splat_pos().is_empty());
+        assert_eq!(plain.kw_len(), 0);
+        assert!(!plain.has_splat());
+        assert!(!plain.has_hash_splat());
+        assert!(!plain.kw_may_exists());
+    }
+}
