@@ -563,6 +563,7 @@
 24ede66710b2716183990244c9ec7ce2	-3.0	class Float; alias __orig :-@; def -@; __orig; end; end; -(3.0)
 250640ebb28cec0f360f71495d32f526	[227, 65, 66, 227, 129, 132]	s = "\\xe3\\x81\\x82\\xe3\\x81\\x84".force_encoding("ASCII-8BIT")\n       
 251463e9ea3898eef34264e66a5b59f3	["ok Foo", "ok Bar", "ok Foo", "ok Bar"]	module Foo\n          def a\n            'ok Foo'\n          end\n        e
+252e16384b990691c23941b1a151829a	[[ArgumentError, "exceed depth limit"], [ArgumentError, "exceed depth limit"], [ArgumentError, "exceed depth limit"], [ArgumentError, "exceed depth limit"], 43, "\\x04\\b[\\ao:\\vObject\\x00@\\x06", "\\x04\\b[\\bl+\\n\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x01\\x00o:\\vObject\\x00@\\a", "\\x04\\b[\\bl+\\t\\x00\\x00\\x00\\x00\\x00\\x00\\x01\\x00o:\\vObject\\x00@\\a", "\\x04\\b[\\bl+\\b\\x00\\x00\\x00\\x00\\x01\\x00o:\\vObject\\x00@\\a", "\\x04\\b/\\x00\\x10", "ASCII-8BIT", ["UTF-32LE", [97, 0, 0, 0]], ["a", "a"], ["x", "x", true]]	r = []\n            h = {'one' => {'two' => {'three' => 0}}}\n       
 2544a8f94d2969a859e5ab589a67438b	[2, 2, 5, 2]	q = SizedQueue.new(2)\n            pushed = 0\n            t = Thread
 254596e4a11ae8569f20585ff35424bc	[["\\e[1msecond line\\e[m\\n", "\\e[1mthird line\\e[m\\n"], "a.rb:1: unhandled exception\\n", "a.rb:1: \\e[1;4munhandled exception\\e[m\\n", true]	res = []\n        begin\n          raise "first line\\nsecond line\\nthird 
 255446c3b754da9870de5a3f4fa85c65	[:wait_readable, "k"]	r, w = IO.pipe\n            a = r.read_nonblock(1, exception: false)

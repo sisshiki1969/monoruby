@@ -43,7 +43,7 @@ fn dump(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let obj = lfp.arg(0);
     // Classify args 1 and 2 into (port, _level). A two-arg call with
     // an Integer second arg is the "(obj, level)" form, NOT a port.
-    let (port, _level) = match (lfp.try_arg(1), lfp.try_arg(2)) {
+    let (port, level) = match (lfp.try_arg(1), lfp.try_arg(2)) {
         (None, _) => (None, None),
         (Some(a), None) => {
             if a.is_kind_of(&globals.store, INTEGER_CLASS) {
@@ -54,6 +54,12 @@ fn dump(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         (Some(a), Some(b)) => (Some(a), Some(b)),
     };
+    // The depth limit: unlimited (`-1`) unless one was given. It is
+    // checked per object, so `Marshal.dump([], 0)` raises straight away.
+    let level = match level {
+        Some(v) => v.coerce_to_i64(&globals.store)? as i32,
+        None => -1,
+    };
     let mut buf: Vec<u8> = Vec::new();
     // Marshal version header
     buf.push(0x04);
@@ -62,7 +68,7 @@ fn dump(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // Object link table: every non-immediate object written takes a slot
     // in dump order; a repeated reference is emitted as a back-reference.
     let mut objects: Vec<u64> = Vec::new();
-    marshal_dump_value(&mut buf, obj, vm, globals, &mut symbols, &mut objects)?;
+    marshal_dump_value(&mut buf, obj, vm, globals, &mut symbols, &mut objects, level)?;
     match port {
         None => Ok(Value::bytes(buf)),
         Some(port) => {
@@ -500,9 +506,35 @@ impl<'a> MarshalReader<'a> {
                 // user ivars).
                 let len = self.read_fixnum()? as usize;
                 let bytes = self.read_bytes(len)?.to_vec();
+                // The dumper gives the String its link slot *before* it
+                // writes the ivars, so an ivar value holding an object
+                // takes the next slot, not this one. Reserving the slot
+                // here keeps the reader's numbering identical — without
+                // it, `Marshal.dump([s, s])` for a String carrying an
+                // object ivar loaded back as `[s, that_object]`.
+                let idx = self.objects.len();
+                self.objects.push(Value::nil());
                 let (encoding, user_ivars) = self.read_encoding_ivars(vm, globals)?;
                 let val = Value::string_from_inner(RStringInner::from_encoding(&bytes, encoding));
-                self.objects.push(val);
+                self.objects[idx] = val;
+                for (sym, ivar_val) in user_ivars {
+                    globals.set_ivar(val, sym, ivar_val)?;
+                }
+                Ok(val)
+            }
+            b'/' => {
+                // Regexp with its encoding ivar (and any user ivars).
+                // The source's declared encoding only arrives with those
+                // ivars, so the pattern is built once they are read —
+                // behind a reserved slot, as for a String.
+                let len = self.read_fixnum()? as usize;
+                let bytes = self.read_bytes(len)?.to_vec();
+                let opt_byte = self.read_byte()? as u32;
+                let idx = self.objects.len();
+                self.objects.push(Value::nil());
+                let (encoding, user_ivars) = self.read_encoding_ivars(vm, globals)?;
+                let val = build_marshal_regexp(&bytes, opt_byte, encoding)?;
+                self.objects[idx] = val;
                 for (sym, ivar_val) in user_ivars {
                     globals.set_ivar(val, sym, ivar_val)?;
                 }
@@ -993,30 +1025,17 @@ impl<'a> MarshalReader<'a> {
     /// happen to use the same values for the first three, so the
     /// CRuby byte can be passed through verbatim.
     fn read_regexp(&mut self) -> Result<Value> {
-        use crate::value::rvalue::RegexpInner;
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?.to_vec();
         let opt_byte = self.read_byte()? as u32;
-        // Use the default UTF-8 onigmo encoding; the ivar wrapper
-        // ('I') around `/` sets the right per-string encoding ivar
-        // afterwards if the original regex was non-UTF-8.
-        let src = match String::from_utf8(bytes.clone()) {
-            Ok(s) => s,
-            Err(_) => {
-                // Non-UTF-8 source — re-encode lossily so onigmo gets
-                // a valid `&str`. The 'I' wrapper restores the right
-                // declared encoding for inspection.
-                String::from_utf8_lossy(&bytes).into_owned()
-            }
-        };
-        let inner = RegexpInner::with_option_kcode(
-            src,
-            opt_byte,
-            onigmo_regex::OnigmoEncoding::UTF8,
-            None,
-            None,
-        )?;
-        Ok(Value::regexp(inner))
+        // A bare `/` payload carries no encoding ivar, which — as for a
+        // bare `"` string — means ASCII-8BIT, not US-ASCII.
+        let val = build_marshal_regexp(&bytes, opt_byte, Encoding::Ascii8)?;
+        // A Regexp takes a link slot like any other object; it used to
+        // take none, so a dump holding the same Regexp twice failed to
+        // load ("bad object reference").
+        self.objects.push(val);
+        Ok(val)
     }
 
     /// Read an extended-object wrapper ('e' tag).
@@ -1520,11 +1539,12 @@ fn marshal_write_ivar_block(
     globals: &mut Globals,
     symbols: &mut Vec<IdentId>,
     objects: &mut Vec<u64>,
+    limit: i32,
 ) -> Result<()> {
     marshal_write_fixnum(buf, ivars.len() as i32);
     for (name, val) in ivars {
         marshal_write_symbol(buf, *name, symbols);
-        marshal_dump_value(buf, *val, vm, globals, symbols, objects)?;
+        marshal_dump_value(buf, *val, vm, globals, symbols, objects, limit)?;
     }
     Ok(())
 }
@@ -1630,6 +1650,30 @@ fn marshal_emit_link(buf: &mut Vec<u8>, obj: Value, objects: &mut Vec<u64>) -> b
     }
 }
 
+/// Rebuild a `Regexp` from a marshalled `/` payload: the raw source
+/// bytes, CRuby's option byte, and the encoding its ivar block declared
+/// (ASCII-8BIT when there was none). The matching engine always gets a
+/// valid `&str`; `source_encoding` is what decides the Regexp's own
+/// `#encoding`.
+fn build_marshal_regexp(bytes: &[u8], opt_byte: u32, encoding: Encoding) -> Result<Value> {
+    use crate::value::rvalue::RegexpInner;
+    let src = match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        // Non-UTF-8 source — decode lossily so onigmo gets a valid
+        // `&str`; the raw bytes are kept as the Regexp's `#source`.
+        Err(_) => String::from_utf8_lossy(bytes).into_owned(),
+    };
+    let inner = RegexpInner::with_option_kcode_source(
+        src,
+        opt_byte,
+        onigmo_regex::OnigmoEncoding::UTF8,
+        None,
+        Some(encoding),
+        Some(bytes.to_vec()),
+    )?;
+    Ok(Value::regexp(inner))
+}
+
 /// If `obj` defines the user serialization protocol `#marshal_dump`
 /// (preferred) or `#_dump`, serialize it via the matching tag
 /// (`'U'` / `'u'`), register its link slot, and return `true`. Returns
@@ -1644,6 +1688,7 @@ fn marshal_try_user_protocol(
     globals: &mut Globals,
     symbols: &mut Vec<IdentId>,
     objects: &mut Vec<u64>,
+    limit: i32,
 ) -> Result<bool> {
     let marshal_dump_id = IdentId::get_id("marshal_dump");
     let dump_id = IdentId::get_id("_dump");
@@ -1665,7 +1710,7 @@ fn marshal_try_user_protocol(
         let payload = vm.invoke_method_inner(globals, marshal_dump_id, obj, &[], None, None)?;
         buf.push(b'U');
         marshal_write_symbol(buf, class_name_id, symbols);
-        marshal_dump_value(buf, payload, vm, globals, symbols, objects)?;
+        marshal_dump_value(buf, payload, vm, globals, symbols, objects, limit)?;
         return Ok(true);
     }
     if globals.check_method(obj, dump_id).is_some() {
@@ -1715,7 +1760,7 @@ fn marshal_try_user_protocol(
             // nanoseconds, then :offset (non-UTC), then :zone.
             for (name, val) in user_ivars {
                 marshal_write_symbol(buf, name, symbols);
-                marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
             }
             if has_nano {
                 marshal_write_symbol(buf, IdentId::get_id("nano_num"), symbols);
@@ -1725,10 +1770,10 @@ fn marshal_try_user_protocol(
                     vm,
                     globals,
                     symbols,
-                    objects,
+                    objects, limit,
                 )?;
                 marshal_write_symbol(buf, IdentId::get_id("nano_den"), symbols);
-                marshal_dump_value(buf, Value::integer(1), vm, globals, symbols, objects)?;
+                marshal_dump_value(buf, Value::integer(1), vm, globals, symbols, objects, limit)?;
             }
             if !is_utc {
                 marshal_write_symbol(buf, IdentId::get_id("offset"), symbols);
@@ -1738,7 +1783,7 @@ fn marshal_try_user_protocol(
                     vm,
                     globals,
                     symbols,
-                    objects,
+                    objects, limit,
                 )?;
             }
             marshal_write_symbol(buf, IdentId::get_id("zone"), symbols);
@@ -1746,7 +1791,7 @@ fn marshal_try_user_protocol(
                 // Zone "UTC" as a US-ASCII string (CRuby's `:E false`).
                 let zone =
                     Value::string_from_inner(RStringInner::from_encoding(b"UTC", Encoding::UsAscii));
-                marshal_dump_value(buf, zone, vm, globals, symbols, objects)?;
+                marshal_dump_value(buf, zone, vm, globals, symbols, objects, limit)?;
             } else {
                 // monoruby has no zone *name* for fixed-offset times.
                 buf.push(b'0'); // nil
@@ -1785,7 +1830,16 @@ fn marshal_dump_value(
     globals: &mut Globals,
     symbols: &mut Vec<IdentId>,
     objects: &mut Vec<u64>,
+    limit: i32,
 ) -> Result<()> {
+    // `Marshal.dump(obj, limit)`: CRuby checks the remaining depth for
+    // *every* object, immediates included, before writing anything, and
+    // spends one level per nesting step. A negative limit (the default)
+    // never reaches 0, so it never runs out.
+    if limit == 0 {
+        return Err(MonorubyErr::argumenterr("exceed depth limit"));
+    }
+    let limit = limit - 1;
     match obj.unpack() {
         RV::Nil => {
             buf.push(b'0'); // 0x30
@@ -1803,7 +1857,10 @@ fn marshal_dump_value(
                 buf.push(b'i');
                 marshal_write_fixnum(buf, n as i32);
             } else {
-                // i64 values outside 30-bit range → treat as bignum
+                // Outside the 30-bit range it goes out as a bignum — and
+                // a bignum, unlike a fixnum, takes a slot in the object
+                // table, so every later link index shifts by one.
+                objects.push(obj.id());
                 let big = BigInt::from(n);
                 marshal_write_bignum(buf, &big);
             }
@@ -1858,7 +1915,7 @@ fn marshal_dump_value(
                 }
                 for (name, val) in ivars {
                     marshal_write_symbol(buf, name, symbols);
-                    marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                    marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
                 }
             }
         }
@@ -1872,7 +1929,7 @@ fn marshal_dump_value(
                 marshal_write_fixnum(buf, idx as i32);
                 return Ok(());
             }
-            if !marshal_try_user_protocol(buf, obj, obj_id, vm, globals, symbols, objects)? {
+            if !marshal_try_user_protocol(buf, obj, obj_id, vm, globals, symbols, objects, limit)? {
                 return Err(MonorubyErr::typeerr(format!(
                     "no _dump_data is defined for class {}",
                     globals.get_class_name(obj.class())
@@ -1889,7 +1946,7 @@ fn marshal_dump_value(
             }
             // User-defined serialization protocols ('U'/'u') take
             // precedence over the built-in container/object encodings.
-            if marshal_try_user_protocol(buf, obj, obj_id, vm, globals, symbols, objects)? {
+            if marshal_try_user_protocol(buf, obj, obj_id, vm, globals, symbols, objects, limit)? {
                 return Ok(());
             }
             // Register the object in the link table *before* writing its
@@ -1916,11 +1973,11 @@ fn marshal_dump_value(
                         buf.push(b'[');
                         marshal_write_fixnum(buf, elems.len() as i32);
                         for elem in elems {
-                            marshal_dump_value(buf, elem, vm, globals, symbols, objects)?;
+                            marshal_dump_value(buf, elem, vm, globals, symbols, objects, limit)?;
                         }
                         if has_ivars {
                             marshal_write_ivar_block(
-                                buf, &ivars, vm, globals, symbols, objects,
+                                buf, &ivars, vm, globals, symbols, objects, limit,
                             )?;
                         }
                     }
@@ -1979,9 +2036,9 @@ fn marshal_dump_value(
                         marshal_write_symbol(buf, IdentId::get_id("excl"), symbols);
                         buf.push(if excl { b'T' } else { b'F' });
                         marshal_write_symbol(buf, IdentId::get_id("begin"), symbols);
-                        marshal_dump_value(buf, begin, vm, globals, symbols, objects)?;
+                        marshal_dump_value(buf, begin, vm, globals, symbols, objects, limit)?;
                         marshal_write_symbol(buf, IdentId::get_id("end"), symbols);
-                        marshal_dump_value(buf, end, vm, globals, symbols, objects)?;
+                        marshal_dump_value(buf, end, vm, globals, symbols, objects, limit)?;
                     }
                     Some(ObjTy::HASH) => {
                         // Snapshot the pairs to avoid holding a borrow into
@@ -2028,15 +2085,15 @@ fn marshal_dump_value(
                         buf.push(if default.is_some() { b'}' } else { b'{' });
                         marshal_write_fixnum(buf, pairs.len() as i32);
                         for (k, v) in pairs {
-                            marshal_dump_value(buf, k, vm, globals, symbols, objects)?;
-                            marshal_dump_value(buf, v, vm, globals, symbols, objects)?;
+                            marshal_dump_value(buf, k, vm, globals, symbols, objects, limit)?;
+                            marshal_dump_value(buf, v, vm, globals, symbols, objects, limit)?;
                         }
                         if let Some(d) = default {
-                            marshal_dump_value(buf, d, vm, globals, symbols, objects)?;
+                            marshal_dump_value(buf, d, vm, globals, symbols, objects, limit)?;
                         }
                         if has_ivars {
                             marshal_write_ivar_block(
-                                buf, &ivars, vm, globals, symbols, objects,
+                                buf, &ivars, vm, globals, symbols, objects, limit,
                             )?;
                         }
                     }
@@ -2073,7 +2130,7 @@ fn marshal_dump_value(
                         marshal_write_fixnum(buf, ivars.len() as i32);
                         for (name, val) in ivars {
                             marshal_write_symbol(buf, name, symbols);
-                            marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                            marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
                         }
                     }
                     Some(ObjTy::STRUCT) => {
@@ -2126,11 +2183,11 @@ fn marshal_dump_value(
                             let sym = m.try_symbol().unwrap();
                             marshal_write_symbol(buf, sym, symbols);
                             let val = inner.try_get(i).unwrap_or(Value::nil());
-                            marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                            marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
                         }
                         if has_ivars {
                             marshal_write_ivar_block(
-                                buf, &ivars, vm, globals, symbols, objects,
+                                buf, &ivars, vm, globals, symbols, objects, limit,
                             )?;
                         }
                     }
@@ -2149,7 +2206,15 @@ fn marshal_dump_value(
                         let opt = (re.option() & 0x37) as u8;
                         let enc = re.declared_encoding();
                         let ivars = globals.get_ivars(obj);
-                        buf.push(b'I');
+                        // As for a String, a BINARY source carries no
+                        // encoding ivar — and with no user ivars either,
+                        // no `I` wrapper at all.
+                        let has_enc_ivar = enc != Encoding::Ascii8;
+                        let ivar_count = has_enc_ivar as usize + ivars.len();
+                        let has_i = ivar_count > 0;
+                        if has_i {
+                            buf.push(b'I');
+                        }
                         marshal_write_extended_and_class(
                             buf, globals, obj, REGEXP_CLASS, symbols,
                         )?;
@@ -2157,12 +2222,15 @@ fn marshal_dump_value(
                         marshal_write_fixnum(buf, src.len() as i32);
                         buf.extend_from_slice(&src);
                         buf.push(opt);
-                        // ivar block: encoding ivar + any user ivars.
-                        marshal_write_fixnum(buf, (1 + ivars.len()) as i32);
-                        marshal_write_encoding_ivar_pair(buf, enc, symbols);
-                        for (name, val) in ivars {
-                            marshal_write_symbol(buf, name, symbols);
-                            marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                        if has_i {
+                            marshal_write_fixnum(buf, ivar_count as i32);
+                            if has_enc_ivar {
+                                marshal_write_encoding_ivar_pair(buf, enc, symbols);
+                            }
+                            for (name, val) in ivars {
+                                marshal_write_symbol(buf, name, symbols);
+                                marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
+                            }
                         }
                     }
                     Some(ObjTy::EXCEPTION) => {
@@ -2219,19 +2287,19 @@ fn marshal_dump_value(
                             // BINARY message as a bare string, and a
                             // UTF-8 one wrapped in `I…:E`.
                             let msg_val = super::exception::message_value(obj);
-                            marshal_dump_value(buf, msg_val, vm, globals, symbols, objects)?;
+                            marshal_dump_value(buf, msg_val, vm, globals, symbols, objects, limit)?;
                         }
                         // :bt
                         marshal_write_symbol(buf, IdentId::get_id("bt"), symbols);
-                        marshal_dump_value(buf, bt, vm, globals, symbols, objects)?;
+                        marshal_dump_value(buf, bt, vm, globals, symbols, objects, limit)?;
                         // :cause
                         if let Some(cause) = cause {
                             marshal_write_symbol(buf, IdentId::get_id("cause"), symbols);
-                            marshal_dump_value(buf, cause, vm, globals, symbols, objects)?;
+                            marshal_dump_value(buf, cause, vm, globals, symbols, objects, limit)?;
                         }
                         for (name, val) in user_ivars {
                             marshal_write_symbol(buf, name, symbols);
-                            marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                            marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
                         }
                     }
                     _ => {
@@ -3663,6 +3731,54 @@ mod tests {
             r#"h = Hash.new(7); h[:a] = 1; l = Marshal.load(Marshal.dump(h)); [l, l[:zz], l.default]"#,
             r#"l = Marshal.load(Marshal.dump({a: 1, b: [2]})); l"#,
         ]);
+    }
+
+    #[test]
+    fn dump_depth_limit_and_object_table_slots() {
+        // `Marshal.dump(obj, limit)`'s second argument was parsed and
+        // then ignored. A fixnum too big for the 30-bit wire form goes
+        // out as a bignum and — unlike a fixnum — takes a slot in the
+        // object table, so every later link index shifts by one.
+        // A BINARY Regexp carries no encoding ivar (and so no `I`
+        // wrapper), a bare `/` payload loads back as BINARY rather than
+        // US-ASCII, and both a Regexp and an ivar-carrying String take
+        // their link slot *before* their ivars: without that a dump
+        // holding the same Regexp twice failed to load outright, and one
+        // holding a String with an object ivar loaded back with that
+        // object in the String's place.
+        run_test_once(
+            r##"
+            r = []
+            h = {'one' => {'two' => {'three' => 0}}}
+            [[h, 3], [[h], 4], [[], 0], [[[[]]], 1]].each do |o, l|
+              begin
+                Marshal.dump(o, l)
+                r << :no_raise
+              rescue => e
+                r << [e.class, e.message]
+              end
+            end
+            r << Marshal.dump(h, 10).bytesize
+            obj = Object.new
+            r << Marshal.dump([obj, obj])
+            r << Marshal.dump([2**64, obj, obj])
+            r << Marshal.dump([2**48, obj, obj])
+            r << Marshal.dump([2**32, obj, obj])
+            o = Regexp.new("".dup.force_encoding("binary"), Regexp::FIXEDENCODING)
+            r << Marshal.dump(o)
+            r << Marshal.load(Marshal.dump(o)).source.encoding.to_s
+            so = Regexp.new("a".encode("utf-32le"))
+            lo = Marshal.load(Marshal.dump(so))
+            r << [lo.encoding.to_s, lo.source.bytes]
+            q = /a/
+            r << Marshal.load(Marshal.dump([q, q])).map(&:source)
+            s = +"x"
+            s.instance_variable_set(:@a, Object.new)
+            l = Marshal.load(Marshal.dump([s, s]))
+            r << [l[0], l[1], l[0].equal?(l[1])]
+            r
+            "##,
+        );
     }
 
     #[test]
