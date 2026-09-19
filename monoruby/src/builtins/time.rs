@@ -307,9 +307,9 @@ fn deconstruct_keys_(
     let arg = lfp.arg(0);
     let self_ = lfp.self_val();
     let t = self_.as_time();
-    let is_utc = t.is_utc();
+
     let (yday, wday) = match t {
-        TimeInner::Local(t) => (t.ordinal(), t.weekday().num_days_from_sunday()),
+        TimeInner::Local(t, _) => (t.ordinal(), t.weekday().num_days_from_sunday()),
         TimeInner::Utc(t) => (t.ordinal(), t.weekday().num_days_from_sunday()),
     };
     let (year, month, day, hour, min, sec, subsec_ns) = (
@@ -321,10 +321,9 @@ fn deconstruct_keys_(
         t.second(),
         t.nanosecond(),
     );
-    let zone_val = if is_utc {
-        Value::string_from_str("UTC")
-    } else {
-        Value::nil()
+    let zone_val = match time_zone_abbr(t) {
+        Some(name) => Value::string_from_str(&name),
+        None => Value::nil(),
     };
     let subsec_val = if subsec_ns == 0 {
         Value::integer(0)
@@ -341,7 +340,7 @@ fn deconstruct_keys_(
         ("min", Value::integer(min as i64)),
         ("sec", Value::integer(sec as i64)),
         ("subsec", subsec_val),
-        ("dst", Value::bool(false)),
+        ("dst", Value::bool(time_is_dst(t))),
         ("zone", zone_val),
     ];
     let mut map = RubyMap::default();
@@ -373,7 +372,7 @@ fn deconstruct_keys_(
 
 fn wday_val(lfp: &Lfp) -> u32 {
     match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.weekday().num_days_from_sunday(),
+        TimeInner::Local(t, _) => t.weekday().num_days_from_sunday(),
         TimeInner::Utc(t) => t.weekday().num_days_from_sunday(),
     }
 }
@@ -481,12 +480,33 @@ fn saturday_q(
 /// - dst? -> bool
 /// - isdst -> bool
 ///
-/// Always returns `false`; monoruby does not track DST transitions.
+/// True when the system zone has daylight saving in effect at this
+/// instant. A time at a plain offset, and a UTC time, answer `false`.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/dst=3f.html]
 #[monoruby_builtin]
-fn dst_q(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(false))
+fn dst_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(time_is_dst(lfp.self_val().as_time())))
+}
+
+/// The abbreviation a `Time` reports for its zone, if it has one: the
+/// system zone's name at that instant (`"JST"`, `"EDT"` — it follows
+/// `TZ` and the time of year), or `"UTC"`. A plain offset has no zone
+/// behind it and so no name. A timezone-object time answers through the
+/// object instead, so callers look in `ZONE_IVAR` first.
+pub(crate) fn time_zone_abbr(t: &TimeInner) -> Option<String> {
+    match t {
+        TimeInner::Utc(_) => Some("UTC".to_string()),
+        TimeInner::Local(_, Zone::Fixed) => None,
+        TimeInner::Local(_, Zone::System { name, .. }) => name.map(|n| n.get_name().to_string()),
+    }
+}
+
+/// Whether daylight saving time is in effect for a `Time`. Only a time
+/// in the system zone can say: a plain offset — and UTC — is always
+/// `false`, whatever the zone would report at that instant.
+pub(crate) fn time_is_dst(t: &TimeInner) -> bool {
+    matches!(t, TimeInner::Local(_, Zone::System { dst: true, .. }))
 }
 
 ///
@@ -494,20 +514,33 @@ fn dst_q(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) 
 ///
 /// - zone -> String | nil
 ///
-/// Returns "UTC" for UTC times, `nil` for fixed-offset local times.
+/// `"UTC"` for a UTC time, the system zone's abbreviation for a time in
+/// it, `nil` for one at a plain offset.
+///
+/// The string is US-ASCII: CRuby builds it with `rb_usascii_str_new`,
+/// so it stays US-ASCII even under a `default_internal`.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/zone.html]
 #[monoruby_builtin]
 fn zone(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    // A time built from a timezone object reports that object as its zone.
-    if let Some(z) = globals.store.get_ivar(self_, IdentId::get_id(ZONE_IVAR)) {
+    // A time built from a timezone object reports that object as its
+    // zone; a time a `Marshal.load` rebuilt reports the dumped name.
+    // Only a local time can: a UTC one is always `"UTC"`, and a nil
+    // slot is one that `#localtime` cleared.
+    if !self_.as_time().is_utc()
+        && let Some(z) = globals.store.get_ivar(self_, IdentId::get_id(ZONE_IVAR))
+        && !z.is_nil()
+    {
         return Ok(z);
     }
-    match self_.as_time() {
-        TimeInner::Utc(_) => Ok(Value::string_from_str("UTC")),
-        TimeInner::Local(_) => Ok(Value::nil()),
-    }
+    Ok(match time_zone_abbr(self_.as_time()) {
+        Some(name) => Value::string_from_inner(RStringInner::from_encoding(
+            name.as_bytes(),
+            Encoding::UsAscii,
+        )),
+        None => Value::nil(),
+    })
 }
 
 ///
@@ -522,7 +555,7 @@ fn zone(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn getutc(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let new = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => TimeInner::Utc(t.with_timezone(&Utc)),
+        TimeInner::Local(t, _) => TimeInner::Utc(t.with_timezone(&Utc)),
         TimeInner::Utc(t) => TimeInner::Utc(*t),
     };
     Ok(Value::new_time(new))
@@ -553,20 +586,18 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         let fixed = parse_utc_offset(vm, globals, arg0)?;
         let utc = offset_arg_is_utc(arg0);
         let instant = match lfp.self_val().as_time() {
-            TimeInner::Local(t) => t.with_timezone(&Utc),
+            TimeInner::Local(t, _) => t.with_timezone(&Utc),
             TimeInner::Utc(t) => *t,
         };
         time_in_offset(instant, fixed, utc)
     } else {
+        // No argument means the *system* zone. A receiver already in it
+        // keeps the zone it captured — CRuby does not re-localize one,
+        // so a `TZ` change between the two calls does not show up here —
+        // while a UTC or fixed-offset receiver is localized now.
         match lfp.self_val().as_time() {
-            TimeInner::Local(t) => {
-                let local = t.with_timezone(&LocalTz);
-                TimeInner::Local(local.fixed_offset())
-            }
-            TimeInner::Utc(t) => {
-                let local = t.with_timezone(&LocalTz);
-                TimeInner::Local(local.fixed_offset())
-            }
+            t @ TimeInner::Local(_, Zone::System { .. }) => t.clone(),
+            t => localize(time_utc_instant(t)),
         }
     };
     Ok(Value::new_time(new))
@@ -584,9 +615,9 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let t = self_.as_time();
-    let is_utc = t.is_utc();
+
     let (wday, yday) = match t {
-        TimeInner::Local(t) => (t.weekday().num_days_from_sunday(), t.ordinal()),
+        TimeInner::Local(t, _) => (t.weekday().num_days_from_sunday(), t.ordinal()),
         TimeInner::Utc(t) => (t.weekday().num_days_from_sunday(), t.ordinal()),
     };
     let (sec, min, hour, day, mon, year) = (
@@ -597,11 +628,11 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         t.month(),
         t.year(),
     );
-    let zone = if is_utc {
-        Value::string_from_str("UTC")
-    } else {
-        Value::nil()
+    let zone = match time_zone_abbr(t) {
+        Some(name) => Value::string_from_str(&name),
+        None => Value::nil(),
     };
+    let isdst = time_is_dst(t);
     Ok(Value::array_from_vec(vec![
         Value::integer(sec as _),
         Value::integer(min as _),
@@ -611,7 +642,7 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         Value::integer(year as _),
         Value::integer(wday as _),
         Value::integer(yday as _),
-        Value::bool(false),
+        Value::bool(isdst),
         zone,
     ]))
 }
@@ -721,7 +752,7 @@ fn _load(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 ));
             }
         };
-        Ok(Value::new_time(TimeInner::Local(local.fixed_offset())))
+        Ok(Value::new_time(localize(local.with_timezone(&Utc))))
     }
 }
 
@@ -733,7 +764,7 @@ pub(crate) fn time_is_utc(t: &TimeInner) -> bool {
 /// Marshal support: the UTC offset in seconds (0 for a UTC time).
 pub(crate) fn time_utc_offset(t: &TimeInner) -> i32 {
     match t {
-        TimeInner::Local(dt) => dt.offset().local_minus_utc(),
+        TimeInner::Local(dt, _) => dt.offset().local_minus_utc(),
         TimeInner::Utc(_) => 0,
     }
 }
@@ -743,7 +774,7 @@ pub(crate) fn time_utc_offset(t: &TimeInner) -> i32 {
 /// resolution) cannot carry.
 pub(crate) fn time_subsec_nanos(t: &TimeInner) -> u32 {
     let ns = match t {
-        TimeInner::Local(dt) => dt.nanosecond(),
+        TimeInner::Local(dt, _) => dt.nanosecond(),
         TimeInner::Utc(dt) => dt.nanosecond(),
     };
     ns % 1000
@@ -754,7 +785,7 @@ pub(crate) fn time_subsec_nanos(t: &TimeInner) -> u32 {
 pub(crate) fn time_add_nanos(mut time: Value, ns: i64) {
     let dur = chrono::Duration::nanoseconds(ns);
     let inner = match time.as_time() {
-        TimeInner::Local(dt) => TimeInner::Local(*dt + dur),
+        TimeInner::Local(dt, zone) => TimeInner::Local(*dt + dur, *zone),
         TimeInner::Utc(dt) => TimeInner::Utc(*dt + dur),
     };
     *time.as_time_mut() = inner;
@@ -767,7 +798,7 @@ pub(crate) fn time_add_nanos(mut time: Value, ns: i64) {
 /// preserving the wall clock (and thus shifting the absolute instant).
 pub(crate) fn time_reinterpret_offset(mut time: Value, offset_secs: i32) {
     let naive = match time.as_time() {
-        TimeInner::Local(dt) => dt.naive_local(),
+        TimeInner::Local(dt, _) => dt.naive_local(),
         TimeInner::Utc(dt) => dt.naive_utc(),
     };
     let fixed =
@@ -777,7 +808,10 @@ pub(crate) fn time_reinterpret_offset(mut time: Value, offset_secs: i32) {
         LocalResult::Ambiguous(t, _) => t,
         LocalResult::None => fixed.from_utc_datetime(&naive),
     };
-    *time.as_time_mut() = TimeInner::Local(dt);
+    // A dump records the offset, not the zone it came from, so the
+    // rebuilt time is at a plain offset — CRuby's loaded time answers
+    // `#dst?` false however its `:zone` string reads.
+    *time.as_time_mut() = TimeInner::Local(dt, Zone::Fixed);
 }
 
 ///
@@ -807,7 +841,7 @@ fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let self_ = lfp.self_val();
     let t = self_.as_time();
     let suffix = match t {
-        TimeInner::Local(t) => t.format("%:z").to_string(),
+        TimeInner::Local(t, _) => t.format("%:z").to_string(),
         TimeInner::Utc(_) => "Z".to_string(),
     };
     let (year, mon, mday, h, mi, s, nsec) = (
@@ -849,7 +883,7 @@ fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn asctime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.format("%a %b %e %H:%M:%S %Y").to_string(),
+        TimeInner::Local(t, _) => t.format("%a %b %e %H:%M:%S %Y").to_string(),
         TimeInner::Utc(t) => t.format("%a %b %e %H:%M:%S %Y").to_string(),
     };
     Ok(Value::string(s))
@@ -900,14 +934,15 @@ fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
     let inner = self_.as_time();
     let new_ns = rescale_nsec(inner.nanosecond(), precision, mode);
     match inner {
-        TimeInner::Local(t) => {
+        TimeInner::Local(t, zone) => {
+            let zone = *zone;
             let mut result = t.with_nanosecond(0).unwrap();
             if new_ns >= 1_000_000_000 {
                 result = result + Duration::seconds(1);
             } else {
                 result = result.with_nanosecond(new_ns).unwrap();
             }
-            TimeInner::Local(result)
+            TimeInner::Local(result, zone)
         }
         TimeInner::Utc(t) => {
             let mut result = t.with_nanosecond(0).unwrap();
@@ -1041,7 +1076,7 @@ fn time_build(
             let fixed = parse_utc_offset(vm, globals, off)?;
             time_in_offset(Utc::now(), fixed, offset_arg_is_utc(off))
         } else {
-            TimeInner::Local(LocalTz::now())
+            localize(Utc::now())
         };
         return Ok(Value::new_time_with_class(time_info, cls));
     }
@@ -1080,7 +1115,7 @@ fn time_build(
                     return Err(MonorubyErr::argumenterr("argument out of range."));
                 }
             };
-            TimeInner::Local(local.fixed_offset())
+            localize(local.with_timezone(&Utc))
         } else if let Some(t) = time_new_with_timezone(vm, globals, naive, off_arg, cls)? {
             // A timezone object (`#local_to_utc`) rather than a utc_offset.
             return Ok(t);
@@ -1112,7 +1147,7 @@ fn time_build(
             LocalResult::Ambiguous(t, _) => t,
             LocalResult::None => return Err(MonorubyErr::argumenterr("argument out of range.")),
         };
-        TimeInner::Local(local.fixed_offset())
+        localize(local.with_timezone(&Utc))
     };
     Ok(Value::new_time_with_class(time_info, cls))
 }
@@ -1232,7 +1267,7 @@ fn time_in_offset(dt: DateTime<Utc>, fixed: FixedOffset, utc: bool) -> TimeInner
     if utc {
         TimeInner::Utc(dt)
     } else {
-        TimeInner::Local(dt.with_timezone(&fixed))
+        TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed)
     }
 }
 
@@ -1282,7 +1317,7 @@ fn parse_utc_offset(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resul
 /// Reserved instance-variable slot holding a Time's timezone object (the
 /// argument that responds to `#local_to_utc` / `#utc_to_local`). Hidden
 /// from `#instance_variables` and Marshal by the `/`-prefix convention.
-const ZONE_IVAR: &str = "/zone";
+pub(crate) const ZONE_IVAR: &str = "/zone";
 
 /// Read the epoch seconds of a Time-like value (a `Time`, a `Time`
 /// subclass, or any object with `#to_i`) returned by a timezone object's
@@ -1336,7 +1371,7 @@ fn time_new_with_timezone(
         .from_local_datetime(&naive)
         .single()
         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
-    let t = Value::new_time_with_class(TimeInner::Local(dt), cls);
+    let t = Value::new_time_with_class(TimeInner::Local(dt, Zone::Fixed), cls);
     globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
     Ok(Some(t))
 }
@@ -1353,7 +1388,7 @@ fn time_at_with_timezone(
     let Some(fixed) = utc_to_local_fixed(vm, globals, dt, tz)? else {
         return Ok(None);
     };
-    let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed)), cls);
+    let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed), cls);
     globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
     Ok(Some(t))
 }
@@ -1385,7 +1420,7 @@ fn find_timezone(
 /// The UTC instant of a Time.
 fn time_utc_instant(t: &TimeInner) -> DateTime<Utc> {
     match t {
-        TimeInner::Local(dt) => dt.with_timezone(&Utc),
+        TimeInner::Local(dt, _) => dt.with_timezone(&Utc),
         TimeInner::Utc(dt) => *dt,
     }
 }
@@ -1682,7 +1717,9 @@ fn parse_time_string(
 /// Replace the sub-second part of a parsed local time.
 fn set_nsec(t: TimeInner, nsec: u32) -> TimeInner {
     match t {
-        TimeInner::Local(dt) => TimeInner::Local(dt.with_nanosecond(nsec).unwrap_or(dt)),
+        TimeInner::Local(dt, zone) => {
+            TimeInner::Local(dt.with_nanosecond(nsec).unwrap_or(dt), zone)
+        }
         TimeInner::Utc(dt) => TimeInner::Utc(dt.with_nanosecond(nsec).unwrap_or(dt)),
     }
 }
@@ -1730,7 +1767,7 @@ fn build_time_string(
                 LocalResult::Ambiguous(d, _) => d,
                 LocalResult::None => return Err(bad()),
             };
-            Ok(TimeInner::Local(local.fixed_offset()))
+            Ok(localize(local.with_timezone(&Utc)))
         }
     }
 }
@@ -1838,8 +1875,7 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         let fixed = parse_utc_offset(vm, globals, off)?;
         time_in_offset(dt, fixed, offset_arg_is_utc(off))
     } else {
-        let local = dt.with_timezone(&LocalTz);
-        TimeInner::Local(local.fixed_offset())
+        localize(dt)
     };
     Ok(Value::new_time_with_class(time_info, cls))
 }
@@ -1860,7 +1896,7 @@ pub(crate) extern "C" fn time_alloc_func(class_id: ClassId, _: &mut Globals) -> 
 fn time_local(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let cls = lfp.self_val().as_class().id();
     let t = generate_time(vm, globals, LocalTz, lfp)?;
-    let time_info = TimeInner::Local(t.fixed_offset());
+    let time_info = localize(t.with_timezone(&Utc));
     Ok(Value::new_time_with_class(time_info, cls))
 }
 
@@ -2336,7 +2372,7 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let utc_dt = time_utc_instant(self_val.as_time());
         if let Some(fixed) = utc_to_local_fixed(vm, globals, utc_dt, arg0)? {
             self_val.ensure_not_frozen(&globals.store)?;
-            *self_val.as_time_mut() = TimeInner::Local(utc_dt.with_timezone(&fixed));
+            *self_val.as_time_mut() = TimeInner::Local(utc_dt.with_timezone(&fixed), Zone::Fixed);
             globals
                 .store
                 .set_ivar(self_val, IdentId::get_id(ZONE_IVAR), arg0)?;
@@ -2349,7 +2385,7 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             }
             self_val.ensure_not_frozen(&globals.store)?;
             let instant = match self_val.as_time() {
-                TimeInner::Local(t) => t.with_timezone(&Utc),
+                TimeInner::Local(t, _) => t.with_timezone(&Utc),
                 TimeInner::Utc(t) => *t,
             };
             *self_val.as_time_mut() = TimeInner::Utc(instant);
@@ -2357,7 +2393,7 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         }
         // Already in the requested zone? No-op (matches CRuby's
         // short-circuit before the frozen check).
-        if let TimeInner::Local(t) = self_val.as_time() {
+        if let TimeInner::Local(t, _) = self_val.as_time() {
             if t.offset() == &target {
                 return Ok(self_val);
             }
@@ -2366,12 +2402,23 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         self_val.as_time_mut().shift_to_offset(target);
         return Ok(self_val);
     }
-    if !self_val.as_time().is_utc() {
-        // Already local, no offset arg → no-op.
+    // No argument: the *system* zone. Already there → no-op; a UTC or
+    // fixed-offset receiver is re-zoned, and loses any zone object or
+    // dumped zone name it was carrying.
+    if matches!(self_val.as_time(), TimeInner::Local(_, Zone::System { .. })) {
         return Ok(self_val);
     }
     self_val.ensure_not_frozen(&globals.store)?;
     self_val.as_time_mut().local();
+    if globals
+        .store
+        .get_ivar(self_val, IdentId::get_id(ZONE_IVAR))
+        .is_some()
+    {
+        globals
+            .store
+            .set_ivar(self_val, IdentId::get_id(ZONE_IVAR), Value::nil())?;
+    }
     Ok(self_val)
 }
 
@@ -2394,7 +2441,7 @@ fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         format!(".{}", format!("{:09}", nsec).trim_end_matches('0'))
     };
     let body = match t {
-        TimeInner::Local(dt) => {
+        TimeInner::Local(dt, _) => {
             format!(
                 "{}{} {}",
                 dt.format("%Y-%m-%d %H:%M:%S"),
@@ -2444,12 +2491,14 @@ fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         .is_str()
         .map(|s| s.to_string())
     } else {
-        None
+        // Otherwise the time's own zone, which a plain offset does not
+        // have — `%Z` is empty there, as CRuby leaves it.
+        time_zone_abbr(&inner)
     };
     let pre = preprocess_strftime(&inner, &fmt_str, zone_abbr.as_deref());
     use std::fmt::Write;
     let s = match &inner {
-        TimeInner::Local(t) => {
+        TimeInner::Local(t, _) => {
             let mut result = String::new();
             let _ = write!(result, "{}", t.format(&pre));
             result
@@ -2562,7 +2611,7 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
                     Some(a) => a.to_string(),
                     None => match inner {
                         TimeInner::Utc(_) => "UTC".to_string(),
-                        TimeInner::Local(_) => String::new(),
+                        TimeInner::Local(_, _) => String::new(),
                     },
                 };
                 out.push_str(&txt);
@@ -2572,7 +2621,7 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
             (b'v', 0) => {
                 // ` D-MMM-YYYY` with uppercase abbreviated month.
                 let (y, m, d) = match inner {
-                    TimeInner::Local(t) => (t.year(), t.month(), t.day()),
+                    TimeInner::Local(t, _) => (t.year(), t.month(), t.day()),
                     TimeInner::Utc(t) => (t.year(), t.month(), t.day()),
                 };
                 out.push_str(&format!(
@@ -2588,7 +2637,7 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
             // `%h` is a CRuby synonym for `%b` (chrono doesn't accept it).
             (b'b' | b'B' | b'h', 0) if flag_caret => {
                 let m = match inner {
-                    TimeInner::Local(t) => t.month(),
+                    TimeInner::Local(t, _) => t.month(),
                     TimeInner::Utc(t) => t.month(),
                 };
                 let idx = (m as usize - 1).min(11);
@@ -2623,7 +2672,7 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
             }
             (b'N', 0) => {
                 let nanos = match inner {
-                    TimeInner::Local(t) => t.nanosecond(),
+                    TimeInner::Local(t, _) => t.nanosecond(),
                     TimeInner::Utc(t) => t.nanosecond(),
                 };
                 let w = width.unwrap_or(9);
@@ -2633,7 +2682,7 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
             }
             (b'L', 0) => {
                 let nanos = match inner {
-                    TimeInner::Local(t) => t.nanosecond(),
+                    TimeInner::Local(t, _) => t.nanosecond(),
                     TimeInner::Utc(t) => t.nanosecond(),
                 };
                 out.push_str(&format!("{:03}", nanos / 1_000_000));
@@ -2663,7 +2712,7 @@ fn format_offset(
     // Total offset in seconds (signed).
     let total_secs: i64 = match inner {
         TimeInner::Utc(_) => 0,
-        TimeInner::Local(t) => t.offset().local_minus_utc() as i64,
+        TimeInner::Local(t, _) => t.offset().local_minus_utc() as i64,
     };
     // CRuby's `%-z` rule: any time with offset == 0 emits the
     // "unknown offset" form `-0000` / `-00:00` / `-00:00:00`. This
@@ -2761,7 +2810,7 @@ const MONTH_UPPER_FULL: [&str; 12] = [
 #[monoruby_builtin]
 fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.format("%Y-%m-%d %H:%M:%S %z"),
+        TimeInner::Local(t, _) => t.format("%Y-%m-%d %H:%M:%S %z"),
         TimeInner::Utc(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
     }
     .to_string();
@@ -2812,7 +2861,7 @@ fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn yday(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let d = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.ordinal(),
+        TimeInner::Local(t, _) => t.ordinal(),
         TimeInner::Utc(t) => t.ordinal(),
     };
     Ok(Value::integer(d as _))
@@ -2826,7 +2875,7 @@ fn yday(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn wday(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let w = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.weekday().num_days_from_sunday(),
+        TimeInner::Local(t, _) => t.weekday().num_days_from_sunday(),
         TimeInner::Utc(t) => t.weekday().num_days_from_sunday(),
     };
     Ok(Value::integer(w as _))
@@ -2889,7 +2938,7 @@ fn subsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 #[monoruby_builtin]
 fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.timestamp(),
+        TimeInner::Local(t, _) => t.timestamp(),
         TimeInner::Utc(t) => t.timestamp(),
     };
     Ok(Value::integer(s))
@@ -2902,7 +2951,7 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let self_ = lfp.self_val();
     let t = self_.as_time();
     let s = match t {
-        TimeInner::Local(t) => t.timestamp(),
+        TimeInner::Local(t, _) => t.timestamp(),
         TimeInner::Utc(t) => t.timestamp(),
     };
     Ok(Value::float(
@@ -2924,7 +2973,7 @@ fn to_r(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let self_ = lfp.self_val();
     let t = self_.as_time();
     let (secs, nsec) = match t {
-        TimeInner::Local(t) => (t.timestamp(), t.nanosecond()),
+        TimeInner::Local(t, _) => (t.timestamp(), t.nanosecond()),
         TimeInner::Utc(t) => (t.timestamp(), t.nanosecond()),
     };
     let num = num::BigInt::from(secs) * 1_000_000_000i64 + nsec;
@@ -2941,7 +2990,7 @@ fn utc_offset(
     _: BytecodePtr,
 ) -> Result<Value> {
     let offs = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => t.offset().local_minus_utc(),
+        TimeInner::Local(t, _) => t.offset().local_minus_utc(),
         TimeInner::Utc(_) => 0,
     };
     Ok(Value::integer(offs as _))
@@ -2994,8 +3043,58 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TimeInner {
-    Local(DateTime<FixedOffset>),
+    Local(DateTime<FixedOffset>, Zone),
     Utc(DateTime<Utc>),
+}
+
+///
+/// Which zone a non-UTC `Time` is in.
+///
+/// CRuby keeps the distinction and answers by it: a time in the system
+/// zone has an abbreviation and a meaningful DST flag, both of which
+/// follow `TZ` and the instant, while a time at a plain offset has
+/// neither — `Time.now.zone` is `"EDT"` where
+/// `Time.now.getlocal("+09:00").zone` is `nil`, and `#dst?` is `false`
+/// for the latter whatever the zone would say at that moment.
+///
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Zone {
+    /// The system's zone: `Time.now`, `Time.local`, `Time.at`,
+    /// `#localtime` / `#getlocal` with no argument.
+    ///
+    /// The abbreviation and the DST flag are captured when the time is
+    /// localized, as CRuby captures them — a later `ENV['TZ'] = …` does
+    /// not rewrite a `Time` that already exists, so a time built under
+    /// `America/New_York` still answers `"EDT"` afterwards.
+    System {
+        /// Interned rather than owned: `TimeInner` is `Copy` and a
+        /// `Time` is collected without running `Drop`. There are only
+        /// ever a handful of distinct abbreviations.
+        name: Option<IdentId>,
+        dst: bool,
+    },
+    /// A fixed offset from UTC, with no zone behind it: `#getlocal("+09:00")`,
+    /// `Time.new(…, "+09:00")`, `Time.at(…, in: …)`.
+    Fixed,
+}
+
+/// Localize a UTC instant in the system zone, capturing the offset, the
+/// abbreviation and the DST flag `TZ` gives for it.
+fn localize(instant: DateTime<Utc>) -> TimeInner {
+    let secs = instant.timestamp();
+    TimeInner::Local(
+        instant.with_timezone(&local_offset_at(secs)),
+        system_zone_at(secs),
+    )
+}
+
+/// What the system zone is at a UTC instant, for a time whose local
+/// clock has already been worked out.
+fn system_zone_at(utc_secs: i64) -> Zone {
+    Zone::System {
+        name: local_zone_name(utc_secs).map(|n| IdentId::get_id(&n)),
+        dst: local_is_dst(utc_secs),
+    }
 }
 
 impl PartialOrd for TimeInner {
@@ -3011,11 +3110,11 @@ impl Ord for TimeInner {
         // `DateTime<Utc>` instants, just with a different display
         // offset. CRuby compares Time by absolute instant.
         let l = match self {
-            TimeInner::Local(t) => t.with_timezone(&Utc),
+            TimeInner::Local(t, _) => t.with_timezone(&Utc),
             TimeInner::Utc(t) => *t,
         };
         let r = match other {
-            TimeInner::Local(t) => t.with_timezone(&Utc),
+            TimeInner::Local(t, _) => t.with_timezone(&Utc),
             TimeInner::Utc(t) => *t,
         };
         l.cmp(&r)
@@ -3164,7 +3263,7 @@ fn eql(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Va
 fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::hash::{Hash, Hasher};
     let (secs, nsec) = match lfp.self_val().as_time() {
-        TimeInner::Local(t) => (t.with_timezone(&Utc).timestamp(), t.nanosecond()),
+        TimeInner::Local(t, _) => (t.with_timezone(&Utc).timestamp(), t.nanosecond()),
         TimeInner::Utc(t) => (t.timestamp(), t.nanosecond()),
     };
     let mut hasher = crate::value::seeded_hasher();
@@ -3177,9 +3276,9 @@ impl std::ops::Sub<Self> for TimeInner {
     type Output = Duration;
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (TimeInner::Local(t), TimeInner::Local(rhs)) => t - rhs,
-            (TimeInner::Local(t), TimeInner::Utc(rhs)) => t.with_timezone(&Utc) - rhs,
-            (TimeInner::Utc(t), TimeInner::Local(rhs)) => t - rhs.with_timezone(&Utc),
+            (TimeInner::Local(t, _), TimeInner::Local(rhs, _)) => t - rhs,
+            (TimeInner::Local(t, _), TimeInner::Utc(rhs)) => t.with_timezone(&Utc) - rhs,
+            (TimeInner::Utc(t), TimeInner::Local(rhs, _)) => t - rhs.with_timezone(&Utc),
             (TimeInner::Utc(t), TimeInner::Utc(rhs)) => t - rhs,
         }
     }
@@ -3189,7 +3288,12 @@ impl std::ops::Sub<Duration> for TimeInner {
     type Output = TimeInner;
     fn sub(self, rhs: Duration) -> Self::Output {
         match self {
-            TimeInner::Local(t) => TimeInner::Local(t - rhs),
+            // A system-zone time is localized again at the new
+            // instant, so a span that crosses a DST boundary lands on
+            // the right side of it (CRuby's `time_add` does the same);
+            // a plain offset simply shifts.
+            TimeInner::Local(t, Zone::System { .. }) => localize((t - rhs).with_timezone(&Utc)),
+            TimeInner::Local(t, zone) => TimeInner::Local(t - rhs, zone),
             TimeInner::Utc(t) => TimeInner::Utc(t - rhs),
         }
     }
@@ -3199,7 +3303,8 @@ impl std::ops::Add<Duration> for TimeInner {
     type Output = TimeInner;
     fn add(self, rhs: Duration) -> Self::Output {
         match self {
-            TimeInner::Local(t) => TimeInner::Local(t + rhs),
+            TimeInner::Local(t, Zone::System { .. }) => localize((t + rhs).with_timezone(&Utc)),
+            TimeInner::Local(t, zone) => TimeInner::Local(t + rhs, zone),
             TimeInner::Utc(t) => TimeInner::Utc(t + rhs),
         }
     }
@@ -3208,7 +3313,7 @@ impl std::ops::Add<Duration> for TimeInner {
 impl std::fmt::Display for TimeInner {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            TimeInner::Local(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S %z")),
+            TimeInner::Local(t, _) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S %z")),
             TimeInner::Utc(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S UTC")),
         }
     }
@@ -3217,82 +3322,81 @@ impl std::fmt::Display for TimeInner {
 impl TimeInner {
     fn utc(&mut self) {
         *self = match self {
-            TimeInner::Local(t) => TimeInner::Utc((*t).into()),
+            TimeInner::Local(t, _) => TimeInner::Utc((*t).into()),
             TimeInner::Utc(_) => return,
         }
     }
 
     fn local(&mut self) {
-        *self = match self {
-            TimeInner::Local(_) => return,
-            TimeInner::Utc(t) => {
-                let local = t.with_timezone(&LocalTz);
-                TimeInner::Local(local.fixed_offset())
-            }
+        // Already in the system zone: nothing to do. A fixed-offset time
+        // is *not* — CRuby's `#localtime` re-zones it.
+        if matches!(self, TimeInner::Local(_, Zone::System { .. })) {
+            return;
         }
+        *self = localize(time_utc_instant(self));
     }
 
     /// Move to a fixed-offset zone, recomputing the local clock fields.
     /// Used by `Time#localtime(offset)`.
     fn shift_to_offset(&mut self, offset: FixedOffset) {
         *self = match self {
-            TimeInner::Local(t) => TimeInner::Local(t.with_timezone(&offset)),
-            TimeInner::Utc(t) => TimeInner::Local(t.with_timezone(&offset)),
+            TimeInner::Local(t, _) => TimeInner::Local(t.with_timezone(&offset), Zone::Fixed),
+            TimeInner::Utc(t) => TimeInner::Local(t.with_timezone(&offset), Zone::Fixed),
         }
     }
 
     fn is_utc(&self) -> bool {
         match self {
-            TimeInner::Local(_) => false,
+            TimeInner::Local(_, _) => false,
             TimeInner::Utc(_) => true,
         }
     }
 
     pub fn year(&self) -> i32 {
         match self {
-            TimeInner::Local(t) => t.year(),
+            TimeInner::Local(t, _) => t.year(),
             TimeInner::Utc(t) => t.year(),
         }
     }
 
     pub fn month(&self) -> u32 {
         match self {
-            TimeInner::Local(t) => t.month(),
+            TimeInner::Local(t, _) => t.month(),
             TimeInner::Utc(t) => t.month(),
         }
     }
 
     pub fn day(&self) -> u32 {
         match self {
-            TimeInner::Local(t) => t.day(),
+            TimeInner::Local(t, _) => t.day(),
             TimeInner::Utc(t) => t.day(),
         }
     }
 
     pub fn hour(&self) -> u32 {
         match self {
-            TimeInner::Local(t) => t.hour(),
+            TimeInner::Local(t, _) => t.hour(),
             TimeInner::Utc(t) => t.hour(),
         }
     }
 
     pub fn minute(&self) -> u32 {
         match self {
-            TimeInner::Local(t) => t.minute(),
+            TimeInner::Local(t, _) => t.minute(),
             TimeInner::Utc(t) => t.minute(),
         }
     }
 
     pub fn second(&self) -> u32 {
         match self {
-            TimeInner::Local(t) => t.second(),
+            TimeInner::Local(t, _) => t.second(),
             TimeInner::Utc(t) => t.second(),
         }
     }
 
     pub fn nanosecond(&self) -> u32 {
         match self {
-            TimeInner::Local(t) => t.nanosecond(),
+            TimeInner::Local(t, _) => t.nanosecond(),
             TimeInner::Utc(t) => t.nanosecond(),
         }
     }

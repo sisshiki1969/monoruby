@@ -689,7 +689,20 @@ impl<'a> MarshalReader<'a> {
                                     );
                                 }
                             }
-                            "zone" => {}
+                            // The dumped zone *name*. The rebuilt time
+                            // is at a plain offset (the dump records no
+                            // rule to follow), but it reports the name:
+                            // CRuby's loaded time answers `#zone` "EDT"
+                            // and `#dst?` false alike.
+                            "zone" => {
+                                if val.is_str().is_some() {
+                                    globals.set_ivar(
+                                        result,
+                                        IdentId::get_id(crate::builtins::time::ZONE_IVAR),
+                                        val,
+                                    )?;
+                                }
+                            }
                             "nano_num" => nano_num = val.try_fixnum().unwrap_or(0),
                             "nano_den" => {}
                             _ => {
@@ -1887,15 +1900,19 @@ fn marshal_try_user_protocol(
                     objects, limit,
                 )?;
             }
+            // The zone's *name* — `"UTC"`, or the system zone's
+            // abbreviation at that instant — as a US-ASCII string
+            // (CRuby's `:E false`). A time at a plain offset has none.
             marshal_write_symbol(buf, IdentId::get_id("zone"), symbols);
-            if is_utc {
-                // Zone "UTC" as a US-ASCII string (CRuby's `:E false`).
-                let zone =
-                    Value::string_from_inner(RStringInner::from_encoding(b"UTC", Encoding::UsAscii));
-                marshal_dump_value(buf, zone, vm, globals, symbols, objects, limit)?;
-            } else {
-                // monoruby has no zone *name* for fixed-offset times.
-                buf.push(b'0'); // nil
+            match crate::builtins::time::time_zone_abbr(obj.as_time()) {
+                Some(name) => {
+                    let zone = Value::string_from_inner(RStringInner::from_encoding(
+                        name.as_bytes(),
+                        Encoding::UsAscii,
+                    ));
+                    marshal_dump_value(buf, zone, vm, globals, symbols, objects, limit)?;
+                }
+                None => buf.push(b'0'), // nil
             }
             // TYPE_USERDEF: the object's own link slot follows the objects
             // embedded in its ivars.
