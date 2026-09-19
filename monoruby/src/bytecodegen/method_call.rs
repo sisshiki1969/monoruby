@@ -425,7 +425,7 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Defined(n) => {
                 self.level_down(n, level);
             }
-            NodeKind::Const { parent, .. } => {
+            NodeKind::Const(box ConstInfo { parent, .. }) => {
                 if let Some(n) = parent {
                     self.level_down(n, level);
                 }

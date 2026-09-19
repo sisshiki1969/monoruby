@@ -1,5 +1,6 @@
 use super::*;
 use crate::ast::{
+    ConstInfo,
     ArgList, BinOp, BlockInfo, CaseBranch, CmpKind, Loc, LvarCollector, Node, NodeKind,
     ParseResult, RescueEntry, SourceInfoRef, UnOp,
 };
@@ -1920,12 +1921,12 @@ impl<'a> BytecodeGen<'a> {
 
     fn eval_lvalue(&mut self, lhs: &Node) -> Result<(LvalueKind, bool)> {
         let lhs = match &lhs.kind {
-            NodeKind::Const {
+            NodeKind::Const(box ConstInfo {
                 toplevel,
                 name,
                 parent,
                 prefix,
-            } => {
+            }) => {
                 let name = IdentId::get_id(name);
                 let prefix = prefix.iter().map(|s| IdentId::get_id(s)).collect();
                 let parent = if let Some(box parent) = parent {

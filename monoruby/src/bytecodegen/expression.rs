@@ -64,12 +64,12 @@ impl<'a> BytecodeGen<'a> {
     pub(super) fn push_check_expr(&mut self, expr: Node) -> Result<BcTemp> {
         let ret = self.sp();
         match expr.kind {
-            NodeKind::Const {
+            NodeKind::Const(box ConstInfo {
                 toplevel,
                 name,
                 parent,
                 prefix,
-            } => {
+            }) => {
                 let old = self.temp;
                 let dst = self.push().into();
                 //self.gen_store_expr(dst, expr)?;
@@ -145,8 +145,8 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Bignum(bigint) => self.emit_bigint(dst, bigint),
             NodeKind::Float(f) => self.emit_float(dst, f),
             NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
-            NodeKind::Rational(n, d) => self.emit_rational(dst, n, d),
-            NodeKind::RImaginary(n, d) => self.emit_rimaginary(dst, &n, &d),
+            NodeKind::Rational(box (n, d)) => self.emit_rational(dst, n, d),
+            NodeKind::RImaginary(box (n, d)) => self.emit_rimaginary(dst, &n, &d),
             NodeKind::String(s) => self.emit_string(dst, s, loc),
             NodeKind::Bytes(b) => self.emit_bytes(dst, b, loc),
             NodeKind::EncodedString(b, enc) => self.emit_encoded_string(dst, b, enc, loc),
@@ -198,7 +198,7 @@ impl<'a> BytecodeGen<'a> {
                         NodeKind::Integer(i) => self.emit_integer(dst, -i),
                         NodeKind::Imaginary(r) => self.emit_imaginary(dst, -Real::from(r)),
                         NodeKind::Float(f) => self.emit_float(dst, -f),
-                        NodeKind::Rational(n, d) => self.emit_rational(dst, -n, d),
+                        NodeKind::Rational(box (n, d)) => self.emit_rational(dst, -n, d),
                         _ => self.emit_unary_op(UnOpK::Neg, dst, rhs, loc)?,
                     };
                 }
@@ -207,7 +207,7 @@ impl<'a> BytecodeGen<'a> {
                         NodeKind::Integer(i) => self.emit_integer(dst, i),
                         NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
                         NodeKind::Float(f) => self.emit_float(dst, f),
-                        NodeKind::Rational(n, d) => self.emit_rational(dst, n, d),
+                        NodeKind::Rational(box (n, d)) => self.emit_rational(dst, n, d),
                         _ => self.emit_unary_op(UnOpK::Pos, dst, rhs, loc)?,
                     };
                 }
@@ -291,12 +291,12 @@ impl<'a> BytecodeGen<'a> {
                     self.emit(BytecodeInst::BlockArg(dst, outer, slot), loc);
                 }
             }
-            NodeKind::Const {
+            NodeKind::Const(box ConstInfo {
                 toplevel,
                 name,
                 parent,
                 prefix,
-            } => {
+            }) => {
                 let base: Option<BcReg> = if let Some(box parent) = parent {
                     let base = self.gen_temp_expr(parent)?;
                     Some(base)
@@ -496,10 +496,10 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Array(..)
             | NodeKind::Hash(..)
             | NodeKind::Range { .. }
-            | NodeKind::RegExp(_, _, _)
+            | NodeKind::RegExp(..)
             | NodeKind::Lambda(_)
             | NodeKind::UnOp(..)
-            | NodeKind::Const { .. }
+            | NodeKind::Const(..)
             | NodeKind::InstanceVar(_)
             | NodeKind::ClassVar(_)
             | NodeKind::GlobalVar(_)
@@ -580,10 +580,10 @@ impl<'a> BytecodeGen<'a> {
                 // to re-read, so it stays on the simpler path below.
                 if matches!(
                     &lhs.kind,
-                    NodeKind::Const {
+                    NodeKind::Const(box ConstInfo {
                         parent: Some(_),
                         ..
-                    }
+                    })
                 ) {
                     return self.gen_scoped_const_op_assign(op, lhs, rhs, use_mode, loc);
                 }

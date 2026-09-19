@@ -11,8 +11,11 @@ pub enum NodeKind {
     Bignum(BigInt),
     Float(f64),
     Imaginary(NReal),
-    Rational(BigInt, BigInt),
-    RImaginary(BigInt, BigInt),
+    /// Boxed: a `BigInt` pair is 64 bytes, which every `NodeKind` would
+    /// otherwise be padded up to. `(numerator, denominator)`.
+    Rational(Box<(BigInt, BigInt)>),
+    /// Boxed for the same reason as [`NodeKind::Rational`].
+    RImaginary(Box<(BigInt, BigInt)>),
     Bool(bool),
     String(String),
     Bytes(Vec<u8>),
@@ -60,12 +63,9 @@ pub enum NodeKind {
     InstanceVar(String),
     GlobalVar(String),
     ClassVar(String),
-    Const {
-        toplevel: bool,
-        parent: Option<Box<Node>>,
-        prefix: Vec<String>,
-        name: String,
-    },
+    /// Boxed: see [`ConstInfo`]. Inline it and every one of the hundred
+    /// `NodeKind`s grows to its width.
+    Const(Box<ConstInfo>),
     //Scope(Box<Node>, String),
     BinOp(BinOp, Box<Node>, Box<Node>),
     UnOp(UnOp, Box<Node>),
@@ -150,6 +150,19 @@ pub enum NodeKind {
     DiscardLhs,
 }
 
+/// The payload of [`NodeKind::Const`], boxed.
+///
+/// A Rust enum is as wide as its widest arm, so an inline four-field
+/// payload here would be charged to every `NodeKind` — including the
+/// hundred that carry nothing. This was the arm that set the width.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstInfo {
+    pub toplevel: bool,
+    pub parent: Option<Box<Node>>,
+    pub prefix: Vec<String>,
+    pub name: String,
+}
+
 impl std::default::Default for NodeKind {
     fn default() -> Self {
         Self::Nil
@@ -161,12 +174,12 @@ impl NodeKind {
         match self {
             NodeKind::Ident(s) => Some(s),
             NodeKind::LocalVar(_, s) => Some(s),
-            NodeKind::Const {
+            NodeKind::Const(box ConstInfo {
                 toplevel: false,
                 parent: None,
                 prefix,
                 name,
-            } if prefix.is_empty() => Some(name),
+            }) if prefix.is_empty() => Some(name),
             NodeKind::String(s) => Some(s),
             NodeKind::SelfValue => Some("self"),
             NodeKind::Bool(true) => Some("true"),
@@ -480,12 +493,12 @@ impl Node {
         let s: &str = match &self.kind {
             NodeKind::Ident(s) => s,
             NodeKind::LocalVar(_, s) => s,
-            NodeKind::Const {
+            NodeKind::Const(box ConstInfo {
                 toplevel: false,
                 parent: None,
                 prefix,
                 name,
-            } if prefix.is_empty() => name,
+            }) if prefix.is_empty() => name,
             NodeKind::String(s) => s,
             // Reserved-word literals are accepted as symbol shorthand keys
             // (`nil:`, `false:`, `true:`) -- matching CRuby's hash literal
@@ -523,11 +536,11 @@ impl Node {
     }
 
     pub(crate) fn new_rational(num: BigInt, den: BigInt, loc: Loc) -> Self {
-        Node::new(NodeKind::Rational(num, den), loc)
+        Node::new(NodeKind::Rational(Box::new((num, den))), loc)
     }
 
     pub(crate) fn new_rimaginary(num: BigInt, den: BigInt, loc: Loc) -> Self {
-        Node::new(NodeKind::RImaginary(num, den), loc)
+        Node::new(NodeKind::RImaginary(Box::new((num, den))), loc)
     }
 
     pub(crate) fn new_array(nodes: Vec<Node>, loc: Loc) -> Self {
@@ -685,12 +698,12 @@ impl Node {
         loc: Loc,
     ) -> Self {
         Node::new(
-            NodeKind::Const {
+            NodeKind::Const(Box::new(ConstInfo {
                 toplevel,
                 parent,
                 prefix,
                 name,
-            },
+            })),
             loc,
         )
     }
