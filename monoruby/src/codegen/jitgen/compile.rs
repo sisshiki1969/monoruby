@@ -278,7 +278,7 @@ impl<'a> JitContext<'a> {
         callid: CallSiteId,
     ) -> bool {
         let cs = &self.store[callid];
-        if !cs.splat_pos.is_empty() {
+        if !cs.splat_pos().is_empty() {
             return false;
         }
         let (args, len) = (cs.args, cs.pos_num as u16);
@@ -306,8 +306,8 @@ impl<'a> JitContext<'a> {
         };
         if mcs.recv != arr_dst
             || mcs.pos_num != 0
-            || !mcs.kw_args.is_empty()
-            || !mcs.hash_splat_pos.is_empty()
+            || !mcs.kw_args().is_empty()
+            || !mcs.hash_splat_pos().is_empty()
             || mcs.block_fid.is_some()
             || mcs.block_arg.is_some()
         {
@@ -510,7 +510,7 @@ impl<'a> JitContext<'a> {
                 // storage (including the empty literal `[]`) can be allocated
                 // inline from the free list, with no runtime call. Otherwise
                 // fall back to `gen_array`.
-                let inline = if self.store[callid].splat_pos.is_empty()
+                let inline = if self.store[callid].splat_pos().is_empty()
                     && pos_num <= ARRAY_INLINE_CAPA
                 {
                     Some((args, pos_num as u16))

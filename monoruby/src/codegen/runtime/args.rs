@@ -22,7 +22,7 @@ pub(crate) fn set_frame_arguments(
     // same value the eager path stores for a keyword-less call site.
     if let Some(rest_slot) = globals.store.lazy_forwarding_rest(callee_fid) {
         let cs = &globals[callid];
-        if cs.splat_pos.is_empty() && cs.kw_args.is_empty() && cs.hash_splat_pos.is_empty() {
+        if cs.splat_pos().is_empty() && cs.kw_args().is_empty() && cs.hash_splat_pos().is_empty() {
             unsafe {
                 *callee_lfp.register_ptr(rest_slot) = Some(Value::integer(callid.get() as i64));
                 if let Some(kwr) = globals[callee_fid].kw_rest() {
@@ -44,8 +44,8 @@ pub(crate) fn set_frame_arguments(
     {
         let cs = &globals[callid];
         if cs.forwarding {
-            if cs.splat_pos.len() == 1
-                && cs.splat_pos[0] < cs.pos_num
+            if cs.splat_pos().len() == 1
+                && cs.splat_pos()[0] < cs.pos_num
                 && forwarded_fast_path_ok(&globals.store[callee_fid], cs)
             {
                 return forwarded_set_arguments_core(
@@ -230,14 +230,14 @@ pub(crate) fn resolve_lazy_forwarding(
     if !cs.forwarding {
         return Ok(false);
     }
-    if cs.splat_pos.len() != 1 || cs.splat_pos[0] >= cs.pos_num {
+    if cs.splat_pos().len() != 1 || cs.splat_pos()[0] >= cs.pos_num {
         // Odd forwarding shape (e.g. extra user splats, `g(*a, ...)`):
         // materialize any pending marker and let the generic machinery
         // interpret the call site.
         materialize_lazy_at_callsite(vm, globals, callid, caller_lfp);
         return Ok(false);
     }
-    let sp = cs.splat_pos[0];
+    let sp = cs.splat_pos()[0];
     let args_ptr = caller_lfp.register_ptr(cs.args) as *const Value;
     let splat_v = unsafe { *args_ptr.sub(sp) };
     let Some((orig_ptr, orig_num)) =
@@ -246,8 +246,8 @@ pub(crate) fn resolve_lazy_forwarding(
         return Ok(false);
     };
 
-    let kw_empty = cs.kw_args.is_empty()
-        && cs.hash_splat_pos.iter().all(|p| {
+    let kw_empty = cs.kw_args().is_empty()
+        && cs.hash_splat_pos().iter().all(|p| {
             caller_lfp.register(*p).map_or(true, |v| {
                 v.is_nil() || v.try_hash_ty().is_some_and(|h| h.len() == 0)
             })
@@ -430,7 +430,7 @@ fn materialize_lazy_at_callsite(
     // A forwarding call site can carry extra user splats besides the
     // `...` rest (`g(*a, ...)`); only the rest slot's copy holds the
     // marker, the others are ordinary values.
-    for &sp in cs.splat_pos.iter() {
+    for &sp in cs.splat_pos().iter() {
         if sp >= cs.pos_num {
             continue;
         }
@@ -502,8 +502,8 @@ fn forwarded_set_arguments_core(
     // A hash-splat slot forwards no keywords when it is nil (`...` kwrest
     // with nothing to forward) — and an *empty* Hash forwards none either
     // (e.g. a `**kwrest` that went through `CheckKwRest`, or `f(**{})`).
-    let kw_empty = cs.kw_args.is_empty()
-        && cs.hash_splat_pos.iter().all(|p| {
+    let kw_empty = cs.kw_args().is_empty()
+        && cs.hash_splat_pos().iter().all(|p| {
             caller_lfp.register(*p).map_or(true, |v| {
                 v.is_nil() || v.try_hash_ty().is_some_and(|h| h.len() == 0)
             })
@@ -517,7 +517,7 @@ fn forwarded_set_arguments_core(
         // gate guarantees exactly one splat; `sp` is its position (the
         // `...`/`*rest` slot). It is trailing for `g(x.., ...)` but is
         // *before* post params for implicit `super` of `def m(a,*r,z)`.
-        let sp = cs.splat_pos[0];
+        let sp = cs.splat_pos()[0];
         let args_ptr = caller_lfp.register_ptr(cs.args) as *const Value;
         // args live at descending addresses: arg i at args_ptr.sub(i).
         // The splat slot is normally an Array, but a rest parameter
@@ -677,8 +677,8 @@ fn coerce_hash_splat_args(
     callid: CallSiteId,
     mut caller_lfp: Lfp,
 ) -> Result<()> {
-    for i in 0..globals[callid].hash_splat_pos.len() {
-        let pos = globals[callid].hash_splat_pos[i];
+    for i in 0..globals[callid].hash_splat_pos().len() {
+        let pos = globals[callid].hash_splat_pos()[i];
         if let Some(v) = caller_lfp.register(pos)
             && !v.is_nil()
             && v.try_hash_ty().is_none()
@@ -771,7 +771,7 @@ fn set_callee_frame_arguments(
         let mut h = RubyMap::default();
         {
             let cs = &globals[callid];
-            for (k, id) in cs.kw_args.iter() {
+            for (k, id) in cs.kw_args().iter() {
                 let v = caller_lfp.register(cs.kw_pos + *id).unwrap();
                 h.insert_sym(RubySymbol::new(*k), v);
             }
@@ -779,9 +779,9 @@ fn set_callee_frame_arguments(
         // Indexed rather than iterated: the body re-enters Ruby (`#to_hash`,
         // `#hash` / `#eql?`), which needs `globals` mutably, so the call
         // site is re-borrowed per position instead of cloned.
-        for i in 0..globals[callid].hash_splat_pos.len() {
+        for i in 0..globals[callid].hash_splat_pos().len() {
             let v = caller_lfp
-                .register(globals[callid].hash_splat_pos[i])
+                .register(globals[callid].hash_splat_pos()[i])
                 .unwrap();
             if v.is_nil() {
                 continue;
@@ -814,7 +814,7 @@ fn set_callee_frame_arguments(
     let coerced = if globals[callee_fid].single_arg_expand()
         && pos_args == 1
         && ex.is_none()
-        && globals[callid].splat_pos.is_empty()
+        && globals[callid].splat_pos().is_empty()
         && !unsafe { *src }.is_array_ty()
     {
         block_arg_to_ary(vm, globals, unsafe { *src })?
@@ -841,7 +841,7 @@ fn set_callee_frame_arguments(
         dup.try_hash_ty().unwrap().unset_ruby2_keywords_flag();
         dup
     }
-    let splat_pos = &globals[callid].splat_pos;
+    let splat_pos = &globals[callid].splat_pos();
     if let Some(coerced) = coerced {
         let ary = coerced.try_array_ty().unwrap();
         fill_positional_args(
@@ -1259,10 +1259,10 @@ fn any_keyword_passed(
     caller_lfp: Lfp,
 ) -> Result<bool> {
     let cs = &globals[caller];
-    if !cs.kw_args.is_empty() {
+    if !cs.kw_args().is_empty() {
         return Ok(true);
     }
-    for pos in cs.hash_splat_pos.iter() {
+    for pos in cs.hash_splat_pos().iter() {
         let h = caller_lfp.register(*pos).unwrap();
         if h.is_nil() {
             continue;
@@ -1388,9 +1388,8 @@ fn ordinary_keyword(
     mut callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<Vec<String>> {
-    let CallSiteInfo {
-        kw_pos, kw_args, ..
-    } = &globals[callsite];
+    let kw_args = globals[callsite].kw_args();
+    let CallSiteInfo { kw_pos, .. } = &globals[callsite];
 
     let callee_kw_pos = globals[info].kw_reg_pos();
     let mut used = 0;
@@ -1444,13 +1443,13 @@ fn hash_splat_and_kw_rest(
     let kw_pos = globals[caller].kw_pos;
     let callee_kw_pos = globals[callee].kw_reg_pos();
     let kw_num = globals[callee].kw_names().len();
-    let splat_num = globals[caller].hash_splat_pos.len();
+    let splat_num = globals[caller].hash_splat_pos().len();
     // The keyword-hash sources, in order: each `**hash` at the call site,
     // then the ruby2_keywords hash promoted from a `*args` splat, if any.
     let source = |globals: &Globals, i: usize| -> Value {
         if i < splat_num {
             caller_lfp
-                .register(globals[caller].hash_splat_pos[i])
+                .register(globals[caller].hash_splat_pos()[i])
                 .unwrap()
         } else {
             r2k_kw.unwrap()
@@ -1504,9 +1503,9 @@ fn hash_splat_and_kw_rest(
             unsafe { callee_lfp.set_register(rest, Some(Value::nil())) }
         } else {
             let mut kw_rest = RubyMap::default();
-            for i in 0..globals[caller].kw_args.len() {
+            for i in 0..globals[caller].kw_args().len() {
                 let (name, idx) = {
-                    let (name, idx) = globals[caller].kw_args.get_index(i).unwrap();
+                    let (name, idx) = globals[caller].kw_args().get_index(i).unwrap();
                     (*name, *idx)
                 };
                 if globals[callee].kw_names().contains(&name) {

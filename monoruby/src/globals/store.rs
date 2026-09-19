@@ -363,7 +363,7 @@ impl Store {
             .callsite_info
             .iter()
             .filter(|c| {
-                !c.splat_pos.is_empty() || !c.kw_args.is_empty() || !c.hash_splat_pos.is_empty()
+                !c.splat_pos().is_empty() || !c.kw_args().is_empty() || !c.hash_splat_pos().is_empty()
             })
             .count();
         writeln!(
@@ -1340,15 +1340,22 @@ impl Store {
         vcall: bool,
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
+        let extra = if splat_pos.is_empty() && kw_args.is_empty() && hash_splat_pos.is_empty() {
+            None
+        } else {
+            Some(Box::new(CallSiteExtra {
+                splat_pos,
+                kw_args,
+                hash_splat_pos,
+            }))
+        };
         self.callsite_info.push(CallSiteInfo {
             id,
             name,
             bc_pos,
             pos_num,
             kw_pos,
-            kw_args,
-            splat_pos,
-            hash_splat_pos,
+            extra,
             block_fid,
             block_arg,
             args,
@@ -2363,6 +2370,31 @@ impl PolyCache {
     }
 }
 
+///
+/// The argument shapes only a small minority of call sites have.
+///
+/// A site with none of them is the overwhelming majority — 99.8% of the
+/// call sites in a definition-heavy file, 98% among the builtins loaded
+/// at startup (`MONORUBY_STORE_STATS=1` counts them). Inline, the three
+/// empty containers cost 120 bytes at every one of those sites; behind
+/// one pointer they cost eight.
+///
+#[derive(Debug, Clone, Default)]
+pub struct CallSiteExtra {
+    /// Positions of splat arguments.
+    pub splat_pos: Vec<usize>,
+    /// Names and positions of keyword arguments.
+    pub kw_args: indexmap::IndexMap<IdentId, usize>,
+    /// Position of hash splat arguments.
+    pub hash_splat_pos: Vec<SlotId>,
+}
+
+/// The empty map `CallSiteInfo::kw_args` hands out for a site with no
+/// keyword arguments. `IndexMap::new` does not allocate, so this is one
+/// shared, empty header.
+static NO_KW_ARGS: std::sync::LazyLock<indexmap::IndexMap<IdentId, usize>> =
+    std::sync::LazyLock::new(indexmap::IndexMap::new);
+
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
 pub struct CallSiteInfo {
@@ -2378,18 +2410,15 @@ pub struct CallSiteInfo {
     pub(crate) args: SlotId,
     /// Number of positional arguments.
     pub pos_num: usize,
-    /// Positions of splat arguments.
-    pub splat_pos: Vec<usize>,
+    /// Splat / keyword / hash-splat arguments, or `None` when the site
+    /// passes none — see [`CallSiteExtra`].
+    extra: Option<Box<CallSiteExtra>>,
     /// *FuncId* of passed block.
     pub block_fid: Option<FuncId>,
     /// Position of block argument.
     pub(crate) block_arg: Option<SlotId>,
     /// Postion of keyword arguments.
     pub(crate) kw_pos: SlotId,
-    /// Names and positions of keyword arguments.
-    pub kw_args: indexmap::IndexMap<IdentId, usize>,
-    /// Position of hash splat arguments.
-    pub(crate) hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.
     pub(crate) dst: Option<SlotId>,
     #[allow(dead_code)]
@@ -2420,20 +2449,36 @@ pub struct CallSiteInfo {
 }
 
 impl CallSiteInfo {
+    /// Positions of splat arguments; empty when the site has none.
+    pub fn splat_pos(&self) -> &[usize] {
+        self.extra.as_ref().map_or(&[], |e| &e.splat_pos)
+    }
+
+    /// Names and positions of keyword arguments; empty when the site
+    /// has none.
+    pub fn kw_args(&self) -> &indexmap::IndexMap<IdentId, usize> {
+        self.extra.as_ref().map_or(&NO_KW_ARGS, |e| &e.kw_args)
+    }
+
+    /// Positions of hash splat arguments; empty when the site has none.
+    pub fn hash_splat_pos(&self) -> &[SlotId] {
+        self.extra.as_ref().map_or(&[], |e| &e.hash_splat_pos)
+    }
+
     pub fn kw_may_exists(&self) -> bool {
-        !self.kw_args.is_empty() || !self.hash_splat_pos.is_empty()
+        !self.kw_args().is_empty() || !self.hash_splat_pos().is_empty()
     }
 
     pub fn has_splat(&self) -> bool {
-        !self.splat_pos.is_empty()
+        !self.splat_pos().is_empty()
     }
 
     pub fn has_hash_splat(&self) -> bool {
-        !self.hash_splat_pos.is_empty()
+        !self.hash_splat_pos().is_empty()
     }
 
     pub fn kw_len(&self) -> usize {
-        self.kw_args.len() + self.hash_splat_pos.len()
+        self.kw_args().len() + self.hash_splat_pos().len()
     }
 
     pub fn is_func_call(&self) -> bool {
@@ -2479,16 +2524,15 @@ impl CallSiteInfo {
     }
 
     pub(crate) fn object_send_single_splat(&self) -> bool {
-        self.splat_pos.len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
+        self.splat_pos().len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
     }
 
     pub fn format_args(&self) -> String {
+        let (splat_pos, kw_args, hash_splat_pos) =
+            (self.splat_pos(), self.kw_args(), self.hash_splat_pos());
         let CallSiteInfo {
             pos_num,
-            splat_pos,
             kw_pos,
-            kw_args,
-            hash_splat_pos,
             block_arg,
             block_fid,
             args,
