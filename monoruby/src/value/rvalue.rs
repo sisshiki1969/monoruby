@@ -811,6 +811,15 @@ impl RValue {
                 ObjTy::MATCHDATA => self.as_match_data().inspect(),
                 ObjTy::HASH => self.hash_inspect(store, set),
                 ObjTy::RANGE => self.as_range().inspect(store, set),
+                // A `Struct` / `Data` instance reached from inside
+                // another object's inspect: render it as its own
+                // `#inspect` would, not as the default `#<S:0x…>`.
+                ObjTy::STRUCT => crate::builtins::data_class::render_struct_or_data(
+                    store,
+                    Value::from_rvalue_ref(self),
+                    set,
+                )
+                .unwrap_or_else(|| self.to_s(store)),
                 _ => self.to_s(store),
             }
         }

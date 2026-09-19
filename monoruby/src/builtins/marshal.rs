@@ -232,6 +232,11 @@ struct MarshalReader<'a> {
     freeze: bool,
     /// `Marshal.load(src, proc)`: called with each reconstructed value.
     proc: Option<Proc>,
+    /// Set while reading a `'C'` (user-class) payload: the value inside
+    /// is about to have its class swapped (and may then take ivars), so
+    /// it must be its own object — never one shared out of the frozen
+    /// string pool by `freeze: true`.
+    no_intern: bool,
     /// Ids of container objects currently being built. A `'@'` link that
     /// resolves to one of these (a self-reference into an in-progress
     /// object) does not fire the load proc, matching CRuby.
@@ -246,6 +251,7 @@ impl<'a> MarshalReader<'a> {
             symbols: Vec::new(),
             objects: Array::new_empty(),
             freeze: false,
+            no_intern: false,
             proc: None,
             building: std::collections::HashSet::new(),
         }
@@ -429,7 +435,7 @@ impl<'a> MarshalReader<'a> {
                 })?;
                 Ok(Value::symbol(id))
             }
-            b'"' => self.read_raw_string(Encoding::Ascii8),
+            b'"' => self.read_raw_string(globals, Encoding::Ascii8),
             b'I' => self.read_ivar_wrapped(vm, globals),
             b'[' => self.read_array(vm, globals),
             b'{' => self.read_hash(vm, globals),
@@ -548,9 +554,23 @@ impl<'a> MarshalReader<'a> {
 
     /// Read a raw string (after the '"' tag has already been consumed).
     /// Format: marshal_int(length) + bytes
-    fn read_raw_string(&mut self, encoding: Encoding) -> Result<Value> {
+    fn read_raw_string(&mut self, globals: &mut Globals, encoding: Encoding) -> Result<Value> {
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?;
+        if self.freeze && !self.no_intern {
+            // `freeze: true` hands back *interned* Strings, so two equal
+            // ones load as the same object (CRuby's
+            // `rb_str_to_interned_str`).
+            let enc = if encoding.is_utf8_compatible() {
+                Encoding::Utf8
+            } else {
+                encoding
+            };
+            let bytes = bytes.to_vec();
+            let val = globals.store.intern_frozen_str(&bytes, enc);
+            self.objects.push(val);
+            return Ok(val);
+        }
         let val = if encoding.is_utf8_compatible() {
             Value::string_from_inner(RStringInner::from_encoding(bytes, Encoding::Utf8))
         } else {
@@ -585,7 +605,13 @@ impl<'a> MarshalReader<'a> {
                 let idx = self.objects.len();
                 self.objects.push(Value::nil());
                 let (encoding, user_ivars) = self.read_encoding_ivars(vm, globals)?;
-                let val = Value::string_from_inner(RStringInner::from_encoding(&bytes, encoding));
+                // Interning is for plain Strings only: one carrying
+                // instance variables must stay its own object.
+                let val = if self.freeze && !self.no_intern && user_ivars.is_empty() {
+                    globals.store.intern_frozen_str(&bytes, encoding)
+                } else {
+                    Value::string_from_inner(RStringInner::from_encoding(&bytes, encoding))
+                };
                 self.objects[idx] = val;
                 for (sym, ivar_val) in user_ivars {
                     globals.set_ivar(val, sym, ivar_val)?;
@@ -1060,7 +1086,10 @@ impl<'a> MarshalReader<'a> {
         // Read the base value without freezing it (under `freeze: true`)
         // so its class can still be swapped; the outer `read_value`
         // freezes the final wrapped result.
-        let mut inner = self.read_value_inner(vm, globals)?;
+        let saved_no_intern = std::mem::replace(&mut self.no_intern, true);
+        let inner = self.read_value_inner(vm, globals);
+        self.no_intern = saved_no_intern;
+        let mut inner = inner?;
         let class_name = class_sym.get_name();
         let class_name_id = IdentId::get_id(&class_name);
         let class_val = globals
@@ -1195,6 +1224,11 @@ impl<'a> MarshalReader<'a> {
                 )));
             }
             instance.set_struct_slot(i, val);
+        }
+        // A `Data` is a frozen value object, whatever `freeze:` says; a
+        // `Struct` is not.
+        if super::data_class::is_data_subclass(&globals.store, class_id) {
+            instance.set_frozen();
         }
         self.objects[obj_idx] = instance;
         Ok(instance)
@@ -3889,6 +3923,38 @@ mod tests {
             r << w.binmodes
             class MarshalToStr; def to_str; Marshal.dump(42); end; end
             r << Marshal.load(MarshalToStr.new)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn load_freezing_and_data_values() {
+        // A `Data` a load rebuilds is frozen (a `Struct` is not), and
+        // `freeze: true` hands back *interned* Strings so two equal ones
+        // are the same object. Interning must skip a String that is
+        // about to become a built-in subclass instance (`'C'`) or to
+        // take instance variables — it would otherwise re-class or
+        // decorate an object shared out of the frozen string pool.
+        run_test_once(
+            r##"
+            D = Data.define(:a)
+            S = Struct.new(:b)
+            r = []
+            r << Marshal.load(Marshal.dump(D.new(1))).frozen?
+            r << Marshal.load(Marshal.dump(S.new(1))).frozen?
+            ob = Marshal.load(Marshal.dump(["foo" + "bar", "foobar"]), freeze: true)
+            r << [ob[0].equal?(ob[1]), ob[0].frozen?]
+            class US < String; end
+            u = US.new("x")
+            u.instance_variable_set(:@foo, "bar")
+            lu = Marshal.load(Marshal.dump(u), freeze: true)
+            r << [lu.class.to_s, lu.frozen?, lu.instance_variable_get(:@foo), lu]
+            s = +"x"
+            s.instance_variable_set(:@a, 1)
+            l = Marshal.load(Marshal.dump([s, +"x"]), freeze: true)
+            r << [l[0].equal?(l[1]), l[0].frozen?, l[0].instance_variable_get(:@a)]
+            r << Marshal.load(Marshal.dump("bin".b), freeze: true).encoding.to_s
             r
             "##,
         );

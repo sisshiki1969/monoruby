@@ -33,6 +33,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(cid, "deconstruct", deconstruct, 0);
 }
 
+/// Whether `class_id` is a `Data` subclass — i.e. its instances are the
+/// frozen value objects `Data.define` produces. `Marshal` needs this:
+/// CRuby freezes a `Data` it loads, but not a `Struct`.
+pub(crate) fn is_data_subclass(store: &Store, class_id: ClassId) -> bool {
+    match data_class_id(store) {
+        Some(data) => derives_from(store, class_id, data),
+        None => false,
+    }
+}
+
 /// The `ClassId` of `::Data`, looked up via the constant so no reserved
 /// builtin id is needed.
 fn data_class_id(store: &Store) -> Option<ClassId> {
@@ -43,13 +53,21 @@ fn data_class_id(store: &Store) -> Option<ClassId> {
 }
 
 /// Whether `class_id`'s superclass chain reaches `target`.
-fn derives_from(store: &Store, mut class_id: ClassId, target: ClassId) -> bool {
+///
+/// The walk follows the ancestor *objects*. Re-looking each step's id up
+/// in `store` instead would spin forever on a chain that passes through
+/// an iclass: an iclass reports the included module's id, and that
+/// module's own entry leads back into the same chain — a `Struct`
+/// subclass (`Struct` includes `Enumerable`) hung `Data#inspect` and
+/// `Marshal.load` that way.
+fn derives_from(store: &Store, class_id: ClassId, target: ClassId) -> bool {
+    let mut module = store[class_id].get_module();
     loop {
-        if class_id == target {
+        if !module.is_iclass() && module.id() == target {
             return true;
         }
-        match store[class_id].get_module().superclass() {
-            Some(s) => class_id = s.id(),
+        match module.superclass() {
+            Some(s) => module = s,
             None => return false,
         }
     }
@@ -157,8 +175,44 @@ fn data_inspect(
     let store = &globals.store;
     let data_cid = data_class_id(store).ok_or_else(|| MonorubyErr::runtimeerr("Data class not found"))?;
     let mut set = std::collections::HashSet::new();
+    set.insert(self_val.id());
     let s = render_data(store, self_val, data_cid, &mut set)?;
     Ok(Value::string(s))
+}
+
+/// The label a self-referential `STRUCT`-typed value renders as:
+/// `#<data D:...>` for a `Data` (with `#<Class:0x...>` in place of the
+/// name when the class is anonymous), `#<struct S:...>` for a Struct.
+pub(crate) fn recursive_struct_label(store: &Store, val: Value) -> String {
+    match data_class_id(store) {
+        Some(data_cid) if derives_from(store, val.class(), data_cid) => {
+            let name = data_class_label(store, val.class()).unwrap_or_else(|| {
+                format!(
+                    "#<Class:0x{:016x}>",
+                    store[val.class()].get_module().as_val().id()
+                )
+            });
+            format!("#<data {name}:...>")
+        }
+        _ => super::struct_class::recursive_struct_label(store, val),
+    }
+}
+
+/// Render a `STRUCT`-typed value — a `Data` value object or a plain
+/// `Struct` instance — the way its `#inspect` does. This is what the
+/// Rust-level inspect uses, so one nested inside another struct, a
+/// Data, an Array or a Hash no longer falls back to `#<S:0x…>`.
+pub(crate) fn render_struct_or_data(
+    store: &Store,
+    val: Value,
+    set: &mut std::collections::HashSet<u64>,
+) -> Option<String> {
+    match data_class_id(store) {
+        Some(data_cid) if derives_from(store, val.class(), data_cid) => {
+            render_data(store, val, data_cid, set).ok()
+        }
+        _ => super::struct_class::render_struct(store, val, set).ok(),
+    }
 }
 
 /// The class label for `#<data ...>` rendering: the fully-qualified real
@@ -173,23 +227,12 @@ fn data_class_label(store: &Store, class_id: ClassId) -> Option<String> {
     }
 }
 
-fn render_data(
+pub(crate) fn render_data(
     store: &Store,
     val: Value,
     data_cid: ClassId,
     set: &mut std::collections::HashSet<u64>,
 ) -> Result<String> {
-    if !set.insert(val.id()) {
-        // Recursion: `#<data Name:...>`, where an anonymous class renders
-        // its default `#<Class:0x...>` form in place of the name.
-        let name = data_class_label(store, val.class()).unwrap_or_else(|| {
-            format!(
-                "#<Class:0x{:016x}>",
-                store[val.class()].get_module().as_val().id()
-            )
-        });
-        return Ok(format!("#<data {name}:...>"));
-    }
     let mut out = String::from("#<data");
     if let Some(name) = data_class_label(store, val.class()) {
         out.push(' ');
@@ -200,13 +243,9 @@ fn render_data(
     for (i, m) in members.iter().enumerate() {
         let name = m.try_symbol().unwrap();
         let slot = val.try_struct().and_then(|s| s.try_get(i));
+        // A nested `Data` or `Struct` renders through the shared
+        // Rust-level inspect, which knows both.
         let rendered = match slot {
-            Some(v)
-                if v.ty() == Some(crate::value::rvalue::ObjTy::STRUCT)
-                    && derives_from(store, v.class(), data_cid) =>
-            {
-                render_data(store, v, data_cid, set)?
-            }
             Some(v) => v.inspect_inner(store, set),
             None => "nil".to_string(),
         };
@@ -215,7 +254,6 @@ fn render_data(
         out.push_str(&format!("{name:?}={rendered}"));
     }
     out.push('>');
-    set.remove(&val.id());
     Ok(out)
 }
 

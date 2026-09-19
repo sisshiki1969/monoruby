@@ -472,47 +472,73 @@ fn is_keyword_init(globals: &Globals, class_obj: Module) -> bool {
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let class_id = self_val.class();
-    let struct_class = globals.store[class_id].get_module();
-    // Class name: fully qualified path (`M::S`), bypassing any user-
-    // defined `#name` so e.g. `def self.name; "x"; end` cannot affect
-    // inspect. CRuby's `rb_struct_inspect` uses `rb_class_real`-derived
-    // path for the same reason. Anonymous classes (and any ancestor in
-    // the path that's anonymous) are detected via `get_name() == None`
-    // — in that case render `#<struct member=...>` with no class name.
-    let class_name = if globals.store[class_id].get_name().is_some()
-        && let Some(qualified) = qualified_real_class_name(&globals.store, class_id)
-    {
-        Some(qualified)
+    let mut set = std::collections::HashSet::new();
+    // The entry point owns the receiver's recursion mark; nested values
+    // are marked by `inspect_inner` as it walks into them.
+    set.insert(self_val.id());
+    Ok(Value::string(render_struct(&globals.store, self_val, &mut set)?))
+}
+
+/// Render a `Struct` instance as `#inspect` does. Shared with the
+/// Rust-level inspect (`RValue::inspect`), so a struct nested inside
+/// another struct, a `Data`, an Array or a Hash renders as
+/// `#<struct …>` instead of the default `#<S:0x…>` — and a struct that
+/// contains itself renders CRuby's `#<struct S:...>` rather than
+/// recursing forever.
+///
+/// Class name: the fully qualified path (`M::S`), bypassing any
+/// user-defined `#name` so e.g. `def self.name; "x"; end` cannot affect
+/// inspect (CRuby's `rb_struct_inspect` uses the `rb_class_real` path
+/// for the same reason). An anonymous class — or any anonymous segment
+/// of the path — drops the label entirely.
+pub(crate) fn render_struct(
+    store: &Store,
+    val: Value,
+    set: &mut std::collections::HashSet<u64>,
+) -> Result<String> {
+    let class_id = val.class();
+    let class_name = if store[class_id].get_name().is_some() {
+        qualified_real_class_name(store, class_id)
     } else {
         None
     };
-
     let mut inspect = String::from("#<struct");
     if let Some(name) = &class_name {
         inspect.push(' ');
         inspect.push_str(name);
     }
-
-    let members = get_members(&globals.store, struct_class)?;
-    let slots = self_val.try_struct();
+    let members = get_members(store, store[class_id].get_module())?;
+    let slots = val.try_struct();
     let mut first = true;
     for (i, m) in members.iter().enumerate() {
         let name = m.try_symbol().unwrap();
         // Slot-based read: by Phase 3 the per-instance slot vec is the
         // canonical store. Fall back to the ivar (legacy) if the value
         // is somehow unsynced -- a paranoia net during the migration.
-        let val = match slots.and_then(|s| s.try_get(i)) {
-            Some(v) => v.inspect(&globals.store),
+        let v = match slots.and_then(|s| s.try_get(i)) {
+            Some(v) => v.inspect_inner(store, set),
             None => "nil".to_string(),
         };
         inspect.push_str(if first { " " } else { ", " });
         first = false;
-        inspect.push_str(&format!("{name:?}={val}"));
+        inspect.push_str(&format!("{name:?}={v}"));
     }
     inspect.push('>');
+    Ok(inspect)
+}
 
-    Ok(Value::string(inspect))
+/// The label a self-referential `Struct` renders as: `#<struct S:...>`,
+/// or `#<struct:...>` for an anonymous class.
+pub(crate) fn recursive_struct_label(store: &Store, val: Value) -> String {
+    let class_id = val.class();
+    match if store[class_id].get_name().is_some() {
+        qualified_real_class_name(store, class_id)
+    } else {
+        None
+    } {
+        Some(name) => format!("#<struct {name}:...>"),
+        None => "#<struct:...>".to_string(),
+    }
 }
 
 /// Returns the fully-qualified class name (`M::S`) by walking the
@@ -1921,6 +1947,42 @@ mod tests {
         run_test_with_prelude(r#"begin; M.new(unit: "km"); rescue ArgumentError => e; e.message; end"#, prelude);
         run_test_with_prelude(
             r#"begin; M.new(amount: 1, unit: "m", system: "x"); rescue ArgumentError => e; e.message; end"#,
+            prelude,
+        );
+    }
+
+    #[test]
+    fn nested_struct_and_data_inspect() {
+        // A Struct / Data reached from inside another object's inspect
+        // used to fall back to the default `#<S:0x…>`: the Rust-level
+        // inspect had no case for them, and only the `#inspect` builtins
+        // (which Ruby dispatch reaches) knew how to render one. A
+        // Struct nested in a Data additionally *hung* — the ancestor
+        // walk that told Data from Struct re-looked each step up by id
+        // and spun on the iclass `Struct`'s `include Enumerable` leaves
+        // in the chain.
+        let prelude = r#"
+            S = Struct.new(:b)
+            T = Struct.new(:c)
+            D = Data.define(:a)
+            E = Data.define(:e)
+        "#;
+        run_test_with_prelude(
+            r#"
+            r = []
+            r << S.new(T.new(1)).inspect
+            r << S.new(D.new(2)).inspect
+            r << D.new(S.new(3)).inspect
+            r << D.new(E.new(4)).inspect
+            r << [S.new(T.new(1))].inspect
+            r << ({ k: S.new(1) }).inspect
+            # Self-reference: CRuby's `#<struct S:...>`, not an endless walk.
+            s = S.new(nil); s.b = s
+            r << s.inspect
+            # An anonymous class drops the label entirely.
+            r << Class.new(S).new(5).inspect
+            r
+            "#,
             prelude,
         );
     }

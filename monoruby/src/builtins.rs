@@ -49,7 +49,7 @@ mod socket;
 pub(crate) mod spawn;
 pub(crate) mod string;
 pub(crate) mod struct_class;
-mod data_class;
+pub(crate) mod data_class;
 mod symbol;
 mod object_space;
 mod thread;
