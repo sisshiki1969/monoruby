@@ -112,7 +112,7 @@ or
 (5) or, install `monoruby` and `irm` onto your `PATH`.
 
 ```sh
-> cargo install --path monoruby
+> bin/install    # cargo install + the native extensions (psych, zlib, …)
 > monoruby test.rb
 > irm
 ```

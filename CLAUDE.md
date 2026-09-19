@@ -154,9 +154,10 @@ parent/
 #### Running core category specs
 
 ```sh
-# Build and install monoruby in release mode
+# Build and install monoruby in release mode, with the native extensions
+# (psych, zlib, sqlite3, … — plain `cargo install` copies only the binary)
 cd monoruby
-cargo install --path monoruby
+bin/install
 
 # Run a specific category (e.g., core/array)
 cd ../spec
