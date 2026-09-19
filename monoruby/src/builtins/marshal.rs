@@ -1595,26 +1595,6 @@ fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentI
         marshal_write_encoding_ivar_pair(buf, enc, symbols);
     }
 }
-
-/// Append the single encoding instance variable that CRuby attaches to a
-/// String / Regexp payload inside an 'I' (ivar) wrapper:
-///
-/// - UTF-8              → `1 ivar` + `:E` + true
-/// - US-ASCII/ASCII-8BIT → `1 ivar` + `:E` + false
-/// - other              → `1 ivar` + `:encoding` + `"<name>"` (raw string)
-///
-/// The String path never calls this for ASCII-8BIT (a binary string is
-/// written without an ivar wrapper); the Regexp path does, because a
-/// Regexp always carries its encoding.
-fn marshal_write_string_encoding_ivar(
-    buf: &mut Vec<u8>,
-    enc: Encoding,
-    symbols: &mut Vec<IdentId>,
-) {
-    marshal_write_fixnum(buf, 1); // 1 ivar
-    marshal_write_encoding_ivar_pair(buf, enc, symbols);
-}
-
 /// Write just the encoding instance-variable *pair* (symbol + value),
 /// without the leading ivar count — used when other user ivars share the
 /// same `I` block.
@@ -1905,23 +1885,33 @@ fn marshal_try_user_protocol(
             objects.push(obj_id);
             return Ok(true);
         }
-        // 'u' (TYPE_USERDEF): the object's own link slot follows any
-        // objects embedded in the returned string.
-        objects.push(obj_id);
-        if enc == Encoding::Ascii8 {
-            buf.push(b'u');
-            marshal_write_symbol(buf, class_name_id, symbols);
-            marshal_write_fixnum(buf, bytes.len() as i32);
-            buf.extend_from_slice(&bytes);
-        } else {
-            // Wrap with 'I' to carry the payload string's encoding.
+        // The String `_dump` returned may carry instance variables of
+        // its own; CRuby writes them in the same `I` block as its
+        // encoding (encoding first), and they were dropped here.
+        let payload_ivars = globals.get_ivars(payload);
+        let has_enc_ivar = enc != Encoding::Ascii8;
+        let ivar_count = has_enc_ivar as usize + payload_ivars.len();
+        if ivar_count > 0 {
             buf.push(b'I');
-            buf.push(b'u');
-            marshal_write_symbol(buf, class_name_id, symbols);
-            marshal_write_fixnum(buf, bytes.len() as i32);
-            buf.extend_from_slice(&bytes);
-            marshal_write_string_encoding_ivar(buf, enc, symbols);
         }
+        buf.push(b'u');
+        marshal_write_symbol(buf, class_name_id, symbols);
+        marshal_write_fixnum(buf, bytes.len() as i32);
+        buf.extend_from_slice(&bytes);
+        if ivar_count > 0 {
+            marshal_write_fixnum(buf, ivar_count as i32);
+            if has_enc_ivar {
+                marshal_write_encoding_ivar_pair(buf, enc, symbols);
+            }
+            for (name, val) in payload_ivars {
+                marshal_write_symbol(buf, name, symbols);
+                marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
+            }
+        }
+        // 'u' (TYPE_USERDEF): the object's own link slot follows any
+        // objects embedded in the returned string's ivars — CRuby
+        // indexes those first and the object itself last.
+        objects.push(obj_id);
         return Ok(true);
     }
     Ok(false)
@@ -3955,6 +3945,51 @@ mod tests {
             l = Marshal.load(Marshal.dump([s, +"x"]), freeze: true)
             r << [l[0].equal?(l[1]), l[0].frozen?, l[0].instance_variable_get(:@a)]
             r << Marshal.load(Marshal.dump("bin".b), freeze: true).encoding.to_s
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn user_defined_dump_payload_ivars() {
+        // A String returned by `#_dump` may carry instance variables of
+        // its own. They were dropped: only the payload's encoding ever
+        // reached the wire. CRuby writes them in the same `I` block
+        // (encoding first) and indexes their values in the object table
+        // *before* the object itself — so a later back-reference to the
+        // object is one index higher than it used to be here.
+        run_test_once(
+            r##"
+            class MarshalDumpIvar
+              def _dump(depth)
+                s = +"<dump>"
+                s.instance_variable_set(:@foo, "bar")
+                s
+              end
+              def self._load(str) = new
+            end
+            class MarshalDumpIvarShared
+              def initialize(s, v); @s = s; @v = v; end
+              def _dump(depth)
+                s = @s.dup
+                s.instance_variable_set(:@foo, @v)
+                s
+              end
+              def self._load(str) = new(str, nil)
+            end
+            class MarshalDumpPlain
+              def _dump(depth) = "plain".b
+              def self._load(str) = new
+            end
+            r = []
+            a = MarshalDumpIvar.new
+            r << Marshal.dump([a, a])
+            value = "<foo>"
+            obj = MarshalDumpIvarShared.new(+"string", value)
+            r << Marshal.dump([obj, obj, value])
+            # No ivars and a BINARY payload: no `I` wrapper at all.
+            r << Marshal.dump(MarshalDumpPlain.new)
+            r << Marshal.load(Marshal.dump(a)).class.to_s
             r
             "##,
         );

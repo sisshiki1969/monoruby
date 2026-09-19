@@ -173,10 +173,9 @@ fn data_inspect(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let store = &globals.store;
-    let data_cid = data_class_id(store).ok_or_else(|| MonorubyErr::runtimeerr("Data class not found"))?;
     let mut set = std::collections::HashSet::new();
     set.insert(self_val.id());
-    let s = render_data(store, self_val, data_cid, &mut set)?;
+    let s = render_data(store, self_val, &mut set)?;
     Ok(Value::string(s))
 }
 
@@ -186,7 +185,7 @@ fn data_inspect(
 pub(crate) fn recursive_struct_label(store: &Store, val: Value) -> String {
     match data_class_id(store) {
         Some(data_cid) if derives_from(store, val.class(), data_cid) => {
-            let name = data_class_label(store, val.class()).unwrap_or_else(|| {
+            let name = data_class_label(store, val.real_class(store).id()).unwrap_or_else(|| {
                 format!(
                     "#<Class:0x{:016x}>",
                     store[val.class()].get_module().as_val().id()
@@ -209,7 +208,7 @@ pub(crate) fn render_struct_or_data(
 ) -> Option<String> {
     match data_class_id(store) {
         Some(data_cid) if derives_from(store, val.class(), data_cid) => {
-            render_data(store, val, data_cid, set).ok()
+            render_data(store, val, set).ok()
         }
         _ => super::struct_class::render_struct(store, val, set).ok(),
     }
@@ -230,15 +229,14 @@ fn data_class_label(store: &Store, class_id: ClassId) -> Option<String> {
 pub(crate) fn render_data(
     store: &Store,
     val: Value,
-    data_cid: ClassId,
     set: &mut std::collections::HashSet<u64>,
 ) -> Result<String> {
     let mut out = String::from("#<data");
-    if let Some(name) = data_class_label(store, val.class()) {
+    if let Some(name) = data_class_label(store, val.real_class(store).id()) {
         out.push(' ');
         out.push_str(&name);
     }
-    let members = get_members(store, store[val.class()].get_module())?;
+    let members = get_members(store, store[val.real_class(store).id()].get_module())?;
     let mut first = true;
     for (i, m) in members.iter().enumerate() {
         let name = m.try_symbol().unwrap();

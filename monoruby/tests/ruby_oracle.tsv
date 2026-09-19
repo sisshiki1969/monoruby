@@ -394,6 +394,7 @@
 198846091a6d514d5ddbc84033648662	[false, true]	["x".freeze.dup.frozen?, "x".freeze.clone.frozen?]
 1999cd0bdd0e91608867896ca0c71619	[true, true]	n = Process.maxgroups\n            begin\n              Process.maxgr
 19a12989023b1f415b1be2cfc30f3a90	[true, nil]	require "stringio"\n\n            io = StringIO.new("hi")\n            [io.external
+19bef7c4dcc1da8f0638c4bfe1966a36	[true, true, true, false, "#<struct ES a=1, b=2>", true, true, "#<data ED x=1>"]	module ExtMeths; end\n            ES = Struct.new(:a, :b)\n          
 19c3117422e24db6dd0e39d531d1f3f5	[true, true, true, false, false]	class C\n            include Comparable\n            attr_accessor :x\n 
 19ef02cee33a2e5545a843ca07979cfa	["\\x04\\bo:\\x0EException\\a:\\tmesg\\"\\bfoo:\\abt0", "ASCII-8BIT", "\\x04\\bo:\\x0EException\\a:\\tmesgI\\"\\bfoo\\x06:\\x06ET:\\abt0", "\\x04\\bo:\\x0EException\\a:\\tmesg\\"\\bfoo:\\abt[\\x06\\"\\x12foo/bar.rb:10", "\\x04\\bo:\\x0EException\\b:\\tmesg\\"\\bfoo:\\abt0:\\n@ivari\\x06", "\\x04\\bo:\\x0EException\\a:\\tmesg0:\\abt0", ["RuntimeError", "the consequence", "StandardError", "the cause", nil], nil]	r = []\n            e = Exception.new("foo".b)\n            r << Mars
 19f37cc8342f248bcc7ea2bff3525fb8	true	def f; caller_locations(1, 1)[0].lineno.is_a?(Integer); end\n       
@@ -1300,6 +1301,7 @@
 56c66dbccb073aee6589ec1565f0bc4a	[true, true, :from_m]	m = Module.new { def hello; :from_m; end }\n            c = Class.ne
 56d2acea00f86435c09eba201d394a6a	"US-ASCII"	"abc".encode("US-ASCII").ljust(5).encoding.to_s
 56e7e0addb979c7b45676dd416029bbd	false	c = Class.new do\n              def foo; 'x'; end\n              unde
+56ed2f8735fbbf7249e76e19d8648b59	["\\x04\\b[\\aIu:\\x14MarshalDumpIvar\\v<dump>\\a:\\x06ET:\\t@fooI\\"\\bbar\\x06;\\x06T@\\a", "\\x04\\b[\\bIu:\\x1AMarshalDumpIvarShared\\vstring\\a:\\x06ET:\\t@fooI\\"\\n<foo>\\x06;\\x06T@\\a@\\x06", "\\x04\\bu:\\x15MarshalDumpPlain\\nplain", "MarshalDumpIvar"]	class MarshalDumpIvar\n              def _dump(depth)\n              
 57024289682840701834a7ec11214795	[[1, 1, 1], [:raised, 2, 2, nil]]	class P\n          attr_reader :a, :b, :c\n          def maybe_freeze(x)\n
 570b040bdaffa1b8418ad19df9963b51	["/home/user", "file.txt"]	File.split("/home/user/file.txt")
 572b1d6bee4d9881bea673d3703255a2	"Kernel"	Object.instance_method(:respond_to_missing?).owner.to_s

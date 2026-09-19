@@ -496,7 +496,9 @@ pub(crate) fn render_struct(
     val: Value,
     set: &mut std::collections::HashSet<u64>,
 ) -> Result<String> {
-    let class_id = val.class();
+    // The real class: an `extend`ed struct's own class is a singleton,
+    // which has no name — CRuby labels it with `rb_class_real`'s answer.
+    let class_id = val.real_class(store).id();
     let class_name = if store[class_id].get_name().is_some() {
         qualified_real_class_name(store, class_id)
     } else {
@@ -530,7 +532,7 @@ pub(crate) fn render_struct(
 /// The label a self-referential `Struct` renders as: `#<struct S:...>`,
 /// or `#<struct:...>` for an anonymous class.
 pub(crate) fn recursive_struct_label(store: &Store, val: Value) -> String {
-    let class_id = val.class();
+    let class_id = val.real_class(store).id();
     match if store[class_id].get_name().is_some() {
         qualified_real_class_name(store, class_id)
     } else {
@@ -578,7 +580,11 @@ pub(super) fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
     if self_val.id() == other.id() {
         return Ok(Value::bool(true));
     }
-    if self_val.class() != other.class() {
+    // The *real* classes, as CRuby's `rb_obj_class` gives: an object
+    // that has been `extend`ed carries a singleton class of its own, and
+    // comparing those made two otherwise-identical extended structs
+    // unequal.
+    if self_val.real_class(&globals.store).id() != other.real_class(&globals.store).id() {
         return Ok(Value::bool(false));
     }
     let lhs_struct = match self_val.try_struct() {
@@ -628,7 +634,11 @@ pub(super) fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     if self_val.id() == other.id() {
         return Ok(Value::bool(true));
     }
-    if self_val.class() != other.class() {
+    // The *real* classes, as CRuby's `rb_obj_class` gives: an object
+    // that has been `extend`ed carries a singleton class of its own, and
+    // comparing those made two otherwise-identical extended structs
+    // unequal.
+    if self_val.real_class(&globals.store).id() != other.real_class(&globals.store).id() {
         return Ok(Value::bool(false));
     }
     let lhs_struct = match self_val.try_struct() {
@@ -669,7 +679,11 @@ pub(super) fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 pub(super) fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
-    if self_val.class() != other.class() {
+    // The *real* classes, as CRuby's `rb_obj_class` gives: an object
+    // that has been `extend`ed carries a singleton class of its own, and
+    // comparing those made two otherwise-identical extended structs
+    // unequal.
+    if self_val.real_class(&globals.store).id() != other.real_class(&globals.store).id() {
         return Ok(Value::bool(true));
     }
     let lhs_struct = match self_val.try_struct() {
@@ -715,7 +729,10 @@ pub(super) fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
     use std::hash::Hasher;
     let self_val = lfp.self_val();
     let id = self_val.id();
-    let class_hash = (self_val.class().u32() as u64).wrapping_mul(0x100000001b3);
+    // Keyed on the real class, so `#hash` agrees with `#eql?` for an
+    // `extend`ed struct (whose own class is a singleton).
+    let class_hash =
+        (self_val.real_class(&globals.store).id().u32() as u64).wrapping_mul(0x100000001b3);
     crate::value::exec_recursive_outer(
         id,
         || {
@@ -1982,6 +1999,33 @@ mod tests {
             # An anonymous class drops the label entirely.
             r << Class.new(S).new(5).inspect
             r
+            "#,
+            prelude,
+        );
+    }
+
+    #[test]
+    fn extended_struct_equality_and_label() {
+        // `#==` / `#eql?` / `#hash` / `#inspect` key on the *real*
+        // class, as CRuby's `rb_obj_class` / `rb_class_real` do. They
+        // used the receiver's own class, which for an `extend`ed object
+        // is a singleton: two otherwise-identical extended structs
+        // compared unequal and hashed apart, and one rendered as
+        // `#<struct a=1>` with its class label dropped.
+        let prelude = r#"
+            module ExtMeths; end
+            ES = Struct.new(:a, :b)
+            ED = Data.define(:x)
+        "#;
+        run_test_with_prelude(
+            r#"
+            o1 = ES.new(1, 2).extend(ExtMeths)
+            o2 = ES.new(1, 2).extend(ExtMeths)
+            [
+              o1 == o2, o1.eql?(o2), o1.hash == o2.hash, o1 != o2,
+              o1.inspect, o1 == ES.new(1, 2),
+              ED.new(1) == ED.new(1), ED.new(1).inspect,
+            ]
             "#,
             prelude,
         );
