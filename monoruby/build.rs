@@ -241,6 +241,16 @@ fn main() {
     // instead of a full recursive delete. If the swap races another builder
     // installing the same versioned tree, tolerate the "already present"
     // outcome rather than panicking.
+    // `ext/` is not ours: `bin/install` puts the dynamically loaded
+    // extensions there after `cargo install` (see `ext::search_dirs`). Carry
+    // it over into the new tree, or every reinstall of the Ruby sources
+    // would leave the installed binary without `psych_native.so`,
+    // `zlib_native.so`, … It is moved in only after the tree was hashed, so
+    // it never takes part in the stamp.
+    let ext = install_root.join("ext");
+    if ext.is_dir() {
+        let _ = fs::rename(&ext, staging.join("ext"));
+    }
     let trash = lib_path.join(format!(".trash-{}", std::process::id()));
     let _ = fs::remove_dir_all(&trash);
     if install_root.exists() {
@@ -252,6 +262,8 @@ fn main() {
         // complete tree is present, then drop staging.
         if !install_root.join(".build-stamp").exists() {
             let _ = copy_dir_all(&staging, &install_root);
+        } else if staging.join("ext").is_dir() && !ext.exists() {
+            let _ = fs::rename(staging.join("ext"), &ext);
         }
         let _ = fs::remove_dir_all(&staging);
     }
