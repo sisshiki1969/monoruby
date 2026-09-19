@@ -106,6 +106,22 @@ impl<'a> JitContext<'a> {
             return Ok(CompileResult::Continue);
         }
         let (recv_class, func_id, visibility) = if let Some(recv_class) = recv_class {
+            // A proven receiver class lets the compile-time lookup below
+            // resolve a site the VM has *never run*. Doing so is what makes
+            // a never-taken branch cost the branch that is taken: the
+            // resolved call arrives at the join with its result in a stack
+            // slot (`S`), so the meet against the hot edge's unboxed float
+            // (`F`) falls to `decide_join`'s catch-all and boxes — the hot
+            // path then reloads, guards and decodes a value that never left
+            // its register. Hand the still-cold site to the same
+            // recompile-once path an unproven receiver takes instead: the
+            // block ends in a counter-gated deopt, the join keeps one
+            // predecessor, and the site resolves for real on the recompile
+            // its first ten executions ask for. A site that never executes
+            // never pays for that, which is exactly the case this is for.
+            if matches!(cache, MethodCache::None) {
+                return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+            }
             // the receiver class is known.
             if let Some((func_id, visibility)) = self.jit_check_call(recv_class, callsite.name) {
                 (recv_class, func_id, visibility)
