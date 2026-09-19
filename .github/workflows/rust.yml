@@ -87,6 +87,38 @@ jobs:
     # a combined build compiles the union of the cfg'd code, which is exactly
     # what hides a feature whose code stopped compiling without another one
     # also being on.
+    #
+    # A matrix rather than a loop in one job, for disk: switching features
+    # invalidates the crate and cargo keeps the superseded artifacts, so
+    # checking all twenty in sequence grows one target dir past 20 GB — more
+    # than a runner has free. One feature per runner keeps each build cold but
+    # bounded. `max-parallel` leaves runners for the two test jobs, which are
+    # the ones on the critical path.
+    strategy:
+      fail-fast: false # one broken feature should not hide the others
+      max-parallel: 5
+      matrix:
+        feature:
+          - chain-deopt-log
+          - deopt
+          - dump-bc
+          - dump-require
+          - dump-traceir
+          - emit-asm
+          - emit-bc
+          - emit-cfg
+          - gc-debug
+          - gc-log
+          - gc-stress
+          - gc-verify
+          - jit-debug
+          - jit-log
+          - mimalloc
+          - perf
+          - phys-table
+          - profile
+          - shadow-placement
+          - stress-spill-pool
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
@@ -97,45 +129,13 @@ jobs:
           # Keep in sync with rust-toolchain.toml (see the amd64 job).
           toolchain: nightly-2026-08-18
       - uses: Swatinem/rust-cache@v2
-      - name: cargo check, one feature at a time
-        run: |
-          # build.rs is host-Ruby independent, so this job needs no ruby.
-          failed=()
-          while read -r feature; do
-            [ -n "$feature" ] || continue
-            echo "::group::cargo check --features $feature"
-            if ! cargo check -p monoruby --features "$feature"; then
-              failed+=("$feature")
-            fi
-            echo "::endgroup::"
-          done <<'EOF'
-          chain-deopt-log
-          deopt
-          dump-bc
-          dump-require
-          dump-traceir
-          emit-asm
-          emit-bc
-          emit-cfg
-          gc-debug
-          gc-log
-          gc-stress
-          gc-verify
-          jit-debug
-          jit-log
-          mimalloc
-          perf
-          phys-table
-          profile
-          shadow-placement
-          stress-spill-pool
-          EOF
-          # Report every broken feature, not just the first, so one run tells
-          # you the whole story.
-          if [ ${#failed[@]} -ne 0 ]; then
-            echo "::error::features that do not build: ${failed[*]}"
-            exit 1
-          fi
+        with:
+          # Without this every matrix leg shares one cache key, and each leg
+          # then restores a tree built for a different feature and rebuilds it
+          # anyway.
+          key: ${{ matrix.feature }}
+      # build.rs is host-Ruby independent, so this job needs no ruby.
+      - run: cargo check -p monoruby --features ${{ matrix.feature }}
 
   darwin:
     # checks: write lets the in-step heartbeat publish a `darwin-heartbeat`
