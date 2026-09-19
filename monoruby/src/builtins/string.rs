@@ -1475,6 +1475,54 @@ fn string_match_named(
     Ok(Value::nil())
 }
 
+/// Resolve a Range index for `String#[]=` against `char_len` in CRuby's
+/// `rb_range_beg_len` order: a negative bound folds against the length
+/// *first*, and only then does `exclude_end` trim one off the end.
+/// Doing the exclusive adjustment first is what made `s[0...0] = ""`
+/// wrap its end to the last character and wipe the receiver. Returns
+/// `(begin, count)`, or `None` when the begin is out of range.
+fn assign_range_beg_count(
+    start_raw: Option<i64>,
+    end_raw: Option<i64>,
+    exclude_end: bool,
+    char_len: usize,
+) -> Option<(usize, usize)> {
+    let len = char_len as i64;
+    let mut beg = start_raw.unwrap_or(0);
+    if beg < 0 {
+        beg += len;
+        if beg < 0 {
+            return None;
+        }
+    }
+    if beg > len {
+        return None;
+    }
+    // An endless range runs to the very end, with no inclusive bump.
+    let mut end = match end_raw {
+        Some(e) => {
+            let e = if e < 0 { e + len } else { e };
+            if exclude_end { e } else { e + 1 }
+        }
+        None => len,
+    };
+    if end < beg {
+        end = beg;
+    }
+    if end > len {
+        end = len;
+    }
+    Some((beg as usize, (end - beg) as usize))
+}
+
+/// CRuby's `RangeError` wording for an out-of-range `String#[]=` index.
+fn assign_range_error(start_raw: Option<i64>, end_raw: Option<i64>, exclude_end: bool) -> MonorubyErr {
+    let beg = start_raw.map(|v| v.to_string()).unwrap_or_default();
+    let fin = end_raw.map(|v| v.to_string()).unwrap_or_default();
+    let dots = if exclude_end { "..." } else { ".." };
+    MonorubyErr::rangeerr(format!("{beg}{dots}{fin} out of range"))
+}
+
 ///
 /// ### String#[]=
 ///
@@ -1610,36 +1658,20 @@ fn index_assign(
             return Ok(arg_val);
         }
         if let Some(info) = arg0_val.is_range() {
-            let start_raw = info.start().coerce_to_int_i64(vm, globals)?;
-            let end_raw = info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
-            if start_raw > char_len as i64 {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "{start_raw}..{end_raw} out of range"
-                )));
-            }
-            let start_char = match conv_index(start_raw, char_len) {
-                Some(i) => i,
-                None => {
-                    return Err(MonorubyErr::rangeerr(format!(
-                        "{start_raw}..{end_raw} out of range"
-                    )));
-                }
+            let start_raw = match info.start().is_nil() {
+                true => None,
+                false => Some(info.start().coerce_to_int_i64(vm, globals)?),
             };
-            let end_char = if end_raw < 0 {
-                let e = char_len as i64 + end_raw;
-                if e < start_char as i64 {
-                    start_char.saturating_sub(1)
-                } else {
-                    e as usize
-                }
-            } else {
-                end_raw as usize
+            let end_raw = match info.end().is_nil() {
+                true => None,
+                false => Some(info.end().coerce_to_int_i64(vm, globals)?),
             };
-            let count = if end_char >= start_char {
-                end_char - start_char + 1
-            } else {
-                0
-            };
+            let exclude_end = info.exclude_end();
+            let (start_char, count) =
+                match assign_range_beg_count(start_raw, end_raw, exclude_end, char_len) {
+                    Some(v) => v,
+                    None => return Err(assign_range_error(start_raw, end_raw, exclude_end)),
+                };
             let r = inner.get_range(start_char, count);
             replace_byte_range(globals, self_, r.start, r.end, subst_inner)?;
             return Ok(arg_val);
@@ -1654,49 +1686,34 @@ fn index_assign(
         Ok(arg_val)
     } else if let Some(info) = arg0_val.is_range() {
         let char_len = len;
-        let start_raw = info.start().coerce_to_int_i64(vm, globals)?;
-        let end_raw = info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64;
+        let start_raw = match info.start().is_nil() {
+            true => None,
+            false => Some(info.start().coerce_to_int_i64(vm, globals)?),
+        };
+        let end_raw = match info.end().is_nil() {
+            true => None,
+            false => Some(info.end().coerce_to_int_i64(vm, globals)?),
+        };
+        let exclude_end = info.exclude_end();
         // CRuby: a positive Range begin past `length` raises, but
         // begin == length is allowed (appends).
-        if start_raw > char_len as i64 {
-            return Err(MonorubyErr::rangeerr(format!(
-                "{}..{} out of range",
-                start_raw, end_raw
-            )));
-        }
-        let start_char = match conv_index(start_raw, char_len) {
-            Some(i) => i,
-            None => {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "{}..{} out of range",
-                    start_raw, end_raw
-                )));
-            }
-        };
-        // For Ranges, a negative end out-of-range with a positive
-        // begin acts as a zero-count delete (no-op append at start).
-        let end_char = if end_raw < 0 {
-            let e = char_len as i64 + end_raw;
-            if e < start_char as i64 {
-                start_char.saturating_sub(1)
-            } else {
-                e as usize
-            }
-        } else {
-            end_raw as usize
-        };
+        let (start_char, count) =
+            match assign_range_beg_count(start_raw, end_raw, exclude_end, char_len) {
+                Some(v) => v,
+                None => return Err(assign_range_error(start_raw, end_raw, exclude_end)),
+            };
         let byte_start = lhs
             .char_indices()
             .nth(start_char)
             .map(|(i, _)| i)
             .unwrap_or(lhs.len());
-        let byte_end = if end_char >= start_char {
+        let byte_end = if count == 0 {
+            byte_start
+        } else {
             lhs.char_indices()
-                .nth(end_char + 1)
+                .nth(start_char + count)
                 .map(|(i, _)| i)
                 .unwrap_or(lhs.len())
-        } else {
-            byte_start
         };
         lhs.replace_range(byte_start..byte_end, &subst);
         *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
@@ -8893,7 +8910,18 @@ fn unpack_offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, len: usize)
 fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
-    let dumped = format!(r#""{}""#, inner.dump());
+    // A non-ASCII-compatible encoding cannot be recovered from the
+    // escaped bytes alone, so CRuby appends the call that restores it
+    // and the dumped form carries UTF-8 instead of the receiver's.
+    let dumped = if inner.encoding().is_ascii_compatible() {
+        format!(r#""{}""#, inner.dump())
+    } else {
+        format!(
+            r#""{}".dup.force_encoding("{}")"#,
+            inner.dump(),
+            inner.encoding().name()
+        )
+    };
     // CRuby keeps the receiver's encoding on the (all-ASCII) dumped
     // form for ASCII-compatible encodings.
     let enc = if inner.encoding().is_ascii_compatible() {
@@ -8921,14 +8949,15 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let s = self_.expect_str(globals)?;
-    let bytes = parse_undump(s)?;
-    // The dumped form is always ASCII-compatible and we tag the
-    // result as UTF-8. `from_encoding_scanned` classifies the
-    // bytes once at construction so subsequent cr queries are
-    // O(1); skipping the eager scan would force every later
-    // operation to re-walk the buffer through `Encoding::classify`.
+    let (bytes, enc) = parse_undump(s)?;
+    // The dumped form is always ASCII-compatible and we tag the result
+    // as UTF-8 unless it carried a `force_encoding` suffix.
+    // `from_encoding_scanned` classifies the bytes once at construction
+    // so subsequent cr queries are O(1); skipping the eager scan would
+    // force every later operation to re-walk the buffer through
+    // `Encoding::classify`.
     Ok(Value::string_from_inner(
-        RStringInner::from_encoding_scanned(&bytes, Encoding::Utf8),
+        RStringInner::from_encoding_scanned(&bytes, enc.unwrap_or(Encoding::Utf8)),
     ))
 }
 
@@ -9141,21 +9170,50 @@ fn scrub_inner_with_block(
 /// Parser for the dump-quoted format. Errors are returned as
 /// `RuntimeError` with messages that match CRuby's variants, so the
 /// spec's `raise_error(RuntimeError, /.../)` matches the right kind.
-fn parse_undump(s: &str) -> Result<Vec<u8>> {
+fn parse_undump(s: &str) -> Result<(Vec<u8>, Option<Encoding>)> {
     let bytes = s.as_bytes();
     let invalid = || MonorubyErr::runtimeerr("invalid dumped string");
+    let bad_form = || {
+        MonorubyErr::runtimeerr(
+            r#"invalid dumped string; not wrapped with '"' nor '"...".force_encoding("...")' form"#,
+        )
+    };
     let unterminated = || MonorubyErr::runtimeerr("unterminated dumped string");
     let bad_hex = || MonorubyErr::runtimeerr("invalid hex escape");
     let bad_unicode = || MonorubyErr::runtimeerr("invalid Unicode escape");
     let null_byte = || MonorubyErr::runtimeerr("string contains null byte");
     let non_ascii = || MonorubyErr::runtimeerr("non-ASCII character detected");
-    if bytes.len() < 2 || bytes[0] != b'"' {
-        return Err(invalid());
+    if bytes.is_empty() || bytes[0] != b'"' {
+        return Err(bad_form());
     }
-    if bytes[bytes.len() - 1] != b'"' {
-        return Err(unterminated());
-    }
-    let inner = &bytes[1..bytes.len() - 1];
+    // Find the quote that closes the literal, honouring escapes, and
+    // read whatever follows as `dump`'s encoding-restoring suffix.
+    let mut i = 1usize;
+    let close = loop {
+        match bytes.get(i) {
+            None => return Err(unterminated()),
+            Some(b'\\') => i += 2,
+            Some(b'"') => break i,
+            Some(_) => i += 1,
+        }
+    };
+    let enc = match &s[close + 1..] {
+        "" => None,
+        rest => {
+            let rest = rest.strip_prefix(".dup").unwrap_or(rest);
+            let name = rest
+                .strip_prefix(r#".force_encoding(""#)
+                .and_then(|r| r.strip_suffix(r#"")"#))
+                .ok_or_else(bad_form)?;
+            if name.contains('"') {
+                return Err(bad_form());
+            }
+            Some(Encoding::try_from_str(name).map_err(|_| {
+                MonorubyErr::runtimeerr("dumped string has unknown encoding name")
+            })?)
+        }
+    };
+    let inner = &bytes[1..close];
     let mut out: Vec<u8> = Vec::with_capacity(inner.len());
     let mut i = 0usize;
     while i < inner.len() {
@@ -9242,7 +9300,7 @@ fn parse_undump(s: &str) -> Result<Vec<u8>> {
             _ => return Err(invalid()),
         }
     }
-    Ok(out)
+    Ok((out, enc))
 }
 
 fn hex_digit(b: u8) -> Option<u32> {
@@ -14061,6 +14119,60 @@ mod tests {
               s.rpartition("X").map(&:encoding).map(&:to_s)
             "#,
         );
+    }
+
+    #[test]
+    fn index_assign_range_resolves_like_cruby() {
+        run_tests(&[
+            // A zero-width range inserts; the exclusive bound must be
+            // folded *after* the negative bound, not before.
+            r#"s = "hello".dup; s[0...0] = ""; s"#,
+            r#"s = "hello".dup; s[0...0] = "X"; s"#,
+            r#"s = "hello".dup; s[2...2] = "Y"; s"#,
+            r#"s = "hello".dup; s[-1...-1] = "Z"; s"#,
+            r#"s = "hello".dup; s[0..0] = ""; s"#,
+            r#"s = "hello".dup; s[0...-1] = "X"; s"#,
+            r#"s = "hello".dup; s[2..-99] = "X"; s"#,
+            r#"s = "hello".dup; s[3..1] = "X"; s"#,
+            // Beginless / endless ranges.
+            r#"s = "hello".dup; s[..2] = "X"; s"#,
+            r#"s = "hello".dup; s[2..] = "X"; s"#,
+            r#"s = "hello".dup; s[..-4] = "X"; s"#,
+            // An out-of-range begin raises, spelled with the range's
+            // own dots.
+            r#"begin; s = "hello".dup; s[6...7] = "X"; rescue => e; [e.class.to_s, e.message]; end"#,
+            r#"begin; s = "hello".dup; s[-6..1] = "X"; rescue => e; e.message; end"#,
+            // Non-UTF-8 receivers take the byte route through the same
+            // resolution.
+            r#"s = "abc".dup.force_encoding("euc-jp"); s[0...0] = "X"; [s.bytes, s.encoding.to_s]"#,
+        ]);
+    }
+
+    #[test]
+    fn dump_and_undump_round_trip_the_encoding() {
+        run_tests(&[
+            r#""abc".encode("utf-16be").dump"#,
+            r#""abc".encode("utf-16le").dump"#,
+            r#"s = "abc".encode("utf-16be").dump.undump; [s.bytes, s.encoding.to_s]"#,
+            r#"s = "¤¢".dup.force_encoding("euc-jp"); [s.dump, s.dump.undump.bytes]"#,
+            r#"["abc".dump, "ÿ".b.dump, "aあ".dump]"#,
+            r#"'"\x00a".force_encoding("UTF-16BE")'.undump.bytes"#,
+            r#"begin; '"a".dup.force_encoding("nonexistent")'.undump; rescue => e; e.message; end"#,
+            r#"begin; '"a".dup'.undump; rescue => e; e.message; end"#,
+            r#"begin; '"abc'.undump; rescue => e; e.message; end"#,
+            r#"begin; 'abc"'.undump; rescue => e; e.message; end"#,
+            r#"'"\x2E force_encoding(\""'.undump.bytes"#,
+        ]);
+    }
+
+    #[test]
+    fn prepend_snapshots_its_arguments() {
+        run_tests(&[
+            r#"s = "hello".dup; s.prepend(s, s); s"#,
+            r#"s = "b".dup; [s.prepend("a"), s]"#,
+            r#"s = "c".dup; [s.prepend("a", "b"), s]"#,
+            r#"s = "a".dup; [s.prepend, s]"#,
+        ]);
     }
 
     #[test]

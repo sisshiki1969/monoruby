@@ -50,9 +50,13 @@ class String
   end
 
   def prepend(*args)
-    args.reverse_each do |arg|
-      self[0, 0] = arg
-    end
+    return self if args.empty?
+    # Build the whole head first: splicing one argument at a time
+    # re-reads an argument that *is* the receiver after it has already
+    # grown (`s.prepend(s, s)`).
+    head = +""
+    args.each { |arg| head << (arg.is_a?(String) ? arg : __to_str(arg)) }
+    self[0, 0] = head
     self
   end
 
