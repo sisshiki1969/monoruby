@@ -1225,9 +1225,9 @@ impl<'a> JitContext<'a> {
         if !callsite.forwarding || callsite.pos_num == 0 {
             return None;
         }
-        if callsite.splat_pos.as_slice() != [callsite.pos_num - 1]
-            || !callsite.kw_args.is_empty()
-            || callsite.hash_splat_pos.len() != 1
+        if callsite.splat_pos() != [callsite.pos_num - 1]
+            || !callsite.kw_args().is_empty()
+            || callsite.hash_splat_pos().len() != 1
         {
             return None;
         }
@@ -1481,7 +1481,7 @@ impl<'a> JitContext<'a> {
         };
         let callsite = &self.store[callid];
         callsite.pos_num == expected_pos
-            && callsite.splat_pos.is_empty()
+            && callsite.splat_pos().is_empty()
             && !callsite.kw_may_exists()
             && callsite.block_fid.is_none()
             && callsite.block_arg.is_none()
@@ -2629,7 +2629,7 @@ impl<'a> JitContext<'a> {
         let cs = &self.store[callid];
         if !self.store.is_simple_call(callee_fid, callid)
             || cs.block_arg.is_some()
-            || !cs.splat_pos.is_empty()
+            || !cs.splat_pos().is_empty()
             || cs.kw_may_exists()
             || callee.is_rest()
             || callee.kw_rest().is_some()
@@ -3130,9 +3130,9 @@ impl AbstractState {
         // hand the values to the block via the direct-copy path; the
         // callee side stays dynamic (see
         // `jit_handle_arguments_no_block_for_yield`).
-        let simple = callinfo.splat_pos.is_empty()
-            && callinfo.kw_args.is_empty()
-            && callinfo.hash_splat_pos.is_empty()
+        let simple = callinfo.splat_pos().is_empty()
+            && callinfo.kw_args().is_empty()
+            && callinfo.hash_splat_pos().is_empty()
             && !callinfo.forwarding
             && callinfo.block_fid.is_none()
             && callinfo.block_arg.is_none();
@@ -3418,7 +3418,7 @@ impl AbstractState {
             }
 
             // fill keyword arguments
-            let kw_args = &callsite.kw_args;
+            let kw_args = &callsite.kw_args();
             let mut used_kw = vec![];
             for (i, param_name) in callee.kw_names().iter().enumerate() {
                 let ofs = stack_offset - (LFP_SELF + (callee.kw_reg_pos() + i).0 as i32 * 8);
@@ -3438,7 +3438,7 @@ impl AbstractState {
             let mut rest_kw = vec![];
             for i in 0..kw_num {
                 if !used_kw.contains(&i) {
-                    let (k, v) = callsite.kw_args.get_index(i).unwrap();
+                    let (k, v) = callsite.kw_args().get_index(i).unwrap();
                     assert_eq!(i, *v);
                     rest_kw.push((kw_pos + i, *k));
                 }
@@ -3499,7 +3499,7 @@ impl AbstractState {
             ir.handle_error(error);
         } else if callsite.forwarding
             && callsite.pos_num >= 1
-            && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]
+            && callsite.splat_pos() == [callsite.pos_num - 1]
             && callee.post_num() == 0
             && callee.reqopt_num() + 1 >= callsite.pos_num
             // A bare `**kwrest` is fine — the lowering stores `nil` into
@@ -3541,7 +3541,7 @@ impl AbstractState {
             let recv = callsite.recv;
             let args = callsite.args;
             let lead_num = callsite.pos_num - 1;
-            let kwrest_guard = callsite.hash_splat_pos.first().copied();
+            let kwrest_guard = callsite.hash_splat_pos().first().copied();
             // K1: the deferred literal keywords' static binding to the
             // callee declaration (None when the frame defers no keywords
             // or they don't bind; the arm gate only admits a
@@ -3649,8 +3649,8 @@ impl AbstractState {
                 ir.handle_error(error);
             }
         } else if callsite.forwarding
-            && callsite.splat_pos.len() == 1
-            && callsite.splat_pos[0] < callsite.pos_num
+            && callsite.splat_pos().len() == 1
+            && callsite.splat_pos()[0] < callsite.pos_num
             && (callee.no_keyword()
                 || (callee.kw_names().is_empty() && callsite.kw_may_exists()))
         {
@@ -3695,7 +3695,7 @@ impl AbstractState {
             ir.handle_error(error);
         } else if !callsite.forwarding
             && callsite.pos_num >= 1
-            && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]
+            && callsite.splat_pos() == [callsite.pos_num - 1]
             && !callsite.kw_may_exists()
             && callee.no_keyword()
             && callee.opt_num() == 0

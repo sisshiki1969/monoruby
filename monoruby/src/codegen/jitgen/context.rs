@@ -3252,18 +3252,18 @@ impl<'a> JitContext<'a> {
         // forwarded callee's declared kw params by the consume or vetoed
         // as a whole (`needs_rest_array`). A `**hash` splat stays on the
         // generic path: its keys are dynamic.
-        if !cs.hash_splat_pos.is_empty() || cs.block_arg.is_some() {
+        if !cs.hash_splat_pos().is_empty() || cs.block_arg.is_some() {
             return None;
         }
-        let kw = if cs.kw_args.is_empty() {
+        let kw = if cs.kw_args().is_empty() {
             None
         } else {
             // `def f(...)` always declares `**kwrest`.
             let kwrest_local = self.store[fid].kw_rest()?;
             // kw_args maps name -> offset from kw_pos; record names in
             // offset order so `names[i]` lives at `kw_pos + i`.
-            let mut names = vec![IdentId::get_id(""); cs.kw_args.len()];
-            for (name, i) in &cs.kw_args {
+            let mut names = vec![IdentId::get_id(""); cs.kw_args().len()];
+            for (name, i) in cs.kw_args() {
                 names[*i] = *name;
             }
             Some((kwrest_local, cs.kw_pos, names.into_boxed_slice()))

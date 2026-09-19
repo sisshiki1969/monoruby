@@ -333,6 +333,83 @@ impl alloc::GC<RValue> for Store {
 
 impl Store {
     ///
+    /// A tally of what the compiled program costs in memory, printed at
+    /// exit when `MONORUBY_STORE_STATS` is set.
+    ///
+    /// Peak RSS says a file's compiled form is the largest thing monoruby
+    /// builds from it — several times prism's tree and an order of
+    /// magnitude more than the intermediate AST. This says which table.
+    ///
+    pub fn memory_report(&self) -> String {
+        use std::fmt::Write;
+        let mut iseq = iseq::ISeqHeapSize::default();
+        for info in self.iseqs.iter() {
+            iseq += info.heap_size();
+        }
+        let headers = self.iseqs.capacity() * size_of::<ISeqInfo>();
+        let mut out = String::new();
+        writeln!(
+            out,
+            "iseqs: {} ({} bytecode instructions), size_of::<ISeqInfo>() = {}\n\
+             callsites: {}, size_of::<CallSiteInfo>() = {}",
+            self.iseqs.len(),
+            iseq.insts,
+            size_of::<ISeqInfo>(),
+            self.callsite_info.len(),
+            size_of::<CallSiteInfo>(),
+        )
+        .unwrap();
+        let with_extras = self
+            .callsite_info
+            .iter()
+            .filter(|c| {
+                !c.splat_pos().is_empty() || !c.kw_args().is_empty() || !c.hash_splat_pos().is_empty()
+            })
+            .count();
+        writeln!(
+            out,
+            "  of which with splat/kw/hash-splat: {with_extras} ({:.1}%)",
+            100.0 * with_extras as f64 / self.callsite_info.len().max(1) as f64,
+        )
+        .unwrap();
+        let mut row = |name: &str, bytes: usize| {
+            writeln!(out, "  {name:<22} {:>9.2} MB", bytes as f64 / (1 << 20) as f64).unwrap()
+        };
+        row("ISeqInfo headers", headers);
+        row("bytecode", iseq.bytecode);
+        row("sourcemap", iseq.sourcemap);
+        row("sp", iseq.sp);
+        row("bb_info", iseq.bb_info);
+        row("callsite_map", iseq.callsite_map);
+        row("locals", iseq.locals);
+        row("jit_entry", iseq.jit_entry);
+        row("iseq other", iseq.other);
+        row(
+            "callsite_info",
+            self.callsite_info.capacity() * size_of::<CallSiteInfo>(),
+        );
+        row(
+            "constsite_info",
+            self.constsite_info.capacity() * size_of::<ConstSiteInfo>(),
+        );
+        row("literals", self.literals.capacity() * size_of::<Value>());
+        let total = headers
+            + iseq.bytecode
+            + iseq.sourcemap
+            + iseq.sp
+            + iseq.bb_info
+            + iseq.callsite_map
+            + iseq.locals
+            + iseq.jit_entry
+            + iseq.other
+            + self.callsite_info.capacity() * size_of::<CallSiteInfo>()
+            + self.constsite_info.capacity() * size_of::<ConstSiteInfo>()
+            + self.literals.capacity() * size_of::<Value>();
+        row("TOTAL", total);
+        out
+    }
+
+    ///
     /// Root a bytecode literal. Called once per literal, from bytecodegen.
     ///
     pub(crate) fn push_literal(&mut self, v: Value) {
@@ -1263,15 +1340,22 @@ impl Store {
         vcall: bool,
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
+        let extra = if splat_pos.is_empty() && kw_args.is_empty() && hash_splat_pos.is_empty() {
+            None
+        } else {
+            Some(Box::new(CallSiteExtra {
+                splat_pos,
+                kw_args,
+                hash_splat_pos,
+            }))
+        };
         self.callsite_info.push(CallSiteInfo {
             id,
             name,
             bc_pos,
             pos_num,
             kw_pos,
-            kw_args,
-            splat_pos,
-            hash_splat_pos,
+            extra,
             block_fid,
             block_arg,
             args,
@@ -2286,6 +2370,31 @@ impl PolyCache {
     }
 }
 
+///
+/// The argument shapes only a small minority of call sites have.
+///
+/// A site with none of them is the overwhelming majority — 99.8% of the
+/// call sites in a definition-heavy file, 98% among the builtins loaded
+/// at startup (`MONORUBY_STORE_STATS=1` counts them). Inline, the three
+/// empty containers cost 120 bytes at every one of those sites; behind
+/// one pointer they cost eight.
+///
+#[derive(Debug, Clone, Default)]
+pub struct CallSiteExtra {
+    /// Positions of splat arguments.
+    pub splat_pos: Vec<usize>,
+    /// Names and positions of keyword arguments.
+    pub kw_args: indexmap::IndexMap<IdentId, usize>,
+    /// Position of hash splat arguments.
+    pub hash_splat_pos: Vec<SlotId>,
+}
+
+/// The empty map `CallSiteInfo::kw_args` hands out for a site with no
+/// keyword arguments. `IndexMap::new` does not allocate, so this is one
+/// shared, empty header.
+static NO_KW_ARGS: std::sync::LazyLock<indexmap::IndexMap<IdentId, usize>> =
+    std::sync::LazyLock::new(indexmap::IndexMap::new);
+
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
 pub struct CallSiteInfo {
@@ -2301,18 +2410,15 @@ pub struct CallSiteInfo {
     pub(crate) args: SlotId,
     /// Number of positional arguments.
     pub pos_num: usize,
-    /// Positions of splat arguments.
-    pub splat_pos: Vec<usize>,
+    /// Splat / keyword / hash-splat arguments, or `None` when the site
+    /// passes none — see [`CallSiteExtra`].
+    extra: Option<Box<CallSiteExtra>>,
     /// *FuncId* of passed block.
     pub block_fid: Option<FuncId>,
     /// Position of block argument.
     pub(crate) block_arg: Option<SlotId>,
     /// Postion of keyword arguments.
     pub(crate) kw_pos: SlotId,
-    /// Names and positions of keyword arguments.
-    pub kw_args: indexmap::IndexMap<IdentId, usize>,
-    /// Position of hash splat arguments.
-    pub(crate) hash_splat_pos: Vec<SlotId>,
     /// Position where the result is to be stored to.
     pub(crate) dst: Option<SlotId>,
     #[allow(dead_code)]
@@ -2343,20 +2449,36 @@ pub struct CallSiteInfo {
 }
 
 impl CallSiteInfo {
+    /// Positions of splat arguments; empty when the site has none.
+    pub fn splat_pos(&self) -> &[usize] {
+        self.extra.as_ref().map_or(&[], |e| &e.splat_pos)
+    }
+
+    /// Names and positions of keyword arguments; empty when the site
+    /// has none.
+    pub fn kw_args(&self) -> &indexmap::IndexMap<IdentId, usize> {
+        self.extra.as_ref().map_or(&NO_KW_ARGS, |e| &e.kw_args)
+    }
+
+    /// Positions of hash splat arguments; empty when the site has none.
+    pub fn hash_splat_pos(&self) -> &[SlotId] {
+        self.extra.as_ref().map_or(&[], |e| &e.hash_splat_pos)
+    }
+
     pub fn kw_may_exists(&self) -> bool {
-        !self.kw_args.is_empty() || !self.hash_splat_pos.is_empty()
+        !self.kw_args().is_empty() || !self.hash_splat_pos().is_empty()
     }
 
     pub fn has_splat(&self) -> bool {
-        !self.splat_pos.is_empty()
+        !self.splat_pos().is_empty()
     }
 
     pub fn has_hash_splat(&self) -> bool {
-        !self.hash_splat_pos.is_empty()
+        !self.hash_splat_pos().is_empty()
     }
 
     pub fn kw_len(&self) -> usize {
-        self.kw_args.len() + self.hash_splat_pos.len()
+        self.kw_args().len() + self.hash_splat_pos().len()
     }
 
     pub fn is_func_call(&self) -> bool {
@@ -2402,16 +2524,15 @@ impl CallSiteInfo {
     }
 
     pub(crate) fn object_send_single_splat(&self) -> bool {
-        self.splat_pos.len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
+        self.splat_pos().len() == 1 && self.pos_num == 1 && !self.kw_may_exists()
     }
 
     pub fn format_args(&self) -> String {
+        let (splat_pos, kw_args, hash_splat_pos) =
+            (self.splat_pos(), self.kw_args(), self.hash_splat_pos());
         let CallSiteInfo {
             pos_num,
-            splat_pos,
             kw_pos,
-            kw_args,
-            hash_splat_pos,
             block_arg,
             block_fid,
             args,
@@ -2577,5 +2698,101 @@ impl GlobalMethodCache {
     #[cfg(feature = "profile")]
     pub(super) fn method_exprolation_stats(&self) -> Vec<(&(ClassId, IdentId), &usize)> {
         self.method_exprolation_stats.iter().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Globals;
+
+    ///
+    /// The report is only printed behind `MONORUBY_STORE_STATS`, so
+    /// nothing else would notice it panicking or going stale — and it is
+    /// the evidence a layout change is measured against.
+    ///
+    #[test]
+    fn memory_report_tallies_the_loaded_program() {
+        let mut globals = Globals::new_test();
+        globals
+            .run(
+                "def a(x, k: 1) = x + k\na(1, k: 2)\n",
+                std::path::Path::new("test.rb"),
+            )
+            .expect("run");
+        let report = globals.store.memory_report();
+
+        // Every table has a row, and the header carries the two counts
+        // and the struct size a shrink is judged by.
+        for row in [
+            "iseqs:",
+            "callsites:",
+            "ISeqInfo headers",
+            "bytecode",
+            "sourcemap",
+            "bb_info",
+            "callsite_info",
+            "TOTAL",
+        ] {
+            assert!(report.contains(row), "no {row:?} row in:\n{report}");
+        }
+
+        // The script defines and calls a method, so the store is not empty.
+        assert!(!globals.store.iseqs.is_empty());
+        assert!(!globals.store.callsite_info.is_empty());
+        assert!(
+            globals.store.iseqs.iter().any(|i| i.heap_size().insts > 0),
+            "no iseq carries bytecode"
+        );
+    }
+
+    ///
+    /// `extra` is allocated for exactly the call sites that pass a splat,
+    /// a keyword or a hash splat — the invariant `is_simple` and the
+    /// accessors rest on.
+    ///
+    #[test]
+    fn only_the_unusual_call_sites_allocate_extra() {
+        let mut globals = Globals::new_test();
+        globals
+            .run(
+                "def m(*a, **k) = [a, k]\nm(1)\nm(*[1, 2])\nm(k: 1)\nm(**{k: 1})\n",
+                std::path::Path::new("test.rb"),
+            )
+            .expect("run");
+        let with_extra = globals
+            .store
+            .callsite_info
+            .iter()
+            .filter(|c| c.extra.is_some())
+            .count();
+        let unusual = globals
+            .store
+            .callsite_info
+            .iter()
+            .filter(|c| {
+                !c.splat_pos().is_empty()
+                    || !c.kw_args().is_empty()
+                    || !c.hash_splat_pos().is_empty()
+            })
+            .count();
+        assert_eq!(with_extra, unusual, "extra allocated for a plain call site");
+        assert!(unusual >= 3, "expected the splat / kw / hash-splat sites");
+
+        // A site with no extra reports empty, not a panic, through every
+        // accessor — the empty map included.
+        let plain = globals
+            .store
+            .callsite_info
+            .iter()
+            .find(|c| c.extra.is_none())
+            .expect("a plain call site");
+        assert!(plain.splat_pos().is_empty());
+        assert!(plain.kw_args().is_empty());
+        assert!(plain.hash_splat_pos().is_empty());
+        assert_eq!(plain.kw_len(), 0);
+        assert!(!plain.has_splat());
+        assert!(!plain.has_hash_splat());
+        assert!(!plain.kw_may_exists());
     }
 }

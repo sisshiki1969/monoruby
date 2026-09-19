@@ -3667,11 +3667,11 @@ impl Executor {
         let cs_name = cs.name;
         let cs_args = cs.args;
         let cs_pos_num = cs.pos_num;
-        let cs_splat_pos = cs.splat_pos.clone();
+        let cs_splat_pos = cs.splat_pos().to_vec();
         let cs_kw_pos = cs.kw_pos;
         let cs_kw_len = cs.kw_len();
-        let cs_kw_args = cs.kw_args.clone();
-        let cs_hash_splat_pos = cs.hash_splat_pos.clone();
+        let cs_kw_args = cs.kw_args().clone();
+        let cs_hash_splat_pos = cs.hash_splat_pos().to_vec();
         let bh = cs.block_handler(lfp);
 
         let method_name = if let Some(name) = cs_name {

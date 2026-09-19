@@ -607,12 +607,12 @@ pub(super) extern "C" fn gen_array(
                 .rev()
                 .cloned()
         };
-        if callsite.splat_pos.is_empty() {
+        if callsite.splat_pos().is_empty() {
             Some(Value::array_from_iter(iter))
         } else {
             let mut ary = Array::new_empty();
             for (i, v) in iter.enumerate() {
-                if globals.store[callid].splat_pos.contains(&i) {
+                if globals.store[callid].splat_pos().contains(&i) {
                     let a = v.try_array_ty().expect("splat arguments must be Array.");
                     ary.extend_from_slice(&a);
                 } else {

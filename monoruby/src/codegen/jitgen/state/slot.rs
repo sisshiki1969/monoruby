@@ -2236,11 +2236,11 @@ impl LinkMode {
         state: &AbstractState,
         recv: LinkMode,
     ) -> Vec<Self> {
+        let kw_args = store[callid].kw_args();
         let CallSiteInfo {
             args,
             pos_num,
             kw_pos,
-            kw_args,
             ..
         } = &store[callid];
         let info = &store[fid];

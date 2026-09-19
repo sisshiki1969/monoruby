@@ -1653,7 +1653,7 @@ impl Store {
         // None. (A hash splat could still supply it, but hash-splat
         // callsites are rejected below anyway.)
         for (i, name) in info.kw_names().iter().enumerate() {
-            if info.kw_is_required(i) && !callsite.kw_args.contains_key(name) {
+            if info.kw_is_required(i) && !callsite.kw_args().contains_key(name) {
                 return false;
             }
         }
