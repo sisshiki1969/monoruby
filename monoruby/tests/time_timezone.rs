@@ -212,3 +212,37 @@ fn marshal_payload_holds_the_utc_clock() {
         "#,
     );
 }
+
+#[test]
+fn ambiguous_local_clocks_and_the_isdst_flag() {
+    // The hour a zone repeats when it falls back reads the same on the
+    // clock twice, an hour apart, and only the `isdst` flag in
+    // `Time.local`'s 10-argument form can say which one is meant. It was
+    // dropped, so whichever side libc preferred was the only answer.
+    //
+    // The flag cannot simply be handed to `mktime`: given an `isdst` its
+    // zone disagrees with, libc *shifts* the clock by an hour rather
+    // than refusing, which would have dragged the advisory `:ignored` in
+    // the C-style form an hour off. Each side is tried and kept only if
+    // reading it back gives the clock that was asked for — and with no
+    // flag, standard time is tried first, which is how CRuby resolves
+    // the repeated hour.
+    run_test_once(
+        r#"
+        old = ENV['TZ']
+        ENV['TZ'] = 'America/New_York'
+        r = []
+        def row(t) = [t.utc_offset, t.to_s, t.zone, t.dst?]
+        # 2005-10-30 01:30 happened twice in New York.
+        r << row(Time.local(0, 30, 1, 30, 10, 2005, 0, 0, true, ENV['TZ']))
+        r << row(Time.local(0, 30, 1, 30, 10, 2005, 0, 0, false, ENV['TZ']))
+        r << row(Time.local(2005, 10, 30, 1, 30, 0))
+        # An advisory flag on an hour that happens once changes nothing.
+        r << Time.local(1, 15, 20, 1, 1, 2000, :ignored, :ignored, :ignored, :ignored).to_a
+        # An hour the zone skips has no reading at all; libc's own choice stands.
+        r << row(Time.local(2005, 4, 3, 2, 30, 0))
+        ENV['TZ'] = old
+        r
+        "#,
+    );
+}

@@ -91,6 +91,49 @@ pub(crate) fn local_is_dst(utc_secs: i64) -> bool {
 /// The UTC instant a local wall clock names. `tm_isdst = -1` lets libc
 /// pick the side of a DST transition, as CRuby's `mktime` call does.
 fn local_naive_to_utc(naive: NaiveDateTime) -> Option<i64> {
+    local_naive_to_utc_dst(naive, None)
+}
+
+/// As [`local_naive_to_utc`], but with an answer to "was daylight saving
+/// in effect?" — the only thing that can settle an *ambiguous* local
+/// clock, the hour a zone repeats when it falls back.
+///
+/// Each side is tried in turn and a candidate counts only if reading it
+/// back in the local zone gives the clock that was asked for. An hour
+/// that does not repeat has exactly one such reading, so the flag cannot
+/// drag it an hour off (libc's `mktime` *shifts* a clock whose
+/// `tm_isdst` disagrees with its zone, which is why the flag cannot
+/// simply be passed through); an hour a zone skips has none, and there
+/// libc's own choice stands. With no flag, standard time is tried
+/// first — CRuby resolves the repeated hour that way.
+fn local_naive_to_utc_dst(naive: NaiveDateTime, isdst: Option<bool>) -> Option<i64> {
+    let first = isdst.unwrap_or(false);
+    for want in [first, !first] {
+        if let Some(t) = mktime_with_isdst(naive, if want { 1 } else { 0 })
+            && local_clock_reads(t, naive)
+        {
+            return Some(t);
+        }
+    }
+    mktime_with_isdst(naive, -1)
+}
+
+/// Whether the local clock at `utc_secs` reads exactly `naive`.
+fn local_clock_reads(utc_secs: i64, naive: NaiveDateTime) -> bool {
+    match local_tm(utc_secs) {
+        Some(tm) => {
+            tm.tm_year == naive.year() - 1900
+                && tm.tm_mon == naive.month0() as i32
+                && tm.tm_mday == naive.day() as i32
+                && tm.tm_hour == naive.hour() as i32
+                && tm.tm_min == naive.minute() as i32
+                && tm.tm_sec == naive.second() as i32
+        }
+        None => false,
+    }
+}
+
+fn mktime_with_isdst(naive: NaiveDateTime, isdst: i32) -> Option<i64> {
     refresh_tz();
     // SAFETY: `tm` is zeroed and every field libc reads is set below;
     // `mktime` only reads it and normalizes it in place.
@@ -102,7 +145,7 @@ fn local_naive_to_utc(naive: NaiveDateTime) -> Option<i64> {
         tm.tm_hour = naive.hour() as i32;
         tm.tm_min = naive.minute() as i32;
         tm.tm_sec = naive.second() as i32;
-        tm.tm_isdst = -1;
+        tm.tm_isdst = isdst;
         let t = libc::mktime(&mut tm);
         if t == -1 && tm.tm_year == 0 {
             // mktime failed rather than landing on 1969-12-31 23:59:59Z
@@ -2007,9 +2050,24 @@ pub(crate) extern "C" fn time_alloc_func(class_id: ClassId, _: &mut Globals) -> 
 #[monoruby_builtin]
 fn time_local(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let cls = lfp.self_val().as_class().id();
-    let t = generate_time(vm, globals, LocalTz, lfp)?;
-    let time_info = localize(t.with_timezone(&Utc));
-    Ok(Value::new_time_with_class(time_info, cls))
+    // The 10-argument C-style form carries an `isdst` flag in slot 8,
+    // and it is not advisory: it picks the side of the hour a zone
+    // repeats when it falls back. `Time.local(0, 30, 1, 30, 10, 2005, 0,
+    // 0, true, …)` is 01:30 EDT in New York, `false` is 01:30 EST — the
+    // same clock, an hour apart. It used to be dropped, so whichever
+    // side libc preferred was the only answer available.
+    let isdst = if (0..10).all(|i| lfp.try_arg(i).is_some()) {
+        lfp.try_arg(8).filter(|v| !v.is_nil()).map(|v| v.as_bool())
+    } else {
+        None
+    };
+    let naive = from_args(vm, globals, lfp)?
+        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
+    let secs = local_naive_to_utc_dst(naive, isdst)
+        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
+    let instant = DateTime::<Utc>::from_timestamp(secs, naive.nanosecond())
+        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
+    Ok(Value::new_time_with_class(localize(instant), cls))
 }
 
 ///
@@ -2667,14 +2725,17 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
         // conversion letter.
         let mut j = i + 1;
         let mut flag_minus = false;
-        let mut flag_underscore = false;
-        let mut flag_zero = false;
         let mut flag_caret = false;
+        // `_` and `0` both name the padding character, so the *last* one
+        // written wins (`%_010h` pads with zeros, `%0_10h` with spaces);
+        // `-` is a separate flag that drops the padding whatever it was,
+        // wherever it appears. CRuby's `rb_strftime` reads them that way.
+        let mut pad_char: Option<char> = None;
         while j < bytes.len() {
             match bytes[j] {
                 b'-' => flag_minus = true,
-                b'_' => flag_underscore = true,
-                b'0' => flag_zero = true,
+                b'_' => pad_char = Some(' '),
+                b'0' => pad_char = Some('0'),
                 b'^' => flag_caret = true,
                 b'#' => {} // ignored
                 _ => break,
@@ -2709,8 +2770,7 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
         // verbatim for chrono.
         match (conv, colons) {
             (b'z', _) => {
-                let txt =
-                    format_offset(inner, colons, flag_minus, flag_underscore, flag_zero, width);
+                let txt = format_offset(inner, colons, flag_minus, pad_char, width);
                 out.push_str(&txt);
                 i = directive_end;
                 continue;
@@ -2753,27 +2813,45 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
                     TimeInner::Utc(t) => t.month(),
                 };
                 let idx = (m as usize - 1).min(11);
-                out.push_str(if conv == b'B' {
+                let name = if conv == b'B' {
                     MONTH_UPPER_FULL[idx]
                 } else {
                     MONTH_UPPER_ABBR[idx]
-                });
+                };
+                // A width pads the name — with zeros under `0`, spaces
+                // under `_` — unless `-` is also given, which drops the
+                // padding whatever else was asked for (`%0-^5h` is
+                // `"FEB"`, not `"00FEB"`).
+                match width {
+                    Some(w) if !flag_minus && name.len() < w => {
+                        out.extend(std::iter::repeat_n(pad_char.unwrap_or(' '), w - name.len()));
+                        out.push_str(name);
+                    }
+                    _ => out.push_str(name),
+                }
                 i = directive_end;
                 continue;
             }
             // `%h` without caret falls through to chrono after the
             // substitution `h → b` (chrono recognises `%b`).
+            // `%h` is a CRuby synonym for `%b`; with a width it takes the
+            // padding path, otherwise chrono renders the re-emitted `%b`.
+            (b'h', 0) if !flag_caret && width.is_some() => {
+                let w = width.unwrap();
+                if let Some(text) = pad_conv(inner, b'b', w, flag_minus, pad_char) {
+                    out.push_str(&text);
+                }
+                i = directive_end;
+                continue;
+            }
             (b'h', 0) if !flag_caret => {
                 // Re-emit as `%b` (preserving flags / width).
                 out.push('%');
                 if flag_minus {
                     out.push('-');
                 }
-                if flag_underscore {
-                    out.push('_');
-                }
-                if flag_zero {
-                    out.push('0');
+                if let Some(pad) = pad_char {
+                    out.push(if pad == ' ' { '_' } else { '0' });
                 }
                 if let Some(w) = width {
                     out.push_str(&w.to_string());
@@ -2803,6 +2881,19 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
             }
             _ => {}
         }
+        // An explicit width is the one thing chrono cannot do, and
+        // passing the directive through with it renders *nothing* — so
+        // `%04m` came out empty. Render the bare directive through
+        // chrono and pad the result here: zeros for a number, spaces for
+        // a name, spaces under `_`, and nothing at all under `-`.
+        if let Some(w) = width
+            && colons == 0
+            && let Some(text) = pad_conv(inner, conv, w, flag_minus, pad_char)
+        {
+            out.push_str(&text);
+            i = directive_end;
+            continue;
+        }
         // Unhandled: copy through verbatim.
         out.push_str(&fmt[i..directive_end]);
         i = directive_end;
@@ -2813,12 +2904,63 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
 /// Format a `%z` family directive. `colons` is the number of `:` in
 /// the directive (0, 1, or 2). UTC + `-` flag emits CRuby's RFC 3339
 /// `-0000` / `-00:00` / `-00:00:00` "unknown offset" form.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum ConvKind {
+    /// Rendered as digits, so a width pads with zeros by default.
+    Number,
+    /// Rendered as a name, so a width pads with spaces.
+    Name,
+}
+
+/// Render one conversion through chrono and pad it to `width`: an
+/// explicit width is the one thing chrono cannot do, and passing the
+/// directive through with it renders *nothing* — so `%04m` came out
+/// empty. Zeros pad a number and spaces a name, `_` asks for spaces
+/// either way, and `-` drops the padding. `None` for a conversion whose
+/// value chrono does not know.
+fn pad_conv(
+    inner: &TimeInner,
+    conv: u8,
+    width: usize,
+    flag_minus: bool,
+    pad_char: Option<char>,
+) -> Option<String> {
+    let kind = padded_conv_kind(conv)?;
+    let bare = format!(
+        "%{}{}",
+        if kind == ConvKind::Number { "-" } else { "" },
+        conv as char
+    );
+    let text = match inner {
+        TimeInner::Local(t, _) => t.format(&bare).to_string(),
+        TimeInner::Utc(t) => t.format(&bare).to_string(),
+    };
+    let mut out = String::with_capacity(width.max(text.len()));
+    if !flag_minus && text.len() < width {
+        let pad = pad_char.unwrap_or(if kind == ConvKind::Name { ' ' } else { '0' });
+        out.extend(std::iter::repeat_n(pad, width - text.len()));
+    }
+    out.push_str(&text);
+    Some(out)
+}
+
+/// Whether a conversion is one whose value chrono can render on its own,
+/// so an explicit width can be applied to the result here. `%z` / `%Z` /
+/// `%N` / `%L` and the composites are handled before this is reached.
+fn padded_conv_kind(conv: u8) -> Option<ConvKind> {
+    match conv {
+        b'Y' | b'y' | b'C' | b'm' | b'd' | b'e' | b'j' | b'H' | b'k' | b'I' | b'l' | b'M'
+        | b'S' | b's' | b'u' | b'w' | b'G' | b'g' | b'V' | b'U' | b'W' => Some(ConvKind::Number),
+        b'a' | b'A' | b'b' | b'B' | b'p' | b'P' => Some(ConvKind::Name),
+        _ => None,
+    }
+}
+
 fn format_offset(
     inner: &TimeInner,
     colons: usize,
     flag_minus: bool,
-    flag_underscore: bool,
-    flag_zero: bool,
+    pad_char: Option<char>,
     width: Option<usize>,
 ) -> String {
     // Total offset in seconds (signed).
@@ -2842,38 +2984,36 @@ fn format_offset(
     let h = abs / 3600;
     let m = (abs / 60) % 60;
     let s = abs % 60;
-    let core = match colons {
-        0 => format!("{}{:02}{:02}", sign, h, m),
-        1 => format!("{}{:02}:{:02}", sign, h, m),
-        _ => format!("{}{:02}:{:02}:{:02}", sign, h, m, s),
+    // The minutes (and seconds) are a fixed suffix; a width applies to
+    // the *hours* field in front of it, as printf's `%*d` would — which
+    // is why `%-_10z` is `"      -000"` and not `"     -0000"`: the hour
+    // loses its default two-digit form to the explicit width.
+    let suffix = match colons {
+        0 => format!("{:02}", m),
+        1 => format!(":{:02}", m),
+        _ => format!(":{:02}:{:02}", m, s),
     };
-    if let Some(w) = width {
-        let pad = if flag_underscore { ' ' } else { '0' };
-        if core.len() < w {
-            let pad_count = w - core.len();
-            // Padding goes after the sign if zero-padding, else before
-            // the whole thing for space-padding (matches CRuby).
-            if pad == '0' {
-                // Insert `pad_count` zeros after the sign.
-                let mut padded = String::with_capacity(w);
-                padded.push(sign);
-                for _ in 0..pad_count {
-                    padded.push('0');
-                }
-                padded.push_str(&core[1..]);
-                return padded;
-            } else {
-                let mut padded = String::with_capacity(w);
-                for _ in 0..pad_count {
-                    padded.push(' ');
-                }
-                padded.push_str(&core);
-                return padded;
-            }
-        }
+    let Some(w) = width else {
+        return format!("{}{:02}{}", sign, h, suffix);
+    };
+    let hours = format!("{}{}", sign, h);
+    let field = w.saturating_sub(suffix.len());
+    if hours.len() >= field {
+        return format!("{}{}", hours, suffix);
     }
-    let _ = flag_zero;
-    core
+    let fill = field - hours.len();
+    let mut out = String::with_capacity(w);
+    if pad_char == Some(' ') {
+        // Spaces go in front of the sign, zeros between it and the digits.
+        out.extend(std::iter::repeat_n(' ', fill));
+        out.push_str(&hours);
+    } else {
+        out.push(sign);
+        out.extend(std::iter::repeat_n('0', fill));
+        out.push_str(&hours[1..]);
+    }
+    out.push_str(&suffix);
+    out
 }
 
 /// Sub-second digits, width-controlled. `nanos` holds nanoseconds
@@ -4542,5 +4682,36 @@ mod tests {
             // `Time.at(Time, usec)` is a TypeError (bug #8173).
             "begin; Time.at(Time.now, 500000); :no; rescue TypeError; :te; end",
         ]);
+    }
+
+    #[test]
+    fn strftime_flags_and_widths() {
+        // An explicit width is the one thing chrono cannot render, and
+        // the directive was passed through to it with the width still
+        // attached — so `%04m` came out *empty*. The conversion is
+        // rendered bare and padded here now. `_` and `0` each name the
+        // padding character, so the last one written wins (`%_010h` pads
+        // with zeros, `%0_10h` with spaces), while `-` drops the padding
+        // wherever it appears. A width on `%z` applies to the hours
+        // field in front of the fixed `MM` suffix, as printf's `%*d`
+        // would: `%-_10z` is `"      -000"`, not `"     -0000"`.
+        run_test_once(
+            r##"
+            t = Time.utc(2001, 2, 3, 4, 5, 6)
+            r = []
+            %w[%^h %^_5h %0^5h %04m %0-^5h %_-^5h %^ha %^B %^_12B %5h %_5h
+               %10h %^10h %_10h %_010h %0_10h %0_-10h %0-_10h %_04m %0_4m %-4m
+               %6a %_6A %06d].each { |f| r << [f, t.strftime(f)] }
+            u = Time.utc(2020, 6, 1)
+            %w[%-_10z %-10z %-010:z %-_10:z %-_10::z %z %:z %::z %-z %010z %_10z].each do |f|
+              r << [f, u.strftime(f)]
+            end
+            o = Time.new(2022, 1, 1, 0, 0, 0, "+03:00")
+            %w[%-z %z %:z %010z %_10z %-_10z %5z].each { |f| r << [f, o.strftime(f)] }
+            n = Time.new(2022, 1, 1, 0, 0, 0, "-09:30")
+            %w[%z %:z %::z %010z %_10z %012::z].each { |f| r << [f, n.strftime(f)] }
+            r
+            "##,
+        );
     }
 }
