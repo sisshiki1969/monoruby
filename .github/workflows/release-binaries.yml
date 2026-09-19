@@ -171,6 +171,23 @@ jobs:
                 "$check/bin/monoruby" -e 'require "json"; puts JSON.generate({"ok" => 1})')
           test "$out" = '{"ok":1}'
 
+          # The dynamically loaded extensions ride in monoruby-home/v*/ext/
+          # (build.rs installs them there). `json` touches none of them, so
+          # check one library per extension; a tarball without them would
+          # otherwise ship with `require "yaml"` / `"zlib"` broken. zstd goes
+          # through the stand-in itself: the gem's Ruby half (`zstd-ruby`) is
+          # not installed on the runner.
+          test -d "$check/monoruby-home/$vdir/ext"
+          out=$(MONORUBY_INSTALL_ROOT="$check/monoruby-home/$vdir" \
+                "$check/bin/monoruby" -e '
+                  require "yaml"; require "zlib"; require "zstd-ruby/zstdruby"
+                  require "sqlite3"; require "nokogiri"
+                  puts [YAML.load("a: 1")["a"], Zlib.crc32("a"),
+                        Zstd.decompress(Zstd.compress("z")),
+                        SQLite3::Database.new(":memory:").get_first_value("select 2"),
+                        Nokogiri::XML("<a>x</a>").root.text].join(",")')
+          test "$out" = '1,3904355907,z,2,x'
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
