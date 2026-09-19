@@ -76,6 +76,67 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
 
+  features:
+    # The diagnostic features are cfg'd out of every build CI otherwise runs,
+    # so code only they pull in is compiled by nobody until someone turns one
+    # on locally — a rename in the code they read reaches master and surfaces
+    # weeks later as "emit-cfg doesn't build". `cargo check` on each of them
+    # is cheap and closes that gap.
+    #
+    # Each feature is checked on its own, not merged into one --features list:
+    # a combined build compiles the union of the cfg'd code, which is exactly
+    # what hides a feature whose code stopped compiling without another one
+    # also being on.
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          # Keep in sync with rust-toolchain.toml (see the amd64 job).
+          toolchain: nightly-2026-08-18
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check, one feature at a time
+        run: |
+          # build.rs is host-Ruby independent, so this job needs no ruby.
+          failed=()
+          while read -r feature; do
+            [ -n "$feature" ] || continue
+            echo "::group::cargo check --features $feature"
+            if ! cargo check -p monoruby --features "$feature"; then
+              failed+=("$feature")
+            fi
+            echo "::endgroup::"
+          done <<'EOF'
+          chain-deopt-log
+          deopt
+          dump-bc
+          dump-require
+          dump-traceir
+          emit-asm
+          emit-bc
+          emit-cfg
+          gc-debug
+          gc-log
+          gc-stress
+          gc-verify
+          jit-debug
+          jit-log
+          mimalloc
+          perf
+          phys-table
+          profile
+          shadow-placement
+          stress-spill-pool
+          EOF
+          # Report every broken feature, not just the first, so one run tells
+          # you the whole story.
+          if [ ${#failed[@]} -ne 0 ]; then
+            echo "::error::features that do not build: ${failed[*]}"
+            exit 1
+          fi
+
   darwin:
     # checks: write lets the in-step heartbeat publish a `darwin-heartbeat`
     # check run that SURVIVES runner death (see the Test step); contents:
