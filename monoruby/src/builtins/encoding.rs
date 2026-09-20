@@ -4234,12 +4234,13 @@ pub(crate) fn init_default_external(globals: &mut Globals) {
     // fixed UTF-8 (`#elif defined __APPLE__`). From then on it tracks
     // `default_external`, which re-aliases it on every assignment
     // (`enc_set_default_encoding`).
+    //
+    // Resolved by name, as the locale encoding beside it is: the
+    // `Encoding::UTF_8` *constant* is not registered yet this early in
+    // `Globals::new`, so a constant lookup here silently falls back and
+    // leaves macOS on the locale encoding.
     let fs = if cfg!(target_os = "macos") {
-        let enc_class = encoding_class(globals);
-        globals
-            .store
-            .get_constant_noautoload(enc_class, IdentId::UTF_8)
-            .unwrap_or(v)
+        find_encoding_object(globals, "UTF-8").unwrap_or(v)
     } else {
         v
     };
