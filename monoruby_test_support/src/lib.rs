@@ -30,29 +30,29 @@ pub fn ruby_path() -> &'static str {
 }
 
 fn find_ruby() -> String {
-    // Already on PATH and recent enough?
-    if ruby_version_ok("ruby") {
-        return "ruby".to_string();
-    }
-    // rbenv shim — defers to the version selected by ~/.rbenv/version.
+    ruby_candidates()
+        .into_iter()
+        .find(|cmd| ruby_version_ok(cmd))
+        .unwrap_or_else(|| "ruby".to_string()) // will fail with a clear error
+}
+
+///
+/// Where to look for the reference CRuby, in the order to try: whatever
+/// `PATH` gives, then the version managers' own entry points, which are
+/// what a shell without their shims on `PATH` still has.
+///
+fn ruby_candidates() -> Vec<String> {
+    let mut candidates = vec!["ruby".to_string()];
     if let Some(home) = std::env::var_os("HOME") {
-        let shim = PathBuf::from(home).join(".rbenv/shims/ruby");
-        if let Some(shim_str) = shim.to_str()
-            && ruby_version_ok(shim_str)
-        {
-            return shim_str.to_string();
+        let home = PathBuf::from(home);
+        // rbenv's shim defers to the version ~/.rbenv/version selects.
+        for manager in [".rbenv/shims/ruby", ".rvm/bin/ruby"] {
+            if let Some(path) = home.join(manager).to_str() {
+                candidates.push(path.to_string());
+            }
         }
     }
-    // rvm
-    if let Some(home) = std::env::var_os("HOME") {
-        let rvm = PathBuf::from(home).join(".rvm/bin/ruby");
-        if let Some(rvm_str) = rvm.to_str()
-            && ruby_version_ok(rvm_str)
-        {
-            return rvm_str.to_string();
-        }
-    }
-    "ruby".to_string() // last resort — will fail with a clear error message
+    candidates
 }
 
 fn ruby_version_ok(ruby_cmd: &str) -> bool {
@@ -152,4 +152,62 @@ pub fn build_extension(name: &str) -> PathBuf {
 ///
 pub fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    ///
+    /// The order matters: `PATH` first, so a shell that already has the
+    /// right Ruby is never overridden by a version manager's copy.
+    ///
+    #[test]
+    fn path_is_tried_before_the_version_managers() {
+        let candidates = ruby_candidates();
+        assert_eq!("ruby", candidates[0]);
+        if std::env::var_os("HOME").is_some() {
+            assert!(
+                candidates.iter().any(|c| c.contains(".rbenv/shims/ruby")),
+                "rbenv shim missing from {candidates:?}"
+            );
+            assert!(
+                candidates.iter().any(|c| c.contains(".rvm/bin/ruby")),
+                "rvm entry missing from {candidates:?}"
+            );
+        }
+    }
+
+    ///
+    /// A candidate that cannot be spawned is not a Ruby, and neither is
+    /// one that runs but answers something that is not a version — the
+    /// two ways `find_ruby` walks past an entry.
+    ///
+    #[test]
+    fn a_candidate_that_is_not_a_ruby_is_rejected() {
+        assert!(!ruby_version_ok("monoruby-no-such-command-exists"));
+        // Runs, exits 0, prints its arguments rather than a version.
+        assert!(!ruby_version_ok("echo"));
+    }
+
+    ///
+    /// Whatever `find_ruby` settled on is one of the places it looked.
+    ///
+    #[test]
+    fn the_resolved_ruby_is_a_candidate() {
+        assert!(ruby_candidates().contains(&ruby_path().to_string()));
+    }
+
+    ///
+    /// `build_extension` resolves `target/ext` against this, so a wrong
+    /// answer would build into the directory the outer cargo has locked.
+    ///
+    #[test]
+    fn workspace_root_is_the_workspace() {
+        assert!(
+            workspace_root().join("Cargo.toml").is_file(),
+            "no Cargo.toml at {:?}",
+            workspace_root()
+        );
+    }
 }
