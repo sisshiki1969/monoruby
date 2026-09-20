@@ -88,12 +88,6 @@ pub(crate) fn local_is_dst(utc_secs: i64) -> bool {
     local_tm(utc_secs).is_some_and(|tm| tm.tm_isdst > 0)
 }
 
-/// The UTC instant a local wall clock names, with libc picking the
-/// side of a DST transition.
-fn local_naive_to_utc(naive: NaiveDateTime) -> Option<i64> {
-    local_naive_to_utc_isdst(naive, None)
-}
-
 /// The UTC instant a local wall clock names.
 ///
 /// A wall clock in the hour a zone falls back names two instants, and
@@ -165,52 +159,6 @@ fn mktime_isdst(naive: NaiveDateTime, tm_isdst: i32) -> Option<(i64, bool)> {
             && tm.tm_min == min as i32
             && tm.tm_sec == sec as i32;
         Some((t as i64, kept))
-    }
-}
-
-/// The system local timezone. A drop-in for chrono's `Local` that asks
-/// libc — and so `TZ` — on every conversion.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LocalTz;
-
-impl LocalTz {
-    /// The current instant in the local zone.
-    fn now() -> DateTime<FixedOffset> {
-        let utc = Utc::now();
-        utc.with_timezone(&local_offset_at(utc.timestamp()))
-    }
-}
-
-impl TimeZone for LocalTz {
-    type Offset = FixedOffset;
-
-    fn from_offset(_: &FixedOffset) -> Self {
-        LocalTz
-    }
-
-    fn offset_from_local_date(&self, local: &NaiveDate) -> LocalResult<FixedOffset> {
-        match local.and_hms_opt(0, 0, 0) {
-            Some(dt) => self.offset_from_local_datetime(&dt),
-            None => LocalResult::None,
-        }
-    }
-
-    fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<FixedOffset> {
-        match local_naive_to_utc(*local) {
-            Some(secs) => LocalResult::Single(local_offset_at(secs)),
-            None => LocalResult::None,
-        }
-    }
-
-    fn offset_from_utc_date(&self, utc: &NaiveDate) -> FixedOffset {
-        match utc.and_hms_opt(0, 0, 0) {
-            Some(dt) => self.offset_from_utc_datetime(&dt),
-            None => FixedOffset::east_opt(0).unwrap(),
-        }
-    }
-
-    fn offset_from_utc_datetime(&self, utc: &NaiveDateTime) -> FixedOffset {
-        local_offset_at(utc.and_utc().timestamp())
     }
 }
 
@@ -607,12 +555,13 @@ fn zone(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/getgm.html]
 #[monoruby_builtin]
-fn getutc(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let new = match lfp.self_val().as_time() {
+fn getutc(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let new = match self_.as_time() {
         TimeInner::Local(t, _) => TimeInner::Utc(t.with_timezone(&Utc)),
         TimeInner::Utc(t) => TimeInner::Utc(*t),
     };
-    Ok(Value::new_time(new))
+    derived_time(globals, self_, new)
 }
 
 ///
@@ -632,6 +581,8 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         // time and becomes its `#zone`.
         let utc_dt = time_utc_instant(lfp.self_val().as_time());
         if let Some(t) = time_at_with_timezone(vm, globals, utc_dt, arg0, TIME_CLASS)? {
+            let (n, d) = exact_subsec_parts(globals, lfp.self_val());
+            store_exact_subsec(globals, t, n, d)?;
             return Ok(t);
         }
         // Otherwise `getlocal(arg)` takes the same offset shapes as
@@ -673,7 +624,7 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             t => localize(time_utc_instant(t)),
         }
     };
-    Ok(Value::new_time(new))
+    derived_time(globals, lfp.self_val(), new)
 }
 
 ///
@@ -850,15 +801,47 @@ pub(crate) fn time_utc_offset(t: &TimeInner) -> i32 {
     }
 }
 
-/// Marshal support: the sub-microsecond part of this time's nanoseconds
-/// (`nanosecond % 1000`), which the 8-byte payload (microsecond
-/// resolution) cannot carry.
-pub(crate) fn time_subsec_nanos(t: &TimeInner) -> u32 {
-    let ns = match t {
-        TimeInner::Local(dt, _) => dt.nanosecond(),
-        TimeInner::Utc(dt) => dt.nanosecond(),
-    };
-    ns % 1000
+/// The sub-microsecond nanoseconds a dump records, as the exact
+/// `(numerator, denominator)` CRuby writes in `:nano_num` / `:nano_den`
+/// — `1000 / 3` for a time a third of a second past the epoch. The
+/// 8-byte payload stops at microseconds, so this is everything below
+/// it, and a time with no sub-nanosecond value gives a denominator of
+/// one just as before.
+pub(crate) fn time_marshal_subnano(globals: &Globals, time: Value) -> (num::BigInt, num::BigInt) {
+    use num::Integer;
+    let (num, den) = exact_subsec_parts(globals, time);
+    // The whole fraction in nanoseconds, less the microseconds the
+    // payload already carries.
+    let ns_num = num * num::BigInt::from(1_000_000_000i64);
+    let (whole_ns, rem) = ns_num.div_mod_floor(&den);
+    let sub = whole_ns % 1000i64;
+    let n = sub * &den + rem;
+    let g = n.gcd(&den);
+    (n / &g, den / &g)
+}
+
+/// Marshal support: add an exact number of nanoseconds to a loaded
+/// time, restoring what the payload's microsecond resolution dropped.
+pub(crate) fn time_marshal_add_subnano(
+    globals: &mut Globals,
+    time: Value,
+    num: num::BigInt,
+    den: num::BigInt,
+) -> Result<()> {
+    use num::Integer;
+    let billion = num::BigInt::from(1_000_000_000i64);
+    let (whole_ns, rem) = num.div_mod_floor(&den);
+    if let Some(ns) = whole_ns.to_i64()
+        && ns != 0
+    {
+        time_add_nanos(time, ns);
+    }
+    // Whatever is left is below a nanosecond and rides on the object.
+    if rem != num::BigInt::from(0) {
+        let cur = num::BigInt::from(time.as_time().nanosecond());
+        store_exact_subsec(globals, time, &cur * &den + rem, billion * den)?;
+    }
+    Ok(())
 }
 
 /// Marshal support: add `ns` nanoseconds to a loaded time, restoring the
@@ -903,10 +886,12 @@ pub(crate) fn time_reinterpret_offset(mut time: Value, offset_secs: i32) {
 fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let digits = if let Some(a) = lfp.try_arg(0) {
         let v = a.coerce_to_int_i64(vm, globals)?;
-        if !(0..=9).contains(&v) {
+        // CRuby has no ceiling here: it renders an exact rational, so
+        // more digits simply show more of it — or more zeros.
+        if v < 0 {
             return Err(MonorubyErr::argumenterr("fraction_digits out of range"));
         }
-        v as u32
+        u32::try_from(v).map_err(|_| MonorubyErr::argumenterr("fraction_digits out of range"))?
     } else {
         0
     };
@@ -916,14 +901,13 @@ fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         TimeInner::Local(t, _) => t.format("%:z").to_string(),
         TimeInner::Utc(_) => "Z".to_string(),
     };
-    let (year, mon, mday, h, mi, s, nsec) = (
+    let (year, mon, mday, h, mi, s) = (
         t.year(),
         t.month(),
         t.day(),
         t.hour(),
         t.minute(),
         t.second(),
-        t.nanosecond(),
     );
     let year_str = if year < 0 {
         format!("-{:04}", -year)
@@ -935,9 +919,9 @@ fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         year_str, mon, mday, h, mi, s
     );
     if digits > 0 {
-        let frac = nsec / 10u32.pow(9 - digits);
+        let (fnum, fden) = exact_subsec_parts(globals, self_);
         out.push('.');
-        out.push_str(&format!("{:0width$}", frac, width = digits as usize));
+        out.push_str(&format_subsec_exact(&fnum, &fden, digits as usize));
     }
     out.push_str(&suffix);
     Ok(Value::string(out))
@@ -964,53 +948,57 @@ fn asctime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn precision_arg(vm: &mut Executor, globals: &mut Globals, lfp: &Lfp) -> Result<u32> {
     if let Some(a) = lfp.try_arg(0) {
         let v = a.coerce_to_int_i64(vm, globals)?;
-        if !(0..=9).contains(&v) {
+        // CRuby has no upper bound here: it rounds an exact rational,
+        // so a precision past nine digits simply keeps more of it.
+        if v < 0 {
             return Err(MonorubyErr::argumenterr("precision out of range"));
         }
-        Ok(v as u32)
+        u32::try_from(v).map_err(|_| MonorubyErr::argumenterr("precision out of range"))
     } else {
         Ok(0)
     }
 }
 
-fn rescale_nsec(ns: u32, precision: u32, mode: i8) -> u32 {
-    // mode: -1 floor, 0 round, 1 ceil
-    if precision >= 9 {
-        return ns;
-    }
-    let div = 10u32.pow(9 - precision);
-    let q = ns / div;
-    let r = ns % div;
+/// Round a `Time`'s sub-second value to `precision` decimal digits.
+///
+/// The rounding is done on the exact fraction, not on the nanoseconds:
+/// `Time.at(0, Rational(1, 3), :nanosecond).ceil(3)` is a thousandth of
+/// a second, where a nanosecond-resolution view of the same time sees
+/// nothing to round up. `mode` is -1 floor, 0 half-up, 1 ceiling.
+///
+/// Returns the new instant and its own exact fraction.
+fn apply_subsec(
+    globals: &Globals,
+    self_: Value,
+    mode: i8,
+    precision: u32,
+) -> (TimeInner, num::BigInt, num::BigInt) {
+    use num::Integer;
+    let inner = self_.as_time();
+    let (num, den) = exact_subsec_parts(globals, self_);
+    let scale = num::BigInt::from(10i64).pow(precision);
+    let (q, r) = (&num * &scale).div_mod_floor(&den);
     let q = match mode {
         -1 => q,
-        1 => {
-            if r == 0 {
-                q
-            } else {
-                q + 1
-            }
-        }
-        _ => {
-            if r * 2 >= div {
-                q + 1
-            } else {
-                q
-            }
-        }
+        1 if r != num::BigInt::from(0) => q + 1,
+        1 => q,
+        _ if &r * 2 >= den => q + 1,
+        _ => q,
     };
-    q * div
-}
-
-fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
-    let self_ = lfp.self_val();
-    let inner = self_.as_time();
-    let new_ns = rescale_nsec(inner.nanosecond(), precision, mode);
-    match inner {
+    // Rounding up out of the second carries into it.
+    let (carry, frac_num) = if q >= scale {
+        (true, num::BigInt::from(0))
+    } else {
+        (false, q)
+    };
+    let billion = num::BigInt::from(1_000_000_000i64);
+    let new_ns = ((&frac_num * &billion) / &scale).to_u32().unwrap_or(0);
+    let inner = match inner {
         TimeInner::Local(t, zone) => {
             let zone = *zone;
             let mut result = t.with_nanosecond(0).unwrap();
-            if new_ns >= 1_000_000_000 {
-                result = result + Duration::seconds(1);
+            if carry {
+                result += Duration::seconds(1);
             } else {
                 result = result.with_nanosecond(new_ns).unwrap();
             }
@@ -1018,14 +1006,15 @@ fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
         }
         TimeInner::Utc(t) => {
             let mut result = t.with_nanosecond(0).unwrap();
-            if new_ns >= 1_000_000_000 {
-                result = result + Duration::seconds(1);
+            if carry {
+                result += Duration::seconds(1);
             } else {
                 result = result.with_nanosecond(new_ns).unwrap();
             }
             TimeInner::Utc(result)
         }
-    }
+    };
+    (inner, frac_num, scale)
 }
 
 ///
@@ -1040,7 +1029,13 @@ fn apply_subsec(lfp: &Lfp, mode: i8, precision: u32) -> TimeInner {
 #[monoruby_builtin]
 fn floor_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let p = precision_arg(vm, globals, &lfp)?;
-    derived_time(globals, lfp.self_val(), apply_subsec(&lfp, -1, p))
+    let (inner, fnum, fden) = apply_subsec(globals, lfp.self_val(), -1, p);
+    let derived = derived_time(globals, lfp.self_val(), inner)?;
+    globals
+        .store
+        .set_ivar(derived, IdentId::get_id(SUBSEC_IVAR), Value::nil())?;
+    store_exact_subsec(globals, derived, fnum, fden)?;
+    Ok(derived)
 }
 
 ///
@@ -1054,7 +1049,13 @@ fn floor_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn ceil_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let p = precision_arg(vm, globals, &lfp)?;
-    derived_time(globals, lfp.self_val(), apply_subsec(&lfp, 1, p))
+    let (inner, fnum, fden) = apply_subsec(globals, lfp.self_val(), 1, p);
+    let derived = derived_time(globals, lfp.self_val(), inner)?;
+    globals
+        .store
+        .set_ivar(derived, IdentId::get_id(SUBSEC_IVAR), Value::nil())?;
+    store_exact_subsec(globals, derived, fnum, fden)?;
+    Ok(derived)
 }
 
 ///
@@ -1068,7 +1069,13 @@ fn ceil_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn round_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let p = precision_arg(vm, globals, &lfp)?;
-    derived_time(globals, lfp.self_val(), apply_subsec(&lfp, 0, p))
+    let (inner, fnum, fden) = apply_subsec(globals, lfp.self_val(), 0, p);
+    let derived = derived_time(globals, lfp.self_val(), inner)?;
+    globals
+        .store
+        .set_ivar(derived, IdentId::get_id(SUBSEC_IVAR), Value::nil())?;
+    store_exact_subsec(globals, derived, fnum, fden)?;
+    Ok(derived)
 }
 
 ///
@@ -1123,6 +1130,11 @@ fn time_initialize(
     // ZONE_IVAR — carry it over to the real receiver.
     if let Some(zone) = globals.store.get_ivar(built, IdentId::get_id(ZONE_IVAR)) {
         globals.store.set_ivar(self_, IdentId::get_id(ZONE_IVAR), zone)?;
+    }
+    // …and so does a sub-nanosecond value, which the `TimeInner` copied
+    // above cannot hold.
+    if let Some(sub) = globals.store.get_ivar(built, IdentId::get_id(SUBSEC_IVAR)) {
+        globals.store.set_ivar(self_, IdentId::get_id(SUBSEC_IVAR), sub)?;
     }
     Ok(self_)
 }
@@ -1182,7 +1194,7 @@ fn time_build(
         ));
     }
     let utc_offset_arg = in_arg.or_else(|| lfp.try_arg(6));
-    let naive = from_args_skip_last(vm, globals, lfp)?
+    let (naive, fnum, fden) = from_args_skip_last(vm, globals, lfp)?
         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
     let time_info = if let Some(off_arg) = utc_offset_arg {
         if off_arg.is_nil() {
@@ -1190,6 +1202,7 @@ fn time_build(
             local_from_naive(naive, None)?
         } else if let Some(t) = time_new_with_timezone(vm, globals, naive, off_arg, cls)? {
             // A timezone object (`#local_to_utc`) rather than a utc_offset.
+            store_exact_subsec(globals, t, fnum, fden)?;
             return Ok(t);
         } else {
             match parse_utc_offset_exact(vm, globals, off_arg) {
@@ -1212,6 +1225,7 @@ fn time_build(
                         && let Some(tz) = find_timezone(vm, globals, tz_lookup, off_arg)?
                         && let Some(t) = time_new_with_timezone(vm, globals, naive, tz, cls)?
                     {
+                        store_exact_subsec(globals, t, fnum, fden)?;
                         return Ok(t);
                     }
                     return Err(e);
@@ -1221,18 +1235,16 @@ fn time_build(
     } else {
         local_from_naive(naive, None)?
     };
-    Ok(Value::new_time_with_class(time_info, cls))
+    let built = Value::new_time_with_class(time_info, cls);
+    store_exact_subsec(globals, built, fnum, fden)?;
+    Ok(built)
 }
 
 /// Variant of `from_args` used by `Time.new`: the 7th positional arg
 /// is consumed by the caller as `utc_offset`, not as `usec`. Re-uses
 /// every other slot's coercion (String → numeric, nil-default,
 /// month-name lookup, fractional sec → nsec, day/sec carry-over).
-fn from_args_skip_last(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-) -> Result<Option<NaiveDateTime>> {
+fn from_args_skip_last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<ArgsResult> {
     // Wrap with a synthetic Lfp would be ideal, but the helper takes a
     // real `Lfp`. Inline the body of `from_args` here, dropping the
     // final `usec_arg` slot.
@@ -1290,15 +1302,20 @@ fn from_args_skip_last(
         Ok(i) => i,
         Err(_) => return Ok(None),
     };
-    Ok(Some(build_naive_datetime(
-        year,
-        mon,
-        day,
-        hour,
-        min,
-        sec_u32,
-        sec_fractional_nsec,
-    )?))
+    let (frac_num, frac_den) = sec_arg
+        .filter(|v| !v.is_nil())
+        .and_then(arg_exact_fraction)
+        .unwrap_or_else(|| {
+            (
+                num::BigInt::from(sec_fractional_nsec),
+                num::BigInt::from(1_000_000_000i64),
+            )
+        });
+    Ok(Some((
+        build_naive_datetime(year, mon, day, hour, min, sec_u32, sec_fractional_nsec)?,
+        frac_num,
+        frac_den,
+    )))
 }
 
 /// Parse a `utc_offset` argument. Accepts:
@@ -1460,6 +1477,123 @@ fn exact_from_f64(f: f64) -> Option<ExactOffset> {
 /// argument that responds to `#local_to_utc` / `#utc_to_local`). Hidden
 /// from `#instance_variables` and Marshal by the `/`-prefix convention.
 pub(crate) const ZONE_IVAR: &str = "/zone";
+
+/// The hidden ivar holding a `Time`'s exact sub-second value.
+///
+/// `TimeInner` keeps the instant in a `chrono::DateTime`, whose
+/// sub-second part is a `u32` of nanoseconds, while CRuby keeps an exact
+/// rational and answers `#subsec` from it — so `Time.at(0) +
+/// Rational(1, 3)` is `(1/3)` there and was `(333333333/1000000000)`
+/// here. The exact value cannot live in `TimeInner`: it is `Copy` and a
+/// `Time` is collected without running `Drop`, so it can hold no
+/// bignum. It lives here instead, on the `Time` object, as the zone
+/// object already does.
+///
+/// It holds the *whole* fractional second as a Ruby `Rational` in
+/// `[0, 1)`, and it is present only when that is finer than the
+/// nanoseconds beside it — which is to say almost never. The invariant
+/// is that the `DateTime`'s nanoseconds are this value truncated to
+/// nanoseconds, so every reader that stops there (`#nsec`, `#usec`,
+/// `#to_s`, `%N` up to nine digits) needs to know nothing about it.
+pub(crate) const SUBSEC_IVAR: &str = "/subsec";
+
+/// `num / den` as the nearest `f64`.
+///
+/// `BigRational`'s own conversion divides the two `to_f64`s, which is
+/// `inf / inf` — and so `NaN` — once either side outgrows a double, and
+/// a sub-nanosecond `Time` reaches denominators like `2^55 * 10^9` in
+/// two additions. Even short of that, dividing two *rounded* halves is
+/// not the correctly rounded quotient: `Time.at(0, Rational(10**15 - 1,
+/// 10**6)) - Time.at(0)` builds `10^24 / 10^21`, whose halves both lose
+/// bits, and the answer came out an ulp high.
+fn bigint_ratio_to_f64(num: &num::BigInt, den: &num::BigInt) -> f64 {
+    use num::{Integer, ToPrimitive};
+    let g = num.gcd(den);
+    let (num, den) = if g > num::BigInt::from(1) {
+        (num / &g, den / &g)
+    } else {
+        (num.clone(), den.clone())
+    };
+    // Reduced, the overwhelming majority of times fit a double exactly
+    // on both sides, and one IEEE division is the correctly rounded
+    // answer.
+    if num.bits() <= 53 && den.bits() <= 53 {
+        return match (num.to_f64(), den.to_f64()) {
+            (Some(n), Some(d)) if d != 0.0 => n / d,
+            _ => f64::NAN,
+        };
+    }
+    if den == num::BigInt::from(0) {
+        return f64::NAN;
+    }
+    // Otherwise do the division in integers, keeping 64 bits of
+    // quotient before handing it to a double: scaling back by an exact
+    // power of two costs nothing.
+    let shift = 64u32;
+    let q = (&num << shift) / &den;
+    match q.to_f64() {
+        Some(f) if f.is_finite() => f / (2f64).powi(shift as i32),
+        // A quotient too large for a double either way.
+        _ => {
+            if num.sign() == num::bigint::Sign::Minus {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            }
+        }
+    }
+}
+
+/// A `Time`'s exact instant in seconds since the epoch, as
+/// `(numerator, denominator)` with `denominator > 0`.
+fn exact_instant_parts(globals: &Globals, time: Value) -> (num::BigInt, num::BigInt) {
+    let secs = match time.as_time() {
+        TimeInner::Local(t, _) => t.timestamp(),
+        TimeInner::Utc(t) => t.timestamp(),
+    };
+    let (fnum, fden) = exact_subsec_parts(globals, time);
+    (num::BigInt::from(secs) * &fden + fnum, fden)
+}
+
+/// A `Time`'s exact fractional second, as `(numerator, denominator)`
+/// with `denominator > 0` and the value in `[0, 1)`. Falls back to the
+/// nanoseconds, which is exact for every time that carries no ivar.
+fn exact_subsec_parts(globals: &Globals, time: Value) -> (num::BigInt, num::BigInt) {
+    if let Some(v) = globals.store.get_ivar(time, IdentId::get_id(SUBSEC_IVAR))
+        && let Some(r) = v.try_rational()
+    {
+        return (r.num().clone(), r.den().clone());
+    }
+    (
+        num::BigInt::from(time.as_time().nanosecond()),
+        num::BigInt::from(1_000_000_000i64),
+    )
+}
+
+/// Record `num / den` as `time`'s exact fractional second.
+///
+/// The caller has already put its nanosecond truncation in the
+/// `DateTime`; this stores the rest, and stores nothing at all when
+/// there is no rest — the ordinary case, and the one that keeps this
+/// free for every `Time` that never sees a sub-nanosecond value.
+fn store_exact_subsec(
+    globals: &mut Globals,
+    time: Value,
+    num: num::BigInt,
+    den: num::BigInt,
+) -> Result<()> {
+    use num::Integer;
+    let g = num.gcd(&den);
+    let (num, den) = (num / &g, den / &g);
+    // A denominator that divides a billion is a whole number of
+    // nanoseconds, which the `DateTime` alongside already states.
+    if num::BigInt::from(1_000_000_000i64) % &den == num::BigInt::from(0) {
+        return Ok(());
+    }
+    globals
+        .store
+        .set_ivar(time, IdentId::get_id(SUBSEC_IVAR), Value::rational(num, den))
+}
 
 /// Read the epoch seconds of a Time-like value (a `Time`, a `Time`
 /// subclass, or any object with `#to_i`) returned by a timezone object's
@@ -1660,6 +1794,15 @@ fn derived_time(globals: &mut Globals, base: Value, inner: TimeInner) -> Result<
         && !zone.is_nil()
     {
         globals.store.set_ivar(derived, IdentId::get_id(ZONE_IVAR), zone)?;
+    }
+    // A sub-nanosecond value rides along the same way — the caller
+    // overwrites it when the derivation changes it, as the rounding
+    // family does.
+    if let Some(sub) = globals.store.get_ivar(base, IdentId::get_id(SUBSEC_IVAR))
+        && sub.try_rational().is_some()
+        && derived.as_time().nanosecond() == base.as_time().nanosecond()
+    {
+        globals.store.set_ivar(derived, IdentId::get_id(SUBSEC_IVAR), sub)?;
     }
     Ok(derived)
 }
@@ -2026,18 +2169,21 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             }
             let fixed = parse_utc_offset(vm, globals, off)?;
             let info = time_in_offset(dt, fixed, offset_arg_is_utc(off));
-            return Ok(Value::new_time_with_class(info, cls));
+            let copy = Value::new_time_with_class(info, cls);
+            let (n, d) = exact_subsec_parts(globals, secs_val);
+            store_exact_subsec(globals, copy, n, d)?;
+            return Ok(copy);
         }
-        return Ok(Value::new_time_with_class(inner, cls));
+        let copy = Value::new_time_with_class(inner, cls);
+        let (n, d) = exact_subsec_parts(globals, secs_val);
+        store_exact_subsec(globals, copy, n, d)?;
+        return Ok(copy);
     }
     // The seconds argument is coerced as an exact number (CRuby
     // `num_exact`): Integer / Rational / Float / `#to_r`-or-`#to_int`
     // objects keep their full fractional precision; String / nil raise
     // TypeError.
-    let (secs, nsecs) = {
-        let (num, den) = num_exact_rational(vm, globals, secs_val)?;
-        bigint_ratio_to_sec_nsec(&num, &den)?
-    };
+    let (secs_num, secs_den) = num_exact_rational(vm, globals, secs_val)?;
     // `Time.at(secs, sub_secs, unit = :microsecond)`. The unit
     // (positional arg 2) selects the multiplier applied to sub_secs:
     //   :nanosecond / :nsec    ⇒ × 1
@@ -2066,40 +2212,48 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // The sub-second argument is likewise coerced as an exact number and
     // scaled by the unit (nanoseconds per unit), so `Time.at(0, 500.500)`
     // and `Time.at(0, Rational(5, 2))` retain sub-microsecond precision.
-    let usec_ns: i128 = if let Some(arg1) = lfp.try_arg(1) {
-        use num::Integer;
-        let (num, den) = num_exact_rational(vm, globals, arg1)?;
-        let scaled = (num * num::BigInt::from(unit_multiplier)).div_floor(&den);
-        scaled
-            .to_i128()
-            .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?
-    } else {
-        0
+    let (sub_num, sub_den) = match lfp.try_arg(1) {
+        Some(arg1) => num_exact_rational(vm, globals, arg1)?,
+        None => (num::BigInt::from(0), num::BigInt::from(1)),
     };
-    // Normalise seconds + fractional nanoseconds, carrying any overflow
-    // from the sub-second argument into whole seconds.
-    let total_ns = secs as i128 * 1_000_000_000 + nsecs as i128 + usec_ns;
-    let norm_secs = i64::try_from(total_ns.div_euclid(1_000_000_000))
-        .map_err(|_| MonorubyErr::argumenterr("out of Time range"))?;
-    let norm_nsec = total_ns.rem_euclid(1_000_000_000) as u32;
+    // The whole instant, exactly: `secs + sub_secs * unit / 1e9`
+    // seconds. CRuby keeps this as a rational and answers `#subsec`
+    // from it, so it is split rather than rounded — the nanoseconds go
+    // into the `DateTime` and the rest, if any, onto the object.
+    use num::Integer;
+    let billion = num::BigInt::from(1_000_000_000i64);
+    let total_den = &secs_den * &sub_den * &billion;
+    let total_num = &secs_num * &sub_den * &billion
+        + &sub_num * num::BigInt::from(unit_multiplier) * &secs_den;
+    let (whole, frac_num) = total_num.div_mod_floor(&total_den);
+    let norm_secs = whole
+        .to_i64()
+        .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
+    let norm_nsec = ((&frac_num * &billion) / &total_den)
+        .to_u32()
+        .unwrap_or(0)
+        .min(999_999_999);
     let dt = DateTime::from_timestamp(norm_secs, norm_nsec)
         .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
     // `Time.at(t, ..., in: offset)` — keyword UTC offset.  The
     // `in:` keyword now sits at positional index 3 (after secs,
     // sub_secs, unit). Was index 2 when arity was 1..2.
-    let time_info = if let Some(off) = lfp.try_arg(3)
+    let built = if let Some(off) = lfp.try_arg(3)
         && !off.is_nil()
     {
         if let Some(t) = time_at_with_timezone(vm, globals, dt, off, cls)? {
             // A timezone object (`#utc_to_local`) rather than a utc_offset.
-            return Ok(t);
+            t
+        } else {
+            let fixed = parse_utc_offset(vm, globals, off)?;
+            let info = time_in_offset(dt, fixed, offset_arg_is_utc(off));
+            Value::new_time_with_class(info, cls)
         }
-        let fixed = parse_utc_offset(vm, globals, off)?;
-        time_in_offset(dt, fixed, offset_arg_is_utc(off))
     } else {
-        localize(dt)
+        Value::new_time_with_class(localize(dt), cls)
     };
-    Ok(Value::new_time_with_class(time_info, cls))
+    store_exact_subsec(globals, built, frac_num, total_den)?;
+    Ok(built)
 }
 
 /// Allocator for `Time` and its subclasses.
@@ -2117,12 +2271,14 @@ pub(crate) extern "C" fn time_alloc_func(class_id: ClassId, _: &mut Globals) -> 
 #[monoruby_builtin]
 fn time_local(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let cls = lfp.self_val().as_class().id();
-    let naive = from_args(vm, globals, lfp)?
+    let (naive, fnum, fden) = from_args(vm, globals, lfp)?
         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
     // The C-style form's `isdst` picks the side of a fall-back, where
     // the wall clock alone is ambiguous.
     let time_info = local_from_naive(naive, isdst_arg(lfp))?;
-    Ok(Value::new_time_with_class(time_info, cls))
+    let built = Value::new_time_with_class(time_info, cls);
+    store_exact_subsec(globals, built, fnum, fden)?;
+    Ok(built)
 }
 
 /// A local-zone `Time` from the wall clock it is written as.
@@ -2162,12 +2318,15 @@ fn isdst_arg(lfp: Lfp) -> Option<bool> {
 #[monoruby_builtin]
 fn time_gm(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let cls = lfp.self_val().as_class().id();
-    let t = generate_time(vm, globals, Utc, lfp)?;
-    let time_info = TimeInner::Utc(t);
-    Ok(Value::new_time_with_class(time_info, cls))
+    let (t, fnum, fden) = generate_time(vm, globals, Utc, lfp)?;
+    let built = Value::new_time_with_class(TimeInner::Utc(t), cls);
+    store_exact_subsec(globals, built, fnum, fden)?;
+    Ok(built)
 }
 
-fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<NaiveDateTime>> {
+type ArgsResult = Option<(NaiveDateTime, num::BigInt, num::BigInt)>;
+
+fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<ArgsResult> {
     // Reorder args when the 10-arg C-style form is used:
     // `Time.gm(sec, min, hour, mday, mon, year, wday, yday, isdst, tz)`.
     // The trailing four args (wday, yday, isdst, tz) are intentionally
@@ -2261,9 +2420,27 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Optio
         Ok(i) => i,
         Err(_) => return Ok(None),
     };
-    Ok(Some(build_naive_datetime(
-        year, mon, day, hour, min, sec_u32, nsec,
-    )?))
+    // The exact fractional second, for the rare argument that carries
+    // one below the nanosecond: an explicit `usec` overrides the `sec`
+    // argument's own fraction, exactly as `nsec` above does. `usec` is
+    // in microseconds, so its fraction of a second is over a million.
+    let million = num::BigInt::from(1_000_000i64);
+    let billion = num::BigInt::from(1_000_000_000i64);
+    let (frac_num, frac_den) = match usec_arg {
+        Some(v) if !v.is_nil() => match arg_exact_fraction(v) {
+            Some((n, d)) => (n, d * &million),
+            None => (num::BigInt::from(nsec), billion.clone()),
+        },
+        _ => match sec_arg.filter(|v| !v.is_nil()).and_then(arg_exact_fraction) {
+            Some(pair) => pair,
+            None => (num::BigInt::from(nsec), billion.clone()),
+        },
+    };
+    Ok(Some((
+        build_naive_datetime(year, mon, day, hour, min, sec_u32, nsec)?,
+        frac_num,
+        frac_den,
+    )))
 }
 
 /// Build a `NaiveDateTime` honouring CRuby's "carry forward" rules:
@@ -2381,6 +2558,26 @@ fn time_month_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resu
     v.coerce_to_int_i64(vm, globals)
 }
 
+/// The exact fractional part of a numeric argument, as
+/// `(numerator, denominator)` in `[0, 1)`.
+///
+/// Only a `Float` or a `Rational` can carry one the nanoseconds beside
+/// it cannot state; everything else (an Integer, a String, an object
+/// coerced through `#to_int`) is answered exactly by them already, and
+/// gets `None` so no ivar is stored.
+fn arg_exact_fraction(v: Value) -> Option<(num::BigInt, num::BigInt)> {
+    use num::Integer;
+    let (num, den) = if let Some(r) = v.try_rational() {
+        (r.num().clone(), r.den().clone())
+    } else if let Some(f) = v.try_float() {
+        let q = num::BigRational::from_float(f)?;
+        (q.numer().clone(), q.denom().clone())
+    } else {
+        return None;
+    };
+    Some(num.mod_floor(&den)).map(|frac| (frac, den))
+}
+
 /// Coerce the `sec` argument to `(integer_seconds, fractional_nsec)`.
 /// `Float` / `Rational` cascade their fractional part into nanoseconds
 /// that propagate to the caller, matching CRuby's
@@ -2494,32 +2691,6 @@ fn num_exact_rational(
     Err(exact_number_err(globals, v))
 }
 
-/// Split an exact `numerator/denominator` number of seconds into
-/// `(whole_seconds, fractional_nanoseconds)` (nsec in `0..1_000_000_000`),
-/// using floor division so the fractional part is always non-negative.
-fn bigint_ratio_to_sec_nsec(num: &num::BigInt, den: &num::BigInt) -> Result<(i64, u32)> {
-    use num::Integer;
-    let (sec_big, rem) = num.div_mod_floor(den);
-    let secs = sec_big
-        .to_i64()
-        .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
-    let nsec_big = (&rem * num::BigInt::from(1_000_000_000i64)) / den;
-    let nsec = nsec_big.to_i64().unwrap_or(0).clamp(0, 999_999_999) as u32;
-    Ok((secs, nsec))
-}
-
-/// Coerce a numeric offset (for `Time#+` / `Time#-`) to a signed count of
-/// nanoseconds via [`num_exact_rational`], so `Rational` / `Float` /
-/// `#to_r` arguments keep sub-microsecond precision instead of being
-/// truncated to whole seconds through `Float`.
-fn num_exact_total_nanos(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i64> {
-    use num::Integer;
-    let (num, den) = num_exact_rational(vm, globals, v)?;
-    let ns = (num * num::BigInt::from(1_000_000_000i64)).div_floor(&den);
-    ns.to_i64()
-        .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))
-}
-
 /// Coerce a `usec` argument (microseconds) to nanoseconds for the
 /// internal `NaiveTime` representation. Float / Rational fractions
 /// extend below the microsecond boundary — `Time.gm(.., 1.75)` for
@@ -2559,13 +2730,14 @@ fn generate_time<Tz: TimeZone>(
     globals: &mut Globals,
     tz: Tz,
     lfp: Lfp,
-) -> Result<DateTime<Tz>> {
-    let naive = from_args(vm, globals, lfp)?
+) -> Result<(DateTime<Tz>, num::BigInt, num::BigInt)> {
+    let (naive, fnum, fden) = from_args(vm, globals, lfp)?
         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
-    Ok(match naive.and_local_timezone(tz) {
+    let dt = match naive.and_local_timezone(tz) {
         LocalResult::Single(t) => t,
         _ => return Err(MonorubyErr::argumenterr("argument out of range")),
-    })
+    };
+    Ok((dt, fnum, fden))
 }
 
 ///
@@ -2681,17 +2853,23 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/inspect.html]
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let t = self_.as_time();
-    // Unlike `to_s`, `inspect` shows sub-second precision (nanosecond
-    // resolution) with trailing zeros trimmed: `.123456`, `.1`,
-    // `.123456789`; nothing when the fraction is zero.
+    // Unlike `to_s`, `inspect` shows the sub-second part: as digits
+    // with trailing zeros trimmed (`.123456`, `.1`, `.123456789`) when
+    // it is a whole number of nanoseconds, and otherwise — CRuby does
+    // this too — as the exact fraction, set off by spaces rather than a
+    // decimal point: `00:00:00 1/3 +0000`.
     let nsec = t.nanosecond();
-    let frac = if nsec == 0 {
-        String::new()
-    } else {
-        format!(".{}", format!("{:09}", nsec).trim_end_matches('0'))
+    let exact = globals
+        .store
+        .get_ivar(self_, IdentId::get_id(SUBSEC_IVAR))
+        .filter(|v| v.try_rational().is_some());
+    let frac = match exact {
+        Some(v) => format!(" {}", v.to_s(&globals.store)),
+        None if nsec == 0 => String::new(),
+        None => format!(".{}", format!("{:09}", nsec).trim_end_matches('0')),
     };
     let body = match t {
         TimeInner::Local(dt, _) => {
@@ -2748,7 +2926,8 @@ fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         // have — `%Z` is empty there, as CRuby leaves it.
         time_zone_abbr(&inner)
     };
-    let pre = preprocess_strftime(&inner, &fmt_str, zone_abbr.as_deref())?;
+    let subsec = exact_subsec_parts(globals, self_val);
+    let pre = preprocess_strftime(&inner, &fmt_str, zone_abbr.as_deref(), &subsec)?;
     use std::fmt::Write;
     let s = match &inner {
         TimeInner::Local(t, _) => {
@@ -2782,7 +2961,12 @@ fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [`directive_core`] and [`pad_core`]. A directive nobody owns is
 /// printed as written, and a `%` with nothing but flags after it is
 /// an `ArgumentError`, both as CRuby does.
-fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) -> Result<String> {
+fn preprocess_strftime(
+    inner: &TimeInner,
+    fmt: &str,
+    zone_abbr: Option<&str>,
+    subsec: &(num::BigInt, num::BigInt),
+) -> Result<String> {
     let mut out = String::new();
     let bytes = fmt.as_bytes();
     let mut i = 0;
@@ -2935,12 +3119,8 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
                 continue;
             }
             (b'N', 0) if modifier_ok => {
-                let nanos = match inner {
-                    TimeInner::Local(t, _) => t.nanosecond(),
-                    TimeInner::Utc(t) => t.nanosecond(),
-                };
                 let w = width.unwrap_or(9);
-                out.push_str(&format_subsec(nanos, w));
+                out.push_str(&format_subsec_exact(&subsec.0, &subsec.1, w));
                 i = directive_end;
                 continue;
             }
@@ -2949,11 +3129,7 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
                 // *digits*, truncated or right-extended to the width
                 // rather than right-aligned in it. `%9L` is the whole
                 // nanoseconds and `%02L` the first two.
-                let nanos = match inner {
-                    TimeInner::Local(t, _) => t.nanosecond(),
-                    TimeInner::Utc(t) => t.nanosecond(),
-                };
-                out.push_str(&format_subsec(nanos, width.unwrap_or(3)));
+                out.push_str(&format_subsec_exact(&subsec.0, &subsec.1, width.unwrap_or(3)));
                 i = directive_end;
                 continue;
             }
@@ -3263,23 +3439,14 @@ fn format_offset(
     }
 }
 
-/// Sub-second digits, width-controlled. `nanos` holds nanoseconds
-/// (9-digit precision); for `width > 9` we right-pad with zeros to
-/// emit the requested precision (storage doesn't carry picoseconds,
-/// but the spec's `%12N` test expects all 9 nanosecond digits + "000").
-fn format_subsec(nanos: u32, width: usize) -> String {
-    let nine = format!("{:09}", nanos);
-    if width >= 9 {
-        let mut out = String::with_capacity(width);
-        out.push_str(&nine);
-        for _ in 0..(width - 9) {
-            out.push('0');
-        }
-        out
-    } else {
-        let div = 10u64.pow((9 - width) as u32);
-        format!("{:0w$}", (nanos as u64) / div, w = width)
-    }
+/// `width` digits of the fractional second `num / den`.
+///
+/// Past nine digits this is the only thing that can answer: the
+/// nanoseconds have run out, and `%12N` of a time built from a Float
+/// asks for the picoseconds the exact value still holds.
+fn format_subsec_exact(num: &num::BigInt, den: &num::BigInt, width: usize) -> String {
+    let scaled = (num * num::BigInt::from(10i64).pow(width as u32)) / den;
+    format!("{:0w$}", scaled, w = width)
 }
 
 const MONTH_UPPER_ABBR: [&str; 12] = [
@@ -3420,11 +3587,18 @@ fn nsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// ### Time#subsec
 #[monoruby_builtin]
-fn subsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ns = lfp.self_val().as_time().nanosecond();
-    // `time_subsec` hands back an exact Rational of nanoseconds over a
-    // second, reduced — `Time.at(0, 3).subsec` is `(3/1000000)`, not a
-    // Float. A whole second's worth reduces to the Integer 0.
+fn subsec(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // A time carrying a sub-nanosecond value answers it exactly, as
+    // CRuby does; otherwise this is the nanoseconds over a second,
+    // reduced — `Time.at(0, 3).subsec` is `(3/1000000)`, not a Float.
+    let self_ = lfp.self_val();
+    if let Some(v) = globals.store.get_ivar(self_, IdentId::get_id(SUBSEC_IVAR))
+        && v.try_rational().is_some()
+    {
+        return Ok(v);
+    }
+    let ns = self_.as_time().nanosecond();
+    // A whole second's worth reduces to the Integer 0.
     if ns == 0 {
         Ok(Value::integer(0))
     } else {
@@ -3446,16 +3620,9 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// ### Time#to_f
 #[monoruby_builtin]
-fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let t = self_.as_time();
-    let s = match t {
-        TimeInner::Local(t, _) => t.timestamp(),
-        TimeInner::Utc(t) => t.timestamp(),
-    };
-    Ok(Value::float(
-        s as f64 + t.nanosecond() as f64 / 1_000_000_000.0,
-    ))
+fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let (num, den) = exact_instant_parts(globals, lfp.self_val());
+    Ok(Value::float(bigint_ratio_to_f64(&num, &den)))
 }
 
 ///
@@ -3468,15 +3635,10 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_r.html]
 #[monoruby_builtin]
-fn to_r(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn to_r(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let t = self_.as_time();
-    let (secs, nsec) = match t {
-        TimeInner::Local(t, _) => (t.timestamp(), t.nanosecond()),
-        TimeInner::Utc(t) => (t.timestamp(), t.nanosecond()),
-    };
-    let num = num::BigInt::from(secs) * 1_000_000_000i64 + nsec;
-    Ok(Value::rational(num, 1_000_000_000i64))
+    let (num, den) = exact_instant_parts(globals, self_);
+    Ok(Value::rational(num, den))
 }
 
 ///
@@ -3500,6 +3662,52 @@ fn utc_offset(
     }
 }
 
+/// Advance `base` by an exact number of seconds, keeping whatever
+/// falls below the nanosecond the `DateTime` can hold.
+///
+/// The whole nanoseconds still go through `TimeInner`'s own arithmetic,
+/// which is what re-localizes a system-zone time across a DST boundary;
+/// only the remainder is handled here. `sign` is `1` for `#+` and `-1`
+/// for `#-`.
+fn shift_by_exact(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    delta: Value,
+    sign: i8,
+) -> Result<Value> {
+    use num::Integer;
+    let (dn, dd) = num_exact_rational(vm, globals, delta)?;
+    // The offset in nanoseconds, exactly: `delta * 1e9`, plus whatever
+    // of the base's own sub-second value the nanoseconds do not state.
+    let (bn, bd) = exact_subsec_parts(globals, base);
+    let base_ns = num::BigInt::from(base.as_time().nanosecond());
+    // excess = base_subsec * 1e9 - base_nsec, in [0, 1) nanoseconds.
+    let billion = num::BigInt::from(1_000_000_000i64);
+    let ex_num = &bn * &billion - &base_ns * &bd;
+    let ex_den = bd;
+    // total = sign * delta * 1e9 + excess
+    let sign = num::BigInt::from(sign as i64);
+    let total_num = &sign * &dn * &billion * &ex_den + &ex_num * &dd;
+    let total_den = &dd * &ex_den;
+    let (whole, rem) = total_num.div_mod_floor(&total_den);
+    let whole_ns = whole
+        .to_i64()
+        .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
+    let inner = base.as_time().clone() + chrono::Duration::nanoseconds(whole_ns);
+    let derived = derived_time(globals, base, inner)?;
+    // The result's own sub-second value: its nanoseconds, plus the
+    // remainder that did not reach one.
+    let res_ns = num::BigInt::from(derived.as_time().nanosecond());
+    store_exact_subsec(
+        globals,
+        derived,
+        &res_ns * &total_den + rem,
+        &billion * &total_den,
+    )?;
+    Ok(derived)
+}
+
 /// ### Time#-
 /// - self - time -> Float
 ///
@@ -3507,21 +3715,22 @@ fn utc_offset(
 #[monoruby_builtin]
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let lhs = self_.as_time().clone();
     let rhs_rv = lfp.arg(0);
     if let Some(rv) = rhs_rv.try_rvalue()
         && rv.ty() == ObjTy::TIME
     {
-        let rhs = rhs_rv.as_time().clone();
-        let res = ((lhs - rhs).num_nanoseconds().unwrap() as f64) / 1_000_000_000.0;
-        Ok(Value::float(res))
+        // The difference is computed exactly and only then made a
+        // Float, so a sub-nanosecond part on either side counts.
+        let (ln, ld) = exact_instant_parts(globals, self_);
+        let (rn, rd) = exact_instant_parts(globals, rhs_rv);
+        let num = &ln * &rd - &rn * &ld;
+        let den = &ld * &rd;
+        Ok(Value::float(bigint_ratio_to_f64(&num, &den)))
     } else {
         // Time - numeric (seconds). The offset is coerced as an exact
         // number so Rational / Float / `#to_r` arguments keep
         // sub-microsecond precision; String / nil raise TypeError.
-        let nanos = num_exact_total_nanos(vm, globals, rhs_rv)?;
-        let result = lhs - chrono::Duration::nanoseconds(nanos);
-        derived_time(globals, self_, result)
+        return shift_by_exact(vm, globals, self_, rhs_rv, -1);
     }
 }
 
@@ -3535,14 +3744,11 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let lhs = self_.as_time().clone();
     let rhs_rv = lfp.arg(0);
     // The offset is coerced as an exact number so Rational / Float /
     // `#to_r` arguments keep sub-microsecond precision; a Time (which has
     // `#to_r` but no `#to_int`), String, and nil all raise TypeError.
-    let nanos = num_exact_total_nanos(vm, globals, rhs_rv)?;
-    let result = lhs + chrono::Duration::nanoseconds(nanos);
-    derived_time(globals, self_, result)
+    shift_by_exact(vm, globals, self_, rhs_rv, 1)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3675,14 +3881,16 @@ fn time_cmp_via_spaceship(
     Err(crate::executor::op::cmperr(&globals.store, self_val, other))
 }
 
-fn time_cmp_opt(self_: Value, other: Value) -> Option<std::cmp::Ordering> {
+fn time_cmp_opt(globals: &Globals, self_: Value, other: Value) -> Option<std::cmp::Ordering> {
     let rv = other.try_rvalue()?;
     if rv.ty() != ObjTy::TIME {
         return None;
     }
-    let lhs = self_.as_time();
-    let rhs = other.as_time();
-    Some(lhs.cmp(rhs))
+    // The exact instants, so two times that differ only below the
+    // nanosecond do not compare equal.
+    let (ln, ld) = exact_instant_parts(globals, self_);
+    let (rn, rd) = exact_instant_parts(globals, other);
+    Some((ln * rd).cmp(&(rn * ld)))
 }
 
 /// `Time#<=>` — returns -1/0/1 against another Time. For a non-Time
@@ -3696,7 +3904,7 @@ fn time_cmp_opt(self_: Value, other: Value) -> Option<std::cmp::Ordering> {
 fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
-    if let Some(ord) = time_cmp_opt(self_val, other) {
+    if let Some(ord) = time_cmp_opt(globals, self_val, other) {
         return Ok(Value::integer(match ord {
             std::cmp::Ordering::Less => -1,
             std::cmp::Ordering::Equal => 0,
@@ -3735,7 +3943,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 
 #[monoruby_builtin]
 fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+    let ord = match time_cmp_opt(globals, lfp.self_val(), lfp.arg(0)) {
         Some(ord) => ord,
         None => time_cmp_via_spaceship(vm, globals, lfp.self_val(), lfp.arg(0))?,
     };
@@ -3744,7 +3952,7 @@ fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 
 #[monoruby_builtin]
 fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+    let ord = match time_cmp_opt(globals, lfp.self_val(), lfp.arg(0)) {
         Some(ord) => ord,
         None => time_cmp_via_spaceship(vm, globals, lfp.self_val(), lfp.arg(0))?,
     };
@@ -3753,7 +3961,7 @@ fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 
 #[monoruby_builtin]
 fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+    let ord = match time_cmp_opt(globals, lfp.self_val(), lfp.arg(0)) {
         Some(ord) => ord,
         None => time_cmp_via_spaceship(vm, globals, lfp.self_val(), lfp.arg(0))?,
     };
@@ -3762,7 +3970,7 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 
 #[monoruby_builtin]
 fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ord = match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
+    let ord = match time_cmp_opt(globals, lfp.self_val(), lfp.arg(0)) {
         Some(ord) => ord,
         None => time_cmp_via_spaceship(vm, globals, lfp.self_val(), lfp.arg(0))?,
     };
@@ -3770,35 +3978,37 @@ fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 }
 
 #[monoruby_builtin]
-fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn eq(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(
-        time_cmp_opt(lfp.self_val(), lfp.arg(0)) == Some(std::cmp::Ordering::Equal),
+        time_cmp_opt(globals, lfp.self_val(), lfp.arg(0)) == Some(std::cmp::Ordering::Equal),
     ))
 }
 
 #[monoruby_builtin]
-fn eql(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn eql(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // CRuby `Time#eql?` is equality of absolute instant (matching
     // `==` for two Times), returning false for any non-Time. The
     // display offset is not part of identity, so a `Time.utc` and
     // its `getlocal("+09:00")` are `eql?`.
     Ok(Value::bool(
-        time_cmp_opt(lfp.self_val(), lfp.arg(0)) == Some(std::cmp::Ordering::Equal),
+        time_cmp_opt(globals, lfp.self_val(), lfp.arg(0)) == Some(std::cmp::Ordering::Equal),
     ))
 }
 
 /// `Time#hash` — must agree with `eql?`, so hash the absolute
 /// instant (UTC seconds + nanoseconds), not the tagged enum.
 #[monoruby_builtin]
-fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn hash(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use num::Integer;
     use std::hash::{Hash, Hasher};
-    let (secs, nsec) = match lfp.self_val().as_time() {
-        TimeInner::Local(t, _) => (t.with_timezone(&Utc).timestamp(), t.nanosecond()),
-        TimeInner::Utc(t) => (t.timestamp(), t.nanosecond()),
-    };
+    // The exact instant, reduced, so it is canonical: two times that
+    // are `eql?` hash alike however each was built, and two that differ
+    // below the nanosecond are free to differ here too.
+    let (num, den) = exact_instant_parts(globals, lfp.self_val());
+    let g = num.gcd(&den);
     let mut hasher = crate::value::seeded_hasher();
-    secs.hash(&mut hasher);
-    nsec.hash(&mut hasher);
+    (num / &g).hash(&mut hasher);
+    (den / &g).hash(&mut hasher);
     Ok(Value::from_hash_digest(hasher.finish()))
 }
 
@@ -4283,6 +4493,88 @@ mod tests {
         for f in ["%", "%-", "%12", "%_", "abc%", "%:%", "%::%", "%12:%", "%E%", "%O%"] {
             run_test_error(&format!(r#"Time.utc(2001,1,1).strftime({f:?})"#));
         }
+    }
+
+    /// A `Time`'s sub-second value below the nanosecond (#1416).
+    ///
+    /// The instant lives in a `chrono::DateTime`, whose sub-second part
+    /// is a `u32` of nanoseconds, where CRuby keeps an exact rational —
+    /// so anything finer was rounded away on the way in and `#subsec`
+    /// answered the rounding. The exact value now rides on the object.
+    #[test]
+    fn time_exact_subsec() {
+        let mut v: Vec<String> = vec![];
+        // Every way a sub-nanosecond value can arrive.
+        let builds = [
+            "Time.at(0) + Rational(1, 3)",
+            "Time.at(5) - Rational(1, 3)",
+            "Time.at(0) + 0.123456789012345",
+            "Time.at(0.123456789012345)",
+            "Time.at(0, Rational(1, 3), :nanosecond)",
+            "Time.at(0, 999999.999999)",
+            "Time.at(0, Rational(999999999999999, 1000000))",
+            "Time.utc(2020, 1, 1, 0, 0, Rational(1, 3))",
+            "Time.new(2020, 1, 1, 0, 0, Rational(1, 3))",
+            "Time.at(-3) - Rational(1, 7)",
+            "Time.at(0) + Rational(1, 3) + Rational(1, 7)",
+            // …and the ordinary times, which must not change.
+            "Time.at(0)",
+            "Time.utc(2020, 6, 5, 4, 3, 2, 123456)",
+            "Time.at(0, 500000)",
+            "Time.at(0, 1, :nanosecond)",
+        ];
+        // …and everything that reads or derives one.
+        let reads = [
+            "subsec", "nsec", "usec", "to_r", "to_f", "to_i", "inspect", "to_s",
+            r#"strftime("%N")"#,
+            r#"strftime("%12N")"#,
+            r#"strftime("%18N")"#,
+            r#"strftime("%6L")"#,
+            "getutc.subsec",
+            r#"getlocal("+09:00").subsec"#,
+            "round.subsec",
+            "round(3).subsec",
+            "round(12).subsec",
+            "floor(12).subsec",
+            "ceil(12).subsec",
+            "floor(3).subsec",
+            "ceil(3).subsec",
+            // …as a String: the harness cannot rebuild a Rational whose
+            // halves are both bignums, which is what 20 digits gives.
+            "ceil(20).subsec.to_s",
+            "(self + 0).subsec",
+            "(self - 0).subsec",
+            "(self - Time.at(0))",
+            "(self <=> Time.at(0))",
+            "eql?(Time.at(0))",
+            "utc.iso8601(12)",
+            "utc.iso8601(18)",
+        ];
+        for b in builds {
+            for r in reads {
+                // `self` is not a receiver here; spell the call out.
+                let code = if let Some(rest) = r.strip_prefix("(self ") {
+                    format!("t = {b}; (t {rest}")
+                } else {
+                    format!("t = {b}; t.{r}")
+                };
+                v.push(code);
+            }
+            // The marshal round trip carries it, and the dump is
+            // CRuby's byte for byte.
+            v.push(format!("Marshal.load(Marshal.dump({b})).subsec"));
+            v.push(format!("Marshal.load(Marshal.dump({b})).inspect"));
+            v.push(format!("Marshal.dump({b}).bytes"));
+        }
+        // Two times that differ only below the nanosecond are not equal,
+        // and the one that is greater says so.
+        v.push(
+            r#"a = Time.at(0, Rational(1, 3), :nanosecond); b = Time.at(0)
+               [a == b, a.eql?(b), a <=> b, b <=> a, a.hash == b.hash]"#
+                .to_string(),
+        );
+        let refs: Vec<&str> = v.iter().map(|s| s.as_str()).collect();
+        run_tests(&refs);
     }
 
     #[test]
