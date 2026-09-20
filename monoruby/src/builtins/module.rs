@@ -2042,6 +2042,16 @@ fn append_features(
     base.as_val().ensure_not_frozen(&globals.store)?;
     let include_module = lfp.self_val().expect_module(globals)?;
     base.include_module(include_module)?;
+    // CRuby propagates a `Module#include` into everything that has
+    // already mixed in `base` — `module B; extend self; include A; end`
+    // needs it, since `extend self` has already put an iclass of `B` in
+    // `B`'s singleton chain. Only a module base can be mixed in anywhere,
+    // so a class base never has to pay for the scan.
+    if base.as_val().ty() == Some(ObjTy::MODULE) {
+        globals
+            .store
+            .propagate_include_to_subclasses(base.id(), include_module);
+    }
     // The module may already carry a basic operation (`module M; def
     // +(o); end; end` and only then `Integer.include M`), which no
     // definition will run to mark.
@@ -4411,6 +4421,56 @@ mod tests {
               C2 = 2
             end
         "#,
+        );
+    }
+
+    #[test]
+    fn include_reaches_existing_includers() {
+        // Since Ruby 3.0 a module mixed into a module that is *already*
+        // mixed in somewhere reaches that somewhere too — singleton
+        // chains (`extend self`, `obj.extend`) included.
+        //
+        // `run_test_once`, not `run_test`: the body mutates the module
+        // chains it builds, so a second run would start from the first
+        // run's result.
+        run_test_once(
+            r#"
+        res = []
+        module PropA; def a = :a; end
+        module PropB; end
+        class PropC; include PropB; end
+        o = Object.new; o.extend(PropB)
+        module PropSelf
+          extend self
+          def base = :base
+        end
+        PropB.include(PropA)
+        PropSelf.include(PropA)
+        res << [PropC.ancestors.map(&:to_s), PropC.new.a, o.a]
+        res << [PropSelf.base, PropSelf.a, PropSelf.ancestors.map(&:to_s)]
+        # ... and so does a later prepend.
+        module PropP; def a = :prepended; end
+        PropB.prepend(PropP)
+        res << [PropC.ancestors.map(&:to_s), PropC.new.a, o.a]
+        # A repeated include adds nothing.
+        PropB.include(PropA)
+        res << PropC.ancestors.map(&:to_s)
+        # The module's own mixins come along, in order.
+        module Deep1; def d = :d; end
+        module Deep2; include Deep1; end
+        module PropQ; end
+        class PropR; include PropQ; end
+        PropQ.include(Deep2)
+        res << [PropR.ancestors.map(&:to_s), PropR.new.d]
+        # A subclass sees it through its superclass's chain.
+        class PropS; end
+        class PropT < PropS; end
+        module PropU; def u = :u; end
+        module PropV; end
+        PropS.include(PropV)
+        PropV.include(PropU)
+        res << [PropT.new.u, PropT.ancestors.map(&:to_s)]
+        res.to_s"#,
         );
     }
 

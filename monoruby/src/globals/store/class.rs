@@ -1602,10 +1602,12 @@ impl ClassInfoTable {
             .iter()
             .filter_map(|info| info.object)
             .filter(|m| {
-                // Skip iclasses (we walk via super through them) and
-                // singleton classes (they carry their own metaclass
-                // semantics; CRuby's propagation skips them too).
-                !m.is_iclass() && m.is_singleton().is_none() && m.id() != base_id
+                // Skip iclasses — we reach them by walking `super` from
+                // the real class/module that heads their chain. Singleton
+                // classes stay in: `obj.extend(B)` and `module B; extend
+                // self; end` both put an iclass of `B` in a singleton
+                // chain, and a later `B.prepend(P)` has to reach it.
+                !m.is_iclass() && m.id() != base_id
             })
             .collect();
 
@@ -1661,6 +1663,64 @@ impl ClassInfoTable {
             let new_iclass = Value::iclass(prepend_id, Some(target)).as_class();
             let mut prev_mut = prev;
             prev_mut.set_superclass(Some(new_iclass));
+        }
+    }
+
+    /// The counterpart of [`Self::propagate_prepend_to_subclasses`] for
+    /// `Module#include`. Since Ruby 3.0 a module mixed into a module that
+    /// is *already* mixed in somewhere reaches that somewhere too, so
+    ///
+    /// ```text
+    /// c.include(b)   # c -> IB -> ...
+    /// b.include(m)   # must also bring m into c's view
+    /// ```
+    ///
+    /// leaves `m` visible from `c`. The idiom that depends on it most is
+    /// `module B; extend self; include A; end`: `extend self` has already
+    /// put an iclass of `B` in `B`'s singleton chain by the time
+    /// `include A` runs, so without propagation `B.a_method` is a
+    /// NoMethodError.
+    ///
+    /// Only a **module** base needs this — a class is never itself mixed
+    /// in, so no iclass anywhere wraps it and the scan could only come up
+    /// empty. The caller checks that before paying for the walk.
+    ///
+    /// Implementation: the same brute-force scan of the class table. For
+    /// each class/module C other than `base_id`, find the iclass wrapping
+    /// `base_id` in C's chain and splice `include_module` (and whatever is
+    /// already mixed into it) in directly below that iclass.
+    pub(crate) fn propagate_include_to_subclasses(
+        &mut self,
+        base_id: ClassId,
+        include_module: Module,
+    ) {
+        // Snapshot the class objects that exist now: the splices below
+        // create iclasses, and those are not themselves candidates.
+        let candidates: Vec<Module> = self
+            .table
+            .iter()
+            .filter_map(|info| info.object)
+            .filter(|m| !m.is_iclass() && m.id() != base_id)
+            .collect();
+
+        for module in candidates {
+            let Some(mut cur) = module.superclass() else {
+                continue;
+            };
+            let target = loop {
+                if cur.is_iclass() && cur.id() == base_id {
+                    break Some(cur);
+                }
+                match cur.superclass() {
+                    Some(next) => cur = next,
+                    None => break None,
+                }
+            };
+            // `splice_below` skips whatever is already visible from the
+            // iclass, so a repeated `include` adds nothing.
+            if let Some(mut target) = target {
+                target.splice_below(include_module);
+            }
         }
     }
 

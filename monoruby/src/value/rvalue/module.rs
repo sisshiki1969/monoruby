@@ -148,6 +148,43 @@ impl Module {
     }
 
     ///
+    /// Splice `module` — and everything already mixed into it — into this
+    /// chain directly below `self`, skipping whatever is already visible
+    /// from here.
+    ///
+    /// The same walk `include_or_prepend_module` does, but starting from
+    /// an arbitrary node rather than from a class's own head, and testing
+    /// "already there?" from that node rather than from the head. That is
+    /// what a *propagated* include needs: the node is an iclass sitting in
+    /// somebody else's chain, and only what is below it is in view.
+    ///
+    /// The caller has already bumped the class and constant versions for
+    /// the include that triggered this.
+    ///
+    pub(crate) fn splice_below(&mut self, mut module: Module) {
+        // A module with prepends keeps its content at its origin iclass;
+        // its head is only the prepend-most position. Start at the first
+        // iclass of its chain so the spliced order matches.
+        if module.has_origin() {
+            match module.superclass() {
+                Some(s) if s.is_iclass() => module = s,
+                _ => return,
+            }
+        }
+        let mut base = *self;
+        loop {
+            if !module.is_ancestor_of(base) {
+                base.include(module);
+            }
+            base = base.superclass().unwrap();
+            match module.superclass() {
+                Some(s) if s.is_iclass() => module = s,
+                _ => break,
+            }
+        }
+    }
+
+    ///
     /// Check whether `self` is an ancestor of `module`.
     ///
     fn check_cyclic(self, mut module: Module) -> bool {
