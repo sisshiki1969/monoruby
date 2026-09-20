@@ -94,18 +94,59 @@ pub struct MonorubyErr {
     /// display, while `Exception#to_s` materializes these bytes in that
     /// encoding (CRuby keeps the message String exactly as given).
     pub(crate) raw_message: Option<(Vec<u8>, crate::value::Encoding)>,
+    /// Set when no message was ever given: `#message` is then the
+    /// exception class's name, and this holds the class to take it from.
+    ///
+    /// The name is *not* built here. Both `Class#new` halves used to build
+    /// it — the allocator seeded it and `Exception#initialize` overwrote it
+    /// with the same string — which made allocating an exception cost two
+    /// class-name renderings that almost nothing reads. The read paths
+    /// render it instead, via `message_with`.
+    pub(crate) default_message_class: Option<ClassId>,
 }
 
 impl MonorubyErr {
     pub fn new(kind: MonorubyErrKind, message: impl ToString) -> Self {
+        Self::with_message(kind, message.to_string())
+    }
+
+    ///
+    /// Same, for a caller that already owns the message.
+    ///
+    /// `new`'s `impl ToString` copies a `String` argument, which costs an
+    /// allocation per exception on the path every `Class#new` takes.
+    ///
+    pub fn with_message(kind: MonorubyErrKind, message: String) -> Self {
         MonorubyErr {
             kind,
-            message: message.to_string(),
+            message,
             trace: vec![],
             original: None,
             explicit_cause: None,
             payload: None,
             raw_message: None,
+            default_message_class: None,
+        }
+    }
+
+    ///
+    /// An exception whose message has not been given: `#message` reports
+    /// `class_id`'s name, rendered when something asks for it.
+    ///
+    pub fn with_class_default_message(kind: MonorubyErrKind, class_id: ClassId) -> Self {
+        let mut err = Self::with_message(kind, String::new());
+        err.default_message_class = Some(class_id);
+        err
+    }
+
+    ///
+    /// The message, rendering a deferred default without storing it — for
+    /// the read paths that hold the error by shared reference.
+    ///
+    pub(crate) fn message_with(&self, store: &Store) -> std::borrow::Cow<'_, str> {
+        match self.default_message_class {
+            Some(class_id) => std::borrow::Cow::Owned(store.get_class_name(class_id)),
+            None => std::borrow::Cow::Borrowed(&self.message),
         }
     }
 
@@ -121,6 +162,7 @@ impl MonorubyErr {
             explicit_cause: None,
             payload: None,
             raw_message: ex.raw_message.clone(),
+            default_message_class: ex.default_message_class,
         }
     }
 
@@ -147,6 +189,7 @@ impl MonorubyErr {
             explicit_cause: None,
             raw_message: None,
             payload: None,
+            default_message_class: None,
         }
     }
 
@@ -230,6 +273,7 @@ impl MonorubyErr {
 
     pub fn set_msg(&mut self, msg: String) {
         self.message = msg;
+        self.default_message_class = None;
     }
 
     pub fn trace(&self) -> &[(Option<(Loc, SourceInfoRef)>, Option<FuncId>)] {

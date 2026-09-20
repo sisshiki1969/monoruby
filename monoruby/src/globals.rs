@@ -725,6 +725,7 @@ impl Globals {
         let monoruby_dir = dirs::home_dir().unwrap().join(".monoruby");
         let gem_path_file = monoruby_dir.join("gem_path");
         let library_path_file = monoruby_dir.join("library_path");
+        let probed_ruby_file = monoruby_dir.join("probed_ruby");
 
         if let Some(p) = std::env::var_os("MONORUBY_GEM_PATH") {
             // SAFETY: `Globals::new` runs single-threaded on the main
@@ -736,16 +737,19 @@ impl Globals {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
             // Probe when there is nothing cached, when the user asks
-            // (`MONORUBY_REPROBE=1`), or when the cache predates the
-            // host's gem index — without that last check a `gem install`
-            // after the first probe stays invisible to `require` forever,
-            // since the cached `$LOAD_PATH` is the only place a
-            // non-default gem's `lib/` is listed.
+            // (`MONORUBY_REPROBE=1`), when the cache predates the host's
+            // gem index — without that check a `gem install` after the
+            // first probe stays invisible to `require` forever, since the
+            // cached `$LOAD_PATH` is the only place a non-default gem's
+            // `lib/` is listed — or when a host Ruby closer to the
+            // version monoruby conforms to has appeared since, which
+            // makes the cache describe the wrong interpreter's gems.
             let must_probe = match cached.as_deref() {
                 None => true,
                 Some(gem_path) => {
                     crate::ruby_probe::reprobe_requested()
                         || crate::ruby_probe::cache_is_stale(&library_path_file, gem_path)
+                        || crate::ruby_probe::preferred_ruby_changed(&probed_ruby_file)
                 }
             };
             let from_probe = if must_probe {
@@ -766,6 +770,11 @@ impl Globals {
                     let _ = std::fs::create_dir_all(&monoruby_dir);
                     let _ = std::fs::write(&gem_path_file, &p.gem_path);
                     let _ = std::fs::write(&library_path_file, &p.library_path);
+                    // Which Ruby the two above describe. Written last and
+                    // unconditionally: `preferred_ruby_changed` reads a
+                    // missing record as "probe once to establish it", so
+                    // failing to write it here would probe on every start.
+                    let _ = std::fs::write(&probed_ruby_file, &p.probed_ruby);
                     p.gem_path
                 })
             } else {
@@ -1077,15 +1086,11 @@ impl Globals {
         // The reported Ruby language level is baked in at compile time by
         // build.rs (env `MONORUBY_RUBY_VERSION`, read from the vendored
         // stdlib snapshot's `.ruby-version` pin so it always matches the
-        // stdlib monoruby actually ships, host-independently). The fallback
-        // mirrors that pin for the rare case the marker is missing at build
-        // time, so the interpreter runs with zero runtime Ruby dependency
-        // instead of panicking on a missing cache file.
-        const DEFAULT_RUBY_VERSION: &str = "4.0.2";
-        let ruby_version = option_env!("MONORUBY_RUBY_VERSION")
-            .unwrap_or(DEFAULT_RUBY_VERSION)
-            .trim()
-            .to_string();
+        // stdlib monoruby actually ships, host-independently), with a
+        // compiled-in fallback for the rare case the marker is missing at
+        // build time. `ruby_probe` owns the constant because it also ranks
+        // host Rubies by distance from it; this is the same value.
+        let ruby_version = crate::ruby_probe::COMPAT_RUBY_VERSION.trim().to_string();
 
         // Build all the top-level RUBY_* String constants up-front.
         // CRuby exposes these as frozen Strings; ruby/spec
