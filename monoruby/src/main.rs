@@ -926,6 +926,14 @@ fn main() {
     // condition-literal warnings for it (prism's `COMMAND_LINE_E` gate).
     if !opts.exec.is_empty() {
         parser::set_cli_e_script(path.clone());
+        // A `-e` script is read in the *locale's* encoding, not UTF-8 —
+        // so under a `C` locale a multibyte character in it is a
+        // SyntaxError, as in CRuby. A `# encoding:` comment in the
+        // script still wins (the parser prefers it), and so does `-K`,
+        // which overwrites this below.
+        if let Some(enc) = monoruby::locale_source_encoding_name() {
+            parser::set_cli_source_encoding(path.clone(), enc.to_string());
+        }
     }
 
     // Ruby prelude synthesized from the remaining switches; runs inside

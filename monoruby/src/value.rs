@@ -1647,8 +1647,8 @@ impl Value {
             RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
             RV::Rational(r) => r.inspect(),
-            RV::Symbol(id) => inspect_symbol(id),
-            RV::String(s) => format!(r#""{}""#, s.inspect()),
+            RV::Symbol(id) => inspect_symbol(id, store.inspect_escape()),
+            RV::String(s) => inspect_string(s, store.inspect_escape()),
             RV::Object(rvalue) => rvalue.debug(store),
         }
     }
@@ -1663,8 +1663,8 @@ impl Value {
             RV::Float(f) => ruby_float_to_s(f),
             RV::Complex(_) => self.as_complex().debug(store),
             RV::Rational(r) => r.inspect(),
-            RV::Symbol(id) => inspect_symbol(id),
-            RV::String(s) => format!(r#""{}""#, s.inspect()),
+            RV::Symbol(id) => inspect_symbol(id, store.inspect_escape()),
+            RV::String(s) => inspect_string(s, store.inspect_escape()),
             RV::Object(rvalue) => rvalue.debug(store),
         };
         Some(s)
@@ -1854,7 +1854,7 @@ pub(crate) fn emit_chilled_string_mutation_warning(
     };
     let msg = format!(
         "warning: string returned by {}.to_s will be frozen in the future\n",
-        inspect_symbol(sym)
+        inspect_symbol(sym, globals.store.inspect_escape())
     );
     let stderr = globals
         .get_gvar(IdentId::get_id("$stderr"))
@@ -1950,7 +1950,13 @@ pub(crate) fn emit_deprecated_constant_warning(
 /// is shared between `Symbol#inspect`, `Value::debug`, and the
 /// `Symbol#to_s`-chilled-string deprecation warning.
 ///
-pub(crate) fn inspect_symbol(id: IdentId) -> String {
+/// `escape` is [`Store::inspect_escape`]: under it a name carrying
+/// non-ASCII cannot be rendered bare, because the `\uXXXX` its
+/// characters become is only a symbol literal inside quotes — CRuby's
+/// `sym_inspect` falls back to `rb_str_inspect` for exactly the names
+/// its result encoding cannot print. `:あ` is `:あ` under a UTF-8
+/// locale and `:"\u3042"` under a `C` one.
+pub(crate) fn inspect_symbol(id: IdentId, escape: bool) -> String {
     let ident_name = id.get_ident_name_clone();
     // A symbol whose recorded source encoding is ASCII-incompatible
     // (UTF-16/32, ISO-2022-JP, UTF-7, …) is always quoted and
@@ -1958,7 +1964,8 @@ pub(crate) fn inspect_symbol(id: IdentId) -> String {
     let ascii_incompat_enc = id
         .symbol_encoding()
         .is_some_and(|e| !e.is_ascii_compatible());
-    if !ascii_incompat_enc && is_simple_symbol(&ident_name) {
+    let escaped_nonascii = escape && !ident_name.is_ascii();
+    if !ascii_incompat_enc && !escaped_nonascii && is_simple_symbol(&ident_name) {
         let mut res = String::from(":");
         match &ident_name {
             IdentName::Utf8(name) => res.push_str(name),
@@ -1979,10 +1986,13 @@ pub(crate) fn inspect_symbol(id: IdentId) -> String {
     };
     let enc = id.symbol_encoding().unwrap_or(default_enc);
     let inner = RStringInner::from_encoding(bytes, enc);
-    let mut res = String::from(":\"");
-    res.push_str(&inner.inspect());
-    res.push('"');
-    res
+    let body = inner.inspect();
+    let body = if escape {
+        escape_nonascii_to_u(&body)
+    } else {
+        body
+    };
+    format!(":\"{body}\"")
 }
 
 /// When a container (`Array`/`Hash`) `#inspect` concatenates a
@@ -2046,6 +2056,20 @@ pub(crate) fn symbol_hash_label(id: IdentId, escape: bool) -> String {
     let enc = id.symbol_encoding().unwrap_or(default_enc);
     let inner = RStringInner::from_encoding(bytes, enc);
     format!("\"{}\"", inner.inspect())
+}
+
+/// `String#inspect`: the quoted form, with non-ASCII escaped to
+/// `\uXXXX` when the result encoding cannot show it (`escape` is
+/// [`Store::inspect_escape`]). CRuby decides this per character in
+/// `rb_str_inspect`; monoruby's strings here are UTF-8, so the whole
+/// rendering escapes or none of it does.
+pub(crate) fn inspect_string(s: &RStringInner, escape: bool) -> String {
+    let body = s.inspect();
+    if escape {
+        format!("\"{}\"", escape_nonascii_to_u(&body))
+    } else {
+        format!("\"{body}\"")
+    }
 }
 
 /// Replace every non-ASCII character with `\uXXXX` / `\u{XXXXX}`,

@@ -201,14 +201,19 @@ module Kernel
     # `rb_f_p` flushes stdout once it has written everything, unlike
     # `puts` — `p` is a debugging aid, so its output must not sit in the
     # buffer while the program keeps running.
+    #
+    # `__inspect` is `rb_inspect`: it dispatches `#inspect` and then
+    # escapes the answer if `Encoding.default_external` cannot show it
+    # (`p "\u3044"` is `"\u3044"` under a `C` locale). Calling
+    # `.inspect` directly here would skip that, as it does in CRuby.
     if args.size == 1
-      $stdout.puts(args[0].inspect)
+      $stdout.puts(__inspect(args[0]))
       $stdout.flush
       args[0]
     elsif args.empty?
       nil
     else
-      args.each { |a| $stdout.puts(a.inspect) }
+      args.each { |a| $stdout.puts(__inspect(a)) }
       $stdout.flush
       args
     end

@@ -1951,8 +1951,12 @@ fn special_encoding_name(globals: &mut Globals, name: &str) -> Option<Encoding> 
                 None => return Some(Encoding::Ascii8),
             }
         }
-        "external" | "filesystem" => globals
+        "external" => globals
             .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+            .filter(|v| !v.is_nil())
+            .unwrap_or_else(|| Value::nil()),
+        "filesystem" => globals
+            .get_gvar(IdentId::get_id("$DEFAULT_FILESYSTEM"))
             .filter(|v| !v.is_nil())
             .unwrap_or_else(|| Value::nil()),
         "locale" => locale_encoding_value(globals),
@@ -2134,22 +2138,58 @@ fn enc_set_default_external(
     }
     let enc_val = resolve_default_encoding_arg(vm, globals, lfp.self_val(), val)?;
     globals.set_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"), enc_val);
+    // CRuby's `enc_set_default_encoding` re-points the `filesystem`
+    // alias at the new external encoding on every assignment, on every
+    // platform — only its startup value is macOS-specific.
+    globals.set_gvar(IdentId::get_id("$DEFAULT_FILESYSTEM"), enc_val);
+    refresh_inspect_escape(globals);
     Ok(enc_val)
 }
 
-/// CRuby renders container (`Array`/`Hash`) `#inspect` with non-ASCII
-/// escaped as `\uXXXX` and a US-ASCII result string whenever
-/// `Encoding.default_external` is not UTF-8 (when it is UTF-8 — the
-/// default — non-ASCII is shown literally, the existing behaviour).
-pub(crate) fn inspect_escape_nonascii(globals: &mut Globals) -> bool {
-    match globals.get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL")) {
-        Some(v) if !v.is_nil() => globals
-            .store
-            .get_ivar(v, IdentId::_ENCODING)
-            .and_then(|s| s.is_str().map(|s| s.to_string()))
-            .map(|n| n != "UTF-8")
-            .unwrap_or(false),
-        _ => false,
+/// The encoding `#inspect` renders into, when that is not UTF-8.
+///
+/// CRuby escapes every character its *result encoding* cannot show and
+/// tags the rendering with that encoding — `rb_str_inspect`'s `resenc`,
+/// which is `Encoding.default_internal` when one is set and
+/// `default_external` otherwise, with US-ASCII standing in for an
+/// encoding that is not ASCII-compatible. monoruby's strings are UTF-8,
+/// so that comes down to: escape unless the result encoding is UTF-8,
+/// which with the locale-derived default is the difference between
+/// `p "い"` under a `C` locale and under a UTF-8 one.
+fn inspect_escape_encoding(globals: &mut Globals) -> Option<Encoding> {
+    let resenc = globals
+        .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
+        .filter(|v| !v.is_nil())
+        .or_else(|| {
+            globals
+                .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+                .filter(|v| !v.is_nil())
+        })?;
+    let enc = globals.encoding_of_object(resenc)?;
+    match enc {
+        Encoding::Utf8 => None,
+        e if !e.is_ascii_compatible() => Some(Encoding::UsAscii),
+        e => Some(e),
+    }
+}
+
+/// Wrap an `#inspect` rendering in the string CRuby would hand back:
+/// escaped to `\uXXXX` and tagged with the result encoding when that
+/// cannot show non-ASCII ([`inspect_escape_encoding`]), the UTF-8 text
+/// itself otherwise.
+pub(crate) fn inspect_result(globals: &mut Globals, s: String) -> Value {
+    if globals.store.inspect_escape() {
+        // Tagged with the result encoding even when the rendering came
+        // out ASCII anyway: CRuby associates `resenc` with what
+        // `rb_str_inspect` built, so `"abc".inspect.encoding` is
+        // US-ASCII under a `C` locale, EUC-JP under `-E EUC-JP`, and
+        // UTF-8 under a UTF-8 locale.
+        Value::string_from_inner(RStringInner::from_encoding(
+            crate::value::escape_nonascii_to_u(&s).as_bytes(),
+            globals.store.inspect_escape_encoding(),
+        ))
+    } else {
+        Value::string(s)
     }
 }
 
@@ -4048,50 +4088,122 @@ fn enc_set_default_internal(
         resolve_default_encoding_arg(vm, globals, lfp.self_val(), val)?
     };
     globals.set_gvar(IdentId::get_id("$DEFAULT_INTERNAL"), enc_val);
+    refresh_inspect_escape(globals);
     Ok(enc_val)
 }
 
-/// The locale's character map, as `nl_langinfo(CODESET)` would report
-/// it. Derived once from the environment, because CRuby reads the
-/// codeset when it calls `setlocale` at startup and never looks at
-/// `ENV` again — ruby/spec checks that assigning `ENV['LC_ALL']` in a
-/// running process does *not* move `Encoding.locale_charmap`.
+/// The locale's character map — `nl_langinfo(CODESET)` under the
+/// locale the environment selects, which is exactly what CRuby reports.
 ///
-/// glibc's `LC_ALL` > `LC_CTYPE` > `LANG` precedence applies, an empty
-/// variable counts as unset, and the codeset is the part after `.`
-/// (with any `@modifier` stripped). With no locale selected — or with
-/// the `C` / `POSIX` locale — glibc reports `ANSI_X3.4-1968`.
+/// Derived once, because CRuby reads the codeset when it calls
+/// `setlocale` at startup and never looks at `ENV` again — ruby/spec
+/// checks that assigning `ENV['LC_ALL']` in a running process does
+/// *not* move `Encoding.locale_charmap`. [`Globals::new`] forces that
+/// one derivation at startup, before any thread or extension could be
+/// running.
+///
+/// The system is asked rather than the variables parsed, because the
+/// two disagree: a `LANG` naming a locale the machine does not have
+/// generated (`en_US.UTF-8` on a container carrying only `C.UTF-8`)
+/// leaves `setlocale` on `C`, and CRuby then reports `ANSI_X3.4-1968`
+/// where reading the name alone says `UTF-8`. The codeset's spelling is
+/// the platform's too — glibc's `ANSI_X3.4-1968` is macOS's `US-ASCII`,
+/// and both name US-ASCII to [`Encoding.find`](enc_find).
 pub(super) fn locale_charmap_str() -> &'static str {
     static CHARMAP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    CHARMAP
-        .get_or_init(|| {
-            let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
-                .iter()
-                .find_map(|key| std::env::var(key).ok().filter(|v| !v.is_empty()))
-                .unwrap_or_default();
-            let locale = locale.split('@').next().unwrap_or("");
-            match locale.split_once('.') {
-                Some((_, codeset)) => {
-                    let normalized = codeset.replace(['-', '_'], "").to_ascii_lowercase();
-                    if normalized == "utf8" {
-                        "UTF-8".to_string()
-                    } else if normalized == "ascii" || normalized == "usascii" {
-                        "ANSI_X3.4-1968".to_string()
-                    } else {
-                        codeset.to_string()
-                    }
-                }
-                // No codeset named: only the "C"/"POSIX" locale (and no
-                // locale at all) has a portable answer. Anything else
-                // picks its codeset from the system's locale definition,
-                // which we cannot read, so assume the modern default.
-                None if locale.is_empty() || locale == "C" || locale == "POSIX" => {
-                    "ANSI_X3.4-1968".to_string()
-                }
-                None => "UTF-8".to_string(),
+    CHARMAP.get_or_init(system_locale_charmap).as_str()
+}
+
+/// `nl_langinfo(CODESET)` for the environment's locale, without
+/// touching the process's own: `newlocale` builds a throwaway
+/// `LC_CTYPE` locale from the environment and `nl_langinfo_l` reads
+/// the codeset out of it. CRuby installs that locale process-wide
+/// (`setlocale(LC_CTYPE, "")`), which we deliberately do not — the
+/// answer is the same, and the C libraries linked into the extensions
+/// (libxml2, SQLite) keep the `C` locale they have always had.
+///
+/// A locale the system cannot provide makes `newlocale` fail, which is
+/// the `setlocale` failure CRuby falls back to `C` from, so we ask for
+/// `C` in turn.
+#[cfg(unix)]
+fn system_locale_charmap() -> String {
+    // `nl_langinfo_l` is POSIX.1-2008 and present on both platforms,
+    // but the `libc` crate declares it only for Linux.
+    unsafe extern "C" {
+        fn nl_langinfo_l(item: libc::nl_item, locale: libc::locale_t) -> *mut std::ffi::c_char;
+    }
+
+    fn codeset_of(name: &std::ffi::CStr) -> Option<String> {
+        // SAFETY: `newlocale` allocates a locale object we own and
+        // never install, so nothing else in the process can observe or
+        // free it; the `nl_langinfo_l` result points into that object
+        // and is copied before `freelocale` invalidates it.
+        unsafe {
+            let loc = libc::newlocale(libc::LC_CTYPE_MASK, name.as_ptr(), std::ptr::null_mut());
+            if loc.is_null() {
+                return None;
             }
-        })
-        .as_str()
+            let codeset = nl_langinfo_l(libc::CODESET, loc);
+            let s = if codeset.is_null() {
+                None
+            } else {
+                Some(
+                    std::ffi::CStr::from_ptr(codeset)
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            };
+            libc::freelocale(loc);
+            s.filter(|s| !s.is_empty())
+        }
+    }
+
+    codeset_of(c"")
+        .or_else(|| codeset_of(c"C"))
+        .unwrap_or_else(|| "ANSI_X3.4-1968".to_string())
+}
+
+/// Without `nl_langinfo`, read the codeset out of the variables
+/// glibc would have consulted: `LC_ALL` > `LC_CTYPE` > `LANG`, an empty
+/// variable counting as unset, the codeset being the part after `.`
+/// with any `@modifier` stripped, and no locale at all (or `C` /
+/// `POSIX`) meaning `ANSI_X3.4-1968`.
+#[cfg(not(unix))]
+fn system_locale_charmap() -> String {
+    let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok().filter(|v| !v.is_empty()))
+        .unwrap_or_default();
+    let locale = locale.split('@').next().unwrap_or("");
+    match locale.split_once('.') {
+        Some((_, codeset)) => {
+            let normalized = codeset.replace(['-', '_'], "").to_ascii_lowercase();
+            if normalized == "utf8" {
+                "UTF-8".to_string()
+            } else if normalized == "ascii" || normalized == "usascii" {
+                "ANSI_X3.4-1968".to_string()
+            } else {
+                codeset.to_string()
+            }
+        }
+        None if locale.is_empty() || locale == "C" || locale == "POSIX" => {
+            "ANSI_X3.4-1968".to_string()
+        }
+        None => "UTF-8".to_string(),
+    }
+}
+
+/// The canonical name of the encoding the locale charmap selects, or
+/// `None` when it names none monoruby knows. This is the source
+/// encoding CRuby gives a `-e` script: a `C` locale makes
+/// `ruby -e 'p "\u3044"'` an `invalid multibyte character`, where a
+/// UTF-8 one runs it. (`-E` does not move it — that sets the external
+/// encoding, not the source's — but `-K` does, and a magic comment in
+/// the script wins over both.)
+pub fn locale_source_encoding_name() -> Option<&'static str> {
+    crate::value::Encoding::try_from_str(locale_charmap_str())
+        .ok()
+        .map(|enc| enc.name())
 }
 
 /// The encoding `Encoding.find("locale")` answers with: the locale
@@ -4104,6 +4216,64 @@ fn locale_encoding_value(globals: &Globals) -> Value {
             .get_constant_noautoload(enc_class, IdentId::UTF_8)
             .unwrap_or(Value::nil())
     })
+}
+
+/// Seed `Encoding.default_external` with the locale's encoding, as
+/// CRuby does at startup: `rb_enc_set_default_external` is handed
+/// `rb_locale_encoding()`, so a `C` / `POSIX` locale (or none) starts
+/// the process on US-ASCII rather than UTF-8. `-E` / `-K` overwrite it
+/// from the CLI prelude, and `Encoding.default_external=` from Ruby;
+/// nothing can unset it again (`= nil` is an `ArgumentError`), so every
+/// later read finds an encoding here and the readers' own UTF-8
+/// fallbacks only cover a `Globals` this never ran on.
+pub(crate) fn init_default_external(globals: &mut Globals) {
+    let v = locale_encoding_value(globals);
+    globals.set_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"), v);
+    // `Encoding.find("filesystem")` starts at the locale encoding too —
+    // except on macOS, where CRuby's `rb_filesystem_encindex` is a
+    // fixed UTF-8 (`#elif defined __APPLE__`). From then on it tracks
+    // `default_external`, which re-aliases it on every assignment
+    // (`enc_set_default_encoding`).
+    let fs = if cfg!(target_os = "macos") {
+        let enc_class = encoding_class(globals);
+        globals
+            .store
+            .get_constant_noautoload(enc_class, IdentId::UTF_8)
+            .unwrap_or(v)
+    } else {
+        v
+    };
+    globals.set_gvar(IdentId::get_id("$DEFAULT_FILESYSTEM"), fs);
+    refresh_inspect_escape(globals);
+}
+
+/// Recompute [`Store::inspect_escape`] from the two gvars that decide
+/// it. Called from every place either can move: startup, `-E` / `-K`
+/// (through `Encoding.default_external=`), `default_internal=`, and the
+/// test pin.
+fn refresh_inspect_escape(globals: &mut Globals) {
+    let enc = inspect_escape_encoding(globals);
+    globals.store.set_inspect_escape(enc);
+}
+
+/// Pin `Encoding.default_external` to UTF-8 whatever the locale says.
+/// Used by [`Globals::new_test`], whose differential partner is spawned
+/// with `-E UTF-8` for the same reason: `cargo nextest` runs with no
+/// `LANG`, and a locale-derived US-ASCII would have both sides escaping
+/// every non-ASCII `#inspect` — reproducible, but not what the tests
+/// are about, and it would re-record the whole snapshot oracle. The
+/// locale path is covered by `tests/encoding_locale.rs`, which spawns
+/// the binary with the environment it wants.
+pub(crate) fn set_default_external_utf8(globals: &mut Globals) {
+    let enc_class = encoding_class(globals);
+    if let Some(utf8) = globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::UTF_8)
+    {
+        globals.set_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"), utf8);
+        globals.set_gvar(IdentId::get_id("$DEFAULT_FILESYSTEM"), utf8);
+    }
+    refresh_inspect_escape(globals);
 }
 
 ///
@@ -4429,8 +4599,13 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         // `default_external`.
         "locale" => return Ok(locale_encoding_value(globals)),
         "external" | "filesystem" => {
+            let gvar = if name.eq_ignore_ascii_case("filesystem") {
+                "$DEFAULT_FILESYSTEM"
+            } else {
+                "$DEFAULT_EXTERNAL"
+            };
             let ext = globals
-                .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+                .get_gvar(IdentId::get_id(gvar))
                 .filter(|v| !v.is_nil())
                 .unwrap_or_else(|| {
                     globals
@@ -4742,16 +4917,23 @@ fn dynamic_encoding_aliases(globals: &mut Globals) -> Vec<(&'static str, String)
     let external_val = globals
         .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
         .filter(|v| !v.is_nil());
+    let filesystem_val = globals
+        .get_gvar(IdentId::get_id("$DEFAULT_FILESYSTEM"))
+        .filter(|v| !v.is_nil());
     let locale_val = locale_encoding_value(globals);
     let locale = canonical_of(globals, locale_val);
     let external = external_val
         .and_then(|v| canonical_of(globals, v))
         .unwrap_or_else(|| "UTF-8".to_string());
+    let filesystem = filesystem_val
+        .and_then(|v| canonical_of(globals, v))
+        .unwrap_or_else(|| external.clone());
     DYNAMIC_ALIASES
         .iter()
         .map(|alias| {
             let target = match *alias {
                 "locale" => locale.clone().unwrap_or_else(|| external.clone()),
+                "filesystem" => filesystem.clone(),
                 _ => external.clone(),
             };
             (*alias, target)

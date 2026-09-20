@@ -321,6 +321,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "singleton_class", singleton_class, 0);
     globals.define_builtin_func(kernel_class, "to_s", to_s, 0);
     globals.define_builtin_func(kernel_class, "inspect", inspect, 0);
+    globals.define_private_builtin_func(kernel_class, "__inspect", display_inspect, 1);
     globals.define_builtin_inline_func(
         kernel_class,
         "instance_of?",
@@ -5505,7 +5506,7 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         || globals.store.get_ivar(self_val, IdentId::_NAME).is_some()
     {
         let s = self_val.inspect(&globals.store);
-        return Ok(Value::string(s));
+        return Ok(crate::builtins::encoding::inspect_result(globals, s));
     }
 
     // CRuby consults the (private) `instance_variables_to_inspect`
@@ -5549,7 +5550,41 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         s += &format!("{name}={}", val.inspect(&globals.store));
     }
     s += ">";
-    Ok(Value::string(s))
+    Ok(crate::builtins::encoding::inspect_result(globals, s))
+}
+
+/// `rb_inspect`: dispatch `#inspect` and render what it answered the
+/// way CRuby displays it. An `#inspect` — a user-defined one, or
+/// `Exception`'s — may hand back text in an encoding the result
+/// encoding cannot show, and CRuby escapes it there rather than in
+/// every `#inspect`: `rb_inspect` escapes to `\uXXXX` unless the
+/// answer is already ASCII-only (the builtin renderers' is, since
+/// [`inspect_result`](crate::builtins::encoding::inspect_result)
+/// escaped it). `Kernel#p` is its caller, as in CRuby.
+#[monoruby_builtin]
+fn display_inspect(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let obj = lfp.arg(0);
+    let res = vm.invoke_method_inner(globals, IdentId::get_id("inspect"), obj, &[], None, None)?;
+    if !globals.store.inspect_escape() {
+        return Ok(res);
+    }
+    match res.is_str() {
+        // Already showable as it stands — CRuby hands back the very
+        // string `#inspect` returned, encoding and all.
+        Some(inner) if !inner.as_bytes().is_ascii() => {
+            let text = String::from_utf8_lossy(inner.as_bytes()).into_owned();
+            Ok(Value::string_from_inner(RStringInner::from_encoding(
+                crate::value::escape_nonascii_to_u(&text).as_bytes(),
+                globals.store.inspect_escape_encoding(),
+            )))
+        }
+        _ => Ok(res),
+    }
 }
 
 ///

@@ -540,7 +540,8 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     crate::value::exec_recursive(
         self_val.id(),
         || {
-            let escape = crate::builtins::encoding::inspect_escape_nonascii(globals);
+            let escape = globals.store.inspect_escape();
+            let escape_enc = globals.store.inspect_escape_encoding();
             let ary = self_val.as_array();
             if ary.len() == 0 {
                 return Ok(Value::string_from_inner(RStringInner::from_encoding(
@@ -594,7 +595,7 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             if escape {
                 Ok(Value::string_from_inner(RStringInner::from_encoding(
                     crate::value::escape_nonascii_to_u(&s).as_bytes(),
-                    Encoding::UsAscii,
+                    escape_enc,
                 )))
             } else {
                 Ok(Value::string(s))

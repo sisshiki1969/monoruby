@@ -399,13 +399,16 @@ fn spawn_ruby(code: &str) -> String {
     tmpfile.write_all(code.as_bytes()).unwrap();
 
     // Force the reference CRuby's default external encoding to UTF-8 with
-    // `-E UTF-8`. monoruby always treats source/strings as UTF-8, but
-    // CRuby derives `Encoding.default_external` from the locale, and in a
-    // non-UTF-8 / empty-`LANG` environment (which is how `cargo nextest`
-    // spawns these subprocesses) `String#inspect` escapes non-ASCII to
-    // `\uXXXX` — so `"café".inspect` would diff against monoruby's literal
-    // `"café"`. `-E UTF-8` pins the encoding independent of locale, making
-    // the differential comparison reproducible across hosts and runners.
+    // `-E UTF-8`, and pin this side to match — `Globals::new_test` sets
+    // `Encoding.default_external` to UTF-8 for exactly this reason.
+    // Both derive it from the locale (#1433), and `cargo nextest` spawns
+    // with no `LANG`, so unpinned both sides would escape non-ASCII in
+    // `#inspect` to `\uXXXX`: reproducible, but it would re-record the
+    // whole snapshot oracle for a property these tests are not about.
+    // Pinning both keeps the comparison about the code under test and
+    // the same on every host and runner. The locale behaviour itself is
+    // covered by `tests/encoding_locale.rs`, which spawns the binary
+    // with the environment it wants.
     let res = match std::process::Command::new(&*RUBY)
         .arg("-E")
         .arg("UTF-8")

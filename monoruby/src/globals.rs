@@ -978,6 +978,11 @@ impl Globals {
         globals.random_init(None);
         gvar::init_builtin_gvars(&mut globals);
         crate::builtins::init_builtins(&mut globals);
+        // `Encoding.default_external` follows the locale, as CRuby's
+        // does. Derived here, at startup, so the one `newlocale` call
+        // behind `Encoding.locale_charmap` happens before any thread or
+        // dynamically loaded extension exists.
+        crate::builtins::encoding::init_default_external(&mut globals);
         // `ARGV` exists from the start — empty until the CLI fills it
         // in — and names the same array as `$*` and the ARGF queue.
         globals.set_argv(globals.argv());
@@ -1165,7 +1170,13 @@ impl Globals {
 
     pub fn new_test() -> Self {
         Self::pin_test_nss_to_files();
-        Globals::new(1, false, true)
+        let mut globals = Globals::new(1, false, true);
+        // The reference CRuby is spawned with `-E UTF-8`; pin this side
+        // to match, or a test host with no `LANG` would compare a
+        // locale-escaped `#inspect` against an unescaped one. See
+        // `encoding::set_default_external_utf8`.
+        crate::builtins::encoding::set_default_external_utf8(&mut globals);
+        globals
     }
 
     /// On glibc hosts, pin the test process's passwd/group NSS lookups
