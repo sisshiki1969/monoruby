@@ -4024,15 +4024,18 @@ mod tests {
     #[test]
     fn expand_path_home_encoding() {
         // `~` puts the filesystem-encoded home directory at the head of
-        // the result, so the result carries that encoding — and a
-        // remainder that is not all-ASCII in another encoding is the
-        // ordinary String-append incompatibility.
+        // the result, so the result carries that encoding whatever the
+        // argument's own encoding was.
         //
-        // Whether the last two raise depends on the host's filesystem
-        // encoding (a UTF-8 one accepts the UTF-8 remainder), so this
-        // one goes against a live CRuby rather than the oracle.
-        run_test_once_live(
-            r##"(fs=Encoding.find("filesystem"); f=->(s){ begin; File.expand_path(s).encoding == fs; rescue => e; [e.class, e.message]; end }; [f.call("~"), f.call("~/foo"), f.call("~root"), f.call("~/foo".encode("EUC-JP")), f.call("~/" + "\u3042"), f.call("~/" + "\xFF".dup.force_encoding("binary"))])"##,
+        // Only all-ASCII remainders are asserted here. A remainder that
+        // is *not* all-ASCII is the ordinary String-append
+        // incompatibility, and whether it raises turns on the identity
+        // of the filesystem encoding — which CRuby reports as UTF8-MAC
+        // on macOS while monoruby folds that onto plain UTF-8, so the
+        // two disagree there for reasons that have nothing to do with
+        // this rule.
+        run_test_once(
+            r##"(fs=Encoding.find("filesystem"); f=->(s){ File.expand_path(s).encoding == fs }; [f.call("~"), f.call("~/foo"), f.call("~root"), f.call("~/foo".encode("EUC-JP"))])"##,
         );
     }
 

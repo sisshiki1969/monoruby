@@ -1391,7 +1391,6 @@
 5c591e9ff73fb3eaf82f8472fbe461ed	:nme	class Float; def *(o); super(o); end; end\n                begin; 2.0 * 3; rescue
 5c78c8c1a1899c06122f988ae4e55650	true	module MNs; module Ext; end; end\n            o = Object.new\n       
 5c81b1416723d320008472f66e0573cc	[true, true, true]	def churn(n) = n.times { |i| [i, i] }\n            churn(50_000); GC
-5c9869ab14f386421e62cfb188f5e361	[true, true, [true, true]]	(d="/tmp/mono_pwde_#{Process.pid}"; Dir.mkdir(d); sub="#{d}/" + "\\xFF\\xFE".dup.f
 5c9a399e6be0e655dcde007dc7ece9b8	true	r, w = IO.pipe\n            t = Thread.new { sleep 0.2 }\n           
 5c9bd2b9dbdb63097f4a4accca2a9df4	nil	def f(&p)\n            p.call\n        end\n        \n\n        f{}\n        
 5d03329e8ce3ae472df7fb2691c658f9	[3, :redefined]	a, b = 3, 9\n            r = []\n            50.times { r << [a, b].m
@@ -3127,6 +3126,7 @@ cf6872bba5781ae3921f031445dcb5b8	[1, 2]	class C\n              define_method(:m)
 cf6bd38f8f98b72059f152760441d427	[true, 5, false, nil, false, nil, false, false, true, 1280, true, false, false, true, true, true, true]	pid = fork { exit 5 }\n            Process.wait(pid)\n            s =
 cf85f9548841ec0b0c470064817b4d36	""	f = File.open("/dev/null", "r")\n            f.read(0)\n        
 cf9672bc0f3346ba3de51fd90ea702e4	[:foo]	$res = []\n            class C\n              def self.singleton_meth
+cf9ad09b764015cc353d012562df9a42	[true, true, true, true]	(fs=Encoding.find("filesystem"); f=->(s){ File.expand_path(s).encoding == fs }; 
 cfa30b29bf3ccea5e600ee36663af61d	["US-ASCII", "US-ASCII", "US-ASCII"]	s = "abc".dup.force_encoding("US-ASCII")\n              s.partitio
 cfaf7efe92a4e7e016bf9da03af47c5a	[true, "m"]	bytes = Marshal.dump(Enumerable)\n            t = Marshal.load(bytes
 cfbb4a0d817bfb9eff84a564fe2b3828	[0, true, false, true, false, false]	o = Object.new\n        pr = proc { |id| }\n        a = ObjectSpace.defin

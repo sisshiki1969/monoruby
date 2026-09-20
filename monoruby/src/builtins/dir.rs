@@ -1264,8 +1264,14 @@ mod tests {
         // encoding come back UTF-8 and invalid, not BINARY. Phrased
         // against `Encoding.find("filesystem")` so the answer is the
         // same whatever locale the test host runs under.
-        run_test_once(
-            r##"(d="/tmp/mono_pwde_#{Process.pid}"; Dir.mkdir(d); sub="#{d}/" + "\xFF\xFE".dup.force_encoding("binary"); Dir.mkdir(sub); fs=Encoding.find("filesystem"); want=(fs == Encoding::US_ASCII ? Encoding::BINARY : fs); r=[Dir.pwd.encoding == want, Dir.getwd.encoding == want, Dir.chdir(sub) { [Dir.pwd.encoding == want, Dir.pwd.valid_encoding? == (want == Encoding::BINARY)] }]; Dir.rmdir(sub); Dir.rmdir(d); r)"##,
+        //
+        // The second half needs a directory whose name is *not* valid
+        // UTF-8, which APFS refuses outright (`EILSEQ @ dir_s_mkdir`),
+        // so it is skipped where the mkdir fails — both runtimes take
+        // the same branch on the same host. That makes the result
+        // platform-dependent, hence a live CRuby rather than the oracle.
+        run_test_once_live(
+            r##"(d="/tmp/mono_pwde_#{Process.pid}"; Dir.mkdir(d); fs=Encoding.find("filesystem"); want=(fs == Encoding::US_ASCII ? Encoding::BINARY : fs); r=[Dir.pwd.encoding == want, Dir.getwd.encoding == want]; sub="#{d}/" + "\xFF\xFE".dup.force_encoding("binary"); made=(begin; Dir.mkdir(sub); true; rescue SystemCallError; false; end); if made; r << Dir.chdir(sub) { [Dir.pwd.encoding == want, Dir.pwd.valid_encoding? == (want == Encoding::BINARY)] }; Dir.rmdir(sub); else; r << :no_invalid_utf8_names; end; Dir.rmdir(d); r)"##,
         );
     }
 
