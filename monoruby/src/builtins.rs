@@ -44,6 +44,7 @@ mod process;
 mod random;
 mod range;
 mod regexp;
+pub(crate) use module::autoload_pending;
 pub(crate) use regexp::check_match_encoding;
 mod set;
 mod socket;

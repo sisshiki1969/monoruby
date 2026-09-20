@@ -1,20 +1,21 @@
-//! What a *concurrent* observer sees of an autoload that is in
-//! progress (#1426).
+//! `Module#autoload`: what a *concurrent* observer sees of a load in
+//! progress (#1426), and when a registration has anything left to load.
 //!
-//! CRuby's rule is that an in-flight autoload is visible per-thread:
+//! CRuby's rule for a load in flight is that it is visible per-thread:
 //! the thread running the load sees the constant it has assigned (and
 //! sees the slot as undefined until it does), while every other thread
 //! goes on seeing the registered autoload it saw before the load
 //! started — and blocks, rather than raising or starting a second load,
 //! when it actually reads the value.
 //!
-//! Two single-threaded rules about *several constants sharing one
-//! autoload file* are here too, because the concurrent case rests on
-//! them: which constants a load retires depends on whether the load was
-//! a direct `require` or an autoload's own, and a retired one still
-//! re-runs its file once the feature is dropped from
-//! `$LOADED_FEATURES`. Getting either wrong stays invisible until many
-//! threads race on one file, which is how they were found.
+//! The rest is about *retirement*, the other half of an entry's life:
+//! an entry is retired when its file has run while it was registered —
+//! by a direct `require`, or because it was registered onto a file
+//! already loaded — and retirement lasts only as long as the feature
+//! stays in `$LOADED_FEATURES`. Drop the feature and the entry has
+//! something to load again. Which loads retire an entry, and the fact
+//! that retirement is reversible, are easy to get subtly wrong and
+//! stay invisible until many threads race on one file.
 //!
 //! These spawn the real binary: green threads and a file `require` are
 //! both process-level, so an in-process `run_test` cannot reach them.
@@ -393,4 +394,148 @@ show "autoload? E2  ", Object.autoload?(:E2)
 "##,
     );
     assert_same("autoload-triggered require of a shared file", &dir, &script);
+}
+
+/// Registering an autoload for a file that is *already loaded* still
+/// registers: the name lists in `Module#constants` and `const_added`
+/// fires. It just has nothing left to load, so it is born retired —
+/// until the feature leaves `$LOADED_FEATURES`, at which point it is an
+/// ordinary pending autoload again.
+#[test]
+fn registering_onto_a_loaded_file_registers_a_retired_entry() {
+    let dir = fixture_dir("registered_loaded");
+    write(
+        &dir,
+        "lib.rb",
+        "$loads = ($loads || 0) + 1\nObject.const_set(:L1, $loads)\n",
+    );
+    let script = write(
+        &dir,
+        "probe.rb",
+        r##"
+DIR = File.expand_path(File.dirname(__FILE__))
+P = File.join(DIR, "lib.rb")
+def st(l)
+  puts "#{l}: autoload?=#{Object.autoload?(:Z).inspect.gsub(DIR + "/", "")} " \
+       "const_defined?=#{Object.const_defined?(:Z)} " \
+       "constants=#{Object.constants.include?(:Z)} loads=#{$loads.inspect}"
+end
+class Object
+  def self.const_added(n) = ($added ||= []) << n
+end
+
+require P
+$added = []
+Object.autoload :Z, P
+puts "const_added: #{$added.inspect}"
+st "1 registered      "
+
+# Nothing to load, so reading raises without running anything — and
+# without dropping the registration.
+begin; Object::Z; rescue NameError; end
+st "2 after no-op read"
+
+# The feature gone, the same entry is pending again.
+$LOADED_FEATURES.delete(P)
+st "3 feature dropped "
+
+# Now the read runs the file. It still does not define Z, and *that*
+# retires the entry for good.
+begin; Object::Z; rescue NameError; end
+st "4 after real read "
+"##,
+    );
+    assert_same("registration onto a loaded file", &dir, &script);
+}
+
+/// Retirement by a direct `require` is reversible in the same way: the
+/// siblings it retires come back the moment the feature is dropped.
+#[test]
+fn a_direct_require_s_retirement_lifts_when_the_feature_is_dropped() {
+    let dir = fixture_dir("retire_lifts");
+    write(
+        &dir,
+        "lib.rb",
+        "$loads = ($loads || 0) + 1\nObject.const_set(:L1, $loads)\n",
+    );
+    let script = write(
+        &dir,
+        "probe.rb",
+        r##"
+DIR = File.expand_path(File.dirname(__FILE__))
+P = File.join(DIR, "lib.rb")
+def st(l)
+  puts "#{l}: autoload?=#{Object.autoload?(:R2).inspect.gsub(DIR + "/", "")} " \
+       "const_defined?=#{Object.const_defined?(:R2)} " \
+       "constants=#{Object.constants.include?(:R2)} loads=#{$loads.inspect}"
+end
+Object.autoload :L1, P
+Object.autoload :R2, P
+st "0 registered      "
+require P
+st "1 direct required "
+$LOADED_FEATURES.delete(P)
+st "2 feature dropped "
+"##,
+    );
+    assert_same("retirement lifts with the feature", &dir, &script);
+}
+
+/// A load run by *another* constant's autoload does not retire this
+/// one: the file never got a chance to define it, so the entry stays
+/// pending even though the feature is now loaded. This is what
+/// separates retirement from "the feature happens to be loaded".
+#[test]
+fn a_sibling_s_autoload_does_not_retire_the_other_constants() {
+    let dir = fixture_dir("sibling");
+    write(
+        &dir,
+        "lib.rb",
+        "$loads = ($loads || 0) + 1\nObject.const_set(:S1, $loads)\n",
+    );
+    let script = write(
+        &dir,
+        "probe.rb",
+        r##"
+DIR = File.expand_path(File.dirname(__FILE__))
+P = File.join(DIR, "lib.rb")
+def st(l)
+  puts "#{l}: featured=#{$LOADED_FEATURES.include?(P)} " \
+       "autoload?=#{Object.autoload?(:S2).inspect.gsub(DIR + "/", "")} " \
+       "const_defined?=#{Object.const_defined?(:S2)}"
+end
+Object.autoload :S1, P
+Object.autoload :S2, P
+st "0 registered   "
+Object::S1
+st "1 after S1 load"
+"##,
+    );
+    assert_same("a sibling's autoload does not retire", &dir, &script);
+}
+
+/// A file that registers an autoload onto *itself* and then defines the
+/// constant must not send `require` back into the file it is already
+/// running: the entry is born retired, so the `class` keyword's own
+/// constant lookup finds nothing to load.
+#[test]
+fn a_file_that_autoloads_itself_does_not_require_itself_again() {
+    let dir = fixture_dir("self");
+    write(
+        &dir,
+        "selfload.rb",
+        "$loads = ($loads || 0) + 1\nObject.autoload :SelfLoad, __FILE__\nclass SelfLoad\nend\n",
+    );
+    let script = write(
+        &dir,
+        "probe.rb",
+        r##"
+DIR = File.expand_path(File.dirname(__FILE__))
+P = File.join(DIR, "selfload.rb")
+require P
+puts "loads=#{$loads} class=#{Object::SelfLoad.is_a?(Class)} " \
+     "autoload?=#{Object.autoload?(:SelfLoad).inspect.gsub(DIR + "/", "")}"
+"##,
+    );
+    assert_same("a file autoloading itself", &dir, &script);
 }

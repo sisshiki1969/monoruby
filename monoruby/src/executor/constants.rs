@@ -97,15 +97,23 @@ impl Executor {
                     // *another* thread was waited out above, so this
                     // arm is always our own.)
                     AutoloadState::Loading { .. } => return Ok(entry.value),
-                    // A direct `require` of the file already ran it
-                    // without defining this constant. The predicates
-                    // report the slot as missing (the name remains in
-                    // `Module#constants(false)` only), but a *value*
-                    // read still goes through `require`: while the
-                    // feature stays loaded that is a no-op and the read
-                    // raises NameError, and once it is dropped from
-                    // `$LOADED_FEATURES` the file runs again and may
-                    // define the constant after all.
+                    // A retired entry has already had its file run
+                    // while registered. While the feature stays loaded
+                    // there is nothing left to run, and CRuby does not
+                    // dispatch `require` at all — the constant simply
+                    // reads as undefined, registration and all. (A file
+                    // that registers an autoload onto itself and then
+                    // defines the constant relies on this: the `class`
+                    // keyword's own lookup must not re-enter the
+                    // require that is running it.) Once the feature
+                    // leaves `$LOADED_FEATURES` the entry is live again
+                    // and the next read runs the file, which may define
+                    // the constant after all.
+                    AutoloadState::Consumed
+                        if !crate::builtins::autoload_pending(globals, &entry.feature) =>
+                    {
+                        return Ok(None);
+                    }
                     AutoloadState::Consumed | AutoloadState::Idle => entry.feature.clone(),
                 },
             },
@@ -547,11 +555,13 @@ impl Executor {
     }
 
     /// Non-triggering probe of a constant directly on `class_id` —
-    /// returns true if a value exists or an autoload is registered
-    /// (Idle, or `Loading` on another thread), false for missing
-    /// entries and for an autoload this thread is part-way through that
-    /// has not assigned the constant yet. Mirrors CRuby's
-    /// `rb_const_defined_at` with `autoload_load = FALSE`.
+    /// returns true if a value exists or an autoload is still pending
+    /// (registered and either never run or run before its feature was
+    /// dropped, or `Loading` on another thread), false for missing
+    /// entries, for a retired autoload whose file is still loaded, and
+    /// for one this thread is part-way through that has not assigned
+    /// the constant yet. Mirrors CRuby's `rb_const_defined_at` with
+    /// `autoload_load = FALSE`.
     pub(crate) fn probe_constant_at(
         globals: &Globals,
         class_id: ClassId,
@@ -566,6 +576,11 @@ impl Executor {
                 ConstStateKind::Loaded(_) | ConstStateKind::LazyToplevelBinding => true,
                 ConstStateKind::Autoload(entry) => match entry.state {
                     AutoloadState::Idle => true,
+                    // Retired, but only for as long as its file stays
+                    // loaded — see `module::autoload_pending`.
+                    AutoloadState::Consumed => {
+                        crate::builtins::autoload_pending(globals, &entry.feature)
+                    }
                     // Only the loading thread sees through its own
                     // in-flight autoload — as not-yet-defined until the
                     // file assigns the constant, and as defined after.
@@ -578,7 +593,6 @@ impl Executor {
                             true
                         }
                     }
-                    AutoloadState::Consumed => false,
                 },
             },
         }
