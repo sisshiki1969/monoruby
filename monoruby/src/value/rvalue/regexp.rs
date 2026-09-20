@@ -930,6 +930,32 @@ impl RegexpInner {
         self.captures_from_pos_with(self.engine_for(given, None), given, pos, vm)
     }
 
+    /// [`captures_from_pos`](Self::captures_from_pos) with `\G` pinned
+    /// to `gpos` rather than to `pos` (see
+    /// [`find_spans_gpos`](Self::find_spans_gpos)).
+    pub fn captures_from_pos_gpos<'a>(
+        &self,
+        given: &'a str,
+        gpos: usize,
+        pos: usize,
+        vm: &mut Executor,
+    ) -> Result<Option<Captures<'a>>> {
+        match self
+            .engine_for(given, None)
+            .captures_from_pos_gpos(given, gpos, pos)
+        {
+            Ok(res) => {
+                if let Some(captures) = &res {
+                    vm.save_capture_special_variables(captures, given)
+                } else {
+                    vm.clear_capture_special_variables();
+                }
+                Ok(res)
+            }
+            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
+        }
+    }
+
     /// [`captures_from_pos`](Self::captures_from_pos) on an engine the
     /// caller picked once (`engine_for`) for a whole walk over `given`.
     fn captures_from_pos_with<'a>(
@@ -1500,14 +1526,37 @@ impl RegexpInner {
         pos: usize,
         region: &mut onigmo_regex::Region,
     ) -> Result<bool> {
+        self.find_spans_gpos(subject, pos, pos, region)
+    }
+
+    /// [`find_spans`](Self::find_spans) with `\G` pinned to `gpos`
+    /// rather than to `pos`.
+    ///
+    /// A reverse search (`String#rindex`) anchors `\G` at the offset it
+    /// was given and then looks for the *last* match starting at or
+    /// before it, which it does by probing forward from every candidate
+    /// start. Each probe is its own search, so without this every probe
+    /// would rebind `\G` to itself; the match may also end past `gpos`
+    /// (`/YOU.+\G.+/`), which is why the probes stay forward searches
+    /// to the end of the subject rather than one backward search.
+    pub(crate) fn find_spans_gpos(
+        &self,
+        subject: &Subject,
+        gpos: usize,
+        pos: usize,
+        region: &mut onigmo_regex::Region,
+    ) -> Result<bool> {
         let r = match (subject.as_text(), subject.native) {
             (Some(s), _) => self
                 .engine_for(s, Some(subject.is_ascii()))
-                .search_with_region(s.as_bytes(), pos, region),
-            (None, Some(enc)) => {
-                self.native_regex(enc)?
-                    .search_bytes(subject.as_bytes(), pos, subject.len(), Some(region))
-            }
+                .search_with_region_gpos(s.as_bytes(), gpos, pos, region),
+            (None, Some(enc)) => self.native_regex(enc)?.search_bytes_gpos(
+                subject.as_bytes(),
+                gpos,
+                pos,
+                subject.len(),
+                Some(region),
+            ),
             (None, None) => unreachable!("a byte subject always has a codec"),
         };
         r.map(|r| r.is_some()).map_err(search_failed)

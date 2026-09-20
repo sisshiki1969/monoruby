@@ -1313,7 +1313,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "onigmo-regex"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/onigmo-regex.git#4513d0af352dbe8ec1c61625d47f62442cbde0fb"
+source = "git+https://github.com/sisshiki1969/onigmo-regex.git#7e88721a1632eda0e28f177c74667f8abd42836f"
 dependencies = [
  "bindgen 0.71.1",
  "cc",
@@ -1890,7 +1890,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
