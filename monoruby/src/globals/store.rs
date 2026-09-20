@@ -203,6 +203,37 @@ pub struct Store {
     /// `TOPLEVEL_BINDING` gets when it is read while no main script
     /// frame is running (during a `-r` require, or from a thread).
     empty_toplevel_fid: Option<FuncId>,
+    /// The encoding `#inspect` renders into when that is not UTF-8 —
+    /// CRuby's `rb_str_inspect` `resenc`, which is
+    /// `Encoding.default_internal` if one is set and `default_external`
+    /// otherwise (US-ASCII in its place when it is not
+    /// ASCII-compatible). `None` means UTF-8, where monoruby's own
+    /// strings already live and nothing needs escaping.
+    ///
+    /// A cache of those two gvars, refreshed whenever either moves
+    /// (`encoding::refresh_inspect_escape`). It lives here, rather than
+    /// being read from the gvars where it is defined, because the
+    /// renderers that need it — `Value::debug`, `inspect_symbol` — are
+    /// handed a `Store` and nothing more.
+    inspect_escape: Option<crate::value::Encoding>,
+}
+
+impl Store {
+    /// Does `#inspect` escape non-ASCII to `\uXXXX` in this process?
+    /// See the [`inspect_escape`](Store::inspect_escape) field.
+    pub(crate) fn inspect_escape(&self) -> bool {
+        self.inspect_escape.is_some()
+    }
+
+    /// The encoding an escaped `#inspect` rendering carries. Only
+    /// meaningful where [`inspect_escape`](Store::inspect_escape) holds.
+    pub(crate) fn inspect_escape_encoding(&self) -> crate::value::Encoding {
+        self.inspect_escape.unwrap_or(crate::value::Encoding::UsAscii)
+    }
+
+    pub(crate) fn set_inspect_escape(&mut self, enc: Option<crate::value::Encoding>) {
+        self.inspect_escape = enc;
+    }
 }
 
 impl std::ops::Deref for Store {
@@ -481,6 +512,7 @@ impl Store {
             refinements: RefinementTable::new(),
             main_script_fid: None,
             empty_toplevel_fid: None,
+            inspect_escape: None,
         }
     }
 

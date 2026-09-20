@@ -358,11 +358,11 @@ fn parse_frozen_directive(comment: &str) -> Option<bool> {
 }
 
 fn try_prism_inner(
-    code: Vec<u8>,
+    mut code: Vec<u8>,
     path: PathBuf,
-    options: Option<prism::Options>,
+    mut options: Option<prism::Options>,
     seed_lvars: Option<LvarCollector>,
-    line_offset: i64,
+    mut line_offset: i64,
     default_encoding: Option<String>,
     main_script: bool,
     defer_bodies: bool,
@@ -371,8 +371,23 @@ fn try_prism_inner(
     // `-n` / `-p`: the main script (and only the main script) gets its
     // top-level statements wrapped in an implicit `while gets ... end`.
     let cli_loop_wrap = super::take_cli_loop_wrap(&path);
-    // `-K`: default source encoding for the main script.
+    // `-K`, and the locale encoding a `-e` script is read in: the main
+    // script's source encoding, when it carries no magic comment.
     let cli_source_encoding = super::take_cli_source_encoding(&path);
+    // Hand it to prism the only way the vendored wrapper allows — as a
+    // magic comment — rather than recording it after the parse. It has
+    // to *lex* in that encoding, or a `-e` script under a `C` locale
+    // would take a multibyte character as US-ASCII bytes instead of
+    // rejecting it the way CRuby does. The extra line is subtracted
+    // back out so every reported line number stays put.
+    if let Some(enc) = &cli_source_encoding
+        && options.is_none()
+        && detect_source_encoding(&code).is_none()
+    {
+        code.splice(0..0, format!("# encoding: {enc}\n").into_bytes());
+        line_offset -= 1;
+        options = Some(build_prism_options(None, seed_lvars.as_ref(), line_offset));
+    }
     // `-e`: prism's `PM_OPTIONS_COMMAND_LINE_E` suppresses the flip-flop /
     // condition-literal parse warnings for command-line scripts. The
     // vendored ruby-prism wrapper doesn't expose the `command_line`

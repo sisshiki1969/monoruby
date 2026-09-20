@@ -125,9 +125,10 @@ fn sym_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/inspect.html]
 #[monoruby_builtin]
-fn sym_inspect(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn sym_inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let sym = lfp.self_val().as_symbol();
-    Ok(Value::string(inspect_symbol(sym)))
+    let s = inspect_symbol(sym, globals.store.inspect_escape());
+    Ok(crate::builtins::encoding::inspect_result(globals, s))
 }
 
 ///
