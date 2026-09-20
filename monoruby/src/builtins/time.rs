@@ -1522,41 +1522,56 @@ pub(crate) const SUBSEC_IVAR: &str = "/subsec";
 /// 10**6)) - Time.at(0)` builds `10^24 / 10^21`, whose halves both lose
 /// bits, and the answer came out an ulp high.
 fn bigint_ratio_to_f64(num: &num::BigInt, den: &num::BigInt) -> f64 {
-    use num::{Integer, ToPrimitive};
+    use num::{Integer, ToPrimitive, Zero};
     let g = num.gcd(den);
     let (num, den) = if g > num::BigInt::from(1) {
         (num / &g, den / &g)
     } else {
         (num.clone(), den.clone())
     };
+    // `den` is a `Rational`'s denominator or a billion, so it is never
+    // zero, and `BigInt::to_f64` answers `Some` for every value —
+    // saturating to an infinity rather than failing — so neither guard
+    // below can fire.
+    let to_f = |b: &num::BigInt| b.to_f64().unwrap_or(f64::NAN);
     // Reduced, the overwhelming majority of times fit a double exactly
     // on both sides, and one IEEE division is the correctly rounded
     // answer.
     if num.bits() <= 53 && den.bits() <= 53 {
-        return match (num.to_f64(), den.to_f64()) {
-            (Some(n), Some(d)) if d != 0.0 => n / d,
-            _ => f64::NAN,
-        };
+        return to_f(&num) / to_f(&den);
     }
-    if den == num::BigInt::from(0) {
-        return f64::NAN;
-    }
-    // Otherwise do the division in integers, keeping 64 bits of
-    // quotient before handing it to a double: scaling back by an exact
-    // power of two costs nothing.
-    let shift = 64u32;
-    let q = (&num << shift) / &den;
-    match q.to_f64() {
-        Some(f) if f.is_finite() => f / (2f64).powi(shift as i32),
-        // A quotient too large for a double either way.
-        _ => {
-            if num.sign() == num::bigint::Sign::Minus {
-                f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
-            }
+    // Otherwise do the division in integers, scaling the numerator up
+    // first so the quotient keeps about 64 significant bits wherever
+    // the ratio sits: a denominator far wider than the numerator — a
+    // sub-nanosecond value of `1/10**34`, say — would otherwise floor
+    // the quotient to zero. Past 2^-1984 the answer is zero for a
+    // double whatever the scaling, so the shift needs no more room
+    // than that.
+    let widen = den.bits().saturating_sub(num.bits()).min(1984) as u32;
+    let shift = 64 + widen;
+    let (q, r) = (&num << shift).div_rem(&den);
+    // Round to odd: the part the division dropped shows in the
+    // quotient's last bit, so rounding those 64 bits down to a double's
+    // 53 cannot land on a tie the value has not earned.
+    let q = if !r.is_zero() && q.is_even() {
+        if q.sign() == num::bigint::Sign::Minus {
+            q - 1
+        } else {
+            q + 1
         }
+    } else {
+        q
+    };
+    // Scaling back by a power of two is exact, but `2f64.powi` of the
+    // whole shift can be zero on its own and take a representable
+    // answer with it, so walk it down in steps.
+    let mut f = to_f(&q);
+    let mut exp = -(shift as i32);
+    while exp < -1000 {
+        f *= (2f64).powi(-1000);
+        exp += 1000;
     }
+    f * (2f64).powi(exp)
 }
 
 /// A `Time`'s exact instant in seconds since the epoch, as
@@ -4540,6 +4555,12 @@ mod tests {
             8210266876799,    // year 262142, the last monoruby can build
             -62135596800,     // year 1
             -62135596801,     // year 0
+            // …and the years before it, where the sign goes on top of
+            // the four digits rather than inside them.
+            -62167219201,     // year -1, its last second
+            -62198755200,     // …and its first
+            -95617584000,     // year -1060
+            -8300000000000,   // year -261047, the earliest monoruby builds
             0,
         ] {
             for r in [
@@ -4641,6 +4662,45 @@ mod tests {
                [a == b, a.eql?(b), a <=> b, b <=> a, a.hash == b.hash]"#
                 .to_string(),
         );
+        let refs: Vec<&str> = v.iter().map(|s| s.as_str()).collect();
+        run_tests(&refs);
+    }
+
+    /// A sub-nanosecond remainder too wide for a Fixnum.
+    ///
+    /// It rides the same path as any other, but the `:nano_num` /
+    /// `:nano_den` pair a `Marshal.dump` writes for it is a bignum, and
+    /// so is the `#subsec` that comes back. The reads are spelled as
+    /// Strings because the harness cannot rebuild a Rational whose two
+    /// halves are both bignums.
+    ///
+    /// `#to_f` and `#-` are *not* compared here. CRuby converts these
+    /// through `rb_Float` on its own wide-int form, which is neither
+    /// the correctly rounded quotient nor `Rational#to_f`: `(Time.at(0)
+    /// + Rational(1, 10**34)).to_f` is `1.0000000000000001e-34` there
+    /// against the exact `9.9999999999999993e-35`, and a denominator
+    /// past `10**320` makes it `NaN` outright. `bigint_ratio_to_f64`
+    /// answers the correctly rounded double, which agrees with CRuby
+    /// for every ratio a `Time` could hold before #1416 and differs
+    /// only in this new band — where #1416 says of exactly this
+    /// difference that CRuby is the less accurate of the two and it is
+    /// "not worth matching".
+    #[test]
+    fn time_exact_subsec_bignum() {
+        let mut v: Vec<String> = vec![];
+        for b in [
+            "Time.at(0, Rational(1, 10**25), :nanosecond)",
+            "Time.at(0) + Rational(1, 2**70)",
+            "Time.at(3) - Rational(1, 10**30)",
+            "Time.at(0) + Rational(1, 3) + Rational(1, 2**64)",
+        ] {
+            for r in ["subsec.to_s", "to_r.to_s", "nsec", "inspect", "usec", "utc?"] {
+                v.push(format!("({b}).{r}"));
+            }
+            v.push(format!("Marshal.dump({b}).bytes"));
+            v.push(format!("Marshal.load(Marshal.dump({b})).subsec.to_s"));
+            v.push(format!("Marshal.load(Marshal.dump({b})) == ({b})"));
+        }
         let refs: Vec<&str> = v.iter().map(|s| s.as_str()).collect();
         run_tests(&refs);
     }

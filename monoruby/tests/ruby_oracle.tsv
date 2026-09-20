@@ -1322,6 +1322,7 @@
 57f002dbbc2a38d20a751f8e1d4218fe	[255, 15, 240, -1, 15, -16, 42, 0, 42, 42, -43, 244837815148286, 304366200, 244837510782086]	def or_a; 0xFF | 0x0F; end\n            def and_a; 0xFF & 0x0F; end\n
 57f22a05e8acf18b24e3a1c7b3e4f9a8	[false, :c, false, :cf, :c]	class A; end\n            class B; end\n            class C; end\n    
 5802c597582fbeab79b6c6ee6bfe6fed	[true, false]	a = ["a","b","c"]\n        \n\n            [a.include?("b"), a.include
+5810dbac09deae097c946aecf7bc4fe0	[333333333, 333333333]	t = Time.at(0) + Rational(1, 3)\n            d = Marshal.dump(t)\n   
 581a9eeda65b4118ca39d22e6e34f801	[:caught, "boom"]	class C\n              def initialize; @h = {}; end\n              de
 582de92dfc668c66f3fca99c56ea0221	9	M = Data.define(:amount, :unit)\nM.new("amount" => 1, amount: 9, unit: "m").amoun
 58330bef80223af992dc7623e3ec3084	[312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3]]	def g(x, y, z)\n          x, y, z = z, x, y\n          x * 100 + y * 10 +
@@ -3567,6 +3568,7 @@ ed8c3ce68eb282255788408da9a12b8a	"UTF-8"	Encoding.default_internal = Encoding::U
 ed9d8e2f202ed982f57795adbdcbe43f	3	File.write("/tmp/foo", "woo")
 ed9eb5bf08edb4fb19ef55071777ac61	["a", "b"]	def foo(&block)\n        ["a","b"].each { |e| block.call(e) }\n\t    end\n    
 eda7a759e9b973f854bd82f3e9fc91f6	"nil"	begin; raise "a"; rescue; end\n            begin; raise "b"; rescue 
+edb2df6938e895009dd0c660f4b52e04	[1, 12, 123, 333333333, 999999999, 123456789, 500000001]	def as_191(t)\n              d = Marshal.dump(t)\n              i = d
 edb5dbcaeaf97748d60848f2d876bf85	87520950	a = 0\n        for x in 0..20\n          for y in 0..20\n            for z
 edb915162043d994549434f1c1361e14	[true, :redefined]	M = 0xffff_ffff_ffff_ffff\n        def t(x) = x <= M\n        r = []\n    
 edd7521592e8b800133323de5557ca5d	[[1, 0], [2, 1]]	r = []; [1, 2].each.with_index { |v, i| r << [v, i] }; r
