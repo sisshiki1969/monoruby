@@ -1,5 +1,4 @@
-extern crate monoruby;
-use monoruby::tests::{ensure_extension, ruby_path};
+use monoruby_test_support::{build_extension as ensure_extension, ruby_path};
 use std::process::Command;
 
 // hexapdf (a pure-Ruby PDF library) compresses every content stream with

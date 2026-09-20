@@ -12,9 +12,7 @@
 //! the gem (CI installs `erubi`, `chunky_png` and the rubocop gems), and
 //! the psych one skips on a host whose libyaml predates 0.2.3.
 
-extern crate monoruby;
-use monoruby::tests::ensure_extension;
-use monoruby::tests::ruby_path;
+use monoruby_test_support::{build_extension as ensure_extension, ruby_path};
 use std::path::PathBuf;
 use std::process::Command;
 

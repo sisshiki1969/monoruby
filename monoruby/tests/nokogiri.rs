@@ -5,8 +5,7 @@
 //! under the host CRuby (with rubygems, so not through the snapshot
 //! oracle) and the outputs must match byte for byte. Skips when the host
 //! ruby has no nokogiri (CI installs it).
-extern crate monoruby;
-use monoruby::tests::{ensure_extension, ruby_path};
+use monoruby_test_support::{build_extension as ensure_extension, ruby_path};
 use std::process::Command;
 
 fn gem_available(name: &str) -> bool {

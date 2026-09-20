@@ -114,6 +114,9 @@ console = "0.15.11"
 fxhash = "0.2.1"
 memchr = "2"
 tempfile = "3.27.0"
+# The interpreter-free half of the test harness. `tests` is part of this
+# lib (integration tests import it), so this is a normal dependency.
+monoruby_test_support = { path = "../monoruby_test_support" }
 dtoa = "1.0.11"
 chrono = "0.4.44"
 encoding_rs = "0.8"
@@ -178,3 +181,9 @@ zlib_native = { path = "../ext/zlib", artifact = "cdylib", lib = false, target =
 zstd_native = { path = "../ext/zstd", artifact = "cdylib", lib = false, target = "target", default-features = false }
 psych_native = { path = "../ext/psych", artifact = "cdylib", lib = false, target = "target" }
 nokogiri_native = { path = "../ext/nokogiri", artifact = "cdylib", lib = false, target = "target" }
+
+[dev-dependencies]
+# For the integration tests that only spawn processes: importing these
+# helpers from `monoruby::tests` would link the interpreter into their
+# binaries for nothing.
+monoruby_test_support = { path = "../monoruby_test_support" }

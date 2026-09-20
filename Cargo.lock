@@ -1118,6 +1118,7 @@ dependencies = [
  "monoasm_macro",
  "monoruby-attr",
  "monoruby-ext-sys",
+ "monoruby_test_support",
  "nokogiri_native",
  "num",
  "onigmo-regex",
@@ -1162,6 +1163,10 @@ dependencies = [
 
 [[package]]
 name = "monoruby-ext-sys"
+version = "0.1.0"
+
+[[package]]
+name = "monoruby_test_support"
 version = "0.1.0"
 
 [[package]]
