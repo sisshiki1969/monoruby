@@ -2374,10 +2374,13 @@ fn marshal_dump_value(
                             )));
                         }
                         let class_name_id = IdentId::get_id(&class_name);
-                        let msg = obj
+                        // Whether a message was ever given. CRuby stores
+                        // nil in `:mesg` until one is, and an exception
+                        // that still carries its deferred default has not
+                        // been given one.
+                        let msg_unset = obj
                             .is_exception()
-                            .map(|e| e.message().to_string())
-                            .unwrap_or_default();
+                            .is_some_and(|e| e.default_message_class.is_some());
                         let user_ivars = globals.get_ivars(obj);
                         // `#cause` is kept in the internal `/cause` slot,
                         // which `get_ivars` hides; CRuby dumps it as a
@@ -2403,11 +2406,9 @@ fn marshal_dump_value(
                             (2 + usize::from(cause.is_some()) + user_ivars.len()) as i32,
                         );
                         // :mesg — CRuby stores nil until a message is
-                        // explicitly given; monoruby always materializes
-                        // the default (the class name), so treat a message
-                        // equal to the class name as "unset".
+                        // explicitly given.
                         marshal_write_symbol(buf, IdentId::get_id("mesg"), symbols);
-                        if msg == class_name {
+                        if msg_unset {
                             buf.push(b'0'); // nil
                         } else {
                             // The message's *own* bytes and encoding, not
