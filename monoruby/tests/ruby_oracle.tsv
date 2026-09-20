@@ -292,6 +292,7 @@
 0ea12292e6120b88a2aa0b88f1830d5e	[-1, 0, 0, 0, true, false, false, true]	__a = [];__a << ("\\xc3".casecmp("\\xe3"));__a << ("\\xc3".casecmp("\\xc3"));__a << 
 0eb451479b9e3deffa5ff499cb00893c	[:private_answer]	class P\n          def method_missing(name, *args) = :missed\n          p
 0ec3628a644993ceba6c22fb3d0a00d9	[[[1, 2], {x: 3}, "blk"], [[[7, 8], {}, nil]]]	def inner(*a, **k, &b) = [a, k, b ? b.call : nil]\n        def fwd(*, **
+0ec6154b8e79917f352d1bb26c1ef181	[[227, 129, 130], 384, 1, false]	d = "/tmp/monoruby_test_rawpath_#{Process.pid}_#{rand(100000)}"\n   
 0ec621d058e56d2405776dcff5d7c373	["10 20 10", "a b a", "20", "00042", "ff", "10", "3.140000", "hello", "1 2", "x x", "42", "00042", "        42", "ff", "3.140000", "hello", "     00001", "00001     ", "00001     ", "00001     ", "         1", "   42", "   42", "abc", "         7"]	__a = [];__a << (sprintf("%1$d %2$d %1$d", 10, 20));__a << (sprintf("%1$s %2$s %
 0ed19825320ad4f01be8637520de3fe5	[[0, 0, 0], [0, 1, 0], [1, 0, 0], [1, 1, 0], [2, 0, 0], [2, 1, 0]]	res = []\n        3.times do |i|\n          2.times do |j|\n            1.
 0ed9e8d09d16c423c6e622570359536f	[["MONORUBY_ENV_TEST_ASSOC", "yes"], nil]	ENV["MONORUBY_ENV_TEST_ASSOC"] = "yes"\n            r = ENV.assoc("M
@@ -1400,6 +1401,7 @@
 4b6fe109f1f968bc1a8d4646ba46c194	"377"	class HasToInt; def to_int; 255; end; end\n            sprintf("%o",
 4b91108237bdda9802ca4299f4114874	[[:singleton_method_added, :singleton_method_added], [:method_added, :foo], [:singleton_method_added, :foo]]	$res = []\n            module M\n              def self.method_added(
 4b97615f1fd9c5dced851f3adf53042b	[:thrown, [:ens]]	$log = []\n            r = catch(:t) do\n              begin\n        
+4b998c100dbe735e23675ef9ca09e8a1	[true, true, true, true, true]	(fs=Encoding.find("filesystem"); [Dir.home.encoding == fs, Dir.home("root").enco
 4ba2572278d477946c8815ee58fef0de	"hello"	class Foo\n              def hello; "hello"; end\n              alias
 4bb8dfa79710364063ae0b96416ec24a	"[C2, C1, M, Object, Kernel, BasicObject]"	module M\n            end\n            class C1\n              include
 4be82552906332efdc535e4cb0bd01a5	[[[1, 0], [1, 0, 0], [255]], [1, 0], [[104, 233, 108, 108, 112], "ISO-8859-1"], [[104, 233, 108, 108, 111], "ISO-8859-1"], [[120, 32, 104, 233, 108, 108, 111, 32, 121], "ISO-8859-1"], [[255], "ASCII-8BIT"], [[233, 61, 51], "ISO-8859-1"], [255, 15, 42], ["\\"h\\\\xE9llo\\"", "ISO-8859-1"], ["\\"\\\\xFF\\"", "ASCII-8BIT"]]	__a = [];__a << (["\\xFF".b.succ.bytes, "\\xFF\\xFF".b.succ.bytes, "\\xFE".b.succ.by
@@ -2480,6 +2482,7 @@
 885c5c5cd9175193870499b63f8d37c1	[:shared]	blk = proc { :shared }\n        class BmShared; end\n        BmShared.sen
 8862e607912266fe599af62e8d8b9786	[20, ["a", "b", "c"], ["a", "b"], ["foo", "bar", "baz"], ["p1\\n\\n", "p2\\n\\n", "p3"], [[227, 129, 130, 10], [227, 129, 132, 10], [227, 129, 134, 10]], ["p\\n", "q\\n", "r\\n"], [122, 89], ["foo", "bar", "baz"], [["a", "1"], ["b", "2"], ["c", "3"]], [], ["FOO", "BAR"], "2", [[99, 97, 102], [114], [115, 117, 109]], [84, 88], [[99], [97], [102], [195, 169]], [true, true], [true, false], [true, false, true], ["X", "Y", "Z"]]	__a = [];__a << ((("x"*40 + "\\n") * 20).lines.length);__a << ("a\\nb\\nc\\n".lines(
 88778584fffee7596996a5615e83172b	[true, true]	__a = [];__a << (binding.receiver == self);__a << (TOPLEVEL_BINDING.receiver.equ
+888bbcf3e6269bd6814a9c2c4a8d1543	[true, true]	sym = "/tmp/monoruby_test_rl_enc_#{Process.pid}_#{rand(100000)}.sym
 889ef2d076f0c4bf33ee8cb138f1383a	[:a, "b"]	module M\n              def a; 1; end\n              def b; 2; end\n  
 88b402e7fdaa8b2f9583d10a43b30b83	[true, false, true, false, true]	class C\n          def pub_method; end\n          private\n          def p
 88b74eaedd70ab6521c45c598a99a423	:OVERRIDDEN	class Float; def <=(o); :OVERRIDDEN; end; end; 3.0 <= 4.0
@@ -3329,6 +3332,7 @@ b82f7004e67d1dce1e4af8e9795a0307	:OVERRIDDEN	class FalseClass; def !; :OVERRIDDE
 b831c7c725c3ecbf2dd649e236c9fbcd	"Hello world"	"hello world".capitalize
 b838044a3ab73c7623063d1b22818274	[1, 2, [5, 6], 3, 4]	def f\n          yield [1,2,3,4,5,6]\n        end\n        \n\n        f { |
 b843b98c578472cd813d8c5ddb8158b4	"f"	def f\n          "f"\n        end\n        alias g f\n        g\n        
+b8529860fdc3802182dd091eef8175ea	[true, true, true, true, :incompat]	(fs=Encoding.find("filesystem"); f=->(s){ File.expand_path(s).encoding == fs }; 
 b857ede9f6bd08a0272c61d48b93bbc1	[1, 5, 1, true, 5, [true, true, true, true, true]]	class String\n          def hash; 42; end\n          def eql?(o); false; 
 b85aa27afabd41f49479b590bb38e22f	[4, 8, 73, 99, 25, 77, 66, 83, 112, 101, 99, 58, 58, 87, 105, 100, 101, 227, 129, 130, 67, 108, 97, 115, 115, 6, 58, 6, 69, 84]	module MBSpec; end\n            name = "WideあClass"\n            MBSp
 b8659d9eac8d9dda73d245a1976bcfbd	256	253.succ.succ.succ
@@ -3994,6 +3998,7 @@ dcfeee4a0f36c226b961d97eee897e9b	true	(require "stringio"; old=$VERBOSE; $VERBOS
 dd2b361456941a89426a35f2ba5e5ada	[{a: 1, c: 3}, {}, {a: 1, b: nil}, [{a: 1}, true], nil]	__a = [];__a << ({a: 1, b: nil, c: 3}.compact);__a << ({a: nil, b: nil}.compact)
 dd3c071c4a6f6953708de611a7d532e1	true	d = Dir.new("/tmp")\n            begin\n              fd = d.fileno\n 
 dd59ae7dd4e6777883a269edec790eb4	[[195], 2]	s = "\\303\\251\\303".dup.force_encoding(Encoding::Windows_31J)\n               m = 
+dd5a65ce6fbcd2bfd6eff700dadf5c13	[[[[97], "US-ASCII"], [[195, 163, 194, 129, 194, 130], "ASCII-8BIT"]], [[[97], "UTF-8"], [[195, 163, 194, 129, 194, 130], "UTF-8"]], [[[97], "ASCII-8BIT"], [[195, 163, 194, 129, 194, 130], "ASCII-8BIT"]], ["US-ASCII", "US-ASCII", "US-ASCII", "ASCII-8BIT"]]	(d="/tmp/mono_eu_#{Process.pid}"; Dir.mkdir(d); n="ã".dup.force_encoding("bina
 dd6ba415513db8cf6aad7ef750eaedc1	[99, 97, 102, 101, 204, 129]	s = "café".dup\n            s.unicode_normalize!(:nfd)\n            s
 dd7215ba379fc74d14dd5dd32b95ff3e	"circular causes"	begin\n              begin\n                raise "Error 1"\n         
 dd8750e730148376d88a9f3c0768a481	[true, true, true, true, true, true]	_r, w = IO.pipe\n            [\n              w.wait(:w, 0) == w,\n   
