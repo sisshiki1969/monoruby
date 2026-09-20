@@ -4,6 +4,7 @@ pub(crate) mod argf;
 mod arithmetic_sequence;
 pub(crate) mod array;
 mod bcrypt;
+mod crypt;
 mod binding;
 mod bool_class;
 mod class;
@@ -154,6 +155,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     digest::init(globals);
     cipher::init(globals);
     bcrypt::init(globals);
+    crypt::init(globals);
     markly::init(globals);
     prism::init(globals);
     object_space::init(globals);
