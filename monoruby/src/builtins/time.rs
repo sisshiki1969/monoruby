@@ -938,11 +938,26 @@ fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/asctime.html]
 #[monoruby_builtin]
 fn asctime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t, _) => t.format("%a %b %e %H:%M:%S %Y").to_string(),
-        TimeInner::Utc(t) => t.format("%a %b %e %H:%M:%S %Y").to_string(),
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    // The year is spelled here rather than by chrono, which writes a
+    // five-digit one as `+10000`.
+    let s = match t {
+        TimeInner::Local(dt, _) => dt.format("%a %b %e %H:%M:%S").to_string(),
+        TimeInner::Utc(dt) => dt.format("%a %b %e %H:%M:%S").to_string(),
     };
-    Ok(Value::string(s))
+    Ok(Value::string(format!("{s} {}", year_digits(t.year()))))
+}
+
+/// A year as `%Y` spells it: at least four digits, and the sign on top
+/// of them rather than inside them. chrono writes anything past four
+/// digits as `+10000`, where Ruby writes `10000`.
+fn year_digits(y: i32) -> String {
+    if y < 0 {
+        format!("-{:04}", -(y as i64))
+    } else {
+        format!("{y:04}")
+    }
 }
 
 fn precision_arg(vm: &mut Executor, globals: &mut Globals, lfp: &Lfp) -> Result<u32> {
@@ -2875,12 +2890,17 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         TimeInner::Local(dt, _) => {
             format!(
                 "{}{} {}",
-                dt.format("%Y-%m-%d %H:%M:%S"),
+                format_args!("{}-{}", year_digits(t.year()), dt.format("%m-%d %H:%M:%S")),
                 frac,
                 dt.format("%z")
             )
         }
-        TimeInner::Utc(dt) => format!("{}{} UTC", dt.format("%Y-%m-%d %H:%M:%S"), frac),
+        TimeInner::Utc(dt) => format!(
+            "{}-{}{} UTC",
+            year_digits(t.year()),
+            dt.format("%m-%d %H:%M:%S"),
+            frac
+        ),
     };
     let mut v = Value::string(body);
     // CRuby returns `Time#inspect` as a US-ASCII string.
@@ -3475,11 +3495,15 @@ const MONTH_UPPER_FULL: [&str; 12] = [
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_s.html]
 #[monoruby_builtin]
 fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t, _) => t.format("%Y-%m-%d %H:%M:%S %z"),
-        TimeInner::Utc(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
-    }
-    .to_string();
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    // The year is spelled here rather than by chrono, which writes a
+    // five-digit one as `+10000`.
+    let rest = match t {
+        TimeInner::Local(dt, _) => dt.format("%m-%d %H:%M:%S %z"),
+        TimeInner::Utc(dt) => dt.format("%m-%d %H:%M:%S UTC"),
+    };
+    let s = format!("{}-{rest}", year_digits(t.year()));
     let mut v = Value::string(s);
     // CRuby returns `Time#to_s` as a US-ASCII string (like `#inspect`).
     v.as_rstring_inner_mut()
@@ -4052,9 +4076,14 @@ impl std::ops::Add<Duration> for TimeInner {
 
 impl std::fmt::Display for TimeInner {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        // The year goes through `year_digits` for the same reason
+        // `%Y` does: chrono spells a five-digit one `+10000`.
+        let year = year_digits(self.year());
         match self {
-            TimeInner::Local(t, _) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S %z")),
-            TimeInner::Utc(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S UTC")),
+            TimeInner::Local(t, _) => {
+                write!(f, "{year}-{}", t.format("%m-%d %H:%M:%S %z"))
+            }
+            TimeInner::Utc(t) => write!(f, "{year}-{}", t.format("%m-%d %H:%M:%S UTC")),
         }
     }
 }
@@ -4493,6 +4522,45 @@ mod tests {
         for f in ["%", "%-", "%12", "%_", "abc%", "%:%", "%::%", "%12:%", "%E%", "%O%"] {
             run_test_error(&format!(r#"Time.utc(2001,1,1).strftime({f:?})"#));
         }
+    }
+
+    /// A year past four digits, in the renderers that do not go
+    /// through `%Y`.
+    ///
+    /// `#to_s`, `#inspect` and `#asctime` handed the year to chrono,
+    /// which spells anything past four digits `+10000` where Ruby
+    /// spells it `10000` — reachable with `Time.at(253402300800)`,
+    /// well inside the range monoruby supports.
+    #[test]
+    fn time_five_digit_year_rendering() {
+        let mut v: Vec<String> = vec![];
+        for secs in [
+            253402300800i64,  // year 10000, the first five-digit one
+            253402300799,     // …and the last four-digit one
+            8210266876799,    // year 262142, the last monoruby can build
+            -62135596800,     // year 1
+            -62135596801,     // year 0
+            0,
+        ] {
+            for r in [
+                "to_s",
+                "inspect",
+                "asctime",
+                "ctime",
+                r#"strftime("%c")"#,
+                r#"strftime("%Y")"#,
+                r#"strftime("%F")"#,
+                "to_a[5]",
+                "year",
+            ] {
+                v.push(format!("Time.at({secs}).utc.{r}"));
+                // …and at an offset, which can carry the wall clock
+                // over the boundary on its own.
+                v.push(format!(r#"Time.at({secs}).getlocal("+09:00").{r}"#));
+            }
+        }
+        let refs: Vec<&str> = v.iter().map(|s| s.as_str()).collect();
+        run_tests(&refs);
     }
 
     /// A `Time`'s sub-second value below the nanosecond (#1416).
