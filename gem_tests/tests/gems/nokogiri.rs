@@ -5,8 +5,7 @@
 //! under the host CRuby (with rubygems, so not through the snapshot
 //! oracle) and the outputs must match byte for byte. Skips when the host
 //! ruby has no nokogiri (CI installs it).
-extern crate monoruby;
-use monoruby::tests::{ensure_extension, ruby_path};
+use monoruby_test_support::{build_extension as ensure_extension, ruby_path};
 use std::process::Command;
 
 fn gem_available(name: &str) -> bool {
@@ -45,7 +44,7 @@ fn compare(script: &str) {
     let mut ruby = Command::new(ruby_path());
     ruby.args(["-E", "UTF-8", "-e", &script]);
     let expected = run(ruby);
-    let mut mono = Command::new(env!("CARGO_BIN_EXE_monoruby"));
+    let mut mono = Command::new(env!("CARGO_BIN_FILE_MONORUBY_monoruby"));
     mono.env("MONORUBY_EXT_PATH", ensure_extension("nokogiri_native"));
     mono.args(["-e", &script]);
     let got = run(mono);

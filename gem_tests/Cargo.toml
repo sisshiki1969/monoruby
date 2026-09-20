@@ -1,0 +1,23 @@
+[package]
+name = "gem_tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# One crate for every test that needs a *third-party gem* installed for
+# the host CRuby. They were ten files under `monoruby/tests/`, which is
+# ten test binaries; here they are ten modules of one target, so one.
+#
+# The boundary is "CI has to `gem install` something for it". monoruby's
+# own stdlib and bundled extensions (sqlite3, psych, zlib, strscan,
+# bigdecimal) are not that, and stay with the interpreter.
+
+[dependencies]
+
+[dev-dependencies]
+monoruby_test_support = { path = "../monoruby_test_support" }
+# `lib` for the in-process tests (`monoruby::tests::run_test`), `artifact`
+# for the spawning ones: `CARGO_BIN_EXE_*` only exists for tests of the
+# package that defines the binary, so the path arrives as
+# `CARGO_BIN_FILE_MONORUBY_monoruby` instead.
+monoruby = { path = "../monoruby", artifact = "bin", lib = true }

@@ -679,6 +679,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gem_tests"
+version = "0.1.0"
+dependencies = [
+ "monoruby",
+ "monoruby_test_support",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1118,6 +1126,7 @@ dependencies = [
  "monoasm_macro",
  "monoruby-attr",
  "monoruby-ext-sys",
+ "monoruby_test_support",
  "nokogiri_native",
  "num",
  "onigmo-regex",
@@ -1162,6 +1171,10 @@ dependencies = [
 
 [[package]]
 name = "monoruby-ext-sys"
+version = "0.1.0"
+
+[[package]]
+name = "monoruby_test_support"
 version = "0.1.0"
 
 [[package]]

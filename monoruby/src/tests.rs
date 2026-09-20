@@ -2,23 +2,15 @@ use crate::*;
 use std::{io::Write, path::PathBuf};
 use tempfile::NamedTempFile;
 
-use std::sync::LazyLock;
 
-// Note: static items do not call [`Drop`] on program termination, so this won't be deallocated.
-// this is fine, as the OS can deallocate the terminated program faster than we can free memory
-// but tools like valgrind might report "memory leaks" as it isn't obvious this is intentional.
-static RUBY: LazyLock<String> = LazyLock::new(|| {
-    // M3 Ultra takes about 16 million years in --release config
-    find_ruby()
-});
-
-/// The reference CRuby the harness resolved (PATH, then rbenv/rvm shims —
-/// see [`find_ruby`]). Integration tests that spawn `ruby` themselves must
-/// use this rather than `Command::new("ruby")`, which breaks in shells
-/// where only a version manager provides Ruby.
-pub fn ruby_path() -> &'static str {
-    &RUBY
-}
+/// The reference CRuby the harness resolved (PATH, then rbenv/rvm shims).
+/// Integration tests that spawn `ruby` themselves must use this rather
+/// than `Command::new("ruby")`, which breaks in shells where only a
+/// version manager provides Ruby.
+///
+/// Re-exported from `monoruby_test_support` so a test that only spawns
+/// processes can take it from there and not link the interpreter.
+pub use monoruby_test_support::ruby_path;
 
 /// The install root this build baked into the binary — the tree
 /// `build.rs` populates with the vendored stdlib, the startup Ruby, the
@@ -48,45 +40,8 @@ pub fn extensions_installed() -> bool {
 /// the tests run, and a nested `cargo build` on it would wait forever.
 /// Once per process; a build failure panics with cargo's output.
 pub fn ensure_extension(name: &str) -> PathBuf {
-    use std::sync::Mutex;
-    static BUILT: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    let mut built = BUILT.lock().unwrap();
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
-    // The library must be built for the arch this test binary runs on,
-    // which under `bin/test-aarch64` (a cross build run in qemu) is not
-    // the build host's; naming the triple explicitly covers both.
-    let triple = format!(
-        "{}-{}",
-        std::env::consts::ARCH,
-        if cfg!(target_os = "macos") { "apple-darwin" } else { "unknown-linux-gnu" }
-    );
-    let target = workspace.join("target/ext");
-    let dir = target.join(&triple).join(profile);
-    if built.iter().any(|n| n == name) {
-        return dir;
-    }
-    let mut cmd = std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
-    cmd.current_dir(&workspace)
-        .args(["build", "-p", name, "--target", &triple, "--target-dir"])
-        .arg(&target);
-    if profile == "release" {
-        cmd.arg("--release");
-    }
-    // Not part of the coverage measurement: under `cargo llvm-cov` the
-    // instrumentation flags and profile path are in the environment, and
-    // a second profiler runtime inside the loaded library is not wanted.
-    for var in ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "LLVM_PROFILE_FILE", "CARGO_INCREMENTAL"] {
-        cmd.env_remove(var);
-    }
-    let out = cmd.output().expect("failed to run cargo");
-    assert!(
-        out.status.success(),
-        "building extension {name} failed:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let dir = monoruby_test_support::build_extension(name);
     crate::ext::add_search_dir(dir.clone());
-    built.push(name.to_string());
     dir
 }
 
@@ -167,6 +122,28 @@ pub fn run_test_once_live(code: &str) {
 }
 
 pub fn run_tests<S: AsRef<str>>(codes: &[S]) {
+    run_tests_inner(codes, Oracle::Snapshot);
+}
+
+///
+/// `run_tests` against a live CRuby, never the snapshot.
+///
+/// For the generated suites: `run_binop_tests` and friends build their
+/// code strings from operand and operator lists, so editing a list
+/// rewrites every string it feeds and the snapshot would fill with
+/// entries nothing asks for again. A hand-written `run_tests` array is
+/// stable and belongs in the snapshot; a generated one does not.
+///
+pub fn run_tests_live<S: AsRef<str>>(codes: &[S]) {
+    run_tests_inner(codes, Oracle::Live);
+}
+
+enum Oracle {
+    Snapshot,
+    Live,
+}
+
+fn run_tests_inner<S: AsRef<str>>(codes: &[S], oracle: Oracle) {
     let mut code = "__a = [];".to_string();
     for c in codes {
         let c = c.as_ref();
@@ -186,8 +163,12 @@ pub fn run_tests<S: AsRef<str>>(codes: &[S]) {
     );
     eprintln!("{}", wrapped);
     let mut globals = Globals::new_test();
-    let interp_val = run_test_main(&mut globals, &wrapped).as_array();
-    let ruby_res = run_ruby_live(&mut globals, &code).as_array();
+    let interp = run_test_main(&mut globals, &wrapped);
+    let ruby = match oracle {
+        Oracle::Snapshot => run_ruby(&mut globals, &code, interp),
+        Oracle::Live => run_ruby_live(&mut globals, &code),
+    };
+    let (interp_val, ruby_res) = (interp.as_array(), ruby.as_array());
 
     for i in 0..codes.len() {
         let interp_elem = interp_val.get(i).unwrap();
@@ -195,7 +176,6 @@ pub fn run_tests<S: AsRef<str>>(codes: &[S]) {
         eprintln!("{}", codes[i].as_ref());
         Value::assert_eq(&globals, *interp_elem, *ruby_elem);
     }
-    //Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
 pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
@@ -218,7 +198,7 @@ pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
             }
         }
     }
-    run_tests(&test);
+    run_tests_live(&test);
 }
 
 pub fn run_binop_tests2(lhs: &[&str], op: &[&str], rhs: &[&str]) {
@@ -231,7 +211,7 @@ pub fn run_binop_tests2(lhs: &[&str], op: &[&str], rhs: &[&str]) {
             }
         }
     }
-    run_tests(&test);
+    run_tests_live(&test);
 }
 
 pub fn run_unop_tests(op: &[&str], rhs: &[&str]) {
@@ -241,7 +221,7 @@ pub fn run_unop_tests(op: &[&str], rhs: &[&str]) {
             test.extend_from_slice(&[format!("{op} ({rhs})"), format!("{op} (-{rhs})")]);
         }
     }
-    run_tests(&test);
+    run_tests_live(&test);
 }
 
 pub fn run_test_with_prelude(code: &str, prelude: &str) {
@@ -285,8 +265,9 @@ pub fn run_tests2<S: AsRef<str>>(codes: &[S]) {
     code += "__a";
     eprintln!("{code}");
     let mut globals = Globals::new_test();
-    let interp_val = run_test_main(&mut globals, &code).as_array();
-    let ruby_res = run_ruby_live(&mut globals, &code).as_array();
+    let interp = run_test_main(&mut globals, &code);
+    let ruby = run_ruby(&mut globals, &code, interp);
+    let (interp_val, ruby_res) = (interp.as_array(), ruby.as_array());
 
     for i in 0..codes.len() {
         let interp_elem = interp_val.get(i).unwrap();
@@ -409,7 +390,7 @@ fn spawn_ruby(code: &str) -> String {
     // the same on every host and runner. The locale behaviour itself is
     // covered by `tests/encoding_locale.rs`, which spawns the binary
     // with the environment it wants.
-    let res = match std::process::Command::new(&*RUBY)
+    let res = match std::process::Command::new(ruby_path())
         .arg("-E")
         .arg("UTF-8")
         // Skip rubygems boot (~5x faster startup across the differential
@@ -420,7 +401,7 @@ fn spawn_ruby(code: &str) -> String {
     {
         Ok(output) => String::from_utf8(output.stdout).unwrap(),
         Err(err) => {
-            panic!("failed to invoke ruby ({}). {}", *RUBY, err);
+            panic!("failed to invoke ruby ({}). {}", ruby_path(), err);
         }
     };
 
@@ -430,59 +411,6 @@ fn spawn_ruby(code: &str) -> String {
 /// Minimum CRuby version the test harness compares output against.
 /// monoruby's startup files mirror Ruby 4.x semantics (e.g. the new Hash
 /// inspect form), so older Rubies on PATH would produce spurious diffs.
-const MIN_RUBY_VERSION: (u32, u32) = (4, 0);
-
-/// Returns true when `ruby_cmd` exists and reports a version `>=
-/// MIN_RUBY_VERSION`.
-fn ruby_version_ok(ruby_cmd: &str) -> bool {
-    let Ok(output) = std::process::Command::new(ruby_cmd)
-        .args(["-e", "puts RUBY_VERSION"])
-        .output()
-    else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let s = String::from_utf8_lossy(&output.stdout);
-    let mut parts = s.trim().split('.').map(|p| p.parse::<u32>().ok());
-    let major = parts.next().flatten();
-    let minor = parts.next().flatten();
-    match (major, minor) {
-        (Some(maj), Some(min)) => (maj, min) >= MIN_RUBY_VERSION,
-        _ => false,
-    }
-}
-
-/// Locate a `ruby` executable that is at least `MIN_RUBY_VERSION`.
-/// Tries the system PATH first, then falls back to common rbenv/rvm shim
-/// paths. A too-old Ruby on PATH (e.g. system 3.0 on Debian) is skipped
-/// so tests run against the rbenv-managed Ruby instead.
-fn find_ruby() -> String {
-    // Already on PATH and recent enough?
-    if ruby_version_ok("ruby") {
-        return "ruby".to_string();
-    }
-    // rbenv shim — defers to the version selected by ~/.rbenv/version.
-    if let Some(home) = std::env::var_os("HOME") {
-        let shim = std::path::PathBuf::from(home).join(".rbenv/shims/ruby");
-        if let Some(shim_str) = shim.to_str() {
-            if ruby_version_ok(shim_str) {
-                return shim_str.to_string();
-            }
-        }
-    }
-    // rvm
-    if let Some(home) = std::env::var_os("HOME") {
-        let rvm = std::path::PathBuf::from(home).join(".rvm/bin/ruby");
-        if let Some(rvm_str) = rvm.to_str() {
-            if ruby_version_ok(rvm_str) {
-                return rvm_str.to_string();
-            }
-        }
-    }
-    "ruby".to_string() // last resort — will fail with a clear error message
-}
 
 /// Snapshot oracle: a checked-in cache of CRuby reference outputs.
 ///

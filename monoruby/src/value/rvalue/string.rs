@@ -12,42 +12,77 @@ use std::cmp::Ordering;
 pub mod pack;
 mod printable;
 
-/// Width (in bytes) of the *valid* EUC-JP character starting at
-/// `b[0]`, or `None` if no valid character starts there. Encodes the
-/// onigenc EUC-JP rules: ASCII (1); `0x8E`+kana (2, JIS X 0201);
-/// `0x8F`+2 (3, JIS X 0212); `0xA1..=0xFE` pair (2, JIS X 0208).
+/// The widest an EUC-JP character gets (onigenc's `mbmaxlen`).
+pub(crate) const EUCJP_MAX_LEN: usize = 3;
+
+/// The widest a Shift_JIS character gets.
+pub(crate) const SJIS_MAX_LEN: usize = 2;
+
+/// Classify the EUC-JP sequence starting at `bytes[pos]`.
+///
+/// The lead byte fixes the width — ASCII (1); `0x8E` + 1 (2, JIS X
+/// 0201 katakana); `0x8F` + 2 (3, JIS X 0212); `0xA1..=0xFE` + 1 (2,
+/// JIS X 0208) — and every byte after it must be `0xA1..=0xFE`.
+/// `0x80..=0x8D`, `0x90..=0xA0` and `0xFF` lead nothing.
+///
+/// Read off onigenc's own answers: `0x8E`'s second byte is the full
+/// `0xA1..=0xFE`, not just the `0xA1..=0xDF` the kana block occupies,
+/// so `"\x8E\xFC"` is a valid two-byte character to CRuby.
+pub(crate) fn eucjp_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    let len = match lead {
+        0x00..=0x7f => return PreciseLen::Char(1),
+        0x8e | 0xa1..=0xfe => 2,
+        0x8f => 3,
+        _ => return PreciseLen::Invalid,
+    };
+    for i in 1..len {
+        match bytes.get(pos + i) {
+            None => return PreciseLen::NeedMore,
+            Some(0xa1..=0xfe) => {}
+            Some(_) => return PreciseLen::Invalid,
+        }
+    }
+    PreciseLen::Char(len)
+}
+
+/// Classify the Shift_JIS / CP932 sequence starting at `bytes[pos]`.
+///
+/// ASCII and the `0xA1..=0xDF` half-width kana stand alone; a
+/// `0x81..=0x9F | 0xE0..=0xFC` lead takes a `0x40..=0x7E | 0x80..=0xFC`
+/// trail. `0x80`, `0xA0` and `0xFD..=0xFF` lead nothing.
+pub(crate) fn sjis_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    match lead {
+        0x00..=0x7f | 0xa1..=0xdf => PreciseLen::Char(1),
+        0x81..=0x9f | 0xe0..=0xfc => match bytes.get(pos + 1) {
+            None => PreciseLen::NeedMore,
+            Some(0x40..=0x7e | 0x80..=0xfc) => PreciseLen::Char(2),
+            Some(_) => PreciseLen::Invalid,
+        },
+        _ => PreciseLen::Invalid,
+    }
+}
+
+/// Width (in bytes) of the *complete* EUC-JP character starting at
+/// `b[0]`, or `None` if none starts there — a well-formed prefix that
+/// merely ran out of bytes counts as none.
 pub(crate) fn eucjp_char_width(b: &[u8]) -> Option<usize> {
-    let c0 = *b.first()?;
-    match c0 {
-        0x00..=0x7f => Some(1),
-        0x8e => match b.get(1) {
-            Some(0xa1..=0xdf) => Some(2),
-            _ => None,
-        },
-        0x8f => match (b.get(1), b.get(2)) {
-            (Some(0xa1..=0xfe), Some(0xa1..=0xfe)) => Some(3),
-            _ => None,
-        },
-        0xa1..=0xfe => match b.get(1) {
-            Some(0xa1..=0xfe) => Some(2),
-            _ => None,
-        },
+    match eucjp_precise_len(b, 0) {
+        PreciseLen::Char(n) => Some(n),
         _ => None,
     }
 }
 
-/// Width of the *valid* Shift_JIS / CP932 character starting at
-/// `b[0]`, or `None`. ASCII & `0xA1..=0xDF` half-width kana are
-/// single byte; a `0x81..=0x9F | 0xE0..=0xFC` lead with a
-/// `0x40..=0x7E | 0x80..=0xFC` trail is a double-byte character.
+/// Width of the *complete* Shift_JIS / CP932 character starting at
+/// `b[0]`, or `None`.
 pub(crate) fn sjis_char_width(b: &[u8]) -> Option<usize> {
-    let c0 = *b.first()?;
-    match c0 {
-        0x00..=0x7f | 0xa1..=0xdf => Some(1),
-        0x81..=0x9f | 0xe0..=0xfc => match b.get(1) {
-            Some(0x40..=0x7e | 0x80..=0xfc) => Some(2),
-            _ => None,
-        },
+    match sjis_precise_len(b, 0) {
+        PreciseLen::Char(n) => Some(n),
         _ => None,
     }
 }
@@ -66,8 +101,10 @@ impl RString {
 /// scalars; broken byte sequences advance one byte at a time so the
 /// iterator always terminates. Non-UTF-8 encodings use the
 /// fixed-code-unit width (1 for Ascii8/UsAscii/Iso8859, 2 for
-/// UTF-16, 4 for UTF-32) — multibyte ASCII-compatible families
-/// (EUC-JP, Shift_JIS) currently iterate byte-wise.
+/// UTF-16, 4 for UTF-32). The multibyte ASCII-compatible families
+/// (EUC-JP, Shift_JIS, Emacs-Mule) go through their own
+/// `precise_mbclen`, and a sequence that is not a complete character
+/// there advances one byte, as it does in UTF-8.
 pub struct CharByteIter<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -100,6 +137,19 @@ impl<'a> Iterator for CharByteIter<'a> {
             Encoding::NamedByte(EMACS_MULE) => {
                 emacs_mule_char_len(self.bytes, self.pos).unwrap_or(1)
             }
+            // EUC-JP / Shift_JIS, likewise: the lead byte alone does
+            // not settle the width, because a lead whose continuation
+            // is not a continuation leads nothing and stands on its
+            // own. Taking the width off the lead swallowed the next
+            // byte instead (`"\x8E "` counted 1 character, CRuby 2).
+            Encoding::EucJp => match eucjp_precise_len(self.bytes, self.pos) {
+                PreciseLen::Char(n) => n,
+                _ => 1,
+            },
+            Encoding::Sjis(_) => match sjis_precise_len(self.bytes, self.pos) {
+                PreciseLen::Char(n) => n,
+                _ => 1,
+            },
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
@@ -111,25 +161,6 @@ impl<'a> Iterator for CharByteIter<'a> {
             // matches the behaviour of `String#bytes.length` ==
             // `String#bytesize` for stateful encodings.
             | Encoding::Iso2022Jp => 1,
-            // EUC-JP (stateless, ASCII-compatible multibyte):
-            //   0x8E + 1 byte  -> JIS X 0201 katakana (2)
-            //   0x8F + 2 bytes -> JIS X 0212            (3)
-            //   0xA1..=0xFE    -> JIS X 0208 lead       (2)
-            //   otherwise (incl. 7-bit & malformed)     (1)
-            Encoding::EucJp => match self.bytes[self.pos] {
-                0x8e => 2,
-                0x8f => 3,
-                0xa1..=0xfe => 2,
-                _ => 1,
-            },
-            // Shift_JIS / CP932 (stateless): a double-byte character
-            // is led by 0x81..=0x9F or 0xE0..=0xFC; single-byte
-            // otherwise (ASCII, 0xA1..=0xDF half-width kana, and the
-            // 0x80/0xA0/0xFD..=0xFF singletons).
-            Encoding::Sjis(_) => match self.bytes[self.pos] {
-                0x81..=0x9f | 0xe0..=0xfc => 2,
-                _ => 1,
-            },
             // A well-formed surrogate pair is one character, four
             // bytes wide; a lone surrogate (or a trailing odd byte)
             // stands on its own, as CRuby's UTF-16 walker has it.
@@ -323,10 +354,14 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
 /// than by name; `emacs_mule_index_is_pinned` keeps the two in step.
 pub(crate) const EMACS_MULE: u8 = 37;
 
-/// What the Emacs-Mule sequence at a given offset is — CRuby's
-/// `rb_enc_precise_mbclen` three-way answer.
+/// What the multibyte sequence at a given offset is — CRuby's
+/// `rb_enc_precise_mbclen` three-way answer. Shared by every encoding
+/// monoruby walks itself (Emacs-Mule, EUC-JP, Shift_JIS), because the
+/// three answers are what `#length`, `#chars` and `#scrub` each need to
+/// tell apart: a width to advance by, a tail that is still only a
+/// prefix, and a byte no character can start at.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum EmacsMuleLen {
+pub(crate) enum PreciseLen {
     /// A complete character, this many bytes wide.
     Char(usize),
     /// A well-formed prefix: it would still become a character with
@@ -346,32 +381,32 @@ const EMACS_MULE_MAX_LEN: usize = 4;
 /// are what narrow it — and every byte after that must be
 /// `0xA0..=0xFF`. Read off CRuby's own validator (`enc/emacs_mule.c`)
 /// and checked against it over the whole lead/continuation space.
-pub(crate) fn emacs_mule_precise_len(bytes: &[u8], pos: usize) -> EmacsMuleLen {
+pub(crate) fn emacs_mule_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
     let Some(&lead) = bytes.get(pos) else {
-        return EmacsMuleLen::NeedMore;
+        return PreciseLen::NeedMore;
     };
     let (len, second) = match lead {
-        0x00..=0x7f => return EmacsMuleLen::Char(1),
+        0x00..=0x7f => return PreciseLen::Char(1),
         0x81..=0x8f => (2, 0xa0..=0xff),
         0x90..=0x99 => (3, 0xa0..=0xff),
         0x9a..=0x9b => (3, 0xe0..=0xef),
         0x9c => (4, 0xf0..=0xf4),
         0x9d => (4, 0xf5..=0xfe),
         // 0x80, and everything from 0x9E up, lead nothing.
-        _ => return EmacsMuleLen::Invalid,
+        _ => return PreciseLen::Invalid,
     };
     let avail = bytes.len() - pos;
     for i in 1..len {
         if i >= avail {
-            return EmacsMuleLen::NeedMore;
+            return PreciseLen::NeedMore;
         }
         let b = bytes[pos + i];
         let ok = if i == 1 { second.contains(&b) } else { b >= 0xa0 };
         if !ok {
-            return EmacsMuleLen::Invalid;
+            return PreciseLen::Invalid;
         }
     }
-    EmacsMuleLen::Char(len)
+    PreciseLen::Char(len)
 }
 
 /// The length of the complete Emacs-Mule character starting at
@@ -379,53 +414,107 @@ pub(crate) fn emacs_mule_precise_len(bytes: &[u8], pos: usize) -> EmacsMuleLen {
 /// merely ran out of bytes counts as none.
 pub(crate) fn emacs_mule_char_len(bytes: &[u8], pos: usize) -> Option<usize> {
     match emacs_mule_precise_len(bytes, pos) {
-        EmacsMuleLen::Char(n) => Some(n),
+        PreciseLen::Char(n) => Some(n),
         _ => None,
     }
 }
 
-/// Copy `bytes`, putting `repl` in place of every ill-formed subpart.
+/// How long the ill-formed subpart starting at `bytes[pos]` is, given
+/// that no character starts there.
 ///
-/// The subparts are CRuby's, which are not one per byte: a run that is
-/// a well-formed *prefix* of a character is one subpart, so `90 A0 20`
-/// gives one replacement and then keeps the `0x20`, and a prefix that
-/// runs off the end of the string gives one for the whole tail.
-/// `enc_str_scrub` finds the run by shortening the window until the
-/// prefix would only need more bytes; this is that walk.
-pub(crate) fn emacs_mule_scrub(bytes: &[u8], repl: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
+/// CRuby's subparts are not one per byte: a run that is a well-formed
+/// *prefix* of a character is one subpart, so Emacs-Mule `90 A0 20`
+/// gives one replacement and then keeps the `0x20`. `enc_str_scrub`
+/// finds the run by shortening the window until the prefix would only
+/// need more bytes; this is that walk. An encoding whose `mbmaxlen` is
+/// 2 can never have such a run, so it always answers 1.
+fn ill_formed_run(
+    bytes: &[u8],
+    pos: usize,
+    max_len: usize,
+    precise: fn(&[u8], usize) -> PreciseLen,
+) -> usize {
+    let mut clen = max_len.min(bytes.len() - pos);
+    if clen <= 2 {
+        return 1;
+    }
+    clen -= 1;
+    while clen > 1 && precise(&bytes[..pos + clen], pos) != PreciseLen::NeedMore {
+        clen -= 1;
+    }
+    clen
+}
+
+/// One piece of a [`walk_mbc`] walk.
+pub(crate) enum MbcPiece<'a> {
+    /// A complete character.
+    Char(&'a [u8]),
+    /// One ill-formed subpart, whole.
+    Bad(&'a [u8]),
+}
+
+/// Walk `bytes` as `precise` sees them, handing each complete
+/// character and each ill-formed subpart to `on`.
+///
+/// The shared half of `String#scrub` and its block form: both need the
+/// same notion of where one subpart ends and the next begins, and they
+/// differ only in what they put in its place. A prefix at the very end
+/// is one subpart covering the whole tail, and ends the walk.
+pub(crate) fn walk_mbc(
+    bytes: &[u8],
+    max_len: usize,
+    precise: fn(&[u8], usize) -> PreciseLen,
+    mut on: impl FnMut(MbcPiece<'_>) -> Result<()>,
+) -> Result<()> {
     let mut pos = 0;
     while pos < bytes.len() {
-        match emacs_mule_precise_len(bytes, pos) {
-            EmacsMuleLen::Char(n) => {
-                out.extend_from_slice(&bytes[pos..pos + n]);
+        match precise(bytes, pos) {
+            PreciseLen::Char(n) => {
+                on(MbcPiece::Char(&bytes[pos..pos + n]))?;
                 pos += n;
             }
-            // A prefix at the very end: the rest of the string is one
-            // subpart, and the walk is over.
-            EmacsMuleLen::NeedMore => {
-                out.extend_from_slice(repl);
-                return out;
+            PreciseLen::NeedMore => {
+                on(MbcPiece::Bad(&bytes[pos..]))?;
+                return Ok(());
             }
-            EmacsMuleLen::Invalid => {
-                let mut clen = EMACS_MULE_MAX_LEN.min(bytes.len() - pos);
-                if clen <= 2 {
-                    clen = 1;
-                } else {
-                    clen -= 1;
-                    while clen > 1
-                        && emacs_mule_precise_len(&bytes[..pos + clen], pos)
-                            != EmacsMuleLen::NeedMore
-                    {
-                        clen -= 1;
-                    }
-                }
-                out.extend_from_slice(repl);
+            PreciseLen::Invalid => {
+                let clen = ill_formed_run(bytes, pos, max_len, precise);
+                on(MbcPiece::Bad(&bytes[pos..pos + clen]))?;
                 pos += clen;
             }
         }
     }
+    Ok(())
+}
+
+/// Copy `bytes`, putting `repl` in place of every ill-formed subpart.
+pub(crate) fn scrub_mbc(
+    bytes: &[u8],
+    repl: &[u8],
+    max_len: usize,
+    precise: fn(&[u8], usize) -> PreciseLen,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let _ = walk_mbc(bytes, max_len, precise, |piece| {
+        match piece {
+            MbcPiece::Char(c) => out.extend_from_slice(c),
+            MbcPiece::Bad(_) => out.extend_from_slice(repl),
+        }
+        Ok(())
+    });
     out
+}
+
+/// The `(mbmaxlen, precise_mbclen)` pair for an encoding monoruby walks
+/// itself, or `None` for one it leaves to `encoding_rs` or to a
+/// fixed-width rule.
+pub(crate) fn mbc_walker(enc: Encoding) -> Option<(usize, fn(&[u8], usize) -> PreciseLen)> {
+    match enc {
+        Encoding::EucJp => Some((EUCJP_MAX_LEN, eucjp_precise_len)),
+        Encoding::Sjis(_) => Some((SJIS_MAX_LEN, sjis_precise_len)),
+        Encoding::NamedByte(EMACS_MULE) => Some((EMACS_MULE_MAX_LEN, emacs_mule_precise_len)),
+        _ => None,
+    }
 }
 
 /// Look up a [`Encoding::NamedByte`] index by its normalized
@@ -1978,29 +2067,15 @@ impl RStringInner {
                     }
                 }
             }
-            Encoding::NamedByte(EMACS_MULE) => {
-                out = emacs_mule_scrub(bytes, repl.as_bytes());
-            }
-            Encoding::EucJp | Encoding::Sjis(_) => {
-                let char_w = if matches!(enc, Encoding::EucJp) {
-                    eucjp_char_width
-                } else {
-                    sjis_char_width
-                };
-                let mut i = 0;
-                while i < bytes.len() {
-                    if let Some(w) = char_w(&bytes[i..]) {
-                        out.extend_from_slice(&bytes[i..i + w]);
-                        i += w;
-                    } else {
-                        // An invalid byte that cannot begin a valid
-                        // character is its own ill-formed subpart
-                        // (CRuby replaces each independently, e.g.
-                        // SJIS `\xFF\xFE` -> two replacements).
-                        out.extend_from_slice(repl.as_bytes());
-                        i += 1;
-                    }
-                }
+            // Emacs-Mule, EUC-JP and Shift_JIS share one walk: an
+            // ill-formed subpart is a *run*, not a byte, so a
+            // truncated EUC-JP tail (`8F A1`) is one replacement and
+            // not two. Shift_JIS never has such a run — its widest
+            // character is two bytes — but it costs nothing to say so
+            // once.
+            _ if mbc_walker(enc).is_some() => {
+                let (max_len, precise) = mbc_walker(enc).unwrap();
+                out = scrub_mbc(bytes, repl.as_bytes(), max_len, precise);
             }
             // UTF-16/32: replace each ill-formed coding unit (a lone
             // surrogate half, a non-scalar UTF-32 unit) and the odd
@@ -2444,6 +2519,12 @@ impl RStringInner {
         // is what `iter_char_bytes` would do anyway, but we
         // shortcut it for performance).
         let unit = match self.ty {
+            // Emacs-Mule is a `NamedByte` encoding but not a byte-wide
+            // one: it has a validator and a multibyte shape, so it has
+            // to walk the iterator like EUC-JP does. Without this,
+            // `s[1]` handed back the lead byte alone while `s.chars[1]`
+            // gave the whole character.
+            Encoding::NamedByte(EMACS_MULE) => None,
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
@@ -2464,6 +2545,7 @@ impl RStringInner {
             // (now encoding-aware) char iterator so `String#[]` /
             // `#slice` index by characters, not bytes.
             Encoding::EucJp | Encoding::Sjis(_) | Encoding::Utf8 => None,
+
         };
         if let Some(u) = unit {
             let total = self.len();
@@ -3228,7 +3310,7 @@ mod encoding_tests {
     /// well-formed prefix, and an offset with nothing at it.
     #[test]
     fn emacs_mule_precise_len_answers() {
-        use EmacsMuleLen::*;
+        use PreciseLen::*;
         // Nothing there at all, and a prefix that ran out of bytes.
         assert_eq!(emacs_mule_precise_len(&[], 0), NeedMore);
         assert_eq!(emacs_mule_precise_len(&[0x61], 1), NeedMore);
@@ -3248,6 +3330,52 @@ mod encoding_tests {
         assert_eq!(emacs_mule_precise_len(&[0x9a, 0xa0, 0xa0], 0), Invalid);
         assert_eq!(emacs_mule_precise_len(&[0x9d, 0xf0, 0xa0, 0xa0], 0), Invalid);
         assert_eq!(emacs_mule_precise_len(&[0x90, 0xa0, 0x20], 0), Invalid);
+    }
+
+    /// `eucjp_precise_len` / `sjis_precise_len`, read off onigenc's own
+    /// answers over the whole lead/continuation space.
+    #[test]
+    fn eucjp_sjis_precise_len_answers() {
+        use PreciseLen::*;
+        // EUC-JP: nothing there, and each width's truncated prefix.
+        assert_eq!(eucjp_precise_len(&[], 0), NeedMore);
+        assert_eq!(eucjp_precise_len(&[0xa1], 0), NeedMore);
+        assert_eq!(eucjp_precise_len(&[0x8e], 0), NeedMore);
+        assert_eq!(eucjp_precise_len(&[0x8f, 0xa1], 0), NeedMore);
+        // One of each width.
+        assert_eq!(eucjp_precise_len(b"a", 0), Char(1));
+        assert_eq!(eucjp_precise_len(&[0xa1, 0xa1], 0), Char(2));
+        assert_eq!(eucjp_precise_len(&[0xfe, 0xfe], 0), Char(2));
+        assert_eq!(eucjp_precise_len(&[0x8f, 0xa1, 0xa1], 0), Char(3));
+        // 0x8E takes the whole A1..FE, not just the kana block: onigenc
+        // validates the shape, not the JIS X 0201 table.
+        assert_eq!(eucjp_precise_len(&[0x8e, 0xa1], 0), Char(2));
+        assert_eq!(eucjp_precise_len(&[0x8e, 0xfe], 0), Char(2));
+        // Leads that lead nothing, and continuations that are not one.
+        for lead in [0x80u8, 0x8d, 0x90, 0xa0, 0xff] {
+            assert_eq!(eucjp_precise_len(&[lead, 0xa1], 0), Invalid, "{lead:#04x}");
+        }
+        assert_eq!(eucjp_precise_len(&[0x8e, 0x20], 0), Invalid);
+        assert_eq!(eucjp_precise_len(&[0xa1, 0xa0], 0), Invalid);
+        assert_eq!(eucjp_precise_len(&[0x8f, 0xa1, 0x20], 0), Invalid);
+
+        // Shift_JIS: the single-byte ranges, the double-byte pair, and
+        // the four bytes that lead nothing.
+        assert_eq!(sjis_precise_len(&[], 0), NeedMore);
+        assert_eq!(sjis_precise_len(&[0x81], 0), NeedMore);
+        assert_eq!(sjis_precise_len(b"a", 0), Char(1));
+        assert_eq!(sjis_precise_len(&[0xa1], 0), Char(1));
+        assert_eq!(sjis_precise_len(&[0xdf], 0), Char(1));
+        assert_eq!(sjis_precise_len(&[0x81, 0x40], 0), Char(2));
+        assert_eq!(sjis_precise_len(&[0x9f, 0x7e], 0), Char(2));
+        assert_eq!(sjis_precise_len(&[0xe0, 0x80], 0), Char(2));
+        assert_eq!(sjis_precise_len(&[0xfc, 0xfc], 0), Char(2));
+        for lead in [0x80u8, 0xa0, 0xfd, 0xff] {
+            assert_eq!(sjis_precise_len(&[lead, 0x40], 0), Invalid, "{lead:#04x}");
+        }
+        assert_eq!(sjis_precise_len(&[0x81, 0x3f], 0), Invalid);
+        assert_eq!(sjis_precise_len(&[0x81, 0x7f], 0), Invalid);
+        assert_eq!(sjis_precise_len(&[0x81, 0xfd], 0), Invalid);
     }
 
     #[test]

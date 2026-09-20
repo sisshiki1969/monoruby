@@ -142,7 +142,93 @@ bigdecimal`.
 > more than it is. `MONORUBY_REPROBE=1 monoruby -e ''` refreshes the
 > cached gem paths after an install.
 
-### 2. Verifying Ruby Version
+### 2. Bootstrapping a fresh sandbox container
+
+Claude Code on the web (and comparable prebuilt sandbox images) already
+carries several CRubies — `/opt/ruby-3.1.6`, `/opt/ruby-3.2.6`,
+`/opt/ruby-3.3.6`, all registered with an rbenv at
+`RBENV_ROOT=/opt/rbenv` — but **not** the pinned `4.0.6`, and `ruby` on
+`PATH` resolves to 3.3.6. Going from that state to a verified 4.0.6 is
+the procedure below; it is idempotent, so re-running it in a container
+that is already set up is a no-op.
+
+```sh
+# 1. The image's ruby-build plugin is usually too old to know 4.0.6
+#    (`rbenv install --list | grep '^4\.'` tells you). Update it:
+rb="$(rbenv root)/plugins/ruby-build"
+git -C "$rb" fetch --depth 50 origin
+git -C "$rb" checkout "$(git -C "$rb" tag --sort=-v:refname | head -1)"
+ls "$rb/share/ruby-build/" | grep '^4\.0'              # 4.0.6 must appear
+
+# 2. Build it. The image already carries the build deps (libssl-dev,
+#    libyaml-dev, zlib1g-dev, libreadline-dev, libffi-dev, libgdbm-dev),
+#    so no apt step is needed; ~6 minutes on 4 cores.
+MAKE_OPTS=-j"$(nproc)" RUBY_CONFIGURE_OPTS=--disable-install-doc \
+    rbenv install -s 4.0.6
+rbenv global 4.0.6
+rbenv rehash
+```
+
+`rbenv global` alone does **not** put 4.0.6 on `PATH`: the image wires the
+baked-in 3.3.6 ahead of rbenv in two independent places, and both have to
+be undone.
+
+```sh
+# 3a. Login shells: /etc/profile.d/ruby.sh prepends /opt/ruby-3.3.6/bin and
+#     sorts *after* rbenv.sh, so it wins. Add a later-sorting file that
+#     drops the /opt/ruby-*/bin entries and puts the shims first.
+cat > /etc/profile.d/zz-rbenv-shims.sh <<'EOF'
+# Put rbenv shims ahead of the baked-in /opt/ruby-*/bin entries so that
+# `rbenv global` decides which ruby is on PATH.
+if [ -d "${RBENV_ROOT:-/opt/rbenv}/shims" ]; then
+    PATH="$(echo "$PATH" | sed -E 's#(^|:)/opt/ruby-[^:]*/bin(:|$)#\2#g; s#^:##; s#:$##')"
+    export PATH="${RBENV_ROOT:-/opt/rbenv}/shims:$PATH"
+fi
+EOF
+
+# 3b. Non-login, non-interactive shells — which is what an agent's or CI
+#     job's individual tool calls get — never read profile.d at all. They
+#     find /usr/local/bin/ruby, a symlink into /opt/ruby-3.3.6. Repoint
+#     those four symlinks at the shims so `rbenv global` is the one switch.
+for c in ruby gem irb bundle; do
+    ln -sfn "${RBENV_ROOT:-/opt/rbenv}/shims/$c" "/usr/local/bin/$c"
+done
+```
+
+Then the gems §1 asks for (`bigdecimal` is already present in a 4.0.6
+built this way, but naming it is harmless and keeps the line copy-pastable):
+
+```sh
+gem install --no-document bigdecimal bcrypt msgpack yajl-ruby strptime \
+    cool.io zstd-ruby markly
+```
+
+Finally, verify — all three shell flavours must agree, since different
+tools reach Ruby through different ones:
+
+```sh
+ruby -v                                  # ruby 4.0.6 ... +PRISM  (non-login)
+bash -lc 'ruby -v; rbenv version'        # same, via the shims    (login)
+bash -ic 'ruby -v'                       # same                   (interactive)
+test "$(ruby -e 'print RUBY_VERSION')" = \
+     "$(cat monoruby/vendor/ruby-stdlib/.ruby-version)" && echo "pin OK"
+gem -v
+ruby -e 'require "openssl"; require "psych"; require "zlib"; require "fiddle"'
+```
+
+A fresh container has no `~/.monoruby/` yet, so there is no stale probe
+cache to invalidate — the first monoruby build/run probes and picks 4.0.6
+(an exact match for `ruby_probe::COMPAT_RUBY_VERSION`). After any *later*
+`gem install`, refresh it with `MONORUBY_REPROBE=1 monoruby -e ''`.
+
+`.claude/hooks/session-start.sh` is this whole procedure as a SessionStart
+hook, so a web session arrives with it already done; it adds the pinned
+nightly toolchain and CI's gem list (`.github/workflows/rust.yml`) on top,
+and no-ops outside a remote container (`CLAUDE_CODE_REMOTE`). Registered in
+`.claude/settings.json`. Change the pin, the gem list or the image's Ruby
+layout and the script has to move with them.
+
+### 3. Verifying Ruby Version
 
 Confirm that the `ruby` command launches the pinned CRuby:
 
@@ -153,7 +239,7 @@ ruby --version
 
 `build.rs` uses this `ruby` binary at build time to capture `$LOAD_PATH` and `RUBY_VERSION`. Tests will fail if `ruby` is not in `PATH`.
 
-### 3. Setting Up and Running ruby/spec
+### 4. Setting Up and Running ruby/spec
 
 ruby/spec (mspec) is cloned outside the monoruby repository:
 
