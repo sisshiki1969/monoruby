@@ -1731,6 +1731,14 @@ pub(super) fn path_value(bytes: &[u8], enc: crate::value::Encoding) -> Value {
     Value::string_from_inner(RStringInner::from_encoding(bytes, enc))
 }
 
+/// `Encoding.find("filesystem")` as a monoruby `Encoding`, for the path
+/// results CRuby tags with `rb_filesystem_encoding()` rather than with
+/// the encoding of the path argument.
+pub(super) fn filesystem_encoding(globals: &mut Globals) -> crate::value::Encoding {
+    let obj = super::io::enc_default_external_obj(globals);
+    super::io::enc_obj_to_enum(globals, obj).unwrap_or(crate::value::Encoding::Utf8)
+}
+
 pub(super) fn to_path_str(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<String> {
     Ok(to_path_rstring(vm, globals, val)?.to_str()?.to_string())
 }
@@ -2278,7 +2286,12 @@ fn file_readlink(
     let target = std::fs::read_link(&path).map_err(|e| {
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_readlink", &path)
     })?;
-    Ok(Value::string(conv_pathbuf(&target)))
+    // CRuby's `rb_readlink` hands the raw link target to
+    // `rb_enc_str_new(..., rb_filesystem_encoding())`: a plain
+    // associate, so the result carries the filesystem encoding even
+    // when the bytes are not valid in it (no ASCII-8BIT fallback).
+    let enc = filesystem_encoding(globals);
+    Ok(path_value(pathbuf_bytes(&target), enc))
 }
 
 ///
@@ -3975,6 +3988,26 @@ mod tests {
               ]
             ensure
               [hard, sym, target].each { |p| File.unlink(p) rescue nil }
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_readlink_encoding() {
+        // CRuby tags the link target with `Encoding.find("filesystem")`
+        // (a plain associate: the bytes pass through untouched even when
+        // they are not valid in it), not with a fixed UTF-8.
+        run_test_once(
+            r#"
+            sym = "/tmp/monoruby_test_rl_enc_#{Process.pid}_#{rand(100000)}.sym"
+            target = "\u3042/target"
+            begin
+              File.symlink(target, sym)
+              s = File.readlink(sym)
+              [s.bytes == target.bytes, s.encoding.name == Encoding.find("filesystem").name]
+            ensure
+              File.unlink(sym) rescue nil
             end
             "#,
         );

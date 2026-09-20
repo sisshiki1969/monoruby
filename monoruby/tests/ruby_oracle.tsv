@@ -2034,6 +2034,7 @@
 8853b8884228122ac56519cd2ee8b71c	[:fiber_1, :fiber_2]	f1 = Fiber.new { :fiber_1 }\n            f2 = Fiber.new { f1.transfe
 885b49a51181fdd9a665649f5d6afb97	[1, 2, 3, 4]	class C; def to_ary; [3, 4]; end; end; o = C.new\n[1, 2] + o
 885c5c5cd9175193870499b63f8d37c1	[:shared]	blk = proc { :shared }\n        class BmShared; end\n        BmShared.sen
+888bbcf3e6269bd6814a9c2c4a8d1543	[true, true]	sym = "/tmp/monoruby_test_rl_enc_#{Process.pid}_#{rand(100000)}.sym
 889ef2d076f0c4bf33ee8cb138f1383a	[:a, "b"]	module M\n              def a; 1; end\n              def b; 2; end\n  
 88b402e7fdaa8b2f9583d10a43b30b83	[true, false, true, false, true]	class C\n          def pub_method; end\n          private\n          def p
 88b74eaedd70ab6521c45c598a99a423	:OVERRIDDEN	class Float; def <=(o); :OVERRIDDEN; end; end; 3.0 <= 4.0
