@@ -704,12 +704,7 @@ fn jisx0212_reverse() -> &'static std::collections::HashMap<char, [u8; 3]> {
                 // it leaves as `U+FF5E` and arrives as `U+007E` — and
                 // that is exactly the entry that must not exist, since
                 // `U+FF5E` has no EUC-JP form in CRuby at all.
-                let d = jp_decode(
-                    crate::value::Encoding::EucJp,
-                    encoding_rs::EUC_JP,
-                    &seq,
-                    None,
-                );
+                let d = jp_decode(&EUCJP_FIXUP, &seq, None);
                 if d.had_invalid || d.unmapped.is_some() {
                     continue;
                 }
@@ -744,6 +739,15 @@ fn jisx0212_reverse() -> &'static std::collections::HashMap<char, [u8; 3]> {
 /// space against CRuby 4.0.6 (17735 cells for EUC-JP, 11343 for
 /// Shift_JIS), not transcribed from a table.
 struct JpFixup {
+    /// The WHATWG codec this one corrects.
+    rs: &'static encoding_rs::Encoding,
+    /// The encoding's `precise_mbclen` (#1444), which is what cuts the
+    /// buffer into cells.
+    precise: fn(&[u8], usize) -> PreciseLen,
+    /// Whether the encoding has a second plane to fall back on when
+    /// `encoding_rs` will not write a character at all — EUC-JP's JIS
+    /// X 0212, reached through [`jisx0212_reverse`].
+    second_plane: bool,
     /// A complete cell → the character CRuby's table holds.
     decode: &'static [(&'static [u8], char)],
     /// A character → the cell CRuby writes for it. **Not** the mirror
@@ -761,6 +765,9 @@ struct JpFixup {
 }
 
 static EUCJP_FIXUP: JpFixup = JpFixup {
+    rs: encoding_rs::EUC_JP,
+    precise: eucjp_precise_len,
+    second_plane: true,
     decode: &[
         (&[0x8f, 0xa2, 0xb7], '\u{007e}'), // TILDE, not FULLWIDTH TILDE
         (&[0xa1, 0xbd], '\u{2014}'),       // EM DASH, not HORIZONTAL BAR
@@ -788,6 +795,9 @@ static EUCJP_FIXUP: JpFixup = JpFixup {
 };
 
 static SJIS_FIXUP: JpFixup = JpFixup {
+    rs: encoding_rs::SHIFT_JIS,
+    precise: sjis_precise_len,
+    second_plane: false,
     decode: &[
         (&[0x81, 0x5c], '\u{2014}'),
         (&[0x81, 0x60], '\u{301c}'),
@@ -816,6 +826,9 @@ static SJIS_FIXUP: JpFixup = JpFixup {
 /// `encoding_rs` writes `U+2212` to `81 7C`, which in this encoding is
 /// `U+FF0D`'s cell and nothing else's.
 static WINDOWS31J_FIXUP: JpFixup = JpFixup {
+    rs: encoding_rs::SHIFT_JIS,
+    precise: sjis_precise_len,
+    second_plane: false,
     decode: &[],
     encode: &[],
     reject: &['\u{2212}'],
@@ -836,10 +849,9 @@ fn jp_fixup(enc: crate::value::Encoding) -> Option<&'static JpFixup> {
 
 /// Whether `encoding_rs` put this cell in a row the encoding has.
 fn jp_cell_is_live(fx: &JpFixup, cell: &[u8]) -> bool {
-    let Some(&lead) = cell.first() else {
-        return true;
-    };
-    !fx.dead_rows.iter().any(|&(lo, hi)| (lo..=hi).contains(&lead))
+    cell.first().is_none_or(|lead| {
+        !fx.dead_rows.iter().any(|&(lo, hi)| (lo..=hi).contains(lead))
+    })
 }
 
 /// CRuby's answer for one complete cell, or `None` where it agrees
@@ -851,13 +863,10 @@ fn jp_decode_override(fx: &JpFixup, cell: &[u8]) -> Option<char> {
 /// Whether this buffer holds anything [`jp_decode`] must treat
 /// differently from `encoding_rs` — an allocation-free walk, so the
 /// common case pays one extra scan and nothing else.
-fn jp_decode_needs_fixup(enc: crate::value::Encoding, fx: &JpFixup, bytes: &[u8]) -> bool {
-    let Some((_, precise)) = mbc_walker(enc) else {
-        return false;
-    };
+fn jp_decode_needs_fixup(fx: &JpFixup, bytes: &[u8]) -> bool {
     let mut pos = 0;
     while pos < bytes.len() {
-        match precise(bytes, pos) {
+        match (fx.precise)(bytes, pos) {
             PreciseLen::Char(n) => {
                 let cell = &bytes[pos..pos + n];
                 if !jp_cell_is_live(fx, cell) || jp_decode_override(fx, cell).is_some() {
@@ -900,21 +909,12 @@ struct JpDecoded<'a> {
 /// `undef` is the replacement text for an unmapped cell when the
 /// caller passed `undef: :replace`; without it the first such cell is
 /// reported back so the caller can raise.
-fn jp_decode<'a>(
-    enc: crate::value::Encoding,
-    rs: &'static encoding_rs::Encoding,
-    bytes: &'a [u8],
-    undef: Option<&str>,
-) -> JpDecoded<'a> {
-    let Some(fx) = jp_fixup(enc) else {
-        let (text, had_invalid) = rs.decode_without_bom_handling(bytes);
-        return JpDecoded { text, had_invalid, unmapped: None };
-    };
-    if !jp_decode_needs_fixup(enc, fx, bytes) {
+fn jp_decode<'a>(fx: &JpFixup, bytes: &'a [u8], undef: Option<&str>) -> JpDecoded<'a> {
+    let rs = fx.rs;
+    if !jp_decode_needs_fixup(fx, bytes) {
         let (text, had_invalid) = rs.decode_without_bom_handling(bytes);
         return JpDecoded { text, had_invalid, unmapped: None };
     }
-    let precise = mbc_walker(enc).expect("checked by jp_decode_needs_fixup").1;
     let flush = |out: &mut String, had_err: &mut bool, run: &[u8]| {
         if run.is_empty() {
             return;
@@ -929,7 +929,7 @@ fn jp_decode<'a>(
     let mut pos = 0;
     let mut pending = 0;
     while pos < bytes.len() {
-        let PreciseLen::Char(n) = precise(bytes, pos) else {
+        let PreciseLen::Char(n) = (fx.precise)(bytes, pos) else {
             pos += 1;
             continue;
         };
@@ -986,27 +986,15 @@ fn undefined_cell_message(
 /// `8F AB E4` in CRuby and was an `UndefinedConversionError` here. An
 /// answer landing in a dead row counts as no answer, and JIS X 0208
 /// proper still wins over 0212 wherever both hold a character.
-fn jp_encode(enc: crate::value::Encoding, s: &str) -> std::result::Result<Vec<u8>, char> {
-    let rs = match encoding_to_rs(enc) {
-        Some(rs) => rs,
-        None => return Err(s.chars().next().unwrap_or('\0')),
-    };
-    let Some(fx) = jp_fixup(enc) else {
-        let (bytes, _, had_err) = rs.encode(s);
-        return if had_err {
-            Err(s.chars().find(|c| rs.encode(c.to_string().as_str()).2).unwrap_or('\0'))
-        } else {
-            Ok(bytes.into_owned())
-        };
-    };
-    let is_second_plane = enc == crate::value::Encoding::EucJp;
+fn jp_encode(fx: &JpFixup, s: &str) -> std::result::Result<Vec<u8>, char> {
+    let rs = fx.rs;
     // Whether this character is one the fixup tables move — the cheap
     // test that keeps the fast path.
     let is_fixed_up = |c: char| {
         c > '\u{7f}' && (fx.reject.contains(&c) || fx.encode.iter().any(|(k, _)| *k == c))
     };
     let (bytes, _, had_err) = rs.encode(s);
-    if !had_err && jp_live_throughout(enc, fx, &bytes) && !s.chars().any(is_fixed_up) {
+    if !had_err && jp_live_throughout(fx, &bytes) && !s.chars().any(is_fixed_up) {
         return Ok(bytes.into_owned());
     }
     let mut out = Vec::with_capacity(bytes.len());
@@ -1022,7 +1010,7 @@ fn jp_encode(enc: crate::value::Encoding, s: &str) -> std::result::Result<Vec<u8
         let (chunk, _, err) = rs.encode(c.encode_utf8(&mut buf));
         if !err && jp_cell_is_live(fx, &chunk) {
             out.extend_from_slice(&chunk);
-        } else if is_second_plane && let Some(seq) = jisx0212_reverse().get(&c) {
+        } else if fx.second_plane && let Some(seq) = jisx0212_reverse().get(&c) {
             out.extend_from_slice(seq);
         } else {
             return Err(c);
@@ -1036,16 +1024,13 @@ fn jp_encode(enc: crate::value::Encoding, s: &str) -> std::result::Result<Vec<u8
 /// [`jp_encode`]. Those bytes are only extension rows in *lead*
 /// position (a trailing byte covers them too), so the buffer is walked
 /// rather than scanned.
-fn jp_live_throughout(enc: crate::value::Encoding, fx: &JpFixup, bytes: &[u8]) -> bool {
+fn jp_live_throughout(fx: &JpFixup, bytes: &[u8]) -> bool {
     if fx.dead_rows.is_empty() {
         return true;
     }
-    let Some((_, precise)) = mbc_walker(enc) else {
-        return true;
-    };
     let mut pos = 0;
     while pos < bytes.len() {
-        match precise(bytes, pos) {
+        match (fx.precise)(bytes, pos) {
             PreciseLen::Char(n) => {
                 if !jp_cell_is_live(fx, &bytes[pos..pos + n]) {
                     return false;
@@ -1495,8 +1480,8 @@ pub(super) fn transcode_bytes_with_opts(
             return Ok(table_decode(src_bytes, table).into_bytes());
         }
         if let Some(src_rs) = encoding_to_rs(src_enc) {
-            let (decoded, decode_err) = if jp_fixup(src_enc).is_some() {
-                let d = jp_decode(src_enc, src_rs, src_bytes, None);
+            let (decoded, decode_err) = if let Some(fx) = jp_fixup(src_enc) {
+                let d = jp_decode(fx, src_bytes, None);
                 if let Some(cell) = d.unmapped {
                     return Err(MonorubyErr::undefined_conversion_error(
                         store,
@@ -1572,9 +1557,9 @@ pub(super) fn transcode_bytes_with_opts(
         // EUC-JP goes through our own wrapper: `encoding_rs`'s is
         // WHATWG's, which disagrees with CRuby on eight cells and
         // accepts the NEC/IBM rows CRuby has no table for.
-        if jp_fixup(src_enc).is_some() {
+        if let Some(fx) = jp_fixup(src_enc) {
             let repl = opts.undef_replace.then(|| opts.replace_str(dst_enc));
-            let d = jp_decode(src_enc, src_rs, src_bytes, repl.as_deref());
+            let d = jp_decode(fx, src_bytes, repl.as_deref());
             if let Some(cell) = d.unmapped {
                 // A well-formed cell with no character: an undefined
                 // conversion, which `invalid: :replace` does not cover.
@@ -1695,8 +1680,8 @@ pub(super) fn transcode_bytes_with_opts(
     // EUC-JP has a second plane `encoding_rs` will not write, and
     // both Japanese codecs need the table corrections; go through the
     // encoder that knows about them.
-    if jp_fixup(dst_enc).is_some() {
-        match jp_encode(dst_enc, &decoded) {
+    if let Some(fx) = jp_fixup(dst_enc) {
+        match jp_encode(fx, &decoded) {
             Ok(v) => return Ok(v),
             Err(bad) if !opts.undef_replace => {
                 return Err(MonorubyErr::undefined_conversion_error(
@@ -1714,10 +1699,11 @@ pub(super) fn transcode_bytes_with_opts(
                 let mut out: Vec<u8> = Vec::with_capacity(decoded.len());
                 let mut buf = [0u8; 4];
                 for c in decoded.chars() {
-                    match jp_encode(dst_enc, c.encode_utf8(&mut buf)) {
+                    match jp_encode(fx, c.encode_utf8(&mut buf)) {
                         Ok(v) => out.extend_from_slice(&v),
-                        Err(_) => out
-                            .extend_from_slice(&jp_encode(dst_enc, &replace).unwrap_or_default()),
+                        Err(_) => {
+                            out.extend_from_slice(&jp_encode(fx, &replace).unwrap_or_default())
+                        }
                     }
                 }
                 return Ok(out);
@@ -7348,9 +7334,8 @@ mod tests {
     #[test]
     fn eucjp_row_scan() {
         use crate::value::Encoding as E;
-        let live = |bytes: &[u8]| {
-            super::jp_live_throughout(E::EucJp, super::jp_fixup(E::EucJp).unwrap(), bytes)
-        };
+        let live =
+            |bytes: &[u8]| super::jp_live_throughout(super::jp_fixup(E::EucJp).unwrap(), bytes);
         // Plain ASCII, JIS X 0208, half-width katakana, JIS X 0212.
         assert!(live(b"abc"));
         assert!(live(&[0xa6, 0xd0]));
@@ -7365,9 +7350,8 @@ mod tests {
         assert!(live(&[0xa1, 0xf9]));
         assert!(live(&[0x8f, 0xf9, 0xad]));
         // Shift_JIS has its own dead rows, and Windows-31J has none.
-        let sjis_live = |bytes: &[u8]| {
-            super::jp_live_throughout(E::Sjis(0), super::jp_fixup(E::Sjis(0)).unwrap(), bytes)
-        };
+        let sjis_live =
+            |bytes: &[u8]| super::jp_live_throughout(super::jp_fixup(E::Sjis(0)).unwrap(), bytes);
         assert!(sjis_live(&[0x82, 0xa0]));
         assert!(!sjis_live(&[0x87, 0x40]));
         assert!(!sjis_live(&[0xed, 0x40]));
@@ -7376,7 +7360,6 @@ mod tests {
         assert!(sjis_live(&[0x82, 0x87]));
         assert!(sjis_live(&[0x82, 0xed]));
         assert!(super::jp_live_throughout(
-            E::Sjis(1),
             super::jp_fixup(E::Sjis(1)).unwrap(),
             &[0x87, 0x40]
         ));
@@ -7428,6 +7411,31 @@ mod tests {
             res << t.encode("UTF-8", undef: :replace, replace: "?")
             # JIS X 0212 is still reachable (#1424 is unchanged).
             res << "\u00FC".encode("EUC-JP").bytes
+            # A corrected cell with ordinary text on either side: the
+            # runs around it still go through `encoding_rs`, which is
+            # the whole point of correcting it rather than replacing
+            # the codec.
+            res << [0x41, 0xA1, 0xBD, 0x42].pack("C*").force_encoding("EUC-JP")
+                     .encode("UTF-8").codepoints.map { |c| "U+%04X" % c }
+            res << [0xA6, 0xD0, 0xA1, 0xC1, 0xA6, 0xD0].pack("C*").force_encoding("EUC-JP")
+                     .encode("UTF-8").codepoints.map { |c| "U+%04X" % c }
+            res << [0x82, 0xA0, 0x81, 0x5C, 0x82, 0xA2].pack("C*").force_encoding("Shift_JIS")
+                     .encode("UTF-8").codepoints.map { |c| "U+%04X" % c }
+            res << "日本語—テスト".encode("EUC-JP").encode("UTF-8")
+            res << "日本語—テスト".encode("Shift_JIS").encode("UTF-8")
+            # …and with an ill-formed byte in the same string, which
+            # `encoding_rs` still gets to group its own way.
+            res << [0x41, 0x80, 0xA1, 0xBD].pack("C*").force_encoding("EUC-JP")
+                     .encode("UTF-8", invalid: :replace).codepoints.map { |c| "U+%04X" % c }
+            res << [0xA1, 0xBD, 0x80, 0x41].pack("C*").force_encoding("EUC-JP")
+                     .encode("UTF-8", invalid: :replace).codepoints.map { |c| "U+%04X" % c }
+            # The undefined-conversion message names the pivot when the
+            # destination is not UTF-8, and BINARY takes its own path.
+            u = [0xF9, 0xA1].pack("C*").force_encoding("EUC-JP")
+            res << %w[ISO-8859-1 UTF-16LE US-ASCII IBM437].map { |d|
+              begin; u.encode(d); rescue => e; [e.class.to_s.split("::").last, e.message]; end
+            }
+            res << (begin; u.encode("ASCII-8BIT"); rescue => e; e.class.to_s.split("::").last; end)
             res
             "#,
         );
