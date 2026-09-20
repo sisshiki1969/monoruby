@@ -1870,6 +1870,7 @@
 6667be2e19d6bb7283e92472772b8804	[[[:req, :x]], [[:req, :y], [:rest, :x]], [[:opt, :x]], :req, [[:opt, :x]], [[:req, :x]], :opt, :req]	__a = [];__a << (proc {|x| }.parameters(lambda: true));__a << (proc {|y, *x| }.p
 667fab9da2a05b848ddd0fd87fbd30d9	[[[false, 300], [true, 300]], :redefined, false]	def probe(a, b) = a == b\n            vals = [1, nil]\n            re
 6689fdb915718c542fa7f92d001dacc0	["inherited:B"]	$res = []\n        class A\n          def self.inherited(subclass)\n      
+6699773914472316918ad23d3c0f6de8	[[[65, 255, 67], "UTF-8"], [[66, 255], "UTF-8"], [[1, 255], "UTF-8"], [[1, 0], "UTF-8"], [[1, 0], "ASCII-8BIT"], [[66, 255], "ASCII-8BIT"], [[97, 97], "ASCII-8BIT"], [[1, 0], "US-ASCII"], [[66, 128], "US-ASCII"], [[97, 97], "US-ASCII"], [[248, 248], "ISO-8859-1"], [[66, 248], "ISO-8859-1"], [[155], "IBM437"], [[192, 192], "KOI8-R"], [[161, 161], "TIS-620"], [[250], "TIS-620"], [[1, 194, 128], "UTF-8"], [[1, 224, 160, 128], "UTF-8"], [[1, 240, 144, 128, 128], "UTF-8"], [[120, 205, 153], "UTF-8"], [[119, 224, 164, 132], "UTF-8"]]	(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); begin; [s.succ.byt
 66b655e81e48c32825c0aeea0b53995d	[0, 10]	f = File.open("Cargo.toml")\n            begin\n              before 
 66b92d6cfcc69793ed5cdd6b3fb7ad21	3.14	class Foo; def to_int; 2; end; end\n            3.14159.truncate(Foo
 66bad7d3dcfda30f39c99e813ab6eccd	"constant"	class A\n          B = 42\n          def f; defined?(B); end\n        end\n
@@ -3808,6 +3809,7 @@ d1a295f75a785d2141f8551da1a6f041	Array	class C < Array; end\nC[1,2,3].map { |x| 
 d1a2f6b3b40a551652027bc197b91882	[:deferred]	def run_masked(timing, blocking = true)\n              klass = Class
 d1b6c360f244221f8cbf36738a39be5a	[10, 25, 40.0, 5]	class C\n              K = 10\n              def initialize; @n = 100
 d1b8a6b7678b598205d8118224d254db	"99"	class HasToI; def to_i; 99; end; end\n            sprintf("%d", HasT
+d1ca3bd19f43be3271304dd034800aef	[[[1, 0], "EUC-JP"], [[0, 161], "Shift_JIS"], [[1, 0], "Emacs-Mule"], [[1, 128], "EUC-JP"], [[1, 0], "Shift_JIS"], [[1, 160], "Shift_JIS"], [[164, 163], "EUC-JP"], [[130, 161], "Shift_JIS"], [[142, 162], "EUC-JP"], [[143, 161, 162], "EUC-JP"], [[65, 65], "EUC-JP"], [[49, 48], "EUC-JP"], [[65, 65, 164, 162], "EUC-JP"], [[65, 65, 130, 160], "Shift_JIS"], [[129, 161, 65], "Emacs-Mule"], [[90, 130, 160], "Emacs-Mule"], [[178], "Shift_JIS"], [[1, 0], "Shift_JIS"], [[], "EUC-JP"], [[46], "EUC-JP"]]	(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); begin; [s.succ.byt
 d1fb6e221ee581e85d0263cbc4321970	[false, false, false]	[$VERBOSE, $-v, $-w]
 d22622fcd363dab097a0d4aa0bfe2e93	30	def f(a:, b:)\n          a + b\n        end\n        \n\n        f(a: 10, b:
 d241f6cfa000d985ad83831917fcd9ab	15	def f(x)\n          yield *x\n        end\n        \n\n        f([1,2,3,4,5]
