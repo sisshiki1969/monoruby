@@ -601,6 +601,12 @@ pub trait GCRoot<T: GCBox>: GC<T> {
 pub trait GCBox: PartialEq {
     fn free(&mut self);
 
+    /// Whether this cell holds an object rather than sitting on the
+    /// free list. A free cell's header is a `next` pointer, so the two
+    /// are told apart by the header alone — no mark bit, which is only
+    /// meaningful during a collection.
+    fn is_alive(&self) -> bool;
+
     fn next(&self) -> Option<std::ptr::NonNull<Self>>;
 
     fn set_next_none(&mut self);
@@ -1357,6 +1363,47 @@ impl<T: GCBox> Allocator<T> {
     /// Returns total active pages.
     ///
     #[allow(unused)]
+    ///
+    /// Call `f` with every cell in the heap that currently holds an
+    /// object.
+    ///
+    /// This is the walk behind `ObjectSpace.each_object`. It reads the
+    /// heap and allocates nothing, so it cannot itself collect; the
+    /// caller is what has to keep the cells it keeps hold of alive.
+    ///
+    /// The cells past `used_in_current` in the page being filled have
+    /// never been handed out, so the walk stops there rather than
+    /// reading uninitialised memory.
+    ///
+    pub(crate) fn for_each_live(&self, mut f: impl FnMut(&T)) {
+        for pinfo in self.pages.iter() {
+            // SAFETY: every page in `pages` is live and fully handed
+            // out, and the cells are only read.
+            unsafe {
+                let page = pinfo.as_ref();
+                let mut ptr = page.get_first_cell();
+                for _ in 0..DATA_LEN {
+                    if (*ptr).is_alive() {
+                        f(&*ptr);
+                    }
+                    ptr = ptr.add(1);
+                }
+            }
+        }
+        // SAFETY: the same, for the prefix of the current page that has
+        // been handed out.
+        unsafe {
+            let page = self.current_page.as_ref();
+            let mut ptr = page.get_first_cell();
+            for _ in 0..self.used_in_current.min(DATA_LEN) {
+                if (*ptr).is_alive() {
+                    f(&*ptr);
+                }
+                ptr = ptr.add(1);
+            }
+        }
+    }
+
     pub fn pages_len(&self) -> usize {
         self.pages.len() + 1
     }

@@ -49,9 +49,36 @@ module ObjectSpace
     private :__entries
   end
 
+  # Yield every object on the heap, or every one that is `kind_of?`
+  # +klass+, and answer how many there were.
+  #
+  # The walk itself is `__live_objects`, in Rust: the allocator knows
+  # which cells hold an object, since a free one's header is a `next`
+  # pointer. What comes back is a *snapshot*, and it has to be — the
+  # block is free to allocate, and so to collect, which would move the
+  # heap out from under a live walk. Holding the snapshot in an Array
+  # also keeps everything in it alive for the duration, which is what
+  # makes it safe to yield.
+  #
+  # The Array is dropped from the enumerable path before yielding
+  # begins, so its own entry — which CRuby's walk would not have — is
+  # skipped rather than reported.
   def self.each_object(klass = nil)
     return to_enum(:each_object, klass) unless block_given?
-    0
+    objs = __live_objects(klass)
+    count = 0
+    i = 0
+    n = objs.size
+    while i < n
+      o = objs[i]
+      i += 1
+      # The snapshot Array is an object too, and it exists only because
+      # of this call.
+      next if o.equal?(objs)
+      count += 1
+      yield o
+    end
+    count
   end
 
   # Register a finalizer for +obj+. The finalizer (a callable or block,

@@ -995,6 +995,10 @@ impl alloc::GCBox for RValue {
     /// note that free() can be called for already free'd rvalue's, because slots in free list
     /// are free'd in the next sweep phase once more.
     ///
+    fn is_alive(&self) -> bool {
+        self.header.is_live()
+    }
+
     fn free(&mut self) {
         if !self.header.is_live() {
             return;
