@@ -395,6 +395,6 @@ specialization 深度上限を使い切った深い呼び出し位置では成�
 
 単一コードのテストヘルパは `monoruby/tests/ruby_oracle.tsv` のスナップショット
 オラクルを再生し、ミス時のみ実 `ruby` を起動する（`CLAUDE.md` 参照）。keyword を
-印字する比較は vendored pin（現在 4.0.2）に一致する CRuby が必要で、
+印字する比較は vendored pin（現在 4.0.6）に一致する CRuby が必要で、
 `MONORUBY_TEST_ORACLE=ruby` で全件を実 Ruby に対して取り直せる。positional
 転送のみのケースは古い Ruby でも検証できる。

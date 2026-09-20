@@ -122,15 +122,23 @@ module Gem::BUNDLED_GEMS # :nodoc:
       false
     end
 
+    if suppress_list = Thread.current[:__bundled_gems_warning_suppression]
+      return if suppress_list.include?(name) || suppress_list.include?(feature)
+    end
+
     return if specs.include?(name)
 
     # Don't warn if a hyphenated gem provides this feature
-    # (e.g., benchmark-ips provides benchmark/ips, not the benchmark gem)
+    # (e.g., benchmark-ips provides benchmark/ips, benchmark/timing, etc.)
     if subfeature
-      feature_parts = feature.split("/")
-      if feature_parts.size >= 2
-        hyphenated_gem = "#{feature_parts[0]}-#{feature_parts[1]}"
-        return if specs.include?(hyphenated_gem)
+      prefix = feature.split("/").first + "-"
+      return if specs.any? { |spec, _| spec.start_with?(prefix) }
+
+      # Don't warn if the feature is found outside the standard library
+      # (e.g., benchmark-ips's lib dir is on $LOAD_PATH but not in specs)
+      resolved = $LOAD_PATH.resolve_feature_path(feature) rescue nil
+      if resolved
+        return unless resolved[1].start_with?(LIBDIR) || resolved[1].start_with?(ARCHDIR)
       end
     end
 
@@ -207,19 +215,28 @@ module Gem::BUNDLED_GEMS # :nodoc:
     require "bundler"
     Bundler.reset!
 
+    # Build and activate a temporary definition containing the original gems + the requested gem
     builder = Bundler::Dsl.new
 
-    if Bundler::SharedHelpers.in_bundle?
-      if Bundler.locked_gems
-        Bundler.locked_gems.specs.each{|spec| builder.gem spec.name, spec.version.to_s }
-      elsif Bundler.definition.gemfiles.size > 0
-        Bundler.definition.gemfiles.each{|gemfile| builder.eval_gemfile(gemfile) }
+    lockfile = nil
+    if Bundler::SharedHelpers.in_bundle? && Bundler.definition.gemfiles.size > 0
+      Bundler.definition.gemfiles.each {|gemfile| builder.eval_gemfile(gemfile) }
+      lockfile = begin
+        Bundler.default_lockfile
+      rescue Bundler::GemfileNotFound
+        nil
       end
+    else
+      # Fake BUNDLE_GEMFILE and BUNDLE_LOCKFILE to let checks pass
+      orig_gemfile = ENV["BUNDLE_GEMFILE"]
+      orig_lockfile = ENV["BUNDLE_LOCKFILE"]
+      Bundler::SharedHelpers.set_env "BUNDLE_GEMFILE", "Gemfile"
+      Bundler::SharedHelpers.set_env "BUNDLE_LOCKFILE", "Gemfile.lock"
     end
 
     builder.gem gem
 
-    definition = builder.to_definition(nil, true)
+    definition = builder.to_definition(lockfile, nil)
     definition.validate_runtime!
 
     begin
@@ -235,6 +252,8 @@ module Gem::BUNDLED_GEMS # :nodoc:
     rescue Bundler::GemNotFound
       warn "Failed to activate #{gem}, please install it with 'gem install #{gem}'"
     ensure
+      ENV['BUNDLE_GEMFILE'] = orig_gemfile if orig_gemfile
+      ENV['BUNDLE_LOCKFILE'] = orig_lockfile if orig_lockfile
       Bundler.ui = orig_ui
       Bundler::Definition.no_lock = orig_no_lock
     end

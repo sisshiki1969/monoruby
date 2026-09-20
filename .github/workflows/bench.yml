@@ -52,7 +52,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "4.0.2"
+          ruby-version: "4.0.6"
 
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -105,7 +105,7 @@ jobs:
         # failure, and a restored older build survives it: the install
         # prefix is wiped only after `make` has succeeded. The nightly
         # Rust toolchain installed above satisfies ZJIT's rustc >= 1.85
-        # requirement; the 4.0.2 ruby installed above is BASERUBY.
+        # requirement; the 4.0.6 ruby installed above is BASERUBY.
         id: zjit
         if: steps.zjit-cache.outputs.cache-hit != 'true'
         continue-on-error: true
@@ -279,7 +279,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "4.0.2"
+          ruby-version: "4.0.6"
 
       - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
         run: gem install bigdecimal --no-document

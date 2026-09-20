@@ -632,13 +632,70 @@ fn pow10(ndigits: i64) -> f64 {
     10f64.powf(ndigits as f64)
 }
 
-// A note for whoever bumps the reference CRuby: the `ruby_4_0` branch has
-// since grown an exact-rational fallback for `ndigits >= DBL_DIG`
-// (`ACCURATE_POW10` / `rb_flo_floor_by_rational`), where `10**ndigits` is
-// no longer exact as a double. The pinned 4.0.2 does not have it, and
-// adding it here makes the answers disagree with that Ruby rather than
-// agree — measured at 547 differences over 240k comparisons, against 0
-// without it. Revisit when the pin moves.
+/// Is `10**ndigits` still exact as a double? Beyond `DBL_DIG` it is not,
+/// and the round-trip below would round twice. CRuby falls back on exact
+/// rational arithmetic there (`ACCURATE_POW10`, numeric.c), and so do we.
+///
+/// This is version-sensitive: 4.0.2 had no such fallback for `#floor` /
+/// `#ceil` and computed the round-trip regardless, so `0.1.ceil(15)` was
+/// `0.1` there and is `0.100000000000001` from 4.0.3-ish on. The pin is
+/// 4.0.6 (`vendor/ruby-stdlib/.ruby-version`); if it ever moves back,
+/// this is the switch.
+fn accurate_pow10(ndigits: i64) -> bool {
+    ndigits < f64::DIGITS as i64
+}
+
+/// `f`, as the exact rational it is, floored (or ceiled) at `ndigits`
+/// decimal places and converted back to a double — CRuby's
+/// `rb_flo_floor_by_rational` / `rb_flo_ceil_by_rational`. Reached only
+/// for the band of `ndigits` above `DBL_DIG` that the overflow guard
+/// does not already answer, so the exponent stays small enough to raise.
+fn round_by_rational(f: f64, ndigits: i64, ceil: bool) -> f64 {
+    let Ok(exp) = u32::try_from(ndigits) else {
+        return f;
+    };
+    let Some(exact) = num::BigRational::from_float(f) else {
+        return f;
+    };
+    let scale = num::BigRational::from(BigInt::from(10u32).pow(exp));
+    let scaled = exact * &scale;
+    let rounded = if ceil { scaled.ceil() } else { scaled.floor() };
+    let q = rounded / &scale;
+    rational_to_f64(&q).unwrap_or(f)
+}
+
+/// A reduced fraction as a double, the way CRuby's `nurat_to_double`
+/// does it — which is not simply the correctly rounded value of the
+/// fraction.
+///
+/// `rb_int_fdiv_double` divides the two integers *as doubles* whenever
+/// the denominator is a fixnum, so each side is rounded and then the
+/// quotient is rounded again; only a bignum denominator takes the
+/// scaled, near-correctly-rounded `big_fdiv_int` path. The difference is
+/// one ulp and shows up at `ndigits` 15 and 16, where `10**ndigits`
+/// still fits a fixnum — so match the division rather than be more
+/// accurate than the thing these answers exist to agree with.
+fn rational_to_f64(q: &num::BigRational) -> Option<f64> {
+    // CRuby's fixnum range: 63-bit signed, one bit for the tag.
+    const FIXNUM_MAX: i128 = (1 << 62) - 1;
+    // `fix_fdiv_double` only divides in doubles while the denominator
+    // still fits the mantissa; at `2**DBL_MANT_DIG` and above it hands
+    // over to `rb_big_fdiv_double`, which scales and divides the
+    // integers and so lands on (near enough) the correctly rounded
+    // value. That threshold is the whole difference between
+    // `0.1.ceil(15)` and `0.1.ceil(16)` agreeing.
+    const DBL_MANT: i128 = 1 << f64::MANTISSA_DIGITS;
+    let (Some(n), Some(d)) = (q.numer().to_i128(), q.denom().to_i128()) else {
+        return q.to_f64();
+    };
+    if n.abs() > FIXNUM_MAX || d.abs() >= DBL_MANT || d == 0 {
+        return q.to_f64();
+    }
+    // `as f64` rounds to nearest, as C's int-to-double conversion does;
+    // `BigInt::to_f64` truncates, which is a whole ulp out once the
+    // numerator passes 2**53 — and here it always has.
+    Some(n as f64 / d as f64)
+}
 
 /// `Float#floor` with `ndigits < 0`: zero the last `-ndigits` digits of
 /// the integer part, rounding toward negative infinity. Done in `BigInt`
@@ -699,6 +756,9 @@ fn floor_ndigits(f: f64, ndigits: i64) -> f64 {
     if f > 0.0 && float_round_underflow(ndigits, binexp) {
         return 0.0;
     }
+    if !accurate_pow10(ndigits) {
+        return round_by_rational(f, ndigits, false);
+    }
     let scale = pow10(ndigits);
     let mul = (f * scale).floor();
     let res = (mul + 1.0) / scale;
@@ -717,6 +777,9 @@ fn ceil_ndigits(f: f64, ndigits: i64) -> f64 {
     }
     if f < 0.0 && float_round_underflow(ndigits, binexp) {
         return 0.0;
+    }
+    if !accurate_pow10(ndigits) {
+        return round_by_rational(f, ndigits, true);
     }
     let scale = pow10(ndigits);
     (f * scale).ceil() / scale

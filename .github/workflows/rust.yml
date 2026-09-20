@@ -16,7 +16,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "4.0.2"
+          ruby-version: "4.0.6"
       - uses: dtolnay/rust-toolchain@nightly
         with:
           # Keep in sync with rust-toolchain.toml. A floating `nightly` here
@@ -172,7 +172,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "4.0.2"
+          ruby-version: "4.0.6"
       - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
         run: gem install bigdecimal --no-document
       - name: Install ruby-bench gem dependencies

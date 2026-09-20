@@ -41,8 +41,9 @@ class Gem::Ext::Builder
     # nmake doesn't support parallel build
     unless is_nmake
       have_make_arguments = make_program.size > 1
+      n_jobs ||= 0
 
-      if !have_make_arguments && !ENV["MAKEFLAGS"] && n_jobs
+      if !have_make_arguments && n_jobs > 1 && !ENV["MAKEFLAGS"]&.match(/-j\d*(\s|\Z)/)
         make_program << "-j#{n_jobs}"
       end
     end
@@ -102,7 +103,8 @@ class Gem::Ext::Builder
       # Set $SOURCE_DATE_EPOCH for the subprocess.
       build_env = { "SOURCE_DATE_EPOCH" => Gem.source_date_epoch_string }.merge(env)
       output, status = begin
-                         Open3.popen2e(build_env, *command, chdir: dir) do |_stdin, stdouterr, wait_thread|
+                         Open3.popen2e(build_env, *command, chdir: dir) do |stdin, stdouterr, wait_thread|
+                           stdin.close
                            output = String.new
                            while line = stdouterr.gets
                              output << line
@@ -163,8 +165,6 @@ class Gem::Ext::Builder
     @gem_dir    = spec.full_gem_path
     @target_rbconfig = target_rbconfig
     @build_jobs = build_jobs
-
-    @ran_rake = false
   end
 
   ##
@@ -177,7 +177,6 @@ class Gem::Ext::Builder
     when /configure/ then
       Gem::Ext::ConfigureBuilder
     when /rakefile/i, /mkrf_conf/i then
-      @ran_rake = true
       Gem::Ext::RakeBuilder
     when /CMakeLists.txt/ then
       Gem::Ext::CmakeBuilder.new
@@ -250,8 +249,6 @@ EOF
     FileUtils.rm_f @spec.gem_build_complete_path
 
     @spec.extensions.each do |extension|
-      break if @ran_rake
-
       build_extension extension, dest_path
     end
 
