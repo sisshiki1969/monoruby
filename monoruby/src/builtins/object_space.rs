@@ -40,6 +40,31 @@ pub(super) fn init(globals: &mut Globals) {
     // allocate — and so to collect — without walking a map that is
     // being mutated underneath it.
     globals.define_builtin_func(weakmap, "__entries", weakmap_entries, 0);
+    globals.define_builtin_func_with(weakmap, "delete", weakmap_delete, 1, 1, false);
+    globals.define_builtin_func(weakmap, "inspect", weakmap_inspect, 0);
+    globals.define_builtin_func(weakmap, "to_s", weakmap_inspect, 0);
+
+    // `WeakKeyMap` shares `WeakMap`'s cell: it is the same pairs, with
+    // the value half held strongly instead of weakly (see
+    // `WeakMapInner::weak_values`). What differs is the lookup — CRuby
+    // compares a `WeakKeyMap`'s keys with `#hash` / `#eql?` rather than
+    // by identity — so it gets its own methods rather than sharing
+    // `WeakMap`'s.
+    let weakkeymap = globals
+        .store
+        .define_class_with_instance_ty("WeakKeyMap", object, object_space, ObjTy::WEAKMAP)
+        .id();
+    globals.store[weakkeymap].set_alloc_func(weakkeymap_alloc);
+    globals.define_builtin_func(weakkeymap, "[]", weakkeymap_index, 1);
+    globals.define_builtin_func(weakkeymap, "[]=", weakkeymap_index_assign, 2);
+    globals.define_builtin_func(weakkeymap, "getkey", weakkeymap_getkey, 1);
+    globals.define_builtin_func(weakkeymap, "key?", weakkeymap_key_p, 1);
+    globals.define_builtin_func_with(weakkeymap, "delete", weakkeymap_delete, 1, 1, false);
+    globals.define_builtin_func(weakkeymap, "clear", weakkeymap_clear, 0);
+    globals.define_builtin_func(weakkeymap, "inspect", weakkeymap_inspect, 0);
+    // No `#size` and no `#to_s`: CRuby's WeakKeyMap has exactly `[]`,
+    // `[]=`, `clear`, `delete`, `getkey`, `inspect` and `key?`. The
+    // size shows up inside `#inspect` and nowhere else.
 
     // The heap walk behind `ObjectSpace.each_object`. It answers a
     // snapshot Array, which the Ruby half yields from — see there for
@@ -169,15 +194,26 @@ fn weakmap_index_assign(
     Ok(Value::nil())
 }
 
-/// WeakMap#delete(key) -> the value, or nil
+/// WeakMap#delete(key) { |key| } -> the value, the block's answer, or nil
 #[monoruby_builtin]
-fn weakmap_delete(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn weakmap_delete(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     map_of(globals, &lfp.self_val())?;
-    Ok(lfp
-        .self_val()
-        .as_weakmap_inner_mut()
-        .remove(lfp.arg(0))
-        .unwrap_or_default())
+    if let Some(v) = lfp.self_val().as_weakmap_inner_mut().remove(lfp.arg(0)) {
+        return Ok(v);
+    }
+    // A miss runs the block on the key, if one was given.
+    match lfp.block() {
+        Some(bh) => {
+            let data = vm.get_block_data(globals, bh)?;
+            vm.invoke_block(globals, &data, &[lfp.arg(0)])
+        }
+        None => Ok(Value::nil()),
+    }
 }
 
 /// WeakMap#key?(key) -> bool
@@ -228,6 +264,151 @@ fn weakmap_entries(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// `ObjectSpace::WeakKeyMap` (#1422), which did not exist.
+    ///
+    /// It is weak-key and *strong*-value, and unlike `WeakMap` it
+    /// compares keys with `#hash` / `#eql?` rather than by identity.
+    #[test]
+    fn weak_key_map() {
+        run_tests(&[
+            // Equality semantics, and the first key is the one kept.
+            r#"
+            m = ObjectSpace::WeakKeyMap.new
+            k1, k2 = %w[a a].map(&:upcase)
+            m[k1] = 1
+            [m[k2], m.key?(k2), m.getkey(k2).equal?(k1), m.getkey("X"), k1, k2]
+            "#,
+            // An equal key replaces the value, not the key, so the size
+            // does not grow.
+            r#"
+            m = ObjectSpace::WeakKeyMap.new
+            a, b, c = "foo", "bar", "bar"
+            m[a] = 1; m[b] = 2; m[c] = 3
+            [m[b], m[c], m.getkey(b).equal?(c), m.getkey(b).equal?(b), a, b, c]
+            "#,
+            // A key with no cell can never be collected, so it is
+            // refused — and never found.
+            r#"
+            m = ObjectSpace::WeakKeyMap.new
+            r = [1, 1.0, :a, true, false, nil].map do |k|
+              begin
+                m[k] = "x"
+                :stored
+              rescue ArgumentError => e
+                e.message
+              end
+            end
+            r << [m.getkey(1), m.getkey(:a), m.delete(1), m.key?(nil)]
+            "#,
+            // `#delete` answers the value, and runs the block on a miss.
+            r#"
+            m = ObjectSpace::WeakKeyMap.new
+            k = "K"
+            m[k] = 42
+            got = []
+            r1 = m.delete("K")
+            r2 = m.delete(Object.new) { |key| got << key.class.to_s; 5 }
+            r3 = m.delete(Object.new)
+            [r1, r2, r3, got, m.key?(k), k]
+            "#,
+            // `#clear` and `#size`.
+            r#"
+            m = ObjectSpace::WeakKeyMap.new
+            a, b = "a", "b"
+            m[a] = 1; m[b] = 2
+            [m.key?(a), m.clear.equal?(m), m.key?(a), m[a], a, b]
+            "#,
+            // `#inspect` shows the size and nothing else — the pairs are
+            // weak, so rendering them would be a promise it cannot keep.
+            r#"
+            m = ObjectSpace::WeakKeyMap.new
+            a = "foo"
+            empty = m.inspect
+            m[a] = 1
+            one = m.inspect
+            [!!(empty =~ /\A#<ObjectSpace::WeakKeyMap:0x[0-9a-f]+ size=0>\z/),
+             !!(one =~ /\A#<ObjectSpace::WeakKeyMap:0x[0-9a-f]+ size=1>\z/),
+             a]
+            "#,
+            // A key is compared by `#hash` first: a different hash never
+            // reaches `#eql?`.
+            r#"
+            calls = []
+            k = Object.new
+            k.define_singleton_method(:hash) { calls << :hash; 42 }
+            k.define_singleton_method(:eql?) { |o| calls << :eql; false }
+            other = Object.new
+            other.define_singleton_method(:hash) { 7 }
+            m = ObjectSpace::WeakKeyMap.new
+            m[other] = 1
+            [m[k], calls, other.class.to_s]
+            "#,
+            // An identical key finds itself even when `#eql?` says no.
+            r#"
+            k = Object.new
+            k.define_singleton_method(:eql?) { |o| false }
+            m = ObjectSpace::WeakKeyMap.new
+            m[k] = 7
+            [m[k], m.key?(k), m.getkey(k).equal?(k)]
+            "#,
+            // A value reachable only from the map survives a collection:
+            // that is the whole difference from `WeakMap`.
+            r#"
+            m = ObjectSpace::WeakKeyMap.new
+            key = "held"
+            m[key] = "value that only the map holds"
+            GC.start
+            [m[key], m.key?(key), key]
+            "#,
+        ]);
+        // A key with no `#hash` cannot be stored.
+        run_test_error(
+            r#"ObjectSpace::WeakKeyMap.new[BasicObject.new] = 1"#,
+        );
+    }
+
+    /// The `WeakMap` corners its own specs cover, which were failing
+    /// alongside the missing `WeakKeyMap`.
+    #[test]
+    fn weak_map_each_delete_and_inspect() {
+        run_tests(&[
+            // `#delete` runs the block on a miss, as `WeakKeyMap`'s does.
+            r#"
+            m = ObjectSpace::WeakMap.new
+            k, v = Object.new, Object.new
+            m[k] = v
+            [m.delete(k).equal?(v), m.delete(Object.new) { |key| 5 },
+             m.delete(Object.new), m.key?(k)]
+            "#,
+            // `#each` is not an Enumerator without a block: an empty map
+            // answers itself, a non-empty one raises on the first pair.
+            r#"
+            m = ObjectSpace::WeakMap.new
+            r = [m.each.equal?(m), m.each_key.equal?(m), m.each_value.equal?(m)]
+            k, v = "k", "v"
+            m[k] = v
+            r << [(m.each rescue $!.class.to_s),
+                  (m.each_key rescue $!.class.to_s),
+                  (m.each_value rescue $!.class.to_s)]
+            r << k << v
+            "#,
+            // It is Enumerable, which needs the include to happen after
+            // the module exists.
+            r#"ObjectSpace::WeakMap.include?(Enumerable)"#,
+            // `#inspect` shows the pairs, and an empty map shows none.
+            r#"
+            m = ObjectSpace::WeakMap.new
+            empty = m.inspect
+            k, v = Object.new, Object.new
+            m[k] = v
+            one = m.inspect
+            [!!(empty =~ /\A#<ObjectSpace::WeakMap:0x[0-9a-f]+>\z/),
+             !!(one =~ /\A#<ObjectSpace::WeakMap:0x[0-9a-f]+: #<Object:0x[0-9a-f]+> => #<Object:0x[0-9a-f]+>>\z/),
+             k.class.to_s, v.class.to_s]
+            "#,
+        ]);
+    }
 
     /// `ObjectSpace.each_object` (#1422). It answered nothing at all —
     /// `builtins/object_space.rb` said so in as many words — where
@@ -306,4 +487,251 @@ mod tests {
             "#,
         ]);
     }
+}
+
+extern "C" fn weakkeymap_alloc(class_id: ClassId, _globals: &mut Globals) -> Value {
+    Value::new_weakkeymap(class_id)
+}
+
+///
+/// The index of the pair whose key is `eql?` to `key`, by CRuby's rule
+/// for a `WeakKeyMap`: `#hash` first, then `#eql?`.
+///
+/// An immediate — Integer, Float, Symbol, `true`, `false`, `nil` — is
+/// never a key, because it has no cell and so can never be collected;
+/// CRuby refuses to store under one and answers `nil` for every lookup.
+/// That check is the caller's, since only `#[]=` raises for it.
+///
+/// The scan is linear. A weak map is a registry of a few entries, which
+/// is the same reasoning `WeakMap` records for its own identity scan,
+/// and it keeps the comparison in one place — `#eql?` can run arbitrary
+/// Ruby, which a hash table would have to do while rehashing too.
+///
+fn weakkeymap_find(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    key: Value,
+) -> Result<Option<usize>> {
+    if key.try_rvalue().is_none() {
+        return Ok(None);
+    }
+    let entries: Vec<Value> = map_of(globals, &self_val)?
+        .entries()
+        .iter()
+        .map(|(k, _)| *k)
+        .collect();
+    // Identity first, so a key finds itself however its `#eql?`
+    // behaves — CRuby has an example for exactly that.
+    if let Some(i) = entries.iter().position(|k| k.id() == key.id()) {
+        return Ok(Some(i));
+    }
+    // Then `#hash`, once, on the key being looked up. A key with no
+    // `#hash` fails here, which is what makes `map[BasicObject.new] = 1`
+    // a NoMethodError rather than a stored pair.
+    let hash = IdentId::get_id("hash");
+    let key_hash = vm.invoke_method_inner(globals, hash, key, &[], None, None)?;
+    for (i, k) in entries.into_iter().enumerate() {
+        let k_hash = vm.invoke_method_inner(globals, hash, k, &[], None, None)?;
+        if !vm
+            .invoke_method_inner(globals, IdentId::_EQ, k_hash, &[key_hash], None, None)?
+            .as_bool()
+        {
+            continue;
+        }
+        // `#eql?` goes to the key being looked up, not the one held:
+        // CRuby asks the argument, and the specs check that the stored
+        // key is never asked.
+        let eq = vm.invoke_method_inner(globals, IdentId::get_id("eql?"), key, &[k], None, None)?;
+        if eq.as_bool() {
+            return Ok(Some(i));
+        }
+    }
+    Ok(None)
+}
+
+/// WeakKeyMap#[](key) -> the value, or nil
+#[monoruby_builtin]
+fn weakkeymap_index(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    map_of(globals, &self_val)?;
+    Ok(match weakkeymap_find(vm, globals, self_val, lfp.arg(0))? {
+        Some(i) => map_of(globals, &self_val)?.entries()[i].1,
+        None => Value::nil(),
+    })
+}
+
+/// WeakKeyMap#[]=(key, value) -> value
+#[monoruby_builtin]
+fn weakkeymap_index_assign(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    map_of(globals, &self_val)?;
+    let (key, value) = (lfp.arg(0), lfp.arg(1));
+    // A key with no cell can never be collected, so the pair could
+    // never be cleared and the map would leak. CRuby refuses it.
+    if key.try_rvalue().is_none() {
+        return Err(MonorubyErr::argumenterr(
+            "WeakKeyMap keys must be garbage collectable",
+        ));
+    }
+    // The lookup calls `#hash` on the key, so one that has none fails
+    // there — `map[BasicObject.new] = 1` is a NoMethodError.
+    match weakkeymap_find(vm, globals, self_val, key)? {
+        // An equal key replaces the one already held, as well as its
+        // value: CRuby's newest key wins, so `#getkey` afterwards
+        // answers the one stored most recently rather than the first.
+        Some(i) => self_val.as_weakmap_inner_mut().set_at(i, key, value),
+        None => self_val.as_weakmap_inner_mut().push(key, value),
+    }
+    // The values are the strong half here, so an old map taking a young
+    // one has to be remembered for the next minor collection.
+    self_val.write_barrier(value);
+    Ok(value)
+}
+
+/// WeakKeyMap#getkey(key) -> the key the map holds, or nil
+#[monoruby_builtin]
+fn weakkeymap_getkey(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    map_of(globals, &self_val)?;
+    Ok(match weakkeymap_find(vm, globals, self_val, lfp.arg(0))? {
+        Some(i) => map_of(globals, &self_val)?.entries()[i].0,
+        None => Value::nil(),
+    })
+}
+
+/// WeakKeyMap#key?(key) -> bool
+#[monoruby_builtin]
+fn weakkeymap_key_p(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    map_of(globals, &self_val)?;
+    let found = weakkeymap_find(vm, globals, self_val, lfp.arg(0))?;
+    Ok(Value::bool(found.is_some()))
+}
+
+/// WeakKeyMap#delete(key) { |key| } -> the value, the block's answer, or nil
+#[monoruby_builtin]
+fn weakkeymap_delete(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    map_of(globals, &self_val)?;
+    let key = lfp.arg(0);
+    if let Some(i) = weakkeymap_find(vm, globals, self_val, key)? {
+        return Ok(self_val.as_weakmap_inner_mut().remove_at(i));
+    }
+    // A miss runs the block on the key, if one was given.
+    match lfp.block() {
+        Some(bh) => {
+            let data = vm.get_block_data(globals, bh)?;
+            vm.invoke_block(globals, &data, &[key])
+        }
+        None => Ok(Value::nil()),
+    }
+}
+
+/// WeakKeyMap#clear -> self
+#[monoruby_builtin]
+fn weakkeymap_clear(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    map_of(globals, &self_val)?;
+    self_val.as_weakmap_inner_mut().clear();
+    Ok(self_val)
+}
+
+/// WeakKeyMap#inspect -> String
+///
+/// CRuby shows the size and nothing else — the pairs are weak, so
+/// rendering them would be a promise it cannot keep.
+#[monoruby_builtin]
+fn weakkeymap_inspect(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    map_of(globals, &self_val)?;
+    let name = globals
+        .store
+        .get_class_name(self_val.real_class(&globals.store).id());
+    Ok(Value::string(format!(
+        "#<{name}:0x{:016x} size={}>",
+        self_val.id(),
+        map_of(globals, &self_val)?.len()
+    )))
+}
+
+/// `#<ClassName:0xaddr>` for an object, without dispatching.
+///
+/// A weak map's halves may be `BasicObject`s, which have no `#inspect`
+/// — and calling one would run Ruby while rendering a map whose pairs
+/// the collector may break. CRuby renders them the same way, with
+/// `rb_any_to_s`.
+fn plain_inspect(globals: &Globals, v: Value) -> String {
+    match v.try_rvalue() {
+        Some(_) => format!(
+            "#<{}:0x{:016x}>",
+            globals.store.get_class_name(v.real_class(&globals.store).id()),
+            v.id()
+        ),
+        // An immediate has no address to show, so it renders itself.
+        None => v.inspect(&globals.store),
+    }
+}
+
+/// WeakMap#inspect -> String
+///
+/// CRuby shows the pairs: `#<ObjectSpace::WeakMap:0xaddr: k => v, …>`,
+/// and just `#<ObjectSpace::WeakMap:0xaddr>` when there are none.
+#[monoruby_builtin]
+fn weakmap_inspect(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let pairs: Vec<(Value, Value)> = map_of(globals, &self_val)?.iter().collect();
+    let name = globals
+        .store
+        .get_class_name(self_val.real_class(&globals.store).id());
+    let head = format!("#<{name}:0x{:016x}", self_val.id());
+    if pairs.is_empty() {
+        return Ok(Value::string(format!("{head}>")));
+    }
+    let body = pairs
+        .iter()
+        .map(|(k, v)| format!("{} => {}", plain_inspect(globals, *k), plain_inspect(globals, *v)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(Value::string(format!("{head}: {body}>")))
 }

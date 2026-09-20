@@ -9,7 +9,9 @@
 # Object iteration is still unsupported: `each_object` answers nothing.
 module ObjectSpace
   class WeakMap
-    include ::Enumerable if defined?(::Enumerable)
+    # `include Enumerable` happens in `startup.rb`, next to `IO`'s:
+    # this file is loaded before `enumerable.rb`, so the module does not
+    # exist yet here.
 
     alias include? key?
     alias member? key?
@@ -18,8 +20,12 @@ module ObjectSpace
     # The pairs, as of the moment `each` was called. A block is free to
     # allocate — and so to collect, which breaks pairs — so iteration
     # walks a snapshot rather than the live map.
+    #
+    # Unlike almost every other `each` in Ruby, a missing block is not
+    # an Enumerator here: CRuby's WeakMap yields straight away, so an
+    # empty map answers itself and a non-empty one raises
+    # LocalJumpError on the first pair it tries to hand over.
     def each
-      return to_enum(:each) unless block_given?
       e = __entries
       i = 0
       while i < e.size
@@ -31,19 +37,13 @@ module ObjectSpace
     alias each_pair each
 
     def each_key
-      return to_enum(:each_key) unless block_given?
       keys.each { |k| yield k }
       self
     end
 
     def each_value
-      return to_enum(:each_value) unless block_given?
       values.each { |v| yield v }
       self
-    end
-
-    def inspect
-      "#<ObjectSpace::WeakMap:#{format('0x%016x', object_id << 1)} size=#{size}>"
     end
 
     private :__entries
@@ -107,7 +107,23 @@ module ObjectSpace
     GC.start(**opts)
   end
 
+  # Resolve an `#object_id` back to its object.
+  #
+  # Deprecated in Ruby 4.0 and warned about on every call, which is the
+  # only thing ruby/spec still checks for it there.
+  #
+  # It used to raise for everything, because there was no way to find an
+  # object by id; `each_object` gives one. `each_object(Object)` rather
+  # than the bare form, since a BasicObject has no `#object_id` to
+  # compare. An Integer, Symbol or Float id still does not resolve —
+  # those encode their value in the id itself and have no cell to find,
+  # so they would need a decoder rather than a search.
   def self._id2ref(id)
+    warn "ObjectSpace._id2ref is deprecated", uplevel: 1
+    return nil if nil.object_id == id
+    return true if true.object_id == id
+    return false if false.object_id == id
+    each_object(Object) { |o| return o if o.object_id == id }
     raise RangeError, "0x#{id.to_s(16)} is not id value"
   end
 

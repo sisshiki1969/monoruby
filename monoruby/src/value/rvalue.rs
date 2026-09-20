@@ -2450,6 +2450,16 @@ impl RValue {
         }
     }
 
+    /// The payload of an `ObjectSpace::WeakKeyMap`: the same cell as a
+    /// weak map, but holding its values strongly.
+    pub(super) fn new_weakkeymap(class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::WEAKMAP),
+            kind: ObjKind::weakmap(WeakMapInner::new_weak_keys()),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_argf(class_id: ClassId, inner: ArgfInner) -> Self {
         RValue {
             header: Header::new(class_id, ObjTy::ARGF),
