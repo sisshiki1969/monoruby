@@ -1271,7 +1271,7 @@ mod tests {
         // the same branch on the same host. That makes the result
         // platform-dependent, hence a live CRuby rather than the oracle.
         run_test_once_live(
-            r##"(d="/tmp/mono_pwde_#{Process.pid}"; Dir.mkdir(d); fs=Encoding.find("filesystem"); want=(fs == Encoding::US_ASCII ? Encoding::BINARY : fs); r=[Dir.pwd.encoding == want, Dir.getwd.encoding == want]; sub="#{d}/" + "\xFF\xFE".dup.force_encoding("binary"); made=(begin; Dir.mkdir(sub); true; rescue SystemCallError; false; end); if made; r << Dir.chdir(sub) { [Dir.pwd.encoding == want, Dir.pwd.valid_encoding? == (want == Encoding::BINARY)] }; Dir.rmdir(sub); else; r << :no_invalid_utf8_names; end; Dir.rmdir(d); r)"##,
+            r##"(d="/tmp/mono_pwde_#{Process.pid}"; Dir.mkdir(d); fs=Encoding.find("filesystem"); want=(fs == Encoding::US_ASCII ? Encoding::BINARY : fs); r=[Dir.pwd.encoding == want, Dir.getwd.encoding == want]; orig=Encoding.default_external; Encoding.default_external=Encoding::US_ASCII; r << Dir.pwd.encoding.name; Encoding.default_external=Encoding::UTF_8; r << Dir.pwd.encoding.name; Encoding.default_external=orig; sub="#{d}/" + "\xFF\xFE".dup.force_encoding("binary"); made=(begin; Dir.mkdir(sub); true; rescue SystemCallError; false; end); if made; r << Dir.chdir(sub) { [Dir.pwd.encoding == want, Dir.pwd.valid_encoding? == (want == Encoding::BINARY)] }; Dir.rmdir(sub); else; r << :no_invalid_utf8_names; end; Dir.rmdir(d); r)"##,
         );
     }
 

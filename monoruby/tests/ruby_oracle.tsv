@@ -3332,6 +3332,7 @@ b82f7004e67d1dce1e4af8e9795a0307	:OVERRIDDEN	class FalseClass; def !; :OVERRIDDE
 b831c7c725c3ecbf2dd649e236c9fbcd	"Hello world"	"hello world".capitalize
 b838044a3ab73c7623063d1b22818274	[1, 2, [5, 6], 3, 4]	def f\n          yield [1,2,3,4,5,6]\n        end\n        \n\n        f { |
 b843b98c578472cd813d8c5ddb8158b4	"f"	def f\n          "f"\n        end\n        alias g f\n        g\n        
+b8529860fdc3802182dd091eef8175ea	[true, true, true, true, :incompat]	(fs=Encoding.find("filesystem"); f=->(s){ File.expand_path(s).encoding == fs }; 
 b857ede9f6bd08a0272c61d48b93bbc1	[1, 5, 1, true, 5, [true, true, true, true, true]]	class String\n          def hash; 42; end\n          def eql?(o); false; 
 b85aa27afabd41f49479b590bb38e22f	[4, 8, 73, 99, 25, 77, 66, 83, 112, 101, 99, 58, 58, 87, 105, 100, 101, 227, 129, 130, 67, 108, 97, 115, 115, 6, 58, 6, 69, 84]	module MBSpec; end\n            name = "WideあClass"\n            MBSp
 b8659d9eac8d9dda73d245a1976bcfbd	256	253.succ.succ.succ
@@ -3766,7 +3767,6 @@ cf6872bba5781ae3921f031445dcb5b8	[1, 2]	class C\n              define_method(:m)
 cf6bd38f8f98b72059f152760441d427	[true, 5, false, nil, false, nil, false, false, true, 1280, true, false, false, true, true, true, true]	pid = fork { exit 5 }\n            Process.wait(pid)\n            s =
 cf85f9548841ec0b0c470064817b4d36	""	f = File.open("/dev/null", "r")\n            f.read(0)\n        
 cf9672bc0f3346ba3de51fd90ea702e4	[:foo]	$res = []\n            class C\n              def self.singleton_meth
-cf9ad09b764015cc353d012562df9a42	[true, true, true, true]	(fs=Encoding.find("filesystem"); f=->(s){ File.expand_path(s).encoding == fs }; 
 cfa30b29bf3ccea5e600ee36663af61d	["US-ASCII", "US-ASCII", "US-ASCII"]	s = "abc".dup.force_encoding("US-ASCII")\n              s.partitio
 cfaf7efe92a4e7e016bf9da03af47c5a	[true, "m"]	bytes = Marshal.dump(Enumerable)\n            t = Marshal.load(bytes
 cfbb4a0d817bfb9eff84a564fe2b3828	[0, true, false, true, false, false]	o = Object.new\n        pr = proc { |id| }\n        a = ObjectSpace.defin

@@ -4027,15 +4027,15 @@ mod tests {
         // the result, so the result carries that encoding whatever the
         // argument's own encoding was.
         //
-        // Only all-ASCII remainders are asserted here. A remainder that
-        // is *not* all-ASCII is the ordinary String-append
-        // incompatibility, and whether it raises turns on the identity
-        // of the filesystem encoding — which CRuby reports as UTF8-MAC
-        // on macOS while monoruby folds that onto plain UTF-8, so the
-        // two disagree there for reasons that have nothing to do with
-        // this rule.
+        // A remainder that is *not* all-ASCII is the ordinary
+        // String-append incompatibility. Only the BINARY one is
+        // asserted: every ASCII-compatible filesystem encoding refuses
+        // it, so the answer is the same on every host, while a UTF-8
+        // remainder turns on the filesystem encoding's identity — which
+        // CRuby reports as UTF8-MAC on macOS while monoruby folds that
+        // onto plain UTF-8.
         run_test_once(
-            r##"(fs=Encoding.find("filesystem"); f=->(s){ File.expand_path(s).encoding == fs }; [f.call("~"), f.call("~/foo"), f.call("~root"), f.call("~/foo".encode("EUC-JP"))])"##,
+            r##"(fs=Encoding.find("filesystem"); f=->(s){ File.expand_path(s).encoding == fs }; g=(begin; File.expand_path("~/" + "\xFF".dup.force_encoding("binary")); :ok; rescue Encoding::CompatibilityError; :incompat; end); [f.call("~"), f.call("~/foo"), f.call("~root"), f.call("~/foo".encode("EUC-JP")), g])"##,
         );
     }
 
