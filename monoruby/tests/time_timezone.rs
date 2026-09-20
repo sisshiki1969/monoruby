@@ -1,5 +1,6 @@
 extern crate monoruby;
 use monoruby::tests::*;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 // The system local timezone is read through libc (`tzset` / `localtime_r` /
 // `mktime`), not chrono's `Local`, which resolves the zone once and caches
@@ -12,8 +13,21 @@ use monoruby::tests::*;
 // Its own test binary: the body rewrites the process's `TZ`, which would
 // otherwise race with any other test reading a local time.
 
+/// Every test in this file rewrites the process's `TZ`, so no two of
+/// them can run at once. `cargo test` runs one binary's tests on
+/// threads of a single process — nextest, which CI uses, gives each its
+/// own — so they take this lock and the lock is what makes the file's
+/// isolation real either way.
+fn tz_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[test]
 fn local_times_follow_a_runtime_tz_change() {
+    let _tz = tz_lock();
     run_test_once(
         r#"
         r = []
@@ -44,6 +58,7 @@ fn local_times_follow_a_runtime_tz_change() {
 
 #[test]
 fn zone_name_and_dst() {
+    let _tz = tz_lock();
     // `Time#zone` was nil for every local time and `#dst?` was hardwired
     // to false, because `TimeInner::Local` could not tell a time in the
     // system zone from one at a plain offset — CRuby answers the zone's
@@ -107,6 +122,7 @@ fn zone_name_and_dst() {
 
 #[test]
 fn timezone_objects() {
+    let _tz = tz_lock();
     // The timezone-object protocol. `Time.now(in: tz)` did not try it at
     // all — it handed the object straight to the offset parser, which
     // answered "can't convert … into an exact number" — and the offset
@@ -184,6 +200,7 @@ fn timezone_objects() {
 
 #[test]
 fn marshal_payload_holds_the_utc_clock() {
+    let _tz = tz_lock();
     // The 8-byte `Time#_dump` payload carries the **UTC** clock whatever
     // zone the time is in; the `:offset` ivar beside it is what puts it
     // back. monoruby wrote the *local* clock, which round-tripped within
@@ -226,6 +243,7 @@ fn marshal_payload_holds_the_utc_clock() {
 // to a different wall clock is discarded.
 #[test]
 fn time_local_isdst_picks_the_side_of_a_fall_back() {
+    let _tz = tz_lock();
     run_test_once(
         r#"
         old = ENV['TZ']
