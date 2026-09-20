@@ -30,10 +30,20 @@ pub fn ruby_path() -> &'static str {
 }
 
 fn find_ruby() -> String {
-    ruby_candidates()
+    resolve_ruby(ruby_candidates())
+}
+
+///
+/// The first candidate that answers a new enough `RUBY_VERSION`. With
+/// none — no host Ruby at all — the answer is still `ruby`, so the
+/// failure a test then hits names the command it could not run rather
+/// than a path nobody configured.
+///
+fn resolve_ruby(candidates: Vec<String>) -> String {
+    candidates
         .into_iter()
         .find(|cmd| ruby_version_ok(cmd))
-        .unwrap_or_else(|| "ruby".to_string()) // will fail with a clear error
+        .unwrap_or_else(|| "ruby".to_string())
 }
 
 ///
@@ -179,15 +189,29 @@ mod tests {
     }
 
     ///
-    /// A candidate that cannot be spawned is not a Ruby, and neither is
-    /// one that runs but answers something that is not a version — the
-    /// two ways `find_ruby` walks past an entry.
+    /// The three ways `resolve_ruby` walks past a candidate: it cannot
+    /// be spawned, it runs and fails (an rbenv shim with no version
+    /// selected exits 1), or it succeeds but answers something that is
+    /// not a version.
     ///
     #[test]
     fn a_candidate_that_is_not_a_ruby_is_rejected() {
         assert!(!ruby_version_ok("monoruby-no-such-command-exists"));
+        assert!(!ruby_version_ok("false"));
         // Runs, exits 0, prints its arguments rather than a version.
         assert!(!ruby_version_ok("echo"));
+    }
+
+    ///
+    /// With nothing usable to resolve to, the harness still answers
+    /// `ruby` — see `resolve_ruby`.
+    ///
+    #[test]
+    fn no_usable_ruby_still_resolves_to_a_name() {
+        assert_eq!(
+            "ruby",
+            resolve_ruby(vec!["monoruby-no-such-command-exists".to_string()])
+        );
     }
 
     ///
