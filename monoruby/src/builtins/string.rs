@@ -9350,10 +9350,32 @@ fn collect_grapheme_clusters(inner: &RStringInner) -> Vec<RStringInner> {
         // the encoding's business. A unit that is not a character (a
         // lone surrogate, a non-scalar) stands in as U+FFFD for the
         // segmentation, which makes it its own cluster.
-        let units: Vec<(char, &[u8])> = inner
+        // A code unit that ran out of bytes is nobody's cluster, the
+        // same way a truncated UTF-8 sequence is: only the *last*
+        // slice can be short, so dropping it is the whole rule.
+        let unit_width = if matches!(enc, Encoding::Utf16Le | Encoding::Utf16Be) {
+            2
+        } else {
+            4
+        };
+        let mut units: Vec<(char, &[u8])> = inner
             .iter_char_bytes()
             .map(|b| (utf16_32_scalar(b, enc), b))
             .collect();
+        if units.last().is_some_and(|(_, b)| b.len() < unit_width) {
+            units.pop();
+        }
+        // …and a high surrogate left at the end with no low half after
+        // it is the same thing one level up — half a character, so it
+        // goes too. The iterator only yields one on its own when the
+        // pair was cut short.
+        if matches!(enc, Encoding::Utf16Le | Encoding::Utf16Be)
+            && units.last().is_some_and(|(_, b)| {
+                b.len() == 2 && (0xD800..0xDC00).contains(&utf16_unit(b, enc))
+            })
+        {
+            units.pop();
+        }
         let text: String = units.iter().map(|(c, _)| *c).collect();
         let mut out = Vec::with_capacity(units.len());
         let mut i = 0;
@@ -9375,6 +9397,16 @@ fn collect_grapheme_clusters(inner: &RStringInner) -> Vec<RStringInner> {
             .map(|s| RStringInner::from_encoding(s, enc))
             .collect()
     }
+}
+
+/// One UTF-16 code unit, read from its two bytes in `enc`'s order.
+fn utf16_unit(bytes: &[u8], enc: Encoding) -> u32 {
+    let (hi, lo) = if enc == Encoding::Utf16Be {
+        (bytes[0], bytes[1])
+    } else {
+        (bytes[1], bytes[0])
+    };
+    ((hi as u32) << 8) | lo as u32
 }
 
 /// The character one UTF-16/UTF-32 code unit (as `iter_char_bytes`
@@ -12676,6 +12708,24 @@ mod tests {
             r#"s = [0x61, 0x62, 0x1F3F3, 0xFE0F, 0x200D, 0x1F308, 0x1F43E].pack("U*")
                s.encode("UTF-16LE").grapheme_clusters.map { |c| c.encode("UTF-8") } ==
                  s.grapheme_clusters"#,
+            // A code unit cut short at the end is nobody's cluster, and
+            // neither is a high surrogate whose low half went with it —
+            // the same "it merely ran out of bytes" rule the UTF-8 walk
+            // follows, one and two levels up.
+            r#"%w[UTF-16LE UTF-16BE UTF-32LE UTF-32BE].map { |e|
+                 b = [0x61, 0x1F3F3].pack("U*").encode(e).bytes
+                 (1..3).map { |cut| b[0, b.size - cut].pack("C*").force_encoding(e)
+                                     .grapheme_clusters.map(&:bytesize) }
+               }"#,
+            r#"[0x61, 0x00, 0x62].pack("C*").force_encoding("UTF-16LE")
+                 .grapheme_clusters.map(&:bytes)"#,
+            r#"[0x61, 0, 0, 0, 0x62].pack("C*").force_encoding("UTF-32LE")
+                 .grapheme_clusters.map(&:bytes)"#,
+            // …and a pure-ASCII Emacs-Mule string, whose length is its
+            // byte count and needs no walk at all.
+            r#"s = "a\tb\n".dup.force_encoding("Emacs-Mule")
+               [s.length, s.valid_encoding?, s.chars, s.scrub("?").bytes]"#,
+            r#"e = "".dup.force_encoding("Emacs-Mule"); [e.length, e.valid_encoding?]"#,
             // A *lone* surrogate is deliberately not pinned here: CRuby
             // re-syncs its UTF-16 walk a byte at a time there, so it
             // answers `[[0], [216, 97]]` for `00 D8 61 00` and drops
