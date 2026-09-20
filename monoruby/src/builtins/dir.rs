@@ -865,17 +865,22 @@ fn home(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     user
                 )));
             }
-            std::ffi::CStr::from_ptr((*pw).pw_dir)
-                .to_string_lossy()
-                .to_string()
+            std::ffi::CStr::from_ptr((*pw).pw_dir).to_bytes().to_vec()
         };
-        return Ok(Value::string(dir));
+        let enc = super::file::filesystem_encoding(globals);
+        return Ok(super::file::path_value(&dir, enc));
     }
     let home = match dirs::home_dir() {
         Some(home) => home,
         None => return Ok(Value::nil()),
     };
-    Ok(Value::string(home.to_string_lossy().to_string()))
+    // CRuby's `copy_home_path` associates the raw bytes with the
+    // filesystem encoding — a plain associate, as `File.readlink` does.
+    let enc = super::file::filesystem_encoding(globals);
+    Ok(super::file::path_value(
+        super::file::pathbuf_bytes(&home),
+        enc,
+    ))
 }
 
 ///
@@ -1379,6 +1384,18 @@ mod tests {
     fn home() {
         // Host-dependent value: verify against a live CRuby, not the oracle.
         run_test_live(r#"Dir.home"#);
+    }
+
+    #[test]
+    fn home_filesystem_encoding() {
+        // `copy_home_path` associates the home directory's raw bytes
+        // with the filesystem encoding — plainly, with no ASCII-8BIT
+        // fallback, unlike `Dir.pwd`. Phrased against
+        // `Encoding.find("filesystem")` so the answer does not depend
+        // on the test host's locale.
+        run_test_once(
+            r##"(fs=Encoding.find("filesystem"); [Dir.home.encoding == fs, Dir.home("root").encoding == fs, File.expand_path("~").encoding == fs, File.expand_path("~/foo").encoding == fs, File.expand_path("foo").encoding == Encoding::UTF_8])"##,
+        );
     }
 
     #[test]

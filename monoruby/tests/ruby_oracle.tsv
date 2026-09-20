@@ -1156,6 +1156,7 @@
 4b6fe109f1f968bc1a8d4646ba46c194	"377"	class HasToInt; def to_int; 255; end; end\n            sprintf("%o",
 4b91108237bdda9802ca4299f4114874	[[:singleton_method_added, :singleton_method_added], [:method_added, :foo], [:singleton_method_added, :foo]]	$res = []\n            module M\n              def self.method_added(
 4b97615f1fd9c5dced851f3adf53042b	[:thrown, [:ens]]	$log = []\n            r = catch(:t) do\n              begin\n        
+4b998c100dbe735e23675ef9ca09e8a1	[true, true, true, true, true]	(fs=Encoding.find("filesystem"); [Dir.home.encoding == fs, Dir.home("root").enco
 4ba2572278d477946c8815ee58fef0de	"hello"	class Foo\n              def hello; "hello"; end\n              alias
 4bb8dfa79710364063ae0b96416ec24a	"[C2, C1, M, Object, Kernel, BasicObject]"	module M\n            end\n            class C1\n              include
 4bf63b7ab095dc317e165b1b582247af	[10, 1]	def m(y: 10) = y; [m, m(y: 1)]

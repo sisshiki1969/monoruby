@@ -447,6 +447,23 @@ fn file_expand_path(
         None
     };
     let res = expand_path_bytes(rs.as_bytes(), dfl.as_deref())?;
+    // A `~` expansion makes the home directory — a filesystem-encoded
+    // string — the head of the result, and CRuby appends the rest of
+    // the argument to it. The result therefore carries the filesystem
+    // encoding, and a remainder that is not all-ASCII in another
+    // encoding is the ordinary String-append incompatibility.
+    let enc = if rs.as_bytes().first() == Some(&b'~') {
+        let fs = filesystem_encoding(globals);
+        // Only the appended remainder decides compatibility: the home
+        // directory itself is already in the filesystem encoding, so
+        // non-ASCII bytes *there* are no conflict.
+        if fs != enc && !rs.as_bytes().is_ascii() {
+            return Err(MonorubyErr::incompatible_encoding(&globals.store, enc, fs));
+        }
+        fs
+    } else {
+        enc
+    };
     Ok(path_value(&res, enc))
 }
 
@@ -4001,6 +4018,21 @@ mod tests {
               [hard, sym, target].each { |p| File.unlink(p) rescue nil }
             end
             "#,
+        );
+    }
+
+    #[test]
+    fn expand_path_home_encoding() {
+        // `~` puts the filesystem-encoded home directory at the head of
+        // the result, so the result carries that encoding — and a
+        // remainder that is not all-ASCII in another encoding is the
+        // ordinary String-append incompatibility.
+        //
+        // Whether the last two raise depends on the host's filesystem
+        // encoding (a UTF-8 one accepts the UTF-8 remainder), so this
+        // one goes against a live CRuby rather than the oracle.
+        run_test_once_live(
+            r##"(fs=Encoding.find("filesystem"); f=->(s){ begin; File.expand_path(s).encoding == fs; rescue => e; [e.class, e.message]; end }; [f.call("~"), f.call("~/foo"), f.call("~root"), f.call("~/foo".encode("EUC-JP")), f.call("~/" + "\u3042"), f.call("~/" + "\xFF".dup.force_encoding("binary"))])"##,
         );
     }
 
