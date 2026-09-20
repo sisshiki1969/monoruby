@@ -780,7 +780,7 @@ impl JitStackFrame {
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
         for i in 0..store[iseq_id].bb_info.len() {
-            let idx = BasicBlockId(i);
+            let idx = BasicBlockId::new(i);
             basic_block_labels.insert(idx, JitLabel(labels.len()));
             labels.push(None);
         }

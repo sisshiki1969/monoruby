@@ -206,7 +206,7 @@ pub(crate) struct ISeqHeapSize {
     pub bytecode: usize,
     pub sourcemap: usize,
     pub sp: usize,
-    pub bb_info: usize,
+    pub bb: crate::basic_block::BbHeapSize,
     pub callsite_map: usize,
     pub locals: usize,
     pub jit_entry: usize,
@@ -219,7 +219,7 @@ impl std::ops::AddAssign for ISeqHeapSize {
         self.bytecode += o.bytecode;
         self.sourcemap += o.sourcemap;
         self.sp += o.sp;
-        self.bb_info += o.bb_info;
+        self.bb += o.bb;
         self.callsite_map += o.callsite_map;
         self.locals += o.locals;
         self.jit_entry += o.jit_entry;
@@ -526,7 +526,7 @@ impl ISeqInfo {
             bytecode: insts * size_of::<Bytecode>(),
             sourcemap: self.sourcemap.capacity() * size_of::<Loc>(),
             sp: self.sp.capacity() * size_of::<SlotId>(),
-            bb_info: self.bb_info.heap_size(),
+            bb: self.bb_info.heap_size(),
             callsite_map: self.callsite_map.capacity()
                 * (size_of::<BcIndex>() + size_of::<CallSiteId>() + 1),
             locals: self.locals.capacity()

@@ -934,12 +934,8 @@ impl TraceIr {
                 end
             ),
             TraceIr::Array { dst, callid } => {
-                let CallSiteInfo {
-                    args,
-                    pos_num,
-                    splat_pos,
-                    ..
-                } = &store[callid];
+                let splat_pos = store[callid].splat_pos();
+                let CallSiteInfo { args, pos_num, .. } = &store[callid];
                 let mut s = format!("{:?} = array[", dst);
                 for i in 0..*pos_num {
                     let prefix = if splat_pos.contains(&i) { "*" } else { "" };

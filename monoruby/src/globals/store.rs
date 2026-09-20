@@ -359,6 +359,12 @@ impl Store {
             size_of::<CallSiteInfo>(),
         )
         .unwrap();
+        writeln!(
+            out,
+            "basic blocks: {}, edges: {}",
+            iseq.bb.blocks, iseq.bb.edges
+        )
+        .unwrap();
         let with_extras = self
             .callsite_info
             .iter()
@@ -379,7 +385,11 @@ impl Store {
         row("bytecode", iseq.bytecode);
         row("sourcemap", iseq.sourcemap);
         row("sp", iseq.sp);
-        row("bb_info", iseq.bb_info);
+        row("bb entries", iseq.bb.entries);
+        row("bb pred/succ vecs", iseq.bb.edge_vecs);
+        row("bb_map", iseq.bb.bb_map);
+        row("bb_head", iseq.bb.bb_head);
+        row("bb loops", iseq.bb.loops);
         row("callsite_map", iseq.callsite_map);
         row("locals", iseq.locals);
         row("jit_entry", iseq.jit_entry);
@@ -397,7 +407,11 @@ impl Store {
             + iseq.bytecode
             + iseq.sourcemap
             + iseq.sp
-            + iseq.bb_info
+            + iseq.bb.entries
+            + iseq.bb.edge_vecs
+            + iseq.bb.bb_map
+            + iseq.bb.bb_head
+            + iseq.bb.loops
             + iseq.callsite_map
             + iseq.locals
             + iseq.jit_entry
@@ -2774,7 +2788,6 @@ impl GlobalMethodCache {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::Globals;
 
     ///
@@ -2798,10 +2811,13 @@ mod tests {
         for row in [
             "iseqs:",
             "callsites:",
+            "basic blocks:",
             "ISeqInfo headers",
             "bytecode",
             "sourcemap",
-            "bb_info",
+            "bb entries",
+            "bb pred/succ vecs",
+            "bb_map",
             "callsite_info",
             "TOTAL",
         ] {
