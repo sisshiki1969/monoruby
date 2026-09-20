@@ -1492,8 +1492,20 @@ impl Value {
         err_class_id: ClassId,
         obj_class_id: ClassId,
     ) -> Self {
-        let err = MonorubyErr::new(MonorubyErrKind::from_class_id(err_class_id), message);
+        let err = MonorubyErr::with_message(MonorubyErrKind::from_class_id(err_class_id), message);
         RValue::new_exception_with_class(err, obj_class_id).pack()
+    }
+
+    ///
+    /// An exception object of `class_id` with no message yet: `#message`
+    /// reports the class's name, rendered on demand.
+    ///
+    pub fn new_exception_with_class_default_message(class_id: ClassId) -> Self {
+        let err = MonorubyErr::with_class_default_message(
+            MonorubyErrKind::from_class_id(class_id),
+            class_id,
+        );
+        RValue::new_exception_with_class(err, class_id).pack()
     }
 
     pub fn new_time(time: TimeInner) -> Self {

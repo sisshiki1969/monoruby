@@ -2414,7 +2414,7 @@ fn marshal_dump_value(
                             // a UTF-8 rebuild of its text: CRuby dumps a
                             // BINARY message as a bare string, and a
                             // UTF-8 one wrapped in `I…:E`.
-                            let msg_val = super::exception::message_value(obj);
+                            let msg_val = super::exception::message_value(&globals.store, obj);
                             marshal_dump_value(buf, msg_val, vm, globals, symbols, objects, limit)?;
                         }
                         // :bt

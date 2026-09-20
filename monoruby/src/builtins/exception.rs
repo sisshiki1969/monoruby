@@ -384,8 +384,8 @@ fn nomethoderr_args(
 /// with its message set to the class name (matching CRuby:
 /// `Exception.allocate.message # => "Exception"`).
 pub(crate) extern "C" fn exception_alloc_func(class_id: ClassId, globals: &mut Globals) -> Value {
-    let name = class_id.get_name(globals);
-    Value::new_exception_from_with_class(name, class_id, class_id)
+    let _ = globals;
+    Value::new_exception_with_class_default_message(class_id)
 }
 
 ///
@@ -417,13 +417,21 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         {
             raw = Some((inner.as_bytes().to_vec(), inner.encoding()));
         }
-        msg.coerce_to_string(vm, globals)?
+        Some(msg.coerce_to_string(vm, globals)?)
     } else {
-        globals.store.get_class_name(class_id)
+        // No message given: the default is the class name, left deferred
+        // rather than rendered here (see `default_message_class`).
+        None
     };
     {
         let ex = self_.is_exception_mut().unwrap();
-        ex.set_message(message);
+        match message {
+            Some(message) => ex.set_message(message),
+            None => {
+                ex.message.clear();
+                ex.default_message_class = Some(class_id);
+            }
+        }
         ex.raw_message = raw;
     }
     // Real keyword arguments (`receiver:` at slot 2, `key:` at slot 3) —
@@ -467,8 +475,8 @@ fn message(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/to_s.html]
 #[monoruby_builtin]
-fn to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(message_value(lfp.self_val()))
+fn to_s(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(message_value(&globals.store, lfp.self_val()))
 }
 
 ///
@@ -477,12 +485,12 @@ fn to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 /// `#message` answer this, and `Marshal.dump` writes it as the `:mesg`
 /// field, so a dump round-trips the message's encoding.
 ///
-pub(crate) fn message_value(exception: Value) -> Value {
+pub(crate) fn message_value(store: &Store, exception: Value) -> Value {
     let ex = exception.is_exception().unwrap();
     if let Some((raw, enc)) = &ex.raw_message {
         return Value::string_from_inner(crate::value::RStringInner::from_encoding(raw, *enc));
     }
-    Value::string_from_str(ex.message())
+    Value::string_from_str(&ex.message_with(store))
 }
 
 ///
