@@ -497,7 +497,7 @@ fn dst_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 pub(crate) fn time_zone_abbr(t: &TimeInner) -> Option<String> {
     match t {
         TimeInner::Utc(_) => Some("UTC".to_string()),
-        TimeInner::Local(_, Zone::Fixed) => None,
+        TimeInner::Local(_, Zone::Fixed { .. }) => None,
         TimeInner::Local(_, Zone::System { name, .. }) => name.map(|n| n.get_name().to_string()),
     }
 }
@@ -829,7 +829,7 @@ pub(crate) fn time_reinterpret_offset(mut time: Value, offset_secs: i32) {
     // A dump records the offset, not the zone it came from, so the
     // rebuilt time is at a plain offset — CRuby's loaded time answers
     // `#dst?` false however its `:zone` string reads.
-    *time.as_time_mut() = TimeInner::Local(instant.with_timezone(&fixed), Zone::Fixed);
+    *time.as_time_mut() = TimeInner::Local(instant.with_timezone(&fixed), Zone::Fixed { exact: None });
 }
 
 ///
@@ -1145,13 +1145,18 @@ fn time_build(
             // A timezone object (`#local_to_utc`) rather than a utc_offset.
             return Ok(t);
         } else {
-            match parse_utc_offset(vm, globals, off_arg) {
-                Ok(offset) => {
+            match parse_utc_offset_exact(vm, globals, off_arg) {
+                Ok((offset, exact)) => {
                     let dt = offset
                         .from_local_datetime(&naive)
                         .single()
                         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
-                    time_in_offset(dt.with_timezone(&Utc), offset, offset_arg_is_utc(off_arg))
+                    time_in_offset_exact(
+                        dt.with_timezone(&Utc),
+                        offset,
+                        exact,
+                        offset_arg_is_utc(off_arg),
+                    )
                 }
                 // A String that isn't a valid offset is resolved through the
                 // class's `.find_timezone`, if defined, to a timezone object.
@@ -1289,30 +1294,79 @@ fn offset_str_is_utc(s: &str) -> bool {
 /// A `TimeInner` for the instant `dt` shown in `fixed`, or as UTC when
 /// the offset argument designated UTC (see [`offset_arg_is_utc`]).
 fn time_in_offset(dt: DateTime<Utc>, fixed: FixedOffset, utc: bool) -> TimeInner {
+    time_in_offset_exact(dt, fixed, None, utc)
+}
+
+/// [`time_in_offset`], remembering the exact offset when it had a
+/// fractional part.
+///
+/// Only remembered, not applied to the instant. chrono's `FixedOffset`
+/// is whole seconds, and the `DateTime` is built so its *local* side is
+/// the wall clock that was asked for — which is what every field reader,
+/// `#to_s` and `strftime` render from, and what CRuby shows. Shifting
+/// the instant by the rounding would fix `#to_f` and break all of those
+/// instead, because chrono derives one from the other through the one
+/// offset it can hold.
+///
+/// So the instant still carries the rounding: `Time.new(.., Rational(1,2))`
+/// is half a second out where CRuby is exact. Closing that means holding
+/// the instant itself exactly rather than as a nanosecond `DateTime`,
+/// which is the representation question #1416 is about; `#utc_offset`
+/// answering `(1/2)` rather than `1` does not have to wait for it.
+fn time_in_offset_exact(
+    dt: DateTime<Utc>,
+    fixed: FixedOffset,
+    exact: Option<ExactOffset>,
+    utc: bool,
+) -> TimeInner {
     if utc {
         TimeInner::Utc(dt)
     } else {
-        TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed)
+        TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed { exact })
     }
 }
 
 fn parse_utc_offset(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<FixedOffset> {
+    Ok(parse_utc_offset_exact(vm, globals, v)?.0)
+}
+
+/// `parse_utc_offset`, keeping the exact fraction when the offset is not
+/// a whole number of seconds.
+///
+/// The `FixedOffset` is rounded half-up, because chrono holds whole
+/// seconds and because that is what CRuby *renders*: `%z` and `%::z` of
+/// a `Rational(1,2)` offset are `+0000` and `+00:00:01`. What CRuby does
+/// not do is round the offset itself — `#utc_offset` answers `(1/2)`,
+/// and the instant moves by half a second — so the exact form rides
+/// along in `Zone::Fixed` and corrects both.
+fn parse_utc_offset_exact(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<(FixedOffset, Option<ExactOffset>)> {
     if let Some(s) = v.is_str() {
-        return parse_utc_offset_string(s);
+        return Ok((parse_utc_offset_string(s)?, None));
     }
     // Integer / Rational / Float / to_int
     if let Some(f) = v.try_float() {
-        // Round to nearest second — `Time.new(.., Rational(36645, 10))`
-        // is 3664.5 and CRuby stores it as 3665. Spec's
-        // `Time#strftime "%::z"` rounding test depends on this.
+        // `Time.new(.., Rational(36645, 10))` is 3664.5, which renders
+        // as 3665; the half second it lost is kept below.
         let secs = f.round() as i32;
-        return FixedOffset::east_opt(secs)
-            .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"));
+        let fixed = FixedOffset::east_opt(secs)
+            .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))?;
+        return Ok((fixed, exact_from_f64(f)));
     }
     if let Some(r) = v.try_rational() {
         let secs = r.to_f().round() as i32;
-        return FixedOffset::east_opt(secs)
-            .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"));
+        let fixed = FixedOffset::east_opt(secs)
+            .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))?;
+        let exact = r
+            .den()
+            .to_i64()
+            .zip(r.num().to_i64())
+            .filter(|(den, _)| *den > 1)
+            .map(|(den, num)| ExactOffset { num, den });
+        return Ok((fixed, exact));
     }
     // An object that responds to `#to_str` (but is not itself numeric)
     // is coerced to a String offset like `"+05:00"`.
@@ -1321,7 +1375,7 @@ fn parse_utc_offset(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resul
     {
         let s = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
         if let Some(s) = s.is_str() {
-            return parse_utc_offset_string(s);
+            return Ok((parse_utc_offset_string(s)?, None));
         }
     }
     // Integer / `#to_int` / `#to_r` → an exact number, rounded to whole
@@ -1336,7 +1390,28 @@ fn parse_utc_offset(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resul
         .filter(|r| r.is_finite() && *r >= i32::MIN as f64 && *r <= i32::MAX as f64)
         .map(|r| r as i32)
         .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))?;
-    FixedOffset::east_opt(secs).ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))
+    let fixed = FixedOffset::east_opt(secs)
+        .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))?;
+    let exact = den
+        .to_i64()
+        .zip(num.to_i64())
+        .filter(|(d, _)| *d > 1)
+        .map(|(den, num)| ExactOffset { num, den });
+    Ok((fixed, exact))
+}
+
+/// The exact value of a `Float` offset as a fraction, the way
+/// `Rational(0.1)` gives `3602879701896397/36028797018963968` — CRuby
+/// records a Float offset by its exact binary value, not by a decimal
+/// reading of it. `None` for a whole number of seconds, and for anything
+/// whose exact form does not fit a pair of `i64`.
+fn exact_from_f64(f: f64) -> Option<ExactOffset> {
+    if f.fract() == 0.0 {
+        return None;
+    }
+    let r = num::BigRational::from_float(f)?;
+    let (num, den) = (r.numer().to_i64()?, r.denom().to_i64()?);
+    (den > 1).then_some(ExactOffset { num, den })
 }
 
 /// Reserved instance-variable slot holding a Time's timezone object (the
@@ -1439,7 +1514,7 @@ fn time_new_with_timezone(
         .from_local_datetime(&naive)
         .single()
         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
-    let t = Value::new_time_with_class(TimeInner::Local(dt, Zone::Fixed), cls);
+    let t = Value::new_time_with_class(TimeInner::Local(dt, Zone::Fixed { exact: None }), cls);
     globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
     Ok(Some(t))
 }
@@ -1456,7 +1531,7 @@ fn time_at_with_timezone(
     let Some(fixed) = utc_to_local_fixed(vm, globals, dt, tz)? else {
         return Ok(None);
     };
-    let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed), cls);
+    let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed { exact: None }), cls);
     globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
     Ok(Some(t))
 }
@@ -2484,7 +2559,7 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let utc_dt = time_utc_instant(self_val.as_time());
         if let Some(fixed) = utc_to_local_fixed(vm, globals, utc_dt, arg0)? {
             self_val.ensure_not_frozen(&globals.store)?;
-            *self_val.as_time_mut() = TimeInner::Local(utc_dt.with_timezone(&fixed), Zone::Fixed);
+            *self_val.as_time_mut() = TimeInner::Local(utc_dt.with_timezone(&fixed), Zone::Fixed { exact: None });
             globals
                 .store
                 .set_ivar(self_val, IdentId::get_id(ZONE_IVAR), arg0)?;
@@ -3101,11 +3176,16 @@ fn utc_offset(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let offs = match lfp.self_val().as_time() {
-        TimeInner::Local(t, _) => t.offset().local_minus_utc(),
-        TimeInner::Utc(_) => 0,
-    };
-    Ok(Value::integer(offs as _))
+    match lfp.self_val().as_time() {
+        // A fractional offset is answered as the exact Rational it was
+        // given, as CRuby does; the `FixedOffset` beside it is the
+        // rounded copy `%z` renders from.
+        TimeInner::Local(_, Zone::Fixed { exact: Some(e) }) => {
+            Ok(Value::rational(e.num, e.den))
+        }
+        TimeInner::Local(t, _) => Ok(Value::integer(t.offset().local_minus_utc() as _)),
+        TimeInner::Utc(_) => Ok(Value::integer(0)),
+    }
 }
 
 /// ### Time#-
@@ -3187,7 +3267,33 @@ pub enum Zone {
     },
     /// A fixed offset from UTC, with no zone behind it: `#getlocal("+09:00")`,
     /// `Time.new(…, "+09:00")`, `Time.at(…, in: …)`.
-    Fixed,
+    ///
+    /// `exact` is the offset as it was given, when that is not a whole
+    /// number of seconds. chrono's `FixedOffset` holds whole seconds
+    /// only, so the `DateTime` alongside carries a rounded copy and
+    /// `#utc_offset` answers from here instead — CRuby keeps the offset
+    /// as an exact Rational and returns it (`Time.new(.., Rational(1,4))`
+    /// answers `(1/4)`, not `0`). `None` is the ordinary case.
+    Fixed { exact: Option<ExactOffset> },
+}
+
+///
+/// An offset that is not a whole number of seconds, as the exact
+/// fraction it was given as.
+///
+/// Kept as a pair of machine integers rather than a `BigRational` so
+/// `Zone` stays `Copy` — a `Time` is collected without running `Drop`.
+/// Every offset CRuby accepts here arrives as a Float or a Rational of
+/// machine-sized parts (`0.1` is `3602879701896397/36028797018963968`),
+/// so the pair is wide enough; anything wider simply does not record an
+/// exact form and answers the rounded seconds, as before.
+///
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExactOffset {
+    /// Numerator, signed.
+    num: i64,
+    /// Denominator, always > 1 (a whole second records no exact form).
+    den: i64,
 }
 
 /// Localize a UTC instant in the system zone, capturing the offset, the
@@ -3452,8 +3558,8 @@ impl TimeInner {
     /// Used by `Time#localtime(offset)`.
     fn shift_to_offset(&mut self, offset: FixedOffset) {
         *self = match self {
-            TimeInner::Local(t, _) => TimeInner::Local(t.with_timezone(&offset), Zone::Fixed),
-            TimeInner::Utc(t) => TimeInner::Local(t.with_timezone(&offset), Zone::Fixed),
+            TimeInner::Local(t, _) => TimeInner::Local(t.with_timezone(&offset), Zone::Fixed { exact: None }),
+            TimeInner::Utc(t) => TimeInner::Local(t.with_timezone(&offset), Zone::Fixed { exact: None }),
         }
     }
 
@@ -3633,6 +3739,41 @@ mod tests {
     fn time_utc_offset() {
         run_test("Time.utc(2000).utc_offset");
         run_test_once("Time.local(2000).utc_offset.is_a?(Integer)");
+    }
+
+    /// An offset that is not a whole number of seconds comes back as the
+    /// exact Rational it was given, not rounded to an Integer — chrono's
+    /// `FixedOffset` holds whole seconds, so the rounded copy is what
+    /// `%z` / `%::z` render from and the exact form rides alongside.
+    #[test]
+    fn time_fractional_utc_offset() {
+        run_tests(&[
+            // The exact value, and its type.
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(1, 4)).utc_offset"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(1, 2)).utc_offset"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(3, 2)).utc_offset"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(36645, 10)).utc_offset"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(1, 4)).utc_offset.class"#,
+            // A Float offset is recorded by its exact binary value, as
+            // `Rational(0.1)` is — not by a decimal reading of it.
+            r#"Time.new(2020, 3, 1, 0, 0, 0, 0.5).utc_offset"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, 1.5).utc_offset"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, 0.1).utc_offset"#,
+            // A whole number of seconds still answers an Integer, by
+            // whichever spelling it arrived in.
+            r#"Time.new(2020, 3, 1, 0, 0, 0, 3601).utc_offset"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(3601, 1)).utc_offset"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, 3601.0).utc_offset"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, "+00:15").utc_offset"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, 3601).utc_offset.class"#,
+            // Rendering still rounds half-up, which is what CRuby shows.
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(1, 2)).strftime("%z %::z")"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(3, 2)).strftime("%z %::z")"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(36645, 10)).strftime("%z %::z")"#,
+            // The wall clock is the one that was asked for.
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(1, 4)).to_s"#,
+            r#"Time.new(2020, 3, 1, 0, 0, 0, Rational(1, 2)).hour"#,
+        ]);
     }
 
     #[test]
