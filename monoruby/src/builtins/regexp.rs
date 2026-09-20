@@ -1528,15 +1528,17 @@ thread_local!(
 /// A timeout in seconds as the `u64` of nanoseconds CRuby keeps, which
 /// is what makes its accessors quantize the way they do: a value below
 /// one nanosecond becomes 0, which *is* the unset marker, so it reads
-/// back as `nil`; one past `u64::MAX` nanoseconds saturates at about
-/// 18446744073.7 seconds; and a NaN lands on `i64::MAX`, as the C cast
-/// does. Rust's `as` saturates on its own, so only the NaN needs saying.
+/// back as `nil`, and one past `u64::MAX` nanoseconds saturates at
+/// about 18446744073.7 seconds. Rust's `as` does both on its own.
+///
+/// A NaN is the one value CRuby has no answer for: converting it to an
+/// unsigned integer is undefined in C, and the platforms disagree —
+/// glibc lands on `i64::MAX` (so `Regexp.timeout` reads back
+/// 9223372036.854776) where macOS lands on zero (so it reads back
+/// `nil`). Rust's saturating cast gives zero, which is the answer that
+/// at least means something: no timeout.
 fn timeout_nanos(sec: f64) -> u64 {
-    if sec.is_nan() {
-        i64::MAX as u64
-    } else {
-        (sec * 1_000_000_000f64) as u64
-    }
+    (sec * 1_000_000_000f64) as u64
 }
 
 /// The Ruby value a stored nanosecond count reads back as.
@@ -2263,7 +2265,9 @@ mod tests {
     /// expose (#1423) — but the accessors answer what CRuby's do,
     /// quantization included: CRuby keeps the value as a `uint64` of
     /// nanoseconds, so anything under a nanosecond reads back as nil and
-    /// anything enormous saturates.
+    /// anything enormous saturates. A NaN is deliberately not pinned —
+    /// the C conversion is undefined and glibc and macOS disagree; see
+    /// `timeout_nanos`.
     #[test]
     fn regexp_per_regexp_timeout() {
         run_tests(&[
@@ -2291,7 +2295,6 @@ mod tests {
                 Regexp.new("a", timeout: 1e-12).timeout,
                 Regexp.new("a", timeout: 10**30).timeout,
                 Regexp.new("a", timeout: Float::INFINITY).timeout]"#,
-            r#"Regexp.timeout = Float::NAN; r = Regexp.timeout; Regexp.timeout = nil; r"#,
             // A subclass, both with and without its own `#initialize`.
             r#"class RTa < Regexp; end
                [RTa.new("a", timeout: 4).timeout, RTa.new("a").timeout]"#,

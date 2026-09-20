@@ -1076,8 +1076,16 @@ pub(super) fn transcode_bytes_with_opts(
     // `invalid: :replace` has work to do even when the encodings match,
     // so a broken string with a usable codec skips the identity path
     // and goes through decode / re-encode to be scrubbed.
+    // …and only when nothing else is being asked for. A newline
+    // decorator on a same-encoding `encode` is the whole conversion —
+    // no transcoder runs, so there is nothing for `invalid:` to act in
+    // and CRuby hands the bytes through untouched:
+    //
+    //     "a\x80\r\nb".encode(invalid: :replace, universal_newline: true)
+    //     # the 0x80 survives; only the CRLF becomes LF
     let scrub_in_place = src_enc == dst_enc
         && opts.invalid_replace
+        && !opts.has_newline()
         && matches!(
             RStringInner::from_encoding_scanned(src_bytes, src_enc).code_range(),
             crate::value::CodeRange::Broken
@@ -1089,17 +1097,11 @@ pub(super) fn transcode_bytes_with_opts(
     // same-encoding `invalid: :replace` can still scrub — through the
     // same walk `String#scrub` uses, so the two agree on where one
     // ill-formed subpart ends and the next begins.
-    if src_enc == dst_enc
-        && opts.invalid_replace
+    if src_enc == dst_enc && opts.invalid_replace && !opts.has_newline()
         && src_enc == E::NamedByte(crate::value::EMACS_MULE)
     {
         let replace = opts.replace_str(dst_enc);
-        let out = crate::value::emacs_mule_scrub(src_bytes, replace.as_bytes());
-        return Ok(if opts.has_newline() {
-            apply_newline_bytes(&out, opts)
-        } else {
-            out
-        });
+        return Ok(crate::value::emacs_mule_scrub(src_bytes, replace.as_bytes()));
     }
     if src_enc == dst_enc && !scrub_in_place {
         // The newline decorators still apply to a same-encoding
@@ -6994,6 +6996,11 @@ mod tests {
         ] {
             let build = format!(r#"s = [{seq}].pack("C*").force_encoding("Emacs-Mule")"#);
             for read in [
+                // A newline decorator is the whole conversion when the
+                // encodings match: no transcoder runs, so `invalid:`
+                // has nothing to act in and the bytes pass through.
+                "s.encode(invalid: :replace, universal_newline: true).bytes",
+                "s.encode(invalid: :replace, crlf_newline: true).bytes",
                 "s.valid_encoding?",
                 "s.length",
                 "s.chars.map(&:bytes)",
@@ -7008,6 +7015,29 @@ mod tests {
         }
         let refs: Vec<&str> = v.iter().map(|s| s.as_str()).collect();
         run_tests(&refs);
+    }
+
+    /// The whole-buffer scan that lets `eucjp_encode` skip the
+    /// per-character walk. The byte ranges it looks for are also
+    /// *trailing* bytes, so it has to walk rather than scan — which is
+    /// the part worth testing directly, since `encoding_rs`'s own
+    /// output never contains the three-byte form.
+    #[test]
+    fn eucjp_row_scan() {
+        use super::is_eucjp_proper_throughout;
+        // Plain ASCII, JIS X 0208, half-width katakana, JIS X 0212.
+        assert!(is_eucjp_proper_throughout(b"abc"));
+        assert!(is_eucjp_proper_throughout(&[0xa6, 0xd0]));
+        assert!(is_eucjp_proper_throughout(&[0x8e, 0xb1]));
+        assert!(is_eucjp_proper_throughout(&[0x8f, 0xab, 0xe4]));
+        assert!(is_eucjp_proper_throughout(&[0x61, 0x8f, 0xab, 0xe4, 0x62]));
+        // An extension row in lead position.
+        assert!(!is_eucjp_proper_throughout(&[0xf9, 0xa1]));
+        assert!(!is_eucjp_proper_throughout(&[0xad, 0xe2]));
+        assert!(!is_eucjp_proper_throughout(&[0xa6, 0xd0, 0xf9, 0xa1]));
+        // …and the same bytes as *trailing* bytes, which are fine.
+        assert!(is_eucjp_proper_throughout(&[0xa1, 0xf9]));
+        assert!(is_eucjp_proper_throughout(&[0x8f, 0xf9, 0xad]));
     }
 
     /// EUC-JP's second plane (#1424). `encoding_rs`'s encoder is

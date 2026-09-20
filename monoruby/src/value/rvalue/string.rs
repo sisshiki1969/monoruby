@@ -3223,6 +3223,33 @@ mod encoding_tests {
         assert!(Encoding::EucJp.is_dummy());
     }
 
+    /// `emacs_mule_precise_len`'s three answers, including the two
+    /// only `emacs_mule_scrub`'s window-shortening ever asks for: a
+    /// well-formed prefix, and an offset with nothing at it.
+    #[test]
+    fn emacs_mule_precise_len_answers() {
+        use EmacsMuleLen::*;
+        // Nothing there at all, and a prefix that ran out of bytes.
+        assert_eq!(emacs_mule_precise_len(&[], 0), NeedMore);
+        assert_eq!(emacs_mule_precise_len(&[0x61], 1), NeedMore);
+        assert_eq!(emacs_mule_precise_len(&[0x90, 0xa0], 0), NeedMore);
+        assert_eq!(emacs_mule_precise_len(&[0x9c, 0xf0, 0xa0], 0), NeedMore);
+        // One of each width.
+        assert_eq!(emacs_mule_precise_len(b"a", 0), Char(1));
+        assert_eq!(emacs_mule_precise_len(&[0x81, 0xa0], 0), Char(2));
+        assert_eq!(emacs_mule_precise_len(&[0x90, 0xa0, 0xa0], 0), Char(3));
+        assert_eq!(emacs_mule_precise_len(&[0x9a, 0xe0, 0xa0], 0), Char(3));
+        assert_eq!(emacs_mule_precise_len(&[0x9c, 0xf0, 0xa0, 0xa0], 0), Char(4));
+        assert_eq!(emacs_mule_precise_len(&[0x9d, 0xf5, 0xa0, 0xa0], 0), Char(4));
+        // A lead that leads nothing, a charset id out of range, and a
+        // continuation that is not one.
+        assert_eq!(emacs_mule_precise_len(&[0x80, 0xa0], 0), Invalid);
+        assert_eq!(emacs_mule_precise_len(&[0x9e, 0xa0], 0), Invalid);
+        assert_eq!(emacs_mule_precise_len(&[0x9a, 0xa0, 0xa0], 0), Invalid);
+        assert_eq!(emacs_mule_precise_len(&[0x9d, 0xf0, 0xa0, 0xa0], 0), Invalid);
+        assert_eq!(emacs_mule_precise_len(&[0x90, 0xa0, 0x20], 0), Invalid);
+    }
+
     #[test]
     fn classify_seven_bit_short_circuit() {
         // SevenBit fast path applies to every ASCII-compatible enc

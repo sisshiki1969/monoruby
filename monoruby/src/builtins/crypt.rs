@@ -12,10 +12,14 @@
 //! precomputed dictionary useless against 4096 variants of the same
 //! password, and it is why this cannot be a stock DES.
 //!
-//! Only the traditional two-character salt is implemented. A modular
-//! salt (`$1$`, `$5$`, `$6$`, `$2a$` …) answers `"*0"`, the failure
-//! marker the C library returns for a salt it cannot honour — never a
-//! valid hash, so it can never be mistaken for one.
+//! Only the traditional two-character salt is implemented. A salt the
+//! algorithm cannot use — a modular one (`$1$`, `$5$`, `$6$`, `$2a$` …)
+//! or a character outside the alphabet — answers `"*0"`, the failure
+//! marker glibc returns for a salt it cannot honour: never a valid
+//! hash, so it can never be mistaken for one. (The BSD `crypt(3)` macOS
+//! carries reads an out-of-alphabet character as zero and hashes
+//! anyway, so that one case is platform-dependent in CRuby and is not
+//! pinned by the tests.)
 
 use super::*;
 
@@ -323,10 +327,6 @@ mod tests {
             // High bytes go through as bytes.
             r#"[0xFF, 0xFE].pack("C*").crypt("aa")"#,
             r#""héllo".crypt("aa")"#,
-            // A salt outside the alphabet is no salt: the C library's
-            // `"*0"`, which no hash can equal.
-            r#"["x".crypt("!!"), "x".crypt("a!"), "x".crypt("!a"), "x".crypt("  "),
-                [0xFF, 0xFE].pack("C*").then { |s| "x".crypt(s) }]"#,
         ]);
         // A NUL in the receiver, and a salt with fewer than two
         // non-NUL bytes, are both rejected.
