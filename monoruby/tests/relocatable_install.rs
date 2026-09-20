@@ -64,6 +64,8 @@ fn run2(dir: &Path, code: &str) -> (String, String) {
         .env_remove("MONORUBY_INSTALL_ROOT")
         .env_remove("MONORUBY_EXT_PATH")
         .env_remove("MONORUBY_GEM_PATH")
+        .env_remove("MONORUBY_REPROBE")
+        .env_remove("MONORUBY_RUBY")
         .env_remove("GEM_PATH")
         .env_remove("RUBYOPT")
         .env_remove("RUBYLIB")
@@ -188,11 +190,29 @@ fn a_fresh_home_gets_its_probe_cache_written() {
         cache.join("library_path").is_file(),
         "the probe wrote gem_path but not library_path"
     );
+    let probed_ruby = cache.join("probed_ruby");
+    assert!(
+        probed_ruby.is_file(),
+        "the probe cached its paths but not which ruby they came from, \
+         so every later start would re-probe to establish the record"
+    );
     // Second start: the cache is there, so no warning.
     let (_, stderr2) = run2(&dir, "p 1");
     assert!(
         !stderr2.contains("failed to read library path file"),
         "warned again although the cache was written\nfirst: {stderr}\nsecond: {stderr2}"
+    );
+    // ... and the probing settles. A host whose closest Ruby is not the
+    // one `ruby` resolves to gets one more probe (the second start moves
+    // the cache onto it), so give it that start and then require the
+    // third to leave the record alone — otherwise `preferred_ruby_changed`
+    // would be spawning a Ruby on every single start.
+    let settled = std::fs::metadata(&probed_ruby).unwrap().modified().unwrap();
+    run2(&dir, "p 1");
+    assert_eq!(
+        std::fs::metadata(&probed_ruby).unwrap().modified().unwrap(),
+        settled,
+        "the cache was re-probed although nothing about the host moved"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
