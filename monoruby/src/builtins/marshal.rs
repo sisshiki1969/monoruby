@@ -217,6 +217,42 @@ fn marshal_read_port(vm: &mut Executor, globals: &mut Globals, port: Value) -> R
 // Marshal reader (deserializer)
 // ============================================================
 
+/// A dumped `Integer` as a `BigInt`, whichever width it arrived in.
+fn marshal_integer_value(v: Value) -> Option<num::BigInt> {
+    match v.unpack() {
+        RV::Fixnum(i) => Some(num::BigInt::from(i)),
+        RV::BigInt(b) => Some(b.clone()),
+        _ => None,
+    }
+}
+
+/// The nanoseconds a `Time` dump's `:submicro` field states.
+///
+/// Ruby 1.9.1 and older recorded the sub-microsecond part only this
+/// way — up to three decimal digits packed two to a byte, most
+/// significant first — and CRuby still falls back to it when the
+/// `:nano_num` / `:nano_den` pair that replaced it is absent. A nibble
+/// that is not a decimal digit ends the number, as CRuby's reader does,
+/// so a truncated or padded field reads as far as it is well formed.
+fn marshal_submicro_nanos(v: Value) -> u32 {
+    let Some(s) = v.is_rstring_inner() else {
+        return 0;
+    };
+    let bytes = s.as_bytes();
+    let mut nsec = 0;
+    // The high nibble of the first byte, then its low nibble, then the
+    // high nibble of the second — hundreds, tens and units.
+    for (index, high, weight) in [(0usize, true, 100u32), (0, false, 10), (1, true, 1)] {
+        let Some(byte) = bytes.get(index) else { break };
+        let digit = if high { byte >> 4 } else { byte & 0xf };
+        if digit >= 10 {
+            break;
+        }
+        nsec += digit as u32 * weight;
+    }
+    nsec
+}
+
 struct MarshalReader<'a> {
     data: &'a [u8],
     pos: usize,
@@ -679,7 +715,9 @@ impl<'a> MarshalReader<'a> {
                 // offset (the payload only recovers the wall clock), `:zone`
                 // is informational, everything else is a real user ivar.
                 if result.ty() == Some(ObjTy::TIME) {
-                    let mut nano_num: i64 = 0;
+                    let mut nano_num: Option<num::BigInt> = None;
+                    let mut nano_den = num::BigInt::from(1);
+                    let mut submicro: Option<Value> = None;
                     for (sym, val) in user_ivars {
                         match sym.get_name().as_str() {
                             "offset" => {
@@ -707,17 +745,42 @@ impl<'a> MarshalReader<'a> {
                                     )?;
                                 }
                             }
-                            "nano_num" => nano_num = val.try_fixnum().unwrap_or(0),
-                            "nano_den" => {}
+                            "nano_num" => {
+                                nano_num = marshal_integer_value(val);
+                            }
+                            "nano_den" => {
+                                if let Some(d) = marshal_integer_value(val)
+                                    && d != num::BigInt::from(0)
+                                {
+                                    nano_den = d;
+                                }
+                            }
+                            // The same value again as packed digits,
+                            // for readers older than `:nano_num`, and
+                            // the only record of it in a dump older
+                            // than that pair. It is not a user ivar.
+                            "submicro" => submicro = Some(val),
                             _ => {
                                 globals.set_ivar(result, sym, val)?;
                             }
                         }
                     }
                     // Restore sub-microsecond precision after any offset
-                    // reinterpretation.
-                    if nano_num != 0 {
-                        crate::builtins::time::time_add_nanos(result, nano_num);
+                    // reinterpretation, from whichever of the two fields
+                    // the dump carries.
+                    let (nano_num, nano_den) = match nano_num {
+                        Some(n) => (n, nano_den),
+                        None => (
+                            num::BigInt::from(
+                                submicro.map_or(0, marshal_submicro_nanos),
+                            ),
+                            num::BigInt::from(1),
+                        ),
+                    };
+                    if nano_num != num::BigInt::from(0) {
+                        crate::builtins::time::time_marshal_add_subnano(
+                            globals, result, nano_num, nano_den,
+                        )?;
                     }
                 } else {
                     for (sym, val) in user_ivars {
@@ -1853,14 +1916,17 @@ fn marshal_try_user_protocol(
         // carrying `:offset` (for non-UTC times) and `:zone` ivars (plus
         // any user ivars), since the payload alone can't recover the zone.
         if obj.ty() == Some(ObjTy::TIME) {
-            let (is_utc, offset, sub_ns) = {
+            let (is_utc, offset) = {
                 let t = obj.as_time();
                 (
                     crate::builtins::time::time_is_utc(t),
                     crate::builtins::time::time_utc_offset(t),
-                    crate::builtins::time::time_subsec_nanos(t),
                 )
             };
+            // The sub-microsecond nanoseconds, exactly: a `Time` whose
+            // value is finer than a nanosecond dumps them as the
+            // rational CRuby does, not as a truncated integer.
+            let (sub_num, sub_den) = crate::builtins::time::time_marshal_subnano(globals, obj);
             let user_ivars = globals.get_ivars(obj);
             buf.push(b'I');
             buf.push(b'u');
@@ -1869,9 +1935,25 @@ fn marshal_try_user_protocol(
             buf.extend_from_slice(&bytes);
             // ivar count: user ivars + optional sub-microsecond
             // (:nano_num/:nano_den) + optional :offset + :zone.
-            let has_nano = sub_ns != 0;
+            let has_nano = sub_num != num::BigInt::from(0);
+            // `:submicro` is the same nanoseconds again, as packed
+            // decimal digits, for a reader older than `:nano_num`.
+            // CRuby writes it whenever there are whole ones to write.
+            let submicro = if has_nano {
+                let whole = (&sub_num / &sub_den).to_u32().unwrap_or(0) % 1000;
+                if whole == 0 {
+                    None
+                } else {
+                    let b0 = ((whole / 100) << 4 | (whole / 10 % 10)) as u8;
+                    let b1 = ((whole % 10) << 4) as u8;
+                    Some(if b1 == 0 { vec![b0] } else { vec![b0, b1] })
+                }
+            } else {
+                None
+            };
             let count = user_ivars.len()
                 + if has_nano { 2 } else { 0 }
+                + usize::from(submicro.is_some())
                 + if is_utc { 1 } else { 2 };
             marshal_write_fixnum(buf, count as i32);
             // CRuby order: user ivars first, then the sub-microsecond
@@ -1882,16 +1964,19 @@ fn marshal_try_user_protocol(
             }
             if has_nano {
                 marshal_write_symbol(buf, IdentId::get_id("nano_num"), symbols);
-                marshal_dump_value(
-                    buf,
-                    Value::integer(sub_ns as i64),
-                    vm,
-                    globals,
-                    symbols,
-                    objects, limit,
-                )?;
+                let n = Value::bigint(sub_num.clone());
+                marshal_dump_value(buf, n, vm, globals, symbols, objects, limit)?;
                 marshal_write_symbol(buf, IdentId::get_id("nano_den"), symbols);
-                marshal_dump_value(buf, Value::integer(1), vm, globals, symbols, objects, limit)?;
+                let d = Value::bigint(sub_den.clone());
+                marshal_dump_value(buf, d, vm, globals, symbols, objects, limit)?;
+            }
+            if let Some(bytes) = submicro {
+                marshal_write_symbol(buf, IdentId::get_id("submicro"), symbols);
+                // A binary string, written without the encoding
+                // wrapper an ordinary String dump carries.
+                buf.push(b'"');
+                marshal_write_fixnum(buf, bytes.len() as i32);
+                buf.extend_from_slice(&bytes);
             }
             if !is_utc {
                 marshal_write_symbol(buf, IdentId::get_id("offset"), symbols);
@@ -3174,6 +3259,47 @@ mod tests {
             t = Time.utc(2020, 1, 2, 3, 4, 5)
             r = Marshal.load(Marshal.dump(t))
             [r.year, r.month, r.day, r.hour, r.min, r.sec, r.utc?]
+            "#,
+        );
+    }
+
+    /// The sub-microsecond part of a `Time` dump older than the
+    /// `:nano_num` / `:nano_den` pair.
+    ///
+    /// Ruby 1.9.1 and older wrote only `:submicro`, up to three decimal
+    /// digits packed two to a byte, and CRuby still reads it when the
+    /// pair is absent. The dumps here are real ones with that pair cut
+    /// out, so the field is the only record of anything finer than a
+    /// microsecond.
+    #[test]
+    fn marshal_time_submicro_only() {
+        run_test(
+            r#"
+            def as_191(t)
+              d = Marshal.dump(t)
+              i = d.index(":\rnano_num")
+              j = d.index(":\rsubmicro")
+              return nil unless i && j
+              # the ivar count sits just before the first ivar
+              head = d[0, i]
+              head = head[0..-2] + (head[-1].ord - 2).chr
+              head + d[j..-1]
+            end
+            [1, 12, 123, 333333333, 999999999, 123456789, 500000001].map do |ns|
+              t = Time.at(0, ns, :nanosecond).utc
+              d = as_191(t)
+              d.nil? ? nil : Marshal.load(d).nsec
+            end
+            "#,
+        );
+        // A `:nano_num` that is not an Integer at all is no record
+        // either, so the same fallback answers.
+        run_test(
+            r#"
+            t = Time.at(0) + Rational(1, 3)
+            d = Marshal.dump(t)
+            i = d.index("nano_num")
+            [Marshal.load(d[0, i + 8] + "0" + d[(i + 12)..-1]).nsec, t.nsec]
             "#,
         );
     }

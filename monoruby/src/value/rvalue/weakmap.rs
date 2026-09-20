@@ -24,11 +24,62 @@ use std::cell::RefCell;
 #[derive(Debug, Clone, Default)]
 pub struct WeakMapInner {
     entries: Vec<(Value, Value)>,
+    /// Whether the *value* half is weak too.
+    ///
+    /// `ObjectSpace::WeakMap` is weak on both halves. Its sibling
+    /// `ObjectSpace::WeakKeyMap` is weak-key and **strong**-value: a
+    /// value reachable only from the map stays alive, and the pair goes
+    /// only when its key dies. The two differ in nothing else, so they
+    /// share this payload and `mark` / `clear_dead` read the flag.
+    weak_values: bool,
 }
 
 impl WeakMapInner {
+    /// A map whose keys *and* values are weak — `ObjectSpace::WeakMap`.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            entries: vec![],
+            weak_values: true,
+        }
+    }
+
+    /// A map whose keys are weak and whose values are held strongly —
+    /// `ObjectSpace::WeakKeyMap`.
+    pub fn new_weak_keys() -> Self {
+        Self {
+            entries: vec![],
+            weak_values: false,
+        }
+    }
+
+    /// The pairs, for a caller that has to compare keys with Ruby's
+    /// `#hash` / `#eql?` and so cannot do it from in here.
+    pub fn entries(&self) -> &[(Value, Value)] {
+        &self.entries
+    }
+
+    /// Replace the pair at `index` outright.
+    ///
+    /// A `WeakKeyMap` given a key *equal* to one it holds takes the new
+    /// key as well as the new value — CRuby's newest key wins, so
+    /// `#getkey` afterwards answers the one most recently stored.
+    pub fn set_at(&mut self, index: usize, key: Value, value: Value) {
+        self.entries[index] = (key, value);
+    }
+
+    /// Append a pair whose key the caller has already established is
+    /// not present.
+    pub fn push(&mut self, key: Value, value: Value) {
+        self.entries.push((key, value));
+    }
+
+    /// Remove the pair at `index`, answering the value it held.
+    pub fn remove_at(&mut self, index: usize) -> Value {
+        self.entries.remove(index).1
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
     }
 
     /// The value stored under `key`, by identity.
@@ -61,15 +112,25 @@ impl WeakMapInner {
         self.entries.iter().copied()
     }
 
-    /// Trace nothing: that is the whole point of a weak map.
-    pub fn mark(&self, _alloc: &mut crate::alloc::Allocator<RValue>) {}
+    /// Trace nothing — that is the whole point of a weak map — unless
+    /// the values are the strong half, in which case they are traced
+    /// and the keys still are not.
+    pub fn mark(&self, alloc: &mut crate::alloc::Allocator<RValue>) {
+        if self.weak_values {
+            return;
+        }
+        for (_, v) in self.entries.iter() {
+            v.mark(alloc);
+        }
+    }
 
     /// Drop every pair with a dead half. Called once per collection,
     /// after marking and before the sweep, so `is_marked` still answers
     /// for this cycle.
     fn clear_dead(&mut self, alloc: &crate::alloc::Allocator<RValue>) {
+        let weak_values = self.weak_values;
         self.entries
-            .retain(|(k, v)| survives(*k, alloc) && survives(*v, alloc));
+            .retain(|(k, v)| survives(*k, alloc) && (!weak_values || survives(*v, alloc)));
     }
 }
 

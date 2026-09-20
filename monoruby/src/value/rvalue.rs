@@ -995,6 +995,10 @@ impl alloc::GCBox for RValue {
     /// note that free() can be called for already free'd rvalue's, because slots in free list
     /// are free'd in the next sweep phase once more.
     ///
+    fn is_alive(&self) -> bool {
+        self.header.is_live()
+    }
+
     fn free(&mut self) {
         if !self.header.is_live() {
             return;
@@ -2442,6 +2446,16 @@ impl RValue {
         RValue {
             header: Header::new(class_id, ObjTy::WEAKMAP),
             kind: ObjKind::weakmap(WeakMapInner::new()),
+            var_table: None,
+        }
+    }
+
+    /// The payload of an `ObjectSpace::WeakKeyMap`: the same cell as a
+    /// weak map, but holding its values strongly.
+    pub(super) fn new_weakkeymap(class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::WEAKMAP),
+            kind: ObjKind::weakmap(WeakMapInner::new_weak_keys()),
             var_table: None,
         }
     }

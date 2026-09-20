@@ -1443,6 +1443,12 @@ impl Value {
         v
     }
 
+    pub fn new_weakkeymap(class_id: ClassId) -> Self {
+        let v = RValue::new_weakkeymap(class_id).pack();
+        crate::value::rvalue::weakmap_register(v);
+        v
+    }
+
     /// An object of `class_id` carrying native data (see `NativeData`).
     pub fn new_native(class_id: ClassId, inner: Box<dyn NativeData>) -> Self {
         RValue::new_native(class_id, inner).pack()

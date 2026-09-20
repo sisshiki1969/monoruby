@@ -39,6 +39,9 @@ require_relative 'data'
 
 require_relative 'enumerable'
 IO.include(Enumerable)
+# `object_space.rb` is loaded well before this, so its `WeakMap` takes
+# the module here — CRuby's includes it too.
+ObjectSpace::WeakMap.include(Enumerable)
 require_relative 'random'
 require_relative 'arithmetic_sequence'
 require_relative 'numeric'
