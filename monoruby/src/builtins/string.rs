@@ -4627,15 +4627,14 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
 
     // Forward scan, keeping the last match whose byte-start is at or
-    // before `byte_offset`. Onigmo's `\G` is anchored to the search
-    // start, so invoking with a fixed start of 0 doesn't reproduce
-    // CRuby's backwards-direction-search behaviour for `\G` — the
-    // half-dozen `\G` tests in `byterindex_spec.rb` are out of scope
-    // for this implementation.
+    // before `byte_offset`. Each probe is its own search, so `\G` — which
+    // Onigmo binds to the search start — is pinned to `byte_offset`
+    // instead: CRuby anchors it at the offset the caller passed, not at
+    // the probe, and the match may still run past it (`/YOU.+\G.+/`).
     let mut best: Option<usize> = None;
     let mut pos = 0usize;
     while pos <= s.len() {
-        let captures = match re.captures_from_pos(s, pos, vm)? {
+        let captures = match re.captures_from_pos_gpos(s, byte_offset, pos, vm)? {
             None => break,
             Some(c) => c,
         };
@@ -4660,7 +4659,7 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         }
     }
 
-    rindex_set_backref(vm, &re, s, best)?;
+    rindex_set_backref(vm, &re, s, byte_offset, best)?;
     Ok(match best {
         Some(p) => Value::integer(p as i64),
         None => Value::nil(),
@@ -4818,11 +4817,16 @@ fn string_rindex(
         char_len
     };
 
+    // `\G` anchors at the offset the caller passed — the *search* start of
+    // this reverse search — not at the probe each candidate start makes,
+    // and the match may end past it. Pin it there for every probe
+    // (`find_spans_gpos`); with no `\G` in the pattern nothing changes.
+    let gpos = bounds.get(max_char_pos).copied().unwrap_or(len);
     // The start of the leftmost match at or after `pos`, without
     // touching `$~`.
     let mut region = onigmo_regex::Region::new();
     let mut search = |pos: usize| -> Result<Option<usize>> {
-        Ok(if re.find_spans(&subject, pos, &mut region)? {
+        Ok(if re.find_spans_gpos(&subject, gpos, pos, &mut region)? {
             Some(region.pos(0).unwrap().0)
         } else {
             None
@@ -4835,7 +4839,7 @@ fn string_rindex(
         match last_char_pos {
             Some(cp) => {
                 let bp = bounds.get(cp).copied().unwrap_or(len);
-                if re.find_spans(&subject, bp, &mut region)? {
+                if re.find_spans_gpos(&subject, gpos, bp, &mut region)? {
                     let spans = spans_of(&region);
                     save_spans(vm, &subject, &spans, self_);
                 } else {
@@ -4908,16 +4912,19 @@ fn string_rindex(
 /// probes *past* the match it ends up returning, leaving `$~` as the
 /// last (failed or too-far) probe. Re-run one probe at the returned
 /// match's byte position so `$~` reflects the result (CRuby
-/// behaviour); a `None` result clears `$~`.
+/// behaviour); a `None` result clears `$~`. The re-probe carries the
+/// same `\G` position (`gpos`) as the scan, or it would find a
+/// different match than the one being reported.
 fn rindex_set_backref(
     vm: &mut Executor,
     re: &Regexp,
     s: &str,
+    gpos: usize,
     byte_pos: Option<usize>,
 ) -> Result<()> {
     match byte_pos {
         Some(p) => {
-            re.captures_from_pos(s, p, vm)?;
+            re.captures_from_pos_gpos(s, gpos, p, vm)?;
         }
         None => vm.clear_capture_special_variables(),
     }
@@ -10117,6 +10124,40 @@ mod tests {
             r##"["".rindex(/\G/, -1), "".rindex("", -1), "".byterindex(/\G/, -1)]"##,
             r##"["".rindex(/\G/), "".rindex(""), "".rindex(/\G/, 0)]"##,
             r##"["a".rindex(/\G/, -1), "a".rindex("", -1), "a".rindex("a", -1)]"##,
+        ]);
+    }
+
+    #[test]
+    fn rindex_and_byterindex_honour_begin_position_anchor() {
+        // `\G` in a reverse search anchors at the offset the caller
+        // passed — the search start — not at the start of the match, so
+        // the match may begin before it and end after it. The forward
+        // scan probes from every candidate start, and each probe is its
+        // own search, so `\G` is pinned across them (issue #1420).
+        run_tests(&[
+            r##""helloYOU.".rindex(/YOU\G/, 8)"##,
+            r##""helloYOU.".byterindex(/YOU\G/, 8)"##,
+            r##""abcabc".rindex(/\Gabc/, 3)"##,
+            r##""abcabc".byterindex(/\Gabc/, 3)"##,
+            r##""abcabc".rindex(/\Gabc/)"##,
+            r##""abcabc".byterindex(/\Gabc/)"##,
+            r##""abcabc".rindex(/\Gabc/, 0)"##,
+            r##""abcabc".rindex(/\Gabc/, 1)"##,
+            r##""helloYOUall.".rindex(/YOU.+\G.+/, 9)"##,
+            r##""helloYOUall.".byterindex(/YOU.+\G.+/, 9)"##,
+            // `$~` is the match that was returned, not the last probe.
+            r##"[("abcabc".rindex(/\Gabc/, 3)), $~[0], $~.begin(0)]"##,
+            r##"[("abcabc".byterindex(/\Gabc/, 3)), $~[0], $~.begin(0)]"##,
+            r##"["helloYOUall.".rindex(/YOU.+\G.+/, 9), $~[0], $~.end(0)]"##,
+            r##"["abcabc".rindex(/\Gabc/), $~.nil?]"##,
+            // Multibyte: the offset is a character index for `rindex`
+            // and a byte index for `byterindex`.
+            r##""あいうあいう".rindex(/\Gあ/, 3)"##,
+            r##""あいうあいう".byterindex(/\Gあ/, 9)"##,
+            r##""あいうあいう".rindex(/\Gあ/, 2)"##,
+            // A pattern whose `\G` is unreachable never matches.
+            r##""abcabc".rindex(/\Gb/, 3)"##,
+            r##""abcabc".rindex(/b\G/, 3)"##,
         ]);
     }
 
