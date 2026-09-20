@@ -1743,6 +1743,19 @@ pub(super) fn to_path_str(vm: &mut Executor, globals: &mut Globals, val: Value) 
     Ok(to_path_rstring(vm, globals, val)?.to_str()?.to_string())
 }
 
+/// A `PathBuf` holding the *raw* bytes of a path argument, with no
+/// lexical normalization: what a syscall taking the path exactly as
+/// written needs. Unlike `to_path_str` — which renders a non-UTF-8
+/// path byte-wise as `\xHH` for display — this hands the bytes to the
+/// kernel untouched, the way CRuby's `rb_str_encode_ospath` does.
+fn to_raw_path(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+) -> Result<std::path::PathBuf> {
+    Ok(bytes_to_pathbuf(to_path_rstring(vm, globals, val)?.as_bytes()))
+}
+
 #[cfg(not(windows))]
 fn conv_pathbuf(dir: &std::path::Path) -> String {
     dir.to_string_lossy().to_string()
@@ -1769,7 +1782,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let args = lfp.arg(0).as_array();
     let mut count = 0i64;
     for arg in args.iter() {
-        let path = to_path_str(vm, globals, *arg)?;
+        let path = to_raw_path(vm, globals, *arg)?;
         std::fs::remove_file(&path)
             .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
         count += 1;
@@ -1791,7 +1804,7 @@ fn chmod(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mode = args[0].coerce_to_int_i64(_vm, globals)? as u32;
     let mut count = 0i64;
     for arg in args[1..].iter() {
-        let path = to_path_str(_vm, globals, *arg)?;
+        let path = to_raw_path(_vm, globals, *arg)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).map_err(|e| {
             MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_chmod", &path)
@@ -1816,8 +1829,8 @@ fn file_symlink(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let old = to_path_str(vm, globals, lfp.arg(0))?;
-    let new = to_path_str(vm, globals, lfp.arg(1))?;
+    let old = to_raw_path(vm, globals, lfp.arg(0))?;
+    let new = to_raw_path(vm, globals, lfp.arg(1))?;
     std::os::unix::fs::symlink(&old, &new)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_symlink", &new))?;
     Ok(Value::integer(0))
@@ -3990,6 +4003,32 @@ mod tests {
               [hard, sym, target].each { |p| File.unlink(p) rescue nil }
             end
             "#,
+        );
+    }
+
+    #[test]
+    fn file_raw_byte_paths() {
+        // A path (or a symlink target) whose bytes are not valid UTF-8
+        // reaches the kernel untouched: CRuby passes the bytes through,
+        // it does not render them as `\xHH`.
+        run_test_once(
+            r##"
+            d = "/tmp/monoruby_test_rawpath_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(d)
+            begin
+              t = "\xE3\x81\x82".dup.force_encoding("binary")
+              link = "#{d}/l"
+              File.symlink(t, link)
+              f = "#{d}/" + t
+              File.write(f, "x")
+              File.chmod(0600, f)
+              [File.readlink(link).bytes, File.stat(f).mode & 0777,
+               File.delete(f), File.exist?(f)]
+            ensure
+              File.unlink(link) rescue nil
+              Dir.rmdir(d) rescue nil
+            end
+            "##,
         );
     }
 

@@ -242,6 +242,7 @@
 0e7e3c1fe18a8cbea4e15f4300b4c145	150.0	def collect(n)\n          acc = 0.0\n          sink = [3, 1, 2]\n         
 0eb451479b9e3deffa5ff499cb00893c	[:private_answer]	class P\n          def method_missing(name, *args) = :missed\n          p
 0ec3628a644993ceba6c22fb3d0a00d9	[[[1, 2], {x: 3}, "blk"], [[[7, 8], {}, nil]]]	def inner(*a, **k, &b) = [a, k, b ? b.call : nil]\n        def fwd(*, **
+0ec6154b8e79917f352d1bb26c1ef181	[[227, 129, 130], 384, 1, false]	d = "/tmp/monoruby_test_rawpath_#{Process.pid}_#{rand(100000)}"\n   
 0ed19825320ad4f01be8637520de3fe5	[[0, 0, 0], [0, 1, 0], [1, 0, 0], [1, 1, 0], [2, 0, 0], [2, 1, 0]]	res = []\n        3.times do |i|\n          2.times do |j|\n            1.
 0ed9e8d09d16c423c6e622570359536f	[["MONORUBY_ENV_TEST_ASSOC", "yes"], nil]	ENV["MONORUBY_ENV_TEST_ASSOC"] = "yes"\n            r = ENV.assoc("M
 0ee21d2dc9f1c2268555d29eb775b9a4	["ArgumentError", "boom"]	begin\n              begin\n                raise ArgumentError, "boo
