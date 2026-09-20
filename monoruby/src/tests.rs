@@ -122,6 +122,28 @@ pub fn run_test_once_live(code: &str) {
 }
 
 pub fn run_tests<S: AsRef<str>>(codes: &[S]) {
+    run_tests_inner(codes, Oracle::Snapshot);
+}
+
+///
+/// `run_tests` against a live CRuby, never the snapshot.
+///
+/// For the generated suites: `run_binop_tests` and friends build their
+/// code strings from operand and operator lists, so editing a list
+/// rewrites every string it feeds and the snapshot would fill with
+/// entries nothing asks for again. A hand-written `run_tests` array is
+/// stable and belongs in the snapshot; a generated one does not.
+///
+pub fn run_tests_live<S: AsRef<str>>(codes: &[S]) {
+    run_tests_inner(codes, Oracle::Live);
+}
+
+enum Oracle {
+    Snapshot,
+    Live,
+}
+
+fn run_tests_inner<S: AsRef<str>>(codes: &[S], oracle: Oracle) {
     let mut code = "__a = [];".to_string();
     for c in codes {
         let c = c.as_ref();
@@ -141,8 +163,12 @@ pub fn run_tests<S: AsRef<str>>(codes: &[S]) {
     );
     eprintln!("{}", wrapped);
     let mut globals = Globals::new_test();
-    let interp_val = run_test_main(&mut globals, &wrapped).as_array();
-    let ruby_res = run_ruby_live(&mut globals, &code).as_array();
+    let interp = run_test_main(&mut globals, &wrapped);
+    let ruby = match oracle {
+        Oracle::Snapshot => run_ruby(&mut globals, &code, interp),
+        Oracle::Live => run_ruby_live(&mut globals, &code),
+    };
+    let (interp_val, ruby_res) = (interp.as_array(), ruby.as_array());
 
     for i in 0..codes.len() {
         let interp_elem = interp_val.get(i).unwrap();
@@ -150,7 +176,6 @@ pub fn run_tests<S: AsRef<str>>(codes: &[S]) {
         eprintln!("{}", codes[i].as_ref());
         Value::assert_eq(&globals, *interp_elem, *ruby_elem);
     }
-    //Value::assert_eq(&globals, interp_val, ruby_res);
 }
 
 pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
@@ -173,7 +198,7 @@ pub fn run_binop_tests(lhs: &[&str], op: &[&str], rhs: &[&str]) {
             }
         }
     }
-    run_tests(&test);
+    run_tests_live(&test);
 }
 
 pub fn run_binop_tests2(lhs: &[&str], op: &[&str], rhs: &[&str]) {
@@ -186,7 +211,7 @@ pub fn run_binop_tests2(lhs: &[&str], op: &[&str], rhs: &[&str]) {
             }
         }
     }
-    run_tests(&test);
+    run_tests_live(&test);
 }
 
 pub fn run_unop_tests(op: &[&str], rhs: &[&str]) {
@@ -196,7 +221,7 @@ pub fn run_unop_tests(op: &[&str], rhs: &[&str]) {
             test.extend_from_slice(&[format!("{op} ({rhs})"), format!("{op} (-{rhs})")]);
         }
     }
-    run_tests(&test);
+    run_tests_live(&test);
 }
 
 pub fn run_test_with_prelude(code: &str, prelude: &str) {
@@ -240,8 +265,9 @@ pub fn run_tests2<S: AsRef<str>>(codes: &[S]) {
     code += "__a";
     eprintln!("{code}");
     let mut globals = Globals::new_test();
-    let interp_val = run_test_main(&mut globals, &code).as_array();
-    let ruby_res = run_ruby_live(&mut globals, &code).as_array();
+    let interp = run_test_main(&mut globals, &code);
+    let ruby = run_ruby(&mut globals, &code, interp);
+    let (interp_val, ruby_res) = (interp.as_array(), ruby.as_array());
 
     for i in 0..codes.len() {
         let interp_elem = interp_val.get(i).unwrap();
