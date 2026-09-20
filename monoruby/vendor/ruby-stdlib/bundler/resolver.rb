@@ -184,6 +184,9 @@ module Bundler
 
         platforms_explanation = specs_matching_other_platforms.any? ? " for any resolution platforms (#{package.platforms.join(", ")})" : ""
         custom_explanation = "#{constraint} could not be found in #{repository_for(package)}#{platforms_explanation}"
+        if hint = cooldown_hint(specs_matching_other_platforms)
+          custom_explanation += " (#{hint})"
+        end
 
         label = "#{name} (#{constraint_string})"
         extended_explanation = other_specs_matching_message(specs_matching_other_platforms, label) if specs_matching_other_platforms.any?
@@ -353,7 +356,29 @@ module Bundler
         message << "\n#{other_specs_matching_message(specs, matching_part)}"
       end
 
+      if hint = cooldown_hint(specs_matching_requirement)
+        message << "\n\n#{hint}."
+      end
+
+      if specs_matching_requirement.any? && (hint = platform_mismatch_hint)
+        message << "\n\n#{hint}"
+      end
+
       raise GemNotFound, message
+    end
+
+    def platform_mismatch_hint
+      locked_platforms = Bundler.locked_gems&.platforms
+      return unless locked_platforms
+
+      local_platform = Bundler.local_platform
+      return if locked_platforms.include?(local_platform)
+      return if locked_platforms.any? {|p| p == Gem::Platform::RUBY }
+
+      "Your current platform (#{local_platform}) is not included in the lockfile's platforms (#{locked_platforms.join(", ")}). " \
+        "Add the current platform to the lockfile with\n`bundle lock --add-platform #{local_platform}` and try again."
+    rescue GemfileNotFound
+      nil
     end
 
     def filtered_versions_for(package)
@@ -378,13 +403,67 @@ module Bundler
     end
 
     def filter_specs(specs, package)
-      filter_remote_specs(filter_prereleases(specs, package), package)
+      filter_remote_specs(filter_cooldown(filter_prereleases(specs, package)), package)
     end
 
     def filter_prereleases(specs, package)
       return specs unless package.ignores_prereleases? && specs.size > 1
 
       specs.reject {|s| s.version.prerelease? }
+    end
+
+    def filter_cooldown(specs)
+      return specs if specs.empty?
+      excluded_versions = cooldown_excluded_versions(specs)
+      return specs if excluded_versions.empty?
+      specs.reject {|s| excluded_versions.include?([s.name, s.version]) }
+    end
+
+    def cooldown_excluded_versions(specs)
+      excluded = {}
+      specs.each do |spec|
+        next unless cooldown_excluded?(spec)
+        excluded[[spec.name, spec.version]] = true
+      end
+      excluded
+    end
+
+    def cooldown_hint(specs)
+      excluded_versions = cooldown_excluded_versions(specs)
+      return nil if excluded_versions.empty?
+      "#{excluded_versions.size} version#{"s" if excluded_versions.size > 1} excluded by the cooldown setting; pass `--cooldown 0` to bypass"
+    end
+
+    def cooldown_excluded?(spec)
+      return false unless spec.respond_to?(:created_at) && spec.created_at
+      return false unless spec.respond_to?(:remote) && spec.remote
+      return false if locked_by_lockfile?(spec)
+      days = spec.remote.effective_cooldown
+      return false if days.nil? || days <= 0
+      (cooldown_now - spec.created_at) < (days * 86_400)
+    end
+
+    # A version already written to the lockfile has been adopted, and cooldown
+    # only governs the adoption of *new* versions, so it must never retract one
+    # the lockfile already pins. Keying this off the locked specs rather than the
+    # prevent-downgrade floor matters because that floor is absent on resolutions
+    # that re-pick a gem from scratch: the auxiliary full update run to compute
+    # `--update` targets, and the from-scratch retries after a conflict unlocks a
+    # gem. In those passes the locked version is the only candidate, so filtering
+    # it out makes an unrelated operation impossible whenever every published
+    # version matching the requirement sits inside the cooldown window.
+    #
+    # Gems named on a `bundle update GEM` command are the exception: the user
+    # asked to move them, so they stay subject to cooldown and a locked-but-fresh
+    # release is pushed back to an older one (or fails loudly when none exists).
+    def locked_by_lockfile?(spec)
+      return false unless defined?(@base) && @base
+      return false if @base.explicitly_unlocked?(spec.name)
+      @base.locked_specs[spec.name].any? {|locked| locked.version == spec.version }
+    end
+
+    def cooldown_now
+      @cooldown_now ||= Time.now
     end
 
     def filter_remote_specs(specs, package)

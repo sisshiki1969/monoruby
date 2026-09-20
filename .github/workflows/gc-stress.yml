@@ -99,7 +99,7 @@ jobs:
         # The test harness diffs monoruby's output against this CRuby.
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "4.0.2"
+          ruby-version: "4.0.6"
       - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
         run: gem install bigdecimal --no-document
       - uses: dtolnay/rust-toolchain@nightly

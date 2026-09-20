@@ -105,8 +105,13 @@ monoruby/                   # Workspace root
 
 ### 1. Installing CRuby (rbenv)
 
-The monoruby test harness compares output against CRuby, so CRuby 4.0 or later is required. To install via rbenv:
-CRuby 4.0 or later can be obtained from the [ruby/ruby](https://github.com/ruby/ruby) repository on GitHub.
+The monoruby test harness compares output against CRuby, and several of
+its answers are version-specific, so the reference Ruby must **match the
+vendored pin** in `monoruby/vendor/ruby-stdlib/.ruby-version` — `4.0.6`
+today. (`Float#floor` / `#ceil` with a large `ndigits` are the sharp
+edge: 4.0.2 and 4.0.6 genuinely disagree there.) Install it with rbenv,
+or build it from the [ruby/ruby](https://github.com/ruby/ruby)
+repository on GitHub.
 
 > **Important:** Starting with Ruby 3.4, `bigdecimal` is no longer a default
 > gem. The monoruby `bigdecimal_*` integration tests `require "bigdecimal"`
@@ -122,11 +127,11 @@ bigdecimal`.
 
 ### 2. Verifying Ruby Version
 
-Confirm that the `ruby` command launches CRuby 4.0 or later:
+Confirm that the `ruby` command launches the pinned CRuby:
 
 ```sh
 ruby --version
-# => ruby 4.0.1 (2025-xx-xx ...) — must be 4.0 or later
+# => ruby 4.0.6 (2026-07-14 ...) — must match .ruby-version
 ```
 
 `build.rs` uses this `ruby` binary at build time to capture `$LOAD_PATH` and `RUBY_VERSION`. Tests will fail if `ruby` is not in `PATH`.
@@ -487,7 +492,7 @@ independent**: it does not need a `ruby` on `PATH` to produce a correct,
 reproducible build. It performs two jobs:
 
 1. **Bake the reported Ruby version** — Reads `monoruby/vendor/ruby-stdlib/.ruby-version`
-   (the pin marker written by `bin/vendor-ruby-stdlib`, currently `4.0.2`)
+   (the pin marker written by `bin/vendor-ruby-stdlib`, currently `4.0.6`)
    and exposes it as the compile-time env var `MONORUBY_RUBY_VERSION`, which
    the runtime reports as `RUBY_VERSION`. This is read from the vendored
    snapshot — **not** from a host `ruby` — so the version monoruby reports
@@ -516,14 +521,14 @@ reproducible build. It performs two jobs:
      C-extension-backed libraries, laid down last so they win name clashes;
      the `stub/` copy is pinned ahead of `$LOAD_PATH` by the require resolver.
      `gem/prism/` is the prism gem's Ruby half (the version the `ruby-prism`
-     crate links, 1.9.0 today; the vendored Ruby 4.0.2 snapshot carries
+     crate links, 1.9.0 today; the vendored Ruby 4.0.6 snapshot carries
      1.8.1) plus `gem/prism/prism.rb`, monoruby's stand-in for the gem's C
      extension: `src/builtins/prism.rs` runs libprism's serializers and the
      gem's `Prism::Serialize` builds the node tree. The serialization format
      is per prism version, so bumping the crate means re-vendoring these
      files from the matching gem. `stdlib/ripper.rb` is
      `Prism::Translation::Ripper` on top of it. `gem/psych/` is the psych
-     5.3.1 gem's Ruby half (Ruby 4.0.2's) plus `gem/psych/psych.rb`, the
+     5.3.1 gem's Ruby half (Ruby 4.0.6's) plus `gem/psych/psych.rb`, the
      stand-in for its C extension: it requires the `ext/psych` extension,
      which drives `libyaml-safer` (a port of libyaml 0.2.5) as
      `Psych::Parser`'s event source and `Psych::Emitter`'s sink, so
@@ -681,6 +686,19 @@ Modes via `MONORUBY_TEST_ORACLE`:
 - `ruby`: always spawn CRuby and refresh stale entries in place — use this
   after bumping the reference CRuby version to re-verify the whole suite
   against the new Ruby.
+
+> **Refresh from the same environment the oracle was recorded in.** The
+> file holds entries that are environment- rather than version-dependent
+> and were never moved to the `_live` helpers: a `Time#iso8601` carrying
+> the recording machine's UTC offset, `Process.euid`, and two tests that
+> read the repository's own `Cargo.toml`. A `MONORUBY_TEST_ORACLE=ruby`
+> run elsewhere rewrites those with the *new* machine's answers and
+> commits its timezone, its uid and the working tree's current
+> `Cargo.toml` into the snapshot. Moving the pin from 4.0.2 to 4.0.6
+> needed **no** oracle change at all — the suite was already green
+> replaying the stored entries — so check `git diff` on the file before
+> committing a refresh, and treat a changed entry that has nothing to do
+> with the version bump as a test that wants `run_test_live`.
 
 ### Cargo Features
 
@@ -858,7 +876,7 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 
 1. **Nightly only**: Attempting to build with stable Rust will fail. The toolchain is pinned in `rust-toolchain.toml`.
 2. **Architecture-specific backends**: The VM and JIT emit machine code directly per `target_arch` (`codegen/arch/{x86_64,aarch64}/`). Both backends lower the full AsmInst set; aarch64 never bails (large immediates go through scratch registers, so the `bool` "decline" return is vestigial — see `doc/arch_difference.md`). Adding/altering low-level codegen usually means touching both backends. Use `bin/test-aarch64` / `bin/setup-aarch64-cross` for the aarch64 path.
-3. **Ruby in PATH**: Tests compare output against a system `ruby` binary matching the vendored pin (`4.0.2`, see `vendor/ruby-stdlib/.ruby-version`). The single-code helpers replay the checked-in snapshot oracle (`monoruby/tests/ruby_oracle.tsv`) and only spawn `ruby` on a cache miss, but the batched helpers (`run_tests` etc.) and several integration tests still invoke it directly — keep a matching Ruby installed for full-suite runs, and use `MONORUBY_TEST_ORACLE=ruby` after a version bump to refresh the oracle.
+3. **Ruby in PATH**: Tests compare output against a system `ruby` binary matching the vendored pin (`4.0.6`, see `vendor/ruby-stdlib/.ruby-version`). The single-code helpers replay the checked-in snapshot oracle (`monoruby/tests/ruby_oracle.tsv`) and only spawn `ruby` on a cache miss, but the batched helpers (`run_tests` etc.) and several integration tests still invoke it directly — keep a matching Ruby installed for full-suite runs, and use `MONORUBY_TEST_ORACLE=ruby` after a version bump to refresh the oracle.
 4. **optcarrot**: The full CI test requires optcarrot cloned at `../optcarrot` relative to the repo root.
 5. **Weak references**: `ObjectSpace::WeakMap` is real — its storage is
    `ObjTy::WEAKMAP` (`src/value/rvalue/weakmap.rs`), whose `mark` traces

@@ -9,7 +9,7 @@
 require "rbconfig"
 
 module Gem
-  VERSION = "4.0.3"
+  VERSION = "4.0.16"
 end
 
 require_relative "rubygems/defaults"
@@ -37,7 +37,7 @@ require_relative "rubygems/win_platform"
 # Further RubyGems documentation can be found at:
 #
 # * {RubyGems Guides}[https://guides.rubygems.org]
-# * {RubyGems API}[https://www.rubydoc.info/github/ruby/rubygems] (also available from
+# * {RubyGems API}[https://guides.rubygems.org/rubygems-org-api/] (also available from
 #   <tt>gem server</tt>)
 #
 # == RubyGems Plugins
@@ -192,11 +192,13 @@ module Gem
     begin
       spec.activate
     rescue Gem::LoadError => e # this could fail due to gem dep collisions, go lax
-      spec_by_name = Gem::Specification.find_by_name(spec.name)
-      if spec_by_name.nil?
+      name = spec.name
+      spec = Gem::Specification.find_unloaded_by_path(path)
+      spec ||= Gem::Specification.find_by_name(name)
+      if spec.nil?
         raise e
       else
-        spec_by_name.activate
+        spec.activate
       end
     end
 
@@ -1283,10 +1285,17 @@ An Array (#{env.inspect}) was passed in from #{caller[3]}
         prefix_pattern = /^(#{prefix_group})/
       end
 
+      native_extension_suffixes = Gem.dynamic_library_suffixes.reject(&:empty?)
+
       spec.files.each do |file|
         if new_format
           file = file.sub(prefix_pattern, "")
-          next unless $~
+          unless $~
+            # Also register native extension files (e.g. date_core.bundle)
+            # that are listed without require path prefix in the gemspec
+            next if file.include?("/")
+            next unless file.end_with?(*native_extension_suffixes)
+          end
         end
 
         spec.activate if already_loaded?(file)
@@ -1410,9 +1419,7 @@ require_relative "rubygems/specification"
 
 # REFACTOR: This should be pulled out into some kind of hacks file.
 begin
-  ##
   # Defaults the operating system (or packager) wants to provide for RubyGems.
-
   require "rubygems/defaults/operating_system"
 rescue LoadError
   # Ignored
@@ -1427,9 +1434,7 @@ rescue StandardError => e
 end
 
 begin
-  ##
   # Defaults the Ruby implementation wants to provide for RubyGems
-
   require "rubygems/defaults/#{RUBY_ENGINE}"
 rescue LoadError
 end
