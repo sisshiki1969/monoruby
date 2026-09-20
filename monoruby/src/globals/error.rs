@@ -100,8 +100,8 @@ pub struct MonorubyErr {
     /// The name is *not* built here. Both `Class#new` halves used to build
     /// it — the allocator seeded it and `Exception#initialize` overwrote it
     /// with the same string — which made allocating an exception cost two
-    /// class-name renderings that almost nothing reads. Resolution now
-    /// happens in the read paths, via `resolve_default_message`.
+    /// class-name renderings that almost nothing reads. The read paths
+    /// render it instead, via `message_with`.
     pub(crate) default_message_class: Option<ClassId>,
 }
 
@@ -137,16 +137,6 @@ impl MonorubyErr {
         let mut err = Self::with_message(kind, String::new());
         err.default_message_class = Some(class_id);
         err
-    }
-
-    ///
-    /// Materialize a deferred default message, if this error still has one.
-    /// Idempotent, and a no-op for the common case of an explicit message.
-    ///
-    pub(crate) fn resolve_default_message(&mut self, store: &Store) {
-        if let Some(class_id) = self.default_message_class.take() {
-            self.message = store.get_class_name(class_id);
-        }
     }
 
     ///

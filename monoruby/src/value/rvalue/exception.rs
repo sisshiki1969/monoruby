@@ -37,11 +37,6 @@ impl ExceptionInner {
         self.default_message_class = None;
     }
 
-    pub fn set_class_name(&mut self, msg: String) {
-        self.message = msg;
-        self.default_message_class = None;
-    }
-
     pub fn kind(&self) -> MonorubyErrKind {
         self.kind.clone()
     }
