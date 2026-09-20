@@ -13,7 +13,14 @@ perf.data
 out.*
 lcov.info
 rubyspec_temp/
-.claude/
+# Claude Code's directory is local scratch, except for the two files that
+# have to reach a fresh session: the SessionStart hook and its registration.
+# (Git does not descend into an ignored directory, so the contents are what
+# gets ignored here, not the directory itself.)
+.claude/*
+!.claude/hooks/
+!.claude/settings.json
+.claude/settings.local.json
 coverage_html
 rustc-ice-*.txt
 # nextest scratch files (TMPDIR=.tmp); the tracked .tmp/suite.log is kept

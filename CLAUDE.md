@@ -221,6 +221,13 @@ cache to invalidate — the first monoruby build/run probes and picks 4.0.6
 (an exact match for `ruby_probe::COMPAT_RUBY_VERSION`). After any *later*
 `gem install`, refresh it with `MONORUBY_REPROBE=1 monoruby -e ''`.
 
+`.claude/hooks/session-start.sh` is this whole procedure as a SessionStart
+hook, so a web session arrives with it already done; it adds the pinned
+nightly toolchain and CI's gem list (`.github/workflows/rust.yml`) on top,
+and no-ops outside a remote container (`CLAUDE_CODE_REMOTE`). Registered in
+`.claude/settings.json`. Change the pin, the gem list or the image's Ruby
+layout and the script has to move with them.
+
 ### 3. Verifying Ruby Version
 
 Confirm that the `ruby` command launches the pinned CRuby:
