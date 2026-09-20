@@ -972,18 +972,72 @@ pub(crate) fn tracked_addr() -> Option<usize> {
     })
 }
 
+///
+/// Reserve the object arena: `size` bytes aligned to `align`, mapped
+/// `MAP_NORESERVE` and committed lazily as pages are handed out.
+///
+/// **`MAP_NORESERVE` is the point of this function.** The arena is
+/// `MAX_PAGES` pages — 2 GiB — of which a typical process touches a few
+/// MiB. Linux accounts a plain private anonymous mapping against the
+/// commit limit, and does so per *VMA*, merging adjacent mappings that
+/// share their flags into one. So several arenas that happen to land next
+/// to each other (a test binary runs a thread per test, and each
+/// interpreter thread has its own allocator) become a single accounted
+/// VMA tens of gigabytes wide. `fork` re-charges every accountable VMA it
+/// copies, so past the machine's RAM it fails with `ENOMEM` — in a
+/// process that has committed almost none of it, and with nothing the
+/// Ruby program could do about it: `Kernel#fork` and `IO.popen` simply
+/// stop working.
+///
+/// The reservation is never released (no `Drop` on `Allocator`), so there
+/// is no unmapping counterpart.
+///
+fn reserve_arena(size: usize, align: usize) -> *mut u8 {
+    // Over-reserve by one alignment unit so an aligned base exists inside
+    // whatever address the kernel picks, then trim the slack away.
+    let slack = size + align;
+    let raw = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            slack,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE,
+            -1,
+            0,
+        )
+    };
+    assert!(
+        raw != libc::MAP_FAILED,
+        "could not reserve {slack} bytes for the object arena: {}",
+        std::io::Error::last_os_error()
+    );
+    let raw = raw as usize;
+    let base = (raw + align - 1) & !(align - 1);
+    // SAFETY: both ranges are inside the mapping just made, and neither is
+    // the arena itself.
+    unsafe {
+        if base > raw {
+            libc::munmap(raw as _, base - raw);
+        }
+        let tail = base + size;
+        if raw + slack > tail {
+            libc::munmap(tail as _, raw + slack - tail);
+        }
+    }
+    base as *mut u8
+}
+
 impl<T: GCBox> Allocator<T> {
     pub(crate) fn new() -> Self {
         assert_eq!(64, GCBOX_SIZE);
         assert!(std::mem::size_of::<Page<T>>() <= ALLOC_SIZE);
-        let layout = Layout::from_size_align(ALLOC_SIZE * MAX_PAGES, ALLOC_SIZE).unwrap();
-        let ptr = unsafe { System.alloc(layout) };
+        let ptr = reserve_arena(ALLOC_SIZE * MAX_PAGES, ALLOC_SIZE);
         let ptr: PageRef<T> = std::ptr::NonNull::new(ptr as _).unwrap();
-        // The arena is freshly `System.alloc`'d (uninitialised). Zero the
-        // first page's old-generation bitmap so the first minor GC seeds
-        // `mark_bits` from zeros rather than arena garbage. (`mark_bits`
-        // is always written by a major clear / minor seed before it is
-        // read, so it needs no such pre-zeroing.)
+        // The arena is freshly reserved (uninitialised as far as this code
+        // is concerned). Zero the first page's old-generation bitmap so the
+        // first minor GC seeds `mark_bits` from zeros rather than arena
+        // garbage. (`mark_bits` is always written by a major clear / minor
+        // seed before it is read, so it needs no such pre-zeroing.)
         // SAFETY: `ptr` points at `ALLOC_SIZE` bytes of owned arena; only
         // the `old_bits` field is written here.
         unsafe { (*ptr.as_ptr()).clear_old_bits() };
@@ -2456,5 +2510,50 @@ impl<T: GCBox> Page<T> {
     ///
     fn all_dead(&self) -> bool {
         self.mark_bits.iter().all(|bits| *bits == 0)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod arena_reservation_tests {
+    use super::{reserve_arena, ALLOC_SIZE};
+
+    /// The kernel's flags for the mapping containing `addr`, as
+    /// `/proc/self/smaps` reports them (`nr` = `MAP_NORESERVE`, `ac` =
+    /// accounted against the commit limit).
+    fn vm_flags(addr: usize) -> String {
+        let smaps = std::fs::read_to_string("/proc/self/smaps").unwrap();
+        let mut here = false;
+        for line in smaps.lines() {
+            if let Some((range, _)) = line.split_once(' ')
+                && let Some((lo, hi)) = range.split_once('-')
+                && let (Ok(lo), Ok(hi)) = (
+                    usize::from_str_radix(lo, 16),
+                    usize::from_str_radix(hi, 16),
+                )
+            {
+                here = (lo..hi).contains(&addr);
+            }
+            if here && let Some(flags) = line.strip_prefix("VmFlags:") {
+                return flags.trim().to_string();
+            }
+        }
+        panic!("no mapping contains {addr:#x}");
+    }
+
+    /// The arena must stay out of the commit accounting — see
+    /// `reserve_arena` for what breaks otherwise (`fork` stops working).
+    /// Linux-only: this is the only place the property is observable.
+    #[test]
+    fn the_arena_is_not_overcommit_accounted() {
+        let size = ALLOC_SIZE * 4;
+        let base = reserve_arena(size, ALLOC_SIZE);
+        let flags = vm_flags(base as usize);
+        assert!(
+            flags.split_whitespace().any(|f| f == "nr"),
+            "arena mapping is missing MAP_NORESERVE; VmFlags: {flags}"
+        );
+        assert_eq!(0, base as usize % ALLOC_SIZE, "arena base is misaligned");
+        // SAFETY: nothing was handed out of this reservation.
+        unsafe { libc::munmap(base as _, size) };
     }
 }
