@@ -956,6 +956,7 @@
 3f9bc283176b2ee563ab3a04dc4a637b	[[2], 0]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 3fb8c0c6f9028a8a1d17e01958b4d1f5	[0, true, 2, 0, true, 1, 0, 0, nil]	class Always\n          def ==(o) = true\n        end\n        class Only1
 3fcbc9935b035dee352be56a30398754	"world"	IO.popen("echo world") { |io| io.read.chomp }\n            
+3fdb77b75ad0ff9bc16456a833ba56a9	[:deferred]	r = []\n            q = Queue.new\n            ready = Queue.new\n    
 3fef9f42692341177896868638c71b46	[["v1", "v2"], [nil, nil, "new"]]	ENV["MONORUBY_ENV_TEST_MN1"] = "v1"\n            ENV["MONORUBY_ENV_T
 3ff02e23d910a4fb58eb4a1180f7d75c	"\\\\u{61}"	Regexp.new(/\\u{61}/).source
 3ff65387266e9d8a7c9c547287b2bcff	[true, true, true, [115, 101, 101, 100, 65, 0, 0, 0, 0, 0, 0, 248, 63, 0, 0, 0, 1], "ASCII-8BIT"]	buf = "seed".b\n        r1 = [65].pack("C", buffer: buf)\n        r2 = [1
@@ -1499,6 +1500,7 @@
 64304d338b2e1d9153798436746ba67c	[:plus, :lt, :bang, :aref, 3, true, false, 9]	class BopUser\n              def +(o); :plus; end\n              def 
 6453b5e2bc4a58561702b08638c14ead	["ab", 2, "ab", nil, "\\xFFc", "\\xFFc", 4, "c", 3, "d ef", "d", 1, "ef", "f", true, "ASCII-8BIT", "", nil, nil, "no implicit conversion of Integer into String", "no implicit conversion of Symbol into String"]	require "strscan"\n        r = []\n        b = StringScanner.new("ab\\xFFc
 646b6df81e3b78ea650391aa2912e6d4	["0.33333e1", "0.3333333333e1", "0.25e2"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
+646ff56571e25bce931e58b1751ddc61	[]	lock = Mutex.new\n            errs = []\n            t2 = nil\n       
 64745fd3594011f602b1ae98a52ab4ae	["Array", true, ["prompt>"], ["prompt>"]]	require "expect"\n            res = []\n            r, w = IO.pipe\n  
 647ffbbf00a05ebdfe455831178357bd	[:nil, "in main"]	def inner\n          begin\n            $!.nil? ? :nil : $!.message\n     
 64813a4dde67dc42192c53915b8c2dc5	true	M = Data.define(:amount, :unit)\nM.new(42, "km").frozen?
