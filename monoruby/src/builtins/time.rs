@@ -3040,12 +3040,14 @@ fn format_offset(
     // Total offset in seconds (signed), as it renders: a fractional
     // offset shows rounded, not floored (see `rendered_offset_secs`).
     let total_secs: i64 = rendered_offset_secs(inner) as i64;
-    // CRuby's `%-z` rule: any time with offset == 0 emits the
-    // "unknown offset" form `-0000` / `-00:00` / `-00:00:00`. This
-    // covers `Time.utc(...)`, `Time.new(.., "Z")`,
-    // `Time.new(.., "-00:00")`, and `Time.new(.., "+03:00").utc`.
-    // Non-zero offsets ignore the `-` flag entirely.
-    let negative_zero = flag_minus && total_secs == 0;
+    // CRuby's `%-z` rule: a time whose zone is *unknown* emits the
+    // "unknown offset" form `-0000` / `-00:00` / `-00:00:00`. That is a
+    // UTC-mode time — `Time.utc(...)`, `Time.new(.., "Z")`,
+    // `Time.new(.., "-00:00")`, `Time.new(.., "+03:00").utc` — and not
+    // merely one whose offset happens to be zero: `Time.new(.., "+00:00")`
+    // and `#getlocal(0)` are at a known zero offset and print `+0000`.
+    // A time at any other offset ignores the `-` flag entirely.
+    let negative_zero = flag_minus && inner.is_utc();
     let (sign, abs) = if negative_zero {
         ('-', 0i64)
     } else if total_secs < 0 {
@@ -3065,16 +3067,21 @@ fn format_offset(
         1 => format!(":{:02}", m),
         _ => format!(":{:02}:{:02}", m, s),
     };
-    let Some(w) = width else {
-        return format!("{}{:02}{}", sign, h, suffix);
-    };
     let hours = format!("{}{}", sign, h);
-    let field = w.saturating_sub(suffix.len());
+    // The hour never falls below its natural sign-plus-two-digits, so a
+    // width too small to fit it is simply ignored: `%3z` is `-0400`, not
+    // `-400`. Without a width that minimum *is* the field, which is what
+    // makes `%_z` (space pad) ` -400` rather than `-0400` — the padding
+    // replaces the leading zero.
+    let field = match width {
+        Some(w) => w.saturating_sub(suffix.len()).max(3),
+        None => 3,
+    };
     if hours.len() >= field {
         return format!("{}{}", hours, suffix);
     }
     let fill = field - hours.len();
-    let mut out = String::with_capacity(w);
+    let mut out = String::with_capacity(field + suffix.len());
     if pad_char == Some(' ') {
         // Spaces go in front of the sign, zeros between it and the digits.
         out.extend(std::iter::repeat_n(' ', fill));
@@ -3881,6 +3888,33 @@ impl TimeInner {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn strftime_zone_padding() {
+        // `%z`'s field: the hour never drops below sign-plus-two-digits,
+        // a space pad replaces the leading zero rather than the sign, and
+        // the `-` flag's "unknown offset" `-0000` is for a UTC-mode time,
+        // not for any time whose offset happens to be zero.
+        run_test(
+            r#"
+        res = []
+        fmts = ["%z","%:z","%::z","%_z","%_:z","%_::z","%0z","%0:z","%-z","%-:z","%^z",
+                "%1z","%3z","%5z","%6z","%10z","%_10z","%010z","%-10z","%-_10z","%_5z","%_6z","%12::z"]
+        ["-04:00", "+05:30", "+00:00", "-00:00", "+11:22:33", "-09:00", "Z"].each do |o|
+          t = Time.new(2020, 1, 4, 12, 34, 56, o)
+          res << [o, t.utc?] + fmts.map { |f| t.strftime(f) }
+        end
+        [Time.utc(2020, 1, 4, 12, 34, 56),
+         Time.new(2020, 1, 4, 12, 34, 56, 0),
+         Time.utc(2020, 1, 4, 12, 34, 56).getlocal(0),
+         Time.at(0, in: 0),
+         Time.new(2020, 1, 4, 12, 34, 56, "+03:00").utc,
+         Time.new(2020, 1, 4, 12, 34, 56, Rational(7201, 2))].each do |t|
+          res << [t.utc?] + fmts.map { |f| t.strftime(f) }
+        end
+        res.to_s"#,
+        );
+    }
 
     #[test]
     fn fractional_utc_offset() {
