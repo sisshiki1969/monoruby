@@ -111,9 +111,32 @@ fn read_entries_via_fd(
         libc::closedir(dirp);
         Ok(names
             .into_iter()
-            .map(|n| super::io::tag_with_encs(globals, n, enc_obj, None))
+            .map(|n| external_str_with_enc(globals, n, enc_obj))
             .collect())
     }
+}
+
+/// Tag one directory entry the way dir.c does, through CRuby's
+/// `rb_external_str_with_enc`: a name that is **not** all-ASCII under a
+/// US-ASCII target encoding is tagged ASCII-8BIT instead — and skips
+/// the `default_internal` conversion — rather than carrying a US-ASCII
+/// tag its own bytes are invalid in. Every other case is the ordinary
+/// external/internal tagging. The rule is the target encoding's, so it
+/// fires for an explicit `encoding: "US-ASCII"` just as it does for a
+/// US-ASCII `Encoding.find("filesystem")`.
+fn external_str_with_enc(globals: &mut Globals, bytes: Vec<u8>, enc_obj: Option<Value>) -> Value {
+    use crate::value::Encoding as E;
+    let target = match enc_obj {
+        Some(o) => super::io::enc_obj_to_enum(globals, o),
+        None => {
+            let de = super::io::enc_default_external_obj(globals);
+            super::io::enc_obj_to_enum(globals, de)
+        }
+    };
+    if target == Some(E::UsAscii) && !bytes.is_ascii() {
+        return super::file::path_value(&bytes, E::Ascii8);
+    }
+    super::io::tag_with_encs(globals, bytes, enc_obj, None)
 }
 
 /// Resolve an `encoding:` keyword value (String name or Encoding
@@ -181,7 +204,7 @@ fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     names.extend(read_dir_names(globals, &path)?);
     let entries: Vec<Value> = names
         .into_iter()
-        .map(|n| super::io::tag_with_encs(globals, n, enc_obj, None))
+        .map(|n| external_str_with_enc(globals, n, enc_obj))
         .collect();
     let p = vm.get_block_data(globals, bh)?;
     // Root the not-yet-yielded name strings: the block body reaches
@@ -970,7 +993,7 @@ fn entries(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     names.extend(read_dir_names(globals, &path)?);
     let result: Vec<Value> = names
         .into_iter()
-        .map(|n| super::io::tag_with_encs(globals, n, enc_obj, None))
+        .map(|n| external_str_with_enc(globals, n, enc_obj))
         .collect();
     Ok(Value::array_from_vec(result))
 }
@@ -1190,6 +1213,18 @@ mod tests {
         // it (default: external encoding); default_internal transcodes.
         run_test_once(
             r##"(d="/tmp/mono_de_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/a", ""); a=Dir.entries(d, encoding: "euc-jp").map { |e| e.encoding.name }.uniq; b=Dir.children(d, encoding: Encoding::ISO_8859_1).map { |e| e.encoding.name }.uniq; c=Dir.foreach(d, encoding: "iso-8859-1").to_a.map { |e| e.encoding.name }.uniq; names=[]; Dir.foreach(d, encoding: Encoding::ISO_8859_1) { |e| names << e.encoding.name }; e2=Dir.entries(d).map { |x| x.encoding.name }.uniq; File.unlink("#{d}/a"); Dir.rmdir(d); [a,b,c,names.uniq,e2])"##,
+        );
+    }
+
+    #[test]
+    fn dir_entries_us_ascii_binary_fallback() {
+        // CRuby's `rb_external_str_with_enc`: a name that is not
+        // all-ASCII under a US-ASCII target encoding comes back
+        // ASCII-8BIT, not US-ASCII-with-invalid-bytes. Spelled with an
+        // explicit `encoding:` so the answer does not ride on the
+        // machine's locale.
+        run_test_once(
+            r##"(d="/tmp/mono_eu_#{Process.pid}"; Dir.mkdir(d); n="ã".dup.force_encoding("binary"); File.write("#{d}/#{n}", ""); File.write("#{d}/a", ""); f=->(enc){ Dir.children(d, encoding: enc).sort_by(&:bytes).map { |s| [s.bytes, s.encoding.name] } }; r=[f.call("US-ASCII"), f.call("UTF-8"), f.call("BINARY"), Dir.entries(d, encoding: "US-ASCII").sort_by(&:bytes).map { |s| s.encoding.name }]; Dir.children(d).each { |c| File.unlink("#{d}/#{c}") }; Dir.rmdir(d); r)"##,
         );
     }
 
