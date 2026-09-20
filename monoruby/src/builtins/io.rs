@@ -5823,6 +5823,24 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn nonblock_errno_message_is_the_bare_strerror() {
+        // CRuby raises `Errno::EPIPE: Broken pipe`, not the name of the
+        // method that hit the error.
+        run_test_once(
+            r#"
+        r, w = IO.pipe
+        r.close
+        res = begin
+          w.write_nonblock("x")
+        rescue => e
+          [e.class.to_s, e.message]
+        end
+        w.close
+        res.to_s"#,
+        );
+    }
+
+    #[test]
     fn io_sysseek_whence_symbols_and_advise() {
         // sysseek accepts :SET/:CUR/:END (and integers); an unknown symbol
         // is ArgumentError; an unknown advice is NotImplementedError.

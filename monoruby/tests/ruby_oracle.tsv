@@ -2036,6 +2036,7 @@
 885b49a51181fdd9a665649f5d6afb97	[1, 2, 3, 4]	class C; def to_ary; [3, 4]; end; end; o = C.new\n[1, 2] + o
 885c5c5cd9175193870499b63f8d37c1	[:shared]	blk = proc { :shared }\n        class BmShared; end\n        BmShared.sen
 889ef2d076f0c4bf33ee8cb138f1383a	[:a, "b"]	module M\n              def a; 1; end\n              def b; 2; end\n  
+88aa1049bc3875d7e107b487bcdc908e	"[\\"Errno::EPIPE\\", \\"Broken pipe\\"]"	r, w = IO.pipe\n        r.close\n        res = begin\n          w.write_no
 88b402e7fdaa8b2f9583d10a43b30b83	[true, false, true, false, true]	class C\n          def pub_method; end\n          private\n          def p
 88b74eaedd70ab6521c45c598a99a423	:OVERRIDDEN	class Float; def <=(o); :OVERRIDDEN; end; end; 3.0 <= 4.0
 88babe728a4927abe5d2e25cd6b25a80	:OVERRIDDEN	class TrueClass; def ==(o); :OVERRIDDEN; end; end; true == true

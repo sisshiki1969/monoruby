@@ -1540,7 +1540,9 @@ impl IoInner {
                 Some(e) if e == libc::EAGAIN || e == libc::EWOULDBLOCK => {
                     Ok(NonblockRead::WouldBlock)
                 }
-                _ => Err(MonorubyErr::from_io_err(store, &err, "read_nonblock".to_string())),
+                // CRuby raises the bare strerror here — `Errno::EPIPE:
+                // Broken pipe`, not the name of the method that hit it.
+                _ => Err(MonorubyErr::errno_plain(store, &err)),
             }
         }
     }
@@ -1566,7 +1568,9 @@ impl IoInner {
                 Some(e) if e == libc::EAGAIN || e == libc::EWOULDBLOCK => {
                     Ok(NonblockWrite::WouldBlock)
                 }
-                _ => Err(MonorubyErr::from_io_err(store, &err, "write_nonblock".to_string())),
+                // CRuby raises the bare strerror here — `Errno::EPIPE:
+                // Broken pipe`, not the name of the method that hit it.
+                _ => Err(MonorubyErr::errno_plain(store, &err)),
             }
         }
     }
