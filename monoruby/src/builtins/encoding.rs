@@ -675,10 +675,43 @@ fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static [char; 128]
         '≡', '±', '≥', '≤', '⌠', '⌡', '÷', '≈', '°', '∙', '·', '√', 'ⁿ', '²', '■',
         '\u{A0}',
     ];
-    if let crate::value::Encoding::NamedByte(_) = enc {
-        if enc.name() == "IBM437" {
+    /// ISO-8859-1 (Latin-1): every byte *is* its code point. Ruby's
+    /// ISO-8859-1 is the real ISO standard, where 0x80..0x9F are the C1
+    /// controls; `encoding_rs` has no codec for it, because WHATWG
+    /// makes the `iso-8859-1` label an alias of windows-1252, which
+    /// puts typographic characters in 27 of those 32 slots. Going
+    /// through the table keeps the byte/code-point bijection.
+    const LATIN1: [char; 128] = [
+        '\u{80}', '\u{81}', '\u{82}', '\u{83}', '\u{84}', '\u{85}', '\u{86}', '\u{87}', '\u{88}', '\u{89}', '\u{8A}', '\u{8B}', '\u{8C}', '\u{8D}', '\u{8E}', '\u{8F}', //
+        '\u{90}', '\u{91}', '\u{92}', '\u{93}', '\u{94}', '\u{95}', '\u{96}', '\u{97}', '\u{98}', '\u{99}', '\u{9A}', '\u{9B}', '\u{9C}', '\u{9D}', '\u{9E}', '\u{9F}', //
+        '\u{A0}', '\u{A1}', '\u{A2}', '\u{A3}', '\u{A4}', '\u{A5}', '\u{A6}', '\u{A7}', '\u{A8}', '\u{A9}', '\u{AA}', '\u{AB}', '\u{AC}', '\u{AD}', '\u{AE}', '\u{AF}', //
+        '\u{B0}', '\u{B1}', '\u{B2}', '\u{B3}', '\u{B4}', '\u{B5}', '\u{B6}', '\u{B7}', '\u{B8}', '\u{B9}', '\u{BA}', '\u{BB}', '\u{BC}', '\u{BD}', '\u{BE}', '\u{BF}', //
+        '\u{C0}', '\u{C1}', '\u{C2}', '\u{C3}', '\u{C4}', '\u{C5}', '\u{C6}', '\u{C7}', '\u{C8}', '\u{C9}', '\u{CA}', '\u{CB}', '\u{CC}', '\u{CD}', '\u{CE}', '\u{CF}', //
+        '\u{D0}', '\u{D1}', '\u{D2}', '\u{D3}', '\u{D4}', '\u{D5}', '\u{D6}', '\u{D7}', '\u{D8}', '\u{D9}', '\u{DA}', '\u{DB}', '\u{DC}', '\u{DD}', '\u{DE}', '\u{DF}', //
+        '\u{E0}', '\u{E1}', '\u{E2}', '\u{E3}', '\u{E4}', '\u{E5}', '\u{E6}', '\u{E7}', '\u{E8}', '\u{E9}', '\u{EA}', '\u{EB}', '\u{EC}', '\u{ED}', '\u{EE}', '\u{EF}', //
+        '\u{F0}', '\u{F1}', '\u{F2}', '\u{F3}', '\u{F4}', '\u{F5}', '\u{F6}', '\u{F7}', '\u{F8}', '\u{F9}', '\u{FA}', '\u{FB}', '\u{FC}', '\u{FD}', '\u{FE}', '\u{FF}',
+    ];
+    /// ISO-8859-9 (Latin-5): Latin-1 with six Turkish letters, and the
+    /// same story as Latin-1 above — WHATWG makes the `iso-8859-9`
+    /// label an alias of windows-1254, which fills 0x80..0x9F instead
+    /// of leaving the C1 controls there.
+    const ISO8859_9: [char; 128] = [
+        '\u{80}', '\u{81}', '\u{82}', '\u{83}', '\u{84}', '\u{85}', '\u{86}', '\u{87}', '\u{88}', '\u{89}', '\u{8A}', '\u{8B}', '\u{8C}', '\u{8D}', '\u{8E}', '\u{8F}', //
+        '\u{90}', '\u{91}', '\u{92}', '\u{93}', '\u{94}', '\u{95}', '\u{96}', '\u{97}', '\u{98}', '\u{99}', '\u{9A}', '\u{9B}', '\u{9C}', '\u{9D}', '\u{9E}', '\u{9F}', //
+        '\u{A0}', '\u{A1}', '\u{A2}', '\u{A3}', '\u{A4}', '\u{A5}', '\u{A6}', '\u{A7}', '\u{A8}', '\u{A9}', '\u{AA}', '\u{AB}', '\u{AC}', '\u{AD}', '\u{AE}', '\u{AF}', //
+        '\u{B0}', '\u{B1}', '\u{B2}', '\u{B3}', '\u{B4}', '\u{B5}', '\u{B6}', '\u{B7}', '\u{B8}', '\u{B9}', '\u{BA}', '\u{BB}', '\u{BC}', '\u{BD}', '\u{BE}', '\u{BF}', //
+        '\u{C0}', '\u{C1}', '\u{C2}', '\u{C3}', '\u{C4}', '\u{C5}', '\u{C6}', '\u{C7}', '\u{C8}', '\u{C9}', '\u{CA}', '\u{CB}', '\u{CC}', '\u{CD}', '\u{CE}', '\u{CF}', //
+        '\u{11E}', '\u{D1}', '\u{D2}', '\u{D3}', '\u{D4}', '\u{D5}', '\u{D6}', '\u{D7}', '\u{D8}', '\u{D9}', '\u{DA}', '\u{DB}', '\u{DC}', '\u{130}', '\u{15E}', '\u{DF}', //
+        '\u{E0}', '\u{E1}', '\u{E2}', '\u{E3}', '\u{E4}', '\u{E5}', '\u{E6}', '\u{E7}', '\u{E8}', '\u{E9}', '\u{EA}', '\u{EB}', '\u{EC}', '\u{ED}', '\u{EE}', '\u{EF}', //
+        '\u{11F}', '\u{F1}', '\u{F2}', '\u{F3}', '\u{F4}', '\u{F5}', '\u{F6}', '\u{F7}', '\u{F8}', '\u{F9}', '\u{FA}', '\u{FB}', '\u{FC}', '\u{131}', '\u{15F}', '\u{FF}',
+    ];
+    match enc {
+        crate::value::Encoding::Iso8859(1) => return Some(&LATIN1),
+        crate::value::Encoding::Iso8859(9) => return Some(&ISO8859_9),
+        crate::value::Encoding::NamedByte(_) if enc.name() == "IBM437" => {
             return Some(&IBM437);
         }
+        _ => {}
     }
     None
 }
@@ -2196,6 +2229,10 @@ const CONVERTER_PENDING_IVAR: &str = "/converter_pending";
 /// Read-again bytes buffered by an `:invalid_byte_sequence` outcome,
 /// returned (and drained) by `Encoding::Converter#putback`.
 const CONVERTER_READAGAIN_IVAR: &str = "/converter_readagain";
+/// Set while a stateful destination encoding (ISO-2022-JP) has been
+/// shifted out of ASCII and not shifted back, so `#finish` knows it
+/// still owes the closing escape. See [`note_shift_state`].
+const CONVERTER_SHIFTED_IVAR: &str = "/converter_shifted";
 /// Structured data of the last conversion error (for `#last_error` /
 /// the error-object attribute readers): `[kind, msg, error_bytes,
 /// readagain_bytes, stage_src, stage_dst]`, or absent/nil when the
@@ -2208,6 +2245,38 @@ const CONVERTER_LAST_ERROR_IVAR: &str = "/converter_last_error";
 const CONVERTER_FLAGS_IVAR: &str = "/converter_flags";
 const CONVERTER_FLAG_INVALID_REPLACE: i64 = 0b01;
 const CONVERTER_FLAG_UNDEF_REPLACE: i64 = 0b10;
+
+/// ISO-2022-JP's escape back to ASCII. A stream that ends in one of
+/// the other designations still owes this before it is well-formed.
+const ISO2022JP_ASCII: &[u8] = b"\x1b(B";
+
+/// Remember whether `out` left a stateful destination shifted out of
+/// ASCII. ISO-2022-JP is the only such encoding here: its bytes mean
+/// nothing without the `ESC` designation in force, and a stream that
+/// ends inside `ESC $ B` (JIS X 0208) has to come back to ASCII before
+/// it is finished. `#convert` does not emit that closing escape — the
+/// caller may still append more — so `#finish` does, and this is how it
+/// knows whether it has to. Output without any escape leaves the state
+/// alone.
+fn note_shift_state(
+    globals: &mut Globals,
+    recv: Value,
+    dst: crate::value::Encoding,
+    out: &[u8],
+) {
+    if dst != crate::value::Encoding::Iso2022Jp {
+        return;
+    }
+    let Some(last_esc) = out.iter().rposition(|&b| b == 0x1b) else {
+        return;
+    };
+    let shifted = !out[last_esc..].starts_with(ISO2022JP_ASCII);
+    let _ = globals.store.set_ivar(
+        recv,
+        IdentId::get_id(CONVERTER_SHIFTED_IVAR),
+        Value::bool(shifted),
+    );
+}
 
 /// Build the `TranscodeOpts` for a Converter instance from its
 /// stored replacement string + conversion flags. Shared by
@@ -2660,6 +2729,7 @@ fn converter_convert(
         // Replacement mode cannot error on content — the single-shot
         // transcoder suffices.
         let out = transcode_bytes_with_opts(&bytes, src, dst, &opts, &globals.store)?;
+        note_shift_state(globals, recv, dst, &out);
         let meta = ErrMeta::default();
         store_conversion_outcome(
             globals,
@@ -2697,6 +2767,7 @@ fn converter_convert(
                 binary_string(tail)
             };
             let _ = globals.store.set_ivar(recv, pending_id, pending_val);
+            note_shift_state(globals, recv, dst, &out);
             store_conversion_outcome(
                 globals,
                 recv,
@@ -2722,10 +2793,10 @@ fn converter_convert(
 /// ### Encoding::Converter#finish
 /// - finish -> String
 ///
-/// Marks the converter as drained and returns the trailing bytes
-/// (always empty in monoruby — none of the `encoding_rs`
-/// transcoders are stateful). Subsequent `convert` calls raise
-/// `ArgumentError`.
+/// Marks the converter as drained and returns the trailing bytes: the
+/// escape back to ASCII when a stateful destination (ISO-2022-JP) was
+/// left shifted out of it, and an empty String otherwise. Subsequent
+/// `convert` calls raise `ArgumentError`.
 ///
 #[monoruby_builtin]
 fn converter_finish(
@@ -2772,8 +2843,23 @@ fn converter_finish(
             msg,
         ));
     }
+    // A stateful destination left mid-designation owes the escape back
+    // to ASCII. Only `#finish` emits it: `#convert` cannot, since more
+    // input may still follow.
+    let shifted_id = IdentId::get_id(CONVERTER_SHIFTED_IVAR);
+    let shifted = globals
+        .store
+        .get_ivar(recv, shifted_id)
+        .map(|v| v.as_bool())
+        .unwrap_or(false);
+    let tail: &[u8] = if shifted {
+        let _ = globals.store.set_ivar(recv, shifted_id, Value::bool(false));
+        ISO2022JP_ASCII
+    } else {
+        b""
+    };
     Ok(Value::string_from_inner(
-        crate::value::RStringInner::from_encoding_scanned(b"", dst),
+        crate::value::RStringInner::from_encoding_scanned(tail, dst),
     ))
 }
 
@@ -2980,6 +3066,131 @@ fn stream_convert(
             }
         }
         return (StreamConvertResult::Finished, src_bytes.len(), out, ErrMeta::default());
+    }
+    // A single-byte-table encoding (ISO-8859-1, IBM437) is one byte per
+    // character and has no `encoding_rs` codec worth using — its
+    // `iso-8859-1` label resolves to windows-1252, a different table
+    // above 0x7F. Translate that side to the UTF-8 pivot here and let
+    // the rest of the pipeline run on UTF-8, which is exact both ways.
+    //
+    // The destination goes first so that the source is still its own
+    // encoding when the inner call needs to map a pivot offset back.
+    if let Some(table) = single_byte_table(dst_enc) {
+        // Unbounded pivot: the cap counts destination bytes, and this
+        // destination writes exactly one per character, so it is a
+        // character cap — applied while mapping, below.
+        let (res, consumed, pivot_bytes, meta) =
+            stream_convert(src_bytes, src_enc, E::Utf8, None, partial_input, opts);
+        let pivot = std::str::from_utf8(&pivot_bytes).unwrap_or("");
+        let repl = opts.replace_str(dst_enc);
+        let mut out: Vec<u8> = Vec::with_capacity(pivot.len());
+        for (i, ch) in pivot.char_indices() {
+            if let Some(max) = max_dst_bytes
+                && out.len() == max
+            {
+                return (
+                    StreamConvertResult::DestinationBufferFull,
+                    pivot_src_offset(src_enc, src_bytes, pivot, i).unwrap_or(consumed),
+                    out,
+                    ErrMeta::default(),
+                );
+            }
+            let mut buf = [0u8; 4];
+            match table_encode(ch.encode_utf8(&mut buf), table) {
+                Ok(v) => out.extend_from_slice(&v),
+                Err(bad) if !opts.undef_replace => {
+                    let through = i + ch.len_utf8();
+                    return (
+                        StreamConvertResult::UndefinedConversion,
+                        pivot_src_offset(src_enc, src_bytes, pivot, through)
+                            .unwrap_or(consumed),
+                        out,
+                        ErrMeta {
+                            error_bytes: bad.to_string().into_bytes(),
+                            readagain_bytes: vec![],
+                        },
+                    );
+                }
+                Err(_) => match table_encode(&repl, table) {
+                    Ok(r) => out.extend_from_slice(&r),
+                    Err(_) => out.push(b'?'),
+                },
+            }
+        }
+        return (res, consumed, out, meta);
+    }
+    if let Some(table) = single_byte_table(src_enc) {
+        let pivot = table_decode(src_bytes, table);
+        let (res, consumed, out, meta) = stream_convert(
+            pivot.as_bytes(),
+            E::Utf8,
+            dst_enc,
+            max_dst_bytes,
+            partial_input,
+            opts,
+        );
+        // One source byte per pivot character.
+        let src_consumed = pivot
+            .get(..consumed)
+            .map(|p| p.chars().count())
+            .unwrap_or(src_bytes.len());
+        return (res, src_consumed, out, meta);
+    }
+    // US-ASCII source. encoding_rs has no US-ASCII decoder, and the
+    // fallthrough below would pass the bytes straight through, so a
+    // byte >= 0x80 sailed past as `:finished`. Ruby's US-ASCII has no
+    // such byte: the first one is an invalid byte sequence. Below it
+    // the bytes *are* UTF-8, so the valid prefix converts as UTF-8.
+    if src_enc == E::UsAscii
+        && let Some(bad) = src_bytes.iter().position(|&b| b >= 0x80)
+    {
+        if opts.invalid_replace {
+            // Each bad byte becomes the replacement, spliced into the
+            // pivot so the destination encoder renders it.
+            let repl = opts.replace_str(dst_enc);
+            let mut pivot = String::with_capacity(src_bytes.len());
+            for &b in src_bytes {
+                if b < 0x80 {
+                    pivot.push(b as char);
+                } else {
+                    pivot.push_str(&repl);
+                }
+            }
+            let (res, _, out, meta) = stream_convert(
+                pivot.as_bytes(),
+                E::Utf8,
+                dst_enc,
+                max_dst_bytes,
+                partial_input,
+                opts,
+            );
+            // The source is one byte per pivot character up to the
+            // first replacement, and we always consume all of it.
+            return (res, src_bytes.len(), out, meta);
+        }
+        // Convert what is valid, then report the offending byte. When
+        // the prefix itself stops early (destination full, an
+        // undefined character), that outcome wins — it comes first.
+        let (res, consumed, out, meta) = stream_convert(
+            &src_bytes[..bad],
+            E::Utf8,
+            dst_enc,
+            max_dst_bytes,
+            false,
+            opts,
+        );
+        if !matches!(res, StreamConvertResult::Finished) {
+            return (res, consumed, out, meta);
+        }
+        return (
+            StreamConvertResult::InvalidByteSequence,
+            bad + 1,
+            out,
+            ErrMeta {
+                error_bytes: vec![src_bytes[bad]],
+                readagain_bytes: vec![],
+            },
+        );
     }
     // Resolve the encoding_rs encoders. The Converter constructor
     // already validated this pair, so the lookups should succeed —
@@ -3232,6 +3443,25 @@ fn stream_convert(
 /// Returns `None` for inputs the decoder can't satisfy (target
 /// not exactly hit before src is exhausted) so the caller can
 /// fall back to a coarser strategy.
+/// How many bytes of `src_bytes` produced the first `utf8_len` bytes of
+/// the UTF-8 `pivot`. One byte per character for the encodings that are
+/// one byte per character; the decoder walk otherwise.
+fn pivot_src_offset(
+    src_enc: crate::value::Encoding,
+    src_bytes: &[u8],
+    pivot: &str,
+    utf8_len: usize,
+) -> Option<usize> {
+    use crate::value::Encoding as E;
+    if src_enc == E::Utf8 {
+        return Some(utf8_len);
+    }
+    if single_byte_table(src_enc).is_some() || matches!(src_enc, E::UsAscii | E::Ascii8) {
+        return pivot.get(..utf8_len).map(|p| p.chars().count());
+    }
+    src_offset_for_utf8_prefix(encoding_to_rs(src_enc)?, src_bytes, utf8_len)
+}
+
 fn src_offset_for_utf8_prefix(
     src_rs: &'static encoding_rs::Encoding,
     src_bytes: &[u8],
@@ -3272,16 +3502,26 @@ fn probe_incomplete_tail(
     if end == 0 {
         return false;
     }
+    use encoding_rs::DecoderResult;
     let mut probe = src_rs.new_decoder();
     let mut probe_dst = vec![0u8; src_bytes.len() + 16];
-    // Re-feed the bytes up to (and not including) the malformed run
-    // first, so the decoder is in the same internal state, then feed
-    // the malformed bytes with `last=false`. If the decoder reports
-    // `InputEmpty` it's still hopeful — the bytes are an incomplete
-    // prefix.
-    let _ = probe.decode_to_utf8_without_replacement(&src_bytes[..end], &mut probe_dst, false);
-    let (probe_result, _, _) = probe.decode_to_utf8_without_replacement(&[], &mut probe_dst, false);
-    matches!(probe_result, encoding_rs::DecoderResult::InputEmpty)
+    // Re-feed the whole run with `last = false`. A tail is *incomplete*
+    // only if the decoder took every byte and is still waiting for more:
+    // a run it already rejected is invalid however the input ends. A
+    // lone `\x80` on UTF-8 is the case that separates the two — it can
+    // never begin a sequence, so no amount of further input would save
+    // it, and CRuby answers `:invalid_byte_sequence` rather than
+    // `:incomplete_input`.
+    let (probe_result, read, _) =
+        probe.decode_to_utf8_without_replacement(&src_bytes[..end], &mut probe_dst, false);
+    if !matches!(probe_result, DecoderResult::InputEmpty) || read != end {
+        return false;
+    }
+    // Still hopeful — but only genuinely incomplete if it was holding
+    // something back. Closing the stream turns a held prefix into a
+    // malformed run; an empty decoder just says `InputEmpty`.
+    let (closed, _, _) = probe.decode_to_utf8_without_replacement(&[], &mut probe_dst, true);
+    matches!(closed, DecoderResult::Malformed(..))
 }
 
 
@@ -3612,6 +3852,13 @@ fn converter_primitive_convert(
     // bytes that aren't valid UTF-8 (e.g. partial EUC-JP / SJIS
     // codepoints). `is_str()` would return `None` for those and
     // the spec's `partial_input` tests would TypeError.
+    // `src` keeps its *own* encoding across the call — CRuby re-tags
+    // only `dst`. A binary source stays binary even when the converter
+    // reads it as UTF-8.
+    let src_arg_enc = src_arg
+        .is_rstring_inner()
+        .map(|s| s.encoding())
+        .unwrap_or(crate::value::Encoding::Ascii8);
     let new_src_bytes: Vec<u8> = if src_arg.is_nil() {
         Vec::new()
     } else {
@@ -3633,7 +3880,22 @@ fn converter_primitive_convert(
         .get_ivar(recv, IdentId::get_id(CONVERTER_PENDING_IVAR))
         .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
         .unwrap_or_default();
-    let mut src_bytes = pending;
+    // Bytes the *previous* error read past the bad sequence to prove it
+    // bad. CRuby keeps them inside the converter and converts them
+    // first on the next call, which is why `"\xf1abcd"` yields `abcd`
+    // over two calls although the `a` is gone from `src` after the
+    // first: unless `#putback` took them, they are ours to re-feed.
+    let readagain_id = IdentId::get_id(CONVERTER_READAGAIN_IVAR);
+    let readagain: Vec<u8> = globals
+        .store
+        .get_ivar(recv, readagain_id)
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    if !readagain.is_empty() {
+        let _ = globals.store.set_ivar(recv, readagain_id, Value::nil());
+    }
+    let mut src_bytes = readagain;
+    src_bytes.extend_from_slice(&pending);
     src_bytes.extend_from_slice(&new_src_bytes);
 
     // Existing dst content (we'll truncate to `dst_offset` and
@@ -3732,8 +3994,8 @@ fn converter_primitive_convert(
         let leftover: Vec<u8> = src_bytes[src_consumed..].to_vec();
         if !src_arg.is_nil() {
             let mut new_src =
-                crate::value::RStringInner::from_encoding_scanned(&leftover, src_enc);
-            new_src.set_encoding(src_enc);
+                crate::value::RStringInner::from_encoding_scanned(&leftover, src_arg_enc);
+            new_src.set_encoding(src_arg_enc);
             src_arg.replace_with_inner(new_src);
         }
         let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
@@ -3742,7 +4004,8 @@ fn converter_primitive_convert(
         // pending for the next call.
         let pending_after: Vec<u8> = src_bytes[src_consumed..].to_vec();
         if !src_arg.is_nil() {
-            let cleared = crate::value::RStringInner::from_encoding_scanned(b"", src_enc);
+            let cleared =
+                crate::value::RStringInner::from_encoding_scanned(b"", src_arg_enc);
             src_arg.replace_with_inner(cleared);
         }
         if pending_after.is_empty() {
@@ -3766,6 +4029,7 @@ fn converter_primitive_convert(
     dst_arg.replace_with_inner(new_dst);
 
     // Record errinfo / read-again / last-error state.
+    note_shift_state(globals, recv, dst_enc, &out_bytes);
     store_conversion_outcome(globals, recv, result, &meta, src_enc, dst_enc);
 
     Ok(Value::symbol_from_str(result.symbol_name()))

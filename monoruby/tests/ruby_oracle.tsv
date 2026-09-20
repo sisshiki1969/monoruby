@@ -469,6 +469,7 @@
 1dbac381063982c828c61a6698e1e664	[42, 42, 42]	$a = 1\n            alias $b $a\n            alias $c $b\n            
 1dc4e6b9d13cbb4bda8ad0cf13be134b	[2, "hi"]	(f="/tmp/mono_oa_#{Process.pid}"; n=IO.write(f, "hi", open_args: ["w", nil, {enc
 1dc6884272715101af309365600555df	[:ensured, "boom"]	log = []\n            begin\n              Enumerator.new { |y| begin
+1ded61a4518f55799e712c99f8d3a514	"[[\\"ISO-8859-1\\", []], [\\"ISO-8859-9\\", []], [286, 304, 350, 287, 305, 351], [128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159]]"	res = []\n        # ISO-8859-1 and ISO-8859-9 are the real ISO tables, n
 1df4fdb4369c9047a1c7804c911c41c5	[Module, true, true]	require "socket"\n        class W\n          include ::Socket::Constants\n
 1e08e67e4ca265bf528592b1dae413d1	42	class Foo\n              @@x = 42\n              def self.get_x; clas
 1e172a461f0c16b5db64904d90096356	[[:mul, :mul, :mul], [[1, 0], [2, 1], [3, 2]]]	class Integer; def *(o); :mul; end; end\n        [[1, 2, 3].map { |x| x 
@@ -1126,6 +1127,7 @@
 49ed29647c7ff556ed4301a4bae46a92	[[:U8, 1], [:S8, 1], [:u16, 513], [:U16, 258], [:s16, 513], [:S16, 258], [:u32, 67305985], [:U32, 16909060], [:s32, 67305985], [:S32, 16909060], [:u64, 9801809732607083009], [:U64, 72623859790382984], [:s64, -8644934341102468607], [:S64, 72623859790382984], [:f32, 1.539989614439558e-36], [:F32, 2.387939260590663e-38], [:f64, -5.447603722011605e-270], [:F64, 8.207880399132047e-304], [ArgumentError, "Type extends beyond end of buffer! (offset=100 > size=8)"], [ArgumentError, "Invalid type name!"], 2, [1, 2], 4, [2, 1], 5, [255], 8, 1.5, 8, -2.25, [ArgumentError, "Type extends beyond end of buffer! (offset=100 > size=8)"], [[0, 1], [1, 2], [2, 3]], [[2, 1027], [4, 1541]], [[2, 3], [3, 4]], 8, [1, 2, 3, 4], [2282161669], [1, 2, 3], 8]	r = []\n            b = IO::Buffer.for("\\x01\\x02\\x03\\x04\\x05\\x06\\x07
 49ed5a0fe73fd1b796e7a9a4e4845e10	true	$".class == Array\n            
 4a00694fe0703f9bf35b82d0eb475842	5	def f; return 5; end; self.f
+4a1abb1c2046d5eca7e86a193bad50e0	"[[[27, 36, 66, 57, 97], [27, 40, 66], []], [\\"finished\\", [27, 36, 66, 57, 97, 27, 40, 66], []], [\\"finished\\", [152], \\"ISO-8859-1\\"], [[\\"invalid_byte_sequence\\", [128, 128], \\"ASCII-8BIT\\"], [\\"invalid_byte_sequence\\", [128], \\"ASCII-8BIT\\"], [\\"invalid_byte_sequence\\", [], \\"ASCII-8BIT\\"]], [\\"invalid_byte_sequence\\", nil, \\"finished\\", [], [97, 98, 99, 100]], [\\"invalid_byte_sequence\\", \\"a\\", \\"finished\\", [], [98, 99, 100]], \\"invalid_byte_sequence\\"]"	res = []\n        # ISO-2022-JP is stateful: #finish owes the escape bac
 4a27834f1a4d3f1b1dbe388b001f68a5	[true, true, true, true, true]	created = Fiber.new {}\n            res = [created.inspect =~ /\\A#<F
 4a330374eb4fb47c48601113a41fc5c2	[false, true, 1]	h = {}\n        s = 'bar'\n        h[s] = 1\n        [h.keys.first.equal?(
 4a3c010763bbdcf926955a661aa391e2	true	Math.acosh(Float::NAN).nan?

@@ -8,6 +8,80 @@ mod tests {
 
     // -------- ASCII identity / passthrough --------
 
+    // -------- Encoding::Converter, streamed --------
+
+    #[test]
+    fn converter_stream_state() {
+        // `#finish`'s tail, the C1 range of ISO-8859-1, an invalid byte
+        // removed one call at a time, the read-again bytes coming back,
+        // and a US-ASCII source refusing a byte >= 0x80.
+        //
+        // `run_test_once`: the body drives converters through a
+        // sequence of calls, so a second run would start mid-stream.
+        run_test_once(
+            r#"
+        res = []
+        # ISO-2022-JP is stateful: #finish owes the escape back to ASCII.
+        ec = Encoding::Converter.new("utf-8", "iso-2022-jp")
+        res << [ec.convert("\u{9999}").bytes, ec.finish.bytes, ec.finish.bytes]
+        # ... and primitive_convert, which ends the stream itself, does not.
+        ec2 = Encoding::Converter.new("utf-8", "iso-2022-jp")
+        d2 = +""
+        res << [ec2.primitive_convert("\u{9999}", d2).to_s, d2.bytes, ec2.finish.bytes]
+        # U+0098 is a C1 control, which ISO-8859-1 represents as the byte 0x98.
+        ec3 = Encoding::Converter.new("utf-8", "iso-8859-1")
+        d3 = "".force_encoding("utf-8")
+        res << [ec3.primitive_convert("\u{98}", d3).to_s, d3.bytes, d3.encoding.to_s]
+        # An invalid byte is removed from the source on every call, and the
+        # last lone one is invalid rather than incomplete.
+        ec4 = Encoding::Converter.new(Encoding::UTF_8, Encoding::UTF_8_MAC)
+        s4 = 3.times.map { 128.chr("binary") }.join.dup
+        d4 = "".force_encoding(Encoding::UTF_8_MAC)
+        res << 3.times.map { [ec4.primitive_convert(s4, d4).to_s, s4.bytes, s4.encoding.to_s] }
+        # Read-again bytes come back on the next call unless #putback took them.
+        [false, true].each do |putback|
+          ec5 = Encoding::Converter.new("utf-8", "iso-8859-1")
+          s5 = (241.chr("binary") + "abcd").dup
+          d5 = +""
+          r1 = ec5.primitive_convert(s5, d5).to_s
+          pb = putback ? ec5.putback : nil
+          res << [r1, pb, ec5.primitive_convert(s5, d5).to_s, s5.bytes, d5.bytes]
+        end
+        # A US-ASCII source has no byte >= 0x80.
+        ec6 = Encoding::Converter.new("ascii", "utf-8")
+        res << ec6.primitive_convert((255.chr("binary") + "fff").dup, +"").to_s
+                res.to_s"#,
+        );
+    }
+
+    #[test]
+    fn latin1_and_latin5_are_the_iso_tables() {
+        run_test(
+            r#"
+        res = []
+        # ISO-8859-1 and ISO-8859-9 are the real ISO tables, not the
+        # windows-125x ones WHATWG aliases their labels to: the C1 range is
+        # the C1 controls, and the byte is its own code point.
+        ["ISO-8859-1", "ISO-8859-9"].each do |name|
+          bad = []
+          (0x80..0xff).each do |b|
+            s = b.chr("binary").force_encoding(name)
+            u = s.encode("UTF-8")
+            bad << [b, u.ord, u.encode(name).bytes] unless u.encode(name).bytes == [b]
+          end
+          res << [name, bad]
+        end
+        # The six positions where Latin-5 is not Latin-1.
+        res << [0xD0, 0xDD, 0xDE, 0xF0, 0xFD, 0xFE].map { |b|
+          b.chr("binary").force_encoding("ISO-8859-9").encode("UTF-8").ord
+        }
+        # C1 controls survive a UTF-8 -> Latin-1 encode.
+        res << (0x80..0x9f).map { |cp| cp.chr(Encoding::UTF_8).encode("ISO-8859-1").bytes }.flatten
+                res.to_s"#,
+        );
+    }
+
+
     #[test]
     fn encode_ascii_and_multibyte() {
         // ASCII-only content transcodes as identity bytes for any
