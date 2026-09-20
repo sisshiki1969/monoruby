@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-40bb076d.js";
+            window.path_to_searchindex_js = "../../searchindex-f2aaae1d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-8a4c8fb9.js"></script>
@@ -325,7 +325,9 @@ Broken は <code>iter_char_bytes</code> を歩く。</li>
 はエンコーディングごとの文字境界層の提案（<em>proposed</em>）で、§2 に現状の
 <code>RStringInner</code> の穴（EUC-JP / SJIS のバイト単位反復、非 UTF-8 の <code>to_str</code>
 退避）の監査がある。ただしその文書は <code>content: Vec&lt;u8&gt;</code> 時代の記述で、
-SmallVec / 共有 union への改修より前のものである。</p>
+SmallVec / 共有 union への改修より前のものであり、§2 が挙げる反復の穴も
+すでに埋まっている（EUC-JP / Shift_JIS / Emacs-Mule は <code>precise_mbclen</code> を
+持ち、<code>CharByteIter</code> はそれを通る）。</p>
 <hr>
 <h2 id="3-リテラル"><a class="header" href="#3-リテラル">3. リテラル</a></h2>
 <h3 id="31-fstring-プール"><a class="header" href="#31-fstring-プール">3.1 fstring プール</a></h3>
@@ -616,7 +618,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 <tr><td><code>opt_str_freeze</code></td><td>あり</td><td>あり — <code>StringFreeze</code> 命令（§3.5）</td></tr>
 <tr><td><code>opt_str_uminus</code></td><td>あり</td><td><strong>無し</strong></td></tr>
 <tr><td>エンコーディング</td><td>約 100 種の本物のコーデック</td><td>native コーデックは <strong>UTF-8, US-ASCII, ASCII-8BIT, UTF-16LE/BE, UTF-32LE/BE, ISO-8859-1..16, EUC-JP, Shift_JIS / CP932 / Windows-31J, ISO-2022-JP（<code>encoding_rs</code>）</strong>。他は名前だけ保持（<code>Other</code> = ASCII 非互換のダミー、<code>NamedByte</code> = 約 38 の ASCII 互換コードページで、格納と文字反復は ASCII-8BIT として振る舞い <code>#name</code> / <code>#inspect</code> / ASCII 互換性だけが違う）</td></tr>
-<tr><td>EUC-JP / Shift_JIS の文字反復</td><td>完全な <code>mbclen</code></td><td><code>classify</code> と <code>char_length</code> は native に復号するが、<code>CharByteIter</code> は<strong>バイト単位</strong>で進む。<a href="../encoding_char_iteration_design.html"><code>../encoding_char_iteration_design.md</code></a> が埋めようとしている穴</td></tr>
+<tr><td>EUC-JP / Shift_JIS の文字反復</td><td>完全な <code>mbclen</code></td><td><code>classify</code> / <code>char_length</code> / <code>CharByteIter</code> / <code>#scrub</code> が同じ三値 <code>precise_mbclen</code>（<code>eucjp_precise_len</code> / <code>sjis_precise_len</code>、Emacs-Mule も同形）を通る。継続バイトまで見るので、先頭バイトだけで幅を決めて次のバイトを飲み込むことはない。<code>#scrub</code> の不正部分は CRuby の <code>enc_str_scrub</code> と同じ<strong>連</strong>単位（<code>8F A1</code> は 1 個の置換）</td></tr>
 <tr><td>非 UTF-8 上の正規表現</td><td>onigmo の多エンコーディング</td><td>バイト → <code>U+00XX</code> 代理写像で UTF-8 専用の <code>regex</code> クレートに掛ける（<code>regex_view</code> / <code>from_mapped_utf8</code>）。EUC-JP / SJIS はバイト単位の近似</td></tr>
 <tr><td>宣言エンコーディング下の不正バイト</td><td>許容、coderange BROKEN</td><td>同じ（<code>content</code> は不透明なバイトバッファ、<code>ty</code> は情報のみ）</td></tr>
 <tr><td><code>str_mod_check</code></td><td>ポインタ + 長さ</td><td>長さのみ（同じ長さの in-place 編集でも再確保するため）</td></tr>
