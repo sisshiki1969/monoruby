@@ -80,45 +80,20 @@ jobs:
     # The diagnostic features are cfg'd out of every build CI otherwise runs,
     # so code only they pull in is compiled by nobody until someone turns one
     # on locally — a rename in the code they read reaches master and surfaces
-    # weeks later as "emit-cfg doesn't build". `cargo check` on each of them
-    # is cheap and closes that gap.
+    # weeks later as "emit-cfg doesn't build". That is how #1405 left seven
+    # features uncompilable (`dump-traceir` and its six dependents) with CI
+    # green throughout.
     #
-    # Each feature is checked on its own, not merged into one --features list:
-    # a combined build compiles the union of the cfg'd code, which is exactly
-    # what hides a feature whose code stopped compiling without another one
-    # also being on.
+    # One build with every feature on. `--all-features` takes them from
+    # Cargo.toml, so a new feature is covered the day it is declared and no
+    # list here can drift out of date.
     #
-    # A matrix rather than a loop in one job, for disk: switching features
-    # invalidates the crate and cargo keeps the superseded artifacts, so
-    # checking all twenty in sequence grows one target dir past 20 GB — more
-    # than a runner has free. One feature per runner keeps each build cold but
-    # bounded. `max-parallel` leaves runners for the two test jobs, which are
-    # the ones on the critical path.
-    strategy:
-      fail-fast: false # one broken feature should not hide the others
-      max-parallel: 5
-      matrix:
-        feature:
-          - chain-deopt-log
-          - deopt
-          - dump-bc
-          - dump-require
-          - dump-traceir
-          - emit-asm
-          - emit-bc
-          - emit-cfg
-          - gc-debug
-          - gc-log
-          - gc-stress
-          - gc-verify
-          - jit-debug
-          - jit-log
-          - mimalloc
-          - perf
-          - phys-table
-          - profile
-          - shadow-placement
-          - stress-spill-pool
+    # What this does not catch: the union of the cfg'd code is what gets
+    # compiled, so a feature that only breaks while another is *off* builds
+    # fine here. That is the ~13 `cfg(not(feature = ...))` sites, which the
+    # `amd64` and `darwin` jobs compile instead — between them the two
+    # polarities are covered. Checking each feature on its own would close the
+    # gap properly, but that is twenty jobs per push for a rarely-hit case.
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
@@ -129,13 +104,8 @@ jobs:
           # Keep in sync with rust-toolchain.toml (see the amd64 job).
           toolchain: nightly-2026-08-18
       - uses: Swatinem/rust-cache@v2
-        with:
-          # Without this every matrix leg shares one cache key, and each leg
-          # then restores a tree built for a different feature and rebuilds it
-          # anyway.
-          key: ${{ matrix.feature }}
       # build.rs is host-Ruby independent, so this job needs no ruby.
-      - run: cargo check -p monoruby --features ${{ matrix.feature }}
+      - run: cargo check -p monoruby --all-features
 
   darwin:
     # checks: write lets the in-step heartbeat publish a `darwin-heartbeat`
