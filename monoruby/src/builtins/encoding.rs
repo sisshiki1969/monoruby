@@ -976,6 +976,47 @@ fn undefined_cell_message(
     }
 }
 
+/// The conversion chain CRuby names in a pivoted error message: every
+/// non-UTF-8 source reaches the pivot as "<src> to UTF-8", except
+/// ISO-2022-JP, whose transcoder goes the long way round.
+fn pivot_chain(src_enc: crate::value::Encoding) -> String {
+    if src_enc == crate::value::Encoding::Iso2022Jp {
+        "ISO-2022-JP to stateless-ISO-2022-JP to EUC-JP to UTF-8".to_string()
+    } else {
+        format!("{} to UTF-8", src_enc.name())
+    }
+}
+
+/// CRuby's `UndefinedConversionError` message for a character the
+/// destination has no cell for.
+///
+/// A UTF-8(-compatible) source converts in one hop and is reported as
+/// `U+3042 from UTF-8 to EUC-JP`; anything else runs through the UTF-8
+/// pivot, and CRuby then spells the whole chain out —
+/// `U+3042 to IBM437 in conversion from EUC-JP to UTF-8 to IBM437`.
+fn undefined_char_message(
+    c: char,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> String {
+    if src_enc.is_utf8_compatible() {
+        format!(
+            "U+{:04X} from {} to {}",
+            c as u32,
+            src_enc.name(),
+            dst_enc.name()
+        )
+    } else {
+        format!(
+            "U+{:04X} to {} in conversion from {} to {}",
+            c as u32,
+            dst_enc.name(),
+            pivot_chain(src_enc),
+            dst_enc.name()
+        )
+    }
+}
+
 /// Encode `s` as `enc`, correcting `encoding_rs` the same way
 /// [`jp_decode`] does and, for EUC-JP, reaching into JIS X 0212 for
 /// what it will not write at all. Returns `Err(c)` on the first
@@ -1458,28 +1499,29 @@ pub(super) fn transcode_bytes_with_opts(
             ),
         ));
     }
-    // Anything → BINARY is just a tag change (BINARY accepts any
-    // bytes). If the source isn't already valid as some recognised
-    // encoding, we still let it through — CRuby tolerates this.
+    // → BINARY. ASCII-8BIT is a byte bucket, not a character encoding:
+    // CRuby has no conversion *to* it from any character above U+007F,
+    // so every one of them is an `UndefinedConversionError` (the
+    // all-ASCII fast path above already handled the content that does
+    // convert). `String#b` and `#force_encoding("BINARY")` are the
+    // reinterpret-these-bytes operations; `#encode("BINARY")` asks for
+    // a conversion, and handing back the decoded pivot's UTF-8 bytes
+    // would silently rewrite the caller's EUC-JP bytes as UTF-8.
     if dst_enc == E::Ascii8 {
-        // For multibyte sources we'd ideally decode to UTF-8 then
-        // hand back the UTF-8 bytes (CRuby converts "あ" in EUC-JP
-        // to UTF-8 BINARY, which contains the UTF-8 byte sequence).
-        // Implement that path via encoding_rs.
-        if is_utf16_or_32(src_enc) {
+        // Decode to the UTF-8 pivot first: the error names a character
+        // (`U+3042`), and `undef: :replace` substitutes per character.
+        let decoded: String = if is_utf16_or_32(src_enc) {
             let (decoded, decode_err) = decode_utf16_32(src_bytes, src_enc);
-            if decode_err {
+            if decode_err && !opts.invalid_replace {
                 return Err(MonorubyErr::invalid_byte_sequence_error(
                     store,
                     format!("invalid byte sequence on {} → ASCII-8BIT", src_enc.name()),
                 ));
             }
-            return Ok(decoded.into_bytes());
-        }
-        if let Some(table) = single_byte_table(src_enc) {
-            return Ok(table_decode(src_bytes, table).into_bytes());
-        }
-        if let Some(src_rs) = encoding_to_rs(src_enc) {
+            decoded
+        } else if let Some(table) = single_byte_table(src_enc) {
+            table_decode(src_bytes, table)
+        } else if let Some(src_rs) = encoding_to_rs(src_enc) {
             let (decoded, decode_err) = if let Some(fx) = jp_fixup(src_enc) {
                 let d = jp_decode(fx, src_bytes, None);
                 if let Some(cell) = d.unmapped {
@@ -1492,16 +1534,52 @@ pub(super) fn transcode_bytes_with_opts(
             } else {
                 src_rs.decode_without_bom_handling(src_bytes)
             };
-            if decode_err {
+            if decode_err && !opts.invalid_replace {
                 return Err(MonorubyErr::invalid_byte_sequence_error(
                     store,
                     format!("invalid byte sequence on {} → ASCII-8BIT", src_enc.name()),
                 ));
             }
-            return Ok(decoded.into_owned().into_bytes());
+            decoded.into_owned()
+        } else {
+            // No decoder for the source: nothing to say about which
+            // character is undefined, so the bytes go through as they
+            // always did.
+            return Ok(src_bytes.to_vec());
+        };
+        // `invalid: :replace` substitutes at the invalid bytes, which
+        // `encoding_rs` has already turned into U+FFFD — and U+FFFD is
+        // itself undefined in BINARY, so it has to go now rather than
+        // resurface below as an undefined conversion.
+        let decoded = if decoded.contains('\u{FFFD}') && opts.invalid_replace {
+            decoded.replace('\u{FFFD}', &opts.replace_str(dst_enc))
+        } else {
+            decoded
+        };
+        let decoded = if opts.has_newline() {
+            opts.apply_newline(&decoded)
+        } else {
+            decoded
+        };
+        if let Some(bad) = decoded.chars().find(|c| !c.is_ascii()) {
+            if !opts.undef_replace {
+                return Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(bad, src_enc, dst_enc),
+                ));
+            }
+            let replace = opts.replace_str(dst_enc);
+            let mut out = String::with_capacity(decoded.len());
+            for c in decoded.chars() {
+                if c.is_ascii() {
+                    out.push(c);
+                } else {
+                    out.push_str(&replace);
+                }
+            }
+            return Ok(out.into_bytes());
         }
-        // Source not representable; just copy bytes.
-        return Ok(src_bytes.to_vec());
+        return Ok(decoded.into_bytes());
     }
     // Decode the source through encoding_rs (UsAscii is decoded as
     // UTF-8 since 7-bit ASCII bytes are identical in both — the
@@ -1625,7 +1703,7 @@ pub(super) fn transcode_bytes_with_opts(
                 let bad = decoded.chars().find(|c| !c.is_ascii()).unwrap();
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,
-                    format!("U+{:04X} from {} to US-ASCII", bad as u32, src_enc.name()),
+                    undefined_char_message(bad, src_enc, dst_enc),
                 ));
             }
             let replace = opts.replace_str(dst_enc);
@@ -1653,12 +1731,7 @@ pub(super) fn transcode_bytes_with_opts(
             Ok(v) => Ok(v),
             Err(bad) if !opts.undef_replace => Err(MonorubyErr::undefined_conversion_error(
                 store,
-                format!(
-                    "U+{:04X} from {} to {}",
-                    bad as u32,
-                    src_enc.name(),
-                    dst_enc.name()
-                ),
+                undefined_char_message(bad, src_enc, dst_enc),
             )),
             Err(_) => {
                 let replace = opts.replace_str(dst_enc);
@@ -1686,12 +1759,7 @@ pub(super) fn transcode_bytes_with_opts(
             Err(bad) if !opts.undef_replace => {
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,
-                    format!(
-                        "U+{:04X} from {} to {}",
-                        bad as u32,
-                        src_enc.name(),
-                        dst_enc.name()
-                    ),
+                    undefined_char_message(bad, src_enc, dst_enc),
                 ));
             }
             Err(_) => {
@@ -1733,16 +1801,10 @@ pub(super) fn transcode_bytes_with_opts(
             let bad = decoded
                 .chars()
                 .find(|c| dst_rs.encode(c.encode_utf8(&mut buf)).2)
-                .map(|c| c as u32)
-                .unwrap_or(0);
+                .unwrap_or('\0');
             return Err(MonorubyErr::undefined_conversion_error(
                 store,
-                format!(
-                    "U+{:04X} from {} to {}",
-                    bad,
-                    src_enc.name(),
-                    dst_enc.name()
-                ),
+                undefined_char_message(bad, src_enc, dst_enc),
             ));
         }
         // `undef: :replace`: walk character by character and substitute
@@ -5926,6 +5988,58 @@ mod tests {
         // buffering (putback), last_error objects with byte attributes.
         crate::tests::run_test_once(
             r##"(r=[]; ec=Encoding::Converter.new("utf-8","iso-8859-1"); r << ec.primitive_errinfo << ec.last_error; r << ec.primitive_convert(+"\xf1abcd", +""); r << ec.primitive_errinfo; e=ec.last_error; r << e.class << [e.error_bytes, e.readagain_bytes, e.incomplete_input?]; r << ec.primitive_convert("ok".dup.force_encoding("utf-8"), +"") << ec.primitive_errinfo << ec.last_error; ec2=Encoding::Converter.new("EUC-JP","ISO-8859-1"); s=+"abc\xa1def"; d=+""; r << ec2.primitive_convert(s,d,nil,10) << [s,d] << ec2.putback << ec2.putback; s=ec2.putback+s; r << ec2.primitive_convert(s,d,nil,10) << [s,d]; ec3=Encoding::Converter.new("utf-16le","iso-8859-1"); s3=+"\x00\xd8\x61\x00"; r << ec3.primitive_convert(s3,+"") << ec3.primitive_errinfo.map{|x| x.is_a?(String) ? x.bytes : x} << ec3.putback(2).bytes; ec4=Encoding::Converter.new("EUC-JP","ISO-8859-1"); r << ec4.primitive_convert(+"\xa4",+"",nil,10) << ec4.primitive_errinfo << ec4.last_error.class << ec4.last_error.incomplete_input?; r)"##,
+        );
+    }
+
+    #[test]
+    fn encode_to_binary_undefined_conversion() {
+        // ASCII-8BIT is a byte bucket, not a character encoding: CRuby
+        // has no conversion to it from any character above U+007F, so
+        // every source encoding raises UndefinedConversionError — in the
+        // direct form from UTF-8 and through the spelled-out UTF-8 pivot
+        // from anything else. ASCII-only content still converts, a
+        // BINARY receiver is the identity, and `undef: :replace`
+        // substitutes.
+        run_test_once(
+            r#"(f=->(&b){ begin; v=b.call; [v.bytes, v.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call { "\u3042".encode("ASCII-8BIT") },
+              f.call { "caf\u00e9".encode("BINARY") },
+              f.call { "\u3042".encode("EUC-JP").encode("ASCII-8BIT") },
+              f.call { "\u3042".encode("Shift_JIS").encode("ASCII-8BIT") },
+              f.call { "\u00e9".encode("ISO-8859-1").encode("ASCII-8BIT") },
+              f.call { "\u3042".encode("UTF-16LE").encode("ASCII-8BIT") },
+              f.call { "\u3042".encode("UTF-32BE").encode("ASCII-8BIT") },
+              f.call { "abc".encode("ASCII-8BIT") },
+              f.call { "abc".encode("US-ASCII").encode("ASCII-8BIT") },
+              f.call { "ab".encode("UTF-16LE").encode("ASCII-8BIT") },
+              f.call { "\xff\xfe".b.encode("ASCII-8BIT") },
+              f.call { "\u3042".encode("ASCII-8BIT", undef: :replace) },
+              f.call { "caf\u00e9\u3042".encode("BINARY", undef: :replace) },
+              f.call { "\u3042".encode("EUC-JP").encode("ASCII-8BIT", undef: :replace) },
+              f.call { "\u3042".encode("ASCII-8BIT", undef: :replace, replace: "!") },
+              f.call { "\u3042".encode("ASCII-8BIT", undef: :replace, xml: :text) },
+              f.call { "\xff".dup.force_encoding("UTF-8").encode("ASCII-8BIT", invalid: :replace) },
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn encode_undefined_conversion_pivot_message() {
+        // The `U+XXXX from <src> to <dst>` form is CRuby's only for a
+        // UTF-8(-compatible) source; every other source converts through
+        // the UTF-8 pivot and the message names the whole chain — with
+        // ISO-2022-JP taking the long way round through EUC-JP.
+        run_test_once(
+            r#"(f=->(&b){ begin; b.call; rescue => e; e.message; end }; [
+              f.call { "\u3042".encode("EUC-JP").encode("US-ASCII") },
+              f.call { "\u00e9".encode("ISO-8859-1").encode("US-ASCII") },
+              f.call { "\u3042".encode("UTF-16LE").encode("US-ASCII") },
+              f.call { "\u3042".encode("EUC-JP").encode("IBM437") },
+              f.call { "\u3042".encode("ISO-2022-JP").encode("IBM437") },
+              f.call { "\u3042".encode("ISO-2022-JP").encode("US-ASCII") },
+              f.call { "\u20ac".encode("UTF-8").encode("EUC-JP") },
+              f.call { "\u20ac".encode("UTF-16LE").encode("EUC-JP") },
+            ])"#,
         );
     }
 
