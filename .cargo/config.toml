@@ -1,3 +1,13 @@
+# Artifact dependencies (`artifact = "cdylib"`), which `monoruby`'s
+# build-dependencies use to have Cargo build the five dynamically loaded
+# extensions and hand their paths to `build.rs`, which installs them next
+# to the vendored stdlib. That is what makes a plain `cargo install
+# --path monoruby` produce a *working* install rather than a binary that
+# cannot `require "psych"`. Still unstable; without the flag the manifest
+# fails to parse rather than quietly skipping the extensions.
+[unstable]
+bindeps = true
+
 [build]
 rustflags = ["-Cforce-frame-pointers=yes"]
 

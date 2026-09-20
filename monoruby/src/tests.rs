@@ -20,6 +20,25 @@ pub fn ruby_path() -> &'static str {
     &RUBY
 }
 
+/// The install root this build baked into the binary — the tree
+/// `build.rs` populates with the vendored stdlib, the startup Ruby, the
+/// stubs and (from Cargo's artifact dependencies) the dynamically loaded
+/// extensions. Tests that assemble a distribution layout read their
+/// pieces from here.
+pub fn install_root() -> PathBuf {
+    PathBuf::from(env!("MONORUBY_INSTALL_ROOT"))
+}
+
+/// Did this build install the dynamically loaded extensions into
+/// [`install_root`]? It does so on a native build, and not when
+/// cross-compiling — the artifacts are then for the target platform
+/// while the install root belongs to the host's binary. A test that
+/// expects the extensions to be there has to skip in the latter case
+/// rather than read it as a regression.
+pub fn extensions_installed() -> bool {
+    env!("MONORUBY_EXT_INSTALLED") == "1"
+}
+
 /// Build the extension crate `name` (a `cdylib` workspace member, e.g.
 /// `sqlite3_native`) in this test binary's profile and put its output
 /// directory on the extension search path, so `require "<name>.so"` in

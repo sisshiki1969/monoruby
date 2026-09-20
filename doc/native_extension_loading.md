@@ -310,9 +310,10 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 
 ## 5. 判断が必要な点
 
-- **`ext/` の配布形態**: `cargo install` 時に `build.rs` がビルドして
-  install root に置く（今の stub と同じ体験）か、別パッケージにするか。
-  前者から始めるのが自然。
+- **`ext/` の配布形態**（決着済み、§7）: `cargo install` 時に `build.rs` が
+  install root に置く（今の stub と同じ体験）を採った。ビルド自体は
+  Cargo の artifact dependency に任せ、`build.rs` は受け取ったパスを
+  置くだけにしてある。
 - **`system` を既定にするライブラリ**: zlib / zstd は OS 版で出力が
   一致するので `system` 既定でよい可能性がある。libxml2 は nokogiri の
   パッチがあるので `bundled` 既定。
@@ -327,10 +328,10 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 | 1. feature 分割 | 済（役目を終えて撤去） | 5 つを default-on の feature にし、off で builtin が消え `build.rs` がその stand-in を install しない形にした。3 で全部が拡張に出たので、feature も `build.rs` の gating も CI の `--no-default-features` チェックも取り除いた。 |
 | 2. C ABI | 済 | `monoruby_ext_sys/`（`MrValue` / `MrContext` / `MrApi`、`include/monoruby_ext.h`）、`monoruby/src/ext.rs`（表の実装、trampoline、`ExtNative`、loader）、`monoruby_ext/`（Rust 向け安全ラッパ: `Ctx` / `Value` / `method!` / `native!`）。`tests/native_ext.rs` が C で書いた拡張をヘッダから `cc` でビルドして全項目を通す。 |
 | 3. sqlite3 の分離 | 済 | `ext/sqlite3/`（crate `sqlite3_native`、cdylib）。`gem/sqlite3/sqlite3_native.rb` が `require "sqlite3_native.so"` する。`tests/sqlite3.rs` の 23 本は無変更で通る。コアから `src/builtins/sqlite3.rs`（2.2k 行）と `libsqlite3-src` 依存が消えた。 |
-| 3. zlib / zstd の分離 | 済 | `ext/zlib/`（`zlib_native`、checksum と `__zstream_*`）、`ext/zstd/`（`zstd_native`）。`stdlib/zlib.rb` / `gem/zstd-ruby/zstdruby.rb` が `require "…_native.so"` する。コアから `libz-sys` / `zstd-safe` が消えた。rubygems が `zlib` を要るので、インストール時は `bin/install` が 3 拡張を `<install root>/ext/` に置く。 |
+| 3. zlib / zstd の分離 | 済 | `ext/zlib/`（`zlib_native`、checksum と `__zstream_*`）、`ext/zstd/`（`zstd_native`）。`stdlib/zlib.rb` / `gem/zstd-ruby/zstdruby.rb` が `require "…_native.so"` する。コアから `libz-sys` / `zstd-safe` が消えた。rubygems が `zlib` を要るので、インストール時は `build.rs` が（artifact dependency 経由で）拡張を `<install root>/ext/` に置く（§7）。 |
 | 3. psych の分離 | 済 | `ext/psych/`（`psych_native`、`__yaml_parse` は `Psych::Handler` を `funcall` で駆動）。`gem/psych/psych.rb` が `require "psych_native.so"` する。コアから `libyaml-safer` が消えた。 |
 | 3. nokogiri の分離 | 済 | `ext/nokogiri/`（`nokogiri_native`、12 ファイル ~7k 行）。`gem/nokogiri/nokogiri.rb` が `require "nokogiri_native.so"` する。コアから `src/builtins/nokogiri/` と `libxml2-src` 依存が消え、`ObjTy::NATIVE` を使う builtin はコア側に無くなった（`ext.rs` の `ExtNative` だけ）。`tests/nokogiri.rs` の 23 本（CRuby の gem と出力比較）はスクリプト無変更。 |
-| 4. `bundled` / `system` feature | 済（3 拡張。nokogiri / psych は対象外、§6.3） | `ext/{sqlite3,zlib,zstd}` に `default = ["bundled"]` と `system`。Cargo の feature は加算しかしないので、選ぶときは `--no-default-features --features system`。`bin/install` は `MONORUBY_SYSTEM_LIBS="zlib zstd"`（または `all`）でその拡張だけをシステム版で組む。 |
+| 4. `bundled` / `system` feature | 済（3 拡張。nokogiri / psych は対象外、§6.3） | `ext/{sqlite3,zlib,zstd}` に `default = ["bundled"]` と `system`。Cargo の feature は加算しかしないので、選ぶときは `--no-default-features --features system`。拡張が artifact dependency になったので、選択は `monoruby` 側の feature（`system-zlib` とその `bundled-…` の対）に持ち上げてある。`bin/install` は `MONORUBY_SYSTEM_LIBS="zlib zstd"`（または `all`）を `--no-default-features --features "system-zlib,system-zstd,bundled-sqlite3"` に翻訳する。 |
 | 5. CRuby API 互換層 | 未 | |
 
 ### 6.1 実際の ABI（§4.2 との差）
@@ -353,7 +354,7 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 - **alloc 関数が無い代わりの「遅延 payload」。** nokogiri の `SAX::Parser` / `SAX::PushParser` / `NodeSet` はコア側で alloc 関数を持ち、`new` の時点でペイロードを作っていた。拡張では汎用 alloc がペイロード無しの instance を作るので、最初にペイロードへ触るアクセサ（`handler_ptr` / `install_push_ctxt` / `set_ptr`）が `is_kind_of` で確かめて `native_set` で埋める。`Object#dup` のコピーも同じ経路で埋まる。
 - **variadic の引数は平らに渡る。** コアの rest builtin は `lfp.arg(0)` が rest 配列だったが、trampoline は `MR_ARGC_VARIADIC` の `argv` に要素を展開する。移植で `ary_vec(args[0])` を残すと最初の引数を配列として読んで壊れる（nokogiri で 6 箇所）。
 - **C パーサの出力が入力バッファを指す場合は `str_bytes` の生ポインタを使う。** gumbo の error record は入力の中を指す。`str_vec`（コピー）だと `add_errors` が別のメモリに対して診断を描くので、`Ctx::str_bytes` の `(ptr, len)` を取り出して渡す（collector は動かさないので String が生きている限り有効）。
-- 配布: `cargo build`（workspace root）で `.so` がバイナリの隣にできる。`cargo install` はバイナリしか置かないので、`bin/install` が拡張をビルドして `<install root>/ext/` にコピーする（`bin/spec` もこれを使う）。`bin/test` / `bin/test-aarch64` はベンチマーク用バイナリの隣に拡張をビルドする。
+- 配布: `cargo build`（workspace root）で `.so` がバイナリの隣にできる。`cargo install` 自体はバイナリしか置かないが、5 つの拡張は `monoruby` の **artifact dependency**（`-Z bindeps`）なので、Cargo がビルドして `build.rs` に `CARGO_CDYLIB_FILE_<NAME>` でパスを渡し、`build.rs` が vendored stdlib と同じ install root の `ext/` に置く。つまり `cargo install --path monoruby` の一手で `require "psych"` の通るインストールができる（`bin/install` はその薄い包み）。詳細は §7。`bin/test` / `bin/test-aarch64` はベンチマーク用バイナリの隣に拡張をビルドする。
 - **カバレッジの計測外。** `bin/test` は拡張を計装フラグ無しでビルドし、`dlopen` で読み込むので、`cargo llvm-cov report` はそのカウンタを集めない。テストは実際にバイナリ越しに拡張を通しているのに、Codecov 上は `ext/` 7409 行中 94 hit（1.3%）、`monoruby_ext/` 448 行中 0 hit と出る。そこで `codecov.yml` で `ext/**` と `monoruby_ext/**` を `ignore` にした（コア側の `monoruby/src/ext.rs` は 82% で計測されており、除外していない）。計測を取り戻すには、拡張を計装付きでビルドし、各 `.so` を `--object` として report に渡す必要がある。移設でよく覆われたコードがコアから抜けた分、全体は 0.2 ポイントほど一度だけ薄まるので、`project` の `threshold` を 1% にしてある。
 
 ### 6.3 `system` を出した拡張と出さなかった拡張
@@ -389,7 +390,93 @@ nokogiri を外した理由は 3 つある。
 出すとすれば、FFI がレイアウトを写すのをやめる（アクセサをすべて C 側の
 glue に移す）か、検出した版に合わせて生成するかが先になる。
 
-## 7. 参考
+## 7. インストールと配布（2026-09）
+
+拡張をコアから外した結果、「インストールされた monoruby」は**バイナリ**と
+**それが読む木**（vendored stdlib、`builtins/`、stub、そして `ext/`）の
+二つになった。`cargo install` はバイナリしか置かないので、この二つを
+揃えるのが最後の穴だった。`bin/ruby-bench` が `cargo install` だけを
+呼んでいた時期に、77 本中 14 本が `libpsych_native.so` /
+`libzlib_native.so` の `LoadError` で落ちたのがその症状で、インタプリタの
+退行ではなくインストールの形の問題だった。
+
+### 7.1 `cargo install` だけで揃う（artifact dependency）
+
+5 つの拡張を `monoruby` の **build-dependency**（`artifact = "cdylib"`,
+`lib = false`, `target = "target"`）にした。Cargo が各 cdylib を
+ターゲット向けにビルドし、`build.rs` に `CARGO_CDYLIB_FILE_<NAME>` で
+パスを渡す。`build.rs` はそれを install root の `ext/` へ（一時名 →
+`rename` で）置くだけ。`lib = false` なのはコアがどれもリンクしない
+（`dlopen` する）から、`target = "target"` なのはビルドホストではなく
+ターゲット向けの `.so` が要るから。
+
+- **feature は `monoruby` 側に上がった。** artifact dependency の feature は
+  依存元が決めるので、`bundled-zlib` / `system-zlib` の対を `monoruby` の
+  feature として持ち、`sqlite3_native/system` などへ転送する。Cargo の
+  feature は加算しかしないので、`default-features = false` を付けた上で
+  `--no-default-features --features "system-zlib,bundled-sqlite3,…"` と
+  全部を書き下す。これを組み立てるのが `bin/install` の仕事。
+- **`-Z bindeps` は unstable** なので `.cargo/config.toml` の
+  `[unstable] bindeps = true` で有効にしてある。無効なら
+  「`artifact = …` requires `-Z bindeps`」とマニフェスト解析の時点で
+  はっきり落ちる（黙って拡張を飛ばすことはない）。リポジトリの外から
+  `cargo install --path …/monoruby` を叩くと `rust-toolchain.toml` が
+  効かず stable に落ちてこのエラーになるので、`bin/install` は
+  リポジトリルートへ `cd` する。
+- **`ext/.build-stamp` で自己修復する。** `build.rs` は木のハッシュが
+  一致すれば早期に戻るが、その経路でも拡張の設置だけは通す。さらに
+  置いた `.so` の名前を `ext/.build-stamp` に書き、それを
+  `cargo:rerun-if-changed` で見ている。`ext/` を消せば次のビルドで
+  `build.rs` が走り直して戻ってくる。
+- **install root は版ごとに一つなので、最後のビルドが勝つ。** Ruby の木は
+  プロファイル非依存だったが `.so` はそうではない。debug の `cargo test`
+  を通すと、release の `bin/install` が置いた `.so` が debug 版に
+  置き換わる（`cargo llvm-cov` なら計装版に。psych で 0.9 MB → 6.9 MB）。
+  動作は正しく、遅いだけ。どのビルドが書いたかは `ext/.build-stamp` の
+  1 行目（プロファイル名）で分かる。release に戻すには `bin/install`。
+- **クロスビルドでは設置しない。** 成果物はターゲット向けで、install root
+  はホストのバイナリのものだから。`bin/test-aarch64` は従来どおり
+  バイナリの隣に建てる。設置したかどうかは
+  `cargo:rustc-env=MONORUBY_EXT_INSTALLED` でテスト側に渡してあり、
+  `tests/relocatable_install.rs` はそれを見て skip する（「回帰で消えた」
+  と「そもそも置いていない」を取り違えないため）。
+
+### 7.2 どこでも動く木（`bin/dist`）
+
+install root の絶対パスはバイナリに焼き込まれている
+（`MONORUBY_INSTALL_ROOT`）ので、それだけでは**ビルドした本人の
+ホームでしか動かない**。そこで `globals::install_root` の解決順に
+「実行ファイルからの相対」を足した:
+
+1. 環境変数 `MONORUBY_INSTALL_ROOT`
+2. `<実行ファイルのあるディレクトリ>/..` に `builtins/` があればそこ
+3. 焼き込まれた `env!("MONORUBY_INSTALL_ROOT")`
+
+2 の目印が `builtins/` なのは、それが install root にしか無く、
+`~/.cargo/bin/monoruby` のような「木を伴わないバイナリ」を
+誤検出しないため。`bin/dist` はこの形
+
+```
+<out>/bin/monoruby   <out>/builtins   <out>/lib   <out>/stub   <out>/ext
+```
+
+に並べ、`--tar` で `target/dist/monoruby-<ver>-<platform>.tar.gz` を書く。
+展開すればどのユーザーでも環境変数無しで動く。
+
+- **ホスト Ruby のプローブは `~/.monoruby` を自分で作る。** 通常この
+  ディレクトリは `build.rs` が install root を置くついでにできているが、
+  tarball を展開しただけのマシンには誰も作っていない。`fs::write` は
+  親を作らないので、放っておくとキャッシュの書き込みが黙って失敗し、
+  毎回 `ruby` を起動し直して「library path file が読めない」と警告する。
+  `ruby_probe` の結果を書く前に `create_dir_all` する。
+  （`tests/relocatable_install.rs::a_fresh_home_gets_its_probe_cache_written`）
+
+`tests/relocatable_install.rs` が両方を押さえている: 5 つの `.so` が
+install root にあること、木ごと移した先で `$LOAD_PATH` が自分の木から
+来て焼き込まれた root からは来ないこと、そこで psych / zlib が読めること、
+`MONORUBY_INSTALL_ROOT` が今も勝つこと。
+
+## 8. 参考
 
 - `doc/c_extention.md` — CRuby C API 互換層の設計検討（Path A / B / C、
   TruffleRuby の事例、レイアウト不一致の吸収、`gem install` のフロー）

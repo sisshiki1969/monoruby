@@ -1,0 +1,78 @@
+#!/bin/bash
+# Assemble a relocatable monoruby tree, and optionally tar it up.
+#
+# `cargo install` and `bin/install` both write into a per-user root whose
+# absolute path is baked into the binary, so what they produce only works
+# for the user who built it. This lays the same pieces out *around* the
+# binary instead:
+#
+#   <out>/bin/monoruby        the interpreter (and irm)
+#   <out>/builtins            Ruby loaded at interpreter start
+#   <out>/lib                 the vendored stdlib + monoruby's own stubs
+#   <out>/stub                the stubs, pinned ahead of $LOAD_PATH
+#   <out>/ext                 the dynamically loaded extensions
+#
+# `globals::install_root` recognises that layout from the executable's own
+# path (the `builtins/` directory is the marker), so the tree runs from
+# anywhere, under any user, with no environment set.
+#
+#   bin/dist                  # build and stage into target/dist/monoruby-<ver>
+#   bin/dist --tar            # …and write target/dist/<name>-<platform>.tar.gz
+#   bin/dist --out DIR        # stage into DIR instead
+set -e
+cd "$(dirname "$0")/.."
+
+TAR=0
+OUT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tar) TAR=1 ;;
+    --out) OUT="$2"; shift ;;
+    *) echo "bin/dist: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+  shift
+done
+
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' monoruby/Cargo.toml | head -1)
+NAME="monoruby-$VERSION"
+OUT="${OUT:-target/dist/$NAME}"
+
+# One build produces both halves: the binaries, and — through the artifact
+# dependencies in monoruby/Cargo.toml — the five extensions.
+cargo build --release
+ROOT="${MONORUBY_INSTALL_ROOT:-$HOME/.monoruby/v$VERSION}"
+if [ ! -d "$ROOT/builtins" ]; then
+  echo "bin/dist: no install root at $ROOT (build.rs populates it)" >&2
+  exit 1
+fi
+
+# There is one install root per version and the extensions in it are
+# per-profile, so the last build wins: a debug `cargo test` — or a
+# `cargo llvm-cov` run, whose instrumented psych is 7x the size — leaves
+# its own copies behind, and the release build above will not have
+# replaced them if build.rs did not need to re-run. An archive must not
+# ship those. Removing `ext/` takes the stamp build.rs watches with it,
+# so the second build reinstalls from the release artifacts.
+if [ "$(head -1 "$ROOT/ext/.build-stamp" 2>/dev/null)" != "release" ]; then
+  echo "bin/dist: $ROOT/ext holds a non-release build; reinstalling"
+  rm -rf "$ROOT/ext"
+  cargo build --release
+fi
+
+rm -rf "$OUT"
+mkdir -p "$OUT/bin"
+cp target/release/monoruby target/release/irm "$OUT/bin/"
+for dir in builtins lib stub ext; do
+  cp -R "$ROOT/$dir" "$OUT/$dir"
+done
+echo "staged $OUT"
+
+if [ "$TAR" = "1" ]; then
+  case "$(uname -s)" in
+    Darwin) PLATFORM="darwin-$(uname -m)" ;;
+    *) PLATFORM="linux-$(uname -m)" ;;
+  esac
+  ARCHIVE="$(dirname "$OUT")/$NAME-$PLATFORM.tar.gz"
+  tar -C "$(dirname "$OUT")" -czf "$ARCHIVE" "$(basename "$OUT")"
+  echo "wrote $ARCHIVE"
+fi

@@ -142,6 +142,24 @@ fn main() {
     // sees a tracked input change and re-runs this script, repopulating it.
     let stamp = install_root.join(".build-stamp");
     println!("cargo:rerun-if-changed={}", stamp.display());
+    // The extensions have their own stamp, tracked for the same reason:
+    // `ext/` is written by `install_extensions` rather than staged with
+    // the Ruby trees, so deleting it has to re-run this script too.
+    println!(
+        "cargo:rerun-if-changed={}",
+        install_root.join("ext").join(".build-stamp").display()
+    );
+    // Whether this build put the extensions in the install root — it does
+    // not when cross-compiling (see `install_extensions`). Emitted here,
+    // before any early return, because every run of this script has to
+    // print the whole of its output. `tests/relocatable_install.rs` reads
+    // it to tell "the install is missing its extensions" (a regression)
+    // from "this build never installed any" (a cross build, where
+    // bin/test-aarch64 builds them next to the binary instead).
+    println!(
+        "cargo:rustc-env=MONORUBY_EXT_INSTALLED={}",
+        if cross_compiling() { "0" } else { "1" }
+    );
 
     fs::create_dir_all(&lib_path).unwrap();
     // Start from a clean staging tree (a stale one may linger if a previous
@@ -230,6 +248,10 @@ fn main() {
     let tree_stamp = format!("{}:{:016x}", env!("CARGO_PKG_VERSION"), hasher.finish());
     if fs::read_to_string(&stamp).map(|s| s == tree_stamp).unwrap_or(false) {
         let _ = fs::remove_dir_all(&staging);
+        // The Ruby trees are already current, but the extensions are
+        // Cargo's artifacts rather than ours and may be newer than the
+        // copies in `ext/` — install them before taking the skip.
+        install_extensions(&install_root);
         return;
     }
 
@@ -273,6 +295,86 @@ fn main() {
     // path is tracked above via cargo:rerun-if-changed, so deleting the
     // install root makes the next build re-run this script.
     fs::write(&stamp, tree_stamp).unwrap();
+
+    install_extensions(&install_root);
+}
+
+/// Put the dynamically loaded extensions Cargo just built into the
+/// install root's `ext/`, where the installed binary looks for them
+/// (`ext::search_dirs`).
+///
+/// They arrive as *artifact dependencies* (`monoruby/Cargo.toml`
+/// `[build-dependencies]`): Cargo builds each `cdylib` and names its
+/// path in `CARGO_CDYLIB_FILE_<CRATE>`. Copying them here is what makes
+/// `cargo install --path monoruby` self-sufficient — it copies only
+/// `[[bin]]` targets, so before this an installed monoruby had no
+/// `psych_native.so` and could not `require "psych"`, which rubygems
+/// does to read any gem's metadata.
+///
+/// Skipped when cross-compiling: the artifacts are then for the target
+/// platform and the install root belongs to the host's binary, which
+/// would no longer be able to load them. A cross build's own binary
+/// finds them next to itself in `target/<triple>/<profile>/` instead.
+fn install_extensions(install_root: &Path) {
+    if cross_compiling() {
+        return;
+    }
+    let ext = install_root.join("ext");
+    if fs::create_dir_all(&ext).is_err() {
+        return;
+    }
+    // Cargo names each artifact twice — `CARGO_CDYLIB_FILE_<CRATE>` and
+    // its `_<lib name>` suffixed twin — with the same value, so collect
+    // the paths and de-duplicate on those rather than on the key's shape
+    // (counting underscores in the name would quietly drop an extension
+    // crate that has none).
+    let mut sources: Vec<PathBuf> = std::env::vars()
+        .filter(|(key, _)| key.starts_with("CARGO_CDYLIB_FILE_"))
+        .map(|(_, path)| PathBuf::from(path))
+        .collect();
+    sources.sort();
+    sources.dedup();
+
+    let mut installed = vec![];
+    for src in sources {
+        let Some(name) = src.file_name() else { continue };
+        let dst = ext.join(name);
+        // A monoruby running from this root may have the old copy open;
+        // replacing the directory entry (write beside, rename over) keeps
+        // its mapping valid where writing in place would not.
+        let tmp = ext.join(format!(".{}.{}", name.to_string_lossy(), std::process::id()));
+        if fs::copy(&src, &tmp).is_ok() {
+            if fs::rename(&tmp, &dst).is_err() {
+                let _ = fs::remove_file(&tmp);
+                continue;
+            }
+            installed.push(name.to_string_lossy().into_owned());
+        }
+    }
+    // Written last, and tracked as an input: deleting `ext/` (or the whole
+    // install root) takes the stamp with it, so Cargo re-runs this script
+    // and the extensions come back.
+    //
+    // The profile goes in it because there is one install root per
+    // *version*, shared by every build of it, and unlike the Ruby trees
+    // these artifacts differ per profile: the last build wins, so a debug
+    // `cargo test` leaves debug extensions where a release `bin/install`
+    // had put release ones. That is correct but slower, and the stamp is
+    // where to look when an installed monoruby is unexpectedly sluggish
+    // inside nokogiri or sqlite3. Re-run `bin/install` to put the release
+    // ones back.
+    installed.sort();
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
+    let _ = fs::write(
+        ext.join(".build-stamp"),
+        format!("{profile}\n{}", installed.join("\n")),
+    );
+}
+
+/// Is this build producing artifacts for a platform other than the one
+/// it runs on? Cargo tells the build script both.
+fn cross_compiling() -> bool {
+    std::env::var("TARGET").ok() != std::env::var("HOST").ok()
 }
 
 fn git(args: &[&str]) -> Option<String> {

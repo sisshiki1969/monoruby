@@ -104,15 +104,40 @@ pub(crate) fn backtrace_limit() -> Option<usize> {
 ///
 /// The baked path embeds the *build* machine's `$HOME`, so a prebuilt
 /// binary running under a different home (distributed release binaries,
-/// containers) would point at a tree that doesn't exist there. Setting
-/// `MONORUBY_INSTALL_ROOT` in the *runtime* environment overrides the
-/// baked path and makes the binary relocatable: point it at wherever the
-/// matching `v<version>` tree was extracted.
+/// containers) would point at a tree that doesn't exist there. Two things
+/// answer that, in order:
+///
+/// 1. `MONORUBY_INSTALL_ROOT` in the *runtime* environment, which
+///    overrides everything: point it at wherever the matching tree was
+///    extracted.
+/// 2. A tree shipped *with* the binary — `<dir of the executable>/..`
+///    when that holds a `builtins/` directory, the layout `bin/dist`
+///    writes (`bin/monoruby` beside `builtins/`, `lib/`, `stub/` and
+///    `ext/`). A release archive unpacked anywhere therefore works with
+///    no environment at all, and since the extensions are looked for in
+///    this root's `ext/` (`ext::search_dirs`) they come along with it.
+///
+/// The `builtins/` marker is what keeps a development build out of this
+/// path: there the executable's parent is `target/`, which has no such
+/// directory, so the baked root stays in force.
 pub(crate) fn install_root() -> PathBuf {
-    match std::env::var_os("MONORUBY_INSTALL_ROOT") {
-        Some(root) if !root.is_empty() => PathBuf::from(root),
-        _ => PathBuf::from(env!("MONORUBY_INSTALL_ROOT")),
+    if let Some(root) = std::env::var_os("MONORUBY_INSTALL_ROOT")
+        && !root.is_empty()
+    {
+        return PathBuf::from(root);
     }
+    if let Some(root) = shipped_install_root() {
+        return root;
+    }
+    PathBuf::from(env!("MONORUBY_INSTALL_ROOT"))
+}
+
+/// The install root shipped alongside the running executable, if any:
+/// `<dir of the executable>/..`, and only when it looks like one.
+fn shipped_install_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let root = exe.parent()?.parent()?;
+    root.join("builtins").is_dir().then(|| root.to_path_buf())
 }
 
 pub(crate) fn ruby_platform() -> &'static str {
@@ -729,6 +754,16 @@ impl Globals {
                     // ~50ms `ruby` spawn. `library_path` may not have
                     // been baked either (e.g. distributed binary), so
                     // write it unconditionally when we just probed.
+                    //
+                    // Create the directory first: `~/.monoruby` normally
+                    // exists because `build.rs` put the install root in
+                    // it, but a relocatable tree (`bin/dist`) was built
+                    // on someone else's machine, so on this host nothing
+                    // has ever made the directory. Without this the two
+                    // writes fail silently and every single start
+                    // re-spawns `ruby` and warns about the missing
+                    // library path file.
+                    let _ = std::fs::create_dir_all(&monoruby_dir);
                     let _ = std::fs::write(&gem_path_file, &p.gem_path);
                     let _ = std::fs::write(&library_path_file, &p.library_path);
                     p.gem_path
