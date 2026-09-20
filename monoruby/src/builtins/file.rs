@@ -447,6 +447,23 @@ fn file_expand_path(
         None
     };
     let res = expand_path_bytes(rs.as_bytes(), dfl.as_deref())?;
+    // A `~` expansion makes the home directory — a filesystem-encoded
+    // string — the head of the result, and CRuby appends the rest of
+    // the argument to it. The result therefore carries the filesystem
+    // encoding, and a remainder that is not all-ASCII in another
+    // encoding is the ordinary String-append incompatibility.
+    let enc = if rs.as_bytes().first() == Some(&b'~') {
+        let fs = filesystem_encoding(globals);
+        // Only the appended remainder decides compatibility: the home
+        // directory itself is already in the filesystem encoding, so
+        // non-ASCII bytes *there* are no conflict.
+        if fs != enc && !rs.as_bytes().is_ascii() {
+            return Err(MonorubyErr::incompatible_encoding(&globals.store, enc, fs));
+        }
+        fs
+    } else {
+        enc
+    };
     Ok(path_value(&res, enc))
 }
 
@@ -1731,8 +1748,27 @@ pub(super) fn path_value(bytes: &[u8], enc: crate::value::Encoding) -> Value {
     Value::string_from_inner(RStringInner::from_encoding(bytes, enc))
 }
 
+/// `Encoding.find("filesystem")` as a monoruby `Encoding`, for the path
+/// results CRuby tags with `rb_filesystem_encoding()` rather than with
+/// the encoding of the path argument.
+pub(super) fn filesystem_encoding(globals: &mut Globals) -> crate::value::Encoding {
+    let obj = super::io::enc_default_external_obj(globals);
+    super::io::enc_obj_to_enum(globals, obj).unwrap_or(crate::value::Encoding::Utf8)
+}
+
 pub(super) fn to_path_str(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<String> {
     Ok(to_path_rstring(vm, globals, val)?.to_str()?.to_string())
+}
+
+/// A `PathBuf` holding the *raw* bytes of a path argument, with no
+/// lexical normalization: what a syscall taking the path exactly as
+/// written needs. Unlike `to_path_str` — which renders a non-UTF-8
+/// path byte-wise as `\xHH` for display — this hands the bytes to the
+/// kernel untouched, the way CRuby's `rb_str_encode_ospath` does.
+fn to_raw_path(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<std::path::PathBuf> {
+    Ok(bytes_to_pathbuf(
+        to_path_rstring(vm, globals, val)?.as_bytes(),
+    ))
 }
 
 #[cfg(not(windows))]
@@ -1761,7 +1797,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let args = lfp.arg(0).as_array();
     let mut count = 0i64;
     for arg in args.iter() {
-        let path = to_path_str(vm, globals, *arg)?;
+        let path = to_raw_path(vm, globals, *arg)?;
         std::fs::remove_file(&path)
             .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
         count += 1;
@@ -1783,7 +1819,7 @@ fn chmod(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mode = args[0].coerce_to_int_i64(_vm, globals)? as u32;
     let mut count = 0i64;
     for arg in args[1..].iter() {
-        let path = to_path_str(_vm, globals, *arg)?;
+        let path = to_raw_path(_vm, globals, *arg)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).map_err(|e| {
             MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_chmod", &path)
@@ -1808,8 +1844,8 @@ fn file_symlink(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let old = to_path_str(vm, globals, lfp.arg(0))?;
-    let new = to_path_str(vm, globals, lfp.arg(1))?;
+    let old = to_raw_path(vm, globals, lfp.arg(0))?;
+    let new = to_raw_path(vm, globals, lfp.arg(1))?;
     std::os::unix::fs::symlink(&old, &new)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_symlink", &new))?;
     Ok(Value::integer(0))
@@ -2278,7 +2314,12 @@ fn file_readlink(
     let target = std::fs::read_link(&path).map_err(|e| {
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_readlink", &path)
     })?;
-    Ok(Value::string(conv_pathbuf(&target)))
+    // CRuby's `rb_readlink` hands the raw link target to
+    // `rb_enc_str_new(..., rb_filesystem_encoding())`: a plain
+    // associate, so the result carries the filesystem encoding even
+    // when the bytes are not valid in it (no ASCII-8BIT fallback).
+    let enc = filesystem_encoding(globals);
+    Ok(path_value(pathbuf_bytes(&target), enc))
 }
 
 ///
@@ -3975,6 +4016,70 @@ mod tests {
               ]
             ensure
               [hard, sym, target].each { |p| File.unlink(p) rescue nil }
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn expand_path_home_encoding() {
+        // `~` puts the filesystem-encoded home directory at the head of
+        // the result, so the result carries that encoding whatever the
+        // argument's own encoding was.
+        //
+        // A remainder that is *not* all-ASCII is the ordinary
+        // String-append incompatibility. Only the BINARY one is
+        // asserted: every ASCII-compatible filesystem encoding refuses
+        // it, so the answer is the same on every host, while a UTF-8
+        // remainder turns on the filesystem encoding's identity — which
+        // CRuby reports as UTF8-MAC on macOS while monoruby folds that
+        // onto plain UTF-8.
+        run_test_once(
+            r##"(fs=Encoding.find("filesystem"); f=->(s){ File.expand_path(s).encoding == fs }; g=(begin; File.expand_path("~/" + "\xFF".dup.force_encoding("binary")); :ok; rescue Encoding::CompatibilityError; :incompat; end); [f.call("~"), f.call("~/foo"), f.call("~root"), f.call("~/foo".encode("EUC-JP")), g])"##,
+        );
+    }
+
+    #[test]
+    fn file_raw_byte_paths() {
+        // A path (or a symlink target) whose bytes are not valid UTF-8
+        // reaches the kernel untouched: CRuby passes the bytes through,
+        // it does not render them as `\xHH`.
+        run_test_once(
+            r##"
+            d = "/tmp/monoruby_test_rawpath_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(d)
+            begin
+              t = "\xE3\x81\x82".dup.force_encoding("binary")
+              link = "#{d}/l"
+              File.symlink(t, link)
+              f = "#{d}/" + t
+              File.write(f, "x")
+              File.chmod(0600, f)
+              [File.readlink(link).bytes, File.stat(f).mode & 0777,
+               File.delete(f), File.exist?(f)]
+            ensure
+              File.unlink(link) rescue nil
+              Dir.rmdir(d) rescue nil
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn file_readlink_encoding() {
+        // CRuby tags the link target with `Encoding.find("filesystem")`
+        // (a plain associate: the bytes pass through untouched even when
+        // they are not valid in it), not with a fixed UTF-8.
+        run_test_once(
+            r#"
+            sym = "/tmp/monoruby_test_rl_enc_#{Process.pid}_#{rand(100000)}.sym"
+            target = "\u3042/target"
+            begin
+              File.symlink(target, sym)
+              s = File.readlink(sym)
+              [s.bytes == target.bytes, s.encoding.name == Encoding.find("filesystem").name]
+            ensure
+              File.unlink(sym) rescue nil
             end
             "#,
         );

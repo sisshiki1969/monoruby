@@ -111,9 +111,32 @@ fn read_entries_via_fd(
         libc::closedir(dirp);
         Ok(names
             .into_iter()
-            .map(|n| super::io::tag_with_encs(globals, n, enc_obj, None))
+            .map(|n| external_str_with_enc(globals, n, enc_obj))
             .collect())
     }
+}
+
+/// Tag one directory entry the way dir.c does, through CRuby's
+/// `rb_external_str_with_enc`: a name that is **not** all-ASCII under a
+/// US-ASCII target encoding is tagged ASCII-8BIT instead — and skips
+/// the `default_internal` conversion — rather than carrying a US-ASCII
+/// tag its own bytes are invalid in. Every other case is the ordinary
+/// external/internal tagging. The rule is the target encoding's, so it
+/// fires for an explicit `encoding: "US-ASCII"` just as it does for a
+/// US-ASCII `Encoding.find("filesystem")`.
+fn external_str_with_enc(globals: &mut Globals, bytes: Vec<u8>, enc_obj: Option<Value>) -> Value {
+    use crate::value::Encoding as E;
+    let target = match enc_obj {
+        Some(o) => super::io::enc_obj_to_enum(globals, o),
+        None => {
+            let de = super::io::enc_default_external_obj(globals);
+            super::io::enc_obj_to_enum(globals, de)
+        }
+    };
+    if target == Some(E::UsAscii) && !bytes.is_ascii() {
+        return super::file::path_value(&bytes, E::Ascii8);
+    }
+    super::io::tag_with_encs(globals, bytes, enc_obj, None)
 }
 
 /// Resolve an `encoding:` keyword value (String name or Encoding
@@ -181,7 +204,7 @@ fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     names.extend(read_dir_names(globals, &path)?);
     let entries: Vec<Value> = names
         .into_iter()
-        .map(|n| super::io::tag_with_encs(globals, n, enc_obj, None))
+        .map(|n| external_str_with_enc(globals, n, enc_obj))
         .collect();
     let p = vm.get_block_data(globals, bh)?;
     // Root the not-yet-yielded name strings: the block body reaches
@@ -842,17 +865,22 @@ fn home(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     user
                 )));
             }
-            std::ffi::CStr::from_ptr((*pw).pw_dir)
-                .to_string_lossy()
-                .to_string()
+            std::ffi::CStr::from_ptr((*pw).pw_dir).to_bytes().to_vec()
         };
-        return Ok(Value::string(dir));
+        let enc = super::file::filesystem_encoding(globals);
+        return Ok(super::file::path_value(&dir, enc));
     }
     let home = match dirs::home_dir() {
         Some(home) => home,
         None => return Ok(Value::nil()),
     };
-    Ok(Value::string(home.to_string_lossy().to_string()))
+    // CRuby's `copy_home_path` associates the raw bytes with the
+    // filesystem encoding — a plain associate, as `File.readlink` does.
+    let enc = super::file::filesystem_encoding(globals);
+    Ok(super::file::path_value(
+        super::file::pathbuf_bytes(&home),
+        enc,
+    ))
 }
 
 ///
@@ -863,15 +891,19 @@ fn home(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/getwd.html]
 #[monoruby_builtin]
-fn pwd(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+fn pwd(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
     let cwd = std::env::current_dir().unwrap();
     let bytes = super::file::pathbuf_bytes(&cwd);
-    // The cwd is reported in the filesystem (UTF-8) encoding; raw bytes
-    // that don't decode fall back to BINARY (core/dir/pwd_spec.rb).
-    let enc = if std::str::from_utf8(bytes).is_ok() {
-        crate::value::Encoding::Utf8
-    } else {
-        crate::value::Encoding::Ascii8
+    // CRuby's `rb_dir_getwd` switches on the filesystem encoding: a
+    // US-ASCII one becomes ASCII-8BIT *unconditionally* — whether or
+    // not the path is all-ASCII, unlike the directory-entry rule — and
+    // every other one is associated as is. The association is plain, so
+    // bytes that are invalid under a UTF-8 filesystem encoding stay
+    // UTF-8 and invalid rather than falling back to BINARY
+    // (core/dir/pwd_spec.rb).
+    let enc = match super::file::filesystem_encoding(globals) {
+        crate::value::Encoding::UsAscii => crate::value::Encoding::Ascii8,
+        e => e,
     };
     Ok(super::file::path_value(bytes, enc))
 }
@@ -970,7 +1002,7 @@ fn entries(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     names.extend(read_dir_names(globals, &path)?);
     let result: Vec<Value> = names
         .into_iter()
-        .map(|n| super::io::tag_with_encs(globals, n, enc_obj, None))
+        .map(|n| external_str_with_enc(globals, n, enc_obj))
         .collect();
     Ok(Value::array_from_vec(result))
 }
@@ -1194,6 +1226,18 @@ mod tests {
     }
 
     #[test]
+    fn dir_entries_us_ascii_binary_fallback() {
+        // CRuby's `rb_external_str_with_enc`: a name that is not
+        // all-ASCII under a US-ASCII target encoding comes back
+        // ASCII-8BIT, not US-ASCII-with-invalid-bytes. Spelled with an
+        // explicit `encoding:` so the answer does not ride on the
+        // machine's locale.
+        run_test_once(
+            r##"(d="/tmp/mono_eu_#{Process.pid}"; Dir.mkdir(d); n="ã".dup.force_encoding("binary"); File.write("#{d}/#{n}", ""); File.write("#{d}/a", ""); f=->(enc){ Dir.children(d, encoding: enc).sort_by(&:bytes).map { |s| [s.bytes, s.encoding.name] } }; r=[f.call("US-ASCII"), f.call("UTF-8"), f.call("BINARY"), Dir.entries(d, encoding: "US-ASCII").sort_by(&:bytes).map { |s| s.encoding.name }]; Dir.children(d).each { |c| File.unlink("#{d}/#{c}") }; Dir.rmdir(d); r)"##,
+        );
+    }
+
+    #[test]
     fn dir_glob_encoding_and_flags_keyword() {
         // Matches inherit the pattern's encoding; the flags: keyword is
         // accepted and preferred over the positional argument.
@@ -1209,6 +1253,25 @@ mod tests {
         // wrapper lists the same entries and has a nil path.
         run_test_once(
             r##"(d="/tmp/mono_ff_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/x", ""); dir=Dir.open(d); a=dir.fileno.is_a?(Integer); dn=Dir.for_fd(dir.fileno); b=dn.to_a.sort; c=dn.path; dir.close; e2=(begin; dn.close; rescue => e; [e.class, e.message]; end); f=(begin; Dir.for_fd("x"); rescue => e; e.class; end); File.unlink("#{d}/x"); Dir.rmdir(d); [a,b,c,e2,f])"##,
+        );
+    }
+
+    #[test]
+    fn dir_pwd_filesystem_encoding() {
+        // `rb_dir_getwd`: the cwd carries the filesystem encoding, with
+        // a US-ASCII one turned into ASCII-8BIT; the association is
+        // plain, so bytes that are invalid in a UTF-8 filesystem
+        // encoding come back UTF-8 and invalid, not BINARY. Phrased
+        // against `Encoding.find("filesystem")` so the answer is the
+        // same whatever locale the test host runs under.
+        //
+        // The second half needs a directory whose name is *not* valid
+        // UTF-8, which APFS refuses outright (`EILSEQ @ dir_s_mkdir`),
+        // so it is skipped where the mkdir fails — both runtimes take
+        // the same branch on the same host. That makes the result
+        // platform-dependent, hence a live CRuby rather than the oracle.
+        run_test_once_live(
+            r##"(d="/tmp/mono_pwde_#{Process.pid}"; Dir.mkdir(d); fs=Encoding.find("filesystem"); want=(fs == Encoding::US_ASCII ? Encoding::BINARY : fs); r=[Dir.pwd.encoding == want, Dir.getwd.encoding == want]; orig=Encoding.default_external; Encoding.default_external=Encoding::US_ASCII; r << Dir.pwd.encoding.name; Encoding.default_external=Encoding::UTF_8; r << Dir.pwd.encoding.name; Encoding.default_external=orig; sub="#{d}/" + "\xFF\xFE".dup.force_encoding("binary"); made=(begin; Dir.mkdir(sub); true; rescue SystemCallError; false; end); if made; r << Dir.chdir(sub) { [Dir.pwd.encoding == want, Dir.pwd.valid_encoding? == (want == Encoding::BINARY)] }; Dir.rmdir(sub); else; r << :no_invalid_utf8_names; end; Dir.rmdir(d); r)"##,
         );
     }
 
@@ -1327,6 +1390,18 @@ mod tests {
     fn home() {
         // Host-dependent value: verify against a live CRuby, not the oracle.
         run_test_live(r#"Dir.home"#);
+    }
+
+    #[test]
+    fn home_filesystem_encoding() {
+        // `copy_home_path` associates the home directory's raw bytes
+        // with the filesystem encoding — plainly, with no ASCII-8BIT
+        // fallback, unlike `Dir.pwd`. Phrased against
+        // `Encoding.find("filesystem")` so the answer does not depend
+        // on the test host's locale.
+        run_test_once(
+            r##"(fs=Encoding.find("filesystem"); [Dir.home.encoding == fs, Dir.home("root").encoding == fs, File.expand_path("~").encoding == fs, File.expand_path("~/foo").encoding == fs, File.expand_path("foo").encoding == Encoding::UTF_8])"##,
+        );
     }
 
     #[test]
