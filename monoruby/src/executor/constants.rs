@@ -162,24 +162,31 @@ impl Executor {
         // reaching one.
         self.autoload_require = false;
 
-        if let Err(e) = res {
-            // require failed (LoadError, syntax error, …). Revert
-            // the slot to Idle so a future reference may retry,
-            // matching CRuby's behaviour of leaving the autoload
-            // registration intact across a failed load, and throw away
-            // whatever the half-run file had assigned.
-            globals.store.discard_autoload_value(class_id, name);
-            globals.store.set_autoload_state(
-                class_id,
-                name,
-                if was_consumed {
-                    AutoloadState::Consumed
-                } else {
-                    AutoloadState::Idle
-                },
-            );
-            return Err(e);
-        }
+        // `Kernel#require` answers whether it *ran* the file, or found
+        // the feature already loaded and did nothing. A slot the load
+        // leaves undefined is retired either way, but only a file that
+        // really ran retires it for good — see below.
+        let loaded = match res {
+            Err(e) => {
+                // require failed (LoadError, syntax error, …). Revert
+                // the slot to what it was so a future reference may
+                // retry, matching CRuby's behaviour of leaving the
+                // autoload registration intact across a failed load,
+                // and throw away whatever the half-run file assigned.
+                globals.store.discard_autoload_value(class_id, name);
+                globals.store.set_autoload_state(
+                    class_id,
+                    name,
+                    if was_consumed {
+                        AutoloadState::Consumed
+                    } else {
+                        AutoloadState::Idle
+                    },
+                );
+                return Err(e);
+            }
+            Ok(v) => v.as_bool(),
+        };
 
         // require returned successfully. Either the file defined the
         // constant — the assignment is sitting in the autoload entry,
@@ -200,11 +207,17 @@ impl Executor {
                 // post-`require` re-read of the slot the load was
                 // triggered for).
                 ConstStateKind::LazyToplevelBinding => Ok(None),
-                ConstStateKind::Autoload(_) if was_consumed => {
-                    // Already consumed before this load, and this load
-                    // did not define it either: leave the slot as it was
-                    // so `Module#constants(false)` keeps listing the
-                    // name and a later reference retries the file.
+                ConstStateKind::Autoload(_) if was_consumed && !loaded => {
+                    // The slot was already retired by an earlier direct
+                    // `require`, and this reference found the feature
+                    // still loaded, so nothing ran that could have
+                    // defined the constant. Leave it retired rather
+                    // than dropped: `Module#constants(false)` keeps
+                    // listing the name, and once the feature leaves
+                    // `$LOADED_FEATURES` a later reference runs the
+                    // file again. (That run is the `loaded` case, which
+                    // falls through to the arm below and drops the
+                    // entry — the file has now had its chance.)
                     globals
                         .store
                         .set_autoload_state(class_id, name, AutoloadState::Consumed);

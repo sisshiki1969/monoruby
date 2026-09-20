@@ -8,6 +8,14 @@
 //! started — and blocks, rather than raising or starting a second load,
 //! when it actually reads the value.
 //!
+//! Two single-threaded rules about *several constants sharing one
+//! autoload file* are here too, because the concurrent case rests on
+//! them: which constants a load retires depends on whether the load was
+//! a direct `require` or an autoload's own, and a retired one still
+//! re-runs its file once the feature is dropped from
+//! `$LOADED_FEATURES`. Getting either wrong stays invisible until many
+//! threads race on one file, which is how they were found.
+//!
 //! These spawn the real binary: green threads and a file `require` are
 //! both process-level, so an in-process `run_test` cannot reach them.
 //! The expectations are differential — each case asks the reference
@@ -299,4 +307,90 @@ p $CTR.get
 "#,
     );
     assert_same("repeated concurrent autoload", &dir, &script);
+}
+
+/// A *direct* `require` of a file retires every constant registered to
+/// autoload it: the predicates stop reporting them, though the names
+/// stay in `Module#constants`. Reading one still runs `require` — a
+/// no-op while the feature is loaded, but once it is dropped from
+/// `$LOADED_FEATURES` the file runs again and may define the constant
+/// after all.
+#[test]
+fn a_direct_require_retires_the_other_constants_but_still_retries_the_file() {
+    let dir = fixture_dir("direct");
+    write(
+        &dir,
+        "shared.rb",
+        "$loads = ($loads || 0) + 1\nObject.const_set(:D1, $loads)\n",
+    );
+    let script = write(
+        &dir,
+        "probe.rb",
+        r##"
+DIR = File.expand_path(File.dirname(__FILE__))
+P = File.join(DIR, "shared.rb")
+def show(label, v) = puts("#{label}: #{v.inspect.gsub(DIR + "/", "")}")
+
+# The file defines D1 and nothing else, so D2's registration is the one
+# the direct require retires.
+Object.autoload :D1, P
+Object.autoload :D2, P
+require P
+show "loads         ", $loads
+show "autoload? D1  ", Object.autoload?(:D1)
+show "autoload? D2  ", Object.autoload?(:D2)
+show "defined? D2   ", Object.const_defined?(:D2)
+show "constants D2  ", Object.constants.include?(:D2)
+
+begin; Object::D2; rescue NameError => e; show "read D2       ", e.class; end
+show "loads         ", $loads
+
+# Dropped from $LOADED_FEATURES, the retired registration runs the file
+# again — it still does not define D2, and the slot stays retired.
+$LOADED_FEATURES.delete(P)
+begin; Object::D2; rescue NameError => e; show "read D2 again ", e.class; end
+show "loads         ", $loads
+show "autoload? D2  ", Object.autoload?(:D2)
+show "constants D2  ", Object.constants.include?(:D2)
+"##,
+    );
+    assert_same("direct require of a shared file", &dir, &script);
+}
+
+/// An *autoload's own* require leaves the other constants registered to
+/// the same file completely alone — `autoload?` keeps answering the
+/// path for them. Retiring them here is what made ruby/spec's
+/// repeated-autoload case fail from its second round on.
+#[test]
+fn an_autoload_s_own_require_leaves_the_other_constants_registered() {
+    let dir = fixture_dir("triggered");
+    write(
+        &dir,
+        "shared.rb",
+        "$loads = ($loads || 0) + 1\nObject.const_set(:E1, $loads)\n",
+    );
+    let script = write(
+        &dir,
+        "probe.rb",
+        r##"
+DIR = File.expand_path(File.dirname(__FILE__))
+P = File.join(DIR, "shared.rb")
+def show(label, v) = puts("#{label}: #{v.inspect.gsub(DIR + "/", "")}")
+
+Object.autoload :E1, P
+Object.autoload :E2, P
+show "E1            ", Object::E1
+show "loads         ", $loads
+show "autoload? E2  ", Object.autoload?(:E2)
+show "defined? E2   ", Object.const_defined?(:E2)
+show "constants E2  ", Object.constants.include?(:E2)
+
+# E2's own registration is live, so reading it loads the file — already
+# loaded, so a no-op — and then reports the constant missing for good.
+begin; Object::E2; rescue NameError => e; show "read E2       ", e.class; end
+show "loads         ", $loads
+show "autoload? E2  ", Object.autoload?(:E2)
+"##,
+    );
+    assert_same("autoload-triggered require of a shared file", &dir, &script);
 }
