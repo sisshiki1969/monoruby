@@ -808,6 +808,24 @@ pub(crate) struct SpecializedPatchEntry {
 }
 
 ///
+/// One emitted native-builtin wrapper, shared by every `FuncId` that
+/// registers the same Rust function.
+///
+/// `gen_native_func_wrapper` bakes in the function's address and nothing
+/// else, so the wrapper is a pure function of that address. `CODEGEN` is
+/// a thread-local that outlives any single `Globals`, and JIT memory is
+/// never freed, so without this memo every additional interpreter on the
+/// thread emits its own copy of all ~1800 bootstrap wrappers.
+///
+#[derive(Clone)]
+pub(crate) struct NativeWrapper {
+    pub(crate) entry: DestLabel,
+    pub(crate) codeptr: CodePtr,
+    #[cfg(feature = "perf")]
+    pub(crate) info: (CodePtr, usize, CodePtr, usize),
+}
+
+///
 /// Machine code generator
 ///
 pub struct Codegen {
@@ -836,6 +854,9 @@ pub struct Codegen {
     /// The id is how `AsmInst::ChainExit` — pushed after the call, when the
     /// address itself is no longer at hand — names the site it belongs to.
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
+    /// Native-builtin wrappers already emitted, keyed by the Rust
+    /// function's address. See [`NativeWrapper`].
+    native_wrappers: HashMap<u64, NativeWrapper>,
     /// `BecamePolymorphic` whole-method recompiles performed per (iseq,
     /// self class). A body whose polymorphism keeps changing would
     /// otherwise recompile forever — each fresh body carries a fresh deopt
@@ -1120,6 +1141,18 @@ impl Drop for Codegen {
 
 impl Codegen {
     ///
+    /// The wrapper already emitted for the native function at
+    /// *abs_address*, if this thread has emitted one.
+    ///
+    pub(crate) fn native_wrapper(&self, abs_address: u64) -> Option<NativeWrapper> {
+        self.native_wrappers.get(&abs_address).cloned()
+    }
+
+    pub(crate) fn record_native_wrapper(&mut self, abs_address: u64, wrapper: NativeWrapper) {
+        self.native_wrappers.insert(abs_address, wrapper);
+    }
+
+    ///
     /// Build the bytecode interpreter (the `dispatch` table).
     ///
     /// Arch-neutral: the per-arch [`Codegen::gen_vm_handlers`] emits the actual
@@ -1297,6 +1330,7 @@ impl Codegen {
             alloc_page_addr: std::ptr::null_mut(),
             compilation_unit: Vec::new(),
             asm_return_addr_table: HashMap::default(),
+            native_wrappers: HashMap::default(),
             recompile_counts: HashMap::default(),
             chain_deopt_table: HashMap::default(),
             chain_cont_stub: entry_panic.clone(),

@@ -1864,18 +1864,46 @@ impl Globals {
     ///  - (old rbp) is to be set by callee.
     ///
     pub(crate) fn gen_wrapper(&mut self, func_id: FuncId) {
+        // A native builtin's wrapper depends only on the Rust function's
+        // address, so it is shared thread-wide rather than re-emitted per
+        // `Globals` (see `NativeWrapper`). Every other kind bakes in
+        // something of this interpreter's own — an ivar name and its
+        // inline cache, a proc's outer frame, a JIT stub that will be
+        // patched — and must stay private to it.
+        let native = match &self.store[func_id].kind {
+            FuncKind::Builtin { abs_address } => Some(*abs_address),
+            _ => None,
+        };
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
+            if let Some(address) = native
+                && let Some(cached) = codegen.native_wrapper(address)
+            {
+                self.store[func_id].set_entry(cached.entry, cached.codeptr);
+                #[cfg(feature = "perf")]
+                self.store[func_id].set_wrapper_info(cached.info);
+                return;
+            }
             #[cfg(feature = "perf")]
             let pair = codegen.get_address_pair();
             let entry = codegen.gen_wrapper(self, func_id);
             let codeptr = codegen.jit.get_label_address(&entry);
+            #[cfg(feature = "perf")]
+            let info = codegen.get_wrapper_info(pair);
+            if let Some(address) = native {
+                codegen.record_native_wrapper(
+                    address,
+                    NativeWrapper {
+                        entry: entry.clone(),
+                        codeptr,
+                        #[cfg(feature = "perf")]
+                        info,
+                    },
+                );
+            }
             self.store[func_id].set_entry(entry, codeptr);
             #[cfg(feature = "perf")]
-            {
-                let info = codegen.get_wrapper_info(pair);
-                self.store[func_id].set_wrapper_info(info);
-            }
+            self.store[func_id].set_wrapper_info(info);
         });
     }
 
@@ -2127,6 +2155,46 @@ impl Globals {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    ///
+    /// The address a native builtin's wrapper is entered at, with the
+    /// kind checked: only a `Builtin` is ever shared, so a method that
+    /// quietly became an `ISeq` would make the test below vacuous.
+    ///
+    fn builtin_entry(globals: &super::Globals, class_id: super::ClassId, name: &str) -> u64 {
+        let name = crate::IdentId::get_id(name);
+        let fid = globals
+            .store
+            .check_method_for_class(class_id, name)
+            .unwrap()
+            .func_id()
+            .unwrap();
+        assert!(
+            matches!(globals.store[fid].kind, super::FuncKind::Builtin { .. }),
+            "{name:?} is no longer a native builtin"
+        );
+        globals.store[fid].data_ref().codeptr().unwrap().as_ptr() as u64
+    }
+
+    ///
+    /// `CODEGEN` is a thread-local that outlives any single interpreter
+    /// and its JIT memory is never freed, so a second `Globals` on the
+    /// thread reuses the wrappers the first emitted rather than laying
+    /// down its own copy of all ~1800 of them.
+    ///
+    #[test]
+    fn a_builtin_wrapper_is_emitted_once_per_thread() {
+        let methods = [
+            (crate::globals::STRING_CLASS, "ord"),
+            (crate::globals::ARRAY_CLASS, "flatten"),
+            (crate::globals::HASH_CLASS, "store"),
+        ];
+        let entries =
+            |globals: &super::Globals| methods.map(|(class_id, name)| builtin_entry(globals, class_id, name));
+        let first = entries(&super::Globals::new_test());
+        let second = entries(&super::Globals::new_test());
+        assert_eq!(first, second);
+    }
 
     #[test]
     fn ruby_constants() {
