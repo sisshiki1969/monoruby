@@ -332,6 +332,14 @@ pub struct Executor {
     /// immediately after, on every arch and in both tiers) has it, so
     /// the location is recorded there.
     pending_const_loc: Option<(ClassId, IdentId)>,
+    /// Set for the single `require` an autoload trigger dispatches, and
+    /// taken by that `require` on entry. It tells the two kinds of load
+    /// of the same file apart: a *direct* `require` consumes every
+    /// autoload registered for it, while an autoload-triggered one
+    /// leaves the other constants' registrations alone — `autoload?`
+    /// keeps answering the path for them and a later reference loads
+    /// the file again. See `Executor::require`.
+    autoload_require: bool,
     /// Stack of definition sites (source, `Loc`) for the
     /// `method_added` / `singleton_method_added` / `const_added` hooks
     /// currently running.
@@ -478,6 +486,7 @@ impl std::default::Default for Executor {
             adapter_blocks: Vec::new(),
             break_barriers: Vec::new(),
             pending_const_loc: None,
+            autoload_require: false,
             hook_sites: Vec::new(),
             temp_stack: vec![],
             method_missing_style: MethodMissingStyle::Plain,
@@ -1259,6 +1268,9 @@ impl Executor {
         file_name: &std::path::Path,
         is_relative: bool,
     ) -> Result<bool> {
+        // Consumed here, not at the dispatch site: the file's own
+        // `require`s run after this point and are direct ones.
+        let from_autoload = std::mem::take(&mut self.autoload_require);
         let (file_body, canonicalized_path) = loop {
             match globals.require_lib(self, file_name, is_relative)? {
                 crate::globals::RequireLoad::Load(body, path) => break (body, path),
@@ -1340,13 +1352,24 @@ impl Executor {
             // entry is dropped so subsequent references raise
             // `NameError` rather than re-entering the (now already
             // loaded) file.
-            let matching = globals
-                .store
-                .find_autoload_entries_for_paths(&[canonicalized_path.clone()]);
-            for (class_id, name) in &matching {
+            // Only a *direct* require consumes them. The require an
+            // autoload dispatches is about its own constant, which the
+            // trigger in `Executor::get_constant` brackets itself;
+            // CRuby leaves every other constant registered for the same
+            // file exactly as it was.
+            let matching = if from_autoload {
+                Vec::new()
+            } else {
                 globals
                     .store
-                    .set_autoload_state(*class_id, *name, AutoloadState::Loading);
+                    .find_autoload_entries_for_paths(&[canonicalized_path.clone()])
+            };
+            for (class_id, name) in &matching {
+                globals.store.set_autoload_state(
+                    *class_id,
+                    *name,
+                    AutoloadState::Loading { owner: loader },
+                );
             }
             let res = self.load_impl(globals, file_body, &canonicalized_path, None);
             // The lock only needs to cover the body: waiters woken from
@@ -1355,7 +1378,15 @@ impl Executor {
             globals.loading_features.remove(&canonicalized_path);
             match res {
                 Ok(()) => {
-                    // require body finished. Any `matching` slot still
+                    // require body finished. Hand over whatever the
+                    // file assigned: while it ran, those assignments
+                    // were this thread's alone (see
+                    // `Store::set_constant`), so publishing them is
+                    // what makes them everyone's.
+                    for (class_id, name) in &matching {
+                        globals.store.publish_autoload(*class_id, *name);
+                    }
+                    // Any `matching` slot still
                     // sitting in `Autoload(Loading)` means the file
                     // did not define that constant. Mark each as
                     // `Consumed` so `const_defined?`/`autoload?` /
@@ -1385,6 +1416,7 @@ impl Executor {
                     // (per `does not remove the constant from
                     // Module#constants if load raises ...` specs).
                     for (class_id, name) in &matching {
+                        globals.store.discard_autoload_value(*class_id, *name);
                         globals
                             .store
                             .set_autoload_state(*class_id, *name, AutoloadState::Idle);

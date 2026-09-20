@@ -17,6 +17,41 @@ impl Executor {
         Ok(class.as_val())
     }
 
+    /// Wait until no *other* thread is part-way through this
+    /// constant's autoload.
+    ///
+    /// CRuby blocks a reader for the duration of another thread's load
+    /// and then hands it the result, rather than letting it either
+    /// raise or start a second load of the same file. Waiting is the
+    /// sleep-and-retry `Executor::require`'s per-feature load lock
+    /// uses; a loader that died without unwinding leaves a marker no
+    /// live thread owns, which we clear and take over.
+    fn wait_for_foreign_autoload(
+        &mut self,
+        globals: &mut Globals,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> Result<()> {
+        loop {
+            let Some(owner) = globals
+                .get_constant(class_id, name)
+                .and_then(|state| state.autoload_entry())
+                .and_then(|entry| entry.loading_owner())
+                .filter(|&owner| owner != crate::scheduler::current_thread_id())
+            else {
+                return Ok(());
+            };
+            if !crate::scheduler::thread_alive_by_id(owner) {
+                globals.store.discard_autoload_value(class_id, name);
+                globals
+                    .store
+                    .set_autoload_state(class_id, name, AutoloadState::Idle);
+                return Ok(());
+            }
+            crate::scheduler::sleep(self, globals, Some(std::time::Duration::from_millis(1)))?;
+        }
+    }
+
     ///
     /// Try to get a value of the constant `name` of the class `class_id`.
     ///
@@ -28,6 +63,9 @@ impl Executor {
         class_id: ClassId,
         name: IdentId,
     ) -> Result<Option<Value>> {
+        // A load another thread is running has to finish before we can
+        // say anything about this constant.
+        self.wait_for_foreign_autoload(globals, class_id, name)?;
         let feature = match globals.get_constant(class_id, name) {
             None => return Ok(None),
             Some(state) => match &state.kind {
@@ -50,28 +88,46 @@ impl Executor {
                 }
                 ConstStateKind::Autoload(entry) => match entry.state {
                     // Same-thread re-entry while the autoload's own
-                    // require is in flight: behave as "not yet
-                    // defined" without re-triggering, matching CRuby's
-                    // recursion guard. The caller will surface
-                    // NameError or const_missing.
-                    AutoloadState::Loading => return Ok(None),
-                    // The autoload was already consumed by a direct
-                    // `require` that did not define the constant.
-                    // CRuby reports the slot as missing for the
-                    // purposes of value lookup; the name remains in
-                    // `Module#constants(false)` only.
-                    AutoloadState::Consumed => return Ok(None),
-                    AutoloadState::Idle => entry.feature.clone(),
+                    // require is in flight. If the file has already
+                    // assigned the constant, this thread — and only
+                    // this thread — can see it; otherwise behave as
+                    // "not yet defined" without re-triggering, matching
+                    // CRuby's recursion guard. The caller will surface
+                    // NameError or const_missing. (A load running on
+                    // *another* thread was waited out above, so this
+                    // arm is always our own.)
+                    AutoloadState::Loading { .. } => return Ok(entry.value),
+                    // A direct `require` of the file already ran it
+                    // without defining this constant. The predicates
+                    // report the slot as missing (the name remains in
+                    // `Module#constants(false)` only), but a *value*
+                    // read still goes through `require`: while the
+                    // feature stays loaded that is a no-op and the read
+                    // raises NameError, and once it is dropped from
+                    // `$LOADED_FEATURES` the file runs again and may
+                    // define the constant after all.
+                    AutoloadState::Consumed | AutoloadState::Idle => entry.feature.clone(),
                 },
             },
         };
 
-        // Mark the slot Loading for the duration of the require so a
-        // recursive reference from inside the file we're about to
-        // load is rejected by the branch above.
+        // A slot that was already `Consumed` goes back to `Consumed` if
+        // this load does not define it either — unlike a fresh (`Idle`)
+        // registration, which is dropped so later references stop
+        // re-entering `require` at all.
+        let was_consumed = globals
+            .get_constant(class_id, name)
+            .and_then(|state| state.autoload_entry())
+            .is_some_and(|entry| entry.state == AutoloadState::Consumed);
+        // Mark the slot Loading for the duration of the require, naming
+        // this thread: a recursive reference from inside the file we're
+        // about to load is rejected by the branch above, and one from
+        // any other thread waits for us in
+        // `wait_for_foreign_autoload`.
+        let owner = crate::scheduler::current_thread(self).id();
         globals
             .store
-            .set_autoload_state(class_id, name, AutoloadState::Loading);
+            .set_autoload_state(class_id, name, AutoloadState::Loading { owner });
 
         let _level = self.inc_require_level();
 
@@ -84,6 +140,9 @@ impl Executor {
         let res = {
             let main = globals.main_object;
             let feature_val = Value::string_from_str(&feature.to_string_lossy());
+            // Tell the `require` we are about to dispatch that it is an
+            // autoload's own load, not a direct one.
+            self.autoload_require = true;
             self.invoke_method_inner(
                 globals,
                 IdentId::get_id("require"),
@@ -98,24 +157,48 @@ impl Executor {
         eprintln!("{} < Autoload:{:?}", "  ".repeat(_level), name);
 
         self.dec_require_level();
+        // Normally `Executor::require` has taken it; clear it here too,
+        // in case a redefined `require` returned or raised without ever
+        // reaching one.
+        self.autoload_require = false;
 
-        if let Err(e) = res {
-            // require failed (LoadError, syntax error, …). Revert
-            // the slot to Idle so a future reference may retry,
-            // matching CRuby's behaviour of leaving the autoload
-            // registration intact across a failed load.
-            globals
-                .store
-                .set_autoload_state(class_id, name, AutoloadState::Idle);
-            return Err(e);
-        }
+        // `Kernel#require` answers whether it *ran* the file, or found
+        // the feature already loaded and did nothing. A slot the load
+        // leaves undefined is retired either way, but only a file that
+        // really ran retires it for good — see below.
+        let loaded = match res {
+            Err(e) => {
+                // require failed (LoadError, syntax error, …). Revert
+                // the slot to what it was so a future reference may
+                // retry, matching CRuby's behaviour of leaving the
+                // autoload registration intact across a failed load,
+                // and throw away whatever the half-run file assigned.
+                globals.store.discard_autoload_value(class_id, name);
+                globals.store.set_autoload_state(
+                    class_id,
+                    name,
+                    if was_consumed {
+                        AutoloadState::Consumed
+                    } else {
+                        AutoloadState::Idle
+                    },
+                );
+                return Err(e);
+            }
+            Ok(v) => v.as_bool(),
+        };
 
         // require returned successfully. Either the file defined the
-        // constant (slot is now Loaded — typically via `set_constant`
-        // or a `class`/`module` keyword) or it didn't (slot is still
-        // Autoload + Loading). The "still Autoload" case means CRuby
-        // would surface NameError; drop the entry so subsequent
-        // references see "missing" rather than re-entering require.
+        // constant — the assignment is sitting in the autoload entry,
+        // this thread's alone until now — or it didn't. Publishing it
+        // here is what makes it everyone's, and it is why a waiting
+        // thread sees a whole constant rather than a half-built one.
+        globals.store.publish_autoload(class_id, name);
+
+        // A slot still registered as an autoload means the file never
+        // defined the constant. CRuby surfaces NameError; drop the
+        // entry so subsequent references see "missing" rather than
+        // re-entering require.
         match globals.get_constant(class_id, name) {
             None => Ok(None),
             Some(state) => match &state.kind {
@@ -124,6 +207,22 @@ impl Executor {
                 // post-`require` re-read of the slot the load was
                 // triggered for).
                 ConstStateKind::LazyToplevelBinding => Ok(None),
+                ConstStateKind::Autoload(_) if was_consumed && !loaded => {
+                    // The slot was already retired by an earlier direct
+                    // `require`, and this reference found the feature
+                    // still loaded, so nothing ran that could have
+                    // defined the constant. Leave it retired rather
+                    // than dropped: `Module#constants(false)` keeps
+                    // listing the name, and once the feature leaves
+                    // `$LOADED_FEATURES` a later reference runs the
+                    // file again. (That run is the `loaded` case, which
+                    // falls through to the arm below and drops the
+                    // entry — the file has now had its chance.)
+                    globals
+                        .store
+                        .set_autoload_state(class_id, name, AutoloadState::Consumed);
+                    Ok(None)
+                }
                 ConstStateKind::Autoload(_) => {
                     // CRuby's verbose mode (`$VERBOSE = true`) emits
                     // `warning: Expected <file> to define
@@ -449,10 +548,10 @@ impl Executor {
 
     /// Non-triggering probe of a constant directly on `class_id` —
     /// returns true if a value exists or an autoload is registered
-    /// (Idle), false for missing entries and for entries currently
-    /// `Loading` on this thread (same-thread recursion sees the slot
-    /// as not-yet-defined). Mirrors CRuby's `rb_const_defined_at`
-    /// with `autoload_load = FALSE`.
+    /// (Idle, or `Loading` on another thread), false for missing
+    /// entries and for an autoload this thread is part-way through that
+    /// has not assigned the constant yet. Mirrors CRuby's
+    /// `rb_const_defined_at` with `autoload_load = FALSE`.
     pub(crate) fn probe_constant_at(
         globals: &Globals,
         class_id: ClassId,
@@ -467,7 +566,18 @@ impl Executor {
                 ConstStateKind::Loaded(_) | ConstStateKind::LazyToplevelBinding => true,
                 ConstStateKind::Autoload(entry) => match entry.state {
                     AutoloadState::Idle => true,
-                    AutoloadState::Loading => false,
+                    // Only the loading thread sees through its own
+                    // in-flight autoload — as not-yet-defined until the
+                    // file assigns the constant, and as defined after.
+                    // To every other thread the slot still reads as the
+                    // registered autoload it was before the load began.
+                    AutoloadState::Loading { .. } => {
+                        if entry.loading_here() {
+                            entry.value.is_some()
+                        } else {
+                            true
+                        }
+                    }
                     AutoloadState::Consumed => false,
                 },
             },

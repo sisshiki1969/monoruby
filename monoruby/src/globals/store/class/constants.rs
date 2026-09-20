@@ -57,15 +57,30 @@ pub(crate) enum ConstStateKind {
 pub(crate) struct AutoloadEntry {
     pub feature: std::path::PathBuf,
     pub state: AutoloadState,
+    /// What the loading thread has assigned to the constant so far,
+    /// held back from every other thread until the load finishes —
+    /// CRuby keeps it in `autoload_data` for the same reason. Until
+    /// publication the slot still *reads* as a registered autoload
+    /// everywhere else, so a concurrent `autoload?` keeps answering
+    /// the path and `const_source_location` the `autoload` line, while
+    /// the loading thread already sees the real constant.
+    pub value: Option<Value>,
+    /// The `[file, line]` of that assignment, published with it. The
+    /// `autoload` call site stays in `constant_locations` meanwhile,
+    /// which is what the other threads go on reading.
+    pub location: Option<(String, u32)>,
 }
 
 /// Load state for an autoload-registered constant.
 ///
 /// `Idle` is the initial state right after `Module#autoload`. The next
 /// triggering reference flips to `Loading` for the duration of the
-/// `require`. monoruby is single-threaded so the flag is just a
-/// recursion guard — a same-(only)-thread re-reference must not
-/// re-enter `require`. After the require returns successfully but the
+/// `require`, recording which thread is running it. For that thread
+/// the flag is a recursion guard — a re-reference must not re-enter
+/// `require` — and for every other thread it is a lock: a triggering
+/// read waits for the loader instead of starting a second load, and a
+/// non-triggering one (`defined?`, `autoload?`, …) goes on seeing the
+/// registered autoload. After the require returns successfully but the
 /// constant is *still* registered as autoload (i.e. the file did not
 /// define it), the entry is removed entirely so that subsequent
 /// references raise `NameError` rather than retrying. If `require`
@@ -79,8 +94,21 @@ pub(crate) struct AutoloadEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutoloadState {
     Idle,
-    Loading,
+    /// A load is in flight, run by the thread whose object id is
+    /// `owner` (`scheduler::current_thread_id`).
+    Loading {
+        owner: u64,
+    },
     Consumed,
+}
+
+impl AutoloadState {
+    pub(crate) fn loading_owner(self) -> Option<u64> {
+        match self {
+            AutoloadState::Loading { owner } => Some(owner),
+            AutoloadState::Idle | AutoloadState::Consumed => None,
+        }
+    }
 }
 
 impl AutoloadEntry {
@@ -88,7 +116,22 @@ impl AutoloadEntry {
         Self {
             feature,
             state: AutoloadState::Idle,
+            value: None,
+            location: None,
         }
+    }
+
+    /// The thread running this entry's load, if one is in flight.
+    pub(crate) fn loading_owner(&self) -> Option<u64> {
+        self.state.loading_owner()
+    }
+
+    /// Is the calling thread the one running this entry's load?
+    /// Everything about an in-flight autoload is per-thread, so this
+    /// is the question every reader of the slot has to ask.
+    pub(crate) fn loading_here(&self) -> bool {
+        self.loading_owner()
+            .is_some_and(|owner| owner == crate::scheduler::current_thread_id())
     }
 }
 
@@ -131,6 +174,26 @@ impl ConstState {
 
     pub(crate) fn is_autoload(&self) -> bool {
         matches!(self.kind, ConstStateKind::Autoload(_))
+    }
+
+    pub(crate) fn autoload_entry(&self) -> Option<&AutoloadEntry> {
+        match &self.kind {
+            ConstStateKind::Autoload(entry) => Some(entry),
+            ConstStateKind::Loaded(_) | ConstStateKind::LazyToplevelBinding => None,
+        }
+    }
+
+    /// Every `Value` this slot keeps alive. Unlike
+    /// [`loaded_value`](ConstState::loaded_value) this includes the one
+    /// an in-flight autoload is holding back from other threads, which
+    /// is reachable from nowhere else — the collector has to see it or
+    /// the constant is freed out from under the loading thread.
+    pub(crate) fn marked_value(&self) -> Option<Value> {
+        match &self.kind {
+            ConstStateKind::Loaded(v) => Some(*v),
+            ConstStateKind::Autoload(entry) => entry.value,
+            ConstStateKind::LazyToplevelBinding => None,
+        }
     }
 
     pub(crate) fn is_private(&self) -> bool {
@@ -220,6 +283,39 @@ impl ClassInfoTable {
                     .constants
                     .insert(name, ConstState::autoload(file_name.into()));
             }
+        }
+    }
+
+    /// Finish an in-flight autoload: if the loading thread assigned the
+    /// constant, make that assignment everyone's. Returns the published
+    /// value, if any. A slot the load left untouched is unchanged — the
+    /// caller decides whether that means "drop the entry" (the file
+    /// never defined it) or "back to Idle" (the require raised).
+    pub(crate) fn publish_autoload(&mut self, class_id: ClassId, name: IdentId) -> Option<Value> {
+        let slot = self[class_id].constants.get_mut(&name)?;
+        let ConstStateKind::Autoload(entry) = &mut slot.kind else {
+            return None;
+        };
+        let value = entry.value.take()?;
+        let location = entry.location.take();
+        slot.kind = ConstStateKind::Loaded(value);
+        if let Some((file, line)) = location {
+            self[class_id].record_constant_location(name, file, line);
+        }
+        self[class_id].mark_dirty();
+        Some(value)
+    }
+
+    /// Throw away what a failed load assigned. CRuby rolls the autoload
+    /// back wholesale when the require raises, so a retry starts from
+    /// the registration again rather than from a half-loaded file's
+    /// leftovers.
+    pub(crate) fn discard_autoload_value(&mut self, class_id: ClassId, name: IdentId) {
+        if let Some(slot) = self[class_id].constants.get_mut(&name)
+            && let ConstStateKind::Autoload(entry) = &mut slot.kind
+        {
+            entry.value = None;
+            entry.location = None;
         }
     }
 
@@ -408,11 +504,31 @@ impl ClassInfoTable {
         // class-binding) so that the message goes through Ruby's
         // `$stderr.write` and uses the proper qualified path. We
         // intentionally do *not* re-emit here.
-        let _prev = self[class_id].constants.insert(name, new_state);
+        // While *this* thread's autoload of `name` is in flight the
+        // assignment is the loading thread's alone: it goes into the
+        // entry rather than over the slot, so every other thread keeps
+        // seeing the registered autoload until the load finishes (and
+        // waits for it, rather than reading a half-built value).
+        // CRuby's `rb_const_set` routes the same case into
+        // `autoload_data`.
+        let stashed = match self[class_id].constants.get_mut(&name).map(|s| &mut s.kind) {
+            Some(ConstStateKind::Autoload(entry)) if entry.loading_here() => {
+                entry.value = Some(val);
+                true
+            }
+            _ => false,
+        };
+        if !stashed {
+            let _prev = self[class_id].constants.insert(name, new_state);
+        }
         // A freshly stored constant is a young `Value` until it has survived
         // enough collections to be promoted; until then a minor GC must scan
         // this class. See `ClassInfo::dirty`.
         self[class_id].mark_dirty();
+        // Auto-naming runs either way: an anonymous class assigned
+        // inside an autoloaded file is named there and then, exactly as
+        // it would be outside one — only *which thread can read the
+        // constant* is deferred, not the class's identity.
         // Auto-naming: only for *non-singleton* anonymous classes/modules.
         // CRuby never names a singleton class from constant assignment
         // (`class << o; CONST = self; end` ⇒ `o.singleton_class.name == nil`).
