@@ -731,14 +731,14 @@ pub(super) fn autoload_on(
     // nor stores the constant name.
     target.ensure_not_frozen(&globals.store)?;
     let class_id = target.as_class_id();
-    // CRuby treats `autoload :Foo, path` as a no-op when `path` resolves
-    // to a file that is already loaded (`$LOADED_FEATURES`) or is the
-    // current `require`'s in-flight file. Mirrors `rb_autoload_str`'s
-    // `rb_feature_p` short-circuit: the constant stays "not autoloaded"
-    // and `autoload?` returns `nil`.
-    if autoload_feature_already_loaded(vm, globals, &feature) {
-        return Ok(Value::nil());
-    }
+    // `autoload :Foo, path` naming a file that is already loaded (or is
+    // the current `require`'s in-flight file) still *registers*: CRuby
+    // lists the constant in `Module#constants`, fires `const_added`,
+    // and brings the entry back to life if the feature ever leaves
+    // `$LOADED_FEATURES`. What it does not do is leave anything to
+    // load, so the entry is born retired — `autoload?` answers nil and
+    // `const_defined?` false for as long as the file stays loaded.
+    let already_loaded = autoload_feature_already_loaded(vm, globals, &feature);
     let was_autoload = match globals.store.get_constant(class_id, const_name) {
         None => true,
         Some(state) => state.is_autoload(),
@@ -746,6 +746,11 @@ pub(super) fn autoload_on(
     globals
         .store
         .set_constant_autoload(class_id, const_name, feature);
+    if already_loaded {
+        globals
+            .store
+            .set_autoload_state(class_id, const_name, AutoloadState::Consumed);
+    }
     // Record the autoload call-site as the constant's source
     // location so `Module#const_source_location(:Foo)` returns the
     // `autoload` line until the load actually happens — once the
@@ -810,15 +815,25 @@ pub(super) fn autoload_query_on(
         if let Some(state) = globals.store.get_constant(module.id(), name) {
             match &state.kind {
                 ConstStateKind::Autoload(entry) => match entry.state {
-                    // CRuby 3.0+: while the autoload's own require is
-                    // in flight, `autoload?` returns nil (the load is
-                    // already in progress, so there's nothing left to
-                    // schedule).
-                    AutoloadState::Loading => return Ok(Value::nil()),
-                    // Direct `require` already ran the file without
-                    // defining the constant — autoload is consumed.
-                    AutoloadState::Consumed => return Ok(Value::nil()),
-                    AutoloadState::Idle => {
+                    // CRuby 3.0+: to the thread running the load,
+                    // `autoload?` is nil — that thread is past the point
+                    // where an autoload is pending, there being nothing
+                    // left for it to schedule. Every other thread still
+                    // has one pending and gets the path, exactly as it
+                    // would before the load started.
+                    AutoloadState::Loading { .. } if entry.loading_here() => {
+                        return Ok(Value::nil());
+                    }
+                    // The entry's file has already run while it was
+                    // registered, so there is nothing left to
+                    // schedule — unless the feature has since left
+                    // `$LOADED_FEATURES`, which makes it live again.
+                    AutoloadState::Consumed if !autoload_pending(globals, &entry.feature) => {
+                        return Ok(Value::nil());
+                    }
+                    AutoloadState::Idle
+                    | AutoloadState::Consumed
+                    | AutoloadState::Loading { .. } => {
                         return Ok(Value::string(
                             entry.feature.to_string_lossy().into_owned(),
                         ));
@@ -848,6 +863,25 @@ pub(super) fn autoload_query_on(
 /// in-flight `require`. This is what CRuby's `rb_autoload_str` checks
 /// before installing an autoload entry — if the file is already
 /// loaded/loading, the autoload registration is a no-op.
+/// Is a *retired* autoload entry live again?
+///
+/// Retirement is not permanent: it says "this entry's file has already
+/// run while the entry was registered", and CRuby re-checks that
+/// against `$LOADED_FEATURES` on every read (`check_autoload_required`).
+/// Drop the feature and the entry has something to load once more, so
+/// `autoload?` answers the path again and `const_defined?` true.
+///
+/// Whether the file has run is what separates this from a plain `Idle`
+/// entry, which stays pending even when the feature is loaded: a file
+/// loaded by *another* constant's autoload never gave this one its
+/// chance. See `Executor::require`, which retires only on a direct
+/// `require`.
+pub(crate) fn autoload_pending(globals: &Globals, feature: &std::path::Path) -> bool {
+    !autoload_resolution_candidates(globals, &feature.to_string_lossy())
+        .iter()
+        .any(|path| globals.is_feature_loaded(path))
+}
+
 fn autoload_feature_already_loaded(vm: &Executor, globals: &Globals, feature: &str) -> bool {
     let candidates = autoload_resolution_candidates(globals, feature);
     for path in &candidates {

@@ -35,6 +35,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(FIBER_CLASS, "scheduler", scheduler_get, 0);
     globals.define_builtin_class_func(FIBER_CLASS, "current_scheduler", current_scheduler, 0);
     globals.define_builtin_class_func(FIBER_CLASS, "set_scheduler", set_scheduler, 1);
+    globals.define_builtin_class_func_with_kw(
+        FIBER_CLASS,
+        "schedule",
+        schedule,
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
     globals.define_builtin_class_func(FIBER_CLASS, "[]", class_storage_get, 1);
     globals.define_builtin_class_func(FIBER_CLASS, "[]=", class_storage_set, 2);
     globals.define_builtin_func_rest(FIBER_CLASS, "resume", resume);
@@ -586,6 +596,42 @@ fn set_scheduler(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
     }
     globals.fiber_scheduler = Some(scheduler);
     Ok(scheduler)
+}
+
+///
+/// ### Fiber.schedule
+///
+/// - schedule(*args) { ... } -> Fiber
+///
+/// Hands the arguments and the block to the scheduler's `#fiber` hook,
+/// which is what decides how — and on which fiber — the block runs, and
+/// answers whatever that hook does. There is no default: without a
+/// scheduler there is nothing to schedule on, and CRuby raises rather
+/// than falling back to running the block inline.
+///
+/// The scheduler is the *thread's* (`Fiber.scheduler`), not the current
+/// fiber's (`Fiber.current_scheduler`) — so this works from a blocking
+/// fiber as well, where the latter answers nil.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Fiber/s/schedule.html]
+#[monoruby_builtin]
+fn schedule(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let Some(scheduler) = globals.fiber_scheduler else {
+        return Err(MonorubyErr::runtimeerr("No scheduler is available!"));
+    };
+    let args = lfp.arg(0).as_array().to_vec();
+    let kw = lfp
+        .try_arg(1)
+        .filter(|v| v.try_hash_ty().is_some_and(|h| h.len() != 0))
+        .map(Hashmap::new);
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("fiber"),
+        scheduler,
+        &args,
+        lfp.block(),
+        kw,
+    )
 }
 
 ///
@@ -1346,6 +1392,47 @@ mod tests {
             end
             fiber.resume
             "##,
+        );
+    }
+
+    /// `Fiber.schedule` hands everything to the scheduler's `#fiber`
+    /// hook, and raises when there is none.
+    #[test]
+    fn fiber_schedule() {
+        run_test_error("Fiber.scheduler.nil? ? Fiber.schedule { } : nil");
+        run_test_with_prelude(
+            r#"
+            s = Sched.new
+            begin
+              Fiber.set_scheduler(s)
+              scheduled = nil
+              fiber = Fiber.schedule(1, :two) { scheduled = Fiber.current; :body }
+              # the hook was called, once, on the calling fiber, with the
+              # arguments passed on, and its answer is what came back
+              [s.log, fiber.equal?(scheduled), fiber.class.to_s,
+               # …and the scheduler is the thread's, so a *blocking*
+               # fiber can schedule too, where `current_scheduler` is nil
+               Fiber.new(blocking: true) {
+                 [Fiber.current_scheduler.nil?, Fiber.schedule { }.class.to_s]
+               }.resume]
+            ensure
+              Fiber.set_scheduler(nil)
+            end
+            "#,
+            r#"
+            class Sched
+              attr_reader :log
+              def initialize = @log = []
+              def block(*) = Fiber.yield
+              def unblock(*) = nil
+              def kernel_sleep(*) = nil
+              def io_wait(*) = nil
+              def fiber(*args, &block)
+                @log << args
+                Fiber.new(blocking: false, &block).tap(&:resume)
+              end
+            end
+            "#,
         );
     }
 

@@ -52,7 +52,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(THREAD_CLASS, "kill", thread_class_kill, 1);
     globals.define_builtin_class_func(THREAD_CLASS, "exit", thread_class_exit, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "handle_interrupt", handle_interrupt, 1);
-    globals.define_builtin_class_func(THREAD_CLASS, "__uninterruptible", thread_uninterruptible, 0);
+    globals.define_builtin_class_func_with(
+        THREAD_CLASS,
+        "__uninterruptible",
+        thread_uninterruptible,
+        0,
+        1,
+        false,
+    );
     globals.define_builtin_class_func_with(
         THREAD_CLASS,
         "pending_interrupt?",
@@ -137,7 +144,7 @@ fn handle_interrupt(
 }
 
 ///
-/// ### Thread.__uninterruptible { ... }
+/// ### Thread.__uninterruptible(at_blocking = false) { ... }
 ///
 /// Internal: run the block with ALL asynchronous interrupts — including
 /// kill, which `handle_interrupt` cannot mask — deferred. Nothing is
@@ -150,6 +157,16 @@ fn handle_interrupt(
 /// (the `rb_mutex_sleep` re-acquire): `Thread::Mutex#sleep` wraps its
 /// ensure-side `lock` in this so a `ConditionVariable#wait`er killed
 /// after being signaled still re-acquires the mutex before dying.
+///
+/// `at_blocking` describes the *enclosing* operation, because that is
+/// what the exit delivery point belongs to: the section is an
+/// implementation detail of whatever Ruby-level call contains it, and a
+/// `handle_interrupt(... => :on_blocking)` interrupt must fire there
+/// only if that call is itself a blocking one. `Mutex#sleep`'s ensure
+/// passes `true` (the sleep blocked); `Mutex#synchronize`'s ensure
+/// leaves it `false`, so a non-blocking `Queue#pop(true)` — which is a
+/// `synchronize` that raises `ThreadError` without ever parking — does
+/// not become an `:on_blocking` delivery point.
 #[monoruby_builtin]
 fn thread_uninterruptible(
     vm: &mut Executor,
@@ -158,11 +175,12 @@ fn thread_uninterruptible(
     _: BytecodePtr,
 ) -> Result<Value> {
     let bh = lfp.expect_block()?;
+    let at_blocking = lfp.try_arg(0).map(|v| v.as_bool()).unwrap_or(false);
     let cur = scheduler::current_thread(vm);
     scheduler::set_uninterruptible(cur, true);
     let res = vm.invoke_block_once(globals, bh, &[]);
     scheduler::set_uninterruptible(cur, false);
-    scheduler::deliver_pending_now(vm, globals, cur, true)?;
+    scheduler::deliver_pending_now(vm, globals, cur, at_blocking)?;
     res
 }
 
@@ -2223,6 +2241,99 @@ mod tests {
             t2 = Thread.new { "x" }.join
             t2.name = "平仮名"
             r << t2.to_s.include?("@平仮名") << t2.to_s.encoding.to_s
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn mutex_synchronize_release_is_uninterruptible() {
+        // A `Mutex#synchronize` unwound by an asynchronous raise must
+        // still release the mutex — including when the *next* raise in
+        // the stream lands inside the ensure that does the releasing.
+        // It used to abandon the mutex there, and the same thread's
+        // next `lock` on it then reported "deadlock; recursive locking"
+        // against itself. Shaped after
+        // `core/mutex/lock_spec.rb`'s "does not raise deadlock if a
+        // fiber's attempt to lock was interrupted".
+        run_test_once(
+            r#"
+            lock = Mutex.new
+            errs = []
+            t2 = nil
+            t1 = Thread.new do
+              loop do
+                sleep 0.001
+                t2.raise if t2
+              end
+            end
+            t2 = Thread.new do
+              10.times do
+                Fiber.new do
+                  begin
+                    loop { lock.synchronize {} }
+                  rescue RuntimeError
+                  rescue ThreadError => e
+                    errs << e.message
+                  end
+                end.resume
+                Fiber.new do
+                  begin
+                    lock.synchronize {}
+                  rescue ThreadError => e
+                    errs << e.message
+                  end
+                end.resume
+              rescue RuntimeError
+                retry
+              end
+            end
+            t2.join
+            t1.kill
+            t1.join
+            errs
+            "#,
+        );
+    }
+
+    #[test]
+    fn on_blocking_interrupt_ignores_a_non_blocking_pop() {
+        // `Queue#pop(true)` on an empty queue is a `Mutex#synchronize`
+        // that raises `ThreadError` without ever parking, so it is not
+        // a blocking call and an interrupt masked `:on_blocking` must
+        // stay deferred across it — the release inside `synchronize`'s
+        // ensure runs uninterruptibly, but that is an implementation
+        // detail and not a delivery point of its own.
+        // (`core/thread/handle_interrupt_spec.rb`, the `:on_blocking`
+        // non-blocking half.)
+        run_test_once(
+            r#"
+            r = []
+            q = Queue.new
+            ready = Queue.new
+            t = Thread.new do
+              begin
+                Thread.handle_interrupt(RuntimeError => :on_blocking) do
+                  begin
+                    ready << true
+                    begin
+                      q.pop(true)
+                    rescue ThreadError
+                      Thread.pass
+                      retry
+                    end
+                  rescue RuntimeError
+                    r << :interrupted
+                  end
+                end
+              rescue RuntimeError
+                r << :deferred
+              end
+            end
+            ready.pop
+            t.raise RuntimeError, "interrupt"
+            q << true
+            t.join
             r
             "#,
         );

@@ -672,6 +672,7 @@
 23f3838afb92bd57e15d229dd0d1deb0	"method"	defined?(__ENCODING__.name)
 23fb14c94b631d93c9694feb48994552	[RuntimeError, true]	class BlockRaiser\n              def self.raise_in_thread(*args, &bl
 23fb7df204a374180f0628ebb762f0dd	[[:deprecated, :experimental, :performance, :strict_unused_block], false, true, false, false, true, true, nil, false, false, false, true]	res = []\n            res << Warning.categories\n            res << W
+240737b193db9e834d60d8dee6ce7386	[[[1, :two], []], true, "Fiber", [true, "Fiber"]]	class Sched\n              attr_reader :log\n              def initia
 2409ce9d3bc696017834648d7c8c2579	[2, [1, 2], 0, [0, 0, 0], 8, [8, 8], [1, 2], [[1, 2], [1, 2]], [[1, 2], [1, 2]], FrozenError, [0, 0]]	class M\n              def initialize; @a = 0; @b = 0; @c = 0; end\n 
 24196e0cebd247d987469fb63b77ec33	:OVERRIDDEN	class Complex; def *(o); :OVERRIDDEN; end; end; Complex(1,2) * Complex(3,4)
 24217724f3389fe2696e8a388ae98442	["nil", "-1", "1", "-1", "-128", "nil", "255", "1", "255", "128", "nil", "nil", "513", "-1", "-32640", "nil", "nil", "513", "65535", "32896", "nil", "nil", "513", "65535", "32896", "nil", "nil", "258", "65535", "32896", "nil", "nil", "67305985", "-1", "-2139062144", "nil", "nil", "67305985", "4294967295", "2155905152", "nil", "nil", "67305985", "-1", "-2139062144", "nil", "nil", "67305985", "4294967295", "2155905152", "nil", "nil", "67305985", "4294967295", "2155905152", "nil", "nil", "16909060", "4294967295", "2155905152", "nil", "nil", "nil", "-1", "-9187201950435737472", "nil", "nil", "nil", "18446744073709551615", "9259542123273814144", "nil", "nil", "nil", "-1", "-9187201950435737472", "nil", "nil", "nil", "18446744073709551615", "9259542123273814144", "nil", "nil", "1.539989614439558e-36", "NaN", "-1.1801040622505304e-38", "nil", "nil", "1.539989614439558e-36", "NaN", "-1.1801040622505304e-38", "nil", "nil", "1.539989614439558e-36", "NaN", "-1.1801040622505304e-38", "nil", "nil", "2.387939260590663e-38", "NaN", "-1.1801040622505304e-38", "nil", "nil", "nil", "NaN", "-2.937446524422997e-306", "nil", "nil", "nil", "NaN", "-2.937446524422997e-306", "nil", "nil", "nil", "NaN", "-2.937446524422997e-306", "nil", "nil", "nil", "NaN", "-2.937446524422997e-306"]	dirs = %w[c C s S v n i I l L V N q Q j J e f F g E d D G]\n        strs
@@ -1159,6 +1160,7 @@
 3f9bc283176b2ee563ab3a04dc4a637b	[[2], 0]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 3fb8c0c6f9028a8a1d17e01958b4d1f5	[0, true, 2, 0, true, 1, 0, 0, nil]	class Always\n          def ==(o) = true\n        end\n        class Only1
 3fcbc9935b035dee352be56a30398754	"world"	IO.popen("echo world") { |io| io.read.chomp }\n            
+3fdb77b75ad0ff9bc16456a833ba56a9	[:deferred]	r = []\n            q = Queue.new\n            ready = Queue.new\n    
 3fef9f42692341177896868638c71b46	[["v1", "v2"], [nil, nil, "new"]]	ENV["MONORUBY_ENV_TEST_MN1"] = "v1"\n            ENV["MONORUBY_ENV_T
 3ff02e23d910a4fb58eb4a1180f7d75c	"\\\\u{61}"	Regexp.new(/\\u{61}/).source
 3ff65387266e9d8a7c9c547287b2bcff	[true, true, true, [115, 101, 101, 100, 65, 0, 0, 0, 0, 0, 0, 248, 63, 0, 0, 0, 1], "ASCII-8BIT"]	buf = "seed".b\n        r1 = [65].pack("C", buffer: buf)\n        r2 = [1
@@ -1817,6 +1819,7 @@
 64304d338b2e1d9153798436746ba67c	[:plus, :lt, :bang, :aref, 3, true, false, 9]	class BopUser\n              def +(o); :plus; end\n              def 
 6453b5e2bc4a58561702b08638c14ead	["ab", 2, "ab", nil, "\\xFFc", "\\xFFc", 4, "c", 3, "d ef", "d", 1, "ef", "f", true, "ASCII-8BIT", "", nil, nil, "no implicit conversion of Integer into String", "no implicit conversion of Symbol into String"]	require "strscan"\n        r = []\n        b = StringScanner.new("ab\\xFFc
 646b6df81e3b78ea650391aa2912e6d4	["0.33333e1", "0.3333333333e1", "0.25e2"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
+646ff56571e25bce931e58b1751ddc61	[]	lock = Mutex.new\n            errs = []\n            t2 = nil\n       
 6472f36d1b5adcae44436dcbba0919c2	["-12-", "-  12-", "-0012-", "-c-", "-   c-", "-000c-", "-C-", "-   C-", "-000C-", "-1001-", "-  1001-", "-001001-", "   1257765464656546546546546546546546546", "111100100011110010100000000011000100111010100101010010010111110110101000100011001100110001011100101001111001011101110010", "12.57582", "0012.570", "00000013", "1.34", "1.3458", "1.345788", "       1.3e-123", "       1.3E-123", ". 4 r"]	__a = [];__a << ("-%d-" % 12);__a << ("-%4d-" % 12);__a << ("-%04d-" % 12);__a <
 64745fd3594011f602b1ae98a52ab4ae	["Array", true, ["prompt>"], ["prompt>"]]	require "expect"\n            res = []\n            r, w = IO.pipe\n  
 647ffbbf00a05ebdfe455831178357bd	[:nil, "in main"]	def inner\n          begin\n            $!.nil? ? :nil : $!.message\n     

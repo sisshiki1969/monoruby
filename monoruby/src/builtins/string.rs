@@ -727,9 +727,11 @@ fn casecmp_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let lhs_str = lhs_inner.check_utf8()?;
         let rhs_str = std::str::from_utf8(&rhs_bytes)
             .map_err(|_| MonorubyErr::argumenterr("invalid byte sequence in UTF-8".to_string()))?;
-        let lhs_lower = lhs_str.to_lowercase();
-        let rhs_lower = rhs_str.to_lowercase();
-        Ok(Value::bool(lhs_lower == rhs_lower))
+        // Full case folding, not lowercasing: `ß` and `ss` are the
+        // same string to `#casecmp?`, and only folding says so.
+        let lhs_folded = apply_case(lhs_str, CaseOp::Downcase, CaseMode::Fold);
+        let rhs_folded = apply_case(rhs_str, CaseOp::Downcase, CaseMode::Fold);
+        Ok(Value::bool(lhs_folded == rhs_folded))
     } else {
         // Binary: ASCII-only case-insensitive byte comparison.
         let eq = lhs_inner.len() == rhs_bytes.len()
@@ -7693,14 +7695,9 @@ fn downcase_char(c: char, mode: CaseMode) -> SmallCaseBuf {
             '\u{0130}' => SmallCaseBuf::one('i'),
             _ => SmallCaseBuf::from_iter(c.to_lowercase()),
         },
-        CaseMode::Fold => match c {
-            // The eszett's full case fold expands to `ss`. Rust's
-            // `char::to_lowercase` leaves it as-is, so handle it
-            // explicitly. CRuby applies the same Unicode default
-            // folding here for a small set of characters; `ß` is
-            // the one our spec battery hits.
-            '\u{00DF}' => SmallCaseBuf::two('s', 's'),
-            _ => SmallCaseBuf::from_iter(c.to_lowercase()),
+        CaseMode::Fold => match FULL_FOLD.binary_search_by_key(&c, |(from, _)| *from) {
+            Ok(i) => SmallCaseBuf::from_iter(FULL_FOLD[i].1.iter().copied()),
+            Err(_) => SmallCaseBuf::from_iter(c.to_lowercase()),
         },
         CaseMode::Full => SmallCaseBuf::from_iter(c.to_lowercase()),
     }
@@ -7775,6 +7772,320 @@ fn apply_case(s: &str, op: CaseOp, mode: CaseMode) -> String {
 /// transforms produce 1 char, a few (`ß` → `ss`, German full upcase
 /// of certain ligatures) produce 2 or 3. Avoids heap allocation in
 /// the hot loop.
+/// The characters whose Unicode *full case folding* is not their
+/// simple lowercase — the only place `String#downcase(:fold)` and
+/// `String#casecmp?` need more than `char::to_lowercase`.
+///
+/// Folding is a comparison key, not a rendering: it maps `ß` and `ﬅ` to
+/// the letters they stand for, both sigmas to the same one, and the
+/// precomposed Greek accents to their decompositions, so that two
+/// strings that differ only in case fold to the same text. These 297
+/// entries are every codepoint where that differs from lowercasing;
+/// everything else folds by lowercasing, and `full_fold_is_complete`
+/// pins the pair against CRuby over the whole codepoint space.
+///
+/// Sorted by codepoint, for the binary search above.
+#[rustfmt::skip]
+const FULL_FOLD: &[(char, &[char])] = &[
+    ('\u{00B5}', &['\u{03BC}']),
+    ('\u{00DF}', &['\u{0073}', '\u{0073}']),
+    ('\u{0149}', &['\u{02BC}', '\u{006E}']),
+    ('\u{017F}', &['\u{0073}']),
+    ('\u{01F0}', &['\u{006A}', '\u{030C}']),
+    ('\u{0345}', &['\u{03B9}']),
+    ('\u{0390}', &['\u{03B9}', '\u{0308}', '\u{0301}']),
+    ('\u{03B0}', &['\u{03C5}', '\u{0308}', '\u{0301}']),
+    ('\u{03C2}', &['\u{03C3}']),
+    ('\u{03D0}', &['\u{03B2}']),
+    ('\u{03D1}', &['\u{03B8}']),
+    ('\u{03D5}', &['\u{03C6}']),
+    ('\u{03D6}', &['\u{03C0}']),
+    ('\u{03F0}', &['\u{03BA}']),
+    ('\u{03F1}', &['\u{03C1}']),
+    ('\u{03F5}', &['\u{03B5}']),
+    ('\u{0587}', &['\u{0565}', '\u{0582}']),
+    ('\u{13A0}', &['\u{13A0}']),
+    ('\u{13A1}', &['\u{13A1}']),
+    ('\u{13A2}', &['\u{13A2}']),
+    ('\u{13A3}', &['\u{13A3}']),
+    ('\u{13A4}', &['\u{13A4}']),
+    ('\u{13A5}', &['\u{13A5}']),
+    ('\u{13A6}', &['\u{13A6}']),
+    ('\u{13A7}', &['\u{13A7}']),
+    ('\u{13A8}', &['\u{13A8}']),
+    ('\u{13A9}', &['\u{13A9}']),
+    ('\u{13AA}', &['\u{13AA}']),
+    ('\u{13AB}', &['\u{13AB}']),
+    ('\u{13AC}', &['\u{13AC}']),
+    ('\u{13AD}', &['\u{13AD}']),
+    ('\u{13AE}', &['\u{13AE}']),
+    ('\u{13AF}', &['\u{13AF}']),
+    ('\u{13B0}', &['\u{13B0}']),
+    ('\u{13B1}', &['\u{13B1}']),
+    ('\u{13B2}', &['\u{13B2}']),
+    ('\u{13B3}', &['\u{13B3}']),
+    ('\u{13B4}', &['\u{13B4}']),
+    ('\u{13B5}', &['\u{13B5}']),
+    ('\u{13B6}', &['\u{13B6}']),
+    ('\u{13B7}', &['\u{13B7}']),
+    ('\u{13B8}', &['\u{13B8}']),
+    ('\u{13B9}', &['\u{13B9}']),
+    ('\u{13BA}', &['\u{13BA}']),
+    ('\u{13BB}', &['\u{13BB}']),
+    ('\u{13BC}', &['\u{13BC}']),
+    ('\u{13BD}', &['\u{13BD}']),
+    ('\u{13BE}', &['\u{13BE}']),
+    ('\u{13BF}', &['\u{13BF}']),
+    ('\u{13C0}', &['\u{13C0}']),
+    ('\u{13C1}', &['\u{13C1}']),
+    ('\u{13C2}', &['\u{13C2}']),
+    ('\u{13C3}', &['\u{13C3}']),
+    ('\u{13C4}', &['\u{13C4}']),
+    ('\u{13C5}', &['\u{13C5}']),
+    ('\u{13C6}', &['\u{13C6}']),
+    ('\u{13C7}', &['\u{13C7}']),
+    ('\u{13C8}', &['\u{13C8}']),
+    ('\u{13C9}', &['\u{13C9}']),
+    ('\u{13CA}', &['\u{13CA}']),
+    ('\u{13CB}', &['\u{13CB}']),
+    ('\u{13CC}', &['\u{13CC}']),
+    ('\u{13CD}', &['\u{13CD}']),
+    ('\u{13CE}', &['\u{13CE}']),
+    ('\u{13CF}', &['\u{13CF}']),
+    ('\u{13D0}', &['\u{13D0}']),
+    ('\u{13D1}', &['\u{13D1}']),
+    ('\u{13D2}', &['\u{13D2}']),
+    ('\u{13D3}', &['\u{13D3}']),
+    ('\u{13D4}', &['\u{13D4}']),
+    ('\u{13D5}', &['\u{13D5}']),
+    ('\u{13D6}', &['\u{13D6}']),
+    ('\u{13D7}', &['\u{13D7}']),
+    ('\u{13D8}', &['\u{13D8}']),
+    ('\u{13D9}', &['\u{13D9}']),
+    ('\u{13DA}', &['\u{13DA}']),
+    ('\u{13DB}', &['\u{13DB}']),
+    ('\u{13DC}', &['\u{13DC}']),
+    ('\u{13DD}', &['\u{13DD}']),
+    ('\u{13DE}', &['\u{13DE}']),
+    ('\u{13DF}', &['\u{13DF}']),
+    ('\u{13E0}', &['\u{13E0}']),
+    ('\u{13E1}', &['\u{13E1}']),
+    ('\u{13E2}', &['\u{13E2}']),
+    ('\u{13E3}', &['\u{13E3}']),
+    ('\u{13E4}', &['\u{13E4}']),
+    ('\u{13E5}', &['\u{13E5}']),
+    ('\u{13E6}', &['\u{13E6}']),
+    ('\u{13E7}', &['\u{13E7}']),
+    ('\u{13E8}', &['\u{13E8}']),
+    ('\u{13E9}', &['\u{13E9}']),
+    ('\u{13EA}', &['\u{13EA}']),
+    ('\u{13EB}', &['\u{13EB}']),
+    ('\u{13EC}', &['\u{13EC}']),
+    ('\u{13ED}', &['\u{13ED}']),
+    ('\u{13EE}', &['\u{13EE}']),
+    ('\u{13EF}', &['\u{13EF}']),
+    ('\u{13F0}', &['\u{13F0}']),
+    ('\u{13F1}', &['\u{13F1}']),
+    ('\u{13F2}', &['\u{13F2}']),
+    ('\u{13F3}', &['\u{13F3}']),
+    ('\u{13F4}', &['\u{13F4}']),
+    ('\u{13F5}', &['\u{13F5}']),
+    ('\u{13F8}', &['\u{13F0}']),
+    ('\u{13F9}', &['\u{13F1}']),
+    ('\u{13FA}', &['\u{13F2}']),
+    ('\u{13FB}', &['\u{13F3}']),
+    ('\u{13FC}', &['\u{13F4}']),
+    ('\u{13FD}', &['\u{13F5}']),
+    ('\u{1C80}', &['\u{0432}']),
+    ('\u{1C81}', &['\u{0434}']),
+    ('\u{1C82}', &['\u{043E}']),
+    ('\u{1C83}', &['\u{0441}']),
+    ('\u{1C84}', &['\u{0442}']),
+    ('\u{1C85}', &['\u{0442}']),
+    ('\u{1C86}', &['\u{044A}']),
+    ('\u{1C87}', &['\u{0463}']),
+    ('\u{1C88}', &['\u{A64B}']),
+    ('\u{1E96}', &['\u{0068}', '\u{0331}']),
+    ('\u{1E97}', &['\u{0074}', '\u{0308}']),
+    ('\u{1E98}', &['\u{0077}', '\u{030A}']),
+    ('\u{1E99}', &['\u{0079}', '\u{030A}']),
+    ('\u{1E9A}', &['\u{0061}', '\u{02BE}']),
+    ('\u{1E9B}', &['\u{1E61}']),
+    ('\u{1E9E}', &['\u{0073}', '\u{0073}']),
+    ('\u{1F50}', &['\u{03C5}', '\u{0313}']),
+    ('\u{1F52}', &['\u{03C5}', '\u{0313}', '\u{0300}']),
+    ('\u{1F54}', &['\u{03C5}', '\u{0313}', '\u{0301}']),
+    ('\u{1F56}', &['\u{03C5}', '\u{0313}', '\u{0342}']),
+    ('\u{1F80}', &['\u{1F00}', '\u{03B9}']),
+    ('\u{1F81}', &['\u{1F01}', '\u{03B9}']),
+    ('\u{1F82}', &['\u{1F02}', '\u{03B9}']),
+    ('\u{1F83}', &['\u{1F03}', '\u{03B9}']),
+    ('\u{1F84}', &['\u{1F04}', '\u{03B9}']),
+    ('\u{1F85}', &['\u{1F05}', '\u{03B9}']),
+    ('\u{1F86}', &['\u{1F06}', '\u{03B9}']),
+    ('\u{1F87}', &['\u{1F07}', '\u{03B9}']),
+    ('\u{1F88}', &['\u{1F00}', '\u{03B9}']),
+    ('\u{1F89}', &['\u{1F01}', '\u{03B9}']),
+    ('\u{1F8A}', &['\u{1F02}', '\u{03B9}']),
+    ('\u{1F8B}', &['\u{1F03}', '\u{03B9}']),
+    ('\u{1F8C}', &['\u{1F04}', '\u{03B9}']),
+    ('\u{1F8D}', &['\u{1F05}', '\u{03B9}']),
+    ('\u{1F8E}', &['\u{1F06}', '\u{03B9}']),
+    ('\u{1F8F}', &['\u{1F07}', '\u{03B9}']),
+    ('\u{1F90}', &['\u{1F20}', '\u{03B9}']),
+    ('\u{1F91}', &['\u{1F21}', '\u{03B9}']),
+    ('\u{1F92}', &['\u{1F22}', '\u{03B9}']),
+    ('\u{1F93}', &['\u{1F23}', '\u{03B9}']),
+    ('\u{1F94}', &['\u{1F24}', '\u{03B9}']),
+    ('\u{1F95}', &['\u{1F25}', '\u{03B9}']),
+    ('\u{1F96}', &['\u{1F26}', '\u{03B9}']),
+    ('\u{1F97}', &['\u{1F27}', '\u{03B9}']),
+    ('\u{1F98}', &['\u{1F20}', '\u{03B9}']),
+    ('\u{1F99}', &['\u{1F21}', '\u{03B9}']),
+    ('\u{1F9A}', &['\u{1F22}', '\u{03B9}']),
+    ('\u{1F9B}', &['\u{1F23}', '\u{03B9}']),
+    ('\u{1F9C}', &['\u{1F24}', '\u{03B9}']),
+    ('\u{1F9D}', &['\u{1F25}', '\u{03B9}']),
+    ('\u{1F9E}', &['\u{1F26}', '\u{03B9}']),
+    ('\u{1F9F}', &['\u{1F27}', '\u{03B9}']),
+    ('\u{1FA0}', &['\u{1F60}', '\u{03B9}']),
+    ('\u{1FA1}', &['\u{1F61}', '\u{03B9}']),
+    ('\u{1FA2}', &['\u{1F62}', '\u{03B9}']),
+    ('\u{1FA3}', &['\u{1F63}', '\u{03B9}']),
+    ('\u{1FA4}', &['\u{1F64}', '\u{03B9}']),
+    ('\u{1FA5}', &['\u{1F65}', '\u{03B9}']),
+    ('\u{1FA6}', &['\u{1F66}', '\u{03B9}']),
+    ('\u{1FA7}', &['\u{1F67}', '\u{03B9}']),
+    ('\u{1FA8}', &['\u{1F60}', '\u{03B9}']),
+    ('\u{1FA9}', &['\u{1F61}', '\u{03B9}']),
+    ('\u{1FAA}', &['\u{1F62}', '\u{03B9}']),
+    ('\u{1FAB}', &['\u{1F63}', '\u{03B9}']),
+    ('\u{1FAC}', &['\u{1F64}', '\u{03B9}']),
+    ('\u{1FAD}', &['\u{1F65}', '\u{03B9}']),
+    ('\u{1FAE}', &['\u{1F66}', '\u{03B9}']),
+    ('\u{1FAF}', &['\u{1F67}', '\u{03B9}']),
+    ('\u{1FB2}', &['\u{1F70}', '\u{03B9}']),
+    ('\u{1FB3}', &['\u{03B1}', '\u{03B9}']),
+    ('\u{1FB4}', &['\u{03AC}', '\u{03B9}']),
+    ('\u{1FB6}', &['\u{03B1}', '\u{0342}']),
+    ('\u{1FB7}', &['\u{03B1}', '\u{0342}', '\u{03B9}']),
+    ('\u{1FBC}', &['\u{03B1}', '\u{03B9}']),
+    ('\u{1FBE}', &['\u{03B9}']),
+    ('\u{1FC2}', &['\u{1F74}', '\u{03B9}']),
+    ('\u{1FC3}', &['\u{03B7}', '\u{03B9}']),
+    ('\u{1FC4}', &['\u{03AE}', '\u{03B9}']),
+    ('\u{1FC6}', &['\u{03B7}', '\u{0342}']),
+    ('\u{1FC7}', &['\u{03B7}', '\u{0342}', '\u{03B9}']),
+    ('\u{1FCC}', &['\u{03B7}', '\u{03B9}']),
+    ('\u{1FD2}', &['\u{03B9}', '\u{0308}', '\u{0300}']),
+    ('\u{1FD3}', &['\u{03B9}', '\u{0308}', '\u{0301}']),
+    ('\u{1FD6}', &['\u{03B9}', '\u{0342}']),
+    ('\u{1FD7}', &['\u{03B9}', '\u{0308}', '\u{0342}']),
+    ('\u{1FE2}', &['\u{03C5}', '\u{0308}', '\u{0300}']),
+    ('\u{1FE3}', &['\u{03C5}', '\u{0308}', '\u{0301}']),
+    ('\u{1FE4}', &['\u{03C1}', '\u{0313}']),
+    ('\u{1FE6}', &['\u{03C5}', '\u{0342}']),
+    ('\u{1FE7}', &['\u{03C5}', '\u{0308}', '\u{0342}']),
+    ('\u{1FF2}', &['\u{1F7C}', '\u{03B9}']),
+    ('\u{1FF3}', &['\u{03C9}', '\u{03B9}']),
+    ('\u{1FF4}', &['\u{03CE}', '\u{03B9}']),
+    ('\u{1FF6}', &['\u{03C9}', '\u{0342}']),
+    ('\u{1FF7}', &['\u{03C9}', '\u{0342}', '\u{03B9}']),
+    ('\u{1FFC}', &['\u{03C9}', '\u{03B9}']),
+    ('\u{AB70}', &['\u{13A0}']),
+    ('\u{AB71}', &['\u{13A1}']),
+    ('\u{AB72}', &['\u{13A2}']),
+    ('\u{AB73}', &['\u{13A3}']),
+    ('\u{AB74}', &['\u{13A4}']),
+    ('\u{AB75}', &['\u{13A5}']),
+    ('\u{AB76}', &['\u{13A6}']),
+    ('\u{AB77}', &['\u{13A7}']),
+    ('\u{AB78}', &['\u{13A8}']),
+    ('\u{AB79}', &['\u{13A9}']),
+    ('\u{AB7A}', &['\u{13AA}']),
+    ('\u{AB7B}', &['\u{13AB}']),
+    ('\u{AB7C}', &['\u{13AC}']),
+    ('\u{AB7D}', &['\u{13AD}']),
+    ('\u{AB7E}', &['\u{13AE}']),
+    ('\u{AB7F}', &['\u{13AF}']),
+    ('\u{AB80}', &['\u{13B0}']),
+    ('\u{AB81}', &['\u{13B1}']),
+    ('\u{AB82}', &['\u{13B2}']),
+    ('\u{AB83}', &['\u{13B3}']),
+    ('\u{AB84}', &['\u{13B4}']),
+    ('\u{AB85}', &['\u{13B5}']),
+    ('\u{AB86}', &['\u{13B6}']),
+    ('\u{AB87}', &['\u{13B7}']),
+    ('\u{AB88}', &['\u{13B8}']),
+    ('\u{AB89}', &['\u{13B9}']),
+    ('\u{AB8A}', &['\u{13BA}']),
+    ('\u{AB8B}', &['\u{13BB}']),
+    ('\u{AB8C}', &['\u{13BC}']),
+    ('\u{AB8D}', &['\u{13BD}']),
+    ('\u{AB8E}', &['\u{13BE}']),
+    ('\u{AB8F}', &['\u{13BF}']),
+    ('\u{AB90}', &['\u{13C0}']),
+    ('\u{AB91}', &['\u{13C1}']),
+    ('\u{AB92}', &['\u{13C2}']),
+    ('\u{AB93}', &['\u{13C3}']),
+    ('\u{AB94}', &['\u{13C4}']),
+    ('\u{AB95}', &['\u{13C5}']),
+    ('\u{AB96}', &['\u{13C6}']),
+    ('\u{AB97}', &['\u{13C7}']),
+    ('\u{AB98}', &['\u{13C8}']),
+    ('\u{AB99}', &['\u{13C9}']),
+    ('\u{AB9A}', &['\u{13CA}']),
+    ('\u{AB9B}', &['\u{13CB}']),
+    ('\u{AB9C}', &['\u{13CC}']),
+    ('\u{AB9D}', &['\u{13CD}']),
+    ('\u{AB9E}', &['\u{13CE}']),
+    ('\u{AB9F}', &['\u{13CF}']),
+    ('\u{ABA0}', &['\u{13D0}']),
+    ('\u{ABA1}', &['\u{13D1}']),
+    ('\u{ABA2}', &['\u{13D2}']),
+    ('\u{ABA3}', &['\u{13D3}']),
+    ('\u{ABA4}', &['\u{13D4}']),
+    ('\u{ABA5}', &['\u{13D5}']),
+    ('\u{ABA6}', &['\u{13D6}']),
+    ('\u{ABA7}', &['\u{13D7}']),
+    ('\u{ABA8}', &['\u{13D8}']),
+    ('\u{ABA9}', &['\u{13D9}']),
+    ('\u{ABAA}', &['\u{13DA}']),
+    ('\u{ABAB}', &['\u{13DB}']),
+    ('\u{ABAC}', &['\u{13DC}']),
+    ('\u{ABAD}', &['\u{13DD}']),
+    ('\u{ABAE}', &['\u{13DE}']),
+    ('\u{ABAF}', &['\u{13DF}']),
+    ('\u{ABB0}', &['\u{13E0}']),
+    ('\u{ABB1}', &['\u{13E1}']),
+    ('\u{ABB2}', &['\u{13E2}']),
+    ('\u{ABB3}', &['\u{13E3}']),
+    ('\u{ABB4}', &['\u{13E4}']),
+    ('\u{ABB5}', &['\u{13E5}']),
+    ('\u{ABB6}', &['\u{13E6}']),
+    ('\u{ABB7}', &['\u{13E7}']),
+    ('\u{ABB8}', &['\u{13E8}']),
+    ('\u{ABB9}', &['\u{13E9}']),
+    ('\u{ABBA}', &['\u{13EA}']),
+    ('\u{ABBB}', &['\u{13EB}']),
+    ('\u{ABBC}', &['\u{13EC}']),
+    ('\u{ABBD}', &['\u{13ED}']),
+    ('\u{ABBE}', &['\u{13EE}']),
+    ('\u{ABBF}', &['\u{13EF}']),
+    ('\u{FB00}', &['\u{0066}', '\u{0066}']),
+    ('\u{FB01}', &['\u{0066}', '\u{0069}']),
+    ('\u{FB02}', &['\u{0066}', '\u{006C}']),
+    ('\u{FB03}', &['\u{0066}', '\u{0066}', '\u{0069}']),
+    ('\u{FB04}', &['\u{0066}', '\u{0066}', '\u{006C}']),
+    ('\u{FB05}', &['\u{0073}', '\u{0074}']),
+    ('\u{FB06}', &['\u{0073}', '\u{0074}']),
+    ('\u{FB13}', &['\u{0574}', '\u{0576}']),
+    ('\u{FB14}', &['\u{0574}', '\u{0565}']),
+    ('\u{FB15}', &['\u{0574}', '\u{056B}']),
+    ('\u{FB16}', &['\u{057E}', '\u{0576}']),
+    ('\u{FB17}', &['\u{0574}', '\u{056D}']),
+];
+
 #[derive(Debug, Clone, Copy)]
 struct SmallCaseBuf {
     chars: [char; 3],
@@ -8990,26 +9301,144 @@ fn chars(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn collect_grapheme_clusters(inner: &RStringInner) -> Vec<RStringInner> {
     use unicode_segmentation::UnicodeSegmentation;
     let enc = inner.encoding();
+    let segment = |s: &str, out: &mut Vec<RStringInner>| {
+        out.extend(
+            s.graphemes(true)
+                .map(|g| RStringInner::from_encoding(g.as_bytes(), enc)),
+        );
+    };
     if enc.is_utf8_compatible() {
-        // Decode liberally so that broken sequences degrade to single
-        // bytes rather than panicking — chars() already handles this
-        // via `check_utf8`-tolerant paths inside `iter_char_bytes`,
-        // but here we need a `&str` for `graphemes()`.
-        let s = std::str::from_utf8(inner.as_bytes()).unwrap_or("");
-        s.graphemes(true)
-            .map(|g| RStringInner::from_encoding(g.as_bytes(), enc))
-            .collect()
+        // Segment the valid runs and let every byte that is part of
+        // none stand as its own cluster: CRuby hands a broken byte back
+        // rather than dropping it or raising.
+        let mut out = vec![];
+        let mut rest = inner.as_bytes();
+        loop {
+            match std::str::from_utf8(rest) {
+                Ok(s) => {
+                    segment(s, &mut out);
+                    return out;
+                }
+                Err(e) => {
+                    let good = e.valid_up_to();
+                    // SAFETY: `valid_up_to` is the length of the prefix
+                    // `from_utf8` accepted.
+                    segment(unsafe { std::str::from_utf8_unchecked(&rest[..good]) }, &mut out);
+                    // `error_len` is `None` for a sequence that merely
+                    // ran out of bytes. CRuby stops there rather than
+                    // handing back a prefix of a character, so the
+                    // trailing bytes are yielded by nobody.
+                    let Some(bad) = e.error_len() else {
+                        return out;
+                    };
+                    for b in &rest[good..good + bad] {
+                        out.push(RStringInner::from_encoding(
+                            std::slice::from_ref(b),
+                            enc,
+                        ));
+                    }
+                    rest = &rest[good + bad..];
+                }
+            }
+        }
+    } else if matches!(
+        enc,
+        Encoding::Utf16Le | Encoding::Utf16Be | Encoding::Utf32Le | Encoding::Utf32Be
+    ) {
+        // Segment in UTF-8 and hand back the original code units: a
+        // cluster is a run of characters, and which bytes spell them is
+        // the encoding's business. A unit that is not a character (a
+        // lone surrogate, a non-scalar) stands in as U+FFFD for the
+        // segmentation, which makes it its own cluster.
+        // A code unit that ran out of bytes is nobody's cluster, the
+        // same way a truncated UTF-8 sequence is: only the *last*
+        // slice can be short, so dropping it is the whole rule.
+        let unit_width = if matches!(enc, Encoding::Utf16Le | Encoding::Utf16Be) {
+            2
+        } else {
+            4
+        };
+        let mut units: Vec<(char, &[u8])> = inner
+            .iter_char_bytes()
+            .map(|b| (utf16_32_scalar(b, enc), b))
+            .collect();
+        if units.last().is_some_and(|(_, b)| b.len() < unit_width) {
+            units.pop();
+        }
+        // …and a high surrogate left at the end with no low half after
+        // it is the same thing one level up — half a character, so it
+        // goes too. The iterator only yields one on its own when the
+        // pair was cut short.
+        if matches!(enc, Encoding::Utf16Le | Encoding::Utf16Be)
+            && units.last().is_some_and(|(_, b)| {
+                b.len() == 2 && (0xD800..0xDC00).contains(&utf16_unit(b, enc))
+            })
+        {
+            units.pop();
+        }
+        let text: String = units.iter().map(|(c, _)| *c).collect();
+        let mut out = Vec::with_capacity(units.len());
+        let mut i = 0;
+        for g in text.graphemes(true) {
+            let n = g.chars().count();
+            let mut buf: Vec<u8> = vec![];
+            for (_, b) in &units[i..i + n] {
+                buf.extend_from_slice(b);
+            }
+            out.push(RStringInner::from_encoding(&buf, enc));
+            i += n;
+        }
+        out
     } else {
-        // Encodings we don't decode (UTF-16/32, dummy, EUC-JP, …):
-        // delegate to the existing per-character byte-slice iterator.
-        // For UTF-16/32 this returns one codepoint at a time, which is
-        // a coarser approximation than CRuby's grapheme segmentation
-        // but keeps the spec's encoding-roundtrip invariants.
+        // Encodings we don't decode (dummy, EUC-JP, …): delegate to the
+        // existing per-character byte-slice iterator.
         inner
             .iter_char_bytes()
             .map(|s| RStringInner::from_encoding(s, enc))
             .collect()
     }
+}
+
+/// One UTF-16 code unit, read from its two bytes in `enc`'s order.
+fn utf16_unit(bytes: &[u8], enc: Encoding) -> u32 {
+    let (hi, lo) = if enc == Encoding::Utf16Be {
+        (bytes[0], bytes[1])
+    } else {
+        (bytes[1], bytes[0])
+    };
+    ((hi as u32) << 8) | lo as u32
+}
+
+/// The character one UTF-16/UTF-32 code unit (as `iter_char_bytes`
+/// groups them) stands for, or U+FFFD when it stands for none.
+fn utf16_32_scalar(bytes: &[u8], enc: Encoding) -> char {
+    let cp = match enc {
+        Encoding::Utf16Le | Encoding::Utf16Be => {
+            let be = enc == Encoding::Utf16Be;
+            let unit = |i: usize| {
+                let (hi, lo) = if be {
+                    (bytes[i], bytes[i + 1])
+                } else {
+                    (bytes[i + 1], bytes[i])
+                };
+                ((hi as u32) << 8) | lo as u32
+            };
+            match bytes.len() {
+                // A surrogate pair, which the iterator yields whole.
+                4 => 0x10000 + ((unit(0) - 0xD800) << 10) + (unit(2) - 0xDC00),
+                2 => unit(0),
+                _ => 0xFFFD,
+            }
+        }
+        Encoding::Utf32Le if bytes.len() == 4 => {
+            u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+        }
+        Encoding::Utf32Be if bytes.len() == 4 => {
+            u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+        }
+        _ => 0xFFFD,
+    };
+    char::from_u32(cp).unwrap_or('\u{FFFD}')
 }
 
 ///
@@ -12215,6 +12644,93 @@ mod tests {
             r#""\xC3".b.casecmp?("abc")"#,
             // UTF-8 vs UTF-8: Unicode case folding
             r#""ä".casecmp?("Ä")"#,
+        ]);
+    }
+
+    /// `#casecmp?` compares *folded* text, and `#downcase(:fold)` is
+    /// what folds it (#1425). Folding is not lowercasing: `ß` and `ss`
+    /// are the same string, both sigmas fold to one, and the micro sign
+    /// folds to mu — 297 characters where `char::to_lowercase` is not
+    /// the answer.
+    #[test]
+    fn string_case_folding() {
+        let mut v: Vec<String> = vec![];
+        // A character from each shape the table has: an expansion, a
+        // one-for-one remap, a decomposition, and the sigmas.
+        for cp in [
+            0xDF, 0xB5, 0x149, 0x17F, 0x1F0, 0x345, 0x390, 0x3B0, 0x3C2, 0x3C3, 0x1E9E, 0x1C4,
+            0x1C5, 0x1C6, 0xFB00, 0xFB05, 0xFB06, 0xFB17, 0x130, 0x131, 0x4D0,
+        ] {
+            v.push(format!(r#"[0x{cp:X}].pack("U").downcase(:fold).codepoints"#));
+            v.push(format!(r#"[0x{cp:X}].pack("U").downcase.codepoints"#));
+            v.push(format!(r#"[0x{cp:X}].pack("U").upcase.codepoints"#));
+        }
+        for (a, b) in [
+            (r"ss", r"ß"),
+            (r"SS", r"ß"),
+            (r"ẞ", r"ß"),
+            (r"µ", r"μ"),
+            (r"ς", r"σ"),
+            (r"ﬀ", r"ff"),
+            (r"straße", r"STRASSE"),
+            (r"abc", r"ABC"),
+            (r"abc", r"abd"),
+        ] {
+            v.push(format!(r#""{a}".casecmp?("{b}")"#));
+            v.push(format!(r#""{b}".casecmp?("{a}")"#));
+            v.push(format!(r#""{a}".casecmp("{b}")"#));
+        }
+        let refs: Vec<&str> = v.iter().map(|s| s.as_str()).collect();
+        run_tests(&refs);
+    }
+
+    /// A grapheme cluster is a run of *characters* (#1425): the bytes
+    /// that spell them are the encoding's business, and a byte that
+    /// spells none stands alone.
+    #[test]
+    fn string_grapheme_clusters_broken_and_wide() {
+        run_tests(&[
+            // A byte that is not a character is its own cluster…
+            r#"[0xA4].pack("C").force_encoding("UTF-8").grapheme_clusters.map(&:bytes)"#,
+            r#"[0x61, 0xFF, 0x62].pack("C*").force_encoding("UTF-8").grapheme_clusters.map(&:bytes)"#,
+            // …but a sequence that merely ran out of bytes is nobody's:
+            // the walk stops there, as CRuby's does.
+            r#"[0x61, 0xC3].pack("C*").force_encoding("UTF-8").grapheme_clusters.map(&:bytes)"#,
+            r#"[0x07, 0xE4, 0xBB].pack("C*").force_encoding("UTF-8").grapheme_clusters.map(&:bytes)"#,
+            r#"[0x5D, 0x9E, 0x09, 0x46, 0xC3, 0xCC].pack("C*").force_encoding("UTF-8")
+                 .each_grapheme_cluster.to_a.map(&:bytes)"#,
+            // The wide encodings cluster like UTF-8 and hand back their
+            // own code units: the flag is one cluster of six characters.
+            r#"%w[UTF-16LE UTF-16BE UTF-32LE UTF-32BE].map { |e|
+                 [0x61, 0x62, 0x1F3F3, 0xFE0F, 0x200D, 0x1F308, 0x1F43E].pack("U*").encode(e)
+                   .grapheme_clusters.map(&:bytesize)
+               }"#,
+            r#"s = [0x61, 0x62, 0x1F3F3, 0xFE0F, 0x200D, 0x1F308, 0x1F43E].pack("U*")
+               s.encode("UTF-16LE").grapheme_clusters.map { |c| c.encode("UTF-8") } ==
+                 s.grapheme_clusters"#,
+            // A code unit cut short at the end is nobody's cluster, and
+            // neither is a high surrogate whose low half went with it —
+            // the same "it merely ran out of bytes" rule the UTF-8 walk
+            // follows, one and two levels up.
+            r#"%w[UTF-16LE UTF-16BE UTF-32LE UTF-32BE].map { |e|
+                 b = [0x61, 0x1F3F3].pack("U*").encode(e).bytes
+                 (1..3).map { |cut| b[0, b.size - cut].pack("C*").force_encoding(e)
+                                     .grapheme_clusters.map(&:bytesize) }
+               }"#,
+            r#"[0x61, 0x00, 0x62].pack("C*").force_encoding("UTF-16LE")
+                 .grapheme_clusters.map(&:bytes)"#,
+            r#"[0x61, 0, 0, 0, 0x62].pack("C*").force_encoding("UTF-32LE")
+                 .grapheme_clusters.map(&:bytes)"#,
+            // …and a pure-ASCII Emacs-Mule string, whose length is its
+            // byte count and needs no walk at all.
+            r#"s = "a\tb\n".dup.force_encoding("Emacs-Mule")
+               [s.length, s.valid_encoding?, s.chars, s.scrub("?").bytes]"#,
+            r#"e = "".dup.force_encoding("Emacs-Mule"); [e.length, e.valid_encoding?]"#,
+            // A *lone* surrogate is deliberately not pinned here: CRuby
+            // re-syncs its UTF-16 walk a byte at a time there, so it
+            // answers `[[0], [216, 97]]` for `00 D8 61 00` and drops
+            // the last byte. Nothing depends on that, and no spec
+            // covers it.
         ]);
     }
 
