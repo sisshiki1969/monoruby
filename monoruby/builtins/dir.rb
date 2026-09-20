@@ -70,12 +70,15 @@ class Dir
     self
   end
 
-  def children(encoding: nil)
+  # The instance forms take no arguments in CRuby — the encoding was
+  # already decided when the Dir was opened (`Dir.new(path, encoding:)`),
+  # so `d.children(encoding: ...)` is an ArgumentError there.
+  def children
     raise IOError, "closed directory" if @closed
     @entries.reject { |e| e == "." || e == ".." }
   end
 
-  def each_child(encoding: nil, &block)
+  def each_child(&block)
     raise IOError, "closed directory" if @closed
     return to_enum(:each_child) unless block
     children.each { |e| block.call(e) }
@@ -128,9 +131,14 @@ class Dir
     entries(path, encoding: encoding).reject { |e| e == "." || e == ".." }
   end
 
-  def self.each_child(path, encoding: nil, &block)
-    return to_enum(:each_child, path) unless block
-    children(path).each { |e| block.call(e) }
+  # The spare second positional is the Enumerator replay slot: an
+  # Enumerator built by `to_enum` replays the call with positional
+  # arguments only, so the requested encoding has to ride there. This is
+  # the same trick `Dir.foreach` uses (see `foreach` in builtins/dir.rs).
+  def self.each_child(path, enc = nil, encoding: nil, &block)
+    encoding = enc if encoding.nil?
+    return to_enum(:each_child, path, encoding) unless block
+    children(path, encoding: encoding).each { |e| block.call(e) }
     nil
   end
 

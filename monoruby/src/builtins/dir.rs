@@ -1527,6 +1527,25 @@ mod tests {
     }
 
     #[test]
+    fn dir_each_child_encoding_keyword() {
+        // `Dir.each_child` forwards `encoding:` to the names it yields —
+        // both the block form and the Enumerator the no-block form
+        // returns (the sibling entries/children/foreach already did).
+        run_test_once(
+            r##"(d="/tmp/mono_ec_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/a", ""); names=[]; Dir.each_child(d, encoding: "euc-jp") { |e| names << e.encoding.name }; a=Dir.each_child(d, encoding: "utf-8").to_a.map { |e| e.encoding.name }; b=Dir.each_child(d, encoding: Encoding::ISO_8859_1).map { |e| e.encoding.name }; File.unlink("#{d}/a"); Dir.rmdir(d); [names.uniq, a.uniq, b.uniq])"##,
+        );
+    }
+
+    #[test]
+    fn dir_instance_children_take_no_arguments() {
+        // The instance forms take no arguments at all: the encoding was
+        // fixed when the Dir was opened, so a keyword is an ArgumentError.
+        run_test_once(
+            r##"(d="/tmp/mono_ic_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/a", ""); f=->(&blk){ begin; blk.call; rescue => e; [e.class, e.message]; end }; a=f.call { Dir.open(d).children(encoding: "utf-8") }; b=f.call { Dir.open(d).each_child(encoding: "utf-8") { |x| x } }; File.unlink("#{d}/a"); Dir.rmdir(d); [a, b])"##,
+        );
+    }
+
+    #[test]
     fn dir_instance_basic() {
         // CRuby's Dir#pos returns an opaque seekdir cookie while monoruby
         // uses an Array index, so don't compare pos values directly. Both
