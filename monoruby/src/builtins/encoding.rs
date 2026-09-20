@@ -1955,10 +1955,7 @@ fn special_encoding_name(globals: &mut Globals, name: &str) -> Option<Encoding> 
             .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
             .filter(|v| !v.is_nil())
             .unwrap_or_else(|| Value::nil()),
-        "filesystem" => globals
-            .get_gvar(IdentId::get_id("$DEFAULT_FILESYSTEM"))
-            .filter(|v| !v.is_nil())
-            .unwrap_or_else(|| Value::nil()),
+        "filesystem" => filesystem_encoding_value(globals),
         "locale" => locale_encoding_value(globals),
         _ => return None,
     };
@@ -4218,6 +4215,38 @@ fn locale_encoding_value(globals: &Globals) -> Value {
     })
 }
 
+/// `Encoding.find("filesystem")`.
+///
+/// CRuby's `rb_filesystem_encindex` is the locale encoding on Linux and
+/// a fixed UTF-8 on macOS (`#elif defined __APPLE__`); from the first
+/// `Encoding.default_external=` on, every platform tracks that instead,
+/// because `enc_set_default_encoding` re-points the `filesystem` alias
+/// on each assignment. `$DEFAULT_FILESYSTEM` records only that
+/// assignment, so its absence means "still the platform's startup
+/// answer" and the rule is applied here, at the query.
+///
+/// Computed at the query rather than seeded in
+/// [`init_default_external`] so it cannot depend on how far
+/// `Globals::new` has got when the seed would run — the constant table
+/// the name resolves through is built during that same startup.
+fn filesystem_encoding_value(globals: &mut Globals) -> Value {
+    if let Some(v) = globals
+        .get_gvar(IdentId::get_id("$DEFAULT_FILESYSTEM"))
+        .filter(|v| !v.is_nil())
+    {
+        return v;
+    }
+    if cfg!(target_os = "macos")
+        && let Some(utf8) = find_encoding_object(globals, "UTF-8")
+    {
+        return utf8;
+    }
+    globals
+        .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+        .filter(|v| !v.is_nil())
+        .unwrap_or_else(Value::nil)
+}
+
 /// Seed `Encoding.default_external` with the locale's encoding, as
 /// CRuby does at startup: `rb_enc_set_default_external` is handed
 /// `rb_locale_encoding()`, so a `C` / `POSIX` locale (or none) starts
@@ -4229,22 +4258,8 @@ fn locale_encoding_value(globals: &Globals) -> Value {
 pub(crate) fn init_default_external(globals: &mut Globals) {
     let v = locale_encoding_value(globals);
     globals.set_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"), v);
-    // `Encoding.find("filesystem")` starts at the locale encoding too —
-    // except on macOS, where CRuby's `rb_filesystem_encindex` is a
-    // fixed UTF-8 (`#elif defined __APPLE__`). From then on it tracks
-    // `default_external`, which re-aliases it on every assignment
-    // (`enc_set_default_encoding`).
-    //
-    // Resolved by name, as the locale encoding beside it is: the
-    // `Encoding::UTF_8` *constant* is not registered yet this early in
-    // `Globals::new`, so a constant lookup here silently falls back and
-    // leaves macOS on the locale encoding.
-    let fs = if cfg!(target_os = "macos") {
-        find_encoding_object(globals, "UTF-8").unwrap_or(v)
-    } else {
-        v
-    };
-    globals.set_gvar(IdentId::get_id("$DEFAULT_FILESYSTEM"), fs);
+    // `Encoding.find("filesystem")` is deliberately *not* seeded here;
+    // see [`filesystem_encoding_value`].
     refresh_inspect_escape(globals);
 }
 
@@ -4599,14 +4614,10 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         // reads from the environment at startup; the other two follow
         // `default_external`.
         "locale" => return Ok(locale_encoding_value(globals)),
-        "external" | "filesystem" => {
-            let gvar = if name.eq_ignore_ascii_case("filesystem") {
-                "$DEFAULT_FILESYSTEM"
-            } else {
-                "$DEFAULT_EXTERNAL"
-            };
+        "filesystem" => return Ok(filesystem_encoding_value(globals)),
+        "external" => {
             let ext = globals
-                .get_gvar(IdentId::get_id(gvar))
+                .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
                 .filter(|v| !v.is_nil())
                 .unwrap_or_else(|| {
                     globals
@@ -4918,9 +4929,7 @@ fn dynamic_encoding_aliases(globals: &mut Globals) -> Vec<(&'static str, String)
     let external_val = globals
         .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
         .filter(|v| !v.is_nil());
-    let filesystem_val = globals
-        .get_gvar(IdentId::get_id("$DEFAULT_FILESYSTEM"))
-        .filter(|v| !v.is_nil());
+    let filesystem_val = Some(filesystem_encoding_value(globals));
     let locale_val = locale_encoding_value(globals);
     let locale = canonical_of(globals, locale_val);
     let external = external_val
