@@ -1,0 +1,11 @@
+[package]
+name = "monoruby_test_support"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately dependency-free. The point of this crate is that a test
+# which only spawns processes can use it *without* linking the
+# interpreter: doing that through `monoruby::tests` costs 122 MB of test
+# binary where 7 MB would do, once per `tests/*.rs` file.
+[dependencies]
