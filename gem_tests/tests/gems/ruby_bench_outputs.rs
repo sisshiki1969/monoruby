@@ -89,7 +89,7 @@ fn compare(bench: &str, gems: &[&str], script: &str) {
     let mut ruby = Command::new(ruby_path());
     ruby.args(["-E", "UTF-8", "-e", script]);
     let expected = run(ruby, &cwd);
-    let mut mono = Command::new(env!("CARGO_BIN_EXE_monoruby"));
+    let mut mono = Command::new(env!("CARGO_BIN_FILE_MONORUBY_monoruby"));
     // Every fingerprint here is a `Zlib.crc32`, so the zlib extension must
     // be reachable from the spawned binary.
     ensure_extension("psych_native");

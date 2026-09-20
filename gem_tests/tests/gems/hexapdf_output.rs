@@ -67,7 +67,7 @@ fn hexapdf_document_bytes_match_cruby() {
     let mut ruby = Command::new(ruby_path());
     ruby.args(["-E", "UTF-8", "-e", SCRIPT]);
     let expected = run(ruby);
-    let mut mono = Command::new(env!("CARGO_BIN_EXE_monoruby"));
+    let mut mono = Command::new(env!("CARGO_BIN_FILE_MONORUBY_monoruby"));
     mono.env("MONORUBY_EXT_PATH", ensure_extension("zlib_native"));
     mono.args(["-e", SCRIPT]);
     let got = run(mono);

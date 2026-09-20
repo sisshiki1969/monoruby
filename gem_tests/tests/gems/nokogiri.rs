@@ -44,7 +44,7 @@ fn compare(script: &str) {
     let mut ruby = Command::new(ruby_path());
     ruby.args(["-E", "UTF-8", "-e", &script]);
     let expected = run(ruby);
-    let mut mono = Command::new(env!("CARGO_BIN_EXE_monoruby"));
+    let mut mono = Command::new(env!("CARGO_BIN_FILE_MONORUBY_monoruby"));
     mono.env("MONORUBY_EXT_PATH", ensure_extension("nokogiri_native"));
     mono.args(["-e", &script]);
     let got = run(mono);
