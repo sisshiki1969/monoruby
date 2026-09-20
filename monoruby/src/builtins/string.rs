@@ -4497,7 +4497,11 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             let len = haystack.len() as i64;
             let pos = len + offset;
             if pos < 0 {
-                return Ok(Value::nil());
+                // CRuby clears `$~` when a Regexp pattern is handed an
+                // offset that wraps past the start of the string, before
+                // it ever reaches the engine (`rb_str_byteindex_m`); a
+                // String needle leaves the backref alone (issue #721).
+                return Ok(clear_backref_for_regexp(vm, lfp.arg(0)));
             }
             pos as usize
         } else {
@@ -4507,7 +4511,8 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         0
     };
     if byte_offset > haystack.len() {
-        return Ok(Value::nil());
+        // Same for an offset past the end of the string.
+        return Ok(clear_backref_for_regexp(vm, lfp.arg(0)));
     }
 
     // String needle: plain byte search (CRuby's `rb_memsearch`).
@@ -4576,7 +4581,11 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         if offset < 0 {
             let pos = bytesize as i64 + offset;
             if pos < 0 {
-                return Ok(Value::nil());
+                // CRuby clears `$~` when a Regexp pattern is handed an
+                // offset that wraps past the start of the string, before
+                // it ever reaches the engine (`rb_str_byteindex_m`); a
+                // String needle leaves the backref alone (issue #721).
+                return Ok(clear_backref_for_regexp(vm, lfp.arg(0)));
             }
             pos as usize
         } else if offset as usize > bytesize {
@@ -4656,6 +4665,20 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         Some(p) => Value::integer(p as i64),
         None => Value::nil(),
     })
+}
+
+/// `nil`, having cleared `$~` if `pattern` is a Regexp: what
+/// `index` / `rindex` / `byteindex` / `byterindex` answer when the
+/// offset argument is out of range. CRuby drops the backref there
+/// (`rb_backref_set(Qnil)` guarded by `RB_TYPE_P(sub, T_REGEXP)`), so a
+/// stale match from an earlier statement does not survive as `$~`; a
+/// String needle — or anything else that merely converts to one —
+/// leaves it untouched (issue #721).
+fn clear_backref_for_regexp(vm: &mut Executor, pattern: Value) -> Value {
+    if pattern.is_regex().is_some() {
+        vm.clear_capture_special_variables();
+    }
+    Value::nil()
 }
 
 /// Whether `pos` lands on a character boundary of `inner` in its
@@ -4787,7 +4810,9 @@ fn string_rindex(
         let pos = arg1.coerce_to_int_i64(vm, globals)?;
         match given.conv_char_index2(pos) {
             Some(pos) => pos,
-            None => return Ok(Value::nil()),
+            // As in `byteindex`: the offset wrapped past the start, and
+            // a Regexp pattern clears `$~` on the way out.
+            None => return Ok(clear_backref_for_regexp(vm, lfp.arg(0))),
         }
     } else {
         char_len
@@ -10063,6 +10088,35 @@ mod tests {
             r##"begin; "あいう".byteindex("い", 1); rescue IndexError; :boundary; end"##,
             r##"begin; "あいう".byterindex("あ", 1); rescue IndexError; :boundary; end"##,
             r##"sj = "soft".encode("Shift_JIS"); sj.index("f".dup.force_encoding("Shift_JIS"))"##,
+        ]);
+    }
+
+    #[test]
+    fn index_family_out_of_range_offset_clears_backref() {
+        // An offset that cannot be honoured (it wraps past the start, or
+        // for the forward methods runs past the end) answers nil before
+        // the pattern is ever matched. CRuby drops `$~` on the way out
+        // when the pattern is a Regexp, and leaves it alone for a String
+        // needle, which never touches the backref at all (issue #721).
+        run_tests(&[
+            r##""seed" =~ /see(d)/; ["abc".index(/b/, -9), $~.nil?]"##,
+            r##""seed" =~ /see(d)/; ["abc".rindex(/b/, -9), $~.nil?]"##,
+            r##""seed" =~ /see(d)/; ["abc".byteindex(/b/, -9), $~.nil?]"##,
+            r##""seed" =~ /see(d)/; ["abc".byterindex(/b/, -9), $~.nil?]"##,
+            r##""seed" =~ /see(d)/; ["abc".index(/b/, 99), $~.nil?]"##,
+            r##""seed" =~ /see(d)/; ["abc".byteindex(/b/, 99), $~.nil?]"##,
+            // A too-large offset is clamped by the reverse methods, so
+            // they match and `$~` is the match.
+            r##""seed" =~ /see(d)/; ["abc".rindex(/b/, 99), $~[0]]"##,
+            r##""seed" =~ /see(d)/; ["abc".byterindex(/b/, 99), $~[0]]"##,
+            // A String needle leaves `$~` as it was.
+            r##""seed" =~ /see(d)/; ["abc".rindex("b", -9), $~[0]]"##,
+            r##""seed" =~ /see(d)/; ["abc".byteindex("b", -9), $~[0]]"##,
+            r##""seed" =~ /see(d)/; ["abc".byterindex("b", -9), $~[0]]"##,
+            // An empty receiver has no position -1 to count back to.
+            r##"["".rindex(/\G/, -1), "".rindex("", -1), "".byterindex(/\G/, -1)]"##,
+            r##"["".rindex(/\G/), "".rindex(""), "".rindex(/\G/, 0)]"##,
+            r##"["a".rindex(/\G/, -1), "a".rindex("", -1), "a".rindex("a", -1)]"##,
         ]);
     }
 
