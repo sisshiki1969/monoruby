@@ -1,9 +1,19 @@
 #!/bin/bash
-# Install monoruby: the binary with `cargo install`, and the dynamically
-# loaded extensions (doc/native_extension_loading.md) into the install
-# root's `ext/`, where the installed binary looks for them after its own
-# directory. `cargo install` copies only the binary, so without this step an
-# installed monoruby has no `require "zlib"` (rubygems needs it) or sqlite3.
+# Install monoruby: the binary and the dynamically loaded extensions
+# (doc/native_extension_loading.md §7), in one `cargo install`. The
+# extensions are artifact dependencies of the interpreter, so Cargo builds
+# them and `build.rs` puts them in the install root's `ext/`, where the
+# installed binary looks for them after its own directory — rubygems needs
+# `require "zlib"` to read a `.gem` at all.
+#
+# So `cargo install --path monoruby` on its own is enough. This script adds
+# two things: MONORUBY_SYSTEM_LIBS (below), and a `cd` to the repository
+# root — from outside it the nightly in rust-toolchain.toml does not apply
+# and the artifact dependencies fail on `-Z bindeps`.
+#
+# For an install that does not depend on this machine's home directory
+# (the install root's absolute path is baked into the binary), see
+# `bin/dist`, which stages a relocatable tree and can tar it up.
 #
 #   bin/install            # release build, ~/.cargo/bin/monoruby
 #   bin/install --debug    # debug build (slower binary, faster build)
@@ -22,17 +32,12 @@
 set -e
 cd "$(dirname "$0")/.."
 
-PROFILE=release
-CARGO_PROFILE_ARGS=(--release)
 INSTALL_ARGS=()
 if [ "${1:-}" = "--debug" ]; then
-  PROFILE=debug
-  CARGO_PROFILE_ARGS=()
   INSTALL_ARGS=(--debug)
 fi
 
-EXTENSIONS=(sqlite3 zlib zstd psych nokogiri)
-# The ones whose Cargo manifest has a `system` feature.
+# The extensions whose Cargo manifest offers a `system` build.
 SYSTEM_CAPABLE=(sqlite3 zlib zstd)
 
 SYSTEM_LIBS="${MONORUBY_SYSTEM_LIBS:-}"
@@ -50,35 +55,32 @@ for want in $SYSTEM_LIBS; do
   esac
 done
 
-# `system` has to come with --no-default-features: Cargo features only ever
-# add, so the default `bundled` would otherwise still build the vendored
-# copy alongside.
-BUNDLED=()
-for ext in "${EXTENSIONS[@]}"; do
-  case " $SYSTEM_LIBS " in
-    *" $ext "*)
-      echo "building ${ext}_native against the platform's library"
-      cargo build "${CARGO_PROFILE_ARGS[@]}" -p "${ext}_native" \
-        --no-default-features --features system
-      ;;
-    *) BUNDLED+=(-p "${ext}_native") ;;
-  esac
-done
-if [ ${#BUNDLED[@]} -gt 0 ]; then
-  cargo build "${CARGO_PROFILE_ARGS[@]}" "${BUNDLED[@]}"
+# Selecting the platform's library is a Cargo feature on `monoruby` now
+# (`system-zlib` and its `bundled-…` twins), because `cargo install` is
+# what builds the extensions: they are artifact dependencies of the
+# interpreter, and `build.rs` installs them. Features only ever add, so
+# the whole set has to be spelled out against --no-default-features.
+FEATURE_ARGS=()
+if [ -n "$SYSTEM_LIBS" ]; then
+  FEATURES=""
+  for ext in "${SYSTEM_CAPABLE[@]}"; do
+    case " $SYSTEM_LIBS " in
+      *" $ext "*) FEATURES="$FEATURES,system-$ext" ;;
+      *) FEATURES="$FEATURES,bundled-$ext" ;;
+    esac
+  done
+  FEATURE_ARGS=(--no-default-features --features "${FEATURES#,}")
+  echo "linking against the platform's library for: $SYSTEM_LIBS"
 fi
-cargo install --path monoruby "${INSTALL_ARGS[@]}"
+
+# One command: `cargo install` builds the binary *and*, through the
+# artifact dependencies in monoruby/Cargo.toml, the five extensions —
+# which `build.rs` puts in the install root's `ext/`, where the installed
+# binary looks for them.
+cargo install --path monoruby "${INSTALL_ARGS[@]}" "${FEATURE_ARGS[@]}"
 
 # The per-version install root build.rs populated (`MONORUBY_INSTALL_ROOT`,
 # see `globals::install_root`); the installed binary reports it.
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' monoruby/Cargo.toml | head -1)
 ROOT="${MONORUBY_INSTALL_ROOT:-$HOME/.monoruby/v$VERSION}"
-mkdir -p "$ROOT/ext"
-case "$(uname -s)" in
-  Darwin) EXT=dylib ;;
-  *) EXT=so ;;
-esac
-for ext in "${EXTENSIONS[@]}"; do
-  cp "target/$PROFILE/lib${ext}_native.$EXT" "$ROOT/ext/"
-done
 echo "installed $(command -v monoruby) and the extensions in $ROOT/ext"

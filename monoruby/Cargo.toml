@@ -74,6 +74,24 @@ phys-table = []
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
 
+# Which C library each extension that carries one is built against.
+# `build.rs` installs the five extensions from Cargo's own artifact
+# dependencies (below), so this is where the choice `bin/install`'s
+# MONORUBY_SYSTEM_LIBS used to make per `cargo build -p` invocation now
+# lives. Cargo features only ever add, so `bundled` and `system` are a
+# pair per extension and the artifact dependency takes
+# `default-features = false`: selecting `system` means
+# `--no-default-features --features "system-zlib,bundled-sqlite3,…"`,
+# which `bin/install` composes. psych and nokogiri have no such choice
+# (a Rust port, and a patched libxml2 the FFI mirrors).
+default = ["bundled-sqlite3", "bundled-zlib", "bundled-zstd"]
+bundled-sqlite3 = ["sqlite3_native/bundled"]
+system-sqlite3 = ["sqlite3_native/system"]
+bundled-zlib = ["zlib_native/bundled"]
+system-zlib = ["zlib_native/system"]
+bundled-zstd = ["zstd_native/bundled"]
+system-zstd = ["zstd_native/system"]
+
 [dependencies]
 # Phase-1 locality experiment: size-class-segregated backend for the global
 # allocator (see the `mimalloc` feature below). Optional; default builds
@@ -144,3 +162,19 @@ libffi = { version = "5.1.0", features = ["system"] }
 
 [build-dependencies]
 dirs = "6.0.0"
+
+# The five dynamically loaded extensions, as *artifact* dependencies
+# (`-Z bindeps`, enabled in .cargo/config.toml). Cargo builds each cdylib
+# and hands `build.rs` its path in `CARGO_CDYLIB_FILE_<NAME>`, which is
+# what lets the build script install them into the same root as the
+# vendored stdlib — so `cargo install --path monoruby` alone produces an
+# install that can `require "psych"`, instead of one that needs a second
+# step to copy them. `lib = false`: the interpreter links none of them,
+# it dlopens them (doc/native_extension_loading.md). `target = "target"`:
+# built for the target platform, not the build host, so a cross build
+# produces extensions its own binary can load.
+sqlite3_native = { path = "../ext/sqlite3", artifact = "cdylib", lib = false, target = "target", default-features = false }
+zlib_native = { path = "../ext/zlib", artifact = "cdylib", lib = false, target = "target", default-features = false }
+zstd_native = { path = "../ext/zstd", artifact = "cdylib", lib = false, target = "target", default-features = false }
+psych_native = { path = "../ext/psych", artifact = "cdylib", lib = false, target = "target" }
+nokogiri_native = { path = "../ext/nokogiri", artifact = "cdylib", lib = false, target = "target" }
