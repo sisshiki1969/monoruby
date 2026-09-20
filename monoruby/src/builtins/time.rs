@@ -2682,7 +2682,7 @@ fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         // have — `%Z` is empty there, as CRuby leaves it.
         time_zone_abbr(&inner)
     };
-    let pre = preprocess_strftime(&inner, &fmt_str, zone_abbr.as_deref());
+    let pre = preprocess_strftime(&inner, &fmt_str, zone_abbr.as_deref())?;
     use std::fmt::Write;
     let s = match &inner {
         TimeInner::Local(t, _) => {
@@ -2704,23 +2704,19 @@ fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     })
 }
 
-/// Walks the format string, replacing Ruby-specific specifiers with
-/// their computed literal output. Everything else is left as-is so
-/// chrono handles it.
+/// Walks the format string and renders every directive CRuby knows,
+/// leaving only literal text (with each `%` doubled) for chrono to
+/// copy out.
 ///
-/// Handled here:
-/// - `%z` / `%:z` / `%::z` (zone offset, with optional `-`/`_`/`0`
-///   flag and width prefix);
-/// - `%-z` family for UTC → renders the "unknown offset" `-0000` /
-///   `-00:00` / `-00:00:00` form, matching CRuby's RFC 3339 quirk;
-/// - `%Z` for fixed-offset zones → empty string (CRuby returns ""
-///   unless the time has a named zone, which monoruby only tracks
-///   for the literal `UTC`);
-/// - `%v` → ` D-MMM-YYYY` with uppercase abbreviated month;
-/// - `%^b` / `%^B` → uppercase abbreviated / full month name;
-/// - `%[1..12]N` → arbitrary-width sub-second digits (right-pads
-///   `%9N` with zeros for `>9`).
-fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) -> String {
+/// The grammar is CRuby's: `%`, then any number of the flags `-` `_`
+/// `0` `^` `#`, then an optional width, then any number of `:` (only
+/// `%z` reads them, and the count wraps at four), then an optional
+/// `E` / `O` locale modifier, then the conversion. `%z`, `%L` and
+/// `%N` read the width themselves; everything else goes through
+/// [`directive_core`] and [`pad_core`]. A directive nobody owns is
+/// printed as written, and a `%` with nothing but flags after it is
+/// an `ArgumentError`, both as CRuby does.
+fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) -> Result<String> {
     let mut out = String::new();
     let bytes = fmt.as_bytes();
     let mut i = 0;
@@ -2742,16 +2738,32 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
         // conversion letter.
         let mut j = i + 1;
         let mut flag_minus = false;
-        let mut flag_underscore = false;
-        let mut flag_zero = false;
         let mut flag_caret = false;
+        let mut flag_hash = false;
+        // `_` and `0` both name a pad character, and CRuby lets the
+        // later one win: `%_010h` pads with zeros, `%0_10h` with
+        // spaces. Two booleans cannot say that, so keep the last.
+        let mut pad_flag: Option<char> = None;
+        let mut z_pad: Option<char> = None;
         while j < bytes.len() {
             match bytes[j] {
-                b'-' => flag_minus = true,
-                b'_' => flag_underscore = true,
-                b'0' => flag_zero = true,
+                b'-' => {
+                    flag_minus = true;
+                    // For `%z`, `-` both selects the unknown-offset
+                    // form *and* joins the pad chain as a zero — so
+                    // `%_-z` is `+0300` where `%-_z` is `" +300"`.
+                    z_pad = Some('0');
+                }
+                b'_' => {
+                    pad_flag = Some(' ');
+                    z_pad = Some(' ');
+                }
+                b'0' => {
+                    pad_flag = Some('0');
+                    z_pad = Some('0');
+                }
                 b'^' => flag_caret = true,
-                b'#' => {} // ignored
+                b'#' => flag_hash = true,
                 _ => break,
             }
             j += 1;
@@ -2767,97 +2779,96 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
         } else {
             None
         };
-        let mut colons = 0usize;
+        let mut raw_colons = 0usize;
         while j < bytes.len() && bytes[j] == b':' {
-            colons += 1;
+            raw_colons += 1;
             j += 1;
         }
+        // CRuby keeps the colon count in a two-bit field, so it wraps:
+        // `%::::b` is `%b` and `%:::::z` is `%:z`. The one thing the
+        // wrap does not restore is `%z` itself — a `%z` that wrapped
+        // back to zero prints as written instead of as an offset.
+        let colons = raw_colons % 4;
+        let colons_wrapped = raw_colons > 0 && colons == 0;
+        // POSIX's locale modifiers. CRuby accepts them for the
+        // conversions the C library does and prints the rest as
+        // written; either way it has no alternative calendars, so an
+        // accepted modifier is simply dropped.
+        let modifier = match bytes.get(j) {
+            Some(&m @ (b'E' | b'O')) => {
+                j += 1;
+                Some(m)
+            }
+            _ => None,
+        };
         if j >= bytes.len() {
-            // `%...` with no conversion letter — emit verbatim.
+            // A directive that runs off the end of the string. CRuby
+            // takes `%:` and friends as literal text, but a `%` with
+            // nothing but flags and a width after it is an error —
+            // `"%"`, `"%-"` and `"%12"` all raise, naming the whole
+            // format string.
+            if raw_colons == 0 && modifier.is_none() {
+                return Err(MonorubyErr::argumenterr(format!("invalid format: {fmt}")));
+            }
+            out.push('%');
             out.push_str(&fmt[i..]);
             break;
         }
-        let conv = bytes[j];
-        let directive_end = j + 1;
+        // The conversion is a *character*, and a multibyte one is
+        // never a directive monoruby knows — CRuby prints `"%\u{65e5}"`
+        // as written. Reading it as a char keeps the slicing below on
+        // UTF-8 boundaries; `\0` stands in for "no directive matches".
+        let conv_start = j;
+        let conv_char = fmt[conv_start..].chars().next().unwrap();
+        let conv = if conv_char.is_ascii() {
+            conv_char as u8
+        } else {
+            b'\0'
+        };
+        let directive_end = conv_start + conv_char.len_utf8();
 
-        // Dispatch handled cases. Anything we don't handle is emitted
-        // verbatim for chrono.
+        // The conversions a modifier may carry, per POSIX and per what
+        // CRuby's own strftime accepts.
+        let modifier_ok = match modifier {
+            None => true,
+            Some(b'E') => matches!(conv, b'Y' | b'y' | b'C' | b'c' | b'x' | b'X'),
+            _ => matches!(
+                conv,
+                b'm' | b'd' | b'H' | b'M' | b'S' | b'y' | b'e' | b'k' | b'l' | b'I' | b'V' | b'U'
+                    | b'W' | b'u' | b'w'
+            ),
+        };
+
+        // Everything monoruby can render itself is rendered here, with
+        // CRuby's padding and casing. Only `%z`, `%L` and `%N` — whose
+        // width means something else — keep their own arms below, and
+        // a conversion nobody owns is printed as written.
+        if colons == 0
+            && modifier_ok
+            && conv != b'z'
+            && conv != b'L'
+            && conv != b'N'
+            && let Some((core, kind)) = directive_core(inner, conv, zone_abbr)
+        {
+            // What this builds is still a *format* string — chrono
+            // renders it afterwards — so a `%` in the text has to be
+            // doubled or chrono reads it as a directive of its own.
+            // `%%` with a width is the case that needs it.
+            let text = pad_core(&core, kind, width, flag_minus, pad_flag, flag_caret, flag_hash);
+            out.push_str(&text.replace('%', "%%"));
+            i = directive_end;
+            continue;
+        }
+
+        // The three whose width is not a padding width.
         match (conv, colons) {
-            (b'z', _) => {
-                let txt =
-                    format_offset(inner, colons, flag_minus, flag_underscore, flag_zero, width);
+            (b'z', _) if !colons_wrapped && modifier_ok => {
+                let txt = format_offset(inner, colons, flag_minus, z_pad == Some(' '), width);
                 out.push_str(&txt);
                 i = directive_end;
                 continue;
             }
-            (b'Z', 0) => {
-                // CRuby: a timezone object's `#abbr` wins; otherwise "UTC"
-                // for UTC times and empty for fixed-offset / unnamed zones
-                // (local-zone names aren't tracked in monoruby).
-                let txt = match zone_abbr {
-                    Some(a) => a.to_string(),
-                    None => match inner {
-                        TimeInner::Utc(_) => "UTC".to_string(),
-                        TimeInner::Local(_, _) => String::new(),
-                    },
-                };
-                out.push_str(&txt);
-                i = directive_end;
-                continue;
-            }
-            (b'v', 0) => {
-                // ` D-MMM-YYYY` with uppercase abbreviated month.
-                let (y, m, d) = match inner {
-                    TimeInner::Local(t, _) => (t.year(), t.month(), t.day()),
-                    TimeInner::Utc(t) => (t.year(), t.month(), t.day()),
-                };
-                out.push_str(&format!(
-                    "{:>2}-{}-{:04}",
-                    d,
-                    MONTH_UPPER_ABBR[(m as usize - 1).min(11)],
-                    y
-                ));
-                i = directive_end;
-                continue;
-            }
-            // `%^b` / `%^h` / `%^B` → uppercase month name.
-            // `%h` is a CRuby synonym for `%b` (chrono doesn't accept it).
-            (b'b' | b'B' | b'h', 0) if flag_caret => {
-                let m = match inner {
-                    TimeInner::Local(t, _) => t.month(),
-                    TimeInner::Utc(t) => t.month(),
-                };
-                let idx = (m as usize - 1).min(11);
-                out.push_str(if conv == b'B' {
-                    MONTH_UPPER_FULL[idx]
-                } else {
-                    MONTH_UPPER_ABBR[idx]
-                });
-                i = directive_end;
-                continue;
-            }
-            // `%h` without caret falls through to chrono after the
-            // substitution `h → b` (chrono recognises `%b`).
-            (b'h', 0) if !flag_caret => {
-                // Re-emit as `%b` (preserving flags / width).
-                out.push('%');
-                if flag_minus {
-                    out.push('-');
-                }
-                if flag_underscore {
-                    out.push('_');
-                }
-                if flag_zero {
-                    out.push('0');
-                }
-                if let Some(w) = width {
-                    out.push_str(&w.to_string());
-                }
-                out.push('b');
-                i = directive_end;
-                continue;
-            }
-            (b'N', 0) => {
+            (b'N', 0) if modifier_ok => {
                 let nanos = match inner {
                     TimeInner::Local(t, _) => t.nanosecond(),
                     TimeInner::Utc(t) => t.nanosecond(),
@@ -2867,33 +2878,241 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
                 i = directive_end;
                 continue;
             }
-            (b'L', 0) => {
+            (b'L', 0) if modifier_ok => {
+                // `%L` is `%N` with a default width of 3: fractional
+                // *digits*, truncated or right-extended to the width
+                // rather than right-aligned in it. `%9L` is the whole
+                // nanoseconds and `%02L` the first two.
                 let nanos = match inner {
                     TimeInner::Local(t, _) => t.nanosecond(),
                     TimeInner::Utc(t) => t.nanosecond(),
                 };
-                out.push_str(&format!("{:03}", nanos / 1_000_000));
+                out.push_str(&format_subsec(nanos, width.unwrap_or(3)));
                 i = directive_end;
                 continue;
             }
             _ => {}
         }
-        // Unhandled: copy through verbatim.
-        out.push_str(&fmt[i..directive_end]);
-        i = directive_end;
+        // Nothing owns this directive. CRuby prints everything up to
+        // the conversion character as literal text and then *resumes
+        // parsing at that character*: `"%:%d"` is `"%:"` followed by
+        // the day, not the four characters written. Re-doubling the `%`
+        // keeps chrono from expanding what we just made literal.
+        out.push('%');
+        out.push_str(&fmt[i..conv_start]);
+        i = conv_start;
     }
-    out
+    Ok(out)
+}
+
+// CRuby's `strftime` pads and cases every directive by the same rules,
+// and monoruby only ever applied them to `%z`: everything else was
+// handed to chrono with the flags still attached, and chrono does not
+// know that syntax — `%04m` and `%10h` came back *empty*, and `%^_5h`
+// came back unpadded. These are those rules.
+
+/// How a directive's text is padded when a flag or a width asks for it.
+#[derive(Clone, Copy)]
+enum PadKind {
+    /// Digits, right-aligned in `width` with `pad`. `%m` and friends are
+    /// `(2, '0')`; `%e` / `%k` / `%l` are `(2, ' ')`; `%s` is `(0, '0')`,
+    /// which is to say never padded unless asked.
+    Num { width: usize, pad: char },
+    /// A literal that no flag re-cases: `%n`, `%t`, `%%`, and the
+    /// compound expansions. Never padded unless asked, with a space.
+    Text,
+    /// A name, which `^` and `#` may re-case. `#` upcases one that has
+    /// any lowercase in it and downcases one that has none, so `%#A` is
+    /// `SATURDAY` while `%#p` is `am`.
+    Name,
+    /// One of the compound expansions (`%c`, `%D`, `%F`, …). Padded
+    /// like text, but `-` does not turn the padding off the way it does
+    /// for a name: `%-13X` is still `"     04:05:06"`.
+    Compound,
+}
+
+/// The unpadded text of `conv` for this time, and how it pads — `None`
+/// for a conversion that is not one of CRuby's, which the caller then
+/// prints as written.
+fn directive_core(inner: &TimeInner, conv: u8, zone_abbr: Option<&str>) -> Option<(String, PadKind)> {
+    use PadKind::{Compound, Name, Num, Text};
+    // The civil fields, from whichever half of the enum holds them.
+    macro_rules! f {
+        ($m:ident) => {
+            match inner {
+                TimeInner::Local(t, _) => t.$m(),
+                TimeInner::Utc(t) => t.$m(),
+            }
+        };
+    }
+    // A name chrono already knows how to spell.
+    let name = |spec: &str| -> String {
+        match inner {
+            TimeInner::Local(t, _) => t.format(spec).to_string(),
+            TimeInner::Utc(t) => t.format(spec).to_string(),
+        }
+    };
+    let num = |v: i64, width: usize, pad: char| Some((v.to_string(), Num { width, pad }));
+    // `%Y` as the compounds that embed it spell it. chrono writes a
+    // five-digit year as `+10000`, where CRuby — and `%Y` itself —
+    // write `10000`, so the compounds cannot go through chrono for it.
+    let year4 = || {
+        let y = f!(year) as i64;
+        if y < 0 {
+            format!("-{:03}", -y)
+        } else {
+            format!("{y:04}")
+        }
+    };
+    let hour = f!(hour) as i64;
+    Some(match conv {
+        b'Y' => return num(f!(year) as i64, 4, '0'),
+        b'C' => return num(f!(year) as i64 / 100, 2, '0'),
+        b'y' => return num(f!(year) as i64 % 100, 2, '0'),
+        b'm' => return num(f!(month) as i64, 2, '0'),
+        b'd' => return num(f!(day) as i64, 2, '0'),
+        b'e' => return num(f!(day) as i64, 2, ' '),
+        b'j' => return num(f!(ordinal) as i64, 3, '0'),
+        b'H' => return num(hour, 2, '0'),
+        b'k' => return num(hour, 2, ' '),
+        b'I' => return num(if hour % 12 == 0 { 12 } else { hour % 12 }, 2, '0'),
+        b'l' => return num(if hour % 12 == 0 { 12 } else { hour % 12 }, 2, ' '),
+        b'M' => return num(f!(minute) as i64, 2, '0'),
+        b'S' => return num(f!(second) as i64, 2, '0'),
+        b's' => return num(
+            match inner {
+                TimeInner::Local(t, _) => t.timestamp(),
+                TimeInner::Utc(t) => t.timestamp(),
+            },
+            0,
+            '0',
+        ),
+        b'A' | b'a' | b'B' | b'b' | b'h' | b'p' | b'P' => {
+            // `%h` is CRuby's synonym for `%b`, which chrono does not take.
+            let spec = if conv == b'h' { "%b" } else { &format!("%{}", conv as char) };
+            (name(spec), Name)
+        }
+        b'Z' => (
+            match zone_abbr {
+                Some(a) => a.to_string(),
+                None => match inner {
+                    TimeInner::Utc(_) => "UTC".to_string(),
+                    TimeInner::Local(_, _) => String::new(),
+                },
+            },
+            Name,
+        ),
+        b'u' => return num(f!(weekday).number_from_monday() as i64, 1, '0'),
+        b'w' => return num(f!(weekday).num_days_from_sunday() as i64, 1, '0'),
+        b'V' => return num(f!(iso_week).week() as i64, 2, '0'),
+        b'G' => return num(f!(iso_week).year() as i64, 4, '0'),
+        b'g' => return num(f!(iso_week).year() as i64 % 100, 2, '0'),
+        // Weeks counted from the year's first Sunday (`%U`) or first
+        // Monday (`%W`); the days before it are week 0.
+        b'U' | b'W' => {
+            let yday0 = f!(ordinal) as i64 - 1;
+            let from_sunday = f!(weekday).num_days_from_sunday() as i64;
+            let wday = if conv == b'U' {
+                from_sunday
+            } else {
+                (from_sunday + 6) % 7
+            };
+            return num((yday0 + 7 - wday) / 7, 2, '0');
+        }
+        // The compound conversions. CRuby pads the whole expansion, so
+        // as far as the padding is concerned they are text.
+        b'D' | b'x' => (name("%m/%d/%y"), Compound),
+        b'F' => (format!("{}-{}", year4(), name("%m-%d")), Compound),
+        b'T' | b'X' => (name("%H:%M:%S"), Compound),
+        b'R' => (name("%H:%M"), Compound),
+        b'r' => (name("%I:%M:%S %p"), Compound),
+        b'c' => (
+            format!("{} {}", name("%a %b %e %H:%M:%S"), year4()),
+            Compound,
+        ),
+        // VMS date: ` D-MMM-YYYY` with the month abbreviation upcased.
+        b'v' => (
+            format!(
+                "{:>2}-{}-{}",
+                f!(day),
+                MONTH_UPPER_ABBR[(f!(month) as usize - 1).min(11)],
+                year4()
+            ),
+            Compound,
+        ),
+        b'n' => ("\n".to_string(), Text),
+        b't' => ("\t".to_string(), Text),
+        b'%' => ("%".to_string(), Text),
+        _ => return None,
+    })
+}
+
+/// Apply CRuby's flags and width to a directive's text.
+///
+/// `-` drops the padding outright (except on a compound), `_` pads with
+/// spaces and `0` with zeros — each overriding the conversion's own
+/// default — `^` upcases, and `#` flips a name's case. The width given
+/// in the directive replaces the conversion's default width; without
+/// one, a name or literal is not padded at all while a number still
+/// reaches its own.
+fn pad_core(
+    core: &str,
+    kind: PadKind,
+    width: Option<usize>,
+    flag_minus: bool,
+    pad_flag: Option<char>,
+    flag_caret: bool,
+    flag_hash: bool,
+) -> String {
+    let nameish = matches!(kind, PadKind::Name);
+    // On a name `#` wins over `^` whichever order they came in:
+    // `%^#p` and `%#^p` are both `pm`. On a compound it is `^` that
+    // applies and `#` that is ignored.
+    let mut text = if flag_hash && nameish {
+        if core.chars().any(|c| c.is_lowercase()) {
+            core.to_uppercase()
+        } else {
+            core.to_lowercase()
+        }
+    } else if flag_caret {
+        core.to_uppercase()
+    } else {
+        core.to_string()
+    };
+    // An empty field — `%Z` on a plain offset — stays empty rather than
+    // becoming a run of padding.
+    if text.is_empty() || (flag_minus && !matches!(kind, PadKind::Compound)) {
+        return text;
+    }
+    let (default_width, default_pad) = match kind {
+        PadKind::Num { width, pad } => (width, pad),
+        _ => (0, ' '),
+    };
+    let pad = pad_flag.unwrap_or(default_pad);
+    let target = width.unwrap_or(default_width);
+    // A negative number keeps its sign in front of the padding when the
+    // padding is zeros, the way C's `%0*d` does.
+    let (sign, digits) = match text.strip_prefix('-') {
+        Some(rest) if matches!(kind, PadKind::Num { .. }) && pad == '0' => ("-", rest.to_string()),
+        _ => ("", std::mem::take(&mut text)),
+    };
+    let have = sign.chars().count() + digits.chars().count();
+    if have >= target {
+        return format!("{sign}{digits}");
+    }
+    let fill: String = std::iter::repeat(pad).take(target - have).collect();
+    format!("{sign}{fill}{digits}")
 }
 
 /// Format a `%z` family directive. `colons` is the number of `:` in
-/// the directive (0, 1, or 2). UTC + `-` flag emits CRuby's RFC 3339
-/// `-0000` / `-00:00` / `-00:00:00` "unknown offset" form.
+/// the directive (0 to 3; `3` is "as many as the offset needs"). A
+/// UTC-mode time with the `-` flag emits CRuby's RFC 3339 `-0000` /
+/// `-00:00` / `-00:00:00` "unknown offset" form.
 fn format_offset(
     inner: &TimeInner,
     colons: usize,
     flag_minus: bool,
-    flag_underscore: bool,
-    flag_zero: bool,
+    space_pad: bool,
     width: Option<usize>,
 ) -> String {
     // Total offset in seconds (signed).
@@ -2901,12 +3120,13 @@ fn format_offset(
         TimeInner::Utc(_) => 0,
         TimeInner::Local(t, _) => t.offset().local_minus_utc() as i64,
     };
-    // CRuby's `%-z` rule: any time with offset == 0 emits the
-    // "unknown offset" form `-0000` / `-00:00` / `-00:00:00`. This
-    // covers `Time.utc(...)`, `Time.new(.., "Z")`,
-    // `Time.new(.., "-00:00")`, and `Time.new(.., "+03:00").utc`.
-    // Non-zero offsets ignore the `-` flag entirely.
-    let negative_zero = flag_minus && total_secs == 0;
+    // CRuby's `%-z` rule: a UTC-mode time emits the "unknown offset"
+    // form `-0000` / `-00:00` / `-00:00:00`. That is `Time.utc(...)`,
+    // `Time.new(.., "Z")`, `Time.new(.., "-00:00")` (CRuby makes that
+    // one UTC mode too) and `Time.new(.., "+03:00").utc`. A *fixed*
+    // `+00:00` offset keeps `+0000`, and every non-zero offset ignores
+    // the `-` flag entirely.
+    let negative_zero = flag_minus && matches!(inner, TimeInner::Utc(_));
     let (sign, abs) = if negative_zero {
         ('-', 0i64)
     } else if total_secs < 0 {
@@ -2917,38 +3137,49 @@ fn format_offset(
     let h = abs / 3600;
     let m = (abs / 60) % 60;
     let s = abs % 60;
-    let core = match colons {
-        0 => format!("{}{:02}{:02}", sign, h, m),
-        1 => format!("{}{:02}:{:02}", sign, h, m),
-        _ => format!("{}{:02}:{:02}:{:02}", sign, h, m, s),
+    // With `_` the hour loses its leading zero and the space it frees
+    // moves out in front of the sign — `%_z` at +03:00 is `" +300"`,
+    // not `"+ 300"`. That is C's `%+*d` against `%+0*d`, so the pad
+    // char decides both the hour's own width and where the sign sits.
+    let pad = if space_pad { ' ' } else { '0' };
+    let hh = if pad == '0' {
+        format!("{h:02}")
+    } else {
+        h.to_string()
     };
-    if let Some(w) = width {
-        let pad = if flag_underscore { ' ' } else { '0' };
-        if core.len() < w {
-            let pad_count = w - core.len();
-            // Padding goes after the sign if zero-padding, else before
-            // the whole thing for space-padding (matches CRuby).
-            if pad == '0' {
-                // Insert `pad_count` zeros after the sign.
-                let mut padded = String::with_capacity(w);
-                padded.push(sign);
-                for _ in 0..pad_count {
-                    padded.push('0');
-                }
-                padded.push_str(&core[1..]);
-                return padded;
-            } else {
-                let mut padded = String::with_capacity(w);
-                for _ in 0..pad_count {
-                    padded.push(' ');
-                }
-                padded.push_str(&core);
-                return padded;
-            }
+    // `%:::z` is "as many colons as the offset needs": the seconds go
+    // only when they are non-zero, the minutes only when they or the
+    // seconds are, and neither when the offset is a whole hour. The
+    // second element is the natural width the directive gets when it
+    // names none — `+hhmm`, `+hh:mm`, `+hh:mm:ss`, `+hh`.
+    let (core, natural) = if colons == 3 && m == 0 && s == 0 {
+        (format!("{sign}{hh}"), 3)
+    } else {
+        let colons = match colons {
+            3 if s != 0 => 2,
+            3 => 1,
+            c => c,
+        };
+        match colons {
+            0 => (format!("{sign}{hh}{m:02}"), 5),
+            1 => (format!("{sign}{hh}:{m:02}"), 6),
+            _ => (format!("{sign}{hh}:{m:02}:{s:02}"), 9),
         }
+    };
+    // A width narrower than the offset's own never shortens it: CRuby
+    // pads `%_1z` out to `" +300"` just as `%_z` does.
+    let target = width.unwrap_or(natural).max(natural);
+    let have = core.chars().count();
+    if have >= target {
+        return core;
     }
-    let _ = flag_zero;
-    core
+    let fill: String = std::iter::repeat(pad).take(target - have).collect();
+    if pad == '0' {
+        // Zeros go between the sign and the digits.
+        format!("{sign}{fill}{}", &core[1..])
+    } else {
+        format!("{fill}{core}")
+    }
 }
 
 /// Sub-second digits, width-controlled. `nanos` holds nanoseconds
@@ -3874,6 +4105,75 @@ mod tests {
         run_test_error(r#"Time.utc(2022,10,5,13,30).deconstruct_keys(1)"#);
         run_test_error(r#"Time.utc(2022,10,5,13,30).deconstruct_keys("asd")"#);
         run_test_error(r#"Time.utc(2022,10,5,13,30).deconstruct_keys({})"#);
+    }
+
+    /// CRuby's `strftime` flag / width / modifier grammar, which
+    /// monoruby used to hand to chrono with the flags still attached.
+    #[test]
+    fn time_strftime_flags() {
+        let mut v: Vec<String> = vec![];
+        let times = [
+            r#"Time.utc(2001,2,3,4,5,6)"#,
+            r#"Time.utc(1999,12,31,23,59,59)"#,
+            r#"Time.new(2022,7,15,13,45,30,"+03:00")"#,
+            r#"Time.new(2022,1,1,0,0,0,"-05:45")"#,
+            r#"Time.new(2022,1,1,0,0,0,"+00:00")"#,
+        ];
+        // Every conversion against a representative flag/width set.
+        for t in times {
+            for d in "YmdHMSjyCeklIpPAaBbhZzsntDFTRrcxXVUWuwGgLNv%".chars() {
+                for f in ["", "-", "_", "0", "^", "#", "5", "05", "_5", "^#5", "-_^#12"] {
+                    v.push(format!(r#"{t}.strftime("%{f}{d}")"#));
+                }
+            }
+        }
+        // `%z` and its colons, including the `:::` "as needed" form and
+        // the count wrapping at four.
+        for t in times {
+            for f in [
+                "%z", "%-z", "%_z", "%0z", "%#z", "%^z", "%-_z", "%_-z", "%-#z", "%12z", "%_12z",
+                "%-_12z", "%1z", "%_1z", "%:z", "%::z", "%:::z", "%::::z", "%:::::z", "%-:::z",
+                "%_:::z", "%12:::z", "%_7:::z", "%-_12::z", "%_-12::z",
+            ] {
+                v.push(format!(r#"{t}.strftime({f:?})"#));
+            }
+        }
+        // Colons on a conversion that is not `%z`: printed as written,
+        // and parsing resumes at the conversion character — except at a
+        // multiple of four, where the count has wrapped back to none.
+        for f in [
+            "%:A", "%::b", "%:::d", "%::::b", "%09::::b", "%:::::d", "%::::::z", "%:A%d", "%:%%",
+            "abc%:%def", "%:", "%_5:", "%::::%",
+        ] {
+            v.push(format!(r#"Time.utc(2001,12,25,13,5,6).strftime({f:?})"#));
+        }
+        // The POSIX locale modifiers, accepted for the conversions
+        // CRuby accepts them for and printed as written elsewhere.
+        for f in ["%EY", "%Ec", "%Ex", "%EX", "%Ey", "%EC", "%Em", "%EA", "%OY", "%Od", "%OH", "%Oy", "%Ou", "%Oj", "%Oc"] {
+            v.push(format!(r#"Time.utc(2001,2,3,4,5,6).strftime({f:?})"#));
+        }
+        // A conversion nobody owns — including chrono's own, which used
+        // to leak through — is printed as written.
+        for f in ["%q", "%-q", "%_5q", "%+", "%f", "%i", "%J", "%8q", "%::::q"] {
+            v.push(format!(r#"Time.utc(2001,2,3,4,5,6).strftime({f:?})"#));
+        }
+        // `%N` / `%L` widths, and `%%` with one.
+        for f in ["%N", "%L", "%3N", "%6N", "%12N", "%1L", "%9L", "%14L", "%-N", "%_L", "%5%", "%-%", "%%"] {
+            v.push(format!(r#"Time.utc(2001,2,3,4,5,6,987654).strftime({f:?})"#));
+        }
+        // Five-digit years: chrono writes `+10000` where CRuby writes
+        // `10000`, so the compounds cannot go through it.
+        for f in ["%Y", "%F", "%c", "%D", "%x", "%G", "%C"] {
+            v.push(format!(r#"Time.at(253402400799).utc.strftime({f:?})"#));
+            v.push(format!(r#"Time.at(-62135596800).utc.strftime({f:?})"#));
+        }
+        let refs: Vec<&str> = v.iter().map(|s| s.as_str()).collect();
+        run_tests(&refs);
+        // A `%` with nothing but flags after it is an error, naming the
+        // whole format string.
+        for f in ["%", "%-", "%12", "%_", "abc%", "%:%", "%::%", "%12:%", "%E%", "%O%"] {
+            run_test_error(&format!(r#"Time.utc(2001,1,1).strftime({f:?})"#));
+        }
     }
 
     #[test]
