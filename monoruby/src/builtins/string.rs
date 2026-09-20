@@ -14374,6 +14374,56 @@ mod tests {
     }
 
     #[test]
+    fn inspect_escape_picks_by_character_not_by_byte() {
+        // CRuby's `rb_str_inspect` picks its escape by whether the
+        // bytes form a character: an ill-formed byte is written on its
+        // own (`\xNN`, one per byte, and a printable byte after the run
+        // stays outside it), while a valid multi-byte character with no
+        // rendering is written whole in one `\x{...}`. A one-byte
+        // character (Shift_JIS halfwidth katakana) has nothing to group,
+        // so it is `\xNN` too. `#dump` is byte-oriented either way.
+        run_test_once(
+            r#"(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); [s.inspect, s.dump] }; [
+              f.call("EUC-JP", 0x41, 0x80, 0x42),
+              f.call("EUC-JP", 0x41, 0x8F, 0xA1, 0x42),
+              f.call("EUC-JP", 0x41, 0xA4, 0xA2, 0x42),
+              f.call("EUC-JP", 0x8F, 0xA1, 0xA1),
+              f.call("EUC-JP", 0x8E, 0xA1),
+              f.call("EUC-JP", 0x8E),
+              f.call("EUC-JP", 0x41, 0xFF, 0xFF, 0x42),
+              f.call("Shift_JIS", 0x41, 0x81, 0x00),
+              f.call("Shift_JIS", 0x41, 0x82, 0xA0, 0x42),
+              f.call("Shift_JIS", 0x41, 0xA1, 0x42),
+              f.call("Shift_JIS", 0x0A, 0xA1, 0xDF, 0xE0, 0x40),
+              f.call("Emacs-Mule", 0x41, 0x81, 0xA0, 0x42),
+              f.call("Emacs-Mule", 0x41, 0x80, 0x42),
+              f.call("Emacs-Mule", 0x41, 0x0A, 0x1B, 0x80, 0x92, 0xA0, 0xB0),
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn inspect_named_escapes_and_hash_lookahead() {
+        // The ASCII-incompatible byte encodings escape every byte, even
+        // printable ASCII — but a control character that has a named
+        // escape keeps it (`\e`, not `\x1B`). And the `#` before `$`,
+        // `@` or `{` is escaped in *every* ASCII-compatible encoding,
+        // not only UTF-8, so the inspected form never reads back as an
+        // interpolation.
+        run_test_once(
+            r##"(g=->(enc){ s = [0x23,0x24,0x61,0x23,0x40,0x23,0x7B].pack("C*").force_encoding(enc); [s.inspect, s.dump] }; [
+              (0..0x20).to_a.pack("C*").force_encoding("ISO-2022-JP").inspect,
+              [0x41,0x0A,0x09,0x1B,0x22,0x5C,0x7F,0x80].pack("C*").force_encoding("ISO-2022-JP").inspect,
+              [0x41,0x0A,0x1B,0x2B,0x80].pack("C*").force_encoding("UTF-7").inspect,
+              g.call("UTF-8"), g.call("US-ASCII"), g.call("ASCII-8BIT"),
+              g.call("ISO-8859-1"), g.call("EUC-JP"), g.call("Shift_JIS"),
+              g.call("Emacs-Mule"), g.call("ISO-2022-JP"),
+              "#$x".inspect, [0x5C,0x23,0x24].pack("C*").force_encoding("ASCII-8BIT").inspect,
+            ])"##,
+        );
+    }
+
+    #[test]
     fn inspect_and_case_map_by_encoding() {
         run_tests(&[
             // UTF-16/UTF-32: decode, ASCII escaped normally, non-ASCII
