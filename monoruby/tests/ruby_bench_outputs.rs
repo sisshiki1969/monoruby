@@ -9,7 +9,8 @@
 //! document — rather than the whole output. Every test needs the
 //! ruby-bench checkout at `$RUBY_BENCH` or `../ruby-bench` (CI clones it)
 //! and skips otherwise; the gem-backed ones also skip when the host lacks
-//! the gem (CI installs `erubi`, `chunky_png` and the rubocop gems).
+//! the gem (CI installs `erubi`, `chunky_png` and the rubocop gems), and
+//! the psych one skips on a host whose libyaml predates 0.2.3.
 
 extern crate monoruby;
 use monoruby::tests::ensure_extension;
@@ -33,6 +34,25 @@ fn gem_available(name: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// The libyaml version the host psych links, as `(major, minor, patch)`.
+/// `Psych::LIBYAML_VERSION` is `yaml_get_version_string()`, so this is the
+/// library actually loaded rather than the one psych was built against.
+fn host_libyaml_version() -> Option<(u32, u32, u32)> {
+    let out = Command::new(ruby_path())
+        .args(["-rpsych", "-e", "print Psych::LIBYAML_VERSION"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(out.stdout).ok()?;
+    let mut it = s.trim().split('.').map(|n| n.parse::<u32>());
+    match (it.next()?, it.next()?, it.next()?) {
+        (Ok(major), Ok(minor), Ok(patch)) => Some((major, minor, patch)),
+        _ => None,
+    }
 }
 
 fn run(mut cmd: Command, cwd: &PathBuf) -> String {
@@ -216,6 +236,24 @@ fn psych_loads_like_cruby() {
     // The three YAML documents of psych-load (the benchmark body is
     // `Psych.load` of each), loaded and inspected; then dumped again and
     // re-loaded, so the emitter's text and the round trip are checked too.
+    //
+    // The emitted text is only comparable against a libyaml that has the
+    // 0.2.3 fix suppressing the trailing space after an empty block
+    // mapping value (`meet.jitsi: ` against `meet.jitsi:`). libyaml-safer,
+    // which monoruby drives, is a port of 0.2.5 and has it; Ubuntu 22.04
+    // still ships 0.2.2, which does not, and there the dumps differ by one
+    // byte per such key. The CI runners (Ubuntu 24.04, Homebrew) are on
+    // 0.2.5, so this only skips on an old host.
+    if let Some(v) = host_libyaml_version()
+        && v < (0, 2, 3)
+    {
+        eprintln!(
+            "skipped: the host psych links libyaml {}.{}.{}, which predates the 0.2.3 \
+             fix for the trailing space after an empty block mapping value",
+            v.0, v.1, v.2
+        );
+        return;
+    }
     compare(
         "psych-load",
         &[],
