@@ -501,7 +501,28 @@ class Thread
       begin
         yield
       ensure
-        unlock
+        # The release is uninterruptible, and it has to be: asynchronous
+        # interrupts arrive in a stream (`Thread#raise` in a loop, a
+        # kill following a raise), and `owned?` is a method call, so the
+        # ensure is itself full of safepoints. A second interrupt
+        # landing in here unwound the thread with the mutex still held
+        # by a fiber that no longer exists; the thread's next `lock` on
+        # it then reported "deadlock; recursive locking" against itself.
+        # `Mutex#sleep`'s re-acquire is uninterruptible for the same
+        # reason.
+        #
+        # `owned?`, not an unconditional `unlock`: the body may have
+        # released the mutex itself (`Mutex#sleep` does, and CRuby lets
+        # a `synchronize` block unlock), and unlocking twice would raise
+        # out of the ensure over whatever exception is already in
+        # flight.
+        #
+        # The exit delivery point is *not* a blocking one — this ensure
+        # is not a blocking call, whatever the body was — so an
+        # `:on_blocking` interrupt stays deferred here. That keeps
+        # `Queue#pop(true)`, a `synchronize` that raises `ThreadError`
+        # without ever parking, from turning into a delivery point.
+        Thread.__uninterruptible { unlock if owned? }
       end
     end
 
@@ -524,8 +545,9 @@ class Thread
         # with mutex_lock_uninterruptible): a ConditionVariable#wait-er
         # killed after being signaled still owns the mutex in its own
         # ensure blocks. The deferred interrupt fires right after the
-        # lock is held.
-        Thread.__uninterruptible { lock }
+        # lock is held — at a blocking delivery point, since the sleep
+        # this is the ensure of is itself the blocking call.
+        Thread.__uninterruptible(true) { lock }
       end
       (Process.clock_gettime(Process::CLOCK_MONOTONIC) - start).round
     end
