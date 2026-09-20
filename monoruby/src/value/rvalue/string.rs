@@ -2270,9 +2270,6 @@ impl RStringInner {
     ///
     pub fn conv_char_index2(&self, char_pos: i64) -> Option<usize> {
         let len = self.char_length();
-        if len == 0 && char_pos == -1 {
-            return Some(0);
-        }
         if char_pos >= 0 {
             Some(char_pos as usize)
         } else {
