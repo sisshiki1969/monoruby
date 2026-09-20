@@ -581,6 +581,147 @@ fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         .ok_or_else(|| vm.take_error())
 }
 
+// `Float#floor` / `#ceil` / `#truncate` with a positive `ndigits` are not
+// simply `(f * 10**n).floor / 10**n`. That round-trip invents digits the
+// receiver never had — `2.675.floor(8)` comes out `2.67499999`, because
+// `2.675 * 1e8` is `267499999.99999997` — and past ~17 significant digits
+// it is pure noise. CRuby guards it at both ends and corrects it in the
+// middle (`rb_float_floor` / `rb_float_ceil`, numeric.c); these are those
+// guards, so that the answers match.
+
+/// The exponent `frexp` would report: the `binexp` with
+/// `0.5 <= |f| / 2**binexp < 1`. Read off the exponent field rather than
+/// via `log2`, so it is exact, and renormalized for subnormals (whose
+/// field reads 0). `f` must be finite and non-zero.
+fn frexp_exp(f: f64) -> i32 {
+    let bits = f.abs().to_bits();
+    let raw = ((bits >> 52) & 0x7ff) as i32;
+    if raw != 0 {
+        return raw - 1022;
+    }
+    // Subnormal: scale into the normal range and take the exponent back off.
+    let scaled = (f.abs() * (2f64).powi(54)).to_bits();
+    (((scaled >> 52) & 0x7ff) as i32 - 1022) - 54
+}
+
+/// `10**ndigits` is so much larger than the receiver that the product is
+/// already an integer, so rounding cannot move it: the answer is the
+/// receiver itself. Up to `DBL_DIG + 2` digits are needed to write a
+/// double, and `binexp` bounds the receiver's decimal exponent from
+/// below (`floor(binexp/4)` for a positive `binexp`, `binexp/3 - 1`
+/// otherwise), which is what the comparison adds.
+fn float_round_overflow(ndigits: i64, binexp: i32) -> bool {
+    const FLOAT_DIG: i64 = f64::DIGITS as i64 + 2;
+    let exp = if binexp > 0 { binexp / 4 } else { binexp / 3 - 1 };
+    ndigits >= FLOAT_DIG - exp as i64
+}
+
+/// The mirror image: `10**ndigits` is so much smaller than the receiver
+/// that every digit the receiver has falls off the end, leaving zero.
+fn float_round_underflow(ndigits: i64, binexp: i32) -> bool {
+    let exp = if binexp > 0 { binexp / 3 + 1 } else { binexp / 4 };
+    ndigits < -(exp as i64)
+}
+
+/// `10**ndigits` as a double, the way C's `pow` computes it: one
+/// correctly rounded result. `powi` would raise by repeated squaring and
+/// round at each step, which from `10**23` on — the first power of ten a
+/// double cannot hold exactly — lands on a different double and takes
+/// every answer derived from it with it.
+fn pow10(ndigits: i64) -> f64 {
+    10f64.powf(ndigits as f64)
+}
+
+// A note for whoever bumps the reference CRuby: the `ruby_4_0` branch has
+// since grown an exact-rational fallback for `ndigits >= DBL_DIG`
+// (`ACCURATE_POW10` / `rb_flo_floor_by_rational`), where `10**ndigits` is
+// no longer exact as a double. The pinned 4.0.2 does not have it, and
+// adding it here makes the answers disagree with that Ruby rather than
+// agree — measured at 547 differences over 240k comparisons, against 0
+// without it. Revisit when the pin moves.
+
+/// `Float#floor` with `ndigits < 0`: zero the last `-ndigits` digits of
+/// the integer part, rounding toward negative infinity. Done in `BigInt`
+/// because the receiver can exceed what a double can step through one
+/// integer at a time.
+fn floor_neg_ndigits(f: f64, ndigits: i64) -> Value {
+    let Some((quot, rem, mul, frac)) = split_at_ndigits(f, ndigits) else {
+        return Value::integer(0);
+    };
+    let quot = if rem < BigInt::ZERO || (rem == BigInt::ZERO && frac < 0.0) {
+        quot - 1
+    } else {
+        quot
+    };
+    Value::bigint(quot * mul)
+}
+
+/// `Float#ceil` with `ndigits < 0`: the same, toward positive infinity.
+fn ceil_neg_ndigits(f: f64, ndigits: i64) -> Value {
+    let Some((quot, rem, mul, frac)) = split_at_ndigits(f, ndigits) else {
+        return Value::integer(0);
+    };
+    let quot = if rem > BigInt::ZERO || (rem == BigInt::ZERO && frac > 0.0) {
+        quot + 1
+    } else {
+        quot
+    };
+    Value::bigint(quot * mul)
+}
+
+/// Split `f` at the `-ndigits`-th decimal place: the quotient and
+/// remainder of its integer part over `10**-ndigits`, that power itself,
+/// and what was left below the decimal point (which decides the tie when
+/// the remainder is zero). `None` when the answer is flatly zero.
+fn split_at_ndigits(f: f64, ndigits: i64) -> Option<(BigInt, BigInt, BigInt, f64)> {
+    let neg_ndigits = u32::try_from(-ndigits).ok()?;
+    if neg_ndigits > 308 {
+        return None;
+    }
+    let int_val = BigInt::from_f64(f.trunc())?;
+    let mul = BigInt::from(10u64).pow(neg_ndigits);
+    let (quot, rem) = num::integer::div_rem(int_val, mul.clone());
+    Some((quot, rem, mul, f - f.trunc()))
+}
+
+/// `Float#floor`'s positive-`ndigits` case, shared with `#truncate` for a
+/// non-negative receiver. The `(mul + 1) / f` step is CRuby's correction:
+/// take the next decimal up unless it overshoots the receiver, which is
+/// what stops `2.675.floor(8)` from reporting `2.67499999`.
+fn floor_ndigits(f: f64, ndigits: i64) -> f64 {
+    if f == 0.0 {
+        return f;
+    }
+    let binexp = frexp_exp(f);
+    if float_round_overflow(ndigits, binexp) {
+        return f;
+    }
+    if f > 0.0 && float_round_underflow(ndigits, binexp) {
+        return 0.0;
+    }
+    let scale = pow10(ndigits);
+    let mul = (f * scale).floor();
+    let res = (mul + 1.0) / scale;
+    if res > f { mul / scale } else { res }
+}
+
+/// `Float#ceil`'s positive-`ndigits` case, shared with `#truncate` for a
+/// negative receiver. CRuby applies no correction step here.
+fn ceil_ndigits(f: f64, ndigits: i64) -> f64 {
+    if f == 0.0 {
+        return f;
+    }
+    let binexp = frexp_exp(f);
+    if float_round_overflow(ndigits, binexp) {
+        return f;
+    }
+    if f < 0.0 && float_round_underflow(ndigits, binexp) {
+        return 0.0;
+    }
+    let scale = pow10(ndigits);
+    (f * scale).ceil() / scale
+}
+
 ///
 /// ### Float#floor
 ///
@@ -612,34 +753,9 @@ fn floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         return Value::coerce_f64_to_int(f.floor());
     }
     if ndigits > 0 {
-        if let Ok(ndigits) = u32::try_from(ndigits) {
-            let mul = 10f64.powi(ndigits as i32);
-            let f = (f * mul).floor() / mul;
-            Ok(Value::float(f))
-        } else {
-            Err(MonorubyErr::rangeerr("too big to convert to u32"))
-        }
+        Ok(Value::float(floor_ndigits(f, ndigits)))
     } else {
-        let neg_ndigits = (-ndigits) as u32;
-        if neg_ndigits > 308 {
-            return Ok(Value::integer(0));
-        }
-        // Use BigInt to avoid precision loss from float division.
-        let int_val = match BigInt::from_f64(f.trunc()) {
-            Some(v) => v,
-            None => return Ok(Value::integer(0)),
-        };
-        let mul_big = BigInt::from(10u64).pow(neg_ndigits);
-        let frac_part = f - f.trunc();
-        let (quot, rem) = num::integer::div_rem(int_val, mul_big.clone());
-        // floor: round toward negative infinity
-        let rounded_quot = if rem < BigInt::ZERO || (rem == BigInt::ZERO && frac_part < 0.0) {
-            &quot - 1
-        } else {
-            quot.clone()
-        };
-        let result = rounded_quot * mul_big;
-        Ok(Value::bigint(result))
+        Ok(floor_neg_ndigits(f, ndigits))
     }
 }
 
@@ -674,34 +790,9 @@ fn ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Value::coerce_f64_to_int(f.ceil());
     }
     if ndigits > 0 {
-        if let Ok(ndigits) = u32::try_from(ndigits) {
-            let mul = 10f64.powi(ndigits as i32);
-            let f = (f * mul).ceil() / mul;
-            Ok(Value::float(f))
-        } else {
-            Err(MonorubyErr::rangeerr("too big to convert to u32"))
-        }
+        Ok(Value::float(ceil_ndigits(f, ndigits)))
     } else {
-        let neg_ndigits = (-ndigits) as u32;
-        if neg_ndigits > 308 {
-            return Ok(Value::integer(0));
-        }
-        // Use BigInt to avoid precision loss from float division.
-        let int_val = match BigInt::from_f64(f.trunc()) {
-            Some(v) => v,
-            None => return Ok(Value::integer(0)),
-        };
-        let mul_big = BigInt::from(10u64).pow(neg_ndigits);
-        let frac_part = f - f.trunc();
-        let (quot, rem) = num::integer::div_rem(int_val, mul_big.clone());
-        // ceil: round toward positive infinity
-        let rounded_quot = if rem > BigInt::ZERO || (rem == BigInt::ZERO && frac_part > 0.0) {
-            &quot + 1
-        } else {
-            quot.clone()
-        };
-        let result = rounded_quot * mul_big;
-        Ok(Value::bigint(result))
+        Ok(ceil_neg_ndigits(f, ndigits))
     }
 }
 
@@ -736,26 +827,25 @@ fn truncate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Value::coerce_f64_to_int(f.trunc());
     }
     if ndigits > 0 {
-        if let Ok(ndigits) = u32::try_from(ndigits) {
-            let mul = 10f64.powi(ndigits as i32);
-            let f = (f * mul).trunc() / mul;
-            Ok(Value::float(f))
+        // CRuby's `flo_truncate` dispatches on the sign bit: truncation
+        // is `ceil` below zero and `floor` above it, guards and all.
+        let f = if f.is_sign_negative() {
+            ceil_ndigits(f, ndigits)
         } else {
-            Err(MonorubyErr::rangeerr("too big to convert to u32"))
-        }
+            floor_ndigits(f, ndigits)
+        };
+        Ok(Value::float(f))
     } else {
-        if let Ok(neg_ndigits) = u32::try_from(-ndigits) {
-            let mul = 10f64.powi(neg_ndigits as i32);
-            let f = (f / mul).trunc() * mul;
-            if let Some(v) = Value::integer_from_f64(f) {
-                return Ok(v);
-            } else {
-                return Err(MonorubyErr::rangeerr(format!(
-                    "[unreachable] invalid f64: {f}"
-                )));
-            }
-        }
-        Err(MonorubyErr::rangeerr("too small to convert to u32"))
+        // As above, truncation is `ceil` below zero and `floor` above it.
+        // Doing it as `(f / 10**n).trunc() * 10**n` in doubles instead
+        // rounds twice, which shows up on values past 2**53:
+        // `9.190298880313063e18.truncate(-5)` came out
+        // `9190298880312999936` rather than `9190298880313000000`.
+        Ok(if f.is_sign_negative() {
+            ceil_neg_ndigits(f, ndigits)
+        } else {
+            floor_neg_ndigits(f, ndigits)
+        })
     }
 }
 
@@ -1193,6 +1283,40 @@ mod tests {
             "(1000 * Math::PI).round(3)",
             "(1000 * Math::PI).round(0)",
             "(1000 * Math::PI).round(-3)",
+            // `(f * 10**n).floor / 10**n` on its own invents digits the
+            // receiver never had: 2.675 is really 2.67499999999999982...,
+            // so the round-trip reports 2.67499999 at 8 places. CRuby
+            // guards the ends and corrects the middle; these pin it.
+            "2.675.floor(8)",
+            "2.675.ceil(8)",
+            "2.675.truncate(8)",
+            "2.675.floor(14)",
+            "2.675.floor(3)",
+            "2.675.floor(2)",
+            "(-2.675).floor(8)",
+            "(-2.675).ceil(8)",
+            "(-2.675).truncate(8)",
+            "8.345.floor(2)",
+            "1.005.floor(2)",
+            // ndigits past the first power of ten a double cannot hold
+            // exactly (10**23), where `powi` and `pow` part company.
+            "1.0e-20.floor(23)",
+            "(-8.378652800054612e-21).floor(23)",
+            "6.755846251024234e-21.ceil(23)",
+            // The overflow guard: nothing is left to round off, so the
+            // receiver comes back unchanged.
+            "1.123456789.floor(30)",
+            "1.123456789.ceil(30)",
+            "1.123456789.truncate(30)",
+            // The underflow guard: every digit falls off the end.
+            "1.0e-20.floor(3)",
+            "(-1.0e-20).ceil(3)",
+            // Negative ndigits past 2**53, where dividing in doubles
+            // rounds twice.
+            "9.190298880313063e18.truncate(-5)",
+            "9.190298880313063e18.floor(-5)",
+            "9.190298880313063e18.ceil(-5)",
+            "(-9.190298880313063e18).truncate(-5)",
             // ndigits > 9 would overflow 10i32.pow() before the fix
             "1.123456789.ceil(15)",
             "1.123456789.floor(15)",
