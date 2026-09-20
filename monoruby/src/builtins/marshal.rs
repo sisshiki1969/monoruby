@@ -683,11 +683,7 @@ impl<'a> MarshalReader<'a> {
                     for (sym, val) in user_ivars {
                         match sym.get_name().as_str() {
                             "offset" => {
-                                if let Some(off) = val.try_fixnum() {
-                                    crate::builtins::time::time_reinterpret_offset(
-                                        result, off as i32,
-                                    );
-                                }
+                                crate::builtins::time::time_reinterpret_offset_value(result, val);
                             }
                             // The dumped zone *name*. The rebuilt time
                             // is at a plain offset (the dump records no
@@ -1857,7 +1853,7 @@ fn marshal_try_user_protocol(
                 let t = obj.as_time();
                 (
                     crate::builtins::time::time_is_utc(t),
-                    crate::builtins::time::time_utc_offset(t),
+                    crate::builtins::time::time_exact_utc_offset(t),
                     crate::builtins::time::time_subsec_nanos(t),
                 )
             };
@@ -1895,14 +1891,7 @@ fn marshal_try_user_protocol(
             }
             if !is_utc {
                 marshal_write_symbol(buf, IdentId::get_id("offset"), symbols);
-                marshal_dump_value(
-                    buf,
-                    Value::integer(offset as i64),
-                    vm,
-                    globals,
-                    symbols,
-                    objects, limit,
-                )?;
+                marshal_dump_value(buf, offset, vm, globals, symbols, objects, limit)?;
             }
             // The zone's *name* — `"UTC"`, or the system zone's
             // abbreviation at that instant — as a US-ASCII string

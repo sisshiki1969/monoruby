@@ -352,7 +352,10 @@ fn deconstruct_keys_(
     let t = self_.as_time();
 
     let (yday, wday) = match t {
-        TimeInner::Local(t, _) => (t.ordinal(), t.weekday().num_days_from_sunday()),
+        TimeInner::Local(t, zone) => {
+            let c = local_clock(t, zone);
+            (c.ordinal(), c.weekday().num_days_from_sunday())
+        }
         TimeInner::Utc(t) => (t.ordinal(), t.weekday().num_days_from_sunday()),
     };
     let (year, month, day, hour, min, sec, subsec_ns) = (
@@ -368,11 +371,7 @@ fn deconstruct_keys_(
         Some(name) => Value::string_from_str(&name),
         None => Value::nil(),
     };
-    let subsec_val = if subsec_ns == 0 {
-        Value::integer(0)
-    } else {
-        Value::float(subsec_ns as f64 / 1_000_000_000.0)
-    };
+    let subsec_val = subsec_value(subsec_ns);
     let pairs: [(&str, Value); 11] = [
         ("year", Value::integer(year as i64)),
         ("month", Value::integer(month as i64)),
@@ -415,7 +414,7 @@ fn deconstruct_keys_(
 
 fn wday_val(lfp: &Lfp) -> u32 {
     match lfp.self_val().as_time() {
-        TimeInner::Local(t, _) => t.weekday().num_days_from_sunday(),
+        TimeInner::Local(t, zone) => local_clock(t, zone).weekday().num_days_from_sunday(),
         TimeInner::Utc(t) => t.weekday().num_days_from_sunday(),
     }
 }
@@ -540,7 +539,7 @@ fn dst_q(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 pub(crate) fn time_zone_abbr(t: &TimeInner) -> Option<String> {
     match t {
         TimeInner::Utc(_) => Some("UTC".to_string()),
-        TimeInner::Local(_, Zone::Fixed) => None,
+        TimeInner::Local(_, Zone::Fixed { .. }) => None,
         TimeInner::Local(_, Zone::System { name, .. }) => name.map(|n| n.get_name().to_string()),
     }
 }
@@ -679,7 +678,10 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let t = self_.as_time();
 
     let (wday, yday) = match t {
-        TimeInner::Local(t, _) => (t.weekday().num_days_from_sunday(), t.ordinal()),
+        TimeInner::Local(t, zone) => {
+            let c = local_clock(t, zone);
+            (c.weekday().num_days_from_sunday(), c.ordinal())
+        }
         TimeInner::Utc(t) => (t.weekday().num_days_from_sunday(), t.ordinal()),
     };
     let (sec, min, hour, day, mon, year) = (
@@ -831,12 +833,27 @@ pub(crate) fn time_is_utc(t: &TimeInner) -> bool {
     matches!(t, TimeInner::Utc(_))
 }
 
-/// Marshal support: the UTC offset in seconds (0 for a UTC time).
+/// Marshal support: the UTC offset in seconds (0 for a UTC time). Only
+/// the whole part — see [`time_exact_utc_offset`] for the exact value.
 pub(crate) fn time_utc_offset(t: &TimeInner) -> i32 {
     match t {
         TimeInner::Local(dt, _) => dt.offset().local_minus_utc(),
         TimeInner::Utc(_) => 0,
     }
+}
+
+/// The exact UTC offset of a time, as `#utc_offset` answers and as a
+/// Marshal dump records it: an Integer number of seconds, or a
+/// `Rational` when the offset has a fraction the clock could not carry.
+pub(crate) fn time_exact_utc_offset(t: &TimeInner) -> Value {
+    if let TimeInner::Local(dt, Zone::Fixed { subsec_nanos }) = t
+        && *subsec_nanos != 0
+    {
+        let num = num::BigInt::from(dt.offset().local_minus_utc()) * 1_000_000_000i64
+            + *subsec_nanos as i64;
+        return Value::rational(num, 1_000_000_000i64);
+    }
+    Value::integer(time_utc_offset(t) as i64)
 }
 
 /// Marshal support: the sub-microsecond part of this time's nanoseconds
@@ -865,14 +882,33 @@ pub(crate) fn time_add_nanos(mut time: Value, ns: i64) {
 /// recorded (seconds east of UTC). The payload fixes the *instant*, and
 /// this only changes the zone it is read in — moving the wall clock, not
 /// the moment.
-pub(crate) fn time_reinterpret_offset(mut time: Value, offset_secs: i32) {
-    let instant = time_utc_instant(time.as_time());
+pub(crate) fn time_reinterpret_offset(time: Value, offset_secs: i32) {
     let fixed =
         FixedOffset::east_opt(offset_secs).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap());
+    time_reinterpret_offset_spec(time, OffsetSpec::whole(fixed));
+}
+
+/// The same, for the `Rational` a fractional offset dumps as: an
+/// Integer is a whole number of seconds, a `Rational` puts its
+/// remainder back into the zone. A value of any other shape is ignored,
+/// leaving the loaded time as its payload read.
+pub(crate) fn time_reinterpret_offset_value(time: Value, off: Value) {
+    if let Some(secs) = off.try_fixnum() {
+        time_reinterpret_offset(time, secs as i32);
+    } else if let Some(r) = off.try_rational()
+        && let (Ok(n), Ok(d)) = (i128::try_from(r.num()), i128::try_from(r.den()))
+        && let Ok(spec) = OffsetSpec::from_rational(n, d)
+    {
+        time_reinterpret_offset_spec(time, spec);
+    }
+}
+
+fn time_reinterpret_offset_spec(mut time: Value, spec: OffsetSpec) {
+    let instant = time_utc_instant(time.as_time());
     // A dump records the offset, not the zone it came from, so the
     // rebuilt time is at a plain offset — CRuby's loaded time answers
     // `#dst?` false however its `:zone` string reads.
-    *time.as_time_mut() = TimeInner::Local(instant.with_timezone(&fixed), Zone::Fixed);
+    *time.as_time_mut() = TimeInner::Local(instant.with_timezone(&spec.fixed), spec.zone());
 }
 
 ///
@@ -902,7 +938,7 @@ fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let self_ = lfp.self_val();
     let t = self_.as_time();
     let suffix = match t {
-        TimeInner::Local(t, _) => t.format("%:z").to_string(),
+        TimeInner::Local(_, _) => format_rendered_offset(rendered_offset_secs(t), true, false),
         TimeInner::Utc(_) => "Z".to_string(),
     };
     let (year, mon, mday, h, mi, s, nsec) = (
@@ -912,7 +948,7 @@ fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         t.hour(),
         t.minute(),
         t.second(),
-        t.nanosecond(),
+        local_clock_nanos(t),
     );
     let year_str = if year < 0 {
         format!("-{:04}", -year)
@@ -944,7 +980,9 @@ fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn asctime(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t, _) => t.format("%a %b %e %H:%M:%S %Y").to_string(),
+        TimeInner::Local(t, zone) => local_clock(t, zone)
+            .format("%a %b %e %H:%M:%S %Y")
+            .to_string(),
         TimeInner::Utc(t) => t.format("%a %b %e %H:%M:%S %Y").to_string(),
     };
     Ok(Value::string(s))
@@ -1191,10 +1229,17 @@ fn time_build(
             match parse_utc_offset(vm, globals, off_arg) {
                 Ok(offset) => {
                     let dt = offset
+                        .fixed
                         .from_local_datetime(&naive)
                         .single()
                         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
-                    time_in_offset(dt.with_timezone(&Utc), offset, offset_arg_is_utc(off_arg))
+                    // The clock was shifted by the whole part only, so the
+                    // remainder still has to come off to reach the instant.
+                    time_in_offset(
+                        dt.with_timezone(&Utc) - offset.subsec_duration(),
+                        offset,
+                        offset_arg_is_utc(off_arg),
+                    )
                 }
                 // A String that isn't a valid offset is resolved through the
                 // class's `.find_timezone`, if defined, to a timezone object.
@@ -1331,31 +1376,37 @@ fn offset_str_is_utc(s: &str) -> bool {
 
 /// A `TimeInner` for the instant `dt` shown in `fixed`, or as UTC when
 /// the offset argument designated UTC (see [`offset_arg_is_utc`]).
-fn time_in_offset(dt: DateTime<Utc>, fixed: FixedOffset, utc: bool) -> TimeInner {
+fn time_in_offset(dt: DateTime<Utc>, offset: OffsetSpec, utc: bool) -> TimeInner {
     if utc {
         TimeInner::Utc(dt)
     } else {
-        TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed)
+        TimeInner::Local(dt.with_timezone(&offset.fixed), offset.zone())
     }
 }
 
-fn parse_utc_offset(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<FixedOffset> {
+fn parse_utc_offset(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<OffsetSpec> {
     if let Some(s) = v.is_str() {
-        return parse_utc_offset_string(s);
+        return Ok(OffsetSpec::whole(parse_utc_offset_string(s)?));
     }
-    // Integer / Rational / Float / to_int
+    // Integer / Rational / Float / to_int. An offset is kept exactly:
+    // the whole part shifts the clock, the rest is what `#utc_offset`
+    // answers with and what the rendered zone rounds.
     if let Some(f) = v.try_float() {
-        // Round to nearest second — `Time.new(.., Rational(36645, 10))`
-        // is 3664.5 and CRuby stores it as 3665. Spec's
-        // `Time#strftime "%::z"` rounding test depends on this.
-        let secs = f.round() as i32;
-        return FixedOffset::east_opt(secs)
-            .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"));
+        if !f.is_finite() {
+            return Err(MonorubyErr::argumenterr("utc_offset out of range"));
+        }
+        let nanos = (f * 1_000_000_000.0).round();
+        if !(i64::MIN as f64..=i64::MAX as f64).contains(&nanos) {
+            return Err(MonorubyErr::argumenterr("utc_offset out of range"));
+        }
+        return OffsetSpec::from_rational(nanos as i128, 1_000_000_000);
     }
     if let Some(r) = v.try_rational() {
-        let secs = r.to_f().round() as i32;
-        return FixedOffset::east_opt(secs)
-            .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"));
+        let (num, den) = (r.num().clone(), r.den().clone());
+        return match (i128::try_from(&num), i128::try_from(&den)) {
+            (Ok(n), Ok(d)) => OffsetSpec::from_rational(n, d),
+            _ => Err(MonorubyErr::argumenterr("utc_offset out of range")),
+        };
     }
     // An object that responds to `#to_str` (but is not itself numeric)
     // is coerced to a String offset like `"+05:00"`.
@@ -1364,7 +1415,7 @@ fn parse_utc_offset(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resul
     {
         let s = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
         if let Some(s) = s.is_str() {
-            return parse_utc_offset_string(s);
+            return Ok(OffsetSpec::whole(parse_utc_offset_string(s)?));
         }
     }
     // Integer / `#to_int` / `#to_r` → an exact number, rounded to whole
@@ -1372,14 +1423,10 @@ fn parse_utc_offset(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resul
     // exact number raises `can't convert X into an exact number`, matching
     // CRuby's `utc_offset` coercion.
     let (num, den) = num_exact_rational(vm, globals, v)?;
-    let secs = num
-        .to_f64()
-        .zip(den.to_f64())
-        .map(|(n, d)| (n / d).round())
-        .filter(|r| r.is_finite() && *r >= i32::MIN as f64 && *r <= i32::MAX as f64)
-        .map(|r| r as i32)
-        .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))?;
-    FixedOffset::east_opt(secs).ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))
+    match (i128::try_from(&num), i128::try_from(&den)) {
+        (Ok(n), Ok(d)) => OffsetSpec::from_rational(n, d),
+        _ => Err(MonorubyErr::argumenterr("utc_offset out of range")),
+    }
 }
 
 /// Reserved instance-variable slot holding a Time's timezone object (the
@@ -1482,7 +1529,7 @@ fn time_new_with_timezone(
         .from_local_datetime(&naive)
         .single()
         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
-    let t = Value::new_time_with_class(TimeInner::Local(dt, Zone::Fixed), cls);
+    let t = Value::new_time_with_class(TimeInner::Local(dt, Zone::fixed()), cls);
     globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
     Ok(Some(t))
 }
@@ -1499,7 +1546,7 @@ fn time_at_with_timezone(
     let Some(fixed) = utc_to_local_fixed(vm, globals, dt, tz)? else {
         return Ok(None);
     };
-    let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed), cls);
+    let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed), Zone::fixed()), cls);
     globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
     Ok(Some(t))
 }
@@ -1898,9 +1945,9 @@ fn build_time_string(
     let date = NaiveDate::from_ymd_opt(year as i32, mon, day).ok_or_else(bad)?;
     let time = NaiveTime::from_hms_opt(hh, mi, ss).ok_or_else(bad)?;
     let naive = NaiveDateTime::new(date, time);
-    let (fixed, utc) = if !off_str.is_empty() {
+    let (offset, utc) = if !off_str.is_empty() {
         (
-            Some(parse_utc_offset_string(off_str)?),
+            Some(OffsetSpec::whole(parse_utc_offset_string(off_str)?)),
             offset_str_is_utc(off_str),
         )
     } else if let Some(off) = in_arg {
@@ -1911,10 +1958,18 @@ fn build_time_string(
     } else {
         (None, false)
     };
-    match fixed {
-        Some(fixed) => {
-            let dt = fixed.from_local_datetime(&naive).single().ok_or_else(bad)?;
-            Ok(time_in_offset(dt.with_timezone(&Utc), fixed, utc))
+    match offset {
+        Some(offset) => {
+            let dt = offset
+                .fixed
+                .from_local_datetime(&naive)
+                .single()
+                .ok_or_else(bad)?;
+            Ok(time_in_offset(
+                dt.with_timezone(&Utc) - offset.subsec_duration(),
+                offset,
+                utc,
+            ))
         }
         None => {
             let local = match LocalTz.from_local_datetime(&naive) {
@@ -2542,7 +2597,7 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let utc_dt = time_utc_instant(self_val.as_time());
         if let Some(fixed) = utc_to_local_fixed(vm, globals, utc_dt, arg0)? {
             self_val.ensure_not_frozen(&globals.store)?;
-            *self_val.as_time_mut() = TimeInner::Local(utc_dt.with_timezone(&fixed), Zone::Fixed);
+            *self_val.as_time_mut() = TimeInner::Local(utc_dt.with_timezone(&fixed), Zone::fixed());
             globals
                 .store
                 .set_ivar(self_val, IdentId::get_id(ZONE_IVAR), arg0)?;
@@ -2563,8 +2618,8 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         }
         // Already in the requested zone? No-op (matches CRuby's
         // short-circuit before the frozen check).
-        if let TimeInner::Local(t, _) = self_val.as_time() {
-            if t.offset() == &target {
+        if let TimeInner::Local(t, zone) = self_val.as_time() {
+            if t.offset() == &target.fixed && *zone == target.zone() {
                 return Ok(self_val);
             }
         }
@@ -2611,12 +2666,13 @@ fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         format!(".{}", format!("{:09}", nsec).trim_end_matches('0'))
     };
     let body = match t {
-        TimeInner::Local(dt, _) => {
+        TimeInner::Local(dt, zone) => {
             format!(
                 "{}{} {}",
-                dt.format("%Y-%m-%d %H:%M:%S"),
+                local_clock(dt, zone).format("%Y-%m-%d %H:%M:%S"),
                 frac,
-                dt.format("%z")
+                // Unlike `%z`, `#inspect` keeps the offset's seconds field.
+                format_rendered_offset(rendered_offset_secs(t), false, true)
             )
         }
         TimeInner::Utc(dt) => format!("{}{} UTC", dt.format("%Y-%m-%d %H:%M:%S"), frac),
@@ -2668,9 +2724,9 @@ fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let pre = preprocess_strftime(&inner, &fmt_str, zone_abbr.as_deref());
     use std::fmt::Write;
     let s = match &inner {
-        TimeInner::Local(t, _) => {
+        TimeInner::Local(t, zone) => {
             let mut result = String::new();
-            let _ = write!(result, "{}", t.format(&pre));
+            let _ = write!(result, "{}", local_clock(t, zone).format(&pre));
             result
         }
         TimeInner::Utc(t) => {
@@ -2793,7 +2849,10 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
             (b'v', 0) => {
                 // ` D-MMM-YYYY` with uppercase abbreviated month.
                 let (y, m, d) = match inner {
-                    TimeInner::Local(t, _) => (t.year(), t.month(), t.day()),
+                    TimeInner::Local(t, zone) => {
+                        let c = local_clock(t, zone);
+                        (c.year(), c.month(), c.day())
+                    }
                     TimeInner::Utc(t) => (t.year(), t.month(), t.day()),
                 };
                 out.push_str(&format!(
@@ -2809,7 +2868,7 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
             // `%h` is a CRuby synonym for `%b` (chrono doesn't accept it).
             (b'b' | b'B' | b'h', 0) if flag_caret => {
                 let m = match inner {
-                    TimeInner::Local(t, _) => t.month(),
+                    TimeInner::Local(t, zone) => local_clock(t, zone).month(),
                     TimeInner::Utc(t) => t.month(),
                 };
                 let idx = (m as usize - 1).min(11);
@@ -2867,6 +2926,21 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) ->
                 };
                 let w = width.unwrap_or(9);
                 out.push_str(&format_subsec(nanos, w));
+                i = directive_end;
+                continue;
+            }
+            (b's', 0) => {
+                // The epoch seconds are the *instant's*: a fractional
+                // offset shifts the clock fields, not the moment.
+                let text = time_utc_instant(inner).timestamp().to_string();
+                if let Some(w) = width
+                    && !flag_minus
+                    && text.len() < w
+                {
+                    let pad = pad_char.unwrap_or('0');
+                    out.extend(std::iter::repeat_n(pad, w - text.len()));
+                }
+                out.push_str(&text);
                 i = directive_end;
                 continue;
             }
@@ -2932,7 +3006,7 @@ fn pad_conv(
         conv as char
     );
     let text = match inner {
-        TimeInner::Local(t, _) => t.format(&bare).to_string(),
+        TimeInner::Local(t, zone) => local_clock(t, zone).format(&bare).to_string(),
         TimeInner::Utc(t) => t.format(&bare).to_string(),
     };
     let mut out = String::with_capacity(width.max(text.len()));
@@ -2963,11 +3037,9 @@ fn format_offset(
     pad_char: Option<char>,
     width: Option<usize>,
 ) -> String {
-    // Total offset in seconds (signed).
-    let total_secs: i64 = match inner {
-        TimeInner::Utc(_) => 0,
-        TimeInner::Local(t, _) => t.offset().local_minus_utc() as i64,
-    };
+    // Total offset in seconds (signed), as it renders: a fractional
+    // offset shows rounded, not floored (see `rendered_offset_secs`).
+    let total_secs: i64 = rendered_offset_secs(inner) as i64;
     // CRuby's `%-z` rule: any time with offset == 0 emits the
     // "unknown offset" form `-0000` / `-00:00` / `-00:00:00`. This
     // covers `Time.utc(...)`, `Time.new(.., "Z")`,
@@ -3061,11 +3133,16 @@ const MONTH_UPPER_FULL: [&str; 12] = [
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_s.html]
 #[monoruby_builtin]
 fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = match lfp.self_val().as_time() {
-        TimeInner::Local(t, _) => t.format("%Y-%m-%d %H:%M:%S %z"),
-        TimeInner::Utc(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
-    }
-    .to_string();
+    let self_ = lfp.self_val();
+    let inner = self_.as_time();
+    let s = match inner {
+        TimeInner::Local(t, zone) => format!(
+            "{} {}",
+            local_clock(t, zone).format("%Y-%m-%d %H:%M:%S"),
+            format_rendered_offset(rendered_offset_secs(inner), false, false)
+        ),
+        TimeInner::Utc(t) => t.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+    };
     let mut v = Value::string(s);
     // CRuby returns `Time#to_s` as a US-ASCII string (like `#inspect`).
     v.as_rstring_inner_mut()
@@ -3113,7 +3190,7 @@ fn day(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn yday(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let d = match lfp.self_val().as_time() {
-        TimeInner::Local(t, _) => t.ordinal(),
+        TimeInner::Local(t, zone) => local_clock(t, zone).ordinal(),
         TimeInner::Utc(t) => t.ordinal(),
     };
     Ok(Value::integer(d as _))
@@ -3127,7 +3204,7 @@ fn yday(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn wday(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let w = match lfp.self_val().as_time() {
-        TimeInner::Local(t, _) => t.weekday().num_days_from_sunday(),
+        TimeInner::Local(t, zone) => local_clock(t, zone).weekday().num_days_from_sunday(),
         TimeInner::Utc(t) => t.weekday().num_days_from_sunday(),
     };
     Ok(Value::integer(w as _))
@@ -3174,14 +3251,17 @@ fn nsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Time#subsec
 #[monoruby_builtin]
 fn subsec(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ns = lfp.self_val().as_time().nanosecond();
-    // `time_subsec` hands back an exact Rational of nanoseconds over a
-    // second, reduced — `Time.at(0, 3).subsec` is `(3/1000000)`, not a
-    // Float. A whole second's worth reduces to the Integer 0.
+    Ok(subsec_value(lfp.self_val().as_time().nanosecond()))
+}
+
+/// `#subsec` for a count of nanoseconds: an exact Rational of nanoseconds
+/// over a second, reduced — `Time.at(0, 3).subsec` is `(3/1000000)`, not
+/// a Float. A whole second's worth reduces to the Integer 0.
+fn subsec_value(ns: u32) -> Value {
     if ns == 0 {
-        Ok(Value::integer(0))
+        Value::integer(0)
     } else {
-        Ok(Value::rational(ns as i64, 1_000_000_000i64))
+        Value::rational(ns as i64, 1_000_000_000i64)
     }
 }
 
@@ -3241,11 +3321,7 @@ fn utc_offset(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let offs = match lfp.self_val().as_time() {
-        TimeInner::Local(t, _) => t.offset().local_minus_utc(),
-        TimeInner::Utc(_) => 0,
-    };
-    Ok(Value::integer(offs as _))
+    Ok(time_exact_utc_offset(lfp.self_val().as_time()))
 }
 
 /// ### Time#-
@@ -3327,7 +3403,148 @@ pub enum Zone {
     },
     /// A fixed offset from UTC, with no zone behind it: `#getlocal("+09:00")`,
     /// `Time.new(…, "+09:00")`, `Time.at(…, in: …)`.
-    Fixed,
+    ///
+    /// An offset need not be a whole number of seconds —
+    /// `#getlocal(Rational(7201, 2))` is `+3600.5` — and chrono's
+    /// `FixedOffset` is. The whole part lives there, where it shifts the
+    /// local clock; `subsec_nanos` is what is left, which only
+    /// `#utc_offset` and the *rendered* zone ever see.
+    Fixed { subsec_nanos: u32 },
+}
+
+impl Zone {
+    /// The ordinary fixed offset: a whole number of seconds.
+    fn fixed() -> Self {
+        Zone::Fixed { subsec_nanos: 0 }
+    }
+}
+
+///
+/// A UTC offset as CRuby keeps one: the whole seconds the local clock is
+/// shifted by, and the part below a second.
+///
+/// The split is a *floor*, not a truncation, because that is what the
+/// local clock does — an instant read at `+3600.5` shows `13:00:00`, and
+/// at `-3600.5` it shows `10:59:59`, a whole second earlier than `-3600`
+/// would give. `subsec_nanos` therefore always counts *up* from the
+/// floor, in `0..1_000_000_000`.
+///
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OffsetSpec {
+    fixed: FixedOffset,
+    subsec_nanos: u32,
+}
+
+impl OffsetSpec {
+    fn whole(fixed: FixedOffset) -> Self {
+        Self {
+            fixed,
+            subsec_nanos: 0,
+        }
+    }
+
+    /// From an exact number of seconds `num / den`.
+    fn from_rational(num: i128, den: i128) -> Result<Self> {
+        if den == 0 {
+            return Err(MonorubyErr::argumenterr("utc_offset out of range"));
+        }
+        let (num, den) = if den < 0 { (-num, -den) } else { (num, den) };
+        let floor = num.div_euclid(den);
+        let rem = num.rem_euclid(den);
+        let secs = i64::try_from(floor)
+            .map_err(|_| MonorubyErr::argumenterr("utc_offset out of range"))?;
+        let subsec_nanos = (rem * 1_000_000_000 / den) as u32;
+        Ok(Self {
+            fixed: zone_offset_fixed(secs)?,
+            subsec_nanos,
+        })
+    }
+
+    fn zone(&self) -> Zone {
+        Zone::Fixed {
+            subsec_nanos: self.subsec_nanos,
+        }
+    }
+
+    /// The whole seconds to *subtract* from a wall clock read at this
+    /// offset to reach the instant it names. The clock has already been
+    /// shifted by the whole part, so only the remainder is left.
+    fn subsec_duration(&self) -> Duration {
+        Duration::nanoseconds(self.subsec_nanos as i64)
+    }
+}
+
+/// The wall clock a `Time` shows. chrono's `FixedOffset` counts whole
+/// seconds, so a fractional offset leaves its remainder in the zone, and
+/// the clock CRuby breaks into fields is `floor(instant + offset)` — the
+/// seconds field therefore carries when the instant's own fraction and
+/// the offset's together pass a second. The sub-second part shown is the
+/// *instant's*, not the clock's: CRuby's `#subsec` answers for the
+/// moment however the offset shifts the fields, so `Time.new(.., 1, 7201/2r)`
+/// reads `..:01.5` although its clock is exactly `..:01`.
+fn local_clock(dt: &DateTime<FixedOffset>, zone: &Zone) -> DateTime<FixedOffset> {
+    match zone {
+        Zone::Fixed { subsec_nanos } if *subsec_nanos != 0 => {
+            let nanos = dt.nanosecond();
+            (*dt + Duration::nanoseconds(*subsec_nanos as i64))
+                .with_nanosecond(nanos)
+                .unwrap_or(*dt)
+        }
+        _ => *dt,
+    }
+}
+
+/// The sub-second part of the local *clock*, rather than of the instant:
+/// the fraction `#iso8601` renders. A fractional offset moves it along
+/// with the fields, so `Time.new(.., 0, 7201/2r).iso8601(3)` is `.000`
+/// although the same time's `#subsec` is `(1/2)`.
+fn local_clock_nanos(t: &TimeInner) -> u32 {
+    match t {
+        TimeInner::Local(dt, Zone::Fixed { subsec_nanos }) if *subsec_nanos != 0 => {
+            (*dt + Duration::nanoseconds(*subsec_nanos as i64)).nanosecond()
+        }
+        _ => t.nanosecond(),
+    }
+}
+
+/// Render an offset in seconds as `±HHMM` (or `±HH:MM` with `colon`),
+/// appending the seconds field when it has one and `with_secs` asks for
+/// it — the form `#inspect` uses and `%z` / `#iso8601` drop.
+fn format_rendered_offset(secs: i32, colon: bool, with_secs: bool) -> String {
+    let (sign, abs) = if secs < 0 {
+        ('-', -(secs as i64))
+    } else {
+        ('+', secs as i64)
+    };
+    let (h, m, sec) = (abs / 3600, (abs / 60) % 60, abs % 60);
+    let sep = if colon { ":" } else { "" };
+    let mut out = format!("{sign}{h:02}{sep}{m:02}");
+    if with_secs && sec != 0 {
+        out.push_str(&format!("{sep}{sec:02}"));
+    }
+    out
+}
+
+/// The offset a `Time` *renders* — in `#to_s`, `#inspect`, `%z` — which
+/// is the exact offset rounded to the nearest second, half away from
+/// zero, as CRuby renders it: `+3600.5` shows as `+01:00:01` while the
+/// clock it shifts uses `+3600`.
+fn rendered_offset_secs(t: &TimeInner) -> i32 {
+    let (secs, frac) = match t {
+        TimeInner::Local(dt, Zone::Fixed { subsec_nanos }) => {
+            (dt.offset().local_minus_utc(), *subsec_nanos)
+        }
+        TimeInner::Local(dt, _) => (dt.offset().local_minus_utc(), 0),
+        TimeInner::Utc(_) => (0, 0),
+    };
+    match frac * 2 {
+        0 => secs,
+        f if f > 1_000_000_000 => secs + 1,
+        // Exactly half: away from zero, so a positive offset rounds up
+        // and a negative one stays at its floor.
+        1_000_000_000 if secs >= 0 => secs + 1,
+        _ => secs,
+    }
 }
 
 /// Localize a UTC instant in the system zone, capturing the offset, the
@@ -3565,7 +3782,12 @@ impl std::ops::Add<Duration> for TimeInner {
 impl std::fmt::Display for TimeInner {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            TimeInner::Local(t, _) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S %z")),
+            TimeInner::Local(t, zone) => write!(
+                f,
+                "{} {}",
+                local_clock(t, zone).format("%Y-%m-%d %H:%M:%S"),
+                format_rendered_offset(rendered_offset_secs(self), false, false)
+            ),
             TimeInner::Utc(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S UTC")),
         }
     }
@@ -3590,10 +3812,12 @@ impl TimeInner {
 
     /// Move to a fixed-offset zone, recomputing the local clock fields.
     /// Used by `Time#localtime(offset)`.
-    fn shift_to_offset(&mut self, offset: FixedOffset) {
+    fn shift_to_offset(&mut self, offset: OffsetSpec) {
         *self = match self {
-            TimeInner::Local(t, _) => TimeInner::Local(t.with_timezone(&offset), Zone::Fixed),
-            TimeInner::Utc(t) => TimeInner::Local(t.with_timezone(&offset), Zone::Fixed),
+            TimeInner::Local(t, _) => {
+                TimeInner::Local(t.with_timezone(&offset.fixed), offset.zone())
+            }
+            TimeInner::Utc(t) => TimeInner::Local(t.with_timezone(&offset.fixed), offset.zone()),
         }
     }
 
@@ -3606,42 +3830,42 @@ impl TimeInner {
 
     pub fn year(&self) -> i32 {
         match self {
-            TimeInner::Local(t, _) => t.year(),
+            TimeInner::Local(t, zone) => local_clock(t, zone).year(),
             TimeInner::Utc(t) => t.year(),
         }
     }
 
     pub fn month(&self) -> u32 {
         match self {
-            TimeInner::Local(t, _) => t.month(),
+            TimeInner::Local(t, zone) => local_clock(t, zone).month(),
             TimeInner::Utc(t) => t.month(),
         }
     }
 
     pub fn day(&self) -> u32 {
         match self {
-            TimeInner::Local(t, _) => t.day(),
+            TimeInner::Local(t, zone) => local_clock(t, zone).day(),
             TimeInner::Utc(t) => t.day(),
         }
     }
 
     pub fn hour(&self) -> u32 {
         match self {
-            TimeInner::Local(t, _) => t.hour(),
+            TimeInner::Local(t, zone) => local_clock(t, zone).hour(),
             TimeInner::Utc(t) => t.hour(),
         }
     }
 
     pub fn minute(&self) -> u32 {
         match self {
-            TimeInner::Local(t, _) => t.minute(),
+            TimeInner::Local(t, zone) => local_clock(t, zone).minute(),
             TimeInner::Utc(t) => t.minute(),
         }
     }
 
     pub fn second(&self) -> u32 {
         match self {
-            TimeInner::Local(t, _) => t.second(),
+            TimeInner::Local(t, zone) => local_clock(t, zone).second(),
             TimeInner::Utc(t) => t.second(),
         }
     }
@@ -3657,6 +3881,53 @@ impl TimeInner {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn fractional_utc_offset() {
+        // An offset with a fraction of a second: the clock keeps its
+        // floor, `#utc_offset` answers the exact Rational, and the
+        // rendered zone rounds half away from zero.
+        run_test(
+            r#"
+        res = []
+        [Rational(7201, 2), Rational(-7201, 2), Rational(1, 4), Rational(-1, 4), Rational(3, 2), 7245.5].each do |o|
+          t = Time.new(2020, 3, 1, 0, 0, 0, o)
+          res << [t.to_s, t.inspect, t.utc_offset, t.utc_offset.class.to_s, t.subsec, t.to_r, t.to_i]
+          res << t.strftime("%z|%:z|%::z|%N|%s|%H:%M:%S|%j %u")
+          res << [t.iso8601, t.iso8601(3), t.asctime, t.yday, t.wday, t.zone, t.dst?]
+          res << t.deconstruct_keys(nil).to_s
+          res << t.to_a.to_s
+          m = Marshal.load(Marshal.dump(t))
+          res << [m.inspect, m.utc_offset, m.to_r == t.to_r]
+          res << [t.getutc.inspect, t.getlocal(0).inspect, t.round.inspect, t.floor.inspect, t.ceil.inspect]
+          res << [t.localtime(o).inspect, t.utc_offset]
+        end
+        res.to_s"#,
+        );
+    }
+
+    #[test]
+    fn fractional_utc_offset_coercion() {
+        run_test(
+            r#"
+        class NM < Numeric
+          def to_r; Rational(7201, 2); end
+        end
+        res = []
+        t = Time.gm(2007, 1, 9, 12, 0, 0).getlocal(Rational(7201, 2))
+        res << [t.inspect, t == Time.new(2007, 1, 9, 13, 0, Rational(1, 2), Rational(7201, 2)),
+                t.utc_offset.eql?(Rational(7201, 2))]
+        t2 = Time.gm(2007, 1, 9, 12, 0, 0)
+        t2.localtime(Rational(7201, 2))
+        res << [t2.inspect, t2 == Time.new(2007, 1, 9, 13, 0, Rational(1, 2), Rational(7201, 2)),
+                t2.utc_offset.eql?(Rational(7201, 2))]
+        res << Time.new(2000, 1, 1, 0, 0, 0, Rational(5, 2)).utc_offset.eql?(Rational(5, 2))
+        res << Time.gm(2007, 1, 9, 12, 0, 0).getlocal(NM.new).utc_offset.eql?(Rational(7201, 2))
+        res << Time.new(2000, 1, 1, 0, 0, 0, NM.new).utc_offset.eql?(Rational(7201, 2))
+        res << (Time.new(2010, 4, 4, 1, 59, 59, 7245.5).utc_offset == Rational(14491, 2))
+        res.to_s"#,
+        );
+    }
 
     #[test]
     fn test_time() {
@@ -4714,4 +4985,5 @@ mod tests {
             "##,
         );
     }
+
 }
