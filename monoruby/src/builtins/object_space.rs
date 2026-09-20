@@ -112,6 +112,21 @@ fn live_objects(
         alloc.borrow().for_each_live(|rv| {
             // A frame is the interpreter's own bookkeeping, not a Ruby
             // object; CRuby hides its equivalents from this walk too.
+            //
+            // Handing out the objects that *do* reach a frame — a
+            // `Binding`, or a `Proc` and its `#binding` — does not
+            // weaken I5 (`doc/jit_invariants.md` §3.5). The JIT reads
+            // locals as rbp-relative slots only while a frame is
+            // uncaptured, and the very act of taking a binding or
+            // capturing a proc promotes the frame to the heap,
+            // tombstones the stack slots and makes `GuardCapture`
+            // deopt. So a `Binding` cannot exist for a frame that is
+            // still being speculated on, and this walk creates no such
+            // capability — it only finds the ones already made. A
+            // method that never captures has no `Binding` on the heap
+            // at all, so its locals stay unreachable from here; both
+            // halves are pinned by `each_object_cannot_reach_an_
+            // uncaptured_frame`.
             if rv.ty() == ObjTy::FRAME {
                 return;
             }
@@ -264,6 +279,112 @@ fn weakmap_entries(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// `each_object` hands out every object on the heap, including the
+    /// `Binding`s and `Proc`s that can write another frame's locals.
+    /// That is safe, and it is worth a test rather than an argument.
+    ///
+    /// The JIT reads locals as rbp-relative stack slots only while a
+    /// frame is *uncaptured* (`doc/jit_invariants.md` §3.5, I5).
+    /// Taking a binding or capturing a proc promotes the frame to the
+    /// heap and tombstones those slots, so a `Binding` can only ever
+    /// name a frame the JIT has already stopped speculating about.
+    /// This walk finds such capabilities; it never manufactures one.
+    #[test]
+    fn each_object_cannot_reach_an_uncaptured_frame() {
+        run_tests(&[
+            // A method that never captures: its locals are unreachable,
+            // and it keeps computing the right answer.
+            r#"
+            def untouched
+              secret = 7
+              t = 0
+              i = 0
+              while i < 400
+                t += secret
+                i += 1
+              end
+              t
+            end
+            50.times { untouched }
+            reachable = 0
+            ObjectSpace.each_object(Binding) do |b|
+              reachable += 1 if b.local_variables.include?(:secret)
+            end
+            [reachable, untouched]
+            "#,
+            // A local rewritten from outside, through `each_object`,
+            // while the frame is still running its JIT-compiled loop —
+            // the loop must see the new value from that iteration on.
+            r#"
+            def rewrite_from_outside
+              ObjectSpace.each_object(Binding) do |b|
+                b.local_variable_set(:x, 100) if b.local_variables.include?(:x)
+              end
+            end
+            def live_frame
+              x = 1
+              b = binding
+              total = 0
+              i = 0
+              while i < 400
+                total += x
+                i += 1
+                rewrite_from_outside if i == 200
+              end
+              total
+            end
+            live_frame
+            "#,
+            // The same through a `Proc`'s binding rather than one taken
+            // directly.
+            r#"
+            def via_proc
+              ObjectSpace.each_object(Proc) do |pr|
+                b = (pr.binding rescue nil)
+                next unless b && b.local_variables.include?(:y)
+                b.local_variable_set(:y, 100)
+              end
+            end
+            def live_proc_frame
+              y = 1
+              keep = proc { y }
+              total = 0
+              i = 0
+              while i < 400
+                total += y
+                i += 1
+                via_proc if i == 200
+              end
+              total
+            end
+            live_proc_frame
+            "#,
+            // Walking everything, repeatedly, from inside hot code and
+            // across collections, leaves the hot code's own arithmetic
+            // alone.
+            r#"
+            def churn(n)
+              acc = 0
+              i = 0
+              while i < n
+                acc += i
+                a = [i, i.to_s, {i => i}]
+                acc += a.size
+                i += 1
+              end
+              acc
+            end
+            swept = 0
+            5.times do
+              churn(200)
+              ObjectSpace.each_object { |o| swept += 1 }
+              GC.start
+            end
+            [swept > 0, churn(200) == (0...200).sum + 200 * 3]
+            "#,
+        ]);
+    }
 
     /// `ObjectSpace::WeakKeyMap` (#1422), which did not exist.
     ///
