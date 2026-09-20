@@ -651,10 +651,14 @@ fn accurate_pow10(ndigits: i64) -> bool {
 /// for the band of `ndigits` above `DBL_DIG` that the overflow guard
 /// does not already answer, so the exponent stays small enough to raise.
 fn round_by_rational(f: f64, ndigits: i64, ceil: bool) -> f64 {
-    let Ok(exp) = u32::try_from(ndigits) else {
-        return f;
-    };
-    let Some(exact) = num::BigRational::from_float(f) else {
+    // Both of these hold by construction — the overflow guard caps
+    // `ndigits` a few hundred short of `u32::MAX`, and `f` reached here
+    // finite and non-zero — so this is one belt-and-braces arm rather
+    // than two: answer the receiver unrounded rather than panic.
+    let Some((exp, exact)) = u32::try_from(ndigits)
+        .ok()
+        .zip(num::BigRational::from_float(f))
+    else {
         return f;
     };
     let scale = num::BigRational::from(BigInt::from(10u32).pow(exp));
@@ -1361,6 +1365,29 @@ mod tests {
             "(-2.675).truncate(8)",
             "8.345.floor(2)",
             "1.005.floor(2)",
+            // Past 10**38 the fraction no longer fits a machine integer
+            // either, so the conversion takes `BigRational`'s own rather
+            // than CRuby's double division.
+            "1.0e-20.floor(39)",
+            "1.0e-20.ceil(39)",
+            "(-1.0e-20).floor(39)",
+            "1.0e-20.truncate(39)",
+            // Zero short-circuits before the guards, keeping its sign.
+            "0.0.floor(3)",
+            "0.0.ceil(3)",
+            "(-0.0).floor(3)",
+            "(-0.0).ceil(3)",
+            // A subnormal receiver, whose exponent field reads 0 and has
+            // to be renormalised before `frexp`'s exponent falls out.
+            "5.0e-324.floor(5)",
+            "5.0e-324.ceil(5)",
+            "5.0e-324.floor(400)",
+            // ndigits past the negative cap, where the answer is zero
+            // either way. (`1.0.ceil(-400)` is *not* here: that is the
+            // pre-existing cap this file still has, answering 0 where
+            // CRuby answers 10**400.)
+            "1.0.floor(-400)",
+            "1.0.truncate(-400)",
             // ndigits past the first power of ten a double cannot hold
             // exactly (10**23), where `powi` and `pow` part company.
             "1.0e-20.floor(23)",
