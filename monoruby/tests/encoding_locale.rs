@@ -129,10 +129,29 @@ fn locale_charmap_and_default_external_match_cruby() {
     for (label, env) in LOCALES {
         let expected = run_script(cruby(env), &path);
         let actual = run_script(monoruby(env), &path);
-        assert_eq!(
-            expected, actual,
-            "locale-derived encoding behaviour differs under {label}"
-        );
+        // Name the first line that differs, and say which platform arm
+        // this build compiled in: `Encoding.find("filesystem")` is the
+        // one answer here that is per-platform rather than per-locale
+        // (UTF-8 on macOS, the locale encoding elsewhere), so a bare
+        // blob-vs-blob failure on a runner we cannot reproduce says
+        // very little on its own.
+        if expected != actual {
+            let first_diff = expected
+                .lines()
+                .zip(actual.lines())
+                .enumerate()
+                .find(|(_, (e, a))| e != a)
+                .map(|(i, (e, a))| format!("line {}: cruby {e:?} vs monoruby {a:?}", i + 1))
+                .unwrap_or_else(|| "line counts differ".to_string());
+            panic!(
+                "locale-derived encoding behaviour differs under {label}\n\
+                 first difference: {first_diff}\n\
+                 built with target_os = macos: {}\n\
+                 expected (cruby):\n{expected}\n\
+                 actual (monoruby):\n{actual}",
+                cfg!(target_os = "macos")
+            );
+        }
     }
 }
 
