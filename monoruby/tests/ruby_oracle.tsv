@@ -2070,6 +2070,7 @@
 8ad0bb005e97f639e1a5c706a270ed11	[true, false, true, true, true, true]	class W\n            include Comparable\n            attr_accessor :x\n 
 8ad8e77fe5dfee952b57c56f285f1173	[0, [[false, 150], [true, 150]]]	big = 1 << 62\n            def probe(a, b) = a < b ? 1 : 0\n         
 8aff130d4cf4e00d7d7b4435b5691762	[true, "hi"]	require 'tmpdir'\n            path = File.join(Dir.tmpdir, "mrb_fifo
+8b1b3451edf1e07ef0e731cc42174038	[2, [[142], [32]], true, 1, [63], [63, 65], [63, 32, 161, 161], [[143, 161]], [252, 161, 63], 2, [[129], [0]], [0, 63], [65, 0, 129], [142, 161], [142, 161, 161]]	res = []\n            res << [0x8E, 0x20].pack("C*").force_encoding(
 8b1c707195f0233d91b133db6b2549a0	3	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.len
 8b55158395e31dd88ba473b1a6f3e551	true	GC.auto_compact = true; GC.auto_compact
 8b98d44ec4272b482412f750678a9964	1	obj = Object.new\n            def obj.infinite?; -1; end\n           

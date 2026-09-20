@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 
 use super::*;
 use crate::codegen::jitgen::deopt_log::DeoptCause;
-use crate::value::rvalue::{char_width_at, eucjp_char_width, sjis_char_width};
+use crate::value::rvalue::{MbcPiece, char_width_at, mbc_walker, walk_mbc};
 #[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
 #[cfg(target_arch = "aarch64")]
@@ -9990,35 +9990,27 @@ fn scrub_inner_with_block(
                 }
             }
         }
-        Encoding::EucJp | Encoding::Sjis(_) => {
-            let char_w = if matches!(enc, Encoding::EucJp) {
-                eucjp_char_width
-            } else {
-                sjis_char_width
-            };
-            let mut i = 0;
-            while i < bytes.len() {
-                if let Some(w) = char_w(&bytes[i..]) {
-                    out.extend_from_slice(&bytes[i..i + w]);
-                    i += w;
-                } else {
-                    // An invalid byte that cannot begin a valid
-                    // character is its own ill-formed subpart; yield
-                    // it to the block independently (mirrors the
-                    // argument-form `scrub`, which replaces each
-                    // such byte separately, e.g. SJIS `\xFF\xFE`).
-                    let bad_arg = Value::string_from_inner(RStringInner::from_encoding(
-                        &bytes[i..i + 1],
-                        enc,
-                    ));
-                    let result = vm.invoke_block(globals, &data, &[bad_arg])?;
-                    let result_inner = result
-                        .is_rstring_inner()
-                        .ok_or_else(|| MonorubyErr::typeerr("scrub block must return a String"))?;
-                    out.extend_from_slice(result_inner.as_bytes());
-                    i += 1;
+        // EUC-JP / Shift_JIS / Emacs-Mule: the block sees the same
+        // ill-formed subparts the argument form replaces — a *run*,
+        // not one byte each, so a truncated EUC-JP tail is yielded
+        // once with both its bytes.
+        _ if mbc_walker(enc).is_some() => {
+            let (max_len, precise) = mbc_walker(enc).unwrap();
+            walk_mbc(bytes, max_len, precise, |piece| {
+                match piece {
+                    MbcPiece::Char(c) => out.extend_from_slice(c),
+                    MbcPiece::Bad(bad) => {
+                        let bad_arg =
+                            Value::string_from_inner(RStringInner::from_encoding(bad, enc));
+                        let result = vm.invoke_block(globals, &data, &[bad_arg])?;
+                        let result_inner = result.is_rstring_inner().ok_or_else(|| {
+                            MonorubyErr::typeerr("scrub block must return a String")
+                        })?;
+                        out.extend_from_slice(result_inner.as_bytes());
+                    }
                 }
-            }
+                Ok(())
+            })?;
         }
         _ => out.extend_from_slice(bytes),
     }
@@ -15631,6 +15623,46 @@ mod tests {
             r#"("\x8F\xA2\xAF" + "A").dup.force_encoding("EUC-JP").each_char.map(&:bytesize)"#,
             r#""".encode("EUC-JP").length"#,
         ]);
+    }
+
+    #[test]
+    fn eucjp_sjis_broken_input_walks() {
+        // The lead byte alone does not settle the width: a lead whose
+        // continuation is not a continuation leads nothing and stands
+        // on its own, so `#length` / `#chars` / `#reverse` must stop
+        // there instead of swallowing the next byte. And `#scrub`
+        // replaces an ill-formed *run*, not one subpart per byte, so a
+        // truncated EUC-JP tail is one replacement (`8F A1` -> "?").
+        // Emacs-Mule rides along: it is a `NamedByte` encoding, but not
+        // a byte-wide one, so `String#[]` has to walk it too.
+        run_test_once(
+            r#"
+            res = []
+            res << [0x8E, 0x20].pack("C*").force_encoding("EUC-JP").length
+            res << [0x8E, 0x20].pack("C*").force_encoding("EUC-JP").chars.map(&:bytes)
+            # 0x8E takes the whole A1..FE, not just the kana block.
+            res << [0x8E, 0xFC].pack("C*").force_encoding("EUC-JP").valid_encoding?
+            res << [0x8E, 0xFC].pack("C*").force_encoding("EUC-JP").length
+            res << [0x8F, 0xA1].pack("C*").force_encoding("EUC-JP").scrub("?").bytes
+            res << [0x8F, 0xA1, 0x41].pack("C*").force_encoding("EUC-JP").scrub("?").bytes
+            res << [0xA1, 0x20, 0xA1, 0xA1].pack("C*").force_encoding("EUC-JP").scrub("?").bytes
+            # the block form sees the same subparts the argument form replaces
+            res << [].tap { |a|
+              [0x8F, 0xA1, 0x41].pack("C*").force_encoding("EUC-JP").scrub { |b| a << b.bytes; "?" }
+            }
+            # a same-encoding `invalid: :replace` is #scrub, not a round trip
+            res << [0xFC, 0xA1, 0xA1].pack("C*").force_encoding("EUC-JP")
+                     .encode("EUC-JP", invalid: :replace, replace: "?").bytes
+            res << [0x81, 0x00].pack("C*").force_encoding("Shift_JIS").length
+            res << [0x81, 0x00].pack("C*").force_encoding("Shift_JIS").chars.map(&:bytes)
+            res << [0x00, 0x80].pack("C*").force_encoding("Shift_JIS")
+                     .encode("Shift_JIS", invalid: :replace, replace: "?").bytes
+            res << [0x81, 0x00, 0x41].pack("C*").force_encoding("Shift_JIS").reverse.bytes
+            res << [0x00, 0x8E, 0xA1, 0xA1].pack("C*").force_encoding("Emacs-Mule")[1].bytes
+            res << [0x00, 0x8E, 0xA1, 0xA1].pack("C*").force_encoding("Emacs-Mule")[1, 2].bytes
+            res
+            "#,
+        );
     }
 
     #[test]

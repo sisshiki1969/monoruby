@@ -155,7 +155,9 @@ clone が安価で独立していることを固定する。
 はエンコーディングごとの文字境界層の提案（*proposed*）で、§2 に現状の
 `RStringInner` の穴（EUC-JP / SJIS のバイト単位反復、非 UTF-8 の `to_str`
 退避）の監査がある。ただしその文書は `content: Vec<u8>` 時代の記述で、
-SmallVec / 共有 union への改修より前のものである。
+SmallVec / 共有 union への改修より前のものであり、§2 が挙げる反復の穴も
+すでに埋まっている（EUC-JP / Shift_JIS / Emacs-Mule は `precise_mbclen` を
+持ち、`CharByteIter` はそれを通る）。
 
 ---
 
@@ -483,7 +485,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 | `opt_str_freeze` | あり | あり — `StringFreeze` 命令（§3.5） |
 | `opt_str_uminus` | あり | **無し** |
 | エンコーディング | 約 100 種の本物のコーデック | native コーデックは **UTF-8, US-ASCII, ASCII-8BIT, UTF-16LE/BE, UTF-32LE/BE, ISO-8859-1..16, EUC-JP, Shift_JIS / CP932 / Windows-31J, ISO-2022-JP（`encoding_rs`）**。他は名前だけ保持（`Other` = ASCII 非互換のダミー、`NamedByte` = 約 38 の ASCII 互換コードページで、格納と文字反復は ASCII-8BIT として振る舞い `#name` / `#inspect` / ASCII 互換性だけが違う） |
-| EUC-JP / Shift_JIS の文字反復 | 完全な `mbclen` | `classify` と `char_length` は native に復号するが、`CharByteIter` は**バイト単位**で進む。[`../encoding_char_iteration_design.md`](../encoding_char_iteration_design.md) が埋めようとしている穴 |
+| EUC-JP / Shift_JIS の文字反復 | 完全な `mbclen` | `classify` / `char_length` / `CharByteIter` / `#scrub` が同じ三値 `precise_mbclen`（`eucjp_precise_len` / `sjis_precise_len`、Emacs-Mule も同形）を通る。継続バイトまで見るので、先頭バイトだけで幅を決めて次のバイトを飲み込むことはない。`#scrub` の不正部分は CRuby の `enc_str_scrub` と同じ**連**単位（`8F A1` は 1 個の置換） |
 | 非 UTF-8 上の正規表現 | onigmo の多エンコーディング | バイト → `U+00XX` 代理写像で UTF-8 専用の `regex` クレートに掛ける（`regex_view` / `from_mapped_utf8`）。EUC-JP / SJIS はバイト単位の近似 |
 | 宣言エンコーディング下の不正バイト | 許容、coderange BROKEN | 同じ（`content` は不透明なバイトバッファ、`ty` は情報のみ） |
 | `str_mod_check` | ポインタ + 長さ | 長さのみ（同じ長さの in-place 編集でも再確保するため） |

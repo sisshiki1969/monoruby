@@ -1093,15 +1093,27 @@ pub(super) fn transcode_bytes_with_opts(
         && (encoding_to_rs(src_enc).is_some()
             || is_utf16_or_32(src_enc)
             || single_byte_table(src_enc).is_some());
-    // Emacs-Mule has no transcoder, but it does have a validator, so a
-    // same-encoding `invalid: :replace` can still scrub — through the
-    // same walk `String#scrub` uses, so the two agree on where one
-    // ill-formed subpart ends and the next begins.
-    if src_enc == dst_enc && opts.invalid_replace && !opts.has_newline()
-        && src_enc == E::NamedByte(crate::value::EMACS_MULE)
+    // The encodings monoruby walks itself (Emacs-Mule, EUC-JP,
+    // Shift_JIS) scrub through that walk, not through a codec. For
+    // Emacs-Mule there is no codec to use; for the other two there is,
+    // and using it was wrong — `encoding_rs`'s EUC-JP and Shift_JIS are
+    // WHATWG's, so a decode / re-encode round trip rewrote cells CRuby
+    // leaves alone (`FC A1` came back as the JIS X 0212 `8F E3 A6`) and
+    // silently accepted bytes onigenc calls broken (Shift_JIS `0x80`).
+    // A same-encoding `invalid: :replace` *is* `String#scrub` in CRuby,
+    // so it has to be the same walk here too.
+    if src_enc == dst_enc
+        && opts.invalid_replace
+        && !opts.has_newline()
+        && let Some((max_len, precise)) = crate::value::mbc_walker(src_enc)
     {
         let replace = opts.replace_str(dst_enc);
-        return Ok(crate::value::emacs_mule_scrub(src_bytes, replace.as_bytes()));
+        return Ok(crate::value::scrub_mbc(
+            src_bytes,
+            replace.as_bytes(),
+            max_len,
+            precise,
+        ));
     }
     if src_enc == dst_enc && !scrub_in_place {
         // The newline decorators still apply to a same-encoding

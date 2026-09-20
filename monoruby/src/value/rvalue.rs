@@ -45,8 +45,8 @@ pub(crate) use string::{
     string_snapshot, string_substring,
 };
 pub(crate) use string::{
-    EMACS_MULE, char_count, char_width_at, emacs_mule_scrub, eucjp_char_width,
-    named_byte_const_name, sjis_char_width,
+    MbcPiece, char_count, char_width_at, eucjp_char_width, mbc_walker, named_byte_const_name,
+    scrub_mbc, sjis_char_width, walk_mbc,
 };
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
 pub use thread::*;
