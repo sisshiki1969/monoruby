@@ -701,6 +701,61 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
 }
 
+/// CRuby's `rb_str_upto_each` walk, for the Range endpoints that are
+/// Strings.
+///
+/// The walk stops when the current value equals `end.succ`, not when it
+/// passes `end`, and bails as soon as the successor outgrows `end` or
+/// comes back empty. Both guards are load-bearing for an empty
+/// endpoint: `"".succ` is `""`, so a "walk until we pass `end`" loop
+/// never moves and `("".."")` took the process down (#1480). They also
+/// make `("".."")` empty — `""` is already `end.succ` — while
+/// `("".."b")` yields exactly once.
+fn str_range_walk(
+    start: &str,
+    end: &str,
+    exclude_end: bool,
+    mut f: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    if start > end || (exclude_end && start == end) {
+        return Ok(());
+    }
+    let after_end = builtins::string::str_next(end);
+    let mut current = start.to_string();
+    while current != after_end {
+        // The successor is taken before `f` runs, as CRuby does.
+        let next = if exclude_end || current != end {
+            Some(builtins::string::str_next(&current))
+        } else {
+            None
+        };
+        f(&current)?;
+        let Some(next) = next else { break };
+        current = next;
+        if exclude_end && current == end {
+            break;
+        }
+        if current.len() > end.len() || current.is_empty() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// The last value an exclusive String range yields — the predecessor of
+/// `end` along `String#succ` — or `None` when the range yields nothing.
+/// Walking to `end` needs the same termination guards as
+/// [`str_range_walk`]: `end` may be unreachable from `start` (`"b"..."a"`)
+/// and an empty `start` never moves.
+fn str_range_predecessor(start: &str, end: &str) -> Option<String> {
+    let mut prev = None;
+    let _ = str_range_walk(start, end, true, |s| {
+        prev = Some(s.to_string());
+        Ok(())
+    });
+    prev
+}
+
 ///
 /// ### Range#entries
 ///
@@ -718,16 +773,11 @@ fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else if let Some(start) = range.start().is_str()
         && let Some(end) = range.end().is_str()
     {
-        let mut start = start.to_string();
-        let end = end.to_string();
         let mut v = vec![];
-        while start < end {
-            v.push(Value::string_from_str(&start));
-            start = builtins::string::str_next(&start);
-        }
-        if !range.exclude_end() && start == end {
-            v.push(Value::string_from_str(&start));
-        }
+        str_range_walk(&start, &end, range.exclude_end(), |s| {
+            v.push(Value::string_from_str(s));
+            Ok(())
+        })?;
         Ok(Value::array_from_vec(v))
     } else {
         Err(MonorubyErr::runtimeerr("not supported"))
@@ -912,12 +962,9 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             } else if let Some(end_str) = end.is_str() {
                 // For exclusive string ranges, iterate to find the predecessor
                 if let Some(start_str) = start.is_str() {
-                    let mut current = start_str.to_string();
-                    let mut prev = current.clone();
-                    while current != end_str {
-                        prev = current.clone();
-                        current = builtins::string::str_next(&current);
-                    }
+                    let Some(prev) = str_range_predecessor(start_str, end_str) else {
+                        return Ok(Value::nil());
+                    };
                     return Ok(Value::string_from_str(&prev));
                 }
                 return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
@@ -1219,13 +1266,10 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 Value::bigint(b - 1)
             } else if let Some(end_str) = end.is_str() {
                 if let Some(start_str) = start.is_str() {
-                    let mut current = start_str.to_string();
-                    let mut prev = current.clone();
-                    while current != end_str {
-                        prev = current.clone();
-                        current = builtins::string::str_next(&current);
+                    match str_range_predecessor(start_str, end_str) {
+                        Some(prev) => Value::string_from_str(&prev),
+                        None => return Ok(Value::nil()),
                     }
-                    Value::string_from_str(&prev)
                 } else {
                     return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
                 }

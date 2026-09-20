@@ -15881,6 +15881,30 @@ mod tests {
     }
 
     #[test]
+    fn upto_terminates_on_an_empty_receiver() {
+        // `"".succ` is `""`, so a walk that stops when the current
+        // value passes `max` never stops at all — `"".upto("")` ran
+        // until the process died. CRuby walks until the current value
+        // equals `max.succ` and stops as soon as the successor outgrows
+        // `max` or comes back empty, which makes `"".upto("")` empty and
+        // `"".upto("a")` exactly one yield.
+        run_test_once(
+            r##"(f=->(a, b, ex){ begin; a.upto(b, ex).to_a; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call("", "", false), f.call("", "", true),
+              f.call("", "a", false), f.call("", "a", true),
+              f.call("a", "", false), f.call("a", "", true),
+              f.call("a", "a", false), f.call("a", "a", true),
+              f.call("a", "e", false), f.call("a", "e", true),
+              f.call("y", "z", false), f.call("zz", "aaa", false),
+              f.call("a9", "b1", false), f.call("8", "11", false),
+              f.call("9", "A", false), f.call("Y", "b", false),
+              f.call("08", "11", false), f.call("ab", "a", false),
+              f.call("1.2", "1.4", false),
+            ])"##,
+        );
+    }
+
+    #[test]
     fn upto_raises_on_incompatible_encodings() {
         run_test_error(
             r#"

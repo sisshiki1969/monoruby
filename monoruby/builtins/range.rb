@@ -37,58 +37,25 @@ class Range
         end
         return self
       end
-      # For String / Symbol ranges, stop once succ extends past the end
-      # element's length — `:Z.succ == :AA` would otherwise loop past
-      # `:z` indefinitely. CRuby's String#upto applies the same
-      # same-length stopping rule.
-      seq_mode = (i.is_a?(String) && e.is_a?(String)) ||
-                 (i.is_a?(Symbol) && e.is_a?(Symbol))
-      # CRuby's String#upto special-cases single ASCII-character
-      # endpoints: it walks by codepoint, not by #succ, so
-      # `("A".."z")` yields the punctuation between `Z` and `a`
-      # (bytes 65..122 = 58 elements) and `(:A..:z)` the symbol
-      # equivalent. #succ would instead stop at `Z`/`z`.
-      if seq_mode
-        __bs = i.is_a?(Symbol) ? i.to_s : i
-        __es = e.is_a?(Symbol) ? e.to_s : e
-        if __bs.length == 1 && __es.length == 1 &&
-           __bs.ord < 128 && __es.ord < 128
-          __sym = i.is_a?(Symbol)
-          __last = excl ? __es.ord - 1 : __es.ord
-          __c = __bs.ord
-          while __c <= __last
-            ch = __c.chr
-            yield(__sym ? ch.to_sym : ch)
-            __c += 1
-          end
-          return self
-        end
+      # String / Symbol ranges are `String#upto`, as CRuby's `range_each`
+      # has them: it calls `rb_str_upto_each(beg, end, excl, …)` for a
+      # String range and the same over `to_s` for a Symbol one. That
+      # brings the single-ASCII-character walk (`("A".."z")` yields the
+      # punctuation between `Z` and `a`, which `#succ` would skip), the
+      # all-digit walk, the same-length stopping rule, and — the reason
+      # this stopped being a loop written out here — the termination
+      # guards an empty endpoint needs, since `"".succ` is `""` (#1480).
+      if i.is_a?(Symbol) && e.is_a?(Symbol)
+        i.to_s.upto(e.to_s, excl) { |s| yield s.to_sym }
+        return self
       end
-      if seq_mode
-        end_len = e.is_a?(Symbol) ? e.to_s.length : e.length
-        # CRuby's rb_str_upto_each gates on a plain lexicographic
-        # compare before iterating: ("z".."aa") is empty even though
-        # succ order would reach "aa" — only ranges with beg <= end
-        # as strings iterate at all.
-        c0 = (i <=> e)
-        return self if c0.nil? || c0 > 0 || (excl && c0 == 0)
+      if i.is_a?(String) && e.is_a?(String)
+        i.upto(e, excl) { |s| yield s }
+        return self
       end
       # `while true`, not `Kernel#loop`: see the `e.nil?` branch above —
       # `loop` would swallow a StopIteration raised by the yielded block.
       while true
-        if seq_mode
-          cur_len = i.is_a?(Symbol) ? i.to_s.length : i.length
-          break if cur_len > end_len
-          # succ order sorts first by length, then lexicographically —
-          # `"b" < "ab"` in succ order even though `"b" > "ab"` as
-          # strings ("a".."ab" runs a..z then aa, ab). While shorter
-          # than the end, keep stepping without the lex comparison.
-          if cur_len < end_len
-            yield i
-            i = i.succ
-            next
-          end
-        end
         c = (i <=> e)
         break if c.nil?
         if excl
