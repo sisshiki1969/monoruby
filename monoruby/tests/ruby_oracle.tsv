@@ -1390,6 +1390,7 @@
 5c591e9ff73fb3eaf82f8472fbe461ed	:nme	class Float; def *(o); super(o); end; end\n                begin; 2.0 * 3; rescue
 5c78c8c1a1899c06122f988ae4e55650	true	module MNs; module Ext; end; end\n            o = Object.new\n       
 5c81b1416723d320008472f66e0573cc	[true, true, true]	def churn(n) = n.times { |i| [i, i] }\n            churn(50_000); GC
+5c9869ab14f386421e62cfb188f5e361	[true, true, [true, true]]	(d="/tmp/mono_pwde_#{Process.pid}"; Dir.mkdir(d); sub="#{d}/" + "\\xFF\\xFE".dup.f
 5c9a399e6be0e655dcde007dc7ece9b8	true	r, w = IO.pipe\n            t = Thread.new { sleep 0.2 }\n           
 5c9bd2b9dbdb63097f4a4accca2a9df4	nil	def f(&p)\n            p.call\n        end\n        \n\n        f{}\n        
 5d03329e8ce3ae472df7fb2691c658f9	[3, :redefined]	a, b = 3, 9\n            r = []\n            50.times { r << [a, b].m

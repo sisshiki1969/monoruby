@@ -1748,12 +1748,10 @@ pub(super) fn to_path_str(vm: &mut Executor, globals: &mut Globals, val: Value) 
 /// written needs. Unlike `to_path_str` — which renders a non-UTF-8
 /// path byte-wise as `\xHH` for display — this hands the bytes to the
 /// kernel untouched, the way CRuby's `rb_str_encode_ospath` does.
-fn to_raw_path(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    val: Value,
-) -> Result<std::path::PathBuf> {
-    Ok(bytes_to_pathbuf(to_path_rstring(vm, globals, val)?.as_bytes()))
+fn to_raw_path(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<std::path::PathBuf> {
+    Ok(bytes_to_pathbuf(
+        to_path_rstring(vm, globals, val)?.as_bytes(),
+    ))
 }
 
 #[cfg(not(windows))]

@@ -886,15 +886,19 @@ fn home(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/getwd.html]
 #[monoruby_builtin]
-fn pwd(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+fn pwd(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
     let cwd = std::env::current_dir().unwrap();
     let bytes = super::file::pathbuf_bytes(&cwd);
-    // The cwd is reported in the filesystem (UTF-8) encoding; raw bytes
-    // that don't decode fall back to BINARY (core/dir/pwd_spec.rb).
-    let enc = if std::str::from_utf8(bytes).is_ok() {
-        crate::value::Encoding::Utf8
-    } else {
-        crate::value::Encoding::Ascii8
+    // CRuby's `rb_dir_getwd` switches on the filesystem encoding: a
+    // US-ASCII one becomes ASCII-8BIT *unconditionally* — whether or
+    // not the path is all-ASCII, unlike the directory-entry rule — and
+    // every other one is associated as is. The association is plain, so
+    // bytes that are invalid under a UTF-8 filesystem encoding stay
+    // UTF-8 and invalid rather than falling back to BINARY
+    // (core/dir/pwd_spec.rb).
+    let enc = match super::file::filesystem_encoding(globals) {
+        crate::value::Encoding::UsAscii => crate::value::Encoding::Ascii8,
+        e => e,
     };
     Ok(super::file::path_value(bytes, enc))
 }
@@ -1244,6 +1248,19 @@ mod tests {
         // wrapper lists the same entries and has a nil path.
         run_test_once(
             r##"(d="/tmp/mono_ff_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/x", ""); dir=Dir.open(d); a=dir.fileno.is_a?(Integer); dn=Dir.for_fd(dir.fileno); b=dn.to_a.sort; c=dn.path; dir.close; e2=(begin; dn.close; rescue => e; [e.class, e.message]; end); f=(begin; Dir.for_fd("x"); rescue => e; e.class; end); File.unlink("#{d}/x"); Dir.rmdir(d); [a,b,c,e2,f])"##,
+        );
+    }
+
+    #[test]
+    fn dir_pwd_filesystem_encoding() {
+        // `rb_dir_getwd`: the cwd carries the filesystem encoding, with
+        // a US-ASCII one turned into ASCII-8BIT; the association is
+        // plain, so bytes that are invalid in a UTF-8 filesystem
+        // encoding come back UTF-8 and invalid, not BINARY. Phrased
+        // against `Encoding.find("filesystem")` so the answer is the
+        // same whatever locale the test host runs under.
+        run_test_once(
+            r##"(d="/tmp/mono_pwde_#{Process.pid}"; Dir.mkdir(d); sub="#{d}/" + "\xFF\xFE".dup.force_encoding("binary"); Dir.mkdir(sub); fs=Encoding.find("filesystem"); want=(fs == Encoding::US_ASCII ? Encoding::BINARY : fs); r=[Dir.pwd.encoding == want, Dir.getwd.encoding == want, Dir.chdir(sub) { [Dir.pwd.encoding == want, Dir.pwd.valid_encoding? == (want == Encoding::BINARY)] }]; Dir.rmdir(sub); Dir.rmdir(d); r)"##,
         );
     }
 
