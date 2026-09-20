@@ -209,17 +209,25 @@ class String
       (from..stop).each { |b| block.call(b.chr) }
       return self
     end
+    # CRuby's `rb_str_upto_each` walks until the current value equals
+    # `max.succ`, not until it passes `max`, and stops as soon as the
+    # successor outgrows `max` or comes back empty. Both guards matter
+    # for an empty receiver: `"".succ` is `""`, so `"".upto("")` would
+    # otherwise yield for ever (it is `[]` in CRuby, since `""` is
+    # already `max.succ`), and `"".upto("a")` yields exactly once.
+    n = (self <=> max)
+    return self if n > 0 || (exclusive && n == 0)
+    after_end = max.succ
     current = self
-    if exclusive
-      while current < max && current.length <= max.length
-        block.call(current)
-        current = current.succ
-      end
-    else
-      while (current <=> max) <= 0 && current.length <= max.length
-        block.call(current)
-        current = current.succ
-      end
+    while current != after_end
+      # The successor is taken before the block runs, as CRuby does, so
+      # a block that mutates the yielded string cannot steer the walk.
+      nxt = (exclusive || current != max) ? current.succ : nil
+      block.call(current)
+      break if nxt.nil?
+      current = nxt
+      break if exclusive && current == max
+      break if current.length > max.length || current.empty?
     end
     self
   end

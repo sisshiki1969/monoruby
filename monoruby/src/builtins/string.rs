@@ -68,12 +68,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "slice!", slice_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp!", chomp_, 0, 1, false);
-    globals.define_builtin_func(STRING_CLASS, "strip", strip, 0);
-    globals.define_builtin_func(STRING_CLASS, "strip!", strip_, 0);
-    globals.define_builtin_func(STRING_CLASS, "rstrip", rstrip, 0);
-    globals.define_builtin_func(STRING_CLASS, "rstrip!", rstrip_, 0);
-    globals.define_builtin_func(STRING_CLASS, "lstrip", lstrip, 0);
-    globals.define_builtin_func(STRING_CLASS, "lstrip!", lstrip_, 0);
+    globals.define_builtin_func_rest(STRING_CLASS, "strip", strip);
+    globals.define_builtin_func_rest(STRING_CLASS, "strip!", strip_);
+    globals.define_builtin_func_rest(STRING_CLASS, "rstrip", rstrip);
+    globals.define_builtin_func_rest(STRING_CLASS, "rstrip!", rstrip_);
+    globals.define_builtin_func_rest(STRING_CLASS, "lstrip", lstrip);
+    globals.define_builtin_func_rest(STRING_CLASS, "lstrip!", lstrip_);
     globals.define_builtin_func_with(STRING_CLASS, "sub", sub, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "sub!", sub_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "gsub", gsub, 1, 2, false);
@@ -3300,6 +3300,159 @@ fn rstrip_broken_check(store: &Store, inner: &RStringInner) -> Result<()> {
     ))
 }
 
+/// Ruby 4.0's character-selector arguments for the strip family.
+///
+/// Each argument is a `tr`-style set — `^` negates, `a-z` is a range,
+/// `\\` escapes — and a character is trimmed only when *every* set
+/// contains it, the same intersection `String#count` and `#delete`
+/// apply. Returns the `(start, end)` byte offsets of the kept span;
+/// `left` / `right` say which ends to trim, so `#lstrip` and `#rstrip`
+/// share the walk.
+///
+/// With no arguments this is not called at all: the no-selector form
+/// strips CRuby's whitespace-plus-NUL byte set, which is what
+/// [`strip_start`] / [`strip_end`] do.
+fn strip_selector_offsets(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    inner: &RStringInner,
+    args: Array,
+    left: bool,
+    right: bool,
+) -> Result<(usize, usize)> {
+    check_selector_encodings(globals, inner, args)?;
+    // The units to trim, as (offset, bytes). They have to be the same
+    // units the membership test below works in, or the two walks slide
+    // out of step: `regex_view` maps a byte-oriented receiver one byte
+    // to one char, while a UTF-8 one keeps whole characters. That is
+    // the same per-byte-vs-per-character split `String#count` and
+    // `#delete` have on an EUC-JP / Shift_JIS receiver (#1475).
+    let by_byte = inner.needs_byte_mapping();
+    let mut pieces: Vec<(usize, &[u8])> = Vec::new();
+    let mut pos = 0;
+    if by_byte {
+        for (i, b) in inner.as_bytes().iter().enumerate() {
+            pieces.push((i, std::slice::from_ref(b)));
+        }
+    } else {
+        for cb in inner.iter_char_bytes() {
+            pieces.push((pos, cb));
+            pos += cb.len();
+        }
+    }
+    // Membership per character, in the same two flavours `String#count`
+    // uses: ASCII-only sets walked over a non-UTF-8 receiver's own
+    // characters, or the `regex_view` both sides are mapped into.
+    let member: Vec<bool> = if let Some(sets) = nonutf8_ascii_charsets(globals, inner, args)? {
+        pieces.iter().map(|(_, cb)| ascii_sets_contain(&sets, cb)).collect()
+    } else {
+        let strs: Vec<String> = args
+            .iter()
+            .map(|arg| tr_set_view(vm, globals, *arg))
+            .collect::<Result<Vec<_>>>()?;
+        let sets: Vec<Charset> = strs
+            .iter()
+            .map(|s| Charset::parse(s))
+            .collect::<Result<_>>()?;
+        // A valid receiver goes through `regex_view`, whose characters
+        // line up one-for-one with `iter_char_bytes` and are in the
+        // same space the sets were mapped into. A broken one cannot be
+        // viewed at all: only its ASCII bytes can match, and the walk
+        // stops at the first byte that is not a character anyway —
+        // where the checks below raise, as they do without selectors.
+        let view = if inner.is_valid_encoding() {
+            Some(inner.regex_view()?)
+        } else {
+            None
+        };
+        match &view {
+            Some(v) => v
+                .chars()
+                .map(|c| sets.iter().all(|s| s.contains_char(c)))
+                .collect(),
+            None => pieces
+                .iter()
+                .map(|(_, cb)| {
+                    cb.len() == 1
+                        && cb[0] < 0x80
+                        && sets.iter().all(|s| s.contains_char(cb[0] as char))
+                })
+                .collect(),
+        }
+    };
+    let mut start = 0;
+    let mut end = inner.len();
+    if left {
+        for (i, (off, cb)) in pieces.iter().enumerate() {
+            if !member.get(i).copied().unwrap_or(false) {
+                break;
+            }
+            start = off + cb.len();
+        }
+        // CRuby's `lstrip_offset` decodes the first character it keeps,
+        // so an invalid one there is an ArgumentError — with or without
+        // selectors.
+        lstrip_invalid_check(inner, start)?;
+    }
+    if right {
+        // `rstrip_offset` refuses to walk a broken receiver at all.
+        rstrip_broken_check(&globals.store, inner)?;
+        for (i, (off, _)) in pieces.iter().enumerate().rev() {
+            if *off < start || !member.get(i).copied().unwrap_or(false) {
+                break;
+            }
+            end = *off;
+        }
+    }
+    Ok((start, end))
+}
+
+/// CRuby's `rb_enc_check` between the receiver and each `tr`-style
+/// selector argument, which happens before any set is parsed: a
+/// selector whose encoding does not combine with the receiver's is an
+/// `Encoding::CompatibilityError`, even when the receiver is UTF-8
+/// (`"\u3042".count("\u3042".encode("EUC-JP"))`).
+/// [`check_selector_encodings`] for `#tr` / `#tr_s`, whose two sets
+/// arrive as fixed arguments rather than a rest array. CRuby checks
+/// both against the receiver, so `"\u3042".tr("a", euc_jp_set)` raises
+/// just as `"\u3042".tr(euc_jp_set, "x")` does.
+fn check_tr_arg_encodings(
+    globals: &Globals,
+    recv: &RStringInner,
+    from: Value,
+    to: Value,
+) -> Result<()> {
+    for a in [from, to] {
+        let Some(set) = a.is_rstring_inner() else {
+            continue;
+        };
+        if recv.compatible_encoding(&set).is_none() {
+            return Err(MonorubyErr::incompatible_encoding(
+                &globals.store,
+                recv.encoding(),
+                set.encoding(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_selector_encodings(globals: &Globals, recv: &RStringInner, args: Array) -> Result<()> {
+    for a in args.iter() {
+        let Some(set) = a.is_rstring_inner() else {
+            continue;
+        };
+        if recv.compatible_encoding(&set).is_none() {
+            return Err(MonorubyErr::incompatible_encoding(
+                &globals.store,
+                recv.encoding(),
+                set.encoding(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 ///
 /// ### String#strip
 ///
@@ -3307,14 +3460,19 @@ fn rstrip_broken_check(store: &Store, inner: &RStringInner) -> Result<()> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/strip.html]
 #[monoruby_builtin]
-fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn strip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    let bytes = inner.as_bytes();
-    lstrip_invalid_check(&inner, strip_start(bytes, bytes.len()))?;
-    rstrip_broken_check(&globals.store, &inner)?;
-    let new_end = strip_end(bytes);
-    let new_start = strip_start(bytes, new_end);
+    let args = lfp.arg(0).as_array();
+    let (new_start, new_end) = if args.len() == 0 {
+        let bytes = inner.as_bytes();
+        lstrip_invalid_check(&inner, strip_start(bytes, bytes.len()))?;
+        rstrip_broken_check(&globals.store, &inner)?;
+        let end = strip_end(bytes);
+        (strip_start(bytes, end), end)
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, true, true)?
+    };
     // Zero-copy shared substring (CoW) for long enough results.
     Ok(string_substring(self_val, new_start, new_end))
 }
@@ -3330,12 +3488,18 @@ fn strip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    let bytes = inner.as_bytes();
-    lstrip_invalid_check(&inner, strip_start(bytes, bytes.len()))?;
-    rstrip_broken_check(&globals.store, &inner)?;
-    let new_end = strip_end(bytes);
-    let new_start = strip_start(bytes, new_end);
-    if new_end - new_start == bytes.len() {
+    let args = lfp.arg(0).as_array();
+    let len = inner.len();
+    let (new_start, new_end) = if args.len() == 0 {
+        let bytes = inner.as_bytes();
+        lstrip_invalid_check(&inner, strip_start(bytes, bytes.len()))?;
+        rstrip_broken_check(&globals.store, &inner)?;
+        let end = strip_end(bytes);
+        (strip_start(bytes, end), end)
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, true, true)?
+    };
+    if new_end - new_start == len {
         return Ok(Value::nil());
     }
     let trimmed = RStringInner::from_substring(inner, new_start, new_end);
@@ -3350,12 +3514,18 @@ fn strip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rstrip.html]
 #[monoruby_builtin]
-fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn rstrip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    rstrip_broken_check(&globals.store, &self_val.as_rstring_inner())?;
-    let new_end = strip_end(self_val.as_rstring_inner().as_bytes());
+    let inner = self_val.as_rstring_inner();
+    let args = lfp.arg(0).as_array();
+    let (start, new_end) = if args.len() == 0 {
+        rstrip_broken_check(&globals.store, &inner)?;
+        (0, strip_end(inner.as_bytes()))
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, false, true)?
+    };
     // Zero-copy shared substring (CoW) for long enough results.
-    Ok(string_substring(self_val, 0, new_end))
+    Ok(string_substring(self_val, start, new_end))
 }
 
 ///
@@ -3369,12 +3539,17 @@ fn rstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    rstrip_broken_check(&globals.store, &inner)?;
-    let new_end = strip_end(inner.as_bytes());
-    if new_end == inner.len() {
+    let args = lfp.arg(0).as_array();
+    let (start, new_end) = if args.len() == 0 {
+        rstrip_broken_check(&globals.store, &inner)?;
+        (0, strip_end(inner.as_bytes()))
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, false, true)?
+    };
+    if new_end - start == inner.len() {
         return Ok(Value::nil());
     }
-    let trimmed = RStringInner::from_substring(inner, 0, new_end);
+    let trimmed = RStringInner::from_substring(inner, start, new_end);
     lfp.self_val().replace_with_inner(trimmed);
     Ok(lfp.self_val())
 }
@@ -3386,15 +3561,20 @@ fn rstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/lstrip.html]
 #[monoruby_builtin]
-fn lstrip(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn lstrip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    let bytes = inner.as_bytes();
-    let new_start = strip_start(bytes, bytes.len());
-    lstrip_invalid_check(&inner, new_start)?;
-    let s_len = bytes.len();
+    let args = lfp.arg(0).as_array();
+    let (new_start, end) = if args.len() == 0 {
+        let bytes = inner.as_bytes();
+        let start = strip_start(bytes, bytes.len());
+        lstrip_invalid_check(&inner, start)?;
+        (start, bytes.len())
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, true, false)?
+    };
     // Zero-copy shared substring (CoW) for long enough results.
-    Ok(string_substring(self_val, new_start, s_len))
+    Ok(string_substring(self_val, new_start, end))
 }
 
 ///
@@ -3408,12 +3588,18 @@ fn lstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    let new_start = strip_start(inner.as_bytes(), inner.len());
-    lstrip_invalid_check(&inner, new_start)?;
-    if new_start == 0 {
+    let args = lfp.arg(0).as_array();
+    let (new_start, end) = if args.len() == 0 {
+        let start = strip_start(inner.as_bytes(), inner.len());
+        lstrip_invalid_check(&inner, start)?;
+        (start, inner.len())
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, true, false)?
+    };
+    if end - new_start == inner.len() {
         return Ok(Value::nil());
     }
-    let result = RStringInner::from_substring(inner, new_start, inner.len());
+    let result = RStringInner::from_substring(inner, new_start, end);
     lfp.self_val().replace_with_inner(result);
     Ok(lfp.self_val())
 }
@@ -8256,6 +8442,7 @@ fn delete_compute(
         ));
     }
     let inner = self_val.as_rstring_inner();
+    check_selector_encodings(globals, &inner, args)?;
     mustnot_broken(&inner)?;
     if let Some(b) = single_ascii_byte_set(args, &inner) {
         let bytes = inner.as_bytes();
@@ -8362,6 +8549,7 @@ fn transform_result(res: &str, self_val: Value, mapped: bool) -> Value {
 fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
+    check_tr_arg_encodings(globals, &inner, lfp.arg(0), lfp.arg(1))?;
     // `#tr` walks characters only where the encoding has them.
     mustnot_broken_multibyte(inner)?;
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
@@ -8393,6 +8581,12 @@ fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
+    check_tr_arg_encodings(
+        globals,
+        &lfp.self_val().as_rstring_inner(),
+        lfp.arg(0),
+        lfp.arg(1),
+    )?;
     mustnot_broken_multibyte(&lfp.self_val().as_rstring_inner())?;
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
     let to = tr_set_view(vm, globals, lfp.arg(1))?;
@@ -8445,6 +8639,7 @@ fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
+    check_tr_arg_encodings(globals, &inner, lfp.arg(0), lfp.arg(1))?;
     // `#tr_s` squeezes, which CRuby refuses on any broken receiver.
     mustnot_broken(inner)?;
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
@@ -8476,6 +8671,12 @@ fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn tr_s_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
+    check_tr_arg_encodings(
+        globals,
+        &lfp.self_val().as_rstring_inner(),
+        lfp.arg(0),
+        lfp.arg(1),
+    )?;
     mustnot_broken(&lfp.self_val().as_rstring_inner())?;
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
     let to = tr_set_view(vm, globals, lfp.arg(1))?;
@@ -8915,6 +9116,7 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
+    check_selector_encodings(globals, inner, args)?;
     mustnot_broken(inner)?;
     if let Some(b) = single_ascii_byte_set(args, inner) {
         let n = memchr::memchr_iter(b, inner.as_bytes()).count();
@@ -9010,6 +9212,7 @@ fn squeeze_compute(
 ) -> Result<RStringInner> {
     let args = rest_arg.as_array();
     let inner = self_val.as_rstring_inner();
+    check_selector_encodings(globals, &inner, args)?;
     mustnot_broken_multibyte(&inner)?;
     if let Some(b) = single_ascii_byte_set(args, &inner) {
         let bytes = inner.as_bytes();
@@ -11447,6 +11650,51 @@ mod tests {
     }
 
     #[test]
+    fn strip_character_selectors() {
+        // Ruby 4.0 gave the strip family the same `tr`-style selector
+        // arguments `#count` / `#delete` / `#squeeze` / `#tr` take:
+        // several arguments intersect, `^` negates, `a-z` is a range,
+        // `\\` escapes, and the bang forms answer nil when nothing was
+        // removed.
+        run_test_once(
+            r##"(f=->(m, s, *a){ begin; v = s.dup.send(m, *a); v.nil? ? nil : [v, v.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call(:strip, "  hello  ", "lo "),
+              f.call(:strip, "xxhelloxx", "x"),
+              f.call(:strip, "hello", "a-y"),
+              f.call(:lstrip, "hello", "a-y"),
+              f.call(:rstrip, "hello", "^l"),
+              f.call(:strip, "hello", "le", "el"),
+              f.call(:strip, "hello", "h", "e"),
+              f.call(:strip, "hhello", "h"),
+              f.call(:strip, "aabbcc", "^b"),
+              f.call(:strip, "  hello  ", ""),
+              f.call(:strip, "hello", "\\\\"),
+              f.call(:strip, "a-b-c", "\\-"),
+              f.call(:strip, "^hello^", "^"),
+              f.call(:strip, "\u3042\u3044\u3046hello\u3042\u3044\u3046", "\u3042-\u3046"),
+              f.call(:strip, "", "x"),
+              f.call(:strip, "xxx", "x"),
+              f.call(:lstrip, "xxx", "x"),
+              f.call(:rstrip, "xxx", "x"),
+              f.call(:strip!, "xxhixx", "x"),
+              f.call(:strip!, "hi", "x"),
+              f.call(:lstrip!, "hi", "x"),
+              f.call(:rstrip!, "hi", "x"),
+              f.call(:strip, "  hi  ".encode("US-ASCII"), " "),
+              f.call(:strip, "\xff\xfe\xff".b, "\xff".b),
+              f.call(:strip, "hello", 1),
+              f.call(:strip, "hello", nil),
+              f.call(:strip, "\u3042", "a".encode("EUC-JP")),
+              f.call(:strip, "\u3042", "\u3042".encode("EUC-JP")),
+              f.call(:lstrip, "\xDFabc", "a"),
+              f.call(:rstrip, "abc\xDF", "c"),
+              f.call(:strip, "\xDFabc", "a"),
+              f.call(:strip, "abc\xDF", "c"),
+            ])"##,
+        );
+    }
+
+    #[test]
     fn broken_receiver_is_refused_in_its_own_encoding() {
         // CRuby refuses character work on a receiver that is broken
         // *under its own encoding*. monoruby's guard was `regex_view`'s
@@ -11489,6 +11737,44 @@ mod tests {
               f.call(enc) { |s| s.dup.capitalize! },
               f.call(enc) { |s| s.casecmp?("a\x80b") },
             ] })"##,
+        );
+    }
+
+    #[test]
+    fn strip_selector_object_and_frozen() {
+        // A `#to_str` argument is accepted, a frozen receiver raises
+        // even when nothing would be removed, and a subclass answers a
+        // plain String — the same contract the no-selector form has.
+        run_test_once(
+            r##"(o=Object.new; def o.to_str; "h"; end; c=Class.new(String); f=->(&b){ begin; v=b.call; v.is_a?(String) ? [v, v.encoding.name] : v; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call { "hhellohh".strip(o) },
+              f.call { "hello".freeze.strip!("x") },
+              f.call { "hello".freeze.strip! },
+              f.call { c.new("  hi  ").strip(" ").class == String },
+              f.call { c.new("  hi  ").strip.class == String },
+              f.call { "  hi  ".strip(" ", " ") },
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn selector_argument_encoding_compatibility() {
+        // CRuby's `rb_enc_check` runs between the receiver and every
+        // `tr`-style selector before any set is parsed, so a set whose
+        // encoding does not combine with the receiver's raises — in the
+        // whole family, `#tr`'s replacement set included. A 7-bit
+        // receiver combines with anything, so it still answers.
+        run_test_once(
+            r##"(e="\u3042".encode("EUC-JP"); f=->(&b){ begin; v=b.call; v.is_a?(String) ? [v.bytes, v.encoding.name] : v; rescue => x; [x.class.to_s, x.message]; end }; [
+              f.call { "\u3042".count(e) }, f.call { "\u3042".count("a", e) },
+              f.call { "\u3042".delete(e) }, f.call { "\u3042".delete!(e) },
+              f.call { "\u3042".squeeze(e) }, f.call { "\u3042".squeeze!(e) },
+              f.call { "\u3042".tr(e, "x") }, f.call { "\u3042".tr("a", e) },
+              f.call { "\u3042".tr_s(e, "x") }, f.call { "\u3042".tr_s("a", e) },
+              f.call { "\u3042".strip(e) }, f.call { "\u3042".lstrip(e) },
+              f.call { "abc".count(e) }, f.call { "abc".delete(e) },
+              f.call { "abc".count("a".encode("EUC-JP")) },
+            ])"##,
         );
     }
 
@@ -14543,6 +14829,56 @@ mod tests {
     }
 
     #[test]
+    fn inspect_escape_picks_by_character_not_by_byte() {
+        // CRuby's `rb_str_inspect` picks its escape by whether the
+        // bytes form a character: an ill-formed byte is written on its
+        // own (`\xNN`, one per byte, and a printable byte after the run
+        // stays outside it), while a valid multi-byte character with no
+        // rendering is written whole in one `\x{...}`. A one-byte
+        // character (Shift_JIS halfwidth katakana) has nothing to group,
+        // so it is `\xNN` too. `#dump` is byte-oriented either way.
+        run_test_once(
+            r#"(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); [s.inspect, s.dump] }; [
+              f.call("EUC-JP", 0x41, 0x80, 0x42),
+              f.call("EUC-JP", 0x41, 0x8F, 0xA1, 0x42),
+              f.call("EUC-JP", 0x41, 0xA4, 0xA2, 0x42),
+              f.call("EUC-JP", 0x8F, 0xA1, 0xA1),
+              f.call("EUC-JP", 0x8E, 0xA1),
+              f.call("EUC-JP", 0x8E),
+              f.call("EUC-JP", 0x41, 0xFF, 0xFF, 0x42),
+              f.call("Shift_JIS", 0x41, 0x81, 0x00),
+              f.call("Shift_JIS", 0x41, 0x82, 0xA0, 0x42),
+              f.call("Shift_JIS", 0x41, 0xA1, 0x42),
+              f.call("Shift_JIS", 0x0A, 0xA1, 0xDF, 0xE0, 0x40),
+              f.call("Emacs-Mule", 0x41, 0x81, 0xA0, 0x42),
+              f.call("Emacs-Mule", 0x41, 0x80, 0x42),
+              f.call("Emacs-Mule", 0x41, 0x0A, 0x1B, 0x80, 0x92, 0xA0, 0xB0),
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn inspect_named_escapes_and_hash_lookahead() {
+        // The ASCII-incompatible byte encodings escape every byte, even
+        // printable ASCII — but a control character that has a named
+        // escape keeps it (`\e`, not `\x1B`). And the `#` before `$`,
+        // `@` or `{` is escaped in *every* ASCII-compatible encoding,
+        // not only UTF-8, so the inspected form never reads back as an
+        // interpolation.
+        run_test_once(
+            r##"(g=->(enc){ s = [0x23,0x24,0x61,0x23,0x40,0x23,0x7B].pack("C*").force_encoding(enc); [s.inspect, s.dump] }; [
+              (0..0x20).to_a.pack("C*").force_encoding("ISO-2022-JP").inspect,
+              [0x41,0x0A,0x09,0x1B,0x22,0x5C,0x7F,0x80].pack("C*").force_encoding("ISO-2022-JP").inspect,
+              [0x41,0x0A,0x1B,0x2B,0x80].pack("C*").force_encoding("UTF-7").inspect,
+              g.call("UTF-8"), g.call("US-ASCII"), g.call("ASCII-8BIT"),
+              g.call("ISO-8859-1"), g.call("EUC-JP"), g.call("Shift_JIS"),
+              g.call("Emacs-Mule"), g.call("ISO-2022-JP"),
+              "#$x".inspect, [0x5C,0x23,0x24].pack("C*").force_encoding("ASCII-8BIT").inspect,
+            ])"##,
+        );
+    }
+
+    #[test]
     fn inspect_and_case_map_by_encoding() {
         run_tests(&[
             // UTF-16/UTF-32: decode, ASCII escaped normally, non-ASCII
@@ -15710,6 +16046,30 @@ mod tests {
             r#"
               ("" <=> "".dup.force_encoding("ISO-2022-JP"))
             "#,
+        );
+    }
+
+    #[test]
+    fn upto_terminates_on_an_empty_receiver() {
+        // `"".succ` is `""`, so a walk that stops when the current
+        // value passes `max` never stops at all — `"".upto("")` ran
+        // until the process died. CRuby walks until the current value
+        // equals `max.succ` and stops as soon as the successor outgrows
+        // `max` or comes back empty, which makes `"".upto("")` empty and
+        // `"".upto("a")` exactly one yield.
+        run_test_once(
+            r##"(f=->(a, b, ex){ begin; a.upto(b, ex).to_a; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call("", "", false), f.call("", "", true),
+              f.call("", "a", false), f.call("", "a", true),
+              f.call("a", "", false), f.call("a", "", true),
+              f.call("a", "a", false), f.call("a", "a", true),
+              f.call("a", "e", false), f.call("a", "e", true),
+              f.call("y", "z", false), f.call("zz", "aaa", false),
+              f.call("a9", "b1", false), f.call("8", "11", false),
+              f.call("9", "A", false), f.call("Y", "b", false),
+              f.call("08", "11", false), f.call("ab", "a", false),
+              f.call("1.2", "1.4", false),
+            ])"##,
         );
     }
 
