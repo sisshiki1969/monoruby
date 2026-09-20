@@ -683,6 +683,98 @@ fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static [char; 128]
     None
 }
 
+/// Unicode → JIS X 0212 (the three-byte `0x8F` plane of EUC-JP).
+///
+/// Built from `encoding_rs`'s own decoder rather than a table in the
+/// tree: every `8F xx yy` in the 94×94 space is decoded once, and the
+/// cells that come back as a single character give the mapping. Where
+/// two cells decode to the same character the lower one wins, which is
+/// the order CRuby's table has them in.
+fn jisx0212_reverse() -> &'static std::collections::HashMap<char, [u8; 3]> {
+    static MAP: std::sync::OnceLock<std::collections::HashMap<char, [u8; 3]>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(|| {
+        let mut m = std::collections::HashMap::new();
+        for b2 in 0xa1u8..=0xfe {
+            for b3 in 0xa1u8..=0xfe {
+                let seq = [0x8fu8, b2, b3];
+                let (decoded, had_err) = encoding_rs::EUC_JP.decode_without_bom_handling(&seq);
+                if had_err {
+                    continue;
+                }
+                let mut chars = decoded.chars();
+                if let (Some(c), None) = (chars.next(), chars.next()) {
+                    m.entry(c).or_insert(seq);
+                }
+            }
+        }
+        m
+    })
+}
+
+/// Encode `s` as EUC-JP, reaching into JIS X 0212 for what
+/// `encoding_rs` will not write. Returns `Err(c)` on the first
+/// character neither plane holds.
+///
+/// Two things separate WHATWG's EUC-JP, which is what `encoding_rs`
+/// implements, from CRuby's:
+///
+/// - its encoder emits JIS X 0208 only, the three-byte `0x8F` forms
+///   being decode-only there — so `"ü".encode("EUC-JP")` is `8F AB E4`
+///   in CRuby and was an `UndefinedConversionError` here;
+/// - it carries the NEC and IBM extension rows, which CRuby's EUC-JP
+///   does not have at all: its transcoder maps nothing in `0xA9..=0xAF`
+///   or `0xF5..=0xFE`. A character `encoding_rs` puts there is either
+///   in JIS X 0212 too — CRuby writes the 0212 form, and 280
+///   characters take that route — or has no EUC-JP form at all, like
+///   `U+FF02`.
+///
+/// So an answer landing in those rows counts as no answer, and JIS X
+/// 0208 proper still wins over 0212 wherever both hold a character.
+fn eucjp_encode(s: &str) -> std::result::Result<Vec<u8>, char> {
+    /// Whether `encoding_rs` put this character in a row CRuby's
+    /// EUC-JP has.
+    fn is_eucjp_proper(bytes: &[u8]) -> bool {
+        !matches!(bytes.first(), Some(0xa9..=0xaf | 0xf5..=0xfe))
+    }
+    let (bytes, _, had_err) = encoding_rs::EUC_JP.encode(s);
+    if !had_err && is_eucjp_proper_throughout(&bytes) {
+        return Ok(bytes.into_owned());
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut buf = [0u8; 4];
+    for c in s.chars() {
+        let (chunk, _, err) = encoding_rs::EUC_JP.encode(c.encode_utf8(&mut buf));
+        if !err && is_eucjp_proper(&chunk) {
+            out.extend_from_slice(&chunk);
+        } else if let Some(seq) = jisx0212_reverse().get(&c) {
+            out.extend_from_slice(seq);
+        } else {
+            return Err(c);
+        }
+    }
+    Ok(out)
+}
+
+/// Whether a whole EUC-JP buffer avoids the NEC/IBM extension rows —
+/// the cheap check that lets the common case skip the per-character
+/// walk in [`eucjp_encode`]. Those bytes are only extension rows in
+/// *lead* position (a trailing byte covers `0xA1..=0xFE` too), so the
+/// buffer is walked rather than scanned.
+fn is_eucjp_proper_throughout(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            0xa9..=0xaf | 0xf5..=0xfe => return false,
+            0x8f => i += 3,
+            0x8e => i += 2,
+            0xa1..=0xfe => i += 2,
+            _ => i += 1,
+        }
+    }
+    true
+}
+
 /// Decode a single-byte-table encoding into a Rust `String`. Every
 /// byte maps (the tables are total), so this cannot fail.
 fn table_decode(bytes: &[u8], table: &[char; 128]) -> String {
@@ -993,6 +1085,22 @@ pub(super) fn transcode_bytes_with_opts(
         && (encoding_to_rs(src_enc).is_some()
             || is_utf16_or_32(src_enc)
             || single_byte_table(src_enc).is_some());
+    // Emacs-Mule has no transcoder, but it does have a validator, so a
+    // same-encoding `invalid: :replace` can still scrub — through the
+    // same walk `String#scrub` uses, so the two agree on where one
+    // ill-formed subpart ends and the next begins.
+    if src_enc == dst_enc
+        && opts.invalid_replace
+        && src_enc == E::NamedByte(crate::value::EMACS_MULE)
+    {
+        let replace = opts.replace_str(dst_enc);
+        let out = crate::value::emacs_mule_scrub(src_bytes, replace.as_bytes());
+        return Ok(if opts.has_newline() {
+            apply_newline_bytes(&out, opts)
+        } else {
+            out
+        });
+    }
     if src_enc == dst_enc && !scrub_in_place {
         // The newline decorators still apply to a same-encoding
         // "conversion" (`"a\n".encode("UTF-8", crlf_newline: true)`).
@@ -1259,6 +1367,38 @@ pub(super) fn transcode_bytes_with_opts(
             }
         };
     }
+    // EUC-JP has a second plane `encoding_rs` will not write; go
+    // through the encoder that knows about it.
+    if dst_enc == E::EucJp {
+        match eucjp_encode(&decoded) {
+            Ok(v) => return Ok(v),
+            Err(bad) if !opts.undef_replace => {
+                return Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    format!(
+                        "U+{:04X} from {} to {}",
+                        bad as u32,
+                        src_enc.name(),
+                        dst_enc.name()
+                    ),
+                ));
+            }
+            Err(_) => {
+                let replace = opts.replace_str(dst_enc);
+                let mut out: Vec<u8> = Vec::with_capacity(decoded.len());
+                let mut buf = [0u8; 4];
+                for c in decoded.chars() {
+                    match eucjp_encode(c.encode_utf8(&mut buf)) {
+                        Ok(v) => out.extend_from_slice(&v),
+                        Err(_) => {
+                            out.extend_from_slice(&eucjp_encode(&replace).unwrap_or_default())
+                        }
+                    }
+                }
+                return Ok(out);
+            }
+        }
+    }
     let dst_rs = match encoding_to_rs(dst_enc) {
         Some(d) => d,
         None => {
@@ -1275,15 +1415,20 @@ pub(super) fn transcode_bytes_with_opts(
     let (encoded, _, encode_err) = dst_rs.encode(&decoded);
     if encode_err {
         if !opts.undef_replace {
+            // The character the destination cannot write, not merely
+            // the first non-ASCII one: a String can hold plenty of
+            // non-ASCII the encoder is perfectly happy with.
+            let mut buf = [0u8; 4];
+            let bad = decoded
+                .chars()
+                .find(|c| dst_rs.encode(c.encode_utf8(&mut buf)).2)
+                .map(|c| c as u32)
+                .unwrap_or(0);
             return Err(MonorubyErr::undefined_conversion_error(
                 store,
                 format!(
                     "U+{:04X} from {} to {}",
-                    decoded
-                        .chars()
-                        .find(|c| !c.is_ascii())
-                        .map(|c| c as u32)
-                        .unwrap_or(0),
+                    bad,
                     src_enc.name(),
                     dst_enc.name()
                 ),
@@ -6817,6 +6962,82 @@ mod tests {
             r#"Encoding::UTF_8_MAC.equal?(Encoding::UTF8_MAC)"#,
             // `name_list` is a superset of every listed encoding name.
             r#"Encoding.list.all? { |e| Encoding.name_list.include?(e.name) }"#,
+        ]);
+    }
+
+    /// Emacs-Mule has no codec, but it does have a shape, and CRuby
+    /// reports a byte that does not fit it as broken — which is what
+    /// gives `#scrub` and `#encode(invalid: :replace)` something to
+    /// replace (#1424).
+    #[test]
+    fn emacs_mule_validity() {
+        let mut v: Vec<String> = vec![];
+        for seq in [
+            // The lead byte fixes the width and the range its second
+            // byte must fall in.
+            "0x80",                        // leads nothing
+            "0x81, 0xA0",                  // 2 bytes
+            "0x81, 0x20",                  // …with a second byte that is not one
+            "0x81",                        // …truncated
+            "0x90, 0xA0, 0xA0",            // 3 bytes
+            "0x90, 0xA0",                  // …truncated: one subpart, not two
+            "0x90, 0xA0, 0x20, 0xA0",      // …and the 0x20 survives
+            "0x9A, 0xE0, 0xA0",            // a private charset
+            "0x9A, 0xA0, 0xA0",            // …whose id is out of range
+            "0x9C, 0xF0, 0xA0, 0xA0",      // 4 bytes
+            "0x9C, 0xFF, 0xA0, 0xA0",
+            "0x9D, 0xF5, 0xA0, 0xA0",
+            "0x9D, 0xF0, 0xA0, 0xA0",      // 0x9C's range, not 0x9D's
+            "0x9E, 0xA0",                  // leads nothing either
+            "0x61, 0xFF, 0x62",
+            "0x61, 0x90, 0xA0, 0xA0, 0x62",
+        ] {
+            let build = format!(r#"s = [{seq}].pack("C*").force_encoding("Emacs-Mule")"#);
+            for read in [
+                "s.valid_encoding?",
+                "s.length",
+                "s.chars.map(&:bytes)",
+                "s.scrub.bytes",
+                r#"s.scrub("!").bytes"#,
+                "s.encode(invalid: :replace).bytes",
+                r#"s.encode(invalid: :replace, replace: "!").bytes"#,
+                "s.reverse.bytes",
+            ] {
+                v.push(format!("{build}; {read}"));
+            }
+        }
+        let refs: Vec<&str> = v.iter().map(|s| s.as_str()).collect();
+        run_tests(&refs);
+    }
+
+    /// EUC-JP's second plane (#1424). `encoding_rs`'s encoder is
+    /// WHATWG's — JIS X 0208 only, plus NEC/IBM extension rows CRuby's
+    /// EUC-JP does not have — so characters that live in JIS X 0212
+    /// had no EUC-JP form at all.
+    #[test]
+    fn eucjp_jisx0212_plane() {
+        run_tests(&[
+            // The issue's own case: π is in 0208, ü and é are in 0212.
+            r#""ü".encode("EUC-JP").bytes"#,
+            r#""é".encode("EUC-JP").bytes"#,
+            r#""π".encode("EUC-JP").bytes"#,
+            r#""あ".encode("euc-jp", "ibm437").bytes"#,
+            r#""aπüé漢".encode("EUC-JP").bytes"#,
+            // …and the round trip.
+            r#""ü".encode("EUC-JP").encode("UTF-8")"#,
+            r#"[0x8F, 0xAB, 0xE4].pack("C*").force_encoding("EUC-JP").encode("UTF-8")"#,
+            // A character CRuby's EUC-JP does not have is still
+            // undefined, and the error names *it* rather than the
+            // first non-ASCII character in the string.
+            r#"begin; "aπ€".encode("EUC-JP"); rescue => e; [e.class.to_s, e.message]; end"#,
+            r#""aπ€".encode("EUC-JP", undef: :replace).bytes"#,
+            // U+FF02 is only in the NEC/IBM rows `encoding_rs` carries
+            // and CRuby's EUC-JP does not, so it has no form here
+            // either; U+4E28 is in those rows *and* in 0212, and takes
+            // the 0212 form.
+            r#"begin; "＂".encode("EUC-JP"); rescue => e; e.class.to_s; end"#,
+            r#""丨".encode("EUC-JP").bytes"#,
+            r#""纊".encode("EUC-JP").bytes"#,
         ]);
     }
 }

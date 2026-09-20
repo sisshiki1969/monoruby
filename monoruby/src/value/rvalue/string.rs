@@ -94,6 +94,12 @@ impl<'a> Iterator for CharByteIter<'a> {
             return None;
         }
         let width = match self.encoding {
+            // A valid Emacs-Mule sequence is one character; a byte
+            // that starts none stands on its own, the way a stray
+            // byte does in every other encoding here.
+            Encoding::NamedByte(EMACS_MULE) => {
+                emacs_mule_char_len(self.bytes, self.pos).unwrap_or(1)
+            }
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
@@ -311,6 +317,117 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
     ("Emacs-Mule", "Emacs_Mule"),
 ];
 
+/// Index of `Emacs-Mule` in [`NAMED_BYTE_ENCODINGS`]. It is the one
+/// entry monoruby validates rather than passing through as raw bytes,
+/// so `classify` and the character walk single it out by index rather
+/// than by name; `emacs_mule_index_is_pinned` keeps the two in step.
+pub(crate) const EMACS_MULE: u8 = 37;
+
+/// What the Emacs-Mule sequence at a given offset is — CRuby's
+/// `rb_enc_precise_mbclen` three-way answer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum EmacsMuleLen {
+    /// A complete character, this many bytes wide.
+    Char(usize),
+    /// A well-formed prefix: it would still become a character with
+    /// more bytes after it.
+    NeedMore,
+    /// No character can start here.
+    Invalid,
+}
+
+/// The widest an Emacs-Mule character gets (CRuby's `mbmaxlen`).
+const EMACS_MULE_MAX_LEN: usize = 4;
+
+/// Classify the Emacs-Mule sequence starting at `bytes[pos]`.
+///
+/// The lead byte fixes both the width and the range the *second* byte
+/// must fall in — that byte is a charset id, and the private charsets
+/// are what narrow it — and every byte after that must be
+/// `0xA0..=0xFF`. Read off CRuby's own validator (`enc/emacs_mule.c`)
+/// and checked against it over the whole lead/continuation space.
+pub(crate) fn emacs_mule_precise_len(bytes: &[u8], pos: usize) -> EmacsMuleLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return EmacsMuleLen::NeedMore;
+    };
+    let (len, second) = match lead {
+        0x00..=0x7f => return EmacsMuleLen::Char(1),
+        0x81..=0x8f => (2, 0xa0..=0xff),
+        0x90..=0x99 => (3, 0xa0..=0xff),
+        0x9a..=0x9b => (3, 0xe0..=0xef),
+        0x9c => (4, 0xf0..=0xf4),
+        0x9d => (4, 0xf5..=0xfe),
+        // 0x80, and everything from 0x9E up, lead nothing.
+        _ => return EmacsMuleLen::Invalid,
+    };
+    let avail = bytes.len() - pos;
+    for i in 1..len {
+        if i >= avail {
+            return EmacsMuleLen::NeedMore;
+        }
+        let b = bytes[pos + i];
+        let ok = if i == 1 { second.contains(&b) } else { b >= 0xa0 };
+        if !ok {
+            return EmacsMuleLen::Invalid;
+        }
+    }
+    EmacsMuleLen::Char(len)
+}
+
+/// The length of the complete Emacs-Mule character starting at
+/// `bytes[pos]`, or `None` when none starts there — a prefix that
+/// merely ran out of bytes counts as none.
+pub(crate) fn emacs_mule_char_len(bytes: &[u8], pos: usize) -> Option<usize> {
+    match emacs_mule_precise_len(bytes, pos) {
+        EmacsMuleLen::Char(n) => Some(n),
+        _ => None,
+    }
+}
+
+/// Copy `bytes`, putting `repl` in place of every ill-formed subpart.
+///
+/// The subparts are CRuby's, which are not one per byte: a run that is
+/// a well-formed *prefix* of a character is one subpart, so `90 A0 20`
+/// gives one replacement and then keeps the `0x20`, and a prefix that
+/// runs off the end of the string gives one for the whole tail.
+/// `enc_str_scrub` finds the run by shortening the window until the
+/// prefix would only need more bytes; this is that walk.
+pub(crate) fn emacs_mule_scrub(bytes: &[u8], repl: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut pos = 0;
+    while pos < bytes.len() {
+        match emacs_mule_precise_len(bytes, pos) {
+            EmacsMuleLen::Char(n) => {
+                out.extend_from_slice(&bytes[pos..pos + n]);
+                pos += n;
+            }
+            // A prefix at the very end: the rest of the string is one
+            // subpart, and the walk is over.
+            EmacsMuleLen::NeedMore => {
+                out.extend_from_slice(repl);
+                return out;
+            }
+            EmacsMuleLen::Invalid => {
+                let mut clen = EMACS_MULE_MAX_LEN.min(bytes.len() - pos);
+                if clen <= 2 {
+                    clen = 1;
+                } else {
+                    clen -= 1;
+                    while clen > 1
+                        && emacs_mule_precise_len(&bytes[..pos + clen], pos)
+                            != EmacsMuleLen::NeedMore
+                    {
+                        clen -= 1;
+                    }
+                }
+                out.extend_from_slice(repl);
+                pos += clen;
+            }
+        }
+    }
+    out
+}
+
 /// Look up a [`Encoding::NamedByte`] index by its normalized
 /// (uppercased, `-`/`.`→`_`) constant suffix.
 pub(crate) fn named_byte_index(normalized_const: &str) -> Option<u8> {
@@ -445,6 +562,20 @@ impl Encoding {
                 Err(_) => CodeRange::Broken,
             },
             Encoding::Ascii8 => CodeRange::Valid, // every byte is "valid"
+            // Emacs-Mule has no codec either, but it does have a
+            // shape, and CRuby reports a byte that does not fit it as
+            // broken — which is what lets `String#scrub` and
+            // `#encode(invalid: :replace)` see anything to replace.
+            Encoding::NamedByte(EMACS_MULE) => {
+                let mut pos = 0;
+                while pos < bytes.len() {
+                    match emacs_mule_char_len(bytes, pos) {
+                        Some(n) => pos += n,
+                        None => return CodeRange::Broken,
+                    }
+                }
+                CodeRange::Valid
+            }
             // No native codec: raw bytes, every sequence "valid".
             Encoding::Other(_) | Encoding::NamedByte(_) => CodeRange::Valid,
             Encoding::Iso8859(_) => CodeRange::Valid, // every byte 0..256 represents a glyph
@@ -1556,6 +1687,10 @@ impl RStringInner {
     pub fn char_length(&self) -> usize {
         match self.ty {
             // Fixed 1-byte-per-char.
+            Encoding::NamedByte(EMACS_MULE) => match self.code_range() {
+                CodeRange::SevenBit => self.len(),
+                _ => self.iter_char_bytes().count(),
+            },
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
@@ -1842,6 +1977,9 @@ impl RStringInner {
                         out.extend_from_slice(repl.as_bytes());
                     }
                 }
+            }
+            Encoding::NamedByte(EMACS_MULE) => {
+                out = emacs_mule_scrub(bytes, repl.as_bytes());
             }
             Encoding::EucJp | Encoding::Sjis(_) => {
                 let char_w = if matches!(enc, Encoding::EucJp) {
