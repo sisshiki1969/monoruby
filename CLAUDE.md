@@ -125,6 +125,23 @@ repository on GitHub.
 > reference Ruby process exits with `LoadError: cannot load such file --
 bigdecimal`.
 
+> **The same applies to the gems whose C extensions monoruby stands in
+> for.** `tests/{bcrypt,msgpack,yajl,strptime,coolio,zstd,markly}.rs`
+> pin monoruby's Ruby replacement against the real gem by running the
+> same code on the host CRuby, so each one needs the gem installed
+> *for the Ruby the runtime probe picks* — which, since the probe
+> prefers the version monoruby conforms to, is the pinned one and not
+> whichever other rbenv version happens to have them:
+>
+> ```sh
+> gem install bcrypt msgpack yajl-ruby strptime cool.io zstd-ruby markly
+> ```
+>
+> A missing one fails its whole test file with `LoadError`, and because
+> `cargo test` stops at the first failing binary it can look like far
+> more than it is. `MONORUBY_REPROBE=1 monoruby -e ''` refreshes the
+> cached gem paths after an install.
+
 ### 2. Verifying Ruby Version
 
 Confirm that the `ruby` command launches the pinned CRuby:
