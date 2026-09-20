@@ -303,6 +303,21 @@ pub(crate) fn current_thread(vm: &mut Executor) -> Value {
     SCHEDULER.with(|s| s.borrow().current.unwrap())
 }
 
+/// Object id of the currently running thread, or `0` before the
+/// thread machinery has been touched at all.
+///
+/// Unlike [`current_thread`] this never creates the main thread
+/// object, so it is callable from `Store` and `ClassInfo` — which are
+/// handed no `Executor` — on the autoload paths that have to tell the
+/// thread running a load from every other one. Those paths only ever
+/// compare it against an owner recorded by [`current_thread`], which
+/// does create the main object, so the `0` stands for "no thread
+/// machinery yet, hence no autoload in flight either" and never
+/// collides with a real thread.
+pub(crate) fn current_thread_id() -> u64 {
+    SCHEDULER.with(|s| s.borrow().current.map(|t| t.id()).unwrap_or(0))
+}
+
 /// The main thread's `Thread` object.
 pub(crate) fn main_thread(vm: &mut Executor) -> Value {
     ensure_main(vm);

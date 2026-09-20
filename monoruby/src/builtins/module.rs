@@ -810,15 +810,19 @@ pub(super) fn autoload_query_on(
         if let Some(state) = globals.store.get_constant(module.id(), name) {
             match &state.kind {
                 ConstStateKind::Autoload(entry) => match entry.state {
-                    // CRuby 3.0+: while the autoload's own require is
-                    // in flight, `autoload?` returns nil (the load is
-                    // already in progress, so there's nothing left to
-                    // schedule).
-                    AutoloadState::Loading => return Ok(Value::nil()),
+                    // CRuby 3.0+: to the thread running the load,
+                    // `autoload?` is nil — that thread is past the point
+                    // where an autoload is pending, there being nothing
+                    // left for it to schedule. Every other thread still
+                    // has one pending and gets the path, exactly as it
+                    // would before the load started.
+                    AutoloadState::Loading { .. } if entry.loading_here() => {
+                        return Ok(Value::nil());
+                    }
                     // Direct `require` already ran the file without
                     // defining the constant — autoload is consumed.
                     AutoloadState::Consumed => return Ok(Value::nil()),
-                    AutoloadState::Idle => {
+                    AutoloadState::Idle | AutoloadState::Loading { .. } => {
                         return Ok(Value::string(
                             entry.feature.to_string_lossy().into_owned(),
                         ));

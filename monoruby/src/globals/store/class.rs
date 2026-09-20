@@ -490,7 +490,7 @@ impl alloc::GC<RValue> for ClassInfo {
             mark_and_test_old(alloc, v, &mut all_old);
         }
         self.constants.values().for_each(|state| {
-            if let Some(v) = state.loaded_value() {
+            if let Some(v) = state.marked_value() {
                 mark_and_test_old(alloc, v, &mut all_old);
             }
         });
@@ -612,7 +612,7 @@ impl ClassInfo {
             check(v, "name value");
         }
         for state in self.constants.values() {
-            if let Some(v) = state.loaded_value() {
+            if let Some(v) = state.marked_value() {
                 check(v, "constant");
             }
         }
@@ -812,10 +812,32 @@ impl ClassInfo {
     }
 
     pub(crate) fn record_constant_location(&mut self, name: IdentId, file: String, line: u32) {
+        // An assignment made by the thread running this constant's
+        // autoload is deferred along with the value it belongs to, so
+        // that `const_source_location` in every other thread keeps
+        // answering the `autoload` call site until the load finishes.
+        if let Some(state) = self.constants.get_mut(&name)
+            && let ConstStateKind::Autoload(entry) = &mut state.kind
+            && entry.loading_here()
+        {
+            entry.location = Some((file, line));
+            return;
+        }
         self.constant_locations.insert(name, (file, line));
     }
 
     pub(crate) fn get_constant_location(&self, name: IdentId) -> Option<(&str, u32)> {
+        // The loading thread sees where the file actually assigned the
+        // constant; everyone else still sees the `autoload` line.
+        if let Some(entry) = self
+            .constants
+            .get(&name)
+            .and_then(|state| state.autoload_entry())
+            && entry.loading_here()
+            && let Some((file, line)) = &entry.location
+        {
+            return Some((file.as_str(), *line));
+        }
         self.constant_locations
             .get(&name)
             .map(|(f, l)| (f.as_str(), *l))
