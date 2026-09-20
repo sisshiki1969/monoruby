@@ -7,6 +7,13 @@
 #   bin/ruby-bench fib             # run only benchmarks whose name matches "fib"
 #   bin/ruby-bench fib nqueens     # run several benchmarks
 
-cargo install --path monoruby || exit 1
+# `bin/install`, not `cargo install`: the latter copies only the binary, and
+# since the native halves moved out of the core into dynamically loaded
+# extensions (doc/native_extension_loading.md) an installed monoruby without
+# them cannot `require "psych"` or `"zlib"` — which rubygems does for every
+# gem-backed benchmark, so activerecord, chunky-png, erubi-rails, fluentd,
+# hexapdf, lobsters and the rest die with "cannot load such file --
+# psych_native.so" before their first iteration.
+bin/install || exit 1
 # cd ../ruby-bench && ./run_benchmarks.rb --once -e "monoruby" -e "yjit::ruby --yjit" "$@"
 cd ../ruby-bench && ./run_benchmarks.rb --rss --harness=harness-warmup -e "monoruby" -e "yjit::ruby --yjit" "$@"
