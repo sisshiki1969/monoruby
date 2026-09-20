@@ -212,3 +212,64 @@ fn marshal_payload_holds_the_utc_clock() {
         "#,
     );
 }
+
+// `Time.local`'s C-style 10-argument form carries an `isdst` flag, and
+// it is not advisory: in the hour a zone falls back, the same wall clock
+// names two instants and `isdst` is the only thing that says which.
+// monoruby dropped the argument and let libc pick (`tm_isdst = -1`), so
+// `Time.local(0, 30, 1, 30, 10, 2005, 0, 0, true, tz)` answered EST
+// where CRuby answers EDT.
+//
+// The flag only resolves that ambiguity. A wall clock in the hour a zone
+// *springs forward* names no instant at all, and CRuby extrapolates
+// forward there whatever the flag says — so a hint that moves the answer
+// to a different wall clock is discarded.
+#[test]
+fn time_local_isdst_picks_the_side_of_a_fall_back() {
+    run_test_once(
+        r#"
+        old = ENV['TZ']
+        r = []
+        ENV['TZ'] = 'America/New_York'
+        # 2005-10-30 01:30 happens twice: once EDT, once EST.
+        [true, false, nil].each do |isdst|
+          t = Time.local(0, 30, 1, 30, 10, 2005, 0, 0, isdst, ENV['TZ'])
+          r << [isdst, t.utc_offset, t.to_i, t.to_s, t.dst?, t.zone]
+        end
+        # CRuby reads the flag for its truthiness alone, so 0 and a
+        # String both mean daylight time.
+        [0, "x", :dst].each do |isdst|
+          r << Time.local(0, 30, 1, 30, 10, 2005, 0, 0, isdst, ENV['TZ']).utc_offset
+        end
+        # No argument at all: libc's own choice, the standard side here.
+        r << Time.local(2005, 10, 30, 1, 30, 0).then { |t| [t.utc_offset, t.to_s] }
+        # 2005-04-03 02:30 never happens. Every flag lands on the same
+        # extrapolated 03:30 EDT.
+        [true, false, nil].each do |isdst|
+          t = Time.local(0, 30, 2, 3, 4, 2005, 0, 0, isdst, ENV['TZ'])
+          r << [isdst, t.utc_offset, t.to_i, t.to_s]
+        end
+        # An unambiguous time ignores the flag either way.
+        [true, false, nil].each do |isdst|
+          r << Time.local(0, 0, 12, 15, 6, 2005, 0, 0, isdst, ENV['TZ']).to_i
+          r << Time.local(0, 0, 12, 15, 1, 2005, 0, 0, isdst, ENV['TZ']).to_i
+        end
+        # The southern hemisphere falls back in April instead.
+        ENV['TZ'] = 'Australia/Sydney'
+        [true, false, nil].each do |isdst|
+          t = Time.local(0, 30, 2, 2, 4, 2006, 0, 0, isdst, ENV['TZ'])
+          r << [isdst, t.utc_offset, t.to_i, t.to_s]
+        end
+        # A zone with no daylight saving at all.
+        ENV['TZ'] = 'Asia/Tokyo'
+        [true, false, nil].each do |isdst|
+          r << Time.local(0, 30, 1, 30, 10, 2005, 0, 0, isdst, ENV['TZ']).to_i
+        end
+        # `Time.utc`'s 10-argument form has no local zone to be
+        # ambiguous in, so the flag changes nothing.
+        r << [true, false, nil].map { |d| Time.utc(0, 30, 1, 30, 10, 2005, 0, 0, d, "x").to_i }.uniq
+        ENV['TZ'] = old
+        r
+        "#,
+    );
+}

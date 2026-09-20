@@ -88,21 +88,69 @@ pub(crate) fn local_is_dst(utc_secs: i64) -> bool {
     local_tm(utc_secs).is_some_and(|tm| tm.tm_isdst > 0)
 }
 
-/// The UTC instant a local wall clock names. `tm_isdst = -1` lets libc
-/// pick the side of a DST transition, as CRuby's `mktime` call does.
+/// The UTC instant a local wall clock names, with libc picking the
+/// side of a DST transition.
 fn local_naive_to_utc(naive: NaiveDateTime) -> Option<i64> {
+    local_naive_to_utc_isdst(naive, None)
+}
+
+/// The UTC instant a local wall clock names.
+///
+/// A wall clock in the hour a zone falls back names two instants, and
+/// `isdst` says which: `Some(true)` the daylight one, `Some(false)` the
+/// standard one, `None` the standard one too — CRuby's own choice when
+/// `Time.local` is called without the argument.
+///
+/// libc cannot be asked this directly. `tm_isdst = -1` lets `mktime`
+/// pick, but glibc picks by the *last* conversion it made, so the same
+/// call answers differently depending on what ran before it; CRuby
+/// searches for the instant itself and is deterministic. So both sides
+/// are converted and the answer chosen here.
+///
+/// A wall clock in the hour a zone *springs forward* names no instant
+/// at all, and neither side comes back naming the time that was asked
+/// for. CRuby extrapolates forward there whatever `isdst` says, which
+/// is the later of the two.
+fn local_naive_to_utc_isdst(naive: NaiveDateTime, isdst: Option<bool>) -> Option<i64> {
     refresh_tz();
+    let daylight = mktime_isdst(naive, 1)?;
+    let standard = mktime_isdst(naive, 0)?;
+    Some(match (daylight, standard) {
+        // Both name the wall clock asked for: it happens twice, and
+        // only `isdst` can say which one is meant. The daylight side is
+        // the earlier instant.
+        ((d, true), (s, true)) => {
+            if isdst == Some(true) {
+                d.min(s)
+            } else {
+                d.max(s)
+            }
+        }
+        ((d, true), (_, false)) => d,
+        ((_, false), (s, true)) => s,
+        // Neither: the wall clock does not exist here.
+        ((d, false), (s, false)) => d.max(s),
+    })
+}
+
+/// `mktime` for `naive` with a given `tm_isdst`. The second element is
+/// whether libc's answer still names the wall clock that was asked for:
+/// `mktime` normalizes `tm` in place, so a field that came back changed
+/// means the time does not exist in this zone.
+fn mktime_isdst(naive: NaiveDateTime, tm_isdst: i32) -> Option<(i64, bool)> {
+    let (year, mon0, mday) = (naive.year().checked_sub(1900)?, naive.month0(), naive.day());
+    let (hour, min, sec) = (naive.hour(), naive.minute(), naive.second());
     // SAFETY: `tm` is zeroed and every field libc reads is set below;
     // `mktime` only reads it and normalizes it in place.
     unsafe {
         let mut tm: libc::tm = std::mem::zeroed();
-        tm.tm_year = naive.year().checked_sub(1900)?;
-        tm.tm_mon = naive.month0() as i32;
-        tm.tm_mday = naive.day() as i32;
-        tm.tm_hour = naive.hour() as i32;
-        tm.tm_min = naive.minute() as i32;
-        tm.tm_sec = naive.second() as i32;
-        tm.tm_isdst = -1;
+        tm.tm_year = year;
+        tm.tm_mon = mon0 as i32;
+        tm.tm_mday = mday as i32;
+        tm.tm_hour = hour as i32;
+        tm.tm_min = min as i32;
+        tm.tm_sec = sec as i32;
+        tm.tm_isdst = tm_isdst;
         let t = libc::mktime(&mut tm);
         if t == -1 && tm.tm_year == 0 {
             // mktime failed rather than landing on 1969-12-31 23:59:59Z
@@ -110,7 +158,13 @@ fn local_naive_to_utc(naive: NaiveDateTime) -> Option<i64> {
             // it never got that far).
             return None;
         }
-        Some(t as i64)
+        let kept = tm.tm_year == year
+            && tm.tm_mon == mon0 as i32
+            && tm.tm_mday == mday as i32
+            && tm.tm_hour == hour as i32
+            && tm.tm_min == min as i32
+            && tm.tm_sec == sec as i32;
+        Some((t as i64, kept))
     }
 }
 
@@ -1133,14 +1187,7 @@ fn time_build(
     let time_info = if let Some(off_arg) = utc_offset_arg {
         if off_arg.is_nil() {
             // Same shape as `Time.local(year, …)` — local-zone time.
-            let local = match LocalTz.from_local_datetime(&naive) {
-                LocalResult::Single(t) => t,
-                LocalResult::Ambiguous(t, _) => t,
-                LocalResult::None => {
-                    return Err(MonorubyErr::argumenterr("argument out of range."));
-                }
-            };
-            localize(local.with_timezone(&Utc))
+            local_from_naive(naive, None)?
         } else if let Some(t) = time_new_with_timezone(vm, globals, naive, off_arg, cls)? {
             // A timezone object (`#local_to_utc`) rather than a utc_offset.
             return Ok(t);
@@ -1172,12 +1219,7 @@ fn time_build(
             }
         }
     } else {
-        let local = match LocalTz.from_local_datetime(&naive) {
-            LocalResult::Single(t) => t,
-            LocalResult::Ambiguous(t, _) => t,
-            LocalResult::None => return Err(MonorubyErr::argumenterr("argument out of range.")),
-        };
-        localize(local.with_timezone(&Utc))
+        local_from_naive(naive, None)?
     };
     Ok(Value::new_time_with_class(time_info, cls))
 }
@@ -1948,14 +1990,7 @@ fn build_time_string(
             let dt = fixed.from_local_datetime(&naive).single().ok_or_else(bad)?;
             Ok(time_in_offset(dt.with_timezone(&Utc), fixed, utc))
         }
-        None => {
-            let local = match LocalTz.from_local_datetime(&naive) {
-                LocalResult::Single(d) => d,
-                LocalResult::Ambiguous(d, _) => d,
-                LocalResult::None => return Err(bad()),
-            };
-            Ok(localize(local.with_timezone(&Utc)))
-        }
+        None => local_from_naive(naive, None),
     }
 }
 
@@ -2082,9 +2117,40 @@ pub(crate) extern "C" fn time_alloc_func(class_id: ClassId, _: &mut Globals) -> 
 #[monoruby_builtin]
 fn time_local(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let cls = lfp.self_val().as_class().id();
-    let t = generate_time(vm, globals, LocalTz, lfp)?;
-    let time_info = localize(t.with_timezone(&Utc));
+    let naive = from_args(vm, globals, lfp)?
+        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
+    // The C-style form's `isdst` picks the side of a fall-back, where
+    // the wall clock alone is ambiguous.
+    let time_info = local_from_naive(naive, isdst_arg(lfp))?;
     Ok(Value::new_time_with_class(time_info, cls))
+}
+
+/// A local-zone `Time` from the wall clock it is written as.
+///
+/// The instant cannot be recovered from an offset: in the hour a zone
+/// springs forward the answer's offset is not the one the requested
+/// wall clock would have had, so going through `LocalTz` — which
+/// derives the instant by subtracting the offset — walks back into the
+/// gap. `local_naive_to_utc_isdst` already has the instant; this keeps
+/// it.
+fn local_from_naive(naive: NaiveDateTime, isdst: Option<bool>) -> Result<TimeInner> {
+    let bad = || MonorubyErr::argumenterr("argument out of range");
+    let secs = local_naive_to_utc_isdst(naive, isdst).ok_or_else(bad)?;
+    Ok(localize(
+        DateTime::from_timestamp(secs, naive.nanosecond()).ok_or_else(bad)?,
+    ))
+}
+
+/// `Time.local`'s `isdst` argument — the 9th of the 10-argument C-style
+/// form, and absent from every other. CRuby reads it for its truthiness
+/// alone, so `0` and `"x"` both mean daylight time.
+fn isdst_arg(lfp: Lfp) -> Option<bool> {
+    let arg_count = (0..10).filter(|i| lfp.try_arg(*i).is_some()).count();
+    if arg_count == 10 {
+        Some(lfp.arg(8).as_bool())
+    } else {
+        None
+    }
 }
 
 ///
@@ -3033,10 +3099,10 @@ fn directive_core(inner: &TimeInner, conv: u8, zone_abbr: Option<&str>) -> Optio
         // VMS date: ` D-MMM-YYYY` with the month abbreviation upcased.
         b'v' => (
             format!(
-                "{:>2}-{}-{}",
+                "{:>2}-{}-{:04}",
                 f!(day),
                 MONTH_UPPER_ABBR[(f!(month) as usize - 1).min(11)],
-                year4()
+                f!(year)
             ),
             Compound,
         ),
