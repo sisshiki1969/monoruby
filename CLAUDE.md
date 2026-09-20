@@ -687,6 +687,19 @@ Modes via `MONORUBY_TEST_ORACLE`:
   after bumping the reference CRuby version to re-verify the whole suite
   against the new Ruby.
 
+> **Refresh from the same environment the oracle was recorded in.** The
+> file holds entries that are environment- rather than version-dependent
+> and were never moved to the `_live` helpers: a `Time#iso8601` carrying
+> the recording machine's UTC offset, `Process.euid`, and two tests that
+> read the repository's own `Cargo.toml`. A `MONORUBY_TEST_ORACLE=ruby`
+> run elsewhere rewrites those with the *new* machine's answers and
+> commits its timezone, its uid and the working tree's current
+> `Cargo.toml` into the snapshot. Moving the pin from 4.0.2 to 4.0.6
+> needed **no** oracle change at all — the suite was already green
+> replaying the stored entries — so check `git diff` on the file before
+> committing a refresh, and treat a changed entry that has nothing to do
+> with the version bump as a test that wants `run_test_live`.
+
 ### Cargo Features
 
 | Feature             | Effect                                                                 |
