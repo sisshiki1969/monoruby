@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-32e1b063.js";
+            window.path_to_searchindex_js = "../../searchindex-8c14f62a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-8a4c8fb9.js"></script>
@@ -253,6 +253,20 @@ KOI8 / Windows-125x のとき、そのコーデックでパターンを再コン
 </ul>
 <h3 id="15-onigmo-に渡す前のソース前処理"><a class="header" href="#15-onigmo-に渡す前のソース前処理">1.5 Onigmo に渡す前のソース前処理</a></h3>
 <ul>
+<li><code>check_regexp_source_valid</code>（<code>builtins/regexp.rs</code>、<code>with_option_kcode_source</code>
+より手前）: ソースのバイト列がそれ自身の encoding で文字を成さないとき、
+Onigmo に渡す前に <code>RegexpError: invalid multibyte character: /…/</code> を出す。
+CRuby の <code>rb_reg_preprocess</code> と同じ位置で、フラグ文字（<code>/\x81/mix</code>、
+<code>rb_reg_desc</code> の m-i-x 順）まで含めて描画する。1 バイト 1 文字の BINARY と、
+バイト列として読む <code>/…/n</code>（<code>NOENCODING</code>）は対象外。<code>Marshal.load</code> の <code>/</code>
+ペイロードと <code>Regexp.union</code> の結合後ソースも
+<code>check_regexp_source_bytes_valid</code> で同じ検査を通る（union が描画するのは
+メンバ単体ではなく結合後 — <code>Regexp.union("x", eucbad)</code> は <code>/x|a\xA4/</code>）。
+なお生バイトではなく <code>\xHH</code> エスケープで書かれた切り詰め
+（<code>Regexp.new("\\xa4".force_encoding("EUC-JP"))</code>）は前処理を通り抜けて
+Onigmo が見つけるので、その <code>too short multibyte code string</code> は CRuby に
+ならって <code>too short escaped multibyte character</code> に言い換える
+（<code>normalize_onigmo_message</code>）。</li>
 <li><code>pre_validate_regex</code>: Onigmo が黙って受けてしまう入力に CRuby の文言で
 <code>RegexpError</code> を出す（末尾の <code>\</code>、桁ゼロの <code>\x</code>、閉じていない <code>\p{</code>）。</li>
 <li><code>expand_unicode_braces</code>: Onigmo の <code>\u</code> は 4 桁ちょうどしか受けないので
