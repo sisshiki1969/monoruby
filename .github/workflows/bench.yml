@@ -457,7 +457,15 @@ jobs:
           # converged is ended by the harness — with the median it has —
           # rather than killed by `timeout(1)`, which records
           # `timeout (Ns)` and no measurement at all.
-          MAX_TIME: '600'
+          #
+          # Tighter here than on amd64 (600), because this job is the one
+          # with no headroom: the three-engine pass has been reaching the
+          # 350-minute `timeout-minutes` cap — three of the seven daily
+          # runs to 2026-09-20 were cancelled there, mid-benchmark, with
+          # `Aggregate to portal JSON` skipped and nothing published for
+          # the day. 350 minutes is already near the 360 GitHub allows, so
+          # the budget has to come out of the benchmarks instead.
+          MAX_TIME: '450'
           ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
           set +e
