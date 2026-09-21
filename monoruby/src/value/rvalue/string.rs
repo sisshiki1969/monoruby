@@ -68,6 +68,137 @@ pub(crate) fn sjis_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
     }
 }
 
+/// Classify the EUC-KR sequence starting at `bytes[pos]`.
+///
+/// A 94×94 double-byte set over ASCII: `0xA1..=0xFE` leads and takes a
+/// trail from the same range. GB2312 and GB12345 have exactly this
+/// shape, and so does EUC-TW's two-byte half (#1473).
+pub(crate) fn euckr_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    match lead {
+        0x00..=0x7f => PreciseLen::Char(1),
+        0xa1..=0xfe => match bytes.get(pos + 1) {
+            None => PreciseLen::NeedMore,
+            Some(0xa1..=0xfe) => PreciseLen::Char(2),
+            Some(_) => PreciseLen::Invalid,
+        },
+        _ => PreciseLen::Invalid,
+    }
+}
+
+/// Classify the EUC-TW sequence starting at `bytes[pos]`.
+///
+/// [`euckr_precise_len`]'s shape plus the four-byte plane form: `0x8E`,
+/// a plane byte `0xA1..=0xB0`, then two bytes from `0xA1..=0xFE`
+/// (#1473).
+pub(crate) fn euctw_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    if bytes.get(pos) != Some(&0x8e) {
+        return euckr_precise_len(bytes, pos);
+    }
+    for (i, range) in [0xa1..=0xb0u8, 0xa1..=0xfe, 0xa1..=0xfe].into_iter().enumerate() {
+        match bytes.get(pos + 1 + i) {
+            None => return PreciseLen::NeedMore,
+            Some(b) if range.contains(b) => {}
+            Some(_) => return PreciseLen::Invalid,
+        }
+    }
+    PreciseLen::Char(4)
+}
+
+/// Classify the CP949 (Unified Hangul Code) sequence starting at
+/// `bytes[pos]`.
+///
+/// EUC-KR's superset: `0x80` stands alone, `0x81..=0xFE` leads, and the
+/// trail widens to the three ASCII-overlapping runs Microsoft added
+/// (#1473).
+pub(crate) fn cp949_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    match lead {
+        0x00..=0x80 => PreciseLen::Char(1),
+        0x81..=0xfe => match bytes.get(pos + 1) {
+            None => PreciseLen::NeedMore,
+            Some(0x41..=0x5a | 0x61..=0x7a | 0x81..=0xfe) => PreciseLen::Char(2),
+            Some(_) => PreciseLen::Invalid,
+        },
+        _ => PreciseLen::Invalid,
+    }
+}
+
+/// Classify the Big5 sequence starting at `bytes[pos]`.
+///
+/// `0xA1..=0xFE` leads and takes a `0x40..=0x7E | 0xA1..=0xFE` trail.
+/// Big5-HKSCS, Big5-UAO and CP950 extend the *characters*, not the byte
+/// structure, so they walk the same way (#1473).
+pub(crate) fn big5_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    match lead {
+        0x00..=0x7f => PreciseLen::Char(1),
+        0xa1..=0xfe => match bytes.get(pos + 1) {
+            None => PreciseLen::NeedMore,
+            Some(0x40..=0x7e | 0xa1..=0xfe) => PreciseLen::Char(2),
+            Some(_) => PreciseLen::Invalid,
+        },
+        _ => PreciseLen::Invalid,
+    }
+}
+
+/// Classify the GBK sequence starting at `bytes[pos]`.
+///
+/// `0x80` stands alone, `0x81..=0xFE` leads, and the trail is
+/// `0x40..=0x7E | 0x80..=0xFE` — everything but `0x7F` and the ASCII
+/// controls (#1473).
+pub(crate) fn gbk_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    match lead {
+        0x00..=0x80 => PreciseLen::Char(1),
+        0x81..=0xfe => match bytes.get(pos + 1) {
+            None => PreciseLen::NeedMore,
+            Some(0x40..=0x7e | 0x80..=0xfe) => PreciseLen::Char(2),
+            Some(_) => PreciseLen::Invalid,
+        },
+        _ => PreciseLen::Invalid,
+    }
+}
+
+/// Classify the GB18030 sequence starting at `bytes[pos]`.
+///
+/// GBK's two-byte form, minus GBK's lone `0x80`, plus the four-byte
+/// form: the *second* byte decides, since a digit `0x30..=0x39` cannot
+/// be a two-byte trail. The remaining two are `0x81..=0xFE` and another
+/// digit (#1473).
+pub(crate) fn gb18030_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    match lead {
+        0x00..=0x7f => PreciseLen::Char(1),
+        0x81..=0xfe => match bytes.get(pos + 1) {
+            None => PreciseLen::NeedMore,
+            Some(0x40..=0x7e | 0x80..=0xfe) => PreciseLen::Char(2),
+            Some(0x30..=0x39) => {
+                for (i, range) in [0x81..=0xfeu8, 0x30..=0x39].into_iter().enumerate() {
+                    match bytes.get(pos + 2 + i) {
+                        None => return PreciseLen::NeedMore,
+                        Some(b) if range.contains(b) => {}
+                        Some(_) => return PreciseLen::Invalid,
+                    }
+                }
+                PreciseLen::Char(4)
+            }
+            Some(_) => PreciseLen::Invalid,
+        },
+        _ => PreciseLen::Invalid,
+    }
+}
+
 /// Width (in bytes) of the *complete* EUC-JP character starting at
 /// `b[0]`, or `None` if none starts there — a well-formed prefix that
 /// merely ran out of bytes counts as none.
@@ -150,6 +281,14 @@ impl<'a> Iterator for CharByteIter<'a> {
                 PreciseLen::Char(n) => n,
                 _ => 1,
             },
+            // The CJK double-byte sets, the same way (#1473).
+            Encoding::NamedByte(_) if mbc_walker(self.encoding).is_some() => {
+                let (_, precise) = mbc_walker(self.encoding).expect("just checked");
+                match precise(self.bytes, self.pos) {
+                    PreciseLen::Char(n) => n,
+                    _ => 1,
+                }
+            }
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
@@ -480,6 +619,33 @@ pub(crate) fn walk_mbc(
     bytes: &[u8],
     max_len: usize,
     precise: fn(&[u8], usize) -> PreciseLen,
+    on: impl FnMut(MbcPiece<'_>) -> Result<()>,
+) -> Result<()> {
+    walk_mbc_with(bytes, max_len, precise, IllFormed::Run, on)
+}
+
+/// How much of the buffer one ill-formed piece covers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum IllFormed {
+    /// A *run*: the bytes that start no character, and a truncated
+    /// character's whole tail, are each one piece. `#scrub` replaces
+    /// them once however many bytes they have.
+    Run,
+    /// One byte, then look again. `rb_str_inspect` advances
+    /// `mbminlen` — one byte in every encoding walked here — on any
+    /// byte that starts no character, so GB18030's `81 30` is a bad
+    /// `\x81` followed by the *printable* `0` rather than two escapes,
+    /// and EUC-TW's `8E A1 A1 41` is a bad `\x8E` and then a whole
+    /// character (#1473).
+    Byte,
+}
+
+/// [`walk_mbc`], with the caller's reading of an ill-formed piece.
+pub(crate) fn walk_mbc_with(
+    bytes: &[u8],
+    max_len: usize,
+    precise: fn(&[u8], usize) -> PreciseLen,
+    ill_formed: IllFormed,
     mut on: impl FnMut(MbcPiece<'_>) -> Result<()>,
 ) -> Result<()> {
     let mut pos = 0;
@@ -488,6 +654,10 @@ pub(crate) fn walk_mbc(
             PreciseLen::Char(n) => {
                 on(MbcPiece::Char(&bytes[pos..pos + n]))?;
                 pos += n;
+            }
+            _ if ill_formed == IllFormed::Byte => {
+                on(MbcPiece::Bad(&bytes[pos..pos + 1]))?;
+                pos += 1;
             }
             PreciseLen::NeedMore => {
                 on(MbcPiece::Bad(&bytes[pos..]))?;
@@ -529,6 +699,19 @@ pub(crate) fn mbc_walker(enc: Encoding) -> Option<(usize, fn(&[u8], usize) -> Pr
         Encoding::EucJp => Some((EUCJP_MAX_LEN, eucjp_precise_len)),
         Encoding::Sjis(_) => Some((SJIS_MAX_LEN, sjis_precise_len)),
         Encoding::NamedByte(EMACS_MULE) => Some((EMACS_MULE_MAX_LEN, emacs_mule_precise_len)),
+        // The CJK double-byte sets. Without a walk here nothing can
+        // tell a character from a stray byte in them, so
+        // `valid_encoding?` answered `true` for any bytes at all and
+        // `#inspect` split characters down the middle (#1473).
+        Encoding::NamedByte(i) => match named_byte_const_name(i) {
+            "EUC_KR" | "GB2312" | "GB12345" => Some((2, euckr_precise_len)),
+            "EUC_TW" => Some((4, euctw_precise_len)),
+            "CP949" => Some((2, cp949_precise_len)),
+            "Big5" | "Big5_HKSCS" | "Big5_UAO" => Some((2, big5_precise_len)),
+            "GBK" => Some((2, gbk_precise_len)),
+            "GB18030" => Some((4, gb18030_precise_len)),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -682,7 +865,23 @@ impl Encoding {
                 }
                 CodeRange::Valid
             }
-            // No native codec: raw bytes, every sequence "valid".
+            // The CJK double-byte sets have no codec here either, but
+            // they do have a shape, and CRuby reports bytes that do not
+            // fit it as broken — which is what `#valid_encoding?`,
+            // `#scrub` and `invalid: :replace` all key off (#1473).
+            Encoding::NamedByte(_) if mbc_walker(self).is_some() => {
+                let (_, precise) = mbc_walker(self).expect("just checked");
+                let mut pos = 0;
+                while pos < bytes.len() {
+                    match precise(bytes, pos) {
+                        PreciseLen::Char(n) => pos += n,
+                        _ => return CodeRange::Broken,
+                    }
+                }
+                CodeRange::Valid
+            }
+            // No native codec and no shape: raw bytes, every sequence
+            // "valid".
             Encoding::Other(_) | Encoding::NamedByte(_) => CodeRange::Valid,
             Encoding::Iso8859(_) => CodeRange::Valid, // every byte 0..256 represents a glyph
             // For encodings we don't decode natively, treat any
@@ -1357,7 +1556,7 @@ impl RStringInner {
                 let bytes = self.as_bytes();
                 let mut res = String::with_capacity(self.len());
                 let mut pos = 0;
-                let _ = walk_mbc(bytes, max_len, precise, |piece| {
+                let _ = walk_mbc_with(bytes, max_len, precise, IllFormed::Byte, |piece| {
                     let len = match piece {
                         MbcPiece::Char(cb) | MbcPiece::Bad(cb) => cb.len(),
                     };
@@ -1876,7 +2075,9 @@ impl RStringInner {
     pub fn char_length(&self) -> usize {
         match self.ty {
             // Fixed 1-byte-per-char.
-            Encoding::NamedByte(EMACS_MULE) => match self.code_range() {
+            // Walked encodings count characters, not bytes: Emacs-Mule
+            // and the CJK double-byte sets (#1473).
+            Encoding::NamedByte(_) if mbc_walker(self.ty).is_some() => match self.code_range() {
                 CodeRange::SevenBit => self.len(),
                 _ => self.iter_char_bytes().count(),
             },
@@ -2624,7 +2825,11 @@ impl RStringInner {
             // to walk the iterator like EUC-JP does. Without this,
             // `s[1]` handed back the lead byte alone while `s.chars[1]`
             // gave the whole character.
-            Encoding::NamedByte(EMACS_MULE) => None,
+            // Emacs-Mule and the CJK double-byte sets, likewise: a
+            // `NamedByte` encoding with a walk is not byte-wide, and
+            // indexing it by bytes handed back a lead byte alone where
+            // `#chars` gave the whole character (#1473).
+            Encoding::NamedByte(_) if mbc_walker(self.ty).is_some() => None,
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)

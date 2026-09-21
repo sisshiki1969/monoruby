@@ -4612,10 +4612,11 @@ fn sub_main(
 ) -> Result<(RStringInner, bool)> {
     // Enable zero-copy $~ haystack snapshots (CoW).
     vm.set_match_haystack(self_val);
-    // `get_pat` quotes the pattern into a Regexp before the two
-    // encodings are negotiated, so a pattern broken in its own
-    // encoding is refused first — as `#gsub` and `#scan` already had
-    // it (#1522).
+    // CRuby's `get_pat_quoted` refuses a pattern that is broken in
+    // its own encoding *before* it is compared with the subject's, so
+    // `"\u3042".sub("\x81".force_encoding("Shift_JIS"), "z")` is a
+    // `RegexpError`, not an `Encoding::CompatibilityError` about the
+    // two encodings. `gsub_main` and `scan` already run in that order.
     check_string_pattern_valid(lfp.arg(0))?;
     check_pattern_encoding_compat(&self_val.as_rstring_inner(), lfp.arg(0), globals)?;
     if let Some(arg1) = lfp.try_arg(1) {
@@ -4963,14 +4964,20 @@ fn pattern_pieces(enc: crate::value::Encoding, bytes: &[u8]) -> Vec<(usize, usiz
     let mut pieces = vec![];
     if let Some((max_len, precise)) = crate::value::mbc_walker(enc) {
         let base = bytes.as_ptr() as usize;
-        let _ = crate::value::rvalue::walk_mbc(bytes, max_len, precise, |piece| {
+        let _ = crate::value::rvalue::walk_mbc_with(
+            bytes,
+            max_len,
+            precise,
+            crate::value::rvalue::IllFormed::Byte,
+            |piece| {
             let (b, valid) = match piece {
                 crate::value::rvalue::MbcPiece::Char(b) => (b, true),
                 crate::value::rvalue::MbcPiece::Bad(b) => (b, false),
             };
-            pieces.push((b.as_ptr() as usize - base, b.len(), valid));
-            Ok(())
-        });
+                pieces.push((b.as_ptr() as usize - base, b.len(), valid));
+                Ok(())
+            },
+        );
         return pieces;
     }
     if enc.is_utf8_compatible() && enc != crate::value::Encoding::UsAscii {
@@ -5012,7 +5019,7 @@ fn pattern_pieces(enc: crate::value::Encoding, bytes: &[u8]) -> Vec<(usize, usiz
 /// is escaped by value — `\uXXXX` in a Unicode encoding and `\x{...}`
 /// of the raw bytes elsewhere, with `\xHH` per byte for the bytes that
 /// start no character at all.
-fn regexp_source_desc(pat: &RStringInner) -> String {
+pub(super) fn regexp_source_desc(pat: &RStringInner) -> String {
     // `None`: nothing is shown verbatim, which is what an error message
     // wants — it is built as a Rust `String` and has no encoding to
     // carry the pattern's raw bytes in.
@@ -5483,6 +5490,11 @@ fn string_match(
             return vm.invoke_method_inner(globals, match_id, pat, &args, lfp.block(), None);
         }
     }
+    // CRuby's `get_pat` compiles the String pattern into a Regexp
+    // before anything else runs, so a pattern that is broken in its
+    // own encoding is a `RegexpError` here too — and is refused ahead
+    // of the `pos` argument's coercion.
+    check_string_pattern_valid(lfp.arg(0))?;
     // Coerce both arguments before borrowing the subject: either
     // coercion may run Ruby code that mutates the receiver.
     let raw_pos = if let Some(arg1) = lfp.try_arg(1) {
@@ -5726,6 +5738,11 @@ fn string_match_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // CRuby's `get_pat` compiles the String pattern into a Regexp
+    // before anything else runs, so a pattern that is broken in its
+    // own encoding is a `RegexpError` here too — and is refused ahead
+    // of the `pos` argument's coercion.
+    check_string_pattern_valid(lfp.arg(0))?;
     let raw_pos = if let Some(arg1) = lfp.try_arg(1) {
         Some(arg1.coerce_to_int_i64(vm, globals)?)
     } else {
@@ -16521,6 +16538,37 @@ mod tests {
     }
 
     #[test]
+    fn string_pattern_broken_in_its_own_encoding() {
+        // CRuby's `get_pat_quoted` validates a String pattern in the
+        // encoding it is tagged with *before* comparing it with the
+        // subject's, so a Shift_JIS string that is not valid Shift_JIS
+        // is a broken pattern, not an encoding mismatch — even when
+        // the subject is UTF-8 and would otherwise be incompatible.
+        run_tests(&[
+            r##"(("あ".sub("\x81".dup.force_encoding("Shift_JIS"), "z")); nil) rescue [$!.class, $!.message]"##,
+            r##"(("あ".gsub("\x81".dup.force_encoding("Shift_JIS"), "z")); nil) rescue [$!.class, $!.message]"##,
+            r##"(("あ".dup.sub!("\x81".dup.force_encoding("Shift_JIS"), "z")); nil) rescue [$!.class, $!.message]"##,
+            r##"(("あ".dup.gsub!("\x81".dup.force_encoding("Shift_JIS"), "z")); nil) rescue [$!.class, $!.message]"##,
+            r##"(("abc".sub("\x81".dup.force_encoding("Shift_JIS"), "z")); nil) rescue [$!.class, $!.message]"##,
+            r##"(("あ".scan("\x81".dup.force_encoding("Shift_JIS"))); nil) rescue [$!.class, $!.message]"##,
+            // `#match` / `#match?` go through `get_pat`, which compiles
+            // the String into a Regexp and refuses the broken source
+            // there.
+            r##"(("あ".match("\x81".dup.force_encoding("Shift_JIS"))); nil) rescue [$!.class, $!.message]"##,
+            r##"(("あ".match?("\x81".dup.force_encoding("Shift_JIS"))); nil) rescue [$!.class, $!.message]"##,
+            r##"(("abc".match("\x81".dup.force_encoding("Shift_JIS"))); nil) rescue [$!.class, $!.message]"##,
+            // The byte-search methods take `get_pat_quoted` *without*
+            // the check flag, so a broken pattern is searched for as a
+            // plain string: the encodings are compared as usual, and a
+            // 7-bit subject simply reports no match.
+            r##"(("あ".index("\x81".dup.force_encoding("Shift_JIS"))); nil) rescue [$!.class, $!.message]"##,
+            r##""abc".index("\x81".dup.force_encoding("Shift_JIS")).inspect"##,
+            r##""abc".rindex("\x81".dup.force_encoding("Shift_JIS")).inspect"##,
+            r##""abc".start_with?("\x81".dup.force_encoding("Shift_JIS")).inspect"##,
+        ]);
+    }
+
+    #[test]
     fn sprintf_string_coerce_kernel_integer() {
         // sprintf integer specifiers (%b/%d/%i/%o/%u/%x/%X) on a
         // String operand parse the string the same way `Kernel#Integer`
@@ -16644,6 +16692,110 @@ mod tests {
             end
             "##,
         ]);
+    }
+
+    #[test]
+    fn cjk_double_byte_sets_have_a_character_walk() {
+        // Nothing could tell a character from a stray byte in
+        // GB18030 / Big5 / EUC-KR and their neighbours, so
+        // `valid_encoding?` was `true` for any bytes at all — and
+        // `#scrub`, `#length`, `#[]` and `#inspect` all read from the
+        // same notion of a character (#1473).
+        run_test_once(
+            r#"
+              encs = %w[EUC-KR CP949 Big5 GBK GB18030 GB2312 EUC-TW]
+              encs.map do |e|
+                singles = (0x00..0xff).count { |b| [b].pack("C").dup.force_encoding(e).valid_encoding? }
+                pairs = 0
+                (0x00..0xff).each do |a|
+                  (0x00..0xff).each { |b| pairs += 1 if [a, b].pack("C*").dup.force_encoding(e).valid_encoding? }
+                end
+                [e, singles, pairs]
+              end
+            "#,
+        );
+        // The shapes each one accepts, and what every reader makes of
+        // them: a complete cell, a lead with the wrong trail, a lone
+        // lead, and GB18030's four-byte form.
+        run_test_once(
+            r#"
+              rows = [
+                ["EUC-KR",  [0xb0, 0xa1, 0x41, 0xb0, 0xa2]], ["EUC-KR",  [0xb0, 0x41]],
+                ["CP949",   [0x81, 0x41, 0x42, 0x81, 0x61]], ["CP949",   [0x80, 0x41]],
+                ["Big5",    [0xa4, 0x40, 0x41, 0xa4, 0x41]], ["Big5",    [0xa4, 0x20]],
+                ["GBK",     [0x81, 0x40, 0x41, 0x81, 0x80]], ["GBK",     [0x41, 0xff, 0x42]],
+                ["GB18030", [0x81, 0x30, 0x81, 0x30, 0x41]], ["GB18030", [0x41, 0x80, 0x42]],
+                ["GB18030", [0x81, 0x30]],                   ["GB18030", [0x81, 0x30, 0x81, 0x41]],
+                ["EUC-TW",  [0x8e, 0xa1, 0xa1, 0xa1, 0x41]], ["EUC-TW",  [0x8e, 0xa1, 0xa1, 0x41]],
+                ["GB2312",  [0xb0, 0xa1, 0x41]],             ["GB2312",  [0xb0, 0x41]],
+              ]
+              rows.map do |e, bs|
+                s = bs.pack("C*").dup.force_encoding(e)
+                [e, bs, s.length, s.valid_encoding?, s.inspect, s.dump,
+                 s.chars.map(&:bytes), s.scrub("?").bytes, s.reverse.bytes,
+                 s[0].bytes, s[1..].bytes]
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn cjk_conversion_follows_the_character_walk() {
+        // WHATWG's tables are wider than CRuby's: `windows-949` reads
+        // EUC-KR's `B0 41`, `gbk` reads GB2312's, `gb18030` reads a
+        // lone `0x80`. A conversion reads from the same walk as
+        // `#valid_encoding?` now, so those are invalid sequences — and
+        // a *well-formed* cell the codec cannot read is an undefined
+        // conversion instead, which `invalid: :replace` does not cover
+        // (#1473).
+        run_test_once(
+            r#"
+              rows = [
+                ["EUC-KR", [0xb0, 0x41]], ["EUC-KR", [0x41, 0x80, 0x42]], ["EUC-KR", [0xb0, 0xa1]],
+                ["GB2312", [0xb0, 0x41]], ["GB18030", [0x41, 0x80, 0x42]], ["GB18030", [0x81, 0x40]],
+                ["Big5", [0xa4, 0x20]], ["Big5", [0xa4, 0x40]],
+                ["CP949", [0x81, 0x20]], ["CP949", [0x80]], ["CP949", [0xac, 0xf8]],
+                ["EUC-KR", [0xac, 0xf8]],
+                # EUC-JP and Shift_JIS read from the same walk, which
+                # is where `encoding_rs` reading `0x80` as `U+0080`
+                # stops (#1500).
+                ["Shift_JIS", [0x41, 0x80, 0x42]], ["Windows-31J", [0x41, 0x80, 0x42]],
+                ["EUC-JP", [0x41, 0x80, 0x42]], ["EUC-JP", [0xa4, 0xa2]],
+                ["EUC-JP", [0x2f, 0xa2, 0xd6]], ["Shift_JIS", [0x49, 0xeb, 0xbc, 0x70]],
+              ]
+              rows.map do |e, bs|
+                s = bs.pack("C*").dup.force_encoding(e)
+                [e, bs, s.valid_encoding?,
+                 (s.encode("UTF-8").bytes rescue $!.class.name.sub("Encoding::", "")),
+                 (s.encode("UTF-8", invalid: :replace).bytes rescue $!.class.name.sub("Encoding::", "")),
+                 (s.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?").bytes rescue $!.class.name.sub("Encoding::", ""))]
+              end
+            "#,
+        );
+        // Every cell of the three that are now exact, counted: the
+        // structure decides which byte pairs are cells, and the codec
+        // decides which of those have a character.
+        run_test_once(
+            r#"
+              %w[EUC-KR CP949 GB18030].map do |e|
+                cells = 0
+                unconvertible = 0
+                (0x81..0xfe).each do |h|
+                  (0x00..0xff).each do |l|
+                    s = [h, l].pack("C*").dup.force_encoding(e)
+                    next unless s.valid_encoding? && s.length == 1
+                    cells += 1
+                    begin
+                      s.encode("UTF-8")
+                    rescue
+                      unconvertible += 1
+                    end
+                  end
+                end
+                [e, cells, unconvertible]
+              end
+            "#,
+        );
     }
 
     #[test]

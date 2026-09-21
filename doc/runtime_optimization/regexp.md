@@ -87,6 +87,20 @@ KOI8 / Windows-125x のとき、そのコーデックでパターンを再コン
 
 ### 1.5 Onigmo に渡す前のソース前処理
 
+- `check_regexp_source_valid`（`builtins/regexp.rs`、`with_option_kcode_source`
+  より手前）: ソースのバイト列がそれ自身の encoding で文字を成さないとき、
+  Onigmo に渡す前に `RegexpError: invalid multibyte character: /…/` を出す。
+  CRuby の `rb_reg_preprocess` と同じ位置で、フラグ文字（`/\x81/mix`、
+  `rb_reg_desc` の m-i-x 順）まで含めて描画する。1 バイト 1 文字の BINARY と、
+  バイト列として読む `/…/n`（`NOENCODING`）は対象外。`Marshal.load` の `/`
+  ペイロードと `Regexp.union` の結合後ソースも
+  `check_regexp_source_bytes_valid` で同じ検査を通る（union が描画するのは
+  メンバ単体ではなく結合後 — `Regexp.union("x", eucbad)` は `/x|a\xA4/`）。
+  なお生バイトではなく `\xHH` エスケープで書かれた切り詰め
+  （`Regexp.new("\\xa4".force_encoding("EUC-JP"))`）は前処理を通り抜けて
+  Onigmo が見つけるので、その `too short multibyte code string` は CRuby に
+  ならって `too short escaped multibyte character` に言い換える
+  （`normalize_onigmo_message`）。
 - `pre_validate_regex`: Onigmo が黙って受けてしまう入力に CRuby の文言で
   `RegexpError` を出す（末尾の `\`、桁ゼロの `\x`、閉じていない `\p{`）。
 - `expand_unicode_braces`: Onigmo の `\u` は 4 桁ちょうどしか受けないので
