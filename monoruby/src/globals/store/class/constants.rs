@@ -69,6 +69,19 @@ pub(crate) struct AutoloadEntry {
     /// `autoload` call site stays in `constant_locations` meanwhile,
     /// which is what the other threads go on reading.
     pub location: Option<(String, u32)>,
+    /// Every other spelling of `feature` that a loaded path may match:
+    /// its `realpath`, and for an extension-less feature the `.rb` /
+    /// `.so` forms and *their* `realpath`s.
+    ///
+    /// Resolved once, on the first question. It used to be resolved on
+    /// every question, and the question is asked about every autoload
+    /// entry in the program on every `require` — with Zeitwerk that is
+    /// tens of thousands of entries per file loaded. Each `realpath` is
+    /// a `readlink` per path component, and none of it shows up in an
+    /// instruction profile because the cost is the kernel's: booting a
+    /// Rails app issued 11.2M `readlink` calls, 73% of its system time.
+    /// CRuby resolves an autoload's feature once, when it is registered.
+    canon: std::cell::OnceCell<Vec<std::path::PathBuf>>,
 }
 
 /// Load state for an autoload-registered constant.
@@ -118,7 +131,35 @@ impl AutoloadEntry {
             state: AutoloadState::Idle,
             value: None,
             location: None,
+            canon: std::cell::OnceCell::new(),
         }
+    }
+
+    /// The alternate spellings of `feature` — see the field. Computed on
+    /// first use and kept.
+    fn alternate_paths(&self) -> &[std::path::PathBuf] {
+        self.canon.get_or_init(|| {
+            let mut out = Vec::new();
+            let mut push = |p: std::path::PathBuf| {
+                if !out.contains(&p) {
+                    out.push(p);
+                }
+            };
+            if let Ok(canon) = self.feature.canonicalize() {
+                push(canon);
+            }
+            if self.feature.extension().is_none() {
+                for ext in ["rb", "so"] {
+                    let mut with_ext = self.feature.clone();
+                    with_ext.set_extension(ext);
+                    if let Ok(canon) = with_ext.canonicalize() {
+                        push(canon);
+                    }
+                    push(with_ext);
+                }
+            }
+            out
+        })
     }
 
     /// The thread running this entry's load, if one is in flight.
@@ -353,7 +394,7 @@ impl ClassInfoTable {
             let class_id = ClassId::new(idx as u32);
             for (name, state) in self[class_id].constants.iter() {
                 if let ConstStateKind::Autoload(entry) = &state.kind {
-                    if Self::autoload_feature_matches_path(&entry.feature, paths) {
+                    if Self::autoload_feature_matches_path(entry, paths) {
                         result.push((class_id, *name));
                     }
                 }
@@ -362,36 +403,19 @@ impl ClassInfoTable {
         result
     }
 
-    fn autoload_feature_matches_path(
-        feature: &std::path::Path,
-        paths: &[std::path::PathBuf],
-    ) -> bool {
-        // Direct match: feature == path.
-        if paths.iter().any(|p| p == feature) {
+    fn autoload_feature_matches_path(entry: &AutoloadEntry, paths: &[std::path::PathBuf]) -> bool {
+        // Direct match: feature == path. Purely lexical, so it stays out
+        // of the memo and runs first.
+        if paths.iter().any(|p| p == &entry.feature) {
             return true;
         }
-        // Canonicalised match: try resolving the feature path.
-        if let Ok(canon) = feature.canonicalize() {
-            if paths.iter().any(|p| p == &canon) {
-                return true;
-            }
-        }
-        // Extension-less feature: try `.rb` and `.so` variants.
-        if feature.extension().is_none() {
-            for ext in ["rb", "so"] {
-                let mut with_ext = feature.to_path_buf();
-                with_ext.set_extension(ext);
-                if paths.iter().any(|p| p == &with_ext) {
-                    return true;
-                }
-                if let Ok(canon) = with_ext.canonicalize() {
-                    if paths.iter().any(|p| p == &canon) {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+        // Then the resolved / extension-carrying spellings, which cost a
+        // `realpath` the first time this entry is asked and nothing
+        // afterwards.
+        entry
+            .alternate_paths()
+            .iter()
+            .any(|alt| paths.iter().any(|p| p == alt))
     }
 
     ///
