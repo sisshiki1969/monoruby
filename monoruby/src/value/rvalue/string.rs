@@ -469,7 +469,10 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
     ("IBM437", "IBM437"),
     ("IBM737", "IBM737"),
     ("IBM775", "IBM775"),
-    ("IBM850", "IBM850"),
+    // CRuby's canonical name for code page 850 is `CP850`; the
+    // constant stays `Encoding::IBM850` (with `Encoding::CP850` beside
+    // it) as it does for the rest of the family (#1520).
+    ("CP850", "IBM850"),
     ("IBM852", "IBM852"),
     ("IBM855", "IBM855"),
     ("IBM857", "IBM857"),
@@ -1014,9 +1017,8 @@ impl Encoding {
             // NFD normalisation, so they're treated as plain
             // UTF-8 — sufficient for transcoding round-trips
             // through `encoding_rs`.
-            "UTF_8" | "UTF8" | "CP65001" | "UTF8_MAC" | "UTF_8_MAC" | "CESU_8" | "CESU8" => {
-                Ok(Encoding::Utf8)
-            }
+            "UTF_8" | "UTF8" | "CP65001" | "UTF8_MAC" | "UTF_8_MAC" | "UTF_8_HFS" | "CESU_8"
+            | "CESU8" => Ok(Encoding::Utf8),
 
             // ASCII-incompatible stateful / dummy byte encodings with
             // no native codec: name-preserved, `#inspect` escapes
@@ -1079,7 +1081,9 @@ impl Encoding {
             // declared name is preserved via `Encoding::NamedByte`, so
             // `# encoding: big5` reports `__ENCODING__.name == "Big5"`.
             "BIG5" | "CP950" => Ok(Encoding::NamedByte(named_byte_index("Big5").unwrap())),
-            "BIG5_HKSCS" | "BIG5HKSCS" | "CP951" => {
+            // `:2008` is the year of the revision, and part of the
+            // name CRuby answers to (#1520).
+            "BIG5_HKSCS" | "BIG5HKSCS" | "BIG5_HKSCS:2008" | "CP951" => {
                 Ok(Encoding::NamedByte(named_byte_index("Big5_HKSCS").unwrap()))
             }
             "BIG5_UAO" => Ok(Encoding::NamedByte(named_byte_index("Big5_UAO").unwrap())),
