@@ -296,11 +296,13 @@ fn source_loc_suffix(store: &Store, func_id: FuncId, is_mm: bool) -> String {
     if is_mm {
         return String::new();
     }
-    if let Some(iseq) = store.resolve_iseq(func_id) {
-        let info = &store[iseq];
-        format!(" {}", info.get_location())
-    } else {
-        String::new()
+    // CRuby's `method_inspect` appends `rb_iseq_path`, the very string
+    // `#source_location` returns — so the rendering shows the path as
+    // the script was reached, not its basename, and a method with no
+    // location shows none (#1517).
+    match source_path_line(store, func_id) {
+        Some((path, line)) => format!(" {path}:{line}"),
+        None => String::new(),
     }
 }
 
@@ -464,18 +466,36 @@ fn source_location(
 /// report `nil` for anything defined in that internal library rather
 /// than leaking an absolute install path.
 fn iseq_source_location(store: &Store, func_id: FuncId) -> Option<Value> {
-    let iseq = store.resolve_iseq(func_id)?;
-    let info = &store[iseq];
+    let (path, line) = source_path_line(store, func_id)?;
+    Some(Value::array2(Value::string(path), Value::integer(line)))
+}
+
+/// The `(path, line)` a method reports, or `None` for one that has
+/// none. Shared by `#source_location` and the trailing `file:line` of
+/// `#inspect`, which CRuby takes from the same place — so the two can
+/// never disagree (#1517).
+fn source_path_line(store: &Store, func_id: FuncId) -> Option<(String, i64)> {
+    // An attribute method has no iseq; the `attr_*` call site it was
+    // defined at stands in, as CRuby's does.
+    let (sourceinfo, loc) = match store.resolve_iseq(func_id) {
+        Some(iseq) => {
+            let info = &store[iseq];
+            (&info.sourceinfo, info.loc)
+        }
+        None => {
+            let (sourceinfo, loc) = store[func_id].def_site()?;
+            (sourceinfo, *loc)
+        }
+    };
     // The bootstrap `builtins/` tree renders as `<internal:NAME>` —
     // truthy, like CRuby's `Kernel.instance_method(:tap).source_location`
     // (`["<internal:kernel>", …]`); other internal-library paths stay
     // nil rather than leaking an absolute install path.
-    let path = crate::globals::display_path(&info.sourceinfo).to_string();
+    let path = crate::globals::display_path(sourceinfo).to_string();
     if path.contains("/.monoruby/") {
         return None;
     }
-    let line = Value::integer(info.sourceinfo.get_line(&info.loc) as i64);
-    Some(Value::array2(Value::string(path), line))
+    Some((path, sourceinfo.get_line(&loc) as i64))
 }
 
 ///
@@ -1038,6 +1058,85 @@ mod tests {
         m = method(:gets)
         m.source_location
         "##,
+        );
+    }
+
+    #[test]
+    fn attr_methods_carry_their_definition_site() {
+        // CRuby records the `attr_*` call site on the method it
+        // defines, so `#source_location` and `#inspect`'s trailing
+        // `file:line` both answer it (#1517). The assertions are
+        // relative to a `def` in the same snippet so they say nothing
+        // about where the test source lives.
+        run_test(
+            r##"
+            class F
+              attr_accessor :x
+              attr_reader :y
+              attr_writer :z
+              def m; end
+            end
+            rows = [:x, :x=, :y, :z=, :m].map do |n|
+              um = F.instance_method(n)
+              loc = um.source_location
+              [loc[0] == F.instance_method(:m).source_location[0],
+               loc[1] - F.instance_method(:m).source_location[1],
+               um.inspect.end_with?(" #{loc[0]}:#{loc[1]}>")]
+            end
+            rows
+            "##,
+        );
+        // The site is the `attr_*` call's own line, wherever it is
+        // written — inside a helper method, a `class_eval` block, or a
+        // `class_eval` string with its own file and line.
+        run_test(
+            r##"
+            def make(k) = k.class_eval { attr_accessor :viahelper }
+            A = Class.new
+            make(A)
+            B = Class.new
+            B.class_eval "attr_accessor :fromstr", "given.rb", 7
+            C = Class.new { attr_accessor :inblock }
+            [A.instance_method(:viahelper).source_location[0] ==
+               method(:make).source_location[0],
+             A.instance_method(:viahelper).source_location[1] -
+               method(:make).source_location[1],
+             B.instance_method(:fromstr).source_location,
+             C.instance_method(:inblock).source_location ==
+               C.instance_method(:inblock=).source_location]
+            "##,
+        );
+        // Struct and Data members are *not* given one: CRuby answers
+        // nil for those, attribute-shaped though they are.
+        run_test(
+            r##"
+            S = Struct.new(:a)
+            D = Data.define(:b)
+            [S.instance_method(:a).source_location,
+             S.instance_method(:a=).source_location,
+             D.instance_method(:b).source_location]
+            "##,
+        );
+    }
+
+    #[test]
+    fn inspect_location_is_the_source_location() {
+        // CRuby's `method_inspect` appends `rb_iseq_path` — the same
+        // string `#source_location` returns — so the two can never
+        // disagree, and a method with no location shows none (#1517).
+        run_test(
+            r##"
+            class G
+              def m; end
+              define_method(:dm) { }
+            end
+            [:m, :dm].map do |n|
+              um = G.instance_method(n)
+              loc = um.source_location
+              um.inspect.end_with?(" #{loc[0]}:#{loc[1]}>")
+            end + [Integer.instance_method(:+).source_location,
+                   Integer.instance_method(:+).inspect]
+            "##,
         );
     }
 

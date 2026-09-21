@@ -876,6 +876,7 @@
 2d0977c7c034e1bbf8950d44e00c27b0	[1, 20, nil, 1, 2, nil, 1, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 2d0f94c4757acfe87ab61946bc9adbbb	3	st = Process.detach(spawn("sh", "-c", "exit 3")).value; st.exitstatus
 2d2ff1c3ff5d4218de0d6a13eec1eeb7	"a"	"a".reverse
+2d3cd7b0cb34969dfe54553a4d918122	[true, true, nil, "#<UnboundMethod: Integer#+(_)>"]	class G\n              def m; end\n              define_method(:dm) {
 2d4ecfc6a346da8617ce2f74c132236e	[["1", "9", "0", nil], ["global-variable", nil], nil, nil]	res = []\n        "1234567890" =~ /(1)(2)(3)(4)(5)(6)(7)(8)(9)(0)/\n     
 2d60c4488e8bd380d51aa30aab63759f	[true, [[1, 2]]]	__a = [];__a << (\n            klass = Class.new(Hash)\n            h = klass[a: 1
 2d6fd217fba4d2b106219e7de92e4253	["Q", "Q"]	alias $myrs $/; $myrs = "Q"; r = [$/, $myrs]; $/ = "\\n"; r
@@ -1276,6 +1277,7 @@
 4469cd34806e00d8575f88a69f15e60f	"run"	Thread.current.status
 4470cbc811c7fd4199af6ea89b88644d	[3, 4, 3, 2, 3, 1, -3, 4, -3, 4, 3, 4, "3/4", "3/2", "5/1", "-3/4", "-3/4", "(3/4)", "(5/1)", "5/6", 1, 1, "1/2", "1/2", "9/8", "7/4", "3/2", "-1/4", "3/8"]	__a = [];__a << (Rational(3, 4).numerator);__a << (Rational(3, 4).denominator);_
 447a897b741808d693d666ee7af98d00	["NameError", true]	-> { it; (binding.local_variable_get(:it) rescue [$!.class.name, $!.message.star
+4486240a5e93940e64f91f9a8f245f80	[nil, nil, nil]	S = Struct.new(:a)\n            D = Data.define(:b)\n            [S.i
 44980591976d753f20e3583e03b07b0b	[150, "AbcAbc", true, true]	def mixapp(s, n)\n          i = 0\n          while i < n\n            x = 
 44a4e5e4818fc7deff1396b80d456ad8	[[0, {z: 9, w: 0}], [1, {}], [1, {z: 9, w: 1}], [1, {}], [2, {z: 9, w: 2}], [1, {}], [3, {z: 9, w: 3}], [1, {}], [4, {z: 9, w: 4}], [1, {}], [5, {z: 9, w: 5}], [1, {}], [6, {z: 9, w: 6}], [1, {}], [7, {z: 9, w: 7}], [1, {}], [8, {z: 9, w: 8}], [1, {}], [9, {z: 9, w: 9}], [1, {}], [10, {z: 9, w: 10}], [1, {}], [11, {z: 9, w: 11}], [1, {}], [12, {z: 9, w: 12}], [1, {}], [13, {z: 9, w: 13}], [1, {}], [14, {z: 9, w: 14}], [1, {}], [15, {z: 9, w: 15}], [1, {}], [16, {z: 9, w: 16}], [1, {}], [17, {z: 9, w: 17}], [1, {}], [18, {z: 9, w: 18}], [1, {}], [19, {z: 9, w: 19}], [1, {}], [20, {z: 9, w: 20}], [1, {}], [21, {z: 9, w: 21}], [1, {}], [22, {z: 9, w: 22}], [1, {}], [23, {z: 9, w: 23}], [1, {}], [24, {z: 9, w: 24}], [1, {}], [25, {z: 9, w: 25}], [1, {}], [26, {z: 9, w: 26}], [1, {}], [27, {z: 9, w: 27}], [1, {}], [28, {z: 9, w: 28}], [1, {}], [29, {z: 9, w: 29}], [1, {}]]	class KwR\n          attr_reader :h\n          def initialize(a: 1, **h) 
 44a71a0aaf4c652c114d8a3ee53bb9f0	["other", "other", "other", "z0", "z1", "z2", "z3", "z4", "z5", "z6", "z7", "z8", "z9", "other", "other", "other", "other"]	def classify(n)\n          case n\n          when 0 then "z0"\n          w
@@ -2939,6 +2941,7 @@
 9ee6b248a18210a26a69b2b0574a203e	[[true, true, 17, 17], [false, true, 42, 17], [nil, true, 42, 17], [100, true, 17, 17], [:ab, true, 17, 17], [Object, true, 17, 17], [false, true, 42, 17], [false, false, 42, 42], [false, nil, 42, 42], [false, 100, 42, 17], [false, :ab, 42, 17], [false, Object, 42, 17], [nil, true, 42, 17], [nil, false, 42, 42], [nil, nil, 42, 42], [nil, 100, 42, 17], [nil, :ab, 42, 17], [nil, Object, 42, 17], [true, 100, 17, 17], [false, 100, 42, 17], [nil, 100, 42, 17], [100, 100, 17, 17], [:ab, 100, 17, 17], [Object, 100, 17, 17], [true, :ab, 17, 17], [false, :ab, 42, 17], [nil, :ab, 42, 17], [100, :ab, 17, 17], [:ab, :ab, 17, 17], [Object, :ab, 17, 17], [true, Object, 17, 17], [false, Object, 42, 17], [nil, Object, 42, 17], [100, Object, 17, 17], [:ab, Object, 17, 17], [Object, Object, 17, 17]]	__a = [];__a << ([\n                        true && true,\n                       
 9eeb8d867dcde677d9837c5ba30e2c40	[:yes, "NoMethodError", false]	module EscA\n              refine(String) { def only_here; :yes; end
 9f0c968145034ea2d742ba8456a2e243	["Scheduler must implement #block", "Scheduler must implement #unblock", "Scheduler must implement #kernel_sleep", "Scheduler must implement #io_wait", true, nil]	required = [:block, :unblock, :kernel_sleep, :io_wait]\n            
+9f13bd740c0b23e8501de54775f77eaa	[true, 0, ["given.rb", 7], true]	def make(k) = k.class_eval { attr_accessor :viahelper }\n           
 9f1a90eeaa16fa36daa6ad13a43b2591	{a: Infinity, b: -Infinity}	{ a: 1.0 / 0.0, b: -1.0 / 0.0 }
 9f1df13fdbe9d24234e5967edfe3a4e1	["3/2+2i", "1/2+2i", "1/2+1/1i", "4+2i", "3+6i"]	__a = [];__a << ((Complex(1, 2) + Rational(1, 2)).to_s);__a << ((Complex(1, 2) -
 9f2e97978468dcf092100b2198ed8c1d	"nil"	BasicObject.superclass.inspect
@@ -3742,6 +3745,7 @@ c8799d1336ebc55a682946bdf05acb08	"world"	"hello world" =~ /world/\n            a
 c88b8c3752c39d8970e218b314f54141	:OVERRIDDEN	class Integer; def **(o); :OVERRIDDEN; end; end; 3 ** 4
 c88d879be35ce530404a7d7d86ef3e35	"<STDERR>"	$stderr.path
 c8bab73ede7ee43432582e134e2a3b5a	["FrozenError"]	def fapp(s)\n          s << "x"\n        end\n        r = []\n        25.ti
+c8bad7daa0423d0cde4db95215138d4a	[[true, -3, true], [true, -3, true], [true, -2, true], [true, -1, true], [true, 0, true]]	class F\n              attr_accessor :x\n              attr_reader :y
 c8bce95deb43e8ab5ca7f3a0947ee77a	[true, false]	require "stringio"\n            out = []\n            [true, false].e
 c8bf8011aa78146fd38ed4085528fb94	"EUC-JP"	Marshal.load(Marshal.dump("a".encode("EUC-JP"))).encoding.to_s
 c8c5061b79a576ee1e2ea779548f7e63	[[], [nil, nil, nil], [:x, :x, :x], [0, 2, 4], "negative array size", "wrong number of arguments (given 3, expected 0..2)", ["MyA", [:z, :z], false]]	class MyA < Array\n              def self.allocate; $called = true; 

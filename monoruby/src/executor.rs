@@ -3201,7 +3201,8 @@ impl Executor {
         method_name: IdentId,
         visi: Visibility,
     ) -> Result<IdentId> {
-        let name = globals.define_attr_reader(class_id, method_name, visi);
+        let (name, func_id) = globals.define_attr_reader(class_id, method_name, visi);
+        self.record_attr_def_site(globals, func_id);
         self.invoke_method_added(globals, class_id, name, None)?;
         Ok(name)
     }
@@ -3214,9 +3215,19 @@ impl Executor {
         method_name: IdentId,
         visi: Visibility,
     ) -> Result<IdentId> {
-        let name = globals.define_attr_writer(class_id, method_name, visi);
+        let (name, func_id) = globals.define_attr_writer(class_id, method_name, visi);
+        self.record_attr_def_site(globals, func_id);
         self.invoke_method_added(globals, class_id, name, None)?;
         Ok(name)
+    }
+
+    /// Remember where the `attr_*` call that defined *func_id* was
+    /// written, so `#source_location` and `#inspect` can report it.
+    /// An attribute method has no iseq to carry it (#1517).
+    fn record_attr_def_site(&self, globals: &mut Globals, func_id: FuncId) {
+        if let Some(site) = self.nearest_caller_site(&globals.store) {
+            globals.store[func_id].set_def_site(site);
+        }
     }
 
     /// Invoke method_removed or singleton_method_removed callback for `class_id`.
