@@ -1540,36 +1540,18 @@ fn regexp_try_convert(
 /// - linear_time?(re) -> bool
 /// - linear_time?(string, options=0) -> bool
 ///
-/// monoruby's regex engine (Onigmo) does not expose its internal
-/// linear-time classifier. CRuby's `linear_time?` is `false` for
-/// patterns that defeat the linear matcher — backreferences
-/// (`\1`..`\9`, `\k<…>`/`\k'…'`) and subexpression calls (`\g<…>`) —
-/// and `true` otherwise (look-around, atomic groups and possessive
-/// quantifiers all match in linear time). We apply that same
-/// syntactic test, which matches CRuby 4.0.
+/// Whether a match of the pattern is bounded by the engine's match
+/// cache, and so runs in time linear in the subject length however the
+/// subject is chosen.
+///
+/// The answer comes from Onigmo, which walks the compiled program for
+/// the constructs the cache cannot memoize across — back-references,
+/// subexpression calls (`\g<...>`), the absent operator, a capture group
+/// inside a look-around that compiles to a push, and nested repeats. It
+/// is not a syntactic test on the source: `/.(?=(a))/` is false while
+/// `/.(?<=(a))/` is true, which no reading of the source alone gives.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/s/linear_time=3f.html]
-fn pattern_is_linear_time(src: &str) -> bool {
-    let bytes = src.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            // `\1`..`\9` (backref), `\k` (named backref) and `\g`
-            // (subexpression call) force backtracking; every other
-            // escape is linear-time.
-            if let Some(&n) = bytes.get(i + 1) {
-                if (n.is_ascii_digit() && n != b'0') || n == b'k' || n == b'g' {
-                    return false;
-                }
-            }
-            i += 2; // skip the escaped character
-            continue;
-        }
-        i += 1;
-    }
-    true
-}
-
 #[monoruby_builtin]
 fn regexp_linear_time_p(
     vm: &mut Executor,
@@ -1584,7 +1566,7 @@ fn regexp_linear_time_p(
         if lfp.try_arg(1).is_some() {
             warn_flags_ignored(vm, globals);
         }
-        return Ok(Value::bool(pattern_is_linear_time(re.as_str())));
+        return Ok(Value::bool(re.is_linear_time()));
     }
     // Otherwise, compile the source to validate the pattern. The
     // option arg may be Integer/String/nil/Boolean — we only need
@@ -1605,8 +1587,8 @@ fn regexp_linear_time_p(
     } else {
         0
     };
-    let _ = RegexpInner::with_option(s.clone(), opt)?;
-    Ok(Value::bool(pattern_is_linear_time(&s)))
+    let re = RegexpInner::with_option(s, opt)?;
+    Ok(Value::bool(re.is_linear_time()))
 }
 
 /// The `timeout:` keyword of `Regexp.new` / `Regexp#initialize`.
@@ -1685,7 +1667,7 @@ fn store_regexp_timeout(_globals: &mut Globals, mut regexp: Value, nanos: u64) -
 #[monoruby_builtin]
 fn regexp_inst_timeout(
     _: &mut Executor,
-    globals: &mut Globals,
+    _: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
@@ -2391,8 +2373,12 @@ mod tests {
 
     #[test]
     fn regexp_linear_time_p() {
-        // Backreferences are not linear-time; look-around / atomic /
-        // possessive / subexpression-call patterns still are.
+        // The answer comes from the engine walking the compiled
+        // program, so it is about what the match cache can memoize
+        // across. Back-references, subexpression calls, the absent
+        // operator and a capture inside a look-around that compiles to
+        // a push all defeat it; look-behind, atomic groups and
+        // possessive quantifiers do not.
         run_tests(&[
             r#"Regexp.linear_time?(/abc/)"#,
             r#"Regexp.linear_time?("abc")"#,
@@ -2404,10 +2390,79 @@ mod tests {
             r#"Regexp.linear_time?(/.(?<=(a))/)"#,
             r#"Regexp.linear_time?(/(?<a>a){0}\g<a>/)"#,
             r#"Regexp.linear_time?(/[\x80-\xff]/n)"#,
+            // A capture inside a look-*ahead* is not linear-time, while
+            // the same capture inside a look-behind (above) is. No
+            // reading of the source alone separates those two.
+            r#"Regexp.linear_time?(/.(?=(a))/)"#,
+            // The absent operator.
+            r#"Regexp.linear_time?(/(?~abc)/)"#,
+            r#"Regexp.linear_time?(/x(?~y)z/)"#,
+            // A named back-reference.
+            r#"Regexp.linear_time?(/(?<x>a)\k<x>/)"#,
+            // The patterns the cache exists for.
+            r#"Regexp.linear_time?(/^(a*)*$/)"#,
+            r#"Regexp.linear_time?(/^(a|a)*$/)"#,
+            r#"Regexp.linear_time?(/(x+x+)+y/)"#,
+            r#"Regexp.linear_time?(/(?>a*)*b/)"#,
+            r#"Regexp.linear_time?(/^(([a-z])+.)+[A-Z]([a-z])+$/)"#,
+            // Nested repeats. A small bounded repeat is expanded by
+            // Onigmo rather than compiled to OP_REPEAT, so it stays
+            // linear; past that threshold the nesting is what the cache
+            // cannot handle.
+            r#"Regexp.linear_time?(/(?:a{1,2}){1,3}/)"#,
+            r#"Regexp.linear_time?(/a{100,200}/)"#,
+            r#"Regexp.linear_time?(/(?:a{10,20})+/)"#,
+            r#"Regexp.linear_time?(/(?:a{20,30}){20,30}/)"#,
+            r#"Regexp.linear_time?(/(a{100,200})*/)"#,
         ]);
         // Flags are ignored (with a warning) for a Regexp argument.
         run_test_no_result_check(
             r#"Regexp.linear_time?(/a/, Regexp::IGNORECASE)"#,
+        );
+    }
+
+    #[test]
+    fn linear_time_patterns_do_not_run_away() {
+        // Each of these used to backtrack exponentially: the match is
+        // one `onig_search` call, so before the engine memoized there
+        // was nothing that could interrupt it and a 40-character
+        // subject did not finish. `Regexp.linear_time?` says true for
+        // all of them, and this is that promise being kept.
+        run_tests(&[
+            r#"/^(a*)*$/ =~ ("a" * 40 + "b")"#,
+            r#"/^(a*)*$/.match("a" * 40).to_a"#,
+            r#"/^(a|a)*$/ =~ ("a" * 40 + "b")"#,
+            r#"/^(a|aa)*$/.match("a" * 40).to_a"#,
+            r#"/(x+x+)+y/ =~ ("x" * 30)"#,
+            r#"/(x+x+)+y/.match("x" * 30 + "y").to_a"#,
+            r#"/^(([a-z])+.)+[A-Z]([a-z])+$/ =~ ("a" * 30)"#,
+            r#"/^(?:(?=a*)a)*$/.match("a" * 40).to_a"#,
+            r#"/^(?>a*)*$/.match("a" * 40).to_a"#,
+            r#"/^(a*)+$/.match("a" * 40).to_a"#,
+            r#"/^(a?)*$/.match("a" * 40).to_a"#,
+            // Bigger than anything that could finish by luck.
+            r#"/^(a*)*$/ =~ ("a" * 400 + "b")"#,
+            r#"("a" * 200).scan(/^(a*)*$/).size"#,
+        ]);
+    }
+
+    #[test]
+    fn a_non_linear_pattern_still_needs_its_timeout() {
+        // The flip side: a back-reference is what the cache cannot key
+        // on, so `/(a+)+\1b/` still runs away and is still the timeout's
+        // to stop. `linear_time?` says so up front.
+        run_test_once(
+            r#"
+            [Regexp.linear_time?(/(a+)+\1b/),
+             begin
+               Regexp.timeout = 0.05
+               /(a+)+\1b/ =~ ("a" * 40 + "c")
+             rescue Regexp::TimeoutError => e
+               e.message
+             ensure
+               Regexp.timeout = nil
+             end]
+            "#,
         );
     }
 

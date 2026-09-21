@@ -1326,7 +1326,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "onigmo-regex"
 version = "0.1.0"
-source = "git+https://github.com/sisshiki1969/onigmo-regex.git#e6bece198d24e7672554bce1c70184206a83001f"
+source = "git+https://github.com/sisshiki1969/onigmo-regex.git#5ada653dbeeb6567f7e6b613cd006b2d7974a4c3"
 dependencies = [
  "bindgen 0.71.1",
  "cc",

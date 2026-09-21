@@ -276,6 +276,17 @@ impl RegexpInner {
         })
     }
 
+    /// Whether a match of this regexp is bounded by the engine's match
+    /// cache, and so runs in time linear in the subject length.
+    ///
+    /// This asks Onigmo, which walks the compiled program: the answer is
+    /// about what the cache can memoize across, not about how the source
+    /// is spelled. It is a property of the compiled pattern, so it is
+    /// shared with every regexp in the cache entry.
+    pub fn is_linear_time(&self) -> bool {
+        self.regex.is_linear_time()
+    }
+
     /// Whether the source encoding was pinned (`u`/`e`/`s`/`n`
     /// modifier set, or non-ASCII content in the source).
     pub fn fixed_encoding(&self) -> bool {
