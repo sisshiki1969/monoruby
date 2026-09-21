@@ -372,11 +372,17 @@ fn with_index(
     let self_val = Enumerator::expect_initialized(lfp.self_val())?;
     let Some(bh) = lfp.block() else {
         // The offset is part of the enumerator's replayed arguments —
-        // `e.with_index(5).to_a` must start at 5.
+        // `e.with_index(5).to_a` must start at 5 — but only when one was
+        // given: CRuby hands `argc` / `argv` to `RETURN_SIZED_ENUMERATOR`,
+        // so a bare `#with_index` records no argument at all.
+        let args = match lfp.try_arg(0) {
+            Some(_) => vec![offset],
+            None => vec![],
+        };
         return vm.generate_enumerator_with_size(
-            IdentId::get_id("with_index"),
+            super::kernel::invoked_name(vm, globals, lfp.self_val(), IdentId::get_id("with_index")),
             lfp.self_val(),
-            vec![offset],
+            args,
             pc,
             self_val.size(),
         );
@@ -402,7 +408,7 @@ fn with_object(
     let self_val = Enumerator::expect_initialized(lfp.self_val())?;
     let Some(bh) = lfp.block() else {
         return vm.generate_enumerator_with_size(
-            IdentId::get_id("with_object"),
+            super::kernel::invoked_name(vm, globals, lfp.self_val(), IdentId::get_id("with_object")),
             lfp.self_val(),
             vec![memo],
             pc,
@@ -1249,6 +1255,83 @@ mod tests {
             // An uninitialized Enumerator has no argument list at all.
             r##"
             Enumerator.allocate.inspect
+            "##,
+        ]);
+    }
+
+    #[test]
+    fn enumerator_records_the_invoked_alias() {
+        // CRuby names the Enumerator with `rb_frame_this_func()` — the
+        // name at the call site — so an alias shows as itself rather
+        // than as the method it aliases (#1496).
+        run_tests(&[
+            r##"
+            a = [1, 2]
+            [a.map, a.collect, a.flat_map, a.collect_concat, a.filter, a.select,
+             a.find_all, a.find, a.detect, a.reject, a.sort_by, a.group_by,
+             a.filter!, a.select!, a.map!, a.collect!, a.partition].map(&:inspect)
+            "##,
+            r##"
+            r = (1..3)
+            [r.map, r.collect, r.flat_map, r.collect_concat, r.filter, r.select,
+             r.find_all, r.find, r.detect].map(&:inspect)
+            "##,
+            r##"
+            h = { a: 1 }
+            [h.each, h.each_pair, h.map, h.collect, h.flat_map, h.collect_concat,
+             h.select, h.filter, h.find_all, h.find, h.detect].map(&:inspect)
+            "##,
+            // A user-level `alias` was already right and stays right.
+            r##"
+            class UA
+              def foo; return to_enum(__callee__) unless block_given?; yield 1; end
+              alias bar foo
+            end
+            o = UA.new
+            [o.foo, o.bar].map { |e| e.inspect.gsub(/0x[0-9a-f]+/, "0xXX") }
+            "##,
+        ]);
+    }
+
+    #[test]
+    fn lazy_step_records_the_invoked_alias() {
+        // `Enumerator::Lazy#inspect` names each step the same way.
+        run_tests(&[
+            r##"
+            l = [1, 2, 3].lazy
+            [l.map { |x| x }, l.collect { |x| x },
+             l.select { |x| x }, l.filter { |x| x }, l.find_all { |x| x },
+             l.flat_map { |x| [x] }, l.collect_concat { |x| [x] },
+             l.reject { |x| x }].map(&:inspect)
+            "##,
+            // The step still does its job.
+            r##"
+            l = [1, 2, 3].lazy
+            [l.collect { |x| x * 2 }.force,
+             l.collect { |x| x }.find_all { |x| x > 1 }.force,
+             l.collect_concat { |x| [x, -x] }.first(4)]
+            "##,
+        ]);
+    }
+
+    #[test]
+    fn enumerator_each_with_index_names_itself() {
+        // `Enumerator#each_with_index` / `#each_with_object` forwarded to
+        // `#with_index` / `#with_object` and let *those* build the
+        // Enumerator, so it recorded the delegate's name and its
+        // argument. A bare `#with_index` records no argument either:
+        // CRuby hands `argc` / `argv` to `RETURN_SIZED_ENUMERATOR`.
+        run_tests(&[
+            r##"
+            e = [1, 2].each
+            [e.each_with_index, e.with_index, e.with_index(5),
+             e.each_with_object([]), e.with_object([])].map(&:inspect)
+            "##,
+            // The offset still does its job when one is given.
+            r##"
+            e = [10, 20].each
+            [e.with_index(5).to_a, e.each_with_index.to_a, e.with_index.to_a,
+             e.each_with_object([]).to_a, e.with_object(:m).to_a]
             "##,
         ]);
     }

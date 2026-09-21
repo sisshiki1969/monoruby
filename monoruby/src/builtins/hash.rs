@@ -334,10 +334,16 @@ pub(crate) extern "C" fn hash_alloc_func(class_id: ClassId, _: &mut Globals) -> 
 /// without a block.
 fn hash_to_sized_enum(
     vm: &mut Executor,
+    globals: &Globals,
     method: IdentId,
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
+    // The Enumerator records the name the *call site* used, so
+    // `{a: 1}.filter` reads `…:filter` rather than `…:select` (CRuby's
+    // `rb_frame_this_func()`); `method` is the definition name, and the
+    // fallback wherever the call site cannot be trusted to name it.
+    let method = super::kernel::invoked_name(vm, globals, lfp.self_val(), method);
     let size = Value::integer(lfp.self_val().as_hash().len() as i64);
     vm.generate_enumerator_with_size(method, lfp.self_val(), lfp.iter().collect(), pc, Some(size))
 }
@@ -1882,7 +1888,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     let bh = match lfp.block() {
         None => {
             let id = IdentId::EACH;
-            return hash_to_sized_enum(vm, id, lfp, pc);
+            return hash_to_sized_enum(vm, globals, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -1917,7 +1923,7 @@ fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("select");
-            return hash_to_sized_enum(vm, id, lfp, pc);
+            return hash_to_sized_enum(vm, globals, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -1949,7 +1955,7 @@ fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("select!");
-            return hash_to_sized_enum(vm, id, lfp, pc);
+            return hash_to_sized_enum(vm, globals, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -2112,7 +2118,7 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("reject");
-            return hash_to_sized_enum(vm, id, lfp, pc);
+            return hash_to_sized_enum(vm, globals, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -2143,7 +2149,7 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("delete_if");
-            return hash_to_sized_enum(vm, id, lfp, pc);
+            return hash_to_sized_enum(vm, globals, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -2179,7 +2185,7 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("reject!");
-            return hash_to_sized_enum(vm, id, lfp, pc);
+            return hash_to_sized_enum(vm, globals, id, lfp, pc);
         }
         Some(block) => block,
     };
@@ -3184,7 +3190,7 @@ fn env_remove_where(
 fn env_delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let Some(bh) = lfp.block() else {
-        return hash_to_sized_enum(vm, IdentId::get_id("delete_if"), lfp, pc);
+        return hash_to_sized_enum(vm, globals, IdentId::get_id("delete_if"), lfp, pc);
     };
     env_remove_where(vm, globals, lfp.self_val(), bh, true)?;
     Ok(lfp.self_val())
@@ -3194,7 +3200,7 @@ fn env_delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: Bytecod
 fn env_reject_bang(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let Some(bh) = lfp.block() else {
-        return hash_to_sized_enum(vm, IdentId::get_id("reject!"), lfp, pc);
+        return hash_to_sized_enum(vm, globals, IdentId::get_id("reject!"), lfp, pc);
     };
     let removed = env_remove_where(vm, globals, lfp.self_val(), bh, true)?;
     // `reject!` reports "nothing changed" with nil; `delete_if` always
@@ -3218,7 +3224,7 @@ fn env_reject_bang(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: Bytec
 fn env_keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let Some(bh) = lfp.block() else {
-        return hash_to_sized_enum(vm, IdentId::get_id("keep_if"), lfp, pc);
+        return hash_to_sized_enum(vm, globals, IdentId::get_id("keep_if"), lfp, pc);
     };
     env_remove_where(vm, globals, lfp.self_val(), bh, false)?;
     Ok(lfp.self_val())
@@ -3228,7 +3234,7 @@ fn env_keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodeP
 fn env_select_bang(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let Some(bh) = lfp.block() else {
-        return hash_to_sized_enum(vm, IdentId::get_id("select!"), lfp, pc);
+        return hash_to_sized_enum(vm, globals, IdentId::get_id("select!"), lfp, pc);
     };
     let removed = env_remove_where(vm, globals, lfp.self_val(), bh, false)?;
     Ok(if removed == 0 {
@@ -3256,7 +3262,7 @@ fn env_each_pair(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let Some(bh) = lfp.block() else {
-        return hash_to_sized_enum(vm, IdentId::get_id("each_pair"), lfp, pc);
+        return hash_to_sized_enum(vm, globals, IdentId::get_id("each_pair"), lfp, pc);
     };
     let data = vm.get_block_data(globals, bh)?;
     vm.with_temp_scope(|vm| {
@@ -3307,7 +3313,7 @@ fn env_each_half(
     name: &str,
 ) -> Result<Value> {
     let Some(bh) = lfp.block() else {
-        return hash_to_sized_enum(vm, IdentId::get_id(name), lfp, pc);
+        return hash_to_sized_enum(vm, globals, IdentId::get_id(name), lfp, pc);
     };
     let data = vm.get_block_data(globals, bh)?;
     vm.with_temp_scope(|vm| {
@@ -3401,7 +3407,7 @@ fn env_filter(
     name: &str,
 ) -> Result<Value> {
     let Some(bh) = lfp.block() else {
-        return hash_to_sized_enum(vm, IdentId::get_id(name), lfp, pc);
+        return hash_to_sized_enum(vm, globals, IdentId::get_id(name), lfp, pc);
     };
     let data = vm.get_block_data(globals, bh)?;
     vm.with_temp_scope(|vm| {
@@ -3779,7 +3785,7 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     let bh = match lfp.block() {
         None => {
             let id = IdentId::get_id("keep_if");
-            return hash_to_sized_enum(vm, id, lfp, pc);
+            return hash_to_sized_enum(vm, globals, id, lfp, pc);
         }
         Some(block) => block,
     };

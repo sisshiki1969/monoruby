@@ -2754,7 +2754,7 @@ fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     let self_val = lfp.self_val();
     self_val.expect_array_ty(globals)?;
     let Some(bh) = lfp.block() else {
-        return array_enumerator(vm, self_val, IdentId::get_id("partition"), pc);
+        return array_enumerator(vm, globals, self_val, IdentId::get_id("partition"), pc);
     };
     let mut res_true = vec![];
     let mut res_false = vec![];
@@ -2919,7 +2919,7 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
             Ok(ary.into())
         })
     } else {
-        array_enumerator(vm, lfp.self_val(), IdentId::get_id("sort_by!"), pc)
+        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("sort_by!"), pc)
     }
 }
 
@@ -2931,10 +2931,16 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
 /// with each builtin's no-block branch.
 fn array_enumerator(
     vm: &mut Executor,
+    globals: &Globals,
     self_val: Value,
     method: IdentId,
     pc: BytecodePtr,
 ) -> Result<Value> {
+    // The Enumerator records the name the *call site* used, so
+    // `[1, 2].select` reads `…:select` rather than `…:filter` (CRuby's
+    // `rb_frame_this_func()`). `method` is the definition name, and the
+    // fallback wherever the call site cannot be trusted to name it.
+    let method = super::kernel::invoked_name(vm, globals, self_val, method);
     let size = Value::integer(self_val.as_array().len() as i64);
     vm.generate_enumerator_with_size(method, self_val, vec![], pc, Some(size))
 }
@@ -3014,7 +3020,7 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             Ok(Value::array_from_vec(sorted_elems))
         })
     } else {
-        array_enumerator(vm, lfp.self_val(), IdentId::get_id("sort_by"), pc)
+        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("sort_by"), pc)
     }
 }
 
@@ -3043,7 +3049,7 @@ fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         }
         Ok(Value::array_from_vec(res))
     } else {
-        array_enumerator(vm, lfp.self_val(), IdentId::get_id("filter"), pc)
+        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("filter"), pc)
     }
 }
 
@@ -3137,7 +3143,7 @@ fn filter_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             Value::nil()
         })
     } else {
-        array_enumerator(vm, lfp.self_val(), IdentId::get_id("filter!"), pc)
+        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("filter!"), pc)
     }
 }
 
@@ -3156,7 +3162,7 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         retain_with_block(vm, globals, lfp.self_val(), &data, false)?;
         Ok(lfp.self_val())
     } else {
-        array_enumerator(vm, lfp.self_val(), IdentId::get_id("keep_if"), pc)
+        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("keep_if"), pc)
     }
 }
 
@@ -3183,7 +3189,7 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         }
         Ok(Value::array_from_vec(res))
     } else {
-        array_enumerator(vm, lfp.self_val(), IdentId::get_id("reject"), pc)
+        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("reject"), pc)
     }
 }
 
@@ -3206,7 +3212,7 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             Value::nil()
         })
     } else {
-        array_enumerator(vm, lfp.self_val(), IdentId::get_id("reject!"), pc)
+        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("reject!"), pc)
     }
 }
 
@@ -3225,7 +3231,7 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         retain_with_block(vm, globals, lfp.self_val(), &data, true)?;
         Ok(lfp.self_val())
     } else {
-        array_enumerator(vm, lfp.self_val(), IdentId::get_id("delete_if"), pc)
+        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("delete_if"), pc)
     }
 }
 
@@ -3252,7 +3258,7 @@ fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
             Ok(h_val)
         })
     } else {
-        array_enumerator(vm, lfp.self_val(), IdentId::get_id("group_by"), pc)
+        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("group_by"), pc)
     }
 }
 
@@ -3381,7 +3387,7 @@ fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let Some(bh) = lfp.block() else {
-        return array_enumerator(vm, lfp.self_val(), IdentId::get_id("flat_map"), pc);
+        return array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("flat_map"), pc);
     };
     let elems: Vec<Value> = lfp.self_val().as_array().iter().copied().collect();
     let data = vm.get_block_data(globals, bh)?;
@@ -3550,7 +3556,12 @@ fn array_find(
             // `find`/`rfind` short-circuit, so the yield count isn't
             // predictable from `self.size`; CRuby leaves the enumerator's
             // `size` at nil. Forward the `ifnone` arg if it was given.
-            let method = IdentId::get_id(if reverse { "rfind" } else { "find" });
+            let method = super::kernel::invoked_name(
+                vm,
+                globals,
+                self_val,
+                IdentId::get_id(if reverse { "rfind" } else { "find" }),
+            );
             let args = match lfp.try_arg(0) {
                 Some(ifnone) => vec![ifnone],
                 None => vec![],

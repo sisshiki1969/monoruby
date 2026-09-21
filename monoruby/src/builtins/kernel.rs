@@ -4204,9 +4204,7 @@ fn called_name(
     self_val: Value,
     def_name: IdentId,
 ) -> Option<IdentId> {
-    let caller = method_cfp.prev()?;
-    let iseq_id = store[caller.lfp().func_id()].is_iseq()?;
-    let name = store[call_site_id(store, iseq_id, method_cfp)?].name?;
+    let name = call_site_name(store, method_cfp)?;
     // `super` has no name, and a dispatch that went through
     // `method_missing` / `send` / `Method#call` / … names the
     // trampoline rather than the frame we are standing in. Only trust
@@ -4216,6 +4214,45 @@ fn called_name(
     match store.check_method_for_class(self_val.class(), name) {
         Some(entry) if entry.original_name() == def_name => Some(name),
         _ => None,
+    }
+}
+
+/// The method name written at the call site that entered `method_cfp`,
+/// with no claim that it names this frame's method: `super` has none,
+/// and a dispatch through `method_missing` / `send` / `Method#call`
+/// names the trampoline. Each caller checks that its own way.
+fn call_site_name(store: &Store, method_cfp: Cfp) -> Option<IdentId> {
+    let caller = method_cfp.prev()?;
+    let iseq_id = store[caller.lfp().func_id()].is_iseq()?;
+    store[call_site_id(store, iseq_id, method_cfp)?].name
+}
+
+/// The name the call site used to reach the builtin that is running —
+/// CRuby's `rb_frame_this_func()`, which is what an Enumerator records,
+/// so `[1, 2].collect` reads `…:collect` rather than `…:map`.
+/// Falls back to `def_name` wherever the call site cannot be trusted to
+/// name this frame (`super`, `send`, `method_missing`, `Method#call`).
+///
+/// A `#[monoruby_builtin]` runs in its own native frame, so `vm.cfp()`
+/// is the frame [`called_name`] wants.
+pub(super) fn invoked_name(
+    vm: &Executor,
+    globals: &Globals,
+    self_val: Value,
+    def_name: IdentId,
+) -> IdentId {
+    let store = &globals.store;
+    let Some(name) = call_site_name(store, vm.cfp()) else {
+        return def_name;
+    };
+    // Identity by `FuncId`, not by `original_name`: a builtin's aliases
+    // are separate entries that each record their *own* name there
+    // (`[1, 2].method(:select).original_name` is `:select`), so only the
+    // shared body says the call site really reached this frame.
+    let running = vm.cfp().lfp().func_id();
+    match store.check_method_for_class(self_val.class(), name) {
+        Some(entry) if entry.func_id() == Some(running) => name,
+        _ => def_name,
     }
 }
 

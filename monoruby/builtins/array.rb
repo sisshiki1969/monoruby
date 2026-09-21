@@ -126,7 +126,7 @@ class Array
   end
 
   def map!
-    return self.to_enum(:map!) { self.size } unless block_given?
+    return self.to_enum(__callee__) { self.size } unless block_given?
     raise FrozenError, "can't modify frozen #{self.class}: #{self.inspect}" if frozen?
     i = 0
     while i < self.size
@@ -138,7 +138,10 @@ class Array
   alias collect! map!
 
   def map
-    return self.to_enum(:map) { self.size } unless block_given?
+    # `__callee__`, not `:map`: the Enumerator records the name the
+    # call site used, so `[1, 2].collect` reads `…:collect` (CRuby
+    # names it with `rb_frame_this_func()`).
+    return self.to_enum(__callee__) { self.size } unless block_given?
     res = Array.new(self.size)
     i = 0
     while i < self.size
