@@ -2355,32 +2355,61 @@ fn enc_pred_char(p: &mut [u8], enc: crate::value::Encoding) -> Neighbor {
     }
 }
 
-/// Whether the encoding's high half carries letters for `#succ`'s
-/// purposes, as Onigmo's ctype table for it does.
+/// Which high-half bytes Onigmo's ctype table marks ALPHA, one bit
+/// per byte from `0x80` up, for every single-byte encoding that marks
+/// any.
 ///
-/// Measured against CRuby 4.0.6 over every non-dummy single-byte
-/// encoding: the ISO-8859 family, the KOI8 pair, TIS-620 and the
-/// Windows code pages step *within* a letter run (`"\xFF"` in
-/// ISO-8859-1 is `"\xF8\xF8"` — the bottom of the lowercase run,
-/// carried), while the DOS code pages and the Mac encodings do not —
-/// their tables mark the high half printable and nothing more, so
-/// `"\x9A"` in IBM437 just steps to `"\x9B"`. Windows-1255 and -1256
-/// go with the second group: Onigmo marks neither the Hebrew nor the
-/// Arabic letters ALPHA there.
-fn high_half_has_letters(enc: crate::value::Encoding) -> bool {
-    match enc {
-        crate::value::Encoding::Iso8859(_) => true,
-        crate::value::Encoding::NamedByte(_) => {
-            let name = enc.name();
-            name.starts_with("KOI8-")
-                || name == "TIS-620"
-                || name == "Windows-874"
-                || (name.starts_with("Windows-12")
-                    && name != "Windows-1255"
-                    && name != "Windows-1256")
-        }
-        _ => false,
-    }
+/// Onigmo carries a hand-written table per encoding, and it is not the
+/// Unicode general category of the character the byte stands for: a
+/// modifier letter is not ALPHA (Windows-1252's `0x88` is U+02C6, a
+/// letter to Unicode and not to Onigmo), and a letter outside the
+/// table's own script run is not either (Windows-1256's `0x8A` is an
+/// Arabic letter, but the table's Arabic run is `0xC1..=0xDA`). Since
+/// `#succ` steps *within* the class, deriving it from the category
+/// stopped in the wrong place on 19 bytes across nine encodings
+/// (#1488).
+///
+/// Read off CRuby byte by byte through `[[:alpha:]]`, which is the
+/// same table. No single-byte encoding marks a high byte DIGIT — Thai
+/// and Arabic-Indic digits included — so the mask is the whole answer.
+/// An encoding that is not here marks none of them (the DOS code
+/// pages, the Mac script encodings and Windows-1258).
+const ONIGMO_HIGH_ALPHA: &[(&str, u128)] = &[
+    ("ISO-8859-1", 0xff7fffffff7fffff0420040000000000),
+    ("ISO-8859-2", 0x7f7fffffff7fffffde6ade6a00000000),
+    ("ISO-8859-3", 0x7f7efff7ff7efff79e629e4200000000),
+    ("ISO-8859-4", 0x7f7fffffff7ffffffe6a5e6e00000000),
+    ("ISO-8859-5", 0xdffeffffffffffffffffdffe00000000),
+    ("ISO-8859-6", 0x0007ffff07fffffe0000000000000000),
+    ("ISO-8859-7", 0x7ffffffffffbffffd740000000000000),
+    ("ISO-8859-8", 0x07ffffff000000000020000000000000),
+    ("ISO-8859-9", 0xff7fffffff7fffff0420040000000000),
+    ("ISO-8859-10", 0xffffffffffffffffdf7edf7e00000000),
+    ("ISO-8859-11", 0x0fffffff87fffffffffffffe00000000),
+    ("ISO-8859-13", 0x7f7fffffff7fffff8520850000000000),
+    ("ISO-8859-14", 0xffffffffffffffffffbf9d7600000000),
+    ("ISO-8859-15", 0xff7fffffff7fffff7530054000000000),
+    ("ISO-8859-16", 0xfffffffffffffffff71cd54e00000000),
+    ("Windows-1250", 0x7f7fffffff7fffffd6288428f400f400),
+    ("Windows-1251", 0xfffffffffffffffff53c852ef401f40b),
+    ("Windows-1252", 0xff7fffffff7fffff04200400d4005400),
+    ("Windows-1253", 0x7ffffffffffbffffd760000400000000),
+    ("Windows-1254", 0xff7fffffff7fffff0420040094001400),
+    ("Windows-1255", 0x07ffffff000000000020000000000000),
+    ("Windows-1256", 0x0007ffff07fffffe0000000000000000),
+    ("Windows-1257", 0x7f7fffffff7fffff8520850000000000),
+    ("KOI8-R", 0xffffffffffffffff0008000800000000),
+    ("KOI8-U", 0xffffffffffffffff20d820d800000000),
+    ("TIS-620", 0x0fffffff87fffffffffffffe00000000),
+];
+
+/// The bits of [`ONIGMO_HIGH_ALPHA`] for `enc`, or zero.
+fn onigmo_high_alpha(enc: crate::value::Encoding) -> u128 {
+    let name = enc.name();
+    ONIGMO_HIGH_ALPHA
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map_or(0, |(_, m)| *m)
 }
 
 /// The alphanumeric class of one character — `Some(true)` for a digit,
@@ -2415,31 +2444,10 @@ fn succ_alnum_class(p: &[u8], enc: crate::value::Encoding) -> Option<bool> {
         // A lone byte above 0x7F is not a character in UTF-8.
         return None;
     }
-    if !high_half_has_letters(enc) {
-        return None;
-    }
-    // Onigmo's TIS-620 / Windows-874 table marks every byte it defines
-    // alpha — the Thai letters, the marks, the digits, and `฿` and `๛`
-    // with them — so `"\xFB"` wraps to `"\xDF"`, the bottom of that
-    // run, while the undefined 0xDB..=0xDE and 0xFC.. are not characters
-    // for it at all.
-    if matches!(enc.name(), "TIS-620" | "Windows-874") {
-        let defined =
-            (0xa1..=0xfb).contains(&p[0]) && super::encoding::single_byte_char(enc, p[0]).is_some();
-        return defined.then_some(false);
-    }
-    let c = super::encoding::single_byte_char(enc, p[0])?;
-    // A single-byte encoding's table marks its whole script alpha,
-    // combining marks included — Thai's `\u0E3A` steps like a letter in
-    // TIS-620, where the same character in UTF-8 does not — while its
-    // national digits are not DIGIT: `"\xF9"` (Thai digit nine) in
-    // TIS-620 steps to `"\xFA"` rather than wrapping to zero.
-    use unicode_general_category::{GeneralCategory as GC, get_general_category};
-    match get_general_category(c) {
-        GC::NonspacingMark | GC::EnclosingMark => Some(false),
-        GC::DecimalNumber => None,
-        _ => unicode_alnum_class(c),
-    }
+    // Onigmo's own table, not the Unicode category of the character the
+    // byte stands for (#1488).
+    let alpha = onigmo_high_alpha(enc) >> (p[0] - 0x80) & 1 == 1;
+    return alpha.then_some(false);
 }
 
 /// [`succ_alnum_class`] for a character monoruby can name as a Unicode
@@ -12218,6 +12226,51 @@ fn unicode_normalize_(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn succ_steps_within_onigmos_alpha_table() {
+        // Onigmo carries a hand-written ALPHA table per encoding, and
+        // it is not the Unicode category of the character the byte
+        // stands for: a modifier letter is not ALPHA, and a letter
+        // outside the table's own script run is not either. `#succ`
+        // steps *within* the class, so deriving it from the category
+        // stopped in the wrong place — these are the nineteen bytes,
+        // across nine encodings, where it did (#1488).
+        run_test_once(
+            r#"
+              rows = [
+                ["Windows-1250", 0x9f], ["Windows-1250", 0xa1],
+                ["Windows-1252", 0x88], ["Windows-1254", 0x88],
+                ["Windows-1253", 0xb6],
+                ["Windows-1255", 0xfa],
+                ["Windows-1256", 0xda], ["Windows-1256", 0xf2],
+                ["Windows-1258", 0xd6], ["Windows-1258", 0xf6], ["Windows-1258", 0xfd],
+                ["KOI8-U", 0xae], ["KOI8-U", 0xbe],
+                ["ISO-8859-2", 0xb6], ["ISO-8859-2", 0xb7],
+                ["ISO-8859-4", 0xb6], ["ISO-8859-4", 0xb7],
+                ["ISO-8859-11", 0xee], ["ISO-8859-11", 0xfb],
+              ]
+              rows.map { |e, b| [e, b, [b].pack("C").dup.force_encoding(e).succ.bytes] }
+            "#,
+        );
+        // And the whole table, one digest per encoding: every high
+        // byte's answer, so a cell that moves anywhere shows up.
+        run_test_once(
+            r#"
+              digest = lambda do |a|
+                a.each_with_index.reduce(0) { |acc, (v, i)| (acc * 131 + (v + 2) * (i + 1)) % 1_000_000_007 }
+              end
+              %w[ISO-8859-1 ISO-8859-2 ISO-8859-3 ISO-8859-4 ISO-8859-5 ISO-8859-6 ISO-8859-7
+                 ISO-8859-8 ISO-8859-9 ISO-8859-10 ISO-8859-11 ISO-8859-13 ISO-8859-14
+                 ISO-8859-15 ISO-8859-16 Windows-1250 Windows-1251 Windows-1252 Windows-1253
+                 Windows-1254 Windows-1255 Windows-1256 Windows-1257 Windows-1258 KOI8-R
+                 KOI8-U TIS-620 IBM437 IBM866 macRoman macCyrillic macThai].map do |e|
+                flat = (0x80..0xff).flat_map { |b| [b].pack("C").dup.force_encoding(e).succ.bytes }
+                [e, flat.size, digest.call(flat)]
+              end
+            "#,
+        );
+    }
 
     #[test]
     fn delete_prefix_is_byte_oriented() {
