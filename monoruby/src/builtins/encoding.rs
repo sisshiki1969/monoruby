@@ -1192,6 +1192,17 @@ struct JpDecoded<'a> {
     unmapped: Option<Vec<u8>>,
 }
 
+/// The `Encoding` a fixup belongs to, for the character walk its
+/// `precise` came from.
+fn jp_enc_of(fx: &JpFixup) -> crate::value::Encoding {
+    use crate::value::Encoding as E;
+    if fx.precise as usize == eucjp_precise_len as usize {
+        E::EucJp
+    } else {
+        E::Sjis(0)
+    }
+}
+
 /// Decode the way CRuby does, by wrapping `encoding_rs`'s WHATWG codec
 /// rather than replacing it.
 ///
@@ -1206,68 +1217,38 @@ struct JpDecoded<'a> {
 /// caller passed `undef: :replace`; without it the first such cell is
 /// reported back so the caller can raise.
 fn jp_decode<'a>(fx: &JpFixup, bytes: &'a [u8], undef: Option<&str>) -> JpDecoded<'a> {
-    let rs = fx.rs;
-    if !jp_decode_needs_fixup(fx, bytes) {
-        let (text, had_invalid) = rs.decode_without_bom_handling(bytes);
-        return JpDecoded { text, had_invalid, unmapped: None };
-    }
-    let flush = |out: &mut String, had_err: &mut bool, run: &[u8]| {
-        if run.is_empty() {
-            return;
-        }
-        let (s, e) = rs.decode_without_bom_handling(run);
-        out.push_str(&s);
-        *had_err |= e;
-    };
-    let mut out = String::with_capacity(bytes.len());
-    let mut had_invalid = false;
-    let mut unmapped = None;
-    let mut pos = 0;
-    let mut pending = 0;
-    while pos < bytes.len() {
-        let PreciseLen::Char(n) = (fx.precise)(bytes, pos) else {
-            pos += 1;
-            continue;
-        };
-        let cell = &bytes[pos..pos + n];
-        if let Some(c) = jp_decode_override(fx, cell) {
-            flush(&mut out, &mut had_invalid, &bytes[pending..pos]);
-            out.push(c);
-            pending = pos + n;
-        } else if !jp_cell_is_live(fx, cell) {
-            flush(&mut out, &mut had_invalid, &bytes[pending..pos]);
-            match undef {
-                Some(repl) => out.push_str(repl),
-                None => {
-                    if unmapped.is_none() {
-                        unmapped = Some(cell.to_vec());
-                    }
-                }
-            }
-            pending = pos + n;
-        }
-        pos += n;
-    }
-    flush(&mut out, &mut had_invalid, &bytes[pending..]);
-    JpDecoded { text: std::borrow::Cow::Owned(out), had_invalid, unmapped }
+    cell_decode(jp_enc_of(fx), fx.rs, Some(fx), bytes, undef)
 }
 
-/// Decode through `encoding_rs`, but let the encoding's own character
-/// walk decide what is well-formed.
+/// Decode through `encoding_rs`, letting the encoding's own character
+/// walk decide what is well formed and its own table decide what has
+/// a character.
 ///
-/// WHATWG's tables are wider than CRuby's for the CJK double-byte
-/// sets: `windows-949` reads EUC-KR's `B0 41`, `gbk` reads GB2312's,
-/// and `gb18030` reads a lone `0x80` — cells those encodings do not
-/// have. `#valid_encoding?` and `#scrub` answer from the walk
-/// ([`mbc_walker`](crate::value::mbc_walker)), so a conversion has to
-/// as well, or the same bytes are broken to one and fine to the other
-/// (#1473).
+/// `encoding_rs` carries WHATWG's tables, which differ from CRuby's in
+/// two ways that both surface here. They read bytes CRuby's encodings
+/// do not have — Shift_JIS's `0x80` as `U+0080`, EUC-KR's `B0 41`
+/// through `windows-949`, GB2312's through `gbk` — and the walk, which
+/// is what `#valid_encoding?` and `#scrub` answer from, is what says
+/// so (#1473, #1500). And they read *cells* CRuby has no character
+/// for, which is an **undefined** conversion rather than an invalid
+/// sequence, and so is not covered by `invalid: :replace`.
 ///
-/// A buffer the walk accepts is handed to `encoding_rs` untouched, so
-/// this costs one classify on the common path.
-fn walked_decode<'a>(
+/// A buffer that is well formed, touches no fixup cell and decodes
+/// cleanly is handed to `encoding_rs` whole, so this costs one
+/// classify on the common path. Everything else is walked piece by
+/// piece, complete cells going to the codec in runs — exact, because
+/// these encodings are stateless and the runs are cut at cell
+/// boundaries.
+///
+/// `fx` carries the per-cell corrections where the encoding has any
+/// (EUC-JP / Shift_JIS); `undef` is the replacement text for a cell
+/// with no character when the caller passed `undef: :replace`, and
+/// without it the first such cell is reported back so the caller can
+/// raise.
+fn cell_decode<'a>(
     enc: crate::value::Encoding,
     rs: &'static encoding_rs::Encoding,
+    fx: Option<&JpFixup>,
     bytes: &'a [u8],
     undef: Option<&str>,
 ) -> JpDecoded<'a> {
@@ -1279,16 +1260,15 @@ fn walked_decode<'a>(
     let Some((max_len, precise)) = crate::value::mbc_walker(enc) else {
         return plain(bytes);
     };
+    let needs_fixup = fx.is_some_and(|fx| jp_decode_needs_fixup(fx, bytes));
     let broken = matches!(enc.classify(bytes), crate::value::CodeRange::Broken);
-    if !broken {
+    if !needs_fixup && !broken {
         let d = plain(bytes);
+        // No error means no cell the codec could not read, and the
+        // walk already accepted every one of them.
         if !d.had_invalid {
             return d;
         }
-        // Every cell is well formed, so whatever `encoding_rs` could
-        // not read is a cell with no character — an *undefined*
-        // conversion, not an invalid sequence. Fall through to the
-        // per-cell walk to name it.
     }
     let base = bytes.as_ptr() as usize;
     let mut pieces: Vec<(usize, usize, bool)> = Vec::new();
@@ -1303,42 +1283,90 @@ fn walked_decode<'a>(
     let mut out = String::with_capacity(bytes.len());
     let mut had_invalid = false;
     let mut unmapped: Option<Vec<u8>> = None;
+    let mut run: Option<std::ops::Range<usize>> = None;
+    // A run of plain cells, decoded together; if the codec stumbles
+    // anywhere in it the cells are taken one at a time, so the one it
+    // cannot read can be named.
+    macro_rules! flush {
+        () => {
+            if let Some(r) = run.take() {
+                let (s, e) = rs.decode_without_bom_handling(&bytes[r.clone()]);
+                if !e {
+                    out.push_str(&s);
+                } else {
+                    let mut p = r.start;
+                    while p < r.end {
+                        let PreciseLen::Char(n) = precise(bytes, p) else {
+                            break;
+                        };
+                        let cell = &bytes[p..p + n];
+                        let (s, e) = rs.decode_without_bom_handling(cell);
+                        if e {
+                            // CP949's `0x80` is the one byte in the
+                            // family whose character table and
+                            // transcoder disagree in CRuby: it is
+                            // `valid_encoding?`-valid and still an
+                            // *invalid byte sequence* to convert, where
+                            // every other unreadable cell here is an
+                            // undefined conversion.
+                            if cell == [0x80] && enc.name() == "CP949" {
+                                out.push('\u{FFFD}');
+                                had_invalid = true;
+                                p += n;
+                                continue;
+                            }
+                            match undef {
+                                Some(repl) => out.push_str(repl),
+                                None => {
+                                    if unmapped.is_none() {
+                                        unmapped = Some(cell.to_vec());
+                                    }
+                                }
+                            }
+                        } else {
+                            out.push_str(&s);
+                        }
+                        p += n;
+                    }
+                }
+            }
+        };
+    }
     for (start, len, ok) in pieces {
         let piece = &bytes[start..start + len];
         if !ok {
+            flush!();
             // One replacement character per ill-formed piece, which is
             // how `encoding_rs` groups them too.
             out.push('\u{FFFD}');
             had_invalid = true;
             continue;
         }
-        // Cell by cell: the encoding is stateless, so a cell decodes
-        // the same alone as it would in a run, and a cell the codec
-        // will not read is one the encoding has no character for.
-        let (s, e) = rs.decode_without_bom_handling(piece);
-        if e {
-            // CP949's `0x80` is the one byte in the family whose
-            // character table and transcoder disagree in CRuby: it is
-            // `valid_encoding?`-valid and still an *invalid byte
-            // sequence* to convert, where every other unreadable cell
-            // here is an undefined conversion.
-            if piece == [0x80] && enc.name() == "CP949" {
-                out.push('\u{FFFD}');
-                had_invalid = true;
+        if let Some(fx) = fx {
+            if let Some(c) = jp_decode_override(fx, piece) {
+                flush!();
+                out.push(c);
                 continue;
             }
-            match undef {
-                Some(repl) => out.push_str(repl),
-                None => {
-                    if unmapped.is_none() {
-                        unmapped = Some(piece.to_vec());
+            if !jp_cell_is_live(fx, piece) {
+                flush!();
+                match undef {
+                    Some(repl) => out.push_str(repl),
+                    None => {
+                        if unmapped.is_none() {
+                            unmapped = Some(piece.to_vec());
+                        }
                     }
                 }
+                continue;
             }
-            continue;
         }
-        out.push_str(&s);
+        match &mut run {
+            Some(r) => r.end = start + len,
+            None => run = Some(start..start + len),
+        }
     }
+    flush!();
     JpDecoded { text: std::borrow::Cow::Owned(out), had_invalid, unmapped }
 }
 
@@ -2091,7 +2119,7 @@ pub(super) fn transcode_bytes_with_opts(
             (d.text, d.had_invalid)
         } else {
             let repl = opts.undef_replace.then(|| opts.replace_str(dst_enc));
-            let d = walked_decode(src_enc, src_rs, src_bytes, repl.as_deref());
+            let d = cell_decode(src_enc, src_rs, None, src_bytes, repl.as_deref());
             if let Some(cell) = d.unmapped {
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,

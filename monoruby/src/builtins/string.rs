@@ -16484,6 +16484,12 @@ mod tests {
                 ["Big5", [0xa4, 0x20]], ["Big5", [0xa4, 0x40]],
                 ["CP949", [0x81, 0x20]], ["CP949", [0x80]], ["CP949", [0xac, 0xf8]],
                 ["EUC-KR", [0xac, 0xf8]],
+                # EUC-JP and Shift_JIS read from the same walk, which
+                # is where `encoding_rs` reading `0x80` as `U+0080`
+                # stops (#1500).
+                ["Shift_JIS", [0x41, 0x80, 0x42]], ["Windows-31J", [0x41, 0x80, 0x42]],
+                ["EUC-JP", [0x41, 0x80, 0x42]], ["EUC-JP", [0xa4, 0xa2]],
+                ["EUC-JP", [0x2f, 0xa2, 0xd6]], ["Shift_JIS", [0x49, 0xeb, 0xbc, 0x70]],
               ]
               rows.map do |e, bs|
                 s = bs.pack("C*").dup.force_encoding(e)
