@@ -300,6 +300,31 @@ impl RegexpInner {
     }
 }
 
+/// Onigmo says "too short multibyte code string"
+/// (`ONIGERR_TOO_SHORT_MULTI_BYTE_STRING`) about a lead byte with too
+/// few trail bytes behind it. CRuby never lets that wording out, and
+/// which of its own it uses depends on where the byte came from:
+///
+///   - Written **raw** in the source, `rb_reg_preprocess` walks the
+///     pattern in its own encoding and refuses it before Onigmo is
+///     reached at all — "invalid multibyte character". That is
+///     `builtins::regexp::check_regexp_source_valid`, which runs ahead
+///     of this.
+///   - Written as a **`\xHH` escape**, preprocessing copies the escape
+///     through and Onigmo is the one that finds the truncation. CRuby
+///     renames it there: `read_escaped_byte` reports "too short escaped
+///     multibyte character", which is what `Regexp.new("\\xa4"
+///     .force_encoding("EUC-JP"))` raises.
+///
+/// Only the second reaches here, so that is the name to give it.
+fn normalize_onigmo_message(msg: String) -> String {
+    msg.replacen(
+        "too short multibyte code string",
+        "too short escaped multibyte character",
+        1,
+    )
+}
+
 /// Expand Ruby's `\u{XXXX}` / `\u{XX YY ZZ}` regex-literal escapes into the
 /// forms Onigmo understands (`\uHHHH` for BMP, raw UTF-8 for supplementary).
 ///
@@ -827,7 +852,7 @@ impl RegexpInner {
                         // format unless the message already
                         // carries a `:` (which means we already
                         // formatted it ourselves in a pre-pass).
-                        let raw_msg = err.to_string();
+                        let raw_msg = normalize_onigmo_message(err.to_string());
                         let formatted = if raw_msg.contains(':') {
                             raw_msg
                         } else {

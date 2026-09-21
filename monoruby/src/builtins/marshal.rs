@@ -1838,6 +1838,12 @@ fn marshal_emit_link(buf: &mut Vec<u8>, obj: Value, objects: &mut Vec<u64>) -> b
 /// `#encoding`.
 fn build_marshal_regexp(bytes: &[u8], opt_byte: u32, encoding: Encoding) -> Result<Value> {
     use crate::value::rvalue::RegexpInner;
+    // A `/` payload carries whatever bytes the dump held, so it is the
+    // one route that can still hand a broken source to `Regexp.new`'s
+    // engine. CRuby preprocesses a marshalled source like any other and
+    // raises `RegexpError: invalid multibyte character` on it rather
+    // than building a Regexp nothing can match.
+    super::regexp::check_regexp_source_bytes_valid(bytes, encoding, opt_byte)?;
     let src = match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
         // Non-UTF-8 source — decode lossily so onigmo gets a valid
