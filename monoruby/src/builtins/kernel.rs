@@ -5311,7 +5311,15 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             recv.id()
         )
     };
-    Ok(Value::string(s))
+    // The names and literals CRuby renders here come from
+    // `rb_usascii_str_new`; the `#<Class:0x…>` form comes from
+    // `rb_sprintf` instead, and is tagged ASCII-8BIT there — a
+    // difference of its own, left as it is.
+    Ok(if s.starts_with("#<") {
+        Value::string(s)
+    } else {
+        Value::string_usascii(s)
+    })
 }
 
 ///

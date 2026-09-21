@@ -1186,6 +1186,31 @@ impl Value {
         RValue::new_string(s).pack()
     }
 
+    /// A string CRuby builds with `rb_usascii_str_new`: the names it
+    /// gives things — a class, a module, an encoding — and the text it
+    /// renders values into. US-ASCII when every byte is ASCII, which is
+    /// nearly always, and the natural UTF-8 when a name carries
+    /// something wider (#1476).
+    ///
+    /// The tag is invisible until the string meets another one, and
+    /// then it decides: a US-ASCII name yields to whatever it is
+    /// appended to, where a UTF-8 one wins over a US-ASCII receiver.
+    pub fn string_usascii(s: String) -> Self {
+        if s.is_ascii() {
+            Self::string_from_inner(RStringInner::from_encoding(
+                s.as_bytes(),
+                crate::value::Encoding::UsAscii,
+            ))
+        } else {
+            Self::string(s)
+        }
+    }
+
+    /// [`Self::string_usascii`] from a borrowed string.
+    pub fn string_usascii_from_str(s: &str) -> Self {
+        Self::string_usascii(s.to_string())
+    }
+
     /// Build a String value and pre-scan it so the cr is set to
     /// SevenBit / Valid up front. Use for long-lived strings
     /// (bytecodegen literal templates) whose cr is queried by every

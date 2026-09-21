@@ -111,12 +111,12 @@ fn to_i(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 
 #[monoruby_builtin]
 fn to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::string(self_rat(lfp).to_s()))
+    Ok(Value::string_usascii(self_rat(lfp).to_s()))
 }
 
 #[monoruby_builtin]
 fn inspect(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::string(self_rat(lfp).inspect()))
+    Ok(Value::string_usascii(self_rat(lfp).inspect()))
 }
 
 #[monoruby_builtin]

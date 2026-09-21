@@ -2559,7 +2559,7 @@ fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let self_val = lfp.self_val();
     if let Some(module) = self_val.is_class_or_module() {
         let class_name = globals.store.get_class_name(module.id());
-        Ok(Value::string(class_name))
+        Ok(Value::string_usascii(class_name))
     } else {
         let class_name = globals.store.get_class_name(self_val.class());
         Ok(Value::string(format!(
@@ -2588,7 +2588,7 @@ fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         return Ok(cached);
     }
     let class_name = globals.store.get_class_name(class_id);
-    let mut val = Value::string(class_name);
+    let mut val = Value::string_usascii(class_name);
     val.set_frozen();
     globals.store[class_id].set_cached_name_value(val);
     Ok(val)

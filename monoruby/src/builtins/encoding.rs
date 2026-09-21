@@ -89,7 +89,7 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         .set_ivar(
             val,
             IdentId::_NAME,
-            Value::string_from_str("#<Encoding:BINARY (ASCII-8BIT)>"),
+            Value::string_usascii_from_str("#<Encoding:BINARY (ASCII-8BIT)>"),
         )
         .unwrap();
     globals
@@ -97,7 +97,7 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         .set_ivar(
             val,
             IdentId::_ENCODING,
-            Value::string_from_str("ASCII-8BIT"),
+            Value::string_usascii_from_str("ASCII-8BIT"),
         )
         .unwrap();
     globals.register_encoding_object(val, Encoding::Ascii8);
@@ -227,12 +227,12 @@ pub(super) fn init_encoding(globals: &mut Globals) {
                 .set_ivar(
                     val,
                     IdentId::_NAME,
-                    Value::string_from_str(&format!("#<Encoding:{}>", canonical)),
+                    Value::string_usascii_from_str(&format!("#<Encoding:{}>", canonical)),
                 )
                 .unwrap();
             globals
                 .store
-                .set_ivar(val, IdentId::_ENCODING, Value::string_from_str(canonical))
+                .set_ivar(val, IdentId::_ENCODING, Value::string_usascii_from_str(canonical))
                 .unwrap();
             // The object's `Encoding`, recorded once so
             // `String#force_encoding(Encoding::X)` never re-parses the
@@ -5594,11 +5594,11 @@ fn enc_names(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     };
     // Find the matching row by canonical name and collect every
     // (canonical, alias) that points here.
-    let mut names: Vec<Value> = vec![Value::string_from_str(&canonical)];
+    let mut names: Vec<Value> = vec![Value::string_usascii_from_str(&canonical)];
     for (c, aliases) in ENCODING_NAMES {
         if c.eq_ignore_ascii_case(&canonical) {
             for alias in *aliases {
-                names.push(Value::string_from_str(alias));
+                names.push(Value::string_usascii_from_str(alias));
             }
             break;
         }
@@ -5874,7 +5874,7 @@ fn enc_to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let self_ = lfp.self_val();
     match globals.store.get_ivar(self_, IdentId::_ENCODING) {
         Some(v) => Ok(v),
-        None => Ok(Value::string_from_str("UTF-8")),
+        None => Ok(Value::string_usascii_from_str("UTF-8")),
     }
 }
 
@@ -5899,14 +5899,14 @@ fn enc_inspect(
         None => "UTF-8".to_string(),
     };
     if name == "ASCII-8BIT" {
-        return Ok(Value::string_from_str("#<Encoding:BINARY (ASCII-8BIT)>"));
+        return Ok(Value::string_usascii_from_str("#<Encoding:BINARY (ASCII-8BIT)>"));
     }
     let suffix = if is_cruby_dummy_name(&name) {
         " (dummy)"
     } else {
         ""
     };
-    Ok(Value::string(format!("#<Encoding:{name}{suffix}>")))
+    Ok(Value::string_usascii(format!("#<Encoding:{name}{suffix}>")))
 }
 
 /// Encoding names that CRuby flags as "dummy" — registered but not
@@ -7622,5 +7622,40 @@ mod tests {
             r#""丨".encode("EUC-JP").bytes"#,
             r#""纊".encode("EUC-JP").bytes"#,
         ]);
+    }
+
+    /// The strings CRuby *names* things with are built out of US-ASCII
+    /// when their content is ASCII, which nearly all of them are. The
+    /// text is identical either way — the tag only shows when the name
+    /// meets another string, and then it decides: a US-ASCII name
+    /// yields, where a UTF-8 one wins over a US-ASCII receiver (#1476).
+    #[test]
+    fn a_name_is_us_ascii_when_its_bytes_are() {
+        run_test_once(
+            r##"
+            def e(x) = [x, x.encoding.name]
+            [
+              e(Encoding::UTF_8.name), e(Encoding::UTF_8.to_s), e(Encoding::UTF_8.inspect),
+              e(Encoding::UTF_8.names.first), e(Encoding::ASCII_8BIT.name),
+              e(Encoding::ASCII_8BIT.inspect), e(Encoding::EUC_JP.name),
+              e(String.to_s), e(String.name), e(String.inspect), e(Comparable.to_s),
+              e(String.singleton_class.to_s), e(Encoding::UTF_8.class.name),
+              e(Rational(1, 2).to_s), e(Rational(1, 2).inspect),
+              e(Complex(1, 2).to_s), e(Complex(1, 2).inspect),
+              e(true.to_s), e(false.to_s), e(nil.to_s),
+              e(true.inspect), e(false.inspect), e(nil.inspect),
+              e((1..2).to_s), e(/ab/.to_s), e(/ab/.source),
+              e(Exception.new.message), e(Exception.new.to_s), e(ArgumentError.new.message),
+              e(Encoding::CompatibilityError.new.message),
+              ("x".encode("EUC-JP") + String.name).encoding.name,
+              (String.name + "x".encode("EUC-JP")).encoding.name,
+              ("".b << Encoding::UTF_8.name).encoding.name,
+              # …and a name that is not ASCII keeps its own encoding.
+              (class Aあ; end
+               [Aあ.name, Aあ.name.encoding.name,
+                Aあ.to_s.encoding.name, Aあ.inspect.encoding.name]),
+            ]
+            "##,
+        );
     }
 }

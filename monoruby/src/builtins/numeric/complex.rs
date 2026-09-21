@@ -703,7 +703,7 @@ fn format_complex(
 
     let body = format!("{}{}{}{}i", re_str, sign, im_str, star);
     let out = if inspect { format!("({})", body) } else { body };
-    Ok(Value::string_from_str(&out))
+    Ok(Value::string_usascii_from_str(&out))
 }
 
 #[monoruby_builtin]
