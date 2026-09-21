@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-8c14f62a.js";
+            window.path_to_searchindex_js = "../../searchindex-39284bba.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-8a4c8fb9.js"></script>
@@ -296,9 +296,16 @@ raise せずバイト単位でエスケープする。</li>
 そのまま返す</strong>、<code>to_regexp</code> に応える 1 個 → その regexp。それ以外は
 <code>parts.join("|")</code> して 1 回コンパイル（キャッシュが効きうる）。
 エンコーディング合成の状態機械 <code>UnionEnc</code> / <code>ArgEnc</code> がある。</li>
-<li><code>Regexp.linear_time?</code> は <code>\1..\9</code> / <code>\k</code> / <code>\g</code> の純粋な構文走査。
-<code>Regexp.timeout</code> / <code>timeout=</code> はスレッドローカルに<strong>保存されるだけで
-強制されない</strong>（ReDoS の中断は無い）。</li>
+<li><code>Regexp.linear_time?</code> は<strong>エンジンに訊く</strong>（<code>onig_check_linear_time</code>）。
+コンパイル済みプログラムを走査して、match cache がメモ化を跨げない構成
+—— 後方参照、部分式呼び出し（<code>\g&lt;…&gt;</code>）、absent operator、push に落ちる
+look-around 内のキャプチャ、入れ子の repeat —— を探す。ソースの構文走査
+ではないので、<code>/.(?=(a))/</code> は false で <code>/.(?&lt;=(a))/</code> は true になる
+（ソースだけ読んでもこの差は出ない）。</li>
+<li><code>Regexp.timeout</code> / <code>timeout=</code> は<strong>強制される</strong>。regexp 自身の timeout →
+グローバル → 無し の順（CRuby と同じ順）で deadline を引き、越えたら
+<code>Regexp::TimeoutError</code>。deadline は <code>onig_set_interrupt_func</code> フックが
+読むスレッドローカルで、ガードがスコープを抜けると元に戻る。</li>
 </ul>
 <h3 id="18-bytecodegen-でのリテラル"><a class="header" href="#18-bytecodegen-でのリテラル">1.8 bytecodegen でのリテラル</a></h3>
 <ul>
@@ -565,7 +572,8 @@ against X string」）、<code>Regexp#match</code> の <code>ArgumentError: inva
 <tr><td><code>MatchData</code> オブジェクトの再利用</td><td><code>rb_reg_search0</code> が backref スロットの busy でない <code>MatchData</code> を再利用</td><td><strong>常に新規確保</strong>。40 バイトのペイロード、<code>SmallVec&lt;[Span; 2]&gt;</code> の inline 容量、コピー無しの CoW haystack スナップショットで緩和</td></tr>
 <tr><td><code>onig_region</code> の再利用</td><td>照合ごとに再利用</td><td><code>captures_from_pos</code> は照合ごとに <code>OnigRegion</code> を確保・解放。再利用は StringScanner のプリミティブ（スレッドローカル <code>Region</code>）<strong>のみ</strong>（<code>onig_region_clear</code> + memset で約 3.3 %）</td></tr>
 <tr><td>リテラル接頭辞の最適探索 / <code>ONIG_OPTION_FIND_NOT_EMPTY</code></td><td>使う</td><td>使わない。代わりに <code>scan</code> / <code>replace_repeat</code> / <code>replace_all_block_inner</code> / <code>scan_block_loop</code> で<strong>手動走査</strong>（クレートの <code>captures_iter</code> は CRuby が yield するはずのゼロ幅一致を落とすため）</td></tr>
-<tr><td><code>Regexp.timeout</code></td><td>強制（ReDoS 中断）</td><td>スレッドローカルに保存して読み返すだけで<strong>強制しない</strong></td></tr>
+<tr><td><code>Regexp.timeout</code></td><td>強制（ReDoS 中断）</td><td>同じ。<code>onig_set_interrupt_func</code> のフックが読むスレッドローカルの deadline を match ループ内で観測し、<code>Regexp::TimeoutError</code> を上げる。CRuby は <code>rb_reg_timeout_p</code> を同じ位置で呼ぶ</td></tr>
+<tr><td>照合の線形時間保証（match cache）</td><td>あり（3.2 以降）。<code>onig_check_linear_time</code> が分類</td><td>同じ。vendored Onigmo に移植済みで、<code>num_fails</code> が <code>(end - str) * num_cache_opcodes</code> を越えてから遅延で有効化するので、線形しか戻らない照合は走査もバッファ確保もしない</td></tr>
 <tr><td><code>Regexp#==</code> / <code>#hash</code></td><td><code>hash</code> はエンコーディングフラグを無視、<code>==</code> は無視しない</td><td>同じ非対称を写す: <code>==</code> は <code>REGEXP_EQ_OPTION_MASK</code>（m / i / x）+ <code>declared_encoding</code>、<code>hash</code> はソース + マスクのみ</td></tr>
 <tr><td>エラーメッセージ</td><td>Onigmo の文言 + <code>: /&lt;source&gt;/</code></td><td><code>pre_validate_regex</code> / <code>expand_unicode_braces</code> / キャッシュミスのエラー腕が CRuby の文言を手で再現</td></tr>
 <tr><td><code>String#index</code>（String needle）</td><td><code>$~</code> を設定しない</td><td>同じ（issue #721）。さらにエンジンにも入らない</td></tr>
@@ -583,7 +591,13 @@ against X string」）、<code>Regexp#match</code> の <code>ArgumentError: inva
 StringScanner だけ。</li>
 <li><code>$~</code> の死活解析が無いので <code>str =~ /x/</code> と <code>case … when /x/</code> は結果を
 使わなくても評価ごとに <code>MatchData</code> を確保する。</li>
-<li><code>Regexp.timeout</code> は不活性。</li>
+<li>match cache は入れ子の <code>OP_REPEAT</code> を扱えない。小さい有界反復は
+Onigmo が展開するので該当しないが（<code>/(?:a{1,2}){1,3}/</code> は true）、
+展開の閾値を越える反復の入れ子 —— <code>/(?:a{10,20})+/</code>、
+<code>/(a{100,200})*/</code> など —— は false になる。CRuby も同じ
+（<code>count_num_cache_opcodes_inner</code> の “A nested OP_REPEAT is not yet
+supported”）。<code>Regexp.linear_time?</code> が false を返すものを縛るには
+<code>Regexp.timeout</code> を使う。</li>
 <li><code>Regexp#multiline?</code> は未実装（<a href="../plan-activerecord.html"><code>../plan-activerecord.md</code></a>）。</li>
 <li>非 UTF-8 レシーバに対する Regexp 付き <code>String#slice!</code>、同一エンコーディング
 の多バイト <code>tr</code> / <code>count</code> 集合は追記予定として <code>string.rs</code> に記録がある。</li>
