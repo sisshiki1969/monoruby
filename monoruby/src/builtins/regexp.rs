@@ -589,7 +589,7 @@ fn regexp_union(
         combined = combined.combine(enc, &globals.store)?;
         parts.push(format_union_member(vm, globals, *arg)?);
     }
-    let s = parts.join("|");
+    let s = parts.join(&b'|');
     // CRuby's `Regexp.union` downgrades the result to US-ASCII
     // when *every* arg was 7-bit ASCII content, even if
     // individual args were declared as a pinned encoding via a
@@ -753,7 +753,7 @@ fn union_arg_encoding(globals: &Globals, arg: Value) -> ArgEnc {
 /// kcode bit so the declared encoding round-trips through
 /// `Regexp#encoding`.
 fn union_inner_with_encoding(
-    pattern: String,
+    pattern: Vec<u8>,
     union_enc: UnionEnc,
 ) -> Result<RegexpInner> {
     use crate::value::Encoding;
@@ -773,11 +773,26 @@ fn union_inner_with_encoding(
         Encoding::Utf8 => (RegexpInner::KCODE_UTF8, Some(RegexpInner::KCODE_UTF8)),
         Encoding::EucJp => (RegexpInner::KCODE_EUCJP, Some(RegexpInner::KCODE_EUCJP)),
         Encoding::Sjis(_) => (RegexpInner::KCODE_SJIS, Some(RegexpInner::KCODE_SJIS)),
-        Encoding::Ascii8 => (RegexpInner::NOENCODING, None),
+        // `FIXEDENCODING`, not `NOENCODING`: the result is pinned to
+        // BINARY because a member was, which is not the same as the
+        // `n` modifier having been written — CRuby's union of a
+        // `/…/n` member carries no `n` of its own (#1516).
+        Encoding::Ascii8 => (RegexpInner::FIXEDENCODING, None),
         _ if pinned => (RegexpInner::FIXEDENCODING, None),
         _ => (0u32, None),
     };
-    RegexpInner::with_option_kcode(pattern, option, onigmo_enc, kcode, Some(enc))
+    // The compiled pattern goes in as a Rust `String`, but the source
+    // the regexp remembers — and compiles from under a native codec —
+    // is the raw bytes, exactly as `Regexp.new` passes them.
+    let text = String::from_utf8_lossy(&pattern).into_owned();
+    RegexpInner::with_option_kcode_source(
+        text,
+        option,
+        onigmo_enc,
+        kcode,
+        Some(enc),
+        Some(pattern),
+    )
 }
 
 /// Render a single `Regexp.union` argument into its embedded form.
@@ -788,30 +803,35 @@ fn format_union_member(
     vm: &mut Executor,
     globals: &mut Globals,
     arg: Value,
-) -> Result<String> {
+) -> Result<Vec<u8>> {
+    // Bytes, not a Rust `String`: a member whose source is not UTF-8
+    // has to reach the union's own source as the bytes that went in,
+    // or the union neither renders nor *matches* what it was built
+    // from (#1516).
+    //
     // `is_rstring_inner()` (not `is_str()`) — a String tagged as
     // an ASCII-incompatible encoding (UTF-16LE etc.) or one
     // carrying invalid UTF-8 bytes shows up here, and `is_str()`
     // would reject it for not being valid UTF-8.
     if let Some(s) = arg.is_rstring_inner() {
-        return Ok(RegexpInner::escape(&String::from_utf8_lossy(s.as_bytes())));
+        return Ok(RegexpInner::escape_bytes(s.as_bytes()));
     }
     if let Some(re) = arg.is_regex() {
-        return Ok(re.tos());
+        return Ok(re.tos_bytes());
     }
     if let Some(sym) = arg.try_symbol() {
-        return Ok(RegexpInner::escape(sym.get_name().as_str()));
+        return Ok(RegexpInner::escape(sym.get_name().as_str()).into_bytes());
     }
     if let Some(func_id) = globals.check_method(arg, IdentId::get_id("to_regexp")) {
         let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
         if let Some(re) = result.is_regex() {
-            return Ok(re.tos());
+            return Ok(re.tos_bytes());
         }
     }
     if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
         let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
         if let Some(s) = result.is_str() {
-            return Ok(RegexpInner::escape(s));
+            return Ok(RegexpInner::escape_bytes(s.as_bytes()));
         }
     }
     let class = arg.builtin_class_name(&globals.store);

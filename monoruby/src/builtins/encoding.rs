@@ -1055,6 +1055,35 @@ struct JpFixup {
     reject: &'static [char],
     /// Lead-byte ranges whose rows CRuby's table does not have.
     dead_rows: &'static [(u8, u8)],
+    /// Whether this encoding carries Windows-31J's user-defined area,
+    /// whose way back is [`windows31j_pua_cell`] rather than a table.
+    pua: bool,
+}
+
+/// Windows-31J's user-defined area: rows `F0`..`F9` run consecutively
+/// through `U+E000..U+E757`, 188 cells to a row (`40..7E` then
+/// `80..FC`). `encoding_rs` decodes them and refuses to encode them
+/// back, so all 1880 are a one-way trip; the mapping is arithmetic
+/// rather than a table, so this is the whole of the way back (#1462).
+///
+/// Rows `FA`..`FC` are *not* this area — they are the NEC-selected IBM
+/// extensions, real characters that `encoding_rs` already writes.
+fn windows31j_pua_cell(c: char) -> Option<[u8; 2]> {
+    const ROWS: u32 = 10;
+    const CELLS_PER_ROW: u32 = 188;
+    let idx = (c as u32).checked_sub(0xE000)?;
+    if idx >= ROWS * CELLS_PER_ROW {
+        return None;
+    }
+    let hi = 0xF0 + (idx / CELLS_PER_ROW) as u8;
+    let col = (idx % CELLS_PER_ROW) as u8;
+    // The trail byte skips `0x7F`, as every Shift_JIS cell does.
+    let lo = if col < 0x7f - 0x40 {
+        0x40 + col
+    } else {
+        0x80 + (col - (0x7f - 0x40))
+    };
+    Some([hi, lo])
 }
 
 static EUCJP_FIXUP: JpFixup = JpFixup {
@@ -1085,6 +1114,7 @@ static EUCJP_FIXUP: JpFixup = JpFixup {
     // WHATWG fills `A9..AD` and `F9..FC`; CRuby maps nothing in either
     // range, 457 cells in all.
     dead_rows: &[(0xa9, 0xaf), (0xf5, 0xfe)],
+    pua: false,
 };
 
 static SJIS_FIXUP: JpFixup = JpFixup {
@@ -1113,6 +1143,7 @@ static SJIS_FIXUP: JpFixup = JpFixup {
     // Row 13 (`87`), the NEC-selected IBM rows (`ED`/`EE`) and the
     // user-defined + IBM rows (`F0`..`FC`) — 2725 cells.
     dead_rows: &[(0x87, 0x87), (0xed, 0xee), (0xf0, 0xfc)],
+    pua: false,
 };
 
 /// Windows-31J agrees with WHATWG everywhere except one character:
@@ -1126,6 +1157,9 @@ static WINDOWS31J_FIXUP: JpFixup = JpFixup {
     encode: &[],
     reject: &['\u{2212}'],
     dead_rows: &[],
+    // Windows-31J alone carries the user-defined area; plain Shift_JIS
+    // has nothing in those rows and refuses them in both directions.
+    pua: true,
 };
 
 /// The table corrections for an encoding, or `None` for one
@@ -1349,7 +1383,10 @@ fn jp_encode(fx: &JpFixup, s: &str) -> std::result::Result<Vec<u8>, char> {
     // Whether this character is one the fixup tables move — the cheap
     // test that keeps the fast path.
     let is_fixed_up = |c: char| {
-        c > '\u{7f}' && (fx.reject.contains(&c) || fx.encode.iter().any(|(k, _)| *k == c))
+        c > '\u{7f}'
+            && (fx.reject.contains(&c)
+                || fx.encode.iter().any(|(k, _)| *k == c)
+                || (fx.pua && windows31j_pua_cell(c).is_some()))
     };
     let (bytes, _, had_err) = rs.encode(s);
     if !had_err && jp_live_throughout(fx, &bytes) && !s.chars().any(is_fixed_up) {
@@ -1363,6 +1400,10 @@ fn jp_encode(fx: &JpFixup, s: &str) -> std::result::Result<Vec<u8>, char> {
         }
         if let Some((_, seq)) = fx.encode.iter().find(|(k, _)| *k == c) {
             out.extend_from_slice(seq);
+            continue;
+        }
+        if fx.pua && let Some(cell) = windows31j_pua_cell(c) {
+            out.extend_from_slice(&cell);
             continue;
         }
         let (chunk, _, err) = rs.encode(c.encode_utf8(&mut buf));
@@ -3011,6 +3052,14 @@ fn enc_set_default_external(
 /// so that comes down to: escape unless the result encoding is UTF-8,
 /// which with the locale-derived default is the difference between
 /// `p "い"` under a `C` locale and under a UTF-8 one.
+/// The encoding an `#inspect` answer will be read in: what
+/// `Encoding.default_internal` or `.default_external` says, UTF-8 when
+/// neither does. CRuby's `rb_reg_desc` compares a pattern against it
+/// to decide what to escape (#1516).
+pub(crate) fn inspect_result_encoding(globals: &mut Globals) -> Encoding {
+    inspect_escape_encoding(globals).unwrap_or(Encoding::Utf8)
+}
+
 fn inspect_escape_encoding(globals: &mut Globals) -> Option<Encoding> {
     let resenc = globals
         .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
@@ -8741,6 +8790,45 @@ mod tests {
             r#"Encoding.find("UTF-16").name"#,
             r#""x".encode("UTF-16LE").bytes.size"#,
         ]);
+    }
+
+    #[test]
+    fn windows31j_user_defined_area_round_trips() {
+        // Rows `F0`..`F9` are Windows-31J's user-defined area, mapped
+        // to the Unicode private-use area. `encoding_rs` decodes them
+        // and refuses to encode them back, so all 1880 cells were a
+        // one-way trip; the mapping is arithmetic, and this walks
+        // every cell of it (#1462).
+        run_test_once(
+            r#"
+              cells = []
+              (0xF0..0xF9).each do |hi|
+                ((0x40..0x7E).to_a + (0x80..0xFC).to_a).each { |lo| cells << [hi, lo] }
+              end
+              bad = cells.reject do |hi, lo|
+                b = [hi, lo].pack("C*").dup.force_encoding("Windows-31J")
+                b.encode("UTF-8").encode("Windows-31J").bytes == [hi, lo]
+              end
+              [
+                [cells.size, bad.size,
+                 cells.map { |hi, lo| [hi, lo].pack("C*").dup.force_encoding("Windows-31J").encode("UTF-8").ord }.minmax],
+                # The edges of the area, and the character just past it.
+                [0xE000, 0xE757, 0xE758, 0xDFFF].map { |cp|
+                  ([cp].pack("U").encode("Windows-31J").bytes rescue $!.class.name.sub("Encoding::", "")) },
+                # Plain Shift_JIS has nothing in those rows, either way.
+                [0xE000, 0xE757].map { |cp|
+                  ([cp].pack("U").encode("Shift_JIS").bytes rescue $!.class.name.sub("Encoding::", "")) },
+                # A mixed string takes the per-character walk; an
+                # ordinary one still takes the whole-buffer fast path.
+                ["あ\u{E000}い\u{E757}う".encode("Windows-31J").bytes,
+                 "あ\u{E000}い".encode("Windows-31J").encode("UTF-8") == "あ\u{E000}い",
+                 "あいう".encode("Windows-31J").bytes],
+                # Rows `FA`..`FC` are the NEC-selected IBM extensions,
+                # not this area, and were already written.
+                [0x2170, 0x9ED1].map { |cp| [cp].pack("U").encode("Windows-31J").bytes },
+              ]
+            "#,
+        );
     }
 
     #[test]
