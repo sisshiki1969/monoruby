@@ -292,6 +292,7 @@
 0e56d42fa329cec66eaa8a31dadafef0	[true, true]	def m; proc{|x| x}; end; p = m; [p.dup.eql?(p), p.dup.hash == p.hash]
 0e58e78424730044c7b8bdc310bb26e6	["Fri Dec 12 ", "Fri Dec 12 ", "Fri", "Dec", "12", 4, ["Fri", "Dec", "12"], ["Fri Dec 12 ", "Dec"], "Fri Dec 12 ", true, 11, "", "1975 14:39", 11, 0, "Fri"]	require "strscan"\n        s = StringScanner.new("Fri Dec 12 1975 14:39"
 0e7e3c1fe18a8cbea4e15f4300b4c145	150.0	def collect(n)\n          acc = 0.0\n          sink = [3, 1, 2]\n         
+0e807706f321288442201ed85be292de	["#<Enumerator:0xXX>", "#<Enumerator:0xXX>"]	__a = [];__a << (\n            [1, 2].each.to_s.sub(/0x[0-9a-f]+/, "0xXX")\n      
 0ea12292e6120b88a2aa0b88f1830d5e	[-1, 0, 0, 0, true, false, false, true]	__a = [];__a << ("\\xc3".casecmp("\\xe3"));__a << ("\\xc3".casecmp("\\xc3"));__a << 
 0eb451479b9e3deffa5ff499cb00893c	[:private_answer]	class P\n          def method_missing(name, *args) = :missed\n          p
 0ec3628a644993ceba6c22fb3d0a00d9	[[[1, 2], {x: 3}, "blk"], [[[7, 8], {}, nil]]]	def inner(*a, **k, &b) = [a, k, b ? b.call : nil]\n        def fwd(*, **
@@ -1810,6 +1811,7 @@
 62aca60ad78802847e5b81e0b6ce2542	[42, "test.rb", 11]	__a = [];__a << (instance_eval("__LINE__", "test.rb", 42));__a << (instance_eval
 62caa309e31dac2a3bb4c9e5ed060cf8	[false, "elefant", 4]	S = Struct.new(:name, :legs, keyword_init: false)\n            \n\n   
 62d15ca21ed1dd74ca65f3735e8b6c5a	false	File.writable?("nonexistent_file_xyz")
+62e1e4a6015b86d8165f5521b136e2ae	[[1, 2], [[:a, 1], [:b, 2]], [[:v], 1], [{k: 2}]]	__a = [];__a << (\n            class A\n              def foo(a, k: 0)\n           
 63089c51218b7c8ba348e648ba7770b7	[16, [16, 5, 4, 10, 17], [[11, 4, 10, 1], [20, 11, 13, 10], 11, 917], [[4, 16, 18, 8], 17], [[4, 16, 18, 8], 17], [9, 17, 15, 10], [[2, 4, 6, 8, 10], 2], [NoMethodError, "private method 'rand' called for nil"], [NoMethodError, "private method 'rand' called for nil"], [RangeError, "random number too big 999"], [RangeError, "random number too small -1"], [1, 2], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], 3, [Array, Integer], 2]	__a = [];__a << ((1..20).to_a.sample(random: Random.new(7)));__a << ((1..20).to_
 63422c9740b43bc9e10c2b9e48ec2652	42	x = 1\n            binding.local_variable_set(:x, 42)\n            x\n
 6342f8bdbf7fb127f0fe51c760a63f08	[true, "z"]	r, w = IO.pipe\n            t = Thread.new { sleep 0.02; w.write "z"
@@ -3886,6 +3888,7 @@ d49c8d4441da431d63717840fad0ac31	[0.5, 1.0, 3]	def leaf\n          a = [1, 2]\n 
 d4b11df043d7e94411357a9fb1a4b7b9	true	"hello".index(/z/); $~.nil?
 d4b1bfe9eda9533ed079348cdba23ae4	"abcaあ"	"あ".rjust(5, "abc")
 d4e0ae9c56a69c0c332580eb22172e11	[[1, 2, 0], 999]	$flag = false\n        class KwNode\n          attr_reader :v\n          d
+d4ef2d9840eaf7679302fcc19b8b636f	[["#<Enumerator: #<A:0xXX>:foo(1, k: 2)>", "#<Enumerator: #<A:0xXX>:foo(k: )>", "#<Enumerator: #<A:0xXX>:foo(k: x)>", "#<Enumerator: #<A:0xXX>:foo(k: v)>", "#<Enumerator: #<A:0xXX>:foo(k: [1, 2])>", "#<Enumerator: #<A:0xXX>:foo(a: 1, b: 2)>", "#<Enumerator: #<A:0xXX>:foo(1, 2)>", "#<Enumerator: #<A:0xXX>:foo>", "#<Enumerator: #<A:0xXX>:foo(\\"x\\")>"], ["#<Enumerator: #<A:0xXX>:foo({k: 2, \\"s\\" => 3})>", "#<Enumerator: #<A:0xXX>:foo({\\"s\\" => 3})>"], ["#<Enumerator: [1, 2]:each>", "#<Enumerator: [1, 2]:each_slice(2)>", "#<Enumerator: 3:times>"], "#<Enumerator: uninitialized>"]	__a = [];__a << (\n            class A\n              def foo(*a, **k) = to_enum(:
 d506260ac377e92b5498fb8e6ec73750	true	GC.stat(nil).is_a?(Hash)
 d51949e16f4c8e33f4baabff8fb4b4dc	[[72, 104, 104], [73, 104, 104]]	src = "hello world"\n        out = []\n        20.times do |k|\n          
 d52efc39591dfa6b41cc1b74f647a5cf	["ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError"]	def g(a, b) = a + b\n        def f(...) = g(10, 20, 30, ...)\n        \n\n 

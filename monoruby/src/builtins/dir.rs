@@ -49,7 +49,7 @@ pub(super) fn init(globals: &mut Globals) {
         "foreach",
         foreach,
         1,
-        2,
+        1,
         false,
         &["encoding"],
         false,
@@ -180,22 +180,24 @@ fn read_dir_names(globals: &Globals, path: &RString) -> Result<Vec<Vec<u8>>> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/foreach.html]
 #[monoruby_builtin]
 fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    // The `encoding:` keyword lives in slot 2; the spare positional
-    // slot 1 carries it through an Enumerator replay (which passes
-    // positional arguments only).
-    let enc_val = lfp.try_arg(2).or_else(|| lfp.try_arg(1));
+    let enc_val = lfp.try_arg(1);
     // Without a block, return a (lazy, size-less) Enumerator that replays
     // `Dir.foreach(path)` when iterated — matching CRuby, which defers the
     // directory read (and any ENOENT) until enumeration.
     let Some(bh) = lfp.block() else {
+        // The Enumerator replays the keyword as a keyword (#1467),
+        // so `encoding:` needs no spare positional to ride in — and
+        // `Dir.foreach(path, enc)` is the ArgumentError CRuby raises.
         let method = IdentId::get_id("foreach");
-        let mut args = vec![lfp.arg(0)];
-        if let Some(e) = enc_val
-            && !e.is_nil()
-        {
-            args.push(e);
-        }
-        return vm.generate_enumerator(method, lfp.self_val(), args, pc);
+        let kw = match enc_val.filter(|e| !e.is_nil()) {
+            Some(e) => {
+                let mut map = RubyMap::default();
+                map.insert(Value::symbol_from_str("encoding"), e, vm, globals)?;
+                Some(Hashmap::new(Value::hash(map)))
+            }
+            None => None,
+        };
+        return vm.generate_enumerator_with_kw(method, lfp.self_val(), vec![lfp.arg(0)], kw, pc);
     };
     let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
     super::file::check_path_encoding(globals, &path)?;

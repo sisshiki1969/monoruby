@@ -300,7 +300,20 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals
         .store
         .set_default_copy_hooks(init_copy_fid, init_dup_fid, init_clone_fid);
-    globals.define_builtin_funcs_rest(kernel_class, "enum_for", &["to_enum"], to_enum);
+    // `**kwrest` so a keyword at the call site is captured as one
+    // rather than collected into the rest array as a trailing Hash and
+    // replayed positionally (#1467).
+    globals.define_builtin_funcs_with_kw(
+        kernel_class,
+        "enum_for",
+        &["to_enum"],
+        to_enum,
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
     globals.define_builtin_func_rest(kernel_class, "extend", extend);
     globals.define_builtin_inline_func(
         kernel_class,
@@ -4867,7 +4880,13 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             args[1..].to_vec(),
         )
     };
-    vm.generate_enumerator_with_size(method, lfp.self_val(), args, pc, size)
+    // An empty keyword hash is no keywords at all, not a positional
+    // `{}` for the replay to hand the method.
+    let kw = lfp
+        .try_arg(1)
+        .filter(|v| v.try_hash_ty().is_some_and(|h| !h.is_empty()))
+        .map(Hashmap::new);
+    vm.generate_enumerator_with_kw_and_size(method, lfp.self_val(), args, kw, pc, size)
 }
 
 ///
