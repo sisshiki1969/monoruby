@@ -1871,9 +1871,12 @@ mod tests {
     fn a_broken_pattern_is_refused_before_the_receiver() {
         // CRuby turns a String pattern into a Regexp *before* it
         // negotiates the two encodings, so a pattern broken in its own
-        // encoding is refused first — `#gsub` and `#scan` already had
-        // that order, `#sub` and `#split` did not. `#index` and
-        // `#partition` genuinely check compatibility first (#1522).
+        // encoding is refused first. `#split` walks the separator's
+        // own characters first for the same reason and had the two
+        // checks the other way round; `#sub`, `#gsub` and `#scan`
+        // already run in that order. `#index` and `#partition`
+        // genuinely do check compatibility first, and stay as they are
+        // — the order is per method, which is what this pins (#1522).
         run_test_once(
             r##"
               def sj(s) = s.dup.force_encoding("Shift_JIS")
@@ -1895,11 +1898,10 @@ mod tests {
     #[test]
     fn a_broken_source_names_the_character_not_the_byte() {
         // `rb_reg_initialize` refuses a source broken in its own
-        // encoding with one message whatever the encoding. Onigmo's own
-        // wording is its internal reading of the offending byte ("too
-        // short multibyte code string"), and a source tagged UTF-8 did
-        // not even reach it — the `&str` conversion raised a bare
-        // `RuntimeError` first (#1522).
+        // encoding with one message whatever the encoding — which
+        // `Regexp.new` now gives; this pins it over the shapes the
+        // constructor can be reached with, since the check sits on one
+        // path and every kind of broken source has to reach it.
         run_test_once(
             r##"
               def sj(s) = s.dup.force_encoding("Shift_JIS")

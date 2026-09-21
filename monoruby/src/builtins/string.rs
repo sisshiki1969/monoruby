@@ -3291,7 +3291,8 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             // `rb_str_split_m` walks the separator's own characters
             // before it negotiates the two encodings, so a separator
             // broken in its own encoding is refused first — the same
-            // order `#sub` / `#gsub` take through `get_pat` (#1522).
+            // order `#sub` / `#gsub` take through `get_pat_quoted`
+            // (#1522).
             if !sep.is_valid_encoding() {
                 return Err(MonorubyErr::argumenterr(format!(
                     "invalid byte sequence in {}",
