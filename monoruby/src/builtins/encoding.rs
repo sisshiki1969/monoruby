@@ -1116,7 +1116,14 @@ static EUCJP_FIXUP: JpFixup = JpFixup {
         ('\u{2016}', &[0xa1, 0xc2]),
         ('\u{301c}', &[0xa1, 0xc1]),
     ],
-    reject: &['\u{2225}', '\u{ff0d}', '\u{ff5e}', '\u{ffe0}', '\u{ffe1}', '\u{ffe2}'],
+    // `encoding_rs` writes U+00A5 as `5C` and U+203E as `7E` — JIS
+    // X 0201's readings of those two ASCII positions. CRuby's table
+    // has no cell for either character, so both are refused (and
+    // `5C` / `7E` read back as backslash and tilde, not as these).
+    reject: &[
+        '\u{2225}', '\u{ff0d}', '\u{ff5e}', '\u{ffe0}', '\u{ffe1}', '\u{ffe2}',
+        '\u{a5}', '\u{203e}',
+    ],
     // WHATWG fills `A9..AD` and `F9..FC`; CRuby maps nothing in either
     // range, 457 cells in all.
     dead_rows: &[(0xa9, 0xaf), (0xf5, 0xfe)],
@@ -1145,7 +1152,13 @@ static SJIS_FIXUP: JpFixup = JpFixup {
         ('\u{2016}', &[0x81, 0x61]),
         ('\u{301c}', &[0x81, 0x60]),
     ],
-    reject: &['\u{2225}', '\u{ff0d}', '\u{ff5e}', '\u{ffe0}', '\u{ffe1}', '\u{ffe2}'],
+    // U+00A5 and U+203E as above, plus U+0080: `encoding_rs` carries
+    // it through as the byte `80`, which Shift_JIS does not have a
+    // character at (#1500 is the same byte on the way in).
+    reject: &[
+        '\u{2225}', '\u{ff0d}', '\u{ff5e}', '\u{ffe0}', '\u{ffe1}', '\u{ffe2}',
+        '\u{80}', '\u{a5}', '\u{203e}',
+    ],
     // Row 13 (`87`), the NEC-selected IBM rows (`ED`/`EE`) and the
     // user-defined + IBM rows (`F0`..`FC`) — 2725 cells.
     dead_rows: &[(0x87, 0x87), (0xed, 0xee), (0xf0, 0xfc)],
@@ -1161,7 +1174,8 @@ static WINDOWS31J_FIXUP: JpFixup = JpFixup {
     second_plane: false,
     decode: &[],
     encode: &[],
-    reject: &['\u{2212}'],
+    // U+0080 / U+00A5 / U+203E as for Shift_JIS above.
+    reject: &['\u{2212}', '\u{80}', '\u{a5}', '\u{203e}'],
     dead_rows: &[],
     // Windows-31J alone carries the user-defined area; plain Shift_JIS
     // has nothing in those rows and refuses them in both directions.
@@ -1230,6 +1244,12 @@ struct JpDecoded<'a> {
     /// `true`, and `invalid: :replace` does not suppress it. `None`
     /// when the caller asked for those to be replaced instead.
     unmapped: Option<Vec<u8>>,
+    /// Where `unmapped`'s cell starts in the input. The streaming
+    /// path needs it to say how much it consumed and to emit what
+    /// converted before it (#1461); the one-shot path only reports.
+    unmapped_at: Option<usize>,
+    /// Where the first ill-formed piece starts, for the same reason.
+    invalid_at: Option<usize>,
 }
 
 /// The `Encoding` a fixup belongs to, for the character walk its
@@ -1295,7 +1315,13 @@ fn cell_decode<'a>(
     use crate::value::rvalue::MbcPiece;
     let plain = |bytes: &'a [u8]| {
         let (text, had_invalid) = rs.decode_without_bom_handling(bytes);
-        JpDecoded { text, had_invalid, unmapped: None }
+        JpDecoded {
+            text,
+            had_invalid,
+            unmapped: None,
+            unmapped_at: None,
+            invalid_at: None,
+        }
     };
     let Some((max_len, precise)) = crate::value::mbc_walker(enc) else {
         return plain(bytes);
@@ -1323,6 +1349,8 @@ fn cell_decode<'a>(
     let mut out = String::with_capacity(bytes.len());
     let mut had_invalid = false;
     let mut unmapped: Option<Vec<u8>> = None;
+    let mut unmapped_at: Option<usize> = None;
+    let mut invalid_at: Option<usize> = None;
     let mut run: Option<std::ops::Range<usize>> = None;
     // A run of plain cells, decoded together; if the codec stumbles
     // anywhere in it the cells are taken one at a time, so the one it
@@ -1352,6 +1380,7 @@ fn cell_decode<'a>(
                             if cell == [0x80] && enc.name() == "CP949" {
                                 out.push('\u{FFFD}');
                                 had_invalid = true;
+                                invalid_at.get_or_insert(p);
                                 p += n;
                                 continue;
                             }
@@ -1360,6 +1389,7 @@ fn cell_decode<'a>(
                                 None => {
                                     if unmapped.is_none() {
                                         unmapped = Some(cell.to_vec());
+                                        unmapped_at = Some(p);
                                     }
                                 }
                             }
@@ -1380,6 +1410,7 @@ fn cell_decode<'a>(
             // how `encoding_rs` groups them too.
             out.push('\u{FFFD}');
             had_invalid = true;
+            invalid_at.get_or_insert(start);
             continue;
         }
         if let Some(fx) = fx {
@@ -1395,6 +1426,7 @@ fn cell_decode<'a>(
                     None => {
                         if unmapped.is_none() {
                             unmapped = Some(piece.to_vec());
+                            unmapped_at = Some(start);
                         }
                     }
                 }
@@ -1407,7 +1439,13 @@ fn cell_decode<'a>(
         }
     }
     flush!();
-    JpDecoded { text: std::borrow::Cow::Owned(out), had_invalid, unmapped }
+    JpDecoded {
+        text: std::borrow::Cow::Owned(out),
+        had_invalid,
+        unmapped,
+        unmapped_at,
+        invalid_at,
+    }
 }
 
 /// CRuby's `UndefinedConversionError` message for a source cell with
@@ -4219,6 +4257,185 @@ fn stream_convert(
             }
             out.extend_from_slice(&unit);
         }
+        return (result, consumed, out, meta);
+    }
+    // EUC-JP / Shift_JIS / Windows-31J on the way *in*: `encoding_rs`
+    // carries WHATWG's tables, which disagree with CRuby's on the
+    // duplicate-mapping cells, read the NEC/IBM extension rows CRuby
+    // has no character for, and can only call a cell CRuby's *walk*
+    // accepts a malformed sequence. `String#encode` has gone through
+    // `jp_decode` since #1445; the streaming path had the raw codec,
+    // so the same bytes converted two ways depending on the API
+    // (#1461). `cell_decode` hands a clean buffer to the codec whole,
+    // so this costs one walk on the common path.
+    if let Some(fx) = jp_fixup(src_enc) {
+        let repl = opts.undef_replace.then(|| opts.replace_str(dst_enc));
+        let d = jp_decode(fx, src_bytes, repl.as_deref());
+        // Where the decode half first has something to say: a cell the
+        // buffer ended in the middle of, one that is ill-formed, or a
+        // well-formed one CRuby's table has no character for.
+        let decode_stop = match (
+            d.had_invalid.then_some(d.invalid_at).flatten(),
+            d.unmapped_at,
+        ) {
+            (Some(i), Some(u)) => Some(i.min(u)),
+            (Some(i), None) => Some(i),
+            (None, u) => u,
+        }
+        .filter(|at| !opts.invalid_replace || d.unmapped_at == Some(*at));
+        if let Some(stop) = decode_stop {
+            // Convert the part before it on its own. The encode half
+            // gets first refusal: a character with no cell in the
+            // destination, or a destination that fills up, happens
+            // *earlier* in the stream than whatever stopped the
+            // decoder, and that is what CRuby reports.
+            let head = jp_decode(fx, &src_bytes[..stop], repl.as_deref());
+            let (res, pivot_consumed, out, meta) = stream_convert(
+                head.text.as_bytes(),
+                E::Utf8,
+                dst_enc,
+                max_dst_bytes,
+                true,
+                opts,
+            );
+            // The head is complete text by construction, so a clean
+            // one answers `Finished`, or `SourceBufferEmpty` for the
+            // `partial_input` this call passes — neither is the encode
+            // half objecting.
+            if !matches!(
+                res,
+                StreamConvertResult::Finished | StreamConvertResult::SourceBufferEmpty
+            ) {
+                let consumed = if pivot_consumed == head.text.len() {
+                    stop
+                } else {
+                    pivot_prefix_consumed(src_bytes, src_enc, pivot_consumed, opts)
+                };
+                return (res, consumed, out, meta);
+            }
+            if d.unmapped_at == Some(stop) {
+                // A well-formed cell with no character is an
+                // *undefined* conversion reported against the source
+                // encoding — the decode half is the one that gave up.
+                let cell = d.unmapped.unwrap_or_default();
+                return (
+                    StreamConvertResult::UndefinedConversion,
+                    stop + cell.len(),
+                    out,
+                    ErrMeta {
+                        error_bytes: cell,
+                        readagain_bytes: vec![],
+                        decode_stage: true,
+                        ..ErrMeta::default()
+                    },
+                );
+            }
+            let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
+            // A malformed run is consumed, along with the bytes read
+            // to disprove it — those are held for `#putback` rather
+            // than left in `src`. A *pending* one is not: a cell split
+            // across two calls has to stay for the next one to finish.
+            let through_error = if matches!(kind, StreamConvertResult::InvalidByteSequence) {
+                (stop + meta.error_bytes.len() + meta.readagain_bytes.len()).min(src_bytes.len())
+            } else {
+                stop
+            };
+            return (kind, through_error, out, meta);
+        }
+        let (result, pivot_consumed, out, meta) = stream_convert(
+            d.text.as_bytes(),
+            E::Utf8,
+            dst_enc,
+            max_dst_bytes,
+            partial_input,
+            opts,
+        );
+        // The whole pivot converting is the common case and needs no
+        // mapping back; anything short of it is a capped destination or
+        // an encode-half error, where the source offset is the pivot
+        // prefix re-decoded.
+        let consumed = if pivot_consumed == d.text.len() {
+            src_bytes.len()
+        } else {
+            pivot_prefix_consumed(src_bytes, src_enc, pivot_consumed, opts)
+        };
+        let mut meta = meta;
+        if meta.dst_full_extra > 0 {
+            let end = (pivot_consumed + meta.dst_full_extra).min(d.text.len());
+            meta.dst_full_extra =
+                pivot_prefix_consumed(src_bytes, src_enc, end, opts).saturating_sub(consumed);
+        }
+        return (result, consumed, out, meta);
+    }
+    // The same three on the way *out*. `encoding_rs`'s encoders write
+    // the duplicate-mapping characters into cells that read back as
+    // their twins, have no EUC-JP JIS X 0212 plane at all, and will
+    // not write Windows-31J's user-defined area — all of which
+    // `jp_encode` settles. `String#encode` has used it since #1445;
+    // the streaming path had the raw codec (#1461).
+    if let Some(fx) = jp_fixup(dst_enc) {
+        // Decode uncapped: the cap is felt in destination bytes, and
+        // this encoding writes one or two of them per character.
+        let (result, consumed, pivot, meta) =
+            stream_convert(src_bytes, src_enc, E::Utf8, None, partial_input, opts);
+        let text = String::from_utf8_lossy(&pivot);
+        let mut out: Vec<u8> = Vec::with_capacity(text.len());
+        let mut buf = [0u8; 4];
+        for (at, c) in text.char_indices() {
+            // Where this character's bytes start, so the destination
+            // cap can cut back to a whole one.
+            let before = out.len();
+            match jp_encode(fx, c.encode_utf8(&mut buf)) {
+                Ok(bytes) => out.extend_from_slice(&bytes),
+                Err(_) if opts.undef_replace => {
+                    let repl = opts.replace_str(dst_enc);
+                    out.extend_from_slice(&jp_encode(fx, &repl).unwrap_or_default());
+                }
+                Err(bad) => {
+                    // Everything up to and including the character
+                    // with no cell is consumed; what follows is the
+                    // caller's to retry.
+                    let upto = at + c.len_utf8();
+                    return (
+                        StreamConvertResult::UndefinedConversion,
+                        pivot_prefix_consumed(src_bytes, src_enc, upto, opts),
+                        out,
+                        ErrMeta {
+                            error_bytes: bad.to_string().into_bytes(),
+                            readagain_bytes: vec![],
+                            ..ErrMeta::default()
+                        },
+                    );
+                }
+            }
+            if let Some(max) = max_dst_bytes
+                && out.len() > max
+            {
+                // Only the characters that fit are converted; the one
+                // the cap cut off is what CRuby reads ahead and
+                // buffers the output of (#1511). These write one or
+                // two bytes per character, so the cut goes back to
+                // this character's start rather than to `max` — half
+                // of it written *and* re-converted next call would
+                // duplicate those bytes. (CRuby fills the gap with the
+                // front of the character instead; that is #1532.)
+                out.truncate(before);
+                let written_through = pivot_prefix_consumed(src_bytes, src_enc, at, opts);
+                let through_tried =
+                    pivot_prefix_consumed(src_bytes, src_enc, at + c.len_utf8(), opts);
+                return (
+                    StreamConvertResult::DestinationBufferFull,
+                    written_through,
+                    out,
+                    ErrMeta {
+                        dst_full_extra: through_tried.saturating_sub(written_through),
+                        ..ErrMeta::default()
+                    },
+                );
+            }
+        }
+        // The pivot encoded cleanly, so the decode half's verdict — a
+        // clean finish or the error it stopped on — is the answer.
         return (result, consumed, out, meta);
     }
     // A single-byte table encoding on either side: `encoding_rs` has
@@ -9625,6 +9842,96 @@ mod tests {
                ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x },
                ec.last_error.message]
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_applies_the_japanese_table_corrections() {
+        // `String#encode` has gone through CRuby's own tables since
+        // #1445; `Encoding::Converter` had the raw WHATWG codec, so
+        // the same bytes converted two ways depending on the API
+        // (#1461). The three shapes that differ: a duplicate-mapping
+        // cell, an extension row CRuby has no character for, and a
+        // cell its *walk* accepts that the codec cannot read.
+        crate::tests::run_test_once(
+            r##"
+            [["EUC-JP", "\xA1\xBD"], ["EUC-JP", "\xF9\xA1"], ["EUC-JP", "\x8F\xA1\xA1"],
+             ["Shift_JIS", "\x81\x5C"], ["Shift_JIS", "\x87\x40"], ["Shift_JIS", "\x81\xAD"],
+             ["Windows-31J", "\x81\x5C"], ["Windows-31J", "\x87\x40"],
+             ["Windows-31J", "\x81\xAD"]].map do |enc, bytes|
+              s = bytes.dup.force_encoding(enc)
+              one = (s.encode("UTF-8").codepoints rescue $!.class.to_s)
+              cv = (Encoding::Converter.new(enc, "UTF-8").convert(bytes.dup).codepoints rescue $!.class.to_s)
+              [one, cv, one == cv]
+            end
+            "##,
+        );
+        // The same on the way out: the duplicate characters, EUC-JP's
+        // JIS X 0212 plane, Windows-31J's user-defined area, and the
+        // three ASCII-position characters WHATWG writes and CRuby has
+        // no cell for.
+        crate::tests::run_test_once(
+            r##"
+            [["EUC-JP", 0x2014], ["EUC-JP", 0x2015], ["EUC-JP", 0x9299],
+             ["Shift_JIS", 0x2212], ["Shift_JIS", 0xFF0D],
+             ["Windows-31J", 0xE000], ["Windows-31J", 0xE757],
+             ["EUC-JP", 0xA5], ["Shift_JIS", 0x203E], ["Windows-31J", 0x80]].map do |enc, cp|
+              s = [cp].pack("U")
+              one = (s.encode(enc).bytes rescue $!.class.to_s)
+              cv = (Encoding::Converter.new("UTF-8", enc).convert(s.dup).bytes rescue $!.class.to_s)
+              [one, cv, one == cv]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_japanese_cells_across_calls() {
+        // A cell split between two `primitive_convert`s has to stay
+        // pending rather than be consumed as a malformed run (#1461).
+        crate::tests::run_test_once(
+            r##"
+            ["\xA1\xBD\xA1\xC1", "\x8F\xA1\xA1"].flat_map do |bytes|
+              (1...bytes.bytesize).map do |cut|
+                ec = Encoding::Converter.new("EUC-JP", "UTF-8")
+                d = "".dup
+                s1 = bytes[0, cut].dup.force_encoding("EUC-JP")
+                r1 = ec.primitive_convert(s1, d, nil, nil, partial_input: true)
+                s2 = bytes[cut..].dup.force_encoding("EUC-JP")
+                r2 = ec.primitive_convert(s2, d)
+                [r1, r2, s1.bytes, s2.bytes, d.bytes]
+              end
+            end
+            "##,
+        );
+        // An undefined cell reached after a well-formed one, with the
+        // errinfo that names it against the *source* encoding — the
+        // decode half is what gave up.
+        crate::tests::run_test_once(
+            r##"
+            ["\x82\xA0\x81\xAD", "\x87\x40\x81\xAD", "A\x81\xAD", "\x81\xAD\x82\xA0"].map do |b|
+              ec = Encoding::Converter.new("Windows-31J", "UTF-8")
+              s = b.dup.force_encoding("Windows-31J")
+              d = "".dup
+              [ec.primitive_convert(s, d), s.bytes, d.bytes,
+               ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            "##,
+        );
+        // A malformed run is consumed together with the bytes read to
+        // disprove it (they are held for `#putback`); an incomplete
+        // tail is not.
+        crate::tests::run_test_once(
+            r##"
+            ec = Encoding::Converter.new("EUC-JP", "US-ASCII")
+            s = "ab\xFF\xFEcd".dup.force_encoding("EUC-JP")
+            d = "".dup
+            r = [ec.primitive_convert(s, d), s.bytes, d.bytes]
+            ec2 = Encoding::Converter.new("EUC-JP", "ISO-8859-1")
+            s2 = "abc\xa1def".dup
+            d2 = "".dup
+            r << ec2.primitive_convert(s2, d2, nil, 10) << [s2, d2] << ec2.putback
             "##,
         );
     }
