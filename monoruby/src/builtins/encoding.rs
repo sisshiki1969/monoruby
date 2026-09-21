@@ -7650,7 +7650,10 @@ mod tests {
               ("x".encode("EUC-JP") + String.name).encoding.name,
               (String.name + "x".encode("EUC-JP")).encoding.name,
               ("".b << Encoding::UTF_8.name).encoding.name,
-              (Class.new { def self.name = "あ" }.name.encoding.name rescue "n/a"),
+              # …and a name that is not ASCII keeps its own encoding.
+              (class Aあ; end
+               [Aあ.name, Aあ.name.encoding.name,
+                Aあ.to_s.encoding.name, Aあ.inspect.encoding.name]),
             ]
             "##,
         );
