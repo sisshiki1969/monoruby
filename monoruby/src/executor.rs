@@ -2211,15 +2211,22 @@ impl Executor {
                 v
             }
             _ => {
-                // Generic payload: the tag string names the hidden ivar
-                // (e.g. `UncaughtThrowError#tag`).
+                // `Encoding::InvalidByteSequenceError` is the one kind
+                // that reaches here with a payload, and it needs five
+                // *public* ivars: CRuby's message names only the
+                // offending bytes, so its accessors have nothing to
+                // parse the rest back out of. (`LocalJumpError` and
+                // `StopIteration` carry theirs through their own arms
+                // above.)
                 let payload = err.payload;
                 let v = Value::new_exception(err);
-                if let Some((val, name)) = payload {
-                    globals
-                        .store
-                        .set_ivar(v, IdentId::get_id(&format!("/{name}")), val)
-                        .unwrap();
+                if let Some((val, _)) = payload {
+                    for (ivar, field) in ENC_ERR_IVARS.iter().zip(val.as_array().iter()) {
+                        globals
+                            .store
+                            .set_ivar(v, IdentId::get_id(ivar), *field)
+                            .unwrap();
+                    }
                 }
                 v
             }
