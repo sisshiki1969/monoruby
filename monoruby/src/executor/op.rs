@@ -977,6 +977,46 @@ impl Executor {
     }
 
     ///
+    /// The `(source, loc)` of the Ruby (iseq) frame that called the
+    /// current native builtin, at its call site.
+    ///
+    /// Unlike [`Self::nearest_caller_location`] this takes the *first*
+    /// Ruby caller whether or not it is one of the interpreter's own
+    /// `builtins/` files: what it answers is where a definition was
+    /// written, not who to blame for a warning, and an `attr_accessor`
+    /// in an internal file was still written there. Returns `None` when
+    /// no iseq caller is found.
+    ///
+    pub(crate) fn nearest_caller_site(&self, store: &Store) -> Option<(SourceInfoRef, Loc)> {
+        // Same walk as `nearest_caller_location` — see there for the
+        // call-site pc mechanics.
+        let mut inner_cfp = self.cfp();
+        let mut cfp = inner_cfp.prev()?;
+        loop {
+            let func_id = cfp.lfp().func_id();
+            if let Some(iseq_id) = store[func_id].is_iseq() {
+                let info = &store[iseq_id];
+                let loc = {
+                    let slot = inner_cfp.caller_pc_slot();
+                    if slot != 0
+                        && slot % 8 == 0
+                        && let Some(pc) =
+                            unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _) }
+                        && info.contains_pc(pc)
+                    {
+                        info.sourcemap[info.get_pc_index(Some(pc)).to_usize()]
+                    } else {
+                        info.loc
+                    }
+                };
+                return Some((info.sourceinfo.clone(), loc));
+            }
+            inner_cfp = cfp;
+            cfp = cfp.prev()?;
+        }
+    }
+
+    ///
     /// The `"file:line"` of the nearest Ruby (iseq) caller of the current
     /// native builtin frame.
     ///

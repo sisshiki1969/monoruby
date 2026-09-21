@@ -871,6 +871,16 @@ struct FuncExt {
     /// carrying the ruby2_keywords flag, so a later `*rest` splat can
     /// turn them back into keywords.
     ruby2_keywords: bool,
+    /// Where an `attr_reader` / `attr_writer` / `attr_accessor` call
+    /// that defined this method was written.
+    ///
+    /// An attribute method has no bytecode of its own, so nothing else
+    /// on it remembers a source location — but CRuby's does
+    /// (`VM_METHOD_TYPE_IVAR` / `ATTRSET` carry the `attr_*` call site),
+    /// and both `#source_location` and `#inspect` report it (#1517).
+    /// `None` for every other kind of function, whose location comes
+    /// from its iseq.
+    def_site: Option<(SourceInfoRef, Loc)>,
     #[cfg(feature = "perf")]
     wrapper: Option<(monoasm::CodePtr, usize, monoasm::CodePtr, usize)>,
 }
@@ -988,6 +998,7 @@ impl FuncInfo {
                 params,
                 effect,
                 ruby2_keywords: false,
+                def_site: None,
                 #[cfg(feature = "perf")]
                 wrapper: None,
             }),
@@ -1308,6 +1319,16 @@ impl FuncInfo {
 
     pub(crate) fn set_ruby2_keywords(&mut self) {
         self.ext.ruby2_keywords = true;
+    }
+
+    /// Where the `attr_*` call that defined this attribute method was
+    /// written — see [`FuncExt::def_site`].
+    pub(crate) fn def_site(&self) -> Option<&(SourceInfoRef, Loc)> {
+        self.ext.def_site.as_ref()
+    }
+
+    pub(crate) fn set_def_site(&mut self, site: (SourceInfoRef, Loc)) {
+        self.ext.def_site = Some(site);
     }
 
     /// `**nil` — the definition explicitly forbids keyword arguments.

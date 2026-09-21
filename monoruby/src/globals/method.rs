@@ -994,12 +994,12 @@ impl Globals {
         class_id: ClassId,
         method_name: IdentId,
         visi: Visibility,
-    ) -> IdentId {
+    ) -> (IdentId, FuncId) {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
         let func_id = self.store.new_attr_reader(method_name, ivar_name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
-        method_name
+        (method_name, func_id)
     }
 
     ///
@@ -1010,13 +1010,13 @@ impl Globals {
         class_id: ClassId,
         method_name: IdentId,
         visi: Visibility,
-    ) -> IdentId {
+    ) -> (IdentId, FuncId) {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
         let method_name = IdentId::add_assign_postfix(method_name);
         let func_id = self.store.new_attr_writer(method_name, ivar_name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
-        method_name
+        (method_name, func_id)
     }
 
     ///
