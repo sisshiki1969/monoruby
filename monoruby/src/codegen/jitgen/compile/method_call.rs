@@ -302,17 +302,21 @@ impl<'a> JitContext<'a> {
     /// guarding the single class the inline cache happens to hold, so an
     /// off-class receiver costs a compare rather than a deopt.
     ///
-    /// The target's `FuncKind` does not matter here. What a set guard
+    /// The target's `FuncKind` does not decide this. What a set guard
     /// gives up is the *proof* of a single receiver class, and everything
     /// downstream that needs that proof already asks for it:
     /// `same_target_set_guarded` turns off `inline_class_new`, the inline
     /// operator generators and the baked-in callee body, and
     /// `recv_class_proven` turns off the ivar-slot lowerings and callee
     /// specialization. This used to admit `FuncKind::Builtin` alone, which
-    /// was a blunt way of saying the same thing — a builtin resolves
-    /// nothing against the receiver's class — and it left every
-    /// Ruby-defined shared target (a method in an included module, the
-    /// common shape) deopting on each off-class receiver.
+    /// left every Ruby-defined shared target — a method in an included
+    /// module, the common shape — deopting on each off-class receiver.
+    ///
+    /// What decides it is whether the proof was *worth* anything at this
+    /// site, which is the one thing the list above does not say: declining
+    /// a lowering is free, but declining to specialize the callee is not.
+    /// So the one case held back is the target this site would specialize;
+    /// see the comment on that test below for the measurements.
     ///
     fn pmc_same_target_classes(
         &mut self,
@@ -320,6 +324,26 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         func_id: FuncId,
     ) -> Option<Box<[ClassId]>> {
+        // A target this site would *specialize* keeps its single-class
+        // guard. The set guard is the better trade only when what it
+        // replaces is a plain call: it buys one compare in place of a
+        // deopt, but it gives up the proof of a receiver class, and with
+        // it the callee body compiled for that class. Inlining the callee
+        // for the class that dominates the traffic is worth more than
+        // serving every class through the wrapper — even when the set
+        // guard is doing its job. On `activerecord` the unrestricted form
+        // removed 40% of the deopts (252,000 -> 151,190, recompiles
+        // unchanged) and still ran 7% slower; declining here it is level,
+        // and `psych-load` (-2%) and `lobsters` (-1%) keep their gains.
+        //
+        // `is_simple_call` is the gate `specializable` itself leads with,
+        // so this declines exactly where specialization is possible and
+        // nowhere else. The share the PMC reports cannot decide this
+        // instead: it counts *misses*, not calls (see `pic_groups`), so
+        // "does one class dominate" is not a question its numbers answer.
+        if self.store[func_id].is_iseq().is_some() && self.store.is_simple_call(func_id, callid) {
+            return None;
+        }
         let callsite = &self.store[callid];
         let name = callsite.name?;
         let pmc = &callsite.pmc;
