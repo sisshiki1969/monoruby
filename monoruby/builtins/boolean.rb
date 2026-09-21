@@ -5,7 +5,7 @@ class TrueClass
   class << self
     undef_method :new
   end
-  TRUE_TO_S = "true".freeze
+  TRUE_TO_S = "true".dup.force_encoding(Encoding::US_ASCII).freeze
   def to_s
     TRUE_TO_S
   end
@@ -15,7 +15,7 @@ class FalseClass
   class << self
     undef_method :new
   end
-  FALSE_TO_S = "false".freeze
+  FALSE_TO_S = "false".dup.force_encoding(Encoding::US_ASCII).freeze
   def to_s
     FALSE_TO_S
   end
@@ -25,9 +25,16 @@ class NilClass
   class << self
     undef_method :new
   end
-  NIL_TO_S = "".freeze
+  NIL_TO_S = "".dup.force_encoding(Encoding::US_ASCII).freeze
   def to_s
     NIL_TO_S
+  end
+
+  # `rb_usascii_str_new2("nil")`: always US-ASCII, where the generic
+  # `#inspect` would take whatever encoding a `String#inspect` result
+  # carries. A fresh, unfrozen string each time, as CRuby's is.
+  def inspect
+    "nil".dup.force_encoding(Encoding::US_ASCII)
   end
 
   def to_a
