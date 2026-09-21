@@ -204,14 +204,10 @@ const PHYS_FPR_POOL: usize = 2;
 pub struct FPReg(pub(crate) usize);
 
 impl FPReg {
-    fn new(id: usize) -> Self {
-        Self(id)
-    }
-
     /// A pool-resident id, i.e. one whose physical `xmm` is the same in
     /// every frame. Only such an id can name a register two frames agree
     /// on: a spill id resolves against the frame's own stack base.
-    pub(crate) fn from_pool(id: usize) -> Self {
+    pub(crate) fn new(id: usize) -> Self {
         debug_assert!(id < PHYS_FPR_POOL);
         Self(id)
     }
@@ -1873,7 +1869,6 @@ impl Codegen {
             return_addr = unsafe { cfp.return_addr() };
         }
     }
-
 }
 
 #[repr(C)]
@@ -2155,10 +2150,7 @@ pub(crate) mod jit_stats {
             "    replay can allocate:             {}",
             g(&CHAIN_CONV_ALLOC)
         );
-        eprintln!(
-            "  specialized-call memo hits:        {}",
-            g(&SPEC_MEMO_HIT)
-        );
+        eprintln!("  specialized-call memo hits:        {}", g(&SPEC_MEMO_HIT));
         eprintln!(
             "    lookups that missed:             {}",
             g(&SPEC_MEMO_MISS)
