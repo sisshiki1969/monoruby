@@ -1291,41 +1291,84 @@ impl RStringInner {
                 }
                 res
             }
-            // ASCII-compatible, non-Unicode multibyte: ASCII bytes use
-            // the normal rules; every non-ASCII *character* becomes one
-            // `\x{HH..}` group of its raw bytes (e.g. EUC-JP "あ" ⇒
-            // `\x{A4A2}`).
-            Encoding::EucJp | Encoding::Sjis(_) => {
+            // ASCII-compatible, non-Unicode multibyte (EUC-JP,
+            // Shift_JIS, Emacs-Mule): CRuby's `rb_str_inspect` picks
+            // its escape by whether the bytes form a *character*.
+            //
+            // - ASCII characters use the normal rules;
+            // - a **valid** character with no rendering is written
+            //   whole, in one `\x{HH..}` — but a one-byte character
+            //   (Shift_JIS's halfwidth katakana, say) is just `\xHH`,
+            //   since there is nothing to group;
+            // - a byte that starts no character is written on its own,
+            //   `\xHH`, one per byte, and a printable byte after the
+            //   ill-formed run stays outside the escape.
+            //
+            // That last rule is why this walks with `walk_mbc` rather
+            // than `iter_char_bytes`: the walker separates complete
+            // characters from ill-formed subparts, which is exactly the
+            // distinction the two escapes encode.
+            ty if mbc_walker(ty).is_some() => {
+                let (max_len, precise) = mbc_walker(ty).unwrap();
+                let bytes = self.as_bytes();
                 let mut res = String::with_capacity(self.len());
-                for cb in self.iter_char_bytes() {
-                    if cb.len() == 1 && cb[0] < 0x80 {
-                        ascii_escape(&mut res, cb[0]);
-                    } else {
-                        res.push_str("\\x{");
-                        for b in cb {
-                            res.push_str(&format!("{:0>2X}", b));
+                let mut pos = 0;
+                let _ = walk_mbc(bytes, max_len, precise, |piece| {
+                    let len = match piece {
+                        MbcPiece::Char(cb) | MbcPiece::Bad(cb) => cb.len(),
+                    };
+                    let next = bytes.get(pos + 1).copied();
+                    pos += len;
+                    match piece {
+                        MbcPiece::Char(cb) if cb.len() == 1 => {
+                            ascii_escape_with_next(&mut res, cb[0], next)
                         }
-                        res.push('}');
+                        MbcPiece::Char(cb) => {
+                            res.push_str("\\x{");
+                            for b in cb {
+                                res.push_str(&format!("{b:0>2X}"));
+                            }
+                            res.push('}');
+                        }
+                        MbcPiece::Bad(cb) => {
+                            for b in cb {
+                                res.push_str(&format!("\\x{b:0>2X}"));
+                            }
+                        }
                     }
-                }
+                    Ok(())
+                });
                 res
             }
             // ASCII-incompatible stateful / no-codec byte encodings
-            // (ISO-2022-JP, UTF-7, CP50220/1, …): CRuby escapes
-            // *every* byte as `\xHH`, even printable ASCII.
+            // (ISO-2022-JP, UTF-7, CP50220/1, …): CRuby escapes *every*
+            // byte as `\xHH`, even printable ASCII — except the control
+            // characters that have a named escape, which keep it
+            // (`\e\x24\x42` for an ESC $ B sequence, not `\x1B\x24\x42`).
             Encoding::Iso2022Jp | Encoding::Other(_) => {
                 let mut res = String::with_capacity(self.len() * 4);
                 for b in self.as_bytes() {
-                    res.push_str(&format!("\\x{:0>2X}", b));
+                    match b {
+                        0x07 => res.push_str("\\a"),
+                        0x08 => res.push_str("\\b"),
+                        0x09 => res.push_str("\\t"),
+                        0x0a => res.push_str("\\n"),
+                        0x0b => res.push_str("\\v"),
+                        0x0c => res.push_str("\\f"),
+                        0x0d => res.push_str("\\r"),
+                        0x1b => res.push_str("\\e"),
+                        _ => res.push_str(&format!("\\x{b:0>2X}")),
+                    }
                 }
                 res
             }
             // US-ASCII, ASCII-8BIT, ISO-8859-N: pure per-byte —
             // ASCII rules for < 0x80, `\xHH` otherwise.
             _ => {
+                let bytes = self.as_bytes();
                 let mut res = String::with_capacity(self.len());
-                for c in self.as_bytes() {
-                    ascii_escape(&mut res, *c);
+                for (i, c) in bytes.iter().enumerate() {
+                    ascii_escape_with_next(&mut res, *c, bytes.get(i + 1).copied());
                 }
                 res
             }
@@ -1516,6 +1559,19 @@ fn utf8_inspect_with_lookahead(res: &mut String, bytes: &[u8], is_utf8: bool) {
             }
         }
     }
+}
+
+/// [`ascii_escape`] with the one-byte lookahead CRuby's `rb_str_inspect`
+/// applies in *every* ASCII-compatible encoding: a `#` immediately
+/// before `$`, `@` or `{` is written `\#`, so the inspected form does
+/// not read back as an interpolation. (`#dump` does the same, and
+/// already did so here for every encoding.)
+fn ascii_escape_with_next(s: &mut String, ch: u8, next: Option<u8>) {
+    if ch == b'#' && matches!(next, Some(b'$') | Some(b'@') | Some(b'{')) {
+        s.push_str("\\#");
+        return;
+    }
+    ascii_escape(s, ch);
 }
 
 fn ascii_escape(s: &mut String, ch: u8) {

@@ -353,8 +353,11 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             Some(ainfo) => {
                 // An empty array argument joins as a single empty component,
                 // so `File.join([], [])` == "/" (core/file/join_spec.rb).
+                // CRuby's `rb_file_join` builds that component with
+                // `rb_str_new(0, 0)`, which is BINARY — which is why
+                // `File.join([], [])` comes back ASCII-8BIT.
                 if ainfo.len() == 0 {
-                    parts.push((Vec::new(), crate::value::Encoding::Utf8));
+                    parts.push((Vec::new(), crate::value::Encoding::Ascii8));
                     return Ok(());
                 }
                 let id = val.id();
@@ -368,14 +371,38 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 seen.pop();
             }
             None => {
+                // A String component and one converted through `to_path` /
+                // `to_str` take different paths in CRuby, and word their NUL
+                // complaint differently: `StringValueCStr` says "string
+                // contains null byte", `rb_get_path`'s conversion says "path
+                // name contains null byte".
+                let was_string = val.is_rstring().is_some();
                 let s = val.coerce_to_path_rstring_allow_nul(vm, globals)?;
+                // The ASCII-compatibility check comes first: a UTF-16
+                // component raises `Encoding::CompatibilityError` rather than
+                // tripping the NUL scan on its zero bytes.
+                check_path_encoding(globals, &s)?;
                 if s.as_bytes().contains(&0) {
-                    return Err(MonorubyErr::argumenterr("string contains null byte"));
+                    return Err(MonorubyErr::argumenterr(if was_string {
+                        "string contains null byte"
+                    } else {
+                        "path name contains null byte"
+                    }));
                 }
                 parts.push((s.as_bytes().to_vec(), s.encoding()));
             }
         }
         Ok(())
+    }
+    // CRuby's `rb_file_join` walks the argument list twice: the first pass
+    // sizes the buffer and runs `check_path_encoding` over every *top-level*
+    // String, and only the second pass converts the rest and scans for NUL.
+    // So an ASCII-incompatible argument outranks a NUL byte in an earlier
+    // one, however deeply that one is nested.
+    for v in lfp.arg(0).as_array().iter() {
+        if let Some(rs) = v.is_rstring() {
+            check_path_encoding(globals, &rs)?;
+        }
     }
     let mut parts = vec![];
     let mut seen = vec![];
@@ -388,12 +415,42 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     // "usr/bin", "usr/" + "//bin" -> "usr//bin"); when exactly one side has one
     // it is reused; when neither does a "/" is inserted.
     let mut path: Vec<u8> = Vec::new();
-    // The joined result carries the first non-UTF-8 component's encoding
-    // (join_spec.rb "preserves the encoding of the path").
-    let mut enc = crate::value::Encoding::Utf8;
+    // CRuby's `rb_file_join` starts from a fresh buffer (BINARY — hence
+    // `File.join()` and `File.join([])` are ASCII-8BIT), copies the first
+    // component's encoding onto it, and `rb_str_buf_append`s the rest, so
+    // the encodings negotiate pairwise and content-dependently instead of
+    // by a "first non-UTF-8 component wins" rule.
+    //
+    // The negotiation is the ordinary append rule — a 7-bit side yields to
+    // a side that carries non-ASCII bytes, two non-ASCII sides in different
+    // encodings are incompatible — with one wrinkle a plain `String#<<`
+    // does not have: a US-ASCII *accumulator* always yields to a component
+    // in another encoding, even when that component is empty or 7-bit
+    // (`File.join(us_ascii_home, "x")` is UTF-8, while
+    // `us_ascii_home.dup << "x"` stays US-ASCII).
+    let mut enc = crate::value::Encoding::Ascii8;
+    let mut ascii_only = true;
     for (i, (part, part_enc)) in parts.iter().enumerate() {
-        if enc == crate::value::Encoding::Utf8 && *part_enc != crate::value::Encoding::Utf8 {
+        let part_ascii_only = part.iter().all(|b| *b < 0x80);
+        if i == 0 {
             enc = *part_enc;
+            ascii_only = part_ascii_only;
+        } else if enc == *part_enc {
+            ascii_only &= part_ascii_only;
+        } else if enc == crate::value::Encoding::UsAscii {
+            enc = *part_enc;
+            ascii_only &= part_ascii_only;
+        } else if ascii_only && part_ascii_only {
+            // Both sides 7-bit: the accumulated encoding wins.
+        } else if ascii_only {
+            enc = *part_enc;
+            ascii_only = false;
+        } else if !part_ascii_only {
+            return Err(MonorubyErr::incompatible_encoding(
+                &globals.store,
+                enc,
+                *part_enc,
+            ));
         }
         if i == 0 {
             path.extend_from_slice(part);
@@ -3336,6 +3393,44 @@ mod tests {
         // File.join array flattening + NUL check, and lexical dirname edges.
         run_test_once(
             r##"(a=File.directory?(STDIN); o=Object.new; def o.to_io; STDIN; end; b=File.directory?(o); c=(begin; File.directory?(1); rescue => e; e.class; end); d=(begin; File.directory?(nil); rescue => e; e.class; end); e2=File.join("a",["b","c"]); f=(begin; File.join("\x00x","y"); rescue => x; [x.class,x.message]; end); [a,b,c,d,e2,f,File.dirname("/.."),File.dirname("./b"),File.dirname("..")])"##,
+        );
+    }
+
+    #[test]
+    fn file_join_encoding_negotiation() {
+        // CRuby's `rb_file_join` starts from an empty BINARY buffer, copies
+        // the first component's encoding and appends the rest, so the result
+        // encoding is negotiated pairwise and content-dependently. The whole
+        // 10x10 cross product of (encoding x 7-bit/non-7-bit/empty) is
+        // compared against CRuby, including the incompatible pairs.
+        run_test_once(
+            r##"(s={us7: "a".encode("US-ASCII"), us0: "".encode("US-ASCII"), u87: "b", u8hi: "あ", u80: "", euc: "い".encode("EUC-JP"), euc7: "c".encode("EUC-JP"), bin7: "d".b, binhi: "ÿ".b, bin0: "".b}; r=[]; s.each { |ka, a| s.each { |kb, b| r << (begin; "#{ka}+#{kb}=#{File.join(a, b).encoding.name}"; rescue => e; "#{ka}+#{kb}=#{e.class}: #{e.message}"; end) } }; r)"##,
+        );
+    }
+
+    #[test]
+    fn file_join_encoding_edges() {
+        // Three-component folds (the US-ASCII accumulator yielding, and a
+        // 7-bit component keeping the accumulated encoding), the BINARY
+        // empty result, nested arrays, and the two NUL / ASCII-compatibility
+        // complaints — which CRuby words differently for a String component
+        // and for one converted through `to_path`, and orders so that an
+        // ASCII-incompatible argument outranks an earlier NUL byte.
+        run_test_once(
+            r##"(f=->(&b){ begin; v=b.call; v.is_a?(String) ? [v.bytes, v.encoding.name] : v; rescue => e; [e.class.to_s, e.message]; end }; o=Object.new; def o.to_path; "a b"; end; [
+              f.call { File.join("a".encode("US-ASCII"), "b".encode("US-ASCII"), "c") },
+              f.call { File.join("b", "a".encode("US-ASCII"), "c".encode("EUC-JP")) },
+              f.call { File.join("あ", "b".b, "c".encode("US-ASCII")) },
+              f.call { File.join() },
+              f.call { File.join([]) },
+              f.call { File.join([], []) },
+              f.call { File.join("a".encode("US-ASCII"), ["あ"]) },
+              f.call { File.join("a b", "x") },
+              f.call { File.join("a b", "x".encode("UTF-16LE")) },
+              f.call { File.join(["a b"], "x".encode("UTF-16LE")) },
+              f.call { File.join(o, "x") },
+              f.call { File.join("あ".encode("UTF-16BE")) },
+            ])"##,
         );
     }
 

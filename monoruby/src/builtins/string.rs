@@ -68,12 +68,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "slice!", slice_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp!", chomp_, 0, 1, false);
-    globals.define_builtin_func(STRING_CLASS, "strip", strip, 0);
-    globals.define_builtin_func(STRING_CLASS, "strip!", strip_, 0);
-    globals.define_builtin_func(STRING_CLASS, "rstrip", rstrip, 0);
-    globals.define_builtin_func(STRING_CLASS, "rstrip!", rstrip_, 0);
-    globals.define_builtin_func(STRING_CLASS, "lstrip", lstrip, 0);
-    globals.define_builtin_func(STRING_CLASS, "lstrip!", lstrip_, 0);
+    globals.define_builtin_func_rest(STRING_CLASS, "strip", strip);
+    globals.define_builtin_func_rest(STRING_CLASS, "strip!", strip_);
+    globals.define_builtin_func_rest(STRING_CLASS, "rstrip", rstrip);
+    globals.define_builtin_func_rest(STRING_CLASS, "rstrip!", rstrip_);
+    globals.define_builtin_func_rest(STRING_CLASS, "lstrip", lstrip);
+    globals.define_builtin_func_rest(STRING_CLASS, "lstrip!", lstrip_);
     globals.define_builtin_func_with(STRING_CLASS, "sub", sub, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "sub!", sub_, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "gsub", gsub, 1, 2, false);
@@ -723,6 +723,9 @@ fn casecmp_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         }
     }
     if lhs_enc.is_utf8_compatible() && rhs_enc.is_utf8_compatible() {
+        // Case folding is case mapping, so a broken receiver gets
+        // `rb_str_casemap`'s wording rather than the encoding check's.
+        casemap_mustnot_broken(&lhs_inner)?;
         // UTF-8 compatible: do Unicode case folding.
         let lhs_str = lhs_inner.check_utf8()?;
         let rhs_str = std::str::from_utf8(&rhs_bytes)
@@ -1136,6 +1139,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // offset, not a byte offset, so multibyte subjects match CRuby).
     if other.is_regex().is_some() {
         let s = self_val.as_rstring_inner();
+        mustnot_broken(&s)?;
         // Native byte match for non-UTF-8 subjects with an Onigmo codec
         // (see `String#match`); the result is the character index of the
         // match start.
@@ -1407,6 +1411,12 @@ fn slice_subject<'a>(
     regexp_pattern: bool,
     view: &'a mut Option<std::borrow::Cow<'a, str>>,
 ) -> Result<Subject<'a>> {
+    // A Regexp pattern walks characters, so CRuby refuses a receiver
+    // that is broken under its own encoding — including the native-bytes
+    // path below, which Onigmo would otherwise walk happily.
+    if regexp_pattern {
+        mustnot_broken(inner)?;
+    }
     if let Some(subject) = re.native_subject(inner, &globals.store, regexp_pattern)? {
         return Ok(subject);
     }
@@ -2627,6 +2637,10 @@ pub(crate) fn string_start_with(
     let self_bytes = self_inner.as_bytes();
     for v in args.iter() {
         if let Some(re) = v.is_regex() {
+            // A Regexp prefix walks characters, so a receiver that is
+            // broken under its own encoding is refused first — with its
+            // own encoding named, not the UTF-8 the view would report.
+            mustnot_broken(self_inner)?;
             // A byte-oriented receiver with 8-bit content is walked on
             // its raw bytes (#1377); anything else must be valid UTF-8.
             let text;
@@ -2948,6 +2962,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         && let Some(sep_inner) = a0.is_rstring_inner()
         && sep_inner.as_bytes().is_empty()
     {
+        mustnot_broken(&recv)?;
         let lim = if let Some(a1) = lfp.try_arg(1) {
             a1.coerce_to_int_i64(vm, globals)?
         } else {
@@ -3072,6 +3087,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         },
     };
 
+    mustnot_broken(&self_.as_rstring_inner())?;
     let split_mapped = self_.as_rstring_inner().needs_byte_mapping();
     let split_enc = self_.as_rstring_inner().encoding();
     let view = self_.as_rstring_inner().regex_view()?;
@@ -3737,6 +3753,159 @@ fn rstrip_broken_check(store: &Store, inner: &RStringInner) -> Result<()> {
     ))
 }
 
+/// Ruby 4.0's character-selector arguments for the strip family.
+///
+/// Each argument is a `tr`-style set — `^` negates, `a-z` is a range,
+/// `\\` escapes — and a character is trimmed only when *every* set
+/// contains it, the same intersection `String#count` and `#delete`
+/// apply. Returns the `(start, end)` byte offsets of the kept span;
+/// `left` / `right` say which ends to trim, so `#lstrip` and `#rstrip`
+/// share the walk.
+///
+/// With no arguments this is not called at all: the no-selector form
+/// strips CRuby's whitespace-plus-NUL byte set, which is what
+/// [`strip_start`] / [`strip_end`] do.
+fn strip_selector_offsets(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    inner: &RStringInner,
+    args: Array,
+    left: bool,
+    right: bool,
+) -> Result<(usize, usize)> {
+    check_selector_encodings(globals, inner, args)?;
+    // The units to trim, as (offset, bytes). They have to be the same
+    // units the membership test below works in, or the two walks slide
+    // out of step: `regex_view` maps a byte-oriented receiver one byte
+    // to one char, while a UTF-8 one keeps whole characters. That is
+    // the same per-byte-vs-per-character split `String#count` and
+    // `#delete` have on an EUC-JP / Shift_JIS receiver (#1475).
+    let by_byte = inner.needs_byte_mapping();
+    let mut pieces: Vec<(usize, &[u8])> = Vec::new();
+    let mut pos = 0;
+    if by_byte {
+        for (i, b) in inner.as_bytes().iter().enumerate() {
+            pieces.push((i, std::slice::from_ref(b)));
+        }
+    } else {
+        for cb in inner.iter_char_bytes() {
+            pieces.push((pos, cb));
+            pos += cb.len();
+        }
+    }
+    // Membership per character, in the same two flavours `String#count`
+    // uses: ASCII-only sets walked over a non-UTF-8 receiver's own
+    // characters, or the `regex_view` both sides are mapped into.
+    let member: Vec<bool> = if let Some(sets) = nonutf8_ascii_charsets(globals, inner, args)? {
+        pieces.iter().map(|(_, cb)| ascii_sets_contain(&sets, cb)).collect()
+    } else {
+        let strs: Vec<String> = args
+            .iter()
+            .map(|arg| tr_set_view(vm, globals, *arg))
+            .collect::<Result<Vec<_>>>()?;
+        let sets: Vec<Charset> = strs
+            .iter()
+            .map(|s| Charset::parse(s))
+            .collect::<Result<_>>()?;
+        // A valid receiver goes through `regex_view`, whose characters
+        // line up one-for-one with `iter_char_bytes` and are in the
+        // same space the sets were mapped into. A broken one cannot be
+        // viewed at all: only its ASCII bytes can match, and the walk
+        // stops at the first byte that is not a character anyway —
+        // where the checks below raise, as they do without selectors.
+        let view = if inner.is_valid_encoding() {
+            Some(inner.regex_view()?)
+        } else {
+            None
+        };
+        match &view {
+            Some(v) => v
+                .chars()
+                .map(|c| sets.iter().all(|s| s.contains_char(c)))
+                .collect(),
+            None => pieces
+                .iter()
+                .map(|(_, cb)| {
+                    cb.len() == 1
+                        && cb[0] < 0x80
+                        && sets.iter().all(|s| s.contains_char(cb[0] as char))
+                })
+                .collect(),
+        }
+    };
+    let mut start = 0;
+    let mut end = inner.len();
+    if left {
+        for (i, (off, cb)) in pieces.iter().enumerate() {
+            if !member.get(i).copied().unwrap_or(false) {
+                break;
+            }
+            start = off + cb.len();
+        }
+        // CRuby's `lstrip_offset` decodes the first character it keeps,
+        // so an invalid one there is an ArgumentError — with or without
+        // selectors.
+        lstrip_invalid_check(inner, start)?;
+    }
+    if right {
+        // `rstrip_offset` refuses to walk a broken receiver at all.
+        rstrip_broken_check(&globals.store, inner)?;
+        for (i, (off, _)) in pieces.iter().enumerate().rev() {
+            if *off < start || !member.get(i).copied().unwrap_or(false) {
+                break;
+            }
+            end = *off;
+        }
+    }
+    Ok((start, end))
+}
+
+/// CRuby's `rb_enc_check` between the receiver and each `tr`-style
+/// selector argument, which happens before any set is parsed: a
+/// selector whose encoding does not combine with the receiver's is an
+/// `Encoding::CompatibilityError`, even when the receiver is UTF-8
+/// (`"\u3042".count("\u3042".encode("EUC-JP"))`).
+/// [`check_selector_encodings`] for `#tr` / `#tr_s`, whose two sets
+/// arrive as fixed arguments rather than a rest array. CRuby checks
+/// both against the receiver, so `"\u3042".tr("a", euc_jp_set)` raises
+/// just as `"\u3042".tr(euc_jp_set, "x")` does.
+fn check_tr_arg_encodings(
+    globals: &Globals,
+    recv: &RStringInner,
+    from: Value,
+    to: Value,
+) -> Result<()> {
+    for a in [from, to] {
+        let Some(set) = a.is_rstring_inner() else {
+            continue;
+        };
+        if recv.compatible_encoding(&set).is_none() {
+            return Err(MonorubyErr::incompatible_encoding(
+                &globals.store,
+                recv.encoding(),
+                set.encoding(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_selector_encodings(globals: &Globals, recv: &RStringInner, args: Array) -> Result<()> {
+    for a in args.iter() {
+        let Some(set) = a.is_rstring_inner() else {
+            continue;
+        };
+        if recv.compatible_encoding(&set).is_none() {
+            return Err(MonorubyErr::incompatible_encoding(
+                &globals.store,
+                recv.encoding(),
+                set.encoding(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 ///
 /// ### String#strip
 ///
@@ -3744,14 +3913,19 @@ fn rstrip_broken_check(store: &Store, inner: &RStringInner) -> Result<()> {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/strip.html]
 #[monoruby_builtin]
-fn strip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn strip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    let bytes = inner.as_bytes();
-    lstrip_invalid_check(&inner, strip_start(bytes, bytes.len()))?;
-    rstrip_broken_check(&globals.store, &inner)?;
-    let new_end = strip_end(bytes);
-    let new_start = strip_start(bytes, new_end);
+    let args = lfp.arg(0).as_array();
+    let (new_start, new_end) = if args.len() == 0 {
+        let bytes = inner.as_bytes();
+        lstrip_invalid_check(&inner, strip_start(bytes, bytes.len()))?;
+        rstrip_broken_check(&globals.store, &inner)?;
+        let end = strip_end(bytes);
+        (strip_start(bytes, end), end)
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, true, true)?
+    };
     // Zero-copy shared substring (CoW) for long enough results.
     Ok(string_substring(self_val, new_start, new_end))
 }
@@ -3767,12 +3941,18 @@ fn strip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    let bytes = inner.as_bytes();
-    lstrip_invalid_check(&inner, strip_start(bytes, bytes.len()))?;
-    rstrip_broken_check(&globals.store, &inner)?;
-    let new_end = strip_end(bytes);
-    let new_start = strip_start(bytes, new_end);
-    if new_end - new_start == bytes.len() {
+    let args = lfp.arg(0).as_array();
+    let len = inner.len();
+    let (new_start, new_end) = if args.len() == 0 {
+        let bytes = inner.as_bytes();
+        lstrip_invalid_check(&inner, strip_start(bytes, bytes.len()))?;
+        rstrip_broken_check(&globals.store, &inner)?;
+        let end = strip_end(bytes);
+        (strip_start(bytes, end), end)
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, true, true)?
+    };
+    if new_end - new_start == len {
         return Ok(Value::nil());
     }
     let trimmed = RStringInner::from_substring(inner, new_start, new_end);
@@ -3787,12 +3967,18 @@ fn strip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/rstrip.html]
 #[monoruby_builtin]
-fn rstrip(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn rstrip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    rstrip_broken_check(&globals.store, &self_val.as_rstring_inner())?;
-    let new_end = strip_end(self_val.as_rstring_inner().as_bytes());
+    let inner = self_val.as_rstring_inner();
+    let args = lfp.arg(0).as_array();
+    let (start, new_end) = if args.len() == 0 {
+        rstrip_broken_check(&globals.store, &inner)?;
+        (0, strip_end(inner.as_bytes()))
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, false, true)?
+    };
     // Zero-copy shared substring (CoW) for long enough results.
-    Ok(string_substring(self_val, 0, new_end))
+    Ok(string_substring(self_val, start, new_end))
 }
 
 ///
@@ -3806,12 +3992,17 @@ fn rstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    rstrip_broken_check(&globals.store, &inner)?;
-    let new_end = strip_end(inner.as_bytes());
-    if new_end == inner.len() {
+    let args = lfp.arg(0).as_array();
+    let (start, new_end) = if args.len() == 0 {
+        rstrip_broken_check(&globals.store, &inner)?;
+        (0, strip_end(inner.as_bytes()))
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, false, true)?
+    };
+    if new_end - start == inner.len() {
         return Ok(Value::nil());
     }
-    let trimmed = RStringInner::from_substring(inner, 0, new_end);
+    let trimmed = RStringInner::from_substring(inner, start, new_end);
     lfp.self_val().replace_with_inner(trimmed);
     Ok(lfp.self_val())
 }
@@ -3823,15 +4014,20 @@ fn rstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/lstrip.html]
 #[monoruby_builtin]
-fn lstrip(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn lstrip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    let bytes = inner.as_bytes();
-    let new_start = strip_start(bytes, bytes.len());
-    lstrip_invalid_check(&inner, new_start)?;
-    let s_len = bytes.len();
+    let args = lfp.arg(0).as_array();
+    let (new_start, end) = if args.len() == 0 {
+        let bytes = inner.as_bytes();
+        let start = strip_start(bytes, bytes.len());
+        lstrip_invalid_check(&inner, start)?;
+        (start, bytes.len())
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, true, false)?
+    };
     // Zero-copy shared substring (CoW) for long enough results.
-    Ok(string_substring(self_val, new_start, s_len))
+    Ok(string_substring(self_val, new_start, end))
 }
 
 ///
@@ -3845,12 +4041,18 @@ fn lstrip_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let self_val = lfp.self_val();
     let inner = self_val.as_rstring_inner();
-    let new_start = strip_start(inner.as_bytes(), inner.len());
-    lstrip_invalid_check(&inner, new_start)?;
-    if new_start == 0 {
+    let args = lfp.arg(0).as_array();
+    let (new_start, end) = if args.len() == 0 {
+        let start = strip_start(inner.as_bytes(), inner.len());
+        lstrip_invalid_check(&inner, start)?;
+        (start, inner.len())
+    } else {
+        strip_selector_offsets(vm, globals, &inner, args, true, false)?
+    };
+    if end - new_start == inner.len() {
         return Ok(Value::nil());
     }
-    let result = RStringInner::from_substring(inner, new_start, inner.len());
+    let result = RStringInner::from_substring(inner, new_start, end);
     lfp.self_val().replace_with_inner(result);
     Ok(lfp.self_val())
 }
@@ -4066,6 +4268,51 @@ fn sub_main(
     }
 }
 
+/// CRuby's `mustnot_broken`: character work on a receiver that is
+/// broken *under its own encoding* is refused before the method runs.
+///
+/// monoruby's equivalent used to be `regex_view`'s UTF-8 check, which
+/// only ever fired for UTF-8 (and US-ASCII, whose bytes it reads as
+/// UTF-8) — an EUC-JP / Shift_JIS / Emacs-Mule receiver walked on
+/// happily and answered for bytes that are not characters in it.
+fn mustnot_broken(inner: &RStringInner) -> Result<()> {
+    if inner.is_valid_encoding() {
+        return Ok(());
+    }
+    Err(MonorubyErr::argumenterr(format!(
+        "invalid byte sequence in {}",
+        inner.encoding().name()
+    )))
+}
+
+/// True for the encodings a character can span more than one byte in —
+/// the ones monoruby walks itself, plus UTF-8. CRuby's
+/// `single_byte_optimizable` receivers (US-ASCII, BINARY, ISO-8859-N)
+/// take a byte path in `#tr`, `#squeeze` and the case-mapping family,
+/// which never looks at a character, so a broken one is not refused
+/// there.
+fn multibyte_encoding(enc: crate::value::Encoding) -> bool {
+    enc == crate::value::Encoding::Utf8 || crate::value::mbc_walker(enc).is_some()
+}
+
+/// [`mustnot_broken`] for the methods CRuby only refuses when the
+/// receiver's encoding actually has multi-byte characters.
+fn mustnot_broken_multibyte(inner: &RStringInner) -> Result<()> {
+    if !multibyte_encoding(inner.encoding()) {
+        return Ok(());
+    }
+    mustnot_broken(inner)
+}
+
+/// The case-mapping family words the same refusal differently — the
+/// message comes from `rb_str_casemap`, not from the encoding check.
+fn casemap_mustnot_broken(inner: &RStringInner) -> Result<()> {
+    if !multibyte_encoding(inner.encoding()) || inner.is_valid_encoding() {
+        return Ok(());
+    }
+    Err(MonorubyErr::argumenterr("input string invalid"))
+}
+
 /// How a pattern operation walks the receiver `self_val` with the pattern
 /// `pattern`: `(mapped, native)` — `mapped` when the receiver has 8-bit
 /// content in a byte-oriented encoding Onigmo has no codec for (or the
@@ -4105,6 +4352,13 @@ fn pattern_subject(
     // receiver's buffer be reallocated while the subject is in use.
     let inner: &'static RStringInner =
         unsafe { std::mem::transmute::<&RStringInner, &'static RStringInner>(self_val.as_rstring_inner()) };
+    // A Regexp pattern walks characters, so a broken receiver is refused
+    // — on the native-bytes path too, which Onigmo would otherwise walk
+    // happily. A String pattern is a literal search CRuby serves on
+    // broken bytes as well.
+    if pattern.is_regex().is_some() {
+        mustnot_broken(inner)?;
+    }
     match pattern_mode(globals, self_val, pattern)? {
         (_, Some(native)) => Ok((Subject::bytes(inner, native), None)),
         (mapped, None) => {
@@ -4401,6 +4655,7 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // Take a stable frozen snapshot of the receiver up front, so every
     // match can be a zero-copy shared (CoW) view even if a block mutates
     // the receiver mid-scan. `$~` snapshots share the same buffer.
+    mustnot_broken(&self_.as_rstring_inner())?;
     self_.as_rstring_inner().regex_view()?;
     check_pattern_encoding_compat(&self_.as_rstring_inner(), lfp.arg(0), globals)?;
     let subject_val = string_snapshot(self_);
@@ -4581,6 +4836,9 @@ fn string_match(
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
     let self_ = lfp.self_val();
     let s = self_.as_rstring_inner();
+    // `#match` / `#match?` compile a Regexp even from a String pattern,
+    // so a broken receiver is refused whatever the argument is.
+    mustnot_broken(&s)?;
     // A subject in a non-UTF-8 encoding Onigmo has a native codec for
     // (BINARY with 8-bit content, EUC-JP, Shift_JIS, ...) is matched on
     // its raw bytes, so the MatchData's strings and byte offsets are the
@@ -4819,6 +5077,9 @@ fn string_match_(
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
     let self_ = lfp.self_val();
     let s = self_.as_rstring_inner();
+    // `#match?` compiles a Regexp even from a String pattern, so a
+    // broken receiver is refused whatever the argument is.
+    mustnot_broken(&s)?;
     // Native byte match for non-UTF-8 subjects with an Onigmo codec (see
     // `String#match`).
     if s.code_range() != CodeRange::SevenBit
@@ -7739,6 +8000,7 @@ fn unicode_noncompat_case(self_val: Value, op: CaseOp, mode: CaseMode) -> Option
 #[monoruby_builtin]
 fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Upcase)?;
+    casemap_mustnot_broken(&lfp.self_val().as_rstring_inner())?;
     let self_val = lfp.self_val();
     if let Some(inner) = self_val.is_rstring_inner() {
         if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Upcase, mode) {
@@ -7768,6 +8030,7 @@ fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Upcase)?;
+    casemap_mustnot_broken(&lfp.self_val().as_rstring_inner())?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
     let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Upcase, mode);
@@ -7812,6 +8075,7 @@ fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
+    casemap_mustnot_broken(&lfp.self_val().as_rstring_inner())?;
     let self_val = lfp.self_val();
     if let Some(inner) = self_val.is_rstring_inner() {
         if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Downcase, mode) {
@@ -7837,6 +8101,7 @@ fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[monoruby_builtin]
 fn downcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
+    casemap_mustnot_broken(&lfp.self_val().as_rstring_inner())?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
     let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Downcase, mode);
@@ -7886,6 +8151,7 @@ fn capitalize(
     _: BytecodePtr,
 ) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
+    casemap_mustnot_broken(&lfp.self_val().as_rstring_inner())?;
     let self_val = lfp.self_val();
     if let Some(inner) = self_val.is_rstring_inner() {
         if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Capitalize, mode) {
@@ -7916,6 +8182,7 @@ fn capitalize_(
     _: BytecodePtr,
 ) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
+    casemap_mustnot_broken(&lfp.self_val().as_rstring_inner())?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
     let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Capitalize, mode);
@@ -7959,6 +8226,7 @@ fn capitalize_(
 #[monoruby_builtin]
 fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
+    casemap_mustnot_broken(&lfp.self_val().as_rstring_inner())?;
     let self_val = lfp.self_val();
     if let Some(inner) = self_val.is_rstring_inner() {
         if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Swapcase, mode) {
@@ -7984,6 +8252,7 @@ fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[monoruby_builtin]
 fn swapcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
+    casemap_mustnot_broken(&lfp.self_val().as_rstring_inner())?;
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     let mut self_val = lfp.self_val();
     let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Swapcase, mode);
@@ -8626,6 +8895,8 @@ fn delete_compute(
         ));
     }
     let inner = self_val.as_rstring_inner();
+    check_selector_encodings(globals, &inner, args)?;
+    mustnot_broken(&inner)?;
     if let Some(b) = single_ascii_byte_set(args, &inner) {
         let bytes = inner.as_bytes();
         let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
@@ -8730,9 +9001,12 @@ fn transform_result(res: &str, self_val: Value, mapped: bool) -> Value {
 #[monoruby_builtin]
 fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
+    check_tr_arg_encodings(globals, &inner, lfp.arg(0), lfp.arg(1))?;
+    // `#tr` walks characters only where the encoding has them.
+    mustnot_broken_multibyte(inner)?;
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
     let to = tr_set_view(vm, globals, lfp.arg(1))?;
-    let inner = self_.as_rstring_inner();
     if let Some((bytes, _)) = ascii_tr_translate(inner, &from, &to, false)? {
         return Ok(Value::string_from_inner(RStringInner::from_ascii_bytes(
             bytes,
@@ -8760,6 +9034,13 @@ fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
+    check_tr_arg_encodings(
+        globals,
+        &lfp.self_val().as_rstring_inner(),
+        lfp.arg(0),
+        lfp.arg(1),
+    )?;
+    mustnot_broken_multibyte(&lfp.self_val().as_rstring_inner())?;
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
     let to = tr_set_view(vm, globals, lfp.arg(1))?;
     let mut self_ = lfp.self_val();
@@ -8810,9 +9091,12 @@ fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
+    let inner = self_.as_rstring_inner();
+    check_tr_arg_encodings(globals, &inner, lfp.arg(0), lfp.arg(1))?;
+    // `#tr_s` squeezes, which CRuby refuses on any broken receiver.
+    mustnot_broken(inner)?;
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
     let to = tr_set_view(vm, globals, lfp.arg(1))?;
-    let inner = self_.as_rstring_inner();
     if let Some((bytes, _)) = ascii_tr_translate(inner, &from, &to, true)? {
         return Ok(Value::string_from_inner(RStringInner::from_ascii_bytes(
             bytes,
@@ -8840,6 +9124,13 @@ fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn tr_s_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
+    check_tr_arg_encodings(
+        globals,
+        &lfp.self_val().as_rstring_inner(),
+        lfp.arg(0),
+        lfp.arg(1),
+    )?;
+    mustnot_broken(&lfp.self_val().as_rstring_inner())?;
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
     let to = tr_set_view(vm, globals, lfp.arg(1))?;
     let mut self_ = lfp.self_val();
@@ -9278,6 +9569,8 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
+    check_selector_encodings(globals, inner, args)?;
+    mustnot_broken(inner)?;
     if let Some(b) = single_ascii_byte_set(args, inner) {
         let n = memchr::memchr_iter(b, inner.as_bytes()).count();
         return Ok(Value::integer(n as i64));
@@ -9372,6 +9665,8 @@ fn squeeze_compute(
 ) -> Result<RStringInner> {
     let args = rest_arg.as_array();
     let inner = self_val.as_rstring_inner();
+    check_selector_encodings(globals, &inner, args)?;
+    mustnot_broken_multibyte(&inner)?;
     if let Some(b) = single_ascii_byte_set(args, &inner) {
         let bytes = inner.as_bytes();
         let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(bytes.len());
@@ -11794,6 +12089,166 @@ mod tests {
         ]);
         run_test_error(r##""abcd".delete"##);
         run_test_error(r##""abcd".delete("d-a")"##);
+    }
+
+    #[test]
+    fn strip_character_selectors() {
+        // Ruby 4.0 gave the strip family the same `tr`-style selector
+        // arguments `#count` / `#delete` / `#squeeze` / `#tr` take:
+        // several arguments intersect, `^` negates, `a-z` is a range,
+        // `\\` escapes, and the bang forms answer nil when nothing was
+        // removed.
+        run_test_once(
+            r##"(f=->(m, s, *a){ begin; v = s.dup.send(m, *a); v.nil? ? nil : [v, v.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call(:strip, "  hello  ", "lo "),
+              f.call(:strip, "xxhelloxx", "x"),
+              f.call(:strip, "hello", "a-y"),
+              f.call(:lstrip, "hello", "a-y"),
+              f.call(:rstrip, "hello", "^l"),
+              f.call(:strip, "hello", "le", "el"),
+              f.call(:strip, "hello", "h", "e"),
+              f.call(:strip, "hhello", "h"),
+              f.call(:strip, "aabbcc", "^b"),
+              f.call(:strip, "  hello  ", ""),
+              f.call(:strip, "hello", "\\\\"),
+              f.call(:strip, "a-b-c", "\\-"),
+              f.call(:strip, "^hello^", "^"),
+              f.call(:strip, "\u3042\u3044\u3046hello\u3042\u3044\u3046", "\u3042-\u3046"),
+              f.call(:strip, "", "x"),
+              f.call(:strip, "xxx", "x"),
+              f.call(:lstrip, "xxx", "x"),
+              f.call(:rstrip, "xxx", "x"),
+              f.call(:strip!, "xxhixx", "x"),
+              f.call(:strip!, "hi", "x"),
+              f.call(:lstrip!, "hi", "x"),
+              f.call(:rstrip!, "hi", "x"),
+              f.call(:strip, "  hi  ".encode("US-ASCII"), " "),
+              f.call(:strip, "\xff\xfe\xff".b, "\xff".b),
+              f.call(:strip, "hello", 1),
+              f.call(:strip, "hello", nil),
+              f.call(:strip, "\u3042", "a".encode("EUC-JP")),
+              f.call(:strip, "\u3042", "\u3042".encode("EUC-JP")),
+              f.call(:lstrip, "\xDFabc", "a"),
+              f.call(:rstrip, "abc\xDF", "c"),
+              f.call(:strip, "\xDFabc", "a"),
+              f.call(:strip, "abc\xDF", "c"),
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn broken_receiver_is_refused_in_its_own_encoding() {
+        // CRuby refuses character work on a receiver that is broken
+        // *under its own encoding*. monoruby's guard was `regex_view`'s
+        // UTF-8 check, so an EUC-JP / Shift_JIS / Emacs-Mule receiver
+        // walked on and answered for bytes that are not characters in
+        // it. The message names the receiver's encoding, and the
+        // case-mapping family words it differently (`rb_str_casemap`).
+        run_test_once(
+            r##"(f=->(enc, &b){ s = [0x41, 0x80, 0x42].pack("C*").force_encoding(enc); begin; v = b.call(s); v.is_a?(String) ? v.bytes : v; rescue => e; [e.class.to_s, e.message]; end }; ["UTF-8", "EUC-JP", "Shift_JIS", "Emacs-Mule"].map { |enc| [
+              enc,
+              f.call(enc) { |s| s.count("A-Z") },
+              f.call(enc) { |s| s.delete("A") },
+              f.call(enc) { |s| s.dup.delete!("A") },
+              f.call(enc) { |s| s.squeeze },
+              f.call(enc) { |s| s.squeeze("A") },
+              f.call(enc) { |s| s.dup.squeeze! },
+              f.call(enc) { |s| s.tr("A", "z") },
+              f.call(enc) { |s| s.dup.tr!("A", "z") },
+              f.call(enc) { |s| s.tr_s("A", "z") },
+              f.call(enc) { |s| s.dup.tr_s!("A", "z") },
+              f.call(enc) { |s| s.split },
+              f.call(enc) { |s| s.split("") },
+              f.call(enc) { |s| s.split(" ") },
+              f.call(enc) { |s| s.split(/A/) },
+              f.call(enc) { |s| s =~ /A/ },
+              f.call(enc) { |s| s.match(/A/) ? 1 : 0 },
+              f.call(enc) { |s| s.match?(/A/) },
+              f.call(enc) { |s| s.scan(/A/) },
+              f.call(enc) { |s| s.sub(/A/, "z") },
+              f.call(enc) { |s| s.gsub(/A/, "z") },
+              f.call(enc) { |s| s.index(/B/) },
+              f.call(enc) { |s| s[/A/] },
+              f.call(enc) { |s| s.partition(/A/) },
+              f.call(enc) { |s| s.start_with?(/A/) },
+              f.call(enc) { |s| s.upcase },
+              f.call(enc) { |s| s.downcase },
+              f.call(enc) { |s| s.swapcase },
+              f.call(enc) { |s| s.capitalize },
+              f.call(enc) { |s| s.dup.upcase! },
+              f.call(enc) { |s| s.dup.capitalize! },
+              f.call(enc) { |s| s.casecmp?("a\x80b") },
+            ] })"##,
+        );
+    }
+
+    #[test]
+    fn strip_selector_object_and_frozen() {
+        // A `#to_str` argument is accepted, a frozen receiver raises
+        // even when nothing would be removed, and a subclass answers a
+        // plain String — the same contract the no-selector form has.
+        run_test_once(
+            r##"(o=Object.new; def o.to_str; "h"; end; c=Class.new(String); f=->(&b){ begin; v=b.call; v.is_a?(String) ? [v, v.encoding.name] : v; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call { "hhellohh".strip(o) },
+              f.call { "hello".freeze.strip!("x") },
+              f.call { "hello".freeze.strip! },
+              f.call { c.new("  hi  ").strip(" ").class == String },
+              f.call { c.new("  hi  ").strip.class == String },
+              f.call { "  hi  ".strip(" ", " ") },
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn selector_argument_encoding_compatibility() {
+        // CRuby's `rb_enc_check` runs between the receiver and every
+        // `tr`-style selector before any set is parsed, so a set whose
+        // encoding does not combine with the receiver's raises — in the
+        // whole family, `#tr`'s replacement set included. A 7-bit
+        // receiver combines with anything, so it still answers.
+        run_test_once(
+            r##"(e="\u3042".encode("EUC-JP"); f=->(&b){ begin; v=b.call; v.is_a?(String) ? [v.bytes, v.encoding.name] : v; rescue => x; [x.class.to_s, x.message]; end }; [
+              f.call { "\u3042".count(e) }, f.call { "\u3042".count("a", e) },
+              f.call { "\u3042".delete(e) }, f.call { "\u3042".delete!(e) },
+              f.call { "\u3042".squeeze(e) }, f.call { "\u3042".squeeze!(e) },
+              f.call { "\u3042".tr(e, "x") }, f.call { "\u3042".tr("a", e) },
+              f.call { "\u3042".tr_s(e, "x") }, f.call { "\u3042".tr_s("a", e) },
+              f.call { "\u3042".strip(e) }, f.call { "\u3042".lstrip(e) },
+              f.call { "abc".count(e) }, f.call { "abc".delete(e) },
+              f.call { "abc".count("a".encode("EUC-JP")) },
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn broken_receiver_still_answers_where_cruby_does() {
+        // The methods CRuby serves on broken bytes keep answering: the
+        // guard is about character work, and `#length` / `#reverse` /
+        // `#index` with a String / `#center` / `#dump` / `#chars` /
+        // `#each_char` / `#scrub` / `#valid_encoding?` / `#ord` /
+        // `#sum` / `#casecmp` walk bytes or already handle the broken
+        // case.
+        run_test_once(
+            r##"(f=->(enc, &b){ s = [0x41, 0x80, 0x42].pack("C*").force_encoding(enc); begin; v = b.call(s); v.is_a?(String) ? v.bytes : v; rescue => e; [e.class.to_s, e.message]; end }; ["UTF-8", "EUC-JP", "Shift_JIS", "Emacs-Mule", "ASCII-8BIT"].map { |enc| [
+              enc,
+              f.call(enc) { |s| s.length },
+              f.call(enc) { |s| s.reverse },
+              f.call(enc) { |s| s.index("B") },
+              f.call(enc) { |s| s.center(6) },
+              f.call(enc) { |s| s.dump },
+              f.call(enc) { |s| s.chars.map(&:bytes) },
+              f.call(enc) { |s| s.each_char.to_a.map(&:bytes) },
+              f.call(enc) { |s| s.scrub.bytes },
+              f.call(enc) { |s| s.valid_encoding? },
+              f.call(enc) { |s| s.ord },
+              f.call(enc) { |s| s.sum },
+              f.call(enc) { |s| s.casecmp("a\x80b") },
+              f.call(enc) { |s| s.end_with?("B") },
+              f.call(enc) { |s| s.partition("A").map(&:bytes) },
+              f.call(enc) { |s| s.chomp("B").bytes },
+              f.call(enc) { |s| s.ljust(5).bytes },
+            ] })"##,
+        );
     }
 
     #[test]
@@ -14816,6 +15271,56 @@ mod tests {
     }
 
     #[test]
+    fn inspect_escape_picks_by_character_not_by_byte() {
+        // CRuby's `rb_str_inspect` picks its escape by whether the
+        // bytes form a character: an ill-formed byte is written on its
+        // own (`\xNN`, one per byte, and a printable byte after the run
+        // stays outside it), while a valid multi-byte character with no
+        // rendering is written whole in one `\x{...}`. A one-byte
+        // character (Shift_JIS halfwidth katakana) has nothing to group,
+        // so it is `\xNN` too. `#dump` is byte-oriented either way.
+        run_test_once(
+            r#"(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); [s.inspect, s.dump] }; [
+              f.call("EUC-JP", 0x41, 0x80, 0x42),
+              f.call("EUC-JP", 0x41, 0x8F, 0xA1, 0x42),
+              f.call("EUC-JP", 0x41, 0xA4, 0xA2, 0x42),
+              f.call("EUC-JP", 0x8F, 0xA1, 0xA1),
+              f.call("EUC-JP", 0x8E, 0xA1),
+              f.call("EUC-JP", 0x8E),
+              f.call("EUC-JP", 0x41, 0xFF, 0xFF, 0x42),
+              f.call("Shift_JIS", 0x41, 0x81, 0x00),
+              f.call("Shift_JIS", 0x41, 0x82, 0xA0, 0x42),
+              f.call("Shift_JIS", 0x41, 0xA1, 0x42),
+              f.call("Shift_JIS", 0x0A, 0xA1, 0xDF, 0xE0, 0x40),
+              f.call("Emacs-Mule", 0x41, 0x81, 0xA0, 0x42),
+              f.call("Emacs-Mule", 0x41, 0x80, 0x42),
+              f.call("Emacs-Mule", 0x41, 0x0A, 0x1B, 0x80, 0x92, 0xA0, 0xB0),
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn inspect_named_escapes_and_hash_lookahead() {
+        // The ASCII-incompatible byte encodings escape every byte, even
+        // printable ASCII — but a control character that has a named
+        // escape keeps it (`\e`, not `\x1B`). And the `#` before `$`,
+        // `@` or `{` is escaped in *every* ASCII-compatible encoding,
+        // not only UTF-8, so the inspected form never reads back as an
+        // interpolation.
+        run_test_once(
+            r##"(g=->(enc){ s = [0x23,0x24,0x61,0x23,0x40,0x23,0x7B].pack("C*").force_encoding(enc); [s.inspect, s.dump] }; [
+              (0..0x20).to_a.pack("C*").force_encoding("ISO-2022-JP").inspect,
+              [0x41,0x0A,0x09,0x1B,0x22,0x5C,0x7F,0x80].pack("C*").force_encoding("ISO-2022-JP").inspect,
+              [0x41,0x0A,0x1B,0x2B,0x80].pack("C*").force_encoding("UTF-7").inspect,
+              g.call("UTF-8"), g.call("US-ASCII"), g.call("ASCII-8BIT"),
+              g.call("ISO-8859-1"), g.call("EUC-JP"), g.call("Shift_JIS"),
+              g.call("Emacs-Mule"), g.call("ISO-2022-JP"),
+              "#$x".inspect, [0x5C,0x23,0x24].pack("C*").force_encoding("ASCII-8BIT").inspect,
+            ])"##,
+        );
+    }
+
+    #[test]
     fn inspect_and_case_map_by_encoding() {
         run_tests(&[
             // UTF-16/UTF-32: decode, ASCII escaped normally, non-ASCII
@@ -16088,6 +16593,30 @@ mod tests {
             r#"
               ("" <=> "".dup.force_encoding("ISO-2022-JP"))
             "#,
+        );
+    }
+
+    #[test]
+    fn upto_terminates_on_an_empty_receiver() {
+        // `"".succ` is `""`, so a walk that stops when the current
+        // value passes `max` never stops at all — `"".upto("")` ran
+        // until the process died. CRuby walks until the current value
+        // equals `max.succ` and stops as soon as the successor outgrows
+        // `max` or comes back empty, which makes `"".upto("")` empty and
+        // `"".upto("a")` exactly one yield.
+        run_test_once(
+            r##"(f=->(a, b, ex){ begin; a.upto(b, ex).to_a; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call("", "", false), f.call("", "", true),
+              f.call("", "a", false), f.call("", "a", true),
+              f.call("a", "", false), f.call("a", "", true),
+              f.call("a", "a", false), f.call("a", "a", true),
+              f.call("a", "e", false), f.call("a", "e", true),
+              f.call("y", "z", false), f.call("zz", "aaa", false),
+              f.call("a9", "b1", false), f.call("8", "11", false),
+              f.call("9", "A", false), f.call("Y", "b", false),
+              f.call("08", "11", false), f.call("ab", "a", false),
+              f.call("1.2", "1.4", false),
+            ])"##,
         );
     }
 
