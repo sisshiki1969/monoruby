@@ -18,14 +18,28 @@ on:
   # dashboard is fresh by the (JST) morning.
   schedule:
     - cron: '47 15 * * *'
+  # Every crate that ends up in the measured binary or in an extension
+  # it dlopens, plus what decides how they are built. `ruruby-parse` is
+  # gone (prism replaced it) and the extensions were missing entirely,
+  # so a change confined to `ext/` — where the interpreter's native
+  # halves now live — used to merge without ever being benchmarked.
   push:
     branches: [master]
     paths:
       - 'monoruby/**'
-      - 'ruruby-parse/**'
       - 'monoruby_attr/**'
+      - 'monoruby_ext/**'
+      - 'monoruby_ext_sys/**'
+      - 'ext/**'
+      - 'hashbrown/**'
       - 'rubymap/**'
+      - 'ruby_traits/**'
+      - 'libxml2-src/**'
+      - 'libsqlite3-src/**'
       - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/config.toml'
       - '.github/workflows/bench.yml'
       - '.github/scripts/**'
       - '.github/portal/**'
@@ -33,15 +47,107 @@ on:
 
 permissions:
   contents: write
+  # `gate` reads this workflow's own run history to throttle the
+  # push-triggered amd64 pass. Naming `contents` above drops every other
+  # scope to none, so the read has to be asked for.
+  actions: read
 
 jobs:
+  # Whether bench-amd64 runs, decided in a job of its own because the
+  # answer needs an API call. A push gets a pass at most once every six
+  # hours: the amd64 job is ~2 h of runner time and master takes a dozen
+  # merges on a busy day, so benchmarking every one of them spends the
+  # allowance without telling us more than the throttled series does —
+  # the portal keys each point by commit either way, just with gaps.
+  #
+  # "When did we last benchmark" cannot be read off the run list, since
+  # a throttled push still creates a workflow run with the job skipped,
+  # so this walks back over the recent runs for the last one whose
+  # bench-amd64 actually started. A job still in flight counts (its
+  # conclusion is null, not "skipped"), which is what keeps a second
+  # pass from starting alongside one that is already running.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      amd64: ${{ steps.decide.outputs.amd64 }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          ARCH: ${{ inputs.arch }}
+          THROTTLE_SECONDS: '21600'
+          SCAN_RUNS: '40'
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          amd64=false
+          reason=""
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            case "${ARCH:-}" in
+              amd64|both) amd64=true; reason="dispatched with arch=${ARCH}" ;;
+              *)          reason="dispatched with arch=${ARCH:-unset}" ;;
+            esac
+          elif [ "$EVENT" != "push" ]; then
+            reason="$EVENT is the arm64 job's trigger, not this one's"
+          else
+            # The newest run, this one aside, whose bench-amd64 started.
+            last=""
+            for id in $(gh api \
+                  "repos/$REPO/actions/workflows/bench.yml/runs?branch=master&per_page=$SCAN_RUNS" \
+                  --jq ".workflow_runs[] | select(.id != $RUN_ID) | .id" 2>/dev/null); do
+              last=$(gh api "repos/$REPO/actions/runs/$id/jobs" --jq \
+                '[.jobs[] | select(.name == "bench-amd64" and .conclusion != "skipped")][0]
+                 | (.started_at // .created_at) // empty' 2>/dev/null)
+              [ -n "$last" ] && break
+            done
+
+            if [ -z "$last" ]; then
+              # No pass in the scanned window, or the API would not
+              # answer. Benchmark rather than silently stop doing so.
+              amd64=true
+              reason="no amd64 pass in the last $SCAN_RUNS runs"
+            else
+              age=$(( $(date -u +%s) - $(date -u -d "$last" +%s) ))
+              if [ "$age" -ge "$THROTTLE_SECONDS" ]; then
+                amd64=true
+                reason="last amd64 pass started $last, ${age}s ago"
+              else
+                reason="throttled: last amd64 pass started $last, only ${age}s ago (need ${THROTTLE_SECONDS}s)"
+              fi
+            fi
+          fi
+
+          echo "amd64=$amd64" >> "$GITHUB_OUTPUT"
+          echo "bench-amd64: **$amd64** — $reason" >> "$GITHUB_STEP_SUMMARY"
+          echo "bench-amd64: $amd64 — $reason"
+
   bench-amd64:
-    # Runs on every master push; a manual dispatch includes it only when
-    # asked (arch: amd64 / both — the dispatch default is arm64-only).
-    # The daily `schedule` trigger is the arm64 job's alone: this
-    # condition is false on schedule events, so amd64 never runs twice
-    # for the same day's work.
-    if: ${{ github.event_name == 'push' || inputs.arch == 'amd64' || inputs.arch == 'both' }}
+    # Runs on a master push, at most once every six hours (see `gate`);
+    # a manual dispatch includes it only when asked (arch: amd64 / both —
+    # the dispatch default is arm64-only). The daily `schedule` trigger
+    # is the arm64 job's alone, so amd64 never runs twice for the same
+    # day's work.
+    needs: gate
+    if: ${{ needs.gate.outputs.amd64 == 'true' }}
+    # One at a time, per architecture. These jobs measure wall-clock
+    # time on shared GitHub runners, so two of the same kind in flight
+    # are two benchmarks competing for one CPU — which is what made
+    # adjacent commits in the portal's history differ by a factor of two
+    # in absolute milliseconds. The group is per job rather than per
+    # workflow so the daily macOS pass, which takes ~4 h, does not hold
+    # the Linux one behind it: they run on different machines and do not
+    # compete. `cancel-in-progress: false` — a job that has already
+    # started is worth finishing, since throwing away hours of
+    # measurement to begin it again from the top gains nothing.
+    concurrency:
+      group: bench-amd64-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -171,9 +277,44 @@ jobs:
         working-directory: ../ruby-bench
         shell: bash
         env:
-          MR_TIMEOUT: '400'
-          YJ_TIMEOUT: '400'
-          ZJ_TIMEOUT: '400'
+          # One `timeout(1)` per engine (see the -e definitions below),
+          # so each benchmark gets this many seconds of wall clock. Equal
+          # across the three engines: they are compared, so they are
+          # measured under the same rule.
+          MR_TIMEOUT: '1000'
+          YJ_TIMEOUT: '1000'
+          ZJ_TIMEOUT: '1000'
+          # The convergence rule. harness-warmup iterates until its
+          # median absolute deviation falls under a threshold that
+          # *relaxes* as it goes — `MAD_TARGET + (iters - MIN_ITERS) *
+          # MAD_INCREASE_PER_ITER` — so a noisy benchmark converges late
+          # rather than never.
+          #
+          # The defaults (0.001, +0.0001) ask for 0.1% and give a point
+          # back every iteration, which is a reasonable target on a quiet
+          # machine and an unreachable one here: a shared GitHub runner,
+          # with several of these jobs in flight at once, is not where a
+          # 0.1% median is going to be established by sitting still for
+          # longer. splay is the extreme — its bimodal GC holds its MAD
+          # at ~0.434, which the default ramp only reaches around
+          # iteration 4,300 (~520 s) — but every benchmark was paying the
+          # same way, running hundreds of iterations to chase a precision
+          # the environment cannot deliver.
+          #
+          # So aim for 2% and give 2 points back per iteration: the
+          # benchmarks that are steady still settle at MIN_ITERS, and the
+          # ones that are not stop within ~20 iterations instead of
+          # thousands. MIN_ITERS (10) and MIN_TIME (5 s), both left at
+          # their defaults, are what now set the floor — a fast benchmark
+          # still runs hundreds of iterations to fill its 5 seconds.
+          MAD_TARGET: '0.02'
+          MAD_INCREASE_PER_ITER: '0.02'
+          # harness-warmup's own ceiling, deliberately *below* the
+          # timeouts above, so a benchmark that somehow still has not
+          # converged is ended by the harness — with the median it has —
+          # rather than killed by `timeout(1)`, which records
+          # `timeout (Ns)` and no measurement at all.
+          MAX_TIME: '600'
           ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
           set +e
@@ -264,6 +405,19 @@ jobs:
     # tolerates its absence and leaves the arm64 dashboard at its last
     # snapshot.
     if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.arch == 'arm64' || inputs.arch == 'both')) }}
+    # One at a time, per architecture. These jobs measure wall-clock
+    # time on shared GitHub runners, so two of the same kind in flight
+    # are two benchmarks competing for one CPU — which is what made
+    # adjacent commits in the portal's history differ by a factor of two
+    # in absolute milliseconds. The group is per job rather than per
+    # workflow so the daily macOS pass, which takes ~4 h, does not hold
+    # the Linux one behind it: they run on different machines and do not
+    # compete. `cancel-in-progress: false` — a job that has already
+    # started is worth finishing, since throwing away hours of
+    # measurement to begin it again from the top gains nothing.
+    concurrency:
+      group: bench-arm64-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: macos-latest
     # The three-engine pass needs ~245-260 min on this runner (the zjit
     # pass alone is ~2.5 h on arm64): the first zjit run hit the old
@@ -385,9 +539,52 @@ jobs:
         working-directory: ../ruby-bench
         shell: bash
         env:
-          MR_TIMEOUT: '400'
-          YJ_TIMEOUT: '400'
-          ZJ_TIMEOUT: '400'
+          # One `timeout(1)` per engine (see the -e definitions below),
+          # so each benchmark gets this many seconds of wall clock. Equal
+          # across the three engines: they are compared, so they are
+          # measured under the same rule.
+          MR_TIMEOUT: '1000'
+          YJ_TIMEOUT: '1000'
+          ZJ_TIMEOUT: '1000'
+          # The convergence rule. harness-warmup iterates until its
+          # median absolute deviation falls under a threshold that
+          # *relaxes* as it goes — `MAD_TARGET + (iters - MIN_ITERS) *
+          # MAD_INCREASE_PER_ITER` — so a noisy benchmark converges late
+          # rather than never.
+          #
+          # The defaults (0.001, +0.0001) ask for 0.1% and give a point
+          # back every iteration, which is a reasonable target on a quiet
+          # machine and an unreachable one here: a shared GitHub runner,
+          # with several of these jobs in flight at once, is not where a
+          # 0.1% median is going to be established by sitting still for
+          # longer. splay is the extreme — its bimodal GC holds its MAD
+          # at ~0.434, which the default ramp only reaches around
+          # iteration 4,300 (~520 s) — but every benchmark was paying the
+          # same way, running hundreds of iterations to chase a precision
+          # the environment cannot deliver.
+          #
+          # So aim for 2% and give 2 points back per iteration: the
+          # benchmarks that are steady still settle at MIN_ITERS, and the
+          # ones that are not stop within ~20 iterations instead of
+          # thousands. MIN_ITERS (10) and MIN_TIME (5 s), both left at
+          # their defaults, are what now set the floor — a fast benchmark
+          # still runs hundreds of iterations to fill its 5 seconds.
+          MAD_TARGET: '0.02'
+          MAD_INCREASE_PER_ITER: '0.02'
+          # harness-warmup's own ceiling, deliberately *below* the
+          # timeouts above, so a benchmark that somehow still has not
+          # converged is ended by the harness — with the median it has —
+          # rather than killed by `timeout(1)`, which records
+          # `timeout (Ns)` and no measurement at all.
+          #
+          # Tighter here than on amd64 (600), because this job is the one
+          # with no headroom: the three-engine pass has been reaching the
+          # 350-minute `timeout-minutes` cap — three of the seven daily
+          # runs to 2026-09-20 were cancelled there, mid-benchmark, with
+          # `Aggregate to portal JSON` skipped and nothing published for
+          # the day. 350 minutes is already near the 360 GitHub allows, so
+          # the budget has to come out of the benchmarks instead.
+          MAX_TIME: '450'
           ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
           set +e
@@ -464,8 +661,13 @@ jobs:
 
   publish:
     needs: [bench-amd64, bench-arm64]
-    # Run even if one benchmark job failed, so partial results are still published.
-    if: ${{ always() && (github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch') }}
+    # Run even if one benchmark job failed, so partial results are still
+    # published — a failed job still uploads what it measured. Skip only
+    # when neither job ran at all, which is what a throttled push looks
+    # like: there is nothing to publish and the last snapshot stands.
+    if: ${{ always()
+      && (needs.bench-amd64.result != 'skipped' || needs.bench-arm64.result != 'skipped')
+      && (github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

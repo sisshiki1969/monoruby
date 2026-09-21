@@ -747,7 +747,7 @@ impl RValue {
                 ObjTy::EXCEPTION => self.as_exception().message().to_string(),
                 ObjTy::METHOD => self.as_method().debug(store),
                 ObjTy::FIBER => self.fiber_debug(store),
-                ObjTy::ENUMERATOR => self.enumerator_debug(store),
+                ObjTy::ENUMERATOR => self.enumerator_inspect(store),
                 ObjTy::GENERATOR => self.object_debug(store),
                 ObjTy::COMPLEX => self.as_complex().debug(store),
                 ObjTy::RATIONAL => self.as_rational().inspect(),
@@ -779,7 +779,9 @@ impl RValue {
                     self.hash_inspect(store, &mut set)
                 }
                 ObjTy::METHOD => self.as_method().to_s(store),
-                ObjTy::ENUMERATOR => self.enumerator_tos(store),
+                // CRuby leaves `Enumerator#to_s` to `Kernel`, as it
+                // does `IO#to_s`: only `#inspect` names the source.
+                ObjTy::ENUMERATOR => self.object_tos(store),
                 ObjTy::GENERATOR => self.object_tos(store),
                 ObjTy::BINDING => self.object_tos(store),
                 ObjTy::UMETHOD => self.as_umethod().to_s(store),
@@ -812,6 +814,7 @@ impl RValue {
                 ObjTy::REGEXP => self.as_regex().inspect(),
                 ObjTy::MATCHDATA => self.as_match_data().inspect(),
                 ObjTy::HASH => self.hash_inspect(store, set),
+                ObjTy::ENUMERATOR => self.enumerator_inspect(store),
                 ObjTy::RANGE => self.as_range().inspect(store, set),
                 // A `Struct` / `Data` instance reached from inside
                 // another object's inspect: render it as its own
@@ -913,32 +916,37 @@ impl RValue {
     /// receiver's own, so `Enumerator::Product` / a user subclass shows
     /// up as itself, and an `allocate`d-but-not-`initialize`d enumerator
     /// reads `#<Enumerator: uninitialized>` (CRuby's `inspect_enumerator`).
-    fn enumerator_inspect(&self, store: &Store, debug: bool) -> String {
+    fn enumerator_inspect(&self, store: &Store) -> String {
         let name = self.real_class(store).id().get_name(store);
         let e = unsafe { self.as_enumerator() };
         if !e.is_initialized() {
             return format!("#<{name}: uninitialized>");
         }
-        let obj = if debug {
-            e.obj.debug(store)
-        } else {
-            e.obj.to_s(store)
-        };
-        let args = if e.args.is_empty() {
+        // `inspect_enumerator` renders the receiver and the positional
+        // arguments with `rb_inspect`, and the keywords as `key: value`
+        // with *`to_s`* on both halves — which is why `k: nil` comes out
+        // as a bare `k: ` and `k: :v` as `k: v`. A keyword hash holding
+        // a key that is not a Symbol cannot be written that way at all,
+        // so the whole hash goes in as one positional instead.
+        let mut list: Vec<String> = e.args.iter().map(|v| v.inspect(store)).collect();
+        if let Some(kw) = &e.kw_args
+            && !kw.is_empty()
+        {
+            if kw.iter().all(|(k, _)| k.is_symbol()) {
+                for (k, v) in kw.iter() {
+                    list.push(format!("{}: {}", k.to_s(store), v.to_s(store)));
+                }
+            } else {
+                list.push(kw.as_val().inspect(store));
+            }
+        }
+        let args = if list.is_empty() {
             String::new()
         } else {
-            let list: Vec<String> = e.args.iter().map(|v| v.debug(store)).collect();
             format!("({})", list.join(", "))
         };
+        let obj = e.obj.inspect(store);
         format!("#<{name}: {obj}:{}{args}>", e.method)
-    }
-
-    fn enumerator_debug(&self, store: &Store) -> String {
-        self.enumerator_inspect(store, true)
-    }
-
-    fn enumerator_tos(&self, store: &Store) -> String {
-        self.enumerator_inspect(store, false)
     }
 
     fn proc_tos(&self) -> String {

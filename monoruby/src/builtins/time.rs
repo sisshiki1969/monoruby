@@ -110,10 +110,32 @@ pub(crate) fn local_is_dst(utc_secs: i64) -> bool {
 /// is the later of the two.
 fn local_naive_to_utc_isdst(naive: NaiveDateTime, isdst: Option<bool>) -> Option<i64> {
     refresh_tz();
+    // Away from a transition the wall clock names exactly one instant.
+    // `isdst` has nothing to choose between, both probes below return
+    // that instant, and `tm_isdst = -1` — which the comment above rules
+    // out for being decided by whatever `mktime` converted last — has
+    // nothing to be undecided about either: its non-determinism is the
+    // repeated hour, and there isn't one here. So ask libc once and
+    // stop; `near_offset_change` is what establishes "away from a
+    // transition".
+    //
+    // This is worth a fast path because the probes are not cheap in the
+    // shape that matters most: asking glibc for `tm_isdst = 1` in a zone
+    // that has no daylight time sends it looking for one, over and over.
+    // Against CRuby's 513 ns, `Time.local` measured 35 us under `TZ=UTC`
+    // and 139 us under `TZ=Asia/Tokyo` — enough to put ruby-bench's
+    // sequel at 0.36x YJIT from 0.86x, since Sequel turns every DATETIME
+    // column of every row it loads back into a Time.
+    if let Some((t, true)) = mktime_isdst(naive, -1)
+        && !near_offset_change(t)
+    {
+        return Some(t);
+    }
     // Either side can fail outright: glibc answers `-1` when no instant
     // with the requested `tm_isdst` exists at all, which is what a zone
     // with no daylight saving does to the daylight side. Only the side
-    // that came back is then a candidate.
+    // that came back is then a candidate — hence no `?` here, which
+    // would let that one failure take the whole conversion down.
     let daylight = mktime_isdst(naive, 1);
     let standard = mktime_isdst(naive, 0);
     Some(match (daylight, standard) {
@@ -136,6 +158,20 @@ fn local_naive_to_utc_isdst(naive: NaiveDateTime, isdst: Option<bool>) -> Option
         (None, Some((s, false))) => s,
         (None, None) => return None,
     })
+}
+
+/// Whether the local offset differs a day either side of `t`.
+///
+/// It is the question "could `tm_isdst` matter here": an offset that
+/// holds for a day on both sides leaves the wall clock naming one
+/// instant, since a zone that falls back repeats an hour and one that
+/// springs forward skips one, both within minutes of the change. A day
+/// is far wider than either needs, and being wrong in this direction
+/// only costs the slow path — which is the correct one anyway.
+fn near_offset_change(t: i64) -> bool {
+    const DAY: i64 = 24 * 60 * 60;
+    let here = local_offset_at(t);
+    local_offset_at(t.saturating_sub(DAY)) != here || local_offset_at(t.saturating_add(DAY)) != here
 }
 
 /// `mktime` for `naive` with a given `tm_isdst`. The second element is
