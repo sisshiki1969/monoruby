@@ -2216,10 +2216,26 @@ impl Executor {
                 let payload = err.payload;
                 let v = Value::new_exception(err);
                 if let Some((val, name)) = payload {
-                    globals
-                        .store
-                        .set_ivar(v, IdentId::get_id(&format!("/{name}")), val)
-                        .unwrap();
+                    if name == ENC_ERR_PAYLOAD {
+                        // `Encoding::InvalidByteSequenceError` needs five
+                        // *public* ivars, not one hidden one: CRuby's
+                        // message names only the offending bytes, so the
+                        // accessors have nothing to parse them back out of.
+                        let fields = val.as_array();
+                        for (ivar, field) in
+                            ENC_ERR_IVARS.iter().zip(fields.iter())
+                        {
+                            globals
+                                .store
+                                .set_ivar(v, IdentId::get_id(ivar), *field)
+                                .unwrap();
+                        }
+                    } else {
+                        globals
+                            .store
+                            .set_ivar(v, IdentId::get_id(&format!("/{name}")), val)
+                            .unwrap();
+                    }
                 }
                 v
             }
