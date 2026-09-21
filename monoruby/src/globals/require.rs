@@ -36,12 +36,9 @@ fn require_candidates(path: &std::path::Path) -> Vec<PathBuf> {
 
 /// The canonical (symlink-resolved) form of a `$LOAD_PATH` directory,
 /// falling back to its lexically-normalized absolute form when the
-/// directory doesn't exist.
-fn canonical_dir_of(dir: &str) -> PathBuf {
-    canonical_dir_of_path(std::path::Path::new(dir))
-}
-
-fn canonical_dir_of_path(dir: &std::path::Path) -> PathBuf {
+/// directory doesn't exist. Uncached — callers go through
+/// `Globals::canonical_dir_of_path`, which memoizes this.
+fn canonicalize_dir(dir: &std::path::Path) -> PathBuf {
     std::fs::canonicalize(dir).unwrap_or_else(|_| {
         lexically_normalize(&std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf()))
     })
@@ -73,6 +70,35 @@ fn has_loadable_ext(path: &std::path::Path) -> bool {
 }
 
 impl Globals {
+    /// `dir/cand`, if it exists, as the *canonicalized* directory
+    /// joined with the candidate as given: CRuby resolves symlinks in
+    /// the `$LOAD_PATH` entry but never in the feature name, and that
+    /// composite is what lands in `$LOADED_FEATURES`.
+    fn probe(&self, dir: &std::path::Path, cand: &std::path::Path) -> Option<PathBuf> {
+        if dir.join(cand).exists() {
+            Some(self.canonical_dir_of_path(dir).join(cand))
+        } else {
+            None
+        }
+    }
+
+    /// The canonical (symlink-resolved) form of a `$LOAD_PATH`
+    /// directory, memoized in `canonical_dirs` — see that field for why
+    /// this is worth caching and what the cache does not notice.
+    fn canonical_dir_of_path(&self, dir: &std::path::Path) -> PathBuf {
+        if let Some(canon) = self.canonical_dirs.borrow().get(dir) {
+            return canon.clone();
+        }
+        // Resolved outside the borrow: `canonicalize` is a syscall, and
+        // holding a `RefCell` borrow across one is how a re-entrant
+        // caller would panic.
+        let canon = canonicalize_dir(dir);
+        self.canonical_dirs
+            .borrow_mut()
+            .insert(dir.to_path_buf(), canon.clone());
+        canon
+    }
+
     ///
     /// Load external library.
     ///
@@ -145,7 +171,10 @@ impl Globals {
             let entries = self.load_path_entries(vm);
             // For feature matching, `$LOAD_PATH` directories compare in
             // their canonical (symlink-resolved) form.
-            let canon_dirs: Vec<PathBuf> = entries.iter().map(|d| canonical_dir_of(d)).collect();
+            let canon_dirs: Vec<PathBuf> = entries
+                .iter()
+                .map(|d| self.canonical_dir_of_path(std::path::Path::new(d)))
+                .collect();
             let bundler_priority = path_str == "bundler" || path_str.starts_with("bundler/");
             // Every candidate is checked against the loaded features
             // before any is searched for (CRuby's `rb_feature_p` runs
@@ -256,14 +285,6 @@ impl Globals {
         entries: &[String],
         bundler_priority: bool,
     ) -> Option<PathBuf> {
-        fn probe(dir: &std::path::Path, cand: &std::path::Path) -> Option<PathBuf> {
-            if dir.join(cand).exists() {
-                Some(canonical_dir_of_path(dir).join(cand))
-            } else {
-                None
-            }
-        }
-
         // Pin monoruby's own C-extension replacement stubs ahead of
         // `$LOAD_PATH`. `~/.monoruby/stub` holds exactly the files
         // monoruby ships in `stdlib/` and `gem/` (json, psych, strscan,
@@ -288,7 +309,7 @@ impl Globals {
         // is merely first), letting host activation shadow it consistently.
         let stub_root = install_root().join("stub");
         for dir in [stub_root.clone(), stub_root.join(ruby_platform())] {
-            if let Some(p) = probe(&dir, cand) {
+            if let Some(p) = self.probe(&dir, cand) {
                 return Some(p);
             }
         }
@@ -329,14 +350,14 @@ impl Globals {
                 if path.starts_with(&vendored_lib) {
                     continue;
                 }
-                if let Some(p) = probe(path, cand) {
+                if let Some(p) = self.probe(path, cand) {
                     return Some(p);
                 }
             }
         }
 
         for lib in entries {
-            if let Some(p) = probe(std::path::Path::new(lib), cand) {
+            if let Some(p) = self.probe(std::path::Path::new(lib), cand) {
                 return Some(p);
             }
         }
@@ -350,7 +371,7 @@ impl Globals {
             .iter()
             .position(|lib| std::path::Path::new(lib).join(cand).exists())?;
         let lib = self.gem_lib_dirs.remove(hit);
-        let p = probe(std::path::Path::new(&lib), cand);
+        let p = self.probe(std::path::Path::new(&lib), cand);
         self.extend_load_path(std::iter::once(lib));
         p
     }
