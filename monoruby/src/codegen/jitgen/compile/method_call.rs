@@ -1,8 +1,5 @@
 use crate::{
-    codegen::jitgen::{
-        context::JitStackFrame,
-        state::LinkMode,
-    },
+    codegen::jitgen::{context::JitStackFrame, state::LinkMode},
     executor::inline::InlineFuncInfo,
 };
 
@@ -148,14 +145,13 @@ impl<'a> JitContext<'a> {
                     if cache.version != self.class_version() {
                         // the inline method cache is invalid.
                         let recv_class = cache.recv_class;
-                        let (func_id, visibility) =
-                            if let Some(x) = self.jit_check_call(recv_class, callsite.name) {
-                                x
-                            } else {
-                                return Ok(CompileResult::Recompile(
-                                    RecompileReason::MethodNotFound,
-                                ));
-                            };
+                        let (func_id, visibility) = if let Some(x) =
+                            self.jit_check_call(recv_class, callsite.name)
+                        {
+                            x
+                        } else {
+                            return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
+                        };
                         (recv_class, func_id, visibility)
                     } else {
                         // The inline method cache is valid: the VM already
@@ -311,11 +307,8 @@ impl<'a> JitContext<'a> {
         let name = callsite.name?;
         let pmc = &callsite.pmc;
         let observations = pmc.observations();
-        let mut classes: Vec<(ClassId, u32)> = pmc
-            .entries()
-            .iter()
-            .map(|e| (e.recv, e.count))
-            .collect();
+        let mut classes: Vec<(ClassId, u32)> =
+            pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
         if !classes.iter().any(|(c, _)| *c == recv_class) {
             classes.push((recv_class, 0));
         }
@@ -327,9 +320,7 @@ impl<'a> JitContext<'a> {
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
         let mut set = Vec::with_capacity(classes.len());
         for (class, count) in classes {
-            if class != recv_class
-                && count.saturating_mul(PMC_SET_SHARE_DIVISOR) < observations
-            {
+            if class != recv_class && count.saturating_mul(PMC_SET_SHARE_DIVISOR) < observations {
                 // A rare tail: not worth a compare on the hot path.
                 continue;
             }
@@ -434,13 +425,12 @@ impl<'a> JitContext<'a> {
             return Ok(CompileResult::Deopt);
         }
         let callsite = &self.store[callid];
-        self.inline_method_cache
-            .push(InlineCacheEntry {
-                recv_class,
-                name: callsite.name,
-                refinements: self.refinements(),
-                func_id,
-            });
+        self.inline_method_cache.push(InlineCacheEntry {
+            recv_class,
+            name: callsite.name,
+            refinements: self.refinements(),
+            func_id,
+        });
 
         // `recv.send(:foo, ...)` with a literal method name: resolve the
         // name here and compile the direct call, instead of the runtime
@@ -496,13 +486,7 @@ impl<'a> JitContext<'a> {
                     }
                 };
                 return self.compile_method_call(
-                    state,
-                    ir,
-                    recv_class,
-                    arg_class,
-                    target,
-                    visibility,
-                    direct,
+                    state, ir, recv_class, arg_class, target, visibility, direct,
                     // The receiver guard the nested call emits is this
                     // site's only one, so the site keeps the miss policy it
                     // came in with. Under `Learn` a miss recompiles once —
@@ -683,13 +667,13 @@ impl<'a> JitContext<'a> {
                     // exclusion: its guard already admits both the flonum
                     // and the heap representation.)
                     RecvMissMode::Learn => {
-                        recv_class != INTEGER_CLASS
-                            && self.store[callid].pmc.entries().len() < 2
+                        recv_class != INTEGER_CLASS && self.store[callid].pmc.entries().len() < 2
                     }
                     RecvMissMode::Plain => false,
                 };
-                let deopt = if let Some(target) =
-                    use_recompile.then(|| self.recv_miss_recompile_target()).flatten()
+                let deopt = if let Some(target) = use_recompile
+                    .then(|| self.recv_miss_recompile_target())
+                    .flatten()
                 {
                     ir.new_recompile_deopt(state, RecompileReason::BecamePolymorphic, target)
                 } else {
@@ -1192,7 +1176,6 @@ impl<'a> JitContext<'a> {
 
         Ok(CompileResult::Continue)
     }
-
 
     ///
     /// The statically-known positional-argument count of a `...`-forwarding
@@ -2030,15 +2013,17 @@ impl<'a> JitContext<'a> {
             // `initialize`, an `alias_method :initialize, :x=`): the Ruby
             // `Class#new` handles it.
             Some(init_iseq) => {
-                let Some(body) = frameless::ivar_store_body(&self.store, init_iseq).filter(|body| {
-                    pos_num == self.store[init_fid].params().total_positional_args()
-                        && self.store[class_id].is_object_ty_instance()
-                        && body.stores.iter().all(|&(name, _)| {
-                            self.store[class_id]
-                                .get_ivarid(name)
-                                .is_some_and(|id| id.is_inline())
-                        })
-                }) else {
+                let Some(body) =
+                    frameless::ivar_store_body(&self.store, init_iseq).filter(|body| {
+                        pos_num == self.store[init_fid].params().total_positional_args()
+                            && self.store[class_id].is_object_ty_instance()
+                            && body.stores.iter().all(|&(name, _)| {
+                                self.store[class_id]
+                                    .get_ivarid(name)
+                                    .is_some_and(|id| id.is_inline())
+                            })
+                    })
+                else {
                     return false;
                 };
                 InitPlan::Stores(body)
@@ -2098,8 +2083,9 @@ impl<'a> JitContext<'a> {
             InitPlan::Fold => {}
             InitPlan::Stores(body) => {
                 let dst = dst.unwrap();
-                let arg_slots: Vec<frameless::ArgSlot> =
-                    (0..pos_num).map(|i| frameless::ArgSlot::Own(args + i)).collect();
+                let arg_slots: Vec<frameless::ArgSlot> = (0..pos_num)
+                    .map(|i| frameless::ArgSlot::Own(args + i))
+                    .collect();
                 // The constructor's return value is discarded by `new`, so
                 // the expansion writes no destination — `dst` keeps the
                 // object.
@@ -2158,10 +2144,7 @@ impl<'a> JitContext<'a> {
                     (GP::Rax, !state.is_guarded_immediate(slot))
                 }
                 frameless::ArgSlot::Caller(slot) => {
-                    ir.push(AsmInst::LoadCallerSlot {
-                        slot,
-                        dst: GP::Rax,
-                    });
+                    ir.push(AsmInst::LoadCallerSlot { slot, dst: GP::Rax });
                     (GP::Rax, true)
                 }
             };
@@ -2177,10 +2160,7 @@ impl<'a> JitContext<'a> {
                 // unboxed float unboxed.
                 frameless::ArgSlot::Own(slot) => state.copy_slot(ir, slot, dst),
                 frameless::ArgSlot::Caller(slot) => {
-                    ir.push(AsmInst::LoadCallerSlot {
-                        slot,
-                        dst: GP::Rax,
-                    });
+                    ir.push(AsmInst::LoadCallerSlot { slot, dst: GP::Rax });
                     state.def_rax2acc(ir, Some(dst));
                 }
             }
@@ -2533,13 +2513,7 @@ impl<'a> JitContext<'a> {
         // its own call site.
         if self.codegen_mode() || !self.store[iseq_id].bb_info.has_loop() {
             return self.compile_specialized_func_uncached(
-                state,
-                iseq_id,
-                self_class,
-                args_info,
-                outer,
-                callid,
-                bmethod,
+                state, iseq_id, self_class, args_info, outer, callid, bmethod,
             );
         }
         let site = spec_memo::SpecCallSite {
@@ -2562,13 +2536,7 @@ impl<'a> JitContext<'a> {
         let entered = (!self.spec_memo_is_full(&site)).then(|| self.tower(state));
         let marks = self.spec_memo_marks();
         let res = self.compile_specialized_func_uncached(
-            state,
-            iseq_id,
-            self_class,
-            args_info,
-            outer,
-            callid,
-            bmethod,
+            state, iseq_id, self_class, args_info, outer, callid, bmethod,
         )?;
         if let Some(entered) = entered {
             let returned = self.tower(state);
@@ -2673,7 +2641,7 @@ impl<'a> JitContext<'a> {
             let Some(id) = free.next() else {
                 return vec![];
             };
-            plan.push((*param, FPReg::from_pool(id)));
+            plan.push((*param, FPReg::new(id)));
         }
         for (param, fpr) in &plan {
             modes[param.0 as usize] = LinkMode::F(*fpr);
@@ -2890,7 +2858,16 @@ impl<'a> JitContext<'a> {
     ) -> BinaryInlineOutcome {
         let state_save = state.clone();
         let ir_save = ir.save();
-        match f(state, ir, self, &self.store, callid, recv_class, arg_class, mode) {
+        match f(
+            state,
+            ir,
+            self,
+            &self.store,
+            callid,
+            recv_class,
+            arg_class,
+            mode,
+        ) {
             BinaryInlineOutcome::Declined => {
                 *state = state_save;
                 ir.restore(ir_save);
@@ -2923,7 +2900,6 @@ impl<'a> JitContext<'a> {
         }
     }
 }
-
 
 /// How deep method specialization may keep inlining callee iseqs into one
 /// compilation unit.
@@ -3081,13 +3057,7 @@ impl AbstractState {
             call_site_pc: self.pc().as_ptr() as u64,
         });
         self.set_arguments(
-            store,
-            ir,
-            callid,
-            callee_fid,
-            defer_rest,
-            arg_hints,
-            float_args,
+            store, ir, callid, callee_fid, defer_rest, arg_hints, float_args,
         );
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
@@ -3180,7 +3150,13 @@ impl AbstractState {
     /// per-site decision §6 argues for rides on top of this, not instead
     /// of it.
     ///
-    fn chain_exit(&self, ir: &mut AsmIr, evict: AsmEvict, using_fpr: UsingFpr, dst: Option<SlotId>) {
+    fn chain_exit(
+        &self,
+        ir: &mut AsmIr,
+        evict: AsmEvict,
+        using_fpr: UsingFpr,
+        dst: Option<SlotId>,
+    ) {
         let spec = Box::new(ChainExitSpec::new(self, using_fpr, dst));
         ir.push(AsmInst::ChainExit { evict, spec });
     }
@@ -3556,13 +3532,12 @@ impl AbstractState {
             // skip (one flag covers the array and the hash) is in force.
             // The routed keywords must come through this callsite's own
             // `**kwrest` hash-splat slot.
-            let deferred_kw_ok =
-                match self.deferred_forward_info().and_then(|df| df.kw.as_ref()) {
-                    None => true,
-                    Some((kwrest_local, _, _)) => {
-                        kw_route.is_some() && kwrest_guard == Some(*kwrest_local)
-                    }
-                };
+            let deferred_kw_ok = match self.deferred_forward_info().and_then(|df| df.kw.as_ref()) {
+                None => true,
+                Some((kwrest_local, _, _)) => {
+                    kw_route.is_some() && kwrest_guard == Some(*kwrest_local)
+                }
+            };
             // D1: if `f`'s `...` rest array was deferred at frame entry,
             // route the copy straight from the caller's source slots.
             // Only when the forwarded arity statically binds to `g`'s
@@ -3583,8 +3558,7 @@ impl AbstractState {
                 Some((src, len))
                     if {
                         let n = lead_num + len as usize;
-                        callee.req_num() <= n
-                            && (callee.is_rest() || n <= callee.reqopt_num())
+                        callee.req_num() <= n && (callee.is_rest() || n <= callee.reqopt_num())
                     } && kwrest_guard.is_some()
                         && deferred_kw_ok =>
                 {
@@ -3654,8 +3628,7 @@ impl AbstractState {
         } else if callsite.forwarding
             && callsite.splat_pos().len() == 1
             && callsite.splat_pos()[0] < callsite.pos_num
-            && (callee.no_keyword()
-                || (callee.kw_names().is_empty() && callsite.kw_may_exists()))
+            && (callee.no_keyword() || (callee.kw_names().is_empty() && callsite.kw_may_exists()))
         {
             // Forwarding with a single splat at any position — `g(x.., ...)`
             // (trailing) or implicit `super` of a `def m(a,*r,z)` method
