@@ -150,14 +150,14 @@ class Range
   # type that only has `succ` — which then walks `Range#each` by way of
   # `Enumerable`. `map` always builds an Array, so `nil` is unambiguous.
   def map(&block)
-    return to_enum(:map) { size rescue nil } unless block
+    return to_enum(__callee__) { size rescue nil } unless block
     res = __builtin_map(&block)
     res.nil? ? super : res
   end
   alias collect map
 
   def flat_map(&block)
-    return to_enum(:flat_map) { size rescue nil } unless block
+    return to_enum(__callee__) { size rescue nil } unless block
     res = __builtin_flat_map(&block)
     res.nil? ? super : res
   end

@@ -191,7 +191,7 @@ fn struct_initialize(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut new_struct = lfp.self_val();
+    let new_struct = lfp.self_val();
     let new_module = new_struct.as_class();
     let class_id = new_module.id();
     let args = lfp.arg(0).as_array();
@@ -209,12 +209,7 @@ fn struct_initialize(
         .expect("Class#new must be defined");
     let meta_id = globals.store.get_metaclass(class_id).id();
     for name in ["new", "[]"] {
-        globals.add_method(
-            meta_id,
-            IdentId::get_id(name),
-            new_fid,
-            Visibility::Public,
-        );
+        globals.add_method(meta_id, IdentId::get_id(name), new_fid, Visibility::Public);
     }
     globals.define_builtin_class_func(class_id, "members", struct_members, 0);
     // `keyword_init?` is defined per Struct subclass (matching CRuby —
@@ -308,16 +303,11 @@ pub(super) fn get_members(store: &Store, mut class: Module) -> Result<Array> {
 }
 
 #[monoruby_builtin]
-fn initialize(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let pos_args = lfp.arg(0).as_array();
-    let kw_args_val = lfp.try_arg(1).filter(|v| {
-        v.try_hash_ty().map(|h| !h.is_empty()).unwrap_or(false)
-    });
+    let kw_args_val = lfp
+        .try_arg(1)
+        .filter(|v| v.try_hash_ty().map(|h| !h.is_empty()).unwrap_or(false));
     let kw_args = kw_args_val.and_then(|v| v.try_hash_ty());
     let mut self_val = lfp.self_val();
     let class_obj = self_val.get_class_obj(globals);
@@ -476,7 +466,11 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     // The entry point owns the receiver's recursion mark; nested values
     // are marked by `inspect_inner` as it walks into them.
     set.insert(self_val.id());
-    Ok(Value::string(render_struct(&globals.store, self_val, &mut set)?))
+    Ok(Value::string(render_struct(
+        &globals.store,
+        self_val,
+        &mut set,
+    )?))
 }
 
 /// Render a `Struct` instance as `#inspect` does. Shared with the
@@ -572,7 +566,12 @@ pub(super) fn qualified_real_class_name(store: &Store, class_id: ClassId) -> Opt
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Struct/i/=3d=3d.html]
 #[monoruby_builtin]
-pub(super) fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn eq(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     // A Struct equals itself without comparing a member, as in
@@ -626,7 +625,12 @@ pub(super) fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 /// (so `1.eql?(1.0)` is false). Recursive structures use the same
 /// `exec_recursive_paired` machinery as `==`.
 #[monoruby_builtin]
-pub(super) fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn eql(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     // A Struct equals itself without comparing a member, as in
@@ -676,7 +680,12 @@ pub(super) fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 /// Struct#!=
 ///
 #[monoruby_builtin]
-pub(super) fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn ne(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     // The *real* classes, as CRuby's `rb_obj_class` gives: an object
@@ -725,7 +734,12 @@ pub(super) fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 /// Struct subclasses with identical content do not collide. Recursive
 /// structures hash to a sentinel via `HASH_RECURSION_GUARD`.
 #[monoruby_builtin]
-pub(super) fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn hash(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     use std::hash::Hasher;
     let self_val = lfp.self_val();
     let id = self_val.id();
@@ -755,7 +769,12 @@ pub(super) fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
 }
 
 #[monoruby_builtin]
-pub(super) fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn members(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // Walk the superclass chain: an instance of a `Class.new(SomeStruct)`
     // subclass has `/members` defined on the ancestor, not its own class.
     let class_obj = lfp.self_val().get_class_obj(globals);
@@ -1942,7 +1961,10 @@ mod tests {
         run_test_with_prelude(r#"M.new(42, "km", **{}).to_h"#, prelude);
         run_test_with_prelude(r#"M.new(42, "km").frozen?"#, prelude);
         // A String and Symbol key for the same member: the last wins.
-        run_test_with_prelude(r#"M.new("amount" => 1, amount: 9, unit: "m").amount"#, prelude);
+        run_test_with_prelude(
+            r#"M.new("amount" => 1, amount: 9, unit: "m").amount"#,
+            prelude,
+        );
         // An overridden initialize is called with keyword arguments even
         // for positional construction, and can `super`.
         run_test(
@@ -1958,10 +1980,19 @@ mod tests {
         run_test_with_prelude(r#"M.new(1, "m").deconstruct_keys([:amount])"#, prelude);
         run_test_with_prelude(r#"M.new(1, "m").deconstruct_keys(["amount"])"#, prelude);
         run_test_with_prelude(r#"M.new(1, "m").deconstruct_keys(nil)"#, prelude);
-        run_test_with_prelude(r#"M.new(1, "m").deconstruct_keys([:amount, :x, :unit])"#, prelude);
+        run_test_with_prelude(
+            r#"M.new(1, "m").deconstruct_keys([:amount, :x, :unit])"#,
+            prelude,
+        );
         // Argument-validation errors.
-        run_test_with_prelude(r#"begin; M.new; rescue ArgumentError => e; e.message; end"#, prelude);
-        run_test_with_prelude(r#"begin; M.new(unit: "km"); rescue ArgumentError => e; e.message; end"#, prelude);
+        run_test_with_prelude(
+            r#"begin; M.new; rescue ArgumentError => e; e.message; end"#,
+            prelude,
+        );
+        run_test_with_prelude(
+            r#"begin; M.new(unit: "km"); rescue ArgumentError => e; e.message; end"#,
+            prelude,
+        );
         run_test_with_prelude(
             r#"begin; M.new(amount: 1, unit: "m", system: "x"); rescue ArgumentError => e; e.message; end"#,
             prelude,

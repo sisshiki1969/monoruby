@@ -80,7 +80,10 @@ pub(crate) fn local_zone_name(utc_secs: i64) -> Option<String> {
     // (static storage, valid until the next `tzset`), which is read and
     // copied before returning.
     let name = unsafe { std::ffi::CStr::from_ptr(tm.tm_zone) };
-    name.to_str().ok().filter(|s| !s.is_empty()).map(String::from)
+    name.to_str()
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 /// Whether daylight saving time is in effect at a UTC instant.
@@ -128,23 +131,32 @@ fn local_naive_to_utc_isdst(naive: NaiveDateTime, isdst: Option<bool>) -> Option
     {
         return Some(t);
     }
-    let daylight = mktime_isdst(naive, 1)?;
-    let standard = mktime_isdst(naive, 0)?;
+    // Either side can fail outright: glibc answers `-1` when no instant
+    // with the requested `tm_isdst` exists at all, which is what a zone
+    // with no daylight saving does to the daylight side. Only the side
+    // that came back is then a candidate — hence no `?` here, which
+    // would let that one failure take the whole conversion down.
+    let daylight = mktime_isdst(naive, 1);
+    let standard = mktime_isdst(naive, 0);
     Some(match (daylight, standard) {
         // Both name the wall clock asked for: it happens twice, and
         // only `isdst` can say which one is meant. The daylight side is
         // the earlier instant.
-        ((d, true), (s, true)) => {
+        (Some((d, true)), Some((s, true))) => {
             if isdst == Some(true) {
                 d.min(s)
             } else {
                 d.max(s)
             }
         }
-        ((d, true), (_, false)) => d,
-        ((_, false), (s, true)) => s,
-        // Neither: the wall clock does not exist here.
-        ((d, false), (s, false)) => d.max(s),
+        (Some((d, true)), _) => d,
+        (_, Some((s, true))) => s,
+        // Neither names it: the wall clock does not exist here, and
+        // CRuby extrapolates forward — the later of the two.
+        (Some((d, false)), Some((s, false))) => d.max(s),
+        (Some((d, false)), None) => d,
+        (None, Some((s, false))) => s,
+        (None, None) => return None,
     })
 }
 
@@ -180,11 +192,13 @@ fn mktime_isdst(naive: NaiveDateTime, tm_isdst: i32) -> Option<(i64, bool)> {
         tm.tm_min = min as i32;
         tm.tm_sec = sec as i32;
         tm.tm_isdst = tm_isdst;
+        // A sentinel for "mktime never normalized this": the call fills
+        // `tm_wday` in on success and leaves the struct untouched when
+        // it fails, so this is what tells a failure apart from the one
+        // valid instant that is also `-1`, 1969-12-31 23:59:59Z.
+        tm.tm_wday = -1;
         let t = libc::mktime(&mut tm);
-        if t == -1 && tm.tm_year == 0 {
-            // mktime failed rather than landing on 1969-12-31 23:59:59Z
-            // (it normalizes `tm` on success, so a year left at 0 means
-            // it never got that far).
+        if t == -1 && tm.tm_wday == -1 {
             return None;
         }
         let kept = tm.tm_year == year
@@ -634,8 +648,7 @@ fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 if arg0.is_str().is_some() {
                     let cls = lfp.self_val().real_class(&globals.store).as_val();
                     if let Some(tz) = find_timezone(vm, globals, cls, arg0)?
-                        && let Some(t) =
-                            time_at_with_timezone(vm, globals, utc_dt, tz, TIME_CLASS)?
+                        && let Some(t) = time_at_with_timezone(vm, globals, utc_dt, tz, TIME_CLASS)?
                     {
                         return Ok(t);
                     }
@@ -901,7 +914,8 @@ pub(crate) fn time_reinterpret_offset(mut time: Value, offset_secs: i32) {
     // A dump records the offset, not the zone it came from, so the
     // rebuilt time is at a plain offset — CRuby's loaded time answers
     // `#dst?` false however its `:zone` string reads.
-    *time.as_time_mut() = TimeInner::Local(instant.with_timezone(&fixed), Zone::Fixed { exact: None });
+    *time.as_time_mut() =
+        TimeInner::Local(instant.with_timezone(&fixed), Zone::Fixed { exact: None });
 }
 
 ///
@@ -1179,12 +1193,16 @@ fn time_initialize(
     // `local_to_utc`) stores the zone object on the built value's
     // ZONE_IVAR — carry it over to the real receiver.
     if let Some(zone) = globals.store.get_ivar(built, IdentId::get_id(ZONE_IVAR)) {
-        globals.store.set_ivar(self_, IdentId::get_id(ZONE_IVAR), zone)?;
+        globals
+            .store
+            .set_ivar(self_, IdentId::get_id(ZONE_IVAR), zone)?;
     }
     // …and so does a sub-nanosecond value, which the `TimeInner` copied
     // above cannot hold.
     if let Some(sub) = globals.store.get_ivar(built, IdentId::get_id(SUBSEC_IVAR)) {
-        globals.store.set_ivar(self_, IdentId::get_id(SUBSEC_IVAR), sub)?;
+        globals
+            .store
+            .set_ivar(self_, IdentId::get_id(SUBSEC_IVAR), sub)?;
     }
     Ok(self_)
 }
@@ -1655,9 +1673,11 @@ fn store_exact_subsec(
     if num::BigInt::from(1_000_000_000i64) % &den == num::BigInt::from(0) {
         return Ok(());
     }
-    globals
-        .store
-        .set_ivar(time, IdentId::get_id(SUBSEC_IVAR), Value::rational(num, den))
+    globals.store.set_ivar(
+        time,
+        IdentId::get_id(SUBSEC_IVAR),
+        Value::rational(num, den),
+    )
 }
 
 /// Read the epoch seconds of a Time-like value (a `Time`, a `Time`
@@ -1772,7 +1792,10 @@ fn time_at_with_timezone(
     let Some(fixed) = utc_to_local_fixed(vm, globals, dt, tz)? else {
         return Ok(None);
     };
-    let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed { exact: None }), cls);
+    let t = Value::new_time_with_class(
+        TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed { exact: None }),
+        cls,
+    );
     globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
     Ok(Some(t))
 }
@@ -1858,7 +1881,9 @@ fn derived_time(globals: &mut Globals, base: Value, inner: TimeInner) -> Result<
     if let Some(zone) = globals.store.get_ivar(base, IdentId::get_id(ZONE_IVAR))
         && !zone.is_nil()
     {
-        globals.store.set_ivar(derived, IdentId::get_id(ZONE_IVAR), zone)?;
+        globals
+            .store
+            .set_ivar(derived, IdentId::get_id(ZONE_IVAR), zone)?;
     }
     // A sub-nanosecond value rides along the same way — the caller
     // overwrites it when the derivation changes it, as the rounding
@@ -1867,7 +1892,9 @@ fn derived_time(globals: &mut Globals, base: Value, inner: TimeInner) -> Result<
         && sub.try_rational().is_some()
         && derived.as_time().nanosecond() == base.as_time().nanosecond()
     {
-        globals.store.set_ivar(derived, IdentId::get_id(SUBSEC_IVAR), sub)?;
+        globals
+            .store
+            .set_ivar(derived, IdentId::get_id(SUBSEC_IVAR), sub)?;
     }
     Ok(derived)
 }
@@ -2288,8 +2315,8 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     use num::Integer;
     let billion = num::BigInt::from(1_000_000_000i64);
     let total_den = &secs_den * &sub_den * &billion;
-    let total_num = &secs_num * &sub_den * &billion
-        + &sub_num * num::BigInt::from(unit_multiplier) * &secs_den;
+    let total_num =
+        &secs_num * &sub_den * &billion + &sub_num * num::BigInt::from(unit_multiplier) * &secs_den;
     let (whole, frac_num) = total_num.div_mod_floor(&total_den);
     let norm_secs = whole
         .to_i64()
@@ -2862,7 +2889,8 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let utc_dt = time_utc_instant(self_val.as_time());
         if let Some(fixed) = utc_to_local_fixed(vm, globals, utc_dt, arg0)? {
             self_val.ensure_not_frozen(&globals.store)?;
-            *self_val.as_time_mut() = TimeInner::Local(utc_dt.with_timezone(&fixed), Zone::Fixed { exact: None });
+            *self_val.as_time_mut() =
+                TimeInner::Local(utc_dt.with_timezone(&fixed), Zone::Fixed { exact: None });
             globals
                 .store
                 .set_ivar(self_val, IdentId::get_id(ZONE_IVAR), arg0)?;
@@ -3154,8 +3182,20 @@ fn preprocess_strftime(
             Some(b'E') => matches!(conv, b'Y' | b'y' | b'C' | b'c' | b'x' | b'X'),
             _ => matches!(
                 conv,
-                b'm' | b'd' | b'H' | b'M' | b'S' | b'y' | b'e' | b'k' | b'l' | b'I' | b'V' | b'U'
-                    | b'W' | b'u' | b'w'
+                b'm' | b'd'
+                    | b'H'
+                    | b'M'
+                    | b'S'
+                    | b'y'
+                    | b'e'
+                    | b'k'
+                    | b'l'
+                    | b'I'
+                    | b'V'
+                    | b'U'
+                    | b'W'
+                    | b'u'
+                    | b'w'
             ),
         };
 
@@ -3174,7 +3214,9 @@ fn preprocess_strftime(
             // renders it afterwards — so a `%` in the text has to be
             // doubled or chrono reads it as a directive of its own.
             // `%%` with a width is the case that needs it.
-            let text = pad_core(&core, kind, width, flag_minus, pad_flag, flag_caret, flag_hash);
+            let text = pad_core(
+                &core, kind, width, flag_minus, pad_flag, flag_caret, flag_hash,
+            );
             out.push_str(&text.replace('%', "%%"));
             i = directive_end;
             continue;
@@ -3199,7 +3241,11 @@ fn preprocess_strftime(
                 // *digits*, truncated or right-extended to the width
                 // rather than right-aligned in it. `%9L` is the whole
                 // nanoseconds and `%02L` the first two.
-                out.push_str(&format_subsec_exact(&subsec.0, &subsec.1, width.unwrap_or(3)));
+                out.push_str(&format_subsec_exact(
+                    &subsec.0,
+                    &subsec.1,
+                    width.unwrap_or(3),
+                ));
                 i = directive_end;
                 continue;
             }
@@ -3246,7 +3292,11 @@ enum PadKind {
 /// The unpadded text of `conv` for this time, and how it pads — `None`
 /// for a conversion that is not one of CRuby's, which the caller then
 /// prints as written.
-fn directive_core(inner: &TimeInner, conv: u8, zone_abbr: Option<&str>) -> Option<(String, PadKind)> {
+fn directive_core(
+    inner: &TimeInner,
+    conv: u8,
+    zone_abbr: Option<&str>,
+) -> Option<(String, PadKind)> {
     use PadKind::{Compound, Name, Num, Text};
     // The civil fields, from whichever half of the enum holds them.
     macro_rules! f {
@@ -3300,17 +3350,23 @@ fn directive_core(inner: &TimeInner, conv: u8, zone_abbr: Option<&str>) -> Optio
         b'l' => return num(if hour % 12 == 0 { 12 } else { hour % 12 }, 2, ' '),
         b'M' => return num(f!(minute) as i64, 2, '0'),
         b'S' => return num(f!(second) as i64, 2, '0'),
-        b's' => return num(
-            match inner {
-                TimeInner::Local(t, _) => t.timestamp(),
-                TimeInner::Utc(t) => t.timestamp(),
-            },
-            0,
-            '0',
-        ),
+        b's' => {
+            return num(
+                match inner {
+                    TimeInner::Local(t, _) => t.timestamp(),
+                    TimeInner::Utc(t) => t.timestamp(),
+                },
+                0,
+                '0',
+            );
+        }
         b'A' | b'a' | b'B' | b'b' | b'h' | b'p' | b'P' => {
             // `%h` is CRuby's synonym for `%b`, which chrono does not take.
-            let spec = if conv == b'h' { "%b" } else { &format!("%{}", conv as char) };
+            let spec = if conv == b'h' {
+                "%b"
+            } else {
+                &format!("%{}", conv as char)
+            };
             (name(spec), Name)
         }
         b'Z' => (
@@ -3523,21 +3579,6 @@ const MONTH_UPPER_ABBR: [&str; 12] = [
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
 ];
 
-const MONTH_UPPER_FULL: [&str; 12] = [
-    "JANUARY",
-    "FEBRUARY",
-    "MARCH",
-    "APRIL",
-    "MAY",
-    "JUNE",
-    "JULY",
-    "AUGUST",
-    "SEPTEMBER",
-    "OCTOBER",
-    "NOVEMBER",
-    "DECEMBER",
-];
-
 ///
 /// ### Time#to_s
 /// - to_s -> String
@@ -3728,9 +3769,7 @@ fn utc_offset(
         // A fractional offset is answered as the exact Rational it was
         // given, as CRuby does; the `FixedOffset` beside it is the
         // rounded copy `%z` renders from.
-        TimeInner::Local(_, Zone::Fixed { exact: Some(e) }) => {
-            Ok(Value::rational(e.num, e.den))
-        }
+        TimeInner::Local(_, Zone::Fixed { exact: Some(e) }) => Ok(Value::rational(e.num, e.den)),
         TimeInner::Local(t, _) => Ok(Value::integer(t.offset().local_minus_utc() as _)),
         TimeInner::Utc(_) => Ok(Value::integer(0)),
     }
@@ -4159,8 +4198,12 @@ impl TimeInner {
     /// Used by `Time#localtime(offset)`.
     fn shift_to_offset(&mut self, offset: FixedOffset) {
         *self = match self {
-            TimeInner::Local(t, _) => TimeInner::Local(t.with_timezone(&offset), Zone::Fixed { exact: None }),
-            TimeInner::Utc(t) => TimeInner::Local(t.with_timezone(&offset), Zone::Fixed { exact: None }),
+            TimeInner::Local(t, _) => {
+                TimeInner::Local(t.with_timezone(&offset), Zone::Fixed { exact: None })
+            }
+            TimeInner::Utc(t) => {
+                TimeInner::Local(t.with_timezone(&offset), Zone::Fixed { exact: None })
+            }
         }
     }
 
@@ -4492,7 +4535,9 @@ mod tests {
         // Every conversion against a representative flag/width set.
         for t in times {
             for d in "YmdHMSjyCeklIpPAaBbhZzsntDFTRrcxXVUWuwGgLNv%".chars() {
-                for f in ["", "-", "_", "0", "^", "#", "5", "05", "_5", "^#5", "-_^#12"] {
+                for f in [
+                    "", "-", "_", "0", "^", "#", "5", "05", "_5", "^#5", "-_^#12",
+                ] {
                     v.push(format!(r#"{t}.strftime("%{f}{d}")"#));
                 }
             }
@@ -4512,14 +4557,28 @@ mod tests {
         // and parsing resumes at the conversion character — except at a
         // multiple of four, where the count has wrapped back to none.
         for f in [
-            "%:A", "%::b", "%:::d", "%::::b", "%09::::b", "%:::::d", "%::::::z", "%:A%d", "%:%%",
-            "abc%:%def", "%:", "%_5:", "%::::%",
+            "%:A",
+            "%::b",
+            "%:::d",
+            "%::::b",
+            "%09::::b",
+            "%:::::d",
+            "%::::::z",
+            "%:A%d",
+            "%:%%",
+            "abc%:%def",
+            "%:",
+            "%_5:",
+            "%::::%",
         ] {
             v.push(format!(r#"Time.utc(2001,12,25,13,5,6).strftime({f:?})"#));
         }
         // The POSIX locale modifiers, accepted for the conversions
         // CRuby accepts them for and printed as written elsewhere.
-        for f in ["%EY", "%Ec", "%Ex", "%EX", "%Ey", "%EC", "%Em", "%EA", "%OY", "%Od", "%OH", "%Oy", "%Ou", "%Oj", "%Oc"] {
+        for f in [
+            "%EY", "%Ec", "%Ex", "%EX", "%Ey", "%EC", "%Em", "%EA", "%OY", "%Od", "%OH", "%Oy",
+            "%Ou", "%Oj", "%Oc",
+        ] {
             v.push(format!(r#"Time.utc(2001,2,3,4,5,6).strftime({f:?})"#));
         }
         // A conversion nobody owns — including chrono's own, which used
@@ -4528,8 +4587,13 @@ mod tests {
             v.push(format!(r#"Time.utc(2001,2,3,4,5,6).strftime({f:?})"#));
         }
         // `%N` / `%L` widths, and `%%` with one.
-        for f in ["%N", "%L", "%3N", "%6N", "%12N", "%1L", "%9L", "%14L", "%-N", "%_L", "%5%", "%-%", "%%"] {
-            v.push(format!(r#"Time.utc(2001,2,3,4,5,6,987654).strftime({f:?})"#));
+        for f in [
+            "%N", "%L", "%3N", "%6N", "%12N", "%1L", "%9L", "%14L", "%-N", "%_L", "%5%", "%-%",
+            "%%",
+        ] {
+            v.push(format!(
+                r#"Time.utc(2001,2,3,4,5,6,987654).strftime({f:?})"#
+            ));
         }
         // Five-digit years: chrono writes `+10000` where CRuby writes
         // `10000`, so the compounds cannot go through it.
@@ -4557,7 +4621,9 @@ mod tests {
         }
         // An offset carrying seconds — the only thing that makes
         // `%:::z` print all three parts.
-        for f in ["%z", "%:z", "%::z", "%:::z", "%_:::z", "%12:::z", "%-:::z", "%0:::z"] {
+        for f in [
+            "%z", "%:z", "%::z", "%:::z", "%_:::z", "%12:::z", "%-:::z", "%0:::z",
+        ] {
             v.push(format!(
                 r#"Time.new(2022, 1, 1, 0, 0, 0, "+03:30:15").strftime({f:?})"#
             ));
@@ -4569,7 +4635,9 @@ mod tests {
         run_tests(&refs);
         // A `%` with nothing but flags after it is an error, naming the
         // whole format string.
-        for f in ["%", "%-", "%12", "%_", "abc%", "%:%", "%::%", "%12:%", "%E%", "%O%"] {
+        for f in [
+            "%", "%-", "%12", "%_", "abc%", "%:%", "%::%", "%12:%", "%E%", "%O%",
+        ] {
             run_test_error(&format!(r#"Time.utc(2001,1,1).strftime({f:?})"#));
         }
     }
@@ -4585,17 +4653,17 @@ mod tests {
     fn time_five_digit_year_rendering() {
         let mut v: Vec<String> = vec![];
         for secs in [
-            253402300800i64,  // year 10000, the first five-digit one
-            253402300799,     // …and the last four-digit one
-            8210266876799,    // year 262142, the last monoruby can build
-            -62135596800,     // year 1
-            -62135596801,     // year 0
+            253402300800i64, // year 10000, the first five-digit one
+            253402300799,    // …and the last four-digit one
+            8210266876799,   // year 262142, the last monoruby can build
+            -62135596800,    // year 1
+            -62135596801,    // year 0
             // …and the years before it, where the sign goes on top of
             // the four digits rather than inside them.
-            -62167219201,     // year -1, its last second
-            -62198755200,     // …and its first
-            -95617584000,     // year -1060
-            -8300000000000,   // year -261047, the earliest monoruby builds
+            -62167219201,   // year -1, its last second
+            -62198755200,   // …and its first
+            -95617584000,   // year -1060
+            -8300000000000, // year -261047, the earliest monoruby builds
             0,
         ] {
             for r in [
@@ -4649,7 +4717,14 @@ mod tests {
         ];
         // …and everything that reads or derives one.
         let reads = [
-            "subsec", "nsec", "usec", "to_r", "to_f", "to_i", "inspect", "to_s",
+            "subsec",
+            "nsec",
+            "usec",
+            "to_r",
+            "to_f",
+            "to_i",
+            "inspect",
+            "to_s",
             r#"strftime("%N")"#,
             r#"strftime("%12N")"#,
             r#"strftime("%18N")"#,
@@ -4729,7 +4804,14 @@ mod tests {
             "Time.at(3) - Rational(1, 10**30)",
             "Time.at(0) + Rational(1, 3) + Rational(1, 2**64)",
         ] {
-            for r in ["subsec.to_s", "to_r.to_s", "nsec", "inspect", "usec", "utc?"] {
+            for r in [
+                "subsec.to_s",
+                "to_r.to_s",
+                "nsec",
+                "inspect",
+                "usec",
+                "utc?",
+            ] {
                 v.push(format!("({b}).{r}"));
             }
             v.push(format!("Marshal.dump({b}).bytes"));

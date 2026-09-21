@@ -178,6 +178,10 @@ class Enumerator
   # value and rejects arguments — unlike `Enumerable#each_with_index`,
   # which the plain inheritance would otherwise supply.
   def each_with_index(&block)
+    # Not a bare delegation: `with_index` would build the Enumerator and
+    # record *its* name and offset. CRuby's `enumerator_with_index`
+    # answers `#<Enumerator: …:each_with_index>` with no argument.
+    return to_enum(:each_with_index) { size } unless block
     with_index(0, &block)
   end
 

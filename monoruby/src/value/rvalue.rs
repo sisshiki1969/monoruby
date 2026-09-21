@@ -9,6 +9,7 @@ use std::mem::ManuallyDrop;
 
 use crate::ast::{Loc, SourceInfoRef};
 
+pub use argf::*;
 pub use arithmetic_sequence::{
     AS_BEGIN_OFFSET, AS_END_OFFSET, AS_EXCLUDE_END_OFFSET, AS_STEP_OFFSET, ArithmeticSequenceInner,
 };
@@ -21,15 +22,13 @@ pub use fiber::*;
 pub use hash::*;
 pub(crate) use io::NonblockGuard;
 pub use io::{ExtEnc, IoInner, IoKind, NonblockRead, NonblockWrite, fd_is_owned};
-pub use argf::*;
-pub use weakmap::*;
-pub(crate) use weakmap::clear_dead as weakmap_clear_dead;
-pub(crate) use weakmap::register as weakmap_register;
 pub use io_buffer::*;
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
 pub use method::*;
-pub use module::{MODULE_OFFSET_CLASS_ID, MODULE_OFFSET_SUPERCLASS, Module, ModuleInner, ModuleType};
+pub use module::{
+    MODULE_OFFSET_CLASS_ID, MODULE_OFFSET_SUPERCLASS, Module, ModuleInner, ModuleType,
+};
 pub use proc::*;
 pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, RangeInner};
 pub use rational::{RationalFloorResult, RationalInner};
@@ -37,20 +36,24 @@ pub use regexp::{Regexp, RegexpInner};
 pub(crate) use regexp::{Spans, Subject, save_spans, spans_of};
 pub(crate) use string::pack::*;
 pub use string::{
-    CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET, char_bytes_code,
-    STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, map_bytes_to_utf8,
-};
-pub(crate) use string::{
-    STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer,
-    string_snapshot, string_substring,
+    CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET,
+    STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, char_bytes_code, map_bytes_to_utf8,
 };
 pub(crate) use string::{
     MbcPiece, PreciseLen, char_count, char_width_at, eucjp_char_width, eucjp_precise_len,
     mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width, sjis_precise_len, walk_mbc,
 };
+pub(crate) use string::{
+    STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer, string_snapshot,
+    string_substring,
+};
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
 pub use thread::*;
+pub(crate) use weakmap::clear_dead as weakmap_clear_dead;
+pub(crate) use weakmap::register as weakmap_register;
+pub use weakmap::*;
 
+mod argf;
 mod arithmetic_sequence;
 mod array;
 mod binding;
@@ -60,8 +63,6 @@ mod exception;
 mod fiber;
 mod hash;
 pub(crate) mod io;
-mod argf;
-mod weakmap;
 mod io_buffer;
 mod ivar_table;
 mod match_data;
@@ -74,6 +75,7 @@ mod regexp;
 mod string;
 mod struct_inner;
 mod thread;
+mod weakmap;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
 /// Header flag bit 7: marks a chilled string as literal-born (see
@@ -90,8 +92,7 @@ pub const NEWBORN_FLAG_MASK: u16 = 0b0001_0111 | CHILLED_LITERAL_BIT;
 pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.flag);
 pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
 // `ty_flags_ptr` addresses the per-type metadata byte as `ty` + 1.
-const _: () =
-    assert!(std::mem::offset_of!(RValue, header.meta.ty_flags) == RVALUE_OFFSET_TY + 1);
+const _: () = assert!(std::mem::offset_of!(RValue, header.meta.ty_flags) == RVALUE_OFFSET_TY + 1);
 pub const RVALUE_OFFSET_CLASS: usize = std::mem::offset_of!(RValue, header.meta.class);
 pub const RVALUE_OFFSET_VAR: usize = std::mem::offset_of!(RValue, var_table);
 pub const RVALUE_OFFSET_KIND: usize = std::mem::offset_of!(RValue, kind);
@@ -994,7 +995,6 @@ impl alloc::GC<RValue> for RValue {
         // `Allocator::drain_mark_queue` gets to it. See `doc/gc.md`.
         alloc.mark(self);
     }
-
 }
 
 impl alloc::GCBox for RValue {
@@ -1317,16 +1317,6 @@ impl RValue {
         self.header.ty()
     }
 
-    /// The per-`ObjTy` metadata byte (see `Metadata::ty_flags`). For
-    /// HASH objects this holds the small-hash representation bits.
-    pub(crate) fn ty_flags(&self) -> u8 {
-        self.header.ty_flags()
-    }
-
-    pub(crate) fn set_ty_flags(&mut self, flags: u8) {
-        self.header.set_ty_flags(flags)
-    }
-
     /// Raw pointer to the `ty_flags` byte, for the hash handles that
     /// pair it with the payload (the iteration guard mutates its bits
     /// through a shared borrow, `Cell`-style).
@@ -1640,7 +1630,9 @@ impl RValue {
                     ObjTy::IO_BUFFER => ObjKind::io_buffer(self.as_io_buffer().clone()),
                     ObjTy::ARGF => ObjKind::argf(self.as_argf().clone()),
                     ObjTy::NATIVE => ObjKind::native(
-                        self.as_native().dup().unwrap_or_else(|| Box::new(EmptyNative)),
+                        self.as_native()
+                            .dup()
+                            .unwrap_or_else(|| Box::new(EmptyNative)),
                     ),
                     ObjTy::ARRAY => {
                         // Sized up front: a literal past the inline
@@ -1740,7 +1732,9 @@ impl RValue {
                             argf: self.kind.argf.clone(),
                         },
                         ObjTy::NATIVE => ObjKind::native(
-                            self.as_native().dup().unwrap_or_else(|| Box::new(EmptyNative)),
+                            self.as_native()
+                                .dup()
+                                .unwrap_or_else(|| Box::new(EmptyNative)),
                         ),
                         ObjTy::ARRAY => ObjKind {
                             array: self.kind.array.clone(),
@@ -1839,7 +1833,9 @@ impl RValue {
                             argf: self.kind.argf.clone(),
                         },
                         ObjTy::NATIVE => ObjKind::native(
-                            self.as_native().dup().unwrap_or_else(|| Box::new(EmptyNative)),
+                            self.as_native()
+                                .dup()
+                                .unwrap_or_else(|| Box::new(EmptyNative)),
                         ),
                         ObjTy::ARRAY => ObjKind {
                             array: self.kind.array.clone(),
@@ -2063,7 +2059,6 @@ impl RValue {
             var_table: None,
         }
     }
-
 
     pub(super) fn new_string_from_inner(inner: RStringInner) -> Self {
         RValue {

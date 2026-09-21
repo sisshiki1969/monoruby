@@ -105,13 +105,15 @@ class Enumerator
     def map(&block)
       raise ArgumentError, "tried to call lazy map without a block" unless block
       src = self
-      __lazy_step(:map, nil, -> { src.size }) { |y, *vals| y << block.call(*vals) }
+      # `__callee__`, not `:map`: `Lazy#inspect` names the step with
+      # the name the call site used, so `.collect` reads `…:collect`.
+      __lazy_step(__callee__, nil, -> { src.size }) { |y, *vals| y << block.call(*vals) }
     end
     alias collect map
 
     def flat_map(&block)
       raise ArgumentError, "tried to call lazy flat_map without a block" unless block
-      __lazy_step(:flat_map, nil, nil) do |y, *vals|
+      __lazy_step(__callee__, nil, nil) do |y, *vals|
         v = block.call(*vals)
         # CRuby flattens an Array, and anything that is itself lazy
         # (`respond_to?(:force) && respond_to?(:each)`), but leaves a
@@ -127,7 +129,7 @@ class Enumerator
 
     def select(&block)
       raise ArgumentError, "tried to call lazy select without a block" unless block
-      __lazy_step(:select, nil, nil) do |y, *vals|
+      __lazy_step(__callee__, nil, nil) do |y, *vals|
         v = __lazy_pack(vals)
         y << v if block.call(v)
       end
@@ -421,7 +423,7 @@ class Enumerator
     alias enum_for to_enum
 
     def with_object(obj, &block)
-      return to_enum(:with_object, obj) unless block
+      return to_enum(__callee__, obj) unless block
       super
     end
     alias each_with_object with_object

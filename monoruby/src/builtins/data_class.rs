@@ -1,5 +1,7 @@
+use super::struct_class::{
+    eq, eql, get_members, hash, members, ne, qualified_real_class_name, struct_members,
+};
 use super::*;
-use super::struct_class::{eq, eql, get_members, hash, members, ne, qualified_real_class_name, struct_members};
 
 /// `Data` (Ruby 3.2+ value objects). The class itself is defined here in
 /// Rust so that `Data.define` can produce *real* `Data` subclasses (CRuby:
@@ -93,7 +95,7 @@ fn data_define_class(
     let members_arg = lfp.arg(1).as_array();
     let m = globals.store.define_struct_class(None, superclass);
     let class_id = m.id();
-    let mut new_class = m.as_val();
+    let new_class = m.as_val();
 
     let members = ArrayInner::from_iter(members_arg.iter().cloned());
     let inline = members.len() <= crate::value::STRUCT_INLINE_SLOTS;
@@ -123,7 +125,12 @@ fn data_define_class(
 /// member slots and freeze the receiver. This is the tail of
 /// `Data#initialize`, split out so slot access stays in Rust.
 #[monoruby_builtin]
-fn data_init(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn data_init(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut self_val = lfp.self_val();
     let values = lfp.arg(0).as_array();
     for (i, v) in values.iter().enumerate() {
@@ -262,7 +269,10 @@ mod tests {
     #[test]
     fn data_is_real_data_subclass() {
         let prelude = r#"M = Data.define(:amount, :unit)"#;
-        run_test_with_prelude(r#"[M.superclass, M.new(1, "m").is_a?(Data), Data.superclass]"#, prelude);
+        run_test_with_prelude(
+            r#"[M.superclass, M.new(1, "m").is_a?(Data), Data.superclass]"#,
+            prelude,
+        );
         // A plain `class X < Data` subclass must not respond to `members`;
         // defined classes (and their subclasses) must.
         run_test_with_prelude(

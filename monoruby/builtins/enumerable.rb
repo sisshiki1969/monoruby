@@ -135,7 +135,10 @@ module Enumerable
   end
 
   def map
-    return to_enum(:map) { respond_to?(:size) ? size : nil } unless block_given?
+    # `__callee__` so `#collect` records itself rather than `#map` —
+    # CRuby names the Enumerator with `rb_frame_this_func()`, the name
+    # at the call site. Same for every aliased method below.
+    return to_enum(__callee__) { respond_to?(:size) ? size : nil } unless block_given?
     res = []
     # The user block is called with the *original* values `each`
     # yields (arity-adaptive), not the packed element: for
@@ -159,7 +162,7 @@ module Enumerable
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
     end
     ifnone = args[0]
-    return self.to_enum(:find, *args) unless block_given?
+    return self.to_enum(__callee__, *args) unless block_given?
     __gather_each do |x|
       if yield(x)
         return x
@@ -197,7 +200,7 @@ module Enumerable
   end
 
   def filter
-    return to_enum(:filter) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(__callee__) { respond_to?(:size) ? size : nil } unless block_given?
     res = []
     __gather_each do |x|
       if yield(x)
@@ -380,7 +383,7 @@ module Enumerable
   end
 
   def flat_map
-    return to_enum(:flat_map) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(__callee__) { respond_to?(:size) ? size : nil } unless block_given?
     res = []
     __gather_each do |x|
       r = yield(x)

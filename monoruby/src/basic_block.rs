@@ -254,6 +254,7 @@ impl BasicBlockInfo {
     }
 
     /// The blocks control can reach directly from `bb_id`.
+    #[cfg(feature = "emit-cfg")]
     pub(crate) fn succ(&self, bb_id: BasicBlockId) -> &[BasicBlockId] {
         &self.succ[self[bb_id].succ.range()]
     }
@@ -333,12 +334,16 @@ impl std::fmt::Debug for BasicBlockInfoEntry {
 /// A block's slice of [`BasicBlockInfo::succ`].
 ///
 #[derive(Clone, Copy, Default, Debug)]
+// The fields are only ever read back through `range`, which is what the
+// CFG dump walks — without that feature they are written and never read.
+#[cfg_attr(not(feature = "emit-cfg"), allow(dead_code))]
 struct EdgeRange {
     start: u32,
     len: u32,
 }
 
 impl EdgeRange {
+    #[cfg(feature = "emit-cfg")]
     fn range(self) -> std::ops::Range<usize> {
         self.start as usize..(self.start + self.len) as usize
     }

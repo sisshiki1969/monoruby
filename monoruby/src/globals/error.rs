@@ -10,6 +10,21 @@ pub(crate) const SIGNAL_INTERRUPT_MSG: &str = "__monoruby_signal_interrupt__";
 /// it leak to Ruby as a RuntimeError.
 pub(crate) const WOULD_BLOCK_INTERRUPT_MSG: &str = "__monoruby_would_block_interrupt__";
 
+/// The `payload` tag [`MonorubyErr::invalid_byte_sequence_error_detail`]
+/// uses, and the ivars `Executor::take_ex_obj` fills from the Array it
+/// carries, in order.
+pub(crate) const ENC_ERR_PAYLOAD: &str = "enc_err";
+
+/// The `Encoding::InvalidByteSequenceError` accessors, in the order the
+/// [`ENC_ERR_PAYLOAD`] Array packs them.
+pub(crate) const ENC_ERR_IVARS: [&str; 5] = [
+    "@source_encoding_name",
+    "@destination_encoding_name",
+    "@error_bytes",
+    "@readagain_bytes",
+    "@incomplete_input",
+];
+
 use super::*;
 
 /// The string backtrace stored on an exception object (`/backtrace`
@@ -81,11 +96,12 @@ pub struct MonorubyErr {
     /// When set, `take_ex_obj` records it as the exception's cause and
     /// suppresses the implicit `$!` chaining.
     pub explicit_cause: Option<Value>,
-    /// Kind-specific extra data, surfaced as hidden ivars when the
-    /// exception object is materialized (`take_ex_obj`): for
-    /// `LocalJumpError` the jump value + reason (`"return"`, …)
-    /// → `#exit_value` / `#reason`; for `StopIteration` the
-    /// iterator return value + `"result"` → `#result`.
+    /// Kind-specific extra data, surfaced as ivars when the exception
+    /// object is materialized (`take_ex_obj`): for `LocalJumpError` the
+    /// jump value + reason (`"return"`, …) → `#exit_value` / `#reason`;
+    /// for `StopIteration` the iterator return value + `"result"` →
+    /// `#result`; for `Encoding::InvalidByteSequenceError` the five
+    /// fields of [`ENC_ERR_IVARS`], as an Array.
     pub(crate) payload: Option<(Value, &'static str)>,
     /// The exact message bytes and their encoding, when a plain UTF-8
     /// `String` would not reproduce them — an Errno message carrying a
@@ -995,6 +1011,23 @@ impl MonorubyErr {
     /// bytes are ill-formed under the source encoding.
     pub(crate) fn invalid_byte_sequence_error(store: &Store, msg: String) -> MonorubyErr {
         Self::encoding_subclass_error(store, "InvalidByteSequenceError", msg)
+    }
+
+    /// The same, carrying the five fields the exception exposes
+    /// (`#source_encoding_name`, `#destination_encoding_name`,
+    /// `#error_bytes`, `#readagain_bytes`, `#incomplete_input?`) as an
+    /// Array payload that `Executor::take_ex_obj` unpacks into ivars.
+    /// CRuby's message names only the offending bytes, so — unlike the
+    /// converter-raised errors — there is nothing left in the text for
+    /// the accessors to parse the encodings back out of.
+    pub(crate) fn invalid_byte_sequence_error_detail(
+        store: &Store,
+        msg: String,
+        detail: Value,
+    ) -> MonorubyErr {
+        let mut err = Self::encoding_subclass_error(store, "InvalidByteSequenceError", msg);
+        err.payload = Some((detail, ENC_ERR_PAYLOAD));
+        err
     }
 
     pub fn cant_convert_error_ary(store: &Store, v: Value, result: Value) -> MonorubyErr {

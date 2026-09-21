@@ -24,7 +24,8 @@ class Hash
   # `[key, value]` array is yielded, so an arity-1 block receives the
   # pair (CRuby's `rb_yield(rb_assoc_new(k, v))`).
   def each
-    return to_enum(:each) { size } unless block_given?
+    # `__callee__` so `#each_pair` records itself rather than `#each`.
+    return to_enum(__callee__) { size } unless block_given?
     guard = __iter_begin
     begin
       # Walk the live entry vector by position. A delete during the loop
@@ -350,7 +351,7 @@ class Hash
   # what writing `map` in Ruby is for. The one thing the block object was
   # needed for, its shape, `__block_splits_pair?` answers off the frame.
   def map
-    return to_enum(:map) { size } unless block_given?
+    return to_enum(__callee__) { size } unless block_given?
     result = []
     if method(:each).owner == ::Hash
       # Own `each` — not overridden by a subclass or a singleton method —
@@ -392,7 +393,7 @@ class Hash
   alias collect map
 
   def flat_map
-    return to_enum(:flat_map) unless block_given?
+    return to_enum(__callee__) unless block_given?
     res = []
     each { |k, v|
       r = yield(k, v)
