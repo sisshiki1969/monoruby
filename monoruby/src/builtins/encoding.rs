@@ -3466,6 +3466,95 @@ fn bad_source_outcome(
     )
 }
 
+/// The byte offset of the first UTF-16 / UTF-32 unit `decode_utf16_32`
+/// cannot read — a lone surrogate, an out-of-range scalar, or a group
+/// the input ended in the middle of. `None` when the whole input reads.
+fn utf16_32_first_error(bytes: &[u8], enc: crate::value::Encoding) -> Option<usize> {
+    use crate::value::Encoding as E;
+    let be = matches!(enc, E::Utf16Be | E::Utf32Be);
+    if matches!(enc, E::Utf32Le | E::Utf32Be) {
+        let mut i = 0;
+        while i + 4 <= bytes.len() {
+            let g = [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]];
+            let cp = if be {
+                u32::from_be_bytes(g)
+            } else {
+                u32::from_le_bytes(g)
+            };
+            if char::from_u32(cp).is_none() {
+                return Some(i);
+            }
+            i += 4;
+        }
+        return (i < bytes.len()).then_some(i);
+    }
+    let unit = |i: usize| {
+        let (a, b) = (bytes[i], bytes[i + 1]);
+        if be {
+            u16::from_be_bytes([a, b])
+        } else {
+            u16::from_le_bytes([a, b])
+        }
+    };
+    let mut i = 0;
+    while i + 2 <= bytes.len() {
+        let u = unit(i);
+        if (0xD800..=0xDBFF).contains(&u) {
+            if i + 4 <= bytes.len() && (0xDC00..=0xDFFF).contains(&unit(i + 2)) {
+                i += 4;
+                continue;
+            }
+            return Some(i);
+        }
+        if (0xDC00..=0xDFFF).contains(&u) {
+            return Some(i);
+        }
+        i += 2;
+    }
+    (i < bytes.len()).then_some(i)
+}
+
+/// How many bytes of `src_bytes` decode to the first `pivot_bytes`
+/// bytes of the UTF-8 pivot. Used where a conversion stops partway
+/// through the *encode* half and only the source up to there counts as
+/// consumed.
+///
+/// A prefix of the source decodes to a prefix of the pivot, and longer
+/// never decodes to shorter, so the shortest source prefix that reaches
+/// `pivot_bytes` is a binary search — a handful of decodes rather than
+/// one per character.
+fn pivot_prefix_consumed(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    pivot_bytes: usize,
+    opts: &TranscodeOpts,
+) -> usize {
+    if pivot_bytes == 0 {
+        return 0;
+    }
+    let decoded_len = |n: usize| -> usize {
+        let (_, _, out, _) = stream_convert(
+            &src_bytes[..n],
+            src_enc,
+            crate::value::Encoding::Utf8,
+            None,
+            true,
+            opts,
+        );
+        out.len()
+    };
+    let (mut lo, mut hi) = (0usize, src_bytes.len());
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if decoded_len(mid) < pivot_bytes {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 fn stream_convert(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -3491,6 +3580,62 @@ fn stream_convert(
             StreamConvertResult::Finished
         };
         return (result, limit, src_bytes[..limit].to_vec(), ErrMeta::default());
+    }
+    // UTF-16 / UTF-32 on either side. `encoding_rs` has no UTF-32 at
+    // all and no UTF-16 *encoder*, so the pivot is built and consumed
+    // here with the same helpers `String#encode` uses (#1509).
+    if is_utf16_or_32(src_enc) {
+        let (pivot, decode_err) = decode_utf16_32(src_bytes, src_enc);
+        if decode_err && !opts.invalid_replace {
+            // The units before the bad one still convert: CRuby writes
+            // them to the destination and *then* reports the error.
+            let at = utf16_32_first_error(src_bytes, src_enc).unwrap_or(0);
+            let (_, _, out, _) =
+                stream_convert(&src_bytes[..at], src_enc, dst_enc, max_dst_bytes, false, opts);
+            let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
+            return (kind, at, out, meta);
+        }
+        let (result, pivot_consumed, out, meta) = stream_convert(
+            pivot.as_bytes(),
+            E::Utf8,
+            dst_enc,
+            max_dst_bytes,
+            partial_input,
+            opts,
+        );
+        // Back to source bytes: two per UTF-16 code unit (so four for a
+        // surrogate pair), four per UTF-32 character.
+        let wide = matches!(src_enc, E::Utf32Le | E::Utf32Be);
+        let consumed = pivot[..pivot_consumed]
+            .chars()
+            .map(|c| if wide { 4 } else { c.len_utf16() * 2 })
+            .sum();
+        return (result, consumed, out, meta);
+    }
+    if is_utf16_or_32(dst_enc) {
+        let (result, consumed, pivot, meta) =
+            stream_convert(src_bytes, src_enc, E::Utf8, None, partial_input, opts);
+        // Whatever decoded before the decode half gave up still has to
+        // come out; the encode half itself cannot fail, every scalar
+        // having a UTF-16 and a UTF-32 form.
+        let text = String::from_utf8_lossy(&pivot);
+        let mut out = Vec::with_capacity(text.len() * 2);
+        for (at, c) in text.char_indices() {
+            let mut buf = [0u8; 4];
+            let unit = encode_utf16_32(c.encode_utf8(&mut buf), dst_enc);
+            if let Some(max) = max_dst_bytes
+                && out.len() + unit.len() > max
+            {
+                return (
+                    StreamConvertResult::DestinationBufferFull,
+                    pivot_prefix_consumed(src_bytes, src_enc, at, opts),
+                    out,
+                    ErrMeta::default(),
+                );
+            }
+            out.extend_from_slice(&unit);
+        }
+        return (result, consumed, out, meta);
     }
     // US-ASCII / ASCII-8BIT destination: `encoding_rs` has no
     // encoder for these. Decode the source to UTF-8 *without*
@@ -4027,8 +4172,8 @@ fn rs_first_malformed(
 
 /// [`first_bad_sequence`] for UTF-16: a trailing odd byte and a high
 /// surrogate at the very end are *incomplete*, a high surrogate that is
-/// not followed by a low one re-reads the next unit's first byte, and a
-/// lone low surrogate is simply invalid.
+/// not followed by a low one re-reads as much of the next unit as the
+/// byte order made it read, and a lone low surrogate is simply invalid.
 fn first_bad_utf16(bytes: &[u8], be: bool) -> Option<(Vec<u8>, Vec<u8>, bool)> {
     let unit = |i: usize| {
         let (a, b) = (bytes[i], bytes[i + 1]);
@@ -4046,13 +4191,27 @@ fn first_bad_utf16(bytes: &[u8], be: bool) -> Option<(Vec<u8>, Vec<u8>, bool)> {
                 i += 4;
                 continue;
             }
-            // A high surrogate the input does not complete. Whatever
-            // follows it — even a single stray byte — is the one byte
-            // CRuby re-reads; with nothing after it, the pair is simply
-            // incomplete.
-            return Some(match bytes.get(i + 2) {
-                Some(b) => (bytes[i..i + 2].to_vec(), vec![*b], false),
-                None => (bytes[i..i + 2].to_vec(), vec![], true),
+            // A high surrogate the input does not complete. How much
+            // of what follows CRuby re-reads depends on the byte order,
+            // because that is how much of the next unit it had to read
+            // to learn it was not a low surrogate: big-endian, the
+            // *first* byte decides, so one byte is re-read; little-
+            // endian, the *second* one does, so the whole unit is. A
+            // little-endian high surrogate with a single byte after it
+            // is therefore not a completed error at all — it is a
+            // three-byte prefix still waiting for its fourth byte.
+            let err = bytes[i..i + 2].to_vec();
+            return Some(if be {
+                match bytes.get(i + 2) {
+                    Some(b) => (err, vec![*b], false),
+                    None => (err, vec![], true),
+                }
+            } else if i + 4 <= bytes.len() {
+                (err, bytes[i + 2..i + 4].to_vec(), false)
+            } else if i + 3 == bytes.len() {
+                (bytes[i..].to_vec(), vec![], true)
+            } else {
+                (err, vec![], true)
             });
         }
         if (0xDC00..=0xDFFF).contains(&u) {
@@ -7204,6 +7363,135 @@ mod tests {
             r#"Encoding::Converter.new("UTF-8", "UTF-32BE").class.name"#,
             r#"Encoding::Converter.new("UTF-32LE", "UTF-8").class.name"#,
             r#"Encoding::Converter.new("UTF-16BE", "UTF-32LE").class.name"#,
+        ]);
+    }
+
+    #[test]
+    fn converter_utf16_32_transcodes_both_ways() {
+        // The UTF-16/UTF-32 codecs are reached through a UTF-8 pivot,
+        // so both a wide source and a wide destination convert, and a
+        // wide pair converts through the middle.
+        run_tests(&[
+            r#"Encoding::Converter.new("UTF-8", "UTF-16LE").convert("a\u3042").bytes"#,
+            r#"Encoding::Converter.new("UTF-8", "UTF-32BE").convert("a\u3042").bytes"#,
+            r#"Encoding::Converter.new("UTF-16LE", "UTF-8").convert("a\u3042".encode("UTF-16LE")).bytes"#,
+            r#"Encoding::Converter.new("UTF-16BE", "UTF-32LE").convert("a\u3042".encode("UTF-16BE")).bytes"#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "UTF-16BE")
+              s = +"abc"
+              d = +""
+              r = c.primitive_convert(s, d)
+              [r, s, d.bytes]
+            "#,
+            // A destination cap that cuts the output mid-way stops with
+            // `:destination_buffer_full`, and a cap that cannot hold a
+            // whole code unit writes none of it.
+            r#"
+              c = Encoding::Converter.new("UTF-8", "UTF-16LE")
+              s = +"abc"
+              d = +""
+              [c.primitive_convert(s, d, nil, 2), d.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "UTF-32LE")
+              s = +"abc"
+              d = +""
+              c.primitive_convert(s, d, nil, 3)
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "UTF-16LE")
+              s = +"\u3042b"
+              d = +""
+              [c.primitive_convert(s, d, nil, 2), d.bytes]
+            "#,
+            r#""a\u3042".encode("UTF-32LE").encode("UTF-8").bytes"#,
+            // `invalid: :replace` on a wide source replaces the bad
+            // unit and converts the rest, in either byte order.
+            r#""a\x00\x00\xd8\x62\x00".b.force_encoding("UTF-16LE").encode("UTF-8", invalid: :replace).bytes"#,
+            r#""\x00\x61\xd8\x00\x00\x62".b.force_encoding("UTF-16BE").encode("UTF-8", invalid: :replace).bytes"#,
+        ]);
+    }
+
+    #[test]
+    fn converter_utf16_32_source_error_positions() {
+        // Where a wide source first stops decoding: a UTF-32 group that
+        // is a surrogate or out of range, a group the input ends in the
+        // middle of, a lone low surrogate, an odd trailing byte — and,
+        // for each, that a well-formed surrogate *pair* before it is
+        // stepped over rather than mistaken for the error. Everything
+        // decoded before the bad unit still reaches the destination.
+        run_test_once(
+            r#"
+              def t(s, enc)
+                c = Encoding::Converter.new(enc, "UTF-8")
+                src = +s.b
+                d = +""
+                r = c.primitive_convert(src, d)
+                e = c.primitive_errinfo
+                [r, d.bytes, e[3]&.bytes, e[4]&.bytes]
+              end
+              [
+                t("\x61\x00\x00\x00\x00\xd8\x00\x00", "UTF-32LE"),
+                t("\x61\x00\x00\x00\x00\x00\x11\x00", "UTF-32LE"),
+                t("\x61\x00\x00\x00\x62\x00", "UTF-32LE"),
+                t("\x00\xd8\x00\xdc\x00\xdc\x61\x00", "UTF-16LE"),
+                t("\x61\x00\x00\xdc", "UTF-16LE"),
+                t("\x61\x00\x62", "UTF-16LE"),
+                t("\x00\xd8\x00\xdc\x61\x00", "UTF-16LE"),
+                t("\x00\x00\x00\x61\x00\x00\xd8\x00", "UTF-32BE"),
+                t("\x00\x61\xdc\x00", "UTF-16BE"),
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn converter_utf16_readagain_is_byte_order_dependent() {
+        // A high surrogate that no low surrogate completes: how much of
+        // the following unit CRuby re-reads is how much of it the byte
+        // order made it read before it knew. Little-endian the second
+        // byte decides, so the whole unit is put back — and a high
+        // surrogate with a single byte after it is an *incomplete*
+        // three-byte prefix, not a finished error. Big-endian the first
+        // byte decides, so one byte suffices.
+        run_tests(&[
+            r#"
+              c = Encoding::Converter.new("UTF-16LE", "ISO-8859-1")
+              s = +"a\x00\x00\xd8\x62\x00".b
+              d = +""
+              r = c.primitive_convert(s, d)
+              [r, d.bytes, c.primitive_errinfo[3].bytes, c.primitive_errinfo[4].bytes, c.putback.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-16BE", "ISO-8859-1")
+              s = +"\x00\x61\xd8\x00\x00\x62".b
+              d = +""
+              r = c.primitive_convert(s, d)
+              [r, d.bytes, c.primitive_errinfo[3].bytes, c.primitive_errinfo[4].bytes, c.putback.bytes]
+            "#,
+            r#"
+              begin
+                "\x00\xd8\x61".b.force_encoding("UTF-16LE").encode("UTF-8")
+              rescue Encoding::InvalidByteSequenceError => e
+                [e.error_bytes.bytes, e.readagain_bytes&.bytes, e.incomplete_input?]
+              end
+            "#,
+            r#"
+              begin
+                "\xd8\x00\x00".b.force_encoding("UTF-16BE").encode("UTF-8")
+              rescue Encoding::InvalidByteSequenceError => e
+                [e.error_bytes.bytes, e.readagain_bytes&.bytes, e.incomplete_input?]
+              end
+            "#,
+            // A high surrogate with nothing at all after it is an
+            // incomplete pair whichever way round the units are.
+            r#"
+              begin
+                "\x00\xd8".b.force_encoding("UTF-16LE").encode("UTF-8")
+              rescue Encoding::InvalidByteSequenceError => e
+                [e.error_bytes.bytes, e.readagain_bytes&.bytes, e.incomplete_input?]
+              end
+            "#,
         ]);
     }
 
