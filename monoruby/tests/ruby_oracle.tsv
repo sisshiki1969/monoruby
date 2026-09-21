@@ -652,6 +652,7 @@
 20e45524efcf74f976e1ee0d9e08a133	[100, 200, "#<struct S a=100, b=200>"]	S = Struct.new(:a,:b)\n        \n\n        s = S.new(100,200)\n        [s.a
 210ca0f6e08261af84be6f99ecfaa071	[65, "Z"]	__a = [];__a << (putc(65));__a << (putc("Z"));__a
 2124167be6a7bd9f87220042a78368ef	["", "Ruby", ["S", true, true, true, true], ["S2", true, "", "ASCII-8BIT"], "str", nil, false, true, "We will rock you."]	__a = [];__a << (String.new);__a << (String.new("Ruby"));__a << (\n        module
+212672b2d0b6e2ec1d704fccc3ba3567	[[1, 2, 0], 1, 2, [1, 2, 3], 4, 5, [1, 2, 6], 7, 8, [1, 2, 9], 10, 11, [1, 2, 12], 13, 14, [1, 2, 15], 16, 17, [1, 2, 18], 19, 20, [1, 2, 21], 22, 23, [1, 2, 24], 25, 26, [1, 2, 27], 28, 29, [1, 2, 30], 31, 32, [1, 2, 33], 34, 35, [1, 2, 36], 37, 38, [1, 2, 39], 40, 41, [1, 2, 42], 43, 44, [1, 2, 45], 46, 47, [1, 2, 48], 49, 50, [1, 2, 51], 52, 53, [1, 2, 54], 55, 56, [1, 2, 57], 58, 59, [1, 2, 60], 61, 62, [1, 2, 63], 64, 65, [1, 2, 66], 67, 68, [1, 2, 69], 70, 71, [1, 2, 72], 73, 74, [1, 2, 75], 76, 77, [1, 2, 78], 79, 80, [1, 2, 81], 82, 83, [1, 2, 84], 85, 86, [1, 2, 87], 88, 89]	module M; def setv(x); @v = x; end; end\n        class A\n          inclu
 2145ee25155f67c8b900f252952714be	:ok	old_stderr = $stderr\n            captured = String.new\n            
 215aa4af8c863ad665773263bec5b5b6	[[true, true, true], "345", "closed stream", "closed stream", "01XY456789", "Errno::ENOTTY", "closed stream"]	path = "/tmp/monoruby_test_iodup_#{Process.pid}_#{rand(100000)}"\n  
 21644521b8885b6a2269e71105c1a8fc	[:in_thread, :in_main, :value_raises]	r = []\n            ready = false\n            t = Thread.new {\n     
@@ -1324,6 +1325,7 @@
 46653d9439881914bfbd95d3cbc1399c	7	Fiber["skey"] = 7\n            Fiber[:skey]\n            
 4666ffe0c30a05805d070f3ba1540b9e	[true, 8, true]	s = Random.bytes(8)\n        [s.is_a?(String), s.bytesize, s.encoding ==
 46963d49691a45826cdde8d0153bd36e	[4, 8, -2, 0, -1, 0, -1, 8, 0, 1024, -1024, 0, 16, -16, 0, -1, 4611686018427387904, 1267650600228229401496703205376, 13835058055282163712, 18446744073709551616, 23058430092136939520, 32281802128991715328, -23058430092136939520, -1180591620717411303424, 18446744073709551616, 18446744073709551616, 135742175033388171264]	def shr_a; 8 >> 1; end\n            def shr_b; 8 >> 0; end\n         
+469b289e42e1a0b845ff5d8fc25fcb91	[:a, :b, :c]	module M; def v; @v; end; end\n        class A; include M; def initializ
 46a80dc2cd47df441429de6df71a47a0	["SignalException", true, true, "boom", "Interrupt", "Interrupt: interrupted", "Interrupt", "Interrupt"]	[\n              Interrupt.superclass.name,\n              Interrupt 
 46a989f5bb905a42d54984ad2d7e6916	1	proc { |a,| a }.call(1, 2, 3)\n            
 46b4ae70e807e896b986438d3efec1ec	[30, 20, 20, 20]	__a = [];__a << (25.round(-1, half: :up));__a << (25.round(-1, half: :down));__a
@@ -1410,6 +1412,7 @@
 4a559a2616834976fdd08253452a37af	[1, 2]	def f\n                  yield 1,[2,3],4\n                end\n   
 4a6606db1e1aa4ca08a3681377e4a47e	false	at_exit { }.lambda?
 4a6bb862ea034f302be2cfbedfb744f4	["Integer", 21, 0, 9]	class UnrealNum < Numeric\n                attr_reader :value\n      
+4a70e3fd68e2aa9c927c1cdfa18af2e4	[[1, 2, 0], 1, 2, [1, 2, 3], 4, 5, [1, 2, 6], 7, 8, [1, 2, 9], 10, 11, [1, 2, 12], 13, 14, [1, 2, 15], 16, 17, [1, 2, 18], 19, 20, [1, 2, 21], 22, 23, [1, 2, 24], 25, 26, [1, 2, 27], 28, 29, [1, 2, 30], 31, 32, [1, 2, 33], 34, 35, [1, 2, 36], 37, 38, [1, 2, 39], 40, 41, [1, 2, 42], 43, 44, [1, 2, 45], 46, 47, [1, 2, 48], 49, 50, [1, 2, 51], 52, 53, [1, 2, 54], 55, 56, [1, 2, 57], 58, 59, [1, 2, 60], 61, 62, [1, 2, 63], 64, 65, [1, 2, 66], 67, 68, [1, 2, 69], 70, 71, [1, 2, 72], 73, 74, [1, 2, 75], 76, 77, [1, 2, 78], 79, 80, [1, 2, 81], 82, 83, [1, 2, 84], 85, 86, [1, 2, 87], 88, 89]	module M; attr_writer :v; end\n        class A\n          include M\n     
 4a81072638ae84178e312daed598c75d	[[0, 4, 8]]	class CLSE_Probe; end\n        def clse_leaf(i)\n          if i == 15\n   
 4a847603089dda435964691badb1916d	["Aello", "Bello"]	path = "/tmp/monoruby_test_flags_#{Process.pid}_#{rand(100000)}"\n  
 4a8ced26fd6e7c6411be14c59f2c32fe	"café"	"CAFÉ".downcase
@@ -4458,6 +4461,7 @@ efe92284cee725e83300f8c7cae98357	[[[255, 128], "ASCII-8BIT", [0, 3]], [[255], [0
 efee58d26b26212a55202a9cf2bc294e	[:a, :b, :c]	Struct.new(:a, :b, :c).new.members\n        
 f02372e49e9616a18cf3432bddd7f5f4	[1, :done]	t = Thread.new do\n              f = Fiber.new { Fiber.yield 1; :don
 f03b1d37814a9387de9ee11f8651b4db	[1, true, :utf8, 2]	a = "abc"\n        b = "abc".dup.force_encoding("ASCII-8BIT")\n        h 
+f03f9d7621e548a53ac7caae3e972480	[:a, :b, :c]	module M; attr_reader :v; end\n        class A; include M; def initializ
 f053ea7381008dbc0e2209151231a4ec	4	a=3;\n        if a==1;\n          3\n        else\n          4\n        end
 f059706df2d555a5932b4ca0afa5f3fe	[[4, 1, 2, 3], [6, 1, 2, 3], [1, 1, 2, 3, 4]]	__a = [];__a << (a = [1,2,3]; a[(..-7)] = [4]; a);__a << (a = [1,2,3]; a[(...-10
 f06768860864e9c94d5eda4e8a2fa12d	[42, true]	module Foo\n          BAR = 42\n        end\n        def baz(x)\n          

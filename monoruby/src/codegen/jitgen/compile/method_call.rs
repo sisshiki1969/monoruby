@@ -850,14 +850,30 @@ impl<'a> JitContext<'a> {
             state.unset_side_effect_guard();
             return Ok(CompileResult::Continue);
         }
+        // Whether the receiver's class is *proven* to be `recv_class`, and
+        // not merely narrowed to a set of classes that share this
+        // `func_id`. Every lowering below that resolves an ivar slot
+        // against `recv_class` needs the proof: two classes sharing one
+        // method need not agree on where its ivars live, so a set-guarded
+        // arm would read or write the first class's slot for all of them.
+        // `expand_leaf_body` makes the same test for the same reason; the
+        // lowerings that do not resolve anything class-specific (the
+        // `Struct` accessors take their slot from the `FuncKind` itself)
+        // are unaffected.
+        let recv_class_proven = !same_target_set_guarded || state.class(recv) == Some(recv_class);
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let (fid, outer_lfp) = match self.store[func_id].kind {
-            FuncKind::AttrReader { ivar_name } => {
+            FuncKind::AttrReader { ivar_name } if recv_class_proven => {
                 return Ok(self.attr_reader(state, ir, callid, recv_class, ivar_name));
             }
-            FuncKind::AttrWriter { ivar_name } => {
+            FuncKind::AttrWriter { ivar_name } if recv_class_proven => {
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
+            // Set-guarded: the ivar slot is not knowable here, so call the
+            // accessor's wrapper, which looks the name up on the receiver's
+            // own class. `pic_groups` keeps accessors out of folded arms so
+            // this stays a cold corner rather than the common case.
+            FuncKind::AttrReader { .. } | FuncKind::AttrWriter { .. } => (func_id, None),
             FuncKind::StructReader { slot_index, inline } => {
                 return Ok(self.struct_slot_reader(state, ir, callid, slot_index, inline));
             }
@@ -1047,7 +1063,8 @@ impl<'a> JitContext<'a> {
                                         .collect()
                                 })
                         };
-                        if let Some(arg_slots) = arg_slots
+                        if recv_class_proven
+                            && let Some(arg_slots) = arg_slots
                             && self.expand_ivar_stores(
                                 state, ir, recv_class, recv, dst, &body, &arg_slots,
                             )
