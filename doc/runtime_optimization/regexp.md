@@ -132,9 +132,16 @@ bytecodegen はリテラルを `Executor` の届かないところでコンパ�
   そのまま返す**、`to_regexp` に応える 1 個 → その regexp。それ以外は
   `parts.join("|")` して 1 回コンパイル（キャッシュが効きうる）。
   エンコーディング合成の状態機械 `UnionEnc` / `ArgEnc` がある。
-- `Regexp.linear_time?` は `\1..\9` / `\k` / `\g` の純粋な構文走査。
-  `Regexp.timeout` / `timeout=` はスレッドローカルに**保存されるだけで
-  強制されない**（ReDoS の中断は無い）。
+- `Regexp.linear_time?` は**エンジンに訊く**（`onig_check_linear_time`）。
+  コンパイル済みプログラムを走査して、match cache がメモ化を跨げない構成
+  —— 後方参照、部分式呼び出し（`\g<…>`）、absent operator、push に落ちる
+  look-around 内のキャプチャ、入れ子の repeat —— を探す。ソースの構文走査
+  ではないので、`/.(?=(a))/` は false で `/.(?<=(a))/` は true になる
+  （ソースだけ読んでもこの差は出ない）。
+- `Regexp.timeout` / `timeout=` は**強制される**。regexp 自身の timeout →
+  グローバル → 無し の順（CRuby と同じ順）で deadline を引き、越えたら
+  `Regexp::TimeoutError`。deadline は `onig_set_interrupt_func` フックが
+  読むスレッドローカルで、ガードがスコープを抜けると元に戻る。
 
 ### 1.8 bytecodegen でのリテラル
 
@@ -427,7 +434,8 @@ Rust 側の `String#__strscan_match`:
 | `MatchData` オブジェクトの再利用 | `rb_reg_search0` が backref スロットの busy でない `MatchData` を再利用 | **常に新規確保**。40 バイトのペイロード、`SmallVec<[Span; 2]>` の inline 容量、コピー無しの CoW haystack スナップショットで緩和 |
 | `onig_region` の再利用 | 照合ごとに再利用 | `captures_from_pos` は照合ごとに `OnigRegion` を確保・解放。再利用は StringScanner のプリミティブ（スレッドローカル `Region`）**のみ**（`onig_region_clear` + memset で約 3.3 %） |
 | リテラル接頭辞の最適探索 / `ONIG_OPTION_FIND_NOT_EMPTY` | 使う | 使わない。代わりに `scan` / `replace_repeat` / `replace_all_block_inner` / `scan_block_loop` で**手動走査**（クレートの `captures_iter` は CRuby が yield するはずのゼロ幅一致を落とすため） |
-| `Regexp.timeout` | 強制（ReDoS 中断） | スレッドローカルに保存して読み返すだけで**強制しない** |
+| `Regexp.timeout` | 強制（ReDoS 中断） | 同じ。`onig_set_interrupt_func` のフックが読むスレッドローカルの deadline を match ループ内で観測し、`Regexp::TimeoutError` を上げる。CRuby は `rb_reg_timeout_p` を同じ位置で呼ぶ |
+| 照合の線形時間保証（match cache） | あり（3.2 以降）。`onig_check_linear_time` が分類 | 同じ。vendored Onigmo に移植済みで、`num_fails` が `(end - str) * num_cache_opcodes` を越えてから遅延で有効化するので、線形しか戻らない照合は走査もバッファ確保もしない |
 | `Regexp#==` / `#hash` | `hash` はエンコーディングフラグを無視、`==` は無視しない | 同じ非対称を写す: `==` は `REGEXP_EQ_OPTION_MASK`（m / i / x）+ `declared_encoding`、`hash` はソース + マスクのみ |
 | エラーメッセージ | Onigmo の文言 + `: /<source>/` | `pre_validate_regex` / `expand_unicode_braces` / キャッシュミスのエラー腕が CRuby の文言を手で再現 |
 | `String#index`（String needle） | `$~` を設定しない | 同じ（issue #721）。さらにエンジンにも入らない |
@@ -444,7 +452,13 @@ Rust 側の `String#__strscan_match`:
    StringScanner だけ。
 3. `$~` の死活解析が無いので `str =~ /x/` と `case … when /x/` は結果を
    使わなくても評価ごとに `MatchData` を確保する。
-4. `Regexp.timeout` は不活性。
+4. match cache は入れ子の `OP_REPEAT` を扱えない。小さい有界反復は
+   Onigmo が展開するので該当しないが（`/(?:a{1,2}){1,3}/` は true）、
+   展開の閾値を越える反復の入れ子 —— `/(?:a{10,20})+/`、
+   `/(a{100,200})*/` など —— は false になる。CRuby も同じ
+   （`count_num_cache_opcodes_inner` の "A nested OP_REPEAT is not yet
+   supported"）。`Regexp.linear_time?` が false を返すものを縛るには
+   `Regexp.timeout` を使う。
 5. `Regexp#multiline?` は未実装（[`../plan-activerecord.md`](../plan-activerecord.md)）。
 6. 非 UTF-8 レシーバに対する Regexp 付き `String#slice!`、同一エンコーディング
    の多バイト `tr` / `count` 集合は追記予定として `string.rs` に記録がある。
