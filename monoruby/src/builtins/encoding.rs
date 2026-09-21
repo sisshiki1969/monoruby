@@ -72,6 +72,12 @@ pub(super) fn canonical_encoding_name(name: &str) -> &'static str {
         // Underscore-preserving / mixed-case names CRuby exposes.
         "SHIFT_JIS" | "Shift_JIS" => "Shift_JIS",
         "EUCJP_MS" => "eucJP-ms",
+        // CRuby's canonical name for code page 850 is `CP850`, with
+        // `IBM850` as the alias — the other way round from the rest of
+        // the family — and the stateless ISO-2022-JP variant is
+        // lower-case (#1520).
+        "IBM850" => "CP850",
+        "STATELESS_ISO_2022_JP" => "stateless-ISO-2022-JP",
         // CRuby spells the Mac OS script encodings with a lowercase
         // `mac` — everywhere but `MacJapanese`, which keeps the capital
         // (#1471). The constant is `Encoding::MacRoman` either way.
@@ -6416,7 +6422,7 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         // UTF-8 (used on macOS filesystems); we don't actually do
         // the NFD trick but the constant has to exist for spec
         // setup like `Encoding::UTF8_MAC` to resolve.
-        "UTF8_MAC" | "UTF_8_MAC" => Some("UTF8_MAC"),
+        "UTF8_MAC" | "UTF_8_MAC" | "UTF_8_HFS" => Some("UTF8_MAC"),
         "CESU_8" | "CESU8" => Some("CESU_8"),
 
         // Windows code pages
@@ -6457,7 +6463,7 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         "GB18030" => Some("GB18030"),
         "GB12345" => Some("GB12345"),
         "BIG5" => Some("Big5"),
-        "BIG5_HKSCS" => Some("Big5_HKSCS"),
+        "BIG5_HKSCS" | "BIG5_HKSCS:2008" => Some("Big5_HKSCS"),
         "BIG5_UAO" => Some("Big5_UAO"),
 
         // Korean encodings
@@ -6531,7 +6537,7 @@ fn enc_aliases(
 /// `"filesystem"` follow `Encoding.default_external`. Returns
 /// `(alias, canonical name)` pairs so `Encoding.aliases`,
 /// `Encoding#names` and `Encoding.find` all agree.
-const DYNAMIC_ALIASES: &[&str] = &["locale", "external", "filesystem"];
+const DYNAMIC_ALIASES: &[&str] = &["locale", "external", "filesystem", "internal"];
 
 fn dynamic_encoding_aliases(globals: &mut Globals) -> Vec<(&'static str, String)> {
     fn canonical_of(globals: &Globals, v: Value) -> Option<String> {
@@ -6548,14 +6554,23 @@ fn dynamic_encoding_aliases(globals: &mut Globals) -> Vec<(&'static str, String)
     let external = external_val
         .and_then(|v| canonical_of(globals, v))
         .unwrap_or_else(|| "UTF-8".to_string());
+    // `"internal"` follows `Encoding.default_internal`, which is
+    // *unset* by default — so unlike the other three it usually names
+    // no encoding at all, and appears in `Encoding.name_list` without
+    // appearing in any encoding's `#names` (#1520).
+    let internal = globals
+        .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
+        .filter(|v| !v.is_nil())
+        .and_then(|v| canonical_of(globals, v));
     DYNAMIC_ALIASES
         .iter()
-        .map(|alias| {
+        .filter_map(|alias| {
             let target = match *alias {
                 "locale" => locale.clone().unwrap_or_else(|| external.clone()),
+                "internal" => internal.clone()?,
                 _ => external.clone(),
             };
-            (*alias, target)
+            Some((*alias, target))
         })
         .collect()
 }
@@ -6602,6 +6617,24 @@ const ENCODING_NAMES: &[(&str, &[&str])] = &[
     ("Windows-1257", &["CP1257"]),
     ("Windows-1258", &["CP1258"]),
     ("KOI8-R", &["CP878"]),
+    // The DOS code pages: CRuby names each one both ways (#1520).
+    ("IBM437", &["CP437"]),
+    ("IBM737", &["CP737"]),
+    ("IBM775", &["CP775"]),
+    ("CP850", &["IBM850"]),
+    ("IBM852", &[]),
+    ("IBM855", &[]),
+    ("IBM857", &["CP857"]),
+    ("IBM860", &["CP860"]),
+    ("IBM861", &["CP861"]),
+    ("IBM862", &["CP862"]),
+    ("IBM863", &["CP863"]),
+    ("IBM864", &["CP864"]),
+    ("IBM865", &["CP865"]),
+    ("IBM866", &["CP866"]),
+    ("IBM869", &["CP869"]),
+    ("Big5-HKSCS", &["Big5-HKSCS:2008"]),
+    ("UTF8-MAC", &["UTF-8-MAC", "UTF-8-HFS"]),
     ("KOI8-U", &[]),
     ("GB2312", &["EUC-CN", "eucCN"]),
     ("GBK", &["CP936"]),
@@ -6622,7 +6655,7 @@ const ENCODING_NAMES: &[(&str, &[&str])] = &[
     ("macThai", &[]),
     ("macTurkish", &[]),
     ("macUkraine", &[]),
-    ("eucJP-ms", &["eucjp-ms", "euc-jp-ms"]),
+    ("eucJP-ms", &["euc-jp-ms"]),
     ("CP51932", &[]),
     ("stateless-ISO-2022-JP", &[]),
     ("CESU-8", &[]),
@@ -9026,6 +9059,59 @@ mod tests {
                 names.map { |n| (Encoding::Converter.new("UTF-8", n) && "ok" rescue $!.class.name.sub("Encoding::", "")) },
                 ("ab".dup.force_encoding("UTF-7").encode("UTF-8") rescue $!.class.name.sub("Encoding::", "")),
               ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn code_pages_answer_to_both_their_names() {
+        // CRuby names each DOS code page twice, `IBMnnn` and `CPnnn`,
+        // and monoruby had only the constant spellings — the names
+        // were missing from `Encoding.aliases`, `#names` and
+        // `name_list`, and `Encoding.find("CP437")` did not resolve.
+        // Code page 850 is the one the family names the other way
+        // round: `CP850` is canonical there, `IBM850` the alias
+        // (#1520).
+        run_test_once(
+            r#"
+              names = %w[CP437 CP737 CP775 CP850 IBM850 CP857 CP860 CP861 CP862 CP863
+                         CP864 CP865 CP866 CP869 Big5-HKSCS:2008 UTF-8-MAC UTF-8-HFS]
+              [
+                names.map { |n| [n, Encoding.find(n).name] },
+                # `UTF8-MAC` is left out here: it is a UTF-8 variant with
+                # no `Encoding` of its own, so `force_encoding` answers
+                # `UTF-8` — a separate gap from the names.
+                (names - %w[UTF-8-MAC UTF-8-HFS]).map { |n| "ab".dup.force_encoding(n).encoding.name },
+                [Encoding::CP850.name, Encoding::IBM850.name,
+                 Encoding::CP850.equal?(Encoding::IBM850),
+                 Encoding::CP437.equal?(Encoding::IBM437)],
+                [Encoding::IBM437.names, Encoding::CP850.names,
+                 Encoding.find("Big5-HKSCS").names, Encoding.find("UTF8-MAC").names],
+                # `eucJP-ms` has two names, not three.
+                Encoding.find("eucJP-ms").names,
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn internal_names_an_encoding_only_once_it_is_set() {
+        // `"internal"` follows `Encoding.default_internal`, which is
+        // unset by default — so unlike `locale` / `external` /
+        // `filesystem` it usually names no encoding at all, and is in
+        // `name_list` without being in any encoding's `#names`
+        // (#1520).
+        run_test_once(
+            r#"
+              before = [Encoding.name_list.include?("internal"),
+                        Encoding.find("internal"),
+                        Encoding::UTF_8.names.include?("internal")]
+              Encoding.default_internal = Encoding::EUC_JP
+              after = [Encoding.find("internal").name,
+                       Encoding.find("EUC-JP").names.include?("internal"),
+                       Encoding::UTF_8.names.include?("internal")]
+              Encoding.default_internal = nil
+              [before, after, Encoding.find("internal")]
             "#,
         );
     }
