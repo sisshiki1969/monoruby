@@ -3592,6 +3592,39 @@ fn pivot_prefix_consumed(
     lo
 }
 
+/// The outcome to report for a source that does not decode, as the
+/// destinations `encoding_rs` has no encoder for (`US-ASCII`, BINARY)
+/// need it: they walk characters rather than bytes, so the bytes that
+/// failed have to be found again. [`first_bad_sequence`] is the same
+/// walk `String#encode`'s error uses, and answers all three fields at
+/// once — CRuby reports `"\xC2"` on a truncated tail as
+/// `:incomplete_input`, and `"\xFF"` as `:invalid_byte_sequence`.
+fn bad_source_outcome(
+    src_enc: crate::value::Encoding,
+    src_bytes: &[u8],
+    last: bool,
+) -> (StreamConvertResult, ErrMeta) {
+    let Some((error_bytes, readagain_bytes, incomplete)) =
+        first_bad_sequence(src_enc, src_bytes)
+    else {
+        return (StreamConvertResult::InvalidByteSequence, ErrMeta::default());
+    };
+    let kind = if !incomplete {
+        StreamConvertResult::InvalidByteSequence
+    } else if last {
+        StreamConvertResult::IncompleteInput
+    } else {
+        StreamConvertResult::SourceBufferEmpty
+    };
+    (
+        kind,
+        ErrMeta {
+            error_bytes,
+            readagain_bytes,
+        },
+    )
+}
+
 fn stream_convert(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -3758,7 +3791,7 @@ fn stream_convert(
         }
         if let Some(src_rs) = encoding_to_rs(src_enc) {
             use encoding_rs::DecoderResult;
-            let mut decoder = src_rs.new_decoder();
+            let mut decoder = src_rs.new_decoder_without_bom_handling();
             let last = !partial_input;
             let mut rest = src_bytes;
             loop {
@@ -3772,12 +3805,8 @@ fn stream_convert(
                     DecoderResult::InputEmpty => break,
                     DecoderResult::Malformed(..) => {
                         if !opts.invalid_replace {
-                            return (
-                                StreamConvertResult::InvalidByteSequence,
-                                src_bytes.len(),
-                                out,
-                                ErrMeta::default(),
-                            );
+                            let (kind, meta) = bad_source_outcome(src_enc, src_bytes, last);
+                            return (kind, src_bytes.len(), out, meta);
                         }
                         out.extend_from_slice(repl.as_bytes());
                         rest = &rest[read..];
@@ -3800,7 +3829,8 @@ fn stream_convert(
                     }
                 }
                 Err(_) => {
-                    return (StreamConvertResult::InvalidByteSequence, src_bytes.len(), out, ErrMeta::default());
+                    let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
+                    return (kind, src_bytes.len(), out, meta);
                 }
             }
         }
@@ -3829,7 +3859,7 @@ fn stream_convert(
         );
     };
 
-    let mut decoder = src_rs.new_decoder();
+    let mut decoder = src_rs.new_decoder_without_bom_handling();
     let mut encoder = dst_rs.new_encoder();
 
     // UTF-8 intermediate buffer. encoding_rs's
@@ -3931,10 +3961,39 @@ fn stream_convert(
             } else {
                 1
             };
-            if meta.readagain_bytes.is_empty() && meta.error_bytes.len() > unit {
+            let mut consumed = src_read;
+            // Distinguish "incomplete tail" from "junk in middle":
+            // if there are bytes after the malformed run, it's junk;
+            // otherwise the partial_input flag picks between
+            // incomplete (`last=true`) and source_buffer_empty
+            // (`last=false`, but we asked for last=true so this branch
+            // means truly invalid-at-end).
+            let kind = if src_read < src_bytes.len() {
+                StreamConvertResult::InvalidByteSequence
+            } else if !probe_incomplete_tail(src_rs, src_bytes, src_read) {
+                // A byte that can never start a character is wrong now,
+                // not merely unfinished: promising more input does not
+                // rescue a lone `\xFF` on UTF-8, so `#convert` raises
+                // instead of buffering it.
+                StreamConvertResult::InvalidByteSequence
+            } else if !last {
+                StreamConvertResult::SourceBufferEmpty
+            } else {
+                StreamConvertResult::IncompleteInput
+            };
+            // Split the run into the prefix that failed and the unit
+            // that disproved it — but only when something *did*
+            // disprove it. An incomplete tail has nothing after it, so
+            // CRuby reports the whole run as `error_bytes` with no
+            // read-again (`incomplete "\xE3\x81" on UTF-8`, not
+            // `"\xE3" followed by "\x81"`).
+            if matches!(kind, StreamConvertResult::InvalidByteSequence)
+                && meta.readagain_bytes.is_empty()
+                && meta.error_bytes.len() > unit
+            {
                 let run = std::mem::take(&mut meta.error_bytes);
                 let pending_len = (unit..run.len()).rev().step_by(unit).find(|k| {
-                    let mut probe = src_rs.new_decoder();
+                    let mut probe = src_rs.new_decoder_without_bom_handling();
                     let mut probe_dst = vec![0u8; run.len() * 4 + 16];
                     let (r, read, written) = probe.decode_to_utf8_without_replacement(
                         &run[..*k],
@@ -3953,22 +4012,6 @@ fn stream_convert(
                     None => meta.error_bytes = run,
                 }
             }
-            let mut consumed = src_read;
-            // Distinguish "incomplete tail" from "junk in middle":
-            // if there are bytes after the malformed run, it's junk;
-            // otherwise the partial_input flag picks between
-            // incomplete (`last=true`) and source_buffer_empty
-            // (`last=false`, but we asked for last=true so this branch
-            // means truly invalid-at-end).
-            let kind = if src_read < src_bytes.len() {
-                StreamConvertResult::InvalidByteSequence
-            } else if !last {
-                StreamConvertResult::SourceBufferEmpty
-            } else if probe_incomplete_tail(src_rs, src_bytes, src_read) {
-                StreamConvertResult::IncompleteInput
-            } else {
-                StreamConvertResult::InvalidByteSequence
-            };
             // encoding_rs stops *before* the byte(s) that disproved
             // the sequence; CRuby reads one more coding unit and
             // reports it as the read-again bytes (`"\xF1" followed by
@@ -3979,7 +4022,7 @@ fn stream_convert(
             // lone `\x80` on UTF-8 needs no disproving byte, and CRuby
             // leaves the following bytes in src with empty read-again.
             let is_plausible_prefix = || {
-                let mut probe = src_rs.new_decoder();
+                let mut probe = src_rs.new_decoder_without_bom_handling();
                 let mut probe_dst = vec![0u8; meta.error_bytes.len() * 4 + 16];
                 let (r, read, _) = probe.decode_to_utf8_without_replacement(
                     &meta.error_bytes,
@@ -4009,7 +4052,7 @@ fn stream_convert(
                 // across calls. Re-probe with `last = true` to find
                 // where that tail starts so the caller can buffer it.
                 let mut consumed = src_read;
-                let mut probe = src_rs.new_decoder();
+                let mut probe = src_rs.new_decoder_without_bom_handling();
                 let mut probe_dst = vec![0u8; src_bytes.len() * 4 + 16];
                 let (probe_res, probe_read, _) =
                     probe.decode_to_utf8_without_replacement(src_bytes, &mut probe_dst, true);
@@ -4065,7 +4108,7 @@ fn src_offset_for_utf8_prefix(
     if target_utf8_len == 0 {
         return Some(0);
     }
-    let mut probe = src_rs.new_decoder();
+    let mut probe = src_rs.new_decoder_without_bom_handling();
     let mut utf8_buf = vec![0u8; target_utf8_len + 16];
     let mut utf8_so_far = 0usize;
     let mut src_pos = 0usize;
@@ -4097,14 +4140,21 @@ fn probe_incomplete_tail(
     if end == 0 {
         return false;
     }
-    let mut probe = src_rs.new_decoder();
-    let mut probe_dst = vec![0u8; src_bytes.len() + 16];
-    // Re-feed the bytes up to (and not including) the malformed run
-    // first, so the decoder is in the same internal state, then feed
-    // the malformed bytes with `last=false`. If the decoder reports
-    // `InputEmpty` it's still hopeful — the bytes are an incomplete
-    // prefix.
-    let _ = probe.decode_to_utf8_without_replacement(&src_bytes[..end], &mut probe_dst, false);
+    let mut probe = src_rs.new_decoder_without_bom_handling();
+    let mut probe_dst = vec![0u8; src_bytes.len() * 4 + 16];
+    // Re-feed the bytes up to and including the malformed run with
+    // `last=false`. A decoder told more input may follow keeps a
+    // well-formed *prefix* pending instead of rejecting it, so both
+    // calls answering `InputEmpty` — the second flushing what is held —
+    // means the tail is incomplete rather than wrong. The first call's
+    // verdict is the one that matters: a byte that can never start a
+    // character is rejected there and then, however much more input is
+    // promised.
+    let (fed, _, _) =
+        probe.decode_to_utf8_without_replacement(&src_bytes[..end], &mut probe_dst, false);
+    if !matches!(fed, encoding_rs::DecoderResult::InputEmpty) {
+        return false;
+    }
     let (probe_result, _, _) = probe.decode_to_utf8_without_replacement(&[], &mut probe_dst, false);
     matches!(probe_result, encoding_rs::DecoderResult::InputEmpty)
 }
@@ -4454,11 +4504,10 @@ fn conversion_error_message(
         }
         _ => {
             if meta.readagain_bytes.is_empty() {
-                format!(
-                    "invalid byte sequence {} on {}",
-                    quote_error_bytes(&meta.error_bytes),
-                    stage_src
-                )
+                // CRuby names the bytes and the encoding, with no
+                // leading phrase — the same text `String#encode` builds
+                // in `invalid_byte_sequence_message`.
+                format!("{} on {}", quote_error_bytes(&meta.error_bytes), stage_src)
             } else {
                 format!(
                     "{} followed by {} on {}",
@@ -6664,6 +6713,72 @@ mod tests {
               f.call { g.call("\x00\x00\x10", "UTF-32LE").encode("UTF-8") },
               f.call { g.call("\x00\xd8\x00", "UTF-32LE").encode("UTF-8") },
               f.call { g.call("\xff\xff", "UTF-32LE").encode("UTF-8") },
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn converter_reads_no_bom() {
+        // `Encoding::Converter` built its decoder with `encoding_rs`'s
+        // BOM-sniffing constructor where `String#encode` did not, so it
+        // swallowed a leading BOM and held a leading `\xFF` back as half
+        // of a UTF-16LE one (#1499). CRuby's converter strips nothing.
+        run_test_once(
+            r#"(t=->(&b){ begin; b.call; rescue => e; [e.class.to_s, e.message]; end }
+               g=->(s, enc){ s.dup.force_encoding(enc) }; [
+              t.call { Encoding::Converter.new("UTF-8", "EUC-JP").convert(g.call("\xEF\xBB\xBFa", "UTF-8")) },
+              t.call { Encoding::Converter.new("UTF-16LE", "UTF-8").convert(g.call("\xFF\xFEa\x00", "UTF-16LE")).bytes },
+              t.call { Encoding::Converter.new("UTF-8", "EUC-JP").convert(g.call("\xff", "UTF-8")) },
+              t.call { Encoding::Converter.new("UTF-8", "EUC-JP").convert(g.call("a\xffb", "UTF-8")) },
+              t.call { c = Encoding::Converter.new("UTF-8", "EUC-JP")
+                       c.convert(g.call("\xff", "UTF-8")) rescue nil
+                       c.finish },
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn converter_error_detail_matches_the_one_shot_path() {
+        // The converter's `primitive_errinfo` now says what
+        // `String#encode`'s error says: the same bytes, the same
+        // incomplete-vs-invalid split, and no `invalid byte sequence`
+        // preamble on the message (#1499). A destination `encoding_rs`
+        // has no encoder for (`US-ASCII`, BINARY) walks characters, so
+        // it has to find the failing bytes again — it reported none.
+        run_test_once(
+            r#"(p=->(src, dst, s){ c = Encoding::Converter.new(src, dst); d = "".dup
+                 r = c.primitive_convert(s.dup.force_encoding(src), d)
+                 [r, d.bytes, c.primitive_errinfo] }; [
+              p.call("UTF-8", "EUC-JP", "\xff"),
+              p.call("UTF-8", "EUC-JP", "a\xffb"),
+              p.call("UTF-8", "EUC-JP", "\xff\xfe"),
+              p.call("UTF-8", "EUC-JP", "\xc2"),
+              p.call("UTF-8", "EUC-JP", "\xe3\x81"),
+              p.call("UTF-8", "US-ASCII", "\xff"),
+              p.call("UTF-8", "US-ASCII", "a\xffb"),
+              p.call("UTF-8", "US-ASCII", "\xc2"),
+              p.call("UTF-8", "US-ASCII", "\xe3\x81"),
+              p.call("UTF-8", "US-ASCII", "\xa1\xa1"),
+              p.call("UTF-8", "ASCII-8BIT", "\xff"),
+              p.call("Shift_JIS", "UTF-8", "\x81"),
+              p.call("EUC-JP", "UTF-8", "\x82"),
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn converter_still_converts() {
+        // The decoder swap is an error-path and BOM change only.
+        run_test_once(
+            r#"(p=->(src, dst, s){ Encoding::Converter.new(src, dst)
+                 .convert(s.dup.force_encoding(src)).bytes }; [
+              p.call("UTF-8", "EUC-JP", "a\xe3\x81\x82b"),
+              p.call("EUC-JP", "UTF-8", "a\xa4\xa2b"),
+              p.call("Shift_JIS", "UTF-8", "a\x82\xa0b"),
+              p.call("UTF-8", "Shift_JIS", "a\xe3\x81\x82b"),
+              p.call("UTF-8", "US-ASCII", "abc"),
+              "a\xffb".dup.force_encoding("UTF-8").encode("EUC-JP", invalid: :replace).bytes,
+              "a\xffb".dup.force_encoding("UTF-8").encode("US-ASCII", invalid: :replace, undef: :replace).bytes,
             ])"#,
         );
     }
