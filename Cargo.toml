@@ -4,3 +4,27 @@ resolver = "2"
 
 [profile.dev]
 opt-level = 1
+
+# The five dynamically loaded extensions are *artifact* dependencies of
+# `monoruby`, declared under its `[build-dependencies]` so that build.rs
+# is handed their paths and can install them. That puts them in Cargo's
+# build graph, where `build-override` decides the profile — and its
+# default is `opt-level = 0`, whatever the profile being built.
+#
+# So `cargo build --release` was producing an optimized interpreter and
+# unoptimized extensions, libyaml / libzstd / the sqlite3 bindings
+# included. It did not show in development, because an extension is
+# looked for next to the running binary before the install root and
+# `cargo build` leaves an optimized copy of each in `target/<profile>/`;
+# only an *installed* monoruby — `cargo install`, `bin/install`, and so
+# the benchmark CI — loaded the artifact copy. Measured there, psych was
+# ~6.8x slower than the same code had been inside the interpreter
+# (1 MB YAML scalar: 8.4 ms -> 57.0 ms), which put ruby-bench's
+# psych-load at 0.18x YJIT where it had been 0.84x.
+#
+# `cargo build --release -Z unstable-options --unit-graph` shows what
+# this override does: psych_native and libyaml_safer at opt-level 3
+# rather than 0. Build scripts are compiled with it too, which costs a
+# little build time and changes nothing about what they do.
+[profile.release.build-override]
+opt-level = 3

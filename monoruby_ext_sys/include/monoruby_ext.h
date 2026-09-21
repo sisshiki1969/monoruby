@@ -34,6 +34,12 @@ extern "C" {
 
 typedef uint64_t MrValue;
 
+/* An interned name, from `intern`. Interning is per process and
+ * permanent, so one taken during Init_ stays valid for every later
+ * call. MR_NO_SYM is the one invalid value. */
+typedef uint32_t MrSym;
+#define MR_NO_SYM ((MrSym)0)
+
 #define MR_UNDEF ((MrValue)0)    /* not a value: error pending / absent */
 #define MR_NIL   ((MrValue)0x04)
 #define MR_FALSE ((MrValue)0x14)
@@ -160,6 +166,10 @@ struct MrApi {
 
     /* misc */
     const char *(*ruby_version)(void);
+
+    /* appended after the first release */
+    MrSym   (*intern)(MrContext *, const uint8_t *ptr, size_t len);
+    MrValue (*funcall_sym)(MrContext *, MrValue recv, MrSym sym, int argc, const MrValue *argv, MrValue block);
 };
 
 #ifdef __cplusplus

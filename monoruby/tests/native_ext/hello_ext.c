@@ -64,6 +64,37 @@ static MrValue hello_call_it(MrContext *ctx, MrValue self, int argc, const MrVal
     return api->funcall(ctx, argv[0], name, 0, NULL, MR_UNDEF);
 }
 
+/* Hello.call_sym(obj, name) -> obj.send(name) via intern + funcall_sym,
+ * the pair a loop is meant to use: the name is interned once and the
+ * symbol kept, since interning is per process and never forgotten. */
+static MrValue hello_call_sym(MrContext *ctx, MrValue self, int argc, const MrValue *argv, MrValue block) {
+    MrValue s = api->sym_to_str(ctx, argv[1]);
+    if (s == MR_UNDEF) return MR_UNDEF;
+    size_t len; const uint8_t *p = api->str_ptr(ctx, s, &len);
+    if (!p) return MR_UNDEF;
+    MrSym sym = api->intern(ctx, p, len);
+    if (sym == MR_NO_SYM) return MR_UNDEF;
+    return api->funcall_sym(ctx, argv[0], sym, 0, NULL, MR_UNDEF);
+}
+
+/* Hello.no_sym(obj) -> funcall_sym given MR_NO_SYM, which names nothing:
+ * an ArgumentError rather than a lookup. */
+static MrValue hello_no_sym(MrContext *ctx, MrValue self, int argc, const MrValue *argv, MrValue block) {
+    return api->funcall_sym(ctx, argv[0], MR_NO_SYM, 0, NULL, MR_UNDEF);
+}
+
+/* Hello.intern_twice(str) -> the MrSym for str's bytes, interned twice:
+ * -1 if the two answers differ (they must not), 0 for MR_NO_SYM, which
+ * is what bytes that are not UTF-8 get. */
+static MrValue hello_intern_twice(MrContext *ctx, MrValue self, int argc, const MrValue *argv, MrValue block) {
+    size_t len; const uint8_t *p = api->str_ptr(ctx, argv[0], &len);
+    if (!p) return MR_UNDEF;
+    MrSym a = api->intern(ctx, p, len);
+    MrSym b = api->intern(ctx, p, len);
+    if (a != b) return api->int_new(-1);
+    return api->int_new((int64_t)a);
+}
+
 /* ---- a native class: Hello::Counter with a held Ruby value ---- */
 typedef struct { int64_t n; MrValue tag; } Counter;
 static void counter_mark(void *d, MrMarker *m) { api->gc_mark(m, ((Counter*)d)->tag); }
@@ -121,6 +152,9 @@ int Init_hello_ext(MrContext *ctx) {
     api->define_method(ctx, hello, "each3", hello_each3, 0, MR_METHOD_SINGLETON);
     api->define_method(ctx, hello, "variadic", hello_variadic, MR_ARGC_VARIADIC, MR_METHOD_SINGLETON);
     api->define_method(ctx, hello, "call_it", hello_call_it, 2, MR_METHOD_SINGLETON);
+    api->define_method(ctx, hello, "call_sym", hello_call_sym, 2, MR_METHOD_SINGLETON);
+    api->define_method(ctx, hello, "no_sym", hello_no_sym, 1, MR_METHOD_SINGLETON);
+    api->define_method(ctx, hello, "intern_twice", hello_intern_twice, 1, MR_METHOD_SINGLETON);
     api->define_method(ctx, hello, "blocking", hello_blocking, 1, MR_METHOD_SINGLETON);
     api->define_method(ctx, hello, "stash", hello_stash, 0, MR_METHOD_SINGLETON);
     MrValue counter = api->define_class(ctx, hello, "Counter", MR_UNDEF, MR_CLASS_NATIVE);
