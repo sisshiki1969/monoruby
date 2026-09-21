@@ -38,6 +38,29 @@ impl<T> DerefMut for MonoVec<T> {
     }
 }
 
+///
+/// `RawVec` frees the buffer but knows nothing of what is in it, so
+/// without this the elements' destructors never ran. That is free for
+/// the `Option<Value>` / `Option<Module>` tables this was written for —
+/// they have no drop glue, and this compiles to nothing — but `Funcs`
+/// keeps its `FuncInfo`s here, and each of those owns a `Box<FuncExt>`.
+/// Every builtin a `Globals` registered therefore leaked its `FuncExt`
+/// (and the `DestLabel` its wrapper put in it) when the `Globals` went
+/// away: 368 KB per interpreter, which over a test binary that builds
+/// one per test came to gigabytes.
+///
+impl<T> Drop for MonoVec<T> {
+    fn drop(&mut self) {
+        // SAFETY: the first `len` slots are initialised — `push` writes
+        // them, and `extend` zero-fills, which is a valid `None` for the
+        // niche-optional types that use it. `RawVec::drop` then frees the
+        // buffer they lived in.
+        unsafe {
+            ptr::drop_in_place(ptr::slice_from_raw_parts_mut(self.ptr(), self.len));
+        }
+    }
+}
+
 impl<T> MonoVec<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -270,3 +293,53 @@ impl<T> Iterator for RawIter<T> {
     }
 }
 */
+
+#[cfg(test)]
+mod monovec_drop_tests {
+    use super::MonoVec;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+
+    /// Stands in for `FuncInfo`: owns something, so forgetting to drop it
+    /// leaks.
+    struct Owner(#[allow(dead_code)] Box<u64>);
+
+    impl Drop for Owner {
+        fn drop(&mut self) {
+            DROPPED.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// The buffer is the container's, but so are the elements in it:
+    /// `RawVec` frees the former and knows nothing of the latter, so
+    /// without `MonoVec`'s own `Drop` everything they own is leaked —
+    /// which is what every `Globals` did with its builtins' `FuncExt`s.
+    #[test]
+    fn dropping_the_vec_drops_what_is_in_it() {
+        DROPPED.store(0, Ordering::SeqCst);
+        {
+            let mut v = MonoVec::with_capacity(2);
+            // Past the initial capacity, so the grow path is covered too:
+            // the elements must survive the realloc and still be dropped
+            // exactly once.
+            for i in 0..5u64 {
+                v.push(Owner(Box::new(i)));
+            }
+            assert_eq!(0, DROPPED.load(Ordering::SeqCst));
+        }
+        assert_eq!(5, DROPPED.load(Ordering::SeqCst));
+    }
+
+    /// Only the initialised prefix is dropped — capacity beyond `len`
+    /// holds nothing.
+    #[test]
+    fn spare_capacity_is_not_dropped() {
+        DROPPED.store(0, Ordering::SeqCst);
+        {
+            let mut v: MonoVec<Owner> = MonoVec::with_capacity(64);
+            v.push(Owner(Box::new(1)));
+        }
+        assert_eq!(1, DROPPED.load(Ordering::SeqCst));
+    }
+}

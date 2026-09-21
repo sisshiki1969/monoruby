@@ -659,10 +659,48 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
     encoding_rs::Encoding::for_label(label)
 }
 
+/// The character a high-half byte stands for in a single-byte
+/// encoding: the in-tree table when there is one, otherwise the codec.
+/// `None` when the byte is not a character there (or the encoding is
+/// not single-byte), which is what Onigmo's ctype tables are built on.
+pub(super) fn single_byte_char(enc: crate::value::Encoding, b: u8) -> Option<char> {
+    if let Some(table) = single_byte_table(enc) {
+        return Some(table[(b & 0x7f) as usize]);
+    }
+    if let crate::value::Encoding::Iso8859(n) = enc {
+        // The ISO-8859 family keeps C1 controls at 0x80..=0x9F.
+        // `encoding_rs` is WHATWG's, where `iso-8859-1` / `-9` / `-11`
+        // are aliases of the Windows code pages, which put characters
+        // there instead.
+        if (0x80..=0x9f).contains(&b) {
+            return None;
+        }
+        // Latin-1 *is* U+0000..U+00FF, so it needs no codec — and the
+        // parts `encoding_rs` has none for (ISO-8859-9) differ from it
+        // only by swapping letters for letters, which leaves the
+        // letter / non-letter split this is asked for unchanged.
+        if n == 1 || encoding_to_rs(enc).is_none() {
+            return Some(char::from(b));
+        }
+    }
+    let rs = encoding_to_rs(enc)?;
+    let buf = [b];
+    let (decoded, had_err) = rs.decode_without_bom_handling(&buf);
+    if had_err {
+        return None;
+    }
+    let mut chars = decoded.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() || c == '\u{FFFD}' {
+        return None;
+    }
+    Some(c)
+}
+
 /// High-half (0x80..=0xFF) Unicode mapping for single-byte encodings
 /// monoruby transcodes with an in-tree table because encoding_rs has
 /// no codec for them. Bytes < 0x80 are ASCII in all of these.
-fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static [char; 128]> {
+pub(super) fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static [char; 128]> {
     /// IBM437 (the original IBM PC / DOS codepage).
     const IBM437: [char; 128] = [
         'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å', //

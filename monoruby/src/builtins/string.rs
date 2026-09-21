@@ -2160,6 +2160,459 @@ pub fn str_next(self_: &str) -> String {
     buf.iter().rev().map(|c| c.0).collect::<String>()
 }
 
+
+/// CRuby's `enum neighbor_char`: the outcome of stepping one character
+/// to its successor within its own encoding.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Neighbor {
+    /// The character has a successor of the same byte length.
+    Found,
+    /// The step wrapped around, so the carry goes to the character on
+    /// the left (`z` → `a`, carry).
+    Wrapped,
+    /// These bytes are not a character in this encoding at all.
+    NotChar,
+}
+
+/// `rb_enc_precise_mbclen` for the encodings `String#succ` walks
+/// itself: the three with a `mbc_walker`, UTF-8, and the single-byte
+/// encodings where every byte is its own character.
+fn succ_precise_len(bytes: &[u8], pos: usize, enc: crate::value::Encoding) -> PreciseLen {
+    if let Some((_, precise)) = crate::value::mbc_walker(enc) {
+        return precise(bytes, pos);
+    }
+    if enc != crate::value::Encoding::Utf8 {
+        if pos >= bytes.len() {
+            return PreciseLen::NeedMore;
+        }
+        // US-ASCII has no character above 0x7F, which is why `"\x7F"`
+        // carries rather than stepping into `0x80`.
+        if enc == crate::value::Encoding::UsAscii && bytes[pos] >= 0x80 {
+            return PreciseLen::Invalid;
+        }
+        return PreciseLen::Char(1);
+    }
+    let rest = &bytes[pos..];
+    match std::str::from_utf8(rest) {
+        Ok(s) => match s.chars().next() {
+            Some(c) => PreciseLen::Char(c.len_utf8()),
+            None => PreciseLen::NeedMore,
+        },
+        Err(e) if e.valid_up_to() > 0 => {
+            // SAFETY: `valid_up_to` bounds a valid UTF-8 prefix.
+            let head = unsafe { std::str::from_utf8_unchecked(&rest[..e.valid_up_to()]) };
+            PreciseLen::Char(head.chars().next().unwrap().len_utf8())
+        }
+        // A truncated tail is "need more"; anything else is invalid here.
+        Err(e) if e.error_len().is_none() => PreciseLen::NeedMore,
+        Err(_) => PreciseLen::Invalid,
+    }
+}
+
+/// The smallest byte sequence of exactly `len` bytes that is a
+/// character in `enc` — what a character of that width wraps to, so
+/// `"\u07FF".succ` is a carry in front of `"\u0080"` (the smallest
+/// two-byte character) rather than in front of two NUL bytes.
+///
+/// Searched lead-first with backtracking: a two-byte lead cannot start
+/// a three-byte character, and only trying to complete it says so.
+fn min_char_bytes(enc: crate::value::Encoding, len: usize) -> Option<Vec<u8>> {
+    fn fill(buf: &mut [u8], i: usize, enc: crate::value::Encoding) -> bool {
+        if i == buf.len() {
+            return matches!(succ_precise_len(buf, 0, enc), PreciseLen::Char(n) if n == buf.len());
+        }
+        if !matches!(succ_precise_len(&buf[..i], 0, enc), PreciseLen::NeedMore) {
+            return false;
+        }
+        for b in 0..=u8::MAX {
+            buf[i] = b;
+            if fill(buf, i + 1, enc) {
+                return true;
+            }
+        }
+        false
+    }
+    let mut buf = vec![0u8; len];
+    for b0 in 0..=u8::MAX {
+        buf[0] = b0;
+        if len == 1 {
+            if matches!(succ_precise_len(&buf, 0, enc), PreciseLen::Char(1)) {
+                return Some(buf);
+            }
+            continue;
+        }
+        if fill(&mut buf, 1, enc) {
+            return Some(buf);
+        }
+    }
+    None
+}
+
+/// CRuby's `enc_succ_char`: the next byte sequence of the same length
+/// that is a character in `enc`, incrementing with `0xFF → 0x00` carry
+/// and skipping every sequence in between that is not one (the next
+/// Shift_JIS character after `0x7F` is `0xA1`, not `0x80`).
+fn enc_succ_char(p: &mut [u8], enc: crate::value::Encoding) -> Neighbor {
+    let len = p.len();
+    loop {
+        let mut i = len as isize - 1;
+        while i >= 0 && p[i as usize] == 0xff {
+            p[i as usize] = 0;
+            i -= 1;
+        }
+        if i < 0 {
+            // Wrapped: the character becomes the smallest one of its own
+            // byte length, so `"\u07FF".succ` is `"\x01\u0080"` — a
+            // carry in front of the smallest two-byte character — and
+            // not a pair of NUL bytes.
+            if let Some(min) = min_char_bytes(enc, len) {
+                p.copy_from_slice(&min);
+            }
+            return Neighbor::Wrapped;
+        }
+        p[i as usize] += 1;
+        match succ_precise_len(p, 0, enc) {
+            PreciseLen::Char(n) if n == len => return Neighbor::Found,
+            PreciseLen::Char(n) => {
+                // A shorter character than we started with: fill the
+                // tail so the next round carries into it.
+                for b in &mut p[n..] {
+                    *b = 0xff;
+                }
+            }
+            PreciseLen::Invalid if (i as usize) < len - 1 => {
+                // Skip the whole dead row rather than one byte of it.
+                let mut len2 = len - 1;
+                while len2 > 0 {
+                    if !matches!(succ_precise_len(&p[..len2], 0, enc), PreciseLen::Invalid) {
+                        break;
+                    }
+                    len2 -= 1;
+                }
+                for b in &mut p[len2 + 1..] {
+                    *b = 0xff;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// CRuby's `enc_pred_char`: [`enc_succ_char`] downwards.
+fn enc_pred_char(p: &mut [u8], enc: crate::value::Encoding) -> Neighbor {
+    let len = p.len();
+    loop {
+        let mut i = len as isize - 1;
+        while i >= 0 && p[i as usize] == 0 {
+            p[i as usize] = 0xff;
+            i -= 1;
+        }
+        if i < 0 {
+            return Neighbor::Wrapped;
+        }
+        p[i as usize] -= 1;
+        match succ_precise_len(p, 0, enc) {
+            PreciseLen::Char(n) if n == len => return Neighbor::Found,
+            PreciseLen::Char(n) => {
+                for b in &mut p[n..] {
+                    *b = 0;
+                }
+            }
+            PreciseLen::Invalid if (i as usize) < len - 1 => {
+                let mut len2 = len - 1;
+                while len2 > 0 {
+                    if !matches!(succ_precise_len(&p[..len2], 0, enc), PreciseLen::Invalid) {
+                        break;
+                    }
+                    len2 -= 1;
+                }
+                for b in &mut p[len2 + 1..] {
+                    *b = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether the encoding's high half carries letters for `#succ`'s
+/// purposes, as Onigmo's ctype table for it does.
+///
+/// Measured against CRuby 4.0.6 over every non-dummy single-byte
+/// encoding: the ISO-8859 family, the KOI8 pair, TIS-620 and the
+/// Windows code pages step *within* a letter run (`"\xFF"` in
+/// ISO-8859-1 is `"\xF8\xF8"` — the bottom of the lowercase run,
+/// carried), while the DOS code pages and the Mac encodings do not —
+/// their tables mark the high half printable and nothing more, so
+/// `"\x9A"` in IBM437 just steps to `"\x9B"`. Windows-1255 and -1256
+/// go with the second group: Onigmo marks neither the Hebrew nor the
+/// Arabic letters ALPHA there.
+fn high_half_has_letters(enc: crate::value::Encoding) -> bool {
+    match enc {
+        crate::value::Encoding::Iso8859(_) => true,
+        crate::value::Encoding::NamedByte(_) => {
+            let name = enc.name();
+            name.starts_with("KOI8-")
+                || name == "TIS-620"
+                || name == "Windows-874"
+                || (name.starts_with("Windows-12")
+                    && name != "Windows-1255"
+                    && name != "Windows-1256")
+        }
+        _ => false,
+    }
+}
+
+/// The alphanumeric class of one character — `Some(true)` for a digit,
+/// `Some(false)` for a letter, `None` for neither — as Onigmo's ctype
+/// tables have it for the receiver's encoding.
+///
+/// ASCII is ASCII everywhere. Above that the encodings disagree, and
+/// `#succ` shows the disagreement: a UTF-8 receiver uses the Unicode
+/// properties (`"Zあ".succ` steps `あ`, since it is a letter there),
+/// EUC-JP and Shift_JIS count no multi-byte character as one
+/// (`"Z\xA4\xA2".succ` wraps the `Z` instead), Emacs-Mule counts all
+/// of them, and the single-byte encodings split per
+/// [`high_half_has_letters`].
+fn succ_alnum_class(p: &[u8], enc: crate::value::Encoding) -> Option<bool> {
+    use crate::value::Encoding as E;
+    if p.len() != 1 {
+        if enc == E::Utf8 {
+            let c = std::str::from_utf8(p).ok()?.chars().next()?;
+            return unicode_alnum_class(c);
+        }
+        // Emacs-Mule is the one self-walked encoding whose multi-byte
+        // characters Onigmo counts as letters.
+        return (enc.name() == "Emacs-Mule").then_some(false);
+    }
+    match p[0] {
+        b'0'..=b'9' => return Some(true),
+        b'a'..=b'z' | b'A'..=b'Z' => return Some(false),
+        b if b < 0x80 => return None,
+        _ => {}
+    }
+    if enc == E::Utf8 {
+        // A lone byte above 0x7F is not a character in UTF-8.
+        return None;
+    }
+    if !high_half_has_letters(enc) {
+        return None;
+    }
+    // Onigmo's TIS-620 / Windows-874 table marks every byte it defines
+    // alpha — the Thai letters, the marks, the digits, and `฿` and `๛`
+    // with them — so `"\xFB"` wraps to `"\xDF"`, the bottom of that
+    // run, while the undefined 0xDB..=0xDE and 0xFC.. are not characters
+    // for it at all.
+    if matches!(enc.name(), "TIS-620" | "Windows-874") {
+        let defined = (0xa1..=0xfb).contains(&p[0])
+            && super::encoding::single_byte_char(enc, p[0]).is_some();
+        return defined.then_some(false);
+    }
+    let c = super::encoding::single_byte_char(enc, p[0])?;
+    // A single-byte encoding's table marks its whole script alpha,
+    // combining marks included — Thai's `\u0E3A` steps like a letter in
+    // TIS-620, where the same character in UTF-8 does not — while its
+    // national digits are not DIGIT: `"\xF9"` (Thai digit nine) in
+    // TIS-620 steps to `"\xFA"` rather than wrapping to zero.
+    use unicode_general_category::{GeneralCategory as GC, get_general_category};
+    match get_general_category(c) {
+        GC::NonspacingMark | GC::EnclosingMark => Some(false),
+        GC::DecimalNumber => None,
+        _ => unicode_alnum_class(c),
+    }
+}
+
+/// [`succ_alnum_class`] for a character monoruby can name as a Unicode
+/// scalar — the same category split `str_next` walks UTF-8 with.
+fn unicode_alnum_class(c: char) -> Option<bool> {
+    use unicode_general_category::{GeneralCategory::*, get_general_category};
+    // Onigmo's Unicode ALPHA, as `#succ` shows it: letters, letter
+    // numbers and the spacing combining marks (`"w\u0903".succ` steps
+    // the mark), but not the non-spacing or enclosing ones
+    // (`"w\u0359".succ` steps the `w`).
+    match get_general_category(c) {
+        DecimalNumber => Some(true),
+        SpacingMark | LetterNumber | OtherLetter | ModifierLetter | LowercaseLetter
+        | UppercaseLetter | TitlecaseLetter => Some(false),
+        _ => None,
+    }
+}
+
+/// CRuby's `enc_succ_alnum_char`: step a digit or a letter to the next
+/// one *of the same class*, wrapping to the bottom of the class (and
+/// reporting the carry) when it runs off the top. `carry` is filled
+/// with what the caller must insert on a wrap: the class's first
+/// character, `1` rather than `0` for digits (`"9".succ` is `"10"`).
+fn enc_succ_alnum_char(
+    p: &mut [u8],
+    enc: crate::value::Encoding,
+    carry: &mut Vec<u8>,
+) -> Neighbor {
+    let Some(is_digit) = succ_alnum_class(p, enc) else {
+        return Neighbor::NotChar;
+    };
+    let save = p.to_vec();
+    // CRuby allows one gap (U+03A2, the hole in the Greek capitals).
+    for _ in 0..=1 {
+        match enc_succ_char(p, enc) {
+            Neighbor::Found if succ_alnum_class(p, enc) == Some(is_digit) => {
+                return Neighbor::Found;
+            }
+            // Stepping off the top wraps within the byte width rather
+            // than out of the class: the successor of the last two-byte
+            // Emacs-Mule character is the first one, not a carry.
+            Neighbor::Wrapped => {
+                if succ_alnum_class(p, enc) == Some(is_digit) {
+                    return Neighbor::Found;
+                }
+                break;
+            }
+            _ => {}
+        }
+    }
+    p.copy_from_slice(&save);
+    // Walk down to the bottom of the class: that is what the wrapped
+    // character becomes, and what the carry is built from.
+    let mut range = 1;
+    loop {
+        let save = p.to_vec();
+        if enc_pred_char(p, enc) == Neighbor::Found && succ_alnum_class(p, enc) == Some(is_digit) {
+            range += 1;
+            continue;
+        }
+        p.copy_from_slice(&save);
+        break;
+    }
+    if range == 1 {
+        return Neighbor::NotChar;
+    }
+    carry.clear();
+    carry.extend_from_slice(p);
+    if is_digit {
+        // The carried digit is `1`, not `0`.
+        enc_succ_char(carry, enc);
+    }
+    Neighbor::Wrapped
+}
+
+/// CRuby's `str_succ`, over the receiver's own encoding.
+///
+/// The rule is: step the rightmost alphanumeric character within its
+/// class, carrying left through the alphanumerics; with no alphanumeric
+/// anywhere, step the rightmost *character*, carrying left the same
+/// way. "Carrying" is where the encoding enters — a wrapped character
+/// prepends the class's first one — and so is "character": a byte that
+/// starts none is skipped rather than incremented, which is why
+/// `"A\xFFB".succ` is `"A\xFFC"` and why the successor of EUC-JP's
+/// `0x7F` carries rather than stepping into `0x80`.
+///
+/// Returns the new bytes. `iter_char_bytes`-style pieces are used for
+/// the walk, so an ill-formed byte is its own piece and is passed over.
+fn enc_str_succ(bytes: &[u8], enc: crate::value::Encoding) -> Vec<u8> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    // (offset, length, is_character) for each piece, left to right.
+    let mut pieces: Vec<(usize, usize, bool)> = Vec::new();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        match succ_precise_len(bytes, pos, enc) {
+            PreciseLen::Char(n) if n > 0 && pos + n <= bytes.len() => {
+                pieces.push((pos, n, true));
+                pos += n;
+            }
+            _ => {
+                pieces.push((pos, 1, false));
+                pos += 1;
+            }
+        }
+    }
+    let mut out = bytes.to_vec();
+    let mut carry: Vec<u8> = vec![0x01];
+    let mut carry_pos = 0;
+    let mut carry_len = 1;
+    let mut found_alnum = false;
+    let mut last_alnum: Option<(usize, usize)> = None;
+    let mut neighbor = Neighbor::Found;
+
+    for &(off, len, is_char) in pieces.iter().rev() {
+        // A digit run that ran off the top stops at the first letter to
+        // its left, and the other way round: `"Az".succ` is `"Ba"`, not
+        // `"Aaa"`.
+        if neighbor == Neighbor::NotChar
+            && let Some((la_off, la_len)) = last_alnum
+        {
+            // CRuby tests this one with the plain ASCII byte macros, not
+            // with the encoding's ctype: a high-half letter is *not* a
+            // letter here, which is why the digit's carry in
+            // `"\xDF\xA19"` (ISO-8859-1) reaches the `\xDF` and steps
+            // it instead of being inserted as a `1`.
+            let ascii_class = |b: &[u8]| match b {
+                [c] if c.is_ascii_digit() => Some(true),
+                [c] if c.is_ascii_alphabetic() => Some(false),
+                _ => None,
+            };
+            let left = ascii_class(&out[la_off..la_off + la_len]);
+            let here = ascii_class(&out[off..off + len]);
+            if let (Some(l), Some(h)) = (left, here)
+                && l != h
+            {
+                carry_pos = la_off;
+                carry_len = la_len;
+                break;
+            }
+        }
+        if !is_char {
+            continue;
+        }
+        let mut buf = out[off..off + len].to_vec();
+        neighbor = enc_succ_alnum_char(&mut buf, enc, &mut carry);
+        match neighbor {
+            Neighbor::NotChar => continue,
+            Neighbor::Found => {
+                out[off..off + len].copy_from_slice(&buf);
+                return out;
+            }
+            Neighbor::Wrapped => {
+                out[off..off + len].copy_from_slice(&buf);
+                last_alnum = Some((off, len));
+            }
+        }
+        found_alnum = true;
+        carry_pos = off;
+        carry_len = carry.len();
+    }
+
+    if !found_alnum {
+        carry_pos = 0;
+        carry_len = 1;
+        for &(off, len, is_char) in pieces.iter().rev() {
+            if !is_char {
+                continue;
+            }
+            let mut buf = out[off..off + len].to_vec();
+            match enc_succ_char(&mut buf, enc) {
+                Neighbor::Found => {
+                    out[off..off + len].copy_from_slice(&buf);
+                    return out;
+                }
+                Neighbor::Wrapped => out[off..off + len].copy_from_slice(&buf),
+                Neighbor::NotChar => {}
+            }
+            carry_pos = off;
+            carry_len = len;
+        }
+        carry = vec![0x01];
+        carry_len = 1;
+    }
+
+    let mut res = Vec::with_capacity(out.len() + carry_len);
+    res.extend_from_slice(&out[..carry_pos]);
+    res.extend_from_slice(&carry[..carry_len.min(carry.len())]);
+    res.extend_from_slice(&out[carry_pos..]);
+    res
+}
+
 ///
 /// ### String#start_with?
 ///
@@ -10412,7 +10865,8 @@ fn center(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn next(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
-    if let Some(out) = byte_succ_no_alnum(&inner) {
+    if succ_walks_its_own_encoding(&inner) {
+        let out = enc_str_succ(inner.as_bytes(), inner.encoding());
         return Ok(Value::string_from_inner(RStringInner::from_encoding(
             &out,
             inner.encoding(),
@@ -10423,32 +10877,19 @@ fn next(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     Ok(transform_result(&str_next(&recv), self_, mapped))
 }
 
-/// CRuby's non-alphanumeric `String#succ` for byte strings: with no
-/// ASCII-alphanumeric character anywhere, the rightmost byte is
-/// incremented with `0xFF → 0x00` carry, prepending `\x01` when the
-/// carry falls off the front (`"\xFF".succ == "\x01\x00"`). Applies
-/// only to receivers the char-walking `str_next` can't serve
-/// faithfully — byte-oriented 8-bit strings and broken UTF-8 —
-/// returning `None` for everything else (and for empty strings).
-fn byte_succ_no_alnum(inner: &RStringInner) -> Option<Vec<u8>> {
-    let bytes = inner.as_bytes();
-    if bytes.is_empty()
-        || bytes.iter().any(|b| b.is_ascii_alphanumeric())
-        || !(inner.needs_byte_mapping() || inner.check_utf8().is_err())
-    {
-        return None;
-    }
-    let mut out = bytes.to_vec();
-    for i in (0..out.len()).rev() {
-        if out[i] == 0xFF {
-            out[i] = 0x00;
-        } else {
-            out[i] += 1;
-            return Some(out);
-        }
-    }
-    out.insert(0, 0x01);
-    Some(out)
+/// Whether `#succ` walks this receiver in its own encoding rather than
+/// through the Unicode-aware `str_next`.
+///
+/// Everything but a valid UTF-8 receiver does. `str_next` increments a
+/// Unicode scalar and emits its UTF-8, which is right only where the
+/// receiver *is* Unicode: for an EUC-JP one it wrote bytes that are not
+/// characters in it, for a BINARY one it stepped `\xFF` as if it were
+/// `ÿ`, and for a broken one there is no view to walk at all — CRuby
+/// answers there (`"A\xFFB".succ` is `"A\xFFC"`) where `str_next`
+/// raised. US-ASCII goes this way too, so `"\x7F"` carries instead of
+/// stepping into a byte the encoding has no character for.
+fn succ_walks_its_own_encoding(_inner: &RStringInner) -> bool {
+    true
 }
 
 ///
@@ -10464,7 +10905,8 @@ fn next_mut(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let mut self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
     let enc = inner.encoding();
-    if let Some(out) = byte_succ_no_alnum(&inner) {
+    if succ_walks_its_own_encoding(&inner) {
+        let out = enc_str_succ(inner.as_bytes(), enc);
         self_.replace_with_inner(RStringInner::from_encoding(&out, enc));
         return Ok(self_);
     }
@@ -16005,6 +16447,111 @@ mod tests {
         run_test_error(r#""abc".ljust(5, "")"#);
         run_test_error(r#""abc".rjust(5, "")"#);
         run_test_error(r#""abc".center(5, "")"#);
+    }
+
+    #[test]
+    fn succ_walks_the_receivers_own_encoding() {
+        // `#succ` used to increment a Unicode scalar and write its
+        // UTF-8, whatever the receiver was labelled: an EUC-JP string
+        // came back holding bytes that are not characters in EUC-JP.
+        // CRuby carries in the receiver's own encoding — the successor
+        // of Shift_JIS `0x7F` is `0xA1`, because `0x80..0xA0` lead
+        // nothing there, and EUC-JP's carries instead.
+        run_test_once(
+            r##"(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); begin; [s.succ.bytes, s.succ.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call("EUC-JP", 0x00, 0x7F), f.call("Shift_JIS", 0x00, 0x7F),
+              f.call("Emacs-Mule", 0x00, 0x7F), f.call("EUC-JP", 0x00, 0x80),
+              f.call("Shift_JIS", 0x00, 0xDF), f.call("Shift_JIS", 0x00, 0xA0),
+              f.call("EUC-JP", 0xA4, 0xA2), f.call("Shift_JIS", 0x82, 0xA0),
+              f.call("EUC-JP", 0x8E, 0xA1), f.call("EUC-JP", 0x8F, 0xA1, 0xA1),
+              f.call("EUC-JP", 0x5A), f.call("EUC-JP", 0x39),
+              f.call("EUC-JP", 0x5A, 0xA4, 0xA2), f.call("Shift_JIS", 0x5A, 0x82, 0xA0),
+              f.call("Emacs-Mule", 0x81, 0xA0, 0x5A), f.call("Emacs-Mule", 0x5A, 0x81, 0xFF),
+              f.call("Shift_JIS", 0xB1), f.call("Shift_JIS", 0xDF),
+              f.call("EUC-JP"), f.call("EUC-JP", 0x2D),
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn succ_on_broken_and_byte_receivers() {
+        // The same walk answers where the UTF-8 one raised — a broken
+        // receiver has no UTF-8 view, and CRuby steps its characters
+        // anyway — and stops a BINARY or US-ASCII receiver from
+        // stepping bytes its encoding has no character for.
+        run_test_once(
+            r##"(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); begin; [s.succ.bytes, s.succ.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call("UTF-8", 0x41, 0xFF, 0x42), f.call("UTF-8", 0x41, 0xFF),
+              f.call("UTF-8", 0xFF), f.call("UTF-8", 0x7F),
+              f.call("ASCII-8BIT", 0xFF), f.call("ASCII-8BIT", 0x41, 0xFF),
+              f.call("ASCII-8BIT", 0x7A), f.call("US-ASCII", 0x7F),
+              f.call("US-ASCII", 0x41, 0x80), f.call("US-ASCII", 0x7A),
+              f.call("ISO-8859-1", 0xFF), f.call("ISO-8859-1", 0x41, 0xFF),
+              f.call("IBM437", 0x9A), f.call("KOI8-R", 0xFF),
+              f.call("TIS-620", 0xDA), f.call("TIS-620", 0xF9),
+              f.call("UTF-8", 0xDF, 0xBF), f.call("UTF-8", 0xEF, 0xBF, 0xBF),
+              f.call("UTF-8", 0xF4, 0x8F, 0xBF, 0xBF),
+              f.call("UTF-8", 0x77, 0xCD, 0x99), f.call("UTF-8", 0x77, 0xE0, 0xA4, 0x83),
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn succ_walks_down_to_the_bottom_of_a_class() {
+        // The carry is built from the smallest character of the class
+        // the stepped one belongs to, which CRuby finds by walking
+        // *down* (`enc_pred_char`). The walk crosses whatever byte
+        // boundaries lie in the way — below NKO DIGIT ZERO the two-byte
+        // UTF-8 tail has to borrow from the lead — and gives up when
+        // the class holds one character only, leaving `#succ` to step
+        // the character rather than the class.
+        run_test_once(
+            r##"(g=->(str){ begin; [str.succ.codepoints, str.succ.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              g.call("߉"), g.call("߀"), g.call("٩"), g.call("٠"),
+              g.call("၉"), g.call("၀"), g.call("９"), g.call("０"),
+              g.call("ª"), g.call("µ"), g.call("ת"), g.call("ʰ"),
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn succ_wraps_within_the_byte_width_it_started_in() {
+        // Stepping off the top of a width wraps to the bottom of the
+        // same one rather than carrying: the successor of the last
+        // two-byte Emacs-Mule character is the first, and with no
+        // alphanumeric anywhere the rightmost *character* steps.
+        run_test_once(
+            r##"(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); begin; [s.succ.bytes, s.succ.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call("Emacs-Mule", 0x8F, 0xFF), f.call("Emacs-Mule", 0x81, 0xA0),
+              f.call("Emacs-Mule", 0x8F, 0xFE), f.call("Emacs-Mule", 0x5A, 0x8F, 0xFF),
+              f.call("EUC-JP", 0xA1, 0xA1), f.call("Shift_JIS", 0x81, 0x40),
+              f.call("Shift_JIS", 0xFC, 0xFC), f.call("EUC-JP", 0xFE, 0xFE),
+              f.call("EUC-JP", 0x8F, 0xFE, 0xFE), f.call("Emacs-Mule", 0x80),
+              f.call("UTF-8", 0xF4, 0x8F, 0xBF, 0xBF), f.call("UTF-8", 0xC2, 0x80),
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn succ_asks_each_single_byte_encoding_its_own_table() {
+        // Which high-half byte is a character at all, and which of them
+        // Onigmo calls a letter, is per encoding: the ISO-8859 family
+        // keeps C1 controls where the Windows pages put characters, an
+        // undefined byte is no character, and Onigmo marks neither the
+        // Hebrew of Windows-1255 nor the Arabic of Windows-1256 alpha,
+        // so those step instead of wrapping.
+        run_test_once(
+            r##"(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); begin; [s.succ.bytes, s.succ.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call("ISO-8859-1", 0x9A), f.call("ISO-8859-2", 0xE1), f.call("ISO-8859-2", 0x9A),
+              f.call("ISO-8859-3", 0xA5), f.call("ISO-8859-3", 0xE1), f.call("ISO-8859-15", 0xFF),
+              f.call("Windows-1255", 0xE0), f.call("Windows-1256", 0xC1),
+              f.call("Windows-1252", 0xFF), f.call("Windows-1250", 0xFF),
+              f.call("KOI8-U", 0xFF), f.call("TIS-620", 0xFB),
+              f.call("Windows-1258", 0xCC), f.call("Windows-1258", 0xEC),
+              f.call("Windows-1258", 0xCB), f.call("Windows-1257", 0xFF),
+              f.call("ISO-8859-3", 0xAE), f.call("ISO-8859-7", 0xD2),
+            ])"##,
+        );
     }
 
     #[test]
