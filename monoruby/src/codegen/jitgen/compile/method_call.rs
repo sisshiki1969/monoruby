@@ -294,15 +294,32 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    ///
+    /// The observed receiver classes of *callid* that all resolve to
+    /// *func_id*, when there are at least two of them worth a compare.
+    ///
+    /// The caller guards the set with one `GuardClassIn` instead of
+    /// guarding the single class the inline cache happens to hold, so an
+    /// off-class receiver costs a compare rather than a deopt.
+    ///
+    /// The target's `FuncKind` does not matter here. What a set guard
+    /// gives up is the *proof* of a single receiver class, and everything
+    /// downstream that needs that proof already asks for it:
+    /// `same_target_set_guarded` turns off `inline_class_new`, the inline
+    /// operator generators and the baked-in callee body, and
+    /// `recv_class_proven` turns off the ivar-slot lowerings and callee
+    /// specialization. This used to admit `FuncKind::Builtin` alone, which
+    /// was a blunt way of saying the same thing — a builtin resolves
+    /// nothing against the receiver's class — and it left every
+    /// Ruby-defined shared target (a method in an included module, the
+    /// common shape) deopting on each off-class receiver.
+    ///
     fn pmc_same_target_classes(
         &mut self,
         callid: CallSiteId,
         recv_class: ClassId,
         func_id: FuncId,
     ) -> Option<Box<[ClassId]>> {
-        if !matches!(self.store[func_id].kind, FuncKind::Builtin { .. }) {
-            return None;
-        }
         let callsite = &self.store[callid];
         let name = callsite.name?;
         let pmc = &callsite.pmc;
@@ -928,7 +945,7 @@ impl<'a> JitContext<'a> {
                             ISeqHint::Normal => {}
                         }
                     }
-                    if self.specialize_level() < SPECIALIZE_DEPTH_LIMIT {
+                    if recv_class_proven && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT {
                         return self.specialized_iseq(
                             state,
                             ir,
@@ -1164,6 +1181,7 @@ impl<'a> JitContext<'a> {
                     && (forward_exempt || self.specialize_level() < SPECIALIZE_DEPTH_LIMIT))
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
+                    && recv_class_proven
                 {
                     return self.specialized_iseq(
                         state,
