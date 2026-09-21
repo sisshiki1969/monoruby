@@ -3794,21 +3794,27 @@ fn converter_convert(
     _: BytecodePtr,
 ) -> Result<Value> {
     let recv = lfp.self_val();
+    // The argument is converted before the converter's state is
+    // looked at, as CRuby's `StringValue` is reached first: a
+    // finished converter handed a non-String still answers the
+    // `TypeError` (#1537).
+    let arg = lfp.arg(0);
+    let bytes = arg
+        .is_rstring_inner()
+        .ok_or_else(|| {
+            MonorubyErr::no_implicit_conversion(&globals.store, arg, STRING_CLASS)
+        })?
+        .as_bytes()
+        .to_vec();
     if globals
         .store
         .get_ivar(recv, IdentId::get_id(CONVERTER_FINISHED_IVAR))
         .is_some()
     {
         return Err(MonorubyErr::argumenterr(
-            "convert called after finish".to_string(),
+            "converter already finished".to_string(),
         ));
     }
-    let arg = lfp.arg(0);
-    let bytes = arg
-        .is_rstring_inner()
-        .ok_or_else(|| MonorubyErr::typeerr("expected String".to_string()))?
-        .as_bytes()
-        .to_vec();
     let src = converter_get_src(globals, recv);
     let dst = converter_get_dst(globals, recv);
     // Honour the configured replacement + `invalid:`/`undef:
@@ -5655,8 +5661,10 @@ fn converter_primitive_convert(
     // dst must be a writable String — frozen / chilled strings are
     // rejected before we look at the rest of the args.
     if dst_arg.is_rstring_inner().is_none() {
-        return Err(MonorubyErr::typeerr(
-            "no implicit conversion of nil into String".to_string(),
+        return Err(MonorubyErr::no_implicit_conversion(
+            &globals.store,
+            dst_arg,
+            STRING_CLASS,
         ));
     }
     dst_arg.ensure_string_mutable(vm, globals)?;
@@ -5676,7 +5684,9 @@ fn converter_primitive_convert(
     } else {
         src_arg
             .is_rstring_inner()
-            .ok_or_else(|| MonorubyErr::typeerr("expected String".to_string()))?
+            .ok_or_else(|| {
+                MonorubyErr::no_implicit_conversion(&globals.store, src_arg, STRING_CLASS)
+            })?
             .as_bytes()
             .to_vec()
     };
@@ -5752,15 +5762,53 @@ fn converter_primitive_convert(
     let src_enc = converter_get_src(globals, recv);
     let dst_enc = converter_get_dst(globals, recv);
 
+    // A call that brings no source of its own says the input has
+    // ended, unless `partial_input:` says more is merely not here
+    // yet — `nil` and `""` alike, which is how CRuby's
+    // `rb_econv_convert` reads an empty final chunk. Once that has
+    // happened the converter is done: every later call answers
+    // `:finished` having converted nothing, and `#convert` raises
+    // (#1537). `#finish` sets the same flag.
+    let finished_id = IdentId::get_id(CONVERTER_FINISHED_IVAR);
+    let already_finished = globals.store.get_ivar(recv, finished_id).is_some();
+    // The *caller's* source, not the pending buffer: bytes held back
+    // by an earlier `dst_bytesize` cap are still converted by the
+    // call that ends the stream.
+    let no_more_input = src_arg.is_nil() || new_src_bytes.is_empty();
+
     let conv_opts = converter_transcode_opts(globals, recv);
-    let (result, src_consumed, out_bytes, meta) = stream_convert(
-        &src_bytes,
-        src_enc,
-        dst_enc,
-        max_dst_bytes,
-        partial_input,
-        &conv_opts,
-    );
+    let (result, src_consumed, out_bytes, meta) = if already_finished {
+        (
+            StreamConvertResult::Finished,
+            0,
+            Vec::new(),
+            ErrMeta::default(),
+        )
+    } else {
+        stream_convert(
+            &src_bytes,
+            src_enc,
+            dst_enc,
+            max_dst_bytes,
+            partial_input,
+            &conv_opts,
+        )
+    };
+    // What the call reports, and whether it closes the stream.
+    let result = if already_finished || !no_more_input {
+        result
+    } else if partial_input {
+        // Nothing to read *this* time. Whatever the converter had
+        // buffered has still been written; an error it ran into is
+        // still the answer.
+        match result {
+            StreamConvertResult::Finished => StreamConvertResult::SourceBufferEmpty,
+            other => other,
+        }
+    } else {
+        let _ = globals.store.set_ivar(recv, finished_id, Value::bool(true));
+        result
+    };
 
     // After-call mutation rules (CRuby observed behaviour):
     //
@@ -5791,7 +5839,10 @@ fn converter_primitive_convert(
             | StreamConvertResult::DestinationBufferFull
     );
     let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
-    if leave_remaining_in_src {
+    if already_finished {
+        // Neither `src` nor the pending buffer is touched — this call
+        // read nothing.
+    } else if leave_remaining_in_src {
         // How much of the source this call took but did not write.
         // Only a capped destination has any (an error result stops
         // before the offending character rather than reading past
@@ -10052,6 +10103,94 @@ mod tests {
               first = ec.primitive_convert(s, d, nil, cap)
               [first, s.bytes, d.bytes,
                ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_stream_ends_on_an_empty_source() {
+        // A `primitive_convert` that brings no source of its own says
+        // the input has ended — `nil` and `""` alike. Every later call
+        // answers `:finished` having converted nothing, and leaves
+        // `src` alone (#1537).
+        crate::tests::run_test_once(
+            r##"
+            [nil, ""].map do |empty|
+              ec = Encoding::Converter.new("UTF-8", "EUC-JP")
+              d = "".dup
+              a = ec.primitive_convert(empty && empty.dup, d)
+              s = "ab".dup
+              b = ec.primitive_convert(s, d)
+              [a, b, s.bytes, d.bytes,
+               ec.primitive_errinfo, ec.last_error,
+               (ec.convert("cd".dup) rescue [$!.class.to_s, $!.message])]
+            end
+            "##,
+        );
+        // `partial_input:` says more is merely not here yet: the
+        // stream stays open, and the answer is `:source_buffer_empty`.
+        crate::tests::run_test_once(
+            r##"
+            [nil, ""].map do |empty|
+              ec = Encoding::Converter.new("UTF-8", "EUC-JP")
+              d = "".dup
+              a = ec.primitive_convert(empty && empty.dup, d, nil, nil, partial_input: true)
+              b = ec.primitive_convert(empty && empty.dup, d, nil, nil, partial_input: true)
+              s = "ab".dup
+              c = ec.primitive_convert(s, d)
+              [a, b, c, s.bytes, d.bytes]
+            end
+            "##,
+        );
+        // Whatever an earlier destination cap held back is still
+        // converted by the call that ends the stream — it is the
+        // *caller's* source that is empty, not the converter.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            [false, true].each do |partial|
+              ec = Encoding::Converter.new("UTF-8", "EUC-JP")
+              d = "".dup
+              a = ec.primitive_convert("あab".dup, d, nil, 2)
+              b = ec.primitive_convert("".dup, d, nil, 100, partial_input: partial)
+              s = "zz".dup
+              c = ec.primitive_convert(s, d, nil, 100)
+              r << [a, b, c, s.bytes, d.bytes]
+            end
+            r
+            "##,
+        );
+        // `#finish` ends it the same way, and the destination is still
+        // truncated to `dst_offset` and re-tagged by a call that comes
+        // after the end.
+        crate::tests::run_test_once(
+            r##"
+            ec = Encoding::Converter.new("UTF-8", "EUC-JP")
+            r = [ec.finish.bytes, ec.finish.bytes]
+            s = "ab".dup
+            r << ec.primitive_convert(s, "".dup) << s.bytes
+            ec2 = Encoding::Converter.new("UTF-8", "EUC-JP")
+            ec2.primitive_convert(nil, "".dup)
+            d = "xyz".dup.force_encoding("UTF-8")
+            r << ec2.primitive_convert("ab".dup, d, 1) << d.bytes << d.encoding.name
+            r << (ec2.convert("ab".dup) rescue [$!.class.to_s, $!.message])
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_argument_errors_name_the_class() {
+        // CRuby's `TypeError` names the class it could not convert;
+        // ours said "expected String", and the destination's said
+        // "nil" whatever was passed (#1537, found alongside).
+        crate::tests::run_test_once(
+            r##"
+            ec = Encoding::Converter.new("UTF-8", "EUC-JP")
+            [42, :ab, [1], nil].map do |bad|
+              [(ec.primitive_convert(bad, "".dup) rescue [$!.class.to_s, $!.message]),
+               (ec.primitive_convert("a".dup, bad) rescue [$!.class.to_s, $!.message]),
+               (ec.convert(bad) rescue [$!.class.to_s, $!.message])]
             end
             "##,
         );
