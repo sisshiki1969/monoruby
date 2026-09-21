@@ -395,9 +395,24 @@ pub struct Globals {
     /// (Strings) that have already been loaded. Stored as a live Ruby
     /// Value so mutations from Ruby code (`$".replace(arr)`,
     /// `$".delete(path)`, `$".clear`) propagate back to the runtime's
-    /// dedup tracking. Membership checks scan the array linearly,
-    /// which is fine because `require` is not on a hot path.
+    /// dedup tracking. Membership goes through `loaded_features_index`.
     pub(crate) loaded_features: Value,
+    /// Membership index over `loaded_features`, because `require` *is*
+    /// on a hot path after all: `Module#autoload` asks
+    /// `autoload_feature_already_loaded` about every candidate path a
+    /// feature could resolve to, and Zeitwerk registers an autoload per
+    /// constant. Booting a Rails app that way came to ~320 `autoload`
+    /// calls x 332 candidates x 2,950 entries — 313M array walks, a
+    /// third of the boot's instructions.
+    ///
+    /// The array stays the source of truth. This mirrors it, maintained
+    /// in step by `add_loaded_feature` / `remove_loaded_feature`, and is
+    /// rebuilt whenever the array's length no longer matches what those
+    /// two accounted for — which is how a mutation from Ruby (`$".delete`,
+    /// `$".replace`, `$".clear`, `$" << path`) is noticed. A same-length
+    /// in-place swap (`$"[0] = other`) is the one shape that slips past,
+    /// since nothing about the array changes that an O(1) check can see.
+    loaded_features_index: std::cell::RefCell<LoadedFeatureIndex>,
     /// Features whose `require` body is currently executing, keyed by
     /// the canonical path registered in `$LOADED_FEATURES`, with the
     /// loading green thread's object id. A second thread requiring the
@@ -520,6 +535,17 @@ impl std::ops::DerefMut for Globals {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.store
     }
+}
+
+
+/// Membership mirror of `$LOADED_FEATURES` — see the field's comment on
+/// `Globals`. `len` is the array length this set was last reconciled
+/// with; a disagreement means Ruby changed the array and the set has to
+/// be re-derived.
+#[derive(Default)]
+struct LoadedFeatureIndex {
+    set: std::collections::HashSet<Box<[u8]>>,
+    len: usize,
 }
 
 impl Globals {
@@ -877,6 +903,7 @@ impl Globals {
             gem_lib_dirs: vec![],
             random: Box::new(Prng::new()),
             loaded_features,
+            loaded_features_index: std::cell::RefCell::new(LoadedFeatureIndex::default()),
             loading_features: std::collections::HashMap::default(),
             ext: crate::ext::ExtState::default(),
             gvar_traces: std::collections::HashMap::default(),
@@ -1780,15 +1807,26 @@ impl Globals {
     /// array entries and `path` are compared via their `OsStr` bytes
     /// so that Ruby-side `$".replace(...)` semantics are honoured.
     pub(crate) fn is_feature_loaded(&self, path: &std::path::Path) -> bool {
-        let target = path.as_os_str().as_bytes();
-        for v in self.loaded_features.as_array().iter() {
-            if let Some(s) = v.is_str()
-                && s.as_bytes() == target
-            {
-                return true;
+        let array = self.loaded_features.as_array();
+        let mut index = self.loaded_features_index.borrow_mut();
+        if index.len != array.len() {
+            // Ruby moved the array out from under us (or this is the
+            // first question asked). Re-derive the whole thing; our own
+            // appends keep `len` in step, so this is not the common case.
+            index.set.clear();
+            for v in array.iter() {
+                // `is_rstring_inner`, not `is_str`: this keys on bytes, so
+                // running each entry through UTF-8 validation buys nothing
+                // — and `is_str` answers `None` for an entry that is not
+                // valid UTF-8, which silently dropped a path this was
+                // meant to match.
+                if let Some(s) = v.is_rstring_inner() {
+                    index.set.insert(s.as_bytes().into());
+                }
             }
+            index.len = array.len();
         }
-        false
+        index.set.contains(path.as_os_str().as_bytes())
     }
 
     /// Append `path` to `$LOADED_FEATURES` if it isn't already
@@ -1800,6 +1838,12 @@ impl Globals {
         let value = Value::string_from_str(path.to_string_lossy().as_ref());
         let mut array = self.loaded_features.as_array();
         array.push(value);
+        // Keep the index in step rather than letting the length change
+        // force a rebuild: every `require` lands here, so a rebuild per
+        // append would be the quadratic walk this index replaces.
+        let mut index = self.loaded_features_index.borrow_mut();
+        index.set.insert(path.as_os_str().as_bytes().into());
+        index.len = array.len();
         true
     }
 
@@ -1811,10 +1855,23 @@ impl Globals {
         let mut array = self.loaded_features.as_array();
         let pos = array
             .iter()
-            .position(|v| v.is_str().is_some_and(|s| s.as_bytes() == target));
+            .position(|v| v.is_rstring_inner().is_some_and(|s| s.as_bytes() == target));
         match pos {
             Some(idx) => {
                 array.remove(idx);
+                // Same reasoning as the append: account for the removal
+                // so the next lookup does not have to rebuild. The path
+                // can still appear more than once (Ruby can push a
+                // duplicate), so only drop it from the set when no copy
+                // is left.
+                let mut index = self.loaded_features_index.borrow_mut();
+                if !array
+                    .iter()
+                    .any(|v| v.is_rstring_inner().is_some_and(|s| s.as_bytes() == target))
+                {
+                    index.set.remove(target);
+                }
+                index.len = array.len();
                 true
             }
             None => false,
