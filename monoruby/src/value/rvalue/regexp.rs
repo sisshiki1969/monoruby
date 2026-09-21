@@ -2208,8 +2208,9 @@ impl RegexpInner {
         while pos <= given.len() {
             let found = engine
                 .search_with_region(given.as_bytes(), pos, &mut region)
-                .map_err(|err| match_timed_out(&err)
-                        .unwrap_or_else(|| MonorubyErr::regexerr(format!("{err}"))))?;
+                .map_err(|err| {
+                    match_timed_out(&err).unwrap_or_else(|| MonorubyErr::regexerr(format!("{err}")))
+                })?;
             if found.is_none() {
                 break;
             }
@@ -2374,8 +2375,7 @@ impl RegexpInner {
         } else {
             engine.search_with_region(sub.as_bytes(), 0, region)
         };
-        r.map(|r| r.is_some())
-            .map_err(capture_failed)
+        r.map(|r| r.is_some()).map_err(capture_failed)
     }
 
     /// [`strscan_match`](Self::strscan_match) for a non-UTF-8 subject
@@ -2397,8 +2397,7 @@ impl RegexpInner {
         } else {
             native.search_with_region(sub, 0, region)
         };
-        r.map(|r| r.is_some())
-            .map_err(capture_failed)
+        r.map(|r| r.is_some()).map_err(capture_failed)
     }
 
     /// Byte-oriented twin of [`match_pred`](Self::match_pred): whether the
