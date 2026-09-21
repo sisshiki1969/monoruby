@@ -3351,6 +3351,9 @@ const CONVERTER_ERRINFO_IVAR: &str = "/converter_errinfo";
 /// Prepended to the next call's source bytes so streaming works
 /// across multiple calls. Stored as a binary String value.
 const CONVERTER_PENDING_IVAR: &str = "/converter_pending";
+/// Output bytes a `dst_bytesize` cap held back mid-character, for the
+/// next call to write before it converts anything new (#1532).
+const CONVERTER_PENDING_OUT_IVAR: &str = "/converter_pending_out";
 /// Read-again bytes buffered by an `:invalid_byte_sequence` outcome,
 /// returned (and drained) by `Encoding::Converter#putback`.
 const CONVERTER_READAGAIN_IVAR: &str = "/converter_readagain";
@@ -4035,6 +4038,13 @@ struct ErrMeta {
     /// call instead — but it must still take them out of the
     /// user's `src` to match what CRuby leaves there.
     dst_full_extra: usize,
+    /// `:destination_buffer_full` only: the output bytes of that
+    /// character which did not fit. CRuby fills the destination to
+    /// the byte and holds the rest for the next call, so a cap of 1
+    /// takes `"\u3042"` apart into `A4` and `A2` (#1532). When this
+    /// is set the character is *not* re-converted next call — these
+    /// bytes are written instead.
+    dst_full_out: Vec<u8>,
     /// `:undefined_conversion` only: the character had no mapping in
     /// the *decode* half (a source byte with no Unicode meaning),
     /// not the encode half. The two stages are reported differently
@@ -4189,9 +4199,11 @@ fn stream_convert(
             (
                 StreamConvertResult::DestinationBufferFull,
                 // One byte per character here, so the character the
-                // cap cut off is exactly one more source byte.
+                // cap cut off is exactly one more source byte, and
+                // its output is that same byte (#1532).
                 ErrMeta {
                     dst_full_extra: 1,
+                    dst_full_out: vec![src_bytes[limit]],
                     ..ErrMeta::default()
                 },
             )
@@ -4248,15 +4260,20 @@ fn stream_convert(
             if let Some(max) = max_dst_bytes
                 && out.len() + unit.len() > max
             {
+                // Fill to the byte and hold the rest of this unit
+                // for the next call (#1532).
+                let fits = max - out.len();
                 let written_through = pivot_prefix_consumed(src_bytes, src_enc, at, opts);
                 let through_tried =
                     pivot_prefix_consumed(src_bytes, src_enc, at + c.len_utf8(), opts);
+                out.extend_from_slice(&unit[..fits]);
                 return (
                     StreamConvertResult::DestinationBufferFull,
                     written_through,
                     out,
                     ErrMeta {
                         dst_full_extra: through_tried.saturating_sub(written_through),
+                        dst_full_out: unit[fits..].to_vec(),
                         ..ErrMeta::default()
                     },
                 );
@@ -4419,13 +4436,12 @@ fn stream_convert(
             {
                 // Only the characters that fit are converted; the one
                 // the cap cut off is what CRuby reads ahead and
-                // buffers the output of (#1511). These write one or
-                // two bytes per character, so the cut goes back to
-                // this character's start rather than to `max` — half
-                // of it written *and* re-converted next call would
-                // duplicate those bytes. (CRuby fills the gap with the
-                // front of the character instead; that is #1532.)
-                out.truncate(before);
+                // buffers the output of (#1511). It fills the
+                // destination to the byte, so the cut is at `max` and
+                // the rest of this character rides the next call
+                // (#1532) — `before` is where it starts.
+                let leftover = out[max.max(before)..].to_vec();
+                out.truncate(max);
                 let written_through = pivot_prefix_consumed(src_bytes, src_enc, at, opts);
                 let through_tried =
                     pivot_prefix_consumed(src_bytes, src_enc, at + c.len_utf8(), opts);
@@ -4435,6 +4451,7 @@ fn stream_convert(
                     out,
                     ErrMeta {
                         dst_full_extra: through_tried.saturating_sub(written_through),
+                        dst_full_out: leftover,
                         ..ErrMeta::default()
                     },
                 );
@@ -4547,7 +4564,9 @@ fn stream_convert(
                 // source, since the pivot was built uncapped. Only the
                 // characters that fit are converted; the one the cap
                 // cut off is what CRuby reads ahead and buffers
-                // (#1511).
+                // (#1511). One byte per character here, so filling to
+                // the byte (#1532) never splits one.
+                let leftover = out[max..].to_vec();
                 out.truncate(max);
                 let written_through = pivot_prefix_consumed(src_bytes, src_enc, at, opts);
                 let through_tried =
@@ -4558,6 +4577,7 @@ fn stream_convert(
                     out,
                     ErrMeta {
                         dst_full_extra: through_tried.saturating_sub(written_through),
+                        dst_full_out: leftover,
                         ..ErrMeta::default()
                     },
                 );
@@ -4881,12 +4901,67 @@ fn stream_convert(
                     },
                 );
             }
+            // `encoding_rs` will not write a character it cannot fit
+            // whole, and wants headroom besides — a two-byte character
+            // and a two-byte destination leave it writing *nothing*,
+            // so the cap path made no progress at all and a caller
+            // looping to `:finished` never got there. Fill the
+            // destination here instead, character by character through
+            // a throwaway encoder, to exactly the byte CRuby fills it
+            // to; then read one character further, as CRuby does, and
+            // hold its output for the next call (#1532).
+            let mut out_buf = out_buf;
+            let mut leftover: Vec<u8> = vec![];
+            let mut at = utf8_read;
+            if let Some(max) = max_dst_bytes {
+                while out_buf.len() < max {
+                    let Some(c) = utf8_str[at..].chars().next() else {
+                        break;
+                    };
+                    let Some(bytes) = dst_rs_encode_one(dst_rs, c) else {
+                        break;
+                    };
+                    let fits = (max - out_buf.len()).min(bytes.len());
+                    out_buf.extend_from_slice(&bytes[..fits]);
+                    at += c.len_utf8();
+                    if fits < bytes.len() {
+                        leftover = bytes[fits..].to_vec();
+                        break;
+                    }
+                }
+                // Nothing was split, so the character CRuby reads
+                // ahead is the next one whole.
+                if leftover.is_empty()
+                    && let Some(c) = utf8_str[at..].chars().next()
+                    && let Some(bytes) = dst_rs_encode_one(dst_rs, c)
+                {
+                    leftover = bytes;
+                    at += c.len_utf8();
+                }
+            }
+            // The whole pivot fits after all: `encoding_rs` simply
+            // would not write into a buffer this tight. The cap was
+            // never binding, so this is an ordinary finish — convert
+            // again without one and let the decode half answer.
+            if leftover.is_empty() && at == utf8_str.len() && max_dst_bytes.is_some() {
+                return stream_convert(src_bytes, src_enc, dst_enc, None, partial_input, opts);
+            }
+            // Everything up to `at` is converted — written or held —
+            // so it is consumed outright and `dst_full_extra`, which
+            // exists to re-convert what was only read, has nothing to
+            // say.
+            let consumed = if at == utf8_read {
+                written_through
+            } else {
+                src_offset_for_utf8_prefix(src_rs, src_bytes, at).unwrap_or(through_tried)
+            };
             (
                 StreamConvertResult::DestinationBufferFull,
-                written_through,
+                consumed,
                 out_buf,
                 ErrMeta {
-                    dst_full_extra: through_tried.saturating_sub(written_through),
+                    dst_full_extra: through_tried.saturating_sub(consumed.max(written_through)),
+                    dst_full_out: leftover,
                     ..ErrMeta::default()
                 },
             )
@@ -5166,6 +5241,21 @@ fn first_bad_sequence(enc: crate::value::Encoding, bytes: &[u8]) -> Option<(Vec<
         // neither has a decoder to ask.
         _ if single_byte_table(enc).is_some() => None,
         _ => first_bad_via_rs(encoding_to_rs(enc)?, bytes),
+    }
+}
+
+/// What `dst_rs` writes for *c*, or `None` if it has no cell for it.
+/// Asked with a throwaway encoder, for the character a full
+/// destination stopped the real one from writing (#1532).
+fn dst_rs_encode_one(dst_rs: &'static encoding_rs::Encoding, c: char) -> Option<Vec<u8>> {
+    let mut probe = dst_rs.new_encoder();
+    let mut src = [0u8; 4];
+    let mut out = [0u8; 16];
+    let (res, _, written) =
+        probe.encode_from_utf8_without_replacement(c.encode_utf8(&mut src), &mut out, false);
+    match res {
+        encoding_rs::EncoderResult::InputEmpty => Some(out[..written].to_vec()),
+        _ => None,
     }
 }
 
@@ -5843,6 +5933,40 @@ fn converter_primitive_convert(
     let src_enc = converter_get_src(globals, recv);
     let dst_enc = converter_get_dst(globals, recv);
 
+    // Output the last call's cap held back mid-character goes out
+    // first, before anything new is converted, and counts against
+    // this call's cap (#1532). If it fills the destination on its
+    // own the call stops there having read nothing — and the stream
+    // is not over, so the end-of-input check below is skipped with
+    // it.
+    let pending_out_id = IdentId::get_id(CONVERTER_PENDING_OUT_IVAR);
+    let pending_out: Vec<u8> = globals
+        .store
+        .get_ivar(recv, pending_out_id)
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    let (held_out, still_held) = match max_dst_bytes {
+        Some(max) if pending_out.len() > max => {
+            (pending_out[..max].to_vec(), pending_out[max..].to_vec())
+        }
+        _ => (pending_out, vec![]),
+    };
+    if !still_held.is_empty() {
+        let _ = globals
+            .store
+            .set_ivar(recv, pending_out_id, Value::bytes_from_slice(&still_held));
+        let mut new_dst_bytes = dst_initial[..dst_offset].to_vec();
+        new_dst_bytes.extend_from_slice(&held_out);
+        let new_dst = crate::value::RStringInner::from_encoding_scanned(&new_dst_bytes, dst_enc);
+        dst_arg.replace_with_inner(new_dst);
+        let result = StreamConvertResult::DestinationBufferFull;
+        store_conversion_outcome(globals, recv, result, &ErrMeta::default(), src_enc, dst_enc);
+        return Ok(Value::symbol_from_str(result.symbol_name()));
+    }
+    let _ = globals.store.set_ivar(recv, pending_out_id, Value::nil());
+    // Whatever it took is off this call's allowance.
+    let max_dst_bytes = max_dst_bytes.map(|m| m - held_out.len());
+
     // A call that brings no source of its own says the input has
     // ended, unless `partial_input:` says more is merely not here
     // yet — `nil` and `""` alike, which is how CRuby's
@@ -5934,6 +6058,17 @@ fn converter_primitive_convert(
         } else {
             0
         };
+        // The character the cap stopped at has been converted and
+        // what did not fit is held as *output*, so its source must
+        // not also be held as input or it converts twice (#1532).
+        let converted_ahead = !meta.dst_full_out.is_empty();
+        if converted_ahead {
+            let _ = globals.store.set_ivar(
+                recv,
+                pending_out_id,
+                Value::bytes_from_slice(&meta.dst_full_out),
+            );
+        }
         // With no `src` to leave them in (the caller passed `nil`)
         // everything a capped destination held back has to be
         // buffered instead, or it is lost. An error result buffers
@@ -5946,7 +6081,14 @@ fn converter_primitive_convert(
         } else {
             src_consumed
         };
-        let buffered: Vec<u8> = src_bytes[src_consumed..split].to_vec();
+        // Its output is held instead, so the bytes of the character
+        // already converted are not buffered again.
+        let buffered_from = if converted_ahead {
+            split.min(src_bytes.len())
+        } else {
+            src_consumed
+        };
+        let buffered: Vec<u8> = src_bytes[buffered_from..split].to_vec();
         // Put bytes after the error back into `src_arg`. Pending
         // buffer otherwise drops — the converter has nothing it
         // could write next call without more user input.
@@ -5991,6 +6133,7 @@ fn converter_primitive_convert(
     // tag with destination encoding (CRuby always re-tags dst on
     // a primitive_convert call, success or failure).
     let mut new_dst_bytes = dst_initial[..dst_offset].to_vec();
+    new_dst_bytes.extend_from_slice(&held_out);
     new_dst_bytes.extend_from_slice(&out_bytes);
     let new_dst = crate::value::RStringInner::from_encoding_scanned(&new_dst_bytes, dst_enc);
     dst_arg.replace_with_inner(new_dst);
@@ -10064,6 +10207,81 @@ mod tests {
             s2 = "abc\xa1def".dup
             d2 = "".dup
             r << ec2.primitive_convert(s2, d2, nil, 10) << [s2, d2] << ec2.putback
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_fills_a_capped_destination_to_the_byte() {
+        // CRuby fills the destination byte by byte and holds the rest
+        // of that character's output for the next call, so a cap of 1
+        // takes a two-byte character apart (#1532).
+        crate::tests::run_test_once(
+            r##"
+            ["EUC-JP", "UTF-16BE", "UTF-32BE", "GBK"].flat_map do |dst|
+              [1, 2, 3].map do |cap|
+                ec = Encoding::Converter.new("UTF-8", dst)
+                s = "あい".dup
+                d = "".dup
+                steps = []
+                12.times do
+                  r = ec.primitive_convert(s, d, nil, cap)
+                  steps << [r, d.bytes.dup, s.bytesize]
+                  break if r == :finished
+                end
+                [dst, cap, steps]
+              end
+            end
+            "##,
+        );
+        // The character the cap stopped at is converted once: its
+        // output is held, not its source re-read. A destination whose
+        // encoder will not write into a buffer that tight made no
+        // progress at all before this, so a caller looping to
+        // `:finished` never got there.
+        crate::tests::run_test_once(
+            r##"
+            ["GBK", "EUC-KR", "Shift_JIS", "EUC-JP"].map do |dst|
+              ec = Encoding::Converter.new("UTF-8", dst)
+              s = "éé".dup
+              d = "".dup
+              steps = []
+              12.times do
+                r = (ec.primitive_convert(s, d, nil, 2) rescue break steps << $!.class.to_s)
+                steps << [r, d.bytesize, s.bytesize]
+                break if r == :finished
+              end
+              [dst, steps, d.bytes]
+            end
+            "##,
+        );
+        // A cap that is not actually binding is an ordinary finish,
+        // whatever the codec says about headroom.
+        crate::tests::run_test_once(
+            r##"
+            ["GBK", "EUC-JP", "UTF-16BE"].flat_map do |dst|
+              [4, 5, 8].map do |cap|
+                ec = Encoding::Converter.new("UTF-8", dst)
+                s = "éé".dup
+                d = "".dup
+                [dst, cap, ec.primitive_convert(s, d, nil, cap), d.bytesize, s.bytesize]
+              end
+            end
+            "##,
+        );
+        // The held output goes out before anything new is converted,
+        // and counts against the next call's cap — including when the
+        // caller changes it.
+        crate::tests::run_test_once(
+            r##"
+            ec = Encoding::Converter.new("UTF-8", "UTF-32BE")
+            s = "ab".dup
+            d = "".dup
+            r = []
+            r << ec.primitive_convert(s, d, nil, 3) << d.bytes.dup
+            r << ec.primitive_convert(s, d, nil, 1) << d.bytes.dup
+            r << ec.primitive_convert(s, d, nil, 100) << d.bytes.dup
+            r << s.bytesize
             "##,
         );
     }
