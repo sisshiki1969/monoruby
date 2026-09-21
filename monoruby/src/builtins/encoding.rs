@@ -4801,13 +4801,34 @@ fn stream_convert(
             // one it tried to write, whose output it buffers — so
             // `"あabcd"` capped at 2 leaves `"bcd"` in `src`, not
             // `"abcd"`.
-            let through_tried = utf8_str[utf8_read..]
-                .chars()
-                .next()
+            let tried = utf8_str[utf8_read..].chars().next();
+            let through_tried = tried
                 .and_then(|c| {
                     src_offset_for_utf8_prefix(src_rs, src_bytes, utf8_read + c.len_utf8())
                 })
                 .unwrap_or(written_through);
+            // A full destination is not why the encoder stopped if the
+            // character it stopped at has no cell there at all: CRuby
+            // reports that undefined conversion in this same call, not
+            // in the next one (#1533). The branches that map the pivot
+            // themselves already decide it in this order; only the
+            // codec pair had to be asked, which is one character
+            // through a throwaway encoder on the cap path alone.
+            if !opts.undef_replace
+                && let Some(c) = tried
+                && dst_rs_unmappable(dst_rs, c)
+            {
+                return (
+                    StreamConvertResult::UndefinedConversion,
+                    through_tried,
+                    out_buf,
+                    ErrMeta {
+                        error_bytes: c.to_string().into_bytes(),
+                        readagain_bytes: vec![],
+                        ..ErrMeta::default()
+                    },
+                );
+            }
             (
                 StreamConvertResult::DestinationBufferFull,
                 written_through,
@@ -5094,6 +5115,20 @@ fn first_bad_sequence(enc: crate::value::Encoding, bytes: &[u8]) -> Option<(Vec<
         _ if single_byte_table(enc).is_some() => None,
         _ => first_bad_via_rs(encoding_to_rs(enc)?, bytes),
     }
+}
+
+/// Whether `dst_rs` has no cell for *c* — asked with a throwaway
+/// encoder, since a destination that is also full hides the answer
+/// (#1533).
+fn dst_rs_unmappable(dst_rs: &'static encoding_rs::Encoding, c: char) -> bool {
+    let mut probe = dst_rs.new_encoder();
+    let mut src = [0u8; 4];
+    // Room for the longest cell any of these write, plus the shift
+    // sequence a stateful encoder may emit before it.
+    let mut out = [0u8; 16];
+    let (res, _, _) =
+        probe.encode_from_utf8_without_replacement(c.encode_utf8(&mut src), &mut out, false);
+    matches!(res, encoding_rs::EncoderResult::Unmappable(_))
 }
 
 /// [`first_bad_sequence`] for the encodings `encoding_rs` decodes.
@@ -9932,6 +9967,46 @@ mod tests {
             s2 = "abc\xa1def".dup
             d2 = "".dup
             r << ec2.primitive_convert(s2, d2, nil, 10) << [s2, d2] << ec2.putback
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_reports_an_unconvertible_character_over_a_full_destination() {
+        // A full destination is not why the encoder stopped if the
+        // character it stopped at has no cell there at all — CRuby
+        // reports that undefined conversion in the same call (#1533).
+        // EUC-KR and Big5 reach it through the codec pair, where the
+        // cap hides the answer; the branches that map the pivot
+        // themselves already decided it in this order.
+        crate::tests::run_test_once(
+            r##"
+            [["EUC-KR", "aéb"], ["Big5", "aéb"],
+             ["Shift_JIS", "aéb"], ["US-ASCII", "aあb"],
+             ["ISO-8859-1", "aあb"]].flat_map do |dst, text|
+              [0, 1, 2].map do |cap|
+                ec = Encoding::Converter.new("UTF-8", dst)
+                s = text.dup
+                d = "".dup
+                [cap, ec.primitive_convert(s, d, nil, cap), s.bytes, d.bytes,
+                 ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+              end
+            end
+            "##,
+        );
+        // With a replacement the character does have a cell, so the
+        // cap is the answer again. Shift_JIS stands in for EUC-KR
+        // here: the codec-pair path drops `undef: :replace` entirely,
+        // which is #1542, not this.
+        crate::tests::run_test_once(
+            r##"
+            [0, 1, 2, 3].map do |cap|
+              ec = Encoding::Converter.new("UTF-8", "Shift_JIS", undef: :replace)
+              s = "aéb".dup
+              d = "".dup
+              first = ec.primitive_convert(s, d, nil, cap)
+              [first, s.bytes, d.bytes, ec.primitive_convert(s, d, nil, 100), d.bytes]
+            end
             "##,
         );
     }
