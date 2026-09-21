@@ -10545,6 +10545,47 @@ mod tests {
             end
             "##,
         );
+        // Malformed input on the direct path: which bytes the run
+        // covers, and which are read again rather than swallowed with
+        // it. `\x80` and `\xFD` are left out — those never begin a
+        // Shift_JIS sequence, and the run they report is #1546, which
+        // the pivoted paths get wrong in the same way.
+        crate::tests::run_test_once(
+            r##"
+            [[0xA1, 0x41], [0xA1, 0x20], [0xA1, 0xFF], [0x8E, 0x41], [0x8E, 0xFF],
+             [0x8F, 0xA1], [0x8F, 0x41], [0xA1]].map do |b|
+              s = b.pack("C*").force_encoding("EUC-JP")
+              [(s.encode("Shift_JIS") rescue [$!.class.to_s, $!.message]),
+               s.encode("Shift_JIS", invalid: :replace, undef: :replace).bytes]
+            end
+            "##,
+        );
+        crate::tests::run_test_once(
+            r##"
+            [[0x81, 0x20], [0x81, 0x7F], [0x81, 0xFD], [0x81]].map do |b|
+              s = b.pack("C*").force_encoding("Shift_JIS")
+              [(s.encode("EUC-JP") rescue [$!.class.to_s, $!.message]),
+               s.encode("EUC-JP", invalid: :replace, undef: :replace).bytes]
+            end
+            "##,
+        );
+        // The same through the converter, where an incomplete tail is
+        // the next call's to finish rather than an error.
+        crate::tests::run_test_once(
+            r##"
+            [[0xA1, 0x41], [0x8F, 0xA1], [0xA1]].map do |b|
+              ec = Encoding::Converter.new("EUC-JP", "Shift_JIS")
+              s = b.pack("C*").force_encoding("EUC-JP")
+              d = "".dup
+              r = [ec.primitive_convert(s, d, nil, nil, partial_input: true), s.bytes, d.bytes]
+              ec2 = Encoding::Converter.new("EUC-JP", "Shift_JIS")
+              s2 = b.pack("C*").force_encoding("EUC-JP")
+              d2 = "".dup
+              r << ec2.primitive_convert(s2, d2) << s2.bytes << d2.bytes
+              r << ec2.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }
+            end
+            "##,
+        );
         // A capped destination and a split call behave as everywhere
         // else.
         crate::tests::run_test_once(
