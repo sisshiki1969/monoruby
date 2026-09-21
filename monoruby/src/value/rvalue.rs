@@ -41,7 +41,8 @@ pub use string::{
 };
 pub(crate) use string::{
     MbcPiece, PreciseLen, char_count, char_width_at, eucjp_char_width, eucjp_precise_len,
-    mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width, sjis_precise_len, walk_mbc,
+    IllFormed, mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width, sjis_precise_len,
+    walk_mbc, walk_mbc_with,
 };
 pub(crate) use string::{
     STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer, string_snapshot,
