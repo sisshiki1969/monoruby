@@ -715,7 +715,11 @@ enum GcKind {
     Major,
 }
 
-pub struct Allocator<T> {
+pub struct Allocator<T: GCBox> {
+    /// The base of the arena reservation — the first page, and what
+    /// [`Allocator::drop`] unmaps. `head_page` walks away from it, so it
+    /// is kept separately.
+    arena_base: PageRef<T>,
     /// Current page.
     current_page: PageRef<T>,
     /// Topmost page.
@@ -1027,6 +1031,67 @@ fn reserve_arena(size: usize, align: usize) -> *mut u8 {
     base as *mut u8
 }
 
+///
+/// Tear the heap down with the thread that owns it.
+///
+/// `ALLOC` is thread-local, so every interpreter thread builds a heap of
+/// its own — and without this, every one of them was abandoned where it
+/// stood. Nothing swept it, so each live object's `malloc`'d payload (a
+/// String's bytes, an Array's or Hash's table) was never freed, and the
+/// arena mapping itself was never unmapped, so the pages it had touched
+/// stayed resident. A process that runs many short-lived interpreters —
+/// the test binary runs one per test — therefore grew without bound. Over
+/// the lib suite that was **6.8 GB**: 4.8 GB of `malloc`'d buffers and
+/// 2.0 GB of arena pages, on a peak RSS of 7.3 GB, none of it ever given
+/// back (resident-at-exit matched the peak almost exactly).
+///
+/// So sweep it: run every live cell's destructor, then unmap the arena.
+/// `RValue::free` is idempotent — it ends by zeroing the header word that
+/// `is_live` reads — so a page that a previous salvage already dropped
+/// costs a scan and nothing else, and a cell that is merely on the free
+/// list is skipped.
+///
+/// This runs when the thread's TLS destructors do, which is after the
+/// interpreter that used the heap is gone: `Globals` is a local of the
+/// thread's body, so it is dropped first. A `Value` never leaves the
+/// thread that allocated it (green threads share one OS thread), so no
+/// other thread can be holding one.
+///
+/// Tracked `malloc` bytes released by [`Allocator::drop`], summed over
+/// every heap torn down so far. Test-only: it is what
+/// `a_thread_frees_its_heap_when_it_ends` measures, since the live-bytes
+/// counter it is derived from is process-wide and therefore too noisy to
+/// read directly while other tests are running.
+#[cfg(test)]
+pub(crate) static TEARDOWN_FREED: AtomicUsize = AtomicUsize::new(0);
+
+impl<T: GCBox> Drop for Allocator<T> {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        let before = malloc_amount();
+        let base = self.arena_base.as_ptr() as usize;
+        let head = self.head_page.as_ptr() as usize;
+        debug_assert!(head >= base && (head - base) % ALLOC_SIZE == 0);
+        let pages = (head - base) / ALLOC_SIZE + 1;
+        for i in 0..pages {
+            // SAFETY: every page from the base up to and including
+            // `head_page` was handed out by `new_page`, so each is an
+            // initialised `Page<T>` inside this arena.
+            unsafe {
+                let page = (base + i * ALLOC_SIZE) as *mut Page<T>;
+                (*page).drop_inner_cells();
+            }
+        }
+        // SAFETY: `arena_base` is exactly what `reserve_arena` returned
+        // for this allocator, and every cell in it has just been dropped.
+        unsafe {
+            libc::munmap(base as *mut libc::c_void, ALLOC_SIZE * MAX_PAGES);
+        }
+        #[cfg(test)]
+        TEARDOWN_FREED.fetch_add(before.saturating_sub(malloc_amount()), Ordering::Relaxed);
+    }
+}
+
 impl<T: GCBox> Allocator<T> {
     pub(crate) fn new() -> Self {
         assert_eq!(64, GCBOX_SIZE);
@@ -1042,6 +1107,7 @@ impl<T: GCBox> Allocator<T> {
         // the `old_bits` field is written here.
         unsafe { (*ptr.as_ptr()).clear_old_bits() };
         Allocator {
+            arena_base: ptr,
             current_page: ptr,
             head_page: ptr,
             pages: vec![],
@@ -2555,5 +2621,69 @@ mod arena_reservation_tests {
         assert_eq!(0, base as usize % ALLOC_SIZE, "arena base is misaligned");
         // SAFETY: nothing was handed out of this reservation.
         unsafe { libc::munmap(base as _, size) };
+    }
+}
+
+#[cfg(test)]
+mod heap_teardown_tests {
+    use crate::*;
+    use std::sync::atomic::Ordering;
+
+    /// An interpreter thread must not leave its heap behind: when the
+    /// thread ends, the objects it allocated are dropped (so their
+    /// `malloc`'d payloads are freed) and the arena is unmapped. Before
+    /// `Allocator`'s `Drop`, a process that ran many short-lived
+    /// interpreters grew without bound — the lib suite ended holding
+    /// 6.8 GB it could never reuse, its resident set at exit matching its
+    /// peak almost exactly.
+    ///
+    /// Run threads that each build a few MB of Ruby strings and keep them
+    /// live, then require that tearing those threads down gave the bytes
+    /// back. The assertion is a lower bound on
+    /// [`super::TEARDOWN_FREED`], so the heaps other tests are tearing
+    /// down at the same time can only help it — which is what makes this
+    /// readable while the rest of the suite runs.
+    #[test]
+    fn a_thread_frees_its_heap_when_it_ends() {
+        const THREADS: usize = 4;
+        const PER_THREAD_MB: usize = 8;
+        let held = THREADS * PER_THREAD_MB * 1024 * 1024;
+
+        let before = super::TEARDOWN_FREED.load(Ordering::Relaxed);
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let mut globals = Globals::new_test();
+                    // No GC: the strings must still be live when the
+                    // thread ends, since the teardown is what is on trial.
+                    Globals::gc_enable(false);
+                    let code = format!(
+                        r#"a = []
+                           {PER_THREAD_MB}.times {{ a << "x" * (1024 * 1024) }}
+                           a.size"#
+                    );
+                    let res = globals.run(code, std::path::Path::new("."));
+                    assert!(res.is_ok(), "{:?}", res.err());
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let freed = super::TEARDOWN_FREED
+            .load(Ordering::Relaxed)
+            .saturating_sub(before);
+        // Half of what they built, not all of it: a collection may
+        // still run before a thread ends (`gc_enable` is advisory, and
+        // building the strings allocates intermediates), so some of the
+        // bytes are freed before the teardown ever sees them. The point
+        // is that the teardown frees on this scale at all — without it
+        // the figure is zero.
+        assert!(
+            freed >= held / 2,
+            "the threads' heaps outlived them: tearing them down released \
+             {freed} bytes, nothing like the {held} bytes they were holding"
+        );
     }
 }
