@@ -900,10 +900,23 @@ fn autoload_resolution_candidates(
     globals: &Globals,
     feature: &str,
 ) -> Vec<std::path::PathBuf> {
+    use std::collections::HashSet;
     use std::path::PathBuf;
     let mut out: Vec<PathBuf> = Vec::new();
-    let push = |out: &mut Vec<PathBuf>, p: PathBuf| {
-        if !out.iter().any(|q| *q == p) {
+    // Keep the candidates unique, but not by re-scanning what is already
+    // there: `PathBuf`'s `==` walks both paths component by component, so
+    // this was quadratic in `$LOAD_PATH` — one candidate per entry per
+    // extension, each compared against every candidate before it. A Rails
+    // app's 166 entries make 332 candidates and ~55,000 whole-path
+    // comparisons per resolution, and Zeitwerk asks for a resolution on
+    // every missing constant. A callgrind run of ruby-bench's lobsters
+    // (boot included) spent 42% of its instructions inside
+    // `std::path::Components`. A `HashSet` answers the same question in
+    // one hash of the path — `Hash` for `Path` is component-wise too, so
+    // it agrees with `==` exactly.
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let push = |out: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, p: PathBuf| {
+        if seen.insert(p.clone()) {
             out.push(p);
         }
     };
@@ -929,7 +942,7 @@ fn autoload_resolution_candidates(
     let norm = |p: PathBuf| std::path::absolute(&p).unwrap_or(p);
     if feature.starts_with('/') {
         for c in with_ext(&raw) {
-            push(&mut out, norm(c));
+            push(&mut out, &mut seen, norm(c));
         }
         return out;
     }
@@ -937,7 +950,7 @@ fn autoload_resolution_candidates(
         if let Ok(cwd) = std::env::current_dir() {
             let resolved = cwd.join(&raw);
             for c in with_ext(&resolved) {
-                push(&mut out, norm(c));
+                push(&mut out, &mut seen, norm(c));
             }
         }
         return out;
@@ -950,7 +963,7 @@ fn autoload_resolution_candidates(
         };
         let joined = PathBuf::from(lib).join(&raw);
         for c in with_ext(&joined) {
-            push(&mut out, norm(c));
+            push(&mut out, &mut seen, norm(c));
         }
     }
     out
