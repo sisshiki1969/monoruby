@@ -328,7 +328,14 @@ fn chr_with_encoding(globals: &mut Globals, i: i64, enc_name: Option<&str>) -> R
             };
             // Create a binary string with the requested encoding label
             let enc_label = enc_name.unwrap();
-            let inner = RStringInner::from_encoding(&bytes, Encoding::Ascii8);
+            // Tag the bytes with the encoding that was asked for, not
+            // with BINARY: the string has to *decode* as that encoding
+            // later (`0x8E.chr("macRoman").encode("UTF-8")`), which a
+            // display-only label cannot do. The name reached here
+            // through `chr_resolve_encoding_name`, which already
+            // resolved it, so the fallback is only a belt.
+            let enc = Encoding::try_from_str(enc_label).unwrap_or(Encoding::Ascii8);
+            let inner = RStringInner::from_encoding(&bytes, enc);
             let val = Value::string_from_inner(inner);
             // Set the encoding name on the string so .encoding returns the right object
             chr_set_encoding_label(globals, val, enc_label);
@@ -1899,6 +1906,23 @@ fn format_bigint_base(n: &BigInt, base: u32) -> String {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn chr_tags_the_encoding_it_was_asked_for() {
+        // `Integer#chr(enc)` used to build a BINARY string and hang the
+        // encoding on it as a display label, so the byte it answered
+        // could not be decoded as what it claimed to be: every one of
+        // these was an `UndefinedConversionError` "from ASCII-8BIT"
+        // (#1471).
+        run_test_once(
+            r#"
+              %w[Windows-1252 IBM437 ISO-8859-1 ISO-8859-5 macRoman].map do |n|
+                s = 0x8e.chr(n)
+                [n, s.encoding.name, s.bytes, (s.encode("UTF-8").ord rescue $!.class.name)]
+              end
+            "#,
+        );
+    }
 
     /// Regression test for `integer_tof`: when the to_f result aliases the
     /// receiver slot (very common — e.g. `496.to_f` or chained

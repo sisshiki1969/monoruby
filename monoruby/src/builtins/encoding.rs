@@ -72,6 +72,19 @@ pub(super) fn canonical_encoding_name(name: &str) -> &'static str {
         // Underscore-preserving / mixed-case names CRuby exposes.
         "SHIFT_JIS" | "Shift_JIS" => "Shift_JIS",
         "EUCJP_MS" => "eucJP-ms",
+        // CRuby spells the Mac OS script encodings with a lowercase
+        // `mac` — everywhere but `MacJapanese`, which keeps the capital
+        // (#1471). The constant is `Encoding::MacRoman` either way.
+        "MacRoman" => "macRoman",
+        "MacCyrillic" => "macCyrillic",
+        "MacCentEuro" => "macCentEuro",
+        "MacCroatian" => "macCroatian",
+        "MacGreek" => "macGreek",
+        "MacIceland" => "macIceland",
+        "MacRomania" => "macRomania",
+        "MacThai" => "macThai",
+        "MacTurkish" => "macTurkish",
+        "MacUkraine" => "macUkraine",
         // Defaults: replace `_` with `-`. The `match` returns
         // `&'static str`, but the input is also `&'static str` from
         // the call site (a literal name in the constant table). The
@@ -174,7 +187,7 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         "EUC_TW",
         "CP949",
         "TIS_620",
-        "MACJAPANESE",
+        "MacJapanese",
         "EUCJP_MS",
         "CP51932",
         "STATELESS_ISO_2022_JP",
@@ -192,6 +205,8 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         "Big5_UAO",
         "GB12345",
         "MacCyrillic",
+        "MacCentEuro",
+        "MacCroatian",
         "MacGreek",
         "MacIceland",
         "MacRoman",
@@ -600,6 +615,14 @@ pub(super) fn init_encoding(globals: &mut Globals) {
 ///   `encode` raises `UndefinedConversionError` per CRuby.
 /// - UTF-32: encoding_rs does not support it; we raise
 ///   `ConverterNotFoundError`.
+/// UTF-7, the one encoding CRuby names but ships no converter for in
+/// either direction — `"ab".encode("UTF-7")` is a
+/// `ConverterNotFoundError` where every other dummy encoding converts
+/// its 7-bit content (#1471).
+pub(super) fn is_utf7(enc: crate::value::Encoding) -> bool {
+    matches!(enc, crate::value::Encoding::Other(0))
+}
+
 fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::Encoding> {
     use crate::value::Encoding as E;
     let label: &[u8] = match enc {
@@ -623,6 +646,11 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
             _ => return None,
         },
         E::EucJp => b"euc-jp",
+        // MacJapanese runs on the Shift_JIS character walk but has no
+        // converter of its own in CRuby, which answers
+        // `ConverterNotFoundError` for anything but 7-bit text — so it
+        // gets no codec here either (#1471).
+        E::Sjis(2) => return None,
         E::Sjis(_) => b"shift_jis",
         E::Iso2022Jp => b"iso-2022-jp",
         // Named byte-oriented encodings with an encoding_rs codec.
@@ -768,12 +796,182 @@ pub(super) fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static 
         Some('\u{E58}'), Some('\u{E59}'), Some('\u{E5A}'), Some('\u{E5B}'), None, None, None, None,
     ];
 
+    /// macRoman (Mac OS Roman), and the seven tables below it, as
+    /// CRuby's own converters have them — read off byte by byte. The
+    /// Apple-logo cell (`0xF0` in most of the family) maps to no
+    /// character, which CRuby reports as an undefined conversion.
+    const MACROMAN: [Option<char>; 128] = [
+        Some('\u{C4}'), Some('\u{C5}'), Some('\u{C7}'), Some('\u{C9}'), Some('\u{D1}'), Some('\u{D6}'), Some('\u{DC}'), Some('\u{E1}'),
+        Some('\u{E0}'), Some('\u{E2}'), Some('\u{E4}'), Some('\u{E3}'), Some('\u{E5}'), Some('\u{E7}'), Some('\u{E9}'), Some('\u{E8}'),
+        Some('\u{EA}'), Some('\u{EB}'), Some('\u{ED}'), Some('\u{EC}'), Some('\u{EE}'), Some('\u{EF}'), Some('\u{F1}'), Some('\u{F3}'),
+        Some('\u{F2}'), Some('\u{F4}'), Some('\u{F6}'), Some('\u{F5}'), Some('\u{FA}'), Some('\u{F9}'), Some('\u{FB}'), Some('\u{FC}'),
+        Some('\u{2020}'), Some('\u{B0}'), Some('\u{A2}'), Some('\u{A3}'), Some('\u{A7}'), Some('\u{2022}'), Some('\u{B6}'), Some('\u{DF}'),
+        Some('\u{AE}'), Some('\u{A9}'), Some('\u{2122}'), Some('\u{B4}'), Some('\u{A8}'), Some('\u{2260}'), Some('\u{C6}'), Some('\u{D8}'),
+        Some('\u{221E}'), Some('\u{B1}'), Some('\u{2264}'), Some('\u{2265}'), Some('\u{A5}'), Some('\u{B5}'), Some('\u{2202}'), Some('\u{2211}'),
+        Some('\u{220F}'), Some('\u{3C0}'), Some('\u{222B}'), Some('\u{AA}'), Some('\u{BA}'), Some('\u{2126}'), Some('\u{E6}'), Some('\u{F8}'),
+        Some('\u{BF}'), Some('\u{A1}'), Some('\u{AC}'), Some('\u{221A}'), Some('\u{192}'), Some('\u{2248}'), Some('\u{2206}'), Some('\u{AB}'),
+        Some('\u{BB}'), Some('\u{2026}'), Some('\u{A0}'), Some('\u{C0}'), Some('\u{C3}'), Some('\u{D5}'), Some('\u{152}'), Some('\u{153}'),
+        Some('\u{2013}'), Some('\u{2014}'), Some('\u{201C}'), Some('\u{201D}'), Some('\u{2018}'), Some('\u{2019}'), Some('\u{F7}'), Some('\u{25CA}'),
+        Some('\u{FF}'), Some('\u{178}'), Some('\u{2044}'), Some('\u{A4}'), Some('\u{2039}'), Some('\u{203A}'), Some('\u{FB01}'), Some('\u{FB02}'),
+        Some('\u{2021}'), Some('\u{B7}'), Some('\u{201A}'), Some('\u{201E}'), Some('\u{2030}'), Some('\u{C2}'), Some('\u{CA}'), Some('\u{C1}'),
+        Some('\u{CB}'), Some('\u{C8}'), Some('\u{CD}'), Some('\u{CE}'), Some('\u{CF}'), Some('\u{CC}'), Some('\u{D3}'), Some('\u{D4}'),
+        None, Some('\u{D2}'), Some('\u{DA}'), Some('\u{DB}'), Some('\u{D9}'), Some('\u{131}'), Some('\u{2C6}'), Some('\u{2DC}'),
+        Some('\u{AF}'), Some('\u{2D8}'), Some('\u{2D9}'), Some('\u{2DA}'), Some('\u{B8}'), Some('\u{2DD}'), Some('\u{2DB}'), Some('\u{2C7}'),
+    ];
+    /// macCyrillic.
+    const MACCYRILLIC: [Option<char>; 128] = [
+        Some('\u{410}'), Some('\u{411}'), Some('\u{412}'), Some('\u{413}'), Some('\u{414}'), Some('\u{415}'), Some('\u{416}'), Some('\u{417}'),
+        Some('\u{418}'), Some('\u{419}'), Some('\u{41A}'), Some('\u{41B}'), Some('\u{41C}'), Some('\u{41D}'), Some('\u{41E}'), Some('\u{41F}'),
+        Some('\u{420}'), Some('\u{421}'), Some('\u{422}'), Some('\u{423}'), Some('\u{424}'), Some('\u{425}'), Some('\u{426}'), Some('\u{427}'),
+        Some('\u{428}'), Some('\u{429}'), Some('\u{42A}'), Some('\u{42B}'), Some('\u{42C}'), Some('\u{42D}'), Some('\u{42E}'), Some('\u{42F}'),
+        Some('\u{2020}'), Some('\u{B0}'), Some('\u{A2}'), Some('\u{A3}'), Some('\u{A7}'), Some('\u{2022}'), Some('\u{B6}'), Some('\u{406}'),
+        Some('\u{AE}'), Some('\u{A9}'), Some('\u{2122}'), Some('\u{402}'), Some('\u{452}'), Some('\u{2260}'), Some('\u{403}'), Some('\u{453}'),
+        Some('\u{221E}'), Some('\u{B1}'), Some('\u{2264}'), Some('\u{2265}'), Some('\u{456}'), Some('\u{B5}'), Some('\u{2202}'), Some('\u{408}'),
+        Some('\u{404}'), Some('\u{454}'), Some('\u{407}'), Some('\u{457}'), Some('\u{409}'), Some('\u{459}'), Some('\u{40A}'), Some('\u{45A}'),
+        Some('\u{458}'), Some('\u{405}'), Some('\u{AC}'), Some('\u{221A}'), Some('\u{192}'), Some('\u{2248}'), Some('\u{2206}'), Some('\u{AB}'),
+        Some('\u{BB}'), Some('\u{2026}'), Some('\u{A0}'), Some('\u{40B}'), Some('\u{45B}'), Some('\u{40C}'), Some('\u{45C}'), Some('\u{455}'),
+        Some('\u{2013}'), Some('\u{2014}'), Some('\u{201C}'), Some('\u{201D}'), Some('\u{2018}'), Some('\u{2019}'), Some('\u{F7}'), Some('\u{201E}'),
+        Some('\u{40E}'), Some('\u{45E}'), Some('\u{40F}'), Some('\u{45F}'), Some('\u{2116}'), Some('\u{401}'), Some('\u{451}'), Some('\u{44F}'),
+        Some('\u{430}'), Some('\u{431}'), Some('\u{432}'), Some('\u{433}'), Some('\u{434}'), Some('\u{435}'), Some('\u{436}'), Some('\u{437}'),
+        Some('\u{438}'), Some('\u{439}'), Some('\u{43A}'), Some('\u{43B}'), Some('\u{43C}'), Some('\u{43D}'), Some('\u{43E}'), Some('\u{43F}'),
+        Some('\u{440}'), Some('\u{441}'), Some('\u{442}'), Some('\u{443}'), Some('\u{444}'), Some('\u{445}'), Some('\u{446}'), Some('\u{447}'),
+        Some('\u{448}'), Some('\u{449}'), Some('\u{44A}'), Some('\u{44B}'), Some('\u{44C}'), Some('\u{44D}'), Some('\u{44E}'), Some('\u{A4}'),
+    ];
+    /// macCroatian.
+    const MACCROATIAN: [Option<char>; 128] = [
+        Some('\u{C4}'), Some('\u{C5}'), Some('\u{C7}'), Some('\u{C9}'), Some('\u{D1}'), Some('\u{D6}'), Some('\u{DC}'), Some('\u{E1}'),
+        Some('\u{E0}'), Some('\u{E2}'), Some('\u{E4}'), Some('\u{E3}'), Some('\u{E5}'), Some('\u{E7}'), Some('\u{E9}'), Some('\u{E8}'),
+        Some('\u{EA}'), Some('\u{EB}'), Some('\u{ED}'), Some('\u{EC}'), Some('\u{EE}'), Some('\u{EF}'), Some('\u{F1}'), Some('\u{F3}'),
+        Some('\u{F2}'), Some('\u{F4}'), Some('\u{F6}'), Some('\u{F5}'), Some('\u{FA}'), Some('\u{F9}'), Some('\u{FB}'), Some('\u{FC}'),
+        Some('\u{2020}'), Some('\u{B0}'), Some('\u{A2}'), Some('\u{A3}'), Some('\u{A7}'), Some('\u{2022}'), Some('\u{B6}'), Some('\u{DF}'),
+        Some('\u{AE}'), Some('\u{160}'), Some('\u{2122}'), Some('\u{B4}'), Some('\u{A8}'), Some('\u{2260}'), Some('\u{17D}'), Some('\u{D8}'),
+        Some('\u{221E}'), Some('\u{B1}'), Some('\u{2264}'), Some('\u{2265}'), Some('\u{2206}'), Some('\u{B5}'), Some('\u{2202}'), Some('\u{2211}'),
+        Some('\u{220F}'), Some('\u{161}'), Some('\u{222B}'), Some('\u{AA}'), Some('\u{BA}'), Some('\u{2126}'), Some('\u{17E}'), Some('\u{F8}'),
+        Some('\u{BF}'), Some('\u{A1}'), Some('\u{AC}'), Some('\u{221A}'), Some('\u{192}'), Some('\u{2248}'), Some('\u{106}'), Some('\u{AB}'),
+        Some('\u{10C}'), Some('\u{2026}'), Some('\u{A0}'), Some('\u{C0}'), Some('\u{C3}'), Some('\u{D5}'), Some('\u{152}'), Some('\u{153}'),
+        Some('\u{110}'), Some('\u{2014}'), Some('\u{201C}'), Some('\u{201D}'), Some('\u{2018}'), Some('\u{2019}'), Some('\u{F7}'), Some('\u{25CA}'),
+        None, Some('\u{A9}'), Some('\u{2044}'), Some('\u{A4}'), Some('\u{2039}'), Some('\u{203A}'), Some('\u{C6}'), Some('\u{BB}'),
+        Some('\u{2013}'), Some('\u{B7}'), Some('\u{201A}'), Some('\u{201E}'), Some('\u{2030}'), Some('\u{C2}'), Some('\u{107}'), Some('\u{C1}'),
+        Some('\u{10D}'), Some('\u{C8}'), Some('\u{CD}'), Some('\u{CE}'), Some('\u{CF}'), Some('\u{CC}'), Some('\u{D3}'), Some('\u{D4}'),
+        Some('\u{111}'), Some('\u{D2}'), Some('\u{DA}'), Some('\u{DB}'), Some('\u{D9}'), Some('\u{131}'), Some('\u{2C6}'), Some('\u{2DC}'),
+        Some('\u{AF}'), Some('\u{3C0}'), Some('\u{CB}'), Some('\u{2DA}'), Some('\u{B8}'), Some('\u{CA}'), Some('\u{E6}'), Some('\u{2C7}'),
+    ];
+    /// macGreek.
+    const MACGREEK: [Option<char>; 128] = [
+        Some('\u{C4}'), Some('\u{B9}'), Some('\u{B2}'), Some('\u{C9}'), Some('\u{B3}'), Some('\u{D6}'), Some('\u{DC}'), Some('\u{385}'),
+        Some('\u{E0}'), Some('\u{E2}'), Some('\u{E4}'), Some('\u{384}'), Some('\u{A8}'), Some('\u{E7}'), Some('\u{E9}'), Some('\u{E8}'),
+        Some('\u{EA}'), Some('\u{EB}'), Some('\u{A3}'), Some('\u{2122}'), Some('\u{EE}'), Some('\u{EF}'), Some('\u{2022}'), Some('\u{BD}'),
+        Some('\u{2030}'), Some('\u{F4}'), Some('\u{F6}'), Some('\u{A6}'), Some('\u{AD}'), Some('\u{F9}'), Some('\u{FB}'), Some('\u{FC}'),
+        Some('\u{2020}'), Some('\u{393}'), Some('\u{394}'), Some('\u{398}'), Some('\u{39B}'), Some('\u{39E}'), Some('\u{3A0}'), Some('\u{DF}'),
+        Some('\u{AE}'), Some('\u{A9}'), Some('\u{3A3}'), Some('\u{3AA}'), Some('\u{A7}'), Some('\u{2260}'), Some('\u{B0}'), Some('\u{387}'),
+        Some('\u{391}'), Some('\u{B1}'), Some('\u{2264}'), Some('\u{2265}'), Some('\u{A5}'), Some('\u{392}'), Some('\u{395}'), Some('\u{396}'),
+        Some('\u{397}'), Some('\u{399}'), Some('\u{39A}'), Some('\u{39C}'), Some('\u{3A6}'), Some('\u{3AB}'), Some('\u{3A8}'), Some('\u{3A9}'),
+        Some('\u{3AC}'), Some('\u{39D}'), Some('\u{AC}'), Some('\u{39F}'), Some('\u{3A1}'), Some('\u{2248}'), Some('\u{3A4}'), Some('\u{AB}'),
+        Some('\u{BB}'), Some('\u{2026}'), Some('\u{A0}'), Some('\u{3A5}'), Some('\u{3A7}'), Some('\u{386}'), Some('\u{388}'), Some('\u{153}'),
+        Some('\u{2013}'), Some('\u{2015}'), Some('\u{201C}'), Some('\u{201D}'), Some('\u{2018}'), Some('\u{2019}'), Some('\u{F7}'), Some('\u{389}'),
+        Some('\u{38A}'), Some('\u{38C}'), Some('\u{38E}'), Some('\u{3AD}'), Some('\u{3AE}'), Some('\u{3AF}'), Some('\u{3CC}'), Some('\u{38F}'),
+        Some('\u{3CD}'), Some('\u{3B1}'), Some('\u{3B2}'), Some('\u{3C8}'), Some('\u{3B4}'), Some('\u{3B5}'), Some('\u{3C6}'), Some('\u{3B3}'),
+        Some('\u{3B7}'), Some('\u{3B9}'), Some('\u{3BE}'), Some('\u{3BA}'), Some('\u{3BB}'), Some('\u{3BC}'), Some('\u{3BD}'), Some('\u{3BF}'),
+        Some('\u{3C0}'), Some('\u{3CE}'), Some('\u{3C1}'), Some('\u{3C3}'), Some('\u{3C4}'), Some('\u{3B8}'), Some('\u{3C9}'), Some('\u{3C2}'),
+        Some('\u{3C7}'), Some('\u{3C5}'), Some('\u{3B6}'), Some('\u{3CA}'), Some('\u{3CB}'), Some('\u{390}'), Some('\u{3B0}'), None,
+    ];
+    /// macIceland.
+    const MACICELAND: [Option<char>; 128] = [
+        Some('\u{C4}'), Some('\u{C5}'), Some('\u{C7}'), Some('\u{C9}'), Some('\u{D1}'), Some('\u{D6}'), Some('\u{DC}'), Some('\u{E1}'),
+        Some('\u{E0}'), Some('\u{E2}'), Some('\u{E4}'), Some('\u{E3}'), Some('\u{E5}'), Some('\u{E7}'), Some('\u{E9}'), Some('\u{E8}'),
+        Some('\u{EA}'), Some('\u{EB}'), Some('\u{ED}'), Some('\u{EC}'), Some('\u{EE}'), Some('\u{EF}'), Some('\u{F1}'), Some('\u{F3}'),
+        Some('\u{F2}'), Some('\u{F4}'), Some('\u{F6}'), Some('\u{F5}'), Some('\u{FA}'), Some('\u{F9}'), Some('\u{FB}'), Some('\u{FC}'),
+        Some('\u{DD}'), Some('\u{B0}'), Some('\u{A2}'), Some('\u{A3}'), Some('\u{A7}'), Some('\u{2022}'), Some('\u{B6}'), Some('\u{DF}'),
+        Some('\u{AE}'), Some('\u{A9}'), Some('\u{2122}'), Some('\u{B4}'), Some('\u{A8}'), Some('\u{2260}'), Some('\u{C6}'), Some('\u{D8}'),
+        Some('\u{221E}'), Some('\u{B1}'), Some('\u{2264}'), Some('\u{2265}'), Some('\u{A5}'), Some('\u{B5}'), Some('\u{2202}'), Some('\u{2211}'),
+        Some('\u{220F}'), Some('\u{3C0}'), Some('\u{222B}'), Some('\u{AA}'), Some('\u{BA}'), Some('\u{2126}'), Some('\u{E6}'), Some('\u{F8}'),
+        Some('\u{BF}'), Some('\u{A1}'), Some('\u{AC}'), Some('\u{221A}'), Some('\u{192}'), Some('\u{2248}'), Some('\u{2206}'), Some('\u{AB}'),
+        Some('\u{BB}'), Some('\u{2026}'), Some('\u{A0}'), Some('\u{C0}'), Some('\u{C3}'), Some('\u{D5}'), Some('\u{152}'), Some('\u{153}'),
+        Some('\u{2013}'), Some('\u{2014}'), Some('\u{201C}'), Some('\u{201D}'), Some('\u{2018}'), Some('\u{2019}'), Some('\u{F7}'), Some('\u{25CA}'),
+        Some('\u{FF}'), Some('\u{178}'), Some('\u{2044}'), Some('\u{A4}'), Some('\u{D0}'), Some('\u{F0}'), Some('\u{DE}'), Some('\u{FE}'),
+        Some('\u{FD}'), Some('\u{B7}'), Some('\u{201A}'), Some('\u{201E}'), Some('\u{2030}'), Some('\u{C2}'), Some('\u{CA}'), Some('\u{C1}'),
+        Some('\u{CB}'), Some('\u{C8}'), Some('\u{CD}'), Some('\u{CE}'), Some('\u{CF}'), Some('\u{CC}'), Some('\u{D3}'), Some('\u{D4}'),
+        None, Some('\u{D2}'), Some('\u{DA}'), Some('\u{DB}'), Some('\u{D9}'), Some('\u{131}'), Some('\u{2C6}'), Some('\u{2DC}'),
+        Some('\u{AF}'), Some('\u{2D8}'), Some('\u{2D9}'), Some('\u{2DA}'), Some('\u{B8}'), Some('\u{2DD}'), Some('\u{2DB}'), Some('\u{2C7}'),
+    ];
+    /// macRomania.
+    const MACROMANIA: [Option<char>; 128] = [
+        Some('\u{C4}'), Some('\u{C5}'), Some('\u{C7}'), Some('\u{C9}'), Some('\u{D1}'), Some('\u{D6}'), Some('\u{DC}'), Some('\u{E1}'),
+        Some('\u{E0}'), Some('\u{E2}'), Some('\u{E4}'), Some('\u{E3}'), Some('\u{E5}'), Some('\u{E7}'), Some('\u{E9}'), Some('\u{E8}'),
+        Some('\u{EA}'), Some('\u{EB}'), Some('\u{ED}'), Some('\u{EC}'), Some('\u{EE}'), Some('\u{EF}'), Some('\u{F1}'), Some('\u{F3}'),
+        Some('\u{F2}'), Some('\u{F4}'), Some('\u{F6}'), Some('\u{F5}'), Some('\u{FA}'), Some('\u{F9}'), Some('\u{FB}'), Some('\u{FC}'),
+        Some('\u{2020}'), Some('\u{B0}'), Some('\u{A2}'), Some('\u{A3}'), Some('\u{A7}'), Some('\u{2022}'), Some('\u{B6}'), Some('\u{DF}'),
+        Some('\u{AE}'), Some('\u{A9}'), Some('\u{2122}'), Some('\u{B4}'), Some('\u{A8}'), Some('\u{2260}'), Some('\u{102}'), Some('\u{15E}'),
+        Some('\u{221E}'), Some('\u{B1}'), Some('\u{2264}'), Some('\u{2265}'), Some('\u{A5}'), Some('\u{B5}'), Some('\u{2202}'), Some('\u{2211}'),
+        Some('\u{220F}'), Some('\u{3C0}'), Some('\u{222B}'), Some('\u{AA}'), Some('\u{BA}'), Some('\u{2126}'), Some('\u{103}'), Some('\u{15F}'),
+        Some('\u{BF}'), Some('\u{A1}'), Some('\u{AC}'), Some('\u{221A}'), Some('\u{192}'), Some('\u{2248}'), Some('\u{2206}'), Some('\u{AB}'),
+        Some('\u{BB}'), Some('\u{2026}'), Some('\u{A0}'), Some('\u{C0}'), Some('\u{C3}'), Some('\u{D5}'), Some('\u{152}'), Some('\u{153}'),
+        Some('\u{2013}'), Some('\u{2014}'), Some('\u{201C}'), Some('\u{201D}'), Some('\u{2018}'), Some('\u{2019}'), Some('\u{F7}'), Some('\u{25CA}'),
+        Some('\u{FF}'), Some('\u{178}'), Some('\u{2044}'), Some('\u{A4}'), Some('\u{2039}'), Some('\u{203A}'), Some('\u{162}'), Some('\u{163}'),
+        Some('\u{2021}'), Some('\u{B7}'), Some('\u{201A}'), Some('\u{201E}'), Some('\u{2030}'), Some('\u{C2}'), Some('\u{CA}'), Some('\u{C1}'),
+        Some('\u{CB}'), Some('\u{C8}'), Some('\u{CD}'), Some('\u{CE}'), Some('\u{CF}'), Some('\u{CC}'), Some('\u{D3}'), Some('\u{D4}'),
+        None, Some('\u{D2}'), Some('\u{DA}'), Some('\u{DB}'), Some('\u{D9}'), Some('\u{131}'), Some('\u{2C6}'), Some('\u{2DC}'),
+        Some('\u{AF}'), Some('\u{2D8}'), Some('\u{2D9}'), Some('\u{2DA}'), Some('\u{B8}'), Some('\u{2DD}'), Some('\u{2DB}'), Some('\u{2C7}'),
+    ];
+    /// macTurkish.
+    const MACTURKISH: [Option<char>; 128] = [
+        Some('\u{C4}'), Some('\u{C5}'), Some('\u{C7}'), Some('\u{C9}'), Some('\u{D1}'), Some('\u{D6}'), Some('\u{DC}'), Some('\u{E1}'),
+        Some('\u{E0}'), Some('\u{E2}'), Some('\u{E4}'), Some('\u{E3}'), Some('\u{E5}'), Some('\u{E7}'), Some('\u{E9}'), Some('\u{E8}'),
+        Some('\u{EA}'), Some('\u{EB}'), Some('\u{ED}'), Some('\u{EC}'), Some('\u{EE}'), Some('\u{EF}'), Some('\u{F1}'), Some('\u{F3}'),
+        Some('\u{F2}'), Some('\u{F4}'), Some('\u{F6}'), Some('\u{F5}'), Some('\u{FA}'), Some('\u{F9}'), Some('\u{FB}'), Some('\u{FC}'),
+        Some('\u{2020}'), Some('\u{B0}'), Some('\u{A2}'), Some('\u{A3}'), Some('\u{A7}'), Some('\u{2022}'), Some('\u{B6}'), Some('\u{DF}'),
+        Some('\u{AE}'), Some('\u{A9}'), Some('\u{2122}'), Some('\u{B4}'), Some('\u{A8}'), Some('\u{2260}'), Some('\u{C6}'), Some('\u{D8}'),
+        Some('\u{221E}'), Some('\u{B1}'), Some('\u{2264}'), Some('\u{2265}'), Some('\u{A5}'), Some('\u{B5}'), Some('\u{2202}'), Some('\u{2211}'),
+        Some('\u{220F}'), Some('\u{3C0}'), Some('\u{222B}'), Some('\u{AA}'), Some('\u{BA}'), Some('\u{2126}'), Some('\u{E6}'), Some('\u{F8}'),
+        Some('\u{BF}'), Some('\u{A1}'), Some('\u{AC}'), Some('\u{221A}'), Some('\u{192}'), Some('\u{2248}'), Some('\u{2206}'), Some('\u{AB}'),
+        Some('\u{BB}'), Some('\u{2026}'), Some('\u{A0}'), Some('\u{C0}'), Some('\u{C3}'), Some('\u{D5}'), Some('\u{152}'), Some('\u{153}'),
+        Some('\u{2013}'), Some('\u{2014}'), Some('\u{201C}'), Some('\u{201D}'), Some('\u{2018}'), Some('\u{2019}'), Some('\u{F7}'), Some('\u{25CA}'),
+        Some('\u{FF}'), Some('\u{178}'), Some('\u{11E}'), Some('\u{11F}'), Some('\u{130}'), Some('\u{131}'), Some('\u{15E}'), Some('\u{15F}'),
+        Some('\u{2021}'), Some('\u{B7}'), Some('\u{201A}'), Some('\u{201E}'), Some('\u{2030}'), Some('\u{C2}'), Some('\u{CA}'), Some('\u{C1}'),
+        Some('\u{CB}'), Some('\u{C8}'), Some('\u{CD}'), Some('\u{CE}'), Some('\u{CF}'), Some('\u{CC}'), Some('\u{D3}'), Some('\u{D4}'),
+        None, Some('\u{D2}'), Some('\u{DA}'), Some('\u{DB}'), Some('\u{D9}'), None, Some('\u{2C6}'), Some('\u{2DC}'),
+        Some('\u{AF}'), Some('\u{2D8}'), Some('\u{2D9}'), Some('\u{2DA}'), Some('\u{B8}'), Some('\u{2DD}'), Some('\u{2DB}'), Some('\u{2C7}'),
+    ];
+    /// macUkraine.
+    const MACUKRAINE: [Option<char>; 128] = [
+        Some('\u{410}'), Some('\u{411}'), Some('\u{412}'), Some('\u{413}'), Some('\u{414}'), Some('\u{415}'), Some('\u{416}'), Some('\u{417}'),
+        Some('\u{418}'), Some('\u{419}'), Some('\u{41A}'), Some('\u{41B}'), Some('\u{41C}'), Some('\u{41D}'), Some('\u{41E}'), Some('\u{41F}'),
+        Some('\u{420}'), Some('\u{421}'), Some('\u{422}'), Some('\u{423}'), Some('\u{424}'), Some('\u{425}'), Some('\u{426}'), Some('\u{427}'),
+        Some('\u{428}'), Some('\u{429}'), Some('\u{42A}'), Some('\u{42B}'), Some('\u{42C}'), Some('\u{42D}'), Some('\u{42E}'), Some('\u{42F}'),
+        Some('\u{2020}'), Some('\u{B0}'), Some('\u{490}'), Some('\u{A3}'), Some('\u{A7}'), Some('\u{2022}'), Some('\u{B6}'), Some('\u{406}'),
+        Some('\u{AE}'), Some('\u{A9}'), Some('\u{2122}'), Some('\u{402}'), Some('\u{452}'), Some('\u{2260}'), Some('\u{403}'), Some('\u{453}'),
+        Some('\u{221E}'), Some('\u{B1}'), Some('\u{2264}'), Some('\u{2265}'), Some('\u{456}'), Some('\u{B5}'), Some('\u{491}'), Some('\u{408}'),
+        Some('\u{404}'), Some('\u{454}'), Some('\u{407}'), Some('\u{457}'), Some('\u{409}'), Some('\u{459}'), Some('\u{40A}'), Some('\u{45A}'),
+        Some('\u{458}'), Some('\u{405}'), Some('\u{AC}'), Some('\u{221A}'), Some('\u{192}'), Some('\u{2248}'), Some('\u{2206}'), Some('\u{AB}'),
+        Some('\u{BB}'), Some('\u{2026}'), Some('\u{A0}'), Some('\u{40B}'), Some('\u{45B}'), Some('\u{40C}'), Some('\u{45C}'), Some('\u{455}'),
+        Some('\u{2013}'), Some('\u{2014}'), Some('\u{201C}'), Some('\u{201D}'), Some('\u{2018}'), Some('\u{2019}'), Some('\u{F7}'), Some('\u{201E}'),
+        Some('\u{40E}'), Some('\u{45E}'), Some('\u{40F}'), Some('\u{45F}'), Some('\u{2116}'), Some('\u{401}'), Some('\u{451}'), Some('\u{44F}'),
+        Some('\u{430}'), Some('\u{431}'), Some('\u{432}'), Some('\u{433}'), Some('\u{434}'), Some('\u{435}'), Some('\u{436}'), Some('\u{437}'),
+        Some('\u{438}'), Some('\u{439}'), Some('\u{43A}'), Some('\u{43B}'), Some('\u{43C}'), Some('\u{43D}'), Some('\u{43E}'), Some('\u{43F}'),
+        Some('\u{440}'), Some('\u{441}'), Some('\u{442}'), Some('\u{443}'), Some('\u{444}'), Some('\u{445}'), Some('\u{446}'), Some('\u{447}'),
+        Some('\u{448}'), Some('\u{449}'), Some('\u{44A}'), Some('\u{44B}'), Some('\u{44C}'), Some('\u{44D}'), Some('\u{44E}'), Some('\u{A4}'),
+    ];
+
     use crate::value::Encoding as E;
     match enc {
         E::Iso8859(1) => Some(&ISO8859_1),
         E::Iso8859(9) => Some(&ISO8859_9),
         E::Iso8859(11) => Some(&ISO8859_11),
-        E::NamedByte(_) if enc.name() == "IBM437" => Some(&IBM437),
+        E::NamedByte(_) => match enc.name() {
+            "IBM437" => Some(&IBM437),
+            "macRoman" => Some(&MACROMAN),
+            "macCyrillic" => Some(&MACCYRILLIC),
+            "macCroatian" => Some(&MACCROATIAN),
+            "macGreek" => Some(&MACGREEK),
+            "macIceland" => Some(&MACICELAND),
+            "macRomania" => Some(&MACROMANIA),
+            "macTurkish" => Some(&MACTURKISH),
+            "macUkraine" => Some(&MACUKRAINE),
+            // `macCentEuro` and `macThai` have no table: CRuby ships no
+            // converter for either, so a conversion is a
+            // `ConverterNotFoundError` rather than a mapping (#1471).
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -937,6 +1135,9 @@ fn jp_fixup(enc: crate::value::Encoding) -> Option<&'static JpFixup> {
     match enc {
         E::EucJp => Some(&EUCJP_FIXUP),
         E::Sjis(0) => Some(&SJIS_FIXUP),
+        // MacJapanese has no converter in CRuby at all, so it gets no
+        // fixup — and no transcoding path — here either (#1471).
+        E::Sjis(2) => None,
         E::Sjis(_) => Some(&WINDOWS31J_FIXUP),
         _ => None,
     }
@@ -1586,11 +1787,15 @@ pub(super) fn transcode_bytes_with_opts(
     // looks like 7-bit input on the wire (it's a 7-bit encoding), but
     // its bytes carry ESC sequences that change interpretation, so the
     // identity copy would silently retag escape codes as ASCII
-    // characters.
+    // characters. UTF-7 is excluded on the other side for the same
+    // reason: it re-spells `+` as `+-`, so 7-bit text is not a copy
+    // there, and CRuby — which ships no UTF-7 converter at all —
+    // answers `ConverterNotFoundError` even for `"ab"` (#1471).
     let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
     if all_ascii
         && src_enc.is_ascii_compatible()
         && !is_utf16_or_32(dst_enc)
+        && !is_utf7(dst_enc)
         && dummy_wide_target(dst_enc).is_none()
     {
         if opts.has_newline() {
@@ -2542,6 +2747,7 @@ pub(crate) fn encoding_constant_name(enc: Encoding) -> &'static str {
         Encoding::Iso8859(_) => "ISO_8859_1",
         Encoding::EucJp => "EUC_JP",
         Encoding::Sjis(0) => "SHIFT_JIS",
+        Encoding::Sjis(2) => "MacJapanese",
         Encoding::Sjis(_) => "Windows_31J",
         Encoding::Iso2022Jp => "ISO_2022_JP",
         // Name-preserving byte encodings: map the canonical display
@@ -6049,6 +6255,8 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         // collapsed to underscores by the `normalized` step
         // above, so a single uppercase arm covers all spellings.
         "MACCYRILLIC" => Some("MacCyrillic"),
+        "MACCENTEURO" => Some("MacCentEuro"),
+        "MACCROATIAN" => Some("MacCroatian"),
         "MACGREEK" => Some("MacGreek"),
         "MACICELAND" => Some("MacIceland"),
         "MACROMAN" => Some("MacRoman"),
@@ -6185,6 +6393,16 @@ const ENCODING_NAMES: &[(&str, &[&str])] = &[
     ("CP949", &[]),
     ("TIS-620", &[]),
     ("MacJapanese", &["MacJapan"]),
+    ("macRoman", &[]),
+    ("macCyrillic", &[]),
+    ("macCentEuro", &[]),
+    ("macCroatian", &[]),
+    ("macGreek", &[]),
+    ("macIceland", &[]),
+    ("macRomania", &[]),
+    ("macThai", &[]),
+    ("macTurkish", &[]),
+    ("macUkraine", &[]),
     ("eucJP-ms", &["eucjp-ms", "euc-jp-ms"]),
     ("CP51932", &[]),
     ("stateless-ISO-2022-JP", &[]),
@@ -8479,6 +8697,79 @@ mod tests {
             r#"Encoding.find("UTF-16").name"#,
             r#""x".encode("UTF-16LE").bytes.size"#,
         ]);
+    }
+
+    #[test]
+    fn mac_family_tables_match_cruby() {
+        // The eight Mac OS script encodings CRuby ships a converter
+        // for, pinned cell by cell: each table was read off CRuby byte
+        // by byte, and this digest changes if any one of the 128 cells
+        // moves (#1471).
+        run_test_once(
+            r#"
+              digest = lambda do |cps|
+                cps.each_with_index.reduce(0) { |a, (c, i)| (a * 131 + (c + 2) * (i + 1)) % 1_000_000_007 }
+              end
+              %w[macRoman macCyrillic macCroatian macGreek macIceland macRomania macTurkish macUkraine].map do |n|
+                cps = (0x80..0xff).map { |b| ([b].pack("C").force_encoding(n).encode("UTF-8").ord rescue -1) }
+                [n, digest.call(cps)]
+              end
+            "#,
+        );
+        // The readable half of the same pin: é and ß are in every one
+        // of them, Ω only in macGreek, and the Apple-logo cell
+        // (`0xF0`, `0xD8` in macCroatian) is assigned no character at
+        // all — an undefined conversion, not an invalid byte.
+        run_test_once(
+            r#"
+              [
+                %w[é Ω ß].map { |c| %w[macRoman macGreek macTurkish macCroatian].map { |n| (c.encode(n).bytes rescue $!.class.name.sub("Encoding::", "")) } },
+                %w[macRoman macGreek macTurkish macCroatian macIceland macRomania].map { |n| (["\xf0".b.force_encoding(n).encode("UTF-8").bytes] rescue $!.class.name.sub("Encoding::", "")) },
+                (["\xd8".b.force_encoding("macCroatian").encode("UTF-8").bytes] rescue $!.class.name.sub("Encoding::", "")),
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn mac_family_and_cp949_keep_their_own_names() {
+        // Each of these used to answer some other encoding's name:
+        // `CP949` was stored as `EUC-KR`, `MacJapanese` as
+        // `Windows-31J`, and the rest of the Mac family as
+        // `ASCII-8BIT`. CRuby spells the family with a lowercase
+        // `mac`, `MacJapanese` excepted (#1471).
+        run_test_once(
+            r#"
+              names = %w[macRoman macCyrillic macCentEuro macCroatian macGreek macIceland
+                         macRomania macThai macTurkish macUkraine MacJapanese CP949]
+              [
+                names.map { |n| e = Encoding.find(n); [e.name, e.names, e.dummy?, e.ascii_compatible?] },
+                names.map { |n| "ab".encode(n).encoding.name },
+                [Encoding::MacRoman.name, Encoding::MacCentEuro.name, Encoding::MacJapanese.name],
+                [Encoding::CP949 == Encoding::EUC_KR, Encoding::CP949.name, Encoding::EUC_KR.name],
+                (begin; "ab".dup.force_encoding("UHC"); rescue => e; e.class.name; end),
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn encodings_with_no_converter_refuse_to_convert() {
+        // CRuby ships no converter for `macCentEuro`, `macThai` or
+        // `MacJapanese`, so they carry 7-bit text and nothing else —
+        // and none at all for UTF-7, which refuses even `"ab"` where
+        // every other dummy encoding copies it through (#1471).
+        run_test_once(
+            r#"
+              names = %w[macCentEuro macThai MacJapanese UTF-7]
+              [
+                names.map { |n| ("ab".encode(n).bytes rescue $!.class.name.sub("Encoding::", "")) },
+                names.map { |n| ("あ".encode(n).bytes rescue $!.class.name.sub("Encoding::", "")) },
+                names.map { |n| (Encoding::Converter.new("UTF-8", n) && "ok" rescue $!.class.name.sub("Encoding::", "")) },
+                ("ab".dup.force_encoding("UTF-7").encode("UTF-8") rescue $!.class.name.sub("Encoding::", "")),
+              ]
+            "#,
+        );
     }
 
     #[test]

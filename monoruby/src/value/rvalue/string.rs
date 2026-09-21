@@ -346,6 +346,22 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
     // name-preserved, no codec (so `Encoding::Converter.new` refuses
     // it while 7-bit content still converts).
     ("Emacs-Mule", "Emacs_Mule"),
+    // The Mac OS script encodings. Eight of them have a table of their
+    // own ([`single_byte_table`](crate::builtins::encoding)); CRuby has
+    // no converter at all for `macCentEuro` and `macThai`, so those two
+    // are name-only, which is what this variant is for. CRuby spells
+    // the family with a lowercase `mac` — `MacJapanese` is the one
+    // exception, and it is a Shift_JIS variant rather than one of these.
+    ("macRoman", "MacRoman"),
+    ("macCyrillic", "MacCyrillic"),
+    ("macCentEuro", "MacCentEuro"),
+    ("macCroatian", "MacCroatian"),
+    ("macGreek", "MacGreek"),
+    ("macIceland", "MacIceland"),
+    ("macRomania", "MacRomania"),
+    ("macThai", "MacThai"),
+    ("macTurkish", "MacTurkish"),
+    ("macUkraine", "MacUkraine"),
 ];
 
 /// Index of `Emacs-Mule` in [`NAMED_BYTE_ENCODINGS`]. It is the one
@@ -611,6 +627,7 @@ impl Encoding {
             Encoding::EucJp => "EUC-JP",
             // 0 = canonical Shift_JIS, 1 = Windows-31J / CP932.
             Encoding::Sjis(0) => "Shift_JIS",
+            Encoding::Sjis(2) => "MacJapanese",
             Encoding::Sjis(_) => "Windows-31J",
             Encoding::Iso2022Jp => "ISO-2022-JP",
         }
@@ -848,7 +865,11 @@ impl Encoding {
             | "STATELESS_ISO_2022_JP" => Ok(Encoding::EucJp),
             "ISO_2022_JP" | "ISO2022_JP" | "ISO_2022_JP_KDDI" | "ISO_2022_JP_2"
             | "ISO_2022_JP_2004" => Ok(Encoding::Iso2022Jp),
-            "SHIFT_JIS" | "MACJAPANESE" | "MACJAPAN" => Ok(Encoding::Sjis(0)),
+            "SHIFT_JIS" => Ok(Encoding::Sjis(0)),
+            // MacJapanese is a Shift_JIS variant. monoruby runs it on
+            // the Shift_JIS codec and keeps only its name apart, as it
+            // does for Windows-31J (#1471).
+            "MACJAPANESE" | "MACJAPAN" => Ok(Encoding::Sjis(2)),
             // CRuby's "SJIS" is an alias of Windows-31J, not of Shift_JIS.
             "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" | "PCK" | "SJIS" => {
                 Ok(Encoding::Sjis(1))
@@ -869,9 +890,11 @@ impl Encoding {
             }
             "GB18030" => Ok(Encoding::NamedByte(named_byte_index("GB18030").unwrap())),
             "GB12345" => Ok(Encoding::NamedByte(named_byte_index("GB12345").unwrap())),
-            "EUC_KR" | "EUCKR" | "CP949" => {
-                Ok(Encoding::NamedByte(named_byte_index("EUC_KR").unwrap()))
-            }
+            "EUC_KR" | "EUCKR" => Ok(Encoding::NamedByte(named_byte_index("EUC_KR").unwrap())),
+            // CP949 is EUC-KR's superset, and a *different* encoding to
+            // CRuby: `Encoding::CP949 != Encoding::EUC_KR`, and the name
+            // it keeps is the one a conversion error reports (#1471).
+            "CP949" => Ok(Encoding::NamedByte(named_byte_index("CP949").unwrap())),
             "EUC_TW" | "EUCTW" => Ok(Encoding::NamedByte(named_byte_index("EUC_TW").unwrap())),
             "TIS_620" | "TIS620" => Ok(Encoding::NamedByte(named_byte_index("TIS_620").unwrap())),
             "KOI8_R" | "CP878" => Ok(Encoding::NamedByte(named_byte_index("KOI8_R").unwrap())),
@@ -921,11 +944,32 @@ impl Encoding {
 
             "EMACS_MULE" => Ok(Encoding::NamedByte(named_byte_index("Emacs_Mule").unwrap())),
 
-            // Byte encodings we still fold onto ASCII-8BIT without
-            // name preservation (Mac* — kept as the prior behaviour to
-            // avoid ASCII-compat edge cases).
-            "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN" | "MACROMANIA" | "MACTHAI"
-            | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
+            // The Mac OS script encodings keep their own names, and
+            // the eight with a table convert through it (#1471).
+            "MACROMAN" => Ok(Encoding::NamedByte(named_byte_index("MacRoman").unwrap())),
+            "MACCYRILLIC" => Ok(Encoding::NamedByte(
+                named_byte_index("MacCyrillic").unwrap(),
+            )),
+            "MACCENTEURO" => Ok(Encoding::NamedByte(
+                named_byte_index("MacCentEuro").unwrap(),
+            )),
+            "MACCROATIAN" => Ok(Encoding::NamedByte(
+                named_byte_index("MacCroatian").unwrap(),
+            )),
+            "MACGREEK" => Ok(Encoding::NamedByte(named_byte_index("MacGreek").unwrap())),
+            "MACICELAND" => Ok(Encoding::NamedByte(
+                named_byte_index("MacIceland").unwrap(),
+            )),
+            "MACROMANIA" => Ok(Encoding::NamedByte(
+                named_byte_index("MacRomania").unwrap(),
+            )),
+            "MACTHAI" => Ok(Encoding::NamedByte(named_byte_index("MacThai").unwrap())),
+            "MACTURKISH" => Ok(Encoding::NamedByte(
+                named_byte_index("MacTurkish").unwrap(),
+            )),
+            "MACUKRAINE" => Ok(Encoding::NamedByte(
+                named_byte_index("MacUkraine").unwrap(),
+            )),
 
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unknown encoding name - {s}"
