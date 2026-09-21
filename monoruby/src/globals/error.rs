@@ -1329,6 +1329,47 @@ impl MonorubyErr {
         e
     }
 
+    /// The two-path form of [`Self::errno_with_path`], which CRuby's
+    /// `syserr_fail2_in` renders for the calls that name an old and a
+    /// new path (`File.symlink` / `.link` / `.rename`): both of them,
+    /// as `(old, new)`, under the calling function's own tag.
+    ///
+    /// `EEXIST` is the exception: there CRuby names only the second
+    /// path, and the tag it reports is `syserr_fail2_in` itself — that
+    /// branch takes the function name from the helper rather than from
+    /// its caller.
+    pub(crate) fn errno_with_paths(
+        store: &Store,
+        err: &std::io::Error,
+        syscall: &str,
+        from: impl AsRef<std::ffi::OsStr>,
+        to: impl AsRef<std::ffi::OsStr>,
+    ) -> MonorubyErr {
+        if err.raw_os_error() == Some(libc::EEXIST) {
+            return Self::errno_with_path(store, err, "syserr_fail2_in", to);
+        }
+        let desc = errno_description(err);
+        let (from, to) = (from.as_ref(), to.as_ref());
+        let msg = format!(
+            "{} @ {} - ({}, {})",
+            desc,
+            syscall,
+            from.to_string_lossy(),
+            to.to_string_lossy()
+        );
+        let mut e = Self::from_io_err(store, err, msg);
+        let (fb, tb) = (from.as_encoded_bytes(), to.as_encoded_bytes());
+        if std::str::from_utf8(fb).is_err() || std::str::from_utf8(tb).is_err() {
+            let mut raw = format!("{desc} @ {syscall} - (").into_bytes();
+            raw.extend_from_slice(fb);
+            raw.extend_from_slice(b", ");
+            raw.extend_from_slice(tb);
+            raw.push(b')');
+            e.raw_message = Some((raw, crate::value::Encoding::Ascii8));
+        }
+        e
+    }
+
     /// Create an Errno exception from a `std::io::Error` with just a path (no syscall name).
     ///
     /// Formats the message to match CRuby: `"<description> - <path>"`
