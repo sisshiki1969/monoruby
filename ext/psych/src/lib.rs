@@ -81,6 +81,26 @@ fn yaml_parse(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value
     let mut parser = Parser::new();
     parser.set_input_string(&mut input);
 
+    // The handler's method names, interned once for the whole parse.
+    // A document of any size is thousands of events and two calls per
+    // event, and interning a name costs a hash under a lock — which is
+    // most of what dispatching an event costs, the handler methods
+    // themselves being a few lines each. (The in-core `builtins/yaml.rs`
+    // did exactly this before psych became an extension; the extension
+    // ABI grew `intern` / `funcall_sym` so it could again.)
+    let s_event_location = ctx.intern("event_location");
+    let s_start_stream = ctx.intern("start_stream");
+    let s_end_stream = ctx.intern("end_stream");
+    let s_start_document = ctx.intern("start_document");
+    let s_end_document = ctx.intern("end_document");
+    let s_alias = ctx.intern("alias");
+    let s_scalar = ctx.intern("scalar");
+    let s_start_sequence = ctx.intern("start_sequence");
+    let s_end_sequence = ctx.intern("end_sequence");
+    let s_start_mapping = ctx.intern("start_mapping");
+    let s_end_mapping = ctx.intern("end_mapping");
+    let s_empty = ctx.intern("empty");
+
     loop {
         let event = match parser.parse() {
             Ok(ev) => ev,
@@ -114,15 +134,18 @@ fn yaml_parse(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value
             Value::int(event.end_mark.line as i64),
             Value::int(event.end_mark.column as i64),
         ];
-        ctx.funcall(handler, "event_location", &loc, None)?;
+        ctx.funcall_sym(handler, s_event_location, &loc, None)?;
+        // Whether this is the last event, read before the match below
+        // takes `event.data` apart.
+        let done = matches!(event.data, EventData::StreamEnd);
         // The event's Values are built, then handed to the handler in one
         // call: nothing runs Ruby between the allocations and the call
         // that roots them in its frame.
-        let (name, args): (&str, Vec<Value>) = match event.data {
+        let (name, args): (Sym, Vec<Value>) = match event.data {
             EventData::StreamStart { encoding } => {
-                ("start_stream", vec![Value::int(encoding as i64)])
+                (s_start_stream, vec![Value::int(encoding as i64)])
             }
-            EventData::StreamEnd => ("end_stream", vec![]),
+            EventData::StreamEnd => (s_end_stream, vec![]),
             EventData::DocumentStart {
                 version_directive,
                 tag_directives,
@@ -141,10 +164,10 @@ fn yaml_parse(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value
                     let pair = ctx.ary_from(&[h, p]);
                     ctx.ary_push(tags, pair)?;
                 }
-                ("start_document", vec![version, tags, Value::bool(implicit)])
+                (s_start_document, vec![version, tags, Value::bool(implicit)])
             }
-            EventData::DocumentEnd { implicit } => ("end_document", vec![Value::bool(implicit)]),
-            EventData::Alias { anchor } => ("alias", vec![ctx.str(anchor)]),
+            EventData::DocumentEnd { implicit } => (s_end_document, vec![Value::bool(implicit)]),
+            EventData::Alias { anchor } => (s_alias, vec![ctx.str(anchor)]),
             EventData::Scalar {
                 anchor,
                 tag,
@@ -153,7 +176,7 @@ fn yaml_parse(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value
                 quoted_implicit,
                 style,
             } => (
-                "scalar",
+                s_scalar,
                 vec![
                     ctx.str(value),
                     opt_str_value(ctx, &anchor),
@@ -169,7 +192,7 @@ fn yaml_parse(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value
                 implicit,
                 style,
             } => (
-                "start_sequence",
+                s_start_sequence,
                 vec![
                     opt_str_value(ctx, &anchor),
                     opt_str_value(ctx, &tag),
@@ -177,14 +200,14 @@ fn yaml_parse(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value
                     Value::int(style as i64),
                 ],
             ),
-            EventData::SequenceEnd => ("end_sequence", vec![]),
+            EventData::SequenceEnd => (s_end_sequence, vec![]),
             EventData::MappingStart {
                 anchor,
                 tag,
                 implicit,
                 style,
             } => (
-                "start_mapping",
+                s_start_mapping,
                 vec![
                     opt_str_value(ctx, &anchor),
                     opt_str_value(ctx, &tag),
@@ -192,12 +215,11 @@ fn yaml_parse(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value
                     Value::int(style as i64),
                 ],
             ),
-            EventData::MappingEnd => ("end_mapping", vec![]),
+            EventData::MappingEnd => (s_end_mapping, vec![]),
             #[allow(unreachable_patterns)]
-            _ => ("empty", vec![]),
+            _ => (s_empty, vec![]),
         };
-        let done = name == "end_stream";
-        ctx.funcall(handler, name, &args, None)?;
+        ctx.funcall_sym(handler, name, &args, None)?;
         if done {
             return Ok(Value::nil());
         }

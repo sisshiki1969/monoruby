@@ -495,6 +495,8 @@ pub(crate) static MR_API: MrApi = MrApi {
     proc_call: mr_proc_call,
     call_blocking: mr_call_blocking,
     ruby_version: mr_ruby_version,
+    intern: mr_intern,
+    funcall_sym: mr_funcall_sym,
 };
 
 // ---- errors ----------------------------------------------------------
@@ -1149,21 +1151,76 @@ unsafe extern "C" fn mr_funcall(
     argv: *const MrValue,
     block: MrValue,
 ) -> MrValue {
-    // SAFETY: the table's contract.
-    let (vm, globals) = unsafe { parts(ctx) };
     let name = unsafe { cstr(name) };
+    // SAFETY: the table's contract, passed straight through.
+    unsafe { funcall_id(ctx, recv, IdentId::get_id(name), argc, argv, block) }
+}
+
+///
+/// Intern a name once, so a loop that calls into Ruby does not pay for
+/// it on every call.
+///
+/// `funcall` takes the name as a C string, which means a `&str` built
+/// and validated, then hashed against the interning table under its
+/// lock — per call. That is affordable when what it calls is a method
+/// body of any size, and it is not when the callee is a few lines: the
+/// psych extension hands libyaml's events to a `Psych::Handler` with
+/// two of these per event, and interning `"scalar"` and
+/// `"event_location"` over and over was most of what the dispatch cost.
+///
+unsafe extern "C" fn mr_intern(_: *mut MrContext, ptr: *const u8, len: usize) -> MrSym {
+    // SAFETY: the table's contract — `len` bytes readable at `ptr`.
+    let bytes = unsafe { slice(ptr, len) };
+    match std::str::from_utf8(bytes) {
+        Ok(s) => IdentId::get_id(s).get(),
+        Err(_) => MR_NO_SYM,
+    }
+}
+
+unsafe extern "C" fn mr_funcall_sym(
+    ctx: *mut MrContext,
+    recv: MrValue,
+    sym: MrSym,
+    argc: c_int,
+    argv: *const MrValue,
+    block: MrValue,
+) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, _) = unsafe { parts(ctx) };
+    if sym == MR_NO_SYM {
+        set_err(
+            vm,
+            MonorubyErr::argumenterr("funcall_sym was given MR_NO_SYM"),
+        );
+        return MR_UNDEF;
+    }
+    let id = IdentId::from(sym);
+    // SAFETY: as above.
+    unsafe { funcall_id(ctx, recv, id, argc, argv, block) }
+}
+
+/// What `funcall` and `funcall_sym` both do, once the name is an
+/// `IdentId`.
+///
+/// # Safety
+/// `ctx` is a live context and `argv[0..argc]` is readable, as the
+/// table's contract requires.
+unsafe fn funcall_id(
+    ctx: *mut MrContext,
+    recv: MrValue,
+    method: IdentId,
+    argc: c_int,
+    argv: *const MrValue,
+    block: MrValue,
+) -> MrValue {
+    // SAFETY: the caller's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
     let Some(recv) = val(recv) else {
         return MR_UNDEF;
     };
+    // SAFETY: as above.
     let args = unsafe { args(argv, argc) };
-    match vm.invoke_method_inner(
-        globals,
-        IdentId::get_id(name),
-        recv,
-        &args,
-        block_handler(block),
-        None,
-    ) {
+    match vm.invoke_method_inner(globals, method, recv, &args, block_handler(block), None) {
         Ok(v) => v.id(),
         Err(e) => {
             set_err(vm, e);

@@ -48,6 +48,16 @@ pub const MR_ABI_VERSION: u32 = 1;
 /// extension except for the immediates below and `0`.
 pub type MrValue = u64;
 
+/// An interned name, from [`MrApi::intern`] — monoruby's `IdentId`.
+/// Interning is per process and permanent, so one taken during `Init_`
+/// stays valid for every later call, in any interpreter on any thread.
+/// `MR_NO_SYM` is the one invalid value.
+pub type MrSym = u32;
+
+/// Not a name. [`MrApi::intern`] returns it only for input that is not
+/// UTF-8.
+pub const MR_NO_SYM: MrSym = 0;
+
 /// Not a value. Returned by a method to mean "an error is pending"
 /// (after `raise`), and by lookups to mean "absent".
 pub const MR_UNDEF: MrValue = 0;
@@ -371,4 +381,28 @@ pub struct MrApi {
     // ---- misc ----------------------------------------------------------
     /// `RUBY_VERSION`, NUL-terminated, static.
     pub ruby_version: unsafe extern "C" fn() -> *const c_char,
+
+    // ---- appended after the first release ------------------------------
+    /// Intern `ptr[0..len]`, giving the [`MrSym`] that names it, or
+    /// `MR_NO_SYM` if it is not UTF-8. Interning hashes the bytes under
+    /// a lock, so do it once — in `Init_`, or into a cache — rather
+    /// than per call.
+    pub intern: unsafe extern "C" fn(ctx: *mut MrContext, ptr: *const u8, len: usize) -> MrSym,
+    /// [`MrApi::funcall`] with the name already interned. This is the
+    /// one to use from a loop: `funcall` has to build a `&str` from the
+    /// C string and intern it on every call, which is most of what a
+    /// call into Ruby costs once the callee is small.
+    ///
+    /// `sym` must be one [`MrApi::intern`] gave out — a fabricated one
+    /// names nothing and the interpreter will read past its table, the
+    /// same way a fabricated `MrValue` is not a value. `MR_NO_SYM`
+    /// alone is rejected, with an ArgumentError.
+    pub funcall_sym: unsafe extern "C" fn(
+        ctx: *mut MrContext,
+        recv: MrValue,
+        sym: MrSym,
+        argc: c_int,
+        argv: *const MrValue,
+        block: MrValue,
+    ) -> MrValue,
 }

@@ -151,6 +151,11 @@ fn api_float_new(f: f64) -> MrValue {
 // The context
 // ---------------------------------------------------------------------
 
+/// An interned method name, from [`Ctx::intern`]. Copyable, and valid
+/// for the life of the process.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sym(MrSym);
+
 /// The interpreter, for the duration of one call into the extension.
 /// Methods that run Ruby (or park the green thread) take `&mut self`, so
 /// a borrow handed out by `&self` — a String's bytes — cannot be held
@@ -581,6 +586,50 @@ impl Ctx {
     }
 
     // ---- calling Ruby --------------------------------------------------
+
+    /// Intern `name`, giving a [`Sym`] to call it by.
+    ///
+    /// Interning hashes the name under a lock, so take the symbol once —
+    /// before a loop, or in `Init_` — and call with
+    /// [`funcall_sym`](Self::funcall_sym) inside it. A `Sym` never goes
+    /// stale: monoruby interns per process and never forgets, so one
+    /// taken in `Init_` is good for every interpreter afterwards.
+    ///
+    /// # Panics
+    /// If `name` is not valid UTF-8 — which, for a `&str`, it is.
+    pub fn intern(&self, name: &str) -> Sym {
+        // SAFETY: a live context; `name.len()` bytes readable at its
+        // pointer.
+        let sym = unsafe { (self.api().intern)(self.raw, name.as_ptr(), name.len()) };
+        assert_ne!(MR_NO_SYM, sym, "could not intern {name:?}");
+        Sym(sym)
+    }
+
+    /// [`funcall`](Self::funcall) with the name already interned. Use it
+    /// wherever the same method is called more than a few times: it skips
+    /// the C string and the interning, which is most of the cost of
+    /// calling a small Ruby method from here.
+    pub fn funcall_sym(
+        &mut self,
+        recv: Value,
+        sym: Sym,
+        args: &[Value],
+        block: Option<Block>,
+    ) -> Result<Value> {
+        let b = block.map_or(MR_UNDEF, |b| b.0);
+        // SAFETY: a live context, a symbol from `intern`, `args.len()`
+        // values at `args`.
+        self.ret(unsafe {
+            (self.api().funcall_sym)(
+                self.raw,
+                recv.0,
+                sym.0,
+                args.len() as c_int,
+                args.as_ptr() as *const MrValue,
+                b,
+            )
+        })
+    }
 
     /// `recv.name(*args, &block)`, private methods included.
     pub fn funcall(
