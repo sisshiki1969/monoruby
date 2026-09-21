@@ -1330,9 +1330,9 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         // (`"abc".force_encoding("US-ASCII")["bc".force_encoding("BINARY")]`
         // returns a BINARY string). Byte search suffices — the views
         // keep 8-bit needles byte-aligned with 8-bit haystacks.
-        let given = lhs.regex_view()?;
-        let needle_view = needle.regex_view()?;
-        if given.contains(&*needle_view) {
+        // The search aligns to the receiver's characters: a Shift_JIS
+        // trail byte is not the ASCII character it looks like (#1458).
+        if char_aligned_search_fwd(&lhs, &needle, 0).is_some() {
             Ok(Value::string_from_inner(RStringInner::from_encoding(
                 needle.as_bytes(),
                 needle.encoding(),
@@ -1444,11 +1444,13 @@ fn partition_main(
     let Some(re) = sep.is_regex() else {
         // CRuby's `get_pat_quoted` names the *Regexp* it wanted, where a
         // bare `StringValue` would say "no implicit conversion".
-        let sep = if sep.is_str().is_some() {
+        // Any String, whatever its encoding says about its bytes — a
+        // Shift_JIS or broken separator is still a String separator.
+        let sep = if sep.is_rstring_inner().is_some() {
             sep
         } else {
             match crate::coerce::check_funcall(vm, globals, sep, IdentId::TO_STR)? {
-                Some(v) if v.is_str().is_some() => v,
+                Some(v) if v.is_rstring_inner().is_some() => v,
                 _ => {
                     return Err(MonorubyErr::typeerr(format!(
                         "wrong argument type {} (expected Regexp)",
@@ -2360,15 +2362,21 @@ fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     if let Some(arg_inner) = &arg_inner {
         check_string_encoding_compat(self_inner, arg_inner, globals)?;
     }
-    let string = self_inner.regex_view()?;
-    // View the needle in the same (surrogate or direct) space as the
-    // receiver so 8-bit needles line up byte-wise. `regex_view` borrows
-    // unless the receiver needs byte mapping, and the search only reads,
-    // so the needle stays a `Cow` — copying it cost a malloc + memcpy +
-    // free on every call (three per request in ruby-bench's `grape`).
     let found = match &arg_inner {
-        Some(arg_inner) => string.contains(&*arg_inner.regex_view()?),
-        None => string.contains(&*arg.coerce_to_str(vm, globals)?),
+        // The needle's own bytes, aligned to the receiver's characters
+        // — a Shift_JIS trail byte is not the ASCII letter it looks
+        // like (#1458). This is a literal search, not a regex one, so
+        // a broken receiver is searched rather than refused, as CRuby
+        // searches it.
+        Some(arg_inner) => char_aligned_search_fwd(self_inner, arg_inner, 0).is_some(),
+        // A non-String that converts: `regex_view` borrows unless the
+        // receiver needs byte mapping, and the search only reads, so
+        // the needle stays a `Cow` — copying it cost a malloc + memcpy
+        // + free on every call (three per request in ruby-bench's
+        // `grape`).
+        None => self_inner
+            .regex_view()?
+            .contains(&*arg.coerce_to_str(vm, globals)?),
     };
     Ok(Value::bool(found))
 }
@@ -2457,6 +2465,18 @@ fn is_utf8_char_boundary(bytes: &[u8], pos: usize) -> bool {
     (bytes[pos] & 0xC0) != 0x80
 }
 
+/// Whether a character in `enc` can have bytes *inside* it, so that a
+/// plain byte search may land somewhere that is not a character head.
+/// Every other encoding gives each byte a character of its own, which
+/// is why a byte search over it is already the aligned one.
+fn enc_has_interior(enc: crate::value::Encoding) -> bool {
+    use crate::value::Encoding as E;
+    matches!(
+        enc,
+        E::Utf8 | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
+    ) || crate::value::mbc_walker(enc).is_some()
+}
+
 /// True iff byte offset `pos` is the head of a character in `enc`.
 /// Used so `start_with?` / `end_with?` only accept a prefix/suffix
 /// that aligns to a character (CRuby: a match must start at a char
@@ -2482,7 +2502,107 @@ fn enc_char_boundary(enc: crate::value::Encoding, bytes: &[u8], pos: usize) -> b
             !(0xDC00..=0xDFFF).contains(&u)
         }
         E::Utf32Le | E::Utf32Be => pos % 4 == 0,
+        // The encodings monoruby walks itself: Shift_JIS is the one
+        // whose trail bytes overlap ASCII (0x40..=0x7E), so `"\x81A"`
+        // is one character whose second byte *is* the letter `A`, and a
+        // search for `"A"` must not stop on it (#1458). A byte that
+        // starts no character stands on its own, as `iter_char_bytes`
+        // cuts it, so a broken receiver still has heads to land on.
+        _ if crate::value::mbc_walker(enc).is_some() => {
+            let mut off = 0;
+            while off < pos {
+                off += crate::value::rvalue::char_width_at(enc, bytes, off);
+            }
+            off == pos
+        }
         _ => true,
+    }
+}
+
+/// CRuby refuses a String needle that is broken in its own encoding
+/// before it searches at all — `is_broken_string(sub)` returns -1 from
+/// `rb_str_index`, `rb_str_rindex`, `rb_str_byteindex` and
+/// `rb_str_byterindex`, and the same test heads `chompped_length` and
+/// `deleted_suffix_length`. So a Shift_JIS `"\x81A"` contains neither
+/// `"\x81"` nor `"A\x81"`, however well their bytes line up.
+///
+/// `start_with?` / `end_with?` / `delete_prefix` deliberately do *not*
+/// share this: they compare the bytes and only ask whether the match
+/// lands on a character boundary, so a broken needle can still be a
+/// prefix of an equally broken receiver.
+fn needle_can_match(needle: &RStringInner) -> bool {
+    needle.is_valid_encoding()
+}
+
+/// A byte search that only accepts a match *starting* at a character
+/// head, which is what CRuby's `rb_str_index` does: a hit that landed
+/// inside a character is stepped past with `rb_enc_right_char_head`
+/// and the search resumes. In Shift_JIS the second byte of `"\x81A"`
+/// is the letter `A`, and it is not found (#1458).
+///
+/// The end needs no check of its own. A needle that is whole
+/// characters and starts on one cannot stop inside the next, and one
+/// that is not whole characters never gets here.
+fn char_aligned_search_fwd(
+    inner: &RStringInner,
+    needle: &RStringInner,
+    from: usize,
+) -> Option<usize> {
+    if !needle_can_match(needle) {
+        return None;
+    }
+    let hay = inner.as_bytes();
+    let n = needle.as_bytes();
+    let enc = inner.encoding();
+    if crate::value::mbc_walker(enc).is_none() {
+        // `enc_char_boundary` answers in O(1) here.
+        let mut at = from;
+        loop {
+            let hit = byte_search_fwd(hay, n, at)?;
+            if enc_char_boundary(enc, hay, hit) {
+                return Some(hit);
+            }
+            at = hit + 1;
+        }
+    }
+    // A walked encoding has to be walked to know where its characters
+    // start, so the head cursor advances alongside the search instead
+    // of restarting at every candidate.
+    let mut head = 0usize;
+    let mut at = from;
+    loop {
+        let hit = byte_search_fwd(hay, n, at)?;
+        while head < hit {
+            head += crate::value::rvalue::char_width_at(enc, hay, head);
+        }
+        if head == hit {
+            return Some(hit);
+        }
+        at = hit + 1;
+    }
+}
+
+/// [`char_aligned_search_fwd`] from the right: the last aligned match
+/// starting at or before `upto` (CRuby's `str_rindex`, which walks the
+/// candidates back through `rb_enc_left_char_head`).
+fn char_aligned_search_bwd(
+    inner: &RStringInner,
+    needle: &RStringInner,
+    upto: usize,
+) -> Option<usize> {
+    if !needle_can_match(needle) {
+        return None;
+    }
+    let hay = inner.as_bytes();
+    let n = needle.as_bytes();
+    let enc = inner.encoding();
+    let mut at = upto;
+    loop {
+        let hit = byte_search_rev(hay, n, at)?;
+        if enc_char_boundary(enc, hay, hit) {
+            return Some(hit);
+        }
+        at = hit.checked_sub(1)?;
     }
 }
 
@@ -2584,6 +2704,18 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         Re(crate::value::Regexp),
     }
     let resolve = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<SepKind> {
+        if let Some(sep) = v.is_rstring_inner() {
+            // `rb_str_split_m` negotiates the two encodings and then
+            // walks the separator's characters, so an incompatible or
+            // broken separator is refused before the split runs.
+            check_string_encoding_compat(&self_.as_rstring_inner(), &sep, globals)?;
+            if !sep.is_valid_encoding() {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "invalid byte sequence in {}",
+                    sep.encoding().name()
+                )));
+            }
+        }
         if let Some(re) = v.is_regex() {
             // A `Regexp` whose source is empty splits into characters;
             // a single-space source is treated as a literal " " string
@@ -2688,6 +2820,32 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         Some(subject) => subject.as_bytes(),
         None => string.as_bytes(),
     };
+    // A receiver monoruby walks itself reaches the view as its
+    // surrogate image — one view character per receiver byte — so the
+    // view offsets at which one of its characters starts can be
+    // tabulated from the raw bytes. A literal separator that lands
+    // anywhere else is not a separator: in Shift_JIS the second byte
+    // of `"\x81A"` only looks like the letter `A` (#1458).
+    let str_heads: Option<Vec<usize>> = (split_mapped
+        && crate::value::mbc_walker(split_enc).is_some())
+    .then(|| {
+        let raw = self_.as_rstring_inner();
+        let bytes = raw.as_bytes();
+        let mut heads = Vec::new();
+        let mut view = 0usize;
+        let mut off = 0usize;
+        while off < bytes.len() {
+            heads.push(view);
+            let width = crate::value::rvalue::char_width_at(split_enc, bytes, off);
+            view += bytes[off..off + width]
+                .iter()
+                .map(|b| if *b < 0x80 { 1 } else { 2 })
+                .sum::<usize>();
+            off += width;
+        }
+        heads.push(view);
+        heads
+    });
     let mk_bytes = |b: &[u8]| -> Value {
         if native_re.is_some() {
             Value::string_from_inner(RStringInner::from_encoding_scanned(b, split_enc))
@@ -2804,6 +2962,25 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     None => break,
                     Some(rel) => {
                         let pos = from + rel;
+                        if let Some(heads) = &str_heads
+                            && let Err(next) = heads.binary_search(&pos)
+                        {
+                            // CRuby steps to the head after the hit
+                            // (`rb_enc_right_char_head`) and carries on
+                            // from there without emitting a field. The
+                            // field start is left where it was, so a
+                            // later separator still cuts from there;
+                            // it is the *trailing* field that starts at
+                            // the walk cursor, which is why the skipped
+                            // text is lost when no separator follows.
+                            match heads.get(next) {
+                                Some(&head) => {
+                                    from = head;
+                                    continue;
+                                }
+                                None => break,
+                            }
+                        }
                         let s = &string[substr_start..pos];
                         push(&mut out, &mut ec, s.as_bytes());
                         from = pos + seps.len();
@@ -2817,7 +2994,10 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     }
                 }
             }
-            beg = substr_start;
+            // The walk cursor, not the field start: they only differ
+            // once a hit has been skipped for landing inside a
+            // character, and CRuby's trailing field starts here.
+            beg = from.min(len);
         }
         SepKind::Re(re) => {
             let view_subject;
@@ -3153,9 +3333,14 @@ fn chomp_byte_end(bytes: &[u8], rs: &[u8], enc: Encoding) -> usize {
         }
     } else {
         // Explicit separator: remove exactly one trailing occurrence
-        // (`"abcabc".chomp("abc")` is `"abc"`, not `""`).
+        // (`"abcabc".chomp("abc")` is `"abc"`, not `""`), and only when
+        // it starts on a character boundary — a Shift_JIS trail byte is
+        // not the ASCII character it looks like (#1458).
         let end = bytes.len();
-        if end >= rs.len() && &bytes[end - rs.len()..end] == rs {
+        if end >= rs.len()
+            && &bytes[end - rs.len()..end] == rs
+            && enc_char_boundary(enc, bytes, end - rs.len())
+        {
             end - rs.len()
         } else {
             end
@@ -3199,9 +3384,29 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // doesn't actually parse (e.g. `"\xa0\xa1\n".chomp`) can still
     // have their trailing newline stripped.
     let inner = self_.as_rstring_inner();
+    if !chomp_separator_chomps(globals, &inner, &rs_owned)? {
+        return Ok(self_.dup());
+    }
     let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes, inner.encoding());
     // Zero-copy shared substring (CoW) for long enough results.
     Ok(string_substring(self_, 0, new_end))
+}
+
+/// The separator tests `chompped_length` runs before it compares any
+/// bytes: past its `"\n"` shortcut (which looks at neither encoding)
+/// the two have to meet, and a separator broken in its own encoding
+/// chomps nothing at all — `"\x81A".chomp("A")` in Shift_JIS keeps its
+/// trail byte, and so does `"A\xA1".chomp("\xA1")` in US-ASCII (#1458).
+fn chomp_separator_chomps(
+    globals: &mut Globals,
+    inner: &RStringInner,
+    rs: &RStringInner,
+) -> Result<bool> {
+    if rs.as_bytes() == b"\n" || rs.as_bytes().len() > inner.as_bytes().len() {
+        return Ok(true);
+    }
+    check_string_encoding_compat(inner, rs, globals)?;
+    Ok(rs.is_valid_encoding())
 }
 
 ///
@@ -3236,6 +3441,9 @@ fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
+    if !chomp_separator_chomps(globals, &inner, &rs_owned)? {
+        return Ok(Value::nil());
+    }
     let self_len = inner.as_bytes().len();
     let new_end = chomp_byte_end(inner.as_bytes(), rs_bytes, inner.encoding());
     if new_end == self_len {
@@ -3697,20 +3905,26 @@ fn single_ascii_byte_set(args: Array, recv: &RStringInner) -> Option<u8> {
 }
 
 /// `sub` / `gsub` with a String pattern and a String replacement that
-/// holds no backslash: `memmem` over the receiver's bytes and a splice,
-/// instead of compiling the escaped pattern into a Regexp and running
-/// onigmo (`RegexpInner::with_coerced_regexp`). `$~` is set from the
-/// (last) match span, or cleared on a miss, as the regex path does;
-/// `$~.regexp` (the escaped pattern, which `gsub` attached eagerly) is
-/// built only when asked for (`MatchDataInner::regexp`).
+/// holds no backslash: a literal search over the receiver's bytes and
+/// a splice, instead of compiling the escaped pattern into a Regexp
+/// and running onigmo (`RegexpInner::with_coerced_regexp`). `$~` is set
+/// from the (last) match span, or cleared on a miss, as the regex path
+/// does; `$~.regexp` (the escaped pattern, which `gsub` attached
+/// eagerly) is built only when asked for (`MatchDataInner::regexp`).
 ///
-/// Both strings must be ASCII-only or valid UTF-8: a valid UTF-8
-/// needle can only match at a character boundary of a valid UTF-8
-/// haystack (a lead byte never equals a continuation byte), so no
-/// boundary check is needed. Everything else — a backslash in the
-/// replacement (`\0`, `\&`, `` \` ``, `\'` expand), an empty
-/// pattern, a byte-oriented encoding, a non-String replacement —
-/// returns `None` and takes the regex path.
+/// This is not merely a fast path: CRuby's `get_pat_quoted` keeps a
+/// String pattern a String, so `sub` / `gsub` search literally rather
+/// than through onigmo, and a broken receiver is searched instead of
+/// being refused. A pattern broken in its own encoding never reaches
+/// here — `check_string_pattern_valid` raised `RegexpError` for it.
+/// The match has to start on a character head, which is what
+/// `char_aligned_search_fwd` enforces: in Shift_JIS the second byte of
+/// `"\x81A"` *is* the letter `A` (#1458).
+///
+/// A backslash in the replacement (`\0`, `\&`, `` \` ``, `\'` expand)
+/// or a non-String replacement returns `None` and takes the regex
+/// path, as does a pattern or replacement whose encoding will not
+/// merge into the receiver's (the result carries the receiver's).
 fn string_pattern_replace(
     vm: &mut Executor,
     self_val: Value,
@@ -3718,37 +3932,70 @@ fn string_pattern_replace(
     replacement: Value,
     all: bool,
 ) -> Option<(RStringInner, bool)> {
-    fn plain(s: &RStringInner) -> bool {
-        s.is_ascii_only() || (s.encoding().is_utf8_compatible() && s.is_valid_encoding())
-    }
     let recv = self_val.is_rstring_inner()?;
     let pat = pattern.is_rstring_inner()?;
     let rep = replacement.is_rstring_inner()?;
-    if !plain(&recv) || !plain(&pat) || !plain(&rep) {
+    let enc = recv.encoding();
+    let mergeable = |s: &RStringInner| s.is_ascii_only() || s.encoding() == enc;
+    if !pat.is_valid_encoding() || !mergeable(&pat) || !mergeable(&rep) {
         return None;
     }
     let needle = pat.as_bytes();
     let rep_bytes = rep.as_bytes();
-    if needle.is_empty() || memchr::memchr(b'\\', rep_bytes).is_some() {
+    if memchr::memchr(b'\\', rep_bytes).is_some() {
+        return None;
+    }
+    // Where no character has an interior — an ASCII-only or valid-UTF-8
+    // receiver included, since a UTF-8 lead byte never equals a
+    // continuation byte — a byte search is the aligned search, and the
+    // shared `Finder` walk is kept.
+    let aligned_by_construction = recv.is_ascii_only()
+        || !enc_has_interior(enc)
+        || (enc.is_utf8_compatible() && recv.is_valid_encoding());
+    if needle.is_empty() && aligned_by_construction {
+        // The regex path already places an empty match at every
+        // character of these; only a walked encoding needs the walk
+        // below to place it, since its surrogate image is byte-wise.
         return None;
     }
     let hay = recv.as_bytes();
-    let enc = recv.encoding();
     let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(hay.len());
     let mut last = 0usize;
     let mut last_hit = None;
-    if all {
-        for hit in memchr::memmem::find_iter(hay, needle) {
-            out.extend_from_slice(&hay[last..hit]);
+    if aligned_by_construction {
+        if all {
+            for hit in memchr::memmem::find_iter(hay, needle) {
+                out.extend_from_slice(&hay[last..hit]);
+                out.extend_from_slice(rep_bytes);
+                last = hit + needle.len();
+                last_hit = Some(hit);
+            }
+        } else if let Some(hit) = memchr::memmem::find(hay, needle) {
+            out.extend_from_slice(&hay[..hit]);
             out.extend_from_slice(rep_bytes);
             last = hit + needle.len();
             last_hit = Some(hit);
         }
-    } else if let Some(hit) = memchr::memmem::find(hay, needle) {
-        out.extend_from_slice(&hay[..hit]);
-        out.extend_from_slice(rep_bytes);
-        last = hit + needle.len();
-        last_hit = Some(hit);
+    } else {
+        let mut from = 0usize;
+        while let Some(hit) = char_aligned_search_fwd(&recv, &pat, from) {
+            out.extend_from_slice(&hay[last..hit]);
+            out.extend_from_slice(rep_bytes);
+            last = hit + needle.len();
+            last_hit = Some(hit);
+            if !all {
+                break;
+            }
+            if !needle.is_empty() {
+                from = last;
+            } else if hit >= hay.len() {
+                // An empty pattern matches at every character head and
+                // once at the end; the walk steps a character on.
+                break;
+            } else {
+                from = hit + crate::value::rvalue::char_width_at(enc, hay, hit);
+            }
+        }
     }
     out.extend_from_slice(&hay[last..]);
     let res = RStringInner::from_encoding_scanned(&out, enc);
@@ -3774,6 +4021,7 @@ fn sub_main(
     // Enable zero-copy $~ haystack snapshots (CoW).
     vm.set_match_haystack(self_val);
     check_pattern_encoding_compat(&self_val.as_rstring_inner(), lfp.arg(0), globals)?;
+    check_string_pattern_valid(lfp.arg(0))?;
     if let Some(arg1) = lfp.try_arg(1) {
         if lfp.block().is_some() {
             eprintln!("warning: default value argument supersedes block");
@@ -4105,12 +4353,152 @@ fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
     Ok(res)
 }
 
+/// The characters of `bytes` under `enc`, as `(start, len, valid)`.
+/// A run of bytes that starts no character is reported as invalid, one
+/// ill-formed piece at a time, the way `#inspect` cuts them.
+fn pattern_pieces(enc: crate::value::Encoding, bytes: &[u8]) -> Vec<(usize, usize, bool)> {
+    let mut pieces = vec![];
+    if let Some((max_len, precise)) = crate::value::mbc_walker(enc) {
+        let base = bytes.as_ptr() as usize;
+        let _ = crate::value::rvalue::walk_mbc(bytes, max_len, precise, |piece| {
+            let (b, valid) = match piece {
+                crate::value::rvalue::MbcPiece::Char(b) => (b, true),
+                crate::value::rvalue::MbcPiece::Bad(b) => (b, false),
+            };
+            pieces.push((b.as_ptr() as usize - base, b.len(), valid));
+            Ok(())
+        });
+        return pieces;
+    }
+    if enc.is_utf8_compatible() && enc != crate::value::Encoding::UsAscii {
+        let mut pos = 0;
+        while pos < bytes.len() {
+            let (good, bad) = match std::str::from_utf8(&bytes[pos..]) {
+                Ok(s) => (s, 0),
+                Err(e) => (
+                    // SAFETY: `valid_up_to` is exactly how far the
+                    // slice does decode.
+                    unsafe { std::str::from_utf8_unchecked(&bytes[pos..pos + e.valid_up_to()]) },
+                    e.error_len().unwrap_or(bytes.len() - pos - e.valid_up_to()),
+                ),
+            };
+            for c in good.chars() {
+                pieces.push((pos, c.len_utf8(), true));
+                pos += c.len_utf8();
+            }
+            if bad > 0 {
+                pieces.push((pos, bad, false));
+                pos += bad;
+            }
+        }
+        return pieces;
+    }
+    // Every other encoding gives each byte a character, US-ASCII
+    // included — where a byte outside ASCII is the broken one, and is
+    // escaped singly rather than as the UTF-8 character it may spell.
+    for (i, b) in bytes.iter().enumerate() {
+        pieces.push((i, 1, *b < 0x80));
+    }
+    pieces
+}
+
+/// CRuby renders the offending pattern as `rb_reg_expr_str` renders a
+/// Regexp source, which is not `String#inspect`: a bare `/` takes a
+/// backslash, a backslash makes whatever follows literal, printable
+/// ASCII (`\t`..`\r` included) stands for itself, and everything else
+/// is escaped by value — `\uXXXX` in a Unicode encoding and `\x{...}`
+/// of the raw bytes elsewhere, with `\xHH` per byte for the bytes that
+/// start no character at all.
+fn regexp_source_desc(pat: &RStringInner) -> String {
+    use crate::value::Encoding as E;
+    let bytes = pat.as_bytes();
+    let enc = pat.encoding();
+    let unicode = matches!(
+        enc,
+        E::Utf8 | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
+    );
+    let printable = |b: u8| (0x09..=0x0d).contains(&b) || (0x20..=0x7e).contains(&b);
+    let mut out = String::new();
+    let mut pieces = pattern_pieces(enc, bytes).into_iter();
+    while let Some((start, len, valid)) = pieces.next() {
+        if !valid {
+            for b in &bytes[start..start + len] {
+                out.push_str(&format!("\\x{b:02X}"));
+            }
+            continue;
+        }
+        if len == 1 && bytes[start] < 0x80 {
+            match bytes[start] {
+                b'\\' => {
+                    // A backslash makes whatever follows literal, so
+                    // CRuby copies the next character's raw bytes —
+                    // which a Rust `String` cannot carry when they are
+                    // not UTF-8, so those are escaped instead.
+                    out.push('\\');
+                    if let Some((s2, l2, _)) = pieces.next() {
+                        match std::str::from_utf8(&bytes[s2..s2 + l2]) {
+                            Ok(s) => out.push_str(s),
+                            Err(_) => {
+                                for b in &bytes[s2..s2 + l2] {
+                                    out.push_str(&format!("\\x{b:02X}"));
+                                }
+                            }
+                        }
+                    }
+                }
+                b'/' => out.push_str("\\/"),
+                b if printable(b) => out.push(char::from(b)),
+                b => out.push_str(&format!("\\x{b:02X}")),
+            }
+            continue;
+        }
+        // The value CRuby escapes is the codepoint in a Unicode
+        // encoding and the raw bytes packed big-endian in any other.
+        let value: u32 = if unicode {
+            std::str::from_utf8(&bytes[start..start + len])
+                .ok()
+                .and_then(|s| s.chars().next())
+                .map_or(0xfffd, u32::from)
+        } else {
+            bytes[start..start + len]
+                .iter()
+                .fold(0u32, |acc, b| (acc << 8) | u32::from(*b))
+        };
+        out.push_str(&match (unicode, value) {
+            (true, v) if v < 0x10000 => format!("\\u{v:04X}"),
+            (true, v) => format!("\\u{{{v:X}}}"),
+            (false, v) if v < 0x100 => format!("\\x{v:02X}"),
+            (false, v) => format!("\\x{{{v:X}}}"),
+        });
+    }
+    out
+}
+
+/// CRuby turns a String pattern into a Regexp (`get_pat`, and
+/// `get_pat_quoted` with its `check` flag set), so a pattern that is
+/// broken in its own encoding is refused there rather than searched
+/// for: `s.sub("\x81".force_encoding("Shift_JIS"), "z")` raises
+/// `RegexpError: invalid multibyte character: /\x81/`.
+fn check_string_pattern_valid(pattern: Value) -> Result<()> {
+    let Some(pat) = pattern.is_rstring_inner() else {
+        return Ok(());
+    };
+    if pat.is_valid_encoding() {
+        return Ok(());
+    }
+    Err(MonorubyErr::regexerr(format!(
+        "invalid multibyte character: /{}/",
+        regexp_source_desc(&pat)
+    )))
+}
+
 fn gsub_main(
     vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     lfp: Lfp,
 ) -> Result<(RStringInner, bool)> {
+    check_string_pattern_valid(lfp.arg(0))?;
     // Enable zero-copy $~ haystack snapshots (CoW).
     vm.set_match_haystack(self_val);
     check_pattern_encoding_compat(&self_val.as_rstring_inner(), lfp.arg(0), globals)?;
@@ -4189,6 +4577,43 @@ fn decode_replaced_all(
     Ok((res, changed))
 }
 
+/// Every character-aligned occurrence of `needle` in `inner`, as
+/// `(start, end)` byte spans, or `None` when this receiver / needle
+/// pair is not one this literal walk serves (the regex path takes it).
+///
+/// Only the encodings monoruby walks itself need it — elsewhere every
+/// byte is a character, so a byte search cannot land inside one — and
+/// only a valid receiver and needle, since CRuby turns a String pattern
+/// into a Regexp and refuses broken bytes there.
+fn char_aligned_scan(inner: &RStringInner, needle: &RStringInner) -> Option<Vec<(usize, usize)>> {
+    let enc = inner.encoding();
+    if crate::value::mbc_walker(enc).is_none()
+        || !inner.is_valid_encoding()
+        || !needle.is_valid_encoding()
+        || !(needle.is_ascii_only() || needle.encoding() == enc)
+    {
+        return None;
+    }
+    let hay = inner.as_bytes();
+    let n = needle.as_bytes();
+    let mut hits = vec![];
+    let mut from = 0;
+    while let Some(hit) = char_aligned_search_fwd(inner, needle, from) {
+        hits.push((hit, hit + n.len()));
+        if !n.is_empty() {
+            from = hit + n.len();
+            continue;
+        }
+        // An empty pattern matches at every character head and at the
+        // end, so the walk steps one *character* on, not one byte.
+        if hit >= hay.len() {
+            break;
+        }
+        from = hit + crate::value::rvalue::char_width_at(enc, hay, hit);
+    }
+    Some(hits)
+}
+
 ///
 /// ### String#scan
 ///
@@ -4202,12 +4627,65 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // Take a stable frozen snapshot of the receiver up front, so every
     // match can be a zero-copy shared (CoW) view even if a block mutates
     // the receiver mid-scan. `$~` snapshots share the same buffer.
+    // `get_pat` quotes the pattern into a Regexp first, so a pattern
+    // broken in its own encoding is refused before the receiver is:
+    // a broken pattern over a broken receiver raises `RegexpError`,
+    // not the receiver's `ArgumentError`.
+    check_string_pattern_valid(lfp.arg(0))?;
     mustnot_broken(&self_.as_rstring_inner())?;
     self_.as_rstring_inner().regex_view()?;
     check_pattern_encoding_compat(&self_.as_rstring_inner(), lfp.arg(0), globals)?;
     let subject_val = string_snapshot(self_);
     vm.set_match_haystack(subject_val);
     let arg0 = lfp.arg(0);
+    // A String pattern over a receiver monoruby walks itself is a
+    // literal search that has to align to characters — in Shift_JIS the
+    // trail byte of `"\x81A"` is not the letter `A` (#1458). The regex
+    // path would walk the surrogate image byte by byte and find it.
+    if let Some(needle) = arg0.is_rstring_inner()
+        && let Some(hits) = char_aligned_scan(&self_.as_rstring_inner(), &needle)
+    {
+        let enc = self_.as_rstring_inner().encoding();
+        let found: Vec<Value> = hits
+            .iter()
+            .map(|&(start, end)| {
+                Value::string_from_inner(RStringInner::from_encoding(
+                    &self_.as_rstring_inner().as_bytes()[start..end],
+                    enc,
+                ))
+            })
+            .collect();
+        match lfp.block() {
+            None => {
+                if let Some(&(start, end)) = hits.last() {
+                    vm.save_capture_span(subject_val, start, end, arg0);
+                } else {
+                    vm.clear_capture_special_variables();
+                }
+                return Ok(Value::array_from_vec(found));
+            }
+            Some(block) => {
+                let data = vm.get_block_data(globals, block)?;
+                // The snapshot is rooted for the whole walk: the block
+                // may GC, and every yielded chunk was cut from it.
+                vm.temp_push(subject_val);
+                let res = (|| -> Result<()> {
+                    for (i, v) in found.iter().enumerate() {
+                        let (start, end) = hits[i];
+                        vm.save_capture_span(subject_val, start, end, arg0);
+                        vm.invoke_block(globals, &data, &[*v])?;
+                    }
+                    Ok(())
+                })();
+                vm.temp_pop();
+                res?;
+                if hits.is_empty() {
+                    vm.clear_capture_special_variables();
+                }
+                return Ok(lfp.self_val());
+            }
+        }
+    }
     let owned_re;
     let coerced_re;
     let re: &RegexpInner = if let Some(inner) = arg0.is_rstring_inner() {
@@ -4702,8 +5180,7 @@ fn string_index(
                 None => return Ok(Value::nil()),
             }
         };
-        let needle = arg_inner.as_bytes().to_vec();
-        return Ok(match substring_char_index(&given, &needle, from, false) {
+        return Ok(match substring_char_index(&given, &arg_inner, from, false) {
             Some(cp) => Value::integer(cp as i64),
             None => Value::nil(),
         });
@@ -4789,7 +5266,7 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             )));
         }
         return Ok(
-            match byte_search_fwd(haystack, needle.as_bytes(), byte_offset) {
+            match char_aligned_search_fwd(&given, &needle, byte_offset) {
                 Some(p) => Value::integer(p as i64),
                 None => Value::nil(),
             },
@@ -4872,12 +5349,21 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 "offset {byte_offset} does not land on character boundary"
             )));
         }
-        return Ok(
-            match byte_search_rev(haystack, needle.as_bytes(), byte_offset) {
-                Some(p) => Value::integer(p as i64),
-                None => Value::nil(),
-            },
-        );
+        // CRuby clamps the start down to `bytesize - needle.bytesize`
+        // (`rb_str_byterindex`) *after* the caller's offset has passed
+        // the boundary check above, so the clamped start may itself sit
+        // inside a character — and a match there is taken as it stands.
+        // That is how `"\x81A".byterindex("A")` answers 1, the offset
+        // of a trail byte; every other candidate has to start on a
+        // character head (#1458).
+        let start = byte_offset.min(bytesize.saturating_sub(needle.len()));
+        if needle_can_match(&needle) && haystack[start..].starts_with(needle.as_bytes()) {
+            return Ok(Value::integer(start as i64));
+        }
+        return Ok(match char_aligned_search_bwd(&given, &needle, start) {
+            Some(p) => Value::integer(p as i64),
+            None => Value::nil(),
+        });
     }
 
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
@@ -4968,8 +5454,7 @@ fn byte_search_fwd(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize>
     if needle.is_empty() {
         return (from <= haystack.len()).then_some(from);
     }
-    let last = haystack.len().checked_sub(needle.len())?;
-    (from..=last).find(|&i| haystack[i..].starts_with(needle))
+    memchr::memmem::find(haystack.get(from..)?, needle).map(|p| p + from)
 }
 
 /// Last byte index `<= upto` where `needle` occurs in `haystack`.
@@ -4978,10 +5463,8 @@ fn byte_search_rev(haystack: &[u8], needle: &[u8], upto: usize) -> Option<usize>
     if needle.is_empty() {
         return Some(upto.min(haystack.len()));
     }
-    let last = haystack.len().checked_sub(needle.len())?;
-    (0..=last.min(upto))
-        .rev()
-        .find(|&i| haystack[i..].starts_with(needle))
+    let end = upto.checked_add(needle.len())?.min(haystack.len());
+    memchr::memmem::rfind(haystack.get(..end)?, needle)
 }
 
 /// Coerce a value to a `Regexp` for `byteindex`/`byterindex`. Accepts
@@ -5205,11 +5688,15 @@ fn rindex_set_backref(
 /// ASCII or same-encoding bytes.
 fn substring_char_index(
     inner: &RStringInner,
-    needle: &[u8],
+    needle: &RStringInner,
     anchor: usize,
     rev: bool,
 ) -> Option<usize> {
+    if !needle_can_match(needle) {
+        return None;
+    }
     let bytes = inner.as_bytes();
+    let needle = needle.as_bytes();
     if needle.is_empty() {
         let char_len = inner.char_length();
         return if rev {
@@ -5240,6 +5727,7 @@ fn substring_char_index(
     if rev {
         return substring_char_index_rev_multibyte(inner, needle, anchor);
     }
+    let enc = inner.encoding();
     if inner.encoding().is_utf8_compatible() && inner.is_valid_encoding() {
         // Valid UTF-8: a character starts at every non-continuation
         // byte, so the anchor and the hit convert by counting those —
@@ -5285,6 +5773,7 @@ fn substring_char_index(
         off += ch.len();
         cp += 1;
     }
+    let _ = enc;
     let finder = memchr::memmem::Finder::new(needle);
     let mut search_from = off;
     loop {
@@ -5359,6 +5848,12 @@ fn string_rindex_string(
     };
 
     let needle_inner = needle_val.is_rstring_inner().unwrap();
+    // `rb_str_rindex` refuses a broken needle before it searches, so it
+    // never reaches the regex path below — which would refuse the
+    // *receiver* instead, with an ArgumentError CRuby does not raise.
+    if !needle_can_match(&needle_inner) {
+        return Ok(Value::nil());
+    }
     let needle_bytes = needle_inner.as_bytes();
 
     // Empty needle: `rindex("", k)` == k, capped at char_len.
@@ -5372,7 +5867,7 @@ fn string_rindex_string(
     // receivers).
     if !given.encoding().is_utf8_compatible() || !given.is_valid_encoding() {
         return Ok(
-            match substring_char_index(given, needle_bytes, max_char_pos, true) {
+            match substring_char_index(given, &needle_inner, max_char_pos, true) {
                 Some(cp) => Value::integer(cp as i64),
                 None => Value::nil(),
             },
@@ -16780,6 +17275,199 @@ mod tests {
             r#""\u3042\u3044\u3046".partition(/\u3044/)"#,
             r#""hello".partition(/l/).map { |s| s.class.to_s }"#,
         ]);
+    }
+
+    #[test]
+    fn a_shift_jis_trail_byte_is_not_the_letter_it_looks_like() {
+        // `"\x81A"` is one valid Shift_JIS character whose second byte
+        // *is* the ASCII `A`, and `"\x82`"` one whose second byte is a
+        // backquote. Every literal search has to step past them (#1458).
+        run_test_once(
+            r##"
+            s = [0x81, 0x41, 0x82, 0x60].pack("C*").force_encoding("Shift_JIS")
+            n = "A".dup.force_encoding("Shift_JIS")
+            [s.valid_encoding?, s.length,
+             s.include?(n), s.index(n), s.rindex(n),
+             s.byteindex(n), s.byterindex(n),
+             s.start_with?(n), s.end_with?("`".dup.force_encoding("Shift_JIS")),
+             s.sub(n, "z").bytes, s.gsub(n, "z").bytes,
+             s.scan(n), s.split(n).map(&:bytes),
+             s.partition(n).map(&:bytes), s.rpartition(n).map(&:bytes),
+             s[n], s.count(n), s.delete(n).bytes, s.tr(n, "z").bytes,
+             s.chomp(n).bytes, s.delete_prefix(n).bytes, s.delete_suffix(n).bytes]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_literal_search_resumes_at_the_next_shift_jis_character() {
+        // A trail byte that looks like the needle must not stop the
+        // walk: the same needle a character later is still found.
+        run_test_once(
+            r##"
+            s = [0x81, 0x41, 0x41, 0x81, 0x41].pack("C*").force_encoding("Shift_JIS")
+            n = "A".dup.force_encoding("Shift_JIS")
+            [s.index(n), s.rindex(n), s.byteindex(n), s.byterindex(n),
+             s.include?(n), s.gsub(n, "z").bytes, s.sub(n, "z").bytes,
+             s.scan(n).size, s.split(n).map(&:bytes),
+             s.partition(n).map(&:bytes), s.rpartition(n).map(&:bytes)]
+            "##,
+        );
+    }
+
+    #[test]
+    fn byterindex_takes_its_clamped_start_unaligned() {
+        // `rb_str_byterindex` clamps the start to `bytesize - needle
+        // .bytesize` after the caller's offset has been checked, so
+        // that start may sit inside a character and a match there is
+        // taken as it stands — while every other candidate must start
+        // on a character head.
+        run_test_once(
+            r##"
+            def b(a) = a.pack("C*").dup.force_encoding("Shift_JIS")
+            n = b([0x41])
+            [b([0x81, 0x41]), b([0x41, 0x81, 0x41]), b([0x81, 0x41, 0x81, 0x41]),
+             b([0x81, 0x41, 0x42, 0x81, 0x41]), b([0x81, 0x41, 0x41]),
+             b([0x41, 0x81, 0x41, 0x42])].map do |s|
+              [s.byterindex(n), (0..s.bytesize).map { |i| (s.byterindex(n, i) rescue :err) }]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_broken_needle_never_matches() {
+        // CRuby's `is_broken_string(sub)` check: the search gives up
+        // before it starts, however well the bytes line up. The
+        // prefix/suffix predicates deliberately do not share it.
+        run_test_once(
+            r##"
+            def b(a, e) = a.pack("C*").dup.force_encoding(e)
+            [[[0x81, 0x41], "Shift_JIS", [0x81], "Shift_JIS"],
+             [[0xA1, 0xA1, 0x41], "EUC-JP", [0xA1], "EUC-JP"],
+             [[0xE3, 0x81, 0x82], "UTF-8", [0x81, 0x82], "UTF-8"],
+             [[0x41, 0xA1], "US-ASCII", [0xA1], "US-ASCII"],
+             [[0x80, 0x41], "UTF-8", [0x80], "UTF-8"]].map do |sb, se, nb, ne|
+              s = b(sb, se); n = b(nb, ne)
+              [n.valid_encoding?, s.index(n), s.rindex(n), s.byteindex(n),
+               s.byterindex(n), s.include?(n), s[n],
+               s.start_with?(n), s.end_with?(n),
+               s.partition(n).map(&:bytes), s.rpartition(n).map(&:bytes),
+               s.chomp(n).bytes, s.delete_prefix(n).bytes, s.delete_suffix(n).bytes,
+               (s.delete_suffix!(n) ? :changed : nil)]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_broken_string_pattern_is_refused_as_a_regexp() {
+        // `sub` / `gsub` / `scan` quote the pattern into a Regexp, so a
+        // pattern broken in its own encoding raises there — and the
+        // source is rendered as a Regexp source, not by `#inspect`.
+        run_test_once(
+            r##"
+            def b(a, e) = a.pack("C*").dup.force_encoding(e)
+            [[[0xE3, 0x81, 0x8C, 0xEA], "UTF-8"],
+             [[0x7F, 0xE3], "UTF-8"],
+             [[0x41, 0x81], "Shift_JIS"],
+             [[0x82, 0xA0, 0x81], "Shift_JIS"],
+             [[0xA1, 0xA1, 0xA1], "EUC-JP"],
+             [[0xF0, 0x9F, 0x98, 0x80, 0xEA], "UTF-8"],
+             [[0x00, 0x01, 0x81], "Shift_JIS"],
+             [[0x2F, 0x81], "Shift_JIS"],
+             [[0x0E, 0x1F, 0x81], "Shift_JIS"],
+             [[0xE3, 0x81, 0x9E], "US-ASCII"]].map do |a, e|
+              pat = b(a, e)
+              [(("x".sub(pat, "z") rescue [$!.class.to_s, $!.message])),
+               (("x".scan(pat) rescue [$!.class.to_s, $!.message]))]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_broken_separator_stops_split_before_it_walks() {
+        run_test_once(
+            r##"
+            def b(a, e) = a.pack("C*").dup.force_encoding(e)
+            [[[0x81, 0x41], "Shift_JIS", [0x81], "Shift_JIS"],
+             [[0x41, 0xA1], "US-ASCII", [0xA1], "US-ASCII"],
+             [[0xE3, 0x81, 0x82], "UTF-8", [0x81], "UTF-8"]].map do |sb, se, nb, ne|
+              (b(sb, se).split(b(nb, ne)) rescue [$!.class.to_s, $!.message])
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn split_drops_what_a_misaligned_separator_walked_past() {
+        // CRuby's `rb_str_split_m` steps to the character head after a
+        // hit that landed inside a character and carries on from there
+        // without emitting a field; the trailing field starts at that
+        // cursor, so the text before it survives only when a later
+        // separator cuts it out. Recorded here because it is
+        // surprising, not because it is nice (#1458).
+        run_test_once(
+            r##"
+            def b(a) = a.pack("C*").dup.force_encoding("Shift_JIS")
+            n = b([0x41])
+            [b([0x81, 0x41]), b([0x41, 0x81, 0x41]), b([0x81, 0x41, 0x81, 0x42]),
+             b([0x58, 0x81, 0x41, 0x59]), b([0x58, 0x81, 0x41, 0x59, 0x41, 0x5A]),
+             b([0x41, 0x58, 0x81, 0x41]), b([0x81, 0x41, 0x42])].map do |s|
+              [s.split(n).map(&:bytes), s.split(n, -1).map(&:bytes)]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn an_empty_pattern_steps_a_character_at_a_time() {
+        // `gsub("")` / `scan("")` place a match at every character head
+        // and once at the end — a walked encoding has two of them in
+        // `"\x81A"`, not three.
+        run_test_once(
+            r##"
+            s = [0x81, 0x41, 0x82, 0x60].pack("C*").force_encoding("Shift_JIS")
+            e = "".dup.force_encoding("Shift_JIS")
+            [s.gsub(e, "z").bytes, s.sub(e, "z").bytes, s.scan(e).size,
+             s.split(e).map(&:bytes)]
+            "##,
+        );
+    }
+
+    #[test]
+    fn chomp_and_delete_suffix_want_a_whole_character() {
+        run_test_once(
+            r##"
+            def b(a, e) = a.pack("C*").dup.force_encoding(e)
+            s = b([0x81, 0x41], "Shift_JIS")
+            n = b([0x41], "Shift_JIS")
+            t = b([0x81, 0x41, 0x42], "Shift_JIS")
+            [s.chomp(n).bytes, s.delete_suffix(n).bytes, s.end_with?(n),
+             t.chomp(b([0x42], "Shift_JIS")).bytes,
+             t.delete_suffix(b([0x42], "Shift_JIS")).bytes,
+             (s.chomp("あ".encode("EUC-JP")) rescue [$!.class.to_s, $!.message]),
+             (s.dup.chomp!(n) ? :changed : nil)]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_literal_search_reads_a_broken_receiver_rather_than_refusing_it() {
+        // `sub` / `gsub` with a String pattern search literally
+        // (`get_pat_quoted` keeps the pattern a String), so a receiver
+        // the regex engine would refuse is searched all the same.
+        run_test_once(
+            r##"
+            s = [0x80, 0x41].pack("C*").force_encoding("UTF-8")
+            n = "A".dup.force_encoding("UTF-8")
+            [s.valid_encoding?, s.include?(n), s.index(n), s.byteindex(n),
+             s.sub(n, "z").bytes, s.gsub(n, "z").bytes,
+             s.partition(n).map(&:bytes), s.chomp(n).bytes,
+             s.delete_suffix(n).bytes]
+            "##,
+        );
     }
 
     #[test]

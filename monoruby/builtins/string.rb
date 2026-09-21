@@ -88,6 +88,10 @@ class String
 
   def delete_suffix(suffix)
     s = suffix.is_a?(String) ? suffix : __to_str(suffix)
+    # `deleted_suffix_length` refuses a suffix that is broken in its
+    # own encoding before it compares anything, so the bytes may match
+    # (`end_with?` says so) and still not be deleted.
+    return dup unless s.valid_encoding?
     if end_with?(s)
       self[0, length - s.length]
     else
@@ -100,8 +104,9 @@ class String
     raise FrozenError.new("can't modify frozen String: #{inspect}", receiver: self) if frozen?
     s = suffix.is_a?(String) ? suffix : __to_str(suffix)
     # Deleting an empty suffix changes nothing, so the bang form
-    # reports "no change" rather than returning self.
-    if !s.empty? && end_with?(s)
+    # reports "no change" rather than returning self; a broken suffix
+    # deletes nothing either (see `delete_suffix`).
+    if !s.empty? && s.valid_encoding? && end_with?(s)
       result = self[0, length - s.length]
       replace(result)
       self

@@ -366,6 +366,7 @@
 121e42097ec2d1d15351f0bc5ecc27d5	5.955087954701154e+22	r = 0.0\n        for i in 0..50\n          f = i * 1.1; g = i * 0.9; h = 
 123a397b90ab67e4ccd83ca59fc29237	2	def f(a = ($x = 2)); nil; end\n        f\n        $x\n        
 1244f1881c878c3dc6d1b1caed0b9f68	:jit	def base2; yield :s; end\n        def relay2; base2 { |s| yield(s) }; en
+127f186abd7a02d06bf77d6be26fc301	[false, true, 1, 1, [128, 122], [128, 122], [[128], [65], []], [128], [128]]	s = [0x80, 0x41].pack("C*").force_encoding("UTF-8")\n            n =
 12a9e585ad7e62c7384adb2ddbbe2374	["m", :r, :k, "m", :nm, 42, :frozen_recv, :meth, [1, 2], :nm_recv]	k = KeyError.new("m", receiver: :r, key: :k)\n            n = NameEr
 12ac69d0e3d7829ff39cbbddc61b3277	["elefant", 4]	S = Struct.new(:name, :legs, keyword_init: true)\n            \n\n    
 12b1a598797e50c460f3d7646ca37481	[:y]	class B\n              def x; end\n            end\n            class 
@@ -922,6 +923,7 @@
 315fe0e279e16dfcac75e00152641d0c	[true, true, [1, 2, 3, nil, 2, nil, nil, nil, nil, nil], [1, 3, 5], [1, 3, 5], [], 1, 1, nil, 1, nil, "a", 5, 4]	__a = [];__a << (\n        (1...5).all? do |x|\n            x > 0\n        end\n    
 318bdea838d913fccc46d8c181d3eaba	:ok	mod = Module.new { def foo; :ok; end }\n            obj = Object.new
 31a2f98d7f3401ad6b8d4ee1b71619d4	:OVERRIDDEN	class Float; def *(o); :OVERRIDDEN; end; end; 3.0 * 4.0
+31c383225ceaeb67f09d37a00edb79a3	[[129, 65], [129, 65], false, [129, 65], [129, 65], ["Encoding::CompatibilityError", "incompatible character encodings: Shift_JIS and EUC-JP"], nil]	def b(a, e) = a.pack("C*").dup.force_encoding(e)\n            s = b(
 31c544a50d5a96da58f1f2bca81c1529	[true, 42, "boom"]	class MyErr < StandardError\n              attr_accessor :data\n     
 31dbc52d25f8fde84592827fdd169183	42	def f(x)\n          x * 2\n        end\n        f(21)\n        
 31e9b020860b3439dfb171b0b2800af8	["aaa ddd ccc", "abed"]	__a = [];__a << (s = "aaa bbb ccc"; s[/a (bbb) c/, 1] = "ddd"; s);__a << (s = "a
@@ -986,6 +988,7 @@
 34c5e73b9bc573ebdb2b02dbcf61535c	false	class Integer; alias __orig :>; def >(o); __orig(o); end; end; 3 > 4
 34d92e030feea7a955c11db593e2a994	"3.140000"	class HasToF; def to_f; 3.14; end; end\n            sprintf("%f", Ha
 34ecba38576b846b812555973c74f70e	[[[[:a, 1]], [[:b, 2]]], [[[:a, 1]], [[:b, 2]]], [[:a, [1]], [:b, [2]]], [[[:a, 1], []], [[:b, 2], []]], [[:a, 1, []], [:b, 2, []]], [[[:a, 1], :d], [[:b, 2], :d]], [[:a, 1], [:b, 2]], ["[:a, 1]", "[:b, 2]"], [[:a, 1, []], [:b, 2, []]]]	__a = [];__a << (h = {a: 1, b: 2}; h.map { |*a| a });__a << (h = {a: 1, b: 2}; h
+34ee66abb852d7f0c4164a48676e0715	[[["RegexpError", "invalid multibyte character: /\\\\u304C\\\\xEA/"], ["RegexpError", "invalid multibyte character: /\\\\u304C\\\\xEA/"]], [["RegexpError", "invalid multibyte character: /\\\\x7F\\\\xE3/"], ["RegexpError", "invalid multibyte character: /\\\\x7F\\\\xE3/"]], [["RegexpError", "invalid multibyte character: /A\\\\x81/"], ["RegexpError", "invalid multibyte character: /A\\\\x81/"]], [["RegexpError", "invalid multibyte character: /\\\\x{82A0}\\\\x81/"], ["RegexpError", "invalid multibyte character: /\\\\x{82A0}\\\\x81/"]], [["RegexpError", "invalid multibyte character: /\\\\x{A1A1}\\\\xA1/"], ["RegexpError", "invalid multibyte character: /\\\\x{A1A1}\\\\xA1/"]], [["RegexpError", "invalid multibyte character: /\\\\u{1F600}\\\\xEA/"], ["RegexpError", "invalid multibyte character: /\\\\u{1F600}\\\\xEA/"]], [["RegexpError", "invalid multibyte character: /\\\\x00\\\\x01\\\\x81/"], ["RegexpError", "invalid multibyte character: /\\\\x00\\\\x01\\\\x81/"]], [["RegexpError", "invalid multibyte character: /\\\\/\\\\x81/"], ["RegexpError", "invalid multibyte character: /\\\\/\\\\x81/"]], [["RegexpError", "invalid multibyte character: /\\\\x0E\\\\x1F\\\\x81/"], ["RegexpError", "invalid multibyte character: /\\\\x0E\\\\x1F\\\\x81/"]], [["RegexpError", "invalid multibyte character: /\\\\xE3\\\\x81\\\\x9E/"], ["RegexpError", "invalid multibyte character: /\\\\xE3\\\\x81\\\\x9E/"]]]	def b(a, e) = a.pack("C*").dup.force_encoding(e)\n            [[[0xE
 350fc45901c7ff4041bdf8a1abf3a79c	["via_send", "BSend", "BSend", [], [:a], 1]	class BSend\n              def direct; binding; end\n              de
 351c5e2d7c1113c1b45bd6b66e8aa52a	[2.0, 3.0, -3.0, -2.0, 0.0, 2.0, 0.5]	def fa; 17 % 5.0; end\n            def fb; -17 % 5.0; end\n          
 352428e9faa270d3196958a5fcbd8627	[true, "hello", "hello", "UTF-8", "UTF-8", "US-ASCII", "ASCII-8BIT", "US-ASCII", "UTF-8", true]	__a = [];__a << (\n            Encoding.aliases.is_a?(Hash)\n            );__a << 
@@ -1743,6 +1746,7 @@
 5ef4ae2fc57aa31c629a25dfa84f272e	[[:has, 1], [:hasnt, :poke, [1]]]	class Has\n          def poke(x) = [:has, x]\n        end\n        class H
 5f01b61b54eff66626bd4e39f4fe48c3	[42, 42]	__a = [];__a << (if 4 == 4 and 3 < 1 then 0 else 42 end);__a << (if 4 != 4 or 3 
 5f0569ade8d86da38a36eb38659c1886	[100, 200, [100, 200]]	S = Struct.new(:x, :y)\n            \n\n            s = S.new(1, 2)\n  
+5f0e1ee5c3eec7de1b8accfe9540877d	[[122, 129, 65, 122, 130, 96, 122], [122, 129, 65, 130, 96], 3, [[129, 65], [130, 96]]]	s = [0x81, 0x41, 0x82, 0x60].pack("C*").force_encoding("Shift_JIS")
 5f13837bff8d207bda00a02916bd6e02	[nil, false]	t = Thread.new { raise "boom" }\n            Thread.pass until t.sta
 5f3db22eac0a8e7c15126c82100c9ef4	["<7>", ["<1>", "<2>"], ["coerced"]]	module ProtoR\n              refine Integer do\n                def t
 5f4db5ebb75f3bf2b8fad5e3973d2488	false	Signal.list.key?("STKFLT")
@@ -1875,6 +1879,7 @@
 664f853aae1b23342a7f3f6347677439	[nil, [:r]]	$clog = []\n            def craise; $clog << :r; raise "x"; end\n    
 666756434f77a17dca0c4a9844a9e4e2	[true, true]	def foo; end\n            def bar; end\n            public :foo, :bar
 6667be2e19d6bb7283e92472772b8804	[[[:req, :x]], [[:req, :y], [:rest, :x]], [[:opt, :x]], :req, [[:opt, :x]], [[:req, :x]], :opt, :req]	__a = [];__a << (proc {|x| }.parameters(lambda: true));__a << (proc {|y, *x| }.p
+66748409dc60958fc5d8ef557f0e9eb5	[[1, [nil, :err, 1]], [2, [0, 0, :err, 2]], [3, [nil, :err, nil, :err, 3]], [4, [nil, :err, nil, nil, :err, 4]], [2, [nil, :err, 2, 2]], [0, [0, 0, :err, 0, 0]]]	def b(a) = a.pack("C*").dup.force_encoding("Shift_JIS")\n           
 667fab9da2a05b848ddd0fd87fbd30d9	[[[false, 300], [true, 300]], :redefined, false]	def probe(a, b) = a == b\n            vals = [1, nil]\n            re
 6689fdb915718c542fa7f92d001dacc0	["inherited:B"]	$res = []\n        class A\n          def self.inherited(subclass)\n      
 66b655e81e48c32825c0aeea0b53995d	[0, 10]	f = File.open("Cargo.toml")\n            begin\n              before 
@@ -2317,6 +2322,7 @@
 7f31a0877dd67722a0d7d14c5b74abb0	[[], ["warning: given block not used"], ["warning: block supersedes default value argument"], ["warning: block supersedes default value argument"], [], []]	require 'stringio'\n        def capw\n          $stderr = StringIO.new\n  
 7f39046674eb2565ca621a342f701cae	[true, true, true]	M = Data.define(:amount, :unit)\n\n            a = M.allocate\n            a.send(:
 7f48ec6081718c6875731cb8393d7b9c	["echo hello", true]	def `(cmd); [cmd, cmd.frozen?]; end\n        %x{echo hello}\n        
+7f59fb8e2fc95e2e431ab529671b99e0	[[false, nil, nil, nil, nil, false, nil, false, false, [[129, 65], [], []], [[], [], [129, 65]], [129, 65], [129, 65], [129, 65], nil], [false, nil, nil, nil, nil, false, nil, false, false, [[161, 161, 65], [], []], [[], [], [161, 161, 65]], [161, 161, 65], [161, 161, 65], [161, 161, 65], nil], [false, nil, nil, nil, nil, false, nil, false, false, [[227, 129, 130], [], []], [[], [], [227, 129, 130]], [227, 129, 130], [227, 129, 130], [227, 129, 130], nil], [false, nil, nil, nil, nil, false, nil, false, true, [[65, 161], [], []], [[], [], [65, 161]], [65, 161], [65, 161], [65, 161], nil], [false, nil, nil, nil, nil, false, nil, true, false, [[128, 65], [], []], [[], [], [128, 65]], [128, 65], [65], [128, 65], nil]]	def b(a, e) = a.pack("C*").dup.force_encoding(e)\n            [[[0x8
 7f684c2506ac66a75606077c90b5924f	"US-ASCII"	s = "hello".encode("US-ASCII")\n              s.upcase!\n          
 7f68c0c2608b0a93888ba660052937e5	7	mul = proc { |n, m| n * m }; inc = proc { |n| n + 1 }; (mul >> inc).call(2, 3)
 7f747f780d48143c0ab242713c240386	["Foo", "Bar", "Foo"]	$a = []\n            class Foo\n                CONST = 'Foo'\n       
@@ -2421,6 +2427,7 @@
 842592b1bb99be694e92c22a5315ee23	[false, false, false, nil, false, false, false, nil, false, false, false, nil, false, false, false, nil, false, false, false, nil]	a = [1,2,3,nil] * 5\n        x = []\n        for e in a\n          x << e&
 8426848ab8fdf086ee8cf3191a12c5f8	"MShip2::Blob"	module MShip2\n              class Blob\n                def _dump(l)
 842d7abc8c7da9f58042f513762d25ea	[[nil, Enumerator, true], [:to_s, ["1", "2"]], 7, [Proc, 4, true], [Proc, true], [Proc, 2], true]	def k(&b); [1, 2].map(&b); end\n        def none(&b); b = nil; [b, k(&b)
+8441c0f3f2bcba62a5214ad474b501f5	[1, 1, 2, 4, true, [129, 65, 122, 129, 65], [129, 65, 122, 129, 65], 1, [[129, 65]], [[129, 65], [65], [129, 65]], [[129, 65], [65], [129, 65]]]	s = [0x81, 0x41, 0x41, 0x81, 0x41].pack("C*").force_encoding("Shift
 8451778dd19940239d54ccd8c48d4976	["Enumerator", "Enumerator", "Enumerator", "Enumerator", "Enumerator", [[1], [3, 4], [6], [9, 10, 11]], [[1, 3], [2, 4]], true]	__a = [];__a << (Set[1, 2, 3].freeze.delete_if.class.to_s);__a << (Set[1, 2, 3].
 846556768cd567bd24d3916bd92ff7db	[false, false, true, [true, true, false], true, false, false, ["NameError", "'a' is not an implicit parameter"], ["TypeError", "1 is not a symbol nor a string"]]	def try; yield; rescue => e; [e.class.to_s, e.message]; end\n       
 8479b8263b2031ca390cec82e34d1347	"yes-shname\\n"	env = Object.new\n            def env.to_hash = {"VIA_TO_HASH" => "y
@@ -3588,6 +3595,7 @@ c431f27a212f229c0d702b83f694670a	[true, true]	def f(k: false, j: 1.5); true; end
 c442d1bf934d69ee3025ead0d68d8e4c	[2, -2, 3, -3, 3, 2, 2, 4, "23/10", "233/100", 160, 150]	__a = [];__a << (Rational(7, 3).round);__a << (Rational(-7, 3).round);__a << (Ra
 c444afe0e4c0ccab9570a5aa78554ed4	[1000, 10, 10, 1, 0, 120, 120, 1000, 1000, 1000, 11, 11, 1, 0, 1001, 1001, 121, 121, 1001, 1, 1000, 0]	__a = [];__a << (\n            i = 0\n            while i < 1000\n              i =
 c48885b3fbd7a1a20faf1adae918a3e1	[true, true, true, true, true, false, false, nil, true, true, true, true, false, false, nil]	module Foo; end\n        class Bar; include Foo; end\n        class Baz <
+c488f98d76d91740b9329146c835211d	[["ArgumentError", "invalid byte sequence in Shift_JIS"], ["ArgumentError", "invalid byte sequence in US-ASCII"], ["ArgumentError", "invalid byte sequence in UTF-8"]]	def b(a, e) = a.pack("C*").dup.force_encoding(e)\n            [[[0x8
 c49a1455846fa4aaf07d1f11c3f2244d	[["0", "-1", "42", "-9007199254740993"], ["4611686018427387903", "-4611686018427387904", "4611686018427387904", "-4611686018427387905", "1208925819614629174706176", "-1208925819614629174706176"], ["n122333", "UTF-8", true, true, false], ["あ1い-2う", "UTF-8", false, true, 6], ["v1.5truesym2", "UTF-8"], [69, true, true, "xx123456789yyy"], [[255, 55], "ASCII-8BIT", false], ["UTF-16LE", 6]]	__a = [];__a << (i = 0; ["#{i}", "#{-1}", "#{42}", "#{-9007199254740993}"]);__a 
 c4aad381945577c7d224be25741b79c1	["Hello ", "there, ", "Dave", "!\\n"]	class Interpreter\n              def do_a() $res << "there, "; end\n 
 c4b18be49d96a9fcf781e931b81a7adb	true	h = {a: 1, b: 2}; h.rehash.equal?(h)
@@ -4181,6 +4189,7 @@ e5a3f82fe99eb062a625f7d7fad989ef	[91, 112, 97]	f = File.open("Cargo.toml")\n    
 e5b6caddf0926a77ca0debe16a0d139d	:linux	def f(x); end\n            f(:windows)\n            a = :linux\n      
 e5e0bd691c34bf90bff88a5a70e2ac6f	[1, 2, 3, "hi"]	class N; def f(x) = x + 1; end\n        class Bare < BasicObject; def hi
 e5f22b981e4a6ed9bfbde224b1a43306	"constant"	module AutoloadProbe\n          autoload :Bar, "/nonexistent/probe/file"
+e5f92973ec26b6da468931b92171a9d1	[[[], [[]]], [[], [[], []]], [[[129, 66]], [[129, 66]]], [[[89]], [[89]]], [[[88, 129, 65, 89], [90]], [[88, 129, 65, 89], [90]]], [[], [[], []]], [[[66]], [[66]]]]	def b(a) = a.pack("C*").dup.force_encoding("Shift_JIS")\n           
 e5fbcacb7034291e96616d4e0bf14525	[111, 999]	TOP_CONST = 999\n        class C\n          TOP_CONST = 111\n          def
 e603c178c8f9d5b7d28bfcae327cbdc8	[[[72, 201, 76, 76, 79, 32, 201, 247, 255], [104, 233, 108, 108, 111, 32, 233, 247, 255], [72, 233, 108, 108, 111, 32, 233, 247, 255], [72, 201, 76, 76, 79, 32, 233, 247, 255]], [[65, 233, 90], [97, 233, 122], [65, 233, 122]], [nil, "\\xC9", [201]], [[104, 101, 108, 108, 111], "ISO-8859-1"], [[104, 101, 108, 108, 111], "ISO-8859-1"], [[104, 108, 108, 111], 1, [104, 233, 108, 111]], [104, 101, 108, 108, 111], [[104, 233, 108, 108, 111], [104, 233, 108, 108, 111, 32, 9], [32, 32, 104, 233, 108, 108, 111], "ISO-8859-1"], [104, 233, 108, 108, 111]]	__a = [];__a << (l = "h\\xE9llo \\xC9\\xF7\\xFF".dup.force_encoding("ISO-8859-1"); [
 e60570cf39218d754a8da43cd162e6df	[1, 2, 3]	class C; def to_int; 3; end; end; o = C.new\n[1,2,3,4,5].take(o)
@@ -4637,6 +4646,7 @@ ff9e2498040dab7413f767cd46c78f25	[0, 1, 1, 1, 4611686018427387902, 4611686018427
 ffa313223da3719ff05f33e6674d2972	["abcdeabcdeabcdeabcdeabcde", "機動戦士機動戦士機動戦士"]	__a = [];__a << ("abcde" * 5);__a << ("機動戦士" * 3);__a
 ffab0594ecbb10ffe2bbe69dcb755491	[[1, 2], [1, nil], [3, 4], 9, 8, 42, "struct size differs", false]	S = Struct.new(:a, :b)\n            K = Struct.new(:x, keyword_init:
 ffc098432e042caf6d133cc71c10f21b	1	->((a, *)) { a }.call([1, 2, 3])
+ffc6345d38bd7e7cf9e74d7354e939b8	[true, 2, false, nil, nil, nil, nil, false, false, [129, 65, 130, 96], [129, 65, 130, 96], [], [[130, 96]], [[129, 65, 130, 96], [], []], [[], [], [129, 65, 130, 96]], nil, 0, [129, 65, 130, 96], [129, 65, 130, 96], [129, 65, 130, 96], [129, 65, 130, 96], [129, 65, 130, 96]]	s = [0x81, 0x41, 0x82, 0x60].pack("C*").force_encoding("Shift_JIS")
 ffdafa4805c47b0449e1f54f6393dba9	[:missing, :orphan, [7]]	class Parent\n          def method_missing(name, *args) = [:missing, nam
 ffdb24889c89007dbdeeef12634ddfcf	[:after, "VSChild", true]	class VSParent\n              private\n              def m; :before; 
 ffdd37a11749e039dc0a5ce43f52d1ed	[0, 1, 2, 3, 4, 5, 6, 7, 8]	def f(*x)\n          x\n        end\n        \n\n        f(*[0,1,2,3,4,5,6,7
