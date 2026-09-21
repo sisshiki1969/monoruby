@@ -2684,7 +2684,7 @@ pub(crate) fn string_start_with(
         check_encoding_compat(self_enc, self_bytes, &arg_inner, globals)?;
         let arg_bytes = arg_inner.as_bytes();
         if self_bytes.starts_with(arg_bytes) {
-            if !enc_char_boundary(self_enc, self_bytes, arg_bytes.len()) {
+            if !enc_prefix_boundary(self_enc, self_bytes, arg_bytes.len()) {
                 continue;
             }
             return Ok(Value::bool(true));
@@ -2867,7 +2867,8 @@ fn deleted_prefix_length(
     let self_bytes = self_inner.as_bytes();
     check_encoding_compat(self_enc, self_bytes, &arg_inner, globals)?;
     let arg_bytes = arg_inner.as_bytes();
-    if !self_bytes.starts_with(arg_bytes) || !enc_char_boundary(self_enc, self_bytes, arg_bytes.len())
+    if !self_bytes.starts_with(arg_bytes)
+        || !enc_prefix_boundary(self_enc, self_bytes, arg_bytes.len())
     {
         return Ok(None);
     }
@@ -2945,6 +2946,110 @@ fn enc_has_interior(enc: crate::value::Encoding) -> bool {
     ) || crate::value::mbc_walker(enc).is_some()
 }
 
+/// The boundary test a *prefix* match uses, where
+/// [`enc_char_boundary`] is the one a suffix match uses.
+///
+/// CRuby rounds the two ends in opposite directions —
+/// `rb_enc_right_char_head` for a prefix, `rb_enc_left_char_head` for a
+/// suffix — and on a broken receiver they disagree. Rounding forward
+/// only asks that some character *end* exactly at `pos`, so a byte that
+/// begins nothing does not block the match:
+/// `"W\x00\x80A".start_with?("W\x00")` is true, while the mirrored
+/// `"WA\x80\x00".end_with?("\x80\x00")` is false (#1487).
+fn enc_prefix_boundary(enc: crate::value::Encoding, bytes: &[u8], pos: usize) -> bool {
+    use crate::value::Encoding as E;
+    if pos == 0 || pos >= bytes.len() {
+        return true;
+    }
+    match enc {
+        // Fixed-width: the arithmetic answers without a walk.
+        E::Utf16Le | E::Utf16Be => pos % 2 == 0,
+        E::Utf32Le | E::Utf32Be => pos % 4 == 0,
+        _ if trail_class(enc).is_some() => {
+            // `rb_enc_right_char_head`: scan back to a head, then take
+            // one character forward. A run of trail bytes longer than
+            // one character therefore does *not* round up to `pos` —
+            // which is where this parts company with a forward walk.
+            let head = enc_left_char_head(enc, bytes, pos);
+            head == pos || head + crate::value::rvalue::char_width_at(enc, bytes, head) == pos
+        }
+        _ if crate::value::mbc_walker(enc).is_some() => {
+            let mut off = 0;
+            while off < pos {
+                off += crate::value::rvalue::char_width_at(enc, bytes, off);
+            }
+            off == pos
+        }
+        _ => true,
+    }
+}
+
+/// The bytes that can only continue a character in `enc`, which
+/// `rb_enc_left_char_head` scans back over. `None` for the encodings
+/// whose trail bytes overlap their lead bytes so far that the scan is
+/// not a byte class at all — Shift_JIS, whose `left_adjust_char_head`
+/// is its own function, and where a forward walk already agrees with
+/// CRuby on every case measured.
+fn trail_class(enc: crate::value::Encoding) -> Option<std::ops::RangeInclusive<u8>> {
+    use crate::value::Encoding as E;
+    match enc {
+        E::Utf8 => Some(0x80..=0xBF),
+        E::EucJp => Some(0xA1..=0xFE),
+        E::NamedByte(_) => Some(0x9E..=0xFF),
+        _ => None,
+    }
+}
+
+/// `rb_enc_left_char_head`: the nearest offset at or before `pos` whose
+/// byte is not a pure continuation byte.
+fn enc_left_char_head(enc: crate::value::Encoding, bytes: &[u8], pos: usize) -> usize {
+    let Some(trail) = trail_class(enc) else {
+        return pos;
+    };
+    let mut p = pos;
+    while p > 0 && bytes.get(p).is_some_and(|b| trail.contains(b)) {
+        p -= 1;
+    }
+    p
+}
+
+/// Whether a character can *start* at `pos` — the half of CRuby's
+/// boundary test that `enc_char_boundary`'s forward walk does not
+/// answer. A byte that begins nothing is still cut as a one-byte
+/// character by `iter_char_bytes`, so `#chars` gives it a head where
+/// CRuby's `rb_enc_left_char_head` does not (#1487).
+///
+/// Each encoding's `left_adjust_char_head` draws the line differently,
+/// so this is what measurement against CRuby 4.0.6 says rather than one
+/// rule three times — sweeping every `[0x38, b1, b2]` and every
+/// `[b0, b1, 0x41]`:
+///
+/// - **Shift_JIS** wants a complete character, or a well-formed prefix
+///   of one: `0x80` / `0xA0` / `0xFD..=0xFF` never start one, and a
+///   lead followed by a byte outside `0x40..=0xFC` (minus `0x7F`) does
+///   not either.
+/// - **EUC-JP** asks the same of `0x8E` / `0x8F`, whose two- and
+///   three-byte forms must be well formed, and refuses `0x80..=0xA0` /
+///   `0xFF` outright — but exempts `0xA1..=0xFE`. Those bytes are both
+///   lead and trail, and `eucjp_islead` treats them as trail: the
+///   backward scan resolves them from what precedes, which is exactly
+///   what the forward walk already does, so `"8\xA1A"` *does* end with
+///   `"\xA1A"` even though the pair is not a character.
+/// - **Emacs-Mule** is a plain byte class: `0x9E..=0xFF` start nothing,
+///   and every lead below that heads a character whatever follows it.
+fn enc_char_can_start(enc: crate::value::Encoding, bytes: &[u8], pos: usize) -> bool {
+    use crate::value::Encoding as E;
+    let Some(&byte) = bytes.get(pos) else {
+        return true;
+    };
+    match enc {
+        E::EucJp if (0xA1..=0xFE).contains(&byte) => true,
+        E::NamedByte(_) => !(0x9E..=0xFF).contains(&byte),
+        _ => crate::value::mbc_walker(enc)
+            .is_none_or(|(_, precise)| !matches!(precise(bytes, pos), PreciseLen::Invalid)),
+    }
+}
+
 /// True iff byte offset `pos` is the head of a character in `enc`.
 /// Used so `start_with?` / `end_with?` only accept a prefix/suffix
 /// that aligns to a character (CRuby: a match must start at a char
@@ -2973,10 +3078,21 @@ fn enc_char_boundary(enc: crate::value::Encoding, bytes: &[u8], pos: usize) -> b
         // The encodings monoruby walks itself: Shift_JIS is the one
         // whose trail bytes overlap ASCII (0x40..=0x7E), so `"\x81A"`
         // is one character whose second byte *is* the letter `A`, and a
-        // search for `"A"` must not stop on it (#1458). A byte that
-        // starts no character stands on its own, as `iter_char_bytes`
-        // cuts it, so a broken receiver still has heads to land on.
+        // search for `"A"` must not stop on it (#1458).
+        //
+        // Two conditions, not one. The walk has to reach `pos` — that is
+        // the "not inside a character" half — and a character has to be
+        // able to *start* there. A byte that starts none (EUC-JP's
+        // `0x80..=0xA0` / `0xFF`, Shift_JIS's `0x80` / `0xA0` /
+        // `0xFD..=0xFF`) is cut as a one-byte character by
+        // `iter_char_bytes`, so `#chars` gives it a head, but CRuby's
+        // boundary test does not: `"8\x8BW"` (EUC-JP) does not end with
+        // `"\x8BW"` (#1487). A *truncated* lead still counts — it is a
+        // well-formed prefix, and only ran out of input.
         _ if crate::value::mbc_walker(enc).is_some() => {
+            if !enc_char_can_start(enc, bytes, pos) {
+                return false;
+            }
             let mut off = 0;
             while off < pos {
                 off += crate::value::rvalue::char_width_at(enc, bytes, off);
@@ -13098,6 +13214,81 @@ mod tests {
               f.call(enc) { |s| s.chomp("B").bytes },
               f.call(enc) { |s| s.ljust(5).bytes },
             ] })"##,
+        );
+    }
+
+    #[test]
+    fn char_head_rejects_a_byte_that_starts_nothing() {
+        // A byte that begins no character is still cut as a one-byte
+        // character by `iter_char_bytes`, so `#chars` gives it a head —
+        // but CRuby's boundary test does not, and each encoding draws
+        // the line differently (#1487).
+        run_test_once(
+            r##"(f=->(a, enc, n){ s = a.pack("C*").dup.force_encoding(enc);
+                 t = n.pack("C*").dup.force_encoding(enc);
+                 [s.end_with?(t), s.start_with?(t), s.delete_suffix(t).bytes, s.delete_prefix(t).bytes] }; [
+              f.call([0x38, 0xAF, 0xAA, 0x8B, 0x57], "EUC-JP", [0x8B, 0x57]),
+              f.call([0x38, 0x8B, 0x57], "EUC-JP", [0x8B, 0x57]),
+              f.call([0x8B, 0x57], "EUC-JP", [0x8B, 0x57]),
+              f.call([0x38, 0xA1, 0xA1, 0x8B, 0x57], "EUC-JP", [0x8B, 0x57]),
+              f.call([0x38, 0xA1, 0x41], "EUC-JP", [0xA1, 0x41]),
+              f.call([0x38, 0x8E, 0x41], "EUC-JP", [0x8E, 0x41]),
+              f.call([0x38, 0x8E, 0xA1], "EUC-JP", [0x8E, 0xA1]),
+              f.call([0x38, 0x8F, 0xA1, 0x41], "EUC-JP", [0xA1, 0x41]),
+              f.call([0x38, 0x80, 0x41], "Shift_JIS", [0x80, 0x41]),
+              f.call([0x38, 0x81, 0x41], "Shift_JIS", [0x81, 0x41]),
+              f.call([0x38, 0x81, 0x20], "Shift_JIS", [0x81, 0x20]),
+              f.call([0x38, 0x9E, 0x41], "Emacs-Mule", [0x9E, 0x41]),
+              f.call([0x38, 0x91, 0x41], "Emacs-Mule", [0x91, 0x41]),
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn prefix_and_suffix_round_the_boundary_opposite_ways() {
+        // CRuby rounds a prefix forward (`rb_enc_right_char_head`) and a
+        // suffix backward (`rb_enc_left_char_head`), so on a broken
+        // receiver the two disagree: a byte that begins nothing does not
+        // block a prefix match, but does block a suffix one — and a run
+        // of continuation bytes longer than one character blocks both,
+        // which a forward walk would not catch (#1487).
+        run_test_once(
+            r##"(f=->(a, enc, k){ s = a.pack("C*").dup.force_encoding(enc);
+                 t = a[0, k].pack("C*").dup.force_encoding(enc);
+                 u = a[k..].pack("C*").dup.force_encoding(enc);
+                 [s.start_with?(t), s.end_with?(u), s.delete_prefix(t).bytes] }; [
+              f.call([0x57, 0x39, 0x6B, 0xA3], "UTF-8", 3),
+              f.call([0x57, 0x00, 0x80, 0x41], "UTF-8", 2),
+              f.call([0x57, 0x80, 0x80, 0x41], "UTF-8", 2),
+              f.call([0x57, 0xE3, 0x81, 0x82], "UTF-8", 2),
+              f.call([0x57, 0x39, 0x80, 0x80, 0x41], "UTF-8", 3),
+              f.call([0x38, 0x38, 0x80, 0x41], "EUC-JP", 2),
+              f.call([0x38, 0x38, 0xA1, 0x41], "EUC-JP", 2),
+              f.call([0x38, 0x38, 0x9E, 0x41], "Emacs-Mule", 2),
+              f.call([0x38, 0x9E, 0x9E, 0x41], "Emacs-Mule", 2),
+              f.call([0x38, 0x38, 0x80, 0x41], "Shift_JIS", 2),
+              f.call([0x38, 0x81, 0x41, 0x42], "Shift_JIS", 2),
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn valid_receivers_keep_their_boundaries() {
+        // The boundary rules only ever bite on a broken receiver: a
+        // well-formed one answers as it always did, and a match inside a
+        // multibyte character is still refused.
+        run_test_once(
+            r##"(f=->(s, t){ [s.start_with?(t), s.end_with?(t), s.include?(t), s.index(t),
+                             s.delete_prefix(t).bytes, s.delete_suffix(t).bytes] };
+               g=->(s, e){ s.encode(e) }; [
+              f.call("abc", "ab"), f.call("abc", "bc"), f.call("abc", "b"),
+              f.call("あいう", "あ"), f.call("あいう", "う"), f.call("あいう", "い"),
+              f.call(g.call("あいう", "EUC-JP"), g.call("あ", "EUC-JP")),
+              f.call(g.call("あいう", "EUC-JP"), g.call("う", "EUC-JP")),
+              f.call(g.call("アイウ", "Shift_JIS"), g.call("ア", "Shift_JIS")),
+              f.call(g.call("アイウ", "Shift_JIS"), g.call("ウ", "Shift_JIS")),
+              f.call("あ".b, "\xE3".b),
+            ])"##,
         );
     }
 
