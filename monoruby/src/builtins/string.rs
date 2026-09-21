@@ -722,7 +722,22 @@ fn casecmp_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             return Ok(Value::nil());
         }
     }
-    if lhs_enc.is_utf8_compatible() && rhs_enc.is_utf8_compatible() {
+    // Folding is case mapping wherever a character can span more than
+    // one byte, so a receiver broken in its own encoding is refused
+    // with `rb_str_casemap`'s wording — including EUC-JP and Shift_JIS,
+    // which take the byte comparison below but are not exempt from the
+    // check the way a `single_byte_optimizable` receiver is.
+    casemap_mustnot_broken(&lhs_inner)?;
+    // Unicode folding needs both sides decodable. A US-ASCII string
+    // that is broken is not — and CRuby does not ask it to be: it is
+    // `single_byte_optimizable`, so the byte comparison below is what
+    // runs, exactly as for BINARY.
+    let foldable = |enc: crate::value::Encoding, broken: bool| {
+        enc.is_utf8_compatible() && (enc == crate::value::Encoding::Utf8 || !broken)
+    };
+    if foldable(lhs_enc, !lhs_inner.is_valid_encoding())
+        && foldable(rhs_enc, std::str::from_utf8(&rhs_bytes).is_err())
+    {
         // Case folding is case mapping, so a broken receiver gets
         // `rb_str_casemap`'s wording rather than the encoding check's.
         casemap_mustnot_broken(&lhs_inner)?;
@@ -7377,32 +7392,49 @@ fn line_ranges(
     };
     let inner = receiver.as_rstring_inner();
     let mapped = inner.needs_byte_mapping();
-    let view = inner.regex_view()?;
-    let s: &str = &view;
+    // Splitting a line off is a *byte* operation: CRuby's
+    // `rb_str_enumerate_lines` scans for the separator's bytes, and a
+    // separator in a self-synchronizing encoding can never match inside
+    // another character. Walking the raw bytes rather than a decoded
+    // view is what lets a receiver that is broken in its own encoding
+    // still yield its lines (`"A\xFF\nB".lines`), which CRuby does and
+    // a `regex_view()` cannot. The byte-mapped encodings keep the view,
+    // since their separator has to be read in the same surrogate space
+    // the ranges are converted back from.
+    let view;
+    let bytes: &[u8] = if mapped {
+        view = inner.regex_view()?;
+        view.as_bytes()
+    } else {
+        inner.as_bytes()
+    };
     let ranges = match sep {
         Sep::Whole => {
-            if s.is_empty() {
+            if bytes.is_empty() {
                 vec![]
             } else {
-                vec![0..s.len()]
+                vec![0..bytes.len()]
             }
         }
-        Sep::Default => split_with_default_newline_ranges(s, chomp),
-        Sep::Paragraph => split_paragraph_ranges(s, chomp),
-        Sep::Str(sep) => split_with_separator_ranges(s, &sep, chomp),
+        Sep::Default => split_with_default_newline_ranges(bytes, chomp),
+        Sep::Paragraph => split_paragraph_ranges(bytes, chomp),
+        Sep::Str(sep) => split_with_separator_ranges(bytes, sep.as_bytes(), chomp),
     };
     if !mapped {
         return Ok(ranges);
     }
     // Surrogate space: convert view-byte ranges back to receiver-byte
     // ranges (one view *char* is one receiver byte).
+    let chars = |range: std::ops::Range<usize>| {
+        bytes[range].iter().filter(|b| **b & 0xc0 != 0x80).count()
+    };
     let mut out = Vec::with_capacity(ranges.len());
     let mut view_pos = 0usize;
     let mut byte_pos = 0usize;
     for r in ranges {
-        byte_pos += s[view_pos..r.start].chars().count();
+        byte_pos += chars(view_pos..r.start);
         let start = byte_pos;
-        byte_pos += s[r.start..r.end].chars().count();
+        byte_pos += chars(r.start..r.end);
         view_pos = r.end;
         out.push(start..byte_pos);
     }
@@ -7448,16 +7480,16 @@ fn build_lines(
 
 /// Default-newline splitter (CRuby treats the unspecified separator as
 /// "\n" but also allows the line to end with `\r\n` or a bare `\r`,
-/// which matters only for `chomp: true`). Returns byte ranges into `s`.
-fn split_with_default_newline_ranges(s: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
+/// which matters only for `chomp: true`). Returns byte ranges into `b`.
+fn split_with_default_newline_ranges(b: &[u8], chomp: bool) -> Vec<std::ops::Range<usize>> {
     let mut out = Vec::new();
     let mut start = 0usize;
-    for piece in s.split_inclusive('\n') {
+    for piece in b.split_inclusive(|c| *c == b'\n') {
         let mut end = start + piece.len();
         if chomp {
-            if piece.ends_with("\r\n") {
+            if piece.ends_with(b"\r\n") {
                 end -= 2;
-            } else if piece.ends_with('\n') || piece.ends_with('\r') {
+            } else if piece.ends_with(b"\n") || piece.ends_with(b"\r") {
                 end -= 1;
             }
         }
@@ -7467,21 +7499,26 @@ fn split_with_default_newline_ranges(s: &str, chomp: bool) -> Vec<std::ops::Rang
     out
 }
 
-fn split_with_separator_ranges(s: &str, sep: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
+fn split_with_separator_ranges(b: &[u8], sep: &[u8], chomp: bool) -> Vec<std::ops::Range<usize>> {
     let mut out = Vec::new();
     let mut start = 0usize;
-    for piece in s.split_inclusive(sep) {
-        let mut end = start + piece.len();
-        if chomp && piece.ends_with(sep) {
-            end -= sep.len();
-        }
-        out.push(start..end);
-        start += piece.len();
+    while start < b.len() {
+        let end = match memchr::memmem::find(&b[start..], sep) {
+            Some(i) => start + i + sep.len(),
+            None => b.len(),
+        };
+        let keep = if chomp && b[start..end].ends_with(sep) {
+            end - sep.len()
+        } else {
+            end
+        };
+        out.push(start..keep);
+        start = end;
     }
     out
 }
 
-fn split_paragraph_ranges(s: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
+fn split_paragraph_ranges(bytes: &[u8], chomp: bool) -> Vec<std::ops::Range<usize>> {
     // Paragraph mode (empty record separator): split on a run of two or
     // more `\n`. Each paragraph keeps exactly the first two newlines of
     // the run that terminates it (`\n\n`); the remaining newlines in
@@ -7496,7 +7533,6 @@ fn split_paragraph_ranges(s: &str, chomp: bool) -> Vec<std::ops::Range<usize>> {
     // A newline here is a *unit* — `\r\n` or `\n` — as in CRuby, so
     // `"a\r\n\r\n\nb"` terminates after the two `\r\n` and the stray
     // `\n` is skipped with the rest of the run.
-    let bytes = s.as_bytes();
     let pend = bytes.len();
     let nl_len = |p: usize| -> Option<usize> {
         if p >= pend {
@@ -8286,6 +8322,11 @@ fn ascii_case_fast_path(inner: &RStringInner, op: CaseOp, mode: CaseMode) -> Opt
                 | crate::value::Encoding::Iso8859(_)
                 | crate::value::Encoding::Other(_)
                 | crate::value::Encoding::NamedByte(_)
+                // US-ASCII reaches here only when it is *broken* — a
+                // well-formed one is ASCII-only and took the vector
+                // path below. CRuby's `single_byte_optimizable` sends
+                // it down the byte path too rather than refusing it.
+                | crate::value::Encoding::UsAscii
         ) {
             // Latin-1 case pairs exist only in ISO-8859-1: upper
             // 0xC0..=0xDE (minus `×` 0xD7) ↔ lower 0xE0..=0xFE
@@ -9932,9 +9973,15 @@ fn tr_sets_cp(
     b: Value,
 ) -> Result<Option<(crate::value::Encoding, Vec<u32>, Vec<u32>)>> {
     let mut enc = recv.encoding();
+    // A broken US-ASCII receiver has no UTF-8 view; CRuby's
+    // `single_byte_optimizable` walks its bytes instead, which is what
+    // the codepoint path below does. (See `nonutf8_charsets`.)
+    let single_byte_broken =
+        enc != crate::value::Encoding::Utf8 && !recv.is_valid_encoding();
     // An ASCII-only receiver and ASCII-only sets: the byte paths are
     // already per character, and cheaper.
-    if recv.is_ascii_only()
+    if !single_byte_broken
+        && recv.is_ascii_only()
         && [a, b].iter().all(|v| {
             v.is_rstring_inner()
                 .is_some_and(|s| s.as_bytes().iter().all(|x| *x < 0x80))
@@ -9963,7 +10010,7 @@ fn tr_sets_cp(
             enc = merged;
         }
     }
-    if enc.is_utf8_compatible() && enc == recv.encoding() {
+    if enc.is_utf8_compatible() && enc == recv.encoding() && !single_byte_broken {
         return Ok(None);
     }
     let mut sets = Vec::with_capacity(2);
@@ -10574,7 +10621,13 @@ fn nonutf8_charsets(
     recv: &RStringInner,
     args: Array,
 ) -> Result<Option<Vec<CpCharset>>> {
-    if recv.encoding().is_utf8_compatible() {
+    // A US-ASCII receiver that is broken has no UTF-8 view to walk, and
+    // CRuby does not ask for one: it is `single_byte_optimizable`, so
+    // each byte is its own character and the codepoint path below is
+    // that byte walk.
+    if recv.encoding() == crate::value::Encoding::Utf8
+        || (recv.encoding().is_utf8_compatible() && recv.is_valid_encoding())
+    {
         return Ok(None);
     }
     // An ASCII-only receiver has no character wider than the byte the
@@ -13045,6 +13098,72 @@ mod tests {
               f.call(enc) { |s| s.chomp("B").bytes },
               f.call(enc) { |s| s.ljust(5).bytes },
             ] })"##,
+        );
+    }
+
+    #[test]
+    fn broken_receiver_yields_its_lines() {
+        // Splitting a line off is a byte operation in CRuby, so a
+        // receiver broken in its own encoding still yields its lines —
+        // including UTF-8 and US-ASCII, which used to go through a
+        // `regex_view()` that cannot decode them (#1455).
+        run_test_once(
+            r##"(f=->(enc, &b){ s = "A\xFF\nB\r\nC\n\nD".dup.force_encoding(enc); begin; v = b.call(s); v.is_a?(Array) ? v.map(&:bytes) : v; rescue => e; [e.class.to_s, e.message]; end }; ["UTF-8", "US-ASCII", "EUC-JP", "Shift_JIS", "ASCII-8BIT", "ISO-8859-1"].map { |enc| [
+              enc,
+              f.call(enc) { |s| s.lines },
+              f.call(enc) { |s| s.lines(chomp: true) },
+              f.call(enc) { |s| s.lines("B") },
+              f.call(enc) { |s| s.lines("") },
+              f.call(enc) { |s| s.lines(nil) },
+              f.call(enc) { |s| s.each_line.to_a },
+              f.call(enc) { |s| a = []; s.each_line { |l| a << l }; a },
+              f.call(enc) { |s| s.each_line("\r\n").to_a },
+            ] })"##,
+        );
+    }
+
+    #[test]
+    fn broken_us_ascii_takes_the_byte_path() {
+        // CRuby's `single_byte_optimizable` exemption: a US-ASCII
+        // receiver has no character wider than a byte, so `#tr`,
+        // `#squeeze`, `#casecmp?` and the case-mapping family answer on
+        // its bytes instead of refusing a broken one (#1455). BINARY
+        // and ISO-8859-1 are the same shape and were already right;
+        // UTF-8 is the one that still refuses.
+        run_test_once(
+            r##"(f=->(enc, &b){ s = "A\xFFB".dup.force_encoding(enc); begin; v = b.call(s); v.is_a?(String) ? v.bytes : v; rescue => e; [e.class.to_s, e.message]; end }; ["US-ASCII", "ASCII-8BIT", "ISO-8859-1", "UTF-8"].map { |enc| [
+              enc,
+              f.call(enc) { |s| s.upcase },
+              f.call(enc) { |s| s.downcase },
+              f.call(enc) { |s| s.swapcase },
+              f.call(enc) { |s| s.capitalize },
+              f.call(enc) { |s| s.casecmp?("a\xFFb".dup.force_encoding(enc)) },
+              f.call(enc) { |s| s.casecmp("a\xFFb".dup.force_encoding(enc)) },
+              f.call(enc) { |s| s.squeeze },
+              f.call(enc) { |s| s.squeeze("A") },
+              f.call(enc) { |s| s.tr("A", "z") },
+              f.call(enc) { |s| s.tr_s("A", "z") },
+              f.call(enc) { |s| s.count("A") },
+              f.call(enc) { |s| s.delete("A") },
+            ] })"##,
+        );
+    }
+
+    #[test]
+    fn casecmp_p_refuses_a_broken_multibyte_receiver() {
+        // Folding is case mapping wherever a character can span more
+        // than one byte, so EUC-JP and Shift_JIS get `rb_str_casemap`'s
+        // wording — they take the byte comparison, but are not exempt
+        // from the check the way a single-byte receiver is (#1455).
+        run_test_once(
+            r##"(f=->(enc, bytes){ s = bytes.pack("C*").force_encoding(enc); begin; s.casecmp?(s); rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call("EUC-JP", [0x41, 0xFF, 0x42]),
+              f.call("EUC-JP", [0x61, 0xE3, 0x81, 0x82, 0x62]),
+              f.call("Shift_JIS", [0x41, 0xFF, 0x42]),
+              f.call("Emacs-Mule", [0x41, 0xFF, 0x42]),
+              f.call("EUC-JP", [0x41, 0xA1, 0xA1, 0x42]),
+              f.call("Shift_JIS", [0x41, 0x82, 0xA0, 0x42]),
+            ])"##,
         );
     }
 
