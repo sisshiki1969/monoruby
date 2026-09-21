@@ -4839,6 +4839,20 @@ impl Executor {
         self.generate_enumerator_inner(ENUMERATOR_CLASS, method, obj, args, kw_args, pc, None)
     }
 
+    /// Both of the above: `to_enum` takes the keywords *and* a block to
+    /// serve as the size proc.
+    pub(crate) fn generate_enumerator_with_kw_and_size(
+        &mut self,
+        method: IdentId,
+        obj: Value,
+        args: Vec<Value>,
+        kw_args: Option<Hashmap>,
+        pc: BytecodePtr,
+        size: Option<Value>,
+    ) -> Result<Value> {
+        self.generate_enumerator_inner(ENUMERATOR_CLASS, method, obj, args, kw_args, pc, size)
+    }
+
     /// Like [`Self::generate_enumerator_with_size`], but builds the
     /// Enumerator as an instance of `class_id` instead of `Enumerator`.
     /// Used by `Enumerator.new` so that a Ruby subclass — notably
