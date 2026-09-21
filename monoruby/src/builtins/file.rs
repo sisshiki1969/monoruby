@@ -4677,6 +4677,9 @@ mod tests {
                 stat:     -> { File.stat(miss) },
                 chdir:    -> { Dir.chdir(miss) },
                 chdir_f:  -> { Dir.chdir(ok) },
+                # The block form fails one function further in.
+                chdir_blk:-> { Dir.chdir(miss) { 1 } },
+                chdir_blkf:-> { Dir.chdir(ok) { 2 } },
               }.map do |name, b|
                 begin
                   b.call
@@ -4703,6 +4706,7 @@ mod tests {
               ok2 = File.join(d, "ok2"); File.write(ok2, "y")
               sub = File.join(d, "sub"); Dir.mkdir(sub)
               miss = File.join(d, "no")
+              bad = (d + "/\xFF").dup.force_encoding("ASCII-8BIT")
               {
                 symlink:   -> { File.symlink("x", File.join(miss, "y")) },
                 symlink_e: -> { File.symlink("x", ok) },
@@ -4711,12 +4715,22 @@ mod tests {
                 rename:    -> { File.rename(miss, File.join(d, "r")) },
                 rename_2:  -> { File.rename(ok, File.join(miss, "y")) },
                 rename_nd: -> { File.rename(sub, ok) },
+                # A path that is not UTF-8 keeps its own bytes in the
+                # message, on both sides of the pair.
+                rename_raw:-> { File.rename(bad, File.join(d, "r")) },
+                link_raw:  -> { File.link(File.join(d, "l"), bad) },
+                symlink_raw: -> { File.symlink("x", bad + "/y") },
               }.map do |name, b|
                 begin
                   b.call
                   [name, :ok]
                 rescue => e
-                  [name, e.class.to_s, e.message.gsub(d, "<D>")]
+                  # The encoding is only reported for a message that
+                  # carries raw bytes: what an all-ASCII message is
+                  # tagged with is #1476, not this.
+                  raw = e.message.bytes.any? { |x| x >= 0x80 }
+                  [name, e.class.to_s, e.message.gsub(d, "<D>").bytes,
+                   raw ? e.message.encoding.name : nil]
                 end
               end
             end

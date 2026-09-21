@@ -942,10 +942,12 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         match std::env::set_current_dir(&path) {
             Ok(_) => {}
             Err(err) => {
+                // The block form fails inside `dir_chdir0`, where the
+                // argument form has already reported `chdir_path`.
                 return Err(MonorubyErr::errno_with_path(
                     &globals.store,
                     &err,
-                    "chdir_path",
+                    "dir_chdir0",
                     &display,
                 ));
             }
@@ -959,9 +961,10 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             Ok(_) => res,
             Err(err) => {
                 res?;
-                Err(MonorubyErr::errno_with_msg(
+                Err(MonorubyErr::errno_with_path(
                     &globals.store,
                     &err,
+                    "dir_chdir0",
                     &old_pwd,
                 ))
             }
