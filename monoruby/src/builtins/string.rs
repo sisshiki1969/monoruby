@@ -15497,6 +15497,64 @@ mod tests {
     }
 
     #[test]
+    fn succ_walks_down_to_the_bottom_of_a_class() {
+        // The carry is built from the smallest character of the class
+        // the stepped one belongs to, which CRuby finds by walking
+        // *down* (`enc_pred_char`). The walk crosses whatever byte
+        // boundaries lie in the way — below NKO DIGIT ZERO the two-byte
+        // UTF-8 tail has to borrow from the lead — and gives up when
+        // the class holds one character only, leaving `#succ` to step
+        // the character rather than the class.
+        run_test_once(
+            r##"(g=->(str){ begin; [str.succ.codepoints, str.succ.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              g.call("߉"), g.call("߀"), g.call("٩"), g.call("٠"),
+              g.call("၉"), g.call("၀"), g.call("９"), g.call("０"),
+              g.call("ª"), g.call("µ"), g.call("ת"), g.call("ʰ"),
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn succ_wraps_within_the_byte_width_it_started_in() {
+        // Stepping off the top of a width wraps to the bottom of the
+        // same one rather than carrying: the successor of the last
+        // two-byte Emacs-Mule character is the first, and with no
+        // alphanumeric anywhere the rightmost *character* steps.
+        run_test_once(
+            r##"(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); begin; [s.succ.bytes, s.succ.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call("Emacs-Mule", 0x8F, 0xFF), f.call("Emacs-Mule", 0x81, 0xA0),
+              f.call("Emacs-Mule", 0x8F, 0xFE), f.call("Emacs-Mule", 0x5A, 0x8F, 0xFF),
+              f.call("EUC-JP", 0xA1, 0xA1), f.call("Shift_JIS", 0x81, 0x40),
+              f.call("Shift_JIS", 0xFC, 0xFC), f.call("EUC-JP", 0xFE, 0xFE),
+              f.call("EUC-JP", 0x8F, 0xFE, 0xFE), f.call("Emacs-Mule", 0x80),
+              f.call("UTF-8", 0xF4, 0x8F, 0xBF, 0xBF), f.call("UTF-8", 0xC2, 0x80),
+            ])"##,
+        );
+    }
+
+    #[test]
+    fn succ_asks_each_single_byte_encoding_its_own_table() {
+        // Which high-half byte is a character at all, and which of them
+        // Onigmo calls a letter, is per encoding: the ISO-8859 family
+        // keeps C1 controls where the Windows pages put characters, an
+        // undefined byte is no character, and Onigmo marks neither the
+        // Hebrew of Windows-1255 nor the Arabic of Windows-1256 alpha,
+        // so those step instead of wrapping.
+        run_test_once(
+            r##"(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); begin; [s.succ.bytes, s.succ.encoding.name]; rescue => e; [e.class.to_s, e.message]; end }; [
+              f.call("ISO-8859-1", 0x9A), f.call("ISO-8859-2", 0xE1), f.call("ISO-8859-2", 0x9A),
+              f.call("ISO-8859-3", 0xA5), f.call("ISO-8859-3", 0xE1), f.call("ISO-8859-15", 0xFF),
+              f.call("Windows-1255", 0xE0), f.call("Windows-1256", 0xC1),
+              f.call("Windows-1252", 0xFF), f.call("Windows-1250", 0xFF),
+              f.call("KOI8-U", 0xFF), f.call("TIS-620", 0xFB),
+              f.call("Windows-1258", 0xCC), f.call("Windows-1258", 0xEC),
+              f.call("Windows-1258", 0xCB), f.call("Windows-1257", 0xFF),
+              f.call("ISO-8859-3", 0xAE), f.call("ISO-8859-7", 0xD2),
+            ])"##,
+        );
+    }
+
+    #[test]
     fn succ_preserves_encoding() {
         run_test(r#""a".encode("US-ASCII").succ.encoding.to_s"#);
         run_test(r#""z".encode("US-ASCII").next.encoding.to_s"#);
