@@ -171,9 +171,22 @@ jobs:
         working-directory: ../ruby-bench
         shell: bash
         env:
-          MR_TIMEOUT: '400'
-          YJ_TIMEOUT: '400'
-          ZJ_TIMEOUT: '400'
+          # One `timeout(1)` per engine (see the -e definitions below),
+          # so each benchmark gets this many seconds of wall clock. Equal
+          # across the three engines: they are compared, so they are
+          # measured under the same rule.
+          MR_TIMEOUT: '1000'
+          YJ_TIMEOUT: '1000'
+          ZJ_TIMEOUT: '1000'
+          # harness-warmup's own ceiling, deliberately *below* the
+          # timeouts above. A benchmark whose median-absolute-deviation
+          # never reaches the convergence threshold — splay, whose GC
+          # bimodality holds it around 0.4 against a threshold of 0.05 —
+          # otherwise runs to the harness default of 20 minutes and is
+          # killed, which records `timeout (Ns)` and no measurement at
+          # all. With the ceiling first, the harness stops on its own and
+          # still reports the median it has.
+          MAX_TIME: '600'
           ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
           set +e
@@ -385,9 +398,22 @@ jobs:
         working-directory: ../ruby-bench
         shell: bash
         env:
-          MR_TIMEOUT: '400'
-          YJ_TIMEOUT: '400'
-          ZJ_TIMEOUT: '400'
+          # One `timeout(1)` per engine (see the -e definitions below),
+          # so each benchmark gets this many seconds of wall clock. Equal
+          # across the three engines: they are compared, so they are
+          # measured under the same rule.
+          MR_TIMEOUT: '1000'
+          YJ_TIMEOUT: '1000'
+          ZJ_TIMEOUT: '1000'
+          # harness-warmup's own ceiling, deliberately *below* the
+          # timeouts above. A benchmark whose median-absolute-deviation
+          # never reaches the convergence threshold — splay, whose GC
+          # bimodality holds it around 0.4 against a threshold of 0.05 —
+          # otherwise runs to the harness default of 20 minutes and is
+          # killed, which records `timeout (Ns)` and no measurement at
+          # all. With the ceiling first, the harness stops on its own and
+          # still reports the median it has.
+          MAX_TIME: '600'
           ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
           set +e
