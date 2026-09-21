@@ -52,17 +52,6 @@ permissions:
   # scope to none, so the read has to be asked for.
   actions: read
 
-# One benchmark run at a time per ref. These jobs measure wall-clock
-# time on shared GitHub runners, so two of them in flight are two
-# benchmarks competing for the same CPU — which is what made adjacent
-# commits in the portal's history differ by a factor of two in absolute
-# milliseconds. `cancel-in-progress: false`: a run that has already
-# started is worth finishing, since throwing away 2-4 h of measurement
-# to start it again from the top gains nothing.
-concurrency:
-  group: bench-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   # Whether bench-amd64 runs, decided in a job of its own because the
   # answer needs an API call. A push gets a pass at most once every six
@@ -146,6 +135,19 @@ jobs:
     # day's work.
     needs: gate
     if: ${{ needs.gate.outputs.amd64 == 'true' }}
+    # One at a time, per architecture. These jobs measure wall-clock
+    # time on shared GitHub runners, so two of the same kind in flight
+    # are two benchmarks competing for one CPU — which is what made
+    # adjacent commits in the portal's history differ by a factor of two
+    # in absolute milliseconds. The group is per job rather than per
+    # workflow so the daily macOS pass, which takes ~4 h, does not hold
+    # the Linux one behind it: they run on different machines and do not
+    # compete. `cancel-in-progress: false` — a job that has already
+    # started is worth finishing, since throwing away hours of
+    # measurement to begin it again from the top gains nothing.
+    concurrency:
+      group: bench-amd64-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -403,6 +405,19 @@ jobs:
     # tolerates its absence and leaves the arm64 dashboard at its last
     # snapshot.
     if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.arch == 'arm64' || inputs.arch == 'both')) }}
+    # One at a time, per architecture. These jobs measure wall-clock
+    # time on shared GitHub runners, so two of the same kind in flight
+    # are two benchmarks competing for one CPU — which is what made
+    # adjacent commits in the portal's history differ by a factor of two
+    # in absolute milliseconds. The group is per job rather than per
+    # workflow so the daily macOS pass, which takes ~4 h, does not hold
+    # the Linux one behind it: they run on different machines and do not
+    # compete. `cancel-in-progress: false` — a job that has already
+    # started is worth finishing, since throwing away hours of
+    # measurement to begin it again from the top gains nothing.
+    concurrency:
+      group: bench-arm64-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: macos-latest
     # The three-engine pass needs ~245-260 min on this runner (the zjit
     # pass alone is ~2.5 h on arm64): the first zjit run hit the old
