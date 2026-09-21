@@ -114,7 +114,13 @@ fn register_owned_fd(fd: i32) {
 }
 
 fn unregister_owned_fd(fd: i32) {
-    OWNED_FDS.with(|s| {
+    // `try_with`, because this also runs while the thread is being torn
+    // down: `Allocator::drop` frees the thread's remaining objects from a
+    // TLS destructor, and `OWNED_FDS` may already have been destroyed.
+    // There is nothing to unregister once the set is gone — the caller
+    // still closes the fd — so a failure here is the expected end state,
+    // not an error.
+    let _ = OWNED_FDS.try_with(|s| {
         s.borrow_mut().remove(&fd);
     });
 }

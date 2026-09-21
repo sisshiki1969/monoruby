@@ -1343,6 +1343,37 @@ mod tests {
     }
 
     #[test]
+    fn string_range_walk_terminates_and_carries() {
+        // The String walk stops at `end.succ` and bails as soon as the
+        // successor outgrows `end` or comes back empty, which is what
+        // keeps an empty endpoint from walking for ever (#1480), and the
+        // exclusive forms answer nil rather than spinning when `end` is
+        // unreachable from `start`.
+        run_tests2(&[
+            r#"("".."").to_a"#,
+            r#"("".."b").to_a"#,
+            r#"("".."").each.to_a"#,
+            r#"("a".."c").to_a"#,
+            r#"("a"..."c").to_a"#,
+            r#"("b".."a").to_a"#,
+            r#"("b"..."a").to_a"#,
+            r#"("ay".."bc").to_a"#,
+            r#"("y"..."z").to_a"#,
+            r#"("a"..."d").max"#,
+            r#"("a"..."d").last"#,
+            r#"("b"..."a").max"#,
+            r#"("".."").max"#,
+            r#"("".."").last"#,
+            r#"("a"..."b").max"#,
+            r#"("".."b").max"#,
+            r#"("".."b").last"#,
+            r#"("a"..."aa").max"#,
+            r#"(:a..:c).to_a"#,
+            r#"(:a...:c).to_a"#,
+        ]);
+    }
+
+    #[test]
     fn string_range_succ_order_iteration() {
         // succ order sorts by length first: "a".."ab" runs a..z, aa, ab.
         run_tests2(&[
