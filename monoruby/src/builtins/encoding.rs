@@ -9630,6 +9630,86 @@ mod tests {
     }
 
     #[test]
+    fn converter_destination_cap_through_a_pivot_encoding() {
+        // A UTF-16 / UTF-32 source is decoded to a UTF-8 pivot before
+        // anything is converted, so the destination cap is felt in
+        // pivot bytes and has to be mapped back to source units —
+        // two per UTF-16 code unit, four per UTF-32 character (#1511).
+        crate::tests::run_test_once(
+            r##"
+            [["UTF-16BE", 3], ["UTF-16BE", 5], ["UTF-32LE", 2], ["UTF-32LE", 6]].map do |src, cap|
+              ec = Encoding::Converter.new(src, "EUC-JP")
+              s = "あabc".encode(src).dup
+              d = "".dup
+              first = ec.primitive_convert(s, d, nil, cap)
+              mid = [s.bytes, d.bytes]
+              [first, mid, ec.primitive_convert(s, d, nil, 200), s.bytes, d.bytes]
+            end
+            "##,
+        );
+        // A UTF-16 / UTF-32 *destination* is built here rather than by
+        // a codec, and counts its cap in destination bytes. CRuby
+        // fills the last bytes of the buffer with the front of the
+        // character that did not fit (#1532), so only the drained end
+        // state is compared.
+        crate::tests::run_test_once(
+            r##"
+            [["UTF-16LE", 3], ["UTF-32BE", 6]].map do |dst, cap|
+              ec = Encoding::Converter.new("UTF-8", dst)
+              s = "あabc".dup
+              d = "".dup
+              first = ec.primitive_convert(s, d, nil, cap)
+              [first, ec.primitive_convert(s, d, nil, 200), s.bytes, d.bytes]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_single_byte_destination_cap() {
+        // A single-byte-table destination maps the pivot itself, one
+        // byte per character, and has to report the cap in *source*
+        // bytes — which a non-ASCII source does not count the same way
+        // (#1511).
+        crate::tests::run_test_once(
+            r##"
+            [1, 2, 3].map do |cap|
+              ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+              s = "àéü".dup
+              d = "".dup
+              first = ec.primitive_convert(s, d, nil, cap)
+              mid = [s.bytes, d.bytes]
+              [first, mid, ec.primitive_convert(s, d, nil, 200), s.bytes, d.bytes]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_ascii_destination_with_a_wide_source() {
+        // The US-ASCII / BINARY destination walks characters itself,
+        // so both the cap and an unconvertible character have to be
+        // translated back through the pivot to source bytes — which a
+        // multi-byte source does not count one-for-one (#1511).
+        crate::tests::run_test_once(
+            r##"
+            [["EUC-JP", "US-ASCII", 1, "abあc"],
+             ["EUC-JP", "US-ASCII", nil, "abあc"],
+             ["Shift_JIS", "BINARY", 1, "abあc"],
+             ["ISO-8859-1", "US-ASCII", 1, "aébc"],
+             ["ISO-8859-1", "US-ASCII", nil, "aébc"]].map do |src, dst, cap, text|
+              ec = Encoding::Converter.new(src, dst)
+              s = text.encode(src).dup
+              d = "".dup
+              first = ec.primitive_convert(s, d, nil, cap)
+              [first, s.bytes, d.bytes,
+               ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            "##,
+        );
+    }
+
+    #[test]
     fn converter_ascii_destination_leaves_the_rest_in_src() {
         // The US-ASCII / BINARY destination has no codec of its own,
         // and used to report the whole source as consumed however far
