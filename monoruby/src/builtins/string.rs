@@ -3288,16 +3288,18 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     let resolve = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<SepKind> {
         if let Some(sep) = v.is_rstring_inner() {
-            // `rb_str_split_m` negotiates the two encodings and then
-            // walks the separator's characters, so an incompatible or
-            // broken separator is refused before the split runs.
-            check_string_encoding_compat(&self_.as_rstring_inner(), &sep, globals)?;
+            // `rb_str_split_m` walks the separator's own characters
+            // before it negotiates the two encodings, so a separator
+            // broken in its own encoding is refused first — the same
+            // order `#sub` / `#gsub` take through `get_pat_quoted`
+            // (#1522).
             if !sep.is_valid_encoding() {
                 return Err(MonorubyErr::argumenterr(format!(
                     "invalid byte sequence in {}",
                     sep.encoding().name()
                 )));
             }
+            check_string_encoding_compat(&self_.as_rstring_inner(), &sep, globals)?;
         }
         if let Some(re) = v.is_regex() {
             // A `Regexp` whose source is empty splits into characters;

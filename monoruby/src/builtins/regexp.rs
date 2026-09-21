@@ -1868,6 +1868,73 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn a_broken_pattern_is_refused_before_the_receiver() {
+        // CRuby turns a String pattern into a Regexp *before* it
+        // negotiates the two encodings, so a pattern broken in its own
+        // encoding is refused first. `#split` walks the separator's
+        // own characters first for the same reason and had the two
+        // checks the other way round; `#sub`, `#gsub` and `#scan`
+        // already run in that order. `#index` and `#partition`
+        // genuinely do check compatibility first, and stay as they are
+        // — the order is per method, which is what this pins (#1522).
+        run_test_once(
+            r##"
+              def sj(s) = s.dup.force_encoding("Shift_JIS")
+              [
+                (("あ".sub(sj("\x81"), "z")) rescue "#{$!.class}: #{$!.message}"),
+                (("あ".gsub(sj("\x81"), "z")) rescue "#{$!.class}: #{$!.message}"),
+                (("あ".scan(sj("\x81"))) rescue "#{$!.class}: #{$!.message}"),
+                (("あ".split(sj("\x81"))) rescue "#{$!.class}: #{$!.message}"),
+                (("あ".index(sj("\x81"))) rescue "#{$!.class}: #{$!.message}"),
+                (("あ".partition(sj("\x81"))) rescue "#{$!.class}: #{$!.message}"),
+                ((sj("\x82\xa0").sub(sj("\x81"), "z")) rescue "#{$!.class}: #{$!.message}"),
+                ((sj("\x82\xa0").index(sj("\x81"))) rescue "#{$!.class}: #{$!.message}"),
+                (("あ".split(sj("\x82\xa0"))) rescue "#{$!.class}: #{$!.message}"),
+              ]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_broken_source_names_the_character_not_the_byte() {
+        // `rb_reg_initialize` refuses a source broken in its own
+        // encoding with one message whatever the encoding — which
+        // `Regexp.new` now gives; this pins it over the shapes the
+        // constructor can be reached with, since the check sits on one
+        // path and every kind of broken source has to reach it.
+        run_test_once(
+            r##"
+              def sj(s) = s.dup.force_encoding("Shift_JIS")
+              def ej(s) = s.dup.force_encoding("EUC-JP")
+              [
+                (Regexp.new("\xff".dup.force_encoding("UTF-8")) rescue "#{$!.class}: #{$!.message}"),
+                (Regexp.new("\xff".dup.force_encoding("US-ASCII")) rescue "#{$!.class}: #{$!.message}"),
+                (Regexp.new(ej("\xa4")) rescue "#{$!.class}: #{$!.message}"),
+                (Regexp.new(ej("a\xa4b")) rescue "#{$!.class}: #{$!.message}"),
+                (Regexp.new(ej("(\xa4")) rescue "#{$!.class}: #{$!.message}"),
+                (Regexp.new(sj("\x81")) rescue "#{$!.class}: #{$!.message}"),
+                # A BINARY source is never broken, and a valid one of
+                # any encoding still compiles.
+                Regexp.new("\xff".dup.force_encoding("ASCII-8BIT")).inspect,
+                Regexp.new(ej("\xa4\xa2")).inspect,
+                /\xff/n.inspect,
+              ]
+            "##,
+        );
+        // A surrogate is in the BMP range but names no character, so it
+        // is refused the way a codepoint past `U+10FFFF` is — Onigmo
+        // accepts the four digits, so the check cannot be left to it.
+        run_test_once(
+            r##"
+              %w[\ud800 \udfff ퟿ ].map { |t|
+                (Regexp.new(t).inspect rescue "#{$!.class}: #{$!.message}") } +
+              ['\u{d800}', '\u{dfff}', '\u{d7ff}', '\u{110000}', '\u{10ffff}', '\u{d800 41}'].map { |t|
+                (Regexp.new(t).inspect rescue "#{$!.class}: #{$!.message}") }
+            "##,
+        );
+    }
+
+    #[test]
     fn match_returns_the_saved_backref() {
         // `String#match` / `Regexp#match` hand back the very MatchData
         // they saved as `$~` (no second object), block form included.

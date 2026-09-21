@@ -425,6 +425,13 @@ fn expand_unicode_braces(src: &str) -> Result<String> {
                             break;
                         }
                         match u32::from_str_radix(tok, 16) {
+                            // A surrogate names no character, so CRuby
+                            // refuses it the same way it refuses one
+                            // past `U+10FFFF` (#1522).
+                            Ok(0xd800..=0xdfff) => {
+                                out_of_range = Some(tok);
+                                break;
+                            }
                             Ok(cp) if cp <= 0x10FFFF => {
                                 if cp <= 0xFFFF {
                                     use std::fmt::Write;
@@ -482,6 +489,15 @@ fn expand_unicode_braces(src: &str) -> Result<String> {
                     let frag = std::str::from_utf8(&bytes[i..frag_end]).unwrap_or("\\u");
                     return Err(MonorubyErr::regexerr(format!(
                         "invalid Unicode escape: /{frag}/"
+                    )));
+                }
+                // Four digits that name a surrogate name no character,
+                // as in the braced form above (#1522).
+                if let Ok(cp) = u32::from_str_radix(&src[after_u..after_u + 4], 16)
+                    && (0xd800..=0xdfff).contains(&cp)
+                {
+                    return Err(MonorubyErr::regexerr(format!(
+                        "invalid Unicode range: /{src}/"
                     )));
                 }
                 // Fall through: 4 valid hex digits, copy through to
@@ -797,6 +813,12 @@ impl RegexpInner {
             declared_encoding = crate::value::Encoding::Utf8;
             fixed_encoding = true;
         }
+        // A source that is broken in its own encoding is refused
+        // before Onigmo sees it, with the message CRuby's
+        // `rb_reg_initialize` gives: Onigmo's own wording is its
+        // internal reading of the byte ("too short multibyte code
+        // string"), and monoruby's UTF-8 pre-check raised a bare
+        // `RuntimeError` (#1522).
         // Strip Ruby-only bits (`NOENCODING`, `FIXEDENCODING`,
         // `KCODE_*`) before handing the option mask to Onigmo —
         // those bits sit in the same word but Onigmo only understands
@@ -3069,10 +3091,18 @@ mod expand_unicode_braces_tests {
     }
 
     #[test]
-    fn bmp_surrogate_passes_through_as_four_digits() {
-        // Surrogate values are in the BMP range; we emit them as \uHHHH and
-        // leave validation to Onigmo (same behavior as CRuby for regex literals).
-        assert_eq!(ok("\\u{D800}"), "\\uD800");
+    fn rejects_a_surrogate() {
+        // A surrogate is in the BMP range but names no character, so
+        // CRuby refuses it as it refuses one past `U+10FFFF`:
+        // `Regexp.new("\\u{D800}")` is `RegexpError: invalid Unicode
+        // range`, and a *literal* `/\u{D800}/` does not even parse
+        // (#1522). Onigmo accepts the four digits, so the check has to
+        // be here.
+        assert!(expand_unicode_braces("\\u{D800}").is_err());
+        assert!(expand_unicode_braces("\\uD800").is_err());
+        assert!(expand_unicode_braces("\\u{DFFF}").is_err());
+        assert_eq!(ok("\\u{D7FF}"), "\\uD7FF");
+        assert_eq!(ok("\\uE000"), "\\uE000");
     }
 
     #[test]

@@ -3133,6 +3133,7 @@ a96f44dffe64892feff990050d690d94	[150, false, true, false, false]	class Tail1; e
 a98bef4ea7d42ca9b3589602d2392195	[[5, 6], [0, 0], [5, 6], [1, 1], [5, 6], [2, 2], [5, 6], [3, 3], [5, 6], [4, 4], [5, 6], [5, 5], [5, 6], [6, 6], [5, 6], [7, 7], [5, 6], [8, 8], [5, 6], [9, 9], [5, 6], [10, 10], [5, 6], [11, 11], [5, 6], [12, 12], [5, 6], [13, 13], [5, 6], [14, 14], [5, 6], [15, 15], [5, 6], [16, 16], [5, 6], [17, 17], [5, 6], [18, 18], [5, 6], [19, 19], [5, 6], [20, 20], [5, 6], [21, 21], [5, 6], [22, 22], [5, 6], [23, 23], [5, 6], [24, 24], [5, 6], [25, 25], [5, 6], [26, 26], [5, 6], [27, 27], [5, 6], [28, 28], [5, 6], [29, 29]]	class N\n          attr_reader :v\n          def initialize(a: 0, b: 1) =
 a9a64f0fa64e4bb1ec264c4f7c86df8b	:OVERRIDDEN	class Integer; def *(o); :OVERRIDDEN; end; end; 3 * 4
 a9a661726e586bfd7b7140fe8f35fec5	[:argerr, 7, :argerr2]	class AccArity\n          attr_reader :x\n          attr_writer :y\n      
+a9ae2ad2c5c01ddf6b1df2b89f2d6b7f	["RegexpError: invalid multibyte character: /\\\\x81/", "RegexpError: invalid multibyte character: /\\\\x81/", "RegexpError: invalid multibyte character: /\\\\x81/", "ArgumentError: invalid byte sequence in Shift_JIS", "Encoding::CompatibilityError: incompatible character encodings: UTF-8 and Shift_JIS", "Encoding::CompatibilityError: incompatible character encodings: UTF-8 and Shift_JIS", "RegexpError: invalid multibyte character: /\\\\x81/", nil, "Encoding::CompatibilityError: incompatible character encodings: UTF-8 and Shift_JIS"]	def sj(s) = s.dup.force_encoding("Shift_JIS")\n              [\n   
 a9ae3e391f88203fe65c9135f9075c2e	[[100, [99, 100]], [99.0, 99.0], 99, [198, [99, 198]], [100, [99, 100]], [100, [99, 100]], [99, [99, 99]], [99, [99, 99]], [FrozenError, [nil, nil]]]	class C\n              def set2(a, b); @a = a; @b = b; end\n         
 a9b082961457f87dd5dd3df08a2bc22e	"CAFÉ"	"Café".upcase
 a9cceae0d32dce8d89f28a34f27a49e1	[RuntimeError, "boom"]	o = Object.new\n            def o.each; raise "boom"; end\n          
@@ -4072,6 +4073,7 @@ dba8c999f223349114b2637336cb1407	true	Process.getpriority(Process::PRIO_PGRP, 0)
 dbac611098d272f9af09e0a0f0872a71	7	obj = Object.new\n            obj.define_singleton_method(:add) { |a
 dbc18dfb07e0bf31beaad3fdb0a50b52	3	"hello".byteindex("lo", -3)
 dbc20278d0d856cfb185f95ac488161b	[nil, 3, 5, "abcde"]	path = "/tmp/mr_buf_points.txt"\n            res = []\n            f 
+dbd7763f5cc8da699566eecf0839dd67	["RegexpError: invalid multibyte character: /\\\\xFF/", "RegexpError: invalid multibyte character: /\\\\xFF/", "RegexpError: invalid multibyte character: /\\\\xA4/", "RegexpError: invalid multibyte character: /a\\\\xA4b/", "RegexpError: invalid multibyte character: /(\\\\xA4/", "RegexpError: invalid multibyte character: /\\\\x81/", "/\\\\xFF/", "/\\\\x{A4A2}/", "/\\\\xff/n"]	def sj(s) = s.dup.force_encoding("Shift_JIS")\n              def e
 dbf25e1b967821afefbd465ccf25e8f2		require "yaml"\n        require "stringio"\n        r = []\n        # The 
 dc05a6cf5a15aeac0cf2549ba573a79e	[false, "helloX", false, "BAD!"]	__a = [];__a << (:hello.to_s.frozen?);__a << (s = :hello.to_s.dup; s << "X"; s);
 dc0885a7e9180887b8b86834b910e71a	10	class A\n              @@shared = 10\n            end\n            cla
@@ -4248,6 +4250,7 @@ e4bd0fbbc936a91cc4257bb6e2ef0c7f	["\\"\\\\x00a\\\\x00b\\\\x00c\\".dup.force_enco
 e4c3805b5eda733c2c3b305a068dc955	"Cargo.toml"	File.open("Cargo.toml") { |f| f.path }
 e4e344de107f90e3a04f591c1d83fb9a	nil	Inner = Struct.new(:b)\n        Outer = Struct.new(:a)\n        o = Outer
 e4e47b16c304d24fa7f1fd62c39e35e0	3.0	class Float; def <=>(o) = (o.to_f - to_f); end\n[3.0, 1.0, 2.0].min
+e4f3a5cd1e8bdb80a91729e8f1bc9c98	["RegexpError: invalid Unicode range: /\\\\ud800/", "RegexpError: invalid Unicode range: /\\\\udfff/", "/\\uD7FF/", "//", "RegexpError: invalid Unicode range: /\\\\u{d800}/", "RegexpError: invalid Unicode range: /\\\\u{dfff}/", "/\\\\u{d7ff}/", "RegexpError: invalid Unicode range: /\\\\u{110000}/", "/\\\\u{10ffff}/", "RegexpError: invalid Unicode range: /\\\\u{d800 41}/"]	%w[\\ud800 \\udfff ퟿ ].map { |t|\n                (Regexp.new(t).in
 e4f68a2f5af719f7806b8131e1468888	[1, 2, 3]	def f(x,y,z=42)\n            [x,y,z]\n        end\n        \n\n        f(1,2
 e5006c1032b8867e3476898f3a7987dd	"not match (?-mix:regex)"	class Foo\n              def !~(other)\n                "not match #{
 e5100caa80d4f4b7d03f697cc77e1758	1	(0x8000_0000_0000_0000 + 39) <=> (0x8000_0000_0000_0000 + 39 + 0.0)
