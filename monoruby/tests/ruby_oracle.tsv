@@ -267,6 +267,7 @@
 0cace142624c1e6cb89f728eba20c289	[39, 39, 39, "zzz", [39, 39, "39"]]	def __f(x)\n          \n        a = x\n        b = a\n        s = "z" * 3\n 
 0cc1878ea30baafb813863f3ce8b91b6	[90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90]	def real(a, *r) = yield(a + r.sum)\n        def g(...) = real(...)\n     
 0cc1f2336599fa6eed61ad410e8c8162	[[100, 0, 0, 0, 101, 0, 0, 0, 102, 0, 0, 0], "UTF-32LE", "nil", "ASCII-8BIT", "ASCII-8BIT", "UTF-8", "nil", "EUC-JP", "US-ASCII", "nil", "UTF-8", "UTF-7", "nil", "ASCII-8BIT", "US-ASCII", "nil"]	__a = [];__a << ("def".b.encode("utf-32le").bytes);__a << (Encoding.compatible?(
+0cd10f2441abfbf79a04c7d602f850f3	[[[[142], [142], [142], [142]], ["UndefinedConversionError", [191], "UndefinedConversionError", "UndefinedConversionError"], [[167], [167], [167], [167]]], ["UndefinedConversionError", [[207, 128]], "UndefinedConversionError", [[196, 145]], "UndefinedConversionError", "UndefinedConversionError"], "UndefinedConversionError"]	[\n                %w[é Ω ß].map { |c| %w[macRoman macGreek macTur
 0cd2f3c1bf5250cf57e6f6309774939b	[3, -2, -2]	__a = [];__a << (7.ceildiv(3));__a << ((-7).ceildiv(3));__a << (7.ceildiv(-3));_
 0cebe4bdba51d916fafb772a61e36f04	42	x = 42\n            binding.local_variable_get(:x)\n            
 0cf52da8cfa0528dc273b8d510378aad	["not_myobj", false]	class MyObj\n          def !\n            "not_myobj"\n          end\n     
@@ -362,6 +363,7 @@
 11cc75ade577235c4ddea752c1daddb7	[[0, 4, 8]]	def cljc_leaf\n          ls = caller(0, 3).map { |s| s[/:(\\d+):/, 1].to_
 11d62cdecae23915bd6b9eaa6db1a63e	[["X", nil, nil], [[[:to_ary, true], :to_ary], 10, 20], ["W", nil], [7, 8], [1, 2, 3]]	__a = [];__a << (\n        class X\n          def respond_to?(m, inc = false); fal
 11d8f66614d6ef25a5a6c863d202cdb1	14	f = ->{ it * 2 }; f.call(7)
+11d90a1c977fb0504e5d267216240b2c	[[["macRoman", ["macRoman"], false, true], ["macCyrillic", ["macCyrillic"], false, true], ["macCentEuro", ["macCentEuro"], false, true], ["macCroatian", ["macCroatian"], false, true], ["macGreek", ["macGreek"], false, true], ["macIceland", ["macIceland"], false, true], ["macRomania", ["macRomania"], false, true], ["macThai", ["macThai"], false, true], ["macTurkish", ["macTurkish"], false, true], ["macUkraine", ["macUkraine"], false, true], ["MacJapanese", ["MacJapanese", "MacJapan"], false, true], ["CP949", ["CP949"], false, true]], ["macRoman", "macCyrillic", "macCentEuro", "macCroatian", "macGreek", "macIceland", "macRomania", "macThai", "macTurkish", "macUkraine", "MacJapanese", "CP949"], ["macRoman", "macCentEuro", "MacJapanese"], [false, "CP949", "EUC-KR"], "ArgumentError"]	names = %w[macRoman macCyrillic macCentEuro macCroatian macGreek 
 11e1e88fc746e03236aac26feef4e781	[".", "..", "a", "b"]	base = "/tmp/monoruby_dir_foreach_#{Process.pid}_#{rand(100000)}"\n 
 11ef7cfb28ed3fee72077d2729417664	nil	1.5 <=> 'a'
 12093eb7709b2f29a8934569c6ec1675	3	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.siz
@@ -369,6 +371,7 @@
 121e42097ec2d1d15351f0bc5ecc27d5	5.955087954701154e+22	r = 0.0\n        for i in 0..50\n          f = i * 1.1; g = i * 0.9; h = 
 123a397b90ab67e4ccd83ca59fc29237	2	def f(a = ($x = 2)); nil; end\n        f\n        $x\n        
 1244f1881c878c3dc6d1b1caed0b9f68	:jit	def base2; yield :s; end\n        def relay2; base2 { |s| yield(s) }; en
+125bec231e3fa89685a10bed9a1c3c45	[["Windows-1252", "Windows-1252", [142], 381], ["IBM437", "IBM437", [142], 196], ["ISO-8859-1", "ISO-8859-1", [142], 142], ["ISO-8859-5", "ISO-8859-5", [142], 142], ["macRoman", "macRoman", [142], 233]]	%w[Windows-1252 IBM437 ISO-8859-1 ISO-8859-5 macRoman].map do |n|
 127f186abd7a02d06bf77d6be26fc301	[false, true, 1, 1, [128, 122], [128, 122], [[128], [65], []], [128], [128]]	s = [0x80, 0x41].pack("C*").force_encoding("UTF-8")\n            n =
 12a9e585ad7e62c7384adb2ddbbe2374	["m", :r, :k, "m", :nm, 42, :frozen_recv, :meth, [1, 2], :nm_recv]	k = KeyError.new("m", receiver: :r, key: :k)\n            n = NameEr
 12ac69d0e3d7829ff39cbbddc61b3277	["elefant", 4]	S = Struct.new(:name, :legs, keyword_init: true)\n            \n\n    
@@ -1278,6 +1281,7 @@
 44e35e721c76737a34dd6351e19f068d	[1024, 243, 100000, 1, 16, -32, 1, 0, 4611686018427387904, 1267650600228229401496703205376, (1/8)]	def pow_a; 2 ** 10; end\n            def pow_b; 3 ** 5; end\n        
 44e57f818794e73382077def2e12f5bb	[[true, "A STRING", 8, false], 0, ["WeakRef::RefError", "Invalid Reference - probably recycled"], [true, "A STRING", "a string"]]	require "weakref"\n        res = []\n        strong = "a string"\n        
 44e68a42fc21864d3655bc7637e9b548	[1, 2]	c = Class.new { def foo(*a); a; end; ruby2_keywords "foo" }\n       
+44eb12998fcef22d990cb4cddb4ef0eb	[[[97, 98], [97, 98], [97, 98], "ConverterNotFoundError"], ["ConverterNotFoundError", "ConverterNotFoundError", "ConverterNotFoundError", "ConverterNotFoundError"], ["ConverterNotFoundError", "ConverterNotFoundError", "ConverterNotFoundError", "ConverterNotFoundError"], "ConverterNotFoundError"]	names = %w[macCentEuro macThai MacJapanese UTF-7]\n              [
 44ef14cc0315a5970badc2886bcac2ee	"mm:bar:[1, 2]"	class Foo\n              private\n              def method_missing(na
 44f1637501a6c7cf0fd3b221e1aa900d	6.466855489220472e+219	def fact(x)\n                if x <= 1.0 then\n                    1.
 44f5057dc05820dc78575222bbfe64a1	[604462909807314587353091, 5]	srand(2 ** 79 + 3)\n            prev = srand(1)\n            o = Obje
@@ -4525,6 +4529,7 @@ f4e806c9b81411016af3f2f2299cc395	[0, 42.0, 1.0e+307, 0.42, 0.42, 300000000000000
 f4ef37c05309c4811b6d78d2a1b7c9ce	[true, true]	S = Struct.new(:a, :b)\n            \n\n            a = S.new(1, "x")\n
 f4f168f8c67128f9b1bc02c608e68a9c	[[[false, 499], [true, 101]], true, true]	def probe(a, b) = (a == b)\n            res = []\n            300.tim
 f4f318253ef6eda2bd57d54a445dae64	[1, 2, [3, 4], 5, [6], 7, 8, [9, 10]]	f = ->((a, b, *c, d), (*e, f, g), (*h)) { [a, b, c, d, e, f, g, h] }\n  
+f4f4b2ff5edbdbca5544abd2091cd287	[["macRoman", 33517301], ["macCyrillic", 817192145], ["macCroatian", 62137496], ["macGreek", 1521897], ["macIceland", 382186372], ["macRomania", 11622602], ["macTurkish", 574590095], ["macUkraine", 576286665]]	digest = lambda do |cps|\n                cps.each_with_index.redu
 f503cf0577bba9b2bac2d97b6ed31ccc	[7, 28, 10, 6, 27, 7, 7, 6, 0, 0, 1, 0, 7, 7, 7]	__a = [];__a << ((1..10).step(Rational(3,2)).size);__a << ((1..10).step(Rational
 f526cf4fd15d081cc83ed51c5212359d	[true, true, true]	__a = [];__a << (Encoding::SHIFT_JIS.equal?(Encoding::Shift_JIS));__a << (0x8140
 f54339b0ac95ca56fd90790bbbaab021	[[1], [2], :missing, [:hi], :gone]	class R; def v = 1; end\n        first = [R.new].map(&:v)\n        class 
