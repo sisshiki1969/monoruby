@@ -665,7 +665,7 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
 /// not single-byte), which is what Onigmo's ctype tables are built on.
 pub(super) fn single_byte_char(enc: crate::value::Encoding, b: u8) -> Option<char> {
     if let Some(table) = single_byte_table(enc) {
-        return Some(table[(b & 0x7f) as usize]);
+        return table[(b & 0x7f) as usize];
     }
     if let crate::value::Encoding::Iso8859(n) = enc {
         // The ISO-8859 family keeps C1 controls at 0x80..=0x9F.
@@ -697,28 +697,85 @@ pub(super) fn single_byte_char(enc: crate::value::Encoding, b: u8) -> Option<cha
     Some(c)
 }
 
-/// High-half (0x80..=0xFF) Unicode mapping for single-byte encodings
-/// monoruby transcodes with an in-tree table because encoding_rs has
-/// no codec for them. Bytes < 0x80 are ASCII in all of these.
-pub(super) fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static [char; 128]> {
+/// High-half (0x80..=0xFF) Unicode mapping for the single-byte
+/// encodings monoruby transcodes with an in-tree table rather than
+/// through `encoding_rs`. `None` is a cell the encoding assigns no
+/// character to. Bytes < 0x80 are ASCII in all of these.
+pub(super) fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static [Option<char>; 128]> {
     /// IBM437 (the original IBM PC / DOS codepage).
-    const IBM437: [char; 128] = [
-        'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å', //
-        'É', 'æ', 'Æ', 'ô', 'ö', 'ò', 'û', 'ù', 'ÿ', 'Ö', 'Ü', '¢', '£', '¥', '₧', 'ƒ', //
-        'á', 'í', 'ó', 'ú', 'ñ', 'Ñ', 'ª', 'º', '¿', '⌐', '¬', '½', '¼', '¡', '«', '»', //
-        '░', '▒', '▓', '│', '┤', '╡', '╢', '╖', '╕', '╣', '║', '╗', '╝', '╜', '╛', '┐', //
-        '└', '┴', '┬', '├', '─', '┼', '╞', '╟', '╚', '╔', '╩', '╦', '╠', '═', '╬', '╧', //
-        '╨', '╤', '╥', '╙', '╘', '╒', '╓', '╫', '╪', '┘', '┌', '█', '▄', '▌', '▐', '▀', //
-        'α', 'ß', 'Γ', 'π', 'Σ', 'σ', 'µ', 'τ', 'Φ', 'Θ', 'Ω', 'δ', '∞', 'φ', 'ε', '∩', //
-        '≡', '±', '≥', '≤', '⌠', '⌡', '÷', '≈', '°', '∙', '·', '√', 'ⁿ', '²', '■',
-        '\u{A0}',
+    const IBM437: [Option<char>; 128] = [
+        Some('Ç'), Some('ü'), Some('é'), Some('â'), Some('ä'), Some('à'), Some('å'), Some('ç'), Some('ê'), Some('ë'), Some('è'), Some('ï'), Some('î'), Some('ì'), Some('Ä'), Some('Å'), //
+        Some('É'), Some('æ'), Some('Æ'), Some('ô'), Some('ö'), Some('ò'), Some('û'), Some('ù'), Some('ÿ'), Some('Ö'), Some('Ü'), Some('¢'), Some('£'), Some('¥'), Some('₧'), Some('ƒ'), //
+        Some('á'), Some('í'), Some('ó'), Some('ú'), Some('ñ'), Some('Ñ'), Some('ª'), Some('º'), Some('¿'), Some('⌐'), Some('¬'), Some('½'), Some('¼'), Some('¡'), Some('«'), Some('»'), //
+        Some('░'), Some('▒'), Some('▓'), Some('│'), Some('┤'), Some('╡'), Some('╢'), Some('╖'), Some('╕'), Some('╣'), Some('║'), Some('╗'), Some('╝'), Some('╜'), Some('╛'), Some('┐'), //
+        Some('└'), Some('┴'), Some('┬'), Some('├'), Some('─'), Some('┼'), Some('╞'), Some('╟'), Some('╚'), Some('╔'), Some('╩'), Some('╦'), Some('╠'), Some('═'), Some('╬'), Some('╧'), //
+        Some('╨'), Some('╤'), Some('╥'), Some('╙'), Some('╘'), Some('╒'), Some('╓'), Some('╫'), Some('╪'), Some('┘'), Some('┌'), Some('█'), Some('▄'), Some('▌'), Some('▐'), Some('▀'), //
+        Some('α'), Some('ß'), Some('Γ'), Some('π'), Some('Σ'), Some('σ'), Some('µ'), Some('τ'), Some('Φ'), Some('Θ'), Some('Ω'), Some('δ'), Some('∞'), Some('φ'), Some('ε'), Some('∩'), //
+        Some('≡'), Some('±'), Some('≥'), Some('≤'), Some('⌠'), Some('⌡'), Some('÷'), Some('≈'), Some('°'), Some('∙'), Some('·'), Some('√'), Some('ⁿ'), Some('²'), Some('■'),
+        Some('\u{A0}'),
     ];
-    if let crate::value::Encoding::NamedByte(_) = enc {
-        if enc.name() == "IBM437" {
-            return Some(&IBM437);
+    /// ISO-8859-1 (Latin-1) *is* `U+0000..=U+00FF`, C1 controls
+    /// included, so its high half is the identity map. `encoding_rs`
+    /// has no codec for it: the WHATWG `iso-8859-1` label resolves to
+    /// windows-1252, which puts printable characters in the C1 range
+    /// (#1508).
+    const ISO8859_1: [Option<char>; 128] = {
+        let mut t = [None; 128];
+        let mut i = 0;
+        while i < 128 {
+            t[i] = char::from_u32(0x80 + i as u32);
+            i += 1;
         }
+        t
+    };
+
+    /// ISO-8859-9 (Latin-5, Turkish) is Latin-1 with six Icelandic
+    /// letters swapped for Turkish ones. The WHATWG `iso-8859-9` label
+    /// is windows-1254, which also replaces the whole C1 range.
+    const ISO8859_9: [Option<char>; 128] = {
+        let mut t = ISO8859_1;
+        t[0xD0 - 0x80] = Some('\u{11E}'); // LATIN CAPITAL LETTER G WITH BREVE
+        t[0xDD - 0x80] = Some('\u{130}'); // LATIN CAPITAL LETTER I WITH DOT ABOVE
+        t[0xDE - 0x80] = Some('\u{15E}'); // LATIN CAPITAL LETTER S WITH CEDILLA
+        t[0xF0 - 0x80] = Some('\u{11F}'); // LATIN SMALL LETTER G WITH BREVE
+        t[0xFD - 0x80] = Some('\u{131}'); // LATIN SMALL LETTER DOTLESS I
+        t[0xFE - 0x80] = Some('\u{15F}'); // LATIN SMALL LETTER S WITH CEDILLA
+        t
+    };
+
+    /// ISO-8859-11 (Thai): TIS-620 with NBSP, so `0x80..=0xA0` stay C1
+    /// and NBSP while `0xA1..=0xFB` are Thai — with eight cells
+    /// (`0xDB..=0xDE`, `0xFC..=0xFF`) that are assigned no character at
+    /// all, and which CRuby refuses as an undefined conversion rather
+    /// than as invalid bytes. The WHATWG `iso-8859-11` label is
+    /// windows-874, which fills five of the C1 slots in.
+    const ISO8859_11: [Option<char>; 128] = [
+        Some('\u{80}'), Some('\u{81}'), Some('\u{82}'), Some('\u{83}'), Some('\u{84}'), Some('\u{85}'), Some('\u{86}'), Some('\u{87}'),
+        Some('\u{88}'), Some('\u{89}'), Some('\u{8A}'), Some('\u{8B}'), Some('\u{8C}'), Some('\u{8D}'), Some('\u{8E}'), Some('\u{8F}'),
+        Some('\u{90}'), Some('\u{91}'), Some('\u{92}'), Some('\u{93}'), Some('\u{94}'), Some('\u{95}'), Some('\u{96}'), Some('\u{97}'),
+        Some('\u{98}'), Some('\u{99}'), Some('\u{9A}'), Some('\u{9B}'), Some('\u{9C}'), Some('\u{9D}'), Some('\u{9E}'), Some('\u{9F}'),
+        Some('\u{A0}'), Some('\u{E01}'), Some('\u{E02}'), Some('\u{E03}'), Some('\u{E04}'), Some('\u{E05}'), Some('\u{E06}'), Some('\u{E07}'),
+        Some('\u{E08}'), Some('\u{E09}'), Some('\u{E0A}'), Some('\u{E0B}'), Some('\u{E0C}'), Some('\u{E0D}'), Some('\u{E0E}'), Some('\u{E0F}'),
+        Some('\u{E10}'), Some('\u{E11}'), Some('\u{E12}'), Some('\u{E13}'), Some('\u{E14}'), Some('\u{E15}'), Some('\u{E16}'), Some('\u{E17}'),
+        Some('\u{E18}'), Some('\u{E19}'), Some('\u{E1A}'), Some('\u{E1B}'), Some('\u{E1C}'), Some('\u{E1D}'), Some('\u{E1E}'), Some('\u{E1F}'),
+        Some('\u{E20}'), Some('\u{E21}'), Some('\u{E22}'), Some('\u{E23}'), Some('\u{E24}'), Some('\u{E25}'), Some('\u{E26}'), Some('\u{E27}'),
+        Some('\u{E28}'), Some('\u{E29}'), Some('\u{E2A}'), Some('\u{E2B}'), Some('\u{E2C}'), Some('\u{E2D}'), Some('\u{E2E}'), Some('\u{E2F}'),
+        Some('\u{E30}'), Some('\u{E31}'), Some('\u{E32}'), Some('\u{E33}'), Some('\u{E34}'), Some('\u{E35}'), Some('\u{E36}'), Some('\u{E37}'),
+        Some('\u{E38}'), Some('\u{E39}'), Some('\u{E3A}'), None, None, None, None, Some('\u{E3F}'),
+        Some('\u{E40}'), Some('\u{E41}'), Some('\u{E42}'), Some('\u{E43}'), Some('\u{E44}'), Some('\u{E45}'), Some('\u{E46}'), Some('\u{E47}'),
+        Some('\u{E48}'), Some('\u{E49}'), Some('\u{E4A}'), Some('\u{E4B}'), Some('\u{E4C}'), Some('\u{E4D}'), Some('\u{E4E}'), Some('\u{E4F}'),
+        Some('\u{E50}'), Some('\u{E51}'), Some('\u{E52}'), Some('\u{E53}'), Some('\u{E54}'), Some('\u{E55}'), Some('\u{E56}'), Some('\u{E57}'),
+        Some('\u{E58}'), Some('\u{E59}'), Some('\u{E5A}'), Some('\u{E5B}'), None, None, None, None,
+    ];
+
+    use crate::value::Encoding as E;
+    match enc {
+        E::Iso8859(1) => Some(&ISO8859_1),
+        E::Iso8859(9) => Some(&ISO8859_9),
+        E::Iso8859(11) => Some(&ISO8859_11),
+        E::NamedByte(_) if enc.name() == "IBM437" => Some(&IBM437),
+        _ => None,
     }
-    None
 }
 
 /// Unicode → JIS X 0212 (the three-byte `0x8F` plane of EUC-JP).
@@ -1032,6 +1089,27 @@ fn pivot_chain(src_enc: crate::value::Encoding) -> String {
 /// `U+3042 from UTF-8 to EUC-JP`; anything else runs through the UTF-8
 /// pivot, and CRuby then spells the whole chain out —
 /// `U+3042 to IBM437 in conversion from EUC-JP to UTF-8 to IBM437`.
+/// [`undefined_char_message`] for a *byte* the source encoding assigns
+/// a character to that Unicode has nowhere to put — ISO-8859-11's eight
+/// unassigned Thai cells are the only ones here. CRuby quotes the byte
+/// where it would otherwise name a codepoint.
+fn undefined_byte_message(
+    b: u8,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> String {
+    let quoted = quote_error_bytes(&[b]);
+    if dst_enc == crate::value::Encoding::Utf8 {
+        format!("{quoted} from {} to {}", src_enc.name(), dst_enc.name())
+    } else {
+        format!(
+            "{quoted} to UTF-8 in conversion from {} to UTF-8 to {}",
+            src_enc.name(),
+            dst_enc.name()
+        )
+    }
+}
+
 fn undefined_char_message(
     c: char,
     src_enc: crate::value::Encoding,
@@ -1124,27 +1202,49 @@ fn jp_live_throughout(fx: &JpFixup, bytes: &[u8]) -> bool {
 
 /// Decode a single-byte-table encoding into a Rust `String`. Every
 /// byte maps (the tables are total), so this cannot fail.
-fn table_decode(bytes: &[u8], table: &[char; 128]) -> String {
-    bytes
-        .iter()
-        .map(|&b| {
-            if b < 0x80 {
-                b as char
-            } else {
-                table[(b - 0x80) as usize]
-            }
-        })
-        .collect()
+/// Decode through a single-byte table. `Err(b)` is a byte the encoding
+/// assigns no character to — CRuby calls that an *undefined
+/// conversion*, not an invalid byte, since the byte is a perfectly good
+/// character of the source that Unicode has nowhere to put.
+fn table_decode(
+    bytes: &[u8],
+    table: &[Option<char>; 128],
+) -> std::result::Result<String, (usize, u8)> {
+    let mut out = String::with_capacity(bytes.len());
+    for (i, &b) in bytes.iter().enumerate() {
+        if b < 0x80 {
+            out.push(b as char);
+        } else {
+            out.push(table[(b - 0x80) as usize].ok_or((i, b))?);
+        }
+    }
+    Ok(out)
+}
+
+/// [`table_decode`] with `undef: :replace`: an unassigned byte becomes
+/// the replacement rather than an error.
+fn table_decode_lossy(bytes: &[u8], table: &[Option<char>; 128], replace: &str) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    for &b in bytes {
+        if b < 0x80 {
+            out.push(b as char);
+        } else if let Some(c) = table[(b - 0x80) as usize] {
+            out.push(c);
+        } else {
+            out.push_str(replace);
+        }
+    }
+    out
 }
 
 /// Encode `s` through a single-byte table. Returns `Err(c)` on the
 /// first character the encoding cannot represent.
-fn table_encode(s: &str, table: &[char; 128]) -> std::result::Result<Vec<u8>, char> {
+fn table_encode(s: &str, table: &[Option<char>; 128]) -> std::result::Result<Vec<u8>, char> {
     let mut out = Vec::with_capacity(s.len());
     for c in s.chars() {
         if c.is_ascii() {
             out.push(c as u8);
-        } else if let Some(pos) = table.iter().position(|&t| t == c) {
+        } else if let Some(pos) = table.iter().position(|&t| t == Some(c)) {
             out.push(0x80 + pos as u8);
         } else {
             return Err(c);
@@ -1555,7 +1655,16 @@ pub(super) fn transcode_bytes_with_opts(
             }
             decoded
         } else if let Some(table) = single_byte_table(src_enc) {
-            table_decode(src_bytes, table)
+            if opts.undef_replace {
+                table_decode_lossy(src_bytes, table, &opts.replace_str(dst_enc))
+            } else {
+                table_decode(src_bytes, table).map_err(|(_, b)| {
+                    MonorubyErr::undefined_conversion_error(
+                        store,
+                        undefined_byte_message(b, src_enc, dst_enc),
+                    )
+                })?
+            }
         } else if let Some(src_rs) = encoding_to_rs(src_enc) {
             let (decoded, decode_err) = if let Some(fx) = jp_fixup(src_enc) {
                 let d = jp_decode(fx, src_bytes, None);
@@ -1622,12 +1731,21 @@ pub(super) fn transcode_bytes_with_opts(
         let (s, e) = decode_utf16_32(src_bytes, src_enc);
         (std::borrow::Cow::Owned(s), e)
     } else if let Some(table) = single_byte_table(src_enc) {
-        // Table encodings are total over the byte range — no invalid
-        // sequences possible.
-        (
-            std::borrow::Cow::Owned(table_decode(src_bytes, table)),
-            false,
-        )
+        // A table encoding has a character for every byte it assigns
+        // one to, so no byte sequence in it is *invalid* — but a cell
+        // the encoding leaves unassigned has no character to convert,
+        // which is an undefined conversion.
+        let decoded = if opts.undef_replace {
+            table_decode_lossy(src_bytes, table, &opts.replace_str(dst_enc))
+        } else {
+            table_decode(src_bytes, table).map_err(|(_, b)| {
+                MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_byte_message(b, src_enc, dst_enc),
+                )
+            })?
+        };
+        (std::borrow::Cow::Owned(decoded), false)
     } else {
         let src_rs = match encoding_to_rs(src_enc) {
             Some(s) => s,
@@ -3433,6 +3551,47 @@ struct ErrMeta {
     readagain_bytes: Vec<u8>,
 }
 
+/// How many bytes of `src_bytes` decode to the first `pivot_bytes`
+/// bytes of the UTF-8 pivot. Used where a conversion fails partway
+/// through the *encode* half and only the source up to there counts as
+/// consumed.
+///
+/// A prefix of the source decodes to a prefix of the pivot, and longer
+/// never decodes to shorter, so the shortest source prefix that reaches
+/// `pivot_bytes` is a binary search — a handful of decodes rather than
+/// one per character.
+fn pivot_prefix_consumed(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    pivot_bytes: usize,
+    opts: &TranscodeOpts,
+) -> usize {
+    if pivot_bytes == 0 {
+        return 0;
+    }
+    let decoded_len = |n: usize| -> usize {
+        let (_, _, out, _) = stream_convert(
+            &src_bytes[..n],
+            src_enc,
+            crate::value::Encoding::Utf8,
+            None,
+            true,
+            opts,
+        );
+        out.len()
+    };
+    let (mut lo, mut hi) = (0usize, src_bytes.len());
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if decoded_len(mid) < pivot_bytes {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 /// The outcome to report for a source that does not decode, as the
 /// destinations `encoding_rs` has no encoder for (`US-ASCII`, BINARY)
 /// need it: they walk characters rather than bytes, so the bytes that
@@ -3491,6 +3650,101 @@ fn stream_convert(
             StreamConvertResult::Finished
         };
         return (result, limit, src_bytes[..limit].to_vec(), ErrMeta::default());
+    }
+    // A single-byte table encoding on either side: `encoding_rs` has
+    // no codec for these, or resolves their label to a Windows code
+    // page that is not the same encoding (#1508). They are stateless
+    // and one byte per character, so the pivot is built here and the
+    // rest of the pair goes through the ordinary path.
+    if let Some(table) = single_byte_table(src_enc) {
+        let pivot = if opts.undef_replace {
+            table_decode_lossy(src_bytes, table, &opts.replace_str(dst_enc))
+        } else {
+            match table_decode(src_bytes, table) {
+                Ok(p) => p,
+                Err((at, b)) => {
+                    // Everything up to and including the unassigned
+                    // byte is consumed — one byte is one character
+                    // here — and what converted before it still comes
+                    // out, as CRuby's incremental transcoder has it.
+                    let (_, _, out, _) =
+                        stream_convert(&src_bytes[..at], src_enc, dst_enc, max_dst_bytes, false, opts);
+                    return (
+                        StreamConvertResult::UndefinedConversion,
+                        at + 1,
+                        out,
+                        ErrMeta {
+                            error_bytes: vec![b],
+                            readagain_bytes: vec![],
+                        },
+                    );
+                }
+            }
+        };
+        let (result, pivot_consumed, out, meta) = stream_convert(
+            pivot.as_bytes(),
+            E::Utf8,
+            dst_enc,
+            max_dst_bytes,
+            partial_input,
+            opts,
+        );
+        // One source byte per pivot character, so the count converts
+        // back by counting characters rather than bytes.
+        let consumed = pivot[..pivot_consumed].chars().count();
+        return (result, consumed, out, meta);
+    }
+    if let Some(table) = single_byte_table(dst_enc) {
+        // Decode with the ordinary path, then map the pivot through the
+        // table: one destination byte per character, so a destination
+        // cap falls on a character boundary by construction.
+        let (result, consumed, pivot, meta) =
+            stream_convert(src_bytes, src_enc, E::Utf8, None, partial_input, opts);
+        // Whatever decoded before the decode half gave up still has to
+        // come out: `#primitive_convert` appends it to the destination
+        // and *then* reports the error.
+        let text = String::from_utf8_lossy(&pivot);
+        let mut out = Vec::with_capacity(text.len());
+        for (at, c) in text.char_indices() {
+            let mut buf = [0u8; 4];
+            match table_encode(c.encode_utf8(&mut buf), table) {
+                Ok(bytes) => out.extend_from_slice(&bytes),
+                Err(_) if opts.undef_replace => {
+                    let repl = opts.replace_str(dst_enc);
+                    match table_encode(&repl, table) {
+                        Ok(bytes) => out.extend_from_slice(&bytes),
+                        Err(_) => out.push(b'?'),
+                    }
+                }
+                Err(c) => {
+                    // Everything up to and including the offending
+                    // character is consumed — CRuby leaves only what
+                    // follows it in `src`. Re-decoding with the pivot
+                    // capped there is how many source bytes that is,
+                    // which the ordinary path already counts for a
+                    // capped destination.
+                    let upto = at + c.len_utf8();
+                    return (
+                        StreamConvertResult::UndefinedConversion,
+                        pivot_prefix_consumed(src_bytes, src_enc, upto, opts),
+                        out,
+                        ErrMeta {
+                            error_bytes: c.to_string().into_bytes(),
+                            readagain_bytes: vec![],
+                        },
+                    );
+                }
+            }
+            if let Some(max) = max_dst_bytes
+                && out.len() > max
+            {
+                out.truncate(max);
+                return (StreamConvertResult::DestinationBufferFull, consumed, out, ErrMeta::default());
+            }
+        }
+        // The pivot mapped cleanly, so the decode half's verdict — a
+        // clean finish or the error it stopped on — is the answer.
+        return (result, consumed, out, meta);
     }
     // US-ASCII / ASCII-8BIT destination: `encoding_rs` has no
     // encoder for these. Decode the source to UTF-8 *without*
@@ -6611,6 +6865,77 @@ mod tests {
         // search_convpath report the UTF-8 pivot and decorators.
         crate::tests::run_test_once(
             r##"(t=lambda{|&b| begin; b.call; rescue Exception => e; [e.class, e.message]; end}; r=[]; ec=Encoding::Converter.new("utf-8","iso-8859-1"); r << t.call{ec.convert("\xf1abcd")} << ec.primitive_errinfo << ec.last_error.class; ec2=Encoding::Converter.new("iso-8859-1","Big5"); r << t.call{ec2.convert("\xE9")}[0] << ec2.last_error.message.include?("from ISO-8859-1 to UTF-8 to Big5"); ec3=Encoding::Converter.new("EUC-JP","ISO-8859-1"); r << ec3.convert("\xa4") << t.call{ec3.finish} << ec3.primitive_errinfo; r << Encoding::Converter.new("ASCII","UTF-8").convpath.map{|p| p.map(&:name)} << Encoding::Converter.new("ascii","Big5").convpath.map{|p| p.map(&:name)}; r << Encoding::Converter.new("iso-8859-1","EUC-JP",crlf_newline: true).convpath.last; r << Encoding::Converter.search_convpath("ISO-8859-1","EUC-JP",crlf_newline: true).last; r << Encoding::InvalidByteSequenceError.new.incomplete_input?; r)"##,
+        );
+    }
+
+    #[test]
+    fn iso8859_tables_are_the_iso_ones() {
+        // `encoding_rs` resolves `iso-8859-1` / `-9` / `-11` the WHATWG
+        // way, onto windows-1252 / -1254 / -874. CRuby uses the real
+        // ISO tables, so all three needed one of their own (#1508).
+        run_test_once(
+            r#"(f=->(enc){ (0x80..0xff).map { |b|
+                 s = [b].pack("C*").dup.force_encoding(enc)
+                 begin; s.encode("UTF-8").ord; rescue => e; e.class.to_s; end } }; [
+              f.call("ISO-8859-1"), f.call("ISO-8859-9"), f.call("ISO-8859-11"),
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn iso8859_round_trips_and_refuses_what_it_has_no_cell_for() {
+        // The encode direction reads the same tables backwards, and
+        // ISO-8859-11's eight unassigned cells are an *undefined
+        // conversion* — the byte is a character of the source that
+        // Unicode has nowhere to put — not an invalid byte.
+        run_test_once(
+            r#"(t=->(&b){ begin; b.call; rescue => e; [e.class.to_s, e.message]; end }
+               g=->(s, enc){ s.dup.force_encoding(enc) }; [
+              t.call { g.call("\xDB", "ISO-8859-11").encode("UTF-8") },
+              t.call { g.call("\xDB", "ISO-8859-11").encode("EUC-JP") },
+              t.call { g.call("a\xDBb", "ISO-8859-11").encode("UTF-8", undef: :replace).bytes },
+              t.call { g.call("a\xDBb", "ISO-8859-11").encode("UTF-8", undef: :replace, replace: "?") },
+              t.call { g.call("\xDB", "ISO-8859-11").valid_encoding? },
+              t.call { "\u{11E}".encode("ISO-8859-9").bytes },
+              t.call { "\u{E01}".encode("ISO-8859-11").bytes },
+              t.call { "\u{FF}".encode("ISO-8859-1").bytes },
+              t.call { "\u{201A}".encode("ISO-8859-1") },
+              t.call { "\u{100}".encode("ISO-8859-1") },
+              t.call { (0x80..0xff).map { |b|
+                         s = [b].pack("C*").dup.force_encoding("ISO-8859-1")
+                         s.encode("UTF-8").encode("ISO-8859-1").bytes[0] } },
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn iso8859_converter_matches_the_one_shot_path() {
+        // `Encoding::Converter` went straight to `encoding_rs`, so it
+        // kept the Windows readings after `String#encode` stopped using
+        // them. It consults the same tables now, in both directions,
+        // and still reports what it consumed the way CRuby does.
+        run_test_once(
+            r#"(t=->(&b){ begin; b.call; rescue => e; [e.class.to_s, e.message]; end }
+               c=->(src, dst, s){ Encoding::Converter.new(src, dst)
+                 .convert(s.dup.force_encoding(src)).bytes }; [
+              t.call { c.call("ISO-8859-1", "UTF-8", "\x82\x80\xff") },
+              t.call { c.call("ISO-8859-9", "UTF-8", "\xD0\xDD\xFE") },
+              t.call { c.call("ISO-8859-11", "UTF-8", "\xA1\xFB") },
+              t.call { c.call("UTF-8", "ISO-8859-1", "\u{FF}") },
+              t.call { c.call("UTF-8", "ISO-8859-9", "\u{11E}") },
+              t.call { c.call("ISO-8859-1", "ISO-8859-9", "\xD0") },
+              # The bytes after an undefined character stay in `src`,
+              # and what converted before it still reaches `dst`.
+              t.call { ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")
+                       s = "\u{9878}abcd".dup; d = "".dup
+                       [ec.primitive_convert(s, d), s, d, ec.primitive_errinfo] },
+              # A source byte the encoding assigns nothing to: the
+              # classification and what it consumes are CRuby's; the
+              # message the converter builds for it is #1511.
+              t.call { ec = Encoding::Converter.new("ISO-8859-11", "UTF-8")
+                       s = "a\xDBb".dup.force_encoding("ISO-8859-11"); d = "".dup
+                       [ec.primitive_convert(s, d), s.bytes, d.bytes] },
+            ])"#,
         );
     }
 
