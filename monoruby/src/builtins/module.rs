@@ -2558,8 +2558,19 @@ fn public_class_method(
 fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     if let Some(module) = self_val.is_class_or_module() {
+        // An anonymous class/module has no name to give, so
+        // `get_class_name` answers the `#<Class:0x…>` rendering
+        // instead — which CRuby builds with `rb_sprintf`, not with the
+        // name builder, and tags accordingly (#1494). A singleton
+        // class renders as `#<Class:Foo>` and is *not* one of those:
+        // `rb_mod_to_s` opens that buffer with `rb_usascii_str_new`
+        // and appends the attached object to it.
         let class_name = globals.store.get_class_name(module.id());
-        Ok(Value::string_usascii(class_name))
+        Ok(if module.is_singleton().is_some() {
+            Value::string_usascii(class_name)
+        } else {
+            Value::string_name_or_repr(class_name)
+        })
     } else {
         let class_name = globals.store.get_class_name(self_val.class());
         Ok(Value::string(format!(
@@ -3301,16 +3312,19 @@ fn refinement_tos(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let info = &globals.store[class_id];
-    let s = match (info.refined_class(), info.refinement_owner()) {
-        (Some(refined), Some(owner)) => format!(
+    // `rb_mod_to_s` opens the refinement form's buffer with
+    // `rb_usascii_str_new`; a Refinement with nothing to say falls
+    // through to the anonymous-class rendering, which is
+    // `rb_sprintf`'s (#1494).
+    Ok(match (info.refined_class(), info.refinement_owner()) {
+        (Some(refined), Some(owner)) => Value::string_usascii(format!(
             "#<refinement:{}@{}>",
             globals.store.get_class_name(refined),
             globals.store.get_class_name(owner)
-        ),
+        )),
         // `Refinement.new` — a Refinement that refines nothing.
-        _ => format!("#<Refinement:0x{:016x}>", lfp.self_val().id()),
-    };
-    Ok(Value::string(s))
+        _ => Value::string_sprintf(format!("#<Refinement:0x{:016x}>", lfp.self_val().id())),
+    })
 }
 
 /// `Refinement#include` / `#prepend` — always a TypeError. A refinement

@@ -804,7 +804,7 @@ fn weakkeymap_inspect(
     let name = globals
         .store
         .get_class_name(self_val.real_class(&globals.store).id());
-    Ok(Value::string(format!(
+    Ok(Value::string_sprintf(format!(
         "#<{name}:0x{:016x} size={}>",
         self_val.id(),
         map_of(globals, &self_val)?.len()
@@ -847,12 +847,12 @@ fn weakmap_inspect(
         .get_class_name(self_val.real_class(&globals.store).id());
     let head = format!("#<{name}:0x{:016x}", self_val.id());
     if pairs.is_empty() {
-        return Ok(Value::string(format!("{head}>")));
+        return Ok(Value::string_sprintf(format!("{head}>")));
     }
     let body = pairs
         .iter()
         .map(|(k, v)| format!("{} => {}", plain_inspect(globals, *k), plain_inspect(globals, *v)))
         .collect::<Vec<_>>()
         .join(", ");
-    Ok(Value::string(format!("{head}: {body}>")))
+    Ok(Value::string_sprintf(format!("{head}: {body}>")))
 }

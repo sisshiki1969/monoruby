@@ -14,6 +14,14 @@ module Kernel
 
   private
 
+  # Tag a `#<…>` rendering the way CRuby's `rb_sprintf` leaves it: that
+  # buffer starts with *no* encoding, so a rendering that came out
+  # all-ASCII is handed back tagged ASCII-8BIT, while one carrying a
+  # non-ASCII name or path keeps that text's own encoding (#1494).
+  def __sprintf_repr(s)
+    s.ascii_only? ? s.b : s
+  end
+
   # How a type error names an argument (CRuby's rb_builtin_class_name):
   # nil / true / false by keyword, anything else by its class — "no
   # implicit conversion of nil into String", "wrong argument type true

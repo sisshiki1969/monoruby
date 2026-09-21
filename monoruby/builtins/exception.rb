@@ -62,7 +62,7 @@ class Exception
     if s.nil? || s.empty?
       self.class.name || self.class.to_s
     else
-      "#<#{self.class}: #{s}>"
+      __sprintf_repr("#<#{self.class}: #{s}>")
     end
   end
 

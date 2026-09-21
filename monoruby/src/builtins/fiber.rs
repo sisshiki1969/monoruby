@@ -752,7 +752,7 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         Some(loc) => format!("#<Fiber:0x{:016x} {} ({})>", obj.id(), loc, state),
         None => format!("#<Fiber:0x{:016x} ({})>", obj.id(), state),
     };
-    Ok(Value::string(s))
+    Ok(Value::string_sprintf(s))
 }
 
 #[cfg(test)]

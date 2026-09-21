@@ -430,7 +430,7 @@ class Enumerator
 
     def inspect
       src = @__lazy_source
-      return "#<#{self.class}: uninitialized>" if src.nil? && @__lazy_method.nil?
+      return __sprintf_repr("#<#{self.class}: uninitialized>") if src.nil? && @__lazy_method.nil?
       s = "#<#{self.class}: #{src.inspect}"
       if @__lazy_method
         s = s + ":#{@__lazy_method}"
@@ -439,7 +439,7 @@ class Enumerator
           s = s + "(#{args.map { |a| a.inspect }.join(', ')})"
         end
       end
-      s + ">"
+      __sprintf_repr(s + ">")
     end
     alias to_s inspect
   end

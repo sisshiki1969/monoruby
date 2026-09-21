@@ -1185,8 +1185,8 @@ class Enumerator
     end
 
     def inspect
-      return "#<Enumerator::Chain: uninitialized>" if @enums.nil?
-      "#<Enumerator::Chain: #{@enums.inspect}>"
+      return __sprintf_repr("#<Enumerator::Chain: uninitialized>") if @enums.nil?
+      __sprintf_repr("#<Enumerator::Chain: #{@enums.inspect}>")
     end
     alias to_s inspect
   end

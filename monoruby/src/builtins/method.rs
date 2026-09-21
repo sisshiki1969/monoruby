@@ -389,7 +389,7 @@ fn inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         method.func_id(),
         method.method_missing_name().is_some(),
     );
-    Ok(Value::string(s))
+    Ok(Value::string_sprintf(s))
 }
 
 /// CRuby's `#<Method: …#name(original)>` form: when a method was
@@ -433,7 +433,7 @@ fn uinspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         method.func_id(),
         method.method_missing_name().is_some(),
     );
-    Ok(Value::string(s))
+    Ok(Value::string_sprintf(s))
 }
 
 ///
@@ -879,6 +879,35 @@ fn bind_call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn method_inspect_signature_shapes() {
+        // A method with bytecode renders its parameters by name; one
+        // without is CRuby's C function, whose definition records an
+        // argument *count*, so it renders `argc` anonymous required
+        // parameters or a lone rest for the variadic `argc == -1`. A
+        // `(...)` method is remembered as forwarding rather than shown
+        // as the rest/kwrest/block it lowers to (#1494).
+        run_test_once(
+            r#"
+              def fa(x, y = 1, *r, z, k:, k2: 2, **kw, &b); end
+              def fb(...); end
+              def fc; end
+              class Fd; attr_accessor :x; end
+              [
+                method(:fa).inspect.sub(%r{ [^ ]*:\d+>$}, ">"),
+                method(:fb).inspect.sub(%r{ [^ ]*:\d+>$}, ">"),
+                method(:fc).inspect.sub(%r{ [^ ]*:\d+>$}, ">"),
+                1.method(:to_s).inspect,
+                "".method(:sub).inspect,
+                Integer.instance_method(:+).inspect,
+                Fd.instance_method(:x).inspect.sub(%r{ [^ ]*:\d+>$}, ">"),
+                Fd.instance_method(:x=).inspect.sub(%r{ [^ ]*:\d+>$}, ">"),
+              ]
+            "#,
+        );
+    }
+
     #[test]
     fn call1() {
         run_test_with_prelude(

@@ -158,12 +158,12 @@ class Enumerator
 
     def inspect
       enums = @enums
-      return "#<#{self.class}: uninitialized>" if enums.nil?
+      return __sprintf_repr("#<#{self.class}: uninitialized>") if enums.nil?
       guard = (Thread.current[:__product_inspect] ||= [])
-      return "#<#{self.class}: ...>" if guard.include?(object_id)
+      return __sprintf_repr("#<#{self.class}: ...>") if guard.include?(object_id)
       guard.push(object_id)
       begin
-        "#<#{self.class}: #{enums.inspect}>"
+        __sprintf_repr("#<#{self.class}: #{enums.inspect}>")
       ensure
         guard.pop
       end

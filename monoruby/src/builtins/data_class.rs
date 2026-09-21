@@ -183,7 +183,7 @@ fn data_inspect(
     let mut set = std::collections::HashSet::new();
     set.insert(self_val.id());
     let s = render_data(store, self_val, &mut set)?;
-    Ok(Value::string(s))
+    Ok(Value::string_sprintf(s))
 }
 
 /// The label a self-referential `STRUCT`-typed value renders as:

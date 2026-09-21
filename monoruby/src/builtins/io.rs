@@ -1869,7 +1869,7 @@ fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn io_inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let name = globals.store.get_class_name(self_.class());
-    Ok(Value::string(format!(
+    Ok(Value::string_sprintf(format!(
         "#<{name}:{}>",
         self_.as_io_inner().kind().descriptor()
     )))

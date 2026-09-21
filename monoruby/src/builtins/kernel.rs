@@ -5369,13 +5369,8 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     };
     // The names and literals CRuby renders here come from
     // `rb_usascii_str_new`; the `#<Class:0x…>` form comes from
-    // `rb_sprintf` instead, and is tagged ASCII-8BIT there — a
-    // difference of its own, left as it is.
-    Ok(if s.starts_with("#<") {
-        Value::string(s)
-    } else {
-        Value::string_usascii(s)
-    })
+    // `rb_sprintf` instead, which tags it ASCII-8BIT (#1494).
+    Ok(Value::string_name_or_repr(s))
 }
 
 ///
@@ -5570,7 +5565,30 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         || globals.store.get_ivar(self_val, IdentId::_NAME).is_some()
     {
         let s = self_val.inspect(&globals.store);
-        return Ok(crate::builtins::encoding::inspect_result(globals, s));
+        // A Regexp's rendering carries the *regexp's* own encoding,
+        // whatever the result encoding is: `rb_reg_desc` escapes what
+        // the result encoding cannot show, as any `#inspect` does, but
+        // associates the pattern's encoding rather than the result's,
+        // so `/ab/.inspect` is US-ASCII and `/\xff/n.inspect` is
+        // ASCII-8BIT under every locale (#1494).
+        if let Some(re) = self_val.is_regex() {
+            let text = crate::builtins::encoding::inspect_embedded(globals, s);
+            let enc = re.declared_encoding();
+            // A pattern that is not UTF-8 renders lossily (#1516), so
+            // its bytes are the pattern's own only once escaping has
+            // left them ASCII — tagging them otherwise would build a
+            // broken string.
+            if text.is_ascii() || enc == crate::value::Encoding::Utf8 {
+                return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                    text.as_bytes(),
+                    enc,
+                )));
+            }
+            return Ok(crate::builtins::encoding::inspect_result(globals, text));
+        }
+        return Ok(crate::builtins::encoding::inspect_or_sprintf_result(
+            globals, s,
+        ));
     }
 
     // CRuby consults the (private) `instance_variables_to_inspect`
@@ -5611,10 +5629,14 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let mut s = format!("#<{}:0x{:016x}", class_name, self_val.id());
     for (i, (name, val)) in chosen.iter().enumerate() {
         s += if i == 0 { " " } else { ", " };
-        s += &format!("{name}={}", val.inspect(&globals.store));
+        // Only the values are escaped, and each on its own: the
+        // rendering around them is `rb_sprintf`'s, which CRuby hands
+        // back as it built it.
+        let text = crate::builtins::encoding::inspect_embedded(globals, val.inspect(&globals.store));
+        s += &format!("{name}={text}");
     }
     s += ">";
-    Ok(crate::builtins::encoding::inspect_result(globals, s))
+    Ok(Value::string_sprintf(s))
 }
 
 /// `rb_inspect`: dispatch `#inspect` and render what it answered the
@@ -6206,6 +6228,145 @@ fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn sprintf_renderings_are_ascii_8bit() {
+        // The `#<…>` form an object falls back on when it has no
+        // better `#to_s` comes from `rb_sprintf`, whose buffer starts
+        // with no encoding — so an all-ASCII rendering comes back
+        // ASCII-8BIT, where a *name* (`rb_usascii_str_new`) is
+        // US-ASCII (#1494).
+        run_test_once(
+            r#"
+              class Zt; end
+              St = Struct.new(:a)
+              Et = Class.new(StandardError)
+              o = Zt.new
+              o.instance_variable_set(:@a, 1)
+              [
+                Class.new.to_s.encoding.name,
+                Class.new.inspect.encoding.name,
+                Module.new.to_s.encoding.name,
+                Zt.to_s.encoding.name,
+                Zt.singleton_class.to_s.encoding.name,
+                Zt.new.to_s.encoding.name,
+                Zt.new.inspect.encoding.name,
+                o.inspect.encoding.name,
+                St.to_s.encoding.name,
+                St.new(1).inspect.encoding.name,
+                Data.define(:a).new(a: 1).inspect.encoding.name,
+                Et.new("x").inspect.encoding.name,
+                1.method(:to_s).inspect.encoding.name,
+                Integer.instance_method(:to_s).inspect.encoding.name,
+                binding.inspect.encoding.name,
+                /a/.match("a").inspect.encoding.name,
+                Set[1].inspect.encoding.name,
+                [1].each.inspect.encoding.name,
+                [1].lazy.map { |x| x }.inspect.encoding.name,
+                (1..10).step(2).inspect.encoding.name,
+                Fiber.new {}.inspect.encoding.name,
+                ObjectSpace::WeakMap.new.inspect.encoding.name,
+                Module.new { refine(String) {} }.refinements[0].inspect.encoding.name,
+                Encoding::UTF_8.inspect.encoding.name,
+                Encoding::Converter.new("UTF-8", "EUC-JP").inspect.encoding.name,
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn sprintf_rendering_keeps_a_wider_name() {
+        // A non-ASCII argument appended along the way gives the
+        // rendering *its* encoding instead of ASCII-8BIT — and the
+        // rendering itself is never escaped, only the values it
+        // embeds (#1494).
+        run_test_once(
+            r#"
+              class Zあt; end
+              [
+                Zあt.new.to_s.encoding.name,
+                Zあt.new.inspect.encoding.name,
+                Zあt.new.inspect.sub(/0x\h+/, "0xX"),
+                RuntimeError.new("あ").inspect.encoding.name,
+                RuntimeError.new("あ").inspect,
+                RuntimeError.new("あ".encode("EUC-JP")).inspect.encoding.name,
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn sprintf_rendering_escapes_only_what_it_embeds() {
+        // Under a result encoding that cannot show non-ASCII, CRuby
+        // escapes the values a `#<…>` rendering embeds — through
+        // `rb_inspect` — and leaves the rendering itself alone. So the
+        // class name stays as it is (and keeps the rendering UTF-8)
+        // while the ivar beside it is escaped (#1494).
+        run_test_once(
+            r#"
+              class Zえ; end
+              class Zお; end
+              o = Zえ.new
+              o.instance_variable_set(:@a, "あ")
+              n = Zえ.new
+              n.instance_variable_set(:@a, Zお.new)
+              Encoding.default_external = Encoding::US_ASCII
+              [
+                Zえ.new.inspect.sub(/0x\h+/, "0xX"),
+                Zえ.new.inspect.encoding.name,
+                o.inspect.sub(/0x\h+/, "0xX"),
+                o.inspect.encoding.name,
+                # The *nested* rendering is a value, so it is escaped
+                # where the one around it is not.
+                n.inspect.gsub(/0x\h+/, "0xX"),
+                n.inspect.encoding.name,
+                /あ/.match("あ").inspect,
+                /あ/.match("あ").inspect.encoding.name,
+                [1, "あ"].each.inspect,
+                RuntimeError.new("あ").inspect,
+                RuntimeError.new("あ").inspect.encoding.name,
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_inspect_of_a_lossy_pattern_stays_a_valid_string() {
+        // A pattern that is not UTF-8 renders lossily (#1516), so the
+        // rendering's bytes are not the pattern's and cannot be tagged
+        // with the pattern's encoding — that would build a broken
+        // string. Until #1516 lands it keeps the result encoding, and
+        // this pins the "still a usable string" half rather than an
+        // answer CRuby agrees with.
+        run_test_no_result_check(
+            r#"
+              r = Regexp.new("あ".encode("EUC-JP"))
+              s = r.inspect
+              raise unless s.valid_encoding?
+              raise unless s.start_with?("/") && s.end_with?("/")
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_inspect_carries_the_patterns_encoding() {
+        // `rb_reg_desc` escapes what the result encoding cannot show,
+        // as any `#inspect` does, but associates the *pattern's*
+        // encoding rather than the result's — so the answer does not
+        // depend on the locale (#1494).
+        run_test_once(
+            r#"
+              [
+                /ab/.inspect.encoding.name,
+                /あ/.inspect.encoding.name,
+                /ab/u.inspect.encoding.name,
+                /\xff/n.inspect.encoding.name,
+                /あ/.inspect,
+                /ab/.inspect,
+              ]
+            "#,
+        );
+    }
 
     #[test]
     fn clone_freeze_coverage() {
