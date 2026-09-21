@@ -781,6 +781,14 @@ fn union_inner_with_encoding(
         _ if pinned => (RegexpInner::FIXEDENCODING, None),
         _ => (0u32, None),
     };
+    // `Regexp.union` ends in `rb_reg_new_str`, so the joined source is
+    // preprocessed like any other and a member that is broken in its
+    // own encoding is refused there — after the per-member encoding
+    // combine above, which is what raises for two *different* broken
+    // encodings. The source CRuby renders is the join, not the member
+    // (`Regexp.union("x", eucbad)` is `/x|a\xA4/`), which is exactly
+    // what `pattern` now holds.
+    check_regexp_source_bytes_valid(&pattern, enc, option)?;
     // The compiled pattern goes in as a Rust `String`, but the source
     // the regexp remembers — and compiles from under a native codec —
     // is the raw bytes, exactly as `Regexp.new` passes them.
@@ -3001,6 +3009,26 @@ mod tests {
             // A sound one still round-trips.
             r##"d = Marshal.dump(Regexp.new("\xa4\xa2".dup.force_encoding("EUC-JP")));
                 re = Marshal.load(d); [re.source.bytes, re.encoding.to_s]"##,
+        ]);
+    }
+
+    #[test]
+    fn regexp_union_member_broken_in_its_own_encoding() {
+        // `Regexp.union` ends in `rb_reg_new_str`, so a member that is
+        // broken in its own encoding is refused like any other source —
+        // and the pattern the error renders is the *join*, not the
+        // offending member.
+        run_tests(&[
+            r##"(Regexp.union("a\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.union("x", "a\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.union("a\xa4".dup.force_encoding("EUC-JP"), "x"); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.union(["x", "a\xa4".dup.force_encoding("EUC-JP")]); nil) rescue [$!.class, $!.message]"##,
+            // The per-member encoding combine still runs first, so two
+            // members in *different* encodings are an ArgumentError
+            // about the pair rather than about either one's bytes.
+            r##"(Regexp.union("\x81".dup.force_encoding("Shift_JIS"), "a\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
+            // BINARY has a character per byte, so it is never broken.
+            r##"Regexp.union("a\xa4".dup.force_encoding("BINARY")).source.bytes.inspect"##,
         ]);
     }
 

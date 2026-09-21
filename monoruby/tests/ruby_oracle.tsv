@@ -1463,6 +1463,7 @@
 4ced78ec21c3171b7eb6b8175a725267	[[4, 8, 73, 91, 7, 105, 6, 105, 7, 6, 58, 9, 64, 102, 111, 111, 105, 10], [[1, 2], 5], [{a: 1}, 5], ["str", 5]]	__a = [];__a << (\n            a = [1, 2]\n            a.instance_variable_set(:@f
 4cf2c2b92a59f794f3435c85df91b8b2	[512, 39104]	src = [[1.0, 1.0, 1.0], [1.0, 0.8, 0.81], [0.78, 0.94, 0.66], [0.79, 0.
 4cf8b4d4c75a2630523d2e95fc8edb16	["MyStr", 75, "ab[c]", "ASCII-8BIT"]	class MyStr < String; end\n        class Coerced\n          def to_str = 
+4d179225710c89efa353730f51bc628c	[[RegexpError, "invalid multibyte character: /a\\\\xA4/"], [RegexpError, "invalid multibyte character: /x|a\\\\xA4/"], [RegexpError, "invalid multibyte character: /a\\\\xA4|x/"], [RegexpError, "invalid multibyte character: /x|a\\\\xA4/"], [ArgumentError, "incompatible encodings: Shift_JIS and EUC-JP"], "[97, 164]"]	__a = [];__a << ((Regexp.union("a\\xa4".dup.force_encoding("EUC-JP")); nil) rescu
 4d3b8cfdb3abf0074873c94df0f08c11	nil	ENV.rehash
 4d3df55da53ba45fdeda6a3f5a171162	[:caught, :caught, :caught, :propagated, :propagated, :propagated, :propagated, :propagated, :propagated]	def caught?(k)\n              begin\n                begin\n          
 4d3e3e2c0afc6cd7e00e85a264e70654	[111, 222, 333, 111, 222, 333]	def add_fold; 5 + 3; end\n        def mul_fold; 100 * 100; end\n        d
