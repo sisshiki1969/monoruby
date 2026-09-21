@@ -3288,16 +3288,17 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     let resolve = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<SepKind> {
         if let Some(sep) = v.is_rstring_inner() {
-            // `rb_str_split_m` negotiates the two encodings and then
-            // walks the separator's characters, so an incompatible or
-            // broken separator is refused before the split runs.
-            check_string_encoding_compat(&self_.as_rstring_inner(), &sep, globals)?;
+            // `rb_str_split_m` walks the separator's own characters
+            // before it negotiates the two encodings, so a separator
+            // broken in its own encoding is refused first — the same
+            // order `#sub` / `#gsub` take through `get_pat` (#1522).
             if !sep.is_valid_encoding() {
                 return Err(MonorubyErr::argumenterr(format!(
                     "invalid byte sequence in {}",
                     sep.encoding().name()
                 )));
             }
+            check_string_encoding_compat(&self_.as_rstring_inner(), &sep, globals)?;
         }
         if let Some(re) = v.is_regex() {
             // A `Regexp` whose source is empty splits into characters;
@@ -4611,8 +4612,12 @@ fn sub_main(
 ) -> Result<(RStringInner, bool)> {
     // Enable zero-copy $~ haystack snapshots (CoW).
     vm.set_match_haystack(self_val);
-    check_pattern_encoding_compat(&self_val.as_rstring_inner(), lfp.arg(0), globals)?;
+    // `get_pat` quotes the pattern into a Regexp before the two
+    // encodings are negotiated, so a pattern broken in its own
+    // encoding is refused first — as `#gsub` and `#scan` already had
+    // it (#1522).
     check_string_pattern_valid(lfp.arg(0))?;
+    check_pattern_encoding_compat(&self_val.as_rstring_inner(), lfp.arg(0), globals)?;
     if let Some(arg1) = lfp.try_arg(1) {
         if lfp.block().is_some() {
             eprintln!("warning: default value argument supersedes block");

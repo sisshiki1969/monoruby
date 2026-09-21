@@ -33,6 +33,7 @@ pub use proc::*;
 pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, RangeInner};
 pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
+pub(crate) use regexp::broken_source_error;
 pub(crate) use regexp::{Spans, Subject, save_spans, spans_of};
 pub(crate) use string::pack::*;
 pub use string::{
