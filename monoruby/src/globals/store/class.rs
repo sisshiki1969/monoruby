@@ -109,6 +109,12 @@ pub const REFINEMENT_CLASS: ClassId = ClassId::new(61);
 /// generic call, which is where a heap Integer wants to be anyway.
 pub const BIGNUM_CLASS: ClassId = ClassId::new(62);
 
+/// `Regexp::TimeoutError < RegexpError` — raised when a match runs past
+/// the deadline `Regexp.timeout` / `Regexp.new(timeout:)` set. It has a
+/// fixed id, like the other error classes an error kind names, so that
+/// building one needs no `Store` lookup from inside the matcher.
+pub const REGEX_TIMEOUT_ERROR_CLASS: ClassId = ClassId::new(63);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ClassId(NonZeroU32);

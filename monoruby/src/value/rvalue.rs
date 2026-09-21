@@ -72,7 +72,7 @@ mod module;
 mod proc;
 mod range;
 mod rational;
-mod regexp;
+pub(crate) mod regexp;
 mod string;
 mod struct_inner;
 mod thread;

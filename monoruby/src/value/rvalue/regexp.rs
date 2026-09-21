@@ -125,7 +125,25 @@ pub struct RegexpInner {
     /// `regex` on a 7-bit subject (see [`ascii_engine`](Self::ascii_engine)):
     /// 0 = not decided yet, 1 = yes (it lives in `native`), 2 = no.
     ascii_state: std::cell::Cell<u8>,
+    /// This regexp's own `Regexp.new(src, timeout:)`, in nanoseconds;
+    /// 0 when it has none and the global `Regexp.timeout` applies
+    /// instead. It lives here rather than in an ivar because the
+    /// matcher is what needs it, and the matcher only ever holds a
+    /// `RegexpInner`. Per *object*, not per compiled pattern: the
+    /// `Regex` behind `regex` is shared through `REGEX_CACHE`, so two
+    /// regexps with the same source and different timeouts must not
+    /// see each other's.
+    timeout: u64,
 }
+
+thread_local!(
+    /// The global `Regexp.timeout`, in nanoseconds (0 = unset). Read at
+    /// every match, written by `Regexp.timeout=`; thread-local because
+    /// CRuby's is per-ractor and monoruby's threads are the closest
+    /// thing.
+    pub(crate) static REGEXP_GLOBAL_TIMEOUT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) }
+);
 
 impl PartialEq for RegexpInner {
     fn eq(&self, other: &Self) -> bool {
@@ -143,7 +161,33 @@ impl PartialEq for RegexpInner {
 /// happening, so this is not reachable in-test.
 #[coverage(off)]
 fn search_failed(err: onigmo_regex::OnigmoError) -> MonorubyErr {
+    if let Some(e) = match_timed_out(&err) {
+        return e;
+    }
     MonorubyErr::regexerr(format!("Search failed. {:?}", err))
+}
+
+/// A match the deadline cut short is `Regexp::TimeoutError`, not the
+/// `RegexpError` every other engine failure becomes: it says nothing is
+/// wrong with the pattern or the subject, only that this run was given
+/// a bound and reached it. CRuby's message is the bare "regexp match
+/// timeout", which is also what Onigmo's own `ONIGERR_TIMEOUT` string
+/// says, so it passes straight through.
+///
+/// Every `map_err` over an engine result goes through this, so a
+/// timeout cannot be mistaken for a pattern error anywhere.
+fn match_timed_out(err: &onigmo_regex::OnigmoError) -> Option<MonorubyErr> {
+    err.is_timeout()
+        .then(|| MonorubyErr::regex_timeout_err(err.message()))
+}
+
+/// [`search_failed`] for the capture-reading paths, which word it
+/// differently but must classify a timeout the same way.
+fn capture_failed(err: onigmo_regex::OnigmoError) -> MonorubyErr {
+    if let Some(e) = match_timed_out(&err) {
+        return e;
+    }
+    MonorubyErr::regexerr(format!("Capture failed. {:?}", err))
 }
 
 impl RegexpInner {
@@ -200,6 +244,36 @@ impl RegexpInner {
     /// from source-string encoding + `n`/`u`/`e`/`s` modifiers).
     pub fn declared_encoding(&self) -> crate::value::Encoding {
         self.declared_encoding
+    }
+
+    /// This regexp's own timeout in nanoseconds, 0 when it has none.
+    pub fn timeout_nanos(&self) -> u64 {
+        self.timeout
+    }
+
+    /// Record a `Regexp.new(src, timeout:)`. A timeout that quantized to
+    /// nothing is no timeout.
+    pub fn set_timeout_nanos(&mut self, nanos: u64) {
+        self.timeout = nanos;
+    }
+
+    /// The deadline this match runs under: the regexp's own timeout when
+    /// it has one, else the global `Regexp.timeout`, else none. CRuby
+    /// consults them in that order.
+    ///
+    /// The guard must outlive the search — it is what the engine's
+    /// interrupt hook reads — so every caller binds it to a local rather
+    /// than dropping it on the spot.
+    #[must_use = "the deadline only applies while the guard is alive"]
+    fn deadline(&self) -> onigmo_regex::DeadlineGuard {
+        let nanos = match self.timeout {
+            0 => REGEXP_GLOBAL_TIMEOUT.with(|t| t.get()),
+            own => own,
+        };
+        onigmo_regex::set_timeout(match nanos {
+            0 => None,
+            n => Some(std::time::Duration::from_nanos(n)),
+        })
     }
 
     /// Whether the source encoding was pinned (`u`/`e`/`s`/`n`
@@ -855,6 +929,7 @@ impl RegexpInner {
                     native: Default::default(),
                     native_enc: std::cell::Cell::new(OnigmoEncoding::UTF8),
                     ascii_state: std::cell::Cell::new(0),
+                    timeout: 0,
                 })
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
@@ -874,6 +949,7 @@ impl RegexpInner {
                             native: Default::default(),
                     native_enc: std::cell::Cell::new(OnigmoEncoding::UTF8),
                     ascii_state: std::cell::Cell::new(0),
+                    timeout: 0,
                         })
                     }
                     Err(err) => {
@@ -997,6 +1073,7 @@ impl RegexpInner {
         pos: usize,
         vm: &mut Executor,
     ) -> Result<Option<Captures<'a>>> {
+        let _deadline = self.deadline();
         match self
             .engine_for(given, None)
             .captures_from_pos_gpos(given, gpos, pos)
@@ -1009,7 +1086,7 @@ impl RegexpInner {
                 }
                 Ok(res)
             }
-            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
+            Err(err) => Err(capture_failed(err)),
         }
     }
 
@@ -1022,6 +1099,7 @@ impl RegexpInner {
         pos: usize,
         vm: &mut Executor,
     ) -> Result<Option<Captures<'a>>> {
+        let _deadline = self.deadline();
         match engine.captures_from_pos(given, pos) {
             Ok(res) => {
                 if let Some(captures) = &res {
@@ -1031,7 +1109,7 @@ impl RegexpInner {
                 }
                 Ok(res)
             }
-            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
+            Err(err) => Err(capture_failed(err)),
         }
     }
 
@@ -1169,7 +1247,7 @@ impl RegexpInner {
                 }
                 Ok(res)
             }
-            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
+            Err(err) => Err(capture_failed(err)),
         }
     }
 
@@ -1634,6 +1712,7 @@ impl RegexpInner {
         pos: usize,
         region: &mut onigmo_regex::Region,
     ) -> Result<bool> {
+        let _deadline = self.deadline();
         let r = match (subject.as_text(), subject.native) {
             (Some(s), _) => self
                 .engine_for(s, Some(subject.is_ascii()))
@@ -2123,12 +2202,15 @@ impl RegexpInner {
         // one Unicode scalar past an empty one (past EOS to terminate),
         // so the zero-width matches CRuby yields are all seen.
         let engine = self.engine_for(given, Some(given.is_ascii()));
+        let _deadline = self.deadline();
         let mut region = onigmo_regex::Region::new();
         let mut pos = 0usize;
         while pos <= given.len() {
             let found = engine
                 .search_with_region(given.as_bytes(), pos, &mut region)
-                .map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
+                .map_err(|err| {
+                    match_timed_out(&err).unwrap_or_else(|| MonorubyErr::regexerr(format!("{err}")))
+                })?;
             if found.is_none() {
                 break;
             }
@@ -2287,13 +2369,13 @@ impl RegexpInner {
         region: &mut onigmo_regex::Region,
     ) -> Result<bool> {
         let engine = self.engine_for(sub, Some(ascii));
+        let _deadline = self.deadline();
         let r = if anchored {
             engine.match_at_with_region(sub.as_bytes(), 0, region)
         } else {
             engine.search_with_region(sub.as_bytes(), 0, region)
         };
-        r.map(|r| r.is_some())
-            .map_err(|err| MonorubyErr::regexerr(format!("Capture failed. {:?}", err)))
+        r.map(|r| r.is_some()).map_err(capture_failed)
     }
 
     /// [`strscan_match`](Self::strscan_match) for a non-UTF-8 subject
@@ -2309,13 +2391,13 @@ impl RegexpInner {
         region: &mut onigmo_regex::Region,
     ) -> Result<bool> {
         let native = self.native_regex(enc)?;
+        let _deadline = self.deadline();
         let r = if anchored {
             native.match_at_with_region(sub, 0, region)
         } else {
             native.search_with_region(sub, 0, region)
         };
-        r.map(|r| r.is_some())
-            .map_err(|err| MonorubyErr::regexerr(format!("Capture failed. {:?}", err)))
+        r.map(|r| r.is_some()).map_err(capture_failed)
     }
 
     /// Byte-oriented twin of [`match_pred`](Self::match_pred): whether the
@@ -2328,6 +2410,7 @@ impl RegexpInner {
         byte_pos: usize,
     ) -> Result<bool> {
         let native = self.native_regex(enc)?;
+        let _deadline = self.deadline();
         // A predicate needs no capture groups: search without a region.
         native
             .search_bytes(bytes, byte_pos, bytes.len(), None)
@@ -2357,6 +2440,7 @@ impl RegexpInner {
         };
         // A predicate needs no capture groups: search without a region,
         // which skips the region allocation and the capture bookkeeping.
+        let _deadline = re.deadline();
         re.engine_for(given, None)
             .search(given, byte_pos, given.len(), None)
             .map(|res| res.is_some())

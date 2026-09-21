@@ -2247,6 +2247,7 @@
 789ce4346a48bb5ea840901a5fad268c	[42, "test.rb", 11]	__a = [];__a << (eval("__LINE__", nil, "test.rb", 42));__a << (eval("__FILE__", 
 78a587bd11334c23588dbf05ffc1160d		require "rubygems"\n        require "yajl"\n        t = ->(&b) { begin; b
 78a9147b5bb75312ad6a700a83ce8209	["can't create instance of singleton class", "can't create instance of singleton class", "ok", true]	o = Object.new\n        msgs = []\n        begin; o.singleton_class.new; 
+78ad3a87aaa8d59c4c2d454c205b7eb1	["RegexpError", "[Regexp::TimeoutError, RegexpError, StandardError]", [Regexp::TimeoutError, "regexp match timeout"], [Regexp::TimeoutError, "regexp match timeout"], "Regexp::TimeoutError", "Regexp::TimeoutError", "Regexp::TimeoutError", "Regexp::TimeoutError", "Regexp::TimeoutError", "[4, \\"heLo\\"]", 4, "[3.0, nil]"]	__a = [];__a << (Regexp::TimeoutError.superclass.to_s);__a << (Regexp::TimeoutEr
 78d0e78fc74998266ad2fd179077428d	[[4, 5, "s4"]]	class P\n          attr_accessor :x, :y, :z\n        end\n        def fill
 78d7ea39e2bafbf7649c9fc6b54bb309	[90300, 50, 50, [6, 6], [8, 8]]	class Base\n          def helper(x); x.succ; end\n          def m(v); [he
 78eac98714bc7e5b84c1dc7db0012170	[2, "2", 33, 33, "33", 2, 1, 4]	__a = [];__a << ([2, 33, 4, 11].min {|a, b| a <=> b});__a << (["2","33","4","11"

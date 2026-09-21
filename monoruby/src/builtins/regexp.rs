@@ -36,6 +36,23 @@ pub(crate) fn init(globals: &mut Globals) {
         2,
         false,
     );
+    // Regexp::TimeoutError < RegexpError — raised when a match runs past
+    // `Regexp.timeout` / `Regexp.new(timeout:)`. Registered here rather
+    // than with the other exception classes because `exception::init`
+    // runs before `Regexp` itself exists, and this one is named under
+    // it (#1423).
+    let regexp_error = globals.store.get_module(REGEX_ERROR_CLASS);
+    let timeout_error = globals.store.define_builtin_class(
+        "TimeoutError",
+        REGEX_TIMEOUT_ERROR_CLASS,
+        Some(regexp_error),
+        REGEXP_CLASS,
+        ObjTy::EXCEPTION,
+    );
+    globals.store.get_metaclass(REGEX_TIMEOUT_ERROR_CLASS);
+    // Naming it under Regexp sets the class's *name*; the constant that
+    // `Regexp::TimeoutError` resolves has to be set as well.
+    globals.set_constant_by_str(REGEXP_CLASS, "TimeoutError", timeout_error.get());
     globals.define_builtin_class_func(REGEXP_CLASS, "timeout", regexp_timeout_get, 0);
     globals.define_builtin_class_func(REGEXP_CLASS, "timeout=", regexp_timeout_set, 1);
     globals.define_builtin_func(REGEXP_CLASS, "=~", regexp_match, 1);
@@ -1595,25 +1612,14 @@ fn regexp_linear_time_p(
 /// The `timeout:` keyword of `Regexp.new` / `Regexp#initialize`.
 const TIMEOUT_KW: &str = "timeout";
 
-/// Hidden ivar carrying a regexp's own timeout, in nanoseconds. Hidden
-/// from `#instance_variables` and Marshal by the `/`-prefix convention,
-/// the way `Time`'s exact sub-second value is. It is absent — not zero —
-/// when the regexp has no timeout of its own, which is every literal and
-/// every `Regexp.new` that was not given one.
-const TIMEOUT_IVAR: &str = "/timeout";
-
-// The global `Regexp.timeout`. monoruby does not enforce a timeout
-// during matching yet — that needs an interrupt hook inside Onigmo's
-// own match loop (`CHECK_INTERRUPT_IN_MATCH_AT`, compiled away in a
-// non-Ruby build), which the `onigmo-regex` crate does not expose. The
-// value is validated, quantized and read back exactly as CRuby's is.
-// `Regexp::TimeoutError` deliberately stays undefined until the raise
-// exists: a `rescue Regexp::TimeoutError` that can never fire would let
-// a runaway match run forever where the missing constant at least says
-// so (see #1423).
-thread_local!(
-    static REGEXP_TIMEOUT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }
-);
+// A regexp's own timeout lives on its `RegexpInner`, and the global one
+// in `REGEXP_GLOBAL_TIMEOUT` beside it: the matcher is what consults
+// them, and the matcher only ever holds a `RegexpInner`. Both are
+// enforced now — the vendored Onigmo calls an embedder hook from inside
+// its match loop (`CHECK_INTERRUPT_IN_MATCH_AT`, which a non-Ruby build
+// used to compile away) and `onigmo-regex` turns that into a per-thread
+// deadline (#1423).
+use crate::value::rvalue::regexp::REGEXP_GLOBAL_TIMEOUT;
 
 /// A timeout in seconds as the `u64` of nanoseconds CRuby keeps, which
 /// is what makes its accessors quantize the way they do: a value below
@@ -1660,9 +1666,9 @@ fn timeout_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<u
 /// Record a `Regexp.new` `timeout:` on the freshly built regexp. A
 /// timeout that quantized to nothing is no timeout, so nothing is
 /// stored and `#timeout` answers nil — as it does in CRuby.
-fn store_regexp_timeout(globals: &mut Globals, regexp: Value, nanos: u64) -> Result<()> {
+fn store_regexp_timeout(_globals: &mut Globals, mut regexp: Value, nanos: u64) -> Result<()> {
     if nanos != 0 {
-        globals.set_ivar(regexp, IdentId::get_id(TIMEOUT_IVAR), Value::integer(nanos as i64))?;
+        regexp.as_regexp_inner_mut().set_timeout_nanos(nanos);
     }
     Ok(())
 }
@@ -1686,12 +1692,9 @@ fn regexp_inst_timeout(
     if !lfp.self_val().as_regexp_inner().initialized() {
         return Err(MonorubyErr::typeerr("uninitialized Regexp"));
     }
-    let nanos = globals
-        .store
-        .get_ivar(lfp.self_val(), IdentId::get_id(TIMEOUT_IVAR))
-        .and_then(|v| v.try_fixnum())
-        .unwrap_or(0);
-    Ok(timeout_value(nanos as u64))
+    Ok(timeout_value(
+        lfp.self_val().as_regexp_inner().timeout_nanos(),
+    ))
 }
 
 ///
@@ -1706,7 +1709,7 @@ fn regexp_timeout_get(
     _: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(timeout_value(REGEXP_TIMEOUT.with(|t| t.get())))
+    Ok(timeout_value(REGEXP_GLOBAL_TIMEOUT.with(|t| t.get())))
 }
 
 ///
@@ -1725,7 +1728,7 @@ fn regexp_timeout_set(
 ) -> Result<Value> {
     let arg = lfp.arg(0);
     let nanos = timeout_arg(vm, globals, arg)?;
-    REGEXP_TIMEOUT.with(|t| t.set(nanos));
+    REGEXP_GLOBAL_TIMEOUT.with(|t| t.set(nanos));
     Ok(arg)
 }
 
@@ -3096,6 +3099,62 @@ mod tests {
             r##"(Regexp.union("\x81".dup.force_encoding("Shift_JIS"), "a\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
             // BINARY has a character per byte, so it is never broken.
             r##"Regexp.union("a\xa4".dup.force_encoding("BINARY")).source.bytes.inspect"##,
+        ]);
+    }
+
+    #[test]
+    fn regexp_timeout_raises_timeout_error() {
+        // `(a+)+\1b` is the shape that still backtracks exponentially in
+        // CRuby: its backreference is what keeps the linear-time
+        // memoization (`Regexp.linear_time?`) from applying, so both
+        // engines really run the match and both have to be cut short by
+        // the deadline. A pattern CRuby memoizes — `^(a*)*$` — would
+        // return instantly there and prove nothing.
+        run_tests(&[
+            r##"Regexp::TimeoutError.superclass.to_s"##,
+            r##"Regexp::TimeoutError.ancestors[0, 3].inspect"##,
+            // The regexp's own timeout.
+            r##"re = Regexp.new('(a+)+\1b', timeout: 0.05)
+                (re =~ ("a" * 40 + "c"); "no raise") rescue [$!.class, $!.message]"##,
+            // The global one.
+            r##"Regexp.timeout = 0.05
+                r = ((/(a+)+\1b/ =~ ("a" * 40 + "c")); "no raise") rescue [$!.class, $!.message]
+                Regexp.timeout = nil
+                r"##,
+            // It is a RegexpError, so the older rescue still catches it.
+            r##"Regexp.timeout = 0.05
+                r = ((/(a+)+\1b/ =~ ("a" * 40 + "c")); "no raise") rescue (RegexpError === $! ? $!.class.to_s : "not a RegexpError")
+                Regexp.timeout = nil
+                r"##,
+            // The regexp's own value wins over a global that would not
+            // have fired.
+            r##"Regexp.timeout = 50
+                re = Regexp.new('(a+)+\1b', timeout: 0.05)
+                r = ((re =~ ("a" * 40 + "c")); "no raise") rescue $!.class.to_s
+                Regexp.timeout = nil
+                r"##,
+            // The String methods run the same matcher, so they are bound too.
+            r##"Regexp.timeout = 0.05
+                r = (("a" * 40 + "c").match?(/(a+)+\1b/); "no raise") rescue $!.class.to_s
+                Regexp.timeout = nil
+                r"##,
+            r##"Regexp.timeout = 0.05
+                r = (("a" * 40 + "c").sub(/(a+)+\1b/, "x"); "no raise") rescue $!.class.to_s
+                Regexp.timeout = nil
+                r"##,
+            r##"Regexp.timeout = 0.05
+                r = (("a" * 40 + "c").scan(/(a+)+\1b/); "no raise") rescue $!.class.to_s
+                Regexp.timeout = nil
+                r"##,
+            // With no timeout in force nothing is bounded, and a match
+            // that raised does not leave a deadline behind.
+            r##"[/\d+/ =~ "abc 123", "hello".sub(/l+/, "L")].inspect"##,
+            r##"Regexp.timeout = 0.05
+                (/(a+)+\1b/ =~ ("a" * 40 + "c")) rescue nil
+                Regexp.timeout = nil
+                /\d+/ =~ "abc 123""##,
+            // The accessors still read back as they did.
+            r##"[Regexp.new("a", timeout: 3).timeout, Regexp.new("a").timeout].inspect"##,
         ]);
     }
 

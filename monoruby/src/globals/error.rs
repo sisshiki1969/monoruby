@@ -413,6 +413,7 @@ impl MonorubyErr {
             MonorubyErrKind::Frozen(_) => "FrozenError",
             MonorubyErrKind::Load(_) => "LoadError",
             MonorubyErrKind::Regex => "RegexpError",
+            MonorubyErrKind::RegexTimeout => "Regexp::TimeoutError",
             MonorubyErrKind::Runtime => "RuntimeError",
             MonorubyErrKind::IO => "IOError",
             MonorubyErrKind::Key(_) => "KeyError",
@@ -472,6 +473,7 @@ impl MonorubyErr {
             MonorubyErrKind::Frozen(_) => FROZEN_ERROR_CLASS,
             MonorubyErrKind::Load(_) => LOAD_ERROR_CLASS,
             MonorubyErrKind::Regex => REGEX_ERROR_CLASS,
+            MonorubyErrKind::RegexTimeout => REGEX_TIMEOUT_ERROR_CLASS,
             MonorubyErrKind::Runtime => RUNTIME_ERROR_CLASS,
             MonorubyErrKind::IO => IO_ERROR_CLASS,
             MonorubyErrKind::Key(_) => KEY_ERROR_CLASS,
@@ -1191,6 +1193,14 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Regex, msg)
     }
 
+    /// `Regexp::TimeoutError`. CRuby's message is the bare
+    /// "regexp match timeout"; Onigmo's own error string for
+    /// `ONIGERR_TIMEOUT` is worded the same, so the matcher can pass it
+    /// straight through.
+    pub fn regex_timeout_err(msg: impl Into<String>) -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::RegexTimeout, msg.into())
+    }
+
     pub(crate) fn runtimeerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Runtime, msg)
     }
@@ -1481,6 +1491,11 @@ pub enum MonorubyErrKind {
     Frozen(Option<Value>),
     Load(PathBuf),
     Regex,
+    /// `Regexp::TimeoutError` — a match that ran past `Regexp.timeout`.
+    /// Separate from `Regex` because it is a *subclass*: `rescue
+    /// RegexpError` still catches it, `rescue Regexp::TimeoutError`
+    /// catches only this.
+    RegexTimeout,
     Runtime,
     IO,
     /// `KeyError` with optional `(receiver, key)` `Value`s.
@@ -1542,6 +1557,7 @@ impl MonorubyErrKind {
             FROZEN_ERROR_CLASS => MonorubyErrKind::Frozen(None),
             LOAD_ERROR_CLASS => MonorubyErrKind::Load(PathBuf::new()),
             REGEX_ERROR_CLASS => MonorubyErrKind::Regex,
+            REGEX_TIMEOUT_ERROR_CLASS => MonorubyErrKind::RegexTimeout,
             RUNTIME_ERROR_CLASS => MonorubyErrKind::Runtime,
             IO_ERROR_CLASS => MonorubyErrKind::IO,
             KEY_ERROR_CLASS => MonorubyErrKind::Key(None),
