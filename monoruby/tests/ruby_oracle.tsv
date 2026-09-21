@@ -292,6 +292,7 @@
 0e56d42fa329cec66eaa8a31dadafef0	[true, true]	def m; proc{|x| x}; end; p = m; [p.dup.eql?(p), p.dup.hash == p.hash]
 0e58e78424730044c7b8bdc310bb26e6	["Fri Dec 12 ", "Fri Dec 12 ", "Fri", "Dec", "12", 4, ["Fri", "Dec", "12"], ["Fri Dec 12 ", "Dec"], "Fri Dec 12 ", true, 11, "", "1975 14:39", 11, 0, "Fri"]	require "strscan"\n        s = StringScanner.new("Fri Dec 12 1975 14:39"
 0e7e3c1fe18a8cbea4e15f4300b4c145	150.0	def collect(n)\n          acc = 0.0\n          sink = [3, 1, 2]\n         
+0e807706f321288442201ed85be292de	["#<Enumerator:0xXX>", "#<Enumerator:0xXX>"]	__a = [];__a << (\n            [1, 2].each.to_s.sub(/0x[0-9a-f]+/, "0xXX")\n      
 0ea12292e6120b88a2aa0b88f1830d5e	[-1, 0, 0, 0, true, false, false, true]	__a = [];__a << ("\\xc3".casecmp("\\xe3"));__a << ("\\xc3".casecmp("\\xc3"));__a << 
 0eb451479b9e3deffa5ff499cb00893c	[:private_answer]	class P\n          def method_missing(name, *args) = :missed\n          p
 0ec3628a644993ceba6c22fb3d0a00d9	[[[1, 2], {x: 3}, "blk"], [[[7, 8], {}, nil]]]	def inner(*a, **k, &b) = [a, k, b ? b.call : nil]\n        def fwd(*, **
@@ -818,6 +819,7 @@
 2a5869ecfcebdbb2da9022b23ccf267d	["constant", true, [:C]]	$res = []\n        parent = Class.new do\n          def self.inherited(su
 2a5b9f708b06a2c9976d7328b5e29c89	["<int>", "<int><int>", "<int>"]	module IntTos\n              refine Integer do\n                def t
 2a5cd0c05a4c867471eb9bdcd900f0a1	[[4, 5, 6], 8]	r = []\n        calls = 0\n        10.times { |i| r << i if (calls += 1; 
+2a76dfd5908ca7bba96c9b1966e2e6c4	[[[Enumerator, 3], [Enumerator, 3], [Enumerator, 3], [Enumerator, 3], [Enumerator, 3], [Enumerator, 3], [Enumerator, 3]], [[1, 1, 2, 2, 3, 3], [1, 2, 3], [[1, 3], [2]], [2, 4, 6], [1, -1, 2, -2, 3, -3]], [[[1, 0], [2, 1], [3, 2]], [1, 2]]]	__a = [];__a << (\n        [\n          [1, 2, 3].flat_map, [1, 2, 3].collect_conc
 2a7ebdf4fd301bbdfa3591753316bc4d	:OVERRIDDEN	class Float; def >=(o); :OVERRIDDEN; end; end; 3.0 >= 4.0
 2a8528b266533b52014c1733d4a93306	[1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", "x", "\\xFF", 2, "y", "y z", "x\\xFFy ", true, "\\x{A4A2}", 2, "\\x{A4A4}", 4, 1, "x"]	require "strscan"\n        src = "{\\"name\\": \\"K\\xC3\\xA4rnten\\", \\"n\\": 
 2a88d8fcfb67f8e7184d4e309deabac3	[true, nil, nil, nil, true]	__a = [];__a << (IO.try_convert($stdout).equal?($stdout));__a << (IO.try_convert
@@ -1720,6 +1722,7 @@
 5d3e8beda2cfe6c5baa2a2cd21c8d001	:ok	S = Struct.new(:x)\n            \n\n            s = S.new(1).freeze\n  
 5d3ec2f2c61ae49660281bbdcd726dc3	true	class C\n        end\n        C.new.is_a? C
 5d43651c5f78468687d17de79bce19e9	["yelow mon", " now is the", "puters shot balls", "abbc", nil, "abc"]	__a = [];__a << ("yellow moon".squeeze);__a << ("  now   is  the".squeeze(" "));
+5d4d412ab545630123d567ea6f38ed8f	[[["aa", "bb", "cc", "dd", "ee"], ["a", "a", "b", "b", "c", "c"]], [["a", "b", "c"], [:a, :b, :c]], 4, [[], [], ["a", "b"]], "can't iterate from Float", "can't iterate from NilClass", [1, 2, 3, 4], [[1, 4, 9, 16], [1, 4, 9], [1, 2, 3, 4]]]	__a = [];__a << ([("a".."e").map { |s| s * 2 }, ("a".."c").flat_map { |s| [s, s]
 5d502ca059290eefdd957831c0d881cc	[[97, 233, 128512, 122], [97, 233, 128512, 122], Enumerator, [], true, [194, 466, 257024, 244], [97, 98, 99], [255, 128], String, [98, 234, 128513, 123], [122, 3], ArgumentError]	s = "aé\\u{1F600}z"\n        r = [s.codepoints, s.each_codepoint.to_a, s.
 5d53a8af94b50b97064e8d51ff1aee9b	["ASCII-8BIT", true, true, "UTF-8"]	t = Thread.new { "x" }\n            t.join\n            s = t.to_s\n  
 5d6c8b649c34e181f15d691733d4d981	[3, 5, 9, 4, 1, TypeError, [NotImplementedError, "Unsupported advice: :bogus"]]	(f="/tmp/mono_ss_#{Process.pid}"; File.write(f,"0123456789"); io=File.open(f); a
@@ -1781,6 +1784,7 @@
 60e7801250bb0dce26c76cbfe1c94612	[1, 2, 3, 4, false, false, true, false, true, false]	o = Object.new\n            def o.foo = 1\n            m = Module.new
 60fa84926456bf38e08b292f42e6048b	[true, false, true]	parent = Class.new do\n              protected; def parent_pro; end\n
 60fba8f11f422d913f9063b5a6042917	[1, "KwHash", 1..5, 2, [1, 2, 3, 4, 5], 2020, 0, 3]	class KwHash < Hash\n          attr_reader :opt\n          def initialize
+60fc414b128c2631f9d834deb9ed0753	[["#<Enumerator: 1..3:find>", "#<Enumerator: 1..3:find(nil)>", "#<Enumerator: {a: 1}:find>"], [3, :none, nil], "wrong number of arguments (given 2, expected 0..1)"]	__a = [];__a << ([(1..3).find.inspect, (1..3).find(nil).inspect, {a: 1}.find.ins
 61004613ce868620a7ea63f5833c5be8	[100, 200]	def f(&p)\n            g(&p)\n        end\n                \n        def g(
 6100afe56aff9e241cc3260eb947b50d	[[1, 2, 3, 1, 2, 3], [], [], 6, 0, 0]	__a = [];__a << ([1, 2, 3].cycle(2).to_a);__a << ([1, 2, 3].cycle(0).to_a);__a <
 610ba8e265017385d40dc2c419f419df	[[true, 5, nil, false], [true, true, true, ["LocalJumpError", "LocalJumpError", "LocalJumpError"], "k", "v"], true, [true, true, "Object", "Object"]]	__a = [];__a << (\n            m = ObjectSpace::WeakMap.new\n            k, v = Ob
@@ -1815,6 +1819,7 @@
 62aca60ad78802847e5b81e0b6ce2542	[42, "test.rb", 11]	__a = [];__a << (instance_eval("__LINE__", "test.rb", 42));__a << (instance_eval
 62caa309e31dac2a3bb4c9e5ed060cf8	[false, "elefant", 4]	S = Struct.new(:name, :legs, keyword_init: false)\n            \n\n   
 62d15ca21ed1dd74ca65f3735e8b6c5a	false	File.writable?("nonexistent_file_xyz")
+62e1e4a6015b86d8165f5521b136e2ae	[[1, 2], [[:a, 1], [:b, 2]], [[:v], 1], [{k: 2}]]	__a = [];__a << (\n            class A\n              def foo(a, k: 0)\n           
 63089c51218b7c8ba348e648ba7770b7	[16, [16, 5, 4, 10, 17], [[11, 4, 10, 1], [20, 11, 13, 10], 11, 917], [[4, 16, 18, 8], 17], [[4, 16, 18, 8], 17], [9, 17, 15, 10], [[2, 4, 6, 8, 10], 2], [NoMethodError, "private method 'rand' called for nil"], [NoMethodError, "private method 'rand' called for nil"], [RangeError, "random number too big 999"], [RangeError, "random number too small -1"], [1, 2], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], 3, [Array, Integer], 2]	__a = [];__a << ((1..20).to_a.sample(random: Random.new(7)));__a << ((1..20).to_
 63422c9740b43bc9e10c2b9e48ec2652	42	x = 1\n            binding.local_variable_set(:x, 42)\n            x\n
 6342f8bdbf7fb127f0fe51c760a63f08	[true, "z"]	r, w = IO.pipe\n            t = Thread.new { sleep 0.02; w.write "z"
@@ -3897,6 +3902,7 @@ d49c8d4441da431d63717840fad0ac31	[0.5, 1.0, 3]	def leaf\n          a = [1, 2]\n 
 d4b11df043d7e94411357a9fb1a4b7b9	true	"hello".index(/z/); $~.nil?
 d4b1bfe9eda9533ed079348cdba23ae4	"abcaあ"	"あ".rjust(5, "abc")
 d4e0ae9c56a69c0c332580eb22172e11	[[1, 2, 0], 999]	$flag = false\n        class KwNode\n          attr_reader :v\n          d
+d4ef2d9840eaf7679302fcc19b8b636f	[["#<Enumerator: #<A:0xXX>:foo(1, k: 2)>", "#<Enumerator: #<A:0xXX>:foo(k: )>", "#<Enumerator: #<A:0xXX>:foo(k: x)>", "#<Enumerator: #<A:0xXX>:foo(k: v)>", "#<Enumerator: #<A:0xXX>:foo(k: [1, 2])>", "#<Enumerator: #<A:0xXX>:foo(a: 1, b: 2)>", "#<Enumerator: #<A:0xXX>:foo(1, 2)>", "#<Enumerator: #<A:0xXX>:foo>", "#<Enumerator: #<A:0xXX>:foo(\\"x\\")>"], ["#<Enumerator: #<A:0xXX>:foo({k: 2, \\"s\\" => 3})>", "#<Enumerator: #<A:0xXX>:foo({\\"s\\" => 3})>"], ["#<Enumerator: [1, 2]:each>", "#<Enumerator: [1, 2]:each_slice(2)>", "#<Enumerator: 3:times>"], "#<Enumerator: uninitialized>"]	__a = [];__a << (\n            class A\n              def foo(*a, **k) = to_enum(:
 d506260ac377e92b5498fb8e6ec73750	true	GC.stat(nil).is_a?(Hash)
 d51949e16f4c8e33f4baabff8fb4b4dc	[[72, 104, 104], [73, 104, 104]]	src = "hello world"\n        out = []\n        20.times do |k|\n          
 d52efc39591dfa6b41cc1b74f647a5cf	["ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError"]	def g(a, b) = a + b\n        def f(...) = g(10, 20, 30, ...)\n        \n\n 

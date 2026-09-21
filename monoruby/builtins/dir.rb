@@ -131,13 +131,13 @@ class Dir
     entries(path, encoding: encoding).reject { |e| e == "." || e == ".." }
   end
 
-  # The spare second positional is the Enumerator replay slot: an
-  # Enumerator built by `to_enum` replays the call with positional
-  # arguments only, so the requested encoding has to ride there. This is
-  # the same trick `Dir.foreach` uses (see `foreach` in builtins/dir.rs).
-  def self.each_child(path, enc = nil, encoding: nil, &block)
-    encoding = enc if encoding.nil?
-    return to_enum(:each_child, path, encoding) unless block
+  def self.each_child(path, encoding: nil, &block)
+    # The Enumerator replays a keyword as a keyword (#1467), so this
+    # needs no spare positional for the encoding to ride in.
+    unless block
+      return encoding.nil? ? to_enum(:each_child, path)
+                           : to_enum(:each_child, path, encoding: encoding)
+    end
     children(path, encoding: encoding).each { |e| block.call(e) }
     nil
   end

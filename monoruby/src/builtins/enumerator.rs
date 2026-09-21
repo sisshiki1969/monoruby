@@ -1162,4 +1162,130 @@ mod tests {
             "3.times.size",
         ]);
     }
+
+    #[test]
+    fn to_enum_keywords() {
+        // `to_enum` / `enum_for` carry keyword arguments through to the
+        // replayed call, instead of dropping them (#1467).
+        run_tests(&[
+            r##"
+            class A
+              def foo(a, k: 0)
+                return to_enum(:foo, a, k: k) unless block_given?
+                yield a
+                yield k
+              end
+            end
+            A.new.foo(1, k: 2).to_a
+            "##,
+            r##"
+            class B
+              def bar(**opts)
+                return enum_for(:bar, **opts) unless block_given?
+                opts.each { |k, v| yield [k, v] }
+              end
+            end
+            B.new.bar(a: 1, b: 2).to_a
+            "##,
+            // A keyword-only replay still reports arity-appropriate errors.
+            r##"
+            class C
+              def baz(k:)
+                return to_enum(:baz, k: k) unless block_given?
+                yield k
+              end
+            end
+            [C.new.baz(k: :v).to_a, C.new.baz(k: 1).next]
+            "##,
+            // An explicit Hash positional stays positional.
+            r##"
+            class D
+              def qux(h)
+                return to_enum(:qux, h) unless block_given?
+                yield h
+              end
+            end
+            D.new.qux({ k: 2 }).to_a
+            "##,
+        ]);
+    }
+
+    #[test]
+    fn enumerator_inspect_keywords() {
+        // `Enumerator#inspect` renders recorded keywords as `key: value`,
+        // with `to_s` (not `inspect`) applied to each half — so a String
+        // value loses its quotes and `nil` renders as the empty string.
+        // Receiver addresses differ run to run, so mask them.
+        run_tests(&[
+            r##"
+            class A
+              def foo(*a, **k) = to_enum(:foo, *a, **k)
+            end
+            o = A.new
+            [
+              o.foo(1, k: 2),
+              o.foo(k: nil),
+              o.foo(k: "x"),
+              o.foo(k: :v),
+              o.foo(k: [1, 2]),
+              o.foo(a: 1, b: 2),
+              o.foo(1, 2),
+              o.foo,
+              o.foo("x"),
+            ].map { |e| e.inspect.gsub(/0x[0-9a-f]+/, "0xXX") }
+            "##,
+            // A non-Symbol key anywhere makes the whole hash one positional.
+            r##"
+            class A
+              def foo(*a, **k) = to_enum(:foo, *a, **k)
+            end
+            [A.new.foo(:k => 2, "s" => 3), A.new.foo("s" => 3)]
+              .map { |e| e.inspect.gsub(/0x[0-9a-f]+/, "0xXX") }
+            "##,
+            // Built-in enumerators keep rendering as before.
+            r##"
+            [[1, 2].each.inspect, [1, 2].each_slice(2).inspect, 3.times.inspect]
+            "##,
+            // An uninitialized Enumerator has no argument list at all.
+            r##"
+            Enumerator.allocate.inspect
+            "##,
+        ]);
+    }
+
+    #[test]
+    fn enumerator_to_s() {
+        // `Enumerator#to_s` is `Object#to_s`, not `#inspect`.
+        run_tests(&[
+            r##"
+            [1, 2].each.to_s.sub(/0x[0-9a-f]+/, "0xXX")
+            "##,
+            r##"
+            Enumerator.new { |y| y << 1 }.to_s.sub(/0x[0-9a-f]+/, "0xXX")
+            "##,
+        ]);
+    }
+
+    #[test]
+    fn dir_foreach_enumerator_keywords() {
+        // `Dir.foreach` / `Dir.each_child` replay their `encoding:` keyword
+        // as a keyword, so neither needs (nor accepts) a spare positional.
+        run_test_once_live(
+            r##"
+            require "tmpdir"
+            Dir.mktmpdir do |d|
+              File.write(File.join(d, "a.txt"), "x")
+              [
+                Dir.foreach(d).to_a.sort,
+                Dir.each_child(d).to_a.sort,
+                Dir.foreach(d, encoding: "ASCII-8BIT").to_a.map { |s| s.encoding.name }.uniq,
+                Dir.each_child(d, encoding: "ASCII-8BIT").to_a.map { |s| s.encoding.name }.uniq,
+                Dir.foreach(d).inspect.sub(d, "DIR"),
+                Dir.foreach(d, encoding: "ASCII-8BIT").inspect.sub(d, "DIR"),
+                Dir.each_child(d, encoding: "ASCII-8BIT").inspect.sub(d, "DIR"),
+              ]
+            end
+            "##,
+        );
+    }
 }
