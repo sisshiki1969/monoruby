@@ -157,6 +157,7 @@
 0715fb308c9399e307ba7db5da2024eb	[[true, 19800, 6, 1, []], 3600, [true, -28800]]	__a = [];__a << (\n            class TZ1\n              def initialize(o); @o = o;
 071650ec93f915a34dff9e18041b0a1b	false	def foo; end\n            public :foo\n            Object.private_met
 072525d9f9be127994b409c1f5b247e4	["a\\r\\nb\\r\\nc", "a\\rb", "a\\nb\\nc\\n", "a\\r\\nb", [97, 0, 13, 0, 10, 0, 98, 0]]	(a="a\\nb\\nc".encode("UTF-8", crlf_newline: true); b="a\\nb".encode("UTF-8", cr_ne
+07262c69027fb626e4c8b1f0872b4e5b	[[120, 177], [120, 142, 177], ["Encoding::UndefinedConversionError", "\\"\\\\x8F\\\\xA1\\\\xA1\\" from EUC-JP to Shift_JIS"], [63], ["Encoding::UndefinedConversionError", "\\"\\\\xF0@\\" from Shift_JIS to EUC-JP"], [63, 65]]	r = []\n            r << ("x" + [0x8E, 0xB1].pack("C*")).force_encod
 0736de5b921b47f8e9e27ca56c6c9b35	{A: 1, b: 2}	def drive(n)\n              r = nil\n              n.times { r = yiel
 07499214dbe1866c9cba9612dd1f4909	["a", nil, "bc", true, nil, 2, nil, "bar", 7, true, "foo bar", 7]	require "strscan"\n        r = []\n        s = StringScanner.new("abc")\n 
 0750b259ae197e8b437459f5cfaa246a	{}	/(foo)(bar)/.match("foobar").deconstruct_keys(nil)
@@ -2116,6 +2117,7 @@
 70928ba635fab871d9d7a7cc112e80d9	[1, false, 10, "Shift_JIS", "heRlo", "heRRo", "heLlo", "heLLo", TypeError, TypeError]	r = []\n        s = "表\\\\示".encode("Shift_JIS")\n        bs = "\\\\".encode(
 70a1593046773caec35e978f0c08553c	["", "shown\\n"]	require 'stringio'\n        def cap; $stderr = StringIO.new; yield; s = 
 70ae62584feac2ecded5e03fc39ac020	[["AF_INET", "127.0.0.1", "127.0.0.1"], true, ["AF_INET", "127.0.0.1", "127.0.0.1"], true, "AF_INET", "127.0.0.1"]	require "socket"\n            s = TCPServer.new("127.0.0.1", 0)\n    
+70b570c7b59709f018e635b6535c5ace	[[[129, 173], [129, 173], true], [[235, 173], [235, 173], true], [[135, 64], [135, 64], true], [[129, 64], [129, 64], true], [[234, 164], [234, 164], true], [[130, 160], [130, 160], true], [[239, 252], [239, 252], true]]	[[0xA2, 0xAF], [0xF6, 0xAF], [0xAD, 0xA1], [0xA1, 0xA1], [0xF4, 0xA
 70bdfd5e68a7d505347fcfb446cf1af5	[1, 1, true, false]	o = Object.new\n        o.instance_variable_set(:@a, 1)\n        s = Obje
 70c6209b155649b610440ef6e067c40f	["AAＡあBC", "aaＡあbc", "aAＡあbC", "AaＡあbc", "ＸYＺZ漢K", "ＸyＺz漢k", "ＸYＺZ漢k", "ＸyＺz漢k", "ABC", nil, "漢字ABC"]	__a = [];__a << ("AaＡあBc".encode("EUC-JP").upcase.encode("UTF-8"));__a << ("AaＡあ
 70cd65fef1953e3ba6f203b7c29748c5	["#<struct S b=#<struct T c=1>>", "#<struct S b=#<data D a=2>>", "#<data D a=#<struct S b=3>>", "#<data D a=#<data E e=4>>", "[#<struct S b=#<struct T c=1>>]", "{k: #<struct S b=1>}", "#<struct S b=#<struct S:...>>", "#<struct b=5>"]	S = Struct.new(:b)\n            T = Struct.new(:c)\n            D = D
@@ -2962,6 +2964,7 @@
 9eb8b6ae56715eb169a709857b6176e9	:done	END { }; :done
 9eb98c1b5f6e2d631b2b51c04acc62e5	"m::N"	m = Module.new\n            m::N = Module.new\n            m::N.name 
 9ec21f255b64bf6cee16e04bbbaa7ae3	[[:C1, :C2, :S1], [:C1, :C2]]	class S\n              S1 = 100\n            end\n            class C 
+9ec954b90493441f14a819a881837387	[:undefined_conversion, [:undefined_conversion, [69, 85, 67, 45, 74, 80], [83, 104, 105, 102, 116, 95, 74, 73, 83], [143, 161, 161], []], [["EUC-JP", "Shift_JIS"]], [["EUC-JP", "UTF-8"], ["UTF-8", "Windows-31J"]]]	ec = Encoding::Converter.new("EUC-JP", "Shift_JIS")\n            d =
 9ed3763bcd2664e8cf0aae5654b5955d	[nil, false, 1]	class String; def hash = 0; def eql?(o) = true; end\n        [{"p" => 1}
 9ed470f69b7adeaf9e790c17d1dcce76	[150, 199, :absent]	def nlr_y3\n          yield\n        end\n        def find_it(n)\n         
 9ee5793f09dedfe9c6cd4714aaad32b5	[15150, [10, 105, 20000000000000000000000000000000000000000, 10000000000000000000000000000000000000100, 20000000000000000000000000000000000000002, 10000000000000000000000000000000000000101, 14, 107, 200000000000000000000000000000000000000000000000000000000000000000000000000000000, 100000000000000000000000000000000000000000000000000000000000000000000000000000100, 18, 109, -16, 92, -20000000000000000000000000000000000000000, -9999999999999999999999999999999999999900]]	class Integer\n          def dbl; self * 2; end\n          def add5(x); s
@@ -3413,6 +3416,7 @@ b6188ece8fef79ae6424391505bef5b4	[[0.3745401188473625, 92, 703904363269456309900
 b6222454a310e9ff5bb303f4ff3250ba	[true, nil, false]	saved = $VERBOSE\n        $VERBOSE = 1\n        res = [$VERBOSE]\n        
 b641fbd5ebdf00e1aed645d54b50f668	[[100, 400]]	class C\n          def f(a, b)\n            $res << [a, b]\n          end\n
 b665e7999873f7c9a5bf25c8c8c1ffeb	42	klass = Struct.new(nil, :a)\n            klass.new(42).a\n           
+b66877cf7f0c241a02cf71abbce0bb68	[[129, 64], "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", [142, 161, 142, 161], [142, 173, 142, 161], "Encoding::UndefinedConversionError", [161, 161], [173, 161], "Encoding::UndefinedConversionError"]	[["EUC-JP", "Windows-31J"], ["Windows-31J", "EUC-JP"],\n            
 b6799d38502adf59ced438f5fcef43f4	["pp", ["Socket", "Socket"], "qq", true, "Socket", "zz"]	require "socket"\n            res = []\n            x, y = Socket.pai
 b680671714a43502907fe153774b1c85	true	GC.config(nil) == GC.config
 b69cddbeefe2b001d970e7193e2038e0	[1.99e+302, "Float"]	class P\n          attr_reader :f\n          def put(x)\n            @f = 
@@ -4067,6 +4071,7 @@ d9392deb40395a4dd8b8c603adf94553	[["a", "b"], true]	require "open3"; oe, st = Op
 d953131d36ad61d4b18bf52bffde1c09	[[97, 164, 162, 98], [97, 227, 129, 130, 98], [97, 227, 129, 130, 98], [97, 130, 160, 98], [97, 98, 99], [97, 63, 98], [97, 63, 98]]	(p=->(src, dst, s){ Encoding::Converter.new(src, dst)\n                 .convert(
 d95cabdb6b92c504c151f149a6465413	"!dlroW ,olleH!dlroW ,olleH!dlroW ,olleH!dlroW ,olleH!dlroW ,olleH!dlroW ,olleH!dlroW ,olleH!dlroW ,olleH"	("Hello, World!" * 8).reverse
 d96d6c2d2ebdc06aa1ab3fb58f8bea51	""	"" * 1000000
+d9804c6409c98c3ed21c39d417760940	[[0, [[:destination_buffer_full, []], [:destination_buffer_full, []], [:destination_buffer_full, []], [:destination_buffer_full, []], [:destination_buffer_full, []], [:destination_buffer_full, []], [:destination_buffer_full, []], [:destination_buffer_full, []]]], [1, [[:destination_buffer_full, [235]], [:finished, [235, 173]]]], [2, [[:finished, [235, 173]]]], [3, [[:finished, [235, 173]]]], [:source_buffer_empty, :finished, [235, 173]]]	r = []\n            [0, 1, 2, 3].each do |cap|\n              ec = En
 d983e7db9d163a4ca80f799fde2142df	[42, 42, 42, 42, 42, 42]	class C\n          def f(x)\n            $res << x\n          end\n        
 d991ac7c0868be30dda514fccf896c9d	[[[:a, 1], {b: 2, c: 3}], nil, [nil, nil]]	__a = [];__a << (\n        h = {a: 1, b: 2, c: 3}\n        res = []\n        res <<
 d9a13378cc29516431f2b68cb4b919b8	[{a: 1}, {"a" => 1}, "no keywords accepted", "no keywords accepted", "no keywords accepted", 7]	def rescue_msg\n              yield; :no_error\n            rescue Ar
@@ -4110,6 +4115,7 @@ db90f2376fc98c595018b8cd9811c86d	[[1, 2], [3, 2], [], [], [1, 2, 3], [3, 2, 1], 
 dba2d7d71196ffa6ba5cc0dfc0c8e092	"!"	r, w = IO.pipe\n            begin\n              $\\ = "!"\n           
 dba8c999f223349114b2637336cb1407	true	Process.getpriority(Process::PRIO_PGRP, 0).is_a?(Integer)
 dbac611098d272f9af09e0a0f0872a71	7	obj = Object.new\n            obj.define_singleton_method(:add) { |a
+dbae308d2c1f723a0c6bbba4f6c43d0f	[[[162, 175], [162, 175], true], [[173, 161], [173, 161], true], [[246, 175], [246, 175], true], [[161, 161], [161, 161], true], ["Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], [[249, 161], [249, 161], true]]	[[0x81, 0xAD], [0x87, 0x40], [0xEB, 0xAD], [0x81, 0x40], [0xF0, 0x4
 dbc18dfb07e0bf31beaad3fdb0a50b52	3	"hello".byteindex("lo", -3)
 dbc20278d0d856cfb185f95ac488161b	[nil, 3, 5, "abcde"]	path = "/tmp/mr_buf_points.txt"\n            res = []\n            f 
 dbd7763f5cc8da699566eecf0839dd67	["RegexpError: invalid multibyte character: /\\\\xFF/", "RegexpError: invalid multibyte character: /\\\\xFF/", "RegexpError: invalid multibyte character: /\\\\xA4/", "RegexpError: invalid multibyte character: /a\\\\xA4b/", "RegexpError: invalid multibyte character: /(\\\\xA4/", "RegexpError: invalid multibyte character: /\\\\x81/", "/\\\\xFF/", "/\\\\x{A4A2}/", "/\\\\xff/n"]	def sj(s) = s.dup.force_encoding("Shift_JIS")\n              def e

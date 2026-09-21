@@ -1184,6 +1184,158 @@ static WINDOWS31J_FIXUP: JpFixup = JpFixup {
 
 /// The table corrections for an encoding, or `None` for one
 /// `encoding_rs` already answers CRuby's way.
+/// Walks a whole buffer through [`jis_direct_one`], honouring
+/// `invalid:` / `undef: :replace`. Stops at the first refusal it
+/// cannot replace, returning what converted, where it stopped, and
+/// whether the character was ill-formed or merely homeless.
+fn jis_direct_all(
+    bytes: &[u8],
+    from_euc: bool,
+    opts: &TranscodeOpts,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> (Vec<u8>, Option<(usize, usize, bool)>) {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        match jis_direct_one(&bytes[at..], from_euc) {
+            JisCell::Cell(b, n) => {
+                out.extend_from_slice(&b);
+                at += n;
+            }
+            JisCell::Undefined(n) if opts.undef_replace => {
+                out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                at += n;
+            }
+            JisCell::Invalid(n) if opts.invalid_replace => {
+                out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                // The bytes read to disprove the sequence are read
+                // again rather than swallowed with it, so the walk
+                // decides how far the malformed run reaches — the
+                // same answer the raising path gets.
+                at += first_bad_sequence(src_enc, &bytes[at..])
+                    .map(|(err, _, _)| err.len().max(1))
+                    .unwrap_or(n);
+            }
+            JisCell::Undefined(n) => return (out, Some((at, n, false))),
+            JisCell::Invalid(n) => return (out, Some((at, n, true))),
+        }
+    }
+    (out, None)
+}
+
+/// EUC-JP and Shift_JIS spell the same JIS X 0208 plane, so CRuby
+/// converts between them cell to cell and never asks which Unicode
+/// character is involved — `Encoding::Converter#convpath` reports no
+/// pivot for the pair. The mapping is arithmetic rather than a table,
+/// and it reaches the 1957 cells per direction whose Unicode home
+/// CRuby's own tables do not have, which a pivot cannot follow
+/// (#1460). Windows-31J is *not* in this: CRuby pivots that pair, and
+/// `EUC-JP → Windows-31J` of a row-13 cell is an undefined conversion
+/// where `EUC-JP → Shift_JIS` of the same is `87 40`.
+fn jis_direct_from_euc(src_enc: crate::value::Encoding, dst_enc: crate::value::Encoding) -> Option<bool> {
+    use crate::value::Encoding as E;
+    match (src_enc, dst_enc) {
+        // `Sjis(0)` is Shift_JIS proper; the other payloads are
+        // Windows-31J / CP932 and MacJapanese, which CRuby pivots.
+        (E::EucJp, E::Sjis(0)) => Some(true),
+        (E::Sjis(0), E::EucJp) => Some(false),
+        _ => None,
+    }
+}
+
+/// What one character costs on the way in, and what it spells on the
+/// way out — or which way it is refused.
+enum JisCell {
+    /// Bytes to write, and how many source bytes they came from.
+    Cell(Vec<u8>, usize),
+    /// Well-formed for the source, with no home in the destination:
+    /// EUC-JP's JIS X 0212 plane, or a Shift_JIS cell outside the
+    /// 94×94 grid.
+    Undefined(usize),
+    /// Not well-formed for the source encoding at all.
+    Invalid(usize),
+}
+
+/// One character of a direct EUC-JP ↔ Shift_JIS conversion.
+fn jis_direct_one(bytes: &[u8], from_euc: bool) -> JisCell {
+    let b0 = bytes[0];
+    if b0 < 0x80 {
+        return JisCell::Cell(vec![b0], 1);
+    }
+    if from_euc {
+        // `8E` prefixes a half-width katakana, which Shift_JIS spells
+        // as the single byte on its own.
+        if b0 == 0x8E {
+            return match bytes.get(1) {
+                Some(&k) if (0xA1..=0xDF).contains(&k) => JisCell::Cell(vec![k], 2),
+                Some(_) => JisCell::Invalid(2),
+                None => JisCell::Invalid(1),
+            };
+        }
+        // `8F` prefixes the JIS X 0212 plane, which Shift_JIS has no
+        // room for at all.
+        if b0 == 0x8F {
+            return match (bytes.get(1), bytes.get(2)) {
+                (Some(&b1), Some(&b2))
+                    if (0xA1..=0xFE).contains(&b1) && (0xA1..=0xFE).contains(&b2) =>
+                {
+                    JisCell::Undefined(3)
+                }
+                (Some(_), Some(_)) => JisCell::Invalid(3),
+                _ => JisCell::Invalid(bytes.len().min(2)),
+            };
+        }
+        if !(0xA1..=0xFE).contains(&b0) {
+            return JisCell::Invalid(1);
+        }
+        let Some(&b1) = bytes.get(1) else {
+            return JisCell::Invalid(1);
+        };
+        if !(0xA1..=0xFE).contains(&b1) {
+            return JisCell::Invalid(2);
+        }
+        // Row and cell are 1..=94 either side; only the spelling of
+        // the pair differs.
+        let (row, cell) = ((b0 - 0xA0) as u32, (b1 - 0xA0) as u32);
+        let s1 = if row <= 62 { (row + 257) / 2 } else { (row + 385) / 2 };
+        let s2 = if row % 2 == 1 {
+            cell + 63 + u32::from(cell >= 64)
+        } else {
+            cell + 158
+        };
+        JisCell::Cell(vec![s1 as u8, s2 as u8], 2)
+    } else {
+        // Shift_JIS spells half-width katakana in one byte.
+        if (0xA1..=0xDF).contains(&b0) {
+            return JisCell::Cell(vec![0x8E, b0], 1);
+        }
+        let lead = match b0 {
+            0x81..=0x9F => 2 * b0 as u32 - 257,
+            0xE0..=0xFC => 2 * b0 as u32 - 385,
+            _ => return JisCell::Invalid(1),
+        };
+        let Some(&b1) = bytes.get(1) else {
+            return JisCell::Invalid(1);
+        };
+        if !(0x40..=0xFC).contains(&b1) || b1 == 0x7F {
+            return JisCell::Invalid(if (0x40..=0xFC).contains(&b1) { 2 } else { 1 });
+        }
+        // The trail byte says which of the two rows this lead covers.
+        let (row, cell) = if b1 <= 0x9E {
+            (lead, b1 as u32 - 63 - u32::from(b1 >= 0x80))
+        } else {
+            (lead + 1, b1 as u32 - 158)
+        };
+        // Shift_JIS reaches past the 94×94 grid (the IBM extension
+        // rows); EUC-JP's two-byte form does not.
+        if !(1..=94).contains(&row) || !(1..=94).contains(&cell) {
+            return JisCell::Undefined(2);
+        }
+        JisCell::Cell(vec![(row + 0xA0) as u8, (cell + 0xA0) as u8], 2)
+    }
+}
+
 fn jp_fixup(enc: crate::value::Encoding) -> Option<&'static JpFixup> {
     use crate::value::Encoding as E;
     match enc {
@@ -1977,6 +2129,37 @@ pub(super) fn transcode_bytes_with_opts(
         }
         // Non-ASCII-compatible encodings fall through to the decode /
         // re-encode pipeline so the decorators run on real characters.
+    }
+    // EUC-JP ↔ Shift_JIS needs no pivot: CRuby maps the shared JIS
+    // X 0208 plane cell to cell, which reaches the cells its own
+    // tables have no Unicode home for (#1460).
+    if let Some(from_euc) = jis_direct_from_euc(src_enc, dst_enc)
+        && !opts.has_newline()
+    {
+        let (out, stop) = jis_direct_all(src_bytes, from_euc, opts, src_enc, dst_enc);
+        return match stop {
+            None => Ok(out),
+            Some((at, _n, true)) => Err(invalid_byte_sequence(
+                store,
+                src_enc,
+                dst_enc,
+                &src_bytes[at..],
+            )),
+            Some((at, n, false)) => {
+                // Named against the two encodings themselves — this
+                // conversion has no pivot to name.
+                let cell = &src_bytes[at..(at + n).min(src_bytes.len())];
+                Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    format!(
+                        "{} from {} to {}",
+                        quote_error_bytes(cell),
+                        src_enc.name(),
+                        dst_enc.name()
+                    ),
+                ))
+            }
+        };
     }
     // Fast path: 7-bit content + an ascii-compatible source copies
     // through unchanged into any byte-oriented destination. Covers the
@@ -4282,6 +4465,78 @@ fn stream_convert(
         }
         return (result, consumed, out, meta);
     }
+    // EUC-JP ↔ Shift_JIS converts cell to cell with no pivot at all,
+    // so it is settled before either half below gets a say (#1460).
+    if let Some(from_euc) = jis_direct_from_euc(src_enc, dst_enc) {
+        let mut out: Vec<u8> = Vec::with_capacity(src_bytes.len());
+        let mut at = 0;
+        while at < src_bytes.len() {
+            let (bytes, n, refusal) = match jis_direct_one(&src_bytes[at..], from_euc) {
+                JisCell::Cell(b, n) => (b, n, None),
+                JisCell::Undefined(n) if opts.undef_replace => {
+                    (opts.replace_str(dst_enc).into_bytes(), n, None)
+                }
+                JisCell::Invalid(n) if opts.invalid_replace => {
+                    (opts.replace_str(dst_enc).into_bytes(), n, None)
+                }
+                JisCell::Undefined(n) => (vec![], n, Some(false)),
+                JisCell::Invalid(n) => (vec![], n, Some(true)),
+            };
+            if let Some(is_invalid) = refusal {
+                let cell = &src_bytes[at..(at + n).min(src_bytes.len())];
+                if is_invalid {
+                    // An incomplete tail is the next call's to finish,
+                    // exactly as it is for the pivoted paths.
+                    let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
+                    let through = if matches!(kind, StreamConvertResult::InvalidByteSequence) {
+                        (at + meta.error_bytes.len() + meta.readagain_bytes.len())
+                            .min(src_bytes.len())
+                    } else {
+                        at
+                    };
+                    return (kind, through, out, meta);
+                }
+                return (
+                    StreamConvertResult::UndefinedConversion,
+                    at + n,
+                    out,
+                    ErrMeta {
+                        error_bytes: cell.to_vec(),
+                        readagain_bytes: vec![],
+                        // Named against the source encoding, since
+                        // there is no pivot in between.
+                        decode_stage: true,
+                        ..ErrMeta::default()
+                    },
+                );
+            }
+            if let Some(max) = max_dst_bytes
+                && out.len() + bytes.len() > max
+            {
+                // Fill to the byte and hold the rest, as every other
+                // destination does (#1532).
+                let fits = max - out.len();
+                out.extend_from_slice(&bytes[..fits]);
+                return (
+                    StreamConvertResult::DestinationBufferFull,
+                    at + n,
+                    out,
+                    ErrMeta {
+                        dst_full_out: bytes[fits..].to_vec(),
+                        ..ErrMeta::default()
+                    },
+                );
+            }
+            out.extend_from_slice(&bytes);
+            at += n;
+        }
+        let result = if partial_input {
+            StreamConvertResult::SourceBufferEmpty
+        } else {
+            StreamConvertResult::Finished
+        };
+        return (result, src_bytes.len(), out, ErrMeta::default());
+    }
     // EUC-JP / Shift_JIS / Windows-31J on the way *in*: `encoding_rs`
     // carries WHATWG's tables, which disagree with CRuby's on the
     // duplicate-mapping cells, read the NEC/IBM extension rows CRuby
@@ -5524,6 +5779,12 @@ fn error_stage_names(
     dst_enc: crate::value::Encoding,
     decode_stage: bool,
 ) -> (String, String) {
+    // A pair with no pivot names itself at both ends, whichever half
+    // gave up — there is no UTF-8 hop in the conversion to blame
+    // (#1460).
+    if jis_direct_from_euc(src_enc, dst_enc).is_some() {
+        return (src_enc.name().to_string(), dst_enc.name().to_string());
+    }
     if decode_stage {
         let stage_dst = if src_enc.is_utf8_compatible() {
             dst_enc.name().to_string()
@@ -6358,7 +6619,9 @@ fn build_convpath(
 ) -> Value {
     use crate::value::Encoding as E;
     let mut elems: Vec<Value> = vec![];
-    if src == E::Utf8 || dst == E::Utf8 || src == dst {
+    // EUC-JP ↔ Shift_JIS is one step: CRuby has a converter that maps
+    // the shared JIS X 0208 plane directly (#1460).
+    if src == E::Utf8 || dst == E::Utf8 || src == dst || jis_direct_from_euc(src, dst).is_some() {
         elems.push(Value::array2(
             encoding_value(globals, src),
             encoding_value(globals, dst),
@@ -10207,6 +10470,104 @@ mod tests {
             s2 = "abc\xa1def".dup
             d2 = "".dup
             r << ec2.primitive_convert(s2, d2, nil, 10) << [s2, d2] << ec2.putback
+            "##,
+        );
+    }
+
+    #[test]
+    fn euc_jp_and_shift_jis_convert_without_a_pivot() {
+        // The two spell the same JIS X 0208 plane, so CRuby maps them
+        // cell to cell and never asks which Unicode character is
+        // involved — which reaches the cells its own tables have no
+        // Unicode home for (#1460).
+        crate::tests::run_test_once(
+            r##"
+            [[0xA2, 0xAF], [0xF6, 0xAF], [0xAD, 0xA1], [0xA1, 0xA1], [0xF4, 0xA6],
+             [0xA4, 0xA2], [0xFE, 0xFE]].map do |b1, b2|
+              s = [b1, b2].pack("C*").force_encoding("EUC-JP")
+              one = (s.encode("Shift_JIS").bytes rescue $!.class.to_s)
+              cv = (Encoding::Converter.new("EUC-JP", "Shift_JIS").convert(s.dup).bytes rescue $!.class.to_s)
+              [one, cv, one == cv]
+            end
+            "##,
+        );
+        crate::tests::run_test_once(
+            r##"
+            [[0x81, 0xAD], [0x87, 0x40], [0xEB, 0xAD], [0x81, 0x40], [0xF0, 0x40],
+             [0xFA, 0x40], [0xED, 0x40]].map do |b1, b2|
+              s = [b1, b2].pack("C*").force_encoding("Shift_JIS")
+              one = (s.encode("EUC-JP").bytes rescue $!.class.to_s)
+              cv = (Encoding::Converter.new("Shift_JIS", "EUC-JP").convert(s.dup).bytes rescue $!.class.to_s)
+              [one, cv, one == cv]
+            end
+            "##,
+        );
+        // Half-width katakana changes shape, the JIS X 0212 plane has
+        // nowhere to go, and ASCII rides through.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            r << ("x" + [0x8E, 0xB1].pack("C*")).force_encoding("EUC-JP").encode("Shift_JIS").bytes
+            r << ("x" + [0xB1].pack("C*")).force_encoding("Shift_JIS").encode("EUC-JP").bytes
+            r << ([0x8F, 0xA1, 0xA1].pack("C*").force_encoding("EUC-JP").encode("Shift_JIS") rescue
+                  [$!.class.to_s, $!.message])
+            r << ([0x8F, 0xA1, 0xA1].pack("C*").force_encoding("EUC-JP")
+                    .encode("Shift_JIS", undef: :replace).bytes)
+            r << ([0xF0, 0x40].pack("C*").force_encoding("Shift_JIS").encode("EUC-JP") rescue
+                  [$!.class.to_s, $!.message])
+            r << ([0xA1, 0x41].pack("C*").force_encoding("EUC-JP")
+                    .encode("Shift_JIS", invalid: :replace).bytes)
+            "##,
+        );
+        // Errors name the two encodings themselves: this conversion
+        // has no UTF-8 hop to blame, and `convpath` says so.
+        crate::tests::run_test_once(
+            r##"
+            ec = Encoding::Converter.new("EUC-JP", "Shift_JIS")
+            d = "".dup
+            s = [0x8F, 0xA1, 0xA1].pack("C*").force_encoding("EUC-JP")
+            r = [ec.primitive_convert(s, d),
+                 ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            r << Encoding::Converter.new("EUC-JP", "Shift_JIS").convpath.map { |x| x.map(&:name) }
+            r << Encoding::Converter.new("EUC-JP", "Windows-31J").convpath.map { |x| x.map(&:name) }
+            "##,
+        );
+        // Windows-31J is not in it — CRuby pivots that pair, so the
+        // row-13 cell that Shift_JIS reaches is undefined there.
+        crate::tests::run_test_once(
+            r##"
+            [["EUC-JP", "Windows-31J"], ["Windows-31J", "EUC-JP"],
+             ["Shift_JIS", "Windows-31J"]].flat_map do |a, b|
+              [[0xA1, 0xA1], [0xAD, 0xA1], [0xF6, 0xAF]].map do |b1, b2|
+                s = [b1, b2].pack("C*").force_encoding(a)
+                (s.encode(b).bytes rescue $!.class.to_s)
+              end
+            end
+            "##,
+        );
+        // A capped destination and a split call behave as everywhere
+        // else.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            [0, 1, 2, 3].each do |cap|
+              ec = Encoding::Converter.new("EUC-JP", "Shift_JIS")
+              s = [0xF6, 0xAF].pack("C*").force_encoding("EUC-JP")
+              d = "".dup
+              steps = []
+              8.times do
+                x = ec.primitive_convert(s, d, nil, cap)
+                steps << [x, d.bytes.dup]
+                break if x == :finished
+              end
+              r << [cap, steps]
+            end
+            ec2 = Encoding::Converter.new("EUC-JP", "Shift_JIS")
+            d2 = "".dup
+            a = ec2.primitive_convert([0xF6].pack("C*").force_encoding("EUC-JP"), d2,
+                                      nil, nil, partial_input: true)
+            b = ec2.primitive_convert([0xAF].pack("C*").force_encoding("EUC-JP"), d2)
+            r << [a, b, d2.bytes]
             "##,
         );
     }
