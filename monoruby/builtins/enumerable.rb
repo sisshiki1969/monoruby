@@ -149,8 +149,17 @@ module Enumerable
   end
   alias collect map
 
-  def find(ifnone = nil)
-    return self.to_enum(:find, ifnone) unless block_given?
+  # `*args` rather than `ifnone = nil` so that an *omitted* `ifnone` is
+  # no argument at all in the Enumerator the blockless form builds:
+  # CRuby's `enum_find` hands `argc` / `argv` straight to
+  # `RETURN_ENUMERATOR`, so `find` records `find` and only an explicit
+  # `find(nil)` records `find(nil)`.
+  def find(*args)
+    if args.size > 1
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    end
+    ifnone = args[0]
+    return self.to_enum(:find, *args) unless block_given?
     __gather_each do |x|
       if yield(x)
         return x

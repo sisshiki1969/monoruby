@@ -143,6 +143,26 @@ class Range
     self
   end
   
+  # `Enumerable#map` / `#flat_map` with an Integer fast path in front.
+  # `__builtin_map` runs the two-Fixnum case as a counted loop, with no
+  # `<=>` / `succ` dispatch per element, and answers `nil` for every other
+  # shape — a String or Symbol range, an endless one, a Bignum endpoint, a
+  # type that only has `succ` — which then walks `Range#each` by way of
+  # `Enumerable`. `map` always builds an Array, so `nil` is unambiguous.
+  def map(&block)
+    return to_enum(:map) { size rescue nil } unless block
+    res = __builtin_map(&block)
+    res.nil? ? super : res
+  end
+  alias collect map
+
+  def flat_map(&block)
+    return to_enum(:flat_map) { size rescue nil } unless block
+    res = __builtin_flat_map(&block)
+    res.nil? ? super : res
+  end
+  alias collect_concat flat_map
+
   def reject
     return self.to_enum(:reject) unless block_given?
     i = self.begin
@@ -475,6 +495,8 @@ class Range
     end
     aseq
   end
+
+  private :__builtin_map, :__builtin_flat_map
 
   private
 

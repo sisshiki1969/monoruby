@@ -41,8 +41,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "__cover_num_q", cover_num_q, 1);
     globals.define_builtin_func(RANGE_CLASS, "===", teq, 1);
     globals.define_builtin_func(RANGE_CLASS, "all?", all_, 0);
-    globals.define_builtin_funcs(RANGE_CLASS, "collect", &["map"], map, 0);
-    globals.define_builtin_funcs(RANGE_CLASS, "collect_concat", &["flat_map"], flat_map, 0);
+    // Fast paths kept reachable from the Ruby-level map / flat_map
+    // (builtins/range.rb), which add the blockless Enumerator and the
+    // non-Integer walk. Each answers `nil` when its fast path does not
+    // apply, and the Ruby side falls through to `Enumerable`.
+    globals.define_builtin_func(RANGE_CLASS, "__builtin_map", map, 0);
+    globals.define_builtin_func(RANGE_CLASS, "__builtin_flat_map", flat_map, 0);
     globals.define_builtin_funcs(RANGE_CLASS, "entries", &["to_a"], toa, 0);
     globals.define_builtin_func(RANGE_CLASS, "min", min, 0);
     globals.define_builtin_func(RANGE_CLASS, "max", max, 0);
@@ -651,14 +655,10 @@ fn all_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 }
 
 ///
-/// ### Enumerable#map
-///
-/// - [NOT SUPPORTED]collect -> Enumerator
-/// - [NOT SUPPORTED]map -> Enumerator
-/// - collect {|item| ... } -> [object]
-/// - map {|item| ... } -> [object]
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect.html]
+/// The Integer fast path behind `Range#map` / `#collect`: a counted loop
+/// over the two Fixnum endpoints, with no `<=>` / `succ` dispatch per
+/// element. `nil` means "not this shape" — `builtins/range.rb` then hands
+/// the call to `Enumerable#map`, which walks `Range#each`.
 #[monoruby_builtin]
 fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
@@ -672,18 +672,12 @@ fn map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let iter = (start..end).map(Value::integer);
         vm.invoke_block_map1(globals, bh, iter, (end - start).unsigned_abs() as usize)
     } else {
-        Err(MonorubyErr::runtimeerr("not supported"))
+        Ok(Value::nil())
     }
 }
 
-/// ### Enumerable#collect_concat
-///
-/// - flat_map {| obj | block } -> Array
-/// - collect_concat {| obj | block } -> Array
-/// - [NOT SUPPORTED] flat_map -> Enumerator
-/// - [NOT SUPPORTED] collect_concat -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
+/// The Integer fast path behind `Range#flat_map` / `#collect_concat`,
+/// answering `nil` off it exactly as [`map`] does.
 #[monoruby_builtin]
 fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let bh = lfp.expect_block()?;
@@ -697,7 +691,7 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         let iter = (start..end).map(Value::integer);
         vm.invoke_block_flat_map1(globals, bh, iter, (end - start).unsigned_abs() as usize)
     } else {
-        Err(MonorubyErr::runtimeerr("not supported"))
+        Ok(Value::nil())
     }
 }
 
