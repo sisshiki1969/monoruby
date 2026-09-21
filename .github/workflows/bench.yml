@@ -178,23 +178,36 @@ jobs:
           MR_TIMEOUT: '1000'
           YJ_TIMEOUT: '1000'
           ZJ_TIMEOUT: '1000'
-          # harness-warmup's own ceiling, deliberately *below* the
-          # timeouts above, so the harness ends the run rather than
-          # `timeout(1)` killing it — which records `timeout (Ns)` and no
-          # measurement at all.
+          # The convergence rule. harness-warmup iterates until its
+          # median absolute deviation falls under a threshold that
+          # *relaxes* as it goes — `MAD_TARGET + (iters - MIN_ITERS) *
+          # MAD_INCREASE_PER_ITER` — so a noisy benchmark converges late
+          # rather than never.
           #
-          # The harness iterates until its median absolute deviation
-          # falls under a threshold that *relaxes* as it goes:
-          # `MAD_TARGET + (iters - MIN_ITERS) * MAD_INCREASE_PER_ITER`,
-          # i.e. 0.001 at iteration 10 and +0.0001 per iteration after.
-          # So a noisy benchmark converges late rather than never: splay,
-          # whose bimodal GC holds its MAD at ~0.434, needs the threshold
-          # to reach that — about 4,300 iterations, ~520 s at ~0.11 s an
-          # iteration. Measured here it was at `mad=0.4343/0.3407` after
-          # 3,407 iterations when the old 400 s timeout killed it, a
-          # couple of minutes short. 600 s clears that, and a benchmark
-          # that still has not converged stops here with the median it
-          # has instead of with nothing.
+          # The defaults (0.001, +0.0001) ask for 0.1% and give a point
+          # back every iteration, which is a reasonable target on a quiet
+          # machine and an unreachable one here: a shared GitHub runner,
+          # with several of these jobs in flight at once, is not where a
+          # 0.1% median is going to be established by sitting still for
+          # longer. splay is the extreme — its bimodal GC holds its MAD
+          # at ~0.434, which the default ramp only reaches around
+          # iteration 4,300 (~520 s) — but every benchmark was paying the
+          # same way, running hundreds of iterations to chase a precision
+          # the environment cannot deliver.
+          #
+          # So aim for 2% and give 2 points back per iteration: the
+          # benchmarks that are steady still settle at MIN_ITERS, and the
+          # ones that are not stop within ~20 iterations instead of
+          # thousands. MIN_ITERS (10) and MIN_TIME (5 s), both left at
+          # their defaults, are what now set the floor — a fast benchmark
+          # still runs hundreds of iterations to fill its 5 seconds.
+          MAD_TARGET: '0.02'
+          MAD_INCREASE_PER_ITER: '0.02'
+          # harness-warmup's own ceiling, deliberately *below* the
+          # timeouts above, so a benchmark that somehow still has not
+          # converged is ended by the harness — with the median it has —
+          # rather than killed by `timeout(1)`, which records
+          # `timeout (Ns)` and no measurement at all.
           MAX_TIME: '600'
           ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
@@ -414,23 +427,36 @@ jobs:
           MR_TIMEOUT: '1000'
           YJ_TIMEOUT: '1000'
           ZJ_TIMEOUT: '1000'
-          # harness-warmup's own ceiling, deliberately *below* the
-          # timeouts above, so the harness ends the run rather than
-          # `timeout(1)` killing it — which records `timeout (Ns)` and no
-          # measurement at all.
+          # The convergence rule. harness-warmup iterates until its
+          # median absolute deviation falls under a threshold that
+          # *relaxes* as it goes — `MAD_TARGET + (iters - MIN_ITERS) *
+          # MAD_INCREASE_PER_ITER` — so a noisy benchmark converges late
+          # rather than never.
           #
-          # The harness iterates until its median absolute deviation
-          # falls under a threshold that *relaxes* as it goes:
-          # `MAD_TARGET + (iters - MIN_ITERS) * MAD_INCREASE_PER_ITER`,
-          # i.e. 0.001 at iteration 10 and +0.0001 per iteration after.
-          # So a noisy benchmark converges late rather than never: splay,
-          # whose bimodal GC holds its MAD at ~0.434, needs the threshold
-          # to reach that — about 4,300 iterations, ~520 s at ~0.11 s an
-          # iteration. Measured here it was at `mad=0.4343/0.3407` after
-          # 3,407 iterations when the old 400 s timeout killed it, a
-          # couple of minutes short. 600 s clears that, and a benchmark
-          # that still has not converged stops here with the median it
-          # has instead of with nothing.
+          # The defaults (0.001, +0.0001) ask for 0.1% and give a point
+          # back every iteration, which is a reasonable target on a quiet
+          # machine and an unreachable one here: a shared GitHub runner,
+          # with several of these jobs in flight at once, is not where a
+          # 0.1% median is going to be established by sitting still for
+          # longer. splay is the extreme — its bimodal GC holds its MAD
+          # at ~0.434, which the default ramp only reaches around
+          # iteration 4,300 (~520 s) — but every benchmark was paying the
+          # same way, running hundreds of iterations to chase a precision
+          # the environment cannot deliver.
+          #
+          # So aim for 2% and give 2 points back per iteration: the
+          # benchmarks that are steady still settle at MIN_ITERS, and the
+          # ones that are not stop within ~20 iterations instead of
+          # thousands. MIN_ITERS (10) and MIN_TIME (5 s), both left at
+          # their defaults, are what now set the floor — a fast benchmark
+          # still runs hundreds of iterations to fill its 5 seconds.
+          MAD_TARGET: '0.02'
+          MAD_INCREASE_PER_ITER: '0.02'
+          # harness-warmup's own ceiling, deliberately *below* the
+          # timeouts above, so a benchmark that somehow still has not
+          # converged is ended by the harness — with the median it has —
+          # rather than killed by `timeout(1)`, which records
+          # `timeout (Ns)` and no measurement at all.
           MAX_TIME: '600'
           ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
