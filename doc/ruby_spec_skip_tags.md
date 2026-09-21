@@ -1,5 +1,33 @@
 # ruby/spec ハング対策: `skip.txt` → `tags/` 移行
 
+> **更新(2026-09-21): `language/pattern_matching_tags.txt` を削除、タグは 5 ファイル 9 件に。**
+> 全タグを棚卸しした。現 master(0faa867)の release ビルド + ruby/spec
+> (af6351a)で、タグを無効にして 6 ファイルを `timeout` 付きで実行:
+>
+> - `pattern_matching_tags.txt` の 3 例(`refinements are used for
+>   #deconstruct` / `#deconstruct_keys` / `#=== in constant pattern`)は
+>   refinements の実装(`doc/refinements.md`)後、`deconstruct` 系が通常の
+>   メソッド呼び出しとして lower されるため **pass** する。`fails:` は
+>   pass する example を集計から落とすので、剪定した(ファイルごと削除)。
+> - `fork_tags.txt`(5 タグ、実例 8)/ `wait_tags.txt`(1): ローカルでは
+>   pass し、両ファイルを 10 回連続で回してもハングしない。しかし #1386
+>   以降の master に fork / wait / signal を触るコミットは無く、これらは
+>   GitHub runner 上でだけ起きるハング(下記)なので、ローカルで通ることは
+>   外す根拠にならない。**残す**。
+> - `import_methods_tags.txt`(1)/ `predefined_tags.txt`(1)/
+>   `regexp/modifiers_tags.txt`(1): いずれも今も fail。前者は下記
+>   「実装前提の非互換」、`resolve_feature_path` の `.so` 例は monoruby の
+>   `etc` が `stdlib/etc.rb` なので `[:rb, …]` を返し `:so` と恒久に一致しない
+>   (`RbConfig::CONFIG["EXTSTATIC"]` を `"static"` にすれば spec 側が skip
+>   するが、実態と違う値を報告することになる)、`/o` は
+>   `regex_flags_from_closing` が `o` を落とす本物の未実装
+>   (`doc/runtime_optimization/regexp.md` §5)。**残す**。
+>
+> 副産物: `pattern_matching_spec` の `Hash pattern raises
+> NoMatchingPatternKeyError if the key does not match` がタグ無しで error
+> している(`NoMatchingPatternKeyError` が上がらない)。タグとは無関係の
+> 実装差なので統計に出たままで正しい。
+
 > **更新(2026-09-17): `core/process/wait_tags.txt` を追加(#1386)。**
 > rubyspec-stats の 2026-09-17 の run(nightly = 900252fd)で core が空になった。
 > `spec/default.mspec` の example トレースが指す最後の example は
