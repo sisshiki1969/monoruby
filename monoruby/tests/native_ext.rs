@@ -67,6 +67,12 @@ p Hello.call_it(Foo.new, :bar)
 p Hello.call_it(Foo.new, :priv)
 p (begin; Hello.call_it(Foo.new, :bad); rescue IOError => e; e.message; end)
 p (begin; Hello.call_it(Foo.new, :nope); rescue NoMethodError => e; e.message[0, 30]; end)
+p Hello.call_sym(Foo.new, :bar)
+p Hello.call_sym(Foo.new, :priv)
+p (begin; Hello.call_sym(Foo.new, :nope); rescue NoMethodError => e; e.message[0, 30]; end)
+p (begin; Hello.no_sym(Foo.new); rescue ArgumentError => e; e.message; end)
+p Hello.intern_twice("bar") > 0
+p Hello.intern_twice("\xFF".b)
 c = Hello::Counter.new("t" * 3)
 p [c.incr, c.incr, c.incr, c.tag]
 d = c.dup
@@ -102,6 +108,12 @@ true
 :priv_called
 "io"
 "undefined method 'nope' for an"
+:bar_called
+:priv_called
+"undefined method 'nope' for an"
+"funcall_sym was given MR_NO_SYM"
+true
+0
 [1, 2, 3, "ttt"]
 [4, 4, true]
 "not a counter"
