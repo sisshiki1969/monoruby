@@ -179,13 +179,22 @@ jobs:
           YJ_TIMEOUT: '1000'
           ZJ_TIMEOUT: '1000'
           # harness-warmup's own ceiling, deliberately *below* the
-          # timeouts above. A benchmark whose median-absolute-deviation
-          # never reaches the convergence threshold — splay, whose GC
-          # bimodality holds it around 0.4 against a threshold of 0.05 —
-          # otherwise runs to the harness default of 20 minutes and is
-          # killed, which records `timeout (Ns)` and no measurement at
-          # all. With the ceiling first, the harness stops on its own and
-          # still reports the median it has.
+          # timeouts above, so the harness ends the run rather than
+          # `timeout(1)` killing it — which records `timeout (Ns)` and no
+          # measurement at all.
+          #
+          # The harness iterates until its median absolute deviation
+          # falls under a threshold that *relaxes* as it goes:
+          # `MAD_TARGET + (iters - MIN_ITERS) * MAD_INCREASE_PER_ITER`,
+          # i.e. 0.001 at iteration 10 and +0.0001 per iteration after.
+          # So a noisy benchmark converges late rather than never: splay,
+          # whose bimodal GC holds its MAD at ~0.434, needs the threshold
+          # to reach that — about 4,300 iterations, ~520 s at ~0.11 s an
+          # iteration. Measured here it was at `mad=0.4343/0.3407` after
+          # 3,407 iterations when the old 400 s timeout killed it, a
+          # couple of minutes short. 600 s clears that, and a benchmark
+          # that still has not converged stops here with the median it
+          # has instead of with nothing.
           MAX_TIME: '600'
           ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
@@ -406,13 +415,22 @@ jobs:
           YJ_TIMEOUT: '1000'
           ZJ_TIMEOUT: '1000'
           # harness-warmup's own ceiling, deliberately *below* the
-          # timeouts above. A benchmark whose median-absolute-deviation
-          # never reaches the convergence threshold — splay, whose GC
-          # bimodality holds it around 0.4 against a threshold of 0.05 —
-          # otherwise runs to the harness default of 20 minutes and is
-          # killed, which records `timeout (Ns)` and no measurement at
-          # all. With the ceiling first, the harness stops on its own and
-          # still reports the median it has.
+          # timeouts above, so the harness ends the run rather than
+          # `timeout(1)` killing it — which records `timeout (Ns)` and no
+          # measurement at all.
+          #
+          # The harness iterates until its median absolute deviation
+          # falls under a threshold that *relaxes* as it goes:
+          # `MAD_TARGET + (iters - MIN_ITERS) * MAD_INCREASE_PER_ITER`,
+          # i.e. 0.001 at iteration 10 and +0.0001 per iteration after.
+          # So a noisy benchmark converges late rather than never: splay,
+          # whose bimodal GC holds its MAD at ~0.434, needs the threshold
+          # to reach that — about 4,300 iterations, ~520 s at ~0.11 s an
+          # iteration. Measured here it was at `mad=0.4343/0.3407` after
+          # 3,407 iterations when the old 400 s timeout killed it, a
+          # couple of minutes short. 600 s clears that, and a benchmark
+          # that still has not converged stops here with the median it
+          # has instead of with nothing.
           MAX_TIME: '600'
           ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
