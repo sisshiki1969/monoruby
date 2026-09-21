@@ -9666,6 +9666,47 @@ mod tests {
     }
 
     #[test]
+    fn converter_single_byte_source_cap() {
+        // A single-byte-table *source* builds the pivot itself and
+        // hands it to the ordinary path, so a cap comes back measured
+        // in pivot characters and has to be counted back to the one
+        // source byte each of them came from (#1511).
+        //
+        // Cap 2 is left out: it falls inside `à`'s two UTF-8 bytes,
+        // where CRuby writes the first of them and we stop on the
+        // character boundary (#1532).
+        crate::tests::run_test_once(
+            r##"
+            [1, 3, 4].map do |cap|
+              ec = Encoding::Converter.new("ISO-8859-1", "UTF-8")
+              s = "aàbéc".encode("ISO-8859-1").dup
+              d = "".dup
+              first = ec.primitive_convert(s, d, nil, cap)
+              mid = [s.bytes, d.bytes]
+              [first, mid, ec.primitive_convert(s, d, nil, 200), s.bytes, d.bytes]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_capped_destination_with_no_source_buffers_everything() {
+        // A `nil` source has nowhere to leave what the cap held back,
+        // so all of it goes to the converter's pending buffer instead
+        // of being dropped (#1511).
+        crate::tests::run_test_once(
+            r##"
+            ec = Encoding::Converter.new("UTF-8", "EUC-JP")
+            s = "あいう".dup
+            d = "".dup
+            first = ec.primitive_convert(s, d, nil, 2)
+            second = ec.primitive_convert(nil, d, nil, 3)
+            [first, second, s.bytes, d.bytes]
+            "##,
+        );
+    }
+
+    #[test]
     fn converter_single_byte_destination_cap() {
         // A single-byte-table destination maps the pivot itself, one
         // byte per character, and has to report the cap in *source*
