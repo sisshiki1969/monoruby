@@ -1859,6 +1859,7 @@
 62d15ca21ed1dd74ca65f3735e8b6c5a	false	File.writable?("nonexistent_file_xyz")
 62e1e4a6015b86d8165f5521b136e2ae	[[1, 2], [[:a, 1], [:b, 2]], [[:v], 1], [{k: 2}]]	__a = [];__a << (\n            class A\n              def foo(a, k: 0)\n           
 63089c51218b7c8ba348e648ba7770b7	[16, [16, 5, 4, 10, 17], [[11, 4, 10, 1], [20, 11, 13, 10], 11, 917], [[4, 16, 18, 8], 17], [[4, 16, 18, 8], 17], [9, 17, 15, 10], [[2, 4, 6, 8, 10], 2], [NoMethodError, "private method 'rand' called for nil"], [NoMethodError, "private method 'rand' called for nil"], [RangeError, "random number too big 999"], [RangeError, "random number too small -1"], [1, 2], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], 3, [Array, Integer], 2]	__a = [];__a << ((1..20).to_a.sample(random: Random.new(7)));__a << ((1..20).to_
+63174085f791ceab6009ea9d497d6c8c	[:finished, [], [97, 33, 98], [[0, :destination_buffer_full, [195, 169, 98], []], [1, :destination_buffer_full, [98], [97]], [2, :destination_buffer_full, [], [97, 63]], [3, :finished, [], [97, 63, 98]], [4, :finished, [], [97, 63, 98]]]]	ec = Encoding::Converter.new("UTF-8", "EUC-KR", undef: :replace)\n  
 63422c9740b43bc9e10c2b9e48ec2652	42	x = 1\n            binding.local_variable_set(:x, 42)\n            x\n
 6342f8bdbf7fb127f0fe51c760a63f08	[true, "z"]	r, w = IO.pipe\n            t = Thread.new { sleep 0.02; w.write "z"
 63444ecfa93e0e246d693e530ba2cfa8	[[:whatever, [], {}, nil], [:whatever, [1, 2], {}, nil], [:whatever, [0], {}, nil], [:whatever, [], {k: 1}, nil], [:whatever, [], {}, :from_block], [:whatever, [3, 4], {}, nil], [:whatever, [1], {}, nil]]	class MM\n          def method_missing(name, *args, **kw, &blk)\n        
@@ -3909,6 +3910,7 @@ d03f3da52be16a5382075d9aea65e40c	[0, true]	class Symbol; def ==(o) = true; end\n
 d044b1d1eedcdda6f15b67ec84350344	4	"hello".byteindex("o")
 d05976bbfb14033f00937939ab90a32c	36000000	class Lib; def twice(n); n + n; end; end\n        $lib = Lib.new\n       
 d067e8092ba68c29f3fd731c4bbc1200	[42, [Ractor::RemoteError, RuntimeError, "boom", true], "worker", true, :done]	r = Ractor.new { Ractor.receive * 2 }\n        r.send(21)\n        r2 = R
+d072fdc46e88f0261aa49b79b575f161	[[:finished, [], [97, 63, 98]], [:finished, [], [63, 63]], [:finished, [], [63, 120]], [:finished, [], [97, 63, 98]], [:finished, [], [63, 63]], [:finished, [], [63, 120]]]	["EUC-KR", "Big5"].flat_map do |dst|\n              ["aéb", "éé", "\\
 d07ee4e87e21212dcf67ec14eaa4fbbc	Object	include Math\n        
 d08434c822205293acd0c331ff42f857	"Object"	Time.superclass.to_s
 d08702c38e94487e4a318ebe2df55f9b	["A1\\n", "A2\\n", "B1\\nB2\\n", nil, "A1\\n", "A", "2", "ASCII-8BIT", "A1\\n", "end of file reached"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
