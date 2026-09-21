@@ -5008,20 +5008,43 @@ fn pattern_pieces(enc: crate::value::Encoding, bytes: &[u8]) -> Vec<(usize, usiz
 /// of the raw bytes elsewhere, with `\xHH` per byte for the bytes that
 /// start no character at all.
 fn regexp_source_desc(pat: &RStringInner) -> String {
+    // `None`: nothing is shown verbatim, which is what an error message
+    // wants — it is built as a Rust `String` and has no encoding to
+    // carry the pattern's raw bytes in.
+    String::from_utf8_lossy(&regexp_source_desc_bytes(
+        pat.as_bytes(),
+        pat.encoding(),
+        None,
+    ))
+    .into_owned()
+}
+
+/// [`regexp_source_desc`] as the bytes CRuby would write, and with
+/// `rb_reg_desc`'s own rule about what to escape: a character the
+/// *result* encoding can show is copied raw, which for a pattern in
+/// that encoding means its own bytes come back out (#1516). `resenc`
+/// is `None` where there is no result encoding to compare against and
+/// everything non-ASCII is escaped.
+pub(crate) fn regexp_source_desc_bytes(
+    bytes: &[u8],
+    enc: crate::value::Encoding,
+    resenc: Option<crate::value::Encoding>,
+) -> Vec<u8> {
     use crate::value::Encoding as E;
-    let bytes = pat.as_bytes();
-    let enc = pat.encoding();
     let unicode = matches!(
         enc,
         E::Utf8 | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
     );
+    // CRuby shows a character as itself when the result encoding is the
+    // pattern's own; otherwise it escapes it by value.
+    let showable = resenc == Some(enc);
     let printable = |b: u8| (0x09..=0x0d).contains(&b) || (0x20..=0x7e).contains(&b);
-    let mut out = String::new();
+    let mut out: Vec<u8> = Vec::new();
     let mut pieces = pattern_pieces(enc, bytes).into_iter();
     while let Some((start, len, valid)) = pieces.next() {
         if !valid {
             for b in &bytes[start..start + len] {
-                out.push_str(&format!("\\x{b:02X}"));
+                out.extend_from_slice(format!("\\x{b:02X}").as_bytes());
             }
             continue;
         }
@@ -5029,25 +5052,20 @@ fn regexp_source_desc(pat: &RStringInner) -> String {
             match bytes[start] {
                 b'\\' => {
                     // A backslash makes whatever follows literal, so
-                    // CRuby copies the next character's raw bytes —
-                    // which a Rust `String` cannot carry when they are
-                    // not UTF-8, so those are escaped instead.
-                    out.push('\\');
+                    // CRuby copies the next character's raw bytes.
+                    out.push(b'\\');
                     if let Some((s2, l2, _)) = pieces.next() {
-                        match std::str::from_utf8(&bytes[s2..s2 + l2]) {
-                            Ok(s) => out.push_str(s),
-                            Err(_) => {
-                                for b in &bytes[s2..s2 + l2] {
-                                    out.push_str(&format!("\\x{b:02X}"));
-                                }
-                            }
-                        }
+                        out.extend_from_slice(&bytes[s2..s2 + l2]);
                     }
                 }
-                b'/' => out.push_str("\\/"),
-                b if printable(b) => out.push(char::from(b)),
-                b => out.push_str(&format!("\\x{b:02X}")),
+                b'/' => out.extend_from_slice(b"\\/"),
+                b if printable(b) => out.push(b),
+                b => out.extend_from_slice(format!("\\x{b:02X}").as_bytes()),
             }
+            continue;
+        }
+        if showable {
+            out.extend_from_slice(&bytes[start..start + len]);
             continue;
         }
         // The value CRuby escapes is the codepoint in a Unicode
@@ -5062,12 +5080,15 @@ fn regexp_source_desc(pat: &RStringInner) -> String {
                 .iter()
                 .fold(0u32, |acc, b| (acc << 8) | u32::from(*b))
         };
-        out.push_str(&match (unicode, value) {
-            (true, v) if v < 0x10000 => format!("\\u{v:04X}"),
-            (true, v) => format!("\\u{{{v:X}}}"),
-            (false, v) if v < 0x100 => format!("\\x{v:02X}"),
-            (false, v) => format!("\\x{{{v:X}}}"),
-        });
+        out.extend_from_slice(
+            match (unicode, value) {
+                (true, v) if v < 0x10000 => format!("\\u{v:04X}"),
+                (true, v) => format!("\\u{{{v:X}}}"),
+                (false, v) if v < 0x100 => format!("\\x{v:02X}"),
+                (false, v) => format!("\\x{{{v:X}}}"),
+            }
+            .as_bytes(),
+        );
     }
     out
 }

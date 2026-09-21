@@ -2805,6 +2805,14 @@ fn enc_set_default_external(
 /// so that comes down to: escape unless the result encoding is UTF-8,
 /// which with the locale-derived default is the difference between
 /// `p "い"` under a `C` locale and under a UTF-8 one.
+/// The encoding an `#inspect` answer will be read in: what
+/// `Encoding.default_internal` or `.default_external` says, UTF-8 when
+/// neither does. CRuby's `rb_reg_desc` compares a pattern against it
+/// to decide what to escape (#1516).
+pub(crate) fn inspect_result_encoding(globals: &mut Globals) -> Encoding {
+    inspect_escape_encoding(globals).unwrap_or(Encoding::Utf8)
+}
+
 fn inspect_escape_encoding(globals: &mut Globals) -> Option<Encoding> {
     let resenc = globals
         .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))

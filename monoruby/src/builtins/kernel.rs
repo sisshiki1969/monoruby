@@ -5358,6 +5358,16 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // Symbol) it returns the value literal ("true", "3", …) — that
     // literal is the general-purpose stringification used elsewhere, not
     // the default object representation, so build the `#<...>` form here.
+    // A Regexp's `(?-mix:…)` is the pattern's own bytes, unescaped, and
+    // carries the pattern's encoding — so it cannot go through the
+    // `String`-valued path below, which would replace anything that is
+    // not UTF-8 (#1516).
+    if let Some(re) = recv.is_regex() {
+        return Ok(Value::string_from_inner(RStringInner::from_encoding(
+            &re.tos_bytes(),
+            re.declared_encoding(),
+        )));
+    }
     let s = if recv.try_rvalue().is_some() {
         recv.to_s(&globals.store)
     } else {
@@ -5572,19 +5582,12 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         // so `/ab/.inspect` is US-ASCII and `/\xff/n.inspect` is
         // ASCII-8BIT under every locale (#1494).
         if let Some(re) = self_val.is_regex() {
-            let text = crate::builtins::encoding::inspect_embedded(globals, s);
+            let resenc = crate::builtins::encoding::inspect_result_encoding(globals);
             let enc = re.declared_encoding();
-            // A pattern that is not UTF-8 renders lossily (#1516), so
-            // its bytes are the pattern's own only once escaping has
-            // left them ASCII — tagging them otherwise would build a
-            // broken string.
-            if text.is_ascii() || enc == crate::value::Encoding::Utf8 {
-                return Ok(Value::string_from_inner(RStringInner::from_encoding(
-                    text.as_bytes(),
-                    enc,
-                )));
-            }
-            return Ok(crate::builtins::encoding::inspect_result(globals, text));
+            return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                &re.desc_bytes(resenc),
+                enc,
+            )));
         }
         return Ok(crate::builtins::encoding::inspect_or_sprintf_result(
             globals, s,
@@ -6331,19 +6334,99 @@ mod tests {
     }
 
     #[test]
-    fn regexp_inspect_of_a_lossy_pattern_stays_a_valid_string() {
-        // A pattern that is not UTF-8 renders lossily (#1516), so the
-        // rendering's bytes are not the pattern's and cannot be tagged
-        // with the pattern's encoding — that would build a broken
-        // string. Until #1516 lands it keeps the result encoding, and
-        // this pins the "still a usable string" half rather than an
-        // answer CRuby agrees with.
-        run_test_no_result_check(
+    fn regexp_renders_a_non_utf8_pattern_by_value() {
+        // `rb_reg_desc` escapes what the result encoding cannot show,
+        // and the value it escapes is the character's *bytes*: one
+        // `\x{…}` per multi-byte character of the pattern's own
+        // encoding, `\xNN` for a byte that is a character on its own or
+        // starts none. Rendering the bytes through UTF-8 instead put
+        // replacement characters there (#1516).
+        run_test_once(
             r#"
-              r = Regexp.new("あ".encode("EUC-JP"))
-              s = r.inspect
-              raise unless s.valid_encoding?
-              raise unless s.start_with?("/") && s.end_with?("/")
+              pats = [
+                ["euc",       "\xa4\xa2".dup.force_encoding("EUC-JP")],
+                ["sjis",      "\x82\xa0".dup.force_encoding("Shift_JIS")],
+                ["bin",       "\xff\xfe".dup.force_encoding("ASCII-8BIT")],
+                ["binascii",  "ab".dup.force_encoding("ASCII-8BIT")],
+                ["utf8",      "あ"],
+                ["us",        "ab"],
+                ["euc-mixed", "a\xa4\xa2b".dup.force_encoding("EUC-JP")],
+                ["euc-3byte", "\x8f\xa2\xaf".dup.force_encoding("EUC-JP")],
+                ["bin-mixed", "a\xffb".dup.force_encoding("ASCII-8BIT")],
+              ]
+              pats.map do |name, pt|
+                r = Regexp.new(pt)
+                [name, r.encoding.name, r.inspect.bytes, r.inspect.encoding.name,
+                 r.to_s.bytes, r.to_s.encoding.name, r.source.bytes, r.fixed_encoding?, r.options]
+              end
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_rendering_follows_the_result_encoding() {
+        // Which characters are escaped is the result encoding's
+        // business, so a pattern in *that* encoding comes back as its
+        // own bytes and every other is escaped — a UTF-8 pattern
+        // included, once the result encoding cannot show it (#1516).
+        run_test_once(
+            r#"
+              r = Regexp.new("\xa4\xa2".dup.force_encoding("EUC-JP"))
+              u = Regexp.new("あ")
+              before = [r.inspect, r.inspect.encoding.name, u.inspect, u.inspect.encoding.name]
+              Encoding.default_external = Encoding::EUC_JP
+              euc = [r.inspect.bytes, r.inspect.encoding.name, u.inspect.bytes, u.inspect.encoding.name]
+              Encoding.default_external = Encoding::US_ASCII
+              us = [r.inspect.bytes, r.inspect.encoding.name, u.inspect.bytes, u.inspect.encoding.name]
+              [before, euc, us]
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_n_flag_is_the_modifier_not_the_encoding() {
+        // CRuby's `ARG_ENCODING_NONE` records that the `n` modifier was
+        // *written*. It is not a property of the encoding the regexp
+        // settled on: a pattern built from a BINARY string is
+        // ASCII-8BIT without it, and `Regexp::NOENCODING` carries it
+        // while the regexp stays US-ASCII (#1516).
+        run_test_once(
+            r#"
+              [
+                [/\xff/n, /a/, /a/u, /a/e,
+                 Regexp.new("\xff\xfe".dup.force_encoding("ASCII-8BIT")),
+                 Regexp.new("ab".dup.force_encoding("ASCII-8BIT")),
+                 Regexp.new("\xa4\xa2".dup.force_encoding("EUC-JP")),
+                 Regexp.new("あ"),
+                 Regexp.new("ab", Regexp::NOENCODING),
+                ].map { |r| [r.options, r.encoding.name, r.fixed_encoding?, r.inspect] },
+                [/a/.to_s.encoding.name, /あ/.to_s.encoding.name, /\xff/n.to_s.encoding.name],
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn regexp_union_keeps_a_members_bytes() {
+        // A union's source is built from its members' `#to_s`, so a
+        // member whose pattern is not UTF-8 used to arrive as
+        // replacement characters — which the union then failed to
+        // match with. And pinning the result to BINARY because a member
+        // was is not the `n` modifier, so the union carries no `n`
+        // (#1516).
+        run_test_once(
+            r#"
+              e = "\xa4\xa2".dup.force_encoding("EUC-JP")
+              subj = "x\xa4\xa2y".dup.force_encoding("EUC-JP")
+              u = Regexp.union(Regexp.new(e), /b/)
+              bin = Regexp.union(/a/, "b/c", /\xff/n)
+              str = Regexp.union("\xff\xfe".dup.force_encoding("ASCII-8BIT"), /b/)
+              [
+                [u.encoding.name, u.source.bytes, u.inspect, !!(u =~ subj)],
+                [bin.inspect, bin.options, bin.encoding.name, bin.fixed_encoding?],
+                [str.inspect, str.options, str.encoding.name],
+                [!!(bin =~ "\xff".dup.force_encoding("ASCII-8BIT")), !!(bin =~ "a")],
+              ]
             "#,
         );
     }

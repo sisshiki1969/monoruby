@@ -1119,6 +1119,20 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     Ok(lfp.self_val())
 }
 
+/// CRuby `rb_str_end_with_asciichar(line, '\n')`: whether the line's
+/// last *character* is a newline. In an ASCII-compatible encoding that
+/// is the last byte; in UTF-16 / UTF-32 it is the last unit.
+fn ends_with_ascii_newline(bytes: &[u8], enc: crate::value::Encoding) -> bool {
+    use crate::value::Encoding as E;
+    match enc {
+        E::Utf16Le => bytes.ends_with(&[0x0a, 0x00]),
+        E::Utf16Be => bytes.ends_with(&[0x00, 0x0a]),
+        E::Utf32Le => bytes.ends_with(&[0x0a, 0x00, 0x00, 0x00]),
+        E::Utf32Be => bytes.ends_with(&[0x00, 0x00, 0x00, 0x0a]),
+        _ => bytes.ends_with(b"\n"),
+    }
+}
+
 ///
 /// ### IO#puts
 ///
@@ -1207,10 +1221,14 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             let len = vm.temp_at(root_idx).as_array().len();
             for i in 0..len {
                 let v = vm.temp_at(root_idx).as_array()[i];
-                let s = if v.is_nil() {
-                    String::new()
+                // Bytes and encoding, not a Rust `String`: a line that
+                // is not UTF-8 has to reach `#write` as the bytes that
+                // went in, where `String::from_utf8_lossy` would put
+                // replacement characters (#1516).
+                let (bytes, enc) = if v.is_nil() {
+                    (Vec::new(), crate::value::Encoding::UsAscii)
                 } else if let Some(rs) = v.is_rstring() {
-                    String::from_utf8_lossy(rs.as_bytes()).into_owned()
+                    (rs.as_bytes().to_vec(), rs.encoding())
                 } else {
                     // Stringify through the value's (possibly Ruby-defined)
                     // `to_s`, matching CRuby's `rb_obj_as_string`; fall back
@@ -1224,17 +1242,29 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                         None,
                     )?;
                     match sv.is_rstring() {
-                        Some(rs) => String::from_utf8_lossy(rs.as_bytes()).into_owned(),
-                        None => v.to_s(globals),
+                        Some(rs) => (rs.as_bytes().to_vec(), rs.encoding()),
+                        None => (v.to_s(globals).into_bytes(), crate::value::Encoding::Utf8),
                     }
                 };
-                let needs_newline = !s.ends_with('\n');
-                let write_str = if needs_newline {
-                    Value::string(s + "\n")
+                // `rb_io_puts` asks whether the line ends with the
+                // *character* `\n`, which in a wide encoding is more
+                // than one byte, and appends `rb_default_rs` — a
+                // US-ASCII newline — when it does not.
+                let needs_newline = !ends_with_ascii_newline(&bytes, enc);
+                let (line, extra) = if needs_newline && enc.is_ascii_compatible() {
+                    let mut b = bytes;
+                    b.push(b'\n');
+                    (b, false)
                 } else {
-                    Value::string(s)
+                    (bytes, needs_newline)
                 };
+                let write_str =
+                    Value::string_from_inner(RStringInner::from_encoding(&line, enc));
                 vm.invoke_method_inner(globals, write_id, self_val, &[write_str], None, None)?;
+                if extra {
+                    let nl = Value::string_from_str("\n");
+                    vm.invoke_method_inner(globals, write_id, self_val, &[nl], None, None)?;
+                }
             }
         }
         // No flush: `rb_io_puts` is `#write` and nothing more, so the
@@ -9790,6 +9820,33 @@ mod tests {
               res = [io.class, io.read]
               io.close
               res
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    /// `IO#puts` writes the line's own bytes. Going through a Rust
+    /// `String` put replacement characters in place of anything that
+    /// was not UTF-8, and asked whether the line ended with a newline
+    /// *byte* where CRuby asks for a newline *character* — which in
+    /// UTF-16 is two of them (#1516).
+    #[test]
+    fn puts_writes_the_lines_own_bytes() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_puts_bytes_#{Process.pid}"
+            begin
+              File.open(path, "wb") do |f|
+                f.puts("\xa4\xa2".dup.force_encoding("EUC-JP"))
+                f.puts("\xa4\xa2\n".dup.force_encoding("EUC-JP"))
+                f.puts("\xff".dup.force_encoding("ASCII-8BIT"))
+                f.puts("a".encode("UTF-16LE"))
+                f.puts("b\n".encode("UTF-16LE"))
+                f.puts("plain")
+              end
+              File.binread(path).bytes
             ensure
               File.unlink(path) rescue nil
             end

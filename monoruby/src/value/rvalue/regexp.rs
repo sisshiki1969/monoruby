@@ -105,6 +105,13 @@ pub struct RegexpInner {
     /// methods that need the source (`#match`, etc.) are called on
     /// the unallocated form.
     initialized: bool,
+    /// Whether the `n` modifier (or the `NOENCODING` option) was given
+    /// at construction. CRuby's `ARG_ENCODING_NONE` is a property of
+    /// how the regexp was *written*, not of the encoding it ended up
+    /// with: `Regexp.new("\xff".b)` is ASCII-8BIT without it, and
+    /// `Regexp.new("ab", Regexp::NOENCODING)` carries it while staying
+    /// US-ASCII (#1516).
+    noencoding: bool,
     /// The source bytes compiled under a native (non-UTF-8) Onigmo codec
     /// (`native_enc`) for byte matching against a subject in that
     /// encoding, cached per regexp so the per-match lookup is a pointer
@@ -219,7 +226,7 @@ impl RegexpInner {
 
     pub fn option(&self) -> u32 {
         let mut opt = self.regex.option();
-        if self.encoding == OnigmoEncoding::ASCII {
+        if self.noencoding {
             opt |= Self::NOENCODING;
         }
         if self.fixed_encoding {
@@ -771,6 +778,7 @@ impl RegexpInner {
         // its own option bits (`IGNORECASE`/`MULTILINE`/`EXTEND`/...).
         let onigmo_option = option
             & !(Self::NOENCODING | Self::FIXEDENCODING | Self::KCODE_MASK);
+        let noencoding = option & Self::NOENCODING != 0;
         // Surface the escape-shape errors that CRuby formats with
         // `": /<src>/"` *before* `expand_unicode_braces` rewrites
         // the source — once the `\u{...}` has been replaced with
@@ -796,6 +804,7 @@ impl RegexpInner {
                     declared_encoding,
                     fixed_encoding,
                     initialized: true,
+                    noencoding,
                     native: Default::default(),
                     native_enc: std::cell::Cell::new(OnigmoEncoding::UTF8),
                     ascii_state: std::cell::Cell::new(0),
@@ -814,6 +823,7 @@ impl RegexpInner {
                             declared_encoding,
                             fixed_encoding,
                             initialized: true,
+                            noencoding,
                             native: Default::default(),
                     native_enc: std::cell::Cell::new(OnigmoEncoding::UTF8),
                     ascii_state: std::cell::Cell::new(0),
@@ -1130,6 +1140,14 @@ impl RegexpInner {
     }
 
     pub fn tos(&self) -> String {
+        String::from_utf8_lossy(&self.tos_bytes()).into_owned()
+    }
+
+    /// CRuby `rb_reg_to_s` as the bytes it writes, in the pattern's own
+    /// encoding. Byte-oriented because a pattern that is not UTF-8 has
+    /// to come back out as the bytes that went in, which a Rust
+    /// `String` cannot carry (#1516).
+    pub fn tos_bytes(&self) -> Vec<u8> {
         let option = self.option();
         let mut m = option & onigmo_regex::ONIG_OPTION_MULTILINE != 0;
         let mut i = option & onigmo_regex::ONIG_OPTION_IGNORECASE != 0;
@@ -1137,9 +1155,9 @@ impl RegexpInner {
         // CRuby `rb_reg_to_s`: while the whole pattern is a single
         // wrapping option group `(?on-off:body)` (or `(?:body)`), fold
         // its flags into the displayed options and recurse on `body`.
-        let mut src = self.source_string().into_owned();
+        let mut src: &[u8] = &self.source;
         loop {
-            let b = src.as_bytes();
+            let b = src;
             if b.len() < 4 || b[0] != b'(' || b[1] != b'?' {
                 break;
             }
@@ -1196,19 +1214,25 @@ impl RegexpInner {
             if off_x {
                 x = false;
             }
-            src = src[p + 1..src.len() - 1].to_string();
+            src = &src[p + 1..src.len() - 1];
         }
-        format!(
-            "(?{}{}{}{}{}{}{}:{})",
-            if m { "m" } else { "" },
-            if i { "i" } else { "" },
-            if x { "x" } else { "" },
-            if m && i && x { "" } else { "-" },
-            if !m { "m" } else { "" },
-            if !i { "i" } else { "" },
-            if !x { "x" } else { "" },
-            src
-        )
+        let mut out = Vec::with_capacity(src.len() + 10);
+        out.extend_from_slice(
+            format!(
+                "(?{}{}{}{}{}{}{}:",
+                if m { "m" } else { "" },
+                if i { "i" } else { "" },
+                if x { "x" } else { "" },
+                if m && i && x { "" } else { "-" },
+                if !m { "m" } else { "" },
+                if !i { "i" } else { "" },
+                if !x { "x" } else { "" },
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(src);
+        out.push(b')');
+        out
     }
 
     pub fn inspect(&self) -> String {
@@ -1217,6 +1241,23 @@ impl RegexpInner {
             escape_unescaped_slashes(&self.source_string()),
             self.option_string()
         )
+    }
+
+    /// CRuby `rb_reg_desc`: `/source/flags`, as the bytes it writes.
+    /// `resenc` is the encoding the answer will be read in — what it
+    /// cannot show is escaped by value, so a pattern in that same
+    /// encoding comes back raw and any other comes back as `\x{…}`
+    /// escapes rather than replacement characters (#1516).
+    pub fn desc_bytes(&self, resenc: crate::value::Encoding) -> Vec<u8> {
+        let mut out = vec![b'/'];
+        out.extend_from_slice(&crate::builtins::string::regexp_source_desc_bytes(
+            &self.source,
+            self.declared_encoding(),
+            Some(resenc),
+        ));
+        out.push(b'/');
+        out.extend_from_slice(self.option_string().as_bytes());
+        out
     }
 }
 
