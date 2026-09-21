@@ -413,6 +413,22 @@ pub struct Globals {
     /// in-place swap (`$"[0] = other`) is the one shape that slips past,
     /// since nothing about the array changes that an O(1) check can see.
     loaded_features_index: std::cell::RefCell<LoadedFeatureIndex>,
+    /// Memoized canonical (symlink-resolved) form of a directory,
+    /// keyed by the path as it was given. `require` resolves every
+    /// `$LOAD_PATH` entry to its canonical form to compare it against
+    /// `$LOADED_FEATURES`, and `realpath(3)` is a `readlink` per path
+    /// component: at 166 entries of ~11 components each, a Rails boot's
+    /// ~3,000 requires came to 5.5M `readlink` calls.
+    ///
+    /// A failed `canonicalize` (a `$LOAD_PATH` entry naming a directory
+    /// that does not exist — common, since rubygems adds a `lib/` per
+    /// activated gem whether or not it is there) memoizes its
+    /// lexically-normalized fallback just the same. So this does not
+    /// follow the filesystem: a directory created, deleted or re-pointed
+    /// after it was first resolved keeps the answer given then. CRuby
+    /// caches its expanded load path for the same reason, and expands
+    /// purely lexically on top of that.
+    canonical_dirs: std::cell::RefCell<std::collections::HashMap<PathBuf, PathBuf>>,
     /// Features whose `require` body is currently executing, keyed by
     /// the canonical path registered in `$LOADED_FEATURES`, with the
     /// loading green thread's object id. A second thread requiring the
@@ -904,6 +920,7 @@ impl Globals {
             random: Box::new(Prng::new()),
             loaded_features,
             loaded_features_index: std::cell::RefCell::new(LoadedFeatureIndex::default()),
+            canonical_dirs: std::cell::RefCell::new(std::collections::HashMap::new()),
             loading_features: std::collections::HashMap::default(),
             ext: crate::ext::ExtState::default(),
             gvar_traces: std::collections::HashMap::default(),
