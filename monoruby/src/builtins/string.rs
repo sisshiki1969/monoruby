@@ -7501,6 +7501,24 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 ///
 /// The separator's `to_str` coercion may run Ruby code, so it is
 /// resolved *before* the receiver's bytes are borrowed — a mid-borrow
+/// The `lines` / `each_line` separator as a String *Value*, so its
+/// bytes and encoding reach the search intact. `String#split` coerces
+/// the same way: a String is taken as it is, whatever its encoding
+/// says about its bytes, and anything else is offered `#to_str`.
+fn coerce_separator(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<Value> {
+    if arg.is_rstring_inner().is_some() {
+        return Ok(arg);
+    }
+    match crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_STR)? {
+        Some(v) if v.is_rstring_inner().is_some() => Ok(v),
+        _ => Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            arg,
+            STRING_CLASS,
+        )),
+    }
+}
+
 /// mutation would invalidate the slice the ranges index into.
 fn line_ranges(
     vm: &mut Executor,
@@ -7513,7 +7531,11 @@ fn line_ranges(
         Whole,
         Default,
         Paragraph,
-        Str(String),
+        /// The coerced separator *String*, kept as a Value so its bytes
+        /// and encoding survive: a Shift_JIS separator read through a
+        /// Rust `String` arrives as replacement characters and then
+        /// matches nothing (#1502).
+        Str(Value),
     }
     let sep = match rs_arg {
         // No explicit separator: the default is `$/`. Its "\n" default
@@ -7525,10 +7547,11 @@ fn line_ranges(
             None => Sep::Default,
             Some(v) if v.is_nil() => Sep::Whole,
             Some(v) => {
-                let sep = v.coerce_to_str(vm, globals)?.to_string();
-                if sep == "\n" {
+                let sep = coerce_separator(vm, globals, v)?;
+                let bytes = sep.as_rstring_inner().as_bytes();
+                if bytes == b"\n" {
                     Sep::Default
-                } else if sep.is_empty() {
+                } else if bytes.is_empty() {
                     Sep::Paragraph
                 } else {
                     Sep::Str(sep)
@@ -7550,8 +7573,15 @@ fn line_ranges(
                 }
                 _ => {}
             }
-            let sep = arg.coerce_to_str(vm, globals)?.to_string();
-            if sep.is_empty() {
+            let sep = coerce_separator(vm, globals, arg)?;
+            let bytes = sep.as_rstring_inner().as_bytes();
+            if bytes == b"\n" {
+                // An explicit `"\n"` is the default separator, not just
+                // a one-byte one: `rb_str_enumerate_lines` takes the
+                // same branch either way, so `chomp` also removes the
+                // `\r` in front of it.
+                Sep::Default
+            } else if bytes.is_empty() {
                 Sep::Paragraph
             } else {
                 Sep::Str(sep)
@@ -7559,6 +7589,30 @@ fn line_ranges(
         }
     };
     let inner = receiver.as_rstring_inner();
+    // An explicit separator is searched for in the receiver's own
+    // bytes, so it keeps its own (#1502). The surrogate view below
+    // exists for the `&str`-based machinery; a byte search with a
+    // character-head check needs neither it nor the conversion back.
+    if let Sep::Str(sep) = &sep {
+        let sep_inner = sep.as_rstring_inner();
+        // `rb_str_enumerate_lines` runs the separator through
+        // `rb_enc_check` first, so an encoding it cannot be read
+        // against is an error rather than a separator that never
+        // matches — as it already is for `#split`.
+        if !inner.is_ascii_only()
+            && !sep_inner.is_ascii_only()
+            && inner.encoding() != sep_inner.encoding()
+        {
+            return Err(MonorubyErr::incompatible_encoding(
+                &globals.store,
+                inner.encoding(),
+                sep_inner.encoding(),
+            ));
+        }
+        return Ok(split_with_separator_ranges_aligned(
+            &inner, &sep_inner, chomp,
+        ));
+    }
     let mapped = inner.needs_byte_mapping();
     // Splitting a line off is a *byte* operation: CRuby's
     // `rb_str_enumerate_lines` scans for the separator's bytes, and a
@@ -7577,16 +7631,16 @@ fn line_ranges(
         inner.as_bytes()
     };
     let ranges = match sep {
-        Sep::Whole => {
-            if bytes.is_empty() {
-                vec![]
-            } else {
-                vec![0..bytes.len()]
-            }
-        }
+        // A `nil` separator makes the whole receiver one line, and
+        // `rb_str_enumerate_lines` pushes it without looking at its
+        // length — so an empty receiver yields one empty line, where
+        // every other separator yields none.
+        Sep::Whole => vec![0..bytes.len()],
         Sep::Default => split_with_default_newline_ranges(bytes, chomp),
         Sep::Paragraph => split_paragraph_ranges(bytes, chomp),
-        Sep::Str(sep) => split_with_separator_ranges(bytes, sep.as_bytes(), chomp),
+        // Handled above, before the view: an explicit separator never
+        // reaches the surrogate space.
+        Sep::Str(_) => unreachable!(),
     };
     if !mapped {
         return Ok(ranges);
@@ -7655,9 +7709,12 @@ fn split_with_default_newline_ranges(b: &[u8], chomp: bool) -> Vec<std::ops::Ran
     for piece in b.split_inclusive(|c| *c == b'\n') {
         let mut end = start + piece.len();
         if chomp {
+            // `chomp` removes the separator, and the `\r` before it —
+            // never a bare `\r` that ends the receiver, which is not a
+            // line terminator: `"a\r".lines(chomp: true)` is `["a\r"]`.
             if piece.ends_with(b"\r\n") {
                 end -= 2;
-            } else if piece.ends_with(b"\n") || piece.ends_with(b"\r") {
+            } else if piece.ends_with(b"\n") {
                 end -= 1;
             }
         }
@@ -7667,21 +7724,77 @@ fn split_with_default_newline_ranges(b: &[u8], chomp: bool) -> Vec<std::ops::Ran
     out
 }
 
-fn split_with_separator_ranges(b: &[u8], sep: &[u8], chomp: bool) -> Vec<std::ops::Range<usize>> {
+/// The explicit-separator line splitter. A hit has to land on a
+/// character head, which is what every other search on the same
+/// receiver already does ([`char_aligned_search_fwd`]). In Shift_JIS a
+/// trail byte can be an ASCII letter, so `"X\x82bY".lines("b")` would
+/// otherwise cut `<\x82 b>` in half (#1502).
+///
+/// This is a **deliberate divergence from CRuby**, which notices the
+/// same misalignment and then advances its *line start* past it
+/// (`subptr = adjusted` in `rb_str_enumerate_lines`), discarding the
+/// text before the hit — `"X\x82bY"` comes back as `["Y"]` there, and
+/// the third example in #1502 comes back empty. Losing content is not
+/// something to copy, so an unaligned hit is stepped over and the line
+/// runs on, which is also what `#split` / `#index` / `#include?` say
+/// about the same pair.
+///
+/// The head cursor is carried across the whole walk rather than
+/// restarted per hit, so a long receiver stays linear.
+fn split_with_separator_ranges_aligned(
+    inner: &RStringInner,
+    sep: &RStringInner,
+    chomp: bool,
+) -> Vec<std::ops::Range<usize>> {
+    let b = inner.as_bytes();
+    let n = sep.as_bytes();
+    let enc = inner.encoding();
+    if b.is_empty() {
+        return vec![];
+    }
+    // A separator that is broken in its own encoding matches nothing —
+    // the gate `#index` and `#include?` apply, and `#split` and
+    // `#scan` raise over — so the receiver is one line. CRuby's
+    // `#lines` alone splits on it, cutting characters in half at every
+    // hit, which is the same content-losing shape as above (#1502).
+    if !needle_can_match(sep) {
+        return vec![0..b.len()];
+    }
+    let walked = crate::value::mbc_walker(enc).is_some();
     let mut out = Vec::new();
+    let mut head = 0usize;
     let mut start = 0usize;
+    let mut at = 0usize;
     while start < b.len() {
-        let end = match memchr::memmem::find(&b[start..], sep) {
-            Some(i) => start + i + sep.len(),
+        let hit = loop {
+            let Some(h) = byte_search_fwd(b, n, at) else {
+                break None;
+            };
+            let aligned = if walked {
+                while head < h {
+                    head += crate::value::rvalue::char_width_at(enc, b, head);
+                }
+                head == h
+            } else {
+                enc_char_boundary(enc, b, h)
+            };
+            if aligned {
+                break Some(h);
+            }
+            at = h + 1;
+        };
+        let end = match hit {
+            Some(h) => h + n.len(),
             None => b.len(),
         };
-        let keep = if chomp && b[start..end].ends_with(sep) {
-            end - sep.len()
+        let keep = if chomp && b[start..end].ends_with(n) {
+            end - n.len()
         } else {
             end
         };
         out.push(start..keep);
         start = end;
+        at = end;
     }
     out
 }
@@ -13647,6 +13760,97 @@ mod tests {
         run_test_error(r##""string".end_with?("jng", 3, "ing")"##);
         // end_with? with Regexp raises TypeError
         run_test_error(r#""hello".end_with?(/lo/)"#);
+    }
+
+    #[test]
+    fn lines_keeps_its_separators_bytes() {
+        // The separator used to be read through a Rust `String`, so a
+        // Shift_JIS one arrived as replacement characters and matched
+        // nothing. It is searched for in the receiver's own bytes now,
+        // and an encoding it cannot be read against is the same
+        // `Encoding::CompatibilityError` `#split` already raises
+        // (#1502).
+        run_test_once(
+            r#"
+              def sj(s) = s.dup.force_encoding("Shift_JIS")
+              r = sj("X\x82bY")
+              u = "aあb"
+              [
+                r.lines(sj("\x82b")).map(&:bytes),
+                r.lines(sj("\x82b"), chomp: true).map(&:bytes),
+                sj("a\x82\xa0b").lines(sj("\x82\xa0")).map(&:bytes),
+                (r.lines("あ") rescue $!.class.name),
+                (r.lines("\xff".dup.force_encoding("ASCII-8BIT")) rescue $!.class.name),
+                (u.lines(sj("\x82\xa0")) rescue $!.class.name),
+                u.lines("b".dup.force_encoding("ASCII-8BIT")).map(&:bytes),
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn lines_chomps_the_default_separator_either_way() {
+        // `rb_str_enumerate_lines` takes the same branch for an
+        // explicit `"\n"` as for the default one, so `chomp` removes
+        // the `\r` in front of it — and a bare `\r` that ends the
+        // receiver is not a line terminator, so it stays. A `nil`
+        // separator makes the whole receiver one line, which
+        // `rb_ary_push`es even when it is empty (#1502).
+        run_test_once(
+            r#"
+              [
+                ["".lines, "".lines(nil), "".lines(""), "".lines("x"), "".each_line(nil).to_a],
+                ["a".lines(nil), "a\n".lines(nil), "a".lines(nil, chomp: true)],
+                ["a\r".lines("\n", chomp: true), "a\r\n".lines("\n", chomp: true),
+                 "a\r\nb".lines("\n", chomp: true), "a\rb\r".lines("\n", chomp: true)],
+                ["a\r\n".lines(chomp: true), "a\r".lines(chomp: true)],
+                ["ab".lines("b", chomp: true), "a\rb".lines("b", chomp: true)],
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn lines_does_not_cut_a_character_in_half() {
+        // In Shift_JIS a trail byte can be an ASCII letter, so a
+        // one-character separator can match in the middle of a
+        // character. CRuby notices and then advances its *line start*
+        // past the hit, throwing the text before it away — `"X\x82bY"`
+        // comes back as `["Y"]` there, and the third case comes back
+        // empty. monoruby steps over the hit and the line runs on, so
+        // nothing is lost; this is a **deliberate divergence** (#1502),
+        // which is why it is not compared against the oracle.
+        //
+        // `#index` / `#include?` / `#scan` agree that the separator is
+        // not there; `#split` and `#scan` raise on a broken one, where
+        // `#lines` answers one line.
+        run_test_no_result_check(
+            r##"
+              def sj(s) = s.dup.force_encoding("Shift_JIS")
+              got = [
+                sj("X\x82bY").lines("b").map(&:bytes),
+                sj("\x82b\x82bX").lines("b").map(&:bytes),
+                sj("a\xE3\x81\x82b").lines("b").map(&:bytes),
+                sj("a\x82bc").lines("bc").map(&:bytes),
+                sj("\x82\xa0\x82\xa1").lines(sj("\x82")).map(&:bytes),
+                sj("").lines(sj("\x82")).map(&:bytes),
+              ]
+              want = [
+                [[88, 130, 98, 89]],
+                [[130, 98, 130, 98, 88]],
+                [[97, 227, 129, 130, 98]],
+                [[97, 130, 98, 99]],
+                [[130, 160, 130, 161]],
+                [],
+              ]
+              raise "#{got.inspect} != #{want.inspect}" unless got == want
+              # The rest of the family on the same receiver and needle.
+              r = sj("X\x82bY")
+              raise unless r.index("b").nil?
+              raise unless r.include?("b") == false
+              raise unless r.scan("b") == []
+            "##,
+        );
     }
 
     #[test]
