@@ -3535,7 +3535,12 @@ fn strip_selector_offsets(
     // to one char, while a UTF-8 one keeps whole characters. That is
     // the same per-byte-vs-per-character split `String#count` and
     // `#delete` have on an EUC-JP / Shift_JIS receiver (#1475).
-    let by_byte = inner.needs_byte_mapping();
+    // Which walk applies is decided by whether the sets can be
+    // compared per character at all: when they can, so must the
+    // receiver be, or a Shift_JIS `"を"` is two bytes that separately
+    // fail to match the character the set holds.
+    let cp_sets = nonutf8_charsets(globals, inner, args)?;
+    let by_byte = cp_sets.is_none() && inner.needs_byte_mapping();
     let mut pieces: Vec<(usize, &[u8])> = Vec::new();
     let mut pos = 0;
     if by_byte {
@@ -3551,8 +3556,12 @@ fn strip_selector_offsets(
     // Membership per character, in the same two flavours `String#count`
     // uses: ASCII-only sets walked over a non-UTF-8 receiver's own
     // characters, or the `regex_view` both sides are mapped into.
-    let member: Vec<bool> = if let Some(sets) = nonutf8_ascii_charsets(globals, inner, args)? {
-        pieces.iter().map(|(_, cb)| ascii_sets_contain(&sets, cb)).collect()
+    let member: Vec<bool> = if let Some(sets) = cp_sets {
+        let enc = inner.encoding();
+        pieces
+            .iter()
+            .map(|(_, cb)| cp_sets_contain(&sets, enc, cb))
+            .collect()
     } else {
         let strs: Vec<String> = args
             .iter()
@@ -8950,6 +8959,24 @@ fn delete_compute(
         out.extend_from_slice(&bytes[last..]);
         return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
     }
+    // Non-UTF-8 receiver: delete by character via the encoding-aware
+    // iterator.
+    if let Some(sets2) = nonutf8_charsets(globals, &inner, args)? {
+        let enc = inner.encoding();
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+            SmallVec::with_capacity(inner.as_bytes().len());
+        for ch in inner.iter_char_bytes() {
+            if !cp_sets_contain(&sets2, enc, ch) {
+                out.extend_from_slice(ch);
+            }
+        }
+        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+    }
+
+    // The `char`-space sets are parsed only once the character walk
+    // below has declined this receiver: parsing them means reading the
+    // sets through the surrogate view, where a Shift_JIS `"ぁ-ん"` is a
+    // descending byte range and raises.
     let strs: Vec<String> = args
         .iter()
         .map(|arg| tr_set_view(vm, globals, *arg))
@@ -8958,19 +8985,6 @@ fn delete_compute(
         .iter()
         .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
-
-    // Non-UTF-8 receiver: delete by character via the encoding-aware
-    // iterator (multibyte chars are kept unless the set is negated).
-    if let Some(sets2) = nonutf8_ascii_charsets(globals, &inner, args)? {
-        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
-            SmallVec::with_capacity(inner.as_bytes().len());
-        for ch in inner.iter_char_bytes() {
-            if !ascii_sets_contain(&sets2, ch) {
-                out.extend_from_slice(ch);
-            }
-        }
-        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
-    }
 
     if inner.is_ascii_only() {
         let bytes = inner.as_bytes();
@@ -9047,6 +9061,15 @@ fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     check_tr_arg_encodings(globals, &inner, lfp.arg(0), lfp.arg(1))?;
     // `#tr` walks characters only where the encoding has them.
     mustnot_broken_multibyte(inner)?;
+    // The character walk goes first: the paths below read the sets
+    // through the surrogate view, where a Shift_JIS `"ひ-ん"` is a
+    // descending byte range and raises before anything has matched.
+    if let Some((enc, f, t)) = tr_sets_cp(globals, &inner, lfp.arg(0), lfp.arg(1))? {
+        let (b, _) = tr_translate_cp(&inner, enc, &f, &t, false)?;
+        return Ok(Value::string_from_inner(
+            RStringInner::from_encoding_scanned(&b, enc),
+        ));
+    }
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
     let to = tr_set_view(vm, globals, lfp.arg(1))?;
     if let Some((bytes, _)) = ascii_tr_translate(inner, &from, &to, false)? {
@@ -9054,12 +9077,6 @@ fn tr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
             bytes,
             inner.encoding(),
         )));
-    }
-    if tr_args_ascii_ok(globals, &inner, lfp.arg(0), lfp.arg(1))? {
-        let (b, _) = tr_translate_bytes(&inner, &from, &to, false)?;
-        return Ok(Value::string_from_inner(
-            RStringInner::from_encoding_scanned(&b, inner.encoding()),
-        ));
     }
     let mapped = inner.needs_byte_mapping();
     let rec = inner.regex_view()?;
@@ -9083,9 +9100,21 @@ fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         lfp.arg(1),
     )?;
     mustnot_broken_multibyte(&lfp.self_val().as_rstring_inner())?;
+    let mut self_ = lfp.self_val();
+    // The character walk goes first: the paths below read the sets
+    // through the surrogate view, where a Shift_JIS `"ひ-ん"` is a
+    // descending byte range and raises before anything has matched.
+    if let Some((enc, f, t)) = tr_sets_cp(globals, &self_.as_rstring_inner(), lfp.arg(0), lfp.arg(1))?
+    {
+        let (b, changed) = tr_translate_cp(&self_.as_rstring_inner(), enc, &f, &t, false)?;
+        if !changed {
+            return Ok(Value::nil());
+        }
+        self_.replace_with_inner(RStringInner::from_encoding_scanned(&b, enc));
+        return Ok(self_);
+    }
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
     let to = tr_set_view(vm, globals, lfp.arg(1))?;
-    let mut self_ = lfp.self_val();
     let fast = ascii_tr_translate(self_.as_rstring_inner(), &from, &to, false)?;
     if let Some((bytes, changed)) = fast {
         if !changed {
@@ -9093,15 +9122,6 @@ fn tr_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         }
         let enc = self_.as_rstring_inner().encoding();
         self_.replace_with_inner(RStringInner::from_ascii_bytes(bytes, enc));
-        return Ok(self_);
-    }
-    if tr_args_ascii_ok(globals, &self_.as_rstring_inner(), lfp.arg(0), lfp.arg(1))? {
-        let enc = self_.as_rstring_inner().encoding();
-        let (b, changed) = tr_translate_bytes(&self_.as_rstring_inner(), &from, &to, false)?;
-        if !changed {
-            return Ok(Value::nil());
-        }
-        self_.replace_with_inner(RStringInner::from_encoding_scanned(&b, enc));
         return Ok(self_);
     }
     let inner = self_.as_rstring_inner();
@@ -9137,6 +9157,15 @@ fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     check_tr_arg_encodings(globals, &inner, lfp.arg(0), lfp.arg(1))?;
     // `#tr_s` squeezes, which CRuby refuses on any broken receiver.
     mustnot_broken(inner)?;
+    // The character walk goes first: the paths below read the sets
+    // through the surrogate view, where a Shift_JIS `"ひ-ん"` is a
+    // descending byte range and raises before anything has matched.
+    if let Some((enc, f, t)) = tr_sets_cp(globals, &inner, lfp.arg(0), lfp.arg(1))? {
+        let (b, _) = tr_translate_cp(&inner, enc, &f, &t, true)?;
+        return Ok(Value::string_from_inner(
+            RStringInner::from_encoding_scanned(&b, enc),
+        ));
+    }
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
     let to = tr_set_view(vm, globals, lfp.arg(1))?;
     if let Some((bytes, _)) = ascii_tr_translate(inner, &from, &to, true)? {
@@ -9144,12 +9173,6 @@ fn tr_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             bytes,
             inner.encoding(),
         )));
-    }
-    if tr_args_ascii_ok(globals, &inner, lfp.arg(0), lfp.arg(1))? {
-        let (b, _) = tr_translate_bytes(&inner, &from, &to, true)?;
-        return Ok(Value::string_from_inner(
-            RStringInner::from_encoding_scanned(&b, inner.encoding()),
-        ));
     }
     let mapped = inner.needs_byte_mapping();
     let rec = inner.regex_view()?;
@@ -9173,9 +9196,21 @@ fn tr_s_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         lfp.arg(1),
     )?;
     mustnot_broken(&lfp.self_val().as_rstring_inner())?;
+    let mut self_ = lfp.self_val();
+    // The character walk goes first: the paths below read the sets
+    // through the surrogate view, where a Shift_JIS `"ひ-ん"` is a
+    // descending byte range and raises before anything has matched.
+    if let Some((enc, f, t)) = tr_sets_cp(globals, &self_.as_rstring_inner(), lfp.arg(0), lfp.arg(1))?
+    {
+        let (b, changed) = tr_translate_cp(&self_.as_rstring_inner(), enc, &f, &t, true)?;
+        if !changed {
+            return Ok(Value::nil());
+        }
+        self_.replace_with_inner(RStringInner::from_encoding_scanned(&b, enc));
+        return Ok(self_);
+    }
     let from = tr_set_view(vm, globals, lfp.arg(0))?;
     let to = tr_set_view(vm, globals, lfp.arg(1))?;
-    let mut self_ = lfp.self_val();
     let fast = ascii_tr_translate(self_.as_rstring_inner(), &from, &to, true)?;
     if let Some((bytes, changed)) = fast {
         if !changed {
@@ -9183,15 +9218,6 @@ fn tr_s_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         let enc = self_.as_rstring_inner().encoding();
         self_.replace_with_inner(RStringInner::from_ascii_bytes(bytes, enc));
-        return Ok(self_);
-    }
-    if tr_args_ascii_ok(globals, &self_.as_rstring_inner(), lfp.arg(0), lfp.arg(1))? {
-        let enc = self_.as_rstring_inner().encoding();
-        let (b, changed) = tr_translate_bytes(&self_.as_rstring_inner(), &from, &to, true)?;
-        if !changed {
-            return Ok(Value::nil());
-        }
-        self_.replace_with_inner(RStringInner::from_encoding_scanned(&b, enc));
         return Ok(self_);
     }
     let inner = self_.as_rstring_inner();
@@ -9260,7 +9286,7 @@ fn ascii_tr_translate(
         return Ok(Some((out, changed)));
     }
 
-    let (to_chars, _) = expand_tr_spec(to)?;
+    let to_chars = expand_tr_repl(to)?;
     if !to_chars.iter().all(|c| c.is_ascii()) {
         return Ok(None);
     }
@@ -9338,9 +9364,19 @@ fn ascii_tr_translate(
 /// `^` is *not* part of the returned chars; instead `negated` is set.
 /// `\\` escapes the next char (so `\-` is a literal `-`).
 fn expand_tr_spec(spec: &str) -> Result<(Vec<char>, bool)> {
+    expand_tr_spec_with(spec, true)
+}
+
+/// [`expand_tr_spec`] for a replacement set, where a leading `^` is a
+/// character rather than a negation — only a *source* set negates.
+fn expand_tr_repl(spec: &str) -> Result<Vec<char>> {
+    Ok(expand_tr_spec_with(spec, false)?.0)
+}
+
+fn expand_tr_spec_with(spec: &str, source: bool) -> Result<(Vec<char>, bool)> {
     let mut chars: Vec<char> = Vec::new();
     let mut iter = spec.chars().peekable();
-    let negated = if iter.peek() == Some(&'^') && spec.chars().count() > 1 {
+    let negated = if source && iter.peek() == Some(&'^') && spec.chars().count() > 1 {
         iter.next();
         true
     } else {
@@ -9368,10 +9404,7 @@ fn expand_tr_spec(spec: &str) -> Result<(Vec<char>, bool)> {
                     end_raw
                 };
                 if (ch as u32) > (end_ch as u32) {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "invalid range \"{}-{}\" in string transliteration",
-                        ch, end_ch
-                    )));
+                    return Err(invalid_tr_range(ch as u32, end_ch as u32));
                 }
                 for code in (ch as u32)..=(end_ch as u32) {
                     if let Some(c) = char::from_u32(code) {
@@ -9399,7 +9432,7 @@ fn tr_build_map(from: &str, to: &str) -> Result<TrMap> {
             negated,
         });
     }
-    let (to_chars, _) = expand_tr_spec(to)?;
+    let to_chars = expand_tr_repl(to)?;
     let last_to = *to_chars.last().unwrap();
     if negated {
         return Ok(TrMap::Negated {
@@ -9427,101 +9460,161 @@ enum TrMap {
     },
 }
 
-/// Gate for the non-UTF-8 `tr` / `tr_s` path. `Ok(true)` ⇒ receiver
-/// is non-UTF-8 and both spec args are ASCII-only (safe). `Err` ⇒ a
-/// spec arg is non-ASCII in a *different* encoding
-/// (Encoding::CompatibilityError). `Ok(false)` ⇒ caller keeps the
-/// existing path (UTF-8 receiver, or a same-encoding multibyte spec —
-/// documented follow-up).
-fn tr_args_ascii_ok(globals: &Globals, recv: &RStringInner, a: Value, b: Value) -> Result<bool> {
-    if recv.encoding().is_utf8_compatible() {
-        return Ok(false);
+/// The encoding a `tr` / `tr_s` result carries, and its two sets as
+/// codepoints in it.
+///
+/// The encoding is the one CRuby's `tr_trans` negotiates with
+/// `rb_enc_check`: the receiver's, unless a set carries characters the
+/// receiver's encoding has none of — `"abc".tr("a", euc_jp_あ)` comes
+/// back as EUC-JP, holding that set's own bytes (#1477).
+///
+/// `Ok(None)` leaves a receiver and sets that all agree on a UTF-8
+/// compatible encoding — where the surrogate view *is* the string —
+/// or a non-String set on the `char` path; `Err` is a set that cannot
+/// meet the receiver at all (`Encoding::CompatibilityError`).
+fn tr_sets_cp(
+    globals: &Globals,
+    recv: &RStringInner,
+    a: Value,
+    b: Value,
+) -> Result<Option<(crate::value::Encoding, Vec<u32>, Vec<u32>)>> {
+    let mut enc = recv.encoding();
+    // An ASCII-only receiver and ASCII-only sets: the byte paths are
+    // already per character, and cheaper.
+    if recv.is_ascii_only()
+        && [a, b].iter().all(|v| {
+            v.is_rstring_inner()
+                .is_some_and(|s| s.as_bytes().iter().all(|x| *x < 0x80))
+        })
+    {
+        return Ok(None);
     }
     for v in [a, b] {
-        if let Some(s) = v.is_rstring_inner()
-            && s.as_bytes().iter().any(|x| *x >= 0x80)
-        {
-            return if s.encoding() != recv.encoding() {
-                Err(MonorubyErr::incompatible_encoding(
+        let Some(s) = v.is_rstring_inner() else {
+            return Ok(None);
+        };
+        if s.as_bytes().iter().any(|x| *x >= 0x80) {
+            let Some(merged) = recv.compatible_encoding(&s) else {
+                return Err(MonorubyErr::incompatible_encoding(
                     &globals.store,
                     recv.encoding(),
                     s.encoding(),
-                ))
-            } else {
-                Ok(false)
+                ));
             };
+            if merged != enc && enc != recv.encoding() {
+                // Two sets, each pulling the result towards its own
+                // encoding: not a case CRuby reaches without one of
+                // them being incompatible, so leave it alone.
+                return Ok(None);
+            }
+            enc = merged;
         }
     }
-    Ok(true)
+    if enc.is_utf8_compatible() && enc == recv.encoding() {
+        return Ok(None);
+    }
+    let mut sets = Vec::with_capacity(2);
+    for v in [a, b] {
+        let s = v.is_rstring_inner().unwrap();
+        sets.push(set_codepoints(enc, &s)?);
+    }
+    let to = sets.pop().unwrap();
+    let from = sets.pop().unwrap();
+    Ok(Some((enc, from, to)))
 }
 
-/// `tr_translate` over a non-UTF-8 receiver: walk the encoding-aware
-/// char iterator. Any multibyte character is treated as a single
-/// sentinel non-ASCII codepoint (`\u{FFFF}`) so an ASCII-only
-/// `from`/`to` spec yields exactly CRuby's behaviour (kept verbatim
-/// unless a negated set replaces/deletes it). `from`/`to` must be
-/// ASCII-only (the caller gates via `tr_args_ascii_ok`).
-fn tr_translate_bytes(
+/// `tr` / `tr_s` over a receiver whose characters are its own bytes:
+/// the walk is per character, and the sets are compared on the
+/// codepoints of [`mbc_codepoint`], so a Shift_JIS `"あ"` is one
+/// member rather than two bytes that separately match (#1475).
+fn tr_translate_cp(
     inner: &RStringInner,
-    from: &str,
-    to: &str,
+    enc: crate::value::Encoding,
+    from: &[u32],
+    to: &[u32],
     squeeze: bool,
 ) -> Result<(SmallVec<[u8; STRING_INLINE_CAP]>, bool)> {
-    let map = tr_build_map(from, to)?;
+    let from_set = CpCharset::parse(from)?;
+    let to_set = if to.is_empty() {
+        None
+    } else {
+        Some(CpCharset::parse_literal(to)?)
+    };
+    // The pairing CRuby builds: each `from` character takes the `to`
+    // character written at the same position, the last one repeating
+    // for however many are left over.
+    let last_to = to_set.as_ref().map(|t| *t.members().last().unwrap());
+    let map: Option<indexmap::IndexMap<u32, u32>> = match (&to_set, from_set.negated) {
+        (Some(t), false) => {
+            let tos = t.members();
+            let last = *tos.last().unwrap();
+            let mut m = indexmap::IndexMap::new();
+            for (i, f) in from_set.members().iter().enumerate() {
+                m.insert(*f, tos.get(i).copied().unwrap_or(last));
+            }
+            Some(m)
+        }
+        _ => None,
+    };
+    // CRuby's squeeze path keeps a 256-entry table and consults a hash
+    // of the wider characters only when the set put something in it.
+    // With a negated set that is all ASCII, that hash is absent, so a
+    // character past the table is kept rather than translated —
+    // `"\u3042a".tr("^a", "z")` replaces the あ and `#tr_s` does not.
+    let table_only = squeeze
+        && !to.is_empty()
+        && from_set.negated
+        && from_set.ranges.iter().all(|&(_, hi)| hi < 0x100);
+    enum Out {
+        Keep,
+        Drop,
+        Repl(u32),
+    }
     let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
         SmallVec::with_capacity(inner.as_bytes().len());
     let mut changed = false;
-    let mut last_translated: Option<char> = None;
+    let mut last_translated: Option<u32> = None;
     for ch in inner.iter_char_bytes() {
-        let key = if ch.len() == 1 && ch[0] < 0x80 {
-            ch[0] as char
-        } else {
-            '\u{FFFF}'
-        };
-        enum Out {
-            Keep,
-            Drop,
-            Repl(char),
+        let cp = mbc_codepoint(enc, ch);
+        if table_only && cp >= 0x100 {
+            out.extend_from_slice(ch);
+            last_translated = None;
+            continue;
         }
-        let outcome = match &map {
-            TrMap::Map(m) => match m.get(&key) {
-                Some(r) => Out::Repl(*r),
-                None => Out::Keep,
-            },
-            TrMap::Delete { chars, negated } => {
-                let in_set = chars.contains(&key);
-                if if *negated { !in_set } else { in_set } {
+        let outcome = match (&map, last_to) {
+            // No replacement set at all: the matched characters go.
+            (_, None) => {
+                if from_set.contains(cp) {
                     Out::Drop
                 } else {
                     Out::Keep
                 }
             }
-            TrMap::Negated {
-                from_set,
-                replacement,
-            } => {
-                if from_set.contains(&key) {
+            // A negated set replaces everything *outside* itself.
+            (None, Some(r)) => {
+                if from_set.contains_raw(cp) {
                     Out::Keep
                 } else {
-                    Out::Repl(*replacement)
+                    Out::Repl(r)
                 }
             }
+            (Some(m), Some(_)) => match m.get(&cp) {
+                Some(r) => Out::Repl(*r),
+                None => Out::Keep,
+            },
         };
         match outcome {
             Out::Drop => {
                 changed = true;
                 last_translated = None;
             }
-            // Translated to `r` (ASCII for a gated ASCII-only spec).
             Out::Repl(r) => {
                 changed = true;
                 if !(squeeze && Some(r) == last_translated) {
-                    let mut buf = [0u8; 4];
-                    out.extend_from_slice(r.encode_utf8(&mut buf).as_bytes());
+                    out.extend_from_slice(&cp_to_bytes(enc, r));
                 }
                 last_translated = Some(r);
             }
-            // Kept verbatim (copy the original char bytes).
             Out::Keep => {
                 out.extend_from_slice(ch);
                 last_translated = None;
@@ -9537,10 +9630,25 @@ fn tr_translate_bytes(
 /// were produced by the translation (for `tr_s`).
 fn tr_translate(s: &str, from: &str, to: &str, squeeze: bool) -> Result<(String, bool)> {
     let map = tr_build_map(from, to)?;
+    // CRuby's squeeze path keeps a 256-entry table and consults a hash
+    // of the wider characters only when the set put something in it.
+    // With a negated set that is all ASCII that hash is absent, so a
+    // character past the table is kept rather than translated —
+    // `"\u3042a".tr("^a", "z")` replaces the あ and `#tr_s` does not.
+    let table_only = squeeze
+        && match &map {
+            TrMap::Negated { from_set, .. } => from_set.iter().all(|c| (*c as u32) < 0x100),
+            _ => false,
+        };
     let mut out = String::with_capacity(s.len());
     let mut changed = false;
     let mut last_translated: Option<char> = None;
     for ch in s.chars() {
+        if table_only && (ch as u32) >= 0x100 {
+            out.push(ch);
+            last_translated = None;
+            continue;
+        }
         let (replacement, was_translated) = match &map {
             TrMap::Map(m) => match m.get(&ch) {
                 Some(r) => (Some(*r), true),
@@ -9617,6 +9725,22 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let n = memchr::memchr_iter(b, inner.as_bytes()).count();
         return Ok(Value::integer(n as i64));
     }
+    // Non-UTF-8 receiver: walk the encoding-aware char iterator.
+    if let Some(sets) = nonutf8_charsets(globals, &inner, args)? {
+        let enc = inner.encoding();
+        let mut c = 0i64;
+        for ch in inner.iter_char_bytes() {
+            if cp_sets_contain(&sets, enc, ch) {
+                c += 1;
+            }
+        }
+        return Ok(Value::integer(c));
+    }
+
+    // The `char`-space sets are parsed only once the character walk
+    // below has declined this receiver: parsing them means reading the
+    // sets through the surrogate view, where a Shift_JIS `"ぁ-ん"` is a
+    // descending byte range and raises.
     let strs: Vec<String> = args
         .iter()
         .map(|arg| tr_set_view(vm, globals, *arg))
@@ -9625,17 +9749,6 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         .iter()
         .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
-
-    // Non-UTF-8 receiver: walk the encoding-aware char iterator.
-    if let Some(sets) = nonutf8_ascii_charsets(globals, &inner, args)? {
-        let mut c = 0i64;
-        for ch in inner.iter_char_bytes() {
-            if ascii_sets_contain(&sets, ch) {
-                c += 1;
-            }
-        }
-        return Ok(Value::integer(c));
-    }
 
     // ASCII haystack fast path: bitmap test per byte, branchless
     // `all(...)` over the intersection of sets.
@@ -9726,6 +9839,29 @@ fn squeeze_compute(
         }
         return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
     }
+    // Non-UTF-8 receiver: collapse runs of identical *characters*
+    // via the encoding-aware iterator.
+    if let Some(sets2) = nonutf8_charsets(globals, &inner, args)? {
+        let enc = inner.encoding();
+        let squeeze_all2 = sets2.is_empty();
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+            SmallVec::with_capacity(inner.as_bytes().len());
+        let mut prev: Option<SmallVec<[u8; 4]>> = None;
+        for ch in inner.iter_char_bytes() {
+            let in_set = squeeze_all2 || cp_sets_contain(&sets2, enc, ch);
+            if in_set && prev.as_deref() == Some(ch) {
+                continue;
+            }
+            out.extend_from_slice(ch);
+            prev = Some(SmallVec::from_slice(ch));
+        }
+        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
+    }
+
+    // The `char`-space sets are parsed only once the character walk
+    // above has declined this receiver: parsing them means reading the
+    // sets through the surrogate view, where a Shift_JIS `"ぁ-ん"` is a
+    // descending byte range and raises.
     let strs: Vec<String> = args
         .iter()
         .map(|a| tr_set_view(vm, globals, *a))
@@ -9735,24 +9871,6 @@ fn squeeze_compute(
         .map(|s| Charset::parse(s))
         .collect::<Result<_>>()?;
     let squeeze_all = sets.is_empty();
-
-    // Non-UTF-8 receiver: collapse runs of identical *characters*
-    // via the encoding-aware iterator.
-    if let Some(sets2) = nonutf8_ascii_charsets(globals, &inner, args)? {
-        let squeeze_all2 = sets2.is_empty();
-        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
-            SmallVec::with_capacity(inner.as_bytes().len());
-        let mut prev: Option<SmallVec<[u8; 4]>> = None;
-        for ch in inner.iter_char_bytes() {
-            let in_set = squeeze_all2 || ascii_sets_contain(&sets2, ch);
-            if in_set && prev.as_deref() == Some(ch) {
-                continue;
-            }
-            out.extend_from_slice(ch);
-            prev = Some(SmallVec::from_slice(ch));
-        }
-        return Ok(RStringInner::from_encoding_scanned(&out, inner.encoding()));
-    }
 
     // ASCII fast path: branchless byte-test against the intersection,
     // no allocation when nothing collapses (we still allocate when
@@ -9807,18 +9925,215 @@ fn squeeze_compute(
 /// leading `^` flag from `expand_tr_spec`.
 /// For a non-UTF-8 receiver, classify the `tr`-style set arguments:
 /// - `Ok(Some(sets))`  — every set is ASCII-only; safe to use.
+/// Whether `enc` numbers its characters by Unicode scalar. Everywhere
+/// else a character's "codepoint" is its own bytes.
+fn enc_is_unicode(enc: crate::value::Encoding) -> bool {
+    use crate::value::Encoding as E;
+    matches!(
+        enc,
+        E::Utf8 | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
+    )
+}
+
+/// The codepoint CRuby gives a character (`rb_enc_mbc_to_codepoint`):
+/// the Unicode scalar in a Unicode encoding, the character's own bytes
+/// packed big-endian in any other. A `tr`-style range compares on this
+/// value, and in Shift_JIS that is nothing like the Unicode order —
+/// `"\x81\x50-\x81\x60"` is the seventeen characters between those two
+/// byte pairs, whose scalars wander from U+FFE3 down to U+2010 and
+/// back up again (#1475).
+fn mbc_codepoint(enc: crate::value::Encoding, bytes: &[u8]) -> u32 {
+    if enc_is_unicode(enc)
+        && let Ok(s) = std::str::from_utf8(bytes)
+        && let Some(c) = s.chars().next()
+    {
+        return u32::from(c);
+    }
+    bytes.iter().fold(0u32, |acc, b| (acc << 8) | u32::from(*b))
+}
+
+/// The bytes of the character numbered `cp`: the inverse of
+/// [`mbc_codepoint`], which for a non-Unicode encoding is the packed
+/// value with its leading zero bytes dropped.
+fn cp_to_bytes(enc: crate::value::Encoding, cp: u32) -> SmallVec<[u8; 4]> {
+    let mut out: SmallVec<[u8; 4]> = SmallVec::new();
+    if enc_is_unicode(enc)
+        && let Some(c) = char::from_u32(cp)
+    {
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        return out;
+    }
+    if cp <= 0xff {
+        out.push(cp as u8);
+        return out;
+    }
+    let mut started = false;
+    for shift in [24u32, 16, 8, 0] {
+        let b = ((cp >> shift) & 0xff) as u8;
+        started |= b != 0;
+        if started {
+            out.push(b);
+        }
+    }
+    out
+}
+
+/// CRuby quotes the offending endpoints only when both are ASCII;
+/// anything wider gets the bare message (`trnext`).
+fn invalid_tr_range(lo: u32, hi: u32) -> MonorubyErr {
+    if lo < 0x80 && hi < 0x80 {
+        MonorubyErr::argumenterr(format!(
+            "invalid range \"{}-{}\" in string transliteration",
+            char::from(lo as u8),
+            char::from(hi as u8)
+        ))
+    } else {
+        MonorubyErr::argumenterr("invalid range in string transliteration")
+    }
+}
+
+/// [`expand_tr_spec`] over codepoints, as ranges: `\` escapes the next
+/// character, a leading `^` negates a set of more than one, `a-b` is a
+/// range (a trailing `-` is a literal), and a descending range is
+/// refused.
+fn expand_cp_spec(cps: &[u32], source: bool) -> Result<(Vec<(u32, u32)>, bool)> {
+    let mut ranges: Vec<(u32, u32)> = vec![];
+    let mut i = 0usize;
+    // Only a *source* set negates: `"x".tr("x", "^y")` replaces `x`
+    // with `^`, because `tr_trans` tests the leading caret of `src`
+    // alone and walks `repl` straight through `trnext`.
+    let negated = source && cps.first() == Some(&0x5e) && cps.len() > 1;
+    if negated {
+        i = 1;
+    }
+    while i < cps.len() {
+        let mut ch = cps[i];
+        i += 1;
+        if ch == 0x5c && i < cps.len() {
+            ch = cps[i];
+            i += 1;
+        }
+        if i + 1 < cps.len() && cps[i] == 0x2d {
+            i += 1;
+            let mut end = cps[i];
+            i += 1;
+            if end == 0x5c && i < cps.len() {
+                end = cps[i];
+                i += 1;
+            }
+            if ch > end {
+                return Err(invalid_tr_range(ch, end));
+            }
+            ranges.push((ch, end));
+            continue;
+        }
+        ranges.push((ch, ch));
+    }
+    Ok((ranges, negated))
+}
+
+/// A `tr`-style set parsed in the receiver's own encoding, over the
+/// codepoints of [`mbc_codepoint`] rather than `char`s: an EUC-JP or
+/// Shift_JIS character has no `char` of its own here.
+struct CpCharset {
+    ranges: Vec<(u32, u32)>,
+    negated: bool,
+    empty: bool,
+}
+
+impl CpCharset {
+    fn parse(cps: &[u32]) -> Result<Self> {
+        Self::parse_with(cps, true)
+    }
+
+    /// A replacement set, where a leading `^` is a character.
+    fn parse_literal(cps: &[u32]) -> Result<Self> {
+        Self::parse_with(cps, false)
+    }
+
+    fn parse_with(cps: &[u32], source: bool) -> Result<Self> {
+        if cps.is_empty() {
+            return Ok(Self {
+                ranges: vec![],
+                negated: false,
+                empty: true,
+            });
+        }
+        let (ranges, negated) = expand_cp_spec(cps, source)?;
+        Ok(Self {
+            ranges,
+            negated,
+            empty: false,
+        })
+    }
+
+    /// Membership ignoring the leading `^`.
+    fn contains_raw(&self, cp: u32) -> bool {
+        !self.empty && self.ranges.iter().any(|&(lo, hi)| lo <= cp && cp <= hi)
+    }
+
+    fn contains(&self, cp: u32) -> bool {
+        if self.empty {
+            return false;
+        }
+        self.contains_raw(cp) ^ self.negated
+    }
+
+    /// The set's characters in the order they were written, which is
+    /// what `#tr` pairs against its replacement set. Only meaningful
+    /// for a set that is not negated.
+    fn members(&self) -> Vec<u32> {
+        let mut out = vec![];
+        for &(lo, hi) in &self.ranges {
+            out.extend(lo..=hi);
+        }
+        out
+    }
+}
+
+/// The set's characters as codepoints. A set that is not whole
+/// characters in its own encoding is refused before any matching, the
+/// way CRuby's `tr_setup_table` refuses it — `"\xA4"` is no set in
+/// EUC-JP, though it is one in Shift_JIS, where that byte is a
+/// halfwidth katakana of its own.
+fn set_codepoints(recv_enc: crate::value::Encoding, set: &RStringInner) -> Result<Vec<u32>> {
+    if !set.is_valid_encoding() {
+        return Err(MonorubyErr::argumenterr(format!(
+            "invalid byte sequence in {}",
+            set.encoding().name()
+        )));
+    }
+    Ok(set
+        .iter_char_bytes()
+        .map(|cb| mbc_codepoint(recv_enc, cb))
+        .collect())
+}
+
 /// - `Err(..)`         — a set has non-ASCII bytes in a *different*
 ///   encoding than the receiver → `Encoding::CompatibilityError`
 ///   (CRuby behaviour, e.g. `euc.count("あ")`).
-/// - `Ok(None)`        — UTF-8 receiver, or a non-ASCII set in the
-///   *same* encoding → caller keeps the existing path (the
-///   same-encoding multibyte set case is a documented follow-up).
-fn nonutf8_ascii_charsets(
+/// - `Ok(None)`        — UTF-8 receiver (its view is the string
+///   itself, so the existing `char` path is already per character),
+///   or a set that is not a String.
+fn nonutf8_charsets(
     globals: &Globals,
     recv: &RStringInner,
     args: Array,
-) -> Result<Option<Vec<Charset>>> {
+) -> Result<Option<Vec<CpCharset>>> {
     if recv.encoding().is_utf8_compatible() {
+        return Ok(None);
+    }
+    // An ASCII-only receiver has no character wider than the byte the
+    // view would give it, so the byte paths below are already the
+    // per-character ones — as long as the sets hold no wider character
+    // either.
+    if recv.is_ascii_only()
+        && args.iter().all(|a| {
+            a.is_rstring_inner()
+                .is_some_and(|s| s.as_bytes().iter().all(|x| *x < 0x80))
+        })
+    {
         return Ok(None);
     }
     let mut sets = Vec::with_capacity(args.len());
@@ -9826,36 +10141,23 @@ fn nonutf8_ascii_charsets(
         let Some(s) = a.is_rstring_inner() else {
             return Ok(None);
         };
-        let b = s.as_bytes();
-        if b.iter().any(|x| *x >= 0x80) {
-            return if s.encoding() != recv.encoding() {
-                Err(MonorubyErr::incompatible_encoding(
-                    &globals.store,
-                    recv.encoding(),
-                    s.encoding(),
-                ))
-            } else {
-                Ok(None)
-            };
+        if s.as_bytes().iter().any(|x| *x >= 0x80) && s.encoding() != recv.encoding() {
+            return Err(MonorubyErr::incompatible_encoding(
+                &globals.store,
+                recv.encoding(),
+                s.encoding(),
+            ));
         }
-        // SAFETY: every byte < 0x80, so this is valid ASCII/UTF-8.
-        sets.push(Charset::parse(std::str::from_utf8(b).unwrap())?);
+        sets.push(CpCharset::parse(&set_codepoints(recv.encoding(), &s)?)?);
     }
     Ok(Some(sets))
 }
 
-/// Membership of one character (given as its raw bytes under the
-/// receiver's encoding) in the intersection of ASCII-only `sets`.
-/// A single ASCII byte uses the byte bitmap; any multibyte character
-/// is never an ASCII member, so its membership is uniformly the
-/// negation flag (`contains_char` of any non-ASCII char == `negated`
-/// for an ASCII-only spec).
-fn ascii_sets_contain(sets: &[Charset], ch: &[u8]) -> bool {
-    if ch.len() == 1 && ch[0] < 0x80 {
-        sets.iter().all(|s| s.contains_ascii_byte(ch[0]))
-    } else {
-        sets.iter().all(|s| s.contains_char('\u{FFFF}'))
-    }
+/// Membership of one character, given as its raw bytes under the
+/// receiver's encoding, in the intersection of `sets`.
+fn cp_sets_contain(sets: &[CpCharset], enc: crate::value::Encoding, ch: &[u8]) -> bool {
+    let cp = mbc_codepoint(enc, ch);
+    sets.iter().all(|s| s.contains(cp))
 }
 
 struct Charset {
@@ -17466,6 +17768,148 @@ mod tests {
              s.sub(n, "z").bytes, s.gsub(n, "z").bytes,
              s.partition(n).map(&:bytes), s.chomp(n).bytes,
              s.delete_suffix(n).bytes]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_tr_style_set_matches_whole_characters() {
+        // The selector family used to meet the receiver in the
+        // surrogate view, where an EUC-JP or Shift_JIS character is as
+        // many members as it has bytes: `"あいう".count("あ")` was 5,
+        // one for each byte of `あいう` that also occurs in `あ` — and
+        // `delete` cut the characters in half (#1475).
+        run_test_once(
+            r##"
+            %w[EUC-JP Shift_JIS].map do |enc|
+              s = "あいうabcう".encode(enc)
+              a = "あ".encode(enc)
+              [s.count(a), s.count("あい".encode(enc)), s.count(a, "い".encode(enc)),
+               s.delete(a).bytes, s.squeeze(a).bytes,
+               s.tr(a, "ん".encode(enc)).bytes, s.tr_s(a, "ん".encode(enc)).bytes,
+               s.strip(a).bytes, s.lstrip(a).bytes, s.rstrip(a).bytes,
+               "ああいい".encode(enc).squeeze.bytes]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_tr_range_compares_the_bytes_not_the_scalars() {
+        // A character's number is its own bytes packed, which is what
+        // CRuby compares a range on. In Shift_JIS that ordering is
+        // nothing like Unicode's: `"\x81\x50-\x81\x60"` holds `\x81\x5C`
+        // (U+2014) and not `\x81\x43` (U+FF0C), though the scalars say
+        // the opposite.
+        run_test_once(
+            r##"
+            def b(a, e) = a.pack("C*").dup.force_encoding(e)
+            sel = b([0x81, 0x50, 0x2D, 0x81, 0x60], "Shift_JIS")
+            recv = b([0x81, 0x5C, 0x81, 0x43, 0x81, 0x56, 0x41], "Shift_JIS")
+            e = "あいうabcう".encode("EUC-JP")
+            [recv.count(sel), recv.delete(sel).bytes,
+             e.count("ぁ-ん".encode("EUC-JP")), e.delete("ぁ-ん".encode("EUC-JP")).bytes,
+             e.tr("ぁ-ん".encode("EUC-JP"), "ん".encode("EUC-JP")).bytes,
+             "あいう".encode("Shift_JIS").count("ぁ-ん".encode("Shift_JIS"))]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_tr_style_set_reads_its_caret_escape_and_dash_per_character() {
+        run_test_once(
+            r##"
+            %w[EUC-JP Shift_JIS].map do |enc|
+              s = "あいうabcう".encode(enc)
+              n = "ん".encode(enc)
+              [s.count("^あ".encode(enc)), s.delete("^あ".encode(enc)).bytes,
+               s.tr("^あ".encode(enc), n).bytes, s.tr_s("^あ".encode(enc), n).bytes,
+               s.count("\\あ".encode(enc)), s.count("あ-".encode(enc)),
+               s.count("".dup.force_encoding(enc)), s.count("^".dup.force_encoding(enc)),
+               s.tr("^abc".encode(enc), n).bytes, s.tr_s("^abc".encode(enc), n).bytes]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn only_a_source_set_reads_its_leading_caret_as_a_negation() {
+        // `"x".tr("x", "^y")` replaces `x` with `^`: `tr_trans` tests
+        // the caret of `src` alone and walks `repl` straight through.
+        run_test_once(
+            r##"
+            def b(a, e) = a.pack("C*").dup.force_encoding(e)
+            ["EUC-JP", "Shift_JIS", "UTF-8", "ASCII-8BIT"].map do |enc|
+              s = b([0x32, 0x5C, 0x2D], enc)
+              [s.tr(b([0x32], enc), b([0x5E, 0x32], enc)).bytes,
+               s.tr_s(b([0x32], enc), b([0x5E, 0x32], enc)).bytes,
+               "abc".dup.force_encoding(enc).tr("a-c".dup.force_encoding(enc),
+                                                "^z".dup.force_encoding(enc)).bytes]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn tr_s_leaves_a_wide_character_alone_for_an_ascii_negated_set() {
+        // CRuby's squeeze path keeps a 256-entry table and consults a
+        // hash of the wider characters only when the set put something
+        // in it; a negated ASCII-only set leaves that hash absent, so
+        // `#tr` replaces a wide character and `#tr_s` does not.
+        run_test_once(
+            r##"
+            enc = "EUC-JP"
+            [["あいうabcう", "^abc", "ん"], ["あいうabcう", "^a", "ん"],
+             ["abcdef", "^ac", "z"], ["あいう", "^あ", "ん"],
+             ["aあbあc", "^ab", "ん"], ["あいうabcう", "^あ", "z"],
+             ["aabbcc", "^b", "z"]].map do |str, from, to|
+              s = str.encode(enc); f = from.encode(enc); t = to.encode(enc)
+              [s.tr(f, t).bytes, s.tr_s(f, t).bytes,
+               str.tr(from, to).bytes, str.tr_s(from, to).bytes]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn tr_takes_its_result_encoding_from_the_replacement_set() {
+        // `tr_trans` negotiates the two with `rb_enc_check` and writes
+        // the replacement in *that* encoding, so an ASCII receiver
+        // comes back tagged with the set's (#1477).
+        run_test_once(
+            r##"
+            %w[EUC-JP Shift_JIS].map do |enc|
+              a = "あ".encode(enc)
+              [["abc".tr("a", a).bytes, "abc".tr("a", a).encoding.name],
+               ["abc".tr_s("a", a).bytes, "abc".tr_s("a", a).encoding.name],
+               ["abc".tr("ab", "あい".encode(enc)).bytes,
+                "abc".tr("ab", "あい".encode(enc)).encoding.name],
+               ["あいう".encode(enc).tr(a, "z").bytes,
+                "あいう".encode(enc).tr(a, "z").encoding.name]]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_tr_style_set_is_refused_when_it_is_not_characters() {
+        // A set broken in its own encoding never matches — and `"\xA4"`
+        // is broken in EUC-JP but a halfwidth katakana of its own in
+        // Shift_JIS, so the two answer differently. A descending range
+        // quotes its endpoints only when both are ASCII.
+        run_test_once(
+            r##"
+            def b(a, e) = a.pack("C*").dup.force_encoding(e)
+            def att = (yield rescue [$!.class.to_s, $!.message])
+            %w[EUC-JP Shift_JIS].map do |enc|
+              s = "あいう".encode(enc)
+              [att { s.count(b([0xA4], enc)) },
+               att { s.delete(b([0xA4], enc)) }.then { |x| x.is_a?(String) ? x.bytes : x },
+               att { s.count("ん-ぁ".encode(enc)) },
+               att { s.count("z-a".dup.force_encoding(enc)) },
+               att { s.count("あ-a".encode(enc)) },
+               att { s.tr("ん-ぁ".encode(enc), "z".dup.force_encoding(enc)) }]
+            end + [att { "あ".count("い-あ") }, att { "abc".tr("z-a", "x") }]
             "##,
         );
     }
