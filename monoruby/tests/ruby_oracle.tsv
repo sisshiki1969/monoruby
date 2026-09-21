@@ -816,6 +816,7 @@
 2a5869ecfcebdbb2da9022b23ccf267d	["constant", true, [:C]]	$res = []\n        parent = Class.new do\n          def self.inherited(su
 2a5b9f708b06a2c9976d7328b5e29c89	["<int>", "<int><int>", "<int>"]	module IntTos\n              refine Integer do\n                def t
 2a5cd0c05a4c867471eb9bdcd900f0a1	[[4, 5, 6], 8]	r = []\n        calls = 0\n        10.times { |i| r << i if (calls += 1; 
+2a76dfd5908ca7bba96c9b1966e2e6c4	[[[Enumerator, 3], [Enumerator, 3], [Enumerator, 3], [Enumerator, 3], [Enumerator, 3], [Enumerator, 3], [Enumerator, 3]], [[1, 1, 2, 2, 3, 3], [1, 2, 3], [[1, 3], [2]], [2, 4, 6], [1, -1, 2, -2, 3, -3]], [[[1, 0], [2, 1], [3, 2]], [1, 2]]]	__a = [];__a << (\n        [\n          [1, 2, 3].flat_map, [1, 2, 3].collect_conc
 2a7ebdf4fd301bbdfa3591753316bc4d	:OVERRIDDEN	class Float; def >=(o); :OVERRIDDEN; end; end; 3.0 >= 4.0
 2a8528b266533b52014c1733d4a93306	[1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", 1, 0, [6, "name", "ASCII-8BIT", 7, 6, 1], "K\\xC3\\xA4rnten", 8, 10, [3, "n", "ASCII-8BIT", 24, 3, 21], "12", 2, [3, "s", "ASCII-8BIT", 33, 3, 30], "v\\xE2\\x82\\xACx", 5, 7, 1, true, "", "x", "\\xFF", 2, "y", "y z", "x\\xFFy ", true, "\\x{A4A2}", 2, "\\x{A4A4}", 4, 1, "x"]	require "strscan"\n        src = "{\\"name\\": \\"K\\xC3\\xA4rnten\\", \\"n\\": 
 2a88d8fcfb67f8e7184d4e309deabac3	[true, nil, nil, nil, true]	__a = [];__a << (IO.try_convert($stdout).equal?($stdout));__a << (IO.try_convert
@@ -1718,6 +1719,7 @@
 5d3e8beda2cfe6c5baa2a2cd21c8d001	:ok	S = Struct.new(:x)\n            \n\n            s = S.new(1).freeze\n  
 5d3ec2f2c61ae49660281bbdcd726dc3	true	class C\n        end\n        C.new.is_a? C
 5d43651c5f78468687d17de79bce19e9	["yelow mon", " now is the", "puters shot balls", "abbc", nil, "abc"]	__a = [];__a << ("yellow moon".squeeze);__a << ("  now   is  the".squeeze(" "));
+5d4d412ab545630123d567ea6f38ed8f	[[["aa", "bb", "cc", "dd", "ee"], ["a", "a", "b", "b", "c", "c"]], [["a", "b", "c"], [:a, :b, :c]], 4, [[], [], ["a", "b"]], "can't iterate from Float", "can't iterate from NilClass", [1, 2, 3, 4], [[1, 4, 9, 16], [1, 4, 9], [1, 2, 3, 4]]]	__a = [];__a << ([("a".."e").map { |s| s * 2 }, ("a".."c").flat_map { |s| [s, s]
 5d502ca059290eefdd957831c0d881cc	[[97, 233, 128512, 122], [97, 233, 128512, 122], Enumerator, [], true, [194, 466, 257024, 244], [97, 98, 99], [255, 128], String, [98, 234, 128513, 123], [122, 3], ArgumentError]	s = "aé\\u{1F600}z"\n        r = [s.codepoints, s.each_codepoint.to_a, s.
 5d53a8af94b50b97064e8d51ff1aee9b	["ASCII-8BIT", true, true, "UTF-8"]	t = Thread.new { "x" }\n            t.join\n            s = t.to_s\n  
 5d6c8b649c34e181f15d691733d4d981	[3, 5, 9, 4, 1, TypeError, [NotImplementedError, "Unsupported advice: :bogus"]]	(f="/tmp/mono_ss_#{Process.pid}"; File.write(f,"0123456789"); io=File.open(f); a
@@ -1779,6 +1781,7 @@
 60e7801250bb0dce26c76cbfe1c94612	[1, 2, 3, 4, false, false, true, false, true, false]	o = Object.new\n            def o.foo = 1\n            m = Module.new
 60fa84926456bf38e08b292f42e6048b	[true, false, true]	parent = Class.new do\n              protected; def parent_pro; end\n
 60fba8f11f422d913f9063b5a6042917	[1, "KwHash", 1..5, 2, [1, 2, 3, 4, 5], 2020, 0, 3]	class KwHash < Hash\n          attr_reader :opt\n          def initialize
+60fc414b128c2631f9d834deb9ed0753	[["#<Enumerator: 1..3:find>", "#<Enumerator: 1..3:find(nil)>", "#<Enumerator: {a: 1}:find>"], [3, :none, nil], "wrong number of arguments (given 2, expected 0..1)"]	__a = [];__a << ([(1..3).find.inspect, (1..3).find(nil).inspect, {a: 1}.find.ins
 61004613ce868620a7ea63f5833c5be8	[100, 200]	def f(&p)\n            g(&p)\n        end\n                \n        def g(
 6100afe56aff9e241cc3260eb947b50d	[[1, 2, 3, 1, 2, 3], [], [], 6, 0, 0]	__a = [];__a << ([1, 2, 3].cycle(2).to_a);__a << ([1, 2, 3].cycle(0).to_a);__a <
 610ba8e265017385d40dc2c419f419df	[[true, 5, nil, false], [true, true, true, ["LocalJumpError", "LocalJumpError", "LocalJumpError"], "k", "v"], true, [true, true, "Object", "Object"]]	__a = [];__a << (\n            m = ObjectSpace::WeakMap.new\n            k, v = Ob

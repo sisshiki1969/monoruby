@@ -2745,15 +2745,17 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// ### Enumerable#partition
 ///
-/// - [NOT SUPPORTED] partition -> Enumerator
+/// - partition -> Enumerator
 /// - partition {|item| ... } -> [[object], [object]]
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
 #[monoruby_builtin]
-fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     self_val.expect_array_ty(globals)?;
+    let Some(bh) = lfp.block() else {
+        return array_enumerator(vm, self_val, IdentId::get_id("partition"), pc);
+    };
     let mut res_true = vec![];
     let mut res_false = vec![];
     let p = vm.get_block_data(globals, bh)?;
@@ -3372,13 +3374,15 @@ fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// - flat_map {| obj | block } -> Array
 /// - collect_concat {| obj | block } -> Array
-/// - [NOT SUPPORTED] flat_map -> Enumerator
-/// - [NOT SUPPORTED] collect_concat -> Enumerator
+/// - flat_map -> Enumerator
+/// - collect_concat -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
 #[monoruby_builtin]
-fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let Some(bh) = lfp.block() else {
+        return array_enumerator(vm, lfp.self_val(), IdentId::get_id("flat_map"), pc);
+    };
     let elems: Vec<Value> = lfp.self_val().as_array().iter().copied().collect();
     let data = vm.get_block_data(globals, bh)?;
     // The accumulator has to be a *rooted* Ruby Array, not a Rust `Vec`:
