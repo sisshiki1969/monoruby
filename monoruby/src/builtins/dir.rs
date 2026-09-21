@@ -942,7 +942,12 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         match std::env::set_current_dir(&path) {
             Ok(_) => {}
             Err(err) => {
-                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, &display));
+                return Err(MonorubyErr::errno_with_path(
+                    &globals.store,
+                    &err,
+                    "chdir_path",
+                    &display,
+                ));
             }
         }
         let res = vm.invoke_block(globals, &data, &[path_val]);
@@ -963,7 +968,7 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
     } else {
         std::env::set_current_dir(&path)
-            .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &display))?;
+            .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "chdir_path", &display))?;
         Ok(Value::integer(0))
     }
 }

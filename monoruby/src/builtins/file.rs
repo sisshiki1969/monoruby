@@ -92,6 +92,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "split", file_split, 1);
     globals.define_builtin_class_funcs_rest(file, "delete", &["unlink"], delete);
     globals.define_builtin_class_func_rest(file, "chmod", chmod);
+    globals.define_builtin_class_func_rest(file, "lchmod", lchmod);
     globals.define_builtin_class_func(file, "symlink", file_symlink, 2);
     globals.define_builtin_class_func_with_kw(
         file,
@@ -1855,8 +1856,11 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mut count = 0i64;
     for arg in args.iter() {
         let path = to_raw_path(vm, globals, *arg)?;
+        // `File.delete` / `.chmod` / `.chown` / `.utime` and their `l`
+        // forms all run through CRuby's `apply2files`, so that is the
+        // tag every one of them reports.
         std::fs::remove_file(&path)
-            .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
+            .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "apply2files", &path))?;
         count += 1;
     }
     Ok(Value::integer(count))
@@ -1871,16 +1875,67 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/chmod.html]
 #[monoruby_builtin]
-fn chmod(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn chmod(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
-    let mode = args[0].coerce_to_int_i64(_vm, globals)? as u32;
+    // The mode is required even when no file follows it:
+    // `File.chmod(0o600)` is 0, `File.chmod` an ArgumentError.
+    if args.is_empty() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
+    }
+    let mode = args[0].coerce_to_int_i64(vm, globals)? as u32;
     let mut count = 0i64;
     for arg in args[1..].iter() {
-        let path = to_raw_path(_vm, globals, *arg)?;
+        let path = to_raw_path(vm, globals, *arg)?;
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).map_err(|e| {
-            MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_chmod", &path)
-        })?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "apply2files", &path))?;
+        count += 1;
+    }
+    Ok(Value::integer(count))
+}
+
+///
+/// ### File.lchmod
+///
+/// - lchmod(mode, *filename) -> Integer
+///
+/// `File.chmod` on the link itself rather than on what it points at.
+/// glibc's `lchmod` is `fchmodat` with `AT_SYMLINK_NOFOLLOW`, which is
+/// what CRuby ends up calling too, so the errno matches on either
+/// platform: the Linux kernel refuses a symbolic link with `ENOTSUP`,
+/// Darwin honours the flag.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/s/lchmod.html]
+#[monoruby_builtin]
+fn lchmod(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::ffi::OsStrExt;
+    let args = lfp.arg(0).as_array();
+    if args.is_empty() {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
+    }
+    let mode = args[0].coerce_to_int_i64(vm, globals)? as libc::mode_t;
+    let mut count = 0i64;
+    for arg in args[1..].iter() {
+        let path = to_raw_path(vm, globals, *arg)?;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| MonorubyErr::argumenterr("path contains NUL byte"))?;
+        // SAFETY: `c` is a valid NUL-terminated string for the call's
+        // duration, and `fchmodat` is a POSIX system call.
+        let rc =
+            unsafe { libc::fchmodat(libc::AT_FDCWD, c.as_ptr(), mode, libc::AT_SYMLINK_NOFOLLOW) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "apply2files",
+                &path,
+            ));
+        }
         count += 1;
     }
     Ok(Value::integer(count))
@@ -1903,8 +1958,9 @@ fn file_symlink(
 ) -> Result<Value> {
     let old = to_raw_path(vm, globals, lfp.arg(0))?;
     let new = to_raw_path(vm, globals, lfp.arg(1))?;
-    std::os::unix::fs::symlink(&old, &new)
-        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_symlink", &new))?;
+    std::os::unix::fs::symlink(&old, &new).map_err(|e| {
+        MonorubyErr::errno_with_paths(&globals.store, &e, "rb_file_s_symlink", &old, &new)
+    })?;
     Ok(Value::integer(0))
 }
 
@@ -2369,7 +2425,7 @@ fn file_readlink(
 ) -> Result<Value> {
     let path = to_path(vm, globals, lfp.arg(0))?;
     let target = std::fs::read_link(&path).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_readlink", &path)
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_readlink", &path)
     })?;
     // CRuby's `rb_readlink` hands the raw link target to
     // `rb_enc_str_new(..., rb_filesystem_encoding())`: a plain
@@ -2390,9 +2446,8 @@ fn file_readlink(
 fn file_link(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let old = to_path(vm, globals, lfp.arg(0))?;
     let new = to_path(vm, globals, lfp.arg(1))?;
-    let new_str = new.to_string_lossy().to_string();
     std::fs::hard_link(&old, &new).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_link", &new_str)
+        MonorubyErr::errno_with_paths(&globals.store, &e, "rb_file_s_link", &old, &new)
     })?;
     Ok(Value::integer(0))
 }
@@ -2413,9 +2468,8 @@ fn file_rename(
 ) -> Result<Value> {
     let from = to_path(vm, globals, lfp.arg(0))?;
     let to = to_path(vm, globals, lfp.arg(1))?;
-    let from_str = from.to_string_lossy().to_string();
     std::fs::rename(&from, &to).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_rename", &from_str)
+        MonorubyErr::errno_with_paths(&globals.store, &e, "rb_file_s_rename", &from, &to)
     })?;
     Ok(Value::integer(0))
 }
@@ -2443,7 +2497,7 @@ fn file_truncate(
         return Err(MonorubyErr::errno_with_path(
             &globals.store,
             &err,
-            "truncate",
+            "rb_file_s_truncate",
             &path_str,
         ));
     }
@@ -2451,7 +2505,10 @@ fn file_truncate(
         .write(true)
         .open(&path)
         .map_err(|e| {
-            MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path_str)
+            // CRuby truncates by path, so the open that stands in for
+            // it here reports the call's own tag, not the one a
+            // `File.open` would.
+            MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_truncate", &path_str)
         })?;
     file.set_len(length as u64).map_err(|e| {
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_truncate", &path_str)
@@ -2576,7 +2633,7 @@ fn utime_impl(
             return Err(MonorubyErr::errno_with_path(
                 &globals.store,
                 &err,
-                "rb_file_s_utime",
+                "apply2files",
                 &path_str,
             ));
         }
@@ -2654,7 +2711,7 @@ fn chown_impl(
             return Err(MonorubyErr::errno_with_path(
                 &globals.store,
                 &err,
-                "rb_file_s_chown",
+                "apply2files",
                 &path_str,
             ));
         }
@@ -2943,7 +3000,15 @@ fn build_stat(
     } else {
         std::fs::symlink_metadata(&path)
     }
-    .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path))?;
+    .map_err(|e| {
+        // `lstat` describes the link, and says so in the message.
+        let tag = if follow {
+            "rb_file_s_stat"
+        } else {
+            "rb_file_s_lstat"
+        };
+        MonorubyErr::errno_with_path(&globals.store, &e, tag, &path)
+    })?;
     let stat_class = vm
         .get_qualified_constant(globals, OBJECT_CLASS, &["File", "Stat"])?
         .as_class();
@@ -4578,6 +4643,105 @@ mod tests {
             ensure
               File.unlink(path) rescue nil
             end
+            "#,
+        );
+    }
+
+    /// A `SystemCallError` names the C function CRuby failed in, and
+    /// the `File` class methods that share an implementation there
+    /// share its name: `apply2files` for the whole chmod / chown /
+    /// utime / delete family, whatever the Ruby-level method was.
+    #[test]
+    fn errno_messages_name_the_function_cruby_fails_in() {
+        run_test_once_live(
+            r#"
+            require "tmpdir"
+            Dir.mktmpdir do |d|
+              ok = File.join(d, "ok"); File.write(ok, "x")
+              sub = File.join(d, "sub"); Dir.mkdir(sub)
+              miss = File.join(d, "no")
+              {
+                delete:   -> { File.delete(miss) },
+                unlink:   -> { File.unlink(miss) },
+                delete_d: -> { File.delete(sub) },
+                chmod:    -> { File.chmod(0600, miss) },
+                lchmod:   -> { File.lchmod(0600, miss) },
+                chown:    -> { File.chown(nil, nil, miss) },
+                lchown:   -> { File.lchown(nil, nil, miss) },
+                utime:    -> { File.utime(Time.now, Time.now, miss) },
+                truncate: -> { File.truncate(miss, 0) },
+                trunc_neg:-> { File.truncate(ok, -1) },
+                trunc_dir:-> { File.truncate(sub, 0) },
+                readlink: -> { File.readlink(ok) },
+                lstat:    -> { File.lstat(miss) },
+                stat:     -> { File.stat(miss) },
+                chdir:    -> { Dir.chdir(miss) },
+                chdir_f:  -> { Dir.chdir(ok) },
+              }.map do |name, b|
+                begin
+                  b.call
+                  [name, :ok]
+                rescue => e
+                  [name, e.class.to_s, e.message.gsub(d, "<D>")]
+                end
+              end
+            end
+            "#,
+        );
+    }
+
+    /// The calls that name an old and a new path report both, as
+    /// `(old, new)` — except on `EEXIST`, where CRuby names the second
+    /// one alone under the helper's own function name.
+    #[test]
+    fn errno_messages_carry_both_paths_of_a_two_path_call() {
+        run_test_once_live(
+            r#"
+            require "tmpdir"
+            Dir.mktmpdir do |d|
+              ok = File.join(d, "ok"); File.write(ok, "x")
+              ok2 = File.join(d, "ok2"); File.write(ok2, "y")
+              sub = File.join(d, "sub"); Dir.mkdir(sub)
+              miss = File.join(d, "no")
+              {
+                symlink:   -> { File.symlink("x", File.join(miss, "y")) },
+                symlink_e: -> { File.symlink("x", ok) },
+                link:      -> { File.link(miss, File.join(d, "l")) },
+                link_e:    -> { File.link(ok, ok2) },
+                rename:    -> { File.rename(miss, File.join(d, "r")) },
+                rename_2:  -> { File.rename(ok, File.join(miss, "y")) },
+                rename_nd: -> { File.rename(sub, ok) },
+              }.map do |name, b|
+                begin
+                  b.call
+                  [name, :ok]
+                rescue => e
+                  [name, e.class.to_s, e.message.gsub(d, "<D>")]
+                end
+              end
+            end
+            "#,
+        );
+    }
+
+    /// `File.chmod` used to walk off the end of its argument list when
+    /// the mode was missing, which aborted the process rather than
+    /// raising; `File.lchmod` was absent altogether.
+    #[test]
+    fn chmod_wants_a_mode_even_without_a_file() {
+        run_test_once_live(
+            r#"
+            require "tmpdir"
+            [
+              (File.chmod rescue [$!.class.to_s, $!.message]),
+              (File.lchmod rescue [$!.class.to_s, $!.message]),
+              File.chmod(0600), File.lchmod(0600), File.delete,
+              File.respond_to?(:lchmod),
+              Dir.mktmpdir { |d|
+                f = File.join(d, "f"); File.write(f, "x")
+                [File.lchmod(0600, f), format("%o", File.stat(f).mode & 0777)]
+              },
+            ]
             "#,
         );
     }
