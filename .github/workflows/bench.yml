@@ -11,13 +11,6 @@ on:
           - arm64
           - amd64
           - both
-  # The darwin/arm64 benchmark runs on this daily schedule (once per
-  # day, against master's HEAD at fire time), never on push — the
-  # ~4.3 h three-engine pass is too expensive for the macOS runner
-  # allowance to pay per commit. 15:47 UTC = 00:47 JST, so the arm64
-  # dashboard is fresh by the (JST) morning.
-  schedule:
-    - cron: '47 15 * * *'
   # Every crate that ends up in the measured binary or in an extension
   # it dlopens, plus what decides how they are built. `ruruby-parse` is
   # gone (prism replaced it) and the extensions were missing entirely,
@@ -47,30 +40,27 @@ on:
 
 permissions:
   contents: write
-  # `gate` reads this workflow's own run history to throttle the
-  # push-triggered amd64 pass. Naming `contents` above drops every other
-  # scope to none, so the read has to be asked for.
+  # `gate` reads this workflow's own run history to detect a bench run
+  # already in flight. Naming `contents` above drops every other scope
+  # to none, so the read has to be asked for.
   actions: read
 
 jobs:
-  # Whether bench-amd64 runs, decided in a job of its own because the
-  # answer needs an API call. A push gets a pass at most once every six
-  # hours: the amd64 job is ~2 h of runner time and master takes a dozen
-  # merges on a busy day, so benchmarking every one of them spends the
-  # allowance without telling us more than the throttled series does —
-  # the portal keys each point by commit either way, just with gaps.
-  #
-  # "When did we last benchmark" cannot be read off the run list, since
-  # a throttled push still creates a workflow run with the job skipped,
-  # so this walks back over the recent runs for the last one whose
-  # bench-amd64 actually started. A job still in flight counts (its
-  # conclusion is null, not "skipped"), which is what keeps a second
-  # pass from starting alongside one that is already running.
+  # Whether the benchmark jobs run, decided in a job of its own because
+  # the answer needs an API call. Every master push benchmarks both
+  # architectures — unless a bench run is already underway, in which
+  # case this job FAILS (exit 1): the push's run goes red instead of
+  # starting a second pass alongside one still measuring wall-clock
+  # time on a shared runner. The next push after the running pass
+  # finishes benchmarks again. A manual dispatch is a human's explicit
+  # ask and bypasses the check (the per-job concurrency groups below
+  # still keep two same-kind passes from overlapping).
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       amd64: ${{ steps.decide.outputs.amd64 }}
+      arm64: ${{ steps.decide.outputs.arm64 }}
     steps:
       - id: decide
         env:
@@ -79,60 +69,63 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           EVENT: ${{ github.event_name }}
           ARCH: ${{ inputs.arch }}
-          THROTTLE_SECONDS: '21600'
-          SCAN_RUNS: '40'
         shell: bash
         run: |
           set -uo pipefail
 
           amd64=false
+          arm64=false
           reason=""
 
           if [ "$EVENT" = "workflow_dispatch" ]; then
             case "${ARCH:-}" in
-              amd64|both) amd64=true; reason="dispatched with arch=${ARCH}" ;;
-              *)          reason="dispatched with arch=${ARCH:-unset}" ;;
+              amd64) amd64=true ;;
+              arm64) arm64=true ;;
+              both)  amd64=true; arm64=true ;;
             esac
-          elif [ "$EVENT" != "push" ]; then
-            reason="$EVENT is the arm64 job's trigger, not this one's"
+            reason="dispatched with arch=${ARCH:-unset}"
           else
-            # The newest run, this one aside, whose bench-amd64 started.
-            last=""
-            for id in $(gh api \
-                  "repos/$REPO/actions/workflows/bench.yml/runs?branch=master&per_page=$SCAN_RUNS" \
-                  --jq ".workflow_runs[] | select(.id != $RUN_ID) | .id" 2>/dev/null); do
-              last=$(gh api "repos/$REPO/actions/runs/$id/jobs" --jq \
-                '[.jobs[] | select(.name == "bench-amd64" and .conclusion != "skipped")][0]
-                 | (.started_at // .created_at) // empty' 2>/dev/null)
-              [ -n "$last" ] && break
-            done
+            # Other runs of this workflow still queued or running, this
+            # one aside. Only *older* runs (smaller id) count: of two
+            # pushes racing through this check, the older never defers
+            # to the newer, so exactly one of them proceeds instead of
+            # each seeing the other and both stopping.
+            busy=$(gh api \
+              "repos/$REPO/actions/workflows/bench.yml/runs?per_page=50" \
+              --jq "[.workflow_runs[]
+                     | select(.id < $RUN_ID
+                              and (.status == \"queued\" or .status == \"in_progress\"))]
+                    | length" 2>/dev/null || echo "")
 
-            if [ -z "$last" ]; then
-              # No pass in the scanned window, or the API would not
-              # answer. Benchmark rather than silently stop doing so.
-              amd64=true
-              reason="no amd64 pass in the last $SCAN_RUNS runs"
+            if [ -n "$busy" ] && [ "$busy" -gt 0 ]; then
+              msg="a bench run is already in flight ($busy queued/running) — failing this one"
+              echo "$msg"
+              echo "**FAILED**: $msg" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
+            amd64=true
+            arm64=true
+            if [ -z "$busy" ]; then
+              # The API would not answer. Benchmark rather than silently
+              # stop doing so.
+              reason="run-list query failed — proceeding"
             else
-              age=$(( $(date -u +%s) - $(date -u -d "$last" +%s) ))
-              if [ "$age" -ge "$THROTTLE_SECONDS" ]; then
-                amd64=true
-                reason="last amd64 pass started $last, ${age}s ago"
-              else
-                reason="throttled: last amd64 pass started $last, only ${age}s ago (need ${THROTTLE_SECONDS}s)"
-              fi
+              reason="no other bench run in flight"
             fi
           fi
 
-          echo "amd64=$amd64" >> "$GITHUB_OUTPUT"
-          echo "bench-amd64: **$amd64** — $reason" >> "$GITHUB_STEP_SUMMARY"
-          echo "bench-amd64: $amd64 — $reason"
+          {
+            echo "amd64=$amd64"
+            echo "arm64=$arm64"
+          } >> "$GITHUB_OUTPUT"
+          echo "bench-amd64: **$amd64**, bench-arm64: **$arm64** — $reason" >> "$GITHUB_STEP_SUMMARY"
+          echo "bench-amd64: $amd64, bench-arm64: $arm64 — $reason"
 
   bench-amd64:
-    # Runs on a master push, at most once every six hours (see `gate`);
-    # a manual dispatch includes it only when asked (arch: amd64 / both —
-    # the dispatch default is arm64-only). The daily `schedule` trigger
-    # is the arm64 job's alone, so amd64 never runs twice for the same
-    # day's work.
+    # Runs on every master push, unless `gate` failed the run because a
+    # bench run was already in flight; a manual dispatch includes it
+    # only when asked (arch: amd64 / both).
     needs: gate
     if: ${{ needs.gate.outputs.amd64 == 'true' }}
     # One at a time, per architecture. These jobs measure wall-clock
@@ -397,14 +390,12 @@ jobs:
           retention-days: 30
 
   bench-arm64:
-    # Runs automatically at most once per day (the `schedule` trigger
-    # above), never on push: the ~4.3 h three-engine pass burns far too
-    # much of the macOS runner allowance to pay per commit. It can also
-    # be kicked from the Actions tab (workflow_dispatch, arch: arm64 —
-    # the default — or both). On push-triggered runs the publish job
-    # tolerates its absence and leaves the arm64 dashboard at its last
-    # snapshot.
-    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.arch == 'arm64' || inputs.arch == 'both')) }}
+    # Runs on every master push, like bench-amd64, unless `gate` failed
+    # the run because a bench run was already in flight; a manual
+    # dispatch includes it only when asked (arch: arm64 — the dispatch
+    # default — or both).
+    needs: gate
+    if: ${{ needs.gate.outputs.arm64 == 'true' }}
     # One at a time, per architecture. These jobs measure wall-clock
     # time on shared GitHub runners, so two of the same kind in flight
     # are two benchmarks competing for one CPU — which is what made
@@ -420,11 +411,10 @@ jobs:
       cancel-in-progress: false
     runs-on: macos-latest
     # The three-engine pass needs ~245-260 min on this runner (the zjit
-    # pass alone is ~2.5 h on arm64): the first zjit run hit the old
-    # 240-min cap during its final engine pass, ~90% done, and published
-    # nothing. 350 leaves headroom while staying under the 360-min
-    # GitHub-hosted maximum.
-    timeout-minutes: 350
+    # pass alone is ~2.5 h on arm64) and has been known to reach this
+    # cap on bad days, so take everything GitHub-hosted runners allow:
+    # 360 minutes is the maximum.
+    timeout-minutes: 360
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -577,14 +567,14 @@ jobs:
           # rather than killed by `timeout(1)`, which records
           # `timeout (Ns)` and no measurement at all.
           #
-          # Tighter here than on amd64 (600), because this job is the one
-          # with no headroom: the three-engine pass has been reaching the
-          # 350-minute `timeout-minutes` cap — three of the seven daily
-          # runs to 2026-09-20 were cancelled there, mid-benchmark, with
-          # `Aggregate to portal JSON` skipped and nothing published for
-          # the day. 350 minutes is already near the 360 GitHub allows, so
-          # the budget has to come out of the benchmarks instead.
-          MAX_TIME: '450'
+          # Same budget as amd64, so the two dashboards measure under
+          # the same rule. This job has little headroom under its
+          # `timeout-minutes` cap (at 450 s, three of the seven daily
+          # runs to 2026-09-20 were still cancelled at the cap), but a
+          # cancelled run now costs much less than it did on the daily
+          # cadence: the next master push simply benchmarks again
+          # instead of leaving the whole day unpublished.
+          MAX_TIME: '600'
           ZJIT_OK: ${{ steps.zjit-resolved.outputs.ok }}
         run: |
           set +e
@@ -663,8 +653,9 @@ jobs:
     needs: [bench-amd64, bench-arm64]
     # Run even if one benchmark job failed, so partial results are still
     # published — a failed job still uploads what it measured. Skip only
-    # when neither job ran at all, which is what a throttled push looks
-    # like: there is nothing to publish and the last snapshot stands.
+    # when neither job ran at all — a run `gate` failed because a bench
+    # was already in flight, or a single-arch dispatch's other side:
+    # there is nothing to publish and the last snapshot stands.
     if: ${{ always()
       && (needs.bench-amd64.result != 'skipped' || needs.bench-arm64.result != 'skipped')
       && (github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch') }}
