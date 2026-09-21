@@ -294,13 +294,54 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    ///
+    /// The observed receiver classes of *callid* that all resolve to
+    /// *func_id*, when there are at least two of them worth a compare.
+    ///
+    /// The caller guards the set with one `GuardClassIn` instead of
+    /// guarding the single class the inline cache happens to hold, so an
+    /// off-class receiver costs a compare rather than a deopt.
+    ///
+    /// The target's `FuncKind` does not decide this. What a set guard
+    /// gives up is the *proof* of a single receiver class, and everything
+    /// downstream that needs that proof already asks for it:
+    /// `same_target_set_guarded` turns off `inline_class_new`, the inline
+    /// operator generators and the baked-in callee body, and
+    /// `recv_class_proven` turns off the ivar-slot lowerings and callee
+    /// specialization. This used to admit `FuncKind::Builtin` alone, which
+    /// left every Ruby-defined shared target — a method in an included
+    /// module, the common shape — deopting on each off-class receiver.
+    ///
+    /// What decides it is whether the proof was *worth* anything at this
+    /// site, which is the one thing the list above does not say: declining
+    /// a lowering is free, but declining to specialize the callee is not.
+    /// So the one case held back is the target this site would specialize;
+    /// see the comment on that test below for the measurements.
+    ///
     fn pmc_same_target_classes(
         &mut self,
         callid: CallSiteId,
         recv_class: ClassId,
         func_id: FuncId,
     ) -> Option<Box<[ClassId]>> {
-        if !matches!(self.store[func_id].kind, FuncKind::Builtin { .. }) {
+        // A target this site would *specialize* keeps its single-class
+        // guard. The set guard is the better trade only when what it
+        // replaces is a plain call: it buys one compare in place of a
+        // deopt, but it gives up the proof of a receiver class, and with
+        // it the callee body compiled for that class. Inlining the callee
+        // for the class that dominates the traffic is worth more than
+        // serving every class through the wrapper — even when the set
+        // guard is doing its job. On `activerecord` the unrestricted form
+        // removed 40% of the deopts (252,000 -> 151,190, recompiles
+        // unchanged) and still ran 7% slower; declining here it is level,
+        // and `psych-load` (-2%) and `lobsters` (-1%) keep their gains.
+        //
+        // `is_simple_call` is the gate `specializable` itself leads with,
+        // so this declines exactly where specialization is possible and
+        // nowhere else. The share the PMC reports cannot decide this
+        // instead: it counts *misses*, not calls (see `pic_groups`), so
+        // "does one class dominate" is not a question its numbers answer.
+        if self.store[func_id].is_iseq().is_some() && self.store.is_simple_call(func_id, callid) {
             return None;
         }
         let callsite = &self.store[callid];
@@ -850,14 +891,30 @@ impl<'a> JitContext<'a> {
             state.unset_side_effect_guard();
             return Ok(CompileResult::Continue);
         }
+        // Whether the receiver's class is *proven* to be `recv_class`, and
+        // not merely narrowed to a set of classes that share this
+        // `func_id`. Every lowering below that resolves an ivar slot
+        // against `recv_class` needs the proof: two classes sharing one
+        // method need not agree on where its ivars live, so a set-guarded
+        // arm would read or write the first class's slot for all of them.
+        // `expand_leaf_body` makes the same test for the same reason; the
+        // lowerings that do not resolve anything class-specific (the
+        // `Struct` accessors take their slot from the `FuncKind` itself)
+        // are unaffected.
+        let recv_class_proven = !same_target_set_guarded || state.class(recv) == Some(recv_class);
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let (fid, outer_lfp) = match self.store[func_id].kind {
-            FuncKind::AttrReader { ivar_name } => {
+            FuncKind::AttrReader { ivar_name } if recv_class_proven => {
                 return Ok(self.attr_reader(state, ir, callid, recv_class, ivar_name));
             }
-            FuncKind::AttrWriter { ivar_name } => {
+            FuncKind::AttrWriter { ivar_name } if recv_class_proven => {
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
+            // Set-guarded: the ivar slot is not knowable here, so call the
+            // accessor's wrapper, which looks the name up on the receiver's
+            // own class. `pic_groups` keeps accessors out of folded arms so
+            // this stays a cold corner rather than the common case.
+            FuncKind::AttrReader { .. } | FuncKind::AttrWriter { .. } => (func_id, None),
             FuncKind::StructReader { slot_index, inline } => {
                 return Ok(self.struct_slot_reader(state, ir, callid, slot_index, inline));
             }
@@ -912,7 +969,7 @@ impl<'a> JitContext<'a> {
                             ISeqHint::Normal => {}
                         }
                     }
-                    if self.specialize_level() < SPECIALIZE_DEPTH_LIMIT {
+                    if recv_class_proven && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT {
                         return self.specialized_iseq(
                             state,
                             ir,
@@ -1047,7 +1104,8 @@ impl<'a> JitContext<'a> {
                                         .collect()
                                 })
                         };
-                        if let Some(arg_slots) = arg_slots
+                        if recv_class_proven
+                            && let Some(arg_slots) = arg_slots
                             && self.expand_ivar_stores(
                                 state, ir, recv_class, recv, dst, &body, &arg_slots,
                             )
@@ -1147,6 +1205,7 @@ impl<'a> JitContext<'a> {
                     && (forward_exempt || self.specialize_level() < SPECIALIZE_DEPTH_LIMIT))
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
+                    && recv_class_proven
                 {
                     return self.specialized_iseq(
                         state,

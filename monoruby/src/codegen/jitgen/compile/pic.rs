@@ -236,7 +236,20 @@ impl<'a> JitContext<'a> {
             // Fold into the arm for this target if one is already open. The
             // groups stay in first-seen order, which is most-observed-first,
             // so the hottest target is tested first.
-            if let Some(g) = groups.iter_mut().find(|g| g.func_id == func_id) {
+            //
+            // An `attr_reader` / `attr_writer` target is the exception, for
+            // speed rather than for correctness: the ivar it names lives at
+            // a different slot in each class, so `compile_method_call`
+            // declines the inline load/store unless the arm *proves* the
+            // receiver's class, and a folded arm proves only membership.
+            // Folding one here would trade the two-instruction accessor for
+            // a call through its wrapper; an arm of its own keeps the
+            // inline lowering and costs one compare.
+            let folds = !matches!(
+                self.store[func_id].kind,
+                FuncKind::AttrReader { .. } | FuncKind::AttrWriter { .. }
+            );
+            if folds && let Some(g) = groups.iter_mut().find(|g| g.func_id == func_id) {
                 g.classes.push(class);
             } else {
                 groups.push(PicGroup {

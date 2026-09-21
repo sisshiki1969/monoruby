@@ -1188,16 +1188,22 @@ impl<'a> MarshalReader<'a> {
         self.no_intern = saved_no_intern;
         let mut inner = inner?;
         let class_name = class_sym.get_name();
-        let class_name_id = IdentId::get_id(&class_name);
-        let class_val = globals
-            .get_constant(OBJECT_CLASS, class_name_id)
-            .and_then(|state| state.loaded_value())
-            .ok_or_else(|| {
-                MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
-            })?;
-        let module = class_val.is_class_or_module().ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("{} is not a class", class_name))
+        // The name is a qualified path, exactly as it is for every other
+        // tag that names a class: walk the `::` segments rather than
+        // asking `Object` for one constant of that whole spelling. A
+        // nested subclass of a built-in — `ActiveSupport::SafeBuffer`,
+        // the one Rails hands `Marshal.dump` for every cached template —
+        // never resolved, so `Marshal.load` raised `undefined
+        // class/module` on a dump monoruby had written itself.
+        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
         })?;
+        if module.as_val().ty() == Some(ObjTy::MODULE) {
+            return Err(MonorubyErr::argumenterr(format!(
+                "{} is not a class",
+                class_name
+            )));
+        }
         // A `C :Hash` wrapper around a Hash is CRuby's marker for a
         // compare_by_identity hash (not an actual class change).
         if module.id() == HASH_CLASS && inner.ty() == Some(ObjTy::HASH) {
@@ -3793,6 +3799,45 @@ mod tests {
             s.instance_variable_set(:@foo, "bar")
             r = Marshal.load(Marshal.dump(s), freeze: true)
             [r.class.to_s, r.frozen?, r.instance_variable_get(:@foo)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_nested_builtin_subclass() {
+        // The 'C' (user-class) tag names its class by *qualified path*,
+        // like every other tag that names one. Resolving it as a single
+        // constant on Object made a nested subclass of a built-in fail to
+        // load — `Marshal.load` raised `undefined class/module` on a dump
+        // monoruby had just written. `ActiveSupport::SafeBuffer` is that
+        // shape, so every Rails fragment cache missed on every read.
+        run_test(
+            r#"
+            module MNs
+              class MStr < String; end
+              class MAry < Array; end
+              class MHsh < Hash; end
+            end
+            s = Marshal.load(Marshal.dump(MNs::MStr.new("x")))
+            a = Marshal.load(Marshal.dump(MNs::MAry.new([1, 2])))
+            h = MNs::MHsh.new
+            h[:k] = :v
+            h2 = Marshal.load(Marshal.dump(h))
+            [s.class.to_s, s, a.class.to_s, a.to_a, h2.class.to_s, h2[:k]]
+            "#,
+        );
+        // Doubly nested, and a subclass of a subclass, both by path.
+        run_test(
+            r#"
+            module MOuter
+              module MInner
+                class Deep < String; end
+              end
+            end
+            class MSub < MOuter::MInner::Deep; end
+            d = Marshal.load(Marshal.dump(MOuter::MInner::Deep.new("d")))
+            u = Marshal.load(Marshal.dump(MSub.new("u")))
+            [d.class.to_s, d, u.class.to_s, u]
             "#,
         );
     }
