@@ -4744,6 +4744,13 @@ fn stream_convert(
     // `:destination_buffer_full` (#1511).
     let mut utf8_read = 0usize;
     let mut out_written = 0usize;
+    // `undef: :replace` is settled here rather than in the arms
+    // below: the encoder has to carry on past the character it has no
+    // cell for, and there may be several. The branches that map the
+    // pivot themselves substitute character by character; this one
+    // writes the replacement through the same encoder and re-enters
+    // (#1542).
+    let undef_repl = opts.undef_replace.then(|| opts.replace_str(dst_enc));
     let encode_result = loop {
         let (res, read, written) = encoder.encode_from_utf8_without_replacement(
             &utf8_str[utf8_read..],
@@ -4753,6 +4760,45 @@ fn stream_convert(
         utf8_read += read;
         out_written += written;
         if matches!(res, EncoderResult::OutputFull) && written > 0 && out_written < max_out {
+            continue;
+        }
+        // A destination too full to hold the next character hides
+        // whether it has a cell for it at all. With a replacement to
+        // fall back on, ask and write that instead — it is usually
+        // shorter, so it may fit where the character did not.
+        if matches!(res, EncoderResult::OutputFull)
+            && let Some(repl) = &undef_repl
+            && let Some(c) = utf8_str[utf8_read..].chars().next()
+            && dst_rs_unmappable(dst_rs, c)
+        {
+            let (repl_res, _, repl_written) = encoder.encode_from_utf8_without_replacement(
+                repl,
+                &mut out_buf[out_written..],
+                false,
+            );
+            if matches!(repl_res, EncoderResult::OutputFull) {
+                break EncoderResult::OutputFull;
+            }
+            out_written += repl_written;
+            utf8_read += c.len_utf8();
+            continue;
+        }
+        // `encode_from_utf8_without_replacement` has already consumed
+        // the unmappable character, so the next round starts after it.
+        if matches!(res, EncoderResult::Unmappable(_))
+            && let Some(repl) = &undef_repl
+        {
+            let (repl_res, _, repl_written) = encoder.encode_from_utf8_without_replacement(
+                repl,
+                &mut out_buf[out_written..],
+                false,
+            );
+            out_written += repl_written;
+            // No room for the replacement is a full destination, and
+            // the character it stands for has been read.
+            if matches!(repl_res, EncoderResult::OutputFull) {
+                break EncoderResult::OutputFull;
+            }
             continue;
         }
         break res;
@@ -10018,6 +10064,43 @@ mod tests {
             s2 = "abc\xa1def".dup
             d2 = "".dup
             r << ec2.primitive_convert(s2, d2, nil, 10) << [s2, d2] << ec2.putback
+            "##,
+        );
+    }
+
+    #[test]
+    fn converter_undef_replace_through_the_codec_pair() {
+        // The branches that map the pivot themselves substitute
+        // character by character; the codec pair returned the
+        // undefined conversion instead, so `#primitive_convert`
+        // raised where `#convert` replaced (#1542).
+        crate::tests::run_test_once(
+            r##"
+            ["EUC-KR", "Big5"].flat_map do |dst|
+              ["aéb", "éé", "\u{1F600}x"].map do |t|
+                ec = Encoding::Converter.new("UTF-8", dst, undef: :replace)
+                s = t.dup
+                d = "".dup
+                [ec.primitive_convert(s, d), s.bytes, d.bytes]
+              end
+            end
+            "##,
+        );
+        // A replacement of the caller's choosing, and one that has to
+        // fit where the character it stands for did not.
+        crate::tests::run_test_once(
+            r##"
+            ec = Encoding::Converter.new("UTF-8", "EUC-KR", undef: :replace)
+            ec.replacement = "!"
+            s = "aéb".dup
+            d = "".dup
+            r = [ec.primitive_convert(s, d), s.bytes, d.bytes]
+            r << (0..4).map do |cap|
+              e2 = Encoding::Converter.new("UTF-8", "EUC-KR", undef: :replace)
+              ss = "aéb".dup
+              dd = "".dup
+              [cap, e2.primitive_convert(ss, dd, nil, cap), ss.bytes, dd.bytes]
+            end
             "##,
         );
     }
