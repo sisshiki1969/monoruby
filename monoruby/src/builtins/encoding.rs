@@ -3892,15 +3892,15 @@ fn quote_error_bytes(bytes: &[u8]) -> String {
 fn first_bad_sequence(enc: crate::value::Encoding, bytes: &[u8]) -> Option<(Vec<u8>, Vec<u8>, bool)> {
     use crate::value::Encoding as E;
     match enc {
-        // A byte bucket and the table encodings are total over the byte
-        // range: no sequence in them is ill-formed.
-        E::Ascii8 => None,
         E::UsAscii => bytes
             .iter()
             .position(|b| *b >= 0x80)
             .map(|i| (vec![bytes[i]], vec![], false)),
         E::Utf16Le | E::Utf16Be => first_bad_utf16(bytes, enc == E::Utf16Be),
         E::Utf32Le | E::Utf32Be => first_bad_utf32(bytes, enc == E::Utf32Be),
+        // The table encodings are total over the byte range, and BINARY
+        // is a byte bucket: no sequence in either is ill-formed, and
+        // neither has a decoder to ask.
         _ if single_byte_table(enc).is_some() => None,
         _ => first_bad_via_rs(encoding_to_rs(enc)?, bytes),
     }
@@ -4066,10 +4066,12 @@ fn utf32_prefix_completable(rest: &[u8], be: bool) -> bool {
         // three the last byte can only be 0.
         match rest {
             [_] | [_, _] => true,
-            [b0, b1, b2] => {
-                char::from_u32(*b0 as u32 | (*b1 as u32) << 8 | (*b2 as u32) << 16).is_some()
-            }
-            _ => false,
+            _ => rest
+                .first_chunk::<3>()
+                .and_then(|[b0, b1, b2]| {
+                    char::from_u32(*b0 as u32 | (*b1 as u32) << 8 | (*b2 as u32) << 16)
+                })
+                .is_some(),
         }
     }
 }
@@ -4113,17 +4115,10 @@ fn invalid_byte_sequence(
     dst_enc: crate::value::Encoding,
     src_bytes: &[u8],
 ) -> MonorubyErr {
-    let Some((err, again, incomplete)) = first_bad_sequence(src_enc, src_bytes) else {
-        return MonorubyErr::invalid_byte_sequence_error(
-            store,
-            format!(
-                "invalid byte sequence on {} ({} → {})",
-                src_enc.name(),
-                src_enc.name(),
-                dst_enc.name()
-            ),
-        );
-    };
+    // Every encoding that can reach here has a walker; if one ever does
+    // not, the whole input is the most the message can honestly name.
+    let (err, again, incomplete) = first_bad_sequence(src_enc, src_bytes)
+        .unwrap_or_else(|| (src_bytes.to_vec(), vec![], false));
     let msg = invalid_byte_sequence_message(src_enc, &err, &again, incomplete);
     let detail = Value::array_from_vec(vec![
         Value::string_from_str(&src_enc.name()),
@@ -6415,6 +6410,45 @@ mod tests {
               f.call { g.call("\x00\x00\x10", "UTF-32LE").encode("UTF-8") },
               f.call { g.call("\x00\xd8\x00", "UTF-32LE").encode("UTF-8") },
               f.call { g.call("\xff\xff", "UTF-32LE").encode("UTF-8") },
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn invalid_byte_sequence_past_the_first_block() {
+        // The walk streams: an input whose decoded prefix overruns the
+        // sink several times still names the sequence that follows it,
+        // and so does a destination of BINARY, which decodes through the
+        // UTF-8 pivot on its own path.
+        run_test_once(
+            r#"(f=->(&b){ begin; b.call; rescue Encoding::InvalidByteSequenceError => e;
+                 [e.message, e.error_bytes, e.readagain_bytes, e.incomplete_input?]; end }
+               g=->(s, enc){ s.dup.force_encoding(enc) }; [
+              f.call { g.call("a" * 3000 + "\xff", "UTF-8").encode("EUC-JP") },
+              f.call { g.call("\xe3\x81\x82" * 1000 + "\xff", "UTF-8").encode("EUC-JP") },
+              f.call { g.call("\xd8\x00", "UTF-16BE").encode("ASCII-8BIT") },
+              f.call { g.call("\xdc\x00", "UTF-16BE").encode("ASCII-8BIT") },
+              f.call { g.call("\x00\x11\x00\x00", "UTF-32BE").encode("ASCII-8BIT") },
+              f.call { g.call("\x81", "Shift_JIS").encode("ASCII-8BIT") },
+            ])"#,
+        );
+    }
+
+    #[test]
+    fn invalid_byte_sequence_after_a_well_formed_run() {
+        // The walk has to get *past* what decodes before it reaches what
+        // does not — a surrogate pair in UTF-16, a whole group in
+        // UTF-32 — rather than stopping at the first wide character.
+        run_test_once(
+            r#"(f=->(&b){ begin; b.call; rescue Encoding::InvalidByteSequenceError => e;
+                 [e.message, e.error_bytes, e.readagain_bytes, e.incomplete_input?]; end }
+               g=->(s, enc){ s.dup.force_encoding(enc) }; [
+              f.call { g.call("\xd8\x00\xdc\x00\xdc\x00", "UTF-16BE").encode("UTF-8") },
+              f.call { g.call("\xd8\x00\xdc\x00\x41", "UTF-16BE").encode("UTF-8") },
+              f.call { g.call("\x00\x00\x11\x00", "UTF-32LE").encode("UTF-8") },
+              f.call { g.call("A\x00\x00\x00\x00\x00\x11\x00", "UTF-32LE").encode("UTF-8") },
+              f.call { g.call("\x00\x00\x00A\x00\x11\x00\x00", "UTF-32BE").encode("UTF-8") },
+              f.call { g.call("\x41", "UTF-32LE").encode("UTF-8") },
             ])"#,
         );
     }

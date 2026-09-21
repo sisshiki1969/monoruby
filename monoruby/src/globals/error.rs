@@ -96,11 +96,12 @@ pub struct MonorubyErr {
     /// When set, `take_ex_obj` records it as the exception's cause and
     /// suppresses the implicit `$!` chaining.
     pub explicit_cause: Option<Value>,
-    /// Kind-specific extra data, surfaced as hidden ivars when the
-    /// exception object is materialized (`take_ex_obj`): for
-    /// `LocalJumpError` the jump value + reason (`"return"`, …)
-    /// → `#exit_value` / `#reason`; for `StopIteration` the
-    /// iterator return value + `"result"` → `#result`.
+    /// Kind-specific extra data, surfaced as ivars when the exception
+    /// object is materialized (`take_ex_obj`): for `LocalJumpError` the
+    /// jump value + reason (`"return"`, …) → `#exit_value` / `#reason`;
+    /// for `StopIteration` the iterator return value + `"result"` →
+    /// `#result`; for `Encoding::InvalidByteSequenceError` the five
+    /// fields of [`ENC_ERR_IVARS`], as an Array.
     pub(crate) payload: Option<(Value, &'static str)>,
     /// The exact message bytes and their encoding, when a plain UTF-8
     /// `String` would not reproduce them — an Errno message carrying a
