@@ -651,7 +651,27 @@ pub(crate) fn build_parameters(globals: &Globals, func_id: FuncId, is_lambda: bo
 /// e.g. `(a, b=..., *c, key:, opt: ..., **kw, &blk)`. The parameter
 /// order mirrors `build_parameters` so the two stay consistent.
 pub(crate) fn signature_string(store: &Store, func_id: FuncId) -> String {
+    // A method with no bytecode is one of CRuby's C functions, whose
+    // definition records an argument *count* rather than names:
+    // `method_def_parameters` answers `argc` anonymous required
+    // parameters for a fixed arity, and a lone rest for the variadic
+    // `argc == -1` — so `Integer#to_s` renders `(*)`, not `(_=...)`
+    // (#1494).
+    if store.resolve_iseq(func_id).is_none() {
+        let arity = store[func_id].arity();
+        return if arity < 0 {
+            "(*)".to_string()
+        } else {
+            format!("({})", vec!["_"; arity as usize].join(", "))
+        };
+    }
     let params = store[func_id].params();
+    // `def m(...)` lowers to an anonymous rest + kwrest + block, but
+    // CRuby remembers it was written as forwarding and renders it that
+    // way — `(...)`, not `(*, **, &)` (#1494).
+    if params.forwarding() {
+        return "(...)".to_string();
+    }
     let args_names = &params.args_names;
     let named = |o: Option<&Option<IdentId>>| -> Option<IdentId> {
         match o {

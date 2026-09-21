@@ -1211,6 +1211,41 @@ impl Value {
         Self::string_usascii(s.to_string())
     }
 
+    /// What a `to_s` answers: CRuby builds the *name* of a thing with
+    /// `rb_usascii_str_new` and the `#<…>` fallback for a thing that
+    /// has no name with `rb_sprintf`, and the two tag their result
+    /// differently ([`Self::string_usascii`], [`Self::string_sprintf`]).
+    /// The shape of the text is what tells them apart.
+    pub fn string_name_or_repr(s: String) -> Self {
+        if s.starts_with("#<") {
+            Self::string_sprintf(s)
+        } else {
+            Self::string_usascii(s)
+        }
+    }
+
+    /// A string CRuby builds with `rb_sprintf`: the `#<…>` renderings
+    /// an object falls back on when it has nothing better to say about
+    /// itself. `rb_sprintf` starts its buffer with *no* encoding, so a
+    /// result that came out all-ASCII is tagged ASCII-8BIT; a
+    /// non-ASCII argument appended on the way — a class name, an
+    /// exception message — gives the result that argument's encoding
+    /// instead (#1494).
+    ///
+    /// The arguments monoruby has here are already interpolated into
+    /// `s`, which is UTF-8 by construction, so the second case is just
+    /// "leave it alone".
+    pub fn string_sprintf(s: String) -> Self {
+        if s.is_ascii() {
+            Self::string_from_inner(RStringInner::from_encoding(
+                s.as_bytes(),
+                crate::value::Encoding::Ascii8,
+            ))
+        } else {
+            Self::string(s)
+        }
+    }
+
     /// Build a String value and pre-scan it so the cr is set to
     /// SevenBit / Valid up front. Use for long-lived strings
     /// (bytecodegen literal templates) whose cr is queried by every

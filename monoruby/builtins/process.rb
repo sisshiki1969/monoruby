@@ -93,7 +93,7 @@ module Process
     end
 
     def inspect
-      "#<Process::Status: #{to_s}>"
+      __sprintf_repr("#<Process::Status: #{to_s}>")
     end
 
     def ==(other)

@@ -466,7 +466,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     // The entry point owns the receiver's recursion mark; nested values
     // are marked by `inspect_inner` as it walks into them.
     set.insert(self_val.id());
-    Ok(Value::string(render_struct(
+    Ok(Value::string_sprintf(render_struct(
         &globals.store,
         self_val,
         &mut set,

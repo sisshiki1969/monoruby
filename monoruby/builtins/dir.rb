@@ -124,7 +124,7 @@ class Dir
   alias to_path path
 
   def inspect
-    "#<Dir:#{@path}>"
+    __sprintf_repr("#<Dir:#{@path}>")
   end
 
   def self.children(path, encoding: nil)

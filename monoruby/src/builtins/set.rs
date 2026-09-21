@@ -397,7 +397,9 @@ fn set_inspect(
     _: BytecodePtr,
 ) -> Result<Value> {
     let s = lfp.self_val().inspect(&globals.store);
-    Ok(Value::string(s))
+    // CRuby's `set_i_inspect` builds this with `rb_sprintf`, so an
+    // all-ASCII rendering comes back ASCII-8BIT (#1494).
+    Ok(Value::string_sprintf(s))
 }
 
 ///

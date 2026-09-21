@@ -56,7 +56,7 @@ class Enumerator
         hi = e.nil? ? "" : e.inspect
         sep = exclude_end? ? "..." : ".."
         step_part = s.nil? ? "" : s.inspect
-        return "((#{lo}#{sep}#{hi}).step(#{step_part}))"
+        return __sprintf_repr("((#{lo}#{sep}#{hi}).step(#{step_part}))")
       end
       body = recv.is_a?(Range) ? "(#{recv.inspect})" : recv.inspect
       out = "(#{body}.#{@__meth}"
@@ -64,7 +64,7 @@ class Enumerator
       if args && !args.empty?
         out = out + "(#{args.map { |a| a.inspect }.join(', ')})"
       end
-      out + ")"
+      __sprintf_repr(out + ")")
     end
     alias to_s inspect
 

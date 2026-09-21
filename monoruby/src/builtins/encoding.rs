@@ -2822,6 +2822,50 @@ fn inspect_escape_encoding(globals: &mut Globals) -> Option<Encoding> {
     }
 }
 
+/// [`inspect_result`] for a rendering CRuby builds with `rb_sprintf`
+/// instead of a string buffer of its own: the `#<…>` form an object
+/// falls back on when it has nothing better to say about itself.
+/// `rb_sprintf` starts its buffer with *no* encoding, so a result that
+/// came out all-ASCII is tagged ASCII-8BIT rather than the result
+/// encoding, and one carrying a non-ASCII name or message keeps that
+/// text's own encoding (#1494).
+///
+/// The escaping is still `inspect_result`'s: CRuby escapes the values
+/// such a rendering embeds, through `rb_inspect`, and monoruby escapes
+/// the rendering as a whole, which for an embedded value comes to the
+/// same text.
+pub(crate) fn sprintf_result(globals: &mut Globals, s: String) -> Value {
+    let text = if globals.store.inspect_escape() && !s.is_ascii() {
+        crate::value::escape_nonascii_to_u(&s)
+    } else {
+        s
+    };
+    Value::string_sprintf(text)
+}
+
+/// A value's `#inspect` as it goes *into* a `#<…>` rendering. CRuby
+/// reaches it through `rb_inspect`, which escapes to `\uXXXX` when the
+/// result encoding cannot show the answer — the rendering around it is
+/// not escaped, only what it embeds (#1494).
+pub(crate) fn inspect_embedded(globals: &Globals, s: String) -> String {
+    if globals.store.inspect_escape() && !s.is_ascii() {
+        crate::value::escape_nonascii_to_u(&s)
+    } else {
+        s
+    }
+}
+
+/// [`inspect_result`] where only a `#<…>` rendering is one of
+/// `rb_sprintf`'s: the generic `#inspect`, which sees every kind of
+/// object and so meets both kinds of rendering.
+pub(crate) fn inspect_or_sprintf_result(globals: &mut Globals, s: String) -> Value {
+    if s.starts_with("#<") {
+        sprintf_result(globals, s)
+    } else {
+        inspect_result(globals, s)
+    }
+}
+
 /// Wrap an `#inspect` rendering in the string CRuby would hand back:
 /// escaped to `\uXXXX` and tagged with the result encoding when that
 /// cannot show non-ASCII ([`inspect_escape_encoding`]), the UTF-8 text
@@ -3482,7 +3526,7 @@ fn converter_inspect(
     let recv = lfp.self_val();
     let src = converter_get_src(globals, recv);
     let dst = converter_get_dst(globals, recv);
-    Ok(Value::string(format!(
+    Ok(Value::string_sprintf(format!(
         "#<Encoding::Converter: {} to {}>",
         src.name(),
         dst.name()

@@ -92,10 +92,12 @@ class File
 
     def inspect
       # Times use Time#inspect (fractional seconds included), like CRuby.
-      "#<File::Stat dev=0x#{@dev.to_s(16)}, ino=#{@ino}, mode=0#{@mode.to_s(8)}, " \
-      "nlink=#{@nlink}, uid=#{@uid}, gid=#{@gid}, rdev=0x#{@rdev.to_s(16)}, " \
-      "size=#{@size}, blksize=#{@blksize}, blocks=#{@blocks}, " \
-      "atime=#{@atime.inspect}, mtime=#{@mtime.inspect}, ctime=#{@ctime.inspect}>"
+      __sprintf_repr(
+        "#<File::Stat dev=0x#{@dev.to_s(16)}, ino=#{@ino}, mode=0#{@mode.to_s(8)}, " \
+        "nlink=#{@nlink}, uid=#{@uid}, gid=#{@gid}, rdev=0x#{@rdev.to_s(16)}, " \
+        "size=#{@size}, blksize=#{@blksize}, blocks=#{@blocks}, " \
+        "atime=#{@atime.inspect}, mtime=#{@mtime.inspect}, ctime=#{@ctime.inspect}>"
+      )
     end
   end
 end
