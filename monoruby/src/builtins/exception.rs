@@ -490,6 +490,12 @@ pub(crate) fn message_value(store: &Store, exception: Value) -> Value {
     if let Some((raw, enc)) = &ex.raw_message {
         return Value::string_from_inner(crate::value::RStringInner::from_encoding(raw, *enc));
     }
+    // A message CRuby did not build — the class name standing in for
+    // one — comes from `rb_usascii_str_new`; a message the caller gave
+    // keeps whatever encoding that string had.
+    if ex.default_message_class.is_some() {
+        return Value::string_usascii(ex.message_with(store).into_owned());
+    }
     Value::string_from_str(&ex.message_with(store))
 }
 
