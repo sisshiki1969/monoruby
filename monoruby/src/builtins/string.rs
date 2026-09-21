@@ -4611,8 +4611,13 @@ fn sub_main(
 ) -> Result<(RStringInner, bool)> {
     // Enable zero-copy $~ haystack snapshots (CoW).
     vm.set_match_haystack(self_val);
-    check_pattern_encoding_compat(&self_val.as_rstring_inner(), lfp.arg(0), globals)?;
+    // CRuby's `get_pat_quoted` refuses a pattern that is broken in
+    // its own encoding *before* it is compared with the subject's, so
+    // `"\u3042".sub("\x81".force_encoding("Shift_JIS"), "z")` is a
+    // `RegexpError`, not an `Encoding::CompatibilityError` about the
+    // two encodings. `gsub_main` and `scan` already run in that order.
     check_string_pattern_valid(lfp.arg(0))?;
+    check_pattern_encoding_compat(&self_val.as_rstring_inner(), lfp.arg(0), globals)?;
     if let Some(arg1) = lfp.try_arg(1) {
         if lfp.block().is_some() {
             eprintln!("warning: default value argument supersedes block");
@@ -5007,7 +5012,7 @@ fn pattern_pieces(enc: crate::value::Encoding, bytes: &[u8]) -> Vec<(usize, usiz
 /// is escaped by value — `\uXXXX` in a Unicode encoding and `\x{...}`
 /// of the raw bytes elsewhere, with `\xHH` per byte for the bytes that
 /// start no character at all.
-fn regexp_source_desc(pat: &RStringInner) -> String {
+pub(super) fn regexp_source_desc(pat: &RStringInner) -> String {
     // `None`: nothing is shown verbatim, which is what an error message
     // wants — it is built as a Rust `String` and has no encoding to
     // carry the pattern's raw bytes in.
@@ -5478,6 +5483,11 @@ fn string_match(
             return vm.invoke_method_inner(globals, match_id, pat, &args, lfp.block(), None);
         }
     }
+    // CRuby's `get_pat` compiles the String pattern into a Regexp
+    // before anything else runs, so a pattern that is broken in its
+    // own encoding is a `RegexpError` here too — and is refused ahead
+    // of the `pos` argument's coercion.
+    check_string_pattern_valid(lfp.arg(0))?;
     // Coerce both arguments before borrowing the subject: either
     // coercion may run Ruby code that mutates the receiver.
     let raw_pos = if let Some(arg1) = lfp.try_arg(1) {
@@ -5721,6 +5731,11 @@ fn string_match_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // CRuby's `get_pat` compiles the String pattern into a Regexp
+    // before anything else runs, so a pattern that is broken in its
+    // own encoding is a `RegexpError` here too — and is refused ahead
+    // of the `pos` argument's coercion.
+    check_string_pattern_valid(lfp.arg(0))?;
     let raw_pos = if let Some(arg1) = lfp.try_arg(1) {
         Some(arg1.coerce_to_int_i64(vm, globals)?)
     } else {
@@ -16512,6 +16527,37 @@ mod tests {
             r##"begin; "abc".gsub(123, "x"); rescue TypeError => e; "raised"; end"##,
             r##"begin; "abc".sub(:l, "x"); rescue TypeError => e; "raised"; end"##,
             r##"begin; "abc".gsub(nil, "x"); rescue TypeError => e; "raised"; end"##,
+        ]);
+    }
+
+    #[test]
+    fn string_pattern_broken_in_its_own_encoding() {
+        // CRuby's `get_pat_quoted` validates a String pattern in the
+        // encoding it is tagged with *before* comparing it with the
+        // subject's, so a Shift_JIS string that is not valid Shift_JIS
+        // is a broken pattern, not an encoding mismatch — even when
+        // the subject is UTF-8 and would otherwise be incompatible.
+        run_tests(&[
+            r##"(("あ".sub("\x81".dup.force_encoding("Shift_JIS"), "z")); nil) rescue [$!.class, $!.message]"##,
+            r##"(("あ".gsub("\x81".dup.force_encoding("Shift_JIS"), "z")); nil) rescue [$!.class, $!.message]"##,
+            r##"(("あ".dup.sub!("\x81".dup.force_encoding("Shift_JIS"), "z")); nil) rescue [$!.class, $!.message]"##,
+            r##"(("あ".dup.gsub!("\x81".dup.force_encoding("Shift_JIS"), "z")); nil) rescue [$!.class, $!.message]"##,
+            r##"(("abc".sub("\x81".dup.force_encoding("Shift_JIS"), "z")); nil) rescue [$!.class, $!.message]"##,
+            r##"(("あ".scan("\x81".dup.force_encoding("Shift_JIS"))); nil) rescue [$!.class, $!.message]"##,
+            // `#match` / `#match?` go through `get_pat`, which compiles
+            // the String into a Regexp and refuses the broken source
+            // there.
+            r##"(("あ".match("\x81".dup.force_encoding("Shift_JIS"))); nil) rescue [$!.class, $!.message]"##,
+            r##"(("あ".match?("\x81".dup.force_encoding("Shift_JIS"))); nil) rescue [$!.class, $!.message]"##,
+            r##"(("abc".match("\x81".dup.force_encoding("Shift_JIS"))); nil) rescue [$!.class, $!.message]"##,
+            // The byte-search methods take `get_pat_quoted` *without*
+            // the check flag, so a broken pattern is searched for as a
+            // plain string: the encodings are compared as usual, and a
+            // 7-bit subject simply reports no match.
+            r##"(("あ".index("\x81".dup.force_encoding("Shift_JIS"))); nil) rescue [$!.class, $!.message]"##,
+            r##""abc".index("\x81".dup.force_encoding("Shift_JIS")).inspect"##,
+            r##""abc".rindex("\x81".dup.force_encoding("Shift_JIS")).inspect"##,
+            r##""abc".start_with?("\x81".dup.force_encoding("Shift_JIS")).inspect"##,
         ]);
     }
 

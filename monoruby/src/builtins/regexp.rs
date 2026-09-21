@@ -205,6 +205,60 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(obj)
 }
 
+/// The flag letters CRuby's `rb_reg_desc` appends to a rendered
+/// source, in its order (`/\x81/mix`). `n` is left out: the only
+/// caller skips a `NOENCODING` source entirely.
+fn option_letters(option: u32) -> String {
+    let mut res = String::new();
+    if option & onigmo_regex::ONIG_OPTION_MULTILINE != 0 {
+        res.push('m');
+    }
+    if option & onigmo_regex::ONIG_OPTION_IGNORECASE != 0 {
+        res.push('i');
+    }
+    if option & onigmo_regex::ONIG_OPTION_EXTEND != 0 {
+        res.push('x');
+    }
+    res
+}
+
+/// CRuby's `rb_reg_preprocess` walks the source in the encoding it is
+/// tagged with and refuses it as soon as the bytes spell no character
+/// there: `Regexp.new("a\xA4".force_encoding("EUC-JP"))` raises
+/// `RegexpError: invalid multibyte character: /a\xA4/`, whatever
+/// Onigmo would later have said about the truncated lead byte.
+///
+/// Two sources are exempt. A BINARY one has a character per byte, so
+/// it can never be broken; and a `NOENCODING` (`/…/n`) one is read as
+/// bytes rather than in its tag's encoding — CRuby refuses that with a
+/// different complaint ("/.../n has a non escaped non ASCII character
+/// in non ASCII-8BIT script"), which monoruby does not raise yet, so
+/// leave that case as it stands instead of answering it with this one.
+pub(super) fn check_regexp_source_valid(source: &RStringInner, option: u32) -> Result<()> {
+    if option & RegexpInner::NOENCODING != 0
+        || source.encoding() == crate::value::Encoding::Ascii8
+        || source.is_valid_encoding()
+    {
+        return Ok(());
+    }
+    Err(MonorubyErr::regexerr(format!(
+        "invalid multibyte character: /{}/{}",
+        super::string::regexp_source_desc(source),
+        option_letters(option)
+    )))
+}
+
+/// [`check_regexp_source_valid`] for a caller that holds the source as
+/// loose bytes rather than as a `String` object — `Marshal.load`,
+/// which rebuilds a Regexp straight from a `/` payload.
+pub(super) fn check_regexp_source_bytes_valid(
+    bytes: &[u8],
+    encoding: crate::value::Encoding,
+    option: u32,
+) -> Result<()> {
+    check_regexp_source_valid(&RStringInner::from_encoding(bytes, encoding), option)
+}
+
 /// Parse `Regexp.new`/`#initialize` arguments (source + optional option)
 /// into a fully-built `RegexpInner`.
 fn build_regexp_inner(
@@ -224,37 +278,24 @@ fn build_regexp_inner(
     // ends up with `encoding == UTF-8` and `fixed_encoding? == true`.
     // `raw_option()` doesn't carry KCODE/NOENCODING/FIXEDENCODING
     // bits (those live in `RegexpInner`, not in Onigmo's option word).
-    let (string, default_option, source_encoding, default_kcode, source_bytes) =
-        if let Some(re) = arg0.is_regex() {
-            let kc = if re.fixed_encoding() {
-                kcode_from_encoding(re.declared_encoding())
-            } else {
-                None
-            };
-            let mut opt = re.raw_option();
-            if let Some(bits) = kc {
-                opt |= bits;
-            }
-            (
-                re.as_str().to_string(),
-                Some(opt),
-                Some(re.declared_encoding()),
-                kc,
-                // Preserve the original Regexp's source verbatim.
-                Some(re.source_bytes().to_vec()),
-            )
+    // The flags a Regexp source carries over. Settle them before the
+    // source string is taken: CRuby's `rb_reg_initialize_m` reads the
+    // options first, and the broken-source check below renders the
+    // offending pattern with them (`/\x81/i`).
+    let (default_option, default_kcode) = if let Some(re) = arg0.is_regex() {
+        let kc = if re.fixed_encoding() {
+            kcode_from_encoding(re.declared_encoding())
         } else {
-            // The matching engine needs a UTF-8 view, so escape non-UTF-8
-            // bytes (`coerce_to_string`), but keep the *raw* bytes for
-            // `Regexp#source` so a Shift_JIS/EUC-JP/binary source survives.
-            let s = arg0.coerce_to_string(vm, globals)?;
-            let raw = arg0.is_rstring_inner().map(|r| r.as_bytes().to_vec());
-            let enc = arg0
-                .is_rstring_inner()
-                .map(|r| r.encoding())
-                .unwrap_or(crate::value::Encoding::Utf8);
-            (s, None, Some(enc), None, raw)
+            None
         };
+        let mut opt = re.raw_option();
+        if let Some(bits) = kc {
+            opt |= bits;
+        }
+        (Some(opt), kc)
+    } else {
+        (None, None)
+    };
     let option_provided = lfp.try_arg(1).is_some_and(|v| !v.is_nil());
     if arg0.is_regex().is_some() && option_provided {
         // CRuby emits "warning: flags ignored" (without raising) when
@@ -282,6 +323,27 @@ fn build_regexp_inner(
         }
     } else {
         default_option.unwrap_or(onigmo_regex::ONIG_OPTION_NONE)
+    };
+    let (string, source_encoding, source_bytes) = if let Some(re) = arg0.is_regex() {
+        (
+            re.as_str().to_string(),
+            Some(re.declared_encoding()),
+            // Preserve the original Regexp's source verbatim.
+            Some(re.source_bytes().to_vec()),
+        )
+    } else {
+        // The matching engine needs a UTF-8 view, so escape non-UTF-8
+        // bytes (`coerce_to_string`), but keep the *raw* bytes for
+        // `Regexp#source` so a Shift_JIS/EUC-JP/binary source survives.
+        let (raw, enc) = match arg0.is_rstring_inner() {
+            Some(r) => {
+                check_regexp_source_valid(&r, option)?;
+                (Some(r.as_bytes().to_vec()), r.encoding())
+            }
+            None => (None, crate::value::Encoding::Utf8),
+        };
+        let s = arg0.coerce_to_string(vm, globals)?;
+        (s, Some(enc), raw)
     };
     // A BINARY source carrying high bytes — raw, or as `\xHH` escapes
     // (`Regexp.new("[\xC2-\xDF]".b)`, what `Regexp.union` of `/…/n`
@@ -719,6 +781,14 @@ fn union_inner_with_encoding(
         _ if pinned => (RegexpInner::FIXEDENCODING, None),
         _ => (0u32, None),
     };
+    // `Regexp.union` ends in `rb_reg_new_str`, so the joined source is
+    // preprocessed like any other and a member that is broken in its
+    // own encoding is refused there — after the per-member encoding
+    // combine above, which is what raises for two *different* broken
+    // encodings. The source CRuby renders is the join, not the member
+    // (`Regexp.union("x", eucbad)` is `/x|a\xA4/`), which is exactly
+    // what `pattern` now holds.
+    check_regexp_source_bytes_valid(&pattern, enc, option)?;
     // The compiled pattern goes in as a Rust `String`, but the source
     // the regexp remembers — and compiles from under a native codec —
     // is the raw bytes, exactly as `Regexp.new` passes them.
@@ -2875,6 +2945,91 @@ mod tests {
     fn regexp_uninitialized_encoding_is_binary() {
         // `Regexp.allocate` has no source yet; its encoding is BINARY.
         run_test(r#"Regexp.allocate.encoding.to_s"#);
+    }
+
+    #[test]
+    fn regexp_source_broken_in_its_own_encoding() {
+        // `rb_reg_preprocess` walks the source in the encoding it is
+        // tagged with and refuses it as soon as the bytes spell no
+        // character there — the whole family is "invalid multibyte
+        // character", not whatever Onigmo would have said about the
+        // truncated lead byte ("too short multibyte code string").
+        run_tests(&[
+            r##"(Regexp.new("a\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.new("\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.new("\x81".dup.force_encoding("Shift_JIS")); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.new("a\xff".dup.force_encoding("UTF-8")); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.new("x\xe3\x81y".dup.force_encoding("UTF-8")); nil) rescue [$!.class, $!.message]"##,
+            // A valid character before the broken bytes renders as a
+            // character, the broken bytes byte by byte.
+            r##"(Regexp.new("あ\xff".dup.force_encoding("UTF-8")); nil) rescue [$!.class, $!.message]"##,
+            // The flags the pattern was given are part of the
+            // rendering, in `rb_reg_desc`'s m-i-x order.
+            r##"(Regexp.new("\x81".dup.force_encoding("Shift_JIS"), Regexp::IGNORECASE); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.new("\x81".dup.force_encoding("Shift_JIS"), Regexp::IGNORECASE | Regexp::MULTILINE | Regexp::EXTENDED); nil) rescue [$!.class, $!.message]"##,
+            // `Regexp.escape` does not make a broken source whole.
+            r##"(Regexp.new(Regexp.escape("a\xa4".dup.force_encoding("EUC-JP"))); nil) rescue [$!.class, $!.message]"##,
+            // BINARY has a character per byte, so it is never broken.
+            r##"Regexp.new("a\xa4".dup.force_encoding("BINARY")).source.bytes.inspect"##,
+            // A source that *is* valid in its own encoding still compiles.
+            r##"Regexp.new("\x82\xa0".dup.force_encoding("Shift_JIS")).source.bytes.inspect"##,
+            r##"Regexp.new("\xa4\xa2".dup.force_encoding("EUC-JP")).source.bytes.inspect"##,
+            r##"Regexp.new("あ").source"##,
+        ]);
+    }
+
+    #[test]
+    fn regexp_escaped_byte_too_short_for_its_codec() {
+        // The other half of a truncated multibyte character: written as
+        // a `\xHH` escape rather than raw, it survives preprocessing
+        // and Onigmo is the one that finds it. CRuby renames the
+        // engine's "too short multibyte code string" to "too short
+        // escaped multibyte character" there — a different complaint
+        // from the raw-byte one above, and the one that actually
+        // reaches a caller.
+        run_tests(&[
+            r##"(Regexp.new("\\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.new("a\\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.new("\\x81".dup.force_encoding("Shift_JIS")); nil) rescue [$!.class, $!.message]"##,
+            // A complete escaped character is fine.
+            r##"Regexp.new("\\xa4\\xa2".dup.force_encoding("EUC-JP")).source.bytes.inspect"##,
+        ]);
+    }
+
+    #[test]
+    fn marshalled_regexp_with_a_broken_source_is_refused() {
+        // A `/` payload carries whatever bytes the dump held, so it can
+        // hand the engine a source `Regexp.new` would have refused.
+        // CRuby preprocesses it like any other and raises rather than
+        // building a Regexp nothing can match.
+        run_tests(&[
+            r##"d = Marshal.dump(Regexp.new("\xa4\xa2".dup.force_encoding("EUC-JP")));
+                broken = d.sub("\xa4\xa2".dup.force_encoding("BINARY"), "a\xa4".dup.force_encoding("BINARY"));
+                (Marshal.load(broken); nil) rescue [$!.class, $!.message]"##,
+            // A sound one still round-trips.
+            r##"d = Marshal.dump(Regexp.new("\xa4\xa2".dup.force_encoding("EUC-JP")));
+                re = Marshal.load(d); [re.source.bytes, re.encoding.to_s]"##,
+        ]);
+    }
+
+    #[test]
+    fn regexp_union_member_broken_in_its_own_encoding() {
+        // `Regexp.union` ends in `rb_reg_new_str`, so a member that is
+        // broken in its own encoding is refused like any other source —
+        // and the pattern the error renders is the *join*, not the
+        // offending member.
+        run_tests(&[
+            r##"(Regexp.union("a\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.union("x", "a\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.union("a\xa4".dup.force_encoding("EUC-JP"), "x"); nil) rescue [$!.class, $!.message]"##,
+            r##"(Regexp.union(["x", "a\xa4".dup.force_encoding("EUC-JP")]); nil) rescue [$!.class, $!.message]"##,
+            // The per-member encoding combine still runs first, so two
+            // members in *different* encodings are an ArgumentError
+            // about the pair rather than about either one's bytes.
+            r##"(Regexp.union("\x81".dup.force_encoding("Shift_JIS"), "a\xa4".dup.force_encoding("EUC-JP")); nil) rescue [$!.class, $!.message]"##,
+            // BINARY has a character per byte, so it is never broken.
+            r##"Regexp.union("a\xa4".dup.force_encoding("BINARY")).source.bytes.inspect"##,
+        ]);
     }
 
     #[test]
