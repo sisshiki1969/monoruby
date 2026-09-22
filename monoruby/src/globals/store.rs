@@ -630,12 +630,22 @@ impl Store {
                 labels.push(label);
             }
         }
-        #[cfg(feature = "jit-log")]
-        crate::codegen::jit_stats::JIT_UNITS_POISONED
-            .fetch_add(labels.len(), std::sync::atomic::Ordering::Relaxed);
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             for label in &labels {
+                // A unit poisoned since its last entry is poisoned already:
+                // its word still reads the sentinel, and re-stamping it
+                // (word, immediates, a protection flip on macOS) buys
+                // nothing. Cold units would otherwise pay for every
+                // definition of a name they resolved.
+                let word = codegen.jit.get_label_address(label).as_ptr() as *const u32;
+                // SAFETY: the label names the unit's 4-byte snapshot word,
+                // emitted by `jit_compile` and alive for the process.
+                if unsafe { *word } == crate::codegen::VERSION_IMM_SENTINEL as u32 {
+                    continue;
+                }
+                #[cfg(feature = "jit-log")]
+                crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::JIT_UNITS_POISONED);
                 codegen.set_class_version(crate::codegen::VERSION_IMM_SENTINEL as u32, label);
             }
         });
