@@ -440,11 +440,21 @@ pub(crate) mod placement_shadow {
 /// the 4-byte-immediate `cmp` encoding, keeping every patch site a
 /// fixed 4 bytes. Never compared at runtime — `jit_compile` overwrites
 /// all sites with the unit's real version before the code is published.
-pub(in crate::codegen) const VERSION_IMM_SENTINEL: i32 = 0x8000_0000u32 as i32;
+pub(crate) const VERSION_IMM_SENTINEL: i32 = 0x8000_0000u32 as i32;
 
 pub struct JitModule {
     pub(crate) jit: JitMemory,
     class_version: DestLabel,
+    /// The JIT's own class-version word. Compiled units snapshot and guard
+    /// against *this* word, not `class_version`: the VM's word moves on
+    /// every method-table change, while this one moves only on a change
+    /// whose reach no method name bounds (`include` / `prepend`, a
+    /// refinement activation). A plain definition, removal or visibility
+    /// change instead invalidates only the units the name index says
+    /// resolved that name (`Store::jit_method_changed`), so a `def` on a
+    /// throwaway object's singleton class costs the rest of the compiled
+    /// code nothing.
+    jit_class_version: DestLabel,
     /// x86 only: the class-version-guard imm32 patch sites of the unit
     /// currently being compiled. Each guard emits `movl rax, imm32`
     /// (fixed 5-byte encoding) with the compile-time version baked in
@@ -809,6 +819,7 @@ pub(crate) struct SpecializedPatchEntry {
 pub struct Codegen {
     pub(crate) jit: JitModule,
     class_version_addr: *mut u32,
+    jit_class_version_addr: *mut u32,
     const_version_addr: *mut u64,
 
     /// Addresses of the GC allocator's free-list state, captured once at
@@ -1254,6 +1265,8 @@ impl Codegen {
         let pair = jit.get_address_pair();
 
         let class_version_addr = jit.get_label_address(&jit.class_version).as_ptr() as *mut u32;
+        let jit_class_version_addr =
+            jit.get_label_address(&jit.jit_class_version).as_ptr() as *mut u32;
         let const_version_addr = jit.get_label_address(&jit.const_version).as_ptr() as *mut u64;
         let entry_panic = jit.entry_panic.clone();
         let get_class = jit.get_class();
@@ -1285,6 +1298,7 @@ impl Codegen {
         let mut codegen = Self {
             jit,
             class_version_addr,
+            jit_class_version_addr,
             const_version_addr,
             alloc_free_head_addr: std::ptr::null_mut(),
             alloc_free_count_addr: std::ptr::null_mut(),
@@ -1394,6 +1408,10 @@ impl Codegen {
 
     pub(crate) fn class_version_label(&self) -> DestLabel {
         self.class_version.clone()
+    }
+    /// The word compiled units' class-version guards read (see the field).
+    pub(crate) fn jit_class_version_label(&self) -> DestLabel {
+        self.jit_class_version.clone()
     }
     pub(crate) fn const_version_label(&self) -> DestLabel {
         self.const_version.clone()
@@ -1515,10 +1533,30 @@ impl Codegen {
         unsafe { *self.class_version_addr }
     }
 
+    /// Move both version words: the VM's and the JIT's. This is the
+    /// blunt invalidation, for a change no method name bounds.
     pub(crate) fn class_version_inc(&self) {
+        self.vm_class_version_inc();
+        self.jit_class_version_inc();
+    }
+
+    /// Move the VM's word only. The JIT's units are then invalidated by
+    /// name through `Store::jit_method_changed`, never left stale: a
+    /// caller of this owes that call.
+    pub(crate) fn vm_class_version_inc(&self) {
         unsafe { *self.class_version_addr += 1 }
         #[cfg(feature = "jit-log")]
         jit_stats::bump(&jit_stats::CLASS_VER_INC);
+    }
+
+    pub(crate) fn jit_class_version(&self) -> u32 {
+        unsafe { *self.jit_class_version_addr }
+    }
+
+    pub(crate) fn jit_class_version_inc(&self) {
+        unsafe { *self.jit_class_version_addr += 1 }
+        #[cfg(feature = "jit-log")]
+        jit_stats::bump(&jit_stats::JIT_CLASS_VER_INC);
     }
 
     pub(crate) fn const_version(&self) -> u64 {
@@ -2095,6 +2133,8 @@ pub(crate) mod jit_stats {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     pub static CLASS_VER_INC: AtomicUsize = AtomicUsize::new(0);
+    pub static JIT_CLASS_VER_INC: AtomicUsize = AtomicUsize::new(0);
+    pub static JIT_UNITS_POISONED: AtomicUsize = AtomicUsize::new(0);
     pub static CONST_VER_INC: AtomicUsize = AtomicUsize::new(0);
     pub static RECOVERY_ATTEMPT: AtomicUsize = AtomicUsize::new(0);
     pub static SALVAGE_OK: AtomicUsize = AtomicUsize::new(0);
@@ -2156,6 +2196,8 @@ pub(crate) mod jit_stats {
             g(&SPEC_MEMO_MISS)
         );
         eprintln!("  class_version incs:                {}", g(&CLASS_VER_INC));
+        eprintln!("  jit_class_version incs:            {}", g(&JIT_CLASS_VER_INC));
+        eprintln!("  jit units poisoned by name:        {}", g(&JIT_UNITS_POISONED));
         eprintln!("  const_version incs:                {}", g(&CONST_VER_INC));
         eprintln!(
             "  recovery attempts (class guard):   {}",
