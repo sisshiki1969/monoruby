@@ -19293,6 +19293,64 @@ mod tests {
     }
 
     #[test]
+    fn sub_and_gsub_refuse_a_replacement_from_the_other_utf8_variant() {
+        // The splice negotiates the result encoding piece by piece, but
+        // it was handed UTF-8 as the receiver's encoding for any text
+        // subject — so a `UTF8-MAC` receiver looked like a UTF-8 one
+        // and a UTF-8 replacement merged into it, which CRuby refuses.
+        // Every other method in the family already agreed (#1572).
+        //
+        // The two name the pair in opposite orders: `sub` checks the
+        // receiver against the one replacement, `gsub` the encoding its
+        // result has reached against the piece that would not fit.
+        run_test_once(
+            r##"
+            u = "é"
+            m = -> { "abcé".dup.force_encoding("UTF8-MAC") }
+            n = -> { "abc".dup.force_encoding("UTF8-MAC") }
+            t = ->(&b) { begin; s = b.call; [s.bytes, s.encoding.to_s]
+                         rescue => e; [e.class.to_s, e.message]; end }
+            [t.() { m.().sub("a", u) },      t.() { m.().gsub("a", u) },
+             t.() { m.().sub("a") { u } },   t.() { m.().gsub("a") { u } },
+             t.() { m.().sub("a", "a" => u) }, t.() { m.().gsub("a", "a" => u) },
+             t.() { m.().sub(/a/, u) },      t.() { m.().gsub(/a/, u) },
+             # ...while the cases that must keep working do.
+             t.() { n.().sub("a", u) },      t.() { n.().gsub("a", u) },
+             t.() { m.().sub("z", u) },      t.() { m.().gsub("z", u) },
+             t.() { m.().sub("a", "z") },    t.() { m.().sub(u, "z") }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_replacement_still_decides_the_result_encoding_where_it_can() {
+        // The negotiation is per piece, not a check against the
+        // receiver: a replacement whose encoding the *remaining*
+        // receiver text has no quarrel with settles the result, and
+        // hoisting the check up front broke exactly these (#1572).
+        run_test_once(
+            r##"
+            u = "é"; bin = "\xff".b
+            t = ->(&b) { begin; s = b.call; [s.bytes, s.encoding.to_s]
+                         rescue => e; [e.class.to_s, e.message]; end }
+            [# the receiver's only non-ASCII run is the one replaced
+             t.() { ("a" + u + "b").dup.sub(u, bin) },
+             t.() { "a\xffb".b.gsub(/\xff/n, u) },
+             # ...and where it is not, the pair is named receiver-first
+             # for `sub` and result-first for `gsub`
+             t.() { ("a" + u + "b").dup.sub("a", bin) },
+             t.() { ("a" + u + "b").dup.gsub("a", bin) },
+             t.() { (u + "ab").dup.sub("a", bin) },
+             t.() { ("ab" + u).dup.sub("a", bin) },
+             t.() { ("ab" + u).dup.gsub("a", bin) },
+             # a 7-bit receiver takes the replacement's encoding
+             t.() { "abc".dup.sub("a", bin) },
+             t.() { "abc".dup.sub("a", "あ".encode("EUC-JP")) }]
+            "##,
+        );
+    }
+
+    #[test]
     fn a_strings_encoding_is_part_of_its_identity_as_a_key() {
         // `#eql?` and `#==` already told these apart; nothing keyed on
         // them did, because the container compares and hashes the
