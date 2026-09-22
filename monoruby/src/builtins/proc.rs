@@ -37,6 +37,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(PROC_CLASS, "to_s", &["inspect"], to_s, 0);
     globals.define_builtin_func(PROC_CLASS, "lambda?", lambda_, 0);
     globals.define_builtin_func(PROC_CLASS, "arity", proc_arity, 0);
+    // Private: `Enumerable#map` builds a block for `#each` and has to
+    // make it answer for the user block it stands in for (#1556).
+    globals.define_private_builtin_func(PROC_CLASS, "__set_arity", proc_set_arity, 1);
     globals.define_builtin_func(PROC_CLASS, "to_proc", to_proc, 0);
     // `==` / `eql?` compare the underlying block; `eql?` is registered as
     // an alias so they share the same FuncId (ruby/spec requires
@@ -97,6 +100,11 @@ pub(super) fn proc_is_lambda(globals: &Globals, proc: &Proc) -> bool {
 /// `proc_arity`): a `Method#to_proc` proc reports the bound method's
 /// arity, everything else the func's arity.
 pub(super) fn proc_arity_value(globals: &Globals, proc: &Proc) -> i64 {
+    // An internal block built to stand in for a user block reports the
+    // user block's arity (#1556).
+    if let Some(arity) = proc.arity_override() {
+        return arity;
+    }
     if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
         && let Some(m) = proc.self_val().is_method()
     {
@@ -727,10 +735,34 @@ pub(crate) fn signature_string(store: &Store, func_id: FuncId) -> String {
     format!("({})", parts.join(", "))
 }
 
+/// Report `arity` from this proc in place of its own.
+///
+/// `Enumerable#map` passes `#each` a block it built itself, and CRuby's
+/// `enum_collect` copies the user block's min/max argc onto the
+/// internal one so a redefined `#each` sees the arity the caller wrote.
+/// A Ruby-level block cannot carry an arity it did not declare, so the
+/// Ruby implementation says it here instead (#1556).
+#[monoruby_builtin]
+fn proc_set_arity(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arity = lfp.arg(0).coerce_to_i64(&globals.store)?;
+    let mut proc = Proc::new(lfp.self_val());
+    proc.set_arity_override(arity);
+    Ok(lfp.self_val())
+}
+
 /// ### Proc#arity
 #[monoruby_builtin]
 fn proc_arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    // An internal block standing in for a user block (#1556).
+    if let Some(arity) = proc.arity_override() {
+        return Ok(Value::integer(arity));
+    }
     // A Method#to_proc proc reports the *method's* arity, not the
     // shared rest-style body's (-1).
     if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID

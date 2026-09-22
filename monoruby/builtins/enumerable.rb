@@ -134,20 +134,28 @@ module Enumerable
     obj
   end
 
-  def map
+  def map(&blk)
     # `__callee__` so `#collect` records itself rather than `#map` —
     # CRuby names the Enumerator with `rb_frame_this_func()`, the name
     # at the call site. Same for every aliased method below.
-    return to_enum(__callee__) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(__callee__) { respond_to?(:size) ? size : nil } unless blk
     res = []
     # The user block is called with the *original* values `each`
     # yields (arity-adaptive), not the packed element: for
     # `yield 1, 2` a `{ |e| }` block sees `1`, a `{ |a, b| }` block
     # sees `1, 2` (matches CRuby `rb_yield_values2`). Internal
     # packed-element callers use `__gather_each` directly instead.
-    self.each do |*vs|
-      res << yield(*vs)
-    end
+    #
+    # The block handed to `each` reports the *user* block's arity, so a
+    # redefined `each` that branches on `block.arity` sees what the
+    # caller wrote. CRuby's `enum_collect` copies the user block's
+    # min/max argc onto the internal one for the same reason; a
+    # Ruby-level block cannot carry an arity it did not declare, so it
+    # is said outright. `map` and `collect` are the only `Enumerable`
+    # methods CRuby does this for (#1556).
+    inner = proc { |*vs| res << blk.call(*vs) }
+    inner.__send__(:__set_arity, blk.arity)
+    self.each(&inner)
     res
   end
   alias collect map
