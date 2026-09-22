@@ -700,7 +700,11 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
             "KOI8-R" => b"koi8-r",
             "KOI8-U" => b"koi8-u",
             "IBM866" => b"ibm866",
-            "Big5" | "Big5-HKSCS" => b"big5",
+            // CP950 and CP951 are Big5's table under Microsoft's
+            // names, and CRuby converts them exactly as it does Big5
+            // (#1567). The walk knows them already — #1563 gave them
+            // `big5_precise_len`.
+            "Big5" | "Big5-HKSCS" | "CP950" | "CP951" => b"big5",
             "GBK" | "GB2312" => b"gbk",
             "GB18030" => b"gb18030",
             "EUC-KR" | "CP949" => b"euc-kr",
@@ -823,6 +827,91 @@ pub(super) fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static 
         Some('\u{E48}'), Some('\u{E49}'), Some('\u{E4A}'), Some('\u{E4B}'), Some('\u{E4C}'), Some('\u{E4D}'), Some('\u{E4E}'), Some('\u{E4F}'),
         Some('\u{E50}'), Some('\u{E51}'), Some('\u{E52}'), Some('\u{E53}'), Some('\u{E54}'), Some('\u{E55}'), Some('\u{E56}'), Some('\u{E57}'),
         Some('\u{E58}'), Some('\u{E59}'), Some('\u{E5A}'), Some('\u{E5B}'), None, None, None, None,
+    ];
+
+    /// Windows-874 is ISO-8859-11's Thai half with Microsoft's C1
+    /// row: the range is otherwise unassigned, and the eight cells
+    /// ISO-8859-11 leaves empty stay empty. `encoding_rs`'s
+    /// `windows-874` is WHATWG's, which differs from CRuby's in 23
+    /// cells, so this is a table rather than that codec (#1567).
+    const WINDOWS874: [Option<char>; 128] = {
+        let mut t = ISO8859_11;
+        let mut i = 0;
+        while i < 0x20 {
+            t[i] = None;
+            i += 1;
+        }
+        t[0x00] = Some('\u{20AC}'); // EURO SIGN
+        t[0x05] = Some('\u{2026}'); // HORIZONTAL ELLIPSIS
+        t[0x11] = Some('\u{2018}');
+        t[0x12] = Some('\u{2019}');
+        t[0x13] = Some('\u{201C}');
+        t[0x14] = Some('\u{201D}');
+        t[0x15] = Some('\u{2022}');
+        t[0x16] = Some('\u{2013}');
+        t[0x17] = Some('\u{2014}');
+        t
+    };
+
+    /// The three DOS code pages CRuby converts and `encoding_rs` has
+    /// no codec for, read off CRuby byte by byte (#1567). IBM720
+    /// (Arabic) leaves eight cells unassigned; the other two fill all
+    /// 128. `CP852` / `IBM852` and `CP855` / `IBM855` are separate
+    /// `Encoding` objects in CRuby with identical tables, so each
+    /// pair shares one here.
+    const IBM720: [Option<char>; 128] = [
+        None, None, Some('\u{E9}'), Some('\u{E2}'), None, Some('\u{E0}'), None, Some('\u{E7}'),
+        Some('\u{EA}'), Some('\u{EB}'), Some('\u{E8}'), Some('\u{EF}'), Some('\u{EE}'), None, None, None,
+        None, Some('\u{651}'), Some('\u{652}'), Some('\u{F4}'), Some('\u{A4}'), Some('\u{640}'), Some('\u{FB}'), Some('\u{F9}'),
+        Some('\u{621}'), Some('\u{622}'), Some('\u{623}'), Some('\u{624}'), Some('\u{A3}'), Some('\u{625}'), Some('\u{626}'), Some('\u{627}'),
+        Some('\u{628}'), Some('\u{629}'), Some('\u{62A}'), Some('\u{62B}'), Some('\u{62C}'), Some('\u{62D}'), Some('\u{62E}'), Some('\u{62F}'),
+        Some('\u{630}'), Some('\u{631}'), Some('\u{632}'), Some('\u{633}'), Some('\u{634}'), Some('\u{635}'), Some('\u{AB}'), Some('\u{BB}'),
+        Some('\u{2591}'), Some('\u{2592}'), Some('\u{2593}'), Some('\u{2502}'), Some('\u{2524}'), Some('\u{2561}'), Some('\u{2562}'), Some('\u{2556}'),
+        Some('\u{2555}'), Some('\u{2563}'), Some('\u{2551}'), Some('\u{2557}'), Some('\u{255D}'), Some('\u{255C}'), Some('\u{255B}'), Some('\u{2510}'),
+        Some('\u{2514}'), Some('\u{2534}'), Some('\u{252C}'), Some('\u{251C}'), Some('\u{2500}'), Some('\u{253C}'), Some('\u{255E}'), Some('\u{255F}'),
+        Some('\u{255A}'), Some('\u{2554}'), Some('\u{2569}'), Some('\u{2566}'), Some('\u{2560}'), Some('\u{2550}'), Some('\u{256C}'), Some('\u{2567}'),
+        Some('\u{2568}'), Some('\u{2564}'), Some('\u{2565}'), Some('\u{2559}'), Some('\u{2558}'), Some('\u{2552}'), Some('\u{2553}'), Some('\u{256B}'),
+        Some('\u{256A}'), Some('\u{2518}'), Some('\u{250C}'), Some('\u{2588}'), Some('\u{2584}'), Some('\u{258C}'), Some('\u{2590}'), Some('\u{2580}'),
+        Some('\u{636}'), Some('\u{637}'), Some('\u{638}'), Some('\u{639}'), Some('\u{63A}'), Some('\u{641}'), Some('\u{B5}'), Some('\u{642}'),
+        Some('\u{643}'), Some('\u{644}'), Some('\u{645}'), Some('\u{646}'), Some('\u{647}'), Some('\u{648}'), Some('\u{649}'), Some('\u{64A}'),
+        Some('\u{2261}'), Some('\u{64B}'), Some('\u{64C}'), Some('\u{64D}'), Some('\u{64E}'), Some('\u{64F}'), Some('\u{650}'), Some('\u{2248}'),
+        Some('\u{B0}'), Some('\u{2219}'), Some('\u{B7}'), Some('\u{221A}'), Some('\u{207F}'), Some('\u{B2}'), Some('\u{25A0}'), Some('\u{A0}'),
+    ];
+    const CP852: [Option<char>; 128] = [
+        Some('\u{C7}'), Some('\u{FC}'), Some('\u{E9}'), Some('\u{E2}'), Some('\u{E4}'), Some('\u{16F}'), Some('\u{107}'), Some('\u{E7}'),
+        Some('\u{142}'), Some('\u{EB}'), Some('\u{150}'), Some('\u{151}'), Some('\u{EE}'), Some('\u{179}'), Some('\u{C4}'), Some('\u{106}'),
+        Some('\u{C9}'), Some('\u{139}'), Some('\u{13A}'), Some('\u{F4}'), Some('\u{F6}'), Some('\u{13D}'), Some('\u{13E}'), Some('\u{15A}'),
+        Some('\u{15B}'), Some('\u{D6}'), Some('\u{DC}'), Some('\u{164}'), Some('\u{165}'), Some('\u{141}'), Some('\u{D7}'), Some('\u{10D}'),
+        Some('\u{E1}'), Some('\u{ED}'), Some('\u{F3}'), Some('\u{FA}'), Some('\u{104}'), Some('\u{105}'), Some('\u{17D}'), Some('\u{17E}'),
+        Some('\u{118}'), Some('\u{119}'), Some('\u{AC}'), Some('\u{17A}'), Some('\u{10C}'), Some('\u{15F}'), Some('\u{AB}'), Some('\u{BB}'),
+        Some('\u{2591}'), Some('\u{2592}'), Some('\u{2593}'), Some('\u{2502}'), Some('\u{2524}'), Some('\u{C1}'), Some('\u{C2}'), Some('\u{11A}'),
+        Some('\u{15E}'), Some('\u{2563}'), Some('\u{2551}'), Some('\u{2557}'), Some('\u{255D}'), Some('\u{17B}'), Some('\u{17C}'), Some('\u{2510}'),
+        Some('\u{2514}'), Some('\u{2534}'), Some('\u{252C}'), Some('\u{251C}'), Some('\u{2500}'), Some('\u{253C}'), Some('\u{102}'), Some('\u{103}'),
+        Some('\u{255A}'), Some('\u{2554}'), Some('\u{2569}'), Some('\u{2566}'), Some('\u{2560}'), Some('\u{2550}'), Some('\u{256C}'), Some('\u{A4}'),
+        Some('\u{111}'), Some('\u{110}'), Some('\u{10E}'), Some('\u{CB}'), Some('\u{10F}'), Some('\u{147}'), Some('\u{CD}'), Some('\u{CE}'),
+        Some('\u{11B}'), Some('\u{2518}'), Some('\u{250C}'), Some('\u{2588}'), Some('\u{2584}'), Some('\u{162}'), Some('\u{16E}'), Some('\u{2580}'),
+        Some('\u{D3}'), Some('\u{DF}'), Some('\u{D4}'), Some('\u{143}'), Some('\u{144}'), Some('\u{148}'), Some('\u{160}'), Some('\u{161}'),
+        Some('\u{154}'), Some('\u{DA}'), Some('\u{155}'), Some('\u{170}'), Some('\u{FD}'), Some('\u{DD}'), Some('\u{163}'), Some('\u{B4}'),
+        Some('\u{AD}'), Some('\u{2DD}'), Some('\u{2DB}'), Some('\u{2C7}'), Some('\u{2D8}'), Some('\u{A7}'), Some('\u{F7}'), Some('\u{B8}'),
+        Some('\u{B0}'), Some('\u{A8}'), Some('\u{2D9}'), Some('\u{171}'), Some('\u{158}'), Some('\u{159}'), Some('\u{25A0}'), Some('\u{A0}'),
+    ];
+    const CP855: [Option<char>; 128] = [
+        Some('\u{452}'), Some('\u{402}'), Some('\u{453}'), Some('\u{403}'), Some('\u{451}'), Some('\u{401}'), Some('\u{454}'), Some('\u{404}'),
+        Some('\u{455}'), Some('\u{405}'), Some('\u{456}'), Some('\u{406}'), Some('\u{457}'), Some('\u{407}'), Some('\u{458}'), Some('\u{408}'),
+        Some('\u{459}'), Some('\u{409}'), Some('\u{45A}'), Some('\u{40A}'), Some('\u{45B}'), Some('\u{40B}'), Some('\u{45C}'), Some('\u{40C}'),
+        Some('\u{45E}'), Some('\u{40E}'), Some('\u{45F}'), Some('\u{40F}'), Some('\u{44E}'), Some('\u{42E}'), Some('\u{44A}'), Some('\u{42A}'),
+        Some('\u{430}'), Some('\u{410}'), Some('\u{431}'), Some('\u{411}'), Some('\u{446}'), Some('\u{426}'), Some('\u{434}'), Some('\u{414}'),
+        Some('\u{435}'), Some('\u{415}'), Some('\u{444}'), Some('\u{424}'), Some('\u{433}'), Some('\u{413}'), Some('\u{AB}'), Some('\u{BB}'),
+        Some('\u{2591}'), Some('\u{2592}'), Some('\u{2593}'), Some('\u{2502}'), Some('\u{2524}'), Some('\u{445}'), Some('\u{425}'), Some('\u{438}'),
+        Some('\u{418}'), Some('\u{2563}'), Some('\u{2551}'), Some('\u{2557}'), Some('\u{255D}'), Some('\u{439}'), Some('\u{419}'), Some('\u{2510}'),
+        Some('\u{2514}'), Some('\u{2534}'), Some('\u{252C}'), Some('\u{251C}'), Some('\u{2500}'), Some('\u{253C}'), Some('\u{43A}'), Some('\u{41A}'),
+        Some('\u{255A}'), Some('\u{2554}'), Some('\u{2569}'), Some('\u{2566}'), Some('\u{2560}'), Some('\u{2550}'), Some('\u{256C}'), Some('\u{A4}'),
+        Some('\u{43B}'), Some('\u{41B}'), Some('\u{43C}'), Some('\u{41C}'), Some('\u{43D}'), Some('\u{41D}'), Some('\u{43E}'), Some('\u{41E}'),
+        Some('\u{43F}'), Some('\u{2518}'), Some('\u{250C}'), Some('\u{2588}'), Some('\u{2584}'), Some('\u{41F}'), Some('\u{44F}'), Some('\u{2580}'),
+        Some('\u{42F}'), Some('\u{440}'), Some('\u{420}'), Some('\u{441}'), Some('\u{421}'), Some('\u{442}'), Some('\u{422}'), Some('\u{443}'),
+        Some('\u{423}'), Some('\u{436}'), Some('\u{416}'), Some('\u{432}'), Some('\u{412}'), Some('\u{44C}'), Some('\u{42C}'), Some('\u{2116}'),
+        Some('\u{AD}'), Some('\u{44B}'), Some('\u{42B}'), Some('\u{437}'), Some('\u{417}'), Some('\u{448}'), Some('\u{428}'), Some('\u{44D}'),
+        Some('\u{42D}'), Some('\u{449}'), Some('\u{429}'), Some('\u{447}'), Some('\u{427}'), Some('\u{A7}'), Some('\u{25A0}'), Some('\u{A0}'),
     ];
 
     /// macRoman (Mac OS Roman), and the seven tables below it, as
@@ -988,6 +1077,13 @@ pub(super) fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static 
         E::Iso8859(11) => Some(&ISO8859_11),
         E::NamedByte(_) => match enc.name() {
             "IBM437" => Some(&IBM437),
+            "IBM720" => Some(&IBM720),
+            // TIS-620 keeps its `encoding_rs` codec for now; it is
+            // wrong in the C1 row the same way, but that is its own
+            // bug rather than a missing converter.
+            "Windows-874" => Some(&WINDOWS874),
+            "CP852" | "IBM852" => Some(&CP852),
+            "CP855" | "IBM855" => Some(&CP855),
             "macRoman" => Some(&MACROMAN),
             "macCyrillic" => Some(&MACCYRILLIC),
             "macCroatian" => Some(&MACCROATIAN),
@@ -1436,6 +1532,11 @@ fn cell_table(enc: crate::value::Encoding) -> Option<&'static super::encoding_cj
             "GB2312" => Some(&super::encoding_cjk::GB2312),
             "GBK" => Some(&super::encoding_cjk::GBK),
             "Big5" => Some(&super::encoding_cjk::BIG5),
+            // Microsoft's Big5 rather than CRuby's: thousands of
+            // extra cells and a best-fit encoder, so they carry
+            // tables of their own (#1567).
+            "CP950" => Some(&super::encoding_cjk::CP950),
+            "CP951" => Some(&super::encoding_cjk::CP951),
             // No grid of its own: GB18030 reads every cell CRuby
             // does, and only writes a handful differently.
             "GB18030" => Some(&super::encoding_cjk::GB18030),
@@ -11352,6 +11453,67 @@ mod tests {
                  e.class.to_s
                end]
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_encodings_that_had_no_converter_have_one() {
+        // #1563 gave these `Encoding` objects; CRuby transcodes them
+        // and monoruby answered `ConverterNotFoundError` in both
+        // directions (#1567). The three DOS code pages and
+        // Windows-874 have no `encoding_rs` codec — its `windows-874`
+        // is WHATWG's, which differs from CRuby's in 23 cells — so
+        // they read from in-tree tables.
+        crate::tests::run_test_once(
+            r##"
+            [["IBM720", 0x82], ["IBM720", 0x80], ["Windows-874", 0xA1],
+             ["Windows-874", 0x80], ["Windows-874", 0x81], ["Windows-874", 0xDB],
+             ["CP852", 0x80], ["IBM852", 0xB5], ["CP855", 0x80], ["IBM855", 0xFD],
+             ["CP874", 0x91], ["CP720", 0x91]].map do |enc, b|
+              s = [b].pack("C").force_encoding(enc)
+              one = (s.encode("UTF-8").codepoints rescue $!.class.to_s)
+              cv = (Encoding::Converter.new(enc, "UTF-8").convert(s.dup).codepoints rescue $!.class.to_s)
+              [enc, one, cv, one == cv]
+            end
+            "##,
+        );
+        // The way out, and the characters these code pages have no
+        // cell for.
+        crate::tests::run_test_once(
+            r##"
+            [["IBM720", 0x644], ["IBM720", 0x4E00], ["Windows-874", 0xE01],
+             ["Windows-874", 0x20AC], ["Windows-874", 0x4E00], ["CP852", 0x104],
+             ["CP855", 0x426], ["IBM852", 0x4E00]].map do |enc, cp|
+              s = [cp].pack("U")
+              one = (s.encode(enc).bytes rescue $!.class.to_s)
+              cv = (Encoding::Converter.new("UTF-8", enc).convert(s.dup).bytes rescue $!.class.to_s)
+              [enc, one, cv, one == cv]
+            end
+            "##,
+        );
+        // CP950 and CP951 are Microsoft's Big5, not CRuby's: they
+        // fill thousands of cells Big5 leaves empty — with private
+        // use characters — and their encoders carry best-fit
+        // mappings, which are the single-byte cells here.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            r << [[0xA4, 0x40], [0xC6, 0xA1], [0xF9, 0xD6]].map do |b1, b2|
+              [b1, b2].pack("C*").force_encoding("CP950").encode("UTF-8").codepoints
+            end
+            r << [0x4E00, 0xA1, 0xFF0C, 0x2550].map do |cp|
+              [cp].pack("U").encode("CP950").bytes
+            end
+            r << [0x4E00, 0xA1, 0x2550].map do |cp|
+              [cp].pack("U").encode("CP951").bytes
+            end
+            # what each of the three reaches, counted
+            r << ["Big5", "CP950", "CP951"].map do |e|
+              n = (0x80..0x9FFF).count { |cp| ([cp].pack("U").encode(e) rescue nil) }
+              [e, n]
+            end
+            r
             "##,
         );
     }
