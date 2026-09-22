@@ -980,6 +980,7 @@
 32b5935cc5c9b4d9c5d2e306c1d09629	[true, false, true, true]	__a = [];__a << (Set.instance_method(:to_s) == Set.instance_method(:inspect));__
 32c2b7533445abe2c786addc24166b66	"3/4"	Rational(0.75).to_s
 32dc2c8ce60f570a592f91cf451f6746	99	class C\n          X = 99\n        end\n        \nC.class_eval("X")
+32df5ea3bdff94e1b297b73ba7feab14	[[:invalid_byte_sequence, [65, 66], [], [:invalid_byte_sequence, [69, 85, 67, 45, 75, 82], [85, 84, 70, 45, 56], [129], []]], [:invalid_byte_sequence, [66], [], [:invalid_byte_sequence, [69, 85, 67, 45, 75, 82], [85, 84, 70, 45, 56], [161], [65]]], [:invalid_byte_sequence, [66], [], [:invalid_byte_sequence, [71, 66, 50, 51, 49, 50], [85, 84, 70, 45, 56], [161], [65]]]]	[["EUC-KR", 0x81], ["EUC-KR", 0xA1], ["GB2312", 0xA1]].map do |enc,
 32f8a3ccb6465782cb76e9906981206c	777	class C\n          private\n          def secret; 777; end\n        end\n  
 330c0d9b8d65fb03e7e8ec58a22e4a99	[300.00029999999936, 1.0]	def call_block\n          yield\n        end\n        def w2\n          a =
 330d89ab10eb5cdfc35a731befd57646	[true, true, 2, "ObjectSpace::WeakMap"]	kept = ObjectSpace::WeakMap.new\n        # Both halves held, so the pair
@@ -2130,6 +2131,7 @@
 70928ba635fab871d9d7a7cc112e80d9	[1, false, 10, "Shift_JIS", "heRlo", "heRRo", "heLlo", "heLLo", TypeError, TypeError]	r = []\n        s = "表\\\\示".encode("Shift_JIS")\n        bs = "\\\\".encode(
 70a1593046773caec35e978f0c08553c	["", "shown\\n"]	require 'stringio'\n        def cap; $stderr = StringIO.new; yield; s = 
 70ae62584feac2ecded5e03fc39ac020	[["AF_INET", "127.0.0.1", "127.0.0.1"], true, ["AF_INET", "127.0.0.1", "127.0.0.1"], true, "AF_INET", "127.0.0.1"]	require "socket"\n            s = TCPServer.new("127.0.0.1", 0)\n    
+70aebbb5c91935d174e3505dce6e16d1	[["Encoding::InvalidByteSequenceError", "Encoding::InvalidByteSequenceError", true, false], ["Encoding::InvalidByteSequenceError", "Encoding::InvalidByteSequenceError", true, false], [[44032], [44032], true, true], ["Encoding::InvalidByteSequenceError", "Encoding::InvalidByteSequenceError", true, false], [[21834], [21834], true, true], [[44034], [44034], true, true], [[12354], [12354], true, true]]	[["EUC-KR", 0x81, 0x41], ["EUC-KR", 0xA1, 0x41], ["EUC-KR", 0xB0, 0
 70b570c7b59709f018e635b6535c5ace	[[[129, 173], [129, 173], true], [[235, 173], [235, 173], true], [[135, 64], [135, 64], true], [[129, 64], [129, 64], true], [[234, 164], [234, 164], true], [[130, 160], [130, 160], true], [[239, 252], [239, 252], true]]	[[0xA2, 0xAF], [0xF6, 0xAF], [0xAD, 0xA1], [0xA1, 0xA1], [0xF4, 0xA
 70bdfd5e68a7d505347fcfb446cf1af5	[1, 1, true, false]	o = Object.new\n        o.instance_variable_set(:@a, 1)\n        s = Obje
 70c6209b155649b610440ef6e067c40f	["AAＡあBC", "aaＡあbc", "aAＡあbC", "AaＡあbc", "ＸYＺZ漢K", "ＸyＺz漢k", "ＸYＺZ漢k", "ＸyＺz漢k", "ABC", nil, "漢字ABC"]	__a = [];__a << ("AaＡあBc".encode("EUC-JP").upcase.encode("UTF-8"));__a << ("AaＡあ
@@ -3965,6 +3967,7 @@ d1b6c360f244221f8cbf36738a39be5a	[10, 25, 40.0, 5]	class C\n              K = 10
 d1b8a6b7678b598205d8118224d254db	"99"	class HasToI; def to_i; 99; end; end\n            sprintf("%d", HasT
 d1ca3bd19f43be3271304dd034800aef	[[[1, 0], "EUC-JP"], [[0, 161], "Shift_JIS"], [[1, 0], "Emacs-Mule"], [[1, 128], "EUC-JP"], [[1, 0], "Shift_JIS"], [[1, 160], "Shift_JIS"], [[164, 163], "EUC-JP"], [[130, 161], "Shift_JIS"], [[142, 162], "EUC-JP"], [[143, 161, 162], "EUC-JP"], [[65, 65], "EUC-JP"], [[49, 48], "EUC-JP"], [[65, 65, 164, 162], "EUC-JP"], [[65, 65, 130, 160], "Shift_JIS"], [[129, 161, 65], "Emacs-Mule"], [[90, 130, 160], "Emacs-Mule"], [[178], "Shift_JIS"], [[1, 0], "Shift_JIS"], [[], "EUC-JP"], [[46], "EUC-JP"]]	(f=->(enc, *bytes){ s = bytes.pack("C*").force_encoding(enc); begin; [s.succ.byt
 d1fb6e221ee581e85d0263cbc4321970	[false, false, false]	[$VERBOSE, $-v, $-w]
+d20fd54b935d12eac0c6524e6d5d8ae7	[[[239, 191, 189, 65, 66], [239, 191, 189, 65, 66]], [[239, 191, 189, 65, 66], [239, 191, 189, 65, 66]]]	["EUC-KR", "GB2312"].map do |enc|\n              s = ([0x81, 0x41, 0
 d22622fcd363dab097a0d4aa0bfe2e93	30	def f(a:, b:)\n          a + b\n        end\n        \n\n        f(a: 10, b:
 d241f6cfa000d985ad83831917fcd9ab	15	def f(x)\n          yield *x\n        end\n        \n\n        f([1,2,3,4,5]
 d248c4c75d6d6152979eacdd22264ac7	[true, "3.2", "OS"]	T = Struct.new(:version, :platform)\n            \n\n            pos =
