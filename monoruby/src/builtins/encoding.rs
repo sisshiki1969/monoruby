@@ -78,6 +78,12 @@ pub(super) fn canonical_encoding_name(name: &str) -> &'static str {
         // lower-case (#1520).
         "IBM850" => "CP850",
         "STATELESS_ISO_2022_JP" => "stateless-ISO-2022-JP",
+        // The constant is `Encoding::EBCDIC_CP_US`, the name `IBM037`
+        // (#1555).
+        "EBCDIC_CP_US" => "IBM037",
+        "Windows_874" => "Windows-874",
+        "ISO_2022_JP_2" => "ISO-2022-JP-2",
+        "ISO_2022_JP_KDDI" => "ISO-2022-JP-KDDI",
         // CRuby spells the Mac OS script encodings with a lowercase
         // `mac` — everywhere but `MacJapanese`, which keeps the capital
         // (#1471). The constant is `Encoding::MacRoman` either way.
@@ -193,6 +199,20 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         "EUC_TW",
         "CP949",
         "TIS_620",
+        // Registered in #1555: the Arabic / Thai DOS pages, the ISO-646
+        // Chinese variant, the two DOS pages CRuby keeps apart from
+        // their IBM namesakes, the Big5 variants, EBCDIC, and the two
+        // stateful ISO-2022-JP variants.
+        "IBM720",
+        "Windows_874",
+        "GB1988",
+        "CP852",
+        "CP855",
+        "CP950",
+        "CP951",
+        "EBCDIC_CP_US",
+        "ISO_2022_JP_2",
+        "ISO_2022_JP_KDDI",
         "MacJapanese",
         "EUCJP_MS",
         "CP51932",
@@ -342,8 +362,6 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         ("CP737", "IBM737"),
         ("CP775", "IBM775"),
         ("CP850", "IBM850"),
-        ("CP852", "IBM852"),
-        ("CP855", "IBM855"),
         ("CP857", "IBM857"),
         ("CP860", "IBM860"),
         ("CP861", "IBM861"),
@@ -3160,6 +3178,12 @@ pub(crate) fn encoding_constant_name(enc: Encoding) -> &'static str {
             2 => "CP50221",
             3 => "UTF_16",
             4 => "UTF_32",
+            5 => "EBCDIC_CP_US",
+            6 => "ISO_2022_JP_2",
+            7 => "ISO_2022_JP_KDDI",
+            // Every index in `OTHER_ENC_NAMES` needs an arm above: the
+            // fallback renders the encoding as ASCII-8BIT, which is
+            // how an addition to that table goes wrong quietly.
             _ => "ASCII_8BIT",
         },
         Encoding::NamedByte(i) => crate::value::named_byte_const_name(i),
@@ -7493,8 +7517,13 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         "IBM737" | "CP737" => Some("IBM737"),
         "IBM775" | "CP775" => Some("IBM775"),
         "IBM850" | "CP850" => Some("IBM850"),
-        "IBM852" | "CP852" => Some("IBM852"),
-        "IBM855" | "CP855" => Some("IBM855"),
+        "IBM852" => Some("IBM852"),
+        "IBM855" => Some("IBM855"),
+        // CP852 / CP855 are encodings of their own, not aliases of the
+        // IBM pages above (#1555).
+        "CP852" => Some("CP852"),
+        "CP855" => Some("CP855"),
+        "IBM720" | "CP720" => Some("IBM720"),
         "IBM857" | "CP857" => Some("IBM857"),
         "IBM860" | "CP860" => Some("IBM860"),
         "IBM861" | "CP861" => Some("IBM861"),
@@ -7516,6 +7545,13 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         "GB12345" => Some("GB12345"),
         "BIG5" => Some("Big5"),
         "BIG5_HKSCS" | "BIG5_HKSCS:2008" => Some("Big5_HKSCS"),
+        "CP950" => Some("CP950"),
+        "CP951" => Some("CP951"),
+        "WINDOWS_874" | "CP874" => Some("Windows_874"),
+        "GB1988" => Some("GB1988"),
+        "IBM037" | "EBCDIC_CP_US" => Some("EBCDIC_CP_US"),
+        "ISO_2022_JP_2" | "ISO2022_JP2" => Some("ISO_2022_JP_2"),
+        "ISO_2022_JP_KDDI" => Some("ISO_2022_JP_KDDI"),
         "BIG5_UAO" => Some("Big5_UAO"),
 
         // Korean encodings
@@ -7659,6 +7695,12 @@ const ENCODING_NAMES: &[(&str, &[&str])] = &[
     ("Windows-31J", &["CP932", "csWindows31J", "SJIS", "PCK"]),
     ("EUC-JP", &["eucJP"]),
     ("ISO-2022-JP", &["ISO2022-JP"]),
+    // The two stateful ISO-2022-JP variants, and EBCDIC. All dummy in
+    // CRuby, so raw bytes with a preserved name is all they need
+    // (#1555).
+    ("ISO-2022-JP-2", &["ISO2022-JP2"]),
+    ("ISO-2022-JP-KDDI", &[]),
+    ("IBM037", &["ebcdic-cp-us"]),
     ("Windows-1250", &["CP1250"]),
     ("Windows-1251", &["CP1251"]),
     ("Windows-1252", &["CP1252"]),
@@ -7676,6 +7718,18 @@ const ENCODING_NAMES: &[(&str, &[&str])] = &[
     ("CP850", &["IBM850"]),
     ("IBM852", &[]),
     ("IBM855", &[]),
+    // CP852 / CP855 are encodings of their own in CRuby, each with a
+    // single name — not aliases of the IBM ones, which is how they
+    // resolved here (#1555).
+    ("CP852", &[]),
+    ("CP855", &[]),
+    ("IBM720", &["CP720"]),
+    ("Windows-874", &["CP874"]),
+    ("GB1988", &[]),
+    // Big5 variants of their own rather than aliases of Big5 /
+    // Big5-HKSCS.
+    ("CP950", &[]),
+    ("CP951", &[]),
     ("IBM857", &["CP857"]),
     ("IBM860", &["CP860"]),
     ("IBM861", &["CP861"]),
@@ -8175,9 +8229,13 @@ fn is_ascii_compatible_encoding(name: &str) -> bool {
             | "UTF-32BE"
             | "UTF-32LE"
             | "ISO-2022-JP"
+            | "ISO-2022-JP-2"
+            | "ISO-2022-JP-KDDI"
             | "CP50220"
             | "CP50221"
             | "UTF-7"
+            // EBCDIC does not even agree with ASCII on the letters.
+            | "IBM037"
     )
 }
 
@@ -8189,6 +8247,83 @@ fn is_dummy_encoding(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn newly_registered_encodings_match_cruby() {
+        // Ten names that raised `unknown encoding name` — or, for
+        // CP852 / CP855 / CP950 / CP951, resolved to a *relative* —
+        // until #1555. Each is byte-structurally identical to an
+        // encoding already here (checked over every one- and two-byte
+        // sequence), so they ride its walk and keep their own name.
+        crate::tests::run_test_once(
+            r##"
+            names = %w[CP852 CP855 CP950 CP951 GB1988 IBM037 IBM720
+                       ISO-2022-JP-2 ISO-2022-JP-KDDI Windows-874
+                       CP720 CP874 ebcdic-cp-us ISO2022-JP2
+                       IBM852 IBM855 Big5 Big5-HKSCS]
+            sample = ["\x41\x42", "\xE6\x9D\x94", "\xA4\xA2", "\x81\xA0",
+                      "\xFF", "\xA1\x40", "\x0a"]
+            names.map { |n|
+              e = Encoding.find(n)
+              [n, e.name, e.names.sort, e.dummy?, e.ascii_compatible?,
+               sample.map { |s|
+                 t = s.b.dup.force_encoding(e)
+                 [t.valid_encoding?, t.length]
+               }]
+            }
+            "##,
+        );
+    }
+
+    #[test]
+    fn iso_2022_jp_is_a_dummy_encoding() {
+        // Stateful, so Ruby gives it no character decoder: every byte
+        // string labelled with it is valid, and `length` counts bytes.
+        // monoruby used to decode it through `encoding_rs`, which made
+        // the same bytes Broken here and Valid as CP50220 — its own
+        // variant — and `length` 2 where `chars.size` was 10 (#1554).
+        crate::tests::run_test_once(
+            r##"
+            s = "\xE6\x9D\x94".b
+            j = "\e$B4A;z\e(B".b
+            %w[ISO-2022-JP CP50220 CP50221 UTF-7].map { |e|
+              t = s.dup.force_encoding(e)
+              [e, t.valid_encoding?, t.length, t.chars.size]
+            } + %w[ISO-2022-JP CP50220].map { |e|
+              t = j.dup.force_encoding(e)
+              [e, t.valid_encoding?, t.length, t.chars.size]
+            }
+            "##,
+        );
+    }
+
+    #[test]
+    fn force_encoding_never_answers_a_name_with_another_encoding() {
+        // The two resolvers have to agree: `Encoding.find` reads the
+        // registry, `force_encoding` the enum's own alias table, and
+        // the table used to map `ISO-2022-JP-2` / `-KDDI` / `-2004`
+        // onto plain ISO-2022-JP. So a name `Encoding.find` rejected
+        // silently relabelled the string as an encoding the caller
+        // never asked for (#1554). Asserting they agree rather than
+        // what they answer keeps this about that bug — which names
+        // are *registered* is #1555.
+        crate::tests::run_test_once(
+            r##"
+            # `stateless-ISO-2022-JP`, `eucJP-ms`, `CP51932`, the
+            # `UTF8-MAC` names and `CP950` / `CP951` still disagree —
+            # the same defect in the EUC-JP, UTF-8 and Big5 families,
+            # which this sweep is what found (#1562).
+            names = %w[ISO-2022-JP ISO2022-JP ISO-2022-JP-2 ISO-2022-JP-KDDI
+                       ISO-2022-JP-2004 CP50220 CP50221 UTF-7
+                       UTF-8 Big5-HKSCS Shift_JIS Windows-31J MacJapanese NOPE]
+            names.map { |n|
+              found = (begin; Encoding.find(n).name; rescue ArgumentError; nil; end)
+              forced = (begin; "abc".b.force_encoding(n).encoding.name; rescue ArgumentError; nil; end)
+              [n, found == forced]
+            }
+            "##,
+        );
+    }
+
     #[test]
     fn encode_fallback_option() {
         // fallback: consulted per undefined character — Hash (with

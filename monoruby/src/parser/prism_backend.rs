@@ -31,8 +31,9 @@ use ruby_prism::{
     StatementsNode, StringNode, SymbolNode, UnlessNode, UntilNode, WhileNode,
 };
 
+use crate::ast::LocalsContext;
 use crate::ast::{
-    ConstInfo, DeferCtx, DeferredDef, PrismTree,
+    AnonForwarding, ConstInfo, DeferCtx, DeferredDef, PrismTree,
     ArgList, BinOp, BlockInfo, CmpKind, DestructEntry, Loc, LvarCollector, NReal, Node, NodeKind,
     ParamKind, ParseResult, SourceInfoRef, UnOp,
 };
@@ -45,6 +46,9 @@ use crate::id_table::IdentId;
 /// collide with a user variable (mirrors the empty name used for `&`).
 const ANON_REST_NAME: &str = "*";
 const ANON_KWREST_NAME: &str = "**";
+/// The name `def m(&)` leaves its block parameter under (`store.rs`
+/// gives an unnamed block parameter the empty name).
+const ANON_BLOCK_NAME: &str = "";
 
 /// Reserved, unspellable local bound to the hidden single loop variable
 /// synthesized for a `for <complex-target> in ...` loop (one whose index
@@ -59,7 +63,17 @@ pub(super) fn parse_program(
     path: PathBuf,
     defer_bodies: bool,
 ) -> Result<ParseResult, MonorubyErr> {
-    try_prism_inner(code, path, None, None, 0, None, false, defer_bodies)
+    try_prism_inner(
+        code,
+        path,
+        None,
+        None,
+        0,
+        None,
+        false,
+        defer_bodies,
+        AnonForwarding::default(),
+    )
 }
 
 pub(super) fn parse_program_eval(
@@ -70,7 +84,7 @@ pub(super) fn parse_program_eval(
     default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
     inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
-    let options = build_prism_options(extern_context, None, line_offset);
+    let (options, anon_forwarding) = build_prism_options(extern_context, None, line_offset);
     try_prism_inner(
         code,
         path,
@@ -80,6 +94,7 @@ pub(super) fn parse_program_eval(
         default_encoding,
         false,
         true,
+        anon_forwarding,
     )
 }
 
@@ -134,7 +149,8 @@ pub(super) fn parse_program_binding(
     main_script: bool,
 ) -> Result<ParseResult, MonorubyErr> {
     inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
-    let options = build_prism_options(extern_context, context.as_ref(), line_offset);
+    let (options, anon_forwarding) =
+        build_prism_options(extern_context, context.as_ref(), line_offset);
     try_prism_inner(
         code,
         path,
@@ -144,6 +160,7 @@ pub(super) fn parse_program_binding(
         default_encoding,
         main_script,
         true,
+        anon_forwarding,
     )
 }
 
@@ -156,7 +173,7 @@ fn build_prism_options(
     extern_context: Option<&ExternalContext>,
     binding_locals: Option<&LvarCollector>,
     line_offset: i64,
-) -> prism::Options {
+) -> (prism::Options, AnonForwarding) {
     // Prism's `line` is 1-indexed. monoruby tracks an offset
     // (`lineno - 1`) at the call sites in `globals.rs`, so the
     // wire-format we want is `line_offset + 1`.
@@ -203,7 +220,55 @@ fn build_prism_options(
         scopes.push(prism::Scope::new(Vec::<&[u8]>::new()));
     }
 
-    prism::Options::new().line(line).scopes(scopes)
+    let anon = resolve_anon_forwarding(extern_context, binding_locals);
+
+    // Prism takes the forwarding flags as *permission* at the first
+    // enclosing scope it finds marked `closed`, and as a **conflict**
+    // at any scope inside that one. `pm_parser_init` marks only options
+    // scope 0 — the outermost — as closed, so the flags belong there
+    // and nowhere else; on the eval body's own scope, which is where
+    // the parameters were actually declared, they read as a conflict
+    // and the error does not change.
+    let flags = anon.prism_flags();
+    if flags != 0
+        && let Some(outermost) = scopes.first_mut()
+    {
+        *outermost = std::mem::replace(outermost, prism::Scope::new(Vec::<&[u8]>::new()))
+            .forwarding(flags);
+    }
+
+    (prism::Options::new().line(line).scopes(scopes), anon)
+}
+
+/// Find the anonymous parameters the frames around an `eval` declared,
+/// and how far out each one lives. `*` and `**` are ordinary (if
+/// unspellable) locals, so they are looked up by name; `&` is the
+/// empty-named block parameter; `...` leaves no local at all and is
+/// carried on the context itself.
+fn resolve_anon_forwarding(
+    extern_context: Option<&ExternalContext>,
+    binding_locals: Option<&LvarCollector>,
+) -> AnonForwarding {
+    let Some(ctx) = extern_context else {
+        return AnonForwarding::default();
+    };
+    // A `binding.eval` body *is* the binding's frame, so a parameter
+    // there is at depth 0; without one the body gets a scope of its
+    // own and everything external starts at 1, which is what
+    // `find_lvar` already counts from.
+    let depth_of = |name: &str| {
+        if binding_locals.is_some_and(|coll| coll.table().iter().any(|n| n == name)) {
+            Some(0)
+        } else {
+            ctx.find_lvar(name)
+        }
+    };
+    AnonForwarding {
+        rest: depth_of(ANON_REST_NAME),
+        kwrest: depth_of(ANON_KWREST_NAME),
+        block: (0..ctx.len()).any(|i| ctx[i].1 == Some(IdentId::get_id(ANON_BLOCK_NAME))),
+        all: ctx.is_forwarding(),
+    }
 }
 
 /// Result of lowering the `block` slot on a Prism call/super node.
@@ -366,6 +431,7 @@ fn try_prism_inner(
     default_encoding: Option<String>,
     main_script: bool,
     defer_bodies: bool,
+    anon_forwarding: AnonForwarding,
 ) -> Result<ParseResult, MonorubyErr> {
     let path_display = path.display().to_string();
     // `-n` / `-p`: the main script (and only the main script) gets its
@@ -386,7 +452,7 @@ fn try_prism_inner(
     {
         code.splice(0..0, format!("# encoding: {enc}\n").into_bytes());
         line_offset -= 1;
-        options = Some(build_prism_options(None, seed_lvars.as_ref(), line_offset));
+        options = Some(build_prism_options(None, seed_lvars.as_ref(), line_offset).0);
     }
     // `-e`: prism's `PM_OPTIONS_COMMAND_LINE_E` suppresses the flip-flop /
     // condition-literal parse warnings for command-line scripts. The
@@ -523,6 +589,7 @@ fn try_prism_inner(
         // TOPLEVEL_BINDING) but *is* a script top level — keep script-level
         // warnings like "argument of top-level return is ignored".
         eval_parse: options.is_some() && !main_script,
+        anon_forwarding,
     });
     let root = ctx.tree.root();
     let mut lowerer = Lowerer::new(&ctx);
@@ -699,8 +766,29 @@ impl<'pr> Lowerer<'pr> {
 
     /// Depth of the anonymous `*` / `**` local bound at `binder_level`
     /// as seen from the current scope (0 in the binding scope itself).
+    ///
+    /// With no binder this parse saw, the use is in an `eval` body
+    /// forwarding the frame that called it, and the depth was resolved
+    /// when the parse options were built — measured from the eval
+    /// body's own top scope, so the scopes entered since have to be
+    /// added back. Hardcoding 0 here is what made `eval("foo(*)")`
+    /// read the eval body's own absent slot and call `foo` with
+    /// nothing.
     fn anon_param_depth(&mut self, binder_level: Option<u32>, name: &str) -> usize {
-        let depth = binder_level.map_or(0, |l| (self.prism_scope_level - l) as usize);
+        let depth = match binder_level {
+            Some(level) => (self.prism_scope_level - level) as usize,
+            None => {
+                let outer = if name == ANON_REST_NAME {
+                    self.ctx.anon_forwarding.rest
+                } else {
+                    self.ctx.anon_forwarding.kwrest
+                };
+                // Still 0 when nothing declared one: prism has already
+                // rejected that source, so this is unreachable rather
+                // than a fallback worth inventing a depth for.
+                outer.map_or(0, |d| self.prism_scope_level as usize + d)
+            }
+        };
         self.adjust_lvar_depth(depth, name)
     }
 

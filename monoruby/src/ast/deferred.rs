@@ -79,6 +79,63 @@ pub struct DeferCtx {
     pub source_info: SourceInfoRef,
     pub line_offset: i64,
     pub eval_parse: bool,
+    /// The anonymous parameters the frames around an `eval` declared.
+    pub anon_forwarding: AnonForwarding,
+}
+
+///
+/// What the frames enclosing an `eval` declared, for the anonymous
+/// parameters (`*` / `**` / `&` / `...`) its source may forward.
+///
+/// The lowerer only ever sees the eval body's own scopes, so it cannot
+/// find these itself: `anon_rest_levels` records a `def m(*)` that
+/// *this* parse walked, and an eval walked none. Resolved once, where
+/// the parse options are built and the enclosing frames are still in
+/// hand.
+///
+/// Every field is empty for an ordinary file parse, where a forwarding
+/// use has its binder in the same parse.
+///
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AnonForwarding {
+    /// Depth of the enclosing anonymous `*` local as seen from the eval
+    /// body's own top scope — 0 when it is the binding's own frame, 1
+    /// for the frame that called `eval`, and so on. `None` when no
+    /// enclosing scope declares one.
+    pub rest: Option<usize>,
+    /// As [`Self::rest`], for `**`.
+    pub kwrest: Option<usize>,
+    /// An enclosing scope declares an anonymous `&`.
+    pub block: bool,
+    /// An enclosing method was defined with `...`.
+    pub all: bool,
+}
+
+impl AnonForwarding {
+    /// The `PM_OPTIONS_SCOPE_FORWARDING_*` bits prism wants, so that
+    /// `*` / `**` / `&` / `...` parse as forwarding rather than as the
+    /// syntax errors they are outside a method that declared them.
+    pub fn prism_flags(&self) -> u8 {
+        // Mirrors `PM_OPTIONS_SCOPE_FORWARDING_*` in prism's options.h.
+        const POSITIONALS: u8 = 0x1;
+        const KEYWORDS: u8 = 0x2;
+        const BLOCK: u8 = 0x4;
+        const ALL: u8 = 0x8;
+        let mut flags = 0;
+        if self.rest.is_some() {
+            flags |= POSITIONALS;
+        }
+        if self.kwrest.is_some() {
+            flags |= KEYWORDS;
+        }
+        if self.block {
+            flags |= BLOCK;
+        }
+        if self.all {
+            flags |= ALL;
+        }
+        flags
+    }
 }
 
 ///

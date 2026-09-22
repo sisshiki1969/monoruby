@@ -435,7 +435,19 @@ pub enum Encoding {
 /// Canonical names for [`Encoding::Other`] variants (stateful /
 /// dummy byte encodings monoruby has no native codec for). The
 /// index is the `Encoding::Other` payload.
-pub(crate) const OTHER_ENC_NAMES: &[&str] = &["UTF-7", "CP50220", "CP50221", "UTF-16", "UTF-32"];
+pub(crate) const OTHER_ENC_NAMES: &[&str] = &[
+    "UTF-7",
+    "CP50220",
+    "CP50221",
+    "UTF-16",
+    "UTF-32",
+    // EBCDIC, and the two stateful ISO-2022-JP variants. All three are
+    // dummy in CRuby, so raw bytes with a preserved name is the whole
+    // of what they need (#1555).
+    "IBM037",
+    "ISO-2022-JP-2",
+    "ISO-2022-JP-KDDI",
+];
 
 /// `(display name, `Encoding::<CONST>` suffix)` for
 /// [`Encoding::NamedByte`] variants — ASCII-compatible byte
@@ -455,6 +467,17 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
     ("EUC-TW", "EUC_TW"),
     ("CP949", "CP949"),
     ("TIS-620", "TIS_620"),
+    // Single-byte national sets with no codec, like the rest of this
+    // table: the Arabic and Thai DOS pages, and the ISO-646 Chinese
+    // variant (#1555).
+    ("IBM720", "IBM720"),
+    ("Windows-874", "Windows_874"),
+    ("GB1988", "GB1988"),
+    // Big5 variants: same byte structure as their base (checked over
+    // every one- and two-byte sequence), so they ride its walk and
+    // keep their own names.
+    ("CP950", "CP950"),
+    ("CP951", "CP951"),
     ("KOI8-R", "KOI8_R"),
     ("KOI8-U", "KOI8_U"),
     ("Windows-1250", "Windows_1250"),
@@ -475,6 +498,12 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
     ("CP850", "IBM850"),
     ("IBM852", "IBM852"),
     ("IBM855", "IBM855"),
+    // CP852 / CP855 are *separate* encodings from IBM852 / IBM855 in
+    // CRuby, each with a single name — not the two-name pairs the rest
+    // of the family forms. They were an alias of the IBM ones here,
+    // which is a different encoding to answer with (#1555).
+    ("CP852", "CP852"),
+    ("CP855", "CP855"),
     ("IBM857", "IBM857"),
     ("IBM860", "IBM860"),
     ("IBM861", "IBM861"),
@@ -509,8 +538,38 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
 /// Index of `Emacs-Mule` in [`NAMED_BYTE_ENCODINGS`]. It is the one
 /// entry monoruby validates rather than passing through as raw bytes,
 /// so `classify` and the character walk single it out by index rather
-/// than by name; `emacs_mule_index_is_pinned` keeps the two in step.
-pub(crate) const EMACS_MULE: u8 = 37;
+/// than by name.
+///
+/// Found at compile time: written out as a number, inserting an entry
+/// anywhere above it in the table silently re-pointed it at whatever
+/// moved into the slot (#1555).
+pub(crate) const EMACS_MULE: u8 = named_byte_index_const("Emacs_Mule");
+
+/// [`named_byte_index`] for a `const` context. Panics — at compile
+/// time — on a constant suffix the table does not carry.
+const fn named_byte_index_const(konst: &str) -> u8 {
+    const fn eq(a: &[u8], b: &[u8]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < a.len() {
+            if a[i] != b[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+    let mut i = 0;
+    while i < NAMED_BYTE_ENCODINGS.len() {
+        if eq(NAMED_BYTE_ENCODINGS[i].1.as_bytes(), konst.as_bytes()) {
+            return i as u8;
+        }
+        i += 1;
+    }
+    panic!("NAMED_BYTE_ENCODINGS has no such constant suffix")
+}
 
 /// What the multibyte sequence at a given offset is — CRuby's
 /// `rb_enc_precise_mbclen` three-way answer. Shared by every encoding
@@ -710,7 +769,9 @@ pub(crate) fn mbc_walker(enc: Encoding) -> Option<(usize, fn(&[u8], usize) -> Pr
             "EUC_KR" | "GB2312" | "GB12345" => Some((2, euckr_precise_len)),
             "EUC_TW" => Some((4, euctw_precise_len)),
             "CP949" => Some((2, cp949_precise_len)),
-            "Big5" | "Big5_HKSCS" | "Big5_UAO" => Some((2, big5_precise_len)),
+            "Big5" | "Big5_HKSCS" | "Big5_UAO" | "CP950" | "CP951" => {
+                Some((2, big5_precise_len))
+            }
             "GBK" => Some((2, gbk_precise_len)),
             "GB18030" => Some((4, gb18030_precise_len)),
             _ => None,
@@ -884,8 +945,15 @@ impl Encoding {
                 CodeRange::Valid
             }
             // No native codec and no shape: raw bytes, every sequence
-            // "valid".
-            Encoding::Other(_) | Encoding::NamedByte(_) => CodeRange::Valid,
+            // "valid". ISO-2022-JP belongs here with the other dummy
+            // encodings (UTF-7, CP50220/1, …): it is stateful, so Ruby
+            // gives it no character decoder at all and every byte
+            // string labelled with it is valid. Decoding it to look
+            // for truncated escapes, as this used to, made the same
+            // bytes Broken here and Valid as CP50220 — its own variant
+            // — and `valid_encoding?` answer `false` where CRuby says
+            // `true` (#1554).
+            Encoding::Other(_) | Encoding::NamedByte(_) | Encoding::Iso2022Jp => CodeRange::Valid,
             Encoding::Iso8859(_) => CodeRange::Valid, // every byte 0..256 represents a glyph
             // For encodings we don't decode natively, treat any
             // sequence as Valid unless its byte count contradicts
@@ -956,22 +1024,6 @@ impl Encoding {
                 }
                 CodeRange::Valid
             }
-            // ISO-2022-JP: validate via encoding_rs's decoder so
-            // truncated escape sequences / invalid JIS X 0208
-            // codepoints aren't silently accepted as Valid. The
-            // ASCII-only fast path above already handled the
-            // common (`SevenBit`) case, so we're decoding non-
-            // trivial input here.
-            Encoding::Iso2022Jp => {
-                let enc_rs = encoding_rs::Encoding::for_label(b"iso-2022-jp")
-                    .expect("encoding_rs always supports iso-2022-jp");
-                let (_, had_errors) = enc_rs.decode_without_bom_handling(bytes);
-                if had_errors {
-                    CodeRange::Broken
-                } else {
-                    CodeRange::Valid
-                }
-            }
         }
     }
 
@@ -1035,6 +1087,9 @@ impl Encoding {
             // ASCII-incompatible, byte-oriented, name-preserved.
             "UTF_16" => Ok(Encoding::Other(3)),
             "UTF_32" => Ok(Encoding::Other(4)),
+            "IBM037" | "EBCDIC_CP_US" => Ok(Encoding::Other(5)),
+            "ISO_2022_JP_2" | "ISO2022_JP2" => Ok(Encoding::Other(6)),
+            "ISO_2022_JP_KDDI" => Ok(Encoding::Other(7)),
             "UTF_16LE" => Ok(Encoding::Utf16Le),
             "UTF_16BE" | "UCS_2BE" => Ok(Encoding::Utf16Be),
             "UTF_32LE" | "UCS_4LE" => Ok(Encoding::Utf32Le),
@@ -1064,8 +1119,15 @@ impl Encoding {
             | "EUC_JP_WIN"
             | "CP51932"
             | "STATELESS_ISO_2022_JP" => Ok(Encoding::EucJp),
-            "ISO_2022_JP" | "ISO2022_JP" | "ISO_2022_JP_KDDI" | "ISO_2022_JP_2"
-            | "ISO_2022_JP_2004" => Ok(Encoding::Iso2022Jp),
+            // Only ISO-2022-JP's own two names. `ISO-2022-JP-2` and
+            // `ISO-2022-JP-KDDI` are encodings of their own in CRuby,
+            // and answering them with this one relabelled the string
+            // as something the caller did not ask for — while
+            // `Encoding.find`, which reads the registry rather than
+            // this table, rejected the same names outright (#1554).
+            // `ISO-2022-JP-2004` is not a Ruby encoding at all.
+            // Registering the real ones is #1555.
+            "ISO_2022_JP" | "ISO2022_JP" => Ok(Encoding::Iso2022Jp),
             "SHIFT_JIS" => Ok(Encoding::Sjis(0)),
             // MacJapanese is a Shift_JIS variant. monoruby runs it on
             // the Shift_JIS codec and keeps only its name apart, as it
@@ -1080,12 +1142,17 @@ impl Encoding {
             // codec: bytes are stored raw (like ASCII-8BIT) but the
             // declared name is preserved via `Encoding::NamedByte`, so
             // `# encoding: big5` reports `__ENCODING__.name == "Big5"`.
-            "BIG5" | "CP950" => Ok(Encoding::NamedByte(named_byte_index("Big5").unwrap())),
+            "BIG5" => Ok(Encoding::NamedByte(named_byte_index("Big5").unwrap())),
             // `:2008` is the year of the revision, and part of the
             // name CRuby answers to (#1520).
-            "BIG5_HKSCS" | "BIG5HKSCS" | "BIG5_HKSCS:2008" | "CP951" => {
+            "BIG5_HKSCS" | "BIG5HKSCS" | "BIG5_HKSCS:2008" => {
                 Ok(Encoding::NamedByte(named_byte_index("Big5_HKSCS").unwrap()))
             }
+            // CP950 / CP951 are encodings of their own rather than
+            // aliases of the two above, which is how they were read
+            // here (#1555).
+            "CP950" => Ok(Encoding::NamedByte(named_byte_index("CP950").unwrap())),
+            "CP951" => Ok(Encoding::NamedByte(named_byte_index("CP951").unwrap())),
             "BIG5_UAO" => Ok(Encoding::NamedByte(named_byte_index("Big5_UAO").unwrap())),
             "GBK" | "CP936" => Ok(Encoding::NamedByte(named_byte_index("GBK").unwrap())),
             "GB2312" | "EUC_CN" | "EUCCN" => {
@@ -1100,6 +1167,11 @@ impl Encoding {
             "CP949" => Ok(Encoding::NamedByte(named_byte_index("CP949").unwrap())),
             "EUC_TW" | "EUCTW" => Ok(Encoding::NamedByte(named_byte_index("EUC_TW").unwrap())),
             "TIS_620" | "TIS620" => Ok(Encoding::NamedByte(named_byte_index("TIS_620").unwrap())),
+            "IBM720" | "CP720" => Ok(Encoding::NamedByte(named_byte_index("IBM720").unwrap())),
+            "WINDOWS_874" | "CP874" => {
+                Ok(Encoding::NamedByte(named_byte_index("Windows_874").unwrap()))
+            }
+            "GB1988" => Ok(Encoding::NamedByte(named_byte_index("GB1988").unwrap())),
             "KOI8_R" | "CP878" => Ok(Encoding::NamedByte(named_byte_index("KOI8_R").unwrap())),
             "KOI8_U" => Ok(Encoding::NamedByte(named_byte_index("KOI8_U").unwrap())),
             "WINDOWS_1250" | "CP1250" => Ok(Encoding::NamedByte(
@@ -1133,8 +1205,10 @@ impl Encoding {
             "IBM737" | "CP737" => Ok(Encoding::NamedByte(named_byte_index("IBM737").unwrap())),
             "IBM775" | "CP775" => Ok(Encoding::NamedByte(named_byte_index("IBM775").unwrap())),
             "IBM850" | "CP850" => Ok(Encoding::NamedByte(named_byte_index("IBM850").unwrap())),
-            "IBM852" | "CP852" => Ok(Encoding::NamedByte(named_byte_index("IBM852").unwrap())),
-            "IBM855" | "CP855" => Ok(Encoding::NamedByte(named_byte_index("IBM855").unwrap())),
+            "IBM852" => Ok(Encoding::NamedByte(named_byte_index("IBM852").unwrap())),
+            "IBM855" => Ok(Encoding::NamedByte(named_byte_index("IBM855").unwrap())),
+            "CP852" => Ok(Encoding::NamedByte(named_byte_index("CP852").unwrap())),
+            "CP855" => Ok(Encoding::NamedByte(named_byte_index("CP855").unwrap())),
             "IBM857" | "CP857" => Ok(Encoding::NamedByte(named_byte_index("IBM857").unwrap())),
             "IBM860" | "CP860" => Ok(Encoding::NamedByte(named_byte_index("IBM860").unwrap())),
             "IBM861" | "CP861" => Ok(Encoding::NamedByte(named_byte_index("IBM861").unwrap())),
@@ -2089,7 +2163,12 @@ impl RStringInner {
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
             | Encoding::Other(_)
-            | Encoding::NamedByte(_) => self.len(),
+            | Encoding::NamedByte(_)
+            // ISO-2022-JP counts bytes, as CRuby does for a dummy
+            // encoding and as this string's own character iterator
+            // already does (`fixed_char_width` is 1 for it). Decoding
+            // it here made `length` 2 where `chars.size` was 10.
+            | Encoding::Iso2022Jp => self.len(),
             // UTF-16 / UTF-32 with one extra unit per broken trailing
             // byte. CRuby's `String#length` for these reports the
             // number of *complete* code units plus one per stray byte
@@ -2126,20 +2205,6 @@ impl RStringInner {
                 CodeRange::SevenBit => self.len(),
                 _ => self.iter_char_bytes().count(),
             },
-            // ISO-2022-JP: route through `encoding_rs` to get an
-            // accurate count of *characters* (escape sequences
-            // shouldn't count). Falls back to byte length on
-            // decode failure, matching the EucJp/Sjis policy.
-            Encoding::Iso2022Jp => {
-                let enc_rs = encoding_rs::Encoding::for_label(b"iso-2022-jp")
-                    .expect("encoding_rs always supports iso-2022-jp");
-                let (decoded, had_errors) = enc_rs.decode_without_bom_handling(self.as_bytes());
-                if had_errors {
-                    self.len()
-                } else {
-                    decoded.chars().count()
-                }
-            }
         }
     }
 
@@ -3488,6 +3553,39 @@ mod encoding_tests {
         ] {
             assert!(enc.tag() > STRING_TY_MAX_INLINE_SHL, "{enc:?}");
         }
+    }
+
+    #[test]
+    fn named_byte_index_const_agrees_with_the_table() {
+        // `EMACS_MULE` is the one index `NAMED_BYTE_ENCODINGS` is read
+        // by number rather than by name, and it used to be written out
+        // as `37` — inserting an entry above it re-pointed it at
+        // `IBM861` and broke both encodings' validation. Its doc
+        // comment credited `emacs_mule_index_is_pinned` with keeping
+        // the two in step; that test did not exist. This is it, and it
+        // runs the `const fn` at run time so the walk it does at
+        // compile time is exercised as well.
+        assert_eq!(
+            NAMED_BYTE_ENCODINGS[EMACS_MULE as usize],
+            ("Emacs-Mule", "Emacs_Mule")
+        );
+        for (index, (_, konst)) in NAMED_BYTE_ENCODINGS.iter().enumerate() {
+            assert_eq!(named_byte_index_const(konst), index as u8, "{konst}");
+            assert_eq!(named_byte_index(konst), Some(index as u8), "{konst}");
+        }
+        // The two ways the byte compare can reject a candidate: a
+        // different length, and a same-length mismatch.
+        assert_eq!(named_byte_index_const("Big5"), 0);
+        assert!(named_byte_index("Big5X").is_none());
+        assert!(named_byte_index("Big4").is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "NAMED_BYTE_ENCODINGS has no such constant suffix")]
+    fn named_byte_index_const_rejects_an_unknown_suffix() {
+        // The compile-time failure this gives for a typo in a `const`
+        // position, seen from run time.
+        let _ = named_byte_index_const("NoSuchEncoding");
     }
 
     #[test]

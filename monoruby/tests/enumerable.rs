@@ -101,3 +101,77 @@ fn enumerable_find_records_only_the_given_argument() {
         r##"begin; (1..3).find(1, 2) { |x| x }; rescue ArgumentError => e; e.message; end"##,
     ]);
 }
+
+#[test]
+fn map_reports_the_users_block_arity_to_each() {
+    // `Enumerable#map` hands `#each` a block of its own, and a
+    // Ruby-level block cannot carry an arity it did not declare — so a
+    // redefined `#each` saw `-1` where CRuby, whose `enum_collect`
+    // copies the user block's min/max argc onto its internal one,
+    // reports the user block's (#1556).
+    run_tests(&[
+        r##"
+        class C
+          include Enumerable
+          def each(&b); $seen = [b.arity, b.lambda?]; yield 1, 2; self; end
+        end
+        r = []
+        [proc { |a, b| [a, b] }, proc { |a| a }, proc { |*a| a }, proc { || 0 },
+         proc { |a, b, *c| [a, b, c] }, proc { |a, (b, c)| [a, b, c] },
+         :to_s.to_proc, ->(a, b) { [a, b] }].each do |blk|
+          r << [C.new.map(&blk), $seen]
+        end
+        r
+        "##,
+        // `collect` shares the body, and `method(:x).to_proc` reports
+        // the method's arity rather than the shared body's.
+        r##"
+        class C
+          include Enumerable
+          def each(&b); $seen = b.arity; yield 1, 2; self; end
+        end
+        def two(a, b) = [a, b]
+        [C.new.collect { |a, b| [a, b] }, $seen,
+         C.new.map(&method(:two)), $seen]
+        "##,
+        // An `each` that *branches* on the arity, which is what makes
+        // this more than introspection.
+        r##"
+        class E
+          include Enumerable
+          def each(&b) = yield(*(b.arity == 2 ? [1, 2] : [[9, 9]]))
+        end
+        [E.new.map { |a, b| [a, b] }, E.new.select { |a, b| true }]
+        "##,
+        // Every other Enumerable method still reports -1, as CRuby's do.
+        r##"
+        class C
+          include Enumerable
+          def each(&b); $seen = b.arity; yield 1, 2; self; end
+        end
+        %i[select reject sort_by group_by partition find filter_map
+           take_while each_with_index flat_map].map { |m|
+          C.new.send(m) { |a, b| [a, b] }
+          [m, $seen]
+        }
+        "##,
+        // `Proc#curry` reads the reported arity to decide how many
+        // arguments to collect, so the override has to reach it too:
+        // `b.curry[9]` is a Proc still waiting for the second argument,
+        // where an arity of -1 would have called through on the first.
+        r##"
+        class C
+          include Enumerable
+          def each(&b)
+            c = b.curry[9]
+            $seen = [b.arity, b.curry.arity, c.class.to_s, c.is_a?(Proc) ? c.arity : c]
+            yield 1, 2
+            self
+          end
+        end
+        [C.new.map { |a, b| [a, b] }, $seen]
+        "##,
+        // No block is still an Enumerator, named after the call site.
+        r##"[[1, 2].each_entry.inspect, (1..3).map.inspect, (1..3).collect.inspect]"##,
+    ]);
+}
