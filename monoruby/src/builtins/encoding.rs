@@ -3619,6 +3619,15 @@ fn resolve_enc_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Resu
         let s = arg.coerce_to_string(vm, globals)?;
         s
     };
+    // A name that stands for a setting names the encoding that setting
+    // currently holds; the table below only knows fixed names. CRuby
+    // reaches the same place from the other side — the four are
+    // ordinary aliases in its encoding table, re-pointed as the
+    // settings move — so `"x".encode("locale")` converts to whatever
+    // `Encoding.find("locale")` answers, and an unset `"internal"`,
+    // whose alias was never registered, is a converter that does not
+    // exist rather than a conversion to BINARY (#1575).
+    let name = dynamic_alias_name(globals, &name).unwrap_or(name);
     enc_name_to_const(&name).ok_or_else(|| {
         // CRuby raises `Encoding::ConverterNotFoundError` (not
         // ArgumentError) for `String#encode("xyz")` when the
@@ -3628,6 +3637,16 @@ fn resolve_enc_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Resu
         // `ConverterNotFoundError` for the encode path.
         MonorubyErr::argumenterr(format!("unknown encoding name - {}", name))
     })
+}
+
+/// The canonical name [`dynamic_alias_object`] resolves `name` to, for
+/// the callers that work in names rather than in `Encoding` objects.
+/// `None` when `name` is not one of the four, and also when it is
+/// `"internal"` with no `default_internal` — the name stands unresolved
+/// then, and fails the lookup it is handed to.
+fn dynamic_alias_name(globals: &Globals, name: &str) -> Option<String> {
+    let v = dynamic_alias_object(globals, name)?;
+    encoding_object_name(globals, v)
 }
 
 /// `resolve_enc_arg` variant that lifts the unknown-encoding
@@ -4336,25 +4355,15 @@ pub(super) fn force_encoding(
 /// back to ASCII-8BIT there, unlike `Encoding.find`, which answers
 /// nil). Returns `None` for every other name.
 fn special_encoding_name(globals: &mut Globals, name: &str) -> Option<Encoding> {
-    let lowered = name.to_ascii_lowercase();
-    let value = match lowered.as_str() {
-        "internal" => {
-            let internal = globals
-                .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
-                .filter(|v| !v.is_nil());
-            match internal {
-                Some(v) => v,
-                None => return Some(Encoding::Ascii8),
-            }
-        }
-        "external" | "filesystem" => globals
-            .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
-            .filter(|v| !v.is_nil())
-            .unwrap_or_else(|| Value::nil()),
-        "locale" => locale_encoding_value(globals),
-        _ => return None,
-    };
-    globals.encoding_of_object(value).or(Some(Encoding::UTF8))
+    match dynamic_alias_object(globals, name) {
+        Some(value) => globals.encoding_of_object(value).or(Some(Encoding::UTF8)),
+        // The one place the four are not resolved alike: an unset
+        // `"internal"` names no encoding, and `rb_to_encoding` answers
+        // BINARY for it where `Encoding.find` answers nil and the
+        // converters call the name unknown.
+        None if name.eq_ignore_ascii_case("internal") => Some(Encoding::Ascii8),
+        None => None,
+    }
 }
 
 /// Resolve an encoding operand — an `Encoding` object, a String name, or
@@ -4381,6 +4390,9 @@ pub(super) fn value_to_encoding(
     } else {
         // Try to_str coercion
         let s = arg0.coerce_to_string(vm, globals)?;
+        if let Some(enc) = special_encoding_name(globals, &s) {
+            return Ok(enc);
+        }
         Encoding::try_from_str(&s)
     }
 }
@@ -9360,34 +9372,14 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Ok(arg0);
     }
     let name = arg0.coerce_to_string(vm, globals)?;
-    // Special names resolved at query time: the filesystem/locale
-    // encodings follow `default_external`, and "internal" may be nil.
-    // CRuby resolves these the same way whatever the case, since the
-    // whole name lookup is case-insensitive.
-    match name.to_ascii_lowercase().as_str() {
-        // The locale encoding follows the locale charmap, which CRuby
-        // reads from the environment at startup; the other two follow
-        // `default_external`.
-        "locale" => return Ok(locale_encoding_value(globals)),
-        "external" | "filesystem" => {
-            let ext = globals
-                .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
-                .filter(|v| !v.is_nil())
-                .unwrap_or_else(|| {
-                    globals
-                        .store
-                        .get_constant_noautoload(enc_class, IdentId::UTF_8)
-                        .unwrap_or(Value::nil())
-                });
-            return Ok(ext);
-        }
-        "internal" => {
-            let int = globals
-                .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
-                .unwrap_or(Value::nil());
-            return Ok(int);
-        }
-        _ => {}
+    // Special names resolved at query time: the locale encoding follows
+    // the locale charmap, the filesystem/external ones follow
+    // `default_external`, and "internal" may name nothing. The lookup
+    // below answers all four the same way; the one thing `Encoding.find`
+    // does differently is report an unset `"internal"` as nil rather
+    // than as an unknown name.
+    if name.eq_ignore_ascii_case("internal") {
+        return Ok(dynamic_alias_object(globals, &name).unwrap_or_else(Value::nil));
     }
     // `rb_to_encoding` goes through `StringValueCStr`, so an embedded
     // NUL is its own error rather than an unknown name.
@@ -9405,11 +9397,61 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
 }
 
+/// The `Encoding` object one of the four run-time alias names stands
+/// for, or `None` for any other name.
+///
+/// CRuby registers these in the encoding table with
+/// `enc_alias_internal` and re-points them whenever the setting behind
+/// them moves: `"locale"` at startup from the locale charmap,
+/// `"filesystem"` and `"external"` from `Encoding.default_external`,
+/// `"internal"` only while a `default_internal` is set. That last one
+/// is why `"internal"` can name nothing at all — with no default
+/// internal encoding the alias was never registered, so the name is
+/// simply unknown, which is what `Encoding.find` reports as nil and
+/// what makes `"x".encode("internal")` a missing converter rather than
+/// a conversion to BINARY.
+fn dynamic_alias_object(globals: &Globals, name: &str) -> Option<Value> {
+    // The names are ASCII and the comparison is case-insensitive, as
+    // every encoding-name lookup is; unlike the rest of them these are
+    // whole names, so the `-` / `_` folding does not apply.
+    let gvar = |n: &str| {
+        globals
+            .get_gvar(IdentId::get_id(n))
+            .filter(|v| !v.is_nil())
+    };
+    if name.eq_ignore_ascii_case("locale") {
+        Some(locale_encoding_value(globals))
+    } else if name.eq_ignore_ascii_case("external") || name.eq_ignore_ascii_case("filesystem") {
+        // `$DEFAULT_EXTERNAL` is seeded at startup and can never be
+        // unset again, so the fallback only covers a `Globals` that
+        // `init_default_external` never ran on.
+        Some(gvar("$DEFAULT_EXTERNAL").unwrap_or_else(|| {
+            let enc_class = encoding_class(globals);
+            globals
+                .store
+                .get_constant_noautoload(enc_class, IdentId::UTF_8)
+                .unwrap_or(Value::nil())
+        }))
+    } else if name.eq_ignore_ascii_case("internal") {
+        gvar("$DEFAULT_INTERNAL")
+    } else {
+        None
+    }
+}
+
 /// Resolve an encoding *name* to its registered `Encoding` object,
 /// preserving object identity (so e.g. `IBM866` stays `IBM866` rather
 /// than collapsing to `ASCII-8BIT` the way the `Encoding` enum does).
 /// Mirrors `Encoding.find` without the `to_str`/error handling.
 pub(super) fn find_encoding_object(globals: &Globals, name: &str) -> Option<Value> {
+    // The four names that stand for a setting rather than for an
+    // encoding are answered from that setting, before any table is
+    // consulted. They have to be: a fixed answer here is what made
+    // `String#encode("locale")` and `File.open(f, "r:locale")` reach
+    // UTF-8 whatever the locale actually was (#1575).
+    if let Some(v) = dynamic_alias_object(globals, name) {
+        return Some(v);
+    }
     let enc_class = encoding_class(globals);
     // The alias table names a constant directly, which answers the
     // common names ("UTF-8", "ASCII-8BIT", …) without touching the rest
@@ -9491,8 +9533,11 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
     // Normalize: uppercase, replace '-' with '_'
     let normalized = name.to_uppercase().replace('-', "_");
     match normalized.as_str() {
-        // Special pseudo-encoding names
-        "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Some("UTF_8"),
+        // `"LOCALE"`, `"EXTERNAL"`, `"FILESYSTEM"` and `"INTERNAL"` are
+        // deliberately absent: they name whatever the interpreter's
+        // settings currently hold, which this table cannot know.
+        // `dynamic_alias_object` answers them from that state before
+        // any caller reaches here (#1575).
 
         // UTF-8 (and aliases sharing the constant — `Encoding::CP65001`
         // is an alias of `Encoding::UTF_8`).
@@ -14736,6 +14781,79 @@ mod tests {
               end
             end
             "##,
+        );
+    }
+
+    #[test]
+    fn the_names_that_stand_for_a_setting_name_what_it_holds() {
+        // `"locale"`, `"external"` and `"filesystem"` are references to
+        // an encoding, not encodings: CRuby keeps them in its encoding
+        // table as aliases it re-points whenever the setting behind
+        // them moves. monoruby had them in a table that answered UTF-8
+        // outright, so every resolver but `Encoding.find` and
+        // `force_encoding` disagreed with the interpreter's own
+        // setting. Asserted against `Encoding.find` rather than against
+        // a name, so the answer does not depend on the locale the test
+        // runs under (#1575).
+        run_test_once(
+            r#"
+              names = %w[locale external filesystem LOCALE External]
+              [
+                names.map { |n| "abc".encode(n).encoding == Encoding.find(n) },
+                names.map { |n| "abc".encode("UTF-8", n).encoding.name },
+                names.map { |n| Encoding::Converter.new("UTF-16BE", n).destination_encoding == Encoding.find(n) },
+                names.map { |n| "abc".dup.force_encoding(n).encoding == Encoding.find(n) },
+                (require "stringio"
+                 io = StringIO.new
+                 io.set_encoding("locale")
+                 io.external_encoding == Encoding.find("locale")),
+                # `"internal"` is the one of the four that can name
+                # nothing at all: with no `default_internal` CRuby never
+                # registered the alias, so the converters call the name
+                # unknown where `rb_to_encoding` still falls back to
+                # BINARY.
+                [Encoding.find("internal"),
+                 ("abc".encode("internal") rescue $!.class.name),
+                 (Encoding::Converter.new("UTF-8", "internal") rescue $!.class.name),
+                 "abc".dup.force_encoding("internal").encoding.name],
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_conversion_to_the_default_external_encoding_can_fail() {
+        // The row that bites in #1575: under a US-ASCII default
+        // external, `"\u00e9".encode("locale")` is a conversion CRuby
+        // refuses because the target cannot hold the character, and it
+        // silently succeeded — returning the string labelled UTF-8.
+        // The settings are assigned here rather than read, so this
+        // holds whatever locale the test runs under.
+        run_test_once(
+            r#"
+              Encoding.default_external = Encoding::US_ASCII
+              a = [
+                %w[external filesystem].map { |n| "abc".encode(n).encoding.name },
+                %w[external filesystem].map { |n| ("\u00e9".encode(n) rescue $!.message) },
+                %w[external filesystem].map { |n| "abc".dup.force_encoding(n).encoding.name },
+              ]
+              Encoding.default_external = Encoding::EUC_JP
+              b = [
+                %w[external filesystem].map { |n| "\u3042".encode(n).bytes },
+                Encoding::Converter.new("UTF-8", "external").destination_encoding.name,
+              ]
+              # `"internal"` resolves once there is a `default_internal`
+              # for it to name — CRuby registers the alias on the
+              # assignment.
+              Encoding.default_internal = Encoding::EUC_JP
+              c = [
+                "abc".encode("internal").encoding.name,
+                Encoding::Converter.new("UTF-8", "internal").destination_encoding.name,
+                Encoding.find("internal").name,
+              ]
+              Encoding.default_internal = nil
+              [a, b, c]
+            "#,
         );
     }
 }

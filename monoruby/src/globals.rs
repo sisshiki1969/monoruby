@@ -1722,7 +1722,11 @@ impl Globals {
         self.gvars.set_simple(name, val);
     }
 
-    pub fn get_gvar(&mut self, name: IdentId) -> Option<Value> {
+    /// Reading a simple global needs no interpreter — only the hooked
+    /// variables do — so this takes `&self`, which is what lets the
+    /// encoding resolvers read `$DEFAULT_EXTERNAL` / `$DEFAULT_INTERNAL`
+    /// from a shared `Globals` (#1575).
+    pub fn get_gvar(&self, name: IdentId) -> Option<Value> {
         self.gvars.get_simple(name)
     }
 

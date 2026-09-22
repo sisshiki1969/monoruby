@@ -1581,6 +1581,7 @@
 50a5f1523f40c371eae52d5bdb271289	[:@b]	class Foo\n              def initialize\n                @a = 1\n     
 50dc75cab4d7c00e25ec748ffac45bee	"[C2, M, C1, M, Object, Kernel, BasicObject]"	module M\n            end\n            class C1\n            end\n     
 50e49aaba2c69f266a784e0d0889006c	["raised", "raised"]	__a = [];__a << (begin; "%c" % 0x110000; rescue => e; "raised"; end);__a << (beg
+50e56f29f8ebc08b8b02e38b008171cc	[[["US-ASCII", "US-ASCII"], ["U+00E9 from UTF-8 to US-ASCII", "U+00E9 from UTF-8 to US-ASCII"], ["US-ASCII", "US-ASCII"]], [[[164, 162], [164, 162]], "EUC-JP"], ["EUC-JP", "EUC-JP", "EUC-JP"]]	Encoding.default_external = Encoding::US_ASCII\n              a = 
 50f041c0fa4c04805e8f32314f15d47d	[[ArgumentError, "invalid encoding name (NUL byte)"], [ArgumentError, "invalid encoding name (NUL byte)"], [ArgumentError, "invalid encoding name (NUL byte)"], [ArgumentError, "invalid encoding name (NUL byte)"]]	__a = [];__a << (("x".dup.force_encoding("null byte") rescue [$!.class, $!.messa
 50f4442f2df797a6034190cc99650473	["file", "directory", "characterSpecial"]	__a = [];__a << (File.ftype("Cargo.toml"));__a << (File.ftype("."));__a << (File
 50f9e525cff9a725780f19b016aaa8f9	[-2.0, -2.0, 8.0, 999]	$flag = false\n        def fmaybe\n          Integer.class_eval("def +(o)
@@ -2427,6 +2428,7 @@
 7e75a8afd937017a0d0de081da6ea053	[[["block (2 levels) in BTL1.m"], ["block (3 levels) in BTL1#inst"]], ["<module:BTL2>", "<module:BTL2>", "<class:BTL3>", "singleton class"], ["block in BTL5.b", "b"], ["Object#btl_m"], "BTL6.f", [true, true]]	__a = [];__a << (module BTL1\n                 def self.m; 1.times { 1.times { re
 7e7c0b1b6e6693f9e664b1a54dbde111	0	m = Object.new\n        def m.==(x); true; end\n        m <=> Object.new\n
 7e7e4d6aef6bf7266adf4b085dc59d23	[:one, :two]	rec = []\n        one = proc { |&arg| arg.call(:one) if arg }\n        tw
+7e8a2f280c81cddad64ba8303ff148a8	[[true, true, true, true, true], ["UTF-8", "UTF-8", "UTF-8", "UTF-8", "UTF-8"], [true, true, true, true, true], [true, true, true, true, true], true, [nil, "Encoding::ConverterNotFoundError", "Encoding::ConverterNotFoundError", "ASCII-8BIT"]]	names = %w[locale external filesystem LOCALE External]\n          
 7e96f5f901b2f6fae7a6ccede1e6bf9c	[true, "a b c"]	s1 = "a b c"\n            s2 = s1.dup\n            ok = false\n       
 7ea4a8b6207a7718a57b9eda8672c800	[[1.5, 2, 3], [1, 1180591620717411303424, 1208925819614629174706176], [:a, :b, :c], ArgumentError, ArgumentError, [], [7]]	mixed = [2, 1.5, 3]\n        bigs = [2**70, 1, 2**80]\n        syms = [:c
 7eb0d4817551a97def8fe2bf1a9f7035	[[0, 2, 4, 6], 106]	class FwdA\n          attr_reader :a\n          def initialize(n)\n       
