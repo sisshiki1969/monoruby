@@ -1260,6 +1260,7 @@
 42b5a41ba81c93ef56cb842bd0de353a	[4, 5, 6, 7, 8, 9]	r = []\n        10.times { |i| r << i if (i == 4)...(i == 4) }\n        r
 42e8768ea44a7e6af0bc45fcd546d033	["hello ", nil, "aabc"]	__a = [];__a << (s = "hello world"; s.slice!("world"); s);__a << (s = "hello"; s
 42eae55c860ab92e208765fba1feebd0	[:g, :f, :g, :f]	class C; def f; 1; end; alias g f; end\n            um  = C.instance
+42fe3d90dd01da3f8d97e1ecd40dc2b3	[["Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true, [63]], ["Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true, [63]], ["Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true, [63]], [[176, 161], [176, 161], true, [176, 161]], ["Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true, [63]], ["Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true, [63]], ["Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true, [63]], ["Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true, [63]]]	["EUC-KR", "GB2312"].flat_map do |e|\n              [0xC12A, 0xAC02,
 43287f7f969302f66d6508b01f9391ee	true	path = "/tmp/monoruby_test_link_eexist_#{Process.pid}_#{rand(100000
 432917dce47e57aa2c69d28da5250506	["AAAABB", "BB", nil, nil, "AAAABBBB", [], ["AAA", "AAA"], "", "negative length -1 given"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_r1_#{
 433c417c950d06949c049cf368ef9844	[0, 1, 1, 1, 2, 2]	a = Enumerator.new do |y|\n                3.times do |i|\n          
@@ -3128,6 +3129,7 @@ a6e76941b428102c2ba4a628d8639080	1000	S = Struct.new(:counter)\n            \n\n
 a6f799b2f3bd4b9cbb9608e44dd52dbc	true	Process.warmup
 a6fce0efd0e7b6acce8a4c8bd80e48f7	["expression", "expression", "expression", "expression", "expression", "expression", "method", "nil", "method", "nil"]	__a = [];__a << (a = 1; b = 2; defined?(a && b));__a << (defined?(1 || 2));__a <
 a6ffb30dedbdb58fc281fe6682f6497c	[3, :first_store_raises]	class Q\n          def fill(i)\n            @a = i\n            @b = i\n   
+a702b1f07f84f116c34765dbaf727c91	[:undefined_conversion, [234, 176, 129], [176, 161], [:undefined_conversion, [85, 84, 70, 45, 56], [69, 85, 67, 45, 75, 82], [236, 132, 170], []], :destination_buffer_full, [176, 161, 176], []]	ec = Encoding::Converter.new("UTF-8", "EUC-KR")\n            s = ("\\
 a71e54a7d566380aaed8baaea63868be	99	def make_proc\n          Proc.new { yield }\n        end\n        def get_
 a7842c388edf1fd9f074cafd5774cb4e	23025.0	def g\n          a = 0.0; c = 2.0\n          i = 0\n          while i < 30
 a7bbd186c86ac3ce9091503517f8a4c7	[true, true, false]	class Foo\n              def bar; 1; end\n              alias_method 
@@ -3280,6 +3282,7 @@ aea7097b4756187bea544ff7270e0b0b	[MonoRubyExceptionTestErr, "new message", :boom
 aeb1f2ef69ff2c6d602bc90ff2553233	""	"".downcase
 aed061dc6e19d21ef29d6c8d825a05cb	"ASCII-8BIT"	Regexp.union(/abc/, /[\\x00-\\x7f]/n, /[\\x80-\\xBF]/n).encoding.to_s
 aed53099ff3853e38b0609e15583d008	[true, true]	S = Struct.new(:a, :b)\n            \n\n            x = S.new(nil, "ta
+aee8d539f7b95e0ea157839f7f752af9	[["Encoding::UndefinedConversionError", nil], ["Encoding::UndefinedConversionError", nil], ["Encoding::UndefinedConversionError", nil], [[152, 252], [49450]], [[129, 65], [44034]]]	[["EUC-KR", 0xC12A], ["EUC-KR", 0xAC02], ["GB2312", 0x02CA],\n      
 aeef9bd39cae0a88c4fb5f9174a5dbbf	["NoArg", "wrong number of arguments (given 1, expected 0)", "ArgumentError", "BasicObject"]	class NoArg; end\n            res = []\n            res << NoArg.new.
 af01a63acba6bf69555376a4548815fe	["sleep", "aborting", false]	r = []\n            q = []\n            t = Thread.new { begin; q << 
 af02b51b0c19215887e33b9c73132b67	["myname pv\\n", ["ArgumentError", "expected true or false as unsetenv_others: 1"], ["ArgumentError", "expected true or false as unsetenv_others: \\"true\\""], ["ArgumentError", "expected true or false as close_others: 1"], :ok]	r = []\n            # [cmdname, argv0]: the child runs `cmdname` but
@@ -4507,6 +4510,7 @@ efdf13ba0236082dfdc49bc9ac7068d0	[0, nil, nil, [2, 2, "one", "two"], [true, true
 efe92284cee725e83300f8c7cae98357	[[[255, 128], "ASCII-8BIT", [0, 3]], [[255], [0, 128, 3]], [[255, 128], [0, 3]]]	__a = [];__a << (s = [0, 255, 128, 3].pack("C*"); r = s.slice!(1, 2); [r.bytes, 
 efee58d26b26212a55202a9cf2bc294e	[:a, :b, :c]	Struct.new(:a, :b, :c).new.members\n        
 f02372e49e9616a18cf3432bddd7f5f4	[1, :done]	t = Thread.new do\n              f = Fiber.new { Fiber.yield 1; :don
+f0311ed62e2bf513347aae3cb58a9ff4	[["EUC-KR", 0], ["GB2312", 0], ["CP949", 0], ["GBK", 0], ["Big5", 0], ["EUC-JP", 0], ["Shift_JIS", 0]]	["EUC-KR", "GB2312", "CP949", "GBK", "Big5", "EUC-JP", "Shift_JIS"]
 f03b1d37814a9387de9ee11f8651b4db	[1, true, :utf8, 2]	a = "abc"\n        b = "abc".dup.force_encoding("ASCII-8BIT")\n        h 
 f03f9d7621e548a53ac7caae3e972480	[:a, :b, :c]	module M; attr_reader :v; end\n        class A; include M; def initializ
 f053ea7381008dbc0e2209151231a4ec	4	a=3;\n        if a==1;\n          3\n        else\n          4\n        end
