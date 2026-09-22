@@ -1,0 +1,243 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Regenerates monoruby/src/builtins/encoding_carrier.rs from CRuby's own
+# tables. Like bin/gen-cjk-tables, the output is checked in rather than
+# built: these mappings are frozen vendor tables for Japanese
+# feature-phone mail and change never.
+#
+#   bin/gen-carrier-tables > monoruby/src/builtins/encoding_carrier.rs
+#   cargo build
+#
+# Unlike that generator this one needs no monoruby baseline, because the
+# two bases it measures against — UTF-8 and Windows-31J — already answer
+# exactly as CRuby does (checked cell for cell and scalar for scalar
+# before this was written). Everything here is the difference from them.
+#
+# The two families need different shapes. `UTF8-*` is UTF-8's bytes
+# throughout, so its table is keyed on characters at both ends.
+# `SJIS-*` is Windows-31J's byte structure, and its reading is keyed on
+# the *cell*: Windows-31J's table is many-to-one, and SoftBank reads two
+# cells that Windows-31J calls the same character as different things.
+# Its writing is keyed on the character, as every encoder is, and stores
+# the bytes rather than characters, because those same many-to-one cells
+# mean a character cannot always be written by handing it back to
+# Windows-31J.
+
+CARRIERS = %w[DoCoMo KDDI SoftBank]
+
+SURROGATES = 0xD800..0xDFFF
+
+def scalars
+  return to_enum(:scalars) unless block_given?
+  (0x80..0x10FFFF).each do |cp|
+    next if SURROGATES.cover?(cp)
+    yield cp
+  end
+end
+
+def cells
+  return to_enum(:cells) unless block_given?
+  0x81.upto(0xFC) do |b1|
+    0x40.upto(0xFC) do |b2|
+      next if b2 == 0x7F
+      yield b1, b2
+    end
+  end
+end
+
+# What `enc` writes for each character, and the characters it cannot.
+def encode_map(enc)
+  out = {}
+  refused = []
+  scalars do |cp|
+    s = ([cp].pack("U") rescue next)
+    b = (s.encode(enc) rescue (refused << cp; next))
+    out[cp] = b
+  end
+  [out, refused]
+end
+
+# What `enc` reads each two-byte cell as, and the cells it holds no
+# character for. A cell the byte structure itself rejects is neither.
+def cell_map(enc)
+  out = {}
+  refused = []
+  cells do |b1, b2|
+    s = [b1, b2].pack("C*").force_encoding(enc)
+    next unless s.valid_encoding?
+    cp = (s.encode("UTF-8").unpack("U*") rescue (refused << ((b1 << 8) | b2); next))
+    out[(b1 << 8) | b2] = cp
+  end
+  [out, refused]
+end
+
+# What `enc` reads each character's own UTF-8 bytes as. Only the
+# `UTF8-*` three are asked this, and only they can be: their bytes are
+# UTF-8's.
+def char_map(enc)
+  out = {}
+  refused = []
+  scalars do |cp|
+    s = ([cp].pack("U") rescue next)
+    t = s.dup.force_encoding(enc)
+    next unless t.valid_encoding?
+    u = (t.encode("UTF-8") rescue (refused << cp; next))
+    out[cp] = u.unpack("U*")
+  end
+  [out, refused]
+end
+
+def pair(cps)
+  raise "#{cps.inspect} is more than two characters" if cps.size > 2
+  [cps[0], cps[1] || 0]
+end
+
+# The bytes packed big-endian, as `encoding_cjk.rs` packs them: a lead
+# is never below 0x81, so a value below 0x100 is one byte and a value
+# below 0x1_0000 is two.
+def pack_bytes(bytes)
+  raise "#{bytes.inspect} is more than four bytes" if bytes.size > 4
+  bytes.inject(0) { |acc, b| (acc << 8) | b }
+end
+
+# A doc comment cannot sit on a field of a struct *expression*, so the
+# per-field notes in the statics below are ordinary line comments.
+def rust_triples(name, doc, entries)
+  puts "    // #{doc}"
+  puts "    #{name}: &["
+  entries.sort_by(&:first).each_slice(4) do |slice|
+    puts "        #{slice.map { |k, a, b| "(#{k}, #{a}, #{b})," }.join(' ')}"
+  end
+  puts "    ],"
+end
+
+def rust_pairs(name, doc, entries)
+  puts "    // #{doc}"
+  puts "    #{name}: &["
+  entries.sort_by(&:first).each_slice(6) do |slice|
+    puts "        #{slice.map { |k, v| "(#{k}, #{v})," }.join(' ')}"
+  end
+  puts "    ],"
+end
+
+def rust_list(name, doc, values)
+  puts "    // #{doc}"
+  puts "    #{name}: &["
+  values.sort.each_slice(12) do |slice|
+    puts "        #{slice.map { |v| "#{v}," }.join(' ')}"
+  end
+  puts "    ],"
+end
+
+warn "reading the bases..."
+utf8_enc, = encode_map("UTF-8")
+w31_enc, w31_enc_refused = encode_map("Windows-31J")
+w31_cells, = cell_map("Windows-31J")
+
+tables = {}
+
+CARRIERS.each do |c|
+  warn "UTF8-#{c}..."
+  enc, enc_refused = encode_map("UTF8-#{c}")
+  dec, dec_refused = char_map("UTF8-#{c}")
+  # Against UTF-8: a character it writes as itself is no difference.
+  e = enc.filter_map { |cp, s| [cp, *pair(s.b.unpack("U*"))] if s.b != utf8_enc[cp].b }
+  d = dec.filter_map { |cp, cps| [cp, *pair(cps)] if cps != [cp] }
+  tables["UTF8-#{c}"] = { kind: :utf8, encode: e, encode_reject: enc_refused,
+                          decode: d, decode_reject: dec_refused }
+
+  warn "SJIS-#{c}..."
+  senc, senc_refused = encode_map("SJIS-#{c}")
+  scells, scell_refused = cell_map("SJIS-#{c}")
+  # Against Windows-31J.
+  se = senc.filter_map { |cp, s| [cp, pack_bytes(s.bytes)] if w31_enc[cp].nil? || s.b != w31_enc[cp].b }
+  se_rej = senc_refused - w31_enc_refused
+  sd = scells.filter_map { |cell, cps| [cell, *pair(cps)] if w31_cells[cell] != cps }
+  sd_rej = scell_refused.select { |cell| w31_cells.key?(cell) }
+  extra = scells.keys - w31_cells.keys
+  raise "SJIS-#{c} holds #{extra.size} cells Windows-31J does not" unless extra.empty?
+  tables["SJIS-#{c}"] = { kind: :sjis, encode: se, encode_reject: se_rej,
+                          decode: sd, decode_reject: sd_rej }
+end
+
+puts <<~HEAD
+  //! Generated by bin/gen-carrier-tables from CRuby #{RUBY_VERSION}. Do not edit.
+  //!
+  //! The six carrier-emoji encodings, as the difference from the two
+  //! encodings they are built on (#1573).
+  //!
+  //! Each is a Japanese carrier's emoji block bolted onto a base:
+  //! `UTF8-DoCoMo` is UTF-8 with a few hundred characters spelled as
+  //! DoCoMo's private-use emoji instead, and `SJIS-DoCoMo` is
+  //! Windows-31J with the cells those emoji live in reading as the
+  //! characters they stand for. Storage, iteration and validity are the
+  //! base's throughout — only a conversion tells them apart.
+  //!
+  //! The two families are keyed differently because their bases are.
+  //! A `UTF8-*` table is keyed on characters at both ends. An `SJIS-*`
+  //! table reads by *cell*: Windows-31J's own table is many-to-one, and
+  //! `SJIS-SoftBank` reads two cells it calls the same character as
+  //! different things. It writes by character, as every encoder does,
+  //! and stores bytes rather than characters for the same reason.
+HEAD
+
+puts <<~STRUCT
+
+  /// A `UTF8-*` carrier: UTF-8's bytes, with a block of characters
+  /// spelled as the carrier's private-use emoji.
+  pub(crate) struct Utf8Carrier {
+      /// Characters the carrier spells elsewhere, and where. The second
+      /// character is `0` where there is only one.
+      pub(crate) encode: &'static [(u32, u32, u32)],
+      /// Characters the carrier cannot spell at all.
+      pub(crate) encode_reject: &'static [u32],
+      /// The carrier's own characters, and what they mean.
+      pub(crate) decode: &'static [(u32, u32, u32)],
+      /// Characters the carrier holds no meaning for.
+      pub(crate) decode_reject: &'static [u32],
+  }
+
+  /// An `SJIS-*` carrier: Windows-31J's cells, with a block of them
+  /// reading as emoji and a block of characters writing into them.
+  pub(crate) struct SjisCarrier {
+      /// Characters the carrier writes elsewhere than Windows-31J, and
+      /// the bytes it writes, packed big-endian: a lead is never below
+      /// `0x81`, so a value below `0x100` is one byte.
+      pub(crate) encode: &'static [(u32, u32)],
+      /// Characters Windows-31J writes and the carrier cannot.
+      pub(crate) encode_reject: &'static [u32],
+      /// Cells the carrier reads as something other than Windows-31J
+      /// does. The second character is `0` where there is only one.
+      pub(crate) decode: &'static [(u32, u32, u32)],
+      /// Cells Windows-31J holds a character for and the carrier does
+      /// not.
+      pub(crate) decode_reject: &'static [u32],
+  }
+STRUCT
+
+CARRIERS.each do |c|
+  %w[UTF8 SJIS].each do |fam|
+    name = "#{fam}-#{c}"
+    t = tables[name]
+    konst = "#{fam}_#{c.upcase}"
+    ty = fam == "UTF8" ? "Utf8Carrier" : "SjisCarrier"
+    puts
+    puts "/// `#{name}`'s difference from #{fam == 'UTF8' ? 'UTF-8' : 'Windows-31J'}."
+    puts "pub(crate) static #{konst}: #{ty} = #{ty} {"
+    if fam == "UTF8"
+      rust_triples("encode", "#{t[:encode].size} characters DoCoMo-style emoji stand in for.".sub("DoCoMo-style", "#{c}'s"), t[:encode])
+      rust_list("encode_reject", "#{t[:encode_reject].size} characters #{name} cannot spell.", t[:encode_reject])
+      rust_triples("decode", "#{t[:decode].size} of #{c}'s own characters.", t[:decode])
+      rust_list("decode_reject", "#{t[:decode_reject].size} characters #{name} holds no meaning for.", t[:decode_reject])
+    else
+      rust_pairs("encode", "#{t[:encode].size} characters #{name} writes into #{c}'s cells.", t[:encode])
+      rust_list("encode_reject", "#{t[:encode_reject].size} characters Windows-31J writes and #{name} cannot.", t[:encode_reject])
+      rust_triples("decode", "#{t[:decode].size} cells #{name} reads as #{c}'s emoji.", t[:decode])
+      rust_list("decode_reject", "#{t[:decode_reject].size} cells Windows-31J holds and #{name} does not.", t[:decode_reject])
+    end
+    puts "};"
+    warn "#{name}: encode=#{t[:encode].size} encode_reject=#{t[:encode_reject].size} " \
+         "decode=#{t[:decode].size} decode_reject=#{t[:decode_reject].size}"
+  end
+end

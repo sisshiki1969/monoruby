@@ -84,6 +84,14 @@ pub(super) fn canonical_encoding_name(name: &str) -> &'static str {
         // (#1555).
         "EBCDIC_CP_US" => "IBM037",
         "Windows_874" => "Windows-874",
+        // The carrier sets, whose names carry the vendor's own
+        // capitalisation (#1573).
+        "SJIS_DOCOMO" => "SJIS-DoCoMo",
+        "SJIS_KDDI" => "SJIS-KDDI",
+        "SJIS_SOFTBANK" => "SJIS-SoftBank",
+        "UTF8_DOCOMO" => "UTF8-DoCoMo",
+        "UTF8_KDDI" => "UTF8-KDDI",
+        "UTF8_SOFTBANK" => "UTF8-SoftBank",
         "ISO_2022_JP_2" => "ISO-2022-JP-2",
         "ISO_2022_JP_KDDI" => "ISO-2022-JP-KDDI",
         // CRuby spells the Mac OS script encodings with a lowercase
@@ -254,6 +262,15 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         // surrogate pairs. It has a byte walk and a codec of its own
         // (#1562).
         "CESU_8",
+        // The six carrier-emoji sets: their bases' bytes throughout,
+        // with a block of characters spelled as one Japanese
+        // carrier's emoji (#1573).
+        "SJIS_DOCOMO",
+        "SJIS_KDDI",
+        "SJIS_SOFTBANK",
+        "UTF8_DOCOMO",
+        "UTF8_KDDI",
+        "UTF8_SOFTBANK",
     ] {
         let canonical: &'static str = canonical_encoding_name(name);
         // If a constant with the same canonical name has already been
@@ -3638,9 +3655,7 @@ pub(crate) fn encoding_constant_name(enc: Encoding) -> &'static str {
         Encoding::Iso8859(16) => "ISO_8859_16",
         Encoding::Iso8859(_) => "ISO_8859_1",
         Encoding::EucJp(i) => crate::value::euc_jp_const_name(i),
-        Encoding::Sjis(0) => "SHIFT_JIS",
-        Encoding::Sjis(2) => "MacJapanese",
-        Encoding::Sjis(_) => "Windows_31J",
+        Encoding::Sjis(i) => crate::value::sjis_const_name(i),
         Encoding::Iso2022Jp => "ISO_2022_JP",
         // Name-preserving byte encodings: map the canonical display
         // name back to its registered `Encoding::<CONST>` identifier.
@@ -8411,6 +8426,12 @@ const ENCODING_NAMES: &[(&str, &[&str])] = &[
     ("CP949", &[]),
     ("TIS-620", &[]),
     ("MacJapanese", &["MacJapan"]),
+    ("UTF8-DoCoMo", &[]),
+    ("SJIS-DoCoMo", &[]),
+    ("UTF8-KDDI", &[]),
+    ("SJIS-KDDI", &[]),
+    ("UTF8-SoftBank", &[]),
+    ("SJIS-SoftBank", &[]),
     ("macRoman", &[]),
     ("macCyrillic", &[]),
     ("macCentEuro", &[]),

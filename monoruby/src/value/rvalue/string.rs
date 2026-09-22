@@ -487,7 +487,17 @@ pub(crate) const UTF8_VARIANTS: &[(&str, &str)] = &[
     // Apple's HFS+ form: canonically decomposed, minus the codepoints
     // it leaves alone (see `UTF8_MAC_NO_DECOMPOSE`).
     ("UTF8-MAC", "UTF8_MAC"),
+    // The carrier sets: UTF-8's bytes, with a block of characters
+    // spelled as one Japanese carrier's private-use emoji (#1573).
+    ("UTF8-DoCoMo", "UTF8_DOCOMO"),
+    ("UTF8-KDDI", "UTF8_KDDI"),
+    ("UTF8-SoftBank", "UTF8_SOFTBANK"),
 ];
+
+/// The three carrier members of [`UTF8_VARIANTS`].
+pub(crate) const UTF8_DOCOMO: u8 = utf8_variant_index("UTF8_DOCOMO");
+pub(crate) const UTF8_KDDI: u8 = utf8_variant_index("UTF8_KDDI");
+pub(crate) const UTF8_SOFTBANK: u8 = utf8_variant_index("UTF8_SOFTBANK");
 
 /// Index of `UTF8-MAC` in [`UTF8_VARIANTS`].
 pub(crate) const UTF8_MAC: u8 = utf8_variant_index("UTF8_MAC");
@@ -757,6 +767,41 @@ pub(crate) fn cesu8_to_utf8(bytes: &[u8]) -> Option<String> {
     Some(out)
 }
 
+
+pub(crate) const SJIS_VARIANTS: &[(&str, &str)] = &[
+    ("Shift_JIS", "SHIFT_JIS"),
+    ("Windows-31J", "WINDOWS_31J"),
+    // Rides the Shift_JIS walk and has no converter of its own in
+    // CRuby either, so only its name is kept apart (#1471).
+    ("MacJapanese", "MACJAPANESE"),
+    // The carrier sets: Windows-31J's cells, with a block of them
+    // reading as one Japanese carrier's emoji (#1573).
+    ("SJIS-DoCoMo", "SJIS_DOCOMO"),
+    ("SJIS-KDDI", "SJIS_KDDI"),
+    ("SJIS-SoftBank", "SJIS_SOFTBANK"),
+];
+
+/// Index of `Windows-31J` in [`SJIS_VARIANTS`] — the member whose
+/// cells the carriers are a difference from.
+pub(crate) const WINDOWS_31J: u8 = sjis_variant_index("WINDOWS_31J");
+/// Index of `MacJapanese`, which has no converter at all.
+pub(crate) const MACJAPANESE: u8 = sjis_variant_index("MACJAPANESE");
+/// The three carrier members, in [`SJIS_VARIANTS`] order.
+pub(crate) const SJIS_DOCOMO: u8 = sjis_variant_index("SJIS_DOCOMO");
+pub(crate) const SJIS_KDDI: u8 = sjis_variant_index("SJIS_KDDI");
+pub(crate) const SJIS_SOFTBANK: u8 = sjis_variant_index("SJIS_SOFTBANK");
+
+/// Look up a [`SJIS_VARIANTS`] index by its constant suffix.
+pub(crate) const fn sjis_variant_index(konst: &str) -> u8 {
+    let mut i = 0;
+    while i < SJIS_VARIANTS.len() {
+        if const_str_eq(SJIS_VARIANTS[i].1.as_bytes(), konst.as_bytes()) {
+            return i as u8;
+        }
+        i += 1;
+    }
+    panic!("SJIS_VARIANTS has no such constant suffix")
+}
 
 pub(crate) const EUC_JP_VARIANTS: &[(&str, &str)] = &[
     ("EUC-JP", "EUC_JP"),
@@ -1229,6 +1274,11 @@ pub(crate) fn euc_jp_const_name(index: u8) -> &'static str {
     EUC_JP_VARIANTS[index as usize].1
 }
 
+/// The `Encoding::<CONST>` suffix for an [`Encoding::Sjis`] payload.
+pub(crate) fn sjis_const_name(index: u8) -> &'static str {
+    SJIS_VARIANTS[index as usize].1
+}
+
 impl Encoding {
     /// True if the encoding is a strict superset of US-ASCII for
     /// 7-bit bytes — every byte 0..0x80 represents the same ASCII
@@ -1319,10 +1369,7 @@ impl Encoding {
             Encoding::Iso8859(16) => "ISO-8859-16",
             Encoding::Iso8859(_) => "ISO-8859-1",
             Encoding::EucJp(i) => EUC_JP_VARIANTS[i as usize].0,
-            // 0 = canonical Shift_JIS, 1 = Windows-31J / CP932.
-            Encoding::Sjis(0) => "Shift_JIS",
-            Encoding::Sjis(2) => "MacJapanese",
-            Encoding::Sjis(_) => "Windows-31J",
+            Encoding::Sjis(i) => SJIS_VARIANTS[i as usize].0,
             Encoding::Iso2022Jp => "ISO-2022-JP",
         }
     }
@@ -1516,6 +1563,11 @@ impl Encoding {
             // every storage and iteration path; what differs is the
             // name and the decomposition a conversion applies (#1562).
             "UTF8_MAC" | "UTF_8_MAC" | "UTF_8_HFS" => Ok(Encoding::Utf8(UTF8_MAC)),
+            // UTF-8's bytes throughout; a conversion spells a block of
+            // characters as the carrier's own emoji instead (#1573).
+            "UTF8_DOCOMO" => Ok(Encoding::Utf8(UTF8_DOCOMO)),
+            "UTF8_KDDI" => Ok(Encoding::Utf8(UTF8_KDDI)),
+            "UTF8_SOFTBANK" => Ok(Encoding::Utf8(UTF8_SOFTBANK)),
             // CESU-8 is not a UTF-8 variant: a four-byte sequence is
             // invalid in it and a surrogate pair is one character, so
             // it has a walk of its own ([`cesu8_precise_len`]) and
@@ -1588,14 +1640,19 @@ impl Encoding {
             // `ISO-2022-JP-2004` is not a Ruby encoding at all.
             // Registering the real ones is #1555.
             "ISO_2022_JP" | "ISO2022_JP" => Ok(Encoding::Iso2022Jp),
-            "SHIFT_JIS" => Ok(Encoding::Sjis(0)),
+            "SHIFT_JIS" => Ok(Encoding::Sjis(sjis_variant_index("SHIFT_JIS"))),
             // MacJapanese is a Shift_JIS variant. monoruby runs it on
             // the Shift_JIS codec and keeps only its name apart, as it
             // does for Windows-31J (#1471).
-            "MACJAPANESE" | "MACJAPAN" => Ok(Encoding::Sjis(2)),
+            "MACJAPANESE" | "MACJAPAN" => Ok(Encoding::Sjis(MACJAPANESE)),
+            // The carrier sets ride Windows-31J's walk and differ from
+            // it only in what a conversion does (#1573).
+            "SJIS_DOCOMO" => Ok(Encoding::Sjis(SJIS_DOCOMO)),
+            "SJIS_KDDI" => Ok(Encoding::Sjis(SJIS_KDDI)),
+            "SJIS_SOFTBANK" => Ok(Encoding::Sjis(SJIS_SOFTBANK)),
             // CRuby's "SJIS" is an alias of Windows-31J, not of Shift_JIS.
             "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" | "PCK" | "SJIS" => {
-                Ok(Encoding::Sjis(1))
+                Ok(Encoding::Sjis(WINDOWS_31J))
             }
 
             // ASCII-compatible national byte encodings without a native

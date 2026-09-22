@@ -41,7 +41,7 @@ pub use string::{
     STRING_TY_PAYLOAD_TAG, char_bytes_code, map_bytes_to_utf8,
 };
 pub(crate) use string::{
-    MbcPiece, PreciseLen, char_count, char_width_at, euc_jp_const_name, eucjp_char_width,
+    MbcPiece, PreciseLen, char_count, char_width_at, euc_jp_const_name, eucjp_char_width, sjis_const_name,
     CESU_8, UTF8_MAC, cesu8_precise_len, cesu8_to_utf8, mac_to_utf8, utf8_const_name,
     utf8_to_cesu8, utf8_to_mac, CESU8_MAX_LEN,
     eucjp_precise_len, IllFormed, mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width,
