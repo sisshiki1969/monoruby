@@ -2456,6 +2456,12 @@ pub(super) fn transcode_bytes_with_opts(
     store: &Store,
 ) -> Result<Vec<u8>> {
     use crate::value::Encoding as E;
+    // A replacement the destination cannot spell is refused here,
+    // before any of the input is read, because that is where CRuby
+    // opens the converter (#1566).
+    if opens_a_converter(src_bytes, src_enc, dst_enc, opts, false) {
+        validate_replacement(opts, src_enc, dst_enc, None, store)?;
+    }
     // `invalid: :replace` has work to do even when the encodings match,
     // so a broken string with a usable codec skips the identity path
     // and goes through decode / re-encode to be scrubbed.
@@ -3158,6 +3164,12 @@ fn handle_xml_option(
         )));
     };
     let bytes = lfp.self_val().as_rstring_inner().as_bytes().to_vec();
+    // The decorator is work of its own, so a converter is opened even
+    // for text that would otherwise pass straight through — and its
+    // `replace:` is checked with it (#1566).
+    let src_enc = lfp.self_val().as_rstring_inner().encoding();
+    let opts = parse_transcode_opts(lfp);
+    validate_replacement(&opts, src_enc, dst_enc, Some(mode), &globals.store)?;
     let s = String::from_utf8_lossy(&bytes);
     let mut out = String::with_capacity(s.len() + 2);
     if matches!(mode, XmlMode::Attr) {
@@ -4072,6 +4084,100 @@ fn converter_transcode_opts(globals: &Globals, recv: Value) -> TranscodeOpts {
     opts
 }
 
+/// Whether a conversion opens a converter at all, which is when
+/// CRuby validates the `replace:` string (#1566). `String#encode`
+/// hands the bytes straight back when the source and destination
+/// agree, and when both are ASCII-compatible and the source is
+/// 7-bit — and a replacement it never had to look at goes
+/// unexamined. A decorator is work of its own, so it opens one
+/// whatever the source looks like.
+fn opens_a_converter(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    xml: bool,
+) -> bool {
+    if src_enc == dst_enc {
+        return false;
+    }
+    if opts.has_newline() || xml {
+        return true;
+    }
+    !(src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() && src_bytes.is_ascii())
+}
+
+/// The decorators CRuby names after the encodings when it describes a
+/// converter, in its order.
+fn decorator_names(opts: &TranscodeOpts, xml: Option<XmlMode>) -> Vec<&'static str> {
+    let mut out = vec![];
+    if opts.universal_newline {
+        out.push("universal_newline");
+    }
+    if opts.crlf_newline {
+        out.push("crlf_newline");
+    }
+    if opts.cr_newline {
+        out.push("cr_newline");
+    }
+    match xml {
+        Some(XmlMode::Text) => out.push("xml_text"),
+        Some(XmlMode::Attr) => {
+            out.push("xml_attr_content");
+            out.push("xml_attr_quote");
+        }
+        None => {}
+    }
+    out
+}
+
+/// Refuse a `replace:` string the destination cannot spell (#1566).
+///
+/// CRuby converts the replacement into the destination when it opens
+/// the converter, and a failure there is reported as a converter that
+/// does not exist rather than as a character with no cell — so the
+/// error names the pair and not the character, and arrives before any
+/// of the input is looked at. Dropping the replacement instead, as
+/// this did, turned a substitution into silence: the character with
+/// no cell went missing and so did the thing meant to stand for it.
+fn validate_replacement(
+    opts: &TranscodeOpts,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    xml: Option<XmlMode>,
+    store: &Store,
+) -> Result<()> {
+    let Some(repl) = opts.replace.as_deref() else {
+        return Ok(());
+    };
+    if transcode_bytes_with_opts(
+        repl.as_bytes(),
+        crate::value::Encoding::UTF8,
+        dst_enc,
+        &TranscodeOpts::default(),
+        store,
+    )
+    .is_ok()
+    {
+        return Ok(());
+    }
+    let decorators = decorator_names(opts, xml);
+    let with = if decorators.is_empty() {
+        String::new()
+    } else {
+        format!(" with {}", decorators.join(","))
+    };
+    Err(MonorubyErr::converter_not_found_error(
+        store,
+        format!(
+            "code converter not found ({} to {}{})",
+            src_enc.name(),
+            dst_enc.name(),
+            with
+        ),
+    ))
+}
+
 /// Validate that `(src, dst)` is a transcoder monoruby can run.
 /// Raises `Encoding::ConverterNotFoundError` for anything
 /// `encoding_rs` doesn't cover (UTF-32, dummy CRuby encodings).
@@ -4279,6 +4385,19 @@ fn converter_new(
                     } else {
                         rep.coerce_to_string(vm, globals)?
                     };
+                    // A converter is always opened here, so the
+                    // replacement is checked against the destination
+                    // now rather than at the first substitution
+                    // (#1566). The flags carry the decorators the
+                    // message names.
+                    let decorators = TranscodeOpts {
+                        universal_newline: flags & 0x0000_0100 != 0,
+                        crlf_newline: flags & 0x0000_1000 != 0,
+                        cr_newline: flags & 0x0000_2000 != 0,
+                        replace: Some(s.clone()),
+                        ..Default::default()
+                    };
+                    validate_replacement(&decorators, src, dst, None, &globals.store)?;
                     let mut inner = crate::value::RStringInner::from_string_scanned(s);
                     inner.set_encoding(dst);
                     replace_inner = Some(inner);
@@ -4397,33 +4516,25 @@ fn converter_replacement_set(
     let s = arg
         .is_str()
         .ok_or_else(|| MonorubyErr::typeerr(format!("no implicit conversion into String")))?;
-    // Validate that the new replacement is encodable in dst.
+    // The new replacement has to be one the destination can spell.
+    // Asking the pipeline rather than the codec is what makes this
+    // agree with `#encode` — the codec's repertoire is wider than
+    // several of these encodings (#1544) — and CRuby names neither
+    // the character nor the pair here (#1566).
     let recv = lfp.self_val();
     let dst = converter_get_dst(globals, recv);
-    if let Some(dst_rs) = encoding_to_rs(dst) {
-        let (_bytes, _, encode_err) = dst_rs.encode(s);
-        if encode_err {
-            return Err(MonorubyErr::undefined_conversion_error(
-                &globals.store,
-                format!(
-                    "U+{:04X} from UTF-8 to {}",
-                    s.chars()
-                        .find(|c| !c.is_ascii())
-                        .map(|c| c as u32)
-                        .unwrap_or(0),
-                    dst.name()
-                ),
-            ));
-        }
-    } else if dst == crate::value::Encoding::UsAscii && !s.is_ascii() {
-        // `encoding_rs` has no US-ASCII encoder; a non-ASCII
-        // replacement is unrepresentable there (CRuby raises).
+    if transcode_bytes_with_opts(
+        s.as_bytes(),
+        crate::value::Encoding::UTF8,
+        dst,
+        &TranscodeOpts::default(),
+        &globals.store,
+    )
+    .is_err()
+    {
         return Err(MonorubyErr::undefined_conversion_error(
             &globals.store,
-            format!(
-                "U+{:04X} from UTF-8 to US-ASCII",
-                s.chars().find(|c| !c.is_ascii()).map(|c| c as u32).unwrap_or(0)
-            ),
+            "replacement character setup failed".to_string(),
         ));
     }
     // Tag the stored value with the destination's encoding so a
@@ -11452,6 +11563,72 @@ mod tests {
                rescue => e
                  e.class.to_s
                end]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_replacement_the_destination_cannot_spell_is_refused() {
+        // CRuby converts the `replace:` string into the destination
+        // when it opens the converter, and a failure there is a
+        // converter that does not exist rather than a character with
+        // no cell. Dropping it instead turned a substitution into
+        // silence — the character went missing and so did the thing
+        // meant to stand for it (#1566).
+        crate::tests::run_test_once(
+            r##"
+            bad = [0x1D11E].pack("U")
+            r = []
+            r << ("\u{1F600}".encode("Big5", undef: :replace, replace: bad) rescue [$!.class.to_s, $!.message])
+            r << ("\u{4E00}".encode("Big5", undef: :replace, replace: bad) rescue [$!.class.to_s, $!.message])
+            r << ("\u{4E00}".encode("Big5", invalid: :replace, replace: bad) rescue [$!.class.to_s, $!.message])
+            r << (Encoding::Converter.new("UTF-8", "Big5", undef: :replace, replace: bad) rescue [$!.class.to_s, $!.message])
+            r << (Encoding::Converter.new("UTF-8", "Big5", replace: bad) rescue [$!.class.to_s, $!.message])
+            r
+            "##,
+        );
+        // Where CRuby opens no converter it never looks at the
+        // replacement: the same string and the same options go
+        // through when the source needs no conversion.
+        crate::tests::run_test_once(
+            r##"
+            bad = [0x1D11E].pack("U")
+            r = []
+            r << ("abc".encode("Big5", undef: :replace, replace: bad) rescue $!.class.to_s)
+            r << ("abc".encode("Big5", invalid: :replace, replace: bad) rescue $!.class.to_s)
+            r << ("".encode("Big5", undef: :replace, replace: bad) rescue $!.class.to_s)
+            r << ("\u{1F600}".encode("UTF-8", undef: :replace, replace: bad) rescue $!.class.to_s)
+            r << ("abc".dup.force_encoding("Big5").encode("Big5", undef: :replace,
+                    replace: bad, universal_newline: true) rescue $!.class.to_s)
+            r
+            "##,
+        );
+        // A decorator is work of its own, so it opens a converter for
+        // text that would otherwise pass straight through — and the
+        // error names the decorators after the pair.
+        crate::tests::run_test_once(
+            r##"
+            bad = [0x1D11E].pack("U")
+            [[{ undef: :replace, universal_newline: true }, "a\nb"],
+             [{ undef: :replace, crlf_newline: true }, "a\nb"],
+             [{ undef: :replace, cr_newline: true }, "a\nb"],
+             [{ xml: :text }, "abc"],
+             [{ xml: :attr }, "abc"]].map do |o, s|
+              (s.encode("Big5", **o, replace: bad) rescue [$!.class.to_s, $!.message])
+            end
+            "##,
+        );
+        // The same question asked after the fact, where CRuby names
+        // neither the character nor the pair. The destinations whose
+        // repertoire is narrower than their codec's are included, so
+        // the check is the pipeline's and not `encoding_rs`'s (#1544).
+        crate::tests::run_test_once(
+            r##"
+            [["Big5", 0x1D11E], ["US-ASCII", 0x4E00], ["GB2312", 0x20AC],
+             ["Big5", 0x4E00], ["GB2312", 0x4E00]].map do |enc, cp|
+              c = Encoding::Converter.new("UTF-8", enc)
+              (c.replacement = [cp].pack("U")) rescue [$!.class.to_s, $!.message]
             end
             "##,
         );
