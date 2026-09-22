@@ -3847,6 +3847,51 @@ impl Utf8Carrier {
 }
 
 
+impl SjisCarrier {
+    /// The bytes this carrier writes `c` as, or `None` where it writes
+    /// what Windows-31J writes.
+    pub(crate) fn writes(&self, c: char) -> Option<Vec<u8>> {
+        let i = self.encode.binary_search_by_key(&(c as u32), |e| e.0).ok()?;
+        let packed = self.encode[i].1;
+        Some(if packed < 0x100 {
+            vec![packed as u8]
+        } else if packed < 0x1_0000 {
+            vec![(packed >> 8) as u8, packed as u8]
+        } else {
+            packed.to_be_bytes().to_vec()
+        })
+    }
+
+    /// Whether this carrier cannot write `c` although Windows-31J can.
+    pub(crate) fn refuses(&self, c: char) -> bool {
+        self.encode_reject.binary_search(&(c as u32)).is_ok()
+    }
+
+    /// What this carrier reads the two-byte `cell` as, or `None` where
+    /// it reads what Windows-31J reads.
+    pub(crate) fn reads(&self, cell: u16) -> Option<Vec<char>> {
+        lookup(self.decode, cell as u32)
+    }
+
+    /// Whether this carrier holds no character for `cell`, though
+    /// Windows-31J does.
+    pub(crate) fn unreadable(&self, cell: u16) -> bool {
+        self.decode_reject.binary_search(&(cell as u32)).is_ok()
+    }
+}
+
+/// The `SJIS-*` table for a [`crate::value::Encoding::Sjis`] payload,
+/// or `None` for the members that are not carriers.
+pub(crate) fn sjis_carrier(index: u8) -> Option<&'static SjisCarrier> {
+    use crate::value::{SJIS_DOCOMO, SJIS_KDDI, SJIS_SOFTBANK};
+    match index {
+        i if i == SJIS_DOCOMO => Some(&SJIS_DOCOMO_TABLE),
+        i if i == SJIS_KDDI => Some(&SJIS_KDDI_TABLE),
+        i if i == SJIS_SOFTBANK => Some(&SJIS_SOFTBANK_TABLE),
+        _ => None,
+    }
+}
+
 /// One entry of a `(key, first, second)` table, where a `second` of
 /// `0` means the entry is one character wide.
 fn lookup(table: &'static [(u32, u32, u32)], key: u32) -> Option<Vec<char>> {
@@ -3949,19 +3994,20 @@ pub(crate) fn carrier_route(
 ) -> Vec<(crate::value::Encoding, crate::value::Encoding)> {
     let mut route = vec![];
     let mut at = from;
-    // Out of an `SJIS-*` into its own hub first.
-    if is_sjis_carrier(at)
-        && at != to
+    // Crossing vendors happens in the `UTF8-*` forms, so an `SJIS-*`
+    // goes there first — and only then, since against anything that is
+    // not a carrier it converts against Windows-31J directly.
+    if carrier_vendor(from) != carrier_vendor(to)
+        && matches!(at, crate::value::Encoding::Sjis(_))
         && let Some(u) = carrier_utf8_form(at)
     {
         route.push((at, u));
         at = u;
     }
-    // The destination's hub, where its `SJIS-*` is reached from.
-    let hub = if is_sjis_carrier(to) {
-        carrier_utf8_form(to).unwrap_or(to)
-    } else {
+    let hub = if carrier_vendor(at) == carrier_vendor(to) {
         to
+    } else {
+        carrier_utf8_form(to).unwrap_or(to)
     };
     if at != hub {
         route.push((at, hub));
@@ -3971,11 +4017,6 @@ pub(crate) fn carrier_route(
         route.push((at, to));
     }
     route
-}
-
-/// Whether `enc` is one of the three `SJIS-*` carriers.
-fn is_sjis_carrier(enc: crate::value::Encoding) -> bool {
-    matches!(enc, crate::value::Encoding::Sjis(_)) && carrier_vendor(enc).is_some()
 }
 
 /// Which carrier an encoding belongs to, whichever base it rides.

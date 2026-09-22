@@ -186,7 +186,9 @@ CARRIERS.each do |c|
   warn "SJIS-#{c}..."
   senc, senc_refused = encode_map("SJIS-#{c}")
   scells, scell_refused = cell_map("SJIS-#{c}")
-  # Against Windows-31J.
+  # Against Windows-31J. The difference is not only the emoji: these
+  # encoders pick the NEC-selected row for the 383 characters
+  # Windows-31J has two cells for, where Windows-31J picks the IBM one.
   se = senc.filter_map { |cp, s| [cp, pack_bytes(s.bytes)] if w31_enc[cp].nil? || s.b != w31_enc[cp].b }
   se_rej = senc_refused - w31_enc_refused
   sd = scells.filter_map { |cell, cps| [cell, *pair(cps)] if w31_cells[cell] != cps }
@@ -298,6 +300,25 @@ puts <<~STRUCT
       pub(crate) decode_reject: &'static [u32],
   }
 
+  /// An `SJIS-*` carrier: Windows-31J's cells, with a block of them
+  /// reading as emoji, a block of characters writing into them, and
+  /// the NEC-selected row preferred where Windows-31J has two cells
+  /// for one character.
+  pub(crate) struct SjisCarrier {
+      /// Characters the carrier writes elsewhere than Windows-31J, and
+      /// the bytes it writes, packed big-endian: a lead is never below
+      /// `0x81`, so a value below `0x100` is one byte.
+      pub(crate) encode: &'static [(u32, u32)],
+      /// Characters Windows-31J writes and the carrier cannot.
+      pub(crate) encode_reject: &'static [u32],
+      /// Cells the carrier reads as something other than Windows-31J
+      /// does. The second character is `0` where there is only one.
+      pub(crate) decode: &'static [(u32, u32, u32)],
+      /// Cells Windows-31J holds a character for and the carrier does
+      /// not.
+      pub(crate) decode_reject: &'static [u32],
+  }
+
   /// One carrier's emoji as another spells them.
   ///
   /// A conversion with a carrier at each end is a transcoder of its
@@ -315,20 +336,31 @@ puts <<~STRUCT
 STRUCT
 
 CARRIERS.each do |c|
-  name = "UTF8-#{c}"
-  t = tables[name]
-  # `_TABLE` keeps the static out of the way of the payload index
-  # constant of the same name in `value::Encoding`.
-  puts
-  puts "/// `#{name}`'s difference from UTF-8."
-  puts "pub(crate) static UTF8_#{c.upcase}_TABLE: Utf8Carrier = Utf8Carrier {"
-  rust_triples("encode", "#{t[:encode].size} characters #{c}'s emoji stand in for.", t[:encode])
-  rust_list("encode_reject", "#{t[:encode_reject].size} characters #{name} cannot spell.", t[:encode_reject])
-  rust_triples("decode", "#{t[:decode].size} of #{c}'s own characters.", t[:decode])
-  rust_list("decode_reject", "#{t[:decode_reject].size} characters #{name} holds no meaning for.", t[:decode_reject])
-  puts "};"
-  warn "#{name}: encode=#{t[:encode].size} encode_reject=#{t[:encode_reject].size} " \
-       "decode=#{t[:decode].size} decode_reject=#{t[:decode_reject].size}"
+  %w[UTF8 SJIS].each do |fam|
+    name = "#{fam}-#{c}"
+    t = tables[name]
+    # `_TABLE` keeps the static out of the way of the payload index
+    # constant of the same name in `value::Encoding`.
+    konst = "#{fam}_#{c.upcase}_TABLE"
+    ty = fam == "UTF8" ? "Utf8Carrier" : "SjisCarrier"
+    puts
+    puts "/// `#{name}`'s difference from #{fam == 'UTF8' ? 'UTF-8' : 'Windows-31J'}."
+    puts "pub(crate) static #{konst}: #{ty} = #{ty} {"
+    if fam == "UTF8"
+      rust_triples("encode", "#{t[:encode].size} characters #{c}'s emoji stand in for.", t[:encode])
+      rust_list("encode_reject", "#{t[:encode_reject].size} characters #{name} cannot spell.", t[:encode_reject])
+      rust_triples("decode", "#{t[:decode].size} of #{c}'s own characters.", t[:decode])
+      rust_list("decode_reject", "#{t[:decode_reject].size} characters #{name} holds no meaning for.", t[:decode_reject])
+    else
+      rust_pairs("encode", "#{t[:encode].size} characters #{name} writes into #{c}'s cells.", t[:encode])
+      rust_list("encode_reject", "#{t[:encode_reject].size} characters Windows-31J writes and #{name} cannot.", t[:encode_reject])
+      rust_triples("decode", "#{t[:decode].size} cells #{name} reads as #{c}'s emoji.", t[:decode])
+      rust_list("decode_reject", "#{t[:decode_reject].size} cells Windows-31J holds and #{name} does not.", t[:decode_reject])
+    end
+    puts "};"
+    warn "#{name}: encode=#{t[:encode].size} encode_reject=#{t[:encode_reject].size} " \
+         "decode=#{t[:decode].size} decode_reject=#{t[:decode_reject].size}"
+  end
 end
 
 CARRIERS.permutation(2).each do |a, b|

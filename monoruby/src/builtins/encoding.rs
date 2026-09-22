@@ -1,6 +1,6 @@
 use super::encoding_carrier::{
-    CarrierPair, Utf8Carrier, carrier_base, carrier_pair, carrier_route, carrier_vendor,
-    utf8_carrier,
+    CarrierPair, SjisCarrier, Utf8Carrier, carrier_base, carrier_pair, carrier_route,
+    carrier_vendor, sjis_carrier, utf8_carrier,
 };
 use super::*;
 
@@ -2454,6 +2454,49 @@ fn carrier_hop(
             transcode_bytes_with_opts(bytes, from_base, crate::value::Encoding::UTF8, &TranscodeOpts::default(), store)?;
         String::from_utf8(pivot).map_err(|_| invalid_byte_sequence(store, src_enc, dst_enc, bytes))?
     };
+    // Crossing a vendor's two forms, only its own emoji go by the
+    // table; everything else is Unicode's to carry, and the base
+    // tables have things to say about it — the `SJIS-*` encoders
+    // prefer the NEC-selected row for the 383 characters Windows-31J
+    // has two cells for. So that hop is the ordinary conversion with
+    // the table standing in for the emoji Unicode cannot hold.
+    if carrier_vendor(from) == carrier_vendor(to) {
+        let table = carrier_pair(from, to);
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+        for c in text.chars() {
+            let piece = match table.and_then(|t| t.maps(&[c])) {
+                Some(Some(spelled)) => {
+                    let s: String = spelled.into_iter().collect();
+                    transcode_bytes_with_opts(s.as_bytes(), crate::value::Encoding::UTF8, to_base, opts, store)?
+                }
+                Some(None) => {
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        undefined_char_message(c, src_enc, dst_enc),
+                    ));
+                }
+                // `text` is already Unicode, so what is left is the
+                // ordinary conversion into the destination form —
+                // which is where its own table runs.
+                None => transcode_bytes_with_opts(
+                    c.to_string().as_bytes(),
+                    crate::value::Encoding::UTF8,
+                    to,
+                    opts,
+                    store,
+                )
+                .or_else(|e| {
+                    if opts.undef_replace {
+                        Ok(opts.replace_str(dst_enc).into_bytes())
+                    } else {
+                        Err(e)
+                    }
+                })?,
+            };
+            out.extend_from_slice(&piece);
+        }
+        return Ok(out);
+    }
     let spelled = match carrier_pair(from, to) {
         None => text,
         Some(table) => match carrier_to_carrier(&text, table) {
@@ -2483,6 +2526,95 @@ fn carrier_hop(
     } else {
         transcode_bytes_with_opts(spelled.as_bytes(), crate::value::Encoding::UTF8, to_base, opts, store)
     }
+}
+
+/// An `SJIS-*` carrier source read as Unicode.
+///
+/// The walk is Windows-31J's, and each two-byte cell is asked of the
+/// carrier's table first: it reads a block of them as its own emoji
+/// and holds no character at all for another block, both of which
+/// Windows-31J reads as private-use characters. Everything else is
+/// Windows-31J's own reading. `Err(Some(cell))` is a cell the carrier
+/// does not hold; `Err(None)` is a byte sequence the walk itself
+/// rejects, which the caller reports as it reports any other (#1573).
+fn carrier_sjis_to_unicode(
+    bytes: &[u8],
+    table: &'static SjisCarrier,
+    store: &Store,
+) -> std::result::Result<String, Option<u16>> {
+    let base = crate::value::Encoding::Sjis(crate::value::WINDOWS_31J);
+    let mut out = String::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let b = bytes[at];
+        if b < 0x80 {
+            out.push(b as char);
+            at += 1;
+            continue;
+        }
+        let width = match crate::value::sjis_precise_len(bytes, at) {
+            crate::value::PreciseLen::Char(n) => n,
+            _ => return Err(None),
+        };
+        if width == 2 {
+            let cell = ((bytes[at] as u16) << 8) | bytes[at + 1] as u16;
+            if table.unreadable(cell) {
+                return Err(Some(cell));
+            }
+            if let Some(cs) = table.reads(cell) {
+                out.extend(cs);
+                at += 2;
+                continue;
+            }
+        }
+        let piece = transcode_bytes_with_opts(
+            &bytes[at..at + width],
+            base,
+            crate::value::Encoding::UTF8,
+            &TranscodeOpts::default(),
+            store,
+        )
+        .map_err(|_| Some(((bytes[at] as u16) << 8) | *bytes.get(at + 1).unwrap_or(&0) as u16))?;
+        let Ok(text) = String::from_utf8(piece) else {
+            return Err(None);
+        };
+        out.push_str(&text);
+        at += width;
+    }
+    Ok(out)
+}
+
+/// Unicode written as an `SJIS-*` carrier: the characters its table
+/// names go into the carrier's own cells — its emoji, and the
+/// NEC-selected row it prefers where Windows-31J has two cells for one
+/// character — and the rest are Windows-31J's to write (#1573).
+fn unicode_to_carrier_sjis(
+    s: &str,
+    table: &'static SjisCarrier,
+    store: &Store,
+) -> std::result::Result<Vec<u8>, char> {
+    let base = crate::value::Encoding::Sjis(crate::value::WINDOWS_31J);
+    let mut out: Vec<u8> = Vec::with_capacity(s.len());
+    let mut buf = [0u8; 4];
+    for c in s.chars() {
+        if table.refuses(c) {
+            return Err(c);
+        }
+        if let Some(bytes) = table.writes(c) {
+            out.extend_from_slice(&bytes);
+            continue;
+        }
+        let piece = transcode_bytes_with_opts(
+            c.encode_utf8(&mut buf).as_bytes(),
+            crate::value::Encoding::UTF8,
+            base,
+            &TranscodeOpts::default(),
+            store,
+        )
+        .map_err(|_| c)?;
+        out.extend_from_slice(&piece);
+    }
+    Ok(out)
 }
 
 /// One carrier's text rewritten as another's.
@@ -2746,19 +2878,10 @@ pub(super) fn transcode_bytes_with_opts(
         // bases. `carrier_route` is the `convpath` CRuby reports for
         // the pair, and each hop is one table read in the two sides'
         // base readings (#1573).
-        let route = if carrier_vendor(src_enc).is_some() || carrier_vendor(dst_enc).is_some() {
-            carrier_route(src_enc, dst_enc)
-        } else {
-            vec![]
-        };
-        if route.len() > 1 || route.iter().any(|(f, t)| carrier_pair(*f, *t).is_some()) {
+        if carrier_vendor(src_enc).is_some() && carrier_vendor(dst_enc).is_some() {
             let mut bytes = src_bytes.to_vec();
-            for (from, to) in route {
-                bytes = if carrier_pair(from, to).is_some() {
-                    carrier_hop(&bytes, from, to, src_enc, dst_enc, opts, store)?
-                } else {
-                    transcode_bytes_with_opts(&bytes, from, to, opts, store)?
-                };
+            for (from, to) in carrier_route(src_enc, dst_enc) {
+                bytes = carrier_hop(&bytes, from, to, src_enc, dst_enc, opts, store)?;
             }
             return Ok(bytes);
         }
@@ -2822,6 +2945,83 @@ pub(super) fn transcode_bytes_with_opts(
                     }
                     let _ = c;
                     Ok(out.into_bytes())
+                }
+                Err(c) => Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(c, src_enc, dst_enc),
+                )),
+            };
+        }
+        if let crate::value::Encoding::Sjis(i) = src_enc
+            && let Some(table) = sjis_carrier(i)
+        {
+            // The same for a cell the carrier holds no character for.
+            let replaced;
+            let attempt = match carrier_sjis_to_unicode(src_bytes, table, store) {
+                Err(Some(_)) if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    let mut out = String::with_capacity(src_bytes.len());
+                    let mut at = 0;
+                    while at < src_bytes.len() {
+                        let n = match crate::value::sjis_precise_len(src_bytes, at) {
+                            crate::value::PreciseLen::Char(n) if n > 0 => n,
+                            _ => break,
+                        };
+                        match carrier_sjis_to_unicode(&src_bytes[at..at + n], table, store) {
+                            Ok(piece) => out.push_str(&piece),
+                            Err(_) => out.push_str(&replace),
+                        }
+                        at += n;
+                    }
+                    replaced = out;
+                    Ok(replaced)
+                }
+                other => other,
+            };
+            match attempt {
+                Ok(unicode) => {
+                    return transcode_bytes_with_opts(
+                        unicode.as_bytes(),
+                        crate::value::Encoding::UTF8,
+                        dst_enc,
+                        opts,
+                        store,
+                    );
+                }
+                Err(Some(cell)) => {
+                    let bytes = [(cell >> 8) as u8, cell as u8];
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        format!(
+                            "{} to UTF-8 in conversion from {} to UTF-8 to {}",
+                            quote_error_bytes(&bytes),
+                            src_enc.name(),
+                            dst_enc.name()
+                        ),
+                    ));
+                }
+                // The walk itself refused the bytes: the pipeline
+                // reports that, with the message it already gets right.
+                Err(None) => {}
+            }
+        }
+        if let crate::value::Encoding::Sjis(i) = dst_enc
+            && let Some(table) = sjis_carrier(i)
+        {
+            let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
+            return match unicode_to_carrier_sjis(&utf8, table, store) {
+                Ok(bytes) => Ok(bytes),
+                Err(c) if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    let mut out: Vec<u8> = Vec::with_capacity(utf8.len());
+                    for c in utf8.chars() {
+                        match unicode_to_carrier_sjis(&c.to_string(), table, store) {
+                            Ok(piece) => out.extend_from_slice(&piece),
+                            Err(_) => out.extend_from_slice(replace.as_bytes()),
+                        }
+                    }
+                    let _ = c;
+                    Ok(out)
                 }
                 Err(c) => Err(MonorubyErr::undefined_conversion_error(
                     store,
