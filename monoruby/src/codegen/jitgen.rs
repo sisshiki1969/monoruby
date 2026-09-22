@@ -553,7 +553,7 @@ impl Codegen {
         self_class: ClassId,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
-        class_version: u32,
+        jit_class_version: u32,
         const_version: u64,
     ) -> JitResult<(
         Vec<InlineCacheEntry>,
@@ -572,10 +572,15 @@ impl Codegen {
         // the iseq (`doc/refinements.md` §6.1); `using` moves the class
         // version, which is what re-checks it.
         let refinements = store.iseq_refinements(iseq_id);
+        // Two version words, two jobs. The context validates the VM's
+        // inline caches, which the VM stamps with *its* word, so it gets
+        // that one; the unit's own snapshot and guards (below) take the
+        // JIT's word, `jit_class_version`, which is what they compare.
+        let vm_class_version = self.class_version();
         let mut ctx = JitContext::new(
             store,
             true,
-            class_version,
+            vm_class_version,
             const_version,
             refinements,
             vec![],
@@ -602,7 +607,7 @@ impl Codegen {
         // generation never bails (the front-end's `?` above is the only way to
         // fall back to the interpreter).
         self.jit.finalize();
-        let class_version_label = self.jit.const_i32(class_version as _);
+        let class_version_label = self.jit.const_i32(jit_class_version as _);
         // The unit's single const-version snapshot word: only materialized
         // when the body folded a constant (otherwise no const guard exists
         // and there is nothing to patch). All const guards in the unit —
@@ -679,7 +684,7 @@ impl Codegen {
         {
             let sites = std::mem::take(&mut self.unit_version_patch_sites);
             if !sites.is_empty() {
-                self.stamp_version_imm_sites(&sites, class_version);
+                self.stamp_version_imm_sites(&sites, jit_class_version);
                 self.jit.set_executable();
                 let key = self.jit.get_label_address(&class_version_label).as_ptr() as u64;
                 self.version_imm_sites.insert(key, sites);
