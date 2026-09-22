@@ -1210,10 +1210,27 @@ impl<'a> MarshalReader<'a> {
             inner.as_hash().compare_by_identity(vm, globals)?;
             return Ok(inner);
         }
-        // CRuby's 'C' wraps a built-in (whose RValue layout is fixed),
-        // so it is safe to swap the class on the already-allocated
-        // inner — the storage type does not change, only the
-        // user-visible class.
+        // 'C' only ever wraps a built-in whose *storage* the new class
+        // shares, because all the swap does is retag the already-allocated
+        // inner. A dump naming a class of some other shape — the same
+        // constant reassigned between dump and load, or a hand-written
+        // payload — would leave an RValue whose class says Array over
+        // storage that is a Hash, and the next `Array#size` on it reads
+        // the wrong union arm. CRuby refuses such a pairing (marshal.c,
+        // `TYPE_UCLASS`: a special const, T_OBJECT or T_CLASS payload is
+        // rejected outright, and otherwise an instance of the named class
+        // must have the same `TYPE()` as the payload); `instance_ty` is
+        // inherited down each built-in's subclasses, so comparing it is
+        // that allocate-and-compare without the allocation.
+        let payload_ty = inner.ty();
+        let class_ty = globals.store[module.id()].instance_ty();
+        let swappable = !matches!(
+            payload_ty,
+            None | Some(ObjTy::OBJECT) | Some(ObjTy::CLASS) | Some(ObjTy::MODULE)
+        );
+        if !swappable || class_ty != payload_ty {
+            return Err(MonorubyErr::argumenterr("dump format error (user class)"));
+        }
         inner.change_class(module.id());
         Ok(inner)
     }
@@ -3845,6 +3862,52 @@ mod tests {
             d = Marshal.load(Marshal.dump(MOuter::MInner::Deep.new("d")))
             u = Marshal.load(Marshal.dump(MSub.new("u")))
             [d.class.to_s, d, u.class.to_s, u]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_user_class_type_mismatch() {
+        // Resolving the 'C' tag's qualified path (above) made the
+        // constant it names reachable again — and with it a dump whose
+        // class no longer has the payload's shape, because the constant
+        // was reassigned between dump and load. Retagging a Hash as an
+        // Array subclass left an RValue whose class said Array over
+        // storage that was a Hash, so the next `Array#size` on it read
+        // the wrong union arm and aborted the process. CRuby raises
+        // `ArgumentError: dump format error (user class)`; so does this.
+        run_test(
+            r#"
+            module MSwap
+              def self.set(k)
+                send(:remove_const, :Swapped) if const_defined?(:Swapped, false)
+                const_set(:Swapped, k)
+              end
+            end
+            MSwap.set(Class.new(Hash))
+            data = Marshal.dump(MSwap::Swapped.new)
+            out = []
+            [Class.new(Array), Class.new(String), Class.new].each do |k|
+              MSwap.set(k)
+              begin
+                Marshal.load(data)
+                out << :loaded
+              rescue ArgumentError => e
+                out << e.message
+              end
+            end
+            out
+            "#,
+        );
+        // The pairing the tag exists for still loads: same shape, and a
+        // subclass of the payload's own class.
+        run_test(
+            r#"
+            class MKeep < Hash; end
+            h = MKeep.new
+            h[:k] = :v
+            r = Marshal.load(Marshal.dump(h))
+            [r.class.to_s, r[:k]]
             "#,
         );
     }
