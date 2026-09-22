@@ -708,7 +708,6 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
             "GBK" | "GB2312" => b"gbk",
             "GB18030" => b"gb18030",
             "EUC-KR" | "CP949" => b"euc-kr",
-            "TIS-620" => b"windows-874",
             // Big5-UAO / EUC-TW / GB12345 and the DOS codepages other
             // than IBM866 have no encoding_rs codec; IBM437 is served
             // by the in-tree single-byte table instead.
@@ -828,6 +827,22 @@ pub(super) fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static 
         Some('\u{E50}'), Some('\u{E51}'), Some('\u{E52}'), Some('\u{E53}'), Some('\u{E54}'), Some('\u{E55}'), Some('\u{E56}'), Some('\u{E57}'),
         Some('\u{E58}'), Some('\u{E59}'), Some('\u{E5A}'), Some('\u{E5B}'), None, None, None, None,
     ];
+
+    /// TIS-620 is the Thai standard ISO-8859-11 adds to: the same
+    /// Thai half, with `0x80..=0xA0` assigned nothing at all — no C1
+    /// controls and no NBSP. `encoding_rs` has no codec for it; the
+    /// WHATWG `windows-874` label it used to borrow is Microsoft's
+    /// extension, which fills ten of those cells in and disagrees
+    /// with CRuby in all 33 (#1580).
+    const TIS620: [Option<char>; 128] = {
+        let mut t = ISO8859_11;
+        let mut i = 0;
+        while i <= 0x20 {
+            t[i] = None;
+            i += 1;
+        }
+        t
+    };
 
     /// Windows-874 is ISO-8859-11's Thai half with Microsoft's C1
     /// row: the range is otherwise unassigned, and the eight cells
@@ -1078,9 +1093,11 @@ pub(super) fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static 
         E::NamedByte(_) => match enc.name() {
             "IBM437" => Some(&IBM437),
             "IBM720" => Some(&IBM720),
-            // TIS-620 keeps its `encoding_rs` codec for now; it is
-            // wrong in the C1 row the same way, but that is its own
-            // bug rather than a missing converter.
+            // The three Thai encodings differ only in that row:
+            // TIS-620 assigns none of it, ISO-8859-11 adds the C1
+            // controls and NBSP, Windows-874 adds NBSP and ten
+            // punctuation cells.
+            "TIS-620" => Some(&TIS620),
             "Windows-874" => Some(&WINDOWS874),
             "CP852" | "IBM852" => Some(&CP852),
             "CP855" | "IBM855" => Some(&CP855),
@@ -11629,6 +11646,40 @@ mod tests {
              ["Big5", 0x4E00], ["GB2312", 0x4E00]].map do |enc, cp|
               c = Encoding::Converter.new("UTF-8", enc)
               (c.replacement = [cp].pack("U")) rescue [$!.class.to_s, $!.message]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_three_thai_encodings_differ_only_in_the_c1_row() {
+        // TIS-620 borrowed `encoding_rs`'s `windows-874`, which is
+        // Microsoft's extension of it: ten of the cells TIS-620
+        // assigns nothing to are filled in there, and CRuby disagreed
+        // with monoruby in all 33 of `0x80..=0xA0` (#1580).
+        crate::tests::run_test_once(
+            r##"
+            ["TIS-620", "ISO-8859-11", "Windows-874"].map do |e|
+              row = [0x80, 0x85, 0x91, 0x9F, 0xA0, 0xA1, 0xDA, 0xDB, 0xFB, 0xFF].map do |b|
+                s = [b].pack("C").force_encoding(e)
+                one = (s.encode("UTF-8").codepoints rescue $!.class.to_s)
+                cv = (Encoding::Converter.new(e, "UTF-8").convert(s.dup).codepoints rescue $!.class.to_s)
+                [one, one == cv]
+              end
+              [e, row]
+            end
+            "##,
+        );
+        // And the way out, including the characters Microsoft's
+        // extension has and the standard does not.
+        crate::tests::run_test_once(
+            r##"
+            ["TIS-620", "ISO-8859-11", "Windows-874"].map do |e|
+              n = (0x20..0x3100).count { |cp| ([cp].pack("U").encode(e) rescue nil) }
+              row = [0x20AC, 0x2018, 0x00A0, 0x0E01, 0x0E5B, 0x0085].map do |cp|
+                ([cp].pack("U").encode(e).bytes rescue $!.class.to_s)
+              end
+              [e, n, row]
             end
             "##,
         );
