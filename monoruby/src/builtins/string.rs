@@ -529,15 +529,12 @@ fn string_eq_bool(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     let lhs = self_.as_rstring_inner();
     let rhs = lfp.arg(0);
     if let Some(rhs_inner) = rhs.is_rstring_inner() {
-        // CRuby `==` is content-equal AND encoding-compatible. Two
-        // strings with identical bytes but encodings that can't be
-        // negotiated (e.g. UTF-8 + UTF-32LE) compare *unequal*. The
-        // empty-string special case in `compatible_encoding`
-        // already handles `"".compat("".encode("ISO-2022-JP"))`.
-        if lhs != rhs_inner {
-            return Ok(false);
-        }
-        return Ok(lhs.compatible_encoding(&rhs_inner).is_some());
+        // CRuby `==` is content-equal AND encoding-compatible — two
+        // strings with identical bytes but encodings that cannot be
+        // negotiated (UTF-8 and UTF-32LE, say) compare *unequal* — and
+        // both halves are `RStringInner`'s `PartialEq`, so that a Hash
+        // keyed by a String agrees with this (#1569).
+        return Ok(*lhs == *rhs_inner);
     }
     // CRuby's `String#==` short-circuits on `to_str`: if the rhs
     // *responds to* `to_str`, dispatch to `rhs == self` and let the
@@ -19349,6 +19346,43 @@ mod tests {
              # a 7-bit receiver takes the replacement's encoding
              t.() { "abc".dup.sub("a", bin) },
              t.() { "abc".dup.sub("a", "あ".encode("EUC-JP")) }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_strings_encoding_is_part_of_its_identity_as_a_key() {
+        // `#eql?` and `#==` already told these apart; nothing keyed on
+        // them did, because the container compares and hashes the
+        // bytes through `RStringInner` and that read bytes alone. So
+        // `h.size` came back 1 for two keys Ruby calls different, and
+        // every container built on the same pair agreed with it
+        // (#1569).
+        run_test_once(
+            r##"
+            require "set"
+            a = "あ"
+            b = a.dup.force_encoding("ASCII-8BIT")
+            c = a.encode("EUC-JP")
+            d = c.dup.force_encoding("Shift_JIS")
+            h = {}; h[a] = 1; h[b] = 2
+            [[a.hash == b.hash, a.eql?(b), a == b],
+             [h.size, h[a], h[b]],
+             [a, b].uniq.size, Set[a, b].size,
+             [a, b].group_by { |x| x }.size, [a, b].tally.size,
+             { a => 1 }.key?(b), [a, b].to_h { |x| [x, 1] }.size,
+             [c.hash == d.hash, { c => 1 }.key?(d), [c, d].uniq.size],
+             # 7-bit content stays one key whatever encoding carries it,
+             # and so does the empty string.
+             ["abc".hash == "abc".b.hash,
+              "abc".hash == "abc".dup.force_encoding("EUC-JP").hash,
+              { "abc" => 1 }["abc".b],
+              ["abc", "abc".b, "abc".dup.force_encoding("EUC-JP")].uniq.size,
+              ["".dup, "".b, "".encode("UTF-16BE")].uniq.size],
+             # ...and a `UTF8-MAC` string is its own key, as #1568 made
+             # it its own encoding.
+             [a.hash == a.dup.force_encoding("UTF8-MAC").hash,
+              [a, a.dup.force_encoding("UTF8-MAC")].uniq.size]]
             "##,
         );
     }

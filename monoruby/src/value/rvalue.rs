@@ -2549,7 +2549,16 @@ impl RValue {
                     lhs.as_complex().re() == rhs.as_complex().re()
                         && lhs.as_complex().im() == rhs.as_complex().im()
                 }
-                (ObjTy::STRING, ObjTy::STRING) => lhs.as_rstring() == rhs.as_rstring(),
+                // Bytes only, deliberately: the value this is compared
+                // against was rebuilt by evaluating CRuby's printed
+                // output, which carries no encoding, so every oracle
+                // string arrives as UTF-8 however it was produced.
+                // `RStringInner`'s own `PartialEq` is Ruby's `#eql?` and
+                // does read the encoding (#1569); using it here would
+                // fail every assertion over a BINARY result.
+                (ObjTy::STRING, ObjTy::STRING) => {
+                    lhs.as_rstring().as_bytes() == rhs.as_rstring().as_bytes()
+                }
                 (ObjTy::ARRAY, ObjTy::ARRAY) => {
                     let lhs = lhs.as_array();
                     let rhs = rhs.as_array();

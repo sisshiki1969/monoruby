@@ -26,6 +26,12 @@ SPECS = {
   # no `live` grid — but it still reads and writes some of them
   # differently, so it keeps both override lists.
   "GB18030" => { rust: "GB18030", lead: 0x81..0xFE, trail: 0x40..0xFE, grid: false },
+  # Microsoft's Big5, which is not CRuby's Big5: it fills thousands of
+  # cells Big5 leaves empty (mostly with private-use characters) and
+  # its encoder carries best-fit mappings, which are the single-byte
+  # cells below (#1567).
+  "CP950"   => { rust: "CP950",   lead: 0x81..0xFE, trail: 0x40..0xFE },
+  "CP951"   => { rust: "CP951",   lead: 0x81..0xFE, trail: 0x40..0xFE },
 }
 
 def cells(enc, spec)
@@ -155,8 +161,10 @@ puts <<~STRUCT
       /// Cells CRuby reads as something else.
       pub(crate) decode: &'static [(u16, u32)],
       /// Characters CRuby writes elsewhere. The value packs the bytes
-      /// big-endian, so a two-byte cell is below `0x1_0000` and a
-      /// four-byte one fills the word.
+      /// big-endian, and their number follows from it: a lead is
+      /// never below `0x81`, so a value below `0x100` is one byte
+      /// (CP950's best-fit mappings), one below `0x1_0000` is two,
+      /// and a larger one fills the word with four.
       pub(crate) encode: &'static [(u32, u32)],
       /// Characters the codec writes and CRuby's table has no cell
       /// for. Its tables are many-to-one on the way in, so a cell can
@@ -197,7 +205,9 @@ puts <<~STRUCT
       pub(crate) fn write(&self, c: char) -> Option<Vec<u8>> {
           let i = self.encode.binary_search_by_key(&(c as u32), |e| e.0).ok()?;
           let packed = self.encode[i].1;
-          Some(if packed < 0x1_0000 {
+          Some(if packed < 0x100 {
+              vec![packed as u8]
+          } else if packed < 0x1_0000 {
               vec![(packed >> 8) as u8, packed as u8]
           } else {
               packed.to_be_bytes().to_vec()
@@ -246,10 +256,12 @@ SPECS.each do |enc, spec|
   me = mono_enc[enc] || {}
   dec = live.reject { |c, cp| md[c] == cp }
   encv = ch.reject { |cp, bs| me[cp] == bs }
-  # `write` packs the bytes into one word, so it can only spell a cell
-  # of two bytes or of four.
+  # `write` reads the byte count back off the packed word, which works
+  # only for one, two or four bytes, and only while no two-byte cell
+  # has a lead below 0x81 (which would collide with the one-byte form).
   encv.each_value do |bs|
-    abort "#{enc}: cannot pack a #{bs.size}-byte cell" unless [2, 4].include?(bs.size)
+    abort "#{enc}: cannot pack a #{bs.size}-byte cell" unless [1, 2, 4].include?(bs.size)
+    abort "#{enc}: a two-byte cell leads with #{bs[0]}" if bs.size == 2 && bs[0] < 0x81
   end
   # Characters the codec writes that CRuby's table has no cell for.
   # A cell outside `live` is refused by that alone, so only the ones

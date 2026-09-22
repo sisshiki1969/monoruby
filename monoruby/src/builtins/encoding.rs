@@ -700,7 +700,11 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
             "KOI8-R" => b"koi8-r",
             "KOI8-U" => b"koi8-u",
             "IBM866" => b"ibm866",
-            "Big5" | "Big5-HKSCS" => b"big5",
+            // CP950 and CP951 are Big5's table under Microsoft's
+            // names, and CRuby converts them exactly as it does Big5
+            // (#1567). The walk knows them already — #1563 gave them
+            // `big5_precise_len`.
+            "Big5" | "Big5-HKSCS" | "CP950" | "CP951" => b"big5",
             "GBK" | "GB2312" => b"gbk",
             "GB18030" => b"gb18030",
             "EUC-KR" | "CP949" => b"euc-kr",
@@ -823,6 +827,91 @@ pub(super) fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static 
         Some('\u{E48}'), Some('\u{E49}'), Some('\u{E4A}'), Some('\u{E4B}'), Some('\u{E4C}'), Some('\u{E4D}'), Some('\u{E4E}'), Some('\u{E4F}'),
         Some('\u{E50}'), Some('\u{E51}'), Some('\u{E52}'), Some('\u{E53}'), Some('\u{E54}'), Some('\u{E55}'), Some('\u{E56}'), Some('\u{E57}'),
         Some('\u{E58}'), Some('\u{E59}'), Some('\u{E5A}'), Some('\u{E5B}'), None, None, None, None,
+    ];
+
+    /// Windows-874 is ISO-8859-11's Thai half with Microsoft's C1
+    /// row: the range is otherwise unassigned, and the eight cells
+    /// ISO-8859-11 leaves empty stay empty. `encoding_rs`'s
+    /// `windows-874` is WHATWG's, which differs from CRuby's in 23
+    /// cells, so this is a table rather than that codec (#1567).
+    const WINDOWS874: [Option<char>; 128] = {
+        let mut t = ISO8859_11;
+        let mut i = 0;
+        while i < 0x20 {
+            t[i] = None;
+            i += 1;
+        }
+        t[0x00] = Some('\u{20AC}'); // EURO SIGN
+        t[0x05] = Some('\u{2026}'); // HORIZONTAL ELLIPSIS
+        t[0x11] = Some('\u{2018}');
+        t[0x12] = Some('\u{2019}');
+        t[0x13] = Some('\u{201C}');
+        t[0x14] = Some('\u{201D}');
+        t[0x15] = Some('\u{2022}');
+        t[0x16] = Some('\u{2013}');
+        t[0x17] = Some('\u{2014}');
+        t
+    };
+
+    /// The three DOS code pages CRuby converts and `encoding_rs` has
+    /// no codec for, read off CRuby byte by byte (#1567). IBM720
+    /// (Arabic) leaves eight cells unassigned; the other two fill all
+    /// 128. `CP852` / `IBM852` and `CP855` / `IBM855` are separate
+    /// `Encoding` objects in CRuby with identical tables, so each
+    /// pair shares one here.
+    const IBM720: [Option<char>; 128] = [
+        None, None, Some('\u{E9}'), Some('\u{E2}'), None, Some('\u{E0}'), None, Some('\u{E7}'),
+        Some('\u{EA}'), Some('\u{EB}'), Some('\u{E8}'), Some('\u{EF}'), Some('\u{EE}'), None, None, None,
+        None, Some('\u{651}'), Some('\u{652}'), Some('\u{F4}'), Some('\u{A4}'), Some('\u{640}'), Some('\u{FB}'), Some('\u{F9}'),
+        Some('\u{621}'), Some('\u{622}'), Some('\u{623}'), Some('\u{624}'), Some('\u{A3}'), Some('\u{625}'), Some('\u{626}'), Some('\u{627}'),
+        Some('\u{628}'), Some('\u{629}'), Some('\u{62A}'), Some('\u{62B}'), Some('\u{62C}'), Some('\u{62D}'), Some('\u{62E}'), Some('\u{62F}'),
+        Some('\u{630}'), Some('\u{631}'), Some('\u{632}'), Some('\u{633}'), Some('\u{634}'), Some('\u{635}'), Some('\u{AB}'), Some('\u{BB}'),
+        Some('\u{2591}'), Some('\u{2592}'), Some('\u{2593}'), Some('\u{2502}'), Some('\u{2524}'), Some('\u{2561}'), Some('\u{2562}'), Some('\u{2556}'),
+        Some('\u{2555}'), Some('\u{2563}'), Some('\u{2551}'), Some('\u{2557}'), Some('\u{255D}'), Some('\u{255C}'), Some('\u{255B}'), Some('\u{2510}'),
+        Some('\u{2514}'), Some('\u{2534}'), Some('\u{252C}'), Some('\u{251C}'), Some('\u{2500}'), Some('\u{253C}'), Some('\u{255E}'), Some('\u{255F}'),
+        Some('\u{255A}'), Some('\u{2554}'), Some('\u{2569}'), Some('\u{2566}'), Some('\u{2560}'), Some('\u{2550}'), Some('\u{256C}'), Some('\u{2567}'),
+        Some('\u{2568}'), Some('\u{2564}'), Some('\u{2565}'), Some('\u{2559}'), Some('\u{2558}'), Some('\u{2552}'), Some('\u{2553}'), Some('\u{256B}'),
+        Some('\u{256A}'), Some('\u{2518}'), Some('\u{250C}'), Some('\u{2588}'), Some('\u{2584}'), Some('\u{258C}'), Some('\u{2590}'), Some('\u{2580}'),
+        Some('\u{636}'), Some('\u{637}'), Some('\u{638}'), Some('\u{639}'), Some('\u{63A}'), Some('\u{641}'), Some('\u{B5}'), Some('\u{642}'),
+        Some('\u{643}'), Some('\u{644}'), Some('\u{645}'), Some('\u{646}'), Some('\u{647}'), Some('\u{648}'), Some('\u{649}'), Some('\u{64A}'),
+        Some('\u{2261}'), Some('\u{64B}'), Some('\u{64C}'), Some('\u{64D}'), Some('\u{64E}'), Some('\u{64F}'), Some('\u{650}'), Some('\u{2248}'),
+        Some('\u{B0}'), Some('\u{2219}'), Some('\u{B7}'), Some('\u{221A}'), Some('\u{207F}'), Some('\u{B2}'), Some('\u{25A0}'), Some('\u{A0}'),
+    ];
+    const CP852: [Option<char>; 128] = [
+        Some('\u{C7}'), Some('\u{FC}'), Some('\u{E9}'), Some('\u{E2}'), Some('\u{E4}'), Some('\u{16F}'), Some('\u{107}'), Some('\u{E7}'),
+        Some('\u{142}'), Some('\u{EB}'), Some('\u{150}'), Some('\u{151}'), Some('\u{EE}'), Some('\u{179}'), Some('\u{C4}'), Some('\u{106}'),
+        Some('\u{C9}'), Some('\u{139}'), Some('\u{13A}'), Some('\u{F4}'), Some('\u{F6}'), Some('\u{13D}'), Some('\u{13E}'), Some('\u{15A}'),
+        Some('\u{15B}'), Some('\u{D6}'), Some('\u{DC}'), Some('\u{164}'), Some('\u{165}'), Some('\u{141}'), Some('\u{D7}'), Some('\u{10D}'),
+        Some('\u{E1}'), Some('\u{ED}'), Some('\u{F3}'), Some('\u{FA}'), Some('\u{104}'), Some('\u{105}'), Some('\u{17D}'), Some('\u{17E}'),
+        Some('\u{118}'), Some('\u{119}'), Some('\u{AC}'), Some('\u{17A}'), Some('\u{10C}'), Some('\u{15F}'), Some('\u{AB}'), Some('\u{BB}'),
+        Some('\u{2591}'), Some('\u{2592}'), Some('\u{2593}'), Some('\u{2502}'), Some('\u{2524}'), Some('\u{C1}'), Some('\u{C2}'), Some('\u{11A}'),
+        Some('\u{15E}'), Some('\u{2563}'), Some('\u{2551}'), Some('\u{2557}'), Some('\u{255D}'), Some('\u{17B}'), Some('\u{17C}'), Some('\u{2510}'),
+        Some('\u{2514}'), Some('\u{2534}'), Some('\u{252C}'), Some('\u{251C}'), Some('\u{2500}'), Some('\u{253C}'), Some('\u{102}'), Some('\u{103}'),
+        Some('\u{255A}'), Some('\u{2554}'), Some('\u{2569}'), Some('\u{2566}'), Some('\u{2560}'), Some('\u{2550}'), Some('\u{256C}'), Some('\u{A4}'),
+        Some('\u{111}'), Some('\u{110}'), Some('\u{10E}'), Some('\u{CB}'), Some('\u{10F}'), Some('\u{147}'), Some('\u{CD}'), Some('\u{CE}'),
+        Some('\u{11B}'), Some('\u{2518}'), Some('\u{250C}'), Some('\u{2588}'), Some('\u{2584}'), Some('\u{162}'), Some('\u{16E}'), Some('\u{2580}'),
+        Some('\u{D3}'), Some('\u{DF}'), Some('\u{D4}'), Some('\u{143}'), Some('\u{144}'), Some('\u{148}'), Some('\u{160}'), Some('\u{161}'),
+        Some('\u{154}'), Some('\u{DA}'), Some('\u{155}'), Some('\u{170}'), Some('\u{FD}'), Some('\u{DD}'), Some('\u{163}'), Some('\u{B4}'),
+        Some('\u{AD}'), Some('\u{2DD}'), Some('\u{2DB}'), Some('\u{2C7}'), Some('\u{2D8}'), Some('\u{A7}'), Some('\u{F7}'), Some('\u{B8}'),
+        Some('\u{B0}'), Some('\u{A8}'), Some('\u{2D9}'), Some('\u{171}'), Some('\u{158}'), Some('\u{159}'), Some('\u{25A0}'), Some('\u{A0}'),
+    ];
+    const CP855: [Option<char>; 128] = [
+        Some('\u{452}'), Some('\u{402}'), Some('\u{453}'), Some('\u{403}'), Some('\u{451}'), Some('\u{401}'), Some('\u{454}'), Some('\u{404}'),
+        Some('\u{455}'), Some('\u{405}'), Some('\u{456}'), Some('\u{406}'), Some('\u{457}'), Some('\u{407}'), Some('\u{458}'), Some('\u{408}'),
+        Some('\u{459}'), Some('\u{409}'), Some('\u{45A}'), Some('\u{40A}'), Some('\u{45B}'), Some('\u{40B}'), Some('\u{45C}'), Some('\u{40C}'),
+        Some('\u{45E}'), Some('\u{40E}'), Some('\u{45F}'), Some('\u{40F}'), Some('\u{44E}'), Some('\u{42E}'), Some('\u{44A}'), Some('\u{42A}'),
+        Some('\u{430}'), Some('\u{410}'), Some('\u{431}'), Some('\u{411}'), Some('\u{446}'), Some('\u{426}'), Some('\u{434}'), Some('\u{414}'),
+        Some('\u{435}'), Some('\u{415}'), Some('\u{444}'), Some('\u{424}'), Some('\u{433}'), Some('\u{413}'), Some('\u{AB}'), Some('\u{BB}'),
+        Some('\u{2591}'), Some('\u{2592}'), Some('\u{2593}'), Some('\u{2502}'), Some('\u{2524}'), Some('\u{445}'), Some('\u{425}'), Some('\u{438}'),
+        Some('\u{418}'), Some('\u{2563}'), Some('\u{2551}'), Some('\u{2557}'), Some('\u{255D}'), Some('\u{439}'), Some('\u{419}'), Some('\u{2510}'),
+        Some('\u{2514}'), Some('\u{2534}'), Some('\u{252C}'), Some('\u{251C}'), Some('\u{2500}'), Some('\u{253C}'), Some('\u{43A}'), Some('\u{41A}'),
+        Some('\u{255A}'), Some('\u{2554}'), Some('\u{2569}'), Some('\u{2566}'), Some('\u{2560}'), Some('\u{2550}'), Some('\u{256C}'), Some('\u{A4}'),
+        Some('\u{43B}'), Some('\u{41B}'), Some('\u{43C}'), Some('\u{41C}'), Some('\u{43D}'), Some('\u{41D}'), Some('\u{43E}'), Some('\u{41E}'),
+        Some('\u{43F}'), Some('\u{2518}'), Some('\u{250C}'), Some('\u{2588}'), Some('\u{2584}'), Some('\u{41F}'), Some('\u{44F}'), Some('\u{2580}'),
+        Some('\u{42F}'), Some('\u{440}'), Some('\u{420}'), Some('\u{441}'), Some('\u{421}'), Some('\u{442}'), Some('\u{422}'), Some('\u{443}'),
+        Some('\u{423}'), Some('\u{436}'), Some('\u{416}'), Some('\u{432}'), Some('\u{412}'), Some('\u{44C}'), Some('\u{42C}'), Some('\u{2116}'),
+        Some('\u{AD}'), Some('\u{44B}'), Some('\u{42B}'), Some('\u{437}'), Some('\u{417}'), Some('\u{448}'), Some('\u{428}'), Some('\u{44D}'),
+        Some('\u{42D}'), Some('\u{449}'), Some('\u{429}'), Some('\u{447}'), Some('\u{427}'), Some('\u{A7}'), Some('\u{25A0}'), Some('\u{A0}'),
     ];
 
     /// macRoman (Mac OS Roman), and the seven tables below it, as
@@ -988,6 +1077,13 @@ pub(super) fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static 
         E::Iso8859(11) => Some(&ISO8859_11),
         E::NamedByte(_) => match enc.name() {
             "IBM437" => Some(&IBM437),
+            "IBM720" => Some(&IBM720),
+            // TIS-620 keeps its `encoding_rs` codec for now; it is
+            // wrong in the C1 row the same way, but that is its own
+            // bug rather than a missing converter.
+            "Windows-874" => Some(&WINDOWS874),
+            "CP852" | "IBM852" => Some(&CP852),
+            "CP855" | "IBM855" => Some(&CP855),
             "macRoman" => Some(&MACROMAN),
             "macCyrillic" => Some(&MACCYRILLIC),
             "macCroatian" => Some(&MACCROATIAN),
@@ -1436,6 +1532,11 @@ fn cell_table(enc: crate::value::Encoding) -> Option<&'static super::encoding_cj
             "GB2312" => Some(&super::encoding_cjk::GB2312),
             "GBK" => Some(&super::encoding_cjk::GBK),
             "Big5" => Some(&super::encoding_cjk::BIG5),
+            // Microsoft's Big5 rather than CRuby's: thousands of
+            // extra cells and a best-fit encoder, so they carry
+            // tables of their own (#1567).
+            "CP950" => Some(&super::encoding_cjk::CP950),
+            "CP951" => Some(&super::encoding_cjk::CP951),
             // No grid of its own: GB18030 reads every cell CRuby
             // does, and only writes a handful differently.
             "GB18030" => Some(&super::encoding_cjk::GB18030),
@@ -2008,6 +2109,49 @@ impl TranscodeOpts {
     }
 }
 
+/// A US-ASCII source decoded with `invalid: :replace`.
+///
+/// US-ASCII has no `encoding_rs` codec here, no single-byte table and
+/// no `mbc_walker`, so none of the three paths that honour `invalid:`
+/// covered it and a byte above 0x7F raised whatever the caller had
+/// asked for (#1570). Its walk needs none of them: every byte below
+/// 0x80 is its own character and every byte at or above it is one
+/// ill-formed byte.
+fn usascii_decode_lossy(src_bytes: &[u8], repl: &str) -> String {
+    let mut out = String::with_capacity(src_bytes.len());
+    for &b in src_bytes {
+        if b < 0x80 {
+            out.push(b as char);
+        } else {
+            out.push_str(repl);
+        }
+    }
+    out
+}
+
+/// Whether an encoding spells `U+FFFD`, and so replaces with it rather
+/// than with `"?"`.
+///
+/// CRuby keeps a table of the names that do and asks it about the
+/// encoding the replacement is *inserted in* — the destination for an
+/// ordinary converter. The table is UTF-8, the UTF-16 and UTF-32 forms
+/// and the `UCS-*` aliases of those, and nothing else: read off
+/// `Encoding::Converter#replacement` for all 175 names CRuby lists,
+/// and confirmed from the other side by `"\xf0".force_encoding(
+/// "CESU-8").encode("CESU-8", invalid: :replace)`, which is `"?"`
+/// although a conversion *into* CESU-8 replaces with `U+FFFD` — see
+/// `pivot_replacement` for why those two differ (#1571).
+fn replaces_with_u_fffd(enc: crate::value::Encoding) -> bool {
+    use crate::value::Encoding as E;
+    match enc {
+        E::UTF8 | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be => true,
+        // The endianness-less dummies write a BOM and then the
+        // big-endian form, so they answer as that form does.
+        E::Other(_) => dummy_wide_target(enc).is_some(),
+        _ => false,
+    }
+}
+
 /// The endianness-less dummy `UTF-16` / `UTF-32` as an encode target:
 /// returns the big-endian concrete encoding CRuby writes after a BOM.
 fn dummy_wide_target(enc: crate::value::Encoding) -> Option<crate::value::Encoding> {
@@ -2053,16 +2197,12 @@ impl TranscodeOpts {
         if let Some(s) = &self.replace {
             return s.clone();
         }
-        // CRuby: default replacement is "�" for UTF
-        // destinations and "?" otherwise. `Encoding::UTF8`, not
-        // `Utf8(_)`: CRuby's test is the encoding's *name*, so a
-        // `UTF8-MAC` destination takes the "?" like any other (#1562).
+        // CRuby: default replacement is "�" for the UTF
+        // destinations and "?" otherwise — see `replaces_with_u_fffd`
+        // for which names those are, since `UTF8-MAC` is not one of
+        // them and CESU-8 is.
         match dst_enc {
-            crate::value::Encoding::UTF8
-            | crate::value::Encoding::Utf16Le
-            | crate::value::Encoding::Utf16Be
-            | crate::value::Encoding::Utf32Le
-            | crate::value::Encoding::Utf32Be => "\u{FFFD}".to_string(),
+            _ if replaces_with_u_fffd(dst_enc) => "\u{FFFD}".to_string(),
             _ => "?".to_string(),
         }
     }
@@ -2231,6 +2371,21 @@ fn to_pivot_for(
     opts: &TranscodeOpts,
     store: &Store,
 ) -> Result<String> {
+    // The inner conversion runs to UTF-8, so left alone it resolves
+    // `invalid:` / `undef:`'s default replacement against the *pivot*.
+    // That is right for one of these two destinations and not the
+    // other, so pin it here rather than letting the recursion decide
+    // (#1571).
+    let pinned;
+    let opts = if opts.replace.is_none() && (opts.invalid_replace || opts.undef_replace) {
+        pinned = TranscodeOpts {
+            replace: Some(pivot_replacement(dst_enc)),
+            ..opts.clone()
+        };
+        &pinned
+    } else {
+        opts
+    };
     let utf8 = transcode_bytes_with_opts(
         src_bytes,
         src_enc,
@@ -2247,6 +2402,22 @@ fn to_pivot_for(
             dst_enc,
             e.as_bytes(),
         )),
+    }
+}
+
+/// The replacement a conversion *into* a pivot destination inserts.
+///
+/// CRuby asks its name table about the encoding the last transcoder in
+/// the chain inserts into, and the two pivot destinations answer
+/// differently: `UTF-8 → UTF8-MAC` inserts into `UTF8-MAC`, which is
+/// not in the table, so `"?"`; `UTF-8 → CESU-8` inserts into the pivot
+/// and gets `U+FFFD`. Neither is derivable from anything monoruby
+/// holds about the two — this is the measured answer (#1571).
+fn pivot_replacement(dst_enc: crate::value::Encoding) -> String {
+    if dst_enc == crate::value::Encoding::NamedByte(crate::value::CESU_8) {
+        "\u{FFFD}".to_string()
+    } else {
+        "?".to_string()
     }
 }
 
@@ -2285,6 +2456,12 @@ pub(super) fn transcode_bytes_with_opts(
     store: &Store,
 ) -> Result<Vec<u8>> {
     use crate::value::Encoding as E;
+    // A replacement the destination cannot spell is refused here,
+    // before any of the input is read, because that is where CRuby
+    // opens the converter (#1566).
+    if opens_a_converter(src_bytes, src_enc, dst_enc, opts, false) {
+        validate_replacement(opts, src_enc, dst_enc, None, store)?;
+    }
     // `invalid: :replace` has work to do even when the encodings match,
     // so a broken string with a usable codec skips the identity path
     // and goes through decode / re-encode to be scrubbed.
@@ -2304,7 +2481,11 @@ pub(super) fn transcode_bytes_with_opts(
         )
         && (encoding_to_rs(src_enc).is_some()
             || is_utf16_or_32(src_enc)
-            || single_byte_table(src_enc).is_some());
+            || single_byte_table(src_enc).is_some()
+            // US-ASCII has neither, but the decode below scrubs it
+            // by hand, so a broken one must not take the identity
+            // path that copies the offending byte (#1570).
+            || src_enc == E::UsAscii);
     // The encodings monoruby walks itself (Emacs-Mule, EUC-JP,
     // Shift_JIS) scrub through that walk, not through a codec. For
     // Emacs-Mule there is no codec to use; for the other two there is,
@@ -2543,6 +2724,8 @@ pub(super) fn transcode_bytes_with_opts(
                 return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
             }
             decoded.into_owned()
+        } else if src_enc == E::UsAscii && opts.invalid_replace {
+            usascii_decode_lossy(src_bytes, &opts.replace_str(dst_enc))
         } else {
             // No decoder for the source: nothing to say about which
             // character is undefined, so the bytes go through as they
@@ -2607,6 +2790,9 @@ pub(super) fn transcode_bytes_with_opts(
             })?
         };
         (std::borrow::Cow::Owned(decoded), false)
+    } else if src_enc == E::UsAscii && opts.invalid_replace {
+        let out = usascii_decode_lossy(src_bytes, &opts.replace_str(dst_enc));
+        (std::borrow::Cow::Owned(out), false)
     } else {
         let src_rs = match encoding_to_rs(src_enc) {
             Some(s) => s,
@@ -2978,6 +3164,12 @@ fn handle_xml_option(
         )));
     };
     let bytes = lfp.self_val().as_rstring_inner().as_bytes().to_vec();
+    // The decorator is work of its own, so a converter is opened even
+    // for text that would otherwise pass straight through — and its
+    // `replace:` is checked with it (#1566).
+    let src_enc = lfp.self_val().as_rstring_inner().encoding();
+    let opts = parse_transcode_opts(lfp);
+    validate_replacement(&opts, src_enc, dst_enc, Some(mode), &globals.store)?;
     let s = String::from_utf8_lossy(&bytes);
     let mut out = String::with_capacity(s.len() + 2);
     if matches!(mode, XmlMode::Attr) {
@@ -3892,6 +4084,100 @@ fn converter_transcode_opts(globals: &Globals, recv: Value) -> TranscodeOpts {
     opts
 }
 
+/// Whether a conversion opens a converter at all, which is when
+/// CRuby validates the `replace:` string (#1566). `String#encode`
+/// hands the bytes straight back when the source and destination
+/// agree, and when both are ASCII-compatible and the source is
+/// 7-bit — and a replacement it never had to look at goes
+/// unexamined. A decorator is work of its own, so it opens one
+/// whatever the source looks like.
+fn opens_a_converter(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    xml: bool,
+) -> bool {
+    if src_enc == dst_enc {
+        return false;
+    }
+    if opts.has_newline() || xml {
+        return true;
+    }
+    !(src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() && src_bytes.is_ascii())
+}
+
+/// The decorators CRuby names after the encodings when it describes a
+/// converter, in its order.
+fn decorator_names(opts: &TranscodeOpts, xml: Option<XmlMode>) -> Vec<&'static str> {
+    let mut out = vec![];
+    if opts.universal_newline {
+        out.push("universal_newline");
+    }
+    if opts.crlf_newline {
+        out.push("crlf_newline");
+    }
+    if opts.cr_newline {
+        out.push("cr_newline");
+    }
+    match xml {
+        Some(XmlMode::Text) => out.push("xml_text"),
+        Some(XmlMode::Attr) => {
+            out.push("xml_attr_content");
+            out.push("xml_attr_quote");
+        }
+        None => {}
+    }
+    out
+}
+
+/// Refuse a `replace:` string the destination cannot spell (#1566).
+///
+/// CRuby converts the replacement into the destination when it opens
+/// the converter, and a failure there is reported as a converter that
+/// does not exist rather than as a character with no cell — so the
+/// error names the pair and not the character, and arrives before any
+/// of the input is looked at. Dropping the replacement instead, as
+/// this did, turned a substitution into silence: the character with
+/// no cell went missing and so did the thing meant to stand for it.
+fn validate_replacement(
+    opts: &TranscodeOpts,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    xml: Option<XmlMode>,
+    store: &Store,
+) -> Result<()> {
+    let Some(repl) = opts.replace.as_deref() else {
+        return Ok(());
+    };
+    if transcode_bytes_with_opts(
+        repl.as_bytes(),
+        crate::value::Encoding::UTF8,
+        dst_enc,
+        &TranscodeOpts::default(),
+        store,
+    )
+    .is_ok()
+    {
+        return Ok(());
+    }
+    let decorators = decorator_names(opts, xml);
+    let with = if decorators.is_empty() {
+        String::new()
+    } else {
+        format!(" with {}", decorators.join(","))
+    };
+    Err(MonorubyErr::converter_not_found_error(
+        store,
+        format!(
+            "code converter not found ({} to {}{})",
+            src_enc.name(),
+            dst_enc.name(),
+            with
+        ),
+    ))
+}
+
 /// Validate that `(src, dst)` is a transcoder monoruby can run.
 /// Raises `Encoding::ConverterNotFoundError` for anything
 /// `encoding_rs` doesn't cover (UTF-32, dummy CRuby encodings).
@@ -3968,37 +4254,23 @@ fn converter_get_dst(globals: &Globals, recv: Value) -> crate::value::Encoding {
 }
 
 /// Default replacement string used by `Encoding::Converter#replacement`
-/// when none has been set explicitly. CRuby uses `"�"` (encoded
-/// in the destination encoding) when the dest is UTF-8 / UTF-16 /
-/// UTF-32, and `"?"` (US-ASCII) for everything else.
+/// when none has been set explicitly.
+///
+/// CRuby keeps the replacement in the encoding it will be *inserted*
+/// in, not in the destination, and for every destination that takes
+/// `U+FFFD` at all that encoding is UTF-8 — so `Converter.new("UTF-8",
+/// "UTF-16BE").replacement` is the three UTF-8 bytes tagged UTF-8, not
+/// the two UTF-16BE ones. Everything else takes `"?"` as US-ASCII.
+/// See `replaces_with_u_fffd` for the set (#1571).
 fn converter_default_replacement(dst: crate::value::Encoding) -> Value {
-    match dst {
-        // `Encoding::UTF8` only — see `TranscodeOpts::replace_str`.
-        crate::value::Encoding::UTF8 => {
-            // U+FFFD as UTF-8 bytes.
-            let mut s = crate::value::RStringInner::from_string_scanned("\u{FFFD}".to_string());
-            s.set_encoding(crate::value::Encoding::UTF8);
-            Value::string_from_inner(s)
-        }
-        crate::value::Encoding::Utf16Be | crate::value::Encoding::Utf16Le => {
-            // Encode U+FFFD via encoding_rs.
-            let label = match dst {
-                crate::value::Encoding::Utf16Be => b"utf-16be" as &[u8],
-                _ => b"utf-16le",
-            };
-            let enc_rs = encoding_rs::Encoding::for_label(label).unwrap();
-            let (bytes, _, _) = enc_rs.encode("\u{FFFD}");
-            let mut s = crate::value::RStringInner::from_encoding(&bytes, dst);
-            s.set_encoding(dst);
-            Value::string_from_inner(s)
-        }
-        _ => {
-            // Plain `?` tagged as US-ASCII.
-            let mut s = crate::value::RStringInner::from_string_scanned("?".to_string());
-            s.set_encoding(crate::value::Encoding::UsAscii);
-            Value::string_from_inner(s)
-        }
-    }
+    let (text, enc) = if replaces_with_u_fffd(dst) {
+        ("\u{FFFD}", crate::value::Encoding::UTF8)
+    } else {
+        ("?", crate::value::Encoding::UsAscii)
+    };
+    let mut s = crate::value::RStringInner::from_string_scanned(text.to_string());
+    s.set_encoding(enc);
+    Value::string_from_inner(s)
 }
 
 ///
@@ -4113,6 +4385,19 @@ fn converter_new(
                     } else {
                         rep.coerce_to_string(vm, globals)?
                     };
+                    // A converter is always opened here, so the
+                    // replacement is checked against the destination
+                    // now rather than at the first substitution
+                    // (#1566). The flags carry the decorators the
+                    // message names.
+                    let decorators = TranscodeOpts {
+                        universal_newline: flags & 0x0000_0100 != 0,
+                        crlf_newline: flags & 0x0000_1000 != 0,
+                        cr_newline: flags & 0x0000_2000 != 0,
+                        replace: Some(s.clone()),
+                        ..Default::default()
+                    };
+                    validate_replacement(&decorators, src, dst, None, &globals.store)?;
                     let mut inner = crate::value::RStringInner::from_string_scanned(s);
                     inner.set_encoding(dst);
                     replace_inner = Some(inner);
@@ -4231,33 +4516,25 @@ fn converter_replacement_set(
     let s = arg
         .is_str()
         .ok_or_else(|| MonorubyErr::typeerr(format!("no implicit conversion into String")))?;
-    // Validate that the new replacement is encodable in dst.
+    // The new replacement has to be one the destination can spell.
+    // Asking the pipeline rather than the codec is what makes this
+    // agree with `#encode` — the codec's repertoire is wider than
+    // several of these encodings (#1544) — and CRuby names neither
+    // the character nor the pair here (#1566).
     let recv = lfp.self_val();
     let dst = converter_get_dst(globals, recv);
-    if let Some(dst_rs) = encoding_to_rs(dst) {
-        let (_bytes, _, encode_err) = dst_rs.encode(s);
-        if encode_err {
-            return Err(MonorubyErr::undefined_conversion_error(
-                &globals.store,
-                format!(
-                    "U+{:04X} from UTF-8 to {}",
-                    s.chars()
-                        .find(|c| !c.is_ascii())
-                        .map(|c| c as u32)
-                        .unwrap_or(0),
-                    dst.name()
-                ),
-            ));
-        }
-    } else if dst == crate::value::Encoding::UsAscii && !s.is_ascii() {
-        // `encoding_rs` has no US-ASCII encoder; a non-ASCII
-        // replacement is unrepresentable there (CRuby raises).
+    if transcode_bytes_with_opts(
+        s.as_bytes(),
+        crate::value::Encoding::UTF8,
+        dst,
+        &TranscodeOpts::default(),
+        &globals.store,
+    )
+    .is_err()
+    {
         return Err(MonorubyErr::undefined_conversion_error(
             &globals.store,
-            format!(
-                "U+{:04X} from UTF-8 to US-ASCII",
-                s.chars().find(|c| !c.is_ascii()).map(|c| c as u32).unwrap_or(0)
-            ),
+            "replacement character setup failed".to_string(),
         ));
     }
     // Tag the stored value with the destination's encoding so a
@@ -11292,6 +11569,133 @@ mod tests {
     }
 
     #[test]
+    fn a_replacement_the_destination_cannot_spell_is_refused() {
+        // CRuby converts the `replace:` string into the destination
+        // when it opens the converter, and a failure there is a
+        // converter that does not exist rather than a character with
+        // no cell. Dropping it instead turned a substitution into
+        // silence — the character went missing and so did the thing
+        // meant to stand for it (#1566).
+        crate::tests::run_test_once(
+            r##"
+            bad = [0x1D11E].pack("U")
+            r = []
+            r << ("\u{1F600}".encode("Big5", undef: :replace, replace: bad) rescue [$!.class.to_s, $!.message])
+            r << ("\u{4E00}".encode("Big5", undef: :replace, replace: bad) rescue [$!.class.to_s, $!.message])
+            r << ("\u{4E00}".encode("Big5", invalid: :replace, replace: bad) rescue [$!.class.to_s, $!.message])
+            r << (Encoding::Converter.new("UTF-8", "Big5", undef: :replace, replace: bad) rescue [$!.class.to_s, $!.message])
+            r << (Encoding::Converter.new("UTF-8", "Big5", replace: bad) rescue [$!.class.to_s, $!.message])
+            r
+            "##,
+        );
+        // Where CRuby opens no converter it never looks at the
+        // replacement: the same string and the same options go
+        // through when the source needs no conversion.
+        crate::tests::run_test_once(
+            r##"
+            bad = [0x1D11E].pack("U")
+            r = []
+            r << ("abc".encode("Big5", undef: :replace, replace: bad) rescue $!.class.to_s)
+            r << ("abc".encode("Big5", invalid: :replace, replace: bad) rescue $!.class.to_s)
+            r << ("".encode("Big5", undef: :replace, replace: bad) rescue $!.class.to_s)
+            r << ("\u{1F600}".encode("UTF-8", undef: :replace, replace: bad) rescue $!.class.to_s)
+            r << ("abc".dup.force_encoding("Big5").encode("Big5", undef: :replace,
+                    replace: bad, universal_newline: true) rescue $!.class.to_s)
+            r
+            "##,
+        );
+        // A decorator is work of its own, so it opens a converter for
+        // text that would otherwise pass straight through — and the
+        // error names the decorators after the pair.
+        crate::tests::run_test_once(
+            r##"
+            bad = [0x1D11E].pack("U")
+            [[{ undef: :replace, universal_newline: true }, "a\nb"],
+             [{ undef: :replace, crlf_newline: true }, "a\nb"],
+             [{ undef: :replace, cr_newline: true }, "a\nb"],
+             [{ xml: :text }, "abc"],
+             [{ xml: :attr }, "abc"]].map do |o, s|
+              (s.encode("Big5", **o, replace: bad) rescue [$!.class.to_s, $!.message])
+            end
+            "##,
+        );
+        // The same question asked after the fact, where CRuby names
+        // neither the character nor the pair. The destinations whose
+        // repertoire is narrower than their codec's are included, so
+        // the check is the pipeline's and not `encoding_rs`'s (#1544).
+        crate::tests::run_test_once(
+            r##"
+            [["Big5", 0x1D11E], ["US-ASCII", 0x4E00], ["GB2312", 0x20AC],
+             ["Big5", 0x4E00], ["GB2312", 0x4E00]].map do |enc, cp|
+              c = Encoding::Converter.new("UTF-8", enc)
+              (c.replacement = [cp].pack("U")) rescue [$!.class.to_s, $!.message]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_encodings_that_had_no_converter_have_one() {
+        // #1563 gave these `Encoding` objects; CRuby transcodes them
+        // and monoruby answered `ConverterNotFoundError` in both
+        // directions (#1567). The three DOS code pages and
+        // Windows-874 have no `encoding_rs` codec — its `windows-874`
+        // is WHATWG's, which differs from CRuby's in 23 cells — so
+        // they read from in-tree tables.
+        crate::tests::run_test_once(
+            r##"
+            [["IBM720", 0x82], ["IBM720", 0x80], ["Windows-874", 0xA1],
+             ["Windows-874", 0x80], ["Windows-874", 0x81], ["Windows-874", 0xDB],
+             ["CP852", 0x80], ["IBM852", 0xB5], ["CP855", 0x80], ["IBM855", 0xFD],
+             ["CP874", 0x91], ["CP720", 0x91]].map do |enc, b|
+              s = [b].pack("C").force_encoding(enc)
+              one = (s.encode("UTF-8").codepoints rescue $!.class.to_s)
+              cv = (Encoding::Converter.new(enc, "UTF-8").convert(s.dup).codepoints rescue $!.class.to_s)
+              [enc, one, cv, one == cv]
+            end
+            "##,
+        );
+        // The way out, and the characters these code pages have no
+        // cell for.
+        crate::tests::run_test_once(
+            r##"
+            [["IBM720", 0x644], ["IBM720", 0x4E00], ["Windows-874", 0xE01],
+             ["Windows-874", 0x20AC], ["Windows-874", 0x4E00], ["CP852", 0x104],
+             ["CP855", 0x426], ["IBM852", 0x4E00]].map do |enc, cp|
+              s = [cp].pack("U")
+              one = (s.encode(enc).bytes rescue $!.class.to_s)
+              cv = (Encoding::Converter.new("UTF-8", enc).convert(s.dup).bytes rescue $!.class.to_s)
+              [enc, one, cv, one == cv]
+            end
+            "##,
+        );
+        // CP950 and CP951 are Microsoft's Big5, not CRuby's: they
+        // fill thousands of cells Big5 leaves empty — with private
+        // use characters — and their encoders carry best-fit
+        // mappings, which are the single-byte cells here.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            r << [[0xA4, 0x40], [0xC6, 0xA1], [0xF9, 0xD6]].map do |b1, b2|
+              [b1, b2].pack("C*").force_encoding("CP950").encode("UTF-8").codepoints
+            end
+            r << [0x4E00, 0xA1, 0xFF0C, 0x2550].map do |cp|
+              [cp].pack("U").encode("CP950").bytes
+            end
+            r << [0x4E00, 0xA1, 0x2550].map do |cp|
+              [cp].pack("U").encode("CP951").bytes
+            end
+            # what each of the three reaches, counted
+            r << ["Big5", "CP950", "CP951"].map do |e|
+              n = (0x80..0x9FFF).count { |cp| ([cp].pack("U").encode(e) rescue nil) }
+              [e, n]
+            end
+            r
+            "##,
+        );
+    }
+
+    #[test]
     fn the_cjk_encodings_use_crubys_tables() {
         // `encoding_rs` carries WHATWG's tables: its `gb2312` is GBK,
         // and its `big5` reaches rows CRuby has nothing in. So cells
@@ -12100,6 +12504,69 @@ mod tests {
              lambda { m.sub("a", "z") }].each do |f|
               r << (begin; f.call; rescue => e; e.class.to_s; end)
             end
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn invalid_replace_is_honoured_for_a_us_ascii_source() {
+        // US-ASCII has no `encoding_rs` codec, no single-byte table and
+        // no `mbc_walker`, so none of the three paths that honour
+        // `invalid:` covered it: it raised whatever the caller asked
+        // for, and the destinations with no codec of their own copied
+        // the offending byte through (#1570).
+        crate::tests::run_test_once(
+            r##"
+            s = "a\x80b".dup.force_encoding("US-ASCII")
+            r = [s.valid_encoding?, s.scrub("?")]
+            ["UTF-8", "EUC-JP", "US-ASCII", "ASCII-8BIT", "UTF-16BE"].each do |d|
+              r << (begin; s.encode(d, invalid: :replace).bytes; rescue => e; e.class.to_s; end)
+            end
+            r << s.encode("UTF-8", invalid: :replace, replace: "!").bytes
+            # ...while a source that is merely ill-formed still raises
+            # without the option, with the message it already had.
+            r << (begin; s.encode("UTF-8"); rescue => e; [e.class.to_s, e.message]; end)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_replacement_follows_the_encoding_it_is_inserted_in() {
+        // `U+FFFD` or `"?"` is decided by a table of encoding *names*,
+        // asked about the encoding the last transcoder inserts into.
+        // Resolving it against the UTF-8 pivot rather than the
+        // destination gave `UTF8-MAC` the `U+FFFD` that only UTF-8 and
+        // the wide forms take, and the endianness-less dummies took
+        // `"?"` where their big-endian form takes `U+FFFD` (#1571).
+        crate::tests::run_test_once(
+            r##"
+            s = "a\xffb".dup.force_encoding("UTF-8")
+            dsts = %w[UTF-8 UTF8-MAC CESU-8 EUC-JP Shift_JIS US-ASCII ASCII-8BIT
+                      UTF-16BE UTF-16LE UTF-32BE UTF-32LE UTF-16 UTF-32
+                      UCS-2BE UCS-4BE ISO-8859-1 Windows-31J]
+            r = dsts.map do |d|
+              [d, (begin; s.encode(d, invalid: :replace).b.bytes; rescue => e; e.class.to_s; end)]
+            end
+            # `Converter#replacement` keeps the same string, and CRuby
+            # holds it in the encoding it is inserted in rather than in
+            # the destination — UTF-8 even for a UTF-16BE destination.
+            # CESU-8 and the two BOM dummies are left out:
+            # `Encoding::Converter` does not take them as destinations
+            # yet although `String#encode` does, which is its own gap.
+            r << (dsts - %w[CESU-8 UTF-16 UTF-32]).map do |d|
+              [d, (begin
+                     ec = Encoding::Converter.new("UTF-8", d)
+                     [ec.replacement.b.bytes, ec.replacement.encoding.name]
+                   rescue => e
+                     e.class.to_s
+                   end)]
+            end
+            # The same-encoding scrub asks the source's own name, so
+            # CESU-8 takes "?" although a conversion *into* it does not.
+            r << "\xf0".dup.force_encoding("CESU-8").encode("CESU-8", invalid: :replace).b.bytes
+            r << "\xff".dup.force_encoding("UTF-8").encode("UTF-8", invalid: :replace).b.bytes
             r
             "##,
         );
