@@ -1134,6 +1134,7 @@
 3b1644af44f2b478814ac2f40d1b9037	[3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22]	module Foo\n              @@foo = 1\n              def foo\n          
 3b2c8f065c5ebcd815f411c69823e2f8	[true, "hi", "hi", "hi"]	class ReSubA < Regexp; def initialize(*a); super; @a = a; end; attr_reader :a; e
 3b31ad9a0b1b239abb470c77a4dfeb4d	[[2, [:completed, :after]], 40]	$n = 0\n        def mid(arr)\n          v = begin\n            arr.each { 
+3b31b0677f707c60c5900e6fe9ff2e22	["MKeep", :v]	class MKeep < Hash; end\n            h = MKeep.new\n            h[:k]
 3b321e6a12da0e61ced761fb33a302e2	"[\\"/\\", 1, 2]"	require "tmpdir"\n            Dir.mktmpdir do |d|\n              out 
 3b322fd7da566474e06ac3cf66a73833	"0"	ENV["MONORUBY_ENV_TEST_FF"] = "0"\n            begin\n              E
 3b39e9db52a30f710cbc3acfcfed2261	["Errno::EINVAL", true]	require 'fcntl'\n            File.open("/tmp") do |f|\n              
@@ -3291,6 +3292,7 @@ aceb2659b18216e501df9f2f6ebd7645	[["h", "i", "!"], ["h", "i", "!", ""], ["h", "i
 aced21e1e31e2ddc5465a70187f24f60	["para1a\\npara1b\\n\\npara2\\n", "para", "ASCII-8BIT", "ra1a", "para1b\\n\\npara2\\n", "para1a\\npara1b\\n\\npara2\\n", nil, "US-ASCII", ["para1a\\n", "para1b\\n", "\\n", "para2\\n"], ["para1a\\n", "para1b\\n\\npara2\\n"], ["para1a\\npara1b\\n\\npara2\\n"], ["para1a", "para1b", "", "para2"], ["para1a\\npara1b\\n\\n", "para2\\n"], ["pa", "ra", "1", "a\\n", "pa", "ra", "1", "b\\n", "\\np", "ar", "a2", "\\n"]]	require 'tmpdir'\n            f = File.join(Dir.tmpdir, "file_read_a
 ad063a5a7b5850775d75f6df196eaae1	[nil, 7, 1, 2, 4, 3, 8, 1]	def a; begin; break; end while false; end\n            def b; begin;
 ad1ae32a9a55d70e4730df3370a823db	[1, 2]	class C; def to_ary; [1, 2]; end; end\nArray.try_convert(C.new)
+ad2100bf4a7b6e80193ecf6176b5cef1	["dump format error (user class)", "dump format error (user class)", "dump format error (user class)"]	module MSwap\n              def self.set(k)\n                send(:re
 ad327b0e14cdbac70c350b1dfa7ac595	[4, 2, 3, 2, true, false]	__a = [];__a << (ary = [1, 2, 4, 2.0]; ary.count);__a << (ary = [1, 2, 4, 2.0]; 
 ad351c76c4db959c30dbfa4271bcd7ae	["s", [0, 0], nil, [1, 2]]	class CNStr < String; end\n        class CNAry < Array; end\n        clas
 ad3d114daa3fe697d3d65acf89424a99	[1, 2, 3]	c = Class.new\n            captured = nil\n            c.class_exec(1
