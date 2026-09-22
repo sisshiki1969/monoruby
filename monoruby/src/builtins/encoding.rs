@@ -1,4 +1,7 @@
-use super::encoding_carrier::{SjisCarrier, Utf8Carrier, sjis_carrier, utf8_carrier};
+use super::encoding_carrier::{
+    CarrierPair, Utf8Carrier, carrier_base, carrier_pair, carrier_route, carrier_vendor,
+    utf8_carrier,
+};
 use super::*;
 
 //
@@ -2426,6 +2429,98 @@ pub(super) fn transcode_for_env(
 /// there, naming the destination the caller asked for. And an
 /// `UndefinedConversionError` out of the pivot is a two-hop failure to
 /// CRuby, which spells both hops.
+/// One hop of a carrier-to-carrier conversion: read the bytes in the
+/// hop's source base, rewrite what its table names, write them in the
+/// destination base. `src_enc` and `dst_enc` are the conversion's own
+/// ends, which is what an error message names (#1573).
+#[allow(clippy::too_many_arguments)]
+fn carrier_hop(
+    bytes: &[u8],
+    from: crate::value::Encoding,
+    to: crate::value::Encoding,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> Result<Vec<u8>> {
+    let from_base = carrier_base(from).expect("a carrier has a base");
+    let to_base = carrier_base(to).expect("a carrier has a base");
+    let text = if from_base == crate::value::Encoding::UTF8 {
+        std::str::from_utf8(bytes)
+            .map_err(|_| invalid_byte_sequence(store, src_enc, dst_enc, bytes))?
+            .to_string()
+    } else {
+        let pivot =
+            transcode_bytes_with_opts(bytes, from_base, crate::value::Encoding::UTF8, &TranscodeOpts::default(), store)?;
+        String::from_utf8(pivot).map_err(|_| invalid_byte_sequence(store, src_enc, dst_enc, bytes))?
+    };
+    let spelled = match carrier_pair(from, to) {
+        None => text,
+        Some(table) => match carrier_to_carrier(&text, table) {
+            Ok(spelled) => spelled,
+            Err(c) if opts.undef_replace => {
+                let replace = opts.replace_str(dst_enc);
+                let mut out = String::with_capacity(text.len());
+                for c in text.chars() {
+                    match carrier_to_carrier(&c.to_string(), table) {
+                        Ok(piece) => out.push_str(&piece),
+                        Err(_) => out.push_str(&replace),
+                    }
+                }
+                let _ = c;
+                out
+            }
+            Err(c) => {
+                return Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(c, src_enc, dst_enc),
+                ));
+            }
+        },
+    };
+    if to_base == crate::value::Encoding::UTF8 {
+        Ok(spelled.into_bytes())
+    } else {
+        transcode_bytes_with_opts(spelled.as_bytes(), crate::value::Encoding::UTF8, to_base, opts, store)
+    }
+}
+
+/// One carrier's text rewritten as another's.
+///
+/// A conversion with a carrier at each end is a transcoder of its own
+/// in CRuby, not a round trip through the pivot: a carrier's emoji
+/// converts to the other's even where it has no Unicode meaning at all
+/// and so could not have gone through one. Everything the table has no
+/// say in keeps its own spelling (#1573).
+fn carrier_to_carrier(s: &str, table: &'static CarrierPair) -> std::result::Result<String, char> {
+    let cs: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut at = 0;
+    while at < cs.len() {
+        // The longer key wins: two of one carrier's characters can be
+        // one of another's.
+        let mut took = None;
+        for n in (1..=CarrierPair::LOOKAHEAD.min(cs.len() - at)).rev() {
+            if let Some(answer) = table.maps(&cs[at..at + n]) {
+                took = Some((n, answer));
+                break;
+            }
+        }
+        match took {
+            Some((_, None)) => return Err(cs[at]),
+            Some((n, Some(spelled))) => {
+                out.extend(spelled);
+                at += n;
+            }
+            None => {
+                out.push(cs[at]);
+                at += 1;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// A `UTF8-*` carrier source read as Unicode: the carrier's own
 /// characters mean what its table says, and the rest mean what UTF-8
 /// means. `Err` names the first character the carrier holds no meaning
@@ -2461,97 +2556,7 @@ fn unicode_to_carrier_utf8(s: &str, table: &'static Utf8Carrier) -> std::result:
     Ok(out)
 }
 
-/// An `SJIS-*` carrier source read as Unicode.
-///
-/// The walk is Windows-31J's, and each two-byte cell is asked of the
-/// carrier's table first: it reads a block of them as its own emoji
-/// and holds no character at all for another block, both of which
-/// Windows-31J reads as private-use characters. Everything else is
-/// Windows-31J's own reading. `Err(Some(cell))` is a cell the carrier
-/// does not hold; `Err(None)` is a byte sequence the walk itself
-/// rejects, which the caller reports as it reports any other (#1573).
-fn carrier_sjis_to_unicode(
-    bytes: &[u8],
-    table: &'static SjisCarrier,
-    store: &Store,
-    src_enc: crate::value::Encoding,
-) -> std::result::Result<String, Option<u16>> {
-    let base = crate::value::Encoding::Sjis(crate::value::WINDOWS_31J);
-    let mut out = String::with_capacity(bytes.len());
-    let mut at = 0;
-    while at < bytes.len() {
-        let b = bytes[at];
-        if b < 0x80 {
-            out.push(b as char);
-            at += 1;
-            continue;
-        }
-        // A single-byte half-width katakana, or anything else the
-        // two-byte table has no say in, goes to the base codec whole.
-        let width = match crate::value::sjis_precise_len(bytes, at) {
-            crate::value::PreciseLen::Char(n) => n,
-            _ => return Err(None),
-        };
-        if width == 2 {
-            let cell = ((bytes[at] as u16) << 8) | bytes[at + 1] as u16;
-            if table.unreadable(cell) {
-                return Err(Some(cell));
-            }
-            if let Some(cs) = table.reads(cell) {
-                out.extend(cs);
-                at += 2;
-                continue;
-            }
-        }
-        let piece = transcode_bytes_with_opts(
-            &bytes[at..at + width],
-            base,
-            crate::value::Encoding::UTF8,
-            &TranscodeOpts::default(),
-            store,
-        )
-        .map_err(|_| Some(((bytes[at] as u16) << 8) | *bytes.get(at + 1).unwrap_or(&0) as u16))?;
-        let Ok(text) = String::from_utf8(piece) else {
-            return Err(None);
-        };
-        out.push_str(&text);
-        at += width;
-        let _ = src_enc;
-    }
-    Ok(out)
-}
 
-/// Unicode written as an `SJIS-*` carrier: the characters its table
-/// names go into the carrier's own cells, the rest are Windows-31J's
-/// to write. `Err` names the first character the carrier cannot write.
-fn unicode_to_carrier_sjis(
-    s: &str,
-    table: &'static SjisCarrier,
-    store: &Store,
-) -> std::result::Result<Vec<u8>, char> {
-    let base = crate::value::Encoding::Sjis(crate::value::WINDOWS_31J);
-    let mut out: Vec<u8> = Vec::with_capacity(s.len());
-    let mut buf = [0u8; 4];
-    for c in s.chars() {
-        if table.refuses(c) {
-            return Err(c);
-        }
-        if let Some(bytes) = table.writes(c) {
-            out.extend_from_slice(&bytes);
-            continue;
-        }
-        let piece = transcode_bytes_with_opts(
-            c.encode_utf8(&mut buf).as_bytes(),
-            crate::value::Encoding::UTF8,
-            base,
-            &TranscodeOpts::default(),
-            store,
-        )
-        .map_err(|_| c)?;
-        out.extend_from_slice(&piece);
-    }
-    Ok(out)
-}
 
 fn to_pivot_for(
     src_bytes: &[u8],
@@ -2734,6 +2739,29 @@ pub(super) fn transcode_bytes_with_opts(
             let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
             return Ok(crate::value::utf8_to_mac(&utf8).into_bytes());
         }
+        // A carrier at each end is CRuby's own transcoder, not a round
+        // trip through the pivot: a carrier's emoji converts to the
+        // other's even where it has no Unicode meaning at all, and one
+        // vendor's two encodings hold the same emoji in different
+        // bases. `carrier_route` is the `convpath` CRuby reports for
+        // the pair, and each hop is one table read in the two sides'
+        // base readings (#1573).
+        let route = if carrier_vendor(src_enc).is_some() || carrier_vendor(dst_enc).is_some() {
+            carrier_route(src_enc, dst_enc)
+        } else {
+            vec![]
+        };
+        if route.len() > 1 || route.iter().any(|(f, t)| carrier_pair(*f, *t).is_some()) {
+            let mut bytes = src_bytes.to_vec();
+            for (from, to) in route {
+                bytes = if carrier_pair(from, to).is_some() {
+                    carrier_hop(&bytes, from, to, src_enc, dst_enc, opts, store)?
+                } else {
+                    transcode_bytes_with_opts(&bytes, from, to, opts, store)?
+                };
+            }
+            return Ok(bytes);
+        }
         // The six carrier sets ride it too. Each is its base with a
         // block of characters spelled as one Japanese carrier's emoji,
         // so one side of the conversion is that table and the other is
@@ -2745,12 +2773,30 @@ pub(super) fn transcode_bytes_with_opts(
             && let Some(table) = utf8_carrier(i)
             && let Ok(text) = std::str::from_utf8(src_bytes)
         {
-            let unicode = carrier_utf8_to_unicode(text, table).map_err(|c| {
-                MonorubyErr::undefined_conversion_error(
-                    store,
-                    undefined_char_message(c, src_enc, dst_enc),
-                )
-            })?;
+            let unicode = match carrier_utf8_to_unicode(text, table) {
+                Ok(unicode) => unicode,
+                // A carrier character with no Unicode meaning at all
+                // is an undefined conversion, and `undef: :replace`
+                // stands the destination's replacement in for it like
+                // any other.
+                Err(_) if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    let mut out = String::with_capacity(text.len());
+                    for c in text.chars() {
+                        match carrier_utf8_to_unicode(&c.to_string(), table) {
+                            Ok(piece) => out.push_str(&piece),
+                            Err(_) => out.push_str(&replace),
+                        }
+                    }
+                    out
+                }
+                Err(c) => {
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        undefined_char_message(c, src_enc, dst_enc),
+                    ));
+                }
+            };
             return transcode_bytes_with_opts(
                 unicode.as_bytes(),
                 crate::value::Encoding::UTF8,
@@ -2776,60 +2822,6 @@ pub(super) fn transcode_bytes_with_opts(
                     }
                     let _ = c;
                     Ok(out.into_bytes())
-                }
-                Err(c) => Err(MonorubyErr::undefined_conversion_error(
-                    store,
-                    undefined_char_message(c, src_enc, dst_enc),
-                )),
-            };
-        }
-        if let crate::value::Encoding::Sjis(i) = src_enc
-            && let Some(table) = sjis_carrier(i)
-        {
-            match carrier_sjis_to_unicode(src_bytes, table, store, src_enc) {
-                Ok(unicode) => {
-                    return transcode_bytes_with_opts(
-                        unicode.as_bytes(),
-                        crate::value::Encoding::UTF8,
-                        dst_enc,
-                        opts,
-                        store,
-                    );
-                }
-                Err(Some(cell)) => {
-                    let bytes = [(cell >> 8) as u8, cell as u8];
-                    return Err(MonorubyErr::undefined_conversion_error(
-                        store,
-                        format!(
-                            "{} to UTF-8 in conversion from {} to UTF-8 to {}",
-                            quote_error_bytes(&bytes),
-                            src_enc.name(),
-                            dst_enc.name()
-                        ),
-                    ));
-                }
-                // The walk itself refused the bytes: the pipeline
-                // reports that, with the message it already gets right.
-                Err(None) => {}
-            }
-        }
-        if let crate::value::Encoding::Sjis(i) = dst_enc
-            && let Some(table) = sjis_carrier(i)
-        {
-            let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
-            return match unicode_to_carrier_sjis(&utf8, table, store) {
-                Ok(bytes) => Ok(bytes),
-                Err(c) if opts.undef_replace => {
-                    let replace = opts.replace_str(dst_enc);
-                    let mut out: Vec<u8> = Vec::with_capacity(utf8.len());
-                    for c in utf8.chars() {
-                        match unicode_to_carrier_sjis(&c.to_string(), table, store) {
-                            Ok(piece) => out.extend_from_slice(&piece),
-                            Err(_) => out.extend_from_slice(replace.as_bytes()),
-                        }
-                    }
-                    let _ = c;
-                    Ok(out)
                 }
                 Err(c) => Err(MonorubyErr::undefined_conversion_error(
                     store,
@@ -5037,7 +5029,7 @@ fn converter_convert(
     // the big-endian form CRuby writes.
     let dst_stream = dummy_wide_target(dst).unwrap_or(dst);
     let (result, consumed, out, meta) =
-        stream_convert(&input, src_stream, dst_stream, None, true, &opts);
+        stream_convert(&input, src_stream, dst_stream, None, true, &opts, &globals.store);
     let out = if out.is_empty() {
         out
     } else {
@@ -5123,7 +5115,7 @@ fn converter_finish(
         // character is incomplete input.
         let opts = converter_transcode_opts(globals, recv);
         let (result, consumed, flushed, meta) =
-            stream_convert(&pending, src_stream, dst_stream, None, false, &opts);
+            stream_convert(&pending, src_stream, dst_stream, None, false, &opts, &globals.store);
         if matches!(result, StreamConvertResult::Finished) && consumed == pending.len() {
             out = flushed;
         } else {
@@ -5285,19 +5277,21 @@ fn pivot_prefix_consumed(
     src_enc: crate::value::Encoding,
     pivot_bytes: usize,
     opts: &TranscodeOpts,
+    store: &Store,
 ) -> usize {
     if pivot_bytes == 0 {
         return 0;
     }
     let decoded_len = |n: usize| -> usize {
         let (_, _, out, _) = stream_convert(
-            &src_bytes[..n],
+        &src_bytes[..n],
             src_enc,
             crate::value::Encoding::UTF8,
             None,
             true,
-            opts,
-        );
+        opts,
+        store,
+    );
         out.len()
     };
     let (mut lo, mut hi) = (0usize, src_bytes.len());
@@ -5453,6 +5447,7 @@ fn mac_source_stream(
     max_dst_bytes: Option<usize>,
     partial_input: bool,
     opts: &TranscodeOpts,
+    store: &Store,
 ) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
     use crate::value::Encoding as E;
     let src_enc = E::Utf8(crate::value::UTF8_MAC);
@@ -5469,7 +5464,7 @@ fn mac_source_stream(
         // would settle the cluster before it and lose the composition
         // the next chunk was going to complete.
         let (_, consumed, out, _) =
-            mac_source_stream(&src_bytes[..good], dst_enc, max_dst_bytes, partial_input, opts);
+            mac_source_stream(&src_bytes[..good], dst_enc, max_dst_bytes, partial_input, opts, store);
         let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
         return (kind, consumed, out, meta);
     }
@@ -5495,6 +5490,7 @@ fn mac_source_stream(
         max_dst_bytes,
         false,
         opts,
+        store,
     );
     let consumed = if pivot_consumed == composed.len() {
         cut
@@ -5524,6 +5520,7 @@ fn cesu_source_stream(
     max_dst_bytes: Option<usize>,
     partial_input: bool,
     opts: &TranscodeOpts,
+    store: &Store,
 ) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
     use crate::value::Encoding as E;
     let src_enc = E::NamedByte(crate::value::CESU_8);
@@ -5544,7 +5541,7 @@ fn cesu_source_stream(
     let Some(pivot) = crate::value::cesu8_to_utf8(bytes) else {
         let good = cesu8_good_prefix(bytes);
         let (_, consumed, out, _) =
-            cesu_source_stream(&bytes[..good], dst_enc, max_dst_bytes, partial_input, opts);
+            cesu_source_stream(&bytes[..good], dst_enc, max_dst_bytes, partial_input, opts, store);
         let (kind, meta) = bad_source_outcome(src_enc, bytes, !partial_input);
         return (kind, consumed, out, meta);
     };
@@ -5555,6 +5552,7 @@ fn cesu_source_stream(
         max_dst_bytes,
         partial_input,
         opts,
+        store,
     );
     // Back to source bytes: a character below `U+10000` is spelled
     // exactly as UTF-8 spells it, and one above is its six-byte pair.
@@ -5592,10 +5590,11 @@ fn pivot_rewrite_stream(
     max_dst_bytes: Option<usize>,
     partial_input: bool,
     opts: &TranscodeOpts,
+    store: &Store,
 ) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
     use crate::value::Encoding as E;
     let (result, consumed, pivot, meta) =
-        stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts);
+        stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts, store);
     let text = String::from_utf8_lossy(&pivot);
     // The unit the rewrite runs on. For `UTF8-MAC` it is the whole
     // cluster, since canonical reordering can move a mark past the
@@ -5631,8 +5630,8 @@ fn pivot_rewrite_stream(
             // Fill to the byte and hold the rest of this unit for the
             // next call, as the UTF-16 destination does (#1532).
             let fits = max - out.len();
-            let written_through = pivot_prefix_consumed(src_bytes, src_enc, start, opts);
-            let through_tried = pivot_prefix_consumed(src_bytes, src_enc, end, opts);
+            let written_through = pivot_prefix_consumed(src_bytes, src_enc, start, opts, store);
+            let through_tried = pivot_prefix_consumed(src_bytes, src_enc, end, opts, store);
             out.extend_from_slice(&unit[..fits]);
             return (
                 StreamConvertResult::DestinationBufferFull,
@@ -5650,6 +5649,171 @@ fn pivot_rewrite_stream(
     (result, consumed, out, meta)
 }
 
+/// A chunk through a carrier set.
+///
+/// The carriers hold no state across calls, so the only question a
+/// chunk raises is where it stops being well-formed for its base: the
+/// prefix that is converts, and the rest is reported the way the base
+/// would report it. Everything else is the one-shot conversion, which
+/// is where the tables live (#1573).
+#[allow(clippy::too_many_arguments)]
+fn carrier_stream(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    max_dst_bytes: Option<usize>,
+    partial_input: bool,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
+    // Only the destination is a carrier: the source is an ordinary
+    // encoding, so the pipeline reads it into the pivot and the table
+    // runs on the way out — the shape `pivot_rewrite_stream` has.
+    if carrier_vendor(src_enc).is_none() {
+        let (result, consumed, pivot, meta) =
+            stream_convert(src_bytes, src_enc, crate::value::Encoding::UTF8, None, partial_input, opts, store);
+        let out = match transcode_bytes_with_opts(&pivot, crate::value::Encoding::UTF8, dst_enc, opts, store) {
+            Ok(out) => out,
+            Err(_) => {
+                let text = String::from_utf8_lossy(&pivot);
+                let mut written: Vec<u8> = vec![];
+                let mut at = 0;
+                for c in text.chars() {
+                    match transcode_bytes_with_opts(
+                        c.to_string().as_bytes(),
+                        crate::value::Encoding::UTF8,
+                        dst_enc,
+                        opts,
+                        store,
+                    ) {
+                        Ok(piece) => {
+                            written.extend_from_slice(&piece);
+                            at += c.len_utf8();
+                        }
+                        Err(_) => {
+                            return (
+                                StreamConvertResult::UndefinedConversion,
+                                pivot_prefix_consumed(src_bytes, src_enc, at, opts, store),
+                                written,
+                                ErrMeta {
+                                    error_bytes: c.to_string().into_bytes(),
+                                    readagain_bytes: vec![],
+                                    ..ErrMeta::default()
+                                },
+                            );
+                        }
+                    }
+                }
+                written
+            }
+        };
+        return (result, consumed, out, meta);
+    }
+    // How much of the source reads as whole characters of its own
+    // encoding. A carrier's walk is its base's.
+    let good = match crate::value::mbc_walker(src_enc) {
+        Some((_, precise)) => {
+            let mut at = 0;
+            while at < src_bytes.len() {
+                match precise(src_bytes, at) {
+                    crate::value::PreciseLen::Char(n) if n > 0 => at += n,
+                    _ => break,
+                }
+            }
+            at
+        }
+        None => match std::str::from_utf8(src_bytes) {
+            Ok(_) => src_bytes.len(),
+            Err(e) => e.valid_up_to(),
+        },
+    };
+    let head = &src_bytes[..good];
+    let out = match transcode_bytes_with_opts(head, src_enc, dst_enc, opts, store) {
+        Ok(out) => out,
+        Err(_) => {
+            // The conversion refused a character the carrier does not
+            // hold. Convert what precedes it and report it the way the
+            // pipeline does, by converting one character at a time up
+            // to the first refusal.
+            let mut written: Vec<u8> = vec![];
+            let mut at = 0;
+            while at < good {
+                let n = match crate::value::mbc_walker(src_enc) {
+                    Some((_, precise)) => match precise(src_bytes, at) {
+                        crate::value::PreciseLen::Char(n) if n > 0 => n,
+                        _ => break,
+                    },
+                    None => match std::str::from_utf8(&src_bytes[at..]) {
+                        Ok(rest) => rest.chars().next().map_or(1, |c| c.len_utf8()),
+                        Err(_) => break,
+                    },
+                };
+                match transcode_bytes_with_opts(&src_bytes[at..at + n], src_enc, dst_enc, opts, store)
+                {
+                    Ok(piece) => {
+                        written.extend_from_slice(&piece);
+                        at += n;
+                    }
+                    Err(_) => break,
+                }
+            }
+            let bad = &src_bytes[at..(at + 4).min(src_bytes.len())];
+            return (
+                StreamConvertResult::UndefinedConversion,
+                at,
+                written,
+                ErrMeta {
+                    error_bytes: carrier_error_char(bad, src_enc),
+                    readagain_bytes: vec![],
+                    ..ErrMeta::default()
+                },
+            );
+        }
+    };
+    if good < src_bytes.len() {
+        let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
+        return (kind, good, out, meta);
+    }
+    if let Some(max) = max_dst_bytes
+        && out.len() > max
+    {
+        // The cap cuts the output; hold the rest for the next call.
+        let fits = max;
+        let held = out[fits..].to_vec();
+        return (
+            StreamConvertResult::DestinationBufferFull,
+            good,
+            out[..fits].to_vec(),
+            ErrMeta {
+                dst_full_out: held,
+                ..ErrMeta::default()
+            },
+        );
+    }
+    (StreamConvertResult::Finished, good, out, ErrMeta::default())
+}
+
+/// The character a carrier refused, in the UTF-8 the error machinery
+/// stores it as.
+fn carrier_error_char(bytes: &[u8], src_enc: crate::value::Encoding) -> Vec<u8> {
+    let base = carrier_base(src_enc).unwrap_or(src_enc);
+    if base == crate::value::Encoding::UTF8 {
+        return match std::str::from_utf8(bytes) {
+            Ok(s) => s.chars().next().map(|c| c.to_string().into_bytes()),
+            Err(e) => std::str::from_utf8(&bytes[..e.valid_up_to()])
+                .ok()
+                .and_then(|s| s.chars().next())
+                .map(|c| c.to_string().into_bytes()),
+        }
+        .unwrap_or_else(|| bytes.to_vec());
+    }
+    let n = match crate::value::sjis_precise_len(bytes, 0) {
+        crate::value::PreciseLen::Char(n) => n,
+        _ => return bytes.to_vec(),
+    };
+    bytes[..n.min(bytes.len())].to_vec()
+}
+
 fn stream_convert(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -5657,6 +5821,7 @@ fn stream_convert(
     max_dst_bytes: Option<usize>,
     partial_input: bool,
     opts: &TranscodeOpts,
+    store: &Store,
 ) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
     use crate::value::Encoding as E;
     // The pivot wrappers #1562 gave `String#encode` — `UTF8-MAC`'s
@@ -5665,14 +5830,30 @@ fn stream_convert(
     // pipeline with the rewrite on the side that needs it. They come
     // before the identity fast path below, which would otherwise hand
     // the bytes through unconverted (#1576).
+    // A carrier set on either side is the same story: its base's
+    // structure, with a table saying which characters it spells
+    // differently. It is stateless — no BOM, nothing held back — so a
+    // chunk converts on its own, once its well-formed prefix is
+    // settled (#1573).
+    if carrier_vendor(src_enc).is_some() || carrier_vendor(dst_enc).is_some() {
+        return carrier_stream(
+            src_bytes,
+            src_enc,
+            dst_enc,
+            max_dst_bytes,
+            partial_input,
+            opts,
+            store,
+        );
+    }
     let mac = E::Utf8(crate::value::UTF8_MAC);
     let cesu = E::NamedByte(crate::value::CESU_8);
     if src_enc != dst_enc {
         if src_enc == mac {
-            return mac_source_stream(src_bytes, dst_enc, max_dst_bytes, partial_input, opts);
+            return mac_source_stream(src_bytes, dst_enc, max_dst_bytes, partial_input, opts, store);
         }
         if src_enc == cesu {
-            return cesu_source_stream(src_bytes, dst_enc, max_dst_bytes, partial_input, opts);
+            return cesu_source_stream(src_bytes, dst_enc, max_dst_bytes, partial_input, opts, store);
         }
         if dst_enc == mac || dst_enc == cesu {
             return pivot_rewrite_stream(
@@ -5682,6 +5863,7 @@ fn stream_convert(
                 max_dst_bytes,
                 partial_input,
                 opts,
+                store,
             );
         }
     }
@@ -5724,7 +5906,11 @@ fn stream_convert(
         };
         let eaten = src_bytes.len() - rest.len();
         let (result, consumed, out, meta) =
-            stream_convert(rest, wide, dst_enc, max_dst_bytes, partial_input, opts);
+            stream_convert(
+        rest, wide, dst_enc, max_dst_bytes, partial_input,
+        opts,
+        store,
+    );
         return (result, consumed + eaten, out, meta);
     }
     // UTF-16 / UTF-32 on either side. `encoding_rs` has no UTF-32 at
@@ -5737,18 +5923,23 @@ fn stream_convert(
             // them to the destination and *then* reports the error.
             let at = utf16_32_first_error(src_bytes, src_enc).unwrap_or(0);
             let (_, _, out, _) =
-                stream_convert(&src_bytes[..at], src_enc, dst_enc, max_dst_bytes, false, opts);
+                stream_convert(
+        &src_bytes[..at], src_enc, dst_enc, max_dst_bytes, false,
+        opts,
+        store,
+    );
             let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
             return (kind, at, out, meta);
         }
         let (result, pivot_consumed, out, meta) = stream_convert(
-            pivot.as_bytes(),
+        pivot.as_bytes(),
             E::UTF8,
             dst_enc,
             max_dst_bytes,
             partial_input,
-            opts,
-        );
+        opts,
+        store,
+    );
         // Back to source bytes: two per UTF-16 code unit (so four for a
         // surrogate pair), four per UTF-32 character.
         let wide = matches!(src_enc, E::Utf32Le | E::Utf32Be);
@@ -5763,7 +5954,7 @@ fn stream_convert(
     }
     if is_utf16_or_32(dst_enc) {
         let (result, consumed, pivot, meta) =
-            stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts);
+            stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts, store);
         // Whatever decoded before the decode half gave up still has to
         // come out; the encode half itself cannot fail, every scalar
         // having a UTF-16 and a UTF-32 form.
@@ -5778,9 +5969,9 @@ fn stream_convert(
                 // Fill to the byte and hold the rest of this unit
                 // for the next call (#1532).
                 let fits = max - out.len();
-                let written_through = pivot_prefix_consumed(src_bytes, src_enc, at, opts);
+                let written_through = pivot_prefix_consumed(src_bytes, src_enc, at, opts, store);
                 let through_tried =
-                    pivot_prefix_consumed(src_bytes, src_enc, at + c.len_utf8(), opts);
+                    pivot_prefix_consumed(src_bytes, src_enc, at + c.len_utf8(), opts, store);
                 out.extend_from_slice(&unit[..fits]);
                 return (
                     StreamConvertResult::DestinationBufferFull,
@@ -5915,13 +6106,14 @@ fn stream_convert(
                 repl.as_deref(),
             );
             let (res, pivot_consumed, out, meta) = stream_convert(
-                head.text.as_bytes(),
+        head.text.as_bytes(),
                 E::UTF8,
                 dst_enc,
                 max_dst_bytes,
                 true,
-                opts,
-            );
+        opts,
+        store,
+    );
             // The head is complete text by construction, so a clean
             // one answers `Finished`, or `SourceBufferEmpty` for the
             // `partial_input` this call passes — neither is the encode
@@ -5933,7 +6125,7 @@ fn stream_convert(
                 let consumed = if pivot_consumed == head.text.len() {
                     stop
                 } else {
-                    pivot_prefix_consumed(src_bytes, src_enc, pivot_consumed, opts)
+                    pivot_prefix_consumed(src_bytes, src_enc, pivot_consumed, opts, store)
                 };
                 return (res, consumed, out, meta);
             }
@@ -5967,13 +6159,14 @@ fn stream_convert(
             return (kind, through_error, out, meta);
         }
         let (result, pivot_consumed, out, meta) = stream_convert(
-            d.text.as_bytes(),
+        d.text.as_bytes(),
             E::UTF8,
             dst_enc,
             max_dst_bytes,
             partial_input,
-            opts,
-        );
+        opts,
+        store,
+    );
         // The whole pivot converting is the common case and needs no
         // mapping back; anything short of it is a capped destination or
         // an encode-half error, where the source offset is the pivot
@@ -5981,13 +6174,13 @@ fn stream_convert(
         let consumed = if pivot_consumed == d.text.len() {
             src_bytes.len()
         } else {
-            pivot_prefix_consumed(src_bytes, src_enc, pivot_consumed, opts)
+            pivot_prefix_consumed(src_bytes, src_enc, pivot_consumed, opts, store)
         };
         let mut meta = meta;
         if meta.dst_full_extra > 0 {
             let end = (pivot_consumed + meta.dst_full_extra).min(d.text.len());
             meta.dst_full_extra =
-                pivot_prefix_consumed(src_bytes, src_enc, end, opts).saturating_sub(consumed);
+                pivot_prefix_consumed(src_bytes, src_enc, end, opts, store).saturating_sub(consumed);
         }
         return (result, consumed, out, meta);
     }
@@ -6001,7 +6194,7 @@ fn stream_convert(
         // Decode uncapped: the cap is felt in destination bytes, and
         // these encodings write one or two of them per character.
         let (result, consumed, pivot, meta) =
-            stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts);
+            stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts, store);
         let text = String::from_utf8_lossy(&pivot);
         let mut out: Vec<u8> = Vec::with_capacity(text.len());
         let mut buf = [0u8; 4];
@@ -6023,7 +6216,7 @@ fn stream_convert(
                     let upto = at + c.len_utf8();
                     return (
                         StreamConvertResult::UndefinedConversion,
-                        pivot_prefix_consumed(src_bytes, src_enc, upto, opts),
+                        pivot_prefix_consumed(src_bytes, src_enc, upto, opts, store),
                         out,
                         ErrMeta {
                             error_bytes: bad.to_string().into_bytes(),
@@ -6044,9 +6237,9 @@ fn stream_convert(
                 // (#1532) — `before` is where it starts.
                 let leftover = out[max.max(before)..].to_vec();
                 out.truncate(max);
-                let written_through = pivot_prefix_consumed(src_bytes, src_enc, at, opts);
+                let written_through = pivot_prefix_consumed(src_bytes, src_enc, at, opts, store);
                 let through_tried =
-                    pivot_prefix_consumed(src_bytes, src_enc, at + c.len_utf8(), opts);
+                    pivot_prefix_consumed(src_bytes, src_enc, at + c.len_utf8(), opts, store);
                 return (
                     StreamConvertResult::DestinationBufferFull,
                     written_through,
@@ -6080,7 +6273,11 @@ fn stream_convert(
                     // here — and what converted before it still comes
                     // out, as CRuby's incremental transcoder has it.
                     let (_, _, out, _) =
-                        stream_convert(&src_bytes[..at], src_enc, dst_enc, max_dst_bytes, false, opts);
+                        stream_convert(
+        &src_bytes[..at], src_enc, dst_enc, max_dst_bytes, false,
+        opts,
+        store,
+    );
                     return (
                         StreamConvertResult::UndefinedConversion,
                         at + 1,
@@ -6100,13 +6297,14 @@ fn stream_convert(
             }
         };
         let (result, pivot_consumed, out, meta) = stream_convert(
-            pivot.as_bytes(),
+        pivot.as_bytes(),
             E::UTF8,
             dst_enc,
             max_dst_bytes,
             partial_input,
-            opts,
-        );
+        opts,
+        store,
+    );
         // One source byte per pivot character, so the count converts
         // back by counting characters rather than bytes.
         let consumed = pivot[..pivot_consumed].chars().count();
@@ -6122,7 +6320,7 @@ fn stream_convert(
         // table: one destination byte per character, so a destination
         // cap falls on a character boundary by construction.
         let (result, consumed, pivot, meta) =
-            stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts);
+            stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts, store);
         // Whatever decoded before the decode half gave up still has to
         // come out: `#primitive_convert` appends it to the destination
         // and *then* reports the error.
@@ -6149,7 +6347,7 @@ fn stream_convert(
                     let upto = at + c.len_utf8();
                     return (
                         StreamConvertResult::UndefinedConversion,
-                        pivot_prefix_consumed(src_bytes, src_enc, upto, opts),
+                        pivot_prefix_consumed(src_bytes, src_enc, upto, opts, store),
                         out,
                         ErrMeta {
                             error_bytes: c.to_string().into_bytes(),
@@ -6170,9 +6368,9 @@ fn stream_convert(
                 // the byte (#1532) never splits one.
                 let leftover = out[max..].to_vec();
                 out.truncate(max);
-                let written_through = pivot_prefix_consumed(src_bytes, src_enc, at, opts);
+                let written_through = pivot_prefix_consumed(src_bytes, src_enc, at, opts, store);
                 let through_tried =
-                    pivot_prefix_consumed(src_bytes, src_enc, at + c.len_utf8(), opts);
+                    pivot_prefix_consumed(src_bytes, src_enc, at + c.len_utf8(), opts, store);
                 return (
                     StreamConvertResult::DestinationBufferFull,
                     written_through,
@@ -6224,7 +6422,7 @@ fn stream_convert(
                     // it (#1511).
                     return (
                         StreamConvertResult::UndefinedConversion,
-                        pivot_prefix_consumed(src_bytes, src_enc, pivot_at + ch.len_utf8(), opts),
+                        pivot_prefix_consumed(src_bytes, src_enc, pivot_at + ch.len_utf8(), opts, store),
                         out,
                         ErrMeta {
                             error_bytes: ch.to_string().into_bytes(),
@@ -6241,9 +6439,9 @@ fn stream_convert(
                     // buffers the output of.
                     out.truncate(max);
                     let written_through =
-                        pivot_prefix_consumed(src_bytes, src_enc, pivot_at, opts);
+                        pivot_prefix_consumed(src_bytes, src_enc, pivot_at, opts, store);
                     let through_tried =
-                        pivot_prefix_consumed(src_bytes, src_enc, pivot_at + ch.len_utf8(), opts);
+                        pivot_prefix_consumed(src_bytes, src_enc, pivot_at + ch.len_utf8(), opts, store);
                     return (
                         StreamConvertResult::DestinationBufferFull,
                         written_through,
@@ -6607,7 +6805,11 @@ fn stream_convert(
             // never binding, so this is an ordinary finish — convert
             // again without one and let the decode half answer.
             if leftover.is_empty() && at == utf8_str.len() && max_dst_bytes.is_some() {
-                return stream_convert(src_bytes, src_enc, dst_enc, None, partial_input, opts);
+                return stream_convert(
+        src_bytes, src_enc, dst_enc, None, partial_input,
+        opts,
+        store,
+    );
             }
             // Everything up to `at` is converted — written or held —
             // so it is consumed outright and `dst_full_extra`, which
@@ -7824,6 +8026,7 @@ fn converter_primitive_convert(
             max_dst_bytes.map(|m| m.saturating_sub(bom_owed)),
             partial_input,
             &conv_opts,
+            &globals.store,
         )
     };
     // The BOM goes in front of the first output there is, and is
@@ -11228,6 +11431,73 @@ mod tests {
               end
             "#,
             r#"%w[CESU-8 UTF-16 UTF-32 UTF8-MAC].map { |e| Encoding::Converter.search_convpath("UTF-8", e).size }"#,
+        ]);
+    }
+
+    #[test]
+    fn the_carrier_sets_are_their_bases_with_a_vendors_emoji() {
+        // Storage, iteration and validity are the base's throughout —
+        // `UTF8-DoCoMo` is UTF-8's bytes, `SJIS-DoCoMo` is
+        // Windows-31J's cells — and only a conversion tells them
+        // apart (#1573).
+        run_tests(&[
+            r#"
+              %w[UTF8-DoCoMo UTF8-KDDI UTF8-SoftBank SJIS-DoCoMo SJIS-KDDI SJIS-SoftBank].map do |n|
+                e = Encoding.find(n)
+                [e.name, e.dummy?, e.ascii_compatible?, e.names,
+                 "abc".dup.force_encoding(n).valid_encoding?]
+              end
+            "#,
+            r#"
+              %w[UTF8-DoCoMo UTF8-KDDI UTF8-SoftBank SJIS-DoCoMo SJIS-KDDI SJIS-SoftBank].map do |n|
+                ["☀".encode(n).bytes, "☀".encode(n).encode("UTF-8").bytes]
+              end
+            "#,
+            // The cells Windows-31J holds and a carrier does not.
+            r#"
+              c = [0xF8, 0xA0].pack("C*")
+              [c.dup.force_encoding("Windows-31J").encode("UTF-8").unpack("U*"),
+               c.dup.force_encoding("SJIS-DoCoMo").encode("UTF-8").unpack("U*")]
+            "#,
+            r#"Encoding.name_list.sort == Encoding.name_list.sort.uniq"#,
+        ]);
+    }
+
+    #[test]
+    fn one_carriers_emoji_converts_to_another_without_a_unicode_meaning() {
+        // A conversion with a carrier at each end is CRuby's own
+        // transcoder, not a round trip through the pivot: DoCoMo's
+        // emoji for `U+1F600` means nothing in Unicode — converting it
+        // to UTF-8 raises — and still spells itself in KDDI's and
+        // SoftBank's alphabets (#1573).
+        run_tests(&[
+            r#"
+              d = "\u{1F600}".encode("UTF8-DoCoMo")
+              [d.unpack("U*"),
+               (begin; d.encode("UTF-8"); rescue => e; e.class.name; end),
+               d.encode("UTF8-KDDI").unpack("U*"),
+               d.encode("SJIS-SoftBank").bytes,
+               d.encode("UTF-8", undef: :replace).bytes]
+            "#,
+            // And the same through a converter, for the pairs that
+            // cross a base as well as a vendor.
+            r#"
+              [["SJIS-DoCoMo","UTF8-KDDI"],["SJIS-KDDI","SJIS-SoftBank"],["UTF8-SoftBank","SJIS-DoCoMo"]].map do |s, d|
+                src = "a☀b".encode(s)
+                [src.encode(d).bytes, Encoding::Converter.new(s, d).convert(src.dup).bytes]
+              end
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "UTF8-DoCoMo")
+              [c.convert("a☀").bytes, c.convert("☁b").bytes, c.finish.bytes]
+            "#,
+            // `undef: :replace` stands in for an emoji the other
+            // carrier has not got, as it does for any other character.
+            r#"
+              %w[UTF-8 Windows-31J EUC-JP US-ASCII].map do |d|
+                "\u{1F600}".encode("UTF8-DoCoMo").encode(d, undef: :replace).bytes
+              end
+            "#,
         ]);
     }
 
