@@ -389,6 +389,7 @@
 12ac69d0e3d7829ff39cbbddc61b3277	["elefant", 4]	S = Struct.new(:name, :legs, keyword_init: true)\n            \n\n    
 12b1a598797e50c460f3d7646ca37481	[:y]	class B\n              def x; end\n            end\n            class 
 12cd2297f4d6ac25a476739a253c9292	["RUBZ", "RUBZ", 7, 8, false, true, 7]	class C\n              def succ(s); s.succ; end\n              def po
+12d82372551c55812f45052a6164a0b8	[[65, 239, 191, 189, 66], "Encoding::UndefinedConversionError", [65, 239, 191, 189, 66], "Encoding::UndefinedConversionError"]	s = ([0x41, 0xA2, 0xE8, 0x42].pack("C*")).force_encoding("CP949")\n 
 12dced64afc93b420fbe2976ff18cf1d	[1, 0, 1, 1, 0, 62499999999999999999999999999999, 1999999999999999999999999999999998, 1000000000000000000000000000000000, 5]	B = 999999999999999999999999999999999\n        def t = [B[0], B[47], B[4
 12e99c84613123a5cb062c5fd0fbc38e	[-42, -42]	__a = [];__a << (a=42; b=-a);__a << (a=42; a; b=-a);__a
 12f4445fdce0953cbd5cbdad7cd45815	[[false, false, false], [2, 1, 2], 2, 2, 2, 2, false, 2, [false, false, 2], [true, true, 1, 1, 1], [false, 2]]	require "set"\n            a = "あ"\n            b = a.dup.force_encod
@@ -1780,6 +1781,7 @@
 5c591e9ff73fb3eaf82f8472fbe461ed	:nme	class Float; def *(o); super(o); end; end\n                begin; 2.0 * 3; rescue
 5c78c8c1a1899c06122f988ae4e55650	true	module MNs; module Ext; end; end\n            o = Object.new\n       
 5c81b1416723d320008472f66e0573cc	[true, true, true]	def churn(n) = n.times { |i| [i, i] }\n            churn(50_000); GC
+5c966d91de35ffd8d359720d44e12339	[["A2E8", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["C941", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["FE41", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["A541", "ok", "ok", true], ["AFFE", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true]]	[[0xA2, 0xE8], [0xC9, 0x41], [0xFE, 0x41], [0xA5, 0x41], [0xAF, 0xF
 5c9a399e6be0e655dcde007dc7ece9b8	true	r, w = IO.pipe\n            t = Thread.new { sleep 0.2 }\n           
 5c9bd2b9dbdb63097f4a4accca2a9df4	nil	def f(&p)\n            p.call\n        end\n        \n\n        f{}\n        
 5ca3799c684286b467f40e7d55944357	["unterminated dumped string", "invalid hex escape", "invalid Unicode escape", "string contains null byte", "non-ASCII character detected"]	__a = [];__a << (begin; '"foo'.undump; rescue RuntimeError => e; e.message; end)
@@ -3804,6 +3806,7 @@ c5b7b21a45efae69942aa2fe995450e0	[[[254, 255, 0, 97, 48, 66, 0, 98], [97, 12354,
 c5d36d66f1a2b4575d9850303505af7e	[[100], [100], [], ["100"]]	__a = [];__a << (Array([100]));__a << (Array(100));__a << (Array(nil));__a << (A
 c5f5ea4d7ccb33511960c242704f06f0	[[195], [169], 3, [195, 169], [195]]	s = "\\303\\251\\303".dup.force_encoding(Encoding::Windows_31J)\n               m = 
 c60883d6df2480fbe9ec2ae4e169130c	[200, 300, 250, 60, 200, 300, 250, 60]	class S\n            def f(x, y, a:10, b:20)\n                $res << x\n
+c60f6a6d7c45b396c6859e8ddd4ff24b	[["A2E8", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["C941", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["FE41", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["A541", "ok", "ok", true], ["AFFE", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true]]	[[0xA2, 0xE8], [0xC9, 0x41], [0xFE, 0x41], [0xA5, 0x41], [0xAF, 0xF
 c6102eb378f052a17c45ba81a08239e7	[3, [:ens]]	$log = []\n        def m(a)\n          catch(:done) do\n            begin\n
 c617cc39117c830a63eb6334242e1a40	[2, "aa", 2, "cc", 2, "bb"]	require "socket"\n            srv = UDPSocket.new\n            srv.bi
 c622030023f401e5576556f338a06cf1	:typeerr	class Bad\n              def to_int; "not an int"; end\n            e
@@ -4054,6 +4057,7 @@ d33c0b61b1c253801859e41d71a2a56a	[0, 3, 1, 2, 0, 3, nil]	__a = [];__a << ("blabl
 d33d9a4d8c30a6c6ae6f174ccdc5dd45	true	GC.enable; GC.disable; GC.disable
 d35145572a23f1c9be8cde778c274d8a	10	a = 5\n        p = proc {\n          a = 10\n        }\n        a = 1\n     
 d368d68db28c315d554367c978f045d5	84	def bar(&)\n          yield 42\n        end\n\n        def foo(&)\n         
+d36968e944a707d687381c2ca349c143	[[44032], [44032], ["80", true, "Encoding::InvalidByteSequenceError", "Encoding::InvalidByteSequenceError"], ["8041", true, "Encoding::InvalidByteSequenceError", "Encoding::InvalidByteSequenceError"], ["A2", false, "Encoding::InvalidByteSequenceError", "ok"], ["A2E841", true, "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError"]]	r = []\n            r << [0xB0, 0xA1].pack("C*").force_encoding("CP9
 d3861dd96a95e0c96f222a0649294cc2	[true, false]	class InstanceExecA; end\n            InstanceExecA.new.instance_exe
 d38763b6db5668e8a9221af0a0fe22f0	["constant", nil]	module M\n          C = 1\n        end\n    \n\n        [defined?(M::C), def
 d38a6188952e22ee5c8f4c60ce1a5ac1	true	require "json"\n            original = {"key" => [1, "two", nil, tru
@@ -4236,6 +4240,7 @@ dd2b361456941a89426a35f2ba5e5ada	[{a: 1, c: 3}, {}, {a: 1, b: nil}, [{a: 1}, tru
 dd3c071c4a6f6953708de611a7d532e1	true	d = Dir.new("/tmp")\n            begin\n              fd = d.fileno\n 
 dd59ae7dd4e6777883a269edec790eb4	[[195], 2]	s = "\\303\\251\\303".dup.force_encoding(Encoding::Windows_31J)\n               m = 
 dd5a65ce6fbcd2bfd6eff700dadf5c13	[[[[97], "US-ASCII"], [[195, 163, 194, 129, 194, 130], "ASCII-8BIT"]], [[[97], "UTF-8"], [[195, 163, 194, 129, 194, 130], "UTF-8"]], [[[97], "ASCII-8BIT"], [[195, 163, 194, 129, 194, 130], "ASCII-8BIT"]], ["US-ASCII", "US-ASCII", "US-ASCII", "ASCII-8BIT"]]	(d="/tmp/mono_eu_#{Process.pid}"; Dir.mkdir(d); n="ã".dup.force_encoding("bina
+dd6b212167b602d201bc5465bba0e469	[["UTF-8", :undefined_conversion, [65], [66], [:undefined_conversion, [67, 80, 57, 52, 57], [85, 84, 70, 45, 56], [162, 232], []]], ["EUC-KR", :undefined_conversion, [65], [66], [:undefined_conversion, [67, 80, 57, 52, 57], [85, 84, 70, 45, 56], [162, 232], []]], ["UTF-16BE", :undefined_conversion, [0, 65], [66], [:undefined_conversion, [67, 80, 57, 52, 57], [85, 84, 70, 45, 56], [162, 232], []]]]	["UTF-8", "EUC-KR", "UTF-16BE"].map do |d|\n              ec = Encod
 dd6ba415513db8cf6aad7ef750eaedc1	[99, 97, 102, 101, 204, 129]	s = "café".dup\n            s.unicode_normalize!(:nfd)\n            s
 dd7215ba379fc74d14dd5dd32b95ff3e	"circular causes"	begin\n              begin\n                raise "Error 1"\n         
 dd8750e730148376d88a9f3c0768a481	[true, true, true, true, true, true]	_r, w = IO.pipe\n            [\n              w.wait(:w, 0) == w,\n   

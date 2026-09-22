@@ -6451,7 +6451,17 @@ fn stream_convert(
     // even where its walk is not what decides a malformed run: the
     // two questions are separate, and `bad_source_outcome` below
     // still answers the second one (#1544).
-    if (walk_reports_runs(src_enc) || cell_table(src_enc).is_some())
+    // CP949 is a third reason, and neither of the first two: its walk
+    // is not the authority for a malformed run and it has no
+    // corrected table, but `encoding_rs`'s `euc-kr` still reads 5,380
+    // cells CRuby's transcoder reports as an *undefined conversion*.
+    // Without the per-cell read the codec's U+FFFD made those a
+    // malformed sequence, so the converter disagreed with
+    // `String#encode`, which has gone through `cell_decode`
+    // unconditionally since #1445 (#1565).
+    if (walk_reports_runs(src_enc)
+        || cell_table(src_enc).is_some()
+        || cell_decode_reads_cells(src_enc))
         && let Some(src_rs_in) = encoding_to_rs(src_enc)
     {
         let repl = opts.undef_replace.then(|| opts.replace_str(dst_enc));
@@ -7526,6 +7536,23 @@ fn walk_reports_runs(enc: crate::value::Encoding) -> bool {
         ),
         _ => false,
     }
+}
+
+/// An encoding whose cells the converter must read one at a time even
+/// though neither of the other two reasons applies.
+///
+/// CP949 is the only one. Its walk agrees with CRuby's transcoder
+/// about where a cell ends, but `encoding_rs`'s `euc-kr` reads cells
+/// CRuby has no character for; taking them one at a time is what
+/// tells "this cell exists and maps to nothing" (an undefined
+/// conversion) from "these bytes are malformed" (#1565).
+///
+/// The Big5 family is deliberately not here: `big5_precise_len` is
+/// *narrower* than CRuby's Big5-HKSCS transcoder, so reading through
+/// it would reject 3,908 cells the codec reads correctly today.
+fn cell_decode_reads_cells(enc: crate::value::Encoding) -> bool {
+    matches!(enc, crate::value::Encoding::NamedByte(i)
+        if crate::value::named_byte_const_name(i) == "CP949")
 }
 
 /// Where the first ill-formed sequence in *bytes* is, according to
@@ -13354,6 +13381,91 @@ mod tests {
                  e.class.to_s
                end]
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_cp949_cell_with_no_character_is_an_undefined_conversion_in_both_apis() {
+        // `encoding_rs`'s `euc-kr` reads cells CRuby's CP949
+        // transcoder has no character for. The one-shot path takes
+        // them one at a time and calls that an undefined conversion;
+        // the converter kept the codec's whole-buffer answer, where
+        // the unreadable cell is U+FFFD and so a malformed sequence.
+        // 5,380 cells of the grid disagreed that way (#1565).
+        //
+        // The messages are compared by class only: `String#encode`
+        // still spells the cell's printable trail byte as `\xNN`
+        // where CRuby prints it (#1607).
+        crate::tests::run_test_once(
+            r##"
+            [[0xA2, 0xE8], [0xC9, 0x41], [0xFE, 0x41], [0xA5, 0x41], [0xAF, 0xFE]].map do |l, t|
+              s = [l, t].pack("C*").force_encoding("CP949")
+              one = begin; s.dup.encode("UTF-8"); "ok"; rescue; $!.class.to_s; end
+              cv = begin
+                Encoding::Converter.new("CP949", "UTF-8").convert(s.dup); "ok"
+              rescue
+                $!.class.to_s
+              end
+              ["%02X%02X" % [l, t], one, cv, one == cv]
+            end
+            "##,
+        );
+        // The cells that do have a character still read, and the two
+        // bytes CP949 treats specially keep their own answers: `0x80`
+        // is `valid_encoding?`-valid and still a malformed sequence to
+        // convert, and a lead with no trail is an incomplete run.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            r << [0xB0, 0xA1].pack("C*").force_encoding("CP949").encode("UTF-8").codepoints
+            r << Encoding::Converter.new("CP949", "UTF-8")
+                   .convert([0xB0, 0xA1].pack("C*").force_encoding("CP949")).codepoints
+            [[0x80], [0x80, 0x41], [0xA2], [0xA2, 0xE8, 0x41]].each do |bytes|
+              s = bytes.pack("C*").force_encoding("CP949")
+              one = begin; s.dup.encode("UTF-8"); "ok"; rescue; $!.class.to_s; end
+              cv = begin
+                Encoding::Converter.new("CP949", "UTF-8").convert(s.dup); "ok"
+              rescue
+                $!.class.to_s
+              end
+              r << [bytes.map { |b| "%02X" % b }.join, s.valid_encoding?, one, cv]
+            end
+            r
+            "##,
+        );
+        // What converted before the cell still comes out, the cell is
+        // the whole run, and `#primitive_errinfo` names it.
+        crate::tests::run_test_once(
+            r##"
+            ["UTF-8", "EUC-KR", "UTF-16BE"].map do |d|
+              ec = Encoding::Converter.new("CP949", d)
+              dst = +""
+              s = ([0x41, 0xA2, 0xE8, 0x42].pack("C*")).force_encoding("CP949")
+              res = ec.primitive_convert(s, dst)
+              [d, res, dst.bytes, s.bytes,
+               ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            "##,
+        );
+        // `undef: :replace` covers it and `invalid: :replace` does
+        // not — which is the whole point of the distinction, and was
+        // the other way round through the converter.
+        crate::tests::run_test_once(
+            r##"
+            s = ([0x41, 0xA2, 0xE8, 0x42].pack("C*")).force_encoding("CP949")
+            [begin; s.dup.encode("UTF-8", undef: :replace).bytes; rescue; $!.class.to_s; end,
+             begin; s.dup.encode("UTF-8", invalid: :replace).bytes; rescue; $!.class.to_s; end,
+             begin
+               Encoding::Converter.new("CP949", "UTF-8", undef: :replace).convert(s.dup).bytes
+             rescue
+               $!.class.to_s
+             end,
+             begin
+               Encoding::Converter.new("CP949", "UTF-8", invalid: :replace).convert(s.dup).bytes
+             rescue
+               $!.class.to_s
+             end]
             "##,
         );
     }
