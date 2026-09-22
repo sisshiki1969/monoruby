@@ -951,6 +951,7 @@
 315fe0e279e16dfcac75e00152641d0c	[true, true, [1, 2, 3, nil, 2, nil, nil, nil, nil, nil], [1, 3, 5], [1, 3, 5], [], 1, 1, nil, 1, nil, "a", 5, 4]	__a = [];__a << (\n        (1...5).all? do |x|\n            x > 0\n        end\n    
 318bdea838d913fccc46d8c181d3eaba	:ok	mod = Module.new { def foo; :ok; end }\n            obj = Object.new
 31a2f98d7f3401ad6b8d4ee1b71619d4	:OVERRIDDEN	class Float; def *(o); :OVERRIDDEN; end; end; 3.0 * 4.0
+31b8e652f3f33e5ffc2e6aeb47e53336	[:syntax, :syntax]	def foo(*a) = a\n        def z = eval("foo(*)")\n        def d(*) = eval(
 31c383225ceaeb67f09d37a00edb79a3	[[129, 65], [129, 65], false, [129, 65], [129, 65], ["Encoding::CompatibilityError", "incompatible character encodings: Shift_JIS and EUC-JP"], nil]	def b(a, e) = a.pack("C*").dup.force_encoding(e)\n            s = b(
 31c544a50d5a96da58f1f2bca81c1529	[true, 42, "boom"]	class MyErr < StandardError\n              attr_accessor :data\n     
 31dbc52d25f8fde84592827fdd169183	42	def f(x)\n          x * 2\n        end\n        f(21)\n        
@@ -3185,6 +3186,7 @@ a9ff6dc8c0a696afe692246be87ec6a0	:ok	old_stderr = $stderr\n            captured 
 aa0179c6a7db9bb0b86a4d9b4c86ce88	"val\\n"	k = Object.new\n            def k.to_str = "COERCED"\n            v =
 aa039c3c6274f514b4f7bce223d16f64	["#<Encoding:BINARY (ASCII-8BIT)>", "\\"abc\\\\r\\\\n\\\\fp'\\\\b10\\\\\\\\\\\\\\"\\\\u9B41\\\\u1234\\"", "abc\\r\\n\\f\\x80'\\b10\\\\\\"\\xE9\\xAD\\x81\\xE1\\x88\\xB4"]	__a = [];__a << ('a'.b.encoding.inspect);__a << ("abc\\r\\n\\f\\x70'\\b10\\\\\\"魁\\u1234"
 aa05186b88affb226a363d28386e0fc0	"hello"	obj = Object.new\n            obj.define_singleton_method(:greet) { 
+aa0b7316141c3e89aac0f8079a3b49d9	[[1, 2, 3], {a: 1, b: 2}, 42, [[[1, 2], {k: 3}, 9], [[1, 2], {k: 3}, 9]], [[[1, 2]], [1, 2], [1, 2]], [[3, 4], :b], [[[7], {x: 8}], [0, 1, 2, 9]]]	__a = [];__a << (\n        def foo(*a) = a\n        def m(*) = eval("foo(*)")\n    
 aa208ce2afe4dd6fa0c882724fa0209b	["Inf", "-Inf", "NaN", "Inf", "Inf", "Inf", "-Inf"]	__a = [];__a << ("%f" % Float::INFINITY);__a << ("%f" % (-Float::INFINITY));__a 
 aa23b238b8244c565a6b33e66edb6dcb	Array	class C < Array; end\nC[1,2,3].to_a.class
 aa28322a935799ae96e4d6670e2a2139	["MStructInherited", "a", "b"]	MStructBase ||= Struct.new(:p, :q)\n            class MStructInherit
