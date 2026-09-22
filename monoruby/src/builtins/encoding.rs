@@ -2152,6 +2152,33 @@ fn replaces_with_u_fffd(enc: crate::value::Encoding) -> bool {
     }
 }
 
+/// The endianness-less dummy `UTF-16` / `UTF-32` as a *decode* source:
+/// the concrete encoding its BOM names, and the bytes after it.
+///
+/// CRuby reads the BOM and consumes it. Without one the source is
+/// ill-formed — there is nothing to say which end the code units start
+/// at — so this answers `None` and the caller reports it, naming the
+/// first code unit as the dummy encoding's own (#1576).
+fn dummy_wide_source(
+    enc: crate::value::Encoding,
+    bytes: &[u8],
+) -> Option<(crate::value::Encoding, &[u8])> {
+    use crate::value::Encoding as E;
+    let wide = dummy_wide_target(enc)?;
+    match wide {
+        E::Utf16Be => match bytes {
+            [0xFE, 0xFF, rest @ ..] => Some((E::Utf16Be, rest)),
+            [0xFF, 0xFE, rest @ ..] => Some((E::Utf16Le, rest)),
+            _ => None,
+        },
+        _ => match bytes {
+            [0x00, 0x00, 0xFE, 0xFF, rest @ ..] => Some((E::Utf32Be, rest)),
+            [0xFF, 0xFE, 0x00, 0x00, rest @ ..] => Some((E::Utf32Le, rest)),
+            _ => None,
+        },
+    }
+}
+
 /// The endianness-less dummy `UTF-16` / `UTF-32` as an encode target:
 /// returns the big-endian concrete encoding CRuby writes after a BOM.
 fn dummy_wide_target(enc: crate::value::Encoding) -> Option<crate::value::Encoding> {
@@ -2421,6 +2448,7 @@ fn pivot_replacement(dst_enc: crate::value::Encoding) -> String {
     }
 }
 
+
 /// Re-spell a pivot conversion's error for the destination the caller
 /// actually named.
 ///
@@ -2580,6 +2608,17 @@ pub(super) fn transcode_bytes_with_opts(
             let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
             return Ok(crate::value::utf8_to_cesu8(&utf8));
         }
+    }
+    // The endianness-less dummies read the other way too: the BOM
+    // names the endianness and is consumed, and without one there is
+    // nothing to say which end the code units start at, so the source
+    // is ill-formed (#1576). `dst_enc` may be the dummy as well — the
+    // encode half below writes its own BOM.
+    if dummy_wide_target(src_enc).is_some() {
+        let Some((wide, rest)) = dummy_wide_source(src_enc, src_bytes) else {
+            return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+        };
+        return transcode_bytes_with_opts(rest, wide, dst_enc, opts, store);
     }
     // EUC-JP ↔ Shift_JIS needs no pivot: CRuby maps the shared JIS
     // X 0208 plane cell to cell, which reaches the cells its own
@@ -4178,10 +4217,27 @@ fn validate_replacement(
     ))
 }
 
+/// Whether monoruby can convert to and from `enc` in one shot.
+///
+/// `Encoding::Converter` asks for more than this: it has to convert a
+/// chunk at a time, which the endianness-less dummies cannot do
+/// without remembering the BOM across calls and the pivot
+/// destinations cannot do through `stream_convert` at all. So they are
+/// deliberately absent here even though `String#encode` handles them —
+/// admitting them would build a converter that then hands its bytes
+/// through unconverted (#1576).
+fn has_codec(enc: crate::value::Encoding) -> bool {
+    use crate::value::Encoding as E;
+    encoding_to_rs(enc).is_some()
+        || single_byte_table(enc).is_some()
+        || is_utf16_or_32(enc)
+        || matches!(enc, E::Ascii8 | E::UsAscii)
+}
+
 /// Validate that `(src, dst)` is a transcoder monoruby can run.
 /// Raises `Encoding::ConverterNotFoundError` for anything
-/// `encoding_rs` doesn't cover (UTF-32, dummy CRuby encodings).
-/// Identical encodings are always allowed.
+/// [`has_codec`] does not cover. Identical encodings are always
+/// allowed.
 fn validate_converter_pair(
     src: crate::value::Encoding,
     dst: crate::value::Encoding,
@@ -4190,20 +4246,8 @@ fn validate_converter_pair(
     if src == dst {
         return Ok(());
     }
-    let src_supported = encoding_to_rs(src).is_some()
-        || single_byte_table(src).is_some()
-        || is_utf16_or_32(src)
-        || matches!(
-            src,
-            crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
-        );
-    let dst_supported = encoding_to_rs(dst).is_some()
-        || single_byte_table(dst).is_some()
-        || is_utf16_or_32(dst)
-        || matches!(
-            dst,
-            crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
-        );
+    let src_supported = has_codec(src);
+    let dst_supported = has_codec(dst);
     if !src_supported || !dst_supported {
         return Err(MonorubyErr::converter_not_found_error(
             store,
@@ -6155,6 +6199,20 @@ fn first_bad_sequence(enc: crate::value::Encoding, bytes: &[u8]) -> Option<(Vec<
             .iter()
             .position(|b| *b >= 0x80)
             .map(|i| (vec![bytes[i]], vec![], false)),
+        // A BOM-less endianness-less dummy: the whole source is
+        // ill-formed, and CRuby names its first code unit (#1576).
+        _ if dummy_wide_target(enc).is_some() => {
+            let unit = if dummy_wide_target(enc) == Some(E::Utf16Be) {
+                2
+            } else {
+                4
+            };
+            Some(if bytes.len() < unit {
+                (bytes.to_vec(), vec![], true)
+            } else {
+                (bytes[..unit].to_vec(), vec![], false)
+            })
+        }
         E::Utf16Le | E::Utf16Be => first_bad_utf16(bytes, enc == E::Utf16Be),
         E::Utf32Le | E::Utf32Be => first_bad_utf32(bytes, enc == E::Utf32Be),
         // The table encodings are total over the byte range, and BINARY
@@ -12505,6 +12563,42 @@ mod tests {
               r << (begin; f.call; rescue => e; e.class.to_s; end)
             end
             r
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_bom_dummy_source_reads_the_bom_it_was_written_with() {
+        // `UTF-16` and `UTF-32` worked as a destination and not as a
+        // source, so a round trip through either raised
+        // `ConverterNotFoundError` — `dummy_wide_target` had no
+        // matching source half (#1585).
+        crate::tests::run_test_once(
+            r##"
+            s = "aあb"
+            %w[UTF-16 UTF-32].map do |e|
+              enc = s.encode(e)
+              wide = e.sub("UTF", "UTF")
+              le = (e == "UTF-16" ? [0xFF,0xFE] : [0xFF,0xFE,0,0]).pack("C*") +
+                   s.encode(wide + "LE").b
+              le.force_encoding(e)
+              nb = s.encode(e + "BE").b.dup.force_encoding(e)
+              [enc.b.bytes,
+               # the BOM picks the endianness and is consumed...
+               (begin; enc.encode("UTF-8").codepoints; rescue => x; [x.class.to_s, x.message]; end),
+               (begin; le.encode("UTF-8").codepoints; rescue => x; [x.class.to_s, x.message]; end),
+               # ...and without one the source is ill-formed, named by
+               # its first code unit as the dummy encoding's own.
+               (begin; nb.encode("UTF-8").codepoints; rescue => x; [x.class.to_s, x.message]; end),
+               # a truncated first unit is incomplete rather than invalid
+               (begin
+                  enc.b.bytes.first(1).pack("C*").dup.force_encoding(e).encode("UTF-8")
+                rescue => x
+                  [x.class.to_s, x.message, x.incomplete_input?]
+                end),
+               # and it still converts onward past the pivot
+               (begin; enc.encode("EUC-JP").bytes; rescue => x; x.class.to_s; end)]
+            end
             "##,
         );
     }
