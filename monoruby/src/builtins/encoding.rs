@@ -6230,7 +6230,7 @@ fn stream_convert(
         && let Some(at) = src_bytes.iter().position(|&b| b >= 0x80)
     {
         let (kind, consumed, out, meta) =
-            stream_convert(&src_bytes[..at], src_enc, dst_enc, max_dst_bytes, true, opts);
+            stream_convert(&src_bytes[..at], src_enc, dst_enc, max_dst_bytes, true, opts, store);
         if !matches!(
             kind,
             StreamConvertResult::Finished | StreamConvertResult::SourceBufferEmpty
