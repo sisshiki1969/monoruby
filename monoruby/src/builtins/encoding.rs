@@ -12805,6 +12805,21 @@ mod tests {
             end
             "##,
         );
+        // Not a String at all is the same question asked earlier: a
+        // valid receiver takes it without a glance, an ill-formed one
+        // refuses it the way any String argument is refused.
+        crate::tests::run_test_once(
+            r##"
+            good = "abc"
+            bad  = "a\x80b".dup.force_encoding("UTF-8")
+            [123, :sym, nil, [], 1.5].map do |a|
+              [a.class.to_s,
+               (good.dup.scrub(a).bytes rescue [$!.class.to_s, $!.message]),
+               (bad.dup.scrub(a).bytes rescue [$!.class.to_s, $!.message]),
+               (begin; t = bad.dup; t.scrub!(a); t.bytes; rescue; [$!.class.to_s, $!.message] end)]
+            end
+            "##,
+        );
     }
 
     #[test]

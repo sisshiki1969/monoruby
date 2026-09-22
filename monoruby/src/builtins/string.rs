@@ -11780,22 +11780,12 @@ fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn scrub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
-    // CRuby asks whether the replacement fits the receiver only when
-    // it is about to use one, so a receiver with nothing to scrub
-    // takes a replacement it would otherwise refuse (#1599). The
-    // argument is still type-checked.
+    // CRuby looks at the replacement only when it is about to use
+    // one, so a receiver with nothing to scrub takes an argument it
+    // would otherwise refuse — not merely one whose encoding does not
+    // fit (#1599), but one that is not a String at all. `scrub!`
+    // already returns here for the same reason.
     if inner.is_valid_encoding() {
-        if lfp.block().is_none()
-            && let Some(arg) = lfp.try_arg(0)
-            && !arg.is_nil()
-            && arg.is_rstring_inner().is_none()
-        {
-            return Err(MonorubyErr::no_implicit_conversion(
-                &globals.store,
-                arg,
-                STRING_CLASS,
-            ));
-        }
         return Ok(Value::string_from_inner(inner.clone()));
     }
     let scrubbed = if let Some(bh) = lfp.block() {
