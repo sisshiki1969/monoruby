@@ -5612,12 +5612,14 @@ fn stream_convert(
         let (kind, meta) = bad_source_outcome(src_enc, &src_bytes[at..], !partial_input);
         // The malformed run is *consumed*: `primitive_convert` leaves
         // only what follows it in `src`, since the bytes are readable
-        // from `#primitive_errinfo` (and `#putback`) instead.
-        let through_error = if matches!(kind, StreamConvertResult::InvalidByteSequence) {
-            (consumed + meta.error_bytes.len() + meta.readagain_bytes.len()).min(src_bytes.len())
-        } else {
-            consumed
-        };
+        // from `#primitive_errinfo` (and `#putback`) instead. There is
+        // no pending-run case to hold bytes back for and none to read
+        // again: a byte at or above 0x80 can never begin a US-ASCII
+        // sequence, so the run is this one byte and it is complete
+        // however the source is split.
+        debug_assert!(matches!(kind, StreamConvertResult::InvalidByteSequence));
+        debug_assert!(meta.readagain_bytes.is_empty());
+        let through_error = (consumed + meta.error_bytes.len()).min(src_bytes.len());
         return (kind, through_error, out, meta);
     }
     let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
