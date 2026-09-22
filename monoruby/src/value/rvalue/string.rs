@@ -2006,15 +2006,37 @@ impl std::ops::Deref for RStringInner {
     }
 }
 
+/// CRuby's `rb_str_eql`: the same bytes *and* encodings that can be
+/// compared. This is `String#==` / `#eql?`, and it is also what a Hash
+/// or Set asks of a String key — `RubyEql for Value` answers a pair of
+/// plain Strings from here.
+///
+/// It used to compare bytes alone, which the Ruby-level `==` then
+/// corrected with its own encoding check. The container had no such
+/// correction, so `{"あ" => 1}["あ".b]` found the entry and
+/// `[a, b].uniq` collapsed the pair, for every encoding rather than
+/// only the UTF-8 family (#1569).
 impl std::cmp::PartialEq for RStringInner {
     fn eq(&self, other: &Self) -> bool {
-        self.as_bytes() == other.as_bytes()
+        self.as_bytes() == other.as_bytes() && self.compatible_encoding(other).is_some()
     }
 }
 
+/// The digest [`PartialEq`] obliges: equal strings must hash alike.
+///
+/// CRuby's `rb_str_hash` xors the encoding index into the byte digest,
+/// except for ASCII-only content, where it uses 0. So two 7-bit
+/// strings hash alike whatever their encodings — which is what makes
+/// `"abc" == "abc".b` usable as one Hash key — and two others only
+/// when their encodings match, which is exactly when `eq` above can
+/// call them equal with the same bytes.
 impl std::hash::Hash for RStringInner {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.as_bytes().hash(state);
+        if !self.is_ascii_only() {
+            self.ty.tag().hash(state);
+            self.ty.payload().hash(state);
+        }
     }
 }
 
@@ -4893,6 +4915,68 @@ mod encoding_tests {
         let s = RStringInner::from_vec_scanned(vec![]);
         assert_eq!(s.encoding(), Encoding::UTF8);
         assert_eq!(s.code_range(), CodeRange::SevenBit);
+    }
+
+    /// A `Hash`/`Eq` pair must agree: whatever `eq` calls equal has to
+    /// hash alike, or a lookup misses a key the container holds.
+    #[test]
+    fn equal_strings_hash_alike_and_unequal_ones_are_told_apart() {
+        use std::hash::{BuildHasher, RandomState};
+        let s = RandomState::new();
+        let mk = |bytes: &[u8], enc: Encoding| RStringInner::from_encoding_scanned(bytes, enc);
+        let same = |a: &RStringInner, b: &RStringInner| {
+            assert_eq!(a, b, "{a:?} vs {b:?}");
+            assert_eq!(s.hash_one(a), s.hash_one(b), "{a:?} vs {b:?}");
+        };
+        let apart = |a: &RStringInner, b: &RStringInner| {
+            assert_ne!(a, b, "{a:?} vs {b:?}");
+            assert_ne!(s.hash_one(a), s.hash_one(b), "{a:?} vs {b:?}");
+        };
+        // 7-bit content is one key whatever the encoding carries.
+        let ascii = [
+            Encoding::UTF8,
+            Encoding::Ascii8,
+            Encoding::UsAscii,
+            Encoding::EUC_JP,
+            Encoding::Utf8(UTF8_MAC),
+        ];
+        for enc in ascii {
+            same(&mk(b"abc", Encoding::UTF8), &mk(b"abc", enc));
+        }
+        // ...and so is the empty string, even where the encodings
+        // could not be negotiated with any content in them.
+        for enc in [Encoding::Utf16Be, Encoding::Iso2022Jp, Encoding::Ascii8] {
+            same(&mk(b"", Encoding::UTF8), &mk(b"", enc));
+        }
+        // 8-bit content is a key per encoding.
+        let hi = "\u{3042}".as_bytes();
+        let utf8 = mk(hi, Encoding::UTF8);
+        for enc in [
+            Encoding::Ascii8,
+            Encoding::EUC_JP,
+            Encoding::Sjis(0),
+            Encoding::Utf8(UTF8_MAC),
+            Encoding::NamedByte(CESU_8),
+        ] {
+            apart(&utf8, &mk(hi, enc));
+        }
+        // Different bytes stay different whatever the encodings.
+        apart(&utf8, &mk("\u{3044}".as_bytes(), Encoding::UTF8));
+    }
+
+    /// The bytes alone never decide: a `PartialEq` that read them and
+    /// nothing else made every pair above one key (#1569).
+    #[test]
+    fn the_encoding_is_part_of_a_strings_identity() {
+        let hi = "\u{3042}".as_bytes();
+        assert_eq!(
+            RStringInner::from_encoding_scanned(hi, Encoding::UTF8).as_bytes(),
+            RStringInner::from_encoding_scanned(hi, Encoding::Ascii8).as_bytes(),
+        );
+        assert_ne!(
+            RStringInner::from_encoding_scanned(hi, Encoding::UTF8),
+            RStringInner::from_encoding_scanned(hi, Encoding::Ascii8),
+        );
     }
 
     #[test]
