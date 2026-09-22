@@ -10653,6 +10653,33 @@ mod tests {
             r << [e2.primitive_convert(s2, d2, nil, 3), d2.bytes, s2.bytes]
             "##,
         );
+        // The streaming path writes the cell before it can be asked
+        // about, so an output carrying one is redone character by
+        // character. Uncapped it substitutes and finishes; capped so
+        // that the redone output runs out of room, it fills to the
+        // byte and holds the rest like any other destination.
+        crate::tests::run_test_once(
+            r##"
+            u = [0xC12A].pack("U")
+            ec = Encoding::Converter.new("UTF-8", "EUC-KR", undef: :replace)
+            s = "\u{AC00}#{u}\u{AC01}".dup
+            d = "".dup
+            r = [ec.primitive_convert(s, d), s.bytes, d.bytes]
+            [[4, "\u{AC00}#{u}\u{AC01}"], [6, "#{u}#{u}\u{AC01}"]].each do |cap, text|
+              e2 = Encoding::Converter.new("UTF-8", "EUC-KR", undef: :replace)
+              s2 = text.dup
+              d2 = "".dup
+              steps = []
+              8.times do
+                x = e2.primitive_convert(s2, d2, nil, cap)
+                steps << [x, d2.bytes.dup]
+                break if x == :finished
+              end
+              r << [cap, steps]
+            end
+            r
+            "##,
+        );
         // Through the streaming API too, with a capped destination.
         crate::tests::run_test_once(
             r##"
