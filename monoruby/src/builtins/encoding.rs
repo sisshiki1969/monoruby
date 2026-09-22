@@ -5558,7 +5558,15 @@ fn stream_convert(
             return (kind, consumed, out, meta);
         }
         let (kind, meta) = bad_source_outcome(src_enc, &src_bytes[at..], !partial_input);
-        return (kind, consumed, out, meta);
+        // The malformed run is *consumed*: `primitive_convert` leaves
+        // only what follows it in `src`, since the bytes are readable
+        // from `#primitive_errinfo` (and `#putback`) instead.
+        let through_error = if matches!(kind, StreamConvertResult::InvalidByteSequence) {
+            (consumed + meta.error_bytes.len() + meta.readagain_bytes.len()).min(src_bytes.len())
+        } else {
+            consumed
+        };
+        return (kind, through_error, out, meta);
     }
     let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
     if all_ascii && src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() {
@@ -7193,7 +7201,12 @@ fn invalid_byte_sequence(
 /// is why `is_utf8_compatible` — which answers "do these bytes read
 /// as UTF-8" — is the wrong question here (#1576).
 fn is_the_utf8_pivot(enc: crate::value::Encoding) -> bool {
-    matches!(enc, crate::value::Encoding::UsAscii) || enc == crate::value::Encoding::UTF8
+    // US-ASCII is *not* the pivot: CRuby still builds a US-ASCII →
+    // UTF-8 step in front of every other hop, so a byte the source
+    // encoding has no character for is reported against UTF-8 as the
+    // destination whatever the conversion's real destination is
+    // (#1596).
+    enc == crate::value::Encoding::UTF8
 }
 
 fn error_stage_names(
@@ -12713,6 +12726,42 @@ mod tests {
                   ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
             r << ("a\x80b".dup.force_encoding("US-ASCII").encode("UTF-8", invalid: :replace).codepoints)
             r << ([0x80].pack("C").force_encoding("US-ASCII").encode("US-ASCII").bytes)
+            r
+            "##,
+        );
+        // The run is *consumed*: only what follows it stays in `src`,
+        // since the bytes come back out of `#primitive_errinfo`. And
+        // US-ASCII is not itself the pivot — CRuby puts a US-ASCII →
+        // UTF-8 step in front of every other hop, so UTF-8 is the
+        // destination it reports whatever the real one is.
+        crate::tests::run_test_once(
+            r##"
+            ["UTF-8", "UTF-16BE", "Big5", "EUC-JP", "ISO-8859-1", "ASCII-8BIT"].map do |d|
+              ec = Encoding::Converter.new("US-ASCII", d)
+              dst = +""
+              s = "abc\x80z".dup.force_encoding("US-ASCII")
+              res = ec.primitive_convert(s, dst)
+              [d, res, dst.bytes, s.bytes,
+               ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            "##,
+        );
+        // A destination cap that fills before the offending byte is
+        // reached is the ordinary `:destination_buffer_full`, and the
+        // byte is still there for the next call to trip over.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            ["UTF-8", "UTF-16BE"].each do |d|
+              (1..4).each do |cap|
+                ec = Encoding::Converter.new("US-ASCII", d)
+                dst = +""
+                s = "abc\x80z".dup.force_encoding("US-ASCII")
+                res = ec.primitive_convert(s, dst, nil, cap)
+                r << [d, cap, res, dst.bytes, s.bytes,
+                      ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+              end
+            end
             r
             "##,
         );
