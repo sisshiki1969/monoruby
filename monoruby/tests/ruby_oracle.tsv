@@ -1024,6 +1024,7 @@
 354035ac9f6036c3a6b9b24e07a634bf	ArgumentError	(begin; Dir.home("no_such_user_zzq"); rescue => e; e.class; end)
 355f64ccc41342dde6bb12c04da77410	true	[Process.getpgrp, Process.getpgid(0), Process.getsid].all? { |v| v.is_a?(Integer
 3565c58dca7325f9f598f2c1ae3626b3	true	GC.config.is_a?(Hash)
+356a18a077eaf216c6d672b9b65e22b1	[[["Encoding::InvalidByteSequenceError", "\\"\\\\xA1\\" followed by \\"A\\" on EUC-JP"], [63, 65]], [["Encoding::InvalidByteSequenceError", "\\"\\\\xA1\\" followed by \\" \\" on EUC-JP"], [63, 32]], [["Encoding::InvalidByteSequenceError", "\\"\\\\xA1\\" followed by \\"\\\\xFF\\" on EUC-JP"], [63, 63]], [["Encoding::InvalidByteSequenceError", "\\"\\\\x8E\\" followed by \\"A\\" on EUC-JP"], [63, 65]], [["Encoding::InvalidByteSequenceError", "\\"\\\\x8E\\" followed by \\"\\\\xFF\\" on EUC-JP"], [63, 63]], [["Encoding::InvalidByteSequenceError", "incomplete \\"\\\\x8F\\\\xA1\\" on EUC-JP"], [63]], [["Encoding::InvalidByteSequenceError", "\\"\\\\x8F\\" followed by \\"A\\" on EUC-JP"], [63, 65]], [["Encoding::InvalidByteSequenceError", "incomplete \\"\\\\xA1\\" on EUC-JP"], [63]]]	[[0xA1, 0x41], [0xA1, 0x20], [0xA1, 0xFF], [0x8E, 0x41], [0x8E, 0xF
 356bbf9786b1d2f6d8025e7e3cda3118	[4, [0, 104, 0, 105], [104, 233], "Encoding::UndefinedConversionError"]	path = "/tmp/monoruby_test_iowt_#{Process.pid}_#{rand(100000)}"\n   
 35768788c2eb049dca56e52a4a8fcc7e	["str", 12, 1.5]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 35775e13c022c60a0c23b8a5d98d75a1	[20, :done]	a = "/tmp/monoruby_forkrace_parent"\n        b = "/tmp/monoruby_forkrace
@@ -1206,6 +1207,7 @@
 3fef9f42692341177896868638c71b46	[["v1", "v2"], [nil, nil, "new"]]	ENV["MONORUBY_ENV_TEST_MN1"] = "v1"\n            ENV["MONORUBY_ENV_T
 3ff02e23d910a4fb58eb4a1180f7d75c	"\\\\u{61}"	Regexp.new(/\\u{61}/).source
 3ff65387266e9d8a7c9c547287b2bcff	[true, true, true, [115, 101, 101, 100, 65, 0, 0, 0, 0, 0, 0, 248, 63, 0, 0, 0, 1], "ASCII-8BIT"]	buf = "seed".b\n        r1 = [65].pack("C", buffer: buf)\n        r2 = [1
+3ff7349ac5a27011f852a72213f0d18c	[[:invalid_byte_sequence, [], [], :invalid_byte_sequence, [], [], [:invalid_byte_sequence, [69, 85, 67, 45, 74, 80], [83, 104, 105, 102, 116, 95, 74, 73, 83], [161], [65]]], [:source_buffer_empty, [], [], :incomplete_input, [], [], [:incomplete_input, [69, 85, 67, 45, 74, 80], [83, 104, 105, 102, 116, 95, 74, 73, 83], [143, 161], []]], [:source_buffer_empty, [], [], :incomplete_input, [], [], [:incomplete_input, [69, 85, 67, 45, 74, 80], [83, 104, 105, 102, 116, 95, 74, 73, 83], [161], []]]]	[[0xA1, 0x41], [0x8F, 0xA1], [0xA1]].map do |b|\n              ec = 
 3ffc6d3898225981a488b8b1ab517d61	[[3, 4], [9, 10]]	class P\n          attr_accessor :x, :y\n          def fill_self(i)\n     
 401bf8ea7b3aa33ac1a060658f9ee0cf	[true, true, true, "Class", "Class", "Class", false, true, true, "#<Class:#<Class:MCA>>", true]	class MCA; end\n        class MCH < MCA; end\n        module MCM; end\n   
 402369e00b302b22068e6c528d3bde64	103	$a = 100\n$a.succ.succ.succ
@@ -3211,6 +3213,7 @@ ab1c3b30bca082ec8aa9ba5a6009b151	[["a", "e", "f", "h", "i", "j", "d", "b", "g", 
 ab312ebadfbc96b42cab59f735954c12	3	symbol_proc = :+.to_proc\n            klass = Class.new { define_met
 ab3d5efaceb0aaf63327a5c1530b448e	[:bar, [1, 2, 3, 4]]	class Foo\n              def method_missing(name, *args)\n           
 ab3f4cfac97655ea0e7bb969aff8111e	"ok"	m = Module.new\n            module m::N; end\n            m::N.set_te
+ab4193348ee18a0f4176a3146cd15748	[[["Encoding::InvalidByteSequenceError", "\\"\\\\x81\\" followed by \\" \\" on Shift_JIS"], [63, 32]], [["Encoding::InvalidByteSequenceError", "\\"\\\\x81\\" followed by \\"\\\\x7F\\" on Shift_JIS"], [63, 127]], [["Encoding::InvalidByteSequenceError", "\\"\\\\x81\\" followed by \\"\\\\xFD\\" on Shift_JIS"], [63, 63]], [["Encoding::InvalidByteSequenceError", "incomplete \\"\\\\x81\\" on Shift_JIS"], [63]]]	[[0x81, 0x20], [0x81, 0x7F], [0x81, 0xFD], [0x81]].map do |b|\n     
 ab481a6617c32722334d223d0169a919	14.0	def hop\n          yield\n        end\n        def p5(n)\n          x = nil
 ab50ee2cfe44e124a9d343ea3ba9dfc6	[false, false, 61]	def app_ok(s, n)\n          i = 0\n          while i < n\n            s <<
 ab535c2e7cd8b5a3fe1563c1f8eceada	["refined", "refined", true, "refined", "refined", "refined", "refined", "NoMethodError", false]	module RefR\n              refine String do\n                def foo;
