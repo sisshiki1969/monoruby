@@ -5052,7 +5052,7 @@ fn stream_convert(
         if matches!(res, EncoderResult::OutputFull)
             && let Some(repl) = &undef_repl
             && let Some(c) = utf8_str[utf8_read..].chars().next()
-            && dst_rs_unmappable(dst_rs, c)
+            && dst_rs_unmappable(dst_rs, dst_enc, c)
         {
             let (repl_res, _, repl_written) = encoder.encode_from_utf8_without_replacement(
                 repl,
@@ -5098,9 +5098,7 @@ fn stream_convert(
     if !dst_can_hold(dst_enc, &out_buf) {
         let mut out: Vec<u8> = Vec::with_capacity(out_buf.len());
         for (at, c) in utf8_str.char_indices() {
-            let bytes = match dst_rs_encode_one(dst_rs, c)
-                .filter(|b| dst_can_hold(dst_enc, b))
-            {
+            let bytes = match dst_rs_encode_one(dst_rs, dst_enc, c) {
                 Some(b) => b,
                 None => match &undef_repl {
                     Some(repl) => dst_rs.encode(repl).0.into_owned(),
@@ -5214,7 +5212,7 @@ fn stream_convert(
             // through a throwaway encoder on the cap path alone.
             if !opts.undef_replace
                 && let Some(c) = tried
-                && dst_rs_unmappable(dst_rs, c)
+                && dst_rs_unmappable(dst_rs, dst_enc, c)
             {
                 return (
                     StreamConvertResult::UndefinedConversion,
@@ -5244,7 +5242,7 @@ fn stream_convert(
                     let Some(c) = utf8_str[at..].chars().next() else {
                         break;
                     };
-                    let Some(bytes) = dst_rs_encode_one(dst_rs, c) else {
+                    let Some(bytes) = dst_rs_encode_one(dst_rs, dst_enc, c) else {
                         break;
                     };
                     let fits = (max - out_buf.len()).min(bytes.len());
@@ -5259,7 +5257,7 @@ fn stream_convert(
                 // ahead is the next one whole.
                 if leftover.is_empty()
                     && let Some(c) = utf8_str[at..].chars().next()
-                    && let Some(bytes) = dst_rs_encode_one(dst_rs, c)
+                    && let Some(bytes) = dst_rs_encode_one(dst_rs, dst_enc, c)
                 {
                     leftover = bytes;
                     at += c.len_utf8();
@@ -5597,14 +5595,26 @@ fn dst_can_hold(enc: crate::value::Encoding, bytes: &[u8]) -> bool {
 /// What `dst_rs` writes for *c*, or `None` if it has no cell for it.
 /// Asked with a throwaway encoder, for the character a full
 /// destination stopped the real one from writing (#1532).
-fn dst_rs_encode_one(dst_rs: &'static encoding_rs::Encoding, c: char) -> Option<Vec<u8>> {
+fn dst_rs_encode_one(
+    dst_rs: &'static encoding_rs::Encoding,
+    dst_enc: crate::value::Encoding,
+    c: char,
+) -> Option<Vec<u8>> {
     let mut probe = dst_rs.new_encoder();
     let mut src = [0u8; 4];
     let mut out = [0u8; 16];
     let (res, _, written) =
         probe.encode_from_utf8_without_replacement(c.encode_utf8(&mut src), &mut out, false);
     match res {
-        encoding_rs::EncoderResult::InputEmpty => Some(out[..written].to_vec()),
+        // A cell the destination cannot hold is no cell at all
+        // (#1544), so the paths that ask what a character writes —
+        // the cap fill and the replacement — refuse it with the ones
+        // the codec has no mapping for.
+        encoding_rs::EncoderResult::InputEmpty
+            if dst_can_hold(dst_enc, &out[..written]) =>
+        {
+            Some(out[..written].to_vec())
+        }
         _ => None,
     }
 }
@@ -5612,15 +5622,12 @@ fn dst_rs_encode_one(dst_rs: &'static encoding_rs::Encoding, c: char) -> Option<
 /// Whether `dst_rs` has no cell for *c* — asked with a throwaway
 /// encoder, since a destination that is also full hides the answer
 /// (#1533).
-fn dst_rs_unmappable(dst_rs: &'static encoding_rs::Encoding, c: char) -> bool {
-    let mut probe = dst_rs.new_encoder();
-    let mut src = [0u8; 4];
-    // Room for the longest cell any of these write, plus the shift
-    // sequence a stateful encoder may emit before it.
-    let mut out = [0u8; 16];
-    let (res, _, _) =
-        probe.encode_from_utf8_without_replacement(c.encode_utf8(&mut src), &mut out, false);
-    matches!(res, encoding_rs::EncoderResult::Unmappable(_))
+fn dst_rs_unmappable(
+    dst_rs: &'static encoding_rs::Encoding,
+    dst_enc: crate::value::Encoding,
+    c: char,
+) -> bool {
+    dst_rs_encode_one(dst_rs, dst_enc, c).is_none()
 }
 
 /// [`first_bad_sequence`] for the encodings `encoding_rs` decodes.
@@ -10616,6 +10623,34 @@ mod tests {
                 [one, cv, one == cv, repl]
               end
             end
+            "##,
+        );
+        // A capped destination asks a second path what a character
+        // writes, and it has to refuse the unholdable cell too — the
+        // first byte of one leaked into the destination otherwise,
+        // and the call answered `:destination_buffer_full` where the
+        // character had no cell at all.
+        crate::tests::run_test_once(
+            r##"
+            u = [0xC12A].pack("U")
+            r = []
+            r << Encoding::Converter.new("UTF-8", "EUC-KR", undef: :replace)
+                   .convert("\u{AC00}#{u}\u{AC01}".dup).bytes
+            r << "\u{AC00}#{u}\u{AC01}".encode("EUC-KR", undef: :replace).bytes
+            ec = Encoding::Converter.new("UTF-8", "EUC-KR", undef: :replace)
+            s = "\u{AC00}#{u}\u{AC01}".dup
+            d = "".dup
+            steps = []
+            6.times do
+              x = ec.primitive_convert(s, d, nil, 3)
+              steps << [x, d.bytes.dup]
+              break if x == :finished
+            end
+            r << steps
+            e2 = Encoding::Converter.new("UTF-8", "EUC-KR")
+            s2 = "\u{AC00}#{u}\u{AC01}".dup
+            d2 = "".dup
+            r << [e2.primitive_convert(s2, d2, nil, 3), d2.bytes, s2.bytes]
             "##,
         );
         // Through the streaming API too, with a capped destination.
