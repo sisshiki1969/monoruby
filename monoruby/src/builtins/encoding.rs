@@ -1354,6 +1354,100 @@ fn jis_direct_one(bytes: &[u8], from_euc: bool) -> JisCell {
     }
 }
 
+/// A destination whose characters go through CRuby's tables one at a
+/// time rather than the codec in bulk — the Japanese pair since
+/// #1445, and the CJK table encodings since #1544. The streaming
+/// branch below is the same either way; only this differs.
+enum DstEncoder {
+    Jp(&'static JpFixup),
+    Table(
+        &'static encoding_cjk::CellTable,
+        &'static encoding_rs::Encoding,
+    ),
+}
+
+impl DstEncoder {
+    /// The bytes for *c*, or the character the destination has no
+    /// cell for.
+    fn one(&self, c: char) -> std::result::Result<Vec<u8>, char> {
+        let mut buf = [0u8; 4];
+        match self {
+            DstEncoder::Jp(fx) => jp_encode(fx, c.encode_utf8(&mut buf)),
+            DstEncoder::Table(tab, rs) => table_cell_encode(tab, rs, c).ok_or(c),
+        }
+    }
+}
+
+fn dst_encoder(dst_enc: crate::value::Encoding) -> Option<DstEncoder> {
+    if let Some(fx) = jp_fixup(dst_enc) {
+        return Some(DstEncoder::Jp(fx));
+    }
+    let tab = cell_table(dst_enc)?;
+    Some(DstEncoder::Table(tab, encoding_to_rs(dst_enc)?))
+}
+
+/// What CRuby writes for *c* in a table encoding: its own cell where
+/// the codec's differs, the codec's where the table holds it, and
+/// nothing where it does not (#1544).
+fn table_cell_encode(
+    tab: &encoding_cjk::CellTable,
+    dst_rs: &'static encoding_rs::Encoding,
+    c: char,
+) -> Option<Vec<u8>> {
+    if tab.refuses(c) {
+        return None;
+    }
+    if let Some(b) = tab.write(c) {
+        return Some(b);
+    }
+    let mut buf = [0u8; 4];
+    let (bytes, _, err) = dst_rs.encode(c.encode_utf8(&mut buf));
+    if err {
+        return None;
+    }
+    // The codec's own repertoire is wider, so a cell it writes has to
+    // be one CRuby's table holds. A single byte is not a cell — GBK
+    // spells the euro sign as `80` — and neither is ASCII.
+    match cell_key(&bytes) {
+        Some(cell) if !tab.holds(cell) => None,
+        _ => Some(bytes.into_owned()),
+    }
+}
+
+/// CRuby's own table for a CJK encoding whose codec here is a
+/// different one: `encoding_rs`'s `gb2312` is GBK and its `big5`
+/// reaches rows CRuby has nothing in, so the codec reads and writes
+/// cells the encoding does not have (#1544). The tables are generated
+/// from CRuby by `bin/gen-cjk-tables`.
+fn cell_table(enc: crate::value::Encoding) -> Option<&'static super::encoding_cjk::CellTable> {
+    use crate::value::Encoding as E;
+    // The generator diffs CRuby against the codec, so it needs a build
+    // that answers from the codec alone.
+    if cfg!(feature = "no-cjk-tables") {
+        return None;
+    }
+    match enc {
+        E::NamedByte(i) => match crate::value::named_byte_const_name(i) {
+            "GB2312" => Some(&super::encoding_cjk::GB2312),
+            "GBK" => Some(&super::encoding_cjk::GBK),
+            "Big5" => Some(&super::encoding_cjk::BIG5),
+            // No grid of its own: GB18030 reads every cell CRuby
+            // does, and only writes a handful differently.
+            "GB18030" => Some(&super::encoding_cjk::GB18030),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// A two-byte cell as the tables key them; anything else is not one.
+fn cell_key(piece: &[u8]) -> Option<u16> {
+    match piece {
+        [b1, b2] => Some(((*b1 as u16) << 8) | *b2 as u16),
+        _ => None,
+    }
+}
+
 fn jp_fixup(enc: crate::value::Encoding) -> Option<&'static JpFixup> {
     use crate::value::Encoding as E;
     match enc {
@@ -1496,7 +1590,10 @@ fn cell_decode<'a>(
     let Some((max_len, precise)) = crate::value::mbc_walker(enc) else {
         return plain(bytes);
     };
-    let needs_fixup = fx.is_some_and(|fx| jp_decode_needs_fixup(fx, bytes));
+    // A table encoding reads every cell through its own table, so the
+    // buffer only skips the careful path when it holds no cell at all.
+    let needs_fixup = fx.is_some_and(|fx| jp_decode_needs_fixup(fx, bytes))
+        || (cell_table(enc).is_some() && bytes.iter().any(|&b| b >= 0x80));
     let broken = matches!(enc.classify(bytes), crate::value::CodeRange::Broken);
     if !needs_fixup && !broken {
         let d = plain(bytes);
@@ -1590,6 +1687,30 @@ fn cell_decode<'a>(
                 continue;
             }
             if !jp_cell_is_live(fx, piece) {
+                flush!();
+                match undef {
+                    Some(repl) => out.push_str(repl),
+                    None => {
+                        if unmapped.is_none() {
+                            unmapped = Some(piece.to_vec());
+                            unmapped_at = Some(start);
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+        if let Some(tab) = cell_table(enc)
+            && let Some(cell) = cell_key(piece)
+        {
+            if let Some(c) = tab.read(cell) {
+                flush!();
+                out.push(c);
+                continue;
+            }
+            if !tab.holds(cell) {
+                // A cell CRuby's table does not have: well formed for
+                // the walk, and no character.
                 flush!();
                 match undef {
                     Some(repl) => out.push_str(repl),
@@ -2505,6 +2626,34 @@ pub(super) fn transcode_bytes_with_opts(
                 Ok(out)
             }
         };
+    }
+    // The CJK tables are the same story: the codec writes cells the
+    // destination does not have and reads others differently, so the
+    // characters go through CRuby's table one at a time (#1544).
+    if let Some(tab) = cell_table(dst_enc)
+        && let Some(dst_rs) = encoding_to_rs(dst_enc)
+    {
+        let mut out: Vec<u8> = Vec::with_capacity(decoded.len());
+        for c in decoded.chars() {
+            match table_cell_encode(tab, dst_rs, c) {
+                Some(b) => out.extend_from_slice(&b),
+                None if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    for r in replace.chars() {
+                        if let Some(b) = table_cell_encode(tab, dst_rs, r) {
+                            out.extend_from_slice(&b);
+                        }
+                    }
+                }
+                None => {
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        undefined_char_message(c, src_enc, dst_enc),
+                    ));
+                }
+            }
+        }
+        return Ok(out);
     }
     // EUC-JP has a second plane `encoding_rs` will not write, and
     // both Japanese codecs need the table corrections; go through the
@@ -4580,7 +4729,11 @@ fn stream_convert(
     // through `cell_decode` since #1445; this is the same buffer
     // through the same walk, which hands a clean one to the codec
     // whole and so costs one walk on the common path.
-    if walk_reports_runs(src_enc)
+    // A table encoding reads through its table for the same reason,
+    // even where its walk is not what decides a malformed run: the
+    // two questions are separate, and `bad_source_outcome` below
+    // still answers the second one (#1544).
+    if (walk_reports_runs(src_enc) || cell_table(src_enc).is_some())
         && let Some(src_rs_in) = encoding_to_rs(src_enc)
     {
         let repl = opts.undef_replace.then(|| opts.replace_str(dst_enc));
@@ -4693,9 +4846,9 @@ fn stream_convert(
     // not write Windows-31J's user-defined area — all of which
     // `jp_encode` settles. `String#encode` has used it since #1445;
     // the streaming path had the raw codec (#1461).
-    if let Some(fx) = jp_fixup(dst_enc) {
+    if let Some(enc1) = dst_encoder(dst_enc) {
         // Decode uncapped: the cap is felt in destination bytes, and
-        // this encoding writes one or two of them per character.
+        // these encodings write one or two of them per character.
         let (result, consumed, pivot, meta) =
             stream_convert(src_bytes, src_enc, E::Utf8, None, partial_input, opts);
         let text = String::from_utf8_lossy(&pivot);
@@ -4705,11 +4858,12 @@ fn stream_convert(
             // Where this character's bytes start, so the destination
             // cap can cut back to a whole one.
             let before = out.len();
-            match jp_encode(fx, c.encode_utf8(&mut buf)) {
+            match enc1.one(c) {
                 Ok(bytes) => out.extend_from_slice(&bytes),
                 Err(_) if opts.undef_replace => {
-                    let repl = opts.replace_str(dst_enc);
-                    out.extend_from_slice(&jp_encode(fx, &repl).unwrap_or_default());
+                    for r in opts.replace_str(dst_enc).chars() {
+                        out.extend_from_slice(&enc1.one(r).unwrap_or_default());
+                    }
                 }
                 Err(bad) => {
                     // Everything up to and including the character
@@ -5682,6 +5836,11 @@ fn first_bad_via_walk(
 /// CJK encodings — so the codec's answer is taken only when the
 /// destination can hold it (#1544).
 fn dst_can_hold(enc: crate::value::Encoding, bytes: &[u8]) -> bool {
+    // `bin/gen-cjk-tables` wants the codec's own answer, corrected by
+    // neither this rule nor the tables it is generating.
+    if cfg!(feature = "no-cjk-tables") {
+        return true;
+    }
     let Some((_, precise)) = crate::value::mbc_walker(enc) else {
         return true;
     };
@@ -10907,6 +11066,114 @@ mod tests {
                  e.class.to_s
                end]
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_cjk_encodings_use_crubys_tables() {
+        // `encoding_rs` carries WHATWG's tables: its `gb2312` is GBK,
+        // and its `big5` reaches rows CRuby has nothing in. So cells
+        // the encoding does not have read as characters, and
+        // characters it cannot spell were written (#1544).
+        crate::tests::run_test_once(
+            r##"
+            [["GB2312", 0xA2, 0xA1], ["GB2312", 0xA4, 0xA1], ["GB2312", 0xD7, 0xFA],
+             ["GB2312", 0xF8, 0xA1], ["GBK", 0xA1, 0xA1], ["GBK", 0xA2, 0xA1],
+             ["GBK", 0xD7, 0xFA], ["GBK", 0xFE, 0x50], ["Big5", 0xA3, 0xC0],
+             ["Big5", 0xC6, 0xA1], ["Big5", 0xC7, 0x40], ["Big5", 0xFA, 0x40],
+             ["Big5", 0xF9, 0xD6]].map do |enc, b1, b2|
+              s = [b1, b2].pack("C*").force_encoding(enc)
+              one = (s.encode("UTF-8").codepoints rescue $!.class.to_s)
+              cv = (Encoding::Converter.new(enc, "UTF-8").convert(s.dup).codepoints rescue $!.class.to_s)
+              [one, cv, one == cv]
+            end
+            "##,
+        );
+        // The way out, including the characters whose cell CRuby has
+        // and the codec spells differently.
+        crate::tests::run_test_once(
+            r##"
+            [["GB2312", 0x4E00], ["GB2312", 0x554A], ["GB2312", 0x20AC], ["GB2312", 0x0251],
+             ["GBK", 0x4E00], ["GBK", 0x20AC], ["GBK", 0x0251], ["GBK", 0xE7C7],
+             ["Big5", 0x4E00], ["Big5", 0xF6B1], ["Big5", 0x00A8], ["Big5", 0x2554],
+             ["GB18030", 0xFE17], ["GB18030", 0x4E00], ["GB18030", 0x1D11E]].map do |enc, cp|
+              s = [cp].pack("U")
+              one = (s.encode(enc).bytes rescue $!.class.to_s)
+              cv = (Encoding::Converter.new("UTF-8", enc).convert(s.dup).bytes rescue $!.class.to_s)
+              [one, cv, one == cv]
+            end
+            "##,
+        );
+        // A character the codec itself cannot spell, which is a
+        // different refusal from a cell CRuby's table lacks: both are
+        // an undefined conversion, and `undef: :replace` substitutes
+        // for either.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            [["GB2312", 0x1D11E], ["GBK", 0x1D11E], ["Big5", 0x1F600],
+             ["GB18030", 0x1D11E]].each do |enc, cp|
+              s = [cp].pack("U")
+              one = (s.encode(enc).bytes rescue $!.class.to_s)
+              cv = (Encoding::Converter.new("UTF-8", enc).convert(s.dup).bytes rescue $!.class.to_s)
+              r << [enc, one, cv, one == cv]
+            end
+            r << ("A\u{1F600}B".encode("Big5", undef: :replace).bytes)
+            r << ("A\u{1D11E}B".encode("GB2312", undef: :replace).bytes)
+            r << (Encoding::Converter.new("UTF-8", "GB2312", undef: :replace)
+                    .convert("A\u{1D11E}B".dup).bytes)
+            r
+            "##,
+        );
+        // GB18030 restricts no cell — it has one for everything — but
+        // it still reads a handful differently: CRuby keeps them in the
+        // private use area where `encoding_rs` gives the character.
+        crate::tests::run_test_once(
+            r##"
+            [[0xA3, 0xA0], [0xA6, 0xD9], [0xA6, 0xEC], [0xA8, 0xBC], [0xFE, 0x59],
+             [0xA1, 0xA1], [0xD2, 0xBB]].map do |b1, b2|
+              s = [b1, b2].pack("C*").force_encoding("GB18030")
+              one = (s.encode("UTF-8").codepoints rescue $!.class.to_s)
+              cv = (Encoding::Converter.new("GB18030", "UTF-8").convert(s.dup).codepoints rescue $!.class.to_s)
+              [one, cv, one == cv]
+            end
+            "##,
+        );
+        // What the tables reach, counted: the codec's repertoire is
+        // wider than the encoding's in every one of these.
+        crate::tests::run_test_once(
+            r##"
+            ["GB2312", "GBK", "Big5", "EUC-KR", "CP949"].map do |e|
+              n = (0x80..0x9FFF).count { |cp| ([cp].pack("U").encode(e) rescue nil) }
+              m = (0xA1..0xFE).sum do |b1|
+                (0xA1..0xFE).count do |b2|
+                  ([b1, b2].pack("C*").force_encoding(e).encode("UTF-8") rescue nil)
+                end
+              end
+              [e, n, m]
+            end
+            "##,
+        );
+        // A cell the table does not have is an undefined conversion,
+        // and `undef: :replace` substitutes for a character it cannot
+        // spell — through both APIs, capped and not.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            r << ([0xA2, 0xA1].pack("C*").force_encoding("GB2312")
+                    .encode("UTF-8", undef: :replace).bytes)
+            r << ("一ɑ啊".encode("GB2312", undef: :replace).bytes)
+            r << (Encoding::Converter.new("UTF-8", "GB2312", undef: :replace)
+                    .convert("一ɑ啊".dup).bytes)
+            ec = Encoding::Converter.new("UTF-8", "Big5")
+            s = "一¨丁".dup
+            d = "".dup
+            r << [ec.primitive_convert(s, d), s.bytes, d.bytes]
+            e2 = Encoding::Converter.new("UTF-8", "GBK")
+            s2 = "一丁".dup
+            d2 = "".dup
+            r << [e2.primitive_convert(s2, d2, nil, 3), d2.bytes, s2.bytes]
             "##,
         );
     }
