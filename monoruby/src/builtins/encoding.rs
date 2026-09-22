@@ -3198,19 +3198,37 @@ pub(super) fn transcode_bytes_with_opts(
         // So a conversion is that rewrite plus EUC-JP's own, which is
         // the chain CRuby's errors name (#1600).
         if let Some(stateless) = stateless_iso2022jp(src_enc) {
-            let scrubbed;
-            let mut bytes = src_bytes;
-            if opts.invalid_replace {
-                scrubbed = crate::value::scrub_mbc(
-                    src_bytes,
-                    opts.replace_str(dst_enc).as_bytes(),
-                    3,
-                    crate::value::stateless_iso2022jp_precise_len,
-                );
-                bytes = &scrubbed;
-            }
-            let Ok(eucjp) = crate::value::stateless_iso2022jp_to_eucjp(bytes) else {
-                return Err(invalid_byte_sequence(store, stateless, dst_enc, bytes));
+            let Ok(eucjp) = crate::value::stateless_iso2022jp_to_eucjp(src_bytes) else {
+                if opts.invalid_replace {
+                    // The replacement is the *destination's*, and a
+                    // malformed run is settled at this hop, so each
+                    // good run converts whole and the replacement
+                    // goes straight into the output between them —
+                    // it need not be spellable in EUC-JP, which the
+                    // pivot would have required.
+                    let good = stateless_good_prefix(src_bytes);
+                    let mut out = transcode_bytes_with_opts(
+                        &src_bytes[..good],
+                        stateless,
+                        dst_enc,
+                        opts,
+                        store,
+                    )?;
+                    out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                    let run = first_bad_sequence(stateless, &src_bytes[good..])
+                        .map(|(e, _, _)| e.len().max(1))
+                        .unwrap_or(1);
+                    let rest = transcode_bytes_with_opts(
+                        &src_bytes[(good + run).min(src_bytes.len())..],
+                        stateless,
+                        dst_enc,
+                        opts,
+                        store,
+                    )?;
+                    out.extend_from_slice(&rest);
+                    return Ok(out);
+                }
+                return Err(invalid_byte_sequence(store, stateless, dst_enc, src_bytes));
             };
             if dst_enc == crate::value::Encoding::EUC_JP {
                 return Ok(eucjp);
@@ -5824,21 +5842,45 @@ fn pivot_prefix_consumed(
     opts: &TranscodeOpts,
     store: &Store,
 ) -> usize {
+    pivot_prefix_consumed_in(
+        src_bytes,
+        src_enc,
+        crate::value::Encoding::UTF8,
+        pivot_bytes,
+        opts,
+        store,
+    )
+}
+
+/// The same question against a pivot other than UTF-8 —
+/// stateless-ISO-2022-JP's is EUC-JP (#1600).
+fn pivot_prefix_consumed_in(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    pivot_enc: crate::value::Encoding,
+    pivot_bytes: usize,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> usize {
     if pivot_bytes == 0 {
         return 0;
     }
-    let decoded_len = |n: usize| -> usize {
-        let (_, _, out, _) = stream_convert(
+    if src_enc == pivot_enc {
+        return pivot_bytes.min(src_bytes.len());
+    }
+    let decode = |n: usize| -> (StreamConvertResult, usize) {
+        let (res, _, out, _) = stream_convert(
         &src_bytes[..n],
             src_enc,
-            crate::value::Encoding::UTF8,
+            pivot_enc,
             None,
             true,
         opts,
         store,
     );
-        out.len()
+        (res, out.len())
     };
+    let decoded_len = |n: usize| -> usize { decode(n).1 };
     let (mut lo, mut hi) = (0usize, src_bytes.len());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
@@ -5848,7 +5890,27 @@ fn pivot_prefix_consumed(
             hi = mid;
         }
     }
-    lo
+    // Bytes that follow and write nothing are still read: an
+    // ISO-2022-JP escape sequence is a whole unit that only changes
+    // which character set is in effect, and CRuby takes it out of
+    // `src` along with what came before it. A *partial* character
+    // writes nothing either and is not read, which is what tells the
+    // two apart — the prefix has to convert cleanly (#1609).
+    let mut best = lo;
+    let mut n = lo + 1;
+    while n <= src_bytes.len() {
+        let (res, len) = decode(n);
+        if len > pivot_bytes {
+            break;
+        }
+        // A longer prefix that writes no more but ends on a whole
+        // unit — the escape sequence itself — is the one CRuby read.
+        if len == pivot_bytes && matches!(res, StreamConvertResult::Finished) {
+            best = n;
+        }
+        n += 1;
+    }
+    best
 }
 
 /// The outcome to report for a source that does not decode, as the
@@ -6276,7 +6338,7 @@ fn stateless_dest_stream(
                 let cell_len = crate::value::eucjp_char_width(&eucjp[at..]).unwrap_or(1).max(1);
                 return (
                     StreamConvertResult::UndefinedConversion,
-                    stateless_len_for_eucjp_src(src_bytes, src_enc, at, opts, store),
+                    pivot_prefix_consumed_in(src_bytes, src_enc, crate::value::Encoding::EUC_JP, at, opts, store),
                     out,
                     ErrMeta {
                         error_bytes: eucjp[at..(at + cell_len).min(eucjp.len())].to_vec(),
@@ -6290,9 +6352,16 @@ fn stateless_dest_stream(
             && out.len() + unit.len() > max
         {
             let fits = max - out.len();
-            let written_through = stateless_len_for_eucjp_src(src_bytes, src_enc, at, opts, store);
+            let written_through = pivot_prefix_consumed_in(src_bytes, src_enc, crate::value::Encoding::EUC_JP, at, opts, store);
             let through_tried =
-                stateless_len_for_eucjp_src(src_bytes, src_enc, at + n, opts, store);
+                pivot_prefix_consumed_in(
+                    src_bytes,
+                    src_enc,
+                    crate::value::Encoding::EUC_JP,
+                    at + n,
+                    opts,
+                    store,
+                );
             out.extend_from_slice(&unit[..fits]);
             return (
                 StreamConvertResult::DestinationBufferFull,
@@ -6310,44 +6379,6 @@ fn stateless_dest_stream(
     }
     let _ = dst_enc;
     (result, consumed, out, meta)
-}
-
-/// How much of `src_bytes` produced the first `eucjp_upto` bytes of
-/// the EUC-JP pivot — `pivot_prefix_consumed`'s question with EUC-JP
-/// in the pivot's place.
-fn stateless_len_for_eucjp_src(
-    src_bytes: &[u8],
-    src_enc: crate::value::Encoding,
-    eucjp_upto: usize,
-    opts: &TranscodeOpts,
-    store: &Store,
-) -> usize {
-    if src_enc == crate::value::Encoding::EUC_JP {
-        return eucjp_upto.min(src_bytes.len());
-    }
-    let mut lo = 0;
-    for take in 1..=src_bytes.len() {
-        let (res, _, piece, _) = stream_convert(
-            &src_bytes[..take],
-            src_enc,
-            crate::value::Encoding::EUC_JP,
-            None,
-            true,
-            opts,
-            store,
-        );
-        if !matches!(
-            res,
-            StreamConvertResult::Finished | StreamConvertResult::SourceBufferEmpty
-        ) {
-            break;
-        }
-        if piece.len() > eucjp_upto {
-            break;
-        }
-        lo = take;
-    }
-    lo
 }
 
 fn pivot_rewrite_stream(
@@ -8419,10 +8450,18 @@ fn error_stage_names(
         };
         (src_enc.name().to_string(), stage_dst)
     } else {
-        let stage_src = if is_the_utf8_pivot(src_enc) {
+        // The hop that writes the destination reads the destination's
+        // own pivot, which is EUC-JP for stateless-ISO-2022-JP and
+        // UTF-8 for everything else (#1600).
+        let pivot = if stateless_iso2022jp(dst_enc).is_some() {
+            crate::value::Encoding::EUC_JP
+        } else {
+            crate::value::Encoding::UTF8
+        };
+        let stage_src = if src_enc == pivot || is_the_utf8_pivot(src_enc) && pivot == crate::value::Encoding::UTF8 {
             src_enc.name().to_string()
         } else {
-            "UTF-8".to_string()
+            pivot.name().to_string()
         };
         (stage_src, dst_enc.name().to_string())
     }
@@ -10990,6 +11029,60 @@ mod tests {
                begin; e.dup.encode(st).bytes; rescue; $!.class.to_s; end,
                begin; Encoding::Converter.new("EUC-JP", st).convert(e.dup).bytes; rescue; $!.class.to_s; end]
             end
+            "##,
+        );
+        // The converter *into* it, which the one-shot path does not
+        // reach: a destination cap holds what will not fit and takes
+        // exactly the source bytes that were read, and a cell with no
+        // stateless home is an undefined conversion named against the
+        // EUC-JP hop.
+        crate::tests::run_test_once(
+            r##"
+            st = "stateless-ISO-2022-JP"
+            r = []
+            ["UTF-8", "EUC-JP", "Shift_JIS"].each do |src|
+              s = "a\u{4E00}b\u{3042}".encode(src)
+              ec = Encoding::Converter.new(src, st)
+              r << [src, ec.convert(s.dup).bytes, ec.finish.bytes]
+              (1..6).each do |cap|
+                e2 = Encoding::Converter.new(src, st)
+                d = +""
+                t = s.dup
+                r << [src, cap, e2.primitive_convert(t, d, nil, cap), d.bytes, t.bytes]
+              end
+            end
+            [[0x8E, 0xB1], [0x8F, 0xA2, 0xAF]].each do |bytes|
+              s = bytes.pack("C*").force_encoding("EUC-JP")
+              ec = Encoding::Converter.new("EUC-JP", st)
+              d = +""
+              r << [bytes.map { |x| "%02X" % x }.join, ec.primitive_convert(s.dup, d), d.bytes,
+                    ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+              r << begin
+                Encoding::Converter.new("EUC-JP", st, undef: :replace).convert(s.dup).bytes
+              rescue
+                $!.class.to_s
+              end
+            end
+            r
+            "##,
+        );
+        // A malformed run in a stateless source is settled at that
+        // hop, so `invalid: :replace` puts the *destination's*
+        // replacement between the runs either side — it never has to
+        // be spellable in EUC-JP, which routing it through the pivot
+        // would have required.
+        crate::tests::run_test_once(
+            r##"
+            st = "stateless-ISO-2022-JP"
+            s = [0x41, 0x92, 0xB0, 0xEC, 0x80, 0x42].pack("C*").force_encoding(st)
+            [begin; s.dup.encode("UTF-8", invalid: :replace).codepoints; rescue; $!.class.to_s; end,
+             begin
+               Encoding::Converter.new(st, "UTF-8", invalid: :replace).convert(s.dup).codepoints
+             rescue
+               $!.class.to_s
+             end,
+             begin; s.dup.encode("EUC-JP", invalid: :replace).bytes; rescue; $!.class.to_s; end,
+             begin; s.dup.encode("UTF-8"); "ok"; rescue; [$!.class.to_s, $!.message]; end]
             "##,
         );
         // With a converter to it, ISO-2022-JP's replacement lands
