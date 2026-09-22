@@ -665,6 +665,28 @@ pub(crate) fn utf8_to_mac(s: &str) -> String {
     out.into_iter().collect()
 }
 
+/// The byte ranges of `s`'s canonical-composition clusters: each is a
+/// starter (canonical combining class 0) together with the marks that
+/// follow it.
+///
+/// Neither the canonical reordering nor the composition below reaches
+/// across a starter, so a cluster converts to and from `UTF8-MAC` on
+/// its own and the pieces concatenate. That is what lets a streamed
+/// conversion hold the trailing cluster back until it knows whether
+/// the next chunk opens with a mark that composes onto it (#1576).
+pub(crate) fn mac_clusters(s: &str) -> Vec<std::ops::Range<usize>> {
+    use unicode_normalization::char::canonical_combining_class as ccc;
+    let mut out: Vec<std::ops::Range<usize>> = vec![];
+    for (at, c) in s.char_indices() {
+        let end = at + c.len_utf8();
+        match out.last_mut() {
+            Some(last) if ccc(c) != 0 => last.end = end,
+            _ => out.push(at..end),
+        }
+    }
+    out
+}
+
 /// `UTF8-MAC` -> `UTF-8`: the same restricted decomposition, then
 /// canonical composition.
 ///
