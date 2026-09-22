@@ -6250,15 +6250,32 @@ fn stateless_source_stream(
     // crosses like any other and no codec is asked (#1600).
     if dst_enc == crate::value::Encoding::EUC_JP {
         let fits = max_dst_bytes.map_or(eucjp.len(), |m| m.min(eucjp.len()));
-        let consumed = stateless_len_for_eucjp(bytes, fits);
         if fits < eucjp.len() {
+            // CRuby fills the destination to the byte and holds the
+            // rest of that character for the next call, taking the
+            // whole of it out of `src` — so the cap is read through
+            // the first character whose output runs past it (#1532).
+            let (mut s_at, mut e_at) = (0, 0);
+            while s_at < bytes.len() {
+                let n = if bytes[s_at] < 0x80 { 1 } else { 3 };
+                let out_n = if n == 1 { 1 } else { 2 };
+                s_at += n;
+                e_at += out_n;
+                if e_at > fits {
+                    break;
+                }
+            }
             return (
                 StreamConvertResult::DestinationBufferFull,
-                consumed,
+                s_at.min(bytes.len()),
                 eucjp[..fits].to_vec(),
-                ErrMeta::default(),
+                ErrMeta {
+                    dst_full_out: eucjp[fits..e_at.min(eucjp.len())].to_vec(),
+                    ..ErrMeta::default()
+                },
             );
         }
+        let consumed = stateless_len_for_eucjp(bytes, fits);
         if good < bytes.len() {
             let (kind, meta) = bad_source_outcome(src_enc, &bytes[good..], !partial_input);
             return (kind, consumed, eucjp, meta);
@@ -11062,6 +11079,39 @@ mod tests {
               rescue
                 $!.class.to_s
               end
+            end
+            r
+            "##,
+        );
+        // The converter *from* it: a destination cap fills to the byte
+        // and holds the rest of that character, taking the whole of it
+        // out of `src`, and a malformed run still stops the stream
+        // where the transcoder says.
+        crate::tests::run_test_once(
+            r##"
+            st = "stateless-ISO-2022-JP"
+            good = [0x41, 0x92, 0xB0, 0xEC, 0x42].pack("C*").force_encoding(st)
+            r = []
+            (0..6).each do |cap|
+              ec = Encoding::Converter.new(st, "EUC-JP")
+              d = +""
+              t = good.dup
+              r << [cap, ec.primitive_convert(t, d, nil, cap), d.bytes, t.bytes]
+            end
+            [[0x41, 0x80], [0x41, 0x92], [0x41, 0x92, 0xB0], [0x92, 0xA0, 0xA1]].each do |bytes|
+              s = bytes.pack("C*").force_encoding(st)
+              ec = Encoding::Converter.new(st, "EUC-JP")
+              d = +""
+              r << [bytes.map { |b| "%02X" % b }.join, ec.primitive_convert(s.dup, d), d.bytes,
+                    ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            ["UTF-8", "EUC-JP", "Shift_JIS"].each do |d|
+              bad = [0x41, 0x92, 0xB0, 0xEC, 0x80, 0x42].pack("C*").force_encoding(st)
+              r << [d, begin
+                Encoding::Converter.new(st, d, invalid: :replace).convert(bad.dup).bytes
+              rescue
+                $!.class.to_s
+              end]
             end
             r
             "##,
