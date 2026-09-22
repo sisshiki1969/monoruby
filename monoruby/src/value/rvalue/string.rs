@@ -884,8 +884,15 @@ impl Encoding {
                 CodeRange::Valid
             }
             // No native codec and no shape: raw bytes, every sequence
-            // "valid".
-            Encoding::Other(_) | Encoding::NamedByte(_) => CodeRange::Valid,
+            // "valid". ISO-2022-JP belongs here with the other dummy
+            // encodings (UTF-7, CP50220/1, …): it is stateful, so Ruby
+            // gives it no character decoder at all and every byte
+            // string labelled with it is valid. Decoding it to look
+            // for truncated escapes, as this used to, made the same
+            // bytes Broken here and Valid as CP50220 — its own variant
+            // — and `valid_encoding?` answer `false` where CRuby says
+            // `true` (#1554).
+            Encoding::Other(_) | Encoding::NamedByte(_) | Encoding::Iso2022Jp => CodeRange::Valid,
             Encoding::Iso8859(_) => CodeRange::Valid, // every byte 0..256 represents a glyph
             // For encodings we don't decode natively, treat any
             // sequence as Valid unless its byte count contradicts
@@ -955,22 +962,6 @@ impl Encoding {
                     }
                 }
                 CodeRange::Valid
-            }
-            // ISO-2022-JP: validate via encoding_rs's decoder so
-            // truncated escape sequences / invalid JIS X 0208
-            // codepoints aren't silently accepted as Valid. The
-            // ASCII-only fast path above already handled the
-            // common (`SevenBit`) case, so we're decoding non-
-            // trivial input here.
-            Encoding::Iso2022Jp => {
-                let enc_rs = encoding_rs::Encoding::for_label(b"iso-2022-jp")
-                    .expect("encoding_rs always supports iso-2022-jp");
-                let (_, had_errors) = enc_rs.decode_without_bom_handling(bytes);
-                if had_errors {
-                    CodeRange::Broken
-                } else {
-                    CodeRange::Valid
-                }
             }
         }
     }
@@ -1064,8 +1055,15 @@ impl Encoding {
             | "EUC_JP_WIN"
             | "CP51932"
             | "STATELESS_ISO_2022_JP" => Ok(Encoding::EucJp),
-            "ISO_2022_JP" | "ISO2022_JP" | "ISO_2022_JP_KDDI" | "ISO_2022_JP_2"
-            | "ISO_2022_JP_2004" => Ok(Encoding::Iso2022Jp),
+            // Only ISO-2022-JP's own two names. `ISO-2022-JP-2` and
+            // `ISO-2022-JP-KDDI` are encodings of their own in CRuby,
+            // and answering them with this one relabelled the string
+            // as something the caller did not ask for — while
+            // `Encoding.find`, which reads the registry rather than
+            // this table, rejected the same names outright (#1554).
+            // `ISO-2022-JP-2004` is not a Ruby encoding at all.
+            // Registering the real ones is #1555.
+            "ISO_2022_JP" | "ISO2022_JP" => Ok(Encoding::Iso2022Jp),
             "SHIFT_JIS" => Ok(Encoding::Sjis(0)),
             // MacJapanese is a Shift_JIS variant. monoruby runs it on
             // the Shift_JIS codec and keeps only its name apart, as it
@@ -2089,7 +2087,12 @@ impl RStringInner {
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
             | Encoding::Other(_)
-            | Encoding::NamedByte(_) => self.len(),
+            | Encoding::NamedByte(_)
+            // ISO-2022-JP counts bytes, as CRuby does for a dummy
+            // encoding and as this string's own character iterator
+            // already does (`fixed_char_width` is 1 for it). Decoding
+            // it here made `length` 2 where `chars.size` was 10.
+            | Encoding::Iso2022Jp => self.len(),
             // UTF-16 / UTF-32 with one extra unit per broken trailing
             // byte. CRuby's `String#length` for these reports the
             // number of *complete* code units plus one per stray byte
@@ -2126,20 +2129,6 @@ impl RStringInner {
                 CodeRange::SevenBit => self.len(),
                 _ => self.iter_char_bytes().count(),
             },
-            // ISO-2022-JP: route through `encoding_rs` to get an
-            // accurate count of *characters* (escape sequences
-            // shouldn't count). Falls back to byte length on
-            // decode failure, matching the EucJp/Sjis policy.
-            Encoding::Iso2022Jp => {
-                let enc_rs = encoding_rs::Encoding::for_label(b"iso-2022-jp")
-                    .expect("encoding_rs always supports iso-2022-jp");
-                let (decoded, had_errors) = enc_rs.decode_without_bom_handling(self.as_bytes());
-                if had_errors {
-                    self.len()
-                } else {
-                    decoded.chars().count()
-                }
-            }
         }
     }
 

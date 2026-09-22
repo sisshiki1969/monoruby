@@ -8088,6 +8088,56 @@ fn is_dummy_encoding(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn iso_2022_jp_is_a_dummy_encoding() {
+        // Stateful, so Ruby gives it no character decoder: every byte
+        // string labelled with it is valid, and `length` counts bytes.
+        // monoruby used to decode it through `encoding_rs`, which made
+        // the same bytes Broken here and Valid as CP50220 — its own
+        // variant — and `length` 2 where `chars.size` was 10 (#1554).
+        crate::tests::run_test_once(
+            r##"
+            s = "\xE6\x9D\x94".b
+            j = "\e$B4A;z\e(B".b
+            %w[ISO-2022-JP CP50220 CP50221 UTF-7].map { |e|
+              t = s.dup.force_encoding(e)
+              [e, t.valid_encoding?, t.length, t.chars.size]
+            } + %w[ISO-2022-JP CP50220].map { |e|
+              t = j.dup.force_encoding(e)
+              [e, t.valid_encoding?, t.length, t.chars.size]
+            }
+            "##,
+        );
+    }
+
+    #[test]
+    fn force_encoding_never_answers_a_name_with_another_encoding() {
+        // The two resolvers have to agree: `Encoding.find` reads the
+        // registry, `force_encoding` the enum's own alias table, and
+        // the table used to map `ISO-2022-JP-2` / `-KDDI` / `-2004`
+        // onto plain ISO-2022-JP. So a name `Encoding.find` rejected
+        // silently relabelled the string as an encoding the caller
+        // never asked for (#1554). Asserting they agree rather than
+        // what they answer keeps this about that bug — which names
+        // are *registered* is #1555.
+        crate::tests::run_test_once(
+            r##"
+            # `stateless-ISO-2022-JP`, `eucJP-ms`, `CP51932`, the
+            # `UTF8-MAC` names and `CP950` / `CP951` still disagree —
+            # the same defect in the EUC-JP, UTF-8 and Big5 families,
+            # which this sweep is what found (#1562).
+            names = %w[ISO-2022-JP ISO2022-JP ISO-2022-JP-2 ISO-2022-JP-KDDI
+                       ISO-2022-JP-2004 CP50220 CP50221 UTF-7
+                       UTF-8 Big5-HKSCS Shift_JIS Windows-31J MacJapanese NOPE]
+            names.map { |n|
+              found = (begin; Encoding.find(n).name; rescue ArgumentError; nil; end)
+              forced = (begin; "abc".b.force_encoding(n).encoding.name; rescue ArgumentError; nil; end)
+              [n, found == forced]
+            }
+            "##,
+        );
+    }
+
+    #[test]
     fn encode_fallback_option() {
         // fallback: consulted per undefined character — Hash (with
         // default / default_proc), proc, #[] object; #to_str on the
