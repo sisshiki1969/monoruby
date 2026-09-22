@@ -57,6 +57,14 @@ chain-deopt-log = []
 # free-side consolidate/unlink, which mimalloc's design does not have).
 mimalloc = ["dep:mimalloc"]
 perf = []
+# Answer from `encoding_rs` alone for the CJK encodings: neither
+# `encoding_cjk.rs`'s tables nor #1557's rule that a cell the destination
+# cannot hold is no cell. Both are corrections, and the override lists
+# `bin/gen-cjk-tables` writes say where the codec and CRuby disagree, so
+# generating them needs a build that carries neither — diffing a corrected
+# build against CRuby would silently agree. Nothing else should use it: such
+# a build reads and writes cells CRuby does not have.
+no-cjk-tables = []
 # §5 Layer-② extraction: stage-1 *placement shadow*. Records, in emission order,
 # every physical FP placement that ③ commits (one entry per `PhysMap::resolve`),
 # producing a per-`jit_compile` fingerprint of the FPReg→FPRegLoc lowering. The
