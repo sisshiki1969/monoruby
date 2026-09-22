@@ -464,6 +464,7 @@
 176a4f88e9d3064441c40d65e63991b7	[[:a, :b, :c, :a], ["1", "2.0", "3", "four", "", "true", "false"], [2, 1, 2]]	class A; def tag = :a; end\n        class B; def tag = :b; end\n        c
 176ade062a39fa54620f862c109af764	"US-ASCII"	"abc".dup.force_encoding("US-ASCII").tr("ab", "xy").encoding.to_s
 1770967ece1fd315970d1f5fa174f072	["ZBC", "ABZ", 255, 255, 0, 127]	__a = [];__a << (s = "ABC"; s.setbyte(0, 90); s);__a << (s = "ABC"; s.setbyte(-1
+177231766573e8212e23e7f8039b62fc	[["IBM720", [233], [233], true], ["IBM720", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["Windows-874", [3585], [3585], true], ["Windows-874", [8364], [8364], true], ["Windows-874", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["Windows-874", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["CP852", [199], [199], true], ["IBM852", [193], [193], true], ["CP855", [1106], [1106], true], ["IBM855", [167], [167], true], ["CP874", [8216], [8216], true], ["CP720", [1617], [1617], true]]	[["IBM720", 0x82], ["IBM720", 0x80], ["Windows-874", 0xA1],\n       
 177267179432c2c7c88151677405f37d	[true, "Process::Status", 0]	pid = fork { exit 0 }\n            ret, status = Process.wait2(pid)\n
 1774d08ce1e6f2221ed0ca928cd3513f	[["GBK", [[:destination_buffer_full, 2, 0], [:finished, 4, 0]], [168, 166, 168, 166]], ["EUC-KR", [[:undefined_conversion, 0, 2], [:undefined_conversion, 0, 0], [:finished, 0, 0]], []], ["Shift_JIS", [[:undefined_conversion, 0, 2], [:undefined_conversion, 0, 0], [:finished, 0, 0]], []], ["EUC-JP", [[:destination_buffer_full, 2, 2], [:destination_buffer_full, 4, 0], [:finished, 6, 0]], [143, 171, 177, 143, 171, 177]]]	["GBK", "EUC-KR", "Shift_JIS", "EUC-JP"].map do |dst|\n             
 17761ecd485505a237eebb141e320d52	[[true, true, true, true, true, true, true, true, true, true, true, true, true], true, false, false, false, ["b", "r"], ["b", "r"], [], ["a"], ["a", "b"], ["a", "c"], ["a"], true, true, true, false, true, true, false, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, 0, true, true]	__a = [];__a << (\n        res = [/R.../.match?("-Ruby")]\n        for i in -6...6
@@ -546,6 +547,7 @@
 1b3c2eadd70230e112db45d05e9f2234		require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 1b4f0e33ced070869e7b97b19b0af7ee	"Xhello"	s = "hello"; s.bytesplice(0..-7, "X"); s
 1b5020619890769300a9b8ddb16684a2	[nil, nil]	"abc" =~ /b/; [defined?($+), $+]
+1b62dffb6e3d7dd15535f44b5ebad661	[[[19968], [63153], [30849]], [[164, 64], [33], [161, 65], [249, 249]], [[164, 64], [33], [249, 249]], [["Big5", 13347], ["CP950", 13539], ["CP951", 16601]]]	r = []\n            r << [[0xA4, 0x40], [0xC6, 0xA1], [0xF9, 0xD6]].
 1b63487846c78af5251d8377dfadab0f	610148320.4118465	a = 7.9\n            for i in 0..15\n              a = -(1.1 * a + 2 
 1b65e30600f2f773d8cd72317be4cfb5	[40, 254, "ASCII-8BIT", false, true]	def happ(s, n)\n          i = 0\n          while i < n\n            s << 0
 1b67f85d874f2c3b529059abedf36dec	Array	class C < Array; end\nC[3,1,2].rotate.class
@@ -933,6 +935,7 @@
 2f9cea09fc9016f79e2054e732f21dea	42	class C; def to_int; 42; end; end; o = C.new\nInteger(o)
 2fa57f909d61eb3427eb35f6895a4fda	[["Sub(Base#a)", "Sub(Base#b)", "Al2(Al1#name)", ["anon", "anon", "non-anon"]]]	class SupBase5\n          def a = "Base#a"\n          def b = "Base#b"\n  
 2fcfef9e5f8cfa4ff062ffa00a3ccf80	[{a: nil}, {a: 1, b: 2}]	__a = [];__a << (Hash[[[:a]]]);__a << (Hash[[[:a, 1], [:b, 2]]]);__a
+2fd3d590e98d46ce1385d3a7a4cfff37	[["IBM720", [233], [233], true], ["IBM720", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["Windows-874", [161], [161], true], ["Windows-874", [128], [128], true], ["Windows-874", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["CP852", [164], [164], true], ["CP855", [165], [165], true], ["IBM852", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true]]	[["IBM720", 0x644], ["IBM720", 0x4E00], ["Windows-874", 0xE01],\n   
 2fdb9050b1a5d03ad336a6fbc113e162	12	class CNDm\n          define_method(:initialize) { |a| @a = a * 3 }\n    
 2fdfd5e264a5506e71aa34bed897a435	[ArgumentError, ArgumentError, ArgumentError, TypeError, ArgumentError, "no", 3, TypeError]	class CNOne; def initialize(a); @a = a; end; end\n        class CNRaise\n
 2fdfe913dc96ddd87614afdfb1ae9f18	[[:a, 100], [:b, 50]]	class La; def tag = :a; end\n            class Lb; def tag = :b; end
