@@ -220,7 +220,9 @@ CARRIERS.each do |c|
   %w[UTF8 SJIS].each do |fam|
     name = "#{fam}-#{c}"
     t = tables[name]
-    konst = "#{fam}_#{c.upcase}"
+    # `_TABLE` keeps the static out of the way of the payload index
+    # constant of the same name in `value::Encoding`.
+    konst = "#{fam}_#{c.upcase}_TABLE"
     ty = fam == "UTF8" ? "Utf8Carrier" : "SjisCarrier"
     puts
     puts "/// `#{name}`'s difference from #{fam == 'UTF8' ? 'UTF-8' : 'Windows-31J'}."

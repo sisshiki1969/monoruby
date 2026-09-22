@@ -49,7 +49,7 @@ pub(crate) struct SjisCarrier {
 }
 
 /// `UTF8-DoCoMo`'s difference from UTF-8.
-pub(crate) static UTF8_DOCOMO: Utf8Carrier = Utf8Carrier {
+pub(crate) static UTF8_DOCOMO_TABLE: Utf8Carrier = Utf8Carrier {
     // 390 characters DoCoMo's emoji stand in for.
     encode: &[
         (169, 59185, 0), (174, 59190, 0), (8252, 59140, 0), (8265, 59139, 0),
@@ -228,7 +228,7 @@ pub(crate) static UTF8_DOCOMO: Utf8Carrier = Utf8Carrier {
 };
 
 /// `SJIS-DoCoMo`'s difference from Windows-31J.
-pub(crate) static SJIS_DOCOMO: SjisCarrier = SjisCarrier {
+pub(crate) static SJIS_DOCOMO_TABLE: SjisCarrier = SjisCarrier {
     // 773 characters SJIS-DoCoMo writes into DoCoMo's cells.
     encode: &[
         (169, 63958), (174, 63963), (8252, 63913), (8265, 63912), (8482, 63959), (8560, 61167),
@@ -409,7 +409,7 @@ pub(crate) static SJIS_DOCOMO: SjisCarrier = SjisCarrier {
 };
 
 /// `UTF8-KDDI`'s difference from UTF-8.
-pub(crate) static UTF8_KDDI: Utf8Carrier = Utf8Carrier {
+pub(crate) static UTF8_KDDI_TABLE: Utf8Carrier = Utf8Carrier {
     // 668 characters KDDI's emoji stand in for.
     encode: &[
         (169, 58712, 0), (174, 58713, 0), (8194, 58765, 0), (8195, 58764, 0),
@@ -745,7 +745,7 @@ pub(crate) static UTF8_KDDI: Utf8Carrier = Utf8Carrier {
 };
 
 /// `SJIS-KDDI`'s difference from Windows-31J.
-pub(crate) static SJIS_KDDI: SjisCarrier = SjisCarrier {
+pub(crate) static SJIS_KDDI_TABLE: SjisCarrier = SjisCarrier {
     // 2012 characters SJIS-KDDI writes into KDDI's cells.
     encode: &[
         (169, 63348), (174, 63349), (8194, 63402), (8195, 63401), (8197, 63403), (8252, 62449),
@@ -1171,7 +1171,7 @@ pub(crate) static SJIS_KDDI: SjisCarrier = SjisCarrier {
 };
 
 /// `UTF8-SoftBank`'s difference from UTF-8.
-pub(crate) static UTF8_SOFTBANK: Utf8Carrier = Utf8Carrier {
+pub(crate) static UTF8_SOFTBANK_TABLE: Utf8Carrier = Utf8Carrier {
     // 555 characters SoftBank's emoji stand in for.
     encode: &[
         (169, 57934, 0), (174, 57935, 0), (8482, 58679, 0), (8598, 57911, 0),
@@ -1397,7 +1397,7 @@ pub(crate) static UTF8_SOFTBANK: Utf8Carrier = Utf8Carrier {
 };
 
 /// `SJIS-SoftBank`'s difference from Windows-31J.
-pub(crate) static SJIS_SOFTBANK: SjisCarrier = SjisCarrier {
+pub(crate) static SJIS_SOFTBANK_TABLE: SjisCarrier = SjisCarrier {
     // 1423 characters SJIS-SoftBank writes into SoftBank's cells.
     encode: &[
         (169, 63470), (174, 63471), (8482, 64471), (8560, 61167), (8561, 61168), (8562, 61169),
@@ -1757,3 +1757,100 @@ pub(crate) static SJIS_SOFTBANK: SjisCarrier = SjisCarrier {
         64474, 64475, 64476, 64477, 64478,
     ],
 };
+
+// ---------------------------------------------------------------------
+// Hand-written, below the generated tables.
+// ---------------------------------------------------------------------
+
+impl Utf8Carrier {
+    /// What this carrier spells `c` as, or `None` where it spells it
+    /// the way UTF-8 does.
+    pub(crate) fn writes(&self, c: char) -> Option<Vec<char>> {
+        lookup(self.encode, c as u32)
+    }
+
+    /// Whether this carrier cannot spell `c` at all.
+    pub(crate) fn refuses(&self, c: char) -> bool {
+        self.encode_reject.binary_search(&(c as u32)).is_ok()
+    }
+
+    /// What `c` means in this carrier, or `None` where it means what
+    /// UTF-8 means.
+    pub(crate) fn reads(&self, c: char) -> Option<Vec<char>> {
+        lookup(self.decode, c as u32)
+    }
+
+    /// Whether this carrier holds no meaning for `c`.
+    pub(crate) fn unreadable(&self, c: char) -> bool {
+        self.decode_reject.binary_search(&(c as u32)).is_ok()
+    }
+}
+
+impl SjisCarrier {
+    /// The bytes this carrier writes `c` as, or `None` where it writes
+    /// what Windows-31J writes.
+    pub(crate) fn writes(&self, c: char) -> Option<Vec<u8>> {
+        let i = self.encode.binary_search_by_key(&(c as u32), |e| e.0).ok()?;
+        let packed = self.encode[i].1;
+        Some(if packed < 0x100 {
+            vec![packed as u8]
+        } else if packed < 0x1_0000 {
+            vec![(packed >> 8) as u8, packed as u8]
+        } else {
+            packed.to_be_bytes().to_vec()
+        })
+    }
+
+    /// Whether this carrier cannot write `c` although Windows-31J can.
+    pub(crate) fn refuses(&self, c: char) -> bool {
+        self.encode_reject.binary_search(&(c as u32)).is_ok()
+    }
+
+    /// What this carrier reads the two-byte `cell` as, or `None` where
+    /// it reads what Windows-31J reads.
+    pub(crate) fn reads(&self, cell: u16) -> Option<Vec<char>> {
+        lookup(self.decode, cell as u32)
+    }
+
+    /// Whether this carrier holds no character for `cell`, though
+    /// Windows-31J does.
+    pub(crate) fn unreadable(&self, cell: u16) -> bool {
+        self.decode_reject.binary_search(&(cell as u32)).is_ok()
+    }
+}
+
+/// One entry of a `(key, first, second)` table, where a `second` of
+/// `0` means the entry is one character wide.
+fn lookup(table: &'static [(u32, u32, u32)], key: u32) -> Option<Vec<char>> {
+    let i = table.binary_search_by_key(&key, |e| e.0).ok()?;
+    let (_, a, b) = table[i];
+    let mut out = vec![char::from_u32(a)?];
+    if b != 0 {
+        out.push(char::from_u32(b)?);
+    }
+    Some(out)
+}
+
+/// The `UTF8-*` table for a [`crate::value::Encoding::Utf8`] payload,
+/// or `None` for the members that are not carriers.
+pub(crate) fn utf8_carrier(index: u8) -> Option<&'static Utf8Carrier> {
+    use crate::value::{UTF8_DOCOMO, UTF8_KDDI, UTF8_SOFTBANK};
+    match index {
+        i if i == UTF8_DOCOMO => Some(&UTF8_DOCOMO_TABLE),
+        i if i == UTF8_KDDI => Some(&UTF8_KDDI_TABLE),
+        i if i == UTF8_SOFTBANK => Some(&UTF8_SOFTBANK_TABLE),
+        _ => None,
+    }
+}
+
+/// The `SJIS-*` table for a [`crate::value::Encoding::Sjis`] payload,
+/// or `None` for the members that are not carriers.
+pub(crate) fn sjis_carrier(index: u8) -> Option<&'static SjisCarrier> {
+    use crate::value::{SJIS_DOCOMO, SJIS_KDDI, SJIS_SOFTBANK};
+    match index {
+        i if i == SJIS_DOCOMO => Some(&SJIS_DOCOMO_TABLE),
+        i if i == SJIS_KDDI => Some(&SJIS_KDDI_TABLE),
+        i if i == SJIS_SOFTBANK => Some(&SJIS_SOFTBANK_TABLE),
+        _ => None,
+    }
+}

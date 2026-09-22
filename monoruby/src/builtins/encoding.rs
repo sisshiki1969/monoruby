@@ -1,3 +1,4 @@
+use super::encoding_carrier::{SjisCarrier, Utf8Carrier, sjis_carrier, utf8_carrier};
 use super::*;
 
 //
@@ -2381,6 +2382,133 @@ pub(super) fn transcode_for_env(
 /// there, naming the destination the caller asked for. And an
 /// `UndefinedConversionError` out of the pivot is a two-hop failure to
 /// CRuby, which spells both hops.
+/// A `UTF8-*` carrier source read as Unicode: the carrier's own
+/// characters mean what its table says, and the rest mean what UTF-8
+/// means. `Err` names the first character the carrier holds no meaning
+/// for (#1573).
+fn carrier_utf8_to_unicode(s: &str, table: &'static Utf8Carrier) -> std::result::Result<String, char> {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if table.unreadable(c) {
+            return Err(c);
+        }
+        match table.reads(c) {
+            Some(cs) => out.extend(cs),
+            None => out.push(c),
+        }
+    }
+    Ok(out)
+}
+
+/// Unicode written as a `UTF8-*` carrier: the characters its table
+/// names become the carrier's own emoji, the rest keep their UTF-8
+/// spelling. `Err` names the first character the carrier cannot spell.
+fn unicode_to_carrier_utf8(s: &str, table: &'static Utf8Carrier) -> std::result::Result<String, char> {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if table.refuses(c) {
+            return Err(c);
+        }
+        match table.writes(c) {
+            Some(cs) => out.extend(cs),
+            None => out.push(c),
+        }
+    }
+    Ok(out)
+}
+
+/// An `SJIS-*` carrier source read as Unicode.
+///
+/// The walk is Windows-31J's, and each two-byte cell is asked of the
+/// carrier's table first: it reads a block of them as its own emoji
+/// and holds no character at all for another block, both of which
+/// Windows-31J reads as private-use characters. Everything else is
+/// Windows-31J's own reading. `Err(Some(cell))` is a cell the carrier
+/// does not hold; `Err(None)` is a byte sequence the walk itself
+/// rejects, which the caller reports as it reports any other (#1573).
+fn carrier_sjis_to_unicode(
+    bytes: &[u8],
+    table: &'static SjisCarrier,
+    store: &Store,
+    src_enc: crate::value::Encoding,
+) -> std::result::Result<String, Option<u16>> {
+    let base = crate::value::Encoding::Sjis(crate::value::WINDOWS_31J);
+    let mut out = String::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let b = bytes[at];
+        if b < 0x80 {
+            out.push(b as char);
+            at += 1;
+            continue;
+        }
+        // A single-byte half-width katakana, or anything else the
+        // two-byte table has no say in, goes to the base codec whole.
+        let width = match crate::value::sjis_precise_len(bytes, at) {
+            crate::value::PreciseLen::Char(n) => n,
+            _ => return Err(None),
+        };
+        if width == 2 {
+            let cell = ((bytes[at] as u16) << 8) | bytes[at + 1] as u16;
+            if table.unreadable(cell) {
+                return Err(Some(cell));
+            }
+            if let Some(cs) = table.reads(cell) {
+                out.extend(cs);
+                at += 2;
+                continue;
+            }
+        }
+        let piece = transcode_bytes_with_opts(
+            &bytes[at..at + width],
+            base,
+            crate::value::Encoding::UTF8,
+            &TranscodeOpts::default(),
+            store,
+        )
+        .map_err(|_| Some(((bytes[at] as u16) << 8) | *bytes.get(at + 1).unwrap_or(&0) as u16))?;
+        let Ok(text) = String::from_utf8(piece) else {
+            return Err(None);
+        };
+        out.push_str(&text);
+        at += width;
+        let _ = src_enc;
+    }
+    Ok(out)
+}
+
+/// Unicode written as an `SJIS-*` carrier: the characters its table
+/// names go into the carrier's own cells, the rest are Windows-31J's
+/// to write. `Err` names the first character the carrier cannot write.
+fn unicode_to_carrier_sjis(
+    s: &str,
+    table: &'static SjisCarrier,
+    store: &Store,
+) -> std::result::Result<Vec<u8>, char> {
+    let base = crate::value::Encoding::Sjis(crate::value::WINDOWS_31J);
+    let mut out: Vec<u8> = Vec::with_capacity(s.len());
+    let mut buf = [0u8; 4];
+    for c in s.chars() {
+        if table.refuses(c) {
+            return Err(c);
+        }
+        if let Some(bytes) = table.writes(c) {
+            out.extend_from_slice(&bytes);
+            continue;
+        }
+        let piece = transcode_bytes_with_opts(
+            c.encode_utf8(&mut buf).as_bytes(),
+            crate::value::Encoding::UTF8,
+            base,
+            &TranscodeOpts::default(),
+            store,
+        )
+        .map_err(|_| c)?;
+        out.extend_from_slice(&piece);
+    }
+    Ok(out)
+}
+
 fn to_pivot_for(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -2560,6 +2688,109 @@ pub(super) fn transcode_bytes_with_opts(
         if dst_enc == mac {
             let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
             return Ok(crate::value::utf8_to_mac(&utf8).into_bytes());
+        }
+        // The six carrier sets ride it too. Each is its base with a
+        // block of characters spelled as one Japanese carrier's emoji,
+        // so one side of the conversion is that table and the other is
+        // the ordinary pipeline. `UTF8-*` reads and writes characters;
+        // `SJIS-*` reads *cells*, because Windows-31J's table is
+        // many-to-one and `SJIS-SoftBank` tells two of its cells apart
+        // where Windows-31J does not (#1573).
+        if let crate::value::Encoding::Utf8(i) = src_enc
+            && let Some(table) = utf8_carrier(i)
+            && let Ok(text) = std::str::from_utf8(src_bytes)
+        {
+            let unicode = carrier_utf8_to_unicode(text, table).map_err(|c| {
+                MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(c, src_enc, dst_enc),
+                )
+            })?;
+            return transcode_bytes_with_opts(
+                unicode.as_bytes(),
+                crate::value::Encoding::UTF8,
+                dst_enc,
+                opts,
+                store,
+            );
+        }
+        if let crate::value::Encoding::Utf8(i) = dst_enc
+            && let Some(table) = utf8_carrier(i)
+        {
+            let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
+            return match unicode_to_carrier_utf8(&utf8, table) {
+                Ok(text) => Ok(text.into_bytes()),
+                Err(c) if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    let mut out = String::with_capacity(utf8.len());
+                    for c in utf8.chars() {
+                        match unicode_to_carrier_utf8(&c.to_string(), table) {
+                            Ok(piece) => out.push_str(&piece),
+                            Err(_) => out.push_str(&replace),
+                        }
+                    }
+                    let _ = c;
+                    Ok(out.into_bytes())
+                }
+                Err(c) => Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(c, src_enc, dst_enc),
+                )),
+            };
+        }
+        if let crate::value::Encoding::Sjis(i) = src_enc
+            && let Some(table) = sjis_carrier(i)
+        {
+            match carrier_sjis_to_unicode(src_bytes, table, store, src_enc) {
+                Ok(unicode) => {
+                    return transcode_bytes_with_opts(
+                        unicode.as_bytes(),
+                        crate::value::Encoding::UTF8,
+                        dst_enc,
+                        opts,
+                        store,
+                    );
+                }
+                Err(Some(cell)) => {
+                    let bytes = [(cell >> 8) as u8, cell as u8];
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        format!(
+                            "{} to UTF-8 in conversion from {} to UTF-8 to {}",
+                            quote_error_bytes(&bytes),
+                            src_enc.name(),
+                            dst_enc.name()
+                        ),
+                    ));
+                }
+                // The walk itself refused the bytes: the pipeline
+                // reports that, with the message it already gets right.
+                Err(None) => {}
+            }
+        }
+        if let crate::value::Encoding::Sjis(i) = dst_enc
+            && let Some(table) = sjis_carrier(i)
+        {
+            let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
+            return match unicode_to_carrier_sjis(&utf8, table, store) {
+                Ok(bytes) => Ok(bytes),
+                Err(c) if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    let mut out: Vec<u8> = Vec::with_capacity(utf8.len());
+                    for c in utf8.chars() {
+                        match unicode_to_carrier_sjis(&c.to_string(), table, store) {
+                            Ok(piece) => out.extend_from_slice(&piece),
+                            Err(_) => out.extend_from_slice(replace.as_bytes()),
+                        }
+                    }
+                    let _ = c;
+                    Ok(out)
+                }
+                Err(c) => Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(c, src_enc, dst_enc),
+                )),
+            };
         }
         // CESU-8 rides the same wrapper: it is UTF-8 with the
         // supplementary planes spelled as surrogate pairs, so one side
@@ -8174,6 +8405,14 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         // UTF-8 (used on macOS filesystems); a conversion to or from
         // it applies that normalisation (#1562).
         "UTF8_MAC" | "UTF_8_MAC" | "UTF_8_HFS" => Some("UTF8_MAC"),
+
+        // The carrier sets (#1573).
+        "UTF8_DOCOMO" => Some("UTF8_DOCOMO"),
+        "UTF8_KDDI" => Some("UTF8_KDDI"),
+        "UTF8_SOFTBANK" => Some("UTF8_SOFTBANK"),
+        "SJIS_DOCOMO" => Some("SJIS_DOCOMO"),
+        "SJIS_KDDI" => Some("SJIS_KDDI"),
+        "SJIS_SOFTBANK" => Some("SJIS_SOFTBANK"),
         "CESU_8" | "CESU8" => Some("CESU_8"),
 
         // Windows code pages
