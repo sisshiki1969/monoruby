@@ -89,7 +89,13 @@ pub struct InlineCacheEntry {
     /// `None` for a `super` call site.
     pub name: Option<IdentId>,
     pub refinements: RefinementSetId,
-    pub func_id: FuncId,
+    /// The resolution the code was compiled against — `None` for a site
+    /// compiled as the `method_missing` dispatch because the class had
+    /// no such method. That is as much an assumption as a hit: a later
+    /// definition of the name changes what the site must do, so the
+    /// record has to name it, and a salvage re-validates that it is
+    /// *still* missing.
+    pub func_id: Option<FuncId>,
 }
 
 #[derive(Debug, Clone)]

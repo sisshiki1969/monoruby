@@ -2916,7 +2916,7 @@ impl Store {
         for entry in cache_map {
             let func_id =
                 self.check_method_for_name(lfp, entry.recv_class, entry.name, entry.refinements);
-            if func_id != Some(entry.func_id) {
+            if func_id != entry.func_id {
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(
                     &crate::codegen::jit_stats::SALVAGE_FAIL_RESOLUTION_CHANGED,
@@ -3081,7 +3081,7 @@ impl Store {
         for entry in cache_map {
             let func_id =
                 self.check_method_for_name(lfp, entry.recv_class, entry.name, entry.refinements);
-            if func_id != Some(entry.func_id) {
+            if func_id != entry.func_id {
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(
                     &crate::codegen::jit_stats::SALVAGE_FAIL_RESOLUTION_CHANGED,
