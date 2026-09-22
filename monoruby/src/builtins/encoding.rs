@@ -2008,6 +2008,49 @@ impl TranscodeOpts {
     }
 }
 
+/// A US-ASCII source decoded with `invalid: :replace`.
+///
+/// US-ASCII has no `encoding_rs` codec here, no single-byte table and
+/// no `mbc_walker`, so none of the three paths that honour `invalid:`
+/// covered it and a byte above 0x7F raised whatever the caller had
+/// asked for (#1570). Its walk needs none of them: every byte below
+/// 0x80 is its own character and every byte at or above it is one
+/// ill-formed byte.
+fn usascii_decode_lossy(src_bytes: &[u8], repl: &str) -> String {
+    let mut out = String::with_capacity(src_bytes.len());
+    for &b in src_bytes {
+        if b < 0x80 {
+            out.push(b as char);
+        } else {
+            out.push_str(repl);
+        }
+    }
+    out
+}
+
+/// Whether an encoding spells `U+FFFD`, and so replaces with it rather
+/// than with `"?"`.
+///
+/// CRuby keeps a table of the names that do and asks it about the
+/// encoding the replacement is *inserted in* — the destination for an
+/// ordinary converter. The table is UTF-8, the UTF-16 and UTF-32 forms
+/// and the `UCS-*` aliases of those, and nothing else: read off
+/// `Encoding::Converter#replacement` for all 175 names CRuby lists,
+/// and confirmed from the other side by `"\xf0".force_encoding(
+/// "CESU-8").encode("CESU-8", invalid: :replace)`, which is `"?"`
+/// although a conversion *into* CESU-8 replaces with `U+FFFD` — see
+/// `pivot_replacement` for why those two differ (#1571).
+fn replaces_with_u_fffd(enc: crate::value::Encoding) -> bool {
+    use crate::value::Encoding as E;
+    match enc {
+        E::UTF8 | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be => true,
+        // The endianness-less dummies write a BOM and then the
+        // big-endian form, so they answer as that form does.
+        E::Other(_) => dummy_wide_target(enc).is_some(),
+        _ => false,
+    }
+}
+
 /// The endianness-less dummy `UTF-16` / `UTF-32` as an encode target:
 /// returns the big-endian concrete encoding CRuby writes after a BOM.
 fn dummy_wide_target(enc: crate::value::Encoding) -> Option<crate::value::Encoding> {
@@ -2053,16 +2096,12 @@ impl TranscodeOpts {
         if let Some(s) = &self.replace {
             return s.clone();
         }
-        // CRuby: default replacement is "�" for UTF
-        // destinations and "?" otherwise. `Encoding::UTF8`, not
-        // `Utf8(_)`: CRuby's test is the encoding's *name*, so a
-        // `UTF8-MAC` destination takes the "?" like any other (#1562).
+        // CRuby: default replacement is "�" for the UTF
+        // destinations and "?" otherwise — see `replaces_with_u_fffd`
+        // for which names those are, since `UTF8-MAC` is not one of
+        // them and CESU-8 is.
         match dst_enc {
-            crate::value::Encoding::UTF8
-            | crate::value::Encoding::Utf16Le
-            | crate::value::Encoding::Utf16Be
-            | crate::value::Encoding::Utf32Le
-            | crate::value::Encoding::Utf32Be => "\u{FFFD}".to_string(),
+            _ if replaces_with_u_fffd(dst_enc) => "\u{FFFD}".to_string(),
             _ => "?".to_string(),
         }
     }
@@ -2231,6 +2270,21 @@ fn to_pivot_for(
     opts: &TranscodeOpts,
     store: &Store,
 ) -> Result<String> {
+    // The inner conversion runs to UTF-8, so left alone it resolves
+    // `invalid:` / `undef:`'s default replacement against the *pivot*.
+    // That is right for one of these two destinations and not the
+    // other, so pin it here rather than letting the recursion decide
+    // (#1571).
+    let pinned;
+    let opts = if opts.replace.is_none() && (opts.invalid_replace || opts.undef_replace) {
+        pinned = TranscodeOpts {
+            replace: Some(pivot_replacement(dst_enc)),
+            ..opts.clone()
+        };
+        &pinned
+    } else {
+        opts
+    };
     let utf8 = transcode_bytes_with_opts(
         src_bytes,
         src_enc,
@@ -2247,6 +2301,22 @@ fn to_pivot_for(
             dst_enc,
             e.as_bytes(),
         )),
+    }
+}
+
+/// The replacement a conversion *into* a pivot destination inserts.
+///
+/// CRuby asks its name table about the encoding the last transcoder in
+/// the chain inserts into, and the two pivot destinations answer
+/// differently: `UTF-8 → UTF8-MAC` inserts into `UTF8-MAC`, which is
+/// not in the table, so `"?"`; `UTF-8 → CESU-8` inserts into the pivot
+/// and gets `U+FFFD`. Neither is derivable from anything monoruby
+/// holds about the two — this is the measured answer (#1571).
+fn pivot_replacement(dst_enc: crate::value::Encoding) -> String {
+    if dst_enc == crate::value::Encoding::NamedByte(crate::value::CESU_8) {
+        "\u{FFFD}".to_string()
+    } else {
+        "?".to_string()
     }
 }
 
@@ -2304,7 +2374,11 @@ pub(super) fn transcode_bytes_with_opts(
         )
         && (encoding_to_rs(src_enc).is_some()
             || is_utf16_or_32(src_enc)
-            || single_byte_table(src_enc).is_some());
+            || single_byte_table(src_enc).is_some()
+            // US-ASCII has neither, but the decode below scrubs it
+            // by hand, so a broken one must not take the identity
+            // path that copies the offending byte (#1570).
+            || src_enc == E::UsAscii);
     // The encodings monoruby walks itself (Emacs-Mule, EUC-JP,
     // Shift_JIS) scrub through that walk, not through a codec. For
     // Emacs-Mule there is no codec to use; for the other two there is,
@@ -2543,6 +2617,8 @@ pub(super) fn transcode_bytes_with_opts(
                 return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
             }
             decoded.into_owned()
+        } else if src_enc == E::UsAscii && opts.invalid_replace {
+            usascii_decode_lossy(src_bytes, &opts.replace_str(dst_enc))
         } else {
             // No decoder for the source: nothing to say about which
             // character is undefined, so the bytes go through as they
@@ -2607,6 +2683,9 @@ pub(super) fn transcode_bytes_with_opts(
             })?
         };
         (std::borrow::Cow::Owned(decoded), false)
+    } else if src_enc == E::UsAscii && opts.invalid_replace {
+        let out = usascii_decode_lossy(src_bytes, &opts.replace_str(dst_enc));
+        (std::borrow::Cow::Owned(out), false)
     } else {
         let src_rs = match encoding_to_rs(src_enc) {
             Some(s) => s,
@@ -3968,37 +4047,23 @@ fn converter_get_dst(globals: &Globals, recv: Value) -> crate::value::Encoding {
 }
 
 /// Default replacement string used by `Encoding::Converter#replacement`
-/// when none has been set explicitly. CRuby uses `"�"` (encoded
-/// in the destination encoding) when the dest is UTF-8 / UTF-16 /
-/// UTF-32, and `"?"` (US-ASCII) for everything else.
+/// when none has been set explicitly.
+///
+/// CRuby keeps the replacement in the encoding it will be *inserted*
+/// in, not in the destination, and for every destination that takes
+/// `U+FFFD` at all that encoding is UTF-8 — so `Converter.new("UTF-8",
+/// "UTF-16BE").replacement` is the three UTF-8 bytes tagged UTF-8, not
+/// the two UTF-16BE ones. Everything else takes `"?"` as US-ASCII.
+/// See `replaces_with_u_fffd` for the set (#1571).
 fn converter_default_replacement(dst: crate::value::Encoding) -> Value {
-    match dst {
-        // `Encoding::UTF8` only — see `TranscodeOpts::replace_str`.
-        crate::value::Encoding::UTF8 => {
-            // U+FFFD as UTF-8 bytes.
-            let mut s = crate::value::RStringInner::from_string_scanned("\u{FFFD}".to_string());
-            s.set_encoding(crate::value::Encoding::UTF8);
-            Value::string_from_inner(s)
-        }
-        crate::value::Encoding::Utf16Be | crate::value::Encoding::Utf16Le => {
-            // Encode U+FFFD via encoding_rs.
-            let label = match dst {
-                crate::value::Encoding::Utf16Be => b"utf-16be" as &[u8],
-                _ => b"utf-16le",
-            };
-            let enc_rs = encoding_rs::Encoding::for_label(label).unwrap();
-            let (bytes, _, _) = enc_rs.encode("\u{FFFD}");
-            let mut s = crate::value::RStringInner::from_encoding(&bytes, dst);
-            s.set_encoding(dst);
-            Value::string_from_inner(s)
-        }
-        _ => {
-            // Plain `?` tagged as US-ASCII.
-            let mut s = crate::value::RStringInner::from_string_scanned("?".to_string());
-            s.set_encoding(crate::value::Encoding::UsAscii);
-            Value::string_from_inner(s)
-        }
-    }
+    let (text, enc) = if replaces_with_u_fffd(dst) {
+        ("\u{FFFD}", crate::value::Encoding::UTF8)
+    } else {
+        ("?", crate::value::Encoding::UsAscii)
+    };
+    let mut s = crate::value::RStringInner::from_string_scanned(text.to_string());
+    s.set_encoding(enc);
+    Value::string_from_inner(s)
 }
 
 ///
@@ -12100,6 +12165,69 @@ mod tests {
              lambda { m.sub("a", "z") }].each do |f|
               r << (begin; f.call; rescue => e; e.class.to_s; end)
             end
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn invalid_replace_is_honoured_for_a_us_ascii_source() {
+        // US-ASCII has no `encoding_rs` codec, no single-byte table and
+        // no `mbc_walker`, so none of the three paths that honour
+        // `invalid:` covered it: it raised whatever the caller asked
+        // for, and the destinations with no codec of their own copied
+        // the offending byte through (#1570).
+        crate::tests::run_test_once(
+            r##"
+            s = "a\x80b".dup.force_encoding("US-ASCII")
+            r = [s.valid_encoding?, s.scrub("?")]
+            ["UTF-8", "EUC-JP", "US-ASCII", "ASCII-8BIT", "UTF-16BE"].each do |d|
+              r << (begin; s.encode(d, invalid: :replace).bytes; rescue => e; e.class.to_s; end)
+            end
+            r << s.encode("UTF-8", invalid: :replace, replace: "!").bytes
+            # ...while a source that is merely ill-formed still raises
+            # without the option, with the message it already had.
+            r << (begin; s.encode("UTF-8"); rescue => e; [e.class.to_s, e.message]; end)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_replacement_follows_the_encoding_it_is_inserted_in() {
+        // `U+FFFD` or `"?"` is decided by a table of encoding *names*,
+        // asked about the encoding the last transcoder inserts into.
+        // Resolving it against the UTF-8 pivot rather than the
+        // destination gave `UTF8-MAC` the `U+FFFD` that only UTF-8 and
+        // the wide forms take, and the endianness-less dummies took
+        // `"?"` where their big-endian form takes `U+FFFD` (#1571).
+        crate::tests::run_test_once(
+            r##"
+            s = "a\xffb".dup.force_encoding("UTF-8")
+            dsts = %w[UTF-8 UTF8-MAC CESU-8 EUC-JP Shift_JIS US-ASCII ASCII-8BIT
+                      UTF-16BE UTF-16LE UTF-32BE UTF-32LE UTF-16 UTF-32
+                      UCS-2BE UCS-4BE ISO-8859-1 Windows-31J]
+            r = dsts.map do |d|
+              [d, (begin; s.encode(d, invalid: :replace).b.bytes; rescue => e; e.class.to_s; end)]
+            end
+            # `Converter#replacement` keeps the same string, and CRuby
+            # holds it in the encoding it is inserted in rather than in
+            # the destination — UTF-8 even for a UTF-16BE destination.
+            # CESU-8 and the two BOM dummies are left out:
+            # `Encoding::Converter` does not take them as destinations
+            # yet although `String#encode` does, which is its own gap.
+            r << (dsts - %w[CESU-8 UTF-16 UTF-32]).map do |d|
+              [d, (begin
+                     ec = Encoding::Converter.new("UTF-8", d)
+                     [ec.replacement.b.bytes, ec.replacement.encoding.name]
+                   rescue => e
+                     e.class.to_s
+                   end)]
+            end
+            # The same-encoding scrub asks the source's own name, so
+            # CESU-8 takes "?" although a conversion *into* it does not.
+            r << "\xf0".dup.force_encoding("CESU-8").encode("CESU-8", invalid: :replace).b.bytes
+            r << "\xff".dup.force_encoding("UTF-8").encode("UTF-8", invalid: :replace).b.bytes
             r
             "##,
         );
