@@ -327,7 +327,7 @@ CARRIERS.each do |c|
   rust_triples("decode", "#{t[:decode].size} of #{c}'s own characters.", t[:decode])
   rust_list("decode_reject", "#{t[:decode_reject].size} characters #{name} holds no meaning for.", t[:decode_reject])
   puts "};"
-  warn "#{name}: encode=#{t[:encode].size} encode_reject=#{t[:encode_reject].size} " \\
+  warn "#{name}: encode=#{t[:encode].size} encode_reject=#{t[:encode_reject].size} " \
        "decode=#{t[:decode].size} decode_reject=#{t[:decode_reject].size}"
 end
 
