@@ -2071,6 +2071,7 @@
 6dcb51b99c788c3ce1f7ead68e2e10be	true	S = Struct.new(:a, :b)\n            \n\n            s = S.new("v", 2)\n
 6dcfb7ed29eb370f8b60cf546d5ae302	[1, 2, 3, 4]	[*(1..10)].take_while { |i| i < 5 }
 6dd41ec1ded5717c0e4843842d875e1e	[100, 200, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \n\n    
+6dd4864aec5d26a8914a95712df33e4a	[[[[[1, 2]], [2, false]], [[1], [1, false]], [[[1, 2]], [-1, false]], [[0], [0, false]], [[[1, 2, []]], [-3, false]], [[[1, 2, nil]], [2, false]], [["1"], [-2, false]], [[[1, 2]], [2, false]]], [[[1, 2]], 2, [[1, 2]], 2], [[[1, 2]], [[9, 9]]], [[:select, -1], [:reject, -1], [:sort_by, -1], [:group_by, -1], [:partition, -1], [:find, -1], [:filter_map, -1], [:take_while, -1], [:each_with_index, -1], [:flat_map, -1]], ["#<Enumerator: [1, 2]:each_entry>", "#<Enumerator: 1..3:map>", "#<Enumerator: 1..3:collect>"]]	__a = [];__a << (\n        class C\n          include Enumerable\n          def eac
 6e3f4d68346f263bda44d7cf25bdde4c	"ok"	path = "/tmp/monoruby_test_intmode_#{Process.pid}_#{rand(100000)}"\n
 6e3f50cf024faafd671188a008bbf62e	[true, true, true, false, true, true, false, false, false, false, false, false, false, false, true, false, true, false, TypeError, TypeError]	d = "/tmp/mono_ex_#{Process.pid}"\n            Dir.mkdir(d)\n        
 6e55e9c4e17738f1d844db95211ebfcc	"numbered parameter '_1' is not a local variable"	-> { _1; (binding.local_variable_set(:_1, 1) rescue $!.message) }.call("x")
