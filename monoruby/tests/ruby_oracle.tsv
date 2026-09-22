@@ -3759,6 +3759,7 @@ c56c19f790a407710bd65fa095a58592	[3, 3]	from = 1\n        to = 2\n        [(from
 c57f3073a34696e272a4c621e59717cf	false	"a".index(/a/); $~.nil?
 c5a28c5f978023ef4ce7e9a6bcff4faf	[ArgumentError, "comparison of String with 0 failed"]	class Str\n          def <=>(o) = "not a number"\n        end\n        beg
 c5a9ac24fee6ccfc26954a34f012d3d1	"UTF-8"	"\\xFF#{1}".encoding.to_s
+c5b7b21a45efae69942aa2fe995450e0	[[[254, 255, 0, 97, 48, 66, 0, 98], [97, 12354, 98], [97, 12354, 98], ["Encoding::InvalidByteSequenceError", "\\"\\\\x00a\\" on UTF-16"], ["Encoding::InvalidByteSequenceError", "incomplete \\"\\\\xFE\\" on UTF-16", true], [97, 164, 162, 98]], [[0, 0, 254, 255, 0, 0, 0, 97, 0, 0, 48, 66, 0, 0, 0, 98], [97, 12354, 98], [97, 12354, 98], ["Encoding::InvalidByteSequenceError", "\\"\\\\x00\\\\x00\\\\x00a\\" on UTF-32"], ["Encoding::InvalidByteSequenceError", "incomplete \\"\\\\x00\\" on UTF-32", true], [97, 164, 162, 98]]]	s = "aあb"\n            %w[UTF-16 UTF-32].map do |e|\n              en
 c5d36d66f1a2b4575d9850303505af7e	[[100], [100], [], ["100"]]	__a = [];__a << (Array([100]));__a << (Array(100));__a << (Array(nil));__a << (A
 c5f5ea4d7ccb33511960c242704f06f0	[[195], [169], 3, [195, 169], [195]]	s = "\\303\\251\\303".dup.force_encoding(Encoding::Windows_31J)\n               m = 
 c60883d6df2480fbe9ec2ae4e169130c	[200, 300, 250, 60, 200, 300, 250, 60]	class S\n            def f(x, y, a:10, b:20)\n                $res << x\n
