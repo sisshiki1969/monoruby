@@ -40,9 +40,9 @@ pub use string::{
     STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, char_bytes_code, map_bytes_to_utf8,
 };
 pub(crate) use string::{
-    MbcPiece, PreciseLen, char_count, char_width_at, eucjp_char_width, eucjp_precise_len,
-    IllFormed, mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width, sjis_precise_len,
-    walk_mbc, walk_mbc_with,
+    MbcPiece, PreciseLen, char_count, char_width_at, euc_jp_const_name, eucjp_char_width,
+    eucjp_precise_len, IllFormed, mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width,
+    sjis_precise_len, walk_mbc, walk_mbc_with,
 };
 pub(crate) use string::{
     STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer, string_snapshot,

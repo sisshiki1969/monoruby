@@ -73,6 +73,30 @@ pub(crate) fn sjis_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
 /// A 94×94 double-byte set over ASCII: `0xA1..=0xFE` leads and takes a
 /// trail from the same range. GB2312 and GB12345 have exactly this
 /// shape, and so does EUC-TW's two-byte half (#1473).
+/// Classify the stateless-ISO-2022-JP sequence starting at `bytes[pos]`.
+///
+/// ISO-2022-JP's repertoire with the escape sequences taken out: ASCII,
+/// plus a two-byte form with a lead in `0x81..=0x8F` and a trail in
+/// `0xA0..=0xFF`. Despite sitting with the EUC-JP family in CRuby's
+/// naming, it shares none of EUC-JP's byte structure — the two disagree
+/// on 10182 of the one- and two-byte sequences — so it gets a walk of
+/// its own rather than riding EUC-JP's the way `eucJP-ms` and `CP51932`
+/// legitimately do (#1562).
+pub(crate) fn stateless_iso2022jp_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    match lead {
+        0x00..=0x7f => PreciseLen::Char(1),
+        0x81..=0x8f => match bytes.get(pos + 1) {
+            None => PreciseLen::NeedMore,
+            Some(0xa0..=0xff) => PreciseLen::Char(2),
+            Some(_) => PreciseLen::Invalid,
+        },
+        _ => PreciseLen::Invalid,
+    }
+}
+
 pub(crate) fn euckr_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
     let Some(&lead) = bytes.get(pos) else {
         return PreciseLen::NeedMore;
@@ -273,7 +297,7 @@ impl<'a> Iterator for CharByteIter<'a> {
             // is not a continuation leads nothing and stands on its
             // own. Taking the width off the lead swallowed the next
             // byte instead (`"\x8E "` counted 1 character, CRuby 2).
-            Encoding::EucJp => match eucjp_precise_len(self.bytes, self.pos) {
+            Encoding::EucJp(_) => match eucjp_precise_len(self.bytes, self.pos) {
                 PreciseLen::Char(n) => n,
                 _ => 1,
             },
@@ -398,8 +422,18 @@ pub enum Encoding {
     /// ISO-8859-N for N in 1..=16 (excluding 12). One byte per char,
     /// every byte is "valid" in the encoding.
     Iso8859(u8),
-    /// EUC-JP. ASCII-compatible multibyte.
-    EucJp,
+    /// EUC-JP and the encodings that share its byte structure exactly
+    /// and differ only in vendor mapping tables monoruby does not
+    /// carry: `eucJP-ms`, `CP51932`, `stateless-ISO-2022-JP`,
+    /// `EUC-JIS-2004` and `stateless-ISO-2022-JP-KDDI`. ASCII-compatible
+    /// multibyte.
+    ///
+    /// The payload indexes [`EUC_JP_VARIANTS`] and decides the name
+    /// only — as `Sjis`'s does for Windows-31J and MacJapanese. Without
+    /// it these five collapsed onto EUC-JP, so `force_encoding` handed
+    /// back an encoding the caller had not asked for while
+    /// `Encoding.find` answered correctly (#1562).
+    EucJp(u8),
     /// Shift_JIS / Windows-31J / CP932 (we treat these as one
     /// implementation, but the canonical name is preserved). The
     /// `u8` distinguishes the alias for `name()`/`==`.
@@ -435,6 +469,42 @@ pub enum Encoding {
 /// Canonical names for [`Encoding::Other`] variants (stateful /
 /// dummy byte encodings monoruby has no native codec for). The
 /// index is the `Encoding::Other` payload.
+/// `(display name, `Encoding::<CONST>` suffix)` for the [`Encoding::EucJp`]
+/// family. Index 0 is canonical EUC-JP; the rest ride its character walk
+/// and differ only in the name they report.
+pub(crate) const EUC_JP_VARIANTS: &[(&str, &str)] = &[
+    ("EUC-JP", "EUC_JP"),
+    ("eucJP-ms", "EUCJP_MS"),
+    ("CP51932", "CP51932"),
+    ("EUC-JIS-2004", "EUC_JIS_2004"),
+];
+
+/// Look up an [`EUC_JP_VARIANTS`] index by its constant suffix.
+pub(crate) const fn euc_jp_variant_index(konst: &str) -> u8 {
+    let mut i = 0;
+    while i < EUC_JP_VARIANTS.len() {
+        if const_str_eq(EUC_JP_VARIANTS[i].1.as_bytes(), konst.as_bytes()) {
+            return i as u8;
+        }
+        i += 1;
+    }
+    panic!("EUC_JP_VARIANTS has no such constant suffix")
+}
+
+const fn const_str_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 pub(crate) const OTHER_ENC_NAMES: &[&str] = &[
     "UTF-7",
     "CP50220",
@@ -478,6 +548,11 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
     // keep their own names.
     ("CP950", "CP950"),
     ("CP951", "CP951"),
+    // ISO-2022-JP's repertoire without the escapes. CRuby names them
+    // with the EUC-JP family, but their byte structure is their own
+    // (#1562).
+    ("stateless-ISO-2022-JP", "STATELESS_ISO_2022_JP"),
+    ("stateless-ISO-2022-JP-KDDI", "STATELESS_ISO_2022_JP_KDDI"),
     ("KOI8-R", "KOI8_R"),
     ("KOI8-U", "KOI8_U"),
     ("Windows-1250", "Windows_1250"),
@@ -548,22 +623,9 @@ pub(crate) const EMACS_MULE: u8 = named_byte_index_const("Emacs_Mule");
 /// [`named_byte_index`] for a `const` context. Panics — at compile
 /// time — on a constant suffix the table does not carry.
 const fn named_byte_index_const(konst: &str) -> u8 {
-    const fn eq(a: &[u8], b: &[u8]) -> bool {
-        if a.len() != b.len() {
-            return false;
-        }
-        let mut i = 0;
-        while i < a.len() {
-            if a[i] != b[i] {
-                return false;
-            }
-            i += 1;
-        }
-        true
-    }
     let mut i = 0;
     while i < NAMED_BYTE_ENCODINGS.len() {
-        if eq(NAMED_BYTE_ENCODINGS[i].1.as_bytes(), konst.as_bytes()) {
+        if const_str_eq(NAMED_BYTE_ENCODINGS[i].1.as_bytes(), konst.as_bytes()) {
             return i as u8;
         }
         i += 1;
@@ -758,7 +820,7 @@ pub(crate) fn scrub_mbc(
 /// fixed-width rule.
 pub(crate) fn mbc_walker(enc: Encoding) -> Option<(usize, fn(&[u8], usize) -> PreciseLen)> {
     match enc {
-        Encoding::EucJp => Some((EUCJP_MAX_LEN, eucjp_precise_len)),
+        Encoding::EucJp(_) => Some((EUCJP_MAX_LEN, eucjp_precise_len)),
         Encoding::Sjis(_) => Some((SJIS_MAX_LEN, sjis_precise_len)),
         Encoding::NamedByte(EMACS_MULE) => Some((EMACS_MULE_MAX_LEN, emacs_mule_precise_len)),
         // The CJK double-byte sets. Without a walk here nothing can
@@ -771,6 +833,9 @@ pub(crate) fn mbc_walker(enc: Encoding) -> Option<(usize, fn(&[u8], usize) -> Pr
             "CP949" => Some((2, cp949_precise_len)),
             "Big5" | "Big5_HKSCS" | "Big5_UAO" | "CP950" | "CP951" => {
                 Some((2, big5_precise_len))
+            }
+            "STATELESS_ISO_2022_JP" | "STATELESS_ISO_2022_JP_KDDI" => {
+                Some((2, stateless_iso2022jp_precise_len))
             }
             "GBK" => Some((2, gbk_precise_len)),
             "GB18030" => Some((4, gb18030_precise_len)),
@@ -792,6 +857,11 @@ pub(crate) fn named_byte_index(normalized_const: &str) -> Option<u8> {
 /// The `Encoding::<CONST>` suffix for a [`Encoding::NamedByte`] payload.
 pub(crate) fn named_byte_const_name(index: u8) -> &'static str {
     NAMED_BYTE_ENCODINGS[index as usize].1
+}
+
+/// The `Encoding::<CONST>` suffix for an [`Encoding::EucJp`] payload.
+pub(crate) fn euc_jp_const_name(index: u8) -> &'static str {
+    EUC_JP_VARIANTS[index as usize].1
 }
 
 impl Encoding {
@@ -833,7 +903,7 @@ impl Encoding {
             self,
             Encoding::Ascii8
                 | Encoding::Iso8859(_)
-                | Encoding::EucJp
+                | Encoding::EucJp(_)
                 | Encoding::Sjis(_)
                 | Encoding::Iso2022Jp
                 | Encoding::Other(_)
@@ -871,7 +941,7 @@ impl Encoding {
             Encoding::Iso8859(15) => "ISO-8859-15",
             Encoding::Iso8859(16) => "ISO-8859-16",
             Encoding::Iso8859(_) => "ISO-8859-1",
-            Encoding::EucJp => "EUC-JP",
+            Encoding::EucJp(i) => EUC_JP_VARIANTS[i as usize].0,
             // 0 = canonical Shift_JIS, 1 = Windows-31J / CP932.
             Encoding::Sjis(0) => "Shift_JIS",
             Encoding::Sjis(2) => "MacJapanese",
@@ -1009,8 +1079,8 @@ impl Encoding {
                 }
                 CodeRange::Valid
             }
-            Encoding::EucJp | Encoding::Sjis(_) => {
-                let char_w = if matches!(self, Encoding::EucJp) {
+            Encoding::EucJp(_) | Encoding::Sjis(_) => {
+                let char_w = if matches!(self, Encoding::EucJp(_)) {
                     eucjp_char_width
                 } else {
                     sjis_char_width
@@ -1111,14 +1181,24 @@ impl Encoding {
             "ISO_8859_15" | "ISO8859_15" | "LATIN9" => Ok(Encoding::Iso8859(15)),
             "ISO_8859_16" | "ISO8859_16" | "LATIN10" => Ok(Encoding::Iso8859(16)),
 
-            "EUC_JP"
-            | "EUCJP"
-            | "EUCJP_MS"
-            | "EUCJP_WIN"
-            | "EUC_JP_MS"
-            | "EUC_JP_WIN"
-            | "CP51932"
-            | "STATELESS_ISO_2022_JP" => Ok(Encoding::EucJp),
+            "EUC_JP" | "EUCJP" => Ok(Encoding::EUC_JP),
+            // The rest of the family: one codec, their own names. They
+            // used to answer as EUC-JP, so a string asked to be
+            // `CP51932` came back labelled `EUC-JP` while
+            // `Encoding.find` said otherwise (#1562).
+            "EUCJP_MS" | "EUCJP_WIN" | "EUC_JP_MS" | "EUC_JP_WIN" => {
+                Ok(Encoding::EucJp(euc_jp_variant_index("EUCJP_MS")))
+            }
+            "CP51932" => Ok(Encoding::EucJp(euc_jp_variant_index("CP51932"))),
+            "EUC_JIS_2004" | "EUC_JISX0213" => {
+                Ok(Encoding::EucJp(euc_jp_variant_index("EUC_JIS_2004")))
+            }
+            "STATELESS_ISO_2022_JP" => Ok(Encoding::NamedByte(
+                named_byte_index("STATELESS_ISO_2022_JP").unwrap(),
+            )),
+            "STATELESS_ISO_2022_JP_KDDI" => Ok(Encoding::NamedByte(
+                named_byte_index("STATELESS_ISO_2022_JP_KDDI").unwrap(),
+            )),
             // Only ISO-2022-JP's own two names. `ISO-2022-JP-2` and
             // `ISO-2022-JP-KDDI` are encodings of their own in CRuby,
             // and answering them with this one relabelled the string
@@ -1480,6 +1560,10 @@ pub const STRING_TY_OFFSET: usize =
 pub const STRING_TY_MAX_INLINE_SHL: u8 = Encoding::UsAscii.tag();
 
 impl Encoding {
+    /// Canonical EUC-JP. The other [`EUC_JP_VARIANTS`] share its codec
+    /// and differ only in the name they report.
+    pub const EUC_JP: Self = Encoding::EucJp(0);
+
     /// The `repr(u8)` discriminant, as the JIT reads it out of
     /// [`STRING_TY_OFFSET`].
     pub const fn tag(self) -> u8 {
@@ -2201,7 +2285,7 @@ impl RStringInner {
             // ASCII-only content is 1 byte/char, so the cached
             // SevenBit range answers in O(1); otherwise walk the
             // encoding-aware character iterator.
-            Encoding::EucJp | Encoding::Sjis(_) => match self.code_range() {
+            Encoding::EucJp(_) | Encoding::Sjis(_) => match self.code_range() {
                 CodeRange::SevenBit => self.len(),
                 _ => self.iter_char_bytes().count(),
             },
@@ -2738,7 +2822,7 @@ impl RStringInner {
                 // an ESC sequence — a sub-range that's syntactically
                 // separate from the parent's escape state and would
                 // need re-decoding to classify.
-                Encoding::UsAscii | Encoding::EucJp | Encoding::Sjis(_) | Encoding::Iso2022Jp => {
+                Encoding::UsAscii | Encoding::EucJp(_) | Encoding::Sjis(_) | Encoding::Iso2022Jp => {
                     CodeRange::Unknown
                 }
             },
@@ -2918,7 +3002,7 @@ impl RStringInner {
             // EUC-JP / Shift_JIS are variable-width: walk the
             // (now encoding-aware) char iterator so `String#[]` /
             // `#slice` index by characters, not bytes.
-            Encoding::EucJp | Encoding::Sjis(_) | Encoding::Utf8 => None,
+            Encoding::EucJp(_) | Encoding::Sjis(_) | Encoding::Utf8 => None,
 
         };
         if let Some(u) = unit {
@@ -3545,7 +3629,7 @@ mod encoding_tests {
             Encoding::Utf32Le,
             Encoding::Utf32Be,
             Encoding::Iso8859(1),
-            Encoding::EucJp,
+            Encoding::EUC_JP,
             Encoding::Sjis(0),
             Encoding::Iso2022Jp,
             Encoding::Other(0),
@@ -3651,7 +3735,7 @@ mod encoding_tests {
             Encoding::Other(4)
         );
         // Japanese.
-        assert_eq!(Encoding::try_from_str("EUC-JP").unwrap(), Encoding::EucJp);
+        assert_eq!(Encoding::try_from_str("EUC-JP").unwrap(), Encoding::EUC_JP);
         assert_eq!(
             Encoding::try_from_str("Shift_JIS").unwrap(),
             Encoding::Sjis(0)
@@ -3680,7 +3764,7 @@ mod encoding_tests {
             Encoding::Iso8859(1),
             Encoding::Iso8859(5),
             Encoding::Iso8859(15),
-            Encoding::EucJp,
+            Encoding::EUC_JP,
             Encoding::Sjis(0),
             Encoding::Sjis(1),
         ] {
@@ -3694,7 +3778,7 @@ mod encoding_tests {
         assert!(Encoding::UsAscii.is_ascii_compatible());
         assert!(Encoding::Ascii8.is_ascii_compatible());
         assert!(Encoding::Iso8859(1).is_ascii_compatible());
-        assert!(Encoding::EucJp.is_ascii_compatible());
+        assert!(Encoding::EUC_JP.is_ascii_compatible());
         assert!(Encoding::Sjis(0).is_ascii_compatible());
         assert!(!Encoding::Utf16Le.is_ascii_compatible());
         assert!(!Encoding::Utf16Be.is_ascii_compatible());
@@ -3709,7 +3793,7 @@ mod encoding_tests {
         assert!(!Encoding::Ascii8.is_dummy());
         assert!(Encoding::Utf16Le.is_dummy());
         assert!(Encoding::Iso8859(1).is_dummy());
-        assert!(Encoding::EucJp.is_dummy());
+        assert!(Encoding::EUC_JP.is_dummy());
     }
 
     /// `emacs_mule_precise_len`'s three answers, including the two
@@ -3794,7 +3878,7 @@ mod encoding_tests {
             Encoding::UsAscii,
             Encoding::Ascii8,
             Encoding::Iso8859(1),
-            Encoding::EucJp,
+            Encoding::EUC_JP,
             Encoding::Sjis(0),
         ] {
             assert_eq!(enc.classify(b"abc"), CodeRange::SevenBit, "{:?}", enc);
@@ -4075,7 +4159,7 @@ mod encoding_tests {
         // native decoder, so we can't tell whether `start`/`end`
         // land on a character boundary. The conservative choice is
         // Unknown so the next operation lazy-classifies.
-        let parent = RStringInner::from_encoding(&[0xc6, 0xfc, 0xcb, 0xdc], Encoding::EucJp);
+        let parent = RStringInner::from_encoding(&[0xc6, 0xfc, 0xcb, 0xdc], Encoding::EUC_JP);
         assert_eq!(parent.code_range(), CodeRange::Valid);
         assert_eq!(
             RStringInner::propagated_cr(&parent, 0, 2),

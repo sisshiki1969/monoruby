@@ -627,7 +627,7 @@ fn encoding_ordinal(enc: Encoding) -> i32 {
         Encoding::Utf16Le => 4,
         Encoding::Utf32Be => 5,
         Encoding::Utf32Le => 6,
-        Encoding::EucJp => 7,
+        Encoding::EucJp(_) => 7,
         Encoding::Sjis(_) => 8,
         Encoding::Iso8859(n) => 100 + n as i32,
         Encoding::Iso2022Jp => 200,
@@ -955,7 +955,7 @@ fn codepoint_bytes(enc: Encoding, cp: u32) -> std::result::Result<Vec<u8>, Codep
         }
         // EUC-JP: single-byte ASCII, the 0x8E half-width-kana pair, the
         // two-byte JIS X 0208 plane, and the three-byte 0x8F plane.
-        Encoding::EucJp => {
+        Encoding::EucJp(_) => {
             if cp > 0xFF_FFFF {
                 return Err(CodepointErr::OutOfRange);
             }
@@ -3001,7 +3001,7 @@ fn trail_class(enc: crate::value::Encoding) -> Option<std::ops::RangeInclusive<u
     use crate::value::Encoding as E;
     match enc {
         E::Utf8 => Some(0x80..=0xBF),
-        E::EucJp => Some(0xA1..=0xFE),
+        E::EucJp(_) => Some(0xA1..=0xFE),
         E::NamedByte(_) => Some(0x9E..=0xFF),
         _ => None,
     }
@@ -3050,7 +3050,7 @@ fn enc_char_can_start(enc: crate::value::Encoding, bytes: &[u8], pos: usize) -> 
         return true;
     };
     match enc {
-        E::EucJp if (0xA1..=0xFE).contains(&byte) => true,
+        E::EucJp(_) if (0xA1..=0xFE).contains(&byte) => true,
         E::NamedByte(_) => !(0x9E..=0xFF).contains(&byte),
         _ => crate::value::mbc_walker(enc)
             .is_none_or(|(_, precise)| !matches!(precise(bytes, pos), PreciseLen::Invalid)),
@@ -8623,7 +8623,7 @@ fn ascii_case_fast_path(inner: &RStringInner, op: CaseOp, mode: CaseMode) -> Opt
         let enc = inner.encoding();
         if matches!(
             enc,
-            crate::value::Encoding::EucJp
+            crate::value::Encoding::EucJp(_)
                 | crate::value::Encoding::Sjis(_)
                 | crate::value::Encoding::Ascii8
                 | crate::value::Encoding::Iso8859(_)

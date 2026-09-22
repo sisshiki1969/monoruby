@@ -648,7 +648,7 @@ pub(crate) fn resolve_declared_encoding(
         let enc = if kc & RegexpInner::KCODE_UTF8 != 0 {
             Encoding::Utf8
         } else if kc & RegexpInner::KCODE_EUCJP != 0 {
-            Encoding::EucJp
+            Encoding::EUC_JP
         } else if kc & RegexpInner::KCODE_SJIS != 0 {
             // CRuby's `/.../s` modifier sets Windows-31J (CP932),
             // not canonical Shift_JIS. Use Sjis(1) so that
@@ -1160,7 +1160,7 @@ impl RegexpInner {
             // ASCII-only pattern is byte-transparent; a pattern pinned to
             // another encoding is refused by `check_match_encoding` first.
             E::Ascii8 => OnigmoEncoding::ASCII,
-            E::EucJp => OnigmoEncoding::EUC_JP,
+            E::EucJp(_) => OnigmoEncoding::EUC_JP,
             // Ruby treats Shift_JIS / Windows-31J as one codec family;
             // Windows_31J is the superset CRuby actually pins for /s.
             E::Sjis(_) => OnigmoEncoding::Windows_31J,

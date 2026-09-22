@@ -78,6 +78,8 @@ pub(super) fn canonical_encoding_name(name: &str) -> &'static str {
         // lower-case (#1520).
         "IBM850" => "CP850",
         "STATELESS_ISO_2022_JP" => "stateless-ISO-2022-JP",
+        "EUC_JIS_2004" => "EUC-JIS-2004",
+        "STATELESS_ISO_2022_JP_KDDI" => "stateless-ISO-2022-JP-KDDI",
         // The constant is `Encoding::EBCDIC_CP_US`, the name `IBM037`
         // (#1555).
         "EBCDIC_CP_US" => "IBM037",
@@ -217,6 +219,10 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         "EUCJP_MS",
         "CP51932",
         "STATELESS_ISO_2022_JP",
+        // The last two of the EUC-JP family, which needed the variant
+        // index to keep a name of their own (#1562).
+        "EUC_JIS_2004",
+        "STATELESS_ISO_2022_JP_KDDI",
         "CESU_8",
         // Additional encodings exercised by ruby/spec. Aliases that
         // share an *object* with an existing constant (BINARY ↔
@@ -669,7 +675,7 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
             16 => b"iso-8859-16",
             _ => return None,
         },
-        E::EucJp => b"euc-jp",
+        E::EucJp(_) => b"euc-jp",
         // MacJapanese runs on the Shift_JIS character walk but has no
         // converter of its own in CRuby, which answers
         // `ConverterNotFoundError` for anything but 7-bit text — so it
@@ -1256,8 +1262,8 @@ fn jis_direct_from_euc(src_enc: crate::value::Encoding, dst_enc: crate::value::E
     match (src_enc, dst_enc) {
         // `Sjis(0)` is Shift_JIS proper; the other payloads are
         // Windows-31J / CP932 and MacJapanese, which CRuby pivots.
-        (E::EucJp, E::Sjis(0)) => Some(true),
-        (E::Sjis(0), E::EucJp) => Some(false),
+        (E::EucJp(_), E::Sjis(0)) => Some(true),
+        (E::Sjis(0), E::EucJp(_)) => Some(false),
         _ => None,
     }
 }
@@ -1357,7 +1363,7 @@ fn jis_direct_one(bytes: &[u8], from_euc: bool) -> JisCell {
 fn jp_fixup(enc: crate::value::Encoding) -> Option<&'static JpFixup> {
     use crate::value::Encoding as E;
     match enc {
-        E::EucJp => Some(&EUCJP_FIXUP),
+        E::EucJp(_) => Some(&EUCJP_FIXUP),
         E::Sjis(0) => Some(&SJIS_FIXUP),
         // MacJapanese has no converter in CRuby at all, so it gets no
         // fixup — and no transcoding path — here either (#1471).
@@ -1427,7 +1433,7 @@ struct JpDecoded<'a> {
 fn jp_enc_of(fx: &JpFixup) -> crate::value::Encoding {
     use crate::value::Encoding as E;
     if fx.precise as usize == eucjp_precise_len as usize {
-        E::EucJp
+        E::EUC_JP
     } else {
         E::Sjis(0)
     }
@@ -3165,7 +3171,7 @@ pub(crate) fn encoding_constant_name(enc: Encoding) -> &'static str {
         Encoding::Iso8859(15) => "ISO_8859_15",
         Encoding::Iso8859(16) => "ISO_8859_16",
         Encoding::Iso8859(_) => "ISO_8859_1",
-        Encoding::EucJp => "EUC_JP",
+        Encoding::EucJp(i) => crate::value::euc_jp_const_name(i),
         Encoding::Sjis(0) => "SHIFT_JIS",
         Encoding::Sjis(2) => "MacJapanese",
         Encoding::Sjis(_) => "Windows_31J",
@@ -7494,6 +7500,8 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         "EUCJP_MS" | "EUCJP_WIN" | "EUC_JP_MS" | "EUC_JP_WIN" => Some("EUCJP_MS"),
         "CP51932" => Some("CP51932"),
         "STATELESS_ISO_2022_JP" => Some("STATELESS_ISO_2022_JP"),
+        "EUC_JIS_2004" | "EUC_JISX0213" => Some("EUC_JIS_2004"),
+        "STATELESS_ISO_2022_JP_KDDI" => Some("STATELESS_ISO_2022_JP_KDDI"),
         // `UTF8-MAC` is CRuby's identifier for HFS+ NFD-normalised
         // UTF-8 (used on macOS filesystems); we don't actually do
         // the NFD trick but the constant has to exist for spec
@@ -7764,6 +7772,8 @@ const ENCODING_NAMES: &[(&str, &[&str])] = &[
     ("eucJP-ms", &["euc-jp-ms"]),
     ("CP51932", &[]),
     ("stateless-ISO-2022-JP", &[]),
+    ("EUC-JIS-2004", &["EUC-JISX0213"]),
+    ("stateless-ISO-2022-JP-KDDI", &[]),
     ("CESU-8", &[]),
     ("UTF-7", &["CP65000"]),
     ("Emacs-Mule", &[]),
@@ -8275,6 +8285,78 @@ mod tests {
     }
 
     #[test]
+    fn the_euc_jp_family_keeps_its_own_names() {
+        // `eucJP-ms`, `CP51932` and `EUC-JIS-2004` share EUC-JP's byte
+        // structure exactly — checked over every one- and two-byte
+        // sequence against CRuby — and differ only in vendor mapping
+        // tables. They used to collapse onto EUC-JP, so a string asked
+        // to be `CP51932` came back labelled `EUC-JP` while
+        // `Encoding.find` answered correctly (#1562).
+        crate::tests::run_test_once(
+            r##"
+            sample = ["\x41\x42", "\xA4\xA2", "\x8E\xB1", "\x8F\xA1\xA1",
+                      "\xE6\x9D\x94", "\xFF", "\xA1", "\x81\xA0"]
+            %w[EUC-JP eucJP eucJP-ms euc-jp-ms CP51932
+               EUC-JIS-2004 EUC-JISX0213
+               stateless-ISO-2022-JP stateless-ISO-2022-JP-KDDI].map { |n|
+              e = Encoding.find(n)
+              [n, e.name, e.names.sort, e.dummy?, e.ascii_compatible?,
+               "abc".b.dup.force_encoding(n).encoding.name,
+               sample.map { |s|
+                 t = s.b.dup.force_encoding(e)
+                 [t.valid_encoding?, t.length]
+               }]
+            }
+            "##,
+        );
+    }
+
+    #[test]
+    fn stateless_iso_2022_jp_is_not_an_euc_jp_variant() {
+        // CRuby names it with the EUC-JP family and monoruby read it
+        // as one, but it is ISO-2022-JP's repertoire without the
+        // escapes: ASCII plus a lead in 0x81..0x8F and a trail in
+        // 0xA0..0xFF. The two disagree on 10182 of the one- and
+        // two-byte sequences, so it has a walk of its own (#1562).
+        crate::tests::run_test_once(
+            r##"
+            st = Encoding.find("stateless-ISO-2022-JP")
+            eu = Encoding.find("EUC-JP")
+            seqs = (0..255).flat_map { |x| [[x].pack("C"), [x, 0xA0].pack("C2"),
+                                            [x, 0x41].pack("C2"), [x, 0xFF].pack("C2")] }
+            agree = seqs.count { |s|
+              a = s.dup.force_encoding(st); b = s.dup.force_encoding(eu)
+              a.valid_encoding? == b.valid_encoding? && a.length == b.length
+            }
+            [seqs.size, agree,
+             seqs.count { |s| s.dup.force_encoding(st).valid_encoding? }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_euc_jp_family_converts_under_its_own_name() {
+        // Naming an encoding monoruby only approximates is safe here
+        // because the cases it cannot do *raise*: every byte it
+        // produces is CRuby's, and the vendor-extension characters
+        // CRuby maps through the per-vendor tables (U+FF5E, U+2460,
+        // U+3231) are an honest UndefinedConversionError rather than
+        // EUC-JP's bytes under another name. That is what the UTF-8
+        // family fails — it silently yields plain UTF-8 — and why
+        // those names are still not preserved (#1562).
+        crate::tests::run_test_once(
+            r##"
+            ["A", "\uFFE5", "\u3042", "\u4E2D"].map { |ch|
+              [ch] + %w[EUC-JP eucJP-ms CP51932 EUC-JIS-2004].map { |n|
+                t = ch.encode(n)
+                [t.encoding.name, t.bytes.map { |b| "%02X" % b }.join]
+              }
+            }
+            "##,
+        );
+    }
+
+    #[test]
     fn iso_2022_jp_is_a_dummy_encoding() {
         // Stateful, so Ruby gives it no character decoder: every byte
         // string labelled with it is valid, and `length` counts bytes.
@@ -8308,13 +8390,16 @@ mod tests {
         // are *registered* is #1555.
         crate::tests::run_test_once(
             r##"
-            # `stateless-ISO-2022-JP`, `eucJP-ms`, `CP51932`, the
-            # `UTF8-MAC` names and `CP950` / `CP951` still disagree —
-            # the same defect in the EUC-JP, UTF-8 and Big5 families,
-            # which this sweep is what found (#1562).
+            # The `UTF8-MAC` names and `CESU-8` still disagree: those
+            # codecs really differ from UTF-8 and monoruby silently
+            # produces plain UTF-8 for them, so naming them would
+            # assert a normalisation that did not happen (#1562).
             names = %w[ISO-2022-JP ISO2022-JP ISO-2022-JP-2 ISO-2022-JP-KDDI
                        ISO-2022-JP-2004 CP50220 CP50221 UTF-7
-                       UTF-8 Big5-HKSCS Shift_JIS Windows-31J MacJapanese NOPE]
+                       UTF-8 Big5-HKSCS Shift_JIS Windows-31J MacJapanese
+                       EUC-JP eucJP eucJP-ms euc-jp-ms CP51932
+                       stateless-ISO-2022-JP stateless-ISO-2022-JP-KDDI
+                       EUC-JIS-2004 EUC-JISX0213 NOPE]
             names.map { |n|
               found = (begin; Encoding.find(n).name; rescue ArgumentError; nil; end)
               forced = (begin; "abc".b.force_encoding(n).encoding.name; rescue ArgumentError; nil; end)
@@ -10386,7 +10471,7 @@ mod tests {
     fn eucjp_row_scan() {
         use crate::value::Encoding as E;
         let live =
-            |bytes: &[u8]| super::jp_live_throughout(super::jp_fixup(E::EucJp).unwrap(), bytes);
+            |bytes: &[u8]| super::jp_live_throughout(super::jp_fixup(E::EUC_JP).unwrap(), bytes);
         // Plain ASCII, JIS X 0208, half-width katakana, JIS X 0212.
         assert!(live(b"abc"));
         assert!(live(&[0xa6, 0xd0]));

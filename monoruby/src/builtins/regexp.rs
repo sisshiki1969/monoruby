@@ -425,7 +425,7 @@ fn kcode_from_encoding(enc: crate::value::Encoding) -> Option<u32> {
     use crate::value::Encoding;
     match enc {
         Encoding::Utf8 => Some(RegexpInner::KCODE_UTF8),
-        Encoding::EucJp => Some(RegexpInner::KCODE_EUCJP),
+        Encoding::EucJp(_) => Some(RegexpInner::KCODE_EUCJP),
         Encoding::Sjis(_) => Some(RegexpInner::KCODE_SJIS),
         _ => None,
     }
@@ -788,7 +788,7 @@ fn union_inner_with_encoding(
     // honours the encoding we computed.
     let (option, kcode) = match enc {
         Encoding::Utf8 => (RegexpInner::KCODE_UTF8, Some(RegexpInner::KCODE_UTF8)),
-        Encoding::EucJp => (RegexpInner::KCODE_EUCJP, Some(RegexpInner::KCODE_EUCJP)),
+        Encoding::EucJp(_) => (RegexpInner::KCODE_EUCJP, Some(RegexpInner::KCODE_EUCJP)),
         Encoding::Sjis(_) => (RegexpInner::KCODE_SJIS, Some(RegexpInner::KCODE_SJIS)),
         // `FIXEDENCODING`, not `NOENCODING`: the result is pinned to
         // BINARY because a member was, which is not the same as the

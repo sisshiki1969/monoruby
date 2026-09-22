@@ -181,7 +181,7 @@ fn encode_codepoint(code: i64, enc: Encoding) -> Result<Vec<u8>> {
             let mut buf = [0u8; 4];
             Ok(c.encode_utf8(&mut buf).as_bytes().to_vec())
         }
-        Encoding::EucJp => {
+        Encoding::EucJp(_) => {
             let bytes = be_bytes(code);
             if code > 0xFF_FFFF || !valid_euc_jp(&bytes) {
                 return Err(invalid());
@@ -241,7 +241,7 @@ fn format_char(
         let view = ctx.view(&inner)?;
         if ctx.byte_space {
             let width = match inner.encoding() {
-                Encoding::EucJp => eucjp_char_width(inner.as_bytes()),
+                Encoding::EucJp(_) => eucjp_char_width(inner.as_bytes()),
                 Encoding::Sjis(_) => sjis_char_width(inner.as_bytes()),
                 _ => None,
             }

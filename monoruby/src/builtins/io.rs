@@ -3619,7 +3619,7 @@ fn char_width_from_lead(enc: crate::value::Encoding, b: u8) -> usize {
     use crate::value::Encoding as E;
     match enc {
         E::Ascii8 | E::UsAscii | E::Iso8859(_) | E::Other(_) | E::NamedByte(_) | E::Iso2022Jp => 1,
-        E::EucJp => match b {
+        E::EucJp(_) => match b {
             0x8e => 2,
             0x8f => 3,
             0xa1..=0xfe => 2,
