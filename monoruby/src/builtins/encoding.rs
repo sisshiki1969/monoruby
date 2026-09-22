@@ -2199,7 +2199,7 @@ fn usascii_decode_lossy(src_bytes: &[u8], repl: &str) -> String {
 /// and confirmed from the other side by `"\xf0".force_encoding(
 /// "CESU-8").encode("CESU-8", invalid: :replace)`, which is `"?"`
 /// although a conversion *into* CESU-8 replaces with `U+FFFD` — see
-/// `pivot_replacement` for why those two differ (#1571).
+/// `inserted_replacement` for why those two differ (#1571).
 fn replaces_with_u_fffd(enc: crate::value::Encoding) -> bool {
     use crate::value::Encoding as E;
     match enc {
@@ -2208,6 +2208,49 @@ fn replaces_with_u_fffd(enc: crate::value::Encoding) -> bool {
         // big-endian form, so they answer as that form does.
         E::Other(_) => dummy_wide_target(enc).is_some(),
         _ => false,
+    }
+}
+
+/// The encoding a converter inserts its replacement in, for a given
+/// pair.
+///
+/// `rb_econv_encoding_to_insert_output` asks the *last* transcoder in
+/// the chain, and answers with that transcoder's **source** encoding
+/// when it is an `asciicompat_encoder`. Of everything monoruby
+/// converts, `from_UTF8_MAC` is the only one — so a `UTF8-MAC` source
+/// with the pivot as its destination is the single conversion whose
+/// replacement is the source's rather than the destination's (#1577).
+fn insert_encoding(
+    src: crate::value::Encoding,
+    dst: crate::value::Encoding,
+) -> crate::value::Encoding {
+    if src == crate::value::Encoding::Utf8(crate::value::UTF8_MAC)
+        && dst == crate::value::Encoding::UTF8
+    {
+        src
+    } else {
+        dst
+    }
+}
+
+/// The replacement a *converter* inserts, asked of the encoding it
+/// inserts into.
+///
+/// Not the same question as [`replaces_with_u_fffd`], which is an
+/// encoding's *own* replacement — the one `String#scrub` and a
+/// same-encoding `invalid: :replace` use. CESU-8 is where the two
+/// part: a converter inserting into it writes `U+FFFD`, while
+/// scrubbing a CESU-8 string writes `"?"`. `UTF8-MAC` is the mirror
+/// image: inserting into it is `"?"`. Neither answer is derivable from
+/// anything monoruby holds about the encoding; both are read off CRuby
+/// (#1571, #1577).
+fn inserted_replacement(insert_enc: crate::value::Encoding) -> &'static str {
+    if replaces_with_u_fffd(insert_enc)
+        || insert_enc == crate::value::Encoding::NamedByte(crate::value::CESU_8)
+    {
+        "\u{FFFD}"
+    } else {
+        "?"
     }
 }
 
@@ -2726,7 +2769,7 @@ fn to_pivot_for(
     let pinned;
     let opts = if opts.replace.is_none() && (opts.invalid_replace || opts.undef_replace) {
         pinned = TranscodeOpts {
-            replace: Some(pivot_replacement(dst_enc)),
+            replace: Some(inserted_replacement(dst_enc).to_string()),
             ..opts.clone()
         };
         &pinned
@@ -2751,23 +2794,6 @@ fn to_pivot_for(
         )),
     }
 }
-
-/// The replacement a conversion *into* a pivot destination inserts.
-///
-/// CRuby asks its name table about the encoding the last transcoder in
-/// the chain inserts into, and the two pivot destinations answer
-/// differently: `UTF-8 → UTF8-MAC` inserts into `UTF8-MAC`, which is
-/// not in the table, so `"?"`; `UTF-8 → CESU-8` inserts into the pivot
-/// and gets `U+FFFD`. Neither is derivable from anything monoruby
-/// holds about the two — this is the measured answer (#1571).
-fn pivot_replacement(dst_enc: crate::value::Encoding) -> String {
-    if dst_enc == crate::value::Encoding::NamedByte(crate::value::CESU_8) {
-        "\u{FFFD}".to_string()
-    } else {
-        "?".to_string()
-    }
-}
-
 
 /// Re-spell a pivot conversion's error for the destination the caller
 /// actually named.
@@ -2892,17 +2918,37 @@ pub(super) fn transcode_bytes_with_opts(
     // it, with the message it already gets right.
     if src_enc != dst_enc {
         let mac = crate::value::Encoding::Utf8(crate::value::UTF8_MAC);
-        if src_enc == mac
-            && let Ok(s) = std::str::from_utf8(src_bytes)
-        {
-            let composed = crate::value::mac_to_utf8(s);
-            return transcode_bytes_with_opts(
-                composed.as_bytes(),
-                crate::value::Encoding::UTF8,
-                dst_enc,
-                opts,
-                store,
-            );
+        if src_enc == mac {
+            if let Ok(s) = std::str::from_utf8(src_bytes) {
+                let composed = crate::value::mac_to_utf8(s);
+                return transcode_bytes_with_opts(
+                    composed.as_bytes(),
+                    crate::value::Encoding::UTF8,
+                    dst_enc,
+                    opts,
+                    store,
+                );
+            }
+            if opts.invalid_replace {
+                // Broken input still composes: CRuby's transcoder goes
+                // on holding the cluster it was building, so the
+                // replacement lands where the cluster is not yet and
+                // the marks after the bad byte still join it (#1577).
+                let leads = mac_replacement_leads(dst_enc);
+                let replace = opts.replace.clone().unwrap_or_else(|| {
+                    inserted_replacement(insert_encoding(mac, dst_enc)).to_string()
+                });
+                let composed = mac_replace_pivot(src_bytes, &replace, leads, false);
+                return transcode_bytes_with_opts(
+                    composed.pivot.as_bytes(),
+                    crate::value::Encoding::UTF8,
+                    dst_enc,
+                    opts,
+                    store,
+                );
+            }
+            // Without it the pipeline below reports the bad byte, with
+            // the message it already gets right.
         }
         if dst_enc == mac {
             let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
@@ -4998,12 +5044,14 @@ fn converter_get_dst(globals: &Globals, recv: Value) -> crate::value::Encoding {
 /// `U+FFFD` at all that encoding is UTF-8 — so `Converter.new("UTF-8",
 /// "UTF-16BE").replacement` is the three UTF-8 bytes tagged UTF-8, not
 /// the two UTF-16BE ones. Everything else takes `"?"` as US-ASCII.
-/// See `replaces_with_u_fffd` for the set (#1571).
-fn converter_default_replacement(dst: crate::value::Encoding) -> Value {
-    let (text, enc) = if replaces_with_u_fffd(dst) {
-        ("\u{FFFD}", crate::value::Encoding::UTF8)
+/// See `inserted_replacement` for which encodings take which, and
+/// `insert_encoding` for which encoding is asked (#1571, #1577).
+fn converter_default_replacement(insert_enc: crate::value::Encoding) -> Value {
+    let text = inserted_replacement(insert_enc);
+    let enc = if text == "?" {
+        crate::value::Encoding::UsAscii
     } else {
-        ("?", crate::value::Encoding::UsAscii)
+        crate::value::Encoding::UTF8
     };
     let mut s = crate::value::RStringInner::from_string_scanned(text.to_string());
     s.set_encoding(enc);
@@ -5236,8 +5284,9 @@ fn converter_replacement(
     {
         return Ok(v);
     }
+    let src = converter_get_src(globals, recv);
     let dst = converter_get_dst(globals, recv);
-    Ok(converter_default_replacement(dst))
+    Ok(converter_default_replacement(insert_encoding(src, dst)))
 }
 
 ///
@@ -5764,6 +5813,24 @@ fn mac_src_offset_for_pivot(head: &str, pivot_upto: usize) -> usize {
     src_at
 }
 
+/// The end of the cluster a pivot offset falls in, as a `(pivot,
+/// source)` pair. Clusters compose independently of one another, so
+/// this is the same walk [`mac_src_offset_for_pivot`] makes, stopping
+/// one cluster later.
+fn mac_cluster_end_for_pivot(head: &str, pivot_at: usize) -> (usize, usize) {
+    let mut piv = 0;
+    let mut src = 0;
+    for r in crate::value::mac_clusters(head) {
+        let piece = crate::value::mac_to_utf8(&head[r.clone()]);
+        piv += piece.len();
+        src = r.end;
+        if piv >= pivot_at {
+            break;
+        }
+    }
+    (piv, src)
+}
+
 /// How much of `bytes` a `UTF8-MAC` source is holding back: its
 /// trailing cluster, when the whole of `bytes` is one. Any other
 /// source holds nothing.
@@ -5792,6 +5859,152 @@ fn cesu8_good_prefix(bytes: &[u8]) -> usize {
     at
 }
 
+/// Where a bad byte in a `UTF8-MAC` source lands relative to the
+/// cluster the decoder is holding.
+///
+/// `from_UTF8_MAC` keeps the cluster it is composing to itself and
+/// hands it on only once the next starter arrives. With the pivot as
+/// the destination that transcoder is the whole conversion, so
+/// CRuby's `rb_econv_insert_output` writes the replacement into the
+/// very buffer the cluster is flushed to and it lands *after* it.
+/// With any other destination there is a second transcoder and the
+/// replacement goes into *its* output, so it comes out first — and
+/// the cluster, still upstream and still open, goes on collecting
+/// marks that arrive after the bad byte (#1577).
+fn mac_replacement_leads(dst_enc: crate::value::Encoding) -> bool {
+    dst_enc != crate::value::Encoding::UTF8
+}
+
+/// A broken `UTF8-MAC` source under `invalid: :replace`, composed into
+/// the pivot with every ill-formed subpart replaced.
+struct MacReplaced {
+    /// The composed pivot, replacements and all.
+    pivot: String,
+    /// How much of the source it accounts for. With more input still
+    /// to come the open cluster stays behind for the next chunk — and
+    /// so does anything the replacement has yet to be positioned
+    /// against.
+    cut: usize,
+    /// `(pivot offset, source offset)` wherever the two are in step:
+    /// every point at which the decoder had nothing held. A
+    /// conversion that stops early maps back through these.
+    marks: Vec<(usize, usize)>,
+}
+
+impl MacReplaced {
+    /// The source offset a pivot offset stands for, rounded down to
+    /// the nearest point the two agree on.
+    fn src_for_pivot(&self, pivot_at: usize) -> usize {
+        self.marks
+            .iter()
+            .rev()
+            .find(|(p, _)| *p <= pivot_at)
+            .map_or(0, |(_, s)| *s)
+    }
+
+    /// The first point at or after `pivot_at` the two agree on.
+    fn next_mark(&self, pivot_at: usize) -> Option<(usize, usize)> {
+        self.marks.iter().copied().find(|(p, _)| *p >= pivot_at)
+    }
+}
+
+/// Compose a broken `UTF8-MAC` source, replacing each ill-formed
+/// subpart the way CRuby's converter does.
+///
+/// The walk is CRuby's transcoder rather than monoruby's usual
+/// decode-then-scrub: the cluster being composed is held until a
+/// starter arrives, an ill-formed subpart does not close it, and the
+/// replacement is written where the held cluster is not yet — which is
+/// the whole of what #1577 reported.
+fn mac_replace_pivot(
+    src_bytes: &[u8],
+    replace: &str,
+    leads: bool,
+    partial_input: bool,
+) -> MacReplaced {
+    use unicode_normalization::char::canonical_combining_class as ccc;
+    let mut pivot = String::new();
+    let mut marks = vec![(0usize, 0usize)];
+    // The cluster being composed. Empty means nothing is held, and
+    // every point at which that is so is a point the pivot and the
+    // source agree on.
+    let mut held = String::new();
+    let mut at = 0usize;
+    loop {
+        let rest = &src_bytes[at..];
+        let good = match std::str::from_utf8(rest) {
+            Ok(_) => rest.len(),
+            Err(e) => e.valid_up_to(),
+        };
+        let run = std::str::from_utf8(&rest[..good]).expect("valid up to here");
+        for (off, c) in run.char_indices() {
+            if ccc(c) != 0 && !held.is_empty() {
+                held.push(c);
+                continue;
+            }
+            if !held.is_empty() {
+                pivot.push_str(&crate::value::mac_to_utf8(&held));
+                held.clear();
+                marks.push((pivot.len(), at + off));
+            }
+            // Only a character a mark can attach to is worth holding,
+            // and in CRuby's table that is the Basic Multilingual
+            // Plane — the same cut `mac_source_stream` makes at a
+            // chunk end. An astral character goes straight out, so a
+            // bad byte after it comes out behind it.
+            if (c as u32) >= 0x10000 {
+                pivot.push(c);
+                marks.push((pivot.len(), at + off + c.len_utf8()));
+                continue;
+            }
+            held.push(c);
+        }
+        at += good;
+        if at == src_bytes.len() {
+            break;
+        }
+        // One maximal ill-formed subpart. A truncated character at the
+        // very end of a chunk is not one yet — more of it may still
+        // come — so it goes back with whatever else is open.
+        let err = std::str::from_utf8(&src_bytes[at..]).expect_err("stopped short of the end");
+        let bad = match err.error_len() {
+            Some(n) => n,
+            None if partial_input => break,
+            None => src_bytes.len() - at,
+        };
+        if !leads {
+            // The cluster goes out first, so the replacement follows
+            // it and the composition starts again after it.
+            if !held.is_empty() {
+                pivot.push_str(&crate::value::mac_to_utf8(&held));
+                held.clear();
+            }
+        }
+        pivot.push_str(replace);
+        at += bad;
+        if held.is_empty() {
+            marks.push((pivot.len(), at));
+        }
+    }
+    let cut = if partial_input {
+        // Only what the source and the pivot agree on goes out. A
+        // replacement written past the last of those marks is waiting
+        // on the cluster it precedes, and the bytes behind it are
+        // handed back — so it must not be converted here as well, or
+        // the chunk that settles it writes it a second time.
+        let (pivot_end, src_end) = *marks.last().expect("seeded above");
+        pivot.truncate(pivot_end);
+        src_end
+    } else {
+        if !held.is_empty() {
+            pivot.push_str(&crate::value::mac_to_utf8(&held));
+        }
+        marks.push((pivot.len(), src_bytes.len()));
+        src_bytes.len()
+    };
+    MacReplaced { pivot, cut, marks }
+}
+
 /// A `UTF8-MAC` source, a chunk at a time: compose out of Apple's
 /// decomposed form and hand the result to the ordinary pipeline.
 ///
@@ -5817,6 +6030,16 @@ fn mac_source_stream(
         Err(e) => e.valid_up_to(),
     };
     if good < src_bytes.len() {
+        if opts.invalid_replace {
+            return mac_replace_stream(
+                src_bytes,
+                dst_enc,
+                max_dst_bytes,
+                partial_input,
+                opts,
+                store,
+            );
+        }
         // The well-formed prefix converts exactly as it would on its
         // own — hold-back included, or a chunk that ends mid-character
         // would settle the cluster before it and lose the composition
@@ -5856,11 +6079,101 @@ fn mac_source_stream(
         mac_src_offset_for_pivot(head, pivot_consumed)
     };
     if meta.dst_full_extra > 0 {
-        let tried = mac_src_offset_for_pivot(head, pivot_consumed + meta.dst_full_extra);
-        meta.dst_full_extra = tried.saturating_sub(consumed);
+        // The cap stopped inside a cluster, and a cluster's source
+        // cannot be cut there — it composes as one piece. Take the
+        // whole of it and hold the rest of its output for the next
+        // call, the way a character split across two calls is held
+        // (#1532, #1577).
+        let over = pivot_consumed + meta.dst_full_extra;
+        let (piv_end, src_end) = mac_cluster_end_for_pivot(head, over);
+        if piv_end > over {
+            let (_, _, rest, _) = stream_convert(
+                &composed.as_bytes()[over..piv_end],
+                E::UTF8,
+                dst_enc,
+                None,
+                false,
+                opts,
+                store,
+            );
+            meta.dst_full_out.extend_from_slice(&rest);
+        }
+        meta.dst_full_extra = src_end.saturating_sub(consumed);
     }
     // What was held back is not the end of the input.
     let result = if cut < s.len() && matches!(result, StreamConvertResult::Finished) {
+        StreamConvertResult::SourceBufferEmpty
+    } else {
+        result
+    };
+    (result, consumed, out, meta)
+}
+
+/// A broken `UTF8-MAC` source under `invalid: :replace`, a chunk at a
+/// time.
+///
+/// The composed pivot carries the replacements, so the rest of the
+/// pipeline converts them along with everything else; what the chunk
+/// leaves open — the cluster still being composed, and a replacement
+/// that has yet to be positioned against it — goes back to the caller
+/// as unconsumed source, to be read again with the chunk that settles
+/// it. CRuby keeps that state inside the converter instead, so a chunk
+/// boundary can fall in a different place; the bytes either side of it
+/// add up to the same conversion (#1577).
+fn mac_replace_stream(
+    src_bytes: &[u8],
+    dst_enc: crate::value::Encoding,
+    max_dst_bytes: Option<usize>,
+    partial_input: bool,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
+    use crate::value::Encoding as E;
+    let mac = E::Utf8(crate::value::UTF8_MAC);
+    let leads = mac_replacement_leads(dst_enc);
+    let replace = opts
+        .replace
+        .clone()
+        .unwrap_or_else(|| inserted_replacement(insert_encoding(mac, dst_enc)).to_string());
+    let composed = mac_replace_pivot(src_bytes, &replace, leads, partial_input);
+    let (result, pivot_consumed, out, mut meta) = stream_convert(
+        composed.pivot.as_bytes(),
+        E::UTF8,
+        dst_enc,
+        max_dst_bytes,
+        false,
+        opts,
+        store,
+    );
+    // Back to source bytes. Everything written stops at a point the
+    // two agree on, so that half is a lookup.
+    let consumed = composed.src_for_pivot(pivot_consumed);
+    // What a capped destination read past it is a different question:
+    // the source of a piece cannot be cut in the middle, since the
+    // replacement comes out *before* the cluster it precedes and a
+    // prefix of the output is not a prefix of the source. So take the
+    // whole piece — convert the rest of it and hold that as output,
+    // the way a character split across two calls is held (#1532).
+    let over = pivot_consumed + meta.dst_full_extra;
+    let (end_pivot, end_src) = composed
+        .next_mark(over)
+        .unwrap_or((composed.pivot.len(), composed.cut));
+    if end_pivot > over {
+        let (_, _, rest, _) = stream_convert(
+            &composed.pivot.as_bytes()[over..end_pivot],
+            E::UTF8,
+            dst_enc,
+            None,
+            false,
+            opts,
+            store,
+        );
+        meta.dst_full_out.extend_from_slice(&rest);
+    }
+    meta.dst_full_extra = end_src.saturating_sub(consumed);
+    // What was left open is not the end of the input.
+    let result = if composed.cut < src_bytes.len() && matches!(result, StreamConvertResult::Finished)
+    {
         StreamConvertResult::SourceBufferEmpty
     } else {
         result
@@ -8536,12 +8849,18 @@ fn converter_primitive_convert(
             src_consumed
         };
         // Its output is held instead, so the bytes of the character
-        // already converted are not buffered again.
-        let buffered_from = if converted_ahead {
-            split.min(src_bytes.len())
+        // already converted are not buffered again — but only those.
+        // The cluster a `UTF8-MAC` source is holding for a composition
+        // is read ahead *without* being converted, so it belongs in
+        // the buffer: skipping the whole of `split` here dropped it,
+        // and `"abcd"` in `UTF8-MAC` came back through a two-byte
+        // destination as `"abd"` (#1577).
+        let converted_ahead_len = if converted_ahead {
+            meta.dst_full_extra.min(src_bytes.len() - src_consumed)
         } else {
-            src_consumed
+            0
         };
+        let buffered_from = (src_consumed + converted_ahead_len).min(split);
         let buffered: Vec<u8> = src_bytes[buffered_from..split].to_vec();
         // Put bytes after the error back into `src_arg`. Pending
         // buffer otherwise drops — the converter has nothing it
@@ -14853,6 +15172,154 @@ mod tests {
               ]
               Encoding.default_internal = nil
               [a, b, c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_broken_utf8_mac_source_replaces_where_its_decoder_is() {
+        // `from_UTF8_MAC` keeps the cluster it is composing to itself
+        // until the next starter arrives, so a bad byte reaches the
+        // output before it — which is why every destination past the
+        // pivot sees the replacement one character early, and the
+        // pivot itself, the one destination that conversion reaches in
+        // a single transcoder, does not. The character follows the
+        // same rule from the other side: that single hop inserts into
+        // `UTF8-MAC`, which CRuby does not spell `U+FFFD` for, so it
+        // is `"?"` where the two-hop conversions answer for their own
+        // destination (#1577).
+        run_test_once(
+            r#"
+              def mac(s) = s.dup.force_encoding("UTF8-MAC")
+              [
+                %w[UTF-8 CESU-8 EUC-JP Shift_JIS US-ASCII ISO-8859-1 UTF-16BE ASCII-8BIT].map { |d|
+                  mac("a\xffb").encode(d, invalid: :replace).bytes },
+                # One character back, not to the front of the string.
+                ["abc\xffd", "ab\xffcd", "\xffab", "ab\xff", "a\xff\xffb", "a\xc3"].map { |b|
+                  [mac(b).encode("EUC-JP", invalid: :replace).bytes,
+                   mac(b).encode("UTF-8", invalid: :replace).bytes] },
+                # The held cluster is still open, so a mark after the
+                # bad byte joins it where a second transcoder follows,
+                # and does not where the pivot is the destination.
+                ["a\u0301\xffb", "a\xff\u0301b", "a\u0301b\xff"].map { |b|
+                  [mac(b).encode("EUC-JP", invalid: :replace).bytes,
+                   mac(b).encode("UTF-8", invalid: :replace).bytes] },
+                # `undef:` is the other half of the conversion, and is
+                # reported where it happens.
+                [mac("a\u00e9b").encode("US-ASCII", undef: :replace).bytes,
+                 mac("a\xff\u00e9b").encode("US-ASCII", invalid: :replace, undef: :replace).bytes,
+                 mac("a\xffb").encode("EUC-JP", invalid: :replace, replace: "!").bytes],
+                # Nothing is held after a character no mark can attach
+                # to — CRuby's table is the Basic Multilingual Plane —
+                # so a bad byte after an astral character comes out
+                # behind it.
+                ["\u{1F600}\xffb", "a\u{1F600}\xffb", "\u{1F600}\u0301\xffb"].map { |b|
+                  [mac(b).encode("UTF-16BE", invalid: :replace).bytes,
+                   mac(b).encode("UTF-8", invalid: :replace).bytes] },
+                # An empty replacement drops the bad byte and nothing
+                # else, at either end of the rule.
+                [mac("a\xffb").encode("EUC-JP", invalid: :replace, replace: "").bytes,
+                 mac("a\xffb").encode("UTF-8", invalid: :replace, replace: "").bytes,
+                 mac("\xff\xff\xff").encode("EUC-JP", invalid: :replace).bytes,
+                 mac("").encode("EUC-JP", invalid: :replace).bytes],
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_converter_inserts_in_the_encoding_its_last_step_writes() {
+        // `Encoding::Converter#replacement` asks
+        // `rb_econv_encoding_to_insert_output`, which answers with the
+        // last transcoder's *source* encoding when that transcoder is
+        // an `asciicompat_encoder` — `from_UTF8_MAC` is the only one
+        // monoruby converts through. CESU-8 is the other half of the
+        // same question from the destination side: a converter
+        // inserting into it writes `U+FFFD`, although scrubbing a
+        // CESU-8 string writes `"?"` (#1571, #1577).
+        run_test_once(
+            r#"
+              [
+                [["UTF8-MAC", "UTF-8"], ["UTF8-MAC", "EUC-JP"], ["UTF8-MAC", "UTF-16BE"],
+                 ["UTF8-MAC", "CESU-8"], ["UTF-8", "CESU-8"], ["EUC-JP", "CESU-8"],
+                 ["UTF-8", "UTF8-MAC"], ["UTF-8", "UTF-16BE"]].map { |a, b|
+                  r = Encoding::Converter.new(a, b).replacement
+                  [r.bytes, r.encoding.name] },
+                # Scrubbing answers for the string's own encoding, and
+                # CESU-8's own replacement is still "?".
+                ["\xf0".dup.force_encoding("CESU-8").encode("CESU-8", invalid: :replace).bytes,
+                 "\xf0".dup.force_encoding("CESU-8").scrub.bytes],
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_streamed_broken_utf8_mac_source_adds_up_to_the_one_shot_one() {
+        // The converter used to refuse the input outright — `invalid:
+        // :replace` never reached a `UTF8-MAC` source at all. It
+        // replaces now, and what it holds back between calls is
+        // source rather than CRuby's converted output, so a chunk
+        // boundary can fall in a different place; the bytes either
+        // side of it are the same conversion (#1577).
+        run_test_once(
+            r#"
+              def mac(s) = s.dup.force_encoding("UTF8-MAC")
+              # In bytes, so that an empty chunk's answer cannot bring
+              # an encoding of its own to the join.
+              def drive(dst, *chunks)
+                c = Encoding::Converter.new("UTF8-MAC", dst, invalid: :replace)
+                chunks.flat_map { |b| c.convert(mac(b)).bytes } + c.finish.bytes
+              end
+              [
+                [drive("EUC-JP", "a\xffb"), drive("EUC-JP", "a\xff", "b"),
+                 drive("EUC-JP", "a", "\xffb"), drive("EUC-JP", "a", "\xff", "b"),
+                 mac("a\xffb").encode("EUC-JP", invalid: :replace).bytes],
+                [drive("UTF-8", "ab\xffcd"), drive("UTF-8", "ab", "\xff", "cd"),
+                 mac("ab\xffcd").encode("UTF-8", invalid: :replace).bytes],
+                [drive("UTF-16BE", "a\xffb"),
+                 mac("a\xffb").encode("UTF-16BE", invalid: :replace).bytes],
+                # A mark in the next chunk still joins the cluster the
+                # bad byte interrupted.
+                [drive("EUC-JP", "a\xff", "\u0301b"),
+                 mac("a\xff\u0301b").encode("EUC-JP", invalid: :replace).bytes],
+                [drive("UTF-16BE", "\u{1F600}\xffb"), drive("UTF-16BE", "\u{1F600}", "\xffb"),
+                 mac("\u{1F600}\xffb").encode("UTF-16BE", invalid: :replace).bytes],
+                # A truncated character at a chunk end waits for the
+                # rest of itself; at the end of the stream it is
+                # ill-formed like any other.
+                [drive("EUC-JP", "ab\xc3"), drive("EUC-JP", "ab\xc3", "\x81"),
+                 mac("ab\xc3").encode("EUC-JP", invalid: :replace).bytes],
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_capped_destination_keeps_what_a_utf8_mac_source_held_back() {
+        // The cluster a `UTF8-MAC` source holds for a composition is
+        // read ahead without being converted, so it has to be
+        // buffered; it was being skipped along with the character
+        // whose output the cap had already taken, and `"abcd"` came
+        // back through a two-byte destination as `"abd"` (#1577).
+        run_test_once(
+            r#"
+              def drain(src_enc, bytes, dst_enc, cap)
+                c = Encoding::Converter.new(src_enc, dst_enc, invalid: :replace)
+                src = bytes.dup.force_encoding(src_enc)
+                dst = String.new(encoding: dst_enc)
+                out = []
+                8.times { c.primitive_convert(src, dst, 0, cap); out << dst.bytes.dup; dst.clear }
+                out.flatten
+              end
+              [
+                [drain("UTF8-MAC", "abcd", "UTF-16BE", 2),
+                 "abcd".encode("UTF-16BE").bytes],
+                [drain("UTF8-MAC", "ab\xffcd", "UTF-16BE", 2),
+                 "ab\xffcd".dup.force_encoding("UTF8-MAC").encode("UTF-16BE", invalid: :replace).bytes],
+                [drain("UTF-8", "abcd", "UTF-16BE", 3),
+                 "abcd".encode("UTF-16BE").bytes],
+              ]
             "#,
         );
     }
