@@ -757,6 +757,22 @@ pub(super) fn single_byte_char(enc: crate::value::Encoding, b: u8) -> Option<cha
     Some(c)
 }
 
+/// ASCII-8BIT read *as a source*: its 7-bit half is ASCII and every
+/// byte above it stands for no character at all, which is the shape
+/// of a single-byte table with an empty high half. Kept apart from
+/// [`single_byte_table`], which also answers for destinations and for
+/// the ctype tables, where BINARY is not a character encoding at all
+/// (#1596).
+fn source_byte_table(
+    enc: crate::value::Encoding,
+) -> Option<&'static [Option<char>; 128]> {
+    const BINARY: [Option<char>; 128] = [None; 128];
+    if enc == crate::value::Encoding::Ascii8 {
+        return Some(&BINARY);
+    }
+    single_byte_table(enc)
+}
+
 /// High-half (0x80..=0xFF) Unicode mapping for the single-byte
 /// encodings monoruby transcodes with an in-tree table rather than
 /// through `encoding_rs`. `None` is a cell the encoding assigns no
@@ -2684,6 +2700,18 @@ pub(super) fn transcode_bytes_with_opts(
     // reason: it re-spells `+` as `+-`, so 7-bit text is not a copy
     // there, and CRuby — which ships no UTF-7 converter at all —
     // answers `ConverterNotFoundError` even for `"ab"` (#1471).
+    // A byte of 0x80 or above is not US-ASCII at all, so it is a
+    // malformed sequence rather than a character with no cell — and
+    // the fast paths below would otherwise hand it through (#1596).
+    // A conversion to its own encoding runs no converter, so CRuby
+    // leaves those bytes alone and so does this.
+    if src_enc == E::UsAscii
+        && src_enc != dst_enc
+        && !opts.invalid_replace
+        && src_bytes.iter().any(|&b| b >= 0x80)
+    {
+        return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+    }
     let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
     if all_ascii
         && src_enc.is_ascii_compatible()
@@ -2726,14 +2754,10 @@ pub(super) fn transcode_bytes_with_opts(
                 ),
             ));
         }
-        return Err(MonorubyErr::undefined_conversion_error(
-            store,
-            format!(
-                "\"\\x{:02X}\" from ASCII-8BIT to {}",
-                src_bytes.iter().copied().find(|&b| b >= 0x80).unwrap_or(0),
-                dst_enc.name()
-            ),
-        ));
+        // Everything else falls through to the source-table path,
+        // which reports the offending byte and honours
+        // `undef: :replace` the way every other byte-per-character
+        // source does (#1596).
     }
     // → BINARY. ASCII-8BIT is a byte bucket, not a character encoding:
     // CRuby has no conversion *to* it from any character above U+007F,
@@ -2752,7 +2776,7 @@ pub(super) fn transcode_bytes_with_opts(
                 return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
             }
             decoded
-        } else if let Some(table) = single_byte_table(src_enc) {
+        } else if let Some(table) = source_byte_table(src_enc) {
             if opts.undef_replace {
                 table_decode_lossy(src_bytes, table, &opts.replace_str(dst_enc))
             } else {
@@ -2830,7 +2854,7 @@ pub(super) fn transcode_bytes_with_opts(
     let (decoded, decode_err): (std::borrow::Cow<str>, bool) = if is_utf16_or_32(src_enc) {
         let (s, e) = decode_utf16_32(src_bytes, src_enc);
         (std::borrow::Cow::Owned(s), e)
-    } else if let Some(table) = single_byte_table(src_enc) {
+    } else if let Some(table) = source_byte_table(src_enc) {
         // A table encoding has a character for every byte it assigns
         // one to, so no byte sequence in it is *invalid* — but a cell
         // the encoding leaves unassigned has no character to convert,
@@ -5516,6 +5540,34 @@ fn stream_convert(
     // `:invalid_byte_sequence` reporting on bad input. Restrict
     // the fast path to the all-ASCII / ASCII-compatible case
     // where every byte is unambiguously valid.
+    // The same rule for the streaming half: the bytes before the
+    // offending one convert, and that byte alone is the malformed
+    // run — nothing is read again after it, since it can never begin
+    // a sequence (#1596).
+    if src_enc == E::UsAscii
+        && src_enc != dst_enc
+        && !opts.invalid_replace
+        && let Some(at) = src_bytes.iter().position(|&b| b >= 0x80)
+    {
+        let (kind, consumed, out, meta) =
+            stream_convert(&src_bytes[..at], src_enc, dst_enc, max_dst_bytes, true, opts);
+        if !matches!(
+            kind,
+            StreamConvertResult::Finished | StreamConvertResult::SourceBufferEmpty
+        ) {
+            return (kind, consumed, out, meta);
+        }
+        let (kind, meta) = bad_source_outcome(src_enc, &src_bytes[at..], !partial_input);
+        // The malformed run is *consumed*: `primitive_convert` leaves
+        // only what follows it in `src`, since the bytes are readable
+        // from `#primitive_errinfo` (and `#putback`) instead.
+        let through_error = if matches!(kind, StreamConvertResult::InvalidByteSequence) {
+            (consumed + meta.error_bytes.len() + meta.readagain_bytes.len()).min(src_bytes.len())
+        } else {
+            consumed
+        };
+        return (kind, through_error, out, meta);
+    }
     let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
     if all_ascii && src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() {
         let limit = max_dst_bytes.unwrap_or(src_bytes.len()).min(src_bytes.len());
@@ -5892,7 +5944,7 @@ fn stream_convert(
     // page that is not the same encoding (#1508). They are stateless
     // and one byte per character, so the pivot is built here and the
     // rest of the pair goes through the ordinary path.
-    if let Some(table) = single_byte_table(src_enc) {
+    if let Some(table) = source_byte_table(src_enc) {
         let pivot = if opts.undef_replace {
             table_decode_lossy(src_bytes, table, &opts.replace_str(dst_enc))
         } else {
@@ -7149,7 +7201,12 @@ fn invalid_byte_sequence(
 /// is why `is_utf8_compatible` — which answers "do these bytes read
 /// as UTF-8" — is the wrong question here (#1576).
 fn is_the_utf8_pivot(enc: crate::value::Encoding) -> bool {
-    matches!(enc, crate::value::Encoding::UsAscii) || enc == crate::value::Encoding::UTF8
+    // US-ASCII is *not* the pivot: CRuby still builds a US-ASCII →
+    // UTF-8 step in front of every other hop, so a byte the source
+    // encoding has no character for is reported against UTF-8 as the
+    // destination whatever the conversion's real destination is
+    // (#1596).
+    enc == crate::value::Encoding::UTF8
 }
 
 fn error_stage_names(
@@ -12637,6 +12694,99 @@ mod tests {
               c = Encoding::Converter.new("UTF-8", d)
               [d, c.replacement.bytes, c.replacement.encoding.name]
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_byte_no_source_encoding_has_a_character_for_is_reported() {
+        // A byte of 0x80 or above is not US-ASCII at all, so it is a
+        // malformed sequence. `String#encode` said so; the converter
+        // handed the byte through instead, tagging the result with a
+        // destination whose own rules it breaks (#1596).
+        crate::tests::run_test_once(
+            r##"
+            s = [0x80].pack("C").force_encoding("US-ASCII")
+            ["UTF-8", "Big5", "ASCII-8BIT", "UTF-16BE"].map do |d|
+              one = (s.encode(d).bytes rescue [$!.class.to_s, $!.message])
+              cv = (Encoding::Converter.new("US-ASCII", d).convert(s.dup).bytes rescue [$!.class.to_s, $!.message])
+              [d, one, cv, one == cv]
+            end
+            "##,
+        );
+        // What converted before it still comes out, the byte itself
+        // is the whole run, and nothing is read again after it.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            ec = Encoding::Converter.new("US-ASCII", "UTF-8")
+            d = +""
+            s = "a\x80bc".dup.force_encoding("US-ASCII")
+            r << [ec.primitive_convert(s, d), d.bytes,
+                  ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            r << ("a\x80b".dup.force_encoding("US-ASCII").encode("UTF-8", invalid: :replace).codepoints)
+            r << ([0x80].pack("C").force_encoding("US-ASCII").encode("US-ASCII").bytes)
+            r
+            "##,
+        );
+        // The run is *consumed*: only what follows it stays in `src`,
+        // since the bytes come back out of `#primitive_errinfo`. And
+        // US-ASCII is not itself the pivot — CRuby puts a US-ASCII →
+        // UTF-8 step in front of every other hop, so UTF-8 is the
+        // destination it reports whatever the real one is.
+        crate::tests::run_test_once(
+            r##"
+            ["UTF-8", "UTF-16BE", "Big5", "EUC-JP", "ISO-8859-1", "ASCII-8BIT"].map do |d|
+              ec = Encoding::Converter.new("US-ASCII", d)
+              dst = +""
+              s = "abc\x80z".dup.force_encoding("US-ASCII")
+              res = ec.primitive_convert(s, dst)
+              [d, res, dst.bytes, s.bytes,
+               ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            "##,
+        );
+        // A destination cap that fills before the offending byte is
+        // reached is the ordinary `:destination_buffer_full`, and the
+        // byte is still there for the next call to trip over.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            ["UTF-8", "UTF-16BE"].each do |d|
+              (1..4).each do |cap|
+                ec = Encoding::Converter.new("US-ASCII", d)
+                dst = +""
+                s = "abc\x80z".dup.force_encoding("US-ASCII")
+                res = ec.primitive_convert(s, dst, nil, cap)
+                r << [d, cap, res, dst.bytes, s.bytes,
+                      ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+              end
+            end
+            r
+            "##,
+        );
+        // BINARY is the other source with no character for a high
+        // byte, and there it is an undefined conversion rather than a
+        // malformed one. `undef: :replace` went unhonoured, and the
+        // error named U+0000 where CRuby quotes the byte and spells
+        // the pivot it failed at.
+        crate::tests::run_test_once(
+            r##"
+            b = "a\x80b".b
+            r = []
+            ["UTF-8", "Big5", "EUC-JP", "UTF-16BE"].each do |d|
+              one = (b.dup.encode(d).bytes rescue [$!.class.to_s, $!.message])
+              cv = (Encoding::Converter.new("ASCII-8BIT", d).convert(b.dup).bytes rescue [$!.class.to_s, $!.message])
+              r << [d, one, cv, one == cv]
+              r << [d, b.dup.encode(d, undef: :replace).bytes,
+                    Encoding::Converter.new("ASCII-8BIT", d, undef: :replace).convert(b.dup).bytes]
+            end
+            ec = Encoding::Converter.new("ASCII-8BIT", "Big5")
+            dd = +""
+            r << [ec.primitive_convert(b.dup, dd), dd.bytes,
+                  ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            r << ("\x80".b.encode("ASCII-8BIT").bytes)
+            r
             "##,
         );
     }
