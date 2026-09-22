@@ -48,6 +48,8 @@ pub(crate) use string::{
     eucjp_precise_len, IllFormed, mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width,
     eucjp_to_stateless_iso2022jp, stateless_iso2022jp_to_eucjp,
     stateless_iso2022jp_transcode_len, named_byte_index,
+    iso2022jp_to_stateless, stateless_to_iso2022jp,
+    iso2022jp_to_stateless_from, stateless_to_iso2022jp_from,
     sjis_precise_len, walk_mbc, walk_mbc_with,
 };
 pub(crate) use string::{
