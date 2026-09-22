@@ -919,6 +919,7 @@
 2e37c57b258e2a2b92dab38709220d03	true	class ToInt\n          def to_int = 65\n        end\n        class ToF\n   
 2e419be22648471b9d426d0e2b7fe4a8	[[FrozenError, true], FrozenError]	class Foo\n              def initialize\n                @a = 1\n     
 2e520c993c13bf6afbdcfa9de96cc277	["A", "overridden", "can't create instance of singleton class", "allocator undefined for Integer"]	class A; end\n        class B; def self.allocate; :overridden; end; end\n
+2e5cf3b16d6ec62194a5e10441930f35	[[[97], ["Encoding::UndefinedConversionError", "U+3042 to US-ASCII in conversion from UTF8-MAC to UTF-8 to US-ASCII"]], [[97], :invalid_byte_sequence, "UTF-8", "\\xED\\xA0\\x80", "z", [122], "Encoding::InvalidByteSequenceError"], [[97], [227, 129, 130]], [[["UTF-8", "CESU-8"]], [["UTF-8", "UTF-16"]], [["CESU-8", "UTF-8"]], [["UTF8-MAC", "UTF-8"]]], [1, 1, 1, 1]]	__a = [];__a << (\n              c = Encoding::Converter.new("UTF8-MAC", "US-ASCI
 2e9e5cdf982a6b277e6559a8a489f9a7	["Process::Status", 0, true]	`echo hi`; [$?.class.to_s, $?.exitstatus, $?.success?]
 2ea8cf14ab55d43b075b91985f056e0e	42	class C\n          def bar(x); x * 2; end\n        end\n        C.new.publ
 2eeefccd1243299200ebf36375f04ed8	["UTF-8", "US-ASCII"]	__a = [];__a << (["bar", "foo".dup.force_encoding("US-ASCII")].join.encoding.nam

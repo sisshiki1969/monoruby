@@ -10913,6 +10913,48 @@ mod tests {
     }
 
     #[test]
+    fn a_wrapper_conversion_is_observable_the_way_the_others_are() {
+        // What `#finish` raises when the cluster it was holding turns
+        // out to have no cell, and that a wrapper source reports its
+        // error through `primitive_errinfo` / `putback` / `last_error`
+        // as every other source does (#1576).
+        run_tests(&[
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "US-ASCII")
+              a = c.convert("aあ".encode("UTF8-MAC")).bytes
+              b = (begin; c.finish; rescue => e; [e.class.name, e.message]; end)
+              [a, b]
+            "#,
+            r#"
+              c = Encoding::Converter.new("CESU-8", "UTF-8")
+              src = "a\xED\xA0\x80z".b.force_encoding("CESU-8")
+              dst = +""
+              c.primitive_convert(src.dup, dst)
+              e = c.primitive_errinfo
+              [dst.bytes, e[0], e[2], e[3], e[4], c.putback.bytes, c.last_error.class.name]
+            "#,
+            // A dummy source a chunk at a time through the other
+            // entry point: the BOM arrives in the first and the
+            // second is read in the byte order it named.
+            r#"
+              c = Encoding::Converter.new("UTF-16", "UTF-8")
+              s = "aあ".encode("UTF-16")
+              d1 = +""; d2 = +""
+              c.primitive_convert(s.byteslice(0, 4).dup, d1, nil, nil, partial_input: true)
+              c.primitive_convert(s.byteslice(4, 2).dup, d2, nil, nil, partial_input: true)
+              [d1.bytes, d2.bytes]
+            "#,
+            // And that the pairs describe themselves like any other.
+            r#"
+              [["UTF-8","CESU-8"],["UTF-8","UTF-16"],["CESU-8","UTF-8"],["UTF8-MAC","UTF-8"]].map do |s, d|
+                Encoding::Converter.new(s, d).convpath.map { |x| x.is_a?(Array) ? x.map(&:name) : x }
+              end
+            "#,
+            r#"%w[CESU-8 UTF-16 UTF-32 UTF8-MAC].map { |e| Encoding::Converter.search_convpath("UTF-8", e).size }"#,
+        ]);
+    }
+
+    #[test]
     fn converter_utf16_32_source_error_positions() {
         // Where a wide source first stops decoding: a UTF-32 group that
         // is a surrogate or out of range, a group the input ends in the
