@@ -2114,6 +2114,11 @@ pub(super) struct TranscodeOpts {
     pub invalid_replace: bool,
     pub undef_replace: bool,
     pub replace: Option<String>,
+    /// The encoding the `replace:` string was given in. The scrub
+    /// path needs it: there the replacement has to be compatible
+    /// with the *receiver*, which is `rb_enc_check`'s rule and not
+    /// the converter's (#1599).
+    pub replace_enc: Option<crate::value::Encoding>,
     /// Newline decorators: `universal_newline:` normalizes CRLF / CR
     /// to LF on the decode side; `crlf_newline:` / `cr_newline:`
     /// rewrite LF on the encode side.
@@ -2533,13 +2538,17 @@ pub(super) fn transcode_bytes_with_opts(
     //
     //     "a\x80\r\nb".encode(invalid: :replace, universal_newline: true)
     //     # the 0x80 survives; only the CRLF becomes LF
-    let scrub_in_place = src_enc == dst_enc
+    // A same-encoding `invalid: :replace` is `String#scrub`, and only
+    // a receiver with something to scrub consults the replacement at
+    // all (#1599).
+    let scrubbing = src_enc == dst_enc
         && opts.invalid_replace
         && !opts.has_newline()
         && matches!(
             RStringInner::from_encoding_scanned(src_bytes, src_enc).code_range(),
             crate::value::CodeRange::Broken
-        )
+        );
+    let scrub_in_place = scrubbing
         && (encoding_to_rs(src_enc).is_some()
             || is_utf16_or_32(src_enc)
             || single_byte_table(src_enc).is_some()
@@ -2556,15 +2565,27 @@ pub(super) fn transcode_bytes_with_opts(
     // silently accepted bytes onigenc calls broken (Shift_JIS `0x80`).
     // A same-encoding `invalid: :replace` *is* `String#scrub` in CRuby,
     // so it has to be the same walk here too.
+    // The replacement has to suit the *receiver* — `rb_enc_check`'s
+    // rule, not the converter's. Both scrubbing routes substitute, so
+    // the question is asked once, here, and the walk below reuses the
+    // bytes it answers with (#1599).
+    let scrub_bytes = if scrubbing {
+        Some(scrub_replacement_bytes(opts, src_enc, store)?)
+    } else {
+        None
+    };
     if src_enc == dst_enc
         && opts.invalid_replace
         && !opts.has_newline()
         && let Some((max_len, precise)) = crate::value::mbc_walker(src_enc)
     {
-        let replace = opts.replace_str(dst_enc);
+        let Some(replace) = scrub_bytes else {
+            // Nothing to scrub: the walk would change nothing.
+            return Ok(src_bytes.to_vec());
+        };
         return Ok(crate::value::scrub_mbc(
             src_bytes,
-            replace.as_bytes(),
+            &replace,
             max_len,
             precise,
         ));
@@ -3501,6 +3522,36 @@ fn replacement_text(v: Value, store: &Store) -> Option<String> {
     String::from_utf8(utf8).ok()
 }
 
+/// The bytes a same-encoding `invalid: :replace` substitutes, which
+/// is `String#scrub`'s replacement and follows its rule: it has to be
+/// *compatible with the receiver*, not spellable in some destination,
+/// and what goes into the string is its own bytes (#1599).
+///
+/// An ASCII-only replacement suits any ASCII-compatible receiver, and
+/// one already in the receiver's encoding suits it too; anything else
+/// is what `rb_enc_check` refuses.
+fn scrub_replacement_bytes(
+    opts: &TranscodeOpts,
+    enc: crate::value::Encoding,
+    store: &Store,
+) -> Result<Vec<u8>> {
+    let text = opts.replace_str(enc);
+    let Some(repl_enc) = opts.replace_enc else {
+        // The default replacement is the encoding's own.
+        return Ok(text.into_bytes());
+    };
+    if repl_enc != enc && !(text.is_ascii() && enc.is_ascii_compatible()) {
+        return Err(MonorubyErr::incompatible_encoding(store, enc, repl_enc));
+    }
+    transcode_bytes_with_opts(
+        text.as_bytes(),
+        crate::value::Encoding::UTF8,
+        enc,
+        &TranscodeOpts::default(),
+        store,
+    )
+}
+
 /// The encoding `Encoding::Converter#replacement` hands its answer
 /// back in: the one CRuby inserts substituted output in, which is the
 /// *input* of the last step of the conversion rather than the
@@ -3561,6 +3612,7 @@ fn parse_transcode_opts(lfp: Lfp, store: &Store) -> TranscodeOpts {
     if let Some(v) = find_hash_value_for_symbol(&hash, "replace") {
         if let Some(s) = replacement_text(v, store) {
             out.replace = Some(s);
+            out.replace_enc = v.is_rstring_inner().map(|i| i.encoding());
             // CRuby's `econv_opts`: a bare `replace:` implies
             // `undef: :replace` — but only when `invalid: :replace`
             // was *not* given, so `invalid: :replace, replace: ""`
@@ -12693,6 +12745,63 @@ mod tests {
             ["Big5", "UTF-16BE", "UTF-16LE", "UTF-32BE", "ISO-8859-1"].map do |d|
               c = Encoding::Converter.new("UTF-8", d)
               [d, c.replacement.bytes, c.replacement.encoding.name]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_scrubbed_string_takes_a_replacement_its_own_encoding_admits() {
+        // A same-encoding `invalid: :replace` is `String#scrub`, and
+        // scrub's replacement has to suit the *receiver* — the same
+        // encoding, or nothing above 0x7F — which is `rb_enc_check`'s
+        // rule and not the converter's (#1599). What goes into the
+        // string is the replacement's own bytes.
+        crate::tests::run_test_once(
+            r##"
+            b5 = [0x81].pack("C").force_encoding("Big5")
+            r = []
+            [[0x1D11E, "UTF-8"], [0x4E00, "UTF-8"], [0x4E00, "Big5"],
+             [0x3F, "UTF-8"], [0x3F, "ASCII-8BIT"], [0x3F, "EUC-JP"]].each do |cp, e|
+              repl = [cp].pack("U").encode(e)
+              enc = (b5.encode("Big5", invalid: :replace, replace: repl).bytes rescue [$!.class.to_s, $!.message])
+              scr = (b5.scrub(repl).bytes rescue [$!.class.to_s, $!.message])
+              r << [e, cp, enc, scr, enc == scr]
+            end
+            r << (b5.scrub("\xFF".b).bytes rescue [$!.class.to_s, $!.message])
+            r << (b5.scrub.bytes)
+            r
+            "##,
+        );
+        // Only a receiver with something to scrub consults it, so one
+        // with nothing to scrub takes a replacement it would
+        // otherwise refuse — and BINARY, where no byte is ever
+        // ill-formed, never asks at all.
+        crate::tests::run_test_once(
+            r##"
+            bad = [0x1D11E].pack("U")
+            r = []
+            ok = "ok".dup.force_encoding("Big5")
+            r << (ok.scrub(bad).bytes rescue [$!.class.to_s])
+            r << (ok.encode("Big5", invalid: :replace, replace: bad).bytes rescue [$!.class.to_s])
+            r << ("\x80".b.scrub([0x3042].pack("U")).bytes rescue [$!.class.to_s])
+            r << ("\x80".b.scrub("?").bytes rescue [$!.class.to_s])
+            r
+            "##,
+        );
+        // Every encoding monoruby scrubs, through all three of the
+        // methods that do it.
+        crate::tests::run_test_once(
+            r##"
+            bad = { "UTF-8" => [0x80], "Big5" => [0x81], "EUC-JP" => [0xA1, 0xFF],
+                    "Shift_JIS" => [0x80], "EUC-KR" => [0xFF], "US-ASCII" => [0x80] }
+            bad.map do |e, bytes|
+              s = ("ok" + bytes.pack("C*") + "z").dup.force_encoding(e)
+              repl = [0x4E00].pack("U")
+              a = (s.scrub(repl).bytes rescue [$!.class.to_s, $!.message])
+              b = (s.encode(e, invalid: :replace, replace: repl).bytes rescue [$!.class.to_s, $!.message])
+              c = (begin; t = s.dup; t.scrub!(repl); t.bytes; rescue; [$!.class.to_s, $!.message] end)
+              [e, a, a == b, a == c, s.scrub.bytes]
             end
             "##,
         );

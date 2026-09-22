@@ -3704,6 +3704,7 @@ c09447d0d3e68c912ceea46c1c4d25a1	["nil", "nil", "nil", 42]	__a = [];__a << (Inte
 c095a2c797a127b8e7be93cfb4834bac	300000	def osr_sum(x)\n          total = 0\n          i = 0\n          while i < 
 c09c839979cea217eea20b122b702919	"T:#<TrueClass:0xADDR>"	class TrueClass; def to_s; "T:" + super; end; end\n                true.to_s.sub(
 c09d6cb41615f95536118d7f2c2d3ac5	"UTF-8"	-> { e = __ENCODING__; e.name }.call
+c0b805a186cab4906614ecc51a03c85a	[["UTF-8", 119070, ["Encoding::CompatibilityError", "incompatible character encodings: Big5 and UTF-8"], ["Encoding::CompatibilityError", "incompatible character encodings: Big5 and UTF-8"], true], ["UTF-8", 19968, ["Encoding::CompatibilityError", "incompatible character encodings: Big5 and UTF-8"], ["Encoding::CompatibilityError", "incompatible character encodings: Big5 and UTF-8"], true], ["Big5", 19968, [164, 64], [164, 64], true], ["UTF-8", 63, [63], [63], true], ["ASCII-8BIT", 63, [63], [63], true], ["EUC-JP", 63, [63], [63], true], ["Encoding::CompatibilityError", "incompatible character encodings: Big5 and BINARY (ASCII-8BIT)"], [63]]	b5 = [0x81].pack("C").force_encoding("Big5")\n            r = []\n   
 c0bd20c1f72134f81f9605cb0369bad4	["hello", "helloworld", "helloworld"]	path = "/tmp/mr_buf_rw.txt"\n            res = []\n            f = Fi
 c0c3efca0019690625b937461a354d1e	[1, 2, 3, 3, 10, 1, nil, nil, true, false, false, false, true, false]	__a = [];__a << (Integer.sqrt(1));__a << (Integer.sqrt(4));__a << (Integer.sqrt(
 c0ccecf51a28d34a9407d29cd759ff8a	[:f, :f]	class C; def f; 1; end; end\n            \n\n            m = C.new.met
@@ -4324,6 +4325,7 @@ e19e475a8598d24cded21068c47654dd	"abc"	"abc".rjust(3)
 e1ab8e7fca529a0f63032ace320b58f8	[[2], [:inner, :outer]]	$log = []\n        def inner(arr)\n          begin\n            arr.each {
 e1b4c5e2a4b532af8da5011f102f6898	["raised", "raised", "raised", "raised"]	__a = [];__a << (begin; a = "abc"; b = "abc".dup.force_encoding("UTF-16LE"); a.i
 e1b505f2197e0465fd5bc85b29e4ab80	[604, -1, -2, 1, -2]	n = 1; x = [-1, -2]; a = [*x, n + 0, n + 1, n + 2, n + 3, n + 4, n + 5, n + 6, n
+e1b9bd9917a158d95a8c226b0f50fb1d	[["UTF-8", [111, 107, 228, 184, 128, 122], true, true, [111, 107, 239, 191, 189, 122]], ["Big5", ["Encoding::CompatibilityError", "incompatible character encodings: Big5 and UTF-8"], true, true, [111, 107, 63, 122]], ["EUC-JP", ["Encoding::CompatibilityError", "incompatible character encodings: EUC-JP and UTF-8"], true, true, [111, 107, 63, 63, 122]], ["Shift_JIS", ["Encoding::CompatibilityError", "incompatible character encodings: Shift_JIS and UTF-8"], true, true, [111, 107, 63, 122]], ["EUC-KR", ["Encoding::CompatibilityError", "incompatible character encodings: EUC-KR and UTF-8"], true, true, [111, 107, 63, 122]], ["US-ASCII", ["Encoding::CompatibilityError", "incompatible character encodings: US-ASCII and UTF-8"], true, true, [111, 107, 63, 122]]]	bad = { "UTF-8" => [0x80], "Big5" => [0x81], "EUC-JP" => [0xA1, 0xF
 e1ba7519a727204602c379e31e7f6a90	[nil, false, nil, nil, false, nil, 18, nil, 18, 9, 17]	class Sticky < String\n          def hash; 1; end\n          def eql?(o);
 e1c2cb8e9e01d860acf3a63296e8f6a3	[nil, nil]	s = "\\303".dup.force_encoding(Encoding::Windows_31J)\n               [/z/s.match(
 e1d0e1049ee5298bcdc5c96d04a37dd7	[false, false, true]	res = [$DEBUG, $-d]\n        $DEBUG = true\n        res << $-d\n        $D
@@ -4644,6 +4646,7 @@ f278d110b91e27cba6d94dd2fa48e555	[680, 19, 38, 19]	def __f(x)\n          \n     
 f27aef0e47e3354ce496c90299f462ea	[["x\\ny\\nz\\n"], ["x\\n", "y\\n", "z\\n"], ["x\\n", "y\\n", "z\\n"], "ASCII-8BIT"]	File.write("/tmp/mr_rlf4.txt", "x\\ny\\nz\\n")\n            r = []\n    
 f2899713941ee3ed54e30d3b5b785abc	[1, true]	module MSx; end\n            SX = Struct.new(:a)\n            s = SX.
 f2ac88e48afb453f55b5a804f6cc1ad2	["UTF-8", #<SQLite3::Database:0x00007fe9a8fbd8a0 @tracefunc=nil, @authorizer=nil, @progress_handler=nil, @collations={}, @functions={}, @results_as_hash=nil, @readonly=false, @default_transaction_mode=:deferred>, false, "", ["SQLite3::Exception", "no such bind parameter"], "SQLite3::RangeException", "SQLite3::MismatchException", [[1, "x"]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
+f2dcdedabd41e38790f7a1c605c2fbe2	[[111, 107], [111, 107], [128], [128]]	bad = [0x1D11E].pack("U")\n            r = []\n            ok = "ok".
 f2e470589175775eee4819e2df92057b	true	v = "MONORUBY_TEST_VAL"\n            r = ENV.send(:[]=, "MONORUBY_EN
 f2f61ae8dbed2bff4eb6e1bb603b94d5	5	(..5).max
 f30aa4d203b608f35977d0b328b100ae	[2, 3, 4, 4, 5, 1, 2, 6, 5, 6, 106, "x", nil, 102, [:@a, :@never2]]	class D\n              def initialize; @n = 5; @m = 5; end\n         

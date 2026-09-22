@@ -11780,6 +11780,24 @@ fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn scrub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
+    // CRuby asks whether the replacement fits the receiver only when
+    // it is about to use one, so a receiver with nothing to scrub
+    // takes a replacement it would otherwise refuse (#1599). The
+    // argument is still type-checked.
+    if inner.is_valid_encoding() {
+        if lfp.block().is_none()
+            && let Some(arg) = lfp.try_arg(0)
+            && !arg.is_nil()
+            && arg.is_rstring_inner().is_none()
+        {
+            return Err(MonorubyErr::no_implicit_conversion(
+                &globals.store,
+                arg,
+                STRING_CLASS,
+            ));
+        }
+        return Ok(Value::string_from_inner(inner.clone()));
+    }
     let scrubbed = if let Some(bh) = lfp.block() {
         scrub_inner_with_block(vm, globals, inner, bh)?
     } else {
@@ -11827,10 +11845,16 @@ fn scrub_replacement(globals: &mut Globals, lfp: Lfp, self_enc: Encoding) -> Res
         if arg.is_nil() {
             return Ok(default_scrub_replacement(self_enc));
         }
-        let r_value = arg.expect_str(globals)?;
-        // Take a copy to avoid borrowing issues across `arg`.
-        let _ = r_value;
-        let r_inner = arg.as_rstring_inner();
+        // Any String will do — a replacement written in the
+        // receiver's own encoding is exactly what CRuby accepts, and
+        // asking for UTF-8 here refused it (#1599).
+        let Some(r_inner) = arg.is_rstring_inner() else {
+            return Err(MonorubyErr::no_implicit_conversion(
+                &globals.store,
+                arg,
+                STRING_CLASS,
+            ));
+        };
         let r_enc = r_inner.encoding();
         if !r_inner.is_valid_encoding() {
             return Err(MonorubyErr::argumenterr(
@@ -11841,15 +11865,20 @@ fn scrub_replacement(globals: &mut Globals, lfp: Lfp, self_enc: Encoding) -> Res
         // ASCII-compatible target encoding (CRuby allows
         // `s.scrub("?")` regardless of `s`'s encoding).
         let repl_ascii_only = r_inner.as_bytes().iter().all(|b| *b < 0x80);
-        let compatible = r_enc == self_enc
-            || (r_enc.is_utf8_compatible() && self_enc.is_utf8_compatible())
-            || (repl_ascii_only && self_enc.is_ascii_compatible());
+        // `rb_enc_check`'s rule, and only that: the same encoding, or
+        // a replacement with nothing above 0x7F. A US-ASCII receiver
+        // does *not* take a non-ASCII UTF-8 replacement, though both
+        // spell ASCII the same way (#1599).
+        let compatible =
+            r_enc == self_enc || (repl_ascii_only && self_enc.is_ascii_compatible());
         if !compatible {
-            return Err(MonorubyErr::argumenterr(format!(
-                "incompatible character encodings: {} and {}",
-                self_enc.name(),
-                r_enc.name(),
-            )));
+            // `Encoding::CompatibilityError`, which is what
+            // `rb_enc_check` raises — not an ArgumentError (#1599).
+            return Err(MonorubyErr::incompatible_encoding(
+                &globals.store,
+                self_enc,
+                r_enc,
+            ));
         }
         Ok(RStringInner::from_encoding(r_inner.as_bytes(), self_enc))
     } else {
