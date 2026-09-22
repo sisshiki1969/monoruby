@@ -3714,6 +3714,7 @@ c1bb063ef8447e04a64c4c5e22ad4b5c	100	class C\n              D ||= 100\n         
 c1c036ee2be7d5996cbeadf631f512d9	1	base = "/tmp/monoruby_test_lchown_#{Process.pid}_#{rand(100000)}"\n 
 c1d08f8e7804cdcf40031f921b0146af	[(8778.834117647059-2194.7085294117646i), (0.11764705882352941-0.029411764705882353i), 3, 4, 4, 3.5, -1.25, "3-5i", "3-5i", "3+5i", "0+0i", 25, 25, 0, 8.5, 0.0, 0.0, 0.0, 1.5707963267948966, 3.141592653589793, 0, 1, "-1+0i", false, false, false, false, true, nil, false, 1, 1, 1, -1, 0, 1, -1, 0, true, true, true, "3+4i", "1+0i", "-4+0i", "1024+0i", "3.0+4.0i", "3.0+4.0i", "-1.5-2.0i", :te, 5.0, 5, "5/1", :re, :re, (5/1), :re, false, "1+Infinity*i", "1-Infinity*i", "1+NaN*i", "-3-4i", "3-4i", "0+0i", [1, 2], true, :nm, :nm, false, false, 2, 5.0, "3/1", "1/2", "1/3", :re, :re]	__a = [];__a << (74620.09.quo(Complex(8,2)));__a << (1.0.fdiv(Complex(8,2)));__a
 c1d87157ff5a01d47e7d4063803b73dd	["sleep", false, true, false]	t = Thread.new { sleep }\n            Thread.pass while t.status != 
+c1ff177bd9f8e3cebe4ea5ad743fc708	[["Big5", [63], "US-ASCII"], ["UTF-16BE", [239, 191, 189], "UTF-8"], ["UTF-16LE", [239, 191, 189], "UTF-8"], ["UTF-32BE", [239, 191, 189], "UTF-8"], ["ISO-8859-1", [63], "US-ASCII"]]	["Big5", "UTF-16BE", "UTF-16LE", "UTF-32BE", "ISO-8859-1"].map do |
 c2014a49d1e30b9f6c135aaec1772a50	[1, 99, 2, 3]	class MyNum; def to_int; 1; end; end\nn = MyNum.new\na = [1,2,3]; a.insert(n, 99);
 c2165d7ba0399023a5673c5d758b88c0	"a:1 b:2 c:[3, {x: 100, y: 200}]"	def f\n          yield 1,2,3,x:100,y:200\n        end\n        \n\n        f
 c2223c03773eac42c8717805d9010dc8	[true, 15]	s = Random.new.bytes(15)\n        [s.is_a?(String), s.bytesize]\n        
@@ -3803,6 +3804,7 @@ c68a937ebbf20dbda216eebda6b83971	["x", "x"]	class C; def to_int; 2; end; end; o 
 c69571585acd0ae97070c46877ef1630	"uninitialized constant MdName::NOPE"	m = Module.new { def self.name; "MdName"; end }\n            begin; 
 c6a6be2b7870ba097e242bf620676800	[160.0, 800000.0]	class C\n          def initialize\n            @a = [0.0, 1.0, 2.0]\n     
 c6aa47f3d7123c5ac7cf49f88732c23f	[true, [:waiting, :woken]]	m = Mutex.new\n            cv = ConditionVariable.new\n            lo
+c6ae8d267e9bad42397cedbab55c71a3	[[164, 64], [164, 64], [164, 64], [164, 64], ["Encoding::ConverterNotFoundError", "code converter not found (UTF-8 to Big5)"]]	r = []\n            euc = [0x4E00].pack("U").encode("EUC-JP")\n      
 c6c590c4f5e99e29b5e950ed25d95e8a	"abcabcabc"	class MyInt\n              def to_int\n                3\n            
 c6cf506f9e1bf56b2c88982b59d4a0fe	[(13/25), (1000/1), (3/200), (3/1), (10000/1), (1/2), (-191/30), "invalid value for convert(): \\"1/-2\\"", :zde, :ae, :ae2, (13/25), (1/1), (1/1), (-191/30), (0/1), (1/100), (19/2), (3/1), (7/2), (0/1), nil, nil, :tie, nil, ["Complex", (1/5), (-2/5)], (1/2)]	bad_to_int = Object.new\n            def bad_to_int.to_int; raise No
 c6d3dade907fe66184348357856a018e	[2, -2, 1, -1, 0, 3, -3, 1, 3, -2, 3, 6, 16, 0]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
@@ -3865,6 +3867,7 @@ c9680cb53fc0f3d06760b4803a4f62c9	50.0	[2.7800000000000002, 5.0, 2.5, 4.44, 3.89,
 c97c02f0ab73d588d9ec5c3a5febdc77	[true, true, true, true]	require 'stringio'\n            orig = $stderr\n            $stderr =
 c9a3be96b3cae2aa0ba5aaa77abb03fb	[1, true]	path = "/tmp/monoruby_test_chown_#{Process.pid}_#{rand(100000)}"\n  
 c9a4154fe84fc8b393888e82c5380102	[true, true, true, true, true, true, true, true]	[\n              Process::UID.rid == Process.uid,\n              Proc
+c9c97709667c4c0890d30da2d61d3c47	[["Big5", [164, 64], "Big5", true], ["EUC-JP", [176, 236], "EUC-JP", true], ["ISO-8859-1", "Encoding::UndefinedConversionError"], ["UTF-16BE", [228, 184, 128], "UTF-8", true], ["US-ASCII", "Encoding::UndefinedConversionError"]]	["Big5", "EUC-JP", "ISO-8859-1", "UTF-16BE", "US-ASCII"].map do |d|
 c9ca6f42fac96c8b1cd2b2cb32d2204e	["Refinement", "String", [:shout], 1, false]	m = Module.new do\n              refine String do\n                de
 c9db17651301d6059855d9863a843bfc	[1, 2, 3, [4, 5], 6, [7], 8, 9, 10, 11]	f = ->(a, (b, (c, *d, (e, (*f)), g), (h, (i, j)))) { [a, b, c, d, e, f,
 c9e7ef05749cfbb7600f414d8ffb61cb	true	r, w = IO.pipe\n            w.write "x"\n            box = Object.new

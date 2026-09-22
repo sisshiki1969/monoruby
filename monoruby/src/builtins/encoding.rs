@@ -3224,7 +3224,7 @@ fn handle_xml_option(
     // for text that would otherwise pass straight through — and its
     // `replace:` is checked with it (#1566).
     let src_enc = lfp.self_val().as_rstring_inner().encoding();
-    let opts = parse_transcode_opts(lfp);
+    let opts = parse_transcode_opts(lfp, &globals.store);
     validate_replacement(&opts, src_enc, dst_enc, Some(mode), &globals.store)?;
     let s = String::from_utf8_lossy(&bytes);
     let mut out = String::with_capacity(s.len() + 2);
@@ -3396,7 +3396,7 @@ pub(super) fn encode(
     if let Some(v) = handle_xml_option(globals, lfp, dst_enc)? {
         return Ok(v);
     }
-    let opts = parse_transcode_opts(lfp);
+    let opts = parse_transcode_opts(lfp, &globals.store);
     let fallback = parse_fallback_opt(lfp);
     let src_bytes = self_val.as_rstring_inner().as_bytes().to_vec();
     let bytes =
@@ -3434,7 +3434,7 @@ pub(super) fn encode_(
         }
         return Ok(self_val);
     }
-    let opts = parse_transcode_opts(lfp);
+    let opts = parse_transcode_opts(lfp, &globals.store);
     let fallback = parse_fallback_opt(lfp);
     let src_bytes = self_val.as_rstring_inner().as_bytes().to_vec();
     let bytes =
@@ -3448,7 +3448,72 @@ pub(super) fn encode_(
 /// Parse `String#encode`'s keyword options (`invalid:`, `undef:`,
 /// `replace:`) into a `TranscodeOpts`. Unknown keys are ignored
 /// (CRuby silently does the same) — `xml:` is handled separately.
-fn parse_transcode_opts(lfp: Lfp) -> TranscodeOpts {
+/// The `replace:` option as characters, whatever encoding it was
+/// given in.
+///
+/// CRuby converts the replacement into the destination as soon as it
+/// has one, so a replacement written in the source's encoding — or in
+/// the destination's — is as good as one written in UTF-8. Reading it
+/// through `is_str`, which answers only for valid UTF-8, dropped
+/// those silently and left the default `"?"` in their place (#1583).
+/// The pipeline here carries the replacement as text and converts it
+/// with everything else, so this is that conversion one step earlier.
+fn replacement_text(v: Value, store: &Store) -> Option<String> {
+    let inner = v.is_rstring_inner()?;
+    let bytes = inner.as_bytes();
+    if let Ok(s) = std::str::from_utf8(bytes)
+        && (bytes.is_ascii() || inner.encoding().is_utf8_compatible())
+    {
+        return Some(s.to_string());
+    }
+    let utf8 = transcode_bytes_with_opts(
+        bytes,
+        inner.encoding(),
+        crate::value::Encoding::UTF8,
+        &TranscodeOpts::default(),
+        store,
+    )
+    .ok()?;
+    String::from_utf8(utf8).ok()
+}
+
+/// The encoding `Encoding::Converter#replacement` hands its answer
+/// back in: the one CRuby inserts substituted output in, which is the
+/// *input* of the last step of the conversion rather than the
+/// destination. For a single-step conversion the two are the same, so
+/// this is the destination for nearly everything; the wide encodings
+/// are written from UTF-8 by a step of their own, and keep it.
+///
+/// ISO-2022-JP is the other multi-step destination, and CRuby keeps
+/// its replacement in stateless-ISO-2022-JP — which monoruby cannot
+/// encode to at all, so it stays with the destination here.
+fn replacement_encoding(dst: crate::value::Encoding) -> crate::value::Encoding {
+    if is_utf16_or_32(dst) {
+        crate::value::Encoding::UTF8
+    } else {
+        dst
+    }
+}
+
+/// The replacement as [`replacement_encoding`] spells it, which is
+/// what `Encoding::Converter#replacement` hands back (#1583).
+///
+/// `in_dst` is the replacement already converted to the destination,
+/// which is how the caller established that the destination can
+/// spell it — so those are exactly the bytes wanted, except for the
+/// encodings that keep theirs in UTF-8, where the text already is.
+/// Nothing is converted twice and nothing here can fail.
+fn replacement_in(
+    s: &str,
+    in_dst: &[u8],
+    dst: crate::value::Encoding,
+) -> crate::value::RStringInner {
+    let enc = replacement_encoding(dst);
+    let bytes = if enc == dst { in_dst } else { s.as_bytes() };
+    crate::value::RStringInner::from_encoding_scanned(bytes, enc)
+}
+
+fn parse_transcode_opts(lfp: Lfp, store: &Store) -> TranscodeOpts {
     let opts_val = match get_options_hash_value(lfp) {
         Some(v) => v,
         None => return TranscodeOpts::default(),
@@ -3470,8 +3535,8 @@ fn parse_transcode_opts(lfp: Lfp) -> TranscodeOpts {
         }
     }
     if let Some(v) = find_hash_value_for_symbol(&hash, "replace") {
-        if let Some(s) = v.is_str() {
-            out.replace = Some(s.to_string());
+        if let Some(s) = replacement_text(v, store) {
+            out.replace = Some(s);
             // CRuby's `econv_opts`: a bare `replace:` implies
             // `undef: :replace` — but only when `invalid: :replace`
             // was *not* given, so `invalid: :replace, replace: ""`
@@ -4131,9 +4196,12 @@ fn converter_transcode_opts(globals: &Globals, recv: Value) -> TranscodeOpts {
     if let Some(v) = globals
         .store
         .get_ivar(recv, IdentId::get_id(CONVERTER_REPLACE_IVAR))
-        && let Some(s) = v.is_str()
+        // Stored as the destination spells it (#1583); the pipeline
+        // wants it as characters, and reads it back the same way it
+        // reads the option.
+        && let Some(s) = replacement_text(v, &globals.store)
     {
-        opts.replace = Some(s.to_string());
+        opts.replace = Some(s);
     }
     if let Some(v) = globals
         .store
@@ -4211,20 +4279,18 @@ fn validate_replacement(
     dst_enc: crate::value::Encoding,
     xml: Option<XmlMode>,
     store: &Store,
-) -> Result<()> {
+) -> Result<Option<Vec<u8>>> {
     let Some(repl) = opts.replace.as_deref() else {
-        return Ok(());
+        return Ok(None);
     };
-    if transcode_bytes_with_opts(
+    if let Ok(bytes) = transcode_bytes_with_opts(
         repl.as_bytes(),
         crate::value::Encoding::UTF8,
         dst_enc,
         &TranscodeOpts::default(),
         store,
-    )
-    .is_ok()
-    {
-        return Ok(());
+    ) {
+        return Ok(Some(bytes));
     }
     let decorators = decorator_names(opts, xml);
     let with = if decorators.is_empty() {
@@ -4525,10 +4591,14 @@ fn converter_new(
                     // object exists — holding the fresh object in a
                     // Rust local across `#to_str` left it invisible
                     // to the GC (caught by true `gc-stress`).
-                    let s = if let Some(st) = rep.is_str() {
-                        st.to_string()
-                    } else {
-                        rep.coerce_to_string(vm, globals)?
+                    let s = match replacement_text(rep, &globals.store) {
+                        Some(s) => s,
+                        // Not a String at all: CRuby coerces via
+                        // `#to_str`, which re-enters Ruby.
+                        None => {
+                            let coerced = rep.coerce_to_string(vm, globals)?;
+                            coerced
+                        }
                     };
                     // A converter is always opened here, so the
                     // replacement is checked against the destination
@@ -4542,10 +4612,15 @@ fn converter_new(
                         replace: Some(s.clone()),
                         ..Default::default()
                     };
-                    validate_replacement(&decorators, src, dst, None, &globals.store)?;
-                    let mut inner = crate::value::RStringInner::from_string_scanned(s);
-                    inner.set_encoding(dst);
-                    replace_inner = Some(inner);
+                    // The check converts the replacement into the
+                    // destination, which is also what `#replacement`
+                    // hands back — so the bytes are kept rather than
+                    // tagging the UTF-8 ones with the destination's
+                    // name (#1583).
+                    let in_dst =
+                        validate_replacement(&decorators, src, dst, None, &globals.store)?
+                            .unwrap_or_default();
+                    replace_inner = Some(replacement_in(&s, &in_dst, dst));
                 }
             }
         }
@@ -4658,35 +4733,30 @@ fn converter_replacement_set(
     _: BytecodePtr,
 ) -> Result<Value> {
     let arg = lfp.arg(0);
-    let s = arg
-        .is_str()
-        .ok_or_else(|| MonorubyErr::typeerr(format!("no implicit conversion into String")))?;
+    let recv = lfp.self_val();
+    let dst = converter_get_dst(globals, recv);
+    let s = replacement_text(arg, &globals.store)
+        .ok_or_else(|| MonorubyErr::typeerr("no implicit conversion into String".to_string()))?;
+    let s = s.as_str();
     // The new replacement has to be one the destination can spell.
     // Asking the pipeline rather than the codec is what makes this
     // agree with `#encode` — the codec's repertoire is wider than
     // several of these encodings (#1544) — and CRuby names neither
     // the character nor the pair here (#1566).
-    let recv = lfp.self_val();
-    let dst = converter_get_dst(globals, recv);
-    if transcode_bytes_with_opts(
+    let Ok(in_dst) = transcode_bytes_with_opts(
         s.as_bytes(),
         crate::value::Encoding::UTF8,
         dst,
         &TranscodeOpts::default(),
         &globals.store,
-    )
-    .is_err()
-    {
+    ) else {
         return Err(MonorubyErr::undefined_conversion_error(
             &globals.store,
             "replacement character setup failed".to_string(),
         ));
-    }
-    // Tag the stored value with the destination's encoding so a
-    // subsequent `replacement` call returns it correctly classified.
-    let mut inner = crate::value::RStringInner::from_string_scanned(s.to_string());
-    inner.set_encoding(dst);
-    let val = Value::string_from_inner(inner);
+    };
+    // Those are the bytes `#replacement` hands back (#1583).
+    let val = Value::string_from_inner(replacement_in(s, &in_dst, dst));
     let _ = globals
         .store
         .set_ivar(recv, IdentId::get_id(CONVERTER_REPLACE_IVAR), val);
@@ -12508,6 +12578,64 @@ mod tests {
              ["Big5", 0x4E00], ["GB2312", 0x4E00]].map do |enc, cp|
               c = Encoding::Converter.new("UTF-8", enc)
               (c.replacement = [cp].pack("U")) rescue [$!.class.to_s, $!.message]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_replacement_is_kept_as_the_destination_spells_it() {
+        // It was kept as UTF-8 text with the destination's name
+        // stuck on it, so what `#replacement` handed back was a
+        // string its own tag called impossible (#1583).
+        crate::tests::run_test_once(
+            r##"
+            ["Big5", "EUC-JP", "ISO-8859-1", "UTF-16BE", "US-ASCII"].map do |d|
+              c = Encoding::Converter.new("UTF-8", d)
+              begin
+                c.replacement = [0x4E00].pack("U")
+                [d, c.replacement.bytes, c.replacement.encoding.name,
+                 c.replacement.valid_encoding?]
+              rescue
+                [d, $!.class.to_s]
+              end
+            end
+            "##,
+        );
+        // And a replacement written in some other encoding was
+        // dropped on the way in — `is_str` answers only for valid
+        // UTF-8 — so the default took its place, or the setter
+        // refused a String outright.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            euc = [0x4E00].pack("U").encode("EUC-JP")
+            big5 = [0x4E00].pack("U").encode("Big5")
+            r << ([0x1F600].pack("U").encode("Big5", undef: :replace, replace: euc).bytes)
+            r << (Encoding::Converter.new("UTF-8", "Big5", undef: :replace, replace: euc)
+                    .convert([0x1F600].pack("U")).bytes)
+            r << (begin
+                    c = Encoding::Converter.new("UTF-8", "Big5"); c.replacement = euc
+                    c.replacement.bytes
+                  rescue; [$!.class.to_s] end)
+            r << (begin
+                    c = Encoding::Converter.new("UTF-8", "Big5"); c.replacement = big5
+                    c.replacement.bytes
+                  rescue; [$!.class.to_s] end)
+            # one the destination cannot spell, whatever it is written in
+            r << ([0x1F600].pack("U").encode("Big5", undef: :replace,
+                    replace: [0x3042].pack("U").encode("EUC-JP")) rescue [$!.class.to_s, $!.message])
+            r
+            "##,
+        );
+        // The default is untouched, and the wide destinations keep
+        // theirs in UTF-8 — CRuby inserts substituted output in the
+        // input of the conversion's last step, not the destination.
+        crate::tests::run_test_once(
+            r##"
+            ["Big5", "UTF-16BE", "UTF-16LE", "UTF-32BE", "ISO-8859-1"].map do |d|
+              c = Encoding::Converter.new("UTF-8", d)
+              [d, c.replacement.bytes, c.replacement.encoding.name]
             end
             "##,
         );
