@@ -4545,18 +4545,22 @@ fn stream_convert(
         };
         return (result, src_bytes.len(), out, ErrMeta::default());
     }
-    // EUC-JP / Shift_JIS / Windows-31J on the way *in*: `encoding_rs`
-    // carries WHATWG's tables, which disagree with CRuby's on the
-    // duplicate-mapping cells, read the NEC/IBM extension rows CRuby
-    // has no character for, and can only call a cell CRuby's *walk*
-    // accepts a malformed sequence. `String#encode` has gone through
-    // `jp_decode` since #1445; the streaming path had the raw codec,
-    // so the same bytes converted two ways depending on the API
-    // (#1461). `cell_decode` hands a clean buffer to the codec whole,
-    // so this costs one walk on the common path.
-    if let Some(fx) = jp_fixup(src_enc) {
+    // A source whose walk is the authority reads through that walk
+    // rather than the codec. `encoding_rs` carries WHATWG's tables,
+    // which for the Japanese pair disagree with CRuby's on the
+    // duplicate-mapping cells and read extension rows CRuby has no
+    // character for (#1461), and for `euc-kr` and `gb2312` are
+    // Windows-949 and GBK — so the codec read cells those encodings
+    // do not have at all, and the converter decoded characters
+    // `String#encode` refused (#1558). The one-shot path has gone
+    // through `cell_decode` since #1445; this is the same buffer
+    // through the same walk, which hands a clean one to the codec
+    // whole and so costs one walk on the common path.
+    if walk_reports_runs(src_enc)
+        && let Some(src_rs_in) = encoding_to_rs(src_enc)
+    {
         let repl = opts.undef_replace.then(|| opts.replace_str(dst_enc));
-        let d = jp_decode(fx, src_bytes, repl.as_deref());
+        let d = cell_decode(src_enc, src_rs_in, jp_fixup(src_enc), src_bytes, repl.as_deref());
         // Where the decode half first has something to say: a cell the
         // buffer ended in the middle of, one that is ill-formed, or a
         // well-formed one CRuby's table has no character for.
@@ -4575,7 +4579,13 @@ fn stream_convert(
             // destination, or a destination that fills up, happens
             // *earlier* in the stream than whatever stopped the
             // decoder, and that is what CRuby reports.
-            let head = jp_decode(fx, &src_bytes[..stop], repl.as_deref());
+            let head = cell_decode(
+                src_enc,
+                src_rs_in,
+                jp_fixup(src_enc),
+                &src_bytes[..stop],
+                repl.as_deref(),
+            );
             let (res, pivot_consumed, out, meta) = stream_convert(
                 head.text.as_bytes(),
                 E::Utf8,
@@ -10641,6 +10651,50 @@ mod tests {
             s2 = "abc\xa1def".dup
             d2 = "".dup
             r << ec2.primitive_convert(s2, d2, nil, 10) << [s2, d2] << ec2.putback
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_converter_reads_the_same_cells_the_one_shot_path_does() {
+        // `encoding_rs`'s `euc-kr` is Windows-949 and its `gb2312` is
+        // GBK, so the converter's decode half read cells those
+        // encodings do not have — characters `String#encode` refused
+        // (#1558).
+        crate::tests::run_test_once(
+            r##"
+            [["EUC-KR", 0x81, 0x41], ["EUC-KR", 0xA1, 0x41], ["EUC-KR", 0xB0, 0xA1],
+             ["GB2312", 0xA1, 0x40], ["GB2312", 0xB0, 0xA1],
+             ["CP949", 0x81, 0x41], ["Shift_JIS", 0x82, 0xA0]].map do |enc, b1, b2|
+              s = [b1, b2].pack("C*").force_encoding(enc)
+              one = (s.encode("UTF-8").codepoints rescue $!.class.to_s)
+              cv = (Encoding::Converter.new(enc, "UTF-8").convert(s.dup).codepoints rescue $!.class.to_s)
+              [one, cv, one == cv, s.valid_encoding?]
+            end
+            "##,
+        );
+        // Through `primitive_convert`, where the cell decides how much
+        // of `src` is taken and what the errinfo names.
+        crate::tests::run_test_once(
+            r##"
+            [["EUC-KR", 0x81], ["EUC-KR", 0xA1], ["GB2312", 0xA1]].map do |enc, b|
+              ec = Encoding::Converter.new(enc, "UTF-8")
+              s = ([b, 0x41, 0x42].pack("C*")).force_encoding(enc)
+              d = "".dup
+              [ec.primitive_convert(s, d), s.bytes, d.bytes,
+               ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            "##,
+        );
+        // `invalid: :replace` substitutes the cell rather than
+        // decoding it, through both APIs.
+        crate::tests::run_test_once(
+            r##"
+            ["EUC-KR", "GB2312"].map do |enc|
+              s = ([0x81, 0x41, 0x42].pack("C*")).force_encoding(enc)
+              [s.encode("UTF-8", invalid: :replace).bytes,
+               Encoding::Converter.new(enc, "UTF-8", invalid: :replace).convert(s.dup).bytes]
+            end
             "##,
         );
     }
