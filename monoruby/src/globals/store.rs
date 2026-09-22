@@ -139,6 +139,23 @@ pub struct Store {
     /// and `ISeqInfo::on_jit_list` keeps it duplicate-free.
     ///
     jit_iseqs: Vec<ISeqId>,
+    /// Which compilation units resolved which method names — the index
+    /// that lets a method-table change invalidate only the code it can
+    /// affect. A unit's salvage record already lists every
+    /// `(recv_class, name)` it resolved; this is that list turned around,
+    /// name-first, with the unit named by its salvage-record key (a
+    /// whole-method unit is `(iseq, self_class, None)`, an OSR loop body
+    /// `(iseq, self_class, Some(LoopStart))`). Re-registering a key drops
+    /// its old names first, and a dropped iseq (`jit_forget_iseq`) leaves
+    /// nothing behind, so the index describes only live records.
+    jit_method_deps: HashMap<IdentId, HashSet<JitUnitId>>,
+    /// The reverse map of `jit_method_deps`: the names each unit is filed
+    /// under, so a unit can be withdrawn without scanning every name.
+    jit_unit_names: HashMap<JitUnitId, Vec<IdentId>>,
+    /// Units filed under every name: a `super` site in a body whose
+    /// enclosing method has no name to resolve it under. Poisoned on
+    /// every change, which is what the global word used to do for all.
+    jit_wildcard_units: HashSet<JitUnitId>,
     /// class table.
     pub(in crate::globals) classes: ClassInfoTable,
     /// call site info.
@@ -473,6 +490,167 @@ impl Store {
         }
     }
 
+    /// Install a whole-method unit's salvage record and file the unit in
+    /// the method-name index (see `jit_method_deps`).
+    pub(crate) fn set_salvage_record(
+        &mut self,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        class_version_label: DestLabel,
+        cache: Vec<InlineCacheEntry>,
+        const_map: ConstSalvageMap,
+    ) {
+        self.jit_register_unit((iseq_id, self_class, None), &cache);
+        self[iseq_id].set_salvage_record(self_class, class_version_label, cache, const_map);
+    }
+
+    /// The loop-body twin of [`Self::set_salvage_record`].
+    pub(crate) fn set_loop_jit_info(
+        &mut self,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        index: crate::bytecodegen::BcIndex,
+        class_version_label: DestLabel,
+        cache: Vec<InlineCacheEntry>,
+        const_map: ConstSalvageMap,
+    ) {
+        self.jit_register_unit((iseq_id, self_class, Some(index)), &cache);
+        self[iseq_id].set_loop_jit_info(self_class, index, class_version_label, cache, const_map);
+    }
+
+    /// Permanently give up on JIT-compiling *iseq_id*, withdrawing its
+    /// units from the index along with their records.
+    pub(crate) fn invalidate_jit_code(&mut self, iseq_id: ISeqId) {
+        self.jit_forget_iseq(iseq_id);
+        self[iseq_id].invalidate_jit_code();
+    }
+
+    /// A method table changed under *name*: definition, removal or a
+    /// visibility change. The VM's caches all key on the global word, so
+    /// that moves as before; the JIT's units are invalidated by name.
+    pub(crate) fn method_table_changed(&mut self, name: IdentId) {
+        Globals::vm_class_version_inc();
+        self.jit_method_changed(name);
+    }
+
+    fn jit_register_unit(&mut self, unit: JitUnitId, cache: &[InlineCacheEntry]) {
+        self.jit_forget_unit(unit);
+        let mut names: Vec<IdentId> = Vec::with_capacity(cache.len());
+        let mut wildcard = false;
+        for entry in cache {
+            // A `super` site (no name of its own) re-resolves under the
+            // name the running method was *called* by. For a method body
+            // that is its own name; for a block it need not be — a
+            // `define_method` body runs under whatever name installed it —
+            // so a block's `super` is filed under every name.
+            let name = match entry.name {
+                Some(name) => Some(name),
+                None => self.jit_unit_method_name(unit.0),
+            };
+            match name {
+                Some(name) => {
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                }
+                None => wildcard = true,
+            }
+        }
+        if wildcard {
+            self.jit_wildcard_units.insert(unit);
+        }
+        for name in &names {
+            self.jit_method_deps.entry(*name).or_default().insert(unit);
+        }
+        self.jit_unit_names.insert(unit, names);
+    }
+
+    /// The name a `super` in *iseq_id* resolves under, when that is fixed:
+    /// the method's own name for a method body, and nothing for a block
+    /// (see `jit_register_unit`) or a body without a name.
+    fn jit_unit_method_name(&self, iseq_id: ISeqId) -> Option<IdentId> {
+        let (mother, _) = self[iseq_id].mother();
+        if mother != iseq_id {
+            return None;
+        }
+        self[self[mother].func_id()].name()
+    }
+
+    fn jit_forget_unit(&mut self, unit: JitUnitId) {
+        if let Some(names) = self.jit_unit_names.remove(&unit) {
+            for name in names {
+                if let Some(set) = self.jit_method_deps.get_mut(&name) {
+                    set.remove(&unit);
+                    if set.is_empty() {
+                        self.jit_method_deps.remove(&name);
+                    }
+                }
+            }
+        }
+        self.jit_wildcard_units.remove(&unit);
+    }
+
+    /// Withdraw every unit of *iseq_id* from the index (its records are
+    /// being dropped). A scan of the unit table: eviction is rare.
+    pub(crate) fn jit_forget_iseq(&mut self, iseq_id: ISeqId) {
+        let units: Vec<JitUnitId> = self
+            .jit_unit_names
+            .keys()
+            .filter(|unit| unit.0 == iseq_id)
+            .copied()
+            .collect();
+        for unit in units {
+            self.jit_forget_unit(unit);
+        }
+    }
+
+    /// Invalidate every compiled unit that resolved *name*: its version
+    /// word and guard immediates are set to a value the JIT word can never
+    /// hold, so its next class-version guard fails and the unit goes
+    /// through salvage (re-validated and re-stamped if the resolution it
+    /// recorded still holds, recompiled otherwise) — exactly what a bump
+    /// of the global word did to it, without touching any other unit.
+    fn jit_method_changed(&mut self, name: IdentId) {
+        let mut units: Vec<JitUnitId> = self.jit_wildcard_units.iter().copied().collect();
+        if let Some(set) = self.jit_method_deps.get(&name) {
+            units.extend(set.iter().copied());
+        }
+        if units.is_empty() {
+            return;
+        }
+        let mut labels = Vec::with_capacity(units.len());
+        for (iseq_id, self_class, index) in units {
+            let label = match index {
+                None => self[iseq_id].get_jit_class_version(self_class),
+                Some(index) => self[iseq_id]
+                    .get_loop_jit_info(self_class, index)
+                    .map(|info| info.class_version_label.clone()),
+            };
+            if let Some(label) = label {
+                labels.push(label);
+            }
+        }
+        CODEGEN.with(|codegen| {
+            let mut codegen = codegen.borrow_mut();
+            for label in &labels {
+                // A unit poisoned since its last entry is poisoned already:
+                // its word still reads the sentinel, and re-stamping it
+                // (word, immediates, a protection flip on macOS) buys
+                // nothing. Cold units would otherwise pay for every
+                // definition of a name they resolved.
+                let word = codegen.jit.get_label_address(label).as_ptr() as *const u32;
+                // SAFETY: the label names the unit's 4-byte snapshot word,
+                // emitted by `jit_compile` and alive for the process.
+                if unsafe { *word } == crate::codegen::VERSION_IMM_SENTINEL as u32 {
+                    continue;
+                }
+                #[cfg(feature = "jit-log")]
+                crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::JIT_UNITS_POISONED);
+                codegen.set_class_version(crate::codegen::VERSION_IMM_SENTINEL as u32, label);
+            }
+        });
+    }
+
     ///
     /// Populate a const site's inline cache, keeping the GC's side index of
     /// cache-holding sites in step. The only way a cache is created.
@@ -498,6 +676,9 @@ impl Store {
             iseqs: vec![],
             literals: vec![],
             jit_iseqs: vec![],
+            jit_method_deps: HashMap::default(),
+            jit_unit_names: HashMap::default(),
+            jit_wildcard_units: HashSet::default(),
             constsite_info: vec![],
             cached_constsites: vec![],
             callsite_info: vec![],
@@ -1756,6 +1937,9 @@ impl Store {
                 stale.insert(ISeqId::new(i));
             }
         }
+        for iseq_id in &stale {
+            self.jit_forget_iseq(*iseq_id);
+        }
         stale
     }
 }
@@ -2340,6 +2524,11 @@ pub struct ConstSiteId(pub u32);
 /// Number of ways a call site's polymorphic method cache keeps before it
 /// counts further keys as megamorphic overflow.
 pub const PMC_WAYS: usize = 4;
+
+/// The key of a compilation unit's salvage record, and of its entry in the
+/// method-name index: `(iseq, self_class, None)` for a whole-method unit,
+/// `(iseq, self_class, Some(LoopStart))` for an OSR loop body.
+pub(crate) type JitUnitId = (ISeqId, ClassId, Option<crate::bytecodegen::BcIndex>);
 
 /// One observed key of a call site's polymorphic method cache.
 #[derive(Debug, Clone)]

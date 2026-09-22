@@ -2394,7 +2394,7 @@ impl Store {
     /// This fn increments class version.
     ///
     pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Result<()> {
-        Globals::class_version_inc();
+        self.method_table_changed(func_name);
         // Removal invalidates a fast path exactly as replacement does —
         // `Integer.remove_method(:+)` must make `1 + 2` raise NoMethodError,
         // not keep answering 3. `undef_method` reaches `insert_method` via
@@ -2580,7 +2580,7 @@ impl Store {
                     {
                         entry.func_id = Some(fid);
                     }
-                    Globals::class_version_inc();
+                    self.method_table_changed(*name);
                 }
                 None => {
                     // Optimization (matches CRuby `set_method_visibility`):
@@ -2631,7 +2631,7 @@ impl Store {
     /// This fn increments class version.
     ///
     fn insert_method(&mut self, class_id: ClassId, name: IdentId, entry: MethodTableEntry) {
-        Globals::class_version_inc();
+        self.method_table_changed(name);
         self.classes[class_id].methods.insert(name, entry);
         // Membership is on the `(class, method)` pair, not on whatever
         // entry was displaced: `Integer#!` / `#+@` / `#~`, `NilClass#==`
@@ -2858,7 +2858,7 @@ impl Store {
         if let Some(version_label) = self.salvage_method_unit(iseq_id, self_class, Some(lfp)) {
             // Read the version *before* taking the mutable borrow below —
             // `Globals::class_version` borrows the same thread-local.
-            let version = Globals::class_version();
+            let version = Globals::jit_class_version();
             CODEGEN.with(|codegen| {
                 codegen
                     .borrow_mut()
@@ -2916,7 +2916,7 @@ impl Store {
         for entry in cache_map {
             let func_id =
                 self.check_method_for_name(lfp, entry.recv_class, entry.name, entry.refinements);
-            if func_id != Some(entry.func_id) {
+            if func_id != entry.func_id {
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(
                     &crate::codegen::jit_stats::SALVAGE_FAIL_RESOLUTION_CHANGED,
@@ -3081,7 +3081,7 @@ impl Store {
         for entry in cache_map {
             let func_id =
                 self.check_method_for_name(lfp, entry.recv_class, entry.name, entry.refinements);
-            if func_id != Some(entry.func_id) {
+            if func_id != entry.func_id {
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(
                     &crate::codegen::jit_stats::SALVAGE_FAIL_RESOLUTION_CHANGED,

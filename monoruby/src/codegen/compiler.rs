@@ -324,7 +324,7 @@ impl Codegen {
             }
             Err(_) => {
                 if position.is_none() {
-                    globals.store[iseq_id].invalidate_jit_code();
+                    globals.store.invalidate_jit_code(iseq_id);
                     // The permanent give-up dropped every jit_entry, but on
                     // x86 the wrapper's entry jump may still point at the old
                     // class-guard chain (a whole-compile for one self class
@@ -447,7 +447,7 @@ impl Codegen {
             }
         };
         let jit_entry = self.jit.label();
-        let class_version = self.class_version();
+        let class_version = self.jit_class_version();
         let (cache, class_version_label, const_map) = self.compile_method(
             globals,
             iseq_id,
@@ -462,7 +462,8 @@ impl Codegen {
         // failed again on the next call (270k steady-state misses per
         // activerecord run, and the ones whose exit had no recovery path
         // deopted every time).
-        globals.store[iseq_id].set_salvage_record(
+        globals.store.set_salvage_record(
+            iseq_id,
             self_class,
             class_version_label,
             cache,
@@ -494,7 +495,7 @@ impl Codegen {
         }
         let slot = globals.store[iseq_id].get_jit_slot(self_class)?;
         let jit_entry = self.jit.label();
-        let class_version = self.class_version();
+        let class_version = self.jit_class_version();
         let compiled = self.compile_method(
             globals,
             iseq_id,
@@ -510,7 +511,8 @@ impl Codegen {
         // Refresh the salvage record so later guard failures re-validate
         // against what *this* body folded, and against the version word it
         // actually reads (mirrors the x86 variant).
-        globals.store[iseq_id].set_salvage_record(
+        globals.store.set_salvage_record(
+            iseq_id,
             self_class,
             class_version_label,
             cache,
@@ -559,7 +561,7 @@ impl Codegen {
         is_recompile: Option<RecompileReason>,
     ) -> Option<()> {
         let entry_label = self.jit.label();
-        let class_version = self.class_version();
+        let class_version = self.jit_class_version();
         #[cfg(feature = "jit-log")]
         if let Some(reason) = is_recompile {
             crate::codegen::jit_stats::bump(match reason {
@@ -588,7 +590,8 @@ impl Codegen {
             // failure can re-validate and patch instead of recompiling.
             let index = globals.store[iseq_id].get_pc_index(Some(pc));
             globals.store.note_jit_iseq(iseq_id);
-            globals.store[iseq_id].set_loop_jit_info(
+            globals.store.set_loop_jit_info(
+                iseq_id,
                 self_class,
                 index,
                 version_label,
@@ -752,7 +755,7 @@ fn salvage_specialized(globals: &mut Globals, idx: usize, reason: RecompileReaso
                 }
             };
             if let Some(version_label) = salvaged {
-                let version = Globals::class_version();
+                let version = Globals::jit_class_version();
                 CODEGEN.with(|codegen| {
                     let mut codegen = codegen.borrow_mut();
                     // The failing body reads its *own* unit's version word
@@ -1180,7 +1183,7 @@ fn salvage_loop(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr, reason: Recomp
         // with `recompile_specialized`, which runs inside one. Read the
         // version before the mutable borrow — it borrows the same
         // thread-local.
-        let version = Globals::class_version();
+        let version = Globals::jit_class_version();
         CODEGEN.with(|codegen| {
             codegen
                 .borrow_mut()

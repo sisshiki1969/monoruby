@@ -13,6 +13,7 @@ impl JitModule {
     pub(in crate::codegen) fn new() -> Self {
         let mut jit = JitMemory::new();
         let class_version = jit.data_i32(1);
+        let jit_class_version = jit.data_i32(1);
         let bop_redefined_flags = jit.data_i32(0);
         // One bit per `VmBop`, tested inline by the VM handler that assumes
         // that operator (see `VmBop`).
@@ -49,6 +50,7 @@ impl JitModule {
             class_version,
             unit_version_patch_sites: Vec::new(),
             version_imm_sites: std::collections::HashMap::default(),
+            jit_class_version,
             const_version,
             poll_flag,
             entry_raise,

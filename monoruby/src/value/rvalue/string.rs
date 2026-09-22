@@ -2097,7 +2097,12 @@ impl std::ops::Deref for RStringInner {
 /// only the UTF-8 family (#1569).
 impl std::cmp::PartialEq for RStringInner {
     fn eq(&self, other: &Self) -> bool {
-        self.as_bytes() == other.as_bytes() && self.compatible_encoding(other).is_some()
+        // Same bytes, and encodings that can be compared. Equal tags are
+        // the common case by far (every key of a Hash built from one
+        // source string), so answer them here rather than through
+        // `compatible_encoding`'s general negotiation.
+        self.as_bytes() == other.as_bytes()
+            && (self.ty == other.ty || self.compatible_encoding(other).is_some())
     }
 }
 

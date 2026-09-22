@@ -1065,8 +1065,40 @@ fn reserve_arena(size: usize, align: usize) -> *mut u8 {
 #[cfg(test)]
 pub(crate) static TEARDOWN_FREED: AtomicUsize = AtomicUsize::new(0);
 
+/// Whether the calling OS thread is the process's initial thread.
+///
+/// The initial thread's TLS destructors run from `exit(3)`, so its heap
+/// is torn down only because the whole process is ending — and in a
+/// `fork` child, the thread that forked *is* the initial thread. Both are
+/// answered the same way: on Linux the initial thread's tid is the pid,
+/// and macOS asks `pthread_main_np`.
+fn on_process_initial_thread() -> bool {
+    #[cfg(target_os = "linux")]
+    // SAFETY: gettid(2) takes no arguments and cannot fail.
+    unsafe {
+        libc::syscall(libc::SYS_gettid) == libc::getpid() as libc::c_long
+    }
+    #[cfg(target_os = "macos")]
+    // SAFETY: pthread_main_np(3) takes no arguments and cannot fail.
+    unsafe {
+        libc::pthread_main_np() != 0
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    false
+}
+
 impl<T: GCBox> Drop for Allocator<T> {
     fn drop(&mut self) {
+        // A heap that dies with its process has nothing to give back:
+        // the kernel reclaims every page and every `malloc`'d buffer in
+        // one go, whereas sweeping them here first dirties (copy-on-write
+        // faults, in a fork child) and frees each cell one at a time.
+        // knucleotide forks seven workers per iteration and paid ~25 ms
+        // of teardown per child for it. The sweep is for a *thread* that
+        // ends while the process lives on.
+        if on_process_initial_thread() {
+            return;
+        }
         #[cfg(test)]
         let before = malloc_amount();
         let base = self.arena_base.as_ptr() as usize;

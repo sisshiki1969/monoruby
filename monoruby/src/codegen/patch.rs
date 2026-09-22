@@ -43,7 +43,7 @@ impl Codegen {
             return None;
         }
         let self_class = lfp.self_val().class();
-        let class_version = self.class_version();
+        let class_version = self.jit_class_version();
         let jit_entry = self.jit.label();
         // `jit_entry` is bound by `gen_machine_code` (even on the bail path)
         // so it always resolves at `finalize`.
@@ -64,7 +64,7 @@ impl Codegen {
             jit_entry.clone(),
             class_version_label.clone(),
         );
-        globals.store[iseq_id].set_salvage_record(self_class, class_version_label, cache, const_map);
+        globals.store.set_salvage_record(iseq_id, self_class, class_version_label, cache, const_map);
         // Front the compiled `jit_entry` with a self-class guard. The JIT body
         // assumes `self == self_class`, but a single per-method slot is shared
         // by every receiver class of an inherited method — so publishing the
@@ -124,7 +124,7 @@ impl Codegen {
         entry: monoasm::CodePtr,
     ) -> Option<()> {
         let jit_entry = self.jit.label();
-        let class_version = self.class_version();
+        let class_version = self.jit_class_version();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
         let self_class = lfp.self_val().class();
@@ -160,7 +160,8 @@ impl Codegen {
                     globals.store[iseq_id].name()
                 );
             }
-            globals.store[iseq_id].set_salvage_record(
+            globals.store.set_salvage_record(
+                iseq_id,
                 self_class,
                 class_version_label,
                 cache,
