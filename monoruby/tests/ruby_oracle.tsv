@@ -386,6 +386,7 @@
 12cd2297f4d6ac25a476739a253c9292	["RUBZ", "RUBZ", 7, 8, false, true, 7]	class C\n              def succ(s); s.succ; end\n              def po
 12dced64afc93b420fbe2976ff18cf1d	[1, 0, 1, 1, 0, 62499999999999999999999999999999, 1999999999999999999999999999999998, 1000000000000000000000000000000000, 5]	B = 999999999999999999999999999999999\n        def t = [B[0], B[47], B[4
 12e99c84613123a5cb062c5fd0fbc38e	[-42, -42]	__a = [];__a << (a=42; b=-a);__a << (a=42; a; b=-a);__a
+12f4445fdce0953cbd5cbdad7cd45815	[[false, false, false], [2, 1, 2], 2, 2, 2, 2, false, 2, [false, false, 2], [true, true, 1, 1, 1], [false, 2]]	require "set"\n            a = "あ"\n            b = a.dup.force_encod
 12f9391c89c11935d8348e594acea735	[[10, 2, 3]]	class C\n          def f(a, b, c)\n            $res << [a, b, c]\n        
 130bd1a7f21b5653162bef9f08d80536	[9, nil, 3, 0]	__a = [];__a << ("blablabla".index("", 9));__a << ("blablabla".index("", 10));__
 130c3ca6bf8ec4fd7170e0e2e1fcd2af	[Complex, -6, -3, -11, 9, -6, (1/8), 8, -81, (1/512), "1/1", 9, 8]	__a = [];__a << (((-1) ** 0.5).class);__a << (p ~5);__a << (p ~5 + 3);__a << (a 
