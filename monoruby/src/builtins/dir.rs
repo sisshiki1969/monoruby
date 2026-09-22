@@ -933,7 +933,7 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let home = dirs::home_dir().unwrap();
         let v = super::file::path_value(
             super::file::pathbuf_bytes(&home),
-            crate::value::Encoding::Utf8,
+            crate::value::Encoding::UTF8,
         );
         (home, v)
     };

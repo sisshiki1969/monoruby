@@ -951,7 +951,7 @@ fn concatenate_string_inner(
                     &mut enc,
                     &mut cr,
                     piece,
-                    Encoding::Utf8,
+                    Encoding::UTF8,
                     CodeRange::SevenBit,
                 )?;
                 continue;
@@ -981,7 +981,7 @@ fn concatenate_string_inner(
                 v.id()
             );
             enc = Some(match enc {
-                None => Encoding::Utf8,
+                None => Encoding::UTF8,
                 Some(prev) => prev,
             });
             // The appended form is pure ASCII: the fold is the identity
@@ -991,7 +991,7 @@ fn concatenate_string_inner(
     }
     Ok(Value::string_from_inner(RStringInner::from_buf_cr(
         bytes,
-        enc.unwrap_or(Encoding::Utf8),
+        enc.unwrap_or(Encoding::UTF8),
         cr,
     )))
 }

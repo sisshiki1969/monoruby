@@ -2845,8 +2845,10 @@ impl Codegen {
             );
         }
         monoasm_arm64!(&mut self.jit,
-            mov x12, (ty as u64);
+            mov x12, (ty.tag() as u64);
             strb w12, [x(rax), #(crate::rvalue::STRING_TY_OFFSET as u32)];
+            mov x12, (ty.payload() as u64);
+            strb w12, [x(rax), #(crate::rvalue::STRING_TY_PAYLOAD_OFFSET as u32)];
             mov x12, (cr as u64);
             strb w12, [x(rax), #(crate::rvalue::STRING_CR_OFFSET as u32)];
             b cont;

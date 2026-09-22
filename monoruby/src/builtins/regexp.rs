@@ -357,7 +357,7 @@ fn build_regexp_inner(
                 check_regexp_source_valid(&r, option)?;
                 (Some(r.as_bytes().to_vec()), r.encoding())
             }
-            None => (None, crate::value::Encoding::Utf8),
+            None => (None, crate::value::Encoding::UTF8),
         };
         let s = arg0.coerce_to_string(vm, globals)?;
         (s, Some(enc), raw)
@@ -379,7 +379,7 @@ fn build_regexp_inner(
             .filter(|e| {
                 !matches!(
                     e,
-                    crate::value::Encoding::Utf8
+                    crate::value::Encoding::Utf8(_)
                         | crate::value::Encoding::UsAscii
                         | crate::value::Encoding::Ascii8
                 )
@@ -424,7 +424,7 @@ fn build_regexp_inner(
 fn kcode_from_encoding(enc: crate::value::Encoding) -> Option<u32> {
     use crate::value::Encoding;
     match enc {
-        Encoding::Utf8 => Some(RegexpInner::KCODE_UTF8),
+        Encoding::Utf8(_) => Some(RegexpInner::KCODE_UTF8),
         Encoding::EucJp(_) => Some(RegexpInner::KCODE_EUCJP),
         Encoding::Sjis(_) => Some(RegexpInner::KCODE_SJIS),
         _ => None,
@@ -529,12 +529,12 @@ fn regexp_escape(
     } else if let Some(sym) = arg0.try_symbol() {
         (
             sym.to_string().into_bytes(),
-            crate::value::Encoding::Utf8,
+            crate::value::Encoding::UTF8,
         )
     } else {
         (
             arg0.coerce_to_str(vm, globals)?.into_bytes(),
-            crate::value::Encoding::Utf8,
+            crate::value::Encoding::UTF8,
         )
     };
     let escaped = RegexpInner::escape_bytes(&bytes);
@@ -787,7 +787,7 @@ fn union_inner_with_encoding(
     // encoding fallback branch in `resolve_declared_encoding`
     // honours the encoding we computed.
     let (option, kcode) = match enc {
-        Encoding::Utf8 => (RegexpInner::KCODE_UTF8, Some(RegexpInner::KCODE_UTF8)),
+        Encoding::Utf8(_) => (RegexpInner::KCODE_UTF8, Some(RegexpInner::KCODE_UTF8)),
         Encoding::EucJp(_) => (RegexpInner::KCODE_EUCJP, Some(RegexpInner::KCODE_EUCJP)),
         Encoding::Sjis(_) => (RegexpInner::KCODE_SJIS, Some(RegexpInner::KCODE_SJIS)),
         // `FIXEDENCODING`, not `NOENCODING`: the result is pinned to

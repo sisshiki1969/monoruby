@@ -1135,7 +1135,7 @@ pub(crate) fn make_exception_error(
         // Keep the message's own bytes and encoding, as `Exception#initialize`
         // does: `raise "x".b` must not report a UTF-8 message.
         let mut err = MonorubyErr::runtimeerr(message.to_str()?);
-        if message.encoding() != crate::value::Encoding::Utf8 {
+        if message.encoding() != crate::value::Encoding::UTF8 {
             err.raw_message = Some((message.as_bytes().to_vec(), message.encoding()));
         }
         return apply_cause(globals, err, None, cause_kwarg);
@@ -1252,7 +1252,7 @@ fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         // A non-String format (an object with `to_str`) has no encoding
         // of its own; format its conversion as plain UTF-8.
         let fmt = fmt_val.coerce_to_str(vm, globals)?;
-        let inner = RStringInner::from_encoding_scanned(fmt.as_bytes(), Encoding::Utf8);
+        let inner = RStringInner::from_encoding_scanned(fmt.as_bytes(), Encoding::UTF8);
         let ctx = crate::executor::format::negotiate_format(&globals.store, &inner, arguments)?;
         let result = vm.format_by_args(globals, &fmt, arguments, ctx)?;
         Ok(ctx.finish(&result))

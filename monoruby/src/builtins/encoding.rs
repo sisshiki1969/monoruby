@@ -250,10 +250,9 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         // legacy `UTF_8_MAC` spelling is wired as an alias of this
         // single object below (not a distinct encoding).
         "UTF8_MAC",
-        // `CESU-8` is a UTF-8 variant used by some legacy systems
-        // (encodes supplementary chars as surrogate pairs in
-        // UTF-8). We don't transcode it specially; the constant
-        // exists so `Encoding::CESU_8` resolves.
+        // `CESU-8`: UTF-8 with the supplementary planes spelled as
+        // surrogate pairs. It has a byte walk and a codec of its own
+        // (#1562).
         "CESU_8",
     ] {
         let canonical: &'static str = canonical_encoding_name(name);
@@ -656,7 +655,7 @@ pub(super) fn is_utf7(enc: crate::value::Encoding) -> bool {
 fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::Encoding> {
     use crate::value::Encoding as E;
     let label: &[u8] = match enc {
-        E::Utf8 => b"utf-8",
+        E::Utf8(_) => b"utf-8",
         E::Utf16Le => b"utf-16le",
         E::Utf16Be => b"utf-16be",
         E::Iso8859(n) => match n {
@@ -1633,7 +1632,7 @@ fn undefined_cell_message(
     dst_enc: crate::value::Encoding,
 ) -> String {
     let escaped: String = cell.iter().map(|b| format!("\\x{b:02X}")).collect();
-    if dst_enc == crate::value::Encoding::Utf8 {
+    if dst_enc == crate::value::Encoding::UTF8 {
         format!("\"{escaped}\" from {} to UTF-8", src_enc.name())
     } else {
         format!(
@@ -1672,7 +1671,7 @@ fn undefined_byte_message(
     dst_enc: crate::value::Encoding,
 ) -> String {
     let quoted = quote_error_bytes(&[b]);
-    if dst_enc == crate::value::Encoding::Utf8 {
+    if dst_enc == crate::value::Encoding::UTF8 {
         format!("{quoted} from {} to {}", src_enc.name(), dst_enc.name())
     } else {
         format!(
@@ -1934,9 +1933,11 @@ impl TranscodeOpts {
             return s.clone();
         }
         // CRuby: default replacement is "�" for UTF
-        // destinations and "?" otherwise.
+        // destinations and "?" otherwise. `Encoding::UTF8`, not
+        // `Utf8(_)`: CRuby's test is the encoding's *name*, so a
+        // `UTF8-MAC` destination takes the "?" like any other (#1562).
         match dst_enc {
-            crate::value::Encoding::Utf8
+            crate::value::Encoding::UTF8
             | crate::value::Encoding::Utf16Le
             | crate::value::Encoding::Utf16Be
             | crate::value::Encoding::Utf32Le
@@ -2092,6 +2093,69 @@ pub(super) fn transcode_for_env(
     transcode_bytes_with_opts(bytes, src, dst, &TranscodeOpts::default(), store)
 }
 
+/// `src_bytes` as UTF-8, on the way to a destination whose codec is
+/// UTF-8's with a rewrite after it (`UTF8-MAC`, CESU-8).
+///
+/// The pivot conversion is the ordinary pipeline with UTF-8 as its
+/// destination; what this adds is `dst_enc`'s share of the *reporting*.
+/// A source that is already UTF-8 converts by doing nothing, so nothing
+/// would otherwise notice that its bytes are broken — CRuby raises
+/// there, naming the destination the caller asked for. And an
+/// `UndefinedConversionError` out of the pivot is a two-hop failure to
+/// CRuby, which spells both hops.
+fn to_pivot_for(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> Result<String> {
+    let utf8 = transcode_bytes_with_opts(
+        src_bytes,
+        src_enc,
+        crate::value::Encoding::UTF8,
+        opts,
+        store,
+    )
+    .map_err(|e| name_pivot_destination(e, src_enc, dst_enc))?;
+    match String::from_utf8(utf8) {
+        Ok(s) => Ok(s),
+        Err(e) => Err(invalid_byte_sequence(
+            store,
+            src_enc,
+            dst_enc,
+            e.as_bytes(),
+        )),
+    }
+}
+
+/// Re-spell a pivot conversion's error for the destination the caller
+/// actually named.
+///
+/// The inner conversion ran to UTF-8, so an undefined source byte was
+/// reported as `"\xFF" from ASCII-8BIT to UTF-8` — the one-hop form.
+/// With a destination past the pivot the failure is the first of two
+/// hops, and CRuby names them both. Everything else (an invalid byte
+/// sequence, which names only the *source*) already reads correctly.
+fn name_pivot_destination(
+    err: MonorubyErr,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> MonorubyErr {
+    let one_hop = format!(" from {} to UTF-8", src_enc.name());
+    let Some(quoted) = err.message().strip_suffix(&one_hop) else {
+        return err;
+    };
+    let msg = format!(
+        "{quoted} to UTF-8 in conversion from {} to UTF-8 to {}",
+        src_enc.name(),
+        dst_enc.name()
+    );
+    let mut err = err;
+    err.set_msg(msg);
+    err
+}
+
 pub(super) fn transcode_bytes_with_opts(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -2153,6 +2217,67 @@ pub(super) fn transcode_bytes_with_opts(
         }
         // Non-ASCII-compatible encodings fall through to the decode /
         // re-encode pipeline so the decorators run on real characters.
+    }
+    // `UTF8-MAC` holds UTF-8 bytes in Apple's HFS+ decomposed form, so
+    // a conversion to or from it is a normalisation wrapped around the
+    // ordinary pipeline rather than a codec of its own: take the source
+    // out of that form first, put the destination into it last (#1562).
+    // Broken input falls through, so it is the pipeline that reports
+    // it, with the message it already gets right.
+    if src_enc != dst_enc {
+        let mac = crate::value::Encoding::Utf8(crate::value::UTF8_MAC);
+        if src_enc == mac
+            && let Ok(s) = std::str::from_utf8(src_bytes)
+        {
+            let composed = crate::value::mac_to_utf8(s);
+            return transcode_bytes_with_opts(
+                composed.as_bytes(),
+                crate::value::Encoding::UTF8,
+                dst_enc,
+                opts,
+                store,
+            );
+        }
+        if dst_enc == mac {
+            let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
+            return Ok(crate::value::utf8_to_mac(&utf8).into_bytes());
+        }
+        // CESU-8 rides the same wrapper: it is UTF-8 with the
+        // supplementary planes spelled as surrogate pairs, so one side
+        // of the conversion is the rewrite and the other is the
+        // ordinary pipeline (#1562).
+        let cesu = crate::value::Encoding::NamedByte(crate::value::CESU_8);
+        if src_enc == cesu {
+            let scrubbed;
+            let mut bytes = src_bytes;
+            if opts.invalid_replace {
+                // The replacement is the *destination's* — an EUC-JP
+                // destination takes `"?"`, not `U+FFFD` — and it goes
+                // into the pivot as text, so the pipeline converts it
+                // along with everything else.
+                scrubbed = crate::value::scrub_mbc(
+                    src_bytes,
+                    opts.replace_str(dst_enc).as_bytes(),
+                    crate::value::CESU8_MAX_LEN,
+                    crate::value::cesu8_precise_len,
+                );
+                bytes = &scrubbed;
+            }
+            let Some(s) = crate::value::cesu8_to_utf8(bytes) else {
+                return Err(invalid_byte_sequence(store, src_enc, dst_enc, bytes));
+            };
+            return transcode_bytes_with_opts(
+                s.as_bytes(),
+                crate::value::Encoding::UTF8,
+                dst_enc,
+                opts,
+                store,
+            );
+        }
+        if dst_enc == cesu {
+            let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
+            return Ok(crate::value::utf8_to_cesu8(&utf8));
+        }
     }
     // EUC-JP ↔ Shift_JIS needs no pivot: CRuby maps the shared JIS
     // X 0208 plane cell to cell, which reaches the cells its own
@@ -2373,7 +2498,7 @@ pub(super) fn transcode_bytes_with_opts(
                 // byte as an UndefinedConversionError, spelling out the
                 // UTF-8 pivot for non-UTF-8 destinations.
                 let bad = src_bytes.iter().copied().find(|b| *b >= 0x80).unwrap_or(0);
-                let msg = if dst_enc == E::Utf8 {
+                let msg = if dst_enc == E::UTF8 {
                     format!("\"\\x{bad:02X}\" from ASCII-8BIT to UTF-8")
                 } else {
                     format!(
@@ -2722,7 +2847,7 @@ fn handle_xml_option(
             _ if !c.is_ascii()
                 && transcode_bytes_with_opts(
                     c.to_string().as_bytes(),
-                    crate::value::Encoding::Utf8,
+                    crate::value::Encoding::UTF8,
                     dst_enc,
                     &plain,
                     &globals.store,
@@ -2739,7 +2864,7 @@ fn handle_xml_option(
     }
     let encoded = transcode_bytes_with_opts(
         out.as_bytes(),
-        crate::value::Encoding::Utf8,
+        crate::value::Encoding::UTF8,
         dst_enc,
         &plain,
         &globals.store,
@@ -3043,7 +3168,7 @@ fn transcode_with_fallback(
     let decoded_bytes = transcode_bytes_with_opts(
         src_bytes,
         src_enc,
-        crate::value::Encoding::Utf8,
+        crate::value::Encoding::UTF8,
         &decode_opts,
         &globals.store,
     )?;
@@ -3057,7 +3182,7 @@ fn transcode_with_fallback(
         let cs = c.encode_utf8(&mut buf);
         match transcode_bytes_with_opts(
             cs.as_bytes(),
-            crate::value::Encoding::Utf8,
+            crate::value::Encoding::UTF8,
             dst_enc,
             &TranscodeOpts::default(),
             &globals.store,
@@ -3149,7 +3274,7 @@ pub(super) fn str_encoding(
 pub(crate) fn encoding_constant_name(enc: Encoding) -> &'static str {
     match enc {
         Encoding::Ascii8 => "ASCII_8BIT",
-        Encoding::Utf8 => "UTF_8",
+        Encoding::Utf8(i) => crate::value::utf8_const_name(i),
         Encoding::UsAscii => "US_ASCII",
         Encoding::Utf16Le => "UTF_16LE",
         Encoding::Utf16Be => "UTF_16BE",
@@ -3253,7 +3378,7 @@ fn special_encoding_name(globals: &mut Globals, name: &str) -> Option<Encoding> 
         "locale" => locale_encoding_value(globals),
         _ => return None,
     };
-    globals.encoding_of_object(value).or(Some(Encoding::Utf8))
+    globals.encoding_of_object(value).or(Some(Encoding::UTF8))
 }
 
 /// Resolve an encoding operand — an `Encoding` object, a String name, or
@@ -3448,7 +3573,7 @@ fn enc_set_default_external(
 /// neither does. CRuby's `rb_reg_desc` compares a pattern against it
 /// to decide what to escape (#1516).
 pub(crate) fn inspect_result_encoding(globals: &mut Globals) -> Encoding {
-    inspect_escape_encoding(globals).unwrap_or(Encoding::Utf8)
+    inspect_escape_encoding(globals).unwrap_or(Encoding::UTF8)
 }
 
 fn inspect_escape_encoding(globals: &mut Globals) -> Option<Encoding> {
@@ -3462,7 +3587,7 @@ fn inspect_escape_encoding(globals: &mut Globals) -> Option<Encoding> {
         })?;
     let enc = globals.encoding_of_object(resenc)?;
     match enc {
-        Encoding::Utf8 => None,
+        Encoding::Utf8(_) => None,
         e if !e.is_ascii_compatible() => Some(Encoding::UsAscii),
         e => Some(e),
     }
@@ -3699,10 +3824,11 @@ fn converter_get_dst(globals: &Globals, recv: Value) -> crate::value::Encoding {
 /// UTF-32, and `"?"` (US-ASCII) for everything else.
 fn converter_default_replacement(dst: crate::value::Encoding) -> Value {
     match dst {
-        crate::value::Encoding::Utf8 => {
+        // `Encoding::UTF8` only — see `TranscodeOpts::replace_str`.
+        crate::value::Encoding::UTF8 => {
             // U+FFFD as UTF-8 bytes.
             let mut s = crate::value::RStringInner::from_string_scanned("\u{FFFD}".to_string());
-            s.set_encoding(crate::value::Encoding::Utf8);
+            s.set_encoding(crate::value::Encoding::UTF8);
             Value::string_from_inner(s)
         }
         crate::value::Encoding::Utf16Be | crate::value::Encoding::Utf16Le => {
@@ -4296,7 +4422,7 @@ fn pivot_prefix_consumed(
         let (_, _, out, _) = stream_convert(
             &src_bytes[..n],
             src_enc,
-            crate::value::Encoding::Utf8,
+            crate::value::Encoding::UTF8,
             None,
             true,
             opts,
@@ -4449,7 +4575,7 @@ fn stream_convert(
         }
         let (result, pivot_consumed, out, meta) = stream_convert(
             pivot.as_bytes(),
-            E::Utf8,
+            E::UTF8,
             dst_enc,
             max_dst_bytes,
             partial_input,
@@ -4469,7 +4595,7 @@ fn stream_convert(
     }
     if is_utf16_or_32(dst_enc) {
         let (result, consumed, pivot, meta) =
-            stream_convert(src_bytes, src_enc, E::Utf8, None, partial_input, opts);
+            stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts);
         // Whatever decoded before the decode half gave up still has to
         // come out; the encode half itself cannot fail, every scalar
         // having a UTF-16 and a UTF-32 form.
@@ -4608,7 +4734,7 @@ fn stream_convert(
             let head = jp_decode(fx, &src_bytes[..stop], repl.as_deref());
             let (res, pivot_consumed, out, meta) = stream_convert(
                 head.text.as_bytes(),
-                E::Utf8,
+                E::UTF8,
                 dst_enc,
                 max_dst_bytes,
                 true,
@@ -4660,7 +4786,7 @@ fn stream_convert(
         }
         let (result, pivot_consumed, out, meta) = stream_convert(
             d.text.as_bytes(),
-            E::Utf8,
+            E::UTF8,
             dst_enc,
             max_dst_bytes,
             partial_input,
@@ -4693,7 +4819,7 @@ fn stream_convert(
         // Decode uncapped: the cap is felt in destination bytes, and
         // this encoding writes one or two of them per character.
         let (result, consumed, pivot, meta) =
-            stream_convert(src_bytes, src_enc, E::Utf8, None, partial_input, opts);
+            stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts);
         let text = String::from_utf8_lossy(&pivot);
         let mut out: Vec<u8> = Vec::with_capacity(text.len());
         let mut buf = [0u8; 4];
@@ -4792,7 +4918,7 @@ fn stream_convert(
         };
         let (result, pivot_consumed, out, meta) = stream_convert(
             pivot.as_bytes(),
-            E::Utf8,
+            E::UTF8,
             dst_enc,
             max_dst_bytes,
             partial_input,
@@ -4813,7 +4939,7 @@ fn stream_convert(
         // table: one destination byte per character, so a destination
         // cap falls on a character boundary by construction.
         let (result, consumed, pivot, meta) =
-            stream_convert(src_bytes, src_enc, E::Utf8, None, partial_input, opts);
+            stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts);
         // Whatever decoded before the decode half gave up still has to
         // come out: `#primitive_convert` appends it to the destination
         // and *then* reports the error.
@@ -5581,6 +5707,47 @@ fn quote_error_bytes(bytes: &[u8]) -> String {
 ///
 /// `None` when the walk finds nothing — the caller then falls back to
 /// naming no bytes, rather than inventing some.
+/// [`first_bad_sequence`] for an encoding monoruby walks itself.
+///
+/// The three fields are the decoder's own account of where it stopped:
+/// the ill-formed run, the byte it had already read past it, and
+/// whether the input simply ran out. A run that is a well-formed
+/// *prefix* is one the decoder only rejected on the byte after it, so
+/// that byte is handed back to be read again — while a lead byte that
+/// starts nothing at all is rejected on the spot, with nothing read
+/// past it (CRuby's `readagain_bytes` is `nil` for `"\xF0"` on CESU-8
+/// and `"\xB0"` for `"\xED\xB0"`).
+fn first_bad_via_mbc(
+    bytes: &[u8],
+    max_len: usize,
+    precise: fn(&[u8], usize) -> crate::value::PreciseLen,
+) -> Option<(Vec<u8>, Vec<u8>, bool)> {
+    use crate::value::{MbcPiece, PreciseLen};
+    let mut found = None;
+    let _ = crate::value::walk_mbc(bytes, max_len, precise, |piece| {
+        if found.is_none()
+            && let MbcPiece::Bad(bad) = piece
+        {
+            // The walk hands out subslices of `bytes`, so the offset
+            // comes off the pointer — searching for the run's bytes
+            // would find an earlier, well-formed copy of them.
+            let at = bad.as_ptr() as usize - bytes.as_ptr() as usize;
+            found = Some((at, bad.to_vec()));
+        }
+        Ok(())
+    });
+    let (at, err) = found?;
+    let end = at + err.len();
+    let incomplete = end == bytes.len() && precise(bytes, at) == PreciseLen::NeedMore;
+    let again = if !incomplete && end < bytes.len() && precise(&bytes[..end], at) == PreciseLen::NeedMore
+    {
+        vec![bytes[end]]
+    } else {
+        vec![]
+    };
+    Some((err, again, incomplete))
+}
+
 fn first_bad_sequence(enc: crate::value::Encoding, bytes: &[u8]) -> Option<(Vec<u8>, Vec<u8>, bool)> {
     use crate::value::Encoding as E;
     match enc {
@@ -5588,6 +5755,13 @@ fn first_bad_sequence(enc: crate::value::Encoding, bytes: &[u8]) -> Option<(Vec<
             .iter()
             .position(|b| *b >= 0x80)
             .map(|i| (vec![bytes[i]], vec![], false)),
+        // The walked encodings name their own ill-formed run; CESU-8
+        // is the one of them that reaches a conversion (#1562).
+        E::NamedByte(crate::value::CESU_8) => first_bad_via_mbc(
+            bytes,
+            crate::value::CESU8_MAX_LEN,
+            crate::value::cesu8_precise_len,
+        ),
         E::Utf16Le | E::Utf16Be => first_bad_utf16(bytes, enc == E::Utf16Be),
         E::Utf32Le | E::Utf32Be => first_bad_utf32(bytes, enc == E::Utf32Be),
         // The table encodings are total over the byte range, and BINARY
@@ -5888,9 +6062,14 @@ fn invalid_byte_sequence(
     let (err, again, incomplete) = first_bad_sequence(src_enc, src_bytes)
         .unwrap_or_else(|| (src_bytes.to_vec(), vec![], false));
     let msg = invalid_byte_sequence_message(src_enc, &err, &again, incomplete);
+    // The failing hop is source → pivot, so its destination is the
+    // pivot unless the source already sits at it — `"\x80"` on EUC-JP
+    // reports UTF-8 as its destination however far the conversion was
+    // headed, where a broken UTF-8 source reports the real one.
+    let (stage_src, stage_dst) = error_stage_names(src_enc, dst_enc, true);
     let detail = Value::array_from_vec(vec![
-        Value::string_from_str(&src_enc.name()),
-        Value::string_from_str(&dst_enc.name()),
+        Value::string_from_str(&stage_src),
+        Value::string_from_str(&stage_dst),
         binary_string(&err),
         if again.is_empty() {
             Value::nil()
@@ -6753,7 +6932,7 @@ fn build_convpath(
     let mut elems: Vec<Value> = vec![];
     // EUC-JP ↔ Shift_JIS is one step: CRuby has a converter that maps
     // the shared JIS X 0208 plane directly (#1460).
-    if src == E::Utf8 || dst == E::Utf8 || src == dst || jis_direct_from_euc(src, dst).is_some() {
+    if src == E::UTF8 || dst == E::UTF8 || src == dst || jis_direct_from_euc(src, dst).is_some() {
         elems.push(Value::array2(
             encoding_value(globals, src),
             encoding_value(globals, dst),
@@ -6761,10 +6940,10 @@ fn build_convpath(
     } else {
         elems.push(Value::array2(
             encoding_value(globals, src),
-            encoding_value(globals, E::Utf8),
+            encoding_value(globals, E::UTF8),
         ));
         elems.push(Value::array2(
-            encoding_value(globals, E::Utf8),
+            encoding_value(globals, E::UTF8),
             encoding_value(globals, dst),
         ));
     }
@@ -7039,7 +7218,12 @@ fn parse_enc_err_pair(msg: &str) -> Option<(String, String)> {
     if let Some(rest) = msg.split_once(" from ").map(|(_, b)| b)
         && let Some((src, rest)) = rest.split_once(" to ")
     {
-        return Some((src.trim().to_string(), rest.trim().to_string()));
+        // The pivot form names three encodings — `from A to UTF-8 to
+        // D` — and the hop that failed is the first one, which is
+        // what CRuby's accessors answer. Taking the whole remainder
+        // made the destination read "UTF-8 to D".
+        let dst = rest.split(" to ").next().unwrap_or(rest);
+        return Some((src.trim().to_string(), dst.trim().to_string()));
     }
     if let Some(open) = msg.find('(')
         && let Some(close) = msg.find(')')
@@ -7503,9 +7687,8 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         "EUC_JIS_2004" | "EUC_JISX0213" => Some("EUC_JIS_2004"),
         "STATELESS_ISO_2022_JP_KDDI" => Some("STATELESS_ISO_2022_JP_KDDI"),
         // `UTF8-MAC` is CRuby's identifier for HFS+ NFD-normalised
-        // UTF-8 (used on macOS filesystems); we don't actually do
-        // the NFD trick but the constant has to exist for spec
-        // setup like `Encoding::UTF8_MAC` to resolve.
+        // UTF-8 (used on macOS filesystems); a conversion to or from
+        // it applies that normalisation (#1562).
         "UTF8_MAC" | "UTF_8_MAC" | "UTF_8_HFS" => Some("UTF8_MAC"),
         "CESU_8" | "CESU8" => Some("CESU_8"),
 
@@ -8023,7 +8206,7 @@ fn encoded_operand(globals: &Globals, v: Value) -> Option<EncodedOperand> {
                 if s.is_ascii() {
                     Encoding::UsAscii
                 } else {
-                    Encoding::Utf8
+                    Encoding::UTF8
                 }
             }
             crate::id_table::IdentName::Bytes(_) => Encoding::Ascii8,
@@ -8390,16 +8573,18 @@ mod tests {
         // are *registered* is #1555.
         crate::tests::run_test_once(
             r##"
-            # The `UTF8-MAC` names and `CESU-8` still disagree: those
-            # codecs really differ from UTF-8 and monoruby silently
-            # produces plain UTF-8 for them, so naming them would
-            # assert a normalisation that did not happen (#1562).
+            # The carrier-emoji encodings are the ones left out: their
+            # conversion is a vendor table monoruby does not carry, so
+            # naming them would silently hand back plain UTF-8 or
+            # Shift_JIS (#1562).
             names = %w[ISO-2022-JP ISO2022-JP ISO-2022-JP-2 ISO-2022-JP-KDDI
                        ISO-2022-JP-2004 CP50220 CP50221 UTF-7
                        UTF-8 Big5-HKSCS Shift_JIS Windows-31J MacJapanese
                        EUC-JP eucJP eucJP-ms euc-jp-ms CP51932
                        stateless-ISO-2022-JP stateless-ISO-2022-JP-KDDI
-                       EUC-JIS-2004 EUC-JISX0213 NOPE]
+                       EUC-JIS-2004 EUC-JISX0213
+                       UTF8-MAC UTF8_MAC UTF-8-MAC UTF-8-HFS
+                       CESU-8 CESU8 NOPE]
             names.map { |n|
               found = (begin; Encoding.find(n).name; rescue ArgumentError; nil; end)
               forced = (begin; "abc".b.force_encoding(n).encoding.name; rescue ArgumentError; nil; end)
@@ -10350,10 +10535,7 @@ mod tests {
                          CP864 CP865 CP866 CP869 Big5-HKSCS:2008 UTF-8-MAC UTF-8-HFS]
               [
                 names.map { |n| [n, Encoding.find(n).name] },
-                # `UTF8-MAC` is left out here: it is a UTF-8 variant with
-                # no `Encoding` of its own, so `force_encoding` answers
-                # `UTF-8` — a separate gap from the names.
-                (names - %w[UTF-8-MAC UTF-8-HFS]).map { |n| "ab".dup.force_encoding(n).encoding.name },
+                names.map { |n| "ab".dup.force_encoding(n).encoding.name },
                 [Encoding::CP850.name, Encoding::IBM850.name,
                  Encoding::CP850.equal?(Encoding::IBM850),
                  Encoding::CP437.equal?(Encoding::IBM437)],
@@ -11441,6 +11623,147 @@ mod tests {
               r << [ec.primitive_convert(s, d, nil, 100), s.dup, d.dup]
             end
             r
+            "##,
+        );
+    }
+
+    #[test]
+    fn utf8_mac_converts_rather_than_renames() {
+        // `UTF8-MAC` used to be an alias of UTF-8, so a conversion
+        // into it handed back the composed bytes it was given. It is
+        // now Apple's HFS+ form: canonically decomposed, minus the
+        // codepoints the table keeps (#1562).
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            r << "が".encode("UTF8-MAC").bytes
+            r << "が".encode("UTF8-MAC").encoding.name
+            r << "が".dup.force_encoding("UTF8-MAC").encode("UTF-8").bytes
+            # The singletons the table keeps composed, where NFC/NFD
+            # would move them.
+            r << ["Å", "Ω", "豈"].map { |c| c.encode("UTF8-MAC").bytes }
+            # Two marks on one base come back in canonical order.
+            r << "ṩ".encode("UTF8-MAC").codepoints
+            # Through a third encoding: the pivot is UTF-8 both ways.
+            r << "が".encode("UTF8-MAC").encode("EUC-JP").bytes
+            r << "が".encode("EUC-JP").encode("UTF8-MAC").bytes
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn utf8_mac_is_its_own_encoding_not_an_alias_of_utf8() {
+        // Its bytes are UTF-8's, so every read path treats it alike —
+        // but CRuby calls the two incompatible encodings, and mixing
+        // them raises wherever it would for any other pair (#1562).
+        crate::tests::run_test_once(
+            r##"
+            m = "abcé".dup.force_encoding("UTF8-MAC")
+            u = "é"
+            r = [m.length, m.chars.size, m.valid_encoding?, m.ascii_only?,
+                 m.upcase, m.upcase.encoding.name, m.succ, m[3].encoding.name,
+                 m.dup.concat(0x1E69).bytes, Marshal.dump(m).bytes,
+                 Marshal.load(Marshal.dump(m)).encoding.name]
+            # `sub` / `gsub` with a replacement of the other variant
+            # is left out: their `&str` path settles the encoding per
+            # piece and does not yet tell the two apart (#1562).
+            [lambda { m =~ /#{u}/ }, lambda { m.match(/#{u}/) },
+             lambda { m.match?(/#{u}/) }, lambda { m.split(/#{u}/) },
+             lambda { m.sub(u, "z") }, lambda { m.gsub(u, "z") },
+             lambda { m.end_with?(u) }, lambda { m.index(u) },
+             lambda { m + u }, lambda { m.unicode_normalize(:nfc) },
+             lambda { [m, u].join }, lambda { m.center(8, u) },
+             # ...while an ASCII-only argument stays compatible.
+             lambda { m.end_with?("cé".dup.force_encoding("UTF8-MAC")) },
+             lambda { m.sub("a", "z") }].each do |f|
+              r << (begin; f.call; rescue => e; e.class.to_s; end)
+            end
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_conversion_past_the_pivot_names_the_destination_it_was_given() {
+        // `UTF8-MAC` and CESU-8 convert through UTF-8, so a source
+        // that cannot reach the pivot fails on the first of two hops —
+        // which CRuby spells out, naming the destination the caller
+        // asked for. A source that *is* UTF-8 reaches the pivot by
+        // doing nothing, so only this notices that its bytes are
+        // broken (#1562).
+        //
+        // `#destination_encoding_name` is the failing hop's, which is
+        // the pivot: reading the whole tail of the message answered
+        // "UTF-8 to UTF8-MAC" — a pre-existing misparse, wrong the
+        // same way for `"\xC3\xA9".b.encode("UTF-16BE")`.
+        crate::tests::run_test_once(
+            r##"
+            [["\xff".b, "ASCII-8BIT"], ["\xff".dup.force_encoding("UTF-8"), "UTF-8"],
+             ["\x80\x40".dup.force_encoding("EUC-JP"), "EUC-JP"]].map do |s, n|
+              ["UTF8-MAC", "CESU-8", "UTF-8", "UTF-16BE"].map do |d|
+                begin
+                  [n, d, s.encode(d).bytes]
+                rescue => e
+                  [n, d, e.class.to_s, e.message,
+                   e.destination_encoding_name, e.source_encoding_name]
+                end
+              end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn cesu8_spells_the_astral_planes_as_surrogate_pairs() {
+        // UTF-8's own four-byte sequence is invalid here and a pair of
+        // three-byte surrogate halves is one character, so CESU-8 needs
+        // a byte walk and a codec of its own rather than UTF-8's
+        // (#1562).
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            r << "\u{1F600}".encode("CESU-8").bytes
+            r << ["\u{1F600}".encode("CESU-8").length,
+                  "\u{1F600}".encode("CESU-8").bytesize,
+                  "\u{1F600}".encode("CESU-8").encoding.name]
+            r << "\u{1F600}".encode("CESU-8").encode("UTF-8").bytes
+            # Below U+10000 the bytes are UTF-8's, unchanged.
+            r << "abcéあ".encode("CESU-8").bytes
+            # Through a third encoding.
+            r << "あ".encode("CESU-8").encode("EUC-JP").bytes
+            r << "あ".encode("EUC-JP").encode("CESU-8").bytes
+            r << (begin; "\u{1F600}".encode("CESU-8").encode("EUC-JP"); rescue => e; e.class.to_s; end)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn cesu8_reports_its_own_ill_formed_runs() {
+        // The run a message quotes is the well-formed prefix, and the
+        // byte after it is handed back to be read again — except when
+        // the lead byte started nothing at all (#1562).
+        crate::tests::run_test_once(
+            r##"
+            [[0x41,0xF0,0x9F,0x98,0x80,0x42],
+             [0x41,0xED,0xA0,0xBD,0x42],
+             [0x41,0xED,0xA0,0xBD],
+             [0x41,0xED,0xA0],
+             [0x41,0xED,0xB0,0x80,0x42],
+             [0x41,0x80,0x42],
+             [0x41,0xE3,0x81],
+             [0x41,0xE3,0x81,0x42],
+             [0x41,0xC2],
+             [0x41,0xED,0xA0,0xBD,0xED,0x9F,0xBF,0x42]].map do |b|
+              s = b.pack("C*").dup.force_encoding("CESU-8")
+              begin
+                [s.valid_encoding?, s.scrub("?"), s.encode("UTF-8").bytes]
+              rescue Encoding::InvalidByteSequenceError => e
+                [s.valid_encoding?, s.scrub("?"), e.message,
+                 e.error_bytes.bytes, e.readagain_bytes&.bytes, e.incomplete_input?]
+              end
+            end
             "##,
         );
     }

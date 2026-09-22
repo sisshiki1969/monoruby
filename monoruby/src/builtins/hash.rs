@@ -2524,7 +2524,7 @@ pub(crate) fn env_generation() -> u64 {
 fn env_locale_encoding() -> Encoding {
     static ENC: std::sync::OnceLock<Encoding> = std::sync::OnceLock::new();
     *ENC.get_or_init(|| {
-        Encoding::try_from_str(super::encoding::locale_charmap_str()).unwrap_or(Encoding::Utf8)
+        Encoding::try_from_str(super::encoding::locale_charmap_str()).unwrap_or(Encoding::UTF8)
     })
 }
 

@@ -74,6 +74,42 @@ fn encodings_and_code_ranges() {
     );
 }
 
+/// The JIT writes a fresh cell's encoding as two bytes — the
+/// discriminant and the variant index — and the inline `String#<<`
+/// reads both before it calls two encodings equal.
+///
+/// Writing only the discriminant left a `UTF8-MAC` literal reading as
+/// UTF-8 under whatever index the allocator's cell happened to hold,
+/// and reading only the discriminant folded a UTF-8 piece into a
+/// `UTF8-MAC` receiver that CRuby refuses (#1562).
+#[test]
+fn a_literal_keeps_the_encoding_it_was_built_with() {
+    run_test(
+        r##"
+        res = nil
+        i = 0
+        while i < 3000
+          a = "abc".dup.force_encoding("UTF8-MAC")
+          a << "d"
+          a << 0x65
+          b = "abc".dup.force_encoding("EUC-JP")
+          c = "".dup.force_encoding("UTF8-MAC")
+          c << "z"
+          mixed = (begin
+                     d = "abc\xc3\xa9".dup.force_encoding("UTF8-MAC")
+                     d << "é"
+                     d.encoding.to_s
+                   rescue => e
+                     e.class.to_s
+                   end)
+          res = [a, a.encoding.to_s, b.encoding.to_s, c, c.encoding.to_s, mixed]
+          i += 1
+        end
+        res
+        "##,
+    );
+}
+
 /// The code range is a cache: asking for it before and after a
 /// mutation has to give the same answers either way round.
 #[test]

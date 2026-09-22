@@ -67,7 +67,7 @@ pub(crate) fn symbol_string_inner(sym: IdentId) -> RStringInner {
             let enc = if s.is_ascii() {
                 Encoding::UsAscii
             } else {
-                Encoding::Utf8
+                Encoding::UTF8
             };
             (s.as_bytes(), enc)
         }
@@ -100,7 +100,7 @@ fn sym_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             let enc = if s.is_ascii() {
                 Encoding::UsAscii
             } else {
-                Encoding::Utf8
+                Encoding::UTF8
             };
             (s.as_bytes(), enc)
         }

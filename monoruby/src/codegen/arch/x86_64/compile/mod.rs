@@ -1741,7 +1741,8 @@ impl Codegen {
             }
         }
         monoasm! { &mut self.jit,
-            movb [rax + (crate::rvalue::STRING_TY_OFFSET)], (ty as u64);
+            movb [rax + (crate::rvalue::STRING_TY_OFFSET)], (ty.tag() as u64);
+            movb [rax + (crate::rvalue::STRING_TY_PAYLOAD_OFFSET)], (ty.payload() as u64);
             movb [rax + (crate::rvalue::STRING_CR_OFFSET)], (cr as u64);
             jmp  cont;
         slow:

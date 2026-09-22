@@ -1610,9 +1610,9 @@ impl<'a> BytecodeGen<'a> {
     pub(crate) fn source_encoding(&self) -> crate::value::Encoding {
         match self.sourceinfo.source_encoding.as_deref() {
             Some(name) => {
-                crate::value::Encoding::try_from_str(name).unwrap_or(crate::value::Encoding::Utf8)
+                crate::value::Encoding::try_from_str(name).unwrap_or(crate::value::Encoding::UTF8)
             }
-            None => crate::value::Encoding::Utf8,
+            None => crate::value::Encoding::UTF8,
         }
     }
 
@@ -1720,7 +1720,7 @@ impl<'a> BytecodeGen<'a> {
     /// doesn't recognise the alias (shouldn't happen for these two).
     fn emit_encoded_string(&mut self, dst: BcReg, b: Vec<u8>, enc_name: &'static str, loc: Loc) {
         let enc =
-            crate::value::Encoding::try_from_str(enc_name).unwrap_or(crate::value::Encoding::Utf8);
+            crate::value::Encoding::try_from_str(enc_name).unwrap_or(crate::value::Encoding::UTF8);
         if self.frozen_string_literal() {
             self.emit_frozen_interned(dst, &b, enc, loc);
             return;

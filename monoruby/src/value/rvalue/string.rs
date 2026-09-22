@@ -347,7 +347,7 @@ impl<'a> Iterator for CharByteIter<'a> {
                 }
             }
             Encoding::Utf32Le | Encoding::Utf32Be => 4,
-            Encoding::Utf8 => {
+            Encoding::Utf8(_) => {
                 let b = self.bytes[self.pos];
                 if b < 0x80 {
                     1
@@ -407,8 +407,14 @@ pub enum CodeRange {
 pub enum Encoding {
     /// Binary / ASCII-8BIT.
     Ascii8,
-    /// UTF-8.
-    Utf8,
+    /// UTF-8, and the encodings whose bytes are UTF-8 but whose
+    /// *content* is normalised differently — currently `UTF8-MAC`,
+    /// Apple's HFS+ decomposed form.
+    ///
+    /// The payload indexes [`UTF8_VARIANTS`]. Storage, iteration and
+    /// validity are UTF-8's for every variant; only the name and the
+    /// normalisation a conversion applies differ (#1562).
+    Utf8(u8),
     /// US-ASCII (a 7-bit subset of UTF-8 for storage purposes).
     UsAscii,
     /// UTF-16 little-endian.
@@ -472,6 +478,286 @@ pub enum Encoding {
 /// `(display name, `Encoding::<CONST>` suffix)` for the [`Encoding::EucJp`]
 /// family. Index 0 is canonical EUC-JP; the rest ride its character walk
 /// and differ only in the name they report.
+/// `(display name, `Encoding::<CONST>` suffix)` for the
+/// [`Encoding::Utf8`] family. Index 0 is canonical UTF-8; the rest hold
+/// the same bytes under a different normalisation, so they share every
+/// UTF-8 path and differ only in name and in what a conversion does.
+pub(crate) const UTF8_VARIANTS: &[(&str, &str)] = &[
+    ("UTF-8", "UTF_8"),
+    // Apple's HFS+ form: canonically decomposed, minus the codepoints
+    // it leaves alone (see `UTF8_MAC_NO_DECOMPOSE`).
+    ("UTF8-MAC", "UTF8_MAC"),
+];
+
+/// Index of `UTF8-MAC` in [`UTF8_VARIANTS`].
+pub(crate) const UTF8_MAC: u8 = utf8_variant_index("UTF8_MAC");
+
+/// Look up a [`UTF8_VARIANTS`] index by its constant suffix.
+pub(crate) const fn utf8_variant_index(konst: &str) -> u8 {
+    let mut i = 0;
+    while i < UTF8_VARIANTS.len() {
+        if const_str_eq(UTF8_VARIANTS[i].1.as_bytes(), konst.as_bytes()) {
+            return i as u8;
+        }
+        i += 1;
+    }
+    panic!("UTF8_VARIANTS has no such constant suffix")
+}
+
+/// The `Encoding::<CONST>` suffix for an [`Encoding::Utf8`] payload.
+pub(crate) fn utf8_const_name(index: u8) -> &'static str {
+    UTF8_VARIANTS[index as usize].1
+}
+
+/// The codepoints `UTF8-MAC` leaves alone where NFD would decompose
+/// them.
+///
+/// Apple's HFS+ form is canonical decomposition with a fixed set of
+/// exceptions — the composition exclusions, the singleton mappings
+/// (`2126` OHM, `212A` KELVIN, `212B` ANGSTROM, `2329` / `232A`), and
+/// the CJK compatibility ideographs. Enumerating CRuby over all
+/// 0x110000 codepoints says the two agree exactly otherwise: nothing
+/// decomposes differently, and nothing decomposes here that NFD leaves
+/// alone. So the whole of the difference is these 1128 codepoints,
+/// derived from CRuby rather than transcribed (#1562).
+///
+/// Sorted, so a lookup is a binary search.
+const UTF8_MAC_NO_DECOMPOSE: &[(u32, u32)] = &[
+    (0x0390, 0x0390),
+    (0x03B0, 0x03B0),
+    (0x1B06, 0x1B06),
+    (0x1B08, 0x1B08),
+    (0x1B0A, 0x1B0A),
+    (0x1B0C, 0x1B0C),
+    (0x1B0E, 0x1B0E),
+    (0x1B12, 0x1B12),
+    (0x1B3B, 0x1B3B),
+    (0x1B3D, 0x1B3D),
+    (0x1B40, 0x1B41),
+    (0x1B43, 0x1B43),
+    (0x1F71, 0x1F71),
+    (0x1F73, 0x1F73),
+    (0x1F75, 0x1F75),
+    (0x1F77, 0x1F77),
+    (0x1F79, 0x1F79),
+    (0x1F7B, 0x1F7B),
+    (0x1F7D, 0x1F7D),
+    (0x1FBB, 0x1FBB),
+    (0x1FC9, 0x1FC9),
+    (0x1FCB, 0x1FCB),
+    (0x1FDB, 0x1FDB),
+    (0x1FEB, 0x1FEB),
+    (0x1FEE, 0x1FEE),
+    (0x1FF9, 0x1FF9),
+    (0x1FFB, 0x1FFB),
+    (0x2000, 0x2001),
+    (0x2126, 0x2126),
+    (0x212A, 0x212B),
+    (0x219A, 0x219B),
+    (0x21AE, 0x21AE),
+    (0x21CD, 0x21CF),
+    (0x2204, 0x2204),
+    (0x2209, 0x2209),
+    (0x220C, 0x220C),
+    (0x2224, 0x2224),
+    (0x2226, 0x2226),
+    (0x2241, 0x2241),
+    (0x2244, 0x2244),
+    (0x2247, 0x2247),
+    (0x2249, 0x2249),
+    (0x2260, 0x2260),
+    (0x2262, 0x2262),
+    (0x226D, 0x2271),
+    (0x2274, 0x2275),
+    (0x2278, 0x2279),
+    (0x2280, 0x2281),
+    (0x2284, 0x2285),
+    (0x2288, 0x2289),
+    (0x22AC, 0x22AF),
+    (0x22E0, 0x22E3),
+    (0x22EA, 0x22ED),
+    (0x2329, 0x232A),
+    (0x2ADC, 0x2ADC),
+    (0xF900, 0xFA0D),
+    (0xFA10, 0xFA10),
+    (0xFA12, 0xFA12),
+    (0xFA15, 0xFA1E),
+    (0xFA20, 0xFA20),
+    (0xFA22, 0xFA22),
+    (0xFA25, 0xFA26),
+    (0xFA2A, 0xFA6D),
+    (0xFA70, 0xFAD9),
+    (0x105C9, 0x105C9),
+    (0x105E4, 0x105E4),
+    (0x1109A, 0x1109A),
+    (0x1109C, 0x1109C),
+    (0x110AB, 0x110AB),
+    (0x1112E, 0x1112F),
+    (0x1134B, 0x1134C),
+    (0x11383, 0x11383),
+    (0x11385, 0x11385),
+    (0x1138E, 0x1138E),
+    (0x11391, 0x11391),
+    (0x113C5, 0x113C5),
+    (0x113C7, 0x113C8),
+    (0x114BB, 0x114BC),
+    (0x114BE, 0x114BE),
+    (0x115BA, 0x115BB),
+    (0x11938, 0x11938),
+    (0x16121, 0x16128),
+    (0x16D68, 0x16D6A),
+    (0x1D15E, 0x1D164),
+    (0x1D1BB, 0x1D1C0),
+    (0x2F800, 0x2FA1D),
+];
+
+/// Whether `c` is one of the codepoints [`UTF8_MAC_NO_DECOMPOSE`] names.
+fn utf8_mac_keeps_composed(c: char) -> bool {
+    let cp = c as u32;
+    UTF8_MAC_NO_DECOMPOSE
+        .binary_search_by(|&(lo, hi)| {
+            if cp < lo {
+                std::cmp::Ordering::Greater
+            } else if cp > hi {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
+/// Put a decomposed sequence into canonical order: within each run of
+/// combining marks, sort by canonical combining class, stably.
+///
+/// UAX #15's canonical ordering algorithm. `unicode-normalization` does
+/// this inside `nfd()`, which is no use here because the decomposition
+/// has to skip [`UTF8_MAC_NO_DECOMPOSE`] first.
+fn canonical_order(chars: &mut [char]) {
+    use unicode_normalization::char::canonical_combining_class as ccc;
+    let mut i = 0;
+    while i < chars.len() {
+        if ccc(chars[i]) == 0 {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && ccc(chars[i]) != 0 {
+            i += 1;
+        }
+        chars[start..i].sort_by_key(|&c| ccc(c));
+    }
+}
+
+/// `UTF-8` -> `UTF8-MAC`: canonical decomposition, skipping the
+/// codepoints Apple's form keeps composed.
+pub(crate) fn utf8_to_mac(s: &str) -> String {
+    use unicode_normalization::char::decompose_canonical;
+    let mut out: Vec<char> = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        if utf8_mac_keeps_composed(c) {
+            out.push(c);
+        } else {
+            decompose_canonical(c, |d| out.push(d));
+        }
+    }
+    canonical_order(&mut out);
+    out.into_iter().collect()
+}
+
+/// `UTF8-MAC` -> `UTF-8`: the same restricted decomposition, then
+/// canonical composition.
+///
+/// Not `nfc()`: that would decompose `212B` ANGSTROM to `0041 030A` and
+/// compose that to `00C5`, where CRuby hands back the `212B` it was
+/// given. Composing *after* the restricted decomposition is what keeps
+/// the two apart.
+pub(crate) fn mac_to_utf8(s: &str) -> String {
+    use unicode_normalization::char::{canonical_combining_class as ccc, compose};
+    let decomposed: Vec<char> = utf8_to_mac(s).chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(decomposed.len());
+    // UAX #15's canonical composition: each character composes onto the
+    // last starter unless something blocks it, and a character is
+    // blocked when the mark before it has a class at least its own.
+    let mut starter: Option<usize> = None;
+    let mut last_class: Option<u8> = None;
+    for c in decomposed {
+        let c_class = ccc(c);
+        if let Some(si) = starter
+            && last_class.is_none_or(|prev| prev < c_class)
+            && let Some(composed) = compose(out[si], c)
+        {
+            out[si] = composed;
+            continue;
+        }
+        if c_class == 0 {
+            starter = Some(out.len());
+            last_class = None;
+        } else {
+            last_class = Some(c_class);
+        }
+        out.push(c);
+    }
+    out.into_iter().collect()
+}
+
+
+/// CESU-8's bytes for `s`.
+///
+/// Below `U+10000` the bytes are UTF-8's; above it the character is its
+/// UTF-16 surrogate pair, and each half is written as if it were an
+/// ordinary three-byte character. So a conversion into CESU-8 is UTF-8
+/// plus this rewrite, exactly as one into `UTF8-MAC` is UTF-8 plus a
+/// normalisation (#1562).
+pub(crate) fn utf8_to_cesu8(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    let mut buf = [0u8; 4];
+    for c in s.chars() {
+        let cp = c as u32;
+        if cp < 0x10000 {
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        } else {
+            let c = cp - 0x10000;
+            for half in [0xd800 + (c >> 10), 0xdc00 + (c & 0x3ff)] {
+                out.push(0xe0 | (half >> 12) as u8);
+                out.push(0x80 | ((half >> 6) & 0x3f) as u8);
+                out.push(0x80 | (half & 0x3f) as u8);
+            }
+        }
+    }
+    out
+}
+
+/// The UTF-8 bytes of the CESU-8 `bytes`, or `None` if they are not
+/// well-formed CESU-8 (the caller reports the offending sequence).
+pub(crate) fn cesu8_to_utf8(bytes: &[u8]) -> Option<String> {
+    let mut out = String::with_capacity(bytes.len());
+    let mut pos = 0;
+    while pos < bytes.len() {
+        let PreciseLen::Char(n) = cesu8_precise_len(bytes, pos) else {
+            return None;
+        };
+        if n == 6 {
+            let half = |i: usize| -> u32 {
+                (((bytes[i] & 0x0f) as u32) << 12)
+                    | (((bytes[i + 1] & 0x3f) as u32) << 6)
+                    | ((bytes[i + 2] & 0x3f) as u32)
+            };
+            let cp = 0x10000 + ((half(pos) - 0xd800) << 10) + (half(pos + 3) - 0xdc00);
+            // The walk proved both halves are surrogates in range, so
+            // the pair names a character of the supplementary planes.
+            out.push(char::from_u32(cp)?);
+        } else {
+            // Below `U+10000` and not a surrogate: the same bytes are
+            // this character's UTF-8, so they go out as they came in.
+            out.push_str(std::str::from_utf8(&bytes[pos..pos + n]).ok()?);
+        }
+        pos += n;
+    }
+    Some(out)
+}
+
+
 pub(crate) const EUC_JP_VARIANTS: &[(&str, &str)] = &[
     ("EUC-JP", "EUC_JP"),
     ("eucJP-ms", "EUCJP_MS"),
@@ -608,6 +894,11 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
     ("macThai", "MacThai"),
     ("macTurkish", "MacTurkish"),
     ("macUkraine", "MacUkraine"),
+    // Not a national byte encoding at all: CESU-8 is here because what
+    // it needs from this table is a name of its own and a byte walk,
+    // and those are what the table carries. Its codec is a wrapper
+    // around UTF-8's, in `transcode_bytes_with_opts` (#1562).
+    ("CESU-8", "CESU_8"),
 ];
 
 /// Index of `Emacs-Mule` in [`NAMED_BYTE_ENCODINGS`]. It is the one
@@ -619,6 +910,10 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
 /// anywhere above it in the table silently re-pointed it at whatever
 /// moved into the slot (#1555).
 pub(crate) const EMACS_MULE: u8 = named_byte_index_const("Emacs_Mule");
+
+/// Index of `CESU-8` in [`NAMED_BYTE_ENCODINGS`], found the same way
+/// and for the same reason.
+pub(crate) const CESU_8: u8 = named_byte_index_const("CESU_8");
 
 /// [`named_byte_index`] for a `const` context. Panics — at compile
 /// time — on a constant suffix the table does not carry.
@@ -652,6 +947,75 @@ pub(crate) enum PreciseLen {
 
 /// The widest an Emacs-Mule character gets (CRuby's `mbmaxlen`).
 const EMACS_MULE_MAX_LEN: usize = 4;
+
+/// The widest a CESU-8 character gets: the six bytes of a surrogate
+/// pair.
+pub(crate) const CESU8_MAX_LEN: usize = 6;
+
+/// Classify the CESU-8 sequence starting at `bytes[pos]`.
+///
+/// CESU-8 is UTF-8 with the astral plane spelled the way UTF-16 does:
+/// a character above `U+FFFF` is its surrogate pair, and each half of
+/// that pair is encoded as if it were an ordinary three-byte
+/// character. So the two differences from UTF-8 are that a four-byte
+/// sequence is invalid (`F0..FF` starts nothing) and that
+/// `ED A0..AF xx` is not a character on its own but the first half of
+/// a six-byte one, which must be followed by `ED B0..BF xx`.
+///
+/// A lone surrogate of either half is therefore invalid, where plain
+/// UTF-8 rejects both halves outright and CESU-8 rejects only the
+/// unpaired ones. Read off CRuby's own validator over every one- and
+/// two-byte sequence and every shape of the six-byte form.
+pub(crate) fn cesu8_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    // The second byte's range is what the lead narrows: `E0` may not
+    // encode a value below `U+0800`, and `ED` splits into the plain
+    // `D000..D7FF` block and the surrogate halves.
+    let (len, second) = match lead {
+        0x00..=0x7f => return PreciseLen::Char(1),
+        0xc2..=0xdf => (2, 0x80..=0xbf),
+        0xe0 => (3, 0xa0..=0xbf),
+        0xe1..=0xec | 0xee..=0xef => (3, 0x80..=0xbf),
+        0xed => match bytes.get(pos + 1) {
+            None => return PreciseLen::NeedMore,
+            // A high surrogate: the six-byte form, whose second half
+            // has to be a low one.
+            Some(0xa0..=0xaf) => return cesu8_surrogate_pair(bytes, pos),
+            Some(0x80..=0x9f) => (3, 0x80..=0x9f),
+            Some(_) => return PreciseLen::Invalid,
+        },
+        _ => return PreciseLen::Invalid,
+    };
+    for (i, range) in std::iter::once(second)
+        .chain(std::iter::repeat(0x80..=0xbf))
+        .take(len - 1)
+        .enumerate()
+    {
+        match bytes.get(pos + 1 + i) {
+            None => return PreciseLen::NeedMore,
+            Some(b) if range.contains(b) => {}
+            Some(_) => return PreciseLen::Invalid,
+        }
+    }
+    PreciseLen::Char(len)
+}
+
+/// The six-byte form, given that `bytes[pos..pos + 2]` is `ED A0..AF`.
+fn cesu8_surrogate_pair(bytes: &[u8], pos: usize) -> PreciseLen {
+    for (i, range) in [0x80..=0xbf, 0xed..=0xed, 0xb0..=0xbf, 0x80..=0xbf]
+        .into_iter()
+        .enumerate()
+    {
+        match bytes.get(pos + 2 + i) {
+            None => return PreciseLen::NeedMore,
+            Some(b) if range.contains(b) => {}
+            Some(_) => return PreciseLen::Invalid,
+        }
+    }
+    PreciseLen::Char(6)
+}
 
 /// Classify the Emacs-Mule sequence starting at `bytes[pos]`.
 ///
@@ -837,6 +1201,7 @@ pub(crate) fn mbc_walker(enc: Encoding) -> Option<(usize, fn(&[u8], usize) -> Pr
             "STATELESS_ISO_2022_JP" | "STATELESS_ISO_2022_JP_KDDI" => {
                 Some((2, stateless_iso2022jp_precise_len))
             }
+            "CESU_8" => Some((CESU8_MAX_LEN, cesu8_precise_len)),
             "GBK" => Some((2, gbk_precise_len)),
             "GB18030" => Some((4, gb18030_precise_len)),
             _ => None,
@@ -885,14 +1250,26 @@ impl Encoding {
     /// existing UTF-8-internal pipelines (`expect_str`,
     /// `String::chars`, regex calls) can run without modification.
     pub fn is_utf8_compatible(self) -> bool {
-        matches!(self, Encoding::Utf8 | Encoding::UsAscii)
+        matches!(self, Encoding::Utf8(_) | Encoding::UsAscii)
+    }
+
+    /// True if `self` and `other` are two *different* members of the
+    /// [`UTF8_VARIANTS`] family.
+    ///
+    /// They hold the same bytes, so every read path treats them alike
+    /// and [`Self::is_utf8_compatible`] answers `true` for both — but
+    /// CRuby calls them incompatible encodings, and mixing them in one
+    /// string raises. The pairwise checks that exempt a UTF-8 /
+    /// US-ASCII pair have to exclude this one (#1562).
+    pub fn is_distinct_utf8_variant(self, other: Self) -> bool {
+        matches!((self, other), (Encoding::Utf8(a), Encoding::Utf8(b)) if a != b)
     }
 
     /// True if monoruby has no native byte→character decoder for
     /// this encoding and the bytes are stored opaquely. Used to
     /// route operations down the binary-style path.
     pub fn is_dummy(self) -> bool {
-        !matches!(self, Encoding::Ascii8 | Encoding::Utf8 | Encoding::UsAscii)
+        !matches!(self, Encoding::Ascii8 | Encoding::Utf8(_) | Encoding::UsAscii)
     }
 
     /// True for the byte-oriented encodings whose 8-bit content runs
@@ -919,7 +1296,7 @@ impl Encoding {
             Encoding::Other(i) => OTHER_ENC_NAMES[i as usize],
             Encoding::NamedByte(i) => NAMED_BYTE_ENCODINGS[i as usize].0,
             Encoding::Ascii8 => "ASCII-8BIT",
-            Encoding::Utf8 => "UTF-8",
+            Encoding::Utf8(i) => UTF8_VARIANTS[i as usize].0,
             Encoding::UsAscii => "US-ASCII",
             Encoding::Utf16Le => "UTF-16LE",
             Encoding::Utf16Be => "UTF-16BE",
@@ -980,7 +1357,7 @@ impl Encoding {
                 // and is therefore Broken.
                 CodeRange::Broken
             }
-            Encoding::Utf8 => match std::str::from_utf8(bytes) {
+            Encoding::Utf8(_) => match std::str::from_utf8(bytes) {
                 Ok(_) => CodeRange::Valid,
                 Err(_) => CodeRange::Broken,
             },
@@ -1134,13 +1511,16 @@ impl Encoding {
             )));
         };
         match normalized {
-            // `UTF8-MAC` and the legacy `UTF_8_MAC` are CRuby's
-            // HFS+/macOS-NFD UTF-8 variants. We don't apply the
-            // NFD normalisation, so they're treated as plain
-            // UTF-8 — sufficient for transcoding round-trips
-            // through `encoding_rs`.
-            "UTF_8" | "UTF8" | "CP65001" | "UTF8_MAC" | "UTF_8_MAC" | "UTF_8_HFS" | "CESU_8"
-            | "CESU8" => Ok(Encoding::Utf8),
+            "UTF_8" | "UTF8" | "CP65001" => Ok(Encoding::UTF8),
+            // Apple's HFS+ form. Its bytes are UTF-8, so it shares
+            // every storage and iteration path; what differs is the
+            // name and the decomposition a conversion applies (#1562).
+            "UTF8_MAC" | "UTF_8_MAC" | "UTF_8_HFS" => Ok(Encoding::Utf8(UTF8_MAC)),
+            // CESU-8 is not a UTF-8 variant: a four-byte sequence is
+            // invalid in it and a surrogate pair is one character, so
+            // it has a walk of its own ([`cesu8_precise_len`]) and
+            // sits with the encodings that carry their own name.
+            "CESU_8" | "CESU8" => Ok(Encoding::NamedByte(CESU_8)),
 
             // ASCII-incompatible stateful / dummy byte encodings with
             // no native codec: name-preserved, `#inspect` escapes
@@ -1150,7 +1530,7 @@ impl Encoding {
             "CP50221" => Ok(Encoding::Other(2)),
             "ASCII_8BIT" | "BINARY" => Ok(Encoding::Ascii8),
             "US_ASCII" | "ASCII" | "ANSI_X3_4_1968" | "646" => Ok(Encoding::UsAscii),
-            "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Ok(Encoding::Utf8),
+            "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Ok(Encoding::UTF8),
 
             // Bare `UTF-16` / `UTF-32` are CRuby's BOM-based *dummy*
             // encodings, distinct from the real `UTF-16LE` / … codecs:
@@ -1546,20 +1926,44 @@ pub const STRING_CR_OFFSET: usize =
 
 /// Byte offset of the encoding tag (`ty`) from the head of an `RValue`
 /// holding a String, for the JIT's inline `String#<<`. `Encoding` is
-/// `repr(u8)`, so its first byte is the discriminant (`Ascii8` == 0).
+/// `repr(u8)`, so its first byte is the discriminant (`Ascii8` == 0)
+/// and the byte after it is [`Encoding::payload`] — the variant index
+/// of the variants that carry one.
 pub const STRING_TY_OFFSET: usize =
     super::RVALUE_OFFSET_KIND + std::mem::offset_of!(RStringInner, ty);
+
+/// Byte offset of the encoding's payload — the variant index of an
+/// `Encoding` variant that carries one, padding for one that does not.
+///
+/// The JIT's inline string literal writes it, and the inline
+/// `String#<<` reads it to tell UTF-8 from `UTF8-MAC`: those two share
+/// a discriminant, so within `Utf8` the tag byte alone is not the
+/// encoding (#1562).
+pub const STRING_TY_PAYLOAD_OFFSET: usize = STRING_TY_OFFSET + 1;
+
+/// The one discriminant `STRING_TY_MAX_INLINE_SHL` admits that carries
+/// a payload byte, so the inline `String#<<` has to read
+/// [`STRING_TY_PAYLOAD_OFFSET`] before calling two equal tags an equal
+/// encoding.
+pub const STRING_TY_PAYLOAD_TAG: u8 = Encoding::UTF8.tag();
 
 /// The largest encoding tag the JIT's inline `String#<<` may append a
 /// raw byte into: `Ascii8` (0), `Utf8` (1), `UsAscii` (2). In these
 /// three a 7-bit codepoint *is* its byte; in UTF-16 / UTF-32 it is two
 /// or four, and the encodings past `UsAscii` have multibyte sequences
 /// the fast path does not know how to build, so they take the helper.
+/// The `Utf8` tag covers every [`UTF8_VARIANTS`] entry, which is what
+/// this path wants: they hold UTF-8 bytes, so a 7-bit byte is that
+/// character in all of them.
 /// (The high-byte case narrows further to `Ascii8` — see
 /// `emit_string_shl`.)
 pub const STRING_TY_MAX_INLINE_SHL: u8 = Encoding::UsAscii.tag();
 
 impl Encoding {
+    /// Canonical UTF-8. The other [`UTF8_VARIANTS`] hold the same
+    /// bytes under a different normalisation.
+    pub const UTF8: Self = Encoding::Utf8(0);
+
     /// Canonical EUC-JP. The other [`EUC_JP_VARIANTS`] share its codec
     /// and differ only in the name they report.
     pub const EUC_JP: Self = Encoding::EucJp(0);
@@ -1571,6 +1975,27 @@ impl Encoding {
         // discriminant and reading it through a pointer cast is the
         // documented way to obtain one from a value with fields.
         unsafe { *(&self as *const Self as *const u8) }
+    }
+
+    /// The variant index the discriminant is followed by, or `0` for a
+    /// variant that carries none.
+    ///
+    /// The second half of what [`STRING_TY_OFFSET`] addresses: a
+    /// payload-carrying variant's index sits one byte past its
+    /// discriminant, so writing a whole `Encoding` from the JIT is the
+    /// two bytes together. A payload-free variant's second byte is
+    /// padding, and `0` is what the JIT stores there — reading it back
+    /// is never a payload, so any value would do.
+    pub const fn payload(self) -> u8 {
+        match self {
+            Encoding::Utf8(i)
+            | Encoding::Iso8859(i)
+            | Encoding::EucJp(i)
+            | Encoding::Sjis(i)
+            | Encoding::Other(i)
+            | Encoding::NamedByte(i) => i,
+            _ => 0,
+        }
     }
 }
 
@@ -1677,7 +2102,7 @@ impl RStringInner {
 
     pub fn inspect(&self) -> String {
         match self.ty {
-            Encoding::Utf8 => {
+            Encoding::Utf8(_) => {
                 let mut res = String::with_capacity(self.len());
                 utf8_inspect_with_lookahead(&mut res, self.as_bytes(), true);
                 res
@@ -2269,7 +2694,7 @@ impl RStringInner {
             // individually (CRuby's "adds 1 for every invalid byte
             // in UTF-8" rule). Use the cached cr instead of re-running
             // from_utf8 -- a SevenBit string can answer in O(1).
-            Encoding::Utf8 => match self.code_range() {
+            Encoding::Utf8(_) => match self.code_range() {
                 CodeRange::SevenBit => self.len(),
                 CodeRange::Valid => self
                     .as_bytes()
@@ -2484,7 +2909,7 @@ impl RStringInner {
         //     still re-check those.
         let cr = self.code_range();
         if matches!(cr, CodeRange::SevenBit)
-            || (self.ty == Encoding::Utf8 && matches!(cr, CodeRange::Valid))
+            || (matches!(self.ty, Encoding::Utf8(_)) && matches!(cr, CodeRange::Valid))
         {
             // SAFETY: see above.
             return Ok(unsafe { std::str::from_utf8_unchecked(self.as_bytes()) });
@@ -2511,7 +2936,7 @@ impl RStringInner {
         }
         let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
         match enc {
-            Encoding::Utf8 => scrub_utf8(bytes, repl.as_bytes(), &mut out),
+            Encoding::Utf8(_) => scrub_utf8(bytes, repl.as_bytes(), &mut out),
             Encoding::UsAscii => {
                 for &b in bytes {
                     if b < 0x80 {
@@ -2609,7 +3034,7 @@ impl RStringInner {
     pub fn from_str(s: &str) -> Self {
         RStringInner::from(
             SmallVec::from_slice(s.as_bytes()),
-            Encoding::Utf8,
+            Encoding::UTF8,
             CodeRange::Unknown,
         )
     }
@@ -2625,7 +3050,7 @@ impl RStringInner {
         } else {
             CodeRange::Valid
         };
-        RStringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::Utf8, cr)
+        RStringInner::from(SmallVec::from_slice(s.as_bytes()), Encoding::UTF8, cr)
     }
 
     /// O(1) variant of `from_str_scanned` that consumes a `String`.
@@ -2634,7 +3059,7 @@ impl RStringInner {
     pub fn from_string(s: String) -> Self {
         RStringInner::from(
             SmallVec::from_vec(s.into_bytes()),
-            Encoding::Utf8,
+            Encoding::UTF8,
             CodeRange::Unknown,
         )
     }
@@ -2646,7 +3071,7 @@ impl RStringInner {
         } else {
             CodeRange::Valid
         };
-        RStringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::Utf8, cr)
+        RStringInner::from(SmallVec::from_vec(s.into_bytes()), Encoding::UTF8, cr)
     }
 
     pub fn bytes(slice: &[u8]) -> Self {
@@ -2739,20 +3164,17 @@ impl RStringInner {
     /// its own inline buffer, so there is no heap buffer to clone and
     /// nothing for [`share_string_buffer`] to convert.
     ///
-    /// Declines an encoding carrying a payload byte, for which the tag
-    /// alone would not reproduce the value.
+    /// The encoding goes out whole: the JIT writes both its
+    /// discriminant and its [`Encoding::payload`], so a variant
+    /// carrying an index reproduces exactly (#1562).
     ///
-    pub(crate) fn inline_copyable(&self) -> Option<(Vec<u8>, u8, u8)> {
+    pub(crate) fn inline_copyable(&self) -> Option<(Vec<u8>, Encoding, u8)> {
         if self.content.is_shared() || self.owned_spilled() {
             return None;
         }
-        match self.ty {
-            Encoding::Ascii8 | Encoding::Utf8 | Encoding::UsAscii => {}
-            _ => return None,
-        }
         Some((
             self.content.as_slice().to_vec(),
-            self.ty.tag(),
+            self.ty,
             self.cr.get() as u8,
         ))
     }
@@ -2789,7 +3211,7 @@ impl RStringInner {
                 // boundaries (a non-continuation byte or one-past-the-
                 // end). When both endpoints align, the byte sequence
                 // between them is still valid UTF-8.
-                Encoding::Utf8 => {
+                Encoding::Utf8(_) => {
                     if Self::is_utf8_char_boundary(parent, start)
                         && Self::is_utf8_char_boundary(parent, end)
                     {
@@ -2847,9 +3269,9 @@ impl RStringInner {
     /// same pass.
     pub fn from_vec_scanned(vec: Vec<u8>) -> Self {
         let (enc, cr) = if vec.iter().all(|&b| b < 0x80) {
-            (Encoding::Utf8, CodeRange::SevenBit)
+            (Encoding::UTF8, CodeRange::SevenBit)
         } else if std::str::from_utf8(&vec).is_ok() {
-            (Encoding::Utf8, CodeRange::Valid)
+            (Encoding::UTF8, CodeRange::Valid)
         } else {
             // Ascii8 — every byte is "valid" under the binary tag.
             (Encoding::Ascii8, CodeRange::Valid)
@@ -2998,11 +3420,11 @@ impl RStringInner {
             // char index == byte index — take the O(1) offset path
             // instead of walking the scalar iterator. (Must precede the
             // generic UTF-8 arm below.)
-            Encoding::Utf8 if matches!(self.code_range(), CodeRange::SevenBit) => Some(1),
+            Encoding::Utf8(_) if matches!(self.code_range(), CodeRange::SevenBit) => Some(1),
             // EUC-JP / Shift_JIS are variable-width: walk the
             // (now encoding-aware) char iterator so `String#[]` /
             // `#slice` index by characters, not bytes.
-            Encoding::EucJp(_) | Encoding::Sjis(_) | Encoding::Utf8 => None,
+            Encoding::EucJp(_) | Encoding::Sjis(_) | Encoding::Utf8(_) => None,
 
         };
         if let Some(u) = unit {
@@ -3307,7 +3729,7 @@ impl RStringInner {
         // prefix-free property of UTF-8 lets the receiver-side stay
         // valid as long as the replacement is itself valid (which
         // its cached cr tells us in O(1)).
-        let utf8_boundaries_ok = matches!(prev_ty, Encoding::Utf8)
+        let utf8_boundaries_ok = matches!(prev_ty, Encoding::Utf8(_))
             && matches!(prev_cr, CodeRange::Valid | CodeRange::SevenBit)
             && is_utf8_char_boundary(self.as_bytes(), start)
             && is_utf8_char_boundary(self.as_bytes(), end);
@@ -3372,7 +3794,7 @@ impl RStringInner {
                 }
                 bytes[0] as u32
             }
-            Encoding::Utf8 => {
+            Encoding::Utf8(_) => {
                 let head = &bytes[..bytes.len().min(4)];
                 match std::str::from_utf8(head) {
                     Ok(s) => s.chars().next().unwrap() as u32,
@@ -3619,7 +4041,7 @@ mod encoding_tests {
     #[test]
     fn inline_shl_encoding_tags_are_pinned() {
         assert_eq!(0, Encoding::Ascii8.tag());
-        assert_eq!(1, Encoding::Utf8.tag());
+        assert_eq!(1, Encoding::UTF8.tag());
         assert_eq!(2, Encoding::UsAscii.tag());
         assert_eq!(STRING_TY_MAX_INLINE_SHL, Encoding::UsAscii.tag());
         // Everything the fast path must refuse sorts above the bound.
@@ -3636,6 +4058,244 @@ mod encoding_tests {
             Encoding::NamedByte(0),
         ] {
             assert!(enc.tag() > STRING_TY_MAX_INLINE_SHL, "{enc:?}");
+        }
+    }
+
+    #[test]
+    fn cesu8_round_trips_every_codepoint() {
+        // Read off CRuby over the whole codepoint space when the walk
+        // was written; this keeps the two halves consistent with each
+        // other, which is what a conversion round trip needs.
+        let mut checked = 0;
+        for cp in 0..=0x10FFFFu32 {
+            let Some(c) = char::from_u32(cp) else { continue };
+            let s = c.to_string();
+            let bytes = utf8_to_cesu8(&s);
+            // A supplementary character is six bytes and one character;
+            // everything below `U+10000` is UTF-8's own bytes.
+            if cp >= 0x10000 {
+                assert_eq!(bytes.len(), 6, "U+{cp:04X}");
+            } else {
+                assert_eq!(bytes.as_slice(), s.as_bytes(), "U+{cp:04X}");
+            }
+            assert_eq!(cesu8_precise_len(&bytes, 0), PreciseLen::Char(bytes.len()));
+            assert_eq!(cesu8_to_utf8(&bytes).as_deref(), Some(s.as_str()), "U+{cp:04X}");
+            checked += 1;
+        }
+        assert!(checked > 1_000_000, "checked {checked}");
+    }
+
+    #[test]
+    fn cesu8_refuses_what_utf8_spells_differently() {
+        // The two differences from UTF-8, both ways round.
+        let emoji = "\u{1F600}";
+        assert_eq!(
+            utf8_to_cesu8(emoji),
+            vec![0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80]
+        );
+        // Its four-byte UTF-8 form starts no character here.
+        assert_eq!(cesu8_precise_len(emoji.as_bytes(), 0), PreciseLen::Invalid);
+        assert_eq!(cesu8_to_utf8(emoji.as_bytes()), None);
+        // A lone surrogate half is a prefix, not a character...
+        assert_eq!(cesu8_precise_len(&[0xed, 0xa0, 0xbd], 0), PreciseLen::NeedMore);
+        // ...and a low half on its own starts nothing.
+        assert_eq!(cesu8_precise_len(&[0xed, 0xb0, 0x80], 0), PreciseLen::Invalid);
+        // `U+D7FF` sits just below the surrogates and is an ordinary
+        // three-byte character.
+        assert_eq!(cesu8_precise_len(&[0xed, 0x9f, 0xbf], 0), PreciseLen::Char(3));
+        // The ill-formed run the walk reports is the well-formed
+        // prefix, which is what CRuby's error messages quote.
+        let runs = |bytes: &[u8]| {
+            let mut out: Vec<Vec<u8>> = vec![];
+            let _ = walk_mbc(bytes, CESU8_MAX_LEN, cesu8_precise_len, |piece| {
+                if let MbcPiece::Bad(b) = piece {
+                    out.push(b.to_vec());
+                }
+                Ok(())
+            });
+            out
+        };
+        assert_eq!(
+            runs(&[0x41, 0xf0, 0x9f, 0x98, 0x80, 0x42]),
+            vec![vec![0xf0], vec![0x9f], vec![0x98], vec![0x80]]
+        );
+        assert_eq!(runs(&[0x41, 0xed, 0xa0, 0xbd, 0x42]), vec![vec![0xed, 0xa0, 0xbd]]);
+        assert_eq!(
+            runs(&[0x41, 0xed, 0xa0, 0xbd, 0xed, 0x9f, 0xbf, 0x42]),
+            vec![vec![0xed, 0xa0, 0xbd, 0xed], vec![0x9f], vec![0xbf]]
+        );
+    }
+
+    #[test]
+    fn utf8_mac_agrees_with_cruby_everywhere() {
+        // The table was derived from CRuby; this re-derives CRuby's
+        // answer for all 0x110000 codepoints and compares, so a change
+        // to `unicode-normalization`'s tables cannot drift silently.
+        let script = r#"
+            require "json"
+            out = {}
+            (0..0x10FFFF).each do |cp|
+              next if (0xD800..0xDFFF).cover?(cp)
+              s = begin; [cp].pack("U"); rescue; next; end
+              t = begin; s.encode("UTF8-MAC").force_encoding("UTF-8"); rescue; next; end
+              out[cp] = t.codepoints if t.codepoints != [cp]
+            end
+            print JSON.dump(out)
+        "#;
+        let Ok(out) = std::process::Command::new("ruby").arg("-e").arg(script).output() else {
+            eprintln!("no ruby on PATH; skipping");
+            return;
+        };
+        if !out.status.success() {
+            eprintln!("ruby failed; skipping");
+            return;
+        }
+        let json = String::from_utf8(out.stdout).unwrap();
+        // {"cp":[a,b,..],...} — parsed by hand rather than pulling in
+        // serde for one test.
+        let mut expected: std::collections::HashMap<u32, String> =
+            std::collections::HashMap::new();
+        for entry in json.trim_matches(|c| c == '{' || c == '}').split("],") {
+            let Some((k, v)) = entry.split_once(":[") else { continue };
+            let cp: u32 = k.trim_matches('"').parse().unwrap();
+            let s: String = v
+                .trim_end_matches(']')
+                .split(',')
+                .map(|n| char::from_u32(n.trim().parse().unwrap()).unwrap())
+                .collect();
+            expected.insert(cp, s);
+        }
+        let mut checked = 0;
+        for cp in 0..=0x10FFFFu32 {
+            let Some(c) = char::from_u32(cp) else { continue };
+            let s = c.to_string();
+            let want = expected.get(&cp).cloned().unwrap_or_else(|| s.clone());
+            assert_eq!(utf8_to_mac(&s), want, "U+{cp:04X}");
+            checked += 1;
+        }
+        assert!(checked > 1_000_000, "checked {checked}");
+    }
+
+    #[test]
+    fn utf8_mac_round_trips_every_codepoint() {
+        // Checked against CRuby over all 0x110000 codepoints when the
+        // table was derived; this keeps the two halves consistent with
+        // each other, which is what a conversion round trip needs.
+        for cp in 0..=0x10FFFFu32 {
+            let Some(c) = char::from_u32(cp) else { continue };
+            let s = c.to_string();
+            let mac = utf8_to_mac(&s);
+            // Decomposing an already-decomposed string is a no-op.
+            assert_eq!(utf8_to_mac(&mac), mac, "U+{cp:04X}");
+            // And composing it back returns the composed form, which
+            // for anything the table keeps composed is the input.
+            if utf8_mac_keeps_composed(c) {
+                assert_eq!(mac, s, "U+{cp:04X} must not decompose");
+                assert_eq!(mac_to_utf8(&mac), s, "U+{cp:04X}");
+            }
+        }
+    }
+
+    #[test]
+    fn utf8_mac_matches_the_documented_cases() {
+        // The four shapes that separate this from plain NFD/NFC.
+        let ga = "\u{304C}";
+        assert_eq!(utf8_to_mac(ga), "\u{304B}\u{3099}");
+        assert_eq!(mac_to_utf8("\u{304B}\u{3099}"), ga);
+        // A singleton the table keeps: ANGSTROM stays put, where NFC
+        // would answer U+00C5.
+        assert_eq!(utf8_to_mac("\u{212B}"), "\u{212B}");
+        assert_eq!(mac_to_utf8("\u{212B}"), "\u{212B}");
+        // ...while the decomposed form of the same letter composes.
+        assert_eq!(mac_to_utf8("A\u{030A}"), "\u{00C5}");
+        // A CJK compatibility ideograph is left alone both ways.
+        assert_eq!(utf8_to_mac("\u{F900}"), "\u{F900}");
+        assert_eq!(mac_to_utf8("\u{F900}"), "\u{F900}");
+        // A compatibility ligature is not a canonical decomposition, so
+        // neither direction touches it.
+        assert_eq!(utf8_to_mac("\u{FB01}"), "\u{FB01}");
+        // Two marks on one base come back in canonical order.
+        assert_eq!(utf8_to_mac("\u{1E69}"), "s\u{0323}\u{0307}");
+        assert_eq!(mac_to_utf8("s\u{0307}\u{0323}"), "\u{1E69}");
+    }
+
+    /// The JIT addresses an `RStringInner`'s encoding as two bytes —
+    /// the discriminant and [`Encoding::payload`] — and its code range
+    /// as the byte after them. Nothing in the language pins that
+    /// layout, so pin it here: a `cr` that moved onto the payload byte
+    /// would have the inline string literal write the code range and
+    /// then stamp the encoding index over it.
+    #[test]
+    fn the_encoding_payload_byte_sits_between_the_tag_and_the_code_range() {
+        assert_eq!(STRING_TY_PAYLOAD_OFFSET, STRING_TY_OFFSET + 1);
+        assert_eq!(STRING_CR_OFFSET, STRING_TY_PAYLOAD_OFFSET + 1);
+        assert_eq!(std::mem::size_of::<Encoding>(), 2);
+        assert_eq!(std::mem::align_of::<Encoding>(), 1);
+    }
+
+    /// `Encoding::payload` has to name every variant that carries an
+    /// index: one left out would read back as `0` and silently become
+    /// the canonical member of its family.
+    #[test]
+    fn every_payload_carrying_variant_reports_its_index() {
+        for enc in [
+            Encoding::Utf8(1),
+            Encoding::Iso8859(9),
+            Encoding::EucJp(2),
+            Encoding::Sjis(1),
+            Encoding::Other(3),
+            Encoding::NamedByte(CESU_8),
+        ] {
+            // SAFETY: `Encoding` is `#[repr(u8)]` with a `u8` field, so
+            // the second byte of a payload-carrying variant is that
+            // field — which is the byte the JIT reads.
+            let byte = unsafe { *(&enc as *const Encoding as *const u8).add(1) };
+            assert_eq!(enc.payload(), byte, "{enc:?}");
+            assert_ne!(enc.payload(), 0, "{enc:?}");
+        }
+        for enc in [
+            Encoding::Ascii8,
+            Encoding::UsAscii,
+            Encoding::Utf16Le,
+            Encoding::Utf16Be,
+            Encoding::Utf32Le,
+            Encoding::Utf32Be,
+            Encoding::Iso2022Jp,
+        ] {
+            assert_eq!(enc.payload(), 0, "{enc:?}");
+        }
+    }
+
+    /// The inline `String#<<` reads one tag byte and only then the
+    /// payload, so exactly one discriminant it admits may carry one.
+    /// Insert a payload-carrying variant above `Utf32Be` and the fast
+    /// path would call two different encodings equal.
+    #[test]
+    fn utf8_is_the_only_payload_carrying_tag_the_inline_shl_admits() {
+        assert_eq!(STRING_TY_PAYLOAD_TAG, Encoding::UTF8.tag());
+        for enc in [
+            Encoding::Ascii8,
+            Encoding::UsAscii,
+            Encoding::Utf16Le,
+            Encoding::Utf16Be,
+            Encoding::Utf32Le,
+            Encoding::Utf32Be,
+        ] {
+            assert!(enc.tag() <= 6, "{enc:?}");
+            assert_ne!(enc.tag(), STRING_TY_PAYLOAD_TAG, "{enc:?}");
+        }
+        assert!(Encoding::UTF8.tag() <= 6);
+        // Everything that carries an index and is not `Utf8` sits past
+        // the range, so the fast path never sees it.
+        for enc in [
+            Encoding::Iso8859(1),
+            Encoding::EUC_JP,
+            Encoding::Sjis(0),
+            Encoding::Iso2022Jp,
+            Encoding::Other(0),
+            Encoding::NamedByte(0),
+        ] {
+            assert!(enc.tag() > 6, "{enc:?}");
         }
     }
 
@@ -3683,15 +4343,15 @@ mod encoding_tests {
         assert!(Encoding::try_from_str(&"A".repeat(MAX_ENC_NAME + 1)).is_err());
         assert!(Encoding::try_from_str("UTF-8\u{3042}").is_err());
         // `.` normalises like `-` (CRuby accepts `UTF.8`).
-        assert_eq!(Encoding::try_from_str("UTF.8").unwrap(), Encoding::Utf8);
+        assert_eq!(Encoding::try_from_str("UTF.8").unwrap(), Encoding::UTF8);
         // The longest name we recognise still fits the buffer.
         assert_eq!(
             Encoding::try_from_str("ANSI_X3.4-1968").unwrap(),
             Encoding::UsAscii
         );
-        assert_eq!(Encoding::try_from_str("UTF-8").unwrap(), Encoding::Utf8);
-        assert_eq!(Encoding::try_from_str("utf-8").unwrap(), Encoding::Utf8);
-        assert_eq!(Encoding::try_from_str("UTF8").unwrap(), Encoding::Utf8);
+        assert_eq!(Encoding::try_from_str("UTF-8").unwrap(), Encoding::UTF8);
+        assert_eq!(Encoding::try_from_str("utf-8").unwrap(), Encoding::UTF8);
+        assert_eq!(Encoding::try_from_str("UTF8").unwrap(), Encoding::UTF8);
         assert_eq!(Encoding::try_from_str("BINARY").unwrap(), Encoding::Ascii8);
         assert_eq!(
             Encoding::try_from_str("ASCII-8BIT").unwrap(),
@@ -3746,7 +4406,7 @@ mod encoding_tests {
         );
         assert_eq!(Encoding::try_from_str("CP932").unwrap(), Encoding::Sjis(1));
         // Pseudo-encoding names map to UTF-8.
-        assert_eq!(Encoding::try_from_str("LOCALE").unwrap(), Encoding::Utf8);
+        assert_eq!(Encoding::try_from_str("LOCALE").unwrap(), Encoding::UTF8);
         // Unknown name → ArgumentError.
         assert!(Encoding::try_from_str("Bogus-1").is_err());
     }
@@ -3755,7 +4415,7 @@ mod encoding_tests {
     fn name_round_trips_through_try_from_str() {
         for enc in [
             Encoding::Ascii8,
-            Encoding::Utf8,
+            Encoding::UTF8,
             Encoding::UsAscii,
             Encoding::Utf16Le,
             Encoding::Utf16Be,
@@ -3774,7 +4434,7 @@ mod encoding_tests {
 
     #[test]
     fn ascii_compatible_flags() {
-        assert!(Encoding::Utf8.is_ascii_compatible());
+        assert!(Encoding::UTF8.is_ascii_compatible());
         assert!(Encoding::UsAscii.is_ascii_compatible());
         assert!(Encoding::Ascii8.is_ascii_compatible());
         assert!(Encoding::Iso8859(1).is_ascii_compatible());
@@ -3788,7 +4448,7 @@ mod encoding_tests {
 
     #[test]
     fn dummy_flags_cover_non_native_decoders() {
-        assert!(!Encoding::Utf8.is_dummy());
+        assert!(!Encoding::UTF8.is_dummy());
         assert!(!Encoding::UsAscii.is_dummy());
         assert!(!Encoding::Ascii8.is_dummy());
         assert!(Encoding::Utf16Le.is_dummy());
@@ -3874,7 +4534,7 @@ mod encoding_tests {
         // SevenBit fast path applies to every ASCII-compatible enc
         // when all bytes are < 0x80.
         for enc in [
-            Encoding::Utf8,
+            Encoding::UTF8,
             Encoding::UsAscii,
             Encoding::Ascii8,
             Encoding::Iso8859(1),
@@ -3887,7 +4547,7 @@ mod encoding_tests {
         assert_ne!(Encoding::Utf16Le.classify(b"ab"), CodeRange::SevenBit);
         assert_ne!(Encoding::Utf32Le.classify(b"abcd"), CodeRange::SevenBit);
         // Empty → SevenBit by definition.
-        assert_eq!(Encoding::Utf8.classify(b""), CodeRange::SevenBit);
+        assert_eq!(Encoding::UTF8.classify(b""), CodeRange::SevenBit);
         assert_eq!(Encoding::Utf16Le.classify(b""), CodeRange::SevenBit);
     }
 
@@ -3901,10 +4561,10 @@ mod encoding_tests {
 
     #[test]
     fn classify_utf8_validity() {
-        assert_eq!(Encoding::Utf8.classify("é".as_bytes()), CodeRange::Valid);
-        assert_eq!(Encoding::Utf8.classify(&[0xff]), CodeRange::Broken);
+        assert_eq!(Encoding::UTF8.classify("é".as_bytes()), CodeRange::Valid);
+        assert_eq!(Encoding::UTF8.classify(&[0xff]), CodeRange::Broken);
         // Truncated 2-byte scalar.
-        assert_eq!(Encoding::Utf8.classify(&[0xC3]), CodeRange::Broken);
+        assert_eq!(Encoding::UTF8.classify(&[0xC3]), CodeRange::Broken);
     }
 
     #[test]
@@ -3942,7 +4602,7 @@ mod encoding_tests {
         assert!(s.is_ascii_only());
         assert!(s.is_valid_encoding());
 
-        let bad = RStringInner::from_encoding(b"\xff", Encoding::Utf8);
+        let bad = RStringInner::from_encoding(b"\xff", Encoding::UTF8);
         assert_eq!(bad.code_range(), CodeRange::Broken);
         assert!(!bad.is_ascii_only());
         assert!(!bad.is_valid_encoding());
@@ -4010,7 +4670,7 @@ mod encoding_tests {
 
     #[test]
     fn from_encoding_does_not_scan_until_queried() {
-        let s = RStringInner::from_encoding(b"abc", Encoding::Utf8);
+        let s = RStringInner::from_encoding(b"abc", Encoding::UTF8);
         assert_eq!(s.cr.get(), CodeRange::Unknown);
         assert_eq!(s.code_range(), CodeRange::SevenBit);
     }
@@ -4018,15 +4678,15 @@ mod encoding_tests {
     #[test]
     fn from_encoding_scanned_sets_cr_eagerly() {
         // Source-byte literal that's all ASCII -> SevenBit.
-        let s = RStringInner::from_encoding_scanned(b"abc", Encoding::Utf8);
+        let s = RStringInner::from_encoding_scanned(b"abc", Encoding::UTF8);
         assert_eq!(s.cr.get(), CodeRange::SevenBit);
 
         // Source-byte literal with valid UTF-8 multi-byte content.
-        let s = RStringInner::from_encoding_scanned("é".as_bytes(), Encoding::Utf8);
+        let s = RStringInner::from_encoding_scanned("é".as_bytes(), Encoding::UTF8);
         assert_eq!(s.cr.get(), CodeRange::Valid);
 
         // Source-byte literal with broken UTF-8 (e.g. `"\xff"`).
-        let s = RStringInner::from_encoding_scanned(b"\xff", Encoding::Utf8);
+        let s = RStringInner::from_encoding_scanned(b"\xff", Encoding::UTF8);
         assert_eq!(s.cr.get(), CodeRange::Broken);
 
         // Ascii8 + high bytes: trivially Valid (no cut into char
@@ -4076,7 +4736,7 @@ mod encoding_tests {
         // (E3 81 82). Cuts that land on offsets 0/3/6/9 are character
         // boundaries; offsets 4/5/7/8 land on continuation bytes and
         // must NOT inherit Valid.
-        let parent = RStringInner::from_encoding("abcあdef".as_bytes(), Encoding::Utf8);
+        let parent = RStringInner::from_encoding("abcあdef".as_bytes(), Encoding::UTF8);
         assert_eq!(parent.code_range(), CodeRange::Valid);
 
         for &(start, end) in &[(0, 3), (0, 6), (3, 6), (6, 9), (3, 9), (0, 9)] {
@@ -4187,7 +4847,7 @@ mod encoding_tests {
         // A Broken parent could have either Broken or Valid sub-
         // ranges depending on which bytes the slice covers, so we
         // don't propagate.
-        let parent = RStringInner::from_encoding(&[0x61, 0xff, 0x62], Encoding::Utf8);
+        let parent = RStringInner::from_encoding(&[0x61, 0xff, 0x62], Encoding::UTF8);
         assert_eq!(parent.code_range(), CodeRange::Broken);
         assert_eq!(
             RStringInner::propagated_cr(&parent, 0, 1),
@@ -4209,18 +4869,18 @@ mod encoding_tests {
         // SevenBit, skipping the `from_utf8` rerun the lazy path
         // would do on first use.
         let s = RStringInner::from_vec_scanned(b"abc".to_vec());
-        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.encoding(), Encoding::UTF8);
         assert_eq!(s.code_range(), CodeRange::SevenBit);
 
         // Non-ASCII but valid UTF-8: tagged UTF-8 and pre-classified
         // Valid (the from_utf8 check landed on Ok).
         let s = RStringInner::from_vec_scanned("あいう".as_bytes().to_vec());
-        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.encoding(), Encoding::UTF8);
         assert_eq!(s.code_range(), CodeRange::Valid);
 
         // Two-byte UTF-8 scalar: still Valid + UTF-8.
         let s = RStringInner::from_vec_scanned("é".as_bytes().to_vec());
-        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.encoding(), Encoding::UTF8);
         assert_eq!(s.code_range(), CodeRange::Valid);
 
         // Invalid UTF-8 falls back to ASCII-8BIT, which classifies
@@ -4231,7 +4891,7 @@ mod encoding_tests {
 
         // Empty input: SevenBit by definition under any encoding.
         let s = RStringInner::from_vec_scanned(vec![]);
-        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.encoding(), Encoding::UTF8);
         assert_eq!(s.code_range(), CodeRange::SevenBit);
     }
 
@@ -4242,12 +4902,12 @@ mod encoding_tests {
         // that encoding regardless of CR.
         assert_eq!(
             Encoding::compatible(
-                Encoding::Utf8,
+                Encoding::UTF8,
                 CodeRange::Valid,
-                Encoding::Utf8,
+                Encoding::UTF8,
                 CodeRange::Broken
             ),
-            Some(Encoding::Utf8)
+            Some(Encoding::UTF8)
         );
     }
 
@@ -4256,18 +4916,18 @@ mod encoding_tests {
         // Both ASCII-compatible AND both 7-bit → left wins.
         assert_eq!(
             Encoding::compatible(
-                Encoding::Utf8,
+                Encoding::UTF8,
                 CodeRange::SevenBit,
                 Encoding::UsAscii,
                 CodeRange::SevenBit,
             ),
-            Some(Encoding::Utf8)
+            Some(Encoding::UTF8)
         );
         assert_eq!(
             Encoding::compatible(
                 Encoding::UsAscii,
                 CodeRange::SevenBit,
-                Encoding::Utf8,
+                Encoding::UTF8,
                 CodeRange::SevenBit,
             ),
             Some(Encoding::UsAscii)
@@ -4280,7 +4940,7 @@ mod encoding_tests {
         // encoding.
         assert_eq!(
             Encoding::compatible(
-                Encoding::Utf8,
+                Encoding::UTF8,
                 CodeRange::SevenBit,
                 Encoding::Iso8859(1),
                 CodeRange::Valid,
@@ -4291,7 +4951,7 @@ mod encoding_tests {
             Encoding::compatible(
                 Encoding::Iso8859(1),
                 CodeRange::Valid,
-                Encoding::Utf8,
+                Encoding::UTF8,
                 CodeRange::SevenBit,
             ),
             Some(Encoding::Iso8859(1))
@@ -4303,7 +4963,7 @@ mod encoding_tests {
         // Two non-7-bit, distinct ASCII-compatible encodings → None.
         assert_eq!(
             Encoding::compatible(
-                Encoding::Utf8,
+                Encoding::UTF8,
                 CodeRange::Valid,
                 Encoding::Iso8859(1),
                 CodeRange::Valid,
@@ -4315,7 +4975,7 @@ mod encoding_tests {
             Encoding::compatible(
                 Encoding::Utf16Le,
                 CodeRange::Valid,
-                Encoding::Utf8,
+                Encoding::UTF8,
                 CodeRange::SevenBit,
             ),
             None
@@ -4328,7 +4988,7 @@ mod encoding_tests {
     fn to_str_errors_on_invalid_utf8_in_utf8_string() {
         // UTF-8-tagged bytes containing an invalid sequence: `to_str`
         // returns Err with the "invalid byte sequence: ..." prefix.
-        let s = RStringInner::from_encoding(b"abc\xFFdef", Encoding::Utf8);
+        let s = RStringInner::from_encoding(b"abc\xFFdef", Encoding::UTF8);
         let err = s.to_str().unwrap_err();
         let msg = err.message();
         assert!(
@@ -4358,7 +5018,7 @@ mod encoding_tests {
         assert!(s.byte_to_char_index(0).is_err());
 
         // Same for an explicitly-broken UTF-8 string.
-        let s = RStringInner::from_encoding(b"abc\xFF", Encoding::Utf8);
+        let s = RStringInner::from_encoding(b"abc\xFF", Encoding::UTF8);
         assert!(s.byte_to_char_index(3).is_err());
     }
 
@@ -4494,7 +5154,7 @@ mod encoding_tests {
         s.bytesplice_with(2, 2, &repl, &globals.store).unwrap();
         assert_eq!(s.as_bytes(), b"abXYef");
         assert_eq!(s.cr.get(), CodeRange::SevenBit);
-        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.encoding(), Encoding::UTF8);
     }
 
     #[test]
@@ -4537,7 +5197,7 @@ mod encoding_tests {
         s.set_encoding(Encoding::UsAscii);
         let repl = RStringInner::from_str_scanned("X");
         assert_eq!(s.encoding(), Encoding::UsAscii);
-        assert_eq!(repl.encoding(), Encoding::Utf8);
+        assert_eq!(repl.encoding(), Encoding::UTF8);
 
         s.bytesplice_with(0, 1, &repl, &globals.store).unwrap();
         assert_eq!(s.as_bytes(), b"Xi");
@@ -4570,7 +5230,7 @@ mod encoding_tests {
 
         // Replace byte 1 (middle of "あ") — boundary check fails.
         s.bytesplice_with(1, 0, &repl, &globals.store).unwrap();
-        assert_eq!(s.encoding(), Encoding::Utf8);
+        assert_eq!(s.encoding(), Encoding::UTF8);
         assert_eq!(s.cr.get(), CodeRange::Broken);
     }
 }

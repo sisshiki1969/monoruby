@@ -413,7 +413,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             vm.invoke_method_inner(globals, IdentId::TO_S, msg, &[], None, None)?
         };
         if let Some(inner) = msg.is_rstring_inner()
-            && inner.encoding() != crate::value::Encoding::Utf8
+            && inner.encoding() != crate::value::Encoding::UTF8
         {
             raw = Some((inner.as_bytes().to_vec(), inner.encoding()));
         }

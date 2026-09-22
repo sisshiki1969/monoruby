@@ -1243,7 +1243,7 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     )?;
                     match sv.is_rstring() {
                         Some(rs) => (rs.as_bytes().to_vec(), rs.encoding()),
-                        None => (v.to_s(globals).into_bytes(), crate::value::Encoding::Utf8),
+                        None => (v.to_s(globals).into_bytes(), crate::value::Encoding::UTF8),
                     }
                 };
                 // `rb_io_puts` asks whether the line ends with the
@@ -1340,7 +1340,7 @@ fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         Some(inner) => inner.clone(),
         None => {
             let s = lfp.arg(0).coerce_to_string(vm, globals)?;
-            RStringInner::from_encoding_scanned(s.as_bytes(), Encoding::Utf8)
+            RStringInner::from_encoding_scanned(s.as_bytes(), Encoding::UTF8)
         }
     };
     let ctx = crate::executor::format::negotiate_format(&globals.store, &fmt_inner, &args)?;
@@ -1454,7 +1454,7 @@ pub(super) fn chomp_line(buf: &mut Vec<u8>, sep: Option<&[u8]>, _limit: Option<u
 fn io_completes_utf8(globals: &mut Globals, io: Value) -> bool {
     use crate::value::Encoding as E;
     let ext_v = read_io_encoding(globals, io, false);
-    matches!(enc_obj_to_enum(globals, ext_v).unwrap_or(E::Utf8), E::Utf8)
+    matches!(enc_obj_to_enum(globals, ext_v).unwrap_or(E::UTF8), E::Utf8(_))
 }
 
 /// Bump the IO's line counter and `$.` after a successful line read.
@@ -1645,7 +1645,7 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
     let self_ = lfp.self_val();
     let (ext, intl) = io_encodings(globals, self_);
-    let complete_utf8 = ext == crate::value::Encoding::Utf8;
+    let complete_utf8 = matches!(ext, crate::value::Encoding::Utf8(_));
     let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         lfp.self_val()
             .as_io_inner_mut()
@@ -2084,10 +2084,10 @@ fn io_class_read(
         }
     }
     let ext = match ext_obj {
-        Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::Utf8),
+        Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::UTF8),
         None => {
             let de = enc_default_external_obj(globals);
-            enc_obj_to_enum(globals, de).unwrap_or(E::Utf8)
+            enc_obj_to_enum(globals, de).unwrap_or(E::UTF8)
         }
     };
     let intl = int_obj.and_then(|o| enc_obj_to_enum(globals, o));
@@ -2250,13 +2250,13 @@ fn class_getline_args(
 fn ext_completes_utf8(globals: &mut Globals, ext_obj: Option<Value>) -> bool {
     use crate::value::Encoding as E;
     let ext = match ext_obj {
-        Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::Utf8),
+        Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::UTF8),
         None => {
             let de = enc_default_external_obj(globals);
-            enc_obj_to_enum(globals, de).unwrap_or(E::Utf8)
+            enc_obj_to_enum(globals, de).unwrap_or(E::UTF8)
         }
     };
-    matches!(ext, E::Utf8)
+    matches!(ext, E::Utf8(_))
 }
 
 ///
@@ -3631,7 +3631,7 @@ fn char_width_from_lead(enc: crate::value::Encoding, b: u8) -> usize {
         },
         E::Utf16Le | E::Utf16Be => 2,
         E::Utf32Le | E::Utf32Be => 4,
-        E::Utf8 => 0,
+        E::Utf8(_) => 0,
     }
 }
 
@@ -3639,7 +3639,7 @@ fn char_width_from_lead(enc: crate::value::Encoding, b: u8) -> usize {
 /// `read_one_char` so the (validated, EOF-tolerant) UTF-8 path stays
 /// byte-identical to before.
 fn read_one_char_enc(io: &mut IoInner, enc: crate::value::Encoding) -> Result<Vec<u8>> {
-    if enc == crate::value::Encoding::Utf8 {
+    if matches!(enc, crate::value::Encoding::Utf8(_)) {
         return read_one_char(io);
     }
     let first = io.read_buffered(Some(1))?;
@@ -5056,10 +5056,10 @@ pub(super) fn tag_with_encs(
 ) -> Value {
     use crate::value::Encoding as E;
     let ext = match ext_obj {
-        Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::Utf8),
+        Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::UTF8),
         None => {
             let de = enc_default_external_obj(globals);
-            enc_obj_to_enum(globals, de).unwrap_or(E::Utf8)
+            enc_obj_to_enum(globals, de).unwrap_or(E::UTF8)
         }
     };
     // An unset internal encoding falls back to Encoding.default_internal
@@ -5116,7 +5116,7 @@ pub(super) fn io_encodings(
     use crate::value::Encoding as E;
     let ext_v = read_io_encoding(globals, io, false);
     let int_v = read_io_encoding(globals, io, true);
-    let ext = enc_obj_to_enum(globals, ext_v).unwrap_or(E::Utf8);
+    let ext = enc_obj_to_enum(globals, ext_v).unwrap_or(E::UTF8);
     let intl = if int_v.is_nil() {
         None
     } else {
