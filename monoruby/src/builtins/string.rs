@@ -622,12 +622,12 @@ fn encoding_ordinal(enc: Encoding) -> i32 {
     match enc {
         Encoding::Ascii8 => 0,
         Encoding::UsAscii => 1,
-        Encoding::Utf8 => 2,
+        Encoding::Utf8(_) => 2,
         Encoding::Utf16Be => 3,
         Encoding::Utf16Le => 4,
         Encoding::Utf32Be => 5,
         Encoding::Utf32Le => 6,
-        Encoding::EucJp => 7,
+        Encoding::EucJp(_) => 7,
         Encoding::Sjis(_) => 8,
         Encoding::Iso8859(n) => 100 + n as i32,
         Encoding::Iso2022Jp => 200,
@@ -713,7 +713,11 @@ fn casecmp_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let lhs_enc = lhs_inner.encoding();
     // If encodings are incompatible, return nil.
     // Binary vs UTF-8 is compatible if at least one side is ASCII-only.
-    if lhs_enc != rhs_enc && !(lhs_enc.is_utf8_compatible() && rhs_enc.is_utf8_compatible()) {
+    if lhs_enc != rhs_enc
+        && !(lhs_enc.is_utf8_compatible()
+            && rhs_enc.is_utf8_compatible()
+            && !lhs_enc.is_distinct_utf8_variant(rhs_enc))
+    {
         let lhs_ascii_only = lhs_inner.is_ascii();
         let rhs_ascii_only = rhs_bytes.is_ascii();
         if !lhs_ascii_only && !rhs_ascii_only {
@@ -731,7 +735,7 @@ fn casecmp_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     // `single_byte_optimizable`, so the byte comparison below is what
     // runs, exactly as for BINARY.
     let foldable = |enc: crate::value::Encoding, broken: bool| {
-        enc.is_utf8_compatible() && (enc == crate::value::Encoding::Utf8 || !broken)
+        enc.is_utf8_compatible() && (matches!(enc, crate::value::Encoding::Utf8(_)) || !broken)
     };
     if foldable(lhs_enc, !lhs_inner.is_valid_encoding())
         && foldable(rhs_enc, std::str::from_utf8(&rhs_bytes).is_err())
@@ -861,7 +865,10 @@ fn shl_inner(
                 self_.set_encoding(Encoding::Ascii8);
             }
             self_.extend_from_slice_checked(&[ch as u8])?;
-        } else if enc == Encoding::Utf8 {
+        } else if matches!(enc, Encoding::Utf8(_)) {
+            // Every `UTF8_VARIANTS` member stores UTF-8 bytes, and a
+            // `<<` appends the codepoint as it stands — CRuby does not
+            // decompose here, so `UTF8-MAC` takes this path too.
             let c = char::from_u32(ch)
                 .ok_or_else(|| MonorubyErr::char_out_of_range(&globals.store, other_v))?;
             let mut buf = [0u8; 4];
@@ -918,7 +925,7 @@ enum CodepointErr {
 fn codepoint_bytes(enc: Encoding, cp: u32) -> std::result::Result<Vec<u8>, CodepointErr> {
     let surrogate = (0xD800..=0xDFFF).contains(&cp);
     match enc {
-        Encoding::Utf8 | Encoding::UsAscii | Encoding::Ascii8 => unreachable!(),
+        Encoding::Utf8(_) | Encoding::UsAscii | Encoding::Ascii8 => unreachable!(),
         Encoding::Utf16Le | Encoding::Utf16Be => {
             let big = enc == Encoding::Utf16Be;
             let units: Vec<u16> = if cp <= 0xFFFF && !surrogate {
@@ -955,7 +962,7 @@ fn codepoint_bytes(enc: Encoding, cp: u32) -> std::result::Result<Vec<u8>, Codep
         }
         // EUC-JP: single-byte ASCII, the 0x8E half-width-kana pair, the
         // two-byte JIS X 0208 plane, and the three-byte 0x8F plane.
-        Encoding::EucJp => {
+        Encoding::EucJp(_) => {
             if cp > 0xFF_FFFF {
                 return Err(CodepointErr::OutOfRange);
             }
@@ -1172,12 +1179,22 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 };
             return Ok(res);
         }
+        let regex = &other.coerce_to_regexp_or_string(vm, globals)?;
+    // Ahead of the view split below, not inside its native branch: a
+    // subject whose encoding is UTF-8's bytes under another name
+    // (`UTF8-MAC`) reads through the `&str` path, and CRuby refuses a
+    // UTF-8 regexp against it all the same (#1562).
+        super::regexp::check_match_encoding(
+            &globals.store,
+            regex,
+            s.encoding(),
+            s.is_ascii_only(),
+        )?;
         let given = s.regex_view()?;
         let given: &str = &given;
         // Enable zero-copy $~ haystack snapshots (CoW), which also
         // propagate the subject's encoding to $&/$`/$'/$1..$N.
         vm.set_match_haystack(self_val);
-        let regex = &other.coerce_to_regexp_or_string(vm, globals)?;
         let res = match regex.find_one(vm, given)? {
             Some(r) => {
                 let char_idx = given
@@ -2201,7 +2218,7 @@ fn succ_precise_len(bytes: &[u8], pos: usize, enc: crate::value::Encoding) -> Pr
     if let Some((_, precise)) = crate::value::mbc_walker(enc) {
         return precise(bytes, pos);
     }
-    if enc != crate::value::Encoding::Utf8 {
+    if !matches!(enc, crate::value::Encoding::Utf8(_)) {
         if pos >= bytes.len() {
             return PreciseLen::NeedMore;
         }
@@ -2426,7 +2443,7 @@ fn onigmo_high_alpha(enc: crate::value::Encoding) -> u128 {
 fn succ_alnum_class(p: &[u8], enc: crate::value::Encoding) -> Option<bool> {
     use crate::value::Encoding as E;
     if p.len() != 1 {
-        if enc == E::Utf8 {
+        if matches!(enc, E::Utf8(_)) {
             let c = std::str::from_utf8(p).ok()?.chars().next()?;
             return unicode_alnum_class(c);
         }
@@ -2440,7 +2457,7 @@ fn succ_alnum_class(p: &[u8], enc: crate::value::Encoding) -> Option<bool> {
         b if b < 0x80 => return None,
         _ => {}
     }
-    if enc == E::Utf8 {
+    if matches!(enc, E::Utf8(_)) {
         // A lone byte above 0x7F is not a character in UTF-8.
         return None;
     }
@@ -2766,7 +2783,9 @@ fn check_encoding_compat(
 ) -> Result<()> {
     let arg_enc = arg_inner.encoding();
     if self_enc != arg_enc
-        && !(self_enc.is_utf8_compatible() && arg_enc.is_utf8_compatible())
+        && !(self_enc.is_utf8_compatible()
+            && arg_enc.is_utf8_compatible()
+            && !self_enc.is_distinct_utf8_variant(arg_enc))
         && !(self_bytes.is_ascii() || arg_inner.as_bytes().is_ascii())
     {
         return Err(MonorubyErr::incompatible_encoding(
@@ -2949,7 +2968,7 @@ fn enc_has_interior(enc: crate::value::Encoding) -> bool {
     use crate::value::Encoding as E;
     matches!(
         enc,
-        E::Utf8 | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
+        E::Utf8(_) | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
     ) || crate::value::mbc_walker(enc).is_some()
 }
 
@@ -3000,8 +3019,8 @@ fn enc_prefix_boundary(enc: crate::value::Encoding, bytes: &[u8], pos: usize) ->
 fn trail_class(enc: crate::value::Encoding) -> Option<std::ops::RangeInclusive<u8>> {
     use crate::value::Encoding as E;
     match enc {
-        E::Utf8 => Some(0x80..=0xBF),
-        E::EucJp => Some(0xA1..=0xFE),
+        E::Utf8(_) => Some(0x80..=0xBF),
+        E::EucJp(_) => Some(0xA1..=0xFE),
         E::NamedByte(_) => Some(0x9E..=0xFF),
         _ => None,
     }
@@ -3050,7 +3069,7 @@ fn enc_char_can_start(enc: crate::value::Encoding, bytes: &[u8], pos: usize) -> 
         return true;
     };
     match enc {
-        E::EucJp if (0xA1..=0xFE).contains(&byte) => true,
+        E::EucJp(_) if (0xA1..=0xFE).contains(&byte) => true,
         E::NamedByte(_) => !(0x9E..=0xFF).contains(&byte),
         _ => crate::value::mbc_walker(enc)
             .is_none_or(|(_, precise)| !matches!(precise(bytes, pos), PreciseLen::Invalid)),
@@ -3069,7 +3088,7 @@ fn enc_char_boundary(enc: crate::value::Encoding, bytes: &[u8], pos: usize) -> b
         return true;
     }
     match enc {
-        E::Utf8 => is_utf8_char_boundary(bytes, pos),
+        E::Utf8(_) => is_utf8_char_boundary(bytes, pos),
         E::Utf16Le | E::Utf16Be => {
             if pos % 2 != 0 || pos + 1 >= bytes.len() {
                 return pos % 2 == 0;
@@ -4460,7 +4479,7 @@ fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn apply_template_encoding(result: &mut RStringInner, template: Value) {
     if let Some(t) = template.is_rstring_inner() {
         let t_enc = t.encoding();
-        if result.encoding() != Encoding::Utf8 || t_enc == Encoding::Utf8 {
+        if result.encoding() != Encoding::UTF8 || t_enc == Encoding::UTF8 {
             return;
         }
         if t.is_ascii_only() && !result.is_ascii_only() {
@@ -4643,6 +4662,14 @@ fn sub_main(
                 // The surrogate-space replace cannot settle the encoding
                 // piece by piece; the receiver has 8-bit content, so a
                 // replacement it cannot merge with is refused up front.
+                //
+                // The `&str` path below settles it per piece instead,
+                // which is what CRuby does — `"a\xffb".b.gsub(/\xff/n,
+                // "é")` keeps only the replacement's non-ASCII and
+                // comes back UTF-8. It does not yet tell two members of
+                // the UTF-8 family apart, so a UTF-8 replacement into a
+                // `UTF8-MAC` receiver merges where CRuby refuses
+                // (#1562, left over).
                 check_replacement_encoding_compat(globals, self_val, arg1)?;
             }
             if let Some(res) = string_pattern_replace(vm, self_val, lfp.arg(0), arg1, false) {
@@ -4701,7 +4728,7 @@ fn mustnot_broken(inner: &RStringInner) -> Result<()> {
 /// which never looks at a character, so a broken one is not refused
 /// there.
 fn multibyte_encoding(enc: crate::value::Encoding) -> bool {
-    enc == crate::value::Encoding::Utf8 || crate::value::mbc_walker(enc).is_some()
+    matches!(enc, crate::value::Encoding::Utf8(_)) || crate::value::mbc_walker(enc).is_some()
 }
 
 /// [`mustnot_broken`] for the methods CRuby only refuses when the
@@ -5054,7 +5081,7 @@ pub(crate) fn regexp_source_desc_bytes(
     use crate::value::Encoding as E;
     let unicode = matches!(
         enc,
-        E::Utf8 | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
+        E::Utf8(_) | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
     );
     // CRuby shows a character as itself when the result encoding is the
     // pattern's own; otherwise it escapes it by value.
@@ -5517,6 +5544,11 @@ fn string_match(
     // `#match` / `#match?` compile a Regexp even from a String pattern,
     // so a broken receiver is refused whatever the argument is.
     mustnot_broken(&s)?;
+    // Ahead of the view split below, not inside its native branch: a
+    // subject whose encoding is UTF-8's bytes under another name
+    // (`UTF8-MAC`) reads through the `&str` path, and CRuby refuses a
+    // UTF-8 regexp against it all the same (#1562).
+    super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), s.is_ascii_only())?;
     // A subject in a non-UTF-8 encoding Onigmo has a native codec for
     // (BINARY with 8-bit content, EUC-JP, Shift_JIS, ...) is matched on
     // its raw bytes, so the MatchData's strings and byte offsets are the
@@ -5524,7 +5556,6 @@ fn string_match(
     if s.code_range() != CodeRange::SevenBit
         && let Some(native_enc) = RegexpInner::onigmo_encoding_for(s.encoding())
     {
-        super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
         let byte_pos = match raw_pos {
             None | Some(0) => 0,
             Some(mut pos) => {
@@ -5678,7 +5709,7 @@ fn string_strscan_match(
     // Anything else takes the Ruby-side `String#match` fallback, which
     // knows how to view those.
     let ascii = s.is_ascii_only();
-    let utf8_view = ascii || (s.encoding() == Encoding::Utf8 && s.is_valid_encoding());
+    let utf8_view = ascii || (s.encoding() == Encoding::UTF8 && s.is_valid_encoding());
     let native_enc = if utf8_view {
         None
     } else if let Some(enc) = RegexpInner::onigmo_encoding_for(s.encoding()) {
@@ -5763,12 +5794,16 @@ fn string_match_(
     // `#match?` compiles a Regexp even from a String pattern, so a
     // broken receiver is refused whatever the argument is.
     mustnot_broken(&s)?;
+    // Ahead of the view split below, not inside its native branch: a
+    // subject whose encoding is UTF-8's bytes under another name
+    // (`UTF8-MAC`) reads through the `&str` path, and CRuby refuses a
+    // UTF-8 regexp against it all the same (#1562).
+    super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), s.is_ascii_only())?;
     // Native byte match for non-UTF-8 subjects with an Onigmo codec (see
     // `String#match`).
     if s.code_range() != CodeRange::SevenBit
         && let Some(native_enc) = RegexpInner::onigmo_encoding_for(s.encoding())
     {
-        super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
         let byte_pos = match raw_pos {
             None | Some(0) => 0,
             Some(pos) => match conv_index(pos, s.char_length()) {
@@ -8581,7 +8616,10 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     // encoding re-derived by `Symbol#to_s` (US-ASCII vs UTF-8); other
     // encodings are byte-interned keyed by `(bytes, encoding)` so the
     // symbol carries (and round-trips) its distinct identity.
-    let id = if matches!(canon, E::UsAscii | E::Utf8) {
+    // `Encoding::UTF8`, not `Utf8(_)`: a `UTF8-MAC` name is an
+    // encoding of its own to CRuby, and interning it as a plain string
+    // would hand it back as UTF-8 (#1562).
+    let id = if matches!(canon, E::UsAscii | E::UTF8) {
         match std::str::from_utf8(inner.as_bytes()) {
             Ok(s) => IdentId::get_id(s),
             Err(_) => IdentId::get_id_from_bytes(inner.as_bytes().to_vec(), E::Ascii8),
@@ -8623,7 +8661,7 @@ fn ascii_case_fast_path(inner: &RStringInner, op: CaseOp, mode: CaseMode) -> Opt
         let enc = inner.encoding();
         if matches!(
             enc,
-            crate::value::Encoding::EucJp
+            crate::value::Encoding::EucJp(_)
                 | crate::value::Encoding::Sjis(_)
                 | crate::value::Encoding::Ascii8
                 | crate::value::Encoding::Iso8859(_)
@@ -8913,7 +8951,7 @@ fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let enc = self_val
         .is_rstring_inner()
         .map(|r| r.encoding())
-        .unwrap_or(crate::value::Encoding::Utf8);
+        .unwrap_or(crate::value::Encoding::UTF8);
     self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
 
     Ok(if changed {
@@ -8984,7 +9022,7 @@ fn downcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let enc = self_val
         .is_rstring_inner()
         .map(|r| r.encoding())
-        .unwrap_or(crate::value::Encoding::Utf8);
+        .unwrap_or(crate::value::Encoding::UTF8);
     self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
 
     Ok(if changed {
@@ -9065,7 +9103,7 @@ fn capitalize_(
     let enc = self_val
         .is_rstring_inner()
         .map(|r| r.encoding())
-        .unwrap_or(crate::value::Encoding::Utf8);
+        .unwrap_or(crate::value::Encoding::UTF8);
     self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
     Ok(if changed {
         lfp.self_val()
@@ -9135,7 +9173,7 @@ fn swapcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let enc = self_val
         .is_rstring_inner()
         .map(|r| r.encoding())
-        .unwrap_or(crate::value::Encoding::Utf8);
+        .unwrap_or(crate::value::Encoding::UTF8);
     self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
     Ok(if changed {
         lfp.self_val()
@@ -10286,7 +10324,7 @@ fn tr_sets_cp(
     // `single_byte_optimizable` walks its bytes instead, which is what
     // the codepoint path below does. (See `nonutf8_charsets`.)
     let single_byte_broken =
-        enc != crate::value::Encoding::Utf8 && !recv.is_valid_encoding();
+        !matches!(enc, crate::value::Encoding::Utf8(_)) && !recv.is_valid_encoding();
     // An ASCII-only receiver and ASCII-only sets: the byte paths are
     // already per character, and cheaper.
     if !single_byte_broken
@@ -10740,7 +10778,7 @@ fn enc_is_unicode(enc: crate::value::Encoding) -> bool {
     use crate::value::Encoding as E;
     matches!(
         enc,
-        E::Utf8 | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
+        E::Utf8(_) | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
     )
 }
 
@@ -10934,7 +10972,7 @@ fn nonutf8_charsets(
     // CRuby does not ask for one: it is `single_byte_optimizable`, so
     // each byte is its own character and the codepoint path below is
     // that byte walk.
-    if recv.encoding() == crate::value::Encoding::Utf8
+    if matches!(recv.encoding(), crate::value::Encoding::Utf8(_))
         || (recv.encoding().is_utf8_compatible() && recv.is_valid_encoding())
     {
         return Ok(None);
@@ -11686,7 +11724,7 @@ fn dump(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     let enc = if inner.encoding().is_ascii_compatible() {
         inner.encoding()
     } else {
-        Encoding::Utf8
+        Encoding::UTF8
     };
     Ok(Value::string_from_inner(
         RStringInner::from_encoding_scanned(dumped.as_bytes(), enc),
@@ -11824,7 +11862,7 @@ fn scrub_replacement(globals: &mut Globals, lfp: Lfp, self_enc: Encoding) -> Res
 
 fn default_scrub_replacement(enc: Encoding) -> RStringInner {
     match enc {
-        Encoding::Utf8 => RStringInner::from_encoding("\u{FFFD}".as_bytes(), Encoding::Utf8),
+        Encoding::UTF8 => RStringInner::from_encoding("\u{FFFD}".as_bytes(), Encoding::UTF8),
         _ => RStringInner::from_encoding(b"?", enc),
     }
 }
@@ -11850,7 +11888,7 @@ fn scrub_inner_with_block(
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let data = vm.get_block_data(globals, bh)?;
     match enc {
-        Encoding::Utf8 => {
+        Encoding::Utf8(_) => {
             let mut i = 0;
             while i < bytes.len() {
                 match std::str::from_utf8(&bytes[i..]) {
@@ -12104,9 +12142,12 @@ fn normalize_form(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<&
 /// UTF-32 forms). Anything else is refused whatever the content — an
 /// ASCII-only EUC-JP string too.
 fn ensure_unicode_normalizable(globals: &Globals, enc: Encoding) -> Result<()> {
+    // `Encoding::UTF8`, not `Utf8(_)`: the family's other members
+    // are encodings of their own to CRuby, and it refuses them here
+    // like any other (#1562).
     if matches!(
         enc,
-        Encoding::Utf8
+        Encoding::UTF8
             | Encoding::UsAscii
             | Encoding::Utf16Le
             | Encoding::Utf16Be

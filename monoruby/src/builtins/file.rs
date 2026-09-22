@@ -991,14 +991,14 @@ fn resolved_path_value(
     force: bool,
 ) -> Value {
     use crate::value::Encoding as E;
-    if enc == E::Utf8 {
-        return path_value(&bytes, E::Utf8);
+    if enc == E::UTF8 {
+        return path_value(&bytes, E::UTF8);
     }
     let topts = super::encoding::TranscodeOpts::default();
-    match super::encoding::transcode_bytes_with_opts(&bytes, E::Utf8, enc, &topts, &globals.store) {
+    match super::encoding::transcode_bytes_with_opts(&bytes, E::UTF8, enc, &topts, &globals.store) {
         Ok(b) => path_value(&b, enc),
         Err(_) if force => path_value(&bytes, enc),
-        Err(_) => path_value(&bytes, E::Utf8),
+        Err(_) => path_value(&bytes, E::UTF8),
     }
 }
 
@@ -1811,7 +1811,7 @@ pub(super) fn path_value(bytes: &[u8], enc: crate::value::Encoding) -> Value {
 /// the encoding of the path argument.
 pub(super) fn filesystem_encoding(globals: &mut Globals) -> crate::value::Encoding {
     let obj = super::io::enc_default_external_obj(globals);
-    super::io::enc_obj_to_enum(globals, obj).unwrap_or(crate::value::Encoding::Utf8)
+    super::io::enc_obj_to_enum(globals, obj).unwrap_or(crate::value::Encoding::UTF8)
 }
 
 pub(super) fn to_path_str(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<String> {

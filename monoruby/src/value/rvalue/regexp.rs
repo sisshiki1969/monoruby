@@ -646,9 +646,9 @@ pub(crate) fn resolve_declared_encoding(
     }
     if let Some(kc) = kcode {
         let enc = if kc & RegexpInner::KCODE_UTF8 != 0 {
-            Encoding::Utf8
+            Encoding::UTF8
         } else if kc & RegexpInner::KCODE_EUCJP != 0 {
-            Encoding::EucJp
+            Encoding::EUC_JP
         } else if kc & RegexpInner::KCODE_SJIS != 0 {
             // CRuby's `/.../s` modifier sets Windows-31J (CP932),
             // not canonical Shift_JIS. Use Sjis(1) so that
@@ -684,7 +684,7 @@ fn source_encoding_fallback(
         Some(src) if !src.is_ascii_compatible() => (src, true),
         Some(src) if fixed_flag => (src, true),
         Some(_) => (Encoding::UsAscii, false),
-        None if has_non_ascii => (Encoding::Utf8, true),
+        None if has_non_ascii => (Encoding::UTF8, true),
         None => (Encoding::UsAscii, fixed_flag),
     }
 }
@@ -895,7 +895,7 @@ impl RegexpInner {
             && kcode.map(|k| k & Self::KCODE_UTF8 != 0).unwrap_or(true)
             && (has_non_ascii_unicode_escape(&reg_str) || has_escape(reg_str.as_bytes(), b"pP"))
         {
-            declared_encoding = crate::value::Encoding::Utf8;
+            declared_encoding = crate::value::Encoding::UTF8;
             fixed_encoding = true;
         }
         // A source that is broken in its own encoding is refused
@@ -1160,7 +1160,7 @@ impl RegexpInner {
             // ASCII-only pattern is byte-transparent; a pattern pinned to
             // another encoding is refused by `check_match_encoding` first.
             E::Ascii8 => OnigmoEncoding::ASCII,
-            E::EucJp => OnigmoEncoding::EUC_JP,
+            E::EucJp(_) => OnigmoEncoding::EUC_JP,
             // Ruby treats Shift_JIS / Windows-31J as one codec family;
             // Windows_31J is the superset CRuby actually pins for /s.
             E::Sjis(_) => OnigmoEncoding::Windows_31J,
@@ -1557,7 +1557,7 @@ impl<'a> Subject<'a> {
     /// (a surrogate image included), the subject's own otherwise.
     pub(crate) fn view_encoding(&self) -> crate::value::Encoding {
         if self.text.is_some() {
-            crate::value::Encoding::Utf8
+            crate::value::Encoding::UTF8
         } else {
             self.enc
         }
@@ -1677,13 +1677,26 @@ impl RegexpInner {
         store: &Store,
         regexp_pattern: bool,
     ) -> Result<Option<Subject<'a>>> {
-        if !regexp_pattern || !inner.needs_byte_mapping() {
+        if !regexp_pattern {
+            return Ok(None);
+        }
+        // Every subject's encoding is checked against the pattern's,
+        // not only the ones that need a byte view of their own: a
+        // `UTF8_VARIANTS` member other than UTF-8 holds UTF-8 bytes,
+        // so it reads through the `&str` path below while CRuby
+        // refuses to match a UTF-8 regexp against it (#1562).
+        crate::builtins::check_match_encoding(
+            store,
+            self,
+            inner.encoding(),
+            inner.is_ascii_only(),
+        )?;
+        if !inner.needs_byte_mapping() {
             return Ok(None);
         }
         let Some(native) = Self::onigmo_encoding_for(inner.encoding()) else {
             return Ok(None);
         };
-        crate::builtins::check_match_encoding(store, self, inner.encoding(), false)?;
         // CRuby refuses a regexp search over a broken string
         // (`rb_reg_prepare_re`: "invalid byte sequence").
         if !inner.is_valid_encoding() {

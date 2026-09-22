@@ -383,7 +383,7 @@ pub(crate) fn argf_getline_raw(
                 pair
             }
         };
-        let complete_utf8 = ext == crate::value::Encoding::Utf8;
+        let complete_utf8 = matches!(ext, crate::value::Encoding::Utf8(_));
         let line = super::io::blocking_io_region(vm, globals, stream, libc::POLLIN, |_store| {
             let mut s = stream;
             s.as_io_inner_mut().getline(sep, limit, complete_utf8)
@@ -566,7 +566,7 @@ fn default_encodings(
 ) -> (crate::value::Encoding, Option<crate::value::Encoding>) {
     use crate::value::Encoding as E;
     let ext_v = super::io::enc_default_external_obj(globals);
-    let ext = super::io::enc_obj_to_enum(globals, ext_v).unwrap_or(E::Utf8);
+    let ext = super::io::enc_obj_to_enum(globals, ext_v).unwrap_or(E::UTF8);
     (ext, None)
 }
 

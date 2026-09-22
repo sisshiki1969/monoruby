@@ -37,12 +37,15 @@ pub(crate) use regexp::{Spans, Subject, save_spans, spans_of};
 pub(crate) use string::pack::*;
 pub use string::{
     CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET,
-    STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, char_bytes_code, map_bytes_to_utf8,
+    STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, STRING_TY_PAYLOAD_OFFSET,
+    STRING_TY_PAYLOAD_TAG, char_bytes_code, map_bytes_to_utf8,
 };
 pub(crate) use string::{
-    MbcPiece, PreciseLen, char_count, char_width_at, eucjp_char_width, eucjp_precise_len,
-    IllFormed, mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width, sjis_precise_len,
-    walk_mbc, walk_mbc_with,
+    MbcPiece, PreciseLen, char_count, char_width_at, euc_jp_const_name, eucjp_char_width,
+    CESU_8, UTF8_MAC, cesu8_precise_len, cesu8_to_utf8, mac_to_utf8, utf8_const_name,
+    utf8_to_cesu8, utf8_to_mac, CESU8_MAX_LEN,
+    eucjp_precise_len, IllFormed, mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width,
+    sjis_precise_len, walk_mbc, walk_mbc_with,
 };
 pub(crate) use string::{
     STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer, string_snapshot,
@@ -1510,7 +1513,7 @@ impl RValue {
     /// frozen template is excluded because copying it is
     /// `share_string_buffer`'s CoW job, not a byte copy.
     ///
-    pub(crate) fn inline_copyable_string(&self) -> Option<(Vec<u8>, u8, u8)> {
+    pub(crate) fn inline_copyable_string(&self) -> Option<(Vec<u8>, Encoding, u8)> {
         if self.ty() != ObjTy::STRING || self.var_table.is_some() || self.is_frozen() {
             return None;
         }

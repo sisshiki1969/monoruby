@@ -794,7 +794,7 @@ pub(crate) fn pack(
     let promote_text = |cur: Option<Encoding>, new: Encoding| -> Option<Encoding> {
         let rank = |e: Encoding| match e {
             Encoding::UsAscii => 1,
-            Encoding::Utf8 => 2,
+            Encoding::Utf8(_) => 2,
             _ => 0,
         };
         match cur {
@@ -1199,7 +1199,7 @@ pub(crate) fn pack(
                         emit(*value)?;
                     }
                 }
-                text_encoding = promote_text(text_encoding, Encoding::Utf8);
+                text_encoding = promote_text(text_encoding, Encoding::UTF8);
             }
             Template::BerCompressedInt => {
                 // 'w' — BER compressed integer (handles Bignums too).

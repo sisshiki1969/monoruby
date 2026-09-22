@@ -324,11 +324,11 @@ impl Codegen {
                 tst x9, x10;
             );
             self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
-            // Payload-free encodings only: discriminants 0..=6
-            // (Ascii8..Utf32Be) carry no payload byte, so one byte is the
-            // whole `Encoding`; payload-carrying / exotic encodings
-            // (Iso8859(n), Sjis(n), …) go to the helper's full
-            // negotiation. Equal encodings pass outright; a *mismatched*
+            // Discriminants 0..=6 (Ascii8..Utf32Be) only; the exotic
+            // encodings past them (Iso8859(n), Sjis(n), …) go to the
+            // helper's full negotiation. Of those seven only `Utf8`
+            // carries a payload byte, checked below; the rest are one
+            // byte whole. Equal encodings pass outright; a *mismatched*
             // pair still appends in place when both are ASCII-compatible
             // (0..=2: Ascii8/Utf8/UsAscii), the piece is cached SevenBit,
             // and the receiver is cached SevenBit or Valid —
@@ -340,6 +340,7 @@ impl Codegen {
             // caches the piece's cr, so a repeated piece inlines from its
             // second append on.
             let enc_mixed = self.jit.label();
+            let enc_same = self.jit.label();
             monoasm_arm64!(&mut self.jit,
                 ldrb w9, [x4, #(crate::rvalue::STRING_TY_OFFSET as u32)];
                 ldrb w10, [x3, #(crate::rvalue::STRING_TY_OFFSET as u32)];
@@ -350,6 +351,22 @@ impl Codegen {
                 cmp x9, #(6);
             );
             self.jit.bcond_label(monoasm::Cond::Gt, &fallback);
+            // Same tag, and it is `Utf8`: the payload byte decides
+            // whether these really are the same encoding, since UTF-8
+            // and `UTF8-MAC` share the discriminant. A mismatched pair
+            // takes the helper — the mixed path below reads the tags,
+            // which these share (#1562).
+            monoasm_arm64!(&mut self.jit,
+                cmp x9, #(crate::rvalue::STRING_TY_PAYLOAD_TAG as u64);
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &enc_same);
+            monoasm_arm64!(&mut self.jit,
+                ldrb w9, [x4, #(crate::rvalue::STRING_TY_PAYLOAD_OFFSET as u32)];
+                ldrb w10, [x3, #(crate::rvalue::STRING_TY_PAYLOAD_OFFSET as u32)];
+                cmp x9, x10;
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+            self.jit.bind_label(enc_same);
             // The piece's cr must be cached (SevenBit / Valid): folding an
             // uncached piece leaves the receiver Unknown, and the next
             // mixed-encoding append re-classifies the whole buffer (see the

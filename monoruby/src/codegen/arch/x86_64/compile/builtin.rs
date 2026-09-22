@@ -296,6 +296,7 @@ impl Codegen {
         let detach_path = self.jit.label();
         if hint != StringShlHint::Fixnum {
             let enc_mixed = self.jit.label();
+            let enc_same = self.jit.label();
             let recv_ready = self.jit.label();
             let arg_ready = self.jit.label();
             let copy_loop = self.jit.label();
@@ -312,13 +313,16 @@ impl Codegen {
                 // frozen (0b010) or chilled (0b100) → helper raises / warns
                 testb [rdi + (RVALUE_OFFSET_FLAG)], (0b110);
                 jnz  fallback;
-                // Payload-free encodings only: discriminants 0..=6
-                // (Ascii8..Utf32Be) carry no payload byte, so one byte is
-                // the whole `Encoding`; payload-carrying / exotic
-                // encodings (Iso8859(n), Sjis(n), …) go to the helper's
-                // full negotiation. Equal encodings pass outright; a
-                // *mismatched* pair still appends in place when both are
-                // ASCII-compatible (0..=2: Ascii8/Utf8/UsAscii), the
+                // Discriminants 0..=6 (Ascii8..Utf32Be) only; the
+                // exotic encodings past them (Iso8859(n), Sjis(n), …)
+                // go to the helper's full negotiation. Of those seven
+                // only `Utf8` carries a payload byte — UTF-8 and
+                // `UTF8-MAC` share its discriminant — so an equal tag
+                // there is checked against the payload too before it
+                // counts as an equal encoding (#1562). Equal encodings
+                // pass outright; a *mismatched* pair still appends in
+                // place when both are ASCII-compatible (0..=2:
+                // Ascii8/Utf8/UsAscii), the
                 // piece is cached SevenBit, and the receiver is cached
                 // SevenBit or Valid — `Encoding.compatible?` then answers
                 // the receiver's encoding (rule 1 when the receiver is
@@ -333,6 +337,17 @@ impl Codegen {
                 jne  enc_mixed;
                 cmpq rax, (6);
                 jgt  fallback;
+                // Same tag, and it is `Utf8`: the payload byte decides
+                // whether these really are the same encoding. A
+                // UTF-8 / `UTF8-MAC` pair takes the helper — the
+                // mixed path below reads the tags, which these share.
+                cmpq rax, (crate::rvalue::STRING_TY_PAYLOAD_TAG);
+                jne  enc_same;
+                movzxb rax, [rdi + (crate::rvalue::STRING_TY_PAYLOAD_OFFSET)];
+                movzxb rcx, [rsi + (crate::rvalue::STRING_TY_PAYLOAD_OFFSET)];
+                cmpq rax, rcx;
+                jne  fallback;
+            enc_same:
                 // The piece's cr must be cached (SevenBit / Valid). Folding
                 // an *uncached* piece would leave the receiver Unknown, and
                 // the next mixed-encoding append (`buf << 1.to_s`) then

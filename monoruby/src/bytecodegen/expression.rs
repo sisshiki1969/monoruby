@@ -1074,7 +1074,7 @@ impl<'a> BytecodeGen<'a> {
                         NodeKind::EncodedString(b, enc_name) => {
                             let r = self.push().into();
                             let enc = crate::value::Encoding::try_from_str(enc_name)
-                                .unwrap_or(crate::value::Encoding::Utf8);
+                                .unwrap_or(crate::value::Encoding::UTF8);
                             self.emit_frozen_interned(r, &b, enc, loc);
                         }
                         _ => {
@@ -2081,7 +2081,7 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Bytes(b) => self.store.intern_frozen_str(b, enc),
             NodeKind::EncodedString(b, name) => {
                 let enc = crate::value::Encoding::try_from_str(name)
-                    .unwrap_or(crate::value::Encoding::Utf8);
+                    .unwrap_or(crate::value::Encoding::UTF8);
                 self.store.intern_frozen_str(b, enc)
             }
             _ => Value::from_const_ast(node, enc),

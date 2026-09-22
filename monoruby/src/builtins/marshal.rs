@@ -612,7 +612,7 @@ impl<'a> MarshalReader<'a> {
             // ones load as the same object (CRuby's
             // `rb_str_to_interned_str`).
             let enc = if encoding.is_utf8_compatible() {
-                Encoding::Utf8
+                Encoding::UTF8
             } else {
                 encoding
             };
@@ -622,7 +622,7 @@ impl<'a> MarshalReader<'a> {
             return Ok(val);
         }
         let val = if encoding.is_utf8_compatible() {
-            Value::string_from_inner(RStringInner::from_encoding(bytes, Encoding::Utf8))
+            Value::string_from_inner(RStringInner::from_encoding(bytes, Encoding::UTF8))
         } else {
             // Non-UTF-8 encodings (Ascii8 / dummy): preserve the
             // declared encoding tag verbatim. Marshal data records
@@ -941,7 +941,7 @@ impl<'a> MarshalReader<'a> {
                             message = Some(String::from_utf8_lossy(s.as_bytes()).into_owned());
                             // Keep the dumped bytes and encoding so a
                             // BINARY message does not come back UTF-8.
-                            if s.encoding() != crate::value::Encoding::Utf8 {
+                            if s.encoding() != crate::value::Encoding::UTF8 {
                                 raw_message = Some((s.as_bytes().to_vec(), s.encoding()));
                             }
                         }
@@ -1064,7 +1064,7 @@ impl<'a> MarshalReader<'a> {
             if sym_name == "E" {
                 match self.read_byte()? {
                     b'T' => {
-                        encoding = Encoding::Utf8;
+                        encoding = Encoding::UTF8;
                         // CRuby also passes the encoding flag value to the
                         // load proc (its return is irrelevant here).
                         self.fire_proc(vm, globals, Value::bool(true))?;
@@ -1660,7 +1660,10 @@ fn marshal_write_float(buf: &mut Vec<u8>, f: f64) {
 /// identity-equal to the same literal symbol; other encodings (binary,
 /// UTF-16, …) intern per (bytes, encoding) to preserve the distinction.
 fn intern_symbol_bytes(bytes: &[u8], enc: Encoding) -> IdentId {
-    if matches!(enc, Encoding::Utf8 | Encoding::UsAscii) {
+    // `Encoding::UTF8`, not `Utf8(_)`: a `UTF8-MAC` name is an
+    // encoding of its own to CRuby, and interning it as a plain string
+    // would hand it back as UTF-8 (#1562).
+    if matches!(enc, Encoding::UTF8 | Encoding::UsAscii) {
         if let Ok(s) = std::str::from_utf8(bytes) {
             return IdentId::get_id(s);
         }
@@ -1682,7 +1685,7 @@ fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentI
     // under a real encoding (UTF-8, or a named one) is wrapped in an 'I'
     // ivar block recording that encoding, and takes its symlink slot
     // *before* the encoding symbol.
-    let enc = id.symbol_encoding().unwrap_or(Encoding::Utf8);
+    let enc = id.symbol_encoding().unwrap_or(Encoding::UTF8);
     if ascii_only || enc == Encoding::Ascii8 {
         buf.push(b':');
         marshal_write_fixnum(buf, bytes.len() as i32);
@@ -1703,9 +1706,13 @@ fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentI
 /// same `I` block.
 fn marshal_write_encoding_ivar_pair(buf: &mut Vec<u8>, enc: Encoding, symbols: &mut Vec<IdentId>) {
     match enc {
-        Encoding::Utf8 | Encoding::UsAscii | Encoding::Ascii8 => {
+        // The short `E: true/false` form names UTF-8, US-ASCII and
+        // BINARY and nothing else — a `UTF8_VARIANTS` member other
+        // than UTF-8 itself has to go out under its own name, or it
+        // would come back as US-ASCII (#1562).
+        Encoding::UTF8 | Encoding::UsAscii | Encoding::Ascii8 => {
             marshal_write_symbol(buf, IdentId::get_id("E"), symbols);
-            buf.push(if enc == Encoding::Utf8 { b'T' } else { b'F' });
+            buf.push(if enc == Encoding::UTF8 { b'T' } else { b'F' });
         }
         _ => {
             marshal_write_symbol(buf, IdentId::get_id("encoding"), symbols);

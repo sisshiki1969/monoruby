@@ -83,7 +83,7 @@ pub use time::TimeInner;
 pub(crate) fn eval_src_encoding(code: Value) -> Option<String> {
     let inner = code.is_rstring_inner()?;
     let enc = inner.encoding();
-    if enc == crate::value::rvalue::Encoding::Utf8 {
+    if enc == crate::value::rvalue::Encoding::UTF8 {
         None
     } else {
         Some(enc.name().to_string())

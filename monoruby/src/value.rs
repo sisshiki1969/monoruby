@@ -1014,7 +1014,7 @@ impl Value {
     /// in a UTF-8 source — and `Symbol#{to_s,encoding}` report the
     /// recorded encoding (CRuby).
     pub(crate) fn symbol_from_source_str(s: &str, src_enc: Encoding) -> Self {
-        if s.is_ascii() || matches!(src_enc, Encoding::Utf8 | Encoding::UsAscii) {
+        if s.is_ascii() || matches!(src_enc, Encoding::Utf8(_) | Encoding::UsAscii) {
             return Self::symbol_from_str(s);
         }
         Value::symbol(IdentId::get_id_from_bytes(s.as_bytes().to_vec(), src_enc))
@@ -1273,7 +1273,7 @@ impl Value {
         let enc = template
             .is_rstring_inner()
             .map(|r| r.encoding())
-            .unwrap_or(crate::value::Encoding::Utf8);
+            .unwrap_or(crate::value::Encoding::UTF8);
         Self::string_from_inner(crate::value::RStringInner::from_encoding_scanned(
             s.as_bytes(),
             enc,
@@ -1289,7 +1289,7 @@ impl Value {
         let enc = template
             .is_rstring_inner()
             .map(|r| r.encoding())
-            .unwrap_or(crate::value::Encoding::Utf8);
+            .unwrap_or(crate::value::Encoding::UTF8);
         Self::string_from_inner(crate::value::RStringInner::from_encoding_scanned(s, enc))
     }
 
@@ -1324,7 +1324,7 @@ impl Value {
     /// Pre-scanned so deep_copy clones inherit `cr` for free.
     ///
     pub fn string_from_source_str(s: &str, enc: Encoding) -> Self {
-        if matches!(enc, Encoding::Utf8) {
+        if matches!(enc, Encoding::Utf8(_)) {
             // Hot path: the common case (no magic comment) reuses the
             // existing UTF-8 scanned constructor verbatim.
             return Self::string_scanned(s.to_owned());
@@ -1919,7 +1919,8 @@ pub(crate) fn emit_chilled_string_mutation_warning(
             } else {
                 src
             };
-            if matches!(canon, Encoding::UsAscii | Encoding::Utf8) {
+            // `Encoding::UTF8` only — see `string::str_to_sym`.
+            if matches!(canon, Encoding::UsAscii | Encoding::UTF8) {
                 match std::str::from_utf8(bytes) {
                     Ok(utf8) => IdentId::get_id(utf8),
                     Err(_) => IdentId::get_id_from_bytes(bytes.to_vec(), Encoding::Ascii8),
@@ -2056,7 +2057,7 @@ pub(crate) fn inspect_symbol(id: IdentId, escape: bool) -> String {
             let enc = if s.is_ascii() {
                 Encoding::UsAscii
             } else {
-                Encoding::Utf8
+                Encoding::UTF8
             };
             (s.as_bytes(), enc)
         }
@@ -2126,7 +2127,7 @@ pub(crate) fn symbol_hash_label(id: IdentId, escape: bool) -> String {
             if s.is_ascii() {
                 Encoding::UsAscii
             } else {
-                Encoding::Utf8
+                Encoding::UTF8
             },
         ),
         IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
@@ -2693,7 +2694,7 @@ impl Value {
         self.try_rvalue()?.inline_copyable_array()
     }
 
-    pub(crate) fn inline_copyable_string(&self) -> Option<(Vec<u8>, u8, u8)> {
+    pub(crate) fn inline_copyable_string(&self) -> Option<(Vec<u8>, Encoding, u8)> {
         self.try_rvalue()?.inline_copyable_string()
     }
 
@@ -3330,7 +3331,7 @@ impl Value {
 impl Value {
     pub(crate) fn from_ast(node: &Node, globals: &mut Globals) -> Value {
         let mut vm = Executor::default();
-        Self::from_ast_inner(node, &mut vm, globals, Encoding::Utf8)
+        Self::from_ast_inner(node, &mut vm, globals, Encoding::UTF8)
     }
 
     fn from_ast_inner(
@@ -3365,7 +3366,7 @@ impl Value {
             NodeKind::String(s) => Value::string_from_source_str(s, src_enc),
             NodeKind::Bytes(b) => Value::string_from_source_bytes(b, src_enc),
             NodeKind::EncodedString(b, name) => {
-                let enc = Encoding::try_from_str(name).unwrap_or(Encoding::Utf8);
+                let enc = Encoding::try_from_str(name).unwrap_or(Encoding::UTF8);
                 Value::string_from_source_bytes(b, enc)
             }
             NodeKind::Array(v, ..) => {
@@ -3532,7 +3533,7 @@ impl Value {
             NodeKind::String(s) => Value::string_from_source_str(s, src_enc),
             NodeKind::Bytes(b) => Value::string_from_source_bytes(b, src_enc),
             NodeKind::EncodedString(b, name) => {
-                let enc = Encoding::try_from_str(name).unwrap_or(Encoding::Utf8);
+                let enc = Encoding::try_from_str(name).unwrap_or(Encoding::UTF8);
                 Value::string_from_source_bytes(b, enc)
             }
             NodeKind::Array(v, ..) => {
