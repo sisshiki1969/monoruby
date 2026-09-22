@@ -5564,8 +5564,77 @@ fn first_bad_sequence(enc: crate::value::Encoding, bytes: &[u8]) -> Option<(Vec<
         // is a byte bucket: no sequence in either is ill-formed, and
         // neither has a decoder to ask.
         _ if single_byte_table(enc).is_some() => None,
+        // An encoding whose walk agrees with CRuby's transcoder
+        // answers from that walk rather than from `encoding_rs`,
+        // whose idea of how far a malformed run reaches is not
+        // CRuby's: a byte that can never begin a sequence took the
+        // byte after it along (#1546).
+        _ if walk_reports_runs(enc) => first_bad_via_walk(enc, bytes),
         _ => first_bad_via_rs(encoding_to_rs(enc)?, bytes),
     }
+}
+
+/// Whether `enc`'s walk can be asked where a malformed run reaches.
+///
+/// It can when the walk and the converter agree about which sequences
+/// exist. CRuby's Big5 family and CP949 are the ones where they do
+/// not: `"\x8A\xA1"` is `valid_encoding? == false` in Big5 and yet
+/// an *undefined conversion* rather than a malformed one, because its
+/// transcoder reads leads its encoding object does not. Their runs
+/// stay with the codec, which is closer to that second answer; the
+/// gap itself is #1500's.
+fn walk_reports_runs(enc: crate::value::Encoding) -> bool {
+    use crate::value::Encoding as E;
+    match enc {
+        E::EucJp | E::Sjis(_) => true,
+        E::NamedByte(i) => matches!(
+            crate::value::named_byte_const_name(i),
+            "EUC_KR" | "GB2312" | "GB12345" | "EUC_TW" | "GBK" | "GB18030"
+        ),
+        _ => false,
+    }
+}
+
+/// Where the first ill-formed sequence in *bytes* is, according to
+/// the encoding's own walk.
+///
+/// CRuby reports a malformed run as the longest prefix that is still
+/// a *pending* sequence, with the byte that disproved it read again
+/// rather than swallowed — `"\xA1A"` in EUC-JP is `"\xA1"` followed
+/// by `"A"`. A byte that can never begin a sequence has no pending
+/// prefix at all, so the run is that byte alone and nothing is read
+/// again (#1546).
+fn first_bad_via_walk(
+    enc: crate::value::Encoding,
+    bytes: &[u8],
+) -> Option<(Vec<u8>, Vec<u8>, bool)> {
+    use crate::value::PreciseLen as P;
+    let (_, precise) = crate::value::mbc_walker(enc)?;
+    let mut at = 0;
+    while at < bytes.len() {
+        match precise(bytes, at) {
+            P::Char(n) if n > 0 => at += n,
+            // The buffer ended in the middle of a sequence.
+            P::NeedMore => return Some((bytes[at..].to_vec(), vec![], true)),
+            _ => {
+                let rest = &bytes[at..];
+                let mut pending = 0;
+                for n in 1..rest.len() {
+                    if matches!(precise(&rest[..n], 0), P::NeedMore) {
+                        pending = n;
+                    } else {
+                        break;
+                    }
+                }
+                return Some(if pending == 0 {
+                    (vec![rest[0]], vec![], false)
+                } else {
+                    (rest[..pending].to_vec(), vec![rest[pending]], false)
+                });
+            }
+        }
+    }
+    None
 }
 
 /// Whether *bytes* are something `enc` can actually hold — every
@@ -10572,6 +10641,83 @@ mod tests {
             s2 = "abc\xa1def".dup
             d2 = "".dup
             r << ec2.primitive_convert(s2, d2, nil, 10) << [s2, d2] << ec2.putback
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_malformed_run_stops_where_the_encoding_says_it_does() {
+        // CRuby reports the run as the longest prefix that is still a
+        // *pending* sequence, with the byte that disproved it read
+        // again rather than swallowed. A byte that can never begin a
+        // sequence has no pending prefix, so the run is that byte
+        // alone — monoruby took the next byte along with it (#1546).
+        crate::tests::run_test_once(
+            r##"
+            [["Shift_JIS", 0x80], ["Windows-31J", 0x80], ["GB18030", 0x80],
+             ["EUC-KR", 0x81], ["EUC-KR", 0xA0], ["EUC-JP", 0xA1],
+             ["EUC-KR", 0xA1], ["Shift_JIS", 0x81]].flat_map do |enc, b|
+              [[], [0x41], [0xA1], [0xFF]].map do |tail|
+                s = ([b] + tail).pack("C*").force_encoding(enc)
+                begin
+                  s.encode("UTF-8")
+                  "ok"
+                rescue Encoding::InvalidByteSequenceError => e
+                  [e.error_bytes.bytes, (e.readagain_bytes || "").bytes,
+                   e.incomplete_input?, e.message]
+                rescue => e
+                  e.class.to_s
+                end
+              end
+            end
+            "##,
+        );
+        // The same through the converter, where the run decides how
+        // much of `src` is consumed. (EUC-KR is left out: its
+        // converter still *decodes* cells the encoding does not have,
+        // which is a separate leak on the other side of the same
+        // codec.)
+        crate::tests::run_test_once(
+            r##"
+            [["Shift_JIS", 0x80], ["Windows-31J", 0x80], ["EUC-JP", 0xA1]].map do |enc, b|
+              ec = Encoding::Converter.new(enc, "UTF-8")
+              s = ([b, 0x41, 0x42].pack("C*")).force_encoding(enc)
+              d = "".dup
+              [ec.primitive_convert(s, d), s.bytes, d.bytes,
+               ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            "##,
+        );
+        // `invalid: :replace` substitutes the run and re-reads the
+        // byte that disproved it, so a swallowed byte would go
+        // missing from the output.
+        crate::tests::run_test_once(
+            r##"
+            [["Shift_JIS", 0x80], ["EUC-KR", 0x81], ["EUC-KR", 0xA1],
+             ["EUC-JP", 0xA1], ["GB18030", 0x80]].map do |enc, b|
+              ([b, 0x41, 0x42].pack("C*")).force_encoding(enc)
+                .encode("UTF-8", invalid: :replace).bytes
+            end
+            "##,
+        );
+        // Big5 and CP949 keep the codec's answer: CRuby's transcoder
+        // there reads leads its own encoding object does not, so the
+        // walk is not the authority. These are the runs it gets right
+        // and the walk would not — the cells where the two disagree
+        // outright are #1500's, not this.
+        crate::tests::run_test_once(
+            r##"
+            [["Big5", 0x8A], ["Big5-HKSCS", 0x86], ["CP949", 0x80]].map do |enc, b|
+              s = ([b, 0x8F, 0xA1].pack("C*")).force_encoding(enc)
+              [s.valid_encoding?,
+               begin
+                 s.encode("UTF-8"); "ok"
+               rescue Encoding::InvalidByteSequenceError => e
+                 [e.error_bytes.bytes, (e.readagain_bytes || "").bytes]
+               rescue => e
+                 e.class.to_s
+               end]
+            end
             "##,
         );
     }
