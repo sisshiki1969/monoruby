@@ -778,6 +778,167 @@ pub(crate) fn stateless_iso2022jp_transcode_len(bytes: &[u8], pos: usize) -> Pre
     }
 }
 
+/// What stopped an ISO-2022-JP parse: where, the bytes CRuby reports
+/// as the malformed run, the ones it reads again, and whether the
+/// input simply ended in the middle.
+pub(crate) struct Iso2022JpStop {
+    pub at: usize,
+    pub error: Vec<u8>,
+    pub again: Vec<u8>,
+    pub incomplete: bool,
+}
+
+/// The stateless-ISO-2022-JP bytes the ISO-2022-JP `bytes` stand for.
+///
+/// The two are the same repertoire written two ways: ISO-2022-JP
+/// names the character set with an escape sequence that stays in
+/// effect, stateless names it with a lead byte on every character.
+/// `ESC $ @` and `ESC $ B` are JIS X 0208 1978 and 1983, which are
+/// stateless's `0x90` and `0x92`; `ESC ( B` and `ESC ( J` are ASCII
+/// and JIS X 0201 Roman, and CRuby reads both as plain ASCII bytes
+/// (#1609).
+pub(crate) fn iso2022jp_to_stateless(
+    bytes: &[u8],
+) -> std::result::Result<Vec<u8>, Iso2022JpStop> {
+    iso2022jp_to_stateless_from(bytes, None).map(|(out, _)| out)
+}
+
+/// The same, starting in the designation `start` left in effect and
+/// reporting the one this chunk leaves — which is what a converter
+/// needs, the escape staying in effect across `#convert` calls.
+pub(crate) fn iso2022jp_to_stateless_from(
+    bytes: &[u8],
+    start: Option<u8>,
+) -> std::result::Result<(Vec<u8>, Option<u8>), Iso2022JpStop> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut lead: Option<u8> = start;
+    let mut pos = 0;
+    while pos < bytes.len() {
+        if bytes[pos] == 0x1b {
+            let rest = &bytes[pos..];
+            match (rest.get(1), rest.get(2)) {
+                (Some(b'('), Some(b'B' | b'J')) => lead = None,
+                (Some(b'$'), Some(b'@')) => lead = Some(0x90),
+                (Some(b'$'), Some(b'B')) => lead = Some(0x92),
+                // An escape the encoding does not have: the prefix is
+                // the run and the byte that disproved it is read again.
+                (Some(&b1), Some(&b2)) => {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![0x1b, b1],
+                        again: vec![b2],
+                        incomplete: false,
+                    });
+                }
+                _ => {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: rest.to_vec(),
+                        again: vec![],
+                        incomplete: true,
+                    });
+                }
+            }
+            pos += 3;
+            continue;
+        }
+        match lead {
+            None => {
+                if bytes[pos] >= 0x80 {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![bytes[pos]],
+                        again: vec![],
+                        incomplete: false,
+                    });
+                }
+                out.push(bytes[pos]);
+                pos += 1;
+            }
+            Some(l) => {
+                let b1 = bytes[pos];
+                if !(0x21..=0x7e).contains(&b1) {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![b1],
+                        again: vec![],
+                        incomplete: false,
+                    });
+                }
+                let Some(&b2) = bytes.get(pos + 1) else {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![b1],
+                        again: vec![],
+                        incomplete: true,
+                    });
+                };
+                if !(0x21..=0x7e).contains(&b2) {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![b1],
+                        again: vec![b2],
+                        incomplete: false,
+                    });
+                }
+                out.extend_from_slice(&[l, b1 + 0x80, b2 + 0x80]);
+                pos += 2;
+            }
+        }
+    }
+    Ok((out, lead))
+}
+
+/// The ISO-2022-JP bytes for the stateless-ISO-2022-JP `bytes`, or
+/// `Err(offset)` at the first sequence ISO-2022-JP cannot hold — the
+/// single-byte sets `0x81..=0x8F` name and the two-byte ones other
+/// than JIS X 0208.
+pub(crate) fn stateless_to_iso2022jp(bytes: &[u8]) -> std::result::Result<Vec<u8>, usize> {
+    stateless_to_iso2022jp_from(bytes, None, true).map(|(out, _)| out)
+}
+
+/// The same, starting in the designation `start` and closing back to
+/// ASCII only when `close` — a converter emits that last escape from
+/// `#finish`, not from every `#convert` (#1609).
+pub(crate) fn stateless_to_iso2022jp_from(
+    bytes: &[u8],
+    start: Option<u8>,
+    close: bool,
+) -> std::result::Result<(Vec<u8>, Option<u8>), usize> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut lead: Option<u8> = start;
+    let mut pos = 0;
+    while pos < bytes.len() {
+        match bytes[pos] {
+            b @ 0x00..=0x7f => {
+                if lead.take().is_some() {
+                    out.extend_from_slice(b"\x1b(B");
+                }
+                out.push(b);
+                pos += 1;
+            }
+            l @ (0x90 | 0x92)
+                if matches!(bytes.get(pos + 1), Some(0xa1..=0xfe))
+                    && matches!(bytes.get(pos + 2), Some(0xa1..=0xfe)) =>
+            {
+                if lead != Some(l) {
+                    out.extend_from_slice(if l == 0x90 { b"\x1b$@" } else { b"\x1b$B" });
+                    lead = Some(l);
+                }
+                out.push(bytes[pos + 1] - 0x80);
+                out.push(bytes[pos + 2] - 0x80);
+                pos += 3;
+            }
+            _ => return Err(pos),
+        }
+    }
+    // A run of cells is closed off, so the bytes end in ASCII.
+    if close && lead.take().is_some() {
+        out.extend_from_slice(b"\x1b(B");
+    }
+    Ok((out, lead))
+}
+
 /// The EUC-JP bytes the stateless-ISO-2022-JP `bytes` stand for, or
 /// `Err(offset)` at the first sequence that is not stateless's.
 ///
