@@ -2169,6 +2169,33 @@ fn replaces_with_u_fffd(enc: crate::value::Encoding) -> bool {
     }
 }
 
+/// The endianness-less dummy `UTF-16` / `UTF-32` as a *decode* source:
+/// the concrete encoding its BOM names, and the bytes after it.
+///
+/// CRuby reads the BOM and consumes it. Without one the source is
+/// ill-formed — there is nothing to say which end the code units start
+/// at — so this answers `None` and the caller reports it, naming the
+/// first code unit as the dummy encoding's own (#1576).
+fn dummy_wide_source(
+    enc: crate::value::Encoding,
+    bytes: &[u8],
+) -> Option<(crate::value::Encoding, &[u8])> {
+    use crate::value::Encoding as E;
+    let wide = dummy_wide_target(enc)?;
+    match wide {
+        E::Utf16Be => match bytes {
+            [0xFE, 0xFF, rest @ ..] => Some((E::Utf16Be, rest)),
+            [0xFF, 0xFE, rest @ ..] => Some((E::Utf16Le, rest)),
+            _ => None,
+        },
+        _ => match bytes {
+            [0x00, 0x00, 0xFE, 0xFF, rest @ ..] => Some((E::Utf32Be, rest)),
+            [0xFF, 0xFE, 0x00, 0x00, rest @ ..] => Some((E::Utf32Le, rest)),
+            _ => None,
+        },
+    }
+}
+
 /// The endianness-less dummy `UTF-16` / `UTF-32` as an encode target:
 /// returns the big-endian concrete encoding CRuby writes after a BOM.
 fn dummy_wide_target(enc: crate::value::Encoding) -> Option<crate::value::Encoding> {
@@ -2438,6 +2465,7 @@ fn pivot_replacement(dst_enc: crate::value::Encoding) -> String {
     }
 }
 
+
 /// Re-spell a pivot conversion's error for the destination the caller
 /// actually named.
 ///
@@ -2597,6 +2625,17 @@ pub(super) fn transcode_bytes_with_opts(
             let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
             return Ok(crate::value::utf8_to_cesu8(&utf8));
         }
+    }
+    // The endianness-less dummies read the other way too: the BOM
+    // names the endianness and is consumed, and without one there is
+    // nothing to say which end the code units start at, so the source
+    // is ill-formed (#1576). `dst_enc` may be the dummy as well — the
+    // encode half below writes its own BOM.
+    if dummy_wide_target(src_enc).is_some() {
+        let Some((wide, rest)) = dummy_wide_source(src_enc, src_bytes) else {
+            return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+        };
+        return transcode_bytes_with_opts(rest, wide, dst_enc, opts, store);
     }
     // EUC-JP ↔ Shift_JIS needs no pivot: CRuby maps the shared JIS
     // X 0208 plane cell to cell, which reaches the cells its own
@@ -4071,6 +4110,15 @@ const CONVERTER_LAST_ERROR_IVAR: &str = "/converter_last_error";
 /// `UNDEF_REPLACE` Integer-flag bits). Stored as a Fixnum:
 /// bit0 = invalid→replace, bit1 = undef→replace.
 const CONVERTER_FLAGS_IVAR: &str = "/converter_flags";
+
+/// The concrete endianness the source stream's BOM named, once one
+/// has been seen. The dummy `UTF-16` / `UTF-32` carry it in the first
+/// chunk only, so the chunks after it have to be told (#1576).
+const CONVERTER_SRC_BOM_IVAR: &str = "/converter_src_bom";
+
+/// Set once the destination's BOM has been written. The dummies write
+/// one, and only ahead of the first character they emit (#1576).
+const CONVERTER_DST_BOM_IVAR: &str = "/converter_dst_bom";
 const CONVERTER_FLAG_INVALID_REPLACE: i64 = 0b01;
 const CONVERTER_FLAG_UNDEF_REPLACE: i64 = 0b10;
 
@@ -4195,10 +4243,27 @@ fn validate_replacement(
     ))
 }
 
+/// Whether monoruby can convert to and from `enc`.
+///
+/// `Encoding::Converter` converts a chunk at a time, so this is not
+/// quite the same question `String#encode` asks: the pivot wrappers
+/// need an arm in `stream_convert` and the endianness-less dummies
+/// need their BOM remembered across calls. Both are there now, so the
+/// two entry points agree on the whole set (#1576).
+fn has_codec(enc: crate::value::Encoding) -> bool {
+    use crate::value::Encoding as E;
+    encoding_to_rs(enc).is_some()
+        || single_byte_table(enc).is_some()
+        || is_utf16_or_32(enc)
+        || dummy_wide_target(enc).is_some()
+        || enc == E::NamedByte(crate::value::CESU_8)
+        || matches!(enc, E::Ascii8 | E::UsAscii)
+}
+
 /// Validate that `(src, dst)` is a transcoder monoruby can run.
 /// Raises `Encoding::ConverterNotFoundError` for anything
-/// `encoding_rs` doesn't cover (UTF-32, dummy CRuby encodings).
-/// Identical encodings are always allowed.
+/// [`has_codec`] does not cover. Identical encodings are always
+/// allowed.
 fn validate_converter_pair(
     src: crate::value::Encoding,
     dst: crate::value::Encoding,
@@ -4207,20 +4272,8 @@ fn validate_converter_pair(
     if src == dst {
         return Ok(());
     }
-    let src_supported = encoding_to_rs(src).is_some()
-        || single_byte_table(src).is_some()
-        || is_utf16_or_32(src)
-        || matches!(
-            src,
-            crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
-        );
-    let dst_supported = encoding_to_rs(dst).is_some()
-        || single_byte_table(dst).is_some()
-        || is_utf16_or_32(dst)
-        || matches!(
-            dst,
-            crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
-        );
+    let src_supported = has_codec(src);
+    let dst_supported = has_codec(dst);
     if !src_supported || !dst_supported {
         return Err(MonorubyErr::converter_not_found_error(
             store,
@@ -4246,6 +4299,81 @@ fn encoding_value(globals: &Globals, enc: crate::value::Encoding) -> Value {
         .unwrap_or(Value::nil())
 }
 
+
+/// The encoding a chunk of this converter's source is to be read as.
+///
+/// The dummy `UTF-16` / `UTF-32` carry their BOM in the first chunk
+/// only. That chunk stays the dummy — `stream_convert` reads the BOM
+/// off it and converts the rest — and the byte order it named is
+/// remembered here, so every chunk after it is read as the concrete
+/// encoding (#1576). Any other source is already settled and answers
+/// itself.
+fn converter_resolve_src_bom(
+    globals: &mut Globals,
+    recv: Value,
+    src_enc: crate::value::Encoding,
+    input: &[u8],
+) -> crate::value::Encoding {
+    if dummy_wide_target(src_enc).is_none() {
+        return src_enc;
+    }
+    let id = IdentId::get_id(CONVERTER_SRC_BOM_IVAR);
+    if let Some(enc) = globals
+        .store
+        .get_ivar(recv, id)
+        .and_then(|v| v.is_str().map(|s| s.to_string()))
+        .and_then(|s| crate::value::Encoding::try_from_str(&s).ok())
+    {
+        return enc;
+    }
+    if let Some((enc, _)) = dummy_wide_source(src_enc, input) {
+        let _ = globals
+            .store
+            .set_ivar(recv, id, Value::string_from_str(enc.name()));
+    }
+    // Either way this chunk is the one the BOM is in, or the one that
+    // shows there is none; the dummy is what reads it.
+    src_enc
+}
+
+/// The destination's own BOM. The endianness-less dummies write one
+/// ahead of the first character they emit; everything else writes
+/// none (#1576).
+fn converter_dst_bom(dst_enc: crate::value::Encoding) -> Vec<u8> {
+    match dummy_wide_target(dst_enc) {
+        Some(crate::value::Encoding::Utf16Be) => vec![0xFE, 0xFF],
+        Some(_) => vec![0x00, 0x00, 0xFE, 0xFF],
+        None => vec![],
+    }
+}
+
+/// Whether this converter still owes its destination a BOM.
+fn converter_dst_bom_owed(globals: &Globals, recv: Value, dst_enc: crate::value::Encoding) -> bool {
+    dummy_wide_target(dst_enc).is_some()
+        && globals
+            .store
+            .get_ivar(recv, IdentId::get_id(CONVERTER_DST_BOM_IVAR))
+            .is_none()
+}
+
+/// The BOM to put in front of `out`, marking it written. A call that
+/// emits nothing writes no BOM either, which is how CRuby answers an
+/// empty chunk and a `#finish` that had nothing held.
+fn converter_take_dst_bom(
+    globals: &mut Globals,
+    recv: Value,
+    dst_enc: crate::value::Encoding,
+) -> Vec<u8> {
+    if !converter_dst_bom_owed(globals, recv, dst_enc) {
+        return vec![];
+    }
+    let _ = globals.store.set_ivar(
+        recv,
+        IdentId::get_id(CONVERTER_DST_BOM_IVAR),
+        Value::bool(true),
+    );
+    converter_dst_bom(dst_enc)
+}
 
 /// Pull the source encoding out of a `Encoding::Converter`
 /// instance's stashed ivar. Returns `Encoding::Ascii8` as a
@@ -4613,7 +4741,16 @@ fn converter_convert(
     // Honour the configured replacement + `invalid:`/`undef:
     // :replace` flags (a user-set `#replacement=` too).
     let opts = converter_transcode_opts(globals, recv);
-    if opts.invalid_replace || opts.undef_replace {
+    // Some pairs carry state across calls, which a single-shot
+    // transcode has no way to keep: the endianness-less dummies carry
+    // a BOM, read once on the source side and written once on the
+    // destination side, and a `UTF8-MAC` source holds its trailing
+    // cluster back. Those go the streamed way whatever the flags say
+    // (#1576).
+    let stateful = dummy_wide_target(src).is_some()
+        || dummy_wide_target(dst).is_some()
+        || src == crate::value::Encoding::Utf8(crate::value::UTF8_MAC);
+    if (opts.invalid_replace || opts.undef_replace) && !stateful {
         // Replacement mode cannot error on content — the single-shot
         // transcoder suffices.
         let out = transcode_bytes_with_opts(&bytes, src, dst, &opts, &globals.store)?;
@@ -4642,7 +4779,26 @@ fn converter_convert(
         .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
         .unwrap_or_default();
     input.extend_from_slice(&bytes);
-    let (result, consumed, out, meta) = stream_convert(&input, src, dst, None, true, &opts);
+    // A dummy `UTF-16` / `UTF-32` source is read in whatever
+    // endianness its BOM named; until one has arrived whole there is
+    // nothing to read the chunk as (#1576).
+    // The encodings the conversion runs in. They differ from the
+    // converter's own only for the dummies, which stay the names every
+    // error message uses — CRuby reports "from UTF-16", not from
+    // whichever end its BOM turned out to name.
+    let src_stream = converter_resolve_src_bom(globals, recv, src, &input);
+    // The destination's: a dummy writes its BOM here, once, and then
+    // the big-endian form CRuby writes.
+    let dst_stream = dummy_wide_target(dst).unwrap_or(dst);
+    let (result, consumed, out, meta) =
+        stream_convert(&input, src_stream, dst_stream, None, true, &opts);
+    let out = if out.is_empty() {
+        out
+    } else {
+        let mut bom = converter_take_dst_bom(globals, recv, dst);
+        bom.extend_from_slice(&out);
+        bom
+    };
     match result {
         StreamConvertResult::Finished
         | StreamConvertResult::SourceBufferEmpty
@@ -4679,9 +4835,10 @@ fn converter_convert(
 /// ### Encoding::Converter#finish
 /// - finish -> String
 ///
-/// Marks the converter as drained and returns the trailing bytes
-/// (always empty in monoruby — none of the `encoding_rs`
-/// transcoders are stateful). Subsequent `convert` calls raise
+/// Marks the converter as drained and returns the trailing bytes:
+/// empty for the `encoding_rs` transcoders, which are stateless, and
+/// whatever a `UTF8-MAC` source held back for the composition that
+/// never came (#1576). Subsequent `convert` calls raise
 /// `ArgumentError`.
 ///
 #[monoruby_builtin]
@@ -4707,31 +4864,56 @@ fn converter_finish(
         .get_ivar(recv, pending_id)
         .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
         .unwrap_or_default();
+    let src_stream = converter_resolve_src_bom(globals, recv, src_enc, &pending);
+    let dst_stream = dummy_wide_target(dst).unwrap_or(dst);
+    let mut out: Vec<u8> = vec![];
     if !pending.is_empty() {
         let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
-        let meta = ErrMeta {
-            error_bytes: pending,
-            readagain_bytes: vec![],
-            ..ErrMeta::default()
-        };
-        let msg = store_conversion_outcome(
-            globals,
-            recv,
-            StreamConvertResult::IncompleteInput,
-            &meta,
-            src_enc,
-            dst,
-        )
-        .unwrap_or_default();
-        return Err(converter_last_error_raise(
-            globals,
-            recv,
-            StreamConvertResult::IncompleteInput,
-            msg,
-        ));
+        // The end of the input settles what a chunk could not: a
+        // cluster a `UTF8-MAC` source was holding in case a mark
+        // followed it now converts on its own — and can turn out to
+        // have no cell in the destination, which is that error and not
+        // an incomplete one. Only a tail that is still half a
+        // character is incomplete input.
+        let opts = converter_transcode_opts(globals, recv);
+        let (result, consumed, flushed, meta) =
+            stream_convert(&pending, src_stream, dst_stream, None, false, &opts);
+        if matches!(result, StreamConvertResult::Finished) && consumed == pending.len() {
+            out = flushed;
+        } else {
+            let (kind, meta) = match result {
+                StreamConvertResult::UndefinedConversion
+                | StreamConvertResult::InvalidByteSequence => (result, meta),
+                // The flush names the bytes that are still half a
+                // character, which is what CRuby reports — and not the
+                // same thing as the whole pending buffer, since a
+                // `UTF8-MAC` source can have a settled cluster held in
+                // front of them. Fall back to the buffer for a flush
+                // that named nothing.
+                _ if !meta.error_bytes.is_empty() => {
+                    (StreamConvertResult::IncompleteInput, meta)
+                }
+                _ => (
+                    StreamConvertResult::IncompleteInput,
+                    ErrMeta {
+                        error_bytes: pending,
+                        readagain_bytes: vec![],
+                        ..ErrMeta::default()
+                    },
+                ),
+            };
+            let msg = store_conversion_outcome(globals, recv, kind, &meta, src_enc, dst)
+                .unwrap_or_default();
+            return Err(converter_last_error_raise(globals, recv, kind, msg));
+        }
+    }
+    if !out.is_empty() {
+        let mut bom = converter_take_dst_bom(globals, recv, dst);
+        bom.extend_from_slice(&out);
+        out = bom;
     }
     Ok(Value::string_from_inner(
-        crate::value::RStringInner::from_encoding_scanned(b"", dst),
+        crate::value::RStringInner::from_encoding_scanned(&out, dst),
     ))
 }
 
@@ -4966,6 +5148,262 @@ fn utf16_32_first_error(bytes: &[u8], enc: crate::value::Encoding) -> Option<usi
     (i < bytes.len()).then_some(i)
 }
 
+/// Map a byte offset in the composed pivot back to `head`'s own bytes.
+///
+/// Clusters compose independently of one another, so their lengths add
+/// up on both sides and the walk is linear.
+fn mac_src_offset_for_pivot(head: &str, pivot_upto: usize) -> usize {
+    let mut src_at = 0;
+    let mut piv_at = 0;
+    for r in crate::value::mac_clusters(head) {
+        let piece = crate::value::mac_to_utf8(&head[r.clone()]);
+        if piv_at + piece.len() > pivot_upto {
+            break;
+        }
+        piv_at += piece.len();
+        src_at = r.end;
+    }
+    src_at
+}
+
+/// How much of `bytes` a `UTF8-MAC` source is holding back: its
+/// trailing cluster, when the whole of `bytes` is one. Any other
+/// source holds nothing.
+fn mac_held_len(src_enc: crate::value::Encoding, bytes: &[u8]) -> usize {
+    if src_enc != crate::value::Encoding::Utf8(crate::value::UTF8_MAC) {
+        return 0;
+    }
+    let Ok(s) = std::str::from_utf8(bytes) else {
+        return 0;
+    };
+    crate::value::mac_clusters(s)
+        .last()
+        .filter(|r| s[r.start..r.end].chars().next().is_some_and(|c| (c as u32) < 0x10000))
+        .map_or(0, |r| s.len() - r.start)
+}
+
+/// How much of `bytes` is well-formed CESU-8.
+fn cesu8_good_prefix(bytes: &[u8]) -> usize {
+    let mut at = 0;
+    while at < bytes.len() {
+        match crate::value::cesu8_precise_len(bytes, at) {
+            crate::value::PreciseLen::Char(n) => at += n,
+            _ => break,
+        }
+    }
+    at
+}
+
+/// A `UTF8-MAC` source, a chunk at a time: compose out of Apple's
+/// decomposed form and hand the result to the ordinary pipeline.
+///
+/// The trailing cluster is held back while more input may come — the
+/// next chunk can open with a mark that composes onto it. CRuby holds
+/// one back the same way, which is why `"abc"` comes back as `"ab"`
+/// and then, at `#finish`, `"c"` (#1576).
+fn mac_source_stream(
+    src_bytes: &[u8],
+    dst_enc: crate::value::Encoding,
+    max_dst_bytes: Option<usize>,
+    partial_input: bool,
+    opts: &TranscodeOpts,
+) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
+    use crate::value::Encoding as E;
+    let src_enc = E::Utf8(crate::value::UTF8_MAC);
+    // Broken UTF-8 is not this wrapper's to report: convert what
+    // composes and let `bad_source_outcome` name the rest, as the
+    // pipeline would.
+    let good = match std::str::from_utf8(src_bytes) {
+        Ok(_) => src_bytes.len(),
+        Err(e) => e.valid_up_to(),
+    };
+    if good < src_bytes.len() {
+        // The well-formed prefix converts exactly as it would on its
+        // own — hold-back included, or a chunk that ends mid-character
+        // would settle the cluster before it and lose the composition
+        // the next chunk was going to complete.
+        let (_, consumed, out, _) =
+            mac_source_stream(&src_bytes[..good], dst_enc, max_dst_bytes, partial_input, opts);
+        let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
+        return (kind, consumed, out, meta);
+    }
+    let s = std::str::from_utf8(src_bytes).expect("checked just above");
+    // Only a character a mark can attach to is worth keeping, and in
+    // CRuby's table that is the Basic Multilingual Plane: an astral
+    // character at the end of a chunk goes out with the rest of it.
+    let held = crate::value::mac_clusters(s)
+        .last()
+        .filter(|r| s[r.start..r.end].chars().next().is_some_and(|c| (c as u32) < 0x10000))
+        .map(|r| r.start);
+    let cut = if partial_input {
+        held.unwrap_or(s.len())
+    } else {
+        s.len()
+    };
+    let head = &s[..cut];
+    let composed = crate::value::mac_to_utf8(head);
+    let (result, pivot_consumed, out, mut meta) = stream_convert(
+        composed.as_bytes(),
+        E::UTF8,
+        dst_enc,
+        max_dst_bytes,
+        false,
+        opts,
+    );
+    let consumed = if pivot_consumed == composed.len() {
+        cut
+    } else {
+        mac_src_offset_for_pivot(head, pivot_consumed)
+    };
+    if meta.dst_full_extra > 0 {
+        let tried = mac_src_offset_for_pivot(head, pivot_consumed + meta.dst_full_extra);
+        meta.dst_full_extra = tried.saturating_sub(consumed);
+    }
+    // What was held back is not the end of the input.
+    let result = if cut < s.len() && matches!(result, StreamConvertResult::Finished) {
+        StreamConvertResult::SourceBufferEmpty
+    } else {
+        result
+    };
+    (result, consumed, out, meta)
+}
+
+/// A CESU-8 source, a chunk at a time: spell the surrogate pairs back
+/// as the characters they name and hand the result to the ordinary
+/// pipeline. Nothing is held back — CESU-8 is UTF-8's structure, so a
+/// complete character here stays one (#1576).
+fn cesu_source_stream(
+    src_bytes: &[u8],
+    dst_enc: crate::value::Encoding,
+    max_dst_bytes: Option<usize>,
+    partial_input: bool,
+    opts: &TranscodeOpts,
+) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
+    use crate::value::Encoding as E;
+    let src_enc = E::NamedByte(crate::value::CESU_8);
+    let scrubbed;
+    let mut bytes = src_bytes;
+    if opts.invalid_replace {
+        // The replacement is the destination's and goes into the
+        // pivot as text, so the pipeline converts it along with
+        // everything else.
+        scrubbed = crate::value::scrub_mbc(
+            src_bytes,
+            opts.replace_str(dst_enc).as_bytes(),
+            crate::value::CESU8_MAX_LEN,
+            crate::value::cesu8_precise_len,
+        );
+        bytes = &scrubbed;
+    }
+    let Some(pivot) = crate::value::cesu8_to_utf8(bytes) else {
+        let good = cesu8_good_prefix(bytes);
+        let (_, consumed, out, _) =
+            cesu_source_stream(&bytes[..good], dst_enc, max_dst_bytes, partial_input, opts);
+        let (kind, meta) = bad_source_outcome(src_enc, bytes, !partial_input);
+        return (kind, consumed, out, meta);
+    };
+    let (result, pivot_consumed, out, mut meta) = stream_convert(
+        pivot.as_bytes(),
+        E::UTF8,
+        dst_enc,
+        max_dst_bytes,
+        partial_input,
+        opts,
+    );
+    // Back to source bytes: a character below `U+10000` is spelled
+    // exactly as UTF-8 spells it, and one above is its six-byte pair.
+    let unit_len = |c: char| {
+        if (c as u32) < 0x10000 {
+            c.len_utf8()
+        } else {
+            crate::value::CESU8_MAX_LEN
+        }
+    };
+    let consumed = if pivot_consumed == pivot.len() {
+        src_bytes.len()
+    } else {
+        pivot[..pivot_consumed]
+            .chars()
+            .map(unit_len)
+            .sum::<usize>()
+            .min(src_bytes.len())
+    };
+    if meta.dst_full_extra > 0 {
+        let end = (pivot_consumed + meta.dst_full_extra).min(pivot.len());
+        meta.dst_full_extra = pivot[pivot_consumed..end].chars().map(unit_len).sum();
+    }
+    (result, consumed, out, meta)
+}
+
+/// A destination whose bytes are a rewrite of the UTF-8 pivot:
+/// `UTF8-MAC`'s decomposition, CESU-8's surrogate spelling. The
+/// pipeline converts into the pivot and the rewrite runs on the way
+/// out (#1576).
+fn pivot_rewrite_stream(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    max_dst_bytes: Option<usize>,
+    partial_input: bool,
+    opts: &TranscodeOpts,
+) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
+    use crate::value::Encoding as E;
+    let (result, consumed, pivot, meta) =
+        stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, opts);
+    let text = String::from_utf8_lossy(&pivot);
+    // The unit the rewrite runs on. For `UTF8-MAC` it is the whole
+    // cluster, since canonical reordering can move a mark past the
+    // one before it; CESU-8 rewrites character by character.
+    let pieces: Vec<(usize, usize, Vec<u8>)> = if dst_enc == E::Utf8(crate::value::UTF8_MAC) {
+        crate::value::mac_clusters(&text)
+            .into_iter()
+            .map(|r| {
+                (
+                    r.start,
+                    r.end,
+                    crate::value::utf8_to_mac(&text[r.clone()]).into_bytes(),
+                )
+            })
+            .collect()
+    } else {
+        text.char_indices()
+            .map(|(at, c)| {
+                let mut buf = [0u8; 4];
+                (
+                    at,
+                    at + c.len_utf8(),
+                    crate::value::utf8_to_cesu8(c.encode_utf8(&mut buf)),
+                )
+            })
+            .collect()
+    };
+    let mut out = Vec::with_capacity(pivot.len());
+    for (start, end, unit) in pieces {
+        if let Some(max) = max_dst_bytes
+            && out.len() + unit.len() > max
+        {
+            // Fill to the byte and hold the rest of this unit for the
+            // next call, as the UTF-16 destination does (#1532).
+            let fits = max - out.len();
+            let written_through = pivot_prefix_consumed(src_bytes, src_enc, start, opts);
+            let through_tried = pivot_prefix_consumed(src_bytes, src_enc, end, opts);
+            out.extend_from_slice(&unit[..fits]);
+            return (
+                StreamConvertResult::DestinationBufferFull,
+                written_through,
+                out,
+                ErrMeta {
+                    dst_full_extra: through_tried.saturating_sub(written_through),
+                    dst_full_out: unit[fits..].to_vec(),
+                    ..ErrMeta::default()
+                },
+            );
+        }
+        out.extend_from_slice(&unit);
+    }
+    (result, consumed, out, meta)
+}
+
 fn stream_convert(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -4975,6 +5413,32 @@ fn stream_convert(
     opts: &TranscodeOpts,
 ) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
     use crate::value::Encoding as E;
+    // The pivot wrappers #1562 gave `String#encode` — `UTF8-MAC`'s
+    // normalisation, CESU-8's surrogate spelling — are conversions in
+    // their own right, so a stream through one is the ordinary
+    // pipeline with the rewrite on the side that needs it. They come
+    // before the identity fast path below, which would otherwise hand
+    // the bytes through unconverted (#1576).
+    let mac = E::Utf8(crate::value::UTF8_MAC);
+    let cesu = E::NamedByte(crate::value::CESU_8);
+    if src_enc != dst_enc {
+        if src_enc == mac {
+            return mac_source_stream(src_bytes, dst_enc, max_dst_bytes, partial_input, opts);
+        }
+        if src_enc == cesu {
+            return cesu_source_stream(src_bytes, dst_enc, max_dst_bytes, partial_input, opts);
+        }
+        if dst_enc == mac || dst_enc == cesu {
+            return pivot_rewrite_stream(
+                src_bytes,
+                src_enc,
+                dst_enc,
+                max_dst_bytes,
+                partial_input,
+                opts,
+            );
+        }
+    }
     // Identity-copy fast path: only safe when the *source* is
     // known-valid for its declared encoding. Same-encoding pairs
     // (UTF-8 → UTF_8_MAC alias, UTF-8 → UTF-8, …) still need
@@ -5001,6 +5465,21 @@ fn stream_convert(
             (StreamConvertResult::Finished, ErrMeta::default())
         };
         return (result, limit, src_bytes[..limit].to_vec(), meta);
+    }
+    // A dummy `UTF-16` / `UTF-32` source whose byte order nothing has
+    // settled: its BOM opens the stream and says which end the code
+    // units start at, and a stream that does not open with one is
+    // ill-formed. A converter settles this once and passes the
+    // concrete encoding in; this is the one-shot answer (#1576).
+    if dummy_wide_target(src_enc).is_some() {
+        let Some((wide, rest)) = dummy_wide_source(src_enc, src_bytes) else {
+            let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
+            return (kind, 0, vec![], meta);
+        };
+        let eaten = src_bytes.len() - rest.len();
+        let (result, consumed, out, meta) =
+            stream_convert(rest, wide, dst_enc, max_dst_bytes, partial_input, opts);
+        return (result, consumed + eaten, out, meta);
     }
     // UTF-16 / UTF-32 on either side. `encoding_rs` has no UTF-32 at
     // all and no UTF-16 *encoder*, so the pivot is built and consumed
@@ -6172,6 +6651,20 @@ fn first_bad_sequence(enc: crate::value::Encoding, bytes: &[u8]) -> Option<(Vec<
             .iter()
             .position(|b| *b >= 0x80)
             .map(|i| (vec![bytes[i]], vec![], false)),
+        // A BOM-less endianness-less dummy: the whole source is
+        // ill-formed, and CRuby names its first code unit (#1576).
+        _ if dummy_wide_target(enc).is_some() => {
+            let unit = if dummy_wide_target(enc) == Some(E::Utf16Be) {
+                2
+            } else {
+                4
+            };
+            Some(if bytes.len() < unit {
+                (bytes.to_vec(), vec![], true)
+            } else {
+                (bytes[..unit].to_vec(), vec![], false)
+            })
+        }
         E::Utf16Le | E::Utf16Be => first_bad_utf16(bytes, enc == E::Utf16Be),
         E::Utf32Le | E::Utf32Be => first_bad_utf32(bytes, enc == E::Utf32Be),
         // The table encodings are total over the byte range, and BINARY
@@ -6419,9 +6912,15 @@ fn first_bad_utf16(bytes: &[u8], be: bool) -> Option<(Vec<u8>, Vec<u8>, bool)> {
             // little-endian high surrogate with a single byte after it
             // is therefore not a completed error at all — it is a
             // three-byte prefix still waiting for its fourth byte.
+            //
+            // Big-endian, that first byte decides only when it rules a
+            // low surrogate out: `D8 3D DE` is a pair three quarters
+            // written, not a malformed one, and a stream fed by the
+            // byte is exactly how it arrives (#1576).
             let err = bytes[i..i + 2].to_vec();
             return Some(if be {
                 match bytes.get(i + 2) {
+                    Some(b) if (0xDC..=0xDF).contains(b) => (bytes[i..].to_vec(), vec![], true),
                     Some(b) => (err, vec![*b], false),
                     None => (err, vec![], true),
                 }
@@ -6571,6 +7070,18 @@ fn invalid_byte_sequence(
 /// conversion error: decode-stage errors fail into the UTF-8 pivot
 /// unless the source already is UTF-8-compatible; encode-stage errors
 /// fail out of the pivot.
+/// Whether `enc` *is* the UTF-8 pivot the conversion chain runs
+/// through, so an error in it names one hop rather than two.
+///
+/// Plain UTF-8 is, and US-ASCII is read as it without converting.
+/// `UTF8-MAC` is not, although it holds UTF-8's bytes: getting out of
+/// Apple's decomposed form is a conversion, and CRuby names it. That
+/// is why `is_utf8_compatible` — which answers "do these bytes read
+/// as UTF-8" — is the wrong question here (#1576).
+fn is_the_utf8_pivot(enc: crate::value::Encoding) -> bool {
+    matches!(enc, crate::value::Encoding::UsAscii) || enc == crate::value::Encoding::UTF8
+}
+
 fn error_stage_names(
     src_enc: crate::value::Encoding,
     dst_enc: crate::value::Encoding,
@@ -6583,14 +7094,14 @@ fn error_stage_names(
         return (src_enc.name().to_string(), dst_enc.name().to_string());
     }
     if decode_stage {
-        let stage_dst = if src_enc.is_utf8_compatible() {
+        let stage_dst = if is_the_utf8_pivot(src_enc) {
             dst_enc.name().to_string()
         } else {
             "UTF-8".to_string()
         };
         (src_enc.name().to_string(), stage_dst)
     } else {
-        let stage_src = if src_enc.is_utf8_compatible() {
+        let stage_src = if is_the_utf8_pivot(src_enc) {
             src_enc.name().to_string()
         } else {
             "UTF-8".to_string()
@@ -6637,7 +7148,7 @@ fn conversion_error_message(
                 .and_then(|s| s.chars().next())
                 .map(|c| c as u32)
                 .unwrap_or(0);
-            if src_enc.is_utf8_compatible() {
+            if is_the_utf8_pivot(src_enc) {
                 format!("U+{:04X} from {} to {}", cp, stage_src, stage_dst)
             } else {
                 // Two-hop path: show the whole conversion chain.
@@ -6990,6 +7501,11 @@ fn converter_primitive_convert(
 
     let src_enc = converter_get_src(globals, recv);
     let dst_enc = converter_get_dst(globals, recv);
+    // The endianness-less dummies carry a BOM the stream shows once:
+    // read off the source here and remembered, written to the
+    // destination ahead of the first character it emits (#1576).
+    let src_stream = converter_resolve_src_bom(globals, recv, src_enc, &src_bytes);
+    let dst_stream = dummy_wide_target(dst_enc).unwrap_or(dst_enc);
 
     // Output the last call's cap held back mid-character goes out
     // first, before anything new is converted, and counts against
@@ -7048,14 +7564,46 @@ fn converter_primitive_convert(
             ErrMeta::default(),
         )
     } else {
+        // The destination's BOM takes its bytes out of this call's
+        // allowance before anything is converted into it.
+        let bom_owed = if converter_dst_bom_owed(globals, recv, dst_enc) {
+            converter_dst_bom(dst_enc).len()
+        } else {
+            0
+        };
         stream_convert(
             &src_bytes,
-            src_enc,
-            dst_enc,
-            max_dst_bytes,
+            src_stream,
+            dst_stream,
+            max_dst_bytes.map(|m| m.saturating_sub(bom_owed)),
             partial_input,
             &conv_opts,
         )
+    };
+    // The BOM goes in front of the first output there is, and is
+    // itself output: a cap too small to hold it writes what fits and
+    // holds the rest for the next call, the way a character's bytes
+    // are held (#1532). Without that a cap of three bytes against a
+    // four-byte BOM wrote nothing at all, and a caller looping to
+    // `:finished` never got there (#1576).
+    let mut bom_overflow: Vec<u8> = vec![];
+    // A cap that left no room for a character left none for the BOM
+    // either, and that call is still the one the BOM belongs to.
+    let emits = !out_bytes.is_empty()
+        || matches!(result, StreamConvertResult::DestinationBufferFull);
+    let out_bytes = if !emits {
+        out_bytes
+    } else {
+        let mut with_bom = converter_take_dst_bom(globals, recv, dst_enc);
+        with_bom.extend_from_slice(&out_bytes);
+        with_bom
+    };
+    let out_bytes = match max_dst_bytes {
+        Some(max) if out_bytes.len() > max => {
+            bom_overflow = out_bytes[max..].to_vec();
+            out_bytes[..max].to_vec()
+        }
+        _ => out_bytes,
     };
     // What the call reports, and whether it closes the stream.
     let result = if already_finished || !no_more_input {
@@ -7111,8 +7659,14 @@ fn converter_primitive_convert(
         // before the offending character rather than reading past
         // it), and it must be held for the next call or its
         // conversion is lost.
+        // A `UTF8-MAC` source holds its trailing cluster for the
+        // composition the next chunk may complete. Those bytes have
+        // been read, so they belong with what this call buffers and
+        // not in `src` — CRuby leaves nothing of them there either
+        // (#1576).
         let read_ahead = if matches!(result, StreamConvertResult::DestinationBufferFull) {
-            meta.dst_full_extra.min(src_bytes.len() - src_consumed)
+            (meta.dst_full_extra + mac_held_len(src_stream, &src_bytes[src_consumed..]))
+                .min(src_bytes.len() - src_consumed)
         } else {
             0
         };
@@ -7120,12 +7674,12 @@ fn converter_primitive_convert(
         // what did not fit is held as *output*, so its source must
         // not also be held as input or it converts twice (#1532).
         let converted_ahead = !meta.dst_full_out.is_empty();
-        if converted_ahead {
-            let _ = globals.store.set_ivar(
-                recv,
-                pending_out_id,
-                Value::bytes_from_slice(&meta.dst_full_out),
-            );
+        if converted_ahead || !bom_overflow.is_empty() {
+            let mut held = bom_overflow.clone();
+            held.extend_from_slice(&meta.dst_full_out);
+            let _ = globals
+                .store
+                .set_ivar(recv, pending_out_id, Value::bytes_from_slice(&held));
         }
         // With no `src` to leave them in (the caller passed `nil`)
         // everything a capped destination held back has to be
@@ -10110,6 +10664,314 @@ mod tests {
     }
 
     #[test]
+    fn a_converter_streams_the_pivot_wrappers() {
+        // CESU-8 and `UTF8-MAC` are the ordinary pipeline with a
+        // rewrite on one side, so a converter runs them a chunk at a
+        // time. Before #1576 the CESU-8 pair was refused outright and
+        // the `UTF8-MAC` one was built and then handed its bytes
+        // through unconverted.
+        run_tests(&[
+            r#"Encoding::Converter.new("UTF-8", "CESU-8").convert("aあ\u{1F600}").bytes"#,
+            r#"Encoding::Converter.new("CESU-8", "UTF-8").convert("aあ\u{1F600}".encode("CESU-8")).bytes"#,
+            r#"Encoding::Converter.new("UTF-8", "UTF8-MAC").convert("が").bytes"#,
+            r#"Encoding::Converter.new("CESU-8", "EUC-JP").convert("あ".encode("CESU-8")).bytes"#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "CESU-8")
+              [c.convert("a").bytes, c.convert("\u{1F600}").bytes, c.finish.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "UTF8-MAC")
+              [c.convert("a").bytes, c.convert("が").bytes, c.finish.bytes]
+            "#,
+            r#"Encoding::Converter.new("UTF-8", "CESU-8").convert("a").encoding.to_s"#,
+        ]);
+    }
+
+    #[test]
+    fn a_utf8_mac_source_holds_its_trailing_cluster() {
+        // The next chunk may open with a mark that composes onto the
+        // character before it, so a streamed `UTF8-MAC` source keeps
+        // the last one back until `#finish` says no more is coming.
+        // That is why even `"abc"` comes out as `"ab"` and then `"c"`,
+        // and why a mark split across two chunks still composes
+        // (#1576).
+        run_tests(&[
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "UTF-8")
+              [c.convert("abc".b.force_encoding("UTF8-MAC")).bytes, c.finish.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "UTF-8")
+              [c.convert("あか".b.force_encoding("UTF8-MAC")).bytes,
+               c.convert("゙い".b.force_encoding("UTF8-MAC")).bytes,
+               c.finish.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "UTF-8")
+              [c.convert("が".b.force_encoding("UTF8-MAC")).bytes, c.finish.bytes]
+            "#,
+            // Half a character at the end is held for a different
+            // reason, and `#finish` is where it becomes an error.
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "UTF-8")
+              c.convert("a\xE3\x81".b.force_encoding("UTF8-MAC")).bytes
+              begin; c.finish; rescue => e; [e.class.name, e.message]; end
+            "#,
+        ]);
+    }
+
+    #[test]
+    fn a_converter_writes_the_dummies_bom_once() {
+        // `UTF-16` and `UTF-32` name no byte order of their own, so
+        // CRuby's encoder writes a BOM and then the big-endian form.
+        // A stream writes that BOM ahead of the first character it
+        // emits and never again — so a call that emits nothing, and
+        // a `#finish` with nothing held, write none at all (#1576).
+        run_tests(&[
+            r#"Encoding::Converter.new("UTF-8", "UTF-16").convert("aあ").bytes"#,
+            r#"Encoding::Converter.new("UTF-8", "UTF-32").convert("aあ").bytes"#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "UTF-16")
+              [c.convert("a").bytes, c.convert("あ").bytes, c.finish.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "UTF-32")
+              [c.convert("").bytes, c.convert("a").bytes, c.finish.bytes]
+            "#,
+            r#"Encoding::Converter.new("UTF-8", "UTF-16").finish.bytes"#,
+            r#"Encoding::Converter.new("UTF-8", "UTF-16").convert("a").encoding.to_s"#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "UTF-16")
+              s = +"ab"
+              d = +""
+              [c.primitive_convert(s, d), d.bytes]
+            "#,
+        ]);
+    }
+
+    #[test]
+    fn a_converter_reads_the_dummies_bom_once() {
+        // The other way round: the BOM opens the stream, names the
+        // byte order, and is consumed — the chunks after it carry
+        // none, so the converter has to remember what it said. A
+        // stream that does not open with one at all is ill-formed
+        // (#1576).
+        run_tests(&[
+            r#"Encoding::Converter.new("UTF-16", "UTF-8").convert("aあ".encode("UTF-16")).bytes"#,
+            r#"Encoding::Converter.new("UTF-32", "UTF-8").convert("aあ".encode("UTF-32")).bytes"#,
+            r#"
+              c = Encoding::Converter.new("UTF-16", "UTF-8")
+              [c.convert("\xFE".b.force_encoding("UTF-16")).bytes,
+               c.convert("\xFF\x30\x42".b.force_encoding("UTF-16")).bytes,
+               c.convert("\x30\x44".b.force_encoding("UTF-16")).bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-16", "UTF-8")
+              [c.convert("\xFF\xFE\x42\x30".b.force_encoding("UTF-16")).bytes,
+               c.convert("\x44\x30".b.force_encoding("UTF-16")).bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-16", "UTF-8")
+              begin
+                c.convert("\x30\x42\x30\x44".b.force_encoding("UTF-16"))
+              rescue => e
+                [e.class.name, e.message]
+              end
+            "#,
+        ]);
+    }
+
+    #[test]
+    fn half_a_surrogate_pair_is_incomplete_not_malformed() {
+        // A big-endian high surrogate followed by the first byte of
+        // what could still be its partner is three quarters of a pair,
+        // not a malformed unit — and a stream fed by the byte is
+        // exactly how it arrives. The byte that *cannot* open a low
+        // surrogate is still the malformed one, read again (#1576).
+        run_tests(&[
+            r#"
+              c = Encoding::Converter.new("UTF-16BE", "UTF-8")
+              s = "\u{1F600}".encode("UTF-16BE")
+              [s.bytes.map { |b| c.convert(b.chr.force_encoding("UTF-16BE")).bytes }, c.finish.bytes]
+            "#,
+            r#"
+              begin
+                "\xD8\x3D\x00\x61".b.force_encoding("UTF-16BE").encode("UTF-8")
+              rescue => e
+                [e.class.name, e.message]
+              end
+            "#,
+        ]);
+    }
+
+    #[test]
+    fn what_a_utf8_mac_source_holds_back_and_what_it_does_not() {
+        // Only a character a mark can attach to is worth keeping: in
+        // CRuby's table that is the Basic Multilingual Plane, so an
+        // astral character at the end of a chunk goes out with the
+        // rest of it. And a chunk that ends mid-character must not
+        // settle the cluster in front of it either, or the
+        // composition the next chunk was going to complete is lost
+        // (#1576).
+        run_tests(&[
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "UTF-8")
+              [c.convert("a\u{1F600}".b.force_encoding("UTF8-MAC")).bytes, c.finish.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "UTF-8")
+              [c.convert("a漢".b.force_encoding("UTF8-MAC")).bytes, c.finish.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "UTF-8")
+              s = "が".b.force_encoding("UTF8-MAC")
+              [s.bytes.each_slice(2).map { |g| c.convert(g.pack("C*").force_encoding("UTF8-MAC")).bytes },
+               c.finish.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "EUC-JP")
+              s = "が".b.force_encoding("UTF8-MAC")
+              [s.bytes.each_slice(2).map { |g| c.convert(g.pack("C*").force_encoding("UTF8-MAC")).bytes },
+               c.finish.bytes]
+            "#,
+        ]);
+    }
+
+    #[test]
+    fn a_streamed_error_names_the_hops_the_conversion_took() {
+        // `UTF8-MAC` holds UTF-8's bytes, so `is_utf8_compatible`
+        // called it the pivot and the message lost a hop; a dummy
+        // resolved to the end its BOM named and the message reported
+        // that instead of the encoding the converter was built with
+        // (#1576).
+        run_tests(&[
+            r#"
+              begin
+                Encoding::Converter.new("UTF8-MAC", "US-ASCII").convert("あ".encode("UTF8-MAC"))
+              rescue => e
+                [e.class.name, e.message]
+              end
+            "#,
+            r#"
+              begin
+                Encoding::Converter.new("UTF-16", "EUC-JP").convert("\u{1F600}".encode("UTF-16"))
+              rescue => e
+                [e.class.name, e.message]
+              end
+            "#,
+            r#"
+              begin
+                Encoding::Converter.new("CESU-8", "US-ASCII").convert("あ".encode("CESU-8"))
+              rescue => e
+                [e.class.name, e.message]
+              end
+            "#,
+        ]);
+    }
+
+    #[test]
+    fn a_capped_destination_stops_where_it_can_through_the_wrappers() {
+        // The rewrite runs on whole units, so a cap that cuts one
+        // fills the destination to the byte and holds the rest for the
+        // next call — and the BOM is output like any other: a cap too
+        // small for it writes what fits rather than nothing at all,
+        // which is what a caller looping to `:finished` needs (#1576).
+        run_tests(&[
+            r#"
+              [["UTF-8","CESU-8"],["CESU-8","UTF-8"],["UTF-8","UTF8-MAC"],["UTF8-MAC","UTF-8"]].map do |s, d|
+                c = Encoding::Converter.new(s, d)
+                src = "aあb".encode(s).dup
+                dst = +""
+                [c.primitive_convert(src, dst, nil, 3), dst.bytes, src.bytes]
+              end
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "UTF-32")
+              src = +"aあb"
+              dst = +""
+              [c.primitive_convert(src, dst, nil, 3), dst.bytes, src.bytes]
+            "#,
+        ]);
+    }
+
+    #[test]
+    fn a_wrapper_source_reports_and_replaces_what_it_cannot_read() {
+        // CESU-8's walk is its converter, so a lone surrogate half is
+        // a malformed sequence there and `invalid: :replace` scrubs it
+        // with the destination's replacement. A `UTF8-MAC` or dummy
+        // source in replacement mode cannot take the single-shot path
+        // the other encodings do — it has a BOM or a held cluster to
+        // remember — so it streams, and still holds one back (#1576).
+        run_tests(&[
+            r#"
+              begin
+                Encoding::Converter.new("CESU-8", "UTF-8").convert("a\xED\xA0\x80z".b.force_encoding("CESU-8"))
+              rescue => e
+                [e.class.name, e.message]
+              end
+            "#,
+            r#"
+              Encoding::Converter.new("CESU-8", "UTF-8", invalid: :replace)
+                .convert("a\xED\xA0\x80z".b.force_encoding("CESU-8")).bytes
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "EUC-JP", undef: :replace)
+              [c.convert("a\u{1F600}b".encode("UTF8-MAC")).bytes, c.finish.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-16", "EUC-JP", undef: :replace)
+              [c.convert("a\u{1F600}b".encode("UTF-16")).bytes, c.finish.bytes]
+            "#,
+            r#"
+              c = Encoding::Converter.new("UTF-8", "CESU-8", undef: :replace)
+              [c.convert("a\u{1F600}b").bytes, c.finish.bytes]
+            "#,
+        ]);
+    }
+
+    #[test]
+    fn a_wrapper_conversion_is_observable_the_way_the_others_are() {
+        // What `#finish` raises when the cluster it was holding turns
+        // out to have no cell, and that a wrapper source reports its
+        // error through `primitive_errinfo` / `putback` / `last_error`
+        // as every other source does (#1576).
+        run_tests(&[
+            r#"
+              c = Encoding::Converter.new("UTF8-MAC", "US-ASCII")
+              a = c.convert("aあ".encode("UTF8-MAC")).bytes
+              b = (begin; c.finish; rescue => e; [e.class.name, e.message]; end)
+              [a, b]
+            "#,
+            r#"
+              c = Encoding::Converter.new("CESU-8", "UTF-8")
+              src = "a\xED\xA0\x80z".b.force_encoding("CESU-8")
+              dst = +""
+              c.primitive_convert(src.dup, dst)
+              e = c.primitive_errinfo
+              [dst.bytes, e[0], e[2], e[3], e[4], c.putback.bytes, c.last_error.class.name]
+            "#,
+            // A dummy source a chunk at a time through the other
+            // entry point: the BOM arrives in the first and the
+            // second is read in the byte order it named.
+            r#"
+              c = Encoding::Converter.new("UTF-16", "UTF-8")
+              s = "aあ".encode("UTF-16")
+              d1 = +""; d2 = +""
+              c.primitive_convert(s.byteslice(0, 4).dup, d1, nil, nil, partial_input: true)
+              c.primitive_convert(s.byteslice(4, 2).dup, d2, nil, nil, partial_input: true)
+              [d1.bytes, d2.bytes]
+            "#,
+            // And that the pairs describe themselves like any other.
+            r#"
+              [["UTF-8","CESU-8"],["UTF-8","UTF-16"],["CESU-8","UTF-8"],["UTF8-MAC","UTF-8"]].map do |s, d|
+                Encoding::Converter.new(s, d).convpath.map { |x| x.is_a?(Array) ? x.map(&:name) : x }
+              end
+            "#,
+            r#"%w[CESU-8 UTF-16 UTF-32 UTF8-MAC].map { |e| Encoding::Converter.search_convpath("UTF-8", e).size }"#,
+        ]);
+    }
+
+    #[test]
     fn converter_utf16_32_source_error_positions() {
         // Where a wide source first stops decoding: a UTF-32 group that
         // is a surrogate or out of range, a group the input ends in the
@@ -12556,6 +13418,42 @@ mod tests {
               r << (begin; f.call; rescue => e; e.class.to_s; end)
             end
             r
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_bom_dummy_source_reads_the_bom_it_was_written_with() {
+        // `UTF-16` and `UTF-32` worked as a destination and not as a
+        // source, so a round trip through either raised
+        // `ConverterNotFoundError` — `dummy_wide_target` had no
+        // matching source half (#1585).
+        crate::tests::run_test_once(
+            r##"
+            s = "aあb"
+            %w[UTF-16 UTF-32].map do |e|
+              enc = s.encode(e)
+              wide = e.sub("UTF", "UTF")
+              le = (e == "UTF-16" ? [0xFF,0xFE] : [0xFF,0xFE,0,0]).pack("C*") +
+                   s.encode(wide + "LE").b
+              le.force_encoding(e)
+              nb = s.encode(e + "BE").b.dup.force_encoding(e)
+              [enc.b.bytes,
+               # the BOM picks the endianness and is consumed...
+               (begin; enc.encode("UTF-8").codepoints; rescue => x; [x.class.to_s, x.message]; end),
+               (begin; le.encode("UTF-8").codepoints; rescue => x; [x.class.to_s, x.message]; end),
+               # ...and without one the source is ill-formed, named by
+               # its first code unit as the dummy encoding's own.
+               (begin; nb.encode("UTF-8").codepoints; rescue => x; [x.class.to_s, x.message]; end),
+               # a truncated first unit is incomplete rather than invalid
+               (begin
+                  enc.b.bytes.first(1).pack("C*").dup.force_encoding(e).encode("UTF-8")
+                rescue => x
+                  [x.class.to_s, x.message, x.incomplete_input?]
+                end),
+               # and it still converts onward past the pivot
+               (begin; enc.encode("EUC-JP").bytes; rescue => x; x.class.to_s; end)]
+            end
             "##,
         );
     }
