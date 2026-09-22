@@ -12,6 +12,7 @@ mod digest;
 mod cipher;
 mod dir;
 pub(crate) mod encoding;
+mod encoding_carrier;
 mod encoding_cjk;
 pub(crate) mod errno;
 #[cfg(test)]
