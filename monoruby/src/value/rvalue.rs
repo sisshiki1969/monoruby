@@ -47,7 +47,7 @@ pub(crate) use string::{
     UTF8_SOFTBANK, WINDOWS_31J, utf8_const_name, utf8_to_cesu8, utf8_to_mac, CESU8_MAX_LEN,
     eucjp_precise_len, IllFormed, mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width,
     eucjp_to_stateless_iso2022jp, stateless_iso2022jp_to_eucjp,
-    stateless_iso2022jp_precise_len, stateless_iso2022jp_transcode_len, named_byte_index,
+    stateless_iso2022jp_transcode_len, named_byte_index,
     sjis_precise_len, walk_mbc, walk_mbc_with,
 };
 pub(crate) use string::{

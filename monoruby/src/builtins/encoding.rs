@@ -5868,8 +5868,8 @@ fn pivot_prefix_consumed_in(
     if src_enc == pivot_enc {
         return pivot_bytes.min(src_bytes.len());
     }
-    let decode = |n: usize| -> (StreamConvertResult, usize) {
-        let (res, _, out, _) = stream_convert(
+    let decoded_len = |n: usize| -> usize {
+        let (_, _, out, _) = stream_convert(
         &src_bytes[..n],
             src_enc,
             pivot_enc,
@@ -5878,9 +5878,8 @@ fn pivot_prefix_consumed_in(
         opts,
         store,
     );
-        (res, out.len())
+        out.len()
     };
-    let decoded_len = |n: usize| -> usize { decode(n).1 };
     let (mut lo, mut hi) = (0usize, src_bytes.len());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
@@ -5890,27 +5889,7 @@ fn pivot_prefix_consumed_in(
             hi = mid;
         }
     }
-    // Bytes that follow and write nothing are still read: an
-    // ISO-2022-JP escape sequence is a whole unit that only changes
-    // which character set is in effect, and CRuby takes it out of
-    // `src` along with what came before it. A *partial* character
-    // writes nothing either and is not read, which is what tells the
-    // two apart — the prefix has to convert cleanly (#1609).
-    let mut best = lo;
-    let mut n = lo + 1;
-    while n <= src_bytes.len() {
-        let (res, len) = decode(n);
-        if len > pivot_bytes {
-            break;
-        }
-        // A longer prefix that writes no more but ends on a whole
-        // unit — the escape sequence itself — is the one CRuby read.
-        if len == pivot_bytes && matches!(res, StreamConvertResult::Finished) {
-            best = n;
-        }
-        n += 1;
-    }
-    best
+    lo
 }
 
 /// The outcome to report for a source that does not decode, as the
@@ -6231,17 +6210,7 @@ fn stateless_source_stream(
     opts: &TranscodeOpts,
     store: &Store,
 ) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
-    let scrubbed;
-    let mut bytes = src_bytes;
-    if opts.invalid_replace {
-        scrubbed = crate::value::scrub_mbc(
-            src_bytes,
-            opts.replace_str(dst_enc).as_bytes(),
-            3,
-            crate::value::stateless_iso2022jp_transcode_len,
-        );
-        bytes = &scrubbed;
-    }
+    let bytes = src_bytes;
     let good = stateless_good_prefix(bytes);
     let eucjp = crate::value::stateless_iso2022jp_to_eucjp(&bytes[..good])
         .unwrap_or_else(|_| Vec::new());
