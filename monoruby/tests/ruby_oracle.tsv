@@ -826,6 +826,7 @@
 2a0125843d4ab599f9e3f4ec2c1ca1c3	["b", "b"]	class String; def <=>(o) = (o.length - length); end\n["b", "a", "c"].minmax
 2a04e0b26f5843b7982d5765e50f29cf	[[:c1, :c2], [:c1, :c2]]	class S\n              def s; end\n            end\n            class 
 2a054f41f0ebb76b11549882f920add6	[]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.val
+2a1f956f1bdf8dabac9460041981406e	[:g1, :g2]	g = Class.new { def m; :g1; end }\n        p = Class.new(g)\n        p.cl
 2a25d512f1f2e7b492c0615e3eebe7e4	[:hi, true, false, :hi, true, false]	module CrefMixin\n          BLK = proc do\n            module DefinedInBl
 2a2b86ebb2efff59c7eaeba003dc98fc	["abc", "XYZ", "def"]	"abcXYZdef" =~ /XYZ/\n            [$`, $&, $']\n            
 2a2c02a8e1eb184cff179aa37a7afd2c	[[1, 2, 5, 4], A]	class A < Array\n        end\n        \n\n        a = A.new([1,2,3])\n      
@@ -2907,6 +2908,7 @@
 9b8994e2e94d4a2a2b7af7119922b89c	[[195], "Windows-31J", [], [169]]	m = /./s.match("\\303\\251".dup.force_encoding(Encoding::Windows_31J))\n           
 9b8ade67bac5e3b7bdf9490af877bbc4	200	def nlr_foo\n          yield\n        end\n        def nlr_bar\n          n
 9baa5c28f50dc91b0f01fda4b883e860	[[10, [1, 2, 3]], [20, [1, 2, 3]], [30, [1, 2, 3]]]	$log = []\n        def l1(arr)\n          begin\n            arr.each { |y
+9bc2f18a6098c232725931d66e526f07	[:sc, true]	res = []\n        40.times do\n          obj = Object.new\n          class
 9bc5cd11de7335c1c5721c9aa4234521	[true, false, [true, 1, nil]]	__a = [];__a << (h = { a: 1, c: 3 }; h.replace({ b: 2, d: 4 }.compare_by_identit
 9bca238ea4e00870973aae617bce5e3d	["str!!", "str!!ing"]	__a = [];__a << (buf = "string"; buf[3,10]="!!"; buf);__a << (buf = "string"; bu
 9bcad6e1f55d1f4c7fc6bfeb8c9bbe56	[2, 18000, 3]	m = Object.new; def m.to_str; "feb"; end\n            s = Object.new
@@ -3139,6 +3141,7 @@ a7dfe3e551ac8402163609fb863ca4e0	["US-ASCII"]	s = "abcabc".dup.force_encoding("U
 a7e6aaf932959ee4c972ae4048325b70	[1, 2, 3]	class Foo\n            def foo(arg)\n                arg\n            end\n
 a7e6e135e95d618e3ae7fc235b8624b8	17158183388.626425	def calc(i)\n              f = i * 1.1\n              g = i * 0.9\n   
 a7ea202d40851dfadabc161faaaaffb7	true	GC.config({}) == GC.config
+a7f1f321af626db1f115a62e7c1d7cc2	[4, :missing, :defined]	res = []\n        40.times do\n          obj = Object.new\n          def (
 a800cb1d66d4f7c50d700a30535cce0f	["UTF-16LE", [97, 0, 98, 0, 99, 0]]	File.write("/tmp/mr_rd2.txt", "abc")\n            r = []\n           
 a8018262ffba8fba491e3b1e7bcd20b9	42	module M\n              @x = 42\n              remove_instance_variab
 a81d22f2a88cfcc16513b0ca5f20189b	2970.0	def inner(k)\n          arr = [k + 2, k, k + 1]\n          arr.sort! { |a

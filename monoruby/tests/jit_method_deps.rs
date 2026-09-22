@@ -260,3 +260,53 @@ fn super_in_define_method_block_sees_ancestor_redefinition() {
         "##,
     );
 }
+
+/// A site compiled as the `method_missing` dispatch (the receiver's class
+/// had no such method) must be reached by a later definition of the
+/// name: each iteration builds a fresh object and defines the method on
+/// it *after* the site was compiled against a class without it.
+#[test]
+fn missing_method_site_sees_definition() {
+    run_test(
+        r##"
+        res = []
+        40.times do
+          obj = Object.new
+          def (obj).qux; 4; end
+          res << obj.qux
+        end
+        c = Class.new do
+          def method_missing(name, *a); name == :zap ? :missing : super; end
+          def respond_to_missing?(name, priv = false); name == :zap || super; end
+        end
+        o = c.new
+        40.times { res << o.zap }
+        c.class_eval { def zap; :defined; end }
+        40.times { res << o.zap }
+        res.uniq
+        "##,
+    );
+}
+
+/// `class << obj` on an object whose class the unit had proved (it was
+/// just allocated there): the singleton class it creates is the object's
+/// class from then on, so a call after it must not resolve against the
+/// old class.
+#[test]
+fn singleton_class_body_after_known_allocation() {
+    run_test(
+        r##"
+        res = []
+        40.times do
+          obj = Object.new
+          class << obj
+            def tag; :sc; end
+          end
+          res << obj.tag
+          sc = obj.singleton_class
+          res << (sc == obj.singleton_class)
+        end
+        res.uniq
+        "##,
+    );
+}

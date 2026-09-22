@@ -990,6 +990,15 @@ impl<'a> JitContext<'a> {
                     using_fpr,
                     error,
                 });
+                // The definition gives the object a singleton class, so
+                // its class is no longer whatever the state had proved (an
+                // `Object.new` a few instructions up, say): a later call
+                // on it must guard the class again rather than resolve
+                // against the old one — which has no such method and would
+                // compile the call as `method_missing`. `obj` is a
+                // temporary copy of the object's slot, so every slot that
+                // could hold it forgets its class.
+                state.forget_heap_object_classes();
                 ir.check_bop(state);
                 state.unset_class_version_guard();
                 state.unset_const_version_guard();
