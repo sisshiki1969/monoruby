@@ -1367,9 +1367,11 @@ impl Store {
         let mut current_iseq = iseq;
         loop {
             let info = &self[current_iseq];
-            context
-                .scope
-                .push((info.locals.clone(), info.block_param()));
+            context.push_scope(
+                info.locals.clone(),
+                info.block_param(),
+                self[info.func_id()].params().forwarding(),
+            );
             if let Some(outer) = info.outer {
                 current_iseq = outer;
             } else {

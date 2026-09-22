@@ -280,6 +280,12 @@ pub(crate) struct ExternalContext {
         indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
         Option<IdentId>,
     )>,
+    /// Some frame in this chain was defined with `...`. The anonymous
+    /// rest and keyword rest leave locals behind (`*` / `**`) and so
+    /// can be found in `scope`, but `...` leaves two *unnamed* slots,
+    /// so nothing in `scope` records it. `eval` needs it to tell prism
+    /// the enclosing method forwards.
+    forwarding: bool,
 }
 
 impl crate::ast::LocalsContext for ExternalContext {
@@ -306,11 +312,29 @@ impl std::ops::Index<usize> for ExternalContext {
 
 impl ExternalContext {
     pub fn new() -> Self {
-        Self { scope: vec![] }
+        Self {
+            scope: vec![],
+            forwarding: false,
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
         self.scope.len()
+    }
+
+    /// Whether some frame in the chain was defined with `...`.
+    pub(crate) fn is_forwarding(&self) -> bool {
+        self.forwarding
+    }
+
+    pub(crate) fn push_scope(
+        &mut self,
+        locals: indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,
+        block_param: Option<IdentId>,
+        forwarding: bool,
+    ) {
+        self.scope.push((locals, block_param));
+        self.forwarding |= forwarding;
     }
 }
 

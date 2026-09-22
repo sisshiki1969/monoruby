@@ -7500,6 +7500,78 @@ mod tests {
     }
 
     #[test]
+    fn eval_forwards_anonymous_parameters() {
+        // The eval'd source is parsed without the enclosing method's
+        // parameter set, so prism has to be told what the caller
+        // declared — and the lowerer has to be told how far out it
+        // lives, or `foo(*)` reads the eval body's own absent slot and
+        // calls `foo` with nothing (#1553).
+        run_tests(&[
+            r##"
+        def foo(*a) = a
+        def m(*) = eval("foo(*)")
+        m(1, 2, 3)
+        "##,
+            r##"
+        def kw(**h) = h
+        def m(**) = eval("kw(**)")
+        m(a: 1, b: 2)
+        "##,
+            r##"
+        def blk(&b) = b.call
+        def m(&) = eval("blk(&)")
+        m { 42 }
+        "##,
+            r##"
+        def fwd(*a, **h, &b) = [a, h, b.call]
+        def m(...) = fwd(...)
+        def n(...) = eval("fwd(...)")
+        [m(1, 2, k: 3) { 9 }, n(1, 2, k: 3) { 9 }]
+        "##,
+            // The forwarded read has to survive the scopes the eval
+            // body opens after it: a block, a lambda, and a nested
+            // eval are each one more hop out to the binder.
+            r##"
+        def foo(*a) = a
+        def m(*) = eval("[1].map { foo(*) }")
+        def n(*) = eval("-> { foo(*) }").call
+        def o(*) = eval("eval('foo(*)')")
+        [m(1, 2), n(1, 2), o(1, 2)]
+        "##,
+            // `binding.eval` shares the caller's frame rather than
+            // opening one of its own, so the same parameters sit one
+            // scope nearer.
+            r##"
+        def foo(*a) = a
+        def blk(&b) = b.call
+        def m(*) = binding.eval("foo(*)")
+        def n(&) = binding.eval("blk(&)")
+        [m(3, 4), n { :b }]
+        "##,
+            // Mixed with each other and with ordinary arguments.
+            r##"
+        def foo(*a) = a
+        def kw(**h) = h
+        def m(*, **) = eval("[foo(*), kw(**)]")
+        def n(*) = eval("foo(0, *, 9)")
+        [m(7, x: 8), n(1, 2)]
+        "##,
+        ]);
+        // Still a SyntaxError where nothing declared the parameter —
+        // the permission is the caller's, and a `def` inside the eval
+        // is a scope of its own that did not get it.
+        run_test(
+            r##"
+        def foo(*a) = a
+        def z = eval("foo(*)")
+        def d(*) = eval("def __inner; foo(*); end")
+        [begin; z; rescue SyntaxError; :syntax; end,
+         begin; d(1); rescue SyntaxError; :syntax; end]
+        "##,
+        );
+    }
+
+    #[test]
     fn eval_begin_block() {
         // `BEGIN { ... }` (PreExecutionNode), incl. `return`.
         run_test(r##"def m(n); eval("BEGIN {return n*3}"); end; m(4)"##);
