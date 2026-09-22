@@ -88,11 +88,29 @@ pub(crate) fn stateless_iso2022jp_precise_len(bytes: &[u8], pos: usize) -> Preci
     };
     match lead {
         0x00..=0x7f => PreciseLen::Char(1),
-        0x81..=0x8f => match bytes.get(pos + 1) {
-            None => PreciseLen::NeedMore,
-            Some(0xa0..=0xff) => PreciseLen::Char(2),
-            Some(_) => PreciseLen::Invalid,
-        },
+        // The shift-free form of ISO-2022-JP: a character set is named
+        // by a lead byte rather than by an escape sequence still in
+        // effect, and the bytes after it are that set's cell, as
+        // EUC-JP writes it. `0x81..=0x8f` names a single-byte set,
+        // `0x90..=0x99` a two-byte one — so those sequences are three
+        // bytes long, which the walk read as a stray byte followed by
+        // a two-byte one (#1600).
+        //
+        // `0x90` and `0x92` are JIS X 0208, 1978 and 1983, mapping to
+        // the same cells. The rest of the range the walk takes
+        // converts nowhere, the way CP949's and the Big5 family's
+        // walks reach past their transcoders.
+        0x81..=0x99 => {
+            let trail = if lead >= 0x90 { 2 } else { 1 };
+            for i in 1..=trail {
+                match bytes.get(pos + i) {
+                    None => return PreciseLen::NeedMore,
+                    Some(0xa0..=0xff) => {}
+                    Some(_) => return PreciseLen::Invalid,
+                }
+            }
+            PreciseLen::Char(1 + trail)
+        }
         _ => PreciseLen::Invalid,
     }
 }
@@ -734,6 +752,96 @@ pub(crate) fn mac_to_utf8(s: &str) -> String {
 }
 
 
+/// Where a stateless-ISO-2022-JP sequence ends according to the
+/// *transcoder*, which is narrower than the encoding object's walk:
+/// only `0x90` and `0x92` name a set it can convert, and their cells
+/// are `0xA1..=0xFE` rather than `0xA0..=0xFF`. The two questions are
+/// separate, as they are for CP949 and the Big5 family, and this is
+/// the one that decides a malformed run (#1600).
+pub(crate) fn stateless_iso2022jp_transcode_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    match lead {
+        0x00..=0x7f => PreciseLen::Char(1),
+        0x90 | 0x92 => {
+            for i in 1..=2 {
+                match bytes.get(pos + i) {
+                    None => return PreciseLen::NeedMore,
+                    Some(0xa1..=0xfe) => {}
+                    Some(_) => return PreciseLen::Invalid,
+                }
+            }
+            PreciseLen::Char(3)
+        }
+        _ => PreciseLen::Invalid,
+    }
+}
+
+/// The EUC-JP bytes the stateless-ISO-2022-JP `bytes` stand for, or
+/// `Err(offset)` at the first sequence that is not stateless's.
+///
+/// stateless-ISO-2022-JP is ISO-2022-JP with the character set named
+/// by a lead byte instead of by an escape sequence still in effect,
+/// and the cell after it written exactly as EUC-JP writes it. So the
+/// conversion out of it is this rewrite followed by EUC-JP's own — the
+/// chain CRuby names in its errors, `stateless-ISO-2022-JP to EUC-JP
+/// to UTF-8` (#1600).
+///
+/// `0x90` and `0x92` are JIS X 0208, 1978 and 1983; CRuby maps them to
+/// the same cells. The rest of the `0x90..=0x99` range the walk
+/// accepts converts nowhere, so it is malformed *here* even though
+/// `valid_encoding?` is true for it — the same split the Big5 family
+/// and CP949 have.
+pub(crate) fn stateless_iso2022jp_to_eucjp(bytes: &[u8]) -> std::result::Result<Vec<u8>, usize> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut pos = 0;
+    while pos < bytes.len() {
+        match bytes[pos] {
+            b @ 0x00..=0x7f => {
+                out.push(b);
+                pos += 1;
+            }
+            0x90 | 0x92
+                if matches!(bytes.get(pos + 1), Some(0xa1..=0xfe))
+                    && matches!(bytes.get(pos + 2), Some(0xa1..=0xfe)) =>
+            {
+                out.extend_from_slice(&bytes[pos + 1..pos + 3]);
+                pos += 3;
+            }
+            _ => return Err(pos),
+        }
+    }
+    Ok(out)
+}
+
+/// The stateless-ISO-2022-JP bytes for the EUC-JP `bytes`, or
+/// `Err(offset)` at the first character stateless has no cell for.
+///
+/// Only JIS X 0208 and ASCII are in it: EUC-JP's half-width katakana
+/// (`0x8E` + one byte) and JIS X 0212 (`0x8F` + a cell) have nowhere
+/// to go, which is what makes them an undefined conversion — the same
+/// two EUC-JP forms ISO-2022-JP itself cannot spell (#1600).
+pub(crate) fn eucjp_to_stateless_iso2022jp(bytes: &[u8]) -> std::result::Result<Vec<u8>, usize> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut pos = 0;
+    while pos < bytes.len() {
+        match bytes[pos] {
+            b @ 0x00..=0x7f => {
+                out.push(b);
+                pos += 1;
+            }
+            0xa1..=0xfe if matches!(bytes.get(pos + 1), Some(0xa1..=0xfe)) => {
+                out.push(0x92);
+                out.extend_from_slice(&bytes[pos..pos + 2]);
+                pos += 2;
+            }
+            _ => return Err(pos),
+        }
+    }
+    Ok(out)
+}
+
 /// CESU-8's bytes for `s`.
 ///
 /// Below `U+10000` the bytes are UTF-8's; above it the character is its
@@ -1266,7 +1374,7 @@ pub(crate) fn mbc_walker(enc: Encoding) -> Option<(usize, fn(&[u8], usize) -> Pr
                 Some((2, big5_precise_len))
             }
             "STATELESS_ISO_2022_JP" | "STATELESS_ISO_2022_JP_KDDI" => {
-                Some((2, stateless_iso2022jp_precise_len))
+                Some((3, stateless_iso2022jp_precise_len))
             }
             "CESU_8" => Some((CESU8_MAX_LEN, cesu8_precise_len)),
             "GBK" => Some((2, gbk_precise_len)),
