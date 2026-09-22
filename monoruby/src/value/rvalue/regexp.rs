@@ -1553,10 +1553,17 @@ impl<'a> Subject<'a> {
         self.enc
     }
 
-    /// The encoding the walked bytes are in: UTF-8 for any text subject
-    /// (a surrogate image included), the subject's own otherwise.
+    /// The encoding the walked bytes are in: UTF-8 for a surrogate
+    /// image, which really is UTF-8 text standing in for bytes that are
+    /// decoded back afterwards; the subject's own for everything else.
+    ///
+    /// A text subject that is not a surrogate image *is* the subject's
+    /// own bytes, so its own encoding is what the splice must negotiate
+    /// against. Answering UTF-8 there made a `UTF8-MAC` receiver look
+    /// like a UTF-8 one to `splice_all`, which then merged a UTF-8
+    /// replacement into it that CRuby refuses (#1572).
     pub(crate) fn view_encoding(&self) -> crate::value::Encoding {
-        if self.text.is_some() {
+        if self.mapped {
             crate::value::Encoding::UTF8
         } else {
             self.enc
@@ -1873,13 +1880,15 @@ impl RegexpInner {
                 before
             };
             let rep_inner = block_result_to_inner(vm, globals, result, mapped)?;
+            let rep_enc = rep_inner.encoding();
             let res = RStringInner::splice_all(
                 &globals.store,
                 &haystack,
                 view_enc,
                 is_ascii,
                 &[(start..end, rep_inner)],
-            )?;
+            )
+            .map_err(|_| sub_incompatible(&globals.store, subject, rep_enc))?;
             Ok((res, true))
         })
     }
@@ -2077,13 +2086,15 @@ impl RegexpInner {
             save_spans(vm, subject, &spans, owner);
             let key = subject.chunk(None, start..end);
             let rep_inner = lookup_hash_replacement(vm, globals, hash_val, key, subject.mapped())?;
+            let rep_enc = rep_inner.encoding();
             let res = RStringInner::splice_all(
                 &globals.store,
                 subject.as_bytes(),
                 subject.view_encoding(),
                 subject.is_ascii(),
                 &[(start..end, rep_inner)],
-            )?;
+            )
+            .map_err(|_| sub_incompatible(&globals.store, subject, rep_enc))?;
             Ok((res, true))
         })
     }
@@ -2747,16 +2758,36 @@ impl RegexpInner {
         let (start, end) = spans[0].unwrap();
         let (rep, mixed) = self.expand_backref(replace.as_bytes(), subject.as_bytes(), &spans);
         let rep_inner = expansion_inner(store, &rep, replace, mixed, subject.view_encoding())?;
+        let rep_enc = rep_inner.encoding();
         let res = RStringInner::splice_all(
             store,
             subject.as_bytes(),
             subject.view_encoding(),
             subject.is_ascii(),
             &[(start..end, rep_inner)],
-        )?;
+        )
+        .map_err(|_| sub_incompatible(store, subject, rep_enc))?;
         save_spans(vm, subject, &spans, owner);
         Ok((res, true))
     }
+}
+
+/// `String#sub`'s wording for a replacement the receiver cannot take.
+///
+/// With one replacement CRuby checks the receiver against it directly
+/// and names them in that order; `gsub` names the encoding its result
+/// has reached and the piece that would not fit, which is the question
+/// `splice_all` answers and so the wording it produces for both. The
+/// three `sub` entry points re-spell it (#1572).
+///
+/// `splice_all` raises nothing else, so the original error carries no
+/// information this discards.
+fn sub_incompatible(
+    store: &Store,
+    subject: &Subject,
+    rep: crate::value::Encoding,
+) -> MonorubyErr {
+    MonorubyErr::incompatible_encoding(store, subject.encoding(), rep)
 }
 
 /// Coerce the result of a `String#sub`/`#gsub` block to an
