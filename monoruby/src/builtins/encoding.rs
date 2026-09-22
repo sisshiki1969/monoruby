@@ -1907,12 +1907,14 @@ fn undefined_cell_message(
     src_enc: crate::value::Encoding,
     dst_enc: crate::value::Encoding,
 ) -> String {
-    let escaped: String = cell.iter().map(|b| format!("\\x{b:02X}")).collect();
+    // The same rendering every other quoted run gets: a printable
+    // trail byte is printed, not escaped (#1607).
+    let quoted = quote_error_bytes(cell);
     if dst_enc == crate::value::Encoding::UTF8 {
-        format!("\"{escaped}\" from {} to UTF-8", src_enc.name())
+        format!("{quoted} from {} to UTF-8", src_enc.name())
     } else {
         format!(
-            "\"{escaped}\" to UTF-8 in conversion from {} to UTF-8 to {}",
+            "{quoted} to UTF-8 in conversion from {} to UTF-8 to {}",
             src_enc.name(),
             dst_enc.name()
         )
@@ -7910,10 +7912,25 @@ fn probe_incomplete_tail(
 fn quote_error_bytes(bytes: &[u8]) -> String {
     let mut out = String::from("\"");
     for &b in bytes {
-        if (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\' {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("\\x{:02X}", b));
+        match b {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            0x20..=0x7e => out.push(b as char),
+            // The mnemonics `String#inspect` uses, which CRuby's
+            // message builders go through (#1607). `#` is not among
+            // them: it is escaped only before `{`, `$` or `@`, and a
+            // quoted run cannot hold two printable bytes — every
+            // encoding that reaches here begins a sequence at or
+            // above 0x80.
+            0x07 => out.push_str("\\a"),
+            0x08 => out.push_str("\\b"),
+            0x09 => out.push_str("\\t"),
+            0x0a => out.push_str("\\n"),
+            0x0b => out.push_str("\\v"),
+            0x0c => out.push_str("\\f"),
+            0x0d => out.push_str("\\r"),
+            0x1b => out.push_str("\\e"),
+            _ => out.push_str(&format!("\\x{b:02X}")),
         }
     }
     out.push('"');
@@ -14076,6 +14093,64 @@ mod tests {
                  e.class.to_s
                end]
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_quoted_byte_run_is_spelled_the_way_inspect_spells_it() {
+        // Every conversion error quotes the offending bytes, and CRuby
+        // renders that run the way `String#inspect` renders a byte:
+        // printable ASCII literally, eight control characters as their
+        // mnemonics, everything else as `\xNN`. There were two
+        // renderers here and neither matched — one escaped `"`, `\`
+        // and the control characters, the other escaped *everything*
+        // (#1607).
+        crate::tests::run_test_once(
+            r##"
+            # The readagain byte is one byte, so this isolates the
+            # per-byte rule over the whole range.
+            (0x00..0xFF).map do |b|
+              s = [0xA1, b].pack("C*").force_encoding("EUC-JP")
+              m = begin; s.encode("UTF-8"); nil; rescue; $!.message; end
+              m && m[/followed by "((?:[^"\\]|\\.)*)"/, 1]
+            end.compact
+            "##,
+        );
+        // The other builder is the one-shot `UndefinedConversionError`
+        // for a well-formed cell with no character, where the trail
+        // byte reaches into the printable range.
+        crate::tests::run_test_once(
+            r##"
+            [[0xC9, 0x41], [0xC9, 0x22], [0xC9, 0x5C], [0xC9, 0x7E], [0xC9, 0x20],
+             [0xFE, 0x41], [0xA2, 0xE8]].map do |l, t|
+              s = [l, t].pack("C*").force_encoding("CP949")
+              begin
+                s.encode("UTF-8"); "ok"
+              rescue
+                [$!.class.to_s, $!.message]
+              end
+            end
+            "##,
+        );
+        // A multi-byte run keeps the same rule, and an incomplete one
+        // is quoted whole.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            [[0xE3, 0x81], [0xE3, 0x81, 0x41], [0xF0, 0x9F, 0x98], [0xC2]].each do |bytes|
+              s = bytes.pack("C*").force_encoding("UTF-8")
+              r << begin; s.encode("EUC-JP"); "ok"; rescue; $!.message; end
+            end
+            [[0xA1, 0x07], [0xA1, 0x1B], [0xA1, 0x7F], [0xA1, 0x00], [0xA1, 0x20]].each do |bytes|
+              s = bytes.pack("C*").force_encoding("EUC-JP")
+              r << begin
+                Encoding::Converter.new("EUC-JP", "UTF-8").convert(s.dup); "ok"
+              rescue
+                $!.message
+              end
+            end
+            r
             "##,
         );
     }
