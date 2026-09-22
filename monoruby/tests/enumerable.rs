@@ -155,6 +155,22 @@ fn map_reports_the_users_block_arity_to_each() {
           [m, $seen]
         }
         "##,
+        // `Proc#curry` reads the reported arity to decide how many
+        // arguments to collect, so the override has to reach it too:
+        // `b.curry[9]` is a Proc still waiting for the second argument,
+        // where an arity of -1 would have called through on the first.
+        r##"
+        class C
+          include Enumerable
+          def each(&b)
+            c = b.curry[9]
+            $seen = [b.arity, b.curry.arity, c.class.to_s, c.is_a?(Proc) ? c.arity : c]
+            yield 1, 2
+            self
+          end
+        end
+        [C.new.map { |a, b| [a, b] }, $seen]
+        "##,
         // No block is still an Enumerator, named after the call site.
         r##"[[1, 2].each_entry.inspect, (1..3).map.inspect, (1..3).collect.inspect]"##,
     ]);

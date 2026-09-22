@@ -3556,6 +3556,39 @@ mod encoding_tests {
     }
 
     #[test]
+    fn named_byte_index_const_agrees_with_the_table() {
+        // `EMACS_MULE` is the one index `NAMED_BYTE_ENCODINGS` is read
+        // by number rather than by name, and it used to be written out
+        // as `37` — inserting an entry above it re-pointed it at
+        // `IBM861` and broke both encodings' validation. Its doc
+        // comment credited `emacs_mule_index_is_pinned` with keeping
+        // the two in step; that test did not exist. This is it, and it
+        // runs the `const fn` at run time so the walk it does at
+        // compile time is exercised as well.
+        assert_eq!(
+            NAMED_BYTE_ENCODINGS[EMACS_MULE as usize],
+            ("Emacs-Mule", "Emacs_Mule")
+        );
+        for (index, (_, konst)) in NAMED_BYTE_ENCODINGS.iter().enumerate() {
+            assert_eq!(named_byte_index_const(konst), index as u8, "{konst}");
+            assert_eq!(named_byte_index(konst), Some(index as u8), "{konst}");
+        }
+        // The two ways the byte compare can reject a candidate: a
+        // different length, and a same-length mismatch.
+        assert_eq!(named_byte_index_const("Big5"), 0);
+        assert!(named_byte_index("Big5X").is_none());
+        assert!(named_byte_index("Big4").is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "NAMED_BYTE_ENCODINGS has no such constant suffix")]
+    fn named_byte_index_const_rejects_an_unknown_suffix() {
+        // The compile-time failure this gives for a typo in a `const`
+        // position, seen from run time.
+        let _ = named_byte_index_const("NoSuchEncoding");
+    }
+
+    #[test]
     fn try_from_str_normalises_separators_and_aliases() {
         // The normalisation runs in a fixed stack buffer, so the edges of
         // that buffer matter: an empty name, a name exactly at the cap, a
