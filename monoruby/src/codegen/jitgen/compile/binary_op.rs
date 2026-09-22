@@ -814,7 +814,7 @@ impl<'a> JitContext<'a> {
                 recv_class: target.as_val().class(),
                 name: Some(IdentId::_TEQ),
                 refinements: self.refinements(),
-                func_id,
+                func_id: Some(func_id),
             });
             self.guard_class_version(state, ir, true);
             state.load(ir, rhs, GP::Rdi);

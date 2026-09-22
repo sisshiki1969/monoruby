@@ -141,7 +141,7 @@ impl Codegen {
     ) {
         let gv_addr = self
             .jit
-            .get_label_address(&self.class_version_label())
+            .get_label_address(&self.jit_class_version_label())
             .as_ptr() as u64;
         let unit_addr = self.jit.get_label_address(unit_word).as_ptr() as u64;
         monoasm_arm64!(&mut self.jit,

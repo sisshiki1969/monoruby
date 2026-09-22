@@ -61,5 +61,9 @@ impl AbstractState {
             using_fpr,
             error,
         });
+        // `class << base` gives the object a singleton class: whatever
+        // class the state had proved for any slot holding it no longer
+        // holds (see the `SingletonMethodDef` lowering).
+        self.forget_heap_object_classes();
     }
 }

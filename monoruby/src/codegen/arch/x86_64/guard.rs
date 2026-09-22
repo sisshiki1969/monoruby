@@ -21,7 +21,7 @@ impl Codegen {
     /// #1157 failure mode: an unpatchable snapshot immediate silently
     /// turns every salvage into a permanent per-call deopt).
     fn check_version(&mut self, _cached_version: DestLabel, fail: &DestLabel) {
-        let global_version = self.class_version_label();
+        let global_version = self.jit_class_version_label();
         let patch_site = self.jit.label();
         monoasm! { &mut self.jit,
             cmpl [rip + global_version], (crate::codegen::VERSION_IMM_SENTINEL);

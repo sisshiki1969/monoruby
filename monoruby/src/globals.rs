@@ -1981,8 +1981,19 @@ impl Globals {
         CODEGEN.with(|codegen| codegen.borrow_mut().class_version_inc());
     }
 
+    /// Move the VM's class-version word only — see
+    /// `Codegen::vm_class_version_inc` for the obligation this leaves.
+    pub(crate) fn vm_class_version_inc() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().vm_class_version_inc());
+    }
+
     pub(crate) fn class_version() -> u32 {
         CODEGEN.with(|codegen| codegen.borrow().class_version())
+    }
+
+    /// The JIT's class-version word (see `JitModule::jit_class_version`).
+    pub(crate) fn jit_class_version() -> u32 {
+        CODEGEN.with(|codegen| codegen.borrow().jit_class_version())
     }
 
     /// Bump the global *constant* version counter, invalidating every

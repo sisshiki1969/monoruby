@@ -421,6 +421,16 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<CompileResult> {
         let callsite = &self.store[callid];
         let (recv, dst) = (callsite.recv, callsite.dst);
+        // "No such method on this class" is a resolution like any other:
+        // record it, so a definition of the name reaches this unit
+        // (`Store::jit_method_changed`) and a salvage re-checks that it is
+        // still missing.
+        self.inline_method_cache.push(InlineCacheEntry {
+            recv_class,
+            name: callsite.name,
+            refinements: self.refinements(),
+            func_id: None,
+        });
 
         self.guard_class_version(state, ir, true);
         let deopt = ir.new_deopt(state);
@@ -470,7 +480,7 @@ impl<'a> JitContext<'a> {
             recv_class,
             name: callsite.name,
             refinements: self.refinements(),
-            func_id,
+            func_id: Some(func_id),
         });
 
         // `recv.send(:foo, ...)` with a literal method name: resolve the
@@ -671,7 +681,7 @@ impl<'a> JitContext<'a> {
                             recv_class: class,
                             name: callsite.name,
                             refinements: self.refinements(),
-                            func_id,
+                            func_id: Some(func_id),
                         });
                     }
                 }
@@ -2115,7 +2125,7 @@ impl<'a> JitContext<'a> {
             recv_class: class_id,
             name: Some(IdentId::INITIALIZE),
             refinements: self.refinements(),
-            func_id: init_fid,
+            func_id: Some(init_fid),
         });
 
         // Runtime identity guard, for the same reason `Class#allocate`

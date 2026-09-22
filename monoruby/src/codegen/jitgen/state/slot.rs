@@ -942,6 +942,34 @@ impl SlotState {
         self.def_S_guarded(slot, Guarded::Value);
     }
 
+    /// Forget the class proved for every slot that could hold a heap
+    /// object: an object one of them holds has just been given a
+    /// singleton class (`def obj.m`, `class << obj`), which is its class
+    /// from now on, and several slots may hold it — the definition's
+    /// target is a temporary copy of the local it came from — so no
+    /// slot's proof can be trusted. Immediates keep theirs: they cannot
+    /// have a singleton class. Slot 0, `self`, keeps its class, the
+    /// unit's compile-time constant.
+    pub(in crate::codegen::jitgen) fn forget_heap_object_classes(&mut self) {
+        for i in 1..self.slots.len() {
+            if let LinkMode::S(Guarded::Class(class)) = self.slots[i].mode
+                && !matches!(
+                    class,
+                    NIL_CLASS
+                        | TRUE_CLASS
+                        | FALSE_CLASS
+                        | BOOL_CLASS
+                        | INTEGER_CLASS
+                        | BIGNUM_CLASS
+                        | FLOAT_CLASS
+                        | SYMBOL_CLASS
+                )
+            {
+                self.slots[i].mode = LinkMode::S(Guarded::Value);
+            }
+        }
+    }
+
     ///
     /// Link *slot* to stack with guard.
     ///
