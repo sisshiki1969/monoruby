@@ -743,6 +743,40 @@ impl MonorubyErr {
         )
     }
 
+    /// CRuby's `rb_method_name_error`: the reflection API (`Object#method`,
+    /// `#public_method`, `Module#instance_method`, …) reports a method it
+    /// cannot hand out as a plain `NameError` about the *class* it looked
+    /// in — `undefined method 'x' for class 'C'`, `method 'x' for module
+    /// 'M' is private` — whose `#receiver` is that class, not the
+    /// `NoMethodError` a call would raise (#1625, #1642). `visibility` is
+    /// the non-public visibility the method was found with, or `None`
+    /// when there is no such method at all.
+    pub(crate) fn method_name_error(
+        store: &Store,
+        name: IdentId,
+        class: ClassId,
+        visibility: Option<Visibility>,
+    ) -> MonorubyErr {
+        let module = store[class].get_module();
+        let kind = if module.is_singleton().is_none() && module.as_val().ty() == Some(ObjTy::MODULE)
+        {
+            "module"
+        } else {
+            "class"
+        };
+        let class_name = store.get_class_name(class);
+        let msg = match visibility {
+            Some(Visibility::Private) => {
+                format!("method '{name}' for {kind} '{class_name}' is private")
+            }
+            Some(Visibility::Protected) => {
+                format!("method '{name}' for {kind} '{class_name}' is protected")
+            }
+            _ => format!("undefined method '{name}' for {kind} '{class_name}'"),
+        };
+        Self::nameerr_with_name_receiver(msg, name, module.as_val())
+    }
+
     pub(crate) fn private_method_called(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod {

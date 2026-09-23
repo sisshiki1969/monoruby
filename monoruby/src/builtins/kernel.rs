@@ -5908,15 +5908,36 @@ fn method_object_impl(
                     ));
                 }
             }
-            match found {
-                // A non-public method under `public_method`.
-                Ok(_) => Err(MonorubyErr::method_not_found(
-                    &globals.store,
-                    method_name,
-                    receiver,
-                )),
-                Err(err) => Err(err),
-            }
+            // Named against the class the lookup ran in: the receiver's
+            // singleton class when it has one — a class always does in
+            // CRuby, so `Integer.method(:x)` names `#<Class:Integer>` —
+            // and its class otherwise (#1625). monoruby gives every
+            // module a singleton class up front where CRuby makes one
+            // only once something needs it, so an empty one (no methods
+            // of its own, nothing extended) stands for none and a bare
+            // `Module.new.method(:x)` names `Module`.
+            let class = match receiver.ty() {
+                Some(ObjTy::CLASS) => globals.store.get_singleton(receiver)?.id(),
+                Some(ObjTy::MODULE) => match globals.store.has_singleton(receiver) {
+                    Some(sc)
+                        if globals.store.get_method_names(sc.id()).is_empty()
+                            && globals.store.get_private_method_names(sc.id()).is_empty()
+                            && globals.store.get_protected_method_names(sc.id()).is_empty()
+                            && !sc.superclass().is_some_and(|m| m.is_iclass()) =>
+                    {
+                        receiver.real_class(&globals.store).id()
+                    }
+                    _ => receiver.class(),
+                },
+                _ => receiver.class(),
+            };
+            let visibility = found.ok().map(|(_, visi, _)| visi);
+            Err(MonorubyErr::method_name_error(
+                &globals.store,
+                method_name,
+                class,
+                visibility,
+            ))
         }
     }
 }
@@ -5936,20 +5957,49 @@ fn singleton_method(
 ) -> Result<Value> {
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let class_id = match globals.store.has_singleton(receiver) {
-        Some(module) => module.id(),
-        None => {
-            return Err(MonorubyErr::nameerr_with_name(
-                format!(
-                    "undefined singleton method `{}' for `{}'",
-                    method_name,
-                    receiver.inspect(&globals.store)
-                ),
+    // CRuby's `rb_obj_singleton_method`: only the singleton class itself
+    // and the modules mixed into it count — a method the object's class
+    // (or, for a class, its superclass's metaclass) provides is not a
+    // singleton method. `nil` / `true` / `false` have none. Private ones
+    // are found (#1642).
+    let undefined = || {
+        MonorubyErr::nameerr_with_name_receiver(
+            format!(
+                "undefined singleton method '{}' for '{}'",
                 method_name,
-            ));
-        }
+                receiver.inspect(&globals.store)
+            ),
+            method_name,
+            receiver,
+        )
     };
-    let (func_id, _, owner) = globals.store.find_method_for_class(class_id, method_name)?;
+    if receiver.is_nil() || receiver == Value::bool(true) || receiver == Value::bool(false) {
+        return Err(undefined());
+    }
+    let Some(singleton) = globals.store.has_singleton(receiver) else {
+        return Err(undefined());
+    };
+    let Ok((func_id, _, owner)) = globals.store.find_method_for_class(singleton.id(), method_name)
+    else {
+        return Err(undefined());
+    };
+    let stop = singleton.get_real_superclass().map(|m| m.id());
+    let mut own = false;
+    let mut cur = Some(singleton);
+    while let Some(m) = cur {
+        if !m.is_iclass() && Some(m.id()) == stop {
+            break;
+        }
+        if m.id() == owner {
+            own = true;
+            break;
+        }
+        cur = m.superclass();
+    }
+    if !own {
+        return Err(undefined());
+    }
+    let class_id = singleton.id();
     let original_name = globals
         .store
         .original_name_by_class_id(class_id, method_name);
