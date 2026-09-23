@@ -2160,6 +2160,24 @@ fn pivot_chain(src_enc: crate::value::Encoding) -> String {
 /// a character to that Unicode has nowhere to put — ISO-8859-11's eight
 /// unassigned Thai cells are the only ones here. CRuby quotes the byte
 /// where it would otherwise name a codepoint.
+/// A source cell with no character, at `at`, is reported only when
+/// everything before it converts: a character the destination has no
+/// cell for, earlier in the string, is what CRuby reports — the
+/// encode hop gets first refusal, as it does in the stream (#1611).
+fn encode_hop_first(
+    src_bytes: &[u8],
+    at: usize,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> Result<()> {
+    if at == 0 || at > src_bytes.len() {
+        return Ok(());
+    }
+    transcode_bytes_with_opts(&src_bytes[..at], src_enc, dst_enc, opts, store).map(|_| ())
+}
+
 fn undefined_byte_message(
     b: u8,
     src_enc: crate::value::Encoding,
@@ -4564,17 +4582,22 @@ pub(super) fn transcode_bytes_with_opts(
             if opts.undef_replace {
                 table_decode_lossy(src_bytes, table, &opts.replace_str(dst_enc))
             } else {
-                table_decode(src_bytes, table).map_err(|(_, b)| {
-                    MonorubyErr::undefined_conversion_error(
-                        store,
-                        undefined_byte_message(b, src_enc, dst_enc),
-                    )
-                })?
+                match table_decode(src_bytes, table) {
+                    Ok(s) => s,
+                    Err((at, b)) => {
+                        encode_hop_first(src_bytes, at, src_enc, dst_enc, opts, store)?;
+                        return Err(MonorubyErr::undefined_conversion_error(
+                            store,
+                            undefined_byte_message(b, src_enc, dst_enc),
+                        ));
+                    }
+                }
             }
         } else if let Some(src_rs) = encoding_to_rs(src_enc) {
             let (decoded, decode_err) = if let Some(fx) = jp_fixup(src_enc) {
                 let d = jp_decode(fx, src_bytes, None);
                 if let Some(cell) = d.unmapped {
+                    encode_hop_first(src_bytes, d.unmapped_at.unwrap_or(0), src_enc, dst_enc, opts, store)?;
                     return Err(MonorubyErr::undefined_conversion_error(
                         store,
                         undefined_cell_message(&cell, src_enc, dst_enc),
@@ -4646,12 +4669,16 @@ pub(super) fn transcode_bytes_with_opts(
         let decoded = if opts.undef_replace {
             table_decode_lossy(src_bytes, table, &opts.replace_str(dst_enc))
         } else {
-            table_decode(src_bytes, table).map_err(|(_, b)| {
-                MonorubyErr::undefined_conversion_error(
-                    store,
-                    undefined_byte_message(b, src_enc, dst_enc),
-                )
-            })?
+            match table_decode(src_bytes, table) {
+                Ok(s) => s,
+                Err((at, b)) => {
+                    encode_hop_first(src_bytes, at, src_enc, dst_enc, opts, store)?;
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        undefined_byte_message(b, src_enc, dst_enc),
+                    ));
+                }
+            }
         };
         (std::borrow::Cow::Owned(decoded), false)
     } else if src_enc == E::UsAscii && opts.invalid_replace {
@@ -4699,6 +4726,7 @@ pub(super) fn transcode_bytes_with_opts(
             if let Some(cell) = d.unmapped {
                 // A well-formed cell with no character: an undefined
                 // conversion, which `invalid: :replace` does not cover.
+                encode_hop_first(src_bytes, d.unmapped_at.unwrap_or(0), src_enc, dst_enc, opts, store)?;
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,
                     undefined_cell_message(&cell, opts.report_src.unwrap_or(src_enc), dst_enc),
@@ -4721,6 +4749,7 @@ pub(super) fn transcode_bytes_with_opts(
             if let Some(cell) = d.unmapped
                 && !invalid_first
             {
+                encode_hop_first(src_bytes, d.unmapped_at.unwrap_or(0), src_enc, dst_enc, opts, store)?;
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,
                     undefined_cell_message(&cell, opts.report_src.unwrap_or(src_enc), dst_enc),
