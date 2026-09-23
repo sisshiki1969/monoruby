@@ -2471,6 +2471,14 @@ fn latin1_to_ibm037(c: char) -> Option<u8> {
         .map(|i| i as u8)
 }
 
+/// ISO-8859-1 bytes as IBM037's: the table's inverse, byte for byte.
+fn latin1_bytes_to_ibm037(bytes: &[u8]) -> Vec<u8> {
+    bytes
+        .iter()
+        .map(|&b| latin1_to_ibm037(b as char).unwrap_or(b))
+        .collect()
+}
+
 /// IBM037 bytes as the UTF-8 of the Latin-1 characters they stand for.
 fn ibm037_to_utf8(bytes: &[u8]) -> String {
     bytes
@@ -4460,37 +4468,22 @@ pub(super) fn transcode_bytes_with_opts(
         );
     }
     if is_ibm037(dst_enc) {
-        let mut inner = opts.clone();
-        inner.universal_newline = false;
-        inner.crlf_newline = false;
-        inner.cr_newline = false;
-        let utf8 = if src_enc == E::UTF8 {
-            src_bytes.to_vec()
-        } else {
-            transcode_bytes_with_opts(src_bytes, src_enc, E::UTF8, &inner, store)?
-        };
-        let text = String::from_utf8_lossy(&utf8);
-        let text = if opts.has_newline() {
-            opts.apply_newline(&text)
-        } else {
-            text.into_owned()
-        };
-        let mut out = Vec::with_capacity(text.len());
-        for c in text.chars() {
-            match latin1_to_ibm037(c) {
-                Some(b) => out.push(b),
-                None if opts.undef_replace => {
-                    out.extend(opts.replace_str(dst_enc).chars().filter_map(latin1_to_ibm037));
+        // ISO-8859-1's own conversion does the reading, the
+        // decorators and the refusals — a malformed source byte is
+        // its to report, as CRuby's `convpath` says — and the table
+        // is a byte permutation on top (#1584).
+        let latin1 = transcode_bytes_with_opts(src_bytes, src_enc, E::Iso8859(1), opts, store)
+            .map_err(|e| {
+                let (kind, _, _, meta) =
+                    stream_convert(src_bytes, src_enc, dst_enc, None, false, opts, store);
+                match (kind, meta.message) {
+                    (StreamConvertResult::UndefinedConversion, Some(msg)) => {
+                        MonorubyErr::undefined_conversion_error(store, msg)
+                    }
+                    _ => e,
                 }
-                None => {
-                    return Err(MonorubyErr::undefined_conversion_error(
-                        store,
-                        ibm037_undefined_message(c, opts.report_src.unwrap_or(src_enc)),
-                    ));
-                }
-            }
-        }
-        return Ok(out);
+            })?;
+        return Ok(latin1_bytes_to_ibm037(&latin1));
     }
     let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
     if all_ascii
@@ -7944,9 +7937,11 @@ fn ibm037_source_stream(
     (kind, src_consumed, out, meta)
 }
 
-/// An IBM037 destination, streamed: the source reaches UTF-8 by its
-/// own stream, and each character then writes one byte — or is the
-/// undefined conversion into ISO-8859-1 that CRuby reports.
+/// An IBM037 destination, streamed: ISO-8859-1's own stream does
+/// the reading, the cap and the refusals, and each byte it writes is
+/// one of the table's. A character it has no cell for is the
+/// undefined conversion into ISO-8859-1 that CRuby reports, spelled
+/// against the whole chain (#1530, #1584).
 fn ibm037_dest_stream(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -7956,80 +7951,17 @@ fn ibm037_dest_stream(
     store: &Store,
 ) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
     use crate::value::Encoding as E;
-    let dst_enc = ibm037_enc();
-    let mut inner = opts.clone();
-    inner.universal_newline = false;
-    inner.crlf_newline = false;
-    inner.cr_newline = false;
-    let (kind, consumed, utf8, meta) = if src_enc == E::UTF8 {
-        let k = if partial_input {
-            StreamConvertResult::SourceBufferEmpty
-        } else {
-            StreamConvertResult::Finished
-        };
-        (k, src_bytes.len(), src_bytes.to_vec(), ErrMeta::default())
-    } else {
-        stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, &inner, store)
-    };
-    let text = String::from_utf8_lossy(&utf8).into_owned();
-    let text = if opts.has_newline() {
-        opts.apply_newline(&text)
-    } else {
-        text
-    };
-    // Where a character of `text` came from in the source, for the
-    // counts a stop has to report; the decorators only add bytes, so
-    // the offset into `utf8` is what is looked up.
-    let source_through = |utf8_at: usize| -> usize {
-        pivot_prefix_consumed_in(src_bytes, src_enc, E::UTF8, utf8_at.min(utf8.len()), &inner, store)
-    };
-    let mut out: Vec<u8> = Vec::with_capacity(text.len());
-    let mut at = 0usize;
-    for c in text.chars() {
-        let b = match latin1_to_ibm037(c) {
-            Some(b) => b,
-            None if opts.undef_replace => {
-                let repl: Vec<u8> = opts.replace_str(dst_enc).chars().filter_map(latin1_to_ibm037).collect();
-                out.extend_from_slice(&repl);
-                at += c.len_utf8();
-                continue;
-            }
-            None => {
-                let mut buf = [0u8; 4];
-                return (
-                    StreamConvertResult::UndefinedConversion,
-                    source_through(at + c.len_utf8()),
-                    out,
-                    ErrMeta {
-                        error_bytes: c.encode_utf8(&mut buf).as_bytes().to_vec(),
-                        decode_stage: false,
-                        stage: Some(("UTF-8".to_string(), "ISO-8859-1".to_string())),
-                        message: Some(ibm037_undefined_message(c, opts.report_src.unwrap_or(src_enc))),
-                        ..ErrMeta::default()
-                    },
-                );
-            }
-        };
-        if let Some(max) = max_dst_bytes
-            && out.len() >= max
-        {
-            // The character that does not fit is read and its byte
-            // held, as every other destination holds its output.
-            let written_through = source_through(at);
-            let through_tried = source_through(at + c.len_utf8());
-            return (
-                StreamConvertResult::DestinationBufferFull,
-                written_through,
-                out,
-                ErrMeta {
-                    dst_full_extra: through_tried.saturating_sub(written_through),
-                    dst_full_out: vec![b],
-                    ..ErrMeta::default()
-                },
-            );
-        }
-        out.push(b);
-        at += c.len_utf8();
+    let (kind, consumed, out, mut meta) =
+        stream_convert(src_bytes, src_enc, E::Iso8859(1), max_dst_bytes, partial_input, opts, store);
+    let out = latin1_bytes_to_ibm037(&out);
+    meta.dst_full_out = latin1_bytes_to_ibm037(&meta.dst_full_out);
+    if matches!(kind, StreamConvertResult::UndefinedConversion)
+        && !meta.decode_stage
+        && meta.message.is_none()
+        && let Some(c) = single_utf8_char(&meta.error_bytes)
+    {
+        meta.stage = Some(("UTF-8".to_string(), "ISO-8859-1".to_string()));
+        meta.message = Some(ibm037_undefined_message(c, opts.report_src.unwrap_or(src_enc)));
     }
     (kind, consumed, out, meta)
 }
@@ -8203,12 +8135,26 @@ fn kddi_dest_stream(
     inner.crlf_newline = false;
     inner.cr_newline = false;
     let (kind, consumed, utf8, meta) = if src_enc == kddi {
-        let k = if partial_input {
-            StreamConvertResult::SourceBufferEmpty
+        // Its own bytes, once they are read as characters: a
+        // malformed run is the source's to report, and a chunk that
+        // ends inside a character keeps that tail for the next one.
+        let good = std::str::from_utf8(src_bytes).map_or_else(|e| e.valid_up_to(), |_| src_bytes.len());
+        if good < src_bytes.len() {
+            let (kind, meta) = bad_source_outcome(kddi, &src_bytes[good..], !partial_input);
+            let through = if matches!(kind, StreamConvertResult::SourceBufferEmpty) {
+                good
+            } else {
+                through_bad_run(good, &kind, &meta, src_bytes.len())
+            };
+            (kind, through, src_bytes[..good].to_vec(), meta)
         } else {
-            StreamConvertResult::Finished
-        };
-        (k, src_bytes.len(), src_bytes.to_vec(), ErrMeta::default())
+            let k = if partial_input {
+                StreamConvertResult::SourceBufferEmpty
+            } else {
+                StreamConvertResult::Finished
+            };
+            (k, src_bytes.len(), src_bytes.to_vec(), ErrMeta::default())
+        }
     } else {
         stream_convert(src_bytes, src_enc, kddi, None, partial_input, &inner, store)
     };
