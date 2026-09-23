@@ -2586,7 +2586,9 @@ impl RStringInner {
     }
 
     pub fn dump(&self) -> String {
-        if self.ty.is_utf8_compatible() {
+        // `rb_str_dump` spells a character as `\u` only in UTF-8
+        // itself; a UTF8-MAC or CESU-8 string gets its bytes.
+        if self.ty == Encoding::UTF8 || self.ty == Encoding::UsAscii {
             let mut res = String::with_capacity(self.len());
             utf8_dump_with_lookahead(&mut res, self.as_bytes());
             res

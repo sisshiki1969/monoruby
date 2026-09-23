@@ -64,28 +64,6 @@ class String
     self
   end
 
-  def chop
-    return "" if empty?
-    # Compare code points, not bytes: in a fixed-width encoding a
-    # terminator is several bytes wide, so `self[-1] == "\n"` (a UTF-8
-    # literal) would never match.
-    last = self[-1]
-    if length > 1 && last.valid_encoding? && last.ord == 10
-      prev = self[-2]
-      return self[0..-3] if prev.valid_encoding? && prev.ord == 13
-    end
-    self[0..-2]
-  end
-
-  def chop!
-    # A frozen receiver raises even when there is nothing to chop.
-    raise FrozenError.new("can't modify frozen String: #{inspect}", receiver: self) if frozen?
-    return nil if empty?
-    result = chop
-    replace(result)
-    self
-  end
-
   def delete_suffix(suffix)
     s = suffix.is_a?(String) ? suffix : __to_str(suffix)
     # `deleted_suffix_length` refuses a suffix that is broken in its

@@ -69,6 +69,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(STRING_CLASS, "chomp", chomp, 0, 1, false);
     globals.define_builtin_func_with(STRING_CLASS, "chomp!", chomp_, 0, 1, false);
     globals.define_builtin_func_rest(STRING_CLASS, "strip", strip);
+    globals.define_builtin_func(STRING_CLASS, "chop", chop, 0);
+    globals.define_builtin_func(STRING_CLASS, "chop!", chop_, 0);
     globals.define_builtin_func_rest(STRING_CLASS, "strip!", strip_);
     globals.define_builtin_func_rest(STRING_CLASS, "rstrip", rstrip);
     globals.define_builtin_func_rest(STRING_CLASS, "rstrip!", rstrip_);
@@ -853,8 +855,17 @@ fn shl_inner(
             if ch > 0xFF {
                 return Err(MonorubyErr::char_out_of_range(&globals.store, other_v));
             }
+            // …when it was 7-bit: a US-ASCII string already broken
+            // stays US-ASCII, and broken, with the byte appended.
             if ch > 0x7F && enc == Encoding::UsAscii {
-                self_.set_encoding(Encoding::Ascii8);
+                if self_.is_ascii_only() {
+                    self_.set_encoding(Encoding::Ascii8);
+                } else {
+                    let len = self_.len();
+                    let byte = RStringInner::from_encoding(&[ch as u8], Encoding::UsAscii);
+                    self_.bytesplice_with(len, 0, &byte, &globals.store)?;
+                    return Ok(recv);
+                }
             }
             self_.extend_from_slice_checked(&[ch as u8])?;
         } else if matches!(enc, Encoding::Utf8(_)) {
@@ -1849,11 +1860,18 @@ fn index_assign(
         }
     }
     let subst = subst_inner.to_str()?;
+    // The result's encoding is the one `rb_enc_check` negotiated — the
+    // receiver's own for a 7-bit replacement — not UTF-8 because the
+    // splice ran on a UTF-8 view.
+    let result_enc = recv_inner
+        .compatible_encoding(subst_inner)
+        .unwrap_or_else(|| recv_inner.encoding());
     let mut lhs = self_.expect_string(globals)?;
     let len = lhs.chars().count();
     if let Some(arg0) = arg0_val.try_fixnum() {
         index_assign_by_int(&mut lhs, arg0, arg1_opt, vm, globals, &subst, len)?;
-        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
+        *lfp.self_val().as_rstring_inner_mut() =
+            RStringInner::from_encoding_scanned(lhs.as_bytes(), result_enc);
         Ok(arg_val)
     } else if let Some(info) = arg0_val.is_range() {
         let char_len = len;
@@ -1887,12 +1905,14 @@ fn index_assign(
                 .unwrap_or(lhs.len())
         };
         lhs.replace_range(byte_start..byte_end, &subst);
-        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
+        *lfp.self_val().as_rstring_inner_mut() =
+            RStringInner::from_encoding_scanned(lhs.as_bytes(), result_enc);
         Ok(arg_val)
     } else {
         let idx = arg0_val.coerce_to_int_i64(vm, globals)?;
         index_assign_by_int(&mut lhs, idx, arg1_opt, vm, globals, &subst, len)?;
-        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
+        *lfp.self_val().as_rstring_inner_mut() =
+            RStringInner::from_encoding_scanned(lhs.as_bytes(), result_enc);
         Ok(arg_val)
     }
 }
@@ -3841,9 +3861,16 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
     fn slice_sub(lfp: Lfp, mut lhs: String, r: std::ops::Range<usize>) -> Value {
-        let res = Value::string_from_str(&lhs[r.clone()]);
+        // Both halves keep the receiver's encoding (US-ASCII, UTF8-MAC),
+        // whatever view the cut was made on.
+        let enc = lfp.self_val().as_rstring_inner().encoding();
+        let res = Value::string_from_inner(RStringInner::from_encoding_scanned(
+            lhs[r.clone()].as_bytes(),
+            enc,
+        ));
         lhs.replace_range(r, "");
-        *lfp.self_val().as_rstring_inner_mut() = RStringInner::from_string(lhs);
+        *lfp.self_val().as_rstring_inner_mut() =
+            RStringInner::from_encoding_scanned(lhs.as_bytes(), enc);
         res
     }
     let self_ = lfp.self_val();
@@ -4095,6 +4122,181 @@ fn chomp_byte_end(bytes: &[u8], rs: &[u8], enc: Encoding) -> usize {
         } else {
             end
         }
+    }
+}
+
+///
+/// ### String#chop
+///
+/// - chop -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/chop.html]
+#[monoruby_builtin]
+fn chop(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let n = chopped_length(&self_val.as_rstring_inner());
+    Ok(string_substring(self_val, 0, n))
+}
+
+///
+/// ### String#chop!
+///
+/// - chop! -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/chop=21.html]
+#[monoruby_builtin]
+fn chop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().ensure_string_mutable(vm, globals)?;
+    let self_val = lfp.self_val();
+    let inner = self_val.as_rstring_inner();
+    if inner.is_empty() {
+        return Ok(Value::nil());
+    }
+    let n = chopped_length(&inner);
+    let trimmed = RStringInner::from_substring(inner, 0, n);
+    lfp.self_val().replace_with_inner(trimmed);
+    Ok(lfp.self_val())
+}
+
+/// CRuby's `chopped_length`: the receiver minus its last character —
+/// found by `rb_enc_prev_char`, so a run of bytes that starts no
+/// character goes with the lead it hangs off (`"ab\xE3\x81".chop` is
+/// `"ab"`) — and minus a `\r` before a chopped `\n`.
+fn chopped_length(inner: &RStringInner) -> usize {
+    let bytes = inner.as_bytes();
+    let enc = inner.encoding();
+    if bytes.is_empty() {
+        return 0;
+    }
+    let head = prev_char_head(bytes, bytes.len(), enc);
+    if head > 0 && char_at_is(bytes, head, enc, b'\n') {
+        let before = prev_char_head(bytes, head, enc);
+        if char_at_is(bytes, before, enc, b'\r') {
+            return before;
+        }
+    }
+    head
+}
+
+/// `rb_enc_prev_char`: the head of the character before `pos` (which
+/// must be past the start), by each encoding's `left_adjust_char_head`.
+fn prev_char_head(bytes: &[u8], pos: usize, enc: Encoding) -> usize {
+    let w = enc.unit_width();
+    if w > 1 {
+        // Aligned to the unit; a low surrogate joins the high one
+        // before it.
+        let rem = pos % w;
+        if rem != 0 {
+            return pos - rem;
+        }
+        let head = pos - w;
+        if w == 2
+            && head >= 2
+            && let (Some(lo), Some(hi)) = (
+                crate::value::rvalue::unicode_unit_at(bytes, head, enc),
+                crate::value::rvalue::unicode_unit_at(bytes, head - 2, enc),
+            )
+            && (0xDC00..0xE000).contains(&lo)
+            && (0xD800..0xDC00).contains(&hi)
+        {
+            return head - 2;
+        }
+        return head;
+    }
+    let s = pos - 1;
+    if matches!(enc, Encoding::Utf8(_)) {
+        // Back over continuation bytes to a lead.
+        let mut p = s;
+        while p > 0 && bytes[p] & 0xC0 == 0x80 {
+            p -= 1;
+        }
+        return p;
+    }
+    if matches!(enc, Encoding::Sjis(_) | Encoding::EucJp(_)) {
+        // Onigmo's `left_adjust_char_head` for the two: back over the
+        // trail run to the byte after the last lead (Shift_JIS), or to
+        // the lead itself (EUC-JP), then `len = enclen(p)` — the precise
+        // length, which is *negative* for an incomplete or invalid
+        // sequence — and `p + len > s ? p : (p += len, p + ((s - p) & ~1))`.
+        // That signed step is what makes `"ab\x80".chop` (Shift_JIS)
+        // drop two bytes: `0x80` is no character, so the run is paired
+        // off from one byte earlier.
+        let mut p = s;
+        if matches!(enc, Encoding::Sjis(_)) {
+            let first = |b: u8| matches!(b, 0x81..=0x9F | 0xE0..=0xFC);
+            let trail = |b: u8| matches!(b, 0x40..=0x7E | 0x80..=0xFC);
+            if trail(bytes[p]) {
+                while p > 0 {
+                    p -= 1;
+                    if !first(bytes[p]) {
+                        p += 1;
+                        break;
+                    }
+                }
+            }
+        } else {
+            p = enc_left_char_head(enc, bytes, s);
+        }
+        let len = mbclen_signed(bytes, p, enc);
+        let (p, s) = (p as isize, s as isize);
+        if p + len > s {
+            return p as usize;
+        }
+        let p2 = p + len;
+        return (p2 + ((s - p2) & !1)) as usize;
+    }
+    if crate::value::mbc_walker(enc).is_some() {
+        // The CJK pages: the start of the last character the walk finds.
+        let mut head = 0;
+        let mut off = 0;
+        while off < pos {
+            head = off;
+            off += crate::value::rvalue::char_width_at(enc, bytes, off);
+        }
+        return head;
+    }
+    s
+}
+
+/// `rb_enc_mbclen`'s precise answer as Onigmo spells it: the width of
+/// a character, `-1` where none starts, `-1 - n` for a sequence that
+/// wants `n` more bytes.
+fn mbclen_signed(bytes: &[u8], p: usize, enc: Encoding) -> isize {
+    let b = bytes[p];
+    let avail = bytes.len() - p;
+    let (required, single_invalid) = match enc {
+        Encoding::Sjis(_) => (
+            if matches!(b, 0x81..=0x9F | 0xE0..=0xFC) { 2 } else { 1 },
+            matches!(b, 0x80 | 0xA0 | 0xFD..=0xFF),
+        ),
+        _ => (
+            match b {
+                0x8F => 3,
+                0x8E | 0xA1..=0xFE => 2,
+                _ => 1,
+            },
+            matches!(b, 0x80..=0x8D | 0x90..=0xA0 | 0xFF),
+        ),
+    };
+    if required == 1 {
+        return if single_invalid { -1 } else { 1 };
+    }
+    if avail < required {
+        return -1 - (required - avail) as isize;
+    }
+    let trail_ok = match enc {
+        Encoding::Sjis(_) => matches!(bytes[p + 1], 0x40..=0x7E | 0x80..=0xFC),
+        _ => bytes[p + 1..p + required].iter().all(|t| (0xA1..=0xFE).contains(t)),
+    };
+    if trail_ok { required as isize } else { -1 }
+}
+
+/// Whether the character at `head` is the ASCII character `ch`.
+fn char_at_is(bytes: &[u8], head: usize, enc: Encoding, ch: u8) -> bool {
+    if enc.unit_width() > 1 {
+        crate::value::rvalue::unicode_unit_at(bytes, head, enc) == Some(ch as u32)
+    } else {
+        bytes.get(head) == Some(&ch)
     }
 }
 
@@ -11734,6 +11936,11 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 /// scalar for a UTF-8 compatible encoding, the leading byte otherwise
 /// (as `String#ord`).
 fn codepoint_values(inner: &RStringInner) -> Result<Vec<Value>> {
+    // `single_byte_optimizable`: US-ASCII and BINARY are their bytes,
+    // broken or not.
+    if matches!(inner.encoding(), Encoding::UsAscii | Encoding::Ascii8) {
+        return Ok(inner.as_bytes().iter().map(|b| Value::integer(*b as i64)).collect());
+    }
     if inner.encoding().is_utf8_compatible() {
         Ok(inner
             .check_utf8()?
@@ -12454,7 +12661,7 @@ fn normalize_form(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<&
 /// `InvalidByteSequenceError`, as in CRuby's `unicode_normalize.rb`).
 fn normalizable_text(globals: &Globals, inner: &RStringInner) -> Result<String> {
     let enc = inner.encoding();
-    if enc.unit_width() > 1 {
+    if enc != Encoding::UTF8 {
         let utf8 = super::encoding::transcode_bytes_with_opts(
             inner.as_bytes(),
             enc,
@@ -12479,18 +12686,26 @@ fn normalize_text(s: &str, form: &str) -> String {
 }
 
 /// The normalized text back in the receiver's encoding.
-fn normalized_bytes(s: &str, enc: Encoding) -> Vec<u8> {
-    if enc.unit_width() > 1 {
-        super::encoding::encode_utf16_32(s, enc)
-    } else {
-        s.as_bytes().to_vec()
+fn normalized_bytes(globals: &Globals, s: &str, enc: Encoding) -> Vec<u8> {
+    if enc == Encoding::UTF8 {
+        return s.as_bytes().to_vec();
     }
+    // Well-formed Unicode text goes back into any Unicode encoding.
+    super::encoding::transcode_bytes_with_opts(
+        s.as_bytes(),
+        Encoding::UTF8,
+        enc,
+        &super::encoding::TranscodeOpts::default(),
+        &globals.store,
+    )
+    .unwrap_or_else(|_| s.as_bytes().to_vec())
 }
 
 fn ensure_unicode_normalizable(globals: &Globals, enc: Encoding) -> Result<()> {
     // `Encoding::UTF8`, not `Utf8(_)`: the family's other members
     // are encodings of their own to CRuby, and it refuses them here
     // like any other (#1562).
+    // `unicode_normalize.rb`'s UNICODE_ENCODINGS, GB18030 included.
     if matches!(
         enc,
         Encoding::UTF8
@@ -12499,7 +12714,8 @@ fn ensure_unicode_normalizable(globals: &Globals, enc: Encoding) -> Result<()> {
             | Encoding::Utf16Be
             | Encoding::Utf32Le
             | Encoding::Utf32Be
-    ) {
+    ) || enc.name() == "GB18030"
+    {
         return Ok(());
     }
     Err(MonorubyErr::encoding_compatibility_error_with_store(
@@ -12521,13 +12737,16 @@ fn unicode_normalize(
 ) -> Result<Value> {
     let enc = lfp.self_val().as_rstring_inner().encoding();
     ensure_unicode_normalizable(globals, enc)?;
-    let s = normalizable_text(globals, &lfp.self_val().as_rstring_inner())?;
     let form = normalize_form(vm, globals, lfp)?;
+    // `unicode_normalize.rb` hands a US-ASCII string back as it is,
+    // broken bytes and all.
+    if enc == Encoding::UsAscii {
+        return Ok(Value::string_from_inner(lfp.self_val().as_rstring_inner().clone()));
+    }
+    let s = normalizable_text(globals, &lfp.self_val().as_rstring_inner())?;
     let result = normalize_text(&s, form);
-    // The result keeps the receiver's encoding — normalizing US-ASCII
-    // content cannot introduce a non-ASCII byte.
     Ok(Value::string_from_inner(
-        RStringInner::from_encoding_scanned(&normalized_bytes(&result, enc), enc),
+        RStringInner::from_encoding_scanned(&normalized_bytes(globals, &result, enc), enc),
     ))
 }
 
@@ -12555,7 +12774,9 @@ fn unicode_normalized_p(
     // All-ASCII text is normalized in every form — but only bytes of an
     // ASCII-compatible encoding say that: UTF-16 `"e\u0301"` is four
     // bytes under 0x80.
-    if enc.is_ascii_compatible() && inner.as_bytes().iter().all(|b| *b < 0x80) {
+    if enc == Encoding::UsAscii
+        || (enc.is_ascii_compatible() && inner.as_bytes().iter().all(|b| *b < 0x80))
+    {
         // Verify the form is valid even when we shortcut.
         let _ = normalize_form(vm, globals, lfp)?;
         return Ok(Value::bool(true));
@@ -12578,14 +12799,17 @@ fn unicode_normalize_(
 ) -> Result<Value> {
     let enc = lfp.self_val().as_rstring_inner().encoding();
     ensure_unicode_normalizable(globals, enc)?;
-    let s = normalizable_text(globals, &lfp.self_val().as_rstring_inner())?;
     let form = normalize_form(vm, globals, lfp)?;
+    if enc == Encoding::UsAscii {
+        return Ok(lfp.self_val());
+    }
+    let s = normalizable_text(globals, &lfp.self_val().as_rstring_inner())?;
     let result = normalize_text(&s, form);
     let old_len = lfp.self_val().as_rstring_inner().len();
     // The output is well-formed by construction, so a pre-classified
     // buffer lets the splice land in the Valid / SevenBit fast path
     // without re-classifying afterwards.
-    let repl = RStringInner::from_encoding_scanned(&normalized_bytes(&result, enc), enc);
+    let repl = RStringInner::from_encoding_scanned(&normalized_bytes(globals, &result, enc), enc);
     lfp.self_val()
         .as_rstring_inner_mut()
         .bytesplice_with(0, old_len, &repl, &globals.store)?;
@@ -12673,6 +12897,55 @@ mod tests {
             } + [x.() { "12\xFF3".to_i }, x.() { "12\xFF3".to_r }, x.() { "a\xFF".encode("UTF-7") }, x.() { "a\0b".crypt("ab") },
                  x.() { "e\u0301".encode("UTF-16LE").unicode_normalize(:nfc).bytes }, x.() { "\u00e9".encode("UTF-32BE").unicode_normalize(:nfd).bytes },
                  x.() { "e\u0301".encode("UTF-16LE").unicode_normalized? }, x.() { s = "e\u0301".encode("UTF-16LE"); s.unicode_normalize!(:nfc); s.bytes }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn chop_drops_the_last_character_as_rb_enc_prev_char_finds_it() {
+        // A run of bytes that starts no character goes with the lead it
+        // hangs off (UTF-8), Shift_JIS / EUC-JP take Onigmo's signed
+        // `left_adjust_char_head` step, a UTF-16 surrogate pair is one
+        // character, and `\r\n` is one too.
+        run_test_once(
+            r##"
+            def e(s, enc) = s.dup.force_encoding(enc)
+            u = ["ab\xE3\x81", "ab\x81\x81", "a\xE3", "\xE3\x81", "ab\xFF", "ab\r\n", "a\xE3\x81\r\n", "a\xE3\x81\n", "\x81",
+                 "a\xF0\x9F\x8D", "a\u3042\x81", "a\u3042", "", "\n", "\r\n", "a\r"]
+            r = u.map { |s| [s.chop.bytes, s.dup.chop!&.bytes] }
+            r += ["ab\x80c", "ab\x80"].map { |s| [e(s, "US-ASCII").chop.bytes, e(s, "BINARY").chop.bytes] }
+            r += ["a\xA4", "a\xA4\xA2\xA4", "\x8E", "a\x8F\xA2", "a\x8E\xB1", "a\xA4\xA2\r\n"].map { |s| e(s, "EUC-JP").chop.bytes }
+            r += ["a\x82", "a\x82b\x80", "ab\x80", "\x82b\x80", "a\x80\x80", "a\x82\xA0", "a\xB1"].map { |s| e(s, "Shift_JIS").chop.bytes }
+            r += ["a\u{1F363}", "ab\r\n", "a", "\u3042"].map { |s| [s.encode("UTF-16LE").chop.bytes, s.encode("UTF-32BE").chop.bytes] }
+            r += [e("a\x00b", "UTF-16LE").chop.bytes, "中文abc𝄞".encode("GB18030").chop.bytes, "한국어".encode("EUC-KR").chop.bytes]
+            r << (begin; "a".freeze.chop!; rescue => x; x.class; end)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_splice_keeps_the_receiver_s_encoding() {
+        // `[]=`, `insert`, `slice!` and `<<` an Integer leave a US-ASCII
+        // or UTF8-MAC receiver in its own encoding, the way
+        // `rb_enc_check` negotiates it; a US-ASCII receiver is extended
+        // to BINARY by a high byte only while it is 7-bit.
+        run_test_once(
+            r##"
+            def e(s, enc) = s.dup.force_encoding(enc)
+            r = ->(&b) { begin; v = b.call; [v.bytes, v.encoding.to_s, v.valid_encoding?]; rescue => x; [x.class, x.message]; end }
+            m = "e\u0301".encode("UTF8-MAC")
+            [r.() { s = e("abc", "US-ASCII"); s[1, 0] = "x"; s }, r.() { s = m.dup; s[1, 0] = "x"; s },
+             r.() { s = e("abc", "US-ASCII"); s[0] = "z"; s }, r.() { s = e("abc", "US-ASCII"); s[0..1] = "zz"; s },
+             r.() { e("abc", "US-ASCII").insert(1, "x") }, r.() { s = e("abc", "US-ASCII"); s.slice!(0) }, r.() { s = e("abc", "US-ASCII"); s.slice!(0); s },
+             r.() { s = m.dup; s.slice!(0) }, r.() { s = m.dup; s.slice!(0); s }, r.() { s = e("abc", "US-ASCII"); s[1, 1] = "\u3042"; s },
+             r.() { e("abc", "US-ASCII") << 0xff }, r.() { e("ab\x80c", "US-ASCII") << 0xff }, r.() { e("ab\x80c", "US-ASCII") << 0x41 },
+             r.() { e("abc", "US-ASCII") << 0x80 }, r.() { e("abc", "US-ASCII") << 0x100 }, r.() { "a\xFF" << 0x41 }, r.() { "a\xFF" << 0x3042 },
+             r.() { e("abc", "US-ASCII").dump }, r.() { m.dump }, r.() { "e\u0301\u{1F363}".encode("CESU-8").dump }, r.() { "e\u0301".dump },
+             e("ab\x80c", "US-ASCII").codepoints, e("ab\x80c", "BINARY").codepoints, (e("ab\xFFc", "UTF-8").codepoints rescue $!.class),
+             r.() { e("ab\x80c", "US-ASCII").unicode_normalize }, e("ab\x80c", "US-ASCII").unicode_normalized?, r.() { e("ab\x80c", "US-ASCII").dup.unicode_normalize! },
+             r.() { e("ab\x80c", "BINARY").unicode_normalize }, r.() { "中文abc𝄞".encode("GB18030").unicode_normalize }, "中文abc𝄞".encode("GB18030").unicode_normalized?,
+             r.() { "e\u0301".encode("GB18030").unicode_normalize(:nfc) }, r.() { e("\x81", "GB18030").unicode_normalize }]
             "##,
         );
     }
