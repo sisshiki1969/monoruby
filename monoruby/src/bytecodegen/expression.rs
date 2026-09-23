@@ -2215,7 +2215,29 @@ impl<'a> BytecodeGen<'a> {
             opt |= onigmo_regex::ONIG_OPTION_MULTILINE as i64;
         }
         // Encoding selector honours "last wins" (`regexp_encoding_bits`).
-        opt |= regexp_encoding_bits(&option) as i64;
+        let enc_bits = regexp_encoding_bits(&option);
+        opt |= enc_bits as i64;
+        // The literal fragments' `\xHH` escapes are checked now, in the
+        // encoding the literal is read in, so `/\xff#{x}/` is the
+        // SyntaxError CRuby raises rather than a RegexpError later.
+        if enc_bits & RegexpInner::NOENCODING == 0 {
+            let enc = match enc_bits {
+                b if b & RegexpInner::KCODE_UTF8 != 0 => crate::value::Encoding::UTF8,
+                b if b & RegexpInner::KCODE_EUCJP != 0 => crate::value::Encoding::EUC_JP,
+                b if b & RegexpInner::KCODE_SJIS != 0 => crate::value::Encoding::Sjis(1),
+                _ => self.source_encoding(),
+            };
+            for node in &nodes {
+                let bytes: &[u8] = match &node.kind {
+                    NodeKind::String(s) => s.as_bytes(),
+                    NodeKind::Bytes(b) => b,
+                    _ => continue,
+                };
+                if let Err(err) = crate::builtins::check_regexp_hex_escapes(bytes, enc) {
+                    return Err(self.syntax_error(err.message(), loc));
+                }
+            }
+        }
         // Always the first operand (even when 0) so the run-time layout is
         // uniform: operand 0 is the option word, the rest are source
         // fragments.
@@ -2269,13 +2291,7 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn const_regexp(&self, nodes: Vec<Node>, option: String, loc: Loc) -> Result<Value> {
-        let mut string = String::new();
         let enc_bits = regexp_encoding_bits(&option);
-        let encoding = if enc_bits & RegexpInner::NOENCODING != 0 {
-            onigmo_regex::OnigmoEncoding::ASCII
-        } else {
-            onigmo_regex::OnigmoEncoding::UTF8
-        };
         // Decode the literal-syntax modifier letters into the
         // standard Onigmo bits *plus* monoruby's internal
         // `KCODE_*` / `NOENCODING` bits used by
@@ -2300,13 +2316,25 @@ impl<'a> BytecodeGen<'a> {
         } else {
             None
         };
+        // The source as written, in the file's encoding: a literal in an
+        // EUC-JP file is EUC-JP bytes, which the builder reads as
+        // `Regexp.new` reads a String in that encoding (#1622).
+        let mut bytes: Vec<u8> = Vec::new();
         for node in nodes {
             match &node.kind {
-                NodeKind::String(s) => string += s,
+                NodeKind::String(s) => bytes.extend_from_slice(s.as_bytes()),
+                NodeKind::Bytes(b) => bytes.extend_from_slice(b),
                 _ => unreachable!(),
             }
         }
-        let re = match RegexpInner::with_option_kcode(string, opt, encoding, kcode, None) {
+        let string = String::from_utf8_lossy(&bytes).into_owned();
+        let re = match crate::builtins::regexp_inner_from_parts(
+            string,
+            Some(self.source_encoding()),
+            Some(bytes),
+            opt,
+            kcode,
+        ) {
             Ok(re) => re,
             Err(err) => return Err(self.syntax_error(err.message(), loc)),
         };
