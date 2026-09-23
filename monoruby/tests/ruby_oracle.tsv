@@ -3392,6 +3392,7 @@ afbcad07e617b095dc96d973a2845197	[:bar, [1, 2, 3]]	class Foo\n              def 
 afc664b3664dbfb2235fee8c114e24dc	["a\\n", "b\\n", "c"]	path = "/tmp/monoruby_io_classreadlines_#{Process.pid}_#{rand(10000
 afd6879be7df6cb4045a8a84f5160f4c	[{}, {}, {a: 1, b: 2}, {a: 1}, true, :te, :te, {z: 9}]	__a = [];__a << ({**nil});__a << (x = nil; {**x});__a << ({a: 1, **nil, b: 2});_
 afe017e12ee32ba781bc419214f2db54	"e\\n\\nCopyright (c) 202"	File.binread("../LICENSE-MIT", 20, 10)
+afe97e4333816e214787422aa7ddfd1e	["ASCII-8BIT", "UTF-8", nil, "UTF-8", nil, "UTF-7", nil, nil, "ASCII-8BIT", nil]	[[Encoding::US_ASCII, Encoding::BINARY], [Encoding::US_ASCII, Encod
 afecc303354ce360b53ad03479bdb2f0	2	t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end\n      
 affda9c3746f63d913723185794324df	[["no", "match", "no", "no", "match"], ["y", "n"], "b", "hi"]	__a = [];__a << (\n        def t(arr)\n          case\n          when *arr then "ma
 b008ebf522732565f6b3405764b20518	[[8], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y

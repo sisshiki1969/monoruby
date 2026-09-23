@@ -11721,11 +11721,21 @@ pub(crate) fn compatible_encoding_pair(a: Encoding, b: Encoding) -> Option<Encod
     if a == b {
         return Some(a);
     }
+    // `enc_compatible_latter` with no strings to look into: both
+    // sides have to be ASCII-compatible (which no dummy is), and then
+    // US-ASCII on either side yields the other — "objects whose
+    // encoding is the same as their contents".
     if is_cruby_dummy(a) || is_cruby_dummy(b) {
+        return None;
+    }
+    if !a.is_ascii_compatible() || !b.is_ascii_compatible() {
         return None;
     }
     if b == Encoding::UsAscii {
         return Some(a);
+    }
+    if a == Encoding::UsAscii {
+        return Some(b);
     }
     None
 }
@@ -14473,6 +14483,21 @@ mod tests {
              t[1..].ascii_only?, t[0].ascii_only?, l[4..].ascii_only?, l[0,4].ascii_only?,
              (s[1] + "\xff".b).encoding.to_s, s[1].encoding.to_s, s.split("日").map(&:ascii_only?),
              s.chars.map(&:ascii_only?), "abc".force_encoding("UTF-7")[1].ascii_only?, u16[0].ascii_only?]
+            "##,
+        );
+    }
+
+    #[test]
+    fn two_encodings_are_compatible_the_way_enc_compatible_latter_says() {
+        // With no strings to look into: both ASCII-compatible (no
+        // dummy is), then US-ASCII on either side yields the other.
+        crate::tests::run_test_once(
+            r##"
+            [[Encoding::US_ASCII, Encoding::BINARY], [Encoding::US_ASCII, Encoding::UTF_8],
+             [Encoding::UTF_16LE, Encoding::US_ASCII], [Encoding::UTF_8, Encoding::US_ASCII],
+             [Encoding::EUC_JP, Encoding::Shift_JIS], [Encoding::UTF_7, Encoding::UTF_7],
+             [Encoding::UTF_7, Encoding::US_ASCII], [Encoding::ISO_2022_JP, Encoding::US_ASCII],
+             [Encoding::BINARY, Encoding::US_ASCII], [Encoding::UTF_8, Encoding::UTF_16LE]].map { |a, b| Encoding.compatible?(a, b)&.to_s }
             "##,
         );
     }
