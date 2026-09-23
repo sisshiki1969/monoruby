@@ -55,7 +55,7 @@ class Ractor
       unless name.nil? || name.is_a?(String)
         raise TypeError, "no implicit conversion of #{__builtin_class_name(name)} into String"
       end
-      r = allocate
+      r = __builtin_allocate__
       r.__send__(:__ractor_init, args, name, block)
       r
     end
@@ -64,9 +64,17 @@ class Ractor
       Thread.current.thread_variable_get(:__ractor__) || main
     end
 
+    # Ractor has no allocator: instances come only from `Ractor.new` and
+    # the main ractor, which use the privileged spelling above. CRuby
+    # raises this for `allocate`, and — since `dup` / `clone` allocate
+    # their copy — for those too (#1624).
+    def allocate
+      Kernel.raise TypeError, "allocator undefined for #{self}"
+    end
+
     def main
       @main ||= begin
-        r = allocate
+        r = __builtin_allocate__
         r.__send__(:__ractor_init_main)
         r
       end
@@ -213,6 +221,12 @@ class Ractor
   end
 
   attr_reader :name
+
+  # `dup` / `clone` allocate a copy, and Ractor has no allocator (see
+  # `Ractor.allocate`).
+  private def initialize_copy(_)
+    Kernel.raise TypeError, "allocator undefined for #{self.class}"
+  end
 
   def send(obj, move: false)
     raise ClosedError, "The incoming-port is already closed" if @inbox_closed

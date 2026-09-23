@@ -39,6 +39,12 @@ pub struct EnumeratorInner {
     /// `e->stop_exc`. A producer that died from an *exception* leaves it
     /// unset, so the next `#next` restarts the iteration instead.
     stop_result: Option<Value>,
+    /// The producer died by an exception, and nothing has restarted it
+    /// yet. CRuby keeps the dead fiber in that case (only a producer that
+    /// *finished* lets go of it), so the enumerator is still not
+    /// copyable (#1624); the next `#next` restarts the iteration either
+    /// way.
+    producer_raised: bool,
     /// Optional size associated with the Enumerator:
     ///   - `None`                → unknown / fall back to method-name dispatch
     ///   - `Some(v)` with `Proc` → evaluated lazily when `#size` is called
@@ -93,6 +99,7 @@ impl EnumeratorInner {
             buffer: None,
             feed: None,
             stop_result: None,
+            producer_raised: false,
             size,
         }
     }
@@ -110,12 +117,42 @@ impl EnumeratorInner {
             buffer: None,
             feed: None,
             stop_result: None,
+            producer_raised: false,
             size: None,
         }
     }
 
     pub(crate) fn is_initialized(&self) -> bool {
         self.proc.is_some()
+    }
+
+    /// Whether external iteration is part way through: a producer that
+    /// has been resumed and has not finished. CRuby cannot copy the
+    /// fiber behind it, so such an enumerator is not copyable (`can't
+    /// copy execution context`); one that has not started, was rewound,
+    /// or ran to its end is (#1624).
+    pub(crate) fn has_execution_context(&self) -> bool {
+        self.producer_raised
+            || self
+                .internal
+                .is_some_and(|f| f.state() == FiberState::Suspended)
+    }
+
+    /// `Enumerator#initialize_copy`: take `other`'s source — receiver,
+    /// method, arguments, size — and none of its iteration state, so the
+    /// copy starts from the beginning (#1624).
+    pub(crate) fn copy_from(&mut self, other: &EnumeratorInner) {
+        self.obj = other.obj;
+        self.method = other.method;
+        self.proc = other.proc;
+        self.args = Box::new((*other.args).clone());
+        self.kw_args = other.kw_args;
+        self.size = other.size;
+        self.internal = None;
+        self.buffer = None;
+        self.feed = None;
+        self.stop_result = None;
+        self.producer_raised = false;
     }
 
     /// `Enumerator#initialize`: fill in (or replace) the source. Any
@@ -139,6 +176,7 @@ impl EnumeratorInner {
         self.buffer = None;
         self.feed = None;
         self.stop_result = None;
+        self.producer_raised = false;
         self.size = size;
     }
 
@@ -180,6 +218,7 @@ impl Enumerator {
         self.internal = Some(Fiber::from(proc));
         self.buffer = None;
         self.stop_result = None;
+        self.producer_raised = false;
     }
 
     /// `Enumerator#rewind`: as [`Self::rewind`], but also drops a parked
@@ -288,6 +327,7 @@ impl Enumerator {
                 // StopIteration forever.
                 self.internal = None;
                 self.buffer = None;
+                self.producer_raised = true;
                 return Err(err);
             }
         };
@@ -346,6 +386,12 @@ impl GeneratorInner {
 
     pub fn create_internal(&self) -> Fiber {
         Fiber::from(self.proc)
+    }
+
+    /// A copy: the same body, with a fiber of its own that has not run
+    /// (CRuby's `generator_init_copy` copies only the proc).
+    pub(crate) fn dup(&self) -> Self {
+        Self::new(self.proc)
     }
 
     pub fn yielder(&self) -> Value {

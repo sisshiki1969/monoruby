@@ -11,6 +11,7 @@ const STORAGE_IVAR: &str = "/fiber_storage";
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Fiber", FIBER_CLASS, ObjTy::FIBER);
+    globals.store[FIBER_CLASS].set_alloc_func(fiber_alloc_func);
     globals.define_builtin_class_func_with_effect(
         FIBER_CLASS,
         "new",
@@ -65,6 +66,25 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(FIBER_CLASS, "storage", storage_get, 0);
     globals.define_builtin_func(FIBER_CLASS, "storage=", storage_set, 1);
     globals.define_builtin_funcs(FIBER_CLASS, "inspect", &["to_s"], inspect, 0);
+}
+
+/// Allocator for `Fiber` and its subclasses: the uninitialized fiber
+/// CRuby's `Fiber.allocate` returns, which every method refuses. A plain
+/// object in its place tripped the `FIBER` assertion the first time one
+/// was resumed (#1624).
+pub(crate) extern "C" fn fiber_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
+    Value::new_fiber_with_class(FiberInner::uninit(), class_id)
+}
+
+/// The receiver as a fiber that has a body, or CRuby's `FiberError:
+/// uninitialized fiber` for the one `Fiber.allocate` and a copy of a
+/// fiber (`dup` / `clone`) leave behind (#1624).
+fn initialized_fiber(val: Value) -> Result<Fiber> {
+    if val.ty() == Some(ObjTy::FIBER) && !val.as_fiber_inner().is_uninit() {
+        Ok(Fiber::new(val))
+    } else {
+        Err(MonorubyErr::fibererr("uninitialized fiber".to_string()))
+    }
 }
 
 fn storage_ivar_id() -> IdentId {
@@ -343,7 +363,7 @@ fn fiber_yield_inline(
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/i/resume.html]
 #[monoruby_builtin]
 fn resume(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_val = Fiber::new(lfp.self_val());
+    let mut self_val = initialized_fiber(lfp.self_val())?;
     check_same_thread(vm, &self_val)?;
     self_val.resume(vm, globals, lfp)
 }
@@ -356,7 +376,7 @@ fn resume(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/i/transfer.html]
 #[monoruby_builtin]
 fn transfer(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_val = Fiber::new(lfp.self_val());
+    let mut self_val = initialized_fiber(lfp.self_val())?;
     check_same_thread(vm, &self_val)?;
     let binding = lfp.arg(0);
     let args = binding.as_array();
@@ -371,7 +391,7 @@ fn transfer(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/i/alive=3f.html]
 #[monoruby_builtin]
 fn alive_p(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let fiber = Fiber::new(lfp.self_val());
+    let fiber = initialized_fiber(lfp.self_val())?;
     // A thread's root fiber lives as long as the thread does — and a root
     // Fiber object is only obtainable from code running on that thread, so
     // it reads as alive.
@@ -390,7 +410,7 @@ fn alive_p(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/i/kill.html]
 #[monoruby_builtin]
 fn kill(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut fiber = Fiber::new(lfp.self_val());
+    let mut fiber = initialized_fiber(lfp.self_val())?;
     check_same_thread(vm, &fiber)?;
     if fiber.is_root() {
         return Err(MonorubyErr::fibererr(
@@ -462,7 +482,7 @@ fn fiber_raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     if let Some(kw) = kw_rest {
         args.push(kw);
     }
-    let mut fiber = Fiber::new(lfp.self_val());
+    let mut fiber = initialized_fiber(lfp.self_val())?;
     check_same_thread(vm, &fiber)?;
     let mut err = super::thread::build_async_error(vm, globals, &args, cause_kwarg)?;
     // The cause comes from the *calling* context: pin the caller's `$!`
@@ -509,7 +529,7 @@ fn fiber_raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/i/blocking=3f.html]
 #[monoruby_builtin]
 fn blocking_p(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let fiber = Fiber::new(lfp.self_val());
+    let fiber = initialized_fiber(lfp.self_val())?;
     Ok(Value::bool(fiber.executor().is_fiber_blocking()))
 }
 
@@ -694,6 +714,7 @@ fn class_storage_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byte
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/i/storage.html]
 #[monoruby_builtin]
 fn storage_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    initialized_fiber(lfp.self_val())?;
     let cur = current_fiber_obj(vm, globals)?;
     if cur.id() != lfp.self_val().id() {
         return Err(MonorubyErr::argumenterr(
@@ -712,6 +733,7 @@ fn storage_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 /// [https://docs.ruby-lang.org/ja/latest/method/Fiber/i/storage=3d.html]
 #[monoruby_builtin]
 fn storage_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    initialized_fiber(lfp.self_val())?;
     let hash = lfp.arg(0);
     if hash.is_nil() {
         globals
@@ -734,7 +756,7 @@ fn storage_set(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 #[monoruby_builtin]
 fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let obj = lfp.self_val();
-    let fiber = Fiber::new(obj);
+    let fiber = initialized_fiber(obj)?;
     let state = if fiber.executor() as *const Executor == vm as *const Executor {
         "resumed"
     } else {
