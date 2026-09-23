@@ -9062,50 +9062,85 @@ fn stream_convert(
             // that destination needs no second conversion — and the
             // cap applies to these bytes directly.
             if dst_enc == w.inner {
-                let fits = max_dst_bytes.map_or(stateless.len(), |m| m.min(stateless.len()));
-                if fits < stateless.len() {
-                    // The cap cuts a character in half. CRuby writes
-                    // the bytes that fit and holds the rest of that
-                    // character for the next call, taking the whole
-                    // of it out of `src` — dropping them here cost
-                    // the streaming loop its output (#1532).
-                    let mut end = 0;
-                    while end < stateless.len() {
-                        end += if stateless[end] < 0x80 { 1 } else { 3 };
-                        if end > fits {
-                            break;
-                        }
-                    }
-                    let end = end.min(stateless.len());
-                    let consumed = pivot_prefix_consumed_in(
-                        src_bytes,
-                        src_enc,
-                        w.inner,
-                        end,
-                        opts,
-                        store,
-                    );
-                    return (
-                        StreamConvertResult::DestinationBufferFull,
-                        consumed,
-                        stateless[..fits].to_vec(),
-                        ErrMeta {
-                            dst_full_out: stateless[fits..end].to_vec(),
-                            iso_state_out: (w.read)(
-                                &src_bytes[..consumed],
-                                opts.iso_state,
-                            )
-                            .map(|(_, l)| l)
-                            .unwrap_or(opts.iso_state),
-                            ..ErrMeta::default()
-                        },
-                    );
-                }
                 let kind = if partial_input {
                     StreamConvertResult::SourceBufferEmpty
                 } else {
                     StreamConvertResult::Finished
                 };
+                if let Some(max) = max_dst_bytes
+                    && max <= stateless.len()
+                {
+                    // The cap is met unit by unit, the way CRuby's
+                    // one-transcoder path reads the source (#1619):
+                    // an escape sequence is read and writes nothing,
+                    // and if the destination is full once it has been
+                    // read the call stops there — even at the end of
+                    // the input, so `"\e$B0l\e(B"` into three bytes
+                    // is `:destination_buffer_full` with everything
+                    // read and nothing held. A character that fits is
+                    // written; one that does not is read whole, the
+                    // bytes that fit are written and the rest held
+                    // for the next call (#1532) — with no room at all
+                    // included, so a cap of 0 reads the first
+                    // character and holds it.
+                    let mut out: Vec<u8> = Vec::with_capacity(max);
+                    let mut pos = 0;
+                    let mut state = opts.iso_state;
+                    while pos < src_bytes.len() {
+                        // The shortest prefix the reader accepts is
+                        // the next unit: one character, or one
+                        // escape sequence.
+                        let Some((n, unit, next)) = (1..=4.min(src_bytes.len() - pos))
+                            .find_map(|n| {
+                                (w.read)(&src_bytes[pos..pos + n], state)
+                                    .ok()
+                                    .map(|(unit, next)| (n, unit, next))
+                            })
+                        else {
+                            break;
+                        };
+                        pos += n;
+                        state = next;
+                        if unit.is_empty() {
+                            if out.len() >= max {
+                                return (
+                                    StreamConvertResult::DestinationBufferFull,
+                                    pos,
+                                    out,
+                                    ErrMeta {
+                                        iso_state_out: state,
+                                        ..ErrMeta::default()
+                                    },
+                                );
+                            }
+                            continue;
+                        }
+                        if out.len() + unit.len() > max {
+                            let fits = max - out.len();
+                            out.extend_from_slice(&unit[..fits]);
+                            return (
+                                StreamConvertResult::DestinationBufferFull,
+                                pos,
+                                out,
+                                ErrMeta {
+                                    dst_full_out: unit[fits..].to_vec(),
+                                    iso_state_out: state,
+                                    ..ErrMeta::default()
+                                },
+                            );
+                        }
+                        out.extend_from_slice(&unit);
+                    }
+                    return (
+                        kind,
+                        src_bytes.len(),
+                        out,
+                        ErrMeta {
+                            iso_state_out: state,
+                            ..ErrMeta::default()
+                        },
+                    );
+                }
                 return (
                     kind,
                     src_bytes.len(),
@@ -9153,6 +9188,33 @@ fn stream_convert(
                     store,
                 )
             };
+            // The character a cap read and could not write is counted
+            // in stateless bytes by the inner stream; the caller takes
+            // *source* bytes out of `src`, and an escape sequence in
+            // front of the character is read with it. Counting three
+            // for `"\e$B"` + a cell left `"(B"` in the source as text
+            // (#1619).
+            if meta.dst_full_extra > 0 {
+                let through = pivot_prefix_consumed_in(
+                    src_bytes,
+                    src_enc,
+                    w.inner,
+                    stateless_consumed + meta.dst_full_extra,
+                    opts,
+                    store,
+                );
+                meta.dst_full_extra = through.saturating_sub(consumed);
+            }
+            // A call that stopped short leaves the designation in
+            // effect *there*, not the one the whole chunk ended in:
+            // the escapes past that point are still the caller's, and
+            // the next call reads them itself.
+            let read_to = consumed + meta.dst_full_extra;
+            if read_to < src_bytes.len() {
+                meta.iso_state_out = (w.read)(&src_bytes[..read_to], opts.iso_state)
+                    .map(|(_, l)| l)
+                    .unwrap_or(opts.iso_state);
+            }
             return (kind, consumed, out, meta);
         }
         if let Some(w) = jis_wrapper(dst_enc) {
