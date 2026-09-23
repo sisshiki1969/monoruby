@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1f21c04f.js";
+            window.path_to_searchindex_js = "searchindex-5df1080f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -10032,6 +10032,32 @@ FFI では <code>attach_function ..., blocking: true</code>、sqlite3 ブリッ�
 誰も解放しないロックを受け継ぎ、最初の <code>lock()</code> で永久に止まる。
 <code>do_spawn</code> も同じ扱いにしてある(その子は exec するだけでこれらのロックを取らないが、
 「すべての fork(2) は pool を静止させてから」という不変条件を揃えておく)。</li>
+<li><strong>同じ危険はプロセスグローバルなロック全部にある</strong> —— 識別子テーブル
+(<code>id_table::ID</code>)、正規表現のコンパイルキャッシュ(<code>REGEX_CACHE</code> / <code>NATIVE_CACHE</code>)、
+標準ストリームのバッファ(<code>STDIN_BUF</code> / <code>STDOUT_BUF</code> / <code>STDERR_BUF</code>)。monoruby 自身の
+スレッドは green なのでインタプリタスレッドが自分と競合することはないが、複数の
+インタプリタを別 OS スレッドで走らせる embedder(テストハーネスはテストスレッドごとに
+1 つ走らせる)では、fork の瞬間に別スレッドがどれかを握っていることがある。実際に
+<code>forking_while_a_thread_keeps_offloading</code> の子が <code>File.open</code> → <code>IdentId::get_id</code> で
+止まった(識別子テーブルの <code>RwLock</code> を別スレッドが握っていた)。<code>crate::fork::prepare</code>
+がこれらすべてを pool のロックと一緒に、固定順で、フォークするスレッド上で取る
+(どのパスもこれらを入れ子では取らないので、この順で他スレッドとデッドロックしない)。
+親は guard を drop、子は <code>ForkGuards::reset_child</code> で pool とタイマの状態を捨てつつ
+解放する。<code>Process._fork</code> / <code>Process.daemon</code> / <code>do_spawn</code> の 3 箇所の <code>fork(2)</code> は
+すべてここを通る。<code>fork::tests</code> に、別 OS スレッドが intern し続ける中で 200 回 fork
+する再現テストがある(修正前は最初の 10 秒で子が止まる)。
+ただし子が受け継いだ <code>RwLock</code> を <strong>unlock してはいけない</strong>: Linux の std <code>RwLock</code> は
+futex 語で、子での unlock は store と誰も起こさない wake だが、Apple では queue lock
+(<code>std::sys::sync::rwlock::queue</code>)で、unlock は親の待機スレッドがスタックに残した
+ノードを辿って各スレッドを <code>dispatch_semaphore</code> で起こしにいく —— libdispatch は
+マルチスレッドプロセスの fork 子で trap する(darwin ランナーで、fork 時に待機者が
+いた最初の回に <code>SIGTRAP</code>)。そこで識別子テーブルと正規表現キャッシュは
+<code>fork::ForkableRwLock</code>(<code>AtomicPtr&lt;RwLock&lt;T&gt;&gt;</code> の間接参照)にし、子は自分が持つ
+guard 越しにデータを <code>mem::take</code> で取り出し、guard を <code>forget</code> して、新しい lock を
+差し込む。受け継いだ lock はロックされたまま leak し、二度と触らない
+(<code>preempt::ForkState</code> がタイマの mutex にしているのと同じ)。<code>Mutex</code>(ストリーム、
+pool)は Apple では pthread、Linux では futex で、所有者による子での unlock は
+誰も起こさない普通の unlock なので、そのまま drop する。</li>
 <li><strong>完了パイプは子で作り直す</strong>(<code>replace_pipe</code>)。<code>fork(2)</code> が複製するのは fd テーブルで
 あってパイプではないので、親子が同じバッファを読み書きすることになる。親の waiter が
 取るはずだった完了バイトを子の <code>drain</code> が飲んでしまうと、その waiter は結果が
