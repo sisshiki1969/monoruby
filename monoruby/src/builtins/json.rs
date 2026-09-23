@@ -8,24 +8,107 @@ pub(super) fn init(globals: &mut Globals) {
 /// String.__json_parse(source) class method
 #[monoruby_builtin]
 fn json_parse(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let src = lfp.arg(0).expect_string(globals)?;
-    let mut parser = Parser::new(src.as_bytes());
+    let src = json_source(vm, globals, lfp.arg(0))?;
+    let inner = src.is_rstring_inner().unwrap();
+    // The parser reads UTF-8 (`convert_encoding`): a UTF-8 source is
+    // taken as it is, bytes and all, a BINARY one is taken for UTF-8
+    // without a look, and any other encoding is transcoded first, so
+    // its failure is the `Encoding::*Error` of that transcoding.
+    let bytes: std::borrow::Cow<[u8]> = match inner.encoding() {
+        Encoding::UTF8 | Encoding::Ascii8 => std::borrow::Cow::Borrowed(inner.as_bytes()),
+        enc => std::borrow::Cow::Owned(super::encoding::transcode_bytes_with_opts(
+            inner.as_bytes(),
+            enc,
+            Encoding::UTF8,
+            &super::encoding::TranscodeOpts::default(),
+            &globals.store,
+        )?),
+    };
+    let mut parser = Parser::new(&bytes);
     parser
         .parse_value(vm, globals)
-        .ok_or_else(|| MonorubyErr::runtimeerr(parser.error_message()))
+        .ok_or_else(|| json_error(globals, "ParserError", parser.error_message()))
+}
+
+/// The source `JSON.parse` reads: a String, or what `to_str` makes of
+/// the argument.
+fn json_source(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Value> {
+    if v.is_rstring_inner().is_some() {
+        return Ok(v);
+    }
+    if let Some(fid) = globals.check_method(v, IdentId::TO_STR) {
+        let converted = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+        if converted.is_rstring_inner().is_some() {
+            return Ok(converted);
+        }
+        return Err(MonorubyErr::cant_convert_error(
+            &globals.store,
+            v,
+            converted,
+            "String",
+            IdentId::TO_STR,
+        ));
+    }
+    Err(MonorubyErr::no_implicit_conversion(
+        &globals.store,
+        v,
+        STRING_CLASS,
+    ))
+}
+
+/// An error of the `JSON::<name>` class — the class is Ruby's
+/// (`stdlib/json.rb`), looked up when needed.
+fn json_error(globals: &Globals, name: &str, message: String) -> MonorubyErr {
+    match json_error_class(globals, name) {
+        Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), message),
+        None => MonorubyErr::runtimeerr(message),
+    }
+}
+
+fn json_error_class(globals: &Globals, name: &str) -> Option<ClassId> {
+    let json = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("JSON"))?
+        .is_class_or_module()?;
+    globals
+        .store
+        .get_constant_noautoload(json.id(), IdentId::get_id(name))?
+        .is_class_or_module()
+        .map(|c| c.id())
 }
 
 /// Fast native JSON generator: JSON.__generate(obj) -> String
 #[monoruby_builtin]
 fn json_generate(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut buf = String::new();
-    generate(&mut buf, lfp.arg(0), &globals.store);
-    Ok(Value::string(buf))
+    match generate(&mut buf, lfp.arg(0), &globals.store) {
+        Ok(()) => Ok(Value::string(buf)),
+        // `JSON::GeneratorError.new(message, invalid_object)`, raised as
+        // that object so `invalid_object` and `detailed_message` hold.
+        Err((message, invalid_object)) => {
+            let Some(cid) = json_error_class(globals, "GeneratorError") else {
+                return Err(MonorubyErr::runtimeerr(message));
+            };
+            let class_val = globals.store[cid].get_module().as_val();
+            let ex = vm.invoke_method_inner(
+                globals,
+                IdentId::NEW,
+                class_val,
+                &[Value::string(message), invalid_object],
+                None,
+                None,
+            )?;
+            match ex.is_exception() {
+                Some(inner) => Err(MonorubyErr::new_from_exception(inner).with_original(ex)),
+                None => Err(MonorubyErr::new(MonorubyErrKind::Other(cid), String::new())),
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -110,88 +193,97 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// A string value: UTF-8 by declaration, the source's bytes as
+    /// they are — an ill-formed sequence in the source is an
+    /// ill-formed sequence in the result, as CRuby's parser leaves it.
     fn parse_string(&mut self) -> Option<Value> {
         let s = self.parse_string_raw()?;
-        Some(Value::string(s))
+        Some(Value::string_from_inner(RStringInner::from_encoding(&s, Encoding::UTF8)))
     }
 
-    fn parse_string_raw(&mut self) -> Option<String> {
+    /// An object key: the same string, frozen.
+    fn parse_key(&mut self) -> Option<Value> {
+        let mut key = self.parse_string()?;
+        key.set_frozen();
+        Some(key)
+    }
+
+    fn parse_string_raw(&mut self) -> Option<Vec<u8>> {
         self.advance(); // skip opening "
         // Scan for closing " to find the raw extent, handling escapes
-        // by collecting into a String.
-        let mut s = String::new();
+        // by collecting into a byte buffer.
+        let mut s: Vec<u8> = Vec::new();
+        let push_char = |s: &mut Vec<u8>, c: char| {
+            let mut buf = [0u8; 4];
+            s.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        };
         loop {
             let ch = *self.src.get(self.pos)?;
             self.pos += 1;
             match ch {
                 b'"' => return Some(s),
                 b'\\' => {
+                    let esc_at = self.pos - 1;
                     let esc = *self.src.get(self.pos)?;
                     self.pos += 1;
                     match esc {
-                        b'"' => s.push('"'),
-                        b'\\' => s.push('\\'),
-                        b'/' => s.push('/'),
-                        b'b' => s.push('\x08'),
-                        b'f' => s.push('\x0C'),
-                        b'n' => s.push('\n'),
-                        b'r' => s.push('\r'),
-                        b't' => s.push('\t'),
+                        b'"' => s.push(b'"'),
+                        b'\\' => s.push(b'\\'),
+                        b'/' => s.push(b'/'),
+                        b'b' => s.push(0x08),
+                        b'f' => s.push(0x0C),
+                        b'n' => s.push(b'\n'),
+                        b'r' => s.push(b'\r'),
+                        b't' => s.push(b'\t'),
                         b'u' => {
                             let cp = self.parse_unicode_escape()?;
                             if (0xD800..=0xDBFF).contains(&cp) {
-                                if self.src.get(self.pos) == Some(&b'\\')
+                                let low = if self.src.get(self.pos) == Some(&b'\\')
                                     && self.src.get(self.pos + 1) == Some(&b'u')
                                 {
                                     self.pos += 2;
-                                    let low = self.parse_unicode_escape()?;
-                                    if (0xDC00..=0xDFFF).contains(&low) {
+                                    Some(self.parse_unicode_escape()?)
+                                } else {
+                                    None
+                                };
+                                match low {
+                                    Some(low) if (0xDC00..=0xDFFF).contains(&low) => {
                                         let combined =
                                             0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
-                                        s.push(char::from_u32(combined)?);
-                                    } else {
-                                        s.push(char::REPLACEMENT_CHARACTER);
+                                        push_char(&mut s, char::from_u32(combined)?);
                                     }
-                                } else {
-                                    s.push(char::REPLACEMENT_CHARACTER);
+                                    // A high surrogate without its pair is
+                                    // not a character; CRuby refuses it.
+                                    _ => {
+                                        self.set_error(format!(
+                                            "incomplete surrogate pair at '{}'",
+                                            String::from_utf8_lossy(
+                                                &self.src[esc_at..self.src.len().min(esc_at + 32)]
+                                            )
+                                        ));
+                                        return None;
+                                    }
                                 }
                             } else {
-                                s.push(char::from_u32(cp)?);
+                                match char::from_u32(cp) {
+                                    Some(c) => push_char(&mut s, c),
+                                    // A lone low surrogate: spelled as the
+                                    // three bytes it would be in UTF-8.
+                                    None => {
+                                        s.push(0xE0 | (cp >> 12) as u8);
+                                        s.push(0x80 | ((cp >> 6) & 0x3F) as u8);
+                                        s.push(0x80 | (cp & 0x3F) as u8);
+                                    }
+                                }
                             }
                         }
                         _ => {
-                            s.push('\\');
-                            s.push(esc as char);
+                            s.push(b'\\');
+                            s.push(esc);
                         }
                     }
                 }
-                // Multi-byte UTF-8: decode the full sequence
-                b if b >= 0x80 => {
-                    self.pos -= 1; // back up to re-read the lead byte
-                    let remaining = &self.src[self.pos..];
-                    match std::str::from_utf8(remaining) {
-                        Ok(rest) => {
-                            let c = rest.chars().next()?;
-                            s.push(c);
-                            self.pos += c.len_utf8();
-                        }
-                        Err(e) => {
-                            // Partial valid prefix
-                            let valid_len = e.valid_up_to();
-                            if valid_len > 0 {
-                                let valid = std::str::from_utf8(&remaining[..valid_len]).ok()?;
-                                let c = valid.chars().next()?;
-                                s.push(c);
-                                self.pos += c.len_utf8();
-                            } else {
-                                // Skip invalid byte
-                                s.push(char::REPLACEMENT_CHARACTER);
-                                self.pos += 1;
-                            }
-                        }
-                    }
-                }
-                _ => s.push(ch as char),
+                _ => s.push(ch),
             }
         }
     }
@@ -283,7 +375,7 @@ impl<'a> Parser<'a> {
                 self.set_error(format!("expected string key at position {}", self.pos));
                 return None;
             }
-            let key = self.parse_string()?;
+            let key = self.parse_key()?;
             if !self.expect(b':') {
                 return None;
             }
@@ -349,7 +441,12 @@ impl<'a> Parser<'a> {
 // JSON Generator
 // ---------------------------------------------------------------------------
 
-fn generate(buf: &mut String, val: Value, store: &Store) {
+/// Append `val`'s JSON to `buf`. Every string goes out as UTF-8, and
+/// one that cannot is the error: `(message, invalid_object)` — the
+/// message CRuby's generator gives, `source sequence is
+/// illegal/malformed utf-8` for an ill-formed UTF-8 string and the
+/// transcoding's own message for any other encoding.
+fn generate(buf: &mut String, val: Value, store: &Store) -> std::result::Result<(), (String, Value)> {
     if val.is_nil() {
         buf.push_str("null");
     } else if val == Value::bool(true) {
@@ -370,8 +467,9 @@ fn generate(buf: &mut String, val: Value, store: &Store) {
         } else {
             buf.push_str(&dtoa::Buffer::new().format(f));
         }
-    } else if let Some(s) = val.is_str() {
-        generate_string(buf, s);
+    } else if let Some(s) = val.is_rstring_inner() {
+        let utf8 = json_utf8(s, store).map_err(|msg| (msg, val))?;
+        generate_string(buf, &utf8);
     } else if let Some(ary) = val.try_array_ty() {
         buf.push('[');
         let items: Vec<Value> = ary.iter().copied().collect();
@@ -379,7 +477,7 @@ fn generate(buf: &mut String, val: Value, store: &Store) {
             if i > 0 {
                 buf.push(',');
             }
-            generate(buf, *v, store);
+            generate(buf, *v, store)?;
         }
         buf.push(']');
     } else if let Some(hash) = val.try_hash_ty() {
@@ -389,19 +487,132 @@ fn generate(buf: &mut String, val: Value, store: &Store) {
             if i > 0 {
                 buf.push(',');
             }
-            generate_string(buf, &k.to_s(store));
+            if let Some(s) = k.is_rstring_inner() {
+                let utf8 = json_utf8(s, store).map_err(|msg| (msg, *k))?;
+                generate_string(buf, &utf8);
+            } else {
+                generate_string(buf, &k.to_s(store));
+            }
             buf.push(':');
-            generate(buf, *v, store);
+            generate(buf, *v, store)?;
         }
         buf.push('}');
     } else {
         generate_string(buf, &val.to_s(store));
+    }
+    Ok(())
+}
+
+/// A string's characters as UTF-8, the way CRuby's generator reads
+/// them: a UTF-8 string must be well-formed; a BINARY string whose
+/// bytes are well-formed UTF-8 is taken for UTF-8; everything else is
+/// transcoded, and the transcoding's failure is the message.
+fn json_utf8<'a>(
+    s: &'a RStringInner,
+    store: &Store,
+) -> std::result::Result<std::borrow::Cow<'a, str>, String> {
+    const MALFORMED: &str = "source sequence is illegal/malformed utf-8";
+    let bytes = s.as_bytes();
+    match s.encoding() {
+        Encoding::UTF8 => std::str::from_utf8(bytes)
+            .map(std::borrow::Cow::Borrowed)
+            .map_err(|_| MALFORMED.to_string()),
+        enc => {
+            if enc == Encoding::Ascii8
+                && let Ok(st) = std::str::from_utf8(bytes)
+            {
+                return Ok(std::borrow::Cow::Borrowed(st));
+            }
+            let out = super::encoding::transcode_bytes_with_opts(
+                bytes,
+                enc,
+                Encoding::UTF8,
+                &super::encoding::TranscodeOpts::default(),
+                store,
+            )
+            .map_err(|e| e.message().to_string())?;
+            String::from_utf8(out)
+                .map(std::borrow::Cow::Owned)
+                .map_err(|_| MALFORMED.to_string())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn json_generate_writes_every_string_as_utf8() {
+        // CRuby's generator: a UTF-8 string must be well-formed, a
+        // BINARY string with well-formed UTF-8 bytes is taken for UTF-8,
+        // everything else is transcoded and the transcoding's failure
+        // is the GeneratorError's message; `invalid_object` names the
+        // string, wherever it sat.
+        run_test_once(
+            r##"
+            require "json"
+            e = ->(&b) { begin; b.call; rescue JSON::GeneratorError => x; [x.class, x.message, x.invalid_object, x.detailed_message]; end }
+            h = ->(s) { s.unpack1("H*") }
+            [e.() { JSON.generate(["a\xFFb"]) },
+             e.() { JSON.generate(["a\xE3\x81"]) },
+             e.() { JSON.generate({"k" => ["a\xFFb"]}) },
+             e.() { JSON.generate({"\xFF" => 1}) },
+             e.() { JSON.generate("a\xFFb") },
+             [h.(JSON.generate(["abc".b])), JSON.generate(["abc".b]).encoding.to_s],
+             h.(JSON.generate(["\xE3\x81\x82".b])),
+             e.() { JSON.generate(["\xFF".b]) },
+             e.() { JSON.generate(["a\x80".force_encoding("US-ASCII")]) },
+             h.(JSON.generate(["\u3042".encode("EUC-JP")])),
+             h.(JSON.generate(["\u3042".encode("Shift_JIS")])),
+             h.(JSON.generate(["\u3042".encode("UTF-16LE")])),
+             h.(JSON.generate(["\u3042".encode("ISO-2022-JP")])),
+             h.(JSON.generate({"\u3042".encode("EUC-JP") => 1})),
+             e.() { JSON.generate(["a\xA4".force_encoding("EUC-JP")]) },
+             e.() { JSON.generate(["a".encode("UTF-16LE").byteslice(0, 1)]) }.first(2),
+             e.() { JSON.generate(["abc".force_encoding("UTF-7")]) }.first(2),
+             e.() { JSON.dump(["a\xFFb"]) },
+             JSON.generate(["\u3042"]).bytes]
+            "##,
+        );
+    }
+
+    #[test]
+    fn json_parse_reads_the_source_as_utf8() {
+        // `convert_encoding`: a UTF-8 source is read as it is, ill-formed
+        // bytes and all; a BINARY source is taken for UTF-8; any other
+        // encoding is transcoded first, and its failure is an
+        // `Encoding::*Error`. Every string in the result is UTF-8, and a
+        // key is frozen.
+        run_test_once(
+            r##"
+            require "json"
+            e = ->(&b) { begin; b.call; rescue => x; [x.class, x.message]; end }
+            d = ->(v) { v.map { |s| [s.unpack1("H*"), s.encoding.to_s, s.valid_encoding?] } }
+            [d.(JSON.parse("[\"a\xFFb\"]")),
+             d.(JSON.parse("[\"a\xE3\x81\"]")),
+             d.(JSON.parse("[\"abc\"]".b)),
+             d.(JSON.parse("[\"\xE3\x81\x82\"]".b)),
+             d.(JSON.parse("[\"\xFF\"]".b)),
+             d.(JSON.parse("[\"\u3042\"]".encode("EUC-JP"))),
+             d.(JSON.parse("[\"\u3042\"]".encode("Shift_JIS"))),
+             d.(JSON.parse("[\"\u3042\"]".encode("UTF-16LE"))),
+             d.(JSON.parse("[\"abc\"]".force_encoding("US-ASCII"))),
+             e.() { JSON.parse("[\"a\x80\"]".force_encoding("US-ASCII")) },
+             e.() { JSON.parse("[\"\xA4\"]".force_encoding("EUC-JP")) },
+             e.() { JSON.parse("[\"a\"]".encode("UTF-16LE").byteslice(0, 7)) },
+             e.() { JSON.parse("[1]".force_encoding("UTF-7")) },
+             e.() { JSON.parse("[\"\\ud83c\"]") }.first,
+             d.(JSON.parse("[\"\\ud83c\\udf63\"]")),
+             JSON.parse("{\"a\":1}").keys.map { |k| [k.frozen?, k.encoding.to_s] },
+             d.(JSON.parse("{\"\u3042\":1}".encode("EUC-JP")).keys),
+             e.() { JSON.parse("x") }.first,
+             e.() { JSON.parse(nil) },
+             e.() { JSON.parse(Object.new) }.first,
+             JSON.parse(Class.new { def to_str = "[2]" }.new)]
+            "##,
+        );
+    }
 
     #[test]
     fn json_parse_scalars() {

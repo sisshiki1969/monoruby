@@ -399,6 +399,24 @@ mod tests {
     }
 
     #[test]
+    fn the_empty_method_name_is_just_undefined() {
+        // The Enumerator adapters and the Proc bodies are entered by
+        // FuncId and are not methods of Object, so `send("")` finds
+        // nothing rather than one of them (#1621).
+        crate::tests::run_test_once(
+            r##"
+            r = [(Object.new.send("") rescue $!.class), (:"".to_proc.call(Struct.new(:x).new(1)) rescue $!.class),
+                 Object.new.respond_to?(""), Object.instance_methods.include?(:""), Object.new.methods.include?(:"")]
+            r << [1,2].each.with_index(1).to_a << [1,2].each.with_object([]) { |x, m| m << x * 2 }
+            r << ->(a,b,c){a+b+c}.curry[1][2][3] << %w[a b].map(&:upcase) << [1,2].map(&1.method(:+))
+            e = Enumerator.new { |y| y << 1; y.yield 2, 3 }; r << e.to_a << e.next
+            def mm(*a, **k, &b) = [a, k, b&.call]
+            r << method(:mm).to_proc.call(1, k: 2) { 3 } << "ab".each_char.with_index(10).to_a
+            "##,
+        );
+    }
+
+    #[test]
     fn symbol_to_proc_via_define_method() {
         // Regression: `define_method` wrapping a Symbol#to_proc must
         // resolve the symbol from the proc's outer_lfp, not from the

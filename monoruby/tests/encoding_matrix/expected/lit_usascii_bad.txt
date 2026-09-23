@@ -1,0 +1,5 @@
+lit/usascii_bad.rb: lit/usascii_bad.rb:2: syntax error found (SyntaxError)
+  1 | # encoding: us-ascii
+> 2 | puts "あ".encoding
+    |       ^~~ invalid multibyte character 0xE3
+

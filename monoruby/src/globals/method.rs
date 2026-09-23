@@ -242,6 +242,27 @@ impl Globals {
         )
     }
 
+    /// A native body that is entered only by its `FuncId` — a `Proc`
+    /// body or an Enumerator adapter — and so is deliberately **not**
+    /// a method of any class. Registering these on `Object` under the
+    /// empty name let `Object.new.send("")` call one with no
+    /// arguments and abort the process (#1621).
+    pub(crate) fn define_anonymous_builtin(
+        &mut self,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw: &[&str],
+        kw_rest: bool,
+    ) -> FuncId {
+        let func_id = self
+            .store
+            .new_builtin_func("", address, min, max, rest, kw, kw_rest);
+        self.gen_wrapper(func_id);
+        func_id
+    }
+
     pub(crate) fn define_builtin_func_rest(
         &mut self,
         class_id: ClassId,

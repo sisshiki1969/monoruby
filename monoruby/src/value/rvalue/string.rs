@@ -3583,20 +3583,27 @@ impl RStringInner {
             CodeRange::SevenBit => CodeRange::SevenBit,
             CodeRange::Valid => match parent.encoding() {
                 // Single-byte encodings: every byte position is a
-                // character boundary; Valid trivially propagates.
+                // character boundary, so the range is well-formed —
+                // but Valid means "well-formed *and* has a high byte",
+                // and the parent's high byte need not be in this
+                // range. `"\xff abc"[1..]` is SevenBit.
                 Encoding::Ascii8
                 | Encoding::Iso8859(_)
                 | Encoding::Other(_)
-                | Encoding::NamedByte(_) => CodeRange::Valid,
+                | Encoding::NamedByte(_) => {
+                    Self::valid_or_seven_bit(parent.encoding(), &parent.as_bytes()[start..end])
+                }
                 // UTF-8: the cut points must land on character
                 // boundaries (a non-continuation byte or one-past-the-
                 // end). When both endpoints align, the byte sequence
-                // between them is still valid UTF-8.
+                // between them is still valid UTF-8 — and, as above,
+                // SevenBit when it holds no high byte, which is what
+                // `ascii_only?` and every compatibility decision read.
                 Encoding::Utf8(_) => {
                     if Self::is_utf8_char_boundary(parent, start)
                         && Self::is_utf8_char_boundary(parent, end)
                     {
-                        CodeRange::Valid
+                        Self::valid_or_seven_bit(parent.encoding(), &parent.as_bytes()[start..end])
                     } else {
                         CodeRange::Unknown
                     }
@@ -3633,6 +3640,18 @@ impl RStringInner {
             // range could be Valid (if the broken bytes are outside
             // it) or still Broken.
             CodeRange::Broken | CodeRange::Unknown => CodeRange::Unknown,
+        }
+    }
+
+    /// The code range of a *well-formed* byte range under `enc`:
+    /// SevenBit when the encoding is ASCII-compatible and no byte is
+    /// `>= 0x80`, Valid otherwise. Non-ASCII-compatible encodings are
+    /// never SevenBit, as in [`Encoding::classify`].
+    fn valid_or_seven_bit(enc: Encoding, bytes: &[u8]) -> CodeRange {
+        if enc.is_ascii_compatible() && bytes.is_ascii() {
+            CodeRange::SevenBit
+        } else {
+            CodeRange::Valid
         }
     }
 
@@ -5097,6 +5116,30 @@ mod encoding_tests {
     }
 
     #[test]
+    fn propagated_cr_is_seven_bit_when_the_range_holds_no_high_byte() {
+        // Valid means well-formed *with* a high byte somewhere in the
+        // parent; a range that has none is SevenBit, which is what
+        // `ascii_only?` and every compatibility decision read.
+        let parent = RStringInner::from_encoding(b"\xffab", Encoding::Ascii8);
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+        assert_eq!(RStringInner::propagated_cr(&parent, 1, 3), CodeRange::SevenBit);
+        assert_eq!(RStringInner::propagated_cr(&parent, 0, 2), CodeRange::Valid);
+
+        let parent = RStringInner::from_encoding("abc\u{65e5}\u{672c}xyz".as_bytes(), Encoding::UTF8);
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+        assert_eq!(RStringInner::propagated_cr(&parent, 0, 3), CodeRange::SevenBit);
+        assert_eq!(RStringInner::propagated_cr(&parent, 3, 9), CodeRange::Valid);
+        assert_eq!(RStringInner::propagated_cr(&parent, 9, 12), CodeRange::SevenBit);
+        assert_eq!(RStringInner::propagated_cr(&parent, 3, 5), CodeRange::Unknown);
+
+        // A non-ASCII-compatible encoding is never SevenBit.
+        let parent =
+            RStringInner::from_encoding(&[0x61, 0x00, 0x62, 0x00, 0x63, 0x00], Encoding::Utf16Le);
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+        assert_eq!(RStringInner::propagated_cr(&parent, 0, 2), CodeRange::Valid);
+    }
+
+    #[test]
     fn propagated_cr_valid_single_byte_encodings_propagate_unconditionally() {
         // ASCII-8BIT: every byte position is a character boundary, so
         // a Valid parent always yields a Valid child for any non-empty
@@ -5123,11 +5166,20 @@ mod encoding_tests {
         let parent = RStringInner::from_encoding("abcあdef".as_bytes(), Encoding::UTF8);
         assert_eq!(parent.code_range(), CodeRange::Valid);
 
-        for &(start, end) in &[(0, 3), (0, 6), (3, 6), (6, 9), (3, 9), (0, 9)] {
+        for &(start, end) in &[(0, 6), (3, 6), (3, 9), (0, 9)] {
             assert_eq!(
                 RStringInner::propagated_cr(&parent, start, end),
                 CodeRange::Valid,
                 "{start}..{end} should propagate Valid"
+            );
+        }
+        // A cut on character boundaries that leaves no high byte behind
+        // is SevenBit, not Valid.
+        for &(start, end) in &[(0, 3), (6, 9)] {
+            assert_eq!(
+                RStringInner::propagated_cr(&parent, start, end),
+                CodeRange::SevenBit,
+                "{start}..{end} holds only ASCII"
             );
         }
 

@@ -1,0 +1,2 @@
+lit/euc_mix.rb: lit/euc_mix.rb:2: syntax error found (SyntaxError)
+lit/euc_mix.rb:2: UTF-8 mixed within EUC-JP source

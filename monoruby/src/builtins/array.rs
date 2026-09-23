@@ -2115,13 +2115,32 @@ fn get_output_field_separator(globals: &mut Globals) -> Option<String> {
 /// make a UTF-8 7-bit literal collapse into US-ASCII.
 fn merge_join_state(
     cur: Option<(Encoding, CodeRange)>,
+    cur_len: usize,
     other_enc: Encoding,
     other_cr: CodeRange,
+    other_len: usize,
 ) -> Option<(Encoding, CodeRange)> {
     let (cur_enc, cur_cr) = match cur {
         Some(state) => state,
         None => return Some((other_enc, other_cr)),
     };
+    // `enc_compatible_latter`'s two empty-string rules come before
+    // any question of ASCII compatibility: an empty piece changes
+    // nothing (`[utf16].join("")`), and an empty accumulator takes the
+    // piece's encoding unless it is ASCII-compatible and the piece is
+    // 7-bit (`["".encode("EUC-JP"), "あ"].join` is UTF-8).
+    if other_len == 0 {
+        return Some((cur_enc, cur_cr));
+    }
+    if cur_len == 0 {
+        return Some(
+            if cur_enc.is_ascii_compatible() && matches!(other_cr, CodeRange::SevenBit) {
+                (cur_enc, other_cr)
+            } else {
+                (other_enc, other_cr)
+            },
+        );
+    }
     let combined_enc = Encoding::compatible(cur_enc, cur_cr, other_enc, other_cr)?;
     // The result's code range is the fold `concatenate_string_inner`
     // uses: two well-formed sides stay well-formed, and anything
@@ -2150,7 +2169,13 @@ fn append_string(
     s: &RStringInner,
     store: &crate::globals::Store,
 ) -> Result<()> {
-    let new_state = match merge_join_state(*state, s.encoding(), s.code_range()) {
+    let new_state = match merge_join_state(
+        *state,
+        out.len(),
+        s.encoding(),
+        s.code_range(),
+        s.as_bytes().len(),
+    ) {
         Some(st) => st,
         None => {
             let cur_enc = state.map(|(e, _)| e).unwrap_or(Encoding::UsAscii);
@@ -2183,7 +2208,7 @@ fn array_join(
             // Inline-append the separator: no temporary string,
             // just merge `(sep_enc, sep_cr)` into the running
             // state and copy bytes.
-            let new_state = merge_join_state(*state, sep_enc, sep_cr).ok_or_else(|| {
+            let new_state = merge_join_state(*state, out.len(), sep_enc, sep_cr, sep.len()).ok_or_else(|| {
                 let cur_enc = state.map(|(e, _)| e).unwrap_or(Encoding::UsAscii);
                 MonorubyErr::incompatible_encoding(&globals.store, cur_enc, sep_enc)
             })?;
@@ -7580,6 +7605,25 @@ mod tests {
         run_test_with_prelude(
             r#"[C.new].join("-")"#,
             r#"class C; def to_ary; [1, 2]; end; end"#,
+        );
+    }
+
+    #[test]
+    fn join_takes_an_empty_piece_as_no_piece_at_all() {
+        // `enc_compatible_latter`'s two empty-string rules: an empty
+        // piece leaves the accumulator alone even when its encoding
+        // is incompatible, and an empty accumulator takes the piece's
+        // encoding unless it is ASCII-compatible and the piece 7-bit.
+        crate::tests::run_test_once(
+            r##"
+            u16 = "a".encode("UTF-16LE"); j = "\u3042"
+            [[u16].join("").encoding.to_s, [u16, u16].join.encoding.to_s, u16.chars.join == u16,
+             ["".encode("EUC-JP"), j].join.encoding.to_s, ["".encode("EUC-JP"), "a"].join.encoding.to_s,
+             [""].join.encoding.to_s, [].join.encoding.to_s, ["a", ""].join.encoding.to_s,
+             (["a".b, "\xff".b, j].join rescue $!.class), ["abc".b, j].join.encoding.to_s, [j, ""].join.encoding.to_s,
+             ["", "".b].join.encoding.to_s, [u16, ""].join.encoding.to_s, [u16, "".b].join.encoding.to_s,
+             ["", u16].join.encoding.to_s, ([u16, "a"].join rescue $!.class)]
+            "##,
         );
     }
 

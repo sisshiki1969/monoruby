@@ -1038,8 +1038,18 @@ impl<'a> MarshalReader<'a> {
         // Hand the payload string to `_load` in its recorded encoding.
         let payload = Value::string_from_inner(RStringInner::from_encoding(bytes, encoding));
         let load_id = IdentId::get_id("_load");
-        let result =
+        let mut result =
             vm.invoke_method_inner(globals, load_id, module.as_val(), &[payload], None, None)?;
+        // `Encoding._load` hands the name back; the encoding it names is
+        // looked up here, as CRuby's compat loader does, so an unknown
+        // name is the same ArgumentError `Encoding.find` raises.
+        if module.id() == super::encoding::encoding_class(globals)
+            && let Some(name) = result.is_str()
+        {
+            result = super::encoding::find_encoding_object(globals, name).ok_or_else(|| {
+                MonorubyErr::argumenterr(format!("unknown encoding name - {}", name))
+            })?;
+        }
         // Register the reconstructed object so later `'@'` links resolve.
         self.user_protocol_slots.insert(self.objects.len());
         self.objects.push(result);

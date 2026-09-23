@@ -1,0 +1,7 @@
+lit/euc_mix2.rb: 
+lit/euc_mix2.rb:2: syntax error found (SyntaxError)
+  1 | # encoding: EUC-JP
+> 2 | x = "\xC6\xFC\u3042"
+    |              ^~~~~~ UTF-8 mixed within EUC-JP source
+  3 | puts x.encoding
+

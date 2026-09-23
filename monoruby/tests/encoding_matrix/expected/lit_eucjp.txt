@@ -1,0 +1,1 @@
+[#<Encoding:EUC-JP>, #<Encoding:EUC-JP>, #<Encoding:EUC-JP>, 2, #<Encoding:EUC-JP>, #<Encoding:US-ASCII>, #<Encoding:EUC-JP>, #<Encoding:EUC-JP>, #<Encoding:EUC-JP>, [#<Encoding:EUC-JP>, #<Encoding:EUC-JP>], #<Encoding:EUC-JP>, #<Encoding:UTF-8>, "\"\\x{C6FC}\"", #<Encoding:US-ASCII>]

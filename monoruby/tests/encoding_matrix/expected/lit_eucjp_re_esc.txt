@@ -1,0 +1,1 @@
+[#<Encoding:EUC-JP>, #<Encoding:EUC-JP>, #<Encoding:EUC-JP>, #<Encoding:Windows-31J>]

@@ -1,0 +1,6 @@
+lit/sjis.rb: lit/sjis.rb:2: syntax errors found (SyntaxError)
+lit/sjis.rb:2: unexpected local variable or method; expected a `,` separator for the array elements
+lit/sjis.rb:2: unexpected backslash, ignoring it
+lit/sjis.rb:2: unexpected string literal; expected a `,` separator for the array elements
+lit/sjis.rb:2: unterminated string meets end of file
+lit/sjis.rb:3: unexpected end-of-input; expected a `]` to close the array

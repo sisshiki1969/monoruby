@@ -1,0 +1,1 @@
+[#<Encoding:UTF-8>, #<Encoding:UTF-8>, false, #<Encoding:UTF-8>, #<Encoding:UTF-8>, true, #<Encoding:UTF-8>, #<Encoding:US-ASCII>, #<Encoding:EUC-JP>, #<Encoding:Windows-31J>, #<Encoding:UTF-8>, false, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:UTF-8>, false]

@@ -4946,6 +4946,7 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let dup_module = globals.store.duplicate_module(module.id());
         return Ok(dup_module.as_val());
     }
+    refuse_copy_without_allocator(globals, self_val)?;
     let mut copy = self_val.dup();
     // `dup` yields an instance of the receiver's *real* class: the
     // singleton class and its contents (methods, constants) are not
@@ -4978,6 +4979,21 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     )?;
     vm.temp_clear(temp);
     Ok(copy)
+}
+
+/// A plain object of a class with no allocator — an `Encoding` — cannot
+/// be copied: CRuby's `rb_obj_dup` allocates the copy through the class
+/// and fails there. The types with a representation of their own are
+/// copied by that representation whether or not their class allocates.
+fn refuse_copy_without_allocator(globals: &Globals, val: Value) -> Result<()> {
+    if val.ty() == Some(ObjTy::OBJECT) {
+        let class_id = val.real_class(&globals.store).id();
+        if globals.store[class_id].alloc_func().is_none() {
+            let name = globals.store.get_class_name(class_id);
+            return Err(MonorubyErr::typeerr(format!("allocator undefined for {name}")));
+        }
+    }
+    Ok(())
 }
 
 /// Re-register every finalizer attached to `from` onto `to`, so that
@@ -5022,6 +5038,7 @@ fn clone_val(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         _ => self_val.is_frozen(),
     };
 
+    refuse_copy_without_allocator(globals, self_val)?;
     let mut copy = self_val.clone_value();
     copy_finalizers(globals, self_val, copy);
     if self_val.is_class_or_module().is_some() {
