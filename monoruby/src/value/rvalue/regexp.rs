@@ -3190,10 +3190,16 @@ fn expansion_inner(
         if enc != hay_enc
             && (captured_non_ascii || !hay_enc.is_ascii_compatible() || !enc.is_ascii_compatible())
         {
-            // Named the way CRuby names them: the template first, except
-            // that a receiver which is not ASCII-compatible is refused
-            // by `rb_enc_check(str, repl)` and comes first.
-            return Err(if hay_enc.is_ascii_compatible() || template.is_ascii_only() {
+            // Named the way CRuby names them. A captured piece is
+            // appended into the template's own buffer by `rb_reg_regsub`,
+            // which names the template first; so is a 7-bit template a
+            // receiver that is not ASCII-compatible cannot take. Every
+            // other refusal happens when the expansion is appended to
+            // the result, in the receiver's encoding, which names the
+            // receiver first.
+            let template_first =
+                captured_non_ascii || (!hay_enc.is_ascii_compatible() && template.is_ascii_only());
+            return Err(if template_first {
                 MonorubyErr::incompatible_encoding(store, enc, hay_enc)
             } else {
                 MonorubyErr::incompatible_encoding(store, hay_enc, enc)
