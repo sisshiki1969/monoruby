@@ -72,6 +72,7 @@ Diagrams referenced by the above: [`fiber_state_diagram.svg`](fiber_state_diagra
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
 | [`encoding_char_iteration_design.md`](encoding_char_iteration_design.md) | EN | plan | Removing the "every String is UTF-8" assumption via a per-encoding character-boundary layer. Marked *proposed*. |
+| [`encoding_api_plan_2026-09.md`](encoding_api_plan_2026-09.md) | JA | plan | Where String and the encoding APIs stand against CRuby 4.0.6 at `38f2bb0`: a 6,289-case behaviour matrix (601 differences folded into 11 root causes), IO / literal / converter-coverage measurements, the open issues mapped onto them, the per-layer contracts each should honour, and a nine-phase implementation plan. Supersedes the char-iteration design's P3. |
 
 ## Runtime optimization (`runtime_optimization/`)
 
