@@ -104,6 +104,14 @@ impl Codegen {
         self.emit_write_barrier(GP::Rdi, GP::Rdx);
         monoasm_arm64! { &mut self.jit, b exit; }
         self.jit.bind_label(heap);
+        // A shared view must not be written in place: its `ptr` is the
+        // root's buffer, which its other views read. The generic path
+        // copies it first (`owned_mut`).
+        monoasm_arm64! { &mut self.jit,
+            mov x9, (ARRAY_SHARED_TAG as u64);
+            cmp x0, x9;
+            b.eq generic;
+        }
         monoasm_arm64! { &mut self.jit,
             ldr x0, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
             cmp x0, x3;

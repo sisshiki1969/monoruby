@@ -1181,6 +1181,11 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm! { &mut self.jit,
         heap:
+            // A shared view (tag in the capacity slot) has no room of its
+            // own: `f` copies it out of the root before appending.
+            movq rcx, (ARRAY_SHARED_TAG);
+            cmpq rax, rcx;
+            jeq  grow;
             // Spilled buffer: rax is the capacity, the length lives beside
             // the pointer.
             movq rcx, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
@@ -1277,6 +1282,10 @@ impl Codegen {
             movq r8, [rdx + (RVALUE_OFFSET_HEAP_PTR)];
             jmp  src_ready;
         dst_heap:
+            // A shared view is not written in place (see `array_index_assign`).
+            movq rcx, (ARRAY_SHARED_TAG);
+            cmpq rax, rcx;
+            jeq  slow;
             movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
             movq r9, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
             jmp  dst_ready;

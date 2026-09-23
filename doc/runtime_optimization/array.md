@@ -69,6 +69,33 @@ WB_ARMED、ビット 8..15 が GC の年齢。Array は Hash と違って型別�
 
 詳細は [`../gc.md`](../gc.md)。
 
+### 1.4 共有ビュー（長いスライス）
+
+`a[10..]` / `a[i, n]` / `slice` が返す **16 要素以上**（`ARRAY_SHARE_MIN`）の
+スライスは要素をコピーせず、String の `SharedContent` と同じ仕組みで
+**共有ルートのバッファへのビュー**になる（`ArrayContent` 共用体、
+`SharedArray { tag, ptr, len, root }`）。CRuby の `rb_ary_subseq` /
+`ary_make_shared` に相当する。
+
+- 親がヒープ変種なら、最初のスライス時にバッファを隠れた frozen なルート
+  Array に移し、親自身をそのルート全体のビューにする（`ensure_shared_root`）。
+  親が frozen ならルートは親そのもの。inline 変種（5 要素以下）はバッファが
+  セルの中で動くので共有せずコピーする。短いスライスもコピー。
+- `tag` は `capacity` スロットに置く `isize::MAX`（`ARRAY_SHARED_TAG`）で、
+  `ptr` / `len` はあふれた `SmallVec` の `OFFSET_HEAP_PTR` / `OFFSET_HEAP_LEN`
+  に重なる。したがって JIT の読み出し経路（`[]`、`length`、ブロック引数展開）は
+  signed の `capa > 5` でそのままヒープ経路に入り、ビューを変更なしに読める。
+- **書き込みは copy-on-write**: Rust 側は `owned_mut()` がビューを自前の
+  バッファにコピーしてから返す（`DerefMut` も同じ）。JIT の書き込み高速経路
+  （`array_index_assign`、`<<`、同長スライス代入）はヒープ経路の先頭で `tag` を
+  検査し、ビューなら汎用経路に落とす。ルートのバッファは決して書かれない。
+- GC: ビューの mark は要素ではなくルートを mark し、`young_child_exists` も
+  ルートだけを見る（String の STRING アームと同じ理由）。親をビューに変えるとき
+  古い親から若いルートへの辺が生えるので `write_barrier(root)` を打つ。
+- 代償は CRuby と同じで、共有された親への次の破壊的操作が 1 回だけ全コピーに
+  なること。hexapdf の行送り（`@items[@beginning_of_line_index..-1]` を
+  行ごとに返す）はこれで `memmove` 11% が消える。
+
 ---
 
 ## 2. VM の経路
