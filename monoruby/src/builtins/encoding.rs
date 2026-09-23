@@ -4395,7 +4395,7 @@ fn encoding_from_canonical_name(name: &str) -> Option<crate::value::Encoding> {
 /// Look up the current `Encoding.default_internal` (set via
 /// `Encoding.default_internal=`). Returns `None` when unset
 /// (matches CRuby's "no transcoding" default).
-fn current_default_internal(globals: &mut Globals) -> Option<crate::value::Encoding> {
+pub(super) fn current_default_internal(globals: &mut Globals) -> Option<crate::value::Encoding> {
     let v = globals.get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))?;
     if v.is_nil() {
         return None;
@@ -4823,10 +4823,6 @@ pub(super) fn str_encoding(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    // Check for overridden encoding label (set by Integer#chr for mock encodings)
-    if let Some(enc_obj) = globals.store.get_ivar(self_, IdentId::_ENCODING_OVERRIDE) {
-        return Ok(enc_obj);
-    }
     let enc = self_.as_rstring_inner().encoding();
     // The `Encoding::<NAME>` object for `enc` is the same every time;
     // resolve it through the constant table once and answer from the

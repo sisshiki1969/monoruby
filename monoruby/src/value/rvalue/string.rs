@@ -1374,6 +1374,207 @@ pub(crate) fn unicode_unit_encode(cp: u32, enc: Encoding) -> Option<Vec<u8>> {
     }
 }
 
+/// `rb_enc_precise_mbclen` for every encoding: the width of the
+/// character of `enc` starting at `bytes[pos]`, or why there is none.
+///
+/// UTF-8 (and the variants that store UTF-8) decode; the wide forms
+/// walk by code unit; the multibyte CJK sets use their own walkers;
+/// US-ASCII has no character above `0x7F`; and every other encoding —
+/// BINARY, ISO-8859-N, the single-byte code pages, and the dummies
+/// monoruby does not decode — is a byte per character.
+pub(crate) fn precise_mbclen(enc: Encoding, bytes: &[u8], pos: usize) -> PreciseLen {
+    if let Some((_, precise)) = mbc_walker(enc) {
+        return precise(bytes, pos);
+    }
+    if enc.unit_width() > 1 {
+        return unicode_unit_precise_len(bytes, pos, enc);
+    }
+    if !matches!(enc, Encoding::Utf8(_)) {
+        if pos >= bytes.len() {
+            return PreciseLen::NeedMore;
+        }
+        if enc == Encoding::UsAscii && bytes[pos] >= 0x80 {
+            return PreciseLen::Invalid;
+        }
+        return PreciseLen::Char(1);
+    }
+    let rest = &bytes[pos..];
+    match std::str::from_utf8(rest) {
+        Ok(s) => match s.chars().next() {
+            Some(c) => PreciseLen::Char(c.len_utf8()),
+            None => PreciseLen::NeedMore,
+        },
+        Err(e) if e.valid_up_to() > 0 => {
+            // SAFETY: `valid_up_to` bounds a valid UTF-8 prefix.
+            let head = unsafe { std::str::from_utf8_unchecked(&rest[..e.valid_up_to()]) };
+            PreciseLen::Char(head.chars().next().unwrap().len_utf8())
+        }
+        // A truncated tail is "need more"; anything else is invalid here.
+        Err(e) if e.error_len().is_none() => PreciseLen::NeedMore,
+        Err(_) => PreciseLen::Invalid,
+    }
+}
+
+/// `rb_enc_mbc_to_codepoint`: the code point of the one character
+/// `bytes` spells in `enc`, or `None` when `bytes` is not exactly one
+/// character of it.
+///
+/// Only the Unicode encodings have code points of their own; for every
+/// other multibyte encoding CRuby's "code point" is the character's
+/// byte image read big-endian (`onigenc_mbn_mbc_to_code`), so `あ` in
+/// EUC-JP is `0xA4A2` and a four-byte GB18030 character is a value
+/// past `2**31`. A single-byte encoding's character is its byte.
+pub(crate) fn enc_codepoint(enc: Encoding, bytes: &[u8]) -> Option<u32> {
+    match precise_mbclen(enc, bytes, 0) {
+        PreciseLen::Char(n) if n == bytes.len() => {}
+        _ => return None,
+    }
+    match enc {
+        Encoding::Utf8(_) => std::str::from_utf8(bytes)
+            .ok()?
+            .chars()
+            .next()
+            .map(|c| c as u32),
+        Encoding::Utf16Le | Encoding::Utf16Be | Encoding::Utf32Le | Encoding::Utf32Be => {
+            unicode_unit_codepoint(bytes, enc)
+        }
+        Encoding::NamedByte(CESU_8) => cesu8_codepoint(bytes),
+        _ => Some(bytes.iter().fold(0u32, |acc, &b| (acc << 8) | b as u32)),
+    }
+}
+
+/// The scalar a CESU-8 character's bytes stand for: UTF-8's for the
+/// three-byte-and-under forms, the pair's for the six-byte form.
+fn cesu8_codepoint(bytes: &[u8]) -> Option<u32> {
+    let unit = |b: &[u8]| {
+        ((b[0] as u32 & 0x0F) << 12) | ((b[1] as u32 & 0x3F) << 6) | (b[2] as u32 & 0x3F)
+    };
+    match bytes.len() {
+        6 => {
+            let (hi, lo) = (unit(&bytes[..3]), unit(&bytes[3..]));
+            Some(0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00))
+        }
+        _ => std::str::from_utf8(bytes)
+            .ok()?
+            .chars()
+            .next()
+            .map(|c| c as u32),
+    }
+}
+
+/// Why an encoding has no byte sequence for a code point. CRuby draws
+/// the same distinction in `rb_enc_uint_chr` and `rb_str_concat`:
+/// Onigmo answers either "not a code point of this encoding" or "wider
+/// than anything this encoding encodes", and the two get different
+/// messages.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CodepointErr {
+    /// The encoding has sequences, just not this one —
+    /// `"invalid codepoint 0x%X in %s"`.
+    Invalid,
+    /// Past the widest sequence the encoding has at all —
+    /// `"%u out of char range"`.
+    OutOfRange,
+}
+
+/// `rb_enc_codelen` + `rb_enc_mbcput` + the `rb_enc_precise_mbclen`
+/// check `rb_enc_uint_chr` runs on the result: the bytes of code point
+/// `cp` in `enc`, or the refusal.
+///
+/// The Unicode encodings encode a scalar. Everything else spells the
+/// code point's own bytes, big-endian and without leading zero bytes
+/// (the inverse of [`enc_codepoint`]), and the sequence is a character
+/// only if the encoding's walker reads it back as exactly one: `0x3042`
+/// in EUC-JP is the two bytes `30 42`, which are two characters, so it
+/// is an invalid code point there. What is *out of range* rather than
+/// invalid is per encoding: a value past one byte for a single-byte
+/// encoding, past two for the double-byte sets, past three for EUC-JP,
+/// past `U+10FFFF` for UTF-8 — and nothing at all for the four-byte
+/// sets and the UTF-16 / UTF-32 family, where every refusal is an
+/// invalid code point.
+pub(crate) fn enc_mbcput(enc: Encoding, cp: u32) -> std::result::Result<Vec<u8>, CodepointErr> {
+    let surrogate = (0xD800..0xE000).contains(&cp);
+    let bytes = match enc {
+        Encoding::Utf8(_) | Encoding::NamedByte(CESU_8) => {
+            if cp > 0x10FFFF {
+                // Onigmo's UTF-8 knows two "code points" past Unicode:
+                // the stand-ins for the bytes `FE` / `FF`, which it
+                // writes as those bytes and then cannot read back.
+                return Err(if cp >= 0xFFFF_FFFE {
+                    CodepointErr::Invalid
+                } else {
+                    CodepointErr::OutOfRange
+                });
+            }
+            if surrogate {
+                return Err(CodepointErr::Invalid);
+            }
+            let mut buf = [0u8; 4];
+            let utf8 = char::from_u32(cp)
+                .ok_or(CodepointErr::Invalid)?
+                .encode_utf8(&mut buf)
+                .as_bytes()
+                .to_vec();
+            if enc == Encoding::NamedByte(CESU_8) && cp >= 0x10000 {
+                // The astral plane is a surrogate pair, each half as
+                // a three-byte sequence.
+                let v = cp - 0x10000;
+                [0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF)]
+                    .into_iter()
+                    .flat_map(|u| {
+                        [
+                            0xE0 | (u >> 12) as u8,
+                            0x80 | ((u >> 6) & 0x3F) as u8,
+                            0x80 | (u & 0x3F) as u8,
+                        ]
+                    })
+                    .collect()
+            } else {
+                utf8
+            }
+        }
+        Encoding::Utf16Le | Encoding::Utf16Be => {
+            unicode_unit_encode(cp, enc).ok_or(CodepointErr::Invalid)?
+        }
+        Encoding::Utf32Le | Encoding::Utf32Be => {
+            if !utf32_unit_is_char(cp) {
+                return Err(CodepointErr::Invalid);
+            }
+            unicode_unit_encode(cp, enc).ok_or(CodepointErr::Invalid)?
+        }
+        Encoding::UsAscii => {
+            if cp > 0xFF {
+                return Err(CodepointErr::OutOfRange);
+            }
+            if cp > 0x7F {
+                return Err(CodepointErr::Invalid);
+            }
+            vec![cp as u8]
+        }
+        _ => {
+            let widest = match enc {
+                Encoding::EucJp(_) => 0xFF_FFFF,
+                Encoding::Sjis(_) => 0xFFFF,
+                _ => match mbc_walker(enc) {
+                    Some((2, _)) => 0xFFFF,
+                    Some(_) => u32::MAX,
+                    None => 0xFF,
+                },
+            };
+            if cp > widest {
+                return Err(CodepointErr::OutOfRange);
+            }
+            let be = cp.to_be_bytes();
+            let skip = be.iter().take(3).take_while(|&&b| b == 0).count();
+            be[skip..].to_vec()
+        }
+    };
+    match precise_mbclen(enc, &bytes, 0) {
+        PreciseLen::Char(n) if n == bytes.len() => Ok(bytes),
+        _ => Err(CodepointErr::Invalid),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum PreciseLen {
     /// A complete character, this many bytes wide.
@@ -2660,6 +2861,42 @@ impl RStringInner {
             // than `iter_char_bytes`: the walker separates complete
             // characters from ill-formed subparts, which is exactly the
             // distinction the two escapes encode.
+            // CESU-8 is a Unicode encoding too (`rb_enc_unicode_p`), so
+            // a character with no rendering is `\uXXXX` rather than its
+            // bytes — the six-byte surrogate-pair form as the scalar it
+            // stands for.
+            Encoding::NamedByte(CESU_8) => {
+                let bytes = self.as_bytes();
+                let mut res = String::with_capacity(self.len());
+                let mut pos = 0;
+                let _ = walk_mbc_with(
+                    bytes,
+                    CESU8_MAX_LEN,
+                    cesu8_precise_len,
+                    IllFormed::Byte,
+                    |piece| {
+                        match piece {
+                            MbcPiece::Char(cb) => {
+                                let cp = cesu8_codepoint(cb).unwrap_or(cb[0] as u32);
+                                let next = match bytes.get(pos + cb.len()) {
+                                    Some(&b) if b < 0x80 => b as char,
+                                    _ => '\0',
+                                };
+                                unicode_inspect_char(&mut res, cp, next);
+                                pos += cb.len();
+                            }
+                            MbcPiece::Bad(cb) => {
+                                for b in cb {
+                                    res.push_str(&format!("\\x{b:0>2X}"));
+                                }
+                                pos += cb.len();
+                            }
+                        }
+                        Ok(())
+                    },
+                );
+                res
+            }
             ty if mbc_walker(ty).is_some() => {
                 let (max_len, precise) = mbc_walker(ty).unwrap();
                 let bytes = self.as_bytes();
@@ -4338,82 +4575,40 @@ impl RStringInner {
         if self.len() == 0 {
             return Err(MonorubyErr::argumenterr("empty string"));
         }
-        let bytes = self.as_bytes();
-        let broken = || {
-            MonorubyErr::argumenterr(format!("invalid byte sequence in {}", self.ty.name()))
-        };
         // CRuby's `rb_enc_codepoint_len` looks at the *first* character
         // only: `"a\xff"` still ords to 97, while a receiver whose
         // first character is broken for its declared encoding raises —
-        // including `"\u00a9"` bytes tagged US-ASCII, which are perfectly
+        // including `"©"` bytes tagged US-ASCII, which are perfectly
         // good UTF-8 and still not US-ASCII.
-        let ord = match self.ty {
-            Encoding::UsAscii => {
-                if bytes[0] >= 0x80 {
-                    return Err(broken());
-                }
-                bytes[0] as u32
-            }
-            Encoding::Utf8(_) => {
-                let head = &bytes[..bytes.len().min(4)];
-                match std::str::from_utf8(head) {
-                    Ok(s) => s.chars().next().unwrap() as u32,
-                    // A trailing truncation is the next character's, not
-                    // the first one's: decode the valid prefix instead.
-                    Err(e) if e.valid_up_to() > 0 => {
-                        // SAFETY: `valid_up_to` bounds a valid UTF-8 prefix.
-                        unsafe { std::str::from_utf8_unchecked(&head[..e.valid_up_to()]) }
-                            .chars()
-                            .next()
-                            .unwrap() as u32
-                    }
-                    Err(_) => return Err(broken()),
-                }
-            }
-            _ => {
-                let first = self.iter_char_bytes().next().unwrap_or(&[]);
-                char_bytes_code(self.ty, first)
-            }
-        };
-        Ok(ord)
+        self.codepoint_at(0).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("invalid byte sequence in {}", self.ty.name()))
+        })
     }
-}
 
-/// The code point one character's bytes stand for in `enc`. The
-/// fixed-width UTF forms are decoded (a `"\n"` in UTF-32BE is four
-/// bytes, and its ordinal is still 10); every other non-UTF-8 encoding
-/// reports the leading byte, which is what CRuby answers for
-/// ASCII-8BIT and the conservative answer for the dummy encodings
-/// monoruby does not decode.
-pub fn char_bytes_code(enc: Encoding, bytes: &[u8]) -> u32 {
-    let unit16 = |hi: u8, lo: u8| ((hi as u32) << 8) | lo as u32;
-    match enc {
-        Encoding::Utf16Be | Encoding::Utf16Le if bytes.len() >= 2 => {
-            let be = enc == Encoding::Utf16Be;
-            let first = if be {
-                unit16(bytes[0], bytes[1])
-            } else {
-                unit16(bytes[1], bytes[0])
-            };
-            if bytes.len() >= 4 && (0xD800..0xDC00).contains(&first) {
-                let second = if be {
-                    unit16(bytes[2], bytes[3])
-                } else {
-                    unit16(bytes[3], bytes[2])
-                };
-                if (0xDC00..0xE000).contains(&second) {
-                    return 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00);
-                }
-            }
-            first
+    /// The code point of the character at byte `pos` ([`enc_codepoint`]),
+    /// or `None` when no character of the receiver's encoding starts
+    /// there.
+    pub fn codepoint_at(&self, pos: usize) -> Option<u32> {
+        let bytes = self.as_bytes();
+        match precise_mbclen(self.ty, bytes, pos) {
+            PreciseLen::Char(n) => enc_codepoint(self.ty, &bytes[pos..pos + n]),
+            _ => None,
         }
-        Encoding::Utf32Be if bytes.len() >= 4 => {
-            u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
-        }
-        Encoding::Utf32Le if bytes.len() >= 4 => {
-            u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
-        }
-        _ => bytes.first().copied().unwrap_or(0) as u32,
+    }
+
+    /// Append the bytes of one character of the receiver's encoding
+    /// (what [`enc_mbcput`] answered), keeping the cached code range the
+    /// way `rb_str_concat` does: a 7-bit receiver becomes valid when
+    /// the character is not ASCII, a valid one stays valid, and a
+    /// broken one is re-scanned on demand.
+    pub fn push_char_bytes(&mut self, bytes: &[u8]) {
+        let cr = match self.cr.get() {
+            CodeRange::SevenBit if bytes.iter().all(|&b| b < 0x80) => CodeRange::SevenBit,
+            CodeRange::SevenBit | CodeRange::Valid => CodeRange::Valid,
+            _ => CodeRange::Unknown,
+        };
+        self.owned_mut().extend_from_slice(bytes);
+        self.cr.set(cr);
     }
 }
 
