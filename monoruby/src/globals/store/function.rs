@@ -1657,6 +1657,8 @@ impl Store {
     /// - no single argument expansion in block call
     /// - no extra positional argument
     /// - if method_call without a rest param, required + post <= (the number of positional arguments) <= required + optional + post
+    /// - every required keyword is passed, and every keyword passed is
+    ///   declared by the callee (or absorbed by its `**kwrest`)
     ///
     pub(crate) fn is_simple_call(&self, fid: FuncId, callid: CallSiteId) -> bool {
         let callsite = &self[callid];
@@ -1677,6 +1679,16 @@ impl Store {
             if info.kw_is_required(i) && !callsite.kw_args().contains_key(name) {
                 return false;
             }
+        }
+        // The converse: a literal keyword the callee declares no parameter
+        // for has nowhere to go unless the callee takes `**kwrest`. The
+        // inline argument setup only stores undeclared keywords into that
+        // slot, so without one it would drop them silently; the generic
+        // runtime path raises the `unknown keyword` ArgumentError.
+        if info.kw_rest().is_none()
+            && callsite.kw_args().keys().any(|name| !info.kw_names().contains(name))
+        {
+            return false;
         }
         !callsite.has_splat() && !callsite.has_hash_splat() && info.positional_arity_ok(pos_num)
     }

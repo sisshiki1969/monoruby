@@ -3722,9 +3722,7 @@ fn arg_return_hint_on_bmethods_and_plain_blocks() {
 
 /// A keyword-taking method keeps its keyword checks: the fold only reads
 /// the positional, so it must never replace a call whose keywords would
-/// raise. (An *unknown* keyword is not covered here: a JIT-compiled call
-/// site lets one through for every callee, hinted or not, which is a
-/// separate bug.)
+/// raise — a missing required keyword and an unknown one alike.
 #[test]
 fn arg_return_hint_keeps_keyword_errors() {
     run_test_with_prelude(
@@ -3732,12 +3730,56 @@ fn arg_return_hint_keeps_keyword_errors() {
         r = [c3(6), c3(6, k: 1)]
         r << (c2(5) rescue $!.class) << c2(5, k: 1)
         r << (c4(7, k: 1) rescue $!.class) << (send(:c2, 8) rescue $!.class)
+        r << (c3(6, z: 1) rescue $!.message) << (c2(5, k: 1, z: 2) rescue $!.message)
+        r << (c3(6, k: 1, y: 2, z: 3) rescue $!.message)
         r
         "#,
         r#"
         def c2(a, k:); a; end
         def c3(a, k: 0); a; end
         def c4(a); a; end
+        "#,
+    );
+}
+
+/// A compiled call site raises for a literal keyword the callee does not
+/// declare, exactly as the interpreter does. `is_simple_call` used to admit
+/// such a site, and the inline argument setup only stores an undeclared
+/// keyword into `**kwrest`, so a callee without one lost it silently once
+/// the caller was compiled. Covers an ordinary body (no hint), a loop-JIT
+/// caller and a method-JIT caller, one and several unknowns, and the
+/// `**kwrest` shape that legitimately keeps them.
+#[test]
+fn unknown_keyword_raises_from_compiled_call_site() {
+    run_test_with_prelude(
+        r#"
+        r = []
+        r << (u1(1, z: 1) rescue $!.message)
+        r << (u2(1, k: 2, z: 1) rescue $!.message)
+        r << (u2(1, y: 2, z: 3) rescue $!.message)
+        r << (u2(1, k: 1, y: 2, z: 3) rescue $!.message)
+        r << u3(1, z: 1) << u3(1, k: 2, z: 1)
+        r << (u4(1, z: 1) rescue $!.message)
+        r << (u5(z: 1) rescue $!.message)
+        r << caller1 << caller2
+        r
+        "#,
+        r#"
+        def u1(a, k: 0); a + k; end
+        def u2(a, k: 0, j: 0); [a, k, j]; end
+        def u3(a, k: 0, **kw); [a, k, kw]; end
+        def u4(a, k:); [a, k]; end
+        def u5(k: 0); k; end
+        def caller1
+          u1(2, z: 1)
+        rescue ArgumentError => e
+          e.message
+        end
+        def caller2
+          u2(2, k: 3, x: 1)
+        rescue ArgumentError => e
+          e.message
+        end
         "#,
     );
 }
