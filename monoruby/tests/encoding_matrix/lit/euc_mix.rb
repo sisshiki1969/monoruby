@@ -1,0 +1,3 @@
+# encoding: EUC-JP
+x = "\u3042Æü"
+puts x.encoding

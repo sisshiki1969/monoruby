@@ -781,6 +781,16 @@ monoruby's result is re-verified against a live CRuby before failing
 `re-verifying against a live ruby` to find tests that should be moved to
 the `_live` helpers.
 
+**Encoding matrix** — `bin/encoding-matrix` runs the String / Encoding probe
+scripts under `monoruby/tests/encoding_matrix/` (~17,500 rows across ~150
+String methods × ~40 inputs, `IO` encodings per locale, every converter
+pair, source-file encodings) on a monoruby binary and diffs each row against
+the output recorded from the pinned CRuby in `expected/`. It is not part of
+`cargo test`; an encoding change runs it on the base commit (`--out DIR`)
+and on the branch (`--base DIR`) to show "N fixed, 0 regressed". `--record`
+refreshes the expectations (the `ruby` on PATH must be the pin). See
+`monoruby/tests/encoding_matrix/README.md`.
+
 Modes via `MONORUBY_TEST_ORACLE`:
 
 - unset / `snapshot` (default): replay stored entries; spawn + record on miss.

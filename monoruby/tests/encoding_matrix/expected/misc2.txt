@@ -1,0 +1,100 @@
+names	[["UTF-8", "CP65001"], ["ASCII-8BIT", "BINARY"], ["EUC-JP", "eucJP"], ["Shift_JIS"]]
+dummy?	[false, true, true, true, true]
+ascii_compatible?	[true, false, false]
+inspect/to_s/name	["#<Encoding:UTF-8>", "#<Encoding:BINARY (ASCII-8BIT)>", "#<Encoding:UTF-16 (dummy)>", "#<Encoding:ISO-2022-JP (dummy)>", "UTF-8", "UTF-8", true, #<Encoding:US-ASCII>]
+identity	[true, true, true, true]
+find specials	["US-ASCII", "US-ASCII", "US-ASCII"]
+find internal	nil
+find nope	ArgumentError: unknown encoding name - nope
+find symbol	TypeError: no implicit conversion of Symbol into String
+find enc obj	"UTF-8"
+find nil	TypeError: no implicit conversion of nil into String
+find int	TypeError: no implicit conversion of Integer into String
+find to_str	"EUC-JP"
+find case	ArgumentError: unknown encoding name - latin1
+find with null	ArgumentError: invalid encoding name (NUL byte)
+sizes	[103, 175, 71]
+aliases	[["BINARY", "ASCII-8BIT"], ["CP932", "Windows-31J"], ["SJIS", "Windows-31J"], ["eucJP", "EUC-JP"], ["ASCII", "US-ASCII"], ["ANSI_X3.4-1968", "US-ASCII"], ["646", "US-ASCII"], ["UCS-2BE", "UTF-16BE"], ["UTF-8-MAC", "UTF8-MAC"], ["CP65001", "UTF-8"], ["locale", "US-ASCII"], ["external", "US-ASCII"], ["filesystem", "US-ASCII"], ["internal", nil], ["CP1252", "Windows-1252"], ["ISO8859-1", "ISO-8859-1"]]
+aliases frozen	[false, [true, true], false, true, false]
+constants	[217, [:ANSI_X3_4_1968, :ASCII, :ASCII_8BIT, :BIG5, :BIG5_HKSCS, :BIG5_HKSCS_2008, :BIG5_UAO, :BINARY], [:Stateless_ISO_2022_JP, :EucJP, :EucJP_ms, :EucKR, :EucTW]]
+frozen/new/allocate	[true, NoMethodError, TypeError]
+dup	TypeError: allocator undefined for Encoding
+clone	TypeError: allocator undefined for Encoding
+Marshal round-trip	[true, [4, 8, 73, 117, 58, 13, 69, 110, 99, 111, 100, 105, 110, 103, 11, 69, 85, 67, 45, 74, 80, 6, 58, 6, 69, 70]]
+replicate	NoMethodError: undefined method 'replicate' for an instance of Encoding
+<=>	0
+default_external=	ArgumentError: default external can not be nil
+default_internal=	ArgumentError: unknown encoding name - nope
+locale_charmap	"ANSI_X3.4-1968"
+Encoding.compatible? enc objs	["ASCII-8BIT", "ASCII-8BIT", "UTF-8", "UTF-8", nil, "EUC-JP", nil, nil, nil, "ISO-2022-JP", "UTF-8", "EUC-JP", nil, nil, nil, "EUC-JP", "EUC-JP", "EUC-JP", nil, nil, nil, nil, nil]
+join: empty sep	[#<Encoding:UTF-16LE>, #<Encoding:UTF-16LE>, [97, 0]]
+join: sep given	"a"
+join: euc sep	[#<Encoding:UTF-8>, #<Encoding:US-ASCII>, #<Encoding:EUC-JP>, #<Encoding:EUC-JP>]
+join: mixed	Encoding::CompatibilityError: incompatible character encodings: UTF-8 and EUC-JP
+join: incompat	Encoding::CompatibilityError: incompatible character encodings: UTF-8 and EUC-JP
+join: bin+u8	Encoding::CompatibilityError: incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8
+join: bin ascii + u8	#<Encoding:UTF-8>
+join: u8 + bin high	Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+join: nested incompat	Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+join: sep incompat	Encoding::CompatibilityError: incompatible character encodings: UTF-8 and BINARY (ASCII-8BIT)
+join: sym	#<Encoding:EUC-JP>
+join: sym u8+euc	Encoding::CompatibilityError: incompatible character encodings: UTF-8 and EUC-JP
+chr: basics	[#<Encoding:US-ASCII>, #<Encoding:BINARY (ASCII-8BIT)>, true, #<Encoding:US-ASCII>, #<Encoding:BINARY (ASCII-8BIT)>]
+chr: 256	RangeError: 256 out of char range
+chr: 0x3042 utf8	#<Encoding:UTF-8>
+chr: 0x3042 no enc	RangeError: 12354 out of char range
+chr: 0x3042 default_internal	#<Encoding:UTF-8>
+chr: euc cell	[[164, 162], #<Encoding:EUC-JP>, 42146]
+chr: euc 0x3042	RangeError: invalid codepoint 0x3042 in EUC-JP
+chr: sjis	[[130, 160], 33440, 177]
+chr: euc kana	[[142, 177], 36529]
+chr: euc 0212	[[143, 162, 175], 9413295]
+chr: euc 0xff	RangeError: invalid codepoint 0xFF in EUC-JP
+chr: euc 0x80	RangeError: invalid codepoint 0x80 in EUC-JP
+chr: euc 0xA4	RangeError: invalid codepoint 0xA4 in EUC-JP
+chr: usascii 0x80	RangeError: invalid codepoint 0x80 in US-ASCII
+chr: latin1 0x80	#<Encoding:ISO-8859-1>
+chr: utf8 too big	RangeError: 1114112 out of char range
+chr: utf8 surrogate	RangeError: invalid codepoint 0xD800 in UTF-8
+chr: utf16	[[66, 48], [0, 216, 0, 220], [0, 0, 48, 66], [0, 65]]
+chr: euckr	[51153, [199, 209]]
+chr: big5	[42148]
+chr: gbk	[33088]
+chr: gb18030 4byte	2167439664
+chr: gb18030 2byte	45217
+chr: cp949	35939
+chr: iso2022	RangeError: 12354 out of char range
+chr: utf7	"\x41"
+chr: negative	RangeError: -1 out of char range
+chr: binary 0x3042	RangeError: 12354 out of char range
+chr: bad enc name	ArgumentError: unknown encoding name - NOPE
+chr: enc obj	#<Encoding:EUC-JP>
+chr: stateless	[146, 164, 162]
+chr: emacs-mule	#<Encoding:Emacs-Mule>
+chr: cesu-8	"\u00C6"
+chr: utf8-mac	"\uC3A9"
+conv identity	Encoding::ConverterNotFoundError: code converter not found (UTF-8 to UTF-8)
+conv per dst (missing)	Encoding::ConverterNotFoundError: code converter not found (UTF-8 to UTF-8)
+conv per src (missing)	Encoding::ConverterNotFoundError: code converter not found (UTF-8 to UTF-8)
+conv dummies	Encoding::ConverterNotFoundError: code converter not found (UTF-8 to ISO-2022-JP-2)
+convpath pairs	[8742, 94, 94]
+convpath pairs by src	[["macUkraine", 93], ["macTurkish", 93], ["macRomania", 93], ["macRoman", 93], ["macIceland", 93], ["macGreek", 93], ["macCyrillic", 93], ["macCroatian", 93], ["IBM869", 93], ["IBM866", 93], ["IBM865", 93], ["IBM864", 93], ["IBM863", 93], ["IBM862", 93], ["IBM861", 93], ["IBM860", 93], ["IBM857", 93], ["CP855", 93], ["IBM855", 93], ["CP852", 93], ["IBM852", 93], ["CP850", 93], ["IBM775", 93], ["IBM737", 93], ["SJIS-SoftBank", 93], ["UTF8-SoftBank", 93], ["stateless-ISO-2022-JP-KDDI", 93], ["ISO-2022-JP-KDDI", 93], ["SJIS-KDDI", 93], ["UTF8-KDDI", 93], ["SJIS-DoCoMo", 93], ["UTF8-DoCoMo", 93], ["Windows-874", 93], ["TIS-620", 93], ["Windows-1255", 93], ["Windows-1256", 93], ["CP50221", 93], ["CP50220", 93], ["ISO-2022-JP", 93], ["GB12345", 93], ["GB2312", 93], ["EUC-JIS-2004", 93], ["CP51932", 93], ["eucJP-ms", 93], ["stateless-ISO-2022-JP", 93], ["IBM037", 93], ["CP951", 93], ["CP950", 93], ["IBM720", 93], ["ISO-8859-4", 93], ["ISO-8859-3", 93], ["ISO-8859-2", 93], ["ISO-8859-1", 93], ["GBK", 93], ["GB18030", 93], ["EUC-KR", 93], ["CP949", 93], ["CESU-8", 93], ["Big5-UAO", 93], ["Big5-HKSCS", 93], ["Big5", 93], ["Windows-31J", 93], ["EUC-JP", 93], ["UTF8-MAC", 93], ["UTF-32", 93], ["UTF-16", 93], ["UTF-32LE", 93], ["UTF-32BE", 93], ["UTF-16LE", 93], ["UTF-16BE", 93], ["US-ASCII", 93], ["UTF-8", 93], ["ASCII-8BIT", 93], ["IBM437", 93], ["Windows-1257", 93], ["Windows-1254", 93], ["Windows-1253", 93], ["Windows-1252", 93], ["Windows-1251", 93], ["Windows-1250", 93], ["Shift_JIS", 93], ["KOI8-U", 93], ["KOI8-R", 93], ["ISO-8859-16", 93], ["ISO-8859-15", 93], ["ISO-8859-14", 93], ["ISO-8859-5", 93], ["ISO-8859-13", 93], ["ISO-8859-11", 93], ["ISO-8859-6", 93], ["ISO-8859-7", 93], ["ISO-8859-8", 93], ["ISO-8859-9", 93], ["ISO-8859-10", 93], ["macThai", 0], ["macCentEuro", 0], ["UTF-7", 0], ["MacJapanese", 0], ["EUC-TW", 0], ["GB1988", 0], ["Emacs-Mule", 0], ["Windows-1258", 0], ["ISO-2022-JP-2", 0]]
+ivar euc name	[[#<Encoding:EUC-JP>], nil, 1]
+ivar u8 name	[[:"@\u3042"], [#<Encoding:UTF-8>], nil]
+ivar bin name	[[#<Encoding:BINARY (ASCII-8BIT)>], nil]
+ivar bin bad	[":\"@\\xFF\""]
+cvar/const euc name	NameError: uninitialized constant #<Class:0x00007fc3a669fca0>::Xあ
+const_set bad enc	1
+method name euc	NoMethodError: undefined method 'あ' for an instance of #<Class:0x00007fc3a669f340>
+send bin name	NoMethodError: undefined method 'あ' for an instance of #<Class:0x00007fc3a669eee0>
+send u16 name	NoMethodError: (no message: Encoding::CompatibilityError)
+send bad bytes	NoMethodError: undefined method '�' for an instance of Object
+send empty	NoMethodError: undefined method '' for an instance of Object
+respond_to bad bytes	false
+define_method bad bytes	:"\xFF"
+alias euc	NoMethodError: undefined method 'あ' for an instance of #<Class:0x00007fc3a669de00>
+Struct euc member	NoMethodError: undefined method 'あ' for an instance of #<Class:0x00007fc3a669d720>
+Hash kw euc	[nil, [#<Encoding:EUC-JP>], [:"\x{A4A2}"]]
+Symbol#to_proc bin	NoMethodError: undefined method 'あ' for an instance of #<Class:0x00007fc3a669cdc0>
+String#% euc fmt	[#<Encoding:EUC-JP>, #<Encoding:EUC-JP>, "\u3042", #<Encoding:EUC-JP>, #<Encoding:EUC-JP>, [164, 162], "invalid character", [227, 129, 130], #<Encoding:EUC-JP>, #<Encoding:UTF-8>, [255], "12354 out of char range", "\x{A4A2}   |", "\u3042   |", "   \u{1F363}|", "\x{A4A2}|", "\u{1F363}|", "a", "ASCII incompatible encoding: UTF-16LE", #<Encoding:EUC-JP>, "incompatible character encodings: EUC-JP and UTF-8", #<Encoding:BINARY (ASCII-8BIT)>, "incompatible character encodings: BINARY (ASCII-8BIT) and UTF-8", #<Encoding:UTF-8>, #<Encoding:UTF-8>, #<Encoding:UTF-8>, #<Encoding:EUC-JP>, #<Encoding:EUC-JP>, "    \x{C7D1}|", "\u2020\u6120\u6200\x7C", [199, 209, 199, 209, 124]]
+regex literal escapes	Encoding::UndefinedConversionError: U+3042 from UTF-8 to Big5

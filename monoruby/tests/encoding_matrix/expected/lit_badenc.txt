@@ -1,0 +1,5 @@
+lit/badenc.rb: lit/badenc.rb:1: unknown or invalid encoding in the magic comment (ArgumentError)
+> 1 | # encoding: nonexistent-enc
+    |             ^~~~~~~~~~~~~~~
+  2 | puts __ENCODING__
+

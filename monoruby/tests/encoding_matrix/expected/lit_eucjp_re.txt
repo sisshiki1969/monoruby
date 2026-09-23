@@ -1,0 +1,1 @@
+[#<Encoding:EUC-JP>, true, 0]

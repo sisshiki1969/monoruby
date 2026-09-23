@@ -1,0 +1,182 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+#
+# bin/encoding-matrix — run the encoding probe scripts under
+# monoruby/tests/encoding_matrix/ against a monoruby binary and diff every
+# row against the output CRuby (the pinned version) gave for it.
+#
+#   bin/encoding-matrix                       # target/debug/monoruby vs expected/
+#   bin/encoding-matrix --bin target/release/monoruby strmatrix misc
+#   bin/encoding-matrix --base /tmp/before    # also: rows that regressed / got fixed since a run saved there
+#   bin/encoding-matrix --record              # refresh expected/ from the `ruby` on PATH (must be the pin)
+#
+# The actual outputs land in target/encoding_matrix/ (or --out DIR); a run's
+# directory can be handed to a later run as --base, which is how a PR shows
+# "N rows fixed, 0 regressed" against the commit it started from. Exit
+# status is 1 when --base is given and something regressed, 0 otherwise.
+#
+# Same idea as monoruby/tests/ruby_oracle.tsv: CRuby's answer is recorded
+# once and replayed, so a run needs no CRuby at all; only --record does.
+
+require "optparse"
+require "open3"
+require "fileutils"
+
+ROOT = File.expand_path("..", __dir__)
+DIR = File.join(ROOT, "monoruby", "tests", "encoding_matrix")
+EXPECTED = File.join(DIR, "expected")
+PIN = File.read(File.join(ROOT, "monoruby", "vendor", "ruby-stdlib", ".ruby-version")).strip
+
+# name => [script, env, key columns, isolation]. A row is identified by its
+# first `key` tab-separated fields (so a crash that drops rows does not
+# shift every later one), or by its position when `key` is nil.
+#
+# A script that crashes the interpreter takes the rest of its rows with
+# it, so the two big ones can be run a unit at a time: `isolation` names
+# the env var that selects one unit (the script lists them for
+# `LIST=units`) and, for strmatrix, the `SKIP` var that leaves out the
+# case that crashed, so the unit resumes after it. Only used when the
+# whole-script run exits unsuccessfully.
+JOBS = {
+  "strmatrix" => ["strmatrix.rb", {}, 2, ["ONLY_INPUT", "SKIP"]],
+  "misc" => ["misc.rb", {}, 1],
+  "misc2" => ["misc2.rb", {}, 1, ["ONLY", nil]],
+  "ioenc@C" => ["ioenc.rb", { "LANG" => "", "LC_ALL" => nil, "LC_CTYPE" => nil }, 1],
+  "ioenc@C.UTF-8" => ["ioenc.rb", { "LANG" => "C.UTF-8", "LC_ALL" => nil, "LC_CTYPE" => nil }, 1],
+  "conv_cov" => ["conv_cov.rb", {}, 2],
+  "hop2" => ["hop2.rb", {}, nil],
+}
+# Each source-literal script is one row: its whole stdout+stderr, run from
+# the matrix directory so the paths in an error message are the same on
+# both sides.
+Dir.glob(File.join(DIR, "lit", "*.rb")).sort.each do |f|
+  JOBS["lit/#{File.basename(f, ".rb")}"] = ["lit/#{File.basename(f)}", {}, :whole]
+end
+
+opts = {
+  bin: File.join(ROOT, "target", "debug", "monoruby"),
+  out: File.join(ROOT, "target", "encoding_matrix"),
+  record: false,
+  base: nil,
+  show: 10,
+}
+OptionParser.new do |o|
+  o.banner = "usage: bin/encoding-matrix [options] [JOB...]   (jobs: #{JOBS.keys.join(' ')})"
+  o.on("--bin PATH", "monoruby binary (default target/debug/monoruby)") { |v| opts[:bin] = v }
+  o.on("--out DIR", "where to write this run's outputs") { |v| opts[:out] = v }
+  o.on("--base DIR", "a previous run's --out DIR to report regressions against") { |v| opts[:base] = v }
+  o.on("--record", "refresh expected/ from the CRuby on PATH") { opts[:record] = true }
+  o.on("--show N", Integer, "how many differing rows to print per job (default 10)") { |v| opts[:show] = v }
+end.parse!
+names = ARGV.empty? ? JOBS.keys : ARGV
+unknown = names - JOBS.keys
+abort "unknown job(s): #{unknown.join(' ')}" unless unknown.empty?
+
+def capture(cmd, script, env)
+  Open3.capture3(env, *cmd, script, chdir: DIR, binmode: true)
+end
+
+# Run `script` whole; when that crashes and the job can be isolated, run
+# it a unit at a time instead, recording a `CRASH` row for each case that
+# took the process down and resuming the unit after it.
+def run_job(cmd, script, env, whole, isolation)
+  out, err, status = capture(cmd, script, env)
+  return [whole ? out + err : out, err, status] if status.success? || whole || isolation.nil?
+
+  only, skip = isolation
+  units = capture(cmd, script, env.merge("LIST" => "units"))[0].split("\n")
+  cases = skip ? capture(cmd, script, env.merge("LIST" => "cases"))[0].split("\n") : nil
+  out = +""
+  crashes = 0
+  units.each do |unit|
+    skips = []
+    loop do
+      unit_env = env.merge(only => unit)
+      unit_env[skip] = skips.join("|") if skip
+      text, uerr, ustatus = capture(cmd, script, unit_env)
+      out << text
+      break if ustatus.success?
+      crashes += 1
+      last_line = uerr.lines.last&.chomp
+      # Without a case list the unit is one row: it crashed, next unit.
+      unless cases
+        out << "#{unit}\tCRASH: #{last_line}\n"
+        break
+      end
+      # The case after the last one printed is the one that crashed.
+      printed = text.split("\n").filter_map { |l| l.split("\t")[1] }
+      next_case = printed.empty? ? cases.first : cases[cases.index(printed.last).to_i + 1]
+      break unless next_case
+      out << "#{unit}\t#{next_case}\tCRASH: #{last_line}\n"
+      skips << "#{unit}\t#{next_case}"
+    end
+  end
+  [out, "#{crashes} crash(es), see the CRASH rows", status]
+end
+
+def rows(text, key)
+  lines = text.split("\n", -1)
+  lines.pop if lines.last == ""
+  return { "" => text } if key == :whole
+  seen = Hash.new(0)
+  lines.each_with_index.to_h do |line, i|
+    k = key ? line.split("\t", key + 1)[0, key].join("\t") : i.to_s
+    n = (seen[k] += 1)
+    [n == 1 ? k : "#{k}##{n}", line]
+  end
+end
+
+if opts[:record]
+  v = `ruby -e 'print RUBY_VERSION'`.strip
+  abort "ruby on PATH is #{v.inspect}, the pin is #{PIN}" unless v == PIN
+  FileUtils.mkdir_p(EXPECTED)
+  names.each do |name|
+    script, env, key, isolation = JOBS[name]
+    text, err, status = run_job(["ruby"], script, env, key == :whole, isolation)
+    warn "#{name}: ruby exited #{status.exitstatus}: #{err.lines.last&.chomp}" unless status.success? || key == :whole
+    File.binwrite(File.join(EXPECTED, "#{name.tr('/', '_')}.txt"), text)
+    puts "#{name}: #{rows(text, key).size} rows recorded"
+  end
+  exit
+end
+
+abort "no such binary: #{opts[:bin]}" unless File.executable?(opts[:bin])
+FileUtils.mkdir_p(opts[:out])
+total = { rows: 0, diff: 0, regressed: 0, fixed: 0 }
+names.each do |name|
+  script, env, key, isolation = JOBS[name]
+  file = "#{name.tr('/', '_')}.txt"
+  expected_path = File.join(EXPECTED, file)
+  abort "#{expected_path} is missing: run with --record first" unless File.exist?(expected_path)
+  expected = rows(File.binread(expected_path), key)
+  text, err, status = run_job([opts[:bin]], script, env, key == :whole, isolation)
+  File.binwrite(File.join(opts[:out], file), text)
+  actual = rows(text, key)
+  base = opts[:base] && File.exist?(File.join(opts[:base], file)) ? rows(File.binread(File.join(opts[:base], file)), key) : nil
+
+  differing = expected.keys.reject { |k| actual[k] == expected[k] }
+  regressed = base ? differing.select { |k| base[k] == expected[k] } : []
+  fixed = base ? expected.keys.select { |k| actual[k] == expected[k] && base[k] != expected[k] } : []
+  total[:rows] += expected.size
+  total[:diff] += differing.size
+  total[:regressed] += regressed.size
+  total[:fixed] += fixed.size
+
+  line = "#{name}: #{differing.size} / #{expected.size} differ"
+  line << ", #{fixed.size} fixed, #{regressed.size} regressed" if base
+  unless status.success? || key == :whole
+    how = status.exitstatus ? "exited #{status.exitstatus}" : "died of signal #{status.termsig}"
+    line << "  (monoruby #{how}: #{err.lines.last&.chomp})"
+  end
+  puts line
+  (regressed + (differing - regressed)).first(opts[:show]).each do |k|
+    tag = regressed.include?(k) ? "REGRESSED" : "differs"
+    puts "  #{tag} #{k.inspect}"
+    puts "    cruby:    #{expected[k].to_s.lines.first&.chomp&.[](0, 200)}"
+    puts "    monoruby: #{actual[k].to_s.lines.first&.chomp&.[](0, 200) || '(no row)'}"
+  end
+end
+summary = "total: #{total[:diff]} / #{total[:rows]} differ"
+summary << ", #{total[:fixed]} fixed, #{total[:regressed]} regressed" if opts[:base]
+puts summary
+exit(opts[:base] && total[:regressed] > 0 ? 1 : 0)
