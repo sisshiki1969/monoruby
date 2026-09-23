@@ -4192,6 +4192,7 @@ d89844a24a8754c60971a99f315b939c	[[["b", "c", "d", "a"], ["a", "b", "c", "d"]], 
 d8b0d018647384bbab864dd283908894	[:x, :y]	D = Data.define(:x, :y)\nClass.new(D).new(1, 2).members
 d8ec5385ee072765ba7b565e51313657	[777, 777]	class Integer\n          def sub_impl(o); 777; end\n        end\n        $
 d8f147478a0d2e314a65bdef053bb15f	[[MatchData, "o", "hell", " world", 4, 5, ["o"]], nil, ["o", 7, "hello w"], nil, [2, "hé"], ["b", "aBc"], nil, true, "\\\\[", "\\\\.", ".", "y", "t"]	s = "hello world"\n        r = []\n        s.sub("o", "0"); r << [$~.clas
+d8f7673bc84dc4314710c6f19ad37ceb	["UTF-16LE", "UTF-16LE", true, "UTF-8", "EUC-JP", "UTF-8", "US-ASCII", "UTF-8", Encoding::CompatibilityError, "UTF-8", "UTF-8", "UTF-8", "UTF-16LE", "UTF-16LE", "UTF-16LE", Encoding::CompatibilityError]	u16 = "a".encode("UTF-16LE"); j = "\\u3042"\n            [[u16].join(
 d8fb88ad23d8c193bfeb4977788bff5e	["US-ASCII", "US-ASCII"]	class EncName\n          def to_str = "US-ASCII"\n        end\n        [\n 
 d9300c97f073adabeb7a50ccd6acbd23	0..300	a=1\n            b = for a in 0..300 do\n            end\n            
 d937a0a05e129d6461564c4b72d2b8e9	[2, -1, [[:req, :a], [:req, :b]], true, 30]	class C\n              def f(a, b); a + b; end\n              def g(*
