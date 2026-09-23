@@ -809,13 +809,16 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
             // names, and CRuby converts them exactly as it does Big5
             // (#1567). The walk knows them already — #1563 gave them
             // `big5_precise_len`.
-            "Big5" | "Big5-HKSCS" | "CP950" | "CP951" => b"big5",
-            "GBK" | "GB2312" => b"gbk",
+            // Big5-UAO and GB12345 read through the same codecs as
+            // their neighbours, corrected cell by cell by the tables
+            // `bin/gen-cjk-tables` reads off CRuby (#1520).
+            "Big5" | "Big5-HKSCS" | "Big5-UAO" | "CP950" | "CP951" => b"big5",
+            "GBK" | "GB2312" | "GB12345" => b"gbk",
             "GB18030" => b"gb18030",
             "EUC-KR" | "CP949" => b"euc-kr",
-            // Big5-UAO / EUC-TW / GB12345 and the DOS codepages other
-            // than IBM866 have no encoding_rs codec; IBM437 is served
-            // by the in-tree single-byte table instead.
+            // EUC-TW and the DOS codepages other than IBM866 have no
+            // encoding_rs codec; IBM437 is served by the in-tree
+            // single-byte table instead.
             _ => return None,
         },
         // Handled by callers as fast paths / no native codec.
@@ -1670,6 +1673,15 @@ fn cell_table(enc: crate::value::Encoding) -> Option<&'static super::encoding_cj
             "GB2312" => Some(&super::encoding_cjk::GB2312),
             "GBK" => Some(&super::encoding_cjk::GBK),
             "Big5" => Some(&super::encoding_cjk::BIG5),
+            // The other two Big5s read through the same `big5` codec:
+            // HKSCS differs from WHATWG's HKSCS-2008 in a few cells
+            // and UAO in thousands, and both have rows below `0xA1`
+            // that Big5 does not (#1500, #1520).
+            "Big5_HKSCS" => Some(&super::encoding_cjk::BIG5_HKSCS),
+            "Big5_UAO" => Some(&super::encoding_cjk::BIG5_UAO),
+            // GB2312's grid with the traditional forms in it, read
+            // through `gbk` as GB2312 is (#1520).
+            "GB12345" => Some(&super::encoding_cjk::GB12345),
             // Microsoft's Big5 rather than CRuby's: thousands of
             // extra cells and a best-fit encoder, so they carry
             // tables of their own (#1567).
@@ -1831,7 +1843,7 @@ fn cell_decode<'a>(
             invalid_at: None,
         }
     };
-    let Some((max_len, precise)) = crate::value::mbc_walker(enc) else {
+    let Some((max_len, precise)) = conversion_walker(enc) else {
         return plain(bytes);
     };
     // A table encoding reads every cell through its own table, so the
@@ -3882,7 +3894,19 @@ pub(super) fn transcode_bytes_with_opts(
         } else {
             let repl = opts.undef_replace.then(|| opts.replace_str(dst_enc));
             let d = cell_decode(src_enc, src_rs, None, src_bytes, repl.as_deref());
-            if let Some(cell) = d.unmapped {
+            // A malformed run *before* the cell is what CRuby reports,
+            // unless it is being substituted: `"\x8A\x8F\xA1"` in Big5
+            // is `"\x8A"` followed by `"\x8F"`, and the cell `8F A1`
+            // after it, which the table has no character for, comes
+            // second.
+            let invalid_first = !opts.invalid_replace
+                && d.had_invalid
+                && d.invalid_at
+                    .zip(d.unmapped_at)
+                    .is_some_and(|(invalid, unmapped)| invalid < unmapped);
+            if let Some(cell) = d.unmapped
+                && !invalid_first
+            {
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,
                     undefined_cell_message(&cell, src_enc, dst_enc),
@@ -7260,7 +7284,7 @@ fn carrier_stream(
     }
     // How much of the source reads as whole characters of its own
     // encoding. A carrier's walk is its base's.
-    let good = match crate::value::mbc_walker(src_enc) {
+    let good = match conversion_walker(src_enc) {
         Some((_, precise)) => {
             let mut at = 0;
             while at < src_bytes.len() {
@@ -7287,7 +7311,7 @@ fn carrier_stream(
             let mut written: Vec<u8> = vec![];
             let mut at = 0;
             while at < good {
-                let n = match crate::value::mbc_walker(src_enc) {
+                let n = match conversion_walker(src_enc) {
                     Some((_, precise)) => match precise(src_bytes, at) {
                         crate::value::PreciseLen::Char(n) if n > 0 => n,
                         _ => break,
@@ -9093,15 +9117,40 @@ fn first_bad_sequence(enc: crate::value::Encoding, bytes: &[u8]) -> Option<(Vec<
     }
 }
 
+/// Whether `enc` is one of the Big5 family, whose transcoders in
+/// CRuby cut their input differently from the encoding's own walk.
+fn is_big5_family(enc: crate::value::Encoding) -> bool {
+    matches!(enc, crate::value::Encoding::NamedByte(i)
+        if matches!(
+            crate::value::named_byte_const_name(i),
+            "Big5" | "Big5_HKSCS" | "Big5_UAO" | "CP950" | "CP951"
+        ))
+}
+
+/// The walk a *conversion* cuts `enc`'s bytes with: the encoding's own
+/// (`mbc_walker`, what `#valid_encoding?` answers from) for every
+/// encoding but the Big5 family, whose transcoders in CRuby read every
+/// byte from `0x81` to `0xFE` as a lead where the encoding object
+/// starts at `0xA1`. So `"\x81\x40"` is `valid_encoding? == false`
+/// in Big5 and still a well-formed cell to the converter — one the
+/// table has no character for, which is an undefined conversion, not
+/// a malformed sequence — and Big5-HKSCS reads its rows below `0xA1`
+/// (#1500).
+fn conversion_walker(
+    enc: crate::value::Encoding,
+) -> Option<(usize, fn(&[u8], usize) -> crate::value::PreciseLen)> {
+    if is_big5_family(enc) {
+        return Some((2, crate::value::rvalue::big5_transcoder_len));
+    }
+    crate::value::mbc_walker(enc)
+}
+
 /// Whether `enc`'s walk can be asked where a malformed run reaches.
 ///
 /// It can when the walk and the converter agree about which sequences
-/// exist. CRuby's Big5 family and CP949 are the ones where they do
-/// not: `"\x8A\xA1"` is `valid_encoding? == false` in Big5 and yet
-/// an *undefined conversion* rather than a malformed one, because its
-/// transcoder reads leads its encoding object does not. Their runs
-/// stay with the codec, which is closer to that second answer; the
-/// gap itself is #1500's.
+/// exist — which for the Big5 family means [`conversion_walker`]'s
+/// walk, the transcoder's own shape. CP949 is the one where they do
+/// not: its runs stay with the codec.
 fn walk_reports_runs(enc: crate::value::Encoding) -> bool {
     use crate::value::Encoding as E;
     match enc {
@@ -9111,6 +9160,7 @@ fn walk_reports_runs(enc: crate::value::Encoding) -> bool {
             // CESU-8's walk is the converter — the conversion out of
             // it *is* that walk — so the two cannot disagree (#1562).
             "EUC_KR" | "GB2312" | "GB12345" | "EUC_TW" | "GBK" | "GB18030" | "CESU_8"
+                | "Big5" | "Big5_HKSCS" | "Big5_UAO" | "CP950" | "CP951"
         ),
         _ => false,
     }
@@ -9125,9 +9175,8 @@ fn walk_reports_runs(enc: crate::value::Encoding) -> bool {
 /// tells "this cell exists and maps to nothing" (an undefined
 /// conversion) from "these bytes are malformed" (#1565).
 ///
-/// The Big5 family is deliberately not here: `big5_precise_len` is
-/// *narrower* than CRuby's Big5-HKSCS transcoder, so reading through
-/// it would reject 3,908 cells the codec reads correctly today.
+/// The Big5 family reads through its tables instead, cut by the
+/// transcoder's own walk (`conversion_walker`).
 fn cell_decode_reads_cells(enc: crate::value::Encoding) -> bool {
     matches!(enc, crate::value::Encoding::NamedByte(i)
         if crate::value::named_byte_const_name(i) == "CP949")
@@ -9146,7 +9195,7 @@ fn first_bad_via_walk(
     enc: crate::value::Encoding,
     bytes: &[u8],
 ) -> Option<(Vec<u8>, Vec<u8>, bool)> {
-    let (_, precise) = crate::value::mbc_walker(enc)?;
+    let (_, precise) = conversion_walker(enc)?;
     first_bad_via_precise(precise, bytes)
 }
 
@@ -9201,7 +9250,7 @@ fn dst_can_hold(enc: crate::value::Encoding, bytes: &[u8]) -> bool {
     if cfg!(feature = "no-cjk-tables") {
         return true;
     }
-    let Some((_, precise)) = crate::value::mbc_walker(enc) else {
+    let Some((_, precise)) = conversion_walker(enc) else {
         return true;
     };
     let mut at = 0;

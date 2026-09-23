@@ -190,6 +190,30 @@ pub(crate) fn big5_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
     }
 }
 
+/// Classify the sequence starting at `bytes[pos]` the way CRuby's
+/// *transcoders* for the Big5 family cut their input, which is wider
+/// than the walk `#valid_encoding?` answers from: every byte from
+/// `0x81` to `0xFE` leads a cell there, with the trail from
+/// `0x40..=0x7E` or `0xA1..=0xFE`. So `"\x81\x40"` is a cell the
+/// encoding has no character for — an *undefined* conversion, not a
+/// malformed one — while the same bytes are `valid_encoding? == false`
+/// (#1500). Big5-HKSCS and Big5-UAO fill rows below `0xA1` that Big5
+/// itself leaves empty, and all of them read through this one shape.
+pub(crate) fn big5_transcoder_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    match lead {
+        0x00..=0x7f => PreciseLen::Char(1),
+        0x81..=0xfe => match bytes.get(pos + 1) {
+            None => PreciseLen::NeedMore,
+            Some(0x40..=0x7e | 0xa1..=0xfe) => PreciseLen::Char(2),
+            Some(_) => PreciseLen::Invalid,
+        },
+        _ => PreciseLen::Invalid,
+    }
+}
+
 /// Classify the GBK sequence starting at `bytes[pos]`.
 ///
 /// `0x80` stands alone, `0x81..=0xFE` leads, and the trail is

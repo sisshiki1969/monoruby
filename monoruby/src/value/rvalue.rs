@@ -52,7 +52,7 @@ pub(crate) use string::{
     stateless_iso2022jp_transcode_len, named_byte_index,
     iso2022jp_to_stateless, stateless_to_iso2022jp,
     iso2022jp_to_stateless_from, stateless_to_iso2022jp_from,
-    sjis_precise_len, walk_mbc, walk_mbc_with,
+    sjis_precise_len, walk_mbc, walk_mbc_with, big5_transcoder_len,
 };
 pub(crate) use string::{
     STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer, string_snapshot,
