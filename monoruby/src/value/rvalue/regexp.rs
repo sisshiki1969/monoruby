@@ -1,9 +1,43 @@
 use super::*;
 use onigmo_regex::{Captures, FindCaptures, OnigmoEncoding, Regex};
+use crate::fork::{ForkGuard, ForkableRwLock};
 use std::sync::Arc;
-use std::sync::{LazyLock, RwLock};
 
-static REGEX_CACHE: LazyLock<RwLock<RegexCache>> = LazyLock::new(|| RwLock::new(RegexCache::new()));
+/// Process-global like the identifier table, and taken for writing by
+/// every compile that misses, so a `fork(2)` on one OS thread can catch
+/// another thread inside it; the forking thread takes it first
+/// ([`prepare_fork`]) and the child replaces it (`crate::fork`).
+static REGEX_CACHE: ForkableRwLock<RegexCache> = ForkableRwLock::new(RegexCache::new);
+
+/// The native-encoding compile cache (see [`RegexpInner::native_regex`]):
+/// the regular [`REGEX_CACHE`] is keyed on the UTF-8-view pattern, native
+/// compiles use the raw source bytes, so they get their own.
+type NativeRegexCache = HashMap<(Vec<u8>, u32, OnigmoEncoding), Arc<Regex>>;
+static NATIVE_CACHE: ForkableRwLock<NativeRegexCache> =
+    ForkableRwLock::new(NativeRegexCache::default);
+
+/// Both compile caches' locks, held across a `fork(2)` — see
+/// [`crate::fork`].
+pub(crate) struct ForkLocks {
+    cache: ForkGuard<RegexCache>,
+    native: ForkGuard<NativeRegexCache>,
+}
+
+/// Take both caches' locks for a `fork(2)` — see [`ForkLocks`].
+pub(crate) fn prepare_fork() -> ForkLocks {
+    ForkLocks {
+        cache: REGEX_CACHE.prepare_fork(),
+        native: NATIVE_CACHE.prepare_fork(),
+    }
+}
+
+impl ForkLocks {
+    /// The child's side — see [`ForkGuard::reset_child`].
+    pub(crate) fn reset_child(self) {
+        self.cache.reset_child();
+        self.native.reset_child();
+    }
+}
 
 thread_local! {
     /// Compile-time diagnostics Onigmo reported for regexps built
@@ -1402,12 +1436,8 @@ impl RegexpInner {
     }
 
     /// Compile (with caching) the *source bytes* of this regex under
-    /// `enc` for a native-encoding byte match. The regular
-    /// [`REGEX_CACHE`] is keyed on the UTF-8-view pattern; native
-    /// compiles use the raw source bytes, so they get their own cache.
+    /// `enc` for a native-encoding byte match, through [`NATIVE_CACHE`].
     fn native_regex(&self, enc: OnigmoEncoding) -> Result<Arc<Regex>> {
-        static NATIVE_CACHE: LazyLock<RwLock<HashMap<(Vec<u8>, u32, OnigmoEncoding), Arc<Regex>>>> =
-            LazyLock::new(|| RwLock::new(HashMap::default()));
         if let Some(re) = self.native.get()
             && self.native_enc.get() == enc
         {

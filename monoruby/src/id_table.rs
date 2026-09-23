@@ -2,11 +2,25 @@ use crate::ast::CmpKind;
 use crate::bytecodegen::{BinOpK, UnOpK};
 
 use super::*;
+use crate::fork::ForkableRwLock;
 use std::num::NonZeroU32;
-use std::sync::{LazyLock, RwLock};
 
-static ID: LazyLock<RwLock<IdentifierTable>> =
-    LazyLock::new(|| RwLock::new(IdentifierTable::new()));
+/// The table is one per process, shared by every OS thread that runs an
+/// interpreter (the test harness runs one per test thread over it). A
+/// `fork(2)` that catches another thread mid-intern would leave the
+/// child a lock held by a thread it does not have, blocking its first
+/// `get_id` — `File.open` (`init_io_encodings`), or anything else — so
+/// the forking thread takes the lock first ([`prepare_fork`]) and the
+/// child replaces it (`crate::fork`).
+static ID: ForkableRwLock<IdentifierTable> = ForkableRwLock::new(IdentifierTable::new);
+
+/// The table's lock, held across a `fork(2)` — see [`crate::fork`].
+pub(crate) type ForkLock = crate::fork::ForkGuard<IdentifierTable>;
+
+/// Take the table's lock for a `fork(2)` — see [`ForkLock`].
+pub(crate) fn prepare_fork() -> ForkLock {
+    ID.prepare_fork()
+}
 
 ///
 /// Identifier name: either a valid UTF-8 string or raw bytes (binary/ASCII-8BIT).

@@ -477,6 +477,32 @@ poll(2) で readiness を待てるもの(ソケット等)はスケジューラ�
   誰も解放しないロックを受け継ぎ、最初の `lock()` で永久に止まる。
   `do_spawn` も同じ扱いにしてある(その子は exec するだけでこれらのロックを取らないが、
   「すべての fork(2) は pool を静止させてから」という不変条件を揃えておく)。
+- **同じ危険はプロセスグローバルなロック全部にある** —— 識別子テーブル
+  (`id_table::ID`)、正規表現のコンパイルキャッシュ(`REGEX_CACHE` / `NATIVE_CACHE`)、
+  標準ストリームのバッファ(`STDIN_BUF` / `STDOUT_BUF` / `STDERR_BUF`)。monoruby 自身の
+  スレッドは green なのでインタプリタスレッドが自分と競合することはないが、複数の
+  インタプリタを別 OS スレッドで走らせる embedder(テストハーネスはテストスレッドごとに
+  1 つ走らせる)では、fork の瞬間に別スレッドがどれかを握っていることがある。実際に
+  `forking_while_a_thread_keeps_offloading` の子が `File.open` → `IdentId::get_id` で
+  止まった(識別子テーブルの `RwLock` を別スレッドが握っていた)。`crate::fork::prepare`
+  がこれらすべてを pool のロックと一緒に、固定順で、フォークするスレッド上で取る
+  (どのパスもこれらを入れ子では取らないので、この順で他スレッドとデッドロックしない)。
+  親は guard を drop、子は `ForkGuards::reset_child` で pool とタイマの状態を捨てつつ
+  解放する。`Process._fork` / `Process.daemon` / `do_spawn` の 3 箇所の `fork(2)` は
+  すべてここを通る。`fork::tests` に、別 OS スレッドが intern し続ける中で 200 回 fork
+  する再現テストがある(修正前は最初の 10 秒で子が止まる)。
+  ただし子が受け継いだ `RwLock` を **unlock してはいけない**: Linux の std `RwLock` は
+  futex 語で、子での unlock は store と誰も起こさない wake だが、Apple では queue lock
+  (`std::sys::sync::rwlock::queue`)で、unlock は親の待機スレッドがスタックに残した
+  ノードを辿って各スレッドを `dispatch_semaphore` で起こしにいく —— libdispatch は
+  マルチスレッドプロセスの fork 子で trap する(darwin ランナーで、fork 時に待機者が
+  いた最初の回に `SIGTRAP`)。そこで識別子テーブルと正規表現キャッシュは
+  `fork::ForkableRwLock`(`AtomicPtr<RwLock<T>>` の間接参照)にし、子は自分が持つ
+  guard 越しにデータを `mem::take` で取り出し、guard を `forget` して、新しい lock を
+  差し込む。受け継いだ lock はロックされたまま leak し、二度と触らない
+  (`preempt::ForkState` がタイマの mutex にしているのと同じ)。`Mutex`(ストリーム、
+  pool)は Apple では pthread、Linux では futex で、所有者による子での unlock は
+  誰も起こさない普通の unlock なので、そのまま drop する。
 - **完了パイプは子で作り直す**(`replace_pipe`)。`fork(2)` が複製するのは fd テーブルで
   あってパイプではないので、親子が同じバッファを読み書きすることになる。親の waiter が
   取るはずだった完了バイトを子の `drain` が飲んでしまうと、その waiter は結果が
