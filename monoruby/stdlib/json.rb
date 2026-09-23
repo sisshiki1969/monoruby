@@ -16,7 +16,24 @@ module JSON
 
   class JSONError < StandardError; end
   class ParserError < JSONError; end
-  class GeneratorError < JSONError; end
+  class GeneratorError < JSONError
+    attr_reader :invalid_object
+
+    def initialize(message, invalid_object = nil)
+      super(message)
+      @invalid_object = invalid_object
+    end
+
+    def detailed_message(...)
+      super_message = super
+
+      if @invalid_object.nil?
+        super_message
+      else
+        "#{super_message}\nInvalid object: #{@invalid_object.inspect}"
+      end
+    end
+  end
   class NestingError < JSONError; end
 
   NaN = Float::NAN
