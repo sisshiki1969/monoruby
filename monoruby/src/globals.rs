@@ -1008,49 +1008,50 @@ impl Globals {
             IdentId::get_id("BasicObject"),
             basic_object.get(),
         );
+        // The seven bodies below are only ever entered by their
+        // FuncId — the Enumerator and Proc machinery hands it over
+        // directly — so none of them is a method of Object. They used
+        // to be, under the empty name, and `Object.new.send("")`
+        // reached the last of them with no arguments: the adapter's
+        // `as_array` on the receiver aborted the process (#1621).
+        let cap = crate::executor::frame::VARIADIC_CAP;
         assert_eq!(
             ENUM_YIELDER_FUNCID,
-            globals.define_builtin_func(OBJECT_CLASS, "", enum_yielder, 0)
+            globals.define_anonymous_builtin(enum_yielder, 0, 0, false, &[], false)
         );
         assert_eq!(
             YIELDER_FUNCID,
-            globals.define_builtin_func_rest(OBJECT_CLASS, "", yielder)
+            globals.define_anonymous_builtin(yielder, 0, 0, true, &[], false)
         );
-        assert_eq!(
-            SYMBOL_TO_PROC_BODY_FUNCID,
-            globals.define_builtin_func_variadic(OBJECT_CLASS, "", symbol_to_proc_body, 1)
-        );
+        assert_eq!(SYMBOL_TO_PROC_BODY_FUNCID, {
+            let fid = globals.define_anonymous_builtin(symbol_to_proc_body, 1, cap, true, &[], false);
+            globals.store[fid].set_native_variadic();
+            fid
+        });
         assert_eq!(METHOD_TO_PROC_BODY_FUNCID, {
             // `(*args, **kw, &blk)`: keywords reach the method as keywords.
-            let fid = globals.define_builtin_funcs_with_kw(
-                OBJECT_CLASS,
-                "",
-                &[],
-                method_to_proc_body,
-                0,
-                crate::executor::frame::VARIADIC_CAP,
-                true,
-                &[],
-                true,
-            );
+            let fid = globals.define_anonymous_builtin(method_to_proc_body, 0, cap, true, &[], true);
             globals.store[fid].set_native_variadic();
             fid
         });
         assert_eq!(
             PROC_CURRY_BODY_FUNCID,
-            globals.define_builtin_func_rest(
-                OBJECT_CLASS,
-                "",
-                crate::builtins::proc::proc_curry_body
+            globals.define_anonymous_builtin(
+                crate::builtins::proc::proc_curry_body,
+                0,
+                0,
+                true,
+                &[],
+                false
             )
         );
         assert_eq!(
             WITH_INDEX_ADAPTER_FUNCID,
-            globals.define_builtin_func_rest(OBJECT_CLASS, "", with_index_adapter)
+            globals.define_anonymous_builtin(with_index_adapter, 0, 0, true, &[], false)
         );
         assert_eq!(
             WITH_OBJECT_ADAPTER_FUNCID,
-            globals.define_builtin_func_rest(OBJECT_CLASS, "", with_object_adapter)
+            globals.define_anonymous_builtin(with_object_adapter, 0, 0, true, &[], false)
         );
         globals.random_init(None);
         gvar::init_builtin_gvars(&mut globals);
