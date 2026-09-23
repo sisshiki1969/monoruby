@@ -6320,12 +6320,20 @@ fn mac_source_stream(
     } else {
         mac_src_offset_for_pivot(head, pivot_consumed)
     };
-    if meta.dst_full_extra > 0 {
+    if matches!(result, StreamConvertResult::DestinationBufferFull) {
         // The cap stopped inside a cluster, and a cluster's source
         // cannot be cut there — it composes as one piece. Take the
         // whole of it and hold the rest of its output for the next
         // call, the way a character split across two calls is held
         // (#1532, #1577).
+        //
+        // This runs whether or not the pipeline read ahead of the cap
+        // itself: a character *inside* a cluster has no source bytes
+        // of its own, so a stop after one leaves `dst_full_extra` at
+        // zero while `consumed` rounds back to the cluster's start.
+        // Saying nothing there held the character's output and
+        // converted it again next call, and `"a\u0301b\u0302c"`
+        // through a one-byte destination never got past the `b`.
         let over = pivot_consumed + meta.dst_full_extra;
         let (piv_end, src_end) = mac_cluster_end_for_pivot(head, over);
         if piv_end > over {
@@ -16008,6 +16016,13 @@ mod tests {
                  io = StringIO.new
                  io.set_encoding("locale")
                  io.external_encoding == Encoding.find("locale")),
+                # The names resolve through `#to_str` coercion too,
+                # which reaches the resolver by a different route than
+                # a String argument does.
+                (o = Object.new
+                 def o.to_str = "locale"
+                 ["abc".dup.force_encoding(o).encoding == Encoding.find("locale"),
+                  String.new("abc", encoding: o).encoding == Encoding.find("locale")]),
                 # `"internal"` is the one of the four that can name
                 # nothing at all: with no `default_internal` CRuby never
                 # registered the alias, so the converters call the name
@@ -16186,17 +16201,27 @@ mod tests {
         // back through a two-byte destination as `"abd"` (#1577).
         run_test_once(
             r#"
-              def drain(src_enc, bytes, dst_enc, cap)
+              def drain(src_enc, bytes, dst_enc, cap, rounds = 8)
                 c = Encoding::Converter.new(src_enc, dst_enc, invalid: :replace)
                 src = bytes.dup.force_encoding(src_enc)
                 dst = String.new(encoding: dst_enc)
                 out = []
-                8.times { c.primitive_convert(src, dst, 0, cap); out << dst.bytes.dup; dst.clear }
+                rounds.times { c.primitive_convert(src, dst, 0, cap); out << dst.bytes.dup; dst.clear }
                 out.flatten
               end
+              # A cap can stop inside a composed cluster, whose source
+              # cannot be cut there — one cluster is one piece of the
+              # pivot. `"a\u0301b\u0302c"` through a one-byte
+              # destination used to hold the `b`'s output and convert
+              # it again next call, and never got past it.
+              nfd = "a\u0301b\u0302c".encode("UTF8-MAC")
               [
                 [drain("UTF8-MAC", "abcd", "UTF-16BE", 2),
                  "abcd".encode("UTF-16BE").bytes],
+                (1..4).map { |cap|
+                  [drain("UTF8-MAC", nfd, "UTF-8", cap, 14),
+                   drain("UTF8-MAC", nfd, "UTF-16BE", cap, 14)] },
+                [nfd.encode("UTF-8").bytes, nfd.encode("UTF-16BE").bytes],
                 [drain("UTF8-MAC", "ab\xffcd", "UTF-16BE", 2),
                  "ab\xffcd".dup.force_encoding("UTF8-MAC").encode("UTF-16BE", invalid: :replace).bytes],
                 [drain("UTF-8", "abcd", "UTF-16BE", 3),
