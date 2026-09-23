@@ -12227,6 +12227,7 @@ fn undump(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/scrub.html]
 #[monoruby_builtin]
 fn scrub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    scrub_one_way_only(lfp)?;
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
     // CRuby looks at the replacement only when it is about to use
@@ -12258,6 +12259,7 @@ fn scrub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/scrub=21.html]
 #[monoruby_builtin]
 fn scrub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    scrub_one_way_only(lfp)?;
     let mut self_ = lfp.self_val();
     if self_.as_rstring_inner().is_valid_encoding() {
         // Already valid: `scrub!` makes no change and (matching CRuby)
@@ -12277,6 +12279,18 @@ fn scrub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     self_.ensure_not_frozen(&globals.store)?;
     *self_.as_rstring_inner_mut() = scrubbed;
     Ok(self_)
+}
+
+/// A replacement and a block name the same thing two ways, and CRuby
+/// refuses the call rather than pick one — before it looks at the
+/// receiver, so a valid one raises just the same, and before it looks
+/// at the argument, so `123` is refused for being given rather than
+/// for not being a String. `nil` counts as no replacement (#1604).
+fn scrub_one_way_only(lfp: Lfp) -> Result<()> {
+    if lfp.block().is_some() && lfp.try_arg(0).is_some_and(|arg| !arg.is_nil()) {
+        return Err(MonorubyErr::argumenterr("both of block and replacement given"));
+    }
+    Ok(())
 }
 
 fn scrub_replacement(globals: &mut Globals, lfp: Lfp, self_enc: Encoding) -> Result<RStringInner> {
