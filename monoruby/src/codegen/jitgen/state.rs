@@ -716,7 +716,9 @@ impl AbstractFrame {
         self.lexical_outer = link;
     }
 
-    pub(super) fn pc(&self) -> BytecodePtr {
+    /// The bytecode being compiled — `pub(crate)` so an inline generator
+    /// can record its call site in the callee frame (`ContFramePc`).
+    pub(crate) fn pc(&self) -> BytecodePtr {
         self.pc.unwrap()
     }
 

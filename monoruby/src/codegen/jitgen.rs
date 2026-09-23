@@ -1045,7 +1045,7 @@ impl JitModule {
     /// CFP+16..+32 region) and place the xmm saves *above* it, so the
     /// call-site pc store (`ContFramePc`, `[rsp]`) and the callee
     /// never touch a live saved float.
-    fn fpr_save_with_cont(&mut self, using_fpr: UsingFpr, cont: bool) {
+    pub(crate) fn fpr_save_with_cont(&mut self, using_fpr: UsingFpr, cont: bool) {
         if using_fpr.not_any() && !cont {
             return;
         }
@@ -1072,7 +1072,7 @@ impl JitModule {
     ///
     /// Restore floating point registers in use.
     ///
-    fn fpr_restore_with_cont(&mut self, using_fpr: UsingFpr, cont: bool) {
+    pub(crate) fn fpr_restore_with_cont(&mut self, using_fpr: UsingFpr, cont: bool) {
         if using_fpr.not_any() && !cont {
             return;
         }

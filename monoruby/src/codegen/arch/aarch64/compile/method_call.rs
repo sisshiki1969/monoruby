@@ -472,6 +472,7 @@ impl Codegen {
         store: &Store,
         using_fpr: UsingFpr,
         error: &DestLabel,
+        call_site_pc: u64,
     ) {
         let CallSiteInfo {
             recv,
@@ -485,7 +486,9 @@ impl Codegen {
         let proxy = self.jit.label();
         let done = self.jit.label();
 
-        self.emit_fpr_save(using_fpr, false);
+        // Cont mode: the callee's frame gets the call-site pc (#1505).
+        self.emit_fpr_save(using_fpr, true);
+        self.emit_cont_frame_pc(call_site_pc);
         self.a64_frame_load(11, lfp, conv(recv) as u32); // x11 = the Method
         monoasm_arm64!(&mut self.jit,
             ldr w9, [x11, #(METHOD_MM_NAME_OFFSET as u32)];
@@ -544,7 +547,7 @@ impl Codegen {
         );
 
         self.jit.bind_label(done);
-        self.emit_fpr_restore(using_fpr, false);
+        self.emit_fpr_restore(using_fpr, true);
         self.emit_handle_error(error);
     }
 
@@ -562,6 +565,7 @@ impl Codegen {
         using_fpr: UsingFpr,
         error: &DestLabel,
         no_splat: bool,
+        call_site_pc: u64,
     ) {
         let CallSiteInfo {
             recv,
@@ -583,7 +587,9 @@ impl Codegen {
         let missing = self.jit.label();
         let done = self.jit.label();
         self.check_version_with_cache(cache_addr, recv);
-        self.emit_fpr_save(using_fpr, false);
+        // Cont mode: the callee's frame gets the call-site pc (#1505).
+        self.emit_fpr_save(using_fpr, true);
+        self.emit_cont_frame_pc(call_site_pc);
         // resolve arg0 -> FuncId in x0
         if no_splat {
             if pos_num < 1 {
@@ -671,7 +677,7 @@ impl Codegen {
         );
 
         self.jit.bind_label(done);
-        self.emit_fpr_restore(using_fpr, false);
+        self.emit_fpr_restore(using_fpr, true);
         self.emit_handle_error(error);
     }
 

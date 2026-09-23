@@ -2245,14 +2245,7 @@ fn instance_method(
         .store
         .find_method_for_class_refined(klass.id(), method_name, set)
         .map_err(|_| {
-            MonorubyErr::nameerr_with_name(
-                format!(
-                    "undefined method '{}' for class '{}'",
-                    method_name.get_name(),
-                    klass.id().get_name(&globals.store),
-                ),
-                method_name,
-            )
+            MonorubyErr::method_name_error(&globals.store, method_name, klass.id(), None)
         })?;
     let original_name = globals
         .store
@@ -2274,43 +2267,20 @@ fn public_instance_method(
 ) -> Result<Value> {
     let klass = lfp.self_val().as_class();
     let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
-    let (func_id, visibility, owner) =
-        globals
-            .find_method_for_class(klass.id(), method_name)
-            .map_err(|_| {
-                MonorubyErr::nameerr_with_name(
-                    format!(
-                        "undefined method '{}' for class '{}'",
-                        method_name.get_name(),
-                        klass.id().get_name(&globals.store),
-                    ),
-                    method_name,
-                )
-            })?;
+    let (func_id, visibility, owner) = globals
+        .find_method_for_class(klass.id(), method_name)
+        .map_err(|_| {
+            MonorubyErr::method_name_error(&globals.store, method_name, klass.id(), None)
+        })?;
     // CRuby raises a NameError (kind, not NoMethodError) when the
     // looked-up method exists but isn't public.
-    match visibility {
-        Visibility::Private => {
-            return Err(MonorubyErr::nameerr_with_name(
-                format!(
-                    "method `{}' for class `{}' is private",
-                    method_name.get_name(),
-                    klass.id().get_name(&globals.store),
-                ),
-                method_name,
-            ));
-        }
-        Visibility::Protected => {
-            return Err(MonorubyErr::nameerr_with_name(
-                format!(
-                    "method `{}' for class `{}' is protected",
-                    method_name.get_name(),
-                    klass.id().get_name(&globals.store),
-                ),
-                method_name,
-            ));
-        }
-        _ => {}
+    if visibility != Visibility::Public {
+        return Err(MonorubyErr::method_name_error(
+            &globals.store,
+            method_name,
+            klass.id(),
+            Some(visibility),
+        ));
     }
     let original_name = globals
         .store

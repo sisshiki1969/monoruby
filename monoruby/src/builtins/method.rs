@@ -194,9 +194,10 @@ pub fn method_object_call(
     let using_fpr = state.get_using_fpr(ir);
     let error = ir.new_error(state);
     let callid = callsite.id;
+    let call_site_pc = state.pc().as_ptr() as u64;
     ir.inline(move |r#gen, store, labels, _| {
         let error = &labels[error];
-        r#gen.method_object_call_inline(callid, store, using_fpr, error);
+        r#gen.method_object_call_inline(callid, store, using_fpr, error, call_site_pc);
     });
     state.def_reg2acc(ir, GP::Rax, callsite.dst);
     true
