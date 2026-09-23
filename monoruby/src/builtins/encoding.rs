@@ -802,7 +802,11 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
             "Windows-1255" => b"windows-1255",
             "Windows-1256" => b"windows-1256",
             "Windows-1257" => b"windows-1257",
-            "Windows-1258" => b"windows-1258",
+            // Windows-1258 is an encoding CRuby ships no transcoder
+            // for, so it answers `ConverterNotFoundError` for
+            // anything but 7-bit text — and so gets no codec here
+            // either, as MacJapanese does not (#1591).
+            "Windows-1258" => return None,
             "KOI8-R" => b"koi8-r",
             "KOI8-U" => b"koi8-u",
             "IBM866" => b"ibm866",
@@ -2471,6 +2475,14 @@ fn latin1_to_ibm037(c: char) -> Option<u8> {
         .map(|i| i as u8)
 }
 
+/// ISO-8859-1 bytes as IBM037's: the table's inverse, byte for byte.
+fn latin1_bytes_to_ibm037(bytes: &[u8]) -> Vec<u8> {
+    bytes
+        .iter()
+        .map(|&b| latin1_to_ibm037(b as char).unwrap_or(b))
+        .collect()
+}
+
 /// IBM037 bytes as the UTF-8 of the Latin-1 characters they stand for.
 fn ibm037_to_utf8(bytes: &[u8]) -> String {
     bytes
@@ -3733,6 +3745,13 @@ pub(super) fn transcode_bytes_with_opts(
     // before any of the input is read, because that is where CRuby
     // opens the converter (#1566).
     if opens_a_converter(src_bytes, src_enc, dst_enc, opts, false) {
+        // A pair with no transcoder has nothing to open, decorators
+        // or not: 7-bit text passes through the fast path below only
+        // when nothing is asked of a converter, as MacJapanese and
+        // Windows-1258 have it in CRuby (#1591).
+        if !has_codec(src_enc) || !has_codec(dst_enc) {
+            return Err(converter_not_found(store, src_enc, dst_enc, opts, None));
+        }
         validate_replacement(opts, src_enc, dst_enc, None, store)?;
     }
     // `invalid: :replace` has work to do even when the encodings match,
@@ -4460,37 +4479,22 @@ pub(super) fn transcode_bytes_with_opts(
         );
     }
     if is_ibm037(dst_enc) {
-        let mut inner = opts.clone();
-        inner.universal_newline = false;
-        inner.crlf_newline = false;
-        inner.cr_newline = false;
-        let utf8 = if src_enc == E::UTF8 {
-            src_bytes.to_vec()
-        } else {
-            transcode_bytes_with_opts(src_bytes, src_enc, E::UTF8, &inner, store)?
-        };
-        let text = String::from_utf8_lossy(&utf8);
-        let text = if opts.has_newline() {
-            opts.apply_newline(&text)
-        } else {
-            text.into_owned()
-        };
-        let mut out = Vec::with_capacity(text.len());
-        for c in text.chars() {
-            match latin1_to_ibm037(c) {
-                Some(b) => out.push(b),
-                None if opts.undef_replace => {
-                    out.extend(opts.replace_str(dst_enc).chars().filter_map(latin1_to_ibm037));
+        // ISO-8859-1's own conversion does the reading, the
+        // decorators and the refusals — a malformed source byte is
+        // its to report, as CRuby's `convpath` says — and the table
+        // is a byte permutation on top (#1584).
+        let latin1 = transcode_bytes_with_opts(src_bytes, src_enc, E::Iso8859(1), opts, store)
+            .map_err(|e| {
+                let (kind, _, _, meta) =
+                    stream_convert(src_bytes, src_enc, dst_enc, None, false, opts, store);
+                match (kind, meta.message) {
+                    (StreamConvertResult::UndefinedConversion, Some(msg)) => {
+                        MonorubyErr::undefined_conversion_error(store, msg)
+                    }
+                    _ => e,
                 }
-                None => {
-                    return Err(MonorubyErr::undefined_conversion_error(
-                        store,
-                        ibm037_undefined_message(c, opts.report_src.unwrap_or(src_enc)),
-                    ));
-                }
-            }
-        }
-        return Ok(out);
+            })?;
+        return Ok(latin1_bytes_to_ibm037(&latin1));
     }
     let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
     if all_ascii
@@ -5131,6 +5135,9 @@ fn handle_xml_option(
     let src_enc = lfp.self_val().as_rstring_inner().encoding();
     let opts = parse_transcode_opts(lfp, &globals.store);
     validate_replacement(&opts, src_enc, dst_enc, Some(mode), &globals.store)?;
+    if src_enc != dst_enc && (!has_codec(src_enc) || !has_codec(dst_enc)) {
+        return Err(converter_not_found(&globals.store, src_enc, dst_enc, &opts, Some(mode)));
+    }
     // The decorator escapes *characters*, so a source that is not
     // UTF-8 is read by its own conversion first (#1530).
     let decoded;
@@ -6135,6 +6142,71 @@ const CONVERTER_LAST_ERROR_IVAR: &str = "/converter_last_error";
 /// the converter, taken out of it: they are the head of whatever the
 /// next call converts, as CRuby keeps them at the head of its input
 /// buffer — unless `#putback` handed them back to the caller first.
+/// Some pairs carry state across calls, which a single-shot
+/// transcode has no way to keep: the endianness-less dummies carry
+/// a BOM, read once on the source side and written once on the
+/// destination side, and a `UTF8-MAC` source holds its trailing
+/// cluster back. ISO-2022-JP carries its designation across calls,
+/// and an escape sequence split between two of them is held rather
+/// than substituted — which the single-shot transcoder, seeing one
+/// whole input, cannot know (#1576, #1609).
+fn converter_is_stateful(src: crate::value::Encoding, dst: crate::value::Encoding) -> bool {
+    dummy_wide_target(src).is_some()
+        || dummy_wide_target(dst).is_some()
+        || src == crate::value::Encoding::Utf8(crate::value::UTF8_MAC)
+        || jis_wrapper(src).is_some()
+        || jis_wrapper(dst).is_some()
+}
+
+/// The bytes at the end of `input` that begin a character the next
+/// chunk may finish — what a converter holds back rather than
+/// converts, in replacement mode as on every other path (#1592).
+fn incomplete_tail_len(src: crate::value::Encoding, input: &[u8]) -> usize {
+    use crate::value::Encoding as E;
+    if is_utf16_or_32(src) {
+        // A partial coding unit, and for UTF-16 a high surrogate
+        // waiting for its pair.
+        let unit = if matches!(src, E::Utf16Le | E::Utf16Be) { 2 } else { 4 };
+        let mut tail = input.len() % unit;
+        if unit == 2 && input.len() - tail >= 2 {
+            let last = &input[input.len() - tail - 2..input.len() - tail];
+            let u = if src == E::Utf16Be {
+                u16::from_be_bytes([last[0], last[1]])
+            } else {
+                u16::from_le_bytes([last[0], last[1]])
+            };
+            if (0xd800..0xdc00).contains(&u) {
+                tail += 2;
+            }
+        }
+        return tail;
+    }
+    if src.is_utf8_compatible() {
+        let mut at = 0;
+        loop {
+            match std::str::from_utf8(&input[at..]) {
+                Ok(_) => return 0,
+                Err(e) => match e.error_len() {
+                    None => return input.len() - (at + e.valid_up_to()),
+                    Some(n) => at += e.valid_up_to() + n,
+                },
+            }
+        }
+    }
+    let Some((_, precise)) = conversion_walker(src).or_else(|| crate::value::mbc_walker(src)) else {
+        return 0;
+    };
+    let mut at = 0;
+    while at < input.len() {
+        match precise(input, at) {
+            PreciseLen::Char(n) if n > 0 => at += n,
+            PreciseLen::NeedMore => return input.len() - at,
+            _ => at += 1,
+        }
+    }
+    0
+}
+
 fn converter_take_readagain(globals: &mut Globals, recv: Value) -> Vec<u8> {
     let ra_id = IdentId::get_id(CONVERTER_READAGAIN_IVAR);
     let bytes = globals
@@ -6273,13 +6345,25 @@ fn validate_replacement(
     ) {
         return Ok(Some(bytes));
     }
+    Err(converter_not_found(store, src_enc, dst_enc, opts, xml))
+}
+
+/// `code converter not found (UTF-8 to MacJapanese with crlf_newline)`:
+/// a pair with no transcoder, spelled with the decorators asked for.
+fn converter_not_found(
+    store: &Store,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    xml: Option<XmlMode>,
+) -> MonorubyErr {
     let decorators = decorator_names(opts, xml);
     let with = if decorators.is_empty() {
         String::new()
     } else {
         format!(" with {}", decorators.join(","))
     };
-    Err(MonorubyErr::converter_not_found_error(
+    MonorubyErr::converter_not_found_error(
         store,
         format!(
             "code converter not found ({} to {}{})",
@@ -6287,7 +6371,7 @@ fn validate_replacement(
             dst_enc.name(),
             with
         ),
-    ))
+    )
 }
 
 /// Whether monoruby can convert to and from `enc`.
@@ -6344,6 +6428,7 @@ fn refuse_pair_without_converter(
 fn validate_converter_pair(
     src: crate::value::Encoding,
     dst: crate::value::Encoding,
+    decorators: &TranscodeOpts,
     store: &Store,
 ) -> Result<()> {
     if src == dst {
@@ -6352,14 +6437,7 @@ fn validate_converter_pair(
     let src_supported = has_codec(src);
     let dst_supported = has_codec(dst);
     if !src_supported || !dst_supported {
-        return Err(MonorubyErr::converter_not_found_error(
-            store,
-            format!(
-                "code converter not found ({} to {})",
-                src.name(),
-                dst.name()
-            ),
-        ));
+        return Err(converter_not_found(store, src, dst, decorators, None));
     }
     Ok(())
 }
@@ -6558,7 +6636,25 @@ fn converter_new(
             format!("code converter not found ({} to {})", src.name(), dst.name()),
         ));
     }
-    validate_converter_pair(src, dst, &globals.store)?;
+    // The decorators the message names, read ahead of the options
+    // proper: `code converter not found (UTF-8 to Windows-1258 with
+    // crlf_newline)` (#1591).
+    let mut decorators = TranscodeOpts::default();
+    if let Some(n) = lfp.try_arg(2).and_then(|v| v.try_fixnum()) {
+        decorators.universal_newline = n & 0x0000_0100 != 0;
+        decorators.crlf_newline = n & 0x0000_1000 != 0;
+        decorators.cr_newline = n & 0x0000_2000 != 0;
+    }
+    if let Some(hash) = (2..=3)
+        .filter_map(|i| lfp.try_arg(i))
+        .find_map(|v| v.try_hash_ty())
+    {
+        let on = |key: &str| find_hash_value_for_symbol(&hash, key).is_some_and(|v| v.as_bool());
+        decorators.universal_newline |= on("universal_newline");
+        decorators.crlf_newline |= on("crlf_newline");
+        decorators.cr_newline |= on("cr_newline");
+    }
+    validate_converter_pair(src, dst, &decorators, &globals.store)?;
     // Options Hash (`replace:` kwargs / `**opts` / trailing Hash).
     // With `kw_rest=true` the collected kwargs Hash is delivered in
     // the slot after the positional args (index 3 here); a literal
@@ -6844,19 +6940,33 @@ fn converter_convert(
     // destination side, and a `UTF8-MAC` source holds its trailing
     // cluster back. Those go the streamed way whatever the flags say
     // (#1576).
-    let stateful = dummy_wide_target(src).is_some()
-        || dummy_wide_target(dst).is_some()
-        || src == crate::value::Encoding::Utf8(crate::value::UTF8_MAC)
-        // ISO-2022-JP carries its designation across calls, and an
-        // escape sequence split between two of them is held rather
-        // than substituted — which the single-shot transcoder, seeing
-        // one whole input, cannot know (#1609).
-        || jis_wrapper(src).is_some()
-        || jis_wrapper(dst).is_some();
+    let stateful = converter_is_stateful(src, dst);
+    let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
     if (opts.invalid_replace || opts.undef_replace) && !stateful {
         // Replacement mode cannot error on content — the single-shot
-        // transcoder suffices.
-        let out = transcode_bytes_with_opts(&bytes, src, dst, &opts, &globals.store)?;
+        // transcoder suffices — but a chunk that ends inside a
+        // character is still held for the next one to finish, as it
+        // is on every other path (#1592).
+        let mut input: Vec<u8> = converter_take_readagain(globals, recv);
+        input.extend(
+            globals
+                .store
+                .get_ivar(recv, pending_id)
+                .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+                .unwrap_or_default(),
+        );
+        input.extend_from_slice(&bytes);
+        let tail = incomplete_tail_len(src, &input);
+        let head = &input[..input.len() - tail];
+        let out = transcode_bytes_with_opts(head, src, dst, &opts, &globals.store)?;
+        if tail == 0 {
+            let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
+        } else {
+            let mut held =
+                crate::value::RStringInner::from_encoding_scanned(&input[input.len() - tail..], src);
+            held.set_encoding(crate::value::Encoding::Ascii8);
+            let _ = globals.store.set_ivar(recv, pending_id, Value::string_from_inner(held));
+        }
         let meta = ErrMeta::default();
         store_conversion_outcome(
             globals,
@@ -6875,7 +6985,6 @@ fn converter_convert(
     // trailing incomplete character is buffered, not an error), and
     // raise — leaving `primitive_errinfo` / `last_error` /
     // `putback` observable — on invalid / undefined input.
-    let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
     let mut input: Vec<u8> = converter_take_readagain(globals, recv);
     input.extend(
         globals
@@ -6989,8 +7098,16 @@ fn converter_finish(
         // character is incomplete input.
         let mut opts = converter_transcode_opts(globals, recv);
         opts.iso_state = converter_iso_state(globals, recv);
-        let (result, consumed, flushed, meta) =
-            stream_convert(&pending, src_stream, dst_stream, None, false, &opts, &globals.store);
+        let (result, consumed, flushed, meta) = if opts.invalid_replace
+            && !converter_is_stateful(src_stream, dst_stream)
+        {
+            // In replacement mode what is still half a character is
+            // replaced, not reported (#1592).
+            let out = transcode_bytes_with_opts(&pending, src_stream, dst_stream, &opts, &globals.store)?;
+            (StreamConvertResult::Finished, pending.len(), out, ErrMeta::default())
+        } else {
+            stream_convert(&pending, src_stream, dst_stream, None, false, &opts, &globals.store)
+        };
         converter_set_iso_state(globals, recv, meta.iso_state_out);
         if matches!(result, StreamConvertResult::Finished) && consumed == pending.len() {
             out = flushed;
@@ -7944,9 +8061,11 @@ fn ibm037_source_stream(
     (kind, src_consumed, out, meta)
 }
 
-/// An IBM037 destination, streamed: the source reaches UTF-8 by its
-/// own stream, and each character then writes one byte — or is the
-/// undefined conversion into ISO-8859-1 that CRuby reports.
+/// An IBM037 destination, streamed: ISO-8859-1's own stream does
+/// the reading, the cap and the refusals, and each byte it writes is
+/// one of the table's. A character it has no cell for is the
+/// undefined conversion into ISO-8859-1 that CRuby reports, spelled
+/// against the whole chain (#1530, #1584).
 fn ibm037_dest_stream(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -7956,80 +8075,17 @@ fn ibm037_dest_stream(
     store: &Store,
 ) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
     use crate::value::Encoding as E;
-    let dst_enc = ibm037_enc();
-    let mut inner = opts.clone();
-    inner.universal_newline = false;
-    inner.crlf_newline = false;
-    inner.cr_newline = false;
-    let (kind, consumed, utf8, meta) = if src_enc == E::UTF8 {
-        let k = if partial_input {
-            StreamConvertResult::SourceBufferEmpty
-        } else {
-            StreamConvertResult::Finished
-        };
-        (k, src_bytes.len(), src_bytes.to_vec(), ErrMeta::default())
-    } else {
-        stream_convert(src_bytes, src_enc, E::UTF8, None, partial_input, &inner, store)
-    };
-    let text = String::from_utf8_lossy(&utf8).into_owned();
-    let text = if opts.has_newline() {
-        opts.apply_newline(&text)
-    } else {
-        text
-    };
-    // Where a character of `text` came from in the source, for the
-    // counts a stop has to report; the decorators only add bytes, so
-    // the offset into `utf8` is what is looked up.
-    let source_through = |utf8_at: usize| -> usize {
-        pivot_prefix_consumed_in(src_bytes, src_enc, E::UTF8, utf8_at.min(utf8.len()), &inner, store)
-    };
-    let mut out: Vec<u8> = Vec::with_capacity(text.len());
-    let mut at = 0usize;
-    for c in text.chars() {
-        let b = match latin1_to_ibm037(c) {
-            Some(b) => b,
-            None if opts.undef_replace => {
-                let repl: Vec<u8> = opts.replace_str(dst_enc).chars().filter_map(latin1_to_ibm037).collect();
-                out.extend_from_slice(&repl);
-                at += c.len_utf8();
-                continue;
-            }
-            None => {
-                let mut buf = [0u8; 4];
-                return (
-                    StreamConvertResult::UndefinedConversion,
-                    source_through(at + c.len_utf8()),
-                    out,
-                    ErrMeta {
-                        error_bytes: c.encode_utf8(&mut buf).as_bytes().to_vec(),
-                        decode_stage: false,
-                        stage: Some(("UTF-8".to_string(), "ISO-8859-1".to_string())),
-                        message: Some(ibm037_undefined_message(c, opts.report_src.unwrap_or(src_enc))),
-                        ..ErrMeta::default()
-                    },
-                );
-            }
-        };
-        if let Some(max) = max_dst_bytes
-            && out.len() >= max
-        {
-            // The character that does not fit is read and its byte
-            // held, as every other destination holds its output.
-            let written_through = source_through(at);
-            let through_tried = source_through(at + c.len_utf8());
-            return (
-                StreamConvertResult::DestinationBufferFull,
-                written_through,
-                out,
-                ErrMeta {
-                    dst_full_extra: through_tried.saturating_sub(written_through),
-                    dst_full_out: vec![b],
-                    ..ErrMeta::default()
-                },
-            );
-        }
-        out.push(b);
-        at += c.len_utf8();
+    let (kind, consumed, out, mut meta) =
+        stream_convert(src_bytes, src_enc, E::Iso8859(1), max_dst_bytes, partial_input, opts, store);
+    let out = latin1_bytes_to_ibm037(&out);
+    meta.dst_full_out = latin1_bytes_to_ibm037(&meta.dst_full_out);
+    if matches!(kind, StreamConvertResult::UndefinedConversion)
+        && !meta.decode_stage
+        && meta.message.is_none()
+        && let Some(c) = single_utf8_char(&meta.error_bytes)
+    {
+        meta.stage = Some(("UTF-8".to_string(), "ISO-8859-1".to_string()));
+        meta.message = Some(ibm037_undefined_message(c, opts.report_src.unwrap_or(src_enc)));
     }
     (kind, consumed, out, meta)
 }
@@ -8203,12 +8259,26 @@ fn kddi_dest_stream(
     inner.crlf_newline = false;
     inner.cr_newline = false;
     let (kind, consumed, utf8, meta) = if src_enc == kddi {
-        let k = if partial_input {
-            StreamConvertResult::SourceBufferEmpty
+        // Its own bytes, once they are read as characters: a
+        // malformed run is the source's to report, and a chunk that
+        // ends inside a character keeps that tail for the next one.
+        let good = std::str::from_utf8(src_bytes).map_or_else(|e| e.valid_up_to(), |_| src_bytes.len());
+        if good < src_bytes.len() {
+            let (kind, meta) = bad_source_outcome(kddi, &src_bytes[good..], !partial_input);
+            let through = if matches!(kind, StreamConvertResult::SourceBufferEmpty) {
+                good
+            } else {
+                through_bad_run(good, &kind, &meta, src_bytes.len())
+            };
+            (kind, through, src_bytes[..good].to_vec(), meta)
         } else {
-            StreamConvertResult::Finished
-        };
-        (k, src_bytes.len(), src_bytes.to_vec(), ErrMeta::default())
+            let k = if partial_input {
+                StreamConvertResult::SourceBufferEmpty
+            } else {
+                StreamConvertResult::Finished
+            };
+            (k, src_bytes.len(), src_bytes.to_vec(), ErrMeta::default())
+        }
     } else {
         stream_convert(src_bytes, src_enc, kddi, None, partial_input, &inner, store)
     };
@@ -9720,7 +9790,23 @@ fn stream_convert(
                     push_char!(ch);
                 }
                 match res {
-                    DecoderResult::InputEmpty => break,
+                    DecoderResult::InputEmpty => {
+                        // A chunk that ends inside a character keeps
+                        // that tail for the next one, as every other
+                        // destination does: it comes back unconsumed
+                        // and the converter holds it (#1592).
+                        if !last
+                            && let Some((tail, _, true)) = first_bad_sequence(src_enc, src_bytes)
+                        {
+                            return (
+                                StreamConvertResult::SourceBufferEmpty,
+                                src_bytes.len() - tail.len().min(src_bytes.len()),
+                                out,
+                                ErrMeta::default(),
+                            );
+                        }
+                        break;
+                    }
                     DecoderResult::Malformed(..) => {
                         if !opts.invalid_replace {
                             let (kind, meta) = bad_source_outcome(src_enc, src_bytes, last);
@@ -9743,6 +9829,16 @@ fn stream_convert(
                     for ch in s.chars() {
                         push_char!(ch);
                     }
+                }
+                // The same tail, held for the next chunk (#1592).
+                Err(e) if partial_input && e.error_len().is_none() => {
+                    for ch in std::str::from_utf8(&src_bytes[..e.valid_up_to()])
+                        .unwrap_or("")
+                        .chars()
+                    {
+                        push_char!(ch);
+                    }
+                    return (StreamConvertResult::SourceBufferEmpty, e.valid_up_to(), out, ErrMeta::default());
                 }
                 Err(_) if opts.invalid_replace => {
                     for ch in String::from_utf8_lossy(src_bytes).chars() {
@@ -10143,18 +10239,28 @@ fn stream_convert(
                 && meta.error_bytes.len() > unit
             {
                 let run = std::mem::take(&mut meta.error_bytes);
-                let pending_len = (unit..run.len()).rev().step_by(unit).find(|k| {
+                let pending_prefix = |k: usize| {
                     let mut probe = src_rs.new_decoder_without_bom_handling();
                     let mut probe_dst = vec![0u8; run.len() * 4 + 16];
                     let (r, read, written) = probe.decode_to_utf8_without_replacement(
-                        &run[..*k],
+                        &run[..k],
                         &mut probe_dst,
                         false,
                     );
                     // Still waiting for more input, having produced
                     // nothing: a genuine incomplete prefix.
-                    matches!(r, DecoderResult::InputEmpty) && read == *k && written == 0
-                });
+                    matches!(r, DecoderResult::InputEmpty) && read == k && written == 0
+                };
+                // A run that is *whole* still a pending prefix —
+                // `\xE3\x81` before an `x` — was disproved by what
+                // follows it, not by anything inside: it is reported
+                // whole, with the disproving unit pulled in below
+                // (#1592).
+                let pending_len = if pending_prefix(run.len()) {
+                    None
+                } else {
+                    (unit..run.len()).rev().step_by(unit).find(|k| pending_prefix(*k))
+                };
                 match pending_len {
                     Some(k) => {
                         meta.readagain_bytes = run[k..].to_vec();
@@ -11830,7 +11936,7 @@ fn converter_search_convpath(
         lfp.arg(1),
         false,
     )?;
-    validate_converter_pair(src, dst, &globals.store)?;
+    validate_converter_pair(src, dst, &TranscodeOpts::default(), &globals.store)?;
     // The optional third argument / kwargs carry decorator options
     // (the kwargs hash may land in either trailing slot).
     let crlf = (2..=3)
