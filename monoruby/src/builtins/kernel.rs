@@ -1993,6 +1993,19 @@ fn float_domain_error(globals: &Globals, msg: &str) -> MonorubyErr {
     }
 }
 
+/// `rb_must_asciicompat`: `Integer()` / `Float()` read ASCII digits,
+/// so a string of a non-ASCII-compatible encoding is refused first.
+fn kernel_must_ascii_compatible(globals: &Globals, s: &RStringInner) -> Result<()> {
+    let enc = s.encoding();
+    if enc.is_ascii_compatible() {
+        return Ok(());
+    }
+    Err(MonorubyErr::encoding_compatibility_error_with_store(
+        &globals.store,
+        format!("ASCII incompatible encoding: {}", enc.name()),
+    ))
+}
+
 fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     // nil -> TypeError ("can't convert nil into Integer"), always; under
@@ -2045,6 +2058,7 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
             return Ok(Value::bigint(t.to_bigint().unwrap()));
         }
         RV::String(b) => {
+            kernel_must_ascii_compatible(globals, b)?;
             let s = b.check_utf8()?;
             return parse_kernel_integer(s, base.unwrap_or(0));
         }
@@ -2404,6 +2418,7 @@ fn kernel_float_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Res
         // CRuby (identity is preserved for Float inputs).
         RV::Float(_) => return Ok(arg0),
         RV::String(b) => {
+            kernel_must_ascii_compatible(globals, b)?;
             let s = b.to_str()?;
             return parse_kernel_float(&s);
         }
