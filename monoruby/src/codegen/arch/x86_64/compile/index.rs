@@ -88,6 +88,12 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm! { &mut self.jit,
         heap:
+            // A shared view must not be written in place: its `ptr` is the
+            // root's buffer, which its other views read. The generic path
+            // copies it first (`owned_mut`).
+            movq rcx, (ARRAY_SHARED_TAG);
+            cmpq rax, rcx;
+            jeq  generic;
             movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
             // upper range check
             cmpq rax, rsi;

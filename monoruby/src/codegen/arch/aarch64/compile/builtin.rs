@@ -1409,6 +1409,12 @@ impl Codegen {
             b src_ready;
         );
         self.jit.bind_label(dst_heap);
+        // A shared view is not written in place (see `array_index_assign`).
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (ARRAY_SHARED_TAG as u64);
+            cmp x9, x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &slow);
         monoasm_arm64!(&mut self.jit,
             ldr x9, [x(rdi), #(RVALUE_OFFSET_HEAP_LEN as u32)];
             ldr x12, [x(rdi), #(RVALUE_OFFSET_HEAP_PTR as u32)];
@@ -1488,6 +1494,13 @@ impl Codegen {
             b stored;
         );
         self.jit.bind_label(heap);
+        // A shared view (tag in the capacity slot) has no room of its own:
+        // `f` copies it out of the root before appending.
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (ARRAY_SHARED_TAG as u64);
+            cmp x0, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &grow);
         monoasm_arm64!(&mut self.jit,
             // Spilled buffer: x0 is the capacity, the length lives beside
             // the pointer.

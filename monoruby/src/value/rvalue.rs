@@ -1136,7 +1136,15 @@ impl alloc::GCBox for RValue {
                     }
                 }
                 ObjTy::TIME => {}
-                ObjTy::ARRAY => self.as_array().iter().for_each(|v| v.mark(alloc)),
+                ObjTy::ARRAY => {
+                    // A view keeps its (hidden, frozen) root alive — the
+                    // root owns the buffer, and marks the elements itself.
+                    if let Some(root) = self.as_array().shared_root() {
+                        root.mark(alloc)
+                    } else {
+                        self.as_array().iter().for_each(|v| v.mark(alloc))
+                    }
+                }
                 ObjTy::RANGE => self.as_range().mark(alloc),
                 ObjTy::PROC => self.as_proc().mark(alloc),
                 ObjTy::HASH => self.as_hashmap().mark(alloc),
@@ -1303,7 +1311,12 @@ impl alloc::GCBox for RValue {
                     .iter()
                     .filter_map(|o| *o)
                     .any(|v| is_young(v, alloc)),
-                ObjTy::ARRAY => self.as_array().iter().any(|v| is_young(*v, alloc)),
+                // Mirrors `mark` above: a view's only edge is its root
+                // (see the STRING arm for why this must agree).
+                ObjTy::ARRAY => match self.as_array().shared_root() {
+                    Some(root) => is_young(root, alloc),
+                    None => self.as_array().iter().any(|v| is_young(*v, alloc)),
+                },
                 ObjTy::STRUCT => self.as_struct_inner().iter().any(|v| is_young(*v, alloc)),
                 ObjTy::HASH => self.as_hashmap().young_child_exists(alloc),
                 // Mirrors `ModuleInner`'s `mark`: superclass, singleton,
