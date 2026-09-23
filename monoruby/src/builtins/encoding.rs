@@ -702,7 +702,13 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
         // gets no codec here either (#1471).
         E::Sjis(2) => return None,
         E::Sjis(_) => b"shift_jis",
-        E::Iso2022Jp => b"iso-2022-jp",
+        // ISO-2022-JP is not `encoding_rs`'s: WHATWG's folds half-width
+        // katakana into their full-width cells and reaches rows CRuby
+        // has no room for (#1612), and going through Unicode at all
+        // loses the cells Unicode has no character for (#1609). It
+        // converts through stateless-ISO-2022-JP and EUC-JP instead,
+        // which is the chain CRuby's own `convpath` reports.
+        E::Iso2022Jp => return None,
         // Named byte-oriented encodings with an encoding_rs codec.
         // WHATWG deviations accepted here (they only widen coverage):
         // "big5" is the HKSCS-extended table, "euc-kr" is windows-949
@@ -1927,6 +1933,10 @@ fn undefined_cell_message(
 fn pivot_chain(src_enc: crate::value::Encoding) -> String {
     if src_enc == crate::value::Encoding::Iso2022Jp {
         "ISO-2022-JP to stateless-ISO-2022-JP to EUC-JP to UTF-8".to_string()
+    } else if stateless_iso2022jp(src_enc).is_some() {
+        format!("{} to EUC-JP to UTF-8", src_enc.name())
+    } else if src_enc == crate::value::Encoding::EUC_JP {
+        "EUC-JP to UTF-8".to_string()
     } else {
         format!("{} to UTF-8", src_enc.name())
     }
@@ -1958,6 +1968,37 @@ fn undefined_byte_message(
             dst_enc.name()
         )
     }
+}
+
+/// `opts` with the source an error message should name pinned to
+/// `src` — the wrapper's own encoding rather than the intermediate it
+/// rewrote its bytes into (#1609).
+fn reporting_as(opts: &TranscodeOpts, src: crate::value::Encoding) -> TranscodeOpts {
+    let mut o = opts.clone();
+    o.report_src = Some(o.report_src.unwrap_or(src));
+    o
+}
+
+/// How many of `stateless`'s bytes CRuby has read when an
+/// ISO-2022-JP destination of `max` bytes runs out: it stops on the
+/// character whose output does not fit, *having read it*, so the
+/// answer is the shortest prefix whose ISO-2022-JP form is longer
+/// than the cap. The whole input when none is — the overflow is then
+/// inside the closing escape, which no character owns (#1609).
+fn iso2022jp_read_through(stateless: &[u8], state: Option<u8>, max: usize) -> usize {
+    (1..=stateless.len())
+        .find(|&n| {
+            crate::value::stateless_to_iso2022jp_from(&stateless[..n], state, false)
+                .is_ok_and(|(out, _)| out.len() > max)
+        })
+        .unwrap_or(stateless.len())
+}
+
+/// stateless-ISO-2022-JP, the hop ISO-2022-JP and EUC-JP meet at.
+fn stateless_enc() -> crate::value::Encoding {
+    crate::value::Encoding::NamedByte(
+        crate::value::named_byte_index("STATELESS_ISO_2022_JP").unwrap_or(0),
+    )
 }
 
 /// `Some(enc)` when `enc` is one of the stateless-ISO-2022-JP pair.
@@ -2054,7 +2095,10 @@ fn undefined_char_message(
     src_enc: crate::value::Encoding,
     dst_enc: crate::value::Encoding,
 ) -> String {
-    if src_enc.is_utf8_compatible() {
+    // The short form is for a conversion that really is one hop, so
+    // the source has to *be* the pivot — `UTF8-MAC` is UTF-8
+    // compatible and still a step of its own (#1609).
+    if src_enc == crate::value::Encoding::UTF8 || src_enc == crate::value::Encoding::UsAscii {
         format!(
             "U+{:04X} from {} to {}",
             c as u32,
@@ -2231,6 +2275,19 @@ pub(super) struct TranscodeOpts {
     /// with the *receiver*, which is `rb_enc_check`'s rule and not
     /// the converter's (#1599).
     pub replace_enc: Option<crate::value::Encoding>,
+    /// The encoding an error message should name as the source, when
+    /// the conversion running is one hop of a longer chain: the
+    /// wrappers (CESU-8, `UTF8-MAC`, stateless-ISO-2022-JP,
+    /// ISO-2022-JP) rewrite their bytes and hand the rest to the
+    /// ordinary pipeline, which would otherwise name the intermediate
+    /// (#1609).
+    pub report_src: Option<crate::value::Encoding>,
+    /// The ISO-2022-JP designation in effect when this chunk starts,
+    /// and whether its closing escape is owed yet. A converter keeps
+    /// the escape across `#convert` calls and writes the closing one
+    /// from `#finish`; a one-shot conversion is one whole chunk, so it
+    /// starts in ASCII and closes (#1609).
+    pub iso_state: Option<u8>,
     /// Newline decorators: `universal_newline:` normalizes CRLF / CR
     /// to LF on the decode side; `crlf_newline:` / `cr_newline:`
     /// rewrite LF on the encode side.
@@ -2627,7 +2684,7 @@ fn carrier_hop(
                 Some(None) => {
                     return Err(MonorubyErr::undefined_conversion_error(
                         store,
-                        undefined_char_message(c, src_enc, dst_enc),
+                        undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
                     ));
                 }
                 // `text` is already Unicode, so what is left is the
@@ -2671,7 +2728,7 @@ fn carrier_hop(
             Err(c) => {
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,
-                    undefined_char_message(c, src_enc, dst_enc),
+                    undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
                 ));
             }
         },
@@ -3016,7 +3073,7 @@ pub(super) fn transcode_bytes_with_opts(
                     composed.as_bytes(),
                     crate::value::Encoding::UTF8,
                     dst_enc,
-                    opts,
+                    &reporting_as(opts, src_enc),
                     store,
                 );
             }
@@ -3034,7 +3091,7 @@ pub(super) fn transcode_bytes_with_opts(
                     composed.pivot.as_bytes(),
                     crate::value::Encoding::UTF8,
                     dst_enc,
-                    opts,
+                    &reporting_as(opts, src_enc),
                     store,
                 );
             }
@@ -3090,7 +3147,7 @@ pub(super) fn transcode_bytes_with_opts(
                 Err(c) => {
                     return Err(MonorubyErr::undefined_conversion_error(
                         store,
-                        undefined_char_message(c, src_enc, dst_enc),
+                        undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
                     ));
                 }
             };
@@ -3122,7 +3179,7 @@ pub(super) fn transcode_bytes_with_opts(
                 }
                 Err(c) => Err(MonorubyErr::undefined_conversion_error(
                     store,
-                    undefined_char_message(c, src_enc, dst_enc),
+                    undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
                 )),
             };
         }
@@ -3199,7 +3256,7 @@ pub(super) fn transcode_bytes_with_opts(
                 }
                 Err(c) => Err(MonorubyErr::undefined_conversion_error(
                     store,
-                    undefined_char_message(c, src_enc, dst_enc),
+                    undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
                 )),
             };
         }
@@ -3231,7 +3288,7 @@ pub(super) fn transcode_bytes_with_opts(
                 s.as_bytes(),
                 crate::value::Encoding::UTF8,
                 dst_enc,
-                opts,
+                &reporting_as(opts, src_enc),
                 store,
             );
         }
@@ -3245,6 +3302,126 @@ pub(super) fn transcode_bytes_with_opts(
         // sequence, and the cell after it written as EUC-JP writes it.
         // So a conversion is that rewrite plus EUC-JP's own, which is
         // the chain CRuby's errors name (#1600).
+        // ISO-2022-JP rides stateless-ISO-2022-JP, which rides EUC-JP:
+        // the three are the same repertoire written three ways, and
+        // CRuby's `convpath` spells exactly that chain (#1609).
+        if src_enc == E::Iso2022Jp {
+            let stateless = match crate::value::iso2022jp_to_stateless(src_bytes) {
+                Ok(b) => b,
+                Err(_) if opts.invalid_replace => {
+                    // Each good run converts whole and the
+                    // destination's replacement goes between them.
+                    // Parsing resumes in the designation that was in
+                    // effect, so the byte after a substituted one is
+                    // still read as part of its character set rather
+                    // than as ASCII.
+                    let mut out: Vec<u8> = Vec::new();
+                    let mut at = 0;
+                    let mut state = None;
+                    while at <= src_bytes.len() {
+                        match crate::value::iso2022jp_to_stateless_from(&src_bytes[at..], state) {
+                            Ok((piece, _)) => {
+                                out.extend_from_slice(&transcode_bytes_with_opts(
+                                    &piece,
+                                    stateless_enc(),
+                                    dst_enc,
+                                    &reporting_as(opts, src_enc),
+                                    store,
+                                )?);
+                                break;
+                            }
+                            Err(stop) => {
+                                let (piece, left) = crate::value::iso2022jp_to_stateless_from(
+                                    &src_bytes[at..at + stop.at],
+                                    state,
+                                )
+                                .unwrap_or_default();
+                                out.extend_from_slice(&transcode_bytes_with_opts(
+                                    &piece,
+                                    stateless_enc(),
+                                    dst_enc,
+                                    &reporting_as(opts, src_enc),
+                                    store,
+                                )?);
+                                out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                                state = left;
+                                let step = (stop.at + stop.error.len().max(1)).max(1);
+                                at += step;
+                                if at > src_bytes.len() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    return Ok(out);
+                }
+                Err(_) => {
+                    return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+                }
+            };
+            if dst_enc == stateless_enc() {
+                return Ok(stateless);
+            }
+            return transcode_bytes_with_opts(
+                &stateless,
+                stateless_enc(),
+                dst_enc,
+                &reporting_as(opts, src_enc),
+                store,
+            );
+        }
+        if dst_enc == E::Iso2022Jp {
+            let stateless = if src_enc == stateless_enc() {
+                src_bytes.to_vec()
+            } else {
+                transcode_bytes_with_opts(src_bytes, src_enc, stateless_enc(), opts, store)?
+            };
+            if opts.invalid_replace
+                && crate::value::stateless_to_iso2022jp(&stateless).is_err()
+            {
+                // The malformed run is the stateless source's, so it
+                // is settled at that hop: each good run converts whole
+                // and the replacement goes between them.
+                let mut out: Vec<u8> = Vec::new();
+                let mut at = 0;
+                while at < stateless.len() {
+                    let good = stateless_good_prefix(&stateless[at..]);
+                    if good > 0 {
+                        let (piece, _) = crate::value::stateless_to_iso2022jp_from(
+                            &stateless[at..at + good],
+                            None,
+                            true,
+                        )
+                        .unwrap_or_default();
+                        out.extend_from_slice(&piece);
+                    }
+                    at += good;
+                    if at >= stateless.len() {
+                        break;
+                    }
+                    out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                    let run = first_bad_sequence(stateless_enc(), &stateless[at..])
+                        .map(|(e, _, _)| e.len().max(1))
+                        .unwrap_or(1);
+                    at += run;
+                }
+                return Ok(out);
+            }
+            return match crate::value::stateless_to_iso2022jp(&stateless) {
+                Ok(out) => Ok(out),
+                // ISO-2022-JP takes exactly what stateless's
+                // transcoder takes, so there is no well-formed
+                // sequence without a home here — an `Err` is a
+                // malformed stateless run, which only a
+                // stateless *source* can hand over.
+                Err(_) => Err(invalid_byte_sequence(
+                    store,
+                    stateless_enc(),
+                    dst_enc,
+                    &stateless,
+                )),
+            };
+        }
         if let Some(stateless) = stateless_iso2022jp(src_enc) {
             let Ok(eucjp) = crate::value::stateless_iso2022jp_to_eucjp(src_bytes) else {
                 if opts.invalid_replace {
@@ -3285,7 +3462,7 @@ pub(super) fn transcode_bytes_with_opts(
                 &eucjp,
                 crate::value::Encoding::EUC_JP,
                 dst_enc,
-                opts,
+                &reporting_as(opts, stateless),
                 store,
             );
         }
@@ -3533,7 +3710,7 @@ pub(super) fn transcode_bytes_with_opts(
             if !opts.undef_replace {
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,
-                    undefined_char_message(bad, src_enc, dst_enc),
+                    undefined_char_message(bad, opts.report_src.unwrap_or(src_enc), dst_enc),
                 ));
             }
             let replace = opts.replace_str(dst_enc);
@@ -3680,7 +3857,7 @@ pub(super) fn transcode_bytes_with_opts(
                 let bad = decoded.chars().find(|c| !c.is_ascii()).unwrap();
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,
-                    undefined_char_message(bad, src_enc, dst_enc),
+                    undefined_char_message(bad, opts.report_src.unwrap_or(src_enc), dst_enc),
                 ));
             }
             let replace = opts.replace_str(dst_enc);
@@ -3708,7 +3885,7 @@ pub(super) fn transcode_bytes_with_opts(
             Ok(v) => Ok(v),
             Err(bad) if !opts.undef_replace => Err(MonorubyErr::undefined_conversion_error(
                 store,
-                undefined_char_message(bad, src_enc, dst_enc),
+                undefined_char_message(bad, opts.report_src.unwrap_or(src_enc), dst_enc),
             )),
             Err(_) => {
                 let replace = opts.replace_str(dst_enc);
@@ -3748,7 +3925,7 @@ pub(super) fn transcode_bytes_with_opts(
                 None => {
                     return Err(MonorubyErr::undefined_conversion_error(
                         store,
-                        undefined_char_message(c, src_enc, dst_enc),
+                        undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
                     ));
                 }
             }
@@ -3764,7 +3941,7 @@ pub(super) fn transcode_bytes_with_opts(
             Err(bad) if !opts.undef_replace => {
                 return Err(MonorubyErr::undefined_conversion_error(
                     store,
-                    undefined_char_message(bad, src_enc, dst_enc),
+                    undefined_char_message(bad, opts.report_src.unwrap_or(src_enc), dst_enc),
                 ));
             }
             Err(_) => {
@@ -3817,7 +3994,7 @@ pub(super) fn transcode_bytes_with_opts(
                 .unwrap_or('\0');
             return Err(MonorubyErr::undefined_conversion_error(
                 store,
-                undefined_char_message(bad, src_enc, dst_enc),
+                undefined_char_message(bad, opts.report_src.unwrap_or(src_enc), dst_enc),
             ));
         }
         // `undef: :replace`: walk character by character and substitute
@@ -4974,6 +5151,10 @@ const CONVERTER_SRC_BOM_IVAR: &str = "/converter_src_bom";
 /// Set once the destination's BOM has been written. The dummies write
 /// one, and only ahead of the first character they emit (#1576).
 const CONVERTER_DST_BOM_IVAR: &str = "/converter_dst_bom";
+/// The ISO-2022-JP designation in effect, as a small integer: the
+/// escape stays in effect across `#convert` calls, and the closing
+/// one is written from `#finish` (#1609).
+const CONVERTER_ISO_STATE_IVAR: &str = "/converter_iso_state";
 const CONVERTER_FLAG_INVALID_REPLACE: i64 = 0b01;
 const CONVERTER_FLAG_UNDEF_REPLACE: i64 = 0b10;
 
@@ -5114,6 +5295,7 @@ fn has_codec(enc: crate::value::Encoding) -> bool {
         || dummy_wide_target(enc).is_some()
         || enc == E::NamedByte(crate::value::CESU_8)
         || stateless_iso2022jp(enc).is_some()
+        || enc == E::Iso2022Jp
         || matches!(enc, E::Ascii8 | E::UsAscii)
 }
 
@@ -5202,6 +5384,26 @@ fn converter_dst_bom(dst_enc: crate::value::Encoding) -> Vec<u8> {
         Some(_) => vec![0x00, 0x00, 0xFE, 0xFF],
         None => vec![],
     }
+}
+
+/// The ISO-2022-JP designation this converter is in the middle of.
+fn converter_iso_state(globals: &Globals, recv: Value) -> Option<u8> {
+    globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_ISO_STATE_IVAR))
+        .and_then(|v| v.try_fixnum())
+        .map(|n| n as u8)
+}
+
+fn converter_set_iso_state(globals: &mut Globals, recv: Value, state: Option<u8>) {
+    let _ = globals.store.set_ivar(
+        recv,
+        IdentId::get_id(CONVERTER_ISO_STATE_IVAR),
+        match state {
+            Some(b) => Value::integer(b as i64),
+            None => Value::nil(),
+        },
+    );
 }
 
 /// Whether this converter still owes its destination a BOM.
@@ -5613,7 +5815,13 @@ fn converter_convert(
     // (#1576).
     let stateful = dummy_wide_target(src).is_some()
         || dummy_wide_target(dst).is_some()
-        || src == crate::value::Encoding::Utf8(crate::value::UTF8_MAC);
+        || src == crate::value::Encoding::Utf8(crate::value::UTF8_MAC)
+        // ISO-2022-JP carries its designation across calls, and an
+        // escape sequence split between two of them is held rather
+        // than substituted — which the single-shot transcoder, seeing
+        // one whole input, cannot know (#1609).
+        || src == crate::value::Encoding::Iso2022Jp
+        || dst == crate::value::Encoding::Iso2022Jp;
     if (opts.invalid_replace || opts.undef_replace) && !stateful {
         // Replacement mode cannot error on content — the single-shot
         // transcoder suffices.
@@ -5654,8 +5862,11 @@ fn converter_convert(
     // The destination's: a dummy writes its BOM here, once, and then
     // the big-endian form CRuby writes.
     let dst_stream = dummy_wide_target(dst).unwrap_or(dst);
+    let mut opts = opts;
+    opts.iso_state = converter_iso_state(globals, recv);
     let (result, consumed, out, meta) =
         stream_convert(&input, src_stream, dst_stream, None, true, &opts, &globals.store);
+    converter_set_iso_state(globals, recv, meta.iso_state_out);
     let out = if out.is_empty() {
         out
     } else {
@@ -5739,9 +5950,11 @@ fn converter_finish(
         // have no cell in the destination, which is that error and not
         // an incomplete one. Only a tail that is still half a
         // character is incomplete input.
-        let opts = converter_transcode_opts(globals, recv);
+        let mut opts = converter_transcode_opts(globals, recv);
+        opts.iso_state = converter_iso_state(globals, recv);
         let (result, consumed, flushed, meta) =
             stream_convert(&pending, src_stream, dst_stream, None, false, &opts, &globals.store);
+        converter_set_iso_state(globals, recv, meta.iso_state_out);
         if matches!(result, StreamConvertResult::Finished) && consumed == pending.len() {
             out = flushed;
         } else {
@@ -5770,6 +5983,15 @@ fn converter_finish(
                 .unwrap_or_default();
             return Err(converter_last_error_raise(globals, recv, kind, msg));
         }
+    }
+    // The end of the input is where ISO-2022-JP designates ASCII
+    // again, and CRuby writes that escape from `#finish` whether or
+    // not anything was held back (#1609).
+    if dst == crate::value::Encoding::Iso2022Jp
+        && converter_iso_state(globals, recv).is_some()
+    {
+        out.extend_from_slice(b"\x1b(B");
+        converter_set_iso_state(globals, recv, None);
     }
     if !out.is_empty() {
         let mut bom = converter_take_dst_bom(globals, recv, dst);
@@ -5881,6 +6103,9 @@ struct ErrMeta {
     /// is set the character is *not* re-converted next call — these
     /// bytes are written instead.
     dst_full_out: Vec<u8>,
+    /// The ISO-2022-JP designation this chunk leaves in effect, for
+    /// the next one to carry on from (#1609).
+    iso_state_out: Option<u8>,
     /// `:undefined_conversion` only: the character had no mapping in
     /// the *decode* half (a source byte with no Unicode meaning),
     /// not the encode half. The two stages are reported differently
@@ -5931,16 +6156,20 @@ fn pivot_prefix_consumed_in(
     if src_enc == pivot_enc {
         return pivot_bytes.min(src_bytes.len());
     }
+    // The shortest prefix that reaches the offset is the one CRuby
+    // read: it stops on the character whose output it could not fit
+    // and reads no further, so bytes that follow and write nothing —
+    // an ISO-2022-JP escape sequence — stay in `src` (#1609).
     let decoded_len = |n: usize| -> usize {
         let (_, _, out, _) = stream_convert(
-        &src_bytes[..n],
+            &src_bytes[..n],
             src_enc,
             pivot_enc,
             None,
             true,
-        opts,
-        store,
-    );
+            opts,
+            store,
+        );
         out.len()
     };
     let (mut lo, mut hi) = (0usize, src_bytes.len());
@@ -6973,6 +7202,333 @@ fn stream_convert(
         }
         if src_enc == cesu {
             return cesu_source_stream(src_bytes, dst_enc, max_dst_bytes, partial_input, opts, store);
+        }
+        // ISO-2022-JP rides stateless-ISO-2022-JP, which rides EUC-JP.
+        // The designation is the only thing that survives a chunk, and
+        // `opts` / `meta` carry it in and out (#1609).
+        if src_enc == E::Iso2022Jp {
+            let (stateless, left) =
+                match crate::value::iso2022jp_to_stateless_from(src_bytes, opts.iso_state) {
+                    Ok(v) => v,
+                    // With `invalid: :replace` a malformed run is
+                    // substituted here, but an *incomplete* one is
+                    // only malformed once the input has ended — until
+                    // then it is held for the next chunk (#1609).
+                    Err(ref stop)
+                        if opts.invalid_replace && (!stop.incomplete || !partial_input) =>
+                    {
+                        let out = transcode_bytes_with_opts(
+                            src_bytes,
+                            src_enc,
+                            dst_enc,
+                            opts,
+                            store,
+                        )
+                        .unwrap_or_default();
+                        let kind = if partial_input {
+                            StreamConvertResult::SourceBufferEmpty
+                        } else {
+                            StreamConvertResult::Finished
+                        };
+                        return (kind, src_bytes.len(), out, ErrMeta::default());
+                    }
+                    Err(stop) => {
+                        let (head, _) = crate::value::iso2022jp_to_stateless_from(
+                            &src_bytes[..stop.at],
+                            opts.iso_state,
+                        )
+                        .unwrap_or_default();
+                        let (kind, consumed, out, mut meta) = stream_convert(
+                            &head,
+                            stateless_enc(),
+                            dst_enc,
+                            max_dst_bytes,
+                            true,
+                            opts,
+                            store,
+                        );
+                        // The destination filling up happens first.
+                        // CRuby reads the source in order, so a cap
+                        // that stops among the bytes *before* the
+                        // malformed run reports itself and leaves the
+                        // run for the next call to trip over (#1609).
+                        if matches!(kind, StreamConvertResult::DestinationBufferFull) {
+                            let through = if consumed == head.len() {
+                                stop.at
+                            } else {
+                                pivot_prefix_consumed_in(
+                                    src_bytes,
+                                    src_enc,
+                                    stateless_enc(),
+                                    consumed,
+                                    opts,
+                                    store,
+                                )
+                            };
+                            meta.iso_state_out = crate::value::iso2022jp_to_stateless_from(
+                                &src_bytes[..through],
+                                opts.iso_state,
+                            )
+                            .map(|(_, left)| left)
+                            .unwrap_or(opts.iso_state);
+                            return (kind, through, out, meta);
+                        }
+                        let kind = if stop.incomplete && partial_input {
+                            StreamConvertResult::SourceBufferEmpty
+                        } else if stop.incomplete {
+                            StreamConvertResult::IncompleteInput
+                        } else {
+                            StreamConvertResult::InvalidByteSequence
+                        };
+                        meta.error_bytes = stop.error.clone();
+                        meta.readagain_bytes = stop.again.clone();
+                        let through = if matches!(kind, StreamConvertResult::InvalidByteSequence) {
+                            (stop.at + stop.error.len() + stop.again.len()).min(src_bytes.len())
+                        } else {
+                            stop.at
+                        };
+                        return (kind, through, out, meta);
+                    }
+                };
+            // stateless-ISO-2022-JP *is* what the rewrite produced, so
+            // that destination needs no second conversion — and the
+            // cap applies to these bytes directly.
+            if dst_enc == stateless_enc() {
+                let fits = max_dst_bytes.map_or(stateless.len(), |m| m.min(stateless.len()));
+                if fits < stateless.len() {
+                    // The cap cuts a character in half. CRuby writes
+                    // the bytes that fit and holds the rest of that
+                    // character for the next call, taking the whole
+                    // of it out of `src` — dropping them here cost
+                    // the streaming loop its output (#1532).
+                    let mut end = 0;
+                    while end < stateless.len() {
+                        end += if stateless[end] < 0x80 { 1 } else { 3 };
+                        if end > fits {
+                            break;
+                        }
+                    }
+                    let end = end.min(stateless.len());
+                    let consumed = pivot_prefix_consumed_in(
+                        src_bytes,
+                        src_enc,
+                        stateless_enc(),
+                        end,
+                        opts,
+                        store,
+                    );
+                    return (
+                        StreamConvertResult::DestinationBufferFull,
+                        consumed,
+                        stateless[..fits].to_vec(),
+                        ErrMeta {
+                            dst_full_out: stateless[fits..end].to_vec(),
+                            iso_state_out: crate::value::iso2022jp_to_stateless_from(
+                                &src_bytes[..consumed],
+                                opts.iso_state,
+                            )
+                            .map(|(_, l)| l)
+                            .unwrap_or(opts.iso_state),
+                            ..ErrMeta::default()
+                        },
+                    );
+                }
+                let kind = if partial_input {
+                    StreamConvertResult::SourceBufferEmpty
+                } else {
+                    StreamConvertResult::Finished
+                };
+                return (
+                    kind,
+                    src_bytes.len(),
+                    stateless,
+                    ErrMeta {
+                        iso_state_out: left,
+                        ..ErrMeta::default()
+                    },
+                );
+            }
+            let (kind, stateless_consumed, out, mut meta) = stream_convert(
+                &stateless,
+                stateless_enc(),
+                dst_enc,
+                max_dst_bytes,
+                partial_input,
+                &reporting_as(opts, src_enc),
+                store,
+            );
+            meta.iso_state_out = left;
+            // A cap stops part way through the rewrite, so the source
+            // bytes it read are the ones that produced the stateless
+            // prefix — escape sequences included, since they are read
+            // whole and write nothing. Only a run that *ended* takes
+            // the whole source: one that stopped — on an error or on a
+            // full destination — read no further than the character it
+            // choked on, so a trailing escape sequence is still the
+            // caller's (#1609).
+            let ended = matches!(
+                kind,
+                StreamConvertResult::Finished | StreamConvertResult::SourceBufferEmpty
+            );
+            let consumed = if ended && stateless_consumed == stateless.len() {
+                src_bytes.len()
+            } else {
+                pivot_prefix_consumed_in(
+                    src_bytes,
+                    src_enc,
+                    stateless_enc(),
+                    stateless_consumed,
+                    opts,
+                    store,
+                )
+            };
+            return (kind, consumed, out, meta);
+        }
+        if dst_enc == E::Iso2022Jp {
+            let (kind, consumed, stateless, mut meta) = if src_enc == stateless_enc() {
+                let k = if partial_input {
+                    StreamConvertResult::SourceBufferEmpty
+                } else {
+                    StreamConvertResult::Finished
+                };
+                (k, src_bytes.len(), src_bytes.to_vec(), ErrMeta::default())
+            } else {
+                stream_convert(
+                    src_bytes,
+                    src_enc,
+                    stateless_enc(),
+                    None,
+                    partial_input,
+                    opts,
+                    store,
+                )
+            };
+            // The closing escape belongs to the end of the input, so a
+            // chunk that may be followed by more does not write it —
+            // and neither does one that stopped on an error, which is
+            // not the end of anything (#1609).
+            let ended = matches!(
+                kind,
+                StreamConvertResult::Finished | StreamConvertResult::SourceBufferEmpty
+            );
+            return match crate::value::stateless_to_iso2022jp_from(
+                &stateless,
+                opts.iso_state,
+                ended && !partial_input,
+            ) {
+                Ok((out, left)) => {
+                    // The cap counts ISO-2022-JP bytes and CRuby
+                    // fills the destination to the byte — a partial
+                    // escape sequence included — holding the rest for
+                    // the next call rather than leaving it in `src`
+                    // (#1532).
+                    if let Some(max) = max_dst_bytes
+                        && out.len() > max
+                    {
+                        let read = iso2022jp_read_through(&stateless, opts.iso_state, max);
+                        // A run that stopped on an error consumed the
+                        // malformed bytes too, and those are past the
+                        // character the cap stopped on.
+                        let consumed = if read == stateless.len() && ended {
+                            consumed
+                        } else if src_enc == stateless_enc() {
+                            read.min(src_bytes.len())
+                        } else {
+                            pivot_prefix_consumed_in(
+                                src_bytes,
+                                src_enc,
+                                stateless_enc(),
+                                read,
+                                opts,
+                                store,
+                            )
+                        };
+                        return (
+                            StreamConvertResult::DestinationBufferFull,
+                            consumed,
+                            out[..max].to_vec(),
+                            ErrMeta {
+                                dst_full_out: out[max..].to_vec(),
+                                iso_state_out: left,
+                                ..ErrMeta::default()
+                            },
+                        );
+                    }
+                    // A destination filled to the last byte is
+                    // still full when the stream ends in ASCII: the
+                    // encoder's closing reset writes nothing then,
+                    // and it cannot know that without room to try, so
+                    // CRuby asks for one more call. A stream ending
+                    // in JIS wrote its `ESC ( B` and is done (#1609).
+                    let closed_empty = crate::value::stateless_to_iso2022jp_from(
+                        &stateless,
+                        opts.iso_state,
+                        false,
+                    )
+                    .is_ok_and(|(_, l)| l.is_none());
+                    if max_dst_bytes == Some(out.len())
+                        && !partial_input
+                        && closed_empty
+                        && matches!(kind, StreamConvertResult::Finished)
+                    {
+                        return (
+                            StreamConvertResult::DestinationBufferFull,
+                            consumed,
+                            out,
+                            ErrMeta {
+                                iso_state_out: left,
+                                ..ErrMeta::default()
+                            },
+                        );
+                    }
+                    meta.iso_state_out = left;
+                    (kind, consumed, out, meta)
+                }
+                Err(at) => {
+                    // The run before the malformed one was converted,
+                    // and CRuby writes it: the error stops the
+                    // conversion, it does not undo what came before
+                    // (#1609).
+                    let (mut out, left) = crate::value::stateless_to_iso2022jp_from(
+                        &stateless[..at],
+                        opts.iso_state,
+                        false,
+                    )
+                    .unwrap_or_default();
+                    // Reaching here means the *stateless* bytes are
+                    // malformed, and those are either `src_bytes`
+                    // verbatim or the output of a conversion, which is
+                    // well-formed by construction — so the source is
+                    // stateless-ISO-2022-JP itself and its offsets are
+                    // the ones below. (`stateless_enc()` is the exact
+                    // encoding, not the pair: a KDDI-stateless source
+                    // is *converted* to it and takes the Ok arm.)
+                    debug_assert_eq!(src_enc, stateless_enc());
+                    let (k, mut m) =
+                        bad_source_outcome(stateless_enc(), &stateless[at..], !partial_input);
+                    m.iso_state_out = left;
+                    if let Some(max) = max_dst_bytes
+                        && out.len() > max
+                    {
+                        let rest = out.split_off(max);
+                        let read =
+                            iso2022jp_read_through(&stateless[..at], opts.iso_state, max);
+                        let consumed = read.min(src_bytes.len());
+                        return (
+                            StreamConvertResult::DestinationBufferFull,
+                            consumed,
+                            out,
+                            ErrMeta {
+                                dst_full_out: rest,
+                                iso_state_out: left,
+                                ..ErrMeta::default()
+                            },
+                        );
+                    }
+                    let through = at + m.error_bytes.len() + m.readagain_bytes.len();
+                    (k, through.min(src_bytes.len()), out, m)
+                }
+            };
         }
         if let Some(stateless) = stateless_iso2022jp(src_enc) {
             return stateless_source_stream(
@@ -8309,6 +8865,12 @@ fn first_bad_sequence(enc: crate::value::Encoding, bytes: &[u8]) -> Option<(Vec<
                 (bytes[..unit].to_vec(), vec![], false)
             })
         }
+        // Stateful: only a parse from the start knows which character
+        // set is in effect, so the run comes from the parser (#1609).
+        E::Iso2022Jp => match crate::value::iso2022jp_to_stateless(bytes) {
+            Ok(_) => None,
+            Err(stop) => Some((stop.error, stop.again, stop.incomplete)),
+        },
         // Its transcoder is narrower than its walk, and the transcoder
         // is what decides a run (#1600).
         _ if stateless_iso2022jp(enc).is_some() => {
@@ -8775,12 +9337,15 @@ fn error_stage_names(
         return (src_enc.name().to_string(), dst_enc.name().to_string());
     }
     if decode_stage {
+        // The hop that reads the source is the conversion path's
+        // first, and inside the JIS family that is a neighbour on the
+        // line rather than the pivot: ISO-2022-JP hands its bytes to
+        // stateless-ISO-2022-JP, which hands them to EUC-JP (#1609).
+        if let Some(chain) = jis_family_chain(src_enc, dst_enc) {
+            return (chain[0].name().to_string(), chain[1].name().to_string());
+        }
         let stage_dst = if is_the_utf8_pivot(src_enc) {
             dst_enc.name().to_string()
-        } else if stateless_iso2022jp(src_enc).is_some() {
-            // Its next hop is EUC-JP, not the pivot — that is the
-            // whole of what the encoding is (#1600).
-            "EUC-JP".to_string()
         } else {
             "UTF-8".to_string()
         };
@@ -9248,7 +9813,8 @@ fn converter_primitive_convert(
     // call that ends the stream.
     let no_more_input = src_arg.is_nil() || new_src_bytes.is_empty();
 
-    let conv_opts = converter_transcode_opts(globals, recv);
+    let mut conv_opts = converter_transcode_opts(globals, recv);
+    conv_opts.iso_state = converter_iso_state(globals, recv);
     let (result, src_consumed, out_bytes, meta) = if already_finished {
         (
             StreamConvertResult::Finished,
@@ -9274,6 +9840,9 @@ fn converter_primitive_convert(
             &globals.store,
         )
     };
+    if !already_finished {
+        converter_set_iso_state(globals, recv, meta.iso_state_out);
+    }
     // The BOM goes in front of the first output there is, and is
     // itself output: a cap too small to hold it writes what fits and
     // holds the rest for the next call, the way a character's bytes
@@ -9659,6 +10228,78 @@ fn converter_search_convpath(
     Ok(build_convpath(globals, src, dst, crlf))
 }
 
+/// The hops CRuby walks between two JIS-family encodings, or between
+/// one of them and anything else, as `convpath` reports them.
+///
+/// The family is a line — `ISO-2022-JP — stateless-ISO-2022-JP —
+/// EUC-JP — Shift_JIS` — with UTF-8 hanging off EUC-JP's end. A
+/// conversion walks it, so the cells never become Unicode unless the
+/// other end is outside the family (#1609).
+fn jis_family_chain(
+    src: crate::value::Encoding,
+    dst: crate::value::Encoding,
+) -> Option<Vec<crate::value::Encoding>> {
+    use crate::value::Encoding as E;
+    let line = [
+        E::Iso2022Jp,
+        stateless_enc(),
+        E::EUC_JP,
+        E::Sjis(0),
+    ];
+    let rank = |e: crate::value::Encoding| line.iter().position(|&x| x == e);
+    // Only the two encodings this PR adds to the family need a chain
+    // spelled out; EUC-JP ↔ Shift_JIS already had one, and a pair
+    // with neither is none of this function's business.
+    if !matches!(src, E::Iso2022Jp) && stateless_iso2022jp(src).is_none()
+        && !matches!(dst, E::Iso2022Jp) && stateless_iso2022jp(dst).is_none()
+    {
+        return None;
+    }
+    if src == dst {
+        return None;
+    }
+    let mut hops: Vec<crate::value::Encoding> = Vec::new();
+    match (rank(src), rank(dst)) {
+        (Some(a), Some(b)) => {
+            let mut i = a;
+            hops.push(line[i]);
+            while i != b {
+                i = if b > i { i + 1 } else { i - 1 };
+                hops.push(line[i]);
+            }
+        }
+        // Into the family from outside: reach EUC-JP first, which is
+        // the only member with a hop to the pivot.
+        (None, Some(b)) => {
+            hops.push(src);
+            if src != E::UTF8 {
+                hops.push(E::UTF8);
+            }
+            let mut i = 2;
+            hops.push(line[i]);
+            while i != b {
+                i = if b > i { i + 1 } else { i - 1 };
+                hops.push(line[i]);
+            }
+        }
+        (Some(a), None) => {
+            let mut i = a;
+            hops.push(line[i]);
+            while i != 2 {
+                i = if i < 2 { i + 1 } else { i - 1 };
+                hops.push(line[i]);
+            }
+            if dst != E::UTF8 {
+                hops.push(E::UTF8);
+            }
+            hops.push(dst);
+        }
+        (None, None) => return None,
+    }
+    hops.dedup();
+    (hops.len() >= 2).then_some(hops)
+}
+
 /// The conversion path CRuby reports: encodings convert directly to /
 /// from UTF-8; everything else pivots through it. Decorators append
 /// their name as a trailing String element.
@@ -9670,9 +10311,24 @@ fn build_convpath(
 ) -> Value {
     use crate::value::Encoding as E;
     let mut elems: Vec<Value> = vec![];
-    // EUC-JP ↔ Shift_JIS is one step: CRuby has a converter that maps
-    // the shared JIS X 0208 plane directly (#1460).
-    if src == E::UTF8 || dst == E::UTF8 || src == dst || jis_direct_from_euc(src, dst).is_some() {
+    // The JIS family reaches Unicode through each other, not through
+    // the pivot: ISO-2022-JP writes stateless-ISO-2022-JP, which
+    // writes EUC-JP, which writes Shift_JIS — and only EUC-JP has a
+    // hop to UTF-8 at all (#1609).
+    if let Some(chain) = jis_family_chain(src, dst) {
+        for pair in chain.windows(2) {
+            elems.push(Value::array2(
+                encoding_value(globals, pair[0]),
+                encoding_value(globals, pair[1]),
+            ));
+        }
+    } else if src == E::UTF8
+        || dst == E::UTF8
+        || src == dst
+        // EUC-JP ↔ Shift_JIS is one step: CRuby has a converter that
+        // maps the shared JIS X 0208 plane directly (#1460).
+        || jis_direct_from_euc(src, dst).is_some()
+    {
         elems.push(Value::array2(
             encoding_value(globals, src),
             encoding_value(globals, dst),
@@ -9688,7 +10344,17 @@ fn build_convpath(
         ));
     }
     if crlf {
-        elems.push(Value::string_from_str("crlf_newline"));
+        // The decorator rewrites LF, so it has to run while the text
+        // is still ASCII-compatible. CRuby puts it *before* the hop
+        // that writes an ASCII-incompatible destination — the escape
+        // sequences of ISO-2022-JP, the code units of UTF-16 — and
+        // after everything otherwise (`rb_econv_decorate_at_last`).
+        let at = if dst.is_ascii_compatible() {
+            elems.len()
+        } else {
+            elems.len() - 1
+        };
+        elems.insert(at, Value::string_from_str("crlf_newline"));
     }
     Value::array_from_vec(elems)
 }
@@ -11318,6 +11984,388 @@ mod tests {
                     s.chars.map { |c| c.bytesize }]
             end
             r
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_jis_family_converts_cell_to_cell_through_iso_2022_jp() {
+        // The family is a line — ISO-2022-JP — stateless-ISO-2022-JP —
+        // EUC-JP — Shift_JIS — with UTF-8 hanging off EUC-JP's end, so
+        // a conversion inside it never asks Unicode. ISO-2022-JP was
+        // outside that line, going through `encoding_rs`'s WHATWG
+        // table instead: cells Unicode has no character for could not
+        // reach it (#1609) and 343 characters CRuby refuses could
+        // (#1612).
+        crate::tests::run_test_once(
+            r##"
+            [["EUC-JP","ISO-2022-JP"],["ISO-2022-JP","EUC-JP"],["Shift_JIS","ISO-2022-JP"],
+             ["ISO-2022-JP","Shift_JIS"],["EUC-JP","Shift_JIS"],["UTF-8","ISO-2022-JP"],
+             ["ISO-2022-JP","UTF-8"],["stateless-ISO-2022-JP","EUC-JP"],
+             ["ISO-2022-JP","stateless-ISO-2022-JP"],["stateless-ISO-2022-JP","ISO-2022-JP"]].map do |a, b|
+              begin
+                Encoding::Converter.new(a, b).convpath.map { |x| x.is_a?(Array) ? x.map(&:to_s) : x.to_s }
+              rescue
+                $!.class.to_s
+              end
+            end
+            "##,
+        );
+        // A cell with no character crosses like any other, and the
+        // duplicate-mapping rows keep JIS's reading rather than
+        // Windows's.
+        crate::tests::run_test_once(
+            r##"
+            [[0xA2,0xAF],[0xA1,0xBD],[0xA1,0xC1],[0xA1,0xF1],[0xA2,0xCC],[0xB0,0xEC],[0xFE,0xFE]].map do |l, t|
+              e = [l, t].pack("C*").force_encoding("EUC-JP")
+              [("%02X%02X" % [l, t]),
+               begin; e.dup.encode("ISO-2022-JP").bytes; rescue; $!.class.to_s; end,
+               begin; e.dup.encode("Shift_JIS").encode("ISO-2022-JP").bytes; rescue; $!.class.to_s; end,
+               begin
+                 Encoding::Converter.new("EUC-JP", "ISO-2022-JP").convert(e.dup).bytes
+               rescue
+                 $!.class.to_s
+               end]
+            end
+            "##,
+        );
+        // Half-width katakana and JIS X 0212 have no ISO-2022-JP cell,
+        // and no longer quietly become full-width ones.
+        crate::tests::run_test_once(
+            r##"
+            r = []
+            ["\u{FF71}", "\u{FF61}", "\u{2116}", "\u{00A5}", "\u{203E}"].each do |c|
+              r << [c.codepoints, begin; c.encode("ISO-2022-JP").bytes; rescue; $!.class.to_s; end]
+            end
+            r << ("\u{4E00}\u{3042}".encode("ISO-2022-JP").bytes)
+            r
+            "##,
+        );
+        // The escape grammar, and the designation surviving a chunk:
+        // it stays in effect across `#convert`, and the closing escape
+        // comes from `#finish`.
+        crate::tests::run_test_once(
+            r##"
+            e = "ISO-2022-JP"
+            r = []
+            [[0x1B,0x24,0x42,0x30,0x6C,0x1B,0x28,0x42], [0x1B,0x24,0x42,0x30,0x6C],
+             [0x1B,0x24,0x40,0x30,0x6C,0x1B,0x28,0x42], [0x1B,0x28,0x4A,0x5C,0x1B,0x28,0x42],
+             [0x1B,0x24,0x42,0x7E,0x7E,0x1B,0x28,0x42], [0x1B,0x24,0x42,0x20,0x21],
+             [0x1B,0x24,0x42,0x21,0x7F], [0x1B,0x24,0x49,0x21], [0x1B], [0x1B,0x24], [0x80]].each do |bytes|
+              s = bytes.pack("C*").force_encoding(e)
+              r << [bytes.map { |b| "%02X" % b }.join,
+                    begin; s.encode("stateless-ISO-2022-JP").bytes; rescue; [$!.class.to_s, $!.message]; end,
+                    begin; s.encode("UTF-8").codepoints; rescue; $!.class.to_s; end]
+            end
+            ec = Encoding::Converter.new("UTF-8", e)
+            r << "\u{4E00}\u{3042}".each_char.map { |c| ec.convert(c).bytes }
+            r << ec.finish.bytes
+            ec2 = Encoding::Converter.new(e, "UTF-8")
+            d = +""
+            r << [ec2.primitive_convert([0x1B,0x24].pack("C*").dup.force_encoding(e), d, nil, nil, partial_input: true), d.bytes]
+            r << [ec2.primitive_convert([0x42,0x30,0x6C].pack("C*").dup.force_encoding(e), d, nil, nil, partial_input: true), d.bytes]
+            r << [ec2.primitive_convert("".dup.force_encoding(e), d), d.bytes]
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn iso_2022_jp_stops_where_the_destination_fills_not_where_the_error_is() {
+        // The source is read in order, so a cap that stops among the
+        // bytes *before* a malformed run reports the full destination
+        // and leaves the run for the next call to trip over (#1609).
+        crate::tests::run_test_once(
+            r##"
+            e = "ISO-2022-JP"
+            [[0x41,0x80,0x42], [0x1B,0x24,0x42,0x30,0x6C,0x80], [0x1B,0x24,0x49,0x21]].map do |bytes|
+              [bytes.map { |b| "%02X" % b }.join,
+               (0..4).map do |cap|
+                 ec = Encoding::Converter.new(e, "UTF-8")
+                 d = +""; s = bytes.pack("C*").force_encoding(e)
+                 r = ec.primitive_convert(s, d, nil, cap)
+                 [r, d.bytes, s.bytes,
+                  ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+               end]
+            end
+            "##,
+        );
+        // Stopping means stopping: an escape sequence that follows the
+        // character the destination could not hold writes nothing, but
+        // it is never read, so it stays in `src`.
+        crate::tests::run_test_once(
+            r##"
+            e = "ISO-2022-JP"
+            r = []
+            { "cell+esc+ascii" => [0x1B,0x24,0x42,0x30,0x6C,0x1B,0x28,0x42,0x41,0x42],
+              "cell+esc"       => [0x1B,0x24,0x42,0x30,0x6C,0x1B,0x28,0x42],
+              "ascii+esc+cell" => [0x41,0x1B,0x24,0x42,0x30,0x6C] }.each do |name, bytes|
+              (0..7).each do |cap|
+                ec = Encoding::Converter.new(e, "UTF-8")
+                s = bytes.pack("C*").force_encoding(e); d = +""
+                r << [name, cap, ec.primitive_convert(s, d, nil, cap), d.bytes, s.bytes]
+              end
+              ec = Encoding::Converter.new(e, "US-ASCII")
+              s = bytes.pack("C*").force_encoding(e); d = +""
+              r << [name, ec.primitive_convert(s, d), d.bytes, s.bytes,
+                    ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn an_iso_2022_jp_destination_reads_through_the_character_that_did_not_fit() {
+        // A cap stops the encoder on the character whose escape
+        // sequence and cell do not both fit; that character is read,
+        // the bytes after it are not, and the output already written
+        // is held for the next call rather than left in `src` (#1609).
+        crate::tests::run_test_once(
+            r##"
+            s = "stateless-ISO-2022-JP"
+            [[0x41,0x92,0xA4,0xA2,0x42], [0x92,0xA4,0xA2,0x92,0xA4,0xA4],
+             [0x41,0x80,0x42], [0x41,0x92,0xA4,0xA2,0x80,0x42],
+             [0x41,0x91,0xA4,0xA2,0x42]].map do |bytes|
+              [bytes.map { |b| "%02X" % b }.join,
+               (0..11).map do |cap|
+                 ec = Encoding::Converter.new(s, "ISO-2022-JP")
+                 src = bytes.pack("C*").force_encoding(s); d = +""
+                 [cap, ec.primitive_convert(src, d, nil, cap), d.bytes, src.bytes]
+               end]
+            end
+            "##,
+        );
+        // A destination filled to the last byte is still full when
+        // the stream ends in ASCII — the closing reset has nowhere to
+        // run — and finished when the closing escape was what filled
+        // it.
+        crate::tests::run_test_once(
+            r##"
+            [["UTF-8", "EUC-JP", "ab"], ["UTF-8", "ISO-2022-JP", "ab"],
+             ["stateless-ISO-2022-JP", "ISO-2022-JP", "ab"],
+             ["UTF-8", "UTF-16BE", "ab"]].map do |s, d, str|
+              bytes = str.dup.force_encoding(s)
+              full = Encoding::Converter.new(s, d).convert(bytes.dup).bytesize
+              [s, d, [full - 1, full, full + 1].map do |cap|
+                ec = Encoding::Converter.new(s, d); src = bytes.dup; dst = +""
+                [cap, ec.primitive_convert(src, dst, nil, cap), dst.bytes, src.bytes]
+              end]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_source_bound_for_iso_2022_jp_maps_a_cap_back_through_the_line() {
+        // The cap counts ISO-2022-JP bytes, so a source that is not
+        // already stateless-ISO-2022-JP has to map the offset back
+        // along its own hop to say what it read — with or without a
+        // malformed run waiting past it (#1609).
+        crate::tests::run_test_once(
+            r##"
+            e = "ISO-2022-JP"
+            [["EUC-JP", [0x41,0xA4,0xA2,0x42]], ["Shift_JIS", [0x41,0x82,0xA0,0x42]],
+             ["UTF-8", [0x41,0xE3,0x81,0x82,0x42]], ["CP949", [0x41,0x42]],
+             ["Shift_JIS", [0x41,0x82,0xA0,0x80,0x42]],
+             ["UTF-8", [0x41,0xE3,0x81,0x82,0x80,0x42]]].map do |src, bytes|
+              [src, bytes.map { |b| "%02X" % b }.join,
+               (0..12).map do |cap|
+                 ec = Encoding::Converter.new(src, e)
+                 s = bytes.pack("C*").force_encoding(src); d = +""
+                 [cap, ec.primitive_convert(s, d, nil, cap), d.bytes, s.bytes,
+                  ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+               end]
+            end
+            "##,
+        );
+        // An ISO-2022-JP source that stops mid-escape is incomplete,
+        // not malformed, and says so whatever the destination.
+        crate::tests::run_test_once(
+            r##"
+            e = "ISO-2022-JP"
+            r = []
+            [[0x41,0x1B], [0x41,0x1B,0x24], [0x1B,0x24,0x42,0x30]].each do |bytes|
+              [nil, 2].each do |cap|
+                ["UTF-8", "stateless-ISO-2022-JP"].each do |d|
+                  ec = Encoding::Converter.new(e, d)
+                  s = bytes.pack("C*").force_encoding(e); dst = +""
+                  r << [bytes.map { |b| "%02X" % b }.join, cap, d,
+                        ec.primitive_convert(s, dst, nil, cap), dst.bytes, s.bytes,
+                        ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+                end
+                ec = Encoding::Converter.new(e, "UTF-8")
+                s = bytes.pack("C*").force_encoding(e); dst = +""
+                r << [bytes.map { |b| "%02X" % b }.join, cap, "partial",
+                      ec.primitive_convert(s, dst, nil, cap, partial_input: true),
+                      dst.bytes, s.bytes]
+              end
+            end
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn an_error_writing_iso_2022_jp_does_not_close_the_designation() {
+        // The closing `ESC ( B` belongs to the end of the stream, and
+        // an error is not one: writing it there put three bytes into
+        // the destination that CRuby does not (#1609).
+        crate::tests::run_test_once(
+            r##"
+            [["Shift_JIS", [0x41,0x82,0xA0,0x80,0x42]], ["UTF-8", [0x41,0xE3,0x81,0x82,0x80,0x42]],
+             ["stateless-ISO-2022-JP", [0x41,0x92,0xA4,0xA2,0x80,0x42]]].map do |src, bytes|
+              ec = Encoding::Converter.new(src, "ISO-2022-JP")
+              s = bytes.pack("C*").force_encoding(src); d = +""
+              [src, ec.primitive_convert(s, d), d.bytes, s.bytes,
+               ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_capped_stateless_destination_holds_the_character_it_cut() {
+        // Whatever the cap, a loop that keeps calling until it is
+        // finished writes the same bytes: the half of a character
+        // that did not fit is held for the next call, not dropped
+        // (#1532).
+        crate::tests::run_test_once(
+            r##"
+            e = "ISO-2022-JP"; s = "stateless-ISO-2022-JP"
+            [[0x41,0x42,0x43], [0x41,0x1B,0x24,0x42,0x30,0x6C,0x1B,0x28,0x42,0x42],
+             [0x1B,0x24,0x42,0x30,0x6C,0x30,0x6D], [0x1B,0x24,0x42,0x30,0x6C,0x1B,0x28,0x42]].map do |bytes|
+              [bytes.map { |b| "%02X" % b }.join,
+               (1..4).map do |cap|
+                 ec = Encoding::Converter.new(e, s)
+                 src = bytes.pack("C*").force_encoding(e); out = +""; n = 0
+                 loop do
+                   d = +""
+                   r = ec.primitive_convert(src, d, nil, cap)
+                   out << d; n += 1
+                   break if r == :finished || n > 50
+                   break unless r == :destination_buffer_full
+                 end
+                 [cap, out.bytes]
+               end]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn iso_2022_jp_names_the_hop_that_read_the_source() {
+        // The escape sequences come off first, so a malformed run is
+        // reported against `ISO-2022-JP → stateless-ISO-2022-JP` —
+        // never against the conversion's real destination (#1609).
+        crate::tests::run_test_once(
+            r##"
+            e = "ISO-2022-JP"
+            ["UTF-8", "EUC-JP", "Shift_JIS", "stateless-ISO-2022-JP", "UTF-16BE",
+             "ISO-8859-1", "CP949"].map do |d|
+              [[0x41,0x80,0x42], [0x1B,0x24,0x49,0x21,0x21]].map do |bytes|
+                ec = Encoding::Converter.new(e, d)
+                s = bytes.pack("C*").force_encoding(e); dst = +""
+                [d, ec.primitive_convert(s, dst), dst.bytes, s.bytes,
+                 ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+              end
+            end
+            "##,
+        );
+        // The same rule read from the other end: the hop that reads a
+        // source *bound* for the family is its own first hop, which is
+        // EUC-JP for everything that reaches ISO-2022-JP through it.
+        // What was converted before the malformed run is written, not
+        // thrown away with it.
+        crate::tests::run_test_once(
+            r##"
+            [["UTF-8", [0x41,0x80,0x42]], ["Shift_JIS", [0x41,0x80,0x42]],
+             ["stateless-ISO-2022-JP", [0x41,0x80,0x42]],
+             ["stateless-ISO-2022-JP", [0x41,0x91,0xA4,0xA2,0x42]],
+             ["CP949", [0x41,0x80,0x42]]].map do |src, bytes|
+              (["ISO-2022-JP", "stateless-ISO-2022-JP"] - [src]).map do |d|
+                ec = Encoding::Converter.new(src, d)
+                s = bytes.pack("C*").force_encoding(src); dst = +""
+                [src, d, ec.primitive_convert(s, dst), dst.bytes, s.bytes,
+                 ec.primitive_errinfo.map { |x| x.is_a?(String) ? x.bytes : x }]
+              end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_newline_decorator_runs_before_an_ascii_incompatible_encoder() {
+        // The decorator rewrites LF, so CRuby puts it before the hop
+        // that writes ISO-2022-JP's escape sequences or UTF-16's code
+        // units, and after everything otherwise (#1609).
+        crate::tests::run_test_once(
+            r##"
+            ["ISO-2022-JP", "UTF-16BE", "UTF-16LE", "UTF-32BE", "UTF-32LE", "EUC-JP",
+             "Shift_JIS", "Windows-31J", "stateless-ISO-2022-JP"].map do |d|
+              [d, Encoding::Converter.new("UTF-8", d, crlf_newline: true).convpath
+                    .map { |x| x.is_a?(Array) ? x.map(&:to_s) : x.to_s },
+                  Encoding::Converter.search_convpath("ISO-2022-JP", "EUC-JP", crlf_newline: true)
+                    .map { |x| x.is_a?(Array) ? x.map(&:to_s) : x.to_s }]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn iso_2022_jp_substitutes_a_malformed_run_in_the_set_it_was_in() {
+        // `invalid: :replace` on a stateful source has to resume in
+        // the designation that was in effect: the byte after a
+        // substituted one is still that character set's, not ASCII
+        // (#1609).
+        crate::tests::run_test_once(
+            r##"
+            e = "ISO-2022-JP"
+            [[0x41,0x80,0x42], [0x1B,0x24,0x42,0x30,0x6C,0x80,0x1B,0x28,0x42],
+             [0x1B,0x24,0x49,0x21,0x1B,0x28,0x42], [0x1B,0x24,0x42,0x20,0x21,0x1B,0x28,0x42],
+             [0x1B,0x24,0x42,0x21,0x7F,0x1B,0x28,0x42], [0x41,0x1B,0x24,0x42,0x30,0x6C]].map do |bytes|
+              s = bytes.pack("C*").force_encoding(e)
+              [bytes.map { |b| "%02X" % b }.join,
+               ["UTF-8", "EUC-JP", "stateless-ISO-2022-JP"].map do |d|
+                 [begin; s.dup.encode(d, invalid: :replace).bytes; rescue; $!.class.to_s; end,
+                  begin
+                    Encoding::Converter.new(e, d, invalid: :replace).convert(s.dup).bytes
+                  rescue
+                    $!.class.to_s
+                  end]
+               end]
+            end
+            "##,
+        );
+        // An *incomplete* escape is only malformed once the input has
+        // ended: `#convert` holds it and `#finish` substitutes it, so
+        // the converter cannot take the single-shot shortcut that
+        // sees one whole input.
+        crate::tests::run_test_once(
+            r##"
+            e = "ISO-2022-JP"
+            r = []
+            [[0x1B], [0x1B, 0x24], [0x41, 0x1B, 0x24]].each do |bytes|
+              s = bytes.pack("C*").force_encoding(e)
+              ec = Encoding::Converter.new(e, "UTF-8", invalid: :replace)
+              r << [bytes.map { |b| "%02X" % b }.join, ec.convert(s.dup).bytes, ec.finish.bytes]
+              ec2 = Encoding::Converter.new(e, "UTF-8", invalid: :replace)
+              d = +""
+              r << [ec2.primitive_convert(s.dup, d), d.bytes]
+            end
+            r
+            "##,
+        );
+        // A malformed run in a stateless source bound for ISO-2022-JP
+        // is settled at that hop too.
+        crate::tests::run_test_once(
+            r##"
+            [[0x41,0x81,0xA1,0x42], [0x41,0x8E,0xA1]].map do |bytes|
+              s = bytes.pack("C*").force_encoding("stateless-ISO-2022-JP")
+              [bytes.map { |b| "%02X" % b }.join,
+               begin; s.dup.encode("ISO-2022-JP").bytes; rescue; [$!.class.to_s, $!.message]; end,
+               begin; s.dup.encode("ISO-2022-JP", invalid: :replace).bytes; rescue; $!.class.to_s; end]
+            end
             "##,
         );
     }
