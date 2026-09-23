@@ -3172,12 +3172,32 @@ fn expansion_inner(
     captured_non_ascii: bool,
     hay_enc: crate::value::Encoding,
 ) -> Result<RStringInner> {
-    let enc = if template.is_ascii_only() {
+    // `rb_enc_compatible(str, repl)`: an empty template is always
+    // compatible, a 7-bit one only where both encodings are
+    // ASCII-compatible (a UTF-16 receiver cannot take `"X"`), and
+    // otherwise the two must agree once the captured text (which is
+    // the receiver's) is non-ASCII or either side is not
+    // ASCII-compatible.
+    let enc = if template.as_bytes().is_empty() {
+        hay_enc
+    } else if template.is_ascii_only()
+        && hay_enc.is_ascii_compatible()
+        && template.encoding().is_ascii_compatible()
+    {
         hay_enc
     } else {
         let enc = template.encoding();
-        if captured_non_ascii && enc != hay_enc {
-            return Err(MonorubyErr::incompatible_encoding(store, enc, hay_enc));
+        if enc != hay_enc
+            && (captured_non_ascii || !hay_enc.is_ascii_compatible() || !enc.is_ascii_compatible())
+        {
+            // Named the way CRuby names them: the template first, except
+            // that a receiver which is not ASCII-compatible is refused
+            // by `rb_enc_check(str, repl)` and comes first.
+            return Err(if hay_enc.is_ascii_compatible() || template.is_ascii_only() {
+                MonorubyErr::incompatible_encoding(store, enc, hay_enc)
+            } else {
+                MonorubyErr::incompatible_encoding(store, hay_enc, enc)
+            });
         }
         enc
     };

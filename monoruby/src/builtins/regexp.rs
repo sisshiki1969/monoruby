@@ -757,6 +757,7 @@ fn regexp_union(
                     return Ok(re.into());
                 }
             }
+            let arg = union_member_value(vm, globals, arg)?;
             let s = format_union_member(vm, globals, arg)?;
             // Single non-Regexp arg: pin the encoding to the
             // arg's source encoding (CRuby behaviour), rendering
@@ -771,12 +772,13 @@ fn regexp_union(
     let mut combined: UnionEnc = UnionEnc::Free;
     let mut all_ascii_only = true;
     for arg in rest.iter() {
-        let enc = union_arg_encoding(globals, *arg);
+        let arg = union_member_value(vm, globals, *arg)?;
+        let enc = union_arg_encoding(globals, arg);
         if !enc.ascii_only {
             all_ascii_only = false;
         }
         combined = combined.combine(enc, &globals.store)?;
-        parts.push(format_union_member(vm, globals, *arg)?);
+        parts.push(format_union_member(vm, globals, arg)?);
     }
     // CRuby's `Regexp.union` downgrades the result to US-ASCII
     // when *every* arg was 7-bit ASCII content, even if
@@ -981,6 +983,30 @@ fn union_inner_with_encoding(
     // escapes are all the shared builder's.
     let text = String::from_utf8_lossy(&pattern).into_owned();
     regexp_inner_from_parts(text, Some(enc), Some(pattern), option, kcode)
+}
+
+/// What a `Regexp.union` argument stands for: itself when it is a
+/// String, Regexp or Symbol, else the Regexp its `to_regexp` or the
+/// String its `to_str` answers — so the member's encoding is read off
+/// the converted value, as CRuby reads it. Anything else is handed
+/// back as it is, for `format_union_member` to refuse.
+fn union_member_value(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<Value> {
+    if arg.is_rstring().is_some() || arg.is_regex().is_some() || arg.try_symbol().is_some() {
+        return Ok(arg);
+    }
+    if let Some(func_id) = globals.check_method(arg, IdentId::get_id("to_regexp")) {
+        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        if result.is_regex().is_some() {
+            return Ok(result);
+        }
+    }
+    if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
+        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        if result.is_rstring().is_some() {
+            return Ok(result);
+        }
+    }
+    Ok(arg)
 }
 
 /// Render a single `Regexp.union` argument into its embedded form.
@@ -3444,6 +3470,58 @@ mod tests {
               load path
               $r.map { |v| v.is_a?(Encoding) ? v.to_s : v }
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_utf16_regexp_s_remaining_corners() {
+        // The rest of what a UTF-16 pattern reaches: every backreference
+        // form of a replacement template read as code units, the control
+        // characters `Regexp.escape` spells out, `#to_s` with each flag
+        // set, a compile error and a second compile of the same pattern
+        // (the cache), a union of wide regexps, duplicate names, a
+        // native `byteindex` / `byterindex` that finds nothing, a regexp
+        // copied from a wide or EUC-KR one, and a UTF-8 replacement into
+        // a UTF-16 receiver, which is incompatible even when 7-bit.
+        run_test_once(
+            r##"
+def e(s, enc) = s.dup.force_encoding(enc)
+def w(v)
+  case v
+  when String then [v.bytes, v.encoding.to_s]
+  when Array then v.map { |i| w(i) }
+  when MatchData then w(v.to_a)
+  when Regexp then [v.source.bytes, v.encoding.to_s, v.fixed_encoding?, v.options, v.inspect.bytes, v.to_s.bytes]
+  else v
+  end
+end
+x = ->(&b) { begin; w(b.call); rescue => err; [err.class, err.message.ascii_only? ? err.message : err.message.encoding.to_s]; end }
+u = ->(s, enc = "UTF-16LE") { s.encode(enc) }
+s = u.("ab日cab")
+re = Regexp.new(u.("(?<n>a)(b)"))
+[x.() { s.sub(re, u.("<\\&|\\0|\\`|\\'|\\+|\\\\|\\k<n>|\\9|\\z>")) },
+ x.() { s.gsub(Regexp.new(u.("(a)")), u.("[\\1\\1]")) }, x.() { s.sub(Regexp.new(u.("日")), u.("\\")) },
+ x.() { s.gsub(Regexp.new(u.("(?<x>b)")), u.("\\k<x>\\k<x>")) },
+ x.() { Regexp.escape(u.("a\r\f\v\t b#$-^*+?{}()|.")) }, x.() { Regexp.escape(e("a\x00\xD8[", "UTF-16LE")) }, x.() { Regexp.escape(u.("a\n", "UTF-32BE")) },
+ x.() { Regexp.escape(e("\xC7[\xC7\xD1", "EUC-KR")) }, x.() { Regexp.escape("ソ\t[".encode("Shift_JIS")) },
+ x.() { Regexp.new(u.("a"), "m") }, x.() { Regexp.new(u.("a"), "ix") }, x.() { Regexp.new(u.("a"), "mix") }, x.() { Regexp.new(u.("a")) },
+ x.() { Regexp.new(u.("(")) rescue $!.class }, x.() { Regexp.new(u.("a")).equal?(nil) }, x.() { r1 = Regexp.new(u.("日+")); r2 = Regexp.new(u.("日+")); [r1 == r2, r1.match?(s), r2.match?(s)] },
+ x.() { Regexp.union(Regexp.new(u.("a")), u.("b")) }, x.() { Regexp.union(Regexp.new(u.("a"), "i"), Regexp.new(u.("b"), "x")) }, x.() { Regexp.union(Regexp.new(u.("a")), u.("b")) =~ s },
+ x.() { Regexp.new(u.("(?<n>a)(?<n>b)")).names }, x.() { s.byteindex(Regexp.new(u.("z"))) }, x.() { s.byterindex(Regexp.new(u.("z"))) }, x.() { s.byterindex(Regexp.new(u.("a")), 0) },
+ x.() { kr = "한국어abc".encode("EUC-KR"); [kr.split(Regexp.new("국".encode("EUC-KR"))), kr.split(Regexp.new("".encode("EUC-KR"))), Regexp.new("국".encode("EUC-KR")) == Regexp.new("국".encode("EUC-KR"))] },
+ x.() { kr = "한국어abc".encode("EUC-KR"); [kr.byterindex(Regexp.new("국".encode("EUC-KR"))), kr.byterindex(/z/), kr.byteindex(/z/), kr.byteindex(/b/, 8)] },
+ x.() { Regexp.new(Regexp.new("국".encode("EUC-KR"))) }, x.() { Regexp.new(Regexp.new(u.("a")), "i") },
+ x.() { s.scan(Regexp.new(u.("(?<n>a)"))) }, x.() { s.match(Regexp.new(u.("(?<n>a)")))[:n] rescue $!.class },
+ x.() { u.("a\\b").sub(Regexp.new(u.("\\\\")), u.("/")) }, x.() { Regexp.new(u.("a\\x41")) =~ s rescue $!.class }, x.() { Regexp.new(u.("[ab]+")).match(s) },
+ x.() { s.tr(u.("a"), u.("z")).class }, x.() { Regexp.new(e("\xA4\xA2", "EUC-JP")).inspect.bytes }, x.() { Regexp.new(e("\xA4\xA2", "EUC-JP")) =~ e("\xA4\xA2", "EUC-JP") },
+ x.() { Regexp.new(e("\xA4", "EUC-JP")) }, x.() { Regexp.new(u.("a")).source.frozen? }, x.() { s =~ Regexp.new(u.("(?i)A")) }, x.() { u.("").match?(Regexp.new(u.("a"))) }, x.() { u.("") =~ Regexp.new(u.("")) },
+ x.() { s.gsub(Regexp.new(u.("a")), "") }, x.() { s.gsub(Regexp.new(u.("a")), "X") }, x.() { s.sub(Regexp.new(u.("a")), "é") },
+ x.() { Regexp.new("\\xg") }, x.() { o = Object.new; def o.to_str = "ab"; Regexp.new(o) }, x.() { o = Object.new; def o.to_str = "ab"; Regexp.union(o) }, x.() { o = Object.new; def o.to_str = "ab"; "xab".byteindex(o) },
+ x.() { o = Object.new; def o.to_str = "ab"; "xab".match(o) }, x.() { o = Object.new; def o.to_str = "ab"; "xab".byterindex(o) }, x.() { o = Object.new; def o.to_str = "ab"; "xab".index(o) },
+ x.() { o = Object.new; def o.to_str = "국".encode("EUC-KR"); Regexp.union(o) }, x.() { o = Object.new; def o.to_str = "국".encode("EUC-KR"); "한국".encode("EUC-KR").match(o) }, x.() { /日/.match(:"日本").to_a }, x.() { Regexp.new("日") === :"日本" },
+ x.() { u.("ab").split(u.("")) }, x.() { Regexp.new(u.("\u{1F600}a")).inspect }, x.() { kr = "한국어abc".encode("EUC-KR"); [kr.rindex(/b/), kr.match?(/b/, 1), kr.split(Regexp.new("국a".encode("EUC-KR"))), kr.rindex(Regexp.new("국".encode("EUC-KR")))] },
+ x.() { Regexp.new(u.("a")).match(:"日本") }]
             "##,
         );
     }
