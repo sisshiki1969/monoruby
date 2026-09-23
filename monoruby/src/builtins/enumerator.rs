@@ -33,6 +33,12 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
+    globals.define_private_builtin_func(
+        ENUMERATOR_CLASS,
+        "initialize_copy",
+        enumerator_initialize_copy,
+        1,
+    );
     globals.define_private_builtin_func_with(
         ENUMERATOR_CLASS,
         "__enum_init_method__",
@@ -303,6 +309,51 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     );
     globals.pop_enum_block_arity();
     res
+}
+
+///
+/// ### Enumerator#initialize_copy
+///
+/// - initialize_copy(orig) -> self
+///
+/// The second half of `dup` / `clone`: the copy arrives uninitialized and
+/// takes `orig`'s source here, CRuby's `enumerator_init_copy`. An
+/// uninitialized original is `ArgumentError`, and one whose external
+/// iteration is part way through cannot be copied — its fiber is an
+/// execution context — so `TypeError: can't copy execution context`
+/// (#1624).
+#[monoruby_builtin]
+fn enumerator_initialize_copy(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    let orig = lfp.arg(0);
+    if orig.id() == self_val.id() {
+        return Ok(self_val);
+    }
+    if self_val.is_frozen() {
+        return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
+    }
+    if self_val.ty() != Some(ObjTy::ENUMERATOR)
+        || orig.ty() != Some(ObjTy::ENUMERATOR)
+        || self_val.real_class(&globals.store).id() != orig.real_class(&globals.store).id()
+    {
+        return Err(MonorubyErr::typeerr(
+            "initialize_copy should take same class object",
+        ));
+    }
+    let src = orig.as_enumerator_inner();
+    if !src.is_initialized() {
+        return Err(MonorubyErr::argumenterr("uninitialized enumerator"));
+    }
+    if src.has_execution_context() {
+        return Err(MonorubyErr::typeerr("can't copy execution context"));
+    }
+    self_val.as_enumerator_inner_mut().copy_from(src);
+    Ok(self_val)
 }
 
 ///

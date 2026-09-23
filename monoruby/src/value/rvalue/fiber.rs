@@ -115,6 +115,25 @@ impl FiberInner {
         }
     }
 
+    /// The state `Fiber.allocate` and a copy of a fiber leave behind: an
+    /// owned executor with no body. CRuby answers every method of such a
+    /// fiber with `FiberError: uninitialized fiber` (#1624).
+    pub(crate) fn uninit() -> Self {
+        Self {
+            handle: FiberHandle::Owned(Box::new(Executor::default())),
+            proc: None,
+            stack: None,
+            owner_thread: 0,
+            svar_isolated: true,
+        }
+    }
+
+    /// Whether this is [`Self::uninit`]'s fiber: only a root fiber has no
+    /// body otherwise.
+    pub(crate) fn is_uninit(&self) -> bool {
+        self.proc.is_none() && !self.is_root()
+    }
+
     /// A root Fiber object aliasing the given (running) root executor.
     pub(crate) fn root(executor: std::ptr::NonNull<Executor>, owner_thread: u64) -> Self {
         Self {

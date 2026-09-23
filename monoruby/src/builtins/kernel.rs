@@ -4999,14 +4999,23 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// A plain object of a class with no allocator — an `Encoding` — cannot
 /// be copied: CRuby's `rb_obj_dup` allocates the copy through the class
 /// and fails there. The types with a representation of their own are
-/// copied by that representation whether or not their class allocates.
+/// copied by that representation whether or not their class allocates,
+/// except a `Thread`, which CRuby has no allocator for (#1624).
+/// monoruby's `Thread` keeps an allocator for the inert shells
+/// `Process.detach` builds, so it is named here rather than looked up.
 fn refuse_copy_without_allocator(globals: &Globals, val: Value) -> Result<()> {
-    if val.ty() == Some(ObjTy::OBJECT) {
-        let class_id = val.real_class(&globals.store).id();
-        if globals.store[class_id].alloc_func().is_none() {
-            let name = globals.store.get_class_name(class_id);
-            return Err(MonorubyErr::typeerr(format!("allocator undefined for {name}")));
+    let refused = match val.ty() {
+        Some(ObjTy::OBJECT) => {
+            let class_id = val.real_class(&globals.store).id();
+            globals.store[class_id].alloc_func().is_none()
         }
+        Some(ObjTy::THREAD) => true,
+        _ => false,
+    };
+    if refused {
+        let class_id = val.real_class(&globals.store).id();
+        let name = globals.store.get_class_name(class_id);
+        return Err(MonorubyErr::typeerr(format!("allocator undefined for {name}")));
     }
     Ok(())
 }

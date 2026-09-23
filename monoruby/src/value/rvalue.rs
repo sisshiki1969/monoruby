@@ -1806,6 +1806,24 @@ impl RValue {
                         // CRuby's does: the pairs belong to the map
                         // the collector registered, not to this one.
                         ObjTy::WEAKMAP => ObjKind::weakmap(WeakMapInner::new()),
+                        // CRuby allocates the copy and lets
+                        // `Enumerator#initialize_copy` fill it in, which
+                        // is where an uninitialized or running original
+                        // is refused (#1624).
+                        ObjTy::ENUMERATOR => ObjKind {
+                            enumerator: ManuallyDrop::new(Box::new(
+                                EnumeratorInner::new_uninit(),
+                            )),
+                        },
+                        ObjTy::GENERATOR => ObjKind {
+                            generator: ManuallyDrop::new(self.kind.generator.dup()),
+                        },
+                        // A fiber's execution context cannot be copied:
+                        // the copy is an uninitialized fiber, as CRuby's
+                        // is (#1624).
+                        ObjTy::FIBER => ObjKind {
+                            fiber: ManuallyDrop::new(FiberInner::uninit()),
+                        },
                         ty => unreachable!("{ty:?}"),
                     }
                 } else {
@@ -1907,6 +1925,24 @@ impl RValue {
                         // CRuby's does: the pairs belong to the map
                         // the collector registered, not to this one.
                         ObjTy::WEAKMAP => ObjKind::weakmap(WeakMapInner::new()),
+                        // CRuby allocates the copy and lets
+                        // `Enumerator#initialize_copy` fill it in, which
+                        // is where an uninitialized or running original
+                        // is refused (#1624).
+                        ObjTy::ENUMERATOR => ObjKind {
+                            enumerator: ManuallyDrop::new(Box::new(
+                                EnumeratorInner::new_uninit(),
+                            )),
+                        },
+                        ObjTy::GENERATOR => ObjKind {
+                            generator: ManuallyDrop::new(self.kind.generator.dup()),
+                        },
+                        // A fiber's execution context cannot be copied:
+                        // the copy is an uninitialized fiber, as CRuby's
+                        // is (#1624).
+                        ObjTy::FIBER => ObjKind {
+                            fiber: ManuallyDrop::new(FiberInner::uninit()),
+                        },
                         ty => unreachable!("{ty:?}"),
                     }
                 } else {

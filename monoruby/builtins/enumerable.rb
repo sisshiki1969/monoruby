@@ -1155,6 +1155,21 @@ class Enumerator
     end
     private :initialize
 
+    # CRuby's `enum_chain_init_copy`: an uninitialized chain says so in
+    # its own words; the rest is `Enumerator#initialize_copy`, and the
+    # members come along with the ivars (#1624).
+    private def initialize_copy(other)
+      return self if other.equal?(self)
+      if frozen?
+        raise FrozenError, "can't modify frozen #{self.class}"
+      end
+      unless other.instance_of?(self.class)
+        raise TypeError, "initialize_copy should take same class object"
+      end
+      raise ArgumentError, "uninitialized chain" if other.instance_variable_get(:@enums).nil?
+      super
+    end
+
     private def __chain_each(&block)
       each(&block)
     end

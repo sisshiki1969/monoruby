@@ -402,6 +402,17 @@ class Thread
   #    return is re-checked.
 
   class Mutex
+    # A copy is a new, unlocked mutex with no waiters: CRuby allocates it
+    # fresh and its lock is not state `dup` copies. Here the lock lives
+    # in ivars, which `dup` does copy, so they are reset (#1624).
+    private def initialize_copy(other)
+      super
+      @owner = nil
+      @owner_fiber = nil
+      @waiters = nil
+      self
+    end
+
     # A Mutex holds native synchronization state, so it has no wire
     # form. CRuby's T_DATA path reports the missing `_dump_data` hook.
     def marshal_dump
@@ -554,6 +565,12 @@ class Thread
   end
 
   class Queue
+    # A queue cannot be copied: CRuby undefines the copy hook, so `dup` /
+    # `clone` answer `NoMethodError` for `initialize_copy` rather than
+    # sharing (or silently re-creating) the waiters (#1624).
+    # `SizedQueue < Queue` inherits it.
+    undef_method :initialize_copy
+
     # Same as ConditionVariable: the queue's waiters and monitor cannot
     # be serialized. (`SizedQueue < Queue` inherits this, and CRuby
     # names the receiver's own class in both.)
@@ -802,6 +819,9 @@ class Thread
     def initialize
       @waiters = []
     end
+
+    # Not copyable, as a Queue is not (see there).
+    undef_method :initialize_copy
 
     # Atomically release `mutex` and park until signaled (or the timeout
     # elapses), then re-acquire `mutex` before returning — also on an
