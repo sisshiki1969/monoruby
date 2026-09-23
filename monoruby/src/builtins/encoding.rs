@@ -5284,6 +5284,23 @@ const CONVERTER_READAGAIN_IVAR: &str = "/converter_readagain";
 /// readagain_bytes, stage_src, stage_dst]`, or absent/nil when the
 /// last outcome was not an error.
 const CONVERTER_LAST_ERROR_IVAR: &str = "/converter_last_error";
+
+/// The read-again bytes an `:invalid_byte_sequence` outcome left in
+/// the converter, taken out of it: they are the head of whatever the
+/// next call converts, as CRuby keeps them at the head of its input
+/// buffer — unless `#putback` handed them back to the caller first.
+fn converter_take_readagain(globals: &mut Globals, recv: Value) -> Vec<u8> {
+    let ra_id = IdentId::get_id(CONVERTER_READAGAIN_IVAR);
+    let bytes = globals
+        .store
+        .get_ivar(recv, ra_id)
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    if !bytes.is_empty() {
+        let _ = globals.store.set_ivar(recv, ra_id, Value::nil());
+    }
+    bytes
+}
 /// Conversion flags configured at construction (`invalid: :replace`
 /// / `undef: :replace` kwargs, or the `INVALID_REPLACE` /
 /// `UNDEF_REPLACE` Integer-flag bits). Stored as a Fixnum:
@@ -6012,11 +6029,14 @@ fn converter_convert(
     // raise — leaving `primitive_errinfo` / `last_error` /
     // `putback` observable — on invalid / undefined input.
     let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
-    let mut input: Vec<u8> = globals
-        .store
-        .get_ivar(recv, pending_id)
-        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-        .unwrap_or_default();
+    let mut input: Vec<u8> = converter_take_readagain(globals, recv);
+    input.extend(
+        globals
+            .store
+            .get_ivar(recv, pending_id)
+            .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+            .unwrap_or_default(),
+    );
     input.extend_from_slice(&bytes);
     // A dummy `UTF-16` / `UTF-32` source is read in whatever
     // endianness its BOM named; until one has arrived whole there is
@@ -6101,11 +6121,14 @@ fn converter_finish(
     // Input buffered by a partial `#convert` that never completed is an
     // incomplete-input error at finish time (CRuby).
     let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
-    let pending: Vec<u8> = globals
-        .store
-        .get_ivar(recv, pending_id)
-        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-        .unwrap_or_default();
+    let mut pending: Vec<u8> = converter_take_readagain(globals, recv);
+    pending.extend(
+        globals
+            .store
+            .get_ivar(recv, pending_id)
+            .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+            .unwrap_or_default(),
+    );
     let src_stream = converter_resolve_src_bom(globals, recv, src_enc, &pending);
     let dst_stream = dummy_wide_target(dst).unwrap_or(dst);
     let mut out: Vec<u8> = vec![];
@@ -6165,6 +6188,17 @@ fn converter_finish(
         bom.extend_from_slice(&out);
         out = bom;
     }
+    // The end of the stream is an outcome of its own: `primitive_errinfo`
+    // answers `:finished` after it, not the error a previous call
+    // reported and already consumed.
+    store_conversion_outcome(
+        globals,
+        recv,
+        StreamConvertResult::Finished,
+        &ErrMeta::default(),
+        src_enc,
+        dst,
+    );
     Ok(Value::string_from_inner(
         crate::value::RStringInner::from_encoding_scanned(&out, dst),
     ))
@@ -9858,16 +9892,30 @@ fn converter_primitive_convert(
     if !src_arg.is_nil() {
         src_arg.ensure_string_mutable(vm, globals)?;
     }
-    // Pending bytes from the previous `primitive_convert` that the
-    // dst-bytesize cap held back. Prepend them to the new src so
-    // multi-call streaming with `dst_bytesize` works (the spec
-    // test "uses the destination byte offset" hits this path).
-    let pending: Vec<u8> = globals
-        .store
-        .get_ivar(recv, IdentId::get_id(CONVERTER_PENDING_IVAR))
-        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-        .unwrap_or_default();
-    let mut src_bytes = pending;
+    // Once the input has ended the converter is done (see below):
+    // a later call reads nothing, so it takes nothing out of the
+    // converter either.
+    let finished_id = IdentId::get_id(CONVERTER_FINISHED_IVAR);
+    let already_finished = globals.store.get_ivar(recv, finished_id).is_some();
+    // The read-again bytes of the last `:invalid_byte_sequence` come
+    // first — CRuby keeps them at the head of its input buffer, so
+    // `"\xf1abcd"` into ISO-8859-1 stops at `\xF1` with `"a"` read
+    // again, and the next call writes `"abcd"` — then the bytes a
+    // dst-bytesize cap held back last call, then the new source, so
+    // multi-call streaming with `dst_bytesize` works (the spec test
+    // "uses the destination byte offset" hits this path).
+    let mut src_bytes = if already_finished {
+        vec![]
+    } else {
+        converter_take_readagain(globals, recv)
+    };
+    src_bytes.extend(
+        globals
+            .store
+            .get_ivar(recv, IdentId::get_id(CONVERTER_PENDING_IVAR))
+            .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+            .unwrap_or_default(),
+    );
     src_bytes.extend_from_slice(&new_src_bytes);
 
     // Existing dst content (we'll truncate to `dst_offset` and
@@ -9926,6 +9974,13 @@ fn converter_primitive_convert(
 
     let src_enc = converter_get_src(globals, recv);
     let dst_enc = converter_get_dst(globals, recv);
+    // What is left in the caller's source keeps the tag the caller
+    // gave it: the converter reads the bytes as its own source
+    // encoding, but never re-tags the String (#1424).
+    let src_tag = match src_arg.is_rstring_inner() {
+        Some(s) => s.encoding(),
+        None => src_enc,
+    };
     // The endianness-less dummies carry a BOM the stream shows once:
     // read off the source here and remembered, written to the
     // destination ahead of the first character it emits (#1576).
@@ -9973,8 +10028,6 @@ fn converter_primitive_convert(
     // happened the converter is done: every later call answers
     // `:finished` having converted nothing, and `#convert` raises
     // (#1537). `#finish` sets the same flag.
-    let finished_id = IdentId::get_id(CONVERTER_FINISHED_IVAR);
-    let already_finished = globals.store.get_ivar(recv, finished_id).is_some();
     // The *caller's* source, not the pending buffer: bytes held back
     // by an earlier `dst_bytesize` cap are still converted by the
     // call that ends the stream.
@@ -10142,9 +10195,7 @@ fn converter_primitive_convert(
         // could write next call without more user input.
         let leftover: Vec<u8> = src_bytes[split..].to_vec();
         if !src_arg.is_nil() {
-            let mut new_src =
-                crate::value::RStringInner::from_encoding_scanned(&leftover, src_enc);
-            new_src.set_encoding(src_enc);
+            let new_src = crate::value::RStringInner::from_encoding_scanned(&leftover, src_tag);
             src_arg.replace_with_inner(new_src);
         }
         if buffered.is_empty() {
@@ -10159,10 +10210,18 @@ fn converter_primitive_convert(
         }
     } else {
         // Clear src and stash the unconverted tail (if any) in
-        // pending for the next call.
-        let pending_after: Vec<u8> = src_bytes[src_consumed..].to_vec();
+        // pending for the next call. An `:incomplete_input` answer
+        // has *reported* that tail — it is the error's bytes, and
+        // CRuby drops them from its buffer with the report — so
+        // nothing is held: the next `#convert` starts afresh rather
+        // than gluing them onto its argument.
+        let pending_after: Vec<u8> = if matches!(result, StreamConvertResult::IncompleteInput) {
+            vec![]
+        } else {
+            src_bytes[src_consumed..].to_vec()
+        };
         if !src_arg.is_nil() {
-            let cleared = crate::value::RStringInner::from_encoding_scanned(b"", src_enc);
+            let cleared = crate::value::RStringInner::from_encoding_scanned(b"", src_tag);
             src_arg.replace_with_inner(cleared);
         }
         if pending_after.is_empty() {
@@ -15019,6 +15078,50 @@ mod tests {
               info = ec.primitive_errinfo
               raise unless info == [:finished, nil, nil, nil, nil]
             "#,
+        );
+    }
+
+    /// The converter's buffers across calls (#1424): the caller's
+    /// source keeps its own tag when what is left of it is written
+    /// back; the read-again bytes of an `:invalid_byte_sequence` are
+    /// the head of the next call's input (unless `#putback` took
+    /// them); a non-partial `:incomplete_input` has reported its bytes
+    /// and holds nothing for the next `#convert`; and `#finish`
+    /// records `:finished` rather than the error a previous call
+    /// already consumed.
+    #[test]
+    fn converter_buffers_across_calls() {
+        run_test_once(
+            r##"
+            t = ->(&b) { begin; b.call; rescue => e; [e.class, e.message]; end }
+            res = []
+            ec = Encoding::Converter.new(Encoding::UTF_8, Encoding::UTF_8_MAC)
+            s = "\x80\x80\x80".b
+            dest = "".b.force_encoding(Encoding::UTF_8_MAC)
+            res << ec.primitive_convert(s, dest) << s.encoding.to_s << s.bytes << (s == "\x80\x80".b)
+            res << ec.primitive_convert(s, dest) << s.bytes
+            res << ec.primitive_convert(s, dest) << s.bytes << dest.bytes
+            ec = Encoding::Converter.new("utf-8", "iso-8859-1")
+            s = "\xf1abcd".b
+            d = "".b
+            res << ec.primitive_convert(s, d) << s.encoding.to_s << s << ec.primitive_errinfo
+            res << ec.primitive_convert(s, d) << s << d
+            ec = Encoding::Converter.new("utf-8", "iso-8859-1")
+            res << t.() { ec.convert("\xf1abcd") } << ec.putback << t.() { ec.convert("") } << t.() { ec.finish }
+            ec = Encoding::Converter.new("utf-8", "iso-8859-1")
+            res << t.() { ec.convert("\xf1abcd") } << t.() { ec.finish }
+            ec = Encoding::Converter.new("EUC-JP", "ISO-8859-1")
+            res << ec.primitive_convert(+"\xA1", +'') << ec.primitive_errinfo
+            res << t.() { ec.convert("\xA1") } << ec.primitive_errinfo
+            res << t.() { ec.finish } << ec.primitive_errinfo
+            ec = Encoding::Converter.new("EUC-JP", "ISO-8859-1")
+            res << t.() { ec.convert("\xA1") } << t.() { ec.convert("\xA1") } << t.() { ec.finish } << ec.primitive_errinfo
+            ec = Encoding::Converter.new("EUC-JP", "ISO-8859-1")
+            res << t.() { ec.primitive_convert(+"\xA1\xA1", +'') } << t.() { ec.finish } << ec.primitive_errinfo
+            ec = Encoding::Converter.new("EUC-JP", "UTF-8")
+            res << ec.primitive_convert(+"\xA1", +'', nil, nil, partial_input: true) << ec.primitive_convert(+"\xA1", +'') << t.() { ec.finish }
+            res
+            "##,
         );
     }
 
