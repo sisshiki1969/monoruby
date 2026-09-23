@@ -824,7 +824,10 @@ pub(crate) struct Iso2022JpStop {
     pub incomplete: bool,
 }
 
-/// The stateless-ISO-2022-JP bytes the ISO-2022-JP `bytes` stand for.
+/// The stateless-ISO-2022-JP bytes the ISO-2022-JP `bytes` stand for,
+/// starting in the designation `start` left in effect and reporting
+/// the one this chunk leaves — which is what a converter needs, the
+/// escape staying in effect across `#convert` calls.
 ///
 /// The two are the same repertoire written two ways: ISO-2022-JP
 /// names the character set with an escape sequence that stays in
@@ -833,15 +836,6 @@ pub(crate) struct Iso2022JpStop {
 /// stateless's `0x90` and `0x92`; `ESC ( B` and `ESC ( J` are ASCII
 /// and JIS X 0201 Roman, and CRuby reads both as plain ASCII bytes
 /// (#1609).
-pub(crate) fn iso2022jp_to_stateless(
-    bytes: &[u8],
-) -> std::result::Result<Vec<u8>, Iso2022JpStop> {
-    iso2022jp_to_stateless_from(bytes, None).map(|(out, _)| out)
-}
-
-/// The same, starting in the designation `start` left in effect and
-/// reporting the one this chunk leaves — which is what a converter
-/// needs, the escape staying in effect across `#convert` calls.
 pub(crate) fn iso2022jp_to_stateless_from(
     bytes: &[u8],
     start: Option<u8>,
@@ -937,14 +931,9 @@ pub(crate) fn iso2022jp_to_stateless_from(
 /// The ISO-2022-JP bytes for the stateless-ISO-2022-JP `bytes`, or
 /// `Err(offset)` at the first sequence ISO-2022-JP cannot hold — the
 /// single-byte sets `0x81..=0x8F` name and the two-byte ones other
-/// than JIS X 0208.
-pub(crate) fn stateless_to_iso2022jp(bytes: &[u8]) -> std::result::Result<Vec<u8>, usize> {
-    stateless_to_iso2022jp_from(bytes, None, true).map(|(out, _)| out)
-}
-
-/// The same, starting in the designation `start` and closing back to
-/// ASCII only when `close` — a converter emits that last escape from
-/// `#finish`, not from every `#convert` (#1609).
+/// than JIS X 0208 — starting in the designation `start` and closing
+/// back to ASCII only when `close`: a converter emits that last escape
+/// from `#finish`, not from every `#convert` (#1609).
 pub(crate) fn stateless_to_iso2022jp_from(
     bytes: &[u8],
     start: Option<u8>,
