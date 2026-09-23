@@ -3664,3 +3664,80 @@ fn object_send_inline() {
         "##
     ));
 }
+
+/// `ISeqHint::ArgReturn`: a body that is one of its leading required
+/// parameters folds to the argument at every tier — the JIT copies the
+/// caller's slot, the wrapper loads it from the bound frame, and the
+/// invoker answers from its slice — while the arity errors of a call that
+/// does not bind keep going through the real call.
+#[test]
+fn arg_return_hint_folds_to_the_argument() {
+    run_test_with_prelude(
+        r#"
+        x = "shared"
+        r = [m(1), m(*[2]), send(:m, 3), method(:m).call(4), m(x).equal?(x)]
+        r << (m rescue $!.class) << (m(1, 2) rescue $!.class)
+        r << m2(8) << m2(8, 1) << m2(*[7, 6]) << (m2 rescue $!.class)
+        r << m3(1, 2, 3) << m3(*[4, 5, 6]) << (m3(1, 2) rescue $!.class)
+        r << m4(1) << m4(1, 2, 3)
+        r << m5(1, 2) << m5(1, 2, 3)
+        r << d([1, 2]) << (d(5) rescue $!.class)
+        r << b(9) { 1 } << b(9)
+        r
+        "#,
+        r#"
+        def m(a); a; end
+        def m2(a, b = 5); a; end
+        def m3(a, b, c); b; end
+        def m4(a, *r); a; end
+        def m5(a, b = 1, c); c; end
+        def d((a, b)); a; end
+        def b(a, &blk); a; end
+        "#,
+    );
+}
+
+/// The same hint on a `define_method` body: the proc-method arm folds it,
+/// and a block whose body is one of its parameters is still an ordinary
+/// block everywhere else (its wrapper never reads the hint).
+#[test]
+fn arg_return_hint_on_bmethods_and_plain_blocks() {
+    run_test_with_prelude(
+        r#"
+        o = K.new
+        r = [o.one(1), o.one([3, 4]), o.two(1, 2), o.send(:one, 5), o.method(:two).call(6, 7)]
+        r << (o.one(k: 1) rescue $!.class)
+        r << [1, 2, 3].map { |x| x } << [[1, 2], [3, 4]].map { |a, b| b }
+        r << %w[a b].each_with_index.map { |s, i| i }
+        r
+        "#,
+        r#"
+        class K
+          define_method(:one) { |a| a }
+          define_method(:two) { |a, b| b }
+        end
+        "#,
+    );
+}
+
+/// A keyword-taking method keeps its keyword checks: the fold only reads
+/// the positional, so it must never replace a call whose keywords would
+/// raise. (An *unknown* keyword is not covered here: a JIT-compiled call
+/// site lets one through for every callee, hinted or not, which is a
+/// separate bug.)
+#[test]
+fn arg_return_hint_keeps_keyword_errors() {
+    run_test_with_prelude(
+        r#"
+        r = [c3(6), c3(6, k: 1)]
+        r << (c2(5) rescue $!.class) << c2(5, k: 1)
+        r << (c4(7, k: 1) rescue $!.class) << (send(:c2, 8) rescue $!.class)
+        r
+        "#,
+        r#"
+        def c2(a, k:); a; end
+        def c3(a, k: 0); a; end
+        def c4(a); a; end
+        "#,
+    );
+}

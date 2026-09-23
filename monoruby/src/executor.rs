@@ -4299,12 +4299,18 @@ impl Executor {
         let func = &globals.store[func_id];
         if let Some(iseq) = func.is_iseq()
             && func.is_not_block()
-            && let ISeqHint::ConstReturn(v) = globals.store[iseq].hint
             && kw_args.is_none()
             && func.no_keyword()
             && func.positional_arity_ok(args.len())
         {
-            return Some(v.into());
+            match globals.store[iseq].hint {
+                ISeqHint::ConstReturn(v) => return Some(v.into()),
+                // The same, for a body that hands back one of its
+                // arguments: the arity check above is what guarantees the
+                // slice holds it.
+                ISeqHint::ArgReturn(n) if args.len() > n => return Some(args[n]),
+                _ => {}
+            }
         }
         let bh = bh.map(|bh| bh.delegate());
         (globals.invokers.method)(
