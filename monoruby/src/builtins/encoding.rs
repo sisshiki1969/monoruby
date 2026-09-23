@@ -6142,6 +6142,71 @@ const CONVERTER_LAST_ERROR_IVAR: &str = "/converter_last_error";
 /// the converter, taken out of it: they are the head of whatever the
 /// next call converts, as CRuby keeps them at the head of its input
 /// buffer — unless `#putback` handed them back to the caller first.
+/// Some pairs carry state across calls, which a single-shot
+/// transcode has no way to keep: the endianness-less dummies carry
+/// a BOM, read once on the source side and written once on the
+/// destination side, and a `UTF8-MAC` source holds its trailing
+/// cluster back. ISO-2022-JP carries its designation across calls,
+/// and an escape sequence split between two of them is held rather
+/// than substituted — which the single-shot transcoder, seeing one
+/// whole input, cannot know (#1576, #1609).
+fn converter_is_stateful(src: crate::value::Encoding, dst: crate::value::Encoding) -> bool {
+    dummy_wide_target(src).is_some()
+        || dummy_wide_target(dst).is_some()
+        || src == crate::value::Encoding::Utf8(crate::value::UTF8_MAC)
+        || jis_wrapper(src).is_some()
+        || jis_wrapper(dst).is_some()
+}
+
+/// The bytes at the end of `input` that begin a character the next
+/// chunk may finish — what a converter holds back rather than
+/// converts, in replacement mode as on every other path (#1592).
+fn incomplete_tail_len(src: crate::value::Encoding, input: &[u8]) -> usize {
+    use crate::value::Encoding as E;
+    if is_utf16_or_32(src) {
+        // A partial coding unit, and for UTF-16 a high surrogate
+        // waiting for its pair.
+        let unit = if matches!(src, E::Utf16Le | E::Utf16Be) { 2 } else { 4 };
+        let mut tail = input.len() % unit;
+        if unit == 2 && input.len() - tail >= 2 {
+            let last = &input[input.len() - tail - 2..input.len() - tail];
+            let u = if src == E::Utf16Be {
+                u16::from_be_bytes([last[0], last[1]])
+            } else {
+                u16::from_le_bytes([last[0], last[1]])
+            };
+            if (0xd800..0xdc00).contains(&u) {
+                tail += 2;
+            }
+        }
+        return tail;
+    }
+    if src.is_utf8_compatible() {
+        let mut at = 0;
+        loop {
+            match std::str::from_utf8(&input[at..]) {
+                Ok(_) => return 0,
+                Err(e) => match e.error_len() {
+                    None => return input.len() - (at + e.valid_up_to()),
+                    Some(n) => at += e.valid_up_to() + n,
+                },
+            }
+        }
+    }
+    let Some((_, precise)) = conversion_walker(src).or_else(|| crate::value::mbc_walker(src)) else {
+        return 0;
+    };
+    let mut at = 0;
+    while at < input.len() {
+        match precise(input, at) {
+            PreciseLen::Char(n) if n > 0 => at += n,
+            PreciseLen::NeedMore => return input.len() - at,
+            _ => at += 1,
+        }
+    }
+    0
+}
+
 fn converter_take_readagain(globals: &mut Globals, recv: Value) -> Vec<u8> {
     let ra_id = IdentId::get_id(CONVERTER_READAGAIN_IVAR);
     let bytes = globals
@@ -6875,19 +6940,33 @@ fn converter_convert(
     // destination side, and a `UTF8-MAC` source holds its trailing
     // cluster back. Those go the streamed way whatever the flags say
     // (#1576).
-    let stateful = dummy_wide_target(src).is_some()
-        || dummy_wide_target(dst).is_some()
-        || src == crate::value::Encoding::Utf8(crate::value::UTF8_MAC)
-        // ISO-2022-JP carries its designation across calls, and an
-        // escape sequence split between two of them is held rather
-        // than substituted — which the single-shot transcoder, seeing
-        // one whole input, cannot know (#1609).
-        || jis_wrapper(src).is_some()
-        || jis_wrapper(dst).is_some();
+    let stateful = converter_is_stateful(src, dst);
+    let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
     if (opts.invalid_replace || opts.undef_replace) && !stateful {
         // Replacement mode cannot error on content — the single-shot
-        // transcoder suffices.
-        let out = transcode_bytes_with_opts(&bytes, src, dst, &opts, &globals.store)?;
+        // transcoder suffices — but a chunk that ends inside a
+        // character is still held for the next one to finish, as it
+        // is on every other path (#1592).
+        let mut input: Vec<u8> = converter_take_readagain(globals, recv);
+        input.extend(
+            globals
+                .store
+                .get_ivar(recv, pending_id)
+                .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+                .unwrap_or_default(),
+        );
+        input.extend_from_slice(&bytes);
+        let tail = incomplete_tail_len(src, &input);
+        let head = &input[..input.len() - tail];
+        let out = transcode_bytes_with_opts(head, src, dst, &opts, &globals.store)?;
+        if tail == 0 {
+            let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
+        } else {
+            let mut held =
+                crate::value::RStringInner::from_encoding_scanned(&input[input.len() - tail..], src);
+            held.set_encoding(crate::value::Encoding::Ascii8);
+            let _ = globals.store.set_ivar(recv, pending_id, Value::string_from_inner(held));
+        }
         let meta = ErrMeta::default();
         store_conversion_outcome(
             globals,
@@ -6906,7 +6985,6 @@ fn converter_convert(
     // trailing incomplete character is buffered, not an error), and
     // raise — leaving `primitive_errinfo` / `last_error` /
     // `putback` observable — on invalid / undefined input.
-    let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
     let mut input: Vec<u8> = converter_take_readagain(globals, recv);
     input.extend(
         globals
@@ -7020,8 +7098,16 @@ fn converter_finish(
         // character is incomplete input.
         let mut opts = converter_transcode_opts(globals, recv);
         opts.iso_state = converter_iso_state(globals, recv);
-        let (result, consumed, flushed, meta) =
-            stream_convert(&pending, src_stream, dst_stream, None, false, &opts, &globals.store);
+        let (result, consumed, flushed, meta) = if opts.invalid_replace
+            && !converter_is_stateful(src_stream, dst_stream)
+        {
+            // In replacement mode what is still half a character is
+            // replaced, not reported (#1592).
+            let out = transcode_bytes_with_opts(&pending, src_stream, dst_stream, &opts, &globals.store)?;
+            (StreamConvertResult::Finished, pending.len(), out, ErrMeta::default())
+        } else {
+            stream_convert(&pending, src_stream, dst_stream, None, false, &opts, &globals.store)
+        };
         converter_set_iso_state(globals, recv, meta.iso_state_out);
         if matches!(result, StreamConvertResult::Finished) && consumed == pending.len() {
             out = flushed;
@@ -9704,7 +9790,23 @@ fn stream_convert(
                     push_char!(ch);
                 }
                 match res {
-                    DecoderResult::InputEmpty => break,
+                    DecoderResult::InputEmpty => {
+                        // A chunk that ends inside a character keeps
+                        // that tail for the next one, as every other
+                        // destination does: it comes back unconsumed
+                        // and the converter holds it (#1592).
+                        if !last
+                            && let Some((tail, _, true)) = first_bad_sequence(src_enc, src_bytes)
+                        {
+                            return (
+                                StreamConvertResult::SourceBufferEmpty,
+                                src_bytes.len() - tail.len().min(src_bytes.len()),
+                                out,
+                                ErrMeta::default(),
+                            );
+                        }
+                        break;
+                    }
                     DecoderResult::Malformed(..) => {
                         if !opts.invalid_replace {
                             let (kind, meta) = bad_source_outcome(src_enc, src_bytes, last);
@@ -9727,6 +9829,16 @@ fn stream_convert(
                     for ch in s.chars() {
                         push_char!(ch);
                     }
+                }
+                // The same tail, held for the next chunk (#1592).
+                Err(e) if partial_input && e.error_len().is_none() => {
+                    for ch in std::str::from_utf8(&src_bytes[..e.valid_up_to()])
+                        .unwrap_or("")
+                        .chars()
+                    {
+                        push_char!(ch);
+                    }
+                    return (StreamConvertResult::SourceBufferEmpty, e.valid_up_to(), out, ErrMeta::default());
                 }
                 Err(_) if opts.invalid_replace => {
                     for ch in String::from_utf8_lossy(src_bytes).chars() {
@@ -10127,18 +10239,28 @@ fn stream_convert(
                 && meta.error_bytes.len() > unit
             {
                 let run = std::mem::take(&mut meta.error_bytes);
-                let pending_len = (unit..run.len()).rev().step_by(unit).find(|k| {
+                let pending_prefix = |k: usize| {
                     let mut probe = src_rs.new_decoder_without_bom_handling();
                     let mut probe_dst = vec![0u8; run.len() * 4 + 16];
                     let (r, read, written) = probe.decode_to_utf8_without_replacement(
-                        &run[..*k],
+                        &run[..k],
                         &mut probe_dst,
                         false,
                     );
                     // Still waiting for more input, having produced
                     // nothing: a genuine incomplete prefix.
-                    matches!(r, DecoderResult::InputEmpty) && read == *k && written == 0
-                });
+                    matches!(r, DecoderResult::InputEmpty) && read == k && written == 0
+                };
+                // A run that is *whole* still a pending prefix —
+                // `\xE3\x81` before an `x` — was disproved by what
+                // follows it, not by anything inside: it is reported
+                // whole, with the disproving unit pulled in below
+                // (#1592).
+                let pending_len = if pending_prefix(run.len()) {
+                    None
+                } else {
+                    (unit..run.len()).rev().step_by(unit).find(|k| pending_prefix(*k))
+                };
                 match pending_len {
                     Some(k) => {
                         meta.readagain_bytes = run[k..].to_vec();
