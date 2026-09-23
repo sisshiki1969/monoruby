@@ -195,22 +195,54 @@ mod tests {
     /// Apple when a waiter is queued on it).
     #[test]
     fn a_reset_forkable_rwlock_keeps_its_data_and_never_unlocks_the_old_one() {
-        static L: ForkableRwLock<Vec<u32>> = ForkableRwLock::new(Vec::new);
-        L.write().unwrap().push(7);
-        let old = L.get() as *const RwLock<Vec<u32>>;
-        L.prepare_fork().reset_child();
-        let fresh = L.get() as *const RwLock<Vec<u32>>;
+        let l = fresh_lock();
+        l.write().unwrap().push(7);
+        let old = l.get() as *const RwLock<Vec<u32>>;
+        l.prepare_fork().reset_child();
+        let fresh = l.get() as *const RwLock<Vec<u32>>;
         assert!(!std::ptr::eq(old, fresh), "the child kept the inherited lock");
-        assert_eq!(*L.read().unwrap(), vec![7]);
-        L.write().unwrap().push(8);
-        assert_eq!(*L.read().unwrap(), vec![7, 8]);
+        assert_eq!(*l.read().unwrap(), vec![7]);
+        l.write().unwrap().push(8);
+        assert_eq!(*l.read().unwrap(), vec![7, 8]);
         // SAFETY: the leaked lock is never freed.
         let old = unsafe { &*old };
         assert!(old.try_read().is_err(), "the inherited lock was unlocked");
         // The parent's view: dropping the guard unlocks the same lock.
-        drop(L.prepare_fork());
-        assert!(std::ptr::eq(fresh, L.get()));
-        assert_eq!(L.read().unwrap().len(), 2);
+        drop(l.prepare_fork());
+        assert!(std::ptr::eq(fresh, l.get()));
+        assert_eq!(l.read().unwrap().len(), 2);
+    }
+
+    /// A lock built at run time (the real ones are `static`s, built in
+    /// const evaluation) and leaked, since `prepare_fork` wants `'static`.
+    fn fresh_lock() -> &'static ForkableRwLock<Vec<u32>> {
+        Box::leak(Box::new(ForkableRwLock::new(Vec::new)))
+    }
+
+    /// First use is a CAS race, not a `Once`: every thread that arrives
+    /// at a lock nobody has used yet ends up on the same one, and the
+    /// losers' boxes are freed, not leaked.
+    #[test]
+    fn every_thread_racing_a_fresh_lock_gets_the_same_one() {
+        for _ in 0..32 {
+            let l = fresh_lock();
+            let barrier = Arc::new(std::sync::Barrier::new(8));
+            let ptrs: Vec<usize> = (0..8)
+                .map(|_| {
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        l.get() as *const RwLock<Vec<u32>> as usize
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect();
+            assert!(ptrs.iter().all(|p| *p == ptrs[0]), "the threads got different locks");
+            l.write().unwrap().push(1);
+            assert_eq!(l.read().unwrap().len(), 1);
+        }
     }
 
     /// The parent's view: dropping what `prepare` took releases every
@@ -255,6 +287,15 @@ mod tests {
                 }
             })
         };
+        // Flips the flag on the way out, a failed round's panic included,
+        // so the churn thread never spins on under the rest of the suite.
+        struct StopOnDrop(Arc<AtomicBool>);
+        impl Drop for StopOnDrop {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let _stop = StopOnDrop(stop.clone());
         let deadline = std::time::Duration::from_secs(10);
         for round in 0..200 {
             let guards = prepare();
@@ -271,27 +312,11 @@ mod tests {
                 std::process::exit(0);
             }
             drop(guards);
-            let started = std::time::Instant::now();
-            let mut status = 0;
-            loop {
-                // SAFETY: waitpid on the child forked above.
-                let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-                if r == pid {
-                    break;
-                }
-                assert!(r == 0, "waitpid: {}", std::io::Error::last_os_error());
-                if started.elapsed() > deadline {
-                    // SAFETY: our own child.
-                    unsafe {
-                        libc::kill(pid, libc::SIGKILL);
-                        libc::waitpid(pid, &mut status, 0);
-                    }
-                    stop.store(true, Ordering::Relaxed);
-                    let _ = churn.join();
-                    panic!("round {round}: the child never got past get_id (a lock it inherited held)");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
+            let status = wait_or_kill(
+                pid,
+                deadline,
+                &format!("round {round}: the child never got past get_id (a lock it inherited held)"),
+            );
             assert!(
                 libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
                 "round {round}: child status {status:#x}"
@@ -299,5 +324,51 @@ mod tests {
         }
         stop.store(true, Ordering::Relaxed);
         churn.join().unwrap();
+    }
+
+    /// Reap `pid` and return its wait status; once `deadline` has passed
+    /// without it exiting, kill it, reap it, and panic with `what` — so a
+    /// child wedged on an inherited lock fails the test instead of
+    /// hanging the suite.
+    fn wait_or_kill(pid: libc::pid_t, deadline: std::time::Duration, what: &str) -> i32 {
+        let started = std::time::Instant::now();
+        let mut status = 0;
+        loop {
+            // SAFETY: waitpid on a child of ours.
+            let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if r == pid {
+                return status;
+            }
+            assert!(r == 0, "waitpid: {}", std::io::Error::last_os_error());
+            if started.elapsed() > deadline {
+                // SAFETY: our own child.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut status, 0);
+                }
+                panic!("{what}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// The deadline path of the helper above, on a child that never
+    /// exits on its own (a spawned `sleep`, so no line of this binary
+    /// runs in a process that is then killed unrecorded).
+    #[test]
+    fn a_stuck_child_is_killed_and_reported() {
+        let child = std::process::Command::new("sleep")
+            .arg("1000")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id() as libc::pid_t;
+        let r = std::panic::catch_unwind(|| {
+            wait_or_kill(pid, std::time::Duration::from_millis(100), "stuck")
+        });
+        let msg = r.expect_err("the helper let a stuck child pass");
+        assert_eq!(msg.downcast_ref::<String>().map(String::as_str), Some("stuck"));
+        // Killed and reaped by the helper: nothing is left to wait for.
+        // SAFETY: waitpid on a pid the helper has already reaped.
+        assert_eq!(unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) }, -1);
     }
 }
