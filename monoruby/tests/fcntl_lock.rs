@@ -8,6 +8,17 @@ use monoruby::tests::*;
 // thread parks; every other command is immediate and runs inline, with
 // the kernel writing back into the String for `F_GETLK` (issue #1345).
 
+// Every lock file below is named after the running process. The lock
+// commands wait in the kernel for whoever holds the file, so a fixed
+// name couples runs that never meant to meet: a test process that dies
+// holding its lock (one did here, after a disk-full crash, stuck in a
+// futex wait with `F_WRLCK` on `/tmp/monoruby_fcntl_lock_live`) blocks
+// every later `cargo test` on the machine at `F_SETLKW`, indefinitely --
+// and each blocked run then holds the next one. The CRuby oracle process
+// runs the same code, so it too gets a path of its own instead of
+// contending with the interpreter under test. `Process.pid` keeps the
+// code text constant, so the snapshot oracle's key does not move.
+
 /// `struct flock` is laid out differently per platform, and the buffer
 /// has to be the size and shape the kernel expects — prepended to each
 /// test's code so both the interpreter under test and the CRuby oracle
@@ -34,7 +45,7 @@ const FLOCK_PRELUDE: &str = r#"
 fn record_locks_take_a_packed_struct_flock() {
     run_test_once(&format!(
         r#"{FLOCK_PRELUDE}
-        path = "/tmp/monoruby_fcntl_lock_basic"
+        path = "/tmp/monoruby_fcntl_lock_basic_#{{Process.pid}}"
         File.write(path, "x")
         f = File.open(path, "r+")
         r = []
@@ -65,7 +76,7 @@ fn record_locks_take_a_packed_struct_flock() {
 fn lock_errors_and_ofd_locks() {
     run_test_once(&format!(
         r#"{FLOCK_PRELUDE}
-        path = "/tmp/monoruby_fcntl_lock_errors"
+        path = "/tmp/monoruby_fcntl_lock_errors_#{{Process.pid}}"
         File.write(path, "x")
         r = []
         File.open(path, "r+") do |f|
@@ -102,7 +113,7 @@ fn lock_errors_and_ofd_locks() {
 fn a_blocked_lock_wait_lets_other_green_threads_run() {
     run_test_once(&format!(
         r#"{FLOCK_PRELUDE}
-        path = "/tmp/monoruby_fcntl_lock_live"
+        path = "/tmp/monoruby_fcntl_lock_live_#{{Process.pid}}"
         File.write(path, "x")
         # A child process holds the lock for a while.
         child = fork do
@@ -140,8 +151,8 @@ fn a_blocked_lock_wait_lets_other_green_threads_run() {
 fn offload_still_works_in_a_forked_child() {
     run_test_once(
         r#"
-        a = "/tmp/monoruby_offload_fork_parent"
-        b = "/tmp/monoruby_offload_fork_child"
+        a = "/tmp/monoruby_offload_fork_parent_#{Process.pid}"
+        b = "/tmp/monoruby_offload_fork_child_#{Process.pid}"
         File.write(a, "x")
         File.write(b, "x")
         f = File.open(a, "r+")
@@ -187,8 +198,8 @@ fn offload_still_works_in_a_forked_child() {
 fn forking_while_a_thread_keeps_offloading() {
     run_test_once(
         r#"
-        a = "/tmp/monoruby_forkrace_parent"
-        b = "/tmp/monoruby_forkrace_child"
+        a = "/tmp/monoruby_forkrace_parent_#{Process.pid}"
+        b = "/tmp/monoruby_forkrace_child_#{Process.pid}"
         File.write(a, "x")
         File.write(b, "x")
         # A green thread offloading continuously, so a worker is live

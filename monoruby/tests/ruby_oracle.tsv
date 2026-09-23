@@ -162,6 +162,7 @@
 072525d9f9be127994b409c1f5b247e4	["a\\r\\nb\\r\\nc", "a\\rb", "a\\nb\\nc\\n", "a\\r\\nb", [97, 0, 13, 0, 10, 0, 98, 0]]	(a="a\\nb\\nc".encode("UTF-8", crlf_newline: true); b="a\\nb".encode("UTF-8", cr_ne
 07262c69027fb626e4c8b1f0872b4e5b	[[120, 177], [120, 142, 177], ["Encoding::UndefinedConversionError", "\\"\\\\x8F\\\\xA1\\\\xA1\\" from EUC-JP to Shift_JIS"], [63], ["Encoding::UndefinedConversionError", "\\"\\\\xF0@\\" from Shift_JIS to EUC-JP"], [63, 65]]	r = []\n            r << ("x" + [0x8E, 0xB1].pack("C*")).force_encod
 0736de5b921b47f8e9e27ca56c6c9b35	{A: 1, b: 2}	def drive(n)\n              r = nil\n              n.times { r = yiel
+0738999b55d8ade3771cc68b4595bc46	[0, 0, 0, 2, FrozenError]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
 07499214dbe1866c9cba9612dd1f4909	["a", nil, "bc", true, nil, 2, nil, "bar", 7, true, "foo bar", 7]	require "strscan"\n        r = []\n        s = StringScanner.new("abc")\n 
 0750b259ae197e8b437459f5cfaa246a	{}	/(foo)(bar)/.match("foobar").deconstruct_keys(nil)
 075794323ea386fc27f4ad61a4164ace	4	obj = Object.new\n            def (obj).qux; 4; end\n            obj.
@@ -1534,6 +1535,7 @@
 4ced78ec21c3171b7eb6b8175a725267	[[4, 8, 73, 91, 7, 105, 6, 105, 7, 6, 58, 9, 64, 102, 111, 111, 105, 10], [[1, 2], 5], [{a: 1}, 5], ["str", 5]]	__a = [];__a << (\n            a = [1, 2]\n            a.instance_variable_set(:@f
 4cf2c2b92a59f794f3435c85df91b8b2	[512, 39104]	src = [[1.0, 1.0, 1.0], [1.0, 0.8, 0.81], [0.78, 0.94, 0.66], [0.79, 0.
 4cf8b4d4c75a2630523d2e95fc8edb16	["MyStr", 75, "ab[c]", "ASCII-8BIT"]	class MyStr < String; end\n        class Coerced\n          def to_str = 
+4d0c5bfbd33ec43cda3366e3b1c3bafb	[Errno::EINVAL, Errno::EBADF, 0, 0]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
 4d179225710c89efa353730f51bc628c	[[RegexpError, "invalid multibyte character: /a\\\\xA4/"], [RegexpError, "invalid multibyte character: /x|a\\\\xA4/"], [RegexpError, "invalid multibyte character: /a\\\\xA4|x/"], [RegexpError, "invalid multibyte character: /x|a\\\\xA4/"], [ArgumentError, "incompatible encodings: Shift_JIS and EUC-JP"], "[97, 164]"]	__a = [];__a << ((Regexp.union("a\\xa4".dup.force_encoding("EUC-JP")); nil) rescu
 4d1eab28b36d45e1814a2ed2c505c4cc	[[:destination_buffer_full, [164, 162, 99], [97], [:destination_buffer_full, nil, nil, nil, nil]], [:undefined_conversion, [99], [97, 98], [:undefined_conversion, [85, 84, 70, 45, 56], [85, 83, 45, 65, 83, 67, 73, 73], [227, 129, 130], []]], [:destination_buffer_full, [130, 160, 99], [97], [:destination_buffer_full, nil, nil, nil, nil]], [:undefined_conversion, [98, 99], [97], [:undefined_conversion, [85, 84, 70, 45, 56], [85, 83, 45, 65, 83, 67, 73, 73], [195, 169], []]], [:undefined_conversion, [98, 99], [97], [:undefined_conversion, [85, 84, 70, 45, 56], [85, 83, 45, 65, 83, 67, 73, 73], [195, 169], []]]]	[["EUC-JP", "US-ASCII", 1], ["EUC-JP", "US-ASCII", nil],\n          
 4d3b8cfdb3abf0074873c94df0f08c11	nil	ENV.rehash
@@ -1669,6 +1671,7 @@
 54cec27c16a23055cb1af1f7bd0ee7f2	[nil, nil, nil, nil, 1, true, false, false, 1, :blocking]	res = []\n            res << Fiber.scheduler\n            res << Fibe
 54d6779b200cfac2264d1b13551e56a4	[10, 999]	$flag = false\n        class OpRedef\n          def +(o)\n            Inte
 54d92cf0264334597de6d135e289a10d	[[:block, 1], [:proc, 2], [:block, 2], true, [:block, 3], 1, :fired, :argerr]	res = []\n            trace_var(:$tv_spec) { |v| res << [:block, v] 
+54eb41d475a8cd5593d330012e5d8e0e	[20, :done]	a = "/tmp/monoruby_forkrace_parent_#{Process.pid}"\n        b = "/tmp/mo
 54fdd2cc3d02bd64d61ab84f56fff772	[[7, 8, 9], :inner_broke]	class FwdG\n          attr_reader :a\n          def initialize(n)\n       
 550657b209502598ac09bdd6794b2088	[Encoding::CompatibilityError, "5!", ArgumentError]	[ (begin; format("hello %s".encode("utf-8"), "world".encode("UTF-16LE")); rescue
 550c1ab61d78c2f33f57f8dee2011fa8	[[97, 227, 129, 130, 237, 160, 189, 237, 184, 128], [97, 227, 129, 130, 240, 159, 152, 128], [227, 129, 139, 227, 130, 153], [164, 162], [[97], [237, 160, 189, 237, 184, 128], []], [[97], [227, 129, 139, 227, 130, 153], []], "CESU-8"]	__a = [];__a << (Encoding::Converter.new("UTF-8", "CESU-8").convert("aあ\\u{1F600}
@@ -1771,6 +1774,7 @@
 5a93875851be42b5d636e2735c42f411	[["a", "b", "c", "d", "e", ""], ["a", "b", "c", "d", "e", ""], ["a", "b", "c", "d", "e", ""], [["a", "b", "c", ""], "abc"], ["a", "b", "cde"], ["abcde"], ["a", "b", "c", "d", "e"], ["a", "b", "cde"], [["h", "ello"], "hello"]]	__a = [];__a << ("abcde".split("", -1));__a << ("abcde".split("", -3));__a << (a
 5a9ec9964fa563c4bfa0816e3f3aac3b	[3, [:inner, :outer, :inner, :outer, :inner, :outer]]	$log = []\n        def m(a)\n          a.each do |x|\n            begin\n  
 5aa2446f1aac6500e421882c7a6c2c76	[4633.776677988511, 1.5, 5691.4790284806795, 3.5]	def multi(n)\n          a = 0.5\n          b = 1.5\n          c = 2.5\n    
+5aafe9ced76f0f2aa93054846fec7676	true	a = "/tmp/monoruby_offload_fork_parent_#{Process.pid}"\n        b = "/tm
 5ab18a8afa5b4ef499cdca6770a28a63	["MyStr", "hi"]	class MyStr < String; end\n            r = Marshal.load(Marshal.dump
 5ab18cd50f5e88dfaffed040fa6b1cd0	42	class C; def to_int; "1"; end; def to_i; 42; end; end; o = C.new\nInteger(o)
 5ab866434f49bad735e8b417b20d1791	[["8 May 2005 19:09:13 +0000", "2005-05-08T19:09:13+00:00", 2005, 5, 8, 19, 9, 13, (0/1), "+00:00", (0/1), "2005-05-08 19:09:13 UTC", "2005-05-08T19:09:13.000+00:00"], ["2005-05-08 19:09:13 UTC", 0, 0], ["2013-08-14 15:00:00", "2013-08-14T15:00:00+00:00", 2013, 8, 14, 15, 0, 0, (0/1), "+00:00", (0/1), "2013-08-14 15:00:00 UTC", "2013-08-14T15:00:00.000+00:00"], ["2013-08-14 15:00:00 UTC", 0, 0], ["Aug 14 2013 3pm PST", "2013-08-14T15:00:00-08:00", 2013, 8, 14, 15, 0, 0, (-1/3), "-08:00", (0/1), "2013-08-14 23:00:00 UTC", "2013-08-14T15:00:00.000-08:00"], ["2013-08-14 23:00:00 UTC", 0, 0], ["2013-08-14T15:00:00.5+09:00", "2013-08-14T15:00:00+09:00", 2013, 8, 14, 15, 0, 0, (3/8), "+09:00", (1/2), "2013-08-14 06:00:00 UTC", "2013-08-14T15:00:00.500+09:00"], ["2013-08-14 06:00:00 UTC", 0, 500000], ["Wed, 14 Aug 2013 15:00:00 -0500", "2013-08-14T15:00:00-05:00", 2013, 8, 14, 15, 0, 0, (-5/24), "-05:00", (0/1), "2013-08-14 20:00:00 UTC", "2013-08-14T15:00:00.000-05:00"], ["2013-08-14 20:00:00 UTC", 0, 0], "2013-08-14", "2013-08-14", "2013-08-14", "invalid date", "string length (200) exceeds the limit 128"]	require "date"\n        require "time"\n        r = []\n        ["8 May 20
@@ -2062,6 +2066,7 @@
 69454519988d1917d0cf2b32b8ad0e08	["a", "a"]	$/ = "b"; s = "ab"; r = [s.chomp!, s]; $/ = "\\n"; r
 694785db6781d030727d526c0edc3892	["3/4", "3/2", "5/1", "3/2", "0/1", "3/4", "1/2", "3/4", "3/8"]	__a = [];__a << (Rational(3, 4).to_s);__a << (Rational(6, 4).to_s);__a << (Ratio
 6948d55dbe7957e5100beced57da2704	[[]]	def m; [1].map { it; local_variables }; end; m
+694907f3ef3bc9e6904402f06118b4ad	[:locked, true]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
 694e473b91740545d5fd35771b7e9083	[[1], [3, 1], [], [1, "missing z"]]	__a = [];__a << ({a: 1, b: 2, c: 3}.fetch_values(:a));__a << ({a: 1, b: 2, c: 3}
 69574eae26faf1723ff3bb20ea2bd86a	["ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "UTF-8", "US-ASCII", "ASCII-8BIT", nil, "ASCII-8BIT"]	b = "abc".b\n        u = "abc"\n        a = "abc".encode("US-ASCII")\n    
 695a85fd2ea772e6ce3142edd7a921e4	[false, true]	S = Struct.new(:a, :b)\n            T = Struct.new(:a, :b)\n         
