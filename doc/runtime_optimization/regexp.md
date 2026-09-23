@@ -339,12 +339,26 @@ matches:  SmallVec<[Span; 2]>   // 24
   `scan`、`gsub` + ブロック、`gsub` + Hash。
 - `check_string_not_modified`: CRuby の `str_mod_check`（長さ基準、
   `RuntimeError: string modified`）。
-- `RStringInner::splice_all`: `gsub` / `scan` の全置換を**前方一巡**で適用し、
-  N 回の末尾シフト `bytesplice_with` の `O(haystack · matches)` を
-  `O(haystack + Σ replacements)` にする（回帰テスト
-  `gsub_many_matches_linear`）。
-- `bytesplice_with`: 単一一致の `sub` 用。両側が SevenBit / Valid で splice
-  端点が UTF-8 境界なら変更後の code range 分類を O(1) に短縮。
+- `EncBuf`（`rvalue/string.rs`）: CRuby の `rb_enc_cr_str_buf_cat` そのもの。
+  `gsub` の結果（`str_gsub`）と置換テンプレートの展開（`rb_reg_regsub`）は
+  この追記バッファに**前方一巡**で片（マッチまでの区間、置換）を追記して
+  組み立て、結果のエンコーディングは片が来るたびに確定する — 7 bit の片は
+  何も変えず、バッファが 7 bit しか持たないうちは非 ASCII の片がその
+  エンコーディングを与え、非 ASCII 同士の別エンコーディングは
+  `Encoding::CompatibilityError`（バッファ側を先に名指し）。UTF-16 / UTF-32
+  の片は空のバッファだけが受け入れる（`"-".gsub(/-/, "a".encode("UTF-16LE"))`
+  は UTF-16LE、`"-b".gsub(...)` は `b` の追記で拒否、#1634）。ブロック /
+  Hash 形式はループ内で追記するので、受け入れられない片はそれを生んだ
+  yield の直後に拒否される。N 回の末尾シフト `bytesplice_with` の
+  `O(haystack · matches)` は `O(haystack + Σ replacements)`（回帰テスト
+  `gsub_many_matches_linear`）。`splice_all` は集めた置換をこの上に流す
+  ラッパ（Hash の plain 経路）。
+- `RStringInner::sub_splice`: 単一一致の `sub` 用（`rb_str_sub_bang`）。
+  受信者と置換を `rb_enc_compatible` で一度に判定し、判定できなければ
+  マッチの前後が 7 bit のときだけ置換のエンコーディングで生バイトを splice
+  する（`"x-".sub(/-/, "a".encode("UTF-16LE"))` は UTF-16LE の 3 バイト）。
+- `bytesplice_with`: `[]=` などの単一 splice 用。両側が SevenBit / Valid で
+  splice 端点が UTF-8 境界なら変更後の code range 分類を O(1) に短縮。
 
 ### 3.5 メソッドごとの注記
 

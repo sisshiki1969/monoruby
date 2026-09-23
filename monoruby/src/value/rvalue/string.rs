@@ -2480,6 +2480,111 @@ struct SharedContent {
 /// `RStringInner::from_buf_cr`, so short results never allocate.
 pub(crate) type StringBuf = SmallVec<[u8; STRING_INLINE_CAP]>;
 
+/// A string being built by appending pieces of various encodings, the
+/// way CRuby's `rb_enc_cr_str_buf_cat` builds the result of `gsub`
+/// (`str_gsub`) and the expansion of a replacement template
+/// (`rb_reg_regsub`): the buffer starts in a given encoding and settles
+/// its own as the pieces come.
+///
+/// A piece in the buffer's encoding is appended as it is. Otherwise a
+/// 7-bit piece (ASCII bytes in an ASCII-compatible encoding) never
+/// changes the buffer's encoding; a non-7-bit piece is taken when the
+/// buffer holds nothing but 7-bit content (an empty buffer included)
+/// and gives it its encoding; two non-7-bit contents in different
+/// encodings are `Encoding::CompatibilityError`, the buffer's encoding
+/// named first. An ASCII-incompatible side (UTF-16, UTF-32) is a
+/// non-7-bit one that no other encoding's content can join: an empty
+/// piece is skipped, an empty buffer adopts the piece's encoding, and
+/// anything else is the error — so `"-".gsub(/-/, "a".encode("UTF-16LE"))`
+/// is a UTF-16LE string, and `"-b".gsub(...)` is refused when `b`
+/// comes ("UTF-16LE and UTF-8").
+pub struct EncBuf {
+    buf: StringBuf,
+    enc: Encoding,
+    /// The buffer holds only 7-bit content in an ASCII-compatible
+    /// encoding — what CRuby's `str_cr == ENC_CODERANGE_7BIT` means
+    /// there, an empty buffer counting as 7-bit.
+    seven_bit: bool,
+}
+
+impl EncBuf {
+    pub fn new(enc: Encoding) -> Self {
+        Self::with_capacity(enc, 0)
+    }
+
+    pub fn with_capacity(enc: Encoding, cap: usize) -> Self {
+        EncBuf {
+            buf: SmallVec::with_capacity(cap),
+            enc,
+            seven_bit: true,
+        }
+    }
+
+    /// The encoding the buffer has settled on so far.
+    pub fn encoding(&self) -> Encoding {
+        self.enc
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    /// Append `piece`, which is in `enc`; `known_7bit` says the caller
+    /// knows it to be ASCII-only (it is checked otherwise).
+    pub fn append(
+        &mut self,
+        store: &Store,
+        piece: &[u8],
+        enc: Encoding,
+        known_7bit: bool,
+    ) -> Result<()> {
+        let piece_7bit = enc.is_ascii_compatible() && (known_7bit || piece.is_ascii());
+        if enc != self.enc {
+            if !self.enc.is_ascii_compatible() || !enc.is_ascii_compatible() {
+                if piece.is_empty() {
+                    return Ok(());
+                }
+                if !self.buf.is_empty() {
+                    return Err(MonorubyErr::incompatible_encoding(store, self.enc, enc));
+                }
+                self.enc = enc;
+            } else if self.seven_bit {
+                if !piece_7bit {
+                    self.enc = enc;
+                }
+            } else if !piece_7bit {
+                return Err(MonorubyErr::incompatible_encoding(store, self.enc, enc));
+            }
+        }
+        self.seven_bit &= piece_7bit;
+        self.buf.extend_from_slice(piece);
+        Ok(())
+    }
+
+    /// Append a stretch of the haystack being rewritten: `enc` is its
+    /// encoding and `known_7bit` whether the whole haystack is known to
+    /// be ASCII-only.
+    pub fn append_stretch(
+        &mut self,
+        store: &Store,
+        piece: &[u8],
+        enc: Encoding,
+        known_7bit: bool,
+    ) -> Result<()> {
+        self.append(store, piece, enc, known_7bit)
+    }
+
+    /// Append a string: its bytes under its own encoding.
+    pub fn append_inner(&mut self, store: &Store, s: &RStringInner) -> Result<()> {
+        self.append(store, s.as_bytes(), s.encoding(), s.is_ascii_only())
+    }
+
+    /// The string built, with a lazy code range.
+    pub fn finish(self) -> RStringInner {
+        RStringInner::from(self.buf, self.enc, CodeRange::Unknown)
+    }
+}
+
 /// Byte storage of a Ruby String: either an owned buffer (the plain
 /// `SmallVec`, inline ≤ `STRING_INLINE_CAP` bytes or spilled to the
 /// heap) or a zero-copy view into a frozen root's buffer. The active
@@ -4400,10 +4505,11 @@ impl RStringInner {
     /// This is O(`given` + Σ replacement) instead of the
     /// O(`given` · matches) you get from applying each replacement with
     /// an individual buffer-shifting `bytesplice_with` (which `copy_within`s
-    /// the tail every time — quadratic in the match count). Each
-    /// replacement is still encoding-compatibility-checked, raising
-    /// `Encoding::CompatibilityError` where the pieces cannot share an
-    /// encoding. The result's code range is lazy.
+    /// the tail every time — quadratic in the match count). The pieces
+    /// are appended to an [`EncBuf`], so the result's encoding is what
+    /// CRuby's `str_gsub` settles piece by piece, and a piece that
+    /// cannot be appended is `Encoding::CompatibilityError`. The
+    /// result's code range is lazy.
     pub fn splice_all(
         store: &Store,
         bytes: &[u8],
@@ -4420,48 +4526,76 @@ impl RStringInner {
                 .map(|(r, rep)| rep.len() as i64 - (r.end - r.start) as i64)
                 .sum::<i64>())
         .max(0) as usize;
-        let mut buf: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(cap);
+        let mut buf = EncBuf::with_capacity(given_enc, cap);
         let mut last = 0usize;
-        // The result's encoding, as CRuby's `rb_enc_cr_str_buf_cat`
-        // settles it while appending piece by piece (a stretch of the
-        // haystack, a replacement): 7-bit pieces never change it; the
-        // first piece with non-ASCII content decides it — so
-        // `"a-b".gsub(/-/, "\xff".b)` is BINARY, while `"aéb"` stays
-        // UTF-8 whatever 7-bit replacement it takes — and a later
-        // non-ASCII piece in another encoding cannot fit
-        // (`Encoding::CompatibilityError`).
-        let mut enc = given_enc;
-        let mut seven_bit = true;
-        let mut append = |piece: &[u8], piece_enc: Encoding, piece_7bit: bool| -> Result<()> {
-            if !piece_7bit {
-                if seven_bit {
-                    enc = piece_enc;
-                    seven_bit = false;
-                } else if enc != piece_enc {
-                    return Err(MonorubyErr::incompatible_encoding(store, enc, piece_enc));
-                }
-            }
-            buf.extend_from_slice(piece);
-            Ok(())
-        };
         for (r, rep) in replacements {
-            // A replacement in an ASCII-incompatible encoding (UTF-16,
-            // ...) never fits an ASCII-compatible haystack, 7-bit or not,
-            // unless it is empty.
-            let rep_enc = rep.encoding();
-            if !rep.is_empty()
-                && rep_enc != given_enc
-                && !(rep_enc.is_ascii_compatible() && given_enc.is_ascii_compatible())
-            {
-                return Err(MonorubyErr::incompatible_encoding(store, given_enc, rep_enc));
-            }
-            let stretch = &bytes[last..r.start];
-            append(stretch, given_enc, given_7bit || stretch.is_ascii())?;
-            append(rep.as_bytes(), rep_enc, rep.is_ascii_only())?;
+            buf.append_stretch(store, &bytes[last..r.start], given_enc, given_7bit)?;
+            buf.append_inner(store, rep)?;
             last = r.end;
         }
-        let tail = &bytes[last..];
-        append(tail, given_enc, given_7bit || tail.is_ascii())?;
+        buf.append_stretch(store, &bytes[last..], given_enc, given_7bit)?;
+        Ok(buf.finish())
+    }
+
+    /// `String#sub`'s splice (`rb_str_sub_bang`): `bytes[range]` of the
+    /// receiver (encoding `given_enc`, `given_7bit` when it is known to
+    /// be ASCII-only) replaced by `rep`, as one operation rather than
+    /// the piece-by-piece append of [`Self::splice_all`].
+    ///
+    /// The result's encoding is `rb_enc_compatible(str, repl)` — the
+    /// receiver's for an empty or 7-bit replacement, the replacement's
+    /// over a 7-bit receiver, never a merge of two non-ASCII contents
+    /// or of an ASCII-incompatible side with anything. Where there is
+    /// none, CRuby still splices when the bytes before and after the
+    /// match are 7-bit (an ASCII-incompatible receiver never is), and
+    /// the result is tagged with the *replacement's* encoding:
+    /// `"x-".sub(/-/, "a".encode("UTF-16LE"))` is the three bytes
+    /// `x a NUL` as UTF-16LE. Otherwise `Encoding::CompatibilityError`,
+    /// the receiver named first.
+    ///
+    /// The code range is left lazy: CRuby stamps such a mixed-width
+    /// result with the replacement's cached code range, which is what
+    /// makes its `valid_encoding?` answer true, but that is a cached
+    /// value that no scan of the bytes agrees with, and a wide string
+    /// tagged valid with a stray byte is nothing the character walks
+    /// here can be trusted on.
+    pub fn sub_splice(
+        store: &Store,
+        bytes: &[u8],
+        given_enc: Encoding,
+        given_7bit: bool,
+        range: std::ops::Range<usize>,
+        rep: &RStringInner,
+    ) -> Result<RStringInner> {
+        let rep_enc = rep.encoding();
+        let seven = |s: &[u8]| given_enc.is_ascii_compatible() && (given_7bit || s.is_ascii());
+        let enc = if rep_enc == given_enc || rep.is_empty() {
+            given_enc
+        } else if bytes.is_empty() {
+            if given_enc.is_ascii_compatible() && rep.is_ascii_only() {
+                given_enc
+            } else {
+                rep_enc
+            }
+        } else if given_enc.is_ascii_compatible()
+            && rep_enc.is_ascii_compatible()
+            && rep.is_ascii_only()
+        {
+            given_enc
+        } else if given_enc.is_ascii_compatible() && rep_enc.is_ascii_compatible() && seven(bytes) {
+            rep_enc
+        } else if seven(&bytes[..range.start]) && seven(&bytes[range.end..]) {
+            rep_enc
+        } else {
+            return Err(MonorubyErr::incompatible_encoding(
+                store, given_enc, rep_enc,
+            ));
+        };
+        let mut buf: StringBuf =
+            SmallVec::with_capacity(bytes.len() - (range.end - range.start) + rep.len());
+        buf.extend_from_slice(&bytes[..range.start]);
+        buf.extend_from_slice(rep.as_bytes());
+        buf.extend_from_slice(&bytes[range.end..]);
         Ok(RStringInner::from(buf, enc, CodeRange::Unknown))
     }
 

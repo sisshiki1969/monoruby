@@ -4726,30 +4726,6 @@ fn sub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     Ok(res)
 }
 
-/// Re-tag `result`'s encoding to match `template`'s. The string
-/// helpers (`replace_all`, `replace_one`, etc.) build their output
-/// `RStringInner` as UTF-8 for a text subject; this restores the
-/// original receiver's declared encoding so `gsub`/`sub` results
-/// inherit it instead of silently switching to UTF-8 — except where
-/// CRuby's append rules (`rb_enc_cr_str_buf_cat`) let a replacement
-/// decide: a result that `splice_all` already settled on a
-/// replacement's encoding (non-ASCII content in, say, BINARY, over a
-/// 7-bit receiver) keeps it, and so does UTF-8 when a 7-bit receiver
-/// in another ASCII-compatible encoding picked up non-ASCII UTF-8
-/// content from a replacement.
-fn apply_template_encoding(result: &mut RStringInner, template: Value) {
-    if let Some(t) = template.is_rstring_inner() {
-        let t_enc = t.encoding();
-        if result.encoding() != Encoding::UTF8 || t_enc == Encoding::UTF8 {
-            return;
-        }
-        if t.is_ascii_only() && !result.is_ascii_only() {
-            return;
-        }
-        result.set_encoding(t_enc);
-    }
-}
-
 /// `String#sub` / `#sub!` requires either a block or a replacement
 /// argument. CRuby raises `ArgumentError: wrong number of arguments
 /// (given 1, expected 2)` when neither is supplied.
@@ -4817,7 +4793,10 @@ fn string_pattern_replace(
     let pat = pattern.is_rstring_inner()?;
     let rep = replacement.is_rstring_inner()?;
     let enc = recv.encoding();
-    let mergeable = |s: &RStringInner| s.is_ascii_only() || s.encoding() == enc;
+    // A 7-bit piece merges into an ASCII-compatible receiver and keeps
+    // its encoding; a UTF-16 / UTF-32 receiver takes only its own.
+    let mergeable =
+        |s: &RStringInner| s.encoding() == enc || (enc.is_ascii_compatible() && s.is_ascii_only());
     if !pat.is_valid_encoding() || !mergeable(&pat) || !mergeable(&rep) {
         return None;
     }
@@ -4916,7 +4895,7 @@ fn sub_main(
             let (subject, view) = pattern_subject(globals, self_val, lfp.arg(0))?;
             let res =
                 RegexpInner::replace_one_hash(vm, globals, lfp.arg(0), &subject, self_val, arg1);
-            decode_replaced(res, &subject, view, self_val)
+            decode_replaced(res, &subject, view)
         } else {
             let (mapped, _) = pattern_mode(globals, self_val, lfp.arg(0))?;
             if mapped {
@@ -4943,7 +4922,7 @@ fn sub_main(
             let (subject, view) = pattern_subject(globals, self_val, lfp.arg(0))?;
             let res =
                 RegexpInner::replace_one(vm, globals, lfp.arg(0), &subject, self_val, &replace);
-            decode_replaced(res, &subject, view, self_val)
+            decode_replaced(res, &subject, view)
         }
     } else {
         match lfp.block() {
@@ -4959,7 +4938,7 @@ fn sub_main(
                     bh,
                     bang,
                 );
-                decode_replaced(res, &subject, view, self_val)
+                decode_replaced(res, &subject, view)
             }
         }
     }
@@ -5109,22 +5088,19 @@ fn pattern_subject(
 
 /// The result of a replace over `subject`, decoded back to the
 /// receiver's bytes when the walk ran in surrogate space (a valid-UTF-8
-/// image whose U+00XX scalars stand for the receiver's raw bytes).
+/// image whose U+00XX scalars stand for the receiver's raw bytes). Any
+/// other walk built its result in the receiver's own encoding, or in
+/// the one a replacement settled (`EncBuf`), and is taken as it is.
 fn decode_replaced(
     res: Result<(RStringInner, bool)>,
     subject: &Subject,
     view: Option<std::borrow::Cow<'_, str>>,
-    self_val: Value,
 ) -> Result<(RStringInner, bool)> {
     let (mut res, changed) = res?;
     if subject.mapped() {
         if let Ok(s) = std::str::from_utf8(res.as_bytes()) {
             res = RStringInner::from_mapped_utf8(s, subject.encoding());
         }
-    } else if subject.as_text().is_some() {
-        // A text walk built its result as UTF-8; a byte walk built it
-        // in the receiver's own encoding already.
-        apply_template_encoding(&mut res, self_val);
     }
     drop(view);
     Ok((res, changed))
@@ -5562,20 +5538,13 @@ fn gsub_main(
             let (subject, view) = pattern_subject(globals, self_val, lfp.arg(0))?;
             let res =
                 RegexpInner::replace_all(vm, globals, lfp.arg(0), &subject, self_val, &replace);
-            decode_replaced(res, &subject, view, self_val)
+            decode_replaced(res, &subject, view)
         }
     } else {
         match lfp.block() {
             None => Err(MonorubyErr::runtimeerr("Currently, not supported.")),
             Some(bh) => {
-                let res = RegexpInner::replace_all_block(
-                    vm,
-                    globals,
-                    lfp.arg(0),
-                    self_val,
-                    bh,
-                    Some(self_enc),
-                );
+                let res = RegexpInner::replace_all_block(vm, globals, lfp.arg(0), self_val, bh);
                 decode_replaced_all(res, self_mapped, self_enc, globals, self_val, lfp.arg(0))
             }
         }
@@ -5594,14 +5563,11 @@ fn decode_replaced_all(
     pattern: Value,
 ) -> Result<(RStringInner, bool)> {
     let (mut res, changed) = res?;
-    match pattern_mode(globals, self_val, pattern)? {
-        (true, _) => {
-            if self_mapped && let Ok(s) = std::str::from_utf8(res.as_bytes()) {
-                res = RStringInner::from_mapped_utf8(s, self_enc);
-            }
-        }
-        (false, None) => apply_template_encoding(&mut res, self_val),
-        (false, Some(_)) => {}
+    if let (true, _) = pattern_mode(globals, self_val, pattern)?
+        && self_mapped
+        && let Ok(s) = std::str::from_utf8(res.as_bytes())
+    {
+        res = RStringInner::from_mapped_utf8(s, self_enc);
     }
     Ok((res, changed))
 }

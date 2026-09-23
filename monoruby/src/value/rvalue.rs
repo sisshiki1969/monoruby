@@ -36,7 +36,7 @@ pub use regexp::{Regexp, RegexpInner};
 pub(crate) use regexp::{Spans, Subject, save_spans, spans_of};
 pub(crate) use string::pack::*;
 pub use string::{
-    CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET,
+    CharByteIter, CodeRange, EncBuf, Encoding, RString, RStringInner, STRING_CR_OFFSET,
     STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, STRING_TY_PAYLOAD_OFFSET,
     STRING_TY_PAYLOAD_TAG, map_bytes_to_utf8,
 };
