@@ -1873,7 +1873,13 @@ impl Encoding {
             "CP50221" => Ok(Encoding::Other(2)),
             "ASCII_8BIT" | "BINARY" => Ok(Encoding::Ascii8),
             "US_ASCII" | "ASCII" | "ANSI_X3_4_1968" | "646" => Ok(Encoding::UsAscii),
-            "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Ok(Encoding::UTF8),
+            // `"locale"`, `"external"`, `"filesystem"` and `"internal"`
+            // are deliberately absent. They name no encoding of their
+            // own — CRuby keeps them in the encoding table as aliases it
+            // re-points whenever the setting behind them moves — so they
+            // cannot be answered by a pure function on the name. This
+            // one declines them and the callers that hold the
+            // interpreter state resolve them first (#1575).
 
             // Bare `UTF-16` / `UTF-32` are CRuby's BOM-based *dummy*
             // encodings, distinct from the real `UTF-16LE` / … codecs:
@@ -4780,8 +4786,11 @@ mod encoding_tests {
             Encoding::Sjis(1)
         );
         assert_eq!(Encoding::try_from_str("CP932").unwrap(), Encoding::Sjis(1));
-        // Pseudo-encoding names map to UTF-8.
-        assert_eq!(Encoding::try_from_str("LOCALE").unwrap(), Encoding::UTF8);
+        // The names that stand for a setting rather than an encoding are
+        // not this function's to answer (#1575).
+        for n in ["locale", "LOCALE", "external", "filesystem", "internal"] {
+            assert!(Encoding::try_from_str(n).is_err());
+        }
         // Unknown name → ArgumentError.
         assert!(Encoding::try_from_str("Bogus-1").is_err());
     }

@@ -2347,7 +2347,7 @@ fn usascii_decode_lossy(src_bytes: &[u8], repl: &str) -> String {
 /// and confirmed from the other side by `"\xf0".force_encoding(
 /// "CESU-8").encode("CESU-8", invalid: :replace)`, which is `"?"`
 /// although a conversion *into* CESU-8 replaces with `U+FFFD` — see
-/// `pivot_replacement` for why those two differ (#1571).
+/// `inserted_replacement` for why those two differ (#1571).
 fn replaces_with_u_fffd(enc: crate::value::Encoding) -> bool {
     use crate::value::Encoding as E;
     match enc {
@@ -2356,6 +2356,49 @@ fn replaces_with_u_fffd(enc: crate::value::Encoding) -> bool {
         // big-endian form, so they answer as that form does.
         E::Other(_) => dummy_wide_target(enc).is_some(),
         _ => false,
+    }
+}
+
+/// The encoding a converter inserts its replacement in, for a given
+/// pair.
+///
+/// `rb_econv_encoding_to_insert_output` asks the *last* transcoder in
+/// the chain, and answers with that transcoder's **source** encoding
+/// when it is an `asciicompat_encoder`. Of everything monoruby
+/// converts, `from_UTF8_MAC` is the only one — so a `UTF8-MAC` source
+/// with the pivot as its destination is the single conversion whose
+/// replacement is the source's rather than the destination's (#1577).
+fn insert_encoding(
+    src: crate::value::Encoding,
+    dst: crate::value::Encoding,
+) -> crate::value::Encoding {
+    if src == crate::value::Encoding::Utf8(crate::value::UTF8_MAC)
+        && dst == crate::value::Encoding::UTF8
+    {
+        src
+    } else {
+        dst
+    }
+}
+
+/// The replacement a *converter* inserts, asked of the encoding it
+/// inserts into.
+///
+/// Not the same question as [`replaces_with_u_fffd`], which is an
+/// encoding's *own* replacement — the one `String#scrub` and a
+/// same-encoding `invalid: :replace` use. CESU-8 is where the two
+/// part: a converter inserting into it writes `U+FFFD`, while
+/// scrubbing a CESU-8 string writes `"?"`. `UTF8-MAC` is the mirror
+/// image: inserting into it is `"?"`. Neither answer is derivable from
+/// anything monoruby holds about the encoding; both are read off CRuby
+/// (#1571, #1577).
+fn inserted_replacement(insert_enc: crate::value::Encoding) -> &'static str {
+    if replaces_with_u_fffd(insert_enc)
+        || insert_enc == crate::value::Encoding::NamedByte(crate::value::CESU_8)
+    {
+        "\u{FFFD}"
+    } else {
+        "?"
     }
 }
 
@@ -2874,7 +2917,7 @@ fn to_pivot_for(
     let pinned;
     let opts = if opts.replace.is_none() && (opts.invalid_replace || opts.undef_replace) {
         pinned = TranscodeOpts {
-            replace: Some(pivot_replacement(dst_enc)),
+            replace: Some(inserted_replacement(dst_enc).to_string()),
             ..opts.clone()
         };
         &pinned
@@ -2899,23 +2942,6 @@ fn to_pivot_for(
         )),
     }
 }
-
-/// The replacement a conversion *into* a pivot destination inserts.
-///
-/// CRuby asks its name table about the encoding the last transcoder in
-/// the chain inserts into, and the two pivot destinations answer
-/// differently: `UTF-8 → UTF8-MAC` inserts into `UTF8-MAC`, which is
-/// not in the table, so `"?"`; `UTF-8 → CESU-8` inserts into the pivot
-/// and gets `U+FFFD`. Neither is derivable from anything monoruby
-/// holds about the two — this is the measured answer (#1571).
-fn pivot_replacement(dst_enc: crate::value::Encoding) -> String {
-    if dst_enc == crate::value::Encoding::NamedByte(crate::value::CESU_8) {
-        "\u{FFFD}".to_string()
-    } else {
-        "?".to_string()
-    }
-}
-
 
 /// Re-spell a pivot conversion's error for the destination the caller
 /// actually named.
@@ -3040,17 +3066,37 @@ pub(super) fn transcode_bytes_with_opts(
     // it, with the message it already gets right.
     if src_enc != dst_enc {
         let mac = crate::value::Encoding::Utf8(crate::value::UTF8_MAC);
-        if src_enc == mac
-            && let Ok(s) = std::str::from_utf8(src_bytes)
-        {
-            let composed = crate::value::mac_to_utf8(s);
-            return transcode_bytes_with_opts(
-                composed.as_bytes(),
-                crate::value::Encoding::UTF8,
-                dst_enc,
-                &reporting_as(opts, src_enc),
-                store,
-            );
+        if src_enc == mac {
+            if let Ok(s) = std::str::from_utf8(src_bytes) {
+                let composed = crate::value::mac_to_utf8(s);
+                return transcode_bytes_with_opts(
+                    composed.as_bytes(),
+                    crate::value::Encoding::UTF8,
+                    dst_enc,
+                    &reporting_as(opts, src_enc),
+                    store,
+                );
+            }
+            if opts.invalid_replace {
+                // Broken input still composes: CRuby's transcoder goes
+                // on holding the cluster it was building, so the
+                // replacement lands where the cluster is not yet and
+                // the marks after the bad byte still join it (#1577).
+                let leads = mac_replacement_leads(dst_enc);
+                let replace = opts.replace.clone().unwrap_or_else(|| {
+                    inserted_replacement(insert_encoding(mac, dst_enc)).to_string()
+                });
+                let composed = mac_replace_pivot(src_bytes, &replace, leads, false);
+                return transcode_bytes_with_opts(
+                    composed.pivot.as_bytes(),
+                    crate::value::Encoding::UTF8,
+                    dst_enc,
+                    &reporting_as(opts, src_enc),
+                    store,
+                );
+            }
+            // Without it the pipeline below reports the bad byte, with
+            // the message it already gets right.
         }
         if dst_enc == mac {
             let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
@@ -3992,6 +4038,15 @@ fn resolve_enc_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Resu
         let s = arg.coerce_to_string(vm, globals)?;
         s
     };
+    // A name that stands for a setting names the encoding that setting
+    // currently holds; the table below only knows fixed names. CRuby
+    // reaches the same place from the other side — the four are
+    // ordinary aliases in its encoding table, re-pointed as the
+    // settings move — so `"x".encode("locale")` converts to whatever
+    // `Encoding.find("locale")` answers, and an unset `"internal"`,
+    // whose alias was never registered, is a converter that does not
+    // exist rather than a conversion to BINARY (#1575).
+    let name = dynamic_alias_name(globals, &name).unwrap_or(name);
     enc_name_to_const(&name).ok_or_else(|| {
         // CRuby raises `Encoding::ConverterNotFoundError` (not
         // ArgumentError) for `String#encode("xyz")` when the
@@ -4001,6 +4056,16 @@ fn resolve_enc_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Resu
         // `ConverterNotFoundError` for the encode path.
         MonorubyErr::argumenterr(format!("unknown encoding name - {}", name))
     })
+}
+
+/// The canonical name [`dynamic_alias_object`] resolves `name` to, for
+/// the callers that work in names rather than in `Encoding` objects.
+/// `None` when `name` is not one of the four, and also when it is
+/// `"internal"` with no `default_internal` — the name stands unresolved
+/// then, and fails the lookup it is handed to.
+fn dynamic_alias_name(globals: &Globals, name: &str) -> Option<String> {
+    let v = dynamic_alias_object(globals, name)?;
+    encoding_object_name(globals, v)
 }
 
 /// `resolve_enc_arg` variant that lifts the unknown-encoding
@@ -4731,25 +4796,15 @@ pub(super) fn force_encoding(
 /// back to ASCII-8BIT there, unlike `Encoding.find`, which answers
 /// nil). Returns `None` for every other name.
 fn special_encoding_name(globals: &mut Globals, name: &str) -> Option<Encoding> {
-    let lowered = name.to_ascii_lowercase();
-    let value = match lowered.as_str() {
-        "internal" => {
-            let internal = globals
-                .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
-                .filter(|v| !v.is_nil());
-            match internal {
-                Some(v) => v,
-                None => return Some(Encoding::Ascii8),
-            }
-        }
-        "external" | "filesystem" => globals
-            .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
-            .filter(|v| !v.is_nil())
-            .unwrap_or_else(|| Value::nil()),
-        "locale" => locale_encoding_value(globals),
-        _ => return None,
-    };
-    globals.encoding_of_object(value).or(Some(Encoding::UTF8))
+    match dynamic_alias_object(globals, name) {
+        Some(value) => globals.encoding_of_object(value).or(Some(Encoding::UTF8)),
+        // The one place the four are not resolved alike: an unset
+        // `"internal"` names no encoding, and `rb_to_encoding` answers
+        // BINARY for it where `Encoding.find` answers nil and the
+        // converters call the name unknown.
+        None if name.eq_ignore_ascii_case("internal") => Some(Encoding::Ascii8),
+        None => None,
+    }
 }
 
 /// Resolve an encoding operand — an `Encoding` object, a String name, or
@@ -4776,6 +4831,9 @@ pub(super) fn value_to_encoding(
     } else {
         // Try to_str coercion
         let s = arg0.coerce_to_string(vm, globals)?;
+        if let Some(enc) = special_encoding_name(globals, &s) {
+            return Ok(enc);
+        }
         Encoding::try_from_str(&s)
     }
 }
@@ -5407,12 +5465,14 @@ fn converter_get_dst(globals: &Globals, recv: Value) -> crate::value::Encoding {
 /// `U+FFFD` at all that encoding is UTF-8 — so `Converter.new("UTF-8",
 /// "UTF-16BE").replacement` is the three UTF-8 bytes tagged UTF-8, not
 /// the two UTF-16BE ones. Everything else takes `"?"` as US-ASCII.
-/// See `replaces_with_u_fffd` for the set (#1571).
-fn converter_default_replacement(dst: crate::value::Encoding) -> Value {
-    let (text, enc) = if replaces_with_u_fffd(dst) {
-        ("\u{FFFD}", crate::value::Encoding::UTF8)
+/// See `inserted_replacement` for which encodings take which, and
+/// `insert_encoding` for which encoding is asked (#1571, #1577).
+fn converter_default_replacement(insert_enc: crate::value::Encoding) -> Value {
+    let text = inserted_replacement(insert_enc);
+    let enc = if text == "?" {
+        crate::value::Encoding::UsAscii
     } else {
-        ("?", crate::value::Encoding::UsAscii)
+        crate::value::Encoding::UTF8
     };
     let mut s = crate::value::RStringInner::from_string_scanned(text.to_string());
     s.set_encoding(enc);
@@ -5645,8 +5705,9 @@ fn converter_replacement(
     {
         return Ok(v);
     }
+    let src = converter_get_src(globals, recv);
     let dst = converter_get_dst(globals, recv);
-    Ok(converter_default_replacement(dst))
+    Ok(converter_default_replacement(insert_encoding(src, dst)))
 }
 
 ///
@@ -6223,6 +6284,24 @@ fn mac_src_offset_for_pivot(head: &str, pivot_upto: usize) -> usize {
     src_at
 }
 
+/// The end of the cluster a pivot offset falls in, as a `(pivot,
+/// source)` pair. Clusters compose independently of one another, so
+/// this is the same walk [`mac_src_offset_for_pivot`] makes, stopping
+/// one cluster later.
+fn mac_cluster_end_for_pivot(head: &str, pivot_at: usize) -> (usize, usize) {
+    let mut piv = 0;
+    let mut src = 0;
+    for r in crate::value::mac_clusters(head) {
+        let piece = crate::value::mac_to_utf8(&head[r.clone()]);
+        piv += piece.len();
+        src = r.end;
+        if piv >= pivot_at {
+            break;
+        }
+    }
+    (piv, src)
+}
+
 /// How much of `bytes` a `UTF8-MAC` source is holding back: its
 /// trailing cluster, when the whole of `bytes` is one. Any other
 /// source holds nothing.
@@ -6251,6 +6330,152 @@ fn cesu8_good_prefix(bytes: &[u8]) -> usize {
     at
 }
 
+/// Where a bad byte in a `UTF8-MAC` source lands relative to the
+/// cluster the decoder is holding.
+///
+/// `from_UTF8_MAC` keeps the cluster it is composing to itself and
+/// hands it on only once the next starter arrives. With the pivot as
+/// the destination that transcoder is the whole conversion, so
+/// CRuby's `rb_econv_insert_output` writes the replacement into the
+/// very buffer the cluster is flushed to and it lands *after* it.
+/// With any other destination there is a second transcoder and the
+/// replacement goes into *its* output, so it comes out first — and
+/// the cluster, still upstream and still open, goes on collecting
+/// marks that arrive after the bad byte (#1577).
+fn mac_replacement_leads(dst_enc: crate::value::Encoding) -> bool {
+    dst_enc != crate::value::Encoding::UTF8
+}
+
+/// A broken `UTF8-MAC` source under `invalid: :replace`, composed into
+/// the pivot with every ill-formed subpart replaced.
+struct MacReplaced {
+    /// The composed pivot, replacements and all.
+    pivot: String,
+    /// How much of the source it accounts for. With more input still
+    /// to come the open cluster stays behind for the next chunk — and
+    /// so does anything the replacement has yet to be positioned
+    /// against.
+    cut: usize,
+    /// `(pivot offset, source offset)` wherever the two are in step:
+    /// every point at which the decoder had nothing held. A
+    /// conversion that stops early maps back through these.
+    marks: Vec<(usize, usize)>,
+}
+
+impl MacReplaced {
+    /// The source offset a pivot offset stands for, rounded down to
+    /// the nearest point the two agree on.
+    fn src_for_pivot(&self, pivot_at: usize) -> usize {
+        self.marks
+            .iter()
+            .rev()
+            .find(|(p, _)| *p <= pivot_at)
+            .map_or(0, |(_, s)| *s)
+    }
+
+    /// The first point at or after `pivot_at` the two agree on.
+    fn next_mark(&self, pivot_at: usize) -> Option<(usize, usize)> {
+        self.marks.iter().copied().find(|(p, _)| *p >= pivot_at)
+    }
+}
+
+/// Compose a broken `UTF8-MAC` source, replacing each ill-formed
+/// subpart the way CRuby's converter does.
+///
+/// The walk is CRuby's transcoder rather than monoruby's usual
+/// decode-then-scrub: the cluster being composed is held until a
+/// starter arrives, an ill-formed subpart does not close it, and the
+/// replacement is written where the held cluster is not yet — which is
+/// the whole of what #1577 reported.
+fn mac_replace_pivot(
+    src_bytes: &[u8],
+    replace: &str,
+    leads: bool,
+    partial_input: bool,
+) -> MacReplaced {
+    use unicode_normalization::char::canonical_combining_class as ccc;
+    let mut pivot = String::new();
+    let mut marks = vec![(0usize, 0usize)];
+    // The cluster being composed. Empty means nothing is held, and
+    // every point at which that is so is a point the pivot and the
+    // source agree on.
+    let mut held = String::new();
+    let mut at = 0usize;
+    loop {
+        let rest = &src_bytes[at..];
+        let good = match std::str::from_utf8(rest) {
+            Ok(_) => rest.len(),
+            Err(e) => e.valid_up_to(),
+        };
+        let run = std::str::from_utf8(&rest[..good]).expect("valid up to here");
+        for (off, c) in run.char_indices() {
+            if ccc(c) != 0 && !held.is_empty() {
+                held.push(c);
+                continue;
+            }
+            if !held.is_empty() {
+                pivot.push_str(&crate::value::mac_to_utf8(&held));
+                held.clear();
+                marks.push((pivot.len(), at + off));
+            }
+            // Only a character a mark can attach to is worth holding,
+            // and in CRuby's table that is the Basic Multilingual
+            // Plane — the same cut `mac_source_stream` makes at a
+            // chunk end. An astral character goes straight out, so a
+            // bad byte after it comes out behind it.
+            if (c as u32) >= 0x10000 {
+                pivot.push(c);
+                marks.push((pivot.len(), at + off + c.len_utf8()));
+                continue;
+            }
+            held.push(c);
+        }
+        at += good;
+        if at == src_bytes.len() {
+            break;
+        }
+        // One maximal ill-formed subpart. A truncated character at the
+        // very end of a chunk is not one yet — more of it may still
+        // come — so it goes back with whatever else is open.
+        let err = std::str::from_utf8(&src_bytes[at..]).expect_err("stopped short of the end");
+        let bad = match err.error_len() {
+            Some(n) => n,
+            None if partial_input => break,
+            None => src_bytes.len() - at,
+        };
+        if !leads {
+            // The cluster goes out first, so the replacement follows
+            // it and the composition starts again after it.
+            if !held.is_empty() {
+                pivot.push_str(&crate::value::mac_to_utf8(&held));
+                held.clear();
+            }
+        }
+        pivot.push_str(replace);
+        at += bad;
+        if held.is_empty() {
+            marks.push((pivot.len(), at));
+        }
+    }
+    let cut = if partial_input {
+        // Only what the source and the pivot agree on goes out. A
+        // replacement written past the last of those marks is waiting
+        // on the cluster it precedes, and the bytes behind it are
+        // handed back — so it must not be converted here as well, or
+        // the chunk that settles it writes it a second time.
+        let (pivot_end, src_end) = *marks.last().expect("seeded above");
+        pivot.truncate(pivot_end);
+        src_end
+    } else {
+        if !held.is_empty() {
+            pivot.push_str(&crate::value::mac_to_utf8(&held));
+        }
+        marks.push((pivot.len(), src_bytes.len()));
+        src_bytes.len()
+    };
+    MacReplaced { pivot, cut, marks }
+}
+
 /// A `UTF8-MAC` source, a chunk at a time: compose out of Apple's
 /// decomposed form and hand the result to the ordinary pipeline.
 ///
@@ -6276,6 +6501,16 @@ fn mac_source_stream(
         Err(e) => e.valid_up_to(),
     };
     if good < src_bytes.len() {
+        if opts.invalid_replace {
+            return mac_replace_stream(
+                src_bytes,
+                dst_enc,
+                max_dst_bytes,
+                partial_input,
+                opts,
+                store,
+            );
+        }
         // The well-formed prefix converts exactly as it would on its
         // own — hold-back included, or a chunk that ends mid-character
         // would settle the cluster before it and lose the composition
@@ -6314,12 +6549,110 @@ fn mac_source_stream(
     } else {
         mac_src_offset_for_pivot(head, pivot_consumed)
     };
-    if meta.dst_full_extra > 0 {
-        let tried = mac_src_offset_for_pivot(head, pivot_consumed + meta.dst_full_extra);
-        meta.dst_full_extra = tried.saturating_sub(consumed);
+    if matches!(result, StreamConvertResult::DestinationBufferFull) {
+        // The cap stopped inside a cluster, and a cluster's source
+        // cannot be cut there — it composes as one piece. Take the
+        // whole of it and hold the rest of its output for the next
+        // call, the way a character split across two calls is held
+        // (#1532, #1577).
+        //
+        // This runs whether or not the pipeline read ahead of the cap
+        // itself: a character *inside* a cluster has no source bytes
+        // of its own, so a stop after one leaves `dst_full_extra` at
+        // zero while `consumed` rounds back to the cluster's start.
+        // Saying nothing there held the character's output and
+        // converted it again next call, and `"a\u0301b\u0302c"`
+        // through a one-byte destination never got past the `b`.
+        let over = pivot_consumed + meta.dst_full_extra;
+        let (piv_end, src_end) = mac_cluster_end_for_pivot(head, over);
+        if piv_end > over {
+            let (_, _, rest, _) = stream_convert(
+                &composed.as_bytes()[over..piv_end],
+                E::UTF8,
+                dst_enc,
+                None,
+                false,
+                opts,
+                store,
+            );
+            meta.dst_full_out.extend_from_slice(&rest);
+        }
+        meta.dst_full_extra = src_end.saturating_sub(consumed);
     }
     // What was held back is not the end of the input.
     let result = if cut < s.len() && matches!(result, StreamConvertResult::Finished) {
+        StreamConvertResult::SourceBufferEmpty
+    } else {
+        result
+    };
+    (result, consumed, out, meta)
+}
+
+/// A broken `UTF8-MAC` source under `invalid: :replace`, a chunk at a
+/// time.
+///
+/// The composed pivot carries the replacements, so the rest of the
+/// pipeline converts them along with everything else; what the chunk
+/// leaves open — the cluster still being composed, and a replacement
+/// that has yet to be positioned against it — goes back to the caller
+/// as unconsumed source, to be read again with the chunk that settles
+/// it. CRuby keeps that state inside the converter instead, so a chunk
+/// boundary can fall in a different place; the bytes either side of it
+/// add up to the same conversion (#1577).
+fn mac_replace_stream(
+    src_bytes: &[u8],
+    dst_enc: crate::value::Encoding,
+    max_dst_bytes: Option<usize>,
+    partial_input: bool,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
+    use crate::value::Encoding as E;
+    let mac = E::Utf8(crate::value::UTF8_MAC);
+    let leads = mac_replacement_leads(dst_enc);
+    let replace = opts
+        .replace
+        .clone()
+        .unwrap_or_else(|| inserted_replacement(insert_encoding(mac, dst_enc)).to_string());
+    let composed = mac_replace_pivot(src_bytes, &replace, leads, partial_input);
+    let (result, pivot_consumed, out, mut meta) = stream_convert(
+        composed.pivot.as_bytes(),
+        E::UTF8,
+        dst_enc,
+        max_dst_bytes,
+        false,
+        opts,
+        store,
+    );
+    // Back to source bytes. Everything written stops at a point the
+    // two agree on, so that half is a lookup.
+    let consumed = composed.src_for_pivot(pivot_consumed);
+    // What a capped destination read past it is a different question:
+    // the source of a piece cannot be cut in the middle, since the
+    // replacement comes out *before* the cluster it precedes and a
+    // prefix of the output is not a prefix of the source. So take the
+    // whole piece — convert the rest of it and hold that as output,
+    // the way a character split across two calls is held (#1532).
+    let over = pivot_consumed + meta.dst_full_extra;
+    let (end_pivot, end_src) = composed
+        .next_mark(over)
+        .unwrap_or((composed.pivot.len(), composed.cut));
+    if end_pivot > over {
+        let (_, _, rest, _) = stream_convert(
+            &composed.pivot.as_bytes()[over..end_pivot],
+            E::UTF8,
+            dst_enc,
+            None,
+            false,
+            opts,
+            store,
+        );
+        meta.dst_full_out.extend_from_slice(&rest);
+    }
+    meta.dst_full_extra = end_src.saturating_sub(consumed);
+    // What was left open is not the end of the input.
+    let result = if composed.cut < src_bytes.len() && matches!(result, StreamConvertResult::Finished)
+    {
         StreamConvertResult::SourceBufferEmpty
     } else {
         result
@@ -9624,12 +9957,18 @@ fn converter_primitive_convert(
             src_consumed
         };
         // Its output is held instead, so the bytes of the character
-        // already converted are not buffered again.
-        let buffered_from = if converted_ahead {
-            split.min(src_bytes.len())
+        // already converted are not buffered again — but only those.
+        // The cluster a `UTF8-MAC` source is holding for a composition
+        // is read ahead *without* being converted, so it belongs in
+        // the buffer: skipping the whole of `split` here dropped it,
+        // and `"abcd"` in `UTF8-MAC` came back through a two-byte
+        // destination as `"abd"` (#1577).
+        let converted_ahead_len = if converted_ahead {
+            meta.dst_full_extra.min(src_bytes.len() - src_consumed)
         } else {
-            src_consumed
+            0
         };
+        let buffered_from = (src_consumed + converted_ahead_len).min(split);
         let buffered: Vec<u8> = src_bytes[buffered_from..split].to_vec();
         // Put bytes after the error back into `src_arg`. Pending
         // buffer otherwise drops — the converter has nothing it
@@ -10557,34 +10896,14 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Ok(arg0);
     }
     let name = arg0.coerce_to_string(vm, globals)?;
-    // Special names resolved at query time: the filesystem/locale
-    // encodings follow `default_external`, and "internal" may be nil.
-    // CRuby resolves these the same way whatever the case, since the
-    // whole name lookup is case-insensitive.
-    match name.to_ascii_lowercase().as_str() {
-        // The locale encoding follows the locale charmap, which CRuby
-        // reads from the environment at startup; the other two follow
-        // `default_external`.
-        "locale" => return Ok(locale_encoding_value(globals)),
-        "external" | "filesystem" => {
-            let ext = globals
-                .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
-                .filter(|v| !v.is_nil())
-                .unwrap_or_else(|| {
-                    globals
-                        .store
-                        .get_constant_noautoload(enc_class, IdentId::UTF_8)
-                        .unwrap_or(Value::nil())
-                });
-            return Ok(ext);
-        }
-        "internal" => {
-            let int = globals
-                .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
-                .unwrap_or(Value::nil());
-            return Ok(int);
-        }
-        _ => {}
+    // Special names resolved at query time: the locale encoding follows
+    // the locale charmap, the filesystem/external ones follow
+    // `default_external`, and "internal" may name nothing. The lookup
+    // below answers all four the same way; the one thing `Encoding.find`
+    // does differently is report an unset `"internal"` as nil rather
+    // than as an unknown name.
+    if name.eq_ignore_ascii_case("internal") {
+        return Ok(dynamic_alias_object(globals, &name).unwrap_or_else(Value::nil));
     }
     // `rb_to_encoding` goes through `StringValueCStr`, so an embedded
     // NUL is its own error rather than an unknown name.
@@ -10602,11 +10921,61 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
 }
 
+/// The `Encoding` object one of the four run-time alias names stands
+/// for, or `None` for any other name.
+///
+/// CRuby registers these in the encoding table with
+/// `enc_alias_internal` and re-points them whenever the setting behind
+/// them moves: `"locale"` at startup from the locale charmap,
+/// `"filesystem"` and `"external"` from `Encoding.default_external`,
+/// `"internal"` only while a `default_internal` is set. That last one
+/// is why `"internal"` can name nothing at all — with no default
+/// internal encoding the alias was never registered, so the name is
+/// simply unknown, which is what `Encoding.find` reports as nil and
+/// what makes `"x".encode("internal")` a missing converter rather than
+/// a conversion to BINARY.
+fn dynamic_alias_object(globals: &Globals, name: &str) -> Option<Value> {
+    // The names are ASCII and the comparison is case-insensitive, as
+    // every encoding-name lookup is; unlike the rest of them these are
+    // whole names, so the `-` / `_` folding does not apply.
+    let gvar = |n: &str| {
+        globals
+            .get_gvar(IdentId::get_id(n))
+            .filter(|v| !v.is_nil())
+    };
+    if name.eq_ignore_ascii_case("locale") {
+        Some(locale_encoding_value(globals))
+    } else if name.eq_ignore_ascii_case("external") || name.eq_ignore_ascii_case("filesystem") {
+        // `$DEFAULT_EXTERNAL` is seeded at startup and can never be
+        // unset again, so the fallback only covers a `Globals` that
+        // `init_default_external` never ran on.
+        Some(gvar("$DEFAULT_EXTERNAL").unwrap_or_else(|| {
+            let enc_class = encoding_class(globals);
+            globals
+                .store
+                .get_constant_noautoload(enc_class, IdentId::UTF_8)
+                .unwrap_or(Value::nil())
+        }))
+    } else if name.eq_ignore_ascii_case("internal") {
+        gvar("$DEFAULT_INTERNAL")
+    } else {
+        None
+    }
+}
+
 /// Resolve an encoding *name* to its registered `Encoding` object,
 /// preserving object identity (so e.g. `IBM866` stays `IBM866` rather
 /// than collapsing to `ASCII-8BIT` the way the `Encoding` enum does).
 /// Mirrors `Encoding.find` without the `to_str`/error handling.
 pub(super) fn find_encoding_object(globals: &Globals, name: &str) -> Option<Value> {
+    // The four names that stand for a setting rather than for an
+    // encoding are answered from that setting, before any table is
+    // consulted. They have to be: a fixed answer here is what made
+    // `String#encode("locale")` and `File.open(f, "r:locale")` reach
+    // UTF-8 whatever the locale actually was (#1575).
+    if let Some(v) = dynamic_alias_object(globals, name) {
+        return Some(v);
+    }
     let enc_class = encoding_class(globals);
     // The alias table names a constant directly, which answers the
     // common names ("UTF-8", "ASCII-8BIT", …) without touching the rest
@@ -10688,8 +11057,11 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
     // Normalize: uppercase, replace '-' with '_'
     let normalized = name.to_uppercase().replace('-', "_");
     match normalized.as_str() {
-        // Special pseudo-encoding names
-        "LOCALE" | "EXTERNAL" | "FILESYSTEM" => Some("UTF_8"),
+        // `"LOCALE"`, `"EXTERNAL"`, `"FILESYSTEM"` and `"INTERNAL"` are
+        // deliberately absent: they name whatever the interpreter's
+        // settings currently hold, which this table cannot know.
+        // `dynamic_alias_object` answers them from that state before
+        // any caller reaches here (#1575).
 
         // UTF-8 (and aliases sharing the constant — `Encoding::CP65001`
         // is an alias of `Encoding::UTF_8`).
@@ -16666,6 +17038,244 @@ mod tests {
               end
             end
             "##,
+        );
+    }
+
+    #[test]
+    fn the_names_that_stand_for_a_setting_name_what_it_holds() {
+        // `"locale"`, `"external"` and `"filesystem"` are references to
+        // an encoding, not encodings: CRuby keeps them in its encoding
+        // table as aliases it re-points whenever the setting behind
+        // them moves. monoruby had them in a table that answered UTF-8
+        // outright, so every resolver but `Encoding.find` and
+        // `force_encoding` disagreed with the interpreter's own
+        // setting. Asserted against `Encoding.find` rather than against
+        // a name, so the answer does not depend on the locale the test
+        // runs under (#1575).
+        run_test_once(
+            r#"
+              names = %w[locale external filesystem LOCALE External]
+              [
+                names.map { |n| "abc".encode(n).encoding == Encoding.find(n) },
+                names.map { |n| "abc".encode("UTF-8", n).encoding.name },
+                names.map { |n| Encoding::Converter.new("UTF-16BE", n).destination_encoding == Encoding.find(n) },
+                names.map { |n| "abc".dup.force_encoding(n).encoding == Encoding.find(n) },
+                (require "stringio"
+                 io = StringIO.new
+                 io.set_encoding("locale")
+                 io.external_encoding == Encoding.find("locale")),
+                # The names resolve through `#to_str` coercion too,
+                # which reaches the resolver by a different route than
+                # a String argument does.
+                (o = Object.new
+                 def o.to_str = "locale"
+                 ["abc".dup.force_encoding(o).encoding == Encoding.find("locale"),
+                  String.new("abc", encoding: o).encoding == Encoding.find("locale")]),
+                # `"internal"` is the one of the four that can name
+                # nothing at all: with no `default_internal` CRuby never
+                # registered the alias, so the converters call the name
+                # unknown where `rb_to_encoding` still falls back to
+                # BINARY.
+                [Encoding.find("internal"),
+                 ("abc".encode("internal") rescue $!.class.name),
+                 (Encoding::Converter.new("UTF-8", "internal") rescue $!.class.name),
+                 "abc".dup.force_encoding("internal").encoding.name],
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_conversion_to_the_default_external_encoding_can_fail() {
+        // The row that bites in #1575: under a US-ASCII default
+        // external, `"\u00e9".encode("locale")` is a conversion CRuby
+        // refuses because the target cannot hold the character, and it
+        // silently succeeded — returning the string labelled UTF-8.
+        // The settings are assigned here rather than read, so this
+        // holds whatever locale the test runs under.
+        run_test_once(
+            r#"
+              Encoding.default_external = Encoding::US_ASCII
+              a = [
+                %w[external filesystem].map { |n| "abc".encode(n).encoding.name },
+                %w[external filesystem].map { |n| ("\u00e9".encode(n) rescue $!.message) },
+                %w[external filesystem].map { |n| "abc".dup.force_encoding(n).encoding.name },
+              ]
+              Encoding.default_external = Encoding::EUC_JP
+              b = [
+                %w[external filesystem].map { |n| "\u3042".encode(n).bytes },
+                Encoding::Converter.new("UTF-8", "external").destination_encoding.name,
+              ]
+              # `"internal"` resolves once there is a `default_internal`
+              # for it to name — CRuby registers the alias on the
+              # assignment.
+              Encoding.default_internal = Encoding::EUC_JP
+              c = [
+                "abc".encode("internal").encoding.name,
+                Encoding::Converter.new("UTF-8", "internal").destination_encoding.name,
+                Encoding.find("internal").name,
+              ]
+              Encoding.default_internal = nil
+              [a, b, c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_broken_utf8_mac_source_replaces_where_its_decoder_is() {
+        // `from_UTF8_MAC` keeps the cluster it is composing to itself
+        // until the next starter arrives, so a bad byte reaches the
+        // output before it — which is why every destination past the
+        // pivot sees the replacement one character early, and the
+        // pivot itself, the one destination that conversion reaches in
+        // a single transcoder, does not. The character follows the
+        // same rule from the other side: that single hop inserts into
+        // `UTF8-MAC`, which CRuby does not spell `U+FFFD` for, so it
+        // is `"?"` where the two-hop conversions answer for their own
+        // destination (#1577).
+        run_test_once(
+            r#"
+              def mac(s) = s.dup.force_encoding("UTF8-MAC")
+              [
+                %w[UTF-8 CESU-8 EUC-JP Shift_JIS US-ASCII ISO-8859-1 UTF-16BE ASCII-8BIT].map { |d|
+                  mac("a\xffb").encode(d, invalid: :replace).bytes },
+                # One character back, not to the front of the string.
+                ["abc\xffd", "ab\xffcd", "\xffab", "ab\xff", "a\xff\xffb", "a\xc3"].map { |b|
+                  [mac(b).encode("EUC-JP", invalid: :replace).bytes,
+                   mac(b).encode("UTF-8", invalid: :replace).bytes] },
+                # The held cluster is still open, so a mark after the
+                # bad byte joins it where a second transcoder follows,
+                # and does not where the pivot is the destination.
+                ["a\u0301\xffb", "a\xff\u0301b", "a\u0301b\xff"].map { |b|
+                  [mac(b).encode("EUC-JP", invalid: :replace).bytes,
+                   mac(b).encode("UTF-8", invalid: :replace).bytes] },
+                # `undef:` is the other half of the conversion, and is
+                # reported where it happens.
+                [mac("a\u00e9b").encode("US-ASCII", undef: :replace).bytes,
+                 mac("a\xff\u00e9b").encode("US-ASCII", invalid: :replace, undef: :replace).bytes,
+                 mac("a\xffb").encode("EUC-JP", invalid: :replace, replace: "!").bytes],
+                # Nothing is held after a character no mark can attach
+                # to — CRuby's table is the Basic Multilingual Plane —
+                # so a bad byte after an astral character comes out
+                # behind it.
+                ["\u{1F600}\xffb", "a\u{1F600}\xffb", "\u{1F600}\u0301\xffb"].map { |b|
+                  [mac(b).encode("UTF-16BE", invalid: :replace).bytes,
+                   mac(b).encode("UTF-8", invalid: :replace).bytes] },
+                # An empty replacement drops the bad byte and nothing
+                # else, at either end of the rule.
+                [mac("a\xffb").encode("EUC-JP", invalid: :replace, replace: "").bytes,
+                 mac("a\xffb").encode("UTF-8", invalid: :replace, replace: "").bytes,
+                 mac("\xff\xff\xff").encode("EUC-JP", invalid: :replace).bytes,
+                 mac("").encode("EUC-JP", invalid: :replace).bytes],
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_converter_inserts_in_the_encoding_its_last_step_writes() {
+        // `Encoding::Converter#replacement` asks
+        // `rb_econv_encoding_to_insert_output`, which answers with the
+        // last transcoder's *source* encoding when that transcoder is
+        // an `asciicompat_encoder` — `from_UTF8_MAC` is the only one
+        // monoruby converts through. CESU-8 is the other half of the
+        // same question from the destination side: a converter
+        // inserting into it writes `U+FFFD`, although scrubbing a
+        // CESU-8 string writes `"?"` (#1571, #1577).
+        run_test_once(
+            r#"
+              [
+                [["UTF8-MAC", "UTF-8"], ["UTF8-MAC", "EUC-JP"], ["UTF8-MAC", "UTF-16BE"],
+                 ["UTF8-MAC", "CESU-8"], ["UTF-8", "CESU-8"], ["EUC-JP", "CESU-8"],
+                 ["UTF-8", "UTF8-MAC"], ["UTF-8", "UTF-16BE"]].map { |a, b|
+                  r = Encoding::Converter.new(a, b).replacement
+                  [r.bytes, r.encoding.name] },
+                # Scrubbing answers for the string's own encoding, and
+                # CESU-8's own replacement is still "?".
+                ["\xf0".dup.force_encoding("CESU-8").encode("CESU-8", invalid: :replace).bytes,
+                 "\xf0".dup.force_encoding("CESU-8").scrub.bytes],
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_streamed_broken_utf8_mac_source_adds_up_to_the_one_shot_one() {
+        // The converter used to refuse the input outright — `invalid:
+        // :replace` never reached a `UTF8-MAC` source at all. It
+        // replaces now, and what it holds back between calls is
+        // source rather than CRuby's converted output, so a chunk
+        // boundary can fall in a different place; the bytes either
+        // side of it are the same conversion (#1577).
+        run_test_once(
+            r#"
+              def mac(s) = s.dup.force_encoding("UTF8-MAC")
+              # In bytes, so that an empty chunk's answer cannot bring
+              # an encoding of its own to the join.
+              def drive(dst, *chunks)
+                c = Encoding::Converter.new("UTF8-MAC", dst, invalid: :replace)
+                chunks.flat_map { |b| c.convert(mac(b)).bytes } + c.finish.bytes
+              end
+              [
+                [drive("EUC-JP", "a\xffb"), drive("EUC-JP", "a\xff", "b"),
+                 drive("EUC-JP", "a", "\xffb"), drive("EUC-JP", "a", "\xff", "b"),
+                 mac("a\xffb").encode("EUC-JP", invalid: :replace).bytes],
+                [drive("UTF-8", "ab\xffcd"), drive("UTF-8", "ab", "\xff", "cd"),
+                 mac("ab\xffcd").encode("UTF-8", invalid: :replace).bytes],
+                [drive("UTF-16BE", "a\xffb"),
+                 mac("a\xffb").encode("UTF-16BE", invalid: :replace).bytes],
+                # A mark in the next chunk still joins the cluster the
+                # bad byte interrupted.
+                [drive("EUC-JP", "a\xff", "\u0301b"),
+                 mac("a\xff\u0301b").encode("EUC-JP", invalid: :replace).bytes],
+                [drive("UTF-16BE", "\u{1F600}\xffb"), drive("UTF-16BE", "\u{1F600}", "\xffb"),
+                 mac("\u{1F600}\xffb").encode("UTF-16BE", invalid: :replace).bytes],
+                # A truncated character at a chunk end waits for the
+                # rest of itself; at the end of the stream it is
+                # ill-formed like any other.
+                [drive("EUC-JP", "ab\xc3"), drive("EUC-JP", "ab\xc3", "\x81"),
+                 mac("ab\xc3").encode("EUC-JP", invalid: :replace).bytes],
+              ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_capped_destination_keeps_what_a_utf8_mac_source_held_back() {
+        // The cluster a `UTF8-MAC` source holds for a composition is
+        // read ahead without being converted, so it has to be
+        // buffered; it was being skipped along with the character
+        // whose output the cap had already taken, and `"abcd"` came
+        // back through a two-byte destination as `"abd"` (#1577).
+        run_test_once(
+            r#"
+              def drain(src_enc, bytes, dst_enc, cap, rounds = 8)
+                c = Encoding::Converter.new(src_enc, dst_enc, invalid: :replace)
+                src = bytes.dup.force_encoding(src_enc)
+                dst = String.new(encoding: dst_enc)
+                out = []
+                rounds.times { c.primitive_convert(src, dst, 0, cap); out << dst.bytes.dup; dst.clear }
+                out.flatten
+              end
+              # A cap can stop inside a composed cluster, whose source
+              # cannot be cut there — one cluster is one piece of the
+              # pivot. `"a\u0301b\u0302c"` through a one-byte
+              # destination used to hold the `b`'s output and convert
+              # it again next call, and never got past it.
+              nfd = "a\u0301b\u0302c".encode("UTF8-MAC")
+              [
+                [drain("UTF8-MAC", "abcd", "UTF-16BE", 2),
+                 "abcd".encode("UTF-16BE").bytes],
+                (1..4).map { |cap|
+                  [drain("UTF8-MAC", nfd, "UTF-8", cap, 14),
+                   drain("UTF8-MAC", nfd, "UTF-16BE", cap, 14)] },
+                [nfd.encode("UTF-8").bytes, nfd.encode("UTF-16BE").bytes],
+                [drain("UTF8-MAC", "ab\xffcd", "UTF-16BE", 2),
+                 "ab\xffcd".dup.force_encoding("UTF8-MAC").encode("UTF-16BE", invalid: :replace).bytes],
+                [drain("UTF-8", "abcd", "UTF-16BE", 3),
+                 "abcd".encode("UTF-16BE").bytes],
+              ]
+            "#,
         );
     }
 }
