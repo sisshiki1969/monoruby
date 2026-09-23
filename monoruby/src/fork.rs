@@ -265,9 +265,10 @@ mod tests {
             if pid == 0 {
                 guards.reset_child();
                 let _ = IdentId::get_id("fork_child_probe");
-                // SAFETY: a forked child of a test process; `_exit` skips
-                // the atexit handlers that belong to the parent.
-                unsafe { libc::_exit(0) };
+                // `exit` rather than `_exit`, so the child's coverage
+                // profile is flushed (as `fill_closed_std_fds_repairs_closed_stderr`
+                // does): `reset_child`'s child-side paths run nowhere else.
+                std::process::exit(0);
             }
             drop(guards);
             let started = std::time::Instant::now();
