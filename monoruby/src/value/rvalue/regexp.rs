@@ -1,34 +1,41 @@
 use super::*;
 use onigmo_regex::{Captures, FindCaptures, OnigmoEncoding, Regex};
+use crate::fork::{ForkGuard, ForkableRwLock};
 use std::sync::Arc;
-use std::sync::{LazyLock, RwLock};
 
-static REGEX_CACHE: LazyLock<RwLock<RegexCache>> = LazyLock::new(|| RwLock::new(RegexCache::new()));
+/// Process-global like the identifier table, and taken for writing by
+/// every compile that misses, so a `fork(2)` on one OS thread can catch
+/// another thread inside it; the forking thread takes it first
+/// ([`prepare_fork`]) and the child replaces it (`crate::fork`).
+static REGEX_CACHE: ForkableRwLock<RegexCache> = ForkableRwLock::new(RegexCache::new);
 
 /// The native-encoding compile cache (see [`RegexpInner::native_regex`]):
 /// the regular [`REGEX_CACHE`] is keyed on the UTF-8-view pattern, native
 /// compiles use the raw source bytes, so they get their own.
 type NativeRegexCache = HashMap<(Vec<u8>, u32, OnigmoEncoding), Arc<Regex>>;
-static NATIVE_CACHE: LazyLock<RwLock<NativeRegexCache>> =
-    LazyLock::new(|| RwLock::new(HashMap::default()));
+static NATIVE_CACHE: ForkableRwLock<NativeRegexCache> =
+    ForkableRwLock::new(NativeRegexCache::default);
 
 /// Both compile caches' locks, held across a `fork(2)` — see
-/// [`crate::fork`]. Process-global like the identifier table, and taken
-/// for writing by every compile that misses, so a fork on one OS thread
-/// can catch another thread inside one; the child would then block on
-/// its first `Regexp` literal.
+/// [`crate::fork`].
 pub(crate) struct ForkLocks {
-    _cache: std::sync::RwLockWriteGuard<'static, RegexCache>,
-    _native: std::sync::RwLockWriteGuard<'static, NativeRegexCache>,
+    cache: ForkGuard<RegexCache>,
+    native: ForkGuard<NativeRegexCache>,
 }
 
-/// Take both caches' locks for a `fork(2)` — see [`ForkLocks`]. A
-/// poisoned lock is taken anyway: a cache is a map of finished compiles,
-/// consistent whatever unwound while it was held.
+/// Take both caches' locks for a `fork(2)` — see [`ForkLocks`].
 pub(crate) fn prepare_fork() -> ForkLocks {
     ForkLocks {
-        _cache: REGEX_CACHE.write().unwrap_or_else(|e| e.into_inner()),
-        _native: NATIVE_CACHE.write().unwrap_or_else(|e| e.into_inner()),
+        cache: REGEX_CACHE.prepare_fork(),
+        native: NATIVE_CACHE.prepare_fork(),
+    }
+}
+
+impl ForkLocks {
+    /// The child's side — see [`ForkGuard::reset_child`].
+    pub(crate) fn reset_child(self) {
+        self.cache.reset_child();
+        self.native.reset_child();
     }
 }
 
