@@ -6695,18 +6695,6 @@ fn converter_new(
         lfp.arg(1),
         false,
     )?;
-    // CRuby raises `Encoding::ConverterNotFoundError` for identical
-    // source/destination encodings — there is no "X to X" transcoder.
-    // Compare the resolved canonical *names*, not the internal
-    // `Encoding`: monoruby folds aliases like `UTF8-MAC` onto
-    // `Utf8`, but CRuby treats them as distinct and DOES build a
-    // converter (`Converter.new(UTF_8, UTF8_MAC)` is valid).
-    if src.name() == dst.name() {
-        return Err(MonorubyErr::converter_not_found_error(
-            &globals.store,
-            format!("code converter not found ({} to {})", src.name(), dst.name()),
-        ));
-    }
     // The decorators the message names, read ahead of the options
     // proper: `code converter not found (UTF-8 to Windows-1258 with
     // crlf_newline)` (#1591).
@@ -6724,6 +6712,17 @@ fn converter_new(
         decorators.universal_newline |= on("universal_newline");
         decorators.crlf_newline |= on("crlf_newline");
         decorators.cr_newline |= on("cr_newline");
+    }
+    // CRuby raises `Encoding::ConverterNotFoundError` for identical
+    // source/destination encodings — there is no "X to X" transcoder,
+    // and a decorator does not make one: `(UTF-8 to UTF-8 with
+    // universal_newline)` is refused with the decorator named (#1589).
+    // Compare the resolved canonical *names*, not the internal
+    // `Encoding`: monoruby folds aliases like `UTF8-MAC` onto
+    // `Utf8`, but CRuby treats them as distinct and DOES build a
+    // converter (`Converter.new(UTF_8, UTF8_MAC)` is valid).
+    if src.name() == dst.name() {
+        return Err(converter_not_found(&globals.store, src, dst, &decorators, None));
     }
     validate_converter_pair(src, dst, &decorators, &globals.store)?;
     // Options Hash (`replace:` kwargs / `**opts` / trailing Hash).
@@ -11649,18 +11648,27 @@ fn converter_primitive_convert(
         _ => out_bytes,
     };
     // What the call reports, and whether it closes the stream.
-    let result = if already_finished || !no_more_input {
+    //
+    // `partial_input: true` never finishes: the chunk is converted
+    // whole, but more may follow, so a run that reached the end of it
+    // is `:source_buffer_empty` — with input of its own as much as
+    // without (#1589). An error it ran into is still the answer.
+    //
+    // Without it the call is the last: the converter is done once
+    // it has read everything it was given — whether the caller said
+    // so with an empty source or the run simply finished — and every
+    // later call answers `:finished` having converted nothing.
+    let result = if already_finished {
         result
     } else if partial_input {
-        // Nothing to read *this* time. Whatever the converter had
-        // buffered has still been written; an error it ran into is
-        // still the answer.
         match result {
             StreamConvertResult::Finished => StreamConvertResult::SourceBufferEmpty,
             other => other,
         }
     } else {
-        let _ = globals.store.set_ivar(recv, finished_id, Value::bool(true));
+        if no_more_input || matches!(result, StreamConvertResult::Finished) {
+            let _ = globals.store.set_ivar(recv, finished_id, Value::bool(true));
+        }
         result
     };
 
