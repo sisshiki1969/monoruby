@@ -7017,14 +7017,12 @@ fn converter_convert(
         // transcoder suffices — but a chunk that ends inside a
         // character is still held for the next one to finish, as it
         // is on every other path (#1592).
-        let mut input: Vec<u8> = converter_take_readagain(globals, recv);
-        input.extend(
-            globals
-                .store
-                .get_ivar(recv, pending_id)
-                .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-                .unwrap_or_default(),
-        );
+        let mut input: Vec<u8> = globals
+            .store
+            .get_ivar(recv, pending_id)
+            .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+            .unwrap_or_default();
+        input.extend(converter_take_readagain(globals, recv));
         input.extend_from_slice(&bytes);
         let tail = incomplete_tail_len(src, &input);
         let head = &input[..input.len() - tail];
@@ -7055,14 +7053,15 @@ fn converter_convert(
     // trailing incomplete character is buffered, not an error), and
     // raise — leaving `primitive_errinfo` / `last_error` /
     // `putback` observable — on invalid / undefined input.
-    let mut input: Vec<u8> = converter_take_readagain(globals, recv);
-    input.extend(
-        globals
-            .store
-            .get_ivar(recv, pending_id)
-            .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-            .unwrap_or_default(),
-    );
+    // The bytes an error left the decoder holding come before its
+    // read-again bytes (#1617); on every other path one of the two
+    // is empty.
+    let mut input: Vec<u8> = globals
+        .store
+        .get_ivar(recv, pending_id)
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    input.extend(converter_take_readagain(globals, recv));
     input.extend_from_slice(&bytes);
     // A dummy `UTF-16` / `UTF-32` source is read in whatever
     // endianness its BOM named; until one has arrived whole there is
@@ -7108,7 +7107,14 @@ fn converter_convert(
             );
         }
         _ => {
-            let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
+            // What the decoder was holding when it stopped is still
+            // its: the next call reads it first (#1617).
+            let held = if meta.hold_src.is_empty() {
+                Value::nil()
+            } else {
+                binary_string(&meta.hold_src)
+            };
+            let _ = globals.store.set_ivar(recv, pending_id, held);
             let msg = store_conversion_outcome(globals, recv, result, &meta, src, dst)
                 .unwrap_or_default();
             return Err(converter_last_error_raise(globals, recv, result, msg));
@@ -7147,14 +7153,14 @@ fn converter_finish(
     // Input buffered by a partial `#convert` that never completed is an
     // incomplete-input error at finish time (CRuby).
     let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
-    let mut pending: Vec<u8> = converter_take_readagain(globals, recv);
-    pending.extend(
-        globals
-            .store
-            .get_ivar(recv, pending_id)
-            .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-            .unwrap_or_default(),
-    );
+    // What an error left the decoder holding is read ahead of its
+    // read-again bytes (#1617).
+    let mut pending: Vec<u8> = globals
+        .store
+        .get_ivar(recv, pending_id)
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    pending.extend(converter_take_readagain(globals, recv));
     let src_stream = converter_resolve_src_bom(globals, recv, src_enc, &pending);
     let dst_stream = dummy_wide_target(dst).unwrap_or(dst);
     let mut out: Vec<u8> = vec![];
@@ -7346,6 +7352,13 @@ struct ErrMeta {
     /// The ISO-2022-JP designation this chunk leaves in effect, for
     /// the next one to carry on from (#1609).
     iso_state_out: Option<u8>,
+    /// Source bytes read *before* an error and still held by the
+    /// decoder, not written: a `UTF8-MAC` source keeps its last
+    /// cluster back for the composition the next chunk may complete,
+    /// and a malformed run after it does not flush it. They have been
+    /// taken out of the caller's source, so the converter re-reads
+    /// them ahead of everything else next call (#1617).
+    hold_src: Vec<u8>,
     /// `:undefined_conversion` only: the character had no mapping in
     /// the *decode* half (a source byte with no Unicode meaning),
     /// not the encode half. The two stages are reported differently
@@ -7752,13 +7765,30 @@ fn mac_source_stream(
             );
         }
         // The well-formed prefix converts exactly as it would on its
-        // own — hold-back included, or a chunk that ends mid-character
-        // would settle the cluster before it and lose the composition
-        // the next chunk was going to complete.
-        let (_, consumed, out, _) =
-            mac_source_stream(&src_bytes[..good], dst_enc, max_dst_bytes, partial_input, opts, store);
-        let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
-        return (kind, consumed, out, meta);
+        // own — hold-back included, whatever `partial_input` says: the
+        // decoder keeps its last cluster back for a composition that
+        // may still come, and a malformed run is not the end of the
+        // input. CRuby writes nothing of `"A\x80B"` on the call that
+        // reports the `\x80`; the `A` comes out with the `B` (#1617).
+        let (kind_before, consumed, out, meta_before) =
+            mac_source_stream(&src_bytes[..good], dst_enc, max_dst_bytes, true, opts, store);
+        // The destination filling up among the good bytes comes first.
+        if matches!(kind_before, StreamConvertResult::DestinationBufferFull) {
+            return (kind_before, consumed, out, meta_before);
+        }
+        let (kind, mut meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
+        if !matches!(kind, StreamConvertResult::InvalidByteSequence) {
+            // A chunk that merely ends inside a character: nothing
+            // has been disproved, and the cluster in front of the
+            // tail waits with it for the next chunk.
+            return (kind, consumed, out, meta);
+        }
+        // The held cluster has been read: it leaves the caller's
+        // source with the run and its read-again byte, and the
+        // converter reads it again ahead of them next call.
+        meta.hold_src = src_bytes[consumed..good].to_vec();
+        let through = through_bad_run(good, &kind, &meta, src_bytes.len());
+        return (kind, through, out, meta);
     }
     let s = std::str::from_utf8(src_bytes).expect("checked just above");
     // Only a character a mark can attach to is worth keeping, and in
@@ -7930,10 +7960,17 @@ fn cesu_source_stream(
     }
     let Some(pivot) = crate::value::cesu8_to_utf8(bytes) else {
         let good = cesu8_good_prefix(bytes);
-        let (_, consumed, out, _) =
+        let (kind_before, consumed, out, meta_before) =
             cesu_source_stream(&bytes[..good], dst_enc, max_dst_bytes, partial_input, opts, store);
+        // The destination filling up among the good bytes comes first.
+        if matches!(kind_before, StreamConvertResult::DestinationBufferFull) {
+            return (kind_before, consumed, out, meta_before);
+        }
         let (kind, meta) = bad_source_outcome(src_enc, bytes, !partial_input);
-        return (kind, consumed, out, meta);
+        // The run is consumed along with the byte read to disprove
+        // it, which is held for `#putback` (#1617).
+        let through = through_bad_run(good, &kind, &meta, bytes.len());
+        return (kind, through, out, meta);
     };
     let (result, pivot_consumed, out, mut meta) = stream_convert(
         pivot.as_bytes(),
@@ -9311,7 +9348,10 @@ fn stream_convert(
         store,
     );
             let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
-            return (kind, at, out, meta);
+            // The run is consumed along with the unit read to
+            // disprove it, which is held for `#putback` (#1617).
+            let through = through_bad_run(at, &kind, &meta, src_bytes.len());
+            return (kind, through, out, meta);
         }
         let (result, pivot_consumed, out, meta) = stream_convert(
         pivot.as_bytes(),
@@ -11463,18 +11503,23 @@ fn converter_primitive_convert(
     // dst-bytesize cap held back last call, then the new source, so
     // multi-call streaming with `dst_bytesize` works (the spec test
     // "uses the destination byte offset" hits this path).
-    let mut src_bytes = if already_finished {
+    // Ahead of them both is what the decoder was holding when the
+    // error stopped it — a `UTF8-MAC` cluster read before the run,
+    // buffered without being written (#1617). Only an error leaves
+    // read-again bytes, and only an error buffers such a hold, so
+    // the two never meet on any other path.
+    let mut src_bytes: Vec<u8> = if already_finished {
         vec![]
     } else {
-        converter_take_readagain(globals, recv)
-    };
-    src_bytes.extend(
         globals
             .store
             .get_ivar(recv, IdentId::get_id(CONVERTER_PENDING_IVAR))
             .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-            .unwrap_or_default(),
-    );
+            .unwrap_or_default()
+    };
+    if !already_finished {
+        src_bytes.extend(converter_take_readagain(globals, recv));
+    }
     src_bytes.extend_from_slice(&new_src_bytes);
 
     // Existing dst content (we'll truncate to `dst_offset` and
@@ -11757,7 +11802,11 @@ fn converter_primitive_convert(
             0
         };
         let buffered_from = (src_consumed + converted_ahead_len).min(split);
-        let buffered: Vec<u8> = src_bytes[buffered_from..split].to_vec();
+        // What the decoder read and still holds goes first: it was
+        // taken out of `src` before the error and is read again
+        // ahead of the read-again bytes (#1617).
+        let mut buffered: Vec<u8> = meta.hold_src.clone();
+        buffered.extend_from_slice(&src_bytes[buffered_from..split]);
         // Put bytes after the error back into `src_arg`. Pending
         // buffer otherwise drops — the converter has nothing it
         // could write next call without more user input.
@@ -11783,11 +11832,10 @@ fn converter_primitive_convert(
         // CRuby drops them from its buffer with the report — so
         // nothing is held: the next `#convert` starts afresh rather
         // than gluing them onto its argument.
-        let pending_after: Vec<u8> = if matches!(result, StreamConvertResult::IncompleteInput) {
-            vec![]
-        } else {
-            src_bytes[src_consumed..].to_vec()
-        };
+        let mut pending_after: Vec<u8> = meta.hold_src.clone();
+        if !matches!(result, StreamConvertResult::IncompleteInput) {
+            pending_after.extend_from_slice(&src_bytes[src_consumed..]);
+        }
         if !src_arg.is_nil() {
             let cleared = crate::value::RStringInner::from_encoding_scanned(b"", src_tag);
             src_arg.replace_with_inner(cleared);
