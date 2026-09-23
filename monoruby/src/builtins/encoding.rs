@@ -5138,17 +5138,60 @@ fn handle_xml_option(
     if src_enc != dst_enc && (!has_codec(src_enc) || !has_codec(dst_enc)) {
         return Err(converter_not_found(&globals.store, src_enc, dst_enc, &opts, Some(mode)));
     }
-    // The decorator escapes *characters*, so a source that is not
-    // UTF-8 is read by its own conversion first (#1530).
+    // In CRuby `xml:` is an output decorator on the ordinary
+    // converter, not a path of its own: `invalid:` acts in the
+    // transcoder underneath, and the decorator only ever sees what
+    // the conversion produced. So the source is read by its own
+    // conversion first, with the same `invalid:` handling every other
+    // `encode` has — the destination's replacement, or the error —
+    // and `undef:` set aside: the decorator's numeric reference is
+    // what an undefined character becomes, and a source byte with no
+    // Unicode meaning at all stays the error it is (#1615).
+    let plain = TranscodeOpts::default();
+    let mut reading = opts.clone();
+    reading.undef_replace = false;
+    if reading.invalid_replace && reading.replace.is_none() {
+        reading.replace = Some(opts.replace_str(dst_enc));
+    }
     let decoded;
-    let s = if src_enc.is_utf8_compatible() {
-        String::from_utf8_lossy(&bytes)
+    let s = if src_enc == dst_enc && src_enc.is_ascii_compatible() {
+        // No transcoder runs between one encoding and itself, so the
+        // bytes — a malformed one included — pass through the
+        // decorator untouched. Escaping is byte-wise here.
+        let mut out = Vec::with_capacity(bytes.len() + 2);
+        if matches!(mode, XmlMode::Attr) {
+            out.push(b'"');
+        }
+        for &b in &bytes {
+            match b {
+                b'&' => out.extend_from_slice(b"&amp;"),
+                b'<' => out.extend_from_slice(b"&lt;"),
+                b'>' => out.extend_from_slice(b"&gt;"),
+                b'"' if matches!(mode, XmlMode::Attr) => out.extend_from_slice(b"&quot;"),
+                _ => out.push(b),
+            }
+        }
+        if matches!(mode, XmlMode::Attr) {
+            out.push(b'"');
+        }
+        return Ok(Some(Value::string_from_inner(
+            crate::value::RStringInner::from_encoding_scanned(&out, dst_enc),
+        )));
+    } else if src_enc == crate::value::Encoding::UTF8 {
+        match std::str::from_utf8(&bytes) {
+            Ok(_) => String::from_utf8_lossy(&bytes),
+            Err(_) if reading.invalid_replace => {
+                decoded = transcode_bytes_with_opts(&bytes, src_enc, src_enc, &reading, &globals.store)?;
+                String::from_utf8_lossy(&decoded)
+            }
+            Err(_) => return Err(invalid_byte_sequence(&globals.store, src_enc, dst_enc, &bytes)),
+        }
     } else {
         decoded = transcode_bytes_with_opts(
             &bytes,
             src_enc,
             crate::value::Encoding::UTF8,
-            &opts,
+            &reading,
             &globals.store,
         )?;
         String::from_utf8_lossy(&decoded)
@@ -5157,7 +5200,6 @@ fn handle_xml_option(
     if matches!(mode, XmlMode::Attr) {
         out.push('"');
     }
-    let plain = TranscodeOpts::default();
     for c in s.chars() {
         match c {
             '&' => out.push_str("&amp;"),
