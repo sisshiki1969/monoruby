@@ -4385,9 +4385,34 @@ pub(super) fn transcode_bytes_with_opts(
                 // What is left in EUC-JP and not in stateless is
                 // half-width katakana and JIS X 0212.
                 Err(at) => {
-                    let n = crate::value::eucjp_char_width(&eucjp[at..])
-                        .unwrap_or(1)
-                        .max(1);
+                    let Some(n) = crate::value::eucjp_char_width(&eucjp[at..]) else {
+                        // Not a cell: malformed EUC-JP from an EUC-JP
+                        // source (the transcoders write none), which
+                        // is `"\x80" on EUC-JP` and not an undefined
+                        // conversion (#1618).
+                        if opts.invalid_replace {
+                            let scrubbed = crate::value::scrub_mbc(
+                                &eucjp,
+                                opts.replace_str(stateless).as_bytes(),
+                                3,
+                                crate::value::eucjp_precise_len,
+                            );
+                            return transcode_bytes_with_opts(
+                                &scrubbed,
+                                crate::value::Encoding::EUC_JP,
+                                stateless,
+                                opts,
+                                store,
+                            );
+                        }
+                        return Err(invalid_byte_sequence(
+                            store,
+                            crate::value::Encoding::EUC_JP,
+                            dst_enc,
+                            &eucjp[at..],
+                        ));
+                    };
+                    let n = n.max(1);
                     let cell = &eucjp[at..(at + n).min(eucjp.len())];
                     if opts.undef_replace {
                         let mut out =
@@ -6695,18 +6720,6 @@ fn converter_new(
         lfp.arg(1),
         false,
     )?;
-    // CRuby raises `Encoding::ConverterNotFoundError` for identical
-    // source/destination encodings — there is no "X to X" transcoder.
-    // Compare the resolved canonical *names*, not the internal
-    // `Encoding`: monoruby folds aliases like `UTF8-MAC` onto
-    // `Utf8`, but CRuby treats them as distinct and DOES build a
-    // converter (`Converter.new(UTF_8, UTF8_MAC)` is valid).
-    if src.name() == dst.name() {
-        return Err(MonorubyErr::converter_not_found_error(
-            &globals.store,
-            format!("code converter not found ({} to {})", src.name(), dst.name()),
-        ));
-    }
     // The decorators the message names, read ahead of the options
     // proper: `code converter not found (UTF-8 to Windows-1258 with
     // crlf_newline)` (#1591).
@@ -6724,6 +6737,17 @@ fn converter_new(
         decorators.universal_newline |= on("universal_newline");
         decorators.crlf_newline |= on("crlf_newline");
         decorators.cr_newline |= on("cr_newline");
+    }
+    // CRuby raises `Encoding::ConverterNotFoundError` for identical
+    // source/destination encodings — there is no "X to X" transcoder,
+    // and a decorator does not make one: `(UTF-8 to UTF-8 with
+    // universal_newline)` is refused with the decorator named (#1589).
+    // Compare the resolved canonical *names*, not the internal
+    // `Encoding`: monoruby folds aliases like `UTF8-MAC` onto
+    // `Utf8`, but CRuby treats them as distinct and DOES build a
+    // converter (`Converter.new(UTF_8, UTF8_MAC)` is valid).
+    if src.name() == dst.name() {
+        return Err(converter_not_found(&globals.store, src, dst, &decorators, None));
     }
     validate_converter_pair(src, dst, &decorators, &globals.store)?;
     // Options Hash (`replace:` kwargs / `**opts` / trailing Hash).
@@ -7018,14 +7042,12 @@ fn converter_convert(
         // transcoder suffices — but a chunk that ends inside a
         // character is still held for the next one to finish, as it
         // is on every other path (#1592).
-        let mut input: Vec<u8> = converter_take_readagain(globals, recv);
-        input.extend(
-            globals
-                .store
-                .get_ivar(recv, pending_id)
-                .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-                .unwrap_or_default(),
-        );
+        let mut input: Vec<u8> = globals
+            .store
+            .get_ivar(recv, pending_id)
+            .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+            .unwrap_or_default();
+        input.extend(converter_take_readagain(globals, recv));
         input.extend_from_slice(&bytes);
         let tail = incomplete_tail_len(src, &input);
         let head = &input[..input.len() - tail];
@@ -7056,14 +7078,15 @@ fn converter_convert(
     // trailing incomplete character is buffered, not an error), and
     // raise — leaving `primitive_errinfo` / `last_error` /
     // `putback` observable — on invalid / undefined input.
-    let mut input: Vec<u8> = converter_take_readagain(globals, recv);
-    input.extend(
-        globals
-            .store
-            .get_ivar(recv, pending_id)
-            .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-            .unwrap_or_default(),
-    );
+    // The bytes an error left the decoder holding come before its
+    // read-again bytes (#1617); on every other path one of the two
+    // is empty.
+    let mut input: Vec<u8> = globals
+        .store
+        .get_ivar(recv, pending_id)
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    input.extend(converter_take_readagain(globals, recv));
     input.extend_from_slice(&bytes);
     // A dummy `UTF-16` / `UTF-32` source is read in whatever
     // endianness its BOM named; until one has arrived whole there is
@@ -7109,7 +7132,14 @@ fn converter_convert(
             );
         }
         _ => {
-            let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
+            // What the decoder was holding when it stopped is still
+            // its: the next call reads it first (#1617).
+            let held = if meta.hold_src.is_empty() {
+                Value::nil()
+            } else {
+                binary_string(&meta.hold_src)
+            };
+            let _ = globals.store.set_ivar(recv, pending_id, held);
             let msg = store_conversion_outcome(globals, recv, result, &meta, src, dst)
                 .unwrap_or_default();
             return Err(converter_last_error_raise(globals, recv, result, msg));
@@ -7148,14 +7178,14 @@ fn converter_finish(
     // Input buffered by a partial `#convert` that never completed is an
     // incomplete-input error at finish time (CRuby).
     let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
-    let mut pending: Vec<u8> = converter_take_readagain(globals, recv);
-    pending.extend(
-        globals
-            .store
-            .get_ivar(recv, pending_id)
-            .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-            .unwrap_or_default(),
-    );
+    // What an error left the decoder holding is read ahead of its
+    // read-again bytes (#1617).
+    let mut pending: Vec<u8> = globals
+        .store
+        .get_ivar(recv, pending_id)
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    pending.extend(converter_take_readagain(globals, recv));
     let src_stream = converter_resolve_src_bom(globals, recv, src_enc, &pending);
     let dst_stream = dummy_wide_target(dst).unwrap_or(dst);
     let mut out: Vec<u8> = vec![];
@@ -7347,6 +7377,13 @@ struct ErrMeta {
     /// The ISO-2022-JP designation this chunk leaves in effect, for
     /// the next one to carry on from (#1609).
     iso_state_out: Option<u8>,
+    /// Source bytes read *before* an error and still held by the
+    /// decoder, not written: a `UTF8-MAC` source keeps its last
+    /// cluster back for the composition the next chunk may complete,
+    /// and a malformed run after it does not flush it. They have been
+    /// taken out of the caller's source, so the converter re-reads
+    /// them ahead of everything else next call (#1617).
+    hold_src: Vec<u8>,
     /// `:undefined_conversion` only: the character had no mapping in
     /// the *decode* half (a source byte with no Unicode meaning),
     /// not the encode half. The two stages are reported differently
@@ -7753,13 +7790,30 @@ fn mac_source_stream(
             );
         }
         // The well-formed prefix converts exactly as it would on its
-        // own — hold-back included, or a chunk that ends mid-character
-        // would settle the cluster before it and lose the composition
-        // the next chunk was going to complete.
-        let (_, consumed, out, _) =
-            mac_source_stream(&src_bytes[..good], dst_enc, max_dst_bytes, partial_input, opts, store);
-        let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
-        return (kind, consumed, out, meta);
+        // own — hold-back included, whatever `partial_input` says: the
+        // decoder keeps its last cluster back for a composition that
+        // may still come, and a malformed run is not the end of the
+        // input. CRuby writes nothing of `"A\x80B"` on the call that
+        // reports the `\x80`; the `A` comes out with the `B` (#1617).
+        let (kind_before, consumed, out, meta_before) =
+            mac_source_stream(&src_bytes[..good], dst_enc, max_dst_bytes, true, opts, store);
+        // The destination filling up among the good bytes comes first.
+        if matches!(kind_before, StreamConvertResult::DestinationBufferFull) {
+            return (kind_before, consumed, out, meta_before);
+        }
+        let (kind, mut meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
+        if !matches!(kind, StreamConvertResult::InvalidByteSequence) {
+            // A chunk that merely ends inside a character: nothing
+            // has been disproved, and the cluster in front of the
+            // tail waits with it for the next chunk.
+            return (kind, consumed, out, meta);
+        }
+        // The held cluster has been read: it leaves the caller's
+        // source with the run and its read-again byte, and the
+        // converter reads it again ahead of them next call.
+        meta.hold_src = src_bytes[consumed..good].to_vec();
+        let through = through_bad_run(good, &kind, &meta, src_bytes.len());
+        return (kind, through, out, meta);
     }
     let s = std::str::from_utf8(src_bytes).expect("checked just above");
     // Only a character a mark can attach to is worth keeping, and in
@@ -7931,10 +7985,17 @@ fn cesu_source_stream(
     }
     let Some(pivot) = crate::value::cesu8_to_utf8(bytes) else {
         let good = cesu8_good_prefix(bytes);
-        let (_, consumed, out, _) =
+        let (kind_before, consumed, out, meta_before) =
             cesu_source_stream(&bytes[..good], dst_enc, max_dst_bytes, partial_input, opts, store);
+        // The destination filling up among the good bytes comes first.
+        if matches!(kind_before, StreamConvertResult::DestinationBufferFull) {
+            return (kind_before, consumed, out, meta_before);
+        }
         let (kind, meta) = bad_source_outcome(src_enc, bytes, !partial_input);
-        return (kind, consumed, out, meta);
+        // The run is consumed along with the byte read to disprove
+        // it, which is held for `#putback` (#1617).
+        let through = through_bad_run(good, &kind, &meta, bytes.len());
+        return (kind, through, out, meta);
     };
     let (result, pivot_consumed, out, mut meta) = stream_convert(
         pivot.as_bytes(),
@@ -8446,7 +8507,7 @@ fn stateless_dest_stream(
     // two encodings hold the same cells, so the rewrite below is the
     // whole of it and a cell with no character crosses like any other
     // (#1600).
-    let (result, consumed, eucjp, meta) = if src_enc == crate::value::Encoding::EUC_JP {
+    let (result, consumed, eucjp, mut meta) = if src_enc == crate::value::Encoding::EUC_JP {
         let kind = if partial_input {
             StreamConvertResult::SourceBufferEmpty
         } else {
@@ -8464,6 +8525,34 @@ fn stateless_dest_stream(
             store,
         )
     };
+    // An error on the way *into* EUC-JP is that hop's: `errinfo` names
+    // `["UTF-8", "EUC-JP"]` for `U+20AC`, not the rewrite after it
+    // (#1618). The message already says as much.
+    if matches!(
+        result,
+        StreamConvertResult::InvalidByteSequence
+            | StreamConvertResult::UndefinedConversion
+            | StreamConvertResult::IncompleteInput
+    ) && meta.stage.is_none()
+    {
+        let decode_stage =
+            !matches!(result, StreamConvertResult::UndefinedConversion) || meta.decode_stage;
+        meta.stage = Some(error_stage_names(
+            src_enc,
+            crate::value::Encoding::EUC_JP,
+            decode_stage,
+        ));
+        if !decode_stage
+            && meta.message.is_none()
+            && let Some(c) = single_utf8_char(&meta.error_bytes)
+        {
+            meta.message = Some(undefined_before_eucjp_message(
+                c,
+                opts.report_src.unwrap_or(src_enc),
+                dst_enc,
+            ));
+        }
+    }
     let mut out = Vec::with_capacity(eucjp.len());
     let mut at = 0;
     while at < eucjp.len() {
@@ -8472,19 +8561,48 @@ fn stateless_dest_stream(
             0xa1..=0xfe if matches!(eucjp.get(at + 1), Some(0xa1..=0xfe)) => {
                 (vec![0x92, eucjp[at], eucjp[at + 1]], 2)
             }
-            _ => {
-                let cell_len = crate::value::eucjp_char_width(&eucjp[at..]).unwrap_or(1).max(1);
-                return (
-                    StreamConvertResult::UndefinedConversion,
-                    pivot_prefix_consumed_in(src_bytes, src_enc, crate::value::Encoding::EUC_JP, at, opts, store),
-                    out,
-                    ErrMeta {
-                        error_bytes: eucjp[at..(at + cell_len).min(eucjp.len())].to_vec(),
-                        decode_stage: false,
-                        ..ErrMeta::default()
-                    },
-                );
-            }
+            _ => match crate::value::eucjp_char_width(&eucjp[at..]) {
+                None => {
+                    // Not a cell at all. Only an EUC-JP source can
+                    // put one here — the transcoders write none —
+                    // and it is malformed input, `"\x80" on EUC-JP`,
+                    // not a character the rewrite has no cell for
+                    // (#1618).
+                    let (kind, bad) =
+                        bad_source_outcome(crate::value::Encoding::EUC_JP, &eucjp[at..], !partial_input);
+                    if opts.invalid_replace
+                        && !matches!(kind, StreamConvertResult::SourceBufferEmpty)
+                    {
+                        let skip = bad.error_bytes.len().max(1);
+                        (opts.replace_str(dst_enc).into_bytes(), skip)
+                    } else {
+                        let through = through_bad_run(at, &kind, &bad, eucjp.len());
+                        return (
+                            kind,
+                            pivot_prefix_consumed_in(src_bytes, src_enc, crate::value::Encoding::EUC_JP, through, opts, store),
+                            out,
+                            bad,
+                        );
+                    }
+                }
+                Some(cell_len) => {
+                    let cell_len = cell_len.max(1);
+                    // The character with no cell has been read: it is
+                    // the error's bytes, and leaves the caller's
+                    // source with them (#1617).
+                    let through = (at + cell_len).min(eucjp.len());
+                    return (
+                        StreamConvertResult::UndefinedConversion,
+                        pivot_prefix_consumed_in(src_bytes, src_enc, crate::value::Encoding::EUC_JP, through, opts, store),
+                        out,
+                        ErrMeta {
+                            error_bytes: eucjp[at..(at + cell_len).min(eucjp.len())].to_vec(),
+                            decode_stage: false,
+                            ..ErrMeta::default()
+                        },
+                    );
+                }
+            },
         };
         if let Some(max) = max_dst_bytes
             && out.len() + unit.len() > max
@@ -8944,50 +9062,85 @@ fn stream_convert(
             // that destination needs no second conversion — and the
             // cap applies to these bytes directly.
             if dst_enc == w.inner {
-                let fits = max_dst_bytes.map_or(stateless.len(), |m| m.min(stateless.len()));
-                if fits < stateless.len() {
-                    // The cap cuts a character in half. CRuby writes
-                    // the bytes that fit and holds the rest of that
-                    // character for the next call, taking the whole
-                    // of it out of `src` — dropping them here cost
-                    // the streaming loop its output (#1532).
-                    let mut end = 0;
-                    while end < stateless.len() {
-                        end += if stateless[end] < 0x80 { 1 } else { 3 };
-                        if end > fits {
-                            break;
-                        }
-                    }
-                    let end = end.min(stateless.len());
-                    let consumed = pivot_prefix_consumed_in(
-                        src_bytes,
-                        src_enc,
-                        w.inner,
-                        end,
-                        opts,
-                        store,
-                    );
-                    return (
-                        StreamConvertResult::DestinationBufferFull,
-                        consumed,
-                        stateless[..fits].to_vec(),
-                        ErrMeta {
-                            dst_full_out: stateless[fits..end].to_vec(),
-                            iso_state_out: (w.read)(
-                                &src_bytes[..consumed],
-                                opts.iso_state,
-                            )
-                            .map(|(_, l)| l)
-                            .unwrap_or(opts.iso_state),
-                            ..ErrMeta::default()
-                        },
-                    );
-                }
                 let kind = if partial_input {
                     StreamConvertResult::SourceBufferEmpty
                 } else {
                     StreamConvertResult::Finished
                 };
+                if let Some(max) = max_dst_bytes
+                    && max <= stateless.len()
+                {
+                    // The cap is met unit by unit, the way CRuby's
+                    // one-transcoder path reads the source (#1619):
+                    // an escape sequence is read and writes nothing,
+                    // and if the destination is full once it has been
+                    // read the call stops there — even at the end of
+                    // the input, so `"\e$B0l\e(B"` into three bytes
+                    // is `:destination_buffer_full` with everything
+                    // read and nothing held. A character that fits is
+                    // written; one that does not is read whole, the
+                    // bytes that fit are written and the rest held
+                    // for the next call (#1532) — with no room at all
+                    // included, so a cap of 0 reads the first
+                    // character and holds it.
+                    let mut out: Vec<u8> = Vec::with_capacity(max);
+                    let mut pos = 0;
+                    let mut state = opts.iso_state;
+                    while pos < src_bytes.len() {
+                        // The shortest prefix the reader accepts is
+                        // the next unit: one character, or one
+                        // escape sequence.
+                        let Some((n, unit, next)) = (1..=4.min(src_bytes.len() - pos))
+                            .find_map(|n| {
+                                (w.read)(&src_bytes[pos..pos + n], state)
+                                    .ok()
+                                    .map(|(unit, next)| (n, unit, next))
+                            })
+                        else {
+                            break;
+                        };
+                        pos += n;
+                        state = next;
+                        if unit.is_empty() {
+                            if out.len() >= max {
+                                return (
+                                    StreamConvertResult::DestinationBufferFull,
+                                    pos,
+                                    out,
+                                    ErrMeta {
+                                        iso_state_out: state,
+                                        ..ErrMeta::default()
+                                    },
+                                );
+                            }
+                            continue;
+                        }
+                        if out.len() + unit.len() > max {
+                            let fits = max - out.len();
+                            out.extend_from_slice(&unit[..fits]);
+                            return (
+                                StreamConvertResult::DestinationBufferFull,
+                                pos,
+                                out,
+                                ErrMeta {
+                                    dst_full_out: unit[fits..].to_vec(),
+                                    iso_state_out: state,
+                                    ..ErrMeta::default()
+                                },
+                            );
+                        }
+                        out.extend_from_slice(&unit);
+                    }
+                    return (
+                        kind,
+                        src_bytes.len(),
+                        out,
+                        ErrMeta {
+                            iso_state_out: state,
+                            ..ErrMeta::default()
+                        },
+                    );
+                }
                 return (
                     kind,
                     src_bytes.len(),
@@ -9035,6 +9188,33 @@ fn stream_convert(
                     store,
                 )
             };
+            // The character a cap read and could not write is counted
+            // in stateless bytes by the inner stream; the caller takes
+            // *source* bytes out of `src`, and an escape sequence in
+            // front of the character is read with it. Counting three
+            // for `"\e$B"` + a cell left `"(B"` in the source as text
+            // (#1619).
+            if meta.dst_full_extra > 0 {
+                let through = pivot_prefix_consumed_in(
+                    src_bytes,
+                    src_enc,
+                    w.inner,
+                    stateless_consumed + meta.dst_full_extra,
+                    opts,
+                    store,
+                );
+                meta.dst_full_extra = through.saturating_sub(consumed);
+            }
+            // A call that stopped short leaves the designation in
+            // effect *there*, not the one the whole chunk ended in:
+            // the escapes past that point are still the caller's, and
+            // the next call reads them itself.
+            let read_to = consumed + meta.dst_full_extra;
+            if read_to < src_bytes.len() {
+                meta.iso_state_out = (w.read)(&src_bytes[..read_to], opts.iso_state)
+                    .map(|(_, l)| l)
+                    .unwrap_or(opts.iso_state);
+            }
             return (kind, consumed, out, meta);
         }
         if let Some(w) = jis_wrapper(dst_enc) {
@@ -9312,7 +9492,10 @@ fn stream_convert(
         store,
     );
             let (kind, meta) = bad_source_outcome(src_enc, src_bytes, !partial_input);
-            return (kind, at, out, meta);
+            // The run is consumed along with the unit read to
+            // disprove it, which is held for `#putback` (#1617).
+            let through = through_bad_run(at, &kind, &meta, src_bytes.len());
+            return (kind, through, out, meta);
         }
         let (result, pivot_consumed, out, meta) = stream_convert(
         pivot.as_bytes(),
@@ -11464,18 +11647,23 @@ fn converter_primitive_convert(
     // dst-bytesize cap held back last call, then the new source, so
     // multi-call streaming with `dst_bytesize` works (the spec test
     // "uses the destination byte offset" hits this path).
-    let mut src_bytes = if already_finished {
+    // Ahead of them both is what the decoder was holding when the
+    // error stopped it — a `UTF8-MAC` cluster read before the run,
+    // buffered without being written (#1617). Only an error leaves
+    // read-again bytes, and only an error buffers such a hold, so
+    // the two never meet on any other path.
+    let mut src_bytes: Vec<u8> = if already_finished {
         vec![]
     } else {
-        converter_take_readagain(globals, recv)
-    };
-    src_bytes.extend(
         globals
             .store
             .get_ivar(recv, IdentId::get_id(CONVERTER_PENDING_IVAR))
             .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
-            .unwrap_or_default(),
-    );
+            .unwrap_or_default()
+    };
+    if !already_finished {
+        src_bytes.extend(converter_take_readagain(globals, recv));
+    }
     src_bytes.extend_from_slice(&new_src_bytes);
 
     // Existing dst content (we'll truncate to `dst_offset` and
@@ -11649,18 +11837,27 @@ fn converter_primitive_convert(
         _ => out_bytes,
     };
     // What the call reports, and whether it closes the stream.
-    let result = if already_finished || !no_more_input {
+    //
+    // `partial_input: true` never finishes: the chunk is converted
+    // whole, but more may follow, so a run that reached the end of it
+    // is `:source_buffer_empty` — with input of its own as much as
+    // without (#1589). An error it ran into is still the answer.
+    //
+    // Without it the call is the last: the converter is done once
+    // it has read everything it was given — whether the caller said
+    // so with an empty source or the run simply finished — and every
+    // later call answers `:finished` having converted nothing.
+    let result = if already_finished {
         result
     } else if partial_input {
-        // Nothing to read *this* time. Whatever the converter had
-        // buffered has still been written; an error it ran into is
-        // still the answer.
         match result {
             StreamConvertResult::Finished => StreamConvertResult::SourceBufferEmpty,
             other => other,
         }
     } else {
-        let _ = globals.store.set_ivar(recv, finished_id, Value::bool(true));
+        if no_more_input || matches!(result, StreamConvertResult::Finished) {
+            let _ = globals.store.set_ivar(recv, finished_id, Value::bool(true));
+        }
         result
     };
 
@@ -11749,7 +11946,11 @@ fn converter_primitive_convert(
             0
         };
         let buffered_from = (src_consumed + converted_ahead_len).min(split);
-        let buffered: Vec<u8> = src_bytes[buffered_from..split].to_vec();
+        // What the decoder read and still holds goes first: it was
+        // taken out of `src` before the error and is read again
+        // ahead of the read-again bytes (#1617).
+        let mut buffered: Vec<u8> = meta.hold_src.clone();
+        buffered.extend_from_slice(&src_bytes[buffered_from..split]);
         // Put bytes after the error back into `src_arg`. Pending
         // buffer otherwise drops — the converter has nothing it
         // could write next call without more user input.
@@ -11775,11 +11976,10 @@ fn converter_primitive_convert(
         // CRuby drops them from its buffer with the report — so
         // nothing is held: the next `#convert` starts afresh rather
         // than gluing them onto its argument.
-        let pending_after: Vec<u8> = if matches!(result, StreamConvertResult::IncompleteInput) {
-            vec![]
-        } else {
-            src_bytes[src_consumed..].to_vec()
-        };
+        let mut pending_after: Vec<u8> = meta.hold_src.clone();
+        if !matches!(result, StreamConvertResult::IncompleteInput) {
+            pending_after.extend_from_slice(&src_bytes[src_consumed..]);
+        }
         if !src_arg.is_nil() {
             let cleared = crate::value::RStringInner::from_encoding_scanned(b"", src_tag);
             src_arg.replace_with_inner(cleared);
@@ -12437,6 +12637,19 @@ fn enc_err_message(globals: &Globals, exc: Value) -> Option<String> {
 /// - `"invalid byte sequence on SRC (SRC → DST)"`
 ///   (InvalidByteSequenceError)
 fn parse_enc_err_pair(msg: &str) -> Option<(String, String)> {
+    // `U+AC00 to EUC-JP in conversion from CP949 to UTF-8 to EUC-JP to
+    // stateless-ISO-2022-JP`: the hop that gave up is the one whose
+    // destination the message names, and its source is the hop before
+    // it on the chain — `["UTF-8", "EUC-JP"]`, not the chain's first
+    // pair (#1618).
+    if let Some((head, chain)) = msg.split_once(" in conversion from ")
+        && let Some((_, hop_dst)) = head.rsplit_once(" to ")
+    {
+        let hops: Vec<&str> = chain.split(" to ").map(str::trim).collect();
+        if let Some(i) = hops.iter().skip(1).position(|h| *h == hop_dst.trim()) {
+            return Some((hops[i].to_string(), hop_dst.trim().to_string()));
+        }
+    }
     if let Some(rest) = msg.split_once(" from ").map(|(_, b)| b)
         && let Some((src, rest)) = rest.split_once(" to ")
     {
