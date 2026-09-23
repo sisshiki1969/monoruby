@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-39284bba.js";
+            window.path_to_searchindex_js = "../../searchindex-1f21c04f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-8a4c8fb9.js"></script>
@@ -235,6 +235,32 @@ JIT 側は <code>array_index_assign</code> と emit されたバリアがそれ�
 ラッパの mutator は再検査しない。</li>
 </ul>
 <p>詳細は <a href="../gc.html"><code>../gc.md</code></a>。</p>
+<h3 id="14-共有ビュー長いスライス"><a class="header" href="#14-共有ビュー長いスライス">1.4 共有ビュー（長いスライス）</a></h3>
+<p><code>a[10..]</code> / <code>a[i, n]</code> / <code>slice</code> が返す <strong>16 要素以上</strong>（<code>ARRAY_SHARE_MIN</code>）の
+スライスは要素をコピーせず、String の <code>SharedContent</code> と同じ仕組みで
+<strong>共有ルートのバッファへのビュー</strong>になる（<code>ArrayContent</code> 共用体、
+<code>SharedArray { tag, ptr, len, root }</code>）。CRuby の <code>rb_ary_subseq</code> /
+<code>ary_make_shared</code> に相当する。</p>
+<ul>
+<li>親がヒープ変種なら、最初のスライス時にバッファを隠れた frozen なルート
+Array に移し、親自身をそのルート全体のビューにする（<code>ensure_shared_root</code>）。
+親が frozen ならルートは親そのもの。inline 変種（5 要素以下）はバッファが
+セルの中で動くので共有せずコピーする。短いスライスもコピー。</li>
+<li><code>tag</code> は <code>capacity</code> スロットに置く <code>isize::MAX</code>（<code>ARRAY_SHARED_TAG</code>）で、
+<code>ptr</code> / <code>len</code> はあふれた <code>SmallVec</code> の <code>OFFSET_HEAP_PTR</code> / <code>OFFSET_HEAP_LEN</code>
+に重なる。したがって JIT の読み出し経路（<code>[]</code>、<code>length</code>、ブロック引数展開）は
+signed の <code>capa &gt; 5</code> でそのままヒープ経路に入り、ビューを変更なしに読める。</li>
+<li><strong>書き込みは copy-on-write</strong>: Rust 側は <code>owned_mut()</code> がビューを自前の
+バッファにコピーしてから返す（<code>DerefMut</code> も同じ）。JIT の書き込み高速経路
+（<code>array_index_assign</code>、<code>&lt;&lt;</code>、同長スライス代入）はヒープ経路の先頭で <code>tag</code> を
+検査し、ビューなら汎用経路に落とす。ルートのバッファは決して書かれない。</li>
+<li>GC: ビューの mark は要素ではなくルートを mark し、<code>young_child_exists</code> も
+ルートだけを見る（String の STRING アームと同じ理由）。親をビューに変えるとき
+古い親から若いルートへの辺が生えるので <code>write_barrier(root)</code> を打つ。</li>
+<li>代償は CRuby と同じで、共有された親への次の破壊的操作が 1 回だけ全コピーに
+なること。hexapdf の行送り（<code>@items[@beginning_of_line_index..-1]</code> を
+行ごとに返す）はこれで <code>memmove</code> 11% が消える。</li>
+</ul>
 <hr>
 <h2 id="2-vm-の経路"><a class="header" href="#2-vm-の経路">2. VM の経路</a></h2>
 <h3 id="21-バイトコード"><a class="header" href="#21-バイトコード">2.1 バイトコード</a></h3>
