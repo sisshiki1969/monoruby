@@ -2331,12 +2331,16 @@ mod tests {
         // and the session cookie of every request. CRuby's `rb_check_id`
         // looks up without interning; so do these now. (The symbol table
         // is process-wide and other tests intern in parallel, so each
-        // snippet counts its own prefix rather than the table's size.)
+        // snippet counts its own prefix rather than the table's size —
+        // and compares the names as BINARY, since a symbol another test
+        // interned under an ASCII-incompatible encoding, CP50220 from
+        // `dummy_encoding_classification`, makes `start_with?` raise
+        // `Encoding::CompatibilityError`, as it does on CRuby.)
         run_tests(&[
-            r#"r = /\A[\w\-]{1,255}\z/; 3000.times { |i| r.match?("qmatch_#{i}") }; Symbol.all_symbols.count { |s| s.start_with?("qmatch_") }"#,
-            r#"r = /x/; 3000.times { |i| "qeq_#{i}" =~ r; r.match("qeq2_#{i}"); r =~ "qeq3_#{i}" }; Symbol.all_symbols.count { |s| s.start_with?("qeq") }"#,
-            r#"3000.times { |i| Object.autoload?("Qauto#{i}"); autoload?("Qauto2#{i}") }; Symbol.all_symbols.count { |s| s.start_with?("Qauto") }"#,
-            r#"m = /(?<name>a)/.match("a"); 3000.times { |i| (m["qgrp_#{i}"] rescue nil); (m.begin("qgrp_#{i}") rescue nil); (m.values_at("qgrp_#{i}") rescue nil) }; Symbol.all_symbols.count { |s| s.start_with?("qgrp_") }"#,
+            r#"r = /\A[\w\-]{1,255}\z/; 3000.times { |i| r.match?("qmatch_#{i}") }; Symbol.all_symbols.count { |s| s.name.b.start_with?("qmatch_") }"#,
+            r#"r = /x/; 3000.times { |i| "qeq_#{i}" =~ r; r.match("qeq2_#{i}"); r =~ "qeq3_#{i}" }; Symbol.all_symbols.count { |s| s.name.b.start_with?("qeq") }"#,
+            r#"3000.times { |i| Object.autoload?("Qauto#{i}"); autoload?("Qauto2#{i}") }; Symbol.all_symbols.count { |s| s.name.b.start_with?("Qauto") }"#,
+            r#"m = /(?<name>a)/.match("a"); 3000.times { |i| (m["qgrp_#{i}"] rescue nil); (m.begin("qgrp_#{i}") rescue nil); (m.values_at("qgrp_#{i}") rescue nil) }; Symbol.all_symbols.count { |s| s.name.b.start_with?("qgrp_") }"#,
             // Symbol subjects and names still work, and non-UTF-8 subjects
             // are read as before.
             r#"[/x/.match?(:sym_x), /y/.match?(:sym_x), (/a/.match?(1) rescue $!.class), /a/ =~ :xa, /b/.match(:abc)&.begin(0)]"#,
@@ -2375,7 +2379,7 @@ mod tests {
             class RtmC; def respond_to_missing?(n, p) = false; end
             o = Object.new; c = RtmC.new
             3000.times { |i| o.respond_to?("qrtm_#{i}"); o.respond_to?("qrtm_#{i}", true); c.respond_to?("qrtm_#{i}") }
-            Symbol.all_symbols.count { |s| s.start_with?("qrtm_") }
+            Symbol.all_symbols.count { |s| s.name.b.start_with?("qrtm_") }
             "#,
         );
         assert_eq!(res.try_fixnum(), Some(0));
