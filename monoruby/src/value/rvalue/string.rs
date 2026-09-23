@@ -1270,6 +1270,110 @@ const fn named_byte_index_const(konst: &str) -> u8 {
 /// three answers are what `#length`, `#chars` and `#scrub` each need to
 /// tell apart: a width to advance by, a tail that is still only a
 /// prefix, and a byte no character can start at.
+/// Whether a UTF-32 code unit is a character, the way Onigmo's UTF-32
+/// walker decides it (and so `valid_encoding?`, `chars`, `inspect` and
+/// `scrub`): a unit that is negative as a signed 32-bit value is taken
+/// as a character — `"\xFF\xFF\xFF\xFF"` is `"\u{FFFFFFFF}"`, valid —
+/// while any other must be a scalar value: at most U+10FFFF and not a
+/// surrogate.
+pub(crate) fn utf32_unit_is_char(u: u32) -> bool {
+    (u as i32) < 0 || (u <= 0x10FFFF && !(0xD800..0xE000).contains(&u))
+}
+
+/// The code unit of a UTF-16 / UTF-32 string at `pos`, read in the
+/// encoding's byte order; `None` short of a whole unit.
+pub(crate) fn unicode_unit_at(bytes: &[u8], pos: usize, enc: Encoding) -> Option<u32> {
+    match enc {
+        Encoding::Utf16Le => bytes
+            .get(pos..pos + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]) as u32),
+        Encoding::Utf16Be => bytes
+            .get(pos..pos + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]) as u32),
+        Encoding::Utf32Le => bytes
+            .get(pos..pos + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+        Encoding::Utf32Be => bytes
+            .get(pos..pos + 4)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]])),
+        _ => None,
+    }
+}
+
+/// `rb_enc_precise_mbclen` for the UTF-16 / UTF-32 family: a
+/// character (two units for a surrogate pair), a well-formed prefix
+/// that wants more bytes, or nothing that starts a character.
+pub(crate) fn unicode_unit_precise_len(bytes: &[u8], pos: usize, enc: Encoding) -> PreciseLen {
+    let width = enc.unit_width();
+    let Some(u) = unicode_unit_at(bytes, pos, enc) else {
+        return PreciseLen::NeedMore;
+    };
+    if width == 4 {
+        return if utf32_unit_is_char(u) {
+            PreciseLen::Char(4)
+        } else {
+            PreciseLen::Invalid
+        };
+    }
+    if (0xD800..0xDC00).contains(&u) {
+        match unicode_unit_at(bytes, pos + 2, enc) {
+            Some(lo) if (0xDC00..0xE000).contains(&lo) => PreciseLen::Char(4),
+            Some(_) => PreciseLen::Invalid,
+            None => PreciseLen::NeedMore,
+        }
+    } else if (0xDC00..0xE000).contains(&u) {
+        PreciseLen::Invalid
+    } else {
+        PreciseLen::Char(2)
+    }
+}
+
+/// The code point of the character `bytes` spells in a UTF-16 / UTF-32
+/// encoding (one unit, or a surrogate pair), if it is one.
+pub(crate) fn unicode_unit_codepoint(bytes: &[u8], enc: Encoding) -> Option<u32> {
+    match unicode_unit_precise_len(bytes, 0, enc) {
+        PreciseLen::Char(n) if n == bytes.len() => {
+            let u = unicode_unit_at(bytes, 0, enc)?;
+            Some(if n == 4 && enc.unit_width() == 2 {
+                let lo = unicode_unit_at(bytes, 2, enc)?;
+                0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00)
+            } else {
+                u
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The bytes of code point `cp` in a UTF-16 / UTF-32 encoding
+/// (`rb_enc_mbcput`), or `None` where the encoding has no character for
+/// it (a surrogate or a value past U+10FFFF in UTF-16).
+pub(crate) fn unicode_unit_encode(cp: u32, enc: Encoding) -> Option<Vec<u8>> {
+    match enc {
+        Encoding::Utf32Le => Some(cp.to_le_bytes().to_vec()),
+        Encoding::Utf32Be => Some(cp.to_be_bytes().to_vec()),
+        Encoding::Utf16Le | Encoding::Utf16Be => {
+            if (0xD800..0xE000).contains(&cp) || cp > 0x10FFFF {
+                return None;
+            }
+            let be = enc == Encoding::Utf16Be;
+            let put = |out: &mut Vec<u8>, u: u16| {
+                out.extend_from_slice(&if be { u.to_be_bytes() } else { u.to_le_bytes() })
+            };
+            let mut out = Vec::with_capacity(4);
+            if cp >= 0x10000 {
+                let v = cp - 0x10000;
+                put(&mut out, 0xD800 + (v >> 10) as u16);
+                put(&mut out, 0xDC00 + (v & 0x3FF) as u16);
+            } else {
+                put(&mut out, cp as u16);
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum PreciseLen {
     /// A complete character, this many bytes wide.
@@ -1606,6 +1710,26 @@ impl Encoding {
         matches!((self, other), (Encoding::Utf8(a), Encoding::Utf8(b)) if a != b)
     }
 
+    /// A wide-character encoding — one whose smallest character is
+    /// more than one byte (`rb_enc_mbminlen(enc) != 1`): the UTF-16 /
+    /// UTF-32 family, the BOM-carrying dummies included.
+    pub fn is_wide(self) -> bool {
+        matches!(
+            self,
+            Encoding::Utf16Le | Encoding::Utf16Be | Encoding::Utf32Le | Encoding::Utf32Be
+        ) || matches!(self.name(), "UTF-16" | "UTF-32")
+    }
+
+    /// The width of a code unit of a fixed-width encoding: 2 for
+    /// UTF-16, 4 for UTF-32, 1 for everything else.
+    pub fn unit_width(self) -> usize {
+        match self {
+            Encoding::Utf16Le | Encoding::Utf16Be => 2,
+            Encoding::Utf32Le | Encoding::Utf32Be => 4,
+            _ => 1,
+        }
+    }
+
     /// True if monoruby has no native byte→character decoder for
     /// this encoding and the bytes are stored opaquely. Used to
     /// route operations down the binary-style path.
@@ -1788,7 +1912,7 @@ impl Encoding {
                     } else {
                         u32::from_le_bytes([unit[0], unit[1], unit[2], unit[3]])
                     };
-                    if u > 0x10FFFF || (0xD800..0xE000).contains(&u) {
+                    if !utf32_unit_is_char(u) {
                         return CodeRange::Broken;
                     }
                 }
@@ -2462,7 +2586,9 @@ impl RStringInner {
     }
 
     pub fn dump(&self) -> String {
-        if self.ty.is_utf8_compatible() {
+        // `rb_str_dump` spells a character as `\u` only in UTF-8
+        // itself; a UTF8-MAC or CESU-8 string gets its bytes.
+        if self.ty == Encoding::UTF8 || self.ty == Encoding::UsAscii {
             let mut res = String::with_capacity(self.len());
             utf8_dump_with_lookahead(&mut res, self.as_bytes());
             res
@@ -2494,11 +2620,26 @@ impl RStringInner {
             // `\uXXXX` / `\u{XXXXX}` (CRuby never shows them literally
             // because the result encoding differs from the string's).
             Encoding::Utf16Le | Encoding::Utf16Be | Encoding::Utf32Le | Encoding::Utf32Be => {
-                let chars = decode_unicode_units(self.as_bytes(), self.ty);
+                let bytes = self.as_bytes();
+                let units = unicode_units(bytes, self.ty);
                 let mut res = String::with_capacity(self.len());
-                for (idx, &c) in chars.iter().enumerate() {
-                    let next = chars.get(idx + 1).copied().unwrap_or('\0');
-                    unicode_inspect_char(&mut res, c, next);
+                for (idx, unit) in units.iter().enumerate() {
+                    match *unit {
+                        UnicodeUnit::Char(cp) => {
+                            // The `#` lookahead sees the next character
+                            // only when there is one.
+                            let next = match units.get(idx + 1) {
+                                Some(UnicodeUnit::Char(n)) if *n < 0x80 => *n as u8 as char,
+                                _ => '\0',
+                            };
+                            unicode_inspect_char(&mut res, cp, next);
+                        }
+                        UnicodeUnit::Bad(from, to) => {
+                            for b in &bytes[from..to] {
+                                res.push_str(&format!("\\x{:0>2X}", b));
+                            }
+                        }
+                    }
                 }
                 res
             }
@@ -2660,58 +2801,77 @@ fn utf8_inspect_with_next(s: &mut String, ch: char, next_ch: char, is_utf8: bool
     }
 }
 
-/// Decode UTF-16/UTF-32 (LE/BE) bytes into scalar values for
-/// `#inspect`. Mirrors the transcoder's hand-rolled codecs; invalid
-/// units degrade to U+FFFD (CRuby would emit `\xHH` for genuinely
-/// broken units, but the inspect specs only exercise valid input —
-/// and U+FFFD still renders as `�`, matching CRuby's output for
-/// already-U+FFFD content).
-fn decode_unicode_units(bytes: &[u8], enc: Encoding) -> Vec<char> {
+/// One step of `rb_str_inspect`'s walk over a UTF-16 / UTF-32 string:
+/// a character, or the bytes at a position no character starts at.
+enum UnicodeUnit {
+    /// A character, by code point — which for UTF-32 may exceed
+    /// U+10FFFF (see [`utf32_unit_is_char`]).
+    Char(u32),
+    /// The bytes `rb_str_inspect` writes as `\xHH` where no character
+    /// starts: `mbminlen` of them (2 / 4), or what is left of the string.
+    Bad(usize, usize),
+}
+
+/// Walk UTF-16/UTF-32 (LE/BE) bytes the way `rb_str_inspect` does:
+/// `rb_enc_precise_mbclen` at each position, a character where it
+/// finds one and `mbminlen` raw bytes where it does not — a lone
+/// surrogate, a UTF-32 unit that is no scalar, an odd tail.
+fn unicode_units(bytes: &[u8], enc: Encoding) -> Vec<UnicodeUnit> {
     let mut out = Vec::new();
+    let mut i = 0;
     match enc {
         Encoding::Utf32Le | Encoding::Utf32Be => {
             let be = matches!(enc, Encoding::Utf32Be);
-            for c in bytes.chunks(4) {
-                if c.len() < 4 {
-                    out.push('\u{FFFD}');
-                    continue;
+            while i < bytes.len() {
+                if i + 4 > bytes.len() {
+                    out.push(UnicodeUnit::Bad(i, bytes.len()));
+                    break;
                 }
+                let c = &bytes[i..i + 4];
                 let v = if be {
                     u32::from_be_bytes([c[0], c[1], c[2], c[3]])
                 } else {
                     u32::from_le_bytes([c[0], c[1], c[2], c[3]])
                 };
-                out.push(char::from_u32(v).unwrap_or('\u{FFFD}'));
+                out.push(if utf32_unit_is_char(v) {
+                    UnicodeUnit::Char(v)
+                } else {
+                    UnicodeUnit::Bad(i, i + 4)
+                });
+                i += 4;
             }
         }
         _ => {
             let be = matches!(enc, Encoding::Utf16Be);
-            let units: Vec<u16> = bytes
-                .chunks(2)
-                .map(|c| {
-                    if c.len() < 2 {
-                        0xFFFDu16
-                    } else if be {
-                        u16::from_be_bytes([c[0], c[1]])
+            let unit = |at: usize| {
+                let (a, b) = (bytes[at], bytes[at + 1]);
+                if be {
+                    ((a as u32) << 8) | b as u32
+                } else {
+                    ((b as u32) << 8) | a as u32
+                }
+            };
+            while i < bytes.len() {
+                if i + 2 > bytes.len() {
+                    out.push(UnicodeUnit::Bad(i, bytes.len()));
+                    break;
+                }
+                let u = unit(i);
+                if (0xD800..0xDC00).contains(&u) {
+                    if i + 4 <= bytes.len() && (0xDC00..0xE000).contains(&unit(i + 2)) {
+                        let lo = unit(i + 2);
+                        out.push(UnicodeUnit::Char(0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00)));
+                        i += 4;
                     } else {
-                        u16::from_le_bytes([c[0], c[1]])
+                        out.push(UnicodeUnit::Bad(i, i + 2));
+                        i += 2;
                     }
-                })
-                .collect();
-            let mut i = 0;
-            while i < units.len() {
-                let u = units[i];
-                if (0xD800..=0xDBFF).contains(&u)
-                    && i + 1 < units.len()
-                    && (0xDC00..=0xDFFF).contains(&units[i + 1])
-                {
-                    let hi = (u as u32 - 0xD800) << 10;
-                    let lo = units[i + 1] as u32 - 0xDC00;
-                    out.push(char::from_u32(0x10000 + hi + lo).unwrap_or('\u{FFFD}'));
+                } else if (0xDC00..0xE000).contains(&u) {
+                    out.push(UnicodeUnit::Bad(i, i + 2));
                     i += 2;
                 } else {
-                    out.push(char::from_u32(u as u32).unwrap_or('\u{FFFD}'));
-                    i += 1;
+                    out.push(UnicodeUnit::Char(u));
+                    i += 2;
                 }
             }
         }
@@ -2723,16 +2883,13 @@ fn decode_unicode_units(bytes: &[u8], enc: Encoding) -> Vec<char> {
 /// encoding (UTF-16/UTF-32): ASCII chars use the normal escape rules;
 /// every non-ASCII codepoint is `\uXXXX` / `\u{XXXXX}` (never shown
 /// literally, because the result encoding differs from the string's).
-fn unicode_inspect_char(s: &mut String, ch: char, next_ch: char) {
-    if ch.is_ascii() {
-        utf8_inspect_with_next(s, ch, next_ch, true);
+fn unicode_inspect_char(s: &mut String, cp: u32, next_ch: char) {
+    if cp < 0x80 {
+        utf8_inspect_with_next(s, cp as u8 as char, next_ch, true);
+    } else if cp <= 0xFFFF {
+        s.push_str(&format!("\\u{:0>4X}", cp));
     } else {
-        let cp = ch as u32;
-        if cp <= 0xFFFF {
-            s.push_str(&format!("\\u{:0>4X}", cp));
-        } else {
-            s.push_str(&format!("\\u{{{:X}}}", cp));
-        }
+        s.push_str(&format!("\\u{{{:X}}}", cp));
     }
 }
 
@@ -3385,7 +3542,7 @@ impl RStringInner {
                     } else {
                         u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]])
                     };
-                    if u > 0x10FFFF || (0xD800..0xE000).contains(&u) {
+                    if !utf32_unit_is_char(u) {
                         out.extend_from_slice(repl.as_bytes());
                     } else {
                         out.extend_from_slice(&bytes[i..i + 4]);
@@ -3986,10 +4143,13 @@ impl RStringInner {
         // SevenBit/Valid stay so under concatenation of identical
         // valid runs, and Broken stays Broken. The empty case
         // (`len == 0`) collapses to SevenBit, matching `classify(b"")`.
-        let cr = if len == 0 {
-            CodeRange::SevenBit
-        } else {
-            self.cr.get()
+        // Broken does not: two odd UTF-16 halves make an even whole
+        // (`("a\x00b".force_encoding("UTF-16LE") * 2).valid_encoding?`
+        // is true), so that one is classified afresh.
+        let cr = match (len, self.cr.get()) {
+            (0, _) => CodeRange::SevenBit,
+            (_, CodeRange::Broken) => CodeRange::Unknown,
+            (_, cr) => cr,
         };
         RStringInner::from(SmallVec::from_vec(self.as_bytes().repeat(len)), self.ty, cr)
     }

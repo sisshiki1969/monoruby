@@ -4448,6 +4448,11 @@ pub(super) fn encode(
     // to the receiver's own encoding — the options still apply, so this
     // is not a no-op: `"a\n".encode(crlf_newline: true)` converts.
     let dst_enc = dst_enc_opt.unwrap_or(self_enc);
+    // `rb_econv_open` comes first: a pair no converter serves is refused
+    // before the input is looked at, so a UTF-7 source (or a broken one
+    // bound for UTF-7) is `ConverterNotFoundError`, never a complaint
+    // about its bytes.
+    refuse_pair_without_converter(src_enc, dst_enc, &globals.store)?;
     if let Some(v) = handle_xml_option(globals, lfp, dst_enc)? {
         return Ok(v);
     }
@@ -4481,6 +4486,7 @@ pub(super) fn encode_(
     let self_enc = self_val.as_rstring_inner().encoding();
     let (src_enc, dst_enc_opt) = resolve_encode_pair(vm, globals, lfp, self_enc)?;
     let dst_enc = dst_enc_opt.unwrap_or(self_enc);
+    refuse_pair_without_converter(src_enc, dst_enc, &globals.store)?;
     if let Some(v) = handle_xml_option(globals, lfp, dst_enc)? {
         // CRuby's `encode!` just `replace`s self with the encoded
         // form when xml is given.
@@ -5448,6 +5454,33 @@ fn has_codec(enc: crate::value::Encoding) -> bool {
 /// Raises `Encoding::ConverterNotFoundError` for anything
 /// [`has_codec`] does not cover. Identical encodings are always
 /// allowed.
+/// The part of `rb_econv_open`'s answer that is settled before any byte
+/// is read: a dummy encoding with no codec (UTF-7) on either side has no
+/// converter, whatever the input. The rest of the transcoders' coverage
+/// is decided by the transcoding itself, which reports its own
+/// `ConverterNotFoundError` where it has nothing for a pair.
+fn refuse_pair_without_converter(
+    src: crate::value::Encoding,
+    dst: crate::value::Encoding,
+    store: &Store,
+) -> Result<()> {
+    if src == dst {
+        return Ok(());
+    }
+    let missing = |e: crate::value::Encoding| is_cruby_dummy_name(e.name()) && !has_codec(e);
+    if missing(src) || missing(dst) {
+        return Err(MonorubyErr::converter_not_found_error(
+            store,
+            format!(
+                "code converter not found ({} to {})",
+                src.name(),
+                dst.name()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_converter_pair(
     src: crate::value::Encoding,
     dst: crate::value::Encoding,
@@ -11969,7 +12002,7 @@ fn enc_inspect(
 /// have CRuby decoders even if monoruby doesn't). For
 /// `Encoding#dummy?` and `Encoding#inspect` we use this narrower
 /// match to match CRuby observed behaviour.
-fn is_cruby_dummy_name(name: &str) -> bool {
+pub(super) fn is_cruby_dummy_name(name: &str) -> bool {
     let normalized = name.to_uppercase().replace('-', "_");
     // CRuby's actual dummy-encoding set (Emacs-Mule / CESU-8 /
     // stateless-ISO-2022-JP are *not* dummy in CRuby — they are

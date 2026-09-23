@@ -252,11 +252,18 @@ fn crypt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_ = lfp.self_val();
     let password = self_.expect_bytes(&globals.store)?.to_vec();
     // `#to_str` is honoured on the salt, and only on the salt.
-    let salt = lfp
-        .arg(0)
-        .coerce_to_rstring(vm, globals)?
-        .as_bytes()
-        .to_vec();
+    let salt_inner = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    // `mustnot_wchar`: the C `crypt` reads bytes, so a wide-character
+    // encoding on either side is refused before anything else.
+    for enc in [self_.as_rstring_inner().encoding(), salt_inner.encoding()] {
+        if enc.is_wide() {
+            return Err(MonorubyErr::argumenterr(format!(
+                "wide char encoding: {}",
+                enc.name()
+            )));
+        }
+    }
+    let salt = salt_inner.as_bytes().to_vec();
     // The C `crypt` takes NUL-terminated strings, so a NUL anywhere in
     // the password would silently truncate it, and a salt shorter than
     // two *non-NUL* bytes is no salt at all.

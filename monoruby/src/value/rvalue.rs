@@ -42,6 +42,7 @@ pub use string::{
 };
 pub(crate) use string::{
     MbcPiece, PreciseLen, char_count, char_width_at, euc_jp_const_name, eucjp_char_width,
+    unicode_unit_at, unicode_unit_codepoint, unicode_unit_encode, unicode_unit_precise_len,
     sjis_const_name, CESU_8, UTF8_MAC, cesu8_precise_len, cesu8_to_utf8, mac_clusters,
     mac_to_utf8, SJIS_DOCOMO, SJIS_KDDI, SJIS_SOFTBANK, UTF8_DOCOMO, UTF8_KDDI,
     UTF8_SOFTBANK, WINDOWS_31J, utf8_const_name, utf8_to_cesu8, utf8_to_mac, CESU8_MAX_LEN,
