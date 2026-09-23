@@ -802,7 +802,11 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
             "Windows-1255" => b"windows-1255",
             "Windows-1256" => b"windows-1256",
             "Windows-1257" => b"windows-1257",
-            "Windows-1258" => b"windows-1258",
+            // Windows-1258 is an encoding CRuby ships no transcoder
+            // for, so it answers `ConverterNotFoundError` for
+            // anything but 7-bit text — and so gets no codec here
+            // either, as MacJapanese does not (#1591).
+            "Windows-1258" => return None,
             "KOI8-R" => b"koi8-r",
             "KOI8-U" => b"koi8-u",
             "IBM866" => b"ibm866",
@@ -3741,6 +3745,13 @@ pub(super) fn transcode_bytes_with_opts(
     // before any of the input is read, because that is where CRuby
     // opens the converter (#1566).
     if opens_a_converter(src_bytes, src_enc, dst_enc, opts, false) {
+        // A pair with no transcoder has nothing to open, decorators
+        // or not: 7-bit text passes through the fast path below only
+        // when nothing is asked of a converter, as MacJapanese and
+        // Windows-1258 have it in CRuby (#1591).
+        if !has_codec(src_enc) || !has_codec(dst_enc) {
+            return Err(converter_not_found(store, src_enc, dst_enc, opts, None));
+        }
         validate_replacement(opts, src_enc, dst_enc, None, store)?;
     }
     // `invalid: :replace` has work to do even when the encodings match,
@@ -5124,6 +5135,9 @@ fn handle_xml_option(
     let src_enc = lfp.self_val().as_rstring_inner().encoding();
     let opts = parse_transcode_opts(lfp, &globals.store);
     validate_replacement(&opts, src_enc, dst_enc, Some(mode), &globals.store)?;
+    if src_enc != dst_enc && (!has_codec(src_enc) || !has_codec(dst_enc)) {
+        return Err(converter_not_found(&globals.store, src_enc, dst_enc, &opts, Some(mode)));
+    }
     // The decorator escapes *characters*, so a source that is not
     // UTF-8 is read by its own conversion first (#1530).
     let decoded;
@@ -6266,13 +6280,25 @@ fn validate_replacement(
     ) {
         return Ok(Some(bytes));
     }
+    Err(converter_not_found(store, src_enc, dst_enc, opts, xml))
+}
+
+/// `code converter not found (UTF-8 to MacJapanese with crlf_newline)`:
+/// a pair with no transcoder, spelled with the decorators asked for.
+fn converter_not_found(
+    store: &Store,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    xml: Option<XmlMode>,
+) -> MonorubyErr {
     let decorators = decorator_names(opts, xml);
     let with = if decorators.is_empty() {
         String::new()
     } else {
         format!(" with {}", decorators.join(","))
     };
-    Err(MonorubyErr::converter_not_found_error(
+    MonorubyErr::converter_not_found_error(
         store,
         format!(
             "code converter not found ({} to {}{})",
@@ -6280,7 +6306,7 @@ fn validate_replacement(
             dst_enc.name(),
             with
         ),
-    ))
+    )
 }
 
 /// Whether monoruby can convert to and from `enc`.
@@ -6337,6 +6363,7 @@ fn refuse_pair_without_converter(
 fn validate_converter_pair(
     src: crate::value::Encoding,
     dst: crate::value::Encoding,
+    decorators: &TranscodeOpts,
     store: &Store,
 ) -> Result<()> {
     if src == dst {
@@ -6345,14 +6372,7 @@ fn validate_converter_pair(
     let src_supported = has_codec(src);
     let dst_supported = has_codec(dst);
     if !src_supported || !dst_supported {
-        return Err(MonorubyErr::converter_not_found_error(
-            store,
-            format!(
-                "code converter not found ({} to {})",
-                src.name(),
-                dst.name()
-            ),
-        ));
+        return Err(converter_not_found(store, src, dst, decorators, None));
     }
     Ok(())
 }
@@ -6551,7 +6571,25 @@ fn converter_new(
             format!("code converter not found ({} to {})", src.name(), dst.name()),
         ));
     }
-    validate_converter_pair(src, dst, &globals.store)?;
+    // The decorators the message names, read ahead of the options
+    // proper: `code converter not found (UTF-8 to Windows-1258 with
+    // crlf_newline)` (#1591).
+    let mut decorators = TranscodeOpts::default();
+    if let Some(n) = lfp.try_arg(2).and_then(|v| v.try_fixnum()) {
+        decorators.universal_newline = n & 0x0000_0100 != 0;
+        decorators.crlf_newline = n & 0x0000_1000 != 0;
+        decorators.cr_newline = n & 0x0000_2000 != 0;
+    }
+    if let Some(hash) = (2..=3)
+        .filter_map(|i| lfp.try_arg(i))
+        .find_map(|v| v.try_hash_ty())
+    {
+        let on = |key: &str| find_hash_value_for_symbol(&hash, key).is_some_and(|v| v.as_bool());
+        decorators.universal_newline |= on("universal_newline");
+        decorators.crlf_newline |= on("crlf_newline");
+        decorators.cr_newline |= on("cr_newline");
+    }
+    validate_converter_pair(src, dst, &decorators, &globals.store)?;
     // Options Hash (`replace:` kwargs / `**opts` / trailing Hash).
     // With `kw_rest=true` the collected kwargs Hash is delivered in
     // the slot after the positional args (index 3 here); a literal
@@ -11776,7 +11814,7 @@ fn converter_search_convpath(
         lfp.arg(1),
         false,
     )?;
-    validate_converter_pair(src, dst, &globals.store)?;
+    validate_converter_pair(src, dst, &TranscodeOpts::default(), &globals.store)?;
     // The optional third argument / kwargs carry decorator options
     // (the kwargs hash may land in either trailing slot).
     let crlf = (2..=3)

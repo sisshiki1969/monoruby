@@ -42,3 +42,37 @@ fn the_hop_an_undefined_conversion_names() {
         "##,
     );
 }
+
+/// Windows-1258 (CP1258) is an encoding with no transcoder: every
+/// conversion but 7-bit text is `ConverterNotFoundError`, and the
+/// string's own operations are untouched (#1591).
+#[test]
+fn windows_1258_has_no_converter() {
+    run_test_once(
+        r##"
+        t = ->(&b) { begin; v = b.call; v.is_a?(String) ? [v.bytes, v.encoding.to_s] : v; rescue => e; [e.class, e.message]; end }
+        res = []
+        %w[Windows-1258 CP1258].each do |e|
+          res << t.() { "é".encode(e) }
+          res << t.() { "abc".encode(e) }
+          res << t.() { Encoding::Converter.new("UTF-8", e).to_s }
+          res << t.() { Encoding::Converter.new(e, "UTF-8").to_s }
+          res << t.() { Encoding::Converter.search_convpath("UTF-8", e) }
+          res << t.() { "\xe9".force_encoding(e).encode("UTF-8") }
+          res << t.() { "abc".force_encoding(e).encode("UTF-8") }
+          res << t.() { "\xe9".b.encode(e) }
+          res << t.() { "a\nb".encode(e, crlf_newline: true) }
+          res << t.() { "ab".encode("UTF-16LE").encode(e) }
+          res << t.() { "ab".force_encoding(e).encode("UTF-16LE") }
+          res << t.() { "a<".encode(e, xml: :text) }
+          res << t.() { "\xe9".force_encoding(e).valid_encoding? }
+          res << t.() { "\xe9".force_encoding(e).encode(e) }
+          res << t.() { "\xe9".force_encoding(e).scrub }
+          res << t.() { "\xe9".force_encoding(e).encode(e, invalid: :replace) }
+          res << t.() { Encoding.find(e).name }
+        end
+        %w[Windows-1250 Windows-1257 Windows-874].each { |e| res << t.() { "é".encode(e) } }
+        res
+        "##,
+    );
+}
