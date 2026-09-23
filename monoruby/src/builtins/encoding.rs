@@ -4385,9 +4385,34 @@ pub(super) fn transcode_bytes_with_opts(
                 // What is left in EUC-JP and not in stateless is
                 // half-width katakana and JIS X 0212.
                 Err(at) => {
-                    let n = crate::value::eucjp_char_width(&eucjp[at..])
-                        .unwrap_or(1)
-                        .max(1);
+                    let Some(n) = crate::value::eucjp_char_width(&eucjp[at..]) else {
+                        // Not a cell: malformed EUC-JP from an EUC-JP
+                        // source (the transcoders write none), which
+                        // is `"\x80" on EUC-JP` and not an undefined
+                        // conversion (#1618).
+                        if opts.invalid_replace {
+                            let scrubbed = crate::value::scrub_mbc(
+                                &eucjp,
+                                opts.replace_str(stateless).as_bytes(),
+                                3,
+                                crate::value::eucjp_precise_len,
+                            );
+                            return transcode_bytes_with_opts(
+                                &scrubbed,
+                                crate::value::Encoding::EUC_JP,
+                                stateless,
+                                opts,
+                                store,
+                            );
+                        }
+                        return Err(invalid_byte_sequence(
+                            store,
+                            crate::value::Encoding::EUC_JP,
+                            dst_enc,
+                            &eucjp[at..],
+                        ));
+                    };
+                    let n = n.max(1);
                     let cell = &eucjp[at..(at + n).min(eucjp.len())];
                     if opts.undef_replace {
                         let mut out =
@@ -8482,7 +8507,7 @@ fn stateless_dest_stream(
     // two encodings hold the same cells, so the rewrite below is the
     // whole of it and a cell with no character crosses like any other
     // (#1600).
-    let (result, consumed, eucjp, meta) = if src_enc == crate::value::Encoding::EUC_JP {
+    let (result, consumed, eucjp, mut meta) = if src_enc == crate::value::Encoding::EUC_JP {
         let kind = if partial_input {
             StreamConvertResult::SourceBufferEmpty
         } else {
@@ -8500,6 +8525,34 @@ fn stateless_dest_stream(
             store,
         )
     };
+    // An error on the way *into* EUC-JP is that hop's: `errinfo` names
+    // `["UTF-8", "EUC-JP"]` for `U+20AC`, not the rewrite after it
+    // (#1618). The message already says as much.
+    if matches!(
+        result,
+        StreamConvertResult::InvalidByteSequence
+            | StreamConvertResult::UndefinedConversion
+            | StreamConvertResult::IncompleteInput
+    ) && meta.stage.is_none()
+    {
+        let decode_stage =
+            !matches!(result, StreamConvertResult::UndefinedConversion) || meta.decode_stage;
+        meta.stage = Some(error_stage_names(
+            src_enc,
+            crate::value::Encoding::EUC_JP,
+            decode_stage,
+        ));
+        if !decode_stage
+            && meta.message.is_none()
+            && let Some(c) = single_utf8_char(&meta.error_bytes)
+        {
+            meta.message = Some(undefined_before_eucjp_message(
+                c,
+                opts.report_src.unwrap_or(src_enc),
+                dst_enc,
+            ));
+        }
+    }
     let mut out = Vec::with_capacity(eucjp.len());
     let mut at = 0;
     while at < eucjp.len() {
@@ -8508,19 +8561,48 @@ fn stateless_dest_stream(
             0xa1..=0xfe if matches!(eucjp.get(at + 1), Some(0xa1..=0xfe)) => {
                 (vec![0x92, eucjp[at], eucjp[at + 1]], 2)
             }
-            _ => {
-                let cell_len = crate::value::eucjp_char_width(&eucjp[at..]).unwrap_or(1).max(1);
-                return (
-                    StreamConvertResult::UndefinedConversion,
-                    pivot_prefix_consumed_in(src_bytes, src_enc, crate::value::Encoding::EUC_JP, at, opts, store),
-                    out,
-                    ErrMeta {
-                        error_bytes: eucjp[at..(at + cell_len).min(eucjp.len())].to_vec(),
-                        decode_stage: false,
-                        ..ErrMeta::default()
-                    },
-                );
-            }
+            _ => match crate::value::eucjp_char_width(&eucjp[at..]) {
+                None => {
+                    // Not a cell at all. Only an EUC-JP source can
+                    // put one here — the transcoders write none —
+                    // and it is malformed input, `"\x80" on EUC-JP`,
+                    // not a character the rewrite has no cell for
+                    // (#1618).
+                    let (kind, bad) =
+                        bad_source_outcome(crate::value::Encoding::EUC_JP, &eucjp[at..], !partial_input);
+                    if opts.invalid_replace
+                        && !matches!(kind, StreamConvertResult::SourceBufferEmpty)
+                    {
+                        let skip = bad.error_bytes.len().max(1);
+                        (opts.replace_str(dst_enc).into_bytes(), skip)
+                    } else {
+                        let through = through_bad_run(at, &kind, &bad, eucjp.len());
+                        return (
+                            kind,
+                            pivot_prefix_consumed_in(src_bytes, src_enc, crate::value::Encoding::EUC_JP, through, opts, store),
+                            out,
+                            bad,
+                        );
+                    }
+                }
+                Some(cell_len) => {
+                    let cell_len = cell_len.max(1);
+                    // The character with no cell has been read: it is
+                    // the error's bytes, and leaves the caller's
+                    // source with them (#1617).
+                    let through = (at + cell_len).min(eucjp.len());
+                    return (
+                        StreamConvertResult::UndefinedConversion,
+                        pivot_prefix_consumed_in(src_bytes, src_enc, crate::value::Encoding::EUC_JP, through, opts, store),
+                        out,
+                        ErrMeta {
+                            error_bytes: eucjp[at..(at + cell_len).min(eucjp.len())].to_vec(),
+                            decode_stage: false,
+                            ..ErrMeta::default()
+                        },
+                    );
+                }
+            },
         };
         if let Some(max) = max_dst_bytes
             && out.len() + unit.len() > max
@@ -12493,6 +12575,19 @@ fn enc_err_message(globals: &Globals, exc: Value) -> Option<String> {
 /// - `"invalid byte sequence on SRC (SRC → DST)"`
 ///   (InvalidByteSequenceError)
 fn parse_enc_err_pair(msg: &str) -> Option<(String, String)> {
+    // `U+AC00 to EUC-JP in conversion from CP949 to UTF-8 to EUC-JP to
+    // stateless-ISO-2022-JP`: the hop that gave up is the one whose
+    // destination the message names, and its source is the hop before
+    // it on the chain — `["UTF-8", "EUC-JP"]`, not the chain's first
+    // pair (#1618).
+    if let Some((head, chain)) = msg.split_once(" in conversion from ")
+        && let Some((_, hop_dst)) = head.rsplit_once(" to ")
+    {
+        let hops: Vec<&str> = chain.split(" to ").map(str::trim).collect();
+        if let Some(i) = hops.iter().skip(1).position(|h| *h == hop_dst.trim()) {
+            return Some((hops[i].to_string(), hop_dst.trim().to_string()));
+        }
+    }
     if let Some(rest) = msg.split_once(" from ").map(|(_, b)| b)
         && let Some((src, rest)) = rest.split_once(" to ")
     {
