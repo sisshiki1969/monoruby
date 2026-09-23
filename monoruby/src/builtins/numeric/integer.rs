@@ -183,238 +183,44 @@ fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
 #[monoruby_builtin]
 fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let i = match lfp.self_val().try_fixnum() {
-        Some(i) => i,
-        None => {
-            return Err(MonorubyErr::rangeerr("bignum out of char range"));
+    use crate::value::rvalue::{CodepointErr, Encoding, RStringInner};
+    let self_ = lfp.self_val();
+    // `rb_num_to_uint`: a Bignum never names a character, nor does a
+    // negative or a value past `u32`.
+    let Some(i) = self_.try_fixnum() else {
+        return Err(MonorubyErr::rangeerr("bignum out of char range"));
+    };
+    let code = u32::try_from(i)
+        .map_err(|_| MonorubyErr::char_out_of_range(&globals.store, self_))?;
+    let enc = if let Some(enc_val) = lfp.try_arg(0) {
+        // `rb_to_encoding`: an Encoding, a name, or anything `#to_str`
+        // makes one of.
+        super::super::encoding::value_to_encoding(vm, globals, enc_val)?
+    } else {
+        // Without an encoding a byte is a character of US-ASCII or,
+        // above `0x7F`, of BINARY; anything wider needs
+        // `Encoding.default_internal` to say which encoding to read it
+        // in.
+        if code <= 0xFF {
+            let enc = if code < 0x80 { Encoding::UsAscii } else { Encoding::Ascii8 };
+            return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                &[code as u8],
+                enc,
+            )));
+        }
+        match super::super::encoding::current_default_internal(globals) {
+            Some(enc) => enc,
+            None => return Err(MonorubyErr::char_out_of_range(&globals.store, self_)),
         }
     };
-
-    // Resolve encoding name: explicit argument, or Encoding.default_internal, or none
-    let enc_name: Option<String> = if let Some(enc_val) = lfp.try_arg(0) {
-        Some(chr_resolve_encoding_name(vm, globals, enc_val)?)
-    } else {
-        // No argument: check Encoding.default_internal for codepoints > 255
-        if i > 255 {
-            let di = globals
-                .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
-                .unwrap_or(Value::nil());
-            if !di.is_nil() {
-                if let Some(name) = globals.store.get_ivar(di, IdentId::_ENCODING) {
-                    Some(name.as_str().to_string())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
+    // `rb_enc_uint_chr`.
+    let bytes = crate::value::enc_mbcput(enc, code).map_err(|e| match e {
+        CodepointErr::Invalid => {
+            MonorubyErr::rangeerr(format!("invalid codepoint 0x{code:X} in {}", enc.name()))
         }
-    };
-
-    chr_with_encoding(globals, i, enc_name.as_deref())
-}
-
-/// Resolve an encoding argument (String or Encoding object) to an encoding name.
-fn chr_resolve_encoding_name(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    enc_val: Value,
-) -> Result<String> {
-    if let Some(s) = enc_val.is_str() {
-        // Normalize via Encoding.try_from_str to validate, then use the original name
-        let _ = crate::value::rvalue::Encoding::try_from_str(s)?;
-        Ok(s.to_string())
-    } else if let Some(name) = globals.store.get_ivar(enc_val, IdentId::_ENCODING) {
-        Ok(name.as_str().to_string())
-    } else {
-        let s = enc_val.coerce_to_string(vm, globals)?;
-        let _ = crate::value::rvalue::Encoding::try_from_str(&s)?;
-        Ok(s)
-    }
-}
-
-/// Produce a chr String for codepoint `i` with optional encoding name.
-fn chr_with_encoding(globals: &mut Globals, i: i64, enc_name: Option<&str>) -> Result<Value> {
-    use crate::value::rvalue::{Encoding, RStringInner};
-
-    let normalized = enc_name.map(|s| s.to_uppercase().replace('-', "_"));
-    match normalized.as_deref() {
-        Some("US_ASCII") | Some("ASCII") => {
-            if i < 0 || i > 0x7F {
-                return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
-            }
-            let inner = RStringInner::from_encoding(&[i as u8], Encoding::UsAscii);
-            Ok(Value::string_from_inner(inner))
-        }
-        Some("UTF_8") | Some("UTF8") => {
-            if i < 0 || i > 0x10FFFF {
-                return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
-            }
-            match char::from_u32(i as u32) {
-                Some(c) => {
-                    let mut buf = [0u8; 4];
-                    let s = c.encode_utf8(&mut buf);
-                    Ok(Value::string_from_str(s))
-                }
-                None => Err(MonorubyErr::rangeerr(format!("{} out of char range", i))),
-            }
-        }
-        Some("CESU_8") | Some("CESU8") => {
-            // CESU-8: U+0000..U+FFFF same as UTF-8, U+10000..U+10FFFF as surrogate pairs
-            if i < 0 || i > 0x10FFFF {
-                return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
-            }
-            let cp = i as u32;
-            let bytes = if cp <= 0xFFFF {
-                // Same as UTF-8 for BMP
-                match char::from_u32(cp) {
-                    Some(c) => {
-                        let mut buf = [0u8; 4];
-                        let s = c.encode_utf8(&mut buf);
-                        s.as_bytes().to_vec()
-                    }
-                    None => return Err(MonorubyErr::rangeerr(format!("{} out of char range", i))),
-                }
-            } else {
-                // Supplementary: encode as surrogate pair in CESU-8
-                let cp = cp - 0x10000;
-                let hi = 0xD800 + (cp >> 10);
-                let lo = 0xDC00 + (cp & 0x3FF);
-                let mut bytes = Vec::with_capacity(6);
-                // Encode each surrogate as 3-byte CESU-8
-                for surrogate in [hi, lo] {
-                    bytes.push(0xE0 | ((surrogate >> 12) & 0x0F) as u8);
-                    bytes.push(0x80 | ((surrogate >> 6) & 0x3F) as u8);
-                    bytes.push(0x80 | (surrogate & 0x3F) as u8);
-                }
-                bytes
-            };
-            let inner = RStringInner::from_encoding(&bytes, Encoding::Ascii8);
-            let val = Value::string_from_inner(inner);
-            chr_set_encoding_label(globals, val, enc_name.unwrap());
-            Ok(val)
-        }
-        Some("ASCII_8BIT") | Some("BINARY") => {
-            if i < 0 || i > 0xFF {
-                return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
-            }
-            Ok(Value::bytes_from_slice(&[i as u8]))
-        }
-        Some(norm) => {
-            // Mock encoding: encode codepoint as big-endian bytes,
-            // store with the requested encoding name on the String object.
-            if i < 0 {
-                return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
-            }
-            let cp = i as u64;
-            // Validate codepoint for the specific encoding (mock)
-            if !chr_valid_mock_codepoint(norm, cp) {
-                return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
-            }
-            let bytes: Vec<u8> = if cp <= 0xFF {
-                vec![cp as u8]
-            } else if cp <= 0xFFFF {
-                vec![(cp >> 8) as u8, (cp & 0xFF) as u8]
-            } else if cp <= 0xFFFFFF {
-                vec![
-                    (cp >> 16) as u8,
-                    ((cp >> 8) & 0xFF) as u8,
-                    (cp & 0xFF) as u8,
-                ]
-            } else {
-                return Err(MonorubyErr::rangeerr(format!("{} out of char range", i)));
-            };
-            // Create a binary string with the requested encoding label
-            let enc_label = enc_name.unwrap();
-            // Tag the bytes with the encoding that was asked for, not
-            // with BINARY: the string has to *decode* as that encoding
-            // later (`0x8E.chr("macRoman").encode("UTF-8")`), which a
-            // display-only label cannot do. The name reached here
-            // through `chr_resolve_encoding_name`, which already
-            // resolved it, so the fallback is only a belt.
-            let enc = Encoding::try_from_str(enc_label).unwrap_or(Encoding::Ascii8);
-            let inner = RStringInner::from_encoding(&bytes, enc);
-            let val = Value::string_from_inner(inner);
-            // Set the encoding name on the string so .encoding returns the right object
-            chr_set_encoding_label(globals, val, enc_label);
-            Ok(val)
-        }
-        None => {
-            // No encoding specified, no default_internal
-            if let Ok(b) = u8::try_from(i) {
-                if b <= 0x7f {
-                    let inner = RStringInner::from_encoding(&[b], Encoding::UsAscii);
-                    return Ok(Value::string_from_inner(inner));
-                }
-                return Ok(Value::bytes_from_slice(&[b]));
-            }
-            Err(MonorubyErr::char_out_of_range(
-                &globals.store,
-                Value::integer(i),
-            ))
-        }
-    }
-}
-
-/// Validate whether a codepoint is valid for a mock (non-UTF-8/ASCII/Binary) encoding.
-fn chr_valid_mock_codepoint(normalized_enc: &str, cp: u64) -> bool {
-    match normalized_enc {
-        "SHIFT_JIS" | "SJIS" | "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "MACJAPANESE"
-        | "MACJAPAN" => {
-            if cp <= 0x7F {
-                return true;
-            }
-            // Single-byte kana: 0xA1-0xDF
-            if (0xA1..=0xDF).contains(&cp) {
-                return true;
-            }
-            // Double-byte: high byte 0x81-0x9F or 0xE0-0xFC, low byte 0x40-0x7E or 0x80-0xFC
-            if cp > 0xFF && cp <= 0xFFFF {
-                let hi = (cp >> 8) as u8;
-                let lo = (cp & 0xFF) as u8;
-                let hi_ok = (0x81..=0x9F).contains(&hi) || (0xE0..=0xFC).contains(&hi);
-                let lo_ok = (0x40..=0x7E).contains(&lo) || (0x80..=0xFC).contains(&lo);
-                return hi_ok && lo_ok;
-            }
-            false
-        }
-        "EUC_JP" | "EUCJP" | "EUCJP_MS" | "EUCJP_WIN" | "CP51932" => {
-            if cp <= 0x7F {
-                return true;
-            }
-            // EUC-JP double-byte: both bytes in 0xA1-0xFE
-            if cp > 0xFF && cp <= 0xFFFF {
-                let hi = (cp >> 8) as u8;
-                let lo = (cp & 0xFF) as u8;
-                return (0xA1..=0xFE).contains(&hi) && (0xA1..=0xFE).contains(&lo);
-            }
-            false
-        }
-        _ => {
-            // Other mock encodings: only single-byte (0-255)
-            cp <= 0xFF
-        }
-    }
-}
-
-/// Set the encoding label on a string value by finding the Encoding constant.
-fn chr_set_encoding_label(globals: &mut Globals, val: Value, enc_name: &str) {
-    let enc_class_id = globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING)
-        .map(|v| v.as_class_id());
-    if let Some(class_id) = enc_class_id {
-        let const_name = enc_name.replace('-', "_");
-        if let Some(enc_obj) = globals
-            .store
-            .get_constant_noautoload(class_id, IdentId::get_id(&const_name))
-        {
-            let override_id = IdentId::_ENCODING_OVERRIDE;
-            globals.store.set_ivar(val, override_id, enc_obj).ok();
-        }
-    }
+        CodepointErr::OutOfRange => MonorubyErr::char_out_of_range(&globals.store, self_),
+    })?;
+    Ok(Value::string_from_inner(RStringInner::from_encoding(&bytes, enc)))
 }
 
 ///
@@ -1921,6 +1727,41 @@ mod tests {
                 [n, s.encoding.name, s.bytes, (s.encode("UTF-8").ord rescue $!.class.name)]
               end
             "#,
+        );
+    }
+
+    #[test]
+    fn chr_encodes_a_code_point_as_rb_enc_uint_chr_does() {
+        // The Unicode encodings encode a scalar (UTF-16 / UTF-32 units,
+        // CESU-8's surrogate pair, UTF8-MAC's UTF-8 bytes); every other
+        // encoding spells the code point's own bytes and accepts them
+        // only when its walker reads them back as one character, so
+        // the refusal is "invalid codepoint" — "out of char range" is
+        // for a value wider than anything the encoding encodes, and
+        // for a value past a byte when no encoding was named.
+        run_test_once(
+            r##"
+            x = ->(&b) { begin; v = b.call; v.is_a?(String) ? [v.bytes, v.encoding.to_s, v.valid_encoding?] : v; rescue => err; [err.class, err.message]; end }
+            r = []
+            [["EUC-JP", [0x41, 0xA4A2, 0x8EB1, 0x8FA2AF, 0x80, 0xA4, 0x8E, 0x3042, 0xFF, 0x1000000, 0xFFFFFFFF]],
+             ["Shift_JIS", [0x82A0, 0xB1, 0x80, 0xA0, 0x3042, 0x10000]], ["Windows-31J", [0x8740, 0x87]], ["MacJapanese", [0x82A0]],
+             ["EUC-KR", [0xC7D1, 0xC7, 0x3042, 0x10000]], ["CP949", [0x8C63]], ["Big5", [0xA4A4, 0xA4]], ["Big5-HKSCS", [0xA4A4]], ["GBK", [0x8140, 0x3042]],
+             ["GB18030", [0x81308130, 0xB0A1, 0x81, 0x8130, 0x3042, 0xFFFFFFFF]], ["EUC-TW", [0x8EA2A1A1, 0xC4A1, 0x8E, 0xFFFFFFFF]],
+             ["stateless-ISO-2022-JP", [0x92A4A2, 0xA4A2]], ["Emacs-Mule", [0x41, 0x92A4A2, 0x9CF0A1A1, 0x92]],
+             ["UTF-8", [0x41, 0xE9, 0x3042, 0x1F600, 0xD800, 0xDFFF, 0x10FFFF, 0x110000, 0xFFFFFFFE, 0xFFFFFFFF]],
+             ["UTF8-MAC", [0x3042, 0xC3A9, 0xD800]], ["CESU-8", [0xC6, 0x3042, 0x1F600, 0xD800, 0x110000]],
+             ["UTF-16LE", [0x41, 0x3042, 0x10000, 0xD800, 0x110000, 0xFFFFFFFF]], ["UTF-16BE", [0x41, 0x3042, 0x10000]],
+             ["UTF-32BE", [0x41, 0x3042, 0xD800, 0x110000, 0x80000000, 0xFFFFFFFF]], ["UTF-32LE", [0x3042]],
+             ["UTF-16", [0x41, 0xFF, 0x100]], ["ISO-2022-JP", [0x41, 0x80, 0x100, 0x3042]], ["UTF-7", [0x41, 0x100]],
+             ["US-ASCII", [0x41, 0x80, 0x100]], ["BINARY", [0x80, 0x100]], ["ISO-8859-1", [0xE9, 0x100]], ["Windows-1252", [0x80, 0x100]], ["KOI8-R", [0xC1, 0x100]]].each do |enc, codes|
+              codes.each { |c| r << [enc, c, x.() { c.chr(enc) }] }
+            end
+            r << x.() { 0x3042.chr(Encoding::EUC_JP) } << x.() { 65.chr(Encoding::EUC_JP) } << x.() { 65.chr("NOPE") } << x.() { 65.chr("UTF-8\0") } << x.() { 65.chr(1) }
+            r << x.() { 65.chr } << x.() { 0x80.chr } << x.() { 0xFF.chr } << x.() { 0x100.chr } << x.() { -1.chr } << x.() { (2**64).chr } << x.() { (2**32).chr } << x.() { (2**32).chr("UTF-8") }
+            r << x.() { Encoding.default_internal = "EUC-JP"; v = 0xA4A2.chr; Encoding.default_internal = nil; v } << x.() { Encoding.default_internal = "EUC-JP"; v = (0x3042.chr rescue [$!.class, $!.message]); Encoding.default_internal = nil; v }
+            r << x.() { Encoding.default_internal = "UTF-8"; v = 0x3042.chr; Encoding.default_internal = nil; v } << x.() { Encoding.default_internal = "UTF-8"; v = 0x80.chr; Encoding.default_internal = nil; v }
+            r
+            "##,
         );
     }
 

@@ -38,10 +38,11 @@ pub(crate) use string::pack::*;
 pub use string::{
     CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET,
     STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, STRING_TY_PAYLOAD_OFFSET,
-    STRING_TY_PAYLOAD_TAG, char_bytes_code, map_bytes_to_utf8,
+    STRING_TY_PAYLOAD_TAG, map_bytes_to_utf8,
 };
 pub(crate) use string::{
-    MbcPiece, PreciseLen, char_count, char_width_at, euc_jp_const_name, eucjp_char_width,
+    MbcPiece, PreciseLen, CodepointErr, char_count, char_width_at, euc_jp_const_name, eucjp_char_width,
+    enc_mbcput, precise_mbclen,
     unicode_unit_at, unicode_unit_codepoint, unicode_unit_encode, unicode_unit_precise_len,
     sjis_const_name, CESU_8, UTF8_MAC, cesu8_precise_len, cesu8_to_utf8, mac_clusters,
     mac_to_utf8, SJIS_DOCOMO, SJIS_KDDI, SJIS_SOFTBANK, UTF8_DOCOMO, UTF8_KDDI,

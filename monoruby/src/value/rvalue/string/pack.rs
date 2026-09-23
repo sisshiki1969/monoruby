@@ -1180,7 +1180,8 @@ pub(crate) fn pack(
                     if i < 0 {
                         return Err(MonorubyErr::rangeerr("pack(U): value out of range"));
                     }
-                    if i > u32::MAX as i64 {
+                    // The six-byte form tops out at `0x7FFFFFFF`.
+                    if i > 0x7FFF_FFFF {
                         return Err(MonorubyErr::rangeerr("pack(U): value out of range"));
                     }
                     utf8_encode_one(&mut packed, i as u32);
@@ -2196,42 +2197,51 @@ fn utf8_encode_one(buf: &mut StringBuf, cp: u32) {
     }
 }
 
+/// CRuby's `utf8_to_uv`: one character of the original (pre-2003)
+/// UTF-8, up to six bytes and `0x7FFFFFFF`, surrogates included. A
+/// lead byte with fewer bytes after it than it announces says how many
+/// it wanted; a continuation byte that is none, or a byte that leads
+/// nothing, is plainly malformed; and a sequence longer than its value
+/// needs is redundant.
 fn utf8_decode_one(b: &mut ByteIter) -> Result<u32> {
-    let first = b
-        .next()
-        .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
+    let malformed = || MonorubyErr::argumenterr("malformed UTF-8 character");
+    let given = b.remaining().len();
+    let first = b.next().ok_or_else(malformed)?;
     if first & 0x80 == 0 {
-        Ok(first as u32)
-    } else if first & 0xE0 == 0xC0 {
-        let b1 = b
-            .next()
-            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
-        Ok(((first as u32 & 0x1F) << 6) | (b1 as u32 & 0x3F))
-    } else if first & 0xF0 == 0xE0 {
-        let b1 = b
-            .next()
-            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
-        let b2 = b
-            .next()
-            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
-        Ok(((first as u32 & 0x0F) << 12) | ((b1 as u32 & 0x3F) << 6) | (b2 as u32 & 0x3F))
-    } else if first & 0xF8 == 0xF0 {
-        let b1 = b
-            .next()
-            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
-        let b2 = b
-            .next()
-            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
-        let b3 = b
-            .next()
-            .ok_or_else(|| MonorubyErr::argumenterr("malformed UTF-8 character"))?;
-        Ok(((first as u32 & 0x07) << 18)
-            | ((b1 as u32 & 0x3F) << 12)
-            | ((b2 as u32 & 0x3F) << 6)
-            | (b3 as u32 & 0x3F))
-    } else {
-        Err(MonorubyErr::argumenterr("malformed UTF-8 character"))
+        return Ok(first as u32);
     }
+    let (n, mut uv) = if first & 0x40 == 0 {
+        return Err(malformed());
+    } else if first & 0x20 == 0 {
+        (2, first as u32 & 0x1F)
+    } else if first & 0x10 == 0 {
+        (3, first as u32 & 0x0F)
+    } else if first & 0x08 == 0 {
+        (4, first as u32 & 0x07)
+    } else if first & 0x04 == 0 {
+        (5, first as u32 & 0x03)
+    } else if first & 0x02 == 0 {
+        (6, first as u32 & 0x01)
+    } else {
+        return Err(malformed());
+    };
+    if n > given {
+        return Err(MonorubyErr::argumenterr(format!(
+            "malformed UTF-8 character (expected {n} bytes, given {given} bytes)"
+        )));
+    }
+    for _ in 1..n {
+        let c = b.next().ok_or_else(malformed)?;
+        if c & 0xC0 != 0x80 {
+            return Err(malformed());
+        }
+        uv = (uv << 6) | (c as u32 & 0x3F);
+    }
+    const LIMITS: [u32; 7] = [0, 0x80, 0x800, 0x10000, 0x200000, 0x4000000, 0x80000000];
+    if uv < LIMITS[n - 1] {
+        return Err(MonorubyErr::argumenterr("redundant UTF-8 sequence"));
+    }
+    Ok(uv)
 }
 
 fn ber_decode(b: &mut ByteIter) -> Result<Value> {

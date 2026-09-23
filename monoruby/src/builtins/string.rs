@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 
 use super::*;
 use crate::codegen::jitgen::deopt_log::DeoptCause;
-use crate::value::rvalue::{MbcPiece, char_width_at, mbc_walker, walk_mbc};
+use crate::value::rvalue::{CodepointErr, MbcPiece, char_width_at, mbc_walker, walk_mbc};
 #[cfg(target_arch = "x86_64")]
 use jitgen::JitContext;
 #[cfg(target_arch = "aarch64")]
@@ -868,23 +868,17 @@ fn shl_inner(
                 }
             }
             self_.extend_from_slice_checked(&[ch as u8])?;
-        } else if matches!(enc, Encoding::Utf8(_)) {
-            // Every `UTF8_VARIANTS` member stores UTF-8 bytes, and a
-            // `<<` appends the codepoint as it stands — CRuby does not
-            // decompose here, so `UTF8-MAC` takes this path too.
-            let c = char::from_u32(ch)
-                .ok_or_else(|| MonorubyErr::char_out_of_range(&globals.store, other_v))?;
-            let mut buf = [0u8; 4];
-            let encoded = c.encode_utf8(&mut buf);
-            self_.extend_from_slice_checked(encoded.as_bytes())?;
         } else {
+            // Every other encoding appends the character the codepoint
+            // names in it — as it stands: CRuby does not decompose
+            // here, so `UTF8-MAC` takes the UTF-8 bytes too.
             let bytes = codepoint_bytes(enc, ch).map_err(|e| match e {
                 CodepointErr::Invalid => {
                     MonorubyErr::rangeerr(format!("invalid codepoint 0x{ch:X} in {}", enc.name()))
                 }
                 CodepointErr::OutOfRange => MonorubyErr::char_out_of_range(&globals.store, other_v),
             })?;
-            self_.extend_from_slice_checked(&bytes)?;
+            self_.push_char_bytes(&bytes);
         }
     } else {
         // Try to_str coercion. `#to_str` runs Ruby code: the JIT inliner
@@ -899,125 +893,12 @@ fn shl_inner(
     Ok(self_.into())
 }
 
-/// Why an encoding has no byte sequence for a codepoint. CRuby draws
-/// the same distinction in `rb_enc_uint_chr`: onigmo answers either
-/// "not a code point of this encoding" or "wider than anything this
-/// encoding encodes", and the two get different messages.
-enum CodepointErr {
-    /// The encoding has sequences, just not this one —
-    /// `"invalid codepoint 0x%X in %s"`.
-    Invalid,
-    /// Past the widest sequence the encoding has at all —
-    /// `"%u out of char range"`.
-    OutOfRange,
-}
-
 /// The byte sequence a codepoint has in `enc` — CRuby's
 /// `rb_enc_codelen` + `rb_enc_mbcput`, which is what makes
 /// `"".encode(Encoding::EUC_JP) << 0x81` a `RangeError` rather than a
-/// stray lead byte.
-///
-/// UTF-8 and the two ASCII encodings are handled by their caller; the
-/// rest divide into the fixed-width Unicode forms, the two Japanese
-/// multibyte encodings monoruby decodes natively, and the byte-oriented
-/// remainder (ISO-8859-N and the name-preserved encodings with no
-/// codec), where a codepoint is simply a byte. That last group is where
-/// monoruby and CRuby can still disagree: onigmo knows Big5 and GBK are
-/// multibyte and calls `0x100` an invalid codepoint, while monoruby,
-/// having no codec for them, reports it as out of char range.
+/// stray lead byte. See [`enc_mbcput`] for the rules.
 fn codepoint_bytes(enc: Encoding, cp: u32) -> std::result::Result<Vec<u8>, CodepointErr> {
-    let surrogate = (0xD800..=0xDFFF).contains(&cp);
-    match enc {
-        Encoding::Utf8(_) | Encoding::UsAscii | Encoding::Ascii8 => unreachable!(),
-        Encoding::Utf16Le | Encoding::Utf16Be => {
-            let big = enc == Encoding::Utf16Be;
-            let units: Vec<u16> = if cp <= 0xFFFF && !surrogate {
-                vec![cp as u16]
-            } else if (0x10000..=0x10FFFF).contains(&cp) {
-                let c = cp - 0x10000;
-                vec![(0xD800 + (c >> 10)) as u16, (0xDC00 + (c & 0x3FF)) as u16]
-            } else {
-                // Every refusal here is a codepoint Unicode itself does
-                // not have, which onigmo reports as invalid rather than
-                // as too wide.
-                return Err(CodepointErr::Invalid);
-            };
-            Ok(units
-                .into_iter()
-                .flat_map(|u| {
-                    if big {
-                        u.to_be_bytes()
-                    } else {
-                        u.to_le_bytes()
-                    }
-                })
-                .collect())
-        }
-        Encoding::Utf32Le | Encoding::Utf32Be => {
-            if cp > 0x10FFFF || surrogate {
-                return Err(CodepointErr::Invalid);
-            }
-            Ok(if enc == Encoding::Utf32Be {
-                cp.to_be_bytes().to_vec()
-            } else {
-                cp.to_le_bytes().to_vec()
-            })
-        }
-        // EUC-JP: single-byte ASCII, the 0x8E half-width-kana pair, the
-        // two-byte JIS X 0208 plane, and the three-byte 0x8F plane.
-        Encoding::EucJp(_) => {
-            if cp > 0xFF_FFFF {
-                return Err(CodepointErr::OutOfRange);
-            }
-            let ok = if cp <= 0x7F {
-                true
-            } else if cp <= 0xFFFF {
-                let (hi, lo) = ((cp >> 8) as u8, cp as u8);
-                (hi == 0x8E && (0xA1..=0xDF).contains(&lo))
-                    || ((0xA1..=0xFE).contains(&hi) && (0xA1..=0xFE).contains(&lo))
-            } else {
-                let (b0, b1, b2) = ((cp >> 16) as u8, (cp >> 8) as u8, cp as u8);
-                b0 == 0x8F && (0xA1..=0xFE).contains(&b1) && (0xA1..=0xFE).contains(&b2)
-            };
-            ok.then(|| big_endian_bytes(cp))
-                .ok_or(CodepointErr::Invalid)
-        }
-        // Shift_JIS: single-byte ASCII and half-width kana, plus the
-        // two-byte lead/trail pairs.
-        Encoding::Sjis(_) => {
-            if cp > 0xFFFF {
-                return Err(CodepointErr::OutOfRange);
-            }
-            let ok = if cp <= 0x7F || (0xA1..=0xDF).contains(&cp) {
-                true
-            } else if cp >= 0x100 {
-                let (hi, lo) = ((cp >> 8) as u8, cp as u8);
-                ((0x81..=0x9F).contains(&hi) || (0xE0..=0xFC).contains(&hi))
-                    && ((0x40..=0x7E).contains(&lo) || (0x80..=0xFC).contains(&lo))
-            } else {
-                false
-            };
-            ok.then(|| big_endian_bytes(cp))
-                .ok_or(CodepointErr::Invalid)
-        }
-        _ => (cp <= 0xFF)
-            .then(|| vec![cp as u8])
-            .ok_or(CodepointErr::OutOfRange),
-    }
-}
-
-/// The minimal big-endian byte form of a multibyte codepoint — for the
-/// encodings whose "codepoint" *is* its byte sequence. Both callers have
-/// already refused anything past three bytes (EUC-JP's `0x8F` plane is
-/// the widest sequence either names).
-fn big_endian_bytes(cp: u32) -> Vec<u8> {
-    if cp <= 0xFF {
-        vec![cp as u8]
-    } else if cp <= 0xFFFF {
-        vec![(cp >> 8) as u8, cp as u8]
-    } else {
-        vec![(cp >> 16) as u8, (cp >> 8) as u8, cp as u8]
-    }
+    crate::value::enc_mbcput(enc, cp)
 }
 
 /// `String#<<` for the JIT inliner: the builtin's full semantics behind a
@@ -2227,38 +2108,7 @@ enum Neighbor {
 /// itself: the three with a `mbc_walker`, UTF-8, and the single-byte
 /// encodings where every byte is its own character.
 fn succ_precise_len(bytes: &[u8], pos: usize, enc: crate::value::Encoding) -> PreciseLen {
-    if let Some((_, precise)) = crate::value::mbc_walker(enc) {
-        return precise(bytes, pos);
-    }
-    if enc.unit_width() > 1 {
-        return crate::value::rvalue::unicode_unit_precise_len(bytes, pos, enc);
-    }
-    if !matches!(enc, crate::value::Encoding::Utf8(_)) {
-        if pos >= bytes.len() {
-            return PreciseLen::NeedMore;
-        }
-        // US-ASCII has no character above 0x7F, which is why `"\x7F"`
-        // carries rather than stepping into `0x80`.
-        if enc == crate::value::Encoding::UsAscii && bytes[pos] >= 0x80 {
-            return PreciseLen::Invalid;
-        }
-        return PreciseLen::Char(1);
-    }
-    let rest = &bytes[pos..];
-    match std::str::from_utf8(rest) {
-        Ok(s) => match s.chars().next() {
-            Some(c) => PreciseLen::Char(c.len_utf8()),
-            None => PreciseLen::NeedMore,
-        },
-        Err(e) if e.valid_up_to() > 0 => {
-            // SAFETY: `valid_up_to` bounds a valid UTF-8 prefix.
-            let head = unsafe { std::str::from_utf8_unchecked(&rest[..e.valid_up_to()]) };
-            PreciseLen::Char(head.chars().next().unwrap().len_utf8())
-        }
-        // A truncated tail is "need more"; anything else is invalid here.
-        Err(e) if e.error_len().is_none() => PreciseLen::NeedMore,
-        Err(_) => PreciseLen::Invalid,
-    }
+    crate::value::precise_mbclen(enc, bytes, pos)
 }
 
 /// The smallest byte sequence of exactly `len` bytes that is a
@@ -7845,40 +7695,29 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         str_bytes
     };
 
-    // Check character boundary for UTF-8 strings
+    // `str_check_byte_pos`: both ends of the receiver's span, and of
+    // the source's when one was given, have to be character boundaries
+    // in their own encoding — whatever that encoding is, not only
+    // UTF-8 (`"あ".encode("EUC-JP").bytesplice(1, 1, "Z")` is the same
+    // IndexError as in UTF-8).
+    let boundary_err = |pos: usize| {
+        MonorubyErr::indexerr(format!("offset {pos} does not land on character boundary"))
+    };
     let self_enc = self_.as_rstring_inner().encoding();
-    if self_enc.is_utf8_compatible() {
-        let self_bytes = self_.as_rstring_inner().as_bytes();
-        if !is_char_boundary(self_bytes, start) {
-            return Err(MonorubyErr::indexerr(format!(
-                "offset {} does not land on character boundary",
-                start
-            )));
-        }
-        let end = start + splice_len;
-        if !is_char_boundary(self_bytes, end) {
-            return Err(MonorubyErr::indexerr(format!(
-                "offset {} does not land on character boundary",
-                end
-            )));
+    let str_enc = str_inner.encoding();
+    {
+        let inner = self_.as_rstring_inner();
+        for pos in [start, start + splice_len] {
+            if !is_byte_pos_boundary(&inner, pos) {
+                return Err(boundary_err(pos));
+            }
         }
     }
-
-    // Check character boundary for UTF-8 source string
-    let str_enc = str_inner.encoding();
-    if str_enc.is_utf8_compatible() && has_src_range {
-        let (rep_start, rep_end) = src_span;
-        if !is_char_boundary(str_bytes, rep_start) {
-            return Err(MonorubyErr::indexerr(format!(
-                "offset {} does not land on character boundary",
-                rep_start
-            )));
-        }
-        if !is_char_boundary(str_bytes, rep_end) {
-            return Err(MonorubyErr::indexerr(format!(
-                "offset {} does not land on character boundary",
-                rep_end
-            )));
+    if has_src_range {
+        for pos in [src_span.0, src_span.1] {
+            if !is_byte_pos_boundary(&str_inner, pos) {
+                return Err(boundary_err(pos));
+            }
         }
     }
 
@@ -7937,12 +7776,32 @@ fn conv_byte_index_for_splice(idx: i64, byte_len: usize) -> Result<usize> {
 
 /// Check if the given byte offset is on a UTF-8 character boundary.
 /// Returns true for offset == bytes.len() (end of string).
-fn is_char_boundary(bytes: &[u8], offset: usize) -> bool {
-    if offset == 0 || offset >= bytes.len() {
+/// CRuby's `str_check_byte_pos`: whether byte `pos` is where a
+/// character of `inner`'s encoding starts, or the end of the string —
+/// the offsets `rb_enc_left_char_head` hands back unchanged. UTF-8
+/// asks whether the byte is a continuation byte; UTF-16 / UTF-32 ask
+/// for unit alignment (and, in UTF-16, that the unit is not the second
+/// half of a surrogate pair); the multibyte CJK sets walk from the
+/// start; every single-byte encoding is all boundaries.
+fn is_byte_pos_boundary(inner: &RStringInner, pos: usize) -> bool {
+    let bytes = inner.as_bytes();
+    if pos == 0 || pos >= bytes.len() {
         return true;
     }
-    // A byte is a char boundary if it's not a UTF-8 continuation byte (0x80..0xBF)
-    !matches!(bytes[offset], 0x80..=0xBF)
+    let enc = inner.encoding();
+    if matches!(enc, Encoding::Utf8(_)) {
+        return !matches!(bytes[pos], 0x80..=0xBF);
+    }
+    match enc.unit_width() {
+        2 => {
+            pos % 2 == 0
+                && !crate::value::rvalue::unicode_unit_at(bytes, pos, enc)
+                    .is_some_and(|u| (0xDC00..0xE000).contains(&u))
+        }
+        4 => pos % 4 == 0,
+        _ if mbc_walker(enc).is_some() => is_enc_char_boundary(inner, pos),
+        _ => true,
+    }
 }
 
 ///
@@ -11932,34 +11791,42 @@ fn each_char(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     }
 }
 
-/// The code point of each character of `inner`, in order: the Unicode
-/// scalar for a UTF-8 compatible encoding, the leading byte otherwise
-/// (as `String#ord`).
+/// The code point of each character of `inner`, in order (as
+/// `String#ord` reads them: a Unicode scalar for the Unicode encodings,
+/// the character's big-endian byte image for the other multibyte ones,
+/// the byte for a single-byte encoding).
 fn codepoint_values(inner: &RStringInner) -> Result<Vec<Value>> {
-    // `single_byte_optimizable`: US-ASCII and BINARY are their bytes,
-    // broken or not.
-    if matches!(inner.encoding(), Encoding::UsAscii | Encoding::Ascii8) {
-        return Ok(inner.as_bytes().iter().map(|b| Value::integer(*b as i64)).collect());
+    let enc = inner.encoding();
+    let bytes = inner.as_bytes();
+    // `single_byte_optimizable`: a 7-bit receiver, or one whose
+    // encoding has no character wider than a byte, is its bytes —
+    // broken or not (`"a\x80"` tagged US-ASCII enumerates 97 and 128).
+    if inner.is_ascii_only() || !multibyte_encoding(enc) {
+        return Ok(bytes.iter().map(|b| Value::integer(*b as i64)).collect());
     }
-    if inner.encoding().is_utf8_compatible() {
-        Ok(inner
+    if enc.is_utf8_compatible() {
+        return Ok(inner
             .check_utf8()?
             .chars()
             .map(|c| Value::integer(c as u32 as i64))
-            .collect())
-    } else {
-        let enc = inner.encoding();
-        // `rb_enc_codepoint_len` refuses a sequence that is no
-        // character wherever characters can be more than one byte;
-        // the single-byte encodings never meet one.
-        if multibyte_encoding(enc) {
-            mustnot_broken(inner)?;
-        }
-        Ok(inner
-            .iter_char_bytes()
-            .map(|s| Value::integer(crate::value::rvalue::char_bytes_code(enc, s) as i64))
-            .collect())
+            .collect());
     }
+    // `rb_enc_codepoint_len` refuses a sequence that is no character.
+    let mut codes = Vec::new();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        match inner.codepoint_at(pos) {
+            Some(cp) => {
+                codes.push(Value::integer(cp as i64));
+                pos += match crate::value::precise_mbclen(enc, bytes, pos) {
+                    PreciseLen::Char(n) => n,
+                    _ => unreachable!(),
+                };
+            }
+            None => return Err(mustnot_broken(inner).unwrap_err()),
+        }
+    }
+    Ok(codes)
 }
 
 ///
@@ -12897,6 +12764,101 @@ mod tests {
             } + [x.() { "12\xFF3".to_i }, x.() { "12\xFF3".to_r }, x.() { "a\xFF".encode("UTF-7") }, x.() { "a\0b".crypt("ab") },
                  x.() { "e\u0301".encode("UTF-16LE").unicode_normalize(:nfc).bytes }, x.() { "\u00e9".encode("UTF-32BE").unicode_normalize(:nfd).bytes },
                  x.() { "e\u0301".encode("UTF-16LE").unicode_normalized? }, x.() { s = "e\u0301".encode("UTF-16LE"); s.unicode_normalize!(:nfc); s.bytes }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_code_point_is_the_character_s_byte_image_outside_unicode() {
+        // `rb_enc_mbc_to_codepoint`: the Unicode encodings decode a
+        // scalar, every other multibyte encoding reads the character's
+        // bytes big-endian (`あ` in EUC-JP is 0xA4A2, a four-byte
+        // GB18030 character is past 2**31), a single-byte one is its
+        // byte, and a sequence that is no character raises. `ord` used
+        // to answer the lead byte of every non-Unicode character.
+        run_test_once(
+            r##"
+            def e(s, enc) = s.dup.force_encoding(enc)
+            x = ->(&b) { begin; b.call; rescue => err; [err.class, err.message]; end }
+            ss = [e("\xA4\xA2\x8E\xB1\x8F\xA2\xAFab", "EUC-JP"), e("\x82\xA0\xB1a", "Shift_JIS"), e("\x87\x40", "Windows-31J"),
+                  e("\xC7\xD1\xB1\xB9a", "EUC-KR"), e("\x8C\x63", "CP949"), e("\xA4\xA4", "Big5"), e("\x81\x40", "GBK"),
+                  e("\x81\x30\x81\x30\xB0\xA1", "GB18030"), e("\x8E\xA2\xA1\xA1\xC4\xA1", "EUC-TW"),
+                  e("\x92\xA4\xA2", "stateless-ISO-2022-JP"), e("\x92\xA4\xA2\x9C\xF0\xA1\xA1", "Emacs-Mule"),
+                  e("\xED\xA0\xBD\xED\xB8\x80\xE3\x81\x82a", "CESU-8"), e("\xE3\x81\x82", "UTF8-MAC"),
+                  "あ\u{1F600}".encode("UTF-16BE"), "あ".encode("UTF-32LE"),
+                  e("\x30\x42", "UTF-16"), e("\e$B$\"", "ISO-2022-JP"), e("+MEI-", "UTF-7"), e("a\x80", "US-ASCII"), e("\xE9", "ISO-8859-1"), "\xFF".b,
+                  e("\xA4", "EUC-JP"), e("\xFF\xFF\xFF\xFF", "EUC-TW"), e("\x81\x30", "GB18030"), e("\xFF", "UTF-8"), e("\x00\xD8", "UTF-16LE"), e("\x80", "US-ASCII")]
+            ss.map { |s| [x.() { s.ord }, x.() { s.codepoints }, x.() { a = []; s.each_codepoint { |c| a << c }; a }, x.() { s.codepoints.pack("U*").bytes }] } +
+              [x.() { "".ord }, x.() { e("", "EUC-JP").ord }, x.() { "a\xFF".ord }, x.() { e("a\xFF", "EUC-JP").codepoints }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn an_integer_appends_as_the_character_it_names_in_the_receiver_s_encoding() {
+        // `rb_str_concat` with an Integer: the code point's own bytes,
+        // checked by the encoding's walker (`0x3042` is two ASCII
+        // characters in EUC-JP, so it is an invalid code point there),
+        // "out of char range" only past the widest sequence the
+        // encoding has, and the code range kept as CRuby keeps it.
+        run_test_once(
+            r##"
+            def e(s, enc) = s.dup.force_encoding(enc)
+            x = ->(&b) { begin; v = b.call; v.is_a?(String) ? [v.bytes, v.encoding.to_s, v.valid_encoding?, v.ascii_only?] : v; rescue => err; [err.class, err.message]; end }
+            r = []
+            [["EUC-JP", [0x41, 0xA4A2, 0x8EB1, 0x8FA2AF, 0x80, 0xA4, 0x3042, 0xFF, 0x1000000, 0xFFFFFFFF]],
+             ["Shift_JIS", [0x82A0, 0xB1, 0x80, 0x3042, 0x10000]], ["EUC-KR", [0xC7D1, 0xFF, 0x3042, 0x10000]],
+             ["GB18030", [0x81308130, 0xB0A1, 0xFF, 0xFFFFFFFF]], ["EUC-TW", [0x8EA2A1A1, 0xC4A1, 0xFFFFFFFF]],
+             ["UTF-8", [0x3042, 0xD800, 0x110000, 0xFFFFFFFE, 0xFFFFFFFF]], ["UTF8-MAC", [0x3042]], ["CESU-8", [0x3042, 0x1F600, 0xD800]],
+             ["UTF-16LE", [0x3042, 0x10000, 0xD800, 0x110000, 0xFFFFFFFF]], ["UTF-32BE", [0x3042, 0xD800, 0x110000, 0x80000000]],
+             ["ISO-2022-JP", [0x41, 0x80, 0x100]], ["UTF-7", [0x41, 0x100]], ["ISO-8859-1", [0xE9, 0x100]], ["KOI8-R", [0xC1, 0x100]],
+             ["US-ASCII", [0x41, 0x80, 0x100]], ["BINARY", [0x80, 0x100]]].each do |enc, codes|
+              codes.each { |c| r << [enc, c, x.() { s = e("ab", enc); s << c }, x.() { s = e("ab", enc); s.concat(c) }] }
+            end
+            r << x.() { s = e("\xA4", "EUC-JP"); s << 0xA4A2 } << x.() { s = e("\xA4", "EUC-JP"); s << 0xA2 } << x.() { s = "\xFF".dup; s << 0x3042 }
+            r << x.() { s = e("a\x80", "US-ASCII"); s << 0x41 } << x.() { "" << -1 } << x.() { "" << (2**64) } << x.() { "a".freeze << 0x41 }
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn bytesplice_refuses_an_offset_inside_a_character_of_any_encoding() {
+        // `str_check_byte_pos` on both ends of the receiver's span and
+        // of the source's, in whatever encoding each has: the check
+        // used to run for UTF-8 only.
+        run_test_once(
+            r##"
+            x = ->(&b) { begin; v = b.call; v.is_a?(String) ? [v.bytes, v.encoding.to_s] : v; rescue => err; [err.class, err.message]; end }
+            euc = "あいう".encode("EUC-JP"); sj = "あいう".encode("Shift_JIS"); u16 = "あい\u{1F600}".encode("UTF-16LE"); gb = "丂".encode("GB18030")
+            [x.() { s = euc.dup; s.bytesplice(1, 1, "Z") }, x.() { s = euc.dup; s.bytesplice(1, 0, "Z") }, x.() { s = euc.dup; s.bytesplice(0, 1, "Z") },
+             x.() { s = euc.dup; s.bytesplice(0, 2, "Z") }, x.() { s = euc.dup; s.bytesplice(1..2, "Z") }, x.() { s = euc.dup; s.bytesplice(2...4, "Z") },
+             x.() { s = euc.dup; s.bytesplice(0, 2, euc, 1, 2) }, x.() { s = euc.dup; s.bytesplice(0, 2, euc, 2, 2) }, x.() { s = euc.dup; s.bytesplice(0..1, euc, 1..2) },
+             x.() { s = euc.dup; s.bytesplice(0, 2, euc, 1, 0) }, x.() { s = euc.dup; s.bytesplice(-1, 1, "Z") }, x.() { s = euc.dup; s.bytesplice(6, 0, "Z") },
+             x.() { s = "\xA4\xA2\xA4".force_encoding("EUC-JP"); s.bytesplice(1, 1, "Z") }, x.() { s = "\xA4\xA2\xA4".force_encoding("EUC-JP"); s.bytesplice(2, 1, "Z") },
+             x.() { s = sj.dup; s.bytesplice(1, 1, "Z") }, x.() { s = sj.dup; s.bytesplice(2, 2, "Z") },
+             x.() { s = u16.dup; s.bytesplice(1, 2, "Z".encode("UTF-16LE")) }, x.() { s = u16.dup; s.bytesplice(0, 2, "Z".encode("UTF-16LE")) },
+             x.() { s = u16.dup; s.bytesplice(6, 0, "Z".encode("UTF-16LE")) }, x.() { s = u16.dup; s.bytesplice(4, 4, "Z".encode("UTF-16LE")) },
+             x.() { s = gb.dup; s.bytesplice(2, 0, "Z") }, x.() { s = gb.dup; s.bytesplice(4, 0, "Z") },
+             x.() { s = "a\x80b".force_encoding("US-ASCII"); s.bytesplice(1, 1, "Z") }, x.() { s = "\xFF\xFE".b; s.bytesplice(1, 1, "Z") }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn unpack_u_reads_the_original_six_byte_utf8_and_says_what_is_wrong() {
+        // `utf8_to_uv`: five- and six-byte forms up to 0x7FFFFFFF and
+        // surrogates decode, a lead byte short of its bytes says how
+        // many it expected, an overlong form is redundant, and `pack`
+        // stops at the six-byte form's ceiling.
+        run_test_once(
+            r##"
+            x = ->(&b) { begin; b.call; rescue => err; [err.class, err.message]; end }
+            ["\xE3\x81", "\xE3", "\xE3\x81\x82", "\xC0\x80", "\xE0\x80\x80", "\xF8\x88\x80\x80\x80", "\xFC\x84\x80\x80\x80\x80", "\xFE", "\xFF", "\x80",
+             "\xED\xA0\x80", "\xF4\x90\x80\x80", "\xD6\xD0", "\xC3\x28", "a\xE3\x81\x82\xE3\x81", "\xFD\xBF\xBF\xBF\xBF\xBF", ""].map { |b|
+              [x.() { b.b.unpack("U*") }, x.() { b.b.unpack("U") }, x.() { b.b.unpack("U2") }, x.() { b.b.unpack("UU") }]
+            } + [x.() { "\xA4\xA2".force_encoding("EUC-JP").unpack("U*") }, x.() { "a".encode("UTF-16LE").unpack("U*") }, x.() { "\xE9".force_encoding("ISO-8859-1").unpack("U*") },
+                 x.() { [0x3042, 0xD800, 0x110000, 0x7FFFFFFF].pack("U*").bytes }, x.() { [0x80000000].pack("U") }, x.() { [-1].pack("U") }]
             "##,
         );
     }
