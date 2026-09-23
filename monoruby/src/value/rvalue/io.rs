@@ -53,6 +53,33 @@ fn stderr_buf() -> MutexGuard<'static, IoWriter<StdFd>> {
     STDERR_BUF.lock().unwrap()
 }
 
+/// The three standard streams' locks, held across a `fork(2)` — see
+/// [`crate::fork`]. Process-global (see the buffers above), so a fork on
+/// one OS thread can catch another thread inside a `write` or a `read`;
+/// the child would then block on its first `puts`, or at the latest on
+/// the flush its own exit performs. Held by the forking thread instead,
+/// each lock is owned in both processes by a thread that exists there.
+/// (A thread blocked in a `read(2)` on stdin holds that lock for the
+/// wait, so a fork elsewhere in the process waits with it; monoruby's
+/// own threads are green, on one OS thread, so this concerns only an
+/// embedder running several interpreters.)
+pub(crate) struct ForkLocks {
+    _stdin: MutexGuard<'static, IoReader<StdFd>>,
+    _stdout: MutexGuard<'static, IoWriter<StdFd>>,
+    _stderr: MutexGuard<'static, IoWriter<StdFd>>,
+}
+
+/// Take the standard streams' locks for a `fork(2)` — see [`ForkLocks`].
+/// A poisoned lock is taken anyway: whatever unwound left a buffer, not
+/// a half-updated one, and the child has already had its flush.
+pub(crate) fn prepare_fork() -> ForkLocks {
+    ForkLocks {
+        _stdin: STDIN_BUF.lock().unwrap_or_else(|e| e.into_inner()),
+        _stdout: STDOUT_BUF.lock().unwrap_or_else(|e| e.into_inner()),
+        _stderr: STDERR_BUF.lock().unwrap_or_else(|e| e.into_inner()),
+    }
+}
+
 /// Push the standard streams' buffers out to the kernel. Called at
 /// interpreter exit, where there is no longer anywhere to report a
 /// failure to.

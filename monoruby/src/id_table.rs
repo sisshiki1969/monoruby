@@ -8,6 +8,24 @@ use std::sync::{LazyLock, RwLock};
 static ID: LazyLock<RwLock<IdentifierTable>> =
     LazyLock::new(|| RwLock::new(IdentifierTable::new()));
 
+/// The table's lock, held across a `fork(2)` — see [`crate::fork`].
+///
+/// The table is one per process, shared by every OS thread that runs an
+/// interpreter (the test harness runs one per test thread over it). A
+/// fork that catches another thread mid-intern leaves the child a lock
+/// held by a thread it does not have, and the child blocks on its first
+/// `get_id` — which is `File.open` (`init_io_encodings`), or anything
+/// else. Taken by the forking thread before the fork, the lock is owned
+/// in both processes by a thread that exists there.
+pub(crate) struct ForkLock(std::sync::RwLockWriteGuard<'static, IdentifierTable>);
+
+/// Take the table's lock for a `fork(2)` — see [`ForkLock`]. A poisoned
+/// lock is taken anyway: the table is still consistent (interning never
+/// unwinds mid-update), and leaving the child wedged helps nobody.
+pub(crate) fn prepare_fork() -> ForkLock {
+    ForkLock(ID.write().unwrap_or_else(|e| e.into_inner()))
+}
+
 ///
 /// Identifier name: either a valid UTF-8 string or raw bytes (binary/ASCII-8BIT).
 ///

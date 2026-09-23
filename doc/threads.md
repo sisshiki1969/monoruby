@@ -477,6 +477,20 @@ poll(2) で readiness を待てるもの(ソケット等)はスケジューラ�
   誰も解放しないロックを受け継ぎ、最初の `lock()` で永久に止まる。
   `do_spawn` も同じ扱いにしてある(その子は exec するだけでこれらのロックを取らないが、
   「すべての fork(2) は pool を静止させてから」という不変条件を揃えておく)。
+- **同じ危険はプロセスグローバルなロック全部にある** —— 識別子テーブル
+  (`id_table::ID`)、正規表現のコンパイルキャッシュ(`REGEX_CACHE` / `NATIVE_CACHE`)、
+  標準ストリームのバッファ(`STDIN_BUF` / `STDOUT_BUF` / `STDERR_BUF`)。monoruby 自身の
+  スレッドは green なのでインタプリタスレッドが自分と競合することはないが、複数の
+  インタプリタを別 OS スレッドで走らせる embedder(テストハーネスはテストスレッドごとに
+  1 つ走らせる)では、fork の瞬間に別スレッドがどれかを握っていることがある。実際に
+  `forking_while_a_thread_keeps_offloading` の子が `File.open` → `IdentId::get_id` で
+  止まった(識別子テーブルの `RwLock` を別スレッドが握っていた)。`crate::fork::prepare`
+  がこれらすべてを pool のロックと一緒に、固定順で、フォークするスレッド上で取る
+  (どのパスもこれらを入れ子では取らないので、この順で他スレッドとデッドロックしない)。
+  親は guard を drop、子は `ForkGuards::reset_child` で pool とタイマの状態を捨てつつ
+  解放する。`Process._fork` / `Process.daemon` / `do_spawn` の 3 箇所の `fork(2)` は
+  すべてここを通る。`fork::tests` に、別 OS スレッドが intern し続ける中で 200 回 fork
+  する再現テストがある(修正前は最初の 10 秒で子が止まる)。
 - **完了パイプは子で作り直す**(`replace_pipe`)。`fork(2)` が複製するのは fd テーブルで
   あってパイプではないので、親子が同じバッファを読み書きすることになる。親の waiter が
   取るはずだった完了バイトを子の `drain` が飲んでしまうと、その waiter は結果が
