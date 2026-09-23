@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-5df1080f.js";
+            window.path_to_searchindex_js = "../../searchindex-a6ada1b0.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-8a4c8fb9.js"></script>
@@ -476,12 +476,26 @@ nil / true / false だけ）。<code>case/when</code> に regexp が来ると <c
 <code>scan</code>、<code>gsub</code> + ブロック、<code>gsub</code> + Hash。</li>
 <li><code>check_string_not_modified</code>: CRuby の <code>str_mod_check</code>（長さ基準、
 <code>RuntimeError: string modified</code>）。</li>
-<li><code>RStringInner::splice_all</code>: <code>gsub</code> / <code>scan</code> の全置換を<strong>前方一巡</strong>で適用し、
-N 回の末尾シフト <code>bytesplice_with</code> の <code>O(haystack · matches)</code> を
-<code>O(haystack + Σ replacements)</code> にする（回帰テスト
-<code>gsub_many_matches_linear</code>）。</li>
-<li><code>bytesplice_with</code>: 単一一致の <code>sub</code> 用。両側が SevenBit / Valid で splice
-端点が UTF-8 境界なら変更後の code range 分類を O(1) に短縮。</li>
+<li><code>EncBuf</code>（<code>rvalue/string.rs</code>）: CRuby の <code>rb_enc_cr_str_buf_cat</code> そのもの。
+<code>gsub</code> の結果（<code>str_gsub</code>）と置換テンプレートの展開（<code>rb_reg_regsub</code>）は
+この追記バッファに<strong>前方一巡</strong>で片（マッチまでの区間、置換）を追記して
+組み立て、結果のエンコーディングは片が来るたびに確定する — 7 bit の片は
+何も変えず、バッファが 7 bit しか持たないうちは非 ASCII の片がその
+エンコーディングを与え、非 ASCII 同士の別エンコーディングは
+<code>Encoding::CompatibilityError</code>（バッファ側を先に名指し）。UTF-16 / UTF-32
+の片は空のバッファだけが受け入れる（<code>"-".gsub(/-/, "a".encode("UTF-16LE"))</code>
+は UTF-16LE、<code>"-b".gsub(...)</code> は <code>b</code> の追記で拒否、#1634）。ブロック /
+Hash 形式はループ内で追記するので、受け入れられない片はそれを生んだ
+yield の直後に拒否される。N 回の末尾シフト <code>bytesplice_with</code> の
+<code>O(haystack · matches)</code> は <code>O(haystack + Σ replacements)</code>（回帰テスト
+<code>gsub_many_matches_linear</code>）。<code>splice_all</code> は集めた置換をこの上に流す
+ラッパ（Hash の plain 経路）。</li>
+<li><code>RStringInner::sub_splice</code>: 単一一致の <code>sub</code> 用（<code>rb_str_sub_bang</code>）。
+受信者と置換を <code>rb_enc_compatible</code> で一度に判定し、判定できなければ
+マッチの前後が 7 bit のときだけ置換のエンコーディングで生バイトを splice
+する（<code>"x-".sub(/-/, "a".encode("UTF-16LE"))</code> は UTF-16LE の 3 バイト）。</li>
+<li><code>bytesplice_with</code>: <code>[]=</code> などの単一 splice 用。両側が SevenBit / Valid で
+splice 端点が UTF-8 境界なら変更後の code range 分類を O(1) に短縮。</li>
 </ul>
 <h3 id="35-メソッドごとの注記"><a class="header" href="#35-メソッドごとの注記">3.5 メソッドごとの注記</a></h3>
 <div class="table-wrapper">
