@@ -951,6 +951,7 @@
 2f9cea09fc9016f79e2054e732f21dea	42	class C; def to_int; 42; end; end; o = C.new\nInteger(o)
 2fa57f909d61eb3427eb35f6895a4fda	[["Sub(Base#a)", "Sub(Base#b)", "Al2(Al1#name)", ["anon", "anon", "non-anon"]]]	class SupBase5\n          def a = "Base#a"\n          def b = "Base#b"\n  
 2fcfef9e5f8cfa4ff062ffa00a3ccf80	[{a: nil}, {a: 1, b: 2}]	__a = [];__a << (Hash[[[:a]]]);__a << (Hash[[[:a, 1], [:b, 2]]]);__a
+2fd130b9365f93d49138f3940096580b	[1, 2, 3, 4, true, ArgumentError, ArgumentError, 8, 8, 7, ArgumentError, 2, 5, ArgumentError, 1, 1, 2, 3, 1, 5, 9, 9]	def m(a); a; end\n        def m2(a, b = 5); a; end\n        def m3(a, b, 
 2fd3d590e98d46ce1385d3a7a4cfff37	[["IBM720", [233], [233], true], ["IBM720", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["Windows-874", [161], [161], true], ["Windows-874", [128], [128], true], ["Windows-874", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true], ["CP852", [164], [164], true], ["CP855", [165], [165], true], ["IBM852", "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError", true]]	[["IBM720", 0x644], ["IBM720", 0x4E00], ["Windows-874", 0xE01],\n   
 2fdb9050b1a5d03ad336a6fbc113e162	12	class CNDm\n          define_method(:initialize) { |a| @a = a * 3 }\n    
 2fdfd5e264a5506e71aa34bed897a435	[ArgumentError, ArgumentError, ArgumentError, TypeError, ArgumentError, "no", 3, TypeError]	class CNOne; def initialize(a); @a = a; end; end\n        class CNRaise\n
@@ -1602,6 +1603,7 @@
 5125ae5b4839d2d086156969d67bcc50	ArgumentError	class String; def <=>(o); :OVERRIDDEN; end; end\n            begin\n 
 5143e7ab8a07e482829072e37f18a04c	[[4, 8, 73, 47, 8, 102, 111, 111, 5, 6, 58, 6, 69, 70], ["foo", 5], "foo"]	__a = [];__a << (Marshal.dump(/foo/im).bytes);__a << (\n            r = Marshal.l
 514fa64cc2ca2813856a14f1731f5c07	[0, 0, 0, 2, FrozenError]	require 'fcntl'\n        fmt = "s!s!l!l!i!"\n        path = "/tmp/monorub
+5152ebe54ec7920e21330f89bcf8f0a5	[6, 6, ArgumentError, 5, ArgumentError, ArgumentError]	def c2(a, k:); a; end\n        def c3(a, k: 0); a; end\n        def c4(a)
 5153f5263b097f08fb57811bdbdc5aaa	[true, true, true, false, true, true, true, false, false, false, false]	class A\n          def method1; end\n          protected\n          def pr
 5174f3c6fa3195d1fbd047639e4a904d	[[true, {data: 42}], ["async", "ctx"], [[[true, ["both"]], [false, []]], true, "both", false]]	r = []\n            de = Class.new(StandardError) { attr_reader :dat
 51be01e0d292ac0d9c77567390f1d11f	["Bbar", "B[239, 191, 189]", "Bdbar", "Btbar", Encoding::UndefinedConversionError, [ArgumentError, "too big fallback string"], TypeError, Encoding::UndefinedConversionError]	(r=[]; r << "B�".encode(Encoding::US_ASCII, fallback: { "�" => "bar" }); r << "B
@@ -1698,6 +1700,7 @@
 572b1d6bee4d9881bea673d3703255a2	"Kernel"	Object.instance_method(:respond_to_missing?).owner.to_s
 572b2fda9ed374237953b17014b543e8	[["helloworld", true], true, ["helloこんにちは", true]]	__a = [];__a << (\n            s = "hello".encode("UTF-8")\n            s << "worl
 572b883c230b4f69d4b415b30b19b9c2	1	pid = fork { sleep 5 }\n            count = Process.kill(0, pid)\n   
+572cf65b17126d6f36df186dea43dbc1	[1, [3, 4], 2, 5, 7, {k: 1}, [1, 2, 3], [2, 4], [0, 1]]	class K\n          define_method(:one) { |a| a }\n          define_method
 573a889f327b5f24c438d7517aacf15a	nil	"hello".byteindex("ll", 3)
 573fe669ac971343defbd1cde20dc915	["MONORUBY_ENV_TEST_KEY", nil]	ENV["MONORUBY_ENV_TEST_KEY"] = "uniq_value_5678"\n            r = EN
 576157356419a5741dbdbde29df95789	true	GC.stat.values.all? { |v| v.is_a?(Integer) }

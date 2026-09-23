@@ -341,8 +341,10 @@ impl Codegen {
                     // entry at compiled bytecode — skip them, as the BOP
                     // revert does.
                     #[cfg(target_arch = "x86_64")]
-                    if globals.store[iseq_id].hint == ISeqHint::Normal {
-                        let func_id = globals.store[iseq_id].func_id();
+                    if let func_id = globals.store[iseq_id].func_id()
+                        && (globals.store[iseq_id].hint == ISeqHint::Normal
+                            || !globals.store[func_id].is_not_block())
+                    {
                         let entry = self
                             .jit
                             .get_label_address(&globals.store[func_id].entry_label());

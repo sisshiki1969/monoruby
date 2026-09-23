@@ -36,6 +36,17 @@ impl Codegen {
                             ret;
                         );
                     }
+                    // The caller has already bound the positionals into
+                    // the new frame and checked the arity (`vm_call`'s
+                    // simple copy, or `vm_handle_arguments`), so the
+                    // argument is in its slot by the time we run.
+                    ISeqHint::ArgReturn(n) => {
+                        let offset = LFP_ARG0 + 8 * n as i32;
+                        monoasm!( &mut self.jit,
+                            movq rax, [r14 - (offset)];
+                            ret;
+                        );
+                    }
                     ISeqHint::Normal => {
                         if !no_jit {
                             self.gen_jit_stub();

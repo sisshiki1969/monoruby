@@ -201,7 +201,16 @@ pub enum ISeqHint {
     ConstReturn(Immediate),
     /// Always returns self (e.g. `def to_s; self; end`).
     SelfReturn,
+    /// Always returns its n-th positional argument, unchanged (e.g.
+    /// `def itself(x) = x`, `define_method(:id) { |v| v }`). `n` indexes
+    /// the leading required parameters only, so the argument is in slot
+    /// `n` of every call that binds; `ARG_RETURN_MAX` bounds it so the
+    /// wrappers' frame loads stay within a short immediate offset.
+    ArgReturn(usize),
 }
+
+/// The largest `ISeqHint::ArgReturn` index the detector produces.
+pub const ARG_RETURN_MAX: usize = 16;
 
 ///
 /// One iseq's heap footprint, broken down by table.

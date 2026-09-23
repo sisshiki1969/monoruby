@@ -44,6 +44,16 @@ impl Codegen {
                         ret;
                     );
                 }
+                // Bound into the frame by the caller before we run (see the
+                // x86 twin); `ARG_RETURN_MAX` keeps the offset within
+                // `ldur`'s 9-bit immediate.
+                ISeqHint::ArgReturn(n) => {
+                    let offset = LFP_ARG0 + 8 * n as i32;
+                    monoasm_arm64!(&mut self.jit,
+                        ldur x0, [x(LFP.0), #(-(offset))];
+                        ret;
+                    );
+                }
                 ISeqHint::Normal => {
                 let vm_entry = self.vm_entry();
                 // JIT trigger (Phase 3a/3b). Per-method JIT-entry slot + call

@@ -901,7 +901,7 @@ impl<'a> BytecodeGen<'a> {
         }
 
         let ast = info.ast;
-        if !prologue_has_side_effects && let Some(hint) = self.hint(&ast) {
+        if !prologue_has_side_effects && let Some(hint) = self.hint(&ast, info.params.req_num()) {
             self.store[self.iseq_id].hint = hint;
         }
         self.apply_label(self.redo_label);
@@ -911,7 +911,7 @@ impl<'a> BytecodeGen<'a> {
         self.into_bytecode()
     }
 
-    fn hint(&self, ast: &Node) -> Option<ISeqHint> {
+    fn hint(&self, ast: &Node, req_num: usize) -> Option<ISeqHint> {
         // Detect trivial bodies: single trivial expression. In a METHOD a
         // top-level `return expr` is the same trivial body; anywhere
         // `return` escapes the frame (a block, a `class << obj` body —
@@ -960,6 +960,26 @@ impl<'a> BytecodeGen<'a> {
                 ))),
                 NodeKind::Float(f) => Immediate::flonum(*f).map(ISeqHint::ConstReturn),
                 NodeKind::SelfValue => Some(ISeqHint::SelfReturn),
+                // `def m(x) = x`: a body that is one of the leading
+                // required parameters, read from this frame. Those occupy
+                // the first `req_num` locals in declaration order, so the
+                // local's index is the argument's position at every call
+                // that binds (optional, rest and post parameters only move
+                // what comes after them). A destructured parameter's
+                // elements and a named `&block` live in later slots, so
+                // neither can match.
+                NodeKind::LocalVar(0, name) => {
+                    let id = IdentId::get_id(name);
+                    if Some(id) == self.block_param {
+                        return None;
+                    }
+                    match self.iseq().locals.get(&id) {
+                        Some(local) if (local.0 as usize) < req_num.min(ARG_RETURN_MAX) => {
+                            Some(ISeqHint::ArgReturn(local.0 as usize))
+                        }
+                        _ => None,
+                    }
+                }
                 _ => None,
             }
         }

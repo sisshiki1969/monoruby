@@ -976,7 +976,19 @@ impl<'a> JitContext<'a> {
                                 }
                                 return Ok(CompileResult::Continue);
                             }
-                            ISeqHint::Normal => {}
+                            // The argument is in the caller's own slot, so
+                            // the call is the copy. Only when the site
+                            // passes it: a block-style body binds fewer
+                            // positionals leniently (`is_simple_call` lets
+                            // that through), and that case must keep
+                            // reading `nil` from the real frame.
+                            ISeqHint::ArgReturn(n) if callsite.pos_num > n => {
+                                if let Some(dst) = dst {
+                                    state.copy_slot(ir, callsite.args + n, dst);
+                                }
+                                return Ok(CompileResult::Continue);
+                            }
+                            ISeqHint::Normal | ISeqHint::ArgReturn(_) => {}
                         }
                     }
                     if recv_class_proven && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT {
@@ -1040,7 +1052,16 @@ impl<'a> JitContext<'a> {
                             }
                             true
                         }
-                        ISeqHint::Normal => false,
+                        // Reads the argument from this frame's slots, so it
+                        // needs the plain shape: a `...` forward's
+                        // positionals live in the caller's frame, not here.
+                        ISeqHint::ArgReturn(n) if simple_fold && callsite.pos_num > n => {
+                            if let Some(dst) = dst {
+                                state.copy_slot(ir, callsite.args + n, dst);
+                            }
+                            true
+                        }
+                        ISeqHint::Normal | ISeqHint::ArgReturn(_) => false,
                     };
                     if folded {
                         // Call elided — the kept-unboxed locals were never

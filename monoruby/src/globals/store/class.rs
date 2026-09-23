@@ -2810,10 +2810,16 @@ impl Store {
                 let vm_entry = codegen.vm_entry();
                 for func in self.functions.functions() {
                     if let Some(iseq) = func.is_iseq() {
-                        // Skip trivial methods (ConstReturn/SelfReturn) — their
+                        // Skip trivial methods (a hinted body) — their
                         // wrappers don't execute bytecode and contain no BOP
                         // usage, so patching them to vm_entry would break it.
-                        if self[iseq].hint != ISeqHint::Normal || !stale.contains(&iseq) {
+                        // The wrapper reads the hint only for a method: a
+                        // block's wrapper runs its bytecode whatever the
+                        // hint says, so a hinted block still needs the
+                        // revert.
+                        if (func.is_not_block() && self[iseq].hint != ISeqHint::Normal)
+                            || !stale.contains(&iseq)
+                        {
                             continue;
                         }
                         let entry = codegen.jit.get_label_address(&func.entry_label());
