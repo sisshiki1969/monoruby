@@ -2545,6 +2545,7 @@
 82ea00d4003b7161aa2102e05ff69c66	3	"わたし".byteindex("た")
 82ff14b74e3eca76717b9af689a3898e	[:foo, [1, 2, 3, 4]]	class C\n          def method_missing(name, *args)\n            [name, ar
 8305358285ffef3eabb5f06f63fe896b	[[[1, 2], [:a, :b]], [[1, nil], [nil, nil]], [[1, 2]], [[1, 2]]]	def drive(a)\n              acc = []\n              a.each_with_yield
+830dcc6fe0f6f2a38d0bb4c4f3a51fc1	[true, true, true, [true, true, true, false, false, true, true, true], [true, true, false], true, false, false, true, false, true, false, "ASCII-8BIT", "UTF-8", [true, false], [true, true, true, false, false, true, true, true], false, false]	s = "abc日本xyz"; t = "\\xff abc".b; l = "caf\\xE9 abc".force_encoding(
 83332a7cea94c4e4ba8b0e4a5f8c0709	[RuntimeError, "implicit argument passing of super from method defined by define_method() is not supported. Specify all arguments explicitly."]	class SupBase6\n          def a = "Base#a"\n        end\n        class Sup
 835ea436d0b3e9efa89ad032b2093c6c	[["a", "b", "c"], [1, 3], [[1, 2]], [[1, 2]]]	__a = [];__a << (\n            ary = []\n            { "a" => 1, "b" => 2, "c" => 
 8370c5ed8e43de9e99d7f41038618f1b	[true, true, true, [1, 2]]	Nc = 1\n        module RM1; end\n        RM2 = Class.new\n        msgs = [

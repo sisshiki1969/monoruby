@@ -14460,6 +14460,24 @@ mod tests {
     }
 
     #[test]
+    fn a_slice_without_a_high_byte_is_ascii_only() {
+        // The parent being Valid does not make an all-ASCII slice of
+        // it non-ASCII: `"abc日本xyz"[1]` is `"b"`, and `"b"` is
+        // compatible with anything.
+        crate::tests::run_test_once(
+            r##"
+            s = "abc日本xyz"; t = "\xff abc".b; l = "caf\xE9 abc".force_encoding("ISO-8859-1")
+            u16 = "a".encode("UTF-16LE")
+            [s[1].ascii_only?, s[1,2].ascii_only?, s[-2..].ascii_only?, s.scan(/./).map(&:ascii_only?),
+             s.partition("b").map(&:ascii_only?), s.byteslice(1,2).ascii_only?, s[3].ascii_only?, s[3..].ascii_only?,
+             t[1..].ascii_only?, t[0].ascii_only?, l[4..].ascii_only?, l[0,4].ascii_only?,
+             (s[1] + "\xff".b).encoding.to_s, s[1].encoding.to_s, s.split("日").map(&:ascii_only?),
+             s.chars.map(&:ascii_only?), "abc".force_encoding("UTF-7")[1].ascii_only?, u16[0].ascii_only?]
+            "##,
+        );
+    }
+
+    #[test]
     fn encoding_compatible_regexp_string_is_asymmetric() {
         // CRuby's `enc_compatible_latter` swaps the two *values* but
         // leaves the encodings bound to the original operands, so the
