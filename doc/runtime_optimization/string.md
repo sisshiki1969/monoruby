@@ -489,6 +489,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 | 非 UTF-8 上の正規表現 | onigmo の多エンコーディング | バイト → `U+00XX` 代理写像で UTF-8 専用の `regex` クレートに掛ける（`regex_view` / `from_mapped_utf8`）。EUC-JP / SJIS はバイト単位の近似 |
 | 宣言エンコーディング下の不正バイト | 許容、coderange BROKEN | 同じ（`content` は不透明なバイトバッファ、`ty` は情報のみ） |
 | `str_mod_check` | ポインタ + 長さ | 長さのみ（同じ長さの in-place 編集でも再確保するため） |
+| `#tr` の否定集合 + 多バイト置換 | 受信側の coderange が 7BIT と**キャッシュ済み**なら置換文字の下位 1 バイトだけを書く（`"abc".tr("^x", "う")` → `"FFF"`。`#length` を先に呼んだかどうかで答えが変わる） | 常に文字全体を書く（`"ううう"`）。CRuby の coderange キャッシュを観測可能な状態として模倣しないという判断（#1492、`tests/tr_wide_replacement.rs`） |
 
 ---
 

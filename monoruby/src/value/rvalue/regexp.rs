@@ -1910,10 +1910,7 @@ impl<'a> Subject<'a> {
 
     /// The walked bytes as a fresh string, in `view_encoding`.
     pub(crate) fn to_inner(&self) -> RStringInner {
-        match self.text {
-            Some(s) => RStringInner::from_str_scanned(s),
-            None => RStringInner::from_encoding_scanned(self.bytes, self.enc),
-        }
+        RStringInner::from_encoding_scanned(self.bytes, self.view_encoding())
     }
 }
 
@@ -2134,15 +2131,14 @@ impl RegexpInner {
                 before
             };
             let rep_inner = block_result_to_inner(vm, globals, result, mapped)?;
-            let rep_enc = rep_inner.encoding();
-            let res = RStringInner::splice_all(
+            let res = RStringInner::sub_splice(
                 &globals.store,
                 &haystack,
                 view_enc,
                 is_ascii,
-                &[(start..end, rep_inner)],
-            )
-            .map_err(|_| sub_incompatible(&globals.store, subject, rep_enc))?;
+                start..end,
+                &rep_inner,
+            )?;
             Ok((res, true))
         })
     }
@@ -2176,7 +2172,6 @@ impl RegexpInner {
         re_val: Value,
         recv: Value,
         bh: BlockHandler,
-        self_enc: Option<crate::value::Encoding>,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             // Probe the live receiver first. Until the first match no
@@ -2209,16 +2204,12 @@ impl RegexpInner {
             let snapshot = string_snapshot(recv);
             let tmp = vm.temp_len();
             vm.temp_push(snapshot);
-            let res = re.replace_all_block_inner(
-                vm,
-                globals,
-                snapshot,
-                recv,
-                bh,
-                self_enc,
-                first,
-                regexp_pattern,
-            );
+            // The walk's view borrows the snapshot, so `$~` is cut from
+            // it — in the receiver's encoding — rather than copied out
+            // of the view as UTF-8.
+            vm.set_match_haystack(snapshot);
+            let res =
+                re.replace_all_block_inner(vm, globals, snapshot, recv, bh, first, regexp_pattern);
             vm.temp_clear(tmp);
             res
         })
@@ -2231,7 +2222,6 @@ impl RegexpInner {
         snapshot: Value,
         recv: Value,
         bh: BlockHandler,
-        self_enc: Option<crate::value::Encoding>,
         first: usize,
         regexp_pattern: bool,
     ) -> Result<(RStringInner, bool)> {
@@ -2247,8 +2237,21 @@ impl RegexpInner {
             }
         };
         let recv_len = recv.as_rstring_inner().len();
-        let mut range = vec![];
         let data = vm.get_block_data(globals, bh)?;
+        // The result is built as CRuby's `str_gsub` builds it: after
+        // each yield, the stretch since the previous match and then
+        // what the block answered are appended, and the encoding settles
+        // as they come (`EncBuf`) — so a piece the result cannot take is
+        // refused right after the yield that produced it, or the one
+        // after it for a stretch of the receiver, not once the walk is
+        // over.
+        let (bytes, enc, seven_bit) = (
+            subject.as_bytes(),
+            subject.view_encoding(),
+            subject.is_ascii(),
+        );
+        let mut buf = EncBuf::with_capacity(enc, bytes.len());
+        let mut copied = 0usize;
 
         vm.clear_capture_special_variables();
         // The non-overlapping walk of `captures_iter`, started at `first`
@@ -2277,24 +2280,10 @@ impl RegexpInner {
             last_spans = Some(spans);
             let result = vm.invoke_block(globals, &data, &[matched])?;
             check_string_not_modified(recv, recv_len)?;
-            // CRuby raises Encoding::CompatibilityError if the
-            // block returned a String whose encoding can't merge
-            // with self's. Check before stringifying.
-            if let Some(enc) = self_enc {
-                if let Some(repl_inner) = result.is_rstring_inner() {
-                    let dummy = crate::value::RStringInner::from_encoding(b"", enc);
-                    if dummy.compatible_encoding(&repl_inner).is_none() {
-                        return Err(MonorubyErr::incompatible_encoding(
-                            &globals.store,
-                            enc,
-                            repl_inner.encoding(),
-                        ));
-                    }
-                }
-            }
             let replace = block_result_to_inner(vm, globals, result, subject.mapped())?;
-
-            range.push((start..end, replace));
+            buf.append_stretch(&globals.store, &bytes[copied..start], enc, seven_bit)?;
+            buf.append_inner(&globals.store, &replace)?;
+            copied = end;
         }
 
         // CRuby's `str_gsub` sets `$~` to *its* last match once the walk
@@ -2304,16 +2293,9 @@ impl RegexpInner {
             save_spans(vm, &subject, spans, snapshot);
         }
 
-        let is_empty = range.is_empty();
-        let res = RStringInner::splice_all(
-            &globals.store,
-            subject.as_bytes(),
-            subject.view_encoding(),
-            subject.is_ascii(),
-            &range,
-        )?;
-
-        Ok((res, !is_empty))
+        let is_empty = last_spans.is_none();
+        buf.append_stretch(&globals.store, &bytes[copied..], enc, seven_bit)?;
+        Ok((buf.finish(), !is_empty))
     }
 
     /// Replaces the first match in `subject` using hash lookup. The
@@ -2340,15 +2322,14 @@ impl RegexpInner {
             save_spans(vm, subject, &spans, owner);
             let key = subject.chunk(None, start..end);
             let rep_inner = lookup_hash_replacement(vm, globals, hash_val, key, subject.mapped())?;
-            let rep_enc = rep_inner.encoding();
-            let res = RStringInner::splice_all(
+            let res = RStringInner::sub_splice(
                 &globals.store,
                 subject.as_bytes(),
                 subject.view_encoding(),
                 subject.is_ascii(),
-                &[(start..end, rep_inner)],
-            )
-            .map_err(|_| sub_incompatible(&globals.store, subject, rep_enc))?;
+                start..end,
+                &rep_inner,
+            )?;
             Ok((res, true))
         })
     }
@@ -2372,6 +2353,7 @@ impl RegexpInner {
             let subject = string_snapshot(recv);
             let tmp = vm.temp_len();
             vm.temp_push(subject);
+            vm.set_match_haystack(subject);
             let res = re.replace_all_hash_inner(vm, globals, re_val, subject, recv, hash_val);
             vm.temp_clear(tmp);
             res
@@ -2563,7 +2545,16 @@ impl RegexpInner {
             }
         };
         let recv_len = recv.as_rstring_inner().len();
-        let mut range = vec![];
+        // Built as `replace_all_block_inner` builds its result: appended
+        // after each lookup, which may run Ruby (a default proc).
+        let (bytes, enc, seven_bit) = (
+            subject.as_bytes(),
+            subject.view_encoding(),
+            subject.is_ascii(),
+        );
+        let mut buf = EncBuf::with_capacity(enc, bytes.len());
+        let mut copied = 0usize;
+        let mut is_empty = true;
 
         vm.clear_capture_special_variables();
         let mut region = onigmo_regex::Region::new();
@@ -2587,20 +2578,14 @@ impl RegexpInner {
             save_spans(vm, &subject, &spans, snapshot);
             let replacement = lookup_hash_replacement(vm, globals, hash_val, key, subject.mapped())?;
             check_string_not_modified(recv, recv_len)?;
-
-            range.push((start..end, replacement));
+            buf.append_stretch(&globals.store, &bytes[copied..start], enc, seven_bit)?;
+            buf.append_inner(&globals.store, &replacement)?;
+            copied = end;
+            is_empty = false;
         }
 
-        let is_empty = range.is_empty();
-        let res = RStringInner::splice_all(
-            &globals.store,
-            subject.as_bytes(),
-            subject.view_encoding(),
-            subject.is_ascii(),
-            &range,
-        )?;
-
-        Ok((res, !is_empty))
+        buf.append_stretch(&globals.store, &bytes[copied..], enc, seven_bit)?;
+        Ok((buf.finish(), !is_empty))
     }
 
     /// `byte_pos` is a byte offset into `given`, already converted from
@@ -2810,7 +2795,17 @@ impl RegexpInner {
         // immediately after `"por"` is observable in CRuby but the
         // bundled iterator collapses it). For empty matches we
         // advance by one character so the loop terminates.
-        let mut replacements = vec![];
+        // The result is built in one forward pass, as CRuby's `str_gsub`
+        // builds it: the stretch up to each match and the match's
+        // expansion appended in turn, and the encoding settled as they
+        // come (`EncBuf`).
+        let (bytes, enc, seven_bit) = (
+            subject.as_bytes(),
+            subject.view_encoding(),
+            subject.is_ascii(),
+        );
+        let mut buf = EncBuf::with_capacity(enc, bytes.len());
+        let mut copied = 0usize;
         vm.clear_capture_special_variables();
         let mut last: Option<Spans> = None;
         let mut region = onigmo_regex::Region::new();
@@ -2821,23 +2816,16 @@ impl RegexpInner {
             }
             let spans = spans_of(&region);
             let (start, end) = spans[0].unwrap();
-            let (rep, mixed) = self.expand_backref(replace, subject.as_bytes(), &spans);
-            replacements.push((
-                start..end,
-                expansion_inner(store, &rep, replace, mixed, subject.view_encoding())?,
-            ));
+            let rep = self.expand_backref(store, replace, subject, &spans)?;
+            buf.append_stretch(store, &bytes[copied..start], enc, seven_bit)?;
+            buf.append_inner(store, &rep)?;
+            copied = end;
             last = Some(spans);
             pos = Self::next_walk_pos(subject, start, end);
         }
-        let is_empty = replacements.is_empty();
-        // Single forward pass instead of N tail-shifting splices.
-        let res = RStringInner::splice_all(
-            store,
-            subject.as_bytes(),
-            subject.view_encoding(),
-            subject.is_ascii(),
-            &replacements,
-        )?;
+        let is_empty = last.is_none();
+        buf.append_stretch(store, &bytes[copied..], enc, seven_bit)?;
+        let res = buf.finish();
 
         if let Some(spans) = last {
             // Attach the (possibly coerced-from-String) Regexp to `$~` so
@@ -2851,7 +2839,7 @@ impl RegexpInner {
 
     /// Expand backreference sequences in `replace` (the raw bytes of the
     /// replacement template, in whatever encoding it carries) using
-    /// `captures` against `given` (the original haystack). Recognises:
+    /// `captures` against `subject` (the original haystack). Recognises:
     ///
     /// - `\0`, `\1`-`\9`: numbered captures (`\0` is the full match).
     /// - `\&`: same as `\0` (full match).
@@ -2863,75 +2851,76 @@ impl RegexpInner {
     /// - Trailing `\` is left as a literal backslash.
     /// - Other `\X` sequences are passed through verbatim.
     ///
-    /// Works on bytes so a template with non-ASCII bytes in a
-    /// byte-oriented encoding (`"\xff".b`) is spliced as those bytes,
-    /// never re-encoded; see [`expansion_inner`] for the encoding the
-    /// expansion is tagged with.
-    ///
-    /// The flag is whether any captured text (as opposed to the template
-    /// itself) carried non-ASCII bytes — what decides, in
-    /// [`expansion_inner`], whether the two can share an encoding.
+    /// This is CRuby's `rb_reg_regsub`, its encoding included: a template
+    /// with no escape in it is the replacement as it is, and one with an
+    /// escape is rebuilt in an [`EncBuf`] that starts empty and BINARY,
+    /// the template's stretches appended in the template's encoding and
+    /// the captured text in the subject's — so `"x".b + "\\1"` over
+    /// `"é"` comes out UTF-8, and the first non-ASCII stretch decides
+    /// which of the two a later one of the other encoding cannot join
+    /// (`Encoding::CompatibilityError`, the buffer's encoding named
+    /// first).
     fn expand_backref(
         &self,
+        store: &Store,
         replace: &RStringInner,
-        given: &[u8],
+        subject: &Subject,
         spans: &[Option<(usize, usize)>],
-    ) -> (Vec<u8>, bool) {
+    ) -> Result<RStringInner> {
         if replace.encoding().is_wide() {
-            return self.expand_backref_wide(replace, given, spans);
+            return self.expand_backref_wide(store, replace, subject, spans);
         }
+        let given = subject.as_bytes();
+        let given_enc = subject.view_encoding();
+        let given_7bit = subject.is_ascii();
         let bytes = replace.as_bytes();
-        let mut rep: Vec<u8> = Vec::with_capacity(bytes.len());
-        let mut captured_non_ascii = false;
-        let mut push_captured = |rep: &mut Vec<u8>, s: &[u8]| {
-            captured_non_ascii |= !s.is_ascii();
-            rep.extend_from_slice(s);
-        };
+        let enc = replace.encoding();
+        let mut val = Expansion::new(bytes.len());
         let group = |i: usize| -> Option<&[u8]> {
             spans.get(i).copied().flatten().map(|(s, e)| &given[s..e])
         };
         let mut i = 0;
         while i < bytes.len() {
             if bytes[i] != b'\\' {
-                // Copy the run up to the next backslash verbatim.
+                // Skip the run up to the next backslash; it is copied as
+                // a stretch of the template when an escape follows.
                 let run = bytes[i..]
                     .iter()
                     .position(|&b| b == b'\\')
                     .unwrap_or(bytes.len() - i);
-                rep.extend_from_slice(&bytes[i..i + run]);
                 i += run;
                 continue;
             }
             if i + 1 >= bytes.len() {
-                // Trailing backslash: copy verbatim (CRuby leaves it).
-                rep.push(b'\\');
+                // Trailing backslash: copied verbatim (CRuby leaves it).
                 i += 1;
                 continue;
             }
+            // The template up to the backslash, in its own encoding.
+            val.stretch(store, bytes, i, enc)?;
             let next = bytes[i + 1];
             match next {
                 b'0'..=b'9' => {
-                    let idx = (next - b'0') as usize;
-                    if let Some(m) = group(idx) {
-                        push_captured(&mut rep, m);
+                    if let Some(m) = group((next - b'0') as usize) {
+                        val.captured(store, m, given_enc, given_7bit)?;
                     }
                     i += 2;
                 }
                 b'&' => {
                     if let Some(m) = group(0) {
-                        push_captured(&mut rep, m);
+                        val.captured(store, m, given_enc, given_7bit)?;
                     }
                     i += 2;
                 }
                 b'`' => {
                     if let Some((start, _)) = spans.first().copied().flatten() {
-                        push_captured(&mut rep, &given[..start]);
+                        val.captured(store, &given[..start], given_enc, given_7bit)?;
                     }
                     i += 2;
                 }
                 b'\'' => {
                     if let Some((_, end)) = spans.first().copied().flatten() {
-                        push_captured(&mut rep, &given[end..]);
+                        val.captured(store, &given[end..], given_enc, given_7bit)?;
                     }
                     i += 2;
                 }
@@ -2944,14 +2933,14 @@ impl RegexpInner {
                     while idx > 1 {
                         idx -= 1;
                         if let Some(m) = group(idx) {
-                            push_captured(&mut rep, m);
+                            val.captured(store, m, given_enc, given_7bit)?;
                             break;
                         }
                     }
                     i += 2;
                 }
                 b'\\' => {
-                    rep.push(b'\\');
+                    val.template(store, &bytes[i + 1..i + 2], enc)?;
                     i += 2;
                 }
                 b'k' => {
@@ -2971,29 +2960,28 @@ impl RegexpInner {
                                     chosen = Some(m_idx as usize);
                                 }
                             }
-                            if let Some(idx) = chosen {
-                                if let Some(m) = group(idx) {
-                                    push_captured(&mut rep, m);
-                                }
+                            if let Some(m) = chosen.and_then(group) {
+                                val.captured(store, m, given_enc, given_7bit)?;
                             }
                             i = name_end + 1;
+                            val.skip_to(i);
                             continue;
                         }
                     }
-                    // Malformed `\k…`: copy verbatim.
-                    rep.extend_from_slice(b"\\k");
+                    // Malformed `\k…`: copied verbatim.
+                    val.template(store, &bytes[i..i + 2], enc)?;
                     i += 2;
                 }
                 _ => {
-                    // Unknown `\X`: keep as-is (preserves e.g. `\d`); the
+                    // Unknown `\X`: kept as-is (preserves e.g. `\d`); the
                     // rest of a multibyte X is copied by the next run.
-                    rep.push(b'\\');
-                    rep.push(next);
+                    val.template(store, &bytes[i..i + 2], enc)?;
                     i += 2;
                 }
             }
+            val.skip_to(i);
         }
-        (rep, captured_non_ascii)
+        val.finish(store, replace)
     }
 
     /// [`expand_backref`](Self::expand_backref) for a UTF-16 / UTF-32
@@ -3002,10 +2990,14 @@ impl RegexpInner {
     /// encoding.
     fn expand_backref_wide(
         &self,
+        store: &Store,
         replace: &RStringInner,
-        given: &[u8],
+        subject: &Subject,
         spans: &[Option<(usize, usize)>],
-    ) -> (Vec<u8>, bool) {
+    ) -> Result<RStringInner> {
+        let given = subject.as_bytes();
+        let given_enc = subject.view_encoding();
+        let given_7bit = subject.is_ascii();
         let enc = replace.encoding();
         let w = enc.unit_width();
         let bytes = replace.as_bytes();
@@ -3014,43 +3006,37 @@ impl RegexpInner {
                 .get(i..i + w)
                 .and_then(|u| crate::value::enc_codepoint(enc, u))
         };
-        let mut rep: Vec<u8> = Vec::with_capacity(bytes.len());
-        let mut captured_non_ascii = false;
-        let mut push_captured = |rep: &mut Vec<u8>, s: &[u8]| {
-            captured_non_ascii |= !s.is_ascii();
-            rep.extend_from_slice(s);
-        };
+        let mut val = Expansion::new(bytes.len());
         let group = |i: usize| -> Option<&[u8]> {
             spans.get(i).copied().flatten().map(|(s, e)| &given[s..e])
         };
         let mut i = 0;
         while i < bytes.len() {
             let Some(next) = unit(i).filter(|&c| c == b'\\' as u32).and(unit(i + w)) else {
-                let end = (i + w).min(bytes.len());
-                rep.extend_from_slice(&bytes[i..end]);
-                i = end;
+                i = (i + w).min(bytes.len());
                 continue;
             };
+            val.stretch(store, bytes, i, enc)?;
             let mut consumed = 2 * w;
             match u8::try_from(next).unwrap_or(0) {
                 d @ b'0'..=b'9' => {
                     if let Some(m) = group((d - b'0') as usize) {
-                        push_captured(&mut rep, m);
+                        val.captured(store, m, given_enc, given_7bit)?;
                     }
                 }
                 b'&' => {
                     if let Some(m) = group(0) {
-                        push_captured(&mut rep, m);
+                        val.captured(store, m, given_enc, given_7bit)?;
                     }
                 }
                 b'`' => {
                     if let Some((start, _)) = spans.first().copied().flatten() {
-                        push_captured(&mut rep, &given[..start]);
+                        val.captured(store, &given[..start], given_enc, given_7bit)?;
                     }
                 }
                 b'\'' => {
                     if let Some((_, end)) = spans.first().copied().flatten() {
-                        push_captured(&mut rep, &given[end..]);
+                        val.captured(store, &given[end..], given_enc, given_7bit)?;
                     }
                 }
                 b'+' => {
@@ -3058,12 +3044,12 @@ impl RegexpInner {
                     while idx > 1 {
                         idx -= 1;
                         if let Some(m) = group(idx) {
-                            push_captured(&mut rep, m);
+                            val.captured(store, m, given_enc, given_7bit)?;
                             break;
                         }
                     }
                 }
-                b'\\' => rep.extend_from_slice(&bytes[i..i + w]),
+                b'\\' => val.template(store, &bytes[i + w..i + 2 * w], enc)?,
                 b'k' if unit(i + 2 * w) == Some(b'<' as u32) => {
                     // `\k<name>`: the name's units up to `>`, looked up
                     // as the bytes Onigmo registered them under.
@@ -3081,18 +3067,19 @@ impl RegexpInner {
                             }
                         }
                         if let Some(m) = chosen.and_then(group) {
-                            push_captured(&mut rep, m);
+                            val.captured(store, m, given_enc, given_7bit)?;
                         }
                         consumed = j + w - i;
                     } else {
-                        rep.extend_from_slice(&bytes[i..i + 2 * w]);
+                        val.template(store, &bytes[i..i + 2 * w], enc)?;
                     }
                 }
-                _ => rep.extend_from_slice(&bytes[i..i + 2 * w]),
+                _ => val.template(store, &bytes[i..i + 2 * w], enc)?,
             }
             i += consumed;
+            val.skip_to(i);
         }
-        (rep, captured_non_ascii)
+        val.finish(store, replace)
     }
 
     /// Replaces the leftmost-first match for `self` in `subject` with
@@ -3112,38 +3099,18 @@ impl RegexpInner {
         }
         let spans = spans_of(&region);
         let (start, end) = spans[0].unwrap();
-        let (rep, mixed) = self.expand_backref(replace, subject.as_bytes(), &spans);
-        let rep_inner = expansion_inner(store, &rep, replace, mixed, subject.view_encoding())?;
-        let rep_enc = rep_inner.encoding();
-        let res = RStringInner::splice_all(
+        let rep = self.expand_backref(store, replace, subject, &spans)?;
+        let res = RStringInner::sub_splice(
             store,
             subject.as_bytes(),
             subject.view_encoding(),
             subject.is_ascii(),
-            &[(start..end, rep_inner)],
-        )
-        .map_err(|_| sub_incompatible(store, subject, rep_enc))?;
+            start..end,
+            &rep,
+        )?;
         save_spans(vm, subject, &spans, owner);
         Ok((res, true))
     }
-}
-
-/// `String#sub`'s wording for a replacement the receiver cannot take.
-///
-/// With one replacement CRuby checks the receiver against it directly
-/// and names them in that order; `gsub` names the encoding its result
-/// has reached and the piece that would not fit, which is the question
-/// `splice_all` answers and so the wording it produces for both. The
-/// three `sub` entry points re-spell it (#1572).
-///
-/// `splice_all` raises nothing else, so the original error carries no
-/// information this discards.
-fn sub_incompatible(
-    store: &Store,
-    subject: &Subject,
-    rep: crate::value::Encoding,
-) -> MonorubyErr {
-    MonorubyErr::incompatible_encoding(store, subject.encoding(), rep)
 }
 
 /// Coerce the result of a `String#sub`/`#gsub` block to an
@@ -3187,57 +3154,84 @@ fn block_result_to_inner(
     }
 }
 
-/// The expanded replacement (`expand_backref`'s bytes) as a string: under
-/// the template's encoding when the template carries non-ASCII bytes
-/// (`"\xff".b` splices as BINARY, and `splice_all` lets the result take
-/// that encoding over a 7-bit haystack, as CRuby's `rb_enc_cr_str_buf_cat`
-/// does), else the haystack's, so captured text keeps its own. Non-ASCII
-/// captured text (`captured_non_ascii`) pasted into a non-ASCII template
-/// of another encoding is CRuby's `rb_reg_regsub` failure:
-/// `Encoding::CompatibilityError`, the template's encoding first.
-fn expansion_inner(
-    store: &Store,
-    bytes: &[u8],
-    template: &RStringInner,
-    captured_non_ascii: bool,
-    hay_enc: crate::value::Encoding,
-) -> Result<RStringInner> {
-    // `rb_enc_compatible(str, repl)`: an empty template is always
-    // compatible, a 7-bit one only where both encodings are
-    // ASCII-compatible (a UTF-16 receiver cannot take `"X"`), and
-    // otherwise the two must agree once the captured text (which is
-    // the receiver's) is non-ASCII or either side is not
-    // ASCII-compatible.
-    let enc = if template.as_bytes().is_empty() {
-        hay_enc
-    } else if template.is_ascii_only()
-        && hay_enc.is_ascii_compatible()
-        && template.encoding().is_ascii_compatible()
-    {
-        hay_enc
-    } else {
-        let enc = template.encoding();
-        if enc != hay_enc
-            && (captured_non_ascii || !hay_enc.is_ascii_compatible() || !enc.is_ascii_compatible())
-        {
-            // Named the way CRuby names them. A captured piece is
-            // appended into the template's own buffer by `rb_reg_regsub`,
-            // which names the template first; so is a 7-bit template a
-            // receiver that is not ASCII-compatible cannot take. Every
-            // other refusal happens when the expansion is appended to
-            // the result, in the receiver's encoding, which names the
-            // receiver first.
-            let template_first =
-                captured_non_ascii || (!hay_enc.is_ascii_compatible() && template.is_ascii_only());
-            return Err(if template_first {
-                MonorubyErr::incompatible_encoding(store, enc, hay_enc)
-            } else {
-                MonorubyErr::incompatible_encoding(store, hay_enc, enc)
-            });
+/// The buffer `rb_reg_regsub` builds a replacement template's expansion
+/// in: created at the first escape (a template with none is returned as
+/// it is), empty and BINARY, and appended to in order — the template's
+/// stretches in the template's encoding, the captured text in the
+/// subject's — so that its encoding settles as [`EncBuf`] settles it.
+struct Expansion {
+    buf: Option<EncBuf>,
+    /// Where the template stretch not yet appended starts.
+    p: usize,
+    cap: usize,
+}
+
+impl Expansion {
+    fn new(cap: usize) -> Self {
+        Expansion {
+            buf: None,
+            p: 0,
+            cap,
         }
-        enc
-    };
-    Ok(RStringInner::from_encoding_scanned(bytes, enc))
+    }
+
+    /// The template's bytes from the last escape up to `at` (the start
+    /// of the next one), creating the buffer at the first escape.
+    fn stretch(
+        &mut self,
+        store: &Store,
+        template: &[u8],
+        at: usize,
+        enc: crate::value::Encoding,
+    ) -> Result<()> {
+        let cap = self.cap;
+        let buf = self
+            .buf
+            .get_or_insert_with(|| EncBuf::with_capacity(crate::value::Encoding::Ascii8, cap));
+        buf.append(store, &template[self.p..at], enc, false)
+    }
+
+    /// A piece of the template that stands for itself (`\\`, an
+    /// unknown `\X`).
+    fn template(&mut self, store: &Store, piece: &[u8], enc: crate::value::Encoding) -> Result<()> {
+        self.buf.as_mut().unwrap().append(store, piece, enc, false)
+    }
+
+    /// Captured text: the subject's own bytes.
+    fn captured(
+        &mut self,
+        store: &Store,
+        piece: &[u8],
+        enc: crate::value::Encoding,
+        known_7bit: bool,
+    ) -> Result<()> {
+        self.buf
+            .as_mut()
+            .unwrap()
+            .append(store, piece, enc, known_7bit)
+    }
+
+    /// The escape just handled ends at `i`; the next stretch starts there.
+    fn skip_to(&mut self, i: usize) {
+        self.p = i;
+    }
+
+    /// The expansion: the template itself when it held no escape, else
+    /// the buffer with the template's tail appended.
+    fn finish(self, store: &Store, template: &RStringInner) -> Result<RStringInner> {
+        match self.buf {
+            None => Ok(template.clone()),
+            Some(mut buf) => {
+                buf.append(
+                    store,
+                    &template.as_bytes()[self.p..],
+                    template.encoding(),
+                    false,
+                )?;
+                Ok(buf.finish())
+            }
+        }
+    }
 }
 
 /// Look up the replacement string for a `String#sub`/`#gsub` match
