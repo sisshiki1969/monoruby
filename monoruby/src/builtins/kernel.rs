@@ -5000,12 +5000,13 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// be copied: CRuby's `rb_obj_dup` allocates the copy through the class
 /// and fails there. The types with a representation of their own are
 /// copied by that representation whether or not their class allocates,
-/// except a `Thread`, which CRuby has no allocator for (#1624).
+/// except the two CRuby has no allocator for: an
+/// `Enumerator::ArithmeticSequence` and a `Thread` (#1624, #1643).
 /// monoruby's `Thread` keeps an allocator for the inert shells
 /// `Process.detach` builds, so it is named here rather than looked up.
 fn refuse_copy_without_allocator(globals: &Globals, val: Value) -> Result<()> {
     let refused = match val.ty() {
-        Some(ObjTy::OBJECT) => {
+        Some(ObjTy::OBJECT | ObjTy::ARITHMETIC_SEQUENCE) => {
             let class_id = val.real_class(&globals.store).id();
             globals.store[class_id].alloc_func().is_none()
         }

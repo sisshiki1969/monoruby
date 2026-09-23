@@ -105,3 +105,23 @@ fn threads_ractors_and_queues_are_not_copied() {
     "#);
 }
 
+/// `Enumerator::ArithmeticSequence` has no allocator, so `dup` and
+/// `clone` fail the way `.allocate` does rather than returning a copy
+/// (#1643).
+#[test]
+fn an_arithmetic_sequence_is_not_copied() {
+    run(r#"
+        res = []
+        %i[dup clone].each do |m|
+          res << t.() { 1.step(3).__send__(m) }
+          res << t.() { 1.0.step(2.0, 0.5).__send__(m) }
+          res << t.() { (1..3).step(2).__send__(m) }
+          res << t.() { ((1..3) % 2).__send__(m) }
+          res << t.() { 1.step(3).freeze.__send__(m) }
+        end
+        res << t.() { Enumerator::ArithmeticSequence.allocate }
+        res << t.() { Enumerator::ArithmeticSequence.new }
+        res << t.() { a = 1.step(10, 3); (a.dup rescue nil); [a.to_a, a.size, a.first(2)] }
+        res
+    "#);
+}
