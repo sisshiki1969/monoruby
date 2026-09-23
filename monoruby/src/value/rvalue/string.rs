@@ -48,6 +48,18 @@ pub(crate) fn eucjp_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
     PreciseLen::Char(len)
 }
 
+/// Classify the sequence starting at `bytes[pos]` the way CRuby's
+/// CP51932 *transcoder* cuts its input: EUC-JP without the three-byte
+/// JIS X 0212 plane, so `0x8F` leads nothing there (#1520). The
+/// encoding's own walk is EUC-JP's and still accepts it, which is the
+/// same split the Big5 family has.
+pub(crate) fn cp51932_transcoder_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    match bytes.get(pos) {
+        Some(0x8f) => PreciseLen::Invalid,
+        _ => eucjp_precise_len(bytes, pos),
+    }
+}
+
 /// Classify the Shift_JIS / CP932 sequence starting at `bytes[pos]`.
 ///
 /// ASCII and the `0xA1..=0xDF` half-width kana stand alone; a
@@ -182,6 +194,30 @@ pub(crate) fn big5_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
     match lead {
         0x00..=0x7f => PreciseLen::Char(1),
         0xa1..=0xfe => match bytes.get(pos + 1) {
+            None => PreciseLen::NeedMore,
+            Some(0x40..=0x7e | 0xa1..=0xfe) => PreciseLen::Char(2),
+            Some(_) => PreciseLen::Invalid,
+        },
+        _ => PreciseLen::Invalid,
+    }
+}
+
+/// Classify the sequence starting at `bytes[pos]` the way CRuby's
+/// *transcoders* for the Big5 family cut their input, which is wider
+/// than the walk `#valid_encoding?` answers from: every byte from
+/// `0x81` to `0xFE` leads a cell there, with the trail from
+/// `0x40..=0x7E` or `0xA1..=0xFE`. So `"\x81\x40"` is a cell the
+/// encoding has no character for — an *undefined* conversion, not a
+/// malformed one — while the same bytes are `valid_encoding? == false`
+/// (#1500). Big5-HKSCS and Big5-UAO fill rows below `0xA1` that Big5
+/// itself leaves empty, and all of them read through this one shape.
+pub(crate) fn big5_transcoder_len(bytes: &[u8], pos: usize) -> PreciseLen {
+    let Some(&lead) = bytes.get(pos) else {
+        return PreciseLen::NeedMore;
+    };
+    match lead {
+        0x00..=0x7f => PreciseLen::Char(1),
+        0x81..=0xfe => match bytes.get(pos + 1) {
             None => PreciseLen::NeedMore,
             Some(0x40..=0x7e | 0xa1..=0xfe) => PreciseLen::Char(2),
             Some(_) => PreciseLen::Invalid,
@@ -788,7 +824,10 @@ pub(crate) struct Iso2022JpStop {
     pub incomplete: bool,
 }
 
-/// The stateless-ISO-2022-JP bytes the ISO-2022-JP `bytes` stand for.
+/// The stateless-ISO-2022-JP bytes the ISO-2022-JP `bytes` stand for,
+/// starting in the designation `start` left in effect and reporting
+/// the one this chunk leaves — which is what a converter needs, the
+/// escape staying in effect across `#convert` calls.
 ///
 /// The two are the same repertoire written two ways: ISO-2022-JP
 /// names the character set with an escape sequence that stays in
@@ -797,15 +836,6 @@ pub(crate) struct Iso2022JpStop {
 /// stateless's `0x90` and `0x92`; `ESC ( B` and `ESC ( J` are ASCII
 /// and JIS X 0201 Roman, and CRuby reads both as plain ASCII bytes
 /// (#1609).
-pub(crate) fn iso2022jp_to_stateless(
-    bytes: &[u8],
-) -> std::result::Result<Vec<u8>, Iso2022JpStop> {
-    iso2022jp_to_stateless_from(bytes, None).map(|(out, _)| out)
-}
-
-/// The same, starting in the designation `start` left in effect and
-/// reporting the one this chunk leaves — which is what a converter
-/// needs, the escape staying in effect across `#convert` calls.
 pub(crate) fn iso2022jp_to_stateless_from(
     bytes: &[u8],
     start: Option<u8>,
@@ -841,6 +871,15 @@ pub(crate) fn iso2022jp_to_stateless_from(
             }
             pos += 3;
             continue;
+        }
+        // Shift Out / Shift In belong to CP50220 / CP50221, not here.
+        if matches!(bytes[pos], 0x0e | 0x0f) {
+            return Err(Iso2022JpStop {
+                at: pos,
+                error: vec![bytes[pos]],
+                again: vec![],
+                incomplete: false,
+            });
         }
         match lead {
             None => {
@@ -892,14 +931,9 @@ pub(crate) fn iso2022jp_to_stateless_from(
 /// The ISO-2022-JP bytes for the stateless-ISO-2022-JP `bytes`, or
 /// `Err(offset)` at the first sequence ISO-2022-JP cannot hold — the
 /// single-byte sets `0x81..=0x8F` name and the two-byte ones other
-/// than JIS X 0208.
-pub(crate) fn stateless_to_iso2022jp(bytes: &[u8]) -> std::result::Result<Vec<u8>, usize> {
-    stateless_to_iso2022jp_from(bytes, None, true).map(|(out, _)| out)
-}
-
-/// The same, starting in the designation `start` and closing back to
-/// ASCII only when `close` — a converter emits that last escape from
-/// `#finish`, not from every `#convert` (#1609).
+/// than JIS X 0208 — starting in the designation `start` and closing
+/// back to ASCII only when `close`: a converter emits that last escape
+/// from `#finish`, not from every `#convert` (#1609).
 pub(crate) fn stateless_to_iso2022jp_from(
     bytes: &[u8],
     start: Option<u8>,
@@ -937,6 +971,233 @@ pub(crate) fn stateless_to_iso2022jp_from(
         out.extend_from_slice(b"\x1b(B");
     }
     Ok((out, lead))
+}
+
+/// The JIS X 0208 cell CP50220 writes for each half-width katakana
+/// (JIS X 0201's `0xA1..=0xDF`), as its two EUC bytes: the encoding
+/// folds the half-width forms into the full-width ones, since
+/// ISO-2022-JP proper has no room for JIS X 0201 kana. Read off CRuby
+/// 4.0.6 for every kana, alone and followed by the two sound marks.
+static CP50220_KANA_FOLD: [u16; 63] = [
+    0xa1a3, 0xa1d6, 0xa1d7, 0xa1a2, 0xa1a6, 0xa5f2, 0xa5a1, 0xa5a3, // A1..A8
+    0xa5a5, 0xa5a7, 0xa5a9, 0xa5e3, 0xa5e5, 0xa5e7, 0xa5c3, 0xa1bc, // A9..B0
+    0xa5a2, 0xa5a4, 0xa5a6, 0xa5a8, 0xa5aa, 0xa5ab, 0xa5ad, 0xa5af, // B1..B8
+    0xa5b1, 0xa5b3, 0xa5b5, 0xa5b7, 0xa5b9, 0xa5bb, 0xa5bd, 0xa5bf, // B9..C0
+    0xa5c1, 0xa5c4, 0xa5c6, 0xa5c8, 0xa5ca, 0xa5cb, 0xa5cc, 0xa5cd, // C1..C8
+    0xa5ce, 0xa5cf, 0xa5d2, 0xa5d5, 0xa5d8, 0xa5db, 0xa5de, 0xa5df, // C9..D0
+    0xa5e0, 0xa5e1, 0xa5e2, 0xa5e4, 0xa5e6, 0xa5e8, 0xa5e9, 0xa5ea, // D1..D8
+    0xa5eb, 0xa5ec, 0xa5ed, 0xa5ef, 0xa5f3, 0xa1ab, 0xa1ac, // D9..DF
+];
+
+/// The full-width cell for the half-width kana `kana` followed by the
+/// sound mark `mark` (`0xDE` voiced, `0xDF` semi-voiced), when the two
+/// fold into one character: カ..ト and ハ..ホ take the voiced mark, ハ..ホ
+/// the semi-voiced one, and the cell is the next one (or the one after)
+/// in the row. Anything else keeps the mark as a character of its own —
+/// CRuby writes ｳﾞ as ウ゛, not ヴ.
+fn cp50220_kana_fold_pair(kana: u8, mark: u8) -> Option<u16> {
+    let cell = CP50220_KANA_FOLD[(kana - 0xa1) as usize];
+    match (kana, mark) {
+        (0xb6..=0xc4 | 0xca..=0xce, 0xde) => Some(cell + 1),
+        (0xca..=0xce, 0xdf) => Some(cell + 2),
+        _ => None,
+    }
+}
+
+/// CP50220 / CP50221, the Windows readings of ISO-2022-JP, rewritten
+/// as CP51932 (EUC) bytes — the hop CRuby's `convpath` names for the
+/// pair, `CP5022x ↔ CP51932`. Both read the same input: the JIS X 0208
+/// designations (`ESC $ @`, `ESC $ B`), the ASCII ones (`ESC ( B`,
+/// `ESC ( J`), and three ways of spelling JIS X 0201 katakana that
+/// ISO-2022-JP proper has none of — `ESC ( I` with the 7-bit bytes,
+/// Shift Out / Shift In around them, and the 8-bit bytes `0xA1..=0xDF`
+/// as they are. Every kana comes out as EUC-JP's `8E xx` (#1520).
+///
+/// `start` is the designation in effect from the previous chunk and
+/// the result carries the one this chunk leaves: `None` for ASCII,
+/// `0x92` inside JIS X 0208, `0x8E` after `ESC ( I` and `0x0E` after
+/// Shift Out, which Shift In ends (CRuby returns to ASCII from it, not
+/// to the set designated before).
+pub(crate) fn cp5022x_to_eucjp_from(
+    bytes: &[u8],
+    start: Option<u8>,
+) -> std::result::Result<(Vec<u8>, Option<u8>), Iso2022JpStop> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut state: Option<u8> = start;
+    let mut pos = 0;
+    while pos < bytes.len() {
+        let b = bytes[pos];
+        if b == 0x1b {
+            let rest = &bytes[pos..];
+            match (rest.get(1), rest.get(2)) {
+                (Some(b'('), Some(b'B' | b'J')) => state = None,
+                (Some(b'$'), Some(b'@' | b'B')) => state = Some(0x92),
+                (Some(b'('), Some(b'I')) => state = Some(0x8e),
+                (Some(&b1), Some(&b2)) => {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![0x1b, b1],
+                        again: vec![b2],
+                        incomplete: false,
+                    });
+                }
+                _ => {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: rest.to_vec(),
+                        again: vec![],
+                        incomplete: true,
+                    });
+                }
+            }
+            pos += 3;
+            continue;
+        }
+        if b == 0x0e {
+            state = Some(0x0e);
+            pos += 1;
+            continue;
+        }
+        if b == 0x0f {
+            state = None;
+            pos += 1;
+            continue;
+        }
+        match state {
+            None => {
+                if b < 0x80 {
+                    out.push(b);
+                } else if (0xa1..=0xdf).contains(&b) {
+                    out.extend_from_slice(&[0x8e, b]);
+                } else {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![b],
+                        again: vec![],
+                        incomplete: false,
+                    });
+                }
+                pos += 1;
+            }
+            Some(0x8e | 0x0e) => {
+                if (0x21..=0x5f).contains(&b) {
+                    out.extend_from_slice(&[0x8e, b | 0x80]);
+                } else if (0xa1..=0xdf).contains(&b) {
+                    out.extend_from_slice(&[0x8e, b]);
+                } else {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![b],
+                        again: vec![],
+                        incomplete: false,
+                    });
+                }
+                pos += 1;
+            }
+            Some(_) => {
+                if !(0x21..=0x7e).contains(&b) {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![b],
+                        again: vec![],
+                        incomplete: false,
+                    });
+                }
+                let Some(&b2) = bytes.get(pos + 1) else {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![b],
+                        again: vec![],
+                        incomplete: true,
+                    });
+                };
+                if !(0x21..=0x7e).contains(&b2) {
+                    return Err(Iso2022JpStop {
+                        at: pos,
+                        error: vec![b],
+                        again: vec![b2],
+                        incomplete: false,
+                    });
+                }
+                out.extend_from_slice(&[b | 0x80, b2 | 0x80]);
+                pos += 2;
+            }
+        }
+    }
+    Ok((out, state))
+}
+
+/// The CP50220 (`fold_kana`) or CP50221 bytes for the CP51932 (EUC)
+/// `bytes`, or `Err(offset)` at the first sequence neither can hold —
+/// a JIS X 0212 cell, or bytes that are not CP51932's. JIS X 0208 cells
+/// go out under `ESC $ B`; a half-width kana goes out under `ESC ( I`
+/// as CP50221 writes it, or folded into its full-width cell — with the
+/// sound mark after it, where the pair is one character — as CP50220
+/// does. `start` and `close` are as for
+/// [`stateless_to_iso2022jp_from`]: the designation left over from the
+/// previous chunk, and whether the bytes end in ASCII.
+pub(crate) fn eucjp_to_cp5022x_from(
+    bytes: &[u8],
+    start: Option<u8>,
+    close: bool,
+    fold_kana: bool,
+) -> std::result::Result<(Vec<u8>, Option<u8>), usize> {
+    let mut out = Vec::with_capacity(bytes.len() + 8);
+    let mut state: Option<u8> = start;
+    let mut pos = 0;
+    let mut designate = |out: &mut Vec<u8>, state: &mut Option<u8>, set: Option<u8>| {
+        if *state != set {
+            out.extend_from_slice(match set {
+                None => b"\x1b(B",
+                Some(0x8e) => b"\x1b(I",
+                Some(_) => b"\x1b$B",
+            });
+            *state = set;
+        }
+    };
+    while pos < bytes.len() {
+        match bytes[pos] {
+            b @ 0x00..=0x7f => {
+                designate(&mut out, &mut state, None);
+                out.push(b);
+                pos += 1;
+            }
+            0x8e if matches!(bytes.get(pos + 1), Some(0xa1..=0xdf)) => {
+                let kana = bytes[pos + 1];
+                if fold_kana {
+                    let mark = match (bytes.get(pos + 2), bytes.get(pos + 3)) {
+                        (Some(0x8e), Some(&m @ (0xde | 0xdf))) => Some(m),
+                        _ => None,
+                    };
+                    let (cell, n) = match mark.and_then(|m| cp50220_kana_fold_pair(kana, m)) {
+                        Some(cell) => (cell, 4),
+                        None => (CP50220_KANA_FOLD[(kana - 0xa1) as usize], 2),
+                    };
+                    designate(&mut out, &mut state, Some(0x92));
+                    out.push((cell >> 8) as u8 & 0x7f);
+                    out.push(cell as u8 & 0x7f);
+                    pos += n;
+                } else {
+                    designate(&mut out, &mut state, Some(0x8e));
+                    out.push(kana & 0x7f);
+                    pos += 2;
+                }
+            }
+            0xa1..=0xfe
+                if matches!(bytes.get(pos + 1), Some(0xa1..=0xfe)) =>
+            {
+                designate(&mut out, &mut state, Some(0x92));
+                out.push(bytes[pos] & 0x7f);
+                out.push(bytes[pos + 1] & 0x7f);
+                pos += 2;
+            }
+            _ => return Err(pos),
+        }
+    }
+    if close {
+        designate(&mut out, &mut state, None);
+    }
+    Ok((out, state))
 }
 
 /// The EUC-JP bytes the stateless-ISO-2022-JP `bytes` stand for, or

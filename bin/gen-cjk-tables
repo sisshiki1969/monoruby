@@ -32,6 +32,15 @@ SPECS = {
   # cells below (#1567).
   "CP950"   => { rust: "CP950",   lead: 0x81..0xFE, trail: 0x40..0xFE },
   "CP951"   => { rust: "CP951",   lead: 0x81..0xFE, trail: 0x40..0xFE },
+  # Big5-HKSCS and Big5-UAO read through `encoding_rs`'s `big5` (the
+  # HKSCS-2008 table) as Big5 does: HKSCS differs from it in a handful
+  # of cells, UAO in thousands, and both fill rows below 0xA1 that
+  # CRuby's Big5 leaves empty (#1500, #1520).
+  "Big5-HKSCS" => { rust: "BIG5_HKSCS", lead: 0x81..0xFE, trail: 0x40..0xFE },
+  "Big5-UAO"   => { rust: "BIG5_UAO",   lead: 0x81..0xFE, trail: 0x40..0xFE },
+  # GB12345 is GB2312's grid filled with the traditional forms, read
+  # through `gbk` like GB2312 (#1520).
+  "GB12345" => { rust: "GB12345", lead: 0xA1..0xFE, trail: 0xA1..0xFE },
 }
 
 def cells(enc, spec)
@@ -255,7 +264,14 @@ SPECS.each do |enc, spec|
   md = mono_dec[enc] || {}
   me = mono_enc[enc] || {}
   dec = live.reject { |c, cp| md[c] == cp }
-  encv = ch.reject { |cp, bs| me[cp] == bs }
+  # A character CRuby writes into a cell its table does not *read* —
+  # Big5-HKSCS writes U+20AC as `A3 E1` and refuses those bytes on the
+  # way in — is recorded even where the codec writes the same bytes:
+  # the reader takes a codec's cell only when the table holds it, so
+  # the write has to be spelled out to survive that check.
+  encv = ch.reject { |cp, bs|
+    me[cp] == bs && !(bs.size == 2 && spec.fetch(:grid, true) && !live.key?((bs[0] << 8) | bs[1]))
+  }
   # `write` reads the byte count back off the packed word, which works
   # only for one, two or four bytes, and only while no two-byte cell
   # has a lead below 0x81 (which would collide with the one-byte form).

@@ -50,9 +50,10 @@ pub(crate) use string::{
     eucjp_precise_len, IllFormed, mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width,
     eucjp_to_stateless_iso2022jp, stateless_iso2022jp_to_eucjp,
     stateless_iso2022jp_transcode_len, named_byte_index,
-    iso2022jp_to_stateless, stateless_to_iso2022jp,
+    
     iso2022jp_to_stateless_from, stateless_to_iso2022jp_from,
-    sjis_precise_len, walk_mbc, walk_mbc_with,
+    sjis_precise_len, walk_mbc, walk_mbc_with, big5_transcoder_len, cp5022x_to_eucjp_from,
+    eucjp_to_cp5022x_from, Iso2022JpStop, euc_jp_variant_index, cp51932_transcoder_len,
 };
 pub(crate) use string::{
     STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer, string_snapshot,
