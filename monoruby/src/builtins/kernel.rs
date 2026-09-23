@@ -4199,19 +4199,15 @@ fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) 
 }
 
 ///
-/// The name the frame owning `method_lfp` was *called* by. Differs from
+/// The name the frame owning `method_cfp` was *called* by. Differs from
 /// the definition name only for an aliased method, which is exactly what
 /// `__callee__` must report.
 ///
-/// The name is recovered from the call site rather than the frame: the
-/// caller saved its own pc into this frame's cont-frame slot, so the
-/// call site there names the alias that was dispatched.
-///
-/// A by-name dispatcher (`send` / `Method#call`) is deliberately *not*
-/// followed: it names its target at run time, and under the JIT — which
-/// inlines `send` without a cont-frame pc — that name is not reachable
-/// from here at all. Reporting it only in the interpreter would make
-/// `__callee__` depend on whether the caller happens to be compiled.
+/// CRuby keeps that name on the frame (`rb_frame_this_func()`); monoruby
+/// recovers it from whatever dispatched the frame — see
+/// [`dispatched_name`] — and trusts it only when it really resolves to
+/// an alias of this frame's method, `original_name` being the
+/// definition name every alias of it shares.
 ///
 fn called_name(
     store: &Store,
@@ -4219,37 +4215,135 @@ fn called_name(
     self_val: Value,
     def_name: IdentId,
 ) -> Option<IdentId> {
-    let name = call_site_name(store, method_cfp)?;
-    // `super` has no name, and a dispatch that went through
-    // `method_missing` / `send` / `Method#call` / … names the
-    // trampoline rather than the frame we are standing in. Only trust
-    // the call-site name when the receiver really resolves it to an
-    // alias of this frame's method — `original_name` is the definition
-    // name every alias of it shares.
-    match store.check_method_for_class(self_val.class(), name) {
-        Some(entry) if entry.original_name() == def_name => Some(name),
-        _ => None,
-    }
+    let dispatched = dispatched_name(store, method_cfp)?;
+    let running = method_cfp.lfp().func_id();
+    let reaches = |entry: &MethodTableEntry| {
+        entry.original_name() == def_name || entry.func_id() == Some(running)
+    };
+    resolves_to_frame(store, dispatched, self_val, running, reaches)
 }
 
-/// The method name written at the call site that entered `method_cfp`,
-/// with no claim that it names this frame's method: `super` has none,
-/// and a dispatch through `method_missing` / `send` / `Method#call`
-/// names the trampoline. Each caller checks that its own way.
-fn call_site_name(store: &Store, method_cfp: Cfp) -> Option<IdentId> {
+/// How a frame was dispatched: the name, and whether that name came from
+/// a `super` (which looks up from the method's owner rather than from
+/// the receiver's class).
+#[derive(Clone, Copy)]
+struct Dispatched {
+    name: IdentId,
+    via_super: bool,
+}
+
+/// The method name that dispatched the frame at `method_cfp`, read off
+/// whatever made the call:
+///
+/// - a Ruby call site names it (`a.collect`), unless it is a `super`,
+///   which dispatches by the name of the method it is written in, or a
+///   `send` the JIT compiled in place — the literal it was given, or
+///   the argument the inlined `send` wrote back to the caller's frame;
+/// - a builtin `send` / `__send__` / `public_send` holds it as its first
+///   argument;
+/// - a `Method` / `UnboundMethod` (`#call`, `#bind_call`, …) holds the
+///   name it was looked up by.
+///
+/// That is the whole of what CRuby's `rb_frame_this_func()` answers for
+/// indirect dispatch; the name is still verified against the frame by
+/// each caller, so a guess can only fall back to the definition name,
+/// never name another method (#1505).
+fn dispatched_name(store: &Store, method_cfp: Cfp) -> Option<Dispatched> {
+    let direct = |name| Some(Dispatched { name, via_super: false });
     let caller = method_cfp.prev()?;
-    let iseq_id = store[caller.lfp().func_id()].is_iseq()?;
-    store[call_site_id(store, iseq_id, method_cfp)?].name
+    let caller_lfp = caller.lfp();
+    let caller_fid = caller_lfp.func_id();
+    let caller_func = &store[caller_fid];
+    if caller_lfp.meta().is_native() {
+        if store.is_object_send(caller_fid) || caller_func.name() == Some(IdentId::get_id("public_send"))
+        {
+            return direct(name_of(*caller_lfp.variadic_args().first()?)?);
+        }
+        let recv = caller_lfp.self_val();
+        return match recv.ty() {
+            Some(ObjTy::METHOD) if recv.as_method().method_missing_name().is_none() => {
+                direct(recv.as_method().lookup_name(store))
+            }
+            Some(ObjTy::UMETHOD) if recv.as_umethod().method_missing_name().is_none() => {
+                direct(recv.as_umethod().lookup_name(store))
+            }
+            _ => None,
+        };
+    }
+    let iseq_id = caller_func.is_iseq()?;
+    let site = &store[call_site_id(store, iseq_id, method_cfp)?];
+    let Some(name) = site.name else {
+        // `super` looks the method it is written in up again, by that
+        // method's own (definition) name.
+        let (_, name) = enclosing_method(store, caller)?;
+        return Some(Dispatched { name, via_super: true });
+    };
+    // A `Method#call` (or `#[]` / `#===`) the JIT compiled in place: the
+    // Method is the call's receiver, written back to the caller's frame.
+    if let Some(m) = caller_lfp.register(site.recv)
+        && m.ty() == Some(ObjTy::METHOD)
+        && m.as_method().method_missing_name().is_none()
+        && m.as_method().func_id() == method_cfp.lfp().func_id()
+    {
+        return direct(m.as_method().lookup_name(store));
+    }
+    if matches!(name.get_name().as_str(), "send" | "__send__" | "public_send") {
+        // A `send` the JIT compiled in place: the literal is on the
+        // direct call site it compiled instead, and anything else is the
+        // first argument, which the inlined `send` writes back to the
+        // caller's frame before it dispatches.
+        if let Some(target) = site.send_direct {
+            return direct(store[target].name?);
+        }
+        if site.pos_num > 0 && site.splat_pos().is_empty() {
+            if let Some(target) = caller_lfp.register(site.args).and_then(name_of) {
+                return direct(target);
+            }
+        }
+    }
+    direct(name)
+}
+
+/// A method name given as a value, the way `send` accepts one.
+fn name_of(v: Value) -> Option<IdentId> {
+    v.try_symbol().or_else(|| v.is_str().map(IdentId::get_id))
+}
+
+/// Whether `dispatched` really reached the frame running `running`: its
+/// name, looked up where the dispatch looked it up, finds an entry that
+/// `reaches` accepts.
+fn resolves_to_frame(
+    store: &Store,
+    dispatched: Dispatched,
+    self_val: Value,
+    running: FuncId,
+    reaches: impl Fn(&MethodTableEntry) -> bool,
+) -> Option<IdentId> {
+    let Dispatched { name, via_super } = dispatched;
+    let found = if via_super {
+        // Looked up from above the caller, so resolve it where the
+        // running method lives.
+        store[running]
+            .owner_class()
+            .iter()
+            .filter_map(|owner| store.check_method_for_class(*owner, name))
+            .any(|entry| reaches(&entry))
+    } else {
+        store
+            .check_method_for_class(self_val.class(), name)
+            .is_some_and(|entry| reaches(&entry))
+    };
+    found.then_some(name)
 }
 
 /// The name the call site used to reach the builtin that is running —
 /// CRuby's `rb_frame_this_func()`, which is what an Enumerator records,
-/// so `[1, 2].collect` reads `…:collect` rather than `…:map`.
-/// Falls back to `def_name` wherever the call site cannot be trusted to
-/// name this frame (`super`, `send`, `method_missing`, `Method#call`).
+/// so `[1, 2].collect` reads `…:collect` rather than `…:map`, through
+/// `send` / `Method#call` as well (#1505). Falls back to `def_name`
+/// wherever the dispatch cannot be traced to this frame.
 ///
 /// A `#[monoruby_builtin]` runs in its own native frame, so `vm.cfp()`
-/// is the frame [`called_name`] wants.
+/// is the frame [`dispatched_name`] wants.
 pub(super) fn invoked_name(
     vm: &Executor,
     globals: &Globals,
@@ -4257,18 +4351,18 @@ pub(super) fn invoked_name(
     def_name: IdentId,
 ) -> IdentId {
     let store = &globals.store;
-    let Some(name) = call_site_name(store, vm.cfp()) else {
+    let Some(dispatched) = dispatched_name(store, vm.cfp()) else {
         return def_name;
     };
     // Identity by `FuncId`, not by `original_name`: a builtin's aliases
     // are separate entries that each record their *own* name there
     // (`[1, 2].method(:select).original_name` is `:select`), so only the
-    // shared body says the call site really reached this frame.
+    // shared body says the dispatch really reached this frame.
     let running = vm.cfp().lfp().func_id();
-    match store.check_method_for_class(self_val.class(), name) {
-        Some(entry) if entry.func_id() == Some(running) => name,
-        _ => def_name,
-    }
+    resolves_to_frame(store, dispatched, self_val, running, |entry| {
+        entry.func_id() == Some(running)
+    })
+    .unwrap_or(def_name)
 }
 
 ///
@@ -4795,9 +4889,10 @@ pub fn object_send(
     let using_fpr = state.get_using_fpr(ir);
     let error = ir.new_error(state);
     let callid = callsite.id;
+    let call_site_pc = state.pc().as_ptr() as u64;
     ir.inline(move |r#gen, store, labels, _| {
         let error = &labels[error];
-        r#gen.object_send_inline(callid, store, using_fpr, &error, no_splat);
+        r#gen.object_send_inline(callid, store, using_fpr, &error, no_splat, call_site_pc);
     });
     state.def_reg2acc(ir, GP::Rax, callsite.dst);
     true

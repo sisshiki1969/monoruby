@@ -462,6 +462,7 @@ impl Codegen {
         using_fpr: UsingFpr,
         error: &DestLabel,
         no_splat: bool,
+        call_site_pc: u64,
     ) {
         let CallSiteInfo {
             recv,
@@ -480,7 +481,9 @@ impl Codegen {
 
         self.check_version_with_cache(&cache, recv);
 
-        self.fpr_save(using_fpr);
+        // Cont mode: the callee's frame gets the call-site pc (#1505).
+        self.fpr_save_with_cont(using_fpr, true);
+        self.emit_cont_frame_pc(call_site_pc);
         if no_splat {
             if pos_num < 1 {
                 monoasm! { &mut self.jit,
@@ -534,7 +537,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
         done:
         }
-        self.fpr_restore(using_fpr);
+        self.fpr_restore_with_cont(using_fpr, true);
         self.handle_error(&error);
 
         // The name resolved to nothing: hand the whole call to the
@@ -580,6 +583,7 @@ impl Codegen {
         store: &Store,
         using_fpr: UsingFpr,
         error: &DestLabel,
+        call_site_pc: u64,
     ) {
         let CallSiteInfo {
             recv,
@@ -592,7 +596,9 @@ impl Codegen {
         let proxy = self.jit.label();
         let done = self.jit.label();
 
-        self.fpr_save(using_fpr);
+        // Cont mode: the callee's frame gets the call-site pc (#1505).
+        self.fpr_save_with_cont(using_fpr, true);
+        self.emit_cont_frame_pc(call_site_pc);
         monoasm! { &mut self.jit,
             movq rdi, [rbp - (rbp_local(recv))];
             cmpl [rdi + (METHOD_MM_NAME_OFFSET as i32)], 0;
@@ -621,7 +627,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
         done:
         }
-        self.fpr_restore(using_fpr);
+        self.fpr_restore_with_cont(using_fpr, true);
         self.handle_error(error);
 
         self.jit.select_page(1);
