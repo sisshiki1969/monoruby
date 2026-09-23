@@ -213,8 +213,28 @@ impl RegexpInner {
     /// The onigmo matching pattern (UTF-8/ASCII view, with `\u{}`
     /// expanded). Use [`source_bytes`](Self::source_bytes) for the
     /// CRuby-visible `Regexp#source`.
-    pub fn as_str(&self) -> &str {
-        self.regex.as_str()
+    /// The compiled pattern as text: its own bytes when they are UTF-8,
+    /// else — a pattern compiled from raw Shift_JIS, EUC-KR or UTF-16
+    /// bytes — the `\xHH` rendering of them, as `String#to_str` gives
+    /// it, so that a caller that only wants to look at the ASCII
+    /// structure of the pattern (an empty source, a lone space) sees
+    /// the same thing it always has.
+    pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
+        let bytes = self.regex.as_bytes();
+        match std::str::from_utf8(bytes) {
+            Ok(s) => std::borrow::Cow::Borrowed(s),
+            Err(_) => {
+                let mut res = String::with_capacity(bytes.len() * 2);
+                for &b in bytes {
+                    if b.is_ascii() {
+                        res.push(b as char);
+                    } else {
+                        res += &format!("\\x{b:02X}");
+                    }
+                }
+                std::borrow::Cow::Owned(res)
+            }
+        }
     }
 
     /// The original source bytes (CRuby `Regexp#source`), in
@@ -363,6 +383,82 @@ impl RegexpInner {
         // before ASCII metacharacters and passes every other byte
         // through unchanged, so a valid-UTF-8 input stays valid.
         String::from_utf8(Self::escape_bytes(text.as_bytes())).unwrap()
+    }
+
+    /// `rb_reg_quote` in the string's own encoding: a metacharacter is
+    /// escaped as a character of that encoding (the backslash before a
+    /// `[` in UTF-16 is two bytes), and a multibyte character is copied
+    /// whole — a Shift_JIS one whose trail byte happens to be `[`
+    /// included, where the byte-wise walk below would break it.
+    pub fn escape_in(bytes: &[u8], enc: crate::value::Encoding) -> Vec<u8> {
+        if !enc.is_wide() && crate::value::mbc_walker(enc).is_none() {
+            // Single-byte encodings, and UTF-8, whose continuation
+            // bytes are never ASCII: the byte walk is the character
+            // walk.
+            return Self::escape_bytes(bytes);
+        }
+        let put = |out: &mut Vec<u8>, c: u8| match crate::value::enc_mbcput(enc, c as u32) {
+            Ok(b) => out.extend_from_slice(&b),
+            Err(_) => out.push(c),
+        };
+        let mut out = Vec::with_capacity(bytes.len() + 8);
+        let mut pos = 0;
+        while pos < bytes.len() {
+            let n = match crate::value::precise_mbclen(enc, bytes, pos) {
+                PreciseLen::Char(n) => n,
+                // A byte that starts no character is copied as it is
+                // (`rb_enc_ascget` answers -1 and the walk moves on).
+                _ => {
+                    out.push(bytes[pos]);
+                    pos += 1;
+                    continue;
+                }
+            };
+            let ch = &bytes[pos..pos + n];
+            pos += n;
+            let ascii = if enc.is_wide() {
+                crate::value::enc_codepoint(enc, ch)
+                    .filter(|&c| c < 0x80)
+                    .map(|c| c as u8)
+            } else if n == 1 && ch[0] < 0x80 {
+                Some(ch[0])
+            } else {
+                None
+            };
+            let Some(b) = ascii else {
+                out.extend_from_slice(ch);
+                continue;
+            };
+            match b {
+                b'[' | b']' | b'{' | b'}' | b'(' | b')' | b'|' | b'-' | b'*' | b'.'
+                | b'\\' | b'?' | b'+' | b'^' | b'$' | b'#' | b' ' => {
+                    put(&mut out, b'\\');
+                    put(&mut out, b);
+                }
+                b'\n' => {
+                    put(&mut out, b'\\');
+                    put(&mut out, b'n');
+                }
+                b'\r' => {
+                    put(&mut out, b'\\');
+                    put(&mut out, b'r');
+                }
+                b'\x0c' => {
+                    put(&mut out, b'\\');
+                    put(&mut out, b'f');
+                }
+                b'\x0b' => {
+                    put(&mut out, b'\\');
+                    put(&mut out, b'v');
+                }
+                b'\t' => {
+                    put(&mut out, b'\\');
+                    put(&mut out, b't');
+                }
+                other => put(&mut out, other),
+            }
+        }
+        out
     }
 
     /// Byte-wise `Regexp.escape` / `Regexp.quote`, mirroring CRuby's
@@ -877,6 +973,9 @@ impl RegexpInner {
         source: Option<Vec<u8>>,
     ) -> Result<Self> {
         let reg_str: String = reg_str.into();
+        if !matches!(encoding, OnigmoEncoding::UTF8 | OnigmoEncoding::ASCII) {
+            return Self::compile_native(reg_str, option, encoding, kcode, source_encoding, source);
+        }
         // Capture the source as written (before `\u{}` expansion); the
         // caller may override with the true raw bytes for non-UTF-8 input.
         let source: Arc<[u8]> =
@@ -982,6 +1081,76 @@ impl RegexpInner {
                 }
             }
         }
+    }
+
+    /// A pattern in an encoding other than UTF-8 / BINARY, compiled from
+    /// its own bytes under its own codec, as CRuby hands them to Onigmo.
+    /// The UTF-8 text the other constructors read cannot spell UTF-16,
+    /// and is the wrong thing for a Shift_JIS pattern too: the `\xHH`
+    /// escapes it writes for the high bytes leave a raw trail byte
+    /// after an escaped lead (`\x83g`), which Onigmo refuses as "too
+    /// short multibyte code string" where the raw pair is one
+    /// character. The escape pre-passes and `\u{}` expansion work on
+    /// that text, so they do not apply here.
+    fn compile_native(
+        reg_str: String,
+        option: u32,
+        encoding: OnigmoEncoding,
+        kcode: Option<u32>,
+        source_encoding: Option<crate::value::Encoding>,
+        source: Option<Vec<u8>>,
+    ) -> Result<Self> {
+        let source: Arc<[u8]> =
+            source.map_or_else(|| Arc::from(reg_str.as_bytes()), Arc::from);
+        let (declared_encoding, fixed_encoding) =
+            resolve_declared_encoding(&source, option, kcode, source_encoding);
+        let onigmo_option = option & !(Self::NOENCODING | Self::FIXEDENCODING | Self::KCODE_MASK);
+        let noencoding = option & Self::NOENCODING != 0;
+        // The cache is keyed by text; the byte image (one scalar per
+        // byte) is that text here, and is lossless.
+        let key = (crate::value::map_bytes_to_utf8(&source), onigmo_option, encoding);
+        let cached = REGEX_CACHE.read().unwrap().0.get(&key).cloned();
+        let regex = match cached {
+            Some(re) => {
+                queue_regexp_warnings(&re);
+                re
+            }
+            None => match Regex::new_bytes_with_encoding(&source, onigmo_option, encoding) {
+                Ok(regexp) => {
+                    queue_regexp_warnings(&regexp);
+                    let re = Arc::new(CachedRegex::new(regexp));
+                    REGEX_CACHE.write().unwrap().0.insert(key, re.clone());
+                    re
+                }
+                Err(err) => {
+                    let raw_msg = normalize_onigmo_message(err.to_string());
+                    let formatted = if raw_msg.contains(':') {
+                        raw_msg
+                    } else {
+                        let desc = crate::builtins::string::regexp_source_desc_bytes(
+                            &source,
+                            declared_encoding,
+                            None,
+                        );
+                        format!("{raw_msg}: /{}/", String::from_utf8_lossy(&desc))
+                    };
+                    return Err(MonorubyErr::regexerr(formatted));
+                }
+            },
+        };
+        Ok(RegexpInner {
+            regex,
+            source,
+            encoding,
+            declared_encoding,
+            fixed_encoding,
+            initialized: true,
+            noencoding,
+            native: Default::default(),
+            native_enc: std::cell::Cell::new(OnigmoEncoding::UTF8),
+            ascii_state: std::cell::Cell::new(0),
+            timeout: 0,
+        })
     }
 
     pub fn get_group_members(&self, name: &str) -> Vec<i32> {
@@ -1139,7 +1308,7 @@ impl RegexpInner {
         self.regex
             .byte_class
             .get_or_init(|| {
-                single_byte_class_of(self.regex.engine.as_str().as_bytes(), self.regex.engine.option())
+                single_byte_class_of(self.regex.engine.as_bytes(), self.regex.engine.option())
             })
             .as_ref()
     }
@@ -1152,6 +1321,18 @@ impl RegexpInner {
     /// The `OnigmoEncoding` for a subject of Ruby encoding `enc`, or
     /// `None` when Onigmo has no native codec (fall back to the
     /// UTF-8-view path).
+    /// The Onigmo codec a subject is matched under on its own bytes,
+    /// or `None` when it is read through the UTF-8 view instead: a
+    /// byte-oriented string with 8-bit content, or a UTF-16 / UTF-32
+    /// one, in an encoding Onigmo has a codec for.
+    pub fn native_codec_for(inner: &RStringInner) -> Option<OnigmoEncoding> {
+        if inner.needs_byte_mapping() || inner.encoding().is_wide() {
+            Self::onigmo_encoding_for(inner.encoding())
+        } else {
+            None
+        }
+    }
+
     pub fn onigmo_encoding_for(enc: crate::value::Encoding) -> Option<OnigmoEncoding> {
         use crate::value::Encoding as E;
         Some(match enc {
@@ -1160,6 +1341,10 @@ impl RegexpInner {
             // ASCII-only pattern is byte-transparent; a pattern pinned to
             // another encoding is refused by `check_match_encoding` first.
             E::Ascii8 => OnigmoEncoding::ASCII,
+            E::Utf16Le => OnigmoEncoding::UTF16LE,
+            E::Utf16Be => OnigmoEncoding::UTF16BE,
+            E::Utf32Le => OnigmoEncoding::UTF32LE,
+            E::Utf32Be => OnigmoEncoding::UTF32BE,
             E::EucJp(_) => OnigmoEncoding::EUC_JP,
             // Ruby treats Shift_JIS / Windows-31J as one codec family;
             // Windows_31J is the superset CRuby actually pins for /s.
@@ -1182,12 +1367,26 @@ impl RegexpInner {
                 16 => OnigmoEncoding::ISO_8859_16,
                 _ => return None,
             },
-            // Single-byte NamedByte encodings with an Onigmo codec.
-            // Multi-byte ones (Big5, GB18030, EUC-KR/TW, ...) are left
-            // out: monoruby's char iteration treats NamedByte subjects
-            // as one char per byte, which would disagree with Onigmo's
-            // multi-byte char boundaries in MatchData offsets.
+            // The name-preserved encodings Onigmo has a codec for: the
+            // single-byte code pages, and the CJK multibyte sets, whose
+            // walkers (`mbc_walker`) agree with Onigmo's character
+            // boundaries, so a MatchData's offsets and the chunks cut
+            // from the subject are whole characters. Replicas take
+            // their original's codec (GB2312 / GB12345 are EUC-KR's
+            // byte structure, CP950 is Big5's, CP951 is Big5-HKSCS's,
+            // stateless-ISO-2022-JP is Emacs-Mule's).
             E::NamedByte(_) => match enc.name() {
+                "EUC-KR" | "GB2312" | "GB12345" => OnigmoEncoding::EUC_KR,
+                "EUC-TW" => OnigmoEncoding::EUC_TW,
+                "Big5" | "CP950" => OnigmoEncoding::Big5,
+                "Big5-HKSCS" | "CP951" => OnigmoEncoding::Big5_HKSCS,
+                "Big5-UAO" => OnigmoEncoding::Big5_UAO,
+                "GB18030" => OnigmoEncoding::GB18030,
+                "GBK" => OnigmoEncoding::GBK,
+                "CP949" => OnigmoEncoding::CP949,
+                "Emacs-Mule" | "stateless-ISO-2022-JP" | "stateless-ISO-2022-JP-KDDI" => {
+                    OnigmoEncoding::Emacs_Mule
+                }
                 "KOI8-R" => OnigmoEncoding::KOI8_R,
                 "KOI8-U" => OnigmoEncoding::KOI8_U,
                 "Windows-1250" => OnigmoEncoding::Windows_1250,
@@ -1285,6 +1484,39 @@ impl RegexpInner {
     /// `String` cannot carry (#1516).
     pub fn tos_bytes(&self) -> Vec<u8> {
         let option = self.option();
+        if self.declared_encoding().is_wide() {
+            // The wrapper is spelled in the pattern's own encoding, a
+            // unit per character; the source is copied as it is.
+            let enc = self.declared_encoding();
+            let m = option & onigmo_regex::ONIG_OPTION_MULTILINE != 0;
+            let i = option & onigmo_regex::ONIG_OPTION_IGNORECASE != 0;
+            let x = option & onigmo_regex::ONIG_OPTION_EXTEND != 0;
+            let head = format!(
+                "(?{}{}{}{}{}{}{}:",
+                if m { "m" } else { "" },
+                if i { "i" } else { "" },
+                if x { "x" } else { "" },
+                if m && i && x { "" } else { "-" },
+                if !m { "m" } else { "" },
+                if !i { "i" } else { "" },
+                if !x { "x" } else { "" },
+            );
+            let mut out = Vec::with_capacity(self.source.len() + 4 * head.len() + 4);
+            let put = |out: &mut Vec<u8>, c: u8| match crate::value::enc_mbcput(enc, c as u32) {
+                Ok(b) => out.extend_from_slice(&b),
+                Err(_) => out.push(c),
+            };
+            head.bytes().for_each(|c| put(&mut out, c));
+            // `rb_reg_expr_str` renders the source, in its own encoding:
+            // a control character as `\xHH`, a `/` behind a backslash.
+            out.extend_from_slice(&crate::builtins::string::regexp_source_desc_bytes(
+                &self.source,
+                enc,
+                Some(enc),
+            ));
+            put(&mut out, b')');
+            return out;
+        }
         let mut m = option & onigmo_regex::ONIG_OPTION_MULTILINE != 0;
         let mut i = option & onigmo_regex::ONIG_OPTION_IGNORECASE != 0;
         let mut x = option & onigmo_regex::ONIG_OPTION_EXTEND != 0;
@@ -1692,16 +1924,8 @@ impl RegexpInner {
         // `UTF8_VARIANTS` member other than UTF-8 holds UTF-8 bytes,
         // so it reads through the `&str` path below while CRuby
         // refuses to match a UTF-8 regexp against it (#1562).
-        crate::builtins::check_match_encoding(
-            store,
-            self,
-            inner.encoding(),
-            inner.is_ascii_only(),
-        )?;
-        if !inner.needs_byte_mapping() {
-            return Ok(None);
-        }
-        let Some(native) = Self::onigmo_encoding_for(inner.encoding()) else {
+        crate::builtins::check_match_encoding(store, self, inner)?;
+        let Some(native) = Self::native_codec_for(inner) else {
             return Ok(None);
         };
         // CRuby refuses a regexp search over a broken string
@@ -2167,7 +2391,7 @@ impl RegexpInner {
             return Ok(None);
         }
         let recv_inner = recv.as_rstring_inner();
-        if recv_inner.needs_byte_mapping() {
+        if recv_inner.needs_byte_mapping() || recv_inner.encoding().is_wide() {
             return Ok(None);
         }
         let given: &str = recv_inner.check_utf8()?;
@@ -2567,7 +2791,7 @@ impl RegexpInner {
             }
             let spans = spans_of(&region);
             let (start, end) = spans[0].unwrap();
-            let (rep, mixed) = self.expand_backref(replace.as_bytes(), subject.as_bytes(), &spans);
+            let (rep, mixed) = self.expand_backref(replace, subject.as_bytes(), &spans);
             replacements.push((
                 start..end,
                 expansion_inner(store, &rep, replace, mixed, subject.view_encoding())?,
@@ -2619,11 +2843,14 @@ impl RegexpInner {
     /// [`expansion_inner`], whether the two can share an encoding.
     fn expand_backref(
         &self,
-        replace: &[u8],
+        replace: &RStringInner,
         given: &[u8],
         spans: &[Option<(usize, usize)>],
     ) -> (Vec<u8>, bool) {
-        let bytes = replace;
+        if replace.encoding().is_wide() {
+            return self.expand_backref_wide(replace, given, spans);
+        }
+        let bytes = replace.as_bytes();
         let mut rep: Vec<u8> = Vec::with_capacity(bytes.len());
         let mut captured_non_ascii = false;
         let mut push_captured = |rep: &mut Vec<u8>, s: &[u8]| {
@@ -2739,6 +2966,105 @@ impl RegexpInner {
         (rep, captured_non_ascii)
     }
 
+    /// [`expand_backref`](Self::expand_backref) for a UTF-16 / UTF-32
+    /// template, whose backslash and digits are code units rather than
+    /// bytes; the captured text is the subject's own bytes, in the same
+    /// encoding.
+    fn expand_backref_wide(
+        &self,
+        replace: &RStringInner,
+        given: &[u8],
+        spans: &[Option<(usize, usize)>],
+    ) -> (Vec<u8>, bool) {
+        let enc = replace.encoding();
+        let w = enc.unit_width();
+        let bytes = replace.as_bytes();
+        let unit = |i: usize| -> Option<u32> {
+            bytes
+                .get(i..i + w)
+                .and_then(|u| crate::value::enc_codepoint(enc, u))
+        };
+        let mut rep: Vec<u8> = Vec::with_capacity(bytes.len());
+        let mut captured_non_ascii = false;
+        let mut push_captured = |rep: &mut Vec<u8>, s: &[u8]| {
+            captured_non_ascii |= !s.is_ascii();
+            rep.extend_from_slice(s);
+        };
+        let group = |i: usize| -> Option<&[u8]> {
+            spans.get(i).copied().flatten().map(|(s, e)| &given[s..e])
+        };
+        let mut i = 0;
+        while i < bytes.len() {
+            let Some(next) = unit(i).filter(|&c| c == b'\\' as u32).and(unit(i + w)) else {
+                let end = (i + w).min(bytes.len());
+                rep.extend_from_slice(&bytes[i..end]);
+                i = end;
+                continue;
+            };
+            let mut consumed = 2 * w;
+            match u8::try_from(next).unwrap_or(0) {
+                d @ b'0'..=b'9' => {
+                    if let Some(m) = group((d - b'0') as usize) {
+                        push_captured(&mut rep, m);
+                    }
+                }
+                b'&' => {
+                    if let Some(m) = group(0) {
+                        push_captured(&mut rep, m);
+                    }
+                }
+                b'`' => {
+                    if let Some((start, _)) = spans.first().copied().flatten() {
+                        push_captured(&mut rep, &given[..start]);
+                    }
+                }
+                b'\'' => {
+                    if let Some((_, end)) = spans.first().copied().flatten() {
+                        push_captured(&mut rep, &given[end..]);
+                    }
+                }
+                b'+' => {
+                    let mut idx = spans.len();
+                    while idx > 1 {
+                        idx -= 1;
+                        if let Some(m) = group(idx) {
+                            push_captured(&mut rep, m);
+                            break;
+                        }
+                    }
+                }
+                b'\\' => rep.extend_from_slice(&bytes[i..i + w]),
+                b'k' if unit(i + 2 * w) == Some(b'<' as u32) => {
+                    // `\k<name>`: the name's units up to `>`, looked up
+                    // as the bytes Onigmo registered them under.
+                    let name_start = i + 3 * w;
+                    let mut j = name_start;
+                    while j + w <= bytes.len() && unit(j) != Some(b'>' as u32) {
+                        j += w;
+                    }
+                    if j + w <= bytes.len() {
+                        let name = String::from_utf8_lossy(&bytes[name_start..j]).into_owned();
+                        let mut chosen: Option<usize> = None;
+                        for &m_idx in self.get_group_members(&name).iter() {
+                            if group(m_idx as usize).is_some() {
+                                chosen = Some(m_idx as usize);
+                            }
+                        }
+                        if let Some(m) = chosen.and_then(group) {
+                            push_captured(&mut rep, m);
+                        }
+                        consumed = j + w - i;
+                    } else {
+                        rep.extend_from_slice(&bytes[i..i + 2 * w]);
+                    }
+                }
+                _ => rep.extend_from_slice(&bytes[i..i + 2 * w]),
+            }
+            i += consumed;
+        }
+        (rep, captured_non_ascii)
+    }
+
     /// Replaces the leftmost-first match for `self` in `subject` with
     /// `replace`.
     fn replace_once(
@@ -2756,7 +3082,7 @@ impl RegexpInner {
         }
         let spans = spans_of(&region);
         let (start, end) = spans[0].unwrap();
-        let (rep, mixed) = self.expand_backref(replace.as_bytes(), subject.as_bytes(), &spans);
+        let (rep, mixed) = self.expand_backref(replace, subject.as_bytes(), &spans);
         let rep_inner = expansion_inner(store, &rep, replace, mixed, subject.view_encoding())?;
         let rep_enc = rep_inner.encoding();
         let res = RStringInner::splice_all(

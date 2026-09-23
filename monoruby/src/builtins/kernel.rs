@@ -5615,7 +5615,12 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         // ASCII-8BIT under every locale (#1494).
         if let Some(re) = self_val.is_regex() {
             let resenc = crate::builtins::encoding::inspect_result_encoding(globals);
-            let enc = re.declared_encoding();
+            // …except a UTF-16 / UTF-32 pattern, whose rendering is
+            // US-ASCII: it is built as such and never re-associated.
+            let enc = match re.declared_encoding() {
+                e if e.is_wide() => crate::value::Encoding::UsAscii,
+                e => e,
+            };
             return Ok(Value::string_from_inner(RStringInner::from_encoding(
                 &re.desc_bytes(resenc),
                 enc,

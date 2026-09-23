@@ -1132,40 +1132,16 @@ pub(super) extern "C" fn concatenate_regexp(
         enc = e;
         option |= RegexpInner::FIXEDENCODING;
     }
-    // The matching engine only understands UTF-8/ASCII; feed it a
-    // best-effort UTF-8 view while the raw bytes + encoding drive
-    // `Regexp#source` / `#encoding`.
+    // From here the source is read exactly as `Regexp.new` reads a
+    // String in `enc`: the engine, the declared encoding and the `\xHH`
+    // escapes are all settled by the shared builder.
     let reg_str = String::from_utf8_lossy(&bytes).into_owned();
-    // Split the encoding-selector bits out of the option word into the
-    // KCODE the resolver reads (mirroring `const_regexp`); the Onigmo
-    // `i`/`m`/`x` bits stay in `option` and `with_option_kcode_source`
-    // strips the Ruby-only bits before handing the mask to Onigmo. With an
-    // encoding modifier the declared encoding is fixed by it regardless of
-    // the interpolated content's encoding; without one it is derived from
-    // that content as before.
-    let kcode = if option & RegexpInner::KCODE_MASK != 0 {
-        Some(option & RegexpInner::KCODE_MASK)
-    } else {
-        None
-    };
-    let onig_enc = if option & RegexpInner::NOENCODING != 0 {
-        // `/n`: ASCII / BINARY matching.
-        onigmo_regex::OnigmoEncoding::ASCII
-    } else if kcode.is_some() {
-        // `/u` `/e` `/s`: match against the best-effort UTF-8 view.
-        onigmo_regex::OnigmoEncoding::UTF8
-    } else if enc == Encoding::Ascii8 {
-        onigmo_regex::OnigmoEncoding::ASCII
-    } else {
-        onigmo_regex::OnigmoEncoding::UTF8
-    };
-    let inner = match RegexpInner::with_option_kcode_source(
+    let inner = match crate::builtins::regexp_inner_from_parts(
         reg_str,
-        option,
-        onig_enc,
-        kcode,
         Some(enc),
         Some(bytes),
+        option,
+        None,
     ) {
         Ok(inner) => inner,
         Err(err) => {

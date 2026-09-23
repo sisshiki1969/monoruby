@@ -5481,7 +5481,10 @@ fn prism_integer_to_bigint(value: &prism::Integer<'_>) -> num::BigInt {
 fn regex_body_to_string(bytes: &[u8], _loc: Loc) -> Result<NodeKind, MonorubyErr> {
     match std::str::from_utf8(bytes) {
         Ok(s) => Ok(NodeKind::String(s.to_owned())),
-        Err(_) => Err(MonorubyErr::fatal("prism lowerer: non-utf8 regex literal")),
+        // A literal in a non-UTF-8 source file (`# encoding: EUC-JP`):
+        // the bytes as written, which bytecodegen reads in the file's
+        // encoding (#1622).
+        Err(_) => Ok(NodeKind::Bytes(bytes.to_vec())),
     }
 }
 

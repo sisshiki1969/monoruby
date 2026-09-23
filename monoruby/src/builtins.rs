@@ -47,7 +47,10 @@ mod random;
 mod range;
 mod regexp;
 pub(crate) use module::autoload_pending;
-pub(crate) use regexp::check_match_encoding;
+pub(crate) use regexp::{
+    check_match_encoding, check_regexp_hex_escapes, regexp_inner_from_parts,
+    regexp_inner_from_string,
+};
 mod set;
 mod socket;
 pub(crate) mod spawn;

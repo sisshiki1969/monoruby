@@ -485,18 +485,20 @@ impl Value {
     ) -> Result<Regexp> {
         if let Some(re) = self.is_regex() {
             Ok(re)
-        } else if let Some(s) = self.is_str() {
+        } else if self.is_rstring().is_some() {
+            // `get_pat`: the String is a regexp source in its own
+            // encoding — an EUC-KR or UTF-16 pattern included.
             Ok(Regexp::new_unchecked(Value::regexp(
-                RegexpInner::with_option(s, 0)?,
+                crate::builtins::regexp_inner_from_string(vm, globals, *self, 0, None)?,
             )))
         } else {
             // `get_pat`'s `to_str` probe: the full `rb_check_funcall`
             // protocol, so a `method_missing`-backed `to_str` converts.
             if let Some(result) = check_funcall(vm, globals, *self, IdentId::TO_STR)?
-                && let Some(s) = result.is_str()
+                && result.is_rstring().is_some()
             {
                 return Ok(Regexp::new_unchecked(Value::regexp(
-                    RegexpInner::with_option(s, 0)?,
+                    crate::builtins::regexp_inner_from_string(vm, globals, result, 0, None)?,
                 )));
             }
             Err(MonorubyErr::is_not_regexp_nor_string(&globals.store, *self))

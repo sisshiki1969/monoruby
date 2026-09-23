@@ -108,9 +108,16 @@ fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
             unique.push(n);
         }
     }
-    Ok(Value::array_from_iter(
-        unique.iter().map(|n| Value::string_from_str(n)),
-    ))
+    // A name is spelled in the pattern's encoding: in a UTF-16 regexp
+    // it is the UTF-16 bytes, which CRuby hands back as they are.
+    let enc = re.declared_encoding();
+    Ok(Value::array_from_iter(unique.iter().map(|n| {
+        if enc.is_wide() {
+            Value::string_from_inner(RStringInner::from_encoding(n.as_bytes(), enc))
+        } else {
+            Value::string_from_str(n)
+        }
+    })))
 }
 
 // Class methods
@@ -276,6 +283,93 @@ pub(super) fn check_regexp_source_bytes_valid(
     check_regexp_source_valid(&RStringInner::from_encoding(bytes, encoding), option)
 }
 
+/// A regexp source as an error message renders it: the message is
+/// UTF-8, so a UTF-8 source's characters show as themselves and any
+/// other encoding's are escaped by value (`/é/`, `/\x{A4A2}/`).
+fn regexp_source_desc_in_message(bytes: &[u8], enc: crate::value::Encoding) -> String {
+    String::from_utf8_lossy(&super::string::regexp_source_desc_bytes(
+        bytes,
+        enc,
+        Some(crate::value::Encoding::UTF8),
+    ))
+    .into_owned()
+}
+
+/// `unescape_nonascii`'s reading of the `\xHH` escapes in a regexp
+/// source: an escaped byte above `0x7F` has to spell, together with the
+/// `\xHH` escapes right after it, one character of `enc` — "too short
+/// escaped multibyte character" when the escapes run out first,
+/// "invalid multibyte escape" when they spell none — and when it does,
+/// the regexp is pinned to `enc` (`Ok(true)`). BINARY and US-ASCII
+/// sources are exempt: their escaped bytes are bytes, and UTF-16 /
+/// UTF-32 sources are pinned already, and spell their escapes in code
+/// units this walk does not read.
+pub(crate) fn check_regexp_hex_escapes(bytes: &[u8], enc: crate::value::Encoding) -> Result<bool> {
+    use crate::value::Encoding;
+    if matches!(enc, Encoding::Ascii8 | Encoding::UsAscii) || enc.is_wide() {
+        return Ok(false);
+    }
+    let refuse = |what: &str| {
+        MonorubyErr::regexerr(format!("{what}: /{}/", regexp_source_desc_in_message(bytes, enc)))
+    };
+    // A `\xH` / `\xHH` at `i` (the `x`): its byte and the index after
+    // the digits.
+    let hex_at = |i: usize| -> Option<(u8, usize)> {
+        let d = |j: usize| bytes.get(j).and_then(|b| (*b as char).to_digit(16));
+        let first = d(i + 1)?;
+        match d(i + 2) {
+            Some(second) => Some(((first * 16 + second) as u8, i + 3)),
+            None => Some((first as u8, i + 2)),
+        }
+    };
+    let mut pinned = false;
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        if bytes[i + 1] != b'x' {
+            // `\\`, `\n`, `\u`, …: the escaped character is skipped
+            // whole, so a `\\` is never read as the start of an escape.
+            i += 2;
+            continue;
+        }
+        let Some((byte, next)) = hex_at(i + 1) else {
+            // No digits: the engine's "invalid hex escape".
+            i += 2;
+            continue;
+        };
+        i = next;
+        if byte < 0x80 {
+            continue;
+        }
+        let mut ch = vec![byte];
+        loop {
+            match crate::value::precise_mbclen(enc, &ch, 0) {
+                PreciseLen::Char(_) => {
+                    pinned = true;
+                    break;
+                }
+                PreciseLen::Invalid => return Err(refuse("invalid multibyte escape")),
+                PreciseLen::NeedMore => {
+                    // The rest of the character has to be escaped too.
+                    if bytes.get(i) == Some(&b'\\')
+                        && bytes.get(i + 1) == Some(&b'x')
+                        && let Some((b, next)) = hex_at(i + 1)
+                    {
+                        ch.push(b);
+                        i = next;
+                    } else {
+                        return Err(refuse("too short escaped multibyte character"));
+                    }
+                }
+            }
+        }
+    }
+    Ok(pinned)
+}
+
 /// Parse `Regexp.new`/`#initialize` arguments (source + optional option)
 /// into a fully-built `RegexpInner`.
 fn build_regexp_inner(
@@ -341,27 +435,92 @@ fn build_regexp_inner(
     } else {
         default_option.unwrap_or(onigmo_regex::ONIG_OPTION_NONE)
     };
-    let (string, source_encoding, source_bytes) = if let Some(re) = arg0.is_regex() {
-        (
-            re.as_str().to_string(),
-            Some(re.declared_encoding()),
-            // Preserve the original Regexp's source verbatim.
-            Some(re.source_bytes().to_vec()),
-        )
-    } else {
-        // The matching engine needs a UTF-8 view, so escape non-UTF-8
-        // bytes (`coerce_to_string`), but keep the *raw* bytes for
-        // `Regexp#source` so a Shift_JIS/EUC-JP/binary source survives.
-        let (raw, enc) = match arg0.is_rstring_inner() {
-            Some(r) => {
-                check_regexp_source_valid(&r, option)?;
-                (Some(r.as_bytes().to_vec()), r.encoding())
+    if arg0.is_regex().is_none() {
+        return regexp_inner_from_string(vm, globals, arg0, option, default_kcode);
+    }
+    let re = arg0.is_regex().unwrap();
+    let (string, source_encoding, source_bytes) = (
+        re.as_str().to_string(),
+        Some(re.declared_encoding()),
+        // Preserve the original Regexp's source verbatim.
+        Some(re.source_bytes().to_vec()),
+    );
+    regexp_inner_from_parts(string, source_encoding, source_bytes, option, default_kcode)
+}
+
+/// `Regexp.new(string, option)` — and `get_pat`, which is how a String
+/// handed to `String#match` / `#index` / `#byteindex` becomes a
+/// pattern: the string is compiled as a regexp source in its own
+/// encoding, whatever that encoding is.
+pub(crate) fn regexp_inner_from_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg0: Value,
+    option: u32,
+    default_kcode: Option<u32>,
+) -> Result<RegexpInner> {
+    // The matching engine needs a UTF-8 view, so escape non-UTF-8
+    // bytes (`coerce_to_string`), but keep the *raw* bytes for
+    // `Regexp#source` so a Shift_JIS/EUC-JP/binary source survives.
+    let (raw, enc) = match arg0.is_rstring_inner() {
+        Some(r) => {
+            check_regexp_source_valid(&r, option)?;
+            // `/…/n` reads its source as bytes, so a non-ASCII character
+            // written raw in any source but a BINARY one — and every
+            // character of a UTF-16 / UTF-32 source — is refused
+            // (`unescape_nonascii`); the `\xHH` form is how such a byte
+            // is spelled there.
+            if option & RegexpInner::NOENCODING != 0
+                && r.encoding() != crate::value::Encoding::Ascii8
+                && (!r.encoding().is_ascii_compatible() || !r.is_ascii_only())
+            {
+                return Err(MonorubyErr::regexerr(format!(
+                    "/.../n has a non escaped non ASCII character in non ASCII-8BIT script: /{}/",
+                    regexp_source_desc_in_message(r.as_bytes(), r.encoding())
+                )));
             }
-            None => (None, crate::value::Encoding::UTF8),
-        };
-        let s = arg0.coerce_to_string(vm, globals)?;
-        (s, Some(enc), raw)
+            (Some(r.as_bytes().to_vec()), r.encoding())
+        }
+        None => (None, crate::value::Encoding::UTF8),
     };
+    let s = arg0.coerce_to_string(vm, globals)?;
+    regexp_inner_from_parts(s, Some(enc), raw, option, default_kcode)
+}
+
+/// The reading of a regexp source shared by `Regexp.new`, the literal
+/// (`const_regexp`) and the interpolated literal (`concatenate_regexp`):
+/// `rb_reg_initialize` plus `rb_reg_preprocess`. `string` is the
+/// source as UTF-8 text (the engine's view when the pattern compiles
+/// under UTF-8), `source_bytes` the bytes as written, in
+/// `source_encoding`; an `e` / `s` / `u` modifier (`default_kcode` or the
+/// `KCODE_*` bits of `option`) re-tags them first, as
+/// `reg_fragment_setenc` does.
+pub(crate) fn regexp_inner_from_parts(
+    string: String,
+    source_encoding: Option<crate::value::Encoding>,
+    source_bytes: Option<Vec<u8>>,
+    mut option: u32,
+    default_kcode: Option<u32>,
+) -> Result<RegexpInner> {
+    // The encoding the source is read in: the modifier's when there
+    // is one, else the string's own.
+    let kcode_bits = option & RegexpInner::KCODE_MASK;
+    let effective_kcode = if kcode_bits != 0 { Some(kcode_bits) } else { default_kcode };
+    let source_encoding = match effective_kcode {
+        Some(k) if k & RegexpInner::KCODE_UTF8 != 0 => Some(crate::value::Encoding::UTF8),
+        Some(k) if k & RegexpInner::KCODE_EUCJP != 0 => Some(crate::value::Encoding::EUC_JP),
+        Some(k) if k & RegexpInner::KCODE_SJIS != 0 => Some(crate::value::Encoding::Sjis(1)),
+        _ => source_encoding,
+    };
+    // A `\xHH` escape spelling a character of that encoding pins the
+    // regexp to it, and one spelling none is refused here, before
+    // Onigmo (whose own reading of the bytes is worded differently).
+    if option & RegexpInner::NOENCODING == 0
+        && let (Some(enc), Some(bytes)) = (source_encoding, source_bytes.as_deref())
+        && check_regexp_hex_escapes(bytes, enc)?
+    {
+        option |= RegexpInner::FIXEDENCODING;
+    }
     // A BINARY source carrying high bytes — raw, or as `\xHH` escapes
     // (`Regexp.new("[\xC2-\xDF]".b)`, what `Regexp.union` of `/…/n`
     // regexps hands back) — is matched byte-wise like `/…/n`; under the
@@ -393,10 +552,22 @@ fn build_regexp_inner(
     } else {
         None
     };
+    // A UTF-16 / UTF-32 source is compiled under its own codec whatever
+    // it contains: even its ASCII characters are not the bytes the
+    // UTF-8 engine reads.
+    let wide_source = if option & RegexpInner::NOENCODING == 0 {
+        source_encoding
+            .filter(|e| e.is_wide())
+            .and_then(RegexpInner::onigmo_encoding_for)
+    } else {
+        None
+    };
     let encoding = if option & RegexpInner::NOENCODING != 0 || binary_source {
         onigmo_regex::OnigmoEncoding::ASCII
     } else {
-        native_source.unwrap_or(onigmo_regex::OnigmoEncoding::UTF8)
+        native_source
+            .or(wide_source)
+            .unwrap_or(onigmo_regex::OnigmoEncoding::UTF8)
     };
     // Pull the kcode bit out of the option mask before passing to
     // onigmo (which doesn't understand the modifier letters).
@@ -537,12 +708,13 @@ fn regexp_escape(
             crate::value::Encoding::UTF8,
         )
     };
-    let escaped = RegexpInner::escape_bytes(&bytes);
-    // CRuby tags the result US-ASCII when it contains only ASCII
-    // bytes (otherwise it inherits the source's encoding). The
-    // escape itself only adds ASCII metacharacters, so the result
-    // is ASCII-only iff the input is.
-    let result_enc = if escaped.is_ascii() {
+    let escaped = RegexpInner::escape_in(&bytes, src_enc);
+    // CRuby tags the result US-ASCII when it is 7-bit in an
+    // ASCII-compatible encoding (otherwise it keeps the source's — a
+    // UTF-16 string is never 7-bit, whatever it spells). The escape
+    // itself only adds ASCII metacharacters, so the result is 7-bit iff
+    // the input is.
+    let result_enc = if src_enc.is_ascii_compatible() && escaped.is_ascii() {
         crate::value::Encoding::UsAscii
     } else {
         src_enc
@@ -606,7 +778,6 @@ fn regexp_union(
         combined = combined.combine(enc, &globals.store)?;
         parts.push(format_union_member(vm, globals, *arg)?);
     }
-    let s = parts.join(&b'|');
     // CRuby's `Regexp.union` downgrades the result to US-ASCII
     // when *every* arg was 7-bit ASCII content, even if
     // individual args were declared as a pinned encoding via a
@@ -620,6 +791,11 @@ fn regexp_union(
     } else {
         combined
     };
+    // The `|` between members is a character of the result's encoding
+    // (`rb_str_buf_cat_ascii`): two bytes in UTF-16.
+    let bar = crate::value::enc_mbcput(resolved_combined.resolved(), b'|' as u32)
+        .unwrap_or_else(|_| vec![b'|']);
+    let s = parts.join(&bar[..]);
     Ok(Value::regexp(union_inner_with_encoding(s, resolved_combined)?))
 }
 
@@ -775,28 +951,21 @@ fn union_inner_with_encoding(
 ) -> Result<RegexpInner> {
     use crate::value::Encoding;
     let enc = union_enc.resolved();
-    let onigmo_enc = if matches!(enc, Encoding::Ascii8) {
-        onigmo_regex::OnigmoEncoding::ASCII
-    } else {
-        onigmo_regex::OnigmoEncoding::UTF8
-    };
     let pinned = matches!(union_enc, UnionEnc::Pinned(_));
     // For pinned encodings without a kcode equivalent (UTF-16LE,
     // UTF-32, ISO-8859-*, …) we can't piggy-back on the
     // `KCODE_*` bits — set `FIXEDENCODING` instead so the source-
     // encoding fallback branch in `resolve_declared_encoding`
     // honours the encoding we computed.
-    let (option, kcode) = match enc {
-        Encoding::Utf8(_) => (RegexpInner::KCODE_UTF8, Some(RegexpInner::KCODE_UTF8)),
-        Encoding::EucJp(_) => (RegexpInner::KCODE_EUCJP, Some(RegexpInner::KCODE_EUCJP)),
-        Encoding::Sjis(_) => (RegexpInner::KCODE_SJIS, Some(RegexpInner::KCODE_SJIS)),
-        // `FIXEDENCODING`, not `NOENCODING`: the result is pinned to
-        // BINARY because a member was, which is not the same as the
-        // `n` modifier having been written — CRuby's union of a
-        // `/…/n` member carries no `n` of its own (#1516).
-        Encoding::Ascii8 => (RegexpInner::FIXEDENCODING, None),
-        _ if pinned => (RegexpInner::FIXEDENCODING, None),
-        _ => (0u32, None),
+    // `FIXEDENCODING`, never a `KCODE_*` bit: the result is pinned to
+    // the encoding a member had — Shift_JIS stays Shift_JIS where the
+    // `s` modifier would have made it Windows-31J — and a BINARY member
+    // pins BINARY without the `n` modifier having been written (CRuby's
+    // union of a `/…/n` member carries no `n` of its own, #1516).
+    let (option, kcode) = if pinned || matches!(enc, Encoding::Ascii8) {
+        (RegexpInner::FIXEDENCODING, None)
+    } else {
+        (0u32, None)
     };
     // `Regexp.union` ends in `rb_reg_new_str`, so the joined source is
     // preprocessed like any other and a member that is broken in its
@@ -806,18 +975,12 @@ fn union_inner_with_encoding(
     // (`Regexp.union("x", eucbad)` is `/x|a\xA4/`), which is exactly
     // what `pattern` now holds.
     check_regexp_source_bytes_valid(&pattern, enc, option)?;
-    // The compiled pattern goes in as a Rust `String`, but the source
-    // the regexp remembers — and compiles from under a native codec —
-    // is the raw bytes, exactly as `Regexp.new` passes them.
+    // From here the join is read exactly as `Regexp.new` reads a String
+    // in `enc` — the engine (a Shift_JIS join compiles under Shift_JIS,
+    // a UTF-16 one under UTF-16), the declared encoding and the `\xHH`
+    // escapes are all the shared builder's.
     let text = String::from_utf8_lossy(&pattern).into_owned();
-    RegexpInner::with_option_kcode_source(
-        text,
-        option,
-        onigmo_enc,
-        kcode,
-        Some(enc),
-        Some(pattern),
-    )
+    regexp_inner_from_parts(text, Some(enc), Some(pattern), option, kcode)
 }
 
 /// Render a single `Regexp.union` argument into its embedded form.
@@ -839,7 +1002,7 @@ fn format_union_member(
     // carrying invalid UTF-8 bytes shows up here, and `is_str()`
     // would reject it for not being valid UTF-8.
     if let Some(s) = arg.is_rstring_inner() {
-        return Ok(RegexpInner::escape_bytes(s.as_bytes()));
+        return Ok(RegexpInner::escape_in(s.as_bytes(), s.encoding()));
     }
     if let Some(re) = arg.is_regex() {
         return Ok(re.tos_bytes());
@@ -855,8 +1018,8 @@ fn format_union_member(
     }
     if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
         let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
-        if let Some(s) = result.is_str() {
-            return Ok(RegexpInner::escape_bytes(s.as_bytes()));
+        if let Some(s) = result.is_rstring_inner() {
+            return Ok(RegexpInner::escape_in(s.as_bytes(), s.encoding()));
         }
     }
     let class = arg.builtin_class_name(&globals.store);
@@ -986,8 +1149,8 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     // (responds to `to_str`), it coerces and matches.
     let subject = if arg0.is_rstring().is_some() {
         arg0
-    } else if let Some(sym) = arg0.try_symbol() {
-        Value::string(sym.to_string())
+    } else if arg0.try_symbol().is_some() {
+        symbol_as_string(arg0)
     } else if let Some(func_id) = globals.check_method(arg0, IdentId::TO_STR) {
         // `to_str` coercion path: call the method, then accept the
         // result iff it's a String. CRuby raises TypeError on a
@@ -1007,6 +1170,19 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     };
     check_subject_match_encoding(&globals.store, &regex, subject)?;
     warn_binary_regexp_match(vm, globals, &regex, subject);
+    // A subject Onigmo walks natively is matched on its own bytes (see
+    // `Regexp#match`).
+    if let Some(rs) = subject.is_rstring()
+        && rs.code_range() != CodeRange::SevenBit
+        && let Some(native_enc) = RegexpInner::native_codec_for(&subject.as_rstring_inner())
+    {
+        vm.set_match_regex(self_);
+        let bytes = subject.as_rstring_inner().as_bytes();
+        let hit = regex
+            .captures_bytes_from_pos(bytes, subject, native_enc, 0, vm)?
+            .is_some();
+        return Ok(Value::bool(hit));
+    }
     // Stash a UTF-8-valid String subject so the MatchData snapshot is
     // zero-copy and carries the subject's encoding into $&/$1..$N;
     // non-UTF-8 subjects fall back to the owned lossy copy as before.
@@ -1045,9 +1221,22 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 pub(crate) fn check_match_encoding(
     store: &Store,
     regex: &RegexpInner,
-    str_enc: crate::value::Encoding,
-    str_ascii_only: bool,
+    subject: &RStringInner,
 ) -> Result<()> {
+    // `rb_reg_prepare_enc` refuses a broken subject before it looks at
+    // the encodings at all, naming the subject's own encoding — so an
+    // odd-length UTF-16LE string is "invalid byte sequence in UTF-16LE"
+    // and never "incompatible encoding regexp match", and a US-ASCII
+    // string with a high byte names US-ASCII, not the UTF-8 its view
+    // is read through.
+    if !subject.is_valid_encoding() {
+        return Err(MonorubyErr::argumenterr(format!(
+            "invalid byte sequence in {}",
+            subject.encoding().name()
+        )));
+    }
+    let str_enc = subject.encoding();
+    let str_ascii_only = subject.is_ascii_only();
     let reg_enc = regex.declared_encoding();
     if !str_enc.is_ascii_compatible() {
         if reg_enc != str_enc {
@@ -1087,8 +1276,19 @@ fn check_subject_match_encoding(
     subject: Value,
 ) -> Result<()> {
     if subject.is_rstring().is_some() {
-        let inner = subject.as_rstring_inner();
-        check_match_encoding(store, regex, inner.encoding(), inner.is_ascii_only())?;
+        check_match_encoding(store, regex, &subject.as_rstring_inner())?;
+    } else if let Some(sym) = subject.try_symbol() {
+        // `rb_reg_match` reads a Symbol as its String (US-ASCII when
+        // 7-bit, UTF-8 otherwise), so a regexp that cannot match such a
+        // string cannot match the Symbol either.
+        let name = sym.get_name();
+        let enc = if name.is_ascii() {
+            crate::value::Encoding::UsAscii
+        } else {
+            crate::value::Encoding::UTF8
+        };
+        let inner = RStringInner::from_encoding(name.as_bytes(), enc);
+        check_match_encoding(store, regex, &inner)?;
     }
     Ok(())
 }
@@ -1167,6 +1367,7 @@ fn regexp_match(
         };
         return Ok(res);
     }
+    let arg0 = symbol_as_string(arg0);
     let given_owned;
     let given: &str = match arg0.is_rstring() {
         Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
@@ -1349,6 +1550,23 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// zero-copy path cannot borrow: a Symbol's name, or a String that is not
 /// valid UTF-8, read lossily as before. Never interns — the subject is
 /// arbitrary data, and a symbol is never collected.
+/// `rb_reg_match`'s reading of a Symbol subject: the String it names,
+/// US-ASCII when 7-bit and UTF-8 otherwise — which is what the
+/// MatchData's strings then carry. Anything else is handed back as it
+/// is.
+fn symbol_as_string(subject: Value) -> Value {
+    let Some(sym) = subject.try_symbol() else {
+        return subject;
+    };
+    let name = sym.get_name();
+    let enc = if name.is_ascii() {
+        crate::value::Encoding::UsAscii
+    } else {
+        crate::value::Encoding::UTF8
+    };
+    Value::string_from_inner(RStringInner::from_encoding(name.as_bytes(), enc))
+}
+
 fn subject_to_string(store: &Store, subject: Value) -> Result<String> {
     if let Some(sym) = subject.try_symbol() {
         return Ok(sym.get_name());
@@ -1437,6 +1655,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // the zero-copy MatchData snapshot) when it is a UTF-8 String;
     // Symbols and non-UTF-8 subjects fall back to the owned
     // conversion as before.
+    let arg0 = symbol_as_string(arg0);
     let heystack_owned;
     let heystack: &str = match arg0.is_rstring() {
         Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
@@ -3064,6 +3283,169 @@ mod tests {
         );
         // ...and through interpolation (the same "last wins" decode).
         run_test(r#"x = "o"; [ /fo#{x}/ensuens.encoding.to_s, /fo#{x}/su.encoding.to_s ]"#);
+    }
+
+    #[test]
+    fn a_cjk_subject_is_matched_by_character_under_its_own_codec() {
+        // Onigmo has a codec for every CJK code page monoruby walks
+        // (`onigmo_encoding_for`), so a subject in one is matched on its
+        // own bytes: `.` takes a whole character, offsets are character
+        // offsets, and the chunks cut out carry the subject's encoding.
+        // These used to be matched byte by byte through the UTF-8 view.
+        run_test_once(
+            r##"
+            def e(s, enc) = s.dup.force_encoding(enc)
+            def w(v) = v.is_a?(String) ? [v.bytes, v.encoding.to_s] : v.is_a?(Array) ? v.map { |i| w(i) } : v.is_a?(MatchData) ? w(v.to_a) : v
+            x = ->(&b) { begin; w(b.call); rescue => err; [err.class, err.message]; end }
+            ss = [e("\xC7\xD1\xB1\xB9\xBE\xEEabc", "EUC-KR"), e("\xA4\xA4\xA4\xE5abc", "Big5"), e("\xD6\xD0\xCE\xC4abc", "GBK"),
+                  e("\xD6\xD0\xCE\xC4abc\x94\x32\xBE\x34", "GB18030"), e("\x8C\x63abc", "CP949"), e("\xC4\xA1\x8E\xA2\xA1\xA1abc", "EUC-TW"),
+                  e("\x92\xA4\xA2abc", "Emacs-Mule"), e("\xA4\xA4abc", "Big5-HKSCS"), e("\xC7\xD1abc", "GB2312"), e("\xA4\xA4abc", "CP950")]
+            ss.map { |s|
+              [x.() { s =~ /a/ }, x.() { s.match(/(.)/) }, x.() { s.scan(/./) }, x.() { s.index(/b/) }, x.() { s[/./] }, x.() { s.start_with?(/a/) },
+               x.() { s.sub(/./, "X") }, x.() { s.gsub(/./, "X") }, x.() { s.gsub(/(.)/) { $1 * 2 } }, x.() { s =~ /\w/ }, x.() { s =~ /[a-z]+/; $~.byteoffset(0) },
+               x.() { s.byteindex(/a/) }, x.() { s.byterindex(/./) }, x.() { s.byteindex(/./, 1) }, x.() { s.byterindex(/./, 1) }, x.() { s.split(/b/) },
+               x.() { s.partition(/a/) }, x.() { s.match?(/c\z/) }, x.() { s =~ /./u }, x.() { s.rindex(/./) }, x.() { /a/ === s }]
+            }
+            "##,
+        );
+    }
+
+    #[test]
+    fn the_subject_is_checked_as_rb_reg_prepare_enc_does() {
+        // A broken subject is refused first, in its own encoding's name
+        // (an odd-length UTF-16LE string is "invalid byte sequence in
+        // UTF-16LE", a US-ASCII string with a high byte names US-ASCII);
+        // only then are the encodings compared, so a UTF-16 subject meets
+        // an ASCII regexp as an encoding clash rather than as bytes that
+        // are no UTF-8 — for every regexp operation, `scan` and `split`
+        // included. A Symbol is checked as the String it names.
+        run_test_once(
+            r##"
+            def e(s, enc) = s.dup.force_encoding(enc)
+            def w(v) = v.is_a?(String) ? [v.bytes, v.encoding.to_s] : v.is_a?(Array) ? v.map { |i| w(i) } : v.is_a?(MatchData) ? w(v.to_a) : v
+            x = ->(&b) { begin; w(b.call); rescue => err; [err.class, err.message]; end }
+            u16 = "ab日".encode("UTF-16LE"); odd = e("a\x00b", "UTF-16LE"); usb = e("ab\x80c", "US-ASCII"); krb = e("\xC7abc", "EUC-KR"); b5 = e("\xA4abc", "Big5")
+            [u16, "ab日".encode("UTF-32BE"), odd, usb, krb, b5, "ab\xFFc"].map { |s|
+              [x.() { s =~ /a/ }, x.() { s.scan(/./) }, x.() { s.split(/b/) }, x.() { s.index(/b/) }, x.() { s.rindex(/b/) }, x.() { s.sub(/./, "X") },
+               x.() { s.gsub(/a/, "a" => "b") }, x.() { s.gsub(/(.)/) { $1 } }, x.() { s.match?(/a/) }, x.() { s.start_with?(/a/) }, x.() { s.index("b") },
+               x.() { /a/ === s }, x.() { s =~ /日/ }, x.() { s.partition(/a/) }, x.() { s[/a/] }, x.() { s.byteindex(/a/) }]
+            } + [x.() { /a/.match(:abc) }, x.() { Regexp.new("a".encode("UTF-16LE")).match(:abc) }, x.() { Regexp.new("a".encode("UTF-16LE")) === "abc" },
+                 x.() { Regexp.new("a".encode("UTF-16LE")) =~ "abc" }, x.() { u16 =~ "a".encode("UTF-16LE") }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_utf16_pattern_is_compiled_and_matched_in_its_own_encoding() {
+        // `Regexp.new` of a UTF-16 / UTF-32 String compiles its bytes
+        // under that codec; the regexp is pinned to it, and matches only
+        // subjects in it. `Regexp.escape` and `Regexp.union` spell their
+        // metacharacters and the `|` as characters of the encoding, a
+        // replacement's `\2\1` are read as code units, `#to_s` wraps in
+        // the encoding, and `#inspect` is the US-ASCII rendering CRuby
+        // writes (an ASCII character's own bytes, NUL units included).
+        run_test_once(
+            r##"
+            def e(s, enc) = s.dup.force_encoding(enc)
+            def w(v)
+              case v
+              when String then [v.bytes, v.encoding.to_s]
+              when Array then v.map { |i| w(i) }
+              when MatchData then w(v.to_a)
+              when Regexp then [v.source.bytes, v.encoding.to_s, v.fixed_encoding?, v.options, v.inspect.bytes, v.inspect.encoding.to_s, v.to_s.bytes, v.to_s.encoding.to_s]
+              else v
+              end
+            end
+            x = ->(&b) { begin; w(b.call); rescue => err; [err.class, err.message.ascii_only? ? err.message : err.message.encoding.to_s]; end }
+            u = ->(s, enc = "UTF-16LE") { s.encode(enc) }
+            s = u.("ab日cab")
+            re = Regexp.new(u.("(日)(.)"))
+            [x.() { re }, x.() { re.match(s) }, x.() { m = re.match(s); [m.begin(0), m.end(0), m.byteoffset(0), m.pre_match, m.post_match] },
+             x.() { Regexp.new(u.("c")) =~ s }, x.() { s =~ Regexp.new(u.("A"), "i") }, x.() { s[Regexp.new(u.("日."))] }, x.() { s[Regexp.new(u.("(日)(.)")), 2] },
+             x.() { s.index(Regexp.new(u.("a")), 1) }, x.() { s.rindex(Regexp.new(u.("a"))) }, x.() { s.scan(Regexp.new(u.("."))) }, x.() { s.scan(Regexp.new(u.("(a)(.)"))) },
+             x.() { s.gsub(Regexp.new(u.("a")), u.("X")) }, x.() { s.gsub(Regexp.new(u.("(a)(b)")), u.("<\\2\\1>")) }, x.() { s.gsub(Regexp.new(u.("a"))) { |m| m + m } },
+             x.() { s.gsub(Regexp.new(u.("a")), u.("a") => u.("Z")) }, x.() { s.sub(Regexp.new(u.("b"))) { $~.begin(0).to_s.encode("UTF-16LE") } },
+             x.() { s.split(Regexp.new(u.("b"))) }, x.() { s.split(Regexp.new(u.("(b)"))) }, x.() { s.split(u.("b")) }, x.() { s.split(u.("b"), 2) }, x.() { u.("a b  c").split(u.(" ")) },
+             x.() { s.start_with?(Regexp.new(u.("ab"))) }, x.() { s.partition(Regexp.new(u.("日"))) }, x.() { s.rpartition(Regexp.new(u.("a"))) }, x.() { s.match(u.("日.")) }, x.() { s.match?(u.("日.")) },
+             x.() { s.byteindex(Regexp.new(u.("c"))) }, x.() { s.byteindex(Regexp.new(u.("a")), 2) }, x.() { s.byteindex(Regexp.new(u.("a")), 1) }, x.() { s.byterindex(Regexp.new(u.("a"))) },
+             x.() { Regexp.new(u.("日", "UTF-16BE")).match(u.("ab日", "UTF-16BE")) }, x.() { Regexp.new(u.("(日)", "UTF-32LE")).match(u.("ab日", "UTF-32LE")) },
+             x.() { Regexp.new(u.("日", "UTF-32BE")).match(u.("ab日", "UTF-32BE")).byteoffset(0) },
+             x.() { Regexp.new(u.("a")).match(u.("ab", "UTF-16BE")) }, x.() { Regexp.new(u.("a")).match("abc") }, x.() { /a/ =~ s }, x.() { /日/ =~ s },
+             x.() { Regexp.escape(u.("a[b].c\n")) }, x.() { Regexp.escape(u.("日.")) }, x.() { Regexp.union(u.("a[b"), u.("c.")) }, x.() { Regexp.union(u.("a[b"), u.("日")) =~ s },
+             x.() { Regexp.union(u.("a"), "b") }, x.() { [Regexp.new(u.("a")) == Regexp.new(u.("a")), Regexp.new(u.("a")) == /a/, Regexp.new(u.("a")).hash == Regexp.new(u.("a")).hash] },
+             x.() { Regexp.new(u.("(?<n>a)")).names }, x.() { Regexp.new(Regexp.new(u.("a"))) }, x.() { Regexp.new(u.("a")).match(e("a\x00b", "UTF-16LE")) },
+             x.() { Regexp.new(u.("")).match(s) }, x.() { Regexp.new(u.("a\x01\t/\\/b")) }, x.() { Regexp.new(u.("(b)")).match(s); [$~[1], $1, $`, $'] },
+             x.() { Regexp.new(u.("a"), "mix").options }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_string_pattern_is_a_regexp_source_in_its_own_encoding() {
+        // `get_pat`: a String handed where a pattern is wanted is
+        // compiled as a regexp source in its own encoding — an EUC-KR or
+        // Shift_JIS one too — and `Regexp.escape` walks the string's
+        // characters, so a Shift_JIS trail byte that happens to be `[`
+        // is not escaped and a metacharacter in UTF-16 takes a two-byte
+        // backslash.
+        run_test_once(
+            r##"
+            def w(v) = v.is_a?(String) ? [v.bytes, v.encoding.to_s] : v.is_a?(Array) ? v.map { |i| w(i) } : v.is_a?(MatchData) ? w(v.to_a) : v.is_a?(Regexp) ? [v.source.bytes, v.encoding.to_s, v.fixed_encoding?] : v
+            x = ->(&b) { begin; w(b.call); rescue => err; [err.class, err.message]; end }
+            kr = "한국어abc".encode("EUC-KR"); sj = "ソ[ト".encode("Shift_JIS")
+            [x.() { kr.match("국.".encode("EUC-KR")) }, x.() { kr.match?("국.".encode("EUC-KR")) }, x.() { kr =~ "국".encode("EUC-KR") }, x.() { kr.split("국".encode("EUC-KR")) },
+             x.() { kr.sub("국".encode("EUC-KR"), "<\\0>".encode("EUC-KR")) }, x.() { kr.index("어".encode("EUC-KR")) }, x.() { kr.match("국") },
+             x.() { Regexp.escape(sj) }, x.() { Regexp.escape("한[".encode("EUC-KR")) }, x.() { Regexp.escape("a[".force_encoding("US-ASCII")) }, x.() { Regexp.escape("a[\xFF".b) },
+             x.() { Regexp.escape("a[".encode("EUC-KR")) }, x.() { sj.match(Regexp.escape("[ト".encode("Shift_JIS"))) }, x.() { Regexp.new(Regexp.escape(sj)) },
+             x.() { Regexp.new(Regexp.escape("한[".encode("EUC-KR"))).match("x한[".encode("EUC-KR")) }, x.() { Regexp.union(sj, "x".encode("Shift_JIS")) }, x.() { Regexp.union(kr, "日") }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_hex_escape_pins_or_refuses_the_regexp_s_encoding() {
+        // `unescape_nonascii`: an escaped byte above 0x7F has to spell,
+        // with the `\xHH` right after it, one character of the source's
+        // encoding (the modifier's, under `/e` / `/s` / `/u`) — else "too
+        // short escaped multibyte character" when the escapes run out
+        // and "invalid multibyte escape" when they spell none — and then
+        // pins the regexp to that encoding. BINARY and US-ASCII sources
+        // are exempt, as is `/n`. The same reading applies to a literal,
+        // where a refusal is a SyntaxError (#1622).
+        run_test_once(
+            r##"
+            def e(s, enc) = s.dup.force_encoding(enc)
+            def w(v) = v.is_a?(Regexp) ? [v.source.bytes, v.encoding.to_s, v.fixed_encoding?, v.options] : v
+            x = ->(&b) { begin; w(b.call); rescue SyntaxError => err; [err.class, err.message[/(invalid|too short)[^\n]*/]]; rescue => err; [err.class, err.message]; end }
+            [x.() { Regexp.new("\\xff") }, x.() { Regexp.new("\\x80") }, x.() { Regexp.new("\\xe3\\x81\\x82") }, x.() { Regexp.new("\\xe3\\x81\\x82") =~ "xあ" }, x.() { Regexp.new("\\xe3") },
+             x.() { Regexp.new("\\xe3\\x81x") }, x.() { Regexp.new(e("\\xC6\\xFC", "EUC-JP")) }, x.() { Regexp.new(e("\\xC6", "EUC-JP")) }, x.() { Regexp.new(e("\\xC6a", "EUC-JP")) },
+             x.() { Regexp.new(e("\\xff", "US-ASCII")) }, x.() { Regexp.new("\\xff".b) }, x.() { Regexp.new("\\xff", Regexp::NOENCODING) }, x.() { Regexp.new("[\\xe3\\x81\\x82]") },
+             x.() { Regexp.new("[\\xff]") }, x.() { Regexp.new("\\\\\\xff") }, x.() { Regexp.new(e("\\xe3\\x81\\x82", "EUC-JP")) }, x.() { Regexp.new(e("\\x83\\x67", "Shift_JIS")) },
+             x.() { Regexp.new(e("\\x83g", "Shift_JIS")) }, x.() { Regexp.new("é", Regexp::NOENCODING) }, x.() { Regexp.new(e("\xA4\xA2", "EUC-JP"), Regexp::NOENCODING) },
+             x.() { Regexp.new("\\xe9", Regexp::NOENCODING) }, x.() { Regexp.new("\\x41") }, x.() { Regexp.new("\\u3042\\xe3\\x81\\x82") },
+             x.() { eval('/\xe3\x81\x82/') }, x.() { eval('/\xff/') }, x.() { eval('/\xff/n') }, x.() { eval('/\xe3/') }, x.() { eval('/\xC6\xFC/e') }, x.() { eval('/\xC6/e') },
+             x.() { eval('/\x80/u') }, x.() { eval('/\x41/') }, x.() { eval('/\xe3\x81\x82#{1}/') }, x.() { eval('/\xff#{1}/') }, x.() { eval('/\xC6\xFC#{1}/e') }]
+            "##,
+        );
+    }
+
+    #[test]
+    fn a_regexp_literal_in_a_non_utf8_source_reads_the_file_s_encoding() {
+        // `# encoding: EUC-JP` reaches regexp literals as it does string
+        // literals: the bytes as written are the pattern, in EUC-JP,
+        // pinned when they are not ASCII; `\xHH` escapes are read in
+        // EUC-JP; and the literal used to be a FatalError (#1622).
+        run_test_once(
+            r##"
+            require "tmpdir"
+            Dir.mktmpdir do |d|
+              path = File.join(d, "e.rb")
+              File.binwrite(path, "# encoding: EUC-JP\n$r = [/\xC6\xFC/.encoding, /\xC6\xFC/.fixed_encoding?, \"\xC6\xFC\" =~ /\xC6\xFC/, /\\xC6\\xFC/.encoding, /\\xC6\\xFC/e.encoding, /a/e.encoding, /a/s.encoding, /abc/.encoding, /abc/.fixed_encoding?, /\xC6\xFC/.source.bytes, /\#{1}\xC6\xFC/.encoding, /\xC6\xFC/ =~ \"x\xC6\xFC\", \"\xC6\xFC\".match(/(.)/)[1].bytes, /\xC6\xFC/.inspect.bytes, /\xC6\xFC/.to_s.bytes]\n")
+              load path
+              $r.map { |v| v.is_a?(Encoding) ? v.to_s : v }
+            end
+            "##,
+        );
     }
 
     #[test]

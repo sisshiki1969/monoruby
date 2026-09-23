@@ -1035,7 +1035,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // CRuby `String#=~` raises `TypeError` when the rhs is a String —
     // matching a string against a string is meaningless (and would
     // otherwise recurse via the `=~` dispatch below).
-    if other.is_str().is_some() {
+    if other.is_rstring().is_some() {
         return Err(MonorubyErr::typeerr("type mismatch: String given"));
     }
     // Fast path: rhs is a Regexp — run the match and return the
@@ -1051,7 +1051,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             && let Some(native_enc) = RegexpInner::onigmo_encoding_for(s.encoding())
         {
             let regex = other.coerce_to_regexp_or_string(vm, globals)?;
-            super::regexp::check_match_encoding(&globals.store, &regex, s.encoding(), false)?;
+            super::regexp::check_match_encoding(&globals.store, &regex, &s)?;
             vm.set_match_regex(regex.as_val());
             let res =
                 match regex.captures_bytes_from_pos(s.as_bytes(), self_val, native_enc, 0, vm)? {
@@ -1068,12 +1068,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // subject whose encoding is UTF-8's bytes under another name
     // (`UTF8-MAC`) reads through the `&str` path, and CRuby refuses a
     // UTF-8 regexp against it all the same (#1562).
-        super::regexp::check_match_encoding(
-            &globals.store,
-            regex,
-            s.encoding(),
-            s.is_ascii_only(),
-        )?;
+        super::regexp::check_match_encoding(&globals.store, regex, &s)?;
         let given = s.regex_view()?;
         let given: &str = &given;
         // Enable zero-copy $~ haystack snapshots (CoW), which also
@@ -1385,7 +1380,7 @@ fn partition_main(
         return vm.invoke_method_inner(globals, name, self_val, &[sep], None, None);
     };
     let inner = self_val.as_rstring_inner();
-    super::regexp::check_match_encoding(&globals.store, &re, inner.encoding(), false)?;
+    super::regexp::check_match_encoding(&globals.store, &re, &inner)?;
     // Enable zero-copy `$~` haystack snapshots (CoW).
     vm.set_match_haystack(self_val);
     let mut view = None;
@@ -2771,12 +2766,7 @@ fn check_pattern_encoding_compat(
     // a different rule from two Strings meeting (a pinned regexp only
     // matches a subject in its own encoding).
     if let Some(re) = pattern.is_regex() {
-        return super::regexp::check_match_encoding(
-            &globals.store,
-            &re,
-            self_inner.encoding(),
-            self_inner.is_ascii_only(),
-        );
+        return super::regexp::check_match_encoding(&globals.store, &re, self_inner);
     }
     Ok(())
 }
@@ -3323,6 +3313,10 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             check_string_encoding_compat(&self_.as_rstring_inner(), &sep, globals)?;
         }
         if let Some(re) = v.is_regex() {
+            // `rb_reg_prepare_enc` first: a broken receiver, then a
+            // receiver the regexp cannot match, are refused before any
+            // view of the receiver is taken.
+            super::regexp::check_match_encoding(&globals.store, &re, &self_.as_rstring_inner())?;
             // A `Regexp` whose source is empty splits into characters;
             // a single-space source is treated as a literal " " string
             // split (NOT AWK — only a literal String " " is AWK).
@@ -3335,6 +3329,32 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 SepKind::Re(re)
             })
         } else if let Some(inner) = v.is_rstring_inner() {
+            if inner.encoding().is_wide() {
+                // A UTF-16 / UTF-32 separator has no text view; it is
+                // searched for as the regexp of its escaped self, in
+                // its own encoding, which the receiver (already checked
+                // compatible) is walked under natively.
+                if inner.as_bytes().is_empty() {
+                    return Ok(SepKind::Chars);
+                }
+                let enc = inner.encoding();
+                // One space, as a character of the encoding, is awk mode.
+                if inner.as_bytes().len() == enc.unit_width()
+                    && crate::value::enc_codepoint(enc, inner.as_bytes()) == Some(0x20)
+                {
+                    return Ok(SepKind::Awk);
+                }
+                let escaped = RegexpInner::escape_in(inner.as_bytes(), enc);
+                let re = RegexpInner::with_option_kcode_source(
+                    String::from_utf8_lossy(&escaped).into_owned(),
+                    0,
+                    RegexpInner::onigmo_encoding_for(enc).expect("wide codec"),
+                    None,
+                    Some(enc),
+                    Some(escaped),
+                )?;
+                return Ok(SepKind::Re(crate::value::Regexp::new_unchecked(Value::regexp(re))));
+            }
             let s = inner.regex_view()?;
             Ok(if s.is_empty() {
                 SepKind::Chars
@@ -3390,20 +3410,18 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     let split_mapped = self_.as_rstring_inner().needs_byte_mapping();
     let split_enc = self_.as_rstring_inner().encoding();
-    let view = self_.as_rstring_inner().regex_view()?;
-    let string: &str = &view;
 
     // `limit == 1`: the whole string is returned as the single field
     // (an empty receiver yields no fields).
     if limit_given && lim == 1 {
-        let v: Vec<Value> = if string.is_empty() {
+        let raw = self_.as_rstring_inner();
+        let v: Vec<Value> = if raw.as_bytes().is_empty() {
             vec![]
-        } else if split_mapped {
-            vec![Value::string_from_inner(RStringInner::from_mapped_utf8(
-                string, split_enc,
-            ))]
         } else {
-            vec![Value::string_from_str_with_encoding_of(string, self_)]
+            vec![Value::string_from_inner(RStringInner::from_encoding(
+                raw.as_bytes(),
+                split_enc,
+            ))]
         };
         return match lfp.block() {
             Some(bh) => {
@@ -3437,6 +3455,13 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         SepKind::Re(re) => re.native_subject(self_.as_rstring_inner(), &globals.store, true)?,
         _ => None,
     };
+    // The view is only taken when the walk is over it: a UTF-16
+    // receiver has none, and is walked natively above.
+    let view = match &native_re {
+        Some(_) => std::borrow::Cow::Borrowed(""),
+        None => self_.as_rstring_inner().regex_view()?,
+    };
+    let string: &str = &view;
     let hay: &[u8] = match &native_re {
         Some(subject) => subject.as_bytes(),
         None => string.as_bytes(),
@@ -5028,14 +5053,20 @@ fn pattern_mode(
     pattern: Value,
 ) -> Result<(bool, Option<onigmo_regex::OnigmoEncoding>)> {
     let inner = self_val.as_rstring_inner();
+    // `rb_reg_prepare_enc` runs for every Regexp pattern, whatever view
+    // the subject is then walked through: a UTF-16 receiver meets an
+    // ASCII regexp as an encoding clash, not as bytes that are no
+    // UTF-8.
+    if let Some(re) = pattern.is_regex() {
+        super::regexp::check_match_encoding(&globals.store, &re, &inner)?;
+    }
+    if pattern.is_regex().is_some()
+        && let Some(native) = RegexpInner::native_codec_for(&inner)
+    {
+        return Ok((false, Some(native)));
+    }
     if !inner.needs_byte_mapping() {
         return Ok((false, None));
-    }
-    if let Some(re) = pattern.is_regex()
-        && let Some(native) = RegexpInner::onigmo_encoding_for(inner.encoding())
-    {
-        super::regexp::check_match_encoding(&globals.store, &re, inner.encoding(), false)?;
-        return Ok((false, Some(native)));
     }
     Ok((true, None))
 }
@@ -5223,7 +5254,7 @@ fn native_gsub_block_miss(
     let Some(enc) = RegexpInner::onigmo_encoding_for(s.encoding()) else {
         return Ok(false);
     };
-    super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
+    super::regexp::check_match_encoding(&globals.store, &re, &s)?;
     if re.match_pred_bytes(s.as_bytes(), enc, 0)? {
         return Ok(false);
     }
@@ -5346,6 +5377,9 @@ pub(crate) fn regexp_source_desc_bytes(
     resenc: Option<crate::value::Encoding>,
 ) -> Vec<u8> {
     use crate::value::Encoding as E;
+    if enc.is_wide() {
+        return wide_regexp_source_desc_bytes(bytes, enc, resenc);
+    }
     let unicode = matches!(
         enc,
         E::Utf8(_) | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
@@ -5404,6 +5438,67 @@ pub(crate) fn regexp_source_desc_bytes(
             }
             .as_bytes(),
         );
+    }
+    out
+}
+
+/// [`regexp_source_desc_bytes`] for a UTF-16 / UTF-32 pattern, as
+/// `rb_reg_expr_str` walks it: an ASCII character is copied as its own
+/// bytes — NUL units included, which is what CRuby writes — a `/` takes
+/// a backslash, a backslash makes the next character literal, a control
+/// character is `\xHH` of its value, and a non-ASCII character the
+/// result encoding cannot show is `\uXXXX`. A unit that starts no
+/// character is `\xHH` per byte.
+fn wide_regexp_source_desc_bytes(
+    bytes: &[u8],
+    enc: crate::value::Encoding,
+    resenc: Option<crate::value::Encoding>,
+) -> Vec<u8> {
+    let showable = resenc == Some(enc);
+    let mut out: Vec<u8> = Vec::new();
+    let mut pos = 0;
+    let char_len = |pos: usize| match crate::value::precise_mbclen(enc, bytes, pos) {
+        PreciseLen::Char(n) => Some(n),
+        _ => None,
+    };
+    while pos < bytes.len() {
+        let Some(n) = char_len(pos) else {
+            let w = enc.unit_width().min(bytes.len() - pos);
+            for b in &bytes[pos..pos + w] {
+                out.extend_from_slice(format!("\\x{b:02X}").as_bytes());
+            }
+            pos += w;
+            continue;
+        };
+        let ch = &bytes[pos..pos + n];
+        pos += n;
+        let cp = crate::value::enc_codepoint(enc, ch).unwrap_or(0xFFFD);
+        if cp < 0x80 {
+            match cp as u8 {
+                b'\\' => {
+                    out.extend_from_slice(ch);
+                    if pos < bytes.len() {
+                        let m = char_len(pos).unwrap_or(enc.unit_width().min(bytes.len() - pos));
+                        out.extend_from_slice(&bytes[pos..pos + m]);
+                        pos += m;
+                    }
+                }
+                b'/' => {
+                    out.push(b'\\');
+                    out.extend_from_slice(ch);
+                }
+                b if (0x20..=0x7e).contains(&b) || (0x09..=0x0d).contains(&b) => {
+                    out.extend_from_slice(ch)
+                }
+                b => out.extend_from_slice(format!("\\x{b:02X}").as_bytes()),
+            }
+        } else if showable {
+            out.extend_from_slice(ch);
+        } else if cp < 0x10000 {
+            out.extend_from_slice(format!("\\u{cp:04X}").as_bytes());
+        } else {
+            out.extend_from_slice(format!("\\u{{{cp:X}}}").as_bytes());
+        }
     }
     out
 }
@@ -5567,7 +5662,9 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // not the receiver's `ArgumentError`.
     check_string_pattern_valid(lfp.arg(0))?;
     mustnot_broken(&self_.as_rstring_inner())?;
-    self_.as_rstring_inner().regex_view()?;
+    // The encoding check comes before the view: a UTF-16 receiver
+    // meets an ASCII regexp as an encoding clash, not as bytes that
+    // are no UTF-8.
     check_pattern_encoding_compat(&self_.as_rstring_inner(), lfp.arg(0), globals)?;
     let subject_val = string_snapshot(self_);
     vm.set_match_haystack(subject_val);
@@ -5815,7 +5912,7 @@ fn string_match(
     // subject whose encoding is UTF-8's bytes under another name
     // (`UTF8-MAC`) reads through the `&str` path, and CRuby refuses a
     // UTF-8 regexp against it all the same (#1562).
-    super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), s.is_ascii_only())?;
+    super::regexp::check_match_encoding(&globals.store, &re, &s)?;
     // A subject in a non-UTF-8 encoding Onigmo has a native codec for
     // (BINARY with 8-bit content, EUC-JP, Shift_JIS, ...) is matched on
     // its raw bytes, so the MatchData's strings and byte offsets are the
@@ -5980,7 +6077,7 @@ fn string_strscan_match(
     let native_enc = if utf8_view {
         None
     } else if let Some(enc) = RegexpInner::onigmo_encoding_for(s.encoding()) {
-        super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), false)?;
+        super::regexp::check_match_encoding(&globals.store, &re, &s)?;
         Some(enc)
     } else {
         return Ok(Value::bool(false));
@@ -6065,7 +6162,7 @@ fn string_match_(
     // subject whose encoding is UTF-8's bytes under another name
     // (`UTF8-MAC`) reads through the `&str` path, and CRuby refuses a
     // UTF-8 regexp against it all the same (#1562).
-    super::regexp::check_match_encoding(&globals.store, &re, s.encoding(), s.is_ascii_only())?;
+    super::regexp::check_match_encoding(&globals.store, &re, &s)?;
     // Native byte match for non-UTF-8 subjects with an Onigmo codec (see
     // `String#match`).
     if s.code_range() != CodeRange::SevenBit
@@ -6242,6 +6339,22 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     }
 
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
+    // A receiver Onigmo walks natively (a CJK code page, UTF-16 / UTF-32)
+    // is searched on its own bytes; the offset has to be a character
+    // boundary in its encoding (`str_check_byte_pos`).
+    if let Some(native_enc) = RegexpInner::native_codec_for(&given) {
+        if !is_byte_pos_boundary(&given, byte_offset) {
+            return Err(MonorubyErr::indexerr(format!(
+                "offset {byte_offset} does not land on character boundary"
+            )));
+        }
+        return Ok(
+            match re.captures_bytes_from_pos(haystack, self_, native_enc, byte_offset, vm)? {
+                Some(captures) => Value::integer(captures.pos(0).map_or(0, |(b, _)| b) as i64),
+                None => Value::nil(),
+            },
+        );
+    }
     let s = std::str::from_utf8(haystack).map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
 
     // Ensure byte_offset falls on a valid UTF-8 character boundary.
@@ -6335,6 +6448,45 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
 
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
+    // A receiver Onigmo walks natively: the same forward scan as below,
+    // over the receiver's own bytes and character heads.
+    if let Some(native_enc) = RegexpInner::native_codec_for(&given) {
+        if !is_byte_pos_boundary(&given, byte_offset) {
+            return Err(MonorubyErr::indexerr(format!(
+                "offset {byte_offset} does not land on character boundary"
+            )));
+        }
+        let enc = given.encoding();
+        let mut best: Option<usize> = None;
+        let mut pos = 0usize;
+        while pos <= bytesize {
+            let start = match re.captures_bytes_from_pos(haystack, self_, native_enc, pos, vm)? {
+                None => break,
+                Some(c) => c.pos(0).map_or(0, |(b, _)| b),
+            };
+            if start > byte_offset {
+                break;
+            }
+            best = Some(start);
+            let next = match crate::value::precise_mbclen(enc, haystack, start) {
+                PreciseLen::Char(n) => start + n,
+                _ => start + enc.unit_width().max(1),
+            };
+            pos = if next <= pos { pos + 1 } else { next };
+        }
+        return Ok(match best {
+            Some(p) => {
+                // The last probe ran past `p`; re-run there so `$~` is
+                // the match reported.
+                re.captures_bytes_from_pos(haystack, self_, native_enc, p, vm)?;
+                Value::integer(p as i64)
+            }
+            None => {
+                vm.clear_capture_special_variables();
+                Value::nil()
+            }
+        });
+    }
     let s = std::str::from_utf8(haystack).map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
 
     if !s.is_char_boundary(byte_offset) {
@@ -6448,18 +6600,18 @@ fn coerce_pattern_for_byte_search(
     if let Some(re) = v.is_regex() {
         return Ok(re);
     }
-    if let Some(s) = v.is_str() {
+    if v.is_rstring().is_some() {
         return Ok(Regexp::new_unchecked(Value::regexp(
-            RegexpInner::with_option(s, 0)?,
+            super::regexp_inner_from_string(vm, globals, v, 0, None)?,
         )));
     }
     // The full `rb_check_funcall` probe, so a `method_missing`-backed
     // `to_str` converts here as it does for `#rindex` / `#match`.
     if let Some(result) = crate::value::coerce::check_funcall(vm, globals, v, IdentId::TO_STR)?
-        && let Some(s) = result.is_str()
+        && result.is_rstring().is_some()
     {
         return Ok(Regexp::new_unchecked(Value::regexp(
-            RegexpInner::with_option(s, 0)?,
+            super::regexp_inner_from_string(vm, globals, result, 0, None)?,
         )));
     }
     Err(MonorubyErr::no_implicit_conversion(
