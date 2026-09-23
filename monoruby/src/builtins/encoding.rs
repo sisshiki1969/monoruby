@@ -16,6 +16,13 @@ pub(super) fn encoding_class(globals: &Globals) -> ClassId {
         .as_class_id()
 }
 
+/// `v` is one of the `Encoding` singletons. Compared by the real class:
+/// an Encoding can be given a singleton class, and `v.class()` would
+/// then be that.
+pub(super) fn is_encoding_object(globals: &Globals, v: Value) -> bool {
+    !v.is_packed_value() && v.real_class(&globals.store).id() == encoding_class(globals)
+}
+
 /// Map a constant-style encoding name (`SHIFT_JIS`, `EUC_JP`,
 /// `Windows_1252`, …) to the canonical CRuby name (`Shift_JIS`,
 /// `EUC-JP`, `Windows-1252`). Most encodings just translate
@@ -643,7 +650,78 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     globals.define_builtin_func(enc.id(), "name", enc_to_s, 0);
     globals.define_builtin_func(enc.id(), "ascii_compatible?", enc_ascii_compatible_p, 0);
     globals.define_builtin_func(enc.id(), "dummy?", enc_dummy_p, 0);
+    // Marshal: an Encoding dumps as its name ('u' payload) and loads by
+    // looking that name up again — `_load` itself hands the string
+    // back, and Marshal (`finish_user_marshal`) resolves it, as CRuby's
+    // compat loader does.
+    globals.define_builtin_func_with(enc.id(), "_dump", enc_dump, 0, 1, false);
+    globals.define_builtin_class_func(enc.id(), "_load", enc_load, 1);
+    // Every Encoding is a frozen singleton: there is no allocator, so
+    // `allocate`, `dup` and `clone` are TypeErrors (Kernel's copy
+    // methods refuse an object whose class has none) and `new` is not
+    // a method at all.
+    globals.store[enc.id()].clear_alloc_func();
+    let meta = globals.store.get_metaclass(enc.id()).id();
+    globals
+        .store
+        .add_empty_method(meta, IdentId::NEW, Visibility::Undefined);
+    globals.set_constant_by_str(enc.id(), "UNICODE_VERSION", frozen_usascii("17.0.0"));
+    // Freeze the objects and the names they hand out (`name` / `to_s`
+    // answer the `_ENCODING` string itself), now that every constant
+    // is registered.
+    for cname in globals.store.get_constant_names(enc.id()) {
+        if let Some(mut v) = globals.store.get_constant_noautoload(enc.id(), cname)
+            && v.class() == enc.id()
+            && !v.is_frozen()
+        {
+            for ivar in [IdentId::_NAME, IdentId::_ENCODING] {
+                if let Some(mut s) = globals.store.get_ivar(v, ivar) {
+                    s.set_frozen();
+                }
+            }
+            // CRuby's objects carry their name as `@name`, and it is
+            // the one instance variable they show.
+            if let Some(name) = globals.store.get_ivar(v, IdentId::_ENCODING) {
+                globals.store.set_ivar(v, IdentId::get_id("@name"), name).unwrap();
+            }
+            v.set_frozen();
+        }
+    }
 }
+
+/// A frozen US-ASCII string, which is what every name an Encoding
+/// hands out is.
+fn frozen_usascii(s: &str) -> Value {
+    let mut v = Value::string_usascii_from_str(s);
+    v.set_frozen();
+    v
+}
+
+///
+/// ### Encoding#_dump
+/// - _dump(limit = nil) -> String
+///
+/// The encoding's name; Marshal resolves it back to the singleton.
+#[monoruby_builtin]
+fn enc_dump(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::_ENCODING)
+        .unwrap_or_else(|| frozen_usascii("UTF-8")))
+}
+
+///
+/// ### Encoding._load
+/// - _load(str) -> str
+///
+/// Answers its argument unchanged: it is Marshal that turns the name
+/// into the encoding (`finish_user_marshal`), as CRuby's compat loader
+/// does after `_load`.
+#[monoruby_builtin]
+fn enc_load(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(lfp.arg(0))
+}
+
 
 // -------------------------------------------------------
 // Transcoding (String#encode, String#encode!, Encoding::Converter)
@@ -4031,7 +4109,7 @@ pub(super) fn transcode_bytes_with_opts(
 fn resolve_enc_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<&'static str> {
     let name = if let Some(s) = arg.is_str() {
         s.to_string()
-    } else if arg.class() == encoding_class(globals) {
+    } else if is_encoding_object(globals, arg) {
         let s = globals.store.get_ivar(arg, IdentId::_ENCODING).unwrap();
         s.as_str().to_string()
     } else {
@@ -4047,7 +4125,15 @@ fn resolve_enc_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Resu
     // whose alias was never registered, is a converter that does not
     // exist rather than a conversion to BINARY (#1575).
     let name = dynamic_alias_name(globals, &name).unwrap_or(name);
-    enc_name_to_const(&name).ok_or_else(|| {
+    // The converters read a label through `StringValueCStr`: a NUL is
+    // reported as such, and as an ArgumentError even on the paths that
+    // lift an unknown name to `ConverterNotFoundError`.
+    if name.as_bytes().contains(&0) {
+        return Err(MonorubyErr::argumenterr("string contains null byte"));
+    }
+    known_encoding_name(globals, &name)
+        .and_then(|canonical| enc_name_to_const(&canonical))
+        .ok_or_else(|| {
         // CRuby raises `Encoding::ConverterNotFoundError` (not
         // ArgumentError) for `String#encode("xyz")` when the
         // label is unknown. The encoding-search path below the
@@ -4071,28 +4157,90 @@ fn dynamic_alias_name(globals: &Globals, name: &str) -> Option<String> {
 /// `resolve_enc_arg` variant that lifts the unknown-encoding
 /// `ArgumentError` to `Encoding::ConverterNotFoundError`,
 /// matching CRuby's `String#encode` semantics.
-fn encode_resolve_enc_arg(
+fn resolve_enc_label(
     vm: &mut Executor,
     globals: &mut Globals,
     arg: Value,
-) -> Result<&'static str> {
-    resolve_enc_arg(vm, globals, arg).map_err(|e| {
-        // Only translate the unknown-encoding-name case; other
+) -> Result<std::result::Result<&'static str, String>> {
+    match resolve_enc_arg(vm, globals, arg) {
+        Ok(c) => Ok(Ok(c)),
+        // Only the unknown-encoding-name case is a label; other
         // argument errors (TypeError on a non-coercible argument,
         // etc.) pass through unchanged.
-        let msg = e.message().to_string();
-        if msg.starts_with("unknown encoding name") {
-            let label = msg
-                .trim_start_matches("unknown encoding name - ")
-                .to_string();
-            MonorubyErr::converter_not_found_error(
-                &globals.store,
-                format!("code converter not found for {}", label),
-            )
+        Err(e) if e.message().starts_with("unknown encoding name - ") => Ok(Err(e
+            .message()
+            .trim_start_matches("unknown encoding name - ")
+            .to_string())),
+        Err(e) => Err(e),
+    }
+}
+
+/// The source of a converter request: an argument, or the receiver's
+/// own encoding when `String#encode` was given only a destination.
+enum ConverterSrc {
+    Given(Value),
+    Receiver(crate::value::Encoding),
+}
+
+/// Resolve a converter request's two encodings together, so that a
+/// name that is no encoding's is reported the way CRuby's
+/// `rb_econv_open_exc` reports it: `code converter not found (SRC to
+/// DST)`, each side spelled by its canonical name when it resolved
+/// and as given when it did not, and a side that is empty left out.
+/// `String#encode` reads its destination before its source, as CRuby
+/// does; `Encoding::Converter` reads them in argument order.
+fn resolve_converter_pair(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: ConverterSrc,
+    dst: Value,
+    dst_first: bool,
+) -> Result<(crate::value::Encoding, crate::value::Encoding)> {
+    let resolve_src = |vm: &mut Executor, globals: &mut Globals| match src {
+        ConverterSrc::Given(v) => resolve_enc_label(vm, globals, v),
+        ConverterSrc::Receiver(e) => Ok(Ok(encoding_const_name(e))),
+    };
+    let (src_label, dst_label) = if dst_first {
+        let d = resolve_enc_label(vm, globals, dst)?;
+        (resolve_src(vm, globals)?, d)
+    } else {
+        let s = resolve_src(vm, globals)?;
+        (s, resolve_enc_label(vm, globals, dst)?)
+    };
+    let display = |label: &std::result::Result<&'static str, String>| match label {
+        Ok(c) => canonical_encoding_name(c).to_string(),
+        Err(given) => given.clone(),
+    };
+    let not_found = |store: &Store| {
+        let (s, d) = (display(&src_label), display(&dst_label));
+        let desc = if s.is_empty() {
+            d
+        } else if d.is_empty() {
+            s
         } else {
-            e
-        }
-    })
+            format!("{} to {}", s, d)
+        };
+        MonorubyErr::converter_not_found_error(
+            store,
+            format!("code converter not found ({})", desc),
+        )
+    };
+    match (&src_label, &dst_label) {
+        (Ok(s), Ok(d)) => match (
+            encoding_from_canonical_name(s),
+            encoding_from_canonical_name(d),
+        ) {
+            (Some(s), Some(d)) => Ok((s, d)),
+            _ => Err(not_found(&globals.store)),
+        },
+        _ => Err(not_found(&globals.store)),
+    }
+}
+
+/// The constant name (`enc_name_to_const`'s answer) of an `Encoding`,
+/// so the receiver's encoding can stand in for a source label.
+fn encoding_const_name(enc: crate::value::Encoding) -> &'static str {
+    enc_name_to_const(enc.name()).unwrap_or("UTF_8")
 }
 
 /// Implement the `xml:` keyword of `String#encode` directly here
@@ -4243,20 +4391,6 @@ fn encoding_from_canonical_name(name: &str) -> Option<crate::value::Encoding> {
     crate::value::Encoding::try_from_str(name).ok()
 }
 
-/// Resolve the destination encoding for `encode` from arg0.
-fn resolve_dst_encoding(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    arg: Value,
-) -> Result<crate::value::Encoding> {
-    let name = encode_resolve_enc_arg(vm, globals, arg)?;
-    encoding_from_canonical_name(name).ok_or_else(|| {
-        MonorubyErr::converter_not_found_error(
-            &globals.store,
-            format!("code converter not found ({})", name),
-        )
-    })
-}
 
 /// Look up the current `Encoding.default_internal` (set via
 /// `Encoding.default_internal=`). Returns `None` when unset
@@ -4281,17 +4415,15 @@ fn resolve_encode_pair(
     lfp: Lfp,
     self_enc: crate::value::Encoding,
 ) -> Result<(crate::value::Encoding, Option<crate::value::Encoding>)> {
-    let dst = if let Some(arg0) = lfp.try_arg(0) {
-        Some(resolve_dst_encoding(vm, globals, arg0)?)
-    } else {
-        current_default_internal(globals)
+    let Some(arg0) = lfp.try_arg(0) else {
+        return Ok((self_enc, current_default_internal(globals)));
     };
-    let src = if let Some(arg1) = lfp.try_arg(1) {
-        resolve_dst_encoding(vm, globals, arg1)?
-    } else {
-        self_enc
+    let src = match lfp.try_arg(1) {
+        Some(arg1) => ConverterSrc::Given(arg1),
+        None => ConverterSrc::Receiver(self_enc),
     };
-    Ok((src, dst))
+    let (src, dst) = resolve_converter_pair(vm, globals, src, arg0, true)?;
+    Ok((src, Some(dst)))
 }
 
 ///
@@ -4820,12 +4952,25 @@ pub(super) fn value_to_encoding(
         if let Some(enc) = special_encoding_name(globals, s) {
             return Ok(enc);
         }
-        Encoding::try_from_str(s)
+        // `rb_to_encoding` reads the name through `StringValueCStr`, so
+        // an embedded NUL is its own error rather than an unknown name.
+        if s.as_bytes().contains(&0) {
+            return Err(MonorubyErr::argumenterr(
+                "invalid encoding name (NUL byte)",
+            ));
+        }
+        // `try_from_str` folds separators and case, so it is the name's
+        // presence in `Encoding.name_list` that decides whether the
+        // name is one at all ("utf8" is not).
+        let canonical = known_encoding_name(globals, s).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("unknown encoding name - {}", s))
+        })?;
+        Encoding::try_from_str(&canonical)
     } else if let Some(enc) = globals.encoding_of_object(arg0) {
         // An `Encoding::<NAME>` constant object: its `Encoding` was
         // recorded at init, so no name is read or parsed.
         Ok(enc)
-    } else if arg0.class() == encoding_class(globals) {
+    } else if is_encoding_object(globals, arg0) {
         let s = globals.store.get_ivar(arg0, IdentId::_ENCODING).unwrap();
         Encoding::try_from_str(s.as_str())
     } else {
@@ -4928,8 +5073,8 @@ fn resolve_default_encoding_arg(
     enc_class: Value,
     val: Value,
 ) -> Result<Value> {
-    let enc_class_id = enc_class.expect_class_or_module(&globals.store)?.id();
-    if val.class() == enc_class_id {
+    enc_class.expect_class_or_module(&globals.store)?;
+    if is_encoding_object(globals, val) {
         return Ok(val);
     }
     let name = if val.is_str().is_some() {
@@ -5501,27 +5646,20 @@ fn converter_new(
 ) -> Result<Value> {
     // Resolve to canonical constant names *once* (so a `#to_str`
     // mock argument is converted exactly once, per spec).
-    let src_name = encode_resolve_enc_arg(vm, globals, lfp.arg(0))?;
-    let dst_name = encode_resolve_enc_arg(vm, globals, lfp.arg(1))?;
-    let src = encoding_from_canonical_name(src_name).ok_or_else(|| {
-        MonorubyErr::converter_not_found_error(
-            &globals.store,
-            format!("code converter not found ({})", src_name),
-        )
-    })?;
-    let dst = encoding_from_canonical_name(dst_name).ok_or_else(|| {
-        MonorubyErr::converter_not_found_error(
-            &globals.store,
-            format!("code converter not found ({})", dst_name),
-        )
-    })?;
+    let (src, dst) = resolve_converter_pair(
+        vm,
+        globals,
+        ConverterSrc::Given(lfp.arg(0)),
+        lfp.arg(1),
+        false,
+    )?;
     // CRuby raises `Encoding::ConverterNotFoundError` for identical
     // source/destination encodings — there is no "X to X" transcoder.
     // Compare the resolved canonical *names*, not the internal
     // `Encoding`: monoruby folds aliases like `UTF8-MAC` onto
     // `Utf8`, but CRuby treats them as distinct and DOES build a
     // converter (`Converter.new(UTF_8, UTF8_MAC)` is valid).
-    if src_name == dst_name {
+    if src.name() == dst.name() {
         return Err(MonorubyErr::converter_not_found_error(
             &globals.store,
             format!("code converter not found ({} to {})", src.name(), dst.name()),
@@ -10173,7 +10311,7 @@ fn converter_asciicompat_encoding(
     let arg = lfp.arg(0);
     // Accept Encoding objects as well as String / Symbol names. We
     // need the canonical name so we can dispatch on it.
-    let enc_name: String = if arg.class() == encoding_class(globals) {
+    let enc_name: String = if is_encoding_object(globals, arg) {
         globals
             .store
             .get_ivar(arg, IdentId::_ENCODING)
@@ -10214,8 +10352,13 @@ fn converter_search_convpath(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let src = resolve_dst_encoding(vm, globals, lfp.arg(0))?;
-    let dst = resolve_dst_encoding(vm, globals, lfp.arg(1))?;
+    let (src, dst) = resolve_converter_pair(
+        vm,
+        globals,
+        ConverterSrc::Given(lfp.arg(0)),
+        lfp.arg(1),
+        false,
+    )?;
     validate_converter_pair(src, dst, &globals.store)?;
     // The optional third argument / kwargs carry decorator options
     // (the kwargs hash may land in either trailing slot).
@@ -10859,7 +11002,7 @@ fn enc_list(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr
     let mut out: Vec<(String, Value)> = Vec::new();
     for name in names {
         if let Some(v) = globals.store.get_constant_noautoload(enc_class, name) {
-            if v.class() == enc_class {
+            if is_encoding_object(globals, v) {
                 let id = v.id();
                 if !seen.contains(&id) {
                     seen.push(id);
@@ -10887,12 +11030,11 @@ fn enc_list(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr
 #[monoruby_builtin]
 fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
-    let enc_class = encoding_class(globals);
     // CRuby's `Encoding.find` accepts either a String name (subject
     // to `to_str` coercion) *or* an existing `Encoding` object,
     // returning it unchanged. Without this short-circuit a value of
     // class `Encoding` would fail `coerce_to_string`'s TypeError.
-    if arg0.class() == enc_class {
+    if is_encoding_object(globals, arg0) {
         return Ok(arg0);
     }
     let name = arg0.coerce_to_string(vm, globals)?;
@@ -10977,6 +11119,11 @@ pub(super) fn find_encoding_object(globals: &Globals, name: &str) -> Option<Valu
         return Some(v);
     }
     let enc_class = encoding_class(globals);
+    // A name is one of the names `Encoding.name_list` lists, compared
+    // without regard to case and to nothing else: "utf8" and "UTF_8"
+    // are unknown names, "eucJP" is an alias. The alias resolves to
+    // its canonical name, and the canonical name to its object.
+    let canonical = known_encoding_name(globals, name)?;
     // The alias table names a constant directly, which answers the
     // common names ("UTF-8", "ASCII-8BIT", …) without touching the rest
     // of the table. It is only trusted here when the constant it names
@@ -10984,61 +11131,70 @@ pub(super) fn find_encoding_object(globals: &Globals, name: &str) -> Option<Valu
     // hand-maintained and would otherwise mis-resolve a name like
     // "Big5-HKSCS" to a prefix match — so anything it gets wrong falls
     // through to the scan below, which is what decides.
-    if let Some(v) = enc_name_to_const(name)
+    if let Some(v) = enc_name_to_const(&canonical)
         .and_then(|c| globals.store.get_constant_noautoload(enc_class, IdentId::get_id(c)))
-        && v.class() == enc_class
-        && encoding_object_name_is(globals, v, name)
+        && is_encoding_object(globals, v)
+        && encoding_object_name_is(globals, v, &canonical)
     {
         return Some(v);
     }
-    // An exact (separator/case-insensitive) match against the canonical
-    // name of every registered encoding, so `Encoding.find(e.name)`
-    // round-trips for *every* encoding in `Encoding.list`.
+    // The canonical name of every registered encoding, so
+    // `Encoding.find(e.name)` round-trips for *every* encoding in
+    // `Encoding.list`.
     for cname in globals.store.get_constant_names(enc_class) {
         if let Some(v) = globals.store.get_constant_noautoload(enc_class, cname)
-            && v.class() == enc_class
-            && encoding_object_name_is(globals, v, name)
+            && is_encoding_object(globals, v)
+            && encoding_object_name_is(globals, v, &canonical)
         {
             return Some(v);
         }
     }
-    // Last, the alias / pseudo-name table without the canonical-name
-    // check — this is what resolves the names no `Encoding` carries
-    // (LOCALE, UTF8, …).
-    enc_name_to_const(name)
-        .and_then(|c| globals.store.get_constant_noautoload(enc_class, IdentId::get_id(c)))
+    None
+}
+
+/// The canonical name `name` stands for, when `name` is one of the
+/// names `Encoding.name_list` lists — a canonical name or an alias in
+/// `ENCODING_NAMES`, or the canonical name of a registered encoding
+/// the table does not carry — compared ASCII-case-insensitively and
+/// otherwise exactly, as CRuby's encoding table does. The four
+/// run-time aliases are not answered here.
+fn known_encoding_name(globals: &Globals, name: &str) -> Option<String> {
+    if name.is_empty() || !name.is_ascii() {
+        return None;
+    }
+    for (canonical, aliases) in ENCODING_NAMES {
+        if canonical.eq_ignore_ascii_case(name)
+            || aliases.iter().any(|a| a.eq_ignore_ascii_case(name))
+        {
+            return Some(canonical.to_string());
+        }
+    }
+    let enc_class = encoding_class(globals);
+    for cname in globals.store.get_constant_names(enc_class) {
+        if let Some(v) = globals.store.get_constant_noautoload(enc_class, cname)
+            && is_encoding_object(globals, v)
+            && let Some(es) = globals
+                .store
+                .get_ivar(v, IdentId::_ENCODING)
+                .and_then(|ev| ev.is_str().map(|s| s.to_string()))
+            && es.eq_ignore_ascii_case(name)
+        {
+            return Some(es);
+        }
+    }
+    None
 }
 
 /// `v`'s canonical name (its `_ENCODING` ivar) is `name`, compared the
-/// way `Encoding.find` compares names.
+/// way `Encoding.find` compares names: ASCII case does not count,
+/// everything else does.
 fn encoding_object_name_is(globals: &Globals, v: Value, name: &str) -> bool {
     match globals.store.get_ivar(v, IdentId::_ENCODING) {
         Some(ev) => match ev.is_str() {
-            Some(es) => enc_name_eq(es, name),
+            Some(es) => es.eq_ignore_ascii_case(name),
             None => false,
         },
         None => false,
-    }
-}
-
-/// Two encoding names are the same name when they agree ignoring case
-/// and the `-` / `_` separators ("utf8" == "UTF-8").
-///
-/// Encoding names are ASCII, so this compares ASCII case and allocates
-/// nothing — where the previous `to_uppercase().replace(…)` built two
-/// `String`s for *every candidate* of *every* lookup (`Encoding.find`
-/// scans ~107 encodings, and the mail benchmark calls it 80 times per
-/// message: 17,000 temporary strings a message).
-fn enc_name_eq(a: &str, b: &str) -> bool {
-    let sep = |c: &u8| *c != b'-' && *c != b'_';
-    let mut a = a.bytes().filter(sep);
-    let mut b = b.bytes().filter(sep);
-    loop {
-        match (a.next(), b.next()) {
-            (None, None) => return true,
-            (Some(x), Some(y)) if x.eq_ignore_ascii_case(&y) => {}
-            _ => return false,
-        }
     }
 }
 
@@ -11240,8 +11396,8 @@ fn enc_aliases(
     for (canonical, aliases) in ENCODING_NAMES {
         for alias in *aliases {
             map.insert(
-                Value::string_from_str(alias),
-                Value::string_from_str(canonical),
+                frozen_usascii(alias),
+                frozen_usascii(canonical),
                 vm,
                 globals,
             )?;
@@ -11249,8 +11405,8 @@ fn enc_aliases(
     }
     for (alias, canonical) in dynamic_encoding_aliases(globals) {
         map.insert(
-            Value::string_from_str(alias),
-            Value::string_from_str(&canonical),
+            frozen_usascii(alias),
+            frozen_usascii(&canonical),
             vm,
             globals,
         )?;
@@ -11436,7 +11592,7 @@ fn enc_name_list(
     let add = |names: &mut Vec<Value>, seen: &mut Vec<String>, s: &str| {
         if !seen.iter().any(|x| x == s) {
             seen.push(s.to_string());
-            names.push(Value::string_from_str(s));
+            names.push(frozen_usascii(s));
         }
     };
     for (canonical, aliases) in ENCODING_NAMES {
@@ -11454,7 +11610,7 @@ fn enc_name_list(
     let enc_class = encoding_class(globals);
     for cname in globals.store.get_constant_names(enc_class) {
         if let Some(v) = globals.store.get_constant_noautoload(enc_class, cname)
-            && v.class() == enc_class
+            && is_encoding_object(globals, v)
             && let Some(es) = globals
                 .store
                 .get_ivar(v, IdentId::_ENCODING)
@@ -11483,18 +11639,18 @@ fn enc_names(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     };
     // Find the matching row by canonical name and collect every
     // (canonical, alias) that points here.
-    let mut names: Vec<Value> = vec![Value::string_usascii_from_str(&canonical)];
+    let mut names: Vec<Value> = vec![frozen_usascii(&canonical)];
     for (c, aliases) in ENCODING_NAMES {
         if c.eq_ignore_ascii_case(&canonical) {
             for alias in *aliases {
-                names.push(Value::string_usascii_from_str(alias));
+                names.push(frozen_usascii(alias));
             }
             break;
         }
     }
     for (alias, target) in dynamic_encoding_aliases(globals) {
         if target.eq_ignore_ascii_case(&canonical) {
-            names.push(Value::string_from_str(alias));
+            names.push(frozen_usascii(alias));
         }
     }
     Ok(Value::array_from_iter(names.into_iter()))
@@ -11531,13 +11687,12 @@ fn compute_encoding_compatibility(
     a: Value,
     b: Value,
 ) -> Option<Encoding> {
-    let enc_class = encoding_class(globals);
     // `Encoding` × `Encoding` follows a different rule set: only the
     // "second is US-ASCII" exception, no ASCII-only-content
     // accommodation (since Encoding objects carry no bytes). Dummy
     // encodings are rejected outright (except when both sides are
     // the same dummy — `compatible?(UTF_7, UTF_7) == UTF_7`).
-    if a.class() == enc_class && b.class() == enc_class {
+    if is_encoding_object(globals, a) && is_encoding_object(globals, b) {
         let a_enc = pure_encoding_value(globals, a)?;
         let b_enc = pure_encoding_value(globals, b)?;
         return compatible_encoding_pair(a_enc, b_enc);
@@ -11687,7 +11842,7 @@ fn encoded_operand(globals: &Globals, v: Value) -> Option<EncodedOperand> {
             is_string: false,
         });
     }
-    if v.class() == encoding_class(globals) {
+    if is_encoding_object(globals, v) {
         // Bare `Encoding` object — a non-String operand whose
         // "contents" are empty in that encoding.
         if let Some(enc) = pure_encoding_value(globals, v) {
@@ -14483,6 +14638,88 @@ mod tests {
              t[1..].ascii_only?, t[0].ascii_only?, l[4..].ascii_only?, l[0,4].ascii_only?,
              (s[1] + "\xff".b).encoding.to_s, s[1].encoding.to_s, s.split("日").map(&:ascii_only?),
              s.chars.map(&:ascii_only?), "abc".force_encoding("UTF-7")[1].ascii_only?, u16[0].ascii_only?]
+            "##,
+        );
+    }
+
+    #[test]
+    fn an_encoding_name_is_one_the_name_list_lists() {
+        // Case does not count; separators and everything else do, so
+        // "utf8" and "UTF_8" are unknown where "eucJP" and "utf-8" are
+        // aliases — through `Encoding.find`, `force_encoding`,
+        // `String.new`, `encode` and `Encoding::Converter` alike.
+        crate::tests::run_test_once(
+            r##"
+            names = %w[utf8 UTF_8 utf-8 Utf-8 latin1 koi8r iso2022jp ASCII8BIT ascii-8bit shift-jis SHIFT_JIS
+                       eucjp EUC_JP cp932 SJIS BINARY external ISO8859_1 ISO_8859_1 iso8859-1 646 UTF8-MAC
+                       UTF-8-MAC UTF_8_MAC utf_16le UTF16LE euc-jp-ms EUCJP_MS macjapan sjis-docomo SJIS_DOCOMO
+                       UTF.8 Big5-UAO gb12345]
+            r = names.map { |n| (Encoding.find(n).name rescue [$!.class, $!.message]) }
+            r << names.map { |n| ("x".dup.force_encoding(n).encoding.name rescue [$!.class, $!.message]) }
+            r << (String.new(encoding: "utf8") rescue [$!.class, $!.message])
+            r << ("x".encode("utf8") rescue [$!.class, $!.message])
+            r << ("x".encode("utf-8", "utf8") rescue [$!.class, $!.message])
+            r << ("x".encode("utf8", Encoding::EUC_JP) rescue [$!.class, $!.message])
+            r << ("x".encode("") rescue [$!.class, $!.message])
+            r << (Encoding::Converter.new("utf8", "UTF-8") rescue [$!.class, $!.message])
+            r << (Encoding::Converter.new("UTF-8", "utf8") rescue [$!.class, $!.message])
+            r << (Encoding::Converter.search_convpath("utf8", "UTF-8") rescue [$!.class, $!.message])
+            r << (Encoding.default_internal = "utf8") rescue r << [$!.class, $!.message]
+            r << (File.open("/dev/null", "r:utf8") { |f| f.external_encoding.name } rescue [$!.class, $!.message])
+            r << (Encoding.find(" utf-8") rescue [$!.class, $!.message])
+            r << (Encoding.find("") rescue [$!.class, $!.message])
+            r << ("x".encode("a\0b") rescue [$!.class, $!.message])
+            r << (Encoding::Converter.new("UTF-8", "a\0b") rescue [$!.class, $!.message])
+            r << (String.new(encoding: "a\0b") rescue [$!.class, $!.message])
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn an_encoding_is_a_frozen_singleton() {
+        crate::tests::run_test_once(
+            r##"
+            e = Encoding::UTF_8
+            r = [e.frozen?, e.name.frozen?, e.to_s.frozen?, e.name.encoding.to_s, e.names.frozen?,
+                 e.names.map(&:frozen?).uniq, e.names.map { |n| n.encoding.to_s }.uniq,
+                 Encoding.name_list.frozen?, Encoding.name_list.map(&:frozen?).uniq,
+                 Encoding.name_list.map { |n| n.encoding.to_s }.uniq,
+                 Encoding.aliases.frozen?, Encoding.aliases.keys.map(&:frozen?).uniq,
+                 Encoding.aliases.values.map(&:frozen?).uniq, Encoding.list.map(&:frozen?).uniq]
+            r << (Encoding.new rescue [$!.class, $!.message])
+            r << (Encoding.allocate rescue [$!.class, $!.message])
+            r << (e.dup rescue [$!.class, $!.message])
+            r << (e.clone rescue [$!.class, $!.message])
+            r << (e.clone(freeze: false) rescue [$!.class, $!.message])
+            r << (e.instance_variable_set(:@x, 1) rescue [$!.class, $!.message])
+            r << e.instance_variables << e.instance_variable_get(:@name)
+            r << Encoding.respond_to?(:new) << Encoding.respond_to?(:allocate)
+            r << [Encoding::UNICODE_VERSION, Encoding::UNICODE_VERSION.frozen?, Encoding::UNICODE_VERSION.encoding.to_s]
+            r << Encoding.instance_methods(false).sort << Encoding.singleton_methods.sort
+            # A singleton class does not stop the object being an Encoding.
+            r << e.singleton_class.class << Encoding.find("utf-8").equal?(e) << "x".force_encoding(e).encoding.equal?(e)
+            r << Encoding.compatible?(e, Encoding::US_ASCII).equal?(e)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn an_encoding_marshals_by_name() {
+        crate::tests::run_test_once(
+            r##"
+            e = Encoding::UTF_8
+            r = [e._dump(-1), e._dump(-1).encoding.to_s, e._dump(-1).frozen?, e._dump, Encoding._load("UTF-8"), Encoding._load(3)]
+            r << (e._dump(1, 2) rescue [$!.class, $!.message])
+            r << Marshal.dump(e).bytes
+            r << Marshal.load(Marshal.dump(e)).equal?(e)
+            r << Marshal.load(Marshal.dump([e, Encoding::BINARY, Encoding::ISO_2022_JP, Encoding::Windows_31J])).map(&:name)
+            r << Marshal.load(Marshal.dump({e => "x"})).map { |k, v| [k.name, v] }
+            r << (Marshal.load("\x04\x08Iu:\x0dEncoding\x09nope\x06:\x06EF") rescue [$!.class, $!.message])
+            r << Marshal.load("\x04\x08u:\x0dEncoding\x0aUTF-8").name
+            r << Marshal.load("\x04\x08Iu:\x0dEncoding\x0aeucjp\x06:\x06ET").name
+            r
             "##,
         );
     }
