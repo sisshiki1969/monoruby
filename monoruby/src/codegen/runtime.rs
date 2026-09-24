@@ -791,7 +791,7 @@ fn gen_hash_inner(
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            map.insert(chunk[0].frozen_hash_key(), chunk[1], vm, globals)?;
+            map.insert(chunk[0].frozen_hash_key(&globals.store), chunk[1], vm, globals)?;
         }
     }
     Ok(map)
@@ -818,7 +818,7 @@ pub(super) extern "C" fn hash_insert(
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            if let Err(err) = h.insert(chunk[0].frozen_hash_key(), chunk[1], vm, globals) {
+            if let Err(err) = h.insert(chunk[0].frozen_hash_key(&globals.store), chunk[1], vm, globals) {
                 vm.set_error(err);
                 return None;
             }
@@ -1999,7 +1999,7 @@ pub(super) extern "C" fn set_index(
         let key = if base.as_hash().is_compare_by_identity() {
             index
         } else {
-            index.frozen_hash_key()
+            index.frozen_hash_key(&globals.store)
         };
         let res = base
             .as_hash_mut(&globals.store)
