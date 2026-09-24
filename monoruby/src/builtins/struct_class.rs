@@ -607,7 +607,8 @@ pub(super) fn eq(
             for i in 0..len {
                 let lhs = lhs_struct.get(i);
                 let rhs = rhs_struct.get(i);
-                if vm.ne_values_bool(globals, lhs, rhs)? {
+                // `rb_equal`: the member's own `==`, never `!=`.
+                if !vm.eq_values_bool(globals, lhs, rhs)? {
                     return Ok(Value::bool(false));
                 }
             }
@@ -716,7 +717,8 @@ pub(super) fn ne(
             for i in 0..len {
                 let lhs = lhs_struct.get(i);
                 let rhs = rhs_struct.get(i);
-                if vm.ne_values_bool(globals, lhs, rhs)? {
+                // The negation of `Struct#==`, which asks `==`.
+                if !vm.eq_values_bool(globals, lhs, rhs)? {
                     return Ok(Value::bool(true));
                 }
             }

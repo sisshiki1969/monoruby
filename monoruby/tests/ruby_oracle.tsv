@@ -2988,6 +2988,7 @@
 9861856cd9d5f34b618738bf16e9b44c	[:seen, true, "12", false]	p1 = :to_s.to_proc\n        p1.instance_variable_set(:@tag, :seen)\n     
 988c0b8f8c44428ac627b741f329756c	100	# Ret\n            begin\n              100\n            end\n        
 98996233bfa191027494af2f2287502c	[:inner, :early, :late]	def m1\n          obj = Object.new\n          class << obj\n            re
+98b8645f069f2d980b4d0a9a979cef78	[BasicObject, [:<, :<=, :==, :>, :>=, :between?, :clamp], false, true, false, false, true, false, true, false, true, true, false, true, false, false, true, true, false]	class TT < Time; def ==(o) = true; end\n          class V\n            
 98bdea24e737b24b5b5e21db74beb80e	[true, 0]	pid = fork { exit 0 }\n            ret = Process.wait(pid)\n         
 98c5c25856a804e6b5a96f570e24c999	true	class Foo\n              def ==(other)\n                other == 42\n 
 98cd6cba82daea6511d16b70c1d31e7c	:OVERRIDDEN	class Float; def <(o); :OVERRIDDEN; end; end; 3.0 < 4.0
