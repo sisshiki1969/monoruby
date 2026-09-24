@@ -322,3 +322,51 @@ fn bigdecimal_def_power_operator() {
         "#,
     );
 }
+
+#[test]
+fn bigdecimal_dump_and_load() {
+    // `_dump` / `_load` (#1648): "<digits the value's base-10**9 words
+    // hold>:<to_s>", a BINARY String; `_load` skips the digit count and
+    // reads the rest as `BigDecimal()` does. Marshal writes a BigDecimal
+    // through them, and json/add/bigdecimal round-trips on them.
+    run_test_once(
+        r#"
+        require "rubygems"
+        require "bigdecimal"
+        require "json/add/bigdecimal"
+        t = ->(&b) { begin; b.call; rescue => e; [e.class, e.message]; end }
+        vals = [BigDecimal("3.141", 23), BigDecimal("0"), BigDecimal("-0"), BigDecimal("1"), BigDecimal("123456789"),
+                BigDecimal("1234567890"), BigDecimal("0.1"), BigDecimal("0.000000001"), BigDecimal("0.0000000001"),
+                BigDecimal("1e100"), BigDecimal("12345678901234567890.123456789"), BigDecimal("NaN"), BigDecimal("Infinity"),
+                BigDecimal("-Infinity"), BigDecimal("-3.141", 5), BigDecimal(1.5, 10), BigDecimal("999999999"),
+                BigDecimal("1000000000"), BigDecimal("0.999999999"), BigDecimal("0.9999999999"), BigDecimal("123456789.123456789")]
+        res = vals.map { |v| [v._dump, v._dump(1).encoding.to_s] }
+        res << ["18:0.3141e1", "9:NaN", "100:-Infinity", "1:0.5e1", ":0.25", "0.5", "x", "", "123", "12a:1", "9:abc", "9:1.5 "].map { |s| t.() { BigDecimal._load(s).to_s } }
+        res << t.() { BigDecimal._load(1) }
+        res << vals.map { |v| x = Marshal.load(Marshal.dump(v)); [x.class, x.to_s] }
+        res << Marshal.dump(BigDecimal("3.141", 23)).bytes
+        res << t.() { Marshal.load("\x04\bu:\x0FBigDecimal\x1018:0.3141e1".b).to_s }
+        res << t.() { JSON(JSON(BigDecimal("3.141", 23)), create_additions: true).to_s }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn bigdecimal_reads_a_string_strictly() {
+    // `BigDecimal()` refuses a String that is not wholly a number, as
+    // bigdecimal's strict `VpAlloc` does; `String#to_d` stays lenient.
+    run_test_once(
+        r#"
+        require "rubygems"
+        require "bigdecimal"
+        require "bigdecimal/util"
+        strs = ["", " ", "abc", "1x", " 1 ", "\t1\n", "1_000", "1__0", "_1", "1_", "1_.5", "1._5", "1.5_5", "0x10", "1e", "1e+",
+                "1e5", "1E5", "1d5", "1D5", "1e5_0", "1e_5", "1e-5", ".5", "5.", ".", "+.5", "-.5", "--5", "Infinity", "+Infinity",
+                "-Infinity", "infinity", "NaN", "nan", "-NaN", " NaN ", "Inf", "1.2.3", "1 2", "1,000", "0b1", "1e1.5", "00012",
+                "-0", "5.e3", ".e3", "e3", "1_0e1_0", "1_e5", "1.5_", "-1_", "1\0", "a\"b"]
+        [strs.map { |s| begin; BigDecimal(s).to_s; rescue => e; [e.class, e.message]; end },
+         BigDecimal("1x", exception: false), "1x".to_d.to_s, "abc".to_d.to_s]
+        "#,
+    );
+}
