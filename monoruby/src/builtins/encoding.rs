@@ -550,12 +550,13 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         ("UNDEF_HEX_CHARREF", 0x0000_0030),
         ("PARTIAL_INPUT", 0x0002_0000),
         ("AFTER_OUTPUT", 0x0004_0000),
-        ("UNIVERSAL_NEWLINE_DECORATOR", 0x0000_0100),
-        ("CRLF_NEWLINE_DECORATOR", 0x0000_1000),
-        ("CR_NEWLINE_DECORATOR", 0x0000_2000),
-        ("XML_TEXT_DECORATOR", 0x0000_8000),
-        ("XML_ATTR_CONTENT_DECORATOR", 0x0001_0000),
-        ("XML_ATTR_QUOTE_DECORATOR", 0x0010_0000),
+        ("UNIVERSAL_NEWLINE_DECORATOR", ECONV_UNIVERSAL_NEWLINE),
+        ("CRLF_NEWLINE_DECORATOR", ECONV_CRLF_NEWLINE),
+        ("CR_NEWLINE_DECORATOR", ECONV_CR_NEWLINE),
+        ("LF_NEWLINE_DECORATOR", ECONV_LF_NEWLINE),
+        ("XML_TEXT_DECORATOR", ECONV_XML_TEXT),
+        ("XML_ATTR_CONTENT_DECORATOR", ECONV_XML_ATTR_CONTENT),
+        ("XML_ATTR_QUOTE_DECORATOR", ECONV_XML_ATTR_QUOTE),
     ] {
         globals.set_constant_by_str(converter.id(), name, Value::integer(val));
     }
@@ -3071,21 +3072,23 @@ pub(super) struct TranscodeOpts {
     pub iso_state: Option<u8>,
     /// Newline decorators: `universal_newline:` normalizes CRLF / CR
     /// to LF on the decode side; `crlf_newline:` / `cr_newline:`
-    /// rewrite LF on the encode side.
+    /// rewrite LF on the encode side, and `lf_newline:` rewrites CRLF
+    /// and CR to LF there.
     pub universal_newline: bool,
     pub crlf_newline: bool,
     pub cr_newline: bool,
+    pub lf_newline: bool,
 }
 
 impl TranscodeOpts {
     fn has_newline(&self) -> bool {
-        self.universal_newline || self.crlf_newline || self.cr_newline
+        self.universal_newline || self.crlf_newline || self.cr_newline || self.lf_newline
     }
 
     /// Apply the newline decorators to decoded text.
     fn apply_newline(&self, s: &str) -> String {
         let mut out = s.to_string();
-        if self.universal_newline {
+        if self.universal_newline || self.lf_newline {
             out = out.replace("\r\n", "\n").replace('\r', "\n");
         }
         if self.crlf_newline {
@@ -3232,7 +3235,7 @@ fn apply_newline_bytes(bytes: &[u8], opts: &TranscodeOpts) -> Vec<u8> {
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if opts.universal_newline && b == b'\r' {
+        if (opts.universal_newline || opts.lf_newline) && b == b'\r' {
             // CRLF or bare CR → LF.
             if bytes.get(i + 1) == Some(&b'\n') {
                 i += 1;
@@ -4999,9 +5002,10 @@ pub(super) fn transcode_bytes_with_opts(
 /// constant name via `enc_name_to_const`.  Returns the constant name on
 /// success or an ArgumentError on unknown encoding.
 fn resolve_enc_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<&'static str> {
+    let coerced = arg.is_str().is_none() && !is_encoding_object(globals, arg);
     let name = if let Some(s) = arg.is_str() {
         s.to_string()
-    } else if is_encoding_object(globals, arg) {
+    } else if !coerced {
         let s = globals.store.get_ivar(arg, IdentId::_ENCODING).unwrap();
         s.as_str().to_string()
     } else {
@@ -5023,17 +5027,29 @@ fn resolve_enc_arg(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Resu
     if name.as_bytes().contains(&0) {
         return Err(MonorubyErr::argumenterr("string contains null byte"));
     }
-    known_encoding_name(globals, &name)
-        .and_then(|canonical| enc_name_to_const(&canonical))
-        .ok_or_else(|| {
-        // CRuby raises `Encoding::ConverterNotFoundError` (not
-        // ArgumentError) for `String#encode("xyz")` when the
-        // label is unknown. The encoding-search path below the
-        // call (`Encoding.find`) does still raise ArgumentError;
-        // the wrapper at `encode_resolve_enc_arg` lifts it to
-        // `ConverterNotFoundError` for the encode path.
-        MonorubyErr::argumenterr(format!("unknown encoding name - {}", name))
-    })
+    if let Some(c) = known_encoding_name(globals, &name).and_then(|canonical| enc_name_to_const(&canonical)) {
+        return Ok(c);
+    }
+    // A name that resolves to nothing is read a second time: CRuby's
+    // `enc_arg` asks `rb_to_encoding_index` first and, when that
+    // fails, takes the label with `StringValueCStr`, so a `#to_str`
+    // argument is converted once more — and the second answer is the
+    // one the message names.
+    let name = if coerced {
+        arg.coerce_to_string(vm, globals)?
+    } else {
+        name
+    };
+    if name.as_bytes().contains(&0) {
+        return Err(MonorubyErr::argumenterr("string contains null byte"));
+    }
+    // CRuby raises `Encoding::ConverterNotFoundError` (not
+    // ArgumentError) for `String#encode("xyz")` when the label is
+    // unknown. The encoding-search path below the call
+    // (`Encoding.find`) does still raise ArgumentError; the wrapper at
+    // `resolve_enc_label` lifts it to `ConverterNotFoundError` for the
+    // converter paths.
+    Err(MonorubyErr::argumenterr(format!("unknown encoding name - {}", name)))
 }
 
 /// The canonical name [`dynamic_alias_object`] resolves `name` to, for
@@ -5077,22 +5093,30 @@ enum ConverterSrc {
 /// Resolve a converter request's two encodings together, so that a
 /// name that is no encoding's is reported the way CRuby's
 /// `rb_econv_open_exc` reports it: `code converter not found (SRC to
-/// DST)`, each side spelled by its canonical name when it resolved
-/// and as given when it did not, and a side that is empty left out.
-/// `String#encode` reads its destination before its source, as CRuby
-/// does; `Encoding::Converter` reads them in argument order.
+/// DST with DECORATORS)`, each side spelled by its canonical name when
+/// it resolved and as given when it did not, a side that is empty left
+/// out, and `ecflags` (what [`econv_opts`] read) naming the
+/// decorators.
+///
+/// Decorators that cannot be stacked are refused here as well, once
+/// both sides have resolved. `for_encode` is `String#encode`'s way of
+/// asking, which differs twice from `Encoding::Converter`'s: it reads
+/// its destination before its source, and when the two are the same
+/// encoding it opens a decorator-only converter, whose refusal names
+/// no encodings (`code converter not found (crlf_newline,cr_newline)`).
 fn resolve_converter_pair(
     vm: &mut Executor,
     globals: &mut Globals,
     src: ConverterSrc,
     dst: Value,
-    dst_first: bool,
+    for_encode: bool,
+    ecflags: i64,
 ) -> Result<(crate::value::Encoding, crate::value::Encoding)> {
     let resolve_src = |vm: &mut Executor, globals: &mut Globals| match src {
         ConverterSrc::Given(v) => resolve_enc_label(vm, globals, v),
         ConverterSrc::Receiver(e) => Ok(Ok(encoding_const_name(e))),
     };
-    let (src_label, dst_label) = if dst_first {
+    let (src_label, dst_label) = if for_encode {
         let d = resolve_enc_label(vm, globals, dst)?;
         (resolve_src(vm, globals)?, d)
     } else {
@@ -5103,30 +5127,26 @@ fn resolve_converter_pair(
         Ok(c) => canonical_encoding_name(c).to_string(),
         Err(given) => given.clone(),
     };
-    let not_found = |store: &Store| {
-        let (s, d) = (display(&src_label), display(&dst_label));
-        let desc = if s.is_empty() {
-            d
-        } else if d.is_empty() {
-            s
-        } else {
-            format!("{} to {}", s, d)
-        };
-        MonorubyErr::converter_not_found_error(
-            store,
-            format!("code converter not found ({})", desc),
-        )
+    let (sname, dname) = (display(&src_label), display(&dst_label));
+    let not_found =
+        |store: &Store| converter_not_found_named(store, &sname, &dname, ecflags);
+    let (Ok(s), Ok(d)) = (&src_label, &dst_label) else {
+        return Err(not_found(&globals.store));
     };
-    match (&src_label, &dst_label) {
-        (Ok(s), Ok(d)) => match (
-            encoding_from_canonical_name(s),
-            encoding_from_canonical_name(d),
-        ) {
-            (Some(s), Some(d)) => Ok((s, d)),
-            _ => Err(not_found(&globals.store)),
-        },
-        _ => Err(not_found(&globals.store)),
+    let (Some(src), Some(dst)) = (
+        encoding_from_canonical_name(s),
+        encoding_from_canonical_name(d),
+    ) else {
+        return Err(not_found(&globals.store));
+    };
+    if econv_conflict(ecflags) {
+        return Err(if for_encode && sname.eq_ignore_ascii_case(&dname) {
+            converter_not_found_named(&globals.store, "", "", ecflags)
+        } else {
+            not_found(&globals.store)
+        });
     }
+    Ok((src, dst))
 }
 
 /// The constant name (`enc_name_to_const`'s answer) of an `Encoding`,
@@ -5365,15 +5385,28 @@ fn resolve_encode_pair(
     globals: &mut Globals,
     lfp: Lfp,
     self_enc: crate::value::Encoding,
+    ecflags: i64,
 ) -> Result<(crate::value::Encoding, Option<crate::value::Encoding>)> {
-    let Some(arg0) = lfp.try_arg(0) else {
-        return Ok((self_enc, current_default_internal(globals)));
+    let Some(arg0) = lfp.try_arg(0).filter(|v| v.try_hash_ty().is_none()) else {
+        let dst = current_default_internal(globals);
+        if econv_conflict(ecflags) {
+            // Only the decorators are asked for, and they cannot be
+            // stacked (`"a".encode(crlf_newline: true, cr_newline: true)`).
+            let dname = dst.map_or(self_enc.name(), |d| d.name());
+            let (s, d) = if dname.eq_ignore_ascii_case(self_enc.name()) {
+                ("", "")
+            } else {
+                (self_enc.name(), dname)
+            };
+            return Err(converter_not_found_named(&globals.store, s, d, ecflags));
+        }
+        return Ok((self_enc, dst));
     };
     let src = match lfp.try_arg(1) {
         Some(arg1) => ConverterSrc::Given(arg1),
         None => ConverterSrc::Receiver(self_enc),
     };
-    let (src, dst) = resolve_converter_pair(vm, globals, src, arg0, true)?;
+    let (src, dst) = resolve_converter_pair(vm, globals, src, arg0, true, ecflags)?;
     Ok((src, Some(dst)))
 }
 
@@ -5394,7 +5427,11 @@ pub(super) fn encode(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let self_enc = self_val.as_rstring_inner().encoding();
-    let (src_enc, dst_enc_opt) = resolve_encode_pair(vm, globals, lfp, self_enc)?;
+    // The options come first, as in `str_transcode`: a bad one is
+    // reported ahead of a bad encoding name, and the decorators they
+    // ask for are named when a converter cannot be found.
+    let ecflags = econv_opts(get_options_hash_value(lfp).and_then(|v| v.try_hash_ty()))?;
+    let (src_enc, dst_enc_opt) = resolve_encode_pair(vm, globals, lfp, self_enc, ecflags)?;
     // With no destination (and no `default_internal`) the conversion is
     // to the receiver's own encoding — the options still apply, so this
     // is not a no-op: `"a\n".encode(crlf_newline: true)` converts.
@@ -5403,7 +5440,7 @@ pub(super) fn encode(
     // before the input is looked at, so a UTF-7 source (or a broken one
     // bound for UTF-7) is `ConverterNotFoundError`, never a complaint
     // about its bytes.
-    refuse_pair_without_converter(src_enc, dst_enc, &globals.store)?;
+    refuse_pair_without_converter(src_enc, dst_enc, ecflags, &globals.store)?;
     if let Some(v) = handle_xml_option(globals, lfp, dst_enc)? {
         return Ok(v);
     }
@@ -5435,9 +5472,10 @@ pub(super) fn encode_(
     let mut self_val = lfp.self_val();
     self_val.ensure_string_mutable(vm, globals)?;
     let self_enc = self_val.as_rstring_inner().encoding();
-    let (src_enc, dst_enc_opt) = resolve_encode_pair(vm, globals, lfp, self_enc)?;
+    let ecflags = econv_opts(get_options_hash_value(lfp).and_then(|v| v.try_hash_ty()))?;
+    let (src_enc, dst_enc_opt) = resolve_encode_pair(vm, globals, lfp, self_enc, ecflags)?;
     let dst_enc = dst_enc_opt.unwrap_or(self_enc);
-    refuse_pair_without_converter(src_enc, dst_enc, &globals.store)?;
+    refuse_pair_without_converter(src_enc, dst_enc, ecflags, &globals.store)?;
     if let Some(v) = handle_xml_option(globals, lfp, dst_enc)? {
         // CRuby's `encode!` just `replace`s self with the encoded
         // form when xml is given.
@@ -5609,22 +5647,10 @@ fn parse_transcode_opts(lfp: Lfp, store: &Store) -> TranscodeOpts {
             }
         }
     }
-    for (key, flag) in [
-        ("universal_newline", 0usize),
-        ("crlf_newline", 1),
-        ("cr_newline", 2),
-    ] {
-        if let Some(v) = find_hash_value_for_symbol(&hash, key)
-            && v.as_bool()
-        {
-            match flag {
-                0 => out.universal_newline = true,
-                1 => out.crlf_newline = true,
-                _ => out.cr_newline = true,
-            }
-        }
-    }
-    out
+    // The callers have run `econv_opts` over this Hash already and
+    // refused what it refuses, so its answer is only read here.
+    let flags = econv_opts(Some(hash)).unwrap_or(0);
+    with_newline_flags(out, flags)
 }
 
 /// Pull the `fallback:` option value off `String#encode`'s kwargs (the
@@ -6389,28 +6415,177 @@ fn opens_a_converter(
     !(src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() && src_bytes.is_ascii())
 }
 
-/// The decorators CRuby names after the encodings when it describes a
-/// converter, in its order.
-fn decorator_names(opts: &TranscodeOpts, xml: Option<XmlMode>) -> Vec<&'static str> {
-    let mut out = vec![];
-    if opts.universal_newline {
-        out.push("universal_newline");
+// CRuby's `ECONV_*` bits, as `Encoding::Converter`'s constants spell
+// them. The decorator bits travel in a converter's flags as they are;
+// `INVALID_REPLACE` / `UNDEF_REPLACE` are only what [`econv_opts`]
+// reads from an option Hash.
+const ECONV_INVALID_REPLACE: i64 = 0x0000_0002;
+const ECONV_UNDEF_REPLACE: i64 = 0x0000_0020;
+const ECONV_UNIVERSAL_NEWLINE: i64 = 0x0000_0100;
+const ECONV_CRLF_NEWLINE: i64 = 0x0000_1000;
+const ECONV_CR_NEWLINE: i64 = 0x0000_2000;
+const ECONV_LF_NEWLINE: i64 = 0x0000_4000;
+const ECONV_NEWLINE_MASK: i64 = 0x0000_7f00;
+const ECONV_XML_TEXT: i64 = 0x0000_8000;
+const ECONV_XML_ATTR_CONTENT: i64 = 0x0001_0000;
+const ECONV_XML_ATTR_QUOTE: i64 = 0x0010_0000;
+const ECONV_DECORATORS: i64 =
+    ECONV_NEWLINE_MASK | ECONV_XML_TEXT | ECONV_XML_ATTR_CONTENT | ECONV_XML_ATTR_QUOTE;
+
+/// Read a conversion option Hash the way CRuby's `econv_opts` does, and
+/// answer the `ECONV_*` bits it asks for — or the `ArgumentError` it
+/// raises for a value it does not know. `String#encode`,
+/// `Encoding::Converter.new` and `.search_convpath` all read it before
+/// they look at either encoding, so a bad option is reported ahead of
+/// a bad name.
+///
+/// `newline:` names one decorator and overrides the `*_newline:`
+/// flags; without it, each of those flags that is true adds its
+/// decorator. More than one of them is not refused here —
+/// [`econv_conflict`] refuses it when a converter is opened, as
+/// `rb_econv_open` does.
+fn econv_opts(hash: Option<crate::value::Hashmap>) -> Result<i64> {
+    let Some(hash) = hash else {
+        return Ok(0);
+    };
+    let get = |key: &str| find_hash_value_for_symbol(&hash, key).filter(|v| !v.is_nil());
+    let is_sym = |v: Value, name: &str| v.try_symbol().is_some_and(|s| s.get_name() == name);
+    // `unexpected value for xml option: foo` names a Symbol it does
+    // not know, and names nothing for any other value.
+    let unexpected = |option: &str, v: Value| match v.try_symbol() {
+        Some(sym) => MonorubyErr::argumenterr(format!(
+            "unexpected value for {option} option: {}",
+            sym.get_name()
+        )),
+        None => MonorubyErr::argumenterr(format!("unexpected value for {option} option")),
+    };
+    let mut flags = 0;
+    if let Some(v) = get("invalid") {
+        if !is_sym(v, "replace") {
+            return Err(MonorubyErr::argumenterr(
+                "unknown value for invalid character option",
+            ));
+        }
+        flags |= ECONV_INVALID_REPLACE;
     }
-    if opts.crlf_newline {
-        out.push("crlf_newline");
+    if let Some(v) = get("undef") {
+        if !is_sym(v, "replace") {
+            return Err(MonorubyErr::argumenterr(
+                "unknown value for undefined character option",
+            ));
+        }
+        flags |= ECONV_UNDEF_REPLACE;
     }
-    if opts.cr_newline {
-        out.push("cr_newline");
+    if get("replace").is_some() && flags & ECONV_INVALID_REPLACE == 0 {
+        flags |= ECONV_UNDEF_REPLACE;
+    }
+    if let Some(v) = get("xml") {
+        if is_sym(v, "text") {
+            flags |= ECONV_XML_TEXT;
+        } else if is_sym(v, "attr") {
+            flags |= ECONV_XML_ATTR_CONTENT | ECONV_XML_ATTR_QUOTE;
+        } else {
+            return Err(unexpected("xml", v));
+        }
+    }
+    if let Some(v) = get("newline") {
+        flags |= [
+            ("universal", ECONV_UNIVERSAL_NEWLINE),
+            ("crlf", ECONV_CRLF_NEWLINE),
+            ("cr", ECONV_CR_NEWLINE),
+            ("lf", ECONV_LF_NEWLINE),
+        ]
+        .into_iter()
+        .find(|(name, _)| is_sym(v, name))
+        .map(|(_, bit)| bit)
+        .ok_or_else(|| unexpected("newline", v))?;
+    } else {
+        for (key, bit) in [
+            ("universal_newline", ECONV_UNIVERSAL_NEWLINE),
+            ("crlf_newline", ECONV_CRLF_NEWLINE),
+            ("cr_newline", ECONV_CR_NEWLINE),
+            ("lf_newline", ECONV_LF_NEWLINE),
+        ] {
+            if find_hash_value_for_symbol(&hash, key).is_some_and(|v| v.as_bool()) {
+                flags |= bit;
+            }
+        }
+    }
+    Ok(flags)
+}
+
+/// Whether `flags` asks for decorators no converter can stack: two
+/// newline decorators, or `xml_text` with `xml_attr_content`
+/// (`decorator_names` in transcode.c refuses both).
+fn econv_conflict(flags: i64) -> bool {
+    (flags & ECONV_NEWLINE_MASK).count_ones() > 1
+        || (flags & ECONV_XML_TEXT != 0 && flags & ECONV_XML_ATTR_CONTENT != 0)
+}
+
+/// The `ECONV_*` decorator bits `opts` and `xml` stand for.
+fn decorator_flags(opts: &TranscodeOpts, xml: Option<XmlMode>) -> i64 {
+    let mut flags = 0;
+    for (on, bit) in [
+        (opts.universal_newline, ECONV_UNIVERSAL_NEWLINE),
+        (opts.crlf_newline, ECONV_CRLF_NEWLINE),
+        (opts.cr_newline, ECONV_CR_NEWLINE),
+        (opts.lf_newline, ECONV_LF_NEWLINE),
+    ] {
+        if on {
+            flags |= bit;
+        }
     }
     match xml {
-        Some(XmlMode::Text) => out.push("xml_text"),
-        Some(XmlMode::Attr) => {
-            out.push("xml_attr_content");
-            out.push("xml_attr_quote");
-        }
-        None => {}
+        Some(XmlMode::Text) => flags | ECONV_XML_TEXT,
+        Some(XmlMode::Attr) => flags | ECONV_XML_ATTR_CONTENT | ECONV_XML_ATTR_QUOTE,
+        None => flags,
     }
-    out
+}
+
+/// `opts` with the newline decorators `flags` asks for.
+fn with_newline_flags(mut opts: TranscodeOpts, flags: i64) -> TranscodeOpts {
+    opts.universal_newline = flags & ECONV_UNIVERSAL_NEWLINE != 0;
+    opts.crlf_newline = flags & ECONV_CRLF_NEWLINE != 0;
+    opts.cr_newline = flags & ECONV_CR_NEWLINE != 0;
+    opts.lf_newline = flags & ECONV_LF_NEWLINE != 0;
+    opts
+}
+
+/// `code converter not found (UTF-8 to bogus with crlf_newline)`, as
+/// `rb_econv_open_exc` spells it (`econv_description`): the two names
+/// as given, a side that is empty left out, then the decorators in
+/// CRuby's fixed order — and `no-conversion` when there is nothing to
+/// name at all.
+fn converter_not_found_named(store: &Store, sname: &str, dname: &str, flags: i64) -> MonorubyErr {
+    let mut desc = match (sname.is_empty(), dname.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => dname.to_string(),
+        (false, true) => sname.to_string(),
+        (false, false) => format!("{sname} to {dname}"),
+    };
+    let decorators: Vec<&str> = [
+        (ECONV_UNIVERSAL_NEWLINE, "universal_newline"),
+        (ECONV_CRLF_NEWLINE, "crlf_newline"),
+        (ECONV_CR_NEWLINE, "cr_newline"),
+        (ECONV_LF_NEWLINE, "lf_newline"),
+        (ECONV_XML_TEXT, "xml_text"),
+        (ECONV_XML_ATTR_CONTENT, "xml_attr_content"),
+        (ECONV_XML_ATTR_QUOTE, "xml_attr_quote"),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| flags & bit != 0)
+    .map(|(_, name)| name)
+    .collect();
+    if !decorators.is_empty() {
+        if !desc.is_empty() {
+            desc.push_str(" with ");
+        }
+        desc.push_str(&decorators.join(","));
+    }
+    if desc.is_empty() {
+        desc.push_str("no-conversion");
+    }
+    MonorubyErr::converter_not_found_error(store, format!("code converter not found ({desc})"))
 }
 
 /// Refuse a `replace:` string the destination cannot spell (#1566).
@@ -6453,20 +6628,11 @@ fn converter_not_found(
     opts: &TranscodeOpts,
     xml: Option<XmlMode>,
 ) -> MonorubyErr {
-    let decorators = decorator_names(opts, xml);
-    let with = if decorators.is_empty() {
-        String::new()
-    } else {
-        format!(" with {}", decorators.join(","))
-    };
-    MonorubyErr::converter_not_found_error(
+    converter_not_found_named(
         store,
-        format!(
-            "code converter not found ({} to {}{})",
-            src_enc.name(),
-            dst_enc.name(),
-            with
-        ),
+        src_enc.name(),
+        dst_enc.name(),
+        decorator_flags(opts, xml),
     )
 }
 
@@ -6502,6 +6668,7 @@ fn has_codec(enc: crate::value::Encoding) -> bool {
 fn refuse_pair_without_converter(
     src: crate::value::Encoding,
     dst: crate::value::Encoding,
+    ecflags: i64,
     store: &Store,
 ) -> Result<()> {
     if src == dst {
@@ -6509,13 +6676,11 @@ fn refuse_pair_without_converter(
     }
     let missing = |e: crate::value::Encoding| is_cruby_dummy_name(e.name()) && !has_codec(e);
     if missing(src) || missing(dst) {
-        return Err(MonorubyErr::converter_not_found_error(
+        return Err(converter_not_found_named(
             store,
-            format!(
-                "code converter not found ({} to {})",
-                src.name(),
-                dst.name()
-            ),
+            src.name(),
+            dst.name(),
+            ecflags & ECONV_DECORATORS,
         ));
     }
     Ok(())
@@ -6524,7 +6689,7 @@ fn refuse_pair_without_converter(
 fn validate_converter_pair(
     src: crate::value::Encoding,
     dst: crate::value::Encoding,
-    decorators: &TranscodeOpts,
+    ecflags: i64,
     store: &Store,
 ) -> Result<()> {
     if src == dst {
@@ -6533,7 +6698,12 @@ fn validate_converter_pair(
     let src_supported = has_codec(src);
     let dst_supported = has_codec(dst);
     if !src_supported || !dst_supported {
-        return Err(converter_not_found(store, src, dst, decorators, None));
+        return Err(converter_not_found_named(
+            store,
+            src.name(),
+            dst.name(),
+            ecflags & ECONV_DECORATORS,
+        ));
     }
     Ok(())
 }
@@ -6711,6 +6881,20 @@ fn converter_new(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // The flags come first, as in `econv_args`: an Integer mask as it
+    // is, or an option Hash read by `econv_opts` — so a bad option is
+    // reported ahead of a bad name, and the decorators they ask for are
+    // named when a converter cannot be found: `code converter not found
+    // (UTF-8 to Windows-1258 with crlf_newline)` (#1591).
+    let ecflags = match lfp.try_arg(2).and_then(|v| v.try_fixnum()) {
+        Some(n) => n,
+        None => econv_opts(
+            (2..=3)
+                .filter_map(|i| lfp.try_arg(i))
+                .find_map(|v| v.try_hash_ty()),
+        )?,
+    };
+    let decorators = ecflags & ECONV_DECORATORS;
     // Resolve to canonical constant names *once* (so a `#to_str`
     // mock argument is converted exactly once, per spec).
     let (src, dst) = resolve_converter_pair(
@@ -6719,25 +6903,8 @@ fn converter_new(
         ConverterSrc::Given(lfp.arg(0)),
         lfp.arg(1),
         false,
+        decorators,
     )?;
-    // The decorators the message names, read ahead of the options
-    // proper: `code converter not found (UTF-8 to Windows-1258 with
-    // crlf_newline)` (#1591).
-    let mut decorators = TranscodeOpts::default();
-    if let Some(n) = lfp.try_arg(2).and_then(|v| v.try_fixnum()) {
-        decorators.universal_newline = n & 0x0000_0100 != 0;
-        decorators.crlf_newline = n & 0x0000_1000 != 0;
-        decorators.cr_newline = n & 0x0000_2000 != 0;
-    }
-    if let Some(hash) = (2..=3)
-        .filter_map(|i| lfp.try_arg(i))
-        .find_map(|v| v.try_hash_ty())
-    {
-        let on = |key: &str| find_hash_value_for_symbol(&hash, key).is_some_and(|v| v.as_bool());
-        decorators.universal_newline |= on("universal_newline");
-        decorators.crlf_newline |= on("crlf_newline");
-        decorators.cr_newline |= on("cr_newline");
-    }
     // CRuby raises `Encoding::ConverterNotFoundError` for identical
     // source/destination encodings — there is no "X to X" transcoder,
     // and a decorator does not make one: `(UTF-8 to UTF-8 with
@@ -6747,9 +6914,14 @@ fn converter_new(
     // `Utf8`, but CRuby treats them as distinct and DOES build a
     // converter (`Converter.new(UTF_8, UTF8_MAC)` is valid).
     if src.name() == dst.name() {
-        return Err(converter_not_found(&globals.store, src, dst, &decorators, None));
+        return Err(converter_not_found_named(
+            &globals.store,
+            src.name(),
+            dst.name(),
+            decorators,
+        ));
     }
-    validate_converter_pair(src, dst, &decorators, &globals.store)?;
+    validate_converter_pair(src, dst, decorators, &globals.store)?;
     // Options Hash (`replace:` kwargs / `**opts` / trailing Hash).
     // With `kw_rest=true` the collected kwargs Hash is delivered in
     // the slot after the positional args (index 3 here); a literal
@@ -6765,15 +6937,16 @@ fn converter_new(
     let mut flags: i64 = 0;
     let mut replace_inner: Option<crate::value::RStringInner> = None;
     if let Some(n) = lfp.try_arg(2).and_then(|v| v.try_fixnum()) {
-        if n & 0x0000_0002 != 0 {
+        if n & ECONV_INVALID_REPLACE != 0 {
             flags |= CONVERTER_FLAG_INVALID_REPLACE;
         }
-        if n & 0x0000_0020 != 0 {
+        if n & ECONV_UNDEF_REPLACE != 0 {
             flags |= CONVERTER_FLAG_UNDEF_REPLACE;
         }
-        // Newline decorator bits pass through verbatim.
-        flags |= n & (0x0000_0100 | 0x0000_1000 | 0x0000_2000);
     }
+    // The decorator bits pass through verbatim, whichever way they
+    // were asked for.
+    flags |= decorators;
     if let Some(hash) = opts_hash {
         {
             if let Some(v) = find_hash_value_for_symbol(&hash, "invalid")
@@ -6785,17 +6958,6 @@ fn converter_new(
                 && v.try_symbol().map(|s| s.get_name() == "replace") == Some(true)
             {
                 flags |= CONVERTER_FLAG_UNDEF_REPLACE;
-            }
-            for (key, bit) in [
-                ("universal_newline", 0x0000_0100i64),
-                ("crlf_newline", 0x0000_1000),
-                ("cr_newline", 0x0000_2000),
-            ] {
-                if let Some(v) = find_hash_value_for_symbol(&hash, key)
-                    && v.as_bool()
-                {
-                    flags |= bit;
-                }
             }
             if let Some(rep) = find_hash_value_for_symbol(&hash, "replace") {
                 // `replace: nil` → keep the destination's default
@@ -6822,13 +6984,13 @@ fn converter_new(
                     // now rather than at the first substitution
                     // (#1566). The flags carry the decorators the
                     // message names.
-                    let decorators = TranscodeOpts {
-                        universal_newline: flags & 0x0000_0100 != 0,
-                        crlf_newline: flags & 0x0000_1000 != 0,
-                        cr_newline: flags & 0x0000_2000 != 0,
-                        replace: Some(s.clone()),
-                        ..Default::default()
-                    };
+                    let decorators = with_newline_flags(
+                        TranscodeOpts {
+                            replace: Some(s.clone()),
+                            ..Default::default()
+                        },
+                        flags,
+                    );
                     // The check converts the replacement into the
                     // destination, which is also what `#replacement`
                     // hands back — so the bytes are kept rather than
@@ -8390,6 +8552,7 @@ fn kddi_dest_stream(
     inner.universal_newline = false;
     inner.crlf_newline = false;
     inner.cr_newline = false;
+    inner.lf_newline = false;
     let (kind, consumed, utf8, meta) = if src_enc == kddi {
         // Its own bytes, once they are read as characters: a
         // malformed run is the source's to report, and a chunk that
@@ -12200,22 +12363,25 @@ fn converter_search_convpath(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // The optional third argument / kwargs carry decorator options
+    // (the kwargs hash may land in either trailing slot); they are
+    // read before the encodings, as in `econv_args`.
+    let ecflags = econv_opts(
+        (2..=3)
+            .filter_map(|i| lfp.try_arg(i))
+            .find_map(|v| v.try_hash_ty()),
+    )?;
+    let decorators = ecflags & ECONV_DECORATORS;
     let (src, dst) = resolve_converter_pair(
         vm,
         globals,
         ConverterSrc::Given(lfp.arg(0)),
         lfp.arg(1),
         false,
+        decorators,
     )?;
-    validate_converter_pair(src, dst, &TranscodeOpts::default(), &globals.store)?;
-    // The optional third argument / kwargs carry decorator options
-    // (the kwargs hash may land in either trailing slot).
-    let crlf = (2..=3)
-        .filter_map(|i| lfp.try_arg(i))
-        .find_map(|v| v.try_hash_ty())
-        .and_then(|h| find_hash_value_for_symbol(&h, "crlf_newline"))
-        .map(|v| v.as_bool())
-        .unwrap_or(false);
+    validate_converter_pair(src, dst, decorators, &globals.store)?;
+    let crlf = ecflags & ECONV_CRLF_NEWLINE != 0;
     Ok(build_convpath(globals, src, dst, crlf))
 }
 
