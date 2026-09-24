@@ -4970,6 +4970,7 @@ fa18bc1056456d7e5cc4f8f09ad84803	"hello world"	class C; def to_str; " world"; en
 fa47fb1c9e7a32070609887554293ca5	5	def f; a=5; return a; end; f
 fa5055ac8d08b36b7be1b47119fa4188	[10, 20, 30, 40, 50, 60, 70, 80, 1, 2, 3, 4, 5, 6, 7, 8]	class S < Array\n                def initialize\n                    
 fa598aef00ea6f2cda2486c0aa4ccb14	"symbol"	case :symbol\n        when Integer then 'integer'\n        when Float the
+fa7f92a73fc267bc64d6e64a0c23218d	[["#<Class:Cあ>", "UTF-8"], ["#<Class:Cあ>", "UTF-8"], ["#<Class:#<Class:Cあ>>", "UTF-8"], ["#<Class:42>", "US-ASCII"], ["#<Class:sym>", "US-ASCII"], ["#<Class:>", "US-ASCII"], ["#<Class:plain>", "US-ASCII"], ["#<Class:E\\\\xE9>", "US-ASCII"], [NoMethodError, "undefined method 'sub' for an instance of Array"], ["#<Class:\\\\u00E9>", "US-ASCII"], [RuntimeError, "boom"], ["#<Class:#<Object:X>>", "US-ASCII"], ["#<Class:Comparable>", "US-ASCII"], ["#<Class:#<Class:X>>", "US-ASCII"]]	t = ->(&b) { begin; s = b.call; [s.sub(/0x\\h+/, "X"), s.encoding.to_s];
 fab7eee9f4b515894936ad084738442b	[1, 99]	S = Struct.new(:a, :b)\n            \n\n            a = S.new(1, 2)\n  
 fabcf80a8ddf458378128e8d7505cb2e	"/"	File.expand_path("..", "/tmp")
 fac27574a461779f2a50d6859c18ec7b	[[[true, true], [false, true], [true, true], [false, true]], 200, [true, true, true, true, true, true, true, false, true, false], :nope]	def fro(x) = x.frozen?\n            def oid(x) = x.object_id\n       
