@@ -15,17 +15,6 @@ module Comparable
     end
   end
 
-  def !=(other)
-    res = self <=> other
-    if res.nil?
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    elsif res.is_a?(Numeric)
-      res != 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    end
-  end
-
   def >=(other)
     res = self <=> other
     if res.nil?

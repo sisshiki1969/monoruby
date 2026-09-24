@@ -199,9 +199,9 @@ class BigDecimal < Numeric
     end
 
     exp_val = 0
-    if str =~ /[eE]([+-]?\d+)\z/
-      exp_val = $1.to_i
-      str = str.sub(/[eE][+-]?\d+\z/, '')
+    if str =~ /[eEdD]([+-]?\d[\d_]*)\z/
+      exp_val = $1.delete('_').to_i
+      str = str.sub(/[eEdD][+-]?\d[\d_]*\z/, '')
     end
 
     str = str.delete('_')
@@ -350,6 +350,37 @@ class BigDecimal < Numeric
 
   def inspect
     to_s
+  end
+
+  # Marshal support (`BigDecimal_dump`): "<digits>:<to_s>", <digits>
+  # being the digits the value's base-10**9 words hold — the words from
+  # the one with its first significant digit to the one with its last,
+  # counted from the decimal point, 9 digits each (one word for zero,
+  # NaN and the infinities).
+  def _dump(_level = nil)
+    words = if nan? || infinite? || zero?
+      1
+    else
+      high = @exp + _ndigits - 1
+      (high / 9) - (@exp / 9) + 1
+    end
+    "#{words * 9}:#{to_s}".b
+  end
+
+  # `BigDecimal_load`: the digit count before the colon is skipped, not
+  # trusted, and the rest is read as `BigDecimal()` reads a String.
+  def self._load(str)
+    unless str.is_a?(String)
+      raise TypeError, "no implicit conversion of #{str.nil? ? "nil" : str.class} into String" unless str.respond_to?(:to_str)
+      str = str.to_str
+    end
+    raise ArgumentError, "string contains null byte" if str.include?("\0")
+    colon = str.index(":")
+    head = colon ? str[0, colon] : str
+    unless head.match?(/\A[0-9]*\z/)
+      raise TypeError, "load failed: invalid character in the marshaled string"
+    end
+    BigDecimal(colon ? str[(colon + 1)..] : "")
   end
 
   def coerce(other)
@@ -866,7 +897,7 @@ class BigDecimal < Numeric
     #   (with optional fractional part and optional e-exponent).
     m = s.match(/\A[+-]?(NaN|Infinity|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/)
     return _zero(false) unless m
-    parse_value(m[0])
+    _parse_string(m[0])
   end
 
   def **(y)
@@ -971,10 +1002,30 @@ class BigDecimal < Numeric
 
   INFINITY = BigDecimal.__new__(:pos_inf, 0, 0)
   NAN = BigDecimal.__new__(:nan, 0, 0)
+
+  # What `BigDecimal()` accepts from a String (bigdecimal's `VpAlloc`
+  # in strict mode), after ASCII whitespace on either side: `NaN`,
+  # `Infinity` with an optional sign, or a sign, digits with single
+  # underscores between them (one more may end a bare integer), an
+  # optional `.` and fraction, and an optional `e` / `E` / `d` / `D`
+  # exponent — with a digit before or after the point.
+  STRICT_LITERAL = /\A(?:NaN|[+-]?Infinity|[+-]?(?:\d+(?:_\d+)*(?:_|\.(?:\d+(?:_\d+)*)?)?|\.\d+(?:_\d+)*)(?:[eEdD][+-]?\d+(?:_\d+)*)?)\z/
+  private_constant :STRICT_LITERAL
+
+  def self.__check_literal(str)
+    raise ArgumentError, "string contains null byte" if str.include?("\0")
+    body = str.sub(/\A[ \t\n\v\f\r]+/, "").sub(/[ \t\n\v\f\r]+\z/, "")
+    return if STRICT_LITERAL.match?(body) && !body.match?(/\A[+-]?\d+(?:_\d+)*_[eEdD]/)
+    raise ArgumentError, "invalid value for BigDecimal(): \"#{str}\""
+  end
 end
 
 module Kernel
   def BigDecimal(val, prec = 0, exception: true)
+    unless val.is_a?(Numeric)
+      str = val.is_a?(String) ? val : (val.to_str if val.respond_to?(:to_str))
+      BigDecimal.__check_literal(str) if str.is_a?(String)
+    end
     BigDecimal.parse_value(val, prec)
   rescue => e
     raise e if exception

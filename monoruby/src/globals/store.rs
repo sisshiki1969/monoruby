@@ -2356,6 +2356,10 @@ pub struct ClassInfoTable {
     /// superclass chain from here through `GLOBALS_CLASS_OBJECTS`. Kept in
     /// step by `set_object` and the growth paths below.
     pub(in crate::globals) objects: MonoVec<Option<Module>>,
+    /// The functions monoruby itself defines — natives and the
+    /// `builtins/*.rb` bootstrap bodies — as they are installed as
+    /// methods; `is_internal_helper` finds its own helpers among them.
+    pub(in crate::globals) builtin_funcs: HashSet<FuncId>,
 }
 
 impl std::ops::Index<ClassId> for ClassInfoTable {
@@ -2380,6 +2384,7 @@ impl ClassInfoTable {
         Self {
             table: vec![ClassInfo::new(); 100],
             objects,
+            builtin_funcs: HashSet::default(),
         }
     }
 

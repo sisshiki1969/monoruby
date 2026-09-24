@@ -12,6 +12,12 @@ module Kernel
     self
   end
 
+  # `Kernel#display` — `port.write(self)`, answering nil.
+  def display(port = $>)
+    port.write(self)
+    nil
+  end
+
   private
 
   # Tag a `#<…>` rendering the way CRuby's `rb_sprintf` leaves it: that

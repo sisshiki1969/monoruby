@@ -184,3 +184,31 @@ fn string_comparison_error_message() {
         r##"begin; "a" < 7; rescue ArgumentError => e; e.message; end"##,
     );
 }
+
+#[test]
+fn comparable_has_no_ne_of_its_own() {
+    // Comparable defines `==` but no `!=` (#1647): `!=` is
+    // BasicObject's, which asks `==` — so a class that redefines `==`
+    // gets an `!=` that agrees with it, a `<=>` answering nil makes
+    // `!=` true rather than raising, and `Array#==` / `Struct#==` compare
+    // elements with their own `==`.
+    run_test_once(
+        r##"
+          class TT < Time; def ==(o) = true; end
+          class V
+            include Comparable
+            attr_reader :v
+            def initialize(v) = @v = v
+            def <=>(o) = o.is_a?(V) ? v <=> o.v : nil
+          end
+          x = TT.at(0)
+          s = Struct.new(:a)
+          [Time.instance_method(:!=).owner, Comparable.instance_methods.sort,
+           x != Time.at(1), [x] == [Time.at(1)], [x] != [Time.at(1)], [x].eql?([Time.at(1)]),
+           Time.now != "x", Time.at(0) != Time.at(0), Time.at(0) != 1,
+           V.new(1) != V.new(1), V.new(1) != V.new(2), V.new(1) != 3, V.new(1) == 3,
+           s.new(x) == s.new(Time.at(1)), s.new(x) != s.new(Time.at(1)), s.new(1) != s.new(1.0), s.new(1) == s.new(1.0),
+           ["a", 1.0, nil] == ["a", 1, nil], [1] != [1.0]]
+"##,
+    );
+}

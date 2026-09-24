@@ -1406,6 +1406,20 @@ impl ClassInfoTable {
         }
     }
 
+    /// A method monoruby defines for its own use — `__assert`,
+    /// `__warn_deprecated`, `___dlopen` — which CRuby has no counterpart
+    /// of, so the reflection lists (`instance_methods`, `methods`, …)
+    /// leave it out: a `__name` that is not a `__name__` (`__send__`,
+    /// `__id__`, `__method__`, `__getobj__` are real), implemented
+    /// natively or in the `builtins/*.rb` bootstrap tree.
+    fn is_internal_helper(&self, name: IdentId, entry: &MethodTableEntry) -> bool {
+        let Some(func_id) = entry.func_id() else {
+            return false;
+        };
+        let name = name.get_name();
+        name.starts_with("__") && !name.ends_with("__") && self.builtin_funcs.contains(&func_id)
+    }
+
     ///
     /// Get public and protected method names in the class of *class_id*.
     ///
@@ -1414,7 +1428,7 @@ impl ClassInfoTable {
             .methods
             .iter()
             .filter_map(|(name, entry)| {
-                if entry.is_public_protected() {
+                if entry.is_public_protected() && !self.is_internal_helper(*name, entry) {
                     Some(Value::symbol(*name))
                 } else {
                     None
@@ -1433,7 +1447,7 @@ impl ClassInfoTable {
             .methods
             .iter()
             .filter_map(|(name, entry)| {
-                if entry.is_public() {
+                if entry.is_public() && !self.is_internal_helper(*name, entry) {
                     Some(Value::symbol(*name))
                 } else {
                     None
@@ -1470,7 +1484,9 @@ impl ClassInfoTable {
                 if exclude.contains(name) || names.contains(name) {
                     continue;
                 }
-                if matches!(entry.visibility, Visibility::Undefined) {
+                if matches!(entry.visibility, Visibility::Undefined)
+                    || self.is_internal_helper(*name, entry)
+                {
                     exclude.insert(*name);
                 } else if visibility_filter(entry) {
                     names.insert(*name);
@@ -1489,25 +1505,19 @@ impl ClassInfoTable {
         names.into_iter().map(|sym| Value::symbol(sym)).collect()
     }
 
-    /// Stop predicate for `(true)` / inherited variants — process every
-    /// ancestor up to but excluding `OBJECT_CLASS`.
-    /// Stop predicate for the `*_instance_methods(true)` family: stop
-    /// once the next ancestor would be `Object` (or there is none), so a
-    /// module such as `Kernel` reports only its own instance methods and
-    /// does not bleed in `Object`'s (monoruby links `Kernel`'s internal
-    /// superclass to `Object` for lookup).
-    fn stop_before_object(module: Module) -> bool {
-        module
-            .superclass()
-            .is_none_or(|superclass| superclass.id() == OBJECT_CLASS)
-    }
-
-    /// Stop predicate for the receiver-level `obj.{private,public,
-    /// protected}_methods(true)` accessors: walk up to and *including*
-    /// `Object`'s own method table (where toplevel `def`s / `private :m`
-    /// land), then stop before `Kernel` / `BasicObject` builtin noise.
-    fn stop_at_object(module: Module) -> bool {
-        module.id() == OBJECT_CLASS || module.superclass().is_none()
+    /// Where an inherited walk from `start` ends (CRuby's
+    /// `class_instance_method_list` with `recur`): a class's list takes
+    /// its whole ancestry, `Object`, `Kernel` and `BasicObject`
+    /// included; a module's takes the module and the modules it
+    /// includes, and stops before any class — monoruby links `Kernel`'s
+    /// internal superclass to `Object` for lookup, which must not bleed
+    /// `Object`'s methods into `Kernel.instance_methods`.
+    fn chain_end(start: Module) -> impl Fn(Module) -> bool {
+        let start_is_module = start.is_module();
+        move |module: Module| match module.superclass() {
+            None => true,
+            Some(next) => start_is_module && !next.is_iclass(),
+        }
     }
 
     /// Stop predicate for `(false)` / direct variants — process the
@@ -1529,7 +1539,7 @@ impl ClassInfoTable {
         self.walk_method_names(
             class_id,
             MethodTableEntry::is_public,
-            Self::stop_before_object,
+            Self::chain_end(self.get_module(class_id)),
         )
     }
 
@@ -1697,7 +1707,7 @@ impl ClassInfoTable {
             .methods
             .iter()
             .filter_map(|(name, entry)| {
-                if entry.is_private() {
+                if entry.is_private() && !self.is_internal_helper(*name, entry) {
                     Some(Value::symbol(*name))
                 } else {
                     None
@@ -1733,6 +1743,7 @@ impl ClassInfoTable {
     ) -> Vec<Value> {
         let mut names = HashSet::default();
         let mut module = self.get_module(class_id);
+        let chain_end = Self::chain_end(module);
         let mut exclude = HashSet::default();
         loop {
             // Collecting singleton methods stops at the first ordinary
@@ -1756,22 +1767,18 @@ impl ClassInfoTable {
                     if matches!(
                         entry.visibility,
                         Visibility::Undefined | Visibility::Private
-                    ) {
+                    ) || self.is_internal_helper(*name, entry)
+                    {
                         exclude.insert(*name);
                     } else if entry.is_public_protected() {
                         names.insert(*name);
                     }
                 }
             }
-            match module.superclass() {
-                Some(superclass) => {
-                    if superclass.id() == OBJECT_CLASS {
-                        break;
-                    }
-                    module = superclass;
-                }
-                None => break,
+            if chain_end(module) {
+                break;
             }
+            module = module.superclass().unwrap();
         }
         names.into_iter().map(|sym| Value::symbol(sym)).collect()
     }
@@ -1783,26 +1790,8 @@ impl ClassInfoTable {
         self.walk_method_names(
             class_id,
             MethodTableEntry::is_private,
-            Self::stop_before_object,
+            Self::chain_end(self.get_module(class_id)),
         )
-    }
-
-    /// `obj.private_methods(true)`: like the above but also includes
-    /// `Object`'s own private instance methods (toplevel `private :m`),
-    /// which CRuby reports.
-    pub(crate) fn get_private_method_names_inherit_incl_object(
-        &self,
-        class_id: ClassId,
-    ) -> Vec<Value> {
-        self.walk_method_names(class_id, MethodTableEntry::is_private, Self::stop_at_object)
-    }
-
-    /// `obj.protected_methods(true)` counterpart of the above.
-    pub(crate) fn get_protected_method_names_inherit_incl_object(
-        &self,
-        class_id: ClassId,
-    ) -> Vec<Value> {
-        self.walk_method_names(class_id, Self::is_protected, Self::stop_at_object)
     }
 
     ///
@@ -1813,7 +1802,10 @@ impl ClassInfoTable {
             .methods
             .iter()
             .filter_map(|(name, entry)| {
-                if entry.func_id().is_some() && entry.visibility() == Visibility::Protected {
+                if entry.func_id().is_some()
+                    && entry.visibility() == Visibility::Protected
+                    && !self.is_internal_helper(*name, entry)
+                {
                     Some(Value::symbol(*name))
                 } else {
                     None
@@ -1826,7 +1818,11 @@ impl ClassInfoTable {
     /// Get protected method names in the class of *class_id* and its ancestors.
     ///
     pub(crate) fn get_protected_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
-        self.walk_method_names(class_id, Self::is_protected, Self::stop_before_object)
+        self.walk_method_names(
+            class_id,
+            Self::is_protected,
+            Self::chain_end(self.get_module(class_id)),
+        )
     }
 
     fn generate_class_obj(
@@ -2334,6 +2330,10 @@ impl Store {
         is_alias: bool,
     ) {
         self[func_id].set_owner_class(owner);
+        let meta = self[func_id].meta();
+        if meta.is_native() || meta.is_internal_builtin() {
+            self.classes.builtin_funcs.insert(func_id);
+        }
         // Defining into a refinement module puts `name` on the list the
         // resolution fast paths consult, so the cost of refinements stays
         // proportional to how many names are refined

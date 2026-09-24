@@ -1181,7 +1181,8 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
                 if lhs[i].id() == rhs[i].id() {
                     continue;
                 }
-                if vm.ne_values_bool(globals, lhs[i], rhs[i])? {
+                // `rb_equal`: the element's own `==`, never `!=`.
+                if !vm.eq_values_bool(globals, lhs[i], rhs[i])? {
                     return Ok(Value::bool(false));
                 }
             }
