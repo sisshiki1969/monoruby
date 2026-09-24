@@ -954,7 +954,7 @@ fn index_assign(
     // compare_by_identity hash keys on object identity, so it stores
     // the caller's String as-is (no copy, no freeze).
     if !lfp.self_val().as_hash().is_compare_by_identity() {
-        key = key.frozen_hash_key();
+        key = key.frozen_hash_key(&globals.store);
     }
     lfp.self_val()
         .as_hash_mut(&globals.store)?
@@ -1767,7 +1767,7 @@ extern "C" fn hashindex_assign(
     let key = if base.as_hash().is_compare_by_identity() {
         key
     } else {
-        key.frozen_hash_key()
+        key.frozen_hash_key(&globals.store)
     };
     let res = base
         .as_hash_mut(&globals.store)
@@ -3665,7 +3665,7 @@ fn env_slice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 let v = env_read_string(vm, globals, v)?;
                 // The result is keyed by the *given* name, which — as any
                 // `Hash#[]=` does — is stored as a frozen copy.
-                let k = k.frozen_hash_key();
+                let k = k.frozen_hash_key(&globals.store);
                 vm.temp_at(idx).as_hash().insert(k, v, vm, globals)?;
             }
         }

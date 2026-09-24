@@ -402,3 +402,23 @@ fn dynamic_literal_string_keys_ignore_redefined_string_hash() {
         "##,
     );
 }
+
+#[test]
+fn a_subclass_key_is_copied_as_its_class() {
+    // A Hash stores a frozen copy of a plain String key, but an
+    // instance of a String subclass as it is — through `[]=`, a
+    // literal and `store` — and a frozen key as it is.
+    run_test(
+        r##"
+        class KeyStr < String; def tag = :tag; end
+        k = KeyStr.new("k")
+        h = { k => 1 }
+        h2 = {}; h2[KeyStr.new("a")] = 1; h2.store(KeyStr.new("b"), 2)
+        f = KeyStr.new("f").freeze
+        h3 = { f => 3 }
+        s = "plain"; h4 = { s => 4 }
+        [h.keys[0].class, h.keys[0].frozen?, h.keys[0].equal?(k), h.keys[0].tag,
+         h2.keys.map(&:class), h3.keys[0].equal?(f), h4.keys[0].class, h4.keys[0].equal?(s), h[KeyStr.new("k")], h["k"]]
+        "##,
+    );
+}

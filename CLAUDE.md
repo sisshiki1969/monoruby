@@ -635,7 +635,18 @@ reproducible build. It performs two jobs:
      stand-in for its C extension: it requires the `ext/psych` extension,
      which drives `libyaml-safer` (a port of libyaml 0.2.5) as
      `Psych::Parser`'s event source and `Psych::Emitter`'s sink, so
-     `Psych.load` / `dump` and the event API are CRuby's byte for byte. `gem/stackprof/stackprof.rb`
+     `Psych.load` / `dump` and the event API are CRuby's byte for byte.
+     `gem/json.rb` + `gem/json/` are the json 2.18.0 gem's Ruby half
+     (Ruby 4.0.6's default gem, vendored as it is) plus
+     `gem/json/ext/{parser,generator}.rb`, the stand-ins for its two C
+     extensions: they create the classes `parser.so` / `generator.so`
+     define and hand them to `String.__json_setup_parser` /
+     `__json_setup_generator`, which put native methods on them —
+     `src/builtins/json.rs` is a port of the gem's parser.c and
+     generator.c (same grammar, options, messages and positions), and
+     `src/builtins/json/fpconv.rs` its float formatter. A `State` keeps
+     its fields in hidden (`/`-prefixed) instance variables, as the C
+     extension keeps them in its TypedData. `gem/stackprof/stackprof.rb`
      stands in for `stackprof.so` as an inert profiler (its API loads, no
      sampling), since `gem "stackprof", platforms: :mri` is required at boot
      by Bundler on monoruby too.

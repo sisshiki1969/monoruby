@@ -106,6 +106,15 @@ class BigDecimal < Numeric
     16
   end
 
+  # CRuby has no BigDecimal.new (bigdecimal undefines it; `BigDecimal()`
+  # is the constructor), and JSON's `decimal_class: BigDecimal` relies
+  # on that to call `Kernel#BigDecimal`. The internal constructor is
+  # `__new__`.
+  class << self
+    alias_method :__new__, :new
+    undef_method :new
+  end
+
   # Internal constructor: sign, coeff (Integer >= 0), exp (Integer)
   # value = sign * coeff * 10^exp
   def initialize(sign, coeff, exp)
@@ -138,19 +147,19 @@ class BigDecimal < Numeric
       return prec > 0 ? val._round_to_sig(prec) : val
     when Integer
       if val == 0
-        return new(:pos_zero, 0, 0)
+        return __new__(:pos_zero, 0, 0)
       end
       neg = val < 0
       sign = neg ? :neg : :pos
-      bd = new(sign, neg ? -val : val, 0)
+      bd = __new__(sign, neg ? -val : val, 0)
       prec > 0 ? bd._round_to_sig(prec) : bd
     when Float
       if val.nan?
-        return new(:nan, 0, 0)
+        return __new__(:nan, 0, 0)
       elsif val.infinite?
-        return val > 0 ? new(:pos_inf, 0, 0) : new(:neg_inf, 0, 0)
+        return val > 0 ? __new__(:pos_inf, 0, 0) : __new__(:neg_inf, 0, 0)
       elsif val == 0.0
-        return (1.0 / val) < 0 ? new(:neg_zero, 0, 0) : new(:pos_zero, 0, 0)
+        return (1.0 / val) < 0 ? __new__(:neg_zero, 0, 0) : __new__(:pos_zero, 0, 0)
       end
       s = "%.20f" % val
       # Remove trailing zeros after decimal point
@@ -174,11 +183,11 @@ class BigDecimal < Numeric
 
     case str
     when /\A[+-]?NaN\z/i
-      return new(:nan, 0, 0)
+      return __new__(:nan, 0, 0)
     when /\A\+?Infinity\z/i
-      return new(:pos_inf, 0, 0)
+      return __new__(:pos_inf, 0, 0)
     when /\A-Infinity\z/i
-      return new(:neg_inf, 0, 0)
+      return __new__(:neg_inf, 0, 0)
     end
 
     neg = false
@@ -210,14 +219,14 @@ class BigDecimal < Numeric
 
     coeff = all_digits.to_i
     if coeff == 0
-      return neg ? new(:neg_zero, 0, 0) : new(:pos_zero, 0, 0)
+      return neg ? __new__(:neg_zero, 0, 0) : __new__(:pos_zero, 0, 0)
     end
 
     # exp: the value is coeff * 10^(exp_val - frac_part.length)
     exp = exp_val - frac_part.length
 
     sign = neg ? :neg : :pos
-    bd = new(sign, coeff, exp)
+    bd = __new__(sign, coeff, exp)
     prec > 0 ? bd._round_to_sig(prec) : bd
   end
 
@@ -400,13 +409,13 @@ class BigDecimal < Numeric
 
   def -@
     case @sign
-    when :pos then BigDecimal.new(:neg, @coeff, @exp)
-    when :neg then BigDecimal.new(:pos, @coeff, @exp)
-    when :pos_zero then BigDecimal.new(:neg_zero, 0, 0)
-    when :neg_zero then BigDecimal.new(:pos_zero, 0, 0)
-    when :pos_inf then BigDecimal.new(:neg_inf, 0, 0)
-    when :neg_inf then BigDecimal.new(:pos_inf, 0, 0)
-    when :nan then BigDecimal.new(:nan, 0, 0)
+    when :pos then BigDecimal.__new__(:neg, @coeff, @exp)
+    when :neg then BigDecimal.__new__(:pos, @coeff, @exp)
+    when :pos_zero then BigDecimal.__new__(:neg_zero, 0, 0)
+    when :neg_zero then BigDecimal.__new__(:pos_zero, 0, 0)
+    when :pos_inf then BigDecimal.__new__(:neg_inf, 0, 0)
+    when :neg_inf then BigDecimal.__new__(:pos_inf, 0, 0)
+    when :nan then BigDecimal.__new__(:nan, 0, 0)
     end
   end
 
@@ -499,16 +508,16 @@ class BigDecimal < Numeric
 
   def /(other)
     other = BigDecimal._coerce(other)
-    return BigDecimal.new(:nan, 0, 0) if nan? || other.nan?
+    return BigDecimal.__new__(:nan, 0, 0) if nan? || other.nan?
     if other.zero?
-      return BigDecimal.new(:nan, 0, 0) if zero? || infinite?
+      return BigDecimal.__new__(:nan, 0, 0) if zero? || infinite?
       neg = negative? ^ other.negative?
-      return neg ? BigDecimal.new(:neg_inf, 0, 0) : BigDecimal.new(:pos_inf, 0, 0)
+      return neg ? BigDecimal.__new__(:neg_inf, 0, 0) : BigDecimal.__new__(:pos_inf, 0, 0)
     end
     if infinite?
-      return BigDecimal.new(:nan, 0, 0) if other.infinite?
+      return BigDecimal.__new__(:nan, 0, 0) if other.infinite?
       neg = negative? ^ other.negative?
-      return neg ? BigDecimal.new(:neg_inf, 0, 0) : BigDecimal.new(:pos_inf, 0, 0)
+      return neg ? BigDecimal.__new__(:neg_inf, 0, 0) : BigDecimal.__new__(:pos_inf, 0, 0)
     end
     return BigDecimal._zero(negative? ^ other.negative?) if other.infinite?
     return BigDecimal._zero(negative? ^ other.negative?) if zero?
@@ -520,8 +529,8 @@ class BigDecimal < Numeric
 
   def %(other)
     other = BigDecimal._coerce(other)
-    return BigDecimal.new(:nan, 0, 0) if nan? || other.nan? || other.zero?
-    return BigDecimal.new(:nan, 0, 0) if infinite?
+    return BigDecimal.__new__(:nan, 0, 0) if nan? || other.nan? || other.zero?
+    return BigDecimal.__new__(:nan, 0, 0) if infinite?
     return dup if zero?
     q = (self / other).fix
     self - q * other
@@ -537,10 +546,10 @@ class BigDecimal < Numeric
 
   def add(other, prec = 0)
     other = BigDecimal._coerce(other)
-    return BigDecimal.new(:nan, 0, 0) if nan? || other.nan?
+    return BigDecimal.__new__(:nan, 0, 0) if nan? || other.nan?
     if infinite?
       if other.infinite? && infinite? != other.infinite?
-        return BigDecimal.new(:nan, 0, 0)
+        return BigDecimal.__new__(:nan, 0, 0)
       end
       return dup
     end
@@ -566,9 +575,9 @@ class BigDecimal < Numeric
     if result == 0
       bd = BigDecimal._zero(false)
     elsif result > 0
-      bd = BigDecimal.new(:pos, result, min_exp)
+      bd = BigDecimal.__new__(:pos, result, min_exp)
     else
-      bd = BigDecimal.new(:neg, -result, min_exp)
+      bd = BigDecimal.__new__(:neg, -result, min_exp)
     end
     prec > 0 ? bd._round_to_sig(prec) : bd
   end
@@ -579,11 +588,11 @@ class BigDecimal < Numeric
 
   def mult(other, prec = 0)
     other = BigDecimal._coerce(other)
-    return BigDecimal.new(:nan, 0, 0) if nan? || other.nan?
+    return BigDecimal.__new__(:nan, 0, 0) if nan? || other.nan?
     if infinite? || other.infinite?
-      return BigDecimal.new(:nan, 0, 0) if zero? || other.zero?
+      return BigDecimal.__new__(:nan, 0, 0) if zero? || other.zero?
       neg = negative? ^ other.negative?
-      return neg ? BigDecimal.new(:neg_inf, 0, 0) : BigDecimal.new(:pos_inf, 0, 0)
+      return neg ? BigDecimal.__new__(:neg_inf, 0, 0) : BigDecimal.__new__(:pos_inf, 0, 0)
     end
     if zero? || other.zero?
       return BigDecimal._zero(negative? ^ other.negative?)
@@ -592,22 +601,22 @@ class BigDecimal < Numeric
     new_coeff = @coeff * other._coeff
     new_exp = @exp + other._exp
     neg = negative? ^ other.negative?
-    bd = BigDecimal.new(neg ? :neg : :pos, new_coeff, new_exp)
+    bd = BigDecimal.__new__(neg ? :neg : :pos, new_coeff, new_exp)
     prec > 0 ? bd._round_to_sig(prec) : bd
   end
 
   def div(other, prec = 0)
     other = BigDecimal._coerce(other)
-    return BigDecimal.new(:nan, 0, 0) if nan? || other.nan?
+    return BigDecimal.__new__(:nan, 0, 0) if nan? || other.nan?
     if other.zero?
-      return BigDecimal.new(:nan, 0, 0) if zero? || infinite?
+      return BigDecimal.__new__(:nan, 0, 0) if zero? || infinite?
       neg = negative? ^ other.negative?
-      return neg ? BigDecimal.new(:neg_inf, 0, 0) : BigDecimal.new(:pos_inf, 0, 0)
+      return neg ? BigDecimal.__new__(:neg_inf, 0, 0) : BigDecimal.__new__(:pos_inf, 0, 0)
     end
     if infinite?
-      return BigDecimal.new(:nan, 0, 0) if other.infinite?
+      return BigDecimal.__new__(:nan, 0, 0) if other.infinite?
       neg = negative? ^ other.negative?
-      return neg ? BigDecimal.new(:neg_inf, 0, 0) : BigDecimal.new(:pos_inf, 0, 0)
+      return neg ? BigDecimal.__new__(:neg_inf, 0, 0) : BigDecimal.__new__(:pos_inf, 0, 0)
     end
     return BigDecimal._zero(negative? ^ other.negative?) if other.infinite?
     return BigDecimal._zero(negative? ^ other.negative?) if zero?
@@ -623,7 +632,7 @@ class BigDecimal < Numeric
       num = @coeff * (10 ** scale)
       q = num / other._coeff
       new_exp = @exp - other._exp - scale
-      bd = BigDecimal.new(neg ? :neg : :pos, q, new_exp)
+      bd = BigDecimal.__new__(neg ? :neg : :pos, q, new_exp)
       return bd
     end
 
@@ -639,7 +648,7 @@ class BigDecimal < Numeric
       q += 1
     end
     new_exp = @exp - other._exp - extra
-    bd = BigDecimal.new(neg ? :neg : :pos, q, new_exp)
+    bd = BigDecimal.__new__(neg ? :neg : :pos, q, new_exp)
     bd._round_to_sig(prec)
   end
 
@@ -656,7 +665,7 @@ class BigDecimal < Numeric
     end
     s = @coeff.to_s
     int_str = s[0, int_digits]
-    BigDecimal.new(@sign, int_str.to_i, 0)
+    BigDecimal.__new__(@sign, int_str.to_i, 0)
   end
 
   def frac
@@ -715,7 +724,7 @@ class BigDecimal < Numeric
       # All digits are below rounding position
       should_up = _should_round_digit(0, @coeff > 0, mode)
       if should_up
-        return BigDecimal.new(@sign, 1, target_exp)
+        return BigDecimal.__new__(@sign, 1, target_exp)
       else
         return BigDecimal._zero(negative?)
       end
@@ -737,7 +746,7 @@ class BigDecimal < Numeric
       return BigDecimal._zero(negative?)
     end
 
-    BigDecimal.new(@sign, kept, target_exp)
+    BigDecimal.__new__(@sign, kept, target_exp)
   end
 
   def _should_round_digit(digit, has_more, mode)
@@ -801,16 +810,16 @@ class BigDecimal < Numeric
       kept /= 10
     end
 
-    BigDecimal.new(@sign, kept, new_exp)
+    BigDecimal.__new__(@sign, kept, new_exp)
   end
 
   def _decimal_shift(n)
     return dup if nan? || infinite? || zero?
-    BigDecimal.new(@sign, @coeff, @exp + n)
+    BigDecimal.__new__(@sign, @coeff, @exp + n)
   end
 
   def dup
-    BigDecimal.new(@sign, @coeff, @exp)
+    BigDecimal.__new__(@sign, @coeff, @exp)
   end
 
   # Accessors for internal use
@@ -835,7 +844,7 @@ class BigDecimal < Numeric
   end
 
   def self._zero(neg)
-    neg ? new(:neg_zero, 0, 0) : new(:pos_zero, 0, 0)
+    neg ? __new__(:neg_zero, 0, 0) : __new__(:pos_zero, 0, 0)
   end
 
   # interpret_loosely(str) -> BigDecimal
@@ -874,8 +883,8 @@ class BigDecimal < Numeric
 
   def power(y, prec = 0)
     y = BigDecimal._coerce(y) unless y.is_a?(Integer)
-    return BigDecimal.new(:nan, 0, 0) if nan?
-    return BigDecimal.new(:nan, 0, 0) if y.is_a?(BigDecimal) && y.nan?
+    return BigDecimal.__new__(:nan, 0, 0) if nan?
+    return BigDecimal.__new__(:nan, 0, 0) if y.is_a?(BigDecimal) && y.nan?
 
     if y.is_a?(Integer)
       return BigDecimal(1) if y == 0
@@ -902,14 +911,14 @@ class BigDecimal < Numeric
       end
       if y.infinite?
         if zero?
-          return y.positive? ? BigDecimal._zero(false) : BigDecimal.new(:pos_inf, 0, 0)
+          return y.positive? ? BigDecimal._zero(false) : BigDecimal.__new__(:pos_inf, 0, 0)
         end
         return BigDecimal(1) if self == BigDecimal(1)
         a = self.abs
         if a > BigDecimal(1)
-          return y.positive? ? BigDecimal.new(:pos_inf, 0, 0) : BigDecimal._zero(false)
+          return y.positive? ? BigDecimal.__new__(:pos_inf, 0, 0) : BigDecimal._zero(false)
         else
-          return y.positive? ? BigDecimal._zero(false) : BigDecimal.new(:pos_inf, 0, 0)
+          return y.positive? ? BigDecimal._zero(false) : BigDecimal.__new__(:pos_inf, 0, 0)
         end
       end
       if infinite?
@@ -917,13 +926,13 @@ class BigDecimal < Numeric
           return BigDecimal._zero(negative? && y.fix.to_i % 2 == 1)
         end
         neg = negative? && y.fix.to_i % 2 == 1
-        return neg ? BigDecimal.new(:neg_inf, 0, 0) : BigDecimal.new(:pos_inf, 0, 0)
+        return neg ? BigDecimal.__new__(:neg_inf, 0, 0) : BigDecimal.__new__(:pos_inf, 0, 0)
       end
       if zero?
         if y > BigDecimal(0)
           return BigDecimal._zero(false)
         end
-        return BigDecimal.new(:pos_inf, 0, 0)
+        return BigDecimal.__new__(:pos_inf, 0, 0)
       end
       # Check if y is an integer value
       if y.frac.zero?
@@ -940,7 +949,7 @@ class BigDecimal < Numeric
   end
 
   def sqrt(prec)
-    return BigDecimal.new(:pos_inf, 0, 0) if infinite? == 1
+    return BigDecimal.__new__(:pos_inf, 0, 0) if infinite? == 1
     raise FloatDomainError, 'sqrt of negative value' if negative? && !zero?
     raise FloatDomainError, "sqrt of 'NaN'(Not a Number)" if nan?
     return self if zero?
@@ -960,8 +969,8 @@ class BigDecimal < Numeric
     x._round_to_sig(prec)
   end
 
-  INFINITY = BigDecimal.new(:pos_inf, 0, 0)
-  NAN = BigDecimal.new(:nan, 0, 0)
+  INFINITY = BigDecimal.__new__(:pos_inf, 0, 0)
+  NAN = BigDecimal.__new__(:nan, 0, 0)
 end
 
 module Kernel

@@ -1354,12 +1354,17 @@ impl Value {
     /// Callers storing into a `compare_by_identity` Hash must skip this
     /// (identity hashes key on the original object).
     ///
-    pub(crate) fn frozen_hash_key(self) -> Value {
+    pub(crate) fn frozen_hash_key(self, store: &Store) -> Value {
         // Any String key, whatever its encoding or byte validity: CRuby
         // dups and freezes a non-frozen String key on insert. (`is_str`
         // would skip a String holding invalid UTF-8 — a BINARY key —
-        // and leave it mutable inside the Hash.)
-        if self.is_rstring_inner().is_some() && !self.is_frozen() {
+        // and leave it mutable inside the Hash.) Only a String proper:
+        // an instance of a subclass is stored as it is
+        // (`RHASH_STRING_KEY_P`).
+        if self.is_rstring_inner().is_some()
+            && !self.is_frozen()
+            && self.real_class(store).id() == STRING_CLASS
+        {
             let inner = self.as_rstring_inner().clone();
             let mut dup = Value::string_from_inner(inner);
             dup.set_frozen();

@@ -9011,16 +9011,24 @@ fn string_uminus(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/intern.html]
 #[monoruby_builtin]
-fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn to_sym(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let inner = self_val.as_rstring_inner();
+    Ok(Value::symbol(intern_string(
+        &globals.store,
+        self_val.as_rstring_inner(),
+    )?))
+}
+
+/// The Symbol a String's content names (CRuby's `rb_str_intern`):
+/// `String#to_sym`, and a JSON object key under `symbolize_names:`.
+pub(crate) fn intern_string(store: &Store, inner: &RStringInner) -> Result<IdentId> {
     use crate::value::Encoding as E;
     let src = inner.encoding();
     // Bytes that are not valid in their own encoding cannot name a
     // symbol (CRuby's `rb_str_intern` → `rb_enc_symname_type`).
     if !inner.is_valid_encoding() {
         return Err(MonorubyErr::encoding_error_with_store(
-            &_globals.store,
+            store,
             format!(
                 "invalid symbol in encoding {} :\"{}\"",
                 src.name(),
@@ -9052,7 +9060,7 @@ fn to_sym(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     } else {
         IdentId::get_id_from_bytes(inner.as_bytes().to_vec(), canon)
     };
-    Ok(Value::symbol(id))
+    Ok(id)
 }
 
 /// Byte-level case mapping for ASCII-only receivers. Returns the
