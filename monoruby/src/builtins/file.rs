@@ -994,8 +994,8 @@ fn resolved_path_value(
     if enc == E::UTF8 {
         return path_value(&bytes, E::UTF8);
     }
-    let topts = super::encoding::TranscodeOpts::default();
-    match super::encoding::transcode_bytes_with_opts(&bytes, E::UTF8, enc, &topts, &globals.store) {
+    let topts = crate::value::transcode::TranscodeOpts::default();
+    match crate::value::transcode_bytes_with_opts(&bytes, E::UTF8, enc, &topts, &globals.store) {
         Ok(b) => path_value(&b, enc),
         Err(_) if force => path_value(&bytes, enc),
         Err(_) => path_value(&bytes, E::UTF8),

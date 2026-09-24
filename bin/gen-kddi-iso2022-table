@@ -1,14 +1,14 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Regenerates monoruby/src/builtins/encoding_kddi.rs from CRuby: the
+# Regenerates monoruby/src/value/rvalue/string/transcode/kddi.rs from CRuby: the
 # cells stateless-ISO-2022-JP-KDDI (and so ISO-2022-JP-KDDI) spells the
 # KDDI emoji in, which are rows JIS X 0208 does not have (0xF5..0xFB in
 # EUC form), and the few characters it writes into another cell than
 # CP51932 does. Like bin/gen-carrier-tables it needs no monoruby
 # baseline: everything else in the encoding is CP51932's.
 #
-#   bin/gen-kddi-iso2022-table > monoruby/src/builtins/encoding_kddi.rs
+#   bin/gen-kddi-iso2022-table > monoruby/src/value/rvalue/string/transcode/kddi.rs
 
 enc = []
 (0xE000..0xF8FF).each do |cp|

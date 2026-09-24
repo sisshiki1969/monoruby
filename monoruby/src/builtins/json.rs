@@ -530,11 +530,11 @@ fn convert_encoding(vm: &mut Executor, globals: &mut Globals, source: Value) -> 
     let inner = source.as_rstring_inner();
     Ok(match inner.encoding() {
         Encoding::UTF8 | Encoding::Ascii8 => inner.as_bytes().to_vec(),
-        enc => super::encoding::transcode_bytes_with_opts(
+        enc => crate::value::transcode_bytes_with_opts(
             inner.as_bytes(),
             enc,
             Encoding::UTF8,
-            &super::encoding::TranscodeOpts::default(),
+            &crate::value::transcode::TranscodeOpts::default(),
             &globals.store,
         )?,
     })

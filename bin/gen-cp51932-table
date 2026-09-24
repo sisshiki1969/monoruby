@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Regenerates monoruby/src/builtins/encoding_cp51932.rs from CRuby:
+# Regenerates monoruby/src/value/rvalue/string/transcode/cp51932.rs from CRuby:
 # where CP51932 parts from EUC-JP inside the two-byte plane. CP51932 is
 # Windows-31J's table in EUC form, so it has NEC row 13 and the
 # NEC-selected IBM extension rows (0xAD and 0xF9..0xFC), which EUC-JP
@@ -9,7 +9,7 @@
 # on (`A1 C1` is U+FF5E, not U+301C) the Windows way. Like
 # bin/gen-kddi-iso2022-table it needs no monoruby baseline.
 #
-#   bin/gen-cp51932-table > monoruby/src/builtins/encoding_cp51932.rs
+#   bin/gen-cp51932-table > monoruby/src/value/rvalue/string/transcode/cp51932.rs
 
 EXT_ROWS = [0xAD, 0xF9, 0xFA, 0xFB, 0xFC].freeze
 

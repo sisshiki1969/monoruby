@@ -1,12 +1,12 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Regenerates monoruby/src/builtins/encoding_carrier.rs from CRuby's own
+# Regenerates monoruby/src/value/rvalue/string/transcode/carrier.rs from CRuby's own
 # tables. Like bin/gen-cjk-tables, the output is checked in rather than
 # built: these mappings are frozen vendor tables for Japanese
 # feature-phone mail and change never.
 #
-#   bin/gen-carrier-tables > monoruby/src/builtins/encoding_carrier.rs
+#   bin/gen-carrier-tables > monoruby/src/value/rvalue/string/transcode/carrier.rs
 #   cargo build
 #
 # Unlike that generator this one needs no monoruby baseline, because the
@@ -93,7 +93,7 @@ def pair(cps)
   [cps[0], cps[1] || 0]
 end
 
-# The bytes packed big-endian, as `encoding_cjk.rs` packs them: a lead
+# The bytes packed big-endian, as `transcode/cjk.rs` packs them: a lead
 # is never below 0x81, so a value below 0x100 is one byte and a value
 # below 0x1_0000 is two.
 def pack_bytes(bytes)

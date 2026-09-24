@@ -58,7 +58,7 @@ chain-deopt-log = []
 mimalloc = ["dep:mimalloc"]
 perf = []
 # Answer from `encoding_rs` alone for the CJK encodings: neither
-# `encoding_cjk.rs`'s tables nor #1557's rule that a cell the destination
+# `transcode/cjk.rs`'s tables nor #1557's rule that a cell the destination
 # cannot hold is no cell. Both are corrections, and the override lists
 # `bin/gen-cjk-tables` writes say where the codec and CRuby disagree, so
 # generating them needs a build that carries neither — diffing a corrected
