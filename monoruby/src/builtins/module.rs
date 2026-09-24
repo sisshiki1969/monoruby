@@ -3683,7 +3683,7 @@ mod tests {
     #[test]
     fn toplevel_protected_and_direct() {
         // obj.protected_methods(true) includes Object's own protected
-        // instance methods (incl_object walk); the `(false)` direct
+        // instance methods (the whole ancestry); the `(false)` direct
         // variants; and Kernel's instance view must not bleed Object's.
         run_test(
             r#"
