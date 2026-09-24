@@ -6177,6 +6177,135 @@ pub(crate) fn inspect_embedded(globals: &Globals, s: String) -> String {
     }
 }
 
+/// `rb_inspect`: `obj.inspect`, as `rb_obj_as_string` turns its answer
+/// into a String, and escaped by [`str_escape`] when the result
+/// encoding — `default_internal`, else `default_external` — cannot show
+/// it: when that encoding is ASCII-incompatible and the text is not
+/// ASCII, or when the text is in another encoding and is not ASCII.
+/// Otherwise the very string `#inspect` answered comes back, encoding
+/// and all (so a UTF-8 answer passes untouched under a UTF-8 locale,
+/// broken bytes included).
+///
+/// Unlike [`inspect_embedded`], this dispatches `#inspect`, so a
+/// user-defined one is what gets embedded.
+pub(crate) fn rb_inspect(vm: &mut Executor, globals: &mut Globals, obj: Value) -> Result<Value> {
+    let res = vm.invoke_method_inner(globals, IdentId::INSPECT, obj, &[], None, None)?;
+    let res = rb_obj_as_string(vm, globals, res)?;
+    let inner = res.as_rstring_inner();
+    let enc = inner.encoding();
+    let ascii_only = enc.is_ascii_compatible() && inner.as_bytes().is_ascii();
+    let resenc = default_internal_or_external(globals).unwrap_or(Encoding::UTF8);
+    let escape = !ascii_only && (!resenc.is_ascii_compatible() || enc != resenc);
+    if !escape {
+        return Ok(res);
+    }
+    Ok(Value::string_from_inner(RStringInner::from_encoding(
+        str_escape(inner).as_bytes(),
+        Encoding::UsAscii,
+    )))
+}
+
+/// `rb_obj_as_string`: a String as it is, anything else through its
+/// `#to_s` — and, when that is no String either, `rb_any_to_s`'s
+/// `#<Class:0x…>`.
+fn rb_obj_as_string(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Value> {
+    if v.is_rstring_inner().is_some() {
+        return Ok(v);
+    }
+    let s = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
+    if s.is_rstring_inner().is_some() {
+        return Ok(s);
+    }
+    let class_name = v.get_real_class_name(&globals.store);
+    Ok(Value::string(format!("#<{}:0x{:016x}>", class_name, v.id())))
+}
+
+/// `default_internal`, else `default_external`: the encoding
+/// `rb_inspect` measures a rendering against.
+fn default_internal_or_external(globals: &mut Globals) -> Option<Encoding> {
+    let resenc = globals
+        .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
+        .filter(|v| !v.is_nil())
+        .or_else(|| {
+            globals
+                .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+                .filter(|v| !v.is_nil())
+        })?;
+    globals.encoding_of_object(resenc)
+}
+
+/// `rb_str_escape`: `s` as ASCII text. A character that is printable
+/// ASCII in an ASCII-compatible encoding stays; `\n`, `\t` and the
+/// other C escapes are spelled so, and DEL is `\c?`; any other
+/// character is `\uXXXX` /
+/// `\u{XXXXX}` in a Unicode encoding (printable ASCII staying itself
+/// there too) and `\xXX` / `\x{XXXX}` elsewhere; and a byte that
+/// starts no character is `\xXX`. Unlike `String#inspect` it adds no
+/// quotes and leaves `"`, `\` and `#` alone.
+pub(crate) fn str_escape(s: &RStringInner) -> String {
+    use crate::value::Encoding as E;
+    let enc = s.encoding();
+    let bytes = s.as_bytes();
+    let unicode = matches!(
+        enc,
+        E::Utf8(_) | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
+    ) || enc == E::NamedByte(crate::value::CESU_8);
+    let asciicompat = enc.is_ascii_compatible();
+    let printable = |c: u32| (0x20..0x7f).contains(&c);
+    let mut out = String::new();
+    let mut p = 0;
+    while p < bytes.len() {
+        let n = match crate::value::precise_mbclen(enc, bytes, p) {
+            PreciseLen::Char(n) => n,
+            _ => {
+                out.push_str(&format!("\\x{:02X}", bytes[p]));
+                p += 1;
+                continue;
+            }
+        };
+        let Some(c) = crate::value::enc_codepoint(enc, &bytes[p..p + n]) else {
+            for b in &bytes[p..p + n] {
+                out.push_str(&format!("\\x{:02X}", b));
+            }
+            p += n;
+            continue;
+        };
+        p += n;
+        let named = match c {
+            0x0a => Some('n'),
+            0x0d => Some('r'),
+            0x09 => Some('t'),
+            0x0c => Some('f'),
+            0x0b => Some('v'),
+            0x08 => Some('b'),
+            0x07 => Some('a'),
+            0x1b => Some('e'),
+            _ => None,
+        };
+        if let Some(cc) = named {
+            out.push('\\');
+            out.push(cc);
+        } else if c == 0x7f {
+            out.push_str("\\c?");
+        } else if asciicompat && printable(c) {
+            out.push(c as u8 as char);
+        } else if unicode {
+            if c < 0x7f && printable(c) {
+                out.push(c as u8 as char);
+            } else if c < 0x10000 {
+                out.push_str(&format!("\\u{:04X}", c));
+            } else {
+                out.push_str(&format!("\\u{{{:X}}}", c));
+            }
+        } else if c < 0x100 {
+            out.push_str(&format!("\\x{:02X}", c));
+        } else {
+            out.push_str(&format!("\\x{{{:X}}}", c));
+        }
+    }
+    out
+}
+
 /// [`inspect_result`] where only a `#<…>` rendering is one of
 /// `rb_sprintf`'s: the generic `#inspect`, which sees every kind of
 /// object and so meets both kinds of rendering.

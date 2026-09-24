@@ -2538,22 +2538,18 @@ fn public_class_method(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/to_s.html]
 #[monoruby_builtin]
-fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn tos(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     if let Some(module) = self_val.is_class_or_module() {
+        if let Some(attached) = module.is_singleton() {
+            return singleton_tos(vm, globals, module.id(), attached);
+        }
         // An anonymous class/module has no name to give, so
         // `get_class_name` answers the `#<Class:0x…>` rendering
         // instead — which CRuby builds with `rb_sprintf`, not with the
-        // name builder, and tags accordingly (#1494). A singleton
-        // class renders as `#<Class:Foo>` and is *not* one of those:
-        // `rb_mod_to_s` opens that buffer with `rb_usascii_str_new`
-        // and appends the attached object to it.
+        // name builder, and tags accordingly (#1494).
         let class_name = globals.store.get_class_name(module.id());
-        Ok(if module.is_singleton().is_some() {
-            Value::string_usascii(class_name)
-        } else {
-            Value::string_name_or_repr(class_name)
-        })
+        Ok(Value::string_name_or_repr(class_name))
     } else {
         let class_name = globals.store.get_class_name(self_val.class());
         Ok(Value::string(format!(
@@ -2562,6 +2558,40 @@ fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             self_val.id()
         )))
     }
+}
+
+/// A singleton class's `#to_s`, built as `rb_mod_to_s` builds it: a
+/// US-ASCII `#<Class:` buffer, the attached object, and `>`. A class or
+/// module attached is appended through `rb_inspect` — its own
+/// `#inspect`, escaped where the result encoding cannot show it — so
+/// the rendering stays US-ASCII unless an unescaped non-ASCII answer
+/// brings its encoding in (#1518). Any other object is appended as
+/// `rb_any_to_s` renders it, which is not escaped.
+///
+/// `Store::get_class_name` keeps the unescaped `#<Class:Foo>` form for
+/// the places that name a class without a VM to call `#inspect` with.
+fn singleton_tos(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    singleton: ClassId,
+    attached: Value,
+) -> Result<Value> {
+    if attached.is_class_or_module().is_none() {
+        return Ok(Value::string_usascii(globals.store.get_class_name(singleton)));
+    }
+    let inspected = crate::builtins::encoding::rb_inspect(vm, globals, attached)?;
+    let inner = inspected.as_rstring_inner();
+    let mut bytes = b"#<Class:".to_vec();
+    bytes.extend_from_slice(inner.as_bytes());
+    bytes.push(b'>');
+    // `rb_str_append` onto the ASCII-only buffer: an ASCII answer
+    // leaves it US-ASCII, anything else brings its own encoding.
+    let enc = if inner.encoding().is_ascii_compatible() && inner.as_bytes().is_ascii() {
+        crate::value::Encoding::UsAscii
+    } else {
+        inner.encoding()
+    };
+    Ok(Value::string_from_inner(RStringInner::from_encoding(&bytes, enc)))
 }
 
 ///
@@ -5376,6 +5406,46 @@ mod tests {
             r##"
         class Bar; end
         Bar.to_s
+        "##,
+        );
+    }
+
+    /// A singleton class appends a class or module attached to it
+    /// through `rb_inspect`, so the attached one's own `#inspect` is
+    /// what it shows — `rb_obj_as_string`'d when it answers no String,
+    /// its exception propagating — and anything else attached through
+    /// `rb_any_to_s`, whatever its `#inspect` says (#1518).
+    #[test]
+    fn singleton_class_to_s_inspects_what_it_is_attached_to() {
+        run_test_once(
+            r##"
+        t = ->(&b) { begin; s = b.call; [s.sub(/0x\h+/, "X"), s.encoding.to_s]; rescue => e; [e.class, e.message]; end }
+        res = []
+        c = Class.new; def c.inspect = "Cあ"
+        res << t.() { c.singleton_class.inspect }
+        res << t.() { c.singleton_class.to_s }
+        res << t.() { c.singleton_class.singleton_class.inspect }
+        c = Module.new; def c.inspect = 42
+        res << t.() { c.singleton_class.inspect }
+        c = Class.new; def c.inspect = :sym
+        res << t.() { c.singleton_class.inspect }
+        c = Class.new; def c.inspect = nil
+        res << t.() { c.singleton_class.inspect }
+        c = Class.new; def c.inspect = "plain".encode("UTF-16LE")
+        res << t.() { c.singleton_class.inspect }
+        c = Class.new; def c.inspect = "Eé".encode("ISO-8859-1")
+        res << t.() { c.singleton_class.inspect }
+        c = Class.new; def c.inspect = "\xff".dup.force_encoding("UTF-8")
+        res << t.() { c.singleton_class.inspect.bytes }
+        c = Class.new; def c.inspect = "é".encode("CESU-8")
+        res << t.() { c.singleton_class.inspect }
+        c = Class.new; def c.inspect = raise("boom")
+        res << t.() { c.singleton_class.inspect }
+        o = Object.new; def o.inspect = "never"
+        res << t.() { o.singleton_class.inspect }
+        res << t.() { Comparable.singleton_class.inspect }
+        res << t.() { Class.new.singleton_class.inspect }
+        res
         "##,
         );
     }

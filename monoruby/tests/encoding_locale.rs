@@ -350,3 +350,45 @@ fn a_script_file_is_utf8_whatever_the_locale() {
         assert!(actual.starts_with("#<Encoding:UTF-8>\n"), "under {label}");
     }
 }
+
+/// A singleton class's `#to_s` / `#inspect` appends a class or module
+/// attached to it through `rb_inspect`, so its name is escaped where
+/// the result encoding cannot show it and the rendering stays US-ASCII
+/// then (#1518). Anything else attached goes in as `rb_any_to_s` has
+/// it, unescaped. The bytes and encoding are printed rather than the
+/// strings, so what is compared is the rendering and not how `p` shows
+/// it.
+#[test]
+fn a_singleton_class_escapes_the_module_it_is_attached_to() {
+    let path = write_script(
+        "mr_enc_locale_singleton_to_s.rb",
+        r##"
+def show(s) = p([s.bytes, s.encoding.to_s])
+class Zあ; end
+module Mあ; end
+show Zあ.singleton_class.inspect
+show Zあ.singleton_class.to_s
+show Mあ.singleton_class.inspect
+show Zあ.singleton_class.singleton_class.inspect
+show "#{Zあ.singleton_class}"
+show [Zあ.singleton_class].inspect
+show Comparable.singleton_class.inspect
+show Zあ.new.singleton_class.inspect.sub(/0x\h+/, "X")
+c = Class.new; def c.inspect = "Cあ"
+show c.singleton_class.inspect
+c = Class.new; def c.inspect = "\xff".dup.force_encoding("UTF-8")
+show c.singleton_class.inspect
+c = Class.new; def c.inspect = "Eé".encode("ISO-8859-1")
+show c.singleton_class.inspect
+c = Class.new; def c.inspect = "a\nb\x7f\u{1F600}"
+show c.singleton_class.inspect
+Encoding.default_internal = Encoding::EUC_JP
+show Zあ.singleton_class.inspect
+"##,
+    );
+    for (label, env) in LOCALES {
+        let expected = run_script(cruby(env), &path);
+        let actual = run_script(monoruby(env), &path);
+        assert_eq!(expected, actual, "under {label}");
+    }
+}
