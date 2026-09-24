@@ -1500,6 +1500,11 @@ impl Value {
         RValue::new_argf(class_id, inner).pack()
     }
 
+    /// An `Encoding::Converter` over a resolved encoding pair.
+    pub fn new_converter(class_id: ClassId, inner: ConverterInner) -> Self {
+        RValue::new_converter(class_id, inner).pack()
+    }
+
     /// An empty `ObjectSpace::WeakMap`, registered with the collector so
     /// its pairs are broken as their halves die.
     pub fn new_weakmap(class_id: ClassId) -> Self {
@@ -3267,6 +3272,21 @@ impl Value {
 
     pub fn as_iobuffer_inner_mut(&mut self) -> &mut IoBufferInner {
         self.rvalue_mut().as_io_buffer_mut()
+    }
+
+    /// The receiver's ConverterInner. `None` unless the value really
+    /// is an `Encoding::Converter` (`ObjTy::CONVERTER`).
+    pub fn try_converter_inner(&self) -> Option<&ConverterInner> {
+        let rv = self.try_rvalue()?;
+        (rv.ty() == ObjTy::CONVERTER).then(|| rv.as_converter())
+    }
+
+    pub fn as_converter_inner(&self) -> &ConverterInner {
+        self.rvalue().as_converter()
+    }
+
+    pub fn as_converter_inner_mut(&mut self) -> &mut ConverterInner {
+        self.rvalue_mut().as_converter_mut()
     }
 
     /// The receiver's WeakMapInner. `None` unless the value really is

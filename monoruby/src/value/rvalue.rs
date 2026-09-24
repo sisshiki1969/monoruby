@@ -16,6 +16,8 @@ pub use arithmetic_sequence::{
 pub use array::*;
 pub use binding::*;
 pub use complex::ComplexInner;
+pub use converter::Converter;
+pub(crate) use converter::{ConverterError, ConverterFlag, ConverterInner, ConverterOutcome};
 pub use enumerator::*;
 pub use exception::ExceptionInner;
 pub use fiber::*;
@@ -35,25 +37,24 @@ pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use regexp::{Spans, Subject, save_spans, spans_of};
 pub(crate) use string::pack::*;
+pub(crate) use string::transcode_bytes_with_opts;
+pub(crate) use string::{
+    CESU_8, CESU8_MAX_LEN, CodepointErr, IllFormed, Iso2022JpStop, MbcPiece, PreciseLen,
+    SJIS_DOCOMO, SJIS_KDDI, SJIS_SOFTBANK, UTF8_DOCOMO, UTF8_KDDI, UTF8_MAC, UTF8_SOFTBANK,
+    WINDOWS_31J, big5_transcoder_len, cesu8_precise_len, cesu8_to_utf8, char_count, char_width_at,
+    cp5022x_to_eucjp_from, cp51932_transcoder_len, enc_codepoint, enc_mbcput, euc_jp_const_name,
+    euc_jp_variant_index, eucjp_char_width, eucjp_precise_len, eucjp_to_cp5022x_from,
+    eucjp_to_stateless_iso2022jp, iso2022jp_to_stateless_from, mac_clusters, mac_to_utf8,
+    mbc_walker, named_byte_const_name, named_byte_index, precise_mbclen, scrub_mbc,
+    sjis_char_width, sjis_const_name, sjis_precise_len, stateless_iso2022jp_to_eucjp,
+    stateless_iso2022jp_transcode_len, stateless_to_iso2022jp_from, unicode_unit_at,
+    unicode_unit_codepoint, unicode_unit_encode, unicode_unit_precise_len, utf8_const_name,
+    utf8_to_cesu8, utf8_to_mac, walk_mbc, walk_mbc_with,
+};
 pub use string::{
     CharByteIter, CodeRange, EncBuf, Encoding, RString, RStringInner, STRING_CR_OFFSET,
-    STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, STRING_TY_PAYLOAD_OFFSET,
-    STRING_TY_PAYLOAD_TAG, map_bytes_to_utf8,
-};
-pub(crate) use string::{
-    MbcPiece, PreciseLen, CodepointErr, char_count, char_width_at, euc_jp_const_name, eucjp_char_width,
-    enc_codepoint, enc_mbcput, precise_mbclen,
-    unicode_unit_at, unicode_unit_codepoint, unicode_unit_encode, unicode_unit_precise_len,
-    sjis_const_name, CESU_8, UTF8_MAC, cesu8_precise_len, cesu8_to_utf8, mac_clusters,
-    mac_to_utf8, SJIS_DOCOMO, SJIS_KDDI, SJIS_SOFTBANK, UTF8_DOCOMO, UTF8_KDDI,
-    UTF8_SOFTBANK, WINDOWS_31J, utf8_const_name, utf8_to_cesu8, utf8_to_mac, CESU8_MAX_LEN,
-    eucjp_precise_len, IllFormed, mbc_walker, named_byte_const_name, scrub_mbc, sjis_char_width,
-    eucjp_to_stateless_iso2022jp, stateless_iso2022jp_to_eucjp,
-    stateless_iso2022jp_transcode_len, named_byte_index,
-    
-    iso2022jp_to_stateless_from, stateless_to_iso2022jp_from,
-    sjis_precise_len, walk_mbc, walk_mbc_with, big5_transcoder_len, cp5022x_to_eucjp_from,
-    eucjp_to_cp5022x_from, Iso2022JpStop, euc_jp_variant_index, cp51932_transcoder_len,
+    STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, STRING_TY_PAYLOAD_OFFSET, STRING_TY_PAYLOAD_TAG,
+    map_bytes_to_utf8,
 };
 pub(crate) use string::{
     STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer, string_snapshot,
@@ -70,6 +71,7 @@ mod arithmetic_sequence;
 mod array;
 mod binding;
 mod complex;
+mod converter;
 mod enumerator;
 mod exception;
 mod fiber;
@@ -162,6 +164,7 @@ impl std::fmt::Debug for ObjTy {
                 27 => "THREAD",
                 28 => "ARGF",
                 31 => "WEAKMAP",
+                32 => "CONVERTER",
                 29 => "FRAME",
                 30 => "NATIVE",
                 _ => return write!(f, "INVALID({ty})"),
@@ -219,6 +222,8 @@ impl ObjTy {
     /// is dropped with the object. Not promotable: the payload's Values
     /// are stored without a write barrier.
     pub const NATIVE: Self = Self(std::num::NonZeroU8::new(30).unwrap());
+    /// `Encoding::Converter` — see `rvalue/converter.rs`.
+    pub const CONVERTER: Self = Self(std::num::NonZeroU8::new(32).unwrap());
 }
 
 #[repr(C)]
@@ -266,6 +271,7 @@ pub union ObjKind {
     argf: ManuallyDrop<Box<ArgfInner>>,
     /// Boxed: the pair list is owned, and the cell stays pointer-sized.
     weakmap: ManuallyDrop<Box<WeakMapInner>>,
+    converter: ManuallyDrop<Box<ConverterInner>>,
     /// Raw parts of a promoted heap frame's buffer (see `FrameInner`).
     frame: FrameInner,
     /// Native payload (`ObjTy::NATIVE`), a fat pointer to the boxed data.
@@ -603,6 +609,12 @@ impl ObjKind {
         }
     }
 
+    fn converter(inner: ConverterInner) -> Self {
+        Self {
+            converter: ManuallyDrop::new(Box::new(inner)),
+        }
+    }
+
     fn weakmap(inner: WeakMapInner) -> Self {
         Self {
             weakmap: ManuallyDrop::new(Box::new(inner)),
@@ -679,6 +691,7 @@ impl std::fmt::Debug for RValue {
                             ObjTy::IO_BUFFER => format!("{:?}", self.kind.io_buffer),
                             ObjTy::ARGF => format!("{:?}", self.kind.argf),
                             ObjTy::WEAKMAP => format!("{:?}", self.kind.weakmap),
+                            ObjTy::CONVERTER => format!("{:?}", self.kind.converter),
                             ObjTy::ARRAY => format!("{:?}", self.kind.array),
                             ObjTy::RANGE => format!("{:?}", self.kind.range),
                             ObjTy::EXCEPTION => format!("{:?}", self.kind.exception),
@@ -761,6 +774,7 @@ impl RValue {
                 ObjTy::FIBER => self.fiber_debug(store),
                 ObjTy::ENUMERATOR => self.enumerator_inspect(store),
                 ObjTy::GENERATOR => self.object_debug(store),
+                ObjTy::CONVERTER => self.object_debug(store),
                 ObjTy::COMPLEX => self.as_complex().debug(store),
                 ObjTy::RATIONAL => self.as_rational().inspect(),
                 ObjTy::BINDING => self.object_debug(store),
@@ -795,6 +809,7 @@ impl RValue {
                 // does `IO#to_s`: only `#inspect` names the source.
                 ObjTy::ENUMERATOR => self.object_tos(store),
                 ObjTy::GENERATOR => self.object_tos(store),
+                ObjTy::CONVERTER => self.object_tos(store),
                 ObjTy::BINDING => self.object_tos(store),
                 ObjTy::UMETHOD => self.as_umethod().to_s(store),
                 ObjTy::MATCHDATA => self.as_match_data().to_s(),
@@ -1049,6 +1064,7 @@ impl alloc::GCBox for RValue {
                 ObjTy::IO_BUFFER => ManuallyDrop::drop(&mut self.kind.io_buffer),
                 ObjTy::ARGF => ManuallyDrop::drop(&mut self.kind.argf),
                 ObjTy::WEAKMAP => ManuallyDrop::drop(&mut self.kind.weakmap),
+                ObjTy::CONVERTER => ManuallyDrop::drop(&mut self.kind.converter),
                 ObjTy::NATIVE => ManuallyDrop::drop(&mut self.kind.native),
                 // SAFETY: `base`/`len` are exactly the raw parts of the
                 // original `Box<[u64]>` (recorded at promotion); this
@@ -1168,6 +1184,9 @@ impl alloc::GCBox for RValue {
                 ObjTy::ARGF => self.as_argf().mark(alloc),
                 // Traces nothing: both halves of every pair are weak.
                 ObjTy::WEAKMAP => self.as_weakmap().mark(alloc),
+                // Traces nothing: a converter's state is encodings,
+                // flags and byte buffers — it holds no `Value`.
+                ObjTy::CONVERTER => {}
                 ObjTy::NATIVE => self.kind.native.mark(alloc),
                 // Walk the promoted frame's contents (registers, block,
                 // svar, outer chain). Reaching the wrapper twice in one
@@ -1806,14 +1825,18 @@ impl RValue {
                         // CRuby's does: the pairs belong to the map
                         // the collector registered, not to this one.
                         ObjTy::WEAKMAP => ObjKind::weakmap(WeakMapInner::new()),
+                        // A converter's whole state is copied — the
+                        // pair, the flags and every buffer — which is
+                        // what copying its instance variables did.
+                        ObjTy::CONVERTER => ObjKind {
+                            converter: ManuallyDrop::new((*self.kind.converter).clone()),
+                        },
                         // CRuby allocates the copy and lets
                         // `Enumerator#initialize_copy` fill it in, which
                         // is where an uninitialized or running original
                         // is refused (#1624).
                         ObjTy::ENUMERATOR => ObjKind {
-                            enumerator: ManuallyDrop::new(Box::new(
-                                EnumeratorInner::new_uninit(),
-                            )),
+                            enumerator: ManuallyDrop::new(Box::new(EnumeratorInner::new_uninit())),
                         },
                         ObjTy::GENERATOR => ObjKind {
                             generator: ManuallyDrop::new(self.kind.generator.dup()),
@@ -1925,14 +1948,18 @@ impl RValue {
                         // CRuby's does: the pairs belong to the map
                         // the collector registered, not to this one.
                         ObjTy::WEAKMAP => ObjKind::weakmap(WeakMapInner::new()),
+                        // A converter's whole state is copied — the
+                        // pair, the flags and every buffer — which is
+                        // what copying its instance variables did.
+                        ObjTy::CONVERTER => ObjKind {
+                            converter: ManuallyDrop::new((*self.kind.converter).clone()),
+                        },
                         // CRuby allocates the copy and lets
                         // `Enumerator#initialize_copy` fill it in, which
                         // is where an uninitialized or running original
                         // is refused (#1624).
                         ObjTy::ENUMERATOR => ObjKind {
-                            enumerator: ManuallyDrop::new(Box::new(
-                                EnumeratorInner::new_uninit(),
-                            )),
+                            enumerator: ManuallyDrop::new(Box::new(EnumeratorInner::new_uninit())),
                         },
                         ObjTy::GENERATOR => ObjKind {
                             generator: ManuallyDrop::new(self.kind.generator.dup()),
@@ -2507,6 +2534,14 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_converter(class_id: ClassId, inner: ConverterInner) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::CONVERTER),
+            kind: ObjKind::converter(inner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_weakmap(class_id: ClassId) -> Self {
         RValue {
             header: Header::new(class_id, ObjTy::WEAKMAP),
@@ -2859,6 +2894,18 @@ impl RValue {
         assert_eq!(self.ty(), ObjTy::IO_BUFFER);
         // SAFETY: type checked above.
         unsafe { &mut self.kind.io_buffer }
+    }
+
+    pub(crate) fn as_converter(&self) -> &ConverterInner {
+        assert_eq!(self.ty(), ObjTy::CONVERTER);
+        // SAFETY: the type check above pins the live union field.
+        unsafe { &self.kind.converter }
+    }
+
+    pub(crate) fn as_converter_mut(&mut self) -> &mut ConverterInner {
+        assert_eq!(self.ty(), ObjTy::CONVERTER);
+        // SAFETY: as `as_converter`.
+        unsafe { &mut self.kind.converter }
     }
 
     pub(crate) fn as_weakmap(&self) -> &WeakMapInner {

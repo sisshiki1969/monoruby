@@ -2094,7 +2094,7 @@ fn io_class_read(
     let (out, final_enc) = match intl {
         Some(i) if i != ext => {
             let topts = super::encoding::TranscodeOpts::default();
-            match super::encoding::transcode_bytes_with_opts(&buf, ext, i, &topts, &globals.store) {
+            match crate::value::transcode_bytes_with_opts(&buf, ext, i, &topts, &globals.store) {
                 Ok(b) => (b, i),
                 Err(_) => (buf, ext),
             }
@@ -5070,7 +5070,7 @@ pub(super) fn tag_with_encs(
     let (out, final_enc) = match intl {
         Some(i) if i != ext && !matches!(ext, E::Ascii8) => {
             let topts = super::encoding::TranscodeOpts::default();
-            match super::encoding::transcode_bytes_with_opts(&bytes, ext, i, &topts, &globals.store)
+            match crate::value::transcode_bytes_with_opts(&bytes, ext, i, &topts, &globals.store)
             {
                 Ok(b) => (b, i),
                 Err(_) => (bytes, ext),
@@ -5135,7 +5135,7 @@ pub(super) fn tagged_read_string_with(
     let (out, final_enc) = match intl {
         Some(i) if i != ext => {
             let opts = super::encoding::TranscodeOpts::default();
-            match super::encoding::transcode_bytes_with_opts(&bytes, ext, i, &opts, &globals.store)
+            match crate::value::transcode_bytes_with_opts(&bytes, ext, i, &opts, &globals.store)
             {
                 Ok(b) => (b, i),
                 Err(_) => (bytes, ext),

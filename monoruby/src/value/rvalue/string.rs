@@ -1,4 +1,22 @@
 use super::*;
+use crate::builtins::encoding::{
+    JisCell, JisWrapper, StreamConvertResult, TranscodeOpts, carrier_no_unicode_message,
+    carrier_pua_bytes, cell_decode, cell_table, chain_names, conversion_walker,
+    converter_not_found, decode_utf16_32, dst_can_hold, dummy_wide_source, dummy_wide_target,
+    encode_utf16_32, encoding_to_rs, first_bad_sequence, has_codec, ibm037_to_utf8,
+    insert_encoding, inserted_replacement, invalid_byte_sequence, is_ibm037, is_utf16_or_32,
+    jis_direct_from_euc, jis_direct_one, jis_family_chain, jis_wrapper, jp_decode, jp_encode,
+    jp_fixup, kddi_char_cell, kddi_read, kddi_undefined_message, kddi_wrapper,
+    latin1_bytes_to_ibm037, mac_replace_pivot, mac_replacement_leads, pivot_chain,
+    quote_error_bytes, reporting_as, single_byte_table, source_byte_table, stateless_good_prefix,
+    stateless_iso2022jp, stateless_kddi_enc, stream_convert, table_cell_encode, table_decode,
+    table_decode_lossy, table_encode, transcoder_spelling, undefined_before_eucjp_message,
+    utf8_kddi_enc, validate_replacement, wrapper_dst_undefined,
+};
+use crate::builtins::encoding_carrier::{
+    CarrierPair, SjisCarrier, Utf8Carrier, carrier_base, carrier_pair, carrier_route,
+    carrier_vendor, sjis_carrier, utf8_carrier,
+};
 
 /// Longest encoding name `Encoding::try_from_str` can recognise
 /// (`WINDOWS_31J` and friends are far shorter; the cap only has to be an
@@ -151,7 +169,10 @@ pub(crate) fn euctw_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
     if bytes.get(pos) != Some(&0x8e) {
         return euckr_precise_len(bytes, pos);
     }
-    for (i, range) in [0xa1..=0xb0u8, 0xa1..=0xfe, 0xa1..=0xfe].into_iter().enumerate() {
+    for (i, range) in [0xa1..=0xb0u8, 0xa1..=0xfe, 0xa1..=0xfe]
+        .into_iter()
+        .enumerate()
+    {
         match bytes.get(pos + 1 + i) {
             None => return PreciseLen::NeedMore,
             Some(b) if range.contains(b) => {}
@@ -325,11 +346,22 @@ pub struct CharByteIter<'a> {
 /// the number of characters in `bytes` — the two boundary questions the
 /// byte-offset pattern walkers (`Subject`) ask of a non-UTF-8 subject.
 pub(crate) fn char_width_at(encoding: Encoding, bytes: &[u8], pos: usize) -> usize {
-    CharByteIter { bytes, pos, encoding }.next().map_or(1, |c| c.len())
+    CharByteIter {
+        bytes,
+        pos,
+        encoding,
+    }
+    .next()
+    .map_or(1, |c| c.len())
 }
 
 pub(crate) fn char_count(encoding: Encoding, bytes: &[u8]) -> usize {
-    CharByteIter { bytes, pos: 0, encoding }.count()
+    CharByteIter {
+        bytes,
+        pos: 0,
+        encoding,
+    }
+    .count()
 }
 
 impl<'a> Iterator for CharByteIter<'a> {
@@ -787,7 +819,6 @@ pub(crate) fn mac_to_utf8(s: &str) -> String {
     out.into_iter().collect()
 }
 
-
 /// Where a stateless-ISO-2022-JP sequence ends according to the
 /// *transcoder*, which is narrower than the encoding object's walk:
 /// only `0x90` and `0x92` name a set it can convert, and their cells
@@ -1145,7 +1176,7 @@ pub(crate) fn eucjp_to_cp5022x_from(
     let mut out = Vec::with_capacity(bytes.len() + 8);
     let mut state: Option<u8> = start;
     let mut pos = 0;
-    let mut designate = |out: &mut Vec<u8>, state: &mut Option<u8>, set: Option<u8>| {
+    let designate = |out: &mut Vec<u8>, state: &mut Option<u8>, set: Option<u8>| {
         if *state != set {
             out.extend_from_slice(match set {
                 None => b"\x1b(B",
@@ -1183,9 +1214,7 @@ pub(crate) fn eucjp_to_cp5022x_from(
                     pos += 2;
                 }
             }
-            0xa1..=0xfe
-                if matches!(bytes.get(pos + 1), Some(0xa1..=0xfe)) =>
-            {
+            0xa1..=0xfe if matches!(bytes.get(pos + 1), Some(0xa1..=0xfe)) => {
                 designate(&mut out, &mut state, Some(0x92));
                 out.push(bytes[pos] & 0x7f);
                 out.push(bytes[pos + 1] & 0x7f);
@@ -1318,7 +1347,6 @@ pub(crate) fn cesu8_to_utf8(bytes: &[u8]) -> Option<String> {
     }
     Some(out)
 }
-
 
 pub(crate) const SJIS_VARIANTS: &[(&str, &str)] = &[
     ("Shift_JIS", "SHIFT_JIS"),
@@ -1946,7 +1974,11 @@ pub(crate) fn emacs_mule_precise_len(bytes: &[u8], pos: usize) -> PreciseLen {
             return PreciseLen::NeedMore;
         }
         let b = bytes[pos + i];
-        let ok = if i == 1 { second.contains(&b) } else { b >= 0xa0 };
+        let ok = if i == 1 {
+            second.contains(&b)
+        } else {
+            b >= 0xa0
+        };
         if !ok {
             return PreciseLen::Invalid;
         }
@@ -2097,9 +2129,7 @@ pub(crate) fn mbc_walker(enc: Encoding) -> Option<(usize, fn(&[u8], usize) -> Pr
             "EUC_KR" | "GB2312" | "GB12345" => Some((2, euckr_precise_len)),
             "EUC_TW" => Some((4, euctw_precise_len)),
             "CP949" => Some((2, cp949_precise_len)),
-            "Big5" | "Big5_HKSCS" | "Big5_UAO" | "CP950" | "CP951" => {
-                Some((2, big5_precise_len))
-            }
+            "Big5" | "Big5_HKSCS" | "Big5_UAO" | "CP950" | "CP951" => Some((2, big5_precise_len)),
             "STATELESS_ISO_2022_JP" | "STATELESS_ISO_2022_JP_KDDI" => {
                 Some((3, stateless_iso2022jp_precise_len))
             }
@@ -2196,7 +2226,10 @@ impl Encoding {
     /// this encoding and the bytes are stored opaquely. Used to
     /// route operations down the binary-style path.
     pub fn is_dummy(self) -> bool {
-        !matches!(self, Encoding::Ascii8 | Encoding::Utf8(_) | Encoding::UsAscii)
+        !matches!(
+            self,
+            Encoding::Ascii8 | Encoding::Utf8(_) | Encoding::UsAscii
+        )
     }
 
     /// True for the byte-oriented encodings whose 8-bit content runs
@@ -2406,9 +2439,7 @@ impl Encoding {
         // embedded NUL is rejected before any table is consulted, with
         // a message of its own.
         if s.as_bytes().contains(&0) {
-            return Err(MonorubyErr::argumenterr(
-                "invalid encoding name (NUL byte)",
-            ));
+            return Err(MonorubyErr::argumenterr("invalid encoding name (NUL byte)"));
         }
         // Normalize: uppercase, replace '-' / '.' with '_'.
         //
@@ -2568,9 +2599,9 @@ impl Encoding {
             "EUC_TW" | "EUCTW" => Ok(Encoding::NamedByte(named_byte_index("EUC_TW").unwrap())),
             "TIS_620" | "TIS620" => Ok(Encoding::NamedByte(named_byte_index("TIS_620").unwrap())),
             "IBM720" | "CP720" => Ok(Encoding::NamedByte(named_byte_index("IBM720").unwrap())),
-            "WINDOWS_874" | "CP874" => {
-                Ok(Encoding::NamedByte(named_byte_index("Windows_874").unwrap()))
-            }
+            "WINDOWS_874" | "CP874" => Ok(Encoding::NamedByte(
+                named_byte_index("Windows_874").unwrap(),
+            )),
             "GB1988" => Ok(Encoding::NamedByte(named_byte_index("GB1988").unwrap())),
             "KOI8_R" | "CP878" => Ok(Encoding::NamedByte(named_byte_index("KOI8_R").unwrap())),
             "KOI8_U" => Ok(Encoding::NamedByte(named_byte_index("KOI8_U").unwrap())),
@@ -2634,19 +2665,11 @@ impl Encoding {
                 named_byte_index("MacCroatian").unwrap(),
             )),
             "MACGREEK" => Ok(Encoding::NamedByte(named_byte_index("MacGreek").unwrap())),
-            "MACICELAND" => Ok(Encoding::NamedByte(
-                named_byte_index("MacIceland").unwrap(),
-            )),
-            "MACROMANIA" => Ok(Encoding::NamedByte(
-                named_byte_index("MacRomania").unwrap(),
-            )),
+            "MACICELAND" => Ok(Encoding::NamedByte(named_byte_index("MacIceland").unwrap())),
+            "MACROMANIA" => Ok(Encoding::NamedByte(named_byte_index("MacRomania").unwrap())),
             "MACTHAI" => Ok(Encoding::NamedByte(named_byte_index("MacThai").unwrap())),
-            "MACTURKISH" => Ok(Encoding::NamedByte(
-                named_byte_index("MacTurkish").unwrap(),
-            )),
-            "MACUKRAINE" => Ok(Encoding::NamedByte(
-                named_byte_index("MacUkraine").unwrap(),
-            )),
+            "MACTURKISH" => Ok(Encoding::NamedByte(named_byte_index("MacTurkish").unwrap())),
+            "MACUKRAINE" => Ok(Encoding::NamedByte(named_byte_index("MacUkraine").unwrap())),
 
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unknown encoding name - {s}"
@@ -3463,7 +3486,9 @@ fn unicode_units(bytes: &[u8], enc: Encoding) -> Vec<UnicodeUnit> {
                 if (0xD800..0xDC00).contains(&u) {
                     if i + 4 <= bytes.len() && (0xDC00..0xE000).contains(&unit(i + 2)) {
                         let lo = unit(i + 2);
-                        out.push(UnicodeUnit::Char(0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00)));
+                        out.push(UnicodeUnit::Char(
+                            0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00),
+                        ));
                         i += 4;
                     } else {
                         out.push(UnicodeUnit::Bad(i, i + 2));
@@ -4392,9 +4417,10 @@ impl RStringInner {
                 // an ESC sequence — a sub-range that's syntactically
                 // separate from the parent's escape state and would
                 // need re-decoding to classify.
-                Encoding::UsAscii | Encoding::EucJp(_) | Encoding::Sjis(_) | Encoding::Iso2022Jp => {
-                    CodeRange::Unknown
-                }
+                Encoding::UsAscii
+                | Encoding::EucJp(_)
+                | Encoding::Sjis(_)
+                | Encoding::Iso2022Jp => CodeRange::Unknown,
             },
             // Broken parents are never safe to propagate — a sub-
             // range could be Valid (if the broken bytes are outside
@@ -4585,7 +4611,6 @@ impl RStringInner {
             // (now encoding-aware) char iterator so `String#[]` /
             // `#slice` index by characters, not bytes.
             Encoding::EucJp(_) | Encoding::Sjis(_) | Encoding::Utf8(_) => None,
-
         };
         if let Some(u) = unit {
             let total = self.len();
@@ -5179,6 +5204,2016 @@ fn ensure_shared_root(parent: &mut Value) -> (Value, *const u8) {
     (root, ptr)
 }
 
+//
+// The byte-level transcoder.
+//
+
+pub(crate) fn transcode_bytes_with_opts(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> Result<Vec<u8>> {
+    use crate::value::Encoding as E;
+    // A replacement the destination cannot spell is refused here,
+    // before any of the input is read, because that is where CRuby
+    // opens the converter (#1566).
+    if opens_a_converter(src_bytes, src_enc, dst_enc, opts, false) {
+        // A pair with no transcoder has nothing to open, decorators
+        // or not: 7-bit text passes through the fast path below only
+        // when nothing is asked of a converter, as MacJapanese and
+        // Windows-1258 have it in CRuby (#1591).
+        if !has_codec(src_enc) || !has_codec(dst_enc) {
+            return Err(converter_not_found(store, src_enc, dst_enc, opts, None));
+        }
+        validate_replacement(opts, src_enc, dst_enc, None, store)?;
+    }
+    // `invalid: :replace` has work to do even when the encodings match,
+    // so a broken string with a usable codec skips the identity path
+    // and goes through decode / re-encode to be scrubbed.
+    // …and only when nothing else is being asked for. A newline
+    // decorator on a same-encoding `encode` is the whole conversion —
+    // no transcoder runs, so there is nothing for `invalid:` to act in
+    // and CRuby hands the bytes through untouched:
+    //
+    //     "a\x80\r\nb".encode(invalid: :replace, universal_newline: true)
+    //     # the 0x80 survives; only the CRLF becomes LF
+    // A same-encoding `invalid: :replace` is `String#scrub`, and only
+    // a receiver with something to scrub consults the replacement at
+    // all (#1599).
+    let scrubbing = src_enc == dst_enc
+        && opts.invalid_replace
+        && !opts.has_newline()
+        && matches!(
+            RStringInner::from_encoding_scanned(src_bytes, src_enc).code_range(),
+            crate::value::CodeRange::Broken
+        );
+    let scrub_in_place = scrubbing
+        && (encoding_to_rs(src_enc).is_some()
+            || is_utf16_or_32(src_enc)
+            || single_byte_table(src_enc).is_some()
+            // US-ASCII has neither, but the decode below scrubs it
+            // by hand, so a broken one must not take the identity
+            // path that copies the offending byte (#1570).
+            || src_enc == E::UsAscii);
+    // The encodings monoruby walks itself (Emacs-Mule, EUC-JP,
+    // Shift_JIS) scrub through that walk, not through a codec. For
+    // Emacs-Mule there is no codec to use; for the other two there is,
+    // and using it was wrong — `encoding_rs`'s EUC-JP and Shift_JIS are
+    // WHATWG's, so a decode / re-encode round trip rewrote cells CRuby
+    // leaves alone (`FC A1` came back as the JIS X 0212 `8F E3 A6`) and
+    // silently accepted bytes onigenc calls broken (Shift_JIS `0x80`).
+    // A same-encoding `invalid: :replace` *is* `String#scrub` in CRuby,
+    // so it has to be the same walk here too.
+    // The replacement has to suit the *receiver* — `rb_enc_check`'s
+    // rule, not the converter's. Both scrubbing routes substitute, so
+    // the question is asked once, here, and the walk below reuses the
+    // bytes it answers with (#1599).
+    let scrub_bytes = if scrubbing {
+        Some(scrub_replacement_bytes(opts, src_enc, store)?)
+    } else {
+        None
+    };
+    if src_enc == dst_enc
+        && opts.invalid_replace
+        && !opts.has_newline()
+        && let Some((max_len, precise)) = crate::value::mbc_walker(src_enc)
+    {
+        let Some(replace) = scrub_bytes else {
+            // Nothing to scrub: the walk would change nothing.
+            return Ok(src_bytes.to_vec());
+        };
+        return Ok(crate::value::scrub_mbc(
+            src_bytes, &replace, max_len, precise,
+        ));
+    }
+    if src_enc == dst_enc && !scrub_in_place {
+        // The newline decorators still apply to a same-encoding
+        // "conversion" (`"a\n".encode("UTF-8", crlf_newline: true)`).
+        if opts.has_newline() && src_enc.is_ascii_compatible() {
+            return Ok(apply_newline_bytes(src_bytes, opts));
+        }
+        if !opts.has_newline() {
+            return Ok(src_bytes.to_vec());
+        }
+        // Non-ASCII-compatible encodings fall through to the decode /
+        // re-encode pipeline so the decorators run on real characters.
+    }
+    // `UTF8-MAC` holds UTF-8 bytes in Apple's HFS+ decomposed form, so
+    // a conversion to or from it is a normalisation wrapped around the
+    // ordinary pipeline rather than a codec of its own: take the source
+    // out of that form first, put the destination into it last (#1562).
+    // Broken input falls through, so it is the pipeline that reports
+    // it, with the message it already gets right.
+    if src_enc != dst_enc {
+        let mac = crate::value::Encoding::Utf8(crate::value::UTF8_MAC);
+        if src_enc == mac {
+            if let Ok(s) = std::str::from_utf8(src_bytes) {
+                let composed = crate::value::mac_to_utf8(s);
+                return transcode_bytes_with_opts(
+                    composed.as_bytes(),
+                    crate::value::Encoding::UTF8,
+                    dst_enc,
+                    &reporting_as(opts, src_enc),
+                    store,
+                );
+            }
+            if opts.invalid_replace {
+                // Broken input still composes: CRuby's transcoder goes
+                // on holding the cluster it was building, so the
+                // replacement lands where the cluster is not yet and
+                // the marks after the bad byte still join it (#1577).
+                let leads = mac_replacement_leads(dst_enc);
+                let replace = opts.replace.clone().unwrap_or_else(|| {
+                    inserted_replacement(insert_encoding(mac, dst_enc)).to_string()
+                });
+                let composed = mac_replace_pivot(src_bytes, &replace, leads, false);
+                return transcode_bytes_with_opts(
+                    composed.pivot.as_bytes(),
+                    crate::value::Encoding::UTF8,
+                    dst_enc,
+                    &reporting_as(opts, src_enc),
+                    store,
+                );
+            }
+            // Without it the pipeline below reports the bad byte, with
+            // the message it already gets right.
+        }
+        if dst_enc == mac {
+            let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
+            return Ok(crate::value::utf8_to_mac(&utf8).into_bytes());
+        }
+        // stateless-ISO-2022-JP-KDDI rides UTF8-KDDI, not EUC-JP: the
+        // emoji rows have no EUC-JP form, and the cells the two share
+        // are CP51932's (#1530).
+        if src_enc == stateless_kddi_enc() && !kddi_wrapper(dst_enc) {
+            let kddi = utf8_kddi_enc();
+            let (text, _, good) = kddi_read(src_bytes);
+            if good < src_bytes.len() {
+                if opts.invalid_replace {
+                    // As stateless-ISO-2022-JP below: each good run
+                    // converts whole and the destination's
+                    // replacement goes between them.
+                    let mut out = transcode_bytes_with_opts(
+                        &src_bytes[..good],
+                        src_enc,
+                        dst_enc,
+                        opts,
+                        store,
+                    )?;
+                    out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                    let run = first_bad_sequence(src_enc, &src_bytes[good..])
+                        .map(|(e, _, _)| e.len().max(1))
+                        .unwrap_or(1);
+                    let rest = transcode_bytes_with_opts(
+                        &src_bytes[(good + run).min(src_bytes.len())..],
+                        src_enc,
+                        dst_enc,
+                        opts,
+                        store,
+                    )?;
+                    out.extend_from_slice(&rest);
+                    return Ok(out);
+                }
+                return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+            }
+            if dst_enc == kddi {
+                if opts.has_newline() {
+                    return Ok(apply_newline_bytes(&text, opts));
+                }
+                return Ok(text);
+            }
+            return transcode_bytes_with_opts(&text, kddi, dst_enc, opts, store).map_err(|e| {
+                // A refusal further down the line is named against
+                // the whole chain, which the stream knows how to say.
+                let (kind, _, _, meta) =
+                    stream_convert(src_bytes, src_enc, dst_enc, None, false, opts, store);
+                match (kind, meta.message) {
+                    (StreamConvertResult::UndefinedConversion, Some(msg)) => {
+                        MonorubyErr::undefined_conversion_error(store, msg)
+                    }
+                    _ => e,
+                }
+            });
+        }
+        if dst_enc == stateless_kddi_enc() && !kddi_wrapper(src_enc) {
+            let kddi = utf8_kddi_enc();
+            let text = transcode_bytes_with_opts(src_bytes, src_enc, kddi, opts, store)?;
+            let Ok(text) = std::str::from_utf8(&text) else {
+                return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+            };
+            let mut out = Vec::with_capacity(text.len());
+            for c in text.chars() {
+                if c.is_ascii() {
+                    out.push(c as u8);
+                    continue;
+                }
+                match kddi_char_cell(c) {
+                    Some([b1, b2]) => out.extend_from_slice(&[0x92, b1, b2]),
+                    None if opts.undef_replace => {
+                        for r in opts.replace_str(dst_enc).chars() {
+                            if r.is_ascii() {
+                                out.push(r as u8);
+                            } else if let Some([b1, b2]) = kddi_char_cell(r) {
+                                out.extend_from_slice(&[0x92, b1, b2]);
+                            }
+                        }
+                    }
+                    None => {
+                        return Err(MonorubyErr::undefined_conversion_error(
+                            store,
+                            kddi_undefined_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
+                        ));
+                    }
+                }
+            }
+            return Ok(out);
+        }
+        // A carrier at each end is CRuby's own transcoder, not a round
+        // trip through the pivot: a carrier's emoji converts to the
+        // other's even where it has no Unicode meaning at all, and one
+        // vendor's two encodings hold the same emoji in different
+        // bases. `carrier_route` is the `convpath` CRuby reports for
+        // the pair, and each hop is one table read in the two sides'
+        // base readings (#1573).
+        if carrier_vendor(src_enc).is_some() && carrier_vendor(dst_enc).is_some() {
+            let mut bytes = src_bytes.to_vec();
+            for (from, to) in carrier_route(src_enc, dst_enc) {
+                bytes = carrier_hop(&bytes, from, to, src_enc, dst_enc, opts, store)?;
+            }
+            return Ok(bytes);
+        }
+        // The six carrier sets ride it too. Each is its base with a
+        // block of characters spelled as one Japanese carrier's emoji,
+        // so one side of the conversion is that table and the other is
+        // the ordinary pipeline. `UTF8-*` reads and writes characters;
+        // `SJIS-*` reads *cells*, because Windows-31J's table is
+        // many-to-one and `SJIS-SoftBank` tells two of its cells apart
+        // where Windows-31J does not (#1573).
+        if let crate::value::Encoding::Utf8(i) = src_enc
+            && let Some(table) = utf8_carrier(i)
+            && let Ok(text) = std::str::from_utf8(src_bytes)
+            // ISO-2022-JP-KDDI is written from UTF8-KDDI itself, with
+            // no Unicode in between (#1530).
+            && !kddi_wrapper(dst_enc)
+        {
+            let unicode = match carrier_utf8_to_unicode(text, table) {
+                Ok(unicode) => unicode,
+                // A carrier character with no Unicode meaning at all
+                // is an undefined conversion, and `undef: :replace`
+                // stands the destination's replacement in for it like
+                // any other.
+                Err(_) if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    let mut out = String::with_capacity(text.len());
+                    for c in text.chars() {
+                        match carrier_utf8_to_unicode(&c.to_string(), table) {
+                            Ok(piece) => out.push_str(&piece),
+                            Err(_) => out.push_str(&replace),
+                        }
+                    }
+                    out
+                }
+                Err(c) => {
+                    let mut buf = [0u8; 4];
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        carrier_no_unicode_message(
+                            c.encode_utf8(&mut buf).as_bytes(),
+                            opts.report_src.unwrap_or(src_enc),
+                            dst_enc,
+                        ),
+                    ));
+                }
+            };
+            return transcode_bytes_with_opts(
+                unicode.as_bytes(),
+                crate::value::Encoding::UTF8,
+                dst_enc,
+                &reporting_as(opts, src_enc),
+                store,
+            );
+        }
+        if let crate::value::Encoding::Utf8(i) = dst_enc
+            && let Some(table) = utf8_carrier(i)
+            && !kddi_wrapper(src_enc)
+        {
+            let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
+            return match unicode_to_carrier_utf8(&utf8, table) {
+                Ok(text) => Ok(text.into_bytes()),
+                Err(c) if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    let mut out = String::with_capacity(utf8.len());
+                    for c in utf8.chars() {
+                        match unicode_to_carrier_utf8(&c.to_string(), table) {
+                            Ok(piece) => out.push_str(&piece),
+                            Err(_) => out.push_str(&replace),
+                        }
+                    }
+                    let _ = c;
+                    Ok(out.into_bytes())
+                }
+                Err(c) => Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
+                )),
+            };
+        }
+        if let crate::value::Encoding::Sjis(i) = src_enc
+            && let Some(table) = sjis_carrier(i)
+        {
+            // The same for a cell the carrier holds no character for.
+            let replaced;
+            let attempt = match carrier_sjis_to_unicode(src_bytes, table, store) {
+                Err(Some(_)) if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    let mut out = String::with_capacity(src_bytes.len());
+                    let mut at = 0;
+                    while at < src_bytes.len() {
+                        let n = match crate::value::sjis_precise_len(src_bytes, at) {
+                            crate::value::PreciseLen::Char(n) if n > 0 => n,
+                            _ => break,
+                        };
+                        match carrier_sjis_to_unicode(&src_bytes[at..at + n], table, store) {
+                            Ok(piece) => out.push_str(&piece),
+                            Err(_) => out.push_str(&replace),
+                        }
+                        at += n;
+                    }
+                    replaced = out;
+                    Ok(replaced)
+                }
+                other => other,
+            };
+            match attempt {
+                Ok(unicode) => {
+                    return transcode_bytes_with_opts(
+                        unicode.as_bytes(),
+                        crate::value::Encoding::UTF8,
+                        dst_enc,
+                        &reporting_as(opts, src_enc),
+                        store,
+                    );
+                }
+                Err(Some(cell)) => {
+                    let bytes = [(cell >> 8) as u8, cell as u8];
+                    if let Some(pua) = carrier_pua_bytes(&bytes, src_enc, store) {
+                        return Err(MonorubyErr::undefined_conversion_error(
+                            store,
+                            carrier_no_unicode_message(&pua, src_enc, dst_enc),
+                        ));
+                    }
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        format!(
+                            "{} to UTF-8 in conversion from {} to UTF-8 to {}",
+                            quote_error_bytes(&bytes),
+                            src_enc.name(),
+                            dst_enc.name()
+                        ),
+                    ));
+                }
+                // The walk itself refused the bytes: the pipeline
+                // reports that, with the message it already gets right.
+                Err(None) => {}
+            }
+        }
+        if let crate::value::Encoding::Sjis(i) = dst_enc
+            && let Some(table) = sjis_carrier(i)
+        {
+            let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
+            return match unicode_to_carrier_sjis(&utf8, table, store) {
+                Ok(bytes) => Ok(bytes),
+                Err(c) if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    let mut out: Vec<u8> = Vec::with_capacity(utf8.len());
+                    for c in utf8.chars() {
+                        match unicode_to_carrier_sjis(&c.to_string(), table, store) {
+                            Ok(piece) => out.extend_from_slice(&piece),
+                            Err(_) => out.extend_from_slice(replace.as_bytes()),
+                        }
+                    }
+                    let _ = c;
+                    Ok(out)
+                }
+                Err(c) => Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
+                )),
+            };
+        }
+        // CESU-8 rides the same wrapper: it is UTF-8 with the
+        // supplementary planes spelled as surrogate pairs, so one side
+        // of the conversion is the rewrite and the other is the
+        // ordinary pipeline (#1562).
+        let cesu = crate::value::Encoding::NamedByte(crate::value::CESU_8);
+        if src_enc == cesu {
+            let scrubbed;
+            let mut bytes = src_bytes;
+            if opts.invalid_replace {
+                // The replacement is the *destination's* — an EUC-JP
+                // destination takes `"?"`, not `U+FFFD` — and it goes
+                // into the pivot as text, so the pipeline converts it
+                // along with everything else.
+                scrubbed = crate::value::scrub_mbc(
+                    src_bytes,
+                    opts.replace_str(dst_enc).as_bytes(),
+                    crate::value::CESU8_MAX_LEN,
+                    crate::value::cesu8_precise_len,
+                );
+                bytes = &scrubbed;
+            }
+            let Some(s) = crate::value::cesu8_to_utf8(bytes) else {
+                return Err(invalid_byte_sequence(store, src_enc, dst_enc, bytes));
+            };
+            return transcode_bytes_with_opts(
+                s.as_bytes(),
+                crate::value::Encoding::UTF8,
+                dst_enc,
+                &reporting_as(opts, src_enc),
+                store,
+            );
+        }
+        if dst_enc == cesu {
+            let utf8 = to_pivot_for(src_bytes, src_enc, dst_enc, opts, store)?;
+            return Ok(crate::value::utf8_to_cesu8(&utf8));
+        }
+        // stateless-ISO-2022-JP rides it too, but its other side is
+        // EUC-JP rather than UTF-8: it is ISO-2022-JP with the
+        // character set named by a lead byte instead of by an escape
+        // sequence, and the cell after it written as EUC-JP writes it.
+        // So a conversion is that rewrite plus EUC-JP's own, which is
+        // the chain CRuby's errors name (#1600).
+        // ISO-2022-JP rides stateless-ISO-2022-JP, which rides EUC-JP:
+        // the three are the same repertoire written three ways, and
+        // CRuby's `convpath` spells exactly that chain (#1609).
+        if let Some(w) = jis_wrapper(src_enc) {
+            let stateless = match (w.read)(src_bytes, None).map(|(o, _)| o) {
+                Ok(b) => b,
+                Err(_) if opts.invalid_replace => {
+                    // Each good run converts whole and the
+                    // destination's replacement goes between them.
+                    // Parsing resumes in the designation that was in
+                    // effect, so the byte after a substituted one is
+                    // still read as part of its character set rather
+                    // than as ASCII.
+                    let mut out: Vec<u8> = Vec::new();
+                    let mut at = 0;
+                    let mut state = None;
+                    while at <= src_bytes.len() {
+                        match (w.read)(&src_bytes[at..], state) {
+                            Ok((piece, _)) => {
+                                out.extend_from_slice(&transcode_bytes_with_opts(
+                                    &piece,
+                                    w.inner,
+                                    dst_enc,
+                                    &reporting_as(opts, src_enc),
+                                    store,
+                                )?);
+                                break;
+                            }
+                            Err(stop) => {
+                                let (piece, left) = (w.read)(&src_bytes[at..at + stop.at], state)
+                                    .unwrap_or_default();
+                                out.extend_from_slice(&transcode_bytes_with_opts(
+                                    &piece,
+                                    w.inner,
+                                    dst_enc,
+                                    &reporting_as(opts, src_enc),
+                                    store,
+                                )?);
+                                out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                                state = left;
+                                let step = (stop.at + stop.error.len().max(1)).max(1);
+                                at += step;
+                                if at > src_bytes.len() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    return Ok(out);
+                }
+                Err(_) => {
+                    return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+                }
+            };
+            if dst_enc == w.inner {
+                return Ok(stateless);
+            }
+            return transcode_bytes_with_opts(
+                &stateless,
+                w.inner,
+                dst_enc,
+                &reporting_as(opts, src_enc),
+                store,
+            );
+        }
+        if let Some(w) = jis_wrapper(dst_enc) {
+            let stateless = if src_enc == w.inner {
+                src_bytes.to_vec()
+            } else {
+                transcode_bytes_with_opts(src_bytes, src_enc, w.inner, opts, store).map_err(
+                    |e| wrapper_dst_error(e, src_bytes, src_enc, dst_enc, w, opts, store),
+                )?
+            };
+            if opts.invalid_replace && (w.write)(&stateless, None, true).map(|(o, _)| o).is_err() {
+                // The malformed run is the stateless source's, so it
+                // is settled at that hop: each good run converts whole
+                // and the replacement goes between them.
+                let mut out: Vec<u8> = Vec::new();
+                let mut at = 0;
+                while at < stateless.len() {
+                    let good = inner_good_prefix(w.inner, &stateless[at..]);
+                    if good > 0 {
+                        let (piece, _) =
+                            (w.write)(&stateless[at..at + good], None, true).unwrap_or_default();
+                        out.extend_from_slice(&piece);
+                    }
+                    at += good;
+                    if at >= stateless.len() {
+                        break;
+                    }
+                    out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                    let run = first_bad_sequence(w.inner, &stateless[at..])
+                        .map(|(e, _, _)| e.len().max(1))
+                        .unwrap_or(1);
+                    at += run;
+                }
+                return Ok(out);
+            }
+            return match (w.write)(&stateless, None, true).map(|(o, _)| o) {
+                Ok(out) => Ok(out),
+                // ISO-2022-JP takes exactly what stateless's
+                // transcoder takes, so there is no well-formed
+                // sequence without a home here — an `Err` is a
+                // malformed stateless run, which only a
+                // stateless *source* can hand over.
+                Err(_) => Err(invalid_byte_sequence(store, w.inner, dst_enc, &stateless)),
+            };
+        }
+        if let Some(stateless) = stateless_iso2022jp(src_enc) {
+            let Ok(eucjp) = crate::value::stateless_iso2022jp_to_eucjp(src_bytes) else {
+                if opts.invalid_replace {
+                    // The replacement is the *destination's*, and a
+                    // malformed run is settled at this hop, so each
+                    // good run converts whole and the replacement
+                    // goes straight into the output between them —
+                    // it need not be spellable in EUC-JP, which the
+                    // pivot would have required.
+                    let good = stateless_good_prefix(src_bytes);
+                    let mut out = transcode_bytes_with_opts(
+                        &src_bytes[..good],
+                        stateless,
+                        dst_enc,
+                        opts,
+                        store,
+                    )?;
+                    out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                    let run = first_bad_sequence(stateless, &src_bytes[good..])
+                        .map(|(e, _, _)| e.len().max(1))
+                        .unwrap_or(1);
+                    let rest = transcode_bytes_with_opts(
+                        &src_bytes[(good + run).min(src_bytes.len())..],
+                        stateless,
+                        dst_enc,
+                        opts,
+                        store,
+                    )?;
+                    out.extend_from_slice(&rest);
+                    return Ok(out);
+                }
+                return Err(invalid_byte_sequence(store, stateless, dst_enc, src_bytes));
+            };
+            if dst_enc == crate::value::Encoding::EUC_JP {
+                return Ok(eucjp);
+            }
+            return transcode_bytes_with_opts(
+                &eucjp,
+                crate::value::Encoding::EUC_JP,
+                dst_enc,
+                &reporting_as(opts, stateless),
+                store,
+            );
+        }
+        if let Some(stateless) = stateless_iso2022jp(dst_enc) {
+            let eucjp = if src_enc == crate::value::Encoding::EUC_JP {
+                src_bytes.to_vec()
+            } else {
+                transcode_bytes_with_opts(
+                    src_bytes,
+                    src_enc,
+                    crate::value::Encoding::EUC_JP,
+                    opts,
+                    store,
+                )
+                // The hop that gave up is `… → EUC-JP`, but it is one
+                // step of a longer conversion, and CRuby names the
+                // whole of it.
+                .map_err(|e| {
+                    match first_char_eucjp_refuses(src_bytes, src_enc, store) {
+                        Some(c) => MonorubyErr::undefined_conversion_error(
+                            store,
+                            undefined_before_eucjp_message(c, src_enc, stateless),
+                        ),
+                        None => e,
+                    }
+                })?
+            };
+            return match crate::value::eucjp_to_stateless_iso2022jp(&eucjp) {
+                Ok(out) => Ok(out),
+                // What is left in EUC-JP and not in stateless is
+                // half-width katakana and JIS X 0212.
+                Err(at) => {
+                    let Some(n) = crate::value::eucjp_char_width(&eucjp[at..]) else {
+                        // Not a cell: malformed EUC-JP from an EUC-JP
+                        // source (the transcoders write none), which
+                        // is `"\x80" on EUC-JP` and not an undefined
+                        // conversion (#1618).
+                        if opts.invalid_replace {
+                            let scrubbed = crate::value::scrub_mbc(
+                                &eucjp,
+                                opts.replace_str(stateless).as_bytes(),
+                                3,
+                                crate::value::eucjp_precise_len,
+                            );
+                            return transcode_bytes_with_opts(
+                                &scrubbed,
+                                crate::value::Encoding::EUC_JP,
+                                stateless,
+                                opts,
+                                store,
+                            );
+                        }
+                        return Err(invalid_byte_sequence(
+                            store,
+                            crate::value::Encoding::EUC_JP,
+                            dst_enc,
+                            &eucjp[at..],
+                        ));
+                    };
+                    let n = n.max(1);
+                    let cell = &eucjp[at..(at + n).min(eucjp.len())];
+                    if opts.undef_replace {
+                        let mut out = crate::value::eucjp_to_stateless_iso2022jp(&eucjp[..at])
+                            .unwrap_or_default();
+                        out.extend_from_slice(opts.replace_str(stateless).as_bytes());
+                        let rest = transcode_bytes_with_opts(
+                            &eucjp[at + cell.len()..],
+                            crate::value::Encoding::EUC_JP,
+                            stateless,
+                            opts,
+                            store,
+                        )?;
+                        out.extend_from_slice(&rest);
+                        return Ok(out);
+                    }
+                    Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        undefined_stateless_cell_message(cell, src_enc, stateless),
+                    ))
+                }
+            };
+        }
+    }
+    // The endianness-less dummies read the other way too: the BOM
+    // names the endianness and is consumed, and without one there is
+    // nothing to say which end the code units start at, so the source
+    // is ill-formed (#1576). `dst_enc` may be the dummy as well — the
+    // encode half below writes its own BOM.
+    if dummy_wide_target(src_enc).is_some() {
+        let Some((wide, rest)) = dummy_wide_source(src_enc, src_bytes) else {
+            return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+        };
+        return transcode_bytes_with_opts(rest, wide, dst_enc, opts, store);
+    }
+    // EUC-JP ↔ Shift_JIS needs no pivot: CRuby maps the shared JIS
+    // X 0208 plane cell to cell, which reaches the cells its own
+    // tables have no Unicode home for (#1460).
+    if let Some(from_euc) = jis_direct_from_euc(src_enc, dst_enc)
+        && !opts.has_newline()
+    {
+        let (out, stop) = jis_direct_all(src_bytes, from_euc, opts, src_enc, dst_enc);
+        return match stop {
+            None => Ok(out),
+            Some((at, _n, true)) => Err(invalid_byte_sequence(
+                store,
+                src_enc,
+                dst_enc,
+                &src_bytes[at..],
+            )),
+            Some((at, n, false)) => {
+                // Named against the two encodings themselves — this
+                // conversion has no pivot to name.
+                let cell = &src_bytes[at..(at + n).min(src_bytes.len())];
+                Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    format!(
+                        "{} from {} to {}",
+                        quote_error_bytes(cell),
+                        src_enc.name(),
+                        dst_enc.name()
+                    ),
+                ))
+            }
+        };
+    }
+    // Fast path: 7-bit content + an ascii-compatible source copies
+    // through unchanged into any byte-oriented destination. Covers the
+    // "BINARY ASCII → UTF-8" and "UsAscii → X" cases (encoding_rs's
+    // `us-ascii` → `windows-1252` mapping isn't what CRuby does, and
+    // BINARY isn't a real encoding_rs encoding) and the dummy
+    // destinations CRuby has no generic converter for (Emacs-Mule,
+    // UTF-7, …): 7-bit content is valid in all of them, so `encode`
+    // succeeds even though `Encoding::Converter.new` would raise.
+    // We require the *source* to be ASCII-compatible — `Iso2022Jp`
+    // looks like 7-bit input on the wire (it's a 7-bit encoding), but
+    // its bytes carry ESC sequences that change interpretation, so the
+    // identity copy would silently retag escape codes as ASCII
+    // characters. UTF-7 is excluded on the other side for the same
+    // reason: it re-spells `+` as `+-`, so 7-bit text is not a copy
+    // there, and CRuby — which ships no UTF-7 converter at all —
+    // answers `ConverterNotFoundError` even for `"ab"` (#1471).
+    // A byte of 0x80 or above is not US-ASCII at all, so it is a
+    // malformed sequence rather than a character with no cell — and
+    // the fast paths below would otherwise hand it through (#1596).
+    // A conversion to its own encoding runs no converter, so CRuby
+    // leaves those bytes alone and so does this.
+    if src_enc == E::UsAscii
+        && src_enc != dst_enc
+        && !opts.invalid_replace
+        && src_bytes.iter().any(|&b| b >= 0x80)
+    {
+        return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+    }
+    // IBM037 is a permutation of Latin-1 with nothing in ASCII's
+    // place, so it takes no fast path in either direction: the way in
+    // is the table and then UTF-8's own conversion, the way out is
+    // UTF-8's own conversion and then the table (#1530).
+    if is_ibm037(src_enc) {
+        let text = ibm037_to_utf8(src_bytes);
+        return transcode_bytes_with_opts(
+            text.as_bytes(),
+            E::UTF8,
+            dst_enc,
+            &reporting_as(opts, src_enc),
+            store,
+        );
+    }
+    if is_ibm037(dst_enc) {
+        // ISO-8859-1's own conversion does the reading, the
+        // decorators and the refusals — a malformed source byte is
+        // its to report, as CRuby's `convpath` says — and the table
+        // is a byte permutation on top (#1584).
+        let latin1 = transcode_bytes_with_opts(src_bytes, src_enc, E::Iso8859(1), opts, store)
+            .map_err(|e| {
+                let (kind, _, _, meta) =
+                    stream_convert(src_bytes, src_enc, dst_enc, None, false, opts, store);
+                match (kind, meta.message) {
+                    (StreamConvertResult::UndefinedConversion, Some(msg)) => {
+                        MonorubyErr::undefined_conversion_error(store, msg)
+                    }
+                    _ => e,
+                }
+            })?;
+        return Ok(latin1_bytes_to_ibm037(&latin1));
+    }
+    let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
+    if all_ascii
+        && src_enc.is_ascii_compatible()
+        && !is_utf16_or_32(dst_enc)
+        && !is_utf7(dst_enc)
+        && dummy_wide_target(dst_enc).is_none()
+    {
+        if opts.has_newline() {
+            return Ok(apply_newline_bytes(src_bytes, opts));
+        }
+        return Ok(src_bytes.to_vec());
+    }
+    // 7-bit content from any ASCII-compatible source (incl. BINARY,
+    // which `encoding_rs` doesn't model) widens cleanly into the
+    // non-ASCII-compatible UTF-16/UTF-32 targets — every byte is a
+    // valid one-codepoint character. `"def".b.encode("utf-32le")`
+    // works in CRuby; without this it raised ConverterNotFound.
+    if all_ascii && src_enc.is_ascii_compatible() && is_utf16_or_32(dst_enc) {
+        let s = std::str::from_utf8(src_bytes).expect("bytes < 0x80 are valid UTF-8");
+        if opts.has_newline() {
+            return Ok(encode_utf16_32(&opts.apply_newline(s), dst_enc));
+        }
+        return Ok(encode_utf16_32(s, dst_enc));
+    }
+    // BINARY → ascii-compat with non-ASCII bytes is "undef":
+    // there's no Unicode for "byte 0x82 in BINARY". A codec-less
+    // destination (Emacs-Mule, Big5-UAO, …) is "converter not found"
+    // instead — there is no transcoder to be undefined *in*.
+    if src_enc == E::Ascii8 && dst_enc.is_ascii_compatible() {
+        if matches!(dst_enc, E::NamedByte(_))
+            && encoding_to_rs(dst_enc).is_none()
+            && single_byte_table(dst_enc).is_none()
+        {
+            return Err(MonorubyErr::converter_not_found_error(
+                store,
+                format!(
+                    "code converter not found ({} to {})",
+                    src_enc.name(),
+                    dst_enc.name()
+                ),
+            ));
+        }
+        // Everything else falls through to the source-table path,
+        // which reports the offending byte and honours
+        // `undef: :replace` the way every other byte-per-character
+        // source does (#1596).
+    }
+    // → BINARY. ASCII-8BIT is a byte bucket, not a character encoding:
+    // CRuby has no conversion *to* it from any character above U+007F,
+    // so every one of them is an `UndefinedConversionError` (the
+    // all-ASCII fast path above already handled the content that does
+    // convert). `String#b` and `#force_encoding("BINARY")` are the
+    // reinterpret-these-bytes operations; `#encode("BINARY")` asks for
+    // a conversion, and handing back the decoded pivot's UTF-8 bytes
+    // would silently rewrite the caller's EUC-JP bytes as UTF-8.
+    if dst_enc == E::Ascii8 {
+        // Decode to the UTF-8 pivot first: the error names a character
+        // (`U+3042`), and `undef: :replace` substitutes per character.
+        let decoded: String = if is_utf16_or_32(src_enc) {
+            let (decoded, decode_err) = decode_utf16_32(src_bytes, src_enc);
+            if decode_err && !opts.invalid_replace {
+                return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+            }
+            decoded
+        } else if let Some(table) = source_byte_table(src_enc) {
+            if opts.undef_replace {
+                table_decode_lossy(src_bytes, table, &opts.replace_str(dst_enc))
+            } else {
+                match table_decode(src_bytes, table) {
+                    Ok(s) => s,
+                    Err((at, b)) => {
+                        encode_hop_first(src_bytes, at, src_enc, dst_enc, opts, store)?;
+                        return Err(MonorubyErr::undefined_conversion_error(
+                            store,
+                            undefined_byte_message(b, src_enc, dst_enc),
+                        ));
+                    }
+                }
+            }
+        } else if let Some(src_rs) = encoding_to_rs(src_enc) {
+            let (decoded, decode_err) = if let Some(fx) = jp_fixup(src_enc) {
+                let d = jp_decode(fx, src_bytes, None);
+                if let Some(cell) = d.unmapped {
+                    encode_hop_first(
+                        src_bytes,
+                        d.unmapped_at.unwrap_or(0),
+                        src_enc,
+                        dst_enc,
+                        opts,
+                        store,
+                    )?;
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        undefined_cell_message(&cell, src_enc, dst_enc),
+                    ));
+                }
+                (d.text, d.had_invalid)
+            } else {
+                src_rs.decode_without_bom_handling(src_bytes)
+            };
+            if decode_err && !opts.invalid_replace {
+                return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+            }
+            decoded.into_owned()
+        } else if src_enc == E::UsAscii && opts.invalid_replace {
+            usascii_decode_lossy(src_bytes, &opts.replace_str(dst_enc))
+        } else {
+            // No decoder for the source: nothing to say about which
+            // character is undefined, so the bytes go through as they
+            // always did.
+            return Ok(src_bytes.to_vec());
+        };
+        // `invalid: :replace` substitutes at the invalid bytes, which
+        // `encoding_rs` has already turned into U+FFFD — and U+FFFD is
+        // itself undefined in BINARY, so it has to go now rather than
+        // resurface below as an undefined conversion.
+        let decoded = if decoded.contains('\u{FFFD}') && opts.invalid_replace {
+            decoded.replace('\u{FFFD}', &opts.replace_str(dst_enc))
+        } else {
+            decoded
+        };
+        let decoded = if opts.has_newline() {
+            opts.apply_newline(&decoded)
+        } else {
+            decoded
+        };
+        if let Some(bad) = decoded.chars().find(|c| !c.is_ascii()) {
+            if !opts.undef_replace {
+                return Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(bad, opts.report_src.unwrap_or(src_enc), dst_enc),
+                ));
+            }
+            let replace = opts.replace_str(dst_enc);
+            let mut out = String::with_capacity(decoded.len());
+            for c in decoded.chars() {
+                if c.is_ascii() {
+                    out.push(c);
+                } else {
+                    out.push_str(&replace);
+                }
+            }
+            return Ok(out.into_bytes());
+        }
+        return Ok(decoded.into_bytes());
+    }
+    // Decode the source through encoding_rs (UsAscii is decoded as
+    // UTF-8 since 7-bit ASCII bytes are identical in both — the
+    // all_ascii fast-path above already covered the ASCII-only
+    // case, so here we know src has a non-ASCII byte; UsAscii src
+    // with non-ASCII content is invalid by definition).
+    let (decoded, decode_err): (std::borrow::Cow<str>, bool) = if is_utf16_or_32(src_enc) {
+        let (s, e) = decode_utf16_32(src_bytes, src_enc);
+        (std::borrow::Cow::Owned(s), e)
+    } else if let Some(table) = source_byte_table(src_enc) {
+        // A table encoding has a character for every byte it assigns
+        // one to, so no byte sequence in it is *invalid* — but a cell
+        // the encoding leaves unassigned has no character to convert,
+        // which is an undefined conversion.
+        let decoded = if opts.undef_replace {
+            table_decode_lossy(src_bytes, table, &opts.replace_str(dst_enc))
+        } else {
+            match table_decode(src_bytes, table) {
+                Ok(s) => s,
+                Err((at, b)) => {
+                    encode_hop_first(src_bytes, at, src_enc, dst_enc, opts, store)?;
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        undefined_byte_message(b, src_enc, dst_enc),
+                    ));
+                }
+            }
+        };
+        (std::borrow::Cow::Owned(decoded), false)
+    } else if src_enc == E::UsAscii && opts.invalid_replace {
+        let out = usascii_decode_lossy(src_bytes, &opts.replace_str(dst_enc));
+        (std::borrow::Cow::Owned(out), false)
+    } else {
+        let src_rs = match encoding_to_rs(src_enc) {
+            Some(s) => s,
+            None if src_enc == E::UsAscii => {
+                return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+            }
+            None if src_enc == E::Ascii8 => {
+                // BINARY with an 8-bit byte has no defined conversion
+                // to a real codec: CRuby reports the first offending
+                // byte as an UndefinedConversionError, spelling out the
+                // UTF-8 pivot for non-UTF-8 destinations.
+                let bad = src_bytes.iter().copied().find(|b| *b >= 0x80).unwrap_or(0);
+                let msg = if dst_enc == E::UTF8 {
+                    format!("\"\\x{bad:02X}\" from ASCII-8BIT to UTF-8")
+                } else {
+                    format!(
+                        "\"\\x{bad:02X}\" to UTF-8 in conversion from ASCII-8BIT to UTF-8 to {}",
+                        dst_enc.name()
+                    )
+                };
+                return Err(MonorubyErr::undefined_conversion_error(store, msg));
+            }
+            None => {
+                return Err(MonorubyErr::converter_not_found_error(
+                    store,
+                    format!(
+                        "code converter not found ({} to {})",
+                        src_enc.name(),
+                        dst_enc.name()
+                    ),
+                ));
+            }
+        };
+        // EUC-JP goes through our own wrapper: `encoding_rs`'s is
+        // WHATWG's, which disagrees with CRuby on eight cells and
+        // accepts the NEC/IBM rows CRuby has no table for.
+        if let Some(fx) = jp_fixup(src_enc) {
+            let repl = opts.undef_replace.then(|| opts.replace_str(dst_enc));
+            let d = jp_decode(fx, src_bytes, repl.as_deref());
+            if let Some(cell) = d.unmapped {
+                // A well-formed cell with no character: an undefined
+                // conversion, which `invalid: :replace` does not cover.
+                encode_hop_first(
+                    src_bytes,
+                    d.unmapped_at.unwrap_or(0),
+                    src_enc,
+                    dst_enc,
+                    opts,
+                    store,
+                )?;
+                return Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_cell_message(&cell, opts.report_src.unwrap_or(src_enc), dst_enc),
+                ));
+            }
+            (d.text, d.had_invalid)
+        } else {
+            let repl = opts.undef_replace.then(|| opts.replace_str(dst_enc));
+            let d = cell_decode(src_enc, src_rs, None, src_bytes, repl.as_deref());
+            // A malformed run *before* the cell is what CRuby reports,
+            // unless it is being substituted: `"\x8A\x8F\xA1"` in Big5
+            // is `"\x8A"` followed by `"\x8F"`, and the cell `8F A1`
+            // after it, which the table has no character for, comes
+            // second.
+            let invalid_first = !opts.invalid_replace
+                && d.had_invalid
+                && d.invalid_at
+                    .zip(d.unmapped_at)
+                    .is_some_and(|(invalid, unmapped)| invalid < unmapped);
+            if let Some(cell) = d.unmapped
+                && !invalid_first
+            {
+                encode_hop_first(
+                    src_bytes,
+                    d.unmapped_at.unwrap_or(0),
+                    src_enc,
+                    dst_enc,
+                    opts,
+                    store,
+                )?;
+                return Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_cell_message(&cell, opts.report_src.unwrap_or(src_enc), dst_enc),
+                ));
+            }
+            (d.text, d.had_invalid)
+        }
+    };
+    if decode_err && !opts.invalid_replace {
+        return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
+    }
+    // `invalid: :replace`: the bytes `encoding_rs` turned into U+FFFD
+    // are replaced with the *destination's* replacement string here.
+    // Carrying U+FFFD into the encode half would make the invalid
+    // sequence come back out as an *undefined* conversion (CRuby
+    // substitutes at the point of the invalid bytes instead).
+    let decoded: std::borrow::Cow<str> = if decode_err && opts.invalid_replace {
+        let replace = opts.replace_str(dst_enc);
+        if replace == "\u{FFFD}" {
+            decoded
+        } else {
+            std::borrow::Cow::Owned(decoded.replace('\u{FFFD}', &replace))
+        }
+    } else {
+        decoded
+    };
+    // Newline decorators run on the decoded text, between the decode
+    // and encode halves.
+    let decoded: std::borrow::Cow<str> = if opts.has_newline() {
+        std::borrow::Cow::Owned(opts.apply_newline(&decoded))
+    } else {
+        decoded
+    };
+    // The endianness-less dummy UTF-16 / UTF-32: CRuby's encoder emits a
+    // BOM followed by the big-endian form.
+    if let Some(wide) = dummy_wide_target(dst_enc) {
+        let mut out: Vec<u8> = match wide {
+            E::Utf16Be => vec![0xFE, 0xFF],
+            _ => vec![0x00, 0x00, 0xFE, 0xFF],
+        };
+        out.extend(encode_utf16_32(&decoded, wide));
+        return Ok(out);
+    }
+    // UsAscii destination: only ASCII characters are representable.
+    // Non-ASCII content raises UndefinedConversionError unless
+    // `undef: :replace` was given (in which case we substitute).
+    if dst_enc == E::UsAscii {
+        if !decoded.chars().all(|c| c.is_ascii()) {
+            if !opts.undef_replace {
+                let bad = decoded.chars().find(|c| !c.is_ascii()).unwrap();
+                return Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(bad, opts.report_src.unwrap_or(src_enc), dst_enc),
+                ));
+            }
+            let replace = opts.replace_str(dst_enc);
+            let mut out = String::with_capacity(decoded.len());
+            for c in decoded.chars() {
+                if c.is_ascii() {
+                    out.push(c);
+                } else {
+                    out.push_str(&replace);
+                }
+            }
+            return Ok(out.into_bytes());
+        }
+        return Ok(decoded.into_owned().into_bytes());
+    }
+    // UTF-16/UTF-32 destination: every Unicode scalar value is
+    // representable, so there is no undefined-conversion case.
+    if is_utf16_or_32(dst_enc) {
+        return Ok(encode_utf16_32(&decoded, dst_enc));
+    }
+    // Single-byte-table destination (IBM437 &c.): encode via the
+    // reverse table, honoring `undef: :replace`.
+    if let Some(table) = single_byte_table(dst_enc) {
+        return match table_encode(&decoded, table) {
+            Ok(v) => Ok(v),
+            Err(bad) if !opts.undef_replace => Err(MonorubyErr::undefined_conversion_error(
+                store,
+                undefined_char_message(bad, opts.report_src.unwrap_or(src_enc), dst_enc),
+            )),
+            Err(_) => {
+                let replace = opts.replace_str(dst_enc);
+                let mut out = Vec::with_capacity(decoded.len());
+                for c in decoded.chars() {
+                    let mut buf = [0u8; 4];
+                    match table_encode(c.encode_utf8(&mut buf), table) {
+                        Ok(v) => out.extend_from_slice(&v),
+                        Err(_) => match table_encode(&replace, table) {
+                            Ok(r) => out.extend_from_slice(&r),
+                            Err(_) => out.push(b'?'),
+                        },
+                    }
+                }
+                Ok(out)
+            }
+        };
+    }
+    // The CJK tables are the same story: the codec writes cells the
+    // destination does not have and reads others differently, so the
+    // characters go through CRuby's table one at a time (#1544).
+    if let Some(tab) = cell_table(dst_enc)
+        && let Some(dst_rs) = encoding_to_rs(dst_enc)
+    {
+        let mut out: Vec<u8> = Vec::with_capacity(decoded.len());
+        for c in decoded.chars() {
+            match table_cell_encode(tab, dst_rs, c) {
+                Some(b) => out.extend_from_slice(&b),
+                None if opts.undef_replace => {
+                    let replace = opts.replace_str(dst_enc);
+                    for r in replace.chars() {
+                        if let Some(b) = table_cell_encode(tab, dst_rs, r) {
+                            out.extend_from_slice(&b);
+                        }
+                    }
+                }
+                None => {
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
+                    ));
+                }
+            }
+        }
+        return Ok(out);
+    }
+    // EUC-JP has a second plane `encoding_rs` will not write, and
+    // both Japanese codecs need the table corrections; go through the
+    // encoder that knows about them.
+    if let Some(fx) = jp_fixup(dst_enc) {
+        match jp_encode(fx, &decoded) {
+            Ok(v) => return Ok(v),
+            Err(bad) if !opts.undef_replace => {
+                return Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(bad, opts.report_src.unwrap_or(src_enc), dst_enc),
+                ));
+            }
+            Err(_) => {
+                let replace = opts.replace_str(dst_enc);
+                let mut out: Vec<u8> = Vec::with_capacity(decoded.len());
+                let mut buf = [0u8; 4];
+                for c in decoded.chars() {
+                    match jp_encode(fx, c.encode_utf8(&mut buf)) {
+                        Ok(v) => out.extend_from_slice(&v),
+                        Err(_) => {
+                            out.extend_from_slice(&jp_encode(fx, &replace).unwrap_or_default())
+                        }
+                    }
+                }
+                return Ok(out);
+            }
+        }
+    }
+    let dst_rs = match encoding_to_rs(dst_enc) {
+        Some(d) => d,
+        None => {
+            return Err(MonorubyErr::converter_not_found_error(
+                store,
+                format!(
+                    "code converter not found ({} to {})",
+                    src_enc.name(),
+                    dst_enc.name()
+                ),
+            ));
+        }
+    };
+    let (encoded, _, encode_err) = dst_rs.encode(&decoded);
+    // A cell the codec wrote that the destination cannot hold counts
+    // as no cell at all, so the whole output is walked before it is
+    // handed back — one linear pass, and only for the encodings that
+    // have a walk (#1544).
+    let unholdable = !encode_err && !dst_can_hold(dst_enc, &encoded);
+    if encode_err || unholdable {
+        if !opts.undef_replace {
+            // The character the destination cannot write, not merely
+            // the first non-ASCII one: a String can hold plenty of
+            // non-ASCII the encoder is perfectly happy with.
+            let mut buf = [0u8; 4];
+            let bad = decoded
+                .chars()
+                .find(|c| {
+                    let (b, _, ce) = dst_rs.encode(c.encode_utf8(&mut buf));
+                    ce || !dst_can_hold(dst_enc, &b)
+                })
+                .unwrap_or('\0');
+            return Err(MonorubyErr::undefined_conversion_error(
+                store,
+                undefined_char_message(bad, opts.report_src.unwrap_or(src_enc), dst_enc),
+            ));
+        }
+        // `undef: :replace`: walk character by character and substitute
+        // anything the destination encoder can't represent. This is
+        // O(N*M) but only runs in the slow / replace path.
+        let replace = opts.replace_str(dst_enc);
+        let mut out: Vec<u8> = Vec::with_capacity(encoded.len());
+        for c in decoded.chars() {
+            let mut buf = [0u8; 4];
+            let s = c.encode_utf8(&mut buf);
+            let (chunk, _, ce) = dst_rs.encode(s);
+            if ce || !dst_can_hold(dst_enc, &chunk) {
+                // Substitute. For the replacement we ALSO need to
+                // encode it through the destination encoder so that
+                // non-UTF dst encodings get the right bytes.
+                let (rchunk, _, _) = dst_rs.encode(&replace);
+                out.extend_from_slice(&rchunk);
+            } else {
+                out.extend_from_slice(&chunk);
+            }
+        }
+        return Ok(out);
+    }
+    Ok(encoded.into_owned())
+}
+
+/// Map a monoruby `Encoding` to the corresponding
+/// `encoding_rs::Encoding`. Returns `None` for encodings
+/// `encoding_rs` doesn't support (UTF-32, UsAscii — see notes
+/// below) so the caller can decide whether to fast-path them or
+/// raise `Encoding::ConverterNotFoundError`.
+///
+/// - `UsAscii`: encoding_rs maps the "us-ascii" label to
+///   `windows-1252`, which differs in the 0x80..0x9F range. We
+///   intentionally return `None` and let `transcode_bytes`
+///   handle UsAscii specially (only valid for 7-bit content,
+///   in which case the bytes pass through unchanged).
+/// - `Ascii8` (BINARY): no transcoding semantics — bytes pass
+///   through unchanged for ASCII-only content; otherwise
+///   `encode` raises `UndefinedConversionError` per CRuby.
+/// - UTF-32: encoding_rs does not support it; we raise
+///   `ConverterNotFoundError`.
+/// UTF-7, the one encoding CRuby names but ships no converter for in
+/// either direction — `"ab".encode("UTF-7")` is a
+/// `ConverterNotFoundError` where every other dummy encoding converts
+/// its 7-bit content (#1471).
+fn is_utf7(enc: crate::value::Encoding) -> bool {
+    matches!(enc, crate::value::Encoding::Other(0))
+}
+
+/// The table corrections for an encoding, or `None` for one
+/// `encoding_rs` already answers CRuby's way.
+/// Walks a whole buffer through [`jis_direct_one`], honouring
+/// `invalid:` / `undef: :replace`. Stops at the first refusal it
+/// cannot replace, returning what converted, where it stopped, and
+/// whether the character was ill-formed or merely homeless.
+fn jis_direct_all(
+    bytes: &[u8],
+    from_euc: bool,
+    opts: &TranscodeOpts,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> (Vec<u8>, Option<(usize, usize, bool)>) {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        match jis_direct_one(&bytes[at..], from_euc) {
+            JisCell::Cell(b, n) => {
+                out.extend_from_slice(&b);
+                at += n;
+            }
+            JisCell::Undefined(n) if opts.undef_replace => {
+                out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                at += n;
+            }
+            JisCell::Invalid(n) if opts.invalid_replace => {
+                out.extend_from_slice(opts.replace_str(dst_enc).as_bytes());
+                // The bytes read to disprove the sequence are read
+                // again rather than swallowed with it, so the walk
+                // decides how far the malformed run reaches — the
+                // same answer the raising path gets.
+                at += first_bad_sequence(src_enc, &bytes[at..])
+                    .map(|(err, _, _)| err.len().max(1))
+                    .unwrap_or(n);
+            }
+            JisCell::Undefined(n) => return (out, Some((at, n, false))),
+            JisCell::Invalid(n) => return (out, Some((at, n, true))),
+        }
+    }
+    (out, None)
+}
+
+/// CRuby's `UndefinedConversionError` message for a source cell with
+/// no character, spelling out the UTF-8 pivot for a non-UTF-8
+/// destination exactly as the BINARY path above does.
+fn undefined_cell_message(
+    cell: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> String {
+    // The same rendering every other quoted run gets: a printable
+    // trail byte is printed, not escaped (#1607).
+    let quoted = quote_error_bytes(cell);
+    // A source on one of the JIS lines reaches UTF-8 through its
+    // line, and CRuby names every hop of it (#1609).
+    if let Some(chain) = jis_family_chain(src_enc, dst_enc)
+        && chain.contains(&crate::value::Encoding::UTF8)
+    {
+        return format!(
+            "{quoted} to UTF-8 in conversion from {}",
+            chain_names(&chain)
+        );
+    }
+    if dst_enc == crate::value::Encoding::UTF8 {
+        format!("{quoted} from {} to UTF-8", src_enc.name())
+    } else {
+        format!(
+            "{quoted} to UTF-8 in conversion from {} to UTF-8 to {}",
+            src_enc.name(),
+            dst_enc.name()
+        )
+    }
+}
+
+/// CRuby's `UndefinedConversionError` message for a character the
+/// destination has no cell for.
+///
+/// A UTF-8(-compatible) source converts in one hop and is reported as
+/// `U+3042 from UTF-8 to EUC-JP`; anything else runs through the UTF-8
+/// pivot, and CRuby then spells the whole chain out —
+/// `U+3042 to IBM437 in conversion from EUC-JP to UTF-8 to IBM437`.
+/// [`undefined_char_message`] for a *byte* the source encoding assigns
+/// a character to that Unicode has nowhere to put — ISO-8859-11's eight
+/// unassigned Thai cells are the only ones here. CRuby quotes the byte
+/// where it would otherwise name a codepoint.
+/// A source cell with no character, at `at`, is reported only when
+/// everything before it converts: a character the destination has no
+/// cell for, earlier in the string, is what CRuby reports — the
+/// encode hop gets first refusal, as it does in the stream (#1611).
+fn encode_hop_first(
+    src_bytes: &[u8],
+    at: usize,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> Result<()> {
+    if at == 0 || at > src_bytes.len() {
+        return Ok(());
+    }
+    transcode_bytes_with_opts(&src_bytes[..at], src_enc, dst_enc, opts, store).map(|_| ())
+}
+
+fn undefined_byte_message(
+    b: u8,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> String {
+    let quoted = quote_error_bytes(&[b]);
+    // A source whose transcoder is spelled differently from the
+    // encoding is written out in full, one hop or not — with the
+    // encoding's own spelling in the chain (#1530).
+    if transcoder_spelling(src_enc.name()) != src_enc.name() {
+        return if dst_enc == crate::value::Encoding::UTF8 {
+            format!(
+                "{quoted} to UTF-8 in conversion from {} to UTF-8",
+                src_enc.name()
+            )
+        } else {
+            format!(
+                "{quoted} to UTF-8 in conversion from {} to UTF-8 to {}",
+                src_enc.name(),
+                dst_enc.name()
+            )
+        };
+    }
+    if dst_enc == crate::value::Encoding::UTF8 {
+        format!("{quoted} from {} to {}", src_enc.name(), dst_enc.name())
+    } else {
+        format!(
+            "{quoted} to UTF-8 in conversion from {} to UTF-8 to {}",
+            src_enc.name(),
+            dst_enc.name()
+        )
+    }
+}
+
+/// [`wrapper_dst_undefined`] for the single-shot transcoder: the
+/// inner conversion's error, re-worded from a streamed run of the
+/// same bytes when it is a character the inner encoding refused.
+fn wrapper_dst_error(
+    e: MonorubyErr,
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    w: JisWrapper,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> MonorubyErr {
+    let (kind, _, _, mut meta) =
+        stream_convert(src_bytes, src_enc, w.inner, None, false, opts, store);
+    if !matches!(kind, StreamConvertResult::UndefinedConversion) {
+        return e;
+    }
+    wrapper_dst_undefined(&mut meta, src_enc, dst_enc, w);
+    match meta.message {
+        Some(msg) => MonorubyErr::undefined_conversion_error(store, msg),
+        None => e,
+    }
+}
+
+/// How much of `inner` bytes read as whole sequences of their own —
+/// stateless-ISO-2022-JP by its transcoder's walk, an EUC-JP variant
+/// by its own.
+fn inner_good_prefix(inner: crate::value::Encoding, bytes: &[u8]) -> usize {
+    if inner == stateless_kddi_enc() {
+        return kddi_read(bytes).2;
+    }
+    if stateless_iso2022jp(inner).is_some() {
+        return stateless_good_prefix(bytes);
+    }
+    let Some((_, precise)) = conversion_walker(inner) else {
+        return bytes.len();
+    };
+    let mut at = 0;
+    while at < bytes.len() {
+        match precise(bytes, at) {
+            crate::value::PreciseLen::Char(n) if n > 0 => at += n,
+            _ => break,
+        }
+    }
+    at
+}
+
+/// The first character of `src_bytes` that EUC-JP has no cell for, so
+/// the chain message can name it. `None` when the source cannot even
+/// be read, in which case the inner error stands as it is.
+fn first_char_eucjp_refuses(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    store: &Store,
+) -> Option<char> {
+    let utf8 = if src_enc == crate::value::Encoding::UTF8 {
+        src_bytes.to_vec()
+    } else {
+        transcode_bytes_with_opts(
+            src_bytes,
+            src_enc,
+            crate::value::Encoding::UTF8,
+            &TranscodeOpts::default(),
+            store,
+        )
+        .ok()?
+    };
+    let mut buf = [0u8; 4];
+    String::from_utf8(utf8).ok()?.chars().find(|c| {
+        transcode_bytes_with_opts(
+            c.encode_utf8(&mut buf).as_bytes(),
+            crate::value::Encoding::UTF8,
+            crate::value::Encoding::EUC_JP,
+            &TranscodeOpts::default(),
+            store,
+        )
+        .is_err()
+    })
+}
+
+/// A character that reached EUC-JP and has no stateless-ISO-2022-JP
+/// cell: half-width katakana (`0x8E` + a byte) or JIS X 0212 (`0x8F`
+/// + a cell), the two forms ISO-2022-JP cannot spell either.
+///
+/// The failing hop is EUC-JP → stateless, so CRuby quotes the *EUC-JP
+/// bytes* rather than naming a codepoint, and spells the chain unless
+/// the source was EUC-JP itself — in which case there is only the one
+/// hop to name (#1600).
+fn undefined_stateless_cell_message(
+    eucjp_cell: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> String {
+    let bytes = quote_error_bytes(eucjp_cell);
+    if src_enc == crate::value::Encoding::EUC_JP {
+        format!("{bytes} from EUC-JP to {}", dst_enc.name())
+    } else {
+        format!(
+            "{bytes} to {} in conversion from {} to EUC-JP to {}",
+            dst_enc.name(),
+            src_enc.name(),
+            dst_enc.name()
+        )
+    }
+}
+
+fn undefined_char_message(
+    c: char,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> String {
+    // A destination whose transcoder is spelled differently from the
+    // encoding asked for is written out in full, one hop or not.
+    let spelled = transcoder_spelling(dst_enc.name());
+    if spelled != dst_enc.name() {
+        let from = if src_enc == crate::value::Encoding::UTF8 {
+            src_enc.name().to_string()
+        } else {
+            pivot_chain(src_enc)
+        };
+        return format!(
+            "U+{:04X} to {spelled} in conversion from {from} to {spelled}",
+            c as u32
+        );
+    }
+    // The short form is for a conversion that really is one hop, so
+    // the source has to *be* the pivot — `UTF8-MAC` is UTF-8
+    // compatible and still a step of its own (#1609).
+    if src_enc == crate::value::Encoding::UTF8 || src_enc == crate::value::Encoding::UsAscii {
+        format!(
+            "U+{:04X} from {} to {}",
+            c as u32,
+            src_enc.name(),
+            dst_enc.name()
+        )
+    } else {
+        format!(
+            "U+{:04X} to {} in conversion from {} to {}",
+            c as u32,
+            dst_enc.name(),
+            pivot_chain(src_enc),
+            dst_enc.name()
+        )
+    }
+}
+
+/// A US-ASCII source decoded with `invalid: :replace`.
+///
+/// US-ASCII has no `encoding_rs` codec here, no single-byte table and
+/// no `mbc_walker`, so none of the three paths that honour `invalid:`
+/// covered it and a byte above 0x7F raised whatever the caller had
+/// asked for (#1570). Its walk needs none of them: every byte below
+/// 0x80 is its own character and every byte at or above it is one
+/// ill-formed byte.
+fn usascii_decode_lossy(src_bytes: &[u8], repl: &str) -> String {
+    let mut out = String::with_capacity(src_bytes.len());
+    for &b in src_bytes {
+        if b < 0x80 {
+            out.push(b as char);
+        } else {
+            out.push_str(repl);
+        }
+    }
+    out
+}
+
+/// Byte-level [`TranscodeOpts::apply_newline`], sound for any
+/// ASCII-compatible encoding (no multibyte sequence contains the 0x0A /
+/// 0x0D bytes in those encodings).
+fn apply_newline_bytes(bytes: &[u8], opts: &TranscodeOpts) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if (opts.universal_newline || opts.lf_newline) && b == b'\r' {
+            // CRLF or bare CR → LF.
+            if bytes.get(i + 1) == Some(&b'\n') {
+                i += 1;
+            }
+            out.push(b'\n');
+        } else if b == b'\n' && opts.crlf_newline {
+            out.extend_from_slice(b"\r\n");
+        } else if b == b'\n' && opts.cr_newline {
+            out.push(b'\r');
+        } else {
+            out.push(b);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `src_bytes` as UTF-8, on the way to a destination whose codec is
+/// UTF-8's with a rewrite after it (`UTF8-MAC`, CESU-8).
+///
+/// The pivot conversion is the ordinary pipeline with UTF-8 as its
+/// destination; what this adds is `dst_enc`'s share of the *reporting*.
+/// A source that is already UTF-8 converts by doing nothing, so nothing
+/// would otherwise notice that its bytes are broken — CRuby raises
+/// there, naming the destination the caller asked for. And an
+/// `UndefinedConversionError` out of the pivot is a two-hop failure to
+/// CRuby, which spells both hops.
+/// One hop of a carrier-to-carrier conversion: read the bytes in the
+/// hop's source base, rewrite what its table names, write them in the
+/// destination base. `src_enc` and `dst_enc` are the conversion's own
+/// ends, which is what an error message names (#1573).
+#[allow(clippy::too_many_arguments)]
+fn carrier_hop(
+    bytes: &[u8],
+    from: crate::value::Encoding,
+    to: crate::value::Encoding,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> Result<Vec<u8>> {
+    let from_base = carrier_base(from).expect("a carrier has a base");
+    let to_base = carrier_base(to).expect("a carrier has a base");
+    let text = if from_base == crate::value::Encoding::UTF8 {
+        std::str::from_utf8(bytes)
+            .map_err(|_| invalid_byte_sequence(store, src_enc, dst_enc, bytes))?
+            .to_string()
+    } else {
+        let pivot = transcode_bytes_with_opts(
+            bytes,
+            from_base,
+            crate::value::Encoding::UTF8,
+            &TranscodeOpts::default(),
+            store,
+        )?;
+        String::from_utf8(pivot)
+            .map_err(|_| invalid_byte_sequence(store, src_enc, dst_enc, bytes))?
+    };
+    // Crossing a vendor's two forms, only its own emoji go by the
+    // table; everything else is Unicode's to carry, and the base
+    // tables have things to say about it — the `SJIS-*` encoders
+    // prefer the NEC-selected row for the 383 characters Windows-31J
+    // has two cells for. So that hop is the ordinary conversion with
+    // the table standing in for the emoji Unicode cannot hold.
+    if carrier_vendor(from) == carrier_vendor(to) {
+        let table = carrier_pair(from, to);
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+        for c in text.chars() {
+            let piece = match table.and_then(|t| t.maps(&[c])) {
+                Some(Some(spelled)) => {
+                    let s: String = spelled.into_iter().collect();
+                    transcode_bytes_with_opts(
+                        s.as_bytes(),
+                        crate::value::Encoding::UTF8,
+                        to_base,
+                        opts,
+                        store,
+                    )?
+                }
+                Some(None) => {
+                    return Err(MonorubyErr::undefined_conversion_error(
+                        store,
+                        undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
+                    ));
+                }
+                // `text` is already Unicode, so what is left is the
+                // ordinary conversion into the destination form —
+                // which is where its own table runs.
+                None => transcode_bytes_with_opts(
+                    c.to_string().as_bytes(),
+                    crate::value::Encoding::UTF8,
+                    to,
+                    opts,
+                    store,
+                )
+                .or_else(|e| {
+                    if opts.undef_replace {
+                        Ok(opts.replace_str(dst_enc).into_bytes())
+                    } else {
+                        Err(e)
+                    }
+                })?,
+            };
+            out.extend_from_slice(&piece);
+        }
+        return Ok(out);
+    }
+    let spelled = match carrier_pair(from, to) {
+        None => text,
+        Some(table) => match carrier_to_carrier(&text, table) {
+            Ok(spelled) => spelled,
+            Err(c) if opts.undef_replace => {
+                let replace = opts.replace_str(dst_enc);
+                let mut out = String::with_capacity(text.len());
+                for c in text.chars() {
+                    match carrier_to_carrier(&c.to_string(), table) {
+                        Ok(piece) => out.push_str(&piece),
+                        Err(_) => out.push_str(&replace),
+                    }
+                }
+                let _ = c;
+                out
+            }
+            Err(c) => {
+                return Err(MonorubyErr::undefined_conversion_error(
+                    store,
+                    undefined_char_message(c, opts.report_src.unwrap_or(src_enc), dst_enc),
+                ));
+            }
+        },
+    };
+    if to_base == crate::value::Encoding::UTF8 {
+        Ok(spelled.into_bytes())
+    } else {
+        transcode_bytes_with_opts(
+            spelled.as_bytes(),
+            crate::value::Encoding::UTF8,
+            to_base,
+            opts,
+            store,
+        )
+    }
+}
+
+/// An `SJIS-*` carrier source read as Unicode.
+///
+/// The walk is Windows-31J's, and each two-byte cell is asked of the
+/// carrier's table first: it reads a block of them as its own emoji
+/// and holds no character at all for another block, both of which
+/// Windows-31J reads as private-use characters. Everything else is
+/// Windows-31J's own reading. `Err(Some(cell))` is a cell the carrier
+/// does not hold; `Err(None)` is a byte sequence the walk itself
+/// rejects, which the caller reports as it reports any other (#1573).
+fn carrier_sjis_to_unicode(
+    bytes: &[u8],
+    table: &'static SjisCarrier,
+    store: &Store,
+) -> std::result::Result<String, Option<u16>> {
+    let base = crate::value::Encoding::Sjis(crate::value::WINDOWS_31J);
+    let mut out = String::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let b = bytes[at];
+        if b < 0x80 {
+            out.push(b as char);
+            at += 1;
+            continue;
+        }
+        let width = match crate::value::sjis_precise_len(bytes, at) {
+            crate::value::PreciseLen::Char(n) => n,
+            _ => return Err(None),
+        };
+        if width == 2 {
+            let cell = ((bytes[at] as u16) << 8) | bytes[at + 1] as u16;
+            if table.unreadable(cell) {
+                return Err(Some(cell));
+            }
+            if let Some(cs) = table.reads(cell) {
+                out.extend(cs);
+                at += 2;
+                continue;
+            }
+        }
+        let piece = transcode_bytes_with_opts(
+            &bytes[at..at + width],
+            base,
+            crate::value::Encoding::UTF8,
+            &TranscodeOpts::default(),
+            store,
+        )
+        .map_err(|_| Some(((bytes[at] as u16) << 8) | *bytes.get(at + 1).unwrap_or(&0) as u16))?;
+        let Ok(text) = String::from_utf8(piece) else {
+            return Err(None);
+        };
+        out.push_str(&text);
+        at += width;
+    }
+    Ok(out)
+}
+
+/// Unicode written as an `SJIS-*` carrier: the characters its table
+/// names go into the carrier's own cells — its emoji, and the
+/// NEC-selected row it prefers where Windows-31J has two cells for one
+/// character — and the rest are Windows-31J's to write (#1573).
+fn unicode_to_carrier_sjis(
+    s: &str,
+    table: &'static SjisCarrier,
+    store: &Store,
+) -> std::result::Result<Vec<u8>, char> {
+    let base = crate::value::Encoding::Sjis(crate::value::WINDOWS_31J);
+    let mut out: Vec<u8> = Vec::with_capacity(s.len());
+    let mut buf = [0u8; 4];
+    for c in s.chars() {
+        if table.refuses(c) {
+            return Err(c);
+        }
+        if let Some(bytes) = table.writes(c) {
+            out.extend_from_slice(&bytes);
+            continue;
+        }
+        let piece = transcode_bytes_with_opts(
+            c.encode_utf8(&mut buf).as_bytes(),
+            crate::value::Encoding::UTF8,
+            base,
+            &TranscodeOpts::default(),
+            store,
+        )
+        .map_err(|_| c)?;
+        out.extend_from_slice(&piece);
+    }
+    Ok(out)
+}
+
+/// One carrier's text rewritten as another's.
+///
+/// A conversion with a carrier at each end is a transcoder of its own
+/// in CRuby, not a round trip through the pivot: a carrier's emoji
+/// converts to the other's even where it has no Unicode meaning at all
+/// and so could not have gone through one. Everything the table has no
+/// say in keeps its own spelling (#1573).
+fn carrier_to_carrier(s: &str, table: &'static CarrierPair) -> std::result::Result<String, char> {
+    let cs: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut at = 0;
+    while at < cs.len() {
+        // The longer key wins: two of one carrier's characters can be
+        // one of another's.
+        let mut took = None;
+        for n in (1..=CarrierPair::LOOKAHEAD.min(cs.len() - at)).rev() {
+            if let Some(answer) = table.maps(&cs[at..at + n]) {
+                took = Some((n, answer));
+                break;
+            }
+        }
+        match took {
+            Some((_, None)) => return Err(cs[at]),
+            Some((n, Some(spelled))) => {
+                out.extend(spelled);
+                at += n;
+            }
+            None => {
+                out.push(cs[at]);
+                at += 1;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A `UTF8-*` carrier source read as Unicode: the carrier's own
+/// characters mean what its table says, and the rest mean what UTF-8
+/// means. `Err` names the first character the carrier holds no meaning
+/// for (#1573).
+fn carrier_utf8_to_unicode(
+    s: &str,
+    table: &'static Utf8Carrier,
+) -> std::result::Result<String, char> {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if table.unreadable(c) {
+            return Err(c);
+        }
+        match table.reads(c) {
+            Some(cs) => out.extend(cs),
+            None => out.push(c),
+        }
+    }
+    Ok(out)
+}
+
+/// Unicode written as a `UTF8-*` carrier: the characters its table
+/// names become the carrier's own emoji, the rest keep their UTF-8
+/// spelling. `Err` names the first character the carrier cannot spell.
+fn unicode_to_carrier_utf8(
+    s: &str,
+    table: &'static Utf8Carrier,
+) -> std::result::Result<String, char> {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if table.refuses(c) {
+            return Err(c);
+        }
+        match table.writes(c) {
+            Some(cs) => out.extend(cs),
+            None => out.push(c),
+        }
+    }
+    Ok(out)
+}
+
+fn to_pivot_for(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    store: &Store,
+) -> Result<String> {
+    // The inner conversion runs to UTF-8, so left alone it resolves
+    // `invalid:` / `undef:`'s default replacement against the *pivot*.
+    // That is right for one of these two destinations and not the
+    // other, so pin it here rather than letting the recursion decide
+    // (#1571).
+    let pinned;
+    let opts = if opts.replace.is_none() && (opts.invalid_replace || opts.undef_replace) {
+        pinned = TranscodeOpts {
+            replace: Some(inserted_replacement(dst_enc).to_string()),
+            ..opts.clone()
+        };
+        &pinned
+    } else {
+        opts
+    };
+    let utf8 = transcode_bytes_with_opts(
+        src_bytes,
+        src_enc,
+        crate::value::Encoding::UTF8,
+        opts,
+        store,
+    )
+    .map_err(|e| name_pivot_destination(e, src_enc, dst_enc))?;
+    match String::from_utf8(utf8) {
+        Ok(s) => Ok(s),
+        Err(e) => Err(invalid_byte_sequence(store, src_enc, dst_enc, e.as_bytes())),
+    }
+}
+
+/// Re-spell a pivot conversion's error for the destination the caller
+/// actually named.
+///
+/// The inner conversion ran to UTF-8, so an undefined source byte was
+/// reported as `"\xFF" from ASCII-8BIT to UTF-8` — the one-hop form.
+/// With a destination past the pivot the failure is the first of two
+/// hops, and CRuby names them both. Everything else (an invalid byte
+/// sequence, which names only the *source*) already reads correctly.
+fn name_pivot_destination(
+    err: MonorubyErr,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> MonorubyErr {
+    let one_hop = format!(" from {} to UTF-8", src_enc.name());
+    let Some(quoted) = err.message().strip_suffix(&one_hop) else {
+        return err;
+    };
+    let msg = format!(
+        "{quoted} to UTF-8 in conversion from {} to UTF-8 to {}",
+        src_enc.name(),
+        dst_enc.name()
+    );
+    let mut err = err;
+    err.set_msg(msg);
+    err
+}
+
+/// The bytes a same-encoding `invalid: :replace` substitutes, which
+/// is `String#scrub`'s replacement and follows its rule: it has to be
+/// *compatible with the receiver*, not spellable in some destination,
+/// and what goes into the string is its own bytes (#1599).
+///
+/// An ASCII-only replacement suits any ASCII-compatible receiver, and
+/// one already in the receiver's encoding suits it too; anything else
+/// is what `rb_enc_check` refuses.
+fn scrub_replacement_bytes(
+    opts: &TranscodeOpts,
+    enc: crate::value::Encoding,
+    store: &Store,
+) -> Result<Vec<u8>> {
+    let text = opts.replace_str(enc);
+    let Some(repl_enc) = opts.replace_enc else {
+        // The default replacement is the encoding's own.
+        return Ok(text.into_bytes());
+    };
+    if repl_enc != enc && !(text.is_ascii() && enc.is_ascii_compatible()) {
+        return Err(MonorubyErr::incompatible_encoding(store, enc, repl_enc));
+    }
+    transcode_bytes_with_opts(
+        text.as_bytes(),
+        crate::value::Encoding::UTF8,
+        enc,
+        &TranscodeOpts::default(),
+        store,
+    )
+}
+
+/// Whether a conversion opens a converter at all, which is when
+/// CRuby validates the `replace:` string (#1566). `String#encode`
+/// hands the bytes straight back when the source and destination
+/// agree, and when both are ASCII-compatible and the source is
+/// 7-bit — and a replacement it never had to look at goes
+/// unexamined. A decorator is work of its own, so it opens one
+/// whatever the source looks like.
+fn opens_a_converter(
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    xml: bool,
+) -> bool {
+    if src_enc == dst_enc {
+        return false;
+    }
+    if opts.has_newline() || xml {
+        return true;
+    }
+    !(src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() && src_bytes.is_ascii())
+}
+
 #[cfg(test)]
 mod encoding_tests {
     use super::*;
@@ -5218,7 +7253,9 @@ mod encoding_tests {
         // other, which is what a conversion round trip needs.
         let mut checked = 0;
         for cp in 0..=0x10FFFFu32 {
-            let Some(c) = char::from_u32(cp) else { continue };
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
             let s = c.to_string();
             let bytes = utf8_to_cesu8(&s);
             // A supplementary character is six bytes and one character;
@@ -5229,7 +7266,11 @@ mod encoding_tests {
                 assert_eq!(bytes.as_slice(), s.as_bytes(), "U+{cp:04X}");
             }
             assert_eq!(cesu8_precise_len(&bytes, 0), PreciseLen::Char(bytes.len()));
-            assert_eq!(cesu8_to_utf8(&bytes).as_deref(), Some(s.as_str()), "U+{cp:04X}");
+            assert_eq!(
+                cesu8_to_utf8(&bytes).as_deref(),
+                Some(s.as_str()),
+                "U+{cp:04X}"
+            );
             checked += 1;
         }
         assert!(checked > 1_000_000, "checked {checked}");
@@ -5247,12 +7288,21 @@ mod encoding_tests {
         assert_eq!(cesu8_precise_len(emoji.as_bytes(), 0), PreciseLen::Invalid);
         assert_eq!(cesu8_to_utf8(emoji.as_bytes()), None);
         // A lone surrogate half is a prefix, not a character...
-        assert_eq!(cesu8_precise_len(&[0xed, 0xa0, 0xbd], 0), PreciseLen::NeedMore);
+        assert_eq!(
+            cesu8_precise_len(&[0xed, 0xa0, 0xbd], 0),
+            PreciseLen::NeedMore
+        );
         // ...and a low half on its own starts nothing.
-        assert_eq!(cesu8_precise_len(&[0xed, 0xb0, 0x80], 0), PreciseLen::Invalid);
+        assert_eq!(
+            cesu8_precise_len(&[0xed, 0xb0, 0x80], 0),
+            PreciseLen::Invalid
+        );
         // `U+D7FF` sits just below the surrogates and is an ordinary
         // three-byte character.
-        assert_eq!(cesu8_precise_len(&[0xed, 0x9f, 0xbf], 0), PreciseLen::Char(3));
+        assert_eq!(
+            cesu8_precise_len(&[0xed, 0x9f, 0xbf], 0),
+            PreciseLen::Char(3)
+        );
         // The ill-formed run the walk reports is the well-formed
         // prefix, which is what CRuby's error messages quote.
         let runs = |bytes: &[u8]| {
@@ -5269,7 +7319,10 @@ mod encoding_tests {
             runs(&[0x41, 0xf0, 0x9f, 0x98, 0x80, 0x42]),
             vec![vec![0xf0], vec![0x9f], vec![0x98], vec![0x80]]
         );
-        assert_eq!(runs(&[0x41, 0xed, 0xa0, 0xbd, 0x42]), vec![vec![0xed, 0xa0, 0xbd]]);
+        assert_eq!(
+            runs(&[0x41, 0xed, 0xa0, 0xbd, 0x42]),
+            vec![vec![0xed, 0xa0, 0xbd]]
+        );
         assert_eq!(
             runs(&[0x41, 0xed, 0xa0, 0xbd, 0xed, 0x9f, 0xbf, 0x42]),
             vec![vec![0xed, 0xa0, 0xbd, 0xed], vec![0x9f], vec![0xbf]]
@@ -5292,7 +7345,11 @@ mod encoding_tests {
             end
             print JSON.dump(out)
         "#;
-        let Ok(out) = std::process::Command::new("ruby").arg("-e").arg(script).output() else {
+        let Ok(out) = std::process::Command::new("ruby")
+            .arg("-e")
+            .arg(script)
+            .output()
+        else {
             eprintln!("no ruby on PATH; skipping");
             return;
         };
@@ -5303,10 +7360,11 @@ mod encoding_tests {
         let json = String::from_utf8(out.stdout).unwrap();
         // {"cp":[a,b,..],...} — parsed by hand rather than pulling in
         // serde for one test.
-        let mut expected: std::collections::HashMap<u32, String> =
-            std::collections::HashMap::new();
+        let mut expected: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
         for entry in json.trim_matches(|c| c == '{' || c == '}').split("],") {
-            let Some((k, v)) = entry.split_once(":[") else { continue };
+            let Some((k, v)) = entry.split_once(":[") else {
+                continue;
+            };
             let cp: u32 = k.trim_matches('"').parse().unwrap();
             let s: String = v
                 .trim_end_matches(']')
@@ -5317,7 +7375,9 @@ mod encoding_tests {
         }
         let mut checked = 0;
         for cp in 0..=0x10FFFFu32 {
-            let Some(c) = char::from_u32(cp) else { continue };
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
             let s = c.to_string();
             let want = expected.get(&cp).cloned().unwrap_or_else(|| s.clone());
             assert_eq!(utf8_to_mac(&s), want, "U+{cp:04X}");
@@ -5332,7 +7392,9 @@ mod encoding_tests {
         // table was derived; this keeps the two halves consistent with
         // each other, which is what a conversion round trip needs.
         for cp in 0..=0x10FFFFu32 {
-            let Some(c) = char::from_u32(cp) else { continue };
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
             let s = c.to_string();
             let mac = utf8_to_mac(&s);
             // Decomposing an already-decomposed string is a no-op.
@@ -5625,14 +7687,23 @@ mod encoding_tests {
         assert_eq!(emacs_mule_precise_len(&[0x81, 0xa0], 0), Char(2));
         assert_eq!(emacs_mule_precise_len(&[0x90, 0xa0, 0xa0], 0), Char(3));
         assert_eq!(emacs_mule_precise_len(&[0x9a, 0xe0, 0xa0], 0), Char(3));
-        assert_eq!(emacs_mule_precise_len(&[0x9c, 0xf0, 0xa0, 0xa0], 0), Char(4));
-        assert_eq!(emacs_mule_precise_len(&[0x9d, 0xf5, 0xa0, 0xa0], 0), Char(4));
+        assert_eq!(
+            emacs_mule_precise_len(&[0x9c, 0xf0, 0xa0, 0xa0], 0),
+            Char(4)
+        );
+        assert_eq!(
+            emacs_mule_precise_len(&[0x9d, 0xf5, 0xa0, 0xa0], 0),
+            Char(4)
+        );
         // A lead that leads nothing, a charset id out of range, and a
         // continuation that is not one.
         assert_eq!(emacs_mule_precise_len(&[0x80, 0xa0], 0), Invalid);
         assert_eq!(emacs_mule_precise_len(&[0x9e, 0xa0], 0), Invalid);
         assert_eq!(emacs_mule_precise_len(&[0x9a, 0xa0, 0xa0], 0), Invalid);
-        assert_eq!(emacs_mule_precise_len(&[0x9d, 0xf0, 0xa0, 0xa0], 0), Invalid);
+        assert_eq!(
+            emacs_mule_precise_len(&[0x9d, 0xf0, 0xa0, 0xa0], 0),
+            Invalid
+        );
         assert_eq!(emacs_mule_precise_len(&[0x90, 0xa0, 0x20], 0), Invalid);
     }
 
@@ -5872,15 +7943,28 @@ mod encoding_tests {
         // `ascii_only?` and every compatibility decision read.
         let parent = RStringInner::from_encoding(b"\xffab", Encoding::Ascii8);
         assert_eq!(parent.code_range(), CodeRange::Valid);
-        assert_eq!(RStringInner::propagated_cr(&parent, 1, 3), CodeRange::SevenBit);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 1, 3),
+            CodeRange::SevenBit
+        );
         assert_eq!(RStringInner::propagated_cr(&parent, 0, 2), CodeRange::Valid);
 
-        let parent = RStringInner::from_encoding("abc\u{65e5}\u{672c}xyz".as_bytes(), Encoding::UTF8);
+        let parent =
+            RStringInner::from_encoding("abc\u{65e5}\u{672c}xyz".as_bytes(), Encoding::UTF8);
         assert_eq!(parent.code_range(), CodeRange::Valid);
-        assert_eq!(RStringInner::propagated_cr(&parent, 0, 3), CodeRange::SevenBit);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 3),
+            CodeRange::SevenBit
+        );
         assert_eq!(RStringInner::propagated_cr(&parent, 3, 9), CodeRange::Valid);
-        assert_eq!(RStringInner::propagated_cr(&parent, 9, 12), CodeRange::SevenBit);
-        assert_eq!(RStringInner::propagated_cr(&parent, 3, 5), CodeRange::Unknown);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 9, 12),
+            CodeRange::SevenBit
+        );
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 3, 5),
+            CodeRange::Unknown
+        );
 
         // A non-ASCII-compatible encoding is never SevenBit.
         let parent =

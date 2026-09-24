@@ -12669,7 +12669,7 @@ fn normalize_form(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<&
 fn normalizable_text(globals: &Globals, inner: &RStringInner) -> Result<String> {
     let enc = inner.encoding();
     if enc != Encoding::UTF8 {
-        let utf8 = super::encoding::transcode_bytes_with_opts(
+        let utf8 = crate::value::transcode_bytes_with_opts(
             inner.as_bytes(),
             enc,
             Encoding::UTF8,
@@ -12698,7 +12698,7 @@ fn normalized_bytes(globals: &Globals, s: &str, enc: Encoding) -> Vec<u8> {
         return s.as_bytes().to_vec();
     }
     // Well-formed Unicode text goes back into any Unicode encoding.
-    super::encoding::transcode_bytes_with_opts(
+    crate::value::transcode_bytes_with_opts(
         s.as_bytes(),
         Encoding::UTF8,
         enc,
