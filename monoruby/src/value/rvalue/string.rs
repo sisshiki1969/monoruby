@@ -1,5 +1,9 @@
 use super::*;
-use crate::builtins::encoding::{
+use transcode::carrier::{
+    CarrierPair, SjisCarrier, Utf8Carrier, carrier_base, carrier_pair, carrier_route,
+    carrier_vendor, sjis_carrier, utf8_carrier,
+};
+use transcode::{
     JisCell, JisWrapper, StreamConvertResult, TranscodeOpts, carrier_no_unicode_message,
     carrier_pua_bytes, cell_decode, cell_table, chain_names, conversion_walker,
     converter_not_found, decode_utf16_32, dst_can_hold, dummy_wide_source, dummy_wide_target,
@@ -13,10 +17,6 @@ use crate::builtins::encoding::{
     table_decode_lossy, table_encode, transcoder_spelling, undefined_before_eucjp_message,
     utf8_kddi_enc, validate_replacement, wrapper_dst_undefined,
 };
-use crate::builtins::encoding_carrier::{
-    CarrierPair, SjisCarrier, Utf8Carrier, carrier_base, carrier_pair, carrier_route,
-    carrier_vendor, sjis_carrier, utf8_carrier,
-};
 
 /// Longest encoding name `Encoding::try_from_str` can recognise
 /// (`WINDOWS_31J` and friends are far shorter; the cap only has to be an
@@ -29,6 +29,7 @@ use std::cmp::Ordering;
 
 pub mod pack;
 mod printable;
+pub(crate) mod transcode;
 
 /// The widest an EUC-JP character gets (onigenc's `mbmaxlen`).
 pub(crate) const EUCJP_MAX_LEN: usize = 3;
@@ -1504,7 +1505,7 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
     // it while 7-bit content still converts).
     ("Emacs-Mule", "Emacs_Mule"),
     // The Mac OS script encodings. Eight of them have a table of their
-    // own ([`single_byte_table`](crate::builtins::encoding)); CRuby has
+    // own (`transcode::single_byte_table`); CRuby has
     // no converter at all for `macCentEuro` and `macThai`, so those two
     // are name-only, which is what this variant is for. CRuby spells
     // the family with a lowercase `mac` — `MacJapanese` is the one
@@ -6885,7 +6886,7 @@ fn carrier_hop(
                 )
                 .or_else(|e| {
                     if opts.undef_replace {
-                        Ok(opts.replace_str(dst_enc).into_bytes())
+                        Ok(opts.replace_str(dst_enc).as_bytes().to_vec())
                     } else {
                         Err(e)
                     }
@@ -7177,7 +7178,7 @@ fn scrub_replacement_bytes(
     let text = opts.replace_str(enc);
     let Some(repl_enc) = opts.replace_enc else {
         // The default replacement is the encoding's own.
-        return Ok(text.into_bytes());
+        return Ok(text.as_bytes().to_vec());
     };
     if repl_enc != enc && !(text.is_ascii() && enc.is_ascii_compatible()) {
         return Err(MonorubyErr::incompatible_encoding(store, enc, repl_enc));

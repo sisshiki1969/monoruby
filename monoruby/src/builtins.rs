@@ -12,13 +12,7 @@ mod digest;
 mod cipher;
 mod dir;
 pub(crate) mod encoding;
-pub(crate) mod encoding_carrier;
-mod encoding_cjk;
-mod encoding_cp51932;
-mod encoding_kddi;
 pub(crate) mod errno;
-#[cfg(test)]
-mod encoding_tests;
 pub(crate) mod enumerator;
 mod exception;
 mod false_class;

@@ -37,6 +37,7 @@ pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use regexp::{Spans, Subject, save_spans, spans_of};
 pub(crate) use string::pack::*;
+pub(crate) use string::transcode;
 pub(crate) use string::transcode_bytes_with_opts;
 pub(crate) use string::{
     CESU_8, CESU8_MAX_LEN, CodepointErr, IllFormed, Iso2022JpStop, MbcPiece, PreciseLen,

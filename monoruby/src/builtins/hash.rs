@@ -2553,7 +2553,7 @@ fn env_read_string(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result
         && let Some(target) = super::io::enc_obj_to_enum(globals, int)
         && target != inner.encoding()
     {
-        let bytes = super::encoding::transcode_for_env(
+        let bytes = crate::value::transcode::transcode_for_env(
             &globals.store,
             inner.as_bytes(),
             inner.encoding(),

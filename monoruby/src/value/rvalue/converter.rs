@@ -1,5 +1,5 @@
 use super::*;
-use crate::builtins::encoding::StreamConvertResult;
+use crate::value::transcode::StreamConvertResult;
 
 #[monoruby_object]
 pub struct Converter(Value);

@@ -1,6 +1,5 @@
-// Tests for the real `String#encode` transcoder added in Phase F.
-// Lives in a sibling file to keep `encoding.rs` itself unchanged
-// while adding test coverage for the new behaviour.
+// Tests for the `String#encode` transcoder, run through Ruby, and
+// (`tables`, at the end) for the tables its codecs search.
 
 #[cfg(test)]
 mod tests {
@@ -485,5 +484,77 @@ mod tests {
             // non-encoding-bearing operand → nil.
             r#"Encoding.compatible?(Object.new, "abc").inspect"#,
         ]);
+    }
+}
+
+/// The tables the codecs search, and the scan that lets `jp_encode`
+/// skip its per-character walk: internals no Ruby-level test reaches
+/// directly.
+mod tables {
+    use super::super::*;
+
+    /// [`jp_decode_override`] and [`jp_encode_override`] binary-search
+    /// the fixup tables, so every one of them has to be sorted — the
+    /// hand-written ones as much as the generated CP51932 tables.
+    #[test]
+    fn fixup_tables_are_sorted() {
+        for fx in [
+            &EUCJP_FIXUP,
+            &SJIS_FIXUP,
+            &WINDOWS31J_FIXUP,
+            &*CP51932_FIXUP,
+        ] {
+            assert!(
+                fx.decode.windows(2).all(|w| w[0].0 < w[1].0),
+                "{} decode",
+                fx.enc.name()
+            );
+            assert!(
+                fx.encode.windows(2).all(|w| w[0].0 < w[1].0),
+                "{} encode",
+                fx.enc.name()
+            );
+        }
+        let emoji = &kddi::KDDI_ISO2022_ENCODE;
+        assert!(emoji.windows(2).all(|w| w[0].0 < w[1].0));
+        let cells = &kddi::KDDI_ISO2022_DECODE;
+        assert!(cells.windows(2).all(|w| w[0].0 < w[1].0));
+    }
+
+    /// The whole-buffer scan that lets `jp_encode` skip the
+    /// per-character walk. The byte ranges it looks for are also
+    /// *trailing* bytes, so it has to walk rather than scan — which is
+    /// the part worth testing directly, since `encoding_rs`'s own
+    /// output never contains the three-byte form.
+    #[test]
+    fn eucjp_row_scan() {
+        use crate::value::Encoding as E;
+        let live = |bytes: &[u8]| jp_live_throughout(jp_fixup(E::EUC_JP).unwrap(), bytes);
+        // Plain ASCII, JIS X 0208, half-width katakana, JIS X 0212.
+        assert!(live(b"abc"));
+        assert!(live(&[0xa6, 0xd0]));
+        assert!(live(&[0x8e, 0xb1]));
+        assert!(live(&[0x8f, 0xab, 0xe4]));
+        assert!(live(&[0x61, 0x8f, 0xab, 0xe4, 0x62]));
+        // An extension row in lead position.
+        assert!(!live(&[0xf9, 0xa1]));
+        assert!(!live(&[0xad, 0xe2]));
+        assert!(!live(&[0xa6, 0xd0, 0xf9, 0xa1]));
+        // …and the same bytes as *trailing* bytes, which are fine.
+        assert!(live(&[0xa1, 0xf9]));
+        assert!(live(&[0x8f, 0xf9, 0xad]));
+        // Shift_JIS has its own dead rows, and Windows-31J has none.
+        let sjis_live = |bytes: &[u8]| jp_live_throughout(jp_fixup(E::Sjis(0)).unwrap(), bytes);
+        assert!(sjis_live(&[0x82, 0xa0]));
+        assert!(!sjis_live(&[0x87, 0x40]));
+        assert!(!sjis_live(&[0xed, 0x40]));
+        assert!(!sjis_live(&[0xfa, 0x40]));
+        // `87` / `ED` / `FA` as *trailing* bytes are ordinary.
+        assert!(sjis_live(&[0x82, 0x87]));
+        assert!(sjis_live(&[0x82, 0xed]));
+        assert!(jp_live_throughout(
+            jp_fixup(E::Sjis(1)).unwrap(),
+            &[0x87, 0x40]
+        ));
     }
 }

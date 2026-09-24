@@ -4998,7 +4998,7 @@ fn casemap_mustnot_broken(store: &Store, inner: &RStringInner) -> Result<()> {
 /// UTF-32) — the encoding has no characters to operate on.
 fn check_dummy_enc(store: &Store, inner: &RStringInner) -> Result<()> {
     let enc = inner.encoding();
-    if super::encoding::is_cruby_dummy_name(enc.name()) {
+    if crate::value::transcode::is_cruby_dummy_name(enc.name()) {
         return Err(MonorubyErr::encoding_compatibility_error_with_store(
             store,
             format!("incompatible encoding with this operation: {}", enc.name()),
@@ -9313,9 +9313,9 @@ fn unicode_noncompat_case(self_val: Value, op: CaseOp, mode: CaseMode) -> Option
     ) {
         return None;
     }
-    let (decoded, _) = super::encoding::decode_utf16_32(inner.as_bytes(), enc);
+    let (decoded, _) = crate::value::transcode::decode_utf16_32(inner.as_bytes(), enc);
     let mapped = apply_case(&decoded, op, mode);
-    let bytes = super::encoding::encode_utf16_32(&mapped, enc);
+    let bytes = crate::value::transcode::encode_utf16_32(&mapped, enc);
     Some(RStringInner::from_encoding_scanned(&bytes, enc))
 }
 
@@ -12351,7 +12351,7 @@ fn default_scrub_replacement(enc: Encoding) -> RStringInner {
     match enc {
         Encoding::UTF8 => RStringInner::from_encoding("\u{FFFD}".as_bytes(), Encoding::UTF8),
         Encoding::Utf16Le | Encoding::Utf16Be | Encoding::Utf32Le | Encoding::Utf32Be => {
-            RStringInner::from_encoding(&super::encoding::encode_utf16_32("\u{FFFD}", enc), enc)
+            RStringInner::from_encoding(&crate::value::transcode::encode_utf16_32("\u{FFFD}", enc), enc)
         }
         _ => RStringInner::from_encoding(b"?", enc),
     }
@@ -12673,7 +12673,7 @@ fn normalizable_text(globals: &Globals, inner: &RStringInner) -> Result<String> 
             inner.as_bytes(),
             enc,
             Encoding::UTF8,
-            &super::encoding::TranscodeOpts::default(),
+            &crate::value::transcode::TranscodeOpts::default(),
             &globals.store,
         )?;
         return Ok(String::from_utf8(utf8).unwrap_or_default());
@@ -12702,7 +12702,7 @@ fn normalized_bytes(globals: &Globals, s: &str, enc: Encoding) -> Vec<u8> {
         s.as_bytes(),
         Encoding::UTF8,
         enc,
-        &super::encoding::TranscodeOpts::default(),
+        &crate::value::transcode::TranscodeOpts::default(),
         &globals.store,
     )
     .unwrap_or_else(|_| s.as_bytes().to_vec())

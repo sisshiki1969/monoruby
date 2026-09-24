@@ -2097,7 +2097,7 @@ pub(crate) fn escape_unicode_noncompat_component(inner: &RStringInner) -> Option
     if !matches!(enc, E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be) {
         return None;
     }
-    let (decoded, _) = crate::builtins::encoding::decode_utf16_32(inner.as_bytes(), enc);
+    let (decoded, _) = crate::value::transcode::decode_utf16_32(inner.as_bytes(), enc);
     let mut out = String::with_capacity(decoded.len());
     for ch in decoded.chars() {
         if ch.is_ascii() {

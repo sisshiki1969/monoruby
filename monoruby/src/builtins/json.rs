@@ -534,7 +534,7 @@ fn convert_encoding(vm: &mut Executor, globals: &mut Globals, source: Value) -> 
             inner.as_bytes(),
             enc,
             Encoding::UTF8,
-            &super::encoding::TranscodeOpts::default(),
+            &crate::value::transcode::TranscodeOpts::default(),
             &globals.store,
         )?,
     })

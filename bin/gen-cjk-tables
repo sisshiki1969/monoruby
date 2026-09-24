@@ -1,13 +1,13 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Regenerates monoruby/src/builtins/encoding_cjk.rs from CRuby's own
+# Regenerates monoruby/src/value/rvalue/string/transcode/cjk.rs from CRuby's own
 # tables. These encodings change about as often as the standards they
 # spell, so the output is checked in rather than built.
 #
 #   cargo build --features no-cjk-tables
 #   MONORUBY=target/debug/monoruby bin/gen-cjk-tables \
-#       > monoruby/src/builtins/encoding_cjk.rs
+#       > monoruby/src/value/rvalue/string/transcode/cjk.rs
 #   cargo build
 #
 # `live` is read from CRuby alone: the set of cells its table holds,
