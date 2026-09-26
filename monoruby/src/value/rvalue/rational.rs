@@ -419,6 +419,25 @@ impl RationalInner {
         Some((self.num.to_i64()? as i128, self.den.to_i64()? as i128))
     }
 
+    /// `self` rounded to a multiple of `10**digits` by *round*, one of the
+    /// `ndigits == 0` forms: `round(self / 10**digits) * 10**digits`, on the
+    /// exact value. Rounding the truncated integer instead loses the fraction,
+    /// which moves a value strictly between two multiples onto the wrong one
+    /// (`Rational(3, 4).ceil(-1)` was `0`, `Rational(51, 10).round(-1, half:
+    /// :down)` was `0`).
+    fn round_to_tens(
+        &self,
+        digits: i64,
+        round: impl FnOnce(&Self) -> RationalFloorResult,
+    ) -> RationalFloorResult {
+        let d = BigInt::from(10u32).pow(digits as u32);
+        let scaled = Self::from_bigint(self.num.to_bigint(), self.den.to_bigint() * &d);
+        let RationalFloorResult::Integer(q) = round(&scaled) else {
+            unreachable!("an ndigits == 0 rounding yields an Integer")
+        };
+        RationalFloorResult::Integer(IntegerRepr::from_bigint(q.to_bigint() * d))
+    }
+
     /// Rational#floor(ndigits)
     /// ndigits == 0 => Integer, ndigits > 0 => Rational, ndigits < 0 => Integer
     pub fn rational_floor(&self, ndigits: i64) -> RationalFloorResult {
@@ -443,11 +462,7 @@ impl RationalInner {
             let floored = num::integer::Integer::div_floor(&scaled_num, &den);
             RationalFloorResult::Rational(Self::new(floored, d))
         } else {
-            let d = BigInt::from(10u32).pow((-ndigits) as u32);
-            let i = &num / &den;
-            RationalFloorResult::Integer(IntegerRepr::from_bigint(
-                num::integer::Integer::div_floor(&i, &d) * &d,
-            ))
+            self.round_to_tens(-ndigits, |x| x.rational_floor(0))
         }
     }
 
@@ -475,12 +490,7 @@ impl RationalInner {
             let ceiled = -num::integer::Integer::div_floor(&neg_scaled, &den);
             RationalFloorResult::Rational(Self::new(ceiled, d))
         } else {
-            let d = BigInt::from(10u32).pow((-ndigits) as u32);
-            let i = &num / &den;
-            // ceil = -floor(-i, d)
-            let neg_i = -&i;
-            let floored = num::integer::Integer::div_floor(&neg_i, &d);
-            RationalFloorResult::Integer(IntegerRepr::from_bigint(-floored * &d))
+            self.round_to_tens(-ndigits, |x| x.rational_ceil(0))
         }
     }
 
@@ -600,42 +610,7 @@ impl RationalInner {
                 unreachable!()
             }
         } else {
-            let d = BigInt::from(10u32).pow((-ndigits) as u32);
-            let i = &num / &den;
-            // Round the integer at the given digit position
-            let (q, r) = num::integer::Integer::div_rem(&i, &d);
-            let doubled = &r * BigInt::from(2);
-            let abs_doubled = doubled.abs();
-            let result = if abs_doubled > d.abs() {
-                if i >= BigInt::ZERO {
-                    (q + 1) * &d
-                } else {
-                    (q - 1) * &d
-                }
-            } else if abs_doubled < d.abs() {
-                q * &d
-            } else {
-                match half {
-                    Some(crate::value::RoundHalf::Down) => q * &d,
-                    Some(crate::value::RoundHalf::Even) => {
-                        if (&q % 2u32).is_zero() {
-                            q * &d
-                        } else if i >= BigInt::ZERO {
-                            (q + 1) * &d
-                        } else {
-                            (q - 1) * &d
-                        }
-                    }
-                    _ => {
-                        if i >= BigInt::ZERO {
-                            (q + 1) * &d
-                        } else {
-                            (q - 1) * &d
-                        }
-                    }
-                }
-            };
-            RationalFloorResult::Integer(IntegerRepr::from_bigint(result))
+            self.round_to_tens(-ndigits, |x| x.rational_round(0, half))
         }
     }
 

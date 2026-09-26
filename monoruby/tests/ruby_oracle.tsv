@@ -3366,6 +3366,7 @@ aa9ed623ce6b393da6e8302088781719	[42, 1.5, [42, 1.5]]	def call_block\n      yiel
 aaa1718bf6b917d63bf2b77abdf3cb38	[false, false, true]	__a = [];__a << (ENV.to_h.equal?(ENV));__a << (ENV.to_hash.equal?(ENV));__a << (
 aaa4915a3c9f363b036669c78778de6a	["", "", "", "ab", "ab", "", 200, "ASCII-8BIT"]	r = []\n            r << String.new(capacity: 0)\n            r << St
 aaaff8d374ccb224e40da1efb7b2e792	[[[164, 236], "EUC-JP", true], 1, ["Encoding::CompatibilityError", "incompatible encoding regexp match (EUC-JP regexp with UTF-8 string)"], "Encoding::CompatibilityError", "Encoding::CompatibilityError"]	__a = [];__a << (r = Regexp.new("\\u308C".encode("euc-jp"))\n               [r.sou
+aab1401c1b05e6303cafa4ad9b7acfd5	[[10, -10, 100, -100], [10, 10, -10, -10], [-20, 10, 0, 20, 20, -20], [10, -10, 10, -10, 0, 0], "[590295810358705651000, 590295810358705652000, 590295810358705652000, 590295810358705652000, -590295810358705652000, -590295810358705651000, -590295810358705652000]"]	__a = [];__a << ([Rational(3, 4).ceil(-1), Rational(-3, 4).floor(-1), Rational(3
 aab458ff0c2a03718b6c9b73c90f2db1	:ok	old_stderr = $stderr\n            captured = String.new\n            
 aab9942daadbde6b7f6d2ea8f2774472	[:Receiver, :singleton]	module IEv\n              module ReceiverScope\n                class
 aac724226cfcaf6fac1a6d9fa08ab5f2	0	h = Object.new\n            def h.finalize(id); end\n            Obje

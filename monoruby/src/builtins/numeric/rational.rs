@@ -849,6 +849,20 @@ mod tests {
     /// The `i64` fast path and its hand-off to BigInt: operands at the edge
     /// of `i64`, results that overflow it, BigInt results that come back
     /// into range, and equality / hashing across the two forms.
+    /// A negative `ndigits` rounds the exact value, not its truncation (#1654):
+    /// a value strictly between two multiples of `10**-ndigits` must not be
+    /// treated as sitting on the lower one.
+    #[test]
+    fn rational_negative_ndigits() {
+        run_tests(&[
+            "[Rational(3, 4).ceil(-1), Rational(-3, 4).floor(-1), Rational(3, 4).ceil(-2), Rational(-3, 4).floor(-2)]",
+            "[Rational(51, 10).round(-1, half: :down), Rational(51, 10).round(-1, half: :even), Rational(-51, 10).round(-1, half: :down), Rational(-51, 10).round(-1, half: :even)]",
+            "[Rational(-151, 10).round(-1, half: :down), Rational(149, 10).round(-1, half: :up), Rational(5, 1).round(-1, half: :down), Rational(15, 1).round(-1, half: :even), Rational(25, 1).round(-1, half: :even), Rational(-25, 1).round(-1, half: :even)]",
+            "[Rational(7, 2).ceil(-1), Rational(-7, 2).floor(-1), Rational(26, 3).round(-1), Rational(-15, 2).round(-1), Rational(3, 4).truncate(-1), Rational(-51, 10).truncate(-1)]",
+            "(x = Rational(2**70 + 1, 2); [x.floor(-3), x.ceil(-3), x.round(-3), x.round(-3, half: :down), (-x).floor(-3), (-x).ceil(-3), (-x).round(-3, half: :even)]).inspect",
+        ]);
+    }
+
     /// The BigInt fallbacks behind the i64 fast paths: negative bignum
     /// denominators, bignum arithmetic, `to_i` / `to_f` of wide values, and
     /// floor / ceil / round (every `half:` mode, both signs) past `i64`.
