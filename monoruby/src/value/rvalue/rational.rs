@@ -12,9 +12,11 @@ use super::*;
 /// so the derived equality and hash are value equality. `Small` is what keeps
 /// an ordinary Rational (`Rational(3, 4)`, a `Time#subsec`) free of heap
 /// allocations: only the RValue cell is allocated, not two `BigInt` digit
-/// buffers. It is a Rust value rather than a Ruby `Value` on purpose: a
-/// `RationalInner` is often a temporary in the middle of an arithmetic
-/// builtin, where a bignum `Value` inside it would not be rooted.
+/// buffers. It is a Rust value rather than a Ruby `Value` (CRuby's choice)
+/// because arithmetic has to unpack a `Value` into Rust integers anyway, and a
+/// canonical Rust value gets equality and hashing by `derive` and needs no
+/// marking; a `RationalInner` that is a temporary inside a builtin also carries
+/// no unrooted bignum across a call back into Ruby.
 ///
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum IntegerRepr {

@@ -45,7 +45,7 @@ boot（require、parse、JIT コンパイルで 17% 超）に汚染されるの�
 | Regexp / Onigmo | 2.7% |
 | 定常状態での JIT コンパイル（inclusive 2.5%） | 1.9% |
 | IdentId の intern | 1.3% |
-| Rational / BigInt の gcd（`Time#+` / `-` の exact subsec） | 約 0.7% |
+| BigInt 演算（`Rational` の正規化と `Time` の exact subsec。§3.5） | 約 1.4% |
 
 sqlite は YJIT 側でも約 160 ms/iteration で絶対時間が同じなので、monoruby 由来ではない。
 
@@ -87,7 +87,9 @@ uprobe で数えた 1 iteration あたりの呼び出し回数（定常状態、
 - クラスバージョンは定常状態では動いていない。`GeneratedAttributeMethods` の
   `method_added`（3,073 回）でバージョンが動くのは boot 中だけ。
 - `Time#strftime` は毎回 `exact_subsec_parts` で `BigInt` を 2 つ作ってから
-  `preprocess_strftime` に渡している。`%N` / `%L` を含まないフォーマットでも作る。
+  `preprocess_strftime` に渡している。`%N` / `%L` を含まないフォーマットでも作るが、
+  費用は 0.05% 以下で、`strftime` 全体（0.43%）の大半は書式の組み立てと chrono による
+  2 回目の整形にある。
 - `intern_frozen_str` は pool を引くたびに `bytes.to_vec()` で確保している。
 
 `profile` ビルドのグローバルメソッドキャッシュ統計（15 iteration の実行全体の累計）では、
@@ -132,6 +134,34 @@ malloc の費用はアロケータの遅さではなく確保回数から来て�
 `cached_find_by` 系が各約 290。`profile` の再コンパイル統計の上位は
 `Thread::Mutex#*` の `NotCached`（各 142 回）と、`cached_find_by` のブロックなどの
 `ClassVersionGuardFailed`（各約 60 回）だった。
+
+### 3.5 BigInt 演算（約 1.4%、同じ PR で対処）
+
+BigInt の中で止まっている標本は、§2 と同じ計測で 1.42% あった。呼び出し元の内訳は次の通り。
+
+| monoruby 側の呼び出し元 | 割合 |
+|---|---|
+| `Rational` の正規化（`RationalInner::normalize`） | 0.75% |
+| `Time` の exact subsec の保存（`store_exact_subsec`） | 0.19% |
+| BigInt の比から f64 への変換（`bigint_ratio_to_f64`） | 0.12% |
+| `Time#+` の exact な加算（`shift_by_exact`） | 0.10% |
+
+Ruby 側では ActiveSupport の `Time#change`、TZInfo の `Timestamp.for_time`、
+Duration を足し引きする `Time#plus_with_duration` / `minus_with_duration` から来ている。
+原因は 2 つあった。
+
+- **`Rational` が常に BigInt の組だった。** `Rational(3, 4)` でも `Box` と BigInt 2 つを確保し、
+  生成のたびに BigInt の gcd と除算を行っていた。
+- **`Time` の exact subsec の計算が常に BigInt だった。** 秒以下を任意精度の有理数で保つ
+  仕様上、Float や分母の大きな Rational を足すと分母は i64 を超えるので BigInt 自体は必要。
+  しかし整数や小さな Rational を足すありふれた場合まで BigInt で計算し、
+  `store_exact_subsec` は「ナノ秒未満の端数はない」という結論を出すために BigInt の
+  gcd と剰余を使っていた。
+
+どちらも、値が i64 に収まる間は i128 で計算して溢れたら BigInt に移る形にした
+（`Rational` は分子と分母を `IntegerRepr` で持ち、`RValue` に直接置く）。
+同じコミットの前後を同条件で計測し直した比較では、BigInt の標本は 1.22% から 0.21% に下がった。
+`Time#+` の包含コストは、`Rational` の変更後の 0.58% から `Time` の変更後の 0.15% に下がった。
 
 ## 4. 多相サイトの deopt
 
@@ -262,8 +292,7 @@ ZJIT でもインライン化されるのは小さな callee だけで、多く�
 
 ## 6. 対策案（実装量の少ない順）
 
-1. **`Time#strftime` の subsec を遅延計算する。** `%N` / `%L` に当たったときだけ
-   `exact_subsec_parts` を呼ぶ。約 0.7%。
+1. **（実施済み）`Rational` と `Time` の exact subsec の BigInt をなくす。** §3.5。
 2. **`String#-@` の pool 検索で確保しない。** frozen かつ pool 由来なら自身を返し、
    pool を借用のキーで引く。
 3. **インラインキャッシュのミス時に PMC を先に引く。** `runtime::find_method` で
