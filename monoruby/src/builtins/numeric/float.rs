@@ -1466,6 +1466,17 @@ mod tests {
         run_test_error("(-Float::INFINITY).to_r");
     }
 
+    /// Fixed notation whenever the point falls inside the digits, however
+    /// large; scientific only for integral values past 15 digits (#1655).
+    #[test]
+    fn float_inspect_notation_boundary() {
+        run_tests(&[
+            "[3002399751580331.5, 1234567890123456.5, -1234567890123456.5, 4503599627370497.5, 999999999999999.9, 123456789012345.67]",
+            "[1e15, 1e16, 2e15, 2.5e15, 1234567890123456.0, 9999999999999998.0, 1.5e16, 123456789012345.0, 100000000000000.5]",
+            "[3002399751580331.5.to_s, (-3002399751580331.5).to_s, \"#{1234567890123456.5}\", 1e15.to_s, 123456789012345.0.to_s]",
+        ]);
+    }
+
     #[test]
     fn float_inspect_to_s() {
         run_tests(&[
