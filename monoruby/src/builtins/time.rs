@@ -1645,7 +1645,7 @@ fn exact_subsec_parts(globals: &Globals, time: Value) -> (num::BigInt, num::BigI
     if let Some(v) = globals.store.get_ivar(time, IdentId::get_id(SUBSEC_IVAR))
         && let Some(r) = v.try_rational()
     {
-        return (r.num().clone(), r.den().clone());
+        return (r.num().to_bigint(), r.den().to_bigint());
     }
     (
         num::BigInt::from(time.as_time().nanosecond()),
@@ -2660,7 +2660,7 @@ fn time_month_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resu
 fn arg_exact_fraction(v: Value) -> Option<(num::BigInt, num::BigInt)> {
     use num::Integer;
     let (num, den) = if let Some(r) = v.try_rational() {
-        (r.num().clone(), r.den().clone())
+        (r.num().to_bigint(), r.den().to_bigint())
     } else if let Some(f) = v.try_float() {
         let q = num::BigRational::from_float(f)?;
         (q.numer().clone(), q.denom().clone())
@@ -2704,11 +2704,11 @@ fn time_sec_to_i64_nsec(vm: &mut Executor, globals: &mut Globals, v: Value) -> R
 /// truncate at ~16 significant digits).
 fn rational_split_sec_nsec(r: &RationalInner) -> (i64, u32) {
     use num::Integer;
-    let num = r.num();
-    let den = r.den();
-    let (sec_big, rem) = num.div_mod_floor(den);
+    let num = r.num().to_bigint();
+    let den = r.den().to_bigint();
+    let (sec_big, rem) = num.div_mod_floor(&den);
     let secs = sec_big.to_i64().unwrap_or(0);
-    let nsec_big = (&rem * num::BigInt::from(1_000_000_000i64)) / den;
+    let nsec_big = (&rem * num::BigInt::from(1_000_000_000i64)) / &den;
     let nsec = nsec_big.to_i64().unwrap_or(0).clamp(0, 999_999_999) as u32;
     (secs, nsec)
 }
@@ -2750,7 +2750,7 @@ fn num_exact_rational(
     match v.unpack() {
         RV::Fixnum(n) => return Ok((BigInt::from(n), BigInt::from(1))),
         RV::BigInt(n) => return Ok((n.clone(), BigInt::from(1))),
-        RV::Rational(r) => return Ok((r.num().clone(), r.den().clone())),
+        RV::Rational(r) => return Ok((r.num().to_bigint(), r.den().to_bigint())),
         _ => {}
     }
     // String / nil are never coerced (even a numeric-looking string).
@@ -2766,7 +2766,7 @@ fn num_exact_rational(
         }
         let r = vm.invoke_method_inner(globals, to_r, v, &[], None, None)?;
         if let RV::Rational(rr) = r.unpack() {
-            return Ok((rr.num().clone(), rr.den().clone()));
+            return Ok((rr.num().to_bigint(), rr.den().to_bigint()));
         }
         if let Some(x) = int_ratio(r) {
             return Ok(x);
@@ -2794,9 +2794,9 @@ fn time_usec_to_nsec(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resu
     }
     if let Some(r) = v.try_rational() {
         use num::Integer;
-        let num = r.num() * num::BigInt::from(1_000i64);
-        let den = r.den();
-        let val = num.div_floor(den).to_i64().unwrap_or(-1);
+        let num = r.num().to_bigint() * num::BigInt::from(1_000i64);
+        let den = r.den().to_bigint();
+        let val = num.div_floor(&den).to_i64().unwrap_or(-1);
         return Ok(u32::try_from(val).ok());
     }
     let i = time_arg_to_i64(vm, globals, v)?;

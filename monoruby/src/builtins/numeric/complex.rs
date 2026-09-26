@@ -781,7 +781,7 @@ fn f_gt(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<
 /// `Complex(6, 8) / 4` yields `((3/2)+2i)` (the imaginary `(2/1)` becomes `2`).
 fn rational_canonicalize(value: Value) -> Value {
     if let Some(r) = value.try_rational() {
-        if num::One::is_one(r.den()) {
+        if r.den().is_one() {
             return r.num_as_value();
         }
     }

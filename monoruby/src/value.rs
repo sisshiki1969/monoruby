@@ -1116,7 +1116,7 @@ impl Value {
         RValue::new_complex_from(complex).pack()
     }
 
-    pub fn rational(n: impl Into<BigInt>, d: impl Into<BigInt>) -> Self {
+    pub fn rational(n: impl Into<IntegerRepr>, d: impl Into<IntegerRepr>) -> Self {
         RValue::new_rational(RationalInner::new(n, d)).pack()
     }
 
