@@ -1036,6 +1036,7 @@
 3347692ca7320ce3b96875e272dbbe81	[7.5, 18.0]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 3358715ab6d315ac23aff09b3ff0f005	102450.0	class SpecAcc\n          K = 1.25\n          def calc(n, use_k)\n         
 33606d9f9d185d3cae67e71162c0ade3	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]	def row\n          res = []\n          x = 0\n          while x < 45\n     
+3374a6684d98097b2d7d43a0fbc6cab5	[[true, true, "hello"], true, [true, true], [true, [], false, "z"], ["MyStrU", true, false, "q"], true, [true, "UTF-8"], [true, "ASCII-8BIT", [255]], [true, true, true], [true, true, true, false, true], [true, true, false]]	__a = [];__a << (x = -"hello".dup; y = -"hello".dup; [x.frozen?, x.equal?(y), x]
 33a37997020cb2a326855e1801974373	"hello\\n"	r, w = IO.pipe\n            t = Thread.new { r.gets }\n            Th
 33b5711e09e6c160215318c1fd17224f	["no error", 5]	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:)
 33c649868370c10930670813040a0f1c	[45.0, 30.0]	class RS3\n          def half(v) = v * 0.5\n          def sum(arr)\n      
@@ -4252,7 +4253,6 @@ d6855dfda45a033f96e13fcd9718eeb2	[0, 1, -1, 2, -2, 3, -3, 1, 2, 3, 4, 5, 6, 7, "
 d69d2ef84b7ac3883da56b99ecdd1722	[nil, nil]	S = Struct.new(:name, :legs, keyword_init: true)\n            \n\n    
 d69feae00b538afc09fbb9f6341e403e	:OVERRIDDEN	class Integer; def >(o); :OVERRIDDEN; end; end; 3 > 4
 d6b1e91ca6f365857969484299ed0f51	nil	/(?<z>foo)/ =~ "nope"
-d6b3cf0b7b039abc907679758aa64a03	[[true, true, "hello"], true, [true, true], [true, [], false, "z"], ["MyStrU", true, false, "q"], true, [true, "UTF-8"], [true, "ASCII-8BIT", [255]]]	__a = [];__a << (x = -"hello".dup; y = -"hello".dup; [x.frozen?, x.equal?(y), x]
 d6b954fc5289ea6d95ff086bc292725e	[1, 2, 3]	class A < Array; end\nA[1, 2, 3]
 d6bfe4296b93f2e640133c89a4ab8e47	false	def g; proc{ 1 }; end; g == g
 d6c0eb29e576b66ef1234e2d00a6f0b7	[[1, 0], [2, 1]]	r = []; [1, 2].each.with_index(nil) { |v, i| r << [v, i] }; r

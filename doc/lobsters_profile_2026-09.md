@@ -90,7 +90,11 @@ uprobe で数えた 1 iteration あたりの呼び出し回数（定常状態、
   `preprocess_strftime` に渡している。`%N` / `%L` を含まないフォーマットでも作るが、
   費用は 0.05% 以下で、`strftime` 全体（0.43%）の大半は書式の組み立てと chrono による
   2 回目の整形にある。
-- `intern_frozen_str` は pool を引くたびに `bytes.to_vec()` で確保している。
+- `intern_frozen_str` は pool を引くたびに `bytes.to_vec()` で確保していた（対処済み。
+  pool を借用のバイト列で引くようにした）。呼び出しの大半は ActiveRecord::Result の
+  `columns.each(&:-@)` で、受け手は SQLite から得た frozen でない列名（平均 12 バイト）。
+  frozen な pool の本体が受け手になるのは 0.05% しかなく、「pool 由来なら自身を返す」
+  近道は効果がない。
 
 `profile` ビルドのグローバルメソッドキャッシュ統計（15 iteration の実行全体の累計）では、
 `==`（Object）446k、`String#-@` 370k、`==`（Thread）279k、`hash` 166k、
@@ -293,8 +297,9 @@ ZJIT でもインライン化されるのは小さな callee だけで、多く�
 ## 6. 対策案（実装量の少ない順）
 
 1. **（実施済み）`Rational` と `Time` の exact subsec の BigInt をなくす。** §3.5。
-2. **`String#-@` の pool 検索で確保しない。** frozen かつ pool 由来なら自身を返し、
-   pool を借用のキーで引く。
+2. **（実施済み）`String#-@` の pool 検索で確保しない。** pool を借用のキーで引く。
+   `String#-@` の包含コストは 0.62% から 0.49% に下がり、残りはハッシュ計算と
+   バイト列の比較。
 3. **インラインキャッシュのミス時に PMC を先に引く。** `runtime::find_method` で
    探索の前に `(callid, class)` の PMC を引く。メソッド探索 5.6% の半分弱を見込む。
 4. **`respond_to?` の否定キャッシュ。** `respond_to_missing?` が既定実装の受け手には

@@ -8971,9 +8971,11 @@ fn string_has_ivar(globals: &Globals, v: Value) -> bool {
 ///
 /// `rb_str_uminus`: the receiver is deduplicated through the
 /// frozen-string pool, so two equal Strings answer the *same* frozen
-/// object. A subclass instance, or one carrying instance variables, is
-/// not poolable (CRuby's `rb_fstring` wants a bare String) and just
-/// gets a frozen copy — or itself, when it is frozen already.
+/// object. A frozen receiver that nothing equal precedes becomes the
+/// pooled object itself; an unfrozen one is copied into the pool. A
+/// subclass instance, or one carrying instance variables, is not poolable
+/// (CRuby's `rb_fstring` wants a bare String) and just gets a frozen copy
+/// — or itself, when it is frozen already.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2d=40.html]
 #[monoruby_builtin]
@@ -8999,8 +9001,11 @@ fn string_uminus(
         return Ok(copy);
     }
     let inner = self_.as_rstring_inner();
-    let (bytes, enc) = (inner.as_bytes().to_vec(), inner.encoding());
-    Ok(globals.store.intern_frozen_str(&bytes, enc))
+    let (bytes, enc) = (inner.as_bytes(), inner.encoding());
+    if self_.is_frozen() {
+        return Ok(globals.store.intern_frozen_string(self_, bytes, enc));
+    }
+    Ok(globals.store.intern_frozen_str(bytes, enc))
 }
 
 ///
@@ -19544,6 +19549,12 @@ mod tests {
             r#"class MyStrV < String; end; m = MyStrV.new("q").freeze; (-m).equal?(m)"#,
             r#"e = -"".dup; [e.frozen?, e.encoding.to_s]"#,
             r#"b = -"\xff".b; [b.frozen?, b.encoding.to_s, b.bytes]"#,
+            // A frozen, bare receiver not pooled yet is pooled itself, not
+            // copied (`rb_fstring` registers it), and equal strings then
+            // resolve to it.
+            r#"k = "pool-self-#{Object.new.object_id}"; a = k.dup.freeze; [(-a).equal?(a), (-a.dup).equal?(a), (-k.dup).equal?(a)]"#,
+            r#"k = "mut-#{Object.new.object_id}"; f = k.dup; g = -f; f << "!"; [g == k, f == k + "!", g.frozen?, f.frozen?, (-k.dup).equal?(g)]"#,
+            r#"k = "enc-#{Object.new.object_id}"; x = k.dup.force_encoding("ASCII-8BIT").freeze; y = k.dup.freeze; [(-x).equal?(x), (-y).equal?(y), (-x).equal?(-y)]"#,
         ]);
     }
 
