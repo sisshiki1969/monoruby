@@ -36,7 +36,11 @@ pub const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 /// and then reformats to match CRuby's conventions:
 /// - Special values: "NaN", "Infinity", "-Infinity"
 /// - Preserves `-0.0`
-/// - Scientific notation when decimal exponent >= 15 or <= -5
+/// - Fixed notation when the decimal point falls inside the significant
+///   digits (`3002399751580331.5`, whatever the magnitude), or when the value
+///   is integral with at most 15 digits (`100000000000000.0`); scientific
+///   notation otherwise (`1.0e+15`) and when the decimal exponent is <= -5 —
+///   `flo_to_s` in CRuby's numeric.c
 /// - Scientific exponent always includes sign and at least two digits (`e+02`, `e-05`)
 pub fn ruby_float_to_s(f: f64) -> String {
     if f.is_nan() {
@@ -96,8 +100,9 @@ pub fn ruby_float_to_s(f: f64) -> String {
 
     let ndigits = digits.len() as i32;
 
-    if decpt > 0 && decpt <= 15 {
-        // Fixed notation: decimal point is within range
+    if decpt > 0 && (decpt < ndigits || decpt <= 15) {
+        // Fixed notation: the point falls inside the digits, or the value is
+        // integral and short enough to pad with zeros
         if decpt >= ndigits {
             // All significant digits before decimal point, pad with zeros
             result.push_str(digits);
