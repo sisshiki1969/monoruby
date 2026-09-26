@@ -5917,6 +5917,8 @@ mod tests {
             "(a = Time.at(0, Rational(1, 3), :nanosecond); b = Time.at(0, Rational(2, 7), :nanosecond); [a - b, a <=> b, b <=> a, a.to_f, a == Time.at(0)]).inspect",
             "(a = Time.at(-1_000_000_000, 5, :nsec); b = Time.at(2**35, 7, :nsec); [a - b, b - a, a.to_f, b.to_f, a <=> b]).inspect",
             "(a = Time.at(1_700_000_000.5); [a.to_f, a - Time.at(1_700_000_000), (a + Rational(1, 2)).to_i]).inspect",
+            // A result whose sub-nanosecond denominator outgrows i128 once scaled.
+            "(t = Time.at(Rational(1, 2**62)); u = t + Rational(1, 2**61 - 1); [u.subsec, u.to_r, u.nsec, (u - Rational(1, 2**61 - 1)) == t]).inspect",
         ]);
     }
 }

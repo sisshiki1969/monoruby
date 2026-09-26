@@ -849,6 +849,23 @@ mod tests {
     /// The `i64` fast path and its hand-off to BigInt: operands at the edge
     /// of `i64`, results that overflow it, BigInt results that come back
     /// into range, and equality / hashing across the two forms.
+    /// The BigInt fallbacks behind the i64 fast paths: negative bignum
+    /// denominators, bignum arithmetic, `to_i` / `to_f` of wide values, and
+    /// floor / ceil / round (every `half:` mode, both signs) past `i64`.
+    #[test]
+    fn rational_bigint_paths() {
+        run_tests(&[
+            "([Rational(2**70, -3), Rational(-(2**70), -3), Rational(2**64 + 1, -(2**64 + 1))]).inspect",
+            "([Rational(2**70, 3) + Rational(1, 3), Rational(2**70, 3) - Rational(1, 3), Rational(2**70, 3) * Rational(3, 2**69), Rational(1, 2**70) + Rational(1, 2**70)]).inspect",
+            "([Rational(2**70, 3).to_i, Rational(-(2**70), 3).to_i, Rational(2**70, 3).negative?, Rational(-(2**70), 3).negative?, -Rational(2**70, 3), -Rational(-(2**70), 3), Rational(-(2**70), 3).abs]).inspect",
+            "([Rational(2**1100, 3**700).to_f, Rational(-(2**1100), 3**700).to_f, Rational(3**700, 2**1100).to_f]).inspect",
+            "([Rational(2**70 + 1, 2).floor, Rational(-(2**70) - 1, 2).floor, Rational(2**70 + 1, 2).ceil, Rational(-(2**70) - 1, 2).ceil]).inspect",
+            "([Rational(2**72 + 3, 4).round, Rational(-(2**72) - 3, 4).round, Rational(2**72 + 1, 4).round, Rational(-(2**72) - 1, 4).round]).inspect",
+            "([Rational(2**71 + 1, 2).round, Rational(-(2**71) - 1, 2).round, Rational(2**71 + 1, 2).round(half: :even), Rational(-(2**71) - 1, 2).round(half: :even), Rational(2**71 + 3, 2).round(half: :even), Rational(-(2**71) - 3, 2).round(half: :even), Rational(-(2**71) - 1, 2).round(half: :down)]).inspect",
+            "([Rational(-3, 2).round(half: :even), Rational(-5, 2).round(half: :even), Rational(-7, 4).round(half: :even), Rational(-5, 4).round(half: :even)]).inspect",
+        ]);
+    }
+
     #[test]
     fn rational_small_big_boundaries() {
         run_tests(&[

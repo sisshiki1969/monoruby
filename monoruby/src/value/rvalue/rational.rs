@@ -120,18 +120,6 @@ impl From<i32> for IntegerRepr {
     }
 }
 
-impl From<u32> for IntegerRepr {
-    fn from(i: u32) -> Self {
-        IntegerRepr::Small(i as i64)
-    }
-}
-
-impl From<u64> for IntegerRepr {
-    fn from(i: u64) -> Self {
-        IntegerRepr::from_i128(i as i128)
-    }
-}
-
 impl From<i128> for IntegerRepr {
     fn from(i: i128) -> Self {
         IntegerRepr::from_i128(i)
@@ -141,15 +129,6 @@ impl From<i128> for IntegerRepr {
 impl From<BigInt> for IntegerRepr {
     fn from(b: BigInt) -> Self {
         IntegerRepr::from_bigint(b)
-    }
-}
-
-impl From<&BigInt> for IntegerRepr {
-    fn from(b: &BigInt) -> Self {
-        match i64::try_from(b) {
-            Ok(i) => IntegerRepr::Small(i),
-            Err(_) => IntegerRepr::Big(Box::new(b.clone())),
-        }
     }
 }
 
