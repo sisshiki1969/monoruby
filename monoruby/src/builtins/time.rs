@@ -1645,12 +1645,120 @@ fn exact_subsec_parts(globals: &Globals, time: Value) -> (num::BigInt, num::BigI
     if let Some(v) = globals.store.get_ivar(time, IdentId::get_id(SUBSEC_IVAR))
         && let Some(r) = v.try_rational()
     {
-        return (r.num().clone(), r.den().clone());
+        return (r.num().to_bigint(), r.den().to_bigint());
     }
     (
         num::BigInt::from(time.as_time().nanosecond()),
         num::BigInt::from(1_000_000_000i64),
     )
+}
+
+const NANOS_I128: i128 = 1_000_000_000;
+
+// The `i128` fast paths below cover the times and offsets programs actually
+// use — an Integer or a small Rational number of seconds, a time whose
+// fractional second is whole nanoseconds or a Rational with `i64` parts —
+// with checked arithmetic, and hand anything larger or any overflow to the
+// BigInt code, which stays the reference.
+
+/// *v* as an exact `(numerator, denominator)`, when it is an Integer or a
+/// Rational with `i64` parts: the forms [`num_exact_rational`] answers
+/// without calling back into Ruby.
+fn small_exact_rational(v: Value) -> Option<(i128, i128)> {
+    match v.unpack() {
+        RV::Fixnum(n) => Some((n as i128, 1)),
+        RV::Rational(r) => Some((r.num().to_i64()? as i128, r.den().to_i64()? as i128)),
+        _ => None,
+    }
+}
+
+/// [`exact_subsec_parts`] as `i128`s, when the `/subsec` Rational (if any)
+/// has `i64` parts.
+fn exact_subsec_small(globals: &Globals, time: Value) -> Option<(i128, i128)> {
+    if let Some(v) = globals.store.get_ivar(time, IdentId::get_id(SUBSEC_IVAR))
+        && let Some(r) = v.try_rational()
+    {
+        return Some((r.num().to_i64()? as i128, r.den().to_i64()? as i128));
+    }
+    Some((time.as_time().nanosecond() as i128, NANOS_I128))
+}
+
+/// [`exact_instant_parts`] as `i128`s.
+fn exact_instant_small(globals: &Globals, time: Value) -> Option<(i128, i128)> {
+    let secs = match time.as_time() {
+        TimeInner::Local(t, _) => t.timestamp(),
+        TimeInner::Utc(t) => t.timestamp(),
+    } as i128;
+    let (fnum, fden) = exact_subsec_small(globals, time)?;
+    Some((secs.checked_mul(fden)?.checked_add(fnum)?, fden))
+}
+
+/// [`bigint_ratio_to_f64`] for `num / den` with `den > 0`, in `u128`s:
+/// the same correctly rounded answer, for a denominator up to `2^64` once
+/// reduced. `None` sends the caller to the BigInt version.
+fn small_ratio_to_f64(num: i128, den: i128) -> Option<f64> {
+    let negative = num < 0;
+    let (n, d) = (num.unsigned_abs(), den as u128);
+    if n == 0 {
+        return Some(0.0);
+    }
+    let g = gcd_u128(n, d);
+    let (n, d) = (n / g, d / g);
+    const EXACT: u128 = 1 << 53;
+    let f = if n <= EXACT && d <= EXACT {
+        // Both exact: one IEEE division is the correctly rounded answer.
+        n as f64 / d as f64
+    } else {
+        if d > 1 << 64 {
+            return None;
+        }
+        // Scale the numerator so the quotient has at least 56 significant
+        // bits, then round to odd: the dropped remainder shows in the last
+        // bit, so the conversion's round-to-nearest cannot land on a tie the
+        // value has not earned. `n << shift` has at most `56 + bits(d)` ≤ 121
+        // bits, and the power-of-two scaling back is exact (the quotient is
+        // at least 2^55, so the result is far from subnormal).
+        let bits = |x: u128| 128 - x.leading_zeros();
+        let shift = (56 + bits(d)).saturating_sub(bits(n));
+        let scaled = n << shift;
+        let (q, r) = (scaled / d, scaled % d);
+        let q = if r != 0 { q | 1 } else { q };
+        q as f64 * 2f64.powi(-(shift as i32))
+    };
+    Some(if negative { -f } else { f })
+}
+
+/// The `i128` form of [`shift_by_exact`]'s arithmetic: an Integer or
+/// small-Rational offset of `sign * delta` seconds on a base whose
+/// fractional second has `i64` parts. Answers `(whole, rem, den)`: the
+/// offset plus the base's sub-nanosecond excess is `whole + rem / den`
+/// nanoseconds, with `0 <= rem < den`.
+fn shift_small(
+    globals: &Globals,
+    base: Value,
+    delta: Value,
+    sign: i8,
+) -> Option<(i128, i128, i128)> {
+    let (dn, dd) = small_exact_rational(delta)?;
+    let (bn, bd) = exact_subsec_small(globals, base)?;
+    let base_ns = base.as_time().nanosecond() as i128;
+    // excess = base_subsec * 1e9 - base_nsec, in [0, 1) nanoseconds. Zero —
+    // every time without a `/subsec` — needs no denominator at all.
+    let ex_num = bn
+        .checked_mul(NANOS_I128)?
+        .checked_sub(base_ns.checked_mul(bd)?)?;
+    let ex_den = if ex_num == 0 { 1 } else { bd };
+    // total = sign * delta * 1e9 + excess
+    let total_num = (sign as i128 * dn)
+        .checked_mul(NANOS_I128)?
+        .checked_mul(ex_den)?
+        .checked_add(ex_num.checked_mul(dd)?)?;
+    let total_den = dd.checked_mul(ex_den)?;
+    Some((
+        total_num.div_euclid(total_den),
+        total_num.rem_euclid(total_den),
+        total_den,
+    ))
 }
 
 /// Record `num / den` as `time`'s exact fractional second.
@@ -1665,19 +1773,74 @@ fn store_exact_subsec(
     num: num::BigInt,
     den: num::BigInt,
 ) -> Result<()> {
+    if let (Some(n), Some(d)) = (num.to_i128(), den.to_i128())
+        && d > 0
+    {
+        return store_exact_subsec_small(globals, time, n, d);
+    }
+    store_exact_subsec_big(globals, time, num, den)
+}
+
+/// [`store_exact_subsec`] for `num / den` with `den > 0`, in `i128`s.
+fn store_exact_subsec_small(
+    globals: &mut Globals,
+    time: Value,
+    num: i128,
+    den: i128,
+) -> Result<()> {
+    // Whole nanoseconds exactly when `num * 1e9 / den` is an integer —
+    // the same test as the reduced denominator dividing a billion.
+    let Some(scaled) = num.checked_mul(NANOS_I128) else {
+        return store_exact_subsec_big(globals, time, num.into(), den.into());
+    };
+    if scaled % den == 0 {
+        return clear_stale_subsec(globals, time);
+    }
+    let g = gcd_u128(num.unsigned_abs(), den as u128) as i128;
+    globals.store.set_ivar(
+        time,
+        IdentId::get_id(SUBSEC_IVAR),
+        Value::rational(num / g, den / g),
+    )
+}
+
+fn store_exact_subsec_big(
+    globals: &mut Globals,
+    time: Value,
+    num: num::BigInt,
+    den: num::BigInt,
+) -> Result<()> {
     use num::Integer;
     let g = num.gcd(&den);
     let (num, den) = (num / &g, den / &g);
     // A denominator that divides a billion is a whole number of
     // nanoseconds, which the `DateTime` alongside already states.
     if num::BigInt::from(1_000_000_000i64) % &den == num::BigInt::from(0) {
-        return Ok(());
+        return clear_stale_subsec(globals, time);
     }
     globals.store.set_ivar(
         time,
         IdentId::get_id(SUBSEC_IVAR),
         Value::rational(num, den),
     )
+}
+
+/// A fractional second that is a whole number of nanoseconds leaves no
+/// `/subsec`: the `DateTime` states it. One may be there all the same,
+/// copied from the base by [`derived_time`] (which keeps it when the
+/// nanoseconds match), and it would outlive a sub-nanosecond part that has
+/// since cancelled out — `Time.at(0, Rational(1, 3), :nanosecond) +
+/// Rational(-1, 3_000_000_000)` kept a `subsec` of `(1/3000000000)`.
+fn clear_stale_subsec(globals: &mut Globals, time: Value) -> Result<()> {
+    let id = IdentId::get_id(SUBSEC_IVAR);
+    if globals
+        .store
+        .get_ivar(time, id)
+        .is_some_and(|v| !v.is_nil())
+    {
+        globals.store.set_ivar(time, id, Value::nil())?;
+    }
+    Ok(())
 }
 
 /// Read the epoch seconds of a Time-like value (a `Time`, a `Time`
@@ -2660,7 +2823,7 @@ fn time_month_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resu
 fn arg_exact_fraction(v: Value) -> Option<(num::BigInt, num::BigInt)> {
     use num::Integer;
     let (num, den) = if let Some(r) = v.try_rational() {
-        (r.num().clone(), r.den().clone())
+        (r.num().to_bigint(), r.den().to_bigint())
     } else if let Some(f) = v.try_float() {
         let q = num::BigRational::from_float(f)?;
         (q.numer().clone(), q.denom().clone())
@@ -2704,11 +2867,11 @@ fn time_sec_to_i64_nsec(vm: &mut Executor, globals: &mut Globals, v: Value) -> R
 /// truncate at ~16 significant digits).
 fn rational_split_sec_nsec(r: &RationalInner) -> (i64, u32) {
     use num::Integer;
-    let num = r.num();
-    let den = r.den();
-    let (sec_big, rem) = num.div_mod_floor(den);
+    let num = r.num().to_bigint();
+    let den = r.den().to_bigint();
+    let (sec_big, rem) = num.div_mod_floor(&den);
     let secs = sec_big.to_i64().unwrap_or(0);
-    let nsec_big = (&rem * num::BigInt::from(1_000_000_000i64)) / den;
+    let nsec_big = (&rem * num::BigInt::from(1_000_000_000i64)) / &den;
     let nsec = nsec_big.to_i64().unwrap_or(0).clamp(0, 999_999_999) as u32;
     (secs, nsec)
 }
@@ -2750,7 +2913,7 @@ fn num_exact_rational(
     match v.unpack() {
         RV::Fixnum(n) => return Ok((BigInt::from(n), BigInt::from(1))),
         RV::BigInt(n) => return Ok((n.clone(), BigInt::from(1))),
-        RV::Rational(r) => return Ok((r.num().clone(), r.den().clone())),
+        RV::Rational(r) => return Ok((r.num().to_bigint(), r.den().to_bigint())),
         _ => {}
     }
     // String / nil are never coerced (even a numeric-looking string).
@@ -2766,7 +2929,7 @@ fn num_exact_rational(
         }
         let r = vm.invoke_method_inner(globals, to_r, v, &[], None, None)?;
         if let RV::Rational(rr) = r.unpack() {
-            return Ok((rr.num().clone(), rr.den().clone()));
+            return Ok((rr.num().to_bigint(), rr.den().to_bigint()));
         }
         if let Some(x) = int_ratio(r) {
             return Ok(x);
@@ -2794,9 +2957,9 @@ fn time_usec_to_nsec(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resu
     }
     if let Some(r) = v.try_rational() {
         use num::Integer;
-        let num = r.num() * num::BigInt::from(1_000i64);
-        let den = r.den();
-        let val = num.div_floor(den).to_i64().unwrap_or(-1);
+        let num = r.num().to_bigint() * num::BigInt::from(1_000i64);
+        let den = r.den().to_bigint();
+        let val = num.div_floor(&den).to_i64().unwrap_or(-1);
         return Ok(u32::try_from(val).ok());
     }
     let i = time_arg_to_i64(vm, globals, v)?;
@@ -3736,6 +3899,11 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// ### Time#to_f
 #[monoruby_builtin]
 fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    if let Some((num, den)) = exact_instant_small(globals, lfp.self_val())
+        && let Some(f) = small_ratio_to_f64(num, den)
+    {
+        return Ok(Value::float(f));
+    }
     let (num, den) = exact_instant_parts(globals, lfp.self_val());
     Ok(Value::float(bigint_ratio_to_f64(&num, &den)))
 }
@@ -3789,6 +3957,34 @@ fn shift_by_exact(
     delta: Value,
     sign: i8,
 ) -> Result<Value> {
+    if let Some((whole, rem, total_den)) = shift_small(globals, base, delta, sign) {
+        let whole_ns =
+            i64::try_from(whole).map_err(|_| MonorubyErr::argumenterr("out of Time range"))?;
+        let inner = base.as_time().clone() + chrono::Duration::nanoseconds(whole_ns);
+        let derived = derived_time(globals, base, inner)?;
+        if rem == 0 {
+            clear_stale_subsec(globals, derived)?;
+        } else {
+            // The result's own sub-second value: its nanoseconds, plus the
+            // remainder that did not reach one.
+            let res_ns = derived.as_time().nanosecond() as i128;
+            match res_ns
+                .checked_mul(total_den)
+                .and_then(|n| n.checked_add(rem))
+                .zip(NANOS_I128.checked_mul(total_den))
+            {
+                Some((num, den)) => store_exact_subsec_small(globals, derived, num, den)?,
+                None => store_exact_subsec_big(
+                    globals,
+                    derived,
+                    num::BigInt::from(res_ns) * num::BigInt::from(total_den)
+                        + num::BigInt::from(rem),
+                    num::BigInt::from(NANOS_I128) * num::BigInt::from(total_den),
+                )?,
+            }
+        }
+        return Ok(derived);
+    }
     use num::Integer;
     let (dn, dd) = num_exact_rational(vm, globals, delta)?;
     // The offset in nanoseconds, exactly: `delta * 1e9`, plus whatever
@@ -3834,6 +4030,18 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     {
         // The difference is computed exactly and only then made a
         // Float, so a sub-nanosecond part on either side counts.
+        if let (Some((ln, ld)), Some((rn, rd))) = (
+            exact_instant_small(globals, self_),
+            exact_instant_small(globals, rhs_rv),
+        ) && let Some(num) = ln
+            .checked_mul(rd)
+            .zip(rn.checked_mul(ld))
+            .and_then(|(a, b)| a.checked_sub(b))
+            && let Some(den) = ld.checked_mul(rd)
+            && let Some(f) = small_ratio_to_f64(num, den)
+        {
+            return Ok(Value::float(f));
+        }
         let (ln, ld) = exact_instant_parts(globals, self_);
         let (rn, rd) = exact_instant_parts(globals, rhs_rv);
         let num = &ln * &rd - &rn * &ld;
@@ -4001,6 +4209,13 @@ fn time_cmp_opt(globals: &Globals, self_: Value, other: Value) -> Option<std::cm
     }
     // The exact instants, so two times that differ only below the
     // nanosecond do not compare equal.
+    if let (Some((ln, ld)), Some((rn, rd))) = (
+        exact_instant_small(globals, self_),
+        exact_instant_small(globals, other),
+    ) && let (Some(a), Some(b)) = (ln.checked_mul(rd), rn.checked_mul(ld))
+    {
+        return Some(a.cmp(&b));
+    }
     let (ln, ld) = exact_instant_parts(globals, self_);
     let (rn, rd) = exact_instant_parts(globals, other);
     Some((ln * rd).cmp(&(rn * ld)))
@@ -5628,6 +5843,80 @@ mod tests {
             "o = Time.at(123456789); b = Time.at(o); [b == o, b.to_i]",
             // `Time.at(Time, usec)` is a TypeError (bug #8173).
             "begin; Time.at(Time.now, 500000); :no; rescue TypeError; :te; end",
+        ]);
+    }
+
+    /// `small_ratio_to_f64` must give exactly `bigint_ratio_to_f64`'s answer
+    /// wherever it answers at all: both claim the correctly rounded quotient.
+    #[test]
+    fn small_ratio_to_f64_matches_bigint() {
+        use super::{bigint_ratio_to_f64, small_ratio_to_f64};
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut checked = 0;
+        let fixed: &[(i128, i128)] = &[
+            (0, 1),
+            (1, 3),
+            (-1, 3),
+            (1_700_000_000_123_456_789, 1_000_000_000),
+            (-1_700_000_000_123_456_789, 1_000_000_000),
+            (1 << 53, 1),
+            ((1 << 53) + 1, 1),
+            ((1 << 54) + 1, 2),
+            (i64::MAX as i128 * 1_000_000_000, 1_000_000_000_000_000_000),
+            (1, 1 << 64),
+            (i128::MAX / 3, 1 << 64),
+            (-(i128::MAX / 5), (1 << 64) - 1),
+            (3, (1 << 64) - 59),
+        ];
+        let mut cases: Vec<(i128, i128)> = fixed.to_vec();
+        for _ in 0..200_000 {
+            let nbits = next() % 127;
+            let dbits = next() % 66;
+            let n = ((next() as u128) << 64 | next() as u128) >> (127 - nbits);
+            let d = (((next() as u128) << 64 | next() as u128) >> (128 - dbits.max(1))).max(1);
+            let n = if next() & 1 == 0 {
+                n as i128
+            } else {
+                -(n as i128)
+            };
+            cases.push((n, d as i128));
+        }
+        for (n, d) in cases {
+            if let Some(f) = small_ratio_to_f64(n, d) {
+                let expected = bigint_ratio_to_f64(&num::BigInt::from(n), &num::BigInt::from(d));
+                assert_eq!(
+                    f.to_bits(),
+                    expected.to_bits(),
+                    "{n} / {d}: {f} vs {expected}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 150_000, "only {checked} cases took the fast path");
+    }
+
+    /// The i128 paths of `Time#+` / `#-`, `Time - Time`, `#to_f` and `#<=>`,
+    /// and a sub-nanosecond part that cancels out: the copy of the base's
+    /// `/subsec` must not survive it.
+    #[test]
+    fn time_exact_subsec_fast_paths() {
+        run_tests(&[
+            "(t = Time.at(0, Rational(1, 3), :nanosecond); u = t + Rational(-1, 3_000_000_000); [u.subsec, u.nsec, u == Time.at(0), u.to_r]).inspect",
+            "(w = Time.at(5, Rational(2, 3), :nanosecond) - Rational(2, 3_000_000_000); [w.subsec, w.to_r, w == Time.at(5)]).inspect",
+            "(t = Time.at(0, Rational(1, 3), :nanosecond); [(t + 1).subsec, (t + 1).to_r, (t + Rational(1, 7)).to_r, (t - Rational(2, 7)).subsec]).inspect",
+            "(t = Time.at(1_700_000_000, 123_456_789, :nsec); [(t + 1).nsec, (t - 1).to_r, (t + Rational(1, 3)).subsec, (t + Rational(-5, 4)).to_r, (t + 86400 * 365).year]).inspect",
+            "(t = Time.at(1_700_000_000, 123_456_789, :nsec); [(t + 0.25).nsec, (t + 0.1).subsec, (t - 1e-10).to_r]).inspect",
+            "(t = Time.at(1_700_000_000, 123_456_789, :nsec); [(t + Rational(2**32, 3)).to_r, (t + 2**32).year, (t + Rational(1, 2**62)).subsec, (t + Rational(1, 2**62) - Rational(1, 2**62)).subsec]).inspect",
+            "(a = Time.at(1_700_000_000, 123_456_789, :nsec); b = Time.at(1_600_000_000, 987_654_321, :nsec); [a - b, b - a, a - a, a.to_f, a <=> b, b <=> a, a <=> a]).inspect",
+            "(a = Time.at(0, Rational(1, 3), :nanosecond); b = Time.at(0, Rational(2, 7), :nanosecond); [a - b, a <=> b, b <=> a, a.to_f, a == Time.at(0)]).inspect",
+            "(a = Time.at(-1_000_000_000, 5, :nsec); b = Time.at(2**35, 7, :nsec); [a - b, b - a, a.to_f, b.to_f, a <=> b]).inspect",
+            "(a = Time.at(1_700_000_000.5); [a.to_f, a - Time.at(1_700_000_000), (a + Rational(1, 2)).to_i]).inspect",
         ]);
     }
 }

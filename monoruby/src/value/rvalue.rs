@@ -33,7 +33,8 @@ pub use module::{
 };
 pub use proc::*;
 pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, RangeInner};
-pub use rational::{RationalFloorResult, RationalInner};
+pub use rational::{IntegerRepr, RationalFloorResult, RationalInner};
+pub(crate) use rational::gcd_u128;
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use regexp::{Spans, Subject, save_spans, spans_of};
 pub(crate) use string::pack::*;
@@ -257,7 +258,9 @@ pub union ObjKind {
     generator: ManuallyDrop<GeneratorInner>,
     binding: ManuallyDrop<BindingInner>,
     matchdata: ManuallyDrop<MatchDataInner>,
-    rational: ManuallyDrop<Box<RationalInner>>,
+    /// Inline, not boxed: two `IntegerRepr`s (32 bytes), so a Rational whose
+    /// parts fit in an `i64` costs the cell and nothing else.
+    rational: ManuallyDrop<RationalInner>,
     /// Slot-array storage for `Struct` subclass instances. Stored
     /// directly (not boxed) so up to `STRUCT_INLINE_SLOTS` members
     /// live inline in this union -- the JIT reuses the existing
@@ -594,7 +597,7 @@ impl ObjKind {
 
     fn rational(inner: RationalInner) -> Self {
         Self {
-            rational: ManuallyDrop::new(Box::new(inner)),
+            rational: ManuallyDrop::new(inner),
         }
     }
 
@@ -1259,8 +1262,9 @@ impl alloc::GCBox for RValue {
             | ObjTy::TIME
             | ObjTy::REGEXP
             | ObjTy::UMETHOD
-            // `RationalInner` is a pair of Rust `BigInt`s — its `mark` is a
-            // no-op, so it belongs with the reference-free kinds above.
+            // `RationalInner` is a pair of Rust integers (`i64` or boxed
+            // `BigInt`) — its `mark` is a no-op, so it belongs with the
+            // reference-free kinds above.
             | ObjTy::RATIONAL
             // Range and Complex do hold `Value`s, but every store into one
             // is accounted for: a Range is written only by
@@ -1763,7 +1767,7 @@ impl RValue {
                         ObjTy::COMPLEX => ObjKind {
                             complex: ManuallyDrop::new(self.kind.complex.dup()),
                         },
-                        ObjTy::RATIONAL => ObjKind::rational((**self.kind.rational).clone()),
+                        ObjTy::RATIONAL => ObjKind::rational((*self.kind.rational).clone()),
                         ObjTy::STRING => ObjKind {
                             string: self.kind.string.clone(),
                         },
@@ -1886,7 +1890,7 @@ impl RValue {
                         ObjTy::COMPLEX => ObjKind {
                             complex: ManuallyDrop::new(self.kind.complex.dup()),
                         },
-                        ObjTy::RATIONAL => ObjKind::rational((**self.kind.rational).clone()),
+                        ObjTy::RATIONAL => ObjKind::rational((*self.kind.rational).clone()),
                         ObjTy::STRING => ObjKind {
                             string: self.kind.string.clone(),
                         },

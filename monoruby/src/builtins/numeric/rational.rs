@@ -105,8 +105,7 @@ fn to_f(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 
 #[monoruby_builtin]
 fn to_i(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let i = self_rat(lfp).to_i();
-    Ok(Value::bigint(i))
+    Ok(self_rat(lfp).to_i().to_value())
 }
 
 #[monoruby_builtin]
@@ -128,9 +127,9 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     }
     match rhs.unpack() {
         RV::Fixnum(i) => Ok(Value::bool(
-            lhs.den() == &BigInt::from(1) && lhs.num() == &BigInt::from(i),
+            lhs.den().is_one() && *lhs.num() == IntegerRepr::Small(i),
         )),
-        RV::BigInt(b) => Ok(Value::bool(lhs.den() == &BigInt::from(1) && lhs.num() == b)),
+        RV::BigInt(b) => Ok(Value::bool(lhs.den().is_one() && lhs.num().eq_bigint(b))),
         RV::Float(f) => Ok(Value::bool(lhs.to_f() == f)),
         _ => {
             // Reverse dispatch
@@ -151,7 +150,7 @@ fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     }
     match rhs.unpack() {
         RV::Fixnum(i) => Ok(Value::bool(
-            !(lhs.den() == &BigInt::from(1) && lhs.num() == &BigInt::from(i)),
+            !(lhs.den().is_one() && *lhs.num() == IntegerRepr::Small(i)),
         )),
         RV::Float(f) => Ok(Value::bool(lhs.to_f() != f)),
         _ => Ok(Value::bool(true)),
@@ -385,8 +384,8 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 if lhs.is_zero() && r.is_negative() {
                     return Err(MonorubyErr::divide_by_zero());
                 }
-                if *r.den() == BigInt::from(1) {
-                    return pow_by_integer(&lhs, r.num());
+                if r.den().is_one() {
+                    return pow_by_integer(&lhs, &r.num().to_bigint());
                 }
                 let base = lhs.to_f();
                 let exp = r.to_f();
@@ -440,8 +439,8 @@ fn pow_by_integer(lhs: &RationalInner, exp: &BigInt) -> Result<Value> {
         return Ok(Value::rational(0, 1));
     }
     // |lhs| == 1 shortcut: Rational(1) stays 1; Rational(-1) alternates.
-    let is_one = lhs.num() == &BigInt::from(1) && lhs.den() == &BigInt::from(1);
-    let is_neg_one = lhs.num() == &BigInt::from(-1) && lhs.den() == &BigInt::from(1);
+    let is_one = lhs.num().is_one() && lhs.den().is_one();
+    let is_neg_one = *lhs.num() == IntegerRepr::Small(-1) && lhs.den().is_one();
     if is_one {
         return Ok(Value::rational(1, 1));
     }
@@ -460,13 +459,13 @@ fn pow_by_integer(lhs: &RationalInner, exp: &BigInt) -> Result<Value> {
     };
     if exp_i64 >= 0 {
         let e = exp_i64 as u32;
-        let n = lhs.num().pow(e);
-        let d = lhs.den().pow(e);
+        let n = lhs.num().to_bigint().pow(e);
+        let d = lhs.den().to_bigint().pow(e);
         Ok(Value::rational(n, d))
     } else {
         let e = (-exp_i64) as u32;
-        let n = lhs.den().pow(e);
-        let d = lhs.num().pow(e);
+        let n = lhs.den().to_bigint().pow(e);
+        let d = lhs.num().to_bigint().pow(e);
         Ok(Value::rational(n, d))
     }
 }
@@ -482,7 +481,7 @@ fn coerce_ndigits(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
 /// Convert RationalFloorResult to Value.
 fn floor_result_to_value(r: rvalue::RationalFloorResult) -> Value {
     match r {
-        rvalue::RationalFloorResult::Integer(i) => Value::bigint(i),
+        rvalue::RationalFloorResult::Integer(i) => i.to_value(),
         rvalue::RationalFloorResult::Rational(r) => Value::rational_from_inner(r),
     }
 }
@@ -844,6 +843,52 @@ mod tests {
             // marshal_dump is a private instance method returning [num, den].
             "Rational.private_instance_methods(false).include?(:marshal_dump)",
             "Rational(3, 5).send(:marshal_dump)",
+        ]);
+    }
+
+    /// The `i64` fast path and its hand-off to BigInt: operands at the edge
+    /// of `i64`, results that overflow it, BigInt results that come back
+    /// into range, and equality / hashing across the two forms.
+    #[test]
+    fn rational_small_big_boundaries() {
+        run_tests(&[
+            "(Rational(2**63 - 1, 1) + Rational(1, 1)).inspect",
+            "(Rational(-(2**63), 1) - Rational(1, 1)).inspect",
+            "(-Rational(-(2**63), 1)).inspect",
+            "(Rational(-(2**63), -1)).inspect",
+            "(Rational(-(2**63), 3).abs).inspect",
+            "(Rational(2**62, 3) + Rational(2**62, 5)).inspect",
+            "(Rational(2**62, 3) * Rational(2**62, 5)).inspect",
+            "(Rational(2**63 - 1, 2**63 - 2) / Rational(2**63 - 2, 2**63 - 1)).inspect",
+            "(Rational(2**63 - 1, 2**63 - 2) <=> Rational(2**63 - 2, 2**63 - 3)).inspect",
+            "(Rational(1, 2**63 - 1) - Rational(1, 2**63 - 2)).inspect",
+            "(Rational(2**70, 2**68)).inspect",
+            "(Rational(2**70, 2**68) == Rational(4, 1)).inspect",
+            "(Rational(2**70, 2**68).eql?(Rational(4, 1))).inspect",
+            "(Rational(2**70, 2**68).hash == Rational(4, 1).hash).inspect",
+            "({ Rational(2**70, 2**68) => :x }[Rational(4, 1)]).inspect",
+            "((Rational(2**64, 3) - Rational(2**64, 3) + Rational(1, 2)).numerator.class).inspect",
+            "(Rational(2**62, 1).numerator).inspect",
+            "(Rational(2**62, 1) == 2**62).inspect",
+            "(Rational(2**63, 1) == 2**63).inspect",
+            "(Rational(2**53 + 1, 3).to_f).inspect",
+            "(Rational(3, 2**53 + 1).to_f).inspect",
+            "(Rational(2**63 - 1, 3).to_f).inspect",
+            "(Rational(-(2**63), 7).to_i).inspect",
+            "(Rational(-(2**63), 7).floor).inspect",
+            "(Rational(-(2**63), 7).ceil).inspect",
+            "(Rational(-(2**63), 7).round).inspect",
+            "(Rational(-7, 4).round).inspect",
+            "(Rational(-7, 4).round(half: :even)).inspect",
+            "(Rational(-7, 4).round(half: :down)).inspect",
+            "(Rational(-5, 2).round(half: :even)).inspect",
+            "(Rational(-7 * 10**30, 4 * 10**30).round).inspect",
+            "(Rational(-13, 10**20 + 7).round).inspect",
+            "(Rational(123456789, 1_000_000_000) ** 3).inspect",
+            "(Rational(2**40, 3) ** 2).inspect",
+            "(Time.at(1_700_000_000, 123456789, :nsec).subsec).inspect",
+            "((Time.at(1_700_000_000, 123456789, :nsec) + Rational(1, 3)).subsec).inspect",
+            "(Complex(6, 8) / 4).inspect",
         ]);
     }
 }
