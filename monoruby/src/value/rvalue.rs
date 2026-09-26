@@ -34,6 +34,7 @@ pub use module::{
 pub use proc::*;
 pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, RangeInner};
 pub use rational::{IntegerRepr, RationalFloorResult, RationalInner};
+pub(crate) use rational::gcd_u128;
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use regexp::{Spans, Subject, save_spans, spans_of};
 pub(crate) use string::pack::*;

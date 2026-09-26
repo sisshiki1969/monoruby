@@ -130,6 +130,12 @@ impl From<u64> for IntegerRepr {
     }
 }
 
+impl From<i128> for IntegerRepr {
+    fn from(i: i128) -> Self {
+        IntegerRepr::from_i128(i)
+    }
+}
+
 impl From<BigInt> for IntegerRepr {
     fn from(b: BigInt) -> Self {
         IntegerRepr::from_bigint(b)
@@ -146,7 +152,7 @@ impl From<&BigInt> for IntegerRepr {
 }
 
 /// Greatest common divisor (binary / Stein's algorithm).
-fn gcd_u128(mut a: u128, mut b: u128) -> u128 {
+pub(crate) fn gcd_u128(mut a: u128, mut b: u128) -> u128 {
     if a == 0 {
         return b;
     }
