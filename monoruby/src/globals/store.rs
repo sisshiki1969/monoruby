@@ -203,7 +203,11 @@ pub struct Store {
     /// `Store` outlives any single compilation. Matches CRuby's behaviour
     /// where `"abc".equal?("abc")` is true under the magic comment. Rooted
     /// for GC in [`Store::mark`].
-    frozen_str_pool: HashMap<(Vec<u8>, crate::value::Encoding), Value>,
+    ///
+    /// Split by encoding first so the inner map is keyed by the bytes alone
+    /// and can be probed with a borrowed `&[u8]`: a hit (every `String#-@`
+    /// on an already pooled string) allocates nothing.
+    frozen_str_pool: HashMap<crate::value::Encoding, HashMap<Box<[u8]>, Value>>,
     /// Interned refinement sets, the union of refined method names, and
     /// the "any refinement exists" gate. See `globals/store/refinement.rs`
     /// and `doc/refinements.md` §6.
@@ -375,7 +379,10 @@ impl alloc::GC<RValue> for Store {
             }
         }
         self.classes.table.iter().for_each(|info| info.mark(alloc));
-        self.frozen_str_pool.values().for_each(|v| v.mark(alloc));
+        self.frozen_str_pool
+            .values()
+            .flat_map(|pool| pool.values())
+            .for_each(|v| v.mark(alloc));
     }
 }
 
@@ -742,13 +749,35 @@ impl Store {
     /// different file) resolve to the same object.
     ///
     pub(crate) fn intern_frozen_str(&mut self, bytes: &[u8], enc: crate::value::Encoding) -> Value {
-        if let Some(v) = self.frozen_str_pool.get(&(bytes.to_vec(), enc)) {
+        let pool = self.frozen_str_pool.entry(enc).or_default();
+        if let Some(v) = pool.get(bytes) {
             return *v;
         }
         let mut v = Value::string_from_source_bytes(bytes, enc);
         v.set_frozen();
-        self.frozen_str_pool.insert((bytes.to_vec(), enc), v);
+        pool.insert(bytes.into(), v);
         v
+    }
+
+    ///
+    /// [`Store::intern_frozen_str`] for *s*, a frozen, bare `String` whose
+    /// content is `(bytes, enc)`: when no equal string is pooled yet, *s*
+    /// itself becomes the pooled one instead of a copy of it, as CRuby's
+    /// `rb_fstring` registers an already frozen receiver.
+    ///
+    pub(crate) fn intern_frozen_string(
+        &mut self,
+        s: Value,
+        bytes: &[u8],
+        enc: crate::value::Encoding,
+    ) -> Value {
+        debug_assert!(s.is_frozen());
+        let pool = self.frozen_str_pool.entry(enc).or_default();
+        if let Some(v) = pool.get(bytes) {
+            return *v;
+        }
+        pool.insert(bytes.into(), s);
+        s
     }
 
     pub fn iseq(&self, func_id: FuncId) -> &ISeqInfo {
