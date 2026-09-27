@@ -547,7 +547,7 @@ pub struct Globals {
     #[cfg(feature = "profile")]
     jit_class_unmatched_stats: HashMap<(FuncId, ClassId), usize>,
     #[cfg(feature = "profile")]
-    jit_recompile_count: HashMap<(FuncId, ClassId, RecompileReason), usize>,
+    jit_recompile_count: HashMap<(FuncId, Option<ClassId>, RecompileReason), usize>,
     #[cfg(feature = "emit-bc")]
     dumped_bc: usize,
 }
@@ -2086,7 +2086,7 @@ impl Globals {
     pub fn countup_recompile(
         &mut self,
         func_id: FuncId,
-        class_id: ClassId,
+        class_id: Option<ClassId>,
         reason: &RecompileReason,
     ) {
         match self
