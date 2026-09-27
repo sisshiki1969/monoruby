@@ -737,27 +737,10 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
 pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
     globals: &mut Globals,
-    mut lfp: Lfp,
+    lfp: Lfp,
     pc: BytecodePtr,
 ) -> Option<Value> {
-    let op = pc.op1();
-    let outer = (op >> 16) as u16;
-    let slot = SlotId::new(op as u16);
-    for _ in 0..outer {
-        lfp = lfp.outer().unwrap();
-    }
-    if slot.0 != 0
-        && let Some(v) = lfp.register(slot)
-    {
-        return Some(v);
-    }
-    match vm.block_param_proc(globals, lfp, pc) {
-        Ok(v) => Some(v),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
+    block_param(vm, globals, lfp, pc, false)
 }
 
 /// `BlockArgProxy` with `outer > 0`: the `&block` parameter of the frame
@@ -768,8 +751,18 @@ pub(super) extern "C" fn block_arg(
 pub(super) extern "C" fn block_arg_forward(
     vm: &mut Executor,
     globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Option<Value> {
+    block_param(vm, globals, lfp, pc, true)
+}
+
+fn block_param(
+    vm: &mut Executor,
+    globals: &mut Globals,
     mut lfp: Lfp,
     pc: BytecodePtr,
+    forward: bool,
 ) -> Option<Value> {
     let op = pc.op1();
     let outer = (op >> 16) as u16;
@@ -782,7 +775,12 @@ pub(super) extern "C" fn block_arg_forward(
     {
         return Some(v);
     }
-    match vm.forward_block_param(globals, lfp, pc) {
+    let res = if forward {
+        vm.forward_block_param(globals, lfp, pc)
+    } else {
+        vm.block_param_proc(globals, lfp, pc)
+    };
+    match res {
         Ok(v) => Some(v),
         Err(err) => {
             vm.set_error(err);

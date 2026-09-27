@@ -4705,22 +4705,18 @@ impl Executor {
         };
         let mut hops = 0usize;
         let mut cur = (&*self, self.cfp());
-        loop {
-            if cur.1.lfp() == lfp {
-                // +1: the callee's frame, whose previous frame is this one.
-                let depth = depth as usize + hops + 1;
-                if depth <= u16::MAX as usize {
-                    return Ok(BlockHandler::from_proxy(fid, depth as u16).get());
-                }
-                break;
-            }
+        while cur.1.lfp() != lfp {
             hops += 1;
-            match Executor::try_prev_cfp(cur.0, cur.1) {
-                Some(prev) => cur = prev,
-                None => break,
-            }
+            let Some(prev) = Executor::try_prev_cfp(cur.0, cur.1) else {
+                return self.block_param_proc(globals, lfp, pc);
+            };
+            cur = prev;
         }
-        self.block_param_proc(globals, lfp, pc)
+        // +1: the callee's frame, whose previous frame is this one.
+        match u16::try_from(depth as usize + hops + 1) {
+            Ok(depth) => Ok(BlockHandler::from_proxy(fid, depth).get()),
+            Err(_) => self.block_param_proc(globals, lfp, pc),
+        }
     }
 
     /// The block of the frame `lfp` as a value: `nil` without a block,
