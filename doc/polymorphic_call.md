@@ -464,6 +464,12 @@ unboxed Float / Fixnum ローカル)、`mono_guard_generic_residual`。
 - **フレーム**: self スロットは `Guarded::Value` で始まり(`self_ty` は
   `None`)、self への呼び出しは普通のレシーバと同じく IC / PIC / generic send
   を通る。ブロックへ渡る self も同じく未知になる。
+- **super**: self のクラスが不明なので `super` の飛び先はコンパイル時に
+  決まらない。メソッド本体に直接書かれた `super` は generic send の残余を
+  使い、`runtime::find_super` が VM と同じくフレームから解決する(祖先に
+  同じ本体が複数回現れる場合も含む)。ブロック内の `super` と `(...)` を
+  受けるメソッドの zsuper は対象外。これがないと、アーム外のクラスで毎回
+  deopt していた(lobsters N=5 で定常 1 反復あたり約 4.4k 回)。
 - **ivar**: `LoadIVarGeneric` / `StoreIVarGeneric` が
   `runtime::generic_{get,set}_ivar` を呼ぶ。スロットは (ClassId, 名前) を
   キーにした 4096 エントリの直接写像表で引く。クラスごとの `IvarId` は一度

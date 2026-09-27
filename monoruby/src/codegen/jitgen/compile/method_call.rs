@@ -221,15 +221,33 @@ impl<'a> JitContext<'a> {
     /// Can *callid* take a generic send (`AsmInst::GenericSend`) as the
     /// residual arm of a receiver dispatch?
     ///
-    /// A named call site only — a `super` target can depend on the frame,
-    /// not just the receiver — with no literal block (handing one out needs
-    /// the outgoing-block treatment of the frame's locals, which the
-    /// residual does not give) and no `(...)` forwarding (the lazy
-    /// forwarding marker is the specialized binder's business).
+    /// No literal block (handing one out needs the outgoing-block treatment
+    /// of the frame's locals, which the residual does not give). A named
+    /// site must not be a `(...)` forwarding one (the lazy forwarding
+    /// marker is the specialized binder's business).
+    ///
+    /// A `super` site qualifies when written in the method body itself.
+    /// Its target depends on the frame, not just the receiver, and the run
+    /// time resolves it from the frame the way the VM does
+    /// (`runtime::find_super` reads the current method and how it was
+    /// entered), so that frame has to be the real one of the method whose
+    /// `super` this is: a block's `super` resolves against its home method
+    /// instead. The method must not take `(...)` either: a zsuper
+    /// forwards its parameters, and there the rest may be a lazy marker.
     ///
     pub(super) fn generic_send_eligible(&self, callid: CallSiteId) -> bool {
         let callsite = &self.store[callid];
-        callsite.name.is_some() && callsite.block_fid.is_none() && !callsite.forwarding
+        if callsite.block_fid.is_some() {
+            return false;
+        }
+        match callsite.name {
+            Some(_) => !callsite.forwarding,
+            None => {
+                let iseq_id = self.iseq_id();
+                self.store[iseq_id].mother().0 == iseq_id
+                    && !self.store[self.func_id()].params().forwarding()
+            }
+        }
     }
 
     ///

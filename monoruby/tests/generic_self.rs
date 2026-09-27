@@ -98,3 +98,88 @@ fn generic_body_blocks_and_self_calls() {
         "##,
     );
 }
+
+/// `super` in a generic body: its target depends on self's ancestry, so
+/// the body resolves it at run time (a generic send) instead of deopting
+/// on every class outside its dispatch arms. The module sits over bases
+/// whose `init` differ, and some classes insert a second module between,
+/// so the same `super` reaches different targets. zsuper forwards the
+/// parameters (optional and rest included); explicit `super(...)` and a
+/// block passed through ride along.
+#[test]
+fn generic_body_super_resolves_per_receiver() {
+    enable();
+    run_test(
+        r##"
+        class BaseA
+          def init(a, b = 10, *r); @log = [:a, a, b, r]; yield(a) if block_given?; self; end
+          def pick(x) = [:a, x]
+        end
+        class BaseB
+          def init(a, b = 20, *r); @log = [:b, a, b, r]; self; end
+          def pick(x) = [:b, x * 2]
+        end
+        module Mid
+          def init(a, b = 30, *r); super; @log << :mid; self; end
+          def pick(x) = super(x + 100)
+        end
+        module M
+          def init(a, b = 40, *r)
+            @m = a
+            super
+            @log << :m
+            self
+          end
+          def pick(x) = super(x) + [:m]
+          def log = @log
+        end
+        classes = 8.times.map do |i|
+          base = i.even? ? BaseA : BaseB
+          Class.new(base) do
+            include Mid if i % 3 == 0
+            include M
+          end
+        end
+        res = []
+        seen = 0
+        200.times do |k|
+          c = classes[k % classes.size]
+          o = c.new
+          o.init(k, k + 1, k + 2) { |v| seen += v }
+          res << o.log
+          res << o.pick(k)
+          res << c.new.init(k).log
+        end
+        [res.last(48), seen, res.size]
+        "##,
+    );
+}
+
+/// A method whose own body appears twice in the receiver's ancestry
+/// (included at two levels): each `super` reaches the next occurrence, so
+/// the target depends on the frame, never just the class.
+#[test]
+fn generic_body_super_repeated_ancestor() {
+    enable();
+    run_test(
+        r##"
+        module Twice
+          def depth(n) = n > 5 ? [:end] : [n] + super(n + 1)
+        end
+        class Root
+          def depth(n) = [:root, n]
+        end
+        classes = 6.times.map do |i|
+          mid = Class.new(Root) { include Twice }
+          Class.new(mid) do
+            define_method(:tag) { i }
+            prepend(Module.new { def depth(n) = [:p] + super })
+            include Twice if i.odd?
+          end
+        end
+        out = []
+        300.times { |k| out << classes[k % classes.size].new.depth(0) }
+        out.last(12)
+        "##,
+    );
+}
