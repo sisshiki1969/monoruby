@@ -1136,25 +1136,6 @@ pub(in crate::codegen) enum LInst {
         error: DestLabel,
         evict: AsmEvict,
     },
-    GuardSendResolvable {
-        callid: CallSiteId,
-        recv: SlotId,
-        using_fpr: UsingFpr,
-        cache: u64,
-        deopt: DestLabel,
-    },
-    GenericSend {
-        callid: CallSiteId,
-        recv: SlotId,
-        cache: u64,
-        /// `(args, pos_num)` of a statically simple call site (plain
-        /// positional arguments), whose arguments are copied straight into
-        /// a simple callee's frame; `None` binds everything at run time.
-        simple_args: Option<(SlotId, usize)>,
-        error: DestLabel,
-        evict: AsmEvict,
-        pc: BytecodePtr,
-    },
     Unreachable,
     RestKw {
         table: DestLabel,

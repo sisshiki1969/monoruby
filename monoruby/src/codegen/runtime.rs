@@ -125,6 +125,69 @@ pub(super) extern "C" fn find_method(
 }
 
 ///
+/// The one-entry inline cache of a JIT generic send: the receiver class
+/// (the inline-cache tag `runtime::find_method` answers), the VM class
+/// version it was resolved under, and the admitted target. Heap-leaked per
+/// compiled send, so its address can be baked into the code on both arches.
+/// `class == 0` (never a valid `ClassId`) is the empty cache.
+///
+#[repr(C)]
+#[derive(Default)]
+pub(crate) struct GenericSendCache {
+    pub class: u32,
+    pub version: u32,
+    pub fid: u32,
+    _pad: u32,
+}
+
+pub(crate) const GENERIC_SEND_CACHE_VERSION: i32 =
+    std::mem::offset_of!(GenericSendCache, version) as i32;
+pub(crate) const GENERIC_SEND_CACHE_FID: i32 = std::mem::offset_of!(GenericSendCache, fid) as i32;
+
+///
+/// The admission test of a JIT generic send (`AsmInst::GuardSendResolvable`),
+/// on a miss of its inline cache: may the compiled residual call whatever
+/// *recv*'s class resolves this call site's name to?
+///
+/// Answers `0` — deopt, and let the VM run the call — when the name does
+/// not resolve, or resolves to a method this call site's visibility blocks
+/// (both are the VM's `method_missing` / `NoMethodError` business), or when
+/// the target can capture its caller's frame (`eval` / `binding`): a
+/// compiled caller keeps locals in registers, so it cannot hand its frame
+/// out. Otherwise the resolved `FuncId`, which is also stamped into *cache*
+/// — where `GenericSend` reads it, with no Ruby code run in between. A
+/// refused target is never cached, so it keeps missing and keeps deopting.
+///
+/// Goes through [`find_method`] so the class the residual serves still
+/// reaches the call site's PMC: a site whose receivers the compiled
+/// dispatch does not cover keeps recording them.
+///
+pub(crate) extern "C" fn jit_generic_send_check(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    recv: Value,
+    cache: &mut GenericSendCache,
+) -> u64 {
+    let res = find_method(vm, globals, callid, recv);
+    let fid = res as u32;
+    if fid == 0 {
+        vm.discard_error();
+        return 0;
+    }
+    if globals.store[FuncId::new(fid)].possibly_capture_without_block() {
+        return 0;
+    }
+    *cache = GenericSendCache {
+        class: (res >> 32) as u32,
+        version: Globals::class_version(),
+        fid,
+        _pad: 0,
+    };
+    fid as u64
+}
+
+///
 /// Feed a pair-keyed call site's polymorphic method cache from the VM.
 ///
 /// Called by `vm_save_binary_class` (both arches) — which BinOp / Cmp /
