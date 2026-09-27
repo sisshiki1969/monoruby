@@ -59,7 +59,7 @@ const MAX_TOWERS_PER_SITE: usize = 8;
 #[derive(PartialEq, Eq, Hash)]
 pub(super) struct SpecCallSite {
     pub(super) iseq_id: ISeqId,
-    pub(super) self_class: ClassId,
+    pub(super) self_class: Option<ClassId>,
     pub(super) outer: Option<usize>,
     pub(super) callid: CallSiteId,
     pub(super) bmethod: bool,
@@ -79,7 +79,7 @@ pub(super) struct SpecCallSite {
 #[derive(PartialEq, Eq, Hash)]
 pub(super) struct ChainStep {
     pub(super) iseq_id: ISeqId,
-    pub(super) self_class: ClassId,
+    pub(super) self_class: Option<ClassId>,
     pub(super) callid: Option<CallSiteId>,
     pub(super) outer: Option<usize>,
     pub(super) specialize_level: usize,

@@ -95,7 +95,13 @@ impl<'a> JitContext<'a> {
             // dispatch guard then pins it at runtime.
             match cache.self_class {
                 Some(sc) => {
-                    if sc != self.store.const_self_key_for_class(self.self_class()) {
+                    // A self-generic body (no self class) has nothing to
+                    // match the key against.
+                    if self
+                        .self_class()
+                        .map(|c| self.store.const_self_key_for_class(c))
+                        != Some(sc)
+                    {
                         return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                     }
                 }
@@ -475,6 +481,27 @@ impl AbstractState {
         let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
         ir.push(AsmInst::StoreGVar {
+            name,
+            src,
+            using_fpr,
+        });
+        ir.handle_error(error);
+    }
+
+    /// `dst <- @name` of *self* in a self-generic body.
+    pub(super) fn jit_load_ivar_generic(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
+        self.discard(dst);
+        let using_fpr = self.get_using_fpr(ir);
+        ir.push(AsmInst::LoadIVarGeneric { name, using_fpr });
+        self.def_rax2acc(ir, dst);
+    }
+
+    /// `@name = src` on *self* in a self-generic body.
+    pub(super) fn jit_store_ivar_generic(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
+        self.write_back_slots(ir, &[src]);
+        let using_fpr = self.get_using_fpr(ir);
+        let error = ir.new_error(self);
+        ir.push(AsmInst::StoreIVarGeneric {
             name,
             src,
             using_fpr,

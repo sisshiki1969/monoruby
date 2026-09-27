@@ -72,6 +72,8 @@ impl Codegen {
             | AsmInst::LoadErrinfo
             | AsmInst::StoreGVar { .. }
             | AsmInst::LoadCVar { .. }
+            | AsmInst::LoadIVarGeneric { .. }
+            | AsmInst::StoreIVarGeneric { .. }
             | AsmInst::LoadDynVar { .. }
             | AsmInst::StoreDynVar { .. }
             | AsmInst::CreateArray { .. }
@@ -1242,6 +1244,45 @@ impl Codegen {
         using_fpr: UsingFpr,
     ) -> bool {
         self.load_cvar(name, using_fpr);
+        true
+    }
+
+    /// rax <- `@name` of *self* in a self-generic body.
+    pub(in crate::codegen::jitgen) fn emit_load_ivar_generic(
+        &mut self,
+        name: IdentId,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        self.fpr_save(using_fpr);
+        monoasm!( &mut self.jit,
+            movq rdi, r12;
+            movq rsi, [r14 - (LFP_SELF)];
+            movl rdx, (name.get());
+            movq rax, (runtime::generic_get_ivar);
+            call rax;
+        );
+        self.fpr_restore(using_fpr);
+        true
+    }
+
+    /// `@name` of *self* <- [src] in a self-generic body; rax = 0 on error.
+    pub(in crate::codegen::jitgen) fn emit_store_ivar_generic(
+        &mut self,
+        name: IdentId,
+        src: SlotId,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        self.fpr_save(using_fpr);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [r14 - (LFP_SELF)];
+            movl rcx, (name.get());
+            movq r8, [r14 - (conv(src))];
+            movq rax, (runtime::generic_set_ivar);
+            call rax;
+        );
+        self.fpr_restore(using_fpr);
         true
     }
 

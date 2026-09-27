@@ -504,7 +504,7 @@ impl ChainReplay {
 #[derive(Debug)]
 pub(super) struct SpecializedCodeInfo {
     iseq_id: ISeqId,
-    self_class: ClassId,
+    self_class: Option<ClassId>,
     childs: Vec<SpecializedCodeInfo>,
 }
 
@@ -550,7 +550,7 @@ impl Codegen {
         &mut self,
         store: &Store,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
         jit_class_version: u32,
@@ -796,7 +796,7 @@ impl Codegen {
         entry_label: DestLabel,
         level: usize,
         class_version: DestLabel,
-        root: (ISeqId, ClassId, Option<BytecodePtr>),
+        root: (ISeqId, Option<ClassId>, Option<BytecodePtr>),
     ) {
         for context::SpecializeInfo {
             entry: specialized_entry,

@@ -812,6 +812,15 @@ pub(in crate::codegen) enum LInst {
         name: IdentId,
         using_fpr: UsingFpr,
     },
+    LoadIVarGeneric {
+        name: IdentId,
+        using_fpr: UsingFpr,
+    },
+    StoreIVarGeneric {
+        name: IdentId,
+        src: SlotId,
+        using_fpr: UsingFpr,
+    },
     LoadDynVar {
         src: DynVar,
     },

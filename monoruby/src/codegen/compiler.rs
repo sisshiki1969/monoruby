@@ -8,7 +8,7 @@ impl Codegen {
         &mut self,
         globals: &mut Globals,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         jit_entry: DestLabel,
         class_version: u32,
         is_recompile: Option<RecompileReason>,
@@ -198,7 +198,7 @@ impl Codegen {
         &mut self,
         globals: &mut Globals,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         position: Option<BytecodePtr>,
         entry_label: DestLabel,
         class_version: u32,
@@ -373,7 +373,7 @@ impl Codegen {
     fn recompile_budget_exhausted(
         &mut self,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         reason: RecompileReason,
     ) -> bool {
         if !matches!(reason, RecompileReason::BecamePolymorphic) {
@@ -395,9 +395,9 @@ impl Codegen {
         lfp: Lfp,
         reason: RecompileReason,
     ) -> Option<()> {
-        let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
+        let self_class = globals.store[iseq_id].unit_class(lfp.self_val().class());
         self.recompile_method_by_id(globals, iseq_id, self_class, reason)
     }
 
@@ -406,7 +406,7 @@ impl Codegen {
         &mut self,
         globals: &mut Globals,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         reason: RecompileReason,
     ) -> Option<()> {
         #[cfg(feature = "jit-log")]
@@ -486,7 +486,7 @@ impl Codegen {
         &mut self,
         globals: &mut Globals,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         reason: RecompileReason,
     ) -> Option<()> {
         if globals.store[iseq_id].jit_invalidated() {
@@ -495,7 +495,10 @@ impl Codegen {
         if self.recompile_budget_exhausted(iseq_id, self_class, reason) {
             return None;
         }
-        let slot = globals.store[iseq_id].get_jit_slot(self_class)?;
+        // aarch64 never promotes a method to a self-generic body, so every
+        // whole-method unit here has a concrete self class.
+        let class = self_class?;
+        let slot = globals.store[iseq_id].get_jit_slot(class)?;
         let jit_entry = self.jit.label();
         let class_version = self.jit_class_version();
         let compiled = self.compile_method(
@@ -520,7 +523,7 @@ impl Codegen {
             cache,
             const_map,
         );
-        let guard = self.a64_gen_class_guard_stub(self_class, &jit_entry);
+        let guard = self.a64_gen_class_guard_stub(class, &jit_entry);
         self.jit.finalize();
         let guard_addr = self.jit.get_label_address(&guard).as_ptr() as u64;
         // SAFETY: `slot` is the dispatch word recorded by `compile_patch`.
@@ -531,7 +534,7 @@ impl Codegen {
         // repatching the `patch_point` jump. The slot exists whenever
         // `compile_patch` compiled this (iseq, class) pair, which is a
         // precondition for reaching the recompiler.
-        if let Some(guard_free) = globals.store[iseq_id].get_jit_guard_free_slot(self_class) {
+        if let Some(guard_free) = globals.store[iseq_id].get_jit_guard_free_slot(class) {
             let entry_addr = self.jit.get_label_address(&jit_entry).as_ptr() as u64;
             // SAFETY: heap-leaked `u64` published by `compile_patch`; valid
             // for the process lifetime, single-threaded write (see
@@ -580,7 +583,7 @@ impl Codegen {
         let ret = if let Some((cache, version_label, const_map)) = self.compile(
             globals,
             iseq_id,
-            self_class,
+            Some(self_class),
             Some(pc),
             entry_label.clone(),
             class_version,
@@ -622,7 +625,7 @@ impl Codegen {
     fn recompile_root_unit(
         &mut self,
         globals: &mut Globals,
-        root: (ISeqId, ClassId, Option<BytecodePtr>),
+        root: (ISeqId, Option<ClassId>, Option<BytecodePtr>),
         reason: RecompileReason,
     ) -> Option<()> {
         let (iseq_id, self_class, position) = root;
@@ -636,7 +639,7 @@ impl Codegen {
             // Loop root: recompile from the loop head and re-point the
             // loop-entry word at it, exactly as a plain loop recompile does.
             Some(pc) => {
-                self.compile_partial_by_id(globals, iseq_id, self_class, pc, Some(reason))
+                self.compile_partial_by_id(globals, iseq_id, self_class?, pc, Some(reason))
             }
         }
     }
@@ -751,9 +754,12 @@ fn salvage_specialized(globals: &mut Globals, idx: usize, reason: RecompileReaso
                     .salvage_method_unit(owner_iseq, owner_class, None),
                 Some(pc) => {
                     let index = globals.store[owner_iseq].get_pc_index(Some(pc));
-                    globals
-                        .store
-                        .salvage_loop_unit(owner_iseq, owner_class, index, None)
+                    // Loop units are always compiled for a concrete self.
+                    owner_class.and_then(|class| {
+                        globals
+                            .store
+                            .salvage_loop_unit(owner_iseq, class, index, None)
+                    })
                 }
             };
             if let Some(version_label) = salvaged {
@@ -799,7 +805,7 @@ fn salvage_specialized(globals: &mut Globals, idx: usize, reason: RecompileReaso
 fn salvage_const(
     globals: &mut Globals,
     iseq_id: ISeqId,
-    self_class: ClassId,
+    self_class: Option<ClassId>,
     loop_index: Option<crate::bytecodegen::BcIndex>,
 ) -> bool {
     #[cfg(feature = "jit-log")]
@@ -834,8 +840,8 @@ fn salvage_method_const(globals: &mut Globals, lfp: Lfp, reason: RecompileReason
     if !matches!(reason, RecompileReason::ConstVersionGuardFailed) {
         return false;
     }
-    let self_class = lfp.self_val().class();
     let iseq_id = globals.store[lfp.func_id()].as_iseq();
+    let self_class = globals.store[iseq_id].unit_class(lfp.self_val().class());
     salvage_const(globals, iseq_id, self_class, None)
 }
 
@@ -1169,7 +1175,7 @@ fn salvage_loop(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr, reason: Recomp
     let iseq_id = globals.store[func_id].as_iseq();
     let index = globals.store[iseq_id].get_pc_index(Some(pc));
     if matches!(reason, RecompileReason::ConstVersionGuardFailed) {
-        return salvage_const(globals, iseq_id, self_class, Some(index));
+        return salvage_const(globals, iseq_id, Some(self_class), Some(index));
     }
     if !matches!(reason, RecompileReason::ClassVersionGuardFailed) {
         return false;

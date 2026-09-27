@@ -448,3 +448,44 @@ PMC が既に多相を観測しているサイトの単相/集合ガードのミ
 引数・`method_missing`・private・`alias tag binding`)、
 `pic_residual_indirect_binding`(`alias tag send` 経由の binding と
 unboxed Float / Fixnum ローカル)、`mono_guard_generic_residual`。
+
+## 11. 試作: self 非特化本体(2026-09、既定では無効)
+
+`MONORUBY_GENERIC_SELF=N` を与えると、N 個の self クラス向けに特化済みの
+メソッドは、次のメソッド単位のコンパイルで **self を仮定しない本体** を 1 本
+作る。x86-64 のみ昇格させる(aarch64 は命令だけ持つ)。
+
+- **キー**: `ISeqInfo::jit_entry` のキーは `Option<ClassId>` で、`None` が
+  「self の型情報なし」、つまり非特化本体を表す。salvage 記録
+  (`JitUnitId`)、再コンパイル回数、特化本体の所有単位も同じキーを使い、
+  コンパイル中のフレーム(`AsmInfo::self_class`)も `None` を持つ。ループ本体は
+  常に具体的な self クラスでコンパイルされる。`ISeqInfo::unit_class` が、
+  自分の特化を持たないクラスの再コンパイル・salvage を `None` の単位へ回す。
+- **フレーム**: self スロットは `Guarded::Value` で始まり(`self_ty` は
+  `None`)、self への呼び出しは普通のレシーバと同じく IC / PIC / generic send
+  を通る。ブロックへ渡る self も同じく未知になる。
+- **super**: self のクラスが不明なので `super` の飛び先はコンパイル時に
+  決まらない。メソッド本体に直接書かれた `super` は generic send の残余を
+  使い、`runtime::find_super` が VM と同じくフレームから解決する(祖先に
+  同じ本体が複数回現れる場合も含む)。ブロック内の `super` と `(...)` を
+  受けるメソッドの zsuper は対象外。これがないと、アーム外のクラスで毎回
+  deopt していた(lobsters N=5 で定常 1 反復あたり約 4.4k 回)。
+- **ivar**: `LoadIVarGeneric` / `StoreIVarGeneric` が
+  `runtime::generic_{get,set}_ivar` を呼ぶ。スロットは (ClassId, 名前) を
+  キーにした 4096 エントリの直接写像表で引く。クラスごとの `IvarId` は一度
+  決まると変わらないので、表の無効化は不要。
+- **入口**: クラスガード列の末尾にガードなしで置く。既に特化を持つクラスは
+  従来どおり自分の本体へ、それ以外は非特化本体へ入る。
+- **呼び出し側**: 既知の callee が非特化本体を持つときは、引数の束縛を
+  コンパイル時に済ませたまま、非特化本体の入口へ直接 call する(クラスが
+  証明されていない集合ガードのサイトも含む)。また、そうした callee は
+  呼び出し側で特化コピーを作らない。
+- **対象外**: singleton-lexical なメソッド(定数解決が self に依存)と
+  `(...)` 転送メソッド(`Class#new` など、クラスごとの特化が rest 配列を
+  消している)。
+
+計測(lobsters、3 回の中央値): しきい値 10 で非特化本体 119 本、1 反復目
+2349→2269 ms、ウォームアップ 5 反復の合計 7798→7502 ms、最大 RSS −10 MiB、
+定常 1230→1228 ms。しきい値 5 で 325 本、1 反復目 2116 ms、RSS −24 MiB、
+定常 1243 ms。activerecord / railsbench / erubi-rails は誤差の範囲。
+テスト: `tests/generic_self.rs`。

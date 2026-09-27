@@ -502,13 +502,41 @@ impl Store {
     pub(crate) fn set_salvage_record(
         &mut self,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         class_version_label: DestLabel,
         cache: Vec<InlineCacheEntry>,
         const_map: ConstSalvageMap,
     ) {
         self.jit_register_unit((iseq_id, self_class, None), &cache);
         self[iseq_id].set_salvage_record(self_class, class_version_label, cache, const_map);
+    }
+
+    ///
+    /// Whether the next whole-method compile of *iseq_id* should produce a
+    /// self-generic body instead of one more self-class specialization.
+    ///
+    /// Only once the method has been specialized for
+    /// `MONORUBY_GENERIC_SELF` (default: off) self classes. Excluded:
+    /// methods whose constant sites may resolve through *self*
+    /// (singleton-lexical), and `(...)` forwarding trampolines, whose
+    /// per-class specialization is what removes their rest `Array`.
+    ///
+    pub(crate) fn wants_generic_self(&self, iseq_id: ISeqId) -> bool {
+        thread_local! {
+            static THRESHOLD: usize = std::env::var("MONORUBY_GENERIC_SELF")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+        }
+        let threshold = THRESHOLD.with(|t| *t);
+        if threshold == 0 {
+            return false;
+        }
+        let iseq = &self[iseq_id];
+        !iseq.in_singleton_lexical
+            && !self[iseq.func_id()].params().forwarding()
+            && !iseq.has_generic_jit()
+            && iseq.jit_entry_len() >= threshold
     }
 
     /// The loop-body twin of [`Self::set_salvage_record`].
@@ -521,7 +549,7 @@ impl Store {
         cache: Vec<InlineCacheEntry>,
         const_map: ConstSalvageMap,
     ) {
-        self.jit_register_unit((iseq_id, self_class, Some(index)), &cache);
+        self.jit_register_unit((iseq_id, Some(self_class), Some(index)), &cache);
         self[iseq_id].set_loop_jit_info(self_class, index, class_version_label, cache, const_map);
     }
 
@@ -627,11 +655,13 @@ impl Store {
         }
         let mut labels = Vec::with_capacity(units.len());
         for (iseq_id, self_class, index) in units {
-            let label = match index {
-                None => self[iseq_id].get_jit_class_version(self_class),
-                Some(index) => self[iseq_id]
+            let label = match (index, self_class) {
+                (None, _) => self[iseq_id].get_jit_class_version(self_class),
+                (Some(index), Some(self_class)) => self[iseq_id]
                     .get_loop_jit_info(self_class, index)
                     .map(|info| info.class_version_label.clone()),
+                // Loop units are always compiled for a concrete self class.
+                (Some(_), None) => None,
             };
             if let Some(label) = label {
                 labels.push(label);
@@ -2012,7 +2042,10 @@ impl Store {
             self.func_description(iseq.func_id()),
         );
         for (class, info) in &iseq.jit_entry {
-            eprintln!("  JitEntry: {}", class.get_name(self));
+            match class {
+                Some(class) => eprintln!("  JitEntry: {}", class.get_name(self)),
+                None => eprintln!("  JitEntry: <generic self>"),
+            }
             eprintln!("{:?}", &info.inline_cache_map);
         }
         eprintln!(
@@ -2560,9 +2593,10 @@ pub struct ConstSiteId(pub u32);
 pub const PMC_WAYS: usize = 4;
 
 /// The key of a compilation unit's salvage record, and of its entry in the
-/// method-name index: `(iseq, self_class, None)` for a whole-method unit,
-/// `(iseq, self_class, Some(LoopStart))` for an OSR loop body.
-pub(crate) type JitUnitId = (ISeqId, ClassId, Option<crate::bytecodegen::BcIndex>);
+/// method-name index: `(iseq, self_class, None)` for a whole-method unit
+/// (`self_class` is `None` for the self-generic body),
+/// `(iseq, Some(self_class), Some(LoopStart))` for an OSR loop body.
+pub(crate) type JitUnitId = (ISeqId, Option<ClassId>, Option<crate::bytecodegen::BcIndex>);
 
 /// One observed key of a call site's polymorphic method cache.
 #[derive(Debug, Clone)]
