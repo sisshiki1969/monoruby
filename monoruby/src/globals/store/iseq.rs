@@ -659,11 +659,22 @@ impl ISeqInfo {
     /// r14 to the heap copy, so locals/outer access in the caller
     /// after the capture point would silently diverge between stack
     /// tombstone and heap.
+    ///
+    /// A `BlockArgProxy` (opcode 21) with `outer > 0` counts too: it
+    /// forwards a proxy, but falls back to materializing the Proc when
+    /// the frame depth does not fit one (`Executor::forward_block_param`).
     pub(crate) fn has_block_arg(&self) -> bool {
         let Some(bc) = self.bytecode.as_ref() else {
             return false;
         };
-        bc.iter().any(|b| (b.op1() >> 48) as u8 == 23)
+        bc.iter().any(|b| {
+            let op1 = b.op1();
+            match (op1 >> 48) as u8 {
+                23 => true,
+                21 => (op1 >> 16) as u16 != 0,
+                _ => false,
+            }
+        })
     }
 
     ///

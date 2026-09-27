@@ -737,8 +737,32 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
 pub(super) extern "C" fn block_arg(
     vm: &mut Executor,
     globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Option<Value> {
+    block_param(vm, globals, lfp, pc, false)
+}
+
+/// `BlockArgProxy` with `outer > 0`: the `&block` parameter of the frame
+/// `outer` levels up, to be passed on as the block of a call from the
+/// current frame (`pc` as for [`block_arg`]). The slot's value once
+/// assigned; until then that frame's block handler, a proxy re-encoded for
+/// the callee by `Executor::forward_block_param` without materializing it.
+pub(super) extern "C" fn block_arg_forward(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Option<Value> {
+    block_param(vm, globals, lfp, pc, true)
+}
+
+fn block_param(
+    vm: &mut Executor,
+    globals: &mut Globals,
     mut lfp: Lfp,
     pc: BytecodePtr,
+    forward: bool,
 ) -> Option<Value> {
     let op = pc.op1();
     let outer = (op >> 16) as u16;
@@ -751,7 +775,12 @@ pub(super) extern "C" fn block_arg(
     {
         return Some(v);
     }
-    match vm.block_param_proc(globals, lfp, pc) {
+    let res = if forward {
+        vm.forward_block_param(globals, lfp, pc)
+    } else {
+        vm.block_param_proc(globals, lfp, pc)
+    };
+    match res {
         Ok(v) => Some(v),
         Err(err) => {
             vm.set_error(err);

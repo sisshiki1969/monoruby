@@ -262,28 +262,18 @@ impl<'a> BytecodeGen<'a> {
     /// `dst`, to be passed on as the block argument of a call.
     ///
     /// A *proxy* handler encodes its home frame as a **dynamic** prev-cfp
-    /// hop count, but `BlockArgProxy` can only bump that count by a
-    /// statically known amount — it assumes every lexical level costs
-    /// exactly two frames (the block frame plus the method that `yield`ed
-    /// it). That holds only when each enclosing block is invoked by a
-    /// direct `yield` from the method it was passed to; as soon as the
-    /// block travels one more hop (a block re-yielded from inside another
-    /// literal block, issue #982) the forwarded handler resolves to an
-    /// unrelated frame, so `break` out of it reports a bogus
-    /// `LocalJumpError: break from proc-closure`.
-    ///
-    /// For `outer == 0` the home frame *is* the current frame, so the
-    /// static +1 is exact and the cheap proxy is kept. For `outer > 0`,
-    /// materialize the handler into a Proc with `BlockArg`, which locates
-    /// the home frame on the live cfp chain at run time.
+    /// hop count, relative to the frame it is given to. For `outer == 0`
+    /// the home frame *is* the current frame, so the VM / JIT bump that
+    /// count by a static 1. For `outer > 0` no static count is right: a
+    /// block re-yielded from inside another literal block puts an unknown
+    /// number of frames between the two (issue #982), so the run time
+    /// counts them on the live cfp chain (`Executor::forward_block_param`).
+    /// Either way the handler is forwarded without materializing a Proc,
+    /// so forwarding does not promote a frame to the heap.
     ///
     fn emit_block_forward(&mut self, dst: BcReg, outer: usize, loc: Loc) {
         let slot = self.block_param_slot_of(outer);
-        if outer == 0 {
-            self.emit(BytecodeInst::BlockArgProxy(dst, 0, slot), loc);
-        } else {
-            self.emit(BytecodeInst::BlockArg(dst, outer, slot), loc);
-        }
+        self.emit(BytecodeInst::BlockArgProxy(dst, outer, slot), loc);
     }
 
     fn load_dynvar(&mut self, slot_id: SlotId, outer: usize, loc: Loc) -> BcReg {

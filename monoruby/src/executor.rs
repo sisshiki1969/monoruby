@@ -4678,6 +4678,47 @@ impl Executor {
         ))
     }
 
+    /// The block of the frame `lfp`, a method some levels out from the
+    /// current frame, as the block handler of a call made from the current
+    /// frame (`&block` forwarded from inside a nested block).
+    ///
+    /// A proxy handler is relative to the frame that owns it, so it is
+    /// re-encoded relative to the callee by counting the live control
+    /// frames between the current one and `lfp`'s: `resolve_block_target`
+    /// walks exactly that chain back when the callee yields. Nothing is
+    /// materialized, so no frame is promoted to the heap. A Proc, a
+    /// Symbol or any other handler is passed on as it is. Only when the
+    /// depth does not fit a proxy does this fall back to the Proc
+    /// (`block_param_proc`).
+    pub(crate) fn forward_block_param(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        pc: BytecodePtr,
+    ) -> Result<Value> {
+        let bh = match lfp.block() {
+            Some(bh) => bh,
+            None => return Ok(Value::nil()),
+        };
+        let Some((fid, depth)) = bh.try_proxy() else {
+            return Ok(bh.get());
+        };
+        let mut hops = 0usize;
+        let mut cur = (&*self, self.cfp());
+        while cur.1.lfp() != lfp {
+            hops += 1;
+            let Some(prev) = Executor::try_prev_cfp(cur.0, cur.1) else {
+                return self.block_param_proc(globals, lfp, pc);
+            };
+            cur = prev;
+        }
+        // +1: the callee's frame, whose previous frame is this one.
+        match u16::try_from(depth as usize + hops + 1) {
+            Ok(depth) => Ok(BlockHandler::from_proxy(fid, depth).get()),
+            Err(_) => self.block_param_proc(globals, lfp, pc),
+        }
+    }
+
     /// The block of the frame `lfp` as a value: `nil` without a block,
     /// else its Proc — materialized on the first read and cached back
     /// into the frame's block handler, so every read of a `&block`
@@ -5320,6 +5361,13 @@ impl BlockHandler {
         let block_handler = (u32::from(func_id) as i64) << 16;
         let bh = Value::integer(block_handler);
         Self::new(bh)
+    }
+
+    /// A proxy handler for the block `func_id`, whose home frame is
+    /// `depth` control frames back from the frame the handler is given to.
+    pub fn from_proxy(func_id: FuncId, depth: u16) -> Self {
+        let block_handler = ((u32::from(func_id) as i64) << 16) + depth as i64;
+        Self::new(Value::integer(block_handler))
     }
 
     pub fn try_proxy(&self) -> Option<(FuncId, u16)> {

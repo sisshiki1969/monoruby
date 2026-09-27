@@ -2113,17 +2113,23 @@ impl Codegen {
     }
 
     ///
-    /// Get a block argument of current frame.
+    /// Get a block argument of current frame: as a value, or with
+    /// `forward`, as a block handler to pass on.
     ///
-    fn block_arg(&mut self, using_fpr: UsingFpr, call_site_bc_ptr: BytecodePtr) {
+    fn block_arg(&mut self, using_fpr: UsingFpr, call_site_bc_ptr: BytecodePtr, forward: bool) {
         let call_site_ptr_val = call_site_bc_ptr.as_ptr() as u64;
+        let func = if forward {
+            runtime::block_arg_forward as *const () as u64
+        } else {
+            runtime::block_arg as *const () as u64
+        };
         self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdx, r14;
             movq rdi, rbx;
             movq rsi, r12;
             movq rcx, (call_site_ptr_val);
-            movq rax, (runtime::block_arg);
+            movq rax, (func);
             call rax;
         };
         self.fpr_restore(using_fpr);
@@ -3170,8 +3176,9 @@ impl Codegen {
         using_fpr: UsingFpr,
         call_site_bc_ptr: BytecodePtr,
         error: &DestLabel,
+        forward: bool,
     ) -> bool {
-        self.block_arg(using_fpr, call_site_bc_ptr);
+        self.block_arg(using_fpr, call_site_bc_ptr, forward);
         self.handle_error(error);
         self.store_rax(ret);
         true

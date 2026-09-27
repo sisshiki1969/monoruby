@@ -738,9 +738,17 @@ impl<'a> JitContext<'a> {
                     && let Some(None) = self.resolve_given_block()
                 {
                     state.def_C(ret, Value::nil());
-                } else {
+                } else if outer == 0 {
                     state.def_S(ret);
                     ir.block_arg_proxy(ret, outer, slot);
+                } else {
+                    // A method's block forwarded from a nested block: the
+                    // frames in between are counted at run time
+                    // (`runtime::block_arg_forward`), which may fall back to
+                    // materializing the Proc.
+                    state.def_S(ret);
+                    ir.block_arg(state, ret, outer, pc, true);
+                    state.unset_side_effect_guard();
                 }
             }
             TraceIr::BlockArg(ret, outer, slot) => {
@@ -751,7 +759,7 @@ impl<'a> JitContext<'a> {
                     return Ok(CompileResult::Continue);
                 }
                 state.def_S(ret);
-                ir.block_arg(state, ret, outer, pc);
+                ir.block_arg(state, ret, outer, pc, false);
                 state.unset_side_effect_guard();
             }
 
