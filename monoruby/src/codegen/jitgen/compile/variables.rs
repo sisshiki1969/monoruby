@@ -95,7 +95,13 @@ impl<'a> JitContext<'a> {
             // dispatch guard then pins it at runtime.
             match cache.self_class {
                 Some(sc) => {
-                    if sc != self.store.const_self_key_for_class(self.self_class()) {
+                    // A self-generic body (no self class) has nothing to
+                    // match the key against.
+                    if self
+                        .self_class()
+                        .map(|c| self.store.const_self_key_for_class(c))
+                        != Some(sc)
+                    {
                         return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                     }
                 }

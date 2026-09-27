@@ -723,10 +723,7 @@ impl Codegen {
                     let info = &store[iseq];
                     match recv_class {
                         Some(rc) => info.get_jit_entry(info.unit_class(rc)),
-                        None if info.has_generic_jit() => {
-                            info.get_jit_entry(crate::codegen::GENERIC_SELF_CLASS)
-                        }
-                        None => None,
+                        None => info.get_jit_entry(None),
                     }
                 });
                 // aarch64 guard-free dispatch-slot lookup (x86 ignores it).
@@ -764,8 +761,13 @@ impl Codegen {
             // Per-method ivar-cache prep. The store/frame-dependent heap length
             // is resolved here; the encoder only emits the table-extend guard.
             AsmInst::Preparation => {
-                let heap_len = if !frame.self_class.is_always_frozen() && frame.ivar_heap_accessed {
-                    let ivar_len = store[frame.self_class].ivar_len();
+                // A self-generic body (`self_class: None`) accesses ivars
+                // through the runtime table, never the heap slots directly.
+                let heap_len = if let Some(self_class) = frame.self_class
+                    && !self_class.is_always_frozen()
+                    && frame.ivar_heap_accessed
+                {
+                    let ivar_len = store[self_class].ivar_len();
                     Some(if frame.self_ty == Some(ObjTy::OBJECT) {
                         ivar_len - OBJECT_INLINE_IVAR
                     } else {

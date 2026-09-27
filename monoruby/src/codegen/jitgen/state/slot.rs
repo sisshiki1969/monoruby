@@ -2251,7 +2251,7 @@ impl LinkMode {
         fid: FuncId,
         callid: CallSiteId,
         state: &AbstractState,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
     ) -> Vec<Self> {
         let recv = LinkMode::S(Guarded::from_self_class(self_class));
         Self::from_caller_inner(store, fid, callid, state, recv)
@@ -2343,13 +2343,11 @@ impl Guarded {
     }
 
     /// The guard a frame's `self` starts with: the frame's self class,
-    /// or nothing at all for a self-generic body (see
-    /// [`GENERIC_SELF_CLASS`](crate::codegen::jitgen::GENERIC_SELF_CLASS)).
-    pub fn from_self_class(class: ClassId) -> Self {
-        if class == crate::codegen::jitgen::GENERIC_SELF_CLASS {
-            Guarded::Value
-        } else {
-            Self::from_class(class)
+    /// or nothing at all for a self-generic body (`None`).
+    pub fn from_self_class(class: Option<ClassId>) -> Self {
+        match class {
+            Some(class) => Self::from_class(class),
+            None => Guarded::Value,
         }
     }
 

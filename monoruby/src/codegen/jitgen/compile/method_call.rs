@@ -2543,7 +2543,7 @@ impl<'a> JitContext<'a> {
         let compiled = self.compile_specialized_func(
             state,
             iseq,
-            recv_class,
+            Some(recv_class),
             args_info,
             None,
             callid,
@@ -2722,7 +2722,7 @@ impl<'a> JitContext<'a> {
         iseq_id: ISeqId,
         outer: Option<usize>,
         args_info: JitArgumentInfo,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
     ) -> JitStackFrame {
         let idx = match self.jit_type() {
             JitType::Specialized { idx, .. } => *idx,
@@ -2757,7 +2757,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
@@ -2913,7 +2913,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,

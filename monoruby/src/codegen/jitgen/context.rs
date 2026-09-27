@@ -117,9 +117,9 @@ pub struct JitBlockInfo {
     ///
     pub block_fid: FuncId,
     ///
-    /// `ClassId` of the *self*.
+    /// `ClassId` of the *self* (`None`: no type information about *self*).
     ///
-    pub self_class: ClassId,
+    pub self_class: Option<ClassId>,
     ///
     /// Offset of the outer frame. this must be > 0.
     ///
@@ -127,7 +127,7 @@ pub struct JitBlockInfo {
 }
 
 impl JitBlockInfo {
-    pub(super) fn new(block_fid: FuncId, self_class: ClassId, outer: usize) -> Self {
+    pub(super) fn new(block_fid: FuncId, self_class: Option<ClassId>, outer: usize) -> Self {
         Self {
             block_fid,
             self_class,
@@ -177,9 +177,10 @@ pub(super) struct AsmInfo {
     ///
     pub iseq_id: ISeqId,
     ///
-    /// `ClassId`` of *self*.
+    /// `ClassId`` of *self*. `None` for a self-generic body, which is
+    /// compiled with no type information about *self*.
     ///
-    pub self_class: ClassId,
+    pub self_class: Option<ClassId>,
     ///
     /// Object type of *self*.
     ///
@@ -772,14 +773,10 @@ impl JitStackFrame {
         specialize_level: usize,
         iseq_id: ISeqId,
         outer: Option<usize>,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         abstract_state: Option<AbstractFrame>,
     ) -> Self {
-        let self_ty = if self_class == GENERIC_SELF_CLASS {
-            None
-        } else {
-            store[self_class].instance_ty()
-        };
+        let self_ty = self_class.and_then(|class| store[class].instance_ty());
         let is_not_block = store[store[iseq_id].func_id()].is_not_block();
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
@@ -1337,14 +1334,9 @@ impl<'a> JitContext<'a> {
         self.iseq().func_id()
     }
 
-    pub(super) fn self_class(&self) -> ClassId {
+    /// The class of *self*, `None` in a self-generic body.
+    pub(super) fn self_class(&self) -> Option<ClassId> {
         self.current_frame().self_class
-    }
-
-    /// This frame's body runs for any class of *self*: see
-    /// [`GENERIC_SELF_CLASS`].
-    pub(super) fn self_generic(&self) -> bool {
-        self.self_class() == GENERIC_SELF_CLASS
     }
 
     pub(super) fn self_ty(&self) -> Option<ObjTy> {

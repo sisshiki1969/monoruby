@@ -455,11 +455,12 @@ unboxed Float / Fixnum ローカル)、`mono_guard_generic_residual`。
 メソッドは、次のメソッド単位のコンパイルで **self を仮定しない本体** を 1 本
 作る。x86-64 のみ昇格させる(aarch64 は命令だけ持つ)。
 
-- **キー**: `GENERIC_SELF_CLASS`(= `BasicObject`)で `jit_entry` などに登録
-  する。`BasicObject` のインスタンスは self について何も仮定できないので、
-  本物の `BasicObject` 向けのコンパイルも同じ非特化本体になり、矛盾しない。
-  `ISeqInfo::unit_class` が、自分の特化を持たないクラスの再コンパイル・
-  salvage を非特化単位へ回す。
+- **キー**: `ISeqInfo::jit_entry` のキーは `Option<ClassId>` で、`None` が
+  「self の型情報なし」、つまり非特化本体を表す。salvage 記録
+  (`JitUnitId`)、再コンパイル回数、特化本体の所有単位も同じキーを使い、
+  コンパイル中のフレーム(`AsmInfo::self_class`)も `None` を持つ。ループ本体は
+  常に具体的な self クラスでコンパイルされる。`ISeqInfo::unit_class` が、
+  自分の特化を持たないクラスの再コンパイル・salvage を `None` の単位へ回す。
 - **フレーム**: self スロットは `Guarded::Value` で始まり(`self_ty` は
   `None`)、self への呼び出しは普通のレシーバと同じく IC / PIC / generic send
   を通る。ブロックへ渡る self も同じく未知になる。

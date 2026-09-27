@@ -2898,7 +2898,7 @@ impl Store {
     pub(crate) fn salvage_method_unit(
         &mut self,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         lfp: Option<Lfp>,
     ) -> Option<DestLabel> {
         let iseq = &self[iseq_id];
@@ -2960,14 +2960,16 @@ impl Store {
     pub(crate) fn salvage_const_unit(
         &mut self,
         iseq_id: ISeqId,
-        self_class: ClassId,
+        self_class: Option<ClassId>,
         loop_index: Option<crate::bytecodegen::BcIndex>,
     ) -> ConstSalvage {
         let current_version = Globals::const_version();
         let current_wildcard = crate::globals::const_epoch::wildcard();
         let map_slot = match loop_index {
             None => self[iseq_id].get_const_map_mut(self_class),
-            Some(index) => self[iseq_id].get_loop_const_map_mut(self_class, index),
+            Some(index) => {
+                self_class.and_then(|class| self[iseq_id].get_loop_const_map_mut(class, index))
+            }
         };
         let Some(map_slot) = map_slot else {
             #[cfg(feature = "jit-log")]
@@ -2996,7 +2998,9 @@ impl Store {
         // recompile that follows replaces it wholesale anyway.
         if let Some(map_slot) = match loop_index {
             None => self[iseq_id].get_const_map_mut(self_class),
-            Some(index) => self[iseq_id].get_loop_const_map_mut(self_class, index),
+            Some(index) => {
+                self_class.and_then(|class| self[iseq_id].get_loop_const_map_mut(class, index))
+            }
         } {
             *map_slot = map;
         }
