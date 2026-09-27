@@ -415,3 +415,36 @@ StoreIndex(133)は全て `new_callsite` + `new_callsite_map_entry` で
 テスト: `polymorphic_class_independent_inline`(4-way サイトでの
 nil?/frozen?/object_id、frozen? 述語の全表現アーム、warmup 後の
 `frozen?` オーバーライドの deopt)。
+
+## 10. 実装済み: メソッド呼び出し残余の generic send(2026-09)
+
+PIC の最終アームで学習の余地がない(PMC 満杯・overflow)とき、および
+PMC が既に多相を観測しているサイトの単相/集合ガードのミスは、従来
+毎回 deopt していた。これを **generic send** に置き換え、「多相サイトは
+永久に deopt し続けない」を不変条件にした。
+
+- **形**: 残余は `dispatch.rs` の宣言型マージの 1 アーム
+  (`RecvMissMode::Residual`、`pic.rs` の最終アーム / `method_call_with_residual`)。
+  ガードのミス先が deopt ではなく残余ラベルになる。
+- **探索**: `GuardSendResolvable` がレシーバクラスを 1-way キャッシュ
+  (`runtime::GenericSendCache`: class, class version, fid)と照合し、
+  ミスなら `jit_generic_send_check` で探索して書き戻す。解決できない
+  (未定義・private・`method_missing` 経由)か、呼び先が `binding` /
+  `eval` 系の効果を持つときは 0 を返し、その場合だけ deopt する(VM が
+  例外や frame 捕捉を正しく扱う)。
+- **呼び出し**: `GenericSend` はキャッシュの fid から FuncData を取り、
+  wrapper 経由で呼ぶ(self 特化本体へは wrapper がディスパッチ)。
+  splat・kw・ブロックのない 8 引数以下の呼び出しは、呼び先が単純な
+  シグネチャ(`META_KIND` の simple bit と `FUNCDATA_MIN == pos_num`)なら
+  インラインでコピーし、それ以外は `vm_handle_arguments` で束縛する。
+- **間接的な binding**: 呼び先が `send` や `Method#call` のように名前で
+  呼び戻す builtin だと、admission 判定をすり抜けて `Kernel#binding` に
+  届き、JIT フレームがヒープへ昇格する。残余アームでは
+  `no_capture_guard` を落とし、send 後の capture ガードで deopt して
+  ヒープ側のローカルを読む。
+- **対象外**: ブロック付き呼び出し、`...` 転送、名前のない呼び出し。
+
+テスト: `pic_overflow_generic_residual`(アリティ差・kw・splat+ブロック
+引数・`method_missing`・private・`alias tag binding`)、
+`pic_residual_indirect_binding`(`alias tag send` 経由の binding と
+unboxed Float / Fixnum ローカル)、`mono_guard_generic_residual`。

@@ -173,6 +173,8 @@ impl Codegen {
             | AsmInst::SplicedExitToOuter { .. }
             | AsmInst::SplicedExitLanding { .. }
             | AsmInst::Yield { .. }
+            | AsmInst::GuardSendResolvable { .. }
+            | AsmInst::GenericSend { .. }
             | AsmInst::MethodRetSpecialized { .. }
             | AsmInst::BlockBreakSpecialized { .. }
             | AsmInst::YieldArrayExpand { .. }

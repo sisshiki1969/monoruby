@@ -16,6 +16,11 @@ use super::*;
 use crate::codegen::jitgen::deopt_log::DeoptCause;
 use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSplicedArm};
 
+/// The most positional arguments a generic send copies straight into a
+/// simple callee's frame (unrolled, one load/store pair each); a wider
+/// simple site binds through the runtime like any other.
+const GENERIC_SEND_COPY_MAX: usize = 8;
+
 impl Codegen {
     ///
     /// Lower one `AsmInst`. The single entry point both backends' drivers call.
@@ -1287,6 +1292,54 @@ impl Codegen {
                     evict,
                 });
             }
+            // Generic send (target resolved at runtime): the admission test
+            // deopts before anything is reserved; the send itself records its
+            // return address under `evict`, like `Yield`.
+            AsmInst::GuardSendResolvable {
+                callid,
+                recv,
+                using_fpr,
+                cache,
+                deopt,
+            } => {
+                let deopt =
+                    self.deopt_label(labels, deopt, DeoptCause::Static("generic send target"));
+                self.encode_linst(LInst::GuardSendResolvable {
+                    callid,
+                    recv,
+                    using_fpr,
+                    cache,
+                    deopt,
+                });
+            }
+            AsmInst::GenericSend {
+                callid,
+                recv,
+                cache,
+                error,
+                evict,
+                pc,
+            } => {
+                let error = labels[error].clone();
+                let cs = &store[callid];
+                let simple_args = (cs.splat_pos().is_empty()
+                    && cs.kw_args().is_empty()
+                    && cs.hash_splat_pos().is_empty()
+                    && !cs.forwarding
+                    && cs.block_fid.is_none()
+                    && cs.block_arg.is_none()
+                    && cs.pos_num <= GENERIC_SEND_COPY_MAX)
+                    .then_some((cs.args, cs.pos_num));
+                self.encode_linst(LInst::GenericSend {
+                    callid,
+                    recv,
+                    cache,
+                    simple_args,
+                    error,
+                    evict,
+                    pc,
+                });
+            }
             // ---- Specialized inlined-frame family ------------------------------
             // These lower an inlined callee / block frame. Each arm is identical
             // on both arches and dispatches to a per-arch method of the same name
@@ -2160,6 +2213,26 @@ impl Codegen {
                 evict,
             } => {
                 self.emit_yield(callid, simple, &error, evict);
+            }
+            LInst::GuardSendResolvable {
+                callid,
+                recv,
+                using_fpr,
+                cache,
+                deopt,
+            } => {
+                self.emit_guard_send_resolvable(callid, recv, using_fpr, cache, &deopt);
+            }
+            LInst::GenericSend {
+                callid,
+                recv,
+                cache,
+                simple_args,
+                error,
+                evict,
+                pc,
+            } => {
+                self.emit_generic_send(callid, recv, cache, simple_args, &error, evict, pc);
             }
             LInst::Unreachable => {
                 self.emit_unreachable();

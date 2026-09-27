@@ -96,6 +96,163 @@ impl Codegen {
     }
 
     ///
+    /// The admission test of a generic send. x86 twin:
+    /// `emit_guard_send_resolvable`, which carries the full note.
+    ///
+    pub(in crate::codegen::jitgen) fn emit_guard_send_resolvable(
+        &mut self,
+        callid: CallSiteId,
+        recv: SlotId,
+        using_fpr: UsingFpr,
+        cache: u64,
+        deopt: &DestLabel,
+    ) {
+        let lfp = GP::R14.a64().0;
+        let f = crate::codegen::runtime::jit_generic_send_check as *const () as u64;
+        let gv_addr = self
+            .jit
+            .get_label_address(&self.class_version_label())
+            .as_ptr() as u64;
+        let get_class = self.get_class.clone();
+        let miss = self.jit.label();
+        let hit = self.jit.label();
+        self.a64_frame_load(0, lfp, conv(recv) as u32); // x0 = receiver
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            bl get_class;                      // x0 = receiver's ClassId
+            ldr x30, [sp], #16;
+            mov x9, (cache);
+            ldr w11, [x9];                     // cached class
+            cmp w0, w11;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &miss);
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (gv_addr);
+            ldr w10, [x10];                    // VM class version
+            ldr w11, [x9, #(crate::codegen::runtime::GENERIC_SEND_CACHE_VERSION as u32)];
+            cmp w10, w11;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &hit);
+        self.jit.bind_label(miss);
+        self.emit_fpr_save(using_fpr, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                       // vm
+            mov x1, x20;                       // globals
+            mov x2, (callid.get() as u64);     // CallSiteId
+            mov x4, (cache);
+        );
+        self.a64_frame_load(3, lfp, conv(recv) as u32); // x3 = receiver
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                            // x0 = FuncId, or 0
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit, cbz x0, deopt;);
+        self.jit.bind_label(hit);
+    }
+
+    ///
+    /// A send whose target is resolved at run time. x86 twin:
+    /// `emit_generic_send`, which carries the full note; the frame build and
+    /// the indirect call are `emit_yield`'s, with a method frame (no outer,
+    /// `self` = the receiver) in place of a block frame.
+    ///
+    pub(in crate::codegen::jitgen) fn emit_generic_send(
+        &mut self,
+        callid: CallSiteId,
+        recv: SlotId,
+        cache: u64,
+        simple_args: Option<(SlotId, usize)>,
+        error: &DestLabel,
+        evict: AsmEvict,
+        pc: BytecodePtr,
+    ) {
+        let lfp = GP::R14.a64().0;
+        let f_args = crate::codegen::runtime::vm_handle_arguments as *const () as u64;
+        // The target the admission test left in the cache.
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (cache);
+            ldr w2, [x9, #(crate::codegen::runtime::GENERIC_SEND_CACHE_FID as u32)];
+        );
+        self.a64_get_func_data_x2(); // x9 = &FuncData (clobbers x10, x11)
+        monoasm_arm64!(&mut self.jit, mov x26, x9;);
+        // The method frame: no outer, fresh SVAR, no block (the argument
+        // binder installs the call site's), self = the receiver, meta.
+        self.a64_frame_load(12, lfp, conv(recv) as u32);
+        monoasm_arm64!(&mut self.jit,
+            mov x13, (0u64);
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+            str x13, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+            str x13, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
+            str x13, [x11];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+            str x12, [x11];
+            ldr x10, [x26, #(FUNCDATA_META as u32)];
+            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
+            str x10, [x11];
+        );
+        if let Some((args, pos_num)) = simple_args {
+            // A plain positional call site into a simple callee taking
+            // exactly that many arguments: copy them into the callee frame
+            // (x86 twin: `emit_generic_send`). Anything else binds through
+            // the runtime.
+            let generic = self.jit.label();
+            let exit = self.jit.label();
+            monoasm_arm64!(&mut self.jit,
+                ldrb w9, [x26, #((FUNCDATA_META + META_KIND) as u32)];
+                tbz w9, #(4), generic;
+                ldrh w9, [x26, #(FUNCDATA_MIN as u32)];
+                cmp w9, #(pos_num as u32);
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &generic);
+            monoasm_arm64!(&mut self.jit, sub x13, sp, #(RSP_LOCAL_FRAME as u32););
+            for k in 0..pos_num {
+                self.a64_frame_load(9, lfp, conv(args + k) as u32);
+                self.a64_frame_store(9, 13, (LFP_ARG0 + 8 * k as i32) as u32);
+            }
+            monoasm_arm64!(&mut self.jit, b exit;);
+            self.jit.bind_label(generic);
+            self.a64_generic_handle_arguments(f_args, callid);
+            self.emit_handle_error(error);
+            self.jit.bind_label(exit);
+        } else {
+            self.a64_generic_handle_arguments(f_args, callid);
+            self.emit_handle_error(error);
+        }
+        // call_funcdata: push the control frame, set the callee LFP/PC, call
+        // the entry, restore the caller frame. x3 is the call site's
+        // bytecode pointer for a with-pc builtin.
+        let pc = pc.as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];
+            str x11, [x19, #(EXECUTOR_CFP as u32)];
+            sub x22, sp, #(RSP_LOCAL_FRAME as u32);
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x22, [x10];
+            mov x3, (pc);
+            ldr x21, [x26, #(FUNCDATA_PC as u32)];
+            ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
+            blr x10;                                 // result in x0
+        );
+        let return_addr = self.jit.get_current_address();
+        monoasm_arm64!(&mut self.jit,
+            sub x11, sp, #(RSP_CFP as u32);
+            ldr x10, [x11];
+            str x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x22, [x10];
+        );
+        self.set_deopt_with_return_addr(return_addr, evict);
+    }
+
+    ///
     /// Retire the per-call-site symbol cache when its answers no longer
     /// apply: on a class-version change, and on a change of *receiver
     /// class* — the cache maps a name to a `FuncId`, which is only that

@@ -45,6 +45,11 @@ pub(in crate::codegen) enum RecvMissMode {
     /// reproduce this very body, so the ratchet stops there (no
     /// recompile-per-N-misses livelock).
     Learn,
+    /// Branch to the given label: the residual arm of a dispatch whose
+    /// other receivers take a generic send (see
+    /// [`JitContext::method_call_with_residual`]). The receiver guard
+    /// becomes a branch, so this compile's body is only the fast arm.
+    Residual(JitLabel),
 }
 
 impl<'a> JitContext<'a> {
@@ -195,6 +200,11 @@ impl<'a> JitContext<'a> {
                 None
             }
         };
+        if let Some(outcome) = self.method_call_with_residual(
+            state, ir, recv_class, arg_class, func_id, visibility, callid,
+        )? {
+            return Ok(outcome);
+        }
         self.compile_method_call(
             state,
             ir,
@@ -205,6 +215,148 @@ impl<'a> JitContext<'a> {
             callid,
             RecvMissMode::Learn,
         )
+    }
+
+    ///
+    /// Can *callid* take a generic send (`AsmInst::GenericSend`) as the
+    /// residual arm of a receiver dispatch?
+    ///
+    /// A named call site only — a `super` target can depend on the frame,
+    /// not just the receiver — with no literal block (handing one out needs
+    /// the outgoing-block treatment of the frame's locals, which the
+    /// residual does not give) and no `(...)` forwarding (the lazy
+    /// forwarding marker is the specialized binder's business).
+    ///
+    pub(super) fn generic_send_eligible(&self, callid: CallSiteId) -> bool {
+        let callsite = &self.store[callid];
+        callsite.name.is_some() && callsite.block_fid.is_none() && !callsite.forwarding
+    }
+
+    ///
+    /// Emit the residual arm of a receiver dispatch: a generic send, from
+    /// the arm's entry state *state*.
+    ///
+    /// The target is unknown here, and so is what it reaches. The admission
+    /// test turns away a target that captures its caller directly
+    /// (`Kernel#binding`, `eval`), but not one that gets there through a
+    /// builtin that calls back by name: `x.send(:binding)`, `alias tag
+    /// send`, `[x].map(&:binding)` — each anchors the Binding at the
+    /// nearest Ruby frame, which is this one. So the arm drops the frame's
+    /// no-capture invariant: the result is homed through the LFP, and the
+    /// capture guard after the call deopts if the frame was promoted to the
+    /// heap, so the rest of the method runs against the heap copy — the one
+    /// the Binding wrote — in the VM. (Without it, the compiled
+    /// continuation read the abandoned stack copy: a `send`-aliased `tag`
+    /// reaching `binding` answered `nil`.)
+    ///
+    pub(super) fn generic_send_arm(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+    ) {
+        state.unset_no_capture_guard(self);
+        state.generic_send(ir, self.store, callid);
+    }
+
+    ///
+    /// Compile a send whose receiver guard would otherwise deopt for good as
+    /// a two-arm dispatch instead: the ordinary compile for *recv_class* (or
+    /// its class-set guard) as the fast arm, and a generic send for every
+    /// other receiver.
+    ///
+    /// ```text
+    ///         br_class_ne recv, C -> residual    (or br_class_not_in)
+    ///         <the ordinary compile for C>       ; specialized / inlined
+    ///         br merge
+    ///   residual:
+    ///         <generic send>                     ; resolved at run time
+    ///   merge:
+    /// ```
+    ///
+    /// Only where the plain deopt is permanent: the VM has shown this site
+    /// more than one receiver class (so `Learn` has nothing left to learn)
+    /// and the polymorphic paths already tried at this compile — the PIC
+    /// in `method_call`, the class-set guard — declined or cover only part
+    /// of it. A deopt there is paid on every off-class call, and deep in a
+    /// specialized chain it throws away the whole chain's frames; the
+    /// residual keeps the hot class's arm exactly as it was and serves the
+    /// rest the way the VM would, minus the bytecode decode.
+    ///
+    /// The fast arm is *not* a dispatch arm in the `in_dispatch_arm` sense:
+    /// it may specialize, because nothing is emitted ahead of it that a
+    /// failure would strand — any outcome but `Continue` rolls the whole
+    /// attempt back (`ir.restore`) and the caller compiles the site the
+    /// ordinary way. What the merge costs is precision: it is declared
+    /// (`dst` an unknown `Value`), so a result the fast arm knew the type of
+    /// is boxed there.
+    ///
+    /// `None` when the site does not qualify, with *state* and *ir*
+    /// untouched.
+    ///
+    #[allow(clippy::too_many_arguments)]
+    fn method_call_with_residual(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        recv_class: ClassId,
+        arg_class: Option<ClassId>,
+        func_id: FuncId,
+        visibility: Visibility,
+        callid: CallSiteId,
+    ) -> JitResult<Option<CompileResult>> {
+        let callsite = &self.store[callid];
+        let recv = callsite.recv;
+        if state.class(recv) == Some(recv_class)
+            || callsite.pmc.entries().len() < 2
+            || self.in_dispatch_arm()
+            || !self.generic_send_eligible(callid)
+        {
+            return Ok(None);
+        }
+        let CallSiteInfo {
+            args,
+            pos_num,
+            kw_pos,
+            block_arg,
+            dst,
+            ..
+        } = *callsite;
+        // Everything either arm reads out of this frame has to be at its
+        // stack home before the split.
+        let mut operands = Vec::with_capacity(pos_num + 2);
+        operands.push(recv);
+        operands.extend((0..pos_num).map(|i| args + i));
+        operands.extend((0..callsite.kw_len()).map(|i| kw_pos + i));
+        operands.extend(block_arg);
+
+        let ir_save = ir.save();
+        let state_save = state.clone();
+        let (entry, merge) = self.declare_merge(state, ir, &operands, dst);
+        let residual = self.label();
+        let mut fast = entry.clone();
+        let outcome = self.compile_method_call(
+            &mut fast,
+            ir,
+            recv_class,
+            arg_class,
+            func_id,
+            visibility,
+            callid,
+            RecvMissMode::Residual(residual),
+        );
+        if !matches!(outcome, Ok(CompileResult::Continue)) {
+            ir.restore(ir_save);
+            *state = state_save;
+            return Ok(None);
+        }
+        self.end_arm(fast, ir, &merge, true);
+        ir.push(AsmInst::Label(residual));
+        let mut rest = entry;
+        self.generic_send_arm(&mut rest, ir, callid);
+        self.end_arm(rest, ir, &merge, false);
+        self.bind_merge(state, ir, merge);
+        Ok(Some(CompileResult::Continue))
     }
 
     ///
@@ -685,9 +837,14 @@ impl<'a> JitContext<'a> {
                         });
                     }
                 }
-                let deopt = ir.new_deopt(state);
-                state.load(ir, recv, GP::Rdi);
-                ir.push(AsmInst::GuardClassIn(GP::Rdi, classes, deopt));
+                if let RecvMissMode::Residual(residual) = recv_miss {
+                    state.load(ir, recv, GP::Rdi);
+                    ir.push(AsmInst::BrClassNotIn(GP::Rdi, classes, residual));
+                } else {
+                    let deopt = ir.new_deopt(state);
+                    state.load(ir, recv, GP::Rdi);
+                    ir.push(AsmInst::GuardClassIn(GP::Rdi, classes, deopt));
+                }
                 same_target_set_guarded = true;
             } else {
                 let use_recompile = match recv_miss {
@@ -720,18 +877,26 @@ impl<'a> JitContext<'a> {
                     RecvMissMode::Learn => {
                         recv_class != INTEGER_CLASS && self.store[callid].pmc.entries().len() < 2
                     }
-                    RecvMissMode::Plain => false,
+                    RecvMissMode::Plain | RecvMissMode::Residual(_) => false,
                 };
-                let deopt = if let Some(target) = use_recompile
-                    .then(|| self.recv_miss_recompile_target())
-                    .flatten()
-                {
-                    ir.new_recompile_deopt(state, RecompileReason::BecamePolymorphic, target)
+                if let RecvMissMode::Residual(residual) = recv_miss {
+                    // Reaching the fast arm *is* the proof, as for a PIC arm.
+                    state.load(ir, recv, GP::Rdi);
+                    if state.guard_class_state(recv, recv_class) {
+                        ir.push(AsmInst::BrClassNe(GP::Rdi, recv_class, residual));
+                    }
                 } else {
-                    ir.new_deopt(state)
-                };
-                state.load(ir, recv, GP::Rdi);
-                state.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
+                    let deopt = if let Some(target) = use_recompile
+                        .then(|| self.recv_miss_recompile_target())
+                        .flatten()
+                    {
+                        ir.new_recompile_deopt(state, RecompileReason::BecamePolymorphic, target)
+                    } else {
+                        ir.new_deopt(state)
+                    };
+                    state.load(ir, recv, GP::Rdi);
+                    state.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
+                }
             }
         }
 
@@ -3108,6 +3273,63 @@ impl AbstractState {
     }
 
     ///
+    /// A send whose target is resolved at run time: the residual arm of a
+    /// receiver dispatch (see `JitContext::generic_send_eligible` for the
+    /// call sites it takes). Deopts ahead of the call when the receiver's
+    /// target is one the VM has to handle (`GuardSendResolvable`);
+    /// otherwise framed exactly like `send`, with the lookup, the frame
+    /// build and the argument binding done at run time.
+    ///
+    pub(super) fn generic_send(&mut self, ir: &mut AsmIr, store: &Store, callid: CallSiteId) {
+        let callsite = &store[callid];
+        let (recv, dst) = (callsite.recv, callsite.dst);
+        // The run-time binder reads the receiver, the arguments, the
+        // keywords and a block argument out of this frame.
+        self.write_back_recv_and_callargs(ir, callsite);
+        let using_fpr = self.get_using_fpr(ir);
+        let deopt = ir.new_deopt(self);
+        // One cache per compiled send, alive as long as the code (leaked,
+        // like the other per-site words the backends bake in by address).
+        let cache = Box::into_raw(Box::new(runtime::GenericSendCache::default())) as u64;
+        ir.push(AsmInst::GuardSendResolvable {
+            callid,
+            recv,
+            using_fpr,
+            cache,
+            deopt,
+        });
+        let evict = ir.new_evict();
+        self.check_stack(ir);
+        ir.fpr_save_cont(using_fpr);
+        ir.push(AsmInst::ContFramePc {
+            call_site_pc: self.pc().as_ptr() as u64,
+        });
+        self.discard(dst);
+        self.clear_above_next_sp();
+        let error = ir.new_error(self);
+        ir.push(AsmInst::GenericSend {
+            callid,
+            recv,
+            cache,
+            error,
+            evict,
+            pc: self.pc(),
+        });
+        self.chain_exit(ir, evict, using_fpr, dst);
+        ir.fpr_restore_cont(using_fpr);
+        ir.handle_error(error);
+        if self.no_capture_guard() {
+            self.def_rax2gp(ir, dst);
+        } else {
+            self.def_rax2acc_capturing(ir, dst);
+        }
+        self.immediate_evict(ir, evict);
+        self.unset_class_version_guard();
+        self.unset_const_version_guard();
+        self.unset_side_effect_guard();
+    }
+
+    ///
     /// ### in
     /// rdi: receiver: Value
     ///
@@ -3849,6 +4071,39 @@ mod tests {
             res << check(WeirdIsA.new)
             res << check(7) << check(nil) << check(false)
             res
+            "#,
+        );
+    }
+
+    /// A site whose receivers share one Ruby-defined target keeps the
+    /// single-class guard (the target is specialized for the hot class),
+    /// and once the PMC shows the other classes its miss is a generic send
+    /// rather than a deopt: the fast arm stays specialized, the other
+    /// subclasses — with their own ivar layouts — dispatch through the
+    /// target's wrapper. Also covers keyword arguments bound at run time,
+    /// and a redefinition after warmup.
+    #[test]
+    fn mono_guard_generic_residual() {
+        run_test_once(
+            r#"
+            class Base; def val(a, b) = a + b + (@k ||= 1); end
+            class S1 < Base; end
+            class S2 < Base; def initialize = (@z = 3); end
+            class S3 < Base; def initialize = (@y = 1; @z = 2; @k = 10); end
+            def pr(o, i) = o.val(i, 2)
+            class K1; def f(a, k: 1) = a + k; end
+            class K2 < K1; end
+            class K3 < K1; def initialize = (@q = 1); end
+            def pk(o, i) = o.f(i, k: 3)
+            objs = [S1.new, S1.new, S2.new, S1.new, S3.new]
+            kobjs = [K1.new, K2.new, K1.new, K3.new]
+            acc = 0
+            2000.times do |i|
+              acc += pr(objs[i % 5], i)
+              acc += pk(kobjs[i % 4], i)
+            end
+            class S3; def val(a, b) = -1; end
+            [acc, pr(S3.new, 1), pr(S2.new, 1), pk(K3.new, 1)]
             "#,
         );
     }

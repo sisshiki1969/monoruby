@@ -738,6 +738,148 @@ impl Codegen {
     }
 
     ///
+    /// The admission test of a generic send: a hit on its one-entry cache
+    /// (receiver class and VM class version, as the VM's own send cache
+    /// checks them) admits; a miss asks `runtime::jit_generic_send_check`,
+    /// which refills the cache, and deopts on its refusal. The miss path is
+    /// laid out inline rather than on page 1: the residual arm this sits in
+    /// may itself be emitted in a cold block.
+    ///
+    pub(in crate::codegen::jitgen) fn emit_guard_send_resolvable(
+        &mut self,
+        callid: CallSiteId,
+        recv: SlotId,
+        using_fpr: UsingFpr,
+        cache: u64,
+        deopt: &DestLabel,
+    ) {
+        let miss = self.jit.label();
+        let hit = self.jit.label();
+        let get_class = self.get_class.clone();
+        let class_version = self.class_version_label();
+        monoasm! { &mut self.jit,
+            movq rdi, [rbp - (rbp_local(recv))];
+            call get_class;                       // rax <- receiver's ClassId
+            movq r11, (cache);
+            cmpl rax, [r11];
+            jne  miss;
+            movl rax, [rip + class_version];
+            cmpl rax, [r11 + (runtime::GENERIC_SEND_CACHE_VERSION)];
+            jeq  hit;
+        miss:
+        }
+        self.fpr_save(using_fpr);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;                        // vm
+            movq rsi, r12;                        // globals
+            movl rdx, (callid.get());             // CallSiteId
+            movq rcx, [rbp - (rbp_local(recv))];  // receiver
+            movq r8, (cache);
+            movq rax, (runtime::jit_generic_send_check);
+            call rax;
+        }
+        self.fpr_restore(using_fpr);
+        monoasm! { &mut self.jit,
+            testq rax, rax;
+            jeq  deopt;
+        hit:
+        }
+    }
+
+    ///
+    /// A send whose target is resolved at run time — the VM's own call
+    /// sequence (`vm_send` + `vm_call`), minus its inline cache: resolve,
+    /// build the method frame, bind the arguments with
+    /// `runtime::vm_handle_arguments` (which also installs the block), and
+    /// call the target's entry. The preceding `GuardSendResolvable` has
+    /// already admitted this receiver's target into *cache*, and no Ruby
+    /// code has run since, so the target is read straight from it.
+    ///
+    /// ### in
+    /// - the cont frame is reserved (`FprSave(_, true)` + `ContFramePc`)
+    ///
+    /// ### out
+    /// - rax: the call's result
+    ///
+    pub(in crate::codegen::jitgen) fn emit_generic_send(
+        &mut self,
+        callid: CallSiteId,
+        recv: SlotId,
+        cache: u64,
+        simple_args: Option<(SlotId, usize)>,
+        error: &DestLabel,
+        evict: AsmEvict,
+        pc: BytecodePtr,
+    ) {
+        monoasm! { &mut self.jit,
+            movq rax, (cache);
+            movl rdx, [rax + (runtime::GENERIC_SEND_CACHE_FID)];
+        }
+        self.get_func_data();
+        // r15 <- &FuncData
+        monoasm! { &mut self.jit,
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
+            movq rax, [r15 + (FUNCDATA_META)];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
+            // Zero SVAR — method-introducing frame's lazy `$~`
+            // container is allocated on first MatchData write.
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
+            movq rax, [rbp - (rbp_local(recv))];
+            movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
+        }
+        if let Some((args, pos_num)) = simple_args {
+            // A plain positional call site into a simple callee taking
+            // exactly that many arguments (`vm_call`'s fast path): copy the
+            // arguments into the callee frame. Anything else binds through
+            // the runtime.
+            let generic = self.jit.label();
+            let exit = self.jit.label();
+            monoasm! { &mut self.jit,
+                movzxb rax, [r15 + ((FUNCDATA_META + META_KIND) as i32)];
+                testq rax, 0b1_0000;
+                jz   generic;
+                movzxw rax, [r15 + (FUNCDATA_MIN)];
+                cmpw  rax, (pos_num);
+                jne  generic;
+            }
+            for i in 0..pos_num {
+                monoasm! { &mut self.jit,
+                    movq rax, [rbp - (rbp_local(args + i))];
+                    movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + 8 * i as i32)], rax;
+                }
+            }
+            monoasm! { &mut self.jit,
+            exit:
+            }
+            self.jit.select_page(1);
+            monoasm! { &mut self.jit,
+            generic:
+                movl r8, (callid.get()); // CallSiteId
+            }
+            self.generic_handle_arguments(runtime::vm_handle_arguments);
+            self.handle_error(error);
+            monoasm! { &mut self.jit,
+                jmp  exit;
+            }
+            self.jit.select_page(0);
+        } else {
+            monoasm! { &mut self.jit,
+                movl r8, (callid.get()); // CallSiteId
+            }
+            self.generic_handle_arguments(runtime::vm_handle_arguments);
+            self.handle_error(error);
+        }
+        // `call_funcdata` hands a with-pc builtin `r13 - 16` as the call
+        // site's bytecode pointer.
+        monoasm! { &mut self.jit,
+            movq r13, (pc.as_ptr() as u64 + 16);
+        }
+        let return_addr = self.call_funcdata();
+        self.set_deopt_with_return_addr(return_addr, evict);
+    }
+
+    ///
     /// Retire the per-call-site symbol cache when its answers no longer
     /// apply — before anything reads it.
     ///

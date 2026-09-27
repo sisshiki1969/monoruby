@@ -2100,44 +2100,6 @@ pub(super) enum AsmInst {
         error: AsmError,
         evict: AsmEvict,
     },
-    ///
-    /// Admission test of a generic send: deopt unless the receiver in
-    /// `recv`'s stack home resolves the call site's name to a target the
-    /// compiled residual may call. A hit on the send's one-entry cache
-    /// (receiver class + class version) admits inline; a miss asks
-    /// `runtime::jit_generic_send_check`, which refills the cache, saving
-    /// and restoring `using_fpr` around the C call itself, so it may sit
-    /// anywhere the operands are homed.
-    ///
-    GuardSendResolvable {
-        callid: CallSiteId,
-        recv: SlotId,
-        using_fpr: UsingFpr,
-        /// The send's `runtime::GenericSendCache`, by address.
-        cache: u64,
-        deopt: AsmDeopt,
-    },
-    ///
-    /// A send whose target is resolved at run time: take the target the
-    /// admission test left in the cache, build the method frame and bind the arguments with
-    /// the VM's own `vm_handle_arguments`, then call the target's entry
-    /// (its wrapper, which re-dispatches on the receiver class). The
-    /// residual arm of a receiver-class dispatch, for receivers no compiled
-    /// arm covers. Framed like `Yield`: the operands are homed, the
-    /// cont frame is reserved by a preceding `FprSave(_, true)` +
-    /// `ContFramePc`, and the call's return address is recorded under
-    /// `evict` for the following `ChainExit`.
-    ///
-    GenericSend {
-        callid: CallSiteId,
-        recv: SlotId,
-        /// The cache the preceding `GuardSendResolvable` just filled: the
-        /// target is read from it.
-        cache: u64,
-        error: AsmError,
-        evict: AsmEvict,
-        pc: BytecodePtr,
-    },
     SpecializedYield {
         entry: JitLabel,
         evict: AsmEvict,

@@ -358,14 +358,6 @@ impl<'a> JitContext<'a> {
         // union exactly once. Hoisting the deopt into a separate union guard
         // ahead of the arms reads better but compares everything twice — it
         // measured ~16% slower.
-        // Once a rebuild can no longer help (the PMC is full or overflowed,
-        // or this unit has no recompile target), a receiver past the last
-        // arm is not a class the chain will ever learn: serve it with a
-        // generic send rather than deopting on each of its calls. That is
-        // also where a dropped class lands; the send's own admission test
-        // still deopts the targets the VM has to run itself.
-        let residual =
-            (recompile_exit.is_none() && self.generic_send_eligible(callid)).then(|| self.label());
         let mut miss: Option<JitLabel> = None;
         for (i, group) in groups.iter().enumerate() {
             let last = i + 1 == groups.len();
@@ -373,13 +365,7 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::Label(miss));
             }
             let mut arm = entry.clone();
-            if last && let Some(residual) = residual {
-                ir.push(AsmInst::BrClassNotIn(
-                    GP::Rdi,
-                    group.classes.clone().into_boxed_slice(),
-                    residual,
-                ));
-            } else if last {
+            if last {
                 // Falling out of the last arm's set (past the dropped-class
                 // filter above) is a class the VM never observed here. If
                 // the PMC can still record it (`can_learn`: a free way, no
@@ -451,13 +437,7 @@ impl<'a> JitContext<'a> {
                 )
             })?;
             debug_assert!(matches!(outcome, CompileResult::Continue));
-            self.end_arm(arm, ir, &merge, !last || residual.is_some());
-        }
-        if let Some(residual) = residual {
-            ir.push(AsmInst::Label(residual));
-            let mut rest = entry.clone();
-            self.generic_send_arm(&mut rest, ir, callid);
-            self.end_arm(rest, ir, &merge, false);
+            self.end_arm(arm, ir, &merge, !last);
         }
         self.bind_merge(state, ir, merge);
         Ok(true)
@@ -722,98 +702,10 @@ mod tests {
         );
     }
 
-    /// Past a full PMC the chain can learn nothing more, so the last arm's
-    /// miss is a generic send instead of a deopt. The overflow classes here
-    /// exercise what that send has to get right on its own: differing
-    /// arities, optional and keyword parameters, a splat and a block
-    /// argument bound at run time, `method_missing`, a private target (the
-    /// admission test deopts, the VM raises), and a target that is
-    /// `Kernel#binding` itself (deopted, so the Binding sees the frame).
-    #[test]
-    fn pic_overflow_generic_residual() {
-        run_test(
-            r#"
-            class Ga; def tag(*a, **k, &b) = [:a, a, k, b&.call]; end
-            class Gb; def tag(x = 0, k: 1) = [:b, x, k]; end
-            class Gc; def tag(*r) = [:c, r]; end
-            class Gd; def method_missing(n, *a, **k) = [:mm, n, a, k]; def respond_to_missing?(*) = true; end
-            class Ge; private def tag(*) = :private; end
-            class Gf; alias tag binding; public :tag; end
-            class H1; def tag = 1; end
-            class H2; def tag = 2; end
-            class H3; def tag = 3; end
-            class H4; def tag = 4; end
-            class H5; def tag(x = 5) = x; end
-            def probe(x, i) = x.tag(i, 2, k: 3)
-            def probe2(x, arr, blk) = x.tag(*arr, &blk)
-            def probe3(x)
-              loc = 42
-              x.tag
-            end
-            vals = [Ga.new, Gc.new, Gd.new, H5.new, Ga.new, Gc.new]
-            blk = -> { :blk }
-            res = []
-            600.times do |i|
-              v = vals[i % 6]
-              res << (probe(v, i) rescue :argerr)
-              res << (probe2(v, [i], blk) rescue :argerr)
-            end
-            hs = [H1.new, H2.new, H3.new, H4.new, H5.new, Gd.new]
-            s = []
-            600.times { |i| s << probe3(hs[i % 6]) }
-            [
-              res.map { _1.is_a?(Array) ? _1.first : _1 }.tally.sort_by(&:to_s),
-              s.map { _1.is_a?(Array) ? _1.first : _1 }.tally.sort_by(&:to_s),
-              probe3(Gf.new).local_variable_get(:loc),
-              (probe3(Ge.new) rescue $!.class),
-              (probe(Gb.new, 1) rescue $!.class),
-              probe2(Gb.new, [7], nil),
-            ]
-            "#,
-        );
-    }
-
-    /// A generic send can reach `Kernel#binding` through a builtin that
-    /// calls back by name (`alias tag send`), which the admission test
-    /// cannot see. The Binding then promotes *this* frame to the heap and
-    /// writes the locals there; the capture guard after the send must
-    /// deopt, so the rest of the method reads the heap copy — an unboxed
-    /// Float local and a Fixnum local alike.
-    #[test]
-    fn pic_residual_indirect_binding() {
-        run_test(
-            r#"
-            class Q1; def tag(n) = 1; end
-            class Q2; def tag(n) = 2; end
-            class Q3; def tag(n) = 3; end
-            class Q4; def tag(n) = 4; end
-            class Q5; def tag(n) = 5; end
-            class Qs; alias tag send; end
-            def probe(x, i)
-              f = i * 0.5
-              g = f * 2.0 + 0.25
-              k = i + 1
-              r = x.tag(:binding)
-              if r.is_a?(Binding)
-                r.local_variable_set(:g, 7.5)
-                r.local_variable_set(:k, 70)
-                [r.local_variable_get(:g) + g, k, g * 2.0]
-              else
-                r + g + k
-              end
-            end
-            qs = [Q1.new, Q2.new, Q3.new, Q4.new, Q5.new]
-            s = 0
-            1000.times { |i| s += probe(qs[i % 5], i) }
-            [s, probe(Qs.new, 5), probe(Qs.new, 6)]
-            "#,
-        );
-    }
-
     /// More classes than the PMC has ways: the four recorded ones fill the
-    /// chain and the overflow classes take the generic-send residual, with
-    /// the site never rebuilding (`can_learn` is false once the PMC
-    /// overflowed). All six must keep answering their own method.
+    /// chain and the overflow classes deopt on every call, with the site
+    /// never rebuilding (`can_learn` is false once the PMC overflowed). All
+    /// six must keep answering their own method.
     #[test]
     fn pic_overflowed_site_stays_put() {
         run_test(
