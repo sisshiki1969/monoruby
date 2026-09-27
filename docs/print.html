@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a6ada1b0.js";
+            window.path_to_searchindex_js = "searchindex-d1a37987.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -8900,6 +8900,37 @@ Float 前提の <code>CFunc_*</code>)は従来どおり集合ガード時スキ�
 <p>テスト: <code>polymorphic_class_independent_inline</code>(4-way サイトでの
 nil?/frozen?/object_id、frozen? 述語の全表現アーム、warmup 後の
 <code>frozen?</code> オーバーライドの deopt)。</p>
+<h2 id="10-実装済み-メソッド呼び出し残余の-generic-send2026-09"><a class="header" href="#10-実装済み-メソッド呼び出し残余の-generic-send2026-09">10. 実装済み: メソッド呼び出し残余の generic send(2026-09)</a></h2>
+<p>PIC の最終アームで学習の余地がない(PMC 満杯・overflow)とき、および
+PMC が既に多相を観測しているサイトの単相/集合ガードのミスは、従来
+毎回 deopt していた。これを <strong>generic send</strong> に置き換え、「多相サイトは
+永久に deopt し続けない」を不変条件にした。</p>
+<ul>
+<li><strong>形</strong>: 残余は <code>dispatch.rs</code> の宣言型マージの 1 アーム
+(<code>RecvMissMode::Residual</code>、<code>pic.rs</code> の最終アーム / <code>method_call_with_residual</code>)。
+ガードのミス先が deopt ではなく残余ラベルになる。</li>
+<li><strong>探索</strong>: <code>GuardSendResolvable</code> がレシーバクラスを 1-way キャッシュ
+(<code>runtime::GenericSendCache</code>: class, class version, fid)と照合し、
+ミスなら <code>jit_generic_send_check</code> で探索して書き戻す。解決できない
+(未定義・private・<code>method_missing</code> 経由)か、呼び先が <code>binding</code> /
+<code>eval</code> 系の効果を持つときは 0 を返し、その場合だけ deopt する(VM が
+例外や frame 捕捉を正しく扱う)。</li>
+<li><strong>呼び出し</strong>: <code>GenericSend</code> はキャッシュの fid から FuncData を取り、
+wrapper 経由で呼ぶ(self 特化本体へは wrapper がディスパッチ)。
+splat・kw・ブロックのない 8 引数以下の呼び出しは、呼び先が単純な
+シグネチャ(<code>META_KIND</code> の simple bit と <code>FUNCDATA_MIN == pos_num</code>)なら
+インラインでコピーし、それ以外は <code>vm_handle_arguments</code> で束縛する。</li>
+<li><strong>間接的な binding</strong>: 呼び先が <code>send</code> や <code>Method#call</code> のように名前で
+呼び戻す builtin だと、admission 判定をすり抜けて <code>Kernel#binding</code> に
+届き、JIT フレームがヒープへ昇格する。残余アームでは
+<code>no_capture_guard</code> を落とし、send 後の capture ガードで deopt して
+ヒープ側のローカルを読む。</li>
+<li><strong>対象外</strong>: ブロック付き呼び出し、<code>...</code> 転送、名前のない呼び出し。</li>
+</ul>
+<p>テスト: <code>pic_overflow_generic_residual</code>(アリティ差・kw・splat+ブロック
+引数・<code>method_missing</code>・private・<code>alias tag binding</code>)、
+<code>pic_residual_indirect_binding</code>(<code>alias tag send</code> 経由の binding と
+unboxed Float / Fixnum ローカル)、<code>mono_guard_generic_residual</code>。</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="monoruby-の-gc--機構と実装"><a class="header" href="#monoruby-の-gc--機構と実装">monoruby の GC — 機構と実装</a></h1>
 <p>monoruby のガベージコレクタの<strong>現行実装</strong>を、コードに即して解説するドキュメント。
