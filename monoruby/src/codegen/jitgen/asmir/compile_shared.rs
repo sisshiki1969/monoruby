@@ -254,6 +254,18 @@ impl Codegen {
             AsmInst::LoadCVar { name, using_fpr } => {
                 self.encode_linst(LInst::LoadCVar { name, using_fpr })
             }
+            AsmInst::LoadIVarGeneric { name, using_fpr } => {
+                self.encode_linst(LInst::LoadIVarGeneric { name, using_fpr })
+            }
+            AsmInst::StoreIVarGeneric {
+                name,
+                src,
+                using_fpr,
+            } => self.encode_linst(LInst::StoreIVarGeneric {
+                name,
+                src,
+                using_fpr,
+            }),
             AsmInst::LoadDynVar { src } => self.encode_linst(LInst::LoadDynVar { src }),
             AsmInst::StoreDynVar { dst, src } => self.encode_linst(LInst::StoreDynVar { dst, src }),
             // Runtime allocation / C-call family: each builds a heap object via a
@@ -703,8 +715,20 @@ impl Codegen {
                 // the field's doc on `AsmInst::Call`.
                 // x86 JIT-entry lookup (aarch64 ignores it; the lookup is a
                 // side-effect-free table read, so pre-resolving here is safe).
-                let jit_entry = recv_class
-                    .and_then(|rc| is_iseq.and_then(|iseq| store[iseq].get_jit_entry(rc)));
+                //
+                // A self-generic body runs for any receiver, so it is the
+                // direct target both for a proven class without its own
+                // specialization and for a set-guarded site.
+                let jit_entry = is_iseq.and_then(|iseq| {
+                    let info = &store[iseq];
+                    match recv_class {
+                        Some(rc) => info.get_jit_entry(info.unit_class(rc)),
+                        None if info.has_generic_jit() => {
+                            info.get_jit_entry(crate::codegen::GENERIC_SELF_CLASS)
+                        }
+                        None => None,
+                    }
+                });
                 // aarch64 guard-free dispatch-slot lookup (x86 ignores it).
                 // A `Some` recv_class is statically established at this call
                 // site (class-version + single-class receiver guard precede
@@ -1892,6 +1916,16 @@ impl Codegen {
             }
             LInst::LoadCVar { name, using_fpr } => {
                 self.emit_load_cvar(name, using_fpr);
+            }
+            LInst::LoadIVarGeneric { name, using_fpr } => {
+                self.emit_load_ivar_generic(name, using_fpr);
+            }
+            LInst::StoreIVarGeneric {
+                name,
+                src,
+                using_fpr,
+            } => {
+                self.emit_store_ivar_generic(name, src, using_fpr);
             }
             LInst::LoadDynVar { src } => {
                 self.emit_load_dyn_var(src);

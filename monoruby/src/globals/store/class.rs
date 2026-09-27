@@ -2859,8 +2859,8 @@ impl Store {
 
     pub(crate) fn update_inline_cache(&mut self, lfp: Lfp) -> bool {
         let func_id = lfp.func_id();
-        let self_class = lfp.self_val().class();
         let iseq_id = self[func_id].as_iseq();
+        let self_class = self[iseq_id].unit_class(lfp.self_val().class());
         if let Some(version_label) = self.salvage_method_unit(iseq_id, self_class, Some(lfp)) {
             // Read the version *before* taking the mutable borrow below —
             // `Globals::class_version` borrows the same thread-local.

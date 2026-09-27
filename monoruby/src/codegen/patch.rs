@@ -127,7 +127,16 @@ impl Codegen {
         let class_version = self.jit_class_version();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
-        let self_class = lfp.self_val().class();
+        // A method already specialized for many self classes gets one
+        // self-generic body instead of another specialization. It ends the
+        // class-guard chain unguarded, so every class not yet specialized
+        // runs it, and this patch stub is never reached again.
+        let generic = globals.store.wants_generic_self(iseq_id);
+        let self_class = if generic {
+            GENERIC_SELF_CLASS
+        } else {
+            lfp.self_val().class()
+        };
         // Skip compilation if JIT entries were invalidated (e.g. by BOP redefinition).
         if globals.store[iseq_id].jit_invalidated() {
             let vm_entry = self.vm_entry();
@@ -145,7 +154,17 @@ impl Codegen {
         ) {
             let patch_point = self.jit.label();
             let guard = self.jit.label();
-            self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
+            if generic {
+                #[cfg(feature = "jit-log")]
+                eprintln!("[generic-self] {}", globals.store.func_description(func_id));
+                monoasm! { &mut self.jit,
+                guard:
+                patch_point:
+                    jmp jit_entry;
+                }
+            } else {
+                self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
+            }
             globals.store.note_jit_iseq(iseq_id);
             let old_entry = globals.store[iseq_id].add_jit_code(
                 self_class,

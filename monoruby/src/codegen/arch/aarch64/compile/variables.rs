@@ -124,6 +124,61 @@ impl Codegen {
         true
     }
 
+    /// rax <- `@name` of *self* in a self-generic body, via
+    /// runtime::generic_get_ivar(globals, self, name).
+    pub(in crate::codegen::jitgen) fn emit_load_ivar_generic(
+        &mut self,
+        name: IdentId,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let lfp = GP::R14.a64().0;
+        let f = runtime::generic_get_ivar as *const () as u64;
+        self.emit_fpr_save(using_fpr, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x20;                  // globals
+            mov x2, (name.get() as u64); // name
+        );
+        self.a64_frame_load(1, lfp, LFP_SELF as u32); // x1 = self
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        true
+    }
+
+    /// `@name` of *self* <- src in a self-generic body, via
+    /// runtime::generic_set_ivar(vm, globals, self, name, val); x0 = 0 on
+    /// error.
+    pub(in crate::codegen::jitgen) fn emit_store_ivar_generic(
+        &mut self,
+        name: IdentId,
+        src: SlotId,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        let f = runtime::generic_set_ivar as *const () as u64;
+        self.emit_fpr_save(using_fpr, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                  // vm
+            mov x1, x20;                  // globals
+            mov x3, (name.get() as u64); // name
+        );
+        self.a64_frame_load(2, lfp, LFP_SELF as u32); // x2 = self
+        self.a64_frame_load(4, lfp, off); // x4 = val
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        true
+    }
+
     /// rax <- dynamic (outer-frame) local. Walk `outer` outer-LFP links
     /// (LFP_OUTER == 0, so `[lfp]` is the next outer frame), then load the slot.
     /// Mirrors x86 `load_dyn_var`.

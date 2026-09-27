@@ -775,7 +775,11 @@ impl JitStackFrame {
         self_class: ClassId,
         abstract_state: Option<AbstractFrame>,
     ) -> Self {
-        let self_ty = store[self_class].instance_ty();
+        let self_ty = if self_class == GENERIC_SELF_CLASS {
+            None
+        } else {
+            store[self_class].instance_ty()
+        };
         let is_not_block = store[store[iseq_id].func_id()].is_not_block();
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
@@ -1335,6 +1339,12 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn self_class(&self) -> ClassId {
         self.current_frame().self_class
+    }
+
+    /// This frame's body runs for any class of *self*: see
+    /// [`GENERIC_SELF_CLASS`].
+    pub(super) fn self_generic(&self) -> bool {
+        self.self_class() == GENERIC_SELF_CLASS
     }
 
     pub(super) fn self_ty(&self) -> Option<ObjTy> {

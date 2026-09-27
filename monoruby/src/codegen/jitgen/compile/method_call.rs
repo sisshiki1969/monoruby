@@ -1402,6 +1402,10 @@ impl<'a> JitContext<'a> {
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
                     && recv_class_proven
+                    // A method gone self-generic is called, not copied:
+                    // one more per-class copy is what the generic body
+                    // exists to stop.
+                    && !self.store[iseq].has_generic_jit()
                 {
                     return self.specialized_iseq(
                         state,

@@ -11,6 +11,7 @@ use std::time::Duration;
 mod compiler;
 mod jit_module;
 pub mod jitgen;
+pub(crate) use jitgen::GENERIC_SELF_CLASS;
 mod patch;
 pub mod runtime;
 pub(crate) mod signal_table;

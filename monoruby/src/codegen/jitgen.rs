@@ -25,6 +25,17 @@ use context::{JitArgumentInfo, JitType};
 use state::Liveness;
 use trace_ir::*;
 
+///
+/// The self class under which a *self-generic* body is compiled and
+/// recorded: a whole-method unit that runs correctly for a receiver of any
+/// class, used once a method has been specialized for many self classes.
+///
+/// `BasicObject` doubles as the key because a body compiled for it may
+/// assume nothing about *self* anyway: a plain `BasicObject` instance is a
+/// legitimate receiver, and the generic body is correct for it too.
+///
+pub(crate) const GENERIC_SELF_CLASS: ClassId = BASIC_OBJECT_CLASS;
+
 pub mod asmir;
 mod compile;
 mod context;

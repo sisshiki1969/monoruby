@@ -2928,6 +2928,23 @@ pub(super) enum AsmInst {
         name: IdentId,
         using_fpr: UsingFpr,
     },
+    ///
+    /// `rax <- @name` of *self* in a self-generic body: the slot is found
+    /// through the global (class, name) table (`runtime::generic_get_ivar`).
+    ///
+    LoadIVarGeneric {
+        name: IdentId,
+        using_fpr: UsingFpr,
+    },
+    ///
+    /// `@name = [src]` on *self* in a self-generic body
+    /// (`runtime::generic_set_ivar`); raises on a frozen *self*.
+    ///
+    StoreIVarGeneric {
+        name: IdentId,
+        src: SlotId,
+        using_fpr: UsingFpr,
+    },
     CheckCVar {
         name: IdentId,
         using_fpr: UsingFpr,

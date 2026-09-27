@@ -511,6 +511,34 @@ impl Store {
         self[iseq_id].set_salvage_record(self_class, class_version_label, cache, const_map);
     }
 
+    ///
+    /// Whether the next whole-method compile of *iseq_id* should produce a
+    /// self-generic body instead of one more self-class specialization.
+    ///
+    /// Only once the method has been specialized for
+    /// `MONORUBY_GENERIC_SELF` (default: off) self classes. Excluded:
+    /// methods whose constant sites may resolve through *self*
+    /// (singleton-lexical), and `(...)` forwarding trampolines, whose
+    /// per-class specialization is what removes their rest `Array`.
+    ///
+    pub(crate) fn wants_generic_self(&self, iseq_id: ISeqId) -> bool {
+        thread_local! {
+            static THRESHOLD: usize = std::env::var("MONORUBY_GENERIC_SELF")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+        }
+        let threshold = THRESHOLD.with(|t| *t);
+        if threshold == 0 {
+            return false;
+        }
+        let iseq = &self[iseq_id];
+        !iseq.in_singleton_lexical
+            && !self[iseq.func_id()].params().forwarding()
+            && !iseq.has_generic_jit()
+            && iseq.jit_entry_len() >= threshold
+    }
+
     /// The loop-body twin of [`Self::set_salvage_record`].
     pub(crate) fn set_loop_jit_info(
         &mut self,

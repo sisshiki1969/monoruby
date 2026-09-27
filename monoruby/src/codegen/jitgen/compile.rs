@@ -570,6 +570,13 @@ impl<'a> JitContext<'a> {
             TraceIr::StoreConst(src, id) => {
                 state.store_constant(ir, src, id);
             }
+            TraceIr::LoadIvar(dst, name, _) if self.self_generic() => {
+                state.jit_load_ivar_generic(ir, name, dst);
+            }
+            TraceIr::StoreIvar(src, name, _) if self.self_generic() => {
+                state.jit_store_ivar_generic(ir, name, src);
+                state.unset_side_effect_guard();
+            }
             TraceIr::LoadIvar(dst, name, cache) => {
                 let self_class = self.self_class();
                 if let Some(ivarid) = self.store[self_class].get_ivarid(name) {

@@ -162,6 +162,114 @@ pub(crate) const GENERIC_SEND_CACHE_FID: i32 = std::mem::offset_of!(GenericSendC
 /// reaches the call site's PMC: a site whose receivers the compiled
 /// dispatch does not cover keeps recording them.
 ///
+/// The global instance-variable slot table of self-generic bodies.
+///
+/// A self-generic body does not know *self*'s class at compile time, so it
+/// cannot bake the `IvarId` of `@name` in. This direct-mapped table maps
+/// `(ClassId, name)` to the slot. An entry never goes stale: a class hands
+/// out an `IvarId` for a name once (`Store::get_ivar_id`) and never
+/// renumbers it, so the table needs no invalidation — a colliding pair
+/// simply overwrites the entry.
+///
+const GENERIC_IVAR_TABLE_BITS: u32 = 12;
+
+#[derive(Clone, Copy)]
+struct GenericIvarEntry {
+    class: u32,
+    name: u32,
+    ivar: u32,
+}
+
+thread_local! {
+    static GENERIC_IVAR_TABLE: std::cell::RefCell<Box<[GenericIvarEntry]>> =
+        std::cell::RefCell::new(
+            vec![GenericIvarEntry { class: 0, name: 0, ivar: 0 }; 1 << GENERIC_IVAR_TABLE_BITS]
+                .into_boxed_slice(),
+        );
+}
+
+fn generic_ivar_index(class: u32, name: u32) -> usize {
+    let h = (class as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (name as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    (h >> (64 - GENERIC_IVAR_TABLE_BITS)) as usize
+}
+
+/// The slot of `@name` in instances of `class_id`, creating it when
+/// `create` (a store) and the class has none yet.
+fn generic_ivar_id(
+    store: &mut Store,
+    class_id: ClassId,
+    name: IdentId,
+    create: bool,
+) -> Option<IvarId> {
+    let (c, n) = (class_id.u32(), name.get());
+    let idx = generic_ivar_index(c, n);
+    let hit = GENERIC_IVAR_TABLE.with(|t| {
+        let e = t.borrow()[idx];
+        (e.class == c && e.name == n).then_some(e.ivar)
+    });
+    if let Some(ivar) = hit {
+        return Some(IvarId::new(ivar));
+    }
+    let id = if create {
+        store.get_ivar_id(class_id, name)
+    } else {
+        store[class_id].get_ivarid(name)?
+    };
+    GENERIC_IVAR_TABLE.with(|t| {
+        t.borrow_mut()[idx] = GenericIvarEntry {
+            class: c,
+            name: n,
+            ivar: id.get() as u32,
+        }
+    });
+    Some(id)
+}
+
+///
+/// `@name` of *base* for a self-generic body. `nil` when unset, as the
+/// VM's read is.
+///
+pub(crate) extern "C" fn generic_get_ivar(
+    globals: &mut Globals,
+    base: Value,
+    name: IdentId,
+) -> Value {
+    let Some(rval) = base.try_rvalue() else {
+        return Value::nil();
+    };
+    match generic_ivar_id(&mut globals.store, base.class(), name, false) {
+        Some(id) => rval.get_ivar_by_ivarid(id).unwrap_or_default(),
+        None => Value::nil(),
+    }
+}
+
+///
+/// `@name = val` on *base* for a self-generic body. `None` (with the
+/// error set) when *base* is frozen.
+///
+pub(crate) extern "C" fn generic_set_ivar(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut base: Value,
+    name: IdentId,
+    val: Value,
+) -> Option<Value> {
+    let class_id = base.class();
+    let id = generic_ivar_id(&mut globals.store, class_id, name, true).unwrap();
+    match base.try_rvalue_mut_or_frozen(&globals.store) {
+        Ok(rval) => {
+            rval.set_ivar_by_ivarid(id, val);
+            Some(val)
+        }
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+///
 pub(crate) extern "C" fn jit_generic_send_check(
     vm: &mut Executor,
     globals: &mut Globals,

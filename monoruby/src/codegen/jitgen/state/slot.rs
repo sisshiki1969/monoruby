@@ -306,7 +306,7 @@ impl SlotState {
     fn new(cc: &JitContext, default: LinkMode) -> Self {
         let total_reg_num = cc.total_reg_num();
         let local_num = cc.local_num();
-        let self_class = Guarded::from_class(cc.self_class());
+        let self_class = Guarded::from_self_class(cc.self_class());
         let slot = Slot {
             mode: default,
             ..Slot::default()
@@ -2253,7 +2253,7 @@ impl LinkMode {
         state: &AbstractState,
         self_class: ClassId,
     ) -> Vec<Self> {
-        let recv = LinkMode::S(Guarded::Class(self_class));
+        let recv = LinkMode::S(Guarded::from_self_class(self_class));
         Self::from_caller_inner(store, fid, callid, state, recv)
     }
 
@@ -2339,6 +2339,17 @@ impl Guarded {
             // a single `BOOL_CLASS` guard, avoiding a deopt when a slot
             // toggles between the two booleans.
             Guarded::Class(v.class_for_ic())
+        }
+    }
+
+    /// The guard a frame's `self` starts with: the frame's self class,
+    /// or nothing at all for a self-generic body (see
+    /// [`GENERIC_SELF_CLASS`](crate::codegen::jitgen::GENERIC_SELF_CLASS)).
+    pub fn from_self_class(class: ClassId) -> Self {
+        if class == crate::codegen::jitgen::GENERIC_SELF_CLASS {
+            Guarded::Value
+        } else {
+            Self::from_class(class)
         }
     }
 

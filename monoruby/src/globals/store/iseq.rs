@@ -1215,7 +1215,31 @@ impl ISeqInfo {
         }
     }
 
-    #[cfg(feature = "jit-log")]
+    /// A self-generic whole-method body is installed (see
+    /// [`GENERIC_SELF_CLASS`](crate::codegen::jitgen::GENERIC_SELF_CLASS)).
+    pub(crate) fn has_generic_jit(&self) -> bool {
+        !self.jit_invalidated
+            && self
+                .jit_entry
+                .contains_key(&crate::codegen::jitgen::GENERIC_SELF_CLASS)
+    }
+
+    /// The key of the whole-method unit that runs for a *self* of
+    /// `self_class`: its own specialization when there is one, else the
+    /// self-generic body the class-guard chain ends in.
+    pub(crate) fn unit_class(&self, self_class: ClassId) -> ClassId {
+        if !self.jit_entry.contains_key(&self_class) && self.has_generic_jit() {
+            crate::codegen::jitgen::GENERIC_SELF_CLASS
+        } else {
+            self_class
+        }
+    }
+
+    /// The number of self classes this method has a specialized body for.
+    pub(crate) fn jit_entry_len(&self) -> usize {
+        self.jit_entry.len()
+    }
+
     pub(crate) fn jit_entry_classes(&self) -> Vec<ClassId> {
         self.jit_entry.keys().copied().collect()
     }

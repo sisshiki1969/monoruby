@@ -395,9 +395,9 @@ impl Codegen {
         lfp: Lfp,
         reason: RecompileReason,
     ) -> Option<()> {
-        let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
+        let self_class = globals.store[iseq_id].unit_class(lfp.self_val().class());
         self.recompile_method_by_id(globals, iseq_id, self_class, reason)
     }
 
@@ -834,8 +834,8 @@ fn salvage_method_const(globals: &mut Globals, lfp: Lfp, reason: RecompileReason
     if !matches!(reason, RecompileReason::ConstVersionGuardFailed) {
         return false;
     }
-    let self_class = lfp.self_val().class();
     let iseq_id = globals.store[lfp.func_id()].as_iseq();
+    let self_class = globals.store[iseq_id].unit_class(lfp.self_val().class());
     salvage_const(globals, iseq_id, self_class, None)
 }
 
