@@ -187,6 +187,19 @@ tombstone（`invalidated` ビット）を立てる**。以後スタック側を�
 （`def_return_store_guarded` / `def_rax2acc_capturing`）。昇格が起きても
 生きているフレームへ書き込むためである。
 
+**`ret` の直前では deopt しない**: 呼び出しの次の命令が呼び出し結果か
+`self` を返すだけの `ret` で、フレームがコンパイル内にレキシカルな親を
+持たない（メソッドか root）なら、`immediate_evict` はガードの代わりに
+`AsmInst::ReloadIfCaptured` を出す。昇格していたら結果スロットを LFP 経由
+（ヒープコピー）で読み、`ret` が読むスタックスロットへ書き戻して、そのまま
+コンパイル済みの `ret` へ進む。`ret` が読むのはそのスロットだけなので、
+VM に戻る必要がない。`self` は変わらず、定数・Float の戻り値はスロットを
+読まないので、書き戻しも要らない。ブロックのフレームを除くのは、その昇格が
+外側のフレームにも及び、ブロックの `ret` の後に続く外側のコードがそちらを
+読むからである。`super() { }` で `Hash#initialize` に default proc を渡す
+`InheritableOptions#initialize` のように、呼び出しのたびにフレームが
+昇格するサイトが、以前は毎回ここで deopt していた。
+
 **specialize の拒否**: `&block` を転送する（`BlockArg` を持つ）callee は
 インライン展開しない。specialize すると `pop_frame` が無いため、昇格後に
 r14 がヒープコピーへ更新されず、以後のローカル読みが tombstone と

@@ -1728,6 +1728,11 @@ pub(super) enum AsmInst {
     ///
     KindOfConst { reg: GP, class: ClassId },
     GuardCapture(AsmDeopt),
+    /// In place of `GuardCapture` when the next instruction is a plain
+    /// `ret` of *slot*: if the frame was captured, copy *slot* from the
+    /// live copy (via the LFP) back into the stack slot the `ret` reads,
+    /// instead of deopting to run that `ret` in the VM.
+    ReloadIfCaptured(SlotId),
 
     Ret,
     BlockBreak(BytecodePtr),
@@ -3251,6 +3256,7 @@ impl AsmInst {
             }
             Self::GuardClass(gpr, class, _deopt) => format!("GuardClass {:?} {:?}", class, gpr),
             Self::GuardCapture(_deopt) => format!("Guard Capture"),
+            Self::ReloadIfCaptured(slot) => format!("ReloadIfCaptured {:?}", slot),
 
             Self::CondBr(kind, label) => format!("condbr {:?} {:?}", kind, label),
             Self::NilBr(label) => format!("nil_br {:?}", label),
