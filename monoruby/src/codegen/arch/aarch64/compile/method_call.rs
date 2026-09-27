@@ -1968,18 +1968,25 @@ impl Codegen {
     /// stored to `ret` after a HandleError. The live xmm pool is saved/restored
     /// around the C call (restore placed before the HandleError branch so the
     /// side exit writes the live floats back from the pool); bails only on an
-    /// out-of-range frame offset.
+    /// out-of-range frame offset. With `forward`, runtime::block_arg_forward
+    /// instead: the block handler of the frame `outer` levels up, re-encoded
+    /// to be passed on (`BlockArgProxy` with `outer > 0`).
     pub(in crate::codegen::jitgen) fn emit_block_arg(
         &mut self,
         ret: SlotId,
         using_fpr: UsingFpr,
         call_site_bc_ptr: BytecodePtr,
         error: &DestLabel,
+        forward: bool,
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
         let off = ret.0 as u32 * 8 + LFP_SELF as u32;
         let cs = call_site_bc_ptr.as_ptr() as u64;
-        let f = runtime::block_arg as *const () as u64;
+        let f = if forward {
+            runtime::block_arg_forward as *const () as u64
+        } else {
+            runtime::block_arg as *const () as u64
+        };
         self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;          // vm

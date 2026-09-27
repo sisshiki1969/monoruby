@@ -760,6 +760,37 @@ pub(super) extern "C" fn block_arg(
     }
 }
 
+/// `BlockArgProxy` with `outer > 0`: the `&block` parameter of the frame
+/// `outer` levels up, to be passed on as the block of a call from the
+/// current frame (`pc` as for [`block_arg`]). The slot's value once
+/// assigned; until then that frame's block handler, a proxy re-encoded for
+/// the callee by `Executor::forward_block_param` without materializing it.
+pub(super) extern "C" fn block_arg_forward(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut lfp: Lfp,
+    pc: BytecodePtr,
+) -> Option<Value> {
+    let op = pc.op1();
+    let outer = (op >> 16) as u16;
+    let slot = SlotId::new(op as u16);
+    for _ in 0..outer {
+        lfp = lfp.outer().unwrap();
+    }
+    if slot.0 != 0
+        && let Some(v) = lfp.register(slot)
+    {
+        return Some(v);
+    }
+    match vm.forward_block_param(globals, lfp, pc) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
 pub(super) extern "C" fn gen_array(
     _vm: &mut Executor,
     globals: &mut Globals,

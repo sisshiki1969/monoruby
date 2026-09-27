@@ -800,6 +800,7 @@ impl AsmIr {
         ret: SlotId,
         outer: usize,
         call_site_bc_ptr: BytecodePtr,
+        forward: bool,
     ) {
         let using_fpr = state.using_fpr_offset();
         let error = self.new_error(state);
@@ -809,6 +810,7 @@ impl AsmIr {
             using_fpr,
             error,
             call_site_bc_ptr,
+            forward,
         });
     }
 
@@ -2663,12 +2665,18 @@ pub(super) enum AsmInst {
         outer: usize,
         slot: SlotId,
     },
+    /// The `&block` parameter of the frame `outer` levels up (the operands
+    /// are read off `call_site_bc_ptr`): as a value, materialized into a
+    /// Proc (`runtime::block_arg`), or with `forward`, as a block handler
+    /// to pass on (`runtime::block_arg_forward`, `BlockArgProxy` with
+    /// `outer > 0`).
     BlockArg {
         ret: SlotId,
         _outer: usize,
         using_fpr: UsingFpr,
         error: AsmError,
         call_site_bc_ptr: BytecodePtr,
+        forward: bool,
     },
 
     /// Load instance var *ivarid* of the object *rdi* into register *dst*.

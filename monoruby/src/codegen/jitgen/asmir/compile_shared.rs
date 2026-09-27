@@ -960,6 +960,7 @@ impl Codegen {
                 using_fpr,
                 error,
                 call_site_bc_ptr,
+                forward,
             } => {
                 let error = labels[error].clone();
                 self.encode_linst(LInst::BlockArg {
@@ -967,6 +968,7 @@ impl Codegen {
                     using_fpr,
                     call_site_bc_ptr,
                     error,
+                    forward,
                 });
             }
             // Store into a heap-spilled instance variable of self (the table is
@@ -2173,8 +2175,9 @@ impl Codegen {
                 using_fpr,
                 call_site_bc_ptr,
                 error,
+                forward,
             } => {
-                self.emit_block_arg(ret, using_fpr, call_site_bc_ptr, &error);
+                self.emit_block_arg(ret, using_fpr, call_site_bc_ptr, &error, forward);
             }
             LInst::MethodDef {
                 name,

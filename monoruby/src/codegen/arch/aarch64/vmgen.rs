@@ -479,26 +479,21 @@ impl Codegen {
     /// op 21 `BlockArgProxy`: dst `[pc+4]` <- the `&block` parameter of the
     /// frame `[pc+2]` levels up: its slot `[pc+0]` (0: anonymous) once
     /// assigned, else that frame's block handler with a proxy's depth
-    /// re-encoded. (x86 `vm_block_arg_proxy`.)
+    /// re-encoded. Level 0 is done here (the depth grows by exactly 1);
+    /// a deeper level counts the frames in between at run time
+    /// (`runtime::block_arg_forward`). (x86 `vm_block_arg_proxy`.)
     pub(in crate::codegen) fn a64_op_block_arg_proxy(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
-        let loop_ = self.jit.label();
-        let loop_exit = self.jit.label();
+        let raise = self.entry_raise.clone();
+        let forward = self.jit.label();
         let from_frame = self.jit.label();
         let notzero = self.jit.label();
         let exit = self.jit.label();
         let skip = self.jit.label();
         monoasm_arm64!(&mut self.jit,
-            mov x10, x(LFP.0);
             ldrh w11, [x(PC.0), #(2)];  // outer level
-            cbz x11, loop_exit;
-            loop_:
-            ldr x10, [x10];  // walk outer chain
-            subs x11, x11, #(1);
-        );
-        self.jit.bcond_label(Cond::Ne, &loop_);
-        monoasm_arm64!(&mut self.jit,
-            loop_exit:
+            cbnz x11, forward;
+            mov x10, x(LFP.0);
         // the parameter's slot: an assigned value is the answer.
             ldrh w12, [x(PC.0)];  // slot
             cbz x12, from_frame;
@@ -509,16 +504,13 @@ impl Codegen {
             mov x10, x12;
             b exit;
             from_frame:
-        // block handler = [outer - LFP_BLOCK]
+        // block handler = [lfp - LFP_BLOCK]
             ldur x10, [x10, #(-(LFP_BLOCK as i32))];
             cbnz x10, notzero;
             mov x10, (NIL_VALUE);  // no block -> nil
             notzero:
-        // if bit0 == 0 (Proc/nil), keep as-is; else re-encode proxy depth.
+        // if bit0 == 0 (Proc/nil), keep as-is; else the proxy's depth + 1.
             tbz x10, #(0), exit;
-            ldrh w12, [x(PC.0), #(2)];  // outer
-            lsl x12, x12, #(2);
-            add x10, x10, x12;
             add x10, x10, #(2);
             exit:
         // store X10 to dst [pc+4]
@@ -531,6 +523,16 @@ impl Codegen {
             add x(PC.0), x(PC.0), #(16);
         );
         self.a64_fetch_and_dispatch();
+        monoasm_arm64!(&mut self.jit,
+            forward:
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x2, x(LFP.0);
+            mov x3, x(PC.0);  // BytecodePtr (instruction start)
+            mov x9, (runtime::block_arg_forward as *const () as u64);
+            blr x9;
+        );
+        self.a64_checked_store_next(&raise);
         p
     }
 

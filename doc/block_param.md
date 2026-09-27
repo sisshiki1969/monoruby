@@ -33,7 +33,7 @@ assignment can never be mistaken for the empty state.
 |---|---|---|
 | assignment (`block = v`, from this frame or a nested block) | a plain local store | the slot is no longer 0 |
 | read as a value (`block`, `block.call`) | `BlockArg(dst, outer, slot)` | the slot's value if non-zero; else the handler materialized into a `Proc` (`Executor::block_param_proc`), **cached back into `LFP_BLOCK`** so every read answers the same object (`b.equal?(b)`) |
-| `&block` forwarding | `BlockArgProxy(dst, outer, slot)` | the slot's value if non-zero; else the handler, a proxy re-encoded with the extra frame depth |
+| `&block` forwarding | `BlockArgProxy(dst, outer, slot)` | the slot's value if non-zero; else the handler, a proxy re-encoded with the extra frame depth: +1 for `outer == 0`, and for a nested block the live control frames between it and the method, counted at run time (`Executor::forward_block_param`), so forwarding never materializes a Proc or promotes a frame (it falls back to the Proc only when the depth overflows a proxy) |
 | `yield` / `block_given?` | unchanged | the frame's block handler, never the local (CRuby: `yield` after `b = proc {}` still calls the original block) |
 | `binding.local_variable_get(:block)` | `Binding#local_variable_get` | an empty slot answers `block_param_proc` |
 

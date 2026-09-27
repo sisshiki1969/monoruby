@@ -1305,23 +1305,20 @@ impl Codegen {
     // The `&block` parameter's slot (`slt`, 0: anonymous) in the frame
     // `out` levels up: an assigned value is forwarded as is; an empty slot
     // (0, never assigned) means the frame's block handler, a proxy
-    // re-encoded with the extra depth.
+    // re-encoded with the extra depth. `out == 0` is done here (the depth
+    // grows by exactly 1); `out > 0` counts the frames in between at run
+    // time (`runtime::block_arg_forward`).
     fn vm_block_arg_proxy(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
-        let loop_ = self.jit.label();
-        let loop_exit = self.jit.label();
+        let raise = self.entry_raise();
+        let forward = self.jit.label();
         let from_frame = self.jit.label();
         let exit = self.jit.label();
         self.fetch3();
         monoasm! { &mut self.jit,
-            movq  rax, r14;
             testq rdi, rdi;
-            jz   loop_exit;
-        loop_:
-            movq rax, [rax];
-            subl rdi, 1;
-            jnz  loop_;
-        loop_exit:
+            jnz  forward;
+            movq rax, r14;
             testq rsi, rsi;
             jz   from_frame;
             negq rsi;
@@ -1337,10 +1334,17 @@ impl Codegen {
             cmoveqq rax, rdi;
             testq rax, 0b1;
             jeq exit;
-            movzxw rdi, [r13 - 14];
-            shlq rdi, 2;
-            addq rax, rdi;
             addq rax, 0b10;
+            jmp  exit;
+        forward:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, r14;
+            lea  rcx, [r13 - 16];
+            movq rax, (runtime::block_arg_forward);
+            call rax;
+            testq rax, rax;
+            jz raise;
         exit:
         };
         self.vm_store_r15(GP::Rax);

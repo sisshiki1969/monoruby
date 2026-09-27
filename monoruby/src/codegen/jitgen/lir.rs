@@ -1103,6 +1103,7 @@ pub(in crate::codegen) enum LInst {
         using_fpr: UsingFpr,
         call_site_bc_ptr: BytecodePtr,
         error: DestLabel,
+        forward: bool,
     },
     MethodDef {
         name: IdentId,
