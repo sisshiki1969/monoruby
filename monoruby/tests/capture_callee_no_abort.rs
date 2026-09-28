@@ -139,3 +139,27 @@ fn class_eval_string_callee() {
         "#,
     );
 }
+
+#[test]
+fn eval_callee_at_polymorphic_site_keeps_constants() {
+    // A polymorphic site whose callee is `instance_eval` with a string: the
+    // generic-send residual must not take it into its fast arm, since the
+    // frame write-back before the capturing call (`x` is a constant `nil`
+    // here) would not match the declared merge state.
+    run_test(
+        r#"
+        class A; def val = @v; end
+        class B; def val = @v; end
+        OBJS = [A.new, B.new]
+        def run(i)
+          x = nil
+          o = OBJS[i % 2]
+          o.instance_eval("@v = #{i}")
+          [x, o.val]
+        end
+        res = []
+        40.times { |i| res << run(i) }
+        res
+        "#,
+    );
+}

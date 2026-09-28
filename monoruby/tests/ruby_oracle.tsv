@@ -683,6 +683,7 @@
 205e65e2298e3b75f7ddf8cf3f3495c6	[false, true, "z", :nme]	res = []\n        30.times { res << ("abc" !~ /b/) << ("abc" !~ /z/) << 
 206652bec5b6b36846721ea87b2a4280	[true, true, true, true]	b = binding\n        sl = b.source_location\n        [sl.is_a?(Array), sl
 207dfdc3a331dc3a9bd12c35a3e92870	["pv\\n", "pv2\\n", "pv3\\n", "/tmp\\n", "/tmp\\n", true, "ISO-8859-1", ["UTF-8", "ISO-8859-1"]]	r = []\n            IO.popen([{"PV" => "pv"}, "sh", "-c", "echo $PV"
+207ee138b0c79acbe9db49a08235cc9b	[[nil, 0], [nil, 1], [nil, 2], [nil, 3], [nil, 4], [nil, 5], [nil, 6], [nil, 7], [nil, 8], [nil, 9], [nil, 10], [nil, 11], [nil, 12], [nil, 13], [nil, 14], [nil, 15], [nil, 16], [nil, 17], [nil, 18], [nil, 19], [nil, 20], [nil, 21], [nil, 22], [nil, 23], [nil, 24], [nil, 25], [nil, 26], [nil, 27], [nil, 28], [nil, 29], [nil, 30], [nil, 31], [nil, 32], [nil, 33], [nil, 34], [nil, 35], [nil, 36], [nil, 37], [nil, 38], [nil, 39]]	class A; def val = @v; end\n        class B; def val = @v; end\n        O
 209dfca7e20d5b08fbea7e352067e47e	1	begin\n          abort("test")\n        rescue SystemExit => e\n          
 20a29c3694791809267cf4fb4c026f0b	[true, true, true, true, true]	class C\n              def f(a, b); a + b; end\n            end\n     
 20a5e889d929c3cfef9d0249a0d89866	1	class Foo\n              def initialize\n                @a = 1\n     

@@ -325,10 +325,16 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<Option<CompileResult>> {
         let callsite = &self.store[callid];
         let recv = callsite.recv;
+        // A capturing callee (`eval`) is kept out of the fast arm for the
+        // reason the PIC drops it: its frame write-back inside the arm
+        // (`unbox_to_S_for_outgoing_block`, a `C` becomes `S`) describes a
+        // frame the declared merge does not share, and the bridge cannot
+        // turn a value back into a constant.
         if state.class(recv) == Some(recv_class)
             || callsite.pmc.entries().len() < 2
             || self.in_dispatch_arm()
             || !self.generic_send_eligible(callid)
+            || self.store[func_id].possibly_capture_without_block()
         {
             return Ok(None);
         }
