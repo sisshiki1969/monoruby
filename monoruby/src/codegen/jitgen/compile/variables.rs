@@ -128,6 +128,7 @@ impl<'a> JitContext<'a> {
             self.guard_const_version(state, ir, cache.version);
             state.load_constant(ir, dst, cache);
             state.unset_side_effect_guard();
+            self.settle_constant_class(state, ir, dst, cache.value);
             // Record the fold for const-version salvage: the cache tuple the
             // emitted code now relies on, and every name whose redefinition
             // could change this site's resolution (qualifiers included).
@@ -144,6 +145,43 @@ impl<'a> JitContext<'a> {
             Ok(CompileResult::Continue)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::NotCached))
+        }
+    }
+
+    ///
+    /// The folded constant *v* in *dst* carries its class as of now into
+    /// the compiled code: a call site on it resolves against that class
+    /// with no receiver guard. If the object may still be given a singleton
+    /// class, that is an assumption like the ones carried across calls
+    /// (see `settle_class_proofs`): recorded, and checked by the version
+    /// guard, when no instance of the class has a singleton class yet —
+    /// and not made at all once one has, the slot then holding the value
+    /// with its class unproved.
+    ///
+    fn settle_constant_class(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        dst: SlotId,
+        v: Value,
+    ) {
+        if !matches!(state.mode(dst), LinkMode::C(_))
+            || v.is_packed_value()
+            || v.is_frozen()
+            || v.is_class_or_module().is_some()
+            || !self.store.class_proof_may_break(v.class())
+        {
+            return;
+        }
+        let class = v.class();
+        if self.store[class].instance_singleton() {
+            ir.lit2stack(v, dst);
+            state.def_S(dst);
+        } else {
+            if !self.singleton_deps.contains(&class) {
+                self.singleton_deps.push(class);
+            }
+            self.guard_class_version(state, ir, true);
         }
     }
 

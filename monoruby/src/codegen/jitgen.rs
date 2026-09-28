@@ -557,6 +557,7 @@ impl Codegen {
         const_version: u64,
     ) -> JitResult<(
         Vec<InlineCacheEntry>,
+        Vec<ClassId>,
         SpecializedCodeInfo,
         DestLabel,
         Vec<(ClassId, IdentId)>,
@@ -595,6 +596,7 @@ impl Codegen {
         ctx.resolve_dyn_var_offsets(&mut frame.asm_info);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
+        let singleton_deps = std::mem::take(&mut ctx.singleton_deps);
         let const_folds = std::mem::take(&mut ctx.const_fold_cache);
         // The basic-op invariants this body inlined without a runtime guard.
         // Handed back so the iseq can remember what a later redefinition
@@ -710,6 +712,7 @@ impl Codegen {
         };
         Ok((
             inline_cache,
+            singleton_deps,
             specialized_info,
             class_version_label,
             bop_deps,

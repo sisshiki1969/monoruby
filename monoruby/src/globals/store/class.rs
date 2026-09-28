@@ -408,6 +408,20 @@ pub struct ClassInfo {
     /// ruby-bench's `railsbench`.
     ///
     hash_method_at: std::cell::Cell<Option<(u32, Option<FuncId>)>>,
+    ///
+    /// Some instance of this class has been given a singleton class
+    /// (`def obj.m`, `extend`, `singleton_class`, …) — one-way. Until then
+    /// an object the JIT has proved to be of this class is still of this
+    /// class after any call it makes, so the proof may be carried across
+    /// the call (the unit records the assumption and is invalidated when
+    /// this flips — `Store::note_instance_singletons`). Set only when a
+    /// singleton class given to an instance actually invalidates a unit:
+    /// until some unit relies on the class, an instance leaving it breaks
+    /// nothing (the singleton classes `main`, `$LOAD_PATH` and `ENV` get at
+    /// boot would otherwise latch `Object`, `Array` and `Hash` for good). See
+    /// `doc/singleton_class_facts.md`.
+    ///
+    instance_singleton: bool,
 }
 
 /// C-level allocator function pointer. Given a class id (and a globals
@@ -552,6 +566,7 @@ impl ClassInfo {
             match_method_at: std::cell::Cell::new(None),
             hash_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
+            instance_singleton: false,
         }
     }
 
@@ -580,7 +595,18 @@ impl ClassInfo {
             match_method_at: std::cell::Cell::new(None),
             hash_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
+            instance_singleton: false,
         }
+    }
+
+    /// Has some instance of this class been given a singleton class?
+    /// See the field.
+    pub(crate) fn instance_singleton(&self) -> bool {
+        self.instance_singleton
+    }
+
+    pub(in crate::globals) fn set_instance_singleton(&mut self) {
+        self.instance_singleton = true;
     }
 
     ///
@@ -1171,6 +1197,18 @@ impl ClassInfoTable {
         }
         let mut singleton = self.new_singleton_class(org_class, obj, org_class.id());
         obj.change_class(singleton.id());
+        // The object's class just changed under any proof the JIT holds of
+        // it: `Store::note_instance_singletons` settles that. A frozen
+        // object cannot gain a method (`def` and `extend` both raise), so
+        // it still behaves as an instance of its old class and does not
+        // count; nor does a module, whose class is not what the JIT reasons
+        // about (it gets a singleton class up front anyway).
+        if !obj.is_frozen()
+            && obj.ty() != Some(ObjTy::MODULE)
+            && !self[org_class.id()].instance_singleton
+        {
+            self.new_instance_singletons.push(org_class.id());
+        }
         // MRI's eigenclass model: a module's metaclass is classed by
         // Module's metaclass (classes route through `get_metaclass`,
         // which does the same with Class). A plain object's singleton
@@ -2930,6 +2968,11 @@ impl Store {
                 return None;
             }
         }
+        if let Some(deps) = self[iseq_id].get_singleton_deps(self_class)
+            && !self.singleton_deps_hold(deps)
+        {
+            return None;
+        }
         let version_label = self[iseq_id].get_jit_class_version(self_class);
         #[cfg(feature = "jit-log")]
         if version_label.is_none() {
@@ -3098,6 +3141,13 @@ impl Store {
                 );
                 return None;
             }
+        }
+        let deps = &self[iseq_id]
+            .get_loop_jit_info(self_class, index)
+            .unwrap()
+            .singleton_deps;
+        if !self.singleton_deps_hold(deps) {
+            return None;
         }
         Some(version_label)
     }

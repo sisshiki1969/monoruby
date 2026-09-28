@@ -55,7 +55,7 @@ impl Codegen {
             class_version,
             None,
         );
-        let Some((cache, class_version_label, const_map)) = compiled else {
+        let Some((cache, singleton_deps, class_version_label, const_map)) = compiled else {
             self.jit.finalize();
             return None;
         };
@@ -75,6 +75,7 @@ impl Codegen {
             Some(self_class),
             class_version_label,
             cache,
+            singleton_deps,
             const_map,
         );
         // Front the compiled `jit_entry` with a self-class guard. The JIT body
@@ -155,7 +156,7 @@ impl Codegen {
             self.jit.finalize();
             return None;
         }
-        if let Some((cache, class_version_label, const_map)) = self.compile_method(
+        if let Some((cache, singleton_deps, class_version_label, const_map)) = self.compile_method(
             globals,
             iseq_id,
             self_class,
@@ -198,6 +199,7 @@ impl Codegen {
                 self_class,
                 class_version_label,
                 cache,
+                singleton_deps,
                 const_map,
             );
             self.jit.apply_jmp_patch_address(entry, &guard);

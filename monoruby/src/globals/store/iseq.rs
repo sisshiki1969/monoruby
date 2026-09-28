@@ -103,6 +103,10 @@ pub struct JitInfo {
     pub entry: DestLabel,
     pub class_version_label: DestLabel,
     pub inline_cache_map: Vec<InlineCacheEntry>,
+    /// Classes whose proofs the unit carried across a call on the
+    /// assumption that none of their instances gets a singleton class
+    /// (`ClassInfo::instance_singleton`). Salvage refuses once one has.
+    pub singleton_deps: Vec<ClassId>,
     pub const_map: ConstSalvageMap,
 }
 
@@ -113,6 +117,8 @@ pub struct JitInfo {
 pub struct LoopJitInfo {
     pub class_version_label: DestLabel,
     pub inline_cache_map: Vec<InlineCacheEntry>,
+    /// See [`JitInfo::singleton_deps`].
+    pub singleton_deps: Vec<ClassId>,
     pub const_map: ConstSalvageMap,
 }
 
@@ -1052,6 +1058,7 @@ impl ISeqInfo {
                 entry,
                 class_version_label,
                 inline_cache_map: Vec::new(),
+                singleton_deps: Vec::new(),
                 const_map: ConstSalvageMap::default(),
             },
         )
@@ -1112,6 +1119,13 @@ impl ISeqInfo {
             .map(|info| &info.inline_cache_map)
     }
 
+    /// The whole-method unit's [`JitInfo::singleton_deps`].
+    pub(crate) fn get_singleton_deps(&self, self_class: Option<ClassId>) -> Option<&[ClassId]> {
+        self.jit_entry
+            .get(&self_class)
+            .map(|info| info.singleton_deps.as_slice())
+    }
+
     /// Replace the whole-method unit's salvage record for `self_class` with
     /// the freshly compiled body's: its inline caches, its const folds, and
     /// — critically — the class-version word *this* body reads.
@@ -1126,11 +1140,13 @@ impl ISeqInfo {
         self_class: Option<ClassId>,
         class_version_label: DestLabel,
         cache: Vec<InlineCacheEntry>,
+        singleton_deps: Vec<ClassId>,
         const_map: ConstSalvageMap,
     ) {
         self.jit_entry.get_mut(&self_class).map(|info| {
             info.class_version_label = class_version_label;
             info.inline_cache_map = cache;
+            info.singleton_deps = singleton_deps;
             info.const_map = const_map;
         });
     }
@@ -1283,6 +1299,7 @@ impl ISeqInfo {
         index: BcIndex,
         class_version_label: DestLabel,
         inline_cache_map: Vec<InlineCacheEntry>,
+        singleton_deps: Vec<ClassId>,
         const_map: ConstSalvageMap,
     ) {
         self.loop_jit_info.insert(
@@ -1290,6 +1307,7 @@ impl ISeqInfo {
             LoopJitInfo {
                 class_version_label,
                 inline_cache_map,
+                singleton_deps,
                 const_map,
             },
         );

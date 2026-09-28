@@ -200,6 +200,10 @@ pub fn method_object_call(
         r#gen.method_object_call_inline(callid, store, using_fpr, error, call_site_pc);
     });
     state.def_reg2acc(ir, GP::Rax, callsite.dst);
+    // The method called runs arbitrary Ruby: it can define methods and
+    // give the objects this frame holds singleton classes.
+    state.unset_class_version_guard();
+    state.unset_const_version_guard();
     true
 }
 

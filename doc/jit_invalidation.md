@@ -114,6 +114,11 @@ The word is reachable afterwards through the unit's salvage record:
   it and the code stands.
 - **any changed** → `None`; recompile.
 
+A unit that carried a class proof across a call also records the classes
+it assumed have no instance with a singleton class (`singleton_deps`);
+salvage refuses once one has — see
+[`singleton_class_facts.md`](singleton_class_facts.md).
+
 Two details that are easy to get wrong:
 
 - **The refinement set is part of the question.** Re-asking the *unrefined*
