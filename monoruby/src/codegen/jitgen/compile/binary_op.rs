@@ -706,9 +706,6 @@ impl<'a> JitContext<'a> {
         // on the merge.
         if self.jit_visibility_blocks(callid, visibility)
             || self.store[fid].possibly_capture_without_block()
-            || self.store[fid]
-                .is_iseq()
-                .is_some_and(|iseq| self.store[iseq].has_block_arg())
         {
             return Ok(false);
         }

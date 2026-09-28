@@ -1432,6 +1432,17 @@ impl SlotState {
                     self.grow_fpr_to(fpr.0 + 1);
                     self.set_F(slot, fpr);
                 }
+                // A class fact the subtree gave up on this slot
+                // (`forget_heap_object_classes_all_frames`: an
+                // `eval`-family call or a `def obj.x` under the call may
+                // have attached a singleton class to the object) is given
+                // up here too. The parked frame's fact predates the call,
+                // so keeping it would fold `respond_to?` and resolve
+                // methods against the object's former class. Dropping a
+                // fact is always sound.
+                (LinkMode::S(Guarded::Class(_)), LinkMode::S(Guarded::Value)) => {
+                    self.set_mode(slot, LinkMode::S(Guarded::Value));
+                }
                 _ => {}
             }
         }

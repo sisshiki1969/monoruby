@@ -325,10 +325,16 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<Option<CompileResult>> {
         let callsite = &self.store[callid];
         let recv = callsite.recv;
+        // A capturing callee (`eval`) is kept out of the fast arm for the
+        // reason the PIC drops it: its frame write-back inside the arm
+        // (`unbox_to_S_for_outgoing_block`, a `C` becomes `S`) describes a
+        // frame the declared merge does not share, and the bridge cannot
+        // turn a value back into a constant.
         if state.class(recv) == Some(recv_class)
             || callsite.pmc.entries().len() < 2
             || self.in_dispatch_arm()
             || !self.generic_send_eligible(callid)
+            || self.store[func_id].possibly_capture_without_block()
         {
             return Ok(None);
         }
@@ -741,24 +747,41 @@ impl<'a> JitContext<'a> {
 
         let recv = callsite.recv;
 
-        if self.store[func_id].possibly_capture_without_block() {
-            return Err(CompileError);
+        // A callee that can capture this frame with no block handed out:
+        // `eval`, `binding`, `instance_eval` / `class_eval` with a string
+        // (`Effect::EVAL` / `Effect::BINDING`). The capture moves this frame
+        // — and, through the outer chain, its lexical ancestors — to the
+        // heap in the middle of the call, so it gets the treatment a
+        // literal block gets below: every unboxed local of those frames is
+        // homed in its slot first (a `C` does not survive either: `eval`
+        // can assign the local), and the no-capture invariant is dropped
+        // before the call so the lowering's `immediate_evict` follows it
+        // with a capture guard, which sends a promoted frame to the VM to
+        // run the rest of the method against the heap copy. This used to
+        // abort the whole unit instead, leaving every method that calls
+        // `eval` once — and everything inlined around it — in the
+        // interpreter for good.
+        let captures_without_block = self.store[func_id].possibly_capture_without_block();
+        if captures_without_block {
+            let home = state.innermost_level();
+            state.unbox_to_S_for_outgoing_block(self, ir, Some(home));
         }
-        // Methods that forward `&block` via a BlockArg instruction
-        // trigger `move_frame_to_heap` on an outer frame when invoked.
-        // JIT specialisation inlines the callee into the caller's
-        // frame, which means no `pop_frame` to reload r14 to the heap
-        // copy after the promotion. Subsequent reads of the caller's
-        // locals / outer would split between the invalidated stack
-        // tombstone (via r14) and the heap copy (via the materialised
-        // Proc's `outer_lfp`). Refuse specialisation so the call is
-        // dispatched normally (push_frame / pop_frame) and r14 is
-        // refreshed after return.
-        if let Some(iseq) = self.store[func_id].is_iseq()
-            && self.store[iseq].has_block_arg()
-        {
-            return Err(CompileError);
-        }
+        // A callee that turns its block into a Proc (a `BlockArg`
+        // instruction: `def initialize(body, &block)`) promotes the block's
+        // home frame — this one — when it runs. Called normally that is
+        // covered: the write-back below homes the frame, `pop_frame`
+        // reloads r14 from the heap copy, and the capture guard after the
+        // call deopts. *Inlined* (specialized into this frame) it is not:
+        // there is no `pop_frame`, so the rest of the caller would read
+        // the stack tombstone through r14 while the Proc's `outer_lfp`
+        // reads the heap copy, and the block-inlining bet below (the
+        // compiler sees every store the block makes) is off once the
+        // block escapes as a Proc. So such a callee is never specialized
+        // and its block never inlined; the ordinary call is what remains.
+        // (This too used to abort the whole unit.)
+        let callee_forwards_block = self.store[func_id]
+            .is_iseq()
+            .is_some_and(|iseq| self.store[iseq].has_block_arg());
         // A call that passes a block hands the callee this frame, so every
         // unboxed local is homed in its slot first and its xmm handed back
         // — in every frame of the chain, since the block reaches them all
@@ -789,6 +812,7 @@ impl<'a> JitContext<'a> {
         // the third is the open one.
         if callsite.block_fid.is_some() {
             let inlined_block = matches!(self.store[func_id].kind, FuncKind::ISeq(_))
+                && !callee_forwards_block
                 && callsite
                     .block_fid
                     .and_then(|fid| self.store[fid].is_iseq())
@@ -1440,6 +1464,8 @@ impl<'a> JitContext<'a> {
                     // one more per-class copy is what the generic body
                     // exists to stop.
                     && !self.store[iseq].has_generic_jit()
+                    // See `callee_forwards_block` at the entry.
+                    && !callee_forwards_block
                 {
                     return self.specialized_iseq(
                         state,
@@ -1456,7 +1482,7 @@ impl<'a> JitContext<'a> {
             }
         };
 
-        if block_fid.is_some() {
+        if block_fid.is_some() || captures_without_block {
             state.unset_no_capture_guard(self);
         }
 
@@ -1466,6 +1492,21 @@ impl<'a> JitContext<'a> {
         // through the callee's wrapper (see `AsmInst::Call::recv_class`).
         let proven_recv_class = (!same_target_set_guarded).then_some(recv_class);
         state.send(ir, &self.store, callid, fid, proven_recv_class, outer_lfp);
+
+        // `eval` and its family run arbitrary source against objects this
+        // unit holds class facts about, and one of the things that source
+        // can do is give an object its own singleton class (`def self.x`,
+        // `instance_eval "def x"`). A class fact kept across such a call
+        // would then fold `respond_to?` and resolve methods against the
+        // object's *former* class — and salvage would keep that code, since
+        // the former class's resolution did not change. What happened
+        // inside is unknowable at compile time, so every heap object's class
+        // fact is forgotten, in this frame and in every frame this one is
+        // specialized into. (An in-unit `def obj.x` does the same at
+        // `SingletonMethodDef`.)
+        if captures_without_block {
+            state.forget_heap_object_classes_all_frames();
+        }
 
         Ok(CompileResult::Continue)
     }
