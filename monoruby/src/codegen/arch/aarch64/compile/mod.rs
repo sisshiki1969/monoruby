@@ -1100,7 +1100,7 @@ impl Codegen {
             // materializes large ones through scratch x10.
             LInst::Load {
                 dst,
-                mem: LMem::Slot(slot),
+                mem: LMem::Slot(slot) | LMem::LfpSlot(slot),
             } => {
                 let lfp = GP::R14.a64().0;
                 let off = slot.0 as u32 * 8 + LFP_SELF as u32;
@@ -1628,6 +1628,19 @@ impl Codegen {
                     tst x9, x11;                 // captured or invalidated?
                 );
                 self.jit.bcond_label(monoasm::Cond::Ne, &deopt); // set -> deopt to VM
+            }
+            // The inverse test: branch past the captured-frame path when the
+            // frame is still on the stack.
+            LInst::BrIfNotCaptured { dest } => {
+                let lfp = GP::R14.a64().0; // x22
+                let off = (LFP_META as i64 - META_KIND as i64) as u32;
+                monoasm_arm64!(&mut self.jit,
+                    sub x10, x(lfp), #(off);
+                    ldrb w9, [x10];
+                    mov x11, (0b1000_1000u64);
+                    tst x9, x11;
+                );
+                self.jit.bcond_label(monoasm::Cond::Eq, &dest);
             }
             // BOP-redefinition guard.
             LInst::CheckBOP { deopt, version } => {

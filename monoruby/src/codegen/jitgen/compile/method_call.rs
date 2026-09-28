@@ -1635,7 +1635,7 @@ impl<'a> JitContext<'a> {
         ir.handle_error(error);
         self.emit_spliced_landing(ir, state, callid, splice_widen_mark);
         let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
-        state.immediate_evict(ir, evict);
+        state.immediate_evict(ir, &self.store, evict, dst);
         Ok(res)
     }
 
@@ -2658,7 +2658,7 @@ impl<'a> JitContext<'a> {
         );
         self.emit_spliced_landing(ir, state, callid, splice_widen_mark);
         let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
-        state.immediate_evict(ir, evict);
+        state.immediate_evict(ir, &self.store, evict, dst);
         return Ok(res);
     }
 }
@@ -3288,7 +3288,7 @@ impl AbstractState {
         } else {
             self.def_rax2acc_capturing(ir, dst);
         }
-        self.immediate_evict(ir, evict);
+        self.immediate_evict(ir, store, evict, dst);
         self.unset_class_version_guard();
         self.unset_const_version_guard();
         self.unset_side_effect_guard();
@@ -3345,7 +3345,7 @@ impl AbstractState {
         } else {
             self.def_rax2acc_capturing(ir, dst);
         }
-        self.immediate_evict(ir, evict);
+        self.immediate_evict(ir, store, evict, dst);
         self.unset_class_version_guard();
         self.unset_const_version_guard();
         self.unset_side_effect_guard();
@@ -3457,7 +3457,7 @@ impl AbstractState {
         } else {
             self.def_rax2acc_capturing(ir, dst);
         }
-        self.immediate_evict(ir, evict);
+        self.immediate_evict(ir, store, evict, dst);
         self.unset_class_version_guard();
         self.unset_const_version_guard();
         self.unset_side_effect_guard();
@@ -3506,16 +3506,48 @@ impl AbstractState {
     /// `AsmEvict` is the id under which `chain_exit` finds this call's
     /// return address, and `gen_asm` requires every reserved slot to carry a
     /// write-back.
-    fn immediate_evict(&mut self, ir: &mut AsmIr, evict: AsmEvict) {
+    /// Point the call's evict exit at the next instruction and, unless the
+    /// frame is proven uncaptured, follow the call with a capture guard.
+    ///
+    /// When the next instruction only returns `dst` or `self`, a captured
+    /// frame need not deopt: that `ret` reads nothing but the one slot. A
+    /// result stored to a slot went through the LFP (`def_rax2acc_capturing`,
+    /// `def_return_store_guarded`), so a captured frame has it copied from
+    /// the live (heap) copy back into the stack slot the `ret` reads, and
+    /// both paths go on to the compiled `ret`. (A block the callee keeps as
+    /// a Proc — `super() { }` into `Hash#initialize` storing a default proc
+    /// — promotes the frame on every call, which made this `ret` deopt every
+    /// time.) Only for a frame with no lexical parent in the compile (a
+    /// method, or the root): a block's capture promotes its outer frames
+    /// too, and the code after a block's `ret` reads theirs.
+    fn immediate_evict(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        evict: AsmEvict,
+        dst: Option<SlotId>,
+    ) {
         let next_pc = self.pc().next();
         ir[evict] = SideExit::Evict(Some((next_pc, self.get_write_back())));
-        if !self.no_capture_guard() {
+        if self.no_capture_guard() {
+            return;
+        }
+        if self.lexical_outer().is_none()
+            && let TraceIr::Ret(ret) = TraceIr::from_pc(next_pc, store)
+            && (Some(ret) == dst || ret == SlotId::self_())
+        {
+            // `self` never changes, and a constant or Float result is not
+            // read from the slot.
+            if ret != SlotId::self_() && matches!(self.mode(ret), LinkMode::S(_)) {
+                ir.push(AsmInst::ReloadIfCaptured(ret));
+            }
+        } else {
             let deopt = ir.new_deopt_with_pc(self, next_pc);
             ir.guard_capture(deopt);
-            // The guard's meta check also catches ancestor promotions (the
-            // tombstone bit), so it re-proves the whole lexical chain.
-            self.set_lexical_no_capture_guard();
         }
+        // The guard's meta check also catches ancestor promotions (the
+        // tombstone bit), so it re-proves the whole lexical chain.
+        self.set_lexical_no_capture_guard();
     }
 
     #[allow(non_snake_case)]

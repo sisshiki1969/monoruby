@@ -949,6 +949,19 @@ impl Codegen {
                 let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("frame captured"));
                 self.encode_linst(LInst::GuardCapture { deopt });
             }
+            AsmInst::ReloadIfCaptured(slot) => {
+                let cont = self.jit.label();
+                self.encode_linst(LInst::BrIfNotCaptured { dest: cont.clone() });
+                self.encode_linst(LInst::Load {
+                    dst: GP::Rax.into(),
+                    mem: LMem::LfpSlot(slot),
+                });
+                self.encode_linst(LInst::Store {
+                    src: GP::Rax,
+                    mem: LMem::Slot(slot),
+                });
+                self.encode_linst(LInst::BindLabel(cont));
+            }
             // `&block` forwarding: proxy the block handler, or materialize it
             // into a Proc value (aarch64 bails on a live fpr / range overflow).
             AsmInst::BlockArgProxy { ret, outer, slot } => {

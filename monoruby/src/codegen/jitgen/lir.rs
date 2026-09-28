@@ -540,6 +540,11 @@ pub(in crate::codegen) enum LInst {
     GuardCapture {
         deopt: DestLabel,
     },
+    /// Branch to `dest` unless the current frame was captured or
+    /// invalidated (the test `GuardCapture` makes, inverted).
+    BrIfNotCaptured {
+        dest: DestLabel,
+    },
     /// Basic-operator-redefinition guard: deopt if the basic-op version has
     /// moved since this code was emitted. `version` is the value observed at
     /// lowering time — comparing against it (rather than against zero) keeps a

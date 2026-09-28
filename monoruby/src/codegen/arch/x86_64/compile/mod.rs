@@ -139,6 +139,7 @@ impl Codegen {
             | AsmInst::ZeroToRSPOffset(..)
             | AsmInst::U64ToRSPOffset(..)
             | AsmInst::GuardCapture(..)
+            | AsmInst::ReloadIfCaptured(..)
             | AsmInst::BlockArgProxy { .. }
             | AsmInst::BlockArg { .. }
             | AsmInst::LoopJitRspBump { .. }
@@ -359,6 +360,16 @@ impl Codegen {
                 let r = x86_lreg(dst);
                 monoasm!( &mut self.jit,
                     movq R(r), [rbp - (rbp_local(slot))];
+                );
+            }
+            // dst <- [r14 - slot] (LFP relative; follows a heap-moved frame)
+            LInst::Load {
+                dst,
+                mem: LMem::LfpSlot(slot),
+            } => {
+                let r = x86_lreg(dst);
+                monoasm!( &mut self.jit,
+                    movq R(r), [r14 - (conv(slot))];
                 );
             }
             // dst <- [base + disp] (object field; no immediate-range limit on x86)
@@ -1027,6 +1038,12 @@ impl Codegen {
                 );
             }
             LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
+            LInst::BrIfNotCaptured { dest } => {
+                monoasm! { &mut self.jit,
+                    testb [r14 - (LFP_META - META_KIND)], (0b1000_1000_u8 as i8);
+                    jz dest;
+                }
+            }
             // BOP-redefinition guard: outline the deopt path (page 1) so the hot
             // path is a single load + branch.
             LInst::CheckBOP { deopt, version } => {
