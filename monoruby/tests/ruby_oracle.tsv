@@ -1158,6 +1158,7 @@
 39ab90db8c2175cc97c356aa3d383c0f	[Infinity, Infinity]	class C\n          def f(x) = x * 2.0\n        end\n        m = C.new.meth
 39af2a1340a7198301238c30503a4079	true	Fiber.current.is_a?(Fiber)
 39b040323d16819b1a965df73071e65f	[[true, true, true], [IO::Buffer::AccessError, "Buffer is not writable!"], "HELLO", true, true, "test\\x00\\x00\\x00", "cdef", "abXYefgh", [false, false], [true, false], [6, "\\xC3\\xA9", "\\xC3\\xA9llo"], [ArgumentError, "The given offset is bigger than the buffer size!"], [ArgumentError, "Specified offset+length is bigger than the buffer size!"], "\\x00ab\\x00", 3, "\\x00AAA\\x00"]	r = []\n            s = IO::Buffer.for("abc")\n            r << [s.ex
+39c8cd19df325174ae93e3c6917113fe	4200	class Base\n          def go(m)\n            install(m)\n            7\n   
 39c92c0308629107e62585945ff18f41	7	f = ->{ _1 + _2 }; f.call(3, 4)
 39cebe9290af3ec842595e2aa63877e4	[[233], "ISO-8859-1", [120]]	s = "\\351x".dup.force_encoding(Encoding::ISO_8859_1)\n               m = Regexp.n
 39e6703b6b81cc1675c7d7f7730c417f	[[1, 2, 3, nil, nil, nil, nil], 31, [3, [[:a, 31], [1, 2], [nil, 3]], 31], [4, 4, 31, nil], [nil, nil, 0], [7, 1, 1], ["gen", 1]]	def drive(n)\n              r = nil\n              n.times { r = yiel

@@ -98,7 +98,21 @@ impl<'a> JitContext<'a> {
         self.branch_continue(bb_begin, state);
 
         for bbid in bb_begin..=bb_end {
-            let ir = self.compile_basic_block(bbid, bbid == bb_end)?;
+            let ir = match self.compile_basic_block(bbid, bbid == bb_end) {
+                Ok(ir) => ir,
+                Err(e) => {
+                    // The compile is being abandoned: leave the context as
+                    // it was before this frame was pushed. A caller that
+                    // catches the error and compiles the site another way
+                    // (`method_call_with_residual`) must find its own frame
+                    // innermost again — with this frame left behind, its
+                    // remaining instructions would be read from THIS iseq
+                    // and its chain-position arithmetic would go past the
+                    // end of its state chain (#1666).
+                    self.discard_frame();
+                    return Err(e);
+                }
+            };
             self.push_ir(Some(bbid), ir);
         }
 

@@ -350,6 +350,15 @@ impl<'a> JitContext<'a> {
 
         let ir_save = ir.save();
         let state_save = state.clone();
+        // The fast arm may specialize, and a specialized compile that gives
+        // up (`CompileError`) unwinds through every nested frame it pushed
+        // (`traceir_to_asmir` / `specialized_compile`), so the rollback
+        // below finds the specialization stack as it left it. The
+        // instruction-level proofs are the one piece of context a nested
+        // compile clears rather than restores; keep this instruction's.
+        let depth = self.stack_frame_len();
+        let unfrozen_save = (self.unfrozen_slots.clone(), self.instr_unfrozen.clone());
+        let fused_skip_save = self.fused_skip;
         let (entry, merge) = self.declare_merge(state, ir, &operands, dst);
         let residual = self.label();
         let mut fast = entry.clone();
@@ -364,8 +373,15 @@ impl<'a> JitContext<'a> {
             RecvMissMode::Residual(residual),
         );
         if !matches!(outcome, Ok(CompileResult::Continue)) {
+            assert_eq!(
+                self.stack_frame_len(),
+                depth,
+                "a rolled-back fast arm left frames on the specialization stack"
+            );
             ir.restore(ir_save);
             *state = state_save;
+            (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
+            self.fused_skip = fused_skip_save;
             return Ok(None);
         }
         self.end_arm(fast, ir, &merge, true);
