@@ -1016,8 +1016,9 @@ impl<'a> JitContext<'a> {
                 // against the old one — which has no such method and would
                 // compile the call as `method_missing`. `obj` is a
                 // temporary copy of the object's slot, so every slot that
-                // could hold it forgets its class.
-                state.forget_heap_object_classes();
+                // could hold it forgets its class — in every frame of the
+                // tower, since the object may live in a caller's slot.
+                state.forget_heap_object_classes_all_frames();
                 ir.check_bop(state);
                 state.unset_class_version_guard();
                 state.unset_const_version_guard();

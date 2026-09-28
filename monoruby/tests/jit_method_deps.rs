@@ -165,6 +165,46 @@ fn include_and_prepend_after_compile() {
     );
 }
 
+/// `def o.x` inside an inlined block: the object lives in the *caller's*
+/// slot, so the caller's class fact for it must go too, and survive the
+/// resume from the specialized block compile.
+#[test]
+fn singleton_def_in_inlined_block_forgets_outer_fact() {
+    run_test(
+        r##"
+        def run(i)
+          o = Object.new
+          [1].each { |_| def o.tag; :t; end }
+          [o.respond_to?(:tag), o.tag]
+        end
+        res = []
+        40.times { |i| res << run(i) }
+        res.uniq
+        "##,
+    );
+}
+
+/// `instance_eval` with a string inside a callee that is specialized into
+/// the caller (`Class#new` → `initialize`): the caller's fact about the
+/// allocated object is dropped at the resume, not kept from the parked
+/// frame.
+#[test]
+fn instance_eval_in_specialized_callee_forgets_caller_fact() {
+    run_test(
+        r##"
+        class Ev
+          def initialize(i)
+            @i = i
+            instance_eval "def tag; :t#{@i}; end"
+          end
+        end
+        res = []
+        40.times { |i| o = Ev.new(i % 2); res << [o.respond_to?(:tag), o.tag] }
+        res.uniq.sort
+        "##,
+    );
+}
+
 /// `extend` on the receiver itself after the compile.
 #[test]
 fn extend_after_compile() {

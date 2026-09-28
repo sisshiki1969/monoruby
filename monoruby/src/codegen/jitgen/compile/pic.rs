@@ -196,10 +196,9 @@ impl<'a> JitContext<'a> {
             // exactly what the single-class guard did for it anyway. That
             // covers a name this class does not resolve (`jit_check_call`), a
             // resolution this call site's visibility blocks (the VM then
-            // raises `NoMethodError`, as before), and the two shapes
-            // `compile_method_call` answers with `CompileError` — which must
-            // not be allowed to fire mid-chain, where there is nothing to
-            // back out to.
+            // raises `NoMethodError`, as before), and a capturing callee
+            // (`eval`), whose frame write-back inside one arm would
+            // describe a frame layout the other arms do not share.
             let Some((func_id, visibility)) = self.jit_check_call(class, Some(name)) else {
                 #[cfg(feature = "deopt")]
                 eprintln!("### pic drop [no-resolve] {:?} class={:?}", name, class);
@@ -211,14 +210,6 @@ impl<'a> JitContext<'a> {
             {
                 #[cfg(feature = "deopt")]
                 eprintln!("### pic drop [vis/capture] {:?} class={:?}", name, class);
-                dropped.push(class);
-                continue;
-            }
-            if let Some(iseq) = self.store[func_id].is_iseq()
-                && self.store[iseq].has_block_arg()
-            {
-                #[cfg(feature = "deopt")]
-                eprintln!("### pic drop [callee-block-arg] {:?} class={:?}", name, class);
                 dropped.push(class);
                 continue;
             }

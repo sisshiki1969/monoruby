@@ -32,6 +32,18 @@ pub(crate) struct AbstractState {
     frames: Vec<FrameRef>,
 }
 
+impl AbstractState {
+    /// `SlotState::forget_heap_object_classes` on every frame of the
+    /// specialization tower, for a call after which no heap object's class
+    /// can be trusted (an `eval`-family callee may have attached a
+    /// singleton class to any object a frame holds).
+    pub(in crate::codegen::jitgen) fn forget_heap_object_classes_all_frames(&mut self) {
+        for frame in self.frames.iter_mut() {
+            FrameRef::make_mut(frame).forget_heap_object_classes();
+        }
+    }
+}
+
 impl std::ops::Deref for AbstractState {
     type Target = AbstractFrame;
     fn deref(&self) -> &Self::Target {
