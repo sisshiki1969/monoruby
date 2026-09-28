@@ -1417,6 +1417,19 @@ impl<'a> JitContext<'a> {
         self.stack_frame.push(frame);
     }
 
+    ///
+    /// Drop the innermost frame of a compile that is being abandoned
+    /// (`traceir_to_asmir` answering `Err`): nothing of it is finalized or
+    /// handed back, and the proofs it accumulated must not leak into the
+    /// enclosing compile any more than a finished frame's would.
+    ///
+    pub(super) fn discard_frame(&mut self) {
+        self.stack_frame.pop().unwrap();
+        self.unfrozen_slots.clear();
+        self.instr_unfrozen.clear();
+        self.fused_skip = None;
+    }
+
     pub(super) fn pop_frame(&mut self) -> JitStackFrame {
         let mut frame = self.stack_frame.pop().unwrap();
         // A stage-2 landing is owed to the call this frame was compiling
@@ -1508,8 +1521,31 @@ impl<'a> JitContext<'a> {
         caller.callid = Some(callid);
         let scope = std::mem::take(&mut **state);
         assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
+        // A landing is taken by the call site right after each specialized
+        // call, so none is outstanding when the next one begins.
+        debug_assert!(caller.pending_splice_landing.is_none());
 
-        let mut frame = self.traceir_to_asmir(frame, Some(entry_chain))?;
+        let mut frame = match self.traceir_to_asmir(frame, Some(entry_chain)) {
+            Ok(frame) => frame,
+            Err(e) => {
+                // The callee's frame is already gone (`traceir_to_asmir`
+                // discards it on the way out); put this frame back the way
+                // the call found it, so a caller that catches the error
+                // resumes compiling from an intact context (#1666). What
+                // the aborted compile logged for the outer frames
+                // (widenings, kept views, capture events) stays: every
+                // entry only ever makes a later consumer more conservative.
+                let caller = self.current_frame_mut();
+                let scope = caller.abstract_state.take().unwrap();
+                caller.callid = None;
+                caller.stack_offset -= stack_offset;
+                // A landing the aborted subtree requested has no exit to
+                // serve.
+                caller.pending_splice_landing = None;
+                **state = scope;
+                return Err(e);
+            }
+        };
         frame.call_site_using_fpr = using_fpr;
 
         // Every plain `Ret` in the callee branched to a return segment;
@@ -1648,6 +1684,11 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn set_ivar_heap_accessed(&mut self) {
         self.current_frame_mut().ivar_heap_accessed = true;
+    }
+
+    /// The depth of the specialization stack.
+    pub(super) fn stack_frame_len(&self) -> usize {
+        self.stack_frame.len()
     }
 
     fn caller_pos(&self) -> Option<usize> {
