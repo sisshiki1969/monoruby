@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7eb5ddf0.js";
+            window.path_to_searchindex_js = "searchindex-692711c4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -6359,6 +6359,18 @@ tombstone（<code>invalidated</code> ビット）を立てる</strong>。以後�
 <strong>LFP（r14、呼び出し後に <code>cfp.lfp</code> から再ロード）経由</strong>になる
 （<code>def_return_store_guarded</code> / <code>def_rax2acc_capturing</code>）。昇格が起きても
 生きているフレームへ書き込むためである。</p>
+<p><strong><code>ret</code> の直前では deopt しない</strong>: 呼び出しの次の命令が呼び出し結果か
+<code>self</code> を返すだけの <code>ret</code> で、フレームがコンパイル内にレキシカルな親を
+持たない（メソッドか root）なら、<code>immediate_evict</code> はガードの代わりに
+<code>AsmInst::ReloadIfCaptured</code> を出す。昇格していたら結果スロットを LFP 経由
+（ヒープコピー）で読み、<code>ret</code> が読むスタックスロットへ書き戻して、そのまま
+コンパイル済みの <code>ret</code> へ進む。<code>ret</code> が読むのはそのスロットだけなので、
+VM に戻る必要がない。<code>self</code> は変わらず、定数・Float の戻り値はスロットを
+読まないので、書き戻しも要らない。ブロックのフレームを除くのは、その昇格が
+外側のフレームにも及び、ブロックの <code>ret</code> の後に続く外側のコードがそちらを
+読むからである。<code>super() { }</code> で <code>Hash#initialize</code> に default proc を渡す
+<code>InheritableOptions#initialize</code> のように、呼び出しのたびにフレームが
+昇格するサイトが、以前は毎回ここで deopt していた。</p>
 <p><strong>specialize の拒否</strong>: <code>&amp;block</code> を転送する（<code>BlockArg</code> を持つ）callee は
 インライン展開しない。specialize すると <code>pop_frame</code> が無いため、昇格後に
 r14 がヒープコピーへ更新されず、以後のローカル読みが tombstone と
