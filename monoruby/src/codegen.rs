@@ -79,12 +79,8 @@ pub(crate) type FiberInvoker = extern "C" fn(
     &mut Executor,
 ) -> Option<Value>;
 
-thread_local! {
-    pub static CODEGEN: std::cell::RefCell<Codegen> = std::cell::RefCell::new(
-    {
-        Codegen::new()
-    });
-}
+/// The interpreter's code generator, one per [`crate::vm::Vm`].
+pub(crate) use crate::vm::CODEGEN;
 
 #[cfg(feature = "perf")]
 thread_local! {

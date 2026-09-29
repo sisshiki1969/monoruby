@@ -64,6 +64,7 @@ mod ruby_probe;
 mod scheduler;
 pub mod tests;
 mod value;
+mod vm;
 mod watchdog;
 
 pub(crate) use crate::codegen::runtime::ProcData;

@@ -19,7 +19,6 @@
 //!
 
 use super::*;
-use std::cell::Cell;
 
 mod fpconv;
 
@@ -28,12 +27,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(STRING_CLASS, "__json_setup_generator", setup_generator, 2);
 }
 
-thread_local! {
-    /// `JSON::Ext::Generator::State`, once `json/ext/generator` is loaded.
-    static STATE_CLASS: Cell<Option<ClassId>> = const { Cell::new(None) };
-    /// `JSON::Fragment`.
-    static FRAGMENT_CLASS: Cell<Option<ClassId>> = const { Cell::new(None) };
-}
+/// `JSON::Ext::Generator::State`, once `json/ext/generator` is loaded,
+/// and `JSON::Fragment`. Per interpreter.
+use crate::vm::{JSON_FRAGMENT_CLASS as FRAGMENT_CLASS, JSON_STATE_CLASS as STATE_CLASS};
 
 fn expect_module(globals: &Globals, v: Value) -> Result<Module> {
     v.is_class_or_module()

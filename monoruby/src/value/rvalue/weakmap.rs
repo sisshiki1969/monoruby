@@ -1,5 +1,4 @@
 use super::*;
-use std::cell::RefCell;
 
 ///
 /// The payload of an `ObjectSpace::WeakMap` (`ObjTy::WEAKMAP`).
@@ -145,15 +144,13 @@ fn survives(v: Value, alloc: &crate::alloc::Allocator<RValue>) -> bool {
     }
 }
 
-thread_local! {
-    /// Every live weak map on this thread, as raw cells.
-    ///
-    /// This is not a root: the pointers are never marked, and an entry
-    /// whose map is itself unmarked is dropped in the same pass that
-    /// clears dead pairs, so a collected weak map leaves nothing behind.
-    /// Weak maps are per-thread because the heap is.
-    static WEAKMAPS: RefCell<Vec<*mut RValue>> = const { RefCell::new(Vec::new()) };
-}
+/// Every live weak map of this interpreter, as raw cells.
+///
+/// This is not a root: the pointers are never marked, and an entry
+/// whose map is itself unmarked is dropped in the same pass that
+/// clears dead pairs, so a collected weak map leaves nothing behind.
+/// Weak maps are per-interpreter because the heap is.
+use crate::vm::WEAKMAPS;
 
 /// Record a freshly allocated weak map so the collector can find it.
 pub(crate) fn register(v: Value) {

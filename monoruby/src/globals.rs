@@ -2044,17 +2044,11 @@ impl Globals {
 /// A salvage attempt can then prove "none of the names this unit folded
 /// were touched" without re-resolving anything.
 ///
-/// Thread-local like `CODEGEN`: each interpreter thread (one per test) has
-/// its own table, mirroring the global version counter it refines.
+/// Per interpreter like `CODEGEN`: each interpreter (one per test thread)
+/// has its own table, mirroring the global version counter it refines.
 pub(crate) mod const_epoch {
     use crate::IdentId;
-    use std::cell::{Cell, RefCell};
-    use std::collections::HashMap;
-
-    thread_local! {
-        static WILDCARD: Cell<u64> = const { Cell::new(0) };
-        static NAMES: RefCell<HashMap<IdentId, u64>> = RefCell::new(HashMap::new());
-    }
+    use crate::vm::{CONST_EPOCH_NAMES as NAMES, CONST_EPOCH_WILDCARD as WILDCARD};
 
     pub(crate) fn bump_name(name: IdentId) {
         NAMES.with_borrow_mut(|m| *m.entry(name).or_insert(0) += 1);

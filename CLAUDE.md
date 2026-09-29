@@ -47,7 +47,7 @@ monoruby/                   # Workspace root
 │   │   │   ├── inline.rs   # Inline method dispatch table
 │   │   │   └── constants.rs
 │   │   ├── codegen/        # JIT compiler + arch-neutral codegen glue
-│   │   │   ├── codegen.rs  # Thread-local CODEGEN singleton; arch-neutral types
+│   │   │   ├── codegen.rs  # CODEGEN singleton (per Vm); arch-neutral types
 │   │   │   ├── compiler.rs # JIT compilation entry point
 │   │   │   ├── jit_module.rs # Arch-neutral: handle_error, ErrorReturn, …
 │   │   │   ├── arch.rs     # target_arch switch (x86_64 / aarch64)
@@ -407,7 +407,8 @@ JIT-compiled code keeps no fixed accumulator: `GP_ALLOC_POOL` is empty and
 - Method JIT: ≥ 20 calls (`COUNT_START_COMPILE`, 5 in test mode)
 - Loop JIT: ≥ 100 iterations (`COUNT_LOOP_START_COMPILE`, 15 in test mode)
 
-**`CODEGEN`** is a thread-local `RefCell<Codegen>` singleton.
+**`CODEGEN`** is a `RefCell<Codegen>` singleton held by the interpreter
+instance (`vm::Vm`, see "Interpreter instance" below).
 
 **Deoptimization** falls back to the interpreter when:
 
@@ -447,7 +448,7 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 - Mark-and-sweep garbage collector
 - Page-based arena allocator for `RValue` objects (256 KB pages)
 - `GC_THRESHOLD`, `MALLOC_THRESHOLD` control collection frequency
-- Thread-local `ALLOC` holds the allocator instance
+- `ALLOC` (a field of the interpreter instance `vm::Vm`) holds the allocator instance
 - Controlled via `--no-gc` flag or `Globals::gc_enable()`
 
 ---
@@ -1018,4 +1019,17 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 
    *Which* Ruby gets probed is not simply `ruby` on `PATH`. The CRuby release monoruby conforms to lives in the source as `ruby_probe::COMPAT_RUBY_VERSION` (baked by `build.rs` from `vendor/ruby-stdlib/.ruby-version`, with `FALLBACK_RUBY_VERSION` as the compiled-in stand-in) and is also what `RUBY_VERSION` reports. `find_ruby` ranks `ruby` on `PATH` together with every versioned install of rbenv / rvm / asdf / mise by distance from it — same `major.minor` first, then nearest teeny, newer winning an exact tie, `PATH` winning ties overall — and takes the closest. The versioned installs are read off directory names, so that costs `read_dir` and no spawn. The winner is recorded in `~/.monoruby/probed_ruby` (command + version), and `ruby_probe::preferred_ruby_changed` re-probes once a closer Ruby appears — an `rbenv install` of the pinned version, or a `.ruby-version` switch that moved `ruby` off it — which is what keeps the cache from describing a Ruby whose default gems disagree with the vendored stdlib. `MONORUBY_RUBY=<path>` pins one explicitly and suppresses both the ranking and that re-probe. If no host Ruby is found, those caches stay empty and a warning is printed at startup, but the vendored stdlib still loads from the per-version install root (`~/.monoruby/v<version>/lib`).
 7. **gc-stress in tests**: `gc-stress` is **opt-in** — `export GC_STRESS=1` before `bin/test` and it applies to **every** phase (nextest *and* the benchmark binary, so optcarrot / ruby-spec are stressed too). Since the true-stress restoration this means a collection at **every safepoint**, so a `GC_STRESS=1` run of the full scope is an hours-scale job. Nothing enables it implicitly, so the automatic CI never pays it; run the manual `gc-stress` workflow instead. Tests whose loop counts exist only to reach the JIT thresholds should shrink them under `cfg!(feature = "gc-stress")` (see `tests/method_call.rs`) — otherwise they blow past nextest's per-test cap.
-8. **Thread-local CODEGEN**: The JIT compiler is a thread-local singleton. Do not attempt to use it across threads.
+8. **Interpreter instance (`src/vm.rs`)**: the allocator (`ALLOC`), the JIT
+   (`CODEGEN`), the green-thread scheduler (`SCHEDULER`, `SCHED_RSP`), the
+   preempt timer state and a few caches (weak maps, generic-ivar table,
+   const epochs, `Regexp.timeout`, JSON's class ids) are fields of one
+   `vm::Vm`, reached through `vm::vm()`. Each OS thread carries only a
+   pointer to the `Vm` it serves (`vm::CURRENT`); today a `Vm` is created
+   lazily by the first OS thread that touches it and owned by that thread,
+   so "one interpreter per OS thread" still holds (the test harness runs one
+   per test thread). The `vm::VmField` statics keep the `KEY.with(|c| ..)`
+   shape of the `thread_local!`s they replaced. What stays a genuine
+   `thread_local!` is per *OS thread* state: the poll-word address
+   (`poll_flag`, reachable from inside the global allocator), the
+   scheduler-entry depth, the `hash`/`inspect` recursion guards. Do not use
+   `CODEGEN` or `ALLOC` from a thread other than the one running that `Vm`.

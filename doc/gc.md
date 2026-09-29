@@ -52,10 +52,12 @@ monoruby のガベージコレクタの**現行実装**を、コードに即し�
 ### 2.1 アロケータ
 
 ```
-thread_local! { pub static ALLOC: RefCell<Allocator<RValue>> }   // alloc.rs
+pub(crate) static ALLOC: VmField<RefCell<Allocator<RValue>>>   // vm.rs(alloc.rs が再エクスポート)
 ```
 
-`Allocator<RValue>` はスレッドローカルなシングルトン(`alloc.rs:155`)。
+`Allocator<RValue>` はインタプリタ・インスタンス(`vm::Vm`、`src/vm.rs`)が持つ
+シングルトン。`Vm` は OS スレッドごとに 1 つ遅延生成されるので、実態は従来どおり
+スレッドローカル(`ALLOC.with(|a| …)` の呼び出し形も同じ)。
 `RValue` は 64 バイト固定(`GCBOX_SIZE`、`Allocator::new` で
 `assert_eq!(64, GCBOX_SIZE)`)。
 

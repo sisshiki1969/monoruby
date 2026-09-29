@@ -170,14 +170,10 @@ pub struct RegexpInner {
     timeout: u64,
 }
 
-thread_local!(
-    /// The global `Regexp.timeout`, in nanoseconds (0 = unset). Read at
-    /// every match, written by `Regexp.timeout=`; thread-local because
-    /// CRuby's is per-ractor and monoruby's threads are the closest
-    /// thing.
-    pub(crate) static REGEXP_GLOBAL_TIMEOUT: std::cell::Cell<u64> =
-        const { std::cell::Cell::new(0) }
-);
+/// The global `Regexp.timeout`, in nanoseconds (0 = unset). Read at
+/// every match, written by `Regexp.timeout=`; per interpreter because
+/// CRuby's is per-ractor and one interpreter is the closest thing.
+pub(crate) use crate::vm::REGEXP_GLOBAL_TIMEOUT;
 
 impl PartialEq for RegexpInner {
     fn eq(&self, other: &Self) -> bool {

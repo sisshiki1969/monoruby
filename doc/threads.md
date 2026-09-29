@@ -103,7 +103,9 @@ last_status:   $? / Process.last_status をスレッドごとに保持(#972)
 
 ## 3. スケジューラ
 
-`src/scheduler.rs`。OS スレッドごとの `thread_local!` シングルトン(`SCHEDULER: RefCell<Scheduler>`)。
+`src/scheduler.rs`。インタプリタ・インスタンス(`vm::Vm`、`src/vm.rs`)が持つシングルトン
+(`SCHEDULER: RefCell<Scheduler>`)。`Vm` は現状 OS スレッドごとに 1 つ遅延生成されるので、
+「OS スレッドごとのシングルトン」という性質は変わっていない。
 
 ```
 threads:          生存スレッドの registry(main 含む)— GC ルート
@@ -135,8 +137,9 @@ flushing_reports: flush_pending_reports の再入ラッチ
 スロットは 1 個で足りる(green thread は `scheduler_run` を呼ばないため、
 ループのインスタンスは常に高々 1 つ)。
 
-`SCHED_RSP` は **OS スレッドごと**(`thread_local` の `Cell<u64>`)。各 OS スレッドの
-`Codegen` が自分のスロットのアドレスをスタブに焼き込む(poll ワードと同じ構図)。
+`SCHED_RSP` は **インタプリタごと**(`vm::Vm` のフィールド `Cell<u64>`。`Vm` は `Box` 上に
+あるのでアドレスは動かない)。各インタプリタの `Codegen` が自分のスロットのアドレスを
+スタブに焼き込む(poll ワードと同じ構図)。
 テストハーネスのように複数のインタプリタが別 OS スレッドで並走しても衝突しない。
 
 ### 3.2 コンテキストスイッチのスタブ(×2 アーキ)
