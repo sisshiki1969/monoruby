@@ -206,14 +206,16 @@ impl JitModule {
         let heap_alloc = self.label();
         monoasm! {&mut self.jit,
         label:
-            xorps xmm1, xmm1;
-            ucomisd xmm0, xmm1;
+            // Only +0.0 (all bits clear) has the FLOAT_ZERO encoding. -0.0
+            // compares equal to 0.0, so the test must be on the bits: it
+            // falls through to the exponent check, fails it and is
+            // heap-allocated with its sign kept, as `Value::float` does.
+            movq rax, xmm0;
+            testq rax, rax;
             jne normal;
-            jp normal;
             movq rax, (FLOAT_ZERO);
             ret;
         normal:
-            movq rax, xmm0;
             movq rcx, rax;
             shrq rcx, 60;
             addl rcx, 1;

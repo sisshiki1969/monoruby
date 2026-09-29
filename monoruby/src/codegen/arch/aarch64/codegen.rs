@@ -163,15 +163,18 @@ impl Codegen {
         let normal = self.jit.label();
         let heap = self.jit.label();
         self.jit.bind_label(label.clone());
+        // Only +0.0 (all bits clear) has the FLOAT_ZERO encoding. -0.0
+        // compares equal to 0.0, so test the bits: it falls through to the
+        // exponent check, fails it and is heap-allocated with its sign kept.
         monoasm_arm64!(&mut self.jit,
-            fcmp d0, #0.0;           // compare D0 with zero
+            fmov x0, d0;             // x0 = bits(d0)
+            cmp x0, #(0);
         );
-        self.jit.bcond_label(Cond::Ne, &normal); // != 0.0 (or NaN) -> normal
+        self.jit.bcond_label(Cond::Ne, &normal); // not +0.0 -> normal
         monoasm_arm64!(&mut self.jit,
             mov x0, (FLOAT_ZERO);
             ret;
             normal:
-            fmov x0, d0;             // x0 = bits(d0)
             lsr x1, x0, #(60);
             add x1, x1, #(1);
             mov x9, (6);

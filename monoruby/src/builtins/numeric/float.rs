@@ -1800,4 +1800,20 @@ mod tests {
             "767573.187585.round(5, half: :even)",
         ]);
     }
+
+    #[test]
+    fn float_negative_zero_in_jit() {
+        // JIT code boxing an f64 result must keep the sign of -0.0 (#1660).
+        run_test(
+            r#"
+            r = []
+            50.times do
+              x = 0.0
+              r << (-1.0 * 0.0).to_s << (-x).to_s << (-5.2e-50 * 1e-300).to_s
+              r << (0.0 * 1.0).to_s << (-0.0 + 0.0).to_s
+            end
+            r.uniq
+            "#,
+        );
+    }
 }
